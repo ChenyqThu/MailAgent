@@ -1,0 +1,22 @@
+# Notion API
+notion-client==2.2.1
+
+# HTML 解析
+beautifulsoup4==4.12.2
+html2text==2020.1.16
+lxml==4.9.3
+
+# 配置管理
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# 日志
+loguru==0.7.2
+
+# 异步 IO
+aiofiles==23.2.1
+aiohttp==3.9.1
+
+# 图片处理
+Pillow==10.1.0

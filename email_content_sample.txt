@@ -1,0 +1,676 @@
+Subject: Re: ER706W-4G Version 2 Firmware
+From: Xavier Chen <xavier.chen@tp-link.com>
+Content-Type: text/plain
+Content-Length: 20395 chars
+================================================================================
+
+Hi, Serene,
+
+关于交付时间，我们再安排评估下。预计本周内答复您。
+
+________________________
+Thanks & Best Regards,
+ 
+Xavier Chen ｜陈 翔
+👨‍💼 Omada Gateway Product Line Manager
+📞 +16163139451 | +8615267011580 (WeChat)
+💌 xavier.chen@tp-link.com
+🚀5 Peters Canyon Rd, Irvine, CA 92606
+ 
+TP-Link Systems Inc.
+￼
+
+From: Serene Lim <serene.lim@tp-link.com>
+Date: Sunday, January 4, 2026 at 9:08 PM
+To: Xavier Chen <xavier.chen@tp-link.com>, Echo Liu <echo.liu@tp-link.com>, Gary W <gary.w@tp-link.com>, Alvin Ou <alvin.ou@tp-link.com>, Casper Wang <casper.wang@tp-link.com>, Lucien Chen <lucien.chen@tp-link.com>
+Cc: Iftitah Asri <iftitah.asri@tp-link.com>, Elio Li <elio.li@tp-link.com>, Yuan Ren <renyuan@tp-link.com.hk>, Wenyong Jia <jiawenyong@tp-link.com.hk>, Dongbiao Zeng <zengdongbiao@tp-link.com.hk>
+Subject: Re: ER706W-4G Version 2 Firmware
+
+Hi Xavier,
+
+他们无法接受Q3太久了。
+因为他们预计在Q1完成这migration然后用standalone mode管理。
+可以尽量提前在Q2吗？
+
+Thank you.
+ 
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+ 
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+ 
+Unit 32.01 & 32.02, Level 32,
+ 
+Menara Public Bank 2,
+ 
+No. 78, Jalan Raja Chulan,
+ 
+50200 Kuala Lumpur.
+ 
+t +603-2022 2689 m +6010 2213856
+ 
+e serene.lim@tp-link.com w www.tp-link.com/my/
+From: Xavier Chen <xavier.chen@tp-link.com>
+Sent: Monday, January 5, 2026 10:54:23 AM
+To: Serene Lim <serene.lim@tp-link.com>; Echo Liu <echo.liu@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com>
+Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Yuan Ren <renyuan@tp-link.com.hk>; Wenyong Jia <jiawenyong@tp-link.com.hk>; Dongbiao Zeng <zengdongbiao@tp-link.com.hk>
+Subject: Re: ER706W-4G Version 2 Firmware
+ 
+Hi, Serene,
+
+新年好！
+关于Static PPPoE的需求，
+短期：TM暂时采用Standalone mode，已提供Beta固件满足；
+中期：OC220 Beta外发时间是2026.3.30；
+长期：CBC规划在SDN6.4，作为通用需求合入，预计发布时间是2026Q3。
+
+研发资源受限，这版计划排期已经较紧。请你看下能否匹配客户的要求。
+
+________________________
+Thanks & Best Regards,
+ 
+Xavier Chen ｜陈 翔
+👨‍💼 Omada Gateway Product Line Manager
+📞 +16163139451 | +8615267011580 (WeChat)
+💌 xavier.chen@tp-link.com
+🚀5 Peters Canyon Rd, Irvine, CA 92606
+ 
+TP-Link Systems Inc.
+￼
+From: Serene Lim <serene.lim@tp-link.com>
+Date: Sunday, January 4, 2026 at 6:19 PM
+To: Echo Liu <echo.liu@tp-link.com>, Gary W <gary.w@tp-link.com>, Alvin Ou <alvin.ou@tp-link.com>, Xavier Chen <xavier.chen@tp-link.com>, Casper Wang <casper.wang@tp-link.com>, Lucien Chen <lucien.chen@tp-link.com>
+Cc: Iftitah Asri <iftitah.asri@tp-link.com>, Elio Li <elio.li@tp-link.com>, Yuan Ren <renyuan@tp-link.com.hk>, Wenyong Jia <jiawenyong@tp-link.com.hk>, Dongbiao Zeng <zengdongbiao@tp-link.com.hk>
+Subject: Re: ER706W-4G Version 2 Firmware
+
+Hi Xavier,
+
+新年快乐！
+
+请问CBC的评估有大概的日期了吗？
+
+
+Thank you.
+ 
+Best Regards,
+Serene Lim | Key Account Manager
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+Unit 32.01 & 32.02, Level 32,
+Menara Public Bank 2,
+No. 78, Jalan Raja Chulan,
+50200 Kuala Lumpur.
+t +603-2022 2689  m +6010 2213856
+e serene.lim@tp-link.com  w www.tp-link.com/my/
+
+
+￼
+From: Echo Liu <echo.liu@tp-link.com>
+Sent: Monday, December 29, 2025 9:51 AM
+To: Serene Lim <serene.lim@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com>
+Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Yuan Ren <renyuan@tp-link.com.hk>; Wenyong Jia <jiawenyong@tp-link.com.hk>; Dongbiao Zeng <zengdongbiao@tp-link.com.hk>
+Subject: 回复: ER706W-4G Version 2 Firmware
+ 
+Hi
+ 
+@Xavier Chen 如之前邮件，请Xavier评估设备通用版本计划，CBC无法特制，controller会跟随设备版本评估发布计划
+ 
+该需求非ER706W-4G独有，很难在CBC上针对某机型做特殊支持，需要所有设备端刷新支持该功能，否则开放该功能，长时间无设备端支持容易引起客诉
+当前6.2设备固件以及Controller 6.2（2-3月发布）都在收尾阶段，不建议再新增需求，会对交期带来较大影响（该版本涉及Omada管理Omada Pro设备，Gateway优化以及Latigo功能）
+ 
+Best Regards
+Echo
+ 
+ 
+发件人: Serene Lim <serene.lim@tp-link.com> 发送时间: 2025年12月29日 9:49 收件人: Echo Liu <echo.liu@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> 抄送: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Yuan Ren <renyuan@tp-link.com.hk>; Wenyong Jia <jiawenyong@tp-link.com.hk>; Dongbiao Zeng <zengdongbiao@tp-link.com.hk> 主题: Re: ER706W-4G Version 2 Firmware
+ 
+Hi Echo,
+ 
+如之前说static IP 功能在standalone mode 已经支持。 TM会说服领导先接受这个形式。
+ 
+他们最终还是希望由CBC 做全部的管理。
+ 
+所以想知道预估cbc几时可以管理static IP.
+ 
+ 
+Thank you.
+ 
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+ 
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+ 
+Unit 32.01 & 32.02, Level 32,
+ 
+Menara Public Bank 2,
+ 
+No. 78, Jalan Raja Chulan,
+ 
+50200 Kuala Lumpur.
+ 
+t +603-2022 2689 m +6010 2213856
+ 
+e serene.lim@tp-link.com w www.tp-link.com/my/
+
+From: Echo Liu <echo.liu@tp-link.com> Sent: Monday, December 29, 2025 9:44:30 AM To: Serene Lim <serene.lim@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Yuan Ren <renyuan@tp-link.com.hk>; Wenyong Jia <jiawenyong@tp-link.com.hk>; Dongbiao Zeng <zengdongbiao@tp-link.com.hk> Subject: 回复: ER706W-4G Version 2 Firmware
+ 
+Hi Serene Alvin
+ 
+什么叫做“static IP 先在不监控的情况下”，这是什么需求？
+ 
+意思是Controller不支持配置Static PPPoE IP？？那Controller似乎不需要改动就行了
+PS:若Controller不支持配置Static PPPoE IP，那么意味着Controller模式下， 当前设备端也无法实现该功能，只能Standalone管理
+ 
+Best Regards
+Echo
+ 
+ 
+ 
+发件人: Serene Lim <serene.lim@tp-link.com> 发送时间: 2025年12月29日 9:37 收件人: Echo Liu <echo.liu@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> 抄送: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Yuan Ren <renyuan@tp-link.com.hk>; Wenyong Jia <jiawenyong@tp-link.com.hk>; Dongbiao Zeng <zengdongbiao@tp-link.com.hk> 主题: Re: ER706W-4G Version 2 Firmware
+ 
+Hi Echo, 
+ 
+TM 询问如果他们可以说服领导接受static IP 先在不监控的情况下，CBC 预估大概几时可以ready?
+他们还是比较重于cbc的方案。
+ 
+型号方面我在等您们CBC 预估期才决定。
+ 
+因为刚知道其实OC400也可以同时管理multitenants 可能对TM也会比较方便。
+ 
+ 
+Thank you.
+ 
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+ 
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+ 
+Unit 32.01 & 32.02, Level 32,
+ 
+Menara Public Bank 2,
+ 
+No. 78, Jalan Raja Chulan,
+ 
+50200 Kuala Lumpur.
+ 
+t +603-2022 2689 m +6010 2213856
+ 
+e serene.lim@tp-link.com w www.tp-link.com/my/
+
+From: Echo Liu <echo.liu@tp-link.com> Sent: Thursday, December 25, 2025 7:28:15 PM To: Serene Lim <serene.lim@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Yuan Ren <renyuan@tp-link.com.hk>; Wenyong Jia <jiawenyong@tp-link.com.hk>; Dongbiao Zeng <zengdongbiao@tp-link.com.hk> Subject: 回复: ER706W-4G Version 2 Firmware
+ 
+Loop RD
+ 
+Hi Gary ，Xavier and all
+ 
+（1）该需求非ER706W-4G独有，很难在CBC上针对某机型做特殊支持，需要所有设备端刷新支持该功能，否则开放该功能，长时间无设备端支持容易引起客诉
+当前6.2设备固件以及Controller 6.2（2-3月发布）都在收尾阶段，不建议再新增需求，会对交期带来较大影响（该版本涉及Omada管理Omada Pro设备，Gateway优化以及Latigo功能）
+具体gateway通用功能合入，请 @Xavier Chen规划
+ 
+（2）前线当前接受先用OC220 的Beta软件提供功能（见附件）
+当前RD资源主要都在保证6.2 ，6.2.10，以及AIO的收尾以及冲刺阶段，人力比较紧张。
+Controller OC220 Beta研发初步评估预计2月底可以投入开发，预计3月底可以交付固件
+ 
+PS：附上所有特制要求
+1.     如下三个需求，当前提供的软件已满足诉求，不需要controller端提供额外支持。
+但需要额外注意，由于定制了设备默认账密，会导致Controller首次收养失败，需要用户二次输入账密完成收养
+a)      设备支持默认密码，默认账号为tmadmin，密码为Adm@xxxx(MAC地址后4位大写)
+b)     设备wan口的ipv6地址要公网不可达
+c)      设备默认关闭对http的支持，如果用户需要，可以手动打开
+ 
+2.    支持Static PPPoE功能
+a)      该功能目前standalone已提供，且客户已试用通过，需要controller也可以支持相应功能。评估以OC220 Beta形式提供
+ 
+Best Regards
+Echo
+ 
+发件人: Serene Lim <serene.lim@tp-link.com> 发送时间: 2025年12月24日 10:51 收件人: Echo Liu <echo.liu@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> 抄送: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> 主题: Re: ER706W-4G Version 2 Firmware
+ 
+Hi Echo,
+ 
+明白。
+目前会暂时让TM 他们先考虑static IP在不被监控下操作。
+ 
+可是需要麻烦给一个时间，因为他们项目计划需要有个目标日期来策划。
+ 
+请问预计将会在几时可以给这个评估。
+ 
+ 
+Thank you.
+ 
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+ 
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+ 
+Unit 32.01 & 32.02, Level 32,
+ 
+Menara Public Bank 2,
+ 
+No. 78, Jalan Raja Chulan,
+ 
+50200 Kuala Lumpur.
+ 
+t +603-2022 2689 m +6010 2213856
+ 
+e serene.lim@tp-link.com w www.tp-link.com/my/
+
+From: Echo Liu <echo.liu@tp-link.com> Sent: Wednesday, December 24, 2025 10:36:43 AM To: Serene Lim <serene.lim@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> Subject: 回复: ER706W-4G Version 2 Firmware
+ 
+Hi Serene
+ 
+这个评估没有那么快，本质涉及多个平台调整，要求的又是CBC，
+ 
+如下功能并不是4g-路由的特有属性，要考虑各种兼容，没有那么简单也没有那么快
+ 
+我们内部已经在高优先级评估交付方案
+ 
+@Casper Wang @Xavier Chen，请后续同步
+ 
+ 
+Best Regards
+Echo
+ 
+ 
+发件人: Serene Lim <serene.lim@tp-link.com> 发送时间: 2025年12月24日 9:10 收件人: Echo Liu <echo.liu@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> 抄送: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> 主题: Re: ER706W-4G Version 2 Firmware
+ 
+Hi Echo
+ 
+早。。
+请问评估如何或几时可以给评估日期？
+这个方案，TM领导非常关注。
+需要每周更新状况。
+预计第一期会有150sites。
+今年整体需要migrate会有1500 sites
+还没包括新的项目。
+ 
+ 
+Thank you.
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+Unit 32.01 & 32.02, Level 32,
+Menara Public Bank 2,
+No. 78, Jalan Raja Chulan,
+50200 Kuala Lumpur.
+t +603-2022 2689 m +6010 2213856
+e serene.lim@tp-link.com w www.tp-link.com/my/
+
+From: Serene Lim <serene.lim@tp-link.com> Sent: Tuesday, December 23, 2025 10:08:26 AM To: Echo Liu <echo.liu@tp-link.com>; Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+ 
+Hi Echo,
+ 
+不好意思
+说法不一样
+其实Fixed IP & Static IP都是一样的。
+他们现在是采用CBC.
+因为之前说CBC可能需要更长时间。
+所以想问是不是OC会简短一些。
+可是最好还是CBC那我们也可以每年都有额外的license fee收入。
+ 
+ 
+Thank you.
+ 
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+ 
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+ 
+Unit 32.01 & 32.02, Level 32,
+ 
+Menara Public Bank 2,
+ 
+No. 78, Jalan Raja Chulan,
+ 
+50200 Kuala Lumpur.
+ 
+t +603-2022 2689 m +6010 2213856
+ 
+e serene.lim@tp-link.com w www.tp-link.com/my/
+
+From: Echo Liu <echo.liu@tp-link.com> Sent: Tuesday, December 23, 2025 10:03:58 AM To: Gary W <gary.w@tp-link.com>; Serene Lim <serene.lim@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> Subject: 回复: ER706W-4G Version 2 Firmware
+ 
+Hi Gary
+好的，会先安排内部评估
+ 
+Hi Serene
+ 
+需求需要明确一下，我看最早的邮件是要求ER706W-4G支持Static PPPoE IP拨号
+但如下邮件又变成了Fixed IP，这个是啥意思？
+PPPoE的IP通常是运营商在Server端去配置的，这个Fixed IP是指？
+￼
+ 
+另外用户用的是什么Controller?我看到最早的邮件是OC，后面又变成了CBC
+￼
+ 
+￼
+ 
+Best Regards
+Echo
+ 
+ 
+发件人: Gary W <gary.w@tp-link.com> 发送时间: 2025年12月23日 2:38 收件人: Serene Lim <serene.lim@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Lucien Chen <lucien.chen@tp-link.com>; Echo Liu <echo.liu@tp-link.com> 抄送: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> 主题: Re: ER706W-4G Version 2 Firmware
+ 
+@Echo Liu看看6.2是否还能添加拨号功能？预计时间如何？
+ 
+ 
+Best regards,
+ 
+Gary
+From: Serene Lim <serene.lim@tp-link.com> Date: Sunday, December 21, 2025 at 19:56 To: Gary W <gary.w@tp-link.com>, Alvin Ou <alvin.ou@tp-link.com>, Xavier Chen <xavier.chen@tp-link.com>, Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>, Elio Li <elio.li@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+Hi Gary总，
+ 
+可以再麻烦评估一下吗？
+TM 说Q2 太慢了影响他们migration project 
+首100订单已下。
+ 
+ 
+ 
+Thank you.
+ 
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+ 
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+ 
+Unit 32.01 & 32.02, Level 32,
+ 
+Menara Public Bank 2,
+ 
+No. 78, Jalan Raja Chulan,
+ 
+50200 Kuala Lumpur.
+ 
+t +603-2022 2689 m +6010 2213856
+ 
+e serene.lim@tp-link.com w www.tp-link.com/my/
+
+From: Serene Lim <serene.lim@tp-link.com> Sent: Thursday, December 18, 2025 5:34:32 PM To: Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+ 
+Hi Gary,
+ 
+谢谢第一版的软件。
+我们还在自测。
+至于第二版，如附件TM希望我们尽快实现因为他们有一批顾客需要用到这个功能。
+因为没有FixedIP 功能，他们无法换我们牌子进行替换。
+这也会影响他们采用我们的方案。
+因为有些站点还是需要FIXED IP的。
+麻烦您再考虑。
+不知最近印尼刚拿下的案子有这个功能吗？
+可不可以应用？
+ 
+ 
+Thank you.
+ 
+Best Regards,
+Serene Lim | Key Account Manager
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+Unit 32.01 & 32.02, Level 32,
+Menara Public Bank 2,
+No. 78, Jalan Raja Chulan,
+50200 Kuala Lumpur.
+t +603-2022 2689  m +6010 2213856
+e serene.lim@tp-link.com  w www.tp-link.com/my/
+ 
+ 
+￼
+
+From: Gary W <gary.w@tp-link.com> Sent: Saturday, November 22, 2025 9:54 AM To: Serene Lim <serene.lim@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+ 
+第一批可以考虑优先支持。第二批涉及Cloud controller修改，建议等明年Q2再根据情况支持。 @Xavier Chen安排相关输入。
+ 
+ 
+Best regards,
+ 
+Gary
+From: Serene Lim <serene.lim@tp-link.com> Date: Thursday, November 20, 2025 at 04:13 To: Gary W <gary.w@tp-link.com>, Alvin Ou <alvin.ou@tp-link.com>, Xavier Chen <xavier.chen@tp-link.com>, Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>, Elio Li <elio.li@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+补充信息 - TM 现有Fortinet /Meraki / Sangfor 客户。
+目前没有捆绑static IP, TM 有6855个客户。
+有static IP 是6014 个客户。
+他们预计每年会有1000-2000的增长。
+ 
+所以潜能是非常大的。
+麻烦总部考虑审批。
+ 
+ 
+ 
+ 
+Thank you.
+ 
+ 
+ 
+Best Regards,
+ 
+Serene Lim | Key Account Manager
+ 
+ 
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+ 
+Unit 32.01 & 32.02, Level 32,
+ 
+Menara Public Bank 2,
+ 
+No. 78, Jalan Raja Chulan,
+ 
+50200 Kuala Lumpur.
+ 
+t +603-2022 2689 m +6010 2213856
+ 
+e serene.lim@tp-link.com w www.tp-link.com/my/
+
+From: Serene Lim <serene.lim@tp-link.com> Sent: Thursday, November 20, 2025 3:41:12 PM To: Gary W <gary.w@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+ 
+Hi Gary,
+ 
+附上需求：分为第一期&第二期。
+ 
+1.      第一期（30/11/25前）
+ 
+把V1做好的以下软件功能移植到V2因为目前仓库都是V2机型。
+【固件信息】
+ 
+       固件版本：ER706W-4G_G36W-4G_1.2.0_20250714-rel52039_common_up_2025-07-17_16.32.19.bin
+ 
+       下载链接：https://static.tp-link.com/upload/beta/2025/202507/20250717/ER706W-4G_G36W-4G_1.2.0_20250714-rel52039_common_up_2025-07-17_16.32.19.zip
+ 
+ 
+第二期（总部评估）
+ 
+ 
+需要CBC 支持关于STATIC PPOE IP 的方案。
+研发给的以下standalone mode 已经支持只是不能批量管理。
+ 
+【固件信息】
+ 
+       下载链接：https://static.tp-link.com/upload/beta/2025/202510/20251030/ER706W-4Gv2_2.1.1_20251029-rel61594_common_v2_up_2025-10-30_19.29.05.bin.zip
+ 
+       固件名称：ER706W-4Gv2_2.1.1_20251029-rel61594_common_v2_up_2025-10-30_19.29.05.bin
+ 
+ 
+至于V1是因为TM要求测试的时候, ER706W-4G V2机型并还没有出。
+当TM审批决定推出后，我们仓库的机型全部已经是V2机型了。
+所以不能卖他们V1机型。
+ 
+ 
+ 
+麻烦您考虑审批。 
+ 
+ 
+Thank you.
+ 
+Best Regards,
+Serene Lim | Key Account Manager
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+Unit 32.01 & 32.02, Level 32,
+Menara Public Bank 2,
+No. 78, Jalan Raja Chulan,
+50200 Kuala Lumpur.
+t +603-2022 2689  m +6010 2213856
+e serene.lim@tp-link.com  w www.tp-link.com/my/
+ 
+ 
+￼
+ 
+ 
+
+From: Gary W <gary.w@tp-link.com> Sent: Thursday, November 20, 2025 6:37 AM To: Alvin Ou <alvin.ou@tp-link.com>; Xavier Chen <xavier.chen@tp-link.com>; Serene Lim <serene.lim@tp-link.com>; Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+ 
+具体是什么功能需求？是否有全球可复制性？目前Controller的迭代需求已经非常多，这个时间不见的能塞得进去。
+ 
+先提交单据，BU进行评估与审核。Btw，v1做了，如果没有拿到订单，这个也是不合理的。
+ 
+Best regards,
+ 
+Gary
+From: Alvin Ou <alvin.ou@tp-link.com> Date: Wednesday, November 19, 2025 at 01:43 To: Xavier Chen <xavier.chen@tp-link.com>, Serene Lim <serene.lim@tp-link.com>, Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>, Elio Li <elio.li@tp-link.com>, Gary W <gary.w@tp-link.com> Subject: RE: ER706W-4G Version 2 Firmware
+Hi Xavier，
+ 
+Serene讲的明年1-2000pcs是保守预估，实际上也是接近百万美金规模项目了，毕竟当前产品跟客户预期还有差距，如果功能到位运营商推广顺利，量还会更大。
+ 
+客户层面，述求把V1的功能转移切到V2，这个述求很合理。对比其他大学等项目，如下是ER706W-4G单一型号的需求，交付投入应该也不大，还是很值得投入的。
+ 
+Best Regards,
+Alvin Ou
+ 
+From: Xavier Chen <xavier.chen@tp-link.com> Sent: Wednesday, November 19, 2025 5:26 PM To: Serene Lim <serene.lim@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com>; Casper Wang <casper.wang@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Gary W <gary.w@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+ 
+ 
+@Casper Wang 请Casper Follow up.
+________________________
+Thanks & Best Regards,
+ 
+Xavier Chen ｜陈 翔
+👨‍💼 Omada Gateway Product Line Manager
+📞 +16163139451 | +8615267011580 (WeChat)
+💌 xavier.chen@tp-link.com
+🚀5 Peters Canyon Rd, Irvine, CA 92606
+ 
+TP-Link Systems Inc.
+￼
+From: Serene Lim <serene.lim@tp-link.com> Date: Wednesday, November 19, 2025 at 1:08 AM To: Xavier Chen <xavier.chen@tp-link.com>, Alvin Ou <alvin.ou@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>, Elio Li <elio.li@tp-link.com>, Casper Wang <casper.wang@tp-link.com>, Gary W <gary.w@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+Hi Xavier,
+ 
+如微信沟通， 目前我们只需要把之前Version 1 如下移植到ER706W-4G机型来支持TM在12月份推出他们配套。
+ 
+麻烦让我们知道这个预期。
+ 
+如果可以TM希望总部可以用回同样的的软件名称，那他们就不再通过安全部审查。 
+ 
+至于PPOE STATIC IP 可以批量管理的功能，总部可能让我们知道在什么情况下才会特别特制给顾客。
+ 
+ 
+【固件信息】
+       固件版本：ER706W-4G_G36W-4G_1.2.0_20250714-rel52039_common_up_2025-07-17_16.32.19.bin
+       下载链接：https://static.tp-link.com/upload/beta/2025/202507/20250717/ER706W-4G_G36W-4G_1.2.0_20250714-rel52039_common_up_2025-07-17_16.32.19.zip
+ 
+ 
+Thank you.
+ 
+Best Regards,
+Serene Lim | Key Account Manager
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+Unit 32.01 & 32.02, Level 32,
+Menara Public Bank 2,
+No. 78, Jalan Raja Chulan,
+50200 Kuala Lumpur.
+t +603-2022 2689  m +6010 2213856
+e serene.lim@tp-link.com  w www.tp-link.com/my/
+ 
+ 
+￼
+ 
+ 
+
+From: Xavier Chen <xavier.chen@tp-link.com> Sent: Wednesday, November 19, 2025 4:21 PM To: Serene Lim <serene.lim@tp-link.com>; Alvin Ou <alvin.ou@tp-link.com> Cc: Iftitah Asri <iftitah.asri@tp-link.com>; Elio Li <elio.li@tp-link.com>; Casper Wang <casper.wang@tp-link.com>; Gary W <gary.w@tp-link.com> Subject: Re: ER706W-4G Version 2 Firmware
+ 
+Hi, Serene，欧总，
+ 
+预计明年1-2000pcs.
+TM的需求，7月份的beta是PoC测试已经通过了，对商机应有一定的推动效果。1-2000pcs这个也太不确定了，能否再和客户谈一谈，先锁个单。
+ 
+目前事业部没法做这样的投入：从Beta到正式版本，涉及到Controller全平台的适配，现在Omada的产研资源大家也是了解的，特别是SDN平台的开发排队情况。希望看到更大的价值。
+ 
+________________________
+Thanks & Best Regards,
+ 
+Xavier Chen ｜陈 翔
+👨‍💼 Omada Gateway Product Line Manager
+📞 +16163139451 | +8615267011580 (WeChat)
+💌 xavier.chen@tp-link.com
+🚀5 Peters Canyon Rd, Irvine, CA 92606
+ 
+TP-Link Systems Inc.
+￼
+From: Serene Lim <serene.lim@tp-link.com> Date: Tuesday, November 18, 2025 at 10:58 PM To: Xavier Chen <xavier.chen@tp-link.com> Cc: Alvin Ou <alvin.ou@tp-link.com>, Iftitah Asri <iftitah.asri@tp-link.com> Subject: ER706W-4G Version 2 Firmware
+Hi Xavier,
+ 
+如沟通，希望总部可以考虑尽快给出ER706W-4G Version 2 软件支持之前提供Version 1如附件的。
+ 
+TM下周一&二会进行培训。
+ 
+12月会推出我们的配套。
+ 
+今年会以back to back order 形式进行采购。
+ 
+预计明年1-2000pcs.
+ 
+另外，也麻烦总部尽快给出static ppoe ip 支持的方式，目前standalone 模式已经测试成功。
+ 
+只是不能批量管理对TM是不能接受的。
+ 
+如果OC200/220/300/400可以尽快支持，我们也是可以尽快说服他们。
+ 
+ 
+Thank you.
+ 
+Best Regards,
+Serene Lim | Key Account Manager
+ 
+TPLINK DISTRIBUTION MALAYSIA SDN BHD
+Unit 32.01 & 32.02, Level 32,
+Menara Public Bank 2,
+No. 78, Jalan Raja Chulan,
+50200 Kuala Lumpur.
+t +603-2022 2689  m +6010 2213856
+e serene.lim@tp-link.com  w www.tp-link.com/my/
+ 
+ 
+￼
