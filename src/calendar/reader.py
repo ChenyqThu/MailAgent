@@ -287,11 +287,13 @@ class CalendarReader:
             recurrence_rule = None
             # EventKit 的 recurrenceRules 比较复杂，暂时只标记是否重复
 
-            # 最后修改时间
+            # 最后修改时间（带时区）
             last_modified = None
             mod_date = ek_event.lastModifiedDate()
             if mod_date:
-                last_modified = datetime.fromtimestamp(mod_date.timeIntervalSince1970())
+                # 使用 UTC 时间
+                last_modified = datetime.utcfromtimestamp(mod_date.timeIntervalSince1970())
+                last_modified = last_modified.replace(tzinfo=timezone.utc)
 
             event = CalendarEvent(
                 event_id=event_id,

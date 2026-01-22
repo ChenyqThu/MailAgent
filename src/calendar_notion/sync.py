@@ -92,25 +92,52 @@ class CalendarNotionSync:
             return None
 
     async def _needs_update(self, existing: Dict[str, Any], event: CalendarEvent) -> bool:
-        """检查事件是否需要更新"""
+        """
+        检查事件是否需要更新
+
+        策略：
+        1. 如果事件有 last_modified，比较它与 Notion 中记录的 Last Modified
+        2. 如果事件没有 last_modified（从未修改过），检查是否已同步过
+
+        注意：Notion 存储的日期精度只到分钟，所以比较时需要截断到分钟级别
+        """
         try:
             props = existing.get("properties", {})
 
-            # 获取 Notion 中的 Last Modified
-            notion_modified = props.get("Last Modified", {}).get("date")
-            if notion_modified and notion_modified.get("start"):
-                notion_mod_str = notion_modified["start"]
-                notion_mod_dt = datetime.fromisoformat(notion_mod_str.replace("Z", "+00:00"))
+            # 策略1：比较 Last Modified（事件本身的修改时间）
+            if event.last_modified:
+                notion_modified = props.get("Last Modified", {}).get("date")
+                if notion_modified and notion_modified.get("start"):
+                    notion_mod_str = notion_modified["start"]
+                    notion_mod_dt = datetime.fromisoformat(notion_mod_str.replace("Z", "+00:00"))
 
-                # 比较修改时间
-                if event.last_modified:
-                    # 如果事件的修改时间更新，则需要更新
-                    event_mod = event.last_modified.replace(tzinfo=None)
-                    notion_mod = notion_mod_dt.replace(tzinfo=None)
-                    return event_mod > notion_mod
+                    # 统一转换为 UTC 无时区，并截断到分钟级别比较
+                    event_mod = event.last_modified.replace(tzinfo=None, second=0, microsecond=0)
+                    notion_mod = notion_mod_dt.replace(tzinfo=None, second=0, microsecond=0)
 
-            # 如果无法比较时间，默认更新
+                    if event_mod > notion_mod:
+                        logger.debug(f"事件已修改: {event_mod} > {notion_mod}")
+                        return True
+                    else:
+                        logger.debug(f"事件未修改: {event_mod} <= {notion_mod}")
+                        return False
+                else:
+                    # Notion 中没有记录 Last Modified，说明是旧数据，需要更新一次
+                    logger.debug("Notion 中无 Last Modified 记录，需要更新")
+                    return True
+
+            # 策略2：事件没有 last_modified（从未修改过）
+            # 检查是否已经同步过（通过 Last Synced 判断）
+            notion_synced = props.get("Last Synced", {}).get("date")
+            if notion_synced and notion_synced.get("start"):
+                # 已经同步过，且事件没有修改，跳过
+                logger.debug("事件无修改时间且已同步过，跳过")
+                return False
+
+            # 从未同步过，需要更新
+            logger.debug("事件从未同步过，需要更新")
             return True
+
         except Exception as e:
             logger.debug(f"比较修改时间失败: {e}")
             return True
@@ -183,7 +210,8 @@ class CalendarNotionSync:
 
     def _build_properties(self, event: CalendarEvent) -> Dict[str, Any]:
         """构建 Notion 页面属性"""
-        now = datetime.now().isoformat()
+        from datetime import timezone
+        now = datetime.now(timezone.utc).isoformat()
 
         properties = {
             # 标题
