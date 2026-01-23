@@ -142,6 +142,10 @@ Calendar.app → CalendarReader → CalendarNotionSync → Notion Database
   - Handles timezone conversion (event's original timezone preserved)
   - Extracts attendees, organizer, recurrence rules
   - Stores raw description for Teams meeting parsing
+  - **Recurring Events**: Uses `calendarItemIdentifier + occurrenceDate` as unique ID
+    - Each instance of a recurring meeting gets its own Notion page
+    - Format: `{base_id}_{timestamp}` (e.g., `ABC123_1737532800`)
+    - Allows separate meeting notes for each occurrence
 
 **3. Content Conversion Layer (`src/converter/`)**
 - `html_converter.py`: Converts HTML to Notion blocks
@@ -169,6 +173,10 @@ Calendar.app → CalendarReader → CalendarNotionSync → Notion Database
   - Writes formatted description to page body (not just text property)
   - Extracts Teams join URL to URL property for quick access
   - Handles all-day and multi-day events correctly
+  - **Smart Update Detection**: Avoids unnecessary updates
+    - Compares `last_modified` at minute precision (Notion limitation)
+    - Uses `Last Synced` field to track sync state for events without modification time
+    - Only updates when event has actually changed
 
 ### Teams Meeting Parsing (Critical)
 

@@ -172,7 +172,25 @@ class CalendarReader:
         """将 EventKit 事件转换为 CalendarEvent"""
         try:
             # 基本信息
-            event_id = ek_event.calendarItemIdentifier()
+            # 对于重复会议，使用 calendarItemIdentifier + occurrenceDate 作为唯一标识
+            # 这样每个实例都有独立的条目，可以关联会议纪要等
+            base_id = ek_event.calendarItemIdentifier()
+
+            if ek_event.hasRecurrenceRules():
+                # 重复会议：加上 occurrenceDate 区分不同实例
+                occ_date = ek_event.occurrenceDate()
+                if occ_date:
+                    # 使用日期部分作为后缀（格式：YYYYMMDD）
+                    occ_ts = int(occ_date.timeIntervalSince1970())
+                    event_id = f"{base_id}_{occ_ts}"
+                else:
+                    # 没有 occurrenceDate，使用开始时间
+                    start_ts = int(ek_event.startDate().timeIntervalSince1970())
+                    event_id = f"{base_id}_{start_ts}"
+            else:
+                # 非重复会议：直接使用 calendarItemIdentifier
+                event_id = base_id
+
             title = ek_event.title() or "(无标题)"
 
             # 时间
@@ -285,7 +303,18 @@ class CalendarReader:
             # 重复规则
             is_recurring = ek_event.hasRecurrenceRules()
             recurrence_rule = None
-            # EventKit 的 recurrenceRules 比较复杂，暂时只标记是否重复
+            if is_recurring:
+                rules = ek_event.recurrenceRules()
+                if rules and len(rules) > 0:
+                    rule = rules[0]
+                    freq = rule.frequency()  # 0=daily, 1=weekly, 2=monthly, 3=yearly
+                    interval = rule.interval()
+                    freq_map = {0: 'daily', 1: 'weekly', 2: 'monthly', 3: 'yearly'}
+                    freq_str = freq_map.get(freq, 'unknown')
+                    if interval == 1:
+                        recurrence_rule = freq_str
+                    else:
+                        recurrence_rule = f"every {interval} {freq_str}"
 
             # 最后修改时间（带时区）
             last_modified = None
