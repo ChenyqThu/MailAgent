@@ -70,7 +70,7 @@ MAIL_ACCOUNT_NAME=Exchange        # Mail.app 账户名
 ```bash
 source venv/bin/activate
 python3 scripts/test_notion_api.py   # Notion API
-python3 scripts/test_mail_reader.py  # Mail.app
+python3 scripts/test_mail_reader.py  # Mail.app（获取最新 5 封邮件）
 ```
 
 ### 5. 初始化同步
