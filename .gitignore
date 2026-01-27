@@ -3,6 +3,8 @@ venv/
 env/
 ENV/
 
+# Database and runtime data
+data/
 # Python
 __pycache__/
 *.py[cod]

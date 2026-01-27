@@ -149,9 +149,13 @@ class CalendarNotionSync:
         # 解析描述内容为 blocks
         children = self._build_content_blocks(event)
 
+        # 根据状态设置 icon
+        icon = self._get_status_icon(event)
+
         page = await self.client.pages.create(
             parent={"database_id": self.database_id},
             properties=properties,
+            icon=icon,
             children=children if children else None
         )
         return page
@@ -160,10 +164,14 @@ class CalendarNotionSync:
         """更新 Notion 页面"""
         properties = self._build_properties(event)
 
-        # 更新页面属性
+        # 根据状态设置 icon
+        icon = self._get_status_icon(event)
+
+        # 更新页面属性和 icon
         page = await self.client.pages.update(
             page_id=page_id,
-            properties=properties
+            properties=properties,
+            icon=icon
         )
 
         # 更新页面内容（先删除旧内容，再添加新内容）
@@ -194,6 +202,27 @@ class CalendarNotionSync:
 
         except Exception as e:
             logger.warning(f"更新页面内容失败: {e}")
+
+    def _get_status_icon(self, event: CalendarEvent) -> Dict[str, Any]:
+        """根据事件状态返回对应的 icon
+
+        Args:
+            event: 日历事件
+
+        Returns:
+            Notion icon 对象
+        """
+        # 取消的会议使用 ❌
+        if event.status == EventStatus.CANCELLED:
+            return {"type": "emoji", "emoji": "❌"}
+
+        # 默认使用日期日历 icon（基于起始日期）
+        date_str = event.start_time.strftime("%Y-%m-%d")
+        icon_url = f"https://notion-icons.chenge.ink/?type=day&color=red&date={date_str}"
+        return {
+            "type": "external",
+            "external": {"url": icon_url}
+        }
 
     def _build_content_blocks(self, event: CalendarEvent) -> List[Dict[str, Any]]:
         """构建页面正文 blocks"""

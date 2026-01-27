@@ -2,6 +2,10 @@
 """
 日历同步主入口
 将 macOS Calendar.app 中的 Exchange 日历同步到 Notion
+
+支持两种模式：
+1. eventkit_watcher (推荐): 事件驱动，日历变化时自动同步
+2. eventkit_polling: 定时轮询模式
 """
 
 import asyncio
@@ -11,7 +15,6 @@ from datetime import datetime
 from loguru import logger
 
 from src.config import config
-from src.calendar.reader import CalendarReader
 from src.calendar_notion.sync import CalendarNotionSync
 
 
@@ -31,12 +34,21 @@ def setup_logger():
     )
 
 
-async def sync_once():
-    """执行一次同步"""
-    logger.info("开始日历同步...")
+def get_calendar_reader():
+    """获取日历读取器（用于轮询模式）"""
+    if config.calendar_sync_mode == "applescript":
+        from src.calendar.applescript_reader import CalendarAppleScriptReader
+        return CalendarAppleScriptReader()
+    else:
+        from src.calendar.reader import CalendarReader
+        return CalendarReader()
 
-    # 读取日历事件
-    reader = CalendarReader()
+
+async def sync_events(reader=None):
+    """执行一次同步"""
+    if reader is None:
+        reader = get_calendar_reader()
+
     events = reader.get_events()
 
     if not events:
@@ -57,10 +69,55 @@ async def sync_once():
     )
 
 
-async def run_daemon():
-    """持续运行模式"""
+async def sync_once():
+    """执行一次同步（用于 --once 参数）"""
+    logger.info("开始日历同步...")
+    await sync_events()
+
+
+async def run_watcher_mode():
+    """事件驱动模式（推荐）"""
+    from src.calendar.eventkit_watcher import EventKitWatcher
+
     logger.info("=" * 50)
-    logger.info("日历同步服务启动")
+    logger.info("日历同步服务启动 (事件驱动模式)")
+    logger.info(f"目标日历: {config.calendar_name}")
+    logger.info(f"健康检查间隔: {config.health_check_interval} 秒")
+    logger.info(f"时间范围: 过去 {config.calendar_past_days} 天 ~ 未来 {config.calendar_future_days} 天")
+    logger.info("=" * 50)
+
+    watcher = EventKitWatcher()
+
+    # 处理退出信号
+    stop_event = asyncio.Event()
+
+    def signal_handler():
+        logger.info("收到退出信号，正在停止...")
+        watcher.stop_watching()
+        stop_event.set()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, signal_handler)
+
+    # 同步回调
+    async def on_calendar_changed():
+        logger.info("检测到日历变化，开始同步...")
+        await sync_events(watcher)
+
+    # 启动监听
+    try:
+        await watcher.start_watching(on_calendar_changed)
+    except asyncio.CancelledError:
+        pass
+
+    logger.info("日历同步服务已停止")
+
+
+async def run_polling_mode():
+    """轮询模式"""
+    logger.info("=" * 50)
+    logger.info("日历同步服务启动 (轮询模式)")
     logger.info(f"目标日历: {config.calendar_name}")
     logger.info(f"同步间隔: {config.calendar_check_interval} 秒")
     logger.info(f"时间范围: 过去 {config.calendar_past_days} 天 ~ 未来 {config.calendar_future_days} 天")
@@ -83,13 +140,11 @@ async def run_daemon():
     # 定期同步
     while not stop_event.is_set():
         try:
-            # 等待下一次同步或退出信号
             await asyncio.wait_for(
                 stop_event.wait(),
                 timeout=config.calendar_check_interval
             )
         except asyncio.TimeoutError:
-            # 超时表示该同步了
             await sync_once()
 
     logger.info("日历同步服务已停止")
@@ -106,9 +161,10 @@ def main():
         help="只执行一次同步后退出"
     )
     parser.add_argument(
-        "--daemon",
-        action="store_true",
-        help="持续运行模式（默认）"
+        "--mode",
+        choices=["watcher", "polling"],
+        default="watcher",
+        help="运行模式: watcher (事件驱动，推荐) / polling (轮询)"
     )
 
     args = parser.parse_args()
@@ -121,8 +177,10 @@ def main():
 
     if args.once:
         asyncio.run(sync_once())
+    elif args.mode == "watcher":
+        asyncio.run(run_watcher_mode())
     else:
-        asyncio.run(run_daemon())
+        asyncio.run(run_polling_mode())
 
 
 if __name__ == "__main__":

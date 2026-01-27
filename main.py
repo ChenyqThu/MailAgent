@@ -1,11 +1,9 @@
 import asyncio
+import signal
 import sys
-from pathlib import Path
 
 from loguru import logger
 from src.config import config
-from src.mail.watcher import MailWatcher
-from src.notion.sync import NotionSync
 from src.utils.logger import setup_logger
 
 # 设置日志
@@ -15,81 +13,26 @@ class EmailNotionSyncApp:
     """邮件同步应用主类"""
 
     def __init__(self):
-        self.notion_sync = NotionSync()
-        self.watcher = MailWatcher(on_new_email_callback=self.handle_new_email)
+        from src.mail.new_watcher import NewWatcher
+        logger.info("Using NewWatcher (SQLite Radar + AppleScript Arm)")
 
-    async def handle_new_email(self, email):
-        """
-        处理新邮件的回调函数
+        # 解析邮箱列表
+        mailboxes = [mb.strip() for mb in config.sync_mailboxes.split(',') if mb.strip()]
+        if not mailboxes:
+            mailboxes = ["收件箱"]
 
-        Args:
-            email: Email 对象
-        """
-        logger.info(f"📬 New email received: {email.subject}")
+        self.watcher = NewWatcher(
+            mailboxes=mailboxes,
+            poll_interval=config.radar_poll_interval,
+            sync_store_path=config.sync_store_db_path
+        )
+        self._shutdown_event = asyncio.Event()
 
-        try:
-            # 同步到 Notion
-            success = await self.notion_sync.sync_email(email)
-
-            if success:
-                logger.info(f"✅ Successfully synced: {email.subject}")
-            else:
-                logger.error(f"❌ Failed to sync: {email.subject}")
-
-        except Exception as e:
-            logger.error(f"Error handling email: {e}")
-
-    async def sync_existing_unread_emails(self):
-        """同步所有现有的未读邮件"""
-        logger.info("=" * 60)
-        logger.info("Syncing existing unread emails...")
-        logger.info("=" * 60)
-
-        from src.mail.reader import EmailReader
-
-        try:
-            reader = EmailReader()
-            # 获取所有未读邮件
-            emails = reader.get_unread_emails(limit=config.max_batch_size)
-
-            if not emails:
-                logger.info("No unread emails found")
-                return
-
-            logger.info(f"Found {len(emails)} unread emails")
-
-            # 同步每封邮件
-            synced_count = 0
-            skipped_count = 0
-            failed_count = 0
-
-            for i, email in enumerate(emails, 1):
-                logger.info(f"[{i}/{len(emails)}] Processing: {email.subject}")
-
-                try:
-                    success = await self.notion_sync.sync_email(email)
-
-                    if success:
-                        synced_count += 1
-                        # 标记为已同步（避免监听器重复处理）
-                        self.watcher.mark_as_synced(email.message_id)
-                    else:
-                        skipped_count += 1
-                        logger.info(f"  → Skipped (already synced)")
-
-                except Exception as e:
-                    failed_count += 1
-                    logger.error(f"  → Failed: {e}")
-
-            logger.info("=" * 60)
-            logger.info(f"Initial sync completed:")
-            logger.info(f"  ✅ Synced: {synced_count}")
-            logger.info(f"  ⏭  Skipped: {skipped_count}")
-            logger.info(f"  ❌ Failed: {failed_count}")
-            logger.info("=" * 60)
-
-        except Exception as e:
-            logger.error(f"Failed to sync existing emails: {e}")
+    def _handle_signal(self, signum, frame):
+        """处理系统信号"""
+        sig_name = signal.Signals(signum).name
+        logger.info(f"Received signal {sig_name}, initiating graceful shutdown...")
+        self._shutdown_event.set()
 
     async def start(self):
         """启动应用"""
@@ -97,21 +40,37 @@ class EmailNotionSyncApp:
         logger.info("Email to Notion Sync Service")
         logger.info("=" * 60)
         logger.info(f"User: {config.user_email}")
-        logger.info(f"Check interval: {config.check_interval} seconds")
-        logger.info(f"Sync existing unread: {config.sync_existing_unread}")
+        logger.info(f"Poll interval: {config.radar_poll_interval}s")
         logger.info(f"Log level: {config.log_level}")
         logger.info("=" * 60)
 
+        # 注册信号处理器
+        signal.signal(signal.SIGINT, self._handle_signal)
+        signal.signal(signal.SIGTERM, self._handle_signal)
+
         try:
-            # 如果配置启用，先同步所有现有未读邮件
-            if config.sync_existing_unread:
-                await self.sync_existing_unread_emails()
+            # 启动邮件监听器（在后台任务中运行）
+            watcher_task = asyncio.create_task(self.watcher.start())
 
-            # 启动邮件监听器
-            await self.watcher.start()
+            # 等待关闭信号
+            await self._shutdown_event.wait()
 
-        except KeyboardInterrupt:
-            logger.info("Shutting down gracefully...")
+            # 停止监听器
+            logger.info("Stopping watcher...")
+            await self.watcher.stop()
+
+            # 等待监听器完成当前操作
+            watcher_task.cancel()
+            try:
+                await watcher_task
+            except asyncio.CancelledError:
+                pass
+
+            # 打印最终统计
+            stats = self.watcher.get_stats()
+            logger.info(f"Final stats: synced={stats.get('emails_synced', 0)}, errors={stats.get('errors', 0)}")
+            logger.info("Shutdown complete")
+
         except Exception as e:
             logger.error(f"Fatal error: {e}")
             sys.exit(1)

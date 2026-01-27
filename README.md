@@ -1,197 +1,222 @@
-# MailAgent - 邮件 & 日历同步到 Notion
+# MailAgent
 
-自动将 macOS Mail.app 的邮件和 Calendar.app 的日历事件实时同步到 Notion，支持 AI Agent 自动分类、分析和生成回复建议。
+macOS 邮件实时同步到 Notion，支持 AI 自动分类与处理。
 
-## ✨ 功能特性
+## 功能概览
 
-### 📧 邮件同步
-- 实时监听 Mail.app 新邮件
-- 自动同步到 Notion Database
-- 支持 HTML 内容转换
-- 内联图片和附件处理
-- 邮件线程关联
+| 功能 | 数据源 | 说明 |
+|------|--------|------|
+| **邮件同步** | Mail.app | 邮件内容、附件、线程关系同步到 Notion |
+| **会议邀请识别** | 邮件中的 .ics | 自动解析会议邀请创建日程 |
+| **日历同步** | Calendar.app | 仅用于同步历史日程（可选） |
 
-### 📅 日历同步
-- 同步 Exchange 日历事件到 Notion
-- 自动提取 Teams 会议链接、会议 ID、密码
-- 支持表格内容解析（如 ABR 会议日程）
-- 全天/跨天事件正确处理
-- 多语言 Teams 格式支持（中/英文）
+### 邮件同步特性
+- 基于 message_id 的 100% 准确去重
+- 自动建立邮件线程 Parent-Child 关系
+- **自动识别会议邀请**：检测邮件中的 iCalendar 附件，创建日程页面
+- HTML 正文转 Notion Blocks（含内联图片）
+- 附件上传到 Notion
+- SQLite 雷达 + AppleScript 触发式架构（低延迟）
 
-### 🔮 未来规划
-- [ ] 可视化状态监控看板
-- [ ] 实时消息告警（微信/Slack/Email）
-- [ ] 同步异常自动恢复
-- [ ] 性能指标统计
+### 关于日历同步
 
-## 🚀 快速开始
+`calendar_main.py` 是独立的日历同步服务，直接从 Calendar.app 读取事件。
 
-### 1. 环境准备
+**建议**：一般情况下**不需要运行** `calendar_main.py`，原因如下：
+- 邮件同步 (`main.py`) 已包含会议邀请识别，能自动将邮件中的会议同步到日程
+- Calendar.app 中的会议可能不完整（部分会议不会同步到本地日历）
+- 邮件中的会议邀请信息更全面（包含完整描述、Teams 链接等）
+
+**何时使用**：仅在需要一次性同步 Calendar.app 中的历史日程时使用：
 ```bash
-cd /Users/chenyuanquan/Documents/MailAgent
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. 配置环境变量
-```bash
-cp .env.example .env
-# 编辑 .env 填入你的配置
-```
-
-### 3. 测试连接
-```bash
-# 测试 Notion API
-python3 scripts/test_notion_api.py
-
-# 测试邮件读取
-python3 scripts/test_mail_reader.py
-
-# 测试日历读取
-python3 scripts/test_eventkit.py
-```
-
-### 4. 手动同步测试
-```bash
-# 同步一封邮件
-python3 scripts/manual_sync.py
-
-# 同步日历（一次性）
 python3 calendar_main.py --once
 ```
 
-### 5. 启动服务
+---
 
-#### 方式一：PM2（推荐生产环境）
+## 快速开始
+
+### 1. 环境准备
+
 ```bash
-# 安装 PM2
-npm install -g pm2
-
-# 启动所有服务
-pm2 start ecosystem.config.js
-
-# 设置开机自启
-pm2 save
-pm2 startup
-
-# 查看状态
-pm2 status
-pm2 logs
+git clone <your-repo-url>
+cd MailAgent
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
 ```
 
-#### 方式二：前台运行（测试用）
+### 2. 配置 `.env`
+
+必填项：
 ```bash
-# 邮件同步
+NOTION_TOKEN=ntn_xxx...           # Notion Integration Token
+EMAIL_DATABASE_ID=xxx...          # 邮件数据库 ID
+CALENDAR_DATABASE_ID=xxx...       # 日历数据库 ID
+USER_EMAIL=your@email.com
+MAIL_ACCOUNT_NAME=Exchange        # Mail.app 账户名
+```
+
+完整配置参见 `.env.example`
+
+### 3. 系统权限
+
+**Full Disk Access**（必需）
+- 系统设置 → 隐私与安全 → 完全磁盘访问权限 → 添加 Terminal
+
+### 4. 测试连接
+
+```bash
+source venv/bin/activate
+python3 scripts/test_notion_api.py   # Notion API
+python3 scripts/test_mail_reader.py  # Mail.app
+```
+
+### 5. 初始化同步
+
+首次使用需将历史邮件同步到 Notion：
+
+```bash
+# 完整初始化流程
+python3 scripts/initial_sync.py --action all --yes
+
+# 或分步执行：
+python3 scripts/initial_sync.py --action fetch-cache --inbox-count 3000 --sent-count 500
+python3 scripts/initial_sync.py --action analyze
+python3 scripts/initial_sync.py --action all --yes
+```
+
+### 6. 启动服务
+
+**开发/测试：**
+```bash
 python3 main.py
-
-# 日历同步
-python3 calendar_main.py
 ```
 
-## ⚙️ 配置说明
+**生产环境（PM2）：**
+```bash
+npm install -g pm2
+pm2 start main.py --name mail-sync --interpreter python3
+pm2 save && pm2 startup
+```
 
-### 环境变量 (.env)
+---
 
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `NOTION_TOKEN` | Notion Integration Token | `ntn_xxx...` |
-| `EMAIL_DATABASE_ID` | 邮件数据库 ID | `2df15375...` |
-| `CALENDAR_DATABASE_ID` | 日历数据库 ID | `2f015375...` |
-| `USER_EMAIL` | 用户邮箱 | `user@example.com` |
-| `MAIL_ACCOUNT_NAME` | Mail.app 账户名 | `Exchange` |
-| `MAIL_INBOX_NAME` | 收件箱名称 | `收件箱` |
-| `CALENDAR_NAME` | 日历名称 | `日历` |
-| `CHECK_INTERVAL` | 邮件检查间隔(秒) | `60` |
-| `CALENDAR_CHECK_INTERVAL` | 日历同步间隔(秒) | `300` |
+## 架构说明
 
-完整配置请参考 `.env.example`
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        main.py (邮件同步)                        │
+├─────────────────────────────────────────────────────────────────┤
+│  SQLite Radar ──检测变化──▶ AppleScript Arm ──获取邮件──▶        │
+│                                    ↓                             │
+│                             SyncStore (去重)                     │
+│                                    ↓                             │
+│                  ┌─────────────────┴─────────────────┐           │
+│                  ↓                                   ↓           │
+│         NotionSync (邮件页面)              MeetingInviteSync     │
+│                  ↓                            (解析 .ics)        │
+│            Notion Email DB                        ↓              │
+│                                          Notion Calendar DB      │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-## 📊 Notion Database Schema
+**核心流程**：
+1. SQLite Radar 每 5 秒检测 Mail.app 数据库变化
+2. 发现新邮件后，通过 AppleScript 获取完整内容
+3. 解析邮件，同步到 Notion Email 数据库
+4. 如果邮件包含会议邀请（.ics），自动创建日程到 Calendar 数据库
+
+---
+
+## Notion 数据库结构
 
 ### 邮件数据库
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | Subject | Title | 邮件主题 |
-| From | Email | 发件人邮箱 |
-| From Name | Text | 发件人姓名 |
-| Date | Date | 接收日期 |
-| Message ID | Text | 用于去重 |
-| Thread ID | Text | 邮件线程 |
-| Processing Status | Select | 处理状态 |
+| Message ID | Text | 唯一标识（去重用） |
+| Thread ID | Text | 线程标识 |
+| From / To / CC | Text/Email | 收发件人 |
+| Date | Date | 日期 |
+| Parent Item | Relation (self) | 线程头关联 |
+| Mailbox | Select | 收件箱/发件箱 |
+| Is Read / Is Flagged | Checkbox | 状态 |
+| Has Attachments | Checkbox | 是否有附件 |
 
 ### 日历数据库
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | Title | Title | 事件标题 |
-| Event ID | Text | 用于去重 |
+| Event ID | Text | 唯一标识 |
 | Time | Date | 起止时间 |
 | URL | URL | Teams 会议链接 |
 | Location | Text | 地点 |
-| Status | Select | confirmed/tentative/cancelled |
 | Organizer | Text | 组织者 |
-| Attendee Count | Number | 参会人数 |
 
-## 🔍 故障排查
+---
 
-### 邮箱名称错误
+## 常见问题
+
+**邮箱名称错误**
 ```bash
 python3 scripts/debug_mail_structure.py
 ```
 
-### 日历权限问题
-```bash
-# 在终端运行以触发权限弹窗
-python3 scripts/test_eventkit.py
-```
-然后在 系统设置 > 隐私与安全 > 日历 中授权。
+**SQLite 权限问题**
+- 系统设置 → 隐私与安全 → 完全磁盘访问权限 → 添加 Terminal
 
-### Teams 会议未识别
-- 检查事件描述是否包含 Teams 信息
-- 查看 `logs/sync.log` 中的解析日志
-- 新格式和旧格式都已支持
+**AppleScript 超时**
+- 增大 `.env` 中的 `APPLESCRIPT_TIMEOUT`（默认 200 秒）
 
-### 查看日志
+**查看日志**
 ```bash
-# 实时日志
 tail -f logs/sync.log
-
-# PM2 日志
 pm2 logs
-
-# 搜索错误
-grep ERROR logs/sync.log
 ```
-
-## 📁 项目结构
-
-```
-MailAgent/
-├── main.py                 # 邮件同步入口
-├── calendar_main.py        # 日历同步入口
-├── ecosystem.config.js     # PM2 配置
-├── .env                    # 环境配置
-├── src/
-│   ├── mail/              # 邮件读取（AppleScript）
-│   ├── calendar/          # 日历读取（EventKit）
-│   ├── notion/            # 邮件 Notion 同步
-│   ├── calendar_notion/   # 日历 Notion 同步
-│   │   ├── sync.py        # 同步逻辑
-│   │   └── description_parser.py  # Teams 会议解析
-│   ├── converter/         # HTML 转换
-│   ├── models.py          # 数据模型
-│   └── config.py          # 配置管理
-├── scripts/               # 测试和调试脚本
-└── logs/                  # 日志文件
-```
-
-## 🛠️ 开发指南
-
-详细的架构说明和开发指南请参考 [CLAUDE.md](./CLAUDE.md)
-
-## 📝 License
-
-MIT License
 
 ---
 
-🎉 祝使用愉快！
+## 项目结构
+
+```
+MailAgent/
+├── main.py                 # 邮件同步入口（主服务）
+├── calendar_main.py        # 日历同步入口（可选，一般不需要）
+├── src/
+│   ├── mail/               # 邮件模块
+│   │   ├── new_watcher.py      # 监听器
+│   │   ├── sqlite_radar.py     # SQLite 雷达
+│   │   ├── applescript_arm.py  # AppleScript 获取器
+│   │   ├── sync_store.py       # 同步状态存储
+│   │   ├── meeting_sync.py     # 会议邀请同步
+│   │   ├── icalendar_parser.py # iCalendar 解析
+│   │   └── reader.py           # 邮件解析
+│   ├── calendar/           # 日历模块（可选）
+│   ├── notion/             # Notion 邮件同步
+│   ├── calendar_notion/    # Notion 日历同步
+│   ├── converter/          # HTML 转换
+│   ├── models.py           # 数据模型
+│   └── config.py           # 配置管理
+├── scripts/
+│   ├── initial_sync.py     # 初始化同步
+│   └── test_*.py           # 测试脚本
+├── data/
+│   └── sync_store.db       # 同步状态数据库
+└── logs/
+```
+
+---
+
+## 开发文档
+
+- [架构设计](./docs/new_architecture_design.md)
+- [初始同步指南](./docs/initial_sync.md)
+- [开发指南](./CLAUDE.md)
+
+## License
+
+MIT

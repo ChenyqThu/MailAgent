@@ -10,6 +10,8 @@ class Attachment:
     content_type: str
     size: int
     path: str  # 临时文件路径
+    content_id: Optional[str] = None  # MIME Content-ID，用于内联图片匹配
+    is_inline: bool = False  # 是否为内联附件（Content-Disposition: inline）
 
 @dataclass
 class Email:
@@ -27,7 +29,8 @@ class Email:
     is_flagged: bool = False
     has_attachments: bool = False
     attachments: List[Attachment] = field(default_factory=list)
-    thread_id: Optional[str] = None
+    thread_id: Optional[str] = None  # 线程标识（从 References/In-Reply-To 提取）
+    mailbox: str = "收件箱"  # 邮箱类型: 收件箱 / 发件箱
 
     def __post_init__(self):
         """验证数据"""

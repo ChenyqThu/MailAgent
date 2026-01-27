@@ -72,6 +72,14 @@ class HTMLToNotionConverter:
                     blocks.append(self._create_paragraph(text))
 
             elif child.name == "p":
+                # 先检查段落内是否有图片
+                imgs = child.find_all("img")
+                for img in imgs:
+                    image_block = self._handle_image(img)
+                    if image_block:
+                        blocks.append(image_block)
+
+                # 然后处理文本内容
                 text = child.get_text(strip=True)
                 if text:
                     blocks.append(self._create_paragraph(text))
@@ -365,8 +373,8 @@ class HTMLToNotionConverter:
             has_header = False
 
             for i, row in enumerate(rows):
-                # 查找单元格（th或td）
-                cells = row.find_all(["th", "td"])
+                # 查找单元格（th或td）- 只查找直接子元素，避免嵌套表格导致重复
+                cells = row.find_all(["th", "td"], recursive=False)
                 if not cells:
                     continue
 

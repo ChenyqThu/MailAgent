@@ -1,306 +1,319 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+为 Claude Code 提供的项目指南。
 
-## Project Overview
+## 项目概述
 
-**MailAgent** is a real-time synchronization system that automatically syncs:
-1. **Emails** from macOS Mail.app to Notion
-2. **Calendar events** from macOS Calendar.app (Exchange) to Notion
+**MailAgent** 是一个 macOS 邮件实时同步系统，将 Mail.app 邮件同步到 Notion，支持：
+- 邮件内容、附件、线程关系同步
+- 自动识别邮件中的会议邀请（iCalendar）并创建日程
+- AI 分类与处理（通过 Notion）
 
-Enabling AI-powered classification, analysis, and reply suggestions.
+**技术栈：**
+- Python 3.11+ / asyncio
+- AppleScript（Mail.app 交互）
+- SQLite（状态存储 + 变化检测）
+- Notion API（notion-client）
+- BeautifulSoup/lxml（HTML 解析）
+- Pydantic（配置管理）
 
-**Tech Stack:**
-- Python 3.11+ with asyncio
-- AppleScript for Mail.app integration
-- EventKit (pyobjc) for Calendar.app integration
-- Notion API (notion-client)
-- BeautifulSoup/lxml for HTML parsing
-- Pydantic for configuration management
+## 命令速查
 
-## Commands
-
-### Environment Setup
 ```bash
-# Activate virtual environment (required for all commands)
+# 环境准备
 source venv/bin/activate
-
-# Install/update dependencies
 pip install -r requirements.txt
-```
 
-### Testing & Development
-```bash
-# Test Notion API connection
-python3 scripts/test_notion_api.py
+# 测试
+python3 scripts/test_notion_api.py      # Notion 连接
+python3 scripts/test_mail_reader.py     # 邮件读取
+python3 scripts/debug_mail_structure.py # 查看邮箱名称
 
-# Test Mail.app email reading
-python3 scripts/test_mail_reader.py
+# 初始化同步
+python3 scripts/initial_sync.py --action fetch-cache --inbox-count 3000 --sent-count 500
+python3 scripts/initial_sync.py --action analyze
+python3 scripts/initial_sync.py --action all --yes
 
-# Manually sync one email (interactive)
-python3 scripts/manual_sync.py
+# 运行服务
+python3 main.py                         # 前台运行
+pm2 start main.py --name mail-sync --interpreter python3  # PM2
 
-# Debug Mail.app structure (find correct mailbox names)
-python3 scripts/debug_mail_structure.py
-
-# Inspect latest unread email details
-python3 scripts/inspect_latest_email.py
-
-# Test attachment handling
-python3 scripts/test_attachments.py
-
-# Test EventKit calendar reading
-python3 scripts/test_eventkit.py
-
-# Debug EventKit raw data
-python3 scripts/debug_eventkit.py
-```
-
-### Running the Services
-```bash
-# Run email sync in foreground (for testing)
-python3 main.py
-
-# Run calendar sync once
-python3 calendar_main.py --once
-
-# Run calendar sync daemon (continuous)
-python3 calendar_main.py
-
-# View logs in real-time
+# 日志
 tail -f logs/sync.log
 ```
 
-### Running with PM2 (Recommended for Production)
-```bash
-# Install PM2 if not already installed
-npm install -g pm2
+## 架构
 
-# Start email sync service
-pm2 start main.py --name mail-sync --interpreter python3 --cwd /Users/chenyuanquan/Documents/MailAgent
-
-# Start calendar sync service
-pm2 start calendar_main.py --name calendar-sync --interpreter python3 --cwd /Users/chenyuanquan/Documents/MailAgent
-
-# Save PM2 process list (auto-restart on reboot)
-pm2 save
-
-# Setup PM2 startup script (run on system boot)
-pm2 startup
-
-# View status
-pm2 status
-
-# View logs
-pm2 logs mail-sync
-pm2 logs calendar-sync
-
-# Restart services
-pm2 restart mail-sync
-pm2 restart calendar-sync
-
-# Stop services
-pm2 stop all
-```
-
-## Architecture
-
-### Core Data Flow
+### 核心数据流
 
 ```
-Mail.app → EmailReader → NotionSync → Notion Database
-           (AppleScript)  (HTML Conv)  (Pages + Blocks)
-                              ↓
-                         Attachments → File Upload API
-
-Calendar.app → CalendarReader → CalendarNotionSync → Notion Database
-               (EventKit)       (Description Parser)  (Pages + Blocks)
-                                       ↓
-                              Teams Meeting → URL + Formatted Content
+Mail.app SQLite ──雷达检测──▶ AppleScript ──获取邮件──▶ SyncStore
+        │                                                   │
+        │ (~5ms/次)                                         ▼
+        │                                           ┌───────────────┐
+        └───────────────────────────────────────────│ NotionSync    │
+                                                    │   - 邮件页面  │
+                                                    │   - 附件上传  │
+                                                    └───────┬───────┘
+                                                            │
+                                                            ▼
+                                          ┌─────────────────────────────────┐
+                                          │ MeetingInviteSync (检测 .ics)   │
+                                          │   - 解析 iCalendar              │
+                                          │   - 创建日程页面                │
+                                          └─────────────────────────────────┘
 ```
 
-### Key Components
+### 模块说明
 
-**1. Email Reading Layer (`src/mail/`)**
-- `applescript.py`: AppleScript executor for Mail.app operations
-  - Uses subprocess to run osascript commands
-  - 120s timeout for large HTML emails
-  - Returns structured data via delimiter-separated strings
-- `reader.py`: Email data extraction
-  - **Critical**: Extracts HTML content from email source (not plain text)
-  - Parses RFC 822 email source to get HTML body and thread metadata
-  - Handles attachments by saving to temp directory with MD5 hashing
-  - Extracts Thread ID from `References` or `In-Reply-To` headers
-- `watcher.py`: Polling-based new email detection
-  - Maintains in-memory set of seen Message IDs
-  - Polls every `check_interval` seconds (default: 5s)
+#### 邮件模块 (`src/mail/`)
 
-**2. Calendar Reading Layer (`src/calendar/`)**
-- `reader.py`: EventKit-based calendar reader
-  - Uses pyobjc-framework-EventKit for native macOS Calendar access
-  - Reads Exchange calendar events synced to Calendar.app
-  - Handles timezone conversion (event's original timezone preserved)
-  - Extracts attendees, organizer, recurrence rules
-  - Stores raw description for Teams meeting parsing
-  - **Recurring Events**: Uses `calendarItemIdentifier + occurrenceDate` as unique ID
-    - Each instance of a recurring meeting gets its own Notion page
-    - Format: `{base_id}_{timestamp}` (e.g., `ABC123_1737532800`)
-    - Allows separate meeting notes for each occurrence
+| 模块 | 职责 |
+|------|------|
+| `new_watcher.py` | 主监听器，协调雷达、机械臂、同步器 |
+| `sqlite_radar.py` | 检测 Mail.app SQLite 数据库变化（max_row_id） |
+| `applescript_arm.py` | 通过 AppleScript 获取邮件详情 |
+| `sync_store.py` | SQLite 同步状态存储（message_id 去重） |
+| `reader.py` | MIME 邮件解析（HTML、附件、thread_id） |
+| `meeting_sync.py` | 会议邀请检测与同步 |
+| `icalendar_parser.py` | iCalendar 解析器 |
+| `health_check.py` | 健康检查（发现遗漏邮件） |
+| `reverse_sync.py` | 反向同步（Notion → Mail.app） |
 
-**3. Content Conversion Layer (`src/converter/`)**
-- `html_converter.py`: Converts HTML to Notion blocks
-  - **Critical**: Maps inline images via CID references to uploaded file IDs
-  - Handles tables, lists, headings, quotes, code blocks
-  - Truncates text by UTF-16 length (Notion's requirement)
-  - Max 100 blocks per request (Notion API limit)
-- `eml_generator.py`: Creates RFC 822 .eml files for archival
+#### Notion 模块 (`src/notion/`)
 
-**4. Calendar Description Parser (`src/calendar_notion/description_parser.py`)**
-- Feature-based Teams meeting detection (not fixed format matching)
-- Supports multiple Teams URL formats:
-  - New format: `https://teams.microsoft.com/meet/{id}?p={key}`
-  - Old format: `https://teams.microsoft.com/l/meetup-join/...`
-  - SafeLinks wrapped URLs
-- Multi-language support for Meeting ID and Passcode extraction
-- Table detection and reconstruction for ABR-style schedules
-- Generates formatted Notion blocks with clickable join links
+| 模块 | 职责 |
+|------|------|
+| `client.py` | Notion API 封装（文件上传、页面操作） |
+| `sync.py` | 邮件同步逻辑（线程关系、Parent Item） |
 
-**5. Notion Sync Layer (`src/notion/`, `src/calendar_notion/`)**
-- `client.py`: Notion API wrapper for emails
-- `sync.py`: Email-to-Notion sync orchestration
-- `calendar_notion/sync.py`: Calendar-to-Notion sync
-  - Creates/updates pages with event properties
-  - Writes formatted description to page body (not just text property)
-  - Extracts Teams join URL to URL property for quick access
-  - Handles all-day and multi-day events correctly
-  - **Smart Update Detection**: Avoids unnecessary updates
-    - Compares `last_modified` at minute precision (Notion limitation)
-    - Uses `Last Synced` field to track sync state for events without modification time
-    - Only updates when event has actually changed
+#### 日历模块 (`src/calendar_notion/`)
 
-### Teams Meeting Parsing (Critical)
+| 模块 | 职责 |
+|------|------|
+| `sync.py` | 日历事件同步到 Notion |
+| `description_parser.py` | Teams 会议信息提取 |
 
-The parser uses **feature-based recognition** instead of fixed format matching:
+#### 转换模块 (`src/converter/`)
+
+| 模块 | 职责 |
+|------|------|
+| `html_converter.py` | HTML → Notion Blocks（含内联图片） |
+| `eml_generator.py` | 生成 .eml 归档文件 |
+
+### 关键流程
+
+#### 1. 新邮件检测与同步
 
 ```python
-# Core patterns (language-agnostic)
-TEAMS_URL_PATTERNS = [
-    r'https://teams\.microsoft\.com/meet/\d+\?p=[A-Za-z0-9]+',  # New format
-    r'https://teams\.microsoft\.com/l/meetup-join/...',          # Old format
-]
+# new_watcher.py
+async def _poll_loop():
+    while True:
+        # 1. 雷达检测变化
+        has_new, estimated = radar.check_for_changes()
 
-MEETING_ID_PATTERNS = [
-    r'(?:Meeting\s*ID|会议\s*ID|会议ID)\s*[:：]\s*([\d\s]{10,25})',
-]
+        if has_new:
+            # 2. AppleScript 获取最新邮件
+            emails = arm.fetch_latest_emails(count=estimated + 5)
 
-PASSCODE_PATTERNS = [
-    r'(?:Passcode|Password|Pass code|密码)\s*[:：]\s*(\S{4,20})',
-]
+            for email in emails:
+                # 3. 检查是否已同步
+                if sync_store.is_synced(email.message_id):
+                    continue
+
+                # 4. 获取完整内容并同步
+                content = arm.fetch_email_content(email.message_id)
+                page_id = await notion_sync.sync_email(email)
+
+                # 5. 检测会议邀请
+                if meeting_sync.has_meeting_invite(content):
+                    calendar_page_id = await meeting_sync.process_email(content)
+
+                # 6. 更新同步状态
+                sync_store.mark_synced(email.message_id, page_id)
+
+        await asyncio.sleep(poll_interval)
 ```
 
-Supports variations:
-- `Microsoft Teams 会议` / `Microsoft Teams meeting` / `Microsoft Teams Meeting`
-- `加入:` / `Join:`
-- `会议 ID:` / `Meeting ID:`
-- `密码:` / `Passcode:`
+#### 2. 线程关系处理
 
-### Configuration System
+```python
+# notion/sync.py
+async def _find_or_create_parent(email, thread_id):
+    # 1. 查找现有 Parent
+    parent = await query_by_message_id(thread_id)
+    if parent:
+        return parent['page_id']
 
-Uses Pydantic settings with `.env` file:
+    # 2. 检查缓存（线程头找不到）
+    if sync_store.is_thread_head_not_found(thread_id):
+        return await _use_fallback_parent(thread_id)
 
-**Email Settings:**
-- `MAIL_INBOX_NAME`: Must match exact mailbox name (e.g., "收件箱")
-- `CHECK_INTERVAL`: Polling interval in seconds
-- `MAX_ATTACHMENT_SIZE`: 20MB (Notion's limit)
-- `SYNC_EXISTING_UNREAD`: Whether to sync backlog on startup
+    # 3. 尝试获取线程头邮件
+    thread_head = arm.fetch_email_by_message_id(thread_id)
+    if thread_head:
+        parent_page_id = await sync_email(thread_head)
+        return parent_page_id
 
-**Calendar Settings:**
-- `CALENDAR_DATABASE_ID`: Notion database ID for calendar events
-- `CALENDAR_NAME`: Calendar name in Calendar.app (e.g., "日历")
-- `CALENDAR_CHECK_INTERVAL`: Sync interval in seconds (default: 300)
-- `CALENDAR_PAST_DAYS`: How many days in the past to sync (default: 90)
-- `CALENDAR_FUTURE_DAYS`: How many days in the future to sync (default: 90)
+    # 4. 标记为找不到，使用 fallback
+    sync_store.mark_thread_head_not_found(thread_id)
+    return await _use_fallback_parent(thread_id)
+```
 
-## Notion Database Schema
+#### 3. 内联图片处理
 
-### Email Database
-Required properties (case-sensitive):
+```python
+# converter/html_converter.py
+def convert(html, image_map=None):
+    """
+    image_map: {cid: file_upload_id}
+
+    处理流程：
+    1. 解析 HTML，找到 <img src="cid:xxx">
+    2. 从 image_map 查找对应的 file_upload_id
+    3. 创建 Notion image block
+    """
+```
+
+**关键点**：AppleScript 无法保存内联图片，必须从 MIME 源码提取。
+
+### SyncStore 数据结构
+
+```sql
+-- 邮件元数据
+CREATE TABLE email_metadata (
+    message_id TEXT PRIMARY KEY,
+    thread_id TEXT,
+    subject TEXT,
+    sender TEXT,
+    date_received TEXT,
+    mailbox TEXT,
+    sync_status TEXT,  -- pending / synced / failed
+    notion_page_id TEXT,
+    created_at TEXT,
+    updated_at TEXT
+);
+
+-- 同步状态
+CREATE TABLE sync_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);  -- last_max_row_id, last_sync_time
+
+-- 线程头缓存
+CREATE TABLE thread_head_cache (
+    thread_id TEXT PRIMARY KEY,
+    status TEXT,  -- not_found
+    created_at TEXT
+);
+```
+
+## 配置项
+
+### 必填
+
+| 变量 | 说明 |
+|------|------|
+| `NOTION_TOKEN` | Notion Integration Token |
+| `EMAIL_DATABASE_ID` | 邮件数据库 ID |
+| `CALENDAR_DATABASE_ID` | 日历数据库 ID |
+| `USER_EMAIL` | 邮箱地址 |
+| `MAIL_ACCOUNT_NAME` | Mail.app 账户名 |
+
+### 同步配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SYNC_START_DATE` | `2026-01-01` | 只同步此日期后的邮件 |
+| `SYNC_MAILBOXES` | `收件箱,发件箱` | 监听的邮箱 |
+| `RADAR_POLL_INTERVAL` | `5` | 雷达轮询间隔（秒） |
+| `HEALTH_CHECK_INTERVAL` | `3600` | 健康检查间隔（秒） |
+
+### AppleScript 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `INIT_BATCH_SIZE` | `100` | 初始化每批获取数量 |
+| `APPLESCRIPT_TIMEOUT` | `200` | 超时时间（秒） |
+
+## Notion 数据库结构
+
+### 邮件数据库
+
+必需字段：
 - `Subject` (Title)
-- `From` (Email)
-- `From Name` (Text)
+- `Message ID` (Text) - 去重用
+- `Thread ID` (Text) - 线程关联
+- `From` (Email), `From Name` (Text)
 - `To`, `CC` (Text)
 - `Date` (Date)
-- `Message ID` (Text) - used for deduplication
-- `Thread ID` (Text) - for conversation grouping
-- `Processing Status` (Select: "未处理", "已完成")
+- `Parent Item` (Relation to self) - 线程头
+- `Mailbox` (Select)
 - `Is Read`, `Is Flagged`, `Has Attachments` (Checkbox)
-- `Original EML` (Files)
 
-### Calendar Database
-Required properties:
-- `Title` (Title) - Event title
-- `Event ID` (Text) - Unique identifier for deduplication
-- `Calendar` (Select) - Calendar source (e.g., "Exchange")
-- `Time` (Date) - Start and end time (supports date range)
-- `Is All Day` (Checkbox)
-- `Status` (Select: "confirmed", "tentative", "cancelled")
+### 日历数据库
+
+必需字段：
+- `Title` (Title)
+- `Event ID` (Text) - 去重用
+- `Time` (Date) - 起止时间
+- `URL` (URL) - Teams 链接
 - `Location` (Text)
-- `URL` (URL) - Teams meeting join link (auto-extracted)
 - `Organizer` (Text)
-- `Organizer Email` (Email)
-- `Attendees` (Text)
-- `Attendee Count` (Number)
-- `Is Recurring` (Checkbox)
-- `Recurrence Rule` (Text)
-- `Last Modified` (Date)
-- `Last Synced` (Date)
-- `Sync Status` (Select: "synced", "error")
+- `Status` (Select)
 
-## Common Issues
+## 常见问题
 
-**"不能获得 mailbox" error:**
-- Wrong `MAIL_INBOX_NAME` in .env
-- Run `debug_mail_structure.py` to find correct name
+### 邮箱名称错误
 
-**Calendar access denied:**
-- Grant calendar access in System Settings > Privacy & Security > Calendar
-- Run `python3 scripts/test_eventkit.py` in Terminal to trigger permission dialog
+```bash
+python3 scripts/debug_mail_structure.py
+```
 
-**Teams meeting not detected:**
-- Check if the event has a description with Teams info
-- Verify the Teams format is supported (new/old format)
-- Check logs for parsing errors
+### SQLite 无法访问
 
-**Wrong timezone on calendar events:**
-- Events use their original timezone (e.g., Asia/Shanghai)
-- System timezone doesn't affect event times
+需要 Full Disk Access：系统设置 → 隐私与安全 → 完全磁盘访问权限
 
-**All-day events showing wrong dates:**
-- All-day events use date-only format (no time component)
-- Multi-day events include both start and end dates
+### AppleScript 超时
 
-## Development Workflow
+增大 `APPLESCRIPT_TIMEOUT`（默认 200 秒）
 
-1. **Modifying email parsing:**
-   - Edit `src/mail/reader.py`
-   - Test with `scripts/test_mail_reader.py`
+## 开发指南
 
-2. **Modifying calendar parsing:**
-   - Edit `src/calendar/reader.py`
-   - Test with `scripts/test_eventkit.py`
+### 修改邮件解析
 
-3. **Changing Teams meeting detection:**
-   - Edit `src/calendar_notion/description_parser.py`
-   - Add new patterns to `TEAMS_URL_PATTERNS`, `MEETING_ID_PATTERNS`, etc.
+编辑 `src/mail/reader.py`，测试：
+```bash
+python3 scripts/test_mail_reader.py
+```
 
-4. **Adding new features:**
-   - Update `src/models.py` if data model changes
-   - Update Notion database schema if properties change
-   - Add validation in `src/config.py` if new config needed
+### 修改会议检测
 
-## File Locations
+编辑 `src/mail/icalendar_parser.py` 或 `src/calendar_notion/description_parser.py`
 
-- **Logs**: `logs/sync.log` (rotated at 10MB, 7-day retention)
-- **Temp attachments**: `/tmp/email-notion-sync/{md5}/`
-- **Config**: `.env` (never commit with real tokens)
-- **Entry points**: `main.py` (email), `calendar_main.py` (calendar)
+### 添加新配置
+
+1. 在 `src/config.py` 添加 Field
+2. 在 `.env.example` 添加示例
+3. 更新 CLAUDE.md
+
+## 文件位置
+
+- **日志**: `logs/sync.log`
+- **数据库**: `data/sync_store.db`
+- **临时附件**: `/tmp/email-notion-sync/{md5}/`
+- **配置**: `.env`
+
+## 关于 calendar_main.py
+
+`calendar_main.py` 是独立的日历同步服务，直接从 Calendar.app 读取事件。
+
+**一般不需要运行**，因为：
+- `main.py` 已包含会议邀请识别（从邮件中的 .ics）
+- Calendar.app 中的会议可能不完整
+- 邮件中的会议信息更全面
+
+**仅在需要同步历史日程时使用**：
+```bash
+python3 calendar_main.py --once
+```
