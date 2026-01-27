@@ -165,16 +165,16 @@ class NotionSync:
 
         return page
 
-    def _build_image_map(self, email: Email, uploaded_attachments: List[Dict]) -> Dict[str, str]:
+    def _build_image_map(self, email: Email, uploaded_attachments: List[Dict]) -> Dict[str, tuple]:
         """
-        构建图片映射，基于 Content-ID 精确匹配内联图片
+        构建图片映射，基于 Content-ID 精确匹配内联内容
 
         Args:
             email: Email 对象（包含带 content_id 的附件信息）
             uploaded_attachments: 已上传的附件列表
 
         Returns:
-            图片映射 {cid: file_upload_id} 和 {filename: file_upload_id}
+            映射 {cid: (file_upload_id, content_type)} 和 {filename: (file_upload_id, content_type)}
         """
         image_map = {}
 
@@ -194,26 +194,31 @@ class NotionSync:
         logger.debug(f"Found {len(cid_matches)} cid references in HTML: {cid_matches}")
 
         # 方法1：使用附件的 content_id 精确匹配（推荐）
-        # 构建 content_id -> file_upload_id 映射
-        cid_to_upload_id = {}
+        # 构建 content_id -> (file_upload_id, content_type) 映射
+        # 注意：不再限制只有 image/* 类型，因为 magic bytes 检测可能已经修正了类型
+        cid_to_upload_info = {}
         for att in uploaded_attachments:
             content_id = att.get('content_id')
-            if content_id and att['content_type'].startswith('image/'):
-                cid_to_upload_id[content_id] = att['file_upload_id']
+            if content_id:
+                content_type = att.get('content_type', 'application/octet-stream')
+                upload_info = (att['file_upload_id'], content_type)
+                cid_to_upload_info[content_id] = upload_info
                 # 同时添加文件名映射，便于 html_converter 查找
-                image_map[att['filename']] = att['file_upload_id']
-                logger.debug(f"Mapped by Content-ID: {content_id} -> {att['filename']}")
+                image_map[att['filename']] = upload_info
+                logger.debug(f"Mapped by Content-ID: {content_id} -> {att['filename']} (type={content_type})")
 
         # 检查 HTML 中的每个 cid 引用是否有对应的上传文件
         for cid in cid_matches:
-            if cid in cid_to_upload_id:
+            if cid in cid_to_upload_info:
                 # 添加 cid 本身作为 key（html_converter 会用 cid 查找）
-                image_map[cid] = cid_to_upload_id[cid]
+                image_map[cid] = cid_to_upload_info[cid]
                 logger.debug(f"CID {cid} matched to uploaded file")
             else:
                 # 方法2：降级到启发式匹配（兼容旧数据）
                 for att in uploaded_attachments:
-                    if not att['content_type'].startswith('image/'):
+                    content_id = att.get('content_id')
+                    if content_id:
+                        # 已经在上面处理过
                         continue
                     filename = att['filename']
                     filename_without_ext = filename.rsplit('.', 1)[0] if '.' in filename else filename
@@ -221,14 +226,16 @@ class NotionSync:
 
                     if (cid in filename or filename in cid or
                         cid_clean in filename or filename_without_ext in cid):
-                        image_map[cid] = att['file_upload_id']
-                        image_map[filename] = att['file_upload_id']
-                        logger.debug(f"Fallback match: CID {cid} -> {filename}")
+                        content_type = att.get('content_type', 'application/octet-stream')
+                        upload_info = (att['file_upload_id'], content_type)
+                        image_map[cid] = upload_info
+                        image_map[filename] = upload_info
+                        logger.debug(f"Fallback match: CID {cid} -> {filename} (type={content_type})")
                         break
 
         inline_count = len([a for a in uploaded_attachments if a.get('is_inline')])
-        total_images = len([a for a in uploaded_attachments if a['content_type'].startswith('image/')])
-        logger.info(f"Image mapping: {len(image_map)//2} inline images, {total_images - inline_count} regular attachments")
+        total_images = len([a for a in uploaded_attachments if a.get('content_type', '').startswith('image/')])
+        logger.info(f"Image mapping: {len(image_map)//2} inline items, {total_images} images total, {inline_count} marked inline")
 
         return image_map
 
@@ -329,7 +336,7 @@ class NotionSync:
 
         return properties
 
-    def _build_children(self, email: Email, uploaded_attachments: List[Dict] = None, image_map: Dict[str, str] = None) -> List[Dict[str, Any]]:
+    def _build_children(self, email: Email, uploaded_attachments: List[Dict] = None, image_map: Dict[str, tuple] = None) -> List[Dict[str, Any]]:
         """构建 Notion Page Children (Content Blocks)"""
         children = []
 

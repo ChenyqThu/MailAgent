@@ -12,13 +12,13 @@ class HTMLToNotionConverter:
         self.html2text.body_width = 0  # 不换行
         self.image_map = {}  # cid/filename -> file_upload_id映射
 
-    def convert(self, html_content: str, image_map: Dict[str, str] = None) -> List[Dict[str, Any]]:
+    def convert(self, html_content: str, image_map: Dict[str, tuple] = None) -> List[Dict[str, Any]]:
         """
         转换 HTML 为 Notion Blocks
 
         Args:
             html_content: HTML 内容
-            image_map: 图片映射 {filename: file_upload_id}
+            image_map: 映射 {filename_or_cid: (file_upload_id, content_type)}
 
         Returns:
             Notion Blocks 列表
@@ -31,12 +31,27 @@ class HTMLToNotionConverter:
             if not self._is_html(html_content):
                 return self._text_to_blocks(html_content)
 
+            # 预处理：移除 MSO/IE 条件注释 (<!--[if ...]> ... <![endif]-->)
+            import re
+            # 移除条件注释块
+            html_content = re.sub(r'<!--\[if[^\]]*\]>.*?<!\[endif\]-->', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+            # 移除条件注释开始/结束标记（有时不匹配）
+            html_content = re.sub(r'<!--\[if[^\]]*\]>', '', html_content, flags=re.IGNORECASE)
+            html_content = re.sub(r'<!\[endif\]-->', '', html_content, flags=re.IGNORECASE)
+            # 移除普通 HTML 注释
+            html_content = re.sub(r'<!--.*?-->', '', html_content, flags=re.DOTALL)
+
             # 解析 HTML
             soup = BeautifulSoup(html_content, "lxml")
 
             # 移除 script 和 style 标签
-            for tag in soup(["script", "style"]):
+            for tag in soup(["script", "style", "head", "title", "meta", "link"]):
                 tag.decompose()
+
+            # 移除 HTML 注释节点
+            from bs4 import Comment
+            for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+                comment.extract()
 
             # 提取 body 内容（如果有）
             body = soup.find("body")
@@ -45,6 +60,9 @@ class HTMLToNotionConverter:
 
             # 转换为 Notion Blocks
             blocks = self._convert_element(soup)
+
+            # 过滤掉无意义的 blocks（空白或隐形字符）
+            blocks = [b for b in blocks if self._is_meaningful_block(b)]
 
             # 如果没有生成任何 block，使用 html2text 降级处理
             if not blocks:
@@ -60,6 +78,78 @@ class HTMLToNotionConverter:
             # 降级：返回纯文本
             text = self.html2text.handle(html_content)
             return self._text_to_blocks(text[:2000])  # 限制长度
+
+    def _is_meaningful_block(self, block: Dict[str, Any]) -> bool:
+        """检查 block 是否包含有意义的内容（非空白/隐形字符）"""
+        block_type = block.get('type', '')
+
+        # 图片、文件、分割线等总是保留
+        if block_type in ('image', 'file', 'divider', 'table', 'code'):
+            return True
+
+        # 检查文本内容
+        rich_text = None
+        if block_type == 'paragraph':
+            rich_text = block.get('paragraph', {}).get('rich_text', [])
+        elif block_type.startswith('heading_'):
+            rich_text = block.get(block_type, {}).get('rich_text', [])
+        elif block_type == 'bulleted_list_item':
+            rich_text = block.get('bulleted_list_item', {}).get('rich_text', [])
+        elif block_type == 'numbered_list_item':
+            rich_text = block.get('numbered_list_item', {}).get('rich_text', [])
+        elif block_type == 'quote':
+            rich_text = block.get('quote', {}).get('rich_text', [])
+        elif block_type == 'callout':
+            rich_text = block.get('callout', {}).get('rich_text', [])
+
+        if not rich_text:
+            return False
+
+        text = rich_text[0].get('text', {}).get('content', '') if rich_text else ''
+        return self._is_meaningful_text(text)
+
+    @staticmethod
+    def _is_meaningful_text(text: str) -> bool:
+        """检查文本是否有意义（非纯空白/隐形字符）"""
+        if not text:
+            return False
+
+        # 移除各种隐形字符和空白
+        # - \u200b: zero-width space
+        # - \u200c: zero-width non-joiner
+        # - \u200d: zero-width joiner
+        # - \u034f: combining grapheme joiner
+        # - \u00ad: soft hyphen
+        # - \u2060: word joiner
+        # - \u00a0: non-breaking space
+        # - \ufeff: BOM / zero-width no-break space
+        import re
+        # 移除隐形字符
+        cleaned = re.sub(r'[\u200b\u200c\u200d\u034f\u00ad\u2060\ufeff]', '', text)
+        # 移除空白
+        cleaned = cleaned.strip()
+        # 移除只包含空格和 non-breaking space 的文本
+        cleaned = re.sub(r'^[\s\u00a0]+$', '', cleaned)
+
+        # 检查是否只剩下标点或空白
+        if not cleaned:
+            return False
+
+        # 过滤掉 MSO 条件注释残留（文本形式）
+        if re.match(r'^\[if\s+.*\]$', cleaned, re.IGNORECASE):
+            return False
+        if re.match(r'^\[endif\]$', cleaned, re.IGNORECASE):
+            return False
+
+        # 过滤掉模板注释（如 "A1 Top DS logo with sign in"）
+        # 这些通常是简短的、以字母数字开头的标记
+        if re.match(r'^[A-Z]\d+[a-z]?\s+\w+', cleaned) and len(cleaned) < 50:
+            # 可能是模板标记，检查是否像正常句子
+            words = cleaned.split()
+            if len(words) <= 6 and not any(c in cleaned for c in '.?!,'):
+                return False
+
+        return len(cleaned) > 0
 
     def _convert_element(self, element) -> List[Dict[str, Any]]:
         """递归转换 HTML 元素"""
@@ -118,10 +208,29 @@ class HTMLToNotionConverter:
                     blocks.append(image_block)
 
             elif child.name == "a":
-                text = child.get_text(strip=True)
                 href = child.get("href", "")
-                if text and href:
-                    blocks.append(self._create_paragraph(f"{text} ({href})"))
+                text = child.get_text(strip=True)
+
+                # 跳过空链接或仅为图片的链接
+                if not href:
+                    continue
+
+                # 如果链接内包含图片，先处理图片
+                img = child.find("img")
+                if img:
+                    image_block = self._handle_image(img)
+                    if image_block:
+                        blocks.append(image_block)
+
+                # 如果有文本，创建带链接的段落
+                if text:
+                    # 过滤掉明显的按钮样式文本
+                    if href.startswith(("http://", "https://")):
+                        # 创建带链接的文本（Notion 支持 rich_text 中的链接）
+                        blocks.append(self._create_link_paragraph(text, href))
+                elif href.startswith(("http://", "https://")) and not img:
+                    # 纯链接无文本：显示 URL
+                    blocks.append(self._create_link_paragraph(href, href))
 
             elif child.name == "br":
                 continue
@@ -131,14 +240,22 @@ class HTMLToNotionConverter:
                 blocks.extend(self._convert_element(child))
 
             elif child.name == "table":
-                # 表格转换为Notion table block
-                table_block = self._table_to_notion_table(child)
-                if table_block:
-                    blocks.append(table_block)
+                # 检测是否是布局表格（Microsoft/Office 邮件常用）
+                if self._is_layout_table(child):
+                    # 布局表格：递归处理内容，不创建 table block
+                    blocks.extend(self._convert_element(child))
                 else:
-                    # 降级：转换为代码块
-                    table_text = self._table_to_text(child)
-                    blocks.append(self._create_code(table_text))
+                    # 数据表格：转换为Notion table block
+                    table_block = self._table_to_notion_table(child)
+                    if table_block:
+                        blocks.append(table_block)
+                    else:
+                        # 降级：递归处理内容
+                        blocks.extend(self._convert_element(child))
+
+            elif child.name == "td" or child.name == "tr" or child.name == "tbody" or child.name == "thead":
+                # 表格元素：递归处理（处理布局表格的子元素）
+                blocks.extend(self._convert_element(child))
 
         return blocks
 
@@ -265,6 +382,26 @@ class HTMLToNotionConverter:
             }
         }
 
+    @staticmethod
+    def _create_link_paragraph(text: str, url: str) -> Dict[str, Any]:
+        """创建带链接的段落 Block"""
+        safe_text = HTMLToNotionConverter._truncate_by_utf16(text)
+        # 截断过长的 URL
+        safe_url = url[:2000] if len(url) > 2000 else url
+        return {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{
+                    "type": "text",
+                    "text": {
+                        "content": safe_text,
+                        "link": {"url": safe_url}
+                    }
+                }]
+            }
+        }
+
     def _handle_image(self, img_element) -> Dict[str, Any]:
         """
         处理HTML中的图片标签
@@ -273,7 +410,7 @@ class HTMLToNotionConverter:
             img_element: BeautifulSoup的img元素
 
         Returns:
-            Notion image block，如果无法处理则返回None
+            Notion block (image/file/callout)，如果无法处理则返回None
         """
         try:
             src = img_element.get("src", "")
@@ -282,35 +419,63 @@ class HTMLToNotionConverter:
             if not src:
                 return None
 
-            # 处理cid:引用（内联图片）
+            # 处理cid:引用（内联内容）
             if src.startswith("cid:"):
                 cid = src[4:]  # 移除"cid:"前缀
 
                 # 尝试从image_map中查找
                 # cid可能是完整的Content-ID，也可能只是文件名
-                file_upload_id = None
+                upload_info = None
+                matched_key = None
 
                 # 直接匹配
                 if cid in self.image_map:
-                    file_upload_id = self.image_map[cid]
+                    upload_info = self.image_map[cid]
+                    matched_key = cid
                 else:
                     # 尝试通过文件名匹配（cid通常包含文件名）
-                    for filename, upload_id in self.image_map.items():
-                        if cid in filename or filename in cid:
-                            file_upload_id = upload_id
+                    for key, info in self.image_map.items():
+                        if cid in key or key in cid:
+                            upload_info = info
+                            matched_key = key
                             break
 
-                if file_upload_id:
-                    logger.debug(f"Matched cid:{cid} to uploaded file")
-                    return {
-                        "object": "block",
-                        "type": "image",
-                        "image": {
-                            "type": "file_upload",
-                            "file_upload": {"id": file_upload_id},
-                            "caption": [{"text": {"content": alt[:2000]}}] if alt else []
+                if upload_info:
+                    # 解构 tuple: (file_upload_id, content_type)
+                    # 兼容旧格式：如果是 str 则视为 file_upload_id，类型为 image
+                    if isinstance(upload_info, tuple):
+                        file_upload_id, content_type = upload_info
+                    else:
+                        # 兼容旧格式
+                        file_upload_id = upload_info
+                        content_type = 'image/unknown'
+
+                    logger.debug(f"Matched cid:{cid} to uploaded file (type={content_type})")
+
+                    # 根据 content_type 决定使用 image block 还是 file block
+                    if content_type.startswith('image/'):
+                        return {
+                            "object": "block",
+                            "type": "image",
+                            "image": {
+                                "type": "file_upload",
+                                "file_upload": {"id": file_upload_id},
+                                "caption": [{"text": {"content": alt[:2000]}}] if alt else []
+                            }
                         }
-                    }
+                    else:
+                        # 非图片内联内容：使用 file block
+                        # 使用匹配到的文件名作为 caption（如果 key 是文件名）
+                        caption_text = matched_key if matched_key and '.' in matched_key else f"cid:{cid}"
+                        return {
+                            "object": "block",
+                            "type": "file",
+                            "file": {
+                                "type": "file_upload",
+                                "file_upload": {"id": file_upload_id},
+                                "caption": [{"text": {"content": caption_text[:2000]}}]
+                            }
+                        }
                 else:
                     logger.warning(f"Could not find uploaded file for cid:{cid} (attachment may have failed to upload)")
                     # 返回占位符文本块，而不是完全隐藏图片
@@ -354,6 +519,95 @@ class HTMLToNotionConverter:
     def _is_html(content: str) -> bool:
         """判断是否是 HTML"""
         return "<html" in content.lower() or "<body" in content.lower() or "<div" in content.lower()
+
+    def _is_layout_table(self, table_element) -> bool:
+        """
+        检测表格是否是布局表格（用于邮件排版，而非数据展示）
+
+        Microsoft/Office 邮件通常使用嵌套表格进行布局，这些表格不应该转换为 Notion table。
+        布局表格的特征：
+        1. role="presentation" 属性
+        2. 只有单列或单行
+        3. 包含嵌套表格
+        4. border="0" 且没有 th 元素
+        5. 主要包含图片或链接（而非数据）
+
+        Returns:
+            True 如果是布局表格，False 如果是数据表格
+        """
+        try:
+            # 1. 检查 role="presentation"（明确标记为布局表格）
+            if table_element.get("role") == "presentation":
+                return True
+
+            # 2. 检查是否包含嵌套表格（布局表格的典型特征）
+            nested_tables = table_element.find_all("table", recursive=True)
+            if nested_tables:
+                return True
+
+            # 获取所有行
+            rows = table_element.find_all("tr", recursive=False)
+            if not rows:
+                # 尝试在 tbody 中查找
+                tbody = table_element.find("tbody")
+                if tbody:
+                    rows = tbody.find_all("tr", recursive=False)
+
+            if not rows:
+                return True  # 空表格视为布局表格
+
+            # 3. 统计列数和行数
+            max_cols = 0
+            total_rows = len(rows)
+            has_th = False
+            has_meaningful_content = False
+
+            for row in rows:
+                cells = row.find_all(["td", "th"], recursive=False)
+                max_cols = max(max_cols, len(cells))
+                if any(cell.name == "th" for cell in cells):
+                    has_th = True
+
+                # 检查是否有有意义的文本内容（不只是图片/空格）
+                for cell in cells:
+                    text = cell.get_text(strip=True)
+                    if text and len(text) > 3:  # 超过3个字符的文本
+                        has_meaningful_content = True
+
+            # 4. 单列表格通常是布局表格
+            if max_cols == 1:
+                return True
+
+            # 5. 只有一行且没有表头通常是布局表格
+            if total_rows == 1 and not has_th:
+                return True
+
+            # 6. border="0" 且没有 th 且内容很少 → 布局表格
+            border = table_element.get("border", "")
+            if border == "0" and not has_th and not has_meaningful_content:
+                return True
+
+            # 7. 检查表格属性（常见的布局表格属性）
+            cellpadding = table_element.get("cellpadding", "")
+            cellspacing = table_element.get("cellspacing", "")
+            width = table_element.get("width", "")
+
+            # 如果有布局相关属性且没有表头，很可能是布局表格
+            if (cellpadding or cellspacing or width == "100%") and not has_th:
+                # 额外检查：如果有多行多列的有意义内容，可能是数据表格
+                if total_rows >= 2 and max_cols >= 2 and has_meaningful_content:
+                    return False
+                return True
+
+            # 8. 默认：如果有表头或多行多列数据，认为是数据表格
+            if has_th or (total_rows >= 2 and max_cols >= 2):
+                return False
+
+            return True  # 其他情况默认为布局表格
+
+        except Exception as e:
+            logger.debug(f"Error detecting layout table: {e}")
+            return True  # 出错时默认为布局表格，避免生成混乱的 table block
 
     def _table_to_notion_table(self, table_element) -> Dict[str, Any]:
         """

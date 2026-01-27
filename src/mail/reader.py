@@ -442,16 +442,35 @@ class EmailReader:
                             }
                             logger.debug(f"Found Content-ID mapping: {cid} -> {filename} (inline={is_inline})")
 
-                        # 如果是图片类型，提取二进制数据
-                        if content_type.startswith('image/'):
+                        # 提取所有带 Content-ID 的部分（不仅限于图片）
+                        # 这样可以处理 Outlook 将图片误标为 application/octet-stream 的情况
+                        # 跳过已知的非渲染类型（日历邀请、vCard 等）
+                        skip_types = ('text/calendar', 'text/vcard', 'application/ics')
+                        if not content_type.startswith(skip_types):
                             try:
-                                # 获取图片数据
+                                # 获取数据
                                 payload = part.get_payload(decode=True)
                                 if payload:
-                                    # 生成文件名（如果没有的话）
+                                    # 使用 magic bytes 检测真实的 Content-Type
+                                    detected_type = self._detect_content_type(payload, content_type, filename)
+                                    if detected_type != content_type:
+                                        logger.debug(f"Content-Type corrected: {content_type} -> {detected_type}")
+                                        content_type = detected_type
+                                        # 同步更新 cid_map 中的类型
+                                        if cid in cid_map:
+                                            cid_map[cid]['content_type'] = detected_type
+
+                                    # 生成或修正文件名（确保有正确扩展名）
                                     if not filename:
                                         ext = content_type.split('/')[-1]
                                         filename = f"inline_{cid.split('@')[0]}.{ext}"
+                                    elif '.' not in filename:
+                                        # 文件名存在但没有扩展名，根据 content_type 添加扩展名
+                                        ext = content_type.split('/')[-1]
+                                        if ext == 'jpeg':
+                                            ext = 'jpg'
+                                        filename = f"{filename}.{ext}"
+                                        logger.debug(f"Added extension to filename: {filename}")
 
                                     inline_images.append({
                                         'filename': filename,
@@ -460,9 +479,9 @@ class EmailReader:
                                         'is_inline': is_inline,
                                         'data': payload
                                     })
-                                    logger.debug(f"Extracted inline image: {filename} ({len(payload)} bytes)")
+                                    logger.debug(f"Extracted inline content: {filename} ({len(payload)} bytes, type={content_type})")
                             except Exception as e:
-                                logger.warning(f"Failed to extract inline image {cid}: {e}")
+                                logger.warning(f"Failed to extract inline content {cid}: {e}")
 
             return html_content, thread_id, cid_map, inline_images, email_date
 
@@ -578,14 +597,33 @@ class EmailReader:
                                 'is_inline': is_inline
                             }
 
-                        # 提取图片数据
-                        if part_content_type.startswith('image/'):
+                        # 提取所有带 Content-ID 的内容（不仅限于图片）
+                        # 跳过已知的非渲染类型（日历邀请、vCard 等）
+                        skip_types = ('text/calendar', 'text/vcard', 'application/ics')
+                        if not part_content_type.startswith(skip_types):
                             try:
                                 payload = part.get_payload(decode=True)
                                 if payload:
+                                    # 使用 magic bytes 检测真实的 Content-Type
+                                    detected_type = self._detect_content_type(payload, part_content_type, filename)
+                                    if detected_type != part_content_type:
+                                        logger.debug(f"Content-Type corrected: {part_content_type} -> {detected_type}")
+                                        part_content_type = detected_type
+                                        # 同步更新 cid_map 中的类型
+                                        if cid in cid_map:
+                                            cid_map[cid]['content_type'] = detected_type
+
+                                    # 生成或修正文件名（确保有正确扩展名）
                                     if not filename:
                                         ext = part_content_type.split('/')[-1]
                                         filename = f"inline_{cid.split('@')[0]}.{ext}"
+                                    elif '.' not in filename:
+                                        # 文件名存在但没有扩展名，根据 content_type 添加扩展名
+                                        ext = part_content_type.split('/')[-1]
+                                        if ext == 'jpeg':
+                                            ext = 'jpg'
+                                        filename = f"{filename}.{ext}"
+                                        logger.debug(f"Added extension to filename: {filename}")
 
                                     inline_images.append({
                                         'filename': filename,
@@ -595,7 +633,7 @@ class EmailReader:
                                         'data': payload
                                     })
                             except Exception as e:
-                                logger.warning(f"Failed to extract inline image {cid}: {e}")
+                                logger.warning(f"Failed to extract inline content {cid}: {e}")
 
                     elif disposition.lower().startswith("attachment") and filename:
                         # 常规附件（无 Content-ID，有 Content-Disposition: attachment）
@@ -662,6 +700,56 @@ class EmailReader:
         if "<" in sender:
             return sender.split("<")[0].strip()
         return sender.split("@")[0].strip()
+
+    @staticmethod
+    def _detect_content_type(payload: bytes, declared_type: str, filename: str = None) -> str:
+        """检测真实的 Content-Type（通过 magic bytes + 文件扩展名 + 声明类型）
+
+        处理 Outlook 等客户端将图片误标为 application/octet-stream 的情况
+
+        Args:
+            payload: 文件二进制内容
+            declared_type: MIME 声明的 Content-Type
+            filename: 文件名（可选）
+
+        Returns:
+            检测到的真实 Content-Type
+        """
+        # 1. 首先尝试 magic bytes 检测
+        if payload and len(payload) >= 16:
+            # PNG: \x89PNG\r\n\x1a\n
+            if payload.startswith(b'\x89PNG'):
+                return "image/png"
+            # JPEG: \xff\xd8\xff
+            if payload.startswith(b'\xff\xd8\xff'):
+                return "image/jpeg"
+            # GIF: GIF87a or GIF89a
+            if payload.startswith(b'GIF87a') or payload.startswith(b'GIF89a'):
+                return "image/gif"
+            # BMP: BM
+            if payload.startswith(b'BM'):
+                return "image/bmp"
+            # WebP: RIFF....WEBP
+            if payload[:4] == b'RIFF' and payload[8:12] == b'WEBP':
+                return "image/webp"
+
+        # 2. 如果 magic bytes 无法识别，尝试从文件名扩展名推断
+        if filename:
+            ext_map = {
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
+                '.bmp': 'image/bmp',
+                '.webp': 'image/webp',
+                '.svg': 'image/svg+xml',
+            }
+            ext = '.' + filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+            if ext in ext_map:
+                return ext_map[ext]
+
+        # 3. 回退到声明的 Content-Type
+        return declared_type
 
     @staticmethod
     def _get_content_type(file_path: Path) -> str:
