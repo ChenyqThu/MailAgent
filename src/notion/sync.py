@@ -525,15 +525,14 @@ class NotionSync:
             logger.warning(f"Failed to find thread members for thread_id={thread_id[:30]}...: {e}")
             return []
 
-    async def update_sub_items(self, page_id: str, child_page_ids: List[str], clear_children_sub: bool = False) -> bool:
+    async def update_sub_items(self, page_id: str, child_page_ids: List[str]) -> bool:
         """更新页面的 Sub-item 关系
 
-        通过设置母节点的 Sub-item，自动重建子节点的 Parent Item 关系。
+        通过设置母节点的 Sub-item，Notion 双向关联会自动更新子节点的 Parent Item。
 
         Args:
             page_id: 母节点的 page_id
             child_page_ids: 子节点的 page_id 列表
-            clear_children_sub: 是否先清空 children 的 Sub-item（迁移时使用，日常同步不需要）
 
         Returns:
             是否成功
@@ -560,18 +559,7 @@ class NotionSync:
                 properties={"Parent Item": {"relation": []}}
             )
 
-            # 2. 可选：清空所有 children 的 Sub-item（仅迁移时需要）
-            if clear_children_sub:
-                for child_id in valid_child_ids:
-                    try:
-                        await self.client.client.pages.update(
-                            page_id=child_id,
-                            properties={"Sub-item": {"relation": []}}
-                        )
-                    except Exception:
-                        pass
-
-            # 3. 设置 parent 的 Sub-item
+            # 2. 设置 parent 的 Sub-item（Notion 双向关联会自动更新子节点的 Parent Item）
             relations = [{"id": pid} for pid in valid_child_ids]
             await self.client.client.pages.update(
                 page_id=page_id,
@@ -686,12 +674,42 @@ class NotionSync:
             logger.error(f"Failed to create email page (v2): {e}")
             raise  # 向上传播异常，让调用方知道失败原因
 
+    def _parse_date_to_beijing(self, date_str: str) -> Optional[datetime]:
+        """将日期字符串转换为北京时间 datetime 对象
+
+        支持的格式：
+        - ISO 格式: 2026-01-27T09:14:00+08:00
+        - Notion 格式: 2026-01-27T09:14:00.000+08:00
+
+        Args:
+            date_str: 日期字符串
+
+        Returns:
+            北京时间的 datetime 对象，解析失败返回 None
+        """
+        if not date_str:
+            return None
+
+        try:
+            # 处理 Notion 返回的毫秒格式: 2026-01-27T09:14:00.000+08:00
+            # Python 3.11+ 的 fromisoformat 可以处理这种格式
+            # 但为了兼容，移除毫秒部分
+            import re
+            # 移除毫秒（.000 或 .123456 等）
+            normalized = re.sub(r'\.\d+', '', date_str)
+            dt = datetime.fromisoformat(normalized)
+            # 转换为北京时间
+            return dt.astimezone(BEIJING_TZ)
+        except Exception as e:
+            logger.warning(f"Failed to parse date string '{date_str}': {e}")
+            return None
+
     async def _handle_thread_relations(self, page_id: str, email: Email):
         """处理线程关系（新架构：最新邮件为母节点）
 
         核心逻辑：
         1. 查找同线程所有已有邮件（带日期）
-        2. 比较当前邮件与已有邮件的日期
+        2. 比较当前邮件与已有邮件的日期（统一转为北京时间比较）
         3. 如果当前邮件是最新的 → 设置 Sub-item 包含所有已有邮件
         4. 如果当前邮件不是最新的 → 设置 Parent Item 指向最新邮件
 
@@ -715,25 +733,45 @@ class NotionSync:
                 logger.debug(f"No other thread members found, this is the only email in thread")
                 return
 
-            # 2. 获取当前邮件的日期字符串（用于比较）
-            current_date = email.date.isoformat() if email.date else ""
+            # 2. 获取当前邮件的日期（转换为北京时间）
+            current_dt = None
+            if email.date:
+                if email.date.tzinfo is None:
+                    # naive datetime，假设是北京时间
+                    current_dt = email.date.replace(tzinfo=BEIJING_TZ)
+                else:
+                    # 有时区信息，转换为北京时间
+                    current_dt = email.date.astimezone(BEIJING_TZ)
 
-            # 3. 找到线程中最新的邮件
-            # 按日期字符串排序（ISO 格式可以直接字符串比较）
-            latest_member = max(thread_members, key=lambda x: x.get('date', ''))
-            latest_date = latest_member.get('date', '')
+            # 3. 找到线程中最新的邮件（转换为北京时间比较）
+            # 为每个成员解析日期
+            for member in thread_members:
+                member['date_dt'] = self._parse_date_to_beijing(member.get('date', ''))
 
-            # 4. 判断当前邮件是否是最新的
-            if current_date >= latest_date:
+            # 过滤掉日期解析失败的成员
+            valid_members = [m for m in thread_members if m.get('date_dt')]
+            if not valid_members:
+                logger.warning(f"No valid dates found in thread members, skipping relation handling")
+                return
+
+            latest_member = max(valid_members, key=lambda x: x['date_dt'])
+            latest_dt = latest_member['date_dt']
+
+            # 4. 判断当前邮件是否是最新的（使用 datetime 对象比较，避免时区问题）
+            is_current_latest = current_dt is not None and current_dt >= latest_dt
+            if is_current_latest:
                 # 当前邮件是最新的 → 设置 Sub-item 包含所有已有邮件
                 all_other_page_ids = [m['page_id'] for m in thread_members]
-                logger.info(f"Current email is the latest, setting Sub-item with {len(all_other_page_ids)} members")
+                logger.info(f"Current email is the latest ({current_dt} >= {latest_dt}), setting Sub-item with {len(all_other_page_ids)} members")
                 await self.update_sub_items(page_id, all_other_page_ids)
             else:
-                # 当前邮件不是最新的 → 设置 Parent Item 指向最新邮件
+                # 当前邮件不是最新的 → 需要更新最新邮件的 Sub-item
                 latest_page_id = latest_member['page_id']
-                logger.info(f"Current email is not the latest, setting Parent Item to {latest_page_id}")
-                await self.update_parent_item(page_id, latest_page_id)
+                logger.info(f"Current email is not the latest ({current_dt} < {latest_dt}), updating latest email's Sub-item")
+                # 获取所有非最新邮件的 page_id（包括当前邮件）
+                all_non_latest = [m['page_id'] for m in thread_members if m['page_id'] != latest_page_id]
+                all_non_latest.append(page_id)
+                await self.update_sub_items(latest_page_id, all_non_latest)
 
         except Exception as e:
             logger.warning(f"Failed to handle thread relations for {email.message_id[:30]}...: {e}")
