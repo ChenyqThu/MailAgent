@@ -352,7 +352,7 @@ class NewWatcher:
                 self.sync_store.save_email({
                     'message_id': message_id,
                     'subject': email_obj.subject or '',
-                    'sender': f"{email_obj.sender_name} <{email_obj.sender_email}>" if email_obj.sender_name else (email_obj.sender_email or ''),
+                    'sender': f"{email_obj.sender_name} <{email_obj.sender}>" if email_obj.sender_name else (email_obj.sender or ''),
                     'date_received': email_obj.date.isoformat() if email_obj.date else '',
                     'thread_id': email_obj.thread_id or '',
                     'mailbox': mailbox,
@@ -455,7 +455,7 @@ class NewWatcher:
                     self.sync_store.save_email({
                         'message_id': message_id,
                         'subject': email_obj.subject or '',
-                        'sender': f"{email_obj.sender_name} <{email_obj.sender_email}>" if email_obj.sender_name else (email_obj.sender_email or ''),
+                        'sender': f"{email_obj.sender_name} <{email_obj.sender}>" if email_obj.sender_name else (email_obj.sender or ''),
                         'date_received': email_obj.date.isoformat() if email_obj.date else '',
                         'thread_id': email_obj.thread_id or '',
                         'mailbox': mailbox,
