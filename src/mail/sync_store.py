@@ -292,6 +292,8 @@ class SyncStore:
             cursor = conn.cursor()
 
             try:
+                sync_status = email.get('sync_status', 'pending')
+
                 cursor.execute("""
                     INSERT OR REPLACE INTO email_metadata
                     (message_id, thread_id, subject, sender, sender_name,
@@ -314,7 +316,7 @@ class SyncStore:
                     email.get('mailbox', '收件箱'),
                     1 if email.get('is_read') else 0,
                     1 if email.get('is_flagged') else 0,
-                    email.get('sync_status', 'pending'),
+                    sync_status,
                     email.get('notion_page_id'),
                     email.get('notion_thread_id'),
                     email.get('sync_error'),
@@ -323,6 +325,14 @@ class SyncStore:
                     now,
                     now
                 ))
+
+                # 如果同步成功，从失败队列中移除
+                if sync_status == 'synced':
+                    cursor.execute(
+                        "DELETE FROM sync_failures WHERE message_id = ?",
+                        (message_id,)
+                    )
+
                 conn.commit()
                 logger.debug(f"Saved email: {message_id[:50]}...")
                 return True
