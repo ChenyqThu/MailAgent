@@ -347,8 +347,18 @@ class NewWatcher:
             )
 
             if page_id:
-                # 8. 更新 SyncStore (synced)
-                self.sync_store.mark_synced(message_id, page_id)
+                # 8. 更新 SyncStore (synced) - 用 AppleScript 获取的最新数据完整覆盖
+                # 避免批量缓存时的旧数据与实际同步数据不一致
+                self.sync_store.save_email({
+                    'message_id': message_id,
+                    'subject': email_obj.subject or '',
+                    'sender': f"{email_obj.sender_name} <{email_obj.sender_email}>" if email_obj.sender_name else (email_obj.sender_email or ''),
+                    'date_received': email_obj.date.isoformat() if email_obj.date else '',
+                    'thread_id': email_obj.thread_id or '',
+                    'mailbox': mailbox,
+                    'sync_status': 'synced',
+                    'notion_page_id': page_id
+                })
                 self._stats["emails_synced"] += 1
                 logger.info(f"Email synced successfully: {message_id[:50]}... -> {page_id}")
             else:
@@ -440,7 +450,18 @@ class NewWatcher:
                 page_id = await self.notion_sync.create_email_page_v2(email_obj)
 
                 if page_id:
-                    self.sync_store.mark_synced(message_id, page_id)
+                    # 用 AppleScript 获取的最新数据完整覆盖 SyncStore
+                    # 避免重试时数据与原缓存不一致
+                    self.sync_store.save_email({
+                        'message_id': message_id,
+                        'subject': email_obj.subject or '',
+                        'sender': f"{email_obj.sender_name} <{email_obj.sender_email}>" if email_obj.sender_name else (email_obj.sender_email or ''),
+                        'date_received': email_obj.date.isoformat() if email_obj.date else '',
+                        'thread_id': email_obj.thread_id or '',
+                        'mailbox': mailbox,
+                        'sync_status': 'synced',
+                        'notion_page_id': page_id
+                    })
                     self._stats["retries_succeeded"] += 1
                     self._stats["emails_synced"] += 1
                     logger.info(f"Retry succeeded: {message_id[:50]}... -> {page_id}")

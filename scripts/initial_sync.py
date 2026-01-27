@@ -1540,8 +1540,19 @@ class InitialSync:
                 )
 
                 if new_page_id:
-                    # 3. 更新状态为已同步（用新 page_id 覆盖旧的）
-                    self.sync_store.mark_synced(message_id, new_page_id)
+                    # 3. 用 Mail.app 中的正确数据更新 SyncStore（修复元数据污染问题）
+                    # mark_synced 只更新 sync_status 和 notion_page_id，不更新 subject/sender
+                    # 所以需要用 save_email 完整覆盖
+                    self.sync_store.save_email({
+                        'message_id': message_id,
+                        'subject': email_obj.subject or '',
+                        'sender': f"{email_obj.sender_name} <{email_obj.sender_email}>" if email_obj.sender_name else email_obj.sender_email,
+                        'date_received': email_obj.date.isoformat() if email_obj.date else '',
+                        'thread_id': email_obj.thread_id or '',
+                        'mailbox': mailbox,
+                        'sync_status': 'synced',
+                        'notion_page_id': new_page_id
+                    })
                     success += 1
                 else:
                     failed += 1
@@ -1644,7 +1655,7 @@ class InitialSync:
                 success = True
                 if all_other_page_ids:
                     # 设置最新邮件的 Sub-item（这会自动重建 Parent Item 关系）
-                    success = await self.notion_sync.update_sub_items(latest_page_id, all_other_page_ids, clear_children_sub=True)
+                    success = await self.notion_sync.update_sub_items(latest_page_id, all_other_page_ids)
                     if success:
                         stats['emails_updated'] += len(all_other_page_ids)
                 elif thread_data.get('need_update_latest'):
@@ -1826,6 +1837,9 @@ async def main():
     else:
         # 默认：运行完整流程
         await sync.run(auto_confirm=args.yes, limit=args.limit)
+
+    # 关闭 aiohttp session，避免 "Unclosed client session" 警告
+    await sync.notion_sync.client.close()
 
 
 if __name__ == "__main__":
