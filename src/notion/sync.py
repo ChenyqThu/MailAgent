@@ -1,9 +1,12 @@
-from typing import Dict, Any, List, Set, Optional
+from typing import Dict, Any, List, Set, Optional, TYPE_CHECKING
 from pathlib import Path
 from loguru import logger
 from datetime import datetime, timezone, timedelta
 import re
 import shutil
+
+if TYPE_CHECKING:
+    from src.mail.icalendar_parser import MeetingInvite
 
 from src.models import Email
 from src.notion.client import NotionClient
@@ -164,6 +167,100 @@ class NotionSync:
             logger.info(f"Appended {len(batch)} blocks (batch {i//batch_size + 1})")
 
         return page
+
+    def _create_meeting_callout(self, invite: 'MeetingInvite') -> Dict[str, Any]:
+        """创建会议邀请 Callout Block
+
+        Args:
+            invite: MeetingInvite 对象
+
+        Returns:
+            Notion callout block
+        """
+        # 格式化时间（北京时间）
+        start = invite.start_time.astimezone(BEIJING_TZ)
+        end = invite.end_time.astimezone(BEIJING_TZ)
+
+        if invite.is_all_day:
+            time_str = start.strftime("%Y-%m-%d") + " (全天)"
+        else:
+            time_str = f"{start.strftime('%Y-%m-%d %H:%M')} - {end.strftime('%H:%M')} (北京时间)"
+
+        # 判断会议状态：取消 / 更新 / 普通邀请
+        if invite.method == "CANCEL" or invite.status == "cancelled":
+            title_prefix = "【会议已取消】"
+            callout_color = "red_background"
+        elif invite.sequence > 0:
+            title_prefix = "【更新】"
+            callout_color = "blue_background"
+        else:
+            title_prefix = ""
+            callout_color = "blue_background"
+
+        title_text = f"{title_prefix}在线会议邀请"
+
+        # 构建内容行
+        lines = [
+            f"📌 主题：{invite.summary}",
+            f"🕐 时间：{time_str}",
+        ]
+
+        if invite.location:
+            lines.append(f"📍 地点：{invite.location}")
+
+        content_text = "\n".join(lines)
+
+        # 构建 rich_text 数组
+        rich_text_parts = [
+            {
+                "type": "text",
+                "text": {"content": title_text + "\n\n"},
+                "annotations": {"bold": True}
+            },
+            {
+                "type": "text",
+                "text": {"content": content_text}
+            }
+        ]
+
+        # 会议链接（可点击）
+        if invite.teams_url:
+            rich_text_parts.append({
+                "type": "text",
+                "text": {"content": "\n🔗 会议链接："}
+            })
+            rich_text_parts.append({
+                "type": "text",
+                "text": {
+                    "content": invite.teams_url[:80] + ("..." if len(invite.teams_url) > 80 else ""),
+                    "link": {"url": invite.teams_url}
+                },
+                "annotations": {"color": "blue"}
+            })
+
+        # 会议 ID
+        if invite.meeting_id:
+            rich_text_parts.append({
+                "type": "text",
+                "text": {"content": f"\n🆔 会议 ID：{invite.meeting_id}"}
+            })
+
+        # 密码
+        if invite.passcode:
+            rich_text_parts.append({
+                "type": "text",
+                "text": {"content": f"\n🔑 密码：{invite.passcode}"}
+            })
+
+        return {
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "rich_text": rich_text_parts,
+                "icon": {"type": "emoji", "emoji": "🗓"},
+                "color": callout_color
+            }
+        }
 
     def _build_image_map(self, email: Email, uploaded_attachments: List[Dict]) -> Dict[str, tuple]:
         """
@@ -336,9 +433,18 @@ class NotionSync:
 
         return properties
 
-    def _build_children(self, email: Email, uploaded_attachments: List[Dict] = None, image_map: Dict[str, tuple] = None) -> List[Dict[str, Any]]:
+    def _build_children(self, email: Email, uploaded_attachments: List[Dict] = None, image_map: Dict[str, tuple] = None, meeting_invite: 'MeetingInvite' = None) -> List[Dict[str, Any]]:
         """构建 Notion Page Children (Content Blocks)"""
         children = []
+
+        # 0. 会议邀请 Callout（放在最前面）
+        if meeting_invite:
+            children.append(self._create_meeting_callout(meeting_invite))
+            children.append({
+                "object": "block",
+                "type": "divider",
+                "divider": {}
+            })
 
         # 1. 非图片附件区域（放在顶部，类似邮件的表现）
         non_image_attachments = []
@@ -584,7 +690,8 @@ class NotionSync:
         self,
         email: Email,
         skip_parent_lookup: bool = False,
-        calendar_page_id: str = None
+        calendar_page_id: str = None,
+        meeting_invite: 'MeetingInvite' = None
     ) -> Optional[str]:
         """创建邮件页面（新架构 v2）
 
@@ -592,11 +699,13 @@ class NotionSync:
         - 线程中最新邮件作为母节点
         - 通过设置 Sub-item 自动重建 Parent Item 关系
         - 支持关联日程页面（会议邀请邮件）
+        - 支持在邮件正文前显示会议邀请信息
 
         Args:
             email: Email 对象（必须包含 thread_id）
             skip_parent_lookup: 是否跳过线程关系处理（用于批量同步时避免重复处理）
             calendar_page_id: 日程页面 ID（如果邮件包含会议邀请）
+            meeting_invite: 会议邀请对象（用于在正文前显示会议信息 callout）
 
         Returns:
             成功返回 page_id，失败返回 None
@@ -645,7 +754,7 @@ class NotionSync:
             image_map = self._build_image_map(email, uploaded_attachments)
 
             # 7. 转换邮件内容为 Notion Blocks
-            children = self._build_children(email, uploaded_attachments, image_map)
+            children = self._build_children(email, uploaded_attachments, image_map, meeting_invite)
 
             # 8. 如果有附件上传失败，添加警告提示
             if failed_attachments:

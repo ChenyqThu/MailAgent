@@ -18,7 +18,10 @@ Usage:
         pass
 """
 
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.mail.icalendar_parser import MeetingInvite
 from datetime import datetime, timezone
 from loguru import logger
 
@@ -64,7 +67,7 @@ class MeetingInviteSync:
         """
         return self.parser.has_calendar_invite(email_source)
 
-    async def process_email(self, email_source: str, message_id: str = None) -> Optional[str]:
+    async def process_email(self, email_source: str, message_id: str = None) -> Tuple[Optional[str], Optional['MeetingInvite']]:
         """处理邮件，如果是会议邀请则同步到日程
 
         Args:
@@ -72,12 +75,12 @@ class MeetingInviteSync:
             message_id: 邮件 Message-ID（用于日志）
 
         Returns:
-            日程页面 ID（如果创建/更新了），否则 None
+            (日程页面 ID, MeetingInvite 对象) - 如果不是会议邀请则都是 None
         """
         # 1. 提取会议邀请
         invite = self.parser.extract_from_email_source(email_source)
         if not invite:
-            return None
+            return None, None
 
         self._stats["invites_detected"] += 1
         msg_id_short = (message_id or "unknown")[:40]
@@ -105,14 +108,14 @@ class MeetingInviteSync:
                 self._stats["events_cancelled"] += 1
                 logger.info(f"Meeting cancelled: {invite.summary[:40]}...")
 
-            return page_id
+            return page_id, invite
 
         except Exception as e:
             self._stats["errors"] += 1
             logger.error(f"Failed to sync meeting invite: {e}")
             import traceback
             logger.debug(traceback.format_exc())
-            return None
+            return None, None
 
     async def update_email_relation(self, calendar_page_id: str, email_page_id: str) -> bool:
         """更新日程页面的 Source Email 关联

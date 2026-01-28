@@ -289,8 +289,9 @@ class NewWatcher:
 
             # 2. 检测并处理会议邀请（在正常同步之前）
             source = full_email.get('source', '')
+            meeting_invite = None  # 会议邀请对象
             if self.meeting_sync.has_meeting_invite(source):
-                calendar_page_id = await self.meeting_sync.process_email(source, message_id)
+                calendar_page_id, meeting_invite = await self.meeting_sync.process_email(source, message_id)
                 if calendar_page_id:
                     self._stats["meeting_invites"] += 1
                     logger.info(f"Meeting invite synced to calendar: {calendar_page_id}")
@@ -340,10 +341,11 @@ class NewWatcher:
                     return
 
             # 7. 同步到 Notion（使用 v2 方法，线程关系自动处理）
-            # 如果有会议邀请，传入日程 page_id 用于关联
+            # 如果有会议邀请，传入日程 page_id 和 meeting_invite 用于关联和显示
             page_id = await self.notion_sync.create_email_page_v2(
                 email_obj,
-                calendar_page_id=calendar_page_id  # 传入日程页面 ID
+                calendar_page_id=calendar_page_id,  # 传入日程页面 ID
+                meeting_invite=meeting_invite  # 传入会议邀请对象
             )
 
             if page_id:
