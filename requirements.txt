@@ -1,22 +1,22 @@
 # Notion API
-notion-client==2.2.1
+notion-client>=2.2.1
 
 # HTML 解析
-beautifulsoup4==4.12.2
-html2text==2020.1.16
-lxml==4.9.3
+beautifulsoup4>=4.12.3
+html2text>=2024.2.26
+lxml>=5.2.0  # Python 3.13 需要 5.2.0+
 
 # 配置管理
-pydantic==2.5.0
-pydantic-settings==2.1.0
-python-dotenv==1.0.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+python-dotenv>=1.0.1
 
 # 日志
-loguru==0.7.2
+loguru>=0.7.2
 
 # 异步 IO
-aiofiles==23.2.1
-aiohttp==3.9.1
+aiofiles>=24.1.0
+aiohttp>=3.10.0  # Python 3.13 兼容性改进
 
 # 图片处理
-Pillow==10.1.0
+Pillow>=11.0.0  # Python 3.13 需要 11.0.0+

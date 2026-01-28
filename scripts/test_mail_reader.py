@@ -32,7 +32,7 @@ def main():
     print("\n正在获取最新 5 封邮件...")
 
     # 获取最新 5 封邮件的基本信息
-    emails = arm.fetch_emails_by_position(count=5, mailbox="收件箱")
+    emails = arm.fetch_emails_by_position(count=5, mailbox=config.mail_inbox_name)
 
     print(f"\n找到 {len(emails)} 封邮件:\n")
 
