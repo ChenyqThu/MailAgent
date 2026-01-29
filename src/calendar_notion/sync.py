@@ -152,12 +152,16 @@ class CalendarNotionSync:
         # 根据状态设置 icon
         icon = self._get_status_icon(event)
 
-        page = await self.client.pages.create(
-            parent={"database_id": self.database_id},
-            properties=properties,
-            icon=icon,
-            children=children if children else None
-        )
+        # 构建创建参数（children 为空时不传，避免 Notion API 报错）
+        create_params = {
+            "parent": {"database_id": self.database_id},
+            "properties": properties,
+            "icon": icon
+        }
+        if children:  # 只有非空时才传
+            create_params["children"] = children
+
+        page = await self.client.pages.create(**create_params)
         return page
 
     async def _update_page(self, page_id: str, event: CalendarEvent) -> Dict[str, Any]:

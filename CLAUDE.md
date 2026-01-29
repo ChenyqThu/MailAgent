@@ -9,6 +9,11 @@
 - 自动识别邮件中的会议邀请（iCalendar）并创建日程
 - AI 分类与处理（通过 Notion）
 
+**架构版本：v3 SQLite-First**（2026-01 优化）
+- 使用 `internal_id`（SQLite ROWID = AppleScript id）作为主键
+- AppleScript 查询性能提升 **127 倍**（~1s vs ~100s）
+- 支持大邮箱（6-7 万封邮件）
+
 **技术栈：**
 - Python 3.11+ / asyncio
 - AppleScript（Mail.app 交互）
@@ -44,25 +49,55 @@ tail -f logs/sync.log
 
 ## 架构
 
-### 核心数据流
+### v3 SQLite-First 架构
 
 ```
-Mail.app SQLite ──雷达检测──▶ AppleScript ──获取邮件──▶ SyncStore
-        │                                                   │
-        │ (~5ms/次)                                         ▼
-        │                                           ┌───────────────┐
-        └───────────────────────────────────────────│ NotionSync    │
-                                                    │   - 邮件页面  │
-                                                    │   - 附件上传  │
-                                                    └───────┬───────┘
-                                                            │
-                                                            ▼
-                                          ┌─────────────────────────────────┐
-                                          │ MeetingInviteSync (检测 .ics)   │
-                                          │   - 解析 iCalendar              │
-                                          │   - 创建日程页面                │
-                                          └─────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        v3 架构 (SQLite 优先)                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. SQLite Radar 检测 (~5ms)                                               │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ 检测 max_row_id 变化 → 直接获取新邮件元数据（含 internal_id）        │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                              │                                              │
+│                              ▼                                              │
+│  2. 写入 SyncStore (internal_id 主键, message_id=NULL)                     │
+│                              │                                              │
+│                              ▼                                              │
+│  3. AppleScript 获取完整内容 (~1s/封，使用 `whose id is <int>`)            │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ fetch_email_content_by_id(internal_id, mailbox)                      │   │
+│  │ → 返回 message_id, source, thread_id 等                              │   │
+│  │ → 更新 SyncStore (填充 message_id)                                   │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                              │                                              │
+│                              ▼                                              │
+│  4. 同步到 Notion                                                          │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ - 解析 MIME 源码（HTML、附件、内联图片）                             │   │
+│  │ - 检测会议邀请 (.ics) → 创建日程                                     │   │
+│  │ - 创建 Notion 邮件页面（含线程关系）                                 │   │
+│  │ - 标记 sync_status='synced'                                          │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  5. 失败重试（统一在 email_metadata 表）                                   │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ - fetch_failed: AppleScript 失败 → 用 internal_id 重试               │   │
+│  │ - failed: Notion 失败 → 用 internal_id 重新获取并同步                │   │
+│  │ - 指数退避: 1min, 5min, 15min, 1h, 2h                                │   │
+│  │ - 超过最大重试 → dead_letter 状态                                    │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### 性能对比
+
+| 查询方式 | 耗时 | 说明 |
+|---------|------|------|
+| `whose message id is "<字符串>"` | ~100 秒 | 旧方式，线性搜索 |
+| `whose id is <整数>` | ~1 秒 | **v3 方式，提升 127 倍** |
 
 ### 模块说明
 
@@ -70,10 +105,11 @@ Mail.app SQLite ──雷达检测──▶ AppleScript ──获取邮件──
 
 | 模块 | 职责 |
 |------|------|
-| `new_watcher.py` | 主监听器，协调雷达、机械臂、同步器 |
-| `sqlite_radar.py` | 检测 Mail.app SQLite 数据库变化（max_row_id） |
-| `applescript_arm.py` | 通过 AppleScript 获取邮件详情 |
-| `sync_store.py` | SQLite 同步状态存储（message_id 去重） |
+| `new_watcher.py` | 主监听器，v3 架构主循环（SQLite 优先） |
+| `sqlite_radar.py` | SQLite 雷达：检测变化 + `get_new_emails()` 获取元数据 |
+| `applescript_arm.py` | AppleScript 机械臂：`fetch_email_content_by_id()` 核心方法 |
+| `applescript.py` | AppleScript 底层执行封装 |
+| `sync_store.py` | SQLite 同步状态存储（**internal_id 主键**，v3 架构） |
 | `reader.py` | MIME 邮件解析（HTML、附件、thread_id） |
 | `meeting_sync.py` | 会议邀请检测与同步 |
 | `icalendar_parser.py` | iCalendar 解析器 |
@@ -103,36 +139,65 @@ Mail.app SQLite ──雷达检测──▶ AppleScript ──获取邮件──
 
 ### 关键流程
 
-#### 1. 新邮件检测与同步
+#### 1. 新邮件检测与同步（v3 架构）
 
 ```python
 # new_watcher.py
-async def _poll_loop():
-    while True:
-        # 1. 雷达检测变化
-        has_new, estimated = radar.check_for_changes()
+async def _poll_cycle():
+    # 1. SQLite 雷达检测变化
+    has_new, current_max, estimated = radar.check_for_changes(last_max_row_id)
 
-        if has_new:
-            # 2. AppleScript 获取最新邮件
-            emails = arm.fetch_latest_emails(count=estimated + 5)
+    if has_new:
+        # 2. SQLite 直接获取新邮件元数据（含 internal_id）
+        new_emails = radar.get_new_emails(since_row_id=last_max_row_id)
 
-            for email in emails:
-                # 3. 检查是否已同步
-                if sync_store.is_synced(email.message_id):
-                    continue
+        # 3. 立即写入 SyncStore（internal_id 主键，message_id=NULL）
+        for email_meta in new_emails:
+            sync_store.save_email({
+                'internal_id': email_meta['internal_id'],
+                'message_id': None,  # AppleScript 成功后填充
+                'sync_status': 'pending',
+                ...  # SQLite 元数据
+            })
 
-                # 4. 获取完整内容并同步
-                content = arm.fetch_email_content(email.message_id)
-                page_id = await notion_sync.sync_email(email)
+        # 4. 更新 last_max_row_id
+        sync_store.set_last_max_row_id(current_max)
 
-                # 5. 检测会议邀请
-                if meeting_sync.has_meeting_invite(content):
-                    calendar_page_id = await meeting_sync.process_email(content)
+    # 5. 处理 pending 邮件
+    await _process_pending_emails()
 
-                # 6. 更新同步状态
-                sync_store.mark_synced(email.message_id, page_id)
+    # 6. 处理重试队列
+    await _process_retry_queue()
 
-        await asyncio.sleep(poll_interval)
+async def _sync_single_email_v3(email_meta):
+    internal_id = email_meta['internal_id']
+    mailbox = email_meta['mailbox']
+
+    # 1. AppleScript 通过 internal_id 获取（快速 ~1s）
+    full_email = arm.fetch_email_content_by_id(internal_id, mailbox)
+
+    # 2. 更新 SyncStore（填充 message_id、thread_id）
+    sync_store.update_after_fetch(internal_id, {
+        'message_id': full_email['message_id'],
+        'thread_id': full_email['thread_id'],
+        ...
+    })
+
+    # 3. 检测会议邀请
+    if meeting_sync.has_meeting_invite(full_email['source']):
+        calendar_page_id = await meeting_sync.process_email(...)
+
+    # 4. 日期过滤
+    if email_date < sync_start_date:
+        sync_store.mark_skipped(internal_id)
+        return
+
+    # 5. 同步到 Notion
+    email_obj = reader.parse_email_source(full_email['source'], ...)
+    page_id = await notion_sync.create_email_page_v2(email_obj)
+
+    # 6. 标记成功
+    sync_store.mark_synced_v3(internal_id, page_id)
 ```
 
 #### 2. 线程关系处理
@@ -140,7 +205,7 @@ async def _poll_loop():
 ```python
 # notion/sync.py
 async def _find_or_create_parent(email, thread_id):
-    # 1. 查找现有 Parent
+    # 1. 查找现有 Parent（通过 message_id）
     parent = await query_by_message_id(thread_id)
     if parent:
         return parent['page_id']
@@ -160,6 +225,33 @@ async def _find_or_create_parent(email, thread_id):
     return await _use_fallback_parent(thread_id)
 ```
 
+#### 3. 重试机制（统一处理）
+
+```python
+# new_watcher.py
+async def _process_retry_queue():
+    # 获取可重试邮件（fetch_failed 或 failed）
+    ready_emails = sync_store.get_ready_for_retry(limit=3)
+
+    for record in ready_emails:
+        internal_id = record['internal_id']
+        mailbox = record['mailbox']
+
+        # 统一用 internal_id 获取 MIME（无论哪种失败）
+        full_email = arm.fetch_email_content_by_id(internal_id, mailbox)
+
+        # 后续流程与正常同步相同...
+```
+
+**状态流转：**
+```
+pending → fetch_failed → (重试) → fetched → failed → (重试) → synced
+                ↓                              ↓
+         (超过重试次数)                  (超过重试次数)
+                ↓                              ↓
+           dead_letter                    dead_letter
+```
+
 #### 3. 内联图片处理
 
 ```python
@@ -177,22 +269,37 @@ def convert(html, image_map=None):
 
 **关键点**：AppleScript 无法保存内联图片，必须从 MIME 源码提取。
 
-### SyncStore 数据结构
+### SyncStore 数据结构（v3 架构）
 
 ```sql
--- 邮件元数据
+-- 邮件元数据（internal_id 为主键）
 CREATE TABLE email_metadata (
-    message_id TEXT PRIMARY KEY,
+    internal_id INTEGER PRIMARY KEY,      -- SQLite ROWID = AppleScript id
+    message_id TEXT UNIQUE,               -- AppleScript 成功后填充，用于去重
     thread_id TEXT,
     subject TEXT,
     sender TEXT,
+    sender_name TEXT,
+    to_addr TEXT,
+    cc_addr TEXT,
     date_received TEXT,
     mailbox TEXT,
-    sync_status TEXT,  -- pending / synced / failed
+    is_read INTEGER DEFAULT 0,
+    is_flagged INTEGER DEFAULT 0,
+    sync_status TEXT DEFAULT 'pending',   -- pending/fetch_failed/fetched/synced/failed/skipped/dead_letter
     notion_page_id TEXT,
-    created_at TEXT,
-    updated_at TEXT
+    notion_thread_id TEXT,
+    sync_error TEXT,
+    retry_count INTEGER DEFAULT 0,
+    next_retry_at REAL,                   -- 指数退避重试时间
+    created_at REAL,
+    updated_at REAL
 );
+
+-- 索引
+CREATE UNIQUE INDEX idx_message_id ON email_metadata(message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX idx_sync_status ON email_metadata(sync_status);
+CREATE INDEX idx_next_retry ON email_metadata(next_retry_at) WHERE sync_status IN ('fetch_failed', 'failed');
 
 -- 同步状态
 CREATE TABLE sync_state (
@@ -207,6 +314,15 @@ CREATE TABLE thread_head_cache (
     created_at TEXT
 );
 ```
+
+**v3 架构关键变化：**
+| 功能 | 旧架构 (v2) | 新架构 (v3) |
+|------|------------|------------|
+| 主键 | message_id | **internal_id** |
+| 去重 | message_id | message_id (UNIQUE) |
+| AppleScript 失败处理 | ❌ 无法追踪 | ✅ 用 internal_id 追踪 |
+| 重试队列 | sync_failures 表 | **统一在 email_metadata** |
+| 查询方式 | `whose message id is` | **`whose id is`** (127x 快) |
 
 ## 配置项
 
@@ -303,6 +419,7 @@ python3 scripts/test_mail_reader.py
 - **数据库**: `data/sync_store.db`
 - **临时附件**: `/tmp/email-notion-sync/{md5}/`
 - **配置**: `.env`
+- **优化文档**: `docs/applescript_id_optimization.md`
 
 ## 关于 calendar_main.py
 
@@ -316,4 +433,26 @@ python3 scripts/test_mail_reader.py
 **仅在需要同步历史日程时使用**：
 ```bash
 python3 calendar_main.py --once
+```
+
+## 迁移与运维
+
+### v3 架构迁移
+
+如需从 v2 迁移到 v3（internal_id 主键）：
+```bash
+python3 scripts/migrate_sync_store_v3.py
+```
+
+### 监控重点
+
+```bash
+# 查看 dead_letter 队列（需人工介入）
+sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_status='dead_letter'"
+
+# 查看重试队列
+sqlite3 data/sync_store.db "SELECT internal_id, sync_status, retry_count FROM email_metadata WHERE sync_status IN ('fetch_failed', 'failed')"
+
+# 查看同步统计
+sqlite3 data/sync_store.db "SELECT sync_status, COUNT(*) FROM email_metadata GROUP BY sync_status"
 ```

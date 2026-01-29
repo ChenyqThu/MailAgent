@@ -256,3 +256,118 @@ class SQLiteRadar:
             Last known max_row_id.
         """
         return self._last_max_row_id
+
+    def get_new_emails(self, since_row_id: int) -> List[Dict]:
+        """获取指定 ROWID 之后的所有新邮件元数据
+
+        用于 v3 架构：SQLite 直接查询新邮件，无需通过 AppleScript 批量获取。
+
+        Args:
+            since_row_id: 起始 ROWID（不包含）
+
+        Returns:
+            List[Dict] 包含:
+                - internal_id: int (ROWID = AppleScript id)
+                - subject: str
+                - sender_email: str
+                - sender_name: str
+                - date_received: str (ISO format)
+                - is_read: bool
+                - is_flagged: bool
+                - mailbox: str (收件箱/发件箱/...)
+        """
+        if not self.db_path:
+            return []
+
+        try:
+            with self._connection() as conn:
+                cursor = conn.cursor()
+                mailbox_filter = self._build_mailbox_filter()
+
+                query = f"""
+                    SELECT
+                        m.ROWID as internal_id,
+                        COALESCE(m.subject_prefix, '') || COALESCE(s.subject, '') as subject,
+                        a.address as sender_email,
+                        a.comment as sender_name,
+                        datetime(m.date_received, 'unixepoch', 'localtime') as date_received,
+                        m.read as is_read,
+                        m.flagged as is_flagged,
+                        mb.url as mailbox_url
+                    FROM messages m
+                    LEFT JOIN subjects s ON m.subject = s.ROWID
+                    LEFT JOIN addresses a ON m.sender = a.ROWID
+                    LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID
+                    WHERE m.deleted = 0
+                      AND m.ROWID > ?
+                      AND {mailbox_filter}
+                    ORDER BY m.ROWID ASC
+                """
+
+                cursor.execute(query, (since_row_id,))
+                rows = cursor.fetchall()
+
+                emails = []
+                for row in rows:
+                    mailbox = self._parse_mailbox_url(row['mailbox_url'])
+                    emails.append({
+                        'internal_id': row['internal_id'],
+                        'subject': row['subject'] or '',
+                        'sender_email': row['sender_email'] or '',
+                        'sender_name': row['sender_name'] or '',
+                        'date_received': row['date_received'] or '',
+                        'is_read': bool(row['is_read']),
+                        'is_flagged': bool(row['is_flagged']),
+                        'mailbox': mailbox,
+                    })
+
+                logger.debug(f"get_new_emails: found {len(emails)} emails since ROWID {since_row_id}")
+                return emails
+
+        except Exception as e:
+            logger.error(f"Failed to get new emails: {e}")
+            return []
+
+    def _parse_mailbox_url(self, url: str) -> str:
+        """解析 mailbox URL 提取中文邮箱名称
+
+        Args:
+            url: mailbox URL (e.g., "imap://.../%E6%94%B6%E4%BB%B6%E7%AE%B1")
+
+        Returns:
+            邮箱名称 (收件箱/发件箱/...)
+        """
+        if not url:
+            return "收件箱"  # 默认
+
+        try:
+            from urllib.parse import unquote
+
+            # URL 解码
+            decoded = unquote(url)
+
+            # 常见邮箱名称映射
+            mailbox_patterns = {
+                "收件箱": "收件箱",
+                "INBOX": "收件箱",
+                "发件箱": "发件箱",
+                "已发送邮件": "发件箱",
+                "Sent": "发件箱",
+                "Sent Messages": "发件箱",
+                "已发送": "发件箱",
+            }
+
+            for pattern, mailbox_name in mailbox_patterns.items():
+                if pattern in decoded:
+                    return mailbox_name
+
+            # 未知邮箱，返回最后一段路径
+            parts = decoded.rstrip('/').split('/')
+            if parts:
+                return parts[-1]
+
+            return "收件箱"
+
+        except Exception as e:
+            logger.warning(f"Failed to parse mailbox URL: {e}")
+            return "收件箱"

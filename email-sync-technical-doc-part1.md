@@ -221,7 +221,7 @@ email-notion-sync/
 # .env
 
 # Notion 配置
-NOTION_TOKEN=ntn_P569517748514sTqbObMLErEyhmO4sZaqnqfSqZTLZddiG
+NOTION_TOKEN=ntn_YOUR_TOKEN_HERE
 EMAIL_DATABASE_ID=2df15375830d8094980efd1468ca118c
 
 # 用户配置
@@ -262,7 +262,7 @@ import asyncio
 from notion_client import AsyncClient
 
 async def get_databases():
-    notion = AsyncClient(auth="ntn_P569517748514sTqbObMLErEyhmO4sZaqnqfSqZTLZddiG")
+    notion = AsyncClient(auth="ntn_YOUR_TOKEN_HERE")
     results = await notion.search(filter={"property": "object", "value": "database"})
     
     for db in results["results"]:

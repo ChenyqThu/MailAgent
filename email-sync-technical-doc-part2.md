@@ -1000,7 +1000,7 @@ mkdir -p /tmp/email-attachments
 ```bash
 cat > .env << 'EOF'
 # Notion 配置
-NOTION_TOKEN=ntn_P569517748514sTqbObMLErEyhmO4sZaqnqfSqZTLZddiG
+NOTION_TOKEN=ntn_YOUR_TOKEN_HERE
 EMAIL_DATABASE_ID=2df15375830d8094980efd1468ca118c
 
 # 用户配置

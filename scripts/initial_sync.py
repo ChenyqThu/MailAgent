@@ -68,7 +68,6 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 from loguru import logger
 from src.config import config as settings
 from src.models import Email
-from src.mail.sqlite_radar import SQLiteRadar
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.sync_store import SyncStore
 from src.mail.reader import EmailReader
@@ -282,7 +281,6 @@ class InitialSync:
         self.mailbox_limits = mailbox_limits or {}
 
         # 初始化组件
-        self.radar = SQLiteRadar(mailboxes=self.mailboxes)
         self.arm = AppleScriptArm(
             account_name=settings.mail_account_name,
             inbox_name=settings.mail_inbox_name
@@ -321,10 +319,6 @@ class InitialSync:
         print("\n Step 1: 检查环境...")
         if not self._check_environment():
             return
-
-        # Step 1.5: 记录当前 max_row_id（用于后续增量同步）
-        print("\n 记录当前 max_row_id...")
-        self._record_current_max_row_id()
 
         # Step 2: 从 AppleScript 获取邮件（增量模式）
         print("\n Step 2: 从 Mail.app 获取邮件...")
@@ -413,38 +407,16 @@ class InitialSync:
 
     def _check_environment(self) -> bool:
         """检查环境"""
-        checks = []
+        # 显示 SyncStore 统计
+        stats = self.sync_store.get_stats()
+        total = stats.get('total_emails', 0)
+        by_mailbox = stats.get('by_mailbox', {})
 
-        # 检查 SQLite 雷达
-        radar_ok = self.radar.is_available()
-        checks.append(("SQLite 雷达", radar_ok, "需要 Full Disk Access 权限"))
+        print(f"  SyncStore 邮件总数: {total}")
+        for mb, count in by_mailbox.items():
+            print(f"    - {mb}: {count} 封")
 
-        # 检查邮件数量
-        email_counts = self.radar.get_email_count()
-        for mailbox, count in email_counts.items():
-            checks.append((f"{mailbox} 邮件数", count > 0, f"{count} 封"))
-
-        # 打印检查结果
-        all_ok = True
-        for name, ok, msg in checks:
-            status = "✅" if ok else "❌"
-            print(f"  {status} {name}: {msg if not ok or isinstance(msg, str) else 'OK'}")
-            if not ok and name == "SQLite 雷达":
-                all_ok = False
-
-        return all_ok
-
-    def _record_current_max_row_id(self):
-        """记录当前 max_row_id，用于后续增量同步"""
-        try:
-            current_max = self.radar.get_current_max_row_id()
-            if current_max:
-                self.sync_store.set_last_max_row_id(current_max)
-                print(f"  ✅ 已记录 max_row_id: {current_max}")
-            else:
-                print(f"  ⚠️ 无法获取 max_row_id")
-        except Exception as e:
-            print(f"  ⚠️ 记录 max_row_id 失败: {e}")
+        return True
 
     # ==================== 数据获取 ====================
 
@@ -552,6 +524,7 @@ class InitialSync:
                         date_received = date_received + tz_suffix
 
                     email_dict = {
+                        'internal_id': email.get('id'),  # v3: AppleScript id
                         'message_id': email['message_id'],
                         'thread_id': thread_id,
                         'subject': email.get('subject', ''),
@@ -607,13 +580,14 @@ class InitialSync:
 
         try:
             cursor.execute("""
-                SELECT message_id, subject, sender, date_received, thread_id,
+                SELECT internal_id, message_id, subject, sender, date_received, thread_id,
                        mailbox, sync_status, notion_page_id
                 FROM email_metadata
             """)
 
             for row in cursor.fetchall():
                 store_emails[row['message_id']] = {
+                    "internal_id": row['internal_id'],
                     "subject": row['subject'],
                     "sender": row['sender'],
                     "date_received": row['date_received'],
@@ -1110,14 +1084,18 @@ class InitialSync:
         total = len(pending_emails)
         for i, email_meta in enumerate(pending_emails, 1):
             message_id = email_meta['message_id']
+            internal_id = email_meta.get('internal_id')
             subject = email_meta.get('subject', '')[:40]
 
             print(f"\n  [{i}/{total}] {subject}...")
 
             try:
-                # 获取完整邮件内容
+                # 获取完整邮件内容（v3: 优先使用 internal_id，127x 更快）
                 mailbox = email_meta.get('mailbox', '收件箱')
-                full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
+                if internal_id and internal_id < 100000000:  # 真实 AppleScript id
+                    full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+                else:
+                    full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
 
                 if not full_email:
                     print(f"    ❌ 无法获取邮件内容")
@@ -1125,8 +1103,8 @@ class InitialSync:
                     self.stats["failed"] += 1
                     continue
 
-                # 构建 Email 对象
-                email_obj = await self._build_email_object(full_email, mailbox)
+                # 构建 Email 对象（传入 internal_id）
+                email_obj = await self._build_email_object(full_email, mailbox, internal_id)
                 if not email_obj:
                     print(f"    ❌ 无法解析邮件")
                     self.sync_store.mark_failed(message_id, "Failed to parse email")
@@ -1169,11 +1147,16 @@ class InitialSync:
                 continue
 
             subject = email_meta.get('subject', '')[:40]
+            internal_id = email_meta.get('internal_id')
             print(f"  [{i}/{total}] {subject}...", end='\r')
 
             try:
+                # v3: 优先使用 internal_id 获取（127x 更快）
                 mailbox = email_meta.get('mailbox', '收件箱')
-                full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
+                if internal_id and internal_id < 100000000:  # 真实 AppleScript id
+                    full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+                else:
+                    full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
 
                 if not full_email:
                     # 邮件在 Mail.app 中找不到，删除记录
@@ -1181,7 +1164,7 @@ class InitialSync:
                     not_found += 1
                     continue
 
-                email_obj = await self._build_email_object(full_email, mailbox)
+                email_obj = await self._build_email_object(full_email, mailbox, internal_id)
                 if not email_obj:
                     self.sync_store.mark_failed(message_id, "Failed to parse email")
                     failed += 1
@@ -1356,7 +1339,7 @@ class InitialSync:
 
         return None
 
-    async def _build_email_object(self, full_email: Dict, mailbox: str) -> Optional[Email]:
+    async def _build_email_object(self, full_email: Dict, mailbox: str, internal_id: int = None) -> Optional[Email]:
         """使用 EmailReader 构建完整的 Email 对象（包含附件和图片处理）
 
         优化：直接使用已获取的 source 解析，避免重复调用 AppleScript
@@ -1381,6 +1364,9 @@ class InitialSync:
                 # 如果 AppleScript 已经提取了 thread_id，使用它
                 if full_email.get('thread_id'):
                     email_obj.thread_id = full_email.get('thread_id')
+                # 设置 internal_id（v3 架构）
+                if internal_id:
+                    email_obj.internal_id = internal_id
 
             return email_obj
 
@@ -1501,6 +1487,7 @@ class InitialSync:
         for i, (message_id, store_data, notion_data, _) in enumerate(items, 1):
             page_id = notion_data['page_id']
             subject = store_data.get('subject', '')[:40]
+            internal_id = store_data.get('internal_id')
 
             print(f"  [{i}/{len(items)}] 重新同步: {subject}...", end='\r')
 
@@ -1518,9 +1505,12 @@ class InitialSync:
                     else:
                         raise archive_err
 
-                # 2. 重新同步
+                # 2. 重新同步（v3: 优先使用 internal_id）
                 mailbox = store_data.get('mailbox', '收件箱')
-                full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
+                if internal_id and internal_id < 100000000:  # 真实 AppleScript id
+                    full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+                else:
+                    full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
 
                 if not full_email:
                     # 邮件在 Mail.app 中找不到（可能已删除或移动）
@@ -1529,7 +1519,7 @@ class InitialSync:
                     not_found += 1
                     continue
 
-                email_obj = await self._build_email_object(full_email, mailbox)
+                email_obj = await self._build_email_object(full_email, mailbox, internal_id)
                 if not email_obj:
                     failed += 1
                     self.sync_store.mark_failed(message_id, "Failed to build email object")
@@ -1544,6 +1534,7 @@ class InitialSync:
                     # mark_synced 只更新 sync_status 和 notion_page_id，不更新 subject/sender
                     # 所以需要用 save_email 完整覆盖
                     self.sync_store.save_email({
+                        'internal_id': internal_id,  # v3: 保留 internal_id
                         'message_id': message_id,
                         'subject': email_obj.subject or '',
                         'sender': f"{email_obj.sender_name} <{email_obj.sender}>" if email_obj.sender_name else (email_obj.sender or ''),
@@ -1786,9 +1777,6 @@ async def main():
             print("提示: 使用 --inbox-count 和 --sent-count 指定数量")
 
         await sync._fetch_emails_from_applescript()
-
-        # 记录当前 max_row_id（用于后续增量同步）
-        sync._record_current_max_row_id()
 
         # 输出最终统计
         stats = sync.sync_store.get_stats()

@@ -11,12 +11,13 @@ macOS 邮件实时同步到 Notion，支持 AI 自动分类与处理。
 | **日历同步** | Calendar.app | 仅用于同步历史日程（可选） |
 
 ### 邮件同步特性
+- **v3 SQLite-First 架构**：大邮箱（6-7 万封）支持，单封邮件获取 ~1s（vs 旧架构 ~100s）
 - 基于 message_id 的 100% 准确去重
 - 自动建立邮件线程 Parent-Child 关系
 - **自动识别会议邀请**：检测邮件中的 iCalendar 附件，创建日程页面
 - HTML 正文转 Notion Blocks（含内联图片）
 - 附件上传到 Notion
-- SQLite 雷达 + AppleScript 触发式架构（低延迟）
+- 失败自动重试（指数退避）
 
 ### 关于日历同步
 

@@ -151,6 +151,180 @@ class HTMLToNotionConverter:
 
         return len(cleaned) > 0
 
+    def _is_inline_container(self, element) -> bool:
+        """
+        判断元素是否只包含内联内容（文本、链接、粗体等）
+
+        内联元素：a, b, strong, i, em, span, u, s, br, img, 文本节点
+        块级元素：div, p, table, ul, ol, blockquote, pre, h1-h6 等
+        注意：img 虽然会单独处理为 block，但在 HTML 中是内联元素
+        """
+        block_tags = {'div', 'p', 'table', 'ul', 'ol', 'blockquote', 'pre',
+                      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr'}
+
+        for child in element.descendants:
+            if hasattr(child, 'name') and child.name in block_tags:
+                return False
+        return True
+
+    def _extract_rich_text(self, element) -> List[Dict[str, Any]]:
+        """
+        从元素中提取 rich_text 数组，保留链接和格式
+
+        处理内联元素：文本、<a>、<b>/<strong>、<i>/<em>、<u>、<s>、<span>、<br>
+        """
+        rich_text = []
+
+        def process_node(node, annotations=None):
+            if annotations is None:
+                annotations = {'bold': False, 'italic': False, 'underline': False, 'strikethrough': False}
+
+            if isinstance(node, str):
+                text = node
+                # 保留单个空格，但不保留纯空白字符串（多个空格/换行）
+                if text and (text.strip() or text == ' '):
+                    # 将多个空白字符压缩为单个空格
+                    import re
+                    text = re.sub(r'\s+', ' ', text)
+                    if text:
+                        rich_text.append(self._create_rich_text_item(text, annotations=annotations))
+                return
+
+            if not hasattr(node, 'name'):
+                return
+
+            tag = node.name
+
+            # 跳过不需要处理的标签（img 会单独处理为 block）
+            if tag in ['script', 'style', 'head', 'meta', 'link', 'img']:
+                return
+
+            # 处理换行
+            if tag == 'br':
+                rich_text.append(self._create_rich_text_item('\n'))
+                return
+
+            # 更新注解
+            new_annotations = annotations.copy()
+            if tag in ['b', 'strong']:
+                new_annotations['bold'] = True
+            elif tag in ['i', 'em']:
+                new_annotations['italic'] = True
+            elif tag == 'u':
+                new_annotations['underline'] = True
+            elif tag in ['s', 'strike', 'del']:
+                new_annotations['strikethrough'] = True
+
+            # 处理链接
+            if tag == 'a':
+                href = node.get('href', '')
+                text = node.get_text()
+                # 保留空格
+                import re
+                text = re.sub(r'\s+', ' ', text).strip()
+                if text and href and href.startswith(('http://', 'https://')):
+                    rich_text.append(self._create_rich_text_item(text, link=href, annotations=new_annotations))
+                elif text:
+                    rich_text.append(self._create_rich_text_item(text, annotations=new_annotations))
+                return
+
+            # 递归处理子节点
+            for child in node.children:
+                process_node(child, new_annotations)
+
+        # 处理所有直接子节点
+        for child in element.children:
+            process_node(child)
+
+        # 合并相邻的相同格式文本
+        rich_text = self._merge_rich_text(rich_text)
+
+        return rich_text
+
+    def _create_rich_text_item(self, text: str, link: str = None, annotations: dict = None) -> Dict[str, Any]:
+        """创建单个 rich_text 项"""
+        safe_text = self._truncate_by_utf16(text)
+
+        item = {
+            "type": "text",
+            "text": {"content": safe_text}
+        }
+
+        if link:
+            safe_url = link[:2000] if len(link) > 2000 else link
+            item["text"]["link"] = {"url": safe_url}
+
+        if annotations and any(annotations.values()):
+            item["annotations"] = {
+                "bold": annotations.get('bold', False),
+                "italic": annotations.get('italic', False),
+                "underline": annotations.get('underline', False),
+                "strikethrough": annotations.get('strikethrough', False),
+                "code": False,
+                "color": "default"
+            }
+
+        return item
+
+    def _merge_rich_text(self, rich_text: List[Dict]) -> List[Dict]:
+        """合并相邻的相同格式文本"""
+        if not rich_text:
+            return []
+
+        merged = []
+        for item in rich_text:
+            if not merged:
+                merged.append(item)
+                continue
+
+            last = merged[-1]
+            # 检查是否可以合并（相同的 link 和 annotations）
+            last_link = last.get('text', {}).get('link')
+            item_link = item.get('text', {}).get('link')
+            last_ann = last.get('annotations', {})
+            item_ann = item.get('annotations', {})
+
+            if last_link == item_link and last_ann == item_ann:
+                # 合并文本
+                last['text']['content'] += item['text']['content']
+            else:
+                merged.append(item)
+
+        # 过滤空文本
+        return [item for item in merged if item.get('text', {}).get('content', '').strip()]
+
+    def _create_paragraph_with_rich_text(self, rich_text: List[Dict]) -> Dict[str, Any]:
+        """创建包含 rich_text 的段落 Block"""
+        # 截断过长的 rich_text（Notion 限制每个 block 2000 字符）
+        total_len = sum(len(item.get('text', {}).get('content', '')) for item in rich_text)
+        if total_len > 1990:
+            # 需要截断
+            truncated = []
+            current_len = 0
+            for item in rich_text:
+                content = item.get('text', {}).get('content', '')
+                if current_len + len(content) <= 1987:
+                    truncated.append(item)
+                    current_len += len(content)
+                else:
+                    # 截断这个 item
+                    remaining = 1987 - current_len
+                    if remaining > 0:
+                        new_item = item.copy()
+                        new_item['text'] = item['text'].copy()
+                        new_item['text']['content'] = content[:remaining] + '...'
+                        truncated.append(new_item)
+                    break
+            rich_text = truncated
+
+        return {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": rich_text
+            }
+        }
+
     def _convert_element(self, element) -> List[Dict[str, Any]]:
         """递归转换 HTML 元素"""
         blocks = []
@@ -169,10 +343,15 @@ class HTMLToNotionConverter:
                     if image_block:
                         blocks.append(image_block)
 
-                # 然后处理文本内容
-                text = child.get_text(strip=True)
-                if text:
-                    blocks.append(self._create_paragraph(text))
+                # 检查是否是内联容器（只包含文本、链接、格式标签）
+                if self._is_inline_container(child):
+                    # 提取 rich_text 保留链接和格式
+                    rich_text = self._extract_rich_text(child)
+                    if rich_text:
+                        blocks.append(self._create_paragraph_with_rich_text(rich_text))
+                else:
+                    # 包含块级元素，递归处理
+                    blocks.extend(self._convert_element(child))
 
             elif child.name in ["h1", "h2", "h3"]:
                 text = child.get_text(strip=True)
@@ -236,8 +415,22 @@ class HTMLToNotionConverter:
                 continue
 
             elif child.name == "div" or child.name == "span":
-                # 递归处理 div 和 span
-                blocks.extend(self._convert_element(child))
+                # 检查是否是内联容器
+                if self._is_inline_container(child):
+                    # 先处理图片
+                    imgs = child.find_all("img")
+                    for img in imgs:
+                        image_block = self._handle_image(img)
+                        if image_block:
+                            blocks.append(image_block)
+
+                    # 提取 rich_text 保留链接和格式
+                    rich_text = self._extract_rich_text(child)
+                    if rich_text:
+                        blocks.append(self._create_paragraph_with_rich_text(rich_text))
+                else:
+                    # 包含块级元素，递归处理
+                    blocks.extend(self._convert_element(child))
 
             elif child.name == "table":
                 # 检测是否是布局表格（Microsoft/Office 邮件常用）
@@ -518,7 +711,9 @@ class HTMLToNotionConverter:
     @staticmethod
     def _is_html(content: str) -> bool:
         """判断是否是 HTML"""
-        return "<html" in content.lower() or "<body" in content.lower() or "<div" in content.lower()
+        lower = content.lower()
+        html_tags = ["<html", "<body", "<div", "<p>", "<p ", "<br", "<table", "<a ", "<span", "<b>", "<strong"]
+        return any(tag in lower for tag in html_tags)
 
     def _is_layout_table(self, table_element) -> bool:
         """

@@ -418,6 +418,12 @@ class NotionSync:
                 "rich_text": [{"text": {"content": email.thread_id[:1999]}}]
             }
 
+        # ID (internal_id, 可选) - v3 架构: AppleScript id = SQLite ROWID
+        if email.internal_id:
+            properties["ID"] = {
+                "number": email.internal_id
+            }
+
         # Original EML (Files) - .eml 文件上传
         if eml_file_upload_id:
             properties["Original EML"] = {

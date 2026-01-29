@@ -1,30 +1,39 @@
 """
-SyncStore - 邮件同步状态存储模块
+SyncStore - 邮件同步状态存储模块 (v3 架构)
 
-基于 message_id 的新架构，替代原 cache_store.py。
-不再使用 row_id 映射，直接以 message_id 作为唯一标识。
+v3 架构变更：
+- internal_id (SQLite ROWID = AppleScript id) 作为主键
+- message_id 作为 UNIQUE 约束（AppleScript 成功后填充，用于去重）
+- 合并 sync_failures 到 email_metadata（统一重试机制）
+- 新增 next_retry_at 字段（指数退避）
 
-表结构:
-- sync_state: 同步状态（last_max_row_id, last_sync_time 等）
-- email_metadata: 邮件元数据（message_id 为主键）
-- sync_failures: 失败重试队列
+状态流转：
+    pending -> fetch_failed -> (retry) -> synced/failed
+    pending -> synced
+    pending -> failed -> (retry) -> synced/dead_letter
 
 Usage:
     store = SyncStore("data/sync_store.db")
 
-    # 保存邮件元数据
+    # v3 架构：用 internal_id 保存
     store.save_email({
-        'message_id': '<xxx@example.com>',
-        'thread_id': '<yyy@example.com>',
+        'internal_id': 41457,
+        'mailbox': '收件箱',
         'subject': 'Test',
-        'sender': 'a@b.com',
-        ...
+        'sync_status': 'pending',
     })
 
-    # 获取待同步邮件
-    pending = store.get_pending_emails()
+    # AppleScript 成功后更新
+    store.update_after_fetch(41457, {
+        'message_id': '<xxx@example.com>',
+        'thread_id': '<yyy@example.com>',
+        'subject': 'Test (updated)',
+    })
 
     # 标记同步成功
+    store.mark_synced_v3(41457, notion_page_id)
+
+    # 兼容旧 API（使用 message_id）
     store.mark_synced(message_id, notion_page_id)
 """
 
@@ -32,7 +41,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
+from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict, Union
 from loguru import logger
 
 
@@ -44,7 +53,9 @@ class SyncStoreStats(TypedDict, total=False):
     pending: int
     synced: int
     failed: int
+    fetch_failed: int
     dead_letter: int
+    skipped: int
     failure_queue: int
     last_max_row_id: int
     last_sync_time: Optional[str]
@@ -54,7 +65,8 @@ class SyncStoreStats(TypedDict, total=False):
 
 class EmailMetadata(TypedDict, total=False):
     """邮件元数据类型定义"""
-    message_id: str
+    internal_id: int  # v3 新增：主键
+    message_id: Optional[str]  # v3：UNIQUE，AppleScript 成功后填充
     thread_id: Optional[str]
     subject: str
     sender: str
@@ -65,17 +77,21 @@ class EmailMetadata(TypedDict, total=False):
     mailbox: str
     is_read: int  # SQLite boolean as int
     is_flagged: int
-    sync_status: str  # 'pending' | 'synced' | 'failed' | 'dead_letter'
+    sync_status: str  # 'pending' | 'fetch_failed' | 'synced' | 'failed' | 'skipped' | 'dead_letter'
     notion_page_id: Optional[str]
     notion_thread_id: Optional[str]
     sync_error: Optional[str]
     retry_count: int
+    next_retry_at: Optional[float]  # v3 新增：下次重试时间（合并自 sync_failures）
     created_at: float
     updated_at: float
 
 
 class SyncStore:
-    """邮件同步状态存储 - 基于 message_id 的新架构"""
+    """邮件同步状态存储 - v3 架构（internal_id 为主键）"""
+
+    # 数据库版本，用于迁移检测
+    DB_VERSION = 3
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -117,7 +133,7 @@ class SyncStore:
             conn.close()
 
     def _init_database(self):
-        """初始化数据库表结构"""
+        """初始化数据库表结构（v3 架构）"""
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -130,10 +146,36 @@ class SyncStore:
             )
         """)
 
-        # 邮件元数据表（message_id 为主键）
+        # 检查是否需要迁移
+        cursor.execute("SELECT value FROM sync_state WHERE key = 'db_version'")
+        row = cursor.fetchone()
+        current_version = int(row['value']) if row else 1
+
+        if current_version < 3:
+            # v3 需要迁移，检查是否已有 email_metadata 表
+            cursor.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='email_metadata'
+            """)
+            if cursor.fetchone():
+                # 已有旧表，检查是否有 internal_id 列
+                cursor.execute("PRAGMA table_info(email_metadata)")
+                columns = {row[1] for row in cursor.fetchall()}
+                if 'internal_id' not in columns:
+                    # 需要迁移但尚未迁移，记录警告
+                    logger.warning(
+                        "SyncStore v2 detected, please run migration script: "
+                        "python3 scripts/migrate_sync_store_v3.py"
+                    )
+                    # 继续使用旧表结构
+                    conn.close()
+                    return
+
+        # v3 架构：email_metadata 表（internal_id 为主键）
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_metadata (
-                message_id TEXT PRIMARY KEY,
+                internal_id INTEGER PRIMARY KEY,
+                message_id TEXT UNIQUE,
                 thread_id TEXT,
                 subject TEXT,
                 sender TEXT,
@@ -149,23 +191,17 @@ class SyncStore:
                 notion_thread_id TEXT,
                 sync_error TEXT,
                 retry_count INTEGER DEFAULT 0,
+                next_retry_at REAL,
                 created_at REAL,
                 updated_at REAL
             )
         """)
 
-        # 失败重试队列
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sync_failures (
-                message_id TEXT PRIMARY KEY,
-                error_message TEXT,
-                retry_count INTEGER DEFAULT 0,
-                next_retry_at REAL,
-                created_at REAL
-            )
-        """)
-
         # 创建索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_message_id
+            ON email_metadata(message_id)
+        """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_thread
             ON email_metadata(thread_id)
@@ -183,11 +219,12 @@ class SyncStore:
             ON email_metadata(mailbox)
         """)
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_failures_next_retry
-            ON sync_failures(next_retry_at)
+            CREATE INDEX IF NOT EXISTS idx_email_next_retry
+            ON email_metadata(next_retry_at)
+            WHERE sync_status IN ('fetch_failed', 'failed')
         """)
 
-        # 线程头缓存表（记录找不到的线程头，避免重复请求）
+        # 线程头缓存表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS thread_head_cache (
                 thread_id TEXT PRIMARY KEY,
@@ -197,9 +234,18 @@ class SyncStore:
             )
         """)
 
+        # 兼容性：保留 sync_failures 表（如果存在，用于迁移）
+        # 新代码不再使用此表
+
+        # 更新数据库版本
+        cursor.execute("""
+            INSERT OR REPLACE INTO sync_state (key, value, updated_at)
+            VALUES ('db_version', ?, ?)
+        """, (str(self.DB_VERSION), time.time()))
+
         conn.commit()
         conn.close()
-        logger.debug("Database tables initialized")
+        logger.debug("Database tables initialized (v3)")
 
     # ==================== 同步状态操作 ====================
 
@@ -270,42 +316,367 @@ class SyncStore:
         """设置上次同步时间"""
         return self.set_state('last_sync_time', time_str)
 
-    # ==================== 邮件元数据操作 ====================
+    # ==================== v3 架构：internal_id 操作 ====================
 
-    def save_email(self, email: Dict[str, Any]) -> bool:
-        """保存单个邮件元数据
+    def get(self, internal_id: int) -> Optional[EmailMetadata]:
+        """通过 internal_id 获取邮件元数据
 
         Args:
-            email: 邮件数据字典，必须包含 message_id
+            internal_id: 邮件内部 ID (SQLite ROWID = AppleScript id)
+
+        Returns:
+            邮件数据字典，不存在返回 None
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    SELECT * FROM email_metadata WHERE internal_id = ?
+                """, (internal_id,))
+
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+
+            except sqlite3.Error as e:
+                logger.error(f"Failed to get email by internal_id: {e}")
+                return None
+
+    def get_by_message_id(self, message_id: str) -> Optional[EmailMetadata]:
+        """通过 message_id 获取邮件元数据
+
+        Args:
+            message_id: 邮件 Message-ID (RFC 2822)
+
+        Returns:
+            邮件数据字典，不存在返回 None
+        """
+        if not message_id:
+            return None
+
+        with self._connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    SELECT * FROM email_metadata WHERE message_id = ?
+                """, (message_id,))
+
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+
+            except sqlite3.Error as e:
+                logger.error(f"Failed to get email by message_id: {e}")
+                return None
+
+    def delete(self, internal_id: int) -> bool:
+        """通过 internal_id 删除邮件记录
+
+        Args:
+            internal_id: 邮件内部 ID
 
         Returns:
             是否成功
         """
-        message_id = email.get('message_id')
-        if not message_id:
-            logger.warning("Cannot save email without message_id")
-            return False
+        with self._connection() as conn:
+            cursor = conn.cursor()
 
+            try:
+                cursor.execute(
+                    "DELETE FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,)
+                )
+                conn.commit()
+                logger.debug(f"Deleted email record: internal_id={internal_id}")
+                return True
+
+            except sqlite3.Error as e:
+                logger.error(f"Failed to delete email: {e}")
+                conn.rollback()
+                return False
+
+    def update_after_fetch(self, internal_id: int, data: Dict[str, Any]) -> bool:
+        """AppleScript 获取成功后更新元数据
+
+        用于 v3 架构：AppleScript 获取成功后，用准确的数据刷新 SyncStore。
+
+        Args:
+            internal_id: 邮件内部 ID
+            data: 要更新的字段（message_id, subject, sender, date_received, thread_id 等）
+
+        Returns:
+            是否成功
+        """
+        if not data:
+            return True
+
+        now = time.time()
+
+        # 构建 SET 子句
+        allowed_fields = {
+            'message_id', 'thread_id', 'subject', 'sender', 'sender_name',
+            'to_addr', 'cc_addr', 'date_received', 'is_read', 'is_flagged',
+            'sync_status', 'sync_error'
+        }
+        set_parts = []
+        values = []
+
+        for key, value in data.items():
+            if key in allowed_fields:
+                set_parts.append(f"{key} = ?")
+                if key in ('is_read', 'is_flagged'):
+                    values.append(1 if value else 0)
+                else:
+                    values.append(value)
+
+        if not set_parts:
+            return True
+
+        set_parts.append("updated_at = ?")
+        values.append(now)
+        values.append(internal_id)
+
+        with self._connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                query = f"""
+                    UPDATE email_metadata
+                    SET {', '.join(set_parts)}
+                    WHERE internal_id = ?
+                """
+                cursor.execute(query, values)
+                conn.commit()
+                logger.debug(f"Updated email after fetch: internal_id={internal_id}")
+                return True
+
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update after fetch: {e}")
+                conn.rollback()
+                return False
+
+    def mark_fetch_failed(self, internal_id: int, error: str) -> bool:
+        """标记 AppleScript 获取失败
+
+        Args:
+            internal_id: 邮件内部 ID
+            error: 错误信息
+
+        Returns:
+            是否成功
+        """
+        return self._update_for_retry(internal_id, 'fetch_failed', error)
+
+    def mark_synced_v3(self, internal_id: int, notion_page_id: str, notion_thread_id: str = None) -> bool:
+        """标记邮件同步成功（v3 架构，使用 internal_id）
+
+        Args:
+            internal_id: 邮件内部 ID
+            notion_page_id: Notion 页面 ID
+            notion_thread_id: Notion 线程页面 ID（可选）
+
+        Returns:
+            是否成功
+        """
         now = time.time()
 
         with self._connection() as conn:
             cursor = conn.cursor()
 
             try:
-                sync_status = email.get('sync_status', 'pending')
+                cursor.execute("""
+                    UPDATE email_metadata
+                    SET sync_status = 'synced',
+                        notion_page_id = ?,
+                        notion_thread_id = ?,
+                        sync_error = NULL,
+                        next_retry_at = NULL,
+                        updated_at = ?
+                    WHERE internal_id = ?
+                """, (notion_page_id, notion_thread_id, now, internal_id))
+
+                conn.commit()
+                logger.debug(f"Marked synced: internal_id={internal_id}")
+                return True
+
+            except sqlite3.Error as e:
+                logger.error(f"Failed to mark synced: {e}")
+                conn.rollback()
+                return False
+
+    def mark_failed_v3(self, internal_id: int, error: str, max_retries: int = 5) -> bool:
+        """标记 Notion 同步失败（v3 架构，使用 internal_id）
+
+        Args:
+            internal_id: 邮件内部 ID
+            error: 错误信息
+            max_retries: 最大重试次数
+
+        Returns:
+            是否成功
+        """
+        return self._update_for_retry(internal_id, 'failed', error, max_retries)
+
+    def mark_skipped(self, internal_id: int) -> bool:
+        """标记邮件为跳过状态（因日期过滤等原因不同步到 Notion）
+
+        Args:
+            internal_id: 邮件内部 ID
+
+        Returns:
+            是否成功
+        """
+        now = time.time()
+
+        with self._connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    UPDATE email_metadata
+                    SET sync_status = 'skipped',
+                        sync_error = NULL,
+                        next_retry_at = NULL,
+                        updated_at = ?
+                    WHERE internal_id = ?
+                """, (now, internal_id))
+
+                conn.commit()
+                logger.debug(f"Marked skipped: internal_id={internal_id}")
+                return True
+
+            except sqlite3.Error as e:
+                logger.error(f"Failed to mark skipped: {e}")
+                conn.rollback()
+                return False
+
+    def _update_for_retry(
+        self,
+        internal_id: int,
+        status: str,
+        error: str,
+        max_retries: int = 5
+    ) -> bool:
+        """更新重试状态（统一逻辑）
+
+        Args:
+            internal_id: 邮件内部 ID
+            status: 目标状态 ('fetch_failed' 或 'failed')
+            error: 错误信息
+            max_retries: 最大重试次数
+
+        Returns:
+            是否成功
+        """
+        now = time.time()
+
+        with self._connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                # 获取当前重试次数
+                cursor.execute(
+                    "SELECT retry_count FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,)
+                )
+                row = cursor.fetchone()
+                current_retry = (row['retry_count'] if row else 0) + 1
+
+                # 检查是否达到最大重试次数
+                if current_retry >= max_retries:
+                    cursor.execute("""
+                        UPDATE email_metadata
+                        SET sync_status = 'dead_letter',
+                            sync_error = ?,
+                            retry_count = ?,
+                            next_retry_at = NULL,
+                            updated_at = ?
+                        WHERE internal_id = ?
+                    """, (f"Max retries exceeded: {error}", current_retry, now, internal_id))
+
+                    conn.commit()
+                    logger.warning(f"Marked as dead_letter: internal_id={internal_id}")
+                    return True
+
+                # 计算下次重试时间（指数退避：1min, 5min, 15min, 1h, 2h）
+                delays = [60, 300, 900, 3600, 7200]
+                delay = delays[min(current_retry - 1, len(delays) - 1)]
+                next_retry = now + delay
 
                 cursor.execute("""
+                    UPDATE email_metadata
+                    SET sync_status = ?,
+                        sync_error = ?,
+                        retry_count = ?,
+                        next_retry_at = ?,
+                        updated_at = ?
+                    WHERE internal_id = ?
+                """, (status, error, current_retry, next_retry, now, internal_id))
+
+                conn.commit()
+                logger.warning(f"Marked {status}: internal_id={internal_id}, retry #{current_retry} in {delay}s")
+                return True
+
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update for retry: {e}")
+                conn.rollback()
+                return False
+
+    # ==================== 邮件元数据操作（兼容旧 API） ====================
+
+    def save_email(self, email: Dict[str, Any]) -> bool:
+        """保存单个邮件元数据
+
+        支持两种模式：
+        1. v3 架构：必须包含 internal_id
+        2. 兼容模式：只包含 message_id（用于旧代码）
+
+        Args:
+            email: 邮件数据字典
+
+        Returns:
+            是否成功
+        """
+        internal_id = email.get('internal_id')
+        message_id = email.get('message_id')
+
+        # v3 架构：使用 internal_id 作为主键
+        if internal_id is not None:
+            return self._save_email_v3(email)
+
+        # 兼容模式：使用 message_id（生成临时 internal_id）
+        if message_id:
+            return self._save_email_compat(email)
+
+        logger.warning("Cannot save email without internal_id or message_id")
+        return False
+
+    def _save_email_v3(self, email: Dict[str, Any]) -> bool:
+        """v3 架构保存邮件（internal_id 为主键）"""
+        internal_id = email['internal_id']
+        now = time.time()
+
+        with self._connection() as conn:
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
                     INSERT OR REPLACE INTO email_metadata
-                    (message_id, thread_id, subject, sender, sender_name,
+                    (internal_id, message_id, thread_id, subject, sender, sender_name,
                      to_addr, cc_addr, date_received, mailbox,
                      is_read, is_flagged, sync_status, notion_page_id,
-                     notion_thread_id, sync_error, retry_count,
+                     notion_thread_id, sync_error, retry_count, next_retry_at,
                      created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            COALESCE((SELECT created_at FROM email_metadata WHERE message_id = ?), ?),
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, (
-                    message_id,
+                    internal_id,
+                    email.get('message_id'),
                     email.get('thread_id'),
                     email.get('subject', ''),
                     email.get('sender', ''),
@@ -316,31 +687,42 @@ class SyncStore:
                     email.get('mailbox', '收件箱'),
                     1 if email.get('is_read') else 0,
                     1 if email.get('is_flagged') else 0,
-                    sync_status,
+                    email.get('sync_status', 'pending'),
                     email.get('notion_page_id'),
                     email.get('notion_thread_id'),
                     email.get('sync_error'),
                     email.get('retry_count', 0),
-                    message_id,
+                    email.get('next_retry_at'),
+                    internal_id,
                     now,
                     now
                 ))
 
-                # 如果同步成功，从失败队列中移除
-                if sync_status == 'synced':
-                    cursor.execute(
-                        "DELETE FROM sync_failures WHERE message_id = ?",
-                        (message_id,)
-                    )
-
                 conn.commit()
-                logger.debug(f"Saved email: {message_id[:50]}...")
+                logger.debug(f"Saved email (v3): internal_id={internal_id}")
                 return True
 
             except sqlite3.Error as e:
-                logger.error(f"Failed to save email: {e}")
+                logger.error(f"Failed to save email (v3): {e}")
                 conn.rollback()
                 return False
+
+    def _save_email_compat(self, email: Dict[str, Any]) -> bool:
+        """兼容模式保存邮件（message_id 为主键，生成临时 internal_id）
+
+        用于旧代码兼容，生成负数 internal_id 避免与真实 ID 冲突。
+        """
+        message_id = email['message_id']
+        # 使用 message_id 的 hash 作为临时 internal_id（负数）
+        internal_id = -abs(hash(message_id)) % 2147483647
+
+        # 检查是否已存在（通过 message_id）
+        existing = self.get_by_message_id(message_id)
+        if existing:
+            internal_id = existing['internal_id']
+
+        email_with_id = {**email, 'internal_id': internal_id}
+        return self._save_email_v3(email_with_id)
 
     def save_emails_batch(self, emails: List[Dict[str, Any]]) -> int:
         """批量保存邮件元数据
@@ -361,11 +743,21 @@ class SyncStore:
         # 准备批量数据
         batch_data = []
         for email in emails:
+            internal_id = email.get('internal_id')
             message_id = email.get('message_id')
-            if not message_id:
+
+            # v3 架构
+            if internal_id is not None:
+                pass
+            # 兼容模式
+            elif message_id:
+                internal_id = -abs(hash(message_id)) % 2147483647
+            else:
                 continue
+
             batch_data.append((
-                message_id,
+                internal_id,
+                email.get('message_id'),
                 email.get('thread_id'),
                 email.get('subject', ''),
                 email.get('sender', ''),
@@ -381,7 +773,8 @@ class SyncStore:
                 email.get('notion_thread_id'),
                 email.get('sync_error'),
                 email.get('retry_count', 0),
-                message_id,  # for COALESCE created_at
+                email.get('next_retry_at'),
+                internal_id,  # for COALESCE created_at
                 now,
                 now
             ))
@@ -395,13 +788,13 @@ class SyncStore:
             try:
                 cursor.executemany("""
                     INSERT OR REPLACE INTO email_metadata
-                    (message_id, thread_id, subject, sender, sender_name,
+                    (internal_id, message_id, thread_id, subject, sender, sender_name,
                      to_addr, cc_addr, date_received, mailbox,
                      is_read, is_flagged, sync_status, notion_page_id,
-                     notion_thread_id, sync_error, retry_count,
+                     notion_thread_id, sync_error, retry_count, next_retry_at,
                      created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            COALESCE((SELECT created_at FROM email_metadata WHERE message_id = ?), ?),
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, batch_data)
 
@@ -416,7 +809,7 @@ class SyncStore:
                 return 0
 
     def get_email(self, message_id: str) -> Optional[EmailMetadata]:
-        """获取单个邮件元数据
+        """获取单个邮件元数据（兼容旧 API）
 
         Args:
             message_id: 邮件 Message-ID
@@ -424,22 +817,7 @@ class SyncStore:
         Returns:
             邮件数据字典，不存在返回 None
         """
-        with self._connection() as conn:
-            cursor = conn.cursor()
-
-            try:
-                cursor.execute("""
-                    SELECT * FROM email_metadata WHERE message_id = ?
-                """, (message_id,))
-
-                row = cursor.fetchone()
-                if row:
-                    return dict(row)  # type: ignore[return-value]
-                return None
-
-            except sqlite3.Error as e:
-                logger.error(f"Failed to get email: {e}")
-                return None
+        return self.get_by_message_id(message_id)
 
     def get_earliest_email_by_thread_id(
         self,
@@ -482,8 +860,8 @@ class SyncStore:
 
                 row = cursor.fetchone()
                 if row:
-                    logger.debug(f"Found earliest email in thread: {thread_id[:30]}... -> {row['message_id'][:30]}...")
-                    return dict(row)  # type: ignore[return-value]
+                    logger.debug(f"Found earliest email in thread: {thread_id[:30]}...")
+                    return dict(row)
                 return None
 
             except sqlite3.Error as e:
@@ -531,8 +909,8 @@ class SyncStore:
 
                 row = cursor.fetchone()
                 if row:
-                    logger.debug(f"Found latest email in thread: {thread_id[:30]}... -> {row['message_id'][:30]}...")
-                    return dict(row)  # type: ignore[return-value]
+                    logger.debug(f"Found latest email in thread: {thread_id[:30]}...")
+                    return dict(row)
                 return None
 
             except sqlite3.Error as e:
@@ -566,7 +944,7 @@ class SyncStore:
 
             try:
                 conditions = ["thread_id = ?"]
-                params = [thread_id]
+                params: List[Any] = [thread_id]
 
                 if exclude_message_id:
                     conditions.append("message_id != ?")
@@ -584,9 +962,9 @@ class SyncStore:
                 """, params)
 
                 rows = cursor.fetchall()
-                result = [dict(row) for row in rows]  # type: ignore[misc]
+                result = [dict(row) for row in rows]
                 logger.debug(f"Found {len(result)} emails in thread: {thread_id[:30]}...")
-                return result  # type: ignore[return-value]
+                return result
 
             except sqlite3.Error as e:
                 logger.error(f"Failed to get all emails by thread_id: {e}")
@@ -627,7 +1005,7 @@ class SyncStore:
             cursor = conn.cursor()
 
             try:
-                cursor.execute("SELECT message_id FROM email_metadata")
+                cursor.execute("SELECT message_id FROM email_metadata WHERE message_id IS NOT NULL")
                 return {row['message_id'] for row in cursor.fetchall()}
 
             except sqlite3.Error as e:
@@ -652,7 +1030,7 @@ class SyncStore:
             while True:
                 try:
                     cursor.execute(
-                        "SELECT message_id FROM email_metadata LIMIT ? OFFSET ?",
+                        "SELECT message_id FROM email_metadata WHERE message_id IS NOT NULL LIMIT ? OFFSET ?",
                         (batch_size, offset)
                     )
                     rows = cursor.fetchall()
@@ -683,7 +1061,7 @@ class SyncStore:
 
             try:
                 cursor.execute(
-                    "SELECT message_id FROM email_metadata WHERE sync_status = 'synced'"
+                    "SELECT message_id FROM email_metadata WHERE sync_status = 'synced' AND message_id IS NOT NULL"
                 )
                 return {row['message_id'] for row in cursor.fetchall()}
 
@@ -725,7 +1103,7 @@ class SyncStore:
                         LIMIT ?
                     """, (limit,))
 
-                return [dict(row) for row in cursor.fetchall()]  # type: ignore[misc, return-value]
+                return [dict(row) for row in cursor.fetchall()]
 
             except sqlite3.Error as e:
                 logger.error(f"Failed to get pending emails: {e}")
@@ -739,7 +1117,7 @@ class SyncStore:
         """按状态获取邮件
 
         Args:
-            status: 同步状态 (pending/synced/failed/dead_letter)
+            status: 同步状态 (pending/fetch_failed/synced/failed/skipped/dead_letter)
             limit: 最大返回数量
 
         Returns:
@@ -756,7 +1134,7 @@ class SyncStore:
                     LIMIT ?
                 """, (status, limit))
 
-                return [dict(row) for row in cursor.fetchall()]  # type: ignore[misc, return-value]
+                return [dict(row) for row in cursor.fetchall()]
 
             except sqlite3.Error as e:
                 logger.error(f"Failed to get emails by status: {e}")
@@ -768,7 +1146,7 @@ class SyncStore:
         notion_page_id: str,
         notion_thread_id: str = None
     ) -> bool:
-        """标记邮件同步成功
+        """标记邮件同步成功（兼容旧 API，使用 message_id）
 
         Args:
             message_id: 邮件 Message-ID
@@ -782,22 +1160,16 @@ class SyncStore:
             cursor = conn.cursor()
 
             try:
-                # 使用单个事务完成所有操作
                 cursor.execute("""
                     UPDATE email_metadata
                     SET sync_status = 'synced',
                         notion_page_id = ?,
                         notion_thread_id = ?,
                         sync_error = NULL,
+                        next_retry_at = NULL,
                         updated_at = ?
                     WHERE message_id = ?
                 """, (notion_page_id, notion_thread_id, time.time(), message_id))
-
-                # 从失败队列移除（同一事务）
-                cursor.execute(
-                    "DELETE FROM sync_failures WHERE message_id = ?",
-                    (message_id,)
-                )
 
                 conn.commit()
                 logger.debug(f"Marked synced: {message_id[:50]}...")
@@ -821,7 +1193,6 @@ class SyncStore:
             cursor = conn.cursor()
 
             try:
-                # 使用单个事务完成所有操作
                 cursor.execute("""
                     UPDATE email_metadata
                     SET sync_status = 'pending',
@@ -829,15 +1200,10 @@ class SyncStore:
                         notion_thread_id = NULL,
                         sync_error = NULL,
                         retry_count = 0,
+                        next_retry_at = NULL,
                         updated_at = ?
                     WHERE message_id = ?
                 """, (time.time(), message_id))
-
-                # 从失败队列移除（同一事务）
-                cursor.execute(
-                    "DELETE FROM sync_failures WHERE message_id = ?",
-                    (message_id,)
-                )
 
                 conn.commit()
                 logger.debug(f"Marked pending: {message_id[:50]}...")
@@ -849,7 +1215,7 @@ class SyncStore:
                 return False
 
     def delete_email(self, message_id: str) -> bool:
-        """删除邮件记录（用于邮件源已丢失的情况）
+        """删除邮件记录（兼容旧 API，使用 message_id）
 
         Args:
             message_id: 邮件 Message-ID
@@ -861,18 +1227,10 @@ class SyncStore:
             cursor = conn.cursor()
 
             try:
-                # 从邮件元数据表删除
                 cursor.execute(
                     "DELETE FROM email_metadata WHERE message_id = ?",
                     (message_id,)
                 )
-
-                # 从失败队列删除
-                cursor.execute(
-                    "DELETE FROM sync_failures WHERE message_id = ?",
-                    (message_id,)
-                )
-
                 conn.commit()
                 logger.debug(f"Deleted email record: {message_id[:50]}...")
                 return True
@@ -888,7 +1246,7 @@ class SyncStore:
         error_message: str,
         max_retries: int = 5
     ) -> bool:
-        """标记邮件同步失败
+        """标记邮件同步失败（兼容旧 API，使用 message_id）
 
         当重试次数达到 max_retries 时，自动标记为 dead_letter 状态。
 
@@ -900,72 +1258,14 @@ class SyncStore:
         Returns:
             是否成功
         """
-        with self._connection() as conn:
-            cursor = conn.cursor()
-            now = time.time()
+        # 先获取 internal_id
+        email = self.get_by_message_id(message_id)
+        if not email:
+            logger.warning(f"Email not found for mark_failed: {message_id[:50]}...")
+            return False
 
-            try:
-                # 获取当前重试次数
-                cursor.execute(
-                    "SELECT retry_count FROM email_metadata WHERE message_id = ?",
-                    (message_id,)
-                )
-                row = cursor.fetchone()
-                current_retry = (row['retry_count'] if row else 0) + 1
-
-                # 检查是否达到最大重试次数
-                if current_retry >= max_retries:
-                    # 标记为 dead_letter 状态
-                    cursor.execute("""
-                        UPDATE email_metadata
-                        SET sync_status = 'dead_letter',
-                            sync_error = ?,
-                            retry_count = ?,
-                            updated_at = ?
-                        WHERE message_id = ?
-                    """, (f"Max retries exceeded: {error_message}", current_retry, now, message_id))
-
-                    # 从失败队列移除（不再重试）
-                    cursor.execute(
-                        "DELETE FROM sync_failures WHERE message_id = ?",
-                        (message_id,)
-                    )
-
-                    conn.commit()
-                    logger.warning(f"Marked as dead_letter (max retries): {message_id[:50]}...")
-                    return True
-
-                # 更新邮件状态
-                cursor.execute("""
-                    UPDATE email_metadata
-                    SET sync_status = 'failed',
-                        sync_error = ?,
-                        retry_count = ?,
-                        updated_at = ?
-                    WHERE message_id = ?
-                """, (error_message, current_retry, now, message_id))
-
-                # 计算下次重试时间（指数退避：1min, 5min, 15min, 1h, 2h）
-                delays = [60, 300, 900, 3600, 7200]
-                delay = delays[min(current_retry - 1, len(delays) - 1)]
-                next_retry = now + delay
-
-                # 加入失败队列
-                cursor.execute("""
-                    INSERT OR REPLACE INTO sync_failures
-                    (message_id, error_message, retry_count, next_retry_at, created_at)
-                    VALUES (?, ?, ?, ?,
-                            COALESCE((SELECT created_at FROM sync_failures WHERE message_id = ?), ?))
-                """, (message_id, error_message, current_retry, next_retry, message_id, now))
-
-                conn.commit()
-                logger.warning(f"Marked failed: {message_id[:50]}..., retry #{current_retry} in {delay}s")
-                return True
-
-            except sqlite3.Error as e:
-                logger.error(f"Failed to mark failed: {e}")
-                conn.rollback()
-                return False
+        internal_id = email['internal_id']
+        return self._update_for_retry(internal_id, 'failed', error_message, max_retries)
 
     def update_thread_id(
         self,
@@ -999,16 +1299,18 @@ class SyncStore:
                 conn.rollback()
                 return False
 
-    # ==================== 失败重试队列操作 ====================
+    # ==================== 失败重试队列操作（v3 架构统一在 email_metadata） ====================
 
     def get_ready_for_retry(self, limit: int = 10) -> List[EmailMetadata]:
         """获取可以重试的失败邮件
+
+        v3 架构：统一查询 fetch_failed 和 failed 状态的邮件。
 
         Args:
             limit: 最大返回数量
 
         Returns:
-            邮件列表（包含 email_metadata 的完整信息）
+            邮件列表（包含 internal_id）
         """
         now = time.time()
 
@@ -1017,27 +1319,30 @@ class SyncStore:
 
             try:
                 cursor.execute("""
-                    SELECT em.*
-                    FROM email_metadata em
-                    JOIN sync_failures sf ON em.message_id = sf.message_id
-                    WHERE sf.next_retry_at <= ?
-                    ORDER BY sf.next_retry_at ASC
+                    SELECT * FROM email_metadata
+                    WHERE sync_status IN ('fetch_failed', 'failed')
+                      AND next_retry_at IS NOT NULL
+                      AND next_retry_at <= ?
+                    ORDER BY next_retry_at ASC
                     LIMIT ?
                 """, (now, limit))
 
-                return [dict(row) for row in cursor.fetchall()]  # type: ignore[misc, return-value]
+                return [dict(row) for row in cursor.fetchall()]
 
             except sqlite3.Error as e:
                 logger.error(f"Failed to get ready for retry: {e}")
                 return []
 
     def get_failure_count(self) -> int:
-        """获取失败队列数量"""
+        """获取失败队列数量（fetch_failed + failed）"""
         with self._connection() as conn:
             cursor = conn.cursor()
 
             try:
-                cursor.execute("SELECT COUNT(*) FROM sync_failures")
+                cursor.execute("""
+                    SELECT COUNT(*) FROM email_metadata
+                    WHERE sync_status IN ('fetch_failed', 'failed')
+                """)
                 return cursor.fetchone()[0]
 
             except sqlite3.Error as e:
@@ -1070,9 +1375,8 @@ class SyncStore:
                 """)
                 mailbox_counts = {row['mailbox']: row['count'] for row in cursor.fetchall()}
 
-                # 失败队列统计
-                cursor.execute("SELECT COUNT(*) FROM sync_failures")
-                failure_count = cursor.fetchone()[0]
+                # 失败队列统计（fetch_failed + failed）
+                failure_count = status_counts.get('fetch_failed', 0) + status_counts.get('failed', 0)
 
                 # 数据库大小
                 db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
@@ -1084,7 +1388,9 @@ class SyncStore:
                     pending=status_counts.get('pending', 0),
                     synced=status_counts.get('synced', 0),
                     failed=status_counts.get('failed', 0),
+                    fetch_failed=status_counts.get('fetch_failed', 0),
                     dead_letter=status_counts.get('dead_letter', 0),
+                    skipped=status_counts.get('skipped', 0),
                     failure_queue=failure_count,
                     last_max_row_id=self.get_last_max_row_id(),
                     last_sync_time=self.get_last_sync_time(),
@@ -1103,8 +1409,8 @@ class SyncStore:
 
             try:
                 cursor.execute("DELETE FROM email_metadata")
-                cursor.execute("DELETE FROM sync_failures")
-                cursor.execute("DELETE FROM sync_state")
+                cursor.execute("DELETE FROM sync_state WHERE key != 'db_version'")
+                cursor.execute("DELETE FROM thread_head_cache")
                 conn.commit()
                 logger.warning("Cleared all data from SyncStore")
                 return True
@@ -1265,6 +1571,7 @@ class SyncStore:
                     SET sync_status = 'pending',
                         retry_count = 0,
                         sync_error = NULL,
+                        next_retry_at = NULL,
                         updated_at = ?
                     WHERE message_id = ? AND sync_status = 'dead_letter'
                 """, (time.time(), message_id))
@@ -1281,4 +1588,3 @@ class SyncStore:
                 logger.error(f"Failed to retry dead letter: {e}")
                 conn.rollback()
                 return False
-

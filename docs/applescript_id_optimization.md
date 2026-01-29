@@ -168,12 +168,13 @@ SQLite 可通过 `mailboxes.url` 区分邮箱：
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                              │                                              │
 │                              ▼                                              │
-│  6. 失败重试机制                                                           │
+│  6. 失败重试机制（统一在 email_metadata）                                   │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │ - AppleScript 失败：重试 3 次，指数退避                              │   │
-│  │ - Notion 同步失败：加入 sync_failures 队列                           │   │
-│  │ - 使用 internal_id 重试（快速）                                      │   │
-│  │ - 超过最大重试次数 → dead_letter 状态                                │   │
+│  │ - 失败时：更新 sync_status='failed', 计算 next_retry_at             │   │
+│  │ - 无单独的 sync_failures 表                                         │   │
+│  │ - 每次轮询查询 next_retry_at <= now 的记录                          │   │
+│  │ - 使用 internal_id 重试（快速，~1s）                                │   │
+│  │ - 超过最大重试次数 → dead_letter 状态                               │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -184,20 +185,50 @@ SQLite 可通过 `mailboxes.url` 区分邮箱：
 | 步骤 | 当前架构 (v2) | 优化架构 (v3) |
 |------|---------------|---------------|
 | 检测新邮件 | SQLite max_row_id | SQLite max_row_id |
-| 获取新邮件列表 | AppleScript 批量 (N+buffer) | **SQLite 查询** |
-| 计算新邮件数 | 估算 + buffer | **精确** |
+| 获取新邮件列表 | AppleScript 批量 (N+buffer) | **SQLite 查询 + 写入 SyncStore** |
+| SyncStore 主键 | message_id | **internal_id** |
+| AppleScript 失败处理 | ❌ 无法追踪 | ✅ **用 internal_id 追踪** |
 | 获取完整内容 | `whose message id is` (慢) | **`whose id is`** (快) |
-| 邮箱定位 | 需遍历搜索 | **SQLite 提供，精准定位** |
+| 重试队列 | sync_failures 表 | **统一在 email_metadata** |
 | 单封邮件获取 | ~100 秒 | **~1 秒** |
 
-### 3.3 需要修改的模块
+### 3.3 SyncStore 的角色
+
+**新架构下 SyncStore 的核心变化**：
+
+| 功能 | 旧架构 | 新架构 v3 |
+|------|--------|-----------|
+| **主键** | message_id | **internal_id** |
+| **去重** | message_id | message_id（UNIQUE 约束）|
+| **重试追踪** | sync_failures 表 | **统一在 email_metadata** |
+| **AppleScript 失败处理** | ❌ 无法追踪 | ✅ 用 internal_id 追踪 |
+
+**为什么改用 internal_id 作为主键？**
+
+```
+问题场景：
+1. SQLite 检测到新邮件（只有 internal_id，没有 message_id）
+2. AppleScript 获取失败 ❌
+3. 旧架构：无法写入 SyncStore（主键是 message_id）→ 邮件丢失！
+4. 新架构：直接写入 SyncStore（主键是 internal_id）→ 等待重试 ✅
+```
+
+**SyncStore 的作用**：
+
+1. **追踪所有邮件状态**：从 SQLite 检测到开始，全程追踪
+2. **去重**：用 message_id（AppleScript 成功后填充）
+3. **重试队列**：统一管理 fetch_failed 和 failed 状态
+4. **线程关系**：message_id → notion_page_id 映射（Parent Item）
+5. **位置记录**：last_max_row_id 持久化
+
+### 3.4 需要修改的模块
 
 | 模块 | 文件 | 修改内容 |
 |------|------|----------|
 | **SQLite Radar** | `src/mail/sqlite_radar.py` | 新增 `get_new_emails()` 方法，返回新邮件元数据（含 ROWID 和 mailbox） |
 | **AppleScript Arm** | `src/mail/applescript_arm.py` | 1. `fetch_emails_by_position()` 额外返回 `id`<br>2. 新增 `fetch_email_content_by_id(id, mailbox)` 方法 |
 | **MailAppScripts** | `src/mail/applescript.py` | 1. `get_email_details()` 支持 `internal_id` 参数<br>2. `get_email_source()` 支持 `internal_id` 参数<br>3. `save_attachments()` 支持 `internal_id` 参数 |
-| **SyncStore** | `src/mail/sync_store.py` | 1. `email_metadata` 表新增 `internal_id` 字段<br>2. 新增 `get_internal_id(message_id)` 方法 |
+| **SyncStore** | `src/mail/sync_store.py` | 1. 合并 `sync_failures` 到 `email_metadata`<br>2. 新增 `internal_id`, `next_retry_at` 字段<br>3. 改进去重逻辑 |
 | **EmailReader** | `src/mail/reader.py` | 修改 `get_email_details()` 优先使用 `internal_id` |
 | **NewWatcher** | `src/mail/new_watcher.py` | 重构主循环，使用 SQLite 优先架构 |
 
@@ -309,23 +340,289 @@ end tell
 
 ### 4.3 SyncStore 数据库变更
 
-#### Schema 变更
+#### 核心改动：internal_id 作为主键
+
+**当前架构问题：**
+- `message_id` 作为主键
+- AppleScript 获取失败时没有 message_id，无法写入 SyncStore
+- 邮件可能丢失
+
+**新架构：internal_id 作为主键**
 
 ```sql
--- 新增 internal_id 字段
-ALTER TABLE email_metadata ADD COLUMN internal_id INTEGER;
+-- email_metadata 表（重构后）
+CREATE TABLE email_metadata (
+    internal_id INTEGER PRIMARY KEY,      -- 新主键：SQLite ROWID = AppleScript id
+    message_id TEXT UNIQUE,               -- AppleScript 成功后填充，用于去重
+    thread_id TEXT,
+    subject TEXT,
+    sender TEXT,
+    sender_name TEXT,
+    to_addr TEXT,
+    cc_addr TEXT,
+    date_received TEXT,
+    mailbox TEXT,
+    is_read INTEGER DEFAULT 0,
+    is_flagged INTEGER DEFAULT 0,
+    sync_status TEXT DEFAULT 'pending',   -- pending/fetch_failed/synced/failed/skipped/dead_letter
+    notion_page_id TEXT,
+    sync_error TEXT,
+    retry_count INTEGER DEFAULT 0,
+    next_retry_at REAL,
+    created_at REAL,
+    updated_at REAL
+);
 
--- 创建索引
-CREATE INDEX idx_email_internal_id ON email_metadata(internal_id);
+-- 索引
+CREATE UNIQUE INDEX idx_message_id ON email_metadata(message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX idx_sync_status ON email_metadata(sync_status);
+CREATE INDEX idx_next_retry ON email_metadata(next_retry_at) WHERE sync_status IN ('fetch_failed', 'failed');
 ```
 
-#### 兼容性
+#### 状态流转
 
-- `internal_id` 允许为 NULL（兼容历史数据）
-- 新邮件自动填充 `internal_id`
-- 旧邮件首次访问时可选择性更新
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           状态流转图                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  SQLite 检测到新邮件                                                        │
+│         │                                                                   │
+│         ▼                                                                   │
+│     ┌────────┐                                                              │
+│     │pending │ ← 写入 SyncStore（internal_id, SQLite 元数据）              │
+│     └───┬────┘                                                              │
+│         │                                                                   │
+│         ▼ AppleScript 获取                                                  │
+│     ┌───┴───┐                                                               │
+│     │       │                                                               │
+│   成功    失败                                                              │
+│     │       │                                                               │
+│     │       ▼                                                               │
+│     │   ┌──────────────┐                                                    │
+│     │   │ fetch_failed │ ← 等待重试                                        │
+│     │   └──────┬───────┘                                                    │
+│     │          │ 重试成功                                                   │
+│     │          │                                                            │
+│     ▼          ▼                                                            │
+│  更新 message_id + 刷新元数据                                               │
+│         │                                                                   │
+│         ▼ Notion 同步                                                       │
+│     ┌───┴───┐                                                               │
+│     │       │                                                               │
+│   成功    失败                                                              │
+│     │       │                                                               │
+│     ▼       ▼                                                               │
+│ ┌────────┐ ┌────────┐                                                       │
+│ │ synced │ │ failed │ ← 等待重试                                           │
+│ └────────┘ └───┬────┘                                                       │
+│                │ 超过最大重试次数                                           │
+│                ▼                                                            │
+│          ┌─────────────┐                                                    │
+│          │ dead_letter │                                                    │
+│          └─────────────┘                                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### message_id 重复处理
+
+如果 AppleScript 获取后发现 message_id 已存在（同一封邮件被复制到多个文件夹）：
+
+```python
+existing = self.sync_store.get_by_message_id(message_id)
+if existing:
+    if existing['sync_status'] == 'synced':
+        # 已同步过，删除当前记录（重复邮件）
+        self.sync_store.delete(internal_id)
+        logger.warning(f"Duplicate email detected, skipping: {message_id[:50]}...")
+        return
+    else:
+        # 之前的记录未成功，删除旧的，使用新的 internal_id
+        self.sync_store.delete(existing['internal_id'])
+```
+
+#### 迁移脚本
+
+```python
+# scripts/migrate_sync_store_v3.py
+
+import sqlite3
+import subprocess
+from pathlib import Path
+
+def migrate():
+    """迁移 SyncStore 到 v3 架构（internal_id 作为主键）"""
+    db_path = Path('data/sync_store.db')
+
+    if not db_path.exists():
+        print("Database not found, skipping migration")
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # 1. 备份原表
+    print("Step 1: Backing up original table...")
+    cursor.execute("ALTER TABLE email_metadata RENAME TO email_metadata_backup")
+
+    # 2. 创建新表（internal_id 为主键）
+    print("Step 2: Creating new table with internal_id as primary key...")
+    cursor.execute("""
+        CREATE TABLE email_metadata (
+            internal_id INTEGER PRIMARY KEY,
+            message_id TEXT UNIQUE,
+            thread_id TEXT,
+            subject TEXT,
+            sender TEXT,
+            sender_name TEXT,
+            to_addr TEXT,
+            cc_addr TEXT,
+            date_received TEXT,
+            mailbox TEXT,
+            is_read INTEGER DEFAULT 0,
+            is_flagged INTEGER DEFAULT 0,
+            sync_status TEXT DEFAULT 'pending',
+            notion_page_id TEXT,
+            notion_thread_id TEXT,
+            sync_error TEXT,
+            retry_count INTEGER DEFAULT 0,
+            next_retry_at REAL,
+            created_at REAL,
+            updated_at REAL
+        )
+    """)
+
+    # 3. 回填 internal_id（使用 AppleScript 批量获取）
+    print("Step 3: Backfilling internal_id from AppleScript...")
+    internal_id_map = backfill_internal_ids()
+
+    # 4. 迁移数据
+    print("Step 4: Migrating data...")
+    cursor.execute("SELECT * FROM email_metadata_backup")
+    rows = cursor.fetchall()
+
+    migrated = 0
+    skipped = 0
+    for row in rows:
+        message_id = row['message_id']
+        internal_id = internal_id_map.get(message_id)
+
+        if not internal_id:
+            # 无法获取 internal_id，可能是旧邮件已删除
+            # 对于 synced 状态的保留（用负数作为临时 ID）
+            if row['sync_status'] == 'synced':
+                internal_id = -hash(message_id) % 1000000000  # 负数临时 ID
+            else:
+                skipped += 1
+                continue
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO email_metadata
+            (internal_id, message_id, thread_id, subject, sender, sender_name,
+             to_addr, cc_addr, date_received, mailbox, is_read, is_flagged,
+             sync_status, notion_page_id, notion_thread_id, sync_error,
+             retry_count, next_retry_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            internal_id, message_id, row['thread_id'], row['subject'],
+            row['sender'], row['sender_name'], row['to_addr'], row['cc_addr'],
+            row['date_received'], row['mailbox'], row['is_read'], row['is_flagged'],
+            row['sync_status'], row['notion_page_id'], row['notion_thread_id'],
+            row['sync_error'], row['retry_count'], None,
+            row['created_at'], row['updated_at']
+        ))
+        migrated += 1
+
+    # 5. 删除 sync_failures 表（如果存在）
+    print("Step 5: Dropping sync_failures table...")
+    cursor.execute("DROP TABLE IF EXISTS sync_failures")
+
+    # 6. 创建索引
+    print("Step 6: Creating indexes...")
+    cursor.execute("CREATE INDEX idx_sync_status ON email_metadata(sync_status)")
+    cursor.execute("CREATE INDEX idx_next_retry ON email_metadata(next_retry_at)")
+    cursor.execute("CREATE INDEX idx_mailbox ON email_metadata(mailbox)")
+
+    conn.commit()
+
+    print(f"\nMigration complete!")
+    print(f"  Migrated: {migrated}")
+    print(f"  Skipped (no internal_id): {skipped}")
+    print(f"\nBackup table 'email_metadata_backup' preserved for safety.")
+    print("Run 'DROP TABLE email_metadata_backup' after verification.")
+
+    conn.close()
+
+
+def backfill_internal_ids() -> dict:
+    """批量获取 message_id → internal_id 映射"""
+    # 使用 AppleScript 批量获取最近的邮件
+    # 返回 {message_id: internal_id} 映射
+
+    script = '''
+    tell application "Mail"
+        set resultList to {}
+        repeat with acct in accounts
+            repeat with mbox in mailboxes of acct
+                try
+                    set msgs to messages 1 thru 5000 of mbox
+                    repeat with m in msgs
+                        set msgId to message id of m
+                        set internalId to id of m
+                        set end of resultList to msgId & "{{SEP}}" & (internalId as string)
+                    end repeat
+                end try
+            end repeat
+        end repeat
+
+        set AppleScript's text item delimiters to "{{REC}}"
+        return resultList as string
+    end tell
+    '''
+
+    try:
+        result = subprocess.run(
+            ['osascript', '-e', script],
+            capture_output=True, text=True, timeout=600
+        )
+
+        if result.returncode != 0:
+            print(f"Warning: AppleScript failed: {result.stderr}")
+            return {}
+
+        id_map = {}
+        for record in result.stdout.strip().split("{{REC}}"):
+            if "{{SEP}}" in record:
+                parts = record.split("{{SEP}}")
+                if len(parts) == 2:
+                    id_map[parts[0]] = int(parts[1])
+
+        print(f"  Retrieved {len(id_map)} message_id → internal_id mappings")
+        return id_map
+
+    except subprocess.TimeoutExpired:
+        print("Warning: AppleScript timed out during backfill")
+        return {}
+    except Exception as e:
+        print(f"Warning: Failed to backfill: {e}")
+        return {}
+
+
+if __name__ == "__main__":
+    migrate()
+```
 
 ### 4.4 NewWatcher 主循环重构
+
+#### 关键设计点
+
+1. **SQLite 检测到新邮件 → 立即写入 SyncStore**（用 internal_id 作为主键）
+2. **AppleScript 成功后刷新元数据**（确保 SyncStore 与 Notion 一致）
+3. **MIME 不缓存**，重试时用 internal_id 快速重新获取
+
+#### 完整的主循环
 
 ```python
 # src/mail/new_watcher.py
@@ -333,109 +630,315 @@ CREATE INDEX idx_email_internal_id ON email_metadata(internal_id);
 async def _poll_cycle(self):
     """单次轮询周期 - v3 架构"""
 
-    # 1. 检测新邮件
+    # 1. SQLite 检测新邮件
     current_max = self.radar.get_current_max_row_id()
     last_max = self.sync_store.get_last_max_row_id()
 
-    if current_max <= last_max:
-        return  # 无新邮件
+    if current_max > last_max:
+        # 2. SQLite 查询新邮件元数据
+        new_emails = self.radar.get_new_emails(since_row_id=last_max)
+        logger.info(f"Detected {len(new_emails)} new emails via SQLite")
 
-    # 2. SQLite 查询新邮件元数据
-    new_emails = self.radar.get_new_emails(since_row_id=last_max)
-    logger.info(f"Detected {len(new_emails)} new emails via SQLite")
+        # 3. 写入 SyncStore 并同步
+        for email_meta in new_emails:
+            await self._sync_single_email_v3(email_meta)
 
-    # 3. 同步每封新邮件
-    for email_meta in new_emails:
-        await self._sync_single_email_v3(email_meta)
+        # 4. 更新 last_max_row_id
+        self.sync_store.set_last_max_row_id(current_max)
 
-    # 4. 更新 last_max_row_id
-    self.sync_store.set_last_max_row_id(current_max)
+    # 5. 处理待重试的邮件（每次轮询都检查）
+    await self._process_retry_queue()
 
 async def _sync_single_email_v3(self, email_meta: Dict[str, Any]):
     """同步单封邮件 - v3 架构"""
     internal_id = email_meta['internal_id']
     mailbox = email_meta['mailbox']
 
+    # 1. 立即写入 SyncStore（状态 pending，用 SQLite 元数据）
+    #    这样即使后续 AppleScript 失败，也有记录可追踪
+    self.sync_store.save_email({
+        'internal_id': internal_id,
+        'mailbox': mailbox,
+        'subject': email_meta.get('subject', ''),      # SQLite 提供
+        'sender': email_meta.get('sender_email', ''),  # SQLite 提供
+        'date_received': email_meta.get('date_received', ''),
+        'is_read': email_meta.get('is_read', False),
+        'is_flagged': email_meta.get('is_flagged', False),
+        'sync_status': 'pending',
+    })
+
+    # 2. AppleScript 获取完整内容
     try:
-        # 1. 通过 internal_id 获取完整内容（含 message_id）
         full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
-        if not full_email:
-            logger.error(f"Failed to fetch email by id={internal_id}")
+    except Exception as e:
+        logger.error(f"AppleScript failed for id={internal_id}: {e}")
+        self.sync_store.mark_fetch_failed(internal_id, str(e))
+        return
+
+    if not full_email:
+        logger.error(f"AppleScript returned None for id={internal_id}")
+        self.sync_store.mark_fetch_failed(internal_id, "AppleScript returned None")
+        return
+
+    message_id = full_email['message_id']
+
+    # 3. 检查 message_id 是否已存在（去重）
+    existing = self.sync_store.get_by_message_id(message_id)
+    if existing and existing['internal_id'] != internal_id:
+        if existing['sync_status'] == 'synced':
+            # 已同步过（可能是邮件复制），删除当前记录
+            self.sync_store.delete(internal_id)
+            logger.warning(f"Duplicate email detected, skipping: {message_id[:50]}...")
             return
+        else:
+            # 之前的记录未成功，删除旧的
+            self.sync_store.delete(existing['internal_id'])
+            logger.info(f"Replacing old record with new internal_id: {internal_id}")
 
-        message_id = full_email['message_id']
+    # 4. 用 AppleScript 返回的数据刷新元数据（确保准确性）
+    #    SQLite 的 subject/date 可能与 AppleScript 略有差异
+    self.sync_store.update_after_fetch(internal_id, {
+        'message_id': message_id,
+        'subject': full_email.get('subject', ''),       # AppleScript 提供（更准确）
+        'sender': full_email.get('sender', ''),         # AppleScript 提供
+        'date_received': full_email.get('date', ''),    # AppleScript 提供
+        'thread_id': full_email.get('thread_id'),
+        'is_read': full_email.get('is_read', False),
+        'is_flagged': full_email.get('is_flagged', False),
+        'sync_status': 'fetched',  # AppleScript 成功
+    })
 
-        # 2. 检查是否已同步（用 message_id 去重）
-        if self.sync_store.email_exists(message_id):
-            logger.debug(f"Email already synced: {message_id[:50]}...")
-            return
+    # 5. 解析 MIME 源码
+    email_obj = self.email_reader.parse_email_source(
+        source=full_email['source'],
+        message_id=message_id,
+        is_read=full_email.get('is_read', False),
+        is_flagged=full_email.get('is_flagged', False)
+    )
 
-        # 3. 解析邮件源码
-        email_obj = self.email_reader.parse_email_source(
-            source=full_email['source'],
-            message_id=message_id,
-            is_read=full_email['is_read'],
-            is_flagged=full_email['is_flagged']
-        )
+    if not email_obj:
+        logger.error(f"Failed to parse email: {message_id[:50]}...")
+        self.sync_store.mark_failed(internal_id, "Failed to parse MIME")
+        return
 
-        # 4. 保存到 SyncStore (pending)
-        self.sync_store.save_email({
-            'message_id': message_id,
-            'internal_id': internal_id,  # 新增
-            'subject': full_email['subject'],
-            'sender': full_email['sender'],
-            'mailbox': mailbox,
-            'sync_status': 'pending',
-            # ...
-        })
-
-        # 5. 同步到 Notion
+    # 6. Notion 同步
+    try:
         page_id = await self.notion_sync.create_email_page_v2(email_obj)
 
-        # 6. 更新状态
         if page_id:
-            self.sync_store.mark_synced(message_id, page_id)
+            self.sync_store.mark_synced(internal_id, page_id)
+            logger.info(f"Email synced: {message_id[:50]}... -> {page_id}")
         else:
-            self.sync_store.mark_failed(message_id, "Notion sync failed")
+            self.sync_store.mark_failed(internal_id, "Notion returned None")
 
     except Exception as e:
-        logger.error(f"Failed to sync email id={internal_id}: {e}")
-        # 加入重试队列（见 4.5）
+        logger.error(f"Notion sync failed for {message_id[:50]}...: {e}")
+        self.sync_store.mark_failed(internal_id, str(e))
 ```
 
-### 4.5 失败重试机制
+### 4.5 统一的重试机制
+
+**核心思想**：所有操作都用 `internal_id`，AppleScript 失败和 Notion 失败统一处理。
+
+#### SyncStore 方法更新
 
 ```python
-async def _retry_failed_emails(self):
-    """重试失败的邮件 - v3 架构"""
+# src/mail/sync_store.py
+
+def mark_fetch_failed(self, internal_id: int, error: str) -> bool:
+    """标记 AppleScript 获取失败"""
+    return self._update_for_retry(internal_id, 'fetch_failed', error)
+
+def mark_failed(self, internal_id: int, error: str) -> bool:
+    """标记 Notion 同步失败"""
+    return self._update_for_retry(internal_id, 'failed', error)
+
+def _update_for_retry(self, internal_id: int, status: str, error: str, max_retries: int = 5) -> bool:
+    """更新重试状态（统一逻辑）"""
+    now = time.time()
+
+    # 获取当前重试次数
+    email = self.get(internal_id)
+    current_retry = (email.get('retry_count', 0) if email else 0) + 1
+
+    # 检查是否达到最大重试次数
+    if current_retry >= max_retries:
+        self._execute("""
+            UPDATE email_metadata
+            SET sync_status = 'dead_letter',
+                sync_error = ?,
+                retry_count = ?,
+                next_retry_at = NULL,
+                updated_at = ?
+            WHERE internal_id = ?
+        """, (f"Max retries exceeded: {error}", current_retry, now, internal_id))
+        logger.warning(f"Marked as dead_letter: internal_id={internal_id}")
+        return True
+
+    # 计算下次重试时间（指数退避：1min, 5min, 15min, 1h, 2h）
+    delays = [60, 300, 900, 3600, 7200]
+    delay = delays[min(current_retry - 1, len(delays) - 1)]
+    next_retry = now + delay
+
+    self._execute("""
+        UPDATE email_metadata
+        SET sync_status = ?,
+            sync_error = ?,
+            retry_count = ?,
+            next_retry_at = ?,
+            updated_at = ?
+        WHERE internal_id = ?
+    """, (status, error, current_retry, next_retry, now, internal_id))
+
+    logger.warning(f"Marked {status}: internal_id={internal_id}, retry #{current_retry} in {delay}s")
+    return True
+
+def get_ready_for_retry(self, limit: int = 3) -> List[Dict]:
+    """获取可以重试的邮件（fetch_failed 或 failed）"""
+    now = time.time()
+    return self._query("""
+        SELECT * FROM email_metadata
+        WHERE sync_status IN ('fetch_failed', 'failed')
+          AND next_retry_at IS NOT NULL
+          AND next_retry_at <= ?
+        ORDER BY next_retry_at ASC
+        LIMIT ?
+    """, (now, limit))
+
+def mark_synced(self, internal_id: int, notion_page_id: str) -> bool:
+    """标记同步成功"""
+    now = time.time()
+    self._execute("""
+        UPDATE email_metadata
+        SET sync_status = 'synced',
+            notion_page_id = ?,
+            sync_error = NULL,
+            next_retry_at = NULL,
+            updated_at = ?
+        WHERE internal_id = ?
+    """, (notion_page_id, now, internal_id))
+    return True
+```
+
+#### 统一的重试处理
+
+```python
+async def _process_retry_queue(self):
+    """统一的重试处理 - 用 internal_id"""
 
     ready_emails = self.sync_store.get_ready_for_retry(limit=3)
 
-    for email_meta in ready_emails:
-        message_id = email_meta['message_id']
-        internal_id = email_meta.get('internal_id')  # 可能为 None（历史数据）
-        mailbox = email_meta.get('mailbox', '收件箱')
+    if not ready_emails:
+        return
+
+    logger.info(f"Processing {len(ready_emails)} emails from retry queue...")
+
+    for record in ready_emails:
+        internal_id = record['internal_id']
+        mailbox = record.get('mailbox', '收件箱')
+        status = record['sync_status']
+
+        logger.info(f"Retrying {status} email: internal_id={internal_id}")
 
         try:
-            # 优先使用 internal_id（快），回退到 message_id（慢）
-            if internal_id:
-                full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
-            else:
-                # 历史数据回退：使用慢方法，但同时获取并保存 internal_id
-                full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
-                if full_email and 'id' in full_email:
-                    # 更新 internal_id 以便下次快速访问
-                    self.sync_store.update_internal_id(message_id, full_email['id'])
+            # 1. 用 internal_id 获取 MIME（统一，无论是 fetch_failed 还是 failed）
+            full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
 
             if not full_email:
-                logger.warning(f"Email not found, removing: {message_id[:50]}...")
-                self.sync_store.delete_email(message_id)
+                # 邮件在 Mail.app 中已删除
+                logger.warning(f"Email not found in Mail.app, removing: internal_id={internal_id}")
+                self.sync_store.delete(internal_id)
                 continue
 
-            # 重新同步...
+            message_id = full_email['message_id']
+
+            # 2. 如果是 fetch_failed，需要检查 message_id 去重
+            if status == 'fetch_failed':
+                existing = self.sync_store.get_by_message_id(message_id)
+                if existing and existing['internal_id'] != internal_id:
+                    if existing['sync_status'] == 'synced':
+                        self.sync_store.delete(internal_id)
+                        logger.info(f"Duplicate found during retry, removed: internal_id={internal_id}")
+                        continue
+
+            # 3. 用 AppleScript 数据刷新元数据
+            self.sync_store.update_after_fetch(internal_id, {
+                'message_id': message_id,
+                'subject': full_email.get('subject', ''),
+                'sender': full_email.get('sender', ''),
+                'date_received': full_email.get('date', ''),
+                'thread_id': full_email.get('thread_id'),
+            })
+
+            # 4. 解析 MIME
+            email_obj = self.email_reader.parse_email_source(
+                source=full_email['source'],
+                message_id=message_id,
+                is_read=full_email.get('is_read', False),
+                is_flagged=full_email.get('is_flagged', False)
+            )
+
+            if not email_obj:
+                self.sync_store.mark_failed(internal_id, "Failed to parse MIME on retry")
+                continue
+
+            # 5. Notion 同步
+            page_id = await self.notion_sync.create_email_page_v2(email_obj)
+
+            if page_id:
+                self.sync_store.mark_synced(internal_id, page_id)
+                logger.info(f"Retry succeeded: internal_id={internal_id} -> {page_id}")
+            else:
+                self.sync_store.mark_failed(internal_id, "Notion returned None on retry")
 
         except Exception as e:
-            self.sync_store.mark_failed(message_id, str(e))
+            logger.error(f"Retry failed for internal_id={internal_id}: {e}")
+            # 根据当前状态决定标记哪种失败
+            if status == 'fetch_failed':
+                self.sync_store.mark_fetch_failed(internal_id, str(e))
+            else:
+                self.sync_store.mark_failed(internal_id, str(e))
+```
+
+#### 重试流程图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     统一重试机制 (internal_id)                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  email_metadata 表                                                          │
+│  ┌──────────────┬────────────┬──────────────┬─────────────┬──────────────┐  │
+│  │ internal_id  │ message_id │ sync_status  │ retry_count │ next_retry_at│  │
+│  ├──────────────┼────────────┼──────────────┼─────────────┼──────────────┤  │
+│  │ 41456        │ NULL       │ fetch_failed │ 2           │ 1706500000   │  │
+│  │ 41457        │ <abc@...>  │ synced       │ 0           │ NULL         │  │
+│  │ 41458        │ <def@...>  │ failed       │ 1           │ 1706499900   │  │
+│  └──────────────┴────────────┴──────────────┴─────────────┴──────────────┘  │
+│                                                                             │
+│  查询待重试：                                                               │
+│  SELECT * FROM email_metadata                                               │
+│  WHERE sync_status IN ('fetch_failed', 'failed')                            │
+│    AND next_retry_at <= now()                                               │
+│                                                                             │
+│  处理流程（统一）：                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                     │    │
+│  │  1. fetch_email_content_by_id(internal_id, mailbox)                │    │
+│  │     └─→ 统一用 internal_id，快速（~1s）                            │    │
+│  │                                                                     │    │
+│  │  2. 如果是 fetch_failed，检查 message_id 去重                      │    │
+│  │                                                                     │    │
+│  │  3. 用 AppleScript 数据刷新元数据                                  │    │
+│  │                                                                     │    │
+│  │  4. 解析 MIME → Notion 同步                                        │    │
+│  │     ├─ 成功 → sync_status='synced'                                 │    │
+│  │     └─ 失败 → retry_count++, 计算 next_retry_at                   │    │
+│  │               └─ 超过最大次数 → sync_status='dead_letter'          │    │
+│  │                                                                     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -444,30 +947,26 @@ async def _retry_failed_emails(self):
 
 ### 5.1 数据库迁移（必需）
 
-运行一次性迁移脚本添加 `internal_id` 字段：
+**迁移步骤**：
+1. 备份原表
+2. 批量获取 message_id → internal_id 映射（AppleScript）
+3. 创建新表（internal_id 为主键）
+4. 迁移数据（补全 internal_id）
+5. 删除 sync_failures 表
+6. 创建索引
 
-```python
-# scripts/migrate_add_internal_id.py
+**关键**：迁移时必须补全所有历史数据的 internal_id，因为新架构用 internal_id 作为主键。
 
-def migrate():
-    """添加 internal_id 字段到 SyncStore"""
-    conn = sqlite3.connect('data/sync_store.db')
-    cursor = conn.cursor()
+迁移脚本见 4.3 节。
 
-    # 检查字段是否已存在
-    cursor.execute("PRAGMA table_info(email_metadata)")
-    columns = [col[1] for col in cursor.fetchall()]
+### 5.2 迁移注意事项
 
-    if 'internal_id' not in columns:
-        cursor.execute("ALTER TABLE email_metadata ADD COLUMN internal_id INTEGER")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_internal_id ON email_metadata(internal_id)")
-        conn.commit()
-        print("Migration complete: added internal_id column")
-    else:
-        print("Column internal_id already exists")
-
-    conn.close()
-```
+| 场景 | 处理 |
+|------|------|
+| 已同步且能找到 internal_id | 正常迁移 |
+| 已同步但找不到 internal_id（老邮件已删除）| 用负数临时 ID 保留记录（仅用于线程关系查找）|
+| pending/failed 且能找到 internal_id | 正常迁移，等待重试 |
+| pending/failed 且找不到 internal_id | 跳过（无法重试）|
 
 ### 5.2 历史数据回填（可选）
 
@@ -555,29 +1054,29 @@ def backfill():
 
 ## 7. 实施步骤
 
-### Phase 1: 基础设施（预计 0.5 天）
+### Phase 1: 迁移准备（预计 0.5 天）
 
-1. [ ] 运行数据库迁移脚本（添加 internal_id 字段）
-2. [ ] SQLite Radar 新增 `get_new_emails()` 方法
-3. [ ] AppleScript Arm 新增 `fetch_email_content_by_id()` 方法
+1. [ ] 备份 SyncStore 数据库
+2. [ ] 运行迁移脚本（补全 internal_id + 改主键）
+3. [ ] 验证迁移结果
 
-### Phase 2: 核心逻辑（预计 1 天）
+### Phase 2: 基础设施（预计 0.5 天）
 
-4. [ ] MailAppScripts 修改支持 `internal_id` 参数
-5. [ ] SyncStore 新增 `update_internal_id()` 方法
-6. [ ] EmailReader 修改优先使用 `internal_id`
+4. [ ] SQLite Radar 新增 `get_new_emails()` 方法
+5. [ ] AppleScript Arm 新增 `fetch_email_content_by_id()` 方法
+6. [ ] SyncStore 重构（internal_id 为主键，新方法）
 
 ### Phase 3: 主循环重构（预计 1 天）
 
-7. [ ] NewWatcher 重构 `_poll_cycle()` 使用 v3 架构
-8. [ ] NewWatcher 重构 `_sync_single_email_v3()`
-9. [ ] NewWatcher 更新 `_retry_failed_emails()` 支持 internal_id
+7. [ ] NewWatcher 重构 `_poll_cycle()` - SQLite 检测后立即写入 SyncStore
+8. [ ] NewWatcher 重构 `_sync_single_email_v3()` - AppleScript 成功后刷新元数据
+9. [ ] NewWatcher 重构 `_process_retry_queue()` - 统一用 internal_id
 
 ### Phase 4: 测试 & 发布（预计 0.5 天）
 
 10. [ ] 本地测试（小邮箱）
 11. [ ] 同事测试（大邮箱）
-12. [ ] 可选：运行批量回填脚本
+12. [ ] 监控重试队列，确保正常工作
 
 ---
 
@@ -650,4 +1149,5 @@ end tell
 - `src/mail/sync_store.py` - 同步状态存储
 - `src/mail/new_watcher.py` - 新架构监听器
 - `scripts/test_mail_reader.py` - 测试脚本
-- `scripts/migrate_add_internal_id.py` - 迁移脚本（待创建）
+- `scripts/migrate_sync_store_v3.py` - 迁移脚本（待创建）
+- `scripts/backfill_internal_ids.py` - 回填脚本（可选，待创建）

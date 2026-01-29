@@ -149,6 +149,7 @@ class AppleScriptArm:
                         try
                             set m to message i
                             set msgId to message id of m
+                            set msgInternalId to id of m
                             set msgSubject to subject of m
                             set msgSender to sender of m
                             set msgDate to date received of m
@@ -193,7 +194,7 @@ class AppleScriptArm:
                             end if
                             set dateStr to dateStr & (secondNum as string)
 
-                            set info to msgId & "{{{{SEP}}}}" & msgSubject & "{{{{SEP}}}}" & msgSender & "{{{{SEP}}}}" & dateStr & "{{{{SEP}}}}" & (msgRead as string) & "{{{{SEP}}}}" & (msgFlagged as string) & "{{{{SEP}}}}" & msgReferences & "{{{{SEP}}}}" & msgInReplyTo
+                            set info to msgId & "{{{{SEP}}}}" & (msgInternalId as string) & "{{{{SEP}}}}" & msgSubject & "{{{{SEP}}}}" & msgSender & "{{{{SEP}}}}" & dateStr & "{{{{SEP}}}}" & (msgRead as string) & "{{{{SEP}}}}" & (msgFlagged as string) & "{{{{SEP}}}}" & msgReferences & "{{{{SEP}}}}" & msgInReplyTo
                             set end of resultList to info
                         on error errMsg
                             -- 跳过无法读取的邮件
@@ -223,12 +224,12 @@ class AppleScriptArm:
                 continue
 
             parts = record.split(self.SEPARATOR)
-            if len(parts) >= 6:
+            if len(parts) >= 7:
                 try:
                     # 提取 thread_id（从 References 或 In-Reply-To）
                     thread_id = None
-                    references = parts[6] if len(parts) > 6 else ""
-                    in_reply_to = parts[7] if len(parts) > 7 else ""
+                    references = parts[7] if len(parts) > 7 else ""
+                    in_reply_to = parts[8] if len(parts) > 8 else ""
 
                     if references:
                         # References 第一个是原始邮件的 message_id
@@ -241,11 +242,12 @@ class AppleScriptArm:
                     # 如果没有回复关系，thread_id 为 None（调用方可用 message_id）
                     emails.append({
                         "message_id": parts[0],
-                        "subject": parts[1],
-                        "sender": parts[2],
-                        "date_received": parts[3],
-                        "is_read": parts[4].lower() == "true",
-                        "is_flagged": parts[5].lower() == "true",
+                        "id": int(parts[1]) if parts[1] else None,  # internal_id
+                        "subject": parts[2],
+                        "sender": parts[3],
+                        "date_received": parts[4],
+                        "is_read": parts[5].lower() == "true",
+                        "is_flagged": parts[6].lower() == "true",
                         "thread_id": thread_id,
                     })
                 except Exception as e:
@@ -608,4 +610,194 @@ class AppleScriptArm:
             包含 AppleScript 调用次数等信息
         """
         return self._stats.copy()
+
+    def fetch_email_content_by_id(
+        self,
+        internal_id: int,
+        mailbox: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """通过内部 id（整数）获取邮件完整内容
+
+        v3 架构核心方法：使用 `whose id is <整数>` 替代 `whose message id is "<字符串>"`
+        性能提升约 127 倍（~1s vs ~100s）
+
+        Args:
+            internal_id: 邮件内部 id（= SQLite ROWID）
+            mailbox: 邮箱名称（如 "收件箱"），指定可加速查询
+
+        Returns:
+            Dict 包含:
+                - message_id: str (RFC 2822)
+                - subject: str
+                - sender: str
+                - date: str
+                - content: str (邮件正文)
+                - source: str (原始源码)
+                - is_read: bool
+                - is_flagged: bool
+                - thread_id: Optional[str] (线程标识)
+            如果获取失败返回 None
+        """
+        mailbox_name = self._get_mailbox_name(mailbox)
+
+        # 如果指定了邮箱，优先在该邮箱查找（更快）
+        # 否则遍历所有邮箱
+        if mailbox:
+            script = f'''
+            tell application "Mail"
+                tell account "{self._escape_for_applescript(self.account_name)}"
+                    tell mailbox "{self._escape_for_applescript(mailbox_name)}"
+                        try
+                            set theMessage to first message whose id is {internal_id}
+                            set msgId to message id of theMessage
+                            set msgSubject to subject of theMessage
+                            set msgSender to sender of theMessage
+                            set msgDate to date received of theMessage
+                            set msgContent to content of theMessage
+                            set msgSource to source of theMessage
+                            set msgRead to read status of theMessage
+                            set msgFlagged to flagged status of theMessage
+
+                            -- 格式化日期为 ISO 格式
+                            set dateStr to (year of msgDate as string) & "-"
+                            set monthNum to (month of msgDate as integer)
+                            if monthNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (monthNum as string) & "-"
+                            set dayNum to (day of msgDate as integer)
+                            if dayNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (dayNum as string) & "T"
+                            set hourNum to (hours of msgDate as integer)
+                            if hourNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (hourNum as string) & ":"
+                            set minuteNum to (minutes of msgDate as integer)
+                            if minuteNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (minuteNum as string) & ":"
+                            set secondNum to (seconds of msgDate as integer)
+                            if secondNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (secondNum as string)
+
+                            return "OK{{{{SEP}}}}" & msgId & "{{{{SEP}}}}" & msgSubject & "{{{{SEP}}}}" & msgSender & "{{{{SEP}}}}" & dateStr & "{{{{SEP}}}}" & msgContent & "{{{{SEP}}}}" & msgSource & "{{{{SEP}}}}" & (msgRead as string) & "{{{{SEP}}}}" & (msgFlagged as string)
+                        on error errMsg
+                            return "ERROR{{{{SEP}}}}" & errMsg
+                        end try
+                    end tell
+                end tell
+            end tell
+            '''
+        else:
+            # 遍历所有邮箱查找（较慢，但更可靠）
+            script = f'''
+            tell application "Mail"
+                tell account "{self._escape_for_applescript(self.account_name)}"
+                    set foundResult to ""
+                    repeat with mbox in mailboxes
+                        try
+                            set theMessage to first message of mbox whose id is {internal_id}
+                            set msgId to message id of theMessage
+                            set msgSubject to subject of theMessage
+                            set msgSender to sender of theMessage
+                            set msgDate to date received of theMessage
+                            set msgContent to content of theMessage
+                            set msgSource to source of theMessage
+                            set msgRead to read status of theMessage
+                            set msgFlagged to flagged status of theMessage
+
+                            -- 格式化日期为 ISO 格式
+                            set dateStr to (year of msgDate as string) & "-"
+                            set monthNum to (month of msgDate as integer)
+                            if monthNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (monthNum as string) & "-"
+                            set dayNum to (day of msgDate as integer)
+                            if dayNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (dayNum as string) & "T"
+                            set hourNum to (hours of msgDate as integer)
+                            if hourNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (hourNum as string) & ":"
+                            set minuteNum to (minutes of msgDate as integer)
+                            if minuteNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (minuteNum as string) & ":"
+                            set secondNum to (seconds of msgDate as integer)
+                            if secondNum < 10 then
+                                set dateStr to dateStr & "0"
+                            end if
+                            set dateStr to dateStr & (secondNum as string)
+
+                            set foundResult to "OK{{{{SEP}}}}" & msgId & "{{{{SEP}}}}" & msgSubject & "{{{{SEP}}}}" & msgSender & "{{{{SEP}}}}" & dateStr & "{{{{SEP}}}}" & msgContent & "{{{{SEP}}}}" & msgSource & "{{{{SEP}}}}" & (msgRead as string) & "{{{{SEP}}}}" & (msgFlagged as string)
+                            exit repeat
+                        end try
+                    end repeat
+
+                    if foundResult is "" then
+                        return "ERROR{{{{SEP}}}}Email not found with id {internal_id}"
+                    else
+                        return foundResult
+                    end if
+                end tell
+            end tell
+            '''
+
+        result = self._execute_script(script, timeout=self.timeout)
+        if not result:
+            logger.error(f"fetch_email_content_by_id returned empty result for id={internal_id}")
+            return None
+
+        if result.startswith("ERROR" + self.SEPARATOR):
+            error_msg = result.replace("ERROR" + self.SEPARATOR, "")
+            logger.error(f"fetch_email_content_by_id failed: {error_msg}")
+            return None
+
+        if not result.startswith("OK" + self.SEPARATOR):
+            logger.error(f"fetch_email_content_by_id unexpected result format: {result[:100]}")
+            return None
+
+        # 移除 OK 前缀
+        result = result[len("OK" + self.SEPARATOR):]
+        parts = result.split(self.SEPARATOR)
+
+        if len(parts) < 8:
+            logger.error(f"fetch_email_content_by_id invalid parts count: {len(parts)}")
+            return None
+
+        try:
+            email_data = {
+                "message_id": parts[0],
+                "subject": parts[1],
+                "sender": parts[2],
+                "date": parts[3],
+                "content": parts[4],
+                "source": parts[5],
+                "is_read": parts[6].lower() == "true",
+                "is_flagged": parts[7].lower() == "true",
+            }
+
+            # 提取 thread_id
+            thread_id = self.extract_thread_id(email_data.get('source', ''))
+            if thread_id is None:
+                thread_id = email_data['message_id'].strip('<>')
+            email_data['thread_id'] = thread_id
+
+            self._stats["applescript_calls"] += 1
+            return email_data
+
+        except Exception as e:
+            logger.error(f"fetch_email_content_by_id parse error: {e}")
+            return None
 
