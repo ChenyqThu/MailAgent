@@ -294,7 +294,7 @@ class HTMLToNotionConverter:
         return [item for item in merged if item.get('text', {}).get('content', '').strip()]
 
     def _create_paragraph_with_rich_text(self, rich_text: List[Dict]) -> Dict[str, Any]:
-        """创建包含 rich_text 的段落 Block"""
+        """创建包含 rich_text 的段落 Block（单个段落，超出部分截断）"""
         # 截断过长的 rich_text（Notion 限制每个 block 2000 字符）
         total_len = sum(len(item.get('text', {}).get('content', '')) for item in rich_text)
         if total_len > 1990:
@@ -317,6 +317,10 @@ class HTMLToNotionConverter:
                     break
             rich_text = truncated
 
+        # Notion 限制：每个 rich_text 数组最多 100 个元素，截断超出部分
+        if len(rich_text) > 100:
+            rich_text = rich_text[:100]
+
         return {
             "object": "block",
             "type": "paragraph",
@@ -324,6 +328,45 @@ class HTMLToNotionConverter:
                 "rich_text": rich_text
             }
         }
+
+    def _create_paragraphs_with_rich_text(self, rich_text: List[Dict]) -> List[Dict[str, Any]]:
+        """创建包含 rich_text 的段落 Blocks（超过 100 元素时拆分为多个段落）"""
+        blocks = []
+
+        # Notion 限制：每个 rich_text 数组最多 100 个元素
+        # 拆分为多个段落，保留完整内容
+        for i in range(0, len(rich_text), 100):
+            chunk = rich_text[i:i + 100]
+
+            # 截断过长的 rich_text（Notion 限制每个 block 2000 字符）
+            total_len = sum(len(item.get('text', {}).get('content', '')) for item in chunk)
+            if total_len > 1990:
+                truncated = []
+                current_len = 0
+                for item in chunk:
+                    content = item.get('text', {}).get('content', '')
+                    if current_len + len(content) <= 1987:
+                        truncated.append(item)
+                        current_len += len(content)
+                    else:
+                        remaining = 1987 - current_len
+                        if remaining > 0:
+                            new_item = item.copy()
+                            new_item['text'] = item['text'].copy()
+                            new_item['text']['content'] = content[:remaining] + '...'
+                            truncated.append(new_item)
+                        break
+                chunk = truncated
+
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": chunk
+                }
+            })
+
+        return blocks
 
     def _convert_element(self, element) -> List[Dict[str, Any]]:
         """递归转换 HTML 元素"""
@@ -348,7 +391,7 @@ class HTMLToNotionConverter:
                     # 提取 rich_text 保留链接和格式
                     rich_text = self._extract_rich_text(child)
                     if rich_text:
-                        blocks.append(self._create_paragraph_with_rich_text(rich_text))
+                        blocks.extend(self._create_paragraphs_with_rich_text(rich_text))
                 else:
                     # 包含块级元素，递归处理
                     blocks.extend(self._convert_element(child))

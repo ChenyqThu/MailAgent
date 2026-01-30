@@ -13,7 +13,7 @@ Usage:
 
 Options:
     --dry-run        只检查不实际更新
-    --threshold N    判断异常 ID 的阈值（默认 42000）
+    --threshold N    判断异常 ID 的阈值（默认 100000）
     --fix-metadata   修复元数据模式（用 internal_id 重新获取信息）
     --ids            指定要修复的 internal_id 列表（逗号分隔）
 """
@@ -467,7 +467,7 @@ def fix_metadata(args):
 def main():
     parser = argparse.ArgumentParser(description="修复 SyncStore 中的异常 internal_id")
     parser.add_argument("--dry-run", action="store_true", help="只检查不实际更新")
-    parser.add_argument("--threshold", type=int, default=42000, help="异常 ID 阈值（默认 42000）")
+    parser.add_argument("--threshold", type=int, default=100000, help="异常 ID 阈值（默认 100000）")
     parser.add_argument("--fix-metadata", action="store_true", help="修复元数据混淆模式")
     parser.add_argument("--ids", type=str, help="指定要修复的 internal_id 列表（逗号分隔）")
     args = parser.parse_args()

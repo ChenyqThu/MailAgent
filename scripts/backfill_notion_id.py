@@ -19,7 +19,7 @@ Usage:
 
 Options:
     --dry-run        只检查不实际更新
-    --threshold N    判断异常 ID 的阈值（默认 42000）
+    --threshold N    判断异常 ID 的阈值（默认 100000）
 """
 
 import sys
@@ -157,7 +157,7 @@ async def query_notion_abnormal_pages(notion, database_id: str, threshold: int):
 async def main():
     parser = argparse.ArgumentParser(description="修复 Notion 页面 ID 字段")
     parser.add_argument("--dry-run", action="store_true", help="只检查不实际更新")
-    parser.add_argument("--threshold", type=int, default=42000, help="异常 ID 阈值（默认 42000）")
+    parser.add_argument("--threshold", type=int, default=100000, help="异常 ID 阈值（默认 100000）")
     args = parser.parse_args()
 
     print("=" * 60)
