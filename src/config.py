@@ -20,10 +20,6 @@ class Config(BaseSettings):
 
     # 附件配置
     max_attachment_size: int = Field(default=20971520, env="MAX_ATTACHMENT_SIZE")  # 20MB (Notion limit)
-    allowed_attachment_types: str = Field(
-        default=".pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,.docx,.xlsx,.pptx,.csv,.txt,.zip,.rar,.7z,.mp4,.mov,.avi,.eml",
-        env="ALLOWED_ATTACHMENT_TYPES"
-    )
 
     # 日历同步配置
     calendar_database_id: str = Field(default="", env="CALENDAR_DATABASE_ID")
@@ -58,14 +54,6 @@ class Config(BaseSettings):
     # 初始化同步配置
     init_batch_size: int = Field(default=100, env="INIT_BATCH_SIZE", description="初始化时每批获取邮件数量")
     applescript_timeout: int = Field(default=200, env="APPLESCRIPT_TIMEOUT", description="AppleScript超时时间(秒)")
-
-    @field_validator('allowed_attachment_types')
-    @classmethod
-    def parse_allowed_types(cls, v):
-        """将逗号分隔的字符串转换为列表"""
-        if isinstance(v, str):
-            return [ext.strip() for ext in v.split(',')]
-        return v
 
     class Config:
         env_file = ".env"

@@ -1,9 +1,23 @@
 import asyncio
 from notion_client import AsyncClient
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from loguru import logger
 
 from src.config import config
+
+# Notion File Upload API 支持的扩展名（官方文档）
+# https://developers.notion.com/docs/uploading-small-files
+NOTION_SUPPORTED_EXTENSIONS: Set[str] = {
+    # Audio
+    '.aac', '.adts', '.mid', '.midi', '.mp3', '.mpga', '.m4a', '.m4b', '.mp4', '.oga', '.ogg', '.wav', '.wma',
+    # Document
+    '.pdf', '.txt', '.json', '.doc', '.dot', '.docx', '.dotx', '.xls', '.xlt', '.xla', '.xlsx', '.xltx',
+    '.ppt', '.pot', '.pps', '.ppa', '.pptx', '.potx',
+    # Image
+    '.gif', '.heic', '.jpeg', '.jpg', '.png', '.svg', '.tif', '.tiff', '.webp', '.ico',
+    # Video
+    '.amv', '.asf', '.wmv', '.avi', '.f4v', '.flv', '.gifv', '.m4v', '.mkv', '.webm', '.mov', '.qt', '.mpeg',
+}
 
 
 class NotionClient:
@@ -111,6 +125,11 @@ class NotionClient:
         上传文件到 Notion (三步流程)
         https://developers.notion.com/docs/uploading-small-files
 
+        对于不支持的扩展名，使用 "伪装 PDF" 技巧绕过 API 限制：
+        - Step 1: 声明文件名为 xxx.pdf（绕过扩展名检查）
+        - Step 2: 实际上传时使用原始文件名（保持真实扩展名）
+        - 最终在 Notion 中显示原始文件名，下载后无需改后缀
+
         Args:
             file_path: 文件路径
 
@@ -131,10 +150,20 @@ class NotionClient:
             if file_size > 20 * 1024 * 1024:
                 raise ValueError(f"File too large: {file_size} bytes (max 20MB)")
 
+            # 检查扩展名是否被 Notion 支持
+            file_ext = file.suffix.lower()
+            is_supported = file_ext in NOTION_SUPPORTED_EXTENSIONS
+
+            # Step 1 使用的文件名（不支持的扩展名伪装为 .pdf）
+            if is_supported:
+                step1_filename = file.name
+            else:
+                step1_filename = file.stem + '.pdf'
+                logger.debug(f"Unsupported extension '{file_ext}', using fake filename for Step 1: {step1_filename}")
+
             # Step 1: Create file upload object
             logger.debug(f"Creating file upload for: {file.name}")
 
-            # Step 1使用Notion API headers
             notion_headers = {
                 "Authorization": f"Bearer {config.notion_token}",
                 "Notion-Version": "2022-06-28",
@@ -142,7 +171,7 @@ class NotionClient:
             }
 
             create_payload = {
-                "filename": file.name
+                "filename": step1_filename  # 可能是伪装的 .pdf 文件名
             }
 
             session = await self._get_http_session()
@@ -158,30 +187,31 @@ class NotionClient:
             file_upload_id = upload_obj["id"]
 
             logger.debug(f"Created file upload: {file_upload_id}")
-            logger.debug(f"Upload URL: {upload_url[:100]}...")  # 只打印前100个字符
 
-            # Step 2: Send file content (需要Authorization因为upload_url是Notion API endpoint)
+            # Step 2: Send file content
             logger.debug(f"Uploading file content to upload_url...")
 
             # 读取文件内容
             with open(file, 'rb') as f:
                 file_content = f.read()
 
-            # 确定content type
-            content_type = mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
+            # 确定 content type（不支持的扩展名声明为 PDF）
+            if is_supported:
+                content_type = mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
+            else:
+                content_type = 'application/pdf'
 
-            # 使用multipart/form-data上传（需要Authorization header）
+            # Step 2 使用原始文件名（保持真实扩展名）
             send_headers = {
                 "Authorization": f"Bearer {config.notion_token}",
                 "Notion-Version": "2022-06-28"
-                # 注意：不设置Content-Type，让aiohttp自动设置为multipart/form-data
             }
 
             import aiohttp
             form_data = aiohttp.FormData()
             form_data.add_field('file',
                                file_content,
-                               filename=file.name,
+                               filename=file.name,  # 始终使用原始文件名
                                content_type=content_type)
 
             # Step 2: Upload file content with retry
@@ -193,7 +223,8 @@ class NotionClient:
                 expect_json=False
             )
 
-            logger.debug(f"File uploaded successfully: {file.name}")
+            logger.debug(f"File uploaded successfully: {file.name}" +
+                        (" (used PDF disguise)" if not is_supported else ""))
 
             # Step 3: 返回file_upload_id，将在create_page时使用
             return file_upload_id
@@ -213,7 +244,12 @@ class NotionClient:
         expect_json: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
-        Execute HTTP request with exponential backoff retry on rate limit.
+        Execute HTTP request with exponential backoff retry.
+
+        Handles:
+        - 429 Rate Limit errors
+        - Network errors (connection timeout, DNS failure, etc.)
+        - 5xx Server errors
 
         Args:
             session: aiohttp session
@@ -230,6 +266,8 @@ class NotionClient:
         Raises:
             Exception: After all retries exhausted or on non-retryable errors
         """
+        import aiohttp
+
         last_exception = None
 
         for attempt in range(self.MAX_RETRIES):
@@ -238,7 +276,8 @@ class NotionClient:
                     method, url,
                     headers=headers,
                     json=json,
-                    data=data
+                    data=data,
+                    timeout=aiohttp.ClientTimeout(total=120)  # 2分钟超时
                 ) as resp:
                     if resp.status == 429:
                         # Rate limited - extract retry-after or use exponential backoff
@@ -255,6 +294,16 @@ class NotionClient:
                         await asyncio.sleep(delay)
                         continue
 
+                    if resp.status >= 500:
+                        # Server error - retry with backoff
+                        delay = self.BASE_RETRY_DELAY * (2 ** attempt)
+                        logger.warning(
+                            f"Notion API server error {resp.status} (attempt {attempt + 1}/{self.MAX_RETRIES}), "
+                            f"retrying in {delay:.1f}s"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
                     if resp.status not in [200, 201, 204]:
                         error_text = await resp.text()
                         raise Exception(f"HTTP {method} failed: {resp.status} - {error_text}")
@@ -265,11 +314,25 @@ class NotionClient:
 
             except asyncio.CancelledError:
                 raise
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                # Network errors - retry with backoff
+                last_exception = e
+                delay = self.BASE_RETRY_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"Network error: {type(e).__name__}: {e} (attempt {attempt + 1}/{self.MAX_RETRIES}), "
+                    f"retrying in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
+                continue
             except Exception as e:
                 last_exception = e
-                if "429" not in str(e) and "rate" not in str(e).lower():
-                    # Non-rate-limit error, don't retry
-                    raise
+                if "429" in str(e) or "rate" in str(e).lower():
+                    # Rate limit error in exception - retry
+                    delay = self.BASE_RETRY_DELAY * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                # Non-retryable error
+                raise
 
         # All retries exhausted
         raise Exception(f"Max retries ({self.MAX_RETRIES}) exceeded. Last error: {last_exception}")

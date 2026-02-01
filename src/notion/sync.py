@@ -42,7 +42,8 @@ class NotionSync:
     async def _upload_attachments(self, email: Email) -> tuple[List[Dict[str, Any]], List[str]]:
         """上传邮件附件到 Notion
 
-        处理 .eml 附件重命名为 .txt（Notion 不支持 .eml 格式）
+        使用 "伪装 PDF" 技巧自动处理不支持的扩展名（如 .eml），
+        无需手动重命名文件。
 
         Args:
             email: Email 对象
@@ -62,32 +63,17 @@ class NotionSync:
 
         for attachment in email.attachments:
             try:
-                upload_path = attachment.path
-                original_filename = attachment.filename
-
-                # 处理 .eml 附件：Notion 不支持 .eml，需要重命名为 .txt
-                if attachment.filename.lower().endswith('.eml'):
-                    txt_path = Path(attachment.path).with_suffix('.txt')
-                    shutil.copy2(attachment.path, txt_path)
-                    upload_path = str(txt_path)
-                    original_filename = attachment.filename[:-4] + '.txt'
-                    logger.debug(f"Renamed .eml to .txt for upload: {attachment.filename} -> {original_filename}")
-
-                # 上传附件到 Notion
-                file_upload_id = await self.client.upload_file(upload_path)
+                # 直接上传，client.upload_file 会自动处理不支持的扩展名
+                file_upload_id = await self.client.upload_file(attachment.path)
                 uploaded_attachments.append({
-                    'filename': original_filename,
+                    'filename': attachment.filename,
                     'file_upload_id': file_upload_id,
                     'content_type': attachment.content_type,
                     'size': attachment.size,
                     'content_id': attachment.content_id,
                     'is_inline': attachment.is_inline
                 })
-                logger.info(f"  Uploaded: {original_filename} (cid={attachment.content_id})")
-
-                # 清理临时 .txt 文件
-                if upload_path != attachment.path:
-                    Path(upload_path).unlink(missing_ok=True)
+                logger.info(f"  Uploaded: {attachment.filename} (cid={attachment.content_id})")
 
             except Exception as e:
                 logger.error(f"  Failed to upload {attachment.filename}: {e}")
@@ -101,6 +87,8 @@ class NotionSync:
     async def _upload_eml_file(self, email: Email) -> Optional[str]:
         """生成并上传 .eml 归档文件
 
+        使用 "伪装 PDF" 技巧直接上传 .eml 文件，无需重命名。
+
         Args:
             email: Email 对象
 
@@ -111,16 +99,9 @@ class NotionSync:
             eml_path = self.eml_generator.generate(email)
             logger.debug(f"Generated .eml file: {eml_path.name}")
 
-            # 将 .eml 重命名为 .txt（Notion 不支持 .eml 扩展名）
-            txt_path = eml_path.with_suffix('.txt')
-            shutil.copy2(eml_path, txt_path)
-
-            # 上传到 Notion
-            file_upload_id = await self.client.upload_file(str(txt_path))
-            logger.info(f"Uploaded email file: {txt_path.name}")
-
-            # 清理临时 .txt 文件
-            txt_path.unlink(missing_ok=True)
+            # 直接上传 .eml 文件，client.upload_file 会自动处理
+            file_upload_id = await self.client.upload_file(str(eml_path))
+            logger.info(f"Uploaded email file: {eml_path.name}")
 
             return file_upload_id
 
