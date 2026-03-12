@@ -1386,6 +1386,25 @@ class SyncStore:
                     }
         return result
 
+    def get_all_synced_flags(self) -> Dict[int, Dict]:
+        """获取所有已同步邮件的存储 flags（不限数量，用于全量 flag 检测）"""
+        result = {}
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT internal_id, is_read, is_flagged, notion_page_id
+                FROM email_metadata
+                WHERE sync_status = 'synced'
+                  AND notion_page_id IS NOT NULL
+            """)
+            for row in cursor.fetchall():
+                result[row[0]] = {
+                    'is_read': bool(row[1]),
+                    'is_flagged': bool(row[2]),
+                    'notion_page_id': row[3],
+                }
+        return result
+
     def update_local_flags(self, internal_id: int, is_read: bool, is_flagged: bool):
         """更新本地存储的 read/flagged 状态（不触发 Notion 同步）
 

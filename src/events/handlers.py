@@ -218,11 +218,18 @@ class EventHandlers:
                 "category": full_props.get("category", ""),
             })
 
-        # 更新 Notion Processing Status → 已同步
+        # 更新 Notion: Is Read / Is Flagged + Processing Status → 已同步
         if page_id and self.notion_sync:
             try:
+                is_flagged_for_notion = ai_action in self.FLAG_ACTIONS
+                await self.notion_sync.update_email_flags(
+                    page_id,
+                    is_read=True,
+                    is_flagged=is_flagged_for_notion,
+                    processing_status="已同步"
+                )
                 await self.notion_sync.update_page_mail_sync_status(
-                    page_id, synced=True, processing_status="已同步"
+                    page_id, synced=True
                 )
             except Exception as e:
                 logger.warning(f"Webhook: failed to update Notion status: {e}")

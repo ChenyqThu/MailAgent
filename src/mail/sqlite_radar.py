@@ -333,6 +333,35 @@ class SQLiteRadar:
             logger.error(f"Failed to get new emails: {e}")
             return []
 
+    def get_flags_by_ids(self, internal_ids: List[int]) -> Dict[int, Dict]:
+        """查询指定 internal_id 列表的当前 read/flagged 状态"""
+        if not internal_ids or not self.db_path:
+            return {}
+        result = {}
+        try:
+            with self._connection() as conn:
+                cursor = conn.cursor()
+                batch_size = 500
+                for i in range(0, len(internal_ids), batch_size):
+                    batch = internal_ids[i:i + batch_size]
+                    placeholders = ','.join('?' * len(batch))
+                    cursor.execute(f"""
+                        SELECT m.ROWID as internal_id,
+                               m.read as is_read,
+                               m.flagged as is_flagged
+                        FROM messages m
+                        WHERE m.ROWID IN ({placeholders})
+                          AND m.deleted = 0
+                    """, batch)
+                    for row in cursor.fetchall():
+                        result[row['internal_id']] = {
+                            'is_read': bool(row['is_read']),
+                            'is_flagged': bool(row['is_flagged']),
+                        }
+        except Exception as e:
+            logger.error(f"Failed to get flags by ids: {e}")
+        return result
+
     def get_recent_flags(self, limit: int = 1000) -> Dict[int, Dict]:
         """获取最近 N 封邮件的 read/flagged 状态
 
