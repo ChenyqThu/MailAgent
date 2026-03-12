@@ -56,6 +56,42 @@ class EventHandlers:
         """返回事件处理统计"""
         return dict(self._stats)
 
+    async def _fetch_full_page_props(self, page_id: str) -> Dict:
+        """从 Notion API 拉取完整页面属性，补全 webhook 缺失字段"""
+        page = await self.notion_sync.client.client.pages.retrieve(page_id=page_id)
+        raw_props = page.get("properties", {})
+        result = {}
+        def _text(p):
+            for k in ("title", "rich_text"):
+                items = p.get(k, [])
+                if items:
+                    return "".join(i.get("plain_text", "") for i in items)
+            return ""
+        def _select(p): return (p.get("select") or {}).get("name", "")
+        def _email(p): return p.get("email", "") or ""
+        def _checkbox(p): return bool(p.get("checkbox"))
+        def _date(p): return (p.get("date") or {}).get("start", "")
+        field_map = {
+            "Subject": ("subject", _text),
+            "From Name": ("from_name", _text),
+            "From": ("from_email", _email),
+            "To": ("to_addr", _text),
+            "CC": ("cc_addr", _text),
+            "Date": ("date", _date),
+            "Action Type": ("ai_action", _select),
+            "Priority": ("ai_priority", _select),
+            "Mailbox": ("mailbox", _select),
+            "Category": ("category", _select),
+            "AI Summary": ("ai_summary", _text),
+            "Reply Suggestion": ("reply_suggestion", _text),
+            "Message ID": ("message_id", _text),
+        }
+        for notion_key, (out_key, extractor) in field_map.items():
+            prop = raw_props.get(notion_key)
+            if prop is not None:
+                result[out_key] = extractor(prop)
+        return result
+
     async def handle_flag_changed(self, event: Dict):
         """处理 flag 变化事件: Notion → Mail.app"""
         self._stats["flag_changed"] += 1
@@ -143,28 +179,43 @@ class EventHandlers:
             and mailbox != "发件箱"
         )
         if should_notify and self.feishu:
-            # Notion webhook 可能不包含所有 properties，从 SyncStore 补全 subject
+            # Notion webhook 只含变更字段，补全缺失的展示字段
             subject = props.get("subject", "")
             if not subject and record:
                 subject = (record.get('subject') if isinstance(record, dict)
                            else getattr(record, 'subject', '')) or ''
+
+            # 若 from_name/date/ai_summary 等缺失，从 Notion API 拉完整页面
+            full_props = props
+            needs_fetch = not props.get("from_name") and not props.get("date") and not props.get("ai_summary")
+            if needs_fetch and page_id and self.notion_sync:
+                try:
+                    full_props = await self._fetch_full_page_props(page_id)
+                    full_props.setdefault("subject", subject)
+                    full_props.setdefault("ai_action", ai_action)
+                    full_props.setdefault("ai_priority", ai_priority)
+                    full_props.setdefault("mailbox", mailbox)
+                    full_props.setdefault("message_id", message_id)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch full page props for notification: {e}")
+
             self._stats["feishu_notified"] += 1
             await self.feishu.notify_important_email({
                 "page_id": page_id,
                 "message_id": message_id,
                 "internal_id": internal_id,
-                "subject": subject,
-                "from_name": props.get("from_name", ""),
-                "from_email": props.get("from_email", ""),
-                "to_addr": props.get("to_addr", ""),
-                "cc_addr": props.get("cc_addr", ""),
-                "date": props.get("date", ""),
+                "subject": full_props.get("subject") or subject,
+                "from_name": full_props.get("from_name", ""),
+                "from_email": full_props.get("from_email", ""),
+                "to_addr": full_props.get("to_addr", ""),
+                "cc_addr": full_props.get("cc_addr", ""),
+                "date": full_props.get("date", ""),
                 "mailbox": mailbox,
                 "ai_action": ai_action,
                 "ai_priority": ai_priority,
-                "ai_summary": props.get("ai_summary", ""),
-                "reply_suggestion": props.get("reply_suggestion", ""),
-                "category": props.get("category", ""),
+                "ai_summary": full_props.get("ai_summary", ""),
+                "reply_suggestion": full_props.get("reply_suggestion", ""),
+                "category": full_props.get("category", ""),
             })
 
         # 更新 Notion Processing Status → 已同步
