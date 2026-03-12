@@ -636,12 +636,6 @@ async def handle_notion_webhook(
 
     body = await request.json()
 
-    # DEBUG: 记录原始 payload 结构（top-level keys + properties keys）
-    top_keys = list(body.keys()) if isinstance(body, dict) else []
-    data_keys = list(body.get("data", {}).keys()) if isinstance(body.get("data"), dict) else []
-    raw_props_preview = list(body.get("data", body).get("properties", {}).keys()) if isinstance(body.get("data", body), dict) else []
-    print(f"[webhook debug] top_keys={top_keys} data_keys={data_keys} props_keys={raw_props_preview}", flush=True)
-
     data = body.get("data", body)
     if isinstance(data, dict) and "object" not in data and "id" not in data:
         data = body
@@ -655,7 +649,6 @@ async def handle_notion_webhook(
     page_id = data.get("id", "")
     raw_props = data.get("properties", {})
     properties = parse_properties(raw_props)
-    print(f"[webhook debug] event={event} page_id={page_id[:15] if page_id else ''} parsed_keys={list(properties.keys())}", flush=True)
 
     message = {
         "id": f"evt_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
