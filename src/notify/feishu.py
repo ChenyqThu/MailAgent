@@ -212,7 +212,7 @@ class FeishuNotifier:
                 "tag": "input",
                 "name": "reply_suggestion",
                 "input_type": "multiline_text",
-                "default_value": reply_suggestion[:1500],
+                "default_value": self._truncate_by_bytes(reply_suggestion, 4000),
                 "label": {"tag": "plain_text", "content": "✍️ 建议回复（可直接编辑）"},
                 "label_position": "top",
                 "rows": 4,
@@ -402,6 +402,15 @@ class FeishuNotifier:
         except Exception as e:
             logger.error(f"Feishu app notification failed: {e}")
             return False
+
+    @staticmethod
+    def _truncate_by_bytes(text: str, max_bytes: int) -> str:
+        """按 UTF-8 字节数截断字符串，避免飞书 default_value 超限"""
+        encoded = text.encode('utf-8')
+        if len(encoded) <= max_bytes:
+            return text
+        truncated = encoded[:max_bytes].decode('utf-8', errors='ignore')
+        return truncated
 
     @staticmethod
     def _inject_open_message_id(card: Dict, msg_id: str):
