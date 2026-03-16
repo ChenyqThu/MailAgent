@@ -63,7 +63,7 @@ tail -f logs/sync.log
 | 环境 | Python 版本 | 用途 |
 |------|-----------|------|
 | 本地 macOS | 3.11+ | main.py 邮件同步主服务 |
-| 远程 VPS (106.52.146.114) | 3.9+ | webhook-server FastAPI 服务 |
+| 远程 VPS (170.106.181.89) | 3.9+ | webhook-server FastAPI 服务 |
 
 > `pyproject.toml` 声明 `requires-python = ">=3.9"`，代码已兼容 Python 3.9+。
 
@@ -166,7 +166,7 @@ tail -f logs/sync.log
 | `deploy.md` | 服务器部署指南 |
 | `../scripts/deploy-webhook.sh` | 一键部署脚本（`sshpass` + SSH） |
 
-**远程服务器**：`root@106.52.146.114`，路径 `/home/lighthouse/MailAgent/webhook-server`，PM2 进程名 `mailagent-webhook`。密码文件：`~/.ssh/guangzhou_pass`。
+**远程服务器**：`ubuntu@170.106.181.89`，路径 `/opt/MailAgent/webhook-server`，PM2 进程名 `mailagent-webhook`。SSH 认证：公钥（`~/.ssh/id_ed25519`）。
 
 #### Notion 模块 (`src/notion/`)
 

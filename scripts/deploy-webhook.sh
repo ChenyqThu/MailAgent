@@ -4,25 +4,14 @@
 
 set -e
 
-SERVER="106.52.146.114"
-USER="root"
-PASS_FILE="$HOME/.ssh/guangzhou_pass"
-REMOTE_DIR="/home/lighthouse/MailAgent"
-
-if [ ! -f "$PASS_FILE" ]; then
-    echo "Error: Password file not found at $PASS_FILE"
-    exit 1
-fi
-
-if ! command -v sshpass &> /dev/null; then
-    echo "Error: sshpass not installed. Run: brew install sshpass"
-    exit 1
-fi
+SERVER="170.106.181.89"
+USER="ubuntu"
+REMOTE_DIR="/opt/MailAgent"
 
 echo "Deploying webhook-server to $SERVER..."
-sshpass -f "$PASS_FILE" ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password "$USER@$SERVER" << 'REMOTE_SCRIPT'
+ssh -o StrictHostKeyChecking=no "$USER@$SERVER" << 'REMOTE_SCRIPT'
 set -e
-cd /home/lighthouse/MailAgent
+cd /opt/MailAgent
 
 echo "==> git pull"
 git pull

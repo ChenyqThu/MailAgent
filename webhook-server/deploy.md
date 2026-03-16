@@ -4,13 +4,13 @@
 
 | 项目 | 详情 |
 |------|------|
-| 服务器 | 腾讯云 CentOS 7 (VM-20-16-centos) |
-| IP | 106.52.146.114 |
+| 服务器 | 腾讯云 Ubuntu (170.106.181.89) |
+| IP | 170.106.181.89 |
 | 域名 | mailagent.chenge.ink |
 | SSL | Cloudflare Proxied (Full 模式) + 服务端自签证书 |
-| Python | 3.9.16 (`/usr/local/bin/python3.9`) |
+| Python | 3.9+ |
 | 应用端口 | 8100 (Nginx 反代) |
-| 项目路径 | `/home/lighthouse/MailAgent/webhook-server` |
+| 项目路径 | `/opt/MailAgent/webhook-server` |
 | 同服务器 | Notion2JIRA (notion-webhook, port 7654) |
 
 **Redis 共用（不同 DB）：**
@@ -23,7 +23,7 @@
 ## 1. 部署代码
 
 ```bash
-cd /home/lighthouse
+cd /opt
 git clone https://github.com/ChenyqThu/MailAgent.git
 cd MailAgent/webhook-server
 
@@ -117,7 +117,7 @@ nginx -t && systemctl reload nginx
 
 服务器使用自签证书（10 年有效），Cloudflare 负责公网 SSL 终止：
 
-- **Cloudflare DNS**：`mailagent` A 记录 → 106.52.146.114，**Proxied（橙色云）**
+- **Cloudflare DNS**：`mailagent` A 记录 → 170.106.181.89，**Proxied（橙色云）**
 - **Cloudflare SSL/TLS**：模式 **Full**（不要 Full Strict，服务端为自签证书）
 
 生成自签证书（已完成，路径 `/etc/nginx/ssl/`）：
@@ -143,7 +143,7 @@ macOS 端 MailAgent `.env` 添加：
 
 ```env
 # Redis 事件消费（Notion → Mail 方向）
-REDIS_URL=redis://:VHBMaW5rUmVkaXNTZWN1cmUyMDI1@106.52.146.114:6379
+REDIS_URL=redis://:VHBMaW5rUmVkaXNTZWN1cmUyMDI1@170.106.181.89:6379
 REDIS_DB=2
 REDIS_EVENTS_ENABLED=true
 ```
@@ -204,7 +204,7 @@ pm2 save                         # 保存进程列表（开机自启）
 ### 代码更新
 
 ```bash
-cd /home/lighthouse/MailAgent
+cd /opt/MailAgent
 git pull
 cd webhook-server
 source venv/bin/activate
