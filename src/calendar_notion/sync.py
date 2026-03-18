@@ -286,8 +286,11 @@ class CalendarNotionSync:
                 "checkbox": event.is_all_day
             },
             # Status
-            "Status": {
+            "会议状态": {
                 "select": {"name": event.status.value}
+            },
+            "日程类型": {
+                "select": {"name": "💼 工作·会议"}
             },
             # Is Recurring
             "Is Recurring": {
