@@ -54,7 +54,12 @@ class RedisConsumer:
             pass
         self._pool = redis.from_url(
             f"{self.redis_url}/{self.redis_db}",
-            decode_responses=True
+            decode_responses=True,
+            socket_timeout=30,
+            socket_connect_timeout=10,
+            socket_keepalive=True,
+            socket_keepalive_options={},
+            health_check_interval=15,
         )
 
     def _get_reconnect_delay(self) -> float:
