@@ -284,6 +284,7 @@ class FeishuNotifier:
                     "type": "primary",
                     "form_action_type": "submit",
                     "name": "btn_enhance",
+                    "value": {"action": "enhance", "label": "优化回复"},
                 }],
             },
         ]
@@ -297,6 +298,7 @@ class FeishuNotifier:
                     "type": "default",
                     "form_action_type": "submit",
                     "name": "btn_draft",
+                    "value": {"action": "create_draft", "label": "创建草稿"},
                 }],
             })
 
@@ -308,6 +310,7 @@ class FeishuNotifier:
                 "type": "default",
                 "form_action_type": "submit",
                 "name": "btn_done",
+                "value": {"action": "mark_done", "label": "已完成"},
             }],
         })
 
