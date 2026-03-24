@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -q 'pm2 restart'; then echo 'hook additional context: Post-deploy check: run pm2 status and pm2 logs --lines 15 --nostream to verify service health. Do NOT skip this step.'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -2,6 +2,50 @@
 
 为 Claude Code 提供的项目指南。
 
+## 通用指南
+
+- 被要求做具体修改时，直接动手。不要花大量时间读文件或反复确认简单任务，偏向行动。
+- macOS 环境下 **没有 sudo**，不要尝试 sudo 命令。
+- 不要在嵌套 session 中做 CLI 更新或全局变更。
+- 遇到环境问题时，优先检查已知的 macOS 限制（FDA 权限、symlink、沙盒）再尝试修复。
+
+## 调试流程
+
+调试服务（PM2、gateway、bots）时，按此顺序排查：
+
+1. **进程存活**：`pm2 status` 确认进程 online
+2. **环境变量/密钥**：检查 `.env` 中 token/secret 是否有效
+3. **网络/代理**：检查 Redis 连接、webhook URL、代理设置
+4. **日志**：`pm2 logs <name> --lines 30 --nostream` 查看具体错误
+5. **数据库**：`sqlite3 data/sync_store.db` 检查状态分布
+
+**不要**：
+- 尝试 `sudo` 或交互式命令
+- 在没检查基础项的情况下就改代码
+- 用错误的 SSH 凭证重试（本项目 SSH 公钥认证：`~/.ssh/id_ed25519`）
+
+## 部署验证
+
+部署任何代码变更后，**必须**验证服务正常：
+
+```bash
+# 1. 重启并等待
+pm2 restart <name> && sleep 3
+
+# 2. 确认进程状态
+pm2 status
+
+# 3. 检查启动日志（无 error）
+pm2 logs <name> --lines 20 --nostream
+
+# 4. 检查关键组件
+# - Redis consumer 已连接
+# - SQLite 雷达正常
+# - Webhook handler 已注册
+```
+
+不要假设部署成功 —— Pydantic schema 变更、handler 未注册、依赖缺失都可能导致静默失败。
+
 ## 项目概述
 
 **MailAgent** 是一个 macOS 邮件实时同步系统，将 Mail.app 邮件同步到 Notion，支持：
