@@ -23,3 +23,8 @@ redis>=5.0.0
 
 # 图片处理
 Pillow>=11.0.0  # Python 3.13 需要 11.0.0+
+
+# Office 文档转换 (xlsx → csv)
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-calamine>=0.2.0  # Rust 引擎，xlsx 读取加速 4-18x

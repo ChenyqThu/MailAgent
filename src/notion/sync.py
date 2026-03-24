@@ -8,10 +8,11 @@ import shutil
 if TYPE_CHECKING:
     from src.mail.icalendar_parser import MeetingInvite
 
-from src.models import Email
+from src.models import Email, Attachment
 from src.notion.client import NotionClient
 from src.converter.html_converter import HTMLToNotionConverter
 from src.converter.eml_generator import EMLGenerator
+from src.converter.office_converter import convert_office_attachment, is_convertible
 
 # 北京时区 (UTC+8)
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -83,6 +84,55 @@ class NotionSync:
             logger.warning(f"Failed to upload {len(failed_filenames)} attachments: {failed_filenames}")
 
         return uploaded_attachments, failed_filenames
+
+    def _convert_office_attachments(self, email: Email) -> List[Attachment]:
+        """将 Office 附件转换为更通用的格式
+
+        docx/pptx → PDF, xlsx → CSV。转换后的文件作为额外附件追加，
+        原始文件仍保留上传。转换失败不影响正常同步流程。
+
+        Args:
+            email: Email 对象
+
+        Returns:
+            转换生成的新 Attachment 列表
+        """
+        converted_attachments = []
+
+        convertible = [a for a in email.attachments if is_convertible(a.filename)]
+        if not convertible:
+            return converted_attachments
+
+        logger.info(f"Found {len(convertible)} convertible Office attachments")
+
+        for attachment in convertible:
+            try:
+                # 转换后文件放在与原附件同目录（共享临时目录，统一清理）
+                output_dir = str(Path(attachment.path).parent)
+                converted_paths = convert_office_attachment(attachment.path, output_dir)
+
+                for converted_path in converted_paths:
+                    p = Path(converted_path)
+                    ext = p.suffix.lower()
+                    content_type = "application/pdf" if ext == ".pdf" else "text/csv"
+
+                    converted_attachments.append(Attachment(
+                        filename=p.name,
+                        content_type=content_type,
+                        size=p.stat().st_size,
+                        path=str(p),
+                        content_id=None,
+                        is_inline=False,
+                    ))
+
+            except Exception as e:
+                logger.warning(f"Failed to convert {attachment.filename}, skipping: {e}")
+
+        if converted_attachments:
+            logger.info(f"Generated {len(converted_attachments)} converted attachments: "
+                        f"{[a.filename for a in converted_attachments]}")
+
+        return converted_attachments
 
     async def _upload_eml_file(self, email: Email) -> Optional[str]:
         """生成并上传 .eml 归档文件
@@ -722,29 +772,36 @@ class NotionSync:
                 logger.error(f"Failed to check if page exists, aborting to prevent duplicates: {e}")
                 raise
 
-            # 2. 上传附件（使用提取的方法）
+            # 2. 转换 Office 附件（docx/pptx→PDF, xlsx→CSV），追加到附件列表
+            from src.config import config as app_config
+            if app_config.office_convert_enabled:
+                converted = self._convert_office_attachments(email)
+                if converted:
+                    email.attachments.extend(converted)
+
+            # 3. 上传附件（使用提取的方法）
             uploaded_attachments, failed_attachments = await self._upload_attachments(email)
 
-            # 3. 生成并上传 .eml 归档文件
+            # 4. 生成并上传 .eml 归档文件
             eml_file_upload_id = await self._upload_eml_file(email)
 
-            # 4. 构建 Properties
+            # 5. 构建 Properties
             properties = self._build_properties(email, eml_file_upload_id)
 
-            # 5. 关联日程页面（会议邀请邮件）
+            # 6. 关联日程页面（会议邀请邮件）
             if calendar_page_id:
                 properties["Calendar Events"] = {
                     "relation": [{"id": calendar_page_id}]
                 }
                 logger.info(f"Linked to calendar event: {calendar_page_id}")
 
-            # 6. 构建图片映射
+            # 7. 构建图片映射
             image_map = self._build_image_map(email, uploaded_attachments)
 
-            # 7. 转换邮件内容为 Notion Blocks
+            # 8. 转换邮件内容为 Notion Blocks
             children = self._build_children(email, uploaded_attachments, image_map, meeting_invite)
 
-            # 8. 如果有附件上传失败，添加警告提示
+            # 9. 如果有附件上传失败，添加警告提示
             if failed_attachments:
                 warning_block = {
                     "type": "callout",
@@ -759,15 +816,15 @@ class NotionSync:
                 }
                 children.insert(0, warning_block)
 
-            # 9. 设置邮件 icon（收件箱 📧，发件箱 📤）
+            # 10. 设置邮件 icon（收件箱 📧，发件箱 📤）
             email_icon = {"type": "emoji", "emoji": "📤"} if email.mailbox == "发件箱" else {"type": "emoji", "emoji": "📧"}
 
-            # 10. 创建 Page（使用提取的方法处理分批）
+            # 11. 创建 Page（使用提取的方法处理分批）
             page = await self._create_page_with_blocks(properties, children, email_icon)
             page_id = page['id']
             logger.info(f"Email page created successfully (v2): {email.subject} (page_id={page_id})")
 
-            # 11. 处理线程关系（新架构：最新邮件为母节点）
+            # 12. 处理线程关系（新架构：最新邮件为母节点）
             thread_id = email.thread_id
             if not skip_parent_lookup and thread_id:
                 await self._handle_thread_relations(page_id, email)

@@ -11,6 +11,7 @@
 - 双向 Flag 同步（已读/旗标状态 Mail.app ↔ Notion）
 - 飞书应用机器人通知（重要邮件推送 + 交互式回复按钮 → Openclaw）
 - Notion Webhook → Redis → Mail.app 实时事件驱动
+- Office 附件自动转换（docx/pptx→PDF, xlsx→CSV）
 
 **架构版本：v3 SQLite-First**（2026-01 优化）
 - 使用 `internal_id`（SQLite ROWID = AppleScript id）作为主键
@@ -26,6 +27,8 @@
 - Pydantic（配置管理）
 - Redis（Notion→Mail 事件队列）
 - FastAPI（Webhook Server）
+- LibreOffice headless（Office→PDF 转换）
+- pandas + python-calamine（xlsx→CSV 转换）
 
 ## 命令速查
 
@@ -188,6 +191,7 @@ tail -f logs/sync.log
 |------|------|
 | `html_converter.py` | HTML → Notion Blocks（含内联图片） |
 | `eml_generator.py` | 生成 .eml 归档文件 |
+| `office_converter.py` | Office 附件转换（docx/pptx→PDF via LibreOffice, xlsx→CSV via pandas） |
 
 ### 关键流程
 
@@ -490,6 +494,22 @@ CREATE TABLE thread_head_cache (
 | `error` | 橙色 | 同步失败、API 错误、连续错误、Redis 断连 |
 | `warning` | 黄色 | dead_letter 累积、雷达不可用、服务停止 |
 | `info` | 蓝色 | 服务启动、恢复通知 |
+
+### Office 附件转换配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OFFICE_CONVERT_ENABLED` | `true` | 是否启用 Office 附件转换（docx/pptx→PDF, xlsx→CSV） |
+
+**依赖安装：**
+```bash
+# xlsx→CSV（pip 依赖，随 requirements.txt 安装）
+pip install pandas openpyxl python-calamine
+
+# docx/pptx→PDF（系统依赖）
+brew install --cask libreoffice
+brew install --cask font-noto-sans-cjk   # CJK 字体
+```
 
 ### 防锁屏保活配置
 
