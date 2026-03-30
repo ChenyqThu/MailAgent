@@ -212,7 +212,7 @@ class FeishuNotifier:
                 "tag": "input",
                 "name": "reply_suggestion",
                 "input_type": "multiline_text",
-                "default_value": self._truncate_by_bytes(reply_suggestion, 4000),
+                "default_value": self._truncate_by_bytes(reply_suggestion, 2000),
                 "label": {"tag": "plain_text", "content": "✍️ 建议回复（可直接编辑）"},
                 "label_position": "top",
                 "rows": 4,
