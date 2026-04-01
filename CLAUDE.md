@@ -55,7 +55,7 @@ pm2 logs <name> --lines 20 --nostream
 - 双向 Flag 同步（已读/旗标状态 Mail.app ↔ Notion）
 - 飞书应用机器人通知（重要邮件推送 + 交互式回复按钮 → Openclaw）
 - Notion Webhook → Redis → Mail.app 实时事件驱动
-- Office 附件自动转换（docx/pptx→PDF, xlsx→CSV）
+- Office 附件自动转换（docx/pptx→PDF, xlsx→CSV）并作为额外附件上传
 
 **架构版本：v3 SQLite-First**（2026-01 优化）
 - 使用 `internal_id`（SQLite ROWID = AppleScript id）作为主键

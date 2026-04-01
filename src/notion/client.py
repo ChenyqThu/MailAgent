@@ -9,14 +9,18 @@ from src.config import config
 # https://developers.notion.com/docs/uploading-small-files
 NOTION_SUPPORTED_EXTENSIONS: Set[str] = {
     # Audio
-    '.aac', '.adts', '.mid', '.midi', '.mp3', '.mpga', '.m4a', '.m4b', '.oga', '.ogg', '.wav', '.wma',
+    '.aac', '.adts', '.mid', '.midi', '.mp3', '.mpga', '.m4a', '.m4b', '.mp4', '.oga', '.ogg', '.opus', '.wav',
+    '.wma', '.weba', '.flac',
     # Document
-    '.pdf', '.txt', '.json', '.doc', '.dot', '.docx', '.dotx', '.xls', '.xlt', '.xla', '.xlsx', '.xltx',
-    '.ppt', '.pot', '.pps', '.ppa', '.pptx', '.potx',
+    '.pdf', '.txt', '.csv', '.json', '.doc', '.dot', '.docx', '.dotx', '.xls', '.xlt', '.xla', '.xlsx', '.xltx',
+    '.ppt', '.pot', '.pps', '.ppa', '.pptx', '.potx', '.rtf', '.md', '.markdown', '.html', '.htm', '.epub',
+    '.xml', '.css', '.odt', '.ods', '.odp', '.ics', '.yaml', '.yml', '.tsv', '.zip', '.gz', '.gzip', '.tar',
+    '.7z', '.bz2', '.rar',
     # Image
-    '.gif', '.heic', '.jpeg', '.jpg', '.png', '.svg', '.tif', '.tiff', '.webp', '.ico',
+    '.gif', '.heic', '.jpeg', '.jpg', '.png', '.svg', '.tif', '.tiff', '.webp', '.ico', '.bmp', '.avif', '.apng',
     # Video
-    '.amv', '.asf', '.wmv', '.avi', '.f4v', '.flv', '.gifv', '.m4v', '.mkv', '.webm', '.mov', '.qt', '.mpeg',
+    '.amv', '.asf', '.wmv', '.avi', '.f4v', '.flv', '.gifv', '.m4v', '.mp4', '.mkv', '.webm', '.mov', '.qt',
+    '.mpeg', '.ogv', '.3gp', '.3g2',
 }
 
 
