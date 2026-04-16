@@ -230,8 +230,8 @@ class CalendarNotionSync:
         if event.status == EventStatus.CANCELLED:
             return {"type": "emoji", "emoji": "❌"}
 
-        # 默认使用日期日历 icon（基于起始日期）
-        date_str = event.start_time.strftime("%Y-%m-%d")
+        # 默认使用日期日历 icon（转换为本地时区后取日期）
+        date_str = event.start_time.astimezone().strftime("%Y-%m-%d")
         icon_url = f"https://notion-icons.chenge.ink/?type=day&color=red&date={date_str}"
         return {
             "type": "external",
