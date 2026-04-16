@@ -178,21 +178,18 @@ class CalendarNotionSync:
         return page
 
     async def _update_page(self, page_id: str, event: CalendarEvent) -> Dict[str, Any]:
-        """更新 Notion 页面"""
+        """更新 Notion 页面属性（不覆盖用户写入的页面正文）"""
         properties = self._build_properties(event)
 
         # 根据状态设置 icon
         icon = self._get_status_icon(event)
 
-        # 更新页面属性和 icon
+        # 只更新属性和 icon，保留用户手动编辑的页面正文
         page = await self.client.pages.update(
             page_id=page_id,
             properties=properties,
             icon=icon
         )
-
-        # 更新页面内容（先删除旧内容，再添加新内容）
-        await self._update_page_content(page_id, event)
 
         return page
 
