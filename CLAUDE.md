@@ -793,6 +793,31 @@ EVELYN_AUTO_SYNC_ENABLED=false
 - `python scripts/sync_evelyn_projects.py ...` 会直接报错退出（避免误跑）
 - `new_watcher` 不会初始化 detector（钩子不生效）
 
+### 启用自动触发（本地开发者操作清单）
+1. `.env` 填入（或解除注释）：
+   ```
+   EVELYN_SYNC_ENABLED=true
+   PROJECT_PROGRESS_DATABASE_ID=6f528975839940ceaacaf545e47cf25d
+   EVELYN_AUTO_SYNC_ENABLED=true
+   ```
+2. `pm2 restart mail-sync`
+3. 启动日志出现 `Evelyn project auto-sync enabled (db=...)` → 钩子已注册
+4. 周一 Evelyn 邮件到达、主同步把邮件写入 Notion 成功后，
+   `_maybe_trigger_evelyn_hook` 会匹配发件人 + 标题正则，
+   以 `asyncio.create_task` 在后台并发派发 `EvelynProjectRunner.sync_from_email`，
+   不阻塞主轮询；任何异常只打 WARNING 不影响主同步
+
+### 首次全量回填（历史邮件或初次上线）
+```bash
+# 1. 基础同步（会创建项目页 + 写入"项目开始时间"）
+python scripts/sync_evelyn_projects.py --internal-id <最新那封> --force
+
+# 2. 如果已存在一批旧聚合页 → 手动 archive 或用 Notion 侧清理
+
+# 3. 如果数据库新加了字段（如"项目开始时间"），一次性回填到所有已入库页
+python scripts/sync_evelyn_projects.py --internal-id <任一封> --backfill-project-start
+```
+
 ### 监控
 ```bash
 sqlite3 data/sync_store.db "
