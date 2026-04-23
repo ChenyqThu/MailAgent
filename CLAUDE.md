@@ -653,6 +653,150 @@ python3 scripts/test_mail_reader.py
 - **优化文档**: `docs/applescript_id_optimization.md`
 - **Webhook Server**: `webhook-server/`（远程部署，一键更新：`./scripts/deploy-webhook.sh`）
 
+## Evelyn 周项目同步（外挂模块）
+
+独立于主同步的可选外挂模块，消费 Evelyn (`evelyn.wei@tp-link.com`) 每周一晚转发的
+**《【项目进度】项目deadline汇报MMDD_市场产品》** 邮件，抽取 xlsx 附件过滤 `BU==TPS-ENBU`
+的项目，按 Project Name 聚合 upsert 到 Notion 项目进度库。
+
+### 模块结构
+```
+src/evelyn_project/
+  detector.py          发件人 + 标题正则匹配
+  xlsx_parser.py       Sheet="Project  Ongoing" (双空格) 解析 + ENBU 过滤 + 按 Project Name 聚合
+  slug.py              external_id 生成（英文 slug；含中文加短 sha1 后缀；碰撞后加后缀）
+  progress_parser.py   解析 [MM/DD] / [M/D] / [MM/DD/YYYY] / （MM.DD） 等日期头
+  priority.py          Project Priority 原值直写（N/TBD/Y/Y-Pledge/R&D project）
+  sync_store.py        evelyn_project_sync 表（独立于 email_metadata）
+  notion_sync.py       ProjectProgressNotionClient（用 Notion Markdown API）
+  runner.py            端到端 runner（sync_from_email）
+
+scripts/sync_evelyn_projects.py   CLI
+tests/evelyn_project/             pytest
+docs/notion_markdown_api.md       Notion Markdown API 探测记录
+```
+
+### Notion Markdown API
+使用 `Notion-Version: 2025-09-03` + `ntn_` token 才可用（参见 `docs/notion_markdown_api.md`）：
+- `GET  /v1/pages/{id}/markdown` 读扩展 markdown
+- `PATCH /v1/pages/{id}/markdown` 写，支持 `replace_content / insert_content / update_content / replace_content_range`
+- Prepend 通过 read-modify-write：GET markdown → 客户端拼 → `replace_content` 写回
+
+### 粒度：行级（一行 = 一个 Notion 页）+ 母子任务
+
+xlsx 每行是一个 `(Project Name, Product Model)` 对。**每行独立一个 Notion 页**，不再按 Project Name 聚合。同一 Project Name 下的多行建立**母子任务关系**（Notion 自带的 `母任务 / 子任务` dual_property）：
+
+- 母任务：同 Project Name 多行中，`earliest_progress_date`（progress_blocks 里最老块的实际日期）最早的那行。平局按 Product Model 字母序
+- 子任务：同 Project Name 其余行，`母任务` relation 指向母任务 page_id
+- 独立任务：同 Project Name 只有一行的项目，既不是母也不是子
+
+**Dual-property 策略**：脚本只写子任务一侧的 `母任务` relation；`子任务` 字段由 Notion 自动反填。母任务的 properties 永远不含母子字段，避免 update 时误动 relation。
+
+**Upsert 两阶段**（保证 relation 不 dangling）：
+1. Phase 1：并发 upsert 所有"母 + 独立"（parent_external_id 为 None），收集 external_id→page_id 映射
+2. Phase 2：并发 upsert 所有"子任务"，用 Phase 1 的映射取 parent_page_id 写 `母任务` relation
+
+### 字段映射（xlsx → Notion）
+| Notion property | 类型 | xlsx 列 / 规则 |
+|---|---|---|
+| `项目名称` (title) | title | **Product Model**（每行自己的 SKU 名） |
+| `external_id` | rich_text | slug(`Project Name + "__" + Product Model`)；碰撞按 (name, model) hash 后缀 |
+| `母任务` | relation (dual) | 子任务指向母任务 page_id；母/独立不写 |
+| `本周数据期` | rich_text | xlsx 文件名日期 YYYYMMDD → ISO 周 `YYYY-WXX` |
+| `优先级` | select | Project Priority **原值直写**；Notion 自动新建 option |
+| `Product Models` | multi_select | 本行 Product Model 单值 |
+| `BU` | select | 固定 `TPS-ENBU` |
+| `研发分部` | select | R&D Division |
+| `PM` / `协助 PM` / `接口人` | rich_text | Project Manager / Assist PM / Contact Window |
+| `参考 DDL` | date | Reference Date for the Business（Terminated / NO MPS 等非日期写入风险项） |
+| `美国发货` | checkbox | Shipped to the United States（`Y`→True） |
+| `风险项` | rich_text | Project Risk |
+| `Status` | status | create 时写 `In progress`；update **不覆盖** 手改值；xlsx 消失的页自动标 `Done` |
+| `Evelyn 原邮件` | url | 邮件 Notion 页 URL |
+| `产品线` | multi_select | xlsx Product Line 直写（Notion 自动创建 option） |
+| `出现在会议` | relation | 留空，手动挂 |
+| `最后同步` | last_edited_time | 自动 |
+
+### 正文（进度日志）写入
+- 采用 Notion **Markdown API**（需 `ntn_` token + `Notion-Version: 2025-09-03`），详见 `docs/notion_markdown_api.md`
+- 首次创建：`POST /v1/pages` 建空页 → `PATCH /markdown` `replace_content` 一次性写入全量历史 markdown
+- 增量 prepend：`GET /markdown` → 找页面首个 heading 做 anchor → `PATCH /markdown` `update_content` 把 anchor 替换为 "本周块 + anchor"（Notion 内部只重建首个 block，不是整页 rebuild）
+- 找不到安全 anchor 或空页 → 降级 `replace_content`
+- **幂等 guard**：prepend 前 GET markdown，首段已含 `### {week_tag} ` → skip（一周内多次跑不重复写入）
+
+### Progress 日期 / 年份推断
+xlsx 的 `Project Progress` 里日期头格式多样（`[MM/DD]` / `[M/D]` / `[MM/DD/YYYY]` / `（MM.DD）`），很多缺年份。算法：
+- 按 xlsx 出现顺序（最新在前）**单调递减**推断年份：每块推出的日期必须 ≤ 前一块日期，否则年份 -1 继续试
+- 例：`(01/23/2026) → (3.1) → (11.17) → (11.10)` 被推断为 `2026-01-23 / 2025-03-01 / 2024-11-17 / 2024-11-10`
+
+### 增量同步语义
+- `evelyn_project_sync` 表以 `email_internal_id` 为主键记录每封邮件的处理状态
+- 同 internal_id 已 `completed` → 跳过（`--force` 才重跑）
+- 同 xlsx_md5 不同 internal_id（转发链）→ 默认跳过
+- 行级 upsert：external_id 查 → 无则 create（Status=In progress，正文=全量历史），有则 update properties（**不写 Status / 母任务 / 子任务** 保留手改）+ prepend 本周 markdown
+- **"xlsx 消失 → 标 Done"**：非切片模式下（未加 `--project-limit`），upsert 完成后扫 Notion 里 BU=TPS-ENBU 且 Status ≠ Done 的所有页，对比本次 xlsx 的 external_id 集合，差集全部标 `Done`。项目完成从 xlsx 移除后自动进 Done 归档
+
+### 命令
+```bash
+# 干跑（不写 Notion）
+python scripts/sync_evelyn_projects.py --internal-id 51793 --dry-run
+
+# 自动扫最近一封未处理的
+python scripts/sync_evelyn_projects.py
+
+# 指定一封
+python scripts/sync_evelyn_projects.py --internal-id 51793
+
+# 回填历史（按日期升序 N 封）
+python scripts/sync_evelyn_projects.py --all-history --limit 10
+
+# 小批量验证（前 N 个项目；自动把缺失 parent 拉进切片保证 relation 完整）
+python scripts/sync_evelyn_projects.py --internal-id 51793 --project-limit 10
+
+# 强制重跑（无视 evelyn_project_sync 的 completed 记录）
+python scripts/sync_evelyn_projects.py --internal-id 51793 --force
+
+# 一次性修复正文（年份推断 / markdown 格式变更后）
+python scripts/sync_evelyn_projects.py --internal-id 51793 --force --rebuild-body
+```
+
+### 自动触发（可选）
+设置 `EVELYN_AUTO_SYNC_ENABLED=true` 后，`main.py` 会在每次邮件同步 Notion 成功后检测，匹配到 Evelyn 周项目邮件即 `asyncio.create_task(runner.sync_from_email(...))` 后台触发。任何异常不会影响主同步流程。
+
+### 配置（`.env`）
+**默认全部关闭**：这是个性化外挂，其他协作者拉取代码后 CLI 和钩子都不会运行。
+
+本地启用双开关：
+```
+# 总开关（必须）：CLI / 钩子都依赖它
+EVELYN_SYNC_ENABLED=true
+
+# 项目进度库 ID（必须）
+PROJECT_PROGRESS_DATABASE_ID=6f528975839940ceaacaf545e47cf25d
+
+# 过滤 BU
+PROJECT_PROGRESS_FILTER_BU=TPS-ENBU
+
+# 可选：main.py 自动触发钩子（需同时打开上面的总开关）
+EVELYN_AUTO_SYNC_ENABLED=false
+
+# 可选：自定义识别规则
+# EVELYN_SENDER=evelyn.wei@tp-link.com
+# EVELYN_SUBJECT_PATTERN=【项目进度】项目deadline汇报.*市场产品
+```
+
+`EVELYN_SYNC_ENABLED=false`（默认）时：
+- `python scripts/sync_evelyn_projects.py ...` 会直接报错退出（避免误跑）
+- `new_watcher` 不会初始化 detector（钩子不生效）
+
+### 监控
+```bash
+sqlite3 data/sync_store.db "
+  SELECT email_internal_id, week_tag, status,
+         projects_total, projects_created, projects_updated, projects_failed
+  FROM evelyn_project_sync ORDER BY completed_at DESC LIMIT 5"
+```
+
 ## 关于 calendar_main.py
 
 `calendar_main.py` 是独立的日历同步服务，直接从 Calendar.app 读取事件。

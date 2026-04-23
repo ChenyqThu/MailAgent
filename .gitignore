@@ -42,3 +42,8 @@ logs/
 
 # Project specific
 email-notion-sync/
+
+# Evelyn 同步临时产物（build.py 生成）
+data/_probe_tmp/
+tests/evelyn_project/fixtures/sample_enbu.xlsx
+data/notion_ds_cache.json
