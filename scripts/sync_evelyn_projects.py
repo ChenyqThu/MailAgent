@@ -55,10 +55,27 @@ async def _run(args: argparse.Namespace) -> int:
     else:
         latest = runner.find_latest_pending()
         if latest is None:
-            logger.info("No unprocessed Evelyn project email in SyncStore")
-            return 0
-        targets = [latest]
-        logger.info(f"Auto-picked latest: internal_id={latest}")
+            # backfill 模式下用最近一封已处理的（有完整 xlsx）
+            if args.backfill_project_start:
+                last = runner.find_all_history(limit=1)
+                if last:
+                    targets = [last[-1]]
+                    logger.info(f"backfill picks latest historical: internal_id={targets[0]}")
+            if not targets:
+                logger.info("No unprocessed Evelyn project email in SyncStore")
+                return 0
+        else:
+            targets = [latest]
+            logger.info(f"Auto-picked latest: internal_id={latest}")
+
+    # Backfill 模式：只回填"项目开始时间"，不走完整 sync
+    if args.backfill_project_start:
+        for iid in targets:
+            stats = await runner.backfill_project_start(
+                internal_id=iid, dry_run=args.dry_run
+            )
+            logger.info(f"Backfill result: {stats}")
+        return 0
 
     summaries: list[SyncSummary] = []
     for iid in targets:
@@ -129,6 +146,15 @@ def main() -> int:
         action="store_true",
         help="update 路径下把正文完整重写为全量历史 markdown（修年份推断等，"
              "会覆盖用户对正文的手改；property 手改不受影响）",
+    )
+    p.add_argument(
+        "--backfill-project-start",
+        action="store_true",
+        help=(
+            "一次性回填 项目开始时间 字段到所有已入库项目页。"
+            "从指定/最新 xlsx 重新算 earliest_progress_date，"
+            "只 update 这一个 property，不 touch 正文/其他字段。"
+        ),
     )
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()

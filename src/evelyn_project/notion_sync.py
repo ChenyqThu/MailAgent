@@ -61,6 +61,7 @@ PROP_RISK = "风险项"
 PROP_EVELYN_EMAIL_URL = "Evelyn 原邮件"
 PROP_STATUS = "Status"
 PROP_PARENT_TASK = "母任务"  # Notion self-relation, dual_property → 子任务
+PROP_PROJECT_START = "项目开始时间"  # date，取 progress_blocks 最老块日期
 
 # Status 选项（Notion status 类型，三个分组 To-do/In progress/Complete）
 STATUS_IN_PROGRESS = "In progress"
@@ -276,6 +277,45 @@ class ProjectProgressNotionClient:
     async def mark_status(self, page_id: str, status_name: str) -> None:
         await self.update_page_properties(
             page_id, {PROP_STATUS: {"status": {"name": status_name}}}
+        )
+
+    async def list_all_by_external_id(self, *, bu: str) -> Dict[str, str]:
+        """扫全部 BU=bu 的活跃页，返回 external_id → page_id 字典。
+
+        用于批量回填场景（如 backfill 项目开始时间）。不过滤 Status。
+        """
+        ds_id = await self.get_data_source_id()
+        out: Dict[str, str] = {}
+        cursor: Optional[str] = None
+        while True:
+            body: Dict[str, Any] = {
+                "filter": {"property": PROP_BU, "select": {"equals": bu}},
+                "page_size": 100,
+            }
+            if cursor:
+                body["start_cursor"] = cursor
+            data = await self._request(
+                "POST",
+                f"{API_BASE}/data_sources/{ds_id}/query",
+                json_body=body,
+            )
+            for r in data.get("results", []):
+                props = r.get("properties", {})
+                ext_id_arr = props.get(PROP_EXTERNAL_ID, {}).get("rich_text") or []
+                ext_id = ext_id_arr[0].get("plain_text", "") if ext_id_arr else ""
+                if ext_id:
+                    out[ext_id] = r["id"]
+            if data.get("has_more"):
+                cursor = data.get("next_cursor")
+            else:
+                break
+        return out
+
+    async def set_project_start(self, page_id: str, start_date: "date") -> None:
+        """只更新"项目开始时间"一个字段，不 touch 其他 property。"""
+        await self.update_page_properties(
+            page_id,
+            {PROP_PROJECT_START: {"date": {"start": start_date.isoformat()}}},
         )
 
     # ---------- page CRUD ----------
@@ -500,6 +540,12 @@ def build_properties(
     if include_status:
         # 首次创建默认 In progress；update 路径不写此字段以保留用户手改值
         props[PROP_STATUS] = {"status": {"name": STATUS_IN_PROGRESS}}
+
+        # 项目开始时间：首次创建时写入 progress_blocks 最老块日期
+        # update 路径不覆盖，用 backfill 工具一次性回填已存在页
+        start_date = row.earliest_progress_date
+        if start_date is not None:
+            props[PROP_PROJECT_START] = {"date": {"start": start_date.isoformat()}}
 
     # 母任务 relation：子任务必填指向 parent；母/独立任务留空（不写此 key 保留既有值）
     if parent_page_id:

@@ -470,6 +470,79 @@ class EvelynProjectRunner:
 
         return created, updated, skipped, failed, marked_done, failed_samples, done_samples
 
+    async def backfill_project_start(
+        self, *, internal_id: int, dry_run: bool = False
+    ) -> Dict[str, int]:
+        """批量回填"项目开始时间"到所有已入库项目页。
+
+        - 从指定邮件的 xlsx 重新解析每行项目的 earliest_progress_date
+        - 查 Notion BU=filter_bu 的所有活跃页（external_id → page_id 映射）
+        - 对每个 xlsx 行：若 Notion 有对应页 → set "项目开始时间" = earliest_progress_date
+        - 不触碰其它 property / 正文 / Status
+        """
+        started = time.time()
+        logger.info(
+            f"[evelyn] backfill_project_start internal_id={internal_id} dry_run={dry_run}"
+        )
+        email_row = self._load_email_row(internal_id)
+        if email_row is None:
+            raise RuntimeError(f"email internal_id={internal_id} not in SyncStore")
+        mailbox = email_row.get("mailbox") or config.mail_inbox_name
+        xlsx_filename, xlsx_bytes = self._fetch_xlsx(internal_id, mailbox)
+        if xlsx_bytes is None:
+            raise RuntimeError("no .xlsx attachment found in email")
+        parsed: ParseResult = parse_xlsx(xlsx_bytes, xlsx_filename)
+        logger.info(
+            f"[evelyn] parsed {len(parsed.projects)} projects, "
+            f"enbu={parsed.filtered_rows} week={parsed.week_tag}"
+        )
+
+        stats = {"total": len(parsed.projects), "updated": 0, "skipped": 0, "missing": 0, "failed": 0}
+        sem = asyncio.Semaphore(self.UPSERT_CONCURRENCY)
+
+        async with ProjectProgressNotionClient(
+            database_id=self.project_database_id
+        ) as client:
+            logger.info(f"[evelyn] fetching Notion ext_id map...")
+            ext_to_page = await client.list_all_by_external_id(bu=parsed.filter_bu)
+            logger.info(f"[evelyn] found {len(ext_to_page)} pages in Notion")
+
+            async def update_one(row):
+                if row.earliest_progress_date is None:
+                    stats["skipped"] += 1
+                    return
+                page_id = ext_to_page.get(row.external_id)
+                if page_id is None:
+                    stats["missing"] += 1
+                    return
+                if dry_run:
+                    stats["updated"] += 1
+                    return
+                async with sem:
+                    try:
+                        await client.set_project_start(page_id, row.earliest_progress_date)
+                        stats["updated"] += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"[evelyn] set_project_start failed {row.external_id}: {e}"
+                        )
+                        stats["failed"] += 1
+
+            tasks = [update_one(r) for r in parsed.projects]
+            done_count = 0
+            for fut in asyncio.as_completed(tasks):
+                await fut
+                done_count += 1
+                if done_count % 50 == 0 or done_count == len(tasks):
+                    logger.info(
+                        f"[evelyn] backfill {done_count}/{len(tasks)}: "
+                        f"updated={stats['updated']} skipped_no_date={stats['skipped']} "
+                        f"missing_page={stats['missing']} failed={stats['failed']}"
+                    )
+
+        stats["duration_sec"] = round(time.time() - started, 1)
+        return stats
+
     async def _mark_missing_done(
         self, client: ProjectProgressNotionClient, parsed: ParseResult
     ) -> Tuple[int, List[str]]:

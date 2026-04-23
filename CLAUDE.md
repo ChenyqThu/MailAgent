@@ -712,6 +712,7 @@ xlsx 每行是一个 `(Project Name, Product Model)` 对。**每行独立一个 
 | `美国发货` | checkbox | Shipped to the United States（`Y`→True） |
 | `风险项` | rich_text | Project Risk |
 | `Status` | status | create 时写 `In progress`；update **不覆盖** 手改值；xlsx 消失的页自动标 `Done` |
+| `项目开始时间` | date | create 时写 `earliest_progress_date`（progress 最老块日期）；update **不覆盖** 手改；已入库页用 `--backfill-project-start` 一次性回填 |
 | `Evelyn 原邮件` | url | 邮件 Notion 页 URL |
 | `产品线` | multi_select | xlsx Product Line 直写（Notion 自动创建 option） |
 | `出现在会议` | relation | 留空，手动挂 |
@@ -758,6 +759,9 @@ python scripts/sync_evelyn_projects.py --internal-id 51793 --force
 
 # 一次性修复正文（年份推断 / markdown 格式变更后）
 python scripts/sync_evelyn_projects.py --internal-id 51793 --force --rebuild-body
+
+# 一次性回填"项目开始时间"到所有已入库项目页（只改这一个字段）
+python scripts/sync_evelyn_projects.py --internal-id 51793 --backfill-project-start
 ```
 
 ### 自动触发（可选）
