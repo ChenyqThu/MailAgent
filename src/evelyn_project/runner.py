@@ -95,6 +95,7 @@ class EvelynProjectRunner:
         self,
         sync_store_db_path: Optional[str] = None,
         project_database_id: Optional[str] = None,
+        filter_bu: Optional[str] = None,
         detector: Optional[EvelynProjectDetector] = None,
         arm=None,  # AppleScriptArm，延迟导入避免在 detector-only 上下文污染
     ):
@@ -106,6 +107,9 @@ class EvelynProjectRunner:
             raise RuntimeError(
                 "PROJECT_PROGRESS_DATABASE_ID not set; cannot run Evelyn sync"
             )
+        self.filter_bu = filter_bu or getattr(
+            config, "project_progress_filter_bu", "TPS-ENBU"
+        )
         self.detector = detector or EvelynProjectDetector(
             sender=getattr(config, "evelyn_sender", "evelyn.wei@tp-link.com"),
             subject_pattern=getattr(
@@ -228,7 +232,9 @@ class EvelynProjectRunner:
 
         # 解析
         try:
-            parsed: ParseResult = parse_xlsx(xlsx_bytes, xlsx_filename)
+            parsed: ParseResult = parse_xlsx(
+                xlsx_bytes, xlsx_filename, filter_bu=self.filter_bu
+            )
         except Exception as e:
             logger.exception(f"[evelyn] parse_xlsx failed: {e}")
             msg = f"parse_xlsx failed: {e}"

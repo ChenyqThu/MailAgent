@@ -768,26 +768,29 @@ python scripts/sync_evelyn_projects.py --internal-id 51793 --backfill-project-st
 设置 `EVELYN_AUTO_SYNC_ENABLED=true` 后，`main.py` 会在每次邮件同步 Notion 成功后检测，匹配到 Evelyn 周项目邮件即 `asyncio.create_task(runner.sync_from_email(...))` 后台触发。任何异常不会影响主同步流程。
 
 ### 配置（`.env`）
-**默认全部关闭**：这是个性化外挂，其他协作者拉取代码后 CLI 和钩子都不会运行。
+**默认全部关闭**：其他协作者拉取代码后 CLI 和钩子都不会运行。
 
-本地启用双开关：
+**所有过滤条件都可配置**——理论上其他 BU / 其他团队都能复用此模块：改发件人、标题、数据库 ID、BU 值即可。
+
 ```
 # 总开关（必须）：CLI / 钩子都依赖它
 EVELYN_SYNC_ENABLED=true
 
-# 项目进度库 ID（必须）
+# Notion 目标数据库 ID（必须）——每个人填自己的
 PROJECT_PROGRESS_DATABASE_ID=6f528975839940ceaacaf545e47cf25d
 
-# 过滤 BU
-PROJECT_PROGRESS_FILTER_BU=TPS-ENBU
+# 过滤保留的 BU 值（精确匹配 xlsx 的 BU 列）
+PROJECT_PROGRESS_FILTER_BU=TPS-ENBU   # HNBU 团队改成 TPS-HNBU 即可
 
 # 可选：main.py 自动触发钩子（需同时打开上面的总开关）
 EVELYN_AUTO_SYNC_ENABLED=false
 
-# 可选：自定义识别规则
-# EVELYN_SENDER=evelyn.wei@tp-link.com
-# EVELYN_SUBJECT_PATTERN=【项目进度】项目deadline汇报.*市场产品
+# 可选：自定义识别规则（若不用默认的 Evelyn 邮件）
+EVELYN_SENDER=evelyn.wei@tp-link.com
+EVELYN_SUBJECT_PATTERN=【项目进度】项目deadline汇报.*市场产品
 ```
+
+**多人共用 sync_store.db 的隔离**：`evelyn_project_sync` 表按 `email_internal_id` 主键；不同人的 xlsx 内容不同、Notion 数据库也不同，但 internal_id 是同一台机器 Mail.app 的同一编号，所以**同一台机器上只能有一个配置生效**。如果一台机器需要同时为多个 BU 同步，需要各自独立的 `SYNC_STORE_DB_PATH` + 独立的运行时（PM2 进程）。
 
 `EVELYN_SYNC_ENABLED=false`（默认）时：
 - `python scripts/sync_evelyn_projects.py ...` 会直接报错退出（避免误跑）
