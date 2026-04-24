@@ -9,7 +9,7 @@ macOS 邮件实时同步到 Notion，支持 AI 自动分类与处理。
 | **邮件同步** | Mail.app | 邮件内容、附件、线程关系同步到 Notion |
 | **会议邀请识别** | 邮件中的 .ics | 自动解析会议邀请创建日程 |
 | **双向 Flag 同步** | Mail.app ↔ Notion | 已读/旗标状态实时双向同步 |
-| **AI 分类处理** | Notion Automation | AI 自动审核 + 反向同步到 Mail.app |
+| **AI 分类处理** | Notion Automation 或本地 LLM | Notion Email Agent 或本地 Anthropic 兼容 LLM（见 [docs/LLM_AGENT_SETUP.md](./docs/LLM_AGENT_SETUP.md)） |
 | **飞书通知** | 飞书应用机器人 | 重要邮件推送 + 交互式回复按钮 |
 | **飞书告警** | 飞书 Webhook Bot | 服务异常实时告警（可配置级别/冷却） |
 | **监控看板** | 远程 Dashboard | 同步概览、服务状态、告警、Redis 队列 |
@@ -251,6 +251,7 @@ MailAgent/
 
 - [架构设计](./docs/new_architecture_design.md)
 - [初始同步指南](./docs/initial_sync.md)
+- [LLM Agent 启用清单](./docs/LLM_AGENT_SETUP.md)
 - [开发指南](./CLAUDE.md)
 
 ## License

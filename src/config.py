@@ -129,5 +129,64 @@ class Config(BaseSettings):
         description="过滤保留的 BU 值",
     )
 
+    # =========================================================================
+    # LLM Agent（本地 LLM 接管 Notion Custom Agent 的 AI 字段填充）
+    # 默认关闭。启用前请先到 Notion automation 暂停 Email Agent，避免双跨撞车。
+    # =========================================================================
+    llm_agent_enabled: bool = Field(
+        default=False, env="LLM_AGENT_ENABLED",
+        description="是否启用本地 LLM 处理邮件 AI 字段（取代 Notion Custom Agent）",
+    )
+    llm_api_base: str = Field(
+        default="https://crs.chenge.ink/api", env="LLM_API_BASE",
+        description="Anthropic Messages 兼容网关 base url（不含 /v1/messages）",
+    )
+    llm_api_key: str = Field(
+        default="", env="LLM_API_KEY",
+        description="Anthropic 网关 API Key（Bearer 或 x-api-key 都支持）",
+    )
+    llm_model: str = Field(
+        default="claude-sonnet-4-6", env="LLM_MODEL",
+        description="调用的模型名（需网关支持）",
+    )
+    llm_max_tokens: int = Field(
+        default=4096, env="LLM_MAX_TOKENS", description="单次生成 max_tokens",
+    )
+    llm_timeout_sec: int = Field(
+        default=60, env="LLM_TIMEOUT_SEC", description="LLM 请求超时（秒）",
+    )
+    llm_inbox_prompt_path: str = Field(
+        default="prompts/email_inbox.md", env="LLM_INBOX_PROMPT_PATH",
+        description="收件箱 prompt md 路径（相对工作目录或绝对路径）",
+    )
+    llm_sent_prompt_path: str = Field(
+        default="prompts/email_sent.md", env="LLM_SENT_PROMPT_PATH",
+        description="发件箱 prompt md 路径",
+    )
+    llm_context_page_id: str = Field(
+        default="", env="LLM_CONTEXT_PAGE_ID",
+        description="Email Agent Context Notion 页面 ID（留空则不拼 context）",
+    )
+    llm_context_cache_ttl_sec: int = Field(
+        default=1800, env="LLM_CONTEXT_CACHE_TTL_SEC",
+        description="context markdown 内存缓存 TTL（秒）",
+    )
+    llm_daily_digest_database_id: str = Field(
+        default="", env="LLM_DAILY_DIGEST_DATABASE_ID",
+        description="Daily Email Digests 库 ID（留空则跳过 relation 写入）",
+    )
+    llm_daily_digest_report_date_prop: str = Field(
+        default="Report Date", env="LLM_DAILY_DIGEST_REPORT_DATE_PROP",
+        description="Daily Digest 库里用于匹配归属日期的 date 字段名",
+    )
+    llm_max_retries: int = Field(
+        default=3, env="LLM_MAX_RETRIES",
+        description="LLM 调用失败重试次数（退避 60s/300s/900s）",
+    )
+    llm_body_max_chars: int = Field(
+        default=12000, env="LLM_BODY_MAX_CHARS",
+        description="邮件正文送入 LLM 的最大字符数（超过截断）",
+    )
+
 # 全局配置实例
 config = Config()

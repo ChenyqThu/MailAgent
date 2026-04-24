@@ -28,3 +28,6 @@ Pillow>=11.0.0  # Python 3.13 需要 11.0.0+
 pandas>=2.0.0
 openpyxl>=3.1.0
 python-calamine>=0.2.0  # Rust 引擎，xlsx 读取加速 4-18x
+
+# LLM Agent (本地 LLM 接管 Notion Email Agent 的 AI 字段填充，默认关闭)
+anthropic>=0.40.0

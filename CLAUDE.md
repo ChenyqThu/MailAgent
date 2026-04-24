@@ -653,6 +653,113 @@ python3 scripts/test_mail_reader.py
 - **优化文档**: `docs/applescript_id_optimization.md`
 - **Webhook Server**: `webhook-server/`（远程部署，一键更新：`./scripts/deploy-webhook.sh`）
 
+## LLM Agent（本地 LLM 接管 Notion Custom Agent）
+
+邮件同步到 Notion 后，由本地 LLM（Anthropic Messages 兼容网关）填 11 个 AI 分类/分析字段 + Daily Digests relation，取代原来 Notion Custom Agent（Email Agent）。**默认关闭**。
+
+### ⚠️ 启用前必做（否则会双跑撞车）
+
+本地 LLM + Notion Custom Agent 都盯同一张页面，必须让其中一边退出，**二选一**：
+
+- **方案 A（推荐）**：在 Notion Email Agent Instructions 页面最前面加一句硬约束「仅处理 `Processing Status = 未处理` 的邮件；其他状态一律跳过」。本地 LLM 处理完后状态是 `AI Reviewed` / `已完成`，Notion Agent 读到就自动跳过。
+- **方案 B**：直接禁用 automation（Notion Email Inbox → Automations → Email Agent → Disable）。
+
+没做这一步直接开本地 LLM，两边会同时写同一张页面 → `Processing Status` 被改两次 → webhook 重复触发 → 飞书卡片 + Mail.app 标旗重复跑两次。
+
+详细启用清单：参见 [docs/LLM_AGENT_SETUP.md](./docs/LLM_AGENT_SETUP.md)。
+
+### 启用步骤
+1. `.env` 里改开关：
+   ```
+   LLM_AGENT_ENABLED=true
+   LLM_API_KEY=cr_xxx              # https://crs.chenge.ink 签发的 key
+   LLM_CONTEXT_PAGE_ID=xxx         # Email Agent Context 页面 ID（可选但强烈建议）
+   LLM_DAILY_DIGEST_DATABASE_ID=xxx  # 可选，不填则跳过 Daily Digests relation
+   ```
+2. Notion 那边暂停 Email Agent（见上）。
+3. `pm2 restart mail-sync` 并确认日志 `[llm-agent] enabled (model=... base=...)`。
+
+### 模块结构
+```
+src/llm_agent/
+  schema.py          EMAIL_TOOL_SCHEMA（Anthropic tool JSON schema） + enums（匹配 Notion DB）
+  client.py          AsyncAnthropic 封装（含 User-Agent 绕 Cloudflare 1010）
+  prompt_loader.py   mtime-aware 热重载收/发件箱 prompt .md
+  context_loader.py  加载 Email Agent Context markdown（30min TTL）
+  md_to_rich_text.py Markdown → Notion rich_text JSON（bold/italic/strike/code/link + 换行）
+  digest_resolver.py 日期 → Daily Digest page_id（5min 缓存）
+  notion_writer.py   AILabels → pages.update 多字段写入
+  processor.py       核心入口：拼 system+user → LLM tool_use → AILabels
+  store.py           llm_processing SQLite 表（retry 队列 + cost/latency 记录）
+  runner.py          端到端封装（sync_store → arm fetch → parse → LLM → Notion write）
+scripts/run_llm_on_email.py   CLI（--selftest / --dry-run / --internal-id N / --no-overwrite）
+prompts/
+  email_inbox.md     收件箱判定规则（mailbox-specific）
+  email_sent.md     发件箱 follow-up 判定规则
+  README.md         定制说明
+```
+
+### 挂钩位置
+- 正向钩子：`src/mail/new_watcher.py:_sync_single_email_v3` 中 Evelyn hook 之后派发 `self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)` → `asyncio.create_task` fire-and-forget，不阻塞主同步。
+- 重试队列：`_poll_cycle` 每轮调 `_process_llm_retry_queue()`，处理 `llm_processing.status='failed'` 且 `next_retry_at <= now` 的邮件（指数退避 1min/5min/15min/1h/2h）。
+
+### 失败兜底
+- 单次失败：`retry_count++`，指数退避重试。
+- 达到 `LLM_MAX_RETRIES` 次（默认 3）：`status='gave_up'`，**不写任何 AI 字段**、**不动 Processing Status**（保持"未处理"）、飞书告警（warning 级别），由 Notion Custom Agent 自然接手（如果它还活着，否则字段空着手动补）。
+
+### Processing Status 路由（关键语义）
+- 收件箱 LLM 处理完 → `Processing Status='AI Reviewed'` → Notion webhook 触发 `handle_ai_reviewed` → Mail.app 标旗 + 飞书卡片 + Processing Status→'已同步'。
+- 发件箱 LLM 处理完 → `Processing Status='已完成'`（按原 Email Agent Instructions §发件箱生命周期字面：发件箱不经 AI Reviewed）→ Notion webhook 触发 `handle_completed` → 移除 Mail.app 旗标（发件箱本来就极少标旗，无害）。
+
+### CLI
+```bash
+# 网关健康检查（不烧 token 做真实 Notion 写入）
+python scripts/run_llm_on_email.py --selftest
+
+# 单封干跑（看 LLM 输出 + 待写 properties 但不写 Notion）
+python scripts/run_llm_on_email.py --internal-id 51793 --dry-run
+
+# 单封实跑（覆盖已有字段）
+python scripts/run_llm_on_email.py --internal-id 51793 --force
+
+# 范围重跑（保留用户已手改的非空字段）
+python scripts/run_llm_on_email.py --internal-ids 51000-51100 --force --no-overwrite
+```
+
+### 监控
+```bash
+# 处理状态分布
+sqlite3 data/sync_store.db "SELECT status, COUNT(*) FROM llm_processing GROUP BY status"
+
+# 看最近失败
+sqlite3 data/sync_store.db "
+  SELECT internal_id, status, retry_count, substr(last_error,1,60)
+    FROM llm_processing WHERE status IN ('failed','gave_up')
+  ORDER BY updated_at DESC LIMIT 10"
+
+# cost 审计（当前 gateway 暂不支持 prompt caching，所有 input 按标价）
+sqlite3 data/sync_store.db "
+  SELECT SUM(input_tokens) as in_tok, SUM(output_tokens) as out_tok,
+         AVG(latency_ms) as avg_ms, COUNT(*) as n
+    FROM llm_processing WHERE status='success'"
+```
+
+### 多人配置
+- 每人 fork/clone 后改自己的 `.env`：`LLM_API_KEY` / `LLM_CONTEXT_PAGE_ID` / `LLM_INBOX_PROMPT_PATH` / `LLM_SENT_PROMPT_PATH`。
+- 默认 `prompts/*.md` 跟仓库走；想用自己私人版本就复制成 `prompts/myuser_inbox.md` 等（不会提交），再改 `.env` 指过去。
+- Notion email database schema 全员一致；要改 schema（加/改 select option）→ 同步改 `src/llm_agent/schema.py` 并跑 `pytest tests/llm_agent/test_schema.py`。
+
+### 常见问题
+- **网关 HTTP 403 + Cloudflare `error code: 1010`**：缺 `User-Agent`。`src/llm_agent/client.py` 默认会加 `MailAgent-LLM/0.1`，绕过即可。
+- **HTTP 500 `No available Claude accounts support the requested model`**：网关上游 Claude 账户暂时 exhausted；通常稍等几分钟会恢复。
+- **`cache_creation_input_tokens` / `cache_read_input_tokens` 一直是 0**：当前 `crs.chenge.ink` 上游暂不支持 Anthropic prompt caching。协议兼容（不报错），只是 context token 不缓存，每次多花 ~1500 tokens。
+
+### 测试
+```bash
+pytest tests/llm_agent/ -v
+```
+覆盖：`md_to_rich_text` / `schema` enum 一致性 / `digest_resolver` mock 查询 / `processor` sanitizer + 时区 / `writer._build_props` 各种字段组合。全部 mock 不调网关不烧钱。
+
 ## Evelyn 周项目同步（外挂模块）
 
 独立于主同步的可选外挂模块，消费 Evelyn (`evelyn.wei@tp-link.com`) 每周一晚转发的

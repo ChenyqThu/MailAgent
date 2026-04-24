@@ -136,6 +136,23 @@ class NewWatcher:
                 logger.warning(f"Failed to enable Evelyn detector: {e}")
                 self._evelyn_detector = None
 
+        # LLM Agent 钩子（需 LLM_AGENT_ENABLED=true 且配置了 API key）
+        # ⚠️ 启用前先到 Notion automation 暂停 Email Agent，避免双跑撞车
+        self._llm_runner = None
+        if (
+            getattr(settings, "llm_agent_enabled", False)
+            and getattr(settings, "llm_api_key", "")
+        ):
+            try:
+                from src.llm_agent.runner import LLMRunner
+                self._llm_runner = LLMRunner()
+                logger.info(
+                    f"[llm-agent] enabled (model={settings.llm_model} base={settings.llm_api_base})"
+                )
+            except Exception as e:
+                logger.warning(f"[llm-agent] init failed, disabling: {e}")
+                self._llm_runner = None
+
         # 运行状态
         self._running = False
         self._healthy = True  # 服务健康状态
@@ -291,6 +308,9 @@ class NewWatcher:
         # 6. 处理重试队列（fetch_failed 和 failed 状态）
         await self._process_retry_queue()
 
+        # 6b. 处理 LLM 失败重试队列（若启用本地 LLM）
+        await self._process_llm_retry_queue()
+
         # 7. 检测 read/flagged 变化并同步到 Notion
         await self._detect_and_sync_flag_changes()
 
@@ -389,6 +409,9 @@ class NewWatcher:
 
                 # 8. Evelyn 周项目外挂钩子（非阻塞、异常不影响主流程）
                 self._maybe_trigger_evelyn_hook(email_obj, internal_id, page_id)
+
+                # 9. 本地 LLM Agent 钩子（非阻塞、异常不影响主流程）
+                self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)
             else:
                 self.sync_store.mark_failed_v3(internal_id, "Notion sync returned None")
 
@@ -434,6 +457,88 @@ class NewWatcher:
             asyncio.create_task(_bg())
         except Exception as e:
             logger.warning(f"[evelyn-hook] dispatch failed: {e}")
+
+    def _maybe_trigger_llm_hook(
+        self, email_obj: Email, internal_id: int, notion_page_id: str
+    ) -> None:
+        """若启用本地 LLM Agent，派发后台任务填充 Notion AI 字段。
+
+        任何失败只打 warning，不影响主同步流程。
+        失败 N 次后由 _process_llm_retry_queue 接手重试。
+        """
+        if self._llm_runner is None:
+            return
+        try:
+            subject_preview = (getattr(email_obj, "subject", "") or "")[:60]
+            logger.debug(
+                f"[llm-hook] dispatching internal_id={internal_id} subject={subject_preview!r}"
+            )
+
+            async def _bg():
+                try:
+                    result = await self._llm_runner.run_for_internal_id(
+                        internal_id,
+                        dry_run=False,
+                        force=False,
+                        overwrite=True,
+                    )
+                    if result.get("ok"):
+                        labels = result.get("labels") or {}
+                        logger.info(
+                            f"[llm-hook] ok internal_id={internal_id} "
+                            f"priority={labels.get('priority')} "
+                            f"action_type={labels.get('action_type')} "
+                            f"tokens={labels.get('tokens')}"
+                        )
+                    else:
+                        logger.warning(
+                            f"[llm-hook] failed internal_id={internal_id} "
+                            f"error={result.get('error')} retry={result.get('retry_count')}"
+                        )
+                except Exception as e:
+                    logger.warning(f"[llm-hook] background task failed: {e}")
+
+            asyncio.create_task(_bg())
+        except Exception as e:
+            logger.warning(f"[llm-hook] dispatch failed: {e}")
+
+    async def _process_llm_retry_queue(self) -> None:
+        """重试 LLM 失败的邮件（指数退避：1m/5m/15m/1h/2h）。
+
+        超过 LLM_MAX_RETRIES 的邮件状态转 gave_up：
+        - 不再重试
+        - 不写 AI 字段
+        - 不动 Processing Status（保持'未处理'）
+        - 让 Notion Custom Agent 自然接手（如果还活着）
+        """
+        if self._llm_runner is None:
+            return
+        try:
+            ready = self._llm_runner._store.get_ready_for_retry(limit=3)
+        except Exception as e:
+            logger.warning(f"[llm-retry] queue probe failed: {e}")
+            return
+        if not ready:
+            return
+        logger.info(f"[llm-retry] retrying {len(ready)} failed email(s)")
+        for row in ready:
+            internal_id = row.get("internal_id")
+            try:
+                result = await self._llm_runner.run_for_internal_id(
+                    internal_id,
+                    dry_run=False,
+                    force=True,          # bypass already-success short-circuit
+                    overwrite=True,
+                )
+                if result.get("ok"):
+                    logger.info(f"[llm-retry] recovered internal_id={internal_id}")
+                else:
+                    logger.warning(
+                        f"[llm-retry] still failing internal_id={internal_id} "
+                        f"retry={result.get('retry_count')} status={result.get('status')}"
+                    )
+            except Exception as e:
+                logger.warning(f"[llm-retry] internal_id={internal_id} exception: {e}")
 
     async def _build_email_object(self, full_email: Dict[str, Any], mailbox: str) -> Optional[Email]:
         """从 AppleScript 返回的数据构建 Email 对象
