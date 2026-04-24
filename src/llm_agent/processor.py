@@ -39,6 +39,30 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"[ \t]+")
 _NL_RE = re.compile(r"\n{3,}")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_VALID_TTL = {"5m", "1h"}
+
+
+def _build_cache_control() -> Dict[str, Any] | None:
+    """Return a cache_control dict per cfg, or None when caching is disabled.
+
+    - cfg.llm_cache_enabled=False         → None (no breakpoint emitted)
+    - cfg.llm_cache_ttl=""                → {type: ephemeral} (gateway picks TTL;
+                                            CRS defaults to 1h, native Anthropic
+                                            defaults to 5m)
+    - cfg.llm_cache_ttl in {"5m", "1h"}   → {type: ephemeral, ttl: <value>}
+    """
+    if not cfg.llm_cache_enabled:
+        return None
+    cc: Dict[str, Any] = {"type": "ephemeral"}
+    ttl = (cfg.llm_cache_ttl or "").strip().lower()
+    if ttl in _VALID_TTL:
+        cc["ttl"] = ttl
+    elif ttl:
+        logger.warning(
+            f"[llm] ignoring invalid LLM_CACHE_TTL={cfg.llm_cache_ttl!r}; "
+            f"expected '' / '5m' / '1h'"
+        )
+    return cc
 
 
 @dataclass
@@ -109,6 +133,14 @@ class LLMProcessor:
     # ---- system prompt -----------------------------------------------------
 
     async def _build_system(self, mailbox: str) -> List[Dict[str, Any]]:
+        """Build system blocks with at most one cache_control breakpoint.
+
+        Wire order (before user message) is: tools -> system -> messages.
+        A single cache_control at the end of the LAST stable system block
+        caches the entire prefix (tools + header + ctx + mailbox + final
+        constraints), which maximizes prefix coverage and stays well above
+        Sonnet's 2048-token min-cacheable threshold when ctx is populated.
+        """
         header = (
             "You are an email triage assistant. Call the `classify_email` tool "
             "EXACTLY ONCE. Never emit plain text. Never call any other tool."
@@ -124,7 +156,6 @@ class LLMProcessor:
                     "# Read silently; never echo back.\n\n"
                     + ctx_md
                 ),
-                "cache_control": {"type": "ephemeral"},
             })
 
         mailbox_prompt = self._prompts.get_for_mailbox(mailbox)
@@ -132,15 +163,16 @@ class LLMProcessor:
             blocks.append({
                 "type": "text",
                 "text": f"# Mailbox-specific rules ({mailbox})\n\n" + mailbox_prompt,
-                "cache_control": {"type": "ephemeral"},
             })
 
-        # Final hard constraints (small, uncached)
+        # Final hard constraints — stable per-mailbox. Only `Current mailbox`
+        # differs across requests and that naturally yields two independent
+        # cache keys (one per mailbox), which is what we want.
         if mailbox == "发件箱":
             legal = "、".join(ACTION_TYPE_SENT)
         else:
             legal = "、".join(ACTION_TYPE_INBOX)
-        blocks.append({
+        final_block: Dict[str, Any] = {
             "type": "text",
             "text": (
                 f"Current mailbox = {mailbox}.\n"
@@ -153,7 +185,11 @@ class LLMProcessor:
                 f"结尾统一加：\\n\\n----\\nBest,\\nLucien。\n"
                 f"`daily_digest_date` 用邮件 Date 转 UTC+8 的日期（YYYY-MM-DD）。"
             ),
-        })
+        }
+        cc = _build_cache_control()
+        if cc is not None:
+            final_block["cache_control"] = cc
+        blocks.append(final_block)
         return blocks
 
     # ---- user message ------------------------------------------------------

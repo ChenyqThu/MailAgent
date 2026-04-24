@@ -737,12 +737,56 @@ sqlite3 data/sync_store.db "
     FROM llm_processing WHERE status IN ('failed','gave_up')
   ORDER BY updated_at DESC LIMIT 10"
 
-# cost 审计（当前 gateway 暂不支持 prompt caching，所有 input 按标价）
+# cost 审计（cache hit 用 cache_read_input_tokens，按 0.1x input 定价）
 sqlite3 data/sync_store.db "
   SELECT SUM(input_tokens) as in_tok, SUM(output_tokens) as out_tok,
+         SUM(cache_creation_input_tokens) as cache_write,
+         SUM(cache_read_input_tokens) as cache_read,
          AVG(latency_ms) as avg_ms, COUNT(*) as n
     FROM llm_processing WHERE status='success'"
+
+# 最近 20 封的缓存命中情况
+sqlite3 data/sync_store.db "
+  SELECT internal_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens
+    FROM llm_processing WHERE status='success'
+    ORDER BY updated_at DESC LIMIT 20"
+
+# 近 7 天命中率（cache_read>0 的请求占比）
+sqlite3 data/sync_store.db "
+  SELECT
+    COUNT(*) AS total,
+    SUM(CASE WHEN cache_read_input_tokens > 0 THEN 1 ELSE 0 END) AS hits,
+    ROUND(100.0 * SUM(CASE WHEN cache_read_input_tokens > 0 THEN 1 ELSE 0 END)
+          / COUNT(*), 1) AS hit_pct
+  FROM llm_processing
+  WHERE status='success' AND updated_at > strftime('%s','now','-7 day')"
 ```
+
+### Prompt Caching（CRS 已落地，默认开启）
+
+- 位置：`src/llm_agent/processor.py:_build_system` 在 system 最后一个稳定 block 加 1 个 `cache_control`，前缀覆盖 tools + header + ctx + mailbox prompt + final constraints。单断点 + 最大前缀 = 稳过 Sonnet 4.6 的 2048 tokens 最低阈值。
+- 策略：永远带 `cache_control`，由服务端自动判 hit/miss/write。客户端无状态，不做时机判断（prefix 变了 → 自动 miss 重建；TTL 过期 → 自动 write；都不需要我们操心）。
+- TTL：默认 `LLM_CACHE_TTL=1h`（`src/config.py`）。`client.py` 无条件发 `anthropic-beta: extended-cache-ttl-2025-04-11` header，所以 1h TTL 在 CRS 和原生 Anthropic 两条路都生效。想强制 5m 就 `LLM_CACHE_TTL=5m`；留空则让网关决定（CRS 默认 1h、原生 Anthropic 默认 5m，会漂，不推荐）。
+- 不伪装 Claude Code：CRS 对非 CC 请求会把 system 迁移到 messages，但会保留 cache_control；只要每次调用 prefix 内容一致，迁移后的 hash 依然稳定、命中照常。伪装（`User-Agent: claude-cli/x.y.z` + `x-app: cli`）在 CRS 检测规则变化时容易碎，**不推荐**。
+- 关开关：`LLM_CACHE_ENABLED=false`（非 Anthropic 协议、或定位 cache 相关故障时）。
+- 命中验证：对同一 internal_id 跑两次 `python scripts/run_llm_on_email.py --internal-id X --force`，第 2 次的 `cache_read_input_tokens` 应 > 0、`cache_creation_input_tokens` 应 = 0（prefix 没变、TTL 没过）。
+- 典型收益（Sonnet 4.6，100 封/工作日集中到达）：input 约 4400 uncached + 2500 cached；5m cache 命中率 ~75%，月省 ~$13；1h cache ~95%，月省 ~$17。
+
+### LLM payload vs Notion 页面字段一致性
+
+本地 LLM 替代 Notion Custom Agent 后，两者拿到的邮件上下文语义上等价，字节级不一致——对邮件分类任务这个差异不重要。对照：
+
+| 字段 | `processor._build_user` payload（给 LLM） | Notion page properties（给 Notion Agent） |
+|---|---|---|
+| 主题 / 发件人 / To / CC / Date / 邮箱 / Thread / Read/Flagged/HasAttachments | ✅ 全部传 | ✅ 全部写 |
+| 正文 | `body_text`：plaintext，HTML 剥除，截到 `LLM_BODY_MAX_CHARS`（默认 12000 字符） | HTML → Notion blocks（保留格式、内联图） |
+| 附件 | `attachments: [filename, ...]` 只文件名 | 真实文件上传（docx→PDF、xlsx→CSV） |
+| 日期 | `date_iso` + `date_utc8_date`（LLM 方便做 digest 归类） | `Date`（完整时间） |
+| Message ID / Parent Item / internal_id | ❌ 不传（分类不需要，也避免 LLM 瞎填 relation） | ✅ 写 |
+
+判断依据：邮件分类看 subject / sender / body 语义 + thread / action 等 metadata，不看排版或附件内容；HTML 格式和附件内容对 Notion Custom Agent 的分类决策也没额外价值。所以 **`_build_user` 不需要跟 Notion properties 字节对齐**——判断质量取决于 prompt（`prompts/*.md`）和 context（Email Agent Context 页面），不取决于 payload 形状。
+
+如果未来想让 LLM 看附件内容（比如对合同邮件做深度分析），需要另开一条 pipeline：把 docx→PDF 后上传到 Anthropic Files API、在 `_build_user` 里加 `file_id`，这不在当前 scope 内。
 
 ### 多人配置
 - 每人 fork/clone 后改自己的 `.env`：`LLM_API_KEY` / `LLM_CONTEXT_PAGE_ID` / `LLM_INBOX_PROMPT_PATH` / `LLM_SENT_PROMPT_PATH`。
@@ -752,7 +796,11 @@ sqlite3 data/sync_store.db "
 ### 常见问题
 - **网关 HTTP 403 + Cloudflare `error code: 1010`**：缺 `User-Agent`。`src/llm_agent/client.py` 默认会加 `MailAgent-LLM/0.1`，绕过即可。
 - **HTTP 500 `No available Claude accounts support the requested model`**：网关上游 Claude 账户暂时 exhausted；通常稍等几分钟会恢复。
-- **`cache_creation_input_tokens` / `cache_read_input_tokens` 一直是 0**：当前 `crs.chenge.ink` 上游暂不支持 Anthropic prompt caching。协议兼容（不报错），只是 context token 不缓存，每次多花 ~1500 tokens。
+- **`cache_read_input_tokens` 一直是 0**：
+  - 第 1 次调用本来就该是 `cache_creation`，命中要看第 2 次起；
+  - 如果第 2 次还是 0：看 context 是否刚被刷新（30min TTL）、prompt .md 是否被改过（mtime 变了）、mailbox 是否和上次不同——这几项任意变都会让 prefix hash 变化、cache 自然 miss；
+  - 都没变还是 0：先看缓存段是否低于模型最低阈值（Sonnet 4.6 = 2048 tokens，Opus 4.7 = 4096）——低于阈值会被服务端静默跳过；
+  - 最后才怀疑网关或账户不支持。`LLM_CACHE_ENABLED=false` 可临时关掉断点定位问题。
 
 ### 测试
 ```bash

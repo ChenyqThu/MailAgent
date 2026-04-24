@@ -19,6 +19,12 @@ from src.config import config as cfg
 # Default urllib/httpx UA can trip Cloudflare rule 1010 on some relays.
 _UA = "MailAgent-LLM/0.1 (Mozilla/5.0 compatible)"
 
+# anthropic-beta header: opt into extended cache TTL ("1h" values on
+# cache_control blocks). Legal across CRS (passes through unchanged) and
+# native Anthropic (required for 1h TTL). Harmless when ttl<=5m. We send
+# it unconditionally so downstream code can set ttl:"1h" freely.
+_ANTHROPIC_BETA = "extended-cache-ttl-2025-04-11"
+
 
 @dataclass
 class LLMResult:
@@ -47,7 +53,10 @@ class AnthropicClient:
                 api_key=cfg.llm_api_key,
                 base_url=cfg.llm_api_base,
                 timeout=float(cfg.llm_timeout_sec),
-                default_headers={"User-Agent": _UA},
+                default_headers={
+                    "User-Agent": _UA,
+                    "anthropic-beta": _ANTHROPIC_BETA,
+                },
             )
         return self._client
 

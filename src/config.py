@@ -187,6 +187,23 @@ class Config(BaseSettings):
         default=12000, env="LLM_BODY_MAX_CHARS",
         description="邮件正文送入 LLM 的最大字符数（超过截断）",
     )
+    llm_cache_enabled: bool = Field(
+        default=True, env="LLM_CACHE_ENABLED",
+        description=(
+            "是否在 system prompt 末尾放 cache_control 断点。"
+            "仅 Anthropic 协议（及兼容网关，如 crs.chenge.ink）有效；"
+            "OpenAI 兼容网关应设 false，否则协议报错。"
+        ),
+    )
+    llm_cache_ttl: str = Field(
+        default="1h", env="LLM_CACHE_TTL",
+        description=(
+            "显式 cache TTL：'5m' / '1h'，或空串让网关决定。默认 '1h'：协议兼容性最好——"
+            "走 CRS 时会被透传保留；走原生 Anthropic 端点时配合 client.py 发的 "
+            "'anthropic-beta: extended-cache-ttl-2025-04-11' header 一起 1h 生效。"
+            "仅当 LLM_CACHE_ENABLED=true 时生效。"
+        ),
+    )
 
 # 全局配置实例
 config = Config()
