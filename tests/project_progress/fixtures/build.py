@@ -1,10 +1,10 @@
-"""从 Evelyn internal_id 51793 的邮件抽 20 行 ENBU 子集作为 xlsx test fixture。
+"""从 v1 (单 sheet) 真实邮件附件抽 20 行 ENBU 子集作为 xlsx test fixture.
 
-不应提交包含真实业务数据的 xlsx。本脚本在本地开发者机器上跑一次，
-生成 sample_enbu.xlsx 到 gitignore 之外的位置（或手动 gitignore）。
+不应提交包含真实业务数据的 xlsx (.gitignore 已屏蔽 sample_*.xlsx).
+本脚本在本地开发者机器上跑一次, 生成 sample_enbu.xlsx 到 fixtures/.
 
 Usage:
-    python tests/evelyn_project/fixtures/build.py
+    python tests/project_progress/fixtures/build.py
 """
 
 import hashlib
@@ -16,7 +16,9 @@ import pandas as pd
 ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
-SRC_XLSX = ROOT / "data" / "_probe_tmp" / "evelyn-51793.xlsx"
+# 默认源 xlsx 路径; 用户可设环境变量 V1_SRC_XLSX 覆盖
+import os
+SRC_XLSX = Path(os.environ.get("V1_SRC_XLSX", str(ROOT / "data" / "_probe_tmp" / "v1-source.xlsx")))
 OUT = Path(__file__).parent / "sample_enbu.xlsx"
 
 
@@ -24,13 +26,12 @@ def main() -> int:
     if not SRC_XLSX.exists():
         print(
             f"ERROR: source xlsx not found at {SRC_XLSX}\n"
-            "先手动运行本项目 CLI 拉取一次 Evelyn 邮件让文件生成，"
-            "或将你手上的 xlsx 放到该路径。"
+            "Set V1_SRC_XLSX env var to a v1-format xlsx (single 'Project  Ongoing' sheet) "
+            "or place one at the default path."
         )
         return 1
     df = pd.read_excel(SRC_XLSX, sheet_name="Project  Ongoing", engine="calamine")
     enbu = df[df["BU"] == "TPS-ENBU"].head(20).copy()
-    # 写出 fixture
     with pd.ExcelWriter(OUT, engine="openpyxl") as writer:
         enbu.to_excel(writer, sheet_name="Project  Ongoing", index=False)
     md5 = hashlib.md5(OUT.read_bytes()).hexdigest()

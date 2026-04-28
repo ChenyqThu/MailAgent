@@ -51,7 +51,7 @@ class ProgressBlock:
 def parse_progress(raw: Optional[str]) -> List[ProgressBlock]:
     """把 Progress 原文切分成有序的 [ProgressBlock]。
 
-    返回顺序即原文顺序（Evelyn 邮件里最新在最前）。
+    返回顺序即原文顺序（项目周报邮件里最新在最前）。
 
     非字符串 / 空 / "-" / "/" 返回 []。
     若原文中没有任何日期头，整段文本作为 body 返回（month=0, day=0）—— 调用方可忽略这种块。

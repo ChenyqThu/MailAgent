@@ -1,6 +1,6 @@
 """slug.py 单元测试"""
 
-from src.evelyn_project.slug import MAX_SLUG_LEN, slugify
+from src.project_progress.slug import MAX_SLUG_LEN, slugify
 
 
 def test_pure_ascii():

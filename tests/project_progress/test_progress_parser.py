@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from src.evelyn_project.progress_parser import (
+from src.project_progress.progress_parser import (
     ProgressBlock,
     format_block_markdown,
     format_all_history_markdown,

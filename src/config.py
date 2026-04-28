@@ -95,28 +95,27 @@ class Config(BaseSettings):
     keep_alive_enabled: bool = Field(default=False, env="KEEP_ALIVE_ENABLED", description="是否启用防锁屏保活")
     keep_alive_dim: bool = Field(default=True, env="KEEP_ALIVE_DIM", description="保活时是否调低屏幕亮度")
 
-    # Evelyn 周项目同步（外挂模块）
-    # 总开关：默认关闭，防止其他协作者拉取代码后意外执行（他们没有对应 Notion 权限）。
-    # 本地需手动在 .env 设 EVELYN_SYNC_ENABLED=true 才能启用 CLI 或钩子。
-    evelyn_sync_enabled: bool = Field(
+    # 项目周报同步（外挂模块）
+    # 总开关：默认关闭。本地需 .env 设 PROJECT_PROGRESS_SYNC_ENABLED=true 才会启用。
+    project_progress_sync_enabled: bool = Field(
         default=False,
-        env="EVELYN_SYNC_ENABLED",
-        description="Evelyn 周项目同步模块的总开关（CLI + 钩子）。默认关。",
+        env="PROJECT_PROGRESS_SYNC_ENABLED",
+        description="项目周报同步模块的总开关（CLI + 钩子）。默认关。",
     )
-    evelyn_auto_sync_enabled: bool = Field(
+    project_progress_auto_sync_enabled: bool = Field(
         default=False,
-        env="EVELYN_AUTO_SYNC_ENABLED",
-        description="new_watcher 检测到 Evelyn 周项目邮件后是否自动触发同步（需同时打开 EVELYN_SYNC_ENABLED）",
+        env="PROJECT_PROGRESS_AUTO_SYNC_ENABLED",
+        description="new_watcher 检测到项目周报邮件后是否自动触发同步",
     )
-    evelyn_sender: str = Field(
-        default="evelyn.wei@tp-link.com",
-        env="EVELYN_SENDER",
-        description="Evelyn 发件人 email（包含即匹配）",
+    project_progress_sender: str = Field(
+        default="",
+        env="PROJECT_PROGRESS_SENDER",
+        description="项目周报发件人 email（子串匹配，不区分大小写）。需在 .env 显式配置。",
     )
-    evelyn_subject_pattern: str = Field(
-        default=r"【项目进度】项目deadline汇报.*市场产品",
-        env="EVELYN_SUBJECT_PATTERN",
-        description="Evelyn 周项目邮件标题正则",
+    project_progress_subject_pattern: str = Field(
+        default="",
+        env="PROJECT_PROGRESS_SUBJECT_PATTERN",
+        description="项目周报邮件标题正则。需在 .env 显式配置。",
     )
     project_progress_database_id: str = Field(
         default="",

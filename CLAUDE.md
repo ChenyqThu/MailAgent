@@ -700,7 +700,7 @@ prompts/
 ```
 
 ### 挂钩位置
-- 正向钩子：`src/mail/new_watcher.py:_sync_single_email_v3` 中 Evelyn hook 之后派发 `self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)` → `asyncio.create_task` fire-and-forget，不阻塞主同步。
+- 正向钩子：`src/mail/new_watcher.py:_sync_single_email_v3` 中项目周报 hook 之后派发 `self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)` → `asyncio.create_task` fire-and-forget，不阻塞主同步。
 - 重试队列：`_poll_cycle` 每轮调 `_process_llm_retry_queue()`，处理 `llm_processing.status='failed'` 且 `next_retry_at <= now` 的邮件（指数退避 1min/5min/15min/1h/2h）。
 
 ### 失败兜底
@@ -808,28 +808,42 @@ pytest tests/llm_agent/ -v
 ```
 覆盖：`md_to_rich_text` / `schema` enum 一致性 / `digest_resolver` mock 查询 / `processor` sanitizer + 时区 / `writer._build_props` 各种字段组合。全部 mock 不调网关不烧钱。
 
-## Evelyn 周项目同步（外挂模块）
+## 项目周报同步（外挂模块）
 
-独立于主同步的可选外挂模块，消费 Evelyn (`evelyn.wei@tp-link.com`) 每周一晚转发的
-**《【项目进度】项目deadline汇报MMDD_市场产品》** 邮件，抽取 xlsx 附件过滤 `BU==TPS-ENBU`
-的项目，按 Project Name 聚合 upsert 到 Notion 项目进度库。
+独立于主同步的可选外挂模块，消费每周一定期发出的 **《【项目进度】研发项目deadline汇报_市场产品采购》** 邮件，抽取 xlsx 附件中三个 sheet 的项目，过滤 `BU==TPS-ENBU` upsert 到 Notion 项目进度库。
+
+**信源演进**：
+- v1（2026-04 之前）：消费某转发版，xlsx 仅 1 个 sheet（`Project  Ongoing`，15 列），项目"完成 / 终止"靠 diff 推断
+- v2（2026-04 起）：消费直接发件人版，xlsx 4 个 sheet（多 19/50 列 + 已出货 + 已暂停），状态靠 Sheet 2/3 权威信号
 
 ### 模块结构
 ```
-src/evelyn_project/
-  detector.py          发件人 + 标题正则匹配
-  xlsx_parser.py       Sheet="Project  Ongoing" (双空格) 解析 + ENBU 过滤 + 按 Project Name 聚合
+src/project_progress/
+  detector.py          发件人 + 标题正则匹配（default 留空，需在 .env 显式配置）
+  xlsx_parser.py       4 sheet 解析 + 双行表头检测 + ENBU 过滤 + 1:1 行级 ProjectRow + 母子关系（仅 Ongoing 内）
   slug.py              external_id 生成（英文 slug；含中文加短 sha1 后缀；碰撞后加后缀）
   progress_parser.py   解析 [MM/DD] / [M/D] / [MM/DD/YYYY] / （MM.DD） 等日期头
-  priority.py          Project Priority 原值直写（N/TBD/Y/Y-Pledge/R&D project）
-  sync_store.py        evelyn_project_sync 表（独立于 email_metadata）
-  notion_sync.py       ProjectProgressNotionClient（用 Notion Markdown API）
+  priority.py          Project Priority 原值直写（N/TBD/Y/Y-Pledge/R&D project，含中文'否'/'是'）
+  sync_store.py        project_progress_sync 表（旧 evelyn_project_sync 自动 ALTER RENAME）
+  notion_sync.py       Notion 客户端 + Status 三态路由 + 7 个新字段写入 + Markdown API
+  notion_schema.py     启动时 schema bootstrap（5min 缓存，自动建 7 个 property，Suspended status 仅 log）
   runner.py            端到端 runner（sync_from_email）
 
-scripts/sync_evelyn_projects.py   CLI
-tests/evelyn_project/             pytest
-docs/notion_markdown_api.md       Notion Markdown API 探测记录
+scripts/sync_project_progress.py    CLI
+tests/project_progress/             pytest
+docs/notion_markdown_api.md         Notion Markdown API 探测记录
 ```
+
+### xlsx 结构（v2 / 4-sheet 版）
+
+| Sheet | 用途 | 行数（典型）| 列数 | 表头 | ENBU 行（典型）|
+|---|---|---|---|---|---|
+| `Project  Ongoing`（双空格）| 在研项目 | ~2900 | 34 | 双行（行 1 英文 + 行 2 中文标签）| ~1015 |
+| `2026-Project Shipped` | 已出货 → Status=Done | ~1290 | 65 | 双行 | ~457 |
+| `Project Suspended` | 已暂停 → Status=Suspended | ~890 | 65 | 双行 | ~119 |
+| `Filling-in & Reading Guide` | 字段说明文档 | 52 | - | - | 解析时跳过 |
+
+**双行表头检测**（`_read_sheet_with_dual_header`）：扫描前 5 行找含 `BU` + `Project Name` 的英文 header；下一行如果是中文标签（含'事业部'/'课组'/'研发'等关键词）则跳过，数据从 header+2 起；否则数据紧随 header（兼容 v1 单行表头 fixture）。
 
 ### Notion Markdown API
 使用 `Notion-Version: 2025-09-03` + `ntn_` token 才可用（参见 `docs/notion_markdown_api.md`）：
@@ -856,9 +870,9 @@ xlsx 每行是一个 `(Project Name, Product Model)` 对。**每行独立一个 
 |---|---|---|
 | `项目名称` (title) | title | **Product Model**（每行自己的 SKU 名） |
 | `external_id` | rich_text | slug(`Project Name + "__" + Product Model`)；碰撞按 (name, model) hash 后缀 |
-| `母任务` | relation (dual) | 子任务指向母任务 page_id；母/独立不写 |
+| `母任务` | relation (dual) | 子任务指向母任务 page_id（**仅 Ongoing 内**）；Shipped/Suspended 全独立任务 |
 | `本周数据期` | rich_text | xlsx 文件名日期 YYYYMMDD → ISO 周 `YYYY-WXX` |
-| `优先级` | select | Project Priority **原值直写**；Notion 自动新建 option |
+| `优先级` | select | Project Priority **原值直写**；Notion 自动新建 option（含中文 '否' / '是'）|
 | `Product Models` | multi_select | 本行 Product Model 单值 |
 | `BU` | select | 固定 `TPS-ENBU` |
 | `研发分部` | select | R&D Division |
@@ -866,12 +880,36 @@ xlsx 每行是一个 `(Project Name, Product Model)` 对。**每行独立一个 
 | `参考 DDL` | date | Reference Date for the Business（Terminated / NO MPS 等非日期写入风险项） |
 | `美国发货` | checkbox | Shipped to the United States（`Y`→True） |
 | `风险项` | rich_text | Project Risk |
-| `Status` | status | create 时写 `In progress`；update **不覆盖** 手改值；xlsx 消失的页自动标 `Done` |
-| `项目开始时间` | date | create 时写 `earliest_progress_date`（progress 最老块日期）；update **不覆盖** 手改；已入库页用 `--backfill-project-start` 一次性回填 |
-| `Evelyn 原邮件` | url | 邮件 Notion 页 URL |
+| `Status` | status | **Sheet 路由**：Ongoing+create → `In progress`，Ongoing+update → 不覆盖；Shipped → 强制 `Done`；Suspended → 强制 `Suspended` |
+| `项目开始时间` | date | create 时写 xlsx 的 `Product Establishment Date`（更准），无则用 `earliest_progress_date`；update 不覆盖 |
+| `立项时间` | date | xlsx `Product Establishment Date`（v2 新增） |
+| `期望交期` | date | xlsx `Desired shipping Date`（v2 新增） |
+| `预计出货` | date | xlsx `Estimated Shipping Date`（v2 新增） |
+| `实际出货` | date | xlsx `Actual Shipped Date`（v2 新增，仅 Sheet 2 有值） |
+| `暂停时间` | date | xlsx `Suspension Date`（v2 新增，仅 Sheet 3 有值） |
+| `进度异常` | rich_text | xlsx `Reasons for the Delay`（v2 新增） |
+| `当前状态` | select | xlsx `Current Status`（v2 新增，仅 Sheet 2/3 有值，如 Delivery / Suspended / R&D in progress） |
+| `Evelyn 原邮件` | url | 邮件 Notion 页 URL（Notion 历史 property 名，不能改否则丢历史数据） |
 | `产品线` | multi_select | xlsx Product Line 直写（Notion 自动创建 option） |
 | `出现在会议` | relation | 留空，手动挂 |
 | `最后同步` | last_edited_time | 自动 |
+
+### Status 三态语义
+
+```
+Sheet Ongoing   → create: 写 In progress  | update: 不写（保留手改）
+Sheet Shipped   → 强制 Status=Done       （xlsx 是权威信号，覆盖手改）
+Sheet Suspended → 强制 Status=Suspended  （xlsx 是权威信号，覆盖手改）
+```
+
+**Mark-missing 兜底**：xlsx 三个 sheet 全部消失的项目（罕见，通常是项目改名）→ 仍标 Done。
+
+### Schema Bootstrap（启动时一次）
+
+`runner._upsert_all` 启动时调 `ProjectProgressSchemaBootstrapper.ensure_schema()`（5min 缓存）：
+- `GET /v1/databases/:id` 拉当前 schema
+- 缺失的 7 个 property（立项时间 / 期望交期 / 预计出货 / 实际出货 / 暂停时间 / 进度异常 / 当前状态）通过 `PATCH /v1/databases/:id` 自动建
+- Notion API **不允许**修改 status 类型 options，所以 `Suspended` option 必须用户**手动**在 Notion 后台加（"已入库"组下）；缺失则 schema bootstrap log warning，但不阻塞 Ongoing/Shipped 同步
 
 ### 正文（进度日志）写入
 - 采用 Notion **Markdown API**（需 `ntn_` token + `Notion-Version: 2025-09-03`），详见 `docs/notion_markdown_api.md`
@@ -886,50 +924,60 @@ xlsx 的 `Project Progress` 里日期头格式多样（`[MM/DD]` / `[M/D]` / `[M
 - 例：`(01/23/2026) → (3.1) → (11.17) → (11.10)` 被推断为 `2026-01-23 / 2025-03-01 / 2024-11-17 / 2024-11-10`
 
 ### 增量同步语义
-- `evelyn_project_sync` 表以 `email_internal_id` 为主键记录每封邮件的处理状态
+- `project_progress_sync` 表以 `email_internal_id` 为主键记录每封邮件的处理状态
 - 同 internal_id 已 `completed` → 跳过（`--force` 才重跑）
 - 同 xlsx_md5 不同 internal_id（转发链）→ 默认跳过
-- 行级 upsert：external_id 查 → 无则 create（Status=In progress，正文=全量历史），有则 update properties（**不写 Status / 母任务 / 子任务** 保留手改）+ prepend 本周 markdown
-- **"xlsx 消失 → 标 Done"**：非切片模式下（未加 `--project-limit`），upsert 完成后扫 Notion 里 BU=TPS-ENBU 且 Status ≠ Done 的所有页，对比本次 xlsx 的 external_id 集合，差集全部标 `Done`。项目完成从 xlsx 移除后自动进 Done 归档
+- 行级 upsert：external_id 查 → 无则 create，有则 update properties + prepend 本周 markdown
+- **Sheet 2/3 → 状态权威信号**：在 Shipped sheet 出现的项目自动标 `Status=Done`，在 Suspended sheet 出现的项目自动标 `Status=Suspended`，不再依赖"diff 推断"
+- **mark-missing 兜底**：仅当项目从 xlsx **三个 sheet 全部消失**才标 Done（罕见，通常是项目改名）
+
+### 数据库迁移（旧表 → 新表）
+
+启动 `ProjectProgressSyncStore.__init__` 时透明执行（idempotent）：
+1. 检测旧表 `evelyn_project_sync` → ALTER TABLE RENAME 到 `project_progress_sync`
+2. ADD COLUMN：`sheet_ongoing_rows / sheet_shipped_rows / sheet_suspended_rows / projects_marked_done / projects_marked_suspended`（IF NOT EXIST 容错）
 
 ### 命令
 ```bash
-# 干跑（不写 Notion）
-python scripts/sync_evelyn_projects.py --internal-id 51793 --dry-run
-
-# 自动扫最近一封未处理的
-python scripts/sync_evelyn_projects.py
+# 自动扫最近一封未处理的（默认全 3 sheet）
+python scripts/sync_project_progress.py
 
 # 指定一封
-python scripts/sync_evelyn_projects.py --internal-id 51793
+python scripts/sync_project_progress.py --internal-id 52258
+
+# **首次切换迁移 dry-run**（输出预估的 create / Done / Suspended 数量，不写 Notion）
+python scripts/sync_project_progress.py --internal-id 52258 --first-migration-dry-run
+
+# 仅解析 Ongoing sheet（兼容 v1 行为）
+python scripts/sync_project_progress.py --internal-id 51793 --sheets ongoing
 
 # 回填历史（按日期升序 N 封）
-python scripts/sync_evelyn_projects.py --all-history --limit 10
+python scripts/sync_project_progress.py --all-history --limit 10
 
-# 小批量验证（前 N 个项目；自动把缺失 parent 拉进切片保证 relation 完整）
-python scripts/sync_evelyn_projects.py --internal-id 51793 --project-limit 10
+# 干跑（不写 Notion）
+python scripts/sync_project_progress.py --internal-id 52258 --dry-run
 
-# 强制重跑（无视 evelyn_project_sync 的 completed 记录）
-python scripts/sync_evelyn_projects.py --internal-id 51793 --force
+# 强制重跑
+python scripts/sync_project_progress.py --internal-id 52258 --force
 
-# 一次性修复正文（年份推断 / markdown 格式变更后）
-python scripts/sync_evelyn_projects.py --internal-id 51793 --force --rebuild-body
+# 一次性修复正文
+python scripts/sync_project_progress.py --internal-id 52258 --force --rebuild-body
 
-# 一次性回填"项目开始时间"到所有已入库项目页（只改这一个字段）
-python scripts/sync_evelyn_projects.py --internal-id 51793 --backfill-project-start
+# 一次性回填"项目开始时间"到所有已入库项目页
+python scripts/sync_project_progress.py --internal-id 52258 --backfill-project-start
 ```
 
 ### 自动触发（可选）
-设置 `EVELYN_AUTO_SYNC_ENABLED=true` 后，`main.py` 会在每次邮件同步 Notion 成功后检测，匹配到 Evelyn 周项目邮件即 `asyncio.create_task(runner.sync_from_email(...))` 后台触发。任何异常不会影响主同步流程。
+设置 `PROJECT_PROGRESS_AUTO_SYNC_ENABLED=true` 后，`main.py` 会在每次邮件同步 Notion 成功后检测，匹配到项目周报邮件即 `asyncio.create_task(runner.sync_from_email(...))` 后台触发。任何异常不会影响主同步流程。
 
 ### 配置（`.env`）
 **默认全部关闭**：其他协作者拉取代码后 CLI 和钩子都不会运行。
 
-**所有过滤条件都可配置**——理论上其他 BU / 其他团队都能复用此模块：改发件人、标题、数据库 ID、BU 值即可。
+**所有过滤条件都可配置**——其他 BU / 其他团队复用本模块：改发件人、标题、数据库 ID、BU 值即可。
 
 ```
 # 总开关（必须）：CLI / 钩子都依赖它
-EVELYN_SYNC_ENABLED=true
+PROJECT_PROGRESS_SYNC_ENABLED=true
 
 # Notion 目标数据库 ID（必须）——每个人填自己的
 PROJECT_PROGRESS_DATABASE_ID=6f528975839940ceaacaf545e47cf25d
@@ -938,50 +986,48 @@ PROJECT_PROGRESS_DATABASE_ID=6f528975839940ceaacaf545e47cf25d
 PROJECT_PROGRESS_FILTER_BU=TPS-ENBU   # HNBU 团队改成 TPS-HNBU 即可
 
 # 可选：main.py 自动触发钩子（需同时打开上面的总开关）
-EVELYN_AUTO_SYNC_ENABLED=false
+PROJECT_PROGRESS_AUTO_SYNC_ENABLED=false
 
-# 可选：自定义识别规则（若不用默认的 Evelyn 邮件）
-EVELYN_SENDER=evelyn.wei@tp-link.com
-EVELYN_SUBJECT_PATTERN=【项目进度】项目deadline汇报.*市场产品
+# 必填：识别规则（代码 default 留空，必须在 .env 显式配置）
+PROJECT_PROGRESS_SENDER=<weekly-sender-email>
+PROJECT_PROGRESS_SUBJECT_PATTERN=<标题正则，含【项目进度】等关键词>
 ```
 
-**多人共用 sync_store.db 的隔离**：`evelyn_project_sync` 表按 `email_internal_id` 主键；不同人的 xlsx 内容不同、Notion 数据库也不同，但 internal_id 是同一台机器 Mail.app 的同一编号，所以**同一台机器上只能有一个配置生效**。如果一台机器需要同时为多个 BU 同步，需要各自独立的 `SYNC_STORE_DB_PATH` + 独立的运行时（PM2 进程）。
+`PROJECT_PROGRESS_SYNC_ENABLED=false`（默认）时：
+- CLI 直接报错退出（避免误跑）
+- `new_watcher` 不初始化 detector（钩子不生效）
 
-`EVELYN_SYNC_ENABLED=false`（默认）时：
-- `python scripts/sync_evelyn_projects.py ...` 会直接报错退出（避免误跑）
-- `new_watcher` 不会初始化 detector（钩子不生效）
+### 首次切换迁移操作清单（v1 → v2）
 
-### 启用自动触发（本地开发者操作清单）
-1. `.env` 填入（或解除注释）：
+1. **Notion 后台**：在项目进度库的 Status 属性 → "已入库" 组下，**手动**添加 `Suspended` 选项（API 不能加）
+2. **代码部署**：拉取最新代码（DB 表迁移会在首次启动 `ProjectProgressSyncStore` 时透明完成）
+3. **dry-run 审查**：
+   ```bash
+   python scripts/sync_project_progress.py --internal-id <最新 zwf 邮件 id> --first-migration-dry-run
    ```
-   EVELYN_SYNC_ENABLED=true
-   PROJECT_PROGRESS_DATABASE_ID=6f528975839940ceaacaf545e47cf25d
-   EVELYN_AUTO_SYNC_ENABLED=true
+   输出形如：
    ```
-2. `pm2 restart mail-sync`
-3. 启动日志出现 `Evelyn project auto-sync enabled (db=...)` → 钩子已注册
-4. 周一 Evelyn 邮件到达、主同步把邮件写入 Notion 成功后，
-   `_maybe_trigger_evelyn_hook` 会匹配发件人 + 标题正则，
-   以 `asyncio.create_task` 在后台并发派发 `EvelynProjectRunner.sync_from_email`，
-   不阻塞主轮询；任何异常只打 WARNING 不影响主同步
-
-### 首次全量回填（历史邮件或初次上线）
-```bash
-# 1. 基础同步（会创建项目页 + 写入"项目开始时间"）
-python scripts/sync_evelyn_projects.py --internal-id <最新那封> --force
-
-# 2. 如果已存在一批旧聚合页 → 手动 archive 或用 Notion 侧清理
-
-# 3. 如果数据库新加了字段（如"项目开始时间"），一次性回填到所有已入库页
-python scripts/sync_evelyn_projects.py --internal-id <任一封> --backfill-project-start
-```
+   ongoing=1015  shipped=457  suspended=119
+   Status changes (estimated): Done +457  Suspended +119
+   ```
+4. **正式执行**：移除 `--first-migration-dry-run` 重跑（预估 13~17 min，按 ~3 req/sec 限流）
+5. **校验**：
+   ```bash
+   sqlite3 data/sync_store.db "
+     SELECT sheet_ongoing_rows, sheet_shipped_rows, sheet_suspended_rows,
+            projects_created, projects_updated,
+            projects_marked_done, projects_marked_suspended
+     FROM project_progress_sync ORDER BY completed_at DESC LIMIT 1"
+   ```
 
 ### 监控
 ```bash
 sqlite3 data/sync_store.db "
   SELECT email_internal_id, week_tag, status,
-         projects_total, projects_created, projects_updated, projects_failed
-  FROM evelyn_project_sync ORDER BY completed_at DESC LIMIT 5"
+         sheet_ongoing_rows, sheet_shipped_rows, sheet_suspended_rows,
+         projects_total, projects_created, projects_updated,
+         projects_marked_done, projects_marked_suspended, projects_failed
+  FROM project_progress_sync ORDER BY completed_at DESC LIMIT 5"
 ```
 
 ## 关于 calendar_main.py

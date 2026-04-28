@@ -115,26 +115,26 @@ class NewWatcher:
         self.email_reader = EmailReader()
         self.meeting_sync = MeetingInviteSync()  # 会议邀请同步器
 
-        # Evelyn 周项目外挂钩子（需同时打开 EVELYN_SYNC_ENABLED 总开关 +
-        # EVELYN_AUTO_SYNC_ENABLED 子开关，且配置了项目进度库 ID）
-        self._evelyn_detector = None
+        # 项目周报外挂钩子（需同时打开 PROJECT_PROGRESS_SYNC_ENABLED 总开关 +
+        # PROJECT_PROGRESS_AUTO_SYNC_ENABLED 子开关，且配置了项目进度库 ID）
+        self._progress_detector = None
         if (
-            getattr(settings, "evelyn_sync_enabled", False)
-            and getattr(settings, "evelyn_auto_sync_enabled", False)
+            getattr(settings, "project_progress_sync_enabled", False)
+            and getattr(settings, "project_progress_auto_sync_enabled", False)
             and getattr(settings, "project_progress_database_id", "")
         ):
             try:
-                from src.evelyn_project.detector import EvelynProjectDetector
-                self._evelyn_detector = EvelynProjectDetector(
-                    sender=settings.evelyn_sender,
-                    subject_pattern=settings.evelyn_subject_pattern,
+                from src.project_progress.detector import ProjectProgressDetector
+                self._progress_detector = ProjectProgressDetector(
+                    sender=settings.project_progress_sender,
+                    subject_pattern=settings.project_progress_subject_pattern,
                 )
                 logger.info(
-                    f"Evelyn project auto-sync enabled (db={settings.project_progress_database_id})"
+                    f"Project Progress auto-sync enabled (db={settings.project_progress_database_id})"
                 )
             except Exception as e:
-                logger.warning(f"Failed to enable Evelyn detector: {e}")
-                self._evelyn_detector = None
+                logger.warning(f"Failed to enable project-progress detector: {e}")
+                self._progress_detector = None
 
         # LLM Agent 钩子（需 LLM_AGENT_ENABLED=true 且配置了 API key）
         # ⚠️ 启用前先到 Notion automation 暂停 Email Agent，避免双跑撞车
@@ -407,8 +407,8 @@ class NewWatcher:
                 self._stats["emails_synced"] += 1
                 logger.info(f"Email synced successfully: {internal_id} -> {page_id}")
 
-                # 8. Evelyn 周项目外挂钩子（非阻塞、异常不影响主流程）
-                self._maybe_trigger_evelyn_hook(email_obj, internal_id, page_id)
+                # 8. 项目周报外挂钩子（非阻塞、异常不影响主流程）
+                self._maybe_trigger_project_progress_hook(email_obj, internal_id, page_id)
 
                 # 9. 本地 LLM Agent 钩子（非阻塞、异常不影响主流程）
                 self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)
@@ -420,27 +420,27 @@ class NewWatcher:
             self.sync_store.mark_failed_v3(internal_id, str(e))
             self._stats["errors"] += 1
 
-    def _maybe_trigger_evelyn_hook(
+    def _maybe_trigger_project_progress_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str
     ) -> None:
-        """若该邮件匹配 Evelyn 周项目规则，派发后台任务跑外挂同步。
+        """若该邮件匹配项目周报规则，派发后台任务跑外挂同步。
 
         任何失败只打 warning，不影响主同步流程。
         """
-        if self._evelyn_detector is None:
+        if self._progress_detector is None:
             return
         try:
-            if not self._evelyn_detector.is_match(
+            if not self._progress_detector.is_match(
                 sender=email_obj.sender, subject=email_obj.subject
             ):
                 return
             logger.info(
-                f"[evelyn-hook] matched internal_id={internal_id} subject="
+                f"[pp-hook] matched internal_id={internal_id} subject="
                 f"{(email_obj.subject or '')[:60]!r}; dispatching background task"
             )
-            from src.evelyn_project.runner import EvelynProjectRunner
+            from src.project_progress.runner import ProjectProgressRunner
 
-            runner = EvelynProjectRunner()
+            runner = ProjectProgressRunner()
 
             async def _bg():
                 try:
@@ -450,13 +450,13 @@ class NewWatcher:
                         force=False,
                         dry_run=False,
                     )
-                    logger.info(f"[evelyn-hook] done: {summary.as_log_line()}")
+                    logger.info(f"[pp-hook] done: {summary.as_log_line()}")
                 except Exception as e:
-                    logger.warning(f"[evelyn-hook] background task failed: {e}")
+                    logger.warning(f"[pp-hook] background task failed: {e}")
 
             asyncio.create_task(_bg())
         except Exception as e:
-            logger.warning(f"[evelyn-hook] dispatch failed: {e}")
+            logger.warning(f"[pp-hook] dispatch failed: {e}")
 
     def _maybe_trigger_llm_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str

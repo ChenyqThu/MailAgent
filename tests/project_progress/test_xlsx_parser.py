@@ -1,4 +1,4 @@
-"""xlsx_parser.py 单元测试 - 用 Evelyn 真实附件的 20 行 ENBU 子集"""
+"""xlsx_parser.py 单元测试 - 用 v1 真实附件的 20 行 ENBU 子集"""
 
 from datetime import date
 from pathlib import Path
@@ -6,13 +6,13 @@ from typing import List
 
 import pytest
 
-from src.evelyn_project.xlsx_parser import ProjectRow, parse_xlsx
+from src.project_progress.xlsx_parser import ProjectRow, parse_xlsx
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_enbu.xlsx"
 
 
 skip_if_no_fixture = pytest.mark.skipif(
-    not FIXTURE.exists(), reason="fixture missing: run tests/evelyn_project/fixtures/build.py"
+    not FIXTURE.exists(), reason="fixture missing: run tests/project_progress/fixtures/build.py"
 )
 
 

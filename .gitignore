@@ -43,7 +43,7 @@ logs/
 # Project specific
 email-notion-sync/
 
-# Evelyn 同步临时产物（build.py 生成）
+# 项目周报同步临时产物（build*.py 生成 fixture, 含真实业务数据）
 data/_probe_tmp/
-tests/evelyn_project/fixtures/sample_enbu.xlsx
+tests/project_progress/fixtures/sample_*.xlsx
 data/notion_ds_cache.json

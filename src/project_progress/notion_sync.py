@@ -36,7 +36,7 @@ from .progress_parser import (
     format_block_markdown,
     iso_week_of,
 )
-from .xlsx_parser import ProjectRow, render_project_full_markdown
+from .xlsx_parser import ProjectRow, SheetKind, render_project_full_markdown
 
 
 API_BASE = "https://api.notion.com/v1"
@@ -58,15 +58,30 @@ PROP_CONTACT = "接口人"
 PROP_REF_DDL = "参考 DDL"
 PROP_SHIPPED_US = "美国发货"
 PROP_RISK = "风险项"
-PROP_EVELYN_EMAIL_URL = "Evelyn 原邮件"
+PROP_SOURCE_EMAIL_URL = "Evelyn 原邮件"  # Notion 历史 property 名, 不能改 (改名会丢历史项目页该字段值)
 PROP_STATUS = "Status"
 PROP_PARENT_TASK = "母任务"  # Notion self-relation, dual_property → 子任务
 PROP_PROJECT_START = "项目开始时间"  # date，取 progress_blocks 最老块日期
+
+# zwf 邮件迁移新增字段（Step 3 schema bootstrap 自动建; 缺失时 _safe_set 静默跳过）
+PROP_ESTABLISHMENT_DATE = "立项时间"           # date  ← Product Establishment Date
+PROP_DESIRED_SHIP_DATE = "期望交期"             # date  ← Desired shipping Date
+PROP_ESTIMATED_SHIP_DATE = "预计出货"           # date  ← Estimated Shipping Date
+PROP_ACTUAL_SHIP_DATE = "实际出货"              # date  ← Actual Shipped Date (Sheet 2 only)
+PROP_SUSPENSION_DATE = "暂停时间"               # date  ← Suspension Date (Sheet 3 only)
+PROP_REASONS_FOR_DELAY = "进度异常"             # rich_text ← Reasons for the Delay
+PROP_CURRENT_STATUS = "当前状态"                # select ← Current Status (Sheet 2/3 only)
+
+# Notion DB schema 中存在的 property 名集合的缓存 (由 ProjectProgressNotionClient
+# 启动时通过 schema bootstrap 填充). 缺失字段会被 _safe_set 静默跳过, 防止
+# validation_error.
+KNOWN_DB_PROPS: set = set()
 
 # Status 选项（Notion status 类型，三个分组 To-do/In progress/Complete）
 STATUS_IN_PROGRESS = "In progress"
 STATUS_DONE = "Done"
 STATUS_NOT_STARTED = "Not started"
+STATUS_SUSPENDED = "Suspended"  # zwf Sheet 3 → 用户在 Notion 后台手动加该 status option
 
 
 class NotionMarkdownError(RuntimeError):
@@ -466,21 +481,38 @@ def _find_prepend_anchor(markdown_body: str) -> Optional[str]:
 
 # ---------- property builder ----------
 
+def _safe_set(props: Dict[str, Any], prop_name: str, value: Any) -> None:
+    """仅当 prop_name 在 KNOWN_DB_PROPS 中存在或 KNOWN_DB_PROPS 为空 (尚未 bootstrap) 时写入.
+
+    schema bootstrap 启动后会填充 KNOWN_DB_PROPS, 缺失字段会被静默跳过, 防止
+    validation_error. 在 bootstrap 完成前 (KNOWN_DB_PROPS 为空) 一律写入,
+    走旧的 fail-on-validation-error 路径.
+    """
+    if KNOWN_DB_PROPS and prop_name not in KNOWN_DB_PROPS:
+        return
+    props[prop_name] = value
+
+
 def build_properties(
     row: ProjectRow,
     *,
     week_tag: str,
-    evelyn_email_url: Optional[str] = None,
-    include_status: bool = False,
+    source_email_url: Optional[str] = None,
+    is_create: bool = False,
+    force_status: Optional[str] = None,
     parent_page_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """xlsx 每行 ProjectRow → Notion properties dict.
 
     Args:
-        include_status: 是否写入 Status 字段（仅 create 时 True；update 保持手改值）。
-        parent_page_id: 子任务专用。非空时写 "母任务" relation 指向该 page。
+        is_create: 首次创建? 影响 PROJECT_START 是否写入 (避免 update 覆盖手改值).
+        force_status: 强制写入的 Status 名 (None 表示不写, 保留手改).
+            - ONGOING + create → STATUS_IN_PROGRESS
+            - ONGOING + update → None
+            - SHIPPED → STATUS_DONE (强制覆盖, xlsx 权威)
+            - SUSPENDED → STATUS_SUSPENDED (强制覆盖, 用户需先在 Notion 加该 option)
+        parent_page_id: 子任务专用. 非空时写 "母任务" relation.
     """
-    # Title 用 product_model；兜底用 project_name
     title_text = row.product_model or row.project_name
     props: Dict[str, Any] = {
         PROP_TITLE: {
@@ -495,14 +527,12 @@ def build_properties(
     if row.priority_raw:
         props[PROP_PRIORITY] = {"select": {"name": row.priority_raw[:100]}}
 
-    # Product Models multi_select：本行的 product_model 单值
     if row.product_model:
         name = row.product_model[:100].strip()
         if name:
             props[PROP_PRODUCT_MODELS] = {"multi_select": [{"name": name}]}
 
-    # 产品线：xlsx Product Line 原值直写 Notion multi_select。Notion 会自动创建新 option。
-    # multi_select option name 不允许含逗号；遇到就替换为斜杠。
+    # 产品线: 多 select. Notion 自动创建新 option. option name 不允许含逗号 → 替换为 /.
     if row.product_lines:
         pl_seen = set()
         pl_options = []
@@ -534,24 +564,66 @@ def build_properties(
         joined = "\n".join(risk_lines)[:2000]
         props[PROP_RISK] = _rich_text(joined)
 
-    if evelyn_email_url:
-        props[PROP_EVELYN_EMAIL_URL] = {"url": evelyn_email_url[:2000]}
+    if source_email_url:
+        props[PROP_SOURCE_EMAIL_URL] = {"url": source_email_url[:2000]}
 
-    if include_status:
-        # 首次创建默认 In progress；update 路径不写此字段以保留用户手改值
-        props[PROP_STATUS] = {"status": {"name": STATUS_IN_PROGRESS}}
+    # ---- zwf 新增字段 (schema 不存在时由 _safe_set 静默跳过) ----
+    if row.establishment_date is not None:
+        _safe_set(props, PROP_ESTABLISHMENT_DATE,
+                  {"date": {"start": row.establishment_date.isoformat()}})
+    if row.desired_ship_date is not None:
+        _safe_set(props, PROP_DESIRED_SHIP_DATE,
+                  {"date": {"start": row.desired_ship_date.isoformat()}})
+    if row.estimated_ship_date is not None:
+        _safe_set(props, PROP_ESTIMATED_SHIP_DATE,
+                  {"date": {"start": row.estimated_ship_date.isoformat()}})
+    if row.actual_ship_date is not None:
+        _safe_set(props, PROP_ACTUAL_SHIP_DATE,
+                  {"date": {"start": row.actual_ship_date.isoformat()}})
+    if row.suspension_date is not None:
+        _safe_set(props, PROP_SUSPENSION_DATE,
+                  {"date": {"start": row.suspension_date.isoformat()}})
+    if row.reasons_for_delay:
+        _safe_set(props, PROP_REASONS_FOR_DELAY, _rich_text(row.reasons_for_delay))
+    if row.current_status:
+        _safe_set(props, PROP_CURRENT_STATUS,
+                  {"select": {"name": row.current_status[:100]}})
 
-        # 项目开始时间：首次创建时写入 progress_blocks 最老块日期
-        # update 路径不覆盖，用 backfill 工具一次性回填已存在页
+    # ---- Status 写入 ----
+    if force_status is not None:
+        props[PROP_STATUS] = {"status": {"name": force_status}}
+
+    # 项目开始时间: 首次创建时写; update 路径不覆盖 (走 backfill 单独回填)
+    if is_create:
         start_date = row.earliest_progress_date
+        # 优先用 xlsx 立项时间 (更准, zwf 才有); 否则用 progress 推断
+        if row.establishment_date is not None:
+            start_date = row.establishment_date
         if start_date is not None:
             props[PROP_PROJECT_START] = {"date": {"start": start_date.isoformat()}}
 
-    # 母任务 relation：子任务必填指向 parent；母/独立任务留空（不写此 key 保留既有值）
+    # 母任务 relation: 子任务必填指向 parent; 母/独立任务留空 (不写此 key 保留既有值)
     if parent_page_id:
         props[PROP_PARENT_TASK] = {"relation": [{"id": parent_page_id}]}
 
     return props
+
+
+def status_for_row(row: ProjectRow, is_create: bool) -> Optional[str]:
+    """根据 row.current_sheet + 是否首次 create 决定 Status 写入策略.
+
+    - ONGOING + create → STATUS_IN_PROGRESS (首次默认)
+    - ONGOING + update → None (保留用户手改)
+    - SHIPPED → STATUS_DONE (强制覆盖, xlsx 是权威信号)
+    - SUSPENDED → STATUS_SUSPENDED (强制覆盖)
+    """
+    if row.current_sheet == SheetKind.ONGOING:
+        return STATUS_IN_PROGRESS if is_create else None
+    if row.current_sheet == SheetKind.SHIPPED:
+        return STATUS_DONE
+    if row.current_sheet == SheetKind.SUSPENDED:
+        return STATUS_SUSPENDED
+    return None
 
 
 def _rich_text(content: str) -> Dict[str, Any]:
@@ -592,7 +664,7 @@ async def upsert_project(
     row: ProjectRow,
     *,
     week_tag: str,
-    evelyn_email_url: Optional[str] = None,
+    source_email_url: Optional[str] = None,
     dry_run: bool = False,
     rebuild_body: bool = False,
     parent_page_id: Optional[str] = None,
@@ -609,11 +681,14 @@ async def upsert_project(
             existing = await client.query_by_external_id(row.external_id)
             is_create = existing is None
 
+            force_status = status_for_row(row, is_create=is_create)
+
             properties = build_properties(
                 row,
                 week_tag=week_tag,
-                evelyn_email_url=evelyn_email_url,
-                include_status=is_create,
+                source_email_url=source_email_url,
+                is_create=is_create,
+                force_status=force_status,
                 parent_page_id=parent_page_id,
             )
             return await _do_upsert(
@@ -657,7 +732,21 @@ async def _do_upsert(
             return UpsertOutcome(
                 external_id=row.external_id, page_id=page_id, action="updated"
             )
-        await client.update_page_properties(page_id, properties)
+        try:
+            await client.update_page_properties(page_id, properties)
+        except NotionMarkdownError as e:
+            # Notion dual_property 限制: 若该 page 已是另一 page 的母 (子任务非空),
+            # 不能再 PATCH 它的 "母任务" relation. 跨周角色翻转 (上周母, 本周子) 会触发.
+            # 降级策略: 去掉 PROP_PARENT_TASK 重试, 保留旧角色, log warning.
+            if PROP_PARENT_TASK in properties and "subitem" in str(e).lower():
+                logger.warning(
+                    f"[upsert] {row.external_id} dual_property conflict "
+                    f"(page already child elsewhere); dropping 母任务 update and retry: {e}"
+                )
+                fallback_props = {k: v for k, v in properties.items() if k != PROP_PARENT_TASK}
+                await client.update_page_properties(page_id, fallback_props)
+            else:
+                raise
 
         if rebuild_body:
             full_md = render_project_full_markdown(row, week_tag_override=week_tag)

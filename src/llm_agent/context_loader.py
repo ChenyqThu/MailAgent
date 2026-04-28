@@ -1,7 +1,7 @@
 """ContextLoader: fetch Email Agent Context markdown from Notion with TTL cache.
 
 Uses the ntn_ token + Notion-Version: 2025-09-03 + GET /v1/pages/{id}/markdown
-path (see docs/notion_markdown_api.md). Same mechanism as evelyn_project.
+path (see docs/notion_markdown_api.md). Same mechanism as project_progress.
 """
 
 from __future__ import annotations
