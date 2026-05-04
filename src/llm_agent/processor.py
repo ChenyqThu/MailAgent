@@ -251,6 +251,14 @@ class LLMProcessor:
             if v:
                 stripped = _HTML_TAG_RE.sub(" ", v)
                 return _NL_RE.sub("\n\n", _WS_RE.sub(" ", stripped)).strip()
+        # MailAgent's Email model (src/models.py): .content + .content_type
+        content = getattr(email, "content", None)
+        if content:
+            ctype = (getattr(email, "content_type", "") or "").lower()
+            if "html" in ctype:
+                stripped = _HTML_TAG_RE.sub(" ", content)
+                return _NL_RE.sub("\n\n", _WS_RE.sub(" ", stripped)).strip()
+            return _NL_RE.sub("\n\n", _WS_RE.sub(" ", content)).strip()
         return (getattr(email, "body", "") or "").strip()
 
     # ---- parse / sanitize --------------------------------------------------
