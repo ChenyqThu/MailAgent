@@ -675,9 +675,31 @@ python3 scripts/test_mail_reader.py
    LLM_API_KEY=cr_xxx              # https://crs.chenge.ink 签发的 key
    LLM_CONTEXT_PAGE_ID=xxx         # Email Agent Context 页面 ID（可选但强烈建议）
    LLM_DAILY_DIGEST_DATABASE_ID=xxx  # 可选，不填则跳过 Daily Digests relation
+   # LLM_MODEL=claude-sonnet-4-6                       # 可选，主模型默认 Sonnet 4.6
+   # LLM_FALLBACK_MODELS=gpt-5.4,claude-opus-4-7       # 可选，主模型挂掉时按序兜底
    ```
 2. Notion 那边暂停 Email Agent（见上）。
 3. `pm2 restart mail-sync` 并确认日志 `[llm-agent] enabled (model=... base=...)`。
+
+### 模型 fallback 链（自动兜底，避免上游单点 outage）
+
+`AnthropicClient.classify` 按 `[LLM_MODEL] + LLM_FALLBACK_MODELS` 顺序调用，第一个成功即返回；任一抛 `LLMCallError`（含 HTTP 5xx / "No available accounts in group" / 协议错 / 超时）就 warning 切下一个。最后一个还失败才上抛由 store 走重试队列。
+
+默认链：`claude-sonnet-4-6 → gpt-5.4 → claude-opus-4-7`。
+
+| 模型 | 协议 | 端点 | 备注 |
+|---|---|---|---|
+| `claude-*` | Anthropic Messages | `/v1/messages` + native `tool_use` | 走 `anthropic.AsyncAnthropic`，cache_control 生效 |
+| `gpt-*` / `gemini-*` / `codex-*` | OpenAI Chat Completions | `/v1/chat/completions` 流式 + `tool_calls` | 走 `httpx` 直连，CRS 强制 `stream=true`；OpenAI 协议无 cache_control，命中数始终 0 |
+
+`client.py:_is_openai_proto` 按模型名前缀路由，前缀写死在常量 `_OPENAI_PROTO_PREFIXES`。CRS 上 `owned_by != anthropic` 的模型都走这条路；要新加路由前缀就改这个常量。
+
+注意：
+- 切到 OpenAI 协议时 cache 自动失效（不同协议 + 不同 model = 不同 prefix hash），那次调用算 cache miss；fallback 是兜底而非常态，命中率指标不会被它持续拖累。
+- Fallback warning 在 `pm2 logs mail-sync` 里以 `[llm] model=X failed, falling back to Y: ...` 出现，可作为上游异常告警信号。
+- 想完全禁用 fallback：`LLM_FALLBACK_MODELS=`（空串）。
+
+### 模块结构
 
 ### 模块结构
 ```

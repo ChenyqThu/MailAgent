@@ -146,7 +146,16 @@ class Config(BaseSettings):
     )
     llm_model: str = Field(
         default="claude-sonnet-4-6", env="LLM_MODEL",
-        description="调用的模型名（需网关支持）",
+        description="主模型名（需网关支持）。失败时按 LLM_FALLBACK_MODELS 顺序兜底。",
+    )
+    llm_fallback_models: str = Field(
+        default="gpt-5.4,claude-opus-4-7", env="LLM_FALLBACK_MODELS",
+        description=(
+            "主模型不可用时按顺序 fallback 的模型名（逗号分隔；留空禁用）。"
+            "Anthropic 协议（claude-*）走 /v1/messages + tool_use；"
+            "OpenAI 协议（gpt-*/gemini-*/codex-*）走 /v1/chat/completions 流式 + tool_calls，"
+            "由 client.py 按模型名前缀自动路由。fallback 触发条件：上一个模型抛 LLMCallError。"
+        ),
     )
     llm_max_tokens: int = Field(
         default=4096, env="LLM_MAX_TOKENS", description="单次生成 max_tokens",
