@@ -103,6 +103,103 @@ class CalendarNotionSync:
             logger.error(f"查询事件失败: {e}")
             return None
 
+    async def find_by_event_id_prefix(
+        self, prefix: str, *, future_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """根据 Event ID 前缀查找页面（用于系列级 cancel）。
+
+        Args:
+            prefix: Event ID 前缀，如 "{uid}@"
+            future_only: 仅返回 Time.start >= now 的页面
+
+        Returns:
+            匹配的 Notion page dict 列表
+        """
+        try:
+            ds_id = await self._get_data_source_id()
+            filt: Dict[str, Any] = {
+                "property": "Event ID",
+                "rich_text": {"starts_with": prefix},
+            }
+            if future_only:
+                from datetime import datetime, timezone
+
+                filt = {
+                    "and": [
+                        filt,
+                        {
+                            "property": "Time",
+                            "date": {
+                                "on_or_after": datetime.now(timezone.utc).isoformat()
+                            },
+                        },
+                    ]
+                }
+
+            results: List[Dict[str, Any]] = []
+            cursor: Optional[str] = None
+            while True:
+                kwargs: Dict[str, Any] = {"data_source_id": ds_id, "filter": filt}
+                if cursor:
+                    kwargs["start_cursor"] = cursor
+                response = await self.client.data_sources.query(**kwargs)
+                results.extend(response.get("results", []))
+                if not response.get("has_more"):
+                    break
+                cursor = response.get("next_cursor")
+            return results
+        except Exception as e:
+            logger.error(f"前缀查询失败 [{prefix[:60]}]: {e}")
+            return []
+
+    async def mark_cancelled(self, page_id: str) -> bool:
+        """把已存在的日程页标记为 cancelled（icon=❌，会议状态=cancelled）。
+
+        Args:
+            page_id: Notion 页面 ID
+
+        Returns:
+            是否成功
+        """
+        try:
+            await self.client.pages.update(
+                page_id=page_id,
+                properties={
+                    "会议状态": {"select": {"name": EventStatus.CANCELLED.value}}
+                },
+                icon={"type": "emoji", "emoji": "❌"},
+            )
+            return True
+        except Exception as e:
+            logger.error(f"标记取消失败 [{page_id}]: {e}")
+            return False
+
+    async def relabel_event_id(
+        self, page_id: str, new_event_id: str
+    ) -> bool:
+        """把已存在的页面的 Event ID 改写为 new_event_id（inline relabel 用）。
+
+        Args:
+            page_id: Notion 页面 ID
+            new_event_id: 新的 Event ID（如 "{uid}@{first_occurrence_utc}"）
+
+        Returns:
+            是否成功
+        """
+        try:
+            await self.client.pages.update(
+                page_id=page_id,
+                properties={
+                    "Event ID": {
+                        "rich_text": [{"text": {"content": new_event_id}}]
+                    }
+                },
+            )
+            return True
+        except Exception as e:
+            logger.error(f"重写 Event ID 失败 [{page_id}]: {e}")
+            return False
+
     async def _needs_update(self, existing: Dict[str, Any], event: CalendarEvent) -> bool:
         """
         检查事件是否需要更新
