@@ -87,6 +87,9 @@ class CalendarEvent:
     # 重复规则
     is_recurring: bool = False
     recurrence_rule: Optional[str] = None
+    recurrence_id: Optional[datetime] = None  # 该 occurrence 是哪一次（override 或展开实例）
+    master_event_id: Optional[str] = None     # 裸 UID（series_uid），便于系列级 cancel 查询
+    original_start: Optional[datetime] = None  # override 移动时间时记录原始位置
 
     # 元数据
     last_modified: Optional[datetime] = None
