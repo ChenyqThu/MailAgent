@@ -54,7 +54,6 @@ EXTRA_TO=""
 EXTRA_CC=""
 _REPLY_WINDOW_OPEN=false
 CLIPBOARD_HTML_FILE=""
-PASTE_BASELINE_LEN=-1
 
 # 失败时关闭残留的回复窗口
 _cleanup_on_error() {
@@ -204,79 +203,105 @@ reset_clipboard() {
   fi
 }
 
-# 直接读取 Mail.app 当前 reply 窗口的 outgoing message body 长度
-# 不依赖键盘焦点 / 系统剪贴板，绕过"焦点在别处时假成功"的问题
-get_outgoing_body_length() {
-  osascript 2>/dev/null <<'ASEOF' || echo "-1"
+# 强制 Mail.app 取得前台焦点；返回 0 表示 Mail 现在确实是前台进程
+# Mail.app 的 outgoing message.content 在 reply 编辑期间不暴露给 AppleScript，
+# 所以验证只能依赖键盘事件 + 剪贴板 — 必须先把 Mail 抢到前台才能保证 ⌘V/⌘A/⌘C 落到 reply 窗口
+ensure_mail_front() {
+  osascript 2>/dev/null <<'ASEOF'
 tell application "Mail"
+  activate
   try
-    set msg to first outgoing message
-    return length of (content of msg as string)
-  on error
-    return -1
+    set frontmost to true
   end try
 end tell
 ASEOF
-}
+  sleep 0.4
 
-# 直接读取 Mail.app 当前 reply 窗口的 outgoing message body
-get_outgoing_body() {
-  osascript 2>/dev/null <<'ASEOF' || echo "__NO_OUTGOING_MSG__"
-tell application "Mail"
-  try
-    set msg to first outgoing message
-    return content of msg as string
-  on error
-    return "__NO_OUTGOING_MSG__"
-  end try
+  local front_app
+  front_app=$(osascript 2>/dev/null <<'ASEOF'
+tell application "System Events"
+  return name of first process whose frontmost is true
 end tell
 ASEOF
+)
+  if [[ "$front_app" == "Mail" ]]; then
+    return 0
+  fi
+  echo "ensure_mail_front: front=$front_app" >&2
+  return 1
 }
 
-# 验证粘贴是否成功（直接通过 AppleScript 读 outgoing message，不依赖 System Events 焦点）
+# 清空 reply 窗口当前编辑区的内容（retry 前调用，避免重复粘贴累积）
+# 依赖 Mail 在前台 + 焦点在 body / 编辑字段
+clear_reply_body() {
+  ensure_mail_front || return 1
+  osascript 2>/dev/null <<'ASEOF'
+tell application "System Events"
+  tell process "Mail"
+    keystroke "a" using command down
+    delay 0.3
+    key code 51
+    delay 0.2
+  end tell
+end tell
+ASEOF
+  sleep 0.3
+}
+
+# 验证粘贴是否成功
+# 流程：确保 Mail 前台 → 设剪贴板哨兵 → ⌘A+⌘C 抓 reply 窗口当前内容 → pbpaste 校验
+# Mail 不在前台时直接失败，避免"焦点漂走 → cmd-c 在别处生效 → grep 假成功"
 verify_paste() {
-  # baseline 必须先被 do_reply 在 reply 窗口打开后设置
-  if [[ "$PASTE_BASELINE_LEN" -lt 0 ]]; then
-    echo "verify: baseline not set (reply window not opened)" >&2
+  if ! ensure_mail_front; then
+    echo "verify: Mail not frontmost, cannot probe reply window" >&2
     return 1
   fi
 
-  local current_body
-  current_body=$(get_outgoing_body)
-  if [[ "$current_body" == "__NO_OUTGOING_MSG__" ]]; then
-    echo "verify: no outgoing message (reply window closed or Mail not responsive)" >&2
+  printf '%s' "__PASTE_VERIFY_SENTINEL__" | pbcopy
+  sleep 0.2
+
+  osascript 2>/dev/null <<'ASEOF'
+tell application "System Events"
+  tell process "Mail"
+    keystroke "a" using command down
+    delay 0.4
+    keystroke "c" using command down
+    delay 0.4
+    key code 124
+  end tell
+end tell
+ASEOF
+  sleep 0.4
+
+  local content
+  content=$(pbpaste 2>/dev/null)
+
+  if [[ "$content" == "__PASTE_VERIFY_SENTINEL__" ]]; then
+    echo "verify: clipboard not updated (cmd-a/cmd-c not delivered to Mail)" >&2
     return 1
   fi
 
-  local current_len=${#current_body}
-
-  # body 长度必须比 baseline 增长（确认粘贴写入了 reply 窗口）
-  local delta=$((current_len - PASTE_BASELINE_LEN))
-  if [[ $delta -le 0 ]]; then
-    echo "verify: body length not increased (baseline=$PASTE_BASELINE_LEN, current=$current_len)" >&2
+  local content_len=${#content}
+  if [[ $content_len -lt 10 ]]; then
+    echo "verify: clipboard content too short ($content_len chars)" >&2
     return 1
   fi
 
-  # 非 rich text 模式：要求 body 包含 reply_text 第一行的特征文本
+  # 非 rich text 模式：reply 内容应包含 reply_text 第一行的特征文本
   if [[ "$REPLY_TEXT" != "(rich text)" ]]; then
     local expected
     expected=$(printf '%s' "$REPLY_TEXT" | sed '/^[[:space:]]*$/d' | head -1 | sed 's/[*#>`~_\[()]//g' | cut -c1-30 | xargs)
     if [[ -n "$expected" && ${#expected} -gt 3 ]]; then
-      if printf '%s' "$current_body" | grep -qF "$expected" 2>/dev/null; then
+      if printf '%s' "$content" | grep -qF "$expected" 2>/dev/null; then
         return 0
       fi
-      echo "verify: expected text not found in outgoing message body (expected: '$expected', delta=$delta)" >&2
+      echo "verify: expected text not found in reply body (expected: '$expected', len=$content_len)" >&2
       return 1
     fi
   fi
 
-  # Rich text 模式或没有可校验文本：要求 delta 至少 20 字节，避免极短输入误判
-  if [[ $delta -ge 20 ]]; then
-    return 0
-  fi
-
-  echo "verify: body length increase too small (delta=$delta)" >&2
-  return 1
+  # Rich text 模式或无可校验文本：clipboard 不为 sentinel + 长度 > 10 即视为粘贴有效
+  return 0
 }
 
 # System Events 粘贴内容 + 验证 + 截图 + 保存关闭
@@ -297,6 +322,8 @@ paste_and_save() {
     if [[ $attempt -gt 1 ]]; then
       echo "Paste retry attempt $attempt/$max_attempts" >&2
       wake_display
+      # 关键：retry 前清空 reply 窗口当前内容，避免重复粘贴累积
+      clear_reply_body
       reset_clipboard
     fi
 
@@ -378,16 +405,6 @@ do_reply() {
     if [[ "$RESULT" == "ok" ]]; then
       sleep 2
       _REPLY_WINDOW_OPEN=true
-      PASTE_BASELINE_LEN=$(get_outgoing_body_length)
-      if [[ "$PASTE_BASELINE_LEN" -lt 0 ]]; then
-        echo "baseline read failed (reply window not accessible via AppleScript)" >&2
-        osascript -e 'tell application "Mail" to try
-          close front window saving no
-        end try' 2>/dev/null
-        _REPLY_WINDOW_OPEN=false
-        echo "{\"success\":false,\"method\":\"${method_suffix}_internal_id\",\"error\":\"Cannot read reply window body before paste (Mail state error)\"}"
-        exit 1
-      fi
       if paste_and_save "$(printf '%s' "$REPLY_TEXT")"; then
         _REPLY_WINDOW_OPEN=false
         output_result "true" "${method_suffix}_internal_id"
@@ -424,16 +441,6 @@ do_reply() {
     if [[ "$RESULT" == "ok" ]]; then
       sleep 2
       _REPLY_WINDOW_OPEN=true
-      PASTE_BASELINE_LEN=$(get_outgoing_body_length)
-      if [[ "$PASTE_BASELINE_LEN" -lt 0 ]]; then
-        echo "baseline read failed (reply window not accessible via AppleScript)" >&2
-        osascript -e 'tell application "Mail" to try
-          close front window saving no
-        end try' 2>/dev/null
-        _REPLY_WINDOW_OPEN=false
-        echo "{\"success\":false,\"method\":\"${method_suffix}_message_id\",\"error\":\"Cannot read reply window body before paste (Mail state error)\"}"
-        exit 1
-      fi
       if paste_and_save "$(printf '%s' "$REPLY_TEXT")"; then
         _REPLY_WINDOW_OPEN=false
         output_result "true" "${method_suffix}_message_id"
