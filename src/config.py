@@ -50,6 +50,16 @@ class Config(BaseSettings):
     health_check_interval: int = Field(default=3600, env="HEALTH_CHECK_INTERVAL", description="健康检查间隔(秒)")
     sync_store_db_path: str = Field(default="data/sync_store.db", env="SYNC_STORE_DB_PATH", description="同步状态存储SQLite数据库路径")
 
+    # 周期会议滚动展开配置
+    meeting_expansion_interval_seconds: int = Field(
+        default=86400, env="MEETING_EXPANSION_INTERVAL_SECONDS",
+        description="周期会议滚动展开间隔(秒)，默认每天一次"
+    )
+    meeting_expansion_horizon_weeks: int = Field(
+        default=4, env="MEETING_EXPANSION_HORIZON_WEEKS",
+        description="周期会议展开未来窗口宽度(周)"
+    )
+
     # 多邮箱同步配置
     sync_mailboxes: str = Field(
         default="收件箱",
