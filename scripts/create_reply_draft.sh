@@ -54,6 +54,7 @@ EXTRA_TO=""
 EXTRA_CC=""
 _REPLY_WINDOW_OPEN=false
 CLIPBOARD_HTML_FILE=""
+PASTE_BASELINE_LEN=-1
 
 # 失败时关闭残留的回复窗口
 _cleanup_on_error() {
@@ -203,48 +204,79 @@ reset_clipboard() {
   fi
 }
 
-# 验证粘贴是否成功
-verify_paste() {
-  # 设置标记到剪贴板
-  printf '%s' "__PASTE_VERIFY__" | pbcopy
-
-  # 通过 System Events 全选 + 复制正文内容
-  osascript 2>/dev/null <<'ASEOF'
-tell application "System Events"
-  tell process "Mail"
-    keystroke "a" using command down
-    delay 0.5
-    keystroke "c" using command down
-    delay 0.5
-    key code 124
-  end tell
+# 直接读取 Mail.app 当前 reply 窗口的 outgoing message body 长度
+# 不依赖键盘焦点 / 系统剪贴板，绕过"焦点在别处时假成功"的问题
+get_outgoing_body_length() {
+  osascript 2>/dev/null <<'ASEOF' || echo "-1"
+tell application "Mail"
+  try
+    set msg to first outgoing message
+    return length of (content of msg as string)
+  on error
+    return -1
+  end try
 end tell
 ASEOF
+}
 
-  local content
-  content=$(pbpaste 2>/dev/null)
+# 直接读取 Mail.app 当前 reply 窗口的 outgoing message body
+get_outgoing_body() {
+  osascript 2>/dev/null <<'ASEOF' || echo "__NO_OUTGOING_MSG__"
+tell application "Mail"
+  try
+    set msg to first outgoing message
+    return content of msg as string
+  on error
+    return "__NO_OUTGOING_MSG__"
+  end try
+end tell
+ASEOF
+}
 
-  # 如果剪贴板没变，说明 System Events 完全不工作（屏幕休眠）
-  if [[ "$content" == "__PASTE_VERIFY__" ]]; then
-    echo "verify: System Events not responsive (display may be asleep)" >&2
+# 验证粘贴是否成功（直接通过 AppleScript 读 outgoing message，不依赖 System Events 焦点）
+verify_paste() {
+  # baseline 必须先被 do_reply 在 reply 窗口打开后设置
+  if [[ "$PASTE_BASELINE_LEN" -lt 0 ]]; then
+    echo "verify: baseline not set (reply window not opened)" >&2
     return 1
   fi
 
-  # 如果有预期文本（非 rich text），验证正文包含该文本
+  local current_body
+  current_body=$(get_outgoing_body)
+  if [[ "$current_body" == "__NO_OUTGOING_MSG__" ]]; then
+    echo "verify: no outgoing message (reply window closed or Mail not responsive)" >&2
+    return 1
+  fi
+
+  local current_len=${#current_body}
+
+  # body 长度必须比 baseline 增长（确认粘贴写入了 reply 窗口）
+  local delta=$((current_len - PASTE_BASELINE_LEN))
+  if [[ $delta -le 0 ]]; then
+    echo "verify: body length not increased (baseline=$PASTE_BASELINE_LEN, current=$current_len)" >&2
+    return 1
+  fi
+
+  # 非 rich text 模式：要求 body 包含 reply_text 第一行的特征文本
   if [[ "$REPLY_TEXT" != "(rich text)" ]]; then
     local expected
     expected=$(printf '%s' "$REPLY_TEXT" | sed '/^[[:space:]]*$/d' | head -1 | sed 's/[*#>`~_\[()]//g' | cut -c1-30 | xargs)
     if [[ -n "$expected" && ${#expected} -gt 3 ]]; then
-      if printf '%s' "$content" | grep -qF "$expected" 2>/dev/null; then
+      if printf '%s' "$current_body" | grep -qF "$expected" 2>/dev/null; then
         return 0
       fi
-      echo "verify: expected text not found in body (expected: '$expected')" >&2
+      echo "verify: expected text not found in outgoing message body (expected: '$expected', delta=$delta)" >&2
       return 1
     fi
   fi
 
-  # Fallback（rich text 或短文本）：System Events 可用即认为成功
-  return 0
+  # Rich text 模式或没有可校验文本：要求 delta 至少 20 字节，避免极短输入误判
+  if [[ $delta -ge 20 ]]; then
+    return 0
+  fi
+
+  echo "verify: body length increase too small (delta=$delta)" >&2
+  return 1
 }
 
 # System Events 粘贴内容 + 验证 + 截图 + 保存关闭
@@ -346,6 +378,16 @@ do_reply() {
     if [[ "$RESULT" == "ok" ]]; then
       sleep 2
       _REPLY_WINDOW_OPEN=true
+      PASTE_BASELINE_LEN=$(get_outgoing_body_length)
+      if [[ "$PASTE_BASELINE_LEN" -lt 0 ]]; then
+        echo "baseline read failed (reply window not accessible via AppleScript)" >&2
+        osascript -e 'tell application "Mail" to try
+          close front window saving no
+        end try' 2>/dev/null
+        _REPLY_WINDOW_OPEN=false
+        echo "{\"success\":false,\"method\":\"${method_suffix}_internal_id\",\"error\":\"Cannot read reply window body before paste (Mail state error)\"}"
+        exit 1
+      fi
       if paste_and_save "$(printf '%s' "$REPLY_TEXT")"; then
         _REPLY_WINDOW_OPEN=false
         output_result "true" "${method_suffix}_internal_id"
@@ -382,6 +424,16 @@ do_reply() {
     if [[ "$RESULT" == "ok" ]]; then
       sleep 2
       _REPLY_WINDOW_OPEN=true
+      PASTE_BASELINE_LEN=$(get_outgoing_body_length)
+      if [[ "$PASTE_BASELINE_LEN" -lt 0 ]]; then
+        echo "baseline read failed (reply window not accessible via AppleScript)" >&2
+        osascript -e 'tell application "Mail" to try
+          close front window saving no
+        end try' 2>/dev/null
+        _REPLY_WINDOW_OPEN=false
+        echo "{\"success\":false,\"method\":\"${method_suffix}_message_id\",\"error\":\"Cannot read reply window body before paste (Mail state error)\"}"
+        exit 1
+      fi
       if paste_and_save "$(printf '%s' "$REPLY_TEXT")"; then
         _REPLY_WINDOW_OPEN=false
         output_result "true" "${method_suffix}_message_id"
