@@ -231,17 +231,17 @@ ASEOF
   return 1
 }
 
-# 清空 reply 窗口当前编辑区的内容（retry 前调用，避免重复粘贴累积）
-# 依赖 Mail 在前台 + 焦点在 body / 编辑字段
-clear_reply_body() {
+# 撤销上一次粘贴（retry 前调用，避免重复粘贴累积）
+# Cocoa 编辑器中 ⌘V 是单步可撤销的原子操作，⌘Z 会精确回退最近一次 ⌘V，
+# 而 Mail 自动生成的 quoted reply 模板不在用户 undo 栈中，所以不会被撤销 — 引用线程保留
+# 上一次 ⌘V 实际未生效（焦点漂走）时，⌘Z 是空操作或撤销 Mail 中其他不相关的编辑，无副作用
+undo_last_paste() {
   ensure_mail_front || return 1
   osascript 2>/dev/null <<'ASEOF'
 tell application "System Events"
   tell process "Mail"
-    keystroke "a" using command down
+    keystroke "z" using command down
     delay 0.3
-    key code 51
-    delay 0.2
   end tell
 end tell
 ASEOF
@@ -322,8 +322,8 @@ paste_and_save() {
     if [[ $attempt -gt 1 ]]; then
       echo "Paste retry attempt $attempt/$max_attempts" >&2
       wake_display
-      # 关键：retry 前清空 reply 窗口当前内容，避免重复粘贴累积
-      clear_reply_body
+      # 关键：retry 前撤销上次失败的粘贴，避免内容累积；引用线程不会被撤销
+      undo_last_paste
       reset_clipboard
     fi
 
