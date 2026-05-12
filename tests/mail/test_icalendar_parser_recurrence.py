@@ -198,3 +198,36 @@ def test_parse_rrule_rejects_subsecond_freq():
     assert parser._parse_rrule("FREQ=HOURLY") is None
     assert parser._parse_rrule("INVALID") is None
     assert parser._parse_rrule("") is None
+
+
+def test_description_not_overwritten_by_valarm(parser):
+    """VALARM 块里的 DESCRIPTION:REMINDER 不应覆盖 VEVENT 真实的 DESCRIPTION。
+
+    Outlook 风格邀请典型结构：VEVENT 的 DESCRIPTION 在前，VALARM 块在后，
+    VALARM 内含 DESCRIPTION:REMINDER。扁平解析会让后者覆盖前者，
+    导致 Notion 日程页正文只剩 "REMINDER"。
+    """
+    src = (
+        "From: a@x\r\nTo: b@x\r\nSubject: t\r\nMIME-Version: 1.0\r\n"
+        "Content-Type: text/calendar; method=REQUEST; charset=UTF-8\r\n"
+        "Content-Transfer-Encoding: 8bit\r\n\r\n"
+        "BEGIN:VCALENDAR\r\n"
+        "METHOD:REQUEST\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:valarm-uid-1\r\n"
+        "SUMMARY:Meeting Update\r\n"
+        "DTSTART;TZID=China Standard Time:20260512T140000\r\n"
+        "DTEND;TZID=China Standard Time:20260512T150000\r\n"
+        "DESCRIPTION:Updated meeting time to BJT 14:00 due to conflict\r\n"
+        "BEGIN:VALARM\r\n"
+        "DESCRIPTION:REMINDER\r\n"
+        "ACTION:DISPLAY\r\n"
+        "TRIGGER:-PT15M\r\n"
+        "END:VALARM\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    invite = parser.extract_from_email_source(src)
+    assert invite is not None
+    assert invite.description == "Updated meeting time to BJT 14:00 due to conflict"
+    assert invite.summary == "Meeting Update"

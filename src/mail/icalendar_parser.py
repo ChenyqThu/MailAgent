@@ -156,10 +156,14 @@ class ICalendarParser:
             lines = ical_content.split('\r\n') if '\r\n' in ical_content else ical_content.split('\n')
 
             # 提取字段
+            # 按 RFC 5545 块作用域采集：只读 VCALENDAR 顶层和 VEVENT 直接子项，
+            # 跳过 VALARM / VTIMEZONE 等嵌套块（否则 VALARM 的 DESCRIPTION:REMINDER
+            # 会覆盖 VEVENT 真正的 DESCRIPTION）。
             data = {}
             attendees_raw = []
             exdates_raw = []   # [(key_part, value), ...] 单行可逗号分隔多个值
             rdates_raw = []
+            block_stack: List[str] = []
 
             for line in lines:
                 line = line.strip()
@@ -168,6 +172,20 @@ class ICalendarParser:
 
                 # 处理带参数的键，如 DTSTART;TZID=China Standard Time:20260126T140000
                 key_part, value = line.split(':', 1)
+                bare_key = key_part.split(';')[0].upper()
+
+                if bare_key == 'BEGIN':
+                    block_stack.append(value.strip().upper())
+                    continue
+                if bare_key == 'END':
+                    if block_stack:
+                        block_stack.pop()
+                    continue
+
+                # 仅采集 VCALENDAR 顶层（METHOD 等）和 VEVENT 直接子项的字段
+                current_scope = block_stack[-1] if block_stack else None
+                if current_scope not in ('VCALENDAR', 'VEVENT'):
+                    continue
 
                 # 特殊处理 ATTENDEE (可能有多个)
                 if key_part.startswith('ATTENDEE'):
@@ -175,10 +193,10 @@ class ICalendarParser:
                     continue
 
                 # 多值字段: EXDATE / RDATE 同一行可逗号分隔多个值，且可能多次出现
-                if key_part.split(';')[0] == 'EXDATE':
+                if bare_key == 'EXDATE':
                     exdates_raw.append((key_part, value))
                     continue
-                if key_part.split(';')[0] == 'RDATE':
+                if bare_key == 'RDATE':
                     rdates_raw.append((key_part, value))
                     continue
 
