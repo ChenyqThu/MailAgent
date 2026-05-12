@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MailAgent - Email Processing Workbench</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-primary: #0f0f0f;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #242424;
+  --bg-hover: #2a2a2a;
+  --bg-active: #1e2a3a;
+  --border: #2e2e2e;
+  --text-primary: #e8e8e8;
+  --text-secondary: #999;
+  --text-muted: #666;
+  --accent: #4a9eff;
+  --accent-dim: #1e3a5f;
+  --red: #ff4d4f;
+  --orange: #fa8c16;
+  --green: #52c41a;
+  --yellow: #fadb14;
+  --purple: #b37feb;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Top Bar */
+.topbar {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  gap: 4px;
+}
+
+.topbar-logo {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--accent);
+  margin-right: 20px;
+  letter-spacing: -0.5px;
+}
+
+.topbar-nav { display: flex; gap: 2px; }
+
+.nav-item {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-item.active { background: var(--accent-dim); color: var(--accent); }
+
+.nav-badge {
+  font-size: 11px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 4px;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.search-box {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  width: 200px;
+  outline: none;
+}
+
+.search-box:focus { border-color: var(--accent); }
+
+.sync-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sync-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.kbd {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+/* Main Layout */
+.main {
+  display: flex;
+  height: calc(100vh - 48px);
+}
+
+/* Sidebar / Email List */
+.sidebar {
+  width: 380px;
+  min-width: 380px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+}
+
+.filter-bar {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.filter-chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.filter-chip:hover { border-color: var(--accent); color: var(--accent); }
+.filter-chip.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+
+.batch-actions {
+  display: none;
+  margin-left: auto;
+  gap: 4px;
+}
+
+.batch-actions.visible { display: flex; }
+
+.batch-btn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.batch-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.email-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.email-item {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+  padding-left: 32px;
+}
+
+.email-item:hover { background: var(--bg-hover); }
+.email-item.active { background: var(--bg-active); border-left: 2px solid var(--accent); padding-left: 30px; }
+
+.email-checkbox {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px; height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: all 0.1s;
+}
+
+.email-checkbox.checked { background: var(--accent); border-color: var(--accent); color: #fff; }
+.email-checkbox:hover { border-color: var(--accent); }
+
+.email-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.email-priority {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.priority-urgent { background: rgba(255,77,79,0.15); color: var(--red); }
+.priority-important { background: rgba(250,140,22,0.15); color: var(--orange); }
+.priority-normal { background: rgba(82,196,26,0.15); color: var(--green); }
+.priority-low { background: rgba(102,102,102,0.15); color: var(--text-muted); }
+
+.email-action-type {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.email-sender {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.email-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.email-subject {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 3px;
+}
+
+.email-summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.email-tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.email-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+/* Detail Panel */
+.detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.detail-header {
+  padding: 16px 24px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-subject {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+
+.detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.detail-sender-name { color: var(--text-primary); font-weight: 500; }
+
+/* Editable AI Fields */
+.detail-fields {
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.field-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+
+.field-badge:hover { border-color: var(--accent); }
+.field-badge.editing { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(74,158,255,0.2); }
+
+.field-label { color: var(--text-muted); }
+.field-value { color: var(--text-primary); font-weight: 500; }
+
+.field-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  z-index: 100;
+  min-width: 140px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+.field-dropdown.show { display: block; }
+
+.field-option {
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.field-option:hover { background: var(--bg-hover); color: var(--text-primary); }
+.field-option.selected { color: var(--accent); }
+
+/* AI Analysis Section */
+.detail-ai-section {
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(74,158,255,0.03);
+}
+
+.ai-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.ai-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ai-regen-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.ai-regen-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.ai-summary {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.ai-keypoints {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  padding-left: 16px;
+}
+
+.ai-keypoints li { margin-bottom: 2px; }
+
+/* Reply Suggestion */
+.reply-panel {
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(82,196,26,0.03);
+}
+
+.reply-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.reply-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--green);
+  font-weight: 600;
+}
+
+.reply-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.reply-action-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.reply-action-btn:hover { border-color: var(--green); color: var(--green); }
+.reply-action-btn.primary-green { border-color: var(--green); color: var(--green); }
+
+.reply-content {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  background: var(--bg-tertiary);
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+/* Email Body */
+.detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.detail-body p { margin-bottom: 12px; }
+
+/* Primary Action Bar */
+.action-bar {
+  padding: 10px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-group {
+  display: flex;
+  gap: 4px;
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+  margin-right: 4px;
+}
+
+.action-group:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+
+.action-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.action-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+.action-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.action-btn.primary:hover { background: #3d8ae6; }
+.action-btn.success { border-color: var(--green); color: var(--green); }
+.action-btn.success:hover { background: rgba(82,196,26,0.1); }
+.action-btn.danger { border-color: var(--red); color: var(--red); }
+.action-btn.danger:hover { background: rgba(255,77,79,0.1); }
+
+.action-btn .shortcut {
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  background: rgba(255,255,255,0.05);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.action-btn.primary .shortcut { color: rgba(255,255,255,0.5); }
+
+/* AI Input Row */
+.ai-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-input {
+  flex: 1;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.ai-input:focus { border-color: var(--accent); }
+.ai-input::placeholder { color: var(--text-muted); }
+
+.ai-quick-btn {
+  padding: 5px 10px;
+  border-radius: 5px;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ai-quick-btn:hover { border-color: var(--purple); color: var(--purple); }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--text-primary);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  opacity: 0;
+  transition: all 0.2s;
+  pointer-events: none;
+  z-index: 999;
+}
+
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Help Modal */
+.help-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+
+.help-overlay.show { display: flex; }
+
+.help-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.help-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+
+.help-section { margin-bottom: 16px; }
+.help-section-title { font-size: 12px; color: var(--accent); margin-bottom: 8px; font-weight: 600; }
+
+.help-row {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.help-key {
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.help-key kbd {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.help-desc { color: var(--text-secondary); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
+</style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-logo">MailAgent</div>
+  <div class="topbar-nav">
+    <div class="nav-item active">Inbox<span class="nav-badge">23</span></div>
+    <div class="nav-item">Sent<span class="nav-badge">5</span></div>
+    <div class="nav-item">All</div>
+    <div class="nav-item">Digest</div>
+    <div class="nav-item">Stats</div>
+    <div class="nav-item">Settings</div>
+  </div>
+  <div class="topbar-right">
+    <input class="search-box" placeholder="Search...  /" />
+    <div class="sync-indicator">
+      <div class="sync-dot"></div>
+      <span>Synced</span>
+    </div>
+    <span class="kbd" style="cursor:pointer" onclick="toggleHelp()">?</span>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <!-- Email List -->
+  <div class="sidebar">
+    <div class="filter-bar">
+      <div class="filter-chip active" onclick="filterAll()">All 23</div>
+      <div class="filter-chip" onclick="filterBy('urgent')">Urgent 3</div>
+      <div class="filter-chip" onclick="filterBy('important')">Important 8</div>
+      <div class="filter-chip" onclick="filterBy('reply')">Need Reply 6</div>
+      <div class="filter-chip" onclick="filterBy('fyi')">FYI 6</div>
+      <div class="batch-actions" id="batchActions">
+        <button class="batch-btn" onclick="batchAction('done')">Batch Done</button>
+        <button class="batch-btn" onclick="batchAction('archive')">Archive</button>
+      </div>
+    </div>
+    <div class="email-list" id="emailList">
+
+      <div class="email-item active" onclick="selectEmail(0)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 0)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-urgent">Urgent</span>
+          <span class="email-action-type">Need Decision</span>
+          <span class="email-sender">Gary Wen</span>
+          <span class="email-time">10:30</span>
+        </div>
+        <div class="email-subject">Re: Q3 Product Roadmap Review - Priority Confirmation</div>
+        <div class="email-summary">AI: Need your ranking on 3 features before Friday's executive review</div>
+        <div class="email-tags">
+          <span class="email-tag">Product</span>
+          <span class="email-tag">DDL: Fri</span>
+        </div>
+      </div>
+
+      <div class="email-item" onclick="selectEmail(1)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 1)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-important">Important</span>
+          <span class="email-action-type">Need Reply</span>
+          <span class="email-sender">Sarah Chen</span>
+          <span class="email-time">9:45</span>
+        </div>
+        <div class="email-subject">Omada Pro v2.8 Launch - Legal Review Feedback</div>
+        <div class="email-summary">AI: Legal flagged 2 privacy policy issues, need your sign-off</div>
+        <div class="email-tags">
+          <span class="email-tag">Legal</span>
+          <span class="email-tag">Omada Pro</span>
+        </div>
+      </div>
+
+      <div class="email-item" onclick="selectEmail(2)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 2)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-important">Important</span>
+          <span class="email-action-type">Need Review</span>
+          <span class="email-sender">James Liu</span>
+          <span class="email-time">9:12</span>
+        </div>
+        <div class="email-subject">ENBU Weekly Progress W19 - 2 Projects Blocked</div>
+        <div class="email-summary">AI: AP7000/EAP780 blocked, need resource escalation decision</div>
+        <div class="email-tags">
+          <span class="email-tag">Project</span>
+          <span class="email-tag">ENBU</span>
+        </div>
+      </div>
+
+      <div class="email-item" onclick="selectEmail(3)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 3)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-normal">Normal</span>
+          <span class="email-action-type">Waiting</span>
+          <span class="email-sender">Mike Zhang</span>
+          <span class="email-time">8:50</span>
+        </div>
+        <div class="email-subject">Re: Cloud Controller API Rate Limiting</div>
+        <div class="email-summary">AI: Mike agreed, waiting for infra team capacity confirmation</div>
+        <div class="email-tags">
+          <span class="email-tag">Tech</span>
+          <span class="email-tag">Waiting</span>
+        </div>
+      </div>
+
+      <div class="email-item" onclick="selectEmail(4)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 4)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-normal">Normal</span>
+          <span class="email-action-type">Need Reply</span>
+          <span class="email-sender">Tony Wang</span>
+          <span class="email-time">Yesterday</span>
+        </div>
+        <div class="email-subject">Re: Supplier Quotation for AP7000 RF Module</div>
+        <div class="email-summary">AI: Need your approval on supplier B pricing (+8% vs current)</div>
+        <div class="email-tags">
+          <span class="email-tag">Supply Chain</span>
+        </div>
+      </div>
+
+      <div class="email-item" onclick="selectEmail(5)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 5)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-normal">Normal</span>
+          <span class="email-action-type">Need Meeting</span>
+          <span class="email-sender">Lisa Park</span>
+          <span class="email-time">Yesterday</span>
+        </div>
+        <div class="email-subject">Omada Pro GTM Alignment - Proposed Meeting Slots</div>
+        <div class="email-summary">AI: 3 meeting slots proposed for next week, pick one</div>
+        <div class="email-tags">
+          <span class="email-tag">Meeting</span>
+        </div>
+      </div>
+
+      <div class="email-item" onclick="selectEmail(6)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 6)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-low">Low</span>
+          <span class="email-action-type">FYI</span>
+          <span class="email-sender">HR USA</span>
+          <span class="email-time">Yesterday</span>
+        </div>
+        <div class="email-subject">Organizational Announcement - CISO</div>
+        <div class="email-summary">AI: HR broadcast, new CISO appointment, no action needed</div>
+        <div class="email-tags">
+          <span class="email-tag">System</span>
+        </div>
+      </div>
+
+      <div class="email-item" onclick="selectEmail(7)">
+        <div class="email-checkbox" onclick="toggleCheck(event, 7)"></div>
+        <div class="email-header">
+          <span class="email-priority priority-low">Low</span>
+          <span class="email-action-type">FYI</span>
+          <span class="email-sender">DMS System</span>
+          <span class="email-time">Yesterday</span>
+        </div>
+        <div class="email-subject">【DMS】Overdue Task Reminder</div>
+        <div class="email-summary">AI: System notification, auto-archived</div>
+        <div class="email-tags">
+          <span class="email-tag">Filtered</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Detail Panel -->
+  <div class="detail" id="detailPanel">
+    <div class="detail-header">
+      <div class="detail-subject">Re: Q3 Product Roadmap Review - Priority Confirmation Needed</div>
+      <div class="detail-meta">
+        <span class="detail-sender-name">Gary Wen</span>
+        <span>&lt;gary.wen@tp-link.com&gt;</span>
+        <span>→ kevin.wang@tp-link.com</span>
+        <span>May 10, 2026 10:30</span>
+        <span style="color:var(--text-muted)">Thread: 3 messages</span>
+      </div>
+    </div>
+
+    <!-- Editable AI Fields -->
+    <div class="detail-fields">
+      <div class="field-badge" onclick="toggleDropdown(this, 'priority')">
+        <span class="field-label">Priority</span>
+        <span class="field-value" style="color:var(--red)">Urgent</span>
+        <div class="field-dropdown" id="dd-priority">
+          <div class="field-option" onclick="setField(event,'priority','Urgent')">🔴 Urgent</div>
+          <div class="field-option" onclick="setField(event,'priority','Important')">🟡 Important</div>
+          <div class="field-option" onclick="setField(event,'priority','Normal')">🟢 Normal</div>
+          <div class="field-option" onclick="setField(event,'priority','Low')">⚪ Low</div>
+        </div>
+      </div>
+      <div class="field-badge" onclick="toggleDropdown(this, 'action')">
+        <span class="field-label">Action</span>
+        <span class="field-value">Need Decision</span>
+        <div class="field-dropdown" id="dd-action">
+          <div class="field-option" onclick="setField(event,'action','Need Reply')">Need Reply</div>
+          <div class="field-option selected" onclick="setField(event,'action','Need Decision')">Need Decision</div>
+          <div class="field-option" onclick="setField(event,'action','Need Review')">Need Review</div>
+          <div class="field-option" onclick="setField(event,'action','Need Meeting')">Need Meeting</div>
+          <div class="field-option" onclick="setField(event,'action','Follow-up')">Follow-up</div>
+          <div class="field-option" onclick="setField(event,'action','Waiting')">Waiting</div>
+          <div class="field-option" onclick="setField(event,'action','FYI')">FYI</div>
+        </div>
+      </div>
+      <div class="field-badge">
+        <span class="field-label">Category</span>
+        <span class="field-value">Product Mgmt</span>
+      </div>
+      <div class="field-badge">
+        <span class="field-label">Sender</span>
+        <span class="field-value" style="color:var(--orange)">Important</span>
+      </div>
+      <div class="field-badge">
+        <span class="field-label">Lang</span>
+        <span class="field-value">EN</span>
+      </div>
+      <div class="field-badge" style="margin-left:auto; border-color:var(--text-muted);">
+        <span class="field-label">Status</span>
+        <span class="field-value" style="color:var(--accent)">AI Reviewed</span>
+      </div>
+    </div>
+
+    <!-- AI Analysis -->
+    <div class="detail-ai-section">
+      <div class="ai-section-header">
+        <div class="ai-section-title">AI Analysis</div>
+        <button class="ai-regen-btn" onclick="showToast('Re-running LLM analysis...')">Re-analyze</button>
+      </div>
+      <div class="ai-summary">
+        Gary (Product Director) needs your final ranking on Q3 feature priorities before Friday's executive review. Three features competing for the same engineering slot. Email addressed exclusively to Kevin — high urgency signal. Historical pattern: Gary's requests have hard deadlines.
+      </div>
+      <ul class="ai-keypoints">
+        <li><strong>DDL:</strong> Friday May 15, before 5 PM</li>
+        <li><strong>Decision:</strong> Rank 3 features — Mesh v3 roaming / Cloud API v2 / Site-to-Site VPN</li>
+        <li><strong>Constraint:</strong> Only 2 of 3 fit in Q3 engineering capacity</li>
+        <li><strong>Stakeholders:</strong> Gary (requester), Engineering leads (affected)</li>
+      </ul>
+    </div>
+
+    <!-- Reply Suggestion -->
+    <div class="reply-panel">
+      <div class="reply-header">
+        <div class="reply-title">Reply Suggestion</div>
+        <div class="reply-actions">
+          <button class="reply-action-btn" onclick="showToast('Editing reply...')">Edit</button>
+          <button class="reply-action-btn" onclick="showToast('Regenerating with AI...')">Regenerate</button>
+          <button class="reply-action-btn primary-green" onclick="showToast('Draft created in Mail.app!')">Send to Mail.app</button>
+        </div>
+      </div>
+      <div class="reply-content">Hi Gary,
+
+Thanks for flagging. My recommended priority order:
+
+1. Cloud API v2 — customer-facing, tied to Omada Pro v2.8 launch timeline
+2. Mesh v3 roaming — competitive differentiation, but can slip 2 weeks
+3. Site-to-Site VPN — important but less time-sensitive, Q4 is acceptable
+
+Happy to discuss further if you need rationale. Let me know if this works before I prep the deck section.
+
+----
+Best,
+Kevin</div>
+    </div>
+
+    <!-- Email Body -->
+    <div class="detail-body">
+      <p>Hi Kevin,</p>
+      <p>Following up on our discussion last week — I need your final call on the Q3 priority ranking for these three features:</p>
+      <p><strong>1. Mesh v3 Seamless Roaming</strong><br>
+      Engineering estimate: 6 sprints. Marketing wants this for the Sep trade show demo.</p>
+      <p><strong>2. Cloud Controller API v2</strong><br>
+      Engineering estimate: 4 sprints. Tied to Omada Pro v2.8 launch (committed to 3 enterprise customers).</p>
+      <p><strong>3. Site-to-Site VPN Enhancement</strong><br>
+      Engineering estimate: 5 sprints. Requested by APAC channel partners, no hard deadline.</p>
+      <p>We only have capacity for 2 of the 3 in Q3. Need your ranking by Friday so I can finalize the review deck.</p>
+      <p>Thanks,<br>Gary</p>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="action-bar">
+      <!-- Row 1: Processing Actions -->
+      <div class="action-row">
+        <div class="action-group">
+          <button class="action-btn primary" onclick="showToast('✅ Marked Done → Notion + Mail.app synced')">
+            <span>Done</span><span class="shortcut">E</span>
+          </button>
+          <button class="action-btn success" onclick="showToast('📝 Draft created in Mail.app')">
+            <span>Reply Draft</span><span class="shortcut">R</span>
+          </button>
+          <button class="action-btn" onclick="showToast('↩️ Forward dialog opening...')">
+            <span>Forward</span><span class="shortcut">F</span>
+          </button>
+        </div>
+        <div class="action-group">
+          <button class="action-btn" onclick="showToast('⭐ Flag toggled → synced')">
+            <span>Flag</span><span class="shortcut">S</span>
+          </button>
+          <button class="action-btn" onclick="showToast('📖 Marked as Read → synced')">
+            <span>Read</span>
+          </button>
+          <button class="action-btn" onclick="showToast('⏰ Snooze: reappear tomorrow 9AM')">
+            <span>Snooze</span><span class="shortcut">Z</span>
+          </button>
+          <button class="action-btn" onclick="showToast('🗑️ Archived → removed from inbox')">
+            <span>Archive</span><span class="shortcut">D</span>
+          </button>
+        </div>
+        <div class="action-group">
+          <button class="action-btn" onclick="showToast('🔗 Linked to project: Omada Pro')">
+            <span>Link Project</span>
+          </button>
+          <button class="action-btn" onclick="showToast('📋 Copied to clipboard')">
+            <span>Copy Link</span>
+          </button>
+          <button class="action-btn" onclick="window.open('#','_blank')">
+            <span>Open in Notion</span>
+          </button>
+        </div>
+      </div>
+      <!-- Row 2: AI Actions -->
+      <div class="ai-row">
+        <input class="ai-input" placeholder="Ask AI about this email... (Ctrl+J)" />
+        <button class="ai-quick-btn" onclick="showToast('🌐 Translating to Chinese...')">Translate</button>
+        <button class="ai-quick-btn" onclick="showToast('📋 Summarizing thread...')">Summarize Thread</button>
+        <button class="ai-quick-btn" onclick="showToast('✏️ Polishing reply draft...')">Polish Reply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Help Modal -->
+<div class="help-overlay" id="helpOverlay" onclick="toggleHelp()">
+  <div class="help-modal" onclick="event.stopPropagation()">
+    <div class="help-title">Keyboard Shortcuts</div>
+    <div class="help-section">
+      <div class="help-section-title">Navigation</div>
+      <div class="help-row"><div class="help-key"><kbd>J</kbd> / <kbd>K</kbd></div><div class="help-desc">Next / Previous email</div></div>
+      <div class="help-row"><div class="help-key"><kbd>Enter</kbd></div><div class="help-desc">Open email detail</div></div>
+      <div class="help-row"><div class="help-key"><kbd>/</kbd></div><div class="help-desc">Focus search</div></div>
+      <div class="help-row"><div class="help-key"><kbd>X</kbd></div><div class="help-desc">Select / deselect email</div></div>
+    </div>
+    <div class="help-section">
+      <div class="help-section-title">Processing</div>
+      <div class="help-row"><div class="help-key"><kbd>E</kbd></div><div class="help-desc">Mark as Done (→ Notion + Mail.app)</div></div>
+      <div class="help-row"><div class="help-key"><kbd>R</kbd></div><div class="help-desc">Create reply draft in Mail.app</div></div>
+      <div class="help-row"><div class="help-key"><kbd>F</kbd></div><div class="help-desc">Forward email</div></div>
+      <div class="help-row"><div class="help-key"><kbd>S</kbd></div><div class="help-desc">Toggle flag (→ bidirectional sync)</div></div>
+      <div class="help-row"><div class="help-key"><kbd>Z</kbd></div><div class="help-desc">Snooze (reappear later)</div></div>
+      <div class="help-row"><div class="help-key"><kbd>D</kbd></div><div class="help-desc">Archive</div></div>
+    </div>
+    <div class="help-section">
+      <div class="help-section-title">AI</div>
+      <div class="help-row"><div class="help-key"><kbd>T</kbd></div><div class="help-desc">Translate email body</div></div>
+      <div class="help-row"><div class="help-key"><kbd>Ctrl+J</kbd></div><div class="help-desc">Focus AI input</div></div>
+      <div class="help-row"><div class="help-key"><kbd>Ctrl+R</kbd></div><div class="help-desc">Regenerate AI analysis</div></div>
+    </div>
+    <div class="help-section">
+      <div class="help-section-title">Sync Model</div>
+      <div class="help-row" style="flex-direction:column; align-items:flex-start; gap:4px;">
+        <div class="help-desc" style="line-height:1.8">
+          <strong>Source of Truth:</strong> Local SQLite (sync_store.db)<br>
+          <strong>Sync targets:</strong> Notion (properties + page) + Mail.app (flags/read)<br>
+          <strong>All actions</strong> → Redis queue → MailAgent handlers → bidirectional sync<br>
+          <strong>AI fields edit</strong> → direct Notion API update + local DB update
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+function selectEmail(idx) {
+  document.querySelectorAll('.email-item').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
+  });
+  currentIdx = idx;
+}
+
+function toggleCheck(e, idx) {
+  e.stopPropagation();
+  const cb = e.target.closest('.email-checkbox');
+  cb.classList.toggle('checked');
+  cb.textContent = cb.classList.contains('checked') ? '✓' : '';
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const checked = document.querySelectorAll('.email-checkbox.checked').length;
+  const bar = document.getElementById('batchActions');
+  bar.classList.toggle('visible', checked > 0);
+}
+
+function batchAction(action) {
+  const checked = document.querySelectorAll('.email-checkbox.checked').length;
+  showToast(`${action === 'done' ? '✅' : '🗑️'} ${checked} emails ${action === 'done' ? 'marked done' : 'archived'}`);
+  document.querySelectorAll('.email-checkbox.checked').forEach(cb => {
+    cb.classList.remove('checked');
+    cb.textContent = '';
+  });
+  updateBatchBar();
+}
+
+function filterAll() {
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.filter-chip')[0].classList.add('active');
+  document.querySelectorAll('.email-item').forEach(el => el.style.display = '');
+}
+
+function filterBy(type) {
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+  event.target.classList.add('active');
+  showToast(`Filter: ${type}`);
+}
+
+function toggleDropdown(badge, name) {
+  const dd = badge.querySelector('.field-dropdown');
+  document.querySelectorAll('.field-dropdown.show').forEach(d => {
+    if (d !== dd) d.classList.remove('show');
+  });
+  dd.classList.toggle('show');
+  badge.classList.toggle('editing', dd.classList.contains('show'));
+}
+
+function setField(e, field, value) {
+  e.stopPropagation();
+  const badge = e.target.closest('.field-badge');
+  badge.querySelector('.field-value').textContent = value;
+  badge.querySelector('.field-dropdown').classList.remove('show');
+  badge.classList.remove('editing');
+  showToast(`${field} → ${value} (syncing to Notion...)`);
+}
+
+function toggleHelp() {
+  document.getElementById('helpOverlay').classList.toggle('show');
+}
+
+// Close dropdowns on outside click
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.field-badge')) {
+    document.querySelectorAll('.field-dropdown.show').forEach(d => d.classList.remove('show'));
+    document.querySelectorAll('.field-badge.editing').forEach(b => b.classList.remove('editing'));
+  }
+});
+
+// Keyboard shortcuts
+let currentIdx = 0;
+const items = () => document.querySelectorAll('.email-item');
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') {
+    if (e.key === 'Escape') e.target.blur();
+    return;
+  }
+
+  switch(e.key) {
+    case 'j':
+      currentIdx = Math.min(currentIdx + 1, items().length - 1);
+      selectEmail(currentIdx);
+      items()[currentIdx].scrollIntoView({ block: 'nearest' });
+      break;
+    case 'k':
+      currentIdx = Math.max(currentIdx - 1, 0);
+      selectEmail(currentIdx);
+      items()[currentIdx].scrollIntoView({ block: 'nearest' });
+      break;
+    case 'e':
+      showToast('✅ Marked Done → syncing to Notion + Mail.app');
+      break;
+    case 'r':
+      showToast('📝 Creating reply draft from AI suggestion...');
+      break;
+    case 'f':
+      showToast('↩️ Forward dialog...');
+      break;
+    case 't':
+      showToast('🌐 Translating email body...');
+      break;
+    case 's':
+      showToast('⭐ Flag toggled → bidirectional sync');
+      break;
+    case 'z':
+      showToast('⏰ Snoozed until tomorrow 9:00 AM');
+      break;
+    case 'd':
+      showToast('🗑️ Archived');
+      break;
+    case 'x':
+      const cb = items()[currentIdx].querySelector('.email-checkbox');
+      cb.classList.toggle('checked');
+      cb.textContent = cb.classList.contains('checked') ? '✓' : '';
+      updateBatchBar();
+      break;
+    case '/':
+      e.preventDefault();
+      document.querySelector('.search-box').focus();
+      break;
+    case '?':
+      toggleHelp();
+      break;
+    case 'Escape':
+      document.getElementById('helpOverlay').classList.remove('show');
+      break;
+  }
+
+  if (e.ctrlKey && e.key === 'j') {
+    e.preventDefault();
+    document.querySelector('.ai-input').focus();
+  }
+});
+</script>
+</body>
+</html>

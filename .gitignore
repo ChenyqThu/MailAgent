@@ -37,6 +37,11 @@ logs/
 *.tmp
 *.bak
 
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+
 # Claude Code
 .omc/
 

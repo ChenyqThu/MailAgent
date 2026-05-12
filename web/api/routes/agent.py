@@ -1,0 +1,180 @@
+"""AI Agent 接口 — 翻译、总结、起草回复等。
+
+复用主项目 LLM 配置（CRS 网关 + Sonnet 模型）。
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException
+
+from web.api.deps import verify_token
+
+router = APIRouter(dependencies=[Depends(verify_token)])
+
+
+class AgentRequest(BaseModel):
+    action: str  # translate, summarize, draft_reply, custom
+    prompt: Optional[str] = None
+    context: dict = {}
+
+
+class QueryRequest(BaseModel):
+    prompt: str
+
+
+SYSTEM_PROMPTS = {
+    "translate": "你是一个翻译助手。将以下邮件内容翻译为中文。如果原文已经是中文，则翻译为英文。保持原文格式。只输出翻译结果，不要解释。",
+    "summarize": "你是一个邮件摘要助手。用中文提取以下邮件的关键要点，用 bullet points 列出。简洁明了，不超过 5 点。",
+    "draft_reply": "你是一个邮件助手。根据以下邮件内容，用中文起草一封简洁专业的回复。保持礼貌但不啰嗦。",
+}
+
+# Lazy-init anthropic client（复用主项目配置）
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is not None:
+        return _client
+
+    try:
+        from src.config import config
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"无法加载配置: {exc}")
+
+    if not config.llm_api_key:
+        raise HTTPException(status_code=503, detail="LLM 未配置（需要 LLM_API_KEY）")
+
+    from anthropic import AsyncAnthropic
+
+    _client = AsyncAnthropic(
+        api_key=config.llm_api_key,
+        base_url=config.llm_api_base,
+        timeout=float(config.llm_timeout_sec),
+        default_headers={
+            "User-Agent": "MailAgent-Web/0.1 (Mozilla/5.0 compatible)",
+        },
+    )
+    return _client
+
+
+def _get_model() -> str:
+    from src.config import config
+    return config.llm_model
+
+
+@router.post("/emails/{email_id}/agent")
+async def run_agent(email_id: int, req: AgentRequest):
+    """调用 LLM 处理邮件相关任务。"""
+    if req.action == "custom":
+        system = "你是一个智能邮件助手。用中文回答。"
+        user_msg = (
+            f"邮件主题：{req.context.get('subject', '')}\n\n"
+            f"邮件正文：\n{req.context.get('body', '')}\n\n"
+            f"用户指令：{req.prompt}"
+        )
+    elif req.action in SYSTEM_PROMPTS:
+        system = SYSTEM_PROMPTS[req.action]
+        user_msg = (
+            f"邮件主题：{req.context.get('subject', '')}\n\n"
+            f"{req.context.get('body', '')}"
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"未知操作: {req.action}")
+
+    client = _get_client()
+    try:
+        msg = await client.messages.create(
+            model=_get_model(),
+            max_tokens=2000,
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        result_text = msg.content[0].text
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM 调用失败: {e!s}")
+
+    return {"result": result_text, "email_id": email_id, "action": req.action}
+
+
+@router.post("/agent/query")
+async def global_query(req: QueryRequest):
+    """全局邮件检索 + LLM 汇总。搜索 SQLite 相关邮件后交给 LLM 回答。"""
+    from web.api.services.db import get_db
+
+    # 从用户问题中提取关键词搜索邮件
+    search_term = req.prompt.strip()
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT em.internal_id, em.subject, em.sender, em.sender_name,
+                   em.date_received, em.mailbox,
+                   lp.labels_json
+            FROM email_metadata em
+            LEFT JOIN llm_processing lp ON em.internal_id = lp.internal_id
+            WHERE em.sync_status = 'synced'
+            AND (
+                em.subject LIKE ? OR em.sender LIKE ? OR em.sender_name LIKE ?
+                OR json_extract(lp.labels_json, '$.ai_summary') LIKE ?
+                OR json_extract(lp.labels_json, '$.category') LIKE ?
+            )
+            ORDER BY em.internal_id DESC
+            LIMIT 20
+        """, tuple(f"%{search_term}%" for _ in range(5))).fetchall()
+
+    import json as _json
+
+    # 构建上下文摘要
+    email_summaries: list[str] = []
+    for r in rows:
+        labels = {}
+        try:
+            labels = _json.loads(r["labels_json"] or "{}")
+        except Exception:
+            pass
+        summary = labels.get("ai_summary", "")
+        category = labels.get("category", "")
+        priority = labels.get("priority", "")
+        line = (
+            f"- [{r['date_received'] or ''}] {r['subject'] or '(无主题)'} "
+            f"| 发件人: {r['sender_name'] or r['sender'] or '未知'} "
+            f"| 邮箱: {r['mailbox'] or ''}"
+        )
+        if category:
+            line += f" | 分类: {category}"
+        if priority:
+            line += f" | 优先级: {priority}"
+        if summary:
+            line += f" | 摘要: {summary}"
+        email_summaries.append(line)
+
+    if not email_summaries:
+        return {"result": f"未找到与「{search_term}」相关的邮件", "sources": 0}
+
+    context_block = "\n".join(email_summaries)
+    system = (
+        "你是一个邮件数据分析助手。用中文回答。"
+        "根据以下邮件检索结果回答用户的问题。"
+        "如果检索结果不能完全回答问题，说明已知信息并指出不足。"
+        "回答要简洁有结构。"
+    )
+    user_msg = (
+        f"检索到 {len(email_summaries)} 封相关邮件:\n\n"
+        f"{context_block}\n\n"
+        f"用户问题: {req.prompt}"
+    )
+
+    client = _get_client()
+    try:
+        msg = await client.messages.create(
+            model=_get_model(),
+            max_tokens=2000,
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        result_text = msg.content[0].text
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM 调用失败: {e!s}")
+
+    return {"result": result_text, "sources": len(email_summaries)}
