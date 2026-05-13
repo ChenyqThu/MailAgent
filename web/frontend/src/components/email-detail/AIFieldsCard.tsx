@@ -9,8 +9,8 @@ interface Props {
 export function AIFieldsCard({ email }: Props) {
   const pc = PRIORITY_CONFIG[email.priority || ""] ?? {
     label: "—",
-    color: "text-gray-600",
-    bg: "bg-gray-500/10",
+    color: "text-fg-faint",
+    bg: "bg-fg-muted/10",
   };
 
   const fields = [
@@ -31,7 +31,7 @@ export function AIFieldsCard({ email }: Props) {
 
   return (
     <div className="px-5 py-3 border-b border-border">
-      <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">
+      <div className="text-[11px] text-fg-muted uppercase tracking-wider mb-2">
         AI 分析
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-2">
@@ -42,7 +42,7 @@ export function AIFieldsCard({ email }: Props) {
               key={f.label}
               className={clsx(f.full && "col-span-2")}
             >
-              <div className="text-[10px] text-gray-600 mb-0.5">{f.label}</div>
+              <div className="text-[10px] text-fg-faint mb-0.5">{f.label}</div>
               {f.badge ? (
                 <span
                   className={clsx(
@@ -54,7 +54,7 @@ export function AIFieldsCard({ email }: Props) {
                   {f.value}
                 </span>
               ) : (
-                <div className="text-xs text-gray-300 leading-relaxed">
+                <div className="text-xs text-fg-secondary leading-relaxed">
                   {f.value}
                 </div>
               )}

@@ -27,8 +27,15 @@ class WebConfig(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379", env="REDIS_URL")
     redis_db: int = Field(default=2, env="REDIS_DB")
 
-    # Notion (用于构造链接)
+    # Notion
     email_database_id: str = Field(default="", env="EMAIL_DATABASE_ID")
+    notion_token: str = Field(default="", env="NOTION_TOKEN")
+
+    # LLM（Agent 功能用）
+    llm_api_key: str = Field(default="", env="LLM_API_KEY")
+    llm_api_base: str = Field(default="https://api.anthropic.com", env="LLM_API_BASE")
+    llm_model: str = Field(default="claude-sonnet-4-20250514", env="LLM_MODEL")
+    llm_timeout: float = Field(default=120.0, env="LLM_TIMEOUT_SEC")
 
 
 web_config = WebConfig()

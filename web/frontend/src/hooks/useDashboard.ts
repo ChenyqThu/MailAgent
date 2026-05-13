@@ -42,6 +42,8 @@ export function useDailyDigest(range: DashboardRange = "day") {
     queryFn: () => apiFetch<{
       categories: { category: string; count: number }[];
       priorities: Record<string, number>;
+      action_types: Record<string, number>;
+      top_senders: { name: string; count: number }[];
     }>(`/dashboard/digest?range=${range}`),
     refetchInterval: 60_000,
   });

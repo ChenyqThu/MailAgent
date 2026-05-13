@@ -1,21 +1,48 @@
 /** @type {import('tailwindcss').Config} */
+
+function cssVar(name) {
+  return ({ opacityValue }) => {
+    if (opacityValue !== undefined) {
+      return `rgb(var(${name}) / ${opacityValue})`;
+    }
+    return `rgb(var(${name}))`;
+  };
+}
+
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
         bg: {
-          primary: "#0f0f0f",
-          secondary: "#1a1a1a",
-          tertiary: "#242424",
-          hover: "#2a2a2a",
-          active: "#1e2a3a",
+          primary: cssVar("--color-bg-primary"),
+          secondary: cssVar("--color-bg-secondary"),
+          tertiary: cssVar("--color-bg-tertiary"),
+          hover: cssVar("--color-bg-hover"),
+          active: cssVar("--color-bg-active"),
         },
-        border: "#2e2e2e",
+        fg: {
+          primary: cssVar("--color-fg-primary"),
+          secondary: cssVar("--color-fg-secondary"),
+          tertiary: cssVar("--color-fg-tertiary"),
+          muted: cssVar("--color-fg-muted"),
+          faint: cssVar("--color-fg-faint"),
+        },
+        border: cssVar("--color-border"),
         accent: {
-          DEFAULT: "#4a9eff",
-          dim: "#1e3a5f",
+          DEFAULT: cssVar("--color-accent"),
+          dim: cssVar("--color-accent-dim"),
         },
+        status: {
+          danger: cssVar("--color-status-danger"),
+          warning: cssVar("--color-status-warning"),
+          success: cssVar("--color-status-success"),
+          info: cssVar("--color-status-info"),
+          caution: cssVar("--color-status-caution"),
+          purple: cssVar("--color-status-purple"),
+        },
+        overlay: "var(--color-overlay)",
+        "chart-bar": cssVar("--color-chart-bar"),
       },
     },
   },

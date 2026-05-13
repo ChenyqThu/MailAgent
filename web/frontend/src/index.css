@@ -2,6 +2,74 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Backgrounds */
+  --color-bg-primary: 255 255 255;
+  --color-bg-secondary: 249 250 251;
+  --color-bg-tertiary: 243 244 246;
+  --color-bg-hover: 243 244 246;
+  --color-bg-active: 219 234 254;
+
+  /* Text — each level must be clearly readable on white */
+  --color-fg-primary: 17 24 39;
+  --color-fg-secondary: 55 65 81;
+  --color-fg-tertiary: 75 85 99;
+  --color-fg-muted: 107 114 128;
+  --color-fg-faint: 156 163 175;
+
+  /* Border / Accent */
+  --color-border: 209 213 219;
+  --color-accent: 37 99 235;
+  --color-accent-dim: 219 234 254;
+
+  /* Status colors (-600 shades for light bg contrast) */
+  --color-status-danger: 220 38 38;
+  --color-status-warning: 234 88 12;
+  --color-status-success: 22 163 74;
+  --color-status-info: 37 99 235;
+  --color-status-caution: 180 83 9;
+  --color-status-purple: 147 51 234;
+
+  /* Standalone */
+  --color-overlay: rgba(0, 0, 0, 0.3);
+  --color-chart-bar: 209 213 219;
+  --color-scrollbar: #d1d5db;
+  --color-scrollbar-hover: #9ca3af;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg-primary: 15 15 15;
+    --color-bg-secondary: 26 26 26;
+    --color-bg-tertiary: 36 36 36;
+    --color-bg-hover: 42 42 42;
+    --color-bg-active: 30 42 58;
+
+    --color-fg-primary: 229 229 229;
+    --color-fg-secondary: 209 213 219;
+    --color-fg-tertiary: 156 163 175;
+    --color-fg-muted: 107 114 128;
+    --color-fg-faint: 75 85 99;
+
+    --color-border: 46 46 46;
+    --color-accent: 74 158 255;
+    --color-accent-dim: 30 58 95;
+
+    /* Status colors (dark mode: -400 shades) */
+    --color-status-danger: 248 113 113;
+    --color-status-warning: 251 146 60;
+    --color-status-success: 74 222 128;
+    --color-status-info: 96 165 250;
+    --color-status-caution: 250 204 21;
+    --color-status-purple: 192 132 252;
+
+    --color-overlay: rgba(0, 0, 0, 0.5);
+    --color-chart-bar: 55 65 81;
+    --color-scrollbar: #2e2e2e;
+    --color-scrollbar-hover: #444444;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 5px;
 }
@@ -9,9 +77,9 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2e2e2e;
+  background: var(--color-scrollbar);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #444;
+  background: var(--color-scrollbar-hover);
 }

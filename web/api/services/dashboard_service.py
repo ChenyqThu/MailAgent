@@ -7,10 +7,24 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from web.api.services.db import get_db
+
+
+def _clean_sender(raw: str) -> str:
+    """Extract readable name from 'Name <email>' or raw email."""
+    if not raw:
+        return "未知"
+    m = re.match(r'^"?([^"<]+)"?\s*<', raw)
+    if m:
+        return m.group(1).strip()
+    m = re.match(r'([^@]+)@', raw)
+    if m:
+        return m.group(1).strip()
+    return raw[:20]
 
 # 系统时区 UTC+8
 _TZ = timezone(timedelta(hours=8))
@@ -209,9 +223,46 @@ def get_digest(range_: str | None = None) -> dict[str, Any]:
 
         priorities = {r["priority"] or "未知": r["count"] for r in prio_rows}
 
+        # Action type 分布
+        action_rows = conn.execute("""
+            SELECT
+                json_extract(lp.labels_json, '$.action_type') as action_type,
+                COUNT(*) as count
+            FROM email_metadata em
+            JOIN llm_processing lp ON em.internal_id = lp.internal_id
+            WHERE em.sync_status = 'synced'
+            AND lp.status = 'success'
+            AND em.created_at > ?
+            GROUP BY action_type
+            ORDER BY count DESC
+        """, (since_ts,)).fetchall()
+
+        action_types = {r["action_type"] or "未知": r["count"] for r in action_rows}
+
+        # Top senders — prefer sender_name, fallback to sender email
+        sender_rows = conn.execute("""
+            SELECT
+                CASE
+                    WHEN em.sender_name IS NOT NULL AND em.sender_name != '' THEN em.sender_name
+                    WHEN em.sender IS NOT NULL AND em.sender != '' THEN em.sender
+                    ELSE '未知'
+                END as name,
+                COUNT(*) as count
+            FROM email_metadata em
+            WHERE em.sync_status = 'synced'
+            AND em.created_at > ?
+            GROUP BY name
+            ORDER BY count DESC
+            LIMIT 8
+        """, (since_ts,)).fetchall()
+
+        top_senders = [{"name": _clean_sender(r["name"]), "count": r["count"]} for r in sender_rows]
+
     return {
         "categories": categories,
         "priorities": priorities,
+        "action_types": action_types,
+        "top_senders": top_senders,
         "range": range_,
     }
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
+from web.api.config import web_config
 from web.api.deps import verify_token
 
 router = APIRouter(dependencies=[Depends(verify_token)])
@@ -39,20 +40,15 @@ def _get_client():
     if _client is not None:
         return _client
 
-    try:
-        from src.config import config
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"无法加载配置: {exc}")
-
-    if not config.llm_api_key:
+    if not web_config.llm_api_key:
         raise HTTPException(status_code=503, detail="LLM 未配置（需要 LLM_API_KEY）")
 
     from anthropic import AsyncAnthropic
 
     _client = AsyncAnthropic(
-        api_key=config.llm_api_key,
-        base_url=config.llm_api_base,
-        timeout=float(config.llm_timeout_sec),
+        api_key=web_config.llm_api_key,
+        base_url=web_config.llm_api_base,
+        timeout=web_config.llm_timeout,
         default_headers={
             "User-Agent": "MailAgent-Web/0.1 (Mozilla/5.0 compatible)",
         },
@@ -61,8 +57,7 @@ def _get_client():
 
 
 def _get_model() -> str:
-    from src.config import config
-    return config.llm_model
+    return web_config.llm_model
 
 
 @router.post("/emails/{email_id}/agent")

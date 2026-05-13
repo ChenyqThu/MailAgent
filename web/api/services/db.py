@@ -59,3 +59,32 @@ def get_db_rw() -> Generator[sqlite3.Connection, None, None]:
         conn.commit()
     finally:
         conn.close()
+
+
+_WEB_COLUMNS = [
+    ("processing_status", "TEXT"),
+    ("web_action_at", "REAL"),
+]
+
+
+def ensure_web_columns() -> None:
+    """启动时确保 web 层依赖的列存在（idempotent）。
+
+    当 web 作为独立部署运行时，MailAgent 主进程的 SyncStore 迁移
+    可能还没执行过，这里兜底创建 web 需要的列。
+    """
+    db_path = web_config.sync_store_db_path
+    if not Path(db_path).exists():
+        return
+
+    conn = _connect_rw(db_path)
+    try:
+        existing = {
+            row[1] for row in conn.execute("PRAGMA table_info(email_metadata)").fetchall()
+        }
+        for col_name, col_type in _WEB_COLUMNS:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE email_metadata ADD COLUMN {col_name} {col_type}")
+        conn.commit()
+    finally:
+        conn.close()

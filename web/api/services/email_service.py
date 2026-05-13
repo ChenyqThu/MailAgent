@@ -57,6 +57,46 @@ def _row_to_list_item(row: dict, labels: Dict[str, Any]) -> EmailListItem:
     )
 
 
+_VIEW_BROWSE_EXCLUDE_PRIORITY = "⚪ 低"
+
+
+def _apply_view_conditions(
+    view: Optional[str],
+    conditions: List[str],
+    params: List[Any],
+) -> Optional[str]:
+    """根据 view 参数追加 SQL 条件，返回 labels 后过滤的视图名（browse/ignore 需后过滤）。"""
+    if view == "pending":
+        conditions.append("em.is_flagged = 1")
+        conditions.append("lp.status = 'success'")
+        conditions.append("COALESCE(em.processing_status, '') != '已完成'")
+        return None
+    if view == "browse":
+        conditions.append("em.is_flagged = 0")
+        conditions.append("lp.status = 'success'")
+        conditions.append("COALESCE(em.processing_status, '') NOT IN ('已浏览', '已完成')")
+        return "browse"  # 需后过滤：action_type=仅供参考 + priority 非 ⚪低
+    if view == "ignore":
+        conditions.append("em.is_flagged = 0")
+        conditions.append("lp.status = 'success'")
+        return "ignore"  # 需后过滤：priority=⚪低
+    # view=all 或 None
+    return None
+
+
+def _post_filter_by_view(item: EmailListItem, view_post: Optional[str]) -> bool:
+    """labels 层后过滤，返回 True 表示保留。"""
+    if view_post == "browse":
+        return (
+            item.action_type == "仅供参考"
+            and item.priority is not None
+            and item.priority != _VIEW_BROWSE_EXCLUDE_PRIORITY
+        )
+    if view_post == "ignore":
+        return item.priority == _VIEW_BROWSE_EXCLUDE_PRIORITY
+    return True
+
+
 def list_emails(
     filter: EmailFilter,
     page: int = 1,
@@ -66,16 +106,17 @@ def list_emails(
     conditions = ["em.sync_status = 'synced'"]
     params: List[Any] = []
 
-    # 待处理视图：AI 已审 + 旗标还在 = 需要用户处理
-    need_join_lp = True  # 默认 JOIN llm_processing
-    if filter.pending_only:
-        conditions.append("em.is_flagged = 1")
-        conditions.append("lp.status = 'success'")
+    # view 优先；无 view 时降级到旧 pending_only 逻辑
+    view = filter.view
+    if not view:
+        view = "pending" if filter.pending_only else "all"
+
+    view_post = _apply_view_conditions(view, conditions, params)
 
     if filter.mailbox:
         conditions.append("em.mailbox = ?")
         params.append(filter.mailbox)
-    if not filter.pending_only and filter.is_flagged is not None:
+    if view == "all" and filter.is_flagged is not None:
         conditions.append("em.is_flagged = ?")
         params.append(int(filter.is_flagged))
     if filter.search:
@@ -85,37 +126,55 @@ def list_emails(
 
     where = " AND ".join(conditions)
     join_clause = "LEFT JOIN llm_processing lp ON em.internal_id = lp.internal_id"
-    # pending_only 用了 lp.status 条件，JOIN 变成 INNER 语义（条件已限制 lp.status='success'）
+
+    needs_post_filter = view_post is not None or filter.priority or filter.action_type or filter.category
 
     with get_db() as conn:
-        count_sql = f"""
-            SELECT COUNT(*) as cnt
-            FROM email_metadata em
-            {join_clause}
-            WHERE {where}
-        """
-        total = conn.execute(count_sql, params).fetchone()["cnt"]
+        if needs_post_filter:
+            # 后过滤视图：拉全量 SQL 结果，内存过滤+分页（数据量小，~200 条）
+            list_sql = f"""
+                SELECT em.*,
+                       lp.status as llm_status,
+                       lp.labels_json
+                FROM email_metadata em
+                {join_clause}
+                WHERE {where}
+                ORDER BY em.internal_id DESC
+            """
+            rows = conn.execute(list_sql, params).fetchall()
+        else:
+            # 无后过滤：SQL 分页
+            count_sql = f"""
+                SELECT COUNT(*) as cnt
+                FROM email_metadata em
+                {join_clause}
+                WHERE {where}
+            """
+            sql_total = conn.execute(count_sql, params).fetchone()["cnt"]
 
-        offset = (page - 1) * page_size
-        list_sql = f"""
-            SELECT em.*,
-                   lp.status as llm_status,
-                   lp.labels_json
-            FROM email_metadata em
-            {join_clause}
-            WHERE {where}
-            ORDER BY em.internal_id DESC
-            LIMIT ? OFFSET ?
-        """
-        rows = conn.execute(list_sql, params + [page_size, offset]).fetchall()
+            offset = (page - 1) * page_size
+            list_sql = f"""
+                SELECT em.*,
+                       lp.status as llm_status,
+                       lp.labels_json
+                FROM email_metadata em
+                {join_clause}
+                WHERE {where}
+                ORDER BY em.internal_id DESC
+                LIMIT ? OFFSET ?
+            """
+            rows = conn.execute(list_sql, params + [page_size, offset]).fetchall()
 
-    items = []
+    all_items = []
     for row in rows:
         row_dict = dict(row)
         labels = _parse_labels(row_dict.pop("labels_json", None))
         item = _row_to_list_item(row_dict, labels)
 
-        # 后过滤（labels 内字段，无法在 SQL 层过滤）
+        # view 后过滤（browse/ignore 依赖 labels_json 内字段）
+        if not _post_filter_by_view(item, view_post):
+            continue
+        # 叠加筛选（快捷标签过滤）
         if filter.priority and item.priority != filter.priority:
             continue
         if filter.action_type and item.action_type != filter.action_type:
@@ -123,11 +182,56 @@ def list_emails(
         if filter.category and item.category != filter.category:
             continue
 
-        items.append(item)
+        all_items.append(item)
 
-    # SQL 已按 internal_id DESC 排序（新邮件 id 更大），后过滤不改变顺序
+    if needs_post_filter:
+        total = len(all_items)
+        offset = (page - 1) * page_size
+        items = all_items[offset : offset + page_size]
+    else:
+        total = sql_total  # type: ignore[possibly-undefined]
+        items = all_items
 
     return items, total
+
+
+def get_view_counts() -> Dict[str, int]:
+    """返回各视图邮件数量（供 tab badge 用）。"""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT em.is_flagged, em.processing_status,
+                   lp.status as llm_status,
+                   lp.labels_json
+            FROM email_metadata em
+            LEFT JOIN llm_processing lp ON em.internal_id = lp.internal_id
+            WHERE em.sync_status = 'synced'
+            """
+        ).fetchall()
+
+    pending = 0
+    browse = 0
+    ignore = 0
+    total = len(rows)
+
+    for row in rows:
+        flagged = bool(row["is_flagged"])
+        proc_status = row["processing_status"] or ""
+        llm_ok = row["llm_status"] == "success"
+        labels = _parse_labels(row["labels_json"])
+        priority = labels.get("priority")
+        action_type = labels.get("action_type")
+
+        if flagged and llm_ok and proc_status != "已完成":
+            pending += 1
+        elif not flagged and llm_ok:
+            if priority == _VIEW_BROWSE_EXCLUDE_PRIORITY:
+                ignore += 1
+            elif action_type == "仅供参考" and priority is not None:
+                if proc_status not in ("已浏览", "已完成"):
+                    browse += 1
+
+    return {"pending": pending, "browse": browse, "ignore": ignore, "all": total}
 
 
 def get_email_detail(internal_id: int) -> Optional[EmailDetail]:

@@ -9,7 +9,7 @@ const LINKS = [
 export function NavBar() {
   return (
     <header className="h-11 flex items-center px-4 border-b border-border flex-shrink-0 gap-6">
-      <span className="text-sm font-semibold text-gray-300 mr-2">MailAgent</span>
+      <span className="text-sm font-semibold text-fg-secondary mr-2">MailAgent</span>
       <nav className="flex gap-1">
         {LINKS.map((link) => (
           <NavLink
@@ -21,7 +21,7 @@ export function NavBar() {
                 "px-3 py-1 rounded text-xs transition-colors",
                 isActive
                   ? "bg-accent-dim text-accent font-medium"
-                  : "text-gray-500 hover:text-gray-300"
+                  : "text-fg-muted hover:text-fg-secondary"
               )
             }
           >

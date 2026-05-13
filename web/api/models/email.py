@@ -49,6 +49,7 @@ class EmailDetail(EmailListItem):
 
 
 class EmailFilter(BaseModel):
+    view: Optional[str] = None  # pending | browse | ignore | all
     mailbox: Optional[str] = None
     priority: Optional[str] = None
     action_type: Optional[str] = None
@@ -56,4 +57,4 @@ class EmailFilter(BaseModel):
     is_flagged: Optional[bool] = None
     llm_status: Optional[str] = None
     search: Optional[str] = None
-    pending_only: bool = True
+    pending_only: bool = True  # 兼容旧逻辑，view 优先

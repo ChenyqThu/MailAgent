@@ -7,11 +7,14 @@ import { ActionBar } from "./ActionBar";
 import { apiFetch } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 
+import type { EmailView } from "@/lib/types";
+
 interface Props {
   emailId: number;
+  view?: EmailView;
 }
 
-export function DetailPanel({ emailId }: Props) {
+export function DetailPanel({ emailId, view }: Props) {
   const { data: email, isLoading, error } = useEmailDetail(emailId);
   const { data: bodyData, isLoading: bodyLoading } = useEmailBody(emailId);
   const queryClient = useQueryClient();
@@ -33,7 +36,7 @@ export function DetailPanel({ emailId }: Props) {
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
+      <div className="flex-1 flex items-center justify-center text-fg-faint text-sm">
         加载中...
       </div>
     );
@@ -41,7 +44,7 @@ export function DetailPanel({ emailId }: Props) {
 
   if (error || !email) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
+      <div className="flex-1 flex items-center justify-center text-fg-faint text-sm">
         加载失败
       </div>
     );
@@ -55,10 +58,10 @@ export function DetailPanel({ emailId }: Props) {
           className="flex items-center justify-between px-4 py-1.5 cursor-pointer hover:bg-bg-hover"
           onClick={() => setHeaderCollapsed(!headerCollapsed)}
         >
-          <h2 className="text-sm font-medium text-gray-100 truncate flex-1 mr-4">
+          <h2 className="text-sm font-medium text-fg-primary truncate flex-1 mr-4">
             {email.subject || "(无主题)"}
           </h2>
-          <span className="text-[10px] text-gray-600">
+          <span className="text-[10px] text-fg-faint">
             {headerCollapsed ? "展开 ▼" : "收起 ▲"}
           </span>
         </div>
@@ -74,6 +77,7 @@ export function DetailPanel({ emailId }: Props) {
           isFlagged={email.is_flagged}
           isRead={email.is_read}
           isDone={!email.is_flagged && email.llm_status === "success"}
+          view={view}
           onAction={handleAction}
         />
       </div>
@@ -81,15 +85,15 @@ export function DetailPanel({ emailId }: Props) {
       {/* 正文区域 — 占满剩余空间 */}
       <div className="flex-1 overflow-y-auto px-5 py-3 min-h-0">
         {bodyLoading ? (
-          <div className="text-xs text-gray-600 animate-pulse">
+          <div className="text-xs text-fg-faint animate-pulse">
             正在从 Notion 加载正文...
           </div>
         ) : bodyData?.body ? (
-          <pre className="text-[13px] text-gray-300 whitespace-pre-wrap font-sans leading-relaxed">
+          <pre className="text-[13px] text-fg-secondary whitespace-pre-wrap font-sans leading-relaxed">
             {bodyData.body}
           </pre>
         ) : (
-          <div className="text-xs text-gray-600">
+          <div className="text-xs text-fg-faint">
             {email.notion_page_id ? "正文为空" : "该邮件未同步到 Notion"}
           </div>
         )}

@@ -18,6 +18,7 @@ router = APIRouter(prefix="/emails", tags=["邮件"])
 async def list_emails(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    view: Optional[str] = None,
     mailbox: Optional[str] = None,
     priority: Optional[str] = None,
     action_type: Optional[str] = None,
@@ -29,6 +30,7 @@ async def list_emails(
 ):
     """获取邮件列表（智能排序）。"""
     filter = EmailFilter(
+        view=view,
         mailbox=mailbox,
         priority=priority,
         action_type=action_type,
@@ -45,6 +47,14 @@ async def list_emails(
         page_size=page_size,
         has_more=(page * page_size) < total,
     )
+
+
+@router.get("/view-counts")
+async def view_counts(
+    _token: str = Depends(verify_token),
+):
+    """各视图邮件数量（供 tab badge 用）。"""
+    return email_service.get_view_counts()
 
 
 @router.get("/{internal_id}", response_model=EmailDetail)

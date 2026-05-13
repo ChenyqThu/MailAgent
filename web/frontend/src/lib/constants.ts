@@ -4,26 +4,26 @@ export const PRIORITY_CONFIG: Record<
 > = {
   "🔴 紧急": {
     label: "紧急",
-    color: "text-red-400",
-    bg: "bg-red-500/15",
+    color: "text-status-danger",
+    bg: "bg-status-danger/15",
     order: 1,
   },
   "🟡 重要": {
     label: "重要",
-    color: "text-orange-400",
-    bg: "bg-orange-500/15",
+    color: "text-status-warning",
+    bg: "bg-status-warning/15",
     order: 2,
   },
   "🟢 一般": {
     label: "一般",
-    color: "text-green-400",
-    bg: "bg-green-500/15",
+    color: "text-status-success",
+    bg: "bg-status-success/15",
     order: 3,
   },
   "⚪ 低": {
     label: "低",
-    color: "text-gray-500",
-    bg: "bg-gray-500/15",
+    color: "text-fg-muted",
+    bg: "bg-fg-muted/15",
     order: 4,
   },
 };

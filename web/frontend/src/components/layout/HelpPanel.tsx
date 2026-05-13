@@ -15,13 +15,13 @@ const SHORTCUTS = [
 
 export function HelpPanel({ onClose }: Props) {
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-overlay">
       <div className="bg-bg-secondary rounded-lg border border-border w-80 shadow-xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <span className="text-sm font-medium text-gray-200">快捷键</span>
+          <span className="text-sm font-medium text-fg-primary">快捷键</span>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-300 text-xs"
+            className="text-fg-muted hover:text-fg-secondary text-xs"
           >
             Esc 关闭
           </button>
@@ -29,10 +29,10 @@ export function HelpPanel({ onClose }: Props) {
         <div className="px-4 py-3 space-y-2">
           {SHORTCUTS.map((s) => (
             <div key={s.key} className="flex items-center gap-3">
-              <kbd className="min-w-[48px] text-center px-2 py-0.5 rounded bg-bg-tertiary border border-border text-[11px] font-mono text-gray-300">
+              <kbd className="min-w-[48px] text-center px-2 py-0.5 rounded bg-bg-tertiary border border-border text-[11px] font-mono text-fg-secondary">
                 {s.key}
               </kbd>
-              <span className="text-xs text-gray-400">{s.desc}</span>
+              <span className="text-xs text-fg-tertiary">{s.desc}</span>
             </div>
           ))}
         </div>

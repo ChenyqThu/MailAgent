@@ -1,8 +1,9 @@
 import { useState, useCallback, useMemo } from "react";
-import type { EmailFilter } from "@/lib/types";
+import type { EmailFilter, EmailView } from "@/lib/types";
 import { useEmails } from "@/hooks/useEmails";
 import { useEmailBody } from "@/hooks/useEmailBody";
 import { useEmailDetail } from "@/hooks/useEmailDetail";
+import { useViewCounts } from "@/hooks/useViewCounts";
 import { useKeyboard } from "@/hooks/useKeyboard";
 import { FilterBar } from "@/components/email-list/FilterBar";
 import { EmailList } from "@/components/email-list/EmailList";
@@ -14,10 +15,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 
 export default function InboxPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialId = searchParams.get("id");
+  const initialView = (searchParams.get("view") as EmailView) || "pending";
 
-  const [filter, setFilter] = useState<EmailFilter>({});
+  const [filter, setFilter] = useState<EmailFilter>({ view: initialView });
   const [activeId, setActiveId] = useState<number | null>(
     initialId ? Number(initialId) : null
   );
@@ -30,6 +32,7 @@ export default function InboxPage() {
 
   const queryClient = useQueryClient();
   const { data, isLoading } = useEmails(filter, page, 50);
+  const { data: viewCounts } = useViewCounts();
   const emails = data?.items ?? [];
   const total = data?.total ?? 0;
 
@@ -37,12 +40,16 @@ export default function InboxPage() {
   const { data: activeEmail } = useEmailDetail(activeId);
   const { data: bodyData } = useEmailBody(activeId);
 
+  const activeView = filter.view ?? "pending";
+
   const performAction = useCallback(async (action: string, emailId?: number) => {
     const id = emailId ?? activeId;
     if (!id) return;
 
-    // mark_done 在待处理视图下：先算下一封，再发请求
-    const shouldAdvance = action === "mark_done" && filter.pending_only !== false;
+    // mark_done/mark_browsed 在对应视图下：先算下一封，再发请求
+    const shouldAdvance =
+      (action === "mark_done" && activeView === "pending") ||
+      (action === "mark_browsed" && activeView === "browse");
     let nextId: number | null = null;
     if (shouldAdvance) {
       const idx = emails.findIndex((e) => e.internal_id === id);
@@ -59,10 +66,11 @@ export default function InboxPage() {
       if (shouldAdvance) setActiveId(nextId);
       queryClient.invalidateQueries({ queryKey: ["emails"] });
       queryClient.invalidateQueries({ queryKey: ["email-detail", id] });
+      queryClient.invalidateQueries({ queryKey: ["view-counts"] });
     } catch {
       // silent
     }
-  }, [activeId, emails, filter.pending_only, queryClient]);
+  }, [activeId, activeView, emails, queryClient]);
 
   const performBatchAction = useCallback(async (action: string) => {
     if (selectedIds.size === 0) return;
@@ -74,6 +82,7 @@ export default function InboxPage() {
     );
     await Promise.all(promises);
     queryClient.invalidateQueries({ queryKey: ["emails"] });
+    queryClient.invalidateQueries({ queryKey: ["view-counts"] });
     setSelectedIds(new Set());
     setSelectMode(false);
   }, [selectedIds, queryClient]);
@@ -98,7 +107,7 @@ export default function InboxPage() {
         const prev = currentIndex > 0 ? currentIndex - 1 : 0;
         if (emails[prev]) setActiveId(emails[prev].internal_id);
       },
-      e: () => performAction("mark_done"),
+      e: () => performAction(activeView === "browse" ? "mark_browsed" : "mark_done"),
       s: () => performAction("toggle_flag"),
       r: () => performAction("toggle_read"),
       x: () => {
@@ -117,7 +126,7 @@ export default function InboxPage() {
         setActiveId(null);
       },
     };
-  }, [emails, activeId, performAction, showHelp, selectMode, searchOpen, aiOpen]);
+  }, [emails, activeId, activeView, performAction, showHelp, selectMode, searchOpen, aiOpen]);
 
   useKeyboard(handlers);
 
@@ -129,7 +138,15 @@ export default function InboxPage() {
     setFilter(f);
     setPage(1);
     setActiveId(null);
-  }, []);
+    const view = f.view ?? "pending";
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (view === "pending") next.delete("view");
+      else next.set("view", view);
+      next.delete("id");
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   return (
     <div className="flex-1 flex overflow-hidden relative">
@@ -138,7 +155,7 @@ export default function InboxPage() {
         <FilterBar
           filter={filter}
           onFilterChange={handleFilterChange}
-          total={total}
+          viewCounts={viewCounts}
           searchOpen={searchOpen}
           onSearchToggle={setSearchOpen}
         />
@@ -149,23 +166,26 @@ export default function InboxPage() {
             <span className="text-[11px] text-accent font-medium">
               已选 {selectedIds.size} 封
             </span>
-            <button
-              onClick={() => performBatchAction("mark_done")}
-              disabled={selectedIds.size === 0}
-              className="px-2 py-0.5 rounded text-[11px] bg-accent text-white disabled:opacity-40"
-            >
-              批量完成
-            </button>
-            <button
-              onClick={() => performBatchAction("archive")}
-              disabled={selectedIds.size === 0}
-              className="px-2 py-0.5 rounded text-[11px] bg-bg-tertiary text-gray-400 disabled:opacity-40"
-            >
-              批量归档
-            </button>
+            {activeView === "browse" ? (
+              <button
+                onClick={() => performBatchAction("mark_browsed")}
+                disabled={selectedIds.size === 0}
+                className="px-2 py-0.5 rounded text-[11px] bg-accent text-white disabled:opacity-40"
+              >
+                批量已阅
+              </button>
+            ) : (
+              <button
+                onClick={() => performBatchAction("mark_done")}
+                disabled={selectedIds.size === 0}
+                className="px-2 py-0.5 rounded text-[11px] bg-accent text-white disabled:opacity-40"
+              >
+                批量完成
+              </button>
+            )}
             <button
               onClick={() => { setSelectMode(false); setSelectedIds(new Set()); }}
-              className="ml-auto text-[11px] text-gray-500 hover:text-gray-300"
+              className="ml-auto text-[11px] text-fg-muted hover:text-fg-secondary"
             >
               取消
             </button>
@@ -173,7 +193,7 @@ export default function InboxPage() {
         )}
 
         {isLoading ? (
-          <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
+          <div className="flex-1 flex items-center justify-center text-fg-faint text-sm">
             加载中...
           </div>
         ) : (
@@ -187,7 +207,7 @@ export default function InboxPage() {
           />
         )}
         {total > 50 && (
-          <div className="px-3 py-2 border-t border-border flex items-center justify-between text-[11px] text-gray-500">
+          <div className="px-3 py-2 border-t border-border flex items-center justify-between text-[11px] text-fg-muted">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
@@ -209,12 +229,12 @@ export default function InboxPage() {
 
       {/* 中间详情 */}
       {activeId ? (
-        <DetailPanel emailId={activeId} />
+        <DetailPanel emailId={activeId} view={activeView} />
       ) : (
-        <div className="flex-1 flex flex-col items-center justify-center text-gray-600 text-sm gap-1">
+        <div className="flex-1 flex flex-col items-center justify-center text-fg-faint text-sm gap-1">
           <span>选择一封邮件查看详情</span>
-          <span className="text-[11px] text-gray-700">
-            快捷键: J/K 导航, E 完成, S 旗标, I 打开AI, ? 帮助
+          <span className="text-[11px] text-fg-faint">
+            快捷键: J/K 导航, E {activeView === "browse" ? "已阅" : "完成"}, S 旗标, I 打开AI, ? 帮助
           </span>
         </div>
       )}

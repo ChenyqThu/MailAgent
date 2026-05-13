@@ -116,7 +116,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
     <div className="h-full flex flex-col bg-bg-primary">
       {/* 头部 */}
       <div className="flex-shrink-0 px-3 py-2 border-b border-border flex items-center gap-2">
-        <span className="text-xs font-medium text-gray-300">AI 助手</span>
+        <span className="text-xs font-medium text-fg-secondary">AI 助手</span>
         <div className="flex-1" />
 
         {/* 上下文模式切换 */}
@@ -127,7 +127,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
               "px-2 py-0.5 rounded text-[10px] transition-colors",
               mode === "email"
                 ? "bg-accent text-white"
-                : "text-gray-500 hover:text-gray-300"
+                : "text-fg-muted hover:text-fg-secondary"
             )}
           >
             当前邮件
@@ -138,7 +138,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
               "px-2 py-0.5 rounded text-[10px] transition-colors",
               mode === "global"
                 ? "bg-accent text-white"
-                : "text-gray-500 hover:text-gray-300"
+                : "text-fg-muted hover:text-fg-secondary"
             )}
           >
             全局检索
@@ -147,7 +147,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
 
         <button
           onClick={onClose}
-          className="text-gray-600 hover:text-gray-300 text-sm ml-1"
+          className="text-fg-faint hover:text-fg-secondary text-sm ml-1"
         >
           ✕
         </button>
@@ -157,14 +157,14 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
       <div className="flex-shrink-0 px-3 py-1.5 border-b border-border bg-bg-secondary">
         {mode === "email" ? (
           hasEmail ? (
-            <div className="text-[10px] text-gray-500 truncate">
-              上下文: <span className="text-gray-400">{subject || "(无主题)"}</span>
+            <div className="text-[10px] text-fg-muted truncate">
+              上下文: <span className="text-fg-tertiary">{subject || "(无主题)"}</span>
             </div>
           ) : (
-            <div className="text-[10px] text-yellow-600">未选择邮件，请先在左侧选择</div>
+            <div className="text-[10px] text-status-caution">未选择邮件，请先在左侧选择</div>
           )
         ) : (
-          <div className="text-[10px] text-gray-500">
+          <div className="text-[10px] text-fg-muted">
             全局模式: 跨邮件搜索与分析
           </div>
         )}
@@ -182,7 +182,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
                 "px-2 py-1 rounded text-[11px] transition-colors",
                 loading
                   ? "opacity-50 cursor-wait"
-                  : "bg-bg-tertiary text-gray-300 hover:bg-accent-dim hover:text-accent"
+                  : "bg-bg-tertiary text-fg-secondary hover:bg-accent-dim hover:text-accent"
               )}
             >
               {a.icon} {a.label}
@@ -194,16 +194,16 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
       {/* 消息列表 */}
       <div className="flex-1 overflow-y-auto px-3 py-3 min-h-0 space-y-3">
         {messages.length === 0 && !loading && (
-          <div className="text-[11px] text-gray-700 text-center mt-8 space-y-2">
+          <div className="text-[11px] text-fg-faint text-center mt-8 space-y-2">
             {mode === "email" ? (
               <>
                 <p>点击上方快捷按钮或输入问题</p>
-                <p className="text-gray-800">支持翻译、总结、起草回复等</p>
+                <p className="text-fg-faint">支持翻译、总结、起草回复等</p>
               </>
             ) : (
               <>
                 <p>输入问题进行全局邮件检索</p>
-                <p className="text-gray-800">例: "最近关于项目延期的邮件有哪些"</p>
+                <p className="text-fg-faint">例: "最近关于项目延期的邮件有哪些"</p>
               </>
             )}
           </div>
@@ -225,7 +225,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
               </span>
             ) : (
               <div className="bg-bg-secondary border border-border rounded-lg px-3 py-2">
-                <pre className="text-[13px] text-gray-300 whitespace-pre-wrap font-sans leading-relaxed">
+                <pre className="text-[13px] text-fg-secondary whitespace-pre-wrap font-sans leading-relaxed">
                   {msg.content}
                 </pre>
               </div>
@@ -235,7 +235,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
 
         {loading && (
           <div className="bg-bg-secondary border border-border rounded-lg px-3 py-2">
-            <span className="text-xs text-gray-500 animate-pulse">AI 处理中...</span>
+            <span className="text-xs text-fg-muted animate-pulse">AI 处理中...</span>
           </div>
         )}
 
@@ -257,7 +257,7 @@ export function AgentPanel({ emailId, body, subject, onClose }: Props) {
               }
             }}
             placeholder={mode === "email" ? "输入指令..." : "搜索或提问..."}
-            className="flex-1 bg-bg-tertiary rounded px-2.5 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 outline-none focus:ring-1 focus:ring-accent/50"
+            className="flex-1 bg-bg-tertiary rounded px-2.5 py-1.5 text-xs text-fg-primary placeholder:text-fg-faint outline-none focus:ring-1 focus:ring-accent/50"
           />
           <button
             onClick={handleSubmit}

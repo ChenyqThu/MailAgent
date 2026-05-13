@@ -34,7 +34,7 @@ async def close_redis() -> None:
 async def push_event(event: Dict[str, Any]) -> None:
     """推送事件到 MailAgent 事件队列。"""
     r = await get_redis()
-    queue_key = f"mailagent:{web_config.email_database_id}"
+    queue_key = f"mailagent:{web_config.email_database_id}:events"
     payload = json.dumps(event, ensure_ascii=False)
     await r.lpush(queue_key, payload)
-    logger.debug(f"[web-redis] pushed event: {event.get('event')}")
+    logger.debug(f"[web-redis] pushed event: {event.get('type')}")

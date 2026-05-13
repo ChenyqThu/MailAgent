@@ -23,6 +23,7 @@ from loguru import logger
 
 from web.api.config import web_config
 from web.api.routes import api_router
+from web.api.services.db import ensure_web_columns
 from web.api.services.redis_service import close_redis
 
 
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
         f"[web-api] 启动 port={web_config.web_api_port} "
         f"db={web_config.sync_store_db_path}"
     )
+    ensure_web_columns()
     yield
     await close_redis()
     logger.info("[web-api] 关闭")

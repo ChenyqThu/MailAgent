@@ -29,7 +29,7 @@ export function EmailList({
 
   if (emails.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
+      <div className="flex-1 flex items-center justify-center text-fg-faint text-sm">
         没有邮件
       </div>
     );

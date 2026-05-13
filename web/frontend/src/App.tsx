@@ -6,7 +6,7 @@ export default function App() {
   useSSE();
 
   return (
-    <div className="h-screen flex flex-col bg-bg-primary text-gray-100">
+    <div className="h-screen flex flex-col bg-bg-primary text-fg-primary">
       <NavBar />
       <Outlet />
     </div>

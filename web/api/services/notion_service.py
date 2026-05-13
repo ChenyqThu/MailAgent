@@ -15,8 +15,7 @@ _client: Optional[AsyncClient] = None
 def _get_client() -> AsyncClient:
     global _client
     if _client is None:
-        from src.config import config
-        _client = AsyncClient(auth=config.notion_token)
+        _client = AsyncClient(auth=web_config.notion_token)
     return _client
 
 
