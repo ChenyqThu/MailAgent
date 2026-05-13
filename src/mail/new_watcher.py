@@ -113,7 +113,8 @@ class NewWatcher:
 
         self.notion_sync = NotionSync()
         self.email_reader = EmailReader()
-        self.meeting_sync = MeetingInviteSync()  # 会议邀请同步器
+        # 会议邀请同步器：注入 sync_store 以使用 recurring_series 表
+        self.meeting_sync = MeetingInviteSync(sync_store=self.sync_store)
 
         # 项目周报外挂钩子（需同时打开 PROJECT_PROGRESS_SYNC_ENABLED 总开关 +
         # PROJECT_PROGRESS_AUTO_SYNC_ENABLED 子开关，且配置了项目进度库 ID）

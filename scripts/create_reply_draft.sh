@@ -203,34 +203,91 @@ reset_clipboard() {
   fi
 }
 
-# 验证粘贴是否成功
-verify_paste() {
-  # 设置标记到剪贴板
-  printf '%s' "__PASTE_VERIFY__" | pbcopy
+# 强制 Mail.app 取得前台焦点；返回 0 表示 Mail 现在确实是前台进程
+# Mail.app 的 outgoing message.content 在 reply 编辑期间不暴露给 AppleScript，
+# 所以验证只能依赖键盘事件 + 剪贴板 — 必须先把 Mail 抢到前台才能保证 ⌘V/⌘A/⌘C 落到 reply 窗口
+ensure_mail_front() {
+  osascript 2>/dev/null <<'ASEOF'
+tell application "Mail"
+  activate
+  try
+    set frontmost to true
+  end try
+end tell
+ASEOF
+  sleep 0.4
 
-  # 通过 System Events 全选 + 复制正文内容
+  local front_app
+  front_app=$(osascript 2>/dev/null <<'ASEOF'
+tell application "System Events"
+  return name of first process whose frontmost is true
+end tell
+ASEOF
+)
+  if [[ "$front_app" == "Mail" ]]; then
+    return 0
+  fi
+  echo "ensure_mail_front: front=$front_app" >&2
+  return 1
+}
+
+# 撤销上一次粘贴（retry 前调用，避免重复粘贴累积）
+# Cocoa 编辑器中 ⌘V 是单步可撤销的原子操作，⌘Z 会精确回退最近一次 ⌘V，
+# 而 Mail 自动生成的 quoted reply 模板不在用户 undo 栈中，所以不会被撤销 — 引用线程保留
+# 上一次 ⌘V 实际未生效（焦点漂走）时，⌘Z 是空操作或撤销 Mail 中其他不相关的编辑，无副作用
+undo_last_paste() {
+  ensure_mail_front || return 1
+  osascript 2>/dev/null <<'ASEOF'
+tell application "System Events"
+  tell process "Mail"
+    keystroke "z" using command down
+    delay 0.3
+  end tell
+end tell
+ASEOF
+  sleep 0.3
+}
+
+# 验证粘贴是否成功
+# 流程：确保 Mail 前台 → 设剪贴板哨兵 → ⌘A+⌘C 抓 reply 窗口当前内容 → pbpaste 校验
+# Mail 不在前台时直接失败，避免"焦点漂走 → cmd-c 在别处生效 → grep 假成功"
+verify_paste() {
+  if ! ensure_mail_front; then
+    echo "verify: Mail not frontmost, cannot probe reply window" >&2
+    return 1
+  fi
+
+  printf '%s' "__PASTE_VERIFY_SENTINEL__" | pbcopy
+  sleep 0.2
+
   osascript 2>/dev/null <<'ASEOF'
 tell application "System Events"
   tell process "Mail"
     keystroke "a" using command down
-    delay 0.5
+    delay 0.4
     keystroke "c" using command down
-    delay 0.5
+    delay 0.4
     key code 124
   end tell
 end tell
 ASEOF
+  sleep 0.4
 
   local content
   content=$(pbpaste 2>/dev/null)
 
-  # 如果剪贴板没变，说明 System Events 完全不工作（屏幕休眠）
-  if [[ "$content" == "__PASTE_VERIFY__" ]]; then
-    echo "verify: System Events not responsive (display may be asleep)" >&2
+  if [[ "$content" == "__PASTE_VERIFY_SENTINEL__" ]]; then
+    echo "verify: clipboard not updated (cmd-a/cmd-c not delivered to Mail)" >&2
     return 1
   fi
 
-  # 如果有预期文本（非 rich text），验证正文包含该文本
+  local content_len=${#content}
+  if [[ $content_len -lt 10 ]]; then
+    echo "verify: clipboard content too short ($content_len chars)" >&2
+    return 1
+  fi
+
+  # 非 rich text 模式：reply 内容应包含 reply_text 第一行的特征文本
   if [[ "$REPLY_TEXT" != "(rich text)" ]]; then
     local expected
     expected=$(printf '%s' "$REPLY_TEXT" | sed '/^[[:space:]]*$/d' | head -1 | sed 's/[*#>`~_\[()]//g' | cut -c1-30 | xargs)
@@ -238,12 +295,12 @@ ASEOF
       if printf '%s' "$content" | grep -qF "$expected" 2>/dev/null; then
         return 0
       fi
-      echo "verify: expected text not found in body (expected: '$expected')" >&2
+      echo "verify: expected text not found in reply body (expected: '$expected', len=$content_len)" >&2
       return 1
     fi
   fi
 
-  # Fallback（rich text 或短文本）：System Events 可用即认为成功
+  # Rich text 模式或无可校验文本：clipboard 不为 sentinel + 长度 > 10 即视为粘贴有效
   return 0
 }
 
@@ -265,6 +322,8 @@ paste_and_save() {
     if [[ $attempt -gt 1 ]]; then
       echo "Paste retry attempt $attempt/$max_attempts" >&2
       wake_display
+      # 关键：retry 前撤销上次失败的粘贴，避免内容累积；引用线程不会被撤销
+      undo_last_paste
       reset_clipboard
     fi
 

@@ -37,6 +37,7 @@ Usage:
     store.mark_synced(message_id, notion_page_id)
 """
 
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -232,6 +233,35 @@ class SyncStore:
                 checked_at REAL,
                 note TEXT
             )
+        """)
+
+        # 周期会议系列元数据（用于滚动展开未来 occurrences）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recurring_series (
+                series_uid TEXT PRIMARY KEY,
+                rrule_str TEXT NOT NULL,
+                exdates_json TEXT DEFAULT '[]',
+                rdates_json TEXT DEFAULT '[]',
+                master_dtstart TEXT NOT NULL,
+                master_dtend TEXT NOT NULL,
+                master_summary TEXT,
+                master_organizer TEXT,
+                master_organizer_email TEXT,
+                master_location TEXT,
+                master_description TEXT,
+                master_tzid TEXT,
+                master_is_all_day INTEGER DEFAULT 0,
+                last_sequence INTEGER DEFAULT 0,
+                last_seen_message_id TEXT,
+                last_expanded_until TEXT,
+                last_modified TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_recurring_series_expanded_until
+            ON recurring_series(last_expanded_until)
         """)
 
         # 兼容性：保留 sync_failures 表（如果存在，用于迁移）
@@ -1785,3 +1815,187 @@ class SyncStore:
                 logger.error(f"Failed to retry dead letter: {e}")
                 conn.rollback()
                 return False
+
+    # ==================== 周期会议系列操作 ====================
+
+    def get_recurring_series(self, series_uid: str) -> Optional[Dict[str, Any]]:
+        """读取一条 recurring_series 记录。"""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT * FROM recurring_series WHERE series_uid = ?",
+                    (series_uid,),
+                )
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            except sqlite3.Error as e:
+                logger.error(f"Failed to get recurring_series {series_uid[:60]}: {e}")
+                return None
+
+    def upsert_recurring_series(self, row: Dict[str, Any]) -> bool:
+        """写入或更新一条 recurring_series 记录。
+
+        必填: series_uid, rrule_str, master_dtstart, master_dtend
+        其他字段 None/missing 视为不更新（但 created_at/updated_at 自动维护）
+        """
+        required = ("series_uid", "rrule_str", "master_dtstart", "master_dtend")
+        for k in required:
+            if not row.get(k):
+                logger.error(f"upsert_recurring_series missing required field: {k}")
+                return False
+
+        now = time.time()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT created_at FROM recurring_series WHERE series_uid = ?",
+                    (row["series_uid"],),
+                )
+                existing = cursor.fetchone()
+
+                payload = {
+                    "series_uid": row["series_uid"],
+                    "rrule_str": row["rrule_str"],
+                    "exdates_json": row.get("exdates_json", "[]"),
+                    "rdates_json": row.get("rdates_json", "[]"),
+                    "master_dtstart": row["master_dtstart"],
+                    "master_dtend": row["master_dtend"],
+                    "master_summary": row.get("master_summary"),
+                    "master_organizer": row.get("master_organizer"),
+                    "master_organizer_email": row.get("master_organizer_email"),
+                    "master_location": row.get("master_location"),
+                    "master_description": row.get("master_description"),
+                    "master_tzid": row.get("master_tzid"),
+                    "master_is_all_day": int(bool(row.get("master_is_all_day", False))),
+                    "last_sequence": int(row.get("last_sequence", 0)),
+                    "last_seen_message_id": row.get("last_seen_message_id"),
+                    "last_expanded_until": row.get("last_expanded_until"),
+                    "last_modified": row.get("last_modified"),
+                    "created_at": existing["created_at"] if existing else now,
+                    "updated_at": now,
+                }
+
+                cursor.execute(
+                    """
+                    INSERT INTO recurring_series (
+                        series_uid, rrule_str, exdates_json, rdates_json,
+                        master_dtstart, master_dtend,
+                        master_summary, master_organizer, master_organizer_email,
+                        master_location, master_description, master_tzid, master_is_all_day,
+                        last_sequence, last_seen_message_id,
+                        last_expanded_until, last_modified,
+                        created_at, updated_at
+                    ) VALUES (
+                        :series_uid, :rrule_str, :exdates_json, :rdates_json,
+                        :master_dtstart, :master_dtend,
+                        :master_summary, :master_organizer, :master_organizer_email,
+                        :master_location, :master_description, :master_tzid, :master_is_all_day,
+                        :last_sequence, :last_seen_message_id,
+                        :last_expanded_until, :last_modified,
+                        :created_at, :updated_at
+                    )
+                    ON CONFLICT(series_uid) DO UPDATE SET
+                        rrule_str=excluded.rrule_str,
+                        exdates_json=excluded.exdates_json,
+                        rdates_json=excluded.rdates_json,
+                        master_dtstart=excluded.master_dtstart,
+                        master_dtend=excluded.master_dtend,
+                        master_summary=excluded.master_summary,
+                        master_organizer=excluded.master_organizer,
+                        master_organizer_email=excluded.master_organizer_email,
+                        master_location=excluded.master_location,
+                        master_description=excluded.master_description,
+                        master_tzid=excluded.master_tzid,
+                        master_is_all_day=excluded.master_is_all_day,
+                        last_sequence=excluded.last_sequence,
+                        last_seen_message_id=excluded.last_seen_message_id,
+                        last_expanded_until=excluded.last_expanded_until,
+                        last_modified=excluded.last_modified,
+                        updated_at=excluded.updated_at
+                    """,
+                    payload,
+                )
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to upsert recurring_series: {e}")
+                conn.rollback()
+                return False
+
+    def append_exdate(self, series_uid: str, exdate_iso: str) -> bool:
+        """向 exdates_json 追加一个 ISO-8601 时间（去重，原子）。"""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                cursor.execute(
+                    "SELECT exdates_json FROM recurring_series WHERE series_uid = ?",
+                    (series_uid,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    conn.rollback()
+                    logger.warning(f"append_exdate: series not found {series_uid[:60]}")
+                    return False
+
+                try:
+                    existing = json.loads(row["exdates_json"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    existing = []
+                if not isinstance(existing, list):
+                    existing = []
+
+                if exdate_iso not in existing:
+                    existing.append(exdate_iso)
+
+                cursor.execute(
+                    "UPDATE recurring_series SET exdates_json = ?, updated_at = ? WHERE series_uid = ?",
+                    (json.dumps(existing), time.time(), series_uid),
+                )
+                conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to append_exdate {series_uid[:60]}: {e}")
+                conn.rollback()
+                return False
+
+    def update_expanded_until(self, series_uid: str, until_iso: str) -> bool:
+        """更新 last_expanded_until 高水位。"""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "UPDATE recurring_series SET last_expanded_until = ?, updated_at = ? WHERE series_uid = ?",
+                    (until_iso, time.time(), series_uid),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update_expanded_until {series_uid[:60]}: {e}")
+                conn.rollback()
+                return False
+
+    def iter_series_needing_expansion(self, cutoff_iso: str) -> Iterator[Dict[str, Any]]:
+        """返回 last_expanded_until < cutoff（或为空）的系列行。
+
+        Args:
+            cutoff_iso: ISO-8601 字符串，期望的高水位。低于此的系列需要补展。
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT * FROM recurring_series
+                    WHERE last_expanded_until IS NULL
+                       OR last_expanded_until < ?
+                    """,
+                    (cutoff_iso,),
+                )
+                for row in cursor.fetchall():
+                    yield dict(row)
+            except sqlite3.Error as e:
+                logger.error(f"Failed to iter_series_needing_expansion: {e}")
+                return

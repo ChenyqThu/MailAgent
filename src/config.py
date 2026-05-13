@@ -50,6 +50,16 @@ class Config(BaseSettings):
     health_check_interval: int = Field(default=3600, env="HEALTH_CHECK_INTERVAL", description="健康检查间隔(秒)")
     sync_store_db_path: str = Field(default="data/sync_store.db", env="SYNC_STORE_DB_PATH", description="同步状态存储SQLite数据库路径")
 
+    # 周期会议滚动展开配置
+    meeting_expansion_interval_seconds: int = Field(
+        default=86400, env="MEETING_EXPANSION_INTERVAL_SECONDS",
+        description="周期会议滚动展开间隔(秒)，默认每天一次"
+    )
+    meeting_expansion_horizon_weeks: int = Field(
+        default=4, env="MEETING_EXPANSION_HORIZON_WEEKS",
+        description="周期会议展开未来窗口宽度(周)"
+    )
+
     # 多邮箱同步配置
     sync_mailboxes: str = Field(
         default="收件箱",
@@ -146,7 +156,16 @@ class Config(BaseSettings):
     )
     llm_model: str = Field(
         default="claude-sonnet-4-6", env="LLM_MODEL",
-        description="调用的模型名（需网关支持）",
+        description="主模型名（需网关支持）。失败时按 LLM_FALLBACK_MODELS 顺序兜底。",
+    )
+    llm_fallback_models: str = Field(
+        default="gpt-5.4,claude-opus-4-7", env="LLM_FALLBACK_MODELS",
+        description=(
+            "主模型不可用时按顺序 fallback 的模型名（逗号分隔；留空禁用）。"
+            "Anthropic 协议（claude-*）走 /v1/messages + tool_use；"
+            "OpenAI 协议（gpt-*/gemini-*/codex-*）走 /v1/chat/completions 流式 + tool_calls，"
+            "由 client.py 按模型名前缀自动路由。fallback 触发条件：上一个模型抛 LLMCallError。"
+        ),
     )
     llm_max_tokens: int = Field(
         default=4096, env="LLM_MAX_TOKENS", description="单次生成 max_tokens",

@@ -48,7 +48,6 @@ class ContextLoader:
         if not token:
             logger.warning("[llm-context] NOTION_TOKEN empty; returning empty context")
             return ""
-        url = f"{_NOTION_API_BASE}/pages/{page_id}/markdown"
         headers = {
             "Authorization": f"Bearer {token}",
             "Notion-Version": _NOTION_API_VERSION,
@@ -56,16 +55,93 @@ class ContextLoader:
         }
         timeout = aiohttp.ClientTimeout(total=30)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as sess:
-                async with sess.get(url, headers=headers) as resp:
-                    if resp.status != 200:
-                        body = (await resp.text())[:300]
-                        logger.warning(
-                            f"[llm-context] GET markdown status={resp.status} body={body}"
-                        )
-                        return ""
-                    data = await resp.json()
-                    return (data.get("markdown") or "") if isinstance(data, dict) else ""
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as sess:
+                parent_md = await self._fetch_page_markdown(sess, page_id)
+                if not parent_md:
+                    return ""
+
+                child_pages = await self._list_child_pages(sess, page_id)
+                if not child_pages:
+                    return parent_md
+
+                parts = [parent_md]
+                fetched = 0
+                for child_id, title in child_pages:
+                    child_md = await self._fetch_page_markdown(sess, child_id)
+                    if child_md:
+                        parts.append(f"\n\n## {title}\n\n{child_md}")
+                        fetched += 1
+                logger.info(
+                    f"[llm-context] expanded {fetched}/{len(child_pages)} child pages "
+                    f"under {page_id[:8]}..."
+                )
+                return "\n\n".join(parts)
         except Exception as e:
             logger.warning(f"[llm-context] fetch exception: {e!r}")
             return ""
+
+    async def _fetch_page_markdown(
+        self, sess: aiohttp.ClientSession, page_id: str
+    ) -> str:
+        """GET /v1/pages/{id}/markdown — page body only, no child-page bodies."""
+        url = f"{_NOTION_API_BASE}/pages/{page_id}/markdown"
+        try:
+            async with sess.get(url) as resp:
+                if resp.status != 200:
+                    body = (await resp.text())[:300]
+                    logger.warning(
+                        f"[llm-context] GET markdown status={resp.status} "
+                        f"page={page_id[:8]} body={body}"
+                    )
+                    return ""
+                data = await resp.json()
+                return (data.get("markdown") or "") if isinstance(data, dict) else ""
+        except Exception as e:
+            logger.warning(f"[llm-context] markdown fetch exception page={page_id[:8]}: {e!r}")
+            return ""
+
+    async def _list_child_pages(
+        self, sess: aiohttp.ClientSession, parent_id: str
+    ) -> list[tuple[str, str]]:
+        """List direct child_page blocks under a parent page.
+
+        One level only — Notion's blocks/{id}/children does not recurse.
+        Pagination handled up to 200 children (more than enough for context).
+        Returns [(child_page_id, title), ...] in document order.
+        """
+        results: list[tuple[str, str]] = []
+        cursor: Optional[str] = None
+        for _ in range(2):  # up to 2 pages * 100 = 200 children
+            qs = "?page_size=100"
+            if cursor:
+                qs += f"&start_cursor={cursor}"
+            url = f"{_NOTION_API_BASE}/blocks/{parent_id}/children{qs}"
+            try:
+                async with sess.get(url) as resp:
+                    if resp.status != 200:
+                        body = (await resp.text())[:300]
+                        logger.warning(
+                            f"[llm-context] list children status={resp.status} "
+                            f"parent={parent_id[:8]} body={body}"
+                        )
+                        return results
+                    data = await resp.json()
+            except Exception as e:
+                logger.warning(
+                    f"[llm-context] list children exception parent={parent_id[:8]}: {e!r}"
+                )
+                return results
+
+            for block in data.get("results", []) or []:
+                if block.get("type") == "child_page":
+                    bid = block.get("id")
+                    title = (block.get("child_page") or {}).get("title") or "Untitled"
+                    if bid:
+                        results.append((bid, title))
+
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+        return results

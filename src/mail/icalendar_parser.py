@@ -51,6 +51,13 @@ class MeetingInvite:
     meeting_id: Optional[str] = None
     passcode: Optional[str] = None
 
+    # 周期性 (RFC 5545 RRULE / EXDATE / RECURRENCE-ID)
+    recurrence_rule: Optional[str] = None  # 原始 RRULE 值，如 "FREQ=WEEKLY;BYDAY=TU"
+    exdates: List[datetime] = field(default_factory=list)
+    rdates: List[datetime] = field(default_factory=list)
+    recurrence_id: Optional[datetime] = None  # 单实例 override 的目标时间，tz-aware
+    tzid: Optional[str] = None        # DTSTART 的 TZID，留作 expansion 时复用
+
 
 class ICalendarParser:
     """解析邮件中的 iCalendar 会议邀请"""
@@ -149,8 +156,14 @@ class ICalendarParser:
             lines = ical_content.split('\r\n') if '\r\n' in ical_content else ical_content.split('\n')
 
             # 提取字段
+            # 按 RFC 5545 块作用域采集：只读 VCALENDAR 顶层和 VEVENT 直接子项，
+            # 跳过 VALARM / VTIMEZONE 等嵌套块（否则 VALARM 的 DESCRIPTION:REMINDER
+            # 会覆盖 VEVENT 真正的 DESCRIPTION）。
             data = {}
             attendees_raw = []
+            exdates_raw = []   # [(key_part, value), ...] 单行可逗号分隔多个值
+            rdates_raw = []
+            block_stack: List[str] = []
 
             for line in lines:
                 line = line.strip()
@@ -159,10 +172,32 @@ class ICalendarParser:
 
                 # 处理带参数的键，如 DTSTART;TZID=China Standard Time:20260126T140000
                 key_part, value = line.split(':', 1)
+                bare_key = key_part.split(';')[0].upper()
+
+                if bare_key == 'BEGIN':
+                    block_stack.append(value.strip().upper())
+                    continue
+                if bare_key == 'END':
+                    if block_stack:
+                        block_stack.pop()
+                    continue
+
+                # 仅采集 VCALENDAR 顶层（METHOD 等）和 VEVENT 直接子项的字段
+                current_scope = block_stack[-1] if block_stack else None
+                if current_scope not in ('VCALENDAR', 'VEVENT'):
+                    continue
 
                 # 特殊处理 ATTENDEE (可能有多个)
                 if key_part.startswith('ATTENDEE'):
                     attendees_raw.append(line)
+                    continue
+
+                # 多值字段: EXDATE / RDATE 同一行可逗号分隔多个值，且可能多次出现
+                if bare_key == 'EXDATE':
+                    exdates_raw.append((key_part, value))
+                    continue
+                if bare_key == 'RDATE':
+                    rdates_raw.append((key_part, value))
                     continue
 
                 if ';' in key_part:
@@ -248,6 +283,28 @@ class ICalendarParser:
             except ValueError:
                 sequence = 0
 
+            # 解析 RRULE（轻量校验，semantic 解析交给 dateutil 在 expansion 时处理）
+            rrule_raw = data.get('RRULE', '')
+            if isinstance(rrule_raw, dict):
+                rrule_raw = rrule_raw.get('value', '')
+            recurrence_rule = self._parse_rrule(rrule_raw) if rrule_raw else None
+
+            # 解析 EXDATE / RDATE
+            exdates = self._parse_date_list(exdates_raw)
+            rdates = self._parse_date_list(rdates_raw)
+
+            # 解析 RECURRENCE-ID（单实例 override 的目标时间）
+            recurrence_id = self._parse_datetime(data.get('RECURRENCE-ID'))
+
+            # 提取 DTSTART 的 TZID（用于 expansion 时复现 wall-clock 锚点）
+            dtstart_raw = data.get('DTSTART')
+            tzid = None
+            if isinstance(dtstart_raw, dict):
+                for p in dtstart_raw.get('params', []):
+                    if p.startswith('TZID='):
+                        tzid = p[5:]
+                        break
+
             return MeetingInvite(
                 uid=uid,
                 method=method,
@@ -265,6 +322,11 @@ class ICalendarParser:
                 teams_url=teams_url,
                 meeting_id=meeting_id,
                 passcode=passcode,
+                recurrence_rule=recurrence_rule,
+                exdates=exdates,
+                rdates=rdates,
+                recurrence_id=recurrence_id,
+                tzid=tzid,
             )
 
         except Exception as e:
@@ -272,6 +334,65 @@ class ICalendarParser:
             import traceback
             logger.debug(traceback.format_exc())
             return None
+
+    # 允许的 RRULE FREQ（拒绝 SECONDLY/MINUTELY/HOURLY 防爆）
+    _ALLOWED_FREQ = {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
+
+    def _parse_rrule(self, value: str) -> Optional[str]:
+        """轻量校验 RRULE，通过返回原值，否则 None。
+
+        - 必须以 FREQ= 开头
+        - FREQ ∈ {DAILY, WEEKLY, MONTHLY, YEARLY}
+        - BYSETPOS+BYMONTHDAY 组合 → warning 但保留原值（dateutil 自行处理）
+        """
+        if not value or not isinstance(value, str):
+            return None
+
+        parts = {}
+        for token in value.split(';'):
+            if '=' in token:
+                k, v = token.split('=', 1)
+                parts[k.strip().upper()] = v.strip()
+
+        freq = parts.get('FREQ', '').upper()
+        if freq not in self._ALLOWED_FREQ:
+            logger.warning(f"[recurrence] unsupported FREQ={freq!r}, dropping RRULE: {value!r}")
+            return None
+
+        if 'BYSETPOS' in parts and 'BYMONTHDAY' in parts:
+            logger.warning(
+                f"[recurrence] BYSETPOS+BYMONTHDAY combo not in MVP scope (best-effort): {value!r}"
+            )
+
+        return value
+
+    def _parse_date_list(self, raw_entries: List[tuple]) -> List[datetime]:
+        """解析 EXDATE/RDATE 多值字段。
+
+        每个 entry = (key_part, value)，value 可逗号分隔多个 ISO 时间。
+        """
+        out: List[datetime] = []
+        for key_part, value in raw_entries:
+            # 提取 TZID（可能没有）
+            tz_name = None
+            if ';' in key_part:
+                for p in key_part.split(';')[1:]:
+                    if p.startswith('TZID='):
+                        tz_name = p[5:]
+                        break
+
+            for raw in value.split(','):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                # 复用 _parse_datetime 的逻辑：构造它期望的形状
+                if tz_name:
+                    dt = self._parse_datetime({'value': raw, 'params': [f'TZID={tz_name}']})
+                else:
+                    dt = self._parse_datetime(raw)
+                if dt is not None:
+                    out.append(dt)
+        return out
 
     def _is_all_day_event(self, dt_data) -> bool:
         """判断是否为全天事件"""
@@ -485,11 +606,57 @@ class ICalendarParser:
             organizer=invite.organizer,
             organizer_email=invite.organizer_email,
             attendees=invite.attendees,
-            is_recurring=False,
+            is_recurring=bool(invite.recurrence_rule),
+            recurrence_rule=invite.recurrence_rule,
             last_modified=datetime.now(self.beijing_tz),
         )
 
         # 保存原始描述供 description_parser 使用
         event._raw_description = invite.description
 
+        return event
+
+    def to_override_event(self, invite: MeetingInvite) -> CalendarEvent:
+        """将单实例 override 邀请转换为 CalendarEvent。
+
+        与 to_calendar_event 的区别：
+          - event_id = "{uid}@{recurrence_id_utc_iso}"，区分于主系列其他 occurrences
+          - master_event_id = invite.uid，便于系列级 cancel 查询
+          - recurrence_id = invite.recurrence_id（即被替换的原始 occurrence 时间）
+          - is_recurring=False（override 自身不是周期，只是周期中的一次）
+        """
+        if invite.recurrence_id is None:
+            raise ValueError("to_override_event requires invite.recurrence_id")
+
+        status_map = {
+            'confirmed': EventStatus.CONFIRMED,
+            'tentative': EventStatus.TENTATIVE,
+            'cancelled': EventStatus.CANCELLED,
+        }
+
+        recurrence_id_utc = invite.recurrence_id.astimezone(timezone.utc)
+        event_id = f"{invite.uid}@{recurrence_id_utc.strftime('%Y%m%dT%H%M%SZ')}"
+
+        event = CalendarEvent(
+            event_id=event_id,
+            calendar_name="Email Invite",
+            title=invite.summary,
+            start_time=invite.start_time,
+            end_time=invite.end_time,
+            is_all_day=invite.is_all_day,
+            location=invite.location,
+            description=invite.description,
+            url=invite.teams_url,
+            status=status_map.get(invite.status, EventStatus.TENTATIVE),
+            organizer=invite.organizer,
+            organizer_email=invite.organizer_email,
+            attendees=invite.attendees,
+            is_recurring=False,
+            recurrence_rule=None,
+            recurrence_id=invite.recurrence_id,
+            master_event_id=invite.uid,
+            original_start=invite.recurrence_id,
+            last_modified=datetime.now(self.beijing_tz),
+        )
+        event._raw_description = invite.description
         return event
