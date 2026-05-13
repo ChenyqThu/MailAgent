@@ -152,7 +152,6 @@ class ProjectProgressRunner:
         force: bool = False,
         dry_run: bool = False,
         project_limit: Optional[int] = None,
-        rebuild_body: bool = False,
         sheets: Optional[set] = None,
     ) -> SyncSummary:
         """同步一封项目周报邮件.
@@ -348,7 +347,6 @@ class ProjectProgressRunner:
                 parsed,
                 email_url,
                 mark_missing_as_done=do_mark_done,
-                rebuild_body=rebuild_body,
             )
         except Exception as e:
             logger.exception(f"[pp] upsert_all fatal: {e}")
@@ -414,7 +412,6 @@ class ProjectProgressRunner:
         email_url: Optional[str],
         *,
         mark_missing_as_done: bool,
-        rebuild_body: bool = False,
     ) -> Tuple[int, int, int, int, int, int, int, List[str], List[str]]:
         """返回 (created, updated, skipped, failed, marked_done_fallback,
                   projects_marked_done_sheet2, projects_marked_suspended_sheet3,
@@ -481,7 +478,6 @@ class ProjectProgressRunner:
                         client, row,
                         week_tag=parsed.week_tag,
                         source_email_url=email_url,
-                        rebuild_body=rebuild_body,
                         parent_page_id=parent_page_id,
                     )
 
@@ -668,20 +664,34 @@ class ProjectProgressRunner:
             ).fetchone()
         return dict(row) if row else None
 
-    def find_latest_pending(self) -> Optional[int]:
-        """从 email_metadata 找最近的一封项目周报邮件（未在 project_progress_sync 中 completed）。"""
-        sender_like = f"%{self.detector.sender}%"
-        # Subject regex 在 SQLite 里难做；用 LIKE 粗筛，再 Python 精筛
+    # subject LIKE 粗筛关键词: 与 PROJECT_PROGRESS_SUBJECT_PATTERN 的稳定子串保持一致
+    _SUBJECT_LIKE_KEYWORD = "%项目deadline汇报%"
+
+    def _query_candidates(
+        self, *, order_desc: bool, limit: int
+    ) -> List[Dict[str, Any]]:
+        """SQL 粗筛: subject LIKE 必筛, sender LIKE 仅在 detector 配置 sender 时启用."""
+        order = "DESC" if order_desc else "ASC"
+        params: List[Any] = [self._SUBJECT_LIKE_KEYWORD]
+        sender_clause = ""
+        if self.detector.sender_required:
+            sender_clause = "AND (sender LIKE ? OR sender LIKE ?) "
+            sender_like = f"%{self.detector.sender}%"
+            params.extend([sender_like, sender_like.upper()])
+        params.append(limit)
+        sql = (
+            "SELECT internal_id, subject, sender, date_received FROM email_metadata "
+            f"WHERE subject LIKE ? {sender_clause}"
+            f"ORDER BY date_received {order} LIMIT ?"
+        )
         with sqlite3.connect(self.sync_store_db_path, timeout=30) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT internal_id, subject, sender, date_received FROM email_metadata "
-                "WHERE (sender LIKE ? OR sender LIKE ?) "
-                "AND subject LIKE '%项目deadline汇报%' "
-                "ORDER BY date_received DESC LIMIT 50",
-                (sender_like, sender_like.upper()),
-            ).fetchall()
-        for row in rows:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+
+    def find_latest_pending(self) -> Optional[int]:
+        """从 email_metadata 找最近的一封项目周报邮件（未在 project_progress_sync 中 completed）。"""
+        for row in self._query_candidates(order_desc=True, limit=50):
             if not self.detector.is_match(sender=row["sender"], subject=row["subject"]):
                 continue
             rec = self.progress_store.get(row["internal_id"])
@@ -691,18 +701,8 @@ class ProjectProgressRunner:
         return None
 
     def find_all_history(self, limit: int = 20) -> List[int]:
-        sender_like = f"%{self.detector.sender}%"
-        with sqlite3.connect(self.sync_store_db_path, timeout=30) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT internal_id, subject, sender, date_received FROM email_metadata "
-                "WHERE (sender LIKE ? OR sender LIKE ?) "
-                "AND subject LIKE '%项目deadline汇报%' "
-                "ORDER BY date_received ASC LIMIT ?",
-                (sender_like, sender_like.upper(), limit * 3),
-            ).fetchall()
         out: List[int] = []
-        for row in rows:
+        for row in self._query_candidates(order_desc=False, limit=limit * 3):
             if not self.detector.is_match(sender=row["sender"], subject=row["subject"]):
                 continue
             out.append(int(row["internal_id"]))

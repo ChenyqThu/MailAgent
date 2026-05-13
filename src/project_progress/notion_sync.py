@@ -1,17 +1,17 @@
 """Notion 项目进度库 Upsert.
 
 依赖 ntn_ token 下的 Notion Markdown API（参见 docs/notion_markdown_api.md）:
-  - GET  /v1/pages/{id}/markdown                    读取页面正文
-  - PATCH /v1/pages/{id}/markdown                   type=replace_content 写入
+  - PATCH /v1/pages/{id}/markdown   type=replace_content   整页写入
 
 整体流程（每个 ENBU 项目）:
   1. query_by_external_id(slug) → 现有页面 id 或 None
-  2a. 无 → create_page(properties with full-history markdown in children)
-  2b. 有 → update_page(properties) + prepend_this_week_markdown(page_id, week_tag, blocks)
-         prepend = GET markdown → client 侧把本周块拼到最前 → PATCH replace_content
+  2a. 无 → create_page(properties) + replace_content(full-history markdown)
+  2b. 有 → update_page_properties(properties) + replace_content(full-history markdown)
+         xlsx 是正文的 source of truth, 每次同步整页覆盖.
 
-只更新 CSV 直接驱动的字段，不覆盖:
-    产品线 multi_select / 出现在会议 relation（这两个留给 Lucien 手动挂）
+只更新 xlsx 直接驱动的字段, 不覆盖:
+    产品线 multi_select / 出现在会议 relation (这两个留给 Lucien 手动挂)
+    Status: Ongoing+update 路径保留手改 (见 status_for_row)
 
 Notion 版本常量:
     API_VERSION = "2025-09-03"  —— ntn_ token 要求
@@ -20,22 +20,15 @@ Notion 版本常量:
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 from loguru import logger
 
 from src.config import config
 
-from .progress_parser import (
-    ProgressBlock,
-    format_block_markdown,
-    iso_week_of,
-)
 from .xlsx_parser import ProjectRow, SheetKind, render_project_full_markdown
 
 
@@ -376,109 +369,6 @@ class ProjectProgressNotionClient:
             expect_json=True,
         )
 
-    async def update_content(
-        self, page_id: str, *, old_str: str, new_str: str
-    ) -> None:
-        """`update_content` 精准 find-and-replace（Notion 官方推荐的增量方式）。
-
-        Notion 内部只重建被替换的 block，不整页 rebuild。old_str 必须在整页唯一。
-        """
-        body = {
-            "type": "update_content",
-            "update_content": {
-                "content_updates": [{"old_str": old_str, "new_str": new_str}]
-            },
-        }
-        await self._request(
-            "PATCH",
-            f"{API_BASE}/pages/{page_id}/markdown",
-            json_body=body,
-            expect_json=True,
-        )
-
-    async def prepend_markdown(
-        self, page_id: str, prefix_md: str, *, idempotent_guard: Optional[str] = None
-    ) -> bool:
-        """把 prefix_md 拼到页面 markdown 最前。
-
-        实现策略（按官方 Markdown API guide 推荐）：
-          - 空页面 → `replace_content` 全量写入
-          - 非空页面且能找到"首个 heading"且 anchor 在页内唯一 →
-            `update_content` find-and-replace（Notion 内部只重建首个 block）
-          - 找不到安全 anchor → 降级为 `replace_content` 整页重写
-
-        Returns:
-            True 表示实际写入；False 表示幂等跳过。
-        """
-        if not prefix_md.strip():
-            return False
-        current = await self.get_markdown(page_id)
-        if idempotent_guard:
-            # Notion markdown 把 [ ] 转义为 \[ \]；比较前 un-escape
-            normalized = _unescape_md_brackets(current)
-            head = normalized.lstrip()[: len(idempotent_guard) + 40]
-            if idempotent_guard in head:
-                logger.info(
-                    f"[notion-md] page {page_id} already has guard "
-                    f"{idempotent_guard!r}, skip prepend"
-                )
-                return False
-
-        if not current.strip():
-            await self.replace_markdown(page_id, prefix_md.rstrip() + "\n")
-            return True
-
-        anchor = _find_prepend_anchor(current)
-        if anchor is not None:
-            new_str = prefix_md.rstrip() + "\n\n" + anchor
-            try:
-                await self.update_content(page_id, old_str=anchor, new_str=new_str)
-                return True
-            except NotionMarkdownError as e:
-                logger.warning(
-                    f"[notion-md] update_content failed on page {page_id}, "
-                    f"falling back to replace_content: {e}"
-                )
-
-        # 降级整页 replace
-        new_md = prefix_md.rstrip() + "\n\n" + current.lstrip()
-        await self.replace_markdown(page_id, new_md)
-        return True
-
-
-# ---------- helpers ----------
-
-
-def _unescape_md_brackets(md: str) -> str:
-    """Notion Markdown API GET 返回的 markdown 把 [ 和 ] 转义为 \\[ 和 \\]。
-    幂等 guard 比较前先 un-escape，保证 guard 文本可命中。
-    """
-    if not md:
-        return md
-    return md.replace("\\[", "[").replace("\\]", "]")
-
-
-_HEADING_LINE = re.compile(r"^#{1,6}\s+\S.*$", re.MULTILINE)
-
-
-def _find_prepend_anchor(markdown_body: str) -> Optional[str]:
-    """在整页 markdown 中找一个适合做 update_content anchor 的首段。
-
-    优先规则：
-      1. 第一个 heading 行（`#` ~ `######`），且该行在整页中**唯一出现**（避免 find 误匹配多处）
-      2. 找不到或非唯一 → 返回 None，调用方降级为 replace_content
-
-    返回的字符串即 read 出来的原样 line（含 `\\[` 转义），直接当 `old_str` 传给 update_content。
-    """
-    if not markdown_body:
-        return None
-    for m in _HEADING_LINE.finditer(markdown_body):
-        line = m.group()
-        if markdown_body.count(line) == 1:
-            return line
-    return None
-
-
 # ---------- property builder ----------
 
 def _safe_set(props: Dict[str, Any], prop_name: str, value: Any) -> None:
@@ -639,26 +529,6 @@ def _rich_text(content: str) -> Dict[str, Any]:
 
 # ---------- high-level upsert ----------
 
-def build_week_prefix_markdown(
-    row: ProjectRow, week_tag: str
-) -> Tuple[str, Optional[str]]:
-    """返回 (本周块的 markdown, 幂等 guard 字符串)。
-
-    - 若 this_week_blocks 非空：每块渲染为 `### {week_tag} [MM/DD]` + 正文
-    - 若为空：返回 ("", None) 表示没有新增内容，跳过正文更新
-
-    幂等 guard 使用 `### {week_tag} ` 前缀（仅 week_tag 维度）：
-      同一 week_tag 只要已在页面首段出现过就跳过 prepend，避免一周内多次跑重复写入。
-      同时兼容"首次创建 vs 后续 prepend"的 heading 日期可能不完全一致的情况。
-    """
-    if not row.this_week_blocks:
-        return "", None
-    parts = [format_block_markdown(b, week_tag) for b in row.this_week_blocks]
-    md = "\n".join(parts).strip() + "\n"
-    guard = f"### {week_tag} "
-    return md, guard
-
-
 async def upsert_project(
     client: ProjectProgressNotionClient,
     row: ProjectRow,
@@ -666,13 +536,16 @@ async def upsert_project(
     week_tag: str,
     source_email_url: Optional[str] = None,
     dry_run: bool = False,
-    rebuild_body: bool = False,
     parent_page_id: Optional[str] = None,
 ) -> UpsertOutcome:
     """端到端 upsert 单个项目。
 
+    正文（每周项目进度）每次都用 xlsx 当 source of truth 整页 replace。
+    xlsx 是该字段的唯一来源, 团队不在 Notion 正文里手写笔记, 所以"覆盖手改"
+    不是问题; 换来 xlsx ↔ Notion 严格一致, 避免之前 prepend 逻辑因 ISO 周
+    严格匹配 this_week_blocks 漏掉大量项目的 bug.
+
     Args:
-        rebuild_body: update 路径下强制用全量历史 markdown 重写整页正文。
         parent_page_id: 子任务专用。非空时写 `母任务` relation 指向该 page。
     """
     lk = await client.external_id_lock(row.external_id)
@@ -693,7 +566,7 @@ async def upsert_project(
             )
             return await _do_upsert(
                 client, row, properties, existing,
-                week_tag=week_tag, dry_run=dry_run, rebuild_body=rebuild_body,
+                week_tag=week_tag, dry_run=dry_run,
             )
     except Exception as e:
         logger.error(f"[upsert] {row.external_id} failed: {e}")
@@ -710,7 +583,6 @@ async def _do_upsert(
     *,
     week_tag: str,
     dry_run: bool,
-    rebuild_body: bool,
 ) -> UpsertOutcome:
     """实际 upsert 动作（已在 external_id_lock 保护下调用）。"""
     is_create = existing is None
@@ -735,38 +607,32 @@ async def _do_upsert(
         try:
             await client.update_page_properties(page_id, properties)
         except NotionMarkdownError as e:
-            # Notion dual_property 限制: 若该 page 已是另一 page 的母 (子任务非空),
-            # 不能再 PATCH 它的 "母任务" relation. 跨周角色翻转 (上周母, 本周子) 会触发.
-            # 降级策略: 去掉 PROP_PARENT_TASK 重试, 保留旧角色, log warning.
-            if PROP_PARENT_TASK in properties and "subitem" in str(e).lower():
+            # Notion dual_property 母子关系限制. 两类常见错误都降级为"丢弃 母任务 字段 + 重试":
+            #   1. "This block is already a subitem, so it cannot also be a parent"
+            #      — 该 page 已是另一 page 的子. 跨周角色翻转 (上周母, 本周子) 触发.
+            #   2. "Adding this parent relationship would create a cycle in the sub-item hierarchy"
+            #      — xlsx 这次算出的母子关系与 Notion 现状成环 (A→B 和 B→A 同时存在).
+            # 兜底逻辑保留 Notion 现有角色 + 写入其他 properties, 不去强行翻转关系.
+            err_lower = str(e).lower()
+            is_parent_conflict = (
+                PROP_PARENT_TASK in properties
+                and ("subitem" in err_lower or "cycle" in err_lower)
+            )
+            if is_parent_conflict:
+                reason = "cycle" if "cycle" in err_lower else "already child elsewhere"
                 logger.warning(
-                    f"[upsert] {row.external_id} dual_property conflict "
-                    f"(page already child elsewhere); dropping 母任务 update and retry: {e}"
+                    f"[upsert] {row.external_id} dual_property conflict ({reason}); "
+                    f"dropping 母任务 update and retry: {e}"
                 )
                 fallback_props = {k: v for k, v in properties.items() if k != PROP_PARENT_TASK}
                 await client.update_page_properties(page_id, fallback_props)
             else:
                 raise
 
-        if rebuild_body:
-            full_md = render_project_full_markdown(row, week_tag_override=week_tag)
-            if full_md.strip():
-                await client.replace_markdown(page_id, full_md.rstrip() + "\n")
-            return UpsertOutcome(
-                external_id=row.external_id, page_id=page_id, action="updated"
-            )
-
-        prefix_md, guard = build_week_prefix_markdown(row, week_tag)
-        if prefix_md:
-            wrote = await client.prepend_markdown(
-                page_id, prefix_md, idempotent_guard=guard
-            )
-            if not wrote:
-                return UpsertOutcome(
-                    external_id=row.external_id,
-                    page_id=page_id,
-                    action="skipped_idempotent",
-                )
+        # 正文: xlsx 是 source of truth, 每次整页 replace
+        full_md = render_project_full_markdown(row, week_tag_override=week_tag)
+        if full_md.strip():
+            await client.replace_markdown(page_id, full_md.rstrip() + "\n")
         return UpsertOutcome(
             external_id=row.external_id, page_id=page_id, action="updated"
         )
