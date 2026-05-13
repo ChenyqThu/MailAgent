@@ -142,9 +142,9 @@ class AIFieldsWriter:
         dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Write labels into the Notion page. Returns a summary dict."""
-        digest_page_id = None
-        if labels.daily_digest_date:
-            digest_page_id = await self._digest.resolve(labels.daily_digest_date)
+        digest_page_id = await self._digest.resolve(
+            labels.daily_digest_date
+        )
 
         props = self._build_props(labels, digest_page_id)
 

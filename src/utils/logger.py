@@ -31,7 +31,8 @@ def setup_logger(log_level: str = "INFO", log_file: str = "logs/sync.log"):
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
         rotation="10 MB",  # 文件大小超过 10MB 时轮转
         retention="7 days",  # 保留 7 天
-        compression="zip"  # 压缩旧日志
+        compression="zip",  # 压缩旧日志
+        enqueue=True,  # 独立线程写入，避免轮转+压缩竞态导致 FileNotFoundError
     )
 
     logger.info(f"Logger initialized - Level: {log_level}")

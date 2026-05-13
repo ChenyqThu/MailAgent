@@ -96,6 +96,7 @@ class RedisConsumer:
 
                 event = json.loads(raw_message)
                 event_type = event.get("type", "page_updated")
+                logger.info(f"Redis event received: type={event_type} raw_keys={list(event.keys())}")
 
                 # Try specific handler, then fallback to page_updated
                 handler = self._handlers.get(event_type) or self._handlers.get("page_updated")

@@ -267,6 +267,18 @@ class SyncStore:
         # 兼容性：保留 sync_failures 表（如果存在，用于迁移）
         # 新代码不再使用此表
 
+        # web_action_at: web 操作抑制窗口（防止正向同步竞态）
+        try:
+            cursor.execute("ALTER TABLE email_metadata ADD COLUMN web_action_at REAL")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
+        # processing_status: 镜像 Notion Processing Status（本地权威状态）
+        try:
+            cursor.execute("ALTER TABLE email_metadata ADD COLUMN processing_status TEXT")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
         # 更新数据库版本
         cursor.execute("""
             INSERT OR REPLACE INTO sync_state (key, value, updated_at)
@@ -1381,11 +1393,12 @@ class SyncStore:
 
     # ==================== 统计和维护 ====================
 
-    def get_synced_flags(self, internal_ids: List[int]) -> Dict[int, Dict]:
+    def get_synced_flags(self, internal_ids: List[int], suppress_window: float = 30.0) -> Dict[int, Dict]:
         """批量获取已同步邮件的存储 flags 和 notion_page_id
 
         Args:
             internal_ids: 要查询的 internal_id 列表
+            suppress_window: 跳过最近 N 秒内有 web 操作的邮件（防竞态）
 
         Returns:
             {internal_id: {'is_read': bool, 'is_flagged': bool, 'notion_page_id': str}}
@@ -1393,6 +1406,7 @@ class SyncStore:
         if not internal_ids:
             return {}
 
+        cutoff = time.time() - suppress_window
         result = {}
         with self._connection() as conn:
             cursor = conn.cursor()
@@ -1407,7 +1421,8 @@ class SyncStore:
                     WHERE internal_id IN ({placeholders})
                       AND sync_status = 'synced'
                       AND notion_page_id IS NOT NULL
-                """, batch)
+                      AND (web_action_at IS NULL OR web_action_at < ?)
+                """, batch + [cutoff])
                 for row in cursor.fetchall():
                     result[row[0]] = {
                         'is_read': bool(row[1]),
@@ -1450,6 +1465,17 @@ class SyncStore:
                 SET is_read = ?, is_flagged = ?, updated_at = ?
                 WHERE internal_id = ?
             """, (1 if is_read else 0, 1 if is_flagged else 0, time.time(), internal_id))
+            conn.commit()
+
+    def update_processing_status(self, internal_id: int, status: str):
+        """更新本地 processing_status（镜像 Notion Processing Status）"""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE email_metadata
+                SET processing_status = ?, updated_at = ?
+                WHERE internal_id = ?
+            """, (status, time.time(), internal_id))
             conn.commit()
 
     def get_stats(self) -> SyncStoreStats:

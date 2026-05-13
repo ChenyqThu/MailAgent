@@ -186,9 +186,10 @@ class FeishuNotifier:
         if ai_summary:
             elements.append({"tag": "markdown", "content": f"📝 **概要**\n{ai_summary[:300]}"})
 
-        # 回调元数据（reply_suggestion 已是独立 form input，不占 metadata 空间）
-        # 飞书回调自带 open_message_id 和 open_chat_id，无需传递
-        metadata = {
+        # 回调元数据：直接绑定到按钮 callback value。
+        # 注意：schema 2.0 按钮应使用 behaviors.callback，而不是旧版 value/multi_url 字段。
+        # 飞书回调自带 open_message_id / open_chat_id，无需额外 PATCH 回写到卡片里。
+        action_value = {
             "internal_id": internal_id, "page_id": page_id,
             "database_id": self._database_id,
             "message_id": message_id,
@@ -200,9 +201,8 @@ class FeishuNotifier:
             "ai_action": ai_action, "ai_priority": ai_priority,
             "notion_url": notion_url,
         }
-        metadata_json = json.dumps(metadata, ensure_ascii=False)
 
-        # form: 建议回复(可编辑) + 修改意见 + 附加收件人 + 元数据 + 按钮
+        # form: 建议回复(可编辑) + 附加收件人 + 按钮
         form_elements = []
 
         # 建议回复：可编辑 input，用户可直接微调后点创建草稿
@@ -221,22 +221,7 @@ class FeishuNotifier:
                 "width": "fill",
             })
 
-        # 修改意见输入框（用于 AI 优化回复）
-        form_elements.append({
-            "tag": "input",
-            "name": "user_feedback",
-            "placeholder": {"tag": "plain_text", "content": "输入修改意见（如：语气正式一些、补充提到 Q1 进展、改为拒绝...）"},
-            "input_type": "multiline_text",
-            "max_length": 1000,
-            "label": {"tag": "plain_text", "content": "✏️ 修改意见（AI 优化用，可选）"},
-            "label_position": "top",
-            "rows": 2,
-            "auto_resize": True,
-            "max_rows": 10,
-            "width": "fill",
-        })
-
-        # 附加收件人 + 元数据：折叠隐藏
+        # 附加收件人折叠面板
         form_elements.append({
             "tag": "collapsible_panel",
             "expanded": False,
@@ -260,34 +245,11 @@ class FeishuNotifier:
                     "label_position": "top",
                     "width": "fill",
                 },
-                {
-                    "tag": "input",
-                    "name": "metadata",
-                    "input_type": "multiline_text",
-                    "default_value": metadata_json,
-                    "label": {"tag": "plain_text", "content": "元数据（请勿修改）"},
-                    "label_position": "top",
-                    "rows": 1,
-                    "width": "fill",
-                    "disabled": True,
-                },
             ],
         })
 
-        # 按钮列（通过 action.name 区分动作：btn_enhance / btn_draft / btn_done）
-        btn_columns = [
-            {
-                "tag": "column", "width": "auto",
-                "elements": [{
-                    "tag": "button",
-                    "text": {"content": "✨ 优化回复", "tag": "plain_text"},
-                    "type": "primary",
-                    "form_action_type": "submit",
-                    "name": "btn_enhance",
-                    "value": {"action": "enhance", "label": "优化回复"},
-                }],
-            },
-        ]
+        # 按钮列（通过 action.name 区分动作：btn_draft / btn_done）
+        btn_columns = []
 
         if reply_suggestion:
             btn_columns.append({
@@ -295,10 +257,13 @@ class FeishuNotifier:
                 "elements": [{
                     "tag": "button",
                     "text": {"content": "📝 创建草稿", "tag": "plain_text"},
-                    "type": "default",
+                    "type": "primary",
                     "form_action_type": "submit",
                     "name": "btn_draft",
-                    "value": {"action": "create_draft", "label": "创建草稿"},
+                    "behaviors": [{
+                        "type": "callback",
+                        "value": {**action_value, "action": "create_draft", "label": "创建草稿"},
+                    }],
                 }],
             })
 
@@ -310,7 +275,10 @@ class FeishuNotifier:
                 "type": "default",
                 "form_action_type": "submit",
                 "name": "btn_done",
-                "value": {"action": "mark_done", "label": "已完成"},
+                "behaviors": [{
+                    "type": "callback",
+                    "value": {**action_value, "action": "mark_done", "label": "已完成"},
+                }],
             }],
         })
 
@@ -321,7 +289,10 @@ class FeishuNotifier:
                     "tag": "button",
                     "text": {"content": "📬 打开邮件", "tag": "plain_text"},
                     "type": "default",
-                    "multi_url": {"url": notion_url},
+                    "behaviors": [{
+                        "type": "open_url",
+                        "default_url": notion_url,
+                    }],
                 }],
             })
 
@@ -387,20 +358,6 @@ class FeishuNotifier:
 
             msg_id = data.get("data", {}).get("message_id", "")
             logger.info(f"Feishu app notification sent: {subject[:50]} ({msg_id})")
-
-            # 回写 open_message_id 到按钮回调
-            if msg_id:
-                self._inject_open_message_id(card, msg_id)
-                async with session.patch(
-                    f"{self.MSG_URL}/{msg_id}",
-                    headers=headers,
-                    json={"content": json.dumps(card)},
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as patch_resp:
-                    patch_data = await patch_resp.json()
-                    if patch_data.get("code") != 0:
-                        logger.warning(f"Feishu PATCH open_message_id failed: {patch_data}")
-
             return True
         except Exception as e:
             logger.error(f"Feishu app notification failed: {e}")
@@ -414,23 +371,6 @@ class FeishuNotifier:
             return text
         truncated = encoded[:max_bytes].decode('utf-8', errors='ignore')
         return truncated
-
-    @staticmethod
-    def _inject_open_message_id(card: Dict, msg_id: str):
-        """将 open_message_id 注入 metadata input 的 default_value JSON 中"""
-        body_elements = card.get("body", {}).get("elements", [])
-        for el in body_elements:
-            if el.get("tag") == "form":
-                for form_el in el.get("elements", []):
-                    if form_el.get("tag") == "collapsible_panel":
-                        for panel_el in form_el.get("elements", []):
-                            if panel_el.get("tag") == "input" and panel_el.get("name") == "metadata":
-                                try:
-                                    meta = json.loads(panel_el.get("default_value", "{}"))
-                                    meta["open_message_id"] = msg_id
-                                    panel_el["default_value"] = json.dumps(meta, ensure_ascii=False)
-                                except (json.JSONDecodeError, TypeError):
-                                    pass
 
     async def _send_via_webhook(self, card: Dict, subject: str) -> bool:
         """Webhook fallback"""

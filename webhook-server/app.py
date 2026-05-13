@@ -10,6 +10,7 @@ MailAgent Webhook Server
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -18,6 +19,8 @@ import uuid
 import base64
 from pathlib import Path as FilePath
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("mailagent.webhook")
 
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Path, Query, Request
@@ -30,6 +33,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 REDIS_DB = int(os.getenv("REDIS_DB", "2"))
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+FEISHU_VERIFICATION_TOKEN = os.getenv("FEISHU_VERIFICATION_TOKEN", "")
 QUEUE_PREFIX = "mailagent"
 QUEUE_TTL_DAYS = int(os.getenv("QUEUE_TTL_DAYS", "7"))
 STATS_TTL = 300  # 5 minutes, auto-expire stale stats
@@ -76,6 +80,7 @@ Webhook Server (FastAPI) ──→ Redis 队列 ──→ 本地 MailAgent
 tags_metadata = [
     {"name": "指令 API", "description": "外部系统（Openclaw 等）调用的指令接口，支持发送指令和查询执行结果"},
     {"name": "Notion Webhook", "description": "接收 Notion Automation 的 webhook 回调"},
+    {"name": "飞书回调", "description": "接收飞书卡片按钮点击回调，直接入队并返回更新后的卡片"},
     {"name": "运维", "description": "健康检查和队列统计"},
 ]
 
@@ -664,6 +669,152 @@ async def handle_notion_webhook(
     await redis_pool.expire(queue_key, QUEUE_TTL_DAYS * 86400)
 
     return WebhookResponse(ok=True, queue=queue_key, event_id=message["id"])
+
+
+# ── Feishu Card Callback ────────────────────────────────────────────────
+
+def _feishu_build_done_card(subject: str, sender: str, date_short: str) -> Dict:
+    """点击「已完成」后返回的更新卡片"""
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "header": {
+            "title": {"content": f"✅ 已处理 | {subject[:50]}", "tag": "plain_text"},
+            "subtitle": {"content": f"{sender} · {date_short}", "tag": "plain_text"},
+            "template": "grey",
+        },
+        "body": {
+            "direction": "vertical",
+            "elements": [
+                {"tag": "markdown", "content": "已标记完成，Mail.app 旗标已移除。"},
+            ],
+        },
+    }
+
+
+def _feishu_build_draft_card(subject: str, sender: str, date_short: str) -> Dict:
+    """点击「创建草稿」后返回的更新卡片"""
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "header": {
+            "title": {"content": f"📝 草稿创建中 | {subject[:50]}", "tag": "plain_text"},
+            "subtitle": {"content": f"{sender} · {date_short}", "tag": "plain_text"},
+            "template": "blue",
+        },
+        "body": {
+            "direction": "vertical",
+            "elements": [
+                {"tag": "markdown", "content": "正在创建 Mail.app 回复草稿，请稍候..."},
+            ],
+        },
+    }
+
+
+@app.post(
+    "/callback/feishu",
+    tags=["飞书回调"],
+    summary="接收飞书卡片按钮回调",
+)
+async def handle_feishu_callback(request: Request):
+    """接收飞书 Card 2.0 按钮点击回调。
+
+    飞书应用后台「事件与回调 → 卡片回调地址」填：
+    `https://mailagent.kevinfly.cc/callback/feishu`
+
+    支持的按钮动作：
+    - `create_draft` — 创建 Mail.app 回复草稿
+    - `mark_done` — 标记已完成，移除 Mail.app 旗标
+
+    回调响应直接返回更新后的卡片（按钮变为状态文案）。
+    """
+    body = await request.json()
+
+    # URL 验证（飞书首次配置回调地址时发送）
+    if body.get("type") == "url_verification":
+        return JSONResponse({"challenge": body.get("challenge", "")})
+
+    # 验签：校验 Verification Token
+    header = body.get("header", {})
+    token = header.get("token", "")
+    if FEISHU_VERIFICATION_TOKEN and token != FEISHU_VERIFICATION_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid verification token")
+
+    event = body.get("event", {})
+    action = event.get("action", {})
+    callback_value = action.get("value", {})
+    form_value = action.get("form_value", {})
+
+    action_type = callback_value.get("action", "")
+    database_id = (callback_value.get("database_id") or "").replace("-", "")
+    page_id = callback_value.get("page_id", "")
+    message_id = callback_value.get("message_id", "")
+    subject = callback_value.get("subject", "(No Subject)")
+    from_name = callback_value.get("from_name", "")
+    date_str = callback_value.get("date", "")
+    mailbox = callback_value.get("mailbox", "收件箱")
+
+    date_short = date_str[5:16].replace("T", " ") if date_str and len(date_str) >= 16 else date_str[:10] if date_str else ""
+
+    logger.info(
+        f"feishu callback: action={action_type} page={page_id[:12]} "
+        f"subject={subject[:30]} db={database_id[:12]}"
+    )
+
+    if not database_id:
+        return JSONResponse({"toast": {"type": "error", "content": "缺少 database_id"}})
+
+    queue_key = f"{QUEUE_PREFIX}:{database_id}:events"
+
+    if action_type == "mark_done":
+        event_msg = {
+            "id": f"fs_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
+            "type": "completed",
+            "database_id": database_id,
+            "page_id": page_id,
+            "properties": {"message_id": message_id, "mailbox": mailbox},
+            "timestamp": int(time.time() * 1000),
+        }
+        await redis_pool.lpush(queue_key, json.dumps(event_msg))
+        await redis_pool.expire(queue_key, QUEUE_TTL_DAYS * 86400)
+
+        return JSONResponse({
+            "toast": {"type": "success", "content": "已标记完成"},
+            "card": _feishu_build_done_card(subject, from_name, date_short),
+        })
+
+    elif action_type == "create_draft":
+        reply_suggestion = form_value.get("reply_suggestion", "")
+        extra_to = form_value.get("extra_to", "")
+        extra_cc = form_value.get("extra_cc", "")
+
+        event_msg = {
+            "id": f"fs_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
+            "type": "create_draft",
+            "database_id": database_id,
+            "page_id": page_id,
+            "source": "feishu",
+            "properties": {
+                "message_id": message_id,
+                "reply_suggestion": reply_suggestion,
+                "mailbox": mailbox,
+                "mode": "reply-all",
+                "extra_to": extra_to,
+                "extra_cc": extra_cc,
+            },
+            "timestamp": int(time.time() * 1000),
+        }
+        await redis_pool.lpush(queue_key, json.dumps(event_msg))
+        await redis_pool.expire(queue_key, QUEUE_TTL_DAYS * 86400)
+
+        return JSONResponse({
+            "toast": {"type": "info", "content": "正在创建草稿..."},
+            "card": _feishu_build_draft_card(subject, from_name, date_short),
+        })
+
+    else:
+        logger.warning(f"feishu callback: unknown action={action_type}")
+        return JSONResponse({"toast": {"type": "warning", "content": f"未知操作: {action_type}"}})
 
 
 @app.get("/copy", response_class=HTMLResponse, include_in_schema=False)

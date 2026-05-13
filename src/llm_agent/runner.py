@@ -23,7 +23,10 @@ from src.config import config as cfg
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.reader import EmailReader
 
+import re
+
 from .client import LLMCallError
+from .email_filter import check_email_filter
 from .notion_writer import AIFieldsWriter
 from .processor import LLMProcessor
 from .store import LLMProcessingStore
@@ -38,7 +41,7 @@ def _lookup_by_internal_id(
         row = c.execute(
             """
             SELECT internal_id, message_id, notion_page_id, mailbox, subject,
-                   is_read, is_flagged
+                   sender, is_read, is_flagged
               FROM email_metadata
              WHERE internal_id = ?
             """,
@@ -117,6 +120,38 @@ class LLMRunner:
                     "skipped": "already_success",
                     "stored_at": existing.get("updated_at"),
                 }
+
+        # --- 0. pre-LLM filter (DMS/AMS system emails) ---
+        subject = meta.get("subject") or ""
+        sender = meta.get("sender") or ""
+        filter_result = check_email_filter(sender, subject)
+        if filter_result is not None:
+            logger.info(
+                f"[llm-runner] filtered: {internal_id} reason={filter_result.reason}"
+            )
+            if not dry_run:
+                from .email_filter import filtered_labels_props
+                client = self._writer._lazy_client()
+                try:
+                    await client.client.pages.update(
+                        page_id=notion_page_id,
+                        properties=filtered_labels_props(),
+                    )
+                except Exception as e:
+                    logger.warning(f"[llm-runner] filter write failed: {e!r}")
+                self._store.mark_success_filtered(internal_id, notion_page_id)
+                # 直接标记已读（不依赖 webhook 回路，filtered 邮件不经过 handle_ai_reviewed）
+                try:
+                    arm = self._lazy_arm()
+                    arm.mark_as_read_by_id(internal_id, True, mailbox)
+                except Exception as e:
+                    logger.warning(f"[llm-runner] filter mark_as_read failed: {e!r}")
+            return {
+                "ok": True, "internal_id": internal_id,
+                "filtered": True,
+                "reason": filter_result.reason,
+                "dry_run": dry_run,
+            }
 
         # --- 1. fetch MIME ---
         arm = self._lazy_arm()

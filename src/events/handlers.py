@@ -117,12 +117,12 @@ class EventHandlers:
 
         changed = False
 
-        # 同步 read 状态
+        # 同步 read 状态（放到线程避免阻塞事件循环）
         if is_read is not None and is_read != stored_read:
             if internal_id:
-                success = self.arm.mark_as_read_by_id(internal_id, is_read, mailbox)
+                success = await asyncio.to_thread(self.arm.mark_as_read_by_id, internal_id, is_read, mailbox)
             else:
-                success = self.arm.mark_as_read(message_id, is_read, mailbox)
+                success = await asyncio.to_thread(self.arm.mark_as_read, message_id, is_read, mailbox)
             if success:
                 changed = True
                 logger.info(f"Flag sync: read={is_read} for {message_id[:40]}")
@@ -130,9 +130,9 @@ class EventHandlers:
         # 同步 flagged 状态
         if is_flagged is not None and is_flagged != stored_flagged:
             if internal_id:
-                success = self.arm.set_flag_by_id(internal_id, is_flagged, mailbox)
+                success = await asyncio.to_thread(self.arm.set_flag_by_id, internal_id, is_flagged, mailbox)
             else:
-                success = self.arm.set_flag(message_id, is_flagged, mailbox)
+                success = await asyncio.to_thread(self.arm.set_flag, message_id, is_flagged, mailbox)
             if success:
                 changed = True
                 logger.info(f"Flag sync: flagged={is_flagged} for {message_id[:40]}")
@@ -161,20 +161,19 @@ class EventHandlers:
             if record:
                 internal_id = record.get('internal_id') if isinstance(record, dict) else getattr(record, 'internal_id', None)
 
-        # Mail.app 标旗/已读
+        # Mail.app 标旗/已读（放到线程避免阻塞事件循环）
         if internal_id:
             if ai_action in self.FLAG_ACTIONS:
-                self.arm.mark_as_read_by_id(internal_id, True, mailbox)
-                self.arm.set_flag_by_id(internal_id, True, mailbox)
+                await asyncio.to_thread(self.arm.mark_as_read_by_id, internal_id, True, mailbox)
+                await asyncio.to_thread(self.arm.set_flag_by_id, internal_id, True, mailbox)
                 self.sync_store.update_local_flags(internal_id, True, True)
             else:
-                self.arm.mark_as_read_by_id(internal_id, True, mailbox)
+                await asyncio.to_thread(self.arm.mark_as_read_by_id, internal_id, True, mailbox)
                 self.sync_store.update_local_flags(internal_id, True, False)
 
-        # 飞书通知：重要/紧急 且 需要行动（发件箱不通知）
-        notify_priorities = {"🔴 紧急", "🟡 重要"}
+        # 飞书通知：批阅视图全部（FLAG_ACTIONS）且发件箱排除
         should_notify = (
-            ai_priority in notify_priorities
+            True
             and ai_action in self.FLAG_ACTIONS
             and mailbox != "发件箱"
         )
@@ -218,6 +217,10 @@ class EventHandlers:
                 "category": full_props.get("category", ""),
             })
 
+        # 本地状态镜像
+        if internal_id:
+            self.sync_store.update_processing_status(internal_id, "已同步")
+
         # 更新 Notion: Is Read / Is Flagged + Processing Status → 已同步
         if page_id and self.notion_sync:
             try:
@@ -235,9 +238,10 @@ class EventHandlers:
                 logger.warning(f"Webhook: failed to update Notion status: {e}")
 
     async def handle_completed(self, event: Dict):
-        """处理用户标记已完成事件: 移除 Mail.app 旗标"""
+        """处理用户标记已完成事件: 移除 Mail.app 旗标 + 同步 Notion 状态"""
         self._stats["completed"] += 1
         props = event.get("properties", {})
+        page_id = event.get("page_id", "")
         message_id = props.get("message_id", "")
 
         if not message_id:
@@ -251,25 +255,34 @@ class EventHandlers:
 
         internal_id = record.get('internal_id') if isinstance(record, dict) else getattr(record, 'internal_id', None)
         mailbox = record.get('mailbox') if isinstance(record, dict) else getattr(record, 'mailbox', None)
-        stored_flagged = bool(record.get('is_flagged') if isinstance(record, dict) else getattr(record, 'is_flagged', False))
 
-        if not stored_flagged:
-            logger.debug(f"Already unflagged, skipping: {message_id[:40]}")
-            return
+        # 无条件移除旗标 + 标记已读（放到线程避免阻塞事件循环）
+        try:
+            if internal_id:
+                await asyncio.to_thread(self.arm.set_flag_by_id, internal_id, False, mailbox)
+                await asyncio.to_thread(self.arm.mark_as_read_by_id, internal_id, True, mailbox)
+            else:
+                await asyncio.to_thread(self.arm.set_flag, message_id, False, mailbox)
+                await asyncio.to_thread(self.arm.mark_as_read, message_id, True, mailbox)
+        except Exception as e:
+            logger.error(f"Completed: AppleScript failed for {message_id[:40]}: {e}")
 
-        # 移除旗标 + 标记已读
-        if internal_id:
-            self.arm.set_flag_by_id(internal_id, False, mailbox)
-            self.arm.mark_as_read_by_id(internal_id, True, mailbox)
-        else:
-            self.arm.set_flag(message_id, False, mailbox)
-            self.arm.mark_as_read(message_id, True, mailbox)
-
-        # Echo prevention
+        # Echo prevention + 本地状态镜像
         if internal_id:
             self.sync_store.update_local_flags(internal_id, True, False)
+            self.sync_store.update_processing_status(internal_id, "已完成")
 
-        logger.info(f"Completed: unflagged {message_id[:40]}")
+        # 同步 Notion: Is Flagged=False + Processing Status→已完成
+        if page_id and self.notion_sync:
+            try:
+                await self.notion_sync.update_email_flags(
+                    page_id, is_read=True, is_flagged=False,
+                    processing_status="已完成"
+                )
+            except Exception as e:
+                logger.warning(f"Webhook: failed to update Notion status for completed: {e}")
+
+        logger.info(f"Completed: unflagged + Notion synced {message_id[:40]}")
 
     async def handle_create_draft(self, event: Dict):
         """创建 Mail.app 回复草稿（Notion 按钮 / Openclaw 触发）"""

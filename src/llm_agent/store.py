@@ -150,6 +150,27 @@ class LLMProcessingStore:
             )
             c.commit()
 
+    def mark_success_filtered(self, internal_id: int, page_id: str = "") -> None:
+        """Mark a filtered (pre-LLM skipped) email as success with zero tokens."""
+        now = time.time()
+        with self._conn() as c:
+            c.execute(
+                """
+                INSERT INTO llm_processing
+                    (internal_id, notion_page_id, mailbox, status, retry_count,
+                     next_retry_at, last_error, model,
+                     input_tokens, output_tokens,
+                     cache_read_input_tokens, cache_creation_input_tokens,
+                     latency_ms, labels_json, created_at, updated_at)
+                VALUES (?, ?, '', 'success', 0, NULL, NULL, 'filtered',
+                        0, 0, 0, 0, 0, '{"filtered":true}', ?, ?)
+                ON CONFLICT(internal_id) DO UPDATE SET
+                    status='success', model='filtered', updated_at=excluded.updated_at
+                """,
+                (internal_id, page_id, now, now),
+            )
+            c.commit()
+
     def mark_failed(
         self, internal_id: int, error: str, max_retries: int
     ) -> Dict[str, Any]:

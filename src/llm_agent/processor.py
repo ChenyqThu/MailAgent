@@ -38,6 +38,22 @@ _BEIJING = timezone(timedelta(hours=8))
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"[ \t]+")
 _NL_RE = re.compile(r"\n{3,}")
+
+def _html_to_plaintext(html: str) -> str:
+    """HTML → 干净纯文本，复用 html_converter 同款管线（BeautifulSoup 清洗 + html2text）。"""
+    import html2text
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "head", "title", "meta", "link"]):
+        tag.decompose()
+    body = soup.find("body")
+    if body:
+        soup = body
+    h = html2text.HTML2Text()
+    h.ignore_links = True
+    h.ignore_images = True
+    h.body_width = 0
+    return h.handle(str(soup)).strip()
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _VALID_TTL = {"5m", "1h"}
 
@@ -241,23 +257,22 @@ class LLMProcessor:
         )
 
     def _plaintext_body(self, email: Any) -> str:
-        # Try .text / .plain_text first, fall back to stripping .html / .body_html
+        # 1. 尝试已有的纯文本字段
         for attr in ("text", "plain_text"):
             v = getattr(email, attr, None)
             if v:
                 return _NL_RE.sub("\n\n", _WS_RE.sub(" ", v)).strip()
+        # 2. 尝试 HTML 字段 — 用 BeautifulSoup+html2text 正确清洗
         for attr in ("html", "body_html"):
             v = getattr(email, attr, None)
             if v:
-                stripped = _HTML_TAG_RE.sub(" ", v)
-                return _NL_RE.sub("\n\n", _WS_RE.sub(" ", stripped)).strip()
-        # MailAgent's Email model (src/models.py): .content + .content_type
+                return _html_to_plaintext(v)
+        # 3. MailAgent Email model: .content + .content_type
         content = getattr(email, "content", None)
         if content:
             ctype = (getattr(email, "content_type", "") or "").lower()
             if "html" in ctype:
-                stripped = _HTML_TAG_RE.sub(" ", content)
-                return _NL_RE.sub("\n\n", _WS_RE.sub(" ", stripped)).strip()
+                return _html_to_plaintext(content)
             return _NL_RE.sub("\n\n", _WS_RE.sub(" ", content)).strip()
         return (getattr(email, "body", "") or "").strip()
 
