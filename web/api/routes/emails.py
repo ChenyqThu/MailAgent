@@ -57,6 +57,15 @@ async def view_counts(
     return email_service.get_view_counts()
 
 
+@router.get("/thread/{thread_id}", response_model=list[EmailListItem])
+async def get_thread_emails(
+    thread_id: str,
+    _token: str = Depends(verify_token),
+):
+    """获取同一线程内所有邮件（按时间正序）。"""
+    return email_service.get_thread_emails(thread_id)
+
+
 @router.get("/{internal_id}", response_model=EmailDetail)
 async def get_email(
     internal_id: int,

@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
+from web.api.agent.session import session_manager
 from web.api.config import web_config
 from web.api.routes import api_router
 from web.api.services.db import ensure_web_columns
@@ -34,7 +35,9 @@ async def lifespan(app: FastAPI):
         f"db={web_config.sync_store_db_path}"
     )
     ensure_web_columns()
+    session_manager.start_cleanup()
     yield
+    await session_manager.stop_cleanup()
     await close_redis()
     logger.info("[web-api] 关闭")
 

@@ -38,14 +38,15 @@ class EmailListItem(BaseModel):
     # 处理状态
     llm_status: Optional[str] = None
 
+    # 线程
+    thread_id: Optional[str] = None
+    thread_count: int = 0
+
 
 class EmailDetail(EmailListItem):
-    thread_id: Optional[str] = None
     cc_addr: Optional[str] = None
     body_html: Optional[str] = None
     body_text: Optional[str] = None
-    # 线程中其他邮件数量
-    thread_count: int = 0
 
 
 class EmailFilter(BaseModel):

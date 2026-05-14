@@ -27,7 +27,11 @@ def _parse_labels(labels_json: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
-def _row_to_list_item(row: dict, labels: Dict[str, Any]) -> EmailListItem:
+def _row_to_list_item(
+    row: dict,
+    labels: Dict[str, Any],
+    thread_count: int = 0,
+) -> EmailListItem:
     return EmailListItem(
         internal_id=row["internal_id"],
         message_id=row.get("message_id"),
@@ -54,6 +58,8 @@ def _row_to_list_item(row: dict, labels: Dict[str, Any]) -> EmailListItem:
         reply_suggestion=labels.get("reply_suggestion_md"),
         related_project=labels.get("related_project"),
         llm_status=row.get("llm_status"),
+        thread_id=row.get("thread_id"),
+        thread_count=thread_count,
     )
 
 
@@ -165,11 +171,39 @@ def list_emails(
             """
             rows = conn.execute(list_sql, params + [page_size, offset]).fetchall()
 
-    all_items = []
+    # 先收集所有行和 thread_ids
+    row_dicts = []
+    thread_ids: set[str] = set()
     for row in rows:
-        row_dict = dict(row)
+        rd = dict(row)
+        tid = rd.get("thread_id")
+        if tid:
+            thread_ids.add(tid)
+        row_dicts.append(rd)
+
+    # 批量查 thread_count（一次 SQL）
+    thread_counts: Dict[str, int] = {}
+    if thread_ids:
+        with get_db() as conn2:
+            placeholders = ",".join("?" for _ in thread_ids)
+            tc_rows = conn2.execute(
+                f"""
+                SELECT thread_id, COUNT(*) as cnt
+                FROM email_metadata
+                WHERE thread_id IN ({placeholders})
+                  AND sync_status = 'synced'
+                GROUP BY thread_id
+                """,
+                list(thread_ids),
+            ).fetchall()
+            thread_counts = {r["thread_id"]: r["cnt"] for r in tc_rows}
+
+    all_items = []
+    for row_dict in row_dicts:
         labels = _parse_labels(row_dict.pop("labels_json", None))
-        item = _row_to_list_item(row_dict, labels)
+        tid = row_dict.get("thread_id")
+        tc = thread_counts.get(tid, 0) if tid else 0
+        item = _row_to_list_item(row_dict, labels, thread_count=tc)
 
         # view 后过滤（browse/ignore 依赖 labels_json 内字段）
         if not _post_filter_by_view(item, view_post):
@@ -260,18 +294,45 @@ def get_email_detail(internal_id: int) -> Optional[EmailDetail]:
         thread_count = 0
         if thread_id:
             tc = conn.execute(
-                "SELECT COUNT(*) as cnt FROM email_metadata WHERE thread_id = ?",
+                "SELECT COUNT(*) as cnt FROM email_metadata WHERE thread_id = ? AND sync_status = 'synced'",
                 (thread_id,),
             ).fetchone()
             thread_count = tc["cnt"] if tc else 0
 
     detail = EmailDetail(
-        **_row_to_list_item(row_dict, labels).model_dump(),
-        thread_id=row_dict.get("thread_id"),
+        **_row_to_list_item(row_dict, labels, thread_count=thread_count).model_dump(),
         cc_addr=row_dict.get("cc_addr"),
-        thread_count=thread_count,
     )
     return detail
+
+
+def get_thread_emails(thread_id: str) -> List[EmailListItem]:
+    """获取同一线程内所有邮件（按时间正序，用于展开线程）。"""
+    if not thread_id:
+        return []
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT em.*,
+                   lp.status as llm_status,
+                   lp.labels_json
+            FROM email_metadata em
+            LEFT JOIN llm_processing lp ON em.internal_id = lp.internal_id
+            WHERE em.thread_id = ?
+              AND em.sync_status = 'synced'
+            ORDER BY em.date_received ASC
+            """,
+            (thread_id,),
+        ).fetchall()
+
+    thread_count = len(rows)
+    items = []
+    for row in rows:
+        row_dict = dict(row)
+        labels = _parse_labels(row_dict.pop("labels_json", None))
+        items.append(_row_to_list_item(row_dict, labels, thread_count=thread_count))
+    return items
 
 
 def get_stats() -> Dict[str, Any]:

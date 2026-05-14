@@ -24,14 +24,14 @@ export interface EmailListItem {
   reply_suggestion: string | null;
   related_project: string | null;
   llm_status: string | null;
+  thread_id: string | null;
+  thread_count: number;
 }
 
 export interface EmailDetail extends EmailListItem {
-  thread_id: string | null;
   cc_addr: string | null;
   body_html: string | null;
   body_text: string | null;
-  thread_count: number;
 }
 
 export interface PagedResponse<T> {

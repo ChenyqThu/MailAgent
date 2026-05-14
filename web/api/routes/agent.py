@@ -1,14 +1,21 @@
-"""AI Agent 接口 — 翻译、总结、起草回复等。
+"""AI Agent 接口 — 多轮 tool_use 对话 + 传统快捷操作。
 
-复用主项目 LLM 配置（CRS 网关 + Sonnet 模型）。
+新端点 /agent/chat 走 SSE 流式多轮 agent；
+旧端点 /emails/{id}/agent 和 /agent/query 保留兼容。
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+import json
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
 
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from web.api.agent.loop import agent_stream
+from web.api.agent.schemas import ChatRequest
+from web.api.agent.session import session_manager
 from web.api.config import web_config
 from web.api.deps import verify_token
 
@@ -173,3 +180,52 @@ async def global_query(req: QueryRequest):
         raise HTTPException(status_code=502, detail=f"LLM 调用失败: {e!s}")
 
     return {"result": result_text, "sources": len(email_summaries)}
+
+
+# ---------------------------------------------------------------------------
+# 新 Agent 端点 — 多轮 tool_use + SSE 流式
+# ---------------------------------------------------------------------------
+
+
+@router.post("/agent/chat")
+async def agent_chat(req: ChatRequest):
+    """多轮 Agent 对话，SSE 流式返回。"""
+    if not web_config.llm_api_key:
+        raise HTTPException(status_code=503, detail="LLM 未配置（需要 LLM_API_KEY）")
+
+    session = session_manager.get_or_create(req.session_id, req.email_context)
+
+    async def event_stream():
+        # 先发 session_id 事件
+        yield _sse_line("session", {"session_id": session.session_id})
+
+        async for event in agent_stream(session, req.message):
+            yield _sse_line(event.type, event.data)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.delete("/agent/session/{session_id}")
+async def delete_session(session_id: str):
+    """清除指定会话。"""
+    deleted = session_manager.delete(session_id)
+    return {"deleted": deleted, "session_id": session_id}
+
+
+@router.get("/agent/sessions")
+async def list_sessions():
+    """调试用：返回活跃会话数量。"""
+    return {"active_sessions": session_manager.count()}
+
+
+def _sse_line(event_type: str, data: dict) -> str:
+    """格式化 SSE 行。"""
+    payload = json.dumps({"type": event_type, **data}, ensure_ascii=False)
+    return f"data: {payload}\n\n"

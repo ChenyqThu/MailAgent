@@ -257,6 +257,11 @@ export default function InboxPage() {
             emailId={activeId}
             body={bodyData?.body ?? null}
             subject={activeEmail?.subject ?? null}
+            sender={activeEmail?.sender ?? undefined}
+            senderName={activeEmail?.sender_name ?? undefined}
+            date={activeEmail?.date_received ?? undefined}
+            mailbox={activeEmail?.mailbox ?? undefined}
+            threadId={activeEmail?.thread_id ?? undefined}
             onClose={() => setAiOpen(false)}
           />
         </div>

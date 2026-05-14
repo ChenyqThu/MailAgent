@@ -8,9 +8,21 @@ interface Props {
   onClick: () => void;
   selected?: boolean;
   selectMode?: boolean;
+  threadCount?: number;
+  threadExpanded?: boolean;
+  onToggleThread?: () => void;
 }
 
-export function EmailRow({ email, isActive, onClick, selected, selectMode }: Props) {
+export function EmailRow({
+  email,
+  isActive,
+  onClick,
+  selected,
+  selectMode,
+  threadCount,
+  threadExpanded,
+  onToggleThread,
+}: Props) {
   const pc = PRIORITY_CONFIG[email.priority || ""] ?? {
     label: "—",
     color: "text-fg-faint",
@@ -74,21 +86,30 @@ export function EmailRow({ email, isActive, onClick, selected, selectMode }: Pro
         </div>
       )}
 
-      {/* 标签 */}
-      {(email.category || email.related_project) && (
-        <div className="flex gap-1 mt-1.5">
-          {email.category && (
-            <span className="text-[10px] px-1.5 py-px rounded bg-bg-tertiary text-fg-muted">
-              {email.category}
-            </span>
-          )}
-          {email.related_project && (
-            <span className="text-[10px] px-1.5 py-px rounded bg-bg-tertiary text-fg-muted">
-              {email.related_project}
-            </span>
-          )}
-        </div>
-      )}
+      {/* 标签 + 线程 badge */}
+      <div className="flex gap-1 mt-1.5 items-center">
+        {email.category && (
+          <span className="text-[10px] px-1.5 py-px rounded bg-bg-tertiary text-fg-muted">
+            {email.category}
+          </span>
+        )}
+        {email.related_project && (
+          <span className="text-[10px] px-1.5 py-px rounded bg-bg-tertiary text-fg-muted">
+            {email.related_project}
+          </span>
+        )}
+        {threadCount !== undefined && threadCount > 1 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleThread?.();
+            }}
+            className="text-[10px] px-1.5 py-px rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors ml-auto flex-shrink-0"
+          >
+            {threadExpanded ? "▾" : "▸"} {threadCount} 封对话
+          </button>
+        )}
+      </div>
     </div>
   );
 }
