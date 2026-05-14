@@ -16,8 +16,11 @@ from .schema import (
     EMAIL_TOOL_SCHEMA,
     PROCESSING_STATUS_AI_REVIEWED,
     PROCESSING_STATUS_COMPLETED,
+    SENDER_HISTORY_TOOL_SCHEMA,
+    THREAD_CONTEXT_TOOL_SCHEMA,
 )
 from .store import LLMProcessingStore
+from .tools import execute_tool
 
 __all__ = [
     "AnthropicClient",
@@ -34,5 +37,8 @@ __all__ = [
     "EMAIL_TOOL_SCHEMA",
     "PROCESSING_STATUS_AI_REVIEWED",
     "PROCESSING_STATUS_COMPLETED",
+    "SENDER_HISTORY_TOOL_SCHEMA",
+    "THREAD_CONTEXT_TOOL_SCHEMA",
     "LLMProcessingStore",
+    "execute_tool",
 ]

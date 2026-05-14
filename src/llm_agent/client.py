@@ -52,6 +52,8 @@ class LLMResult:
     cache_read_input_tokens: int
     model: str
     latency_ms: int
+    tool_name: str = ""
+    tool_use_id: str = ""
 
 
 class LLMCallError(RuntimeError):
@@ -149,18 +151,31 @@ class AnthropicClient:
         self,
         *,
         system_blocks: List[Dict[str, Any]],
-        user_content: str,
-        tool_schema: Dict[str, Any],
-        tool_name: str,
+        user_content: Any,  # str (single turn) or List[Dict] (multi-turn messages)
+        tool_schema: Any,  # single dict or list of dicts
+        tool_name: Optional[str] = None,  # None = auto, str = force specific tool
         model_chain: Optional[List[str]] = None,
     ) -> LLMResult:
-        """Call LLM forcing tool_use; walk fallback chain on LLMCallError.
+        """Call LLM with tool_use; walk fallback chain on LLMCallError.
 
-        `model_chain` defaults to [cfg.llm_model, *cfg.llm_fallback_models].
+        Args:
+            user_content: either a plain string (wrapped as single user message)
+                or a list of message dicts for multi-turn conversations.
+            tool_schema: a single tool dict or a list of tool dicts.
+            tool_name: if set, forces that specific tool; if None, lets LLM choose.
         """
         chain = _resolve_model_chain(model_chain)
         if not chain:
             raise LLMCallError("model chain is empty (LLM_MODEL unset?)")
+
+        # Normalize tool_schema to list
+        tools = tool_schema if isinstance(tool_schema, list) else [tool_schema]
+
+        # Normalize messages
+        if isinstance(user_content, str):
+            messages = [{"role": "user", "content": user_content}]
+        else:
+            messages = user_content
 
         last_err: Optional[BaseException] = None
         for i, model in enumerate(chain):
@@ -169,15 +184,15 @@ class AnthropicClient:
                     return await self._classify_openai(
                         model=model,
                         system_blocks=system_blocks,
-                        user_content=user_content,
-                        tool_schema=tool_schema,
+                        user_content=messages,
+                        tool_schema=tools,
                         tool_name=tool_name,
                     )
                 return await self._classify_anthropic(
                     model=model,
                     system_blocks=system_blocks,
-                    user_content=user_content,
-                    tool_schema=tool_schema,
+                    user_content=messages,
+                    tool_schema=tools,
                     tool_name=tool_name,
                 )
             except LLMCallError as e:
@@ -190,7 +205,6 @@ class AnthropicClient:
                     continue
                 logger.warning(f"[llm] model={model} failed (last in chain): {e}")
                 raise
-        # unreachable
         raise last_err or LLMCallError("model chain exhausted without result")
 
     # ---- Anthropic leg -----------------------------------------------------
@@ -200,20 +214,27 @@ class AnthropicClient:
         *,
         model: str,
         system_blocks: List[Dict[str, Any]],
-        user_content: str,
-        tool_schema: Dict[str, Any],
-        tool_name: str,
+        user_content: Any,  # List[Dict] (messages)
+        tool_schema: List[Dict[str, Any]],
+        tool_name: Optional[str],
     ) -> LLMResult:
         client = self._lazy()
         t0 = time.monotonic()
+
+        # Build tool_choice
+        if tool_name:
+            tool_choice = {"type": "tool", "name": tool_name}
+        else:
+            tool_choice = {"type": "any"}
+
         try:
             msg = await client.messages.create(
                 model=model,
                 max_tokens=cfg.llm_max_tokens,
                 system=system_blocks,
-                tools=[tool_schema],
-                tool_choice={"type": "tool", "name": tool_name},
-                messages=[{"role": "user", "content": user_content}],
+                tools=tool_schema,
+                tool_choice=tool_choice,
+                messages=user_content,
             )
         except Exception as e:
             raise LLMCallError(f"Anthropic call failed (model={model}): {e!r}") from e
@@ -234,7 +255,7 @@ class AnthropicClient:
                 f"LLM did not return tool_use (model={model}); "
                 f"stop_reason={msg.stop_reason} preview={preview[:200]!r}"
             )
-        if tool_use.name != tool_name:
+        if tool_name and tool_use.name != tool_name:
             raise LLMCallError(
                 f"Expected tool {tool_name!r} but got {tool_use.name!r} (model={model})"
             )
@@ -252,6 +273,8 @@ class AnthropicClient:
             ),
             model=msg.model,
             latency_ms=latency_ms,
+            tool_name=tool_use.name or "",
+            tool_use_id=getattr(tool_use, "id", "") or "",
         )
 
     # ---- OpenAI leg --------------------------------------------------------
@@ -261,23 +284,55 @@ class AnthropicClient:
         *,
         model: str,
         system_blocks: List[Dict[str, Any]],
-        user_content: str,
-        tool_schema: Dict[str, Any],
-        tool_name: str,
+        user_content: Any,  # List[Dict] (messages)
+        tool_schema: List[Dict[str, Any]],
+        tool_name: Optional[str],
     ) -> LLMResult:
-        """Call OpenAI Chat Completions (stream=true is mandatory on CRS)."""
+        """Call OpenAI Chat Completions (stream=true is mandatory on CRS).
+
+        Note: OpenAI protocol doesn't support multi-turn tool_use natively
+        in the same way as Anthropic. For the OpenAI leg, we flatten messages
+        and force classify_email directly (no context tools).
+        """
         http = self._lazy_http()
         sys_text = _flatten_system_to_text(system_blocks)
+
+        # Convert messages to OpenAI format
+        oai_messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": sys_text},
+        ]
+        for msg in user_content:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                oai_messages.append({"role": role, "content": content})
+            elif isinstance(content, list):
+                # Flatten structured content blocks to text
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "tool_result":
+                            text_parts.append(
+                                f"[Tool result: {block.get('content', '')}]"
+                            )
+                        elif block.get("type") == "tool_use":
+                            continue  # skip tool_use blocks in assistant messages
+                        elif block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                if text_parts:
+                    oai_messages.append({"role": role, "content": "\n".join(text_parts)})
+
+        # For OpenAI, always force classify_email (no multi-turn context tools)
+        force_name = tool_name or "classify_email"
+        oai_tools = [_to_openai_tool(t) for t in tool_schema]
+
         body: Dict[str, Any] = {
             "model": model,
             "max_tokens": cfg.llm_max_tokens,
             "stream": True,
-            "messages": [
-                {"role": "system", "content": sys_text},
-                {"role": "user", "content": user_content},
-            ],
-            "tools": [_to_openai_tool(tool_schema)],
-            "tool_choice": {"type": "function", "function": {"name": tool_name}},
+            "messages": oai_messages,
+            "tools": oai_tools,
+            "tool_choice": {"type": "function", "function": {"name": force_name}},
         }
 
         t0 = time.monotonic()
@@ -345,10 +400,6 @@ class AnthropicClient:
                 f"OpenAI returned no tool_calls (model={model}); "
                 f"got_name={seen_tool_name!r}"
             )
-        if seen_tool_name and seen_tool_name != tool_name:
-            raise LLMCallError(
-                f"Expected tool {tool_name!r} but got {seen_tool_name!r} (model={model})"
-            )
         try:
             tool_input = _json.loads(tool_args)
         except _json.JSONDecodeError as e:
@@ -369,6 +420,8 @@ class AnthropicClient:
             cache_read_input_tokens=0,
             model=model,
             latency_ms=latency_ms,
+            tool_name=seen_tool_name or force_name,
+            tool_use_id="",
         )
 
     async def close(self):

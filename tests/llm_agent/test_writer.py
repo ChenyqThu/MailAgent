@@ -24,7 +24,7 @@ def _labels(**overrides) -> AILabels:
         priority="🟡 重要",
         urgency_reason="",
         mail_actions=["⭐ Starred"],
-        reply_suggestion_md="Hi\n\n----\nBest,\nLucien",
+        reply_suggestion_md="Hi\n\n----\nBest,\nKevin",
         daily_digest_date="2026-04-24",
         related_project="",
         mailbox="收件箱",
@@ -34,16 +34,24 @@ def _labels(**overrides) -> AILabels:
 
 
 def test_processing_status_inbox():
-    assert _bare_writer()._processing_status("收件箱") == "AI Reviewed"
+    assert _bare_writer()._processing_status(_labels(mailbox="收件箱")) == "AI Reviewed"
 
 
 def test_processing_status_sent():
-    assert _bare_writer()._processing_status("发件箱") == "已完成"
+    assert _bare_writer()._processing_status(_labels(mailbox="发件箱")) == "已完成"
 
 
 def test_processing_status_default():
-    assert _bare_writer()._processing_status("") == "AI Reviewed"
-    assert _bare_writer()._processing_status("unknown") == "AI Reviewed"
+    assert _bare_writer()._processing_status(_labels(mailbox="")) == "AI Reviewed"
+    assert _bare_writer()._processing_status(_labels(mailbox="unknown")) == "AI Reviewed"
+
+
+def test_processing_status_low_confidence():
+    w = _bare_writer()
+    assert w._processing_status(_labels(confidence=0.3)) is None
+    assert w._processing_status(_labels(confidence=0.59)) is None
+    assert w._processing_status(_labels(confidence=0.6)) == "AI Reviewed"
+    assert w._processing_status(_labels(confidence=0.9)) == "AI Reviewed"
 
 
 def test_build_props_inbox_full():

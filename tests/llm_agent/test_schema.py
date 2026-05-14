@@ -26,7 +26,7 @@ def test_required_fields():
     req = set(EMAIL_TOOL_SCHEMA["input_schema"]["required"])
     assert req == {
         "ai_summary", "category", "language", "sender_priority",
-        "action_required", "action_type", "priority",
+        "action_required", "action_type", "priority", "confidence",
     }
 
 

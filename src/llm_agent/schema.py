@@ -64,8 +64,8 @@ PROCESSING_STATUS_COMPLETED = "已完成"
 EMAIL_TOOL_SCHEMA = {
     "name": "classify_email",
     "description": (
-        "Classify a single email and produce all required Notion fields. "
-        "Call this tool exactly once. Never reply in plain text."
+        "Classify the email and produce all required fields. "
+        "You MUST call this tool exactly once as your final action."
     ),
     "input_schema": {
         "type": "object",
@@ -78,100 +78,129 @@ EMAIL_TOOL_SCHEMA = {
             "action_required",
             "action_type",
             "priority",
+            "confidence",
         ],
         "properties": {
+            "confidence": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": (
+                    "分类置信度 0.0-1.0。"
+                    "< 0.6 时系统不会自动推进 Processing Status，留给人工复核。"
+                    "简单明确的邮件（系统通知、newsletter）应 >= 0.9；"
+                    "模糊或需要更多上下文才能判断的给 0.4-0.6。"
+                ),
+            },
             "ai_summary": {
                 "type": "string",
                 "description": (
-                    "2-4 句摘要。收件箱：这封邮件说了什么/我需要做什么；"
-                    "发件箱：我请求了什么/期望的响应是什么。最多 2000 字。"
+                    "2-4 句摘要。收件箱：说了什么 + 我需要做什么；"
+                    "发件箱：我请求了什么 + 期望的响应。最多 2000 字。"
                 ),
                 "maxLength": 2000,
             },
             "key_points": {
                 "type": "string",
                 "description": (
-                    "关键信息点，每条一行（待办事项、决策点、截止日期、数据、结论、风险）。"
+                    "关键信息点，每条一行（待办、决策点、截止日期、数据、结论、风险）。"
                     "多行用 \\n 分隔。没有则留空字符串。"
                 ),
             },
             "category": {
                 "type": "string",
                 "enum": CATEGORY_ENUM,
-                "description": "综合主题与正文判断邮件分类。",
             },
             "language": {
                 "type": "string",
                 "enum": LANGUAGE_ENUM,
-                "description": "邮件主要语言。",
             },
             "sender_priority": {
                 "type": "string",
                 "enum": SENDER_PRIORITY_ENUM,
-                "description": (
-                    "发件人角色分组（收件箱）；收件人重要性（发件箱，语义变）。"
-                    "参照 reference context 中的 Sender Priority 映射。"
-                ),
             },
             "action_required": {
                 "type": "boolean",
-                "description": (
-                    "收件箱：是否有对我的明确请求/需要回复决策评审参会；"
-                    "发件箱：是否需要我主动跟进（超时未回复或 reminder）。"
-                ),
             },
             "action_type": {
                 "type": "string",
                 "enum": ACTION_TYPE_ALL,
-                "description": (
-                    "必须匹配当前 mailbox。\n"
-                    "收件箱仅可选：需要回复 / 需要决策 / 需要Review / 需要会议 / 仅供参考。\n"
-                    "发件箱仅可选：等待响应 / 需要跟进 / 已完结 / 仅供参考。"
-                ),
             },
             "priority": {
                 "type": "string",
                 "enum": PRIORITY_ENUM,
-                "description": (
-                    "严格判定：🔴 紧急仅用于线上事故/发布阻塞/生产异常且需我立即处理。"
-                    "🟡 重要用于关键评审/版本 deadline。🟢 一般用于日常。⚪ 低用于 FYI。"
-                ),
             },
             "urgency_reason": {
                 "type": "string",
                 "description": (
-                    "仅当 priority=🔴 紧急时填 1-3 句原因（时间限制、风险、影响范围）；"
-                    "其他情况留空字符串。"
+                    "仅当 priority=🔴紧急 时填 1-3 句原因；其他留空字符串。"
                 ),
             },
             "mail_actions": {
                 "type": "array",
                 "items": {"type": "string", "enum": MAIL_ACTIONS_ENUM},
-                "description": "推荐后续操作标签，0-4 个，与 priority/action_required 呼应。",
+                "description": "推荐操作标签，0-4 个。",
             },
             "reply_suggestion_md": {
                 "type": "string",
                 "description": (
-                    "建议回复/跟进内容，Markdown 格式。仅 action_required=true 时填。\n"
-                    "⚠️ 仅限 inline 元素 + 换行：**bold**, *italic*, ~~strike~~, `code`, [text](url)。\n"
-                    "列表用 '- ' 或 '1. ' 前缀纯文本模拟，禁止 heading / code block / 真 list。\n"
-                    "结构：称呼 → 正文段落 → 签名。结尾必须是：\n\n----\nBest,\nLucien"
+                    "建议回复草稿（仅 action_required=true 时填）。"
+                    "仅限 inline Markdown + 换行。"
+                    "结尾签名：\\n\\n----\\nBest,\\nKevin"
                 ),
             },
             "daily_digest_date": {
                 "type": "string",
-                "description": (
-                    "邮件所属 Daily Digest 日期（YYYY-MM-DD，固定 UTC+8 切割线）。"
-                    "脚本将按此日期查 Daily Digest 页面建立 relation。"
-                    "不确定则留空字符串。"
-                ),
+                "description": "邮件 Date 转 UTC+8 的日期（YYYY-MM-DD）。不确定则留空。",
             },
             "related_project": {
                 "type": "string",
                 "description": (
-                    "可选。若邮件与 reference context 中『当前重点项目』之一明确相关，"
-                    "填项目名称；否则留空字符串。"
+                    "若与 reference context 中重点项目明确相关，填项目名；否则留空。"
                 ),
+            },
+        },
+    },
+}
+
+
+# ---- Context tools (agent can optionally call before classify_email) --------
+
+THREAD_CONTEXT_TOOL_SCHEMA = {
+    "name": "get_thread_context",
+    "description": (
+        "查询当前邮件所在线程的历史邮件摘要。"
+        "用于判断：这是新话题还是已有对话？之前做过什么决定？谁参与过？"
+        "仅当 thread_id 非空且你需要上下文时调用。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["thread_id"],
+        "properties": {
+            "thread_id": {
+                "type": "string",
+                "description": "邮件的 thread_id（从邮件元数据中获取）。",
+            },
+        },
+    },
+}
+
+SENDER_HISTORY_TOOL_SCHEMA = {
+    "name": "get_sender_history",
+    "description": (
+        "查询发件人近 30 天的邮件统计：发信频率、主题分布、历史 priority 分布。"
+        "用于判断：这个人经常发什么邮件？过去的优先级模式是什么？"
+        "仅当你需要了解发件人行为模式时调用。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["sender_address"],
+        "properties": {
+            "sender_address": {
+                "type": "string",
+                "description": "发件人邮箱地址。",
             },
         },
     },

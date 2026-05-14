@@ -52,10 +52,25 @@ class AIFieldsWriter:
             self._client = NotionClient()
         return self._client
 
-    def _processing_status(self, mailbox: str) -> str:
+    # Confidence threshold: below this, don't advance Processing Status
+    LOW_CONFIDENCE_THRESHOLD = 0.6
+
+    def _processing_status(self, labels: AILabels) -> Optional[str]:
+        """Determine Processing Status based on mailbox and confidence.
+
+        Returns None when confidence is too low — keeps '未处理' so the
+        email stays visible for human review instead of auto-advancing
+        through the webhook → Mail.app flag → 飞书 notification pipeline.
+        """
+        if labels.confidence < self.LOW_CONFIDENCE_THRESHOLD:
+            logger.info(
+                f"[llm-writer] low confidence={labels.confidence:.2f}; "
+                f"skipping Processing Status advancement"
+            )
+            return None
         return (
             PROCESSING_STATUS_COMPLETED
-            if mailbox == "发件箱"
+            if labels.mailbox == "发件箱"
             else PROCESSING_STATUS_AI_REVIEWED
         )
 
@@ -94,7 +109,10 @@ class AIFieldsWriter:
         if digest_page_id:
             props["Daily Digests"] = {"relation": [{"id": digest_page_id}]}
 
-        props["Processing Status"] = _select(self._processing_status(labels.mailbox))
+        status = self._processing_status(labels)
+        if status is not None:
+            props["Processing Status"] = _select(status)
+
         return props
 
     async def _read_non_empty_props(self, page_id: str) -> Set[str]:
@@ -159,10 +177,12 @@ class AIFieldsWriter:
                 )
             props = {k: v for k, v in props.items() if k not in protected}
 
+        status = self._processing_status(labels)
         summary = {
             "page_id": page_id,
             "mailbox": labels.mailbox,
-            "processing_status": self._processing_status(labels.mailbox),
+            "processing_status": status or "未处理 (low confidence)",
+            "confidence": labels.confidence,
             "digest_page_id": digest_page_id,
             "written_props": sorted(props.keys()),
             "skipped_digest": bool(labels.daily_digest_date and not digest_page_id),
