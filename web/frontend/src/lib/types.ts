@@ -42,7 +42,7 @@ export interface PagedResponse<T> {
   has_more: boolean;
 }
 
-export type EmailView = "pending" | "browse" | "ignore" | "all";
+export type EmailView = "pending" | "browse" | "all";
 
 export interface EmailFilter {
   view?: EmailView;
@@ -58,6 +58,5 @@ export interface EmailFilter {
 export interface ViewCounts {
   pending: number;
   browse: number;
-  ignore: number;
   all: number;
 }

@@ -1,11 +1,13 @@
 import { useRef, useEffect, useState, useMemo, useCallback } from "react";
 import type { EmailListItem } from "@/lib/types";
+import type { ThreadGroup } from "@/pages/InboxPage";
 import { EmailRow } from "./EmailRow";
 import { ThreadChildRow } from "./ThreadChildRow";
 import { useThreadEmails } from "@/hooks/useThreadEmails";
 
 interface Props {
   emails: EmailListItem[];
+  groups: ThreadGroup[];
   activeId: number | null;
   onSelect: (id: number) => void;
   selectMode?: boolean;
@@ -13,14 +15,9 @@ interface Props {
   onToggleSelect?: (id: number) => void;
 }
 
-interface ThreadGroup {
-  representative: EmailListItem;
-  threadId: string | null;
-  count: number;
-}
-
 export function EmailList({
   emails,
+  groups,
   activeId,
   onSelect,
   selectMode = false,
@@ -28,43 +25,13 @@ export function EmailList({
   onToggleSelect,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
-  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
+  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     if (activeId === null || !listRef.current) return;
     const el = listRef.current.querySelector(`[data-id="${activeId}"]`);
     el?.scrollIntoView({ block: "nearest" });
   }, [activeId]);
-
-  // 按 thread_id 分组：同 thread 只显示最新一封（internal_id 最大）
-  const groups = useMemo<ThreadGroup[]>(() => {
-    const seen = new Map<string, ThreadGroup>();
-    const result: ThreadGroup[] = [];
-
-    for (const email of emails) {
-      const tid = email.thread_id;
-      if (!tid || email.thread_count <= 1) {
-        // 独立邮件
-        result.push({ representative: email, threadId: null, count: 1 });
-        continue;
-      }
-
-      if (seen.has(tid)) {
-        // 同线程已有代表 — 跳过（emails 已按 internal_id DESC 排序，第一个就是最新）
-        continue;
-      }
-
-      const group: ThreadGroup = {
-        representative: email,
-        threadId: tid,
-        count: email.thread_count,
-      };
-      seen.set(tid, group);
-      result.push(group);
-    }
-
-    return result;
-  }, [emails]);
 
   const toggleThread = useCallback((threadId: string) => {
     setExpandedThreads((prev) => {
@@ -143,6 +110,15 @@ function ThreadGroupRow({
     );
   }, [threadEmails, group.representative.internal_id]);
 
+  // 聚合线程状态：任意一封未读 → 线程未读；任意一封有旗标 → 线程有旗标
+  const threadStatus = useMemo(() => {
+    if (!group.threadId || group.members.length <= 1) return null;
+    return {
+      hasUnread: group.members.some((m) => !m.is_read),
+      hasFlagged: group.members.some((m) => m.is_flagged),
+    };
+  }, [group.threadId, group.members]);
+
   const email = group.representative;
 
   return (
@@ -163,6 +139,8 @@ function ThreadGroupRow({
           threadCount={group.count}
           threadExpanded={expanded}
           onToggleThread={onToggleThread}
+          threadHasUnread={threadStatus?.hasUnread}
+          threadHasFlagged={threadStatus?.hasFlagged}
         />
       </div>
 

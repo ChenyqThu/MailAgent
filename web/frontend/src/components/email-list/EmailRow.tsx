@@ -11,6 +11,8 @@ interface Props {
   threadCount?: number;
   threadExpanded?: boolean;
   onToggleThread?: () => void;
+  threadHasUnread?: boolean;
+  threadHasFlagged?: boolean;
 }
 
 export function EmailRow({
@@ -22,7 +24,13 @@ export function EmailRow({
   threadCount,
   threadExpanded,
   onToggleThread,
+  threadHasUnread,
+  threadHasFlagged,
 }: Props) {
+  const isThread = threadCount !== undefined && threadCount > 1;
+  // 线程聚合状态优先，单封回退到自身
+  const showUnread = isThread ? !!threadHasUnread : !email.is_read;
+  const showFlagged = isThread ? !!threadHasFlagged : email.is_flagged;
   const pc = PRIORITY_CONFIG[email.priority || ""] ?? {
     label: "—",
     color: "text-fg-faint",
@@ -66,7 +74,13 @@ export function EmailRow({
         {email.action_type && (
           <span className="text-[10px] text-fg-muted">{email.action_type}</span>
         )}
-        <span className="text-xs font-medium text-fg-primary flex-1 truncate">
+        {showUnread && (
+          <span className="w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" title="未读" />
+        )}
+        {showFlagged && (
+          <span className="text-[10px] text-status-warning flex-shrink-0">⚑</span>
+        )}
+        <span className={clsx("text-xs flex-1 truncate", showUnread ? "font-semibold text-fg-primary" : "font-medium text-fg-primary")}>
           {extractSenderName(email.sender)}
         </span>
         <span className="text-[11px] text-fg-muted flex-shrink-0">
@@ -79,7 +93,7 @@ export function EmailRow({
         {email.subject || "(无主题)"}
       </div>
 
-      {/* 第���行: AI Summary */}
+      {/* 第三行: AI Summary */}
       {email.ai_summary && (
         <div className="text-[11px] text-fg-faint truncate">
           {email.ai_summary}

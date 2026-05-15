@@ -24,6 +24,9 @@ export function useEmails(filter: EmailFilter, page = 1, pageSize = 50) {
       apiFetch<PagedResponse<EmailListItem>>(
         `/emails?${buildParams(filter, page, pageSize)}`
       ),
-    refetchInterval: 15_000,
+    // SSE-driven invalidation (see useSSE). 60s fallback for SSE outages.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    placeholderData: (prev) => prev,
   });
 }

@@ -66,6 +66,41 @@ async def get_thread_emails(
     return email_service.get_thread_emails(thread_id)
 
 
+@router.get("/thread/{thread_id}/bodies")
+async def get_thread_bodies(
+    thread_id: str,
+    _token: str = Depends(verify_token),
+):
+    """获取线程内所有邮件的正文（按时间正序）。"""
+    from asyncio import gather
+    from web.api.services import notion_service
+
+    emails = email_service.get_thread_emails(thread_id)
+    if not emails:
+        return []
+
+    async def fetch_body(email: EmailListItem) -> dict:
+        body = ""
+        error: str | None = None
+        if email.notion_page_id:
+            try:
+                body = await notion_service.get_page_body(email.notion_page_id)
+            except notion_service.NotionBodyError as e:
+                error = str(e)
+        return {
+            "internal_id": email.internal_id,
+            "subject": email.subject,
+            "sender": email.sender,
+            "sender_name": email.sender_name,
+            "date_received": email.date_received,
+            "body": body,
+            "error": error,
+        }
+
+    results = await gather(*(fetch_body(e) for e in emails))
+    return list(results)
+
+
 @router.get("/{internal_id}", response_model=EmailDetail)
 async def get_email(
     internal_id: int,
@@ -92,5 +127,8 @@ async def get_email_body(
     if not detail.notion_page_id:
         raise HTTPException(status_code=404, detail="该邮件未同步到 Notion")
 
-    body = await notion_service.get_page_body(detail.notion_page_id)
+    try:
+        body = await notion_service.get_page_body(detail.notion_page_id)
+    except notion_service.NotionBodyError as e:
+        raise HTTPException(status_code=502, detail=f"Notion 正文读取失败: {e}")
     return {"internal_id": internal_id, "body": body}

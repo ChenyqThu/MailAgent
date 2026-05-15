@@ -50,7 +50,7 @@ class EmailDetail(EmailListItem):
 
 
 class EmailFilter(BaseModel):
-    view: Optional[str] = None  # pending | browse | ignore | all
+    view: Optional[str] = None  # pending | browse | all
     mailbox: Optional[str] = None
     priority: Optional[str] = None
     action_type: Optional[str] = None

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 from loguru import logger
@@ -19,14 +20,17 @@ from loguru import logger
 from web.api.config import web_config
 
 from .schemas import EmailContext, SSEEvent
-from .session import Session
+from .session import Session, session_manager
 from .tools import TOOL_SCHEMAS, execute_tool
 
 _MAX_TURNS = 8
 _MAX_TOKENS = 4000
+_PROMPT_PATH = Path(__file__).parent / "system_prompt.md"
 
 # Lazy-init
 _client = None
+_prompt_text: str | None = None
+_prompt_mtime: float = 0
 
 
 def _get_client():
@@ -47,28 +51,29 @@ def _get_client():
     return _client
 
 
+def _load_prompt() -> str:
+    """读取 system_prompt.md，带 mtime 热重载。"""
+    global _prompt_text, _prompt_mtime
+    try:
+        mt = _PROMPT_PATH.stat().st_mtime
+        if _prompt_text is None or mt != _prompt_mtime:
+            _prompt_text = _PROMPT_PATH.read_text("utf-8")
+            _prompt_mtime = mt
+            logger.info(f"[agent] loaded system_prompt.md ({len(_prompt_text)} chars)")
+    except FileNotFoundError:
+        if _prompt_text is None:
+            _prompt_text = "你是邮件 AI 助手。"
+    return _prompt_text  # type: ignore[return-value]
+
+
 def _build_system(email_ctx: Optional[EmailContext] = None) -> str:
     """构建 system prompt。"""
     now = time.strftime("%Y-%m-%d %H:%M %A", time.localtime())
 
     parts = [
-        "你是 Kevin 的邮件 AI 助手。你可以搜索邮件、查看邮件正文、分析发件人和线程。",
+        _load_prompt(),
+        "",
         f"当前时间: {now}",
-        "",
-        "## 行为准则",
-        "- 用中文回答，除非用户用英文提问",
-        "- 回答简洁有结构，避免啰嗦",
-        "- 需要查询数据时主动调用工具，不要凭空编造",
-        "- 搜索结果不够时，尝试不同关键词或放宽条件",
-        "- 引用邮件时标注 [主题] 和日期",
-        "",
-        "## 可用工具",
-        "- search_emails: 关键词搜索邮件（匹配主题、发件人、AI 摘要）",
-        "- read_email_body: 读取邮件完整正文",
-        "- get_thread_context: 获取线程上下文（同一对话的多封邮件）",
-        "- get_sender_stats: 获取发件人 30 天统计",
-        "- search_by_date: 按日期范围搜索",
-        "- get_email_ai_labels: 获取邮件的 AI 分析标签",
     ]
 
     if email_ctx:
@@ -206,6 +211,7 @@ async def agent_stream(
         # 没有 tool_use → 结束
         break
 
+    session_manager.save(session)
     yield SSEEvent(type="done", data={"turns": turn + 1})
 
 
@@ -244,5 +250,15 @@ def _tool_result_summary(tool_name: str, data: dict[str, Any]) -> str:
         if category:
             parts.append(f"分类: {category}")
         return " | ".join(parts) if parts else "已获取标签"
+
+    if tool_name == "get_view_summary":
+        total = data.get("total", 0)
+        showing = data.get("showing", 0)
+        return f"共 {total} 封，返回 {showing} 封"
+
+    if tool_name == "batch_action":
+        count = data.get("count", len(data.get("processed", [])))
+        action = data.get("action", "")
+        return f"已执行 {action}，处理 {count} 封"
 
     return "完成"

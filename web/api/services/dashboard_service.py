@@ -1,14 +1,13 @@
 """Dashboard 数据服务。
 
 支持 day/month/quarter/year 四种时间范围视图。
-时区跟随系统（UTC+8）。
+时区跟随系统本地时区。
 """
 
 from __future__ import annotations
 
-import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from web.api.services.db import get_db
@@ -26,8 +25,7 @@ def _clean_sender(raw: str) -> str:
         return m.group(1).strip()
     return raw[:20]
 
-# 系统时区 UTC+8
-_TZ = timezone(timedelta(hours=8))
+_TZ = datetime.now(timezone.utc).astimezone().tzinfo
 
 # 合法 range 值
 _VALID_RANGES = {"day", "month", "quarter", "year"}
@@ -92,31 +90,39 @@ def get_overview_stats(range_: str | None = None) -> dict[str, Any]:
             "SELECT COUNT(*) as n FROM email_metadata WHERE sync_status='synced'"
         ).fetchone()["n"]
 
-        pending = conn.execute(
-            "SELECT COUNT(*) as n FROM email_metadata WHERE sync_status='synced' AND is_flagged=1"
-        ).fetchone()["n"]
+        pending = conn.execute("""
+            SELECT COUNT(*) as n FROM email_metadata em
+            JOIN llm_processing lp ON em.internal_id = lp.internal_id
+            WHERE em.sync_status='synced' AND em.is_flagged=1
+            AND lp.status='success'
+            AND COALESCE(em.processing_status, '') != '已完成'
+        """).fetchone()["n"]
 
-        # 范围内新增
+        # 范围内新增（按邮件接收日期，比 created_at 更准确）
         range_new = conn.execute(
-            "SELECT COUNT(*) as n FROM email_metadata WHERE sync_status='synced' AND created_at > ?",
-            (since_ts,),
+            "SELECT COUNT(*) as n FROM email_metadata WHERE sync_status='synced' AND date_received >= ?",
+            (datetime.fromtimestamp(since_ts, tz=_TZ).strftime("%Y-%m-%d"),),
         ).fetchone()["n"]
 
-        # 范围内 AI 已审核
-        ai_reviewed = conn.execute(
-            "SELECT COUNT(*) as n FROM llm_processing WHERE status='success' AND updated_at > ?",
-            (since_ts,),
-        ).fetchone()["n"]
+        range_date = datetime.fromtimestamp(since_ts, tz=_TZ).strftime("%Y-%m-%d")
 
-        # 范围内紧急数
+        # 范围内 AI 已审核（按邮件接收日期）
+        ai_reviewed = conn.execute("""
+            SELECT COUNT(*) as n FROM llm_processing lp
+            JOIN email_metadata em ON em.internal_id = lp.internal_id
+            WHERE lp.status='success' AND em.date_received >= ?
+        """, (range_date,)).fetchone()["n"]
+
+        # 范围内紧急数（按邮件接收日期）
         urgent = conn.execute("""
-            SELECT COUNT(*) as n FROM llm_processing
-            WHERE status='success'
-            AND updated_at > ?
-            AND json_extract(labels_json, '$.priority') LIKE '%紧急%'
-        """, (since_ts,)).fetchone()["n"]
+            SELECT COUNT(*) as n FROM llm_processing lp
+            JOIN email_metadata em ON em.internal_id = lp.internal_id
+            WHERE lp.status='success'
+            AND em.date_received >= ?
+            AND json_extract(lp.labels_json, '$.priority') LIKE '%紧急%'
+        """, (range_date,)).fetchone()["n"]
 
-        # 范围内 LLM 成本
+        # 范围内 LLM 成本（保持用 updated_at，因为成本是处理时产生的）
         cost_row = conn.execute("""
             SELECT
                 COALESCE(SUM(input_tokens), 0) as input_tok,
@@ -148,6 +154,7 @@ def get_attention_emails(range_: str | None = None, limit: int = 10) -> list[dic
     """需要关注的邮件（紧急+重要，按优先级+时间排序）。"""
     range_ = _normalize_range(range_)
     since_ts = _range_start(range_)
+    range_date = datetime.fromtimestamp(since_ts, tz=_TZ).strftime("%Y-%m-%d")
 
     with get_db() as conn:
         rows = conn.execute("""
@@ -158,7 +165,7 @@ def get_attention_emails(range_: str | None = None, limit: int = 10) -> list[dic
             JOIN llm_processing lp ON em.internal_id = lp.internal_id
             WHERE em.sync_status = 'synced'
             AND lp.status = 'success'
-            AND em.created_at > ?
+            AND em.date_received >= ?
             AND (
                 json_extract(lp.labels_json, '$.priority') LIKE '%紧急%'
                 OR json_extract(lp.labels_json, '$.priority') LIKE '%重要%'
@@ -170,16 +177,14 @@ def get_attention_emails(range_: str | None = None, limit: int = 10) -> list[dic
                 END,
                 em.internal_id DESC
             LIMIT ?
-        """, (since_ts, limit)).fetchall()
+        """, (range_date, limit)).fetchall()
+
+    from web.api.services.email_queries import parse_labels
 
     result = []
     for row in rows:
         d = dict(row)
-        labels = {}
-        try:
-            labels = json.loads(d.pop("labels_json", "{}") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            pass
+        labels = parse_labels(d.pop("labels_json", None))
         d["priority"] = labels.get("priority")
         d["action_type"] = labels.get("action_type")
         d["ai_summary"] = labels.get("ai_summary")
@@ -192,6 +197,7 @@ def get_digest(range_: str | None = None) -> dict[str, Any]:
     """范围内邮件摘要。"""
     range_ = _normalize_range(range_)
     since_ts = _range_start(range_)
+    range_date = datetime.fromtimestamp(since_ts, tz=_TZ).strftime("%Y-%m-%d")
 
     with get_db() as conn:
         rows = conn.execute("""
@@ -202,10 +208,10 @@ def get_digest(range_: str | None = None) -> dict[str, Any]:
             JOIN llm_processing lp ON em.internal_id = lp.internal_id
             WHERE em.sync_status = 'synced'
             AND lp.status = 'success'
-            AND em.created_at > ?
+            AND em.date_received >= ?
             GROUP BY category
             ORDER BY count DESC
-        """, (since_ts,)).fetchall()
+        """, (range_date,)).fetchall()
 
         categories = [{"category": r["category"] or "未分类", "count": r["count"]} for r in rows]
 
@@ -217,9 +223,9 @@ def get_digest(range_: str | None = None) -> dict[str, Any]:
             JOIN llm_processing lp ON em.internal_id = lp.internal_id
             WHERE em.sync_status = 'synced'
             AND lp.status = 'success'
-            AND em.created_at > ?
+            AND em.date_received >= ?
             GROUP BY priority
-        """, (since_ts,)).fetchall()
+        """, (range_date,)).fetchall()
 
         priorities = {r["priority"] or "未知": r["count"] for r in prio_rows}
 
@@ -232,10 +238,10 @@ def get_digest(range_: str | None = None) -> dict[str, Any]:
             JOIN llm_processing lp ON em.internal_id = lp.internal_id
             WHERE em.sync_status = 'synced'
             AND lp.status = 'success'
-            AND em.created_at > ?
+            AND em.date_received >= ?
             GROUP BY action_type
             ORDER BY count DESC
-        """, (since_ts,)).fetchall()
+        """, (range_date,)).fetchall()
 
         action_types = {r["action_type"] or "未知": r["count"] for r in action_rows}
 
@@ -250,11 +256,11 @@ def get_digest(range_: str | None = None) -> dict[str, Any]:
                 COUNT(*) as count
             FROM email_metadata em
             WHERE em.sync_status = 'synced'
-            AND em.created_at > ?
+            AND em.date_received >= ?
             GROUP BY name
             ORDER BY count DESC
             LIMIT 8
-        """, (since_ts,)).fetchall()
+        """, (range_date,)).fetchall()
 
         top_senders = [{"name": _clean_sender(r["name"]), "count": r["count"]} for r in sender_rows]
 

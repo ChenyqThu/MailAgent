@@ -18,6 +18,8 @@ export function useSSE() {
           if (data.type === "email_updated" || data.type === "email_new") {
             queryClient.invalidateQueries({ queryKey: ["emails"] });
             queryClient.invalidateQueries({ queryKey: ["email-detail"] });
+            queryClient.invalidateQueries({ queryKey: ["view-counts"] });
+            queryClient.invalidateQueries({ queryKey: ["thread-emails"] });
             queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
             queryClient.invalidateQueries({ queryKey: ["dashboard-attention"] });
             queryClient.invalidateQueries({ queryKey: ["dashboard-digest"] });

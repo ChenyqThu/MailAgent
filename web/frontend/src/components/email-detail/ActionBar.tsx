@@ -6,13 +6,16 @@ interface Props {
   isRead: boolean;
   isDone: boolean;
   view?: EmailView;
+  threadCount?: number;
   onAction: (action: string) => void;
 }
 
-export function ActionBar({ isFlagged, isRead, isDone, view, onAction }: Props) {
+export function ActionBar({ isFlagged, isRead, isDone, view, threadCount, onAction }: Props) {
   const isBrowse = view === "browse";
+  const isThread = threadCount !== undefined && threadCount > 1;
+  const suffix = isThread ? ` (${threadCount} 封)` : "";
   const primaryAction = isBrowse ? "mark_browsed" : "mark_done";
-  const primaryLabel = isBrowse ? "已阅" : "标记已处理";
+  const primaryLabel = isBrowse ? `已阅${suffix}` : `标记已处理${suffix}`;
   const primaryDoneLabel = isBrowse ? "已阅" : "已完成";
 
   return (

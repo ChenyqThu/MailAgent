@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { clsx } from "clsx";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Props {
   emailId: number | null;
@@ -39,6 +41,8 @@ const TOOL_LABELS: Record<string, string> = {
   get_sender_stats: "发件人统计",
   search_by_date: "日期搜索",
   get_email_ai_labels: "AI 标签",
+  get_view_summary: "视图概览",
+  batch_action: "批量操作",
 };
 
 export function AgentPanel({
@@ -61,15 +65,45 @@ export function AgentPanel({
   const prevEmailIdRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // 切换邮件时清空对话
+  // session 持久化 key
+  const sessionKey = emailId !== null ? `agent_session_${emailId}` : "agent_session_global";
+
+  // 切换邮件时：保存旧 session，恢复目标邮件的 session
   useEffect(() => {
     if (emailId !== prevEmailIdRef.current) {
       prevEmailIdRef.current = emailId;
-      setMessages([]);
-      setSessionId(null);
       abortRef.current?.abort();
+
+      // 恢复目标邮件的 session
+      const savedId = localStorage.getItem(sessionKey);
+      if (savedId) {
+        setSessionId(savedId);
+        setMessages([]);
+        // 从后端恢复历史
+        const token = localStorage.getItem("mailagent_token") || "";
+        fetch(`/api/agent/session/${savedId}/history`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            if (data?.messages?.length) {
+              setMessages(data.messages);
+            }
+          })
+          .catch(() => {});
+      } else {
+        setSessionId(null);
+        setMessages([]);
+      }
     }
-  }, [emailId]);
+  }, [emailId, sessionKey]);
+
+  // sessionId 变化时持久化
+  useEffect(() => {
+    if (sessionId) {
+      localStorage.setItem(sessionKey, sessionId);
+    }
+  }, [sessionId, sessionKey]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -272,6 +306,7 @@ export function AgentPanel({
   function handleNewSession() {
     setMessages([]);
     setSessionId(null);
+    localStorage.removeItem(sessionKey);
     abortRef.current?.abort();
   }
 
@@ -381,10 +416,10 @@ export function AgentPanel({
                 ))}
                 {/* 文本内容 */}
                 {msg.content && (
-                  <div className="bg-bg-secondary border border-border rounded-lg px-3 py-2">
-                    <pre className="text-[13px] text-fg-secondary whitespace-pre-wrap font-sans leading-relaxed">
+                  <div className="bg-bg-secondary border border-border rounded-lg px-3 py-2 prose-agent">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {msg.content}
-                    </pre>
+                    </ReactMarkdown>
                   </div>
                 )}
               </div>

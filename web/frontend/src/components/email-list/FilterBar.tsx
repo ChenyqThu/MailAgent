@@ -5,7 +5,6 @@ import type { EmailFilter, EmailView, ViewCounts } from "@/lib/types";
 const VIEW_TABS: { key: EmailView; label: string }[] = [
   { key: "pending", label: "待处理" },
   { key: "browse", label: "值得浏览" },
-  { key: "ignore", label: "可忽略" },
   { key: "all", label: "全部" },
 ];
 
