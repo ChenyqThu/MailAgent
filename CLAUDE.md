@@ -352,6 +352,10 @@ pending → fetch_failed → (重试) → fetched → failed → (重试) → sy
            dead_letter                    dead_letter
 ```
 
+**死信降级例外（避免无意义告警）：**
+- 发件箱 `fetch_failed` 用尽重试 → 降级为 `skipped`（`sync_error="Skipped (sent box unreachable): ..."`），不进死信。原因：发件箱里 row_id 在 SQLite radar 检测到之后被 Mail.app 重排/清理，AppleScript `whose id = N` 找不到；发件箱漏一封不致命，硬重试只刷告警。逻辑在 `sync_store._update_for_retry`。
+- HTML 转 Notion blocks 时 `link.url` 必须是 ASCII + 协议白名单（http/https/mailto/tel）+ 不含空白；非法 URL 被 `html_converter._sanitize_link_url` 退化成纯文本，避免 Notion API 抛 `Invalid URL for link` 把整封邮件卡进死信。
+
 #### 3. Processing Status 生命周期（双向同步）
 
 ```

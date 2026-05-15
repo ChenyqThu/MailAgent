@@ -1,7 +1,35 @@
-from typing import List, Dict, Any
+import re
+from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 import html2text
 from loguru import logger
+
+# Notion 接受的 link.url 协议白名单
+_NOTION_LINK_SCHEMES = ("http://", "https://", "mailto:", "tel:")
+# URL 内部任何空白字符都会被 Notion 拒收
+_LINK_WHITESPACE_RE = re.compile(r"\s")
+
+
+def _sanitize_link_url(url: Optional[str]) -> Optional[str]:
+    """规范化 link.url：合法返回截断后的安全 URL，否则返回 None（调用方应退化成纯文本）。
+
+    Notion 对 link.url 校验比 HTML 宽松度低：含空格/换行/中文字符 / 非白名单协议都会触发
+    "Invalid URL for link"。本函数集中过滤，避免把脏 URL 喂给 Notion API。
+    """
+    if not url:
+        return None
+    candidate = url.strip()
+    if not candidate:
+        return None
+    if _LINK_WHITESPACE_RE.search(candidate):
+        return None
+    if not candidate.lower().startswith(_NOTION_LINK_SCHEMES):
+        return None
+    try:
+        candidate.encode("ascii")
+    except UnicodeEncodeError:
+        return None
+    return candidate[:2000]
 
 class HTMLToNotionConverter:
     """HTML 转 Notion Blocks 转换器"""
@@ -251,8 +279,9 @@ class HTMLToNotionConverter:
         }
 
         if link:
-            safe_url = link[:2000] if len(link) > 2000 else link
-            item["text"]["link"] = {"url": safe_url}
+            safe_url = _sanitize_link_url(link)
+            if safe_url:
+                item["text"]["link"] = {"url": safe_url}
 
         if annotations and any(annotations.values()):
             item["annotations"] = {
@@ -620,20 +649,19 @@ class HTMLToNotionConverter:
 
     @staticmethod
     def _create_link_paragraph(text: str, url: str) -> Dict[str, Any]:
-        """创建带链接的段落 Block"""
+        """创建带链接的段落 Block；URL 非法时退化为纯文本段落，保住正文内容。"""
         safe_text = HTMLToNotionConverter._truncate_by_utf16(text)
-        # 截断过长的 URL
-        safe_url = url[:2000] if len(url) > 2000 else url
+        safe_url = _sanitize_link_url(url)
+        text_obj: Dict[str, Any] = {"content": safe_text}
+        if safe_url:
+            text_obj["link"] = {"url": safe_url}
         return {
             "object": "block",
             "type": "paragraph",
             "paragraph": {
                 "rich_text": [{
                     "type": "text",
-                    "text": {
-                        "content": safe_text,
-                        "link": {"url": safe_url}
-                    }
+                    "text": text_obj,
                 }]
             }
         }

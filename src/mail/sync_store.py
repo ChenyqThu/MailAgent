@@ -608,16 +608,36 @@ class SyncStore:
             cursor = conn.cursor()
 
             try:
-                # 获取当前重试次数
+                # 获取当前重试次数 + mailbox（用于死信降级判断）
                 cursor.execute(
-                    "SELECT retry_count FROM email_metadata WHERE internal_id = ?",
+                    "SELECT retry_count, mailbox FROM email_metadata WHERE internal_id = ?",
                     (internal_id,)
                 )
                 row = cursor.fetchone()
                 current_retry = (row['retry_count'] if row else 0) + 1
+                mailbox = row['mailbox'] if row else None
 
                 # 检查是否达到最大重试次数
                 if current_retry >= max_retries:
+                    # 发件箱 fetch_failed 用尽：邮件已被 Mail.app 移走/索引失效，
+                    # 业务上发件箱漏一封不致命，降级为 skipped，避免污染死信告警
+                    if status == 'fetch_failed' and mailbox == '发件箱':
+                        cursor.execute("""
+                            UPDATE email_metadata
+                            SET sync_status = 'skipped',
+                                sync_error = ?,
+                                retry_count = ?,
+                                next_retry_at = NULL,
+                                updated_at = ?
+                            WHERE internal_id = ?
+                        """, (f"Skipped (sent box unreachable): {error}", current_retry, now, internal_id))
+                        conn.commit()
+                        logger.warning(
+                            f"Marked sent-box email as skipped after {current_retry} fetch attempts: "
+                            f"internal_id={internal_id}"
+                        )
+                        return True
+
                     cursor.execute("""
                         UPDATE email_metadata
                         SET sync_status = 'dead_letter',
