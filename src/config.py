@@ -205,6 +205,25 @@ class Config(BaseSettings):
         default=12000, env="LLM_BODY_MAX_CHARS",
         description="邮件正文送入 LLM 的最大字符数（超过截断）",
     )
+    llm_strictness_level: int = Field(
+        default=2, env="LLM_STRICTNESS_LEVEL", ge=1, le=5,
+        description=(
+            "邮件重要度判定严格度，1-5 档非线性 sigmoid 曲线："
+            "1=极宽（多放过不重要邮件进重要通道，绝不漏重要）"
+            "2=偏宽（默认，轻微 over-tag）"
+            "3=中性（最准）"
+            "4=偏严（轻微 under-tag）"
+            "5=极严（仅高置信度才上 tag，可能漏一些）"
+            "L1-L2 和 L4-L5 内部差距小，L2↔L3↔L4 是明显跨越点。"
+        ),
+    )
+    llm_low_confidence_threshold: float = Field(
+        default=-1.0, env="LLM_LOW_CONFIDENCE_THRESHOLD",
+        description=(
+            "可选：手动覆盖 strictness 推导出的 confidence 阈值（0.0-1.0）。"
+            "默认 -1.0 表示用 strictness_level 自动推导。"
+        ),
+    )
     llm_cache_enabled: bool = Field(
         default=True, env="LLM_CACHE_ENABLED",
         description=(
@@ -225,3 +244,71 @@ class Config(BaseSettings):
 
 # 全局配置实例
 config = Config()
+
+
+# Strictness 1-5 → confidence threshold（sigmoid 形：低端密、中段陡、高端密）
+_STRICTNESS_THRESHOLDS = {
+    1: 0.10,  # 极宽：几乎所有 LLM 输出都进 AI Reviewed
+    2: 0.25,  # 偏宽：默认，轻微 over-tag
+    3: 0.50,  # 中性：标准
+    4: 0.75,  # 偏严
+    5: 0.90,  # 极严：仅高置信度
+}
+
+
+def derive_confidence_threshold(level: int) -> float:
+    """非线性 sigmoid：L1-L2 内部差小（0.15）、L2↔L3 和 L3↔L4 跨越大（0.25）、L4-L5 又收窄（0.15）。"""
+    return _STRICTNESS_THRESHOLDS.get(level, 0.50)
+
+
+def effective_confidence_threshold() -> float:
+    """读取生效阈值：env 覆盖 > level 推导。"""
+    override = float(config.llm_low_confidence_threshold)
+    if 0.0 <= override <= 1.0:
+        return override
+    return derive_confidence_threshold(int(config.llm_strictness_level))
+
+
+# Strictness 1-5 → prompt directive 偏向语
+_STRICTNESS_DIRECTIVES = {
+    1: (
+        "**判定偏向：极端宽松（recall 最大化）**\n"
+        "- 任何犹豫都向上抬一档：⚪→🟢、🟢→🟡、🟡→🔴（仅 🔴 仍要时间紧迫）。\n"
+        "- 只要 Kevin 在 To 或 CC，且正文有任何提问/讨论/请求，action_required=true。\n"
+        "- confidence 默认偏高（≥ 0.5），让邮件都进入 AI Reviewed。\n"
+        "- Reference Context 里的项目/团队相关邮件 → 优先 🟡 起步。\n"
+        "- 接受多放过不重要邮件进重要通道，但**绝对不能漏掉重要邮件**。"
+    ),
+    2: (
+        "**判定偏向：偏宽松（轻度 recall 偏好，默认档位）**\n"
+        "- 不确定时优先向上一档（🟢→🟡）。🔴 仍按严格定义。\n"
+        "- Kevin 在 To 且正文有请求/讨论 → action_required=true，至少 🟡。\n"
+        "- Reference Context 项目相关 + Kevin 在 To → 至少 🟡。\n"
+        "- 宁可多看一封，也别漏掉。"
+    ),
+    3: (
+        "**判定偏向：中性（追求最准确分类）**\n"
+        "- 按字面规则判定，不偏严也不偏宽。\n"
+        "- 不确定时按邮件本身的强信号选档（如 deadline、点名、决策点）。\n"
+        "- 没有强信号 → 🟢 一般 或 ⚪ 低。"
+    ),
+    4: (
+        "**判定偏向：偏严格（轻度 precision 偏好）**\n"
+        "- 不确定时向下一档（🟡→🟢、🟢→⚪）。\n"
+        "- action_required=true 仅在邮件有明确请求/点名时勾选。\n"
+        "- 🔴 仅在线上事故/发布阻塞且需 Kevin 立即处理。\n"
+        "- 接受漏掉一些边界邮件，避免噪音。"
+    ),
+    5: (
+        "**判定偏向：极端严格（precision 最大化）**\n"
+        "- 仅在邮件**显式**满足某档定义时才选该档，否则一律降档。\n"
+        "- action_required=true 仅在邮件明确点名 Kevin 且要求回复/决策。\n"
+        "- 🟡 重要 仅在版本关键 deadline/明确评审请求。\n"
+        "- 🔴 紧急仅在线上事故/管理层紧急召集，且 Kevin 必须立即响应。\n"
+        "- 宁可漏掉，绝不滥发飞书推送。"
+    ),
+}
+
+
+def get_strictness_directive(level: int) -> str:
+    return _STRICTNESS_DIRECTIVES.get(level, _STRICTNESS_DIRECTIVES[3])

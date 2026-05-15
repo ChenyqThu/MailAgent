@@ -346,6 +346,22 @@ class LLMProcessor:
                 "text": f"# Mailbox Rules ({mailbox})\n\n" + mailbox_prompt,
             })
 
+        # Block 3.5: Strictness directive (per-level bias)
+        from src.config import get_strictness_directive
+        level = int(cfg.llm_strictness_level)
+        directive = get_strictness_directive(level)
+        blocks.append({
+            "type": "text",
+            "text": (
+                f"# Strictness Directive (Level {level}/5)\n\n"
+                f"以下偏向规则**优先于** Mailbox Rules 的所有判定细节："
+                f"当 Mailbox Rules 与本 Directive 冲突时，按本 Directive 执行。\n\n"
+                + directive
+                + "\n\n参考 Reference Context 里的 Sender Priority、当前项目、Kevin 职责，"
+                "结合本 Directive 决定最终 priority / action_required / confidence。"
+            ),
+        })
+
         # Block 4: Output constraints (stable per-mailbox, carries cache_control)
         if mailbox == "发件箱":
             legal = "、".join(ACTION_TYPE_SENT)

@@ -52,19 +52,22 @@ class AIFieldsWriter:
             self._client = NotionClient()
         return self._client
 
-    # Confidence threshold: below this, don't advance Processing Status
-    LOW_CONFIDENCE_THRESHOLD = 0.6
-
     def _processing_status(self, labels: AILabels) -> Optional[str]:
         """Determine Processing Status based on mailbox and confidence.
 
         Returns None when confidence is too low — keeps '未处理' so the
         email stays visible for human review instead of auto-advancing
         through the webhook → Mail.app flag → 飞书 notification pipeline.
+
+        Threshold derives from LLM_STRICTNESS_LEVEL (1-5, sigmoid curve);
+        can be overridden via LLM_LOW_CONFIDENCE_THRESHOLD env.
         """
-        if labels.confidence < self.LOW_CONFIDENCE_THRESHOLD:
+        from src.config import effective_confidence_threshold
+
+        threshold = effective_confidence_threshold()
+        if labels.confidence < threshold:
             logger.info(
-                f"[llm-writer] low confidence={labels.confidence:.2f}; "
+                f"[llm-writer] confidence={labels.confidence:.2f} < {threshold:.2f}; "
                 f"skipping Processing Status advancement"
             )
             return None

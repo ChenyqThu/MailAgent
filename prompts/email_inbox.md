@@ -18,29 +18,31 @@
 - 🔔 系统通知：监控告警、自动邮件、工单、订阅推送。
 - 🌐 外部沟通：客户、渠道、合作伙伴、供应商。
 
-## Action Required + Action Type
+## Action Required + Action Type（中性定义；偏向由 Strictness Directive 控制）
 
-**勾 true** 的判断：邮件里对 Kevin（王俊 / 王工 / Kevin Wang）有明确请求、需要回复 / 决策 / 评审 / 参会。
+**Action Type 各类型定义**（不带偏向的字面解释，结合 Directive 判定）：
 - 需要回复：对方等待答复或信息补充。
 - 需要决策：需要拍板方案、优先级、go/no-go。
 - 需要Review：需要评审文档、PRD、设计方案。
 - 需要会议：需要参与或发起会议。
-- 需要跟进：正文对 Kevin 所在团队 / 群组提出了要求（如"请各位确认""请反馈""请评估"），即使 To 里有多人，只要要求的事项跟 Kevin 职责相关就勾 true。
+- 需要跟进：正文对 Kevin 所在团队 / 群组提出要求（如"请各位确认""请反馈""请评估"）。
 - 等待响应：正文里发起了讨论 / 投票 / 征求意见，Kevin 在 To 列表中被期待参与。
+- 仅供参考：单向通知 / 广播 / 自动生成的状态更新 / 已完结线程里的过时消息。
 
-**不勾** 的判断：
-- 仅供参考：Kevin 在 CC 而非 To 且无点名；纯通知 / 单向广播 / 自动生成的状态更新；已完结的线程里的过时消息。
+`action_required = true` 当且仅当 action_type 不是 `仅供参考`。
 
-> ⚠️ **群发 ≠ 仅供参考**：To 里有多人不代表邮件只是通知。如果正文要求收件人反馈 / 确认 / 参与讨论，且 Kevin 在 To 中，应该勾 action_required=true。
+> 群发不等于仅供参考——是否需要 Kevin 行动看正文要求 + Kevin 在 To/CC 的角色，结合 Strictness Directive 决定。
 
-## Priority（严格，避免滥用🔴）
+## Priority（中性定义；偏向由 Strictness Directive 控制）
 
-- 🔴 **紧急**：线上事故 / 生产异常 / 发布阻塞 / 严重客户投诉 / 管理层紧急召集，**且需 Kevin 立即处理**。只有真正需要立即处理的才打🔴，"紧急的话题"不够。
-- 🟡 **重要**：当前版本关键需求 / 里程碑 / 重要评审 / 紧迫 deadline。
-- 🟢 **一般**：有信息价值但不需要立即行动——日常项目更新、团队进度同步、技术方案讨论（非直接 @Kevin 且 Kevin 不在 To 中）、项目周报、例行会议纪要。用户会在空闲时浏览这类邮件。注意：Kevin 在 To 中 + 正文要求反馈/确认 → 至少🟡重要，不应落到🟢。
-- ⚪ **低**：完全不需要关注——Jira/Confluence/GitLab 等系统自动通知、HR 行政公告、订阅 newsletter、自动化报表、非 Kevin 负责领域的系统告警、营销邮件、通用群发通知。用户默认不看这类邮件。
+字面定义（不带 over-tag 或 under-tag 偏向）：
 
-`priority=🔴 紧急` 时必须填 `urgency_reason`（1-3 句说明时间限制 / 风险 / 影响范围）。
+- 🔴 **紧急**：需要 Kevin **立即处理**的事件——线上事故 / 生产异常 / 发布阻塞 / 严重客户投诉 / 管理层紧急召集 / 24h 内必须响应的 deadline。`urgency_reason` 必填（1-3 句说明时间 / 风险 / 影响）。
+- 🟡 **重要**：当前版本需求 / 里程碑 / 评审 / 一周内 deadline / 跨团队协调 / 直接 @Kevin 或 Kevin 在 To 被要求反馈的工作邮件。
+- 🟢 **一般**：日常项目更新 / 团队进度同步 / 技术方案讨论（非直接 @Kevin） / 例行会议纪要。
+- ⚪ **低**：完全自动 / 系统 / 营销邮件 —— Jira/Confluence/GitLab 系统通知、HR 行政、订阅 newsletter、自动化报表、非 Kevin 领域的系统告警、营销邮件、通用群发广播。
+
+> 边界判定（"Kevin 在 To 且正文有讨论" 应选 🟡 还是 🟢）**完全由 Strictness Directive 决定**。
 
 ## Sender Priority
 参照 reference context 里的 Sender Priority 映射。不在映射里的：
