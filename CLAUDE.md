@@ -837,15 +837,16 @@ pytest tests/llm_agent/ -v
 **信源演进**：
 - v1（2026-04 之前）：消费某转发版，xlsx 仅 1 个 sheet（`Project  Ongoing`，15 列），项目"完成 / 终止"靠 diff 推断
 - v2（2026-04 起）：消费直接发件人版，xlsx 4 个 sheet（多 19/50 列 + 已出货 + 已暂停），状态靠 Sheet 2/3 权威信号
+- v3（2026-05 起）：实际发件人会换人（zhouwangfang → liuxiangjiang → …），`PROJECT_PROGRESS_SENDER` 改为可选；默认仅按标题正则匹配，需要严格双判定再显式配置 sender。
 
 ### 模块结构
 ```
 src/project_progress/
-  detector.py          发件人 + 标题正则匹配（default 留空，需在 .env 显式配置）
+  detector.py          (可选发件人) + 标题正则匹配（sender 留空仅看 subject；两者全空则永不匹配）
   xlsx_parser.py       4 sheet 解析 + 双行表头检测 + ENBU 过滤 + 1:1 行级 ProjectRow + 母子关系（仅 Ongoing 内）
   slug.py              external_id 生成（英文 slug；含中文加短 sha1 后缀；碰撞后加后缀）
   progress_parser.py   解析 [MM/DD] / [M/D] / [MM/DD/YYYY] / （MM.DD） 等日期头
-  priority.py          Project Priority 原值直写（N/TBD/Y/Y-Pledge/R&D project，含中文'否'/'是'）
+  priority.py          Project Priority 语义映射（Y-Pledge→军令状项目, Y/是→高优先级, N/否→低优先级, TBD/R&D project 原样）
   sync_store.py        project_progress_sync 表（旧 evelyn_project_sync 自动 ALTER RENAME）
   notion_sync.py       Notion 客户端 + Status 三态路由 + 7 个新字段写入 + Markdown API
   notion_schema.py     启动时 schema bootstrap（5min 缓存，自动建 7 个 property，Suspended status 仅 log）
@@ -894,7 +895,7 @@ xlsx 每行是一个 `(Project Name, Product Model)` 对。**每行独立一个 
 | `external_id` | rich_text | slug(`Project Name + "__" + Product Model`)；碰撞按 (name, model) hash 后缀 |
 | `母任务` | relation (dual) | 子任务指向母任务 page_id（**仅 Ongoing 内**）；Shipped/Suspended 全独立任务 |
 | `本周数据期` | rich_text | xlsx 文件名日期 YYYYMMDD → ISO 周 `YYYY-WXX` |
-| `优先级` | select | Project Priority **原值直写**；Notion 自动新建 option（含中文 '否' / '是'）|
+| `优先级` | select | Project Priority **映射后写入**（Y-Pledge→军令状项目, Y/是→高优先级, N/否→低优先级, TBD/R&D project 保留原样）|
 | `Product Models` | multi_select | 本行 Product Model 单值 |
 | `BU` | select | 固定 `TPS-ENBU` |
 | `研发分部` | select | R&D Division |
@@ -979,11 +980,8 @@ python scripts/sync_project_progress.py --all-history --limit 10
 # 干跑（不写 Notion）
 python scripts/sync_project_progress.py --internal-id 52258 --dry-run
 
-# 强制重跑
+# 强制重跑 (会用 xlsx 整页 replace 正文)
 python scripts/sync_project_progress.py --internal-id 52258 --force
-
-# 一次性修复正文
-python scripts/sync_project_progress.py --internal-id 52258 --force --rebuild-body
 
 # 一次性回填"项目开始时间"到所有已入库项目页
 python scripts/sync_project_progress.py --internal-id 52258 --backfill-project-start
@@ -1010,9 +1008,13 @@ PROJECT_PROGRESS_FILTER_BU=TPS-ENBU   # HNBU 团队改成 TPS-HNBU 即可
 # 可选：main.py 自动触发钩子（需同时打开上面的总开关）
 PROJECT_PROGRESS_AUTO_SYNC_ENABLED=false
 
-# 必填：识别规则（代码 default 留空，必须在 .env 显式配置）
-PROJECT_PROGRESS_SENDER=<weekly-sender-email>
+# 必填：识别邮件的标题正则
 PROJECT_PROGRESS_SUBJECT_PATTERN=<标题正则，含【项目进度】等关键词>
+
+# 可选：识别邮件的发件人（子串匹配，不区分大小写）
+# 留空 → 仅按 subject 匹配（推荐，实际发件人会换人，例如 zhouwangfang → liuxiangjiang）
+# 配置 → 双判定（sender + subject 都要匹配）
+# PROJECT_PROGRESS_SENDER=<weekly-sender-email>
 ```
 
 `PROJECT_PROGRESS_SYNC_ENABLED=false`（默认）时：

@@ -110,7 +110,6 @@ async def _run(args: argparse.Namespace) -> int:
             force=args.force,
             dry_run=effective_dry_run,
             project_limit=args.project_limit or None,
-            rebuild_body=args.rebuild_body,
             sheets=sheets_set,
         )
         summaries.append(s)
@@ -181,12 +180,6 @@ def main() -> int:
         "--force",
         action="store_true",
         help="忽略已 completed 的记录，强制重跑",
-    )
-    p.add_argument(
-        "--rebuild-body",
-        action="store_true",
-        help="update 路径下把正文完整重写为全量历史 markdown（修年份推断等，"
-             "会覆盖用户对正文的手改；property 手改不受影响）",
     )
     p.add_argument(
         "--backfill-project-start",
