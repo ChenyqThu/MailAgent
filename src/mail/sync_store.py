@@ -440,9 +440,6 @@ class SyncStore:
             ON v4_rollout_stats(flushed_at DESC)
         """)
 
-        # FOREIGN KEY 约束需要 PRAGMA 显式打开（默认关闭，向下兼容）
-        cursor.execute("PRAGMA foreign_keys = ON")
-
         # 更新数据库版本
         cursor.execute("""
             INSERT OR REPLACE INTO sync_state (key, value, updated_at)

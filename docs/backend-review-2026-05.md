@@ -461,4 +461,112 @@ $ pytest tests/ -q --tb=no
 
 ---
 
+## 9. P1–P3 Audit 二轮（2026-05-16 PR-4 ship 后）
+
+> **Audit 时点**: 2026-05-16，main HEAD = `9318ab7`（I-07 docs 更新）。
+> **审计基线**: PR-1（已 ship, 修 I-01/I-02/I-03/I-05/I-06 + R-01..R-04/R-07） → PR-3（CLI rest, 487 passed） → PR-4（commit `4900dda`, CLI batch + R-06 v4_rollout, 612 passed） → I-07 拆 `notion/sync.py` (commit `76abc45`)。PR-5（`scripts/*` inline + thin wrapper）并行在跑，未 ship。
+> **方法**: 对 §4 / §6 的每个 I-* / R-* 重新评估当前代码状态，标记 ✅ Fixed / 🟡 Partial / ⚠ Active / ⏸ Defer-PR5。**只读 verify，不动 src/**（PR-5 在改）。
+
+### 9.1 P1 级（架构层）
+
+| ID | 状态 | 证据 | 备注 |
+|---|---|---|---|
+| **I-01** | ✅ **Fixed** | PR-1 Commit 8 加 monkeypatch 隔离 `.env` | review 表中已标 |
+| **I-02** | ✅ **Fixed** | PR-1 Commit 6 选项 A 删 `fetched` + 状态机回归测试 | 选 A 落地，文档已对齐 |
+| **I-03** | ✅ **Fixed** | `src/notion/sync.py:29-44` `NotionSync.__init__(*, email_repo, sync_store)` strict DI，无 lazy 创建 | 11 调用点改造完成（commit 76abc45 拆分时未引入新 lazy 路径） |
+
+**P1 全数解决 ✅**。
+
+### 9.2 P2 级（接口 / 行为细节）
+
+| ID | 状态 | 当前证据（2026-05-16 HEAD 9318ab7） | 处理时机 |
+|---|---|---|---|
+| **I-04** | ✅ **Fixed (2026-05-16 二修)** | docstring 澄清：key 是**原始** `AttachmentPayload.filename`（line 699 / 737 实测都用 `att.filename`，map 实际一致）；不是 sanitize 后的 `used_filename`。**修复方式**：`commit_email_with_body` docstring 明示 "Key 契约"段，调用方持有 AttachmentPayload list 即可查（不要用 sanitize 结果）。代码行为不动 — review 原始描述其实有误，map 一直是一致的。 | 655 passed 持平 |
+| **I-05** | ✅ **Fixed** | `src/repository/attachment_store.py:45` `self.base_dir = raw_base_dir.resolve()`；L137/L144 `project_root = self.base_dir.parent.parent`，解除 `Path.cwd()` 依赖 | R-04 在 PR-1 Commit 5 落地，**CLI 已可从任意目录执行** |
+| **I-06** | ✅ **Fixed** | review 表已标 PR-1 Commit 4 修 — SQLite SSoT 优先 + Notion fallback | （未深度复测 thread relations 实际 SQL，依赖原 review 标记 + git log） |
+| **I-07** | ✅ **Fixed** | `src/notion/` 5 文件拆分：`sync.py` 409 facade + `pages.py` 1145 + `threads.py` 281 + `queries.py` 378 + `_common.py` 122 = 2335 行净增（含必要的 delegate boilerplate ~80 行）；public API 11 调用点零改动；612 passed 持平 | commit `76abc45`；CLAUDE.md "Notion 模块" 段已对齐 |
+| **I-08** | ⚠ **Active (设计选择)** | `src/events/handlers.py:630` `if body is None or body.body_format == "empty" or not body.markdown: return None`；注释明示 "让 AppleScript 路径接手"。纯附件邮件每次 `fetch_mail_content` 都触发 ~1s AppleScript fallback。 | **保持现状**：原 review §4 自标 "是设计还是 bug 看视角"。改进方向是给 `email_body` 加 `fetched_but_empty` 标志位区分 "真空" vs "未双写"，避免无意义 fallback。**估算工时 ~2h（含 schema + handler + 单测）**。不在 PR-5 范围；可独立 PR 修。 |
+| **I-09** | ⚠ **Active (T-06 兜底)** | `src/repository/email_repository.py:788-799` `delete_email_full`：先 `BEGIN/DELETE/commit()`（CASCADE 触发 body+attachment 行），后 `self.attachment_store.delete_email_dir(internal_id)`。**两阶段非原子**：DB commit 后文件删失败 → 孤儿目录。 | **保持现状**：T-06 orphan cleanup CLI（未来工作）兜底；用户原决策"接受"。修复方案：把 `delete_email_dir` 移到 `BEGIN` 内 try block，文件删失败 → DB rollback。代价：文件 I/O 进 DB 事务窗口（锁时间变长）。**ROI 低**，不推。 |
+| **I-10** | 🟡 **Partial (NotionSync 已收敛)** | EmailRepository 创建点 3 处（grep 验证）：`src/mail/new_watcher.py:122`、`src/llm_agent/runner.py:78`、`src/cli/context.py:98`。原 review 写的 "NotionSync.\_repo lazy 创建" 路径已**消除**（I-03 strict DI 修后），所以 silent 错配风险**降一半**。但 "单进程单实例" 目标仍未达 — CLI 入口 `CliContext` 是 PR-2 新增独立实例。 | **⏸ Defer**：CliContext 创建自己的 repo 是合理设计（CLI 单次调用进程独立）；只有 `new_watcher` ↔ `LLMRunner` 在同一长跑进程内才有共享意义。是否进一步收敛取决于性能 profile，**当前没有信号要修**。 |
+| **I-11** | ✅ **Fixed** | PR-4 US-008 落地 R-06：`NotionSync` 加 `_route_hit/_miss/_error/_latency_samples` (deque maxlen=10) + `record_route_hit/miss/error`；60s flush 到 `v4_rollout_stats` 表；`admin stats --section v4_rollout` 暴露 p99/hit_rate；schema `admin-stats-v4-rollout.schema.json` 落位 | I-07 拆分后 `RolloutMetrics` 抽到 `_common.py`，facade 共享单实例（lazy init 兼容 `__new__` bypass hook） |
+
+**P2 进展（2026-05-16 二修后）**：4 ✅ Fixed（I-05/06/07/11 + 新增 I-04 docstring 澄清）+ 1 🟡 Partial（I-10）+ 2 ⚠ Active（I-08/09，"接受现状"设计选择）。
+
+### 9.3 P3 级（文档 / 命名 / 冗余）
+
+| ID | 状态 | 当前证据 | 处理时机 |
+|---|---|---|---|
+| **I-12** | ⚠ **Active (路径已边缘化)** | `src/mail/sync_store.py:879-944` `_save_email_compat` 仍保留：`if internal_id is None and message_id: → _save_email_compat`. v3 主路径（SQLite radar 来的 email）永远带 `internal_id`，不触发兼容代码。唯一可能 trigger 是老脚本（`scripts/migrate_sync_store_v3.py` 之类 archive 候选）调 `save_email({message_id: ..., internal_id: None})`. | **保持现状**：PR-5 US-011 把这些老脚本归 `scripts/archive/`（详见 `docs/r05-scripts-cleanup-design.md` §3.4）后，`_save_email_compat` 被触发的概率 = 0。可在 PR-7（未来 schema v7）时清掉 + 加 deprecation。 |
+| **I-13** | ✅ **Fixed (2026-05-16 二修)** | `class AnthropicClient` → `class LLMClient`（`src/llm_agent/client.py:110`）；docstring 同步更新；改 5 处 import 调用点（`__init__.py` / `processor.py` × 2 / `test_processor.py` / `scripts/run_llm_on_email.py` × 2）。无 backward-compat alias（按 CLAUDE.md 指南 "Avoid backwards-compatibility hacks"）。 | 62/62 llm_agent tests passed + mail-sync 重启加载 OK |
+| **I-14** | ✅ **Fixed (2026-05-16 二修)** | `src/mail/sync_store.py:_init_database` 末尾的 `cursor.execute("PRAGMA foreign_keys = ON")` 删除。conn 在 `_get_connection:121` 创建时已设过 PRAGMA — 末尾重设是冗余。删 2 行（注释 + 调用）。 | 136 mail+repo tests passed |
+| **I-15** | 🟡 **Partial** | review 文档自己 §1 列出来 handoff 偏差；`docs/r05-scripts-cleanup-design.md` §1.1 给出当前准确 45 数。但 `docs/phase4-handoff-backend-review-and-agent-cli.md` 本体没回改（"43 个脚本"等遗留陈述）。 | **保持现状**：handoff 文档是历史快照性质，不必回改；新文档（CLAUDE.md / r05-cleanup-design / PR-5 PRD）已对齐准确数据。 |
+
+### 9.4 R-* 重构建议状态
+
+| ID | 状态 | 证据 |
+|---|---|---|
+| **R-01** NotionSync strict DI | ✅ Fixed (PR-1 Commit 3) | `notion/sync.py:29` `__init__(*, email_repo, sync_store)` |
+| **R-02** thread relations 切 SQLite | ✅ Fixed (PR-1 Commit 4) | review 表已标 |
+| **R-03** `fetched` 状态决断 | ✅ Fixed (PR-1 Commit 6, 选项 A 删) | review 表已标 |
+| **R-04** CLI cwd 依赖解除 | ✅ Fixed (PR-1 Commit 5) | I-05 证据 |
+| **R-05** scripts/* 大扫除 | ✅ Fixed (PR-5 14 commits ship 2026-05-16) | 顶层 13 thin wrapper + 5 保留 + dev/ 25 + archive/ 4 = 45；650 passed |
+| **R-06** v4 灰度监控补齐 | ✅ Fixed (PR-4 US-008 + 2026-05-16 二修 task GC bug) | 见 §9.6 新发现：PR-4 ship 后 mail-sync 实跑 3h 0 flush（asyncio create_task 弱引用 GC）；1 行 fix 后验证 60s 第一条 row 写入 |
+| **R-07** CLAUDE.md 状态机收紧 | ✅ Fixed (PR-1) | review 表已标 |
+
+**R-* 进展（PR-5 ship 后）**：7 ✅ Fixed（全数解决）。
+
+### 9.5 总结
+
+#### 修复进展（PR-5 ship + 2026-05-16 二修后）
+
+| 级 | 总数 | ✅ Fixed | 🟡 Partial | ⚠ Active | ⏳ Pending |
+|---|---|---|---|---|---|
+| P1 (I-01..03) | 3 | 3 | 0 | 0 | 0 |
+| P2 (I-04..11) | 8 | 5 | 1 | 2 | 0 |
+| P3 (I-12..15) | 4 | 2 | 1 | 1 | 0 |
+| R-* | 7 | 7 | 0 | 0 | 0 |
+| **总计** | **22** | **17** | **2** | **3** | **0** |
+
+**77% 完全修复** + 9% 部分修复 + 14% Active（全部是"接受现状"设计选择）+ 0% Pending。
+
+#### 当前仍需关注
+
+无 P0/P1/P2 阻塞。原 I-08 经实测数据评估后归"不修建议"（见下）。
+
+#### 不修建议
+
+- **I-08 empty body fallback AppleScript**：原描述 "纯附件邮件每次 fetch_mail_content 慢 1s"。**2026-05-16 实测**：v4 双写 6030 封 body 中 `body_format='empty'` 仅 29 封（0.5%），且**全部是 Outlook 会议响应通知**（"已接受 / 已拒绝 / 已取消" 自动邮件，subject 即全部信息，0 附件），**不是真的"纯附件邮件"**。webhook 查询这类邮件的频率近 0，多花 1s 跑 AppleScript fallback 用户感知 ~0。决定：保持现状。
+- **I-09 delete_email_full 非原子**：T-06 cleanup 兜底，修反而引入"文件 I/O 进 DB 事务"风险，ROI 负。
+- **I-10 多套 EmailRepository**：CliContext 独立实例是合理设计（CLI 短进程）；只有同长跑进程内合实例才有共享意义。
+- **I-12 `_save_email_compat`**：路径已边缘化（v3 主路径不触发）；PR-5 US-011 把 archive 老脚本后概率 = 0。可在 PR-7（未来 schema v7）时清掉 + 加 deprecation。
+- **I-15 handoff 文档遗漏**：历史快照不必回改；新文档已对齐。
+
+### 9.6 2026-05-16 二修 round（PR-5 ship 后同日落地 5 项）
+
+PR-5 ship（650 passed）后同日做的修复，全部基于 §9 audit 的"非阻塞但值得清理"项：
+
+| 项 | 修复内容 | 验收 |
+|---|---|---|
+| **R-06 task GC bug**（新发现） | **生产实测**：mail-sync online 3h，`v4_rollout_stats` 表 0 row（预期 ~180）；admin stats CLI 自动 fallback `_source=no_data_yet` 掩盖问题。**根因**：`src/mail/new_watcher.py:251` `asyncio.create_task(self._flush_v4_rollout_stats_loop())` 未保存 task 引用，Python 3.11 弱引用 GC 触发。**修复**：`self._rollout_flush_task = asyncio.create_task(...)`。**1 行 + 1 行注释**。 | mail-sync 重启后 16:00:43（启动 60s 内）写入第一条 row id=3；admin stats 不再 `no_data_yet`；R-06 功能真正落地 |
+| **I-04 docstring 澄清** | review 原描述 "key 是原始 filename 但 SQLite 存 sanitize 后" 其实 map 一直是一致的（line 699 + 737 实测都用 `att.filename`）。修：`commit_email_with_body` docstring 加 "Key 契约"段，明示 key = 原始 AttachmentPayload.filename，不是 sanitize 后 `used_filename`。**纯文档修订，零代码改动**。 | 655 passed 持平 |
+| **I-13 LLMClient rename** | `class AnthropicClient` → `class LLMClient`（`src/llm_agent/client.py:110`）；docstring 改 + 5 处 import 调用点更新（`__init__.py` / `processor.py` × 2 / `test_processor.py` / `scripts/run_llm_on_email.py` × 2）；**无 backward-compat alias**（按 CLAUDE.md 指南 "Avoid backwards-compatibility hacks"）。 | 62 llm_agent + 655 全集 passed；mail-sync 重启加载 OK |
+| **I-14 PRAGMA 删冗余** | `src/mail/sync_store.py:_init_database` 末尾删 `cursor.execute("PRAGMA foreign_keys = ON")`（conn 在 `_get_connection:121` 已设过）。删 2 行（注释 + 调用）。 | 136 mail+repo passed；655 全集 passed |
+| **R-05 scripts cleanup** | **PR-5 14 commits ship**（72a1f65..372f494）落地。scripts/ 顶层 41 → 11 thin wrapper + 5 保留；dev/ 25；archive/ 4。落地与 `docs/r05-scripts-cleanup-design.md` 基本一致，差异 3 项 PR-5 决策更精准（`manual_sync / export_email_content` 归 dev 而非 wrapper；`poc_markdown_api` 归 archive 而非 dev）。 | 612 → 650 passed（+38 净增） |
+
+**总数变化**：
+
+- 原 §9 audit：13 Fixed + 2 Partial + 6 Active + 1 Pending
+- 二修 round 后：17 Fixed + 2 Partial + 3 Active + 0 Pending
+- 净修复 +4（I-04 / I-13 / I-14 + R-05），新发现 1 (R-06 GC bug) 也已修
+
+**新发现 R-06 task GC bug 的教训**：
+
+PR-4 R-06 落地时所有单测都 pass（PR-4 ship 612 passed），但**生产实测**才能发现 task GC 问题——单测里 task 通常显式 `await` 或 mock event loop，不会复现 fire-and-forget + 60s sleep 的 GC 时序。这类 bug 只能靠"灰度后看真实指标"发现。**建议**：未来 fire-and-forget asyncio task 强制 review checklist 一条 "task ref 保存"。
+
+---
+
 > 本 Review 由 Claude Code Opus 4.7 (1M context) 完成于 2026-05-16。不动代码、不动 git、仅产出 markdown + 修 handoff 文档。如需进入阶段 C / D 请明确选择。
+>
+> §9 二轮 audit 追加于 2026-05-16 同日（PR-4 ship 后 + PR-5 启动前）。基线 HEAD `9318ab7`，对应 §4 全表 + §6 全表 verify。
+>
+> §9.6 二修 round 追加于 2026-05-16 PR-5 ship 后（commit `372f494`）。基线 HEAD = PR-5 末位，pytest 655 passed。本轮净修 4 项原 Active + 1 项新发现 R-06 GC bug。下一轮 audit 建议在 **I-08 修复后**（或下次大改时）刷新。

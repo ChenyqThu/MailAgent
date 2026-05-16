@@ -603,8 +603,13 @@ class EmailRepository:
         """事务：写 email_body + 落盘 attachments + 写 email_attachment 行.
 
         返回:
-            {filename_or_derived_key: attachment_id} —— 上层 Notion uploader
-            上传后用这个 map 把 notion_file_id 回写过来。
+            ``dict[原始 AttachmentPayload.filename, attachment_id]`` —— 上层
+            Notion uploader 上传后用这个 map 把 notion_file_id 回写过来。
+
+            **Key 契约**: key 是 caller 传进来的原始 ``att.filename``，**不是**
+            sanitize 后落盘的 ``used_filename``（SQLite ``email_attachment.filename``
+            列里存的）。调用方持有 ``AttachmentPayload`` list 即可直接查；不要用
+            ``AttachmentStore`` 内部的 sanitize 结果做 key。
 
         失败处理:
             事务级别 rollback；落盘错误会触发 rollback 并清理已写入文件。
