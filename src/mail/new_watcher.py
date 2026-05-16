@@ -167,7 +167,9 @@ class NewWatcher:
         ):
             try:
                 from src.llm_agent.runner import LLMRunner
-                self._llm_runner = LLMRunner()
+                # v4: 把 EmailRepository 注入给 runner → processor，
+                # 让 LLM hook 直读 SQLite markdown body，免去重新正则剥 HTML
+                self._llm_runner = LLMRunner(repo=self.email_repo)
                 logger.info(
                     f"[llm-agent] enabled (model={settings.llm_model} base={settings.llm_api_base})"
                 )

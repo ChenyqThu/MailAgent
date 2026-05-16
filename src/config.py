@@ -232,6 +232,13 @@ class Config(BaseSettings):
             "仅当 LLM_CACHE_ENABLED=true 时生效。"
         ),
     )
+    llm_prefer_sqlite_body: bool = Field(
+        default=True, env="LLM_PREFER_SQLITE_BODY",
+        description=(
+            "LLM 处理时优先从 SQLite 读 markdown body (v4 SSoT)；miss 时回退到 "
+            "正则剥 HTML。设 false 退回 Phase 1 之前的正则行为。"
+        ),
+    )
 
 # 全局配置实例
 config = Config()

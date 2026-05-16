@@ -78,6 +78,9 @@ class EmailNotionSyncApp:
                 feishu=feishu,
                 notion_sync=self.watcher.notion_sync,
                 result_callback=self.redis_consumer.publish_result,
+                # v4: 让 handle_fetch_mail_content 优先读 SQLite SSoT，
+                # 历史未双写邮件自动 fallback 到 AppleScript
+                email_repo=self.watcher.email_repo,
             )
             self._event_handlers = handlers
 

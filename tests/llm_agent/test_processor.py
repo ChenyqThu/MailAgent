@@ -28,13 +28,29 @@ def _fake_email(**overrides):
     return SimpleNamespace(**base)
 
 
-def _bare_processor() -> LLMProcessor:
+def _bare_processor(repo=None) -> LLMProcessor:
     """Bypass __init__ to avoid creating real AnthropicClient / loaders."""
     p = LLMProcessor.__new__(LLMProcessor)
     p._client = None
     p._prompts = None
     p._context = None
+    p._repo = repo
     return p
+
+
+class _FakeRepo:
+    """Minimal EmailRepository stub: only get_body_markdown is consulted by _plaintext_body."""
+
+    def __init__(self, mapping=None, *, raise_on=None):
+        self._mapping = mapping or {}
+        self._raise_on = raise_on
+        self.calls = []
+
+    def get_body_markdown(self, internal_id, max_chars=-1):
+        self.calls.append(internal_id)
+        if self._raise_on is not None and internal_id == self._raise_on:
+            raise RuntimeError("simulated SQLite read error")
+        return self._mapping.get(internal_id)
 
 
 def test_build_user_contains_subject_and_from():
@@ -65,6 +81,122 @@ def test_plaintext_body_strips_html_when_no_text():
     body = p._plaintext_body(email)
     assert "Hello" in body
     assert "<p>" not in body and "<b>" not in body
+
+
+# ===== v4 SSoT: SQLite markdown body 路径 =====
+
+def test_plaintext_body_prefers_sqlite_markdown_when_hit(monkeypatch):
+    """SQLite hit → 直接返回 markdown，不再做正则剥 HTML."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", True)
+
+    repo = _FakeRepo(mapping={42: "# Real Markdown\n\nFrom SQLite."})
+    p = _bare_processor(repo=repo)
+    email = _fake_email(text="ignored fallback text", internal_id=42)
+
+    body = p._plaintext_body(email)
+    assert body == "# Real Markdown\n\nFrom SQLite."
+    assert repo.calls == [42]
+
+
+def test_plaintext_body_fallback_when_sqlite_miss(monkeypatch):
+    """SQLite 没行（get_body_markdown=None）→ 回退到 .text 路径."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", True)
+
+    repo = _FakeRepo(mapping={})  # no entry for 99
+    p = _bare_processor(repo=repo)
+    email = _fake_email(text="fallback wins", internal_id=99)
+
+    body = p._plaintext_body(email)
+    assert body == "fallback wins"
+    assert repo.calls == [99]
+
+
+def test_plaintext_body_fallback_when_empty_markdown(monkeypatch):
+    """SQLite 返回空串（body_format='empty'）→ 回退."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", True)
+
+    repo = _FakeRepo(mapping={42: ""})
+    p = _bare_processor(repo=repo)
+    email = _fake_email(text="fallback wins again", internal_id=42)
+
+    body = p._plaintext_body(email)
+    assert body == "fallback wins again"
+
+
+def test_plaintext_body_fallback_when_internal_id_missing(monkeypatch):
+    """email 没有 internal_id 属性 → 不查 SQLite，走 fallback."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", True)
+
+    repo = _FakeRepo(mapping={1: "would have been SQLite"})
+    p = _bare_processor(repo=repo)
+    # _fake_email 不设 internal_id
+    email = _fake_email(text="no id → fallback")
+
+    body = p._plaintext_body(email)
+    assert body == "no id → fallback"
+    assert repo.calls == []  # 完全没查 SQLite
+
+
+def test_plaintext_body_fallback_when_repo_is_none(monkeypatch):
+    """repo=None → 完全不走 SQLite 路径."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", True)
+
+    p = _bare_processor(repo=None)
+    email = _fake_email(text="repo=None fallback", internal_id=42)
+
+    body = p._plaintext_body(email)
+    assert body == "repo=None fallback"
+
+
+def test_plaintext_body_fallback_when_flag_disabled(monkeypatch):
+    """LLM_PREFER_SQLITE_BODY=false → 即便 repo 有也走 fallback（灰度逃生开关）."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", False)
+
+    repo = _FakeRepo(mapping={42: "should NOT be returned"})
+    p = _bare_processor(repo=repo)
+    email = _fake_email(text="flag-off fallback", internal_id=42)
+
+    body = p._plaintext_body(email)
+    assert body == "flag-off fallback"
+    assert repo.calls == []  # 开关关闭时连 SQLite 都不查
+
+
+def test_plaintext_body_fallback_when_sqlite_raises(monkeypatch):
+    """SQLite 抛异常 → warning + fallback，不让 LLM hook 整体挂掉."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", True)
+
+    repo = _FakeRepo(mapping={}, raise_on=42)
+    p = _bare_processor(repo=repo)
+    email = _fake_email(text="exception fallback", internal_id=42)
+
+    body = p._plaintext_body(email)
+    assert body == "exception fallback"
+
+
+def test_plaintext_body_sqlite_overrides_html_fallback(monkeypatch):
+    """SQLite hit 应抢在 .html / content_type 之前 —— 验证优先级."""
+    from src.llm_agent import processor as mod
+    monkeypatch.setattr(mod.cfg, "llm_prefer_sqlite_body", True)
+
+    repo = _FakeRepo(mapping={42: "**Cleaned**: from markdownify"})
+    p = _bare_processor(repo=repo)
+    # text=None 触发 .html 路径；但 SQLite 应该先命中
+    email = _fake_email(
+        text=None,
+        html="<p>Raw HTML that would be regex-stripped</p>",
+        internal_id=42,
+    )
+
+    body = p._plaintext_body(email)
+    assert "Cleaned" in body
+    assert "Raw HTML" not in body
 
 
 def test_parse_sanitizes_bad_priority():

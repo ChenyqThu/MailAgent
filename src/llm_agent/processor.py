@@ -12,11 +12,12 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from src.config import config as cfg
+from src.repository import EmailRepository
 
 from .client import AnthropicClient, LLMCallError, LLMResult
 from .context_loader import ContextLoader
@@ -108,10 +109,12 @@ class AILabels:
 class LLMProcessor:
     """Stateful processor; reuse one instance across calls to keep caches warm."""
 
-    def __init__(self):
+    def __init__(self, repo: Optional[EmailRepository] = None):
         self._client = AnthropicClient()
         self._prompts = PromptLoader()
         self._context = ContextLoader()
+        # v4 SSoT: 优先从 SQLite 读 markdown body，miss 时退回正则路径
+        self._repo = repo
 
     async def close(self):
         await self._client.close()
@@ -241,6 +244,21 @@ class LLMProcessor:
         )
 
     def _plaintext_body(self, email: Any) -> str:
+        # v4: 优先从 SQLite 读 markdownify 处理过的 body（dual-write 落盘后立即可读）.
+        # Miss/disabled 时回退到 in-memory 正则路径（兼容历史邮件 + repo 未注入场景）.
+        if cfg.llm_prefer_sqlite_body and self._repo is not None:
+            internal_id = getattr(email, "internal_id", None)
+            if internal_id is not None:
+                try:
+                    md = self._repo.get_body_markdown(int(internal_id))
+                    if md:
+                        return md.strip()
+                except Exception as e:
+                    logger.warning(
+                        f"[llm] SQLite body lookup failed for internal_id={internal_id}: {e}; "
+                        f"falling back to in-memory parsing"
+                    )
+
         # Try .text / .plain_text first, fall back to stripping .html / .body_html
         for attr in ("text", "plain_text"):
             v = getattr(email, attr, None)

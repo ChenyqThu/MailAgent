@@ -12,6 +12,7 @@ Webhook 事件处理器
 import asyncio
 import json
 import os
+import time
 from typing import Callable, Awaitable, Dict, Optional
 from loguru import logger
 
@@ -19,6 +20,7 @@ from src.mail.applescript_arm import AppleScriptArm
 from src.mail.sync_store import SyncStore
 from src.notify.feishu import FeishuNotifier
 from src.notion.sync import NotionSync
+from src.repository import EmailRepository
 
 
 class EventHandlers:
@@ -33,11 +35,15 @@ class EventHandlers:
         feishu: Optional[FeishuNotifier] = None,
         notion_sync: Optional[NotionSync] = None,
         result_callback: Optional[Callable[[str, Dict], Awaitable[None]]] = None,
+        email_repo: Optional[EmailRepository] = None,
     ):
         self.arm = arm
         self.sync_store = sync_store
         self.feishu = feishu
         self.notion_sync = notion_sync
+        # v4 SSoT: 注入 EmailRepository 让 handle_fetch_mail_content 优先读 SQLite,
+        # miss 时退回 AppleScript（保持向后兼容老邮件）
+        self.email_repo = email_repo
         self._result_callback = result_callback
         self._radar = None  # 延迟初始化
         self._stats = {
@@ -49,12 +55,45 @@ class EventHandlers:
             "create_draft_error": 0,
             "query_mail": 0,
             "fetch_mail_content": 0,
+            "fetch_mail_content_sqlite_hit": 0,
+            "fetch_mail_content_sqlite_miss": 0,
             "feishu_notified": 0,
         }
+        # v4 P2-04: rolling latency buffers (last 1000 samples per path) for P99
+        # stats_reporter 通过 get_stats() 一并上报 dashboard
+        self._latency_sqlite_ms: list[int] = []
+        self._latency_applescript_ms: list[int] = []
+        self._latency_buffer_max = 1000
 
     def get_stats(self) -> Dict:
-        """返回事件处理统计"""
-        return dict(self._stats)
+        """返回事件处理统计 + P99 latency 指标（fetch_mail_content 两条路径）."""
+        out = dict(self._stats)
+        out["fetch_mail_content_sqlite_p99_ms"] = self._percentile(
+            self._latency_sqlite_ms, 0.99
+        )
+        out["fetch_mail_content_sqlite_p50_ms"] = self._percentile(
+            self._latency_sqlite_ms, 0.50
+        )
+        out["fetch_mail_content_applescript_p99_ms"] = self._percentile(
+            self._latency_applescript_ms, 0.99
+        )
+        out["fetch_mail_content_applescript_p50_ms"] = self._percentile(
+            self._latency_applescript_ms, 0.50
+        )
+        return out
+
+    def _record_latency(self, buffer: list, latency_ms: int) -> None:
+        buffer.append(latency_ms)
+        if len(buffer) > self._latency_buffer_max:
+            del buffer[: len(buffer) - self._latency_buffer_max]
+
+    @staticmethod
+    def _percentile(samples: list, p: float) -> int:
+        if not samples:
+            return 0
+        s = sorted(samples)
+        idx = int(len(s) * p)
+        return int(s[min(idx, len(s) - 1)])
 
     async def _fetch_full_page_props(self, page_id: str) -> Dict:
         """从 Notion API 拉取完整页面属性，补全 webhook 缺失字段"""
@@ -505,20 +544,24 @@ class EventHandlers:
         logger.info(f"query_mail: source={source} returned {len(result['emails'])}/{result['total']} emails")
 
     async def handle_fetch_mail_content(self, event: Dict):
-        """获取邮件完整内容（通过 AppleScript + internal_id）
+        """获取邮件完整内容.
 
-        用于检索历史邮件正文，~1s/封。
+        v4 路径（SQLite SSoT 优先）:
+            1. SQLite hit → 直接读 email_body + email_metadata，~5ms
+            2. SQLite miss → AppleScript fallback（保持向后兼容历史未双写邮件），~1s
 
         请求参数:
             internal_id: int (必填)
-            mailbox: str (可选，指定可加速)
+            mailbox: str (可选，仅 AppleScript fallback 用得上)
             format: "full" | "text" (默认 full)
 
         返回:
-            full: message_id, subject, sender, date, content(纯文本), html, is_read, is_flagged
-            text: subject, sender, date, content(纯文本)
+            full: message_id, subject, sender, date, content(markdown/plaintext),
+                  html, is_read, is_flagged, thread_id, source, latency_ms
+            text: subject, sender, date, content, source, latency_ms
         """
         self._stats["fetch_mail_content"] += 1
+        t0 = time.monotonic()
         props = event.get("properties", {})
         event_id = event.get("id", "")
 
@@ -533,14 +576,103 @@ class EventHandlers:
 
         logger.info(f"fetch_mail_content: internal_id={internal_id} mailbox={mailbox} format={fmt}")
 
-        # AppleScript 获取完整内容（~1s）
-        full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
-        if not full_email:
+        # v4: 先尝试 SQLite SSoT（dual-write 已落盘则直读，省 AppleScript 来回）
+        sqlite_result = self._try_fetch_from_sqlite(internal_id, fmt)
+        if sqlite_result is not None:
+            self._stats["fetch_mail_content_sqlite_hit"] += 1
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            self._record_latency(self._latency_sqlite_ms, latency_ms)
+            sqlite_result["source"] = "sqlite-cache"
+            sqlite_result["latency_ms"] = latency_ms
+            await self._publish(event_id, {"status": "success", **sqlite_result})
+            logger.info(
+                f"fetch_mail_content: source=sqlite-cache internal_id={internal_id} "
+                f"format={fmt} latency={latency_ms}ms"
+            )
+            return
+
+        # SQLite miss → AppleScript fallback
+        self._stats["fetch_mail_content_sqlite_miss"] += 1
+        result_data = await self._fetch_from_applescript(internal_id, mailbox, fmt)
+        if result_data is None:
             await self._publish(event_id, {
                 "status": "error",
                 "error": f"Failed to fetch email {internal_id}. Mail.app may not be running or email was deleted.",
             })
             return
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        self._record_latency(self._latency_applescript_ms, latency_ms)
+        result_data["source"] = "applescript-fresh"
+        result_data["latency_ms"] = latency_ms
+        await self._publish(event_id, {"status": "success", **result_data})
+        logger.info(
+            f"fetch_mail_content: source=applescript-fresh internal_id={internal_id} "
+            f"format={fmt} latency={latency_ms}ms"
+        )
+
+    def _try_fetch_from_sqlite(self, internal_id: int, fmt: str) -> Optional[Dict]:
+        """尝试从 SQLite SSoT 拼装邮件内容；不可用时返回 None 让 caller fallback.
+
+        命中条件:
+            - email_repo 已注入
+            - sync_store 有 metadata 行
+            - email_body 有行且 body_format != 'empty' 且 markdown 非空
+        """
+        if self.email_repo is None:
+            return None
+        try:
+            metadata = self.sync_store.get(internal_id)
+            if not metadata:
+                return None
+
+            body = self.email_repo.get_body(internal_id)
+            if body is None or body.body_format == "empty" or not body.markdown:
+                # body 未双写（历史邮件）或解析时为空 → 让 AppleScript 路径接手
+                return None
+
+            sender = metadata.get("sender") or ""
+            sender_name = metadata.get("sender_name") or ""
+            sender_display = (
+                f"{sender_name} <{sender}>".strip()
+                if sender_name and sender else (sender or sender_name or "")
+            )
+
+            base = {
+                "internal_id": internal_id,
+                "subject": metadata.get("subject") or "",
+                "sender": sender_display,
+                "date": metadata.get("date_received") or "",
+                "content": body.markdown,
+            }
+            if fmt != "text":
+                base.update({
+                    "message_id": metadata.get("message_id") or body.message_id or "",
+                    "html": body.html or "",
+                    "is_read": bool(metadata.get("is_read")),
+                    "is_flagged": bool(metadata.get("is_flagged")),
+                    "thread_id": metadata.get("thread_id") or "",
+                })
+
+            page_id = metadata.get("notion_page_id")
+            if page_id:
+                base["notion_page_id"] = page_id
+                base["notion_url"] = f"https://www.notion.so/{page_id.replace('-', '')}"
+            return base
+        except Exception as e:
+            logger.warning(
+                f"fetch_mail_content: SQLite read failed for internal_id={internal_id}: {e}; "
+                f"falling back to AppleScript"
+            )
+            return None
+
+    async def _fetch_from_applescript(
+        self, internal_id: int, mailbox: Optional[str], fmt: str
+    ) -> Optional[Dict]:
+        """AppleScript fallback —— 历史未双写的邮件或 SQLite 异常时走这条路."""
+        full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
+        if not full_email:
+            return None
 
         # 解析 MIME 获取 HTML 正文
         source = full_email.get("source", "")
@@ -566,7 +698,6 @@ class EventHandlers:
             except Exception as e:
                 logger.warning(f"MIME parse error for {internal_id}: {e}")
 
-        # 根据 format 构建返回
         if fmt == "text":
             result_data = {
                 "internal_id": internal_id,
@@ -575,7 +706,7 @@ class EventHandlers:
                 "date": full_email.get("date", ""),
                 "content": plain_body,
             }
-        else:  # full (default)
+        else:
             result_data = {
                 "internal_id": internal_id,
                 "message_id": full_email.get("message_id", ""),
@@ -589,15 +720,13 @@ class EventHandlers:
                 "thread_id": full_email.get("thread_id", ""),
             }
 
-        # 附加 Notion 信息
         record = self.sync_store.get(internal_id)
         if record and record.get("notion_page_id"):
             pid = record["notion_page_id"]
             result_data["notion_page_id"] = pid
             result_data["notion_url"] = f"https://www.notion.so/{pid.replace('-', '')}"
 
-        await self._publish(event_id, {"status": "success", **result_data})
-        logger.info(f"fetch_mail_content: returned {fmt} for {internal_id}")
+        return result_data
 
     async def handle_page_updated(self, event: Dict):
         """通用事件: 根据内容自动判断"""

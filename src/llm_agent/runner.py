@@ -22,6 +22,7 @@ from loguru import logger
 from src.config import config as cfg
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.reader import EmailReader
+from src.repository import AttachmentStore, EmailRepository
 
 from .client import LLMCallError
 from .notion_writer import AIFieldsWriter
@@ -55,8 +56,23 @@ class LLMRunner:
         processor: Optional[LLMProcessor] = None,
         writer: Optional[AIFieldsWriter] = None,
         store: Optional[LLMProcessingStore] = None,
+        repo: Optional[EmailRepository] = None,
     ):
-        self._processor = processor or LLMProcessor()
+        # v4 SSoT: 让 processor 优先读 SQLite markdown body。若未传 repo，
+        # 默认基于 cfg 路径构造一个（让 CLI 也享受新路径，不增加调用方负担）。
+        if processor is None:
+            if repo is None and cfg.llm_prefer_sqlite_body:
+                try:
+                    repo = EmailRepository(
+                        db_path=cfg.sync_store_db_path,
+                        attachment_store=AttachmentStore(cfg.attachment_storage_dir),
+                    )
+                except Exception as e:
+                    logger.warning(f"[llm-runner] failed to init EmailRepository: {e}")
+                    repo = None
+            self._processor = LLMProcessor(repo=repo)
+        else:
+            self._processor = processor
         self._writer = writer or AIFieldsWriter()
         self._store = store or LLMProcessingStore()
         self._arm: Optional[AppleScriptArm] = None
