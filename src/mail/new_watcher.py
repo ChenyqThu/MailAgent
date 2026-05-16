@@ -38,6 +38,11 @@ from src.mail.sync_store import SyncStore
 from src.notion.sync import NotionSync
 from src.mail.reader import EmailReader
 from src.mail.meeting_sync import MeetingInviteSync
+from src.repository import (
+    AttachmentStore,
+    EmailRepository,
+    build_storage_payloads,
+)
 
 
 def _parse_sync_start_date() -> Optional[datetime]:
@@ -115,6 +120,22 @@ class NewWatcher:
         self.email_reader = EmailReader()
         # 会议邀请同步器：注入 sync_store 以使用 recurring_series 表
         self.meeting_sync = MeetingInviteSync(sync_store=self.sync_store)
+
+        # v4: SQLite SSoT 双写仓库（邮件正文 + 附件元数据进 SQLite）
+        # 详见 docs/architecture_v4_sqlite_ssot.md
+        self.email_repo: Optional[EmailRepository] = None
+        if getattr(settings, "body_dual_write_enabled", True):
+            try:
+                self.email_repo = EmailRepository(
+                    db_path=sync_store_path,
+                    attachment_store=AttachmentStore(
+                        getattr(settings, "attachment_storage_dir", "data/attachments")
+                    ),
+                )
+                logger.info("[v4] email body dual-write enabled (SQLite SSoT)")
+            except Exception as e:
+                logger.warning(f"[v4] failed to init EmailRepository, dual-write disabled: {e}")
+                self.email_repo = None
 
         # 项目周报外挂钩子（需同时打开 PROJECT_PROGRESS_SYNC_ENABLED 总开关 +
         # PROJECT_PROGRESS_AUTO_SYNC_ENABLED 子开关，且配置了项目进度库 ID）
@@ -395,6 +416,11 @@ class NewWatcher:
                     self._stats["emails_skipped"] += 1
                     return
 
+            # 5.5 v4: 双写邮件正文 + 附件到 SQLite（SSoT 切换的关键一步）
+            # 详见 docs/architecture_v4_sqlite_ssot.md
+            # 失败仅 warning，主流程继续走 Notion sync
+            self._maybe_dual_write_body(email_obj, internal_id, full_email.get("source"))
+
             # 6. 同步到 Notion
             page_id = await self.notion_sync.create_email_page_v2(
                 email_obj,
@@ -420,6 +446,60 @@ class NewWatcher:
             logger.error(f"Failed to sync email {internal_id}: {e}")
             self.sync_store.mark_failed_v3(internal_id, str(e))
             self._stats["errors"] += 1
+
+    def _maybe_dual_write_body(
+        self,
+        email_obj: Email,
+        internal_id: int,
+        raw_mime_source: Optional[str],
+    ) -> None:
+        """v4: 把邮件正文 + 附件双写到 SQLite（SSoT 切换）.
+
+        - email_repo 未启用时直接返回（开关 BODY_DUAL_WRITE_ENABLED）
+        - 任何失败仅 warning，不阻断 Notion sync 主流程
+        - 详见 docs/architecture_v4_sqlite_ssot.md
+
+        v4 子步骤:
+            1. **预跑 Office 转换**：把 docx→pdf / xlsx→csv 产物追加到 email_obj.attachments
+               这样 dual-write 时附件列表完整（含 derived 行），Notion sync 后续会 skip 重复转换
+            2. build_storage_payloads → SQLite commit
+        """
+        if self.email_repo is None:
+            return
+        try:
+            # v4 step 1: 预跑 Office 转换（让 derived CSV/PDF 进 email_attachment 表）
+            try:
+                derived = self.notion_sync._convert_office_attachments(email_obj)
+                if derived:
+                    email_obj.attachments.extend(derived)
+                    logger.debug(
+                        f"[v4] pre-converted {len(derived)} Office derivatives for internal_id={internal_id}"
+                    )
+            except Exception as e:
+                logger.warning(f"[v4] pre-conversion failed for internal_id={internal_id}: {e}")
+
+            # v4 step 2: 构造 payload + 事务 commit
+            body, attachments = build_storage_payloads(
+                email_obj,
+                internal_id,
+                raw_mime_source=raw_mime_source,
+                attachment_store=self.email_repo.attachment_store,
+            )
+            self.email_repo.commit_email_with_body(
+                internal_id,
+                body,
+                attachments,
+                message_id=email_obj.message_id,
+            )
+            logger.debug(
+                f"[v4] body+attachments committed to SQLite: internal_id={internal_id}, "
+                f"format={body.body_format}, attachments={len(attachments)}, "
+                f"inline_images={body.has_inline_images}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[v4] dual-write to SQLite failed for internal_id={internal_id}: {e}"
+            )
 
     def _maybe_trigger_project_progress_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str
@@ -667,6 +747,11 @@ class NewWatcher:
 
                 # 设置 internal_id（v3 架构）
                 email_obj.internal_id = internal_id
+
+                # v4: 双写邮件正文 + 附件到 SQLite（重试路径同样需要双写）
+                self._maybe_dual_write_body(
+                    email_obj, internal_id, full_email.get("source")
+                )
 
                 # 同步到 Notion
                 page_id = await self.notion_sync.create_email_page_v2(email_obj)

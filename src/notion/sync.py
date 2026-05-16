@@ -99,8 +99,20 @@ class NotionSync:
         """
         converted_attachments = []
 
-        convertible = [a for a in email.attachments if is_convertible(a.filename)]
+        # v4: dual-write 路径会预转一次，second pass 跳过已转过的原始附件，避免重复
+        already_converted_origins = {
+            a.derived_from_filename for a in email.attachments
+            if a.derived_from_filename
+        }
+        convertible = [
+            a for a in email.attachments
+            if is_convertible(a.filename) and a.filename not in already_converted_origins
+        ]
         if not convertible:
+            if already_converted_origins:
+                logger.debug(
+                    f"Office conversion skipped (pre-converted by dual-write): {already_converted_origins}"
+                )
             return converted_attachments
 
         logger.info(f"Found {len(convertible)} convertible Office attachments")
@@ -123,6 +135,9 @@ class NotionSync:
                         path=str(p),
                         content_id=None,
                         is_inline=False,
+                        # v4: 关联原 docx/xlsx/pptx，供 email_attachment.derived_from 写入
+                        derived_from_filename=attachment.filename,
+                        derived_format="pdf" if ext == ".pdf" else "csv",
                     ))
 
             except Exception as e:

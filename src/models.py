@@ -12,6 +12,9 @@ class Attachment:
     path: str  # 临时文件路径
     content_id: Optional[str] = None  # MIME Content-ID，用于内联图片匹配
     is_inline: bool = False  # 是否为内联附件（Content-Disposition: inline）
+    # v4: 转换产物关联（docx→PDF、xlsx→CSV 等）；仅在 Office 转换链路填写
+    derived_from_filename: Optional[str] = None  # 同邮件里原附件的 filename
+    derived_format: Optional[str] = None  # 'pdf' | 'csv'
 
 @dataclass
 class Email:
