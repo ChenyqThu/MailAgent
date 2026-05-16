@@ -14,9 +14,9 @@
         "data": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["matches", "total_matches", "since", "discover_limit"],
+          "required": ["series", "total_series", "scanned", "since", "limit"],
           "properties": {
-            "matches": {
+            "series": {
               "type": "array",
               "items": {
                 "type": "object",
@@ -33,9 +33,10 @@
                 }
               }
             },
-            "total_matches": {"type": "integer", "minimum": 0},
+            "total_series": {"type": "integer", "minimum": 0},
+            "scanned": {"type": "integer", "minimum": 0},
             "since": {"type": ["string", "null"]},
-            "discover_limit": {"type": "integer", "minimum": 1}
+            "limit": {"type": "integer", "minimum": 1}
           }
         },
         "meta": {"$ref": "_common.schema.json#/$defs/meta"}

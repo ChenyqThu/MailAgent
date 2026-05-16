@@ -63,6 +63,8 @@ class TestDebugEmailSource:
         assert payload["data"]["source"] == "abcde"
 
     def test_save_to(self, cli_runner, cli_env, seeded_db, monkeypatch, tmp_path):
+        # PR-3 round-5: --save-to aliased to --out (RFC §4.11 PATH flag — `--output`
+        # 与全局 -o/--output 格式 flag 冲突, leaf 用 --out / --save-to alias)
         _patch_arm(monkeypatch, fetch_returns={
             "source": "hello", "message_id": "<x>",
         })
@@ -70,14 +72,27 @@ class TestDebugEmailSource:
         out.parent.mkdir()
         result = _invoke(
             cli_runner, "debug", "email-source", "12345",
-            "--save-to", str(out), "-o", "json", db_path=seeded_db,
+            "--out", str(out), "-o", "json", db_path=seeded_db,
         )
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
         assert payload["data"]["dest_path"] == str(out.resolve())
         assert out.read_text() == "hello"
-        # source field should NOT be present when --save-to writes
+        # source field should NOT be present when --out writes
         assert "source" not in payload["data"]
+
+    def test_save_to_alias(self, cli_runner, cli_env, seeded_db, monkeypatch, tmp_path):
+        """--save-to remains an alias for --out (backward compat)."""
+        _patch_arm(monkeypatch, fetch_returns={
+            "source": "alias-test", "message_id": "<x>",
+        })
+        out = tmp_path / "saveout.eml"
+        result = _invoke(
+            cli_runner, "debug", "email-source", "12345",
+            "--save-to", str(out), "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        assert out.read_text() == "alias-test"
 
     def test_not_found(self, cli_runner, cli_env, seeded_db):
         result = _invoke(cli_runner, "debug", "email-source", "99999",
@@ -120,8 +135,10 @@ class TestDebugMailStructure:
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
         assert payload["data"]["total_accounts"] == 2
-        assert payload["data"]["accounts"] == ["iCloud", "Work"]
+        assert payload["data"]["accounts"][0]["name"] == "iCloud"
+        assert payload["data"]["accounts"][1]["name"] == "Work"
         assert payload["data"]["total_mailboxes"] == 3
+        assert all("name" in mb for mb in payload["data"]["mailboxes"])
 
     def test_applescript_fails(self, cli_runner, cli_env, seeded_db, monkeypatch):
         from src.mail import applescript
@@ -282,7 +299,7 @@ class TestDebugNotionPage:
                 }
 
         class StubClient:
-            def __init__(self):
+            def __init__(self, *args, **kwargs):
                 self.client = type("X", (), {"pages": StubPages()})()
 
             async def close(self):
@@ -305,7 +322,7 @@ class TestDebugNotionPage:
                 raise RuntimeError("404 not found")
 
         class StubClient:
-            def __init__(self):
+            def __init__(self, *args, **kwargs):
                 self.client = type("X", (), {"pages": StubPages()})()
 
             async def close(self):

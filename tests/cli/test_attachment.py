@@ -140,7 +140,9 @@ class TestAttachmentDerive:
                          "-o", "json", db_path=seeded_db)
         assert result.exit_code == 2, result.output
         payload = _last_json(result.output)
-        assert payload["error"]["code"] == "E_INVALID_ARG"
+        # PR-3 round-5: align attachment derive non-dry-run with error-codes.md
+        # (E_NOT_IMPLEMENTED for "command exists but stub only" cases)
+        assert payload["error"]["code"] == "E_NOT_IMPLEMENTED"
         assert "PR-4" in payload["error"]["message"]
 
 

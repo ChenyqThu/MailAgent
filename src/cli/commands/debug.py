@@ -44,8 +44,12 @@ app = typer.Typer(
 def debug_email_source(
     ctx: typer.Context,
     internal_id: int = typer.Argument(..., help="邮件 internal_id"),
-    save_to: Optional[str] = typer.Option(
-        None, "--save-to", help="保存到指定路径 (默认 stdout text / json size only)",
+    out: Optional[str] = typer.Option(
+        None, "--out", "--save-to",
+        help=(
+            "保存到指定路径 (RFC §4.11 `--output PATH` 因与全局 -o/--output "
+            "format flag 冲突, 在 CLI 实现层用 --out / --save-to)"
+        ),
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
@@ -79,8 +83,8 @@ def debug_email_source(
     size = len(source.encode("utf-8", errors="replace"))
     sha = hashlib.sha256(source.encode("utf-8", errors="replace")).hexdigest()
 
-    if save_to:
-        dest_path = Path(save_to).expanduser()
+    if out:
+        dest_path = Path(out).expanduser()
         if not dest_path.parent.exists():
             raise emit_cli_error(cli, CliInvalidArgError(
                 f"Destination parent does not exist: {dest_path.parent}",
@@ -103,7 +107,7 @@ def debug_email_source(
         }
 
     if cli.output.lower() == "text":
-        if save_to:
+        if out:
             print(f"saved {size} bytes to {data['dest_path']} (sha256={sha[:12]}...)")
         else:
             print(source)
@@ -143,9 +147,9 @@ def debug_mail_structure(
             hint="可能 Mail.app 未运行 / FDA 权限缺",
         ))
 
-    accounts: list[str] = []
+    account_names: list[str] = []
     if result:
-        accounts = [n.strip() for n in result.split(",") if n.strip()]
+        account_names = [n.strip() for n in result.split(",") if n.strip()]
 
     mb_script = (
         'tell application "Mail"\n'
@@ -161,24 +165,33 @@ def debug_mail_structure(
     except Exception:
         mb_result = None
 
-    mailboxes: list[str] = []
+    mailbox_names: list[str] = []
     if mb_result:
-        mailboxes = [n.strip() for n in mb_result.split(",") if n.strip()]
+        mailbox_names = [n.strip() for n in mb_result.split(",") if n.strip()]
+
+    # PRD §US-008 / RFC §4.11: mailboxes 是 object list, account/url/
+    # total_messages 是 PR-3 placeholder (实际 AppleScript 拿 URL prefix /
+    # total messages 需更复杂查询, 留 PR-4)
+    mailboxes_obj = [
+        {"name": n, "account": None, "url": None, "total_messages": None}
+        for n in mailbox_names
+    ]
+    accounts_obj = [{"name": n} for n in account_names]
 
     data = {
-        "accounts": accounts,
-        "mailboxes": mailboxes,
-        "total_accounts": len(accounts),
-        "total_mailboxes": len(mailboxes),
+        "accounts": accounts_obj,
+        "mailboxes": mailboxes_obj,
+        "total_accounts": len(accounts_obj),
+        "total_mailboxes": len(mailboxes_obj),
     }
 
     if cli.output.lower() == "text":
-        print(f"accounts: {len(accounts)}")
-        for a in accounts:
-            print(f"  - {a}")
-        print(f"mailboxes: {len(mailboxes)}")
-        for m in mailboxes:
-            print(f"  - {m}")
+        print(f"accounts: {len(accounts_obj)}")
+        for a in accounts_obj:
+            print(f"  - {a['name']}")
+        print(f"mailboxes: {len(mailboxes_obj)}")
+        for m in mailboxes_obj:
+            print(f"  - {m['name']}")
     else:
         emit(cli, data)
 
@@ -328,7 +341,8 @@ def debug_notion_page(
 
     from src.notion.client import NotionClient
 
-    client = NotionClient()
+    cfg = cli.cli_config
+    client = NotionClient(token=cfg.notion_token, email_db_id=cfg.email_database_id)
     try:
         page = asyncio.run(client.client.pages.retrieve(page_id=page_id))
     except Exception as e:

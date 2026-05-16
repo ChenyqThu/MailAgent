@@ -60,7 +60,11 @@ def llm_run(
 
     from src.llm_agent.runner import LLMRunner
 
-    runner = LLMRunner()
+    cfg = cli.cli_config
+    runner = LLMRunner(
+        db_path=cfg.sync_store_db_path,
+        attachment_storage_dir=cfg.attachment_storage_dir,
+    )
     try:
         result = asyncio.run(runner.run_for_internal_id(
             internal_id,
@@ -215,7 +219,11 @@ def llm_retry_failed(
             emit(cli, data)
         return
 
-    runner = LLMRunner(store=store)
+    runner = LLMRunner(
+        store=store,
+        db_path=cli.cli_config.sync_store_db_path,
+        attachment_storage_dir=cli.cli_config.attachment_storage_dir,
+    )
     items: list[dict] = []
     succeeded = 0
     failed = 0

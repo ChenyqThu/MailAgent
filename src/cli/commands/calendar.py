@@ -80,15 +80,18 @@ def calendar_expand(
     cutoff_iso = cutoff.isoformat()
 
     sync_store = cli.sync_store
-    pending: list[dict] = []
+    expanded: list[dict] = []
     try:
         for row in sync_store.iter_series_needing_expansion(cutoff_iso):
-            pending.append({
+            # PR-3 dry-run: PRD §US-007 / RFC §4.10 — 列出待 expand 的 series,
+            # occurrences_added=0 因为 dry-run 不实跑展开 (实跑路径走 main.py loop).
+            expanded.append({
                 "series_uid": row.get("series_uid"),
                 "master_dtstart": row.get("master_dtstart"),
                 "last_occurrence_dtstart": row.get("last_occurrence_dtstart"),
                 "notion_page_id": row.get("notion_page_id"),
                 "subject": row.get("subject"),
+                "occurrences_added": 0,
             })
     except Exception as e:
         raise emit_cli_error(cli, CliError(
@@ -99,15 +102,16 @@ def calendar_expand(
     data = {
         "horizon_weeks": horizon_weeks,
         "cutoff_iso": cutoff_iso,
-        "pending_series": pending,
-        "total_pending": len(pending),
+        "expanded": expanded,
+        "total_series": len(expanded),
+        "total_occurrences_added": 0,
         "dry_run": True,
     }
 
     if cli.output.lower() == "text":
         print(f"horizon_weeks={horizon_weeks} cutoff={cutoff_iso}")
-        print(f"pending series={len(pending)}")
-        for p in pending[:20]:
+        print(f"pending series={len(expanded)}")
+        for p in expanded[:20]:
             print(
                 f"  uid={p['series_uid']} last_occ={p['last_occurrence_dtstart']} "
                 f"subj={(p['subject'] or '')[:40]}"
@@ -160,14 +164,15 @@ def calendar_recurring_discover(
         ))
 
     data = {
-        "matches": matches,
-        "total_matches": len(matches),
+        "series": matches,
+        "total_series": len(matches),
+        "scanned": discover_limit,
         "since": since_eff,
-        "discover_limit": discover_limit,
+        "limit": discover_limit,
     }
 
     if cli.output.lower() == "text":
-        print(f"matches={len(matches)} since={since_eff} limit={discover_limit}")
+        print(f"series={len(matches)} since={since_eff} limit={discover_limit}")
         for m in matches[:30]:
             print(
                 f"  iid={m.get('internal_id')} uid={m.get('uid')} "
@@ -185,8 +190,8 @@ def calendar_recurring_discover(
 @recurring_app.command("replay")
 def calendar_recurring_replay(
     ctx: typer.Context,
-    internal_id: Optional[int] = typer.Option(
-        None, "--internal-id", help="单封邀请 internal_id",
+    internal_id: Optional[int] = typer.Argument(
+        None, help="单封邀请 internal_id (RFC §4.10 positional, 与 --ids 互斥)",
     ),
     ids: Optional[str] = typer.Option(
         None, "--ids", help="逗号分隔: 53120,53121",
@@ -194,7 +199,11 @@ def calendar_recurring_replay(
     dry_run: bool = typer.Option(False, "--dry-run", help="仅列 plan 不实跑"),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """重跑指定 internal_id 的会议邀请 (修复历史 recurring mis-sync)."""
+    """重跑指定 internal_id 的会议邀请 (修复历史 recurring mis-sync).
+
+    RFC §4.10: ``recurring replay [<internal_id> | --ids LIST] [flags]``.
+    单封 positional 或 ``--ids`` 逗号批量; 互斥取并集.
+    """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 

@@ -132,7 +132,7 @@ mailagent --help                 # 列 7 个 group (email/admin/attachment/llm/n
 
 **写命令鉴权**（RFC §5.3）：默认要 token。设 `MAILAGENT_CLI_API_KEY` 后写命令必须经 `--api-key` 提供同值；服务端未配且 `MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true` 时显式放行（仅 dev 模式）。`--dry-run` 跳过鉴权。
 
-**JSON Schema 契约**：[`docs/cli-schema/`](./docs/cli-schema/) 含 28 个 schema 文件 + `_common.schema.json` + `error-codes.md` 列 9 个 `E_*` enum（新增 `E_LLM_FAILED` / `E_NOT_IMPLEMENTED`）。所有 wrapper 形如 `{status, schema_version: 1, data | error, meta: {duration_ms, ...}}` (RFC §5.1.2)。
+**JSON Schema 契约**：[`docs/cli-schema/`](./docs/cli-schema/) 含 30 个 schema 文件（含 `_common.schema.json`）+ `error-codes.md` 列 9 个 `E_*` enum（新增 `E_LLM_FAILED` / `E_NOT_IMPLEMENTED`）。所有 wrapper 形如 `{status, schema_version: 1, data | error, meta: {duration_ms, ...}}` (RFC §5.1.2)。
 
 **详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7。PR-4 后续补 `backfill / project-progress / init` 批量命令 + 长任务批处理契约（batch / PM2 检测 / checkpoint）+ R-06 v4_rollout 持久化。`scripts/*` 在 PR-5 迁移；当前仍可用。
 

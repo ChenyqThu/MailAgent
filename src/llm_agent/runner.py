@@ -49,7 +49,12 @@ def _lookup_by_internal_id(
 
 
 class LLMRunner:
-    """Reusable runner; keep one instance per long-running process."""
+    """Reusable runner; keep one instance per long-running process.
+
+    PR-3 CLI integration: 接受可选 ``db_path`` / ``attachment_storage_dir`` 让
+    CLI ``--db-path`` / ``--config`` 真正生效 (不再被全局 ``cfg`` 旁路).
+    向后兼容: 缺省时回退到 ``cfg.sync_store_db_path`` 等, 与旧 callers 一致。
+    """
 
     def __init__(
         self,
@@ -57,15 +62,22 @@ class LLMRunner:
         writer: Optional[AIFieldsWriter] = None,
         store: Optional[LLMProcessingStore] = None,
         repo: Optional[EmailRepository] = None,
+        *,
+        db_path: Optional[str] = None,
+        attachment_storage_dir: Optional[str] = None,
     ):
         # v4 SSoT: 让 processor 优先读 SQLite markdown body。若未传 repo，
         # 默认基于 cfg 路径构造一个（让 CLI 也享受新路径，不增加调用方负担）。
+        self._db_path_override = db_path  # None = 用 cfg 全局, 否则 CLI 注入
+        effective_db_path = db_path or cfg.sync_store_db_path
+        effective_attachment_dir = attachment_storage_dir or cfg.attachment_storage_dir
+
         if processor is None:
             if repo is None and cfg.llm_prefer_sqlite_body:
                 try:
                     repo = EmailRepository(
-                        db_path=cfg.sync_store_db_path,
-                        attachment_store=AttachmentStore(cfg.attachment_storage_dir),
+                        db_path=effective_db_path,
+                        attachment_store=AttachmentStore(effective_attachment_dir),
                     )
                 except Exception as e:
                     logger.warning(f"[llm-runner] failed to init EmailRepository: {e}")
@@ -74,7 +86,7 @@ class LLMRunner:
         else:
             self._processor = processor
         self._writer = writer or AIFieldsWriter()
-        self._store = store or LLMProcessingStore()
+        self._store = store or LLMProcessingStore(db_path=effective_db_path)
         self._arm: Optional[AppleScriptArm] = None
         self._reader: Optional[EmailReader] = None
 
@@ -109,7 +121,7 @@ class LLMRunner:
         - dry_run=True: run LLM but do not touch Notion.
         - overwrite=True: LLM output wins over any existing field values.
         """
-        meta = _lookup_by_internal_id(internal_id)
+        meta = _lookup_by_internal_id(internal_id, db_path=self._db_path_override)
         if not meta:
             return {"ok": False, "internal_id": internal_id, "error": "not found in sync_store"}
 

@@ -22,17 +22,34 @@ class _AsyncNoop:
 
 
 def _patch_notion_client(monkeypatch, *, pages_update=None, query_results=None):
-    """Replace NotionClient with a stub that won't touch the network."""
+    """Replace NotionClient with a stub that won't touch the network.
+
+    Covers both old API surface (``query_database``) and new pagination path
+    (``client.data_sources.query`` + ``get_data_source_id``) — PR-3 round-5 fix
+    for codex critic blocker (notion page-orphans needs real pagination).
+    """
     from src.notion import client as client_mod
+    results_list = list(query_results or [])
+
+    class StubDataSources:
+        async def query(self, **kwargs):
+            # Single page — has_more=False so pagination stops after one call.
+            return {"results": results_list, "has_more": False, "next_cursor": None}
 
     class StubClient:
-        def __init__(self):
+        def __init__(self, *args, **kwargs):
+            # 接受任意 token/email_db_id kwargs (PR-3 round-5 加的 CliContext 透传)
+            self.email_db_id = kwargs.get("email_db_id") or "stub-email-db-id"
             self.client = type("PagesNS", (), {})()
             self.client.pages = type("Pages", (), {})()
             self.client.pages.update = pages_update or _AsyncNoop()
+            self.client.data_sources = StubDataSources()
+
+        async def get_data_source_id(self, db_id):
+            return "stub-data-source-id"
 
         async def query_database(self, **kwargs):
-            return query_results or []
+            return results_list
 
         async def close(self):
             return None

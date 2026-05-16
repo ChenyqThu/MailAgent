@@ -350,9 +350,19 @@ class TestSchemaContract:
         from jsonschema import validate
         from src.notion import client as client_mod
 
+        class StubDS:
+            async def query(self, **kwargs):
+                return {"results": [], "has_more": False, "next_cursor": None}
+
         class StubClient:
-            def __init__(self):
-                self.client = type("P", (), {"pages": type("X", (), {})()})()
+            def __init__(self, *args, **kwargs):
+                self.email_db_id = "x"
+                self.client = type("P", (), {})()
+                self.client.pages = type("X", (), {})()
+                self.client.data_sources = StubDS()
+
+            async def get_data_source_id(self, db_id):
+                return "ds-id"
 
             async def query_database(self, **kwargs):
                 return []
@@ -429,7 +439,7 @@ class TestSchemaContract:
 
         result = _invoke(
             cli_runner, "calendar", "recurring", "replay",
-            "--internal-id", "53120", "--dry-run", "-o", "json",
+            "53120", "--dry-run", "-o", "json",
             db_path=seeded_db,
         )
         assert result.exit_code == 0, result.output
@@ -532,7 +542,7 @@ class TestSchemaContract:
                 }
 
         class StubClient:
-            def __init__(self):
+            def __init__(self, *args, **kwargs):
                 self.client = type("X", (), {"pages": StubPages()})()
 
             async def close(self):

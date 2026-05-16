@@ -16,12 +16,12 @@
           "additionalProperties": false,
           "required": [
             "horizon_weeks", "cutoff_iso",
-            "pending_series", "total_pending", "dry_run"
+            "expanded", "total_series", "total_occurrences_added", "dry_run"
           ],
           "properties": {
             "horizon_weeks": {"type": "integer", "minimum": 1},
             "cutoff_iso": {"type": "string"},
-            "pending_series": {
+            "expanded": {
               "type": "array",
               "items": {
                 "type": "object",
@@ -31,11 +31,13 @@
                   "master_dtstart": {"type": ["string", "null"]},
                   "last_occurrence_dtstart": {"type": ["string", "null"]},
                   "notion_page_id": {"type": ["string", "null"]},
-                  "subject": {"type": ["string", "null"]}
+                  "subject": {"type": ["string", "null"]},
+                  "occurrences_added": {"type": "integer", "minimum": 0}
                 }
               }
             },
-            "total_pending": {"type": "integer", "minimum": 0},
+            "total_series": {"type": "integer", "minimum": 0},
+            "total_occurrences_added": {"type": "integer", "minimum": 0},
             "dry_run": {"type": "boolean"}
           }
         },

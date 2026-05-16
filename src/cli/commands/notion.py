@@ -145,10 +145,12 @@ def notion_update_flag(
             emit(cli, data)
         return
 
-    # 实跑 — 调 NotionClient
+    # 实跑 — 调 NotionClient (透传 CLI cfg 而不是 import-time 全局 config, 让
+    # --config / .env override 生效; PR-3 round-5 critic blocker #4 修复)
     from src.notion.client import NotionClient
 
-    client = NotionClient()
+    cfg = cli.cli_config
+    client = NotionClient(token=cfg.notion_token, email_db_id=cfg.email_database_id)
     try:
         asyncio.run(client.client.pages.update(
             page_id=meta.notion_page_id, properties=props,
@@ -228,7 +230,8 @@ def notion_archive(
 
     from src.notion.client import NotionClient
 
-    client = NotionClient()
+    cfg = cli.cli_config
+    client = NotionClient(token=cfg.notion_token, email_db_id=cfg.email_database_id)
     try:
         asyncio.run(client.client.pages.update(page_id=page_id, archived=True))
     except Exception as e:
@@ -285,7 +288,8 @@ def notion_page_orphans(
     # 拉本地已知 message_id 集合
     known_message_ids: set[str] = set()
     import sqlite3
-    conn = sqlite3.connect(cli.cli_config.sync_store_db_path)
+    cfg = cli.cli_config
+    conn = sqlite3.connect(cfg.sync_store_db_path)
     try:
         for (mid,) in conn.execute(
             "SELECT message_id FROM email_metadata WHERE message_id IS NOT NULL"
@@ -294,13 +298,16 @@ def notion_page_orphans(
     finally:
         conn.close()
 
-    client = NotionClient()
+    client = NotionClient(token=cfg.notion_token, email_db_id=cfg.email_database_id)
     orphans: list[dict] = []
+    total_scanned = 0
     try:
-        pages = asyncio.run(client.query_database(raise_on_error=False))
+        # PRD §US-006: 真分页 (而不是只调 NotionClient.query_database 拿单页).
+        # 直接走 client.client.data_sources.query 走 start_cursor / has_more.
+        pages = asyncio.run(_paginated_query(client, limit))
     except Exception as e:
         raise emit_cli_error(cli, CliError(
-            f"Notion query_database failed: {e}",
+            f"Notion paginated query failed: {e}",
             hint="检查 NOTION_TOKEN + EMAIL_DATABASE_ID",
         ))
     finally:
@@ -309,7 +316,6 @@ def notion_page_orphans(
         except Exception:
             pass
 
-    total_scanned = 0
     for page in pages[:limit]:
         total_scanned += 1
         props = page.get("properties", {}) or {}
@@ -348,6 +354,31 @@ def notion_page_orphans(
             )
     else:
         emit(cli, data)
+
+
+async def _paginated_query(client, limit: int) -> list[dict]:
+    """Walk Notion data_sources.query 的 ``start_cursor`` / ``has_more`` 直到 limit 满 / 全扫完.
+
+    单页 Notion API 默认 100 条; 比 NotionClient.query_database 的单调用更可靠
+    (后者只返回一页, codex critic 提的 blocker).
+    """
+    ds_id = await client.get_data_source_id(client.email_db_id)
+    results: list[dict] = []
+    start_cursor: Optional[str] = None
+    while len(results) < limit:
+        params: dict = {"data_source_id": ds_id, "page_size": min(100, limit - len(results))}
+        if start_cursor:
+            params["start_cursor"] = start_cursor
+        page = await client.client.data_sources.query(**params)
+        rows = page.get("results", []) or []
+        results.extend(rows)
+        if not page.get("has_more"):
+            break
+        next_cur = page.get("next_cursor")
+        if not next_cur:
+            break
+        start_cursor = next_cur
+    return results[:limit]
 
 
 def _extract_rich_text(prop: dict) -> str:

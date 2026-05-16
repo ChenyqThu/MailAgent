@@ -29,7 +29,8 @@ class TestCalendarExpand:
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
         assert payload["data"]["dry_run"] is True
-        assert payload["data"]["total_pending"] == 0
+        assert payload["data"]["total_series"] == 0
+        assert payload["data"]["total_occurrences_added"] == 0
         assert payload["data"]["horizon_weeks"] == 8
 
     def test_expand_dry_run_with_stub_series(
@@ -49,8 +50,9 @@ class TestCalendarExpand:
                          "--horizon-weeks", "4", "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        assert payload["data"]["total_pending"] == 1
-        assert payload["data"]["pending_series"][0]["series_uid"] == "uid-1"
+        assert payload["data"]["total_series"] == 1
+        assert payload["data"]["expanded"][0]["series_uid"] == "uid-1"
+        assert payload["data"]["expanded"][0]["occurrences_added"] == 0
         assert payload["data"]["horizon_weeks"] == 4
 
     def test_expand_no_dry_run_not_implemented(
@@ -100,10 +102,11 @@ class TestCalendarRecurringDiscover:
                          "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        assert payload["data"]["total_matches"] == 1
-        assert payload["data"]["matches"][0]["internal_id"] == 53120
+        assert payload["data"]["total_series"] == 1
+        assert payload["data"]["series"][0]["internal_id"] == 53120
         assert payload["data"]["since"] == "2026-04-01"
-        assert payload["data"]["discover_limit"] == 100
+        assert payload["data"]["limit"] == 100
+        assert payload["data"]["scanned"] == 100
 
     def test_discover_empty(self, cli_runner, cli_env, seeded_db, monkeypatch):
         async def fake_discover(*args, **kwargs):
@@ -119,7 +122,7 @@ class TestCalendarRecurringDiscover:
                          "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        assert payload["data"]["total_matches"] == 0
+        assert payload["data"]["total_series"] == 0
 
     def test_discover_invalid_limit(self, cli_runner, cli_env, seeded_db):
         result = _invoke(cli_runner, "calendar", "recurring", "discover",
@@ -135,9 +138,10 @@ class TestCalendarRecurringDiscover:
 
 class TestCalendarRecurringReplay:
     def test_replay_dry_run_single(self, cli_runner, cli_env, seeded_db):
+        # RFC §4.10: positional internal_id (not --internal-id flag)
         result = _invoke(
             cli_runner, "calendar", "recurring", "replay",
-            "--internal-id", "53120", "--dry-run", "-o", "json",
+            "53120", "--dry-run", "-o", "json",
             db_path=seeded_db,
         )
         assert result.exit_code == 0, result.output

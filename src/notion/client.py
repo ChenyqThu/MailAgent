@@ -25,15 +25,26 @@ NOTION_SUPPORTED_EXTENSIONS: Set[str] = {
 
 
 class NotionClient:
-    """Notion API 客户端封装"""
+    """Notion API 客户端封装。
+
+    PR-3 CLI integration: 接受可选 ``token`` / ``email_db_id`` 让
+    CLI ``--api-key`` / ``--config`` 真正生效 (不再被全局 ``config`` 旁路).
+    向后兼容: 缺省时回退到全局 ``config.notion_token`` / ``config.email_database_id``,
+    与 PR-1/PR-2 callers (NotionSync, scripts/*, webhook handlers) 一致。
+    """
 
     # Rate limiting settings
     MAX_RETRIES = 5
     BASE_RETRY_DELAY = 1.0  # seconds
 
-    def __init__(self):
-        self.client = AsyncClient(auth=config.notion_token)
-        self.email_db_id = config.email_database_id
+    def __init__(
+        self,
+        *,
+        token: Optional[str] = None,
+        email_db_id: Optional[str] = None,
+    ):
+        self.client = AsyncClient(auth=token or config.notion_token)
+        self.email_db_id = email_db_id or config.email_database_id
         self._http_session: Optional["aiohttp.ClientSession"] = None
         self._ds_id_cache: Dict[str, str] = {}
 

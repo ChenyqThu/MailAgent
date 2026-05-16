@@ -18,11 +18,28 @@
           "properties": {
             "accounts": {
               "type": "array",
-              "items": {"type": "string"}
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["name"],
+                "properties": {
+                  "name": {"type": "string"}
+                }
+              }
             },
             "mailboxes": {
               "type": "array",
-              "items": {"type": "string"}
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["name"],
+                "properties": {
+                  "name": {"type": "string"},
+                  "account": {"type": ["string", "null"]},
+                  "url": {"type": ["string", "null"]},
+                  "total_messages": {"type": ["integer", "null"]}
+                }
+              }
             },
             "total_accounts": {"type": "integer", "minimum": 0},
             "total_mailboxes": {"type": "integer", "minimum": 0}

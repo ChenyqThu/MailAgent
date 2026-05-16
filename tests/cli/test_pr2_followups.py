@@ -185,8 +185,8 @@ class TestErrorWrapperConsistency:
         (["email", "resync", "12345", "--range", "1-10"], "E_INVALID_ARG", 2),
         # attachment list not-found
         (["attachment", "list", "99999"], "E_NOT_FOUND", 1),
-        # attachment derive non-dry-run rejected
-        (["attachment", "derive", "12345"], "E_INVALID_ARG", 2),
+        # attachment derive non-dry-run rejected (E_NOT_IMPLEMENTED per error-codes.md)
+        (["attachment", "derive", "12345"], "E_NOT_IMPLEMENTED", 2),
         # llm retry-failed invalid limit
         (["llm", "retry-failed", "--limit", "0"], "E_INVALID_ARG", 2),
         # llm compare-paths bad ids

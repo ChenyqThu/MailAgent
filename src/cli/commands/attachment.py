@@ -18,7 +18,12 @@ from typing import TYPE_CHECKING, Optional
 
 import typer
 
-from src.cli.exceptions import CliError, CliInvalidArgError, CliNotFoundError
+from src.cli.exceptions import (
+    CliError,
+    CliInvalidArgError,
+    CliNotFoundError,
+    CliNotImplementedError,
+)
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
 
 if TYPE_CHECKING:
@@ -252,7 +257,7 @@ def attachment_derive(
             emit(cli, data)
         return
 
-    raise emit_cli_error(cli, CliInvalidArgError(
+    raise emit_cli_error(cli, CliNotImplementedError(
         "'attachment derive' non-dry-run path not yet implemented (PR-4 scope).",
         hint=(
             "用 'mailagent attachment derive <internal_id> --dry-run' 看 plan, "
