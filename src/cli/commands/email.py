@@ -274,3 +274,284 @@ def email_body(
         "fetched_source": body_record.fetched_source,
     }
     emit(cli, data)
+
+
+# ============================================================
+# list (US-004)
+# ============================================================
+
+VALID_STATUSES = {"pending", "fetch_failed", "synced", "failed", "skipped", "dead_letter"}
+VALID_TRIBOOL = {"true", "false", None}
+LIST_LIMIT_DEFAULT = 50
+LIST_LIMIT_MAX = 500
+
+
+def _tribool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    v = value.strip().lower()
+    if v == "true":
+        return True
+    if v == "false":
+        return False
+    raise CliInvalidArgError(
+        f"Expected true/false, got {value!r}"
+    )
+
+
+@app.command("list")
+def email_list(
+    ctx: typer.Context,
+    mailbox: Optional[str] = typer.Option(None, "--mailbox"),
+    status: Optional[str] = typer.Option(None, "--status"),
+    since: Optional[str] = typer.Option(None, "--since", help="YYYY-MM-DD"),
+    until: Optional[str] = typer.Option(None, "--until", help="YYYY-MM-DD"),
+    from_: Optional[str] = typer.Option(None, "--from", help="sender 子串"),
+    subject_substr: Optional[str] = typer.Option(None, "--subject"),
+    is_read: Optional[str] = typer.Option(None, "--is-read"),
+    is_flagged: Optional[str] = typer.Option(None, "--is-flagged"),
+    has_notion: Optional[str] = typer.Option(None, "--has-notion"),
+    limit: int = typer.Option(LIST_LIMIT_DEFAULT, "--limit"),
+    offset: int = typer.Option(0, "--offset"),
+    source: str = typer.Option(
+        "syncstore", "--source",
+        help="syncstore (default, 已同步邮件) / mail (Mail.app 全量, 暂未实现)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """列出邮件 — text 表格 / json wrapper / ndjson stream."""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if limit <= 0 or limit > LIST_LIMIT_MAX:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--limit must be in (0, {LIST_LIMIT_MAX}], got {limit}"
+        ))
+    if offset < 0:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--offset must be >= 0, got {offset}"
+        ))
+    if status and status not in VALID_STATUSES:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--status must be one of {sorted(VALID_STATUSES)}, got {status!r}"
+        ))
+
+    try:
+        is_read_bool = _tribool(is_read)
+        is_flagged_bool = _tribool(is_flagged)
+        has_notion_bool = _tribool(has_notion)
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    source_norm = source.lower()
+    if source_norm == "mail":
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "--source mail not implemented in PR-2 "
+            "(走 SQLiteRadar.search_all_emails, PR-3 范围)",
+            hint="Use --source syncstore (default) or wait for PR-3",
+        ))
+    if source_norm != "syncstore":
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--source must be 'syncstore' or 'mail', got {source!r}"
+        ))
+
+    filters: dict = {}
+    if mailbox:
+        filters["mailbox"] = mailbox
+    if from_:
+        filters["from"] = from_
+    if subject_substr:
+        filters["subject"] = subject_substr
+    if since:
+        filters["date_from"] = since
+    if until:
+        filters["date_to"] = until
+    if is_read_bool is not None:
+        filters["is_read"] = is_read_bool
+    if is_flagged_bool is not None:
+        filters["is_flagged"] = is_flagged_bool
+    if has_notion_bool is not None:
+        filters["has_notion"] = has_notion_bool
+
+    sync_store = cli.sync_store
+    # sync_store.search_emails caps limit at 50 internally — for PR-2 we accept
+    # this. Wider list 需走 paging (offset)。
+    result = sync_store.search_emails(filters=filters, limit=limit, offset=offset)
+    rows = result.get("emails", [])
+
+    # 后置过滤 status (sync_store.search_emails 默认锁 synced/pending)
+    if status:
+        rows = [r for r in rows if r.get("sync_status") == status]
+
+    data = [_row_to_list_item(r) for r in rows]
+    meta_extra = {
+        "total": result.get("total", len(rows)),
+        "limit": result.get("limit", limit),
+        "offset": result.get("offset", offset),
+        "count": len(data),
+    }
+
+    if cli.output.lower() == "text":
+        _render_list_text(data, meta_extra)
+    else:
+        emit(cli, data, meta_extra=meta_extra)
+
+
+def _row_to_list_item(row: dict) -> dict:
+    """sync_store row dict → list 输出 item."""
+    page_id = row.get("notion_page_id")
+    notion_url = (
+        f"https://www.notion.so/{page_id.replace('-', '')}"
+        if page_id else None
+    )
+    return {
+        "internal_id": row.get("internal_id"),
+        "message_id": row.get("message_id"),
+        "thread_id": row.get("thread_id"),
+        "subject": row.get("subject") or "",
+        "sender": row.get("sender") or "",
+        "sender_name": row.get("sender_name"),
+        "date_received": row.get("date_received"),
+        "mailbox": row.get("mailbox"),
+        "is_read": bool(row.get("is_read")),
+        "is_flagged": bool(row.get("is_flagged")),
+        "sync_status": row.get("sync_status"),
+        "notion_page_id": page_id,
+        "notion_url": notion_url,
+    }
+
+
+def _render_list_text(data: list[dict], meta: dict) -> None:
+    """Rich 表格 fallback — 失败回到纯 ASCII."""
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        table = Table(show_lines=False)
+        table.add_column("internal_id", justify="right")
+        table.add_column("subject", overflow="fold")
+        table.add_column("sender")
+        table.add_column("date")
+        table.add_column("status")
+        for row in data:
+            sender = row["sender_name"] or row["sender"] or ""
+            table.add_row(
+                str(row["internal_id"]),
+                (row["subject"] or "")[:60],
+                sender[:30],
+                (row["date_received"] or "")[:19],
+                row["sync_status"] or "",
+            )
+        Console().print(table)
+    except Exception:
+        for row in data:
+            print(
+                f"{row['internal_id']}\t{(row['subject'] or '')[:50]}\t"
+                f"{(row['sender'] or '')[:30]}\t{row['date_received']}\t{row['sync_status']}"
+            )
+    print(
+        f"({meta['count']} shown, total={meta['total']}, "
+        f"limit={meta['limit']}, offset={meta['offset']})",
+        file=sys.stderr,
+    )
+
+
+# ============================================================
+# search (US-004)
+# ============================================================
+
+SEARCH_LIMIT_DEFAULT = 50
+SEARCH_LIMIT_MAX = 200
+
+
+@app.command("search")
+def email_search(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="FTS5 query 语法"),
+    mailbox: Optional[str] = typer.Option(None, "--mailbox"),
+    since: Optional[str] = typer.Option(None, "--since", help="YYYY-MM-DD"),
+    until: Optional[str] = typer.Option(None, "--until", help="YYYY-MM-DD"),
+    limit: int = typer.Option(SEARCH_LIMIT_DEFAULT, "--limit"),
+    no_snippet: bool = typer.Option(False, "--no-snippet"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """FTS5 全文搜索邮件正文 + subject + sender (RFC §4.2 / §7.2)."""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if limit <= 0 or limit > SEARCH_LIMIT_MAX:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--limit must be in (0, {SEARCH_LIMIT_MAX}], got {limit}"
+        ))
+
+    repo = cli.email_repo
+    hits = repo.search_email_bodies(
+        query,
+        limit=limit,
+        mailbox=mailbox,
+        since_date=since,
+        until_date=until,
+    )
+
+    data = []
+    for hit in hits:
+        item = {
+            "internal_id": hit.internal_id,
+            "subject": hit.subject,
+            "sender": hit.sender,
+            "date_received": hit.date_received,
+            "mailbox": hit.mailbox,
+            "rank": hit.rank,
+            "notion_page_id": hit.notion_page_id,
+            "notion_url": hit.notion_url,
+        }
+        if not no_snippet:
+            item["snippet"] = hit.snippet
+        data.append(item)
+
+    meta_extra = {
+        "query": query,
+        "total_hits": len(data),
+        "limit": limit,
+        "count": len(data),
+    }
+
+    if cli.output.lower() == "text":
+        _render_search_text(data, meta_extra, no_snippet)
+    else:
+        emit(cli, data, meta_extra=meta_extra)
+
+
+def _render_search_text(data: list[dict], meta: dict, no_snippet: bool) -> None:
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        table = Table(show_lines=False)
+        table.add_column("internal_id", justify="right")
+        table.add_column("rank", justify="right")
+        table.add_column("subject", overflow="fold")
+        table.add_column("sender")
+        if not no_snippet:
+            table.add_column("snippet", overflow="fold")
+        for row in data:
+            cells = [
+                str(row["internal_id"]),
+                f"{row['rank']:.2f}",
+                (row["subject"] or "")[:50],
+                (row["sender"] or "")[:25],
+            ]
+            if not no_snippet:
+                cells.append((row.get("snippet") or "")[:80])
+            table.add_row(*cells)
+        Console().print(table)
+    except Exception:
+        for row in data:
+            print(
+                f"{row['internal_id']}\t{row['rank']:.2f}\t"
+                f"{(row['subject'] or '')[:50]}\t{row['sender']}"
+            )
+    print(
+        f"(query={meta['query']!r}, hits={meta['total_hits']}, limit={meta['limit']})",
+        file=sys.stderr,
+    )
