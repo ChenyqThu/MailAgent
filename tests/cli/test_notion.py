@@ -238,12 +238,152 @@ class TestNotionPageOrphans:
         assert payload["data"]["orphans"][0]["message_id"] == "<unknown@example.com>"
         assert payload["data"]["orphans"][0]["subject"] == "Ghost Mail"
 
-    def test_no_dry_run_rejected(self, cli_runner, cli_env, seeded_db):
+    def test_no_dry_run_without_repair_or_yes_rejected(
+        self, cli_runner, cli_env, seeded_db,
+    ):
         result = _invoke(cli_runner, "notion", "page-orphans",
                          "--no-dry-run", "-o", "json", db_path=seeded_db)
         assert result.exit_code == 2, result.output
         payload = _last_json(result.output)
         assert payload["error"]["code"] == "E_INVALID_ARG"
+        assert (
+            "requires --yes and one of --archive-orphan-pages / --insert-stub-metadata"
+            in payload["error"]["message"]
+        )
+
+    def test_archive_orphan_pages_yes_mocked(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        stub = _AsyncNoop()
+        _patch_notion_client(monkeypatch, pages_update=stub, query_results=[
+            {
+                "id": "ghost-page-id",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost Mail"}]},
+                },
+            },
+        ])
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--archive-orphan-pages", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["mode"] == "inline"
+        assert payload["data"]["action"] == "archive"
+        assert payload["data"]["archived"] == ["ghost-page-id"]
+        assert payload["data"]["failed"] == []
+        assert len(stub.calls) == 1
+        assert stub.calls[0]["page_id"] == "ghost-page-id"
+        assert stub.calls[0]["archived"] is True
+
+    def test_insert_stub_metadata_yes_mocked(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        import sqlite3
+
+        _patch_notion_client(monkeypatch, query_results=[
+            {
+                "id": "ghost-page-id",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost Mail"}]},
+                },
+            },
+        ])
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--insert-stub-metadata", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["mode"] == "inline"
+        assert payload["data"]["action"] == "insert-stub"
+        assert payload["data"]["archived"] == ["ghost-page-id"]
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            rows = conn.execute(
+                """SELECT internal_id, notion_page_id, sync_status
+                   FROM email_metadata
+                   WHERE notion_page_id = ?""",
+                ("ghost-page-id",),
+            ).fetchall()
+        finally:
+            conn.close()
+        assert len(rows) == 1
+        assert rows[0][0] < 0
+        assert rows[0][2] == "dead_letter"
+
+    def test_no_repair_flag_with_no_dry_run(self, cli_runner, cli_env, seeded_db):
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--yes", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+
+    def test_both_repair_flags_mutually_exclusive(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--archive-orphan-pages", "--insert-stub-metadata",
+            "--yes", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+
+    def test_max_pages_caps_archive(self, cli_runner, cli_env, seeded_db, monkeypatch):
+        stub = _AsyncNoop()
+        _patch_notion_client(monkeypatch, pages_update=stub, query_results=[
+            {
+                "id": "ghost-page-1",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost1@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost 1"}]},
+                },
+            },
+            {
+                "id": "ghost-page-2",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost2@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost 2"}]},
+                },
+            },
+            {
+                "id": "ghost-page-3",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost3@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost 3"}]},
+                },
+            },
+        ])
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--archive-orphan-pages", "--yes",
+            "--max-pages", "2", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["archived"] == ["ghost-page-1", "ghost-page-2"]
+        assert payload["data"]["orphans_found"] == 3
+        assert payload["data"]["max_pages"] == 2
+        assert len(stub.calls) == 2
 
 
 # ============================================================

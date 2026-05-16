@@ -7,6 +7,7 @@ PR-3 US-006: page-orphans / file-link-audit
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import TYPE_CHECKING, Optional
 
 import typer
@@ -261,11 +262,25 @@ def notion_page_orphans(
     ctx: typer.Context,
     dry_run: bool = typer.Option(
         True, "--dry-run/--no-dry-run",
-        help="PR-3 仅 dry-run (扫描不修复); 修复路径推迟 PR-4",
+        help="默认只扫描; --no-dry-run 必须配 repair flag + --yes",
     ),
     limit: int = typer.Option(
         100, "--limit", help="最多扫 N 个 Notion page (避免超时)",
     ),
+    archive_orphan_pages: bool = typer.Option(
+        False,
+        "--archive-orphan-pages",
+        help="非 dry-run: 在 Notion 上 archive 孤儿 page",
+    ),
+    insert_stub_metadata: bool = typer.Option(
+        False,
+        "--insert-stub-metadata",
+        help="非 dry-run: 在 SQLite 创建 dead_letter stub metadata",
+    ),
+    max_pages: int = typer.Option(
+        50, "--max-pages", help="实修上限 (避免误操作批量扩散)",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="确认执行非 dry-run 修复"),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """扫 Notion 邮件库有 page 但本地无 metadata 的孤儿 (RFC §4.6)."""
@@ -273,14 +288,19 @@ def notion_page_orphans(
     _apply_local_output(ctx, output)
 
     if not dry_run:
-        raise emit_cli_error(cli, CliInvalidArgError(
-            "page-orphans non-dry-run path not implemented in PR-3",
-            hint="PR-3 只 audit 不修复; 修复留 PR-4 'admin repair-*'",
-        ))
+        if (not yes) or (archive_orphan_pages == insert_stub_metadata):
+            raise emit_cli_error(cli, CliInvalidArgError(
+                "Non-dry-run requires --yes and one of "
+                "--archive-orphan-pages / --insert-stub-metadata (mutually exclusive)",
+            ))
 
     if limit <= 0:
         raise emit_cli_error(cli, CliInvalidArgError(
             f"--limit must be > 0, got {limit}",
+        ))
+    if max_pages <= 0:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--max-pages must be > 0, got {max_pages}",
         ))
 
     from src.notion.client import NotionClient
@@ -299,15 +319,102 @@ def notion_page_orphans(
         conn.close()
 
     client = NotionClient(token=cfg.notion_token, email_db_id=cfg.email_database_id)
-    orphans: list[dict] = []
-    total_scanned = 0
     try:
         # PRD §US-006: 真分页 (而不是只调 NotionClient.query_database 拿单页).
         # 直接走 client.client.data_sources.query 走 start_cursor / has_more.
         pages = asyncio.run(_paginated_query(client, limit))
+
+        orphans: list[dict] = []
+        total_scanned = 0
+        for page in pages[:limit]:
+            total_scanned += 1
+            props = page.get("properties", {}) or {}
+            msg_id_prop = props.get("Message ID") or {}
+            msg_id = _extract_rich_text(msg_id_prop)
+            subj_prop = props.get("Subject") or {}
+            subject = _extract_title(subj_prop)
+            if msg_id and msg_id in known_message_ids:
+                continue
+            page_id = page.get("id", "")
+            notion_url = (
+                f"https://www.notion.so/{page_id.replace('-', '')}"
+                if page_id else None
+            )
+            orphans.append({
+                "page_id": page_id,
+                "message_id": msg_id or None,
+                "subject": subject,
+                "notion_url": notion_url,
+            })
+
+        if dry_run:
+            data = {
+                "orphans": orphans,
+                "total_scanned": total_scanned,
+                "total_orphans": len(orphans),
+                "limit": limit,
+                "dry_run": True,
+                "mode": "dry_run",
+            }
+
+            if cli.output.lower() == "text":
+                print(f"scanned={total_scanned} orphans={len(orphans)} (limit={limit})")
+                for o in orphans:
+                    print(
+                        f"  page={o['page_id']} mid={o['message_id']} "
+                        f"subj={(o['subject'] or '')[:40]}"
+                    )
+            else:
+                emit(cli, data)
+            return
+
+        to_repair = orphans[:max_pages]
+        failed: list[dict] = []
+        repaired_page_ids: list[str] = []
+        if archive_orphan_pages:
+            repaired_page_ids, failed = asyncio.run(
+                _archive_orphan_pages(client, to_repair),
+            )
+            action_name = "archive"
+        else:
+            repaired_page_ids, failed = _insert_stub_metadata(
+                cfg.sync_store_db_path, to_repair,
+            )
+            action_name = "insert-stub"
+
+        data = {
+            "action": action_name,
+            "repair_action": action_name,
+            "command": "page-orphans",
+            "mode": "inline",
+            "dry_run": False,
+            "scanned": total_scanned,
+            "orphans_found": len(orphans),
+            "limit": limit,
+            "max_pages": max_pages,
+            "archived": repaired_page_ids,
+            "failed": failed,
+        }
+
+        if cli.output.lower() == "text":
+            print(
+                f"action={action_name} scanned={total_scanned} "
+                f"orphans={len(orphans)} repaired={len(repaired_page_ids)} "
+                f"failed={len(failed)} max_pages={max_pages}"
+            )
+            for page_id in repaired_page_ids:
+                print(f"  ok page={page_id}")
+            for item in failed:
+                print(f"  failed page={item['page_id']} error={item['error']}")
+        else:
+            emit(cli, data)
+        if failed:
+            raise typer.Exit(code=6)
     except Exception as e:
+        if isinstance(e, typer.Exit):
+            raise
         raise emit_cli_error(cli, CliError(
-            f"Notion paginated query failed: {e}",
+            f"Notion page-orphans failed: {e}",
             hint="检查 NOTION_TOKEN + EMAIL_DATABASE_ID",
         ))
     finally:
@@ -316,44 +423,60 @@ def notion_page_orphans(
         except Exception:
             pass
 
-    for page in pages[:limit]:
-        total_scanned += 1
-        props = page.get("properties", {}) or {}
-        msg_id_prop = props.get("Message ID") or {}
-        msg_id = _extract_rich_text(msg_id_prop)
-        subj_prop = props.get("Subject") or {}
-        subject = _extract_title(subj_prop)
-        if msg_id and msg_id in known_message_ids:
-            continue
-        page_id = page.get("id", "")
-        notion_url = (
-            f"https://www.notion.so/{page_id.replace('-', '')}"
-            if page_id else None
-        )
-        orphans.append({
-            "page_id": page_id,
-            "message_id": msg_id or None,
-            "subject": subject,
-            "notion_url": notion_url,
-        })
 
-    data = {
-        "orphans": orphans,
-        "total_scanned": total_scanned,
-        "total_orphans": len(orphans),
-        "limit": limit,
-        "dry_run": True,
-    }
+async def _archive_orphan_pages(client, orphans: list[dict]) -> tuple[list[str], list[dict]]:
+    archived: list[str] = []
+    failed: list[dict] = []
+    for orphan in orphans:
+        page_id = orphan["page_id"]
+        try:
+            await client.client.pages.update(page_id=page_id, archived=True)
+            archived.append(page_id)
+        except Exception as exc:
+            failed.append({
+                "page_id": page_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    return archived, failed
 
-    if cli.output.lower() == "text":
-        print(f"scanned={total_scanned} orphans={len(orphans)} (limit={limit})")
-        for o in orphans:
-            print(
-                f"  page={o['page_id']} mid={o['message_id']} "
-                f"subj={(o['subject'] or '')[:40]}"
-            )
-    else:
-        emit(cli, data)
+
+def _insert_stub_metadata(db_path: str, orphans: list[dict]) -> tuple[list[str], list[dict]]:
+    from src.mail.sync_store import SyncStore
+
+    store = SyncStore(db_path)
+    inserted: list[str] = []
+    failed: list[dict] = []
+    for orphan in orphans:
+        page_id = orphan["page_id"]
+        try:
+            internal_id = _derive_stub_internal_id(store, page_id)
+            message_id = orphan.get("message_id") or f"orphan-{page_id}@stub"
+            ok = store.save_email({
+                "internal_id": internal_id,
+                "message_id": message_id,
+                "subject": (orphan.get("subject") or "")[:200],
+                "sync_status": "dead_letter",
+                "sync_error": "Orphan Notion page inserted as local stub metadata",
+                "notion_page_id": page_id,
+                "mailbox": "stub",
+            })
+            if not ok:
+                raise RuntimeError("SyncStore.save_email returned False")
+            inserted.append(page_id)
+        except Exception as exc:
+            failed.append({
+                "page_id": page_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    return inserted, failed
+
+
+def _derive_stub_internal_id(store, page_id: str) -> int:
+    digest = hashlib.sha256(page_id.encode("utf-8")).digest()
+    internal_id = -(int.from_bytes(digest[:8], "big") % 2_000_000_000 + 1)
+    while store.get(internal_id) is not None:
+        internal_id -= 1
+    return internal_id
 
 
 async def _paginated_query(client, limit: int) -> list[dict]:
