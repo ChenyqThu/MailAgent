@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/llm-run.schema.json",
+  "title": "mailagent llm run",
+  "description": "RFC v2 §4.4 — 单封邮件跑 LLM 分类 + Notion 写 AI 字段.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["internal_id", "dry_run"],
+          "properties": {
+            "internal_id": {"type": "integer", "minimum": 0},
+            "page_id": {"type": ["string", "null"]},
+            "mailbox": {"type": ["string", "null"]},
+            "dry_run": {"type": "boolean"},
+            "skipped": {"type": ["string", "null"]},
+            "labels": {"type": ["object", "null"]},
+            "writer_summary": {"type": ["object", "string", "null"]},
+            "stored_at": {"type": ["number", "null"]}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

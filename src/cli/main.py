@@ -35,12 +35,17 @@ def _print_version(value: bool) -> None:
 from src.cli.commands import admin as _admin_module  # noqa: E402
 from src.cli.commands import attachment as _attachment_module  # noqa: E402
 from src.cli.commands import email as _email_module  # noqa: E402
+from src.cli.commands import llm as _llm_module  # noqa: E402
 
 app.add_typer(_email_module.app, name="email", help="邮件 CRUD / 搜索 / 重传")
 app.add_typer(_admin_module.app, name="admin", help="统计 / 健康 / db-version")
 app.add_typer(
     _attachment_module.app, name="attachment",
     help="附件 list / download / derive / cleanup-orphans",
+)
+app.add_typer(
+    _llm_module.app, name="llm",
+    help="LLM run / selftest / retry-failed / stats / compare-paths",
 )
 
 

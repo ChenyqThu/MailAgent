@@ -61,3 +61,15 @@ class CliAbortedError(CliError):
     """SIGINT / SIGTERM 主动退出 (RFC §5.2 exit 7) — PR-4 范围占位。"""
     code = "E_ABORTED"
     exit_code = 7
+
+
+class CliLLMFailedError(CliError):
+    """LLM gateway 调用失败 / 模型链耗尽 / Notion 写失败 (PR-3 §4.4)."""
+    code = "E_LLM_FAILED"
+    exit_code = 1
+
+
+class CliNotImplementedError(CliError):
+    """命令存在但 PR-3 仅 stub, 完整实现在后续 PR (PR-3 §4.4 compare-paths 等)."""
+    code = "E_NOT_IMPLEMENTED"
+    exit_code = 2

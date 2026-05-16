@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/llm-retry-failed.schema.json",
+  "title": "mailagent llm retry-failed",
+  "description": "RFC v2 §4.4 — LLM retry queue 批量手动跑 (指数退避到期的 failed 邮件).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "candidates", "candidate_internal_ids",
+            "dry_run", "items", "succeeded", "failed"
+          ],
+          "properties": {
+            "candidates": {"type": "integer", "minimum": 0},
+            "candidate_internal_ids": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
+            },
+            "dry_run": {"type": "boolean"},
+            "succeeded": {"type": "integer", "minimum": 0},
+            "failed": {"type": "integer", "minimum": 0},
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["internal_id", "ok"],
+                "properties": {
+                  "internal_id": {"type": "integer", "minimum": 0},
+                  "ok": {"type": "boolean"},
+                  "error": {"type": ["string", "null"]},
+                  "skipped": {"type": ["string", "null"]}
+                }
+              }
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

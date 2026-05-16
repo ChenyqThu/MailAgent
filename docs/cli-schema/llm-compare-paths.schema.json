@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/llm-compare-paths.schema.json",
+  "title": "mailagent llm compare-paths",
+  "description": "RFC v2 §4.4 — R-15 灰度质量闸 SQLite markdown vs in-memory regex 双路径对比. PR-3 仅 dry-run plan, 实跑实现推迟.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["plan", "status"],
+          "properties": {
+            "plan": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sample_size", "internal_ids", "mode", "dry_run"],
+              "properties": {
+                "sample_size": {"type": "integer", "minimum": 1},
+                "internal_ids": {
+                  "oneOf": [
+                    {"type": "null"},
+                    {
+                      "type": "array",
+                      "items": {"type": "integer", "minimum": 0}
+                    }
+                  ]
+                },
+                "mode": {"type": "string", "enum": ["random", "explicit"]},
+                "dry_run": {"type": "boolean"}
+              }
+            },
+            "status": {"type": "string", "enum": ["pr3_stub"]}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

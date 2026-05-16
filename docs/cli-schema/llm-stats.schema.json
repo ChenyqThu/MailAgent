@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/llm-stats.schema.json",
+  "title": "mailagent llm stats",
+  "description": "RFC v2 §4.4 — llm_processing 表 status 分布 + cost + cache hit + latency.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "by_status", "days", "cost", "_source"],
+          "properties": {
+            "total": {"type": "integer", "minimum": 0},
+            "by_status": {
+              "type": "object",
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            },
+            "days": {"type": "integer"},
+            "since_ts": {"type": ["number", "null"]},
+            "cost": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "input_tokens", "output_tokens",
+                "cache_creation_input_tokens", "cache_read_input_tokens",
+                "cache_hit_rate_pct", "avg_latency_ms", "success_rows"
+              ],
+              "properties": {
+                "input_tokens": {"type": "integer", "minimum": 0},
+                "output_tokens": {"type": "integer", "minimum": 0},
+                "cache_creation_input_tokens": {"type": "integer", "minimum": 0},
+                "cache_read_input_tokens": {"type": "integer", "minimum": 0},
+                "cache_hit_rate_pct": {"type": "number", "minimum": 0},
+                "avg_latency_ms": {"type": "integer", "minimum": 0},
+                "success_rows": {"type": "integer", "minimum": 0}
+              }
+            },
+            "_source": {
+              "type": "string",
+              "enum": ["live_query", "table_missing"]
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

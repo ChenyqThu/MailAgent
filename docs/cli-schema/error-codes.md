@@ -12,6 +12,8 @@
 | `E_PARTIAL_FAILURE` | 6 | batch 命令部分成功部分失败 (PR-4 占位) | `email resync --range A-B` 实施后会用 |
 | `E_ABORTED` | 7 | SIGINT / SIGTERM 主动退出 (PR-4 占位) | 用户 Ctrl-C 长任务 |
 | `E_INTERNAL` | 1 | 意外异常 — 未匹配上述任何 code 的内部错误 | 兜底, 出现 stacktrace 时落到此 code |
+| `E_LLM_FAILED` | 1 | LLM gateway 调用失败 / 模型链耗尽 / Notion 写失败 | `llm run` runner 返回 ok=False (非 not-found 类) / 网关 5xx |
+| `E_NOT_IMPLEMENTED` | 2 | 命令存在但当前 PR 仅 stub, 完整实现在后续 PR | `llm compare-paths` 非 dry-run; `attachment derive` 非 dry-run (PR-3 stub) |
 
 **约定**：
 

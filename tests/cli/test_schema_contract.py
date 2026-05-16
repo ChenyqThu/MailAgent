@@ -223,5 +223,94 @@ class TestSchemaContract:
         )
         validate(instance=payload, schema=schema, registry=registry)
 
+    # ============================================================
+    # PR-3 US-003 / US-004: llm
+    # ============================================================
+
+    def test_llm_run_dry_run_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+        from src.llm_agent import runner as runner_mod
+
+        async def fake_run(self, internal_id, *, dry_run=False, overwrite=True,
+                           force=False):
+            return {
+                "ok": True, "internal_id": internal_id, "page_id": "p",
+                "mailbox": "收件箱", "dry_run": dry_run, "labels": {"x": 1},
+            }
+
+        async def fake_close(self):
+            return None
+
+        def safe_init(self, *args, **kwargs):
+            self._processor = None
+            self._writer = None
+            self._store = None
+            self._arm = None
+            self._reader = None
+
+        monkeypatch.setattr(runner_mod.LLMRunner, "__init__", safe_init)
+        monkeypatch.setattr(runner_mod.LLMRunner, "run_for_internal_id", fake_run)
+        monkeypatch.setattr(runner_mod.LLMRunner, "close", fake_close)
+
+        result = _invoke(cli_runner, "llm", "run", "12345", "--dry-run",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("llm-run.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_llm_selftest_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+
+        monkeypatch.setenv("LLM_API_KEY", "k")
+        monkeypatch.setenv("LLM_API_BASE", "https://e")
+        monkeypatch.setenv("LLM_MODEL", "m")
+        result = _invoke(cli_runner, "llm", "selftest", "-o", "json",
+                         db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("llm-selftest.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_llm_retry_failed_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "llm", "retry-failed", "--dry-run",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("llm-retry-failed.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_llm_stats_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "llm", "stats", "-o", "json",
+                         db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("llm-stats.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_llm_compare_paths_dry_run_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "llm", "compare-paths", "--count", "10",
+                         "--dry-run", "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("llm-compare-paths.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
 
 from tests.cli.conftest import extract_last_json_object as _last_json  # noqa: E402

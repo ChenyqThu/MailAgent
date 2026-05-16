@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/llm-selftest.schema.json",
+  "title": "mailagent llm selftest",
+  "description": "RFC v2 §4.4 — Gateway 健康检查 (不烧 token).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "healthy", "api_base", "primary_model",
+            "fallback_chain", "llm_agent_enabled", "reasons"
+          ],
+          "properties": {
+            "healthy": {"type": "boolean"},
+            "api_base": {"type": "string"},
+            "primary_model": {"type": "string"},
+            "fallback_chain": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "llm_agent_enabled": {"type": "boolean"},
+            "reasons": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}
