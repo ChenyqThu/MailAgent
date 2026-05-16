@@ -240,6 +240,16 @@ class Config(BaseSettings):
         ),
     )
 
+    # CLI: API key 用于写命令鉴权 (RFC v2 §5.3 / PR-2)
+    mailagent_cli_api_key: str = Field(
+        default="", env="MAILAGENT_CLI_API_KEY",
+        description=(
+            "mailagent CLI 写命令所需 API key（resync / delete / cleanup 等）。"
+            "留空+未设 MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true → 默认拒绝写。"
+            "详见 RFC v2 §5.3。"
+        ),
+    )
+
     # v4 Phase 4: Notion uploader 改读 SQLite (架构归一)
     notion_read_from_sqlite: bool = Field(
         default=False, env="NOTION_READ_FROM_SQLITE",
