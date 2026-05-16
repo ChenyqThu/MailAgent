@@ -12,12 +12,12 @@
 
 后端架构总体扎实：v3 internal_id 主键 + v4 SQLite SSoT + 5 个 Phase 渐进切换，每一步都留了灰度开关与回滚路径。本轮 Review 没有发现 P0 级的"架构上必须立刻修"的问题。但有若干 **P1 / P2 级事实问题**值得在进入 Agent CLI 设计前先达成共识：
 
-- **P1**：测试 `test_disabled_by_default` 与 `.env` 真实值耦合（灰度切 true 后必然失败）—— 阻塞 CI 信号
-- **P1**：`fetched` sync_status 是死代码（schema/类型注释里有，但无 `mark_fetched` 路径写入）—— 状态机文档与实现不一致
-- **P1**：`NotionSync` lazy-init `_repo / _sync_store / AttachmentStore`，与 `NewWatcher` 已持有的实例**不共享** —— 生产单进程内有 2 套 EmailRepository + 2 套 SyncStore + 2 套 AttachmentStore
-- **P2**：`_handle_thread_relations` 仍走 Notion API 查兄弟邮件，**未利用 SQLite SSoT 已有的 thread_id 索引** —— Phase 4 灰度后这一路径仍是 Notion 出/入双向
+- **P1**：测试 `test_disabled_by_default` 与 `.env` 真实值耦合（灰度切 true 后必然失败）—— 阻塞 CI 信号 _(待 PR-1 Commit 8 修)_
+- **P1**：`fetched` sync_status 是死代码（schema/类型注释里有，但无 `mark_fetched` 路径写入）—— 状态机文档与实现不一致 ✅ **Fixed in PR-1**
+- **P1**：`NotionSync` lazy-init `_repo / _sync_store / AttachmentStore`，与 `NewWatcher` 已持有的实例**不共享** —— 生产单进程内有 2 套 EmailRepository + 2 套 SyncStore + 2 套 AttachmentStore ✅ **Fixed in PR-1** (strict DI)
+- **P2**：`_handle_thread_relations` 仍走 Notion API 查兄弟邮件，**未利用 SQLite SSoT 已有的 thread_id 索引** —— Phase 4 灰度后这一路径仍是 Notion 出/入双向 ✅ **Fixed in PR-1** (SQLite SSoT 优先 + Notion fallback)
 - **P2**：`EmailRepository.commit_email_with_body` 返回 dict 的 key 用**原始 filename**，但 SQLite 内部用 **sanitize 后的 filename**；调用方未踩坑只是因为暂时没人立即消费返回值
-- **P2**：`AttachmentStore.read` 用 `Path.cwd()` 解析相对路径，CLI 在非项目根目录执行会失败
+- **P2**：`AttachmentStore.read` 用 `Path.cwd()` 解析相对路径，CLI 在非项目根目录执行会失败 ✅ **Fixed in PR-1**
 - **P2**：`scripts/*` 有 47 个文件，混杂 5 类（核心 CLI / 检查调试 / 旧测试 / 一次性迁移 / shell helper），无统一规范 —— 影响阶段 D CLI 设计的边界
 
 **重构建议**（用户拍板）：见 §6。其中"NotionSync 改 strict DI"和"thread relations 切 SQLite"是阶段 D CLI 设计前最值得拍板的两条。
@@ -235,12 +235,12 @@ pending / fetch_failed / fetched / synced / failed / skipped / dead_letter
 
 | ID | 级别 | 文件:行 | 说明 |
 |---|---|---|---|
-| **I-01** | P1 | `tests/notion/test_create_from_sqlite.py:574-608` | `test_disabled_by_default` 未 monkeypatch `notion_read_from_sqlite=False`，依赖 `.env` 真值。用户切 `NOTION_READ_FROM_SQLITE=true` 后该用例必失败。修法：在 setUp / fixture 显式设回 False。 |
-| **I-02** | P1 | `src/mail/sync_store.py:81,1302` + `docs/architecture_v4_sqlite_ssot.md` + `CLAUDE.md` | `fetched` 状态在 schema/类型注释/架构文档/CLAUDE 状态机图都有声明，但 codebase 无任何 `mark_fetched()` 写入路径。死代码。修法：要么实现该过渡状态（在 `update_after_fetch` 里同时设 sync_status=fetched），要么从所有文档/类型注释里删 `fetched`。 |
-| **I-03** | P1 | `src/notion/sync.py:42-54` + `src/mail/new_watcher.py:119` | `NotionSync()` 无参构造，wrapper 触发时 `_ensure_sqlite_resources()` lazy 创建 `EmailRepository / SyncStore / AttachmentStore` 全新实例，与 `NewWatcher` 已持有的实例不共享。单进程内 3 套 repo + 2 套 sync_store + 3 套 attachment_store 并存。 |
+| **I-01** | P1 | `tests/notion/test_create_from_sqlite.py:574-608` | `test_disabled_by_default` 未 monkeypatch `notion_read_from_sqlite=False`，依赖 `.env` 真值。用户切 `NOTION_READ_FROM_SQLITE=true` 后该用例必失败。修法：在 setUp / fixture 显式设回 False。 ✅ **Fixed in PR-1** (Commit 8 monkeypatch) |
+| **I-02** | P1 | `src/mail/sync_store.py:81,1302` + `docs/architecture_v4_sqlite_ssot.md` + `CLAUDE.md` | `fetched` 状态在 schema/类型注释/架构文档/CLAUDE 状态机图都有声明，但 codebase 无任何 `mark_fetched()` 写入路径。死代码。修法：要么实现该过渡状态（在 `update_after_fetch` 里同时设 sync_status=fetched），要么从所有文档/类型注释里删 `fetched`。 ✅ **Fixed in PR-1** (Commit 6 删 search_emails 死状态 + 状态机回归测试) |
+| **I-03** | P1 | `src/notion/sync.py:42-54` + `src/mail/new_watcher.py:119` | `NotionSync()` 无参构造，wrapper 触发时 `_ensure_sqlite_resources()` lazy 创建 `EmailRepository / SyncStore / AttachmentStore` 全新实例，与 `NewWatcher` 已持有的实例不共享。单进程内 3 套 repo + 2 套 sync_store + 3 套 attachment_store 并存。 ✅ **Fixed in PR-1** (Commit 3 strict DI + 12 调用点改造) |
 | **I-04** | P2 | `src/repository/email_repository.py:434, 462` | `commit_email_with_body` 返回值 dict 的 key 是 `att.filename`（原始），SQLite 内存 `used_filename`（sanitize 后），调用方拿返回值要小心；当前未踩坑只是因没人立即消费。 |
-| **I-05** | P2 | `src/repository/attachment_store.py:117-123` | `AttachmentStore.read` 用 `Path.cwd()` 解析相对路径。CLI 从非项目根执行会失败。修法：让 AttachmentStore 在构造时记录 `base_dir.resolve()` 或拼绝对路径。 |
-| **I-06** | P2 | `src/notion/sync.py:1305-1372` | `_handle_thread_relations` 走 Notion API 查兄弟邮件，没用 SQLite `thread_id` 索引。Phase 4 灰度后这一路径仍依赖 Notion 数据。 |
+| **I-05** | P2 | `src/repository/attachment_store.py:117-123` | `AttachmentStore.read` 用 `Path.cwd()` 解析相对路径。CLI 从非项目根执行会失败。修法：让 AttachmentStore 在构造时记录 `base_dir.resolve()` 或拼绝对路径。 ✅ **Fixed in PR-1** (Commit 5 base_dir.resolve() + base_dir 反推 project_root) |
+| **I-06** | P2 | `src/notion/sync.py:1305-1372` | `_handle_thread_relations` 走 Notion API 查兄弟邮件，没用 SQLite `thread_id` 索引。Phase 4 灰度后这一路径仍依赖 Notion 数据。 ✅ **Fixed in PR-1** (Commit 4 SQLite SSoT 优先 + Notion fallback) |
 | **I-07** | P2 | `src/notion/sync.py:1745`（文件长度） | `NotionSync` 类承担 5+ 职责（页面 CRUD / thread / reverse sync 查询 / v4 桥接 / 批量查询）。1745 行单文件难导航与测试。 |
 | **I-08** | P2 | `src/events/handlers.py:641` | `_try_fetch_from_sqlite` 把"body markdown 是空字符串"判定为 miss → 走 AppleScript fallback。纯附件邮件每次查询都触发 ~1s AppleScript。 |
 | **I-09** | P2 | `src/repository/email_repository.py:525-534` | `delete_email_full` 先 DB 删（CASCADE）再删文件，非原子。文件删失败留孤儿目录。T-06 cleanup 兜底。 |
@@ -276,7 +276,7 @@ pending / fetch_failed / fetched / synced / failed / skipped / dead_letter
 
 每条建议都是 **可选**，等阶段 D CLI 设计 RFC 时回看哪些是 CLI 必须前置的、哪些可以晚做。
 
-### R-01：NotionSync 改 strict DI（阻塞 CLI 设计前置项之一）
+### R-01：NotionSync 改 strict DI（阻塞 CLI 设计前置项之一）✅ Fixed in PR-1
 
 **问题**：见 I-03 + I-10。3 套 repo 实例并存，配置默认值匹配纯属巧合。
 
@@ -296,7 +296,7 @@ pending / fetch_failed / fetched / synced / failed / skipped / dead_letter
 
 **风险**：低。仅是构造函数变化，不动业务逻辑。
 
-### R-02：`_handle_thread_relations` 切 SQLite SSoT
+### R-02：`_handle_thread_relations` 切 SQLite SSoT ✅ Fixed in PR-1
 
 **问题**：见 I-06。Phase 4 灰度后 thread relations 仍走 Notion API，错过 SSoT 收益。
 
@@ -316,7 +316,7 @@ pending / fetch_failed / fetched / synced / failed / skipped / dead_letter
 
 **风险**：中。thread relations 是用户能直观感知的功能，回归需要灰度。
 
-### R-03：`fetched` 状态决断（删 or 实现）
+### R-03：`fetched` 状态决断（删 or 实现）✅ Fixed in PR-1 (选项 A 删)
 
 **问题**：见 I-02。死代码 + 文档不一致。
 
@@ -328,7 +328,7 @@ pending / fetch_failed / fetched / synced / failed / skipped / dead_letter
 
 **风险**：低。仅文档/类型注释调整。
 
-### R-04：CLI cwd 依赖解除
+### R-04：CLI cwd 依赖解除 ✅ Fixed in PR-1
 
 **问题**：见 I-05。`AttachmentStore.read` 依赖 `Path.cwd()`。
 
@@ -377,7 +377,7 @@ pending / fetch_failed / fetched / synced / failed / skipped / dead_letter
 
 **风险**：低。
 
-### R-07：移除"`fetched` 中间态"决定后，CLAUDE.md 同步收紧状态机文档
+### R-07：移除"`fetched` 中间态"决定后，CLAUDE.md 同步收紧状态机文档 ✅ Fixed in PR-1
 
 依 R-03 决定。
 

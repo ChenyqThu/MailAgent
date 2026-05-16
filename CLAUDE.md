@@ -345,11 +345,10 @@ async def _process_retry_queue():
 
 **状态流转：**
 ```
-pending → fetch_failed → (重试) → fetched → failed → (重试) → synced
-                ↓                              ↓
-         (超过重试次数)                  (超过重试次数)
-                ↓                              ↓
-           dead_letter                    dead_letter
+pending → fetch_failed → (重试) → synced
+       └───────────────────────→ failed → (重试) → synced
+       └───────────────────────→ dead_letter (超过重试次数)
+       └───────────────────────→ skipped (发件箱降级 / 日期过滤)
 ```
 
 **死信降级例外（避免无意义告警）：**
@@ -430,7 +429,7 @@ CREATE TABLE email_metadata (
     mailbox TEXT,
     is_read INTEGER DEFAULT 0,
     is_flagged INTEGER DEFAULT 0,
-    sync_status TEXT DEFAULT 'pending',   -- pending/fetch_failed/fetched/synced/failed/skipped/dead_letter
+    sync_status TEXT DEFAULT 'pending',   -- pending/fetch_failed/synced/failed/skipped/dead_letter
     notion_page_id TEXT,
     notion_thread_id TEXT,
     sync_error TEXT,
