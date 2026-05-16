@@ -86,6 +86,46 @@ class EmailBodyRecord:
 
 
 @dataclass
+class EmailMetadataRecord:
+    """email_metadata 行 dataclass 投影 (替代 Dict 出口, 用于 CLI / EmailFull)."""
+    internal_id: int
+    message_id: Optional[str]
+    thread_id: Optional[str]
+    subject: str
+    sender: str
+    sender_name: Optional[str]
+    to_addr: str
+    cc_addr: str
+    date_received: Optional[str]
+    mailbox: str
+    is_read: bool
+    is_flagged: bool
+    sync_status: str
+    notion_page_id: Optional[str]
+    notion_thread_id: Optional[str]
+    sync_error: Optional[str]
+    retry_count: int
+    next_retry_at: Optional[float]
+    created_at: float
+    updated_at: float
+
+    @property
+    def notion_url(self) -> Optional[str]:
+        if not self.notion_page_id:
+            return None
+        return f"https://www.notion.so/{self.notion_page_id.replace('-', '')}"
+
+
+@dataclass
+class EmailFull:
+    """EmailRepository.get_email_full 返回 — metadata + body + attachments 单点聚合."""
+    internal_id: int
+    metadata: EmailMetadataRecord
+    body: Optional[EmailBodyRecord]
+    attachments: list[AttachmentRecord]
+
+
+@dataclass
 class EmailSearchHit:
     """search_email_bodies 单条命中（FTS5 + metadata join）."""
     internal_id: int
@@ -231,6 +271,58 @@ class EmailRepository:
                 return None
         finally:
             conn.close()
+
+    def get_metadata(self, internal_id: int) -> Optional[EmailMetadataRecord]:
+        """SELECT email_metadata 单行构造 dataclass."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """SELECT internal_id, message_id, thread_id, subject, sender,
+                          sender_name, to_addr, cc_addr, date_received, mailbox,
+                          is_read, is_flagged, sync_status,
+                          notion_page_id, notion_thread_id, sync_error,
+                          retry_count, next_retry_at, created_at, updated_at
+                   FROM email_metadata WHERE internal_id = ?""",
+                (internal_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return EmailMetadataRecord(
+                internal_id=row["internal_id"],
+                message_id=row["message_id"],
+                thread_id=row["thread_id"],
+                subject=row["subject"] or "",
+                sender=row["sender"] or "",
+                sender_name=row["sender_name"],
+                to_addr=row["to_addr"] or "",
+                cc_addr=row["cc_addr"] or "",
+                date_received=row["date_received"],
+                mailbox=row["mailbox"] or "",
+                is_read=bool(row["is_read"]),
+                is_flagged=bool(row["is_flagged"]),
+                sync_status=row["sync_status"] or "pending",
+                notion_page_id=row["notion_page_id"],
+                notion_thread_id=row["notion_thread_id"],
+                sync_error=row["sync_error"],
+                retry_count=row["retry_count"] or 0,
+                next_retry_at=row["next_retry_at"],
+                created_at=row["created_at"] or 0.0,
+                updated_at=row["updated_at"] or 0.0,
+            )
+        finally:
+            conn.close()
+
+    def get_email_full(self, internal_id: int) -> Optional[EmailFull]:
+        """一次聚合 metadata + body + attachments — CLI / Notion sync from-sqlite 主入口."""
+        meta = self.get_metadata(internal_id)
+        if meta is None:
+            return None
+        return EmailFull(
+            internal_id=internal_id,
+            metadata=meta,
+            body=self.get_body(internal_id),
+            attachments=self.get_attachments(internal_id),
+        )
 
     # ============================================================
     # SEARCH (Phase 3: FTS5)

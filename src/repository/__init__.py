@@ -12,6 +12,8 @@ from src.repository.email_repository import (
     AttachmentRecord,
     BodyPayload,
     EmailBodyRecord,
+    EmailFull,
+    EmailMetadataRecord,
     EmailRepository,
     EmailSearchHit,
 )
@@ -23,6 +25,8 @@ __all__ = [
     "AttachmentStore",
     "BodyPayload",
     "EmailBodyRecord",
+    "EmailFull",
+    "EmailMetadataRecord",
     "EmailRepository",
     "EmailSearchHit",
     "build_storage_payloads",

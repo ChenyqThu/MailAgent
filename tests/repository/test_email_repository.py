@@ -25,6 +25,8 @@ from src.repository import (
     AttachmentPayload,
     AttachmentStore,
     BodyPayload,
+    EmailFull,
+    EmailMetadataRecord,
     EmailRepository,
     EmailSearchHit,
     build_storage_payloads,
@@ -640,3 +642,117 @@ class TestSearchEmailBodies:
 
         repo.delete_email_full(600)
         assert not any(h.internal_id == 600 for h in repo.search_email_bodies("uniqueterm6", limit=10))
+
+
+class TestGetMetadata:
+    def test_returns_none_when_missing(self, repo: EmailRepository):
+        assert repo.get_metadata(99999) is None
+
+    def test_returns_dataclass_with_all_fields(self, repo: EmailRepository, fresh_db: Path):
+        now = time.time()
+        notion_page_id = "abc123-def456-ghi789-jkl012-mno345-pqr678"
+        conn = sqlite3.connect(str(fresh_db))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            """INSERT INTO email_metadata
+               (internal_id, message_id, thread_id, subject, sender,
+                sender_name, to_addr, cc_addr, date_received, mailbox,
+                is_read, is_flagged, sync_status, notion_page_id,
+                notion_thread_id, sync_error, retry_count, next_retry_at,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                500,
+                "<m500@x>",
+                "<t500@x>",
+                "Subject 500",
+                "sender@example.com",
+                "Sender Name",
+                "to@example.com",
+                "cc@example.com",
+                "2026-05-01T12:00:00+08:00",
+                "收件箱",
+                1,
+                0,
+                "synced",
+                notion_page_id,
+                "thread-page-id",
+                "sync error text",
+                2,
+                now + 60,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        m = repo.get_metadata(500)
+
+        assert isinstance(m, EmailMetadataRecord)
+        assert m.internal_id == 500
+        assert m.message_id == "<m500@x>"
+        assert m.thread_id == "<t500@x>"
+        assert m.subject == "Subject 500"
+        assert m.sender == "sender@example.com"
+        assert m.sender_name == "Sender Name"
+        assert m.to_addr == "to@example.com"
+        assert m.cc_addr == "cc@example.com"
+        assert m.date_received == "2026-05-01T12:00:00+08:00"
+        assert m.mailbox == "收件箱"
+        assert m.is_read is True
+        assert m.is_flagged is False
+        assert m.sync_status == "synced"
+        assert m.notion_page_id == notion_page_id
+        assert m.notion_thread_id == "thread-page-id"
+        assert m.sync_error == "sync error text"
+        assert m.retry_count == 2
+        assert m.next_retry_at == now + 60
+        assert m.created_at == now
+        assert m.updated_at == now
+        assert m.notion_url == "https://www.notion.so/abc123def456ghi789jkl012mno345pqr678"
+
+    def test_notion_url_none_when_page_id_missing(self, repo: EmailRepository, fresh_db: Path):
+        _insert_metadata(fresh_db, 501)
+
+        m = repo.get_metadata(501)
+
+        assert m is not None
+        assert m.notion_page_id is None
+        assert m.notion_url is None
+
+
+class TestGetEmailFull:
+    def test_returns_none_when_metadata_missing(self, repo: EmailRepository):
+        assert repo.get_email_full(99999) is None
+
+    def test_returns_full_when_only_metadata(self, repo: EmailRepository, fresh_db: Path):
+        _insert_metadata(fresh_db, 600)
+
+        full = repo.get_email_full(600)
+
+        assert isinstance(full, EmailFull)
+        assert full.internal_id == 600
+        assert full.metadata.internal_id == 600
+        assert full.body is None
+        assert full.attachments == []
+
+    def test_returns_full_with_body_and_attachments(self, repo: EmailRepository, fresh_db: Path):
+        _insert_metadata(fresh_db, 601)
+        repo.commit_email_with_body(
+            601,
+            body=BodyPayload(html="<p>x</p>", markdown="x body", body_format="html"),
+            attachments=[
+                AttachmentPayload("f1.pdf", b"AAA", "application/pdf"),
+                AttachmentPayload("f2.txt", b"BBB", "text/plain"),
+            ],
+            message_id="<m601@x>",
+        )
+
+        full = repo.get_email_full(601)
+
+        assert isinstance(full, EmailFull)
+        assert full.body is not None
+        assert full.body.markdown == "x body"
+        assert len(full.attachments) == 2
+        assert sorted(a.filename for a in full.attachments) == ["f1.pdf", "f2.txt"]
