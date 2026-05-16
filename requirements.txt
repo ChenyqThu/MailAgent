@@ -34,3 +34,7 @@ python-calamine>=0.2.0  # Rust 引擎，xlsx 读取加速 4-18x
 
 # LLM Agent (本地 LLM 接管 Notion Email Agent 的 AI 字段填充，默认关闭)
 anthropic>=0.40.0
+
+
+# v4 SQLite SSoT: HTML→Markdown 主路径（用于 email_body.body_markdown）
+markdownify>=0.13.1

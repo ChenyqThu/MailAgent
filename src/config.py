@@ -28,6 +28,16 @@ class Config(BaseSettings):
     # 附件配置
     max_attachment_size: int = Field(default=20971520, env="MAX_ATTACHMENT_SIZE")  # 20MB (Notion limit)
 
+    # v4: SQLite SSoT 配置（邮件正文 + 附件元数据进 SQLite，详见 docs/architecture_v4_sqlite_ssot.md）
+    body_dual_write_enabled: bool = Field(
+        default=True, env="BODY_DUAL_WRITE_ENABLED",
+        description="是否在 Notion sync 前把邮件正文 + 附件双写到 SQLite（v4 架构）。失败仅 warning，不阻断主流程"
+    )
+    attachment_storage_dir: str = Field(
+        default="data/attachments", env="ATTACHMENT_STORAGE_DIR",
+        description="附件本地落盘目录（按 internal_id 分子目录），与 sync_store.db 同 data/ 便于统一备份"
+    )
+
     # 日历同步配置
     calendar_database_id: str = Field(default="", env="CALENDAR_DATABASE_ID")
     calendar_name: str = Field(default="日历", env="CALENDAR_NAME")
