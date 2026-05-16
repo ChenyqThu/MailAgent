@@ -79,12 +79,76 @@ def _handle_signal(signum, frame):
         sys.exit(130)
 
 
+def _ensure_dead_table(db_path: str) -> None:
+    """专属于 backfill 的 dead-letter 表，不污染 email_metadata.sync_status。
+
+    记录 AppleScript 取不到的 internal_id（邮件已从 Mail.app 删除等），
+    下次 backfill 自动 LEFT JOIN 排除，避免反复尝试 + 触发熔断。
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS backfill_dead_ids (
+                internal_id INTEGER PRIMARY KEY,
+                error TEXT,
+                marked_at REAL DEFAULT (strftime('%s', 'now'))
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _mark_dead(db_path: str, internal_id: int, error: str) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO backfill_dead_ids (internal_id, error, marked_at) "
+            "VALUES (?, ?, strftime('%s', 'now'))",
+            (internal_id, (error or "")[:500]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _reset_dead(db_path: str) -> int:
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute("DELETE FROM backfill_dead_ids")
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def _dead_count(db_path: str) -> int:
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM backfill_dead_ids").fetchone()[0]
+    finally:
+        conn.close()
+
+
+# fetch 拿不到邮件（已删除 / Mail.app 不可见）→ 标记 dead，不计 failure_streak
+_DEAD_ERROR_MARKERS = (
+    "fetch_email_content_by_id returned None",
+)
+
+
+def _is_dead_error(err: str) -> bool:
+    return any(m in (err or "") for m in _DEAD_ERROR_MARKERS)
+
+
 def _pick_candidates(args, db_path: str) -> List[Dict[str, Any]]:
     """选要 backfill 的邮件.
 
-    默认: sync_status='synced' AND notion_page_id IS NOT NULL AND 没有 email_body 行。
-    --force: 包括已有 email_body 行的（会 INSERT OR REPLACE）。
+    默认: sync_status='synced' AND notion_page_id IS NOT NULL AND 没有 email_body 行
+         AND 不在 backfill_dead_ids 表里。
+    --force: 包括已有 email_body 行的（会 INSERT OR REPLACE），但仍排除 dead。
+    --retry-dead: 在调用前清空 dead 表。
     """
+    _ensure_dead_table(db_path)
     conn = sqlite3.connect(db_path)
     try:
         sql = """
@@ -92,8 +156,10 @@ def _pick_candidates(args, db_path: str) -> List[Dict[str, Any]]:
                    m.subject, m.date_received
               FROM email_metadata m
               LEFT JOIN email_body b ON m.internal_id = b.internal_id
+              LEFT JOIN backfill_dead_ids d ON m.internal_id = d.internal_id
              WHERE m.sync_status = 'synced'
                AND m.notion_page_id IS NOT NULL
+               AND d.internal_id IS NULL
         """
         params: List[Any] = []
         if not args.force:
@@ -272,10 +338,35 @@ async def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="不写 SQLite，只走流程并打印 stats")
     ap.add_argument("--max-failures", type=int, default=20,
-                    help="连续失败超过此数自动停（默认 20）")
+                    help="连续真错误超过此数自动停（默认 20）。dead 邮件不计入。")
     ap.add_argument("--progress-every", type=int, default=10,
                     help="每 N 封打印 progress（默认 10）")
+    ap.add_argument("--retry-dead", action="store_true",
+                    help="清空 backfill_dead_ids 表后再开始（让之前标 dead 的邮件重新尝试）")
+    ap.add_argument("--show-dead", action="store_true",
+                    help="只打印 backfill_dead_ids 表里前 20 条记录然后退出")
     args = ap.parse_args()
+
+    _ensure_dead_table(cfg.sync_store_db_path)
+
+    if args.show_dead:
+        conn = sqlite3.connect(cfg.sync_store_db_path)
+        try:
+            rows = conn.execute(
+                "SELECT internal_id, error, marked_at FROM backfill_dead_ids "
+                "ORDER BY marked_at DESC LIMIT 20"
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM backfill_dead_ids").fetchone()[0]
+        finally:
+            conn.close()
+        print(f"backfill_dead_ids: total={total}, showing latest 20:")
+        for r in rows:
+            print(f"  {r[0]}: {(r[1] or '')[:80]}")
+        return
+
+    if args.retry_dead:
+        n = _reset_dead(cfg.sync_store_db_path)
+        print(f"[retry-dead] cleared {n} rows from backfill_dead_ids")
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -297,10 +388,12 @@ async def main():
         return
 
     initial_body_count = _body_row_count(cfg.sync_store_db_path)
+    initial_dead_count = _dead_count(cfg.sync_store_db_path)
     print(f"=" * 70)
     print(f"  v4 Email Body Backfill")
     print(f"  candidates:   {len(candidates)}")
     print(f"  existing:     {initial_body_count} body rows")
+    print(f"  dead-skipped: {initial_dead_count} (use --retry-dead to retry, --show-dead to inspect)")
     print(f"  dry_run:      {args.dry_run}")
     print(f"  force:        {args.force}")
     print(f"  max_failures: {args.max_failures}")
@@ -321,7 +414,7 @@ async def main():
     )  # 只用 _convert_office_attachments，不调远端
 
     t0 = time.monotonic()
-    stats = {"ok": 0, "failed": 0}
+    stats = {"ok": 0, "failed": 0, "dead": 0}
     failure_streak = 0
     errors: List[Dict[str, Any]] = []
 
@@ -344,11 +437,20 @@ async def main():
             stats["ok"] += 1
             failure_streak = 0
         else:
-            stats["failed"] += 1
-            failure_streak += 1
-            errors.append(r)
-            print(f"  ✗ [{i}/{len(candidates)}] {r['internal_id']} "
-                  f"({rec['date'][:10]}): {r.get('error', 'unknown')}")
+            error_msg = r.get("error", "unknown")
+            if _is_dead_error(error_msg) and not args.dry_run:
+                # AppleScript 找不到邮件（已从 Mail.app 删除）→ 入 dead 表，下次自动跳过
+                _mark_dead(cfg.sync_store_db_path, r["internal_id"], error_msg)
+                stats["dead"] += 1
+                failure_streak = 0  # 关键：dead 不计连续失败，避免熔断
+                print(f"  ⊘ [{i}/{len(candidates)}] {r['internal_id']} "
+                      f"({rec['date'][:10]}): marked dead (won't retry; use --retry-dead to reset)")
+            else:
+                stats["failed"] += 1
+                failure_streak += 1
+                errors.append(r)
+                print(f"  ✗ [{i}/{len(candidates)}] {r['internal_id']} "
+                      f"({rec['date'][:10]}): {error_msg}")
 
         # 进度
         if i % args.progress_every == 0 or i == len(candidates) or i == 1:
@@ -357,7 +459,7 @@ async def main():
             eta = (len(candidates) - i) / rate if rate > 0 else 0
             print(
                 f"  [{i}/{len(candidates)}] "
-                f"ok={stats['ok']} failed={stats['failed']} "
+                f"ok={stats['ok']} failed={stats['failed']} dead={stats['dead']} "
                 f"rate={rate:.2f}/s "
                 f"ETA={eta / 60:.1f}min"
             )
@@ -369,14 +471,17 @@ async def main():
 
     elapsed = time.monotonic() - t0
     final_body_count = _body_row_count(cfg.sync_store_db_path)
+    final_dead_count = _dead_count(cfg.sync_store_db_path)
 
     print(f"\n{'=' * 70}")
     print(f"  Done")
     print(f"=" * 70)
     print(f"  ok:           {stats['ok']}")
     print(f"  failed:       {stats['failed']}")
+    print(f"  dead:         {stats['dead']} (newly marked, total now {final_dead_count})")
     print(f"  elapsed:      {elapsed:.0f}s ({elapsed / 60:.1f}min)")
-    rate = (stats['ok'] + stats['failed']) / max(elapsed, 0.001)
+    processed = stats['ok'] + stats['failed'] + stats['dead']
+    rate = processed / max(elapsed, 0.001)
     print(f"  rate:         {rate:.2f} emails/s")
     print(f"  body rows:    {initial_body_count} → {final_body_count}  "
           f"(+{final_body_count - initial_body_count})")
