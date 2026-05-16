@@ -576,7 +576,14 @@ class TestV2WrapperRouting:
         self, repo: EmailRepository, sync_store: SyncStore, fresh_db: Path,
         monkeypatch,
     ):
-        """默认 false → 不会走 SQLite 路径，即使 SQLite 有 body。"""
+        """notion_read_from_sqlite=False → 不会走 SQLite 路径，即使 SQLite 有 body。
+
+        I-01 fix: 不依赖 .env 真值 — 用户切 NOTION_READ_FROM_SQLITE=true 后该测试
+        必失败。这里显式 monkeypatch 设回 False。
+        """
+        from src.config import config as app_config
+        monkeypatch.setattr(app_config, "notion_read_from_sqlite", False)
+
         _insert_metadata(fresh_db, 300, message_id="<m300@x>")
         body = BodyPayload(html="<p>x</p>", markdown="x", body_format="html")
         repo.commit_email_with_body(300, body, [], message_id="<m300@x>")
