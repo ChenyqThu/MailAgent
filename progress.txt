@@ -1,0 +1,98 @@
+# PR-3 Ralph Progress Log
+
+Session: f47b49cf-d81a-4428-8bbf-3864af381db8
+Started: 2026-05-16 (initial PR-2 then PR-3)
+
+## PR-2 Baseline (already shipped before this Ralph turn)
+- 13 commits, ship at bf70a35
+- pytest: 370 passed (PR-1 323 + PR-2 47)
+- CLI groups: email + admin
+- docs/cli-schema/: 9 schemas + _common + error-codes
+
+## PR-3 Implementation (this Ralph session)
+
+Strategy: keep handoff §2.3's 9-story PRD but group related stories into single commits
+(US-001+US-002 attachment-group, US-003+US-004 llm-group, US-005+US-006 notion-group,
+US-007 calendar alone, US-008 debug alone, US-009 follow-ups). 6 commits total.
+
+Commit timeline (bf70a35 .. HEAD, excluding unrelated 7b99bfd that landed mid-session):
+- c1f11b0  attachment list/download/derive + cleanup-orphans       (US-001/002)
+- aee4544  llm run/selftest/retry-failed/stats/compare-paths      (US-003/004)
+- 855f9e8  notion resync(alias)/update-flag/archive/page-orphans/file-link-audit  (US-005/006)
+- fbf5cdc  calendar expand + recurring discover/replay            (US-007)
+- 6d739ed  debug email-source/mail-structure/inline-images/applescript-fetch/notion-page  (US-008)
+- 98b7d28  综合回归 + PR-2 critic round 4 follow-ups                 (US-009)
+
+pytest tests/ -q → 487 passed (370 baseline + 117 new PR-3 cases). 0 failed.
+
+## Key implementation decisions / learnings (for PR-4 / future sessions)
+
+### 1. typer nested sub-typer for `calendar recurring discover/replay`
+typer.add_typer can be nested — create a recurring_app = typer.Typer(name="recurring")
+and `app.add_typer(recurring_app, name="recurring")` to get `mailagent calendar recurring <cmd>`.
+This is documented but easy to miss.
+
+### 2. CliContext shared between commands via typer.Context.obj
+`notion resync` delegates to `email.email_resync(ctx, internal_id=..., ...)` — same typer.Context,
+so CliContext.output / api_key / etc. all flow through. This avoids re-implementing the
+resync logic in two places.
+
+### 3. mock strategy for write commands
+- LLMRunner: monkeypatch `__init__` to skip real client construction, then replace
+  `run_for_internal_id` + `close` with async stubs. Pattern: `_patch_llm_runner` helper.
+- NotionClient: replace the entire class with a StubClient that has `.client.pages` namespace.
+  `_patch_notion_client(monkeypatch, pages_update=stub)`.
+- AppleScriptArm: monkeypatch `__init__` lambda + `fetch_email_content_by_id` static func.
+- NotionSync.create_email_page_from_sqlite: async fake returning CreateEmailFromSqliteResult.
+
+### 4. AttachmentStore.read() path resolution
+Default deployment uses base_dir=`MailAgent/data/attachments`, so `read("data/attachments/.../x.pdf")`
+works via `base_dir.parent.parent / local_path`. **In tests** with `ATTACHMENT_STORAGE_DIR=tmp_path/attachments`,
+the only safe choice is **absolute local_path** — relative resolution would land at `tmp_path.parent/...`
+which is wrong. seeded_db_with_real_attachment fixture writes absolute path to email_attachment.local_path.
+
+### 5. Auth caveat — env var doubles as both expected and provided
+`src/cli/auth.py`: `provided = ctx.api_key or env.get("MAILAGENT_CLI_API_KEY", "")`. So setting
+`MAILAGENT_CLI_API_KEY=expected-token` env actually satisfies BOTH expected and provided. To test
+"auth-rejected with mismatched token" pass `--api-key wrong-token` as a flag override.
+
+### 6. error wrapper schema consistency
+All PR-3 commands' error JSON validates against `_common.schema.json` top-level oneOf
+(wrapper_error branch). 11-case parametrize in test_pr2_followups.py:TestErrorWrapperConsistency
+covers attach/llm/notion/calendar/email + 9 error codes.
+
+### 7. NotionClient.__init__ side effects
+`NotionClient.__init__()` constructs `AsyncClient(auth=config.notion_token)` — for tests
+with empty NOTION_TOKEN this might error in real-network mode but not unit tests since
+AsyncClient.__init__ is lazy about network. Still, prefer stubbing the whole class
+(StubClient with `pages` namespace) rather than the inner client.
+
+### 8. New error codes added (PR-3)
+- E_LLM_FAILED (exit 1): runner ok=False, not a not-found case (gateway 5xx / parse fail)
+- E_NOT_IMPLEMENTED (exit 2): command exists but PR-3 only ships stub
+  (llm compare-paths non-dry-run; calendar expand non-dry-run; attachment derive non-dry-run)
+
+### 9. Schema validation registry pattern (carried from PR-2)
+referencing.Registry().with_resource(uri="_common.schema.json", resource=...) → jsonschema.validate
+can resolve `$ref: _common.schema.json#/$defs/error`. PR-3 follow-up tightens dev extras to
+jsonschema>=4.18 + referencing>=0.30 so install-from-clean has correct deps.
+
+### 10. PR-3 stubs needing real implementation in PR-4
+- `attachment derive` non-dry-run → `backfill derivatives` (PR-4)
+- `llm compare-paths` non-dry-run → real two-path LLM comparison (currently scripts/compare_llm_path.py)
+- `notion page-orphans` non-dry-run repair → PR-4 admin repair-*
+- `notion file-link-audit` non-dry-run repair → PR-4
+- `calendar expand` non-dry-run → wrapping main.py:_run_expansion_tick as standalone
+
+## Final state at ship
+
+- branch: main, clean working tree (after the PR-3 commits + unrelated 7b99bfd that touched scripts/backfill_email_body.py from parallel work)
+- pytest: 487 passed, 0 failed, 79 warnings (Pydantic v2 deprecation, unrelated)
+- CLI groups: 7 (email, admin, attachment, llm, notion, calendar, debug)
+- docs/cli-schema/: 30 schemas + _common + error-codes.md (9 E_* enums)
+- pip install -e ".[cli,dev]" → success, jsonschema 4.26 in venv
+- mailagent --help: shows all 7 groups
+- Ralph Step 7: codex critic launched (background task ble2qwwga)
+- Ralph Step 7.5: ai-slop-cleaner pending after critic approves
+- Ralph Step 7.6: post-deslop regression pending
+- Ralph Step 8: /oh-my-claudecode:cancel pending
