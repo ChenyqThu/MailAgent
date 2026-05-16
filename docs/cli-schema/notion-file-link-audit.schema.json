@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/notion-file-link-audit.schema.json",
+  "title": "mailagent notion file-link-audit",
+  "description": "RFC v2 §4.6 — 审计 email_attachment.notion_file_id (PR-3 只 audit, missing_upload vs ok).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "audits", "total", "by_status",
+            "limit", "internal_id_filter", "dry_run"
+          ],
+          "properties": {
+            "audits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["attachment_id", "internal_id", "filename", "status"],
+                "properties": {
+                  "attachment_id": {"type": "integer", "minimum": 0},
+                  "internal_id": {"type": "integer", "minimum": 0},
+                  "filename": {"type": ["string", "null"]},
+                  "status": {
+                    "type": "string",
+                    "enum": ["missing_upload", "ok", "expired_link"]
+                  },
+                  "notion_file_id": {"type": ["string", "null"]},
+                  "notion_block_id": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "total": {"type": "integer", "minimum": 0},
+            "by_status": {
+              "type": "object",
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            },
+            "limit": {"type": "integer", "minimum": 1},
+            "internal_id_filter": {"type": ["integer", "null"]},
+            "dry_run": {"type": "boolean"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

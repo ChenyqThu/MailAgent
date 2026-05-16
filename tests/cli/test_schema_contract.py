@@ -312,5 +312,73 @@ class TestSchemaContract:
         schema, registry = schema_loader("llm-compare-paths.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
+    # ============================================================
+    # PR-3 US-005 / US-006: notion
+    # ============================================================
+
+    def test_notion_update_flag_dry_run_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(
+            cli_runner, "notion", "update-flag", "12345",
+            "--is-read", "true", "--dry-run", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("notion-update-flag.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_notion_archive_dry_run_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(
+            cli_runner, "notion", "archive", "some-page-id",
+            "--dry-run", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("notion-archive.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_notion_page_orphans_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+        from src.notion import client as client_mod
+
+        class StubClient:
+            def __init__(self):
+                self.client = type("P", (), {"pages": type("X", (), {})()})()
+
+            async def query_database(self, **kwargs):
+                return []
+
+            async def close(self):
+                return None
+
+        monkeypatch.setattr(client_mod, "NotionClient", StubClient)
+        result = _invoke(cli_runner, "notion", "page-orphans",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("notion-page-orphans.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_notion_file_link_audit_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "notion", "file-link-audit",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("notion-file-link-audit.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
 
 from tests.cli.conftest import extract_last_json_object as _last_json  # noqa: E402

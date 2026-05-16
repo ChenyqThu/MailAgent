@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/notion-update-flag.schema.json",
+  "title": "mailagent notion update-flag",
+  "description": "RFC v2 §4.6 — 手动更新 Notion 邮件页 Is Read / Is Flagged / Processing Status.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["internal_id", "page_id", "updated_properties", "dry_run"],
+          "properties": {
+            "internal_id": {"type": "integer", "minimum": 0},
+            "page_id": {"type": "string"},
+            "updated_properties": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "dry_run": {"type": "boolean"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

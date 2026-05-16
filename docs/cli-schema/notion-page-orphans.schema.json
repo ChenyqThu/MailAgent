@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/notion-page-orphans.schema.json",
+  "title": "mailagent notion page-orphans",
+  "description": "RFC v2 §4.6 — 扫 Notion 邮件库有 page 但本地无 metadata (PR-3 只 audit).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "orphans", "total_scanned", "total_orphans",
+            "limit", "dry_run"
+          ],
+          "properties": {
+            "orphans": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["page_id"],
+                "properties": {
+                  "page_id": {"type": "string"},
+                  "message_id": {"type": ["string", "null"]},
+                  "subject": {"type": ["string", "null"]},
+                  "notion_url": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "total_scanned": {"type": "integer", "minimum": 0},
+            "total_orphans": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1},
+            "dry_run": {"type": "boolean"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}
