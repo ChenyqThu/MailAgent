@@ -1815,7 +1815,8 @@ class SyncStore:
             {"total": int, "limit": int, "offset": int, "emails": [...]}
         """
         limit = min(limit, 50)
-        conditions = ["sync_status IN ('synced', 'pending', 'fetched')"]
+        # R-03: fetched 是死代码状态（无 mark_fetched 写入路径），已从允许列表删除
+        conditions = ["sync_status IN ('synced', 'pending')"]
         params: List[Any] = []
 
         # 全文模糊搜索
