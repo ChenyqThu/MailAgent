@@ -126,6 +126,15 @@ class EmailFull:
 
 
 @dataclass
+class ThreadMember:
+    """同 thread_id 的兄弟邮件投影 — _handle_thread_relations 切 SQLite SSoT 用 (R-02)."""
+    internal_id: int
+    page_id: Optional[str]                # email_metadata.notion_page_id
+    date_received: Optional[str]
+    is_synced: bool
+
+
+@dataclass
 class EmailSearchHit:
     """search_email_bodies 单条命中（FTS5 + metadata join）."""
     internal_id: int
@@ -323,6 +332,52 @@ class EmailRepository:
             body=self.get_body(internal_id),
             attachments=self.get_attachments(internal_id),
         )
+
+    def get_thread_members(
+        self,
+        thread_id: str,
+        *,
+        exclude_internal_id: Optional[int] = None,
+        synced_only: bool = True,
+    ) -> list[ThreadMember]:
+        """从 SQLite 查同 thread_id 的兄弟邮件 (R-02 — SSoT 替代 Notion API 查询).
+
+        与 sync_store.get_all_emails_by_thread_id 的区别:
+            - 返回 dataclass list 而非 dict list
+            - 用 internal_id 排除 (caller 语义一致, 不再依赖 message_id)
+            - default synced_only=True — _handle_thread_relations 只关心已上 Notion 的邮件
+              (要写 Notion relation 必须有 page_id)
+
+        排序: date_received DESC (最新在前, 与 sync_store.get_all_emails_by_thread_id 一致)。
+        空 thread_id → 返回 []。
+        """
+        if not thread_id:
+            return []
+        conn = self._connect()
+        try:
+            sql = (
+                "SELECT internal_id, notion_page_id, date_received, sync_status "
+                "FROM email_metadata WHERE thread_id = ?"
+            )
+            params: list = [thread_id]
+            if exclude_internal_id is not None:
+                sql += " AND internal_id != ?"
+                params.append(exclude_internal_id)
+            if synced_only:
+                sql += " AND sync_status = 'synced'"
+            sql += " ORDER BY date_received DESC"
+            rows = conn.execute(sql, params).fetchall()
+            return [
+                ThreadMember(
+                    internal_id=r["internal_id"],
+                    page_id=r["notion_page_id"],
+                    date_received=r["date_received"],
+                    is_synced=(r["sync_status"] == "synced"),
+                )
+                for r in rows
+            ]
+        finally:
+            conn.close()
 
     # ============================================================
     # SEARCH (Phase 3: FTS5)

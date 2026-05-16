@@ -16,6 +16,7 @@ from src.repository.email_repository import (
     EmailMetadataRecord,
     EmailRepository,
     EmailSearchHit,
+    ThreadMember,
 )
 from src.repository.storage_payload_builder import build_storage_payloads
 
@@ -29,5 +30,6 @@ __all__ = [
     "EmailMetadataRecord",
     "EmailRepository",
     "EmailSearchHit",
+    "ThreadMember",
     "build_storage_payloads",
 ]

@@ -29,6 +29,7 @@ from src.repository import (
     EmailMetadataRecord,
     EmailRepository,
     EmailSearchHit,
+    ThreadMember,
     build_storage_payloads,
 )
 
@@ -756,3 +757,80 @@ class TestGetEmailFull:
         assert full.body.markdown == "x body"
         assert len(full.attachments) == 2
         assert sorted(a.filename for a in full.attachments) == ["f1.pdf", "f2.txt"]
+
+
+class TestGetThreadMembers:
+    def _insert_thread_email(
+        self, db: Path, internal_id: int, *, thread_id: str,
+        sync_status: str = "synced", page_id: Optional[str] = None,
+        date_received: str = "2026-05-01T12:00:00+08:00",
+    ):
+        """辅助函数：直接 INSERT 一行带 thread_id / sync_status / notion_page_id / date 的 metadata."""
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA foreign_keys=ON")
+        now = time.time()
+        conn.execute(
+            """INSERT INTO email_metadata
+               (internal_id, thread_id, sync_status, notion_page_id,
+                date_received, mailbox, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, '收件箱', ?, ?)""",
+            (internal_id, thread_id, sync_status, page_id, date_received, now, now),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_empty_thread_id_returns_empty(self, repo: EmailRepository):
+        assert repo.get_thread_members("") == []
+        assert repo.get_thread_members(None) == []  # type: ignore[arg-type]
+
+    def test_no_matches_returns_empty(self, repo: EmailRepository):
+        assert repo.get_thread_members("<no-such-thread>") == []
+
+    def test_filters_by_thread_id_default_synced_only(
+        self, repo: EmailRepository, fresh_db: Path,
+    ):
+        # 同 thread: 1 synced + 1 pending；另一个 thread: 1 synced
+        self._insert_thread_email(fresh_db, 700, thread_id="<T1>", sync_status="synced", page_id="P-700")
+        self._insert_thread_email(fresh_db, 701, thread_id="<T1>", sync_status="pending", page_id=None)
+        self._insert_thread_email(fresh_db, 702, thread_id="<T2>", sync_status="synced", page_id="P-702")
+
+        members = repo.get_thread_members("<T1>")
+        assert len(members) == 1
+        assert isinstance(members[0], ThreadMember)
+        assert members[0].internal_id == 700
+        assert members[0].page_id == "P-700"
+        assert members[0].is_synced is True
+
+    def test_excludes_internal_id(self, repo: EmailRepository, fresh_db: Path):
+        self._insert_thread_email(fresh_db, 710, thread_id="<T-EXC>", page_id="P-710",
+                                  date_received="2026-05-01T10:00:00+08:00")
+        self._insert_thread_email(fresh_db, 711, thread_id="<T-EXC>", page_id="P-711",
+                                  date_received="2026-05-01T11:00:00+08:00")
+        members = repo.get_thread_members("<T-EXC>", exclude_internal_id=710)
+        assert len(members) == 1
+        assert members[0].internal_id == 711
+
+    def test_synced_only_false_includes_pending(
+        self, repo: EmailRepository, fresh_db: Path,
+    ):
+        self._insert_thread_email(fresh_db, 720, thread_id="<T-ALL>", sync_status="synced", page_id="P-720")
+        self._insert_thread_email(fresh_db, 721, thread_id="<T-ALL>", sync_status="pending", page_id=None)
+        self._insert_thread_email(fresh_db, 722, thread_id="<T-ALL>", sync_status="failed", page_id=None)
+
+        members = repo.get_thread_members("<T-ALL>", synced_only=False)
+        assert len(members) == 3
+        assert {m.internal_id for m in members} == {720, 721, 722}
+        # is_synced 应仅对 sync_status='synced' 行为 True
+        is_synced_map = {m.internal_id: m.is_synced for m in members}
+        assert is_synced_map == {720: True, 721: False, 722: False}
+
+    def test_orders_by_date_received_desc(self, repo: EmailRepository, fresh_db: Path):
+        # 故意乱序插入，验证返回按日期降序
+        self._insert_thread_email(fresh_db, 730, thread_id="<T-ORD>", page_id="P-A",
+                                  date_received="2026-05-01T08:00:00+08:00")
+        self._insert_thread_email(fresh_db, 731, thread_id="<T-ORD>", page_id="P-C",
+                                  date_received="2026-05-03T08:00:00+08:00")
+        self._insert_thread_email(fresh_db, 732, thread_id="<T-ORD>", page_id="P-B",
+                                  date_received="2026-05-02T08:00:00+08:00")
+        members = repo.get_thread_members("<T-ORD>")
+        assert [m.internal_id for m in members] == [731, 732, 730]
