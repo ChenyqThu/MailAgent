@@ -8,10 +8,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.project_progress.runner import SyncSummary
 from tests.cli.conftest import extract_last_json_object as _last_json
 
 
@@ -107,9 +108,16 @@ class TestPR4SchemaContract:
     ):
         from jsonschema import validate
 
-        run, _ = _fake_run(0)
+        mock_runner = MagicMock()
+        mock_runner.sync_from_email = AsyncMock(return_value=SyncSummary(
+            internal_id=1,
+            status="completed",
+            week_tag="2026-W19",
+            dry_run=True,
+        ))
         with patch(
-            "src.cli.commands.project_progress.subprocess.run", run,
+            "src.cli.commands.project_progress.ProjectProgressRunner",
+            return_value=mock_runner,
         ):
             result = _invoke(
                 cli_runner, "project-progress", "sync",

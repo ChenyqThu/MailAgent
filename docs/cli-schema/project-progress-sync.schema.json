@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/project-progress-sync.schema.json",
   "title": "mailagent project progress sync",
-  "description": "RFC v2 §4.7 / PR-4 US-006 — subprocess wrap scripts/sync_project_progress.py",
+  "description": "PR-5 US-002 — inline ProjectProgressRunner sync",
   "oneOf": [
     {
       "type": "object",
@@ -25,8 +25,8 @@
           "type": "object",
           "required": [
             "action",
-            "script_returncode",
-            "mode"
+            "mode",
+            "summaries"
           ],
           "additionalProperties": true,
           "properties": {
@@ -36,24 +36,21 @@
             "dry_run": {
               "type": "boolean"
             },
-            "command": {
-              "type": "string"
-            },
-            "script_returncode": {
-              "type": "integer"
-            },
             "duration_ms": {
               "type": "integer",
               "minimum": 0
             },
-            "stdout_tail": {
-              "type": "string"
-            },
-            "stderr_tail": {
-              "type": "string"
-            },
             "mode": {
-              "type": "string"
+              "const": "inline"
+            },
+            "summaries": {
+              "type": "array"
+            },
+            "backfills": {
+              "type": "array"
+            },
+            "any_failed": {
+              "type": "boolean"
             }
           }
         },
