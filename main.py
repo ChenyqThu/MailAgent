@@ -1,9 +1,8 @@
 import asyncio
-import json
 import os
 import signal
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from loguru import logger
 from src.config import config
@@ -334,111 +333,19 @@ class EmailNotionSyncApp:
 
     async def _run_expansion_tick(self, horizon_weeks: int):
         """单次 expansion tick：扫 recurring_series，对低水位的系列补展 horizon 内的 occurrences."""
-        from src.calendar_notion.recurrence import expand_occurrences
-        from src.mail.icalendar_parser import MeetingInvite
+        from src.calendar_notion.expansion import run_expansion_tick
 
-        sync_store = self.watcher.sync_store
-        meeting_sync = self.watcher.meeting_sync
-
-        now = datetime.now(timezone.utc)
-        cutoff = now + timedelta(weeks=horizon_weeks)
-        cutoff_iso = cutoff.isoformat()
-
-        rows = list(sync_store.iter_series_needing_expansion(cutoff_iso))
-        if not rows:
-            logger.debug("[expansion] no series need extension")
-            return
-        logger.info(f"[expansion] tick: {len(rows)} series need extension")
-
-        synced_total = 0
-        for row in rows:
-            try:
-                invite = self._reconstruct_invite_from_series_row(row)
-                if invite is None:
-                    continue
-
-                last_until_str = row.get("last_expanded_until")
-                last_until = None
-                if last_until_str:
-                    try:
-                        last_until = datetime.fromisoformat(last_until_str)
-                        if last_until.tzinfo is None:
-                            last_until = last_until.replace(tzinfo=timezone.utc)
-                    except ValueError:
-                        last_until = None
-
-                # loop 阶段不回填本周历史，只前推：since = max(now, last_until)
-                since = max(now, last_until) if last_until else now
-
-                # 显式传 until=cutoff，避免 since>now 时窗口越界
-                occurrences = expand_occurrences(
-                    invite,
-                    since=since,
-                    until=cutoff,
-                    series_state=row,
-                )
-
-                for occ in occurrences:
-                    try:
-                        await meeting_sync.calendar_sync.sync_event(occ)
-                        synced_total += 1
-                    except Exception as e:
-                        logger.error(
-                            f"[expansion] sync_event failed for {occ.event_id[:80]}: {e}"
-                        )
-
-                sync_store.update_expanded_until(row["series_uid"], cutoff_iso)
-            except Exception as e:
-                logger.error(
-                    f"[expansion] series {row.get('series_uid','?')[:60]} failed: {e}"
-                )
-
-        logger.info(
-            f"[expansion] tick done: {synced_total} occurrences synced across {len(rows)} series"
+        return await run_expansion_tick(
+            self.watcher.sync_store,
+            self.watcher.meeting_sync,
+            horizon_weeks,
         )
 
     def _reconstruct_invite_from_series_row(self, row: dict):
         """从 recurring_series 行还原 minimal MeetingInvite（仅含 expander 必需字段）."""
-        from src.mail.icalendar_parser import MeetingInvite
+        from src.calendar_notion.expansion import reconstruct_invite_from_series_row
 
-        try:
-            dtstart = datetime.fromisoformat(row["master_dtstart"])
-            dtend = datetime.fromisoformat(row["master_dtend"])
-        except (ValueError, KeyError, TypeError) as e:
-            logger.warning(
-                f"[expansion] cannot rehydrate series {row.get('series_uid','?')[:60]}: {e}"
-            )
-            return None
-
-        try:
-            exdates_raw = json.loads(row.get("exdates_json") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            exdates_raw = []
-        exdates = []
-        for s in exdates_raw if isinstance(exdates_raw, list) else []:
-            try:
-                exdates.append(datetime.fromisoformat(s))
-            except ValueError:
-                continue
-
-        return MeetingInvite(
-            uid=row["series_uid"],
-            method="REQUEST",
-            summary=row.get("master_summary") or "",
-            start_time=dtstart,
-            end_time=dtend,
-            location=row.get("master_location"),
-            description=row.get("master_description"),
-            organizer=row.get("master_organizer"),
-            organizer_email=row.get("master_organizer_email"),
-            attendees=[],
-            status="tentative",
-            sequence=int(row.get("last_sequence") or 0),
-            is_all_day=bool(row.get("master_is_all_day")),
-            recurrence_rule=row.get("rrule_str"),
-            exdates=exdates,
-            tzid=row.get("master_tzid"),
-        )
+        return reconstruct_invite_from_series_row(row)
 
     async def _alert_check_loop(self):
         """告警检查循环：定期检测异常并发送告警"""

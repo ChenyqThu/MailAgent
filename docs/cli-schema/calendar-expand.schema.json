@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/calendar-expand.schema.json",
   "title": "mailagent calendar expand",
-  "description": "RFC v2 §4.10 — 周期会议 occurrence 单次展开 (PR-3 仅 dry-run plan).",
+  "description": "RFC v2 §4.10 — 周期会议 occurrence 单次展开.",
   "oneOf": [
     {
       "type": "object",
@@ -15,10 +15,12 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "horizon_weeks", "cutoff_iso",
+            "action", "mode", "horizon_weeks", "cutoff_iso",
             "expanded", "total_series", "total_occurrences_added", "dry_run"
           ],
           "properties": {
+            "action": {"const": "calendar-expand"},
+            "mode": {"const": "dry_run"},
             "horizon_weeks": {"type": "integer", "minimum": 1},
             "cutoff_iso": {"type": "string"},
             "expanded": {
@@ -38,7 +40,44 @@
             },
             "total_series": {"type": "integer", "minimum": 0},
             "total_occurrences_added": {"type": "integer", "minimum": 0},
-            "dry_run": {"type": "boolean"}
+            "dry_run": {"const": true}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action", "mode", "horizon_weeks",
+            "series_scanned", "occurrences_synced", "errors"
+          ],
+          "properties": {
+            "action": {"const": "calendar-expand"},
+            "mode": {"const": "inline"},
+            "horizon_weeks": {"type": "integer", "minimum": 1},
+            "series_scanned": {"type": "integer", "minimum": 0},
+            "occurrences_synced": {"type": "integer", "minimum": 0},
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["series_uid", "error"],
+                "properties": {
+                  "series_uid": {"type": "string"},
+                  "error": {"type": "string"}
+                }
+              }
+            }
           }
         },
         "meta": {"$ref": "_common.schema.json#/$defs/meta"}

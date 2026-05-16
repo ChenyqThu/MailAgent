@@ -17,7 +17,6 @@ import typer
 from src.cli.exceptions import (
     CliError,
     CliInvalidArgError,
-    CliNotImplementedError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
 
@@ -51,7 +50,7 @@ def calendar_expand(
     ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--no-dry-run",
-        help="PR-3 仅 dry-run (列 series 待展开); 实跑路径推迟 (走 main.py loop)",
+        help="列 series 待展开; --no-dry-run 直接执行一次 expansion tick",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
@@ -64,21 +63,50 @@ def calendar_expand(
             f"--horizon-weeks must be > 0, got {horizon_weeks}",
         ))
 
+    sync_store = cli.sync_store
+
     if not dry_run:
-        raise emit_cli_error(cli, CliNotImplementedError(
-            "calendar expand non-dry-run path not implemented in PR-3.",
-            hint=(
-                "PR-3 仅 dry-run 列待展开 series; 实跑由 main.py "
-                "_meeting_expansion_loop 持续运行; 如需手动触发可 pm2 restart "
-                "mail-sync 或等下个 tick。完整 CLI expand 实现留 PR-4."
-            ),
-        ))
+        from src.calendar_notion.expansion import run_expansion_tick
+
+        meeting_sync = _build_meeting_sync(sync_store)
+        try:
+            result = asyncio.run(
+                run_expansion_tick(
+                    sync_store,
+                    meeting_sync,
+                    horizon_weeks,
+                    dry_run=False,
+                )
+            )
+        except Exception as e:
+            raise emit_cli_error(cli, CliError(
+                f"calendar expansion tick failed: {e}",
+                hint="检查 recurring_series 数据、Notion 日历配置和网络连接",
+            ))
+
+        data = {
+            "action": "calendar-expand",
+            "mode": "inline",
+            "horizon_weeks": horizon_weeks,
+            "series_scanned": result.get("series_scanned", 0),
+            "occurrences_synced": result.get("occurrences_synced", 0),
+            "errors": result.get("errors", []),
+        }
+        if cli.output.lower() == "text":
+            print(
+                f"calendar expand inline horizon_weeks={horizon_weeks} "
+                f"series={data['series_scanned']} "
+                f"occurrences_synced={data['occurrences_synced']} "
+                f"errors={len(data['errors'])}"
+            )
+        else:
+            emit(cli, data)
+        return
 
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(weeks=horizon_weeks)
     cutoff_iso = cutoff.isoformat()
 
-    sync_store = cli.sync_store
     expanded: list[dict] = []
     try:
         for row in sync_store.iter_series_needing_expansion(cutoff_iso):
@@ -99,6 +127,8 @@ def calendar_expand(
         ))
 
     data = {
+        "action": "calendar-expand",
+        "mode": "dry_run",
         "horizon_weeks": horizon_weeks,
         "cutoff_iso": cutoff_iso,
         "expanded": expanded,
@@ -117,6 +147,12 @@ def calendar_expand(
             )
     else:
         emit(cli, data)
+
+
+def _build_meeting_sync(sync_store):
+    from src.mail.meeting_sync import MeetingInviteSync
+
+    return MeetingInviteSync(sync_store=sync_store)
 
 
 # ============================================================

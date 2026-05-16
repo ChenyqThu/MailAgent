@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from tests.cli.conftest import extract_last_json_object as _last_json
 
 
@@ -55,14 +53,23 @@ class TestCalendarExpand:
         assert payload["data"]["expanded"][0]["occurrences_added"] == 0
         assert payload["data"]["horizon_weeks"] == 4
 
-    def test_expand_no_dry_run_not_implemented(
-        self, cli_runner, cli_env, seeded_db,
+    def test_expand_no_dry_run_inline(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
     ):
+        async def fake_run(sync_store, meeting_sync, horizon_weeks, *, dry_run=False):
+            return {"series_scanned": 0, "occurrences_synced": 0, "errors": []}
+
+        import src.calendar_notion.expansion as expansion_mod
+        import src.cli.commands.calendar as calendar_cmd
+        monkeypatch.setattr(expansion_mod, "run_expansion_tick", fake_run)
+        monkeypatch.setattr(calendar_cmd, "_build_meeting_sync", lambda sync_store: object())
+
         result = _invoke(cli_runner, "calendar", "expand", "--no-dry-run",
                          "-o", "json", db_path=seeded_db)
-        assert result.exit_code == 2, result.output
+        assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        assert payload["error"]["code"] == "E_NOT_IMPLEMENTED"
+        assert payload["data"]["mode"] == "inline"
+        assert payload["data"]["series_scanned"] == 0
 
     def test_expand_invalid_horizon(self, cli_runner, cli_env, seeded_db):
         result = _invoke(cli_runner, "calendar", "expand", "--horizon-weeks", "0",
