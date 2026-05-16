@@ -243,9 +243,15 @@ tests/
 
 ```bash
 # 1. 当前状态确认
-git log --oneline -5                        # 期望: dac9888 / 8e0c64e / c261242 / c175ac8 / 298a6dc
+# 期望: 5d6cf7e (本 handoff 自己) / dac9888 / 8e0c64e / c261242 / c175ac8
+git log --oneline -5
 sqlite3 data/sync_store.db "SELECT value FROM sync_state WHERE key='db_version'"   # 期望: 5
-source venv/bin/activate && pytest tests/ -q --tb=no | tail -3   # 期望: 295 passed
+# 期望: 295 passed —— 但用户已把 NOTION_READ_FROM_SQLITE=true 写进 .env，
+# 此时 tests/notion/test_create_from_sqlite.py::TestV2WrapperRouting::test_disabled_by_default
+# 会失败（测试没 monkeypatch 默认值，依赖 .env 真实值）。该测试是已知偏差，
+# 修法 = 在测试里加 monkeypatch.setattr(app_config, "notion_read_from_sqlite", False)。
+# 截至本 handoff 同步状态: 294 passed + 1 failed
+source venv/bin/activate && pytest tests/ -q --tb=no | tail -3
 
 # 2. v4 关键数据规模
 sqlite3 data/sync_store.db "
