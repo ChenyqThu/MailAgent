@@ -1072,6 +1072,104 @@ sqlite3 data/sync_store.db "
 python3 calendar_main.py --once
 ```
 
+## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 已上线 2026-05-15**）
+
+把 SQLite 升级为邮件正文 + 附件的 Single Source of Truth，Notion 退化为镜像。新邮件 sync 时把 body + 附件元数据双写到 SQLite，附件二进制落 `data/attachments/{internal_id}/`。详见 [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md)，Phase 间交接说明见 [`docs/phase1-handoff-to-phase2.md`](./docs/phase1-handoff-to-phase2.md)。
+
+### 关键 schema 速查
+
+| 表 | 主键 | 用途 |
+|---|---|---|
+| `email_body` | internal_id (FK metadata, CASCADE) | 邮件正文：`body_html`（原始）+ `body_markdown`（markdownify 产物，LLM/RAG/FTS5 通用）+ `raw_mime_sha256` |
+| `email_attachment` | id (AUTOINCREMENT) | 附件元数据：`local_path` 指向 `data/attachments/{int_id}/`；`derived_from` 自指 FK 关联 Office 转换产物（docx→pdf） |
+| `email_body_fts` | virtual | FTS5 全文索引（Phase 3 启用） |
+
+### 接口层：`EmailRepository`
+
+```python
+from src.repository import EmailRepository, AttachmentStore
+
+repo = EmailRepository(
+    db_path="data/sync_store.db",
+    attachment_store=AttachmentStore("data/attachments"),
+)
+
+# 读
+html = repo.get_body_html(internal_id)
+md = repo.get_body_markdown(internal_id, max_chars=12000)
+atts = repo.get_attachments(internal_id)
+content_bytes = repo.get_attachment_bytes(att.id)
+
+# 写（事务：body + attachments 原子提交，附件落盘失败回滚）
+id_map = repo.commit_email_with_body(internal_id, body, attachments, message_id=...)
+
+# Notion sync 完成后回写
+repo.update_notion_links(internal_id, file_id_map={att_id: notion_file_id})
+
+# CASCADE 删除（含本地文件清理）
+repo.delete_email_full(internal_id)
+```
+
+### 关键开关
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `BODY_DUAL_WRITE_ENABLED` | `true` | v4 双写总开关；失败仅 warning 不阻断 Notion sync |
+| `ATTACHMENT_STORAGE_DIR` | `data/attachments` | 附件本地落盘根目录 |
+
+### 双写流程（v4 vs v3）
+
+v3 sync 路径：AppleScript → in-memory Email → Notion blocks。
+
+v4 sync 路径：AppleScript → in-memory Email → **build_storage_payloads + repo.commit** → Notion blocks（不变）。
+
+双写点位：`src/mail/new_watcher.py` 的 `_sync_single_email_v3` 与 `_process_retry_queue` 都在 Notion sync 之前调 `_maybe_dual_write_body`。
+
+### Phase 推进
+
+| Phase | 状态 | 内容 |
+|---|---|---|
+| Phase 1 | ✅ **已上线 2026-05-15** | 双写 MVP；新邮件 sync 时落 SQLite，Web 端可立即切表。43/43 单测通过、生产服务已加载 v4 |
+| Phase 2 | 待办（下一步） | LLM processor / handle_fetch_mail_content 改读 SQLite。入口点见 [`docs/phase1-handoff-to-phase2.md`](./docs/phase1-handoff-to-phase2.md) |
+| Phase 3 | 待办 | FTS5 启用 + agent 工具 search_email_bodies |
+| Phase 4 | 待办 | Notion uploader 改为读 SQLite，架构归一 |
+| Phase 5 | 未来 | Electron / Web 前端（接口已就位） |
+| **T-01** | 独立 TODO | Notion sync 迁 Markdown API（参考 `src/project_progress/notion_sync.py` 样板） |
+
+### 关键文件
+
+- `src/repository/` 整个目录（EmailRepository / AttachmentStore / build_storage_payloads）
+- `src/converter/html_to_markdown.py`（markdownify 主路径）
+- `src/mail/sync_store.py:95-329`（DB_VERSION=4，新表）
+- `src/mail/new_watcher.py:114-130, 380-393, 450-490, 733-740`（双写入口）
+- `tests/repository/`（单测）
+
+### 运维
+
+```bash
+# 看新邮件双写是否正常（pm2 重启后等 5-10 min）
+sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_body WHERE fetched_at > strftime('%s','now','-10 min')"
+
+# 看 body / attachment 存量
+sqlite3 data/sync_store.db "
+  SELECT
+    (SELECT COUNT(*) FROM email_body) AS bodies,
+    (SELECT COUNT(*) FROM email_attachment) AS attachments,
+    (SELECT COUNT(*) FROM email_attachment WHERE derived_from IS NOT NULL) AS office_converted
+"
+
+# 看附件目录大小
+du -sh data/attachments/
+
+# 单测
+pytest tests/repository/ -v
+
+# 紧急回滚：关 v4 双写
+# 在 .env 加: BODY_DUAL_WRITE_ENABLED=false 然后 pm2 restart mail-sync
+```
+
+---
+
 ## 迁移与运维
 
 ### v3 架构迁移

@@ -17,6 +17,7 @@ macOS 邮件实时同步到 Notion，支持 AI 自动分类与处理。
 
 ### 邮件同步特性
 - **v3 SQLite-First 架构**：大邮箱（6-7 万封）支持，单封邮件获取 ~1s（vs 旧架构 ~100s）
+- **v4 SQLite SSoT 架构（Phase 1 已上线 2026-05-15）**：邮件正文（HTML + Markdown）+ 附件元数据双写到 SQLite，附件二进制落 `data/attachments/{internal_id}/`，为 RAG / FTS5 / Web 前端打地基。详见 [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md)
 - 基于 message_id 的 100% 准确去重
 - 自动建立邮件线程 Parent-Child 关系
 - **自动识别会议邀请**：检测邮件中的 iCalendar 附件，创建日程页面
@@ -148,8 +149,11 @@ pm2 status                # 查看状态
 **核心流程**：
 1. SQLite Radar 每 5 秒检测 Mail.app 数据库变化
 2. 发现新邮件后，通过 AppleScript 获取完整内容
-3. 解析邮件，同步到 Notion Email 数据库
-4. 如果邮件包含会议邀请（.ics），自动创建日程到 Calendar 数据库
+3. 解析邮件，**v4 双写邮件正文 + 附件元数据到本地 SQLite**（`email_body` / `email_attachment` 表），附件二进制落 `data/attachments/{internal_id}/`
+4. 同步到 Notion Email 数据库（Notion 退化为镜像）
+5. 如果邮件包含会议邀请（.ics），自动创建日程到 Calendar 数据库
+
+> **v4 架构演进**：正在分 5 个 Phase 把 Notion 从"唯一持久化处"反转为"本地 SQLite 为 SSoT，Notion 是镜像"。Phase 1（双写 MVP）已上线；Phase 2-5 推进中。详见 [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md)。
 
 ---
 
