@@ -280,4 +280,12 @@ async def main():
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.warn(
+        "scripts/resync_notion.py is deprecated; use "
+        "'mailagent email resync' instead. Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     asyncio.run(main())

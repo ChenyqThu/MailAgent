@@ -234,5 +234,13 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.warn(
+        "scripts/replay_recurring_invite.py is deprecated; use "
+        "'mailagent calendar recurring replay' instead. Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     args = parse_args()
     sys.exit(asyncio.run(main(args)))

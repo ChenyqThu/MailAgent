@@ -174,4 +174,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.warn(
+        "scripts/run_llm_on_email.py is deprecated; use "
+        "'mailagent llm run' instead. Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     sys.exit(main() or 0)
