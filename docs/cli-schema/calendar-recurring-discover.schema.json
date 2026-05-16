@@ -14,26 +14,34 @@
         "data": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["series", "total_series", "scanned", "since", "limit"],
+          "required": [
+            "series", "total_series", "matches_total",
+            "scanned", "since", "limit"
+          ],
           "properties": {
             "series": {
               "type": "array",
               "items": {
                 "type": "object",
                 "additionalProperties": true,
+                "required": ["series_uid", "internal_ids"],
                 "properties": {
-                  "internal_id": {"type": "integer"},
-                  "subject": {"type": ["string", "null"]},
+                  "series_uid": {"type": "string"},
+                  "master_dtstart": {"type": ["string", "null"]},
+                  "summary": {"type": ["string", "null"]},
                   "sender": {"type": ["string", "null"]},
-                  "date": {"type": ["string", "null"]},
-                  "uid": {"type": ["string", "null"]},
+                  "organizer": {"type": ["string", "null"]},
                   "rrule": {"type": ["string", "null"]},
                   "method": {"type": ["string", "null"]},
-                  "dtstart": {"type": ["string", "null"]}
+                  "internal_ids": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 0}
+                  }
                 }
               }
             },
             "total_series": {"type": "integer", "minimum": 0},
+            "matches_total": {"type": "integer", "minimum": 0},
             "scanned": {"type": "integer", "minimum": 0},
             "since": {"type": ["string", "null"]},
             "limit": {"type": "integer", "minimum": 1}

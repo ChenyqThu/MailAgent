@@ -102,8 +102,13 @@ class TestCalendarRecurringDiscover:
                          "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
+        # PRD §US-007: series 是 grouped per-uid (不是 per-email rows)
         assert payload["data"]["total_series"] == 1
-        assert payload["data"]["series"][0]["internal_id"] == 53120
+        assert payload["data"]["matches_total"] == 1
+        s = payload["data"]["series"][0]
+        assert s["series_uid"] == "uid-1"
+        assert s["internal_ids"] == [53120]
+        assert s["summary"] == "Weekly Sync"
         assert payload["data"]["since"] == "2026-04-01"
         assert payload["data"]["limit"] == 100
         assert payload["data"]["scanned"] == 100

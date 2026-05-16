@@ -163,21 +163,51 @@ def calendar_recurring_discover(
             hint="可能 AppleScript 不可用 (mac/Mail.app 缺) 或权限不足",
         ))
 
+    # PRD §US-007 / RFC §4.10: series 是 GROUPED 输出 (per-series_uid 合并多封
+    # invite), 不是 per-email rows. 把 discover_recurring 返回的 per-email matches
+    # 按 invite.uid 聚合为 series 记录。
+    series_by_uid: dict[str, dict] = {}
+    for m in matches:
+        uid = (m.get("uid") or "").strip() or f"__no_uid_iid_{m.get('internal_id')}"
+        if uid not in series_by_uid:
+            series_by_uid[uid] = {
+                "series_uid": uid,
+                "master_dtstart": m.get("dtstart"),
+                "summary": m.get("subject"),
+                "sender": m.get("sender"),
+                "organizer": m.get("sender"),  # PR-3 placeholder; real ORGANIZER 需 ICS 重解析, 留 PR-4
+                "rrule": m.get("rrule"),
+                "method": m.get("method"),
+                "internal_ids": [],
+            }
+        series_by_uid[uid]["internal_ids"].append(int(m.get("internal_id")))
+
+    series_list = list(series_by_uid.values())
+
+    # scanned: discover_recurring 内部 SQL 用 LIMIT discover_limit, 实际扫描行数
+    # = min(discover_limit, 全库 synced 邮件数). PR-3 范围内拿不到精确 scanned
+    # (function 不暴露), 用 discover_limit 作 ceiling 近似 + 用 len(matches) 标记
+    # 实际命中的 invite-bearing 邮件数。下游 caller 应该看 total_series / matches_total
+    # 两个数, 不靠 scanned 做精确判断。
+    matches_total = len(matches)
     data = {
-        "series": matches,
-        "total_series": len(matches),
+        "series": series_list,
+        "total_series": len(series_list),
+        "matches_total": matches_total,
         "scanned": discover_limit,
         "since": since_eff,
         "limit": discover_limit,
     }
 
     if cli.output.lower() == "text":
-        print(f"series={len(matches)} since={since_eff} limit={discover_limit}")
-        for m in matches[:30]:
+        print(
+            f"series={len(series_list)} matches={matches_total} "
+            f"since={since_eff} limit={discover_limit}"
+        )
+        for s in series_list[:30]:
             print(
-                f"  iid={m.get('internal_id')} uid={m.get('uid')} "
-                f"rrule={(m.get('rrule') or '')[:30]} "
-                f"subj={(m.get('subject') or '')[:40]}"
+                f"  uid={s['series_uid']} master={s['master_dtstart']} "
+                f"iids={s['internal_ids']} subj={(s['summary'] or '')[:40]}"
             )
     else:
         emit(cli, data)

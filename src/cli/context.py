@@ -68,6 +68,14 @@ class CliContext:
                 "sync_store_db_path": db_path,
             },
         )
+        # PR-3 round-6 fix (codex critic 2nd-pass blocker): 进程内的 LLM / Notion /
+        # AppleScript 下游链 (AIFieldsWriter / NotionClient / AppleScriptArm /
+        # PromptLoader / LLM client) 读 import-time 的全局 ``src.config.config``,
+        # 不直接消费 CliContext。这导致 ``mailagent --config other.env llm run ...``
+        # 时 LLM/Notion/Mail account 读老 .env. 修法: 把 CLI-scoped cli_config
+        # 的字段 push 到全局 cfg 实例上 (mutable BaseSettings), 让下游模块自然
+        # 拿到 CLI override。CLI 单进程单次调用, 全局 mutation 可接受。
+        _sync_global_cfg_from_cli(ctx._cli_config)
         return ctx
 
     # ============================================================
@@ -124,3 +132,32 @@ class CliContext:
         from src.cli import auth
 
         auth.require_auth(self)
+
+
+def _sync_global_cfg_from_cli(cli_config) -> None:
+    """把 CLI-scoped ``cli_config`` 字段 push 到全局 ``src.config.config``.
+
+    PR-3 round-6 修复 (codex critic 2nd-pass blocker #1): 让下游模块 (LLMRunner /
+    AIFieldsWriter / NotionClient / AppleScriptArm / PromptLoader / LLM client) 中
+    那些读 module-level ``cfg`` 的代码自动拿到 ``--config`` / ``--db-path`` 等
+    flag override, 不需要每条 caller 单独 thread Config 实例.
+
+    CLI 单进程单次调用, 全局 mutation 可接受; 服务模式 (main.py / pm2) 不受影响,
+    因为它们走 import-time 加载的 .env, 从不调 from_flags.
+    """
+    from src.config import config as _global_cfg
+
+    try:
+        fields = cli_config.model_fields
+    except AttributeError:  # pydantic v1 fallback (defensive)
+        return
+    for field_name in fields:
+        try:
+            new_val = getattr(cli_config, field_name)
+        except Exception:
+            continue
+        try:
+            setattr(_global_cfg, field_name, new_val)
+        except Exception:
+            # Frozen / immutable fields — 忽略, 这些不影响 CLI 主流程
+            pass
