@@ -1,11 +1,4 @@
-from dataclasses import dataclass
-from typing import Dict, Any, List, Mapping, Set, Optional, Tuple, TYPE_CHECKING
-from pathlib import Path
-from loguru import logger
-from datetime import datetime, timezone, timedelta
-import re
-import shutil
-import tempfile
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.mail.icalendar_parser import MeetingInvite
@@ -13,36 +6,22 @@ if TYPE_CHECKING:
     from src.repository import AttachmentRecord, EmailBodyRecord, EmailRepository
 
 from src.models import Email, Attachment
+from src.notion._common import BEIJING_TZ, CreateEmailFromSqliteResult, RolloutMetrics
 from src.notion.client import NotionClient
+from src.notion.pages import PageOps
+from src.notion.queries import QueryOps
+from src.notion.threads import ThreadOps
 from src.converter.html_converter import HTMLToNotionConverter
 from src.converter.eml_generator import EMLGenerator
-from src.converter.office_converter import convert_office_attachment, is_convertible
 
-# 北京时区 (UTC+8)
-BEIJING_TZ = timezone(timedelta(hours=8))
+__all__ = ["BEIJING_TZ", "CreateEmailFromSqliteResult", "NotionSync"]
 
-
-@dataclass
-class CreateEmailFromSqliteResult:
-    """``NotionSync.create_email_page_from_sqlite`` 的结构化返回 (R-19 / PR-2 critic round 2).
-
-    - ``page_id``: 当前生效的 Notion page id (created / replaced 新页 / skipped 命中的老页)
-    - ``action``: ``'created' | 'replaced' | 'skipped'`` —— 用户可见动作
-    - ``existing_page_id``: dup-check 命中时老页 id, 没命中是 None
-    - ``archived_page_id``: 仅在 ``--replace-existing`` 真把老页 archive 时填; 否则 None
-
-    设计原因 (codex round 2 review): CLI 不应靠 ``(replace_existing, meta.notion_page_id,
-    new_page_id)`` 推断动作 —— ``meta.notion_page_id`` 在本地可能为 NULL 或 stale, 但 Notion
-    侧通过 ``check_page_exists(message_id)`` 命中 dup, 导致推断结果错。结构化返回让动作判定
-    收敛在 ``create_email_page_from_sqlite`` 内部, 与实际 Notion 调用路径 1:1 对应。
-    """
-    page_id: Optional[str]
-    action: str
-    existing_page_id: Optional[str] = None
-    archived_page_id: Optional[str] = None
 
 class NotionSync:
     """Notion 同步器"""
+
+    _SENSITIVE_PATH_PATTERN = PageOps._SENSITIVE_PATH_PATTERN
+    _V4_ATTACHMENT_SRC_RE = PageOps._V4_ATTACHMENT_SRC_RE
 
     def __init__(
         self,
@@ -63,78 +42,97 @@ class NotionSync:
         self.eml_generator = EMLGenerator()
         self._email_repo = email_repo
         self._sync_store = sync_store
+        self._rollout = RolloutMetrics(sync_store=sync_store)
+        self._queries = QueryOps(client=self.client)
+        self._threads = ThreadOps(client=self.client, email_repo=email_repo)
+        self._pages = PageOps(
+            client=self.client,
+            html_converter=self.html_converter,
+            eml_generator=self.eml_generator,
+            email_repo=email_repo,
+            sync_store=sync_store,
+            rollout=self._rollout,
+            threads=self._threads,
+        )
 
-        # PR-4 R-06: v4 rollout 路由命中计数 (RFC §8 选项 A).
-        from collections import deque
+    def _ensure_rollout_counters(self) -> None:
+        """Lazy-init for callers that bypass __init__ via __new__ (tests)."""
+        if not hasattr(self, "_rollout"):
+            self._rollout = RolloutMetrics(sync_store=getattr(self, "_sync_store", None))
+        self._rollout._ensure()
 
-        self._route_hit: int = 0
-        self._route_miss: int = 0
-        self._route_error: int = 0
-        self._route_latency_samples: list[float] = []
-        self._body_miss_recent: "deque[int]" = deque(maxlen=10)
+    @property
+    def _route_hit(self) -> int:
+        self._ensure_rollout_counters()
+        return self._rollout._route_hit
+
+    @_route_hit.setter
+    def _route_hit(self, value: int) -> None:
+        self._ensure_rollout_counters()
+        self._rollout._route_hit = value
+
+    @property
+    def _route_miss(self) -> int:
+        self._ensure_rollout_counters()
+        return self._rollout._route_miss
+
+    @_route_miss.setter
+    def _route_miss(self, value: int) -> None:
+        self._ensure_rollout_counters()
+        self._rollout._route_miss = value
+
+    @property
+    def _route_error(self) -> int:
+        self._ensure_rollout_counters()
+        return self._rollout._route_error
+
+    @_route_error.setter
+    def _route_error(self, value: int) -> None:
+        self._ensure_rollout_counters()
+        self._rollout._route_error = value
+
+    @property
+    def _route_latency_samples(self) -> List[float]:
+        self._ensure_rollout_counters()
+        return self._rollout._route_latency_samples
+
+    @_route_latency_samples.setter
+    def _route_latency_samples(self, value: List[float]) -> None:
+        self._ensure_rollout_counters()
+        self._rollout._route_latency_samples = value
+
+    @property
+    def _body_miss_recent(self):
+        self._ensure_rollout_counters()
+        return self._rollout._body_miss_recent
+
+    @_body_miss_recent.setter
+    def _body_miss_recent(self, value) -> None:
+        self._ensure_rollout_counters()
+        self._rollout._body_miss_recent = value
 
     # ============================================================
     # PR-4 R-06: v4 rollout 路由命中计数 + flush
     # ============================================================
 
-    def _ensure_rollout_counters(self) -> None:
-        """Lazy-init for callers that bypass __init__ via __new__ (tests)."""
-        if not hasattr(self, "_route_hit"):
-            from collections import deque
-
-            self._route_hit = 0
-            self._route_miss = 0
-            self._route_error = 0
-            self._route_latency_samples = []
-            self._body_miss_recent = deque(maxlen=10)
-
     def record_route_hit(self, latency_ms: float = 0.0) -> None:
         """SQLite 路径命中."""
         self._ensure_rollout_counters()
-        self._route_hit += 1
-        if latency_ms > 0:
-            self._route_latency_samples.append(float(latency_ms))
+        self._rollout.record_hit(latency_ms)
 
     def record_route_miss(self, internal_id: int = 0) -> None:
         """SQLite body miss → fallback 老路径."""
         self._ensure_rollout_counters()
-        self._route_miss += 1
-        if internal_id:
-            self._body_miss_recent.append(int(internal_id))
+        self._rollout.record_miss(internal_id)
 
     def record_route_error(self) -> None:
         """SQLite 路由抛异常 → fallback."""
         self._ensure_rollout_counters()
-        self._route_error += 1
+        self._rollout.record_error()
 
     def snapshot_rollout_stats(self) -> dict:
-        """返回 dict + reset 计数 (close window).
-
-        p99 用 *nearest-rank* (ceil) 公式 — 整数算术避免浮点漂:
-          idx = ceil(99 * n / 100) - 1 = (99 * n + 99) // 100 - 1, clamped to [0, n-1]
-        小窗 (n < 100) 时自然退化为 max(samples), 避免 ``int(n*.99)-1`` 在 n=2 时
-        返回 min 的问题 (PR-4 codex critic round 1 blocker fix).
-        """
         self._ensure_rollout_counters()
-        samples = sorted(self._route_latency_samples)
-        if samples:
-            n = len(samples)
-            idx = max(0, min(n - 1, (99 * n + 99) // 100 - 1))
-            p99 = samples[idx]
-        else:
-            p99 = 0.0
-        out = {
-            "from_sqlite_hit": self._route_hit,
-            "fallback_miss": self._route_miss,
-            "fallback_error": self._route_error,
-            "route_latency_p99_ms": p99,
-            "body_miss_internal_ids": list(self._body_miss_recent),
-        }
-        self._route_hit = 0
-        self._route_miss = 0
-        self._route_error = 0
-        self._route_latency_samples.clear()
-        return out
+        return self._rollout.snapshot()
 
     def flush_rollout_stats(
         self,
@@ -142,947 +140,68 @@ class NotionSync:
         *,
         window_seconds: int = 60,
     ) -> Optional[int]:
-        """snapshot + 写入 ``v4_rollout_stats`` 表, 返回 rowid (失败 None)."""
-        store = sync_store if sync_store is not None else self._sync_store
-        if store is None:
-            return None
-        snap = self.snapshot_rollout_stats()
-        try:
-            return store.write_v4_rollout_snapshot(
-                from_sqlite_hit=snap["from_sqlite_hit"],
-                fallback_miss=snap["fallback_miss"],
-                fallback_error=snap["fallback_error"],
-                route_latency_p99_ms=snap["route_latency_p99_ms"],
-                body_miss_internal_ids=snap["body_miss_internal_ids"],
-                window_seconds=window_seconds,
+        self._ensure_rollout_counters()
+        return self._rollout.flush(sync_store=sync_store, window_seconds=window_seconds)
+
+    def _ensure_threads(self) -> ThreadOps:
+        if not hasattr(self, "_threads"):
+            self._threads = ThreadOps(client=self.client, email_repo=self._email_repo)
+        self._threads.client = self.client
+        self._threads._email_repo = self._email_repo
+        return self._threads
+
+    def _ensure_queries(self) -> QueryOps:
+        if not hasattr(self, "_queries"):
+            self._queries = QueryOps(client=self.client)
+        self._queries.client = self.client
+        return self._queries
+
+    def _ensure_pages(self) -> PageOps:
+        if not hasattr(self, "_pages"):
+            self._ensure_rollout_counters()
+            self._pages = PageOps(
+                client=self.client,
+                html_converter=self.html_converter,
+                eml_generator=self.eml_generator,
+                email_repo=self._email_repo,
+                sync_store=self._sync_store,
+                rollout=self._rollout,
+                threads=self._ensure_threads(),
             )
-        except Exception as exc:  # pragma: no cover
-            from loguru import logger as _logger
-            _logger.warning(
-                f"[v4-rollout] flush failed: {type(exc).__name__}: {exc}"
+        self._pages.client = self.client
+        self._pages.html_converter = self.html_converter
+        self._pages.eml_generator = self.eml_generator
+        self._pages._email_repo = self._email_repo
+        self._pages._sync_store = self._sync_store
+        self._pages._rollout = self._rollout
+        self._pages._threads = self._ensure_threads()
+        if (
+            "create_email_page_from_sqlite" in self.__dict__
+            or
+            type(self).create_email_page_from_sqlite
+            is not _ORIGINAL_CREATE_EMAIL_PAGE_FROM_SQLITE
+        ):
+            self._pages._create_email_page_from_sqlite = (
+                self.create_email_page_from_sqlite
             )
-            return None
+        for name in (
+            "_upload_attachments",
+            "_upload_eml_file",
+            "_create_page_with_blocks",
+            "_build_properties",
+            "_build_image_map",
+            "_build_children",
+            "_handle_thread_relations",
+            "_convert_office_attachments",
+        ):
+            if name in self.__dict__:
+                setattr(self._pages, name, self.__dict__[name])
+        return self._pages
+
+    # ---------- public delegates ----------
 
     async def sync_email(self, email: Email) -> bool:
-        """同步邮件到 Notion（兼容旧 API）
-
-        这是一个简化的接口，内部调用 create_email_page_v2()。
-        主要用于脚本和测试。
-
-        Args:
-            email: Email 对象
-
-        Returns:
-            是否成功
-        """
-        page_id = await self.create_email_page_v2(email)
-        return page_id is not None
-
-    async def _upload_attachments(self, email: Email) -> "tuple[List[Dict[str, Any]], List[str]]":
-        """上传邮件附件到 Notion
-
-        使用 "伪装 PDF" 技巧自动处理不支持的扩展名（如 .eml），
-        无需手动重命名文件。
-
-        Args:
-            email: Email 对象
-
-        Returns:
-            元组 (uploaded_attachments, failed_filenames):
-                - uploaded_attachments: 上传成功的附件列表
-                - failed_filenames: 上传失败的文件名列表
-        """
-        uploaded_attachments = []
-        failed_filenames = []
-
-        if not email.attachments:
-            return uploaded_attachments, failed_filenames
-
-        logger.info(f"邮件包含 {len(email.attachments)} 个附件，开始上传...")
-
-        for attachment in email.attachments:
-            try:
-                # 直接上传，client.upload_file 会自动处理不支持的扩展名
-                file_upload_id = await self.client.upload_file(attachment.path)
-                uploaded_attachments.append({
-                    'filename': attachment.filename,
-                    'file_upload_id': file_upload_id,
-                    'content_type': attachment.content_type,
-                    'size': attachment.size,
-                    'content_id': attachment.content_id,
-                    'is_inline': attachment.is_inline
-                })
-                logger.info(f"  Uploaded: {attachment.filename} (cid={attachment.content_id})")
-
-            except Exception as e:
-                logger.error(f"  Failed to upload {attachment.filename}: {e}")
-                failed_filenames.append(attachment.filename)
-
-        if failed_filenames:
-            logger.warning(f"Failed to upload {len(failed_filenames)} attachments: {failed_filenames}")
-
-        return uploaded_attachments, failed_filenames
-
-    def _convert_office_attachments(self, email: Email) -> List[Attachment]:
-        """将 Office 附件转换为更通用的格式
-
-        docx/pptx → PDF, xlsx → CSV。转换后的文件作为额外附件追加，
-        原始文件仍保留上传。转换失败不影响正常同步流程。
-
-        Args:
-            email: Email 对象
-
-        Returns:
-            转换生成的新 Attachment 列表
-        """
-        converted_attachments = []
-
-        # v4: dual-write 路径会预转一次，second pass 跳过已转过的原始附件，避免重复
-        already_converted_origins = {
-            a.derived_from_filename for a in email.attachments
-            if a.derived_from_filename
-        }
-        convertible = [
-            a for a in email.attachments
-            if is_convertible(a.filename) and a.filename not in already_converted_origins
-        ]
-        if not convertible:
-            if already_converted_origins:
-                logger.debug(
-                    f"Office conversion skipped (pre-converted by dual-write): {already_converted_origins}"
-                )
-            return converted_attachments
-
-        logger.info(f"Found {len(convertible)} convertible Office attachments")
-
-        for attachment in convertible:
-            try:
-                # 转换后文件放在与原附件同目录（共享临时目录，统一清理）
-                output_dir = str(Path(attachment.path).parent)
-                converted_paths = convert_office_attachment(attachment.path, output_dir)
-
-                for converted_path in converted_paths:
-                    p = Path(converted_path)
-                    ext = p.suffix.lower()
-                    content_type = "application/pdf" if ext == ".pdf" else "text/csv"
-
-                    converted_attachments.append(Attachment(
-                        filename=p.name,
-                        content_type=content_type,
-                        size=p.stat().st_size,
-                        path=str(p),
-                        content_id=None,
-                        is_inline=False,
-                        # v4: 关联原 docx/xlsx/pptx，供 email_attachment.derived_from 写入
-                        derived_from_filename=attachment.filename,
-                        derived_format="pdf" if ext == ".pdf" else "csv",
-                    ))
-
-            except Exception as e:
-                logger.warning(f"Failed to convert {attachment.filename}, skipping: {e}")
-
-        if converted_attachments:
-            logger.info(f"Generated {len(converted_attachments)} converted attachments: "
-                        f"{[a.filename for a in converted_attachments]}")
-
-        return converted_attachments
-
-    async def _upload_eml_file(self, email: Email) -> Optional[str]:
-        """生成并上传 .eml 归档文件
-
-        使用 "伪装 PDF" 技巧直接上传 .eml 文件，无需重命名。
-
-        Args:
-            email: Email 对象
-
-        Returns:
-            file_upload_id，失败返回 None
-        """
-        try:
-            eml_path = self.eml_generator.generate(email)
-            logger.debug(f"Generated .eml file: {eml_path.name}")
-
-            # 直接上传 .eml 文件，client.upload_file 会自动处理
-            file_upload_id = await self.client.upload_file(str(eml_path))
-            logger.info(f"Uploaded email file: {eml_path.name}")
-
-            return file_upload_id
-
-        except Exception as e:
-            logger.error(f"Failed to generate/upload email file: {e}")
-            return None
-
-    async def _create_page_with_blocks(
-        self,
-        properties: Dict[str, Any],
-        children: List[Dict[str, Any]],
-        icon: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """创建 Notion 页面，处理超过 100 blocks 的情况
-
-        Args:
-            properties: 页面属性
-            children: 内容 blocks
-            icon: 页面图标
-
-        Returns:
-            创建的页面对象
-        """
-        if len(children) <= 100:
-            return await self.client.create_page(properties=properties, children=children, icon=icon)
-
-        # 分批创建：先创建页面 + 前 100 个 blocks
-        logger.info(f"邮件包含 {len(children)} 个 blocks，将分批创建...")
-
-        page = await self.client.create_page(
-            properties=properties,
-            children=children[:100],
-            icon=icon
-        )
-        page_id = page['id']
-        logger.info(f"Created page with first 100 blocks")
-
-        # 追加剩余 blocks（每次最多 100 个）
-        remaining_blocks = children[100:]
-        batch_size = 100
-        for i in range(0, len(remaining_blocks), batch_size):
-            batch = remaining_blocks[i:i + batch_size]
-            await self.client.append_block_children(page_id, batch)
-            logger.info(f"Appended {len(batch)} blocks (batch {i//batch_size + 1})")
-
-        return page
-
-    def _create_meeting_callout(self, invite: 'MeetingInvite') -> Dict[str, Any]:
-        """创建会议邀请 Callout Block
-
-        Args:
-            invite: MeetingInvite 对象
-
-        Returns:
-            Notion callout block
-        """
-        # 格式化时间（北京时间）
-        start = invite.start_time.astimezone(BEIJING_TZ)
-        end = invite.end_time.astimezone(BEIJING_TZ)
-
-        if invite.is_all_day:
-            time_str = start.strftime("%Y-%m-%d") + " (全天)"
-        else:
-            time_str = f"{start.strftime('%Y-%m-%d %H:%M')} - {end.strftime('%H:%M')} (北京时间)"
-
-        # 判断会议状态：取消 / 更新 / 普通邀请
-        if invite.method == "CANCEL" or invite.status == "cancelled":
-            title_prefix = "【会议已取消】"
-            callout_color = "red_background"
-        elif invite.sequence > 0:
-            title_prefix = "【更新】"
-            callout_color = "blue_background"
-        else:
-            title_prefix = ""
-            callout_color = "blue_background"
-
-        title_text = f"{title_prefix}在线会议邀请"
-
-        # 构建内容行
-        lines = [
-            f"📌 主题：{invite.summary}",
-            f"🕐 时间：{time_str}",
-        ]
-
-        if invite.location:
-            lines.append(f"📍 地点：{invite.location}")
-
-        content_text = "\n".join(lines)
-
-        # 构建 rich_text 数组
-        rich_text_parts = [
-            {
-                "type": "text",
-                "text": {"content": title_text + "\n\n"},
-                "annotations": {"bold": True}
-            },
-            {
-                "type": "text",
-                "text": {"content": content_text}
-            }
-        ]
-
-        # 会议链接（可点击）
-        if invite.teams_url:
-            rich_text_parts.append({
-                "type": "text",
-                "text": {"content": "\n🔗 会议链接："}
-            })
-            rich_text_parts.append({
-                "type": "text",
-                "text": {
-                    "content": invite.teams_url[:80] + ("..." if len(invite.teams_url) > 80 else ""),
-                    "link": {"url": invite.teams_url}
-                },
-                "annotations": {"color": "blue"}
-            })
-
-        # 会议 ID
-        if invite.meeting_id:
-            rich_text_parts.append({
-                "type": "text",
-                "text": {"content": f"\n🆔 会议 ID：{invite.meeting_id}"}
-            })
-
-        # 密码
-        if invite.passcode:
-            rich_text_parts.append({
-                "type": "text",
-                "text": {"content": f"\n🔑 密码：{invite.passcode}"}
-            })
-
-        return {
-            "object": "block",
-            "type": "callout",
-            "callout": {
-                "rich_text": rich_text_parts,
-                "icon": {"type": "emoji", "emoji": "🗓"},
-                "color": callout_color
-            }
-        }
-
-    def _build_image_map(self, email: Email, uploaded_attachments: List[Dict]) -> Dict[str, tuple]:
-        """
-        构建图片映射，基于 Content-ID 精确匹配内联内容
-
-        Args:
-            email: Email 对象（包含带 content_id 的附件信息）
-            uploaded_attachments: 已上传的附件列表
-
-        Returns:
-            映射 {cid: (file_upload_id, content_type)} 和 {filename: (file_upload_id, content_type)}
-        """
-        image_map = {}
-
-        # 只处理HTML邮件
-        if email.content_type != "text/html":
-            return image_map
-
-        # 从HTML中提取所有cid引用
-        cid_pattern = r'cid:([^"\'\s>]+)'
-        cid_matches = set(re.findall(cid_pattern, email.content, re.IGNORECASE))
-
-        if not cid_matches:
-            # 没有cid引用，所有图片都是普通附件
-            logger.debug("No cid references found in HTML")
-            return image_map
-
-        logger.debug(f"Found {len(cid_matches)} cid references in HTML: {cid_matches}")
-
-        # 方法1：使用附件的 content_id 精确匹配（推荐）
-        # 构建 content_id -> (file_upload_id, content_type) 映射
-        # 注意：不再限制只有 image/* 类型，因为 magic bytes 检测可能已经修正了类型
-        cid_to_upload_info = {}
-        for att in uploaded_attachments:
-            content_id = att.get('content_id')
-            if content_id:
-                content_type = att.get('content_type', 'application/octet-stream')
-                upload_info = (att['file_upload_id'], content_type)
-                cid_to_upload_info[content_id] = upload_info
-                # 同时添加文件名映射，便于 html_converter 查找
-                image_map[att['filename']] = upload_info
-                logger.debug(f"Mapped by Content-ID: {content_id} -> {att['filename']} (type={content_type})")
-
-        # 检查 HTML 中的每个 cid 引用是否有对应的上传文件
-        for cid in cid_matches:
-            if cid in cid_to_upload_info:
-                # 添加 cid 本身作为 key（html_converter 会用 cid 查找）
-                image_map[cid] = cid_to_upload_info[cid]
-                logger.debug(f"CID {cid} matched to uploaded file")
-            else:
-                # 方法2：降级到启发式匹配（兼容旧数据）
-                for att in uploaded_attachments:
-                    content_id = att.get('content_id')
-                    if content_id:
-                        # 已经在上面处理过
-                        continue
-                    filename = att['filename']
-                    filename_without_ext = filename.rsplit('.', 1)[0] if '.' in filename else filename
-                    cid_clean = cid.split('@')[0] if '@' in cid else cid
-
-                    if (cid in filename or filename in cid or
-                        cid_clean in filename or filename_without_ext in cid):
-                        content_type = att.get('content_type', 'application/octet-stream')
-                        upload_info = (att['file_upload_id'], content_type)
-                        image_map[cid] = upload_info
-                        image_map[filename] = upload_info
-                        logger.debug(f"Fallback match: CID {cid} -> {filename} (type={content_type})")
-                        break
-
-        inline_count = len([a for a in uploaded_attachments if a.get('is_inline')])
-        total_images = len([a for a in uploaded_attachments if a.get('content_type', '').startswith('image/')])
-        logger.info(f"Image mapping: {len(image_map)//2} inline items, {total_images} images total, {inline_count} marked inline")
-
-        return image_map
-
-    def _build_properties(self, email: Email, eml_file_upload_id: str = None) -> Dict[str, Any]:
-        """构建 Notion Page Properties"""
-        # 确保日期带有时区信息，并统一转换为北京时间 (UTC+8)
-        email_date = email.date
-        if email_date.tzinfo is None:
-            # 假设原始时间是北京时间，添加时区信息
-            logger.debug(f"Date without timezone, assuming Beijing time: {email_date}")
-            email_date = email_date.replace(tzinfo=BEIJING_TZ)
-        else:
-            # 转换为北京时间 (UTC+8)
-            original_tz = email_date.isoformat()
-            email_date = email_date.astimezone(BEIJING_TZ)
-            logger.debug(f"Date converted to Beijing time: {original_tz} -> {email_date.isoformat()}")
-
-        properties = {
-            # Subject (Title)
-            "Subject": {
-                "title": [{"text": {"content": email.subject[:2000]}}]
-            },
-
-            # From (Email)
-            "From": {
-                "email": email.sender
-            },
-
-            # From Name (Text)
-            "From Name": {
-                "rich_text": [{"text": {"content": (email.sender_name or "")[:1999]}}]
-            },
-
-            # To (Text)
-            "To": {
-                "rich_text": [{"text": {"content": email.to[:1999]}}]
-            } if email.to else {"rich_text": []},
-
-            # CC (Text)
-            "CC": {
-                "rich_text": [{"text": {"content": email.cc[:1999]}}]
-            } if email.cc else {"rich_text": []},
-
-            # Date (带时区的 ISO 格式)
-            "Date": {
-                "date": {"start": email_date.isoformat()}
-            },
-
-            # Message ID (Text)
-            "Message ID": {
-                "rich_text": [{"text": {"content": email.message_id[:1999]}}]
-            },
-
-            # Processing Status (Select) - 默认为"未处理"
-            "Processing Status": {
-                "select": {"name": "未处理"}
-            },
-
-            # Is Read (Checkbox)
-            "Is Read": {
-                "checkbox": email.is_read
-            },
-
-            # Is Flagged (Checkbox)
-            "Is Flagged": {
-                "checkbox": email.is_flagged
-            },
-
-            # Has Attachments (Checkbox)
-            "Has Attachments": {
-                "checkbox": email.has_attachments
-            },
-
-            # Mailbox (Select) - 邮箱类型
-            "Mailbox": {
-                "select": {"name": email.mailbox}
-            },
-        }
-
-        # Thread ID (可选)
-        if email.thread_id:
-            properties["Thread ID"] = {
-                "rich_text": [{"text": {"content": email.thread_id[:1999]}}]
-            }
-
-        # ID (internal_id, 可选) - v3 架构: AppleScript id = SQLite ROWID
-        if email.internal_id:
-            properties["ID"] = {
-                "number": email.internal_id
-            }
-
-        # Original EML (Files) - .eml 文件上传
-        if eml_file_upload_id:
-            properties["Original EML"] = {
-                "files": [
-                    {
-                        "type": "file_upload",
-                        "file_upload": {
-                            "id": eml_file_upload_id
-                        }
-                    }
-                ]
-            }
-
-        return properties
-
-    # Notion 内容安全过滤会对某些 Unix 路径返回 403，用零宽空格拆分绕过
-    _SENSITIVE_PATH_PATTERN = re.compile(r'/etc/(?=hosts|passwd|shadow|sudoers|crontab|fstab|resolv)')
-
-    @classmethod
-    def _sanitize_text(cls, text: str) -> str:
-        """净化文本中可能触发 Notion 403 的敏感路径"""
-        return cls._SENSITIVE_PATH_PATTERN.sub('/etc/\u200B', text)
-
-    @classmethod
-    def _sanitize_rich_text_list(cls, rich_text_list: list):
-        """净化一个 rich_text 数组中的文本内容"""
-        for rt in rich_text_list:
-            text_obj = rt.get('text', {})
-            if 'content' in text_obj:
-                text_obj['content'] = cls._sanitize_text(text_obj['content'])
-
-    @classmethod
-    def _sanitize_blocks(cls, blocks: list):
-        """递归净化 blocks 中的 rich_text 内容（含 table cells）"""
-        for block in blocks:
-            btype = block.get('type', '')
-            container = block.get(btype, {})
-            if isinstance(container, dict):
-                # 普通 blocks 的 rich_text
-                if 'rich_text' in container:
-                    cls._sanitize_rich_text_list(container['rich_text'])
-                # table_row 的 cells: [[rich_text], [rich_text], ...]
-                for cell in container.get('cells', []):
-                    cls._sanitize_rich_text_list(cell)
-                # 递归处理子 blocks
-                if 'children' in container:
-                    cls._sanitize_blocks(container['children'])
-
-    def _build_children(self, email: Email, uploaded_attachments: List[Dict] = None, image_map: Dict[str, tuple] = None, meeting_invite: 'MeetingInvite' = None) -> List[Dict[str, Any]]:
-        """构建 Notion Page Children (Content Blocks)"""
-        children = []
-
-        # 0. 会议邀请 Callout（放在最前面）
-        if meeting_invite:
-            children.append(self._create_meeting_callout(meeting_invite))
-            children.append({
-                "object": "block",
-                "type": "divider",
-                "divider": {}
-            })
-
-        # 1. 非图片附件区域（放在顶部，类似邮件的表现）
-        non_image_attachments = []
-        inline_image_filenames = set(image_map.keys()) if image_map else set()
-
-        if uploaded_attachments:
-            for attachment in uploaded_attachments:
-                content_type = attachment.get('content_type', '').lower()
-                is_image = content_type.startswith('image/')
-
-                # 非图片附件：放在顶部
-                # 图片附件：只有非内联图片才放在顶部
-                if not is_image:
-                    non_image_attachments.append(attachment)
-                elif attachment['filename'] not in inline_image_filenames:
-                    # 非内联图片也放在附件区域
-                    non_image_attachments.append(attachment)
-
-        if non_image_attachments:
-            children.append({
-                "object": "block",
-                "type": "heading_3",
-                "heading_3": {
-                    "rich_text": [{"text": {"content": "📎 附件"}}]
-                }
-            })
-
-            for attachment in non_image_attachments:
-                content_type = attachment.get('content_type', '').lower()
-                is_image = content_type.startswith('image/')
-
-                if is_image:
-                    # 非内联图片
-                    children.append({
-                        "object": "block",
-                        "type": "image",
-                        "image": {
-                            "type": "file_upload",
-                            "file_upload": {
-                                "id": attachment['file_upload_id']
-                            },
-                            "caption": [{"text": {"content": attachment['filename']}}]
-                        }
-                    })
-                else:
-                    # 其他文件
-                    children.append({
-                        "object": "block",
-                        "type": "file",
-                        "file": {
-                            "type": "file_upload",
-                            "file_upload": {
-                                "id": attachment['file_upload_id']
-                            },
-                            "caption": [{"text": {"content": attachment['filename']}}]
-                        }
-                    })
-
-            children.append({
-                "object": "block",
-                "type": "divider",
-                "divider": {}
-            })
-
-        # 2. 邮件内容区域标题
-        children.append({
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {
-                "rich_text": [{"text": {"content": "📧 邮件内容"}}]
-            }
-        })
-
-        # 3. 转换邮件正文（包括内联图片）
-        try:
-            content_blocks = self.html_converter.convert(email.content, image_map)
-            children.extend(content_blocks)
-        except Exception as e:
-            logger.error(f"Failed to convert email content: {e}")
-            # 降级：添加纯文本
-            children.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"text": {"content": email.content[:2000]}}]
-                }
-            })
-
-        # 注意：不在这里限制 children 数量，由 _create_page_with_blocks 方法处理分批上传
-
-        return children
-
-    async def _find_thread_parent_by_thread_id(self, thread_id: Optional[str]) -> Optional[str]:
-        """通过 Thread ID (线程头邮件的 message_id) 查找 Parent Item
-
-        新架构：thread_id 就是线程头邮件的 message_id。
-        直接通过 Message ID 属性查找对应的 Notion 页面。
-
-        Args:
-            thread_id: 线程头邮件的 message_id
-
-        Returns:
-            线程头邮件的 page_id，如果没有则返回 None
-        """
-        if not thread_id:
-            return None
-
-        try:
-            # 直接通过 Message ID 查找线程头邮件
-            filter_conditions = {
-                "property": "Message ID",
-                "rich_text": {"equals": thread_id}
-            }
-
-            results = await self.client.query_database(
-                filter_conditions=filter_conditions
-            )
-
-            if results:
-                parent_page = results[0]
-                parent_page_id = parent_page.get("id")
-                logger.debug(f"Found thread parent by thread_id: {thread_id[:50]}... -> page_id={parent_page_id}")
-                return parent_page_id
-
-            logger.debug(f"Thread parent not found in Notion: {thread_id[:50]}...")
-            return None
-
-        except Exception as e:
-            logger.warning(f"Failed to find thread parent for thread_id={thread_id[:50]}...: {e}")
-            return None
-
-    async def _find_all_thread_members_with_date(
-        self,
-        thread_id: str,
-        exclude_message_id: str = None
-    ) -> List[Dict[str, Any]]:
-        """查找同一线程中的所有邮件（带日期信息）
-
-        用于新架构的 Parent Item 关联：找到线程中所有邮件，
-        比较日期以确定最新邮件。
-
-        Args:
-            thread_id: 线程标识
-            exclude_message_id: 排除的 message_id（当前正在同步的邮件）
-
-        Returns:
-            邮件列表，每项包含 {page_id, message_id, date}
-        """
-        if not thread_id:
-            return []
-
-        try:
-            ds_id = await self.client.get_data_source_id(self.client.email_db_id)
-            results = await self.client.client.data_sources.query(
-                data_source_id=ds_id,
-                filter={
-                    "property": "Thread ID",
-                    "rich_text": {"equals": thread_id}
-                },
-                page_size=100
-            )
-
-            pages = results.get("results", [])
-            thread_members = []
-
-            for page in pages:
-                page_id = page.get("id")
-                props = page.get("properties", {})
-
-                # 获取 message_id
-                msg_id_texts = props.get("Message ID", {}).get("rich_text", [])
-                msg_id = msg_id_texts[0].get("text", {}).get("content", "") if msg_id_texts else ""
-
-                # 排除当前邮件
-                if exclude_message_id and msg_id == exclude_message_id:
-                    continue
-
-                # 获取日期
-                date_prop = props.get("Date", {}).get("date", {})
-                date_str = date_prop.get("start", "") if date_prop else ""
-
-                thread_members.append({
-                    "page_id": page_id,
-                    "message_id": msg_id,
-                    "date": date_str
-                })
-
-            logger.debug(f"Found {len(thread_members)} thread members for: {thread_id[:30]}...")
-            return thread_members
-
-        except Exception as e:
-            logger.warning(f"Failed to find thread members for thread_id={thread_id[:30]}...: {e}")
-            return []
-
-    async def update_sub_items(self, page_id: str, child_page_ids: List[str]) -> bool:
-        """更新页面的 Sub-item 关系
-
-        通过设置母节点的 Sub-item，Notion 双向关联会自动更新子节点的 Parent Item。
-
-        Args:
-            page_id: 母节点的 page_id
-            child_page_ids: 子节点的 page_id 列表
-
-        Returns:
-            是否成功
-        """
-        if not child_page_ids:
-            return True
-
-        try:
-            # 过滤和验证子页面 ID
-            valid_child_ids = []
-            seen = set()
-            for pid in child_page_ids:
-                if not pid or pid == page_id or pid in seen:
-                    continue
-                seen.add(pid)
-                valid_child_ids.append(pid)
-
-            if not valid_child_ids:
-                return True
-
-            # 1. 清空 parent 的 Parent Item（避免循环引用）
-            await self.client.client.pages.update(
-                page_id=page_id,
-                properties={"Parent Item": {"relation": []}}
-            )
-
-            # 2. 设置 parent 的 Sub-item（Notion 双向关联会自动更新子节点的 Parent Item）
-            relations = [{"id": pid} for pid in valid_child_ids]
-            await self.client.client.pages.update(
-                page_id=page_id,
-                properties={"Sub-item": {"relation": relations}}
-            )
-
-            logger.debug(f"Updated Sub-item for {page_id}: {len(valid_child_ids)} children")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to update Sub-item for {page_id}: {e}")
-            return False
-
-    # ============================================================
-    # v4 SSoT 路径：从 SQLite 读 body+attachments+metadata 创建 Notion 页
-    # 详见 docs/architecture_v4_sqlite_ssot.md §5
-    # ============================================================
-
-    # 匹配 storage_payload_builder._rewrite_cid_to_local 写入 body_html 的相对路径
-    _V4_ATTACHMENT_SRC_RE = re.compile(
-        r"""(?P<attr>src|href)\s*=\s*(?P<quote>["'])attachments/(?P<int_id>\d+)/(?P<filename>[^"']+)(?P=quote)""",
-        re.IGNORECASE,
-    )
-
-    @classmethod
-    def _restore_cid_in_body_html(
-        cls, html: Optional[str], attachments: List['AttachmentRecord']
-    ) -> str:
-        """把 v4 body_html 里 ``attachments/{int_id}/{filename}`` 还原成 ``cid:{content_id}``。
-
-        Why: _build_image_map / _handle_image 已经被 v2 验证过、只认 cid: 引用；与其改写两边
-        不如把 v4 的相对路径反推回 cid 让既有 helper 原样工作。filename → content_id 映射来自
-        email_attachment 表（保 inline / content_id 不为空）。映射缺失就保留原相对路径，
-        _handle_image 进入 "unsupported src" 分支吐占位 callout，不会让整封邮件失败。
-        """
-        if not html:
-            return html or ""
-        filename_to_cid = {
-            att.filename: att.content_id
-            for att in attachments
-            if att.content_id
-        }
-        if not filename_to_cid:
-            return html
-
-        def repl(m: "re.Match[str]") -> str:
-            filename = m.group("filename")
-            cid = filename_to_cid.get(filename)
-            if not cid:
-                return m.group(0)
-            return f'{m.group("attr")}={m.group("quote")}cid:{cid}{m.group("quote")}'
-
-        return cls._V4_ATTACHMENT_SRC_RE.sub(repl, html)
-
-    @staticmethod
-    def _materialize_attachments(
-        att_records: List['AttachmentRecord'],
-        work_dir: Path,
-        repo: 'EmailRepository',
-    ) -> Tuple[List[Attachment], List[int]]:
-        """把 SQLite 附件物化到 work_dir，转成 v2 期望的 Attachment list。
-
-        v2 的 _upload_attachments / EMLGenerator.generate 都按 ``attachment.path`` 读盘，
-        这里给它们准备好临时文件即可，让上层逻辑无差异复用。
-
-        Returns:
-            (materialized, missing_att_ids):
-                - materialized: 成功落盘的 Attachment 列表（顺序 = att_records 中可用项）
-                - missing_att_ids: 落盘文件不存在的 attachment.id（告警 / 排错用）
-        """
-        materialized: List[Attachment] = []
-        missing: List[int] = []
-        for att in att_records:
-            content = repo.get_attachment_bytes(att.id)
-            if content is None:
-                logger.warning(
-                    f"Attachment file missing for att_id={att.id} "
-                    f"local_path={att.local_path!r}; skipping"
-                )
-                missing.append(att.id)
-                continue
-            target = work_dir / att.filename
-            try:
-                target.write_bytes(content)
-            except OSError as e:
-                logger.warning(f"Failed to stage attachment {att.filename!r}: {e}")
-                missing.append(att.id)
-                continue
-            materialized.append(Attachment(
-                filename=att.filename,
-                content_type=att.content_type or "application/octet-stream",
-                size=att.size_bytes or len(content),
-                path=str(target),
-                content_id=att.content_id,
-                is_inline=att.is_inline,
-                # derived_from_filename 留空：v4 dual-write 阶段已转过，
-                # 不需要让 _convert_office_attachments 二次处理
-                derived_from_filename=None,
-                derived_format=att.derived_format,
-            ))
-        return materialized, missing
-
-    @staticmethod
-    def _parse_iso_to_beijing(date_str: Optional[str]) -> datetime:
-        """ISO 串 → 带 UTC+8 的 datetime；失败回退 now()。"""
-        if not date_str:
-            return datetime.now(BEIJING_TZ)
-        try:
-            normalized = re.sub(r'\.\d+', '', date_str)
-            dt = datetime.fromisoformat(normalized)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=BEIJING_TZ)
-            return dt
-        except Exception:
-            logger.warning(f"Failed to parse date {date_str!r}, using now()")
-            return datetime.now(BEIJING_TZ)
-
-    @classmethod
-    def _build_email_from_sqlite(
-        cls,
-        internal_id: int,
-        body_record: 'EmailBodyRecord',
-        metadata: Mapping[str, Any],
-        att_records: List['AttachmentRecord'],
-        work_dir: Path,
-        repo: 'EmailRepository',
-    ) -> Email:
-        """合成 Email 对象，让 v2 的 properties/children/upload helpers 原样复用。
-
-        - body content 优先取 body_html；text-only / empty 用 markdown 兜底
-        - body_format='html' → content_type='text/html'，否则 'text/plain'
-        - cid 还原仅在 HTML 路径上做，plaintext 不需要
-        """
-        materialized, _missing = cls._materialize_attachments(att_records, work_dir, repo)
-
-        is_html = body_record.body_format == "html" and body_record.html
-        if is_html:
-            content = cls._restore_cid_in_body_html(body_record.html, att_records)
-            content_type = "text/html"
-        else:
-            content = body_record.markdown or body_record.html or ""
-            content_type = "text/plain"
-
-        parsed_date = cls._parse_iso_to_beijing(metadata.get("date_received"))
-
-        message_id = metadata.get("message_id") or body_record.message_id
-        if not message_id:
-            raise ValueError(f"Missing message_id in SQLite for internal_id={internal_id}")
-
-        return Email(
-            message_id=message_id,
-            subject=metadata.get("subject") or "(No Subject)",
-            sender=metadata.get("sender") or "",
-            sender_name=metadata.get("sender_name") or None,
-            to=metadata.get("to_addr") or "",
-            cc=metadata.get("cc_addr") or "",
-            date=parsed_date,
-            content=content,
-            content_type=content_type,
-            is_read=bool(metadata.get("is_read")),
-            is_flagged=bool(metadata.get("is_flagged")),
-            attachments=materialized,
-            thread_id=metadata.get("thread_id") or None,
-            mailbox=metadata.get("mailbox") or "收件箱",
-            internal_id=internal_id,
-        )
-
-    @staticmethod
-    def _build_file_id_map(
-        uploaded_attachments: List[Dict[str, Any]],
-        att_records: List['AttachmentRecord'],
-    ) -> Dict[int, str]:
-        """把上传成功的附件与 SQLite 行关联，返回 {attachment_id: file_upload_id}。
-
-        给 repo.update_notion_links 用，让未来反向同步 / orphan 清理可以走
-        email_attachment.notion_file_id。filename 是 sanitize 后的稳定 key，
-        commit 阶段和 materialize 阶段一致。
-        """
-        filename_to_id = {att.filename: att.id for att in att_records}
-        file_id_map: Dict[int, str] = {}
-        for ua in uploaded_attachments:
-            att_id = filename_to_id.get(ua.get("filename"))
-            upload_id = ua.get("file_upload_id")
-            if att_id is not None and upload_id:
-                file_id_map[att_id] = upload_id
-        return file_id_map
+        return await self._ensure_pages().sync_email(email)
 
     async def create_email_page_v2(
         self,
@@ -1091,167 +210,12 @@ class NotionSync:
         calendar_page_id: str = None,
         meeting_invite: 'MeetingInvite' = None
     ) -> Optional[str]:
-        """创建邮件页面（新架构 v2）
-
-        新架构特性：
-        - 线程中最新邮件作为母节点
-        - 通过设置 Sub-item 自动重建 Parent Item 关系
-        - 支持关联日程页面（会议邀请邮件）
-        - 支持在邮件正文前显示会议邀请信息
-
-        Args:
-            email: Email 对象（必须包含 thread_id）
-            skip_parent_lookup: 是否跳过线程关系处理（用于批量同步时避免重复处理）
-            calendar_page_id: 日程页面 ID（如果邮件包含会议邀请）
-            meeting_invite: 会议邀请对象（用于在正文前显示会议信息 callout）
-
-        Returns:
-            成功返回 page_id，失败返回 None
-
-        Raises:
-            Exception: 检查重复时发生错误会抛出异常，避免创建重复页面
-        """
-        # v4 P4-04：灰度路由 —— NOTION_READ_FROM_SQLITE=true + SQLite 命中 body 时
-        # delegate 到 create_email_page_from_sqlite；miss 自动 fallback 走老路径。
-        # 默认 false，对生产无副作用；切 true 后正常 sync + resync 都统一走 SSoT。
-        # PR-4 R-06: 路径选择计数 → v4_rollout_stats 表 (RFC §8 选项 A).
-        # PR-4 codex critic round 1: fallback 仅覆盖 *pre-side-effect* 错 (body lookup miss / DB locked);
-        # 一旦进入 create_email_page_from_sqlite (side effect 已开始), 错误必须上抛, 否则可能
-        # 触发老路径再建一张重复页 (duplicate page risk).
-        import time as _time
-        from src.config import config as app_config
-        if app_config.notion_read_from_sqlite and email.internal_id:
-            _t0 = _time.monotonic()
-            should_route_sqlite = False
-            try:
-                repo = self._email_repo
-                sync_store = self._sync_store
-                # pre-side-effect 阶段: 只是查 body 是否存在
-                if repo.get_body(email.internal_id) is not None:
-                    should_route_sqlite = True
-                else:
-                    logger.debug(
-                        f"[v4] SQLite body miss for internal_id={email.internal_id}, "
-                        f"falling back to legacy v2 path"
-                    )
-                    self.record_route_miss(int(email.internal_id))
-            except ValueError:
-                # body / metadata lookup 不一致 (Phase 1 之前老邮件): fallback 老路径
-                logger.debug(
-                    f"[v4] SQLite resources incomplete for internal_id={email.internal_id}, "
-                    f"falling back to legacy v2 path"
-                )
-                self.record_route_miss(int(email.internal_id))
-            except Exception as e:
-                # DB locked / 路径解析等 pre-side-effect 错: fallback 但 warning
-                logger.warning(
-                    f"[v4] SQLite pre-route lookup failed for internal_id={email.internal_id} "
-                    f"({type(e).__name__}: {e}); falling back to legacy v2 path"
-                )
-                self.record_route_error()
-
-            # side-effect 阶段: 一旦走 create_email_page_from_sqlite, 任何错都必须上抛, 不再 fallback.
-            if should_route_sqlite:
-                logger.debug(
-                    f"[v4] routing to from-sqlite path: internal_id={email.internal_id}"
-                )
-                sqlite_result = await self.create_email_page_from_sqlite(
-                    email.internal_id,
-                    repo=repo,
-                    sync_store=sync_store,
-                    meeting_invite=meeting_invite,
-                    calendar_page_id=calendar_page_id,
-                    skip_parent_lookup=skip_parent_lookup,
-                )
-                self.record_route_hit((_time.monotonic() - _t0) * 1000)
-                return sqlite_result.page_id
-
-        try:
-            logger.info(f"Creating email page (v2): {email.subject}")
-
-            # 1. 检查是否已同步（这里的异常会向上传播，避免重复创建）
-            try:
-                if await self.client.check_page_exists(email.message_id):
-                    logger.info(f"Email already synced: {email.message_id}")
-                    existing = await self.client.query_database(
-                        filter_conditions={
-                            "property": "Message ID",
-                            "rich_text": {"equals": email.message_id}
-                        }
-                    )
-                    if existing:
-                        return existing[0].get("id")
-                    return None
-            except Exception as e:
-                # 检查重复失败时，向上抛出异常，避免创建重复页面
-                logger.error(f"Failed to check if page exists, aborting to prevent duplicates: {e}")
-                raise
-
-            # 2. 转换 Office 附件（docx/pptx→PDF, xlsx→CSV），追加到附件列表
-            from src.config import config as app_config
-            if app_config.office_convert_enabled:
-                converted = self._convert_office_attachments(email)
-                if converted:
-                    email.attachments.extend(converted)
-
-            # 3. 上传附件（使用提取的方法）
-            uploaded_attachments, failed_attachments = await self._upload_attachments(email)
-
-            # 4. 生成并上传 .eml 归档文件
-            eml_file_upload_id = await self._upload_eml_file(email)
-
-            # 5. 构建 Properties
-            properties = self._build_properties(email, eml_file_upload_id)
-
-            # 6. 关联日程页面（会议邀请邮件）
-            if calendar_page_id:
-                properties["Calendar Events"] = {
-                    "relation": [{"id": calendar_page_id}]
-                }
-                logger.info(f"Linked to calendar event: {calendar_page_id}")
-
-            # 7. 构建图片映射
-            image_map = self._build_image_map(email, uploaded_attachments)
-
-            # 8. 转换邮件内容为 Notion Blocks
-            children = self._build_children(email, uploaded_attachments, image_map, meeting_invite)
-
-            # 8.5 净化 blocks 中可能触发 Notion 403 的敏感路径
-            self._sanitize_blocks(children)
-
-            # 9. 如果有附件上传失败，添加警告提示
-            if failed_attachments:
-                warning_block = {
-                    "type": "callout",
-                    "callout": {
-                        "rich_text": [{
-                            "type": "text",
-                            "text": {"content": f"⚠️ {len(failed_attachments)} 个附件上传失败: {', '.join(failed_attachments)}"}
-                        }],
-                        "icon": {"type": "emoji", "emoji": "⚠️"},
-                        "color": "yellow_background"
-                    }
-                }
-                children.insert(0, warning_block)
-
-            # 10. 设置邮件 icon（收件箱 📧，发件箱 📤）
-            email_icon = {"type": "emoji", "emoji": "📤"} if email.mailbox == "发件箱" else {"type": "emoji", "emoji": "📧"}
-
-            # 11. 创建 Page（使用提取的方法处理分批）
-            page = await self._create_page_with_blocks(properties, children, email_icon)
-            page_id = page['id']
-            logger.info(f"Email page created successfully (v2): {email.subject} (page_id={page_id})")
-
-            # 12. 处理线程关系（新架构：最新邮件为母节点）
-            thread_id = email.thread_id
-            if not skip_parent_lookup and thread_id:
-                await self._handle_thread_relations(page_id, email)
-
-            return page_id
-
-        except Exception as e:
-            logger.error(f"Failed to create email page (v2): {e}")
-            raise  # 向上传播异常，让调用方知道失败原因
+        return await self._ensure_pages().create_email_page_v2(
+            email,
+            skip_parent_lookup=skip_parent_lookup,
+            calendar_page_id=calendar_page_id,
+            meeting_invite=meeting_invite,
+        )
 
     async def create_email_page_from_sqlite(
         self,
@@ -1264,571 +228,33 @@ class NotionSync:
         skip_parent_lookup: bool = False,
         replace_existing: bool = False,
     ) -> CreateEmailFromSqliteResult:
-        """v4 SSoT 路径：从 SQLite 读 body+attachments+metadata 创建 Notion 邮件页面。
+        return await self._ensure_pages().create_email_page_from_sqlite(
+            internal_id,
+            repo=repo,
+            sync_store=sync_store,
+            meeting_invite=meeting_invite,
+            calendar_page_id=calendar_page_id,
+            skip_parent_lookup=skip_parent_lookup,
+            replace_existing=replace_existing,
+        )
 
-        与 create_email_page_v2 的语义差异：
-        - 不接受 in-memory Email 对象，整张邮件从 SQLite 重建
-        - 附件从 ``email_attachment.local_path`` 读盘，不再依赖 ``/tmp/{md5}/``
-        - Office 转换跳过（v4 dual-write 已把 derived 行预转完）
-        - 上传完成后通过 ``repo.update_notion_links`` 回写 ``notion_file_id``
-          供反向同步 / orphan cleanup 复用
-
-        适用场景：
-        - ``scripts/resync_notion.py`` 重传历史邮件（不再走 AppleScript）
-        - 灰度切换后正常 sync 路径（P4-04 wrapper 路由）
-
-        Raises:
-            ValueError: SQLite 没有 body / metadata。调用方自行决定是否降级到 AppleScript。
-        """
-        body_record = repo.get_body(internal_id)
-        if body_record is None:
-            raise ValueError(f"No body in SQLite for internal_id={internal_id}")
-        metadata = sync_store.get(internal_id)
-        if metadata is None:
-            raise ValueError(f"No metadata in SQLite for internal_id={internal_id}")
-        att_records = repo.get_attachments(internal_id)
-
-        work_dir = Path(tempfile.mkdtemp(prefix=f"mailagent-sqlite-{internal_id}-"))
-        try:
-            email = self._build_email_from_sqlite(
-                internal_id, body_record, metadata, att_records, work_dir, repo
-            )
-
-            logger.info(
-                f"Creating email page from SQLite: {email.subject} "
-                f"(internal_id={internal_id}, attachments={len(email.attachments)}, "
-                f"format={body_record.body_format})"
-            )
-
-            # 1. dup check（与 v2 同语义）
-            # R-19 / PR-2 critic round 2: 追踪 dup 命中 + archive 真实发生情况, 供
-            # 结构化 result 区分 'skipped' / 'replaced' / 'created'。
-            existing_page_id_pre_replace: Optional[str] = None
-            archived_page_id: Optional[str] = None
-            try:
-                if await self.client.check_page_exists(email.message_id):
-                    logger.info(f"Email already synced: {email.message_id}")
-                    existing = await self.client.query_database(
-                        filter_conditions={
-                            "property": "Message ID",
-                            "rich_text": {"equals": email.message_id}
-                        }
-                    )
-                    if existing:
-                        existing_page_id = existing[0].get("id")
-                        if not replace_existing:
-                            return CreateEmailFromSqliteResult(
-                                page_id=existing_page_id,
-                                action="skipped",
-                                existing_page_id=existing_page_id,
-                            )
-                        # replace_existing：归档老页落到 create 流程
-                        existing_page_id_pre_replace = existing_page_id
-                        try:
-                            await self.client.client.pages.update(
-                                page_id=existing_page_id, archived=True
-                            )
-                            archived_page_id = existing_page_id
-                            logger.info(
-                                f"Archived existing page {existing_page_id} for replace"
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"Archive existing page {existing_page_id} failed: {e}; "
-                                f"continuing with create anyway"
-                            )
-                    else:
-                        # check_page_exists 命中但 query 拉不到 — Notion 侧索引/视图不一致,
-                        # 不再创建 (避免重复) 也无法定位老页, 返回 page_id=None 的 'skipped'。
-                        return CreateEmailFromSqliteResult(
-                            page_id=None,
-                            action="skipped",
-                        )
-            except Exception:
-                logger.error(
-                    "Failed to check page existence (from-sqlite), aborting to prevent duplicates"
-                )
-                raise
-
-            # 2. 附件上传（v2 _upload_attachments 直接复用，path 指向 work_dir 临时文件）
-            uploaded_attachments, failed_filenames = await self._upload_attachments(email)
-
-            # 3. .eml 归档（v2 EMLGenerator 直接复用）
-            eml_file_upload_id = await self._upload_eml_file(email)
-
-            # 4. properties + image_map + children
-            properties = self._build_properties(email, eml_file_upload_id)
-            if calendar_page_id:
-                properties["Calendar Events"] = {"relation": [{"id": calendar_page_id}]}
-                logger.info(f"Linked to calendar event: {calendar_page_id}")
-
-            image_map = self._build_image_map(email, uploaded_attachments)
-            children = self._build_children(email, uploaded_attachments, image_map, meeting_invite)
-            self._sanitize_blocks(children)
-
-            if failed_filenames:
-                warning_block = {
-                    "type": "callout",
-                    "callout": {
-                        "rich_text": [{
-                            "type": "text",
-                            "text": {"content": f"⚠️ {len(failed_filenames)} 个附件上传失败: {', '.join(failed_filenames)}"}
-                        }],
-                        "icon": {"type": "emoji", "emoji": "⚠️"},
-                        "color": "yellow_background"
-                    }
-                }
-                children.insert(0, warning_block)
-
-            # 5. 创建 Page
-            email_icon = (
-                {"type": "emoji", "emoji": "📤"}
-                if email.mailbox == "发件箱"
-                else {"type": "emoji", "emoji": "📧"}
-            )
-            page = await self._create_page_with_blocks(properties, children, email_icon)
-            page_id = page["id"]
-            logger.info(
-                f"Email page created from SQLite (v4): {email.subject} "
-                f"(page_id={page_id})"
-            )
-
-            # 6. P4-03: 回写 notion_file_id
-            file_id_map = self._build_file_id_map(uploaded_attachments, att_records)
-            if file_id_map:
-                try:
-                    repo.update_notion_links(internal_id, file_id_map=file_id_map)
-                    logger.debug(
-                        f"Wrote back {len(file_id_map)} notion_file_id entries "
-                        f"for internal_id={internal_id}"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to write back notion_file_id for "
-                        f"internal_id={internal_id}: {e}"
-                    )
-
-            # 7. 线程关系（v2 同链路）
-            if not skip_parent_lookup and email.thread_id:
-                await self._handle_thread_relations(page_id, email)
-
-            return CreateEmailFromSqliteResult(
-                page_id=page_id,
-                action=(
-                    "replaced" if existing_page_id_pre_replace else "created"
-                ),
-                existing_page_id=existing_page_id_pre_replace,
-                archived_page_id=archived_page_id,
-            )
-        finally:
-            shutil.rmtree(work_dir, ignore_errors=True)
-
-    def _parse_date_to_beijing(self, date_str: str) -> Optional[datetime]:
-        """将日期字符串转换为北京时间 datetime 对象
-
-        支持的格式：
-        - ISO 格式: 2026-01-27T09:14:00+08:00
-        - Notion 格式: 2026-01-27T09:14:00.000+08:00
-
-        Args:
-            date_str: 日期字符串
-
-        Returns:
-            北京时间的 datetime 对象，解析失败返回 None
-        """
-        if not date_str:
-            return None
-
-        try:
-            # 处理 Notion 返回的毫秒格式: 2026-01-27T09:14:00.000+08:00
-            # Python 3.11+ 的 fromisoformat 可以处理这种格式
-            # 但为了兼容，移除毫秒部分
-            import re
-            # 移除毫秒（.000 或 .123456 等）
-            normalized = re.sub(r'\.\d+', '', date_str)
-            dt = datetime.fromisoformat(normalized)
-            # 转换为北京时间
-            return dt.astimezone(BEIJING_TZ)
-        except Exception as e:
-            logger.warning(f"Failed to parse date string '{date_str}': {e}")
-            return None
-
-    async def _handle_thread_relations(self, page_id: str, email: Email):
-        """处理线程关系（新架构：最新邮件为母节点）.
-
-        Phase 4 R-02 改造：SQLite SSoT 优先 + Notion fallback。
-        数据源（改造点）：
-        - 优先用 self._email_repo.get_thread_members(...) 从 SQLite 查
-        - SQLite 没找到 + config.thread_relations_fallback_to_notion=True → 兜底 Notion API
-        - thread_relations_fallback_to_notion=False 且 SQLite miss → 直接 return（信任 SSoT）
-        """
-        thread_id = email.thread_id
-        if not thread_id:
-            return
-
-        try:
-            # 1. SQLite 优先 (R-02)
-            sqlite_members = self._email_repo.get_thread_members(
-                thread_id=thread_id,
-                exclude_internal_id=email.internal_id if email.internal_id else None,
-                synced_only=True,
-            )
-
-            # 转 dict 列表（兼容后续逻辑 'page_id' / 'date' key）
-            thread_members: List[Dict[str, Any]] = []
-            for m in sqlite_members:
-                if not m.page_id:
-                    continue
-                thread_members.append({
-                    'page_id': m.page_id,
-                    'date': m.date_received or '',
-                })
-
-            # 2. SQLite 空 + 灰度开关允许 → Notion API fallback
-            if not thread_members:
-                from src.config import config as app_config
-                if app_config.thread_relations_fallback_to_notion:
-                    logger.debug(
-                        f"[R-02] SQLite missed thread {thread_id[:30]}, falling back to Notion API"
-                    )
-                    thread_members = await self._find_all_thread_members_with_date(
-                        thread_id,
-                        exclude_message_id=email.message_id,
-                    )
-
-            if not thread_members:
-                logger.debug(f"No other thread members found, this is the only email in thread")
-                return
-
-            # 3. 当前邮件北京时间
-            current_dt = None
-            if email.date:
-                if email.date.tzinfo is None:
-                    current_dt = email.date.replace(tzinfo=BEIJING_TZ)
-                else:
-                    current_dt = email.date.astimezone(BEIJING_TZ)
-
-            # 4. 找最新成员
-            for member in thread_members:
-                member['date_dt'] = self._parse_date_to_beijing(member.get('date', ''))
-
-            valid_members = [m for m in thread_members if m.get('date_dt')]
-            if not valid_members:
-                logger.warning(f"No valid dates found in thread members, skipping relation handling")
-                return
-
-            latest_member = max(valid_members, key=lambda x: x['date_dt'])
-            latest_dt = latest_member['date_dt']
-
-            is_current_latest = current_dt is not None and current_dt >= latest_dt
-            if is_current_latest:
-                all_other_page_ids = [m['page_id'] for m in thread_members]
-                logger.info(
-                    f"Current email is the latest ({current_dt} >= {latest_dt}), "
-                    f"setting Sub-item with {len(all_other_page_ids)} members"
-                )
-                await self.update_sub_items(page_id, all_other_page_ids)
-            else:
-                latest_page_id = latest_member['page_id']
-                logger.info(
-                    f"Current email is not the latest ({current_dt} < {latest_dt}), "
-                    f"updating latest email's Sub-item"
-                )
-                all_non_latest = [m['page_id'] for m in thread_members if m['page_id'] != latest_page_id]
-                all_non_latest.append(page_id)
-                await self.update_sub_items(latest_page_id, all_non_latest)
-
-        except Exception as e:
-            logger.warning(f"Failed to handle thread relations for {email.message_id[:30]}...: {e}")
+    async def update_sub_items(self, page_id: str, child_page_ids: List[str]) -> bool:
+        return await self._ensure_threads().update_sub_items(page_id, child_page_ids)
 
     async def update_parent_item(self, page_id: str, parent_page_id: str) -> bool:
-        """更新邮件的 Parent Item 关联
-
-        用于在线程头邮件同步后，更新子邮件的关联。
-
-        Args:
-            page_id: 子邮件的 page_id
-            parent_page_id: 线程头邮件的 page_id
-
-        Returns:
-            是否成功
-        """
-        try:
-            await self.client.client.pages.update(
-                page_id=page_id,
-                properties={
-                    "Parent Item": {
-                        "relation": [{"id": parent_page_id}]
-                    }
-                }
-            )
-            logger.debug(f"Updated Parent Item: {page_id} -> {parent_page_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to update Parent Item for {page_id}: {e}")
-            return False
+        return await self._ensure_queries().update_parent_item(page_id, parent_page_id)
 
     async def query_all_message_ids(self) -> Set[str]:
-        """查询所有已同步邮件的 message_id
-
-        新架构使用 message_id 作为唯一标识。
-
-        Returns:
-            message_id 集合
-        """
-        message_ids: Set[str] = set()
-
-        try:
-            logger.info("Querying all message IDs from Notion database...")
-            ds_id = await self.client.get_data_source_id(self.client.email_db_id)
-
-            filter_conditions = {
-                "property": "Message ID",
-                "rich_text": {"is_not_empty": True}
-            }
-
-            has_more = True
-            start_cursor = None
-
-            while has_more:
-                query_params = {
-                    "data_source_id": ds_id,
-                    "filter": filter_conditions,
-                    "page_size": 100
-                }
-
-                if start_cursor:
-                    query_params["start_cursor"] = start_cursor
-
-                results = await self.client.client.data_sources.query(**query_params)
-
-                for page in results.get("results", []):
-                    msg_id_prop = page.get("properties", {}).get("Message ID", {})
-                    rich_text = msg_id_prop.get("rich_text", [])
-                    if rich_text:
-                        message_id = rich_text[0].get("text", {}).get("content", "")
-                        if message_id:
-                            message_ids.add(message_id)
-
-                has_more = results.get("has_more", False)
-                start_cursor = results.get("next_cursor")
-
-            logger.info(f"Found {len(message_ids)} existing message IDs in Notion")
-            return message_ids
-
-        except Exception as e:
-            logger.error(f"Failed to query message IDs: {e}")
-            return message_ids
+        return await self._ensure_queries().query_all_message_ids()
 
     async def query_all_row_ids(self) -> Set[int]:
-        """查询所有已同步邮件的 row_id（启动时调用）
-
-        查询 Notion 数据库中所有 Row ID 不为空的页面
-        返回 row_id 集合
-        """
-        row_ids: Set[int] = set()
-
-        try:
-            logger.info("Querying all row IDs from Notion database...")
-            ds_id = await self.client.get_data_source_id(self.client.email_db_id)
-
-            filter_conditions = {
-                "property": "Row ID",
-                "number": {"is_not_empty": True}
-            }
-
-            has_more = True
-            start_cursor = None
-
-            while has_more:
-                query_params = {
-                    "data_source_id": ds_id,
-                    "filter": filter_conditions,
-                    "page_size": 100
-                }
-
-                if start_cursor:
-                    query_params["start_cursor"] = start_cursor
-
-                results = await self.client.client.data_sources.query(**query_params)
-
-                for page in results.get("results", []):
-                    row_id_prop = page.get("properties", {}).get("Row ID", {})
-                    row_id_value = row_id_prop.get("number")
-                    if row_id_value is not None:
-                        row_ids.add(int(row_id_value))
-
-                has_more = results.get("has_more", False)
-                start_cursor = results.get("next_cursor")
-
-            logger.info(f"Found {len(row_ids)} existing row IDs in Notion")
-            return row_ids
-
-        except Exception as e:
-            logger.error(f"Failed to query row IDs: {e}")
-            return row_ids
+        return await self._ensure_queries().query_all_row_ids()
 
     async def query_pages_for_reverse_sync(self) -> List[Dict]:
-        """查询需要反向同步的页面
+        return await self._ensure_queries().query_pages_for_reverse_sync()
 
-        条件:
-        - Processing Status = 'AI Reviewed'
-        - Synced to Mail = False (checkbox)
-
-        Returns:
-            页面列表，每个包含 page_id, message_id, ai_action
-        """
-        pages = []
-
-        try:
-            logger.debug("Querying pages for reverse sync...")
-            ds_id = await self.client.get_data_source_id(self.client.email_db_id)
-
-            filter_conditions = {
-                "and": [
-                    {
-                        "property": "Processing Status",
-                        "select": {"equals": "AI Reviewed"}
-                    },
-                    {
-                        "property": "Synced to Mail",
-                        "checkbox": {"equals": False}
-                    }
-                ]
-            }
-
-            has_more = True
-            start_cursor = None
-
-            while has_more:
-                query_params = {
-                    "data_source_id": ds_id,
-                    "filter": filter_conditions,
-                    "page_size": 100
-                }
-
-                if start_cursor:
-                    query_params["start_cursor"] = start_cursor
-
-                results = await self.client.client.data_sources.query(**query_params)
-
-                for page in results.get("results", []):
-                    props = page.get("properties", {})
-
-                    # 提取 Message ID
-                    message_id_prop = props.get("Message ID", {})
-                    message_id_texts = message_id_prop.get("rich_text", [])
-                    message_id = message_id_texts[0].get("text", {}).get("content", "") if message_id_texts else ""
-
-                    # 提取 AI Action
-                    ai_action_prop = props.get("Action Type", {})
-                    ai_action = ai_action_prop.get("select", {})
-                    ai_action_name = ai_action.get("name", "") if ai_action else ""
-
-                    # 提取 Subject (title)
-                    subject_prop = props.get("Subject", {})
-                    subject_titles = subject_prop.get("title", [])
-                    subject = subject_titles[0].get("text", {}).get("content", "") if subject_titles else ""
-
-                    # 提取 From Name / From
-                    from_name = ""
-                    from_name_prop = props.get("From Name", {})
-                    from_name_texts = from_name_prop.get("rich_text", [])
-                    if from_name_texts:
-                        from_name = from_name_texts[0].get("text", {}).get("content", "")
-
-                    from_email = ""
-                    from_prop = props.get("From", {})
-                    from_email = from_prop.get("email", "") or ""
-
-                    # 提取 To / CC (rich_text)
-                    to_addr = ""
-                    to_prop = props.get("To", {})
-                    to_texts = to_prop.get("rich_text", [])
-                    if to_texts:
-                        to_addr = "".join(t.get("text", {}).get("content", "") for t in to_texts)
-
-                    cc_addr = ""
-                    cc_prop = props.get("CC", {})
-                    cc_texts = cc_prop.get("rich_text", [])
-                    if cc_texts:
-                        cc_addr = "".join(t.get("text", {}).get("content", "") for t in cc_texts)
-
-                    # 提取 Date
-                    date_str = ""
-                    date_prop = props.get("Date", {})
-                    date_val = date_prop.get("date")
-                    if date_val:
-                        date_str = date_val.get("start", "")
-
-                    # 提取 AI Priority (select, 可能不存在)
-                    ai_priority = ""
-                    ai_priority_prop = props.get("Priority", {})
-                    ai_priority_sel = ai_priority_prop.get("select")
-                    if ai_priority_sel:
-                        ai_priority = ai_priority_sel.get("name", "")
-
-                    # 提取 Mailbox (select)
-                    mailbox = ""
-                    mailbox_prop = props.get("Mailbox", {})
-                    mailbox_sel = mailbox_prop.get("select")
-                    if mailbox_sel:
-                        mailbox = mailbox_sel.get("name", "")
-
-                    # 提取 AI Summary
-                    ai_summary = ""
-                    summary_prop = props.get("AI Summary", {})
-                    summary_texts = summary_prop.get("rich_text", [])
-                    if summary_texts:
-                        ai_summary = "".join(t.get("text", {}).get("content", "") for t in summary_texts)
-
-                    # 提取 ID (number)
-                    row_id = None
-                    id_prop = props.get("ID", {})
-                    row_id = id_prop.get("number")
-
-                    # 提取 Category
-                    category = ""
-                    cat_prop = props.get("Category", {})
-                    cat_sel = cat_prop.get("select")
-                    if cat_sel:
-                        category = cat_sel.get("name", "")
-
-                    # 提取 Reply Suggestion
-                    reply_suggestion = ""
-                    reply_prop = props.get("Reply Suggestion", {})
-                    reply_texts = reply_prop.get("rich_text", [])
-                    if reply_texts:
-                        reply_suggestion = "".join(t.get("text", {}).get("content", "") for t in reply_texts)
-
-                    pages.append({
-                        "page_id": page["id"],
-                        "message_id": message_id,
-                        "ai_action": ai_action_name,
-                        "subject": subject,
-                        "from_name": from_name,
-                        "from_email": from_email,
-                        "to_addr": to_addr,
-                        "cc_addr": cc_addr,
-                        "date": date_str,
-                        "ai_priority": ai_priority,
-                        "mailbox": mailbox,
-                        "ai_summary": ai_summary,
-                        "row_id": row_id,
-                        "category": category,
-                        "reply_suggestion": reply_suggestion,
-                    })
-
-                has_more = results.get("has_more", False)
-                start_cursor = results.get("next_cursor")
-
-            if pages:
-                logger.info(f"Found {len(pages)} pages for reverse sync")
-            return pages
-
-        except Exception as e:
-            logger.error(f"Failed to query pages for reverse sync: {e}")
-            return pages
+    async def query_by_row_id(self, row_id: int) -> Optional[Dict]:
+        return await self._ensure_queries().query_by_row_id(row_id)
 
     async def update_page_mail_sync_status(
         self,
@@ -1836,23 +262,11 @@ class NotionSync:
         synced: bool = True,
         processing_status: str = ""
     ):
-        """更新页面的邮件同步状态"""
-        try:
-            properties = {
-                "Synced to Mail": {"checkbox": synced},
-            }
-            if processing_status:
-                properties["Processing Status"] = {"select": {"name": processing_status}}
-
-            await self.client.client.pages.update(
-                page_id=page_id,
-                properties=properties
-            )
-            logger.info(f"Mail sync status updated: {page_id} status={processing_status or 'unchanged'}")
-
-        except Exception as e:
-            logger.error(f"Failed to update mail sync status for {page_id}: {e}")
-            raise
+        return await self._ensure_queries().update_page_mail_sync_status(
+            page_id,
+            synced=synced,
+            processing_status=processing_status,
+        )
 
     async def update_email_flags(
         self,
@@ -1861,52 +275,135 @@ class NotionSync:
         is_flagged: bool,
         processing_status: str = ""
     ):
-        """更新邮件的 Is Read / Is Flagged 状态到 Notion"""
-        try:
-            properties = {
-                "Is Read": {"checkbox": is_read},
-                "Is Flagged": {"checkbox": is_flagged},
-            }
-            if processing_status:
-                properties["Processing Status"] = {"select": {"name": processing_status}}
+        return await self._ensure_queries().update_email_flags(
+            page_id,
+            is_read,
+            is_flagged,
+            processing_status=processing_status,
+        )
 
-            await self.client.client.pages.update(
-                page_id=page_id,
-                properties=properties
-            )
+    # ---------- quasi-public _-prefix delegates ----------
 
-            logger.debug(f"Flags updated for {page_id}: read={is_read}, flagged={is_flagged}, status={processing_status or 'unchanged'}")
+    async def _upload_attachments(self, email: Email):
+        return await self._ensure_pages()._upload_attachments(email)
 
-        except Exception as e:
-            logger.error(f"Failed to update flags for {page_id}: {e}")
-            raise
+    def _convert_office_attachments(self, email: Email) -> List[Attachment]:
+        return self._ensure_pages()._convert_office_attachments(email)
 
-    async def query_by_row_id(self, row_id: int) -> Optional[Dict]:
-        """通过 row_id 查询页面是否已存在
+    async def _upload_eml_file(self, email: Email) -> Optional[str]:
+        return await self._ensure_pages()._upload_eml_file(email)
 
-        Args:
-            row_id: 数据库行 ID
+    async def _create_page_with_blocks(
+        self,
+        properties: Dict[str, Any],
+        children: List[Dict[str, Any]],
+        icon: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        return await self._ensure_pages()._create_page_with_blocks(
+            properties, children, icon
+        )
 
-        Returns:
-            页面信息（如果存在），否则返回 None
-        """
-        try:
-            filter_conditions = {
-                "property": "Row ID",
-                "number": {"equals": row_id}
-            }
+    def _create_meeting_callout(self, invite: 'MeetingInvite') -> Dict[str, Any]:
+        return self._ensure_pages()._create_meeting_callout(invite)
 
-            results = await self.client.query_database(filter_conditions=filter_conditions)
+    def _build_image_map(self, email: Email, uploaded_attachments: List[Dict]) -> Dict[str, tuple]:
+        return self._ensure_pages()._build_image_map(email, uploaded_attachments)
 
-            if results:
-                page = results[0]
-                return {
-                    "page_id": page["id"],
-                    "row_id": row_id
-                }
+    def _build_properties(self, email: Email, eml_file_upload_id: str = None) -> Dict[str, Any]:
+        return self._ensure_pages()._build_properties(email, eml_file_upload_id)
 
-            return None
+    @classmethod
+    def _sanitize_text(cls, text: str) -> str:
+        return PageOps._sanitize_text(text)
 
-        except Exception as e:
-            logger.error(f"Failed to query by row_id {row_id}: {e}")
-            return None
+    @classmethod
+    def _sanitize_rich_text_list(cls, rich_text_list: list):
+        return PageOps._sanitize_rich_text_list(rich_text_list)
+
+    @classmethod
+    def _sanitize_blocks(cls, blocks: list):
+        return PageOps._sanitize_blocks(blocks)
+
+    def _build_children(
+        self,
+        email: Email,
+        uploaded_attachments: List[Dict] = None,
+        image_map: Dict[str, tuple] = None,
+        meeting_invite: 'MeetingInvite' = None
+    ) -> List[Dict[str, Any]]:
+        return self._ensure_pages()._build_children(
+            email, uploaded_attachments, image_map, meeting_invite
+        )
+
+    @classmethod
+    def _restore_cid_in_body_html(
+        cls, html: Optional[str], attachments: List['AttachmentRecord']
+    ) -> str:
+        return PageOps._restore_cid_in_body_html(html, attachments)
+
+    @staticmethod
+    def _materialize_attachments(
+        att_records: List['AttachmentRecord'],
+        work_dir,
+        repo: 'EmailRepository',
+    ) -> Tuple[List[Attachment], List[int]]:
+        return PageOps._materialize_attachments(att_records, work_dir, repo)
+
+    @staticmethod
+    def _parse_iso_to_beijing(date_str: Optional[str]):
+        return PageOps._parse_iso_to_beijing(date_str)
+
+    @classmethod
+    def _build_email_from_sqlite(
+        cls,
+        internal_id: int,
+        body_record: 'EmailBodyRecord',
+        metadata: Mapping[str, Any],
+        att_records: List['AttachmentRecord'],
+        work_dir,
+        repo: 'EmailRepository',
+    ) -> Email:
+        return PageOps._build_email_from_sqlite(
+            internal_id,
+            body_record,
+            metadata,
+            att_records,
+            work_dir,
+            repo,
+        )
+
+    @staticmethod
+    def _build_file_id_map(
+        uploaded_attachments: List[Dict[str, Any]],
+        att_records: List['AttachmentRecord'],
+    ) -> Dict[int, str]:
+        return PageOps._build_file_id_map(uploaded_attachments, att_records)
+
+    async def _find_thread_parent_by_thread_id(self, thread_id: Optional[str]) -> Optional[str]:
+        return await self._ensure_threads()._find_thread_parent_by_thread_id(thread_id)
+
+    async def _find_all_thread_members_with_date(
+        self,
+        thread_id: str,
+        exclude_message_id: str = None
+    ) -> List[Dict[str, Any]]:
+        return await self._ensure_threads()._find_all_thread_members_with_date(
+            thread_id,
+            exclude_message_id=exclude_message_id,
+        )
+
+    def _parse_date_to_beijing(self, date_str: str):
+        return self._ensure_threads()._parse_date_to_beijing(date_str)
+
+    async def _handle_thread_relations(self, page_id: str, email: Email):
+        threads = self._ensure_threads()
+        if "update_sub_items" in self.__dict__:
+            threads.update_sub_items = self.__dict__["update_sub_items"]
+        if "_find_all_thread_members_with_date" in self.__dict__:
+            threads._find_all_thread_members_with_date = self.__dict__["_find_all_thread_members_with_date"]
+        if "_parse_date_to_beijing" in self.__dict__:
+            threads._parse_date_to_beijing = self.__dict__["_parse_date_to_beijing"]
+        return await threads.handle_thread_relations(page_id, email)
+
+
+_ORIGINAL_CREATE_EMAIL_PAGE_FROM_SQLITE = NotionSync.create_email_page_from_sqlite
