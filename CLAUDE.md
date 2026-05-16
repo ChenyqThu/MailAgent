@@ -74,6 +74,48 @@ pm2 logs <name> --lines 20 --nostream
 - LibreOffice headless（Office→PDF 转换）
 - pandas + python-calamine（xlsx→CSV 转换）
 
+## CLI（v4 Phase 5 起接管 scripts/*，PR-2 MVP 已上线）
+
+`mailagent` CLI 提供 agent-friendly 接口给本机调用 / 外部 agent / 看板。底层走 `src/cli/`（typer + rich），所有数据从 SQLite SSoT（`data/sync_store.db`）+ EmailRepository 读，写命令调 NotionSync。
+
+**安装**：
+```bash
+pip install -e ".[cli]"     # 装 typer 0.12-0.14 / click 8.1.x / rich 13-15 / pyyaml 6
+which mailagent             # 应是 venv/bin/mailagent
+mailagent --version         # 3.0.0
+mailagent --help            # 列 email + admin + global flags
+```
+
+**当前 (PR-2 MVP) 支持的命令**：
+
+| 命令 | 说明 | 范围 |
+|---|---|---|
+| `email get <internal_id> [--include {body,attachments,all}]` | 读单封 metadata + 可选 body/attachments | 读 |
+| `email list [--mailbox/--status/--since/--from/--subject/--is-read/--is-flagged/--has-notion/--limit/--offset]` | 列表 (text 表格 / json wrapper / ndjson 流) | 读 |
+| `email body <internal_id> [--format {markdown,html,raw}]` | 邮件正文（markdown 默认；raw 仅哈希） | 读 |
+| `email search <query> [--mailbox/--since/--until/--limit/--no-snippet]` | FTS5 全文搜索 | 读 |
+| `email resync <internal_id> [--dry-run/--replace-existing/--no-parent]` | 重传单封到 Notion（PR-4 才接 batch） | **写** |
+| `admin stats [--section]` | 服务统计 (PR-2 仅 sync_store live_query; 其余 _source: not_implemented_in_pr2) | 读 |
+| `admin health` | SQLite 可达 + db_version + 必备表检查 (exit 0/1) | 读 |
+| `admin db-version` | 打印 db_version + expected + compatible | 读 |
+
+**全局 flags**（写在 subcommand **之前**，例 `mailagent -o json email get 53675`）：`-o/--output {text,json,yaml,ndjson}` / `-q/--quiet` / `-v/--verbose` / `--db-path` / `--api-key` / `--config` / `--no-color` / `--version`。每个 leaf 也暴露 `-o` 供 gh/kubectl 风格的"flag 后置"使用。
+
+**写命令鉴权**（RFC §5.3）：默认要 token。设 `MAILAGENT_CLI_API_KEY` 后写命令必须经 `--api-key` 提供同值；服务端未配且 `MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true` 时显式放行（仅 dev 模式）。`--dry-run` 跳过鉴权。
+
+**JSON Schema 契约**：[`docs/cli-schema/`](./docs/cli-schema/) 含 9 个 schema (`email-get/list/body/search/resync` + `admin-stats/health/db-version` + `_common`) + `error-codes.md` 列 7 个 `E_*` enum。所有 wrapper 形如 `{status, schema_version: 1, data | error, meta: {duration_ms, ...}}` (RFC §5.1.2)。
+
+**详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7。PR-3 / PR-4 后续补 `attachment / llm / backfill / notion / project-progress / init / calendar / debug` 子命令 + 长任务批处理契约（batch / PM2 检测 / checkpoint）。`scripts/*` 在 PR-5 迁移；当前仍可用。
+
+**典型 agent 调用样例**：
+```bash
+mailagent -o json email get 53675 | jq .data.subject
+mailagent -o json email search "redis timeout" --mailbox 收件箱 --limit 20 \
+  | jq '.data[] | {id: .internal_id, snippet}'
+mailagent email resync 53675 --dry-run -o json
+mailagent admin health -o json | jq .data.healthy
+```
+
 ## 命令速查
 
 ```bash
