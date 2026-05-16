@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-stats.schema.json",
+  "title": "mailagent admin stats",
+  "description": "RFC v2 §4.8 / §7.5 — 服务运行汇总 (PR-2 仅 sync_store 段为 live_query)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "watcher": {"$ref": "#/$defs/section"},
+        "sync_store": {"$ref": "#/$defs/sync_store_section"},
+        "handlers": {"$ref": "#/$defs/section"},
+        "v4_rollout": {"$ref": "#/$defs/section"}
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  },
+  "$defs": {
+    "section": {
+      "type": "object",
+      "required": ["_source"],
+      "properties": {
+        "_source": {
+          "type": "string",
+          "enum": ["live_query", "stats_reporter_last_snapshot", "not_implemented_in_pr2"]
+        },
+        "_snapshot_at": {"type": ["string", "null"]},
+        "_warn_if_stale_sec": {"type": ["integer", "null"]}
+      }
+    },
+    "sync_store_section": {
+      "type": "object",
+      "required": ["total_emails", "by_status", "db_size_mb", "_source"],
+      "properties": {
+        "total_emails": {"type": "integer", "minimum": 0},
+        "by_status": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "by_mailbox": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "failure_queue": {"type": "integer", "minimum": 0},
+        "last_max_row_id": {"type": ["integer", "null"]},
+        "last_sync_time": {"type": ["string", "null"]},
+        "db_size_mb": {"type": "number", "minimum": 0},
+        "db_size_bytes": {"type": "integer", "minimum": 0},
+        "_source": {"const": "live_query"}
+      }
+    }
+  }
+}

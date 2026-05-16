@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/email-body.schema.json",
+  "title": "mailagent email body",
+  "description": "RFC v2 §4.2 — 邮件正文 markdown/html/raw (json wrapper; text 模式 stdout 直出原文)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["internal_id", "format", "content", "size_bytes"],
+      "properties": {
+        "internal_id": {"type": "integer", "minimum": 0},
+        "format": {"type": "string", "enum": ["markdown", "html", "raw"]},
+        "content": {"type": ["string", "null"], "description": "raw 模式仅 raw_mime_sha256 哈希"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "fetched_at": {"type": ["number", "null"]},
+        "fetched_source": {"type": ["string", "null"]}
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/email-search.schema.json",
+  "title": "mailagent email search",
+  "description": "RFC v2 §4.2 / §7.2 — FTS5 全文搜索结果",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/search_hit"}
+    },
+    "meta": {
+      "allOf": [
+        {"$ref": "_common.schema.json#/$defs/meta"},
+        {"required": ["duration_ms", "query", "total_hits", "limit"]}
+      ]
+    }
+  },
+  "$defs": {
+    "search_hit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["internal_id", "subject", "sender", "rank"],
+      "properties": {
+        "internal_id": {"type": "integer", "minimum": 0},
+        "subject": {"type": "string"},
+        "sender": {"type": "string"},
+        "date_received": {"$ref": "_common.schema.json#/$defs/iso_datetime_or_date"},
+        "mailbox": {"type": ["string", "null"]},
+        "rank": {
+          "type": "number",
+          "description": "bm25 score - 越小越相关 (FTS5 约定)"
+        },
+        "snippet": {
+          "type": ["string", "null"],
+          "description": "FTS5 snippet() 高亮片段; --no-snippet 时省略"
+        },
+        "notion_page_id": {"type": ["string", "null"]},
+        "notion_url": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

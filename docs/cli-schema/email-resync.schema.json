@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/email-resync.schema.json",
+  "title": "mailagent email resync",
+  "description": "RFC v2 §4.2 / §7.3 — 单封邮件重传 plan / 结果 (PR-2 仅单封; PR-4 batch 走 partial_failure schema)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "oneOf": [
+        {"$ref": "#/$defs/resync_plan"},
+        {"$ref": "#/$defs/resync_result"}
+      ]
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  },
+  "$defs": {
+    "resync_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["internal_id", "dry_run", "action"],
+      "properties": {
+        "internal_id": {"type": "integer", "minimum": 0},
+        "subject": {"type": "string"},
+        "current_page_id": {"type": ["string", "null"]},
+        "action": {"type": "string", "enum": ["create_or_skip", "replace"]},
+        "would_replace": {"type": "boolean"},
+        "skip_parent_lookup": {"type": "boolean"},
+        "dry_run": {"const": true}
+      }
+    },
+    "resync_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["internal_id", "action", "dry_run"],
+      "properties": {
+        "internal_id": {"type": "integer", "minimum": 0},
+        "old_page_id": {"type": ["string", "null"]},
+        "new_page_id": {"type": ["string", "null"]},
+        "action": {"type": "string", "enum": ["created", "replaced", "skipped"]},
+        "dry_run": {"const": false},
+        "attachments_uploaded": {"type": "integer"},
+        "attachments_failed": {"type": "integer"},
+        "thread_relations_updated": {"type": "boolean"}
+      }
+    }
+  }
+}

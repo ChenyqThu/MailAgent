@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-db-version.schema.json",
+  "title": "mailagent admin db-version",
+  "description": "RFC v2 §4.8 — sync_store.db 当前 db_version + expected + compatible 标记",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "expected", "compatible"],
+      "properties": {
+        "version": {"type": ["integer", "null"]},
+        "expected": {"type": "integer"},
+        "compatible": {"type": "boolean"},
+        "db_path": {"type": "string"}
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  }
+}

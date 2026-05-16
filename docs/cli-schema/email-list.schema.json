@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/email-list.schema.json",
+  "title": "mailagent email list",
+  "description": "RFC v2 §4.2 — 邮件列表 (json wrapper / ndjson stream)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/email_list_item"}
+    },
+    "meta": {
+      "allOf": [
+        {"$ref": "_common.schema.json#/$defs/meta"},
+        {
+          "required": ["duration_ms", "total", "limit", "offset", "count"]
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "email_list_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internal_id", "subject", "sender", "mailbox", "is_read", "is_flagged"
+      ],
+      "properties": {
+        "internal_id": {"type": "integer", "minimum": 0},
+        "message_id": {"type": ["string", "null"]},
+        "thread_id": {"type": ["string", "null"]},
+        "subject": {"type": "string"},
+        "sender": {"type": "string"},
+        "sender_name": {"type": ["string", "null"]},
+        "date_received": {"$ref": "_common.schema.json#/$defs/iso_datetime_or_date"},
+        "mailbox": {"type": ["string", "null"]},
+        "is_read": {"type": "boolean"},
+        "is_flagged": {"type": "boolean"},
+        "sync_status": {"$ref": "_common.schema.json#/$defs/sync_status"},
+        "notion_page_id": {"type": ["string", "null"]},
+        "notion_url": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

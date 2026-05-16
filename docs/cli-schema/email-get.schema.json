@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/email-get.schema.json",
+  "title": "mailagent email get",
+  "description": "RFC v2 §4.2 / §7.1 — 单封邮件 metadata + 可选 body summary / attachments[]",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "meta"],
+  "oneOf": [
+    {
+      "required": ["data"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {"$ref": "#/$defs/email_record"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "required": ["error"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ],
+  "$defs": {
+    "email_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internal_id", "subject", "sender", "to_addr", "mailbox",
+        "is_read", "is_flagged", "sync_status"
+      ],
+      "properties": {
+        "internal_id": {"type": "integer", "minimum": 0},
+        "message_id": {"type": ["string", "null"]},
+        "thread_id": {"type": ["string", "null"]},
+        "subject": {"type": "string"},
+        "sender": {"type": "string"},
+        "sender_name": {"type": ["string", "null"]},
+        "to_addr": {"type": "string"},
+        "cc_addr": {"type": "string"},
+        "date_received": {"$ref": "_common.schema.json#/$defs/iso_datetime_or_date"},
+        "mailbox": {"type": "string"},
+        "is_read": {"type": "boolean"},
+        "is_flagged": {"type": "boolean"},
+        "sync_status": {"$ref": "_common.schema.json#/$defs/sync_status"},
+        "notion_page_id": {"type": ["string", "null"]},
+        "notion_thread_id": {"type": ["string", "null"]},
+        "notion_url": {"type": ["string", "null"]},
+        "sync_error": {"type": ["string", "null"]},
+        "retry_count": {"type": "integer", "minimum": 0},
+        "body": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["format", "size_bytes", "fetched_at", "fetched_source"],
+              "properties": {
+                "format": {"type": "string", "enum": ["html", "text-only", "empty", "markdown"]},
+                "size_bytes": {"type": "integer", "minimum": 0},
+                "has_inline_images": {"type": "boolean"},
+                "fetched_at": {"type": ["number", "null"]},
+                "fetched_source": {"type": ["string", "null"]},
+                "raw_mime_sha256": {"type": ["string", "null"]}
+              }
+            }
+          ]
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "filename", "is_inline"],
+            "properties": {
+              "id": {"type": "integer"},
+              "filename": {"type": "string"},
+              "size_bytes": {"type": ["integer", "null"]},
+              "content_type": {"type": ["string", "null"]},
+              "is_inline": {"type": "boolean"},
+              "content_id": {"type": ["string", "null"]},
+              "sha256": {"type": ["string", "null"]},
+              "derived_from": {"type": ["integer", "null"]},
+              "derived_format": {"type": ["string", "null"]},
+              "notion_file_id": {"type": ["string", "null"]},
+              "notion_block_id": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}
