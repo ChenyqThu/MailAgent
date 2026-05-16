@@ -1072,7 +1072,7 @@ sqlite3 data/sync_store.db "
 python3 calendar_main.py --once
 ```
 
-## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 + Phase 2 + Phase 3 已上线 2026-05-15**）
+## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 + 2 + 3 已上线 2026-05-15；Phase 4 ship 2026-05-16 灰度期**）
 
 把 SQLite 升级为邮件正文 + 附件的 Single Source of Truth，Notion 退化为镜像。新邮件 sync 时把 body + 附件元数据双写到 SQLite，附件二进制落 `data/attachments/{internal_id}/`。详见 [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md)，Phase 间交接说明见 [`docs/phase1-handoff-to-phase2.md`](./docs/phase1-handoff-to-phase2.md)。
 
@@ -1134,12 +1134,33 @@ for h in hits:
 
 详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md)。
 
+### Phase 4 重传 CLI
+
+```bash
+# Notion 重传（基于 SQLite，不调 AppleScript）
+python scripts/resync_notion.py --internal-id 53675 --dry-run                # 看 plan
+python scripts/resync_notion.py --internal-id 53675 --replace-existing       # archive 老页 → 建新
+python scripts/resync_notion.py --range 53000-53100 --replace-existing
+python scripts/resync_notion.py --internal-ids 53674,53675,53677
+
+# Office 衍生附件补救（追加 derived row，不动现有 row；适合 backfill silent fail）
+python scripts/backfill_derivatives.py --dry-run                              # 看候选数
+python scripts/backfill_derivatives.py --internal-id 53677                    # 单封
+python scripts/backfill_derivatives.py                                        # 全量补
+```
+
+**注意**:
+- `resync_notion.py` 默认 `skip_parent_lookup=True`（diff 验证用），新页不会重建线程关系
+- `backfill_derivatives.py` 补完后，Notion 老页**不会**自动出现 derived 附件；要更新需要 `resync_notion.py --replace-existing`
+- 灰度切 `NOTION_READ_FROM_SQLITE=true` 操作步骤见 [`docs/phase4-complete.md`](./docs/phase4-complete.md) §6
+
 ### 关键开关
 
 | 配置 | 默认 | 说明 |
 |---|---|---|
 | `BODY_DUAL_WRITE_ENABLED` | `true` | v4 双写总开关；失败仅 warning 不阻断 Notion sync |
 | `ATTACHMENT_STORAGE_DIR` | `data/attachments` | 附件本地落盘根目录 |
+| `NOTION_READ_FROM_SQLITE` | `false` | v4 Phase 4：`create_email_page_v2` 是否优先走 SQLite SSoT 路径。默认灰度期 false；切 true 后正常 sync + resync 都走 `create_email_page_from_sqlite`，miss 时自动 fallback 老路径 |
 
 ### 双写流程（v4 vs v3）
 
@@ -1156,7 +1177,7 @@ v4 sync 路径：AppleScript → in-memory Email → **build_storage_payloads + 
 | Phase 1 | ✅ **已上线 2026-05-15** | 双写 MVP；新邮件 sync 时落 SQLite，Web 端可立即切表。43/43 单测通过、生产服务已加载 v4 |
 | Phase 2 | ✅ **已上线 2026-05-15** | LLM processor / handle_fetch_mail_content 直读 SQLite（命中 ~4ms vs AppleScript 1-3s）；P99 latency tracker；回归对比工具就位。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md)。回退开关 `LLM_PREFER_SQLITE_BODY=false` |
 | Phase 3 | ✅ **已上线 2026-05-15** | FTS5 全文索引 + `search_email_bodies` agent 工具；webhook bm25 排序 + snippet 高亮 + mailbox/date 过滤。274/274 单测通过。详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md) |
-| Phase 4 | 待办（下一步） | Notion uploader 改为读 SQLite，架构归一 |
+| Phase 4 | ✅ **已 ship 2026-05-16（灰度期）** | `create_email_page_from_sqlite` 主入口 + v2 wrapper 路由 (`NOTION_READ_FROM_SQLITE`) + `scripts/resync_notion.py` + `scripts/backfill_derivatives.py`。上传后 `notion_file_id` 回写 SQLite。295/295 单测、3 封灰度切换实测 OK。详见 [`docs/phase4-complete.md`](./docs/phase4-complete.md) |
 | Phase 5 | 未来 | Electron / Web 前端（接口已就位） |
 | **T-01** | 独立 TODO | Notion sync 迁 Markdown API（参考 `src/project_progress/notion_sync.py` 样板） |
 

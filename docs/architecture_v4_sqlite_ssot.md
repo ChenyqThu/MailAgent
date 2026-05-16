@@ -1,6 +1,6 @@
 # MailAgent v4 架构：SQLite 升级为邮件 SSoT
 
-> **状态**: ✅ **Phase 1 + 2 + 3 已上线 2026-05-15**；Phase 4-5 待办
+> **状态**: ✅ **Phase 1 + 2 + 3 已上线 2026-05-15**；✅ **Phase 4 已 ship 2026-05-16（灰度期，默认 `NOTION_READ_FROM_SQLITE=false`）**；Phase 5 待办
 > **输入**: `docs/web-handoff-body-storage.md` (MailAgent-Web hand off)
 > **目标**: 把 Notion 是 body 唯一持久化处反转为 SQLite 是数据中心、Notion 是镜像
 > **范围**: Phase 1 双写 MVP（done）；Phase 2-5 后续推进；Notion Markdown API 迁移列独立 TODO
@@ -221,10 +221,14 @@ class EmailRepository:
 - ✅ 274/274 单测全绿
 - 详见 [`docs/phase3-complete.md`](./phase3-complete.md)
 
-### Phase 4：Notion uploader 切换为下游消费者
-- `notion/sync.create_email_page_from_sqlite(internal_id)` 新签名
-- 旧签名作 wrapper（双源期）
-- `scripts/resync_notion.py` 基于 SQLite 重传，不再依赖 AppleScript
+### Phase 4：Notion uploader 切换为下游消费者（✅ 已 ship 2026-05-16，灰度期）
+- ✅ `notion/sync.create_email_page_from_sqlite(internal_id, repo, sync_store)` 新入口 + 5 个 SQLite 辅助方法
+- ✅ `create_email_page_v2` 改为 wrapper，灰度开关 `NOTION_READ_FROM_SQLITE`（默认 `false` 保守）
+- ✅ `scripts/resync_notion.py` 基于 SQLite 重传，不再依赖 AppleScript
+- ✅ `scripts/backfill_derivatives.py` 单独补 Office 衍生附件（PDF/CSV）漏跑
+- ✅ 上传完成回写 `email_attachment.notion_file_id`，为 T-06 / 反向同步打底
+- ✅ 295/295 单测全绿；3 封灰度切换实测 OK
+- 详见 [`docs/phase4-complete.md`](./phase4-complete.md)
 
 ### Phase 5：Web / Electron（未来）
 - 接口契约已就位，独立项目推进
