@@ -15,7 +15,7 @@
 | `E_PM2_RUNNING` | 9 | PM2 ``mail-sync`` 在跑, 写命令拒绝 | `email resync 53675` 时 pm2 jlist 返回 status=online |
 | `E_INTERNAL` | 1 | 意外异常 — 未匹配上述任何 code 的内部错误 | 兜底, 出现 stacktrace 时落到此 code |
 | `E_LLM_FAILED` | 1 | LLM gateway 调用失败 / 模型链耗尽 / Notion 写失败 | `llm run` runner 返回 ok=False (非 not-found 类) / 网关 5xx |
-| `E_NOT_IMPLEMENTED` | 2 | 命令存在但当前 PR 仅 stub, 完整实现在后续 PR | `llm compare-paths` 非 dry-run (PR-3 stub, PR-4 后退役) |
+| `E_NOT_IMPLEMENTED` | 2 | 命令存在但当前 PR 仅 stub, 完整实现在后续 PR | 保留给后续尚未接通的 stub 命令 |
 
 **PR-4 长任务 SIGINT 二次强退**: 进程退出码 130 (没对应 `E_*` code, 直接 `sys.exit(130)`)。
 

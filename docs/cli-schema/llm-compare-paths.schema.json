@@ -2,7 +2,126 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/llm-compare-paths.schema.json",
   "title": "mailagent llm compare-paths",
-  "description": "RFC v2 §4.4 — R-15 灰度质量闸 SQLite markdown vs in-memory regex 双路径对比. PR-3 仅 dry-run plan, 实跑实现推迟.",
+  "description": "RFC v2 §4.4 — R-15 灰度质量闸 SQLite markdown vs in-memory regex 双路径对比.",
+  "$defs": {
+    "costPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "estimated_input_tokens_per_email",
+        "estimated_output_tokens_per_email",
+        "estimated_tokens_per_email",
+        "total_emails",
+        "estimated_total_tokens",
+        "cost_rate_per_1k_tokens_usd",
+        "estimated_cost_usd"
+      ],
+      "properties": {
+        "model": {"type": "string"},
+        "estimated_input_tokens_per_email": {"type": "integer", "minimum": 0},
+        "estimated_output_tokens_per_email": {"type": "integer", "minimum": 0},
+        "estimated_tokens_per_email": {"type": "integer", "minimum": 0},
+        "total_emails": {"type": "integer", "minimum": 0},
+        "estimated_total_tokens": {"type": "integer", "minimum": 0},
+        "cost_rate_per_1k_tokens_usd": {"type": "number", "minimum": 0},
+        "estimated_cost_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "dryRunPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "sample_size",
+        "internal_ids",
+        "selection_mode",
+        "model",
+        "cost_preview"
+      ],
+      "properties": {
+        "mode": {"const": "dry_run"},
+        "sample_size": {"type": "integer", "minimum": 0},
+        "internal_ids": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "selection_mode": {"type": "string", "enum": ["recent", "explicit"]},
+        "model": {"type": "string"},
+        "cost_preview": {"$ref": "#/$defs/costPreview"}
+      }
+    },
+    "fieldDiff": {
+      "type": "array",
+      "prefixItems": [
+        {},
+        {},
+        {"type": "boolean"}
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "compareResult": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["internal_id", "ok"],
+      "properties": {
+        "internal_id": {"type": "integer", "minimum": 0},
+        "ok": {"type": "boolean"},
+        "error": {"type": "string"},
+        "subject": {"type": "string"},
+        "mailbox": {"type": "string"},
+        "fallback_text_len": {"type": "integer", "minimum": 0},
+        "sqlite_md_len": {"type": "integer", "minimum": 0},
+        "model_a": {"type": "string"},
+        "model_b": {"type": "string"},
+        "all_match": {"type": "boolean"},
+        "diff": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/fieldDiff"}
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all_match_pct",
+        "per_field_match_pct",
+        "input_length",
+        "ok_count",
+        "total",
+        "verdict"
+      ],
+      "properties": {
+        "all_match_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "per_field_match_pct": {
+          "type": "object",
+          "additionalProperties": {"type": "number", "minimum": 0, "maximum": 100}
+        },
+        "input_length": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "avg_fallback_text_len",
+            "avg_sqlite_md_len",
+            "delta_pct"
+          ],
+          "properties": {
+            "avg_fallback_text_len": {"type": "number", "minimum": 0},
+            "avg_sqlite_md_len": {"type": "number", "minimum": 0},
+            "delta_pct": {"type": "number"}
+          }
+        },
+        "ok_count": {"type": "integer", "minimum": 0},
+        "total": {"type": "integer", "minimum": 0},
+        "verdict": {
+          "type": "string",
+          "enum": ["pass", "marginal", "fail", "no_data"]
+        }
+      }
+    }
+  },
   "oneOf": [
     {
       "type": "object",
@@ -14,28 +133,66 @@
         "data": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["plan", "status"],
+          "required": [
+            "action",
+            "mode",
+            "sample_size",
+            "internal_ids",
+            "selection_mode",
+            "model",
+            "cost_preview",
+            "plan"
+          ],
           "properties": {
-            "plan": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["sample_size", "internal_ids", "mode", "dry_run"],
-              "properties": {
-                "sample_size": {"type": "integer", "minimum": 1},
-                "internal_ids": {
-                  "oneOf": [
-                    {"type": "null"},
-                    {
-                      "type": "array",
-                      "items": {"type": "integer", "minimum": 0}
-                    }
-                  ]
-                },
-                "mode": {"type": "string", "enum": ["random", "explicit"]},
-                "dry_run": {"type": "boolean"}
-              }
+            "action": {"const": "compare-paths"},
+            "mode": {"const": "dry_run"},
+            "sample_size": {"type": "integer", "minimum": 0},
+            "internal_ids": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
             },
-            "status": {"type": "string", "enum": ["pr3_stub"]}
+            "selection_mode": {"type": "string", "enum": ["recent", "explicit"]},
+            "model": {"type": "string"},
+            "cost_preview": {"$ref": "#/$defs/costPreview"},
+            "plan": {"$ref": "#/$defs/dryRunPlan"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action",
+            "mode",
+            "results",
+            "summary",
+            "model",
+            "selection_mode",
+            "internal_ids"
+          ],
+          "properties": {
+            "action": {"const": "compare-paths"},
+            "mode": {"const": "inline"},
+            "results": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/compareResult"}
+            },
+            "summary": {"$ref": "#/$defs/summary"},
+            "model": {"type": "string"},
+            "selection_mode": {"type": "string", "enum": ["recent", "explicit"]},
+            "internal_ids": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
+            }
           }
         },
         "meta": {"$ref": "_common.schema.json#/$defs/meta"}

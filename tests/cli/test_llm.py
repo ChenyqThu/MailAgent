@@ -284,14 +284,16 @@ class TestLLMStats:
 # ============================================================
 
 class TestLLMComparePaths:
-    def test_compare_paths_dry_run_random(self, cli_runner, cli_env, seeded_db):
+    def test_compare_paths_dry_run_recent(self, cli_runner, cli_env, seeded_db):
         result = _invoke(cli_runner, "llm", "compare-paths", "--count", "10",
                          "--dry-run", "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        assert payload["data"]["plan"]["mode"] == "random"
-        assert payload["data"]["plan"]["sample_size"] == 10
-        assert payload["data"]["plan"]["dry_run"] is True
+        assert payload["data"]["mode"] == "dry_run"
+        assert payload["data"]["selection_mode"] == "recent"
+        assert payload["data"]["internal_ids"] == [12345]
+        assert payload["data"]["plan"]["sample_size"] == 1
+        assert "cost_preview" in payload["data"]
 
     def test_compare_paths_dry_run_explicit(self, cli_runner, cli_env, seeded_db):
         result = _invoke(
@@ -301,17 +303,18 @@ class TestLLMComparePaths:
         )
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        assert payload["data"]["plan"]["mode"] == "explicit"
-        assert payload["data"]["plan"]["internal_ids"] == [53674, 53675]
+        assert payload["data"]["mode"] == "dry_run"
+        assert payload["data"]["selection_mode"] == "explicit"
+        assert payload["data"]["internal_ids"] == [53674, 53675]
 
-    def test_compare_paths_non_dry_run_not_implemented(
+    def test_compare_paths_non_dry_run_requires_yes(
         self, cli_runner, cli_env, seeded_db,
     ):
         result = _invoke(cli_runner, "llm", "compare-paths", "--count", "5",
-                         "-o", "json", db_path=seeded_db)
+                         "--no-dry-run", "-o", "json", db_path=seeded_db)
         assert result.exit_code == 2, result.output
         payload = _last_json(result.output)
-        assert payload["error"]["code"] == "E_NOT_IMPLEMENTED"
+        assert payload["error"]["code"] == "E_INVALID_ARG"
 
     def test_compare_paths_bad_ids(self, cli_runner, cli_env, seeded_db):
         result = _invoke(

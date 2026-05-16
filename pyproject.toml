@@ -31,3 +31,6 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["src*"]
 exclude = ["tests*", "scripts*", "venv*", "data*", "logs*"]
+
+[tool.ruff.lint.per-file-ignores]
+"docs/cli-schema/*.json" = ["F821"]

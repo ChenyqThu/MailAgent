@@ -33,8 +33,6 @@ from typing import Any, Dict, List, Optional
 # 让脚本能从 repo 根目录跑
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from loguru import logger
-
 from src.config import config as cfg
 from src.llm_agent.processor import LLMProcessor
 from src.mail.applescript_arm import AppleScriptArm
@@ -203,7 +201,7 @@ def _print_summary(results: List[Dict[str, Any]]) -> None:
     match_count = sum(1 for r in ok if r["all_match"])
     print(f"\n=== Summary ({n}/{len(results)} ok) ===")
     print(f"  All-fields match: {match_count}/{n} ({100 * match_count / n:.1f}%)")
-    print(f"  Per-field consistency:")
+    print("  Per-field consistency:")
     for k in _KEYS:
         c = sum(1 for r in ok if r["diff"][k][2])
         bar = "█" * int(c / n * 20)
@@ -212,12 +210,12 @@ def _print_summary(results: List[Dict[str, Any]]) -> None:
     # 长度对比统计
     avg_fb = sum(r["fallback_text_len"] for r in ok) / n
     avg_md = sum(r["sqlite_md_len"] for r in ok) / n
-    print(f"\n  Input length (avg):")
+    print("\n  Input length (avg):")
     print(f"    Path A (fallback regex strip): {avg_fb:>7.0f} chars")
     print(f"    Path B (SQLite markdown):      {avg_md:>7.0f} chars  ({(avg_md - avg_fb) / avg_fb * 100:+.1f}%)")
 
     # 通过门槛判定
-    print(f"\n  Verdict: ", end="")
+    print("\n  Verdict: ", end="")
     pct = match_count / n
     if pct >= 0.8:
         print(f"✅ PASS (all-match ≥ 80%, observed {pct * 100:.1f}%)")
@@ -266,4 +264,12 @@ async def main():
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.warn(
+        "scripts/compare_llm_path.py is deprecated; use "
+        "'mailagent llm compare-paths' instead. Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     asyncio.run(main())

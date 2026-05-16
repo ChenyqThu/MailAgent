@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import typer
 
@@ -18,12 +18,22 @@ from src.cli.exceptions import (
     CliInvalidArgError,
     CliLLMFailedError,
     CliNotFoundError,
-    CliNotImplementedError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
+
+
+# Lazy-loaded compare-paths dependencies. Keeping these names at module scope makes
+# test monkeypatching straightforward without forcing AppleScript/LLM imports on CLI
+# startup.
+AppleScriptArm = None
+EmailReader = None
+AttachmentStore = None
+EmailRepository = None
+LLMProcessor = None
+build_storage_payloads = None
 
 app = typer.Typer(
     name="llm",
@@ -399,35 +409,322 @@ def _zero_cost() -> dict:
 
 
 # ============================================================
-# compare-paths (US-004) — PR-3 stub + dry-run plan
+# compare-paths (US-005) — inline dual-path implementation
 # ============================================================
+
+_COMPARE_KEYS = [
+    "category",
+    "action_type",
+    "priority",
+    "action_required",
+    "sender_priority",
+    "language",
+    "daily_digest_date",
+]
+
+_ESTIMATED_INPUT_TOKENS_PER_EMAIL = 2000
+_ESTIMATED_OUTPUT_TOKENS_PER_EMAIL = 200
+_ESTIMATED_TOKEN_COST_PER_1K_USD = 0.003
+
+
+class _MockRepo:
+    """Single-email in-memory repo: forces path B onto the SQLite markdown branch."""
+
+    def __init__(self, internal_id: int, markdown: str):
+        self._iid = internal_id
+        self._md = markdown
+
+    def get_body_markdown(self, internal_id: int, max_chars: int = -1) -> Optional[str]:
+        if internal_id != self._iid or not self._md:
+            return None
+        if max_chars > 0 and len(self._md) > max_chars:
+            return self._md[:max_chars]
+        return self._md
+
+
+def _ensure_compare_deps() -> None:
+    global AppleScriptArm
+    global AttachmentStore
+    global EmailReader
+    global EmailRepository
+    global LLMProcessor
+    global build_storage_payloads
+
+    if AppleScriptArm is None:
+        from src.mail.applescript_arm import AppleScriptArm as _AppleScriptArm
+
+        AppleScriptArm = _AppleScriptArm
+    if EmailReader is None:
+        from src.mail.reader import EmailReader as _EmailReader
+
+        EmailReader = _EmailReader
+    if AttachmentStore is None:
+        from src.repository import AttachmentStore as _AttachmentStore
+
+        AttachmentStore = _AttachmentStore
+    if EmailRepository is None:
+        from src.repository import EmailRepository as _EmailRepository
+
+        EmailRepository = _EmailRepository
+    if LLMProcessor is None:
+        from src.llm_agent.processor import LLMProcessor as _LLMProcessor
+
+        LLMProcessor = _LLMProcessor
+    if build_storage_payloads is None:
+        from src.repository.storage_payload_builder import (
+            build_storage_payloads as _build_storage_payloads,
+        )
+
+        build_storage_payloads = _build_storage_payloads
+
+
+def _pick_internal_ids(count: int, db_path: str) -> list[int]:
+    """Pick the N most recent synced emails from SyncStore."""
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            """SELECT internal_id FROM email_metadata
+               WHERE sync_status='synced' AND notion_page_id IS NOT NULL
+               ORDER BY updated_at DESC LIMIT ?""",
+            (count,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [int(r[0]) for r in rows]
+
+
+def _lookup_metadata(internal_id: int, db_path: str) -> Optional[dict[str, Any]]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM email_metadata WHERE internal_id = ?",
+            (internal_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+async def _compare_one(
+    internal_id: int,
+    arm: Any,
+    reader: Any,
+    store: Any,
+) -> dict[str, Any]:
+    """Run one email through fallback-regex and SQLite-markdown LLM paths."""
+    _ensure_compare_deps()
+
+    meta = _lookup_metadata(internal_id, str(store.db_path))
+    if not meta:
+        return {"internal_id": internal_id, "ok": False, "error": "metadata not found"}
+
+    mailbox = meta.get("mailbox") or "收件箱"
+
+    full = arm.fetch_email_content_by_id(internal_id, mailbox)
+    if not full:
+        return {
+            "internal_id": internal_id,
+            "ok": False,
+            "error": "AppleScript fetch failed",
+        }
+
+    email = reader.parse_email_source(
+        full.get("source", ""),
+        meta.get("message_id") or full.get("message_id", ""),
+        is_read=bool(meta.get("is_read")),
+        is_flagged=bool(meta.get("is_flagged")),
+    )
+    if email is None:
+        return {
+            "internal_id": internal_id,
+            "ok": False,
+            "error": "parse_email_source returned None",
+        }
+    email.mailbox = mailbox
+    email.internal_id = internal_id
+
+    body_payload, _ = build_storage_payloads(
+        email,
+        internal_id,
+        raw_mime_source=full.get("source"),
+        attachment_store=store.attachment_store,
+    )
+    markdown = body_payload.markdown or ""
+
+    proc_a = LLMProcessor(repo=None)
+    fallback_text = proc_a._plaintext_body(email)
+    try:
+        labels_a = await proc_a.process_email(email)
+    except Exception as e:
+        return {"internal_id": internal_id, "ok": False, "error": f"path A LLM error: {e}"}
+    finally:
+        await proc_a.close()
+
+    proc_b = LLMProcessor(repo=_MockRepo(internal_id, markdown))
+    sqlite_text = proc_b._plaintext_body(email)
+    try:
+        labels_b = await proc_b.process_email(email)
+    except Exception as e:
+        return {"internal_id": internal_id, "ok": False, "error": f"path B LLM error: {e}"}
+    finally:
+        await proc_b.close()
+
+    diff: dict[str, tuple[Any, Any, bool]] = {}
+    for key in _COMPARE_KEYS:
+        a = getattr(labels_a, key)
+        b = getattr(labels_b, key)
+        diff[key] = (a, b, a == b)
+
+    return {
+        "internal_id": internal_id,
+        "subject": (email.subject or "")[:80],
+        "mailbox": mailbox,
+        "ok": True,
+        "fallback_text_len": len(fallback_text),
+        "sqlite_md_len": len(sqlite_text),
+        "model_a": labels_a.model,
+        "model_b": labels_b.model,
+        "diff": diff,
+        "all_match": all(d[2] for d in diff.values()),
+    }
+
+
+def _build_cost_preview(model: str, email_count: int) -> dict[str, Any]:
+    estimated_tokens_per_email = (
+        _ESTIMATED_INPUT_TOKENS_PER_EMAIL + _ESTIMATED_OUTPUT_TOKENS_PER_EMAIL
+    )
+    estimated_total_tokens = estimated_tokens_per_email * email_count
+    estimated_cost = (
+        estimated_total_tokens * _ESTIMATED_TOKEN_COST_PER_1K_USD / 1000
+    )
+    return {
+        "model": model,
+        "estimated_input_tokens_per_email": _ESTIMATED_INPUT_TOKENS_PER_EMAIL,
+        "estimated_output_tokens_per_email": _ESTIMATED_OUTPUT_TOKENS_PER_EMAIL,
+        "estimated_tokens_per_email": estimated_tokens_per_email,
+        "total_emails": email_count,
+        "estimated_total_tokens": estimated_total_tokens,
+        "cost_rate_per_1k_tokens_usd": _ESTIMATED_TOKEN_COST_PER_1K_USD,
+        "estimated_cost_usd": round(estimated_cost, 4),
+    }
+
+
+def _summarize_compare_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    ok_results = [r for r in results if r.get("ok")]
+    ok_count = len(ok_results)
+    if ok_count == 0:
+        return {
+            "all_match_pct": 0.0,
+            "per_field_match_pct": {},
+            "input_length": {
+                "avg_fallback_text_len": 0,
+                "avg_sqlite_md_len": 0,
+                "delta_pct": 0.0,
+            },
+            "ok_count": 0,
+            "total": len(results),
+            "verdict": "no_data",
+        }
+
+    all_match_count = sum(1 for r in ok_results if r.get("all_match"))
+    all_match_ratio = all_match_count / ok_count
+
+    per_field: dict[str, float] = {}
+    for key in _COMPARE_KEYS:
+        matched = sum(1 for r in ok_results if r["diff"][key][2])
+        per_field[key] = round(100.0 * matched / ok_count, 1)
+
+    avg_fallback = sum(int(r["fallback_text_len"]) for r in ok_results) / ok_count
+    avg_sqlite = sum(int(r["sqlite_md_len"]) for r in ok_results) / ok_count
+    if avg_fallback:
+        delta_pct = round((avg_sqlite - avg_fallback) / avg_fallback * 100.0, 1)
+    else:
+        delta_pct = 0.0
+
+    if all_match_ratio >= 0.8:
+        verdict = "pass"
+    elif all_match_ratio >= 0.6:
+        verdict = "marginal"
+    else:
+        verdict = "fail"
+
+    return {
+        "all_match_pct": round(100.0 * all_match_ratio, 1),
+        "per_field_match_pct": per_field,
+        "input_length": {
+            "avg_fallback_text_len": round(avg_fallback, 1),
+            "avg_sqlite_md_len": round(avg_sqlite, 1),
+            "delta_pct": delta_pct,
+        },
+        "ok_count": ok_count,
+        "total": len(results),
+        "verdict": verdict,
+    }
+
+
+def _print_compare_result(result: dict[str, Any]) -> None:
+    internal_id = result["internal_id"]
+    if not result.get("ok"):
+        print(f"  x {internal_id}: ERROR {result.get('error')}")
+        return
+
+    mark = "ok" if result.get("all_match") else "diff"
+    print(
+        f"  {mark} {internal_id} [{result['mailbox']}]: {result['subject']!r} "
+        f"(fallback={result['fallback_text_len']}c, md={result['sqlite_md_len']}c)"
+    )
+    if not result.get("all_match"):
+        for key, (a, b, matched) in result["diff"].items():
+            if not matched:
+                print(f"      x {key}: A={a!r} B={b!r}")
+
+
+def _print_compare_summary(summary: dict[str, Any]) -> None:
+    print(f"\n=== Summary ({summary['ok_count']}/{summary['total']} ok) ===")
+    print(f"  All-fields match: {summary['all_match_pct']}%")
+    print("  Per-field consistency:")
+    for key in _COMPARE_KEYS:
+        value = summary.get("per_field_match_pct", {}).get(key, 0.0)
+        print(f"    {key:22s} {value:>5.1f}%")
+    lengths = summary["input_length"]
+    print("\n  Input length (avg):")
+    print(f"    Path A (fallback regex strip): {lengths['avg_fallback_text_len']:>7}")
+    print(f"    Path B (SQLite markdown):      {lengths['avg_sqlite_md_len']:>7}")
+    print(f"\n  Verdict: {summary['verdict']}")
+
 
 @app.command("compare-paths")
 def llm_compare_paths(
     ctx: typer.Context,
-    count: int = typer.Option(20, "--count", help="随机抽 N 封对比 (--internal-ids 优先)"),
+    count: int = typer.Option(20, "--count", help="选择最近 synced 的 N 封 (--internal-ids 优先)"),
     internal_ids: Optional[str] = typer.Option(
         None, "--internal-ids",
         help="逗号分隔; 指定后忽略 --count",
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run",
-        help="仅打印 plan 不实跑 LLM 对比",
+        True, "--dry-run/--no-dry-run",
+        help="仅打印 plan 不实跑 LLM 对比 (默认 True)",
     ),
+    yes: bool = typer.Option(False, "--yes", help="确认实跑并消耗 LLM token"),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """R-15 灰度质量闸: SQLite markdown vs in-memory regex-stripped HTML 路径对比.
 
-    PR-3 范围: 落 command 入口 + dry-run plan 输出; 实跑路径 (烧 token, 调
-    LLMProcessor 双路径 + diff AILabels) 暂调用 ``scripts/compare_llm_path.py``
-    或推迟到 PR-3 follow-up。
+    默认 dry-run，只输出候选 internal_id 与粗略成本预估。实跑会对每封邮件分别调用
+    fallback-regex 和 SQLite-markdown 两条 LLM 输入路径，需要 ``--no-dry-run --yes``。
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
+    cfg = cli.cli_config
 
     if count <= 0 and not internal_ids:
         raise emit_cli_error(cli, CliInvalidArgError(
             "--count must be > 0 or pass --internal-ids LIST",
+        ))
+    if not dry_run and not yes:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "Real run burns LLM tokens; pass --yes to confirm.",
         ))
 
     explicit_ids: list[int] = []
@@ -442,29 +739,68 @@ def llm_compare_paths(
                 f"--internal-ids must be comma-separated integers: {e}",
             ))
 
-    plan = {
-        "sample_size": len(explicit_ids) if explicit_ids else count,
-        "internal_ids": explicit_ids or None,
-        "mode": "explicit" if explicit_ids else "random",
-        "dry_run": True,
-    }
+    ids = explicit_ids if explicit_ids else _pick_internal_ids(
+        count,
+        cfg.sync_store_db_path,
+    )
+    selection_mode = "explicit" if explicit_ids else "recent"
 
     if dry_run:
-        data = {"plan": plan, "status": "pr3_stub"}
+        cost_preview = _build_cost_preview(cfg.llm_model, len(ids))
+        plan = {
+            "mode": "dry_run",
+            "sample_size": len(ids),
+            "internal_ids": ids,
+            "selection_mode": selection_mode,
+            "model": cfg.llm_model,
+            "cost_preview": cost_preview,
+        }
+        data = {"action": "compare-paths", **plan, "plan": plan}
         if cli.output.lower() == "text":
             print("=== compare-paths plan (dry-run) ===")
-            for k, v in plan.items():
-                print(f"{k:14} {v}")
+            print(f"  candidates: {len(ids)}")
+            print(f"  internal_ids: {ids}")
+            print(f"  model: {cfg.llm_model}")
+            print(f"  cost preview: ~${cost_preview['estimated_cost_usd']}")
         else:
             emit(cli, data)
         return
 
-    # 非 dry-run 实跑路径 — PR-3 暂不接入烧 token 的双路径对比
-    # 用户用 scripts/compare_llm_path.py 临时跑
-    raise emit_cli_error(cli, CliNotImplementedError(
-        "compare-paths non-dry-run path not yet implemented in PR-3.",
-        hint=(
-            "用 --dry-run 看 plan; 或临时跑 "
-            "'python scripts/compare_llm_path.py --count N' / '--internal-ids ...'"
-        ),
-    ))
+    _ensure_compare_deps()
+
+    arm = AppleScriptArm(
+        account_name=cfg.mail_account_name,
+        inbox_name=cfg.mail_inbox_name,
+    )
+    reader = EmailReader()
+    store = EmailRepository(
+        db_path=cfg.sync_store_db_path,
+        attachment_store=AttachmentStore(cfg.attachment_storage_dir),
+    )
+
+    async def _run_all() -> list[dict[str, Any]]:
+        results = []
+        for internal_id in ids:
+            results.append(await _compare_one(internal_id, arm, reader, store))
+        return results
+
+    results = asyncio.run(_run_all())
+    summary = _summarize_compare_results(results)
+
+    data = {
+        "action": "compare-paths",
+        "mode": "inline",
+        "results": results,
+        "summary": summary,
+        "model": cfg.llm_model,
+        "selection_mode": selection_mode,
+        "internal_ids": ids,
+    }
+
+    if cli.output.lower() == "text":
+        print("=== compare-paths results ===")
+        for result in results:
+            _print_compare_result(result)
+        _print_compare_summary(summary)
+    else:
+        emit(cli, data)
