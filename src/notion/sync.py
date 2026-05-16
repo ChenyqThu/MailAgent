@@ -1,12 +1,15 @@
-from typing import Dict, Any, List, Set, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Mapping, Set, Optional, Tuple, TYPE_CHECKING
 from pathlib import Path
 from loguru import logger
 from datetime import datetime, timezone, timedelta
 import re
 import shutil
+import tempfile
 
 if TYPE_CHECKING:
     from src.mail.icalendar_parser import MeetingInvite
+    from src.mail.sync_store import SyncStore
+    from src.repository import AttachmentRecord, EmailBodyRecord, EmailRepository
 
 from src.models import Email, Attachment
 from src.notion.client import NotionClient
@@ -20,10 +23,35 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 class NotionSync:
     """Notion 同步器"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        repo: Optional['EmailRepository'] = None,
+        sync_store: Optional['SyncStore'] = None,
+    ):
+        """初始化。
+
+        Args:
+            repo: 可选注入 EmailRepository（用于 P4-04 灰度路径）。不传则需要时 lazy 创建。
+            sync_store: 可选注入 SyncStore。不传则需要时 lazy 创建。
+        """
         self.client = NotionClient()
         self.html_converter = HTMLToNotionConverter()
         self.eml_generator = EMLGenerator()
+        # v4 P4-04：灰度路由按需 lazy-init 这两个，避免老调用方破坏（NotionSync() 无参也行）
+        self._repo: Optional['EmailRepository'] = repo
+        self._sync_store: Optional['SyncStore'] = sync_store
+
+    def _ensure_sqlite_resources(self) -> Tuple['EmailRepository', 'SyncStore']:
+        """v4 P4-04：lazy-init 默认 EmailRepository + SyncStore，复用 config 配置的 DB 路径。"""
+        from src.config import config as app_config
+        if self._repo is None:
+            from src.repository import EmailRepository
+            self._repo = EmailRepository(db_path=app_config.sync_store_db_path)
+        if self._sync_store is None:
+            from src.mail.sync_store import SyncStore
+            self._sync_store = SyncStore(app_config.sync_store_db_path)
+        return self._repo, self._sync_store
 
     async def sync_email(self, email: Email) -> bool:
         """同步邮件到 Notion（兼容旧 API）
@@ -772,6 +800,180 @@ class NotionSync:
             logger.error(f"Failed to update Sub-item for {page_id}: {e}")
             return False
 
+    # ============================================================
+    # v4 SSoT 路径：从 SQLite 读 body+attachments+metadata 创建 Notion 页
+    # 详见 docs/architecture_v4_sqlite_ssot.md §5
+    # ============================================================
+
+    # 匹配 storage_payload_builder._rewrite_cid_to_local 写入 body_html 的相对路径
+    _V4_ATTACHMENT_SRC_RE = re.compile(
+        r"""(?P<attr>src|href)\s*=\s*(?P<quote>["'])attachments/(?P<int_id>\d+)/(?P<filename>[^"']+)(?P=quote)""",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _restore_cid_in_body_html(
+        cls, html: Optional[str], attachments: List['AttachmentRecord']
+    ) -> str:
+        """把 v4 body_html 里 ``attachments/{int_id}/{filename}`` 还原成 ``cid:{content_id}``。
+
+        Why: _build_image_map / _handle_image 已经被 v2 验证过、只认 cid: 引用；与其改写两边
+        不如把 v4 的相对路径反推回 cid 让既有 helper 原样工作。filename → content_id 映射来自
+        email_attachment 表（保 inline / content_id 不为空）。映射缺失就保留原相对路径，
+        _handle_image 进入 "unsupported src" 分支吐占位 callout，不会让整封邮件失败。
+        """
+        if not html:
+            return html or ""
+        filename_to_cid = {
+            att.filename: att.content_id
+            for att in attachments
+            if att.content_id
+        }
+        if not filename_to_cid:
+            return html
+
+        def repl(m: "re.Match[str]") -> str:
+            filename = m.group("filename")
+            cid = filename_to_cid.get(filename)
+            if not cid:
+                return m.group(0)
+            return f'{m.group("attr")}={m.group("quote")}cid:{cid}{m.group("quote")}'
+
+        return cls._V4_ATTACHMENT_SRC_RE.sub(repl, html)
+
+    @staticmethod
+    def _materialize_attachments(
+        att_records: List['AttachmentRecord'],
+        work_dir: Path,
+        repo: 'EmailRepository',
+    ) -> Tuple[List[Attachment], List[int]]:
+        """把 SQLite 附件物化到 work_dir，转成 v2 期望的 Attachment list。
+
+        v2 的 _upload_attachments / EMLGenerator.generate 都按 ``attachment.path`` 读盘，
+        这里给它们准备好临时文件即可，让上层逻辑无差异复用。
+
+        Returns:
+            (materialized, missing_att_ids):
+                - materialized: 成功落盘的 Attachment 列表（顺序 = att_records 中可用项）
+                - missing_att_ids: 落盘文件不存在的 attachment.id（告警 / 排错用）
+        """
+        materialized: List[Attachment] = []
+        missing: List[int] = []
+        for att in att_records:
+            content = repo.get_attachment_bytes(att.id)
+            if content is None:
+                logger.warning(
+                    f"Attachment file missing for att_id={att.id} "
+                    f"local_path={att.local_path!r}; skipping"
+                )
+                missing.append(att.id)
+                continue
+            target = work_dir / att.filename
+            try:
+                target.write_bytes(content)
+            except OSError as e:
+                logger.warning(f"Failed to stage attachment {att.filename!r}: {e}")
+                missing.append(att.id)
+                continue
+            materialized.append(Attachment(
+                filename=att.filename,
+                content_type=att.content_type or "application/octet-stream",
+                size=att.size_bytes or len(content),
+                path=str(target),
+                content_id=att.content_id,
+                is_inline=att.is_inline,
+                # derived_from_filename 留空：v4 dual-write 阶段已转过，
+                # 不需要让 _convert_office_attachments 二次处理
+                derived_from_filename=None,
+                derived_format=att.derived_format,
+            ))
+        return materialized, missing
+
+    @staticmethod
+    def _parse_iso_to_beijing(date_str: Optional[str]) -> datetime:
+        """ISO 串 → 带 UTC+8 的 datetime；失败回退 now()。"""
+        if not date_str:
+            return datetime.now(BEIJING_TZ)
+        try:
+            normalized = re.sub(r'\.\d+', '', date_str)
+            dt = datetime.fromisoformat(normalized)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=BEIJING_TZ)
+            return dt
+        except Exception:
+            logger.warning(f"Failed to parse date {date_str!r}, using now()")
+            return datetime.now(BEIJING_TZ)
+
+    @classmethod
+    def _build_email_from_sqlite(
+        cls,
+        internal_id: int,
+        body_record: 'EmailBodyRecord',
+        metadata: Mapping[str, Any],
+        att_records: List['AttachmentRecord'],
+        work_dir: Path,
+        repo: 'EmailRepository',
+    ) -> Email:
+        """合成 Email 对象，让 v2 的 properties/children/upload helpers 原样复用。
+
+        - body content 优先取 body_html；text-only / empty 用 markdown 兜底
+        - body_format='html' → content_type='text/html'，否则 'text/plain'
+        - cid 还原仅在 HTML 路径上做，plaintext 不需要
+        """
+        materialized, _missing = cls._materialize_attachments(att_records, work_dir, repo)
+
+        is_html = body_record.body_format == "html" and body_record.html
+        if is_html:
+            content = cls._restore_cid_in_body_html(body_record.html, att_records)
+            content_type = "text/html"
+        else:
+            content = body_record.markdown or body_record.html or ""
+            content_type = "text/plain"
+
+        parsed_date = cls._parse_iso_to_beijing(metadata.get("date_received"))
+
+        message_id = metadata.get("message_id") or body_record.message_id
+        if not message_id:
+            raise ValueError(f"Missing message_id in SQLite for internal_id={internal_id}")
+
+        return Email(
+            message_id=message_id,
+            subject=metadata.get("subject") or "(No Subject)",
+            sender=metadata.get("sender") or "",
+            sender_name=metadata.get("sender_name") or None,
+            to=metadata.get("to_addr") or "",
+            cc=metadata.get("cc_addr") or "",
+            date=parsed_date,
+            content=content,
+            content_type=content_type,
+            is_read=bool(metadata.get("is_read")),
+            is_flagged=bool(metadata.get("is_flagged")),
+            attachments=materialized,
+            thread_id=metadata.get("thread_id") or None,
+            mailbox=metadata.get("mailbox") or "收件箱",
+            internal_id=internal_id,
+        )
+
+    @staticmethod
+    def _build_file_id_map(
+        uploaded_attachments: List[Dict[str, Any]],
+        att_records: List['AttachmentRecord'],
+    ) -> Dict[int, str]:
+        """把上传成功的附件与 SQLite 行关联，返回 {attachment_id: file_upload_id}。
+
+        给 repo.update_notion_links 用，让未来反向同步 / orphan 清理可以走
+        email_attachment.notion_file_id。filename 是 sanitize 后的稳定 key，
+        commit 阶段和 materialize 阶段一致。
+        """
+        filename_to_id = {att.filename: att.id for att in att_records}
+        file_id_map: Dict[int, str] = {}
+        for ua in uploaded_attachments:
+            att_id = filename_to_id.get(ua.get("filename"))
+            upload_id = ua.get("file_upload_id")
+            if att_id is not None and upload_id:
+                file_id_map[att_id] = upload_id
+        return file_id_map
+
     async def create_email_page_v2(
         self,
         email: Email,
@@ -799,6 +1001,42 @@ class NotionSync:
         Raises:
             Exception: 检查重复时发生错误会抛出异常，避免创建重复页面
         """
+        # v4 P4-04：灰度路由 —— NOTION_READ_FROM_SQLITE=true + SQLite 命中 body 时
+        # delegate 到 create_email_page_from_sqlite；miss 自动 fallback 走老路径。
+        # 默认 false，对生产无副作用；切 true 后正常 sync + resync 都统一走 SSoT。
+        from src.config import config as app_config
+        if app_config.notion_read_from_sqlite and email.internal_id:
+            try:
+                repo, sync_store = self._ensure_sqlite_resources()
+                if repo.get_body(email.internal_id) is not None:
+                    logger.debug(
+                        f"[v4] routing to from-sqlite path: internal_id={email.internal_id}"
+                    )
+                    return await self.create_email_page_from_sqlite(
+                        email.internal_id,
+                        repo=repo,
+                        sync_store=sync_store,
+                        meeting_invite=meeting_invite,
+                        calendar_page_id=calendar_page_id,
+                        skip_parent_lookup=skip_parent_lookup,
+                    )
+                logger.debug(
+                    f"[v4] SQLite body miss for internal_id={email.internal_id}, "
+                    f"falling back to legacy v2 path"
+                )
+            except ValueError:
+                # body / metadata 缺失：fallback 老路径
+                logger.debug(
+                    f"[v4] SQLite resources incomplete for internal_id={email.internal_id}, "
+                    f"falling back to legacy v2 path"
+                )
+            except Exception as e:
+                # 其他异常（DB locked / 路径解析等）：fallback 但 warning
+                logger.warning(
+                    f"[v4] SQLite routing failed for internal_id={email.internal_id} "
+                    f"({type(e).__name__}: {e}); falling back to legacy v2 path"
+                )
+
         try:
             logger.info(f"Creating email page (v2): {email.subject}")
 
@@ -885,6 +1123,154 @@ class NotionSync:
         except Exception as e:
             logger.error(f"Failed to create email page (v2): {e}")
             raise  # 向上传播异常，让调用方知道失败原因
+
+    async def create_email_page_from_sqlite(
+        self,
+        internal_id: int,
+        *,
+        repo: 'EmailRepository',
+        sync_store: 'SyncStore',
+        meeting_invite: Optional['MeetingInvite'] = None,
+        calendar_page_id: Optional[str] = None,
+        skip_parent_lookup: bool = False,
+        replace_existing: bool = False,
+    ) -> Optional[str]:
+        """v4 SSoT 路径：从 SQLite 读 body+attachments+metadata 创建 Notion 邮件页面。
+
+        与 create_email_page_v2 的语义差异：
+        - 不接受 in-memory Email 对象，整张邮件从 SQLite 重建
+        - 附件从 ``email_attachment.local_path`` 读盘，不再依赖 ``/tmp/{md5}/``
+        - Office 转换跳过（v4 dual-write 已把 derived 行预转完）
+        - 上传完成后通过 ``repo.update_notion_links`` 回写 ``notion_file_id``
+          供反向同步 / orphan cleanup 复用
+
+        适用场景：
+        - ``scripts/resync_notion.py`` 重传历史邮件（不再走 AppleScript）
+        - 灰度切换后正常 sync 路径（P4-04 wrapper 路由）
+
+        Raises:
+            ValueError: SQLite 没有 body / metadata。调用方自行决定是否降级到 AppleScript。
+        """
+        body_record = repo.get_body(internal_id)
+        if body_record is None:
+            raise ValueError(f"No body in SQLite for internal_id={internal_id}")
+        metadata = sync_store.get(internal_id)
+        if metadata is None:
+            raise ValueError(f"No metadata in SQLite for internal_id={internal_id}")
+        att_records = repo.get_attachments(internal_id)
+
+        work_dir = Path(tempfile.mkdtemp(prefix=f"mailagent-sqlite-{internal_id}-"))
+        try:
+            email = self._build_email_from_sqlite(
+                internal_id, body_record, metadata, att_records, work_dir, repo
+            )
+
+            logger.info(
+                f"Creating email page from SQLite: {email.subject} "
+                f"(internal_id={internal_id}, attachments={len(email.attachments)}, "
+                f"format={body_record.body_format})"
+            )
+
+            # 1. dup check（与 v2 同语义）
+            try:
+                if await self.client.check_page_exists(email.message_id):
+                    logger.info(f"Email already synced: {email.message_id}")
+                    existing = await self.client.query_database(
+                        filter_conditions={
+                            "property": "Message ID",
+                            "rich_text": {"equals": email.message_id}
+                        }
+                    )
+                    if existing:
+                        existing_page_id = existing[0].get("id")
+                        if not replace_existing:
+                            return existing_page_id
+                        # replace_existing：归档老页落到 create 流程
+                        try:
+                            await self.client.client.pages.update(
+                                page_id=existing_page_id, archived=True
+                            )
+                            logger.info(
+                                f"Archived existing page {existing_page_id} for replace"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Archive existing page {existing_page_id} failed: {e}; "
+                                f"continuing with create anyway"
+                            )
+                    else:
+                        return None
+            except Exception:
+                logger.error(
+                    "Failed to check page existence (from-sqlite), aborting to prevent duplicates"
+                )
+                raise
+
+            # 2. 附件上传（v2 _upload_attachments 直接复用，path 指向 work_dir 临时文件）
+            uploaded_attachments, failed_filenames = await self._upload_attachments(email)
+
+            # 3. .eml 归档（v2 EMLGenerator 直接复用）
+            eml_file_upload_id = await self._upload_eml_file(email)
+
+            # 4. properties + image_map + children
+            properties = self._build_properties(email, eml_file_upload_id)
+            if calendar_page_id:
+                properties["Calendar Events"] = {"relation": [{"id": calendar_page_id}]}
+                logger.info(f"Linked to calendar event: {calendar_page_id}")
+
+            image_map = self._build_image_map(email, uploaded_attachments)
+            children = self._build_children(email, uploaded_attachments, image_map, meeting_invite)
+            self._sanitize_blocks(children)
+
+            if failed_filenames:
+                warning_block = {
+                    "type": "callout",
+                    "callout": {
+                        "rich_text": [{
+                            "type": "text",
+                            "text": {"content": f"⚠️ {len(failed_filenames)} 个附件上传失败: {', '.join(failed_filenames)}"}
+                        }],
+                        "icon": {"type": "emoji", "emoji": "⚠️"},
+                        "color": "yellow_background"
+                    }
+                }
+                children.insert(0, warning_block)
+
+            # 5. 创建 Page
+            email_icon = (
+                {"type": "emoji", "emoji": "📤"}
+                if email.mailbox == "发件箱"
+                else {"type": "emoji", "emoji": "📧"}
+            )
+            page = await self._create_page_with_blocks(properties, children, email_icon)
+            page_id = page["id"]
+            logger.info(
+                f"Email page created from SQLite (v4): {email.subject} "
+                f"(page_id={page_id})"
+            )
+
+            # 6. P4-03: 回写 notion_file_id
+            file_id_map = self._build_file_id_map(uploaded_attachments, att_records)
+            if file_id_map:
+                try:
+                    repo.update_notion_links(internal_id, file_id_map=file_id_map)
+                    logger.debug(
+                        f"Wrote back {len(file_id_map)} notion_file_id entries "
+                        f"for internal_id={internal_id}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to write back notion_file_id for "
+                        f"internal_id={internal_id}: {e}"
+                    )
+
+            # 7. 线程关系（v2 同链路）
+            if not skip_parent_lookup and email.thread_id:
+                await self._handle_thread_relations(page_id, email)
+
+            return page_id
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     def _parse_date_to_beijing(self, date_str: str) -> Optional[datetime]:
         """将日期字符串转换为北京时间 datetime 对象

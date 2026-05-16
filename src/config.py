@@ -240,5 +240,16 @@ class Config(BaseSettings):
         ),
     )
 
+    # v4 Phase 4: Notion uploader 改读 SQLite (架构归一)
+    notion_read_from_sqlite: bool = Field(
+        default=False, env="NOTION_READ_FROM_SQLITE",
+        description=(
+            "是否让 create_email_page_v2 优先走 SQLite SSoT 路径 (v4 P4-04)。"
+            "默认 false 灰度期 —— backfill 完 + 抽样人工 diff 验证通过后再切 true。"
+            "切换语义：true 且 email.internal_id + SQLite 命中 body → delegate 到"
+            " create_email_page_from_sqlite；miss 自动 fallback 老路径。"
+        ),
+    )
+
 # 全局配置实例
 config = Config()

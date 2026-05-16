@@ -185,12 +185,28 @@ async def _backfill_one(
     email.internal_id = iid
 
     # 3. 预跑 Office 转换（让 derived CSV/PDF 跟 dual-write 一起落 SQLite）
+    # convert_to_csv/pdf 内部失败时静默返回 []，所以这里加一层"期望 vs 实际"对比，
+    # 漏转的会被 warning 出来，后续可用 scripts/backfill_derivatives.py 补
+    from src.converter.office_converter import is_convertible
+    expected_convertibles = [a.filename for a in email.attachments if is_convertible(a.filename)]
     try:
         derived = notion_sync._convert_office_attachments(email)
         if derived:
             email.attachments.extend(derived)
+            derived_origins = {d.derived_from_filename for d in derived if d.derived_from_filename}
+            missed = set(expected_convertibles) - derived_origins
+            if missed:
+                logger.warning(
+                    f"[{iid}] Office convert produced no derivative for: {missed} "
+                    f"(expected {len(expected_convertibles)}, got {len(derived_origins)})"
+                )
+        elif expected_convertibles:
+            logger.warning(
+                f"[{iid}] Office convert returned empty but {len(expected_convertibles)} "
+                f"convertible attachments expected: {expected_convertibles}"
+            )
     except Exception as e:
-        logger.warning(f"[{iid}] Office pre-convert failed (non-fatal): {e}")
+        logger.warning(f"[{iid}] Office pre-convert raised (non-fatal): {e}")
 
     # 4. build payload
     body, atts = build_storage_payloads(
