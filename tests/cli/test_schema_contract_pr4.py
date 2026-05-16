@@ -52,6 +52,18 @@ def _fake_run(returncode=0, stdout="ok", stderr=""):
     return _r, cap
 
 
+def _mock_initial_sync():
+    instance = MagicMock()
+    instance._fetch_emails_from_applescript = AsyncMock(return_value=None)
+    instance.analyze_only = AsyncMock(return_value=MagicMock(spec=object))
+    instance.fix_properties = AsyncMock(return_value=None)
+    instance.fix_critical_mismatch = AsyncMock(return_value=None)
+    instance.update_all_parent_items = AsyncMock(return_value=None)
+    instance.sync_new_emails = AsyncMock(return_value=None)
+    instance.run = AsyncMock(return_value=None)
+    return MagicMock(return_value=instance)
+
+
 class TestPR4SchemaContract:
     """PR-4 新 schema 与实际 CLI -o json 输出一致性 (US-011)."""
 
@@ -140,8 +152,7 @@ class TestPR4SchemaContract:
     ):
         from jsonschema import validate
 
-        run, _ = _fake_run(0)
-        with patch("src.cli.commands.init.subprocess.run", run):
+        with patch("scripts.initial_sync.InitialSync", _mock_initial_sync()):
             result = _invoke(
                 cli_runner, "init", subcmd, "-o", "json", db_path=seeded_db,
             )
@@ -163,8 +174,7 @@ class TestPR4SchemaContract:
         from jsonschema import validate
 
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
-        run, _ = _fake_run(0)
-        with patch("src.cli.commands.init.subprocess.run", run):
+        with patch("scripts.initial_sync.InitialSync", _mock_initial_sync()):
             result = _invoke(
                 cli_runner, "init", subcmd, "--yes",
                 "-o", "json", db_path=seeded_db,
@@ -178,8 +188,7 @@ class TestPR4SchemaContract:
         from jsonschema import validate
 
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
-        run, _ = _fake_run(0)
-        with patch("src.cli.commands.init.subprocess.run", run):
+        with patch("scripts.initial_sync.InitialSync", _mock_initial_sync()):
             result = _invoke(
                 cli_runner, "init", "all", "--yes", "--inbox-count", "10",
                 "-o", "json", db_path=seeded_db,

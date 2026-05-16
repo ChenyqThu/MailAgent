@@ -1,17 +1,14 @@
 """mailagent init — fetch-cache / analyze / fix-* / update-parents / sync-new / all
 (RFC v2 §4.9 / PR-4 US-007).
-
-首版 subprocess wrap scripts/initial_sync.py --action <name>.
 """
 
 from __future__ import annotations
 
-import shlex
-import subprocess
+import asyncio
+import inspect
 import sys
 import time
-from pathlib import Path
-from typing import List, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 import typer
 
@@ -29,35 +26,73 @@ app = typer.Typer(
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "initial_sync.py"
-
-# 全部 actions 对应 scripts/initial_sync.py --action 值
-ACTION_MAP = {
-    "fetch-cache": "fetch-cache",
-    "analyze": "analyze",
-    "fix-properties": "fix-properties",
-    "fix-critical": "fix-critical",
-    "update-parents": "update-all-parents",
-    "sync-new": "sync-new",
-    "all": "all",
-}
-
 # 仅这些 action 是写命令 (调 Notion / Mail.app), 需 auth + pm2 check
 WRITE_ACTIONS = {"fix-properties", "fix-critical", "update-parents", "sync-new", "all"}
 
 
-def _common_run(
+async def _close_initial_sync(sync_instance: Any) -> None:
+    notion_sync = getattr(sync_instance, "notion_sync", None)
+    notion_client = getattr(notion_sync, "client", None)
+    close = getattr(notion_client, "close", None)
+    if close is None:
+        return
+
+    result = close()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _dispatch_action(
+    sync_instance: Any,
+    *,
+    action: str,
+    yes: bool,
+    skip_fetch: bool,
+    report_out: Optional[str],
+    limit: Optional[int],
+) -> None:
+    try:
+        if action == "fetch-cache":
+            await sync_instance._fetch_emails_from_applescript()
+        elif action == "analyze":
+            await sync_instance.analyze_only(skip_fetch=skip_fetch)
+            if report_out:
+                sync_instance.report.save(report_out)
+        elif action == "fix-properties":
+            await sync_instance.fix_properties(auto_confirm=yes)
+        elif action == "fix-critical":
+            await sync_instance.fix_critical_mismatch(auto_confirm=yes)
+        elif action == "update-parents":
+            await sync_instance.update_all_parent_items(auto_confirm=yes)
+        elif action == "sync-new":
+            await sync_instance.sync_new_emails(limit=limit, auto_confirm=yes)
+        elif action == "all":
+            await sync_instance.run(auto_confirm=yes, limit=limit)
+            if report_out:
+                sync_instance.report.save(report_out)
+        else:
+            raise CliInvalidArgError(f"Unsupported init action: {action}")
+    finally:
+        await _close_initial_sync(sync_instance)
+
+
+def _run_action_inline(
     cli: "CliContext",
     *,
     action: str,
-    extra: List[str],
+    yes: bool = False,
+    inbox_count: Optional[int] = None,
+    sent_count: Optional[int] = None,
+    skip_fetch: bool = False,
+    input_path: Optional[str] = None,
+    report_out: Optional[str] = None,
+    report_in: Optional[str] = None,
+    limit: Optional[int] = None,
     requires_auth: bool,
     allow_concurrent: bool,
     runner=None,
-    dry_run: bool = False,
 ) -> dict:
-    if requires_auth and not dry_run:
+    if requires_auth:
         try:
             cli.require_auth()
         except CliError as e:
@@ -68,40 +103,58 @@ def _common_run(
         except CliError as e:
             raise emit_cli_error(cli, e)
 
-    script_action = ACTION_MAP[action]
-    args = [sys.executable, str(SCRIPT_PATH), "--action", script_action, *extra]
-    run = runner or subprocess.run
+    mailbox_limits: dict[str, int] = {}
+    if inbox_count is not None:
+        mailbox_limits["收件箱"] = inbox_count
+    if sent_count is not None:
+        mailbox_limits["发件箱"] = sent_count
+
+    InitialSyncCls = runner
+    if InitialSyncCls is None:
+        from scripts.initial_sync import InitialSync
+        InitialSyncCls = InitialSync
+
     t0 = time.monotonic()
+    error: Optional[str] = None
     try:
-        result = run(args, capture_output=True, text=True, cwd=str(REPO_ROOT))
-    except FileNotFoundError as exc:
-        raise emit_cli_error(cli, CliInvalidArgError(
-            f"initial_sync.py not found: {SCRIPT_PATH}",
-            hint=str(exc),
+        sync_instance = InitialSyncCls(
+            mailbox_limits=mailbox_limits if mailbox_limits else None,
+        )
+
+        report_path = input_path or report_in
+        if report_path:
+            from scripts.initial_sync import AnalysisReport
+            sync_instance.report = AnalysisReport.load(report_path)
+
+        asyncio.run(_dispatch_action(
+            sync_instance,
+            action=action,
+            yes=yes,
+            skip_fetch=skip_fetch,
+            report_out=report_out,
+            limit=limit,
         ))
+    except Exception as exc:  # noqa: BLE001 - CLI returns structured failure JSON.
+        error = f"{type(exc).__name__}: {exc}"
+
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     return {
         "action": f"init-{action}",
-        "command": shlex.join(args),
-        "script_returncode": result.returncode,
         "duration_ms": elapsed_ms,
-        "stdout_tail": (result.stdout or "")[-500:],
-        "stderr_tail": (result.stderr or "")[-500:],
-        "mode": "subprocess",
+        "mode": "inline",
+        "ok": error is None,
+        **({"error": error} if error else {}),
     }
 
 
 def _emit_and_exit(cli: "CliContext", data: dict) -> None:
     if cli.output.lower() == "text":
-        print(
-            f"[init {data['action']}] subprocess rc={data['script_returncode']} "
-            f"({data['duration_ms']}ms)",
-            file=sys.stderr,
-        )
+        ok_marker = "ok" if data["ok"] else f"failed: {data.get('error', '?')}"
+        print(f"[init {data['action']}] {ok_marker} ({data['duration_ms']}ms)", file=sys.stderr)
     else:
         emit(cli, data)
-    if data["script_returncode"] != 0:
-        raise typer.Exit(code=data["script_returncode"])
+    if not data["ok"]:
+        raise typer.Exit(code=1)
 
 
 # ============================================================
@@ -120,14 +173,13 @@ def init_fetch_cache(
 ) -> None:
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
-    extra: List[str] = []
-    if inbox_count is not None:
-        extra += ["--inbox-count", str(inbox_count)]
-    if sent_count is not None:
-        extra += ["--sent-count", str(sent_count)]
-    data = _common_run(
-        cli, action="fetch-cache", extra=extra,
-        requires_auth=False, allow_concurrent=allow_concurrent,
+    data = _run_action_inline(
+        cli,
+        action="fetch-cache",
+        inbox_count=inbox_count,
+        sent_count=sent_count,
+        requires_auth=False,
+        allow_concurrent=allow_concurrent,
         runner=runner,
     )
     _emit_and_exit(cli, data)
@@ -149,16 +201,14 @@ def init_analyze(
 ) -> None:
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
-    extra: List[str] = []
-    if input_:
-        extra += ["--input", input_]
-    if report_out:
-        extra += ["--report-out", report_out]
-    if skip_fetch:
-        extra.append("--skip-fetch")
-    data = _common_run(
-        cli, action="analyze", extra=extra,
-        requires_auth=False, allow_concurrent=False,
+    data = _run_action_inline(
+        cli,
+        action="analyze",
+        input_path=input_,
+        report_out=report_out,
+        skip_fetch=skip_fetch,
+        requires_auth=False,
+        allow_concurrent=False,
         runner=runner,
     )
     _emit_and_exit(cli, data)
@@ -178,14 +228,13 @@ def _fix_runner(
     allow_concurrent: bool,
     runner,
 ) -> dict:
-    extra: List[str] = []
-    if yes:
-        extra.append("--yes")
-    if report_in:
-        extra += ["--report-in", report_in]
-    return _common_run(
-        cli, action=action, extra=extra,
-        requires_auth=True, allow_concurrent=allow_concurrent,
+    return _run_action_inline(
+        cli,
+        action=action,
+        yes=yes,
+        report_in=report_in,
+        requires_auth=True,
+        allow_concurrent=allow_concurrent,
         runner=runner,
     )
 
@@ -259,10 +308,12 @@ def init_sync_new(
 ) -> None:
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
-    extra: List[str] = ["--yes"] if yes else []
-    data = _common_run(
-        cli, action="sync-new", extra=extra,
-        requires_auth=True, allow_concurrent=allow_concurrent,
+    data = _run_action_inline(
+        cli,
+        action="sync-new",
+        yes=yes,
+        requires_auth=True,
+        allow_concurrent=allow_concurrent,
         runner=runner,
     )
     _emit_and_exit(cli, data)
@@ -286,18 +337,15 @@ def init_all(
 ) -> None:
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
-    extra: List[str] = []
-    if yes:
-        extra.append("--yes")
-    if inbox_count is not None:
-        extra += ["--inbox-count", str(inbox_count)]
-    if sent_count is not None:
-        extra += ["--sent-count", str(sent_count)]
-    if report_out:
-        extra += ["--report-out", report_out]
-    data = _common_run(
-        cli, action="all", extra=extra,
-        requires_auth=True, allow_concurrent=allow_concurrent,
+    data = _run_action_inline(
+        cli,
+        action="all",
+        yes=yes,
+        inbox_count=inbox_count,
+        sent_count=sent_count,
+        report_out=report_out,
+        requires_auth=True,
+        allow_concurrent=allow_concurrent,
         runner=runner,
     )
     _emit_and_exit(cli, data)

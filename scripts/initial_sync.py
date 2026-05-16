@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """
 初始化同步脚本
 
@@ -54,6 +55,7 @@ import argparse
 import json
 import sys
 import time
+import warnings
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
@@ -455,7 +457,7 @@ class InitialSync:
 
         # 获取 SyncStore 中已有的邮件数量（按邮箱）
         existing_counts = self._get_existing_count_by_mailbox()
-        print(f"\n   SyncStore 中已有邮件:")
+        print("\n   SyncStore 中已有邮件:")
         for mailbox in self.mailboxes:
             count = existing_counts.get(mailbox, 0)
             limit = self.mailbox_limits.get(mailbox, 0)
@@ -557,7 +559,7 @@ class InitialSync:
 
                 # 如果获取的数量少于请求数量，说明已到末尾
                 if len(emails) < fetch_count:
-                    print(f"    已到达邮件末尾")
+                    print("    已到达邮件末尾")
                     break
 
                 offset += fetch_count
@@ -828,7 +830,7 @@ class InitialSync:
             store_sender = self._extract_email_address(store_data.get('sender', ''))
             notion_sender = self._extract_email_address(notion_data.get('sender', ''))
             if store_sender and notion_sender and store_sender.lower() != notion_sender.lower():
-                critical_reasons.append(f"sender 不同")
+                critical_reasons.append("sender 不同")
 
             # 对比 date
             store_date_str = store_data.get('date_received') or ''
@@ -1074,7 +1076,7 @@ class InitialSync:
         need_fix_critical = len(comp.get('critical_mismatch', []))
         need_sync_new = len(comp.get('store_only', []))
 
-        print(f"  📌 需要操作:")
+        print("  📌 需要操作:")
         print(f"     - 修复属性 (fix-properties): {need_fix_props} 封")
         print(f"     - 重新同步 (fix-critical): {need_fix_critical} 封")
         print(f"     - 同步新邮件 (sync-new): {need_sync_new} 封")
@@ -1110,7 +1112,7 @@ class InitialSync:
                     full_email = self.arm.fetch_email_by_message_id(message_id, mailbox)
 
                 if not full_email:
-                    print(f"    ❌ 无法获取邮件内容")
+                    print("    ❌ 无法获取邮件内容")
                     self.sync_store.mark_failed(message_id, "Failed to fetch content")
                     self.stats["failed"] += 1
                     continue
@@ -1118,7 +1120,7 @@ class InitialSync:
                 # 构建 Email 对象（传入 internal_id）
                 email_obj = await self._build_email_object(full_email, mailbox, internal_id)
                 if not email_obj:
-                    print(f"    ❌ 无法解析邮件")
+                    print("    ❌ 无法解析邮件")
                     self.sync_store.mark_failed(message_id, "Failed to parse email")
                     self.stats["failed"] += 1
                     continue
@@ -1131,11 +1133,11 @@ class InitialSync:
                 if page_id:
                     self.sync_store.mark_synced(message_id, page_id)
                     self.stats["synced"] += 1
-                    print(f"    ✅ 同步成功")
+                    print("    ✅ 同步成功")
                 else:
                     self.sync_store.mark_failed(message_id, "Notion returned None")
                     self.stats["failed"] += 1
-                    print(f"    ❌ 同步失败")
+                    print("    ❌ 同步失败")
 
             except Exception as e:
                 logger.error(f"Sync error for {message_id}: {e}")
@@ -1601,12 +1603,12 @@ class InitialSync:
         summary = analysis.get('summary', {})
         threads = analysis.get('threads', {})
 
-        print(f"\n📊 Parent Item 分析结果（新架构：最新邮件为母节点）")
+        print("\n📊 Parent Item 分析结果（新架构：最新邮件为母节点）")
         print(f"  总邮件数: {analysis.get('total', 0)}")
         print(f"  总线程数: {summary.get('total_threads', 0)}")
         print(f"    - 单邮件线程: {summary.get('single_email_threads', 0)} 个")
         print(f"    - 多邮件线程: {summary.get('multi_email_threads', 0)} 个")
-        print(f"  关系状态:")
+        print("  关系状态:")
         print(f"    - 已正确: {summary.get('correct', 0)} 封")
         print(f"    - 需要更新: {summary.get('need_update', 0)} 封")
 
@@ -1636,7 +1638,7 @@ class InitialSync:
             'failed': 0
         }
 
-        print(f"\n  开始更新 Parent Item 关系...")
+        print("\n  开始更新 Parent Item 关系...")
 
         for i, (thread_id, thread_data) in enumerate(threads.items(), 1):
             if not thread_data.get('need_update_latest') and not thread_data.get('sub_items_to_set'):
@@ -1645,8 +1647,6 @@ class InitialSync:
             stats['threads_processed'] += 1
             latest_page_id = thread_data['latest_page_id']
             latest_subject = thread_data.get('latest_subject', '')[:40]
-            sub_items = thread_data.get('sub_items_to_set', [])
-
             # 同时包含需要清空 Parent 的最新邮件（如果有错误的 Parent）
             # 通过设置 Sub-item 可以一次性处理
             all_other_page_ids = [e['page_id'] for e in thread_data.get('other_emails', [])]
@@ -1679,7 +1679,7 @@ class InitialSync:
                 stats['failed'] += 1
 
         # 输出统计
-        print(f"\n\n✅ Parent Item 关系重建完成:")
+        print("\n\n✅ Parent Item 关系重建完成:")
         print(f"   处理线程: {stats['threads_processed']} 个")
         print(f"   成功更新: {stats['threads_updated']} 个线程, {stats['emails_updated']} 封邮件")
         print(f"   失败: {stats['failed']} 个")
@@ -1781,7 +1781,7 @@ async def main():
         print("SyncStore 缓存预热")
         print("=" * 60)
         if mailbox_limits:
-            print(f"\n目标数量:")
+            print("\n目标数量:")
             for mb, count in mailbox_limits.items():
                 print(f"  - {mb}: {count} 封")
         else:
@@ -1795,7 +1795,7 @@ async def main():
         print("\n" + "=" * 60)
         print("缓存预热完成")
         print("=" * 60)
-        print(f"\nSyncStore 状态:")
+        print("\nSyncStore 状态:")
         print(f"  - 总邮件数: {stats.get('total_emails', 0)}")
         by_mailbox = stats.get('by_mailbox', {})
         for mb, count in by_mailbox.items():
@@ -1843,4 +1843,10 @@ async def main():
 
 
 if __name__ == "__main__":
+    warnings.warn(
+        "scripts/initial_sync.py is deprecated; use 'mailagent init <action>' instead. "
+        "Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     asyncio.run(main())

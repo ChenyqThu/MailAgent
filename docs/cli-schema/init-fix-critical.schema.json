@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/init-fix-critical.schema.json",
   "title": "mailagent init fix critical",
-  "description": "RFC v2 §4.9 / PR-4 US-007 — subprocess wrap initial_sync.py --action fix-critical",
+  "description": "PR-5 US-003 — inline InitialSync dispatch for fix-critical",
   "oneOf": [
     {
       "type": "object",
@@ -25,7 +25,7 @@
           "type": "object",
           "required": [
             "action",
-            "script_returncode",
+            "ok",
             "mode"
           ],
           "additionalProperties": true,
@@ -33,27 +33,21 @@
             "action": {
               "type": "string"
             },
-            "dry_run": {
+            "ok": {
               "type": "boolean"
             },
-            "command": {
-              "type": "string"
-            },
-            "script_returncode": {
-              "type": "integer"
+            "dry_run": {
+              "type": "boolean"
             },
             "duration_ms": {
               "type": "integer",
               "minimum": 0
             },
-            "stdout_tail": {
-              "type": "string"
-            },
-            "stderr_tail": {
+            "error": {
               "type": "string"
             },
             "mode": {
-              "type": "string"
+              "const": "inline"
             }
           }
         },
