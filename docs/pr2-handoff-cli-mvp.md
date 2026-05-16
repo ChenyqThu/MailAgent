@@ -562,24 +562,93 @@ PR-2 提交前必须 ✅:
 
 ## 8. 启动 prompt（新 session 复制粘贴）
 
+**推荐模式：ralph + `--critic=codex`**（autonomous PRD loop + codex 做 final review）。
+
+理由：
+- PRD = 本 handoff §4 的 9 个 commit = 9 个 user stories
+- ralph 自动重试到所有 stories `passes: true`（适合"睡前挂着"）
+- `--critic=codex` 让 codex 通过 `omc ask codex --agent-prompt critic` 做最后 approval（双 agent 协作：claude 实施 + codex 独立 review）
+- 内置 deslop pass + regression re-verification
+- session 中断可恢复（`.omc/state/sessions/{sessionId}/prd.json` 持久化）
+- 前置：CRS_API_KEY 已写 `~/.zshenv`，subprocess 可见，不需要手动 export
+
 ```
-开始实施 RFC v2 PR-2: CLI 骨架 + MVP 命令（email get/list/body/search/resync + admin stats/health/db-version）。
+/oh-my-claudecode:ralph --critic=codex 实施 RFC v2 PR-2: CLI 骨架 + MVP 命令
 
-前置文档：
-- docs/pr2-handoff-cli-mvp.md（本文档，含完整任务规格 + 实施顺序 + 验证）
-- docs/agent-cli-rfc.md §4 + §5 + §6 + §7（设计原文）
-- docs/pr1-handoff-cli-prep.md（PR-1 已 ship 8 commits，323 passed）
+前置文档（按顺序读）：
+1. docs/pr2-handoff-cli-mvp.md（完整 spec + 9 commit 拆分 + 验证 checklist + 启动约束）
+2. docs/agent-cli-rfc.md §4 §5 §6 §7（CLI 设计原文）
+3. docs/pr1-handoff-cli-prep.md（PR-1 已 ship 8 commits, 323 passed）
 
-按 §4 实施顺序逐 commit 推进。每个 commit 前确保 pytest 不破坏现有 323 passed。
+PRD scaffold 时把 docs/pr2-handoff-cli-mvp.md §4 的 9 个 commit 作为 9 个 user stories：
+- US-001: Commit 1 — pyproject.toml CLI 入口 + src/cli 主骨架（main.py / config.py）
+- US-002: Commit 2 — src/cli/context.py + auth.py + exceptions.py + output.py
+- US-003: Commit 3 — src/cli/commands/email.py: get / body
+- US-004: Commit 4 — src/cli/commands/email.py: list / search (text/json/ndjson)
+- US-005: Commit 5 — src/cli/commands/email.py: resync (单封 + dry-run, 含 auth)
+- US-006: Commit 6 — src/cli/commands/admin.py: stats / health / db-version
+- US-007: Commit 7 — docs/cli-schema/ 10 个 schema 文件 + error-codes.md
+- US-008: Commit 8 — tests/cli/ 全部单测（≥ 15 cases）
+- US-009: Commit 9 — CLAUDE.md CLI 章节 + 综合回归
 
-约束：
+每个 story 的 acceptance criteria 直接来自本 handoff §7 完成检查清单 + RFC § 引用。
+不要写成 "Implementation is complete" 这种 generic 的（PRD theater）。
+
+关键约束：
 - PR-2 不动 scripts/* / attachment / llm / backfill / notion / project-progress / init / calendar / debug 子命令
-- 长任务契约（batch / PM2 检测 / checkpoint）是 PR-4 范围，PR-2 仅单封 resync
-- 完成时 pytest ≥ 338 passed，pip install -e ".[cli]" + mailagent --help 通过
-- docs/cli-schema/ 10 个 schema MVP 落位
+- 长任务契约（batch / PM2 检测 / checkpoint / --range / --ids / --max-failures / --resume-from）是 PR-4 范围，
+  PR-2 仅 resync 单封 + dry-run；遇到 batch flag 报告"PR-4 才支持"
+- 完成时 pytest ≥ 338 passed（PR-1 323 + PR-2 ≥ 15 CLI test）
+- pip install -e ".[cli]" + mailagent --help 通过
+- docs/cli-schema/ 10 个 schema MVP 落位（_common / error-codes / email-{get,list,body,search,resync} / admin-{stats,health,db-version}）
 
-关键决策点（schema 取舍、命名冲突、API 契约变化）用 AskUserQuestion 对齐。
+关键决策（已批准默认值，无需 AskUserQuestion）：
+- typer pin 0.12-0.14，rich 13-15，pyyaml 6-7（RFC §6.5）
+- CLI 参数命名按 RFC §4.2 / §4.8（gh/kubectl 风格：资源单数、动词原形、复合用连字符）
+- JSON Schema wrapper object 始终 status/schema_version/data/meta（RFC §5.1.2）
+- --output ndjson 是独立 flag，不与 json 合并（RFC §5.1.4 / C6）
+- 写命令默认要 token，开发模式靠 MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true 显式 opt-in（RFC §5.3 / C8）
+- load_cli_config factory 不依赖 from src.config import config 全局 singleton（RFC §5.4 / C9）
+- admin stats 的 v4_rollout/watcher/handlers 段标 _source: "not_implemented_in_pr2"（PR-4 范围 R-06）
+- src/config.py 加一个新 Field: mailagent_cli_api_key（RFC §5.3）
+
+并发任务（与 PR-2 无冲突，不动）：
+- backfill_email_body.py 可能后台跑写 email_body / email_attachment 表，PR-2 不动这些表
+- mail-sync 保持 stopped，PR-2 不重启
+- 生产 DB data/sync_store.db 是只读，pytest 用 tmp_path 隔离
+
+Final critic 用 codex：完成所有 stories 后 ralph Step 7 自动调
+omc ask codex --agent-prompt critic
+给它：
+(a) prd.json 9 个 stories 的 acceptance criteria
+(b) 本次改动的所有文件 + 相关文件（callers / callees / shared types）
+(c) 明确的 optimality 问题："是否存在更简单、更快、更易维护的实现路径
+   达到同样 acceptance criteria？"
+
+完成 = 所有 9 stories passes:true + codex critic APPROVE + ai-slop-cleaner deslop pass +
+post-deslop regression 全绿 + 用户已收到 final summary。
 ```
+
+**实操步骤（睡前）**：
+
+1. 开新 session（`/clear` 或新 terminal）
+2. 复制上面整段 prompt（含 `/oh-my-claudecode:ralph --critic=codex` 开头）粘贴
+3. 不需要 export CRS_API_KEY（已写 `~/.zshenv` subprocess 可见）
+4. backfill 继续后台跑（与 PR-2 无冲突）
+5. 早上回来检查：
+   ```bash
+   git log --oneline a3a345a..HEAD                       # 期望 8-9 个 PR-2 commit
+   pytest tests/ -q --tb=no | tail -2                    # 期望 ≥ 338 passed
+   pip install -e ".[cli]" && mailagent --help            # 期望 列 email / admin
+   cat .omc/state/sessions/*/prd.json | jq '.stories[]|{id,title,passes}'  # 期望全 passes:true
+   tail -50 progress.txt                                  # 看实施过程 / 学习记录
+   ```
+6. 如果卡住，看 `progress.txt` 或 `.omc/state/sessions/*/prd.json` 知道卡在哪个 story；用本 session 模式（codex 实施 + claude review）补救剩余 commit
+
+**备选模式**（如不想用 ralph）：
+- `/oh-my-claudecode:autopilot` — 5 phase 全自主，但 reviewer 是 Claude agents（architect / code-reviewer / security-reviewer），不调 codex
+- 手动 codex+claude 协作（本 session 模式）— 用户在场监督，每 commit 派 codex + claude review，质量最高但需在场
+- `/oh-my-claudecode:team ralph N:codex` — N 个 codex worker 并行，但 PR-2 9 commit 串行依赖，并行收益小
 
 ---
 
