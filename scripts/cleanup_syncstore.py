@@ -28,19 +28,19 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.mail.sync_store import SyncStore
+from src.mail.sync_store import SyncStore  # noqa: E402
 
 
 def show_stats(store: SyncStore):
     """显示当前统计"""
     stats = store.get_stats()
     total = stats.get('total_emails', 0)
-    print(f"\n📊 当前 SyncStore 统计:")
+    print("\n📊 当前 SyncStore 统计:")
     print(f"   总邮件数: {total}")
     print(f"   - 待同步 (pending): {stats.get('pending', 0)}")
     print(f"   - 已同步 (synced): {stats.get('synced', 0)}")
     print(f"   - 失败 (failed): {stats.get('failed', 0)}")
-    print(f"   按邮箱:")
+    print("   按邮箱:")
     for mailbox, count in stats.get('by_mailbox', {}).items():
         print(f"     - {mailbox}: {count}")
     return stats
@@ -186,7 +186,6 @@ def reset_sync_status(store: SyncStore, mailbox: str = None, auto_confirm: bool 
     try:
         # 构建查询条件
         where_clause = "WHERE mailbox = ? AND sync_status != 'pending'" if mailbox else "WHERE sync_status != 'pending'"
-        params = [mailbox] if mailbox else []
 
         # 获取将被重置的数量
         cursor.execute(f"""
@@ -213,7 +212,7 @@ def reset_sync_status(store: SyncStore, mailbox: str = None, auto_confirm: bool 
 
         # 确认
         if not auto_confirm:
-            confirm = input(f"\n确认重置同步状态? (y/n): ")
+            confirm = input("\n确认重置同步状态? (y/n): ")
             if confirm.lower() != 'y':
                 print("已取消")
                 return
@@ -330,5 +329,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import warnings
 
+    warnings.warn(
+        "scripts/cleanup_syncstore.py is deprecated; use "
+        "'mailagent admin cleanup-syncstore' instead. Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    main()

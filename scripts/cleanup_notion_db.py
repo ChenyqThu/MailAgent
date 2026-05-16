@@ -25,7 +25,7 @@ import asyncio
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -444,4 +444,12 @@ async def main():
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.warn(
+        "scripts/cleanup_notion_db.py is deprecated; use "
+        "'mailagent admin repair-parents' instead. Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     asyncio.run(main())

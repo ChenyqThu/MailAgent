@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -41,15 +40,6 @@ def schema_loader():
 def _invoke(cli_runner, *args, db_path):
     from src.cli.main import app
     return cli_runner.invoke(app, ["--db-path", str(db_path), *args])
-
-
-def _fake_run(returncode=0, stdout="ok", stderr=""):
-    cap = {"args": None}
-
-    def _r(cmd, **kw):
-        cap["args"] = cmd
-        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
-    return _r, cap
 
 
 def _mock_initial_sync():
@@ -231,32 +221,38 @@ class TestPR4SchemaContract:
         validate(instance=payload, schema=schema, registry=registry)
 
     def test_admin_cleanup_syncstore_dry_run(
-        self, cli_runner, cli_env, seeded_db, schema_loader,
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
     ):
         from jsonschema import validate
 
-        run, _ = _fake_run(0)
-        with patch("src.cli.commands.admin.subprocess.run", run):
-            result = _invoke(
-                cli_runner, "admin", "cleanup-syncstore",
-                "-o", "json", db_path=seeded_db,
-            )
+        monkeypatch.setattr("scripts.cleanup_syncstore.show_stats", MagicMock())
+        result = _invoke(
+            cli_runner, "admin", "cleanup-syncstore",
+            "-o", "json", db_path=seeded_db,
+        )
         assert result.exit_code == 0
         payload = _last_json(result.output)
         schema, registry = schema_loader("admin-cleanup.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
     def test_admin_repair_parents_dry_run(
-        self, cli_runner, cli_env, seeded_db, schema_loader,
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
     ):
         from jsonschema import validate
 
-        run, _ = _fake_run(0)
-        with patch("src.cli.commands.admin.subprocess.run", run):
-            result = _invoke(
-                cli_runner, "admin", "repair-parents",
-                "-o", "json", db_path=seeded_db,
-            )
+        class FakeCleaner:
+            def __init__(self):
+                self.stats = {"parent_set": 0}
+                self.run = AsyncMock(return_value=True)
+
+        monkeypatch.setattr(
+            "scripts.cleanup_notion_db.NotionDBCleaner",
+            MagicMock(return_value=FakeCleaner()),
+        )
+        result = _invoke(
+            cli_runner, "admin", "repair-parents",
+            "-o", "json", db_path=seeded_db,
+        )
         assert result.exit_code == 0
         payload = _last_json(result.output)
         schema, registry = schema_loader("admin-repair-parents.schema.json")

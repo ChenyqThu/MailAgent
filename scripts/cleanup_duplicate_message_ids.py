@@ -10,7 +10,6 @@ import sys
 import asyncio
 from pathlib import Path
 from collections import defaultdict
-from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -175,4 +174,12 @@ async def main():
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.warn(
+        "scripts/cleanup_duplicate_message_ids.py is deprecated; use "
+        "'mailagent admin cleanup-duplicates' instead. Will be removed in PR-6.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     asyncio.run(main())

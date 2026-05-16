@@ -5,16 +5,16 @@ US-006: stats / health / db-version (PR-2 MVP)
 PR-4 范围:
 - watcher / handlers / v4_rollout 真实指标 (来源 stats_reporter 持久化 SQLite stats 表)
 - dead-letter list/retry, cleanup-deadletter, cleanup-syncstore, cleanup-duplicates,
-  repair-parents — 写命令 subprocess wrap (RFC §4.8 / PR-4 US-009)
+  repair-parents — 写命令 (RFC §4.8 / PR-4 US-009, PR-5 inline cleanup)
 """
 
 from __future__ import annotations
 
-import shlex
 import sqlite3
-import subprocess
 import sys
 import time
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
@@ -438,40 +438,8 @@ app.add_typer(dead_letter_app, name="dead-letter")
 
 
 # ============================================================
-# admin cleanup-* + repair-parents (PR-4 US-009, subprocess wrap)
+# admin cleanup-* + repair-parents (PR-5 US-004, inline script helpers)
 # ============================================================
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def _run_cleanup_subprocess(
-    cli: "CliContext",
-    script_name: str,
-    extra: List[str],
-    *,
-    runner=None,
-) -> dict:
-    script = REPO_ROOT / "scripts" / script_name
-    run = runner or subprocess.run
-    cmd = [sys.executable, str(script), *extra]
-    t0 = time.monotonic()
-    try:
-        result = run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT))
-    except FileNotFoundError as exc:
-        raise emit_cli_error(cli, CliInvalidArgError(
-            f"cleanup script not found: {script}",
-            hint=str(exc),
-        ))
-    elapsed_ms = int((time.monotonic() - t0) * 1000)
-    return {
-        "command": shlex.join(cmd),
-        "script_returncode": result.returncode,
-        "duration_ms": elapsed_ms,
-        "stdout_tail": (result.stdout or "")[-500:],
-        "stderr_tail": (result.stderr or "")[-500:],
-        "mode": "subprocess",
-    }
-
 
 def _common_cleanup_auth(cli: "CliContext", *, dry_run: bool, allow_concurrent: bool) -> None:
     """thin wrapper — 把 ``auth.require_auth_and_pm2`` 的异常包成 ``emit_cli_error``."""
@@ -483,6 +451,46 @@ def _common_cleanup_auth(cli: "CliContext", *, dry_run: bool, allow_concurrent: 
         )
     except CliError as e:
         raise emit_cli_error(cli, e)
+
+
+def _format_inline_error(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _call_cleanup_helper(func, *args, **kwargs) -> tuple[object, str]:
+    """Run legacy cleanup helper while keeping JSON output clean."""
+    buf = StringIO()
+    with redirect_stdout(buf):
+        result = func(*args, **kwargs)
+    return result, buf.getvalue()
+
+
+async def _run_repair_parents_inline(cleaner, *, dry_run: bool, thread_id: Optional[str]):
+    """Use the cleanup_notion_db repair path in-process.
+
+    Current ``scripts.cleanup_notion_db.NotionDBCleaner`` exposes parent repair via
+    ``run(parent_only=True)``. If a narrower ``repair_parents`` helper is added later
+    or injected by tests, prefer it so ``--thread-id`` can be passed through.
+    """
+    repair = getattr(cleaner, "repair_parents", None)
+    if callable(repair):
+        return await repair(thread_id=thread_id, dry_run=dry_run)
+
+    if thread_id:
+        # The current legacy script has no thread-id-scoped public entry point.
+        # Reuse its existing steps and keep the message_id index complete so
+        # parent lookup still works for the selected thread.
+        if not await cleaner.init_notion():
+            return False
+        await cleaner.fetch_all_pages()
+        cleaner.all_pages = [
+            page for page in cleaner.all_pages
+            if page.get("thread_id") == thread_id
+        ]
+        await cleaner.step2_set_parent(dry_run)
+        return True
+
+    return await cleaner.run(dry_run=dry_run, parent_only=True)
 
 
 @app.command("cleanup-deadletter")
@@ -547,6 +555,8 @@ def admin_cleanup_deadletter(
         "candidates": candidates,
         "deleted": deleted,
         "dry_run": dry_run,
+        "mode": "inline",
+        "ok": True,
     }
     if cli.output.lower() == "text":
         print(
@@ -566,7 +576,13 @@ def admin_cleanup_syncstore(
     output: Optional[str] = typer.Option(None, "-o", "--output"),
     runner=None,  # pragma: no cover
 ) -> None:
-    """扫"应删未删"的 SQLite 记录 (subprocess wrap scripts/cleanup_syncstore.py)."""
+    """扫 SyncStore 状态。
+
+    默认 dry-run 仅显示统计；``--no-dry-run --yes`` 会把非 pending 状态重置为 pending。
+    """
+    from scripts.cleanup_syncstore import reset_sync_status, show_stats
+    from src.mail.sync_store import SyncStore
+
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
     if not dry_run and not yes:
@@ -574,23 +590,44 @@ def admin_cleanup_syncstore(
             "Non-dry-run cleanup requires --yes"
         ))
     _common_cleanup_auth(cli, dry_run=dry_run, allow_concurrent=allow_concurrent)
-    extra: List[str] = []
-    if dry_run:
-        extra.append("--dry-run")
-    if yes:
-        extra.append("--yes")
-    meta = _run_cleanup_subprocess(cli, "cleanup_syncstore.py", extra, runner=runner)
-    data = {"action": "cleanup-syncstore", "dry_run": dry_run, **meta}
+
+    store_cls = runner or SyncStore
+    store = store_cls(cli.cli_config.sync_store_db_path)
+    t0 = time.monotonic()
+    error = None
+    stdout = ""
+    try:
+        if dry_run:
+            _, stdout = _call_cleanup_helper(show_stats, store)
+        else:
+            _, stdout = _call_cleanup_helper(
+                reset_sync_status, store, mailbox=None, auto_confirm=True,
+            )
+    except Exception as exc:
+        error = _format_inline_error(exc)
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    data = {
+        "action": "cleanup-syncstore",
+        "dry_run": dry_run,
+        "mode": "inline",
+        "duration_ms": duration_ms,
+        "ok": error is None,
+    }
+    if stdout:
+        data["stdout_tail"] = stdout[-500:]
+    if error:
+        data["error"] = error
     if cli.output.lower() == "text":
+        marker = "ok" if data["ok"] else f"failed: {error}"
         print(
-            f"[cleanup-syncstore] subprocess rc={meta['script_returncode']} "
-            f"({meta['duration_ms']}ms)",
+            f"[cleanup-syncstore] {marker} ({duration_ms}ms)",
             file=sys.stderr,
         )
     else:
         emit(cli, data)
-    if meta["script_returncode"] != 0:
-        raise typer.Exit(code=meta["script_returncode"])
+    if not data["ok"]:
+        raise typer.Exit(code=1)
 
 
 @app.command("cleanup-duplicates")
@@ -602,7 +639,19 @@ def admin_cleanup_duplicates(
     output: Optional[str] = typer.Option(None, "-o", "--output"),
     runner=None,  # pragma: no cover
 ) -> None:
-    """扫 message_id 重复但 internal_id 不同的记录 (subprocess wrap)."""
+    """扫 Notion 中 Message ID 重复的邮件页，默认 dry-run 只统计。"""
+    import asyncio
+    from collections import defaultdict
+
+    from notion_client import AsyncClient
+
+    from scripts.cleanup_duplicate_message_ids import (
+        archive_page,
+        extract_page_info,
+        get_all_pages,
+    )
+    from src.config import config
+
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
     if not dry_run and not yes:
@@ -610,25 +659,69 @@ def admin_cleanup_duplicates(
             "Non-dry-run cleanup requires --yes"
         ))
     _common_cleanup_auth(cli, dry_run=dry_run, allow_concurrent=allow_concurrent)
-    extra: List[str] = []
-    if dry_run:
-        extra.append("--dry-run")
-    if yes:
-        extra.append("--yes")
-    meta = _run_cleanup_subprocess(
-        cli, "cleanup_duplicate_message_ids.py", extra, runner=runner,
-    )
-    data = {"action": "cleanup-duplicates", "dry_run": dry_run, **meta}
+
+    async def _scan_and_clean() -> dict:
+        client = AsyncClient(auth=config.notion_token)
+        pages = await get_all_pages(client, config.email_database_id)
+        message_id_map = defaultdict(list)
+        for page in pages:
+            info = extract_page_info(page)
+            message_id = info.get("message_id")
+            if message_id:
+                message_id_map[message_id].append(info)
+
+        duplicates = {
+            message_id: entries
+            for message_id, entries in message_id_map.items()
+            if len(entries) > 1
+        }
+        archived = []
+        failed = []
+        if not dry_run:
+            for entries in duplicates.values():
+                sorted_entries = sorted(entries, key=lambda item: item["created_time"])
+                for entry in sorted_entries[1:]:
+                    ok = await archive_page(client, entry["page_id"])
+                    (archived if ok else failed).append(entry["page_id"])
+                    await asyncio.sleep(0.3)
+
+        return {
+            "duplicate_message_ids": len(duplicates),
+            "duplicate_pages": sum(len(entries) - 1 for entries in duplicates.values()),
+            "archived": archived,
+            "failed": failed,
+        }
+
+    t0 = time.monotonic()
+    error = None
+    result = None
+    try:
+        result = asyncio.run(runner() if runner else _scan_and_clean())
+    except Exception as exc:
+        error = _format_inline_error(exc)
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    data = {
+        "action": "cleanup-duplicates",
+        "dry_run": dry_run,
+        "mode": "inline",
+        "duration_ms": duration_ms,
+        "ok": error is None,
+    }
+    if result:
+        data.update(result)
+    if error:
+        data["error"] = error
     if cli.output.lower() == "text":
+        marker = "ok" if data["ok"] else f"failed: {error}"
         print(
-            f"[cleanup-duplicates] subprocess rc={meta['script_returncode']} "
-            f"({meta['duration_ms']}ms)",
+            f"[cleanup-duplicates] {marker} ({duration_ms}ms)",
             file=sys.stderr,
         )
     else:
         emit(cli, data)
-    if meta["script_returncode"] != 0:
-        raise typer.Exit(code=meta["script_returncode"])
+    if not data["ok"]:
+        raise typer.Exit(code=1)
 
 
 @app.command("repair-parents")
@@ -641,7 +734,11 @@ def admin_repair_parents(
     output: Optional[str] = typer.Option(None, "-o", "--output"),
     runner=None,  # pragma: no cover
 ) -> None:
-    """修复 Notion Parent Item 断链关系 (subprocess wrap scripts/cleanup_notion_db.py)."""
+    """修复 Notion Parent Item 断链关系，默认 dry-run 只预览。"""
+    import asyncio
+
+    from scripts.cleanup_notion_db import NotionDBCleaner
+
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
     if not dry_run and not yes:
@@ -649,25 +746,51 @@ def admin_repair_parents(
             "Non-dry-run repair-parents requires --yes"
         ))
     _common_cleanup_auth(cli, dry_run=dry_run, allow_concurrent=allow_concurrent)
-    extra: List[str] = ["--action", "repair-parents"]
-    if dry_run:
-        extra.append("--dry-run")
-    if thread_id:
-        extra += ["--thread-id", thread_id]
-    if yes:
-        extra.append("--yes")
-    meta = _run_cleanup_subprocess(cli, "cleanup_notion_db.py", extra, runner=runner)
+
+    cleaner_cls = runner or NotionDBCleaner
+    t0 = time.monotonic()
+    error = None
+    summary = None
+    stdout = ""
+    try:
+        cleaner = cleaner_cls()
+        buf = StringIO()
+        with redirect_stdout(buf):
+            result = asyncio.run(
+                _run_repair_parents_inline(
+                    cleaner, dry_run=dry_run, thread_id=thread_id,
+                )
+            )
+        stdout = buf.getvalue()
+        summary = {
+            "result": result,
+            "stats": getattr(cleaner, "stats", None),
+        }
+        if result is False:
+            error = "NotionDBCleaner returned False"
+    except Exception as exc:
+        error = _format_inline_error(exc)
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
     data = {
         "action": "repair-parents", "dry_run": dry_run, "thread_id": thread_id,
-        **meta,
+        "mode": "inline",
+        "duration_ms": duration_ms,
+        "ok": error is None,
     }
+    if summary:
+        data["summary"] = summary
+    if stdout:
+        data["stdout_tail"] = stdout[-500:]
+    if error:
+        data["error"] = error
     if cli.output.lower() == "text":
+        marker = "ok" if data["ok"] else f"failed: {error}"
         print(
-            f"[repair-parents] subprocess rc={meta['script_returncode']} "
-            f"({meta['duration_ms']}ms)",
+            f"[repair-parents] {marker} ({duration_ms}ms)",
             file=sys.stderr,
         )
     else:
         emit(cli, data)
-    if meta["script_returncode"] != 0:
-        raise typer.Exit(code=meta["script_returncode"])
+    if not data["ok"]:
+        raise typer.Exit(code=1)
