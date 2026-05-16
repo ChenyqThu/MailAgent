@@ -35,11 +35,21 @@
     "resync_result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["internal_id", "action", "dry_run"],
+      "required": ["internal_id", "action", "dry_run", "new_page_id", "old_page_id", "archived_page_id"],
       "properties": {
         "internal_id": {"type": "integer", "minimum": 0},
-        "old_page_id": {"type": ["string", "null"]},
-        "new_page_id": {"type": ["string", "null"]},
+        "old_page_id": {
+          "type": ["string", "null"],
+          "description": "Notion 侧 dup 命中时返回的老页 id (优先), 否则取 sync_store 中本地缓存的 notion_page_id"
+        },
+        "new_page_id": {
+          "type": ["string", "null"],
+          "description": "本次实际生效的 Notion page id; skipped 时即 old page, created/replaced 时为新页"
+        },
+        "archived_page_id": {
+          "type": ["string", "null"],
+          "description": "仅在 --replace-existing 真正成功 archive 老页时填; 其他情况 (包括 replace+archive 失败) 为 null"
+        },
         "action": {"type": "string", "enum": ["created", "replaced", "skipped"]},
         "dry_run": {"const": false},
         "attachments_uploaded": {"type": "integer"},

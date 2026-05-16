@@ -4,11 +4,11 @@
   "title": "mailagent email get",
   "description": "RFC v2 §4.2 / §7.1 — 单封邮件 metadata + 可选 body summary / attachments[]",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["status", "schema_version", "meta"],
   "oneOf": [
     {
-      "required": ["data"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
       "properties": {
         "status": {"const": "success"},
         "schema_version": {"type": "integer", "minimum": 1},
@@ -17,7 +17,9 @@
       }
     },
     {
-      "required": ["error"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
       "properties": {
         "status": {"const": "error"},
         "schema_version": {"type": "integer", "minimum": 1},

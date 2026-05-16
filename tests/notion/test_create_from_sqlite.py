@@ -609,6 +609,44 @@ class TestCreateEmailPageFromSqlite:
 
         asyncio.run(_())
 
+    def test_replace_existing_archive_failure_still_replaced(
+        self,
+        mocked_ns: NotionSync,
+        repo: EmailRepository,
+        sync_store: SyncStore,
+        fresh_db: Path,
+    ):
+        """PR-2 critic round 3 follow-up: archive 失败时仍 action=replaced 且 archived_page_id=None.
+
+        existing_page_id_pre_replace 在 archive 调用前赋值, 所以即使 pages.update 抛
+        异常 (Notion archive 失败) 也会继续走 create 路径, 最终 result.action='replaced',
+        但 archived_page_id 留空 — 让 caller 知道老页没真被归档。
+        """
+        _insert_metadata(fresh_db, 206, message_id="<m206@x>")
+        body = BodyPayload(html="<p>x</p>", markdown="x", body_format="html")
+        repo.commit_email_with_body(206, body, [], message_id="<m206@x>")
+
+        mocked_ns.client.check_page_exists = AsyncMock(return_value=True)
+        mocked_ns.client.query_database = AsyncMock(return_value=[{"id": "OLD-2"}])
+        # 模拟 archive 调用抛错
+        nested = MagicMock()
+        nested.pages.update = AsyncMock(side_effect=RuntimeError("notion-down"))
+        mocked_ns.client.client = nested
+
+        async def _():
+            result = await mocked_ns.create_email_page_from_sqlite(
+                206, repo=repo, sync_store=sync_store,
+                replace_existing=True,
+            )
+            assert result.action == "replaced"
+            assert result.page_id == "PAGE-NEW"
+            assert result.existing_page_id == "OLD-2"
+            assert result.archived_page_id is None  # archive 失败时此字段必须 None
+            # create_page 仍被调 (replace 即使 archive 失败也要创建新页)
+            mocked_ns.client.create_page.assert_awaited()
+
+        asyncio.run(_())
+
 
 # ============================================================
 # create_email_page_v2 wrapper 路由 (P4-04)
