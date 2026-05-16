@@ -36,6 +36,7 @@ from src.cli.commands import admin as _admin_module  # noqa: E402
 from src.cli.commands import attachment as _attachment_module  # noqa: E402
 from src.cli.commands import email as _email_module  # noqa: E402
 from src.cli.commands import llm as _llm_module  # noqa: E402
+from src.cli.commands import calendar as _calendar_module  # noqa: E402
 from src.cli.commands import notion as _notion_module  # noqa: E402
 
 app.add_typer(_email_module.app, name="email", help="邮件 CRUD / 搜索 / 重传")
@@ -51,6 +52,10 @@ app.add_typer(
 app.add_typer(
     _notion_module.app, name="notion",
     help="Notion resync (alias) / update-flag / archive / page-orphans / file-link-audit",
+)
+app.add_typer(
+    _calendar_module.app, name="calendar",
+    help="日历 expand + recurring discover / replay",
 )
 
 

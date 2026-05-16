@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/calendar-recurring-discover.schema.json",
+  "title": "mailagent calendar recurring discover",
+  "description": "RFC v2 §4.10 — 扫 SyncStore 找带 RRULE 的会议邀请 (read-only).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["matches", "total_matches", "since", "discover_limit"],
+          "properties": {
+            "matches": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "internal_id": {"type": "integer"},
+                  "subject": {"type": ["string", "null"]},
+                  "sender": {"type": ["string", "null"]},
+                  "date": {"type": ["string", "null"]},
+                  "uid": {"type": ["string", "null"]},
+                  "rrule": {"type": ["string", "null"]},
+                  "method": {"type": ["string", "null"]},
+                  "dtstart": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "total_matches": {"type": "integer", "minimum": 0},
+            "since": {"type": ["string", "null"]},
+            "discover_limit": {"type": "integer", "minimum": 1}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

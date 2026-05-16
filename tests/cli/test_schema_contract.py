@@ -380,5 +380,62 @@ class TestSchemaContract:
         schema, registry = schema_loader("notion-file-link-audit.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
+    # ============================================================
+    # PR-3 US-007: calendar
+    # ============================================================
+
+    def test_calendar_expand_dry_run_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+        from src.mail.sync_store import SyncStore
+
+        monkeypatch.setattr(
+            SyncStore, "iter_series_needing_expansion",
+            lambda self, c: iter([]),
+        )
+        result = _invoke(cli_runner, "calendar", "expand", "-o", "json",
+                         db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-expand.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_recurring_discover_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+
+        async def fake_discover(*args, **kwargs):
+            return []
+        import scripts.replay_recurring_invite as rr_mod
+        from src.mail import applescript_arm
+        monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
+        monkeypatch.setattr(
+            applescript_arm.AppleScriptArm, "__init__",
+            lambda self, *a, **kw: None,
+        )
+        result = _invoke(cli_runner, "calendar", "recurring", "discover",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-recurring-discover.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_recurring_replay_dry_run_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(
+            cli_runner, "calendar", "recurring", "replay",
+            "--internal-id", "53120", "--dry-run", "-o", "json",
+            db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-recurring-replay.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
 
 from tests.cli.conftest import extract_last_json_object as _last_json  # noqa: E402

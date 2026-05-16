@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/calendar-expand.schema.json",
+  "title": "mailagent calendar expand",
+  "description": "RFC v2 §4.10 — 周期会议 occurrence 单次展开 (PR-3 仅 dry-run plan).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "horizon_weeks", "cutoff_iso",
+            "pending_series", "total_pending", "dry_run"
+          ],
+          "properties": {
+            "horizon_weeks": {"type": "integer", "minimum": 1},
+            "cutoff_iso": {"type": "string"},
+            "pending_series": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "series_uid": {"type": ["string", "null"]},
+                  "master_dtstart": {"type": ["string", "null"]},
+                  "last_occurrence_dtstart": {"type": ["string", "null"]},
+                  "notion_page_id": {"type": ["string", "null"]},
+                  "subject": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "total_pending": {"type": "integer", "minimum": 0},
+            "dry_run": {"type": "boolean"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

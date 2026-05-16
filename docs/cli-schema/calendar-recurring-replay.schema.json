@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/calendar-recurring-replay.schema.json",
+  "title": "mailagent calendar recurring replay",
+  "description": "RFC v2 §4.10 — 重跑指定 internal_id 的周期会议邀请.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "replayed", "total", "succeeded", "failed",
+            "dry_run", "candidate_internal_ids"
+          ],
+          "properties": {
+            "replayed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["internal_id", "action"],
+                "properties": {
+                  "internal_id": {"type": "integer", "minimum": 0},
+                  "action": {
+                    "type": "string",
+                    "enum": ["replayed", "skipped", "error"]
+                  },
+                  "page_id": {"type": ["string", "null"]},
+                  "error": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "total": {"type": "integer", "minimum": 0},
+            "succeeded": {"type": "integer", "minimum": 0},
+            "failed": {"type": "integer", "minimum": 0},
+            "dry_run": {"type": "boolean"},
+            "candidate_internal_ids": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}
