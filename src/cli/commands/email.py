@@ -648,10 +648,10 @@ def email_resync(
             emit(cli, plan)
         return
 
-    # 实跑 Notion sync
+    # 实跑 Notion sync — 直接消费结构化 result, 不再推断 (R-19 / critic round 2)
     notion_sync = cli.notion_sync
     try:
-        new_page_id = asyncio.run(
+        result = asyncio.run(
             notion_sync.create_email_page_from_sqlite(
                 internal_id,
                 repo=cli.email_repo,
@@ -668,32 +668,19 @@ def email_resync(
                  "回填后再 resync",
         ))
 
-    # Action 推断 (R-16 / PR-2 critic fix #2):
-    # create_email_page_from_sqlite 在 dup-hit + !replace_existing 时直接
-    # return existing_page_id (== meta.notion_page_id), 没真创建新页;
-    # 把这种情况标 'skipped' 而非 'created'。
-    if new_page_id is None:
-        action = "skipped"
-    elif replace_existing and meta.notion_page_id:
-        action = "replaced"
-    elif (
-        not replace_existing
-        and meta.notion_page_id
-        and new_page_id == meta.notion_page_id
-    ):
-        action = "skipped"
-    else:
-        action = "created"
-
     data = {
         "internal_id": internal_id,
-        "old_page_id": meta.notion_page_id,
-        "new_page_id": new_page_id,
-        "action": action,
+        "old_page_id": result.existing_page_id or meta.notion_page_id,
+        "new_page_id": result.page_id,
+        "archived_page_id": result.archived_page_id,
+        "action": result.action,
         "dry_run": False,
     }
 
     if cli.output.lower() == "text":
-        print(f"resync {action}: internal_id={internal_id} new_page={new_page_id}")
+        print(
+            f"resync {result.action}: internal_id={internal_id} "
+            f"new_page={result.page_id}"
+        )
     else:
         emit(cli, data)

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Dict, Any, List, Mapping, Set, Optional, Tuple, TYPE_CHECKING
 from pathlib import Path
 from loguru import logger
@@ -19,6 +20,26 @@ from src.converter.office_converter import convert_office_attachment, is_convert
 
 # 北京时区 (UTC+8)
 BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+@dataclass
+class CreateEmailFromSqliteResult:
+    """``NotionSync.create_email_page_from_sqlite`` 的结构化返回 (R-19 / PR-2 critic round 2).
+
+    - ``page_id``: 当前生效的 Notion page id (created / replaced 新页 / skipped 命中的老页)
+    - ``action``: ``'created' | 'replaced' | 'skipped'`` —— 用户可见动作
+    - ``existing_page_id``: dup-check 命中时老页 id, 没命中是 None
+    - ``archived_page_id``: 仅在 ``--replace-existing`` 真把老页 archive 时填; 否则 None
+
+    设计原因 (codex round 2 review): CLI 不应靠 ``(replace_existing, meta.notion_page_id,
+    new_page_id)`` 推断动作 —— ``meta.notion_page_id`` 在本地可能为 NULL 或 stale, 但 Notion
+    侧通过 ``check_page_exists(message_id)`` 命中 dup, 导致推断结果错。结构化返回让动作判定
+    收敛在 ``create_email_page_from_sqlite`` 内部, 与实际 Notion 调用路径 1:1 对应。
+    """
+    page_id: Optional[str]
+    action: str
+    existing_page_id: Optional[str] = None
+    archived_page_id: Optional[str] = None
 
 class NotionSync:
     """Notion 同步器"""
@@ -1003,7 +1024,9 @@ class NotionSync:
                     logger.debug(
                         f"[v4] routing to from-sqlite path: internal_id={email.internal_id}"
                     )
-                    return await self.create_email_page_from_sqlite(
+                    # v2 wrapper 历史契约是返回 Optional[str], 这里只抽 page_id (action
+                    # 信息留给 CLI / scripts 直接调 create_email_page_from_sqlite 时消费)
+                    sqlite_result = await self.create_email_page_from_sqlite(
                         email.internal_id,
                         repo=repo,
                         sync_store=sync_store,
@@ -1011,6 +1034,7 @@ class NotionSync:
                         calendar_page_id=calendar_page_id,
                         skip_parent_lookup=skip_parent_lookup,
                     )
+                    return sqlite_result.page_id
                 logger.debug(
                     f"[v4] SQLite body miss for internal_id={email.internal_id}, "
                     f"falling back to legacy v2 path"
@@ -1125,7 +1149,7 @@ class NotionSync:
         calendar_page_id: Optional[str] = None,
         skip_parent_lookup: bool = False,
         replace_existing: bool = False,
-    ) -> Optional[str]:
+    ) -> CreateEmailFromSqliteResult:
         """v4 SSoT 路径：从 SQLite 读 body+attachments+metadata 创建 Notion 邮件页面。
 
         与 create_email_page_v2 的语义差异：
@@ -1163,6 +1187,10 @@ class NotionSync:
             )
 
             # 1. dup check（与 v2 同语义）
+            # R-19 / PR-2 critic round 2: 追踪 dup 命中 + archive 真实发生情况, 供
+            # 结构化 result 区分 'skipped' / 'replaced' / 'created'。
+            existing_page_id_pre_replace: Optional[str] = None
+            archived_page_id: Optional[str] = None
             try:
                 if await self.client.check_page_exists(email.message_id):
                     logger.info(f"Email already synced: {email.message_id}")
@@ -1175,12 +1203,18 @@ class NotionSync:
                     if existing:
                         existing_page_id = existing[0].get("id")
                         if not replace_existing:
-                            return existing_page_id
+                            return CreateEmailFromSqliteResult(
+                                page_id=existing_page_id,
+                                action="skipped",
+                                existing_page_id=existing_page_id,
+                            )
                         # replace_existing：归档老页落到 create 流程
+                        existing_page_id_pre_replace = existing_page_id
                         try:
                             await self.client.client.pages.update(
                                 page_id=existing_page_id, archived=True
                             )
+                            archived_page_id = existing_page_id
                             logger.info(
                                 f"Archived existing page {existing_page_id} for replace"
                             )
@@ -1190,7 +1224,12 @@ class NotionSync:
                                 f"continuing with create anyway"
                             )
                     else:
-                        return None
+                        # check_page_exists 命中但 query 拉不到 — Notion 侧索引/视图不一致,
+                        # 不再创建 (避免重复) 也无法定位老页, 返回 page_id=None 的 'skipped'。
+                        return CreateEmailFromSqliteResult(
+                            page_id=None,
+                            action="skipped",
+                        )
             except Exception:
                 logger.error(
                     "Failed to check page existence (from-sqlite), aborting to prevent duplicates"
@@ -1259,7 +1298,14 @@ class NotionSync:
             if not skip_parent_lookup and email.thread_id:
                 await self._handle_thread_relations(page_id, email)
 
-            return page_id
+            return CreateEmailFromSqliteResult(
+                page_id=page_id,
+                action=(
+                    "replaced" if existing_page_id_pre_replace else "created"
+                ),
+                existing_page_id=existing_page_id_pre_replace,
+                archived_page_id=archived_page_id,
+            )
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 

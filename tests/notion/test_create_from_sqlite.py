@@ -455,10 +455,13 @@ class TestCreateEmailPageFromSqlite:
         )
 
         async def _():
-            page_id = await mocked_ns.create_email_page_from_sqlite(
+            result = await mocked_ns.create_email_page_from_sqlite(
                 200, repo=repo, sync_store=sync_store,
             )
-            assert page_id == "PAGE-NEW"
+            assert result.page_id == "PAGE-NEW"
+            assert result.action == "created"
+            assert result.existing_page_id is None
+            assert result.archived_page_id is None
             # upload_file 应该被调（report.pdf + .eml = 2 次）
             assert mocked_ns.client.upload_file.await_count >= 1
             # create_page 应该被调一次
@@ -528,10 +531,49 @@ class TestCreateEmailPageFromSqlite:
         mocked_ns.client.query_database = AsyncMock(return_value=[{"id": "EXISTING"}])
 
         async def _():
-            page_id = await mocked_ns.create_email_page_from_sqlite(
+            result = await mocked_ns.create_email_page_from_sqlite(
                 203, repo=repo, sync_store=sync_store,
             )
-            assert page_id == "EXISTING"
+            assert result.page_id == "EXISTING"
+            assert result.action == "skipped"  # PR-2 critic round 2: dup-skipped
+            assert result.existing_page_id == "EXISTING"
+            assert result.archived_page_id is None
+            mocked_ns.client.create_page.assert_not_awaited()
+
+        asyncio.run(_())
+
+    def test_duplicate_with_null_local_page_id_is_skipped(
+        self,
+        mocked_ns: NotionSync,
+        repo: EmailRepository,
+        sync_store: SyncStore,
+        fresh_db: Path,
+    ):
+        """PR-2 critic round 2: dup-skipped 必须返回 action='skipped' 即使 local notion_page_id=NULL。
+
+        过去 CLI 推断从 ``(replace, meta.notion_page_id, new_page_id)`` 派生 action,
+        当 SQLite 里 notion_page_id 为 None 但 Notion 侧 dup 命中时, 会误把
+        ``existing_page_id`` 标成 ``created``。结构化 result 把这个 case 收敛。
+        """
+        # 注意: 不调 update_notion_links, sync_store.get(203) 的 notion_page_id 仍是 NULL
+        _insert_metadata(fresh_db, 205, message_id="<m205@x>")
+        body = BodyPayload(html="<p>x</p>", markdown="x", body_format="html")
+        repo.commit_email_with_body(205, body, [], message_id="<m205@x>")
+
+        # Notion 侧已有这封 (老 page=EXISTING), 但本地 sync_store 没回写过
+        mocked_ns.client.check_page_exists = AsyncMock(return_value=True)
+        mocked_ns.client.query_database = AsyncMock(
+            return_value=[{"id": "EXISTING-ON-NOTION-NOT-LOCAL"}]
+        )
+
+        async def _():
+            result = await mocked_ns.create_email_page_from_sqlite(
+                205, repo=repo, sync_store=sync_store, replace_existing=False,
+            )
+            assert result.action == "skipped"
+            assert result.page_id == "EXISTING-ON-NOTION-NOT-LOCAL"
+            assert result.existing_page_id == "EXISTING-ON-NOTION-NOT-LOCAL"
+            assert result.archived_page_id is None
             mocked_ns.client.create_page.assert_not_awaited()
 
         asyncio.run(_())
@@ -554,11 +596,14 @@ class TestCreateEmailPageFromSqlite:
         mocked_ns.client.client = nested
 
         async def _():
-            page_id = await mocked_ns.create_email_page_from_sqlite(
+            result = await mocked_ns.create_email_page_from_sqlite(
                 204, repo=repo, sync_store=sync_store,
                 replace_existing=True,
             )
-            assert page_id == "PAGE-NEW"
+            assert result.page_id == "PAGE-NEW"
+            assert result.action == "replaced"  # PR-2 critic round 2
+            assert result.existing_page_id == "OLD"
+            assert result.archived_page_id == "OLD"
             nested.pages.update.assert_any_await(page_id="OLD", archived=True)
             mocked_ns.client.create_page.assert_awaited()
 
@@ -618,13 +663,17 @@ class TestV2WrapperRouting:
         monkeypatch,
     ):
         """NOTION_READ_FROM_SQLITE=true + body 存在 → 走 SQLite 路径。"""
+        from src.notion.sync import CreateEmailFromSqliteResult
+
         _insert_metadata(fresh_db, 301, message_id="<m301@x>")
         body = BodyPayload(html="<p>x</p>", markdown="x", body_format="html")
         repo.commit_email_with_body(301, body, [], message_id="<m301@x>")
 
         ns = _bare_notion_sync(repo=repo, sync_store=sync_store)
 
-        from_sqlite_mock = AsyncMock(return_value="FROM-SQLITE-PAGE")
+        from_sqlite_mock = AsyncMock(return_value=CreateEmailFromSqliteResult(
+            page_id="FROM-SQLITE-PAGE", action="created",
+        ))
         monkeypatch.setattr(
             NotionSync, "create_email_page_from_sqlite", from_sqlite_mock
         )

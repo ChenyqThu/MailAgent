@@ -151,7 +151,7 @@ async def _resync_one(
         return "DRY-RUN"
 
     try:
-        page_id = await notion_sync.create_email_page_from_sqlite(
+        result = await notion_sync.create_email_page_from_sqlite(
             internal_id,
             repo=repo,
             sync_store=sync_store,
@@ -160,7 +160,11 @@ async def _resync_one(
             # 用户需要重新计算的话另外跑工具
             skip_parent_lookup=True,
         )
-        return page_id
+        # script 历史契约是返回 Optional[str] page_id; action / archive 信息日志带出。
+        logger.info(
+            f"[{internal_id}] resync action={result.action} page_id={result.page_id}"
+        )
+        return result.page_id
     except ValueError as e:
         logger.warning(f"[{internal_id}] skip (SQLite incomplete): {e}")
         return None
