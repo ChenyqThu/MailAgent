@@ -555,3 +555,137 @@ def _render_search_text(data: list[dict], meta: dict, no_snippet: bool) -> None:
         f"(query={meta['query']!r}, hits={meta['total_hits']}, limit={meta['limit']})",
         file=sys.stderr,
     )
+
+
+# ============================================================
+# resync (US-005)
+# ============================================================
+
+# PR-4 范围的 batch flags — PR-2 检测到则拒绝
+PR4_BATCH_FLAGS = {
+    "--range", "--ids", "--internal-ids",
+    "--max-failures", "--resume-from", "--progress-every",
+}
+
+
+@app.command("resync")
+def email_resync(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="邮件 internal_id (PR-2 仅支持单封)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只打 plan, 不写 Notion"),
+    replace_existing: bool = typer.Option(
+        False, "--replace-existing",
+        help="archive 老页 → 建新",
+    ),
+    no_parent: bool = typer.Option(
+        False, "--no-parent",
+        help="跳过 thread relations 重建 (diff 验证用)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+    # PR-4 占位 flags - 显式拒绝
+    range_: Optional[str] = typer.Option(None, "--range", hidden=True),
+    ids: Optional[str] = typer.Option(None, "--ids", hidden=True),
+    max_failures: Optional[int] = typer.Option(None, "--max-failures", hidden=True),
+    resume_from: Optional[int] = typer.Option(None, "--resume-from", hidden=True),
+    progress_every: Optional[int] = typer.Option(None, "--progress-every", hidden=True),
+) -> None:
+    """基于 SQLite SSoT 重传单封邮件到 Notion (RFC v2 §4.2 / §7.3 / PR-2 范围).
+
+    PR-2 仅 ``<internal_id>`` 单封 + ``--dry-run`` + ``--replace-existing`` + ``--no-parent``。
+    长任务 ``--range / --ids / --max-failures / --resume-from / --progress-every``
+    是 PR-4 范围 (batch + PM2 检测 + checkpoint), 当前显式拒绝。
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    # PR-4 batch flags 拒绝
+    illegal = []
+    if range_ is not None:
+        illegal.append("--range")
+    if ids is not None:
+        illegal.append("--ids")
+    if max_failures is not None:
+        illegal.append("--max-failures")
+    if resume_from is not None:
+        illegal.append("--resume-from")
+    if progress_every is not None:
+        illegal.append("--progress-every")
+    if illegal:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"Batch flags {illegal} not supported in PR-2 (single-email only); "
+            f"long-task contract (batch / PM2 detect / checkpoint) ships in PR-4",
+            hint="Run one internal_id at a time for now",
+        ))
+
+    # 写命令 auth: dry-run 跳过
+    if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    # 拉 metadata 给 plan / 校验存在性
+    meta = cli.email_repo.get_metadata(internal_id)
+    if meta is None:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email metadata not found for internal_id={internal_id}",
+        ))
+
+    if dry_run:
+        plan = {
+            "internal_id": internal_id,
+            "subject": meta.subject,
+            "current_page_id": meta.notion_page_id,
+            "action": "replace" if replace_existing else "create_or_skip",
+            "would_replace": replace_existing,
+            "skip_parent_lookup": no_parent,
+            "dry_run": True,
+        }
+        if cli.output.lower() == "text":
+            print("=== resync plan (dry-run) ===")
+            for key, value in plan.items():
+                print(f"{key:24} {value}")
+        else:
+            emit(cli, plan)
+        return
+
+    # 实跑 Notion sync
+    notion_sync = cli.notion_sync
+    try:
+        new_page_id = asyncio.run(
+            notion_sync.create_email_page_from_sqlite(
+                internal_id,
+                repo=cli.email_repo,
+                sync_store=cli.sync_store,
+                replace_existing=replace_existing,
+                skip_parent_lookup=no_parent,
+            )
+        )
+    except ValueError as e:
+        # body / metadata 缺 — Phase 1 之前的老邮件没双写
+        raise emit_cli_error(cli, CliNotFoundError(
+            str(e),
+            hint="Phase 1 之前的邮件正文未双写; 跑 scripts/backfill_email_body.py "
+                 "回填后再 resync",
+        ))
+
+    if new_page_id is None:
+        # 已 synced 且 replace_existing=False, 跳过
+        action = "skipped"
+    elif replace_existing and meta.notion_page_id:
+        action = "replaced"
+    else:
+        action = "created"
+
+    data = {
+        "internal_id": internal_id,
+        "old_page_id": meta.notion_page_id,
+        "new_page_id": new_page_id,
+        "action": action,
+        "dry_run": False,
+    }
+
+    if cli.output.lower() == "text":
+        print(f"resync {action}: internal_id={internal_id} new_page={new_page_id}")
+    else:
+        emit(cli, data)
