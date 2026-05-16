@@ -1072,7 +1072,7 @@ sqlite3 data/sync_store.db "
 python3 calendar_main.py --once
 ```
 
-## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 已上线 2026-05-15**）
+## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 + Phase 2 已上线 2026-05-15**）
 
 把 SQLite 升级为邮件正文 + 附件的 Single Source of Truth，Notion 退化为镜像。新邮件 sync 时把 body + 附件元数据双写到 SQLite，附件二进制落 `data/attachments/{internal_id}/`。详见 [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md)，Phase 间交接说明见 [`docs/phase1-handoff-to-phase2.md`](./docs/phase1-handoff-to-phase2.md)。
 
@@ -1130,8 +1130,8 @@ v4 sync 路径：AppleScript → in-memory Email → **build_storage_payloads + 
 | Phase | 状态 | 内容 |
 |---|---|---|
 | Phase 1 | ✅ **已上线 2026-05-15** | 双写 MVP；新邮件 sync 时落 SQLite，Web 端可立即切表。43/43 单测通过、生产服务已加载 v4 |
-| Phase 2 | 待办（下一步） | LLM processor / handle_fetch_mail_content 改读 SQLite。入口点见 [`docs/phase1-handoff-to-phase2.md`](./docs/phase1-handoff-to-phase2.md) |
-| Phase 3 | 待办 | FTS5 启用 + agent 工具 search_email_bodies |
+| Phase 2 | ✅ **已上线 2026-05-15** | LLM processor / handle_fetch_mail_content 直读 SQLite（命中 ~4ms vs AppleScript 1-3s）；P99 latency tracker；回归对比工具就位。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md)。回退开关 `LLM_PREFER_SQLITE_BODY=false` |
+| Phase 3 | 待办（下一步） | FTS5 启用 + agent 工具 search_email_bodies |
 | Phase 4 | 待办 | Notion uploader 改为读 SQLite，架构归一 |
 | Phase 5 | 未来 | Electron / Web 前端（接口已就位） |
 | **T-01** | 独立 TODO | Notion sync 迁 Markdown API（参考 `src/project_progress/notion_sync.py` 样板） |
@@ -1166,6 +1166,22 @@ pytest tests/repository/ -v
 
 # 紧急回滚：关 v4 双写
 # 在 .env 加: BODY_DUAL_WRITE_ENABLED=false 然后 pm2 restart mail-sync
+```
+
+### T-02 历史邮件 backfill（脚本就位，2026-05-15）
+
+把 Phase 1 之前已 sync 到 Notion 的 6131 封历史邮件正文回填到 SQLite，让 LLM 路径
+口径统一。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md) §7。
+
+```bash
+# 单封验证（dry-run）
+python scripts/backfill_email_body.py --internal-ids 53675 --dry-run
+
+# 全量后台跑（必须先 stop pm2 mail-sync 避免 AppleScript 拥塞）
+pm2 stop mail-sync
+nohup python scripts/backfill_email_body.py --all > logs/backfill.log 2>&1 &
+# 进度：tail -f logs/backfill.log 或 sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_body"
+# 跑完：pm2 start mail-sync
 ```
 
 ---
