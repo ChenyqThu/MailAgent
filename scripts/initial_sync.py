@@ -72,6 +72,7 @@ from src.mail.applescript_arm import AppleScriptArm
 from src.mail.sync_store import SyncStore
 from src.mail.reader import EmailReader
 from src.notion.sync import NotionSync
+from src.repository import AttachmentStore, EmailRepository
 
 
 def get_system_timezone() -> timezone:
@@ -286,7 +287,14 @@ class InitialSync:
             inbox_name=settings.mail_inbox_name
         )
         self.sync_store = SyncStore(sync_store_path)
-        self.notion_sync = NotionSync()
+        self.email_repo = EmailRepository(
+            db_path=sync_store_path,
+            attachment_store=AttachmentStore(settings.attachment_storage_dir),
+        )
+        self.notion_sync = NotionSync(
+            email_repo=self.email_repo,
+            sync_store=self.sync_store,
+        )
         self.email_reader = EmailReader()
 
         # 分析报告

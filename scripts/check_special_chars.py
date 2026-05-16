@@ -7,7 +7,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.logger import setup_logger
 from src.config import config
 from src.mail.reader import EmailReader
+from src.mail.sync_store import SyncStore
 from src.notion.sync import NotionSync
+from src.repository import AttachmentStore, EmailRepository
 
 async def main():
     """检查特殊字符导致的长度问题"""
@@ -19,7 +21,12 @@ async def main():
     email = emails[0]
 
     # 生成children
-    syncer = NotionSync()
+    _ss = SyncStore(config.sync_store_db_path)
+    _repo = EmailRepository(
+        db_path=config.sync_store_db_path,
+        attachment_store=AttachmentStore(config.attachment_storage_dir),
+    )
+    syncer = NotionSync(email_repo=_repo, sync_store=_ss)
     children = syncer._build_children(email, uploaded_files=None)
 
     print("检查超长blocks的字符编码问题:")

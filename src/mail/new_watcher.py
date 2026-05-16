@@ -116,26 +116,30 @@ class NewWatcher:
             logger.error(f"Failed to initialize SyncStore: {e}")
             raise RuntimeError(f"SyncStore initialization failed: {e}")
 
-        self.notion_sync = NotionSync()
+        # v4: SQLite SSoT 仓库（strict DI 需要在 NotionSync 之前初始化）
+        # 详见 docs/architecture_v4_sqlite_ssot.md
+        try:
+            self.email_repo = EmailRepository(
+                db_path=sync_store_path,
+                attachment_store=AttachmentStore(
+                    getattr(settings, "attachment_storage_dir", "data/attachments")
+                ),
+            )
+            if getattr(settings, "body_dual_write_enabled", True):
+                logger.info("[v4] email body dual-write enabled (SQLite SSoT)")
+            else:
+                logger.info("[v4] EmailRepository ready (dual-write disabled, read-only for NotionSync DI)")
+        except Exception as e:
+            logger.error(f"[v4] failed to init EmailRepository: {e}")
+            raise RuntimeError(f"EmailRepository init failed (required for NotionSync DI): {e}")
+
+        self.notion_sync = NotionSync(
+            email_repo=self.email_repo,
+            sync_store=self.sync_store,
+        )
         self.email_reader = EmailReader()
         # 会议邀请同步器：注入 sync_store 以使用 recurring_series 表
         self.meeting_sync = MeetingInviteSync(sync_store=self.sync_store)
-
-        # v4: SQLite SSoT 双写仓库（邮件正文 + 附件元数据进 SQLite）
-        # 详见 docs/architecture_v4_sqlite_ssot.md
-        self.email_repo: Optional[EmailRepository] = None
-        if getattr(settings, "body_dual_write_enabled", True):
-            try:
-                self.email_repo = EmailRepository(
-                    db_path=sync_store_path,
-                    attachment_store=AttachmentStore(
-                        getattr(settings, "attachment_storage_dir", "data/attachments")
-                    ),
-                )
-                logger.info("[v4] email body dual-write enabled (SQLite SSoT)")
-            except Exception as e:
-                logger.warning(f"[v4] failed to init EmailRepository, dual-write disabled: {e}")
-                self.email_repo = None
 
         # 项目周报外挂钩子（需同时打开 PROJECT_PROGRESS_SYNC_ENABLED 总开关 +
         # PROJECT_PROGRESS_AUTO_SYNC_ENABLED 子开关，且配置了项目进度库 ID）
@@ -457,7 +461,7 @@ class NewWatcher:
     ) -> None:
         """v4: 把邮件正文 + 附件双写到 SQLite（SSoT 切换）.
 
-        - email_repo 未启用时直接返回（开关 BODY_DUAL_WRITE_ENABLED）
+        - BODY_DUAL_WRITE_ENABLED=false 时直接返回
         - 任何失败仅 warning，不阻断 Notion sync 主流程
         - 详见 docs/architecture_v4_sqlite_ssot.md
 
@@ -466,7 +470,7 @@ class NewWatcher:
                这样 dual-write 时附件列表完整（含 derived 行），Notion sync 后续会 skip 重复转换
             2. build_storage_payloads → SQLite commit
         """
-        if self.email_repo is None:
+        if not getattr(settings, "body_dual_write_enabled", True):
             return
         try:
             # v4 step 1: 预跑 Office 转换（让 derived CSV/PDF 进 email_attachment 表）

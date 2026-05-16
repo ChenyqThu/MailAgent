@@ -224,7 +224,7 @@ async def main():
 
     repo = EmailRepository(db_path=cfg.sync_store_db_path)
     sync_store = SyncStore(cfg.sync_store_db_path)
-    notion_sync = NotionSync(repo=repo, sync_store=sync_store)
+    notion_sync = NotionSync(email_repo=repo, sync_store=sync_store)
 
     t_start = time.time()
     succeeded = 0

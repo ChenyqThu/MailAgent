@@ -7,7 +7,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.logger import setup_logger
 from src.config import config
 from src.mail.reader import EmailReader
+from src.mail.sync_store import SyncStore
 from src.notion.sync import NotionSync
+from src.repository import AttachmentStore, EmailRepository
 
 async def main():
     """测试附件同步功能"""
@@ -43,7 +45,12 @@ async def main():
         print(f"  {i}. {att.filename} ({att.content_type}, {att.size} bytes)")
 
     # 创建同步器
-    syncer = NotionSync()
+    _ss = SyncStore(config.sync_store_db_path)
+    _repo = EmailRepository(
+        db_path=config.sync_store_db_path,
+        attachment_store=AttachmentStore(config.attachment_storage_dir),
+    )
+    syncer = NotionSync(email_repo=_repo, sync_store=_ss)
 
     # 检查是否已同步
     if await syncer.client.check_page_exists(email.message_id):

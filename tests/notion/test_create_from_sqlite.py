@@ -94,14 +94,17 @@ def _insert_metadata(
     conn.close()
 
 
-def _bare_notion_sync() -> NotionSync:
-    """跳过 NotionClient 初始化，避免读 .env。"""
+def _bare_notion_sync(
+    repo: 'EmailRepository' = None,
+    sync_store: 'SyncStore' = None,
+) -> NotionSync:
+    """跳过 NotionClient 初始化，避免读 .env；可选注入 repo/sync_store."""
     ns = NotionSync.__new__(NotionSync)
     ns.client = MagicMock()
     ns.html_converter = MagicMock()
     ns.eml_generator = MagicMock()
-    ns._repo = None
-    ns._sync_store = None
+    ns._email_repo = repo
+    ns._sync_store = sync_store
     return ns
 
 
@@ -419,9 +422,7 @@ class TestCreateEmailPageFromSqlite:
 
     @pytest.fixture
     def mocked_ns(self, repo: EmailRepository, sync_store: SyncStore) -> NotionSync:
-        ns = _bare_notion_sync()
-        ns._repo = repo
-        ns._sync_store = sync_store
+        ns = _bare_notion_sync(repo=repo, sync_store=sync_store)
         # 默认：没有重复
         ns.client.check_page_exists = AsyncMock(return_value=False)
         ns.client.query_database = AsyncMock(return_value=[])
@@ -580,9 +581,7 @@ class TestV2WrapperRouting:
         body = BodyPayload(html="<p>x</p>", markdown="x", body_format="html")
         repo.commit_email_with_body(300, body, [], message_id="<m300@x>")
 
-        ns = _bare_notion_sync()
-        ns._repo = repo
-        ns._sync_store = sync_store
+        ns = _bare_notion_sync(repo=repo, sync_store=sync_store)
 
         from_sqlite_mock = AsyncMock(return_value="FROM-SQLITE-PAGE")
         monkeypatch.setattr(
@@ -616,9 +615,7 @@ class TestV2WrapperRouting:
         body = BodyPayload(html="<p>x</p>", markdown="x", body_format="html")
         repo.commit_email_with_body(301, body, [], message_id="<m301@x>")
 
-        ns = _bare_notion_sync()
-        ns._repo = repo
-        ns._sync_store = sync_store
+        ns = _bare_notion_sync(repo=repo, sync_store=sync_store)
 
         from_sqlite_mock = AsyncMock(return_value="FROM-SQLITE-PAGE")
         monkeypatch.setattr(
@@ -649,9 +646,7 @@ class TestV2WrapperRouting:
         monkeypatch,
     ):
         """开关开，但 SQLite 无 body → fallback 老路径。"""
-        ns = _bare_notion_sync()
-        ns._repo = repo
-        ns._sync_store = sync_store
+        ns = _bare_notion_sync(repo=repo, sync_store=sync_store)
 
         from_sqlite_mock = AsyncMock(return_value="SHOULD-NOT-BE-CALLED")
         monkeypatch.setattr(

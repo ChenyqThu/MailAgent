@@ -315,7 +315,10 @@ async def main():
         db_path=cfg.sync_store_db_path,
         attachment_store=AttachmentStore(cfg.attachment_storage_dir),
     )
-    notion_sync = NotionSync()  # 只用 _convert_office_attachments，不调远端
+    notion_sync = NotionSync(
+        email_repo=repo,
+        sync_store=store,
+    )  # 只用 _convert_office_attachments，不调远端
 
     t0 = time.monotonic()
     stats = {"ok": 0, "failed": 0}

@@ -26,32 +26,22 @@ class NotionSync:
     def __init__(
         self,
         *,
-        repo: Optional['EmailRepository'] = None,
-        sync_store: Optional['SyncStore'] = None,
+        email_repo: 'EmailRepository',
+        sync_store: 'SyncStore',
     ):
-        """初始化。
+        """初始化（strict DI，PR-1 R-01）.
 
         Args:
-            repo: 可选注入 EmailRepository（用于 P4-04 灰度路径）。不传则需要时 lazy 创建。
-            sync_store: 可选注入 SyncStore。不传则需要时 lazy 创建。
+            email_repo: EmailRepository 实例（v4 SSoT 读路径）。生产 caller 必须传单实例。
+            sync_store: SyncStore 实例（旧 metadata 路径）。同上。
+
+        删除 lazy init / Optional 标注 — caller 显式提供以避免单进程内多实例（I-03）。
         """
         self.client = NotionClient()
         self.html_converter = HTMLToNotionConverter()
         self.eml_generator = EMLGenerator()
-        # v4 P4-04：灰度路由按需 lazy-init 这两个，避免老调用方破坏（NotionSync() 无参也行）
-        self._repo: Optional['EmailRepository'] = repo
-        self._sync_store: Optional['SyncStore'] = sync_store
-
-    def _ensure_sqlite_resources(self) -> Tuple['EmailRepository', 'SyncStore']:
-        """v4 P4-04：lazy-init 默认 EmailRepository + SyncStore，复用 config 配置的 DB 路径。"""
-        from src.config import config as app_config
-        if self._repo is None:
-            from src.repository import EmailRepository
-            self._repo = EmailRepository(db_path=app_config.sync_store_db_path)
-        if self._sync_store is None:
-            from src.mail.sync_store import SyncStore
-            self._sync_store = SyncStore(app_config.sync_store_db_path)
-        return self._repo, self._sync_store
+        self._email_repo = email_repo
+        self._sync_store = sync_store
 
     async def sync_email(self, email: Email) -> bool:
         """同步邮件到 Notion（兼容旧 API）
@@ -1007,7 +997,8 @@ class NotionSync:
         from src.config import config as app_config
         if app_config.notion_read_from_sqlite and email.internal_id:
             try:
-                repo, sync_store = self._ensure_sqlite_resources()
+                repo = self._email_repo
+                sync_store = self._sync_store
                 if repo.get_body(email.internal_id) is not None:
                     logger.debug(
                         f"[v4] routing to from-sqlite path: internal_id={email.internal_id}"

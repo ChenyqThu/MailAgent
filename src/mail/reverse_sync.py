@@ -32,12 +32,16 @@ class NotionToMailSync:
 
     def __init__(
         self,
-        notion_sync: NotionSync = None,
+        notion_sync: NotionSync,
         arm: AppleScriptArm = None,
         sync_store: SyncStore = None,
         skip_notify: bool = False,
     ):
-        self.notion_sync = notion_sync or NotionSync()
+        if notion_sync is None:
+            raise TypeError(
+                "NotionToMailSync requires notion_sync to be injected (R-01 strict DI)"
+            )
+        self.notion_sync = notion_sync
         self.arm = arm or AppleScriptArm()
         self.sync_store = sync_store
         self._skip_notify = skip_notify

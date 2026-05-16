@@ -7,8 +7,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.logger import setup_logger
 from src.config import config
 from src.mail.reader import EmailReader
+from src.mail.sync_store import SyncStore
 from src.notion.sync import NotionSync
 from src.models import Email
+from src.repository import AttachmentStore, EmailRepository
 
 def main():
     """调试完整的children blocks"""
@@ -30,7 +32,12 @@ def main():
     print(f"\n邮件: {email.subject}")
 
     # 创建同步器并生成children
-    syncer = NotionSync()
+    _ss = SyncStore(config.sync_store_db_path)
+    _repo = EmailRepository(
+        db_path=config.sync_store_db_path,
+        attachment_store=AttachmentStore(config.attachment_storage_dir),
+    )
+    syncer = NotionSync(email_repo=_repo, sync_store=_ss)
     children = syncer._build_children(email, uploaded_files=None)
 
     print(f"\n生成了 {len(children)} 个 children blocks")

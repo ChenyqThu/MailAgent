@@ -5,7 +5,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.mail.reader import EmailReader
+from src.config import config as _cfg
+from src.mail.sync_store import SyncStore
 from src.notion.sync import NotionSync
+from src.repository import AttachmentStore, EmailRepository
 from src.utils.logger import setup_logger
 
 async def main():
@@ -13,7 +16,12 @@ async def main():
     setup_logger("DEBUG")
 
     reader = EmailReader()
-    sync = NotionSync()
+    _ss = SyncStore(_cfg.sync_store_db_path)
+    _repo = EmailRepository(
+        db_path=_cfg.sync_store_db_path,
+        attachment_store=AttachmentStore(_cfg.attachment_storage_dir),
+    )
+    sync = NotionSync(email_repo=_repo, sync_store=_ss)
 
     print("=" * 60)
     print("Manual Email Sync")
