@@ -13,6 +13,7 @@ from src.repository.email_repository import (
     BodyPayload,
     EmailBodyRecord,
     EmailRepository,
+    EmailSearchHit,
 )
 from src.repository.storage_payload_builder import build_storage_payloads
 
@@ -23,5 +24,6 @@ __all__ = [
     "BodyPayload",
     "EmailBodyRecord",
     "EmailRepository",
+    "EmailSearchHit",
     "build_storage_payloads",
 ]

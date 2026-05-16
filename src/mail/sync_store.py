@@ -94,7 +94,8 @@ class SyncStore:
     # 数据库版本，用于迁移检测
     # v3 (2026-01): internal_id 主键 + 合并 sync_failures
     # v4 (2026-05): 新增 email_body + email_attachment（body 作为一等公民进 SQLite，SSoT 切换）
-    DB_VERSION = 4
+    # v5 (2026-05): 新增 email_body_fts FTS5 虚表 + insert/update/delete trigger + 首次 reindex
+    DB_VERSION = 5
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -328,6 +329,72 @@ class SyncStore:
             CREATE INDEX IF NOT EXISTS idx_email_attachment_sha256
             ON email_attachment(sha256) WHERE sha256 IS NOT NULL
         """)
+
+        # === v5: email_body_fts FTS5 全文索引 ===
+        # 详见 docs/architecture_v4_sqlite_ssot.md §3.3 + docs/phase2-handoff-to-phase3.md §5.1
+        # 设计稿用 contentless (content='')，但实测 snippet() / SELECT 列内容均返回空 ——
+        # contentless 不存原文，snippet 无法工作。改成 contentful（FTS 自带数据副本），
+        # 索引大小翻倍但实测全量 6131 封后估算 < 100 MB，完全可接受（handoff §7.3）。
+        # rowid = internal_id，便于和 email_metadata / email_body 互查。
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS email_body_fts USING fts5(
+                body_markdown,
+                subject,
+                sender,
+                tokenize='porter unicode61 remove_diacritics 2'
+            )
+        """)
+
+        # Trigger：email_body 写入/更新/删除时自动维护 FTS 索引
+        # 注意：subject / sender 从 email_metadata join 取，trigger 触发时
+        # metadata 行已存在（双写流程 metadata 先 commit）
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_insert
+            AFTER INSERT ON email_body BEGIN
+                INSERT INTO email_body_fts(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(NEW.body_markdown, ''),
+                       COALESCE((SELECT subject FROM email_metadata WHERE internal_id = NEW.internal_id), ''),
+                       COALESCE((SELECT sender  FROM email_metadata WHERE internal_id = NEW.internal_id), '');
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_delete
+            AFTER DELETE ON email_body BEGIN
+                DELETE FROM email_body_fts WHERE rowid = OLD.internal_id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_body_fts_update
+            AFTER UPDATE ON email_body BEGIN
+                DELETE FROM email_body_fts WHERE rowid = OLD.internal_id;
+                INSERT INTO email_body_fts(rowid, body_markdown, subject, sender)
+                SELECT NEW.internal_id,
+                       COALESCE(NEW.body_markdown, ''),
+                       COALESCE((SELECT subject FROM email_metadata WHERE internal_id = NEW.internal_id), ''),
+                       COALESCE((SELECT sender  FROM email_metadata WHERE internal_id = NEW.internal_id), '');
+            END
+        """)
+
+        # 首次启用 reindex：把已有 email_body 行推入 FTS（migration 友好，
+        # 已存在行不会重复写：用 NOT EXISTS 防重，幂等）
+        # current_version 是本次 _init_database 入口处读的旧版本
+        if current_version < 5:
+            cursor.execute("""
+                INSERT INTO email_body_fts(rowid, body_markdown, subject, sender)
+                SELECT b.internal_id,
+                       COALESCE(b.body_markdown, ''),
+                       COALESCE(m.subject, ''),
+                       COALESCE(m.sender, '')
+                  FROM email_body b
+                  JOIN email_metadata m ON m.internal_id = b.internal_id
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM email_body_fts WHERE rowid = b.internal_id
+                 )
+            """)
+            reindexed = cursor.rowcount or 0
+            if reindexed:
+                logger.info(f"v5 FTS5 reindex: {reindexed} email_body rows indexed")
 
         # FOREIGN KEY 约束需要 PRAGMA 显式打开（默认关闭，向下兼容）
         cursor.execute("PRAGMA foreign_keys = ON")

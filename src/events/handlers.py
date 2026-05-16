@@ -57,12 +57,17 @@ class EventHandlers:
             "fetch_mail_content": 0,
             "fetch_mail_content_sqlite_hit": 0,
             "fetch_mail_content_sqlite_miss": 0,
+            "search_email_bodies": 0,
+            "search_email_bodies_hits": 0,
+            "search_email_bodies_empty": 0,
+            "search_email_bodies_error": 0,
             "feishu_notified": 0,
         }
         # v4 P2-04: rolling latency buffers (last 1000 samples per path) for P99
         # stats_reporter 通过 get_stats() 一并上报 dashboard
         self._latency_sqlite_ms: list[int] = []
         self._latency_applescript_ms: list[int] = []
+        self._latency_search_ms: list[int] = []  # v4 P3-03: FTS5 search latency
         self._latency_buffer_max = 1000
 
     def get_stats(self) -> Dict:
@@ -79,6 +84,12 @@ class EventHandlers:
         )
         out["fetch_mail_content_applescript_p50_ms"] = self._percentile(
             self._latency_applescript_ms, 0.50
+        )
+        out["search_email_bodies_p99_ms"] = self._percentile(
+            self._latency_search_ms, 0.99
+        )
+        out["search_email_bodies_p50_ms"] = self._percentile(
+            self._latency_search_ms, 0.50
         )
         return out
 
@@ -727,6 +738,108 @@ class EventHandlers:
             result_data["notion_url"] = f"https://www.notion.so/{pid.replace('-', '')}"
 
         return result_data
+
+    async def handle_search_email_bodies(self, event: Dict):
+        """FTS5 全文搜索邮件正文 + subject + sender（v4 Phase 3）.
+
+        请求参数 (event.properties):
+            query: str (必填) — FTS5 query；支持短语 / AND/OR/NOT / 前缀 `term*`
+            limit: int (默认 50，最大 200)
+            mailbox: str (可选) — 仅返回该邮箱（'收件箱' / '发件箱'）
+            since_date / until_date: str (可选) — 'YYYY-MM-DD'，按 date_received 过滤
+
+        响应:
+            {status:'success', hits:[{internal_id, subject, sender, date_received,
+             mailbox, snippet, rank, notion_page_id, notion_url}], total_hits, latency_ms}
+
+        Notes:
+            - rank 是 bm25 分数，越小越相关；按 rank 升序返回
+            - snippet 是 FTS5 高亮片段（默认 <mark>...</mark>）
+            - 仅覆盖已 dual-written 的邮件；历史未 backfill 的邮件不会出现在结果里
+        """
+        self._stats["search_email_bodies"] += 1
+        t0 = time.monotonic()
+        props = event.get("properties", {})
+        event_id = event.get("id", "")
+
+        query = (props.get("query") or "").strip()
+        if not query:
+            self._stats["search_email_bodies_error"] += 1
+            await self._publish(event_id, {
+                "status": "error",
+                "error": "Missing required: query (FTS5 search query string)",
+            })
+            return
+
+        if self.email_repo is None:
+            self._stats["search_email_bodies_error"] += 1
+            await self._publish(event_id, {
+                "status": "error",
+                "error": "Search unavailable: EmailRepository not initialized (v4 disabled?)",
+            })
+            return
+
+        # cap limit to 200 防止 agent 误传大值压爆 dashboard
+        try:
+            limit = max(1, min(int(props.get("limit", 50)), 200))
+        except (TypeError, ValueError):
+            limit = 50
+
+        mailbox = props.get("mailbox") or None
+        since_date = props.get("since_date") or None
+        until_date = props.get("until_date") or None
+
+        logger.info(
+            f"search_email_bodies: query={query!r} limit={limit} "
+            f"mailbox={mailbox} since={since_date} until={until_date}"
+        )
+
+        try:
+            hits = self.email_repo.search_email_bodies(
+                query,
+                limit=limit,
+                mailbox=mailbox,
+                since_date=since_date,
+                until_date=until_date,
+            )
+        except Exception as e:
+            self._stats["search_email_bodies_error"] += 1
+            logger.error(f"search_email_bodies: failed for query={query!r}: {e}")
+            await self._publish(event_id, {"status": "error", "error": str(e)})
+            return
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        self._record_latency(self._latency_search_ms, latency_ms)
+
+        if hits:
+            self._stats["search_email_bodies_hits"] += len(hits)
+        else:
+            self._stats["search_email_bodies_empty"] += 1
+
+        await self._publish(event_id, {
+            "status": "success",
+            "query": query,
+            "total_hits": len(hits),
+            "hits": [
+                {
+                    "internal_id": h.internal_id,
+                    "subject": h.subject,
+                    "sender": h.sender,
+                    "date_received": h.date_received,
+                    "mailbox": h.mailbox,
+                    "snippet": h.snippet,
+                    "rank": h.rank,
+                    "notion_page_id": h.notion_page_id,
+                    "notion_url": h.notion_url,
+                }
+                for h in hits
+            ],
+            "latency_ms": latency_ms,
+        })
+        logger.info(
+            f"search_email_bodies: query={query!r} returned {len(hits)} hits "
+            f"latency={latency_ms}ms"
+        )
 
     async def handle_page_updated(self, event: Dict):
         """通用事件: 根据内容自动判断"""

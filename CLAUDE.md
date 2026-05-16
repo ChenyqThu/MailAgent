@@ -1072,7 +1072,7 @@ sqlite3 data/sync_store.db "
 python3 calendar_main.py --once
 ```
 
-## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 + Phase 2 已上线 2026-05-15**）
+## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 + Phase 2 + Phase 3 已上线 2026-05-15**）
 
 把 SQLite 升级为邮件正文 + 附件的 Single Source of Truth，Notion 退化为镜像。新邮件 sync 时把 body + 附件元数据双写到 SQLite，附件二进制落 `data/attachments/{internal_id}/`。详见 [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md)，Phase 间交接说明见 [`docs/phase1-handoff-to-phase2.md`](./docs/phase1-handoff-to-phase2.md)。
 
@@ -1082,7 +1082,7 @@ python3 calendar_main.py --once
 |---|---|---|
 | `email_body` | internal_id (FK metadata, CASCADE) | 邮件正文：`body_html`（原始）+ `body_markdown`（markdownify 产物，LLM/RAG/FTS5 通用）+ `raw_mime_sha256` |
 | `email_attachment` | id (AUTOINCREMENT) | 附件元数据：`local_path` 指向 `data/attachments/{int_id}/`；`derived_from` 自指 FK 关联 Office 转换产物（docx→pdf） |
-| `email_body_fts` | virtual | FTS5 全文索引（Phase 3 启用） |
+| `email_body_fts` | virtual (rowid=internal_id) | FTS5 全文索引（Phase 3 已上线，contentful 模式，3 个 trigger 自动维护） |
 
 ### 接口层：`EmailRepository`
 
@@ -1108,7 +1108,31 @@ repo.update_notion_links(internal_id, file_id_map={att_id: notion_file_id})
 
 # CASCADE 删除（含本地文件清理）
 repo.delete_email_full(internal_id)
+
+# Phase 3：全文搜索（bm25 排序 + snippet 高亮）
+hits = repo.search_email_bodies("redis AND timeout", limit=20, mailbox="收件箱")
+for h in hits:
+    print(h.internal_id, h.rank, h.subject, h.snippet)
 ```
+
+### Phase 3 FTS5 全文搜索
+
+`search_email_bodies(query, *, limit=50, mailbox=None, since_date=None, until_date=None)` 支持 FTS5 完整语法：
+- 短语：`"team meeting"`
+- 布尔：`redis AND timeout`、`meeting NOT canceled`、`team OR group`
+- 前缀通配：`meet*`、`产品*`
+- 邻近：`redis NEAR(timeout, 5)`
+
+**中文搜索注意**：SQLite 自带的 `unicode61` tokenizer 把**连续 CJK 字符当一个 token**（不分词），精确搜 "产品" 命不中 token "本周产品评审"。变通：用 `产品*` 前缀通配匹配。邮件正文里如果 "产品" 周围有 markdown 标记（`*` / `[` / 空格）会自动切出独立 token，所以生产邮件大多能直接搜中文 —— 但**单测和纯中文文本必须用 `*`**。未来可接 jieba 或 signal-fts5-tokenizer 提升质量。
+
+**Webhook 端**: `search_email_bodies` event（自动从 Redis 消费），响应：
+```jsonc
+{"status": "success", "query": "...", "total_hits": 2, "latency_ms": 7,
+ "hits": [{"internal_id": ..., "subject": ..., "sender": ..., "snippet": "...<mark>...</mark>...",
+           "rank": -1.76, "notion_url": "..."}]}
+```
+
+详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md)。
 
 ### 关键开关
 
@@ -1131,18 +1155,19 @@ v4 sync 路径：AppleScript → in-memory Email → **build_storage_payloads + 
 |---|---|---|
 | Phase 1 | ✅ **已上线 2026-05-15** | 双写 MVP；新邮件 sync 时落 SQLite，Web 端可立即切表。43/43 单测通过、生产服务已加载 v4 |
 | Phase 2 | ✅ **已上线 2026-05-15** | LLM processor / handle_fetch_mail_content 直读 SQLite（命中 ~4ms vs AppleScript 1-3s）；P99 latency tracker；回归对比工具就位。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md)。回退开关 `LLM_PREFER_SQLITE_BODY=false` |
-| Phase 3 | 待办（下一步） | FTS5 启用 + agent 工具 search_email_bodies |
-| Phase 4 | 待办 | Notion uploader 改为读 SQLite，架构归一 |
+| Phase 3 | ✅ **已上线 2026-05-15** | FTS5 全文索引 + `search_email_bodies` agent 工具；webhook bm25 排序 + snippet 高亮 + mailbox/date 过滤。274/274 单测通过。详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md) |
+| Phase 4 | 待办（下一步） | Notion uploader 改为读 SQLite，架构归一 |
 | Phase 5 | 未来 | Electron / Web 前端（接口已就位） |
 | **T-01** | 独立 TODO | Notion sync 迁 Markdown API（参考 `src/project_progress/notion_sync.py` 样板） |
 
 ### 关键文件
 
-- `src/repository/` 整个目录（EmailRepository / AttachmentStore / build_storage_payloads）
+- `src/repository/` 整个目录（EmailRepository / AttachmentStore / build_storage_payloads / search_email_bodies）
 - `src/converter/html_to_markdown.py`（markdownify 主路径）
-- `src/mail/sync_store.py:95-329`（DB_VERSION=4，新表）
+- `src/mail/sync_store.py:95-410`（DB_VERSION=5，含 email_body / email_attachment / email_body_fts + trigger）
 - `src/mail/new_watcher.py:114-130, 380-393, 450-490, 733-740`（双写入口）
-- `tests/repository/`（单测）
+- `src/events/handlers.py:745-855`（`handle_search_email_bodies` webhook）
+- `tests/repository/`（单测，含 `TestSearchEmailBodies`）+ `tests/events/test_search_email_bodies.py`
 
 ### 运维
 
@@ -1161,8 +1186,21 @@ sqlite3 data/sync_store.db "
 # 看附件目录大小
 du -sh data/attachments/
 
+# Phase 3：FTS5 索引健康度（body ↔ fts 行数应该一致）
+sqlite3 data/sync_store.db "
+  SELECT
+    (SELECT COUNT(*) FROM email_body) AS bodies,
+    (SELECT COUNT(*) FROM email_body_fts) AS fts_rows,
+    (SELECT COUNT(*) FROM email_body) - (SELECT COUNT(*) FROM email_body_fts) AS gap"
+
+# 手测一次 search（不走 webhook）
+python -c "
+from src.repository import EmailRepository
+for h in EmailRepository('data/sync_store.db').search_email_bodies('meeting', limit=3):
+    print(f'{h.internal_id} bm25={h.rank:.2f} | {h.subject[:50]}')"
+
 # 单测
-pytest tests/repository/ -v
+pytest tests/repository/ tests/events/ -v
 
 # 紧急回滚：关 v4 双写
 # 在 .env 加: BODY_DUAL_WRITE_ENABLED=false 然后 pm2 restart mail-sync

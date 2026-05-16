@@ -85,6 +85,20 @@ class EmailBodyRecord:
     fetched_source: str
 
 
+@dataclass
+class EmailSearchHit:
+    """search_email_bodies 单条命中（FTS5 + metadata join）."""
+    internal_id: int
+    subject: str
+    sender: str
+    date_received: Optional[str]
+    mailbox: Optional[str]
+    snippet: str            # FTS5 snippet() 高亮片段（默认 <mark>...</mark>）
+    rank: float             # bm25 分数（越小越相关，FTS5 约定）
+    notion_page_id: Optional[str] = None
+    notion_url: Optional[str] = None
+
+
 # ============================================================
 # Repository
 # ============================================================
@@ -215,6 +229,97 @@ class EmailRepository:
             except FileNotFoundError:
                 logger.warning(f"Attachment file missing: {row['local_path']}")
                 return None
+        finally:
+            conn.close()
+
+    # ============================================================
+    # SEARCH (Phase 3: FTS5)
+    # ============================================================
+
+    def search_email_bodies(
+        self,
+        query: str,
+        *,
+        limit: int = 50,
+        mailbox: Optional[str] = None,
+        since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
+    ) -> list[EmailSearchHit]:
+        """FTS5 全文搜索邮件正文 + subject + sender.
+
+        Args:
+            query: FTS5 query 语法 —— 短语用引号，AND/OR/NOT 大写，前缀用 `term*`。
+                示例：'"project plan"', 'redis AND timeout', 'meeting NOT canceled'
+            limit: 最多返回多少条（caller 责任 cap，repo 不再约束上限）
+            mailbox: 仅返回该 mailbox 的邮件（'收件箱' / '发件箱'）
+            since_date / until_date: 'YYYY-MM-DD'，按 email_metadata.date_received 过滤；
+                date_received 是 ISO 字符串，字典序与时间序一致，直接 `>=` / `<=`
+
+        Returns:
+            EmailSearchHit list，按 bm25 升序（最相关在前）。
+            空查询 / 无命中 / FTS 语法错误均返回 []（语法错误会 logger.warning）。
+        """
+        if not query or not query.strip():
+            return []
+        if limit <= 0:
+            return []
+
+        # FTS5 MATCH 用占位符传字符串避免 SQL 注入（FTS 语法本身的非法字符
+        # 由 SQLite 抛 OperationalError，被下面 try/except 接住）
+        sql = """
+            SELECT m.internal_id,
+                   COALESCE(m.subject, '')        AS subject,
+                   COALESCE(m.sender, '')         AS sender,
+                   m.date_received,
+                   m.mailbox,
+                   m.notion_page_id,
+                   snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
+                   bm25(email_body_fts)           AS rank
+              FROM email_body_fts
+              JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
+             WHERE email_body_fts MATCH ?
+        """
+        params: list = [query]
+        if mailbox:
+            sql += " AND m.mailbox = ?"
+            params.append(mailbox)
+        if since_date:
+            sql += " AND m.date_received >= ?"
+            params.append(since_date)
+        if until_date:
+            sql += " AND m.date_received <= ?"
+            params.append(until_date)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+
+        conn = self._connect()
+        try:
+            try:
+                rows = conn.execute(sql, params).fetchall()
+            except sqlite3.OperationalError as e:
+                # FTS5 query 语法错误（unbalanced quote / lone operator 等）
+                logger.warning(f"search_email_bodies: invalid FTS5 query {query!r}: {e}")
+                return []
+
+            hits: list[EmailSearchHit] = []
+            for r in rows:
+                page_id = r["notion_page_id"]
+                notion_url = (
+                    f"https://www.notion.so/{page_id.replace('-', '')}"
+                    if page_id else None
+                )
+                hits.append(EmailSearchHit(
+                    internal_id=r["internal_id"],
+                    subject=r["subject"],
+                    sender=r["sender"],
+                    date_received=r["date_received"],
+                    mailbox=r["mailbox"],
+                    snippet=r["snippet"] or "",
+                    rank=float(r["rank"]),
+                    notion_page_id=page_id,
+                    notion_url=notion_url,
+                ))
+            return hits
         finally:
             conn.close()
 

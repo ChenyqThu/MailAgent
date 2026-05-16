@@ -1,6 +1,6 @@
 # MailAgent v4 架构：SQLite 升级为邮件 SSoT
 
-> **状态**: ✅ **Phase 1 已上线 2026-05-15**；Phase 2-5 待办
+> **状态**: ✅ **Phase 1 + 2 + 3 已上线 2026-05-15**；Phase 4-5 待办
 > **输入**: `docs/web-handoff-body-storage.md` (MailAgent-Web hand off)
 > **目标**: 把 Notion 是 body 唯一持久化处反转为 SQLite 是数据中心、Notion 是镜像
 > **范围**: Phase 1 双写 MVP（done）；Phase 2-5 后续推进；Notion Markdown API 迁移列独立 TODO
@@ -131,15 +131,26 @@ CREATE INDEX idx_email_attachment_sha256 ON email_attachment(sha256) WHERE sha25
 - pdf 行的 `derived_from` 指向 docx 行的 `id`，`derived_format='pdf'`
 - 删除原附件 → derived SET NULL（防孤儿）
 
-### 3.3 `email_body_fts`（Phase 3 启用）
+### 3.3 `email_body_fts`（✅ Phase 3 已上线 2026-05-15）
 ```sql
 CREATE VIRTUAL TABLE email_body_fts USING fts5(
     body_markdown,
     subject, sender,
-    content='',
     tokenize='porter unicode61 remove_diacritics 2'
 );
+-- contentful 模式（实测 content='' contentless 模式下 snippet() 取不到原文）
+-- rowid = internal_id；3 个 trigger 在 email_body insert/update/delete 时自动维护
+
+CREATE TRIGGER email_body_fts_insert AFTER INSERT ON email_body BEGIN
+    INSERT INTO email_body_fts(rowid, body_markdown, subject, sender)
+    SELECT NEW.internal_id, COALESCE(NEW.body_markdown, ''),
+           COALESCE((SELECT subject FROM email_metadata WHERE internal_id=NEW.internal_id), ''),
+           COALESCE((SELECT sender  FROM email_metadata WHERE internal_id=NEW.internal_id), '');
+END;
+-- _delete / _update trigger 同源对称（详见 src/mail/sync_store.py）
 ```
+
+**中文搜索限制**：SQLite 默认 unicode61 把连续 CJK 当**一个**大 token（不拆字），精确搜 "产品" 命不中 token "本周产品评审"。必须用前缀通配 `产品*`。生产邮件因含 markdown 标记（`*` / `[` / 空格）会自动切出独立中文 token，多数情况能直接搜中文。未来 jieba / signal-fts5-tokenizer 升级见 [`docs/phase3-complete.md`](./phase3-complete.md) §2.3。
 
 ### 3.4 附件本地存储
 
@@ -169,7 +180,10 @@ class EmailRepository:
     get_body(internal_id) -> EmailBodyRecord | None
     get_attachments(internal_id) -> list[AttachmentRecord]
     get_attachment_bytes(attachment_id) -> bytes | None
-    search_body_fts(query, limit=50) -> list[SearchHit]   # Phase 3
+
+    # ===== Search (Phase 3) =====
+    search_email_bodies(query, *, limit=50, mailbox=None,
+                        since_date=None, until_date=None) -> list[EmailSearchHit]
 
     # ===== Write =====
     commit_email_with_body(internal_id, body, attachments, *, message_id=None) -> dict[str, int]
@@ -199,10 +213,13 @@ class EmailRepository:
 - `events/handlers.handle_fetch_mail_content` → 优先读 SQLite，fallback AppleScript
 - Web 端 `/api/emails/:id/body` 切 SQLite（web repo 单独 PR）
 
-### Phase 3：FTS5 + RAG
-- 启用 `email_body_fts`、`commit_email_with_body` 同事务写
-- `scripts/build_email_body_fts.py` 一次性 backfill
-- `EmailRepository.search_body_fts` 暴露给 agent / Web
+### Phase 3：FTS5 + RAG（✅ 已上线 2026-05-15）
+- ✅ `email_body_fts` 虚表 + 3 个 trigger（自动维护，无需独立 backfill 脚本）
+- ✅ DB_VERSION 4→5 启动时一次性 reindex 已有 body 行（幂等）
+- ✅ `EmailRepository.search_email_bodies()` + `EmailSearchHit` dataclass
+- ✅ `handle_search_email_bodies` Redis webhook handler，main.py 注册
+- ✅ 274/274 单测全绿
+- 详见 [`docs/phase3-complete.md`](./phase3-complete.md)
 
 ### Phase 4：Notion uploader 切换为下游消费者
 - `notion/sync.create_email_page_from_sqlite(internal_id)` 新签名

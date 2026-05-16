@@ -91,6 +91,8 @@ class EmailNotionSyncApp:
             self.redis_consumer.on("page_updated", handlers.handle_page_updated)
             self.redis_consumer.on("query_mail", handlers.handle_query_mail)
             self.redis_consumer.on("fetch_mail_content", handlers.handle_fetch_mail_content)
+            # v4 Phase 3: FTS5 full-text search over email_body / subject / sender
+            self.redis_consumer.on("search_email_bodies", handlers.handle_search_email_bodies)
 
             logger.info(f"Redis event consumer configured: queue={queue_key}")
 

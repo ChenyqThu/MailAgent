@@ -26,6 +26,7 @@ from src.repository import (
     AttachmentStore,
     BodyPayload,
     EmailRepository,
+    EmailSearchHit,
     build_storage_payloads,
 )
 
@@ -414,3 +415,228 @@ class TestHtmlToMarkdown:
         md = html_to_markdown('<ul><li>X</li></ul><a href="http://x">L</a>')
         assert "X" in md
         assert "[L](http://x)" in md
+
+
+# ============================================================
+# search_email_bodies (Phase 3: FTS5)
+# ============================================================
+
+def _insert_metadata_full(
+    db: Path,
+    internal_id: int,
+    *,
+    subject: str = "",
+    sender: str = "",
+    mailbox: str = "收件箱",
+    date_received: str = "2026-05-15T10:00:00+08:00",
+    notion_page_id: Optional[str] = None,
+):
+    """直接 INSERT 一行 email_metadata，带 subject/sender/date 让 FTS trigger 能取值。"""
+    conn = sqlite3.connect(str(db))
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        """INSERT INTO email_metadata
+           (internal_id, sync_status, mailbox, subject, sender,
+            date_received, notion_page_id, created_at, updated_at)
+           VALUES (?, 'synced', ?, ?, ?, ?, ?, ?, ?)""",
+        (internal_id, mailbox, subject, sender, date_received,
+         notion_page_id, time.time(), time.time()),
+    )
+    conn.commit()
+    conn.close()
+
+
+# Optional 已在文件顶部用过，重新 import 以防被 reformat
+from typing import Optional  # noqa: E402
+
+
+class TestSearchEmailBodies:
+    def _seed(self, repo: EmailRepository, fresh_db: Path):
+        """种 3 封：
+        100 收件箱 'Project meeting tomorrow' alice  → 含 'meeting'
+        200 发件箱 'Re: Project status update' bob   → 含 'project'
+        300 收件箱 '产品周会日程同步' carol            → 中文
+        """
+        _insert_metadata_full(
+            fresh_db, 100,
+            subject="Project meeting tomorrow",
+            sender="alice@example.com",
+            mailbox="收件箱",
+            date_received="2026-05-01T10:00:00+08:00",
+            notion_page_id="page-100",
+        )
+        repo.commit_email_with_body(
+            100,
+            BodyPayload(html="<p>x</p>",
+                        markdown="Let's discuss the meeting agenda tomorrow at 3pm.",
+                        body_format="html"),
+            [],
+        )
+        _insert_metadata_full(
+            fresh_db, 200,
+            subject="Re: Project status update",
+            sender="bob@example.com",
+            mailbox="发件箱",
+            date_received="2026-05-10T10:00:00+08:00",
+        )
+        repo.commit_email_with_body(
+            200,
+            BodyPayload(html="<p>x</p>",
+                        markdown="The project is on track. Will share details next Monday.",
+                        body_format="html"),
+            [],
+        )
+        _insert_metadata_full(
+            fresh_db, 300,
+            subject="产品周会日程同步",
+            sender="carol@example.com",
+            mailbox="收件箱",
+            date_received="2026-05-15T10:00:00+08:00",
+        )
+        repo.commit_email_with_body(
+            300,
+            BodyPayload(html="<p>x</p>",
+                        markdown="本周产品评审定在周三下午，请提前同步进度。",
+                        body_format="html"),
+            [],
+        )
+
+    def test_basic_hit(self, repo: EmailRepository, fresh_db: Path):
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("meeting", limit=10)
+        # 100 的 subject + body 都含 'meeting'，应该是最高分
+        assert len(hits) >= 1
+        assert hits[0].internal_id == 100
+        assert "meeting" in hits[0].snippet.lower()
+        # snippet 应该带高亮 marker
+        assert "<mark>" in hits[0].snippet
+        assert hits[0].subject == "Project meeting tomorrow"
+        assert hits[0].sender == "alice@example.com"
+
+    def test_hit_returns_dataclass(self, repo: EmailRepository, fresh_db: Path):
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("project", limit=10)
+        assert all(isinstance(h, EmailSearchHit) for h in hits)
+
+    def test_empty_query_returns_empty(self, repo: EmailRepository, fresh_db: Path):
+        self._seed(repo, fresh_db)
+        assert repo.search_email_bodies("") == []
+        assert repo.search_email_bodies("   ") == []
+
+    def test_zero_limit_returns_empty(self, repo: EmailRepository, fresh_db: Path):
+        self._seed(repo, fresh_db)
+        assert repo.search_email_bodies("meeting", limit=0) == []
+        assert repo.search_email_bodies("meeting", limit=-1) == []
+
+    def test_no_hit_returns_empty(self, repo: EmailRepository, fresh_db: Path):
+        self._seed(repo, fresh_db)
+        assert repo.search_email_bodies("zzzzzz-no-match-token-here", limit=10) == []
+
+    def test_invalid_syntax_returns_empty_not_raises(self, repo: EmailRepository, fresh_db: Path):
+        """FTS5 语法错误（未闭合引号 / 孤立操作符）应被吞掉返回 []，记 warning."""
+        self._seed(repo, fresh_db)
+        # 未闭合的双引号
+        assert repo.search_email_bodies('"unbalanced', limit=10) == []
+
+    def test_mailbox_filter(self, repo: EmailRepository, fresh_db: Path):
+        """mailbox 过滤：搜 project 时只看发件箱，应只命中 200."""
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("project", limit=10, mailbox="发件箱")
+        assert all(h.mailbox == "发件箱" for h in hits)
+        assert any(h.internal_id == 200 for h in hits)
+        # 收件箱模式不应包含 200
+        hits_inbox = repo.search_email_bodies("project", limit=10, mailbox="收件箱")
+        assert all(h.internal_id != 200 for h in hits_inbox)
+
+    def test_since_date_filter(self, repo: EmailRepository, fresh_db: Path):
+        """since_date 过滤：5/5 之后的，100 (5/1) 应被排除."""
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("project", limit=10, since_date="2026-05-05")
+        ids = [h.internal_id for h in hits]
+        assert 100 not in ids  # 5/1 的被排除
+        # 200 (5/10) 应在结果里
+        assert 200 in ids
+
+    def test_until_date_filter(self, repo: EmailRepository, fresh_db: Path):
+        """until_date 过滤：5/5 之前的，200 (5/10) 应被排除."""
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("project", limit=10, until_date="2026-05-05")
+        ids = [h.internal_id for h in hits]
+        assert 200 not in ids
+        assert 100 in ids
+
+    def test_chinese_search_unicode61_prefix(self, repo: EmailRepository, fresh_db: Path):
+        """SQLite 自带的 unicode61 tokenizer 在没有 ICU 的情况下把连续 CJK 当**一个**
+        大 token，因此精确搜 '产品' 命不中（token 是 '产品周会日程同步' 整串）。
+        前缀匹配 '产品*' 能命中。文档里需提示中文用 '*' 后缀做前缀匹配，
+        或未来 Phase 4+ 引入 jieba/signal-tokenizer 提质量。
+        """
+        self._seed(repo, fresh_db)
+        # 不带 '*' 命不中（已验证 SQLite 行为）
+        assert repo.search_email_bodies("产品", limit=10) == []
+        # 带 '*' 前缀匹配能命中
+        hits = repo.search_email_bodies("产品*", limit=10)
+        ids = [h.internal_id for h in hits]
+        assert 300 in ids
+
+    def test_limit_caps_result_count(self, repo: EmailRepository, fresh_db: Path):
+        """limit 严格生效."""
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("project", limit=1)
+        assert len(hits) <= 1
+
+    def test_rank_ordering(self, repo: EmailRepository, fresh_db: Path):
+        """bm25 升序：rank 越小越相关，第一个 <= 后面的."""
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("project", limit=10)
+        if len(hits) >= 2:
+            assert hits[0].rank <= hits[1].rank
+
+    def test_notion_url_populated(self, repo: EmailRepository, fresh_db: Path):
+        """notion_page_id 存在 → notion_url 拼好；不存在 → None."""
+        self._seed(repo, fresh_db)
+        hits = repo.search_email_bodies("meeting", limit=10)
+        h100 = next((h for h in hits if h.internal_id == 100), None)
+        assert h100 is not None
+        assert h100.notion_page_id == "page-100"
+        assert h100.notion_url == "https://www.notion.so/page100"
+
+        # 200 没有 notion_page_id
+        hits2 = repo.search_email_bodies("project", limit=10)
+        h200 = next((h for h in hits2 if h.internal_id == 200), None)
+        if h200:
+            assert h200.notion_page_id is None
+            assert h200.notion_url is None
+
+    def test_trigger_keeps_fts_in_sync_on_body_update(self, repo: EmailRepository, fresh_db: Path):
+        """email_body UPDATE → fts_update trigger 重建 FTS 行，老 term 不再命中，新 term 命中."""
+        _insert_metadata_full(fresh_db, 500, subject="s", sender="s@x", mailbox="收件箱")
+        repo.commit_email_with_body(
+            500,
+            BodyPayload(html="", markdown="oldterm content here", body_format="html"),
+            [],
+        )
+        assert any(h.internal_id == 500 for h in repo.search_email_bodies("oldterm", limit=10))
+
+        # 第二次 commit 触发 INSERT OR REPLACE，但 FTS trigger AFTER INSERT 也会触发
+        # 用户场景常见：backfill 后重抽
+        repo.commit_email_with_body(
+            500,
+            BodyPayload(html="", markdown="newterm content here", body_format="html"),
+            [],
+        )
+        # 新 term 应该命中（trigger 工作）
+        assert any(h.internal_id == 500 for h in repo.search_email_bodies("newterm", limit=10))
+
+    def test_trigger_removes_fts_on_body_delete(self, repo: EmailRepository, fresh_db: Path):
+        """删 metadata → CASCADE 删 email_body → fts_delete trigger 移除 FTS 行."""
+        _insert_metadata_full(fresh_db, 600, subject="s", sender="s@x", mailbox="收件箱")
+        repo.commit_email_with_body(
+            600,
+            BodyPayload(html="", markdown="uniqueterm6 content", body_format="html"),
+            [],
+        )
+        assert any(h.internal_id == 600 for h in repo.search_email_bodies("uniqueterm6", limit=10))
+
+        repo.delete_email_full(600)
+        assert not any(h.internal_id == 600 for h in repo.search_email_bodies("uniqueterm6", limit=10))
