@@ -54,9 +54,9 @@ async def cmd_selftest() -> int:
     # Force-enable so the config checks don't short-circuit
     os.environ.setdefault("LLM_AGENT_ENABLED", "true")
 
-    from src.llm_agent import AnthropicClient, EMAIL_TOOL_SCHEMA
+    from src.llm_agent import LLMClient, EMAIL_TOOL_SCHEMA
 
-    client = AnthropicClient()
+    client = LLMClient()
     try:
         result = await client.classify(
             system_blocks=[

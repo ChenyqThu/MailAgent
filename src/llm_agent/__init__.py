@@ -4,7 +4,7 @@ Default disabled via LLM_AGENT_ENABLED=false in .env.
 See CLAUDE.md §LLM Agent for enable steps (including Notion automation pause).
 """
 
-from .client import AnthropicClient, LLMCallError, LLMResult
+from .client import LLMClient, LLMCallError, LLMResult
 from .context_loader import ContextLoader
 from .digest_resolver import DailyDigestResolver
 from .md_to_rich_text import md_to_rich_text
@@ -20,7 +20,7 @@ from .schema import (
 from .store import LLMProcessingStore
 
 __all__ = [
-    "AnthropicClient",
+    "LLMClient",
     "LLMCallError",
     "LLMResult",
     "ContextLoader",

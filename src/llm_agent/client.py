@@ -1,6 +1,6 @@
 """LLM gateway client with multi-model fallback (Anthropic + OpenAI proto).
 
-Despite the historical name `AnthropicClient`, this routes per model:
+`LLMClient` routes per model:
   - claude-* → Anthropic Messages (`/v1/messages`) + native tool_use
   - gpt-* / gemini-* / codex-* → OpenAI Chat Completions
     (`/v1/chat/completions`, stream-only on CRS) + tool_calls
@@ -107,7 +107,7 @@ def _to_openai_tool(schema: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-class AnthropicClient:
+class LLMClient:
     """LLM client with per-model protocol routing + automatic fallback chain."""
 
     def __init__(self):

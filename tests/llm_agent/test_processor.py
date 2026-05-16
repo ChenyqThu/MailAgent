@@ -29,7 +29,7 @@ def _fake_email(**overrides):
 
 
 def _bare_processor(repo=None) -> LLMProcessor:
-    """Bypass __init__ to avoid creating real AnthropicClient / loaders."""
+    """Bypass __init__ to avoid creating real LLMClient / loaders."""
     p = LLMProcessor.__new__(LLMProcessor)
     p._client = None
     p._prompts = None

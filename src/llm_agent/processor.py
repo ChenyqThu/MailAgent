@@ -19,7 +19,7 @@ from loguru import logger
 from src.config import config as cfg
 from src.repository import EmailRepository
 
-from .client import AnthropicClient, LLMCallError, LLMResult
+from .client import LLMClient, LLMCallError, LLMResult
 from .context_loader import ContextLoader
 from .prompt_loader import PromptLoader
 from .schema import (
@@ -110,7 +110,7 @@ class LLMProcessor:
     """Stateful processor; reuse one instance across calls to keep caches warm."""
 
     def __init__(self, repo: Optional[EmailRepository] = None):
-        self._client = AnthropicClient()
+        self._client = LLMClient()
         self._prompts = PromptLoader()
         self._context = ContextLoader()
         # v4 SSoT: 优先从 SQLite 读 markdown body，miss 时退回正则路径
