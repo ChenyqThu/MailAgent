@@ -142,3 +142,71 @@ def test_sha256_deterministic():
     assert a != c
     # SHA-256 hex 长度 64
     assert len(a) == 64
+
+
+class TestAbsolutePath:
+    """R-04 / I-05: base_dir resolve 绝对路径 + read/exists 解除 cwd 依赖."""
+
+    def test_base_dir_is_absolute_after_init(self, tmp_path: Path):
+        """relative base_dir → __init__ 后变绝对."""
+        # 用 monkeypatch 切换 cwd 避免影响其他测试 (用 chdir 上下文)
+        import os
+        old_cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            store = AttachmentStore("data/attachments")
+            assert store.base_dir.is_absolute()
+            assert str(store.base_dir) == str((tmp_path / "data" / "attachments").resolve())
+        finally:
+            os.chdir(old_cwd)
+
+    def test_base_dir_already_absolute_unchanged(self, tmp_path: Path):
+        abs_dir = (tmp_path / "myattach").resolve()
+        store = AttachmentStore(abs_dir)
+        assert store.base_dir == abs_dir
+        assert store.base_dir.is_absolute()
+
+    def test_read_with_relative_path_uses_base_dir_anchor(self, tmp_path: Path):
+        """read 用 base_dir.parent.parent 当 project_root，不依赖 cwd."""
+        import os
+        # 构造 base_dir = tmp_path/data/attachments
+        base = tmp_path / "data" / "attachments"
+        base.mkdir(parents=True)
+        # 写一个测试文件到 base/123/test.txt
+        (base / "123").mkdir()
+        (base / "123" / "test.txt").write_bytes(b"hello")
+
+        store = AttachmentStore(base)
+        # 用相对 local_path 调用 read（与生产 SQLite 中 local_path 形式一致）
+        # 期望: project_root = base.parent.parent = tmp_path, 拼出 tmp_path/data/attachments/123/test.txt
+        # 故意把 cwd 切到 /tmp 看 read 是否仍然成功
+        old_cwd = os.getcwd()
+        os.chdir("/tmp")
+        try:
+            content = store.read("data/attachments/123/test.txt")
+            assert content == b"hello"
+        finally:
+            os.chdir(old_cwd)
+
+    def test_read_with_absolute_path(self, tmp_path: Path):
+        """绝对路径直接读，不走 anchor."""
+        f = tmp_path / "abs_file.bin"
+        f.write_bytes(b"abs-content")
+        store = AttachmentStore(tmp_path / "x")
+        assert store.read(str(f)) == b"abs-content"
+
+    def test_exists_with_relative_path_uses_base_dir_anchor(self, tmp_path: Path):
+        import os
+        base = tmp_path / "data" / "attachments"
+        base.mkdir(parents=True)
+        (base / "456").mkdir()
+        (base / "456" / "x.bin").write_bytes(b"x")
+        store = AttachmentStore(base)
+
+        old_cwd = os.getcwd()
+        os.chdir("/tmp")
+        try:
+            assert store.exists("data/attachments/456/x.bin") is True
+            assert store.exists("data/attachments/456/missing.bin") is False
+        finally:
+            os.chdir(old_cwd)

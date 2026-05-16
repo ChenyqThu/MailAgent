@@ -40,7 +40,16 @@ class AttachmentStore:
     """
 
     def __init__(self, base_dir: str | Path = "data/attachments"):
-        self.base_dir = Path(base_dir)
+        # R-04 / I-05: 构造时 resolve 绝对路径，解除 read/exists 对 Path.cwd() 的依赖
+        raw_base_dir = Path(base_dir)
+        self.base_dir = raw_base_dir.resolve()
+        if (
+            raw_base_dir == Path("data/attachments")
+            or self.base_dir.parts[-2:] == ("data", "attachments")
+        ):
+            self._local_path_base = Path("data/attachments")
+        else:
+            self._local_path_base = self.base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------- 路径相关 ----------
@@ -55,7 +64,7 @@ class AttachmentStore:
         例: 'data/attachments/41457/report.pdf'
         """
         safe = self.sanitize_filename(filename)
-        return str(self.base_dir / str(internal_id) / safe)
+        return str(self._local_path_base / str(internal_id) / safe)
 
     @staticmethod
     def sanitize_filename(name: str) -> str:
@@ -115,18 +124,25 @@ class AttachmentStore:
         return target, safe
 
     def read(self, local_path: str | Path) -> bytes:
-        """按 local_path 读盘。local_path 可以是相对/绝对。"""
+        """按 local_path 读盘。local_path 可以是相对/绝对。
+
+        R-04: 相对路径以 base_dir 反推项目根，解除 cwd 依赖。
+        base_dir = ".../MailAgent/data/attachments"
+        project_root = base_dir.parent.parent = ".../MailAgent"
+        local_path = "data/attachments/53675/file.pdf" → project_root / local_path
+        """
         p = Path(local_path)
-        if not p.is_absolute():
-            # 假设 local_path 相对项目根（与 email_attachment.local_path 一致）
-            p = Path.cwd() / p
-        return p.read_bytes()
+        if p.is_absolute():
+            return p.read_bytes()
+        project_root = self.base_dir.parent.parent
+        return (project_root / p).read_bytes()
 
     def exists(self, local_path: str | Path) -> bool:
         p = Path(local_path)
-        if not p.is_absolute():
-            p = Path.cwd() / p
-        return p.exists()
+        if p.is_absolute():
+            return p.exists()
+        project_root = self.base_dir.parent.parent
+        return (project_root / p).exists()
 
     def delete_email_dir(self, internal_id: int) -> None:
         """删除该 internal_id 的整个附件目录。供 EmailRepository.delete_email_full 调用。"""
