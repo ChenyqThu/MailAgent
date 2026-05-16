@@ -151,7 +151,13 @@ def calendar_recurring_discover(
     from scripts.replay_recurring_invite import discover_recurring
     from src.mail.applescript_arm import AppleScriptArm
 
-    arm = AppleScriptArm()
+    # PR-3 round-7 fix: 从 CLI cfg 显式注入 mail account / inbox (即使
+    # AppleScriptArm 默认走 cfg fallback, 也明示意图)
+    cfg = cli.cli_config
+    arm = AppleScriptArm(
+        account_name=cfg.mail_account_name,
+        inbox_name=cfg.mail_inbox_name,
+    )
     sync_store = cli.sync_store
     try:
         matches = asyncio.run(discover_recurring(
@@ -163,38 +169,85 @@ def calendar_recurring_discover(
             hint="可能 AppleScript 不可用 (mac/Mail.app 缺) 或权限不足",
         ))
 
+    # PR-3 round-7 fix (codex MAJOR 2): 用 SQL 算实际 scanned count
+    # discover_recurring 内部 LIMIT discover_limit + sync_status='synced' [+ since].
+    # 复现同条件在 CLI 层算 actual scanned, 而不是用 discover_limit 作近似。
+    import sqlite3 as _sql
+
+    _scanned_sql = (
+        "SELECT COUNT(*) FROM (SELECT 1 FROM email_metadata "
+        "WHERE sync_status = 'synced'"
+    )
+    _params: list = []
+    if since_eff:
+        _scanned_sql += " AND date_received >= ?"
+        _params.append(since_eff)
+    _scanned_sql += " ORDER BY date_received DESC LIMIT ?)"
+    _params.append(discover_limit)
+    _conn = _sql.connect(cli.cli_config.sync_store_db_path)
+    try:
+        actual_scanned = int(_conn.execute(_scanned_sql, _params).fetchone()[0])
+    except Exception:
+        actual_scanned = 0
+    finally:
+        _conn.close()
+
     # PRD §US-007 / RFC §4.10: series 是 GROUPED 输出 (per-series_uid 合并多封
-    # invite), 不是 per-email rows. 把 discover_recurring 返回的 per-email matches
-    # 按 invite.uid 聚合为 series 记录。
-    series_by_uid: dict[str, dict] = {}
+    # invite). PR-3 round-7 fix (codex MAJOR 3): master_dtstart 应该是 group 内
+    # **最早 METHOD=REQUEST 的 dtstart**, 不是第一条 (discover_recurring 按
+    # date_received DESC 排序, 第一条往往是最新更新而非 master). 先 group, 然后
+    # canonical record 选择: 优先 earliest parseable dtstart 中 method=REQUEST 的;
+    # 否则 earliest parseable dtstart; 都解析失败 fallback 任意一个.
+    grouped: dict[str, list[dict]] = {}
     for m in matches:
         uid = (m.get("uid") or "").strip() or f"__no_uid_iid_{m.get('internal_id')}"
-        if uid not in series_by_uid:
-            series_by_uid[uid] = {
-                "series_uid": uid,
-                "master_dtstart": m.get("dtstart"),
-                "summary": m.get("subject"),
-                "sender": m.get("sender"),
-                "organizer": m.get("sender"),  # PR-3 placeholder; real ORGANIZER 需 ICS 重解析, 留 PR-4
-                "rrule": m.get("rrule"),
-                "method": m.get("method"),
-                "internal_ids": [],
-            }
-        series_by_uid[uid]["internal_ids"].append(int(m.get("internal_id")))
+        grouped.setdefault(uid, []).append(m)
 
-    series_list = list(series_by_uid.values())
+    def _safe_dt(s: Optional[str]) -> Optional[str]:
+        """返回 ISO 字符串 (lex-sortable) 或 None — 不抛."""
+        if not s:
+            return None
+        return s.strip() or None
 
-    # scanned: discover_recurring 内部 SQL 用 LIMIT discover_limit, 实际扫描行数
-    # = min(discover_limit, 全库 synced 邮件数). PR-3 范围内拿不到精确 scanned
-    # (function 不暴露), 用 discover_limit 作 ceiling 近似 + 用 len(matches) 标记
-    # 实际命中的 invite-bearing 邮件数。下游 caller 应该看 total_series / matches_total
-    # 两个数, 不靠 scanned 做精确判断。
+    series_list: list[dict] = []
+    for uid, group in grouped.items():
+        # 先找 method=REQUEST 中最早 dtstart 的
+        request_candidates = [
+            (g, _safe_dt(g.get("dtstart")))
+            for g in group
+            if (g.get("method") or "").upper() == "REQUEST"
+        ]
+        request_candidates = [(g, dt) for g, dt in request_candidates if dt]
+        if request_candidates:
+            request_candidates.sort(key=lambda t: t[1])
+            master = request_candidates[0][0]
+        else:
+            # 没有 REQUEST 或全无可解析 dtstart: 取所有 group 中最早 dtstart
+            all_with_dt = [(g, _safe_dt(g.get("dtstart"))) for g in group]
+            all_with_dt = [(g, dt) for g, dt in all_with_dt if dt]
+            if all_with_dt:
+                all_with_dt.sort(key=lambda t: t[1])
+                master = all_with_dt[0][0]
+            else:
+                master = group[0]  # 全部 dtstart 无法解析 — fallback
+
+        series_list.append({
+            "series_uid": uid,
+            "master_dtstart": master.get("dtstart"),
+            "summary": master.get("subject"),
+            "sender": master.get("sender"),
+            "organizer": master.get("sender"),  # placeholder; 真 ORGANIZER 留 PR-4
+            "rrule": master.get("rrule"),
+            "method": master.get("method"),
+            "internal_ids": [int(g.get("internal_id")) for g in group],
+        })
+
     matches_total = len(matches)
     data = {
         "series": series_list,
         "total_series": len(series_list),
         "matches_total": matches_total,
-        "scanned": discover_limit,
+        "scanned": actual_scanned,
         "since": since_eff,
         "limit": discover_limit,
     }

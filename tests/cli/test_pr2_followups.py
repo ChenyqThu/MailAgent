@@ -178,6 +178,38 @@ class TestNdjsonContract:
 class TestErrorWrapperConsistency:
     """所有 PR-3 命令的 error 返回都必须走 _common.schema.json#/$defs/wrapper_error."""
 
+    def test_applescript_arm_reads_cli_config_account(
+        self, monkeypatch, tmp_path,
+    ):
+        """PR-3 round-7 codex critic MAJOR 1 regression:
+
+        ``AppleScriptArm()`` 必须从 ``src.config.config.mail_account_name`` /
+        ``mail_inbox_name`` 取默认值, 不能硬编码 'Exchange' / '收件箱'.
+        通过 CliContext.from_flags 全局 sync, 再实例化 AppleScriptArm,
+        断言 account/inbox 来自 CLI-scoped 配置.
+        """
+        monkeypatch.setenv("MAIL_ACCOUNT_NAME", "TestAccount")
+        monkeypatch.setenv("MAIL_INBOX_NAME", "TestInbox")
+        monkeypatch.setenv("SYNC_STORE_DB_PATH", str(tmp_path / "x.db"))
+        monkeypatch.setenv("ATTACHMENT_STORAGE_DIR", str(tmp_path / "atts"))
+        monkeypatch.setenv("NOTION_TOKEN", "t")
+        monkeypatch.setenv("EMAIL_DATABASE_ID", "d")
+        monkeypatch.setenv("USER_EMAIL", "e@x")
+        monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "")
+
+        from src.cli.context import CliContext
+        CliContext.from_flags()  # syncs global cfg from CLI-scoped Config
+
+        from src.mail.applescript_arm import AppleScriptArm
+
+        arm = AppleScriptArm()  # 不传参 — 应走 cfg 默认
+        assert arm.account_name == "TestAccount", (
+            f"expected CLI-config-scoped 'TestAccount', got {arm.account_name!r}"
+        )
+        assert arm.inbox_name == "TestInbox", (
+            f"expected CLI-config-scoped 'TestInbox', got {arm.inbox_name!r}"
+        )
+
     @pytest.mark.parametrize("cmd_args,expected_code,exit_code", [
         # email get not-found
         (["email", "get", "99999"], "E_NOT_FOUND", 1),

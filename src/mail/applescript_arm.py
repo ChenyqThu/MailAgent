@@ -48,21 +48,25 @@ class AppleScriptArm:
 
     def __init__(
         self,
-        account_name: str = "Exchange",
-        inbox_name: str = "收件箱"
+        account_name: str = None,
+        inbox_name: str = None,
     ):
         """
         初始化 AppleScript 机械臂
 
         Args:
-            account_name: Mail.app 账户名称
-            inbox_name: 默认邮箱名称
+            account_name: Mail.app 账户名称 (None → 读 ``config.mail_account_name``,
+                默认 'Exchange'); PR-3 round-7 codex critic fix: 之前硬编码 'Exchange'
+                导致 CLI ``--config other.env`` 时仍读老账户。
+            inbox_name: 默认邮箱名称 (同上, None → 读 ``config.mail_inbox_name``,
+                默认 '收件箱')
         """
-        self.account_name = account_name
-        self.inbox_name = inbox_name
-
-        # 从配置读取超时时间
+        # 从配置读取超时时间 + account/inbox 默认值 (cfg 读 import-time .env;
+        # CLI 走 CliContext.from_flags 已 sync 到 cfg)
         from src.config import config
+
+        self.account_name = account_name if account_name is not None else config.mail_account_name
+        self.inbox_name = inbox_name if inbox_name is not None else config.mail_inbox_name
         self.timeout = config.applescript_timeout
 
         # 统计信息
@@ -70,7 +74,10 @@ class AppleScriptArm:
             "applescript_calls": 0
         }
 
-        logger.debug(f"AppleScriptArm initialized: account={account_name}, inbox={inbox_name}, timeout={self.timeout}s")
+        logger.debug(
+            f"AppleScriptArm initialized: account={self.account_name}, "
+            f"inbox={self.inbox_name}, timeout={self.timeout}s"
+        )
 
     def _get_mailbox_name(self, mailbox: str = None) -> str:
         """Get AppleScript mailbox name from user-friendly name.

@@ -111,7 +111,10 @@ class TestCalendarRecurringDiscover:
         assert s["summary"] == "Weekly Sync"
         assert payload["data"]["since"] == "2026-04-01"
         assert payload["data"]["limit"] == 100
-        assert payload["data"]["scanned"] == 100
+        # PR-3 round-7 fix (codex MAJOR 2): scanned 是实际 SQL 扫描的 synced
+        # 邮件数, 不是 discover_limit 近似. seeded fixture 只有 1 个
+        # sync_status='synced' 且 date>=2026-04-01 的邮件 (12345, date=2026-05-15)
+        assert payload["data"]["scanned"] == 1
 
     def test_discover_empty(self, cli_runner, cli_env, seeded_db, monkeypatch):
         async def fake_discover(*args, **kwargs):
