@@ -265,6 +265,22 @@ class TestNotionPageOrphans:
             in payload["error"]["message"]
         )
 
+    def test_archive_missing_auth_exit_4(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+        monkeypatch.delenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", raising=False)
+
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--archive-orphan-pages", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+
+        assert result.exit_code == 4, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_AUTH_FAILED"
+
     def test_archive_orphan_pages_yes_mocked(
         self, cli_runner, cli_env, seeded_db, monkeypatch,
     ):
@@ -280,6 +296,7 @@ class TestNotionPageOrphans:
                 },
             },
         ])
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         result = _invoke(
             cli_runner, "notion", "page-orphans",
             "--no-dry-run", "--archive-orphan-pages", "--yes",
@@ -328,6 +345,7 @@ class TestNotionPageOrphans:
                 },
             },
         ])
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
 
         result = _invoke(
             cli_runner, "notion", "page-orphans",
@@ -359,6 +377,7 @@ class TestNotionPageOrphans:
                 },
             },
         ])
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         result = _invoke(
             cli_runner, "notion", "page-orphans",
             "--no-dry-run", "--insert-stub-metadata", "--yes",
@@ -435,6 +454,7 @@ class TestNotionPageOrphans:
                 },
             },
         ])
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         result = _invoke(
             cli_runner, "notion", "page-orphans",
             "--no-dry-run", "--archive-orphan-pages", "--yes",
@@ -533,6 +553,7 @@ class TestNotionFileLinkAudit:
             "src.cli.commands.notion.NotionClient",
             lambda **kwargs: fake_client,
         )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
 
         result = _invoke(
             cli_runner, "notion", "file-link-audit",
@@ -583,6 +604,7 @@ class TestNotionFileLinkAudit:
             "src.cli.commands.notion.NotionClient",
             lambda **kwargs: fake_client,
         )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
 
         result = _invoke(
             cli_runner, "notion", "file-link-audit",
@@ -621,6 +643,7 @@ class TestNotionFileLinkAudit:
             "src.cli.commands.notion.NotionClient",
             lambda **kwargs: fake_client,
         )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
 
         result = _invoke(
             cli_runner, "notion", "file-link-audit",
@@ -645,6 +668,21 @@ class TestNotionFileLinkAudit:
         payload = _last_json(result.output)
         assert payload["error"]["code"] == "E_INVALID_ARG"
         assert "requires --yes" in payload["error"]["message"]
+
+    def test_audit_real_run_missing_auth_exit_4(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+        monkeypatch.delenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", raising=False)
+
+        result = _invoke(
+            cli_runner, "notion", "file-link-audit",
+            "--no-dry-run", "--yes", "-o", "json", db_path=seeded_db,
+        )
+
+        assert result.exit_code == 4, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_AUTH_FAILED"
 
     def test_audit_max_files_caps(
         self, cli_runner, cli_env, seeded_db, monkeypatch, tmp_path,
@@ -696,6 +734,7 @@ class TestNotionFileLinkAudit:
             "src.cli.commands.notion.NotionClient",
             lambda **kwargs: fake_client,
         )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
 
         result = _invoke(
             cli_runner, "notion", "file-link-audit",

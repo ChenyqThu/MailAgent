@@ -61,6 +61,7 @@ class TestCalendarExpand:
 
         import src.calendar_notion.expansion as expansion_mod
         import src.cli.commands.calendar as calendar_cmd
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         monkeypatch.setattr(expansion_mod, "run_expansion_tick", fake_run)
         monkeypatch.setattr(calendar_cmd, "_build_meeting_sync", lambda sync_store: object())
 

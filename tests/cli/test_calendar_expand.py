@@ -75,6 +75,25 @@ def test_dry_run_no_series(cli_runner, cli_env, seeded_db, monkeypatch):
     assert payload["data"]["total_series"] == 0
 
 
+def test_real_run_missing_auth_exit_4(cli_runner, cli_env, seeded_db, monkeypatch):
+    monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+    monkeypatch.delenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", raising=False)
+
+    result = _invoke(
+        cli_runner,
+        "calendar",
+        "expand",
+        "--no-dry-run",
+        "-o",
+        "json",
+        db_path=seeded_db,
+    )
+
+    assert result.exit_code == 4, result.output
+    payload = _last_json(result.output)
+    assert payload["error"]["code"] == "E_AUTH_FAILED"
+
+
 def test_real_run_no_yes_fine(cli_runner, cli_env, seeded_db, monkeypatch):
     async def fake_run(sync_store, meeting_sync, horizon_weeks, *, dry_run=False):
         return {"series_scanned": 0, "occurrences_synced": 0, "errors": []}
@@ -82,6 +101,7 @@ def test_real_run_no_yes_fine(cli_runner, cli_env, seeded_db, monkeypatch):
     import src.calendar_notion.expansion as expansion_mod
     import src.cli.commands.calendar as calendar_cmd
 
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
     monkeypatch.setattr(expansion_mod, "run_expansion_tick", fake_run)
     monkeypatch.setattr(calendar_cmd, "_build_meeting_sync", lambda sync_store: object())
 
@@ -111,6 +131,7 @@ def test_real_run_horizon_weeks_4_mocked(cli_runner, cli_env, seeded_db, monkeyp
     import src.calendar_notion.expansion as expansion_mod
     import src.cli.commands.calendar as calendar_cmd
 
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
     monkeypatch.setattr(expansion_mod, "run_expansion_tick", fake_run)
     monkeypatch.setattr(calendar_cmd, "_build_meeting_sync", lambda sync_store: object())
 
@@ -135,6 +156,39 @@ def test_real_run_horizon_weeks_4_mocked(cli_runner, cli_env, seeded_db, monkeyp
     assert payload["data"]["errors"] == []
 
 
+def test_real_run_with_errors_returns_exit_6(
+    cli_runner, cli_env, seeded_db, monkeypatch,
+):
+    async def fake_run(sync_store, meeting_sync, horizon_weeks, *, dry_run=False):
+        return {
+            "series_scanned": 1,
+            "occurrences_synced": 1,
+            "errors": [{"series_uid": "S1", "error": "sync_event failed: boom"}],
+        }
+
+    import src.calendar_notion.expansion as expansion_mod
+    import src.cli.commands.calendar as calendar_cmd
+
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+    monkeypatch.setattr(expansion_mod, "run_expansion_tick", fake_run)
+    monkeypatch.setattr(calendar_cmd, "_build_meeting_sync", lambda sync_store: object())
+
+    result = _invoke(
+        cli_runner,
+        "calendar",
+        "expand",
+        "--no-dry-run",
+        "-o",
+        "json",
+        db_path=seeded_db,
+    )
+
+    assert result.exit_code == 6, result.output
+    payload = _last_json(result.output)
+    assert payload["data"]["errors"][0]["series_uid"] == "S1"
+    assert payload["data"]["occurrences_synced"] == 1
+
+
 def test_error_handling(cli_runner, cli_env, seeded_db, monkeypatch):
     async def fake_run(sync_store, meeting_sync, horizon_weeks, *, dry_run=False):
         raise RuntimeError("boom")
@@ -142,6 +196,7 @@ def test_error_handling(cli_runner, cli_env, seeded_db, monkeypatch):
     import src.calendar_notion.expansion as expansion_mod
     import src.cli.commands.calendar as calendar_cmd
 
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
     monkeypatch.setattr(expansion_mod, "run_expansion_tick", fake_run)
     monkeypatch.setattr(calendar_cmd, "_build_meeting_sync", lambda sync_store: object())
 

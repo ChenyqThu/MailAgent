@@ -21,9 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -32,13 +30,13 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from loguru import logger
+from loguru import logger  # noqa: E402
 
-from src.config import config
-from src.mail.applescript_arm import AppleScriptArm
-from src.mail.icalendar_parser import ICalendarParser
-from src.mail.meeting_sync import MeetingInviteSync
-from src.mail.sync_store import SyncStore
+from src.config import config  # noqa: E402
+from src.mail.applescript_arm import AppleScriptArm  # noqa: E402
+from src.mail.icalendar_parser import ICalendarParser  # noqa: E402
+from src.mail.meeting_sync import MeetingInviteSync  # noqa: E402
+from src.mail.sync_store import SyncStore  # noqa: E402
 
 
 def _has_calendar_part(source: str) -> bool:

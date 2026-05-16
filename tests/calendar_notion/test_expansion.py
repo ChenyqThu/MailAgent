@@ -77,6 +77,25 @@ async def test_run_expansion_tick_one_series_two_occurrences():
 
 
 @pytest.mark.asyncio
+async def test_failed_sync_does_not_advance_watermark():
+    sync_store = FakeSyncStore([_series_row("S1", count=2)])
+    meeting_sync = MagicMock()
+    meeting_sync.calendar_sync.sync_event = AsyncMock(
+        side_effect=[("created", "page"), RuntimeError("boom")]
+    )
+
+    result = await run_expansion_tick(sync_store, meeting_sync, horizon_weeks=4)
+
+    assert result["series_scanned"] == 1
+    assert result["occurrences_synced"] == 1
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["series_uid"] == "S1"
+    assert "boom" in result["errors"][0]["error"]
+    assert meeting_sync.calendar_sync.sync_event.await_count == 2
+    assert sync_store.expanded_until_calls == []
+
+
+@pytest.mark.asyncio
 async def test_run_expansion_tick_dry_run_mode():
     sync_store = FakeSyncStore([_series_row("uid-dry", count=2)])
     meeting_sync = MagicMock()

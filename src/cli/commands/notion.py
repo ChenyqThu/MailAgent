@@ -304,6 +304,11 @@ def notion_page_orphans(
         raise emit_cli_error(cli, CliInvalidArgError(
             f"--max-pages must be > 0, got {max_pages}",
         ))
+    if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
 
     from src.notion.client import NotionClient
 
@@ -565,6 +570,11 @@ def notion_file_link_audit(
         raise emit_cli_error(cli, CliInvalidArgError(
             f"--max-files must be > 0, got {max_files}",
         ))
+    if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
 
     if internal_id is not None:
         if cli.email_repo.get_metadata(internal_id) is None:

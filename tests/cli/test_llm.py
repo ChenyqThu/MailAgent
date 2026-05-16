@@ -6,8 +6,6 @@ import sqlite3
 import time
 from pathlib import Path
 
-import pytest
-
 from tests.cli.conftest import extract_last_json_object as _last_json
 
 
@@ -41,7 +39,6 @@ def _patch_llm_runner(monkeypatch, run_returns):
     monkeypatch.setattr(runner_mod.LLMRunner, "close", fake_close)
     # 同时屏蔽 LLMRunner.__init__ 的 EmailRepository 构造 (默认 sync_store_db_path
     # 可能不存在; 测试用 monkeypatched cfg 路径就够了)
-    orig_init = runner_mod.LLMRunner.__init__
 
     def safe_init(self, *args, **kwargs):
         # 不做真实 client / store 初始化

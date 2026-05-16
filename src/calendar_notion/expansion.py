@@ -79,6 +79,7 @@ async def run_expansion_tick(
     errors: list[dict[str, str]] = []
     for row in rows:
         try:
+            series_failed = False
             invite = reconstruct_invite_from_series_row(row)
             if invite is None:
                 continue
@@ -112,6 +113,7 @@ async def run_expansion_tick(
                     logger.error(
                         f"[expansion] sync_event failed for {occ.event_id[:80]}: {e}"
                     )
+                    series_failed = True
                     errors.append(
                         {
                             "series_uid": row.get("series_uid") or "",
@@ -119,7 +121,7 @@ async def run_expansion_tick(
                         }
                     )
 
-            if not dry_run:
+            if not dry_run and not series_failed:
                 sync_store.update_expanded_until(row["series_uid"], cutoff_iso)
         except Exception as e:
             logger.error(

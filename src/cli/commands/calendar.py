@@ -66,6 +66,11 @@ def calendar_expand(
     sync_store = cli.sync_store
 
     if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
         from src.calendar_notion.expansion import run_expansion_tick
 
         meeting_sync = _build_meeting_sync(sync_store)
@@ -101,6 +106,8 @@ def calendar_expand(
             )
         else:
             emit(cli, data)
+        if data["errors"]:
+            raise typer.Exit(code=6)
         return
 
     now = datetime.now(timezone.utc)
