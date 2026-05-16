@@ -21,6 +21,20 @@ class _AsyncNoop:
         return {"object": "page", "id": kwargs.get("page_id", "")}
 
 
+class _AsyncFailOne:
+    """async functor that raises for one page_id and records every attempt."""
+
+    def __init__(self, failing_page_id: str):
+        self.failing_page_id = failing_page_id
+        self.calls = []
+
+    async def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("page_id") == self.failing_page_id:
+            raise RuntimeError("archive failed")
+        return {"object": "page", "id": kwargs.get("page_id", "")}
+
+
 def _patch_notion_client(monkeypatch, *, pages_update=None, query_results=None):
     """Replace NotionClient with a stub that won't touch the network.
 
@@ -281,6 +295,54 @@ class TestNotionPageOrphans:
         assert stub.calls[0]["page_id"] == "ghost-page-id"
         assert stub.calls[0]["archived"] is True
 
+    def test_archive_partial_failure(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        stub = _AsyncFailOne("ghost-page-2")
+        _patch_notion_client(monkeypatch, pages_update=stub, query_results=[
+            {
+                "id": "ghost-page-1",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost1@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost 1"}]},
+                },
+            },
+            {
+                "id": "ghost-page-2",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost2@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost 2"}]},
+                },
+            },
+            {
+                "id": "ghost-page-3",
+                "properties": {
+                    "Message ID": {
+                        "rich_text": [{"plain_text": "<ghost3@example.com>"}],
+                    },
+                    "Subject": {"title": [{"plain_text": "Ghost 3"}]},
+                },
+            },
+        ])
+
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--archive-orphan-pages", "--yes",
+            "-o", "json", db_path=seeded_db,
+        )
+
+        assert result.exit_code == 6, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["archived"] == ["ghost-page-1", "ghost-page-3"]
+        assert len(payload["data"]["failed"]) == 1
+        assert payload["data"]["failed"][0]["page_id"] == "ghost-page-2"
+        assert "RuntimeError: archive failed" in payload["data"]["failed"][0]["error"]
+        assert len(stub.calls) == 3
+
     def test_insert_stub_metadata_yes_mocked(
         self, cli_runner, cli_env, seeded_db, monkeypatch,
     ):
@@ -385,6 +447,18 @@ class TestNotionPageOrphans:
         assert payload["data"]["max_pages"] == 2
         assert len(stub.calls) == 2
 
+    def test_max_pages_zero_rejected(self, cli_runner, cli_env, seeded_db):
+        result = _invoke(
+            cli_runner, "notion", "page-orphans",
+            "--no-dry-run", "--archive-orphan-pages", "--yes",
+            "--max-pages", "0", "-o", "json", db_path=seeded_db,
+        )
+
+        assert result.exit_code == 2, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+        assert "--max-pages must be > 0" in payload["error"]["message"]
+
 
 # ============================================================
 # US-006: file-link-audit
@@ -482,6 +556,85 @@ class TestNotionFileLinkAudit:
         finally:
             conn.close()
         assert rows[0][0] == "fake-file-id-123"
+
+    def test_audit_upload_local_file_missing(
+        self, cli_runner, cli_env, seeded_db, monkeypatch, tmp_path,
+    ):
+        import sqlite3
+        from unittest.mock import AsyncMock, MagicMock
+
+        missing_file = tmp_path / "missing.pdf"
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            conn.execute(
+                """UPDATE email_attachment
+                   SET local_path = ?, notion_file_id = NULL
+                   WHERE internal_id = ?""",
+                (str(missing_file), 12345),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        fake_client = MagicMock()
+        fake_client.upload_file = AsyncMock()
+        fake_client.close = AsyncMock()
+        monkeypatch.setattr(
+            "src.cli.commands.notion.NotionClient",
+            lambda **kwargs: fake_client,
+        )
+
+        result = _invoke(
+            cli_runner, "notion", "file-link-audit",
+            "--no-dry-run", "--yes", "-o", "json", db_path=seeded_db,
+        )
+
+        assert result.exit_code == 6, result.output
+        payload = _last_json(result.output)
+        assert len(payload["data"]["failed"]) == 1
+        assert "file missing" in payload["data"]["failed"][0]["error"]
+        assert str(missing_file) in payload["data"]["failed"][0]["error"]
+        fake_client.upload_file.assert_not_awaited()
+
+    def test_audit_archive_dead_flag_accepted_but_noop(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        import sqlite3
+        from unittest.mock import AsyncMock, MagicMock
+
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            conn.execute(
+                """UPDATE email_attachment
+                   SET notion_file_id = ?
+                   WHERE internal_id = ?""",
+                ("existing-file-id", 12345),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        fake_client = MagicMock()
+        fake_client.upload_file = AsyncMock()
+        fake_client.close = AsyncMock()
+        monkeypatch.setattr(
+            "src.cli.commands.notion.NotionClient",
+            lambda **kwargs: fake_client,
+        )
+
+        result = _invoke(
+            cli_runner, "notion", "file-link-audit",
+            "--no-dry-run", "--yes", "--archive-dead",
+            "-o", "json", db_path=seeded_db,
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["archive_dead"] is True
+        assert payload["data"]["dead_link_archived"] == []
+        assert payload["data"]["uploaded"] == []
+        assert payload["data"]["failed"] == []
+        fake_client.upload_file.assert_not_awaited()
 
     def test_audit_real_run_requires_yes(self, cli_runner, cli_env, seeded_db):
         result = _invoke(

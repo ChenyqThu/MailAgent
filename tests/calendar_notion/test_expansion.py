@@ -76,6 +76,23 @@ async def test_run_expansion_tick_one_series_two_occurrences():
     assert sync_store.expanded_until_calls[0][0] == "uid-1"
 
 
+@pytest.mark.asyncio
+async def test_run_expansion_tick_dry_run_mode():
+    sync_store = FakeSyncStore([_series_row("uid-dry", count=2)])
+    meeting_sync = MagicMock()
+    meeting_sync.calendar_sync.sync_event = AsyncMock(return_value=("created", "page"))
+
+    result = await run_expansion_tick(
+        sync_store, meeting_sync, horizon_weeks=4, dry_run=True,
+    )
+
+    assert result["series_scanned"] == 1
+    assert result["occurrences_synced"] == 2
+    assert result["errors"] == []
+    meeting_sync.calendar_sync.sync_event.assert_not_awaited()
+    assert sync_store.expanded_until_calls == []
+
+
 def test_reconstruct_invite_from_series_row():
     row = _series_row("uid-2", count=4)
 
@@ -89,3 +106,18 @@ def test_reconstruct_invite_from_series_row():
     assert invite.recurrence_rule == "FREQ=WEEKLY;COUNT=4"
     assert invite.sequence == 3
     assert invite.organizer_email == "alice@example.com"
+
+
+def test_reconstruct_invite_invalid_dtstart(monkeypatch):
+    import src.calendar_notion.expansion as expansion_mod
+
+    logger = MagicMock()
+    monkeypatch.setattr(expansion_mod, "logger", logger)
+    row = _series_row("uid-bad")
+    row.pop("master_dtstart")
+
+    invite = expansion_mod.reconstruct_invite_from_series_row(row)
+
+    assert invite is None
+    logger.warning.assert_called_once()
+    assert "cannot rehydrate series uid-bad" in logger.warning.call_args.args[0]

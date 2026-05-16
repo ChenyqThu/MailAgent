@@ -17,6 +17,33 @@ def _invoke(cli_runner, *args, db_path):
     )
 
 
+def _mock_compare_result(internal_id: int, *, all_match: bool = True) -> dict:
+    diff = {
+        key: ("same", "same" if all_match else "different", all_match)
+        for key in (
+            "category",
+            "action_type",
+            "priority",
+            "action_required",
+            "sender_priority",
+            "language",
+            "daily_digest_date",
+        )
+    }
+    return {
+        "internal_id": internal_id,
+        "subject": f"mail {internal_id}",
+        "mailbox": "收件箱",
+        "ok": True,
+        "fallback_text_len": 100,
+        "sqlite_md_len": 120,
+        "model_a": "test-model",
+        "model_b": "test-model",
+        "diff": diff,
+        "all_match": all_match,
+    }
+
+
 class TestLLMComparePaths:
     def test_dry_run_default(self, cli_runner, cli_env, seeded_db):
         result = _invoke(cli_runner, "-o", "json", db_path=seeded_db)
@@ -39,6 +66,42 @@ class TestLLMComparePaths:
         payload = _xj(result.output)
         assert payload["data"]["sample_size"] == 3
         assert payload["data"]["internal_ids"] == [1, 2, 3]
+
+    def test_dry_run_no_candidates(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        from src.cli.commands import llm as llm_cmd
+
+        monkeypatch.setattr(llm_cmd, "_pick_internal_ids", lambda count, db: [])
+
+        result = _invoke(cli_runner, "-o", "json", db_path=seeded_db)
+
+        assert result.exit_code == 0, result.output
+        payload = _xj(result.output)
+        assert payload["data"]["sample_size"] == 0
+        assert payload["data"]["internal_ids"] == []
+        assert payload["data"]["cost_preview"]["total_emails"] == 0
+
+    def test_dry_run_cost_preview_internal_ids(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        result = _invoke(
+            cli_runner,
+            "--internal-ids",
+            "1,2,3,4,5",
+            "-o",
+            "json",
+            db_path=seeded_db,
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = _xj(result.output)
+        preview = payload["data"]["cost_preview"]
+        assert payload["data"]["sample_size"] == 5
+        assert payload["data"]["internal_ids"] == [1, 2, 3, 4, 5]
+        assert preview["total_emails"] == 5
+        assert preview["estimated_total_tokens"] == 11_000
+        assert preview["estimated_cost_usd"] == 0.033
 
     def test_real_run_requires_yes(self, cli_runner, cli_env, seeded_db):
         result = _invoke(
@@ -121,6 +184,49 @@ class TestLLMComparePaths:
         assert payload["data"]["summary"]["all_match_pct"] == 100.0
         assert payload["data"]["summary"]["verdict"] == "pass"
         assert process_mock.await_count == 4
+
+    def test_real_run_partial_failure(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        from src.cli.commands import llm as llm_cmd
+
+        async def fake_compare_one(internal_id, arm, reader, store):
+            results = {
+                1: _mock_compare_result(1, all_match=True),
+                2: _mock_compare_result(2, all_match=False),
+                3: {
+                    "internal_id": 3,
+                    "ok": False,
+                    "error": "metadata not found",
+                },
+            }
+            return results[internal_id]
+
+        monkeypatch.setattr(llm_cmd, "_ensure_compare_deps", lambda: None)
+        monkeypatch.setattr(llm_cmd, "AppleScriptArm", MagicMock())
+        monkeypatch.setattr(llm_cmd, "EmailReader", MagicMock())
+        monkeypatch.setattr(llm_cmd, "AttachmentStore", MagicMock())
+        monkeypatch.setattr(llm_cmd, "EmailRepository", MagicMock())
+        monkeypatch.setattr(llm_cmd, "_compare_one", fake_compare_one)
+
+        result = _invoke(
+            cli_runner,
+            "--no-dry-run",
+            "--yes",
+            "--internal-ids",
+            "1,2,3",
+            "-o",
+            "json",
+            db_path=seeded_db,
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = _xj(result.output)
+        summary = payload["data"]["summary"]
+        assert summary["ok_count"] == 2
+        assert summary["total"] == 3
+        assert summary["all_match_pct"] == 50.0
+        assert summary["verdict"] == "fail"
 
     def test_count_invalid_zero(self, cli_runner, cli_env, seeded_db):
         result = _invoke(

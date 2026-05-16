@@ -39,6 +39,42 @@ def test_dry_run_default(cli_runner, cli_env, seeded_db, monkeypatch):
     assert payload["data"]["expanded"][0]["series_uid"] == "uid-1"
 
 
+def test_horizon_weeks_zero_rejected(cli_runner, cli_env, seeded_db):
+    result = _invoke(
+        cli_runner,
+        "calendar",
+        "expand",
+        "--horizon-weeks",
+        "0",
+        "-o",
+        "json",
+        db_path=seeded_db,
+    )
+
+    assert result.exit_code == 2, result.output
+    payload = _last_json(result.output)
+    assert payload["error"]["code"] == "E_INVALID_ARG"
+    assert "--horizon-weeks must be > 0" in payload["error"]["message"]
+
+
+def test_dry_run_no_series(cli_runner, cli_env, seeded_db, monkeypatch):
+    from src.mail.sync_store import SyncStore
+
+    monkeypatch.setattr(
+        SyncStore,
+        "iter_series_needing_expansion",
+        lambda self, cutoff_iso: iter([]),
+    )
+
+    result = _invoke(cli_runner, "calendar", "expand", "-o", "json", db_path=seeded_db)
+
+    assert result.exit_code == 0, result.output
+    payload = _last_json(result.output)
+    assert payload["data"]["mode"] == "dry_run"
+    assert payload["data"]["expanded"] == []
+    assert payload["data"]["total_series"] == 0
+
+
 def test_real_run_no_yes_fine(cli_runner, cli_env, seeded_db, monkeypatch):
     async def fake_run(sync_store, meeting_sync, horizon_weeks, *, dry_run=False):
         return {"series_scanned": 0, "occurrences_synced": 0, "errors": []}
