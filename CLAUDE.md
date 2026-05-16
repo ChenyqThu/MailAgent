@@ -74,44 +74,80 @@ pm2 logs <name> --lines 20 --nostream
 - LibreOffice headless（Office→PDF 转换）
 - pandas + python-calamine（xlsx→CSV 转换）
 
-## CLI（v4 Phase 5 起接管 scripts/*，PR-2 MVP 已上线）
+## CLI（v4 Phase 5 起接管 scripts/*，PR-3 已上线）
 
 `mailagent` CLI 提供 agent-friendly 接口给本机调用 / 外部 agent / 看板。底层走 `src/cli/`（typer + rich），所有数据从 SQLite SSoT（`data/sync_store.db`）+ EmailRepository 读，写命令调 NotionSync。
 
 **安装**：
 ```bash
-pip install -e ".[cli]"     # 装 typer 0.12-0.14 / click 8.1.x / rich 13-15 / pyyaml 6
-which mailagent             # 应是 venv/bin/mailagent
-mailagent --version         # 3.0.0
-mailagent --help            # 列 email + admin + global flags
+pip install -e ".[cli,dev]"     # cli: typer/rich/pyyaml; dev: pytest + jsonschema>=4.18 + referencing
+which mailagent                  # 应是 venv/bin/mailagent
+mailagent --version              # 3.0.0
+mailagent --help                 # 列 7 个 group (email/admin/attachment/llm/notion/calendar/debug) + global flags
 ```
 
-**当前 (PR-2 MVP) 支持的命令**：
+**当前 (PR-3) 支持的命令** — 7 个 group：
 
-| 命令 | 说明 | 范围 |
-|---|---|---|
-| `email get <internal_id> [--include {body,attachments,all}]` | 读单封 metadata + 可选 body/attachments | 读 |
-| `email list [--mailbox/--status/--since/--from/--subject/--is-read/--is-flagged/--has-notion/--limit/--offset]` | 列表 (text 表格 / json wrapper / ndjson 流) | 读 |
-| `email body <internal_id> [--format {markdown,html,raw}]` | 邮件正文（markdown 默认；raw 仅哈希） | 读 |
-| `email search <query> [--mailbox/--since/--until/--limit/--no-snippet]` | FTS5 全文搜索 | 读 |
-| `email resync <internal_id> [--dry-run/--replace-existing/--no-parent]` | 重传单封到 Notion（PR-4 才接 batch） | **写** |
-| `admin stats [--section]` | 服务统计 (PR-2 仅 sync_store live_query; 其余 _source: not_implemented_in_pr2) | 读 |
-| `admin health` | SQLite 可达 + db_version + 必备表检查 (exit 0/1) | 读 |
-| `admin db-version` | 打印 db_version + expected + compatible | 读 |
+读命令（只读, 无 auth）：
+
+| 命令 | 说明 |
+|---|---|
+| `email get <internal_id> [--include {body,attachments,all}]` | 读单封 metadata + 可选 body/attachments |
+| `email list [--mailbox/--status/--since/--from/--subject/--is-read/--is-flagged/--has-notion/--limit/--offset]` | 列表 (text 表格 / json wrapper / ndjson 流) |
+| `email body <internal_id> [--format {markdown,html,raw}]` | 邮件正文（markdown 默认；raw 仅哈希） |
+| `email search <query> [--mailbox/--since/--until/--limit/--no-snippet]` | FTS5 全文搜索 |
+| `admin stats [--section]` | 服务统计 (PR-2 仅 sync_store live_query; 其余 _source: not_implemented_in_pr2) |
+| `admin health` | SQLite 可达 + db_version + 必备表检查 (exit 0/1) |
+| `admin db-version` | 打印 db_version + expected + compatible |
+| `attachment list <internal_id>` | 列邮件附件（含 derived） |
+| `attachment download <attachment_id> [--dest PATH]` | 默认 stdout 二进制 / --dest 写文件返回 JSON 元信息 |
+| `llm selftest` | LLM gateway 健康检查（不烧 token） |
+| `llm stats [--days N]` | llm_processing 表统计 (status / cost / cache hit / latency) |
+| `llm compare-paths --dry-run` | R-15 灰度质量闸 plan（实跑 PR-3 推迟） |
+| `notion page-orphans --dry-run` | 扫 Notion 有 page 但本地无 metadata 的孤儿 |
+| `notion file-link-audit [--internal-id N] --dry-run` | 审计 email_attachment.notion_file_id 状态 |
+| `calendar expand [--horizon-weeks W] --dry-run` | 列待展开的 recurring_series（实跑由 main.py loop） |
+| `calendar recurring discover [--since DATE]` | 扫 SyncStore 找带 RRULE 的邀请 |
+| `debug email-source <internal_id> [--save-to PATH]` | 打印 / 保存 raw MIME（AppleScript 重抽） |
+| `debug mail-structure` | 列 Mail.app accounts + mailboxes |
+| `debug inline-images <internal_id>` | 分析 cid: 引用 vs attachment 行 |
+| `debug applescript-fetch <internal_id> [--mailbox X]` | 仅跑 AppleScriptArm.fetch（绕 SQLite SSoT） |
+| `debug notion-page <page_id>` | Notion API 拉 page properties summary |
+
+写命令（需 auth；`--dry-run` 跳过）：
+
+| 命令 | 说明 |
+|---|---|
+| `email resync <internal_id> [--dry-run/--replace-existing/--no-parent]` | 重传单封到 Notion（PR-4 才接 batch） |
+| `attachment derive <internal_id> [--dry-run]` | PR-3 stub — 实现在 PR-4 `backfill derivatives` |
+| `attachment cleanup-orphans [--no-dry-run --yes]` | 删 data/attachments 下孤儿目录 |
+| `llm run <internal_id> [--dry-run/--force/--no-overwrite]` | 单封 LLM 分类 + Notion 写 AI 字段 |
+| `llm retry-failed [--limit N --dry-run]` | 跑 LLM retry queue |
+| `notion resync <internal_id>` | alias of `email resync` |
+| `notion update-flag <internal_id> [--is-read/--is-flagged/--processing-status]` | 手改 Notion 邮件页 flags |
+| `notion archive <page_id> --yes` | archive Notion page (move to Trash) |
+| `calendar recurring replay [--internal-id N \| --ids LIST --dry-run]` | 重跑指定 internal_id 的邀请 |
 
 **全局 flags**（写在 subcommand **之前**，例 `mailagent -o json email get 53675`）：`-o/--output {text,json,yaml,ndjson}` / `-q/--quiet` / `-v/--verbose` / `--db-path` / `--api-key` / `--config` / `--no-color` / `--version`。每个 leaf 也暴露 `-o` 供 gh/kubectl 风格的"flag 后置"使用。
 
 **写命令鉴权**（RFC §5.3）：默认要 token。设 `MAILAGENT_CLI_API_KEY` 后写命令必须经 `--api-key` 提供同值；服务端未配且 `MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true` 时显式放行（仅 dev 模式）。`--dry-run` 跳过鉴权。
 
-**JSON Schema 契约**：[`docs/cli-schema/`](./docs/cli-schema/) 含 9 个 schema (`email-get/list/body/search/resync` + `admin-stats/health/db-version` + `_common`) + `error-codes.md` 列 7 个 `E_*` enum。所有 wrapper 形如 `{status, schema_version: 1, data | error, meta: {duration_ms, ...}}` (RFC §5.1.2)。
+**JSON Schema 契约**：[`docs/cli-schema/`](./docs/cli-schema/) 含 28 个 schema 文件 + `_common.schema.json` + `error-codes.md` 列 9 个 `E_*` enum（新增 `E_LLM_FAILED` / `E_NOT_IMPLEMENTED`）。所有 wrapper 形如 `{status, schema_version: 1, data | error, meta: {duration_ms, ...}}` (RFC §5.1.2)。
 
-**详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7。PR-3 / PR-4 后续补 `attachment / llm / backfill / notion / project-progress / init / calendar / debug` 子命令 + 长任务批处理契约（batch / PM2 检测 / checkpoint）。`scripts/*` 在 PR-5 迁移；当前仍可用。
+**详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7。PR-4 后续补 `backfill / project-progress / init` 批量命令 + 长任务批处理契约（batch / PM2 检测 / checkpoint）+ R-06 v4_rollout 持久化。`scripts/*` 在 PR-5 迁移；当前仍可用。
 
 **典型 agent 调用样例**：
 ```bash
 mailagent -o json email get 53675 | jq .data.subject
 mailagent -o json email search "redis timeout" --mailbox 收件箱 --limit 20 \
   | jq '.data[] | {id: .internal_id, snippet}'
+mailagent attachment list 53675 -o json | jq '.data | length'
+mailagent attachment download 1024 --dest /tmp/out.pdf -o json
+mailagent llm selftest -o json | jq .data.healthy
+mailagent llm stats --days 7 -o json | jq .data.cost.cache_hit_rate_pct
+mailagent notion file-link-audit --internal-id 53675 -o json
+mailagent calendar recurring discover --since 2026-04-01 -o json
+mailagent debug mail-structure -o json
 mailagent email resync 53675 --dry-run -o json
 mailagent admin health -o json | jq .data.healthy
 ```

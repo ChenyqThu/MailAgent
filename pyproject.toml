@@ -12,7 +12,8 @@ mailagent = "src.cli.main:app"
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
-    "jsonschema>=4.0,<5",
+    "jsonschema>=4.18,<5",
+    "referencing>=0.30",
 ]
 cli = [
     "typer>=0.12,<0.14",
