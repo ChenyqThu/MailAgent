@@ -74,7 +74,7 @@ pm2 logs <name> --lines 20 --nostream
 - LibreOffice headless（Office→PDF 转换）
 - pandas + python-calamine（xlsx→CSV 转换）
 
-## CLI（v4 Phase 5 起接管 scripts/*，PR-3 已上线）
+## CLI（v4 Phase 5 起接管 scripts/*，PR-5 全部 inline 已上线）
 
 `mailagent` CLI 提供 agent-friendly 接口给本机调用 / 外部 agent / 看板。底层走 `src/cli/`（typer + rich），所有数据从 SQLite SSoT（`data/sync_store.db`）+ EmailRepository 读，写命令调 NotionSync。
 
@@ -86,7 +86,7 @@ mailagent --version              # 3.0.0
 mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/notion/calendar/debug + backfill/project-progress/init) + global flags
 ```
 
-**当前 (PR-4) 支持的命令** — 10 个 group：
+**当前 (PR-5) 支持的命令** — 10 个 group（全部 inline，PR-5 起 5 个 stub 接通 + 7 个 subprocess wrap 改 inline，scripts/* 加 DeprecationWarning + dev/archive 子目录归位）：
 
 读命令（只读, 无 auth）：
 
@@ -103,10 +103,10 @@ mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/
 | `attachment download <attachment_id> [--dest PATH]` | 默认 stdout 二进制 / --dest 写文件返回 JSON 元信息 |
 | `llm selftest` | LLM gateway 健康检查（不烧 token） |
 | `llm stats [--days N]` | llm_processing 表统计 (status / cost / cache hit / latency) |
-| `llm compare-paths --dry-run` | R-15 灰度质量闸 plan（实跑 PR-3 推迟） |
-| `notion page-orphans --dry-run` | 扫 Notion 有 page 但本地无 metadata 的孤儿 |
-| `notion file-link-audit [--internal-id N] --dry-run` | 审计 email_attachment.notion_file_id 状态 |
-| `calendar expand [--horizon-weeks W] --dry-run` | 列待展开的 recurring_series（实跑由 main.py loop） |
+| `llm compare-paths [--count N \| --internal-ids LIST] [--dry-run/--no-dry-run] [--yes]` | R-15 灰度质量闸（PR-5 真实现：默认 dry-run + cost preview，实跑 `--no-dry-run --yes` 双路径 diff AILabels） |
+| `notion page-orphans --dry-run` | 扫 Notion 有 page 但本地无 metadata 的孤儿（PR-5 加 `--archive-orphan-pages` / `--insert-stub-metadata` 真修复） |
+| `notion file-link-audit [--internal-id N] --dry-run` | 审计 email_attachment.notion_file_id 状态（PR-5 加 `--no-dry-run --yes` 真修复：NULL → upload） |
+| `calendar expand [--horizon-weeks W] [--dry-run/--no-dry-run]` | PR-5 真实现：单次 expansion tick（取代 main.py loop 触发；逻辑抽到 `src/calendar_notion/expansion.py:run_expansion_tick`） |
 | `calendar recurring discover [--since DATE]` | 扫 SyncStore 找带 RRULE 的邀请 |
 | `debug email-source <internal_id> [--save-to PATH]` | 打印 / 保存 raw MIME（AppleScript 重抽） |
 | `debug mail-structure` | 列 Mail.app accounts + mailboxes |
@@ -119,12 +119,12 @@ mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/
 | 命令 | 说明 |
 |---|---|
 | `email resync <internal_id\|--range LO-HI\|--ids 1,2,3> [--dry-run/--replace-existing/--no-parent/--max-failures/--resume-from/--progress-every/--allow-concurrent]` | 重传到 Notion（PR-4 batch + 长任务契约：SIGINT 二次 / 熔断 / checkpoint resume / PM2 检测） |
-| `attachment derive <internal_id> [--dry-run]` | PR-3 stub — alias 到 `backfill derivatives` (PR-4 推荐路径) |
+| `attachment derive <internal_id> [--dry-run]` | PR-5 alias → `backfill derivatives` (deprecation warning + `data.deprecated_alias=true`) |
 | `attachment cleanup-orphans [--no-dry-run --yes]` | 删 data/attachments 下孤儿目录 |
-| `backfill body [--since-date/--until-date/--mailbox/--internal-ids/--all/--limit/--force/--dry-run]` | v4 历史邮件正文 backfill (PR-4, subprocess wrap scripts/backfill_email_body.py) |
-| `backfill derivatives [--internal-id N --dry-run]` | v4 衍生附件 (docx→PDF / xlsx→CSV) 补齐 (PR-4) |
-| `project-progress sync [--internal-id/--all-history/--limit/--sheets/--dry-run/--force/--backfill-project-start/--first-migration-dry-run]` | 项目周报同步 (PR-4, subprocess wrap) |
-| `init {fetch-cache,analyze,fix-properties,fix-critical,update-parents,sync-new,all} [...]` | 初始化同步 7 个 sub-action (PR-4, subprocess wrap scripts/initial_sync.py) |
+| `backfill body [--since-date/--until-date/--mailbox/--internal-ids/--all/--limit/--force/--dry-run/--resume-from/--retry-dead]` | v4 历史邮件正文 backfill (PR-5 inline + LongTaskContext: 真 max-failures / checkpoint resume / SIGINT 二次 / dead-letter 表) |
+| `backfill derivatives [--internal-id N --dry-run]` | v4 衍生附件 (docx→PDF / xlsx→CSV) 补齐 (PR-5 inline) |
+| `project-progress sync [--internal-id/--all-history/--limit/--sheets/--dry-run/--force/--backfill-project-start/--first-migration-dry-run]` | 项目周报同步 (PR-5 inline 直调 ProjectProgressRunner) |
+| `init {fetch-cache,analyze,fix-properties,fix-critical,update-parents,sync-new,all} [...]` | 初始化同步 7 个 sub-action (PR-5 inline 直调 InitialSync) |
 | `llm run <internal_id> [--dry-run/--force/--no-overwrite]` | 单封 LLM 分类 + Notion 写 AI 字段 |
 | `llm retry-failed [--limit N --dry-run]` | 跑 LLM retry queue |
 | `notion resync <internal_id>` | alias of `email resync` |
@@ -134,9 +134,9 @@ mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/
 | `admin dead-letter list [--limit/--mailbox]` | 列 dead_letter 邮件 (PR-4 读命令, 无 auth) |
 | `admin dead-letter retry <internal_id>` | 重置 dead_letter 为 pending (PR-4) |
 | `admin cleanup-deadletter [--older-than N --no-dry-run --yes]` | 清理超 N 天的 dead_letter (PR-4, 内置) |
-| `admin cleanup-syncstore [--no-dry-run --yes]` | 扫"应删未删"的 SQLite 记录 (PR-4, subprocess wrap) |
-| `admin cleanup-duplicates [--no-dry-run --yes]` | 扫 message_id 重复的记录 (PR-4) |
-| `admin repair-parents [--thread-id ID --no-dry-run --yes]` | 修复 Notion Parent Item 断链 (PR-4) |
+| `admin cleanup-syncstore [--no-dry-run --yes]` | dry-run → show_stats; --no-dry-run --yes → reset_sync_status (PR-5 inline) |
+| `admin cleanup-duplicates [--no-dry-run --yes]` | 扫 message_id 重复的 Notion page → archive 重复 (PR-5 inline) |
+| `admin repair-parents [--thread-id ID --no-dry-run --yes]` | 修复 Notion Parent Item 断链 (PR-5 inline NotionDBCleaner.run parent_only=true) |
 
 **PR-4 长任务退出码体系**（RFC §5.2 / `email resync` batch / `backfill` / `init`）：
 
@@ -157,7 +157,7 @@ Batch 命令自动写 `cli_checkpoints` 表（每 N=50 unit）；中断后用同
 
 **JSON Schema 契约**：[`docs/cli-schema/`](./docs/cli-schema/) 含 45+ schema 文件（含 `_common.schema.json`）+ `error-codes.md` 列 11 个 `E_*` enum（PR-4 新增 `E_MAX_FAILURES` / `E_PM2_RUNNING`）。所有 wrapper 形如 `{status, schema_version: 1, data | error, meta: {duration_ms, ...}}` (RFC §5.1.2)。
 
-**详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7。PR-4 已 ship: `backfill / project-progress / init` 批量命令 + 长任务批处理契约（batch / SIGINT 二次 / 熔断 / PM2 检测 / checkpoint resume）+ R-06 v4_rollout 持久化（NotionSync 内存累计 → 60s flush → `v4_rollout_stats` 表 → admin stats `--section v4_rollout`）+ DB_VERSION 5→6。`scripts/*` 在 PR-5 迁移；当前仍可用。
+**详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7 + [`docs/pr5-handoff-scripts-migration.md`](./docs/pr5-handoff-scripts-migration.md)。**PR-5 已 ship**: 5 个 stub 真接通（llm compare-paths / notion page-orphans / notion file-link-audit / calendar expand / attachment derive）+ 7 个 subprocess wrap 全部 inline 化（backfill body / backfill derivatives / project-progress sync / init {7 actions} / admin cleanup-syncstore / cleanup-duplicates / repair-parents）+ `scripts/dev/` + `scripts/archive/` 子目录归位（29 → dev，4 → archive）+ 11 个 module-with-deprecation 顶层脚本（旧用法 `python scripts/foo.py …` 仍可用 + stderr DeprecationWarning）。DB_VERSION 仍 6，10 个 CLI group / 45+ schema / 退出码体系（0/1/2/4/5/6/7/8/9/130）不变。pytest 650 passed。PR-6 见 [`docs/pr6-handoff-deprecation-cleanup.md`](./docs/pr6-handoff-deprecation-cleanup.md)（4 周 release window 后删 thin wrappers）。
 
 **典型 agent 调用样例**：
 ```bash
