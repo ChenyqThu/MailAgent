@@ -248,7 +248,10 @@ class NewWatcher:
         # PR-4 US-008: 启动 v4_rollout flush loop (RFC §8 选项 A)
         # 每 60s 把 NotionSync 内存累计的路由命中 / miss / error 写一行到
         # v4_rollout_stats 表; admin stats 读最新行 + staleness.
-        asyncio.create_task(self._flush_v4_rollout_stats_loop())
+        # 保存 task 引用避免 Python 3.11 asyncio 弱引用 GC (生产 3h 0 row 实证).
+        self._rollout_flush_task = asyncio.create_task(
+            self._flush_v4_rollout_stats_loop()
+        )
 
         # 主循环
         while self._running:
