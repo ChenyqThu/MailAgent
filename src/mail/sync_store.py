@@ -92,7 +92,9 @@ class SyncStore:
     """邮件同步状态存储 - v3 架构（internal_id 为主键）"""
 
     # 数据库版本，用于迁移检测
-    DB_VERSION = 3
+    # v3 (2026-01): internal_id 主键 + 合并 sync_failures
+    # v4 (2026-05): 新增 email_body + email_attachment（body 作为一等公民进 SQLite，SSoT 切换）
+    DB_VERSION = 4
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -114,6 +116,7 @@ class SyncStore:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")  # v4: CASCADE / SET NULL 生效必需
         return conn
 
     @contextmanager
@@ -267,6 +270,68 @@ class SyncStore:
         # 兼容性：保留 sync_failures 表（如果存在，用于迁移）
         # 新代码不再使用此表
 
+        # === v4: email_body 表（邮件正文作为一等公民进 SQLite）===
+        # 详见 docs/architecture_v4_sqlite_ssot.md §4.1
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_body (
+                internal_id INTEGER PRIMARY KEY,
+                message_id TEXT,
+                body_html TEXT,
+                body_markdown TEXT,
+                body_format TEXT,
+                body_size_bytes INTEGER,
+                has_inline_images INTEGER DEFAULT 0,
+                raw_mime_sha256 TEXT,
+                fetched_at REAL NOT NULL,
+                fetched_source TEXT NOT NULL,
+                schema_version INTEGER DEFAULT 1,
+                FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_body_message_id
+            ON email_body(message_id) WHERE message_id IS NOT NULL
+        """)
+
+        # === v4: email_attachment 表（附件元数据，二进制落本地 data/attachments/{internal_id}/）===
+        # 详见 docs/architecture_v4_sqlite_ssot.md §4.2
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_attachment (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                internal_id INTEGER NOT NULL,
+                content_id TEXT,
+                filename TEXT NOT NULL,
+                content_type TEXT,
+                size_bytes INTEGER,
+                is_inline INTEGER DEFAULT 0,
+                local_path TEXT,
+                sha256 TEXT,
+                derived_from INTEGER,
+                derived_format TEXT,
+                notion_file_id TEXT,
+                notion_block_id TEXT,
+                created_at REAL NOT NULL,
+                schema_version INTEGER DEFAULT 1,
+                FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE,
+                FOREIGN KEY (derived_from) REFERENCES email_attachment(id) ON DELETE SET NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_attachment_internal
+            ON email_attachment(internal_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_attachment_cid
+            ON email_attachment(content_id) WHERE content_id IS NOT NULL
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_attachment_sha256
+            ON email_attachment(sha256) WHERE sha256 IS NOT NULL
+        """)
+
+        # FOREIGN KEY 约束需要 PRAGMA 显式打开（默认关闭，向下兼容）
+        cursor.execute("PRAGMA foreign_keys = ON")
+
         # 更新数据库版本
         cursor.execute("""
             INSERT OR REPLACE INTO sync_state (key, value, updated_at)
@@ -275,7 +340,7 @@ class SyncStore:
 
         conn.commit()
         conn.close()
-        logger.debug("Database tables initialized (v3)")
+        logger.debug(f"Database tables initialized (v{self.DB_VERSION})")
 
     # ==================== 同步状态操作 ====================
 
