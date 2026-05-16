@@ -17,7 +17,7 @@ from src.cli.exceptions import (
     CliInvalidArgError,
     CliNotFoundError,
 )
-from src.cli.output import emit, emit_cli_error
+from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -29,22 +29,10 @@ app = typer.Typer(
 )
 
 
-_VALID_LEAF_OUTPUT = ("text", "json", "yaml", "ndjson")
 PROCESSING_STATUS_ENUM = {
     "未处理", "AI Reviewed", "已同步", "已完成",
     "草稿已创建", "Reply Draft Created",
 }
-
-
-def _apply_local_output(ctx: typer.Context, output: Optional[str]) -> None:
-    if output is None or ctx.obj is None:
-        return
-    if output.lower() not in _VALID_LEAF_OUTPUT:
-        raise typer.BadParameter(
-            f"--output must be one of {_VALID_LEAF_OUTPUT}, got {output!r}",
-            param_hint="-o/--output",
-        )
-    ctx.obj.output = output.lower()
 
 
 # ============================================================

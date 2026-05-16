@@ -24,6 +24,27 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 1
 
 
+# Leaf-command 输出格式校验 (PR-3: 5 个新命令组用同一份, 别重复定义).
+VALID_LEAF_OUTPUT = ("text", "json", "yaml", "ndjson")
+
+
+def apply_local_output(ctx: "typer.Context", output: Optional[str]) -> None:
+    """允许 ``-o json`` 写在 leaf command 后 (gh/kubectl 风格).
+
+    parent typer App 的全局 ``-o`` 只在 subcommand **之前** 生效;
+    每个 leaf 暴露同名 flag, 若用户在 leaf 后传则覆盖 ``ctx.obj.output``。
+    未知值走 typer.BadParameter (exit 2, 与 RFC §5.2 一致), 不 silent fallback。
+    """
+    if output is None or ctx.obj is None:
+        return
+    if output.lower() not in VALID_LEAF_OUTPUT:
+        raise typer.BadParameter(
+            f"--output must be one of {VALID_LEAF_OUTPUT}, got {output!r}",
+            param_hint="-o/--output",
+        )
+    ctx.obj.output = output.lower()
+
+
 def _json_default(obj: Any) -> Any:
     """让 json.dumps 容忍 dataclass / Path / set 等 — fallback 走 str()。"""
     try:

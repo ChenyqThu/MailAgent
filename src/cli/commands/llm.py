@@ -20,7 +20,7 @@ from src.cli.exceptions import (
     CliNotFoundError,
     CliNotImplementedError,
 )
-from src.cli.output import emit, emit_cli_error
+from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -30,20 +30,6 @@ app = typer.Typer(
     help="LLM 分类 run / selftest / retry-failed / stats / compare-paths (RFC §4.4)",
     no_args_is_help=True,
 )
-
-
-_VALID_LEAF_OUTPUT = ("text", "json", "yaml", "ndjson")
-
-
-def _apply_local_output(ctx: typer.Context, output: Optional[str]) -> None:
-    if output is None or ctx.obj is None:
-        return
-    if output.lower() not in _VALID_LEAF_OUTPUT:
-        raise typer.BadParameter(
-            f"--output must be one of {_VALID_LEAF_OUTPUT}, got {output!r}",
-            param_hint="-o/--output",
-        )
-    ctx.obj.output = output.lower()
 
 
 # ============================================================
