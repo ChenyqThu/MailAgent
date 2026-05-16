@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import json
-import re
 
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+from tests.cli.conftest import extract_last_json_object as _extract_last_json_object
 
 
 def _invoke_email(cli_runner, *args, db_path):
@@ -14,36 +13,6 @@ def _invoke_email(cli_runner, *args, db_path):
     return cli_runner.invoke(
         app, ["--db-path", str(db_path), "email", *args],
     )
-
-
-def _extract_last_json_object(text: str) -> dict:
-    """从混合输出中抓最后一个 JSON object (含 success / error wrapper).
-
-    CliRunner mix_stderr=True 时 emit_error 的 stderr JSON 会和 stdout 合并,
-    可能前后夹杂 loguru log。
-    """
-    if not text:
-        raise ValueError("empty output")
-    # 找最后一行符合 wrapper 形态的 JSON
-    candidates = []
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line.startswith("{") or not line.endswith("}"):
-            continue
-        try:
-            candidates.append(json.loads(line))
-        except json.JSONDecodeError:
-            pass
-    if not candidates:
-        # fallback: 全文匹配 (单行 dict 时)
-        m = _JSON_OBJ_RE.search(text)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError as e:
-                raise ValueError(f"could not parse JSON from output: {text[:300]!r}") from e
-        raise ValueError(f"no JSON object in output: {text[:300]!r}")
-    return candidates[-1]
 
 
 class TestEmailGet:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+from tests.cli.conftest import extract_last_json_object as _extract_last_json_object
 
 
 def _invoke_admin(cli_runner, *args, db_path):
@@ -11,23 +11,6 @@ def _invoke_admin(cli_runner, *args, db_path):
     return cli_runner.invoke(
         app, ["--db-path", str(db_path), "admin", *args],
     )
-
-
-def _extract_last_json_object(text: str) -> dict:
-    if not text:
-        raise ValueError("empty output")
-    candidates = []
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line.startswith("{") or not line.endswith("}"):
-            continue
-        try:
-            candidates.append(json.loads(line))
-        except json.JSONDecodeError:
-            pass
-    if not candidates:
-        raise ValueError(f"no JSON object in output: {text[:300]!r}")
-    return candidates[-1]
 
 
 class TestAdminDbVersion:

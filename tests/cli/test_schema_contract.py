@@ -145,12 +145,4 @@ class TestSchemaContract:
         validate(instance=payload, schema=schema, registry=registry)
 
 
-def _last_json(text: str) -> dict:
-    for line in reversed(text.strip().splitlines()):
-        line = line.strip()
-        if line.startswith("{") and line.endswith("}"):
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                continue
-    raise AssertionError(f"no JSON in output: {text[:300]!r}")
+from tests.cli.conftest import extract_last_json_object as _last_json  # noqa: E402

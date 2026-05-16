@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+
+def extract_last_json_object(text: str) -> dict[str, Any]:
+    """从混合 stdout/stderr 中抓最后一个 JSON object (含 success / error wrapper).
+
+    CliRunner mix_stderr=True 下 emit_error 的 stderr JSON 会和 stdout 合并,
+    可能前后夹杂 loguru log 或 typer renderer 输出。所有 CLI 测试 (test_email /
+    test_admin / test_schema_contract) 共用这一份提取逻辑。
+    """
+    if not text:
+        raise ValueError("empty output")
+    for line in reversed(text.strip().splitlines()):
+        line = line.strip()
+        if not line.startswith("{") or not line.endswith("}"):
+            continue
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    raise AssertionError(f"no JSON object in output: {text[:300]!r}")
 
 
 @pytest.fixture

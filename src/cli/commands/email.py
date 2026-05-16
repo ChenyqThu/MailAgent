@@ -9,20 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from dataclasses import asdict
 from typing import Optional, TYPE_CHECKING
 
 import typer
 
 from src.cli.exceptions import CliError, CliInvalidArgError, CliNotFoundError
-from src.cli.output import emit, emit_cli_error, emit_error
+from src.cli.output import emit, emit_cli_error
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
     from src.repository import (
         AttachmentRecord,
         EmailBodyRecord,
-        EmailFull,
         EmailMetadataRecord,
     )
 
