@@ -150,6 +150,30 @@ class TestEmailList:
         payload = _extract_last_json_object(result.output)
         assert payload["error"]["code"] == "E_INVALID_ARG"
 
+    def test_list_status_filter_returns_failed(self, cli_runner, cli_env, seeded_db):
+        """PR-2 critic fix #1: --status failed 必须命中 (修前 sync_store 锁 synced/pending)."""
+        result = _invoke_email(
+            cli_runner, "list", "--status", "failed", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _extract_last_json_object(result.output)
+        ids = [row["internal_id"] for row in payload["data"]]
+        assert 12346 in ids, f"expected failed email 12346 in {ids}"
+        assert 12345 not in ids
+        # data 中含 sync_status + thread_id (修前 SELECT 缺这俩字段)
+        first = payload["data"][0]
+        assert first["sync_status"] == "failed"
+        assert "thread_id" in first
+
+    def test_list_limit_high_not_capped_to_50(self, cli_runner, cli_env, seeded_db):
+        """PR-2 critic fix #1: --limit 500 应被接受 (修前 sync_store 硬 cap 50)."""
+        result = _invoke_email(
+            cli_runner, "list", "--limit", "200", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _extract_last_json_object(result.output)
+        assert payload["meta"]["limit"] == 200
+
 
 class TestEmailSearch:
     def test_search_happy(self, cli_runner, cli_env, seeded_db):
@@ -212,3 +236,22 @@ class TestEmailResync:
         assert result.exit_code == 4
         payload = _extract_last_json_object(result.output)
         assert payload["error"]["code"] == "E_AUTH_FAILED"
+
+
+class TestInvalidOutput:
+    """PR-2 critic fix #5: --output xyz 应拒绝, 不能 silent fallback to text."""
+
+    def test_unknown_output_global_rejected(self, cli_runner, cli_env, seeded_db):
+        from src.cli.main import app
+
+        result = cli_runner.invoke(
+            app, ["--db-path", str(seeded_db), "-o", "xml",
+                  "email", "get", "12345"],
+        )
+        assert result.exit_code == 2, result.output
+
+    def test_unknown_output_leaf_rejected(self, cli_runner, cli_env, seeded_db):
+        result = _invoke_email(
+            cli_runner, "get", "12345", "-o", "xml", db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output

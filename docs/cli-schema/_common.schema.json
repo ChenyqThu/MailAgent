@@ -2,7 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/_common.schema.json",
   "title": "MailAgent CLI Common Wrapper",
-  "description": "顶层 wrapper / error / meta 通用结构 (RFC v2 §5.1.2 / §7.0)",
+  "description": "顶层 wrapper / error / meta 通用结构 (RFC v2 §5.1.2 / §7.0). 根 schema 用 oneOf 校验 status ∈ {success, error, partial_failure} 三种 wrapper 之一。",
+  "oneOf": [
+    {"$ref": "#/$defs/wrapper_success"},
+    {"$ref": "#/$defs/wrapper_error"},
+    {"$ref": "#/$defs/wrapper_partial_failure"}
+  ],
   "$defs": {
     "wrapper_success": {
       "type": "object",

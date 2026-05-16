@@ -73,6 +73,33 @@ def seeded_db(empty_db: Path) -> Path:
                 now,
             ),
         )
+        # 另插一封 failed 状态邮件 (PR-2 critic fix #1 测试 --status filter)
+        conn.execute(
+            """INSERT INTO email_metadata
+                 (internal_id, message_id, thread_id, subject, sender, sender_name,
+                  to_addr, cc_addr, date_received, mailbox, is_read, is_flagged,
+                  sync_status, notion_page_id, retry_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                12346,
+                "<msg-12346@example.com>",
+                None,
+                "Failed sync email",
+                "bob@example.com",
+                "Bob",
+                "alice@example.com",
+                "",
+                "2026-05-14 09:00:00",
+                "收件箱",
+                0,
+                0,
+                "failed",
+                None,
+                3,
+                now,
+                now,
+            ),
+        )
         conn.execute(
             """INSERT INTO email_body
                  (internal_id, message_id, body_html, body_markdown,

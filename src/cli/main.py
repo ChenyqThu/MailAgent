@@ -7,6 +7,8 @@ from typing import Optional
 
 import typer
 
+VALID_OUTPUT_FORMATS = ("text", "json", "yaml", "ndjson")
+
 app = typer.Typer(
     name="mailagent",
     help="MailAgent CLI - Agent-friendly interface to the MailAgent backend.",
@@ -67,8 +69,17 @@ def main(
     # 延迟 import: 避免 --help / --version 触发整个后端链
     from src.cli.context import CliContext
 
+    # R-18 / PR-2 critic fix #5: 拒绝未知 --output 值 (避免 silent fallback 到 text)
+    if output.lower() not in VALID_OUTPUT_FORMATS:
+        # 在 callback 内直接 typer.Exit 即可; CliContext 还未存在,
+        # 走 typer 的原生 BadParameter 通道, exit code = 2 与 RFC §5.2 一致。
+        raise typer.BadParameter(
+            f"--output must be one of {VALID_OUTPUT_FORMATS}, got {output!r}",
+            param_hint="-o/--output",
+        )
+
     ctx.obj = CliContext.from_flags(
-        output=output,
+        output=output.lower(),
         quiet=quiet,
         verbose=verbose,
         db_path=db_path,

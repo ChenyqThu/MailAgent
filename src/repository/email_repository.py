@@ -380,6 +380,124 @@ class EmailRepository:
             conn.close()
 
     # ============================================================
+    # LIST (CLI `email list` 专用 — 比 SyncStore.search_emails 更宽松,
+    # 不锁 sync_status, 不 cap limit, 暴露 sync_status + thread_id)
+    # ============================================================
+
+    LIST_LIMIT_MAX = 500
+
+    def list_metadata(
+        self,
+        *,
+        mailbox: Optional[str] = None,
+        status: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        sender_substr: Optional[str] = None,
+        subject_substr: Optional[str] = None,
+        is_read: Optional[bool] = None,
+        is_flagged: Optional[bool] = None,
+        has_notion: Optional[bool] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """CLI ``email list`` 用 — 返回 ``{total, limit, offset, emails: [EmailMetadataRecord, ...]}``.
+
+        与 ``SyncStore.search_emails`` 的差异 (R-15 / PR-2 critic fix):
+        - 不强制 ``sync_status IN ('synced', 'pending')``; 若 caller 传 ``status``
+          就只过滤该 status, 否则不锁
+        - 不把 limit 硬 cap 到 50; 上限走 ``LIST_LIMIT_MAX = 500``
+          (与 CLI 公开契约一致, RFC §4.2)
+        - SELECT 含 ``sync_status`` + ``thread_id``, CLI 能直接消费
+        """
+        if limit <= 0:
+            return {"total": 0, "limit": limit, "offset": offset, "emails": []}
+        limit = min(limit, self.LIST_LIMIT_MAX)
+
+        clauses: list[str] = []
+        params: list = []
+        if mailbox:
+            clauses.append("mailbox = ?")
+            params.append(mailbox)
+        if status:
+            clauses.append("sync_status = ?")
+            params.append(status)
+        if date_from:
+            clauses.append("date_received >= ?")
+            params.append(date_from)
+        if date_to:
+            clauses.append("date_received <= ?")
+            params.append(f"{date_to} 23:59:59")
+        if sender_substr:
+            clauses.append("(sender LIKE ? OR sender_name LIKE ?)")
+            like_val = f"%{sender_substr}%"
+            params.extend([like_val, like_val])
+        if subject_substr:
+            clauses.append("subject LIKE ?")
+            params.append(f"%{subject_substr}%")
+        if is_read is not None:
+            clauses.append("is_read = ?")
+            params.append(1 if is_read else 0)
+        if is_flagged is not None:
+            clauses.append("is_flagged = ?")
+            params.append(1 if is_flagged else 0)
+        if has_notion is True:
+            clauses.append("notion_page_id IS NOT NULL")
+        elif has_notion is False:
+            clauses.append("notion_page_id IS NULL")
+
+        where_clause = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        conn = self._connect()
+        try:
+            count_row = conn.execute(
+                f"SELECT COUNT(*) AS c FROM email_metadata{where_clause}",
+                params,
+            ).fetchone()
+            total = count_row["c"] if count_row else 0
+
+            rows = conn.execute(
+                f"""SELECT internal_id, message_id, thread_id, subject, sender,
+                           sender_name, to_addr, cc_addr, date_received, mailbox,
+                           is_read, is_flagged, sync_status,
+                           notion_page_id, notion_thread_id, sync_error,
+                           retry_count, next_retry_at, created_at, updated_at
+                      FROM email_metadata{where_clause}
+                  ORDER BY date_received DESC
+                     LIMIT ? OFFSET ?""",
+                params + [limit, offset],
+            ).fetchall()
+
+            emails = [
+                EmailMetadataRecord(
+                    internal_id=r["internal_id"],
+                    message_id=r["message_id"],
+                    thread_id=r["thread_id"],
+                    subject=r["subject"] or "",
+                    sender=r["sender"] or "",
+                    sender_name=r["sender_name"],
+                    to_addr=r["to_addr"] or "",
+                    cc_addr=r["cc_addr"] or "",
+                    date_received=r["date_received"],
+                    mailbox=r["mailbox"] or "",
+                    is_read=bool(r["is_read"]),
+                    is_flagged=bool(r["is_flagged"]),
+                    sync_status=r["sync_status"] or "pending",
+                    notion_page_id=r["notion_page_id"],
+                    notion_thread_id=r["notion_thread_id"],
+                    sync_error=r["sync_error"],
+                    retry_count=r["retry_count"] or 0,
+                    next_retry_at=r["next_retry_at"],
+                    created_at=r["created_at"] or 0.0,
+                    updated_at=r["updated_at"] or 0.0,
+                )
+                for r in rows
+            ]
+            return {"total": total, "limit": limit, "offset": offset, "emails": emails}
+        finally:
+            conn.close()
+
+    # ============================================================
     # SEARCH (Phase 3: FTS5)
     # ============================================================
 

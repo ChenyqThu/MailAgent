@@ -47,6 +47,22 @@ class TestAdminDbVersion:
         assert payload["data"]["expected"] == 5
         assert payload["data"]["compatible"] is True
 
+    def test_incompat_emits_error_wrapper(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """PR-2 critic fix #3: 不兼容时 status=error E_SCHEMA_MISMATCH, 不再 status=success."""
+        # 临时 patch EXPECTED_DB_VERSION 为 9 (与 seeded_db 的 5 不匹配)
+        from src.cli.commands import admin
+
+        monkeypatch.setattr(admin, "EXPECTED_DB_VERSION", 9)
+        result = _invoke_admin(
+            cli_runner, "db-version", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 5, result.output
+        payload = _extract_last_json_object(result.output)
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "E_SCHEMA_MISMATCH"
+
 
 class TestAdminHealth:
     def test_healthy(self, cli_runner, cli_env, seeded_db):

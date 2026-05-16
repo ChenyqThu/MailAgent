@@ -31,9 +31,19 @@ REQUIRED_TABLES = (
 )
 
 
+_VALID_LEAF_OUTPUT = ("text", "json", "yaml", "ndjson")
+
+
 def _apply_local_output(ctx: typer.Context, output: Optional[str]) -> None:
-    if output is not None and ctx.obj is not None:
-        ctx.obj.output = output
+    """与 email.py 的 helper 同语义 — 校验后置 -o 值合法。"""
+    if output is None or ctx.obj is None:
+        return
+    if output.lower() not in _VALID_LEAF_OUTPUT:
+        raise typer.BadParameter(
+            f"--output must be one of {_VALID_LEAF_OUTPUT}, got {output!r}",
+            param_hint="-o/--output",
+        )
+    ctx.obj.output = output.lower()
 
 
 # ============================================================
@@ -222,6 +232,20 @@ def admin_db_version(
         ))
 
     compatible = version == EXPECTED_DB_VERSION
+
+    # R-17 / PR-2 critic fix #3: 不兼容时输出 error wrapper (E_SCHEMA_MISMATCH),
+    # 不再用 status: success + compatible: false (语义矛盾)。
+    if not compatible:
+        raise emit_cli_error(cli, CliSchemaError(
+            f"db_version={version} mismatch (expected {EXPECTED_DB_VERSION})",
+            hint="Run migration to bring schema to v5; see docs/architecture_v4_sqlite_ssot.md",
+            context={
+                "db_path": db_path,
+                "version": version,
+                "expected": EXPECTED_DB_VERSION,
+            },
+        ))
+
     data = {
         "version": version,
         "expected": EXPECTED_DB_VERSION,
@@ -230,10 +254,6 @@ def admin_db_version(
     }
 
     if cli.output.lower() == "text":
-        compat_word = "yes" if compatible else "no"
-        print(f"{version} (expected: {EXPECTED_DB_VERSION}, compatible: {compat_word})")
+        print(f"{version} (expected: {EXPECTED_DB_VERSION}, compatible: yes)")
     else:
         emit(cli, data)
-
-    if not compatible:
-        raise typer.Exit(code=5)

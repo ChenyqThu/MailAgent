@@ -29,14 +29,25 @@ if TYPE_CHECKING:
 app = typer.Typer(name="email", help="邮件 CRUD / 搜索 / 重传", no_args_is_help=True)
 
 
+_VALID_LEAF_OUTPUT = ("text", "json", "yaml", "ndjson")
+
+
 def _apply_local_output(ctx: typer.Context, output: Optional[str]) -> None:
     """允许 `-o json` 写在 leaf command 后 (gh/kubectl 风格).
 
     parent typer App 的全局 -o 只在 subcommand **之前** 生效;
     每个 leaf 暴露同名 flag, 若用户在 leaf 后传则覆盖 ctx.obj.output。
+
+    校验未知值 (PR-2 critic fix #5 / R-18): 拒绝 silent fallback 到 text。
     """
-    if output is not None and ctx.obj is not None:
-        ctx.obj.output = output
+    if output is None or ctx.obj is None:
+        return
+    if output.lower() not in _VALID_LEAF_OUTPUT:
+        raise typer.BadParameter(
+            f"--output must be one of {_VALID_LEAF_OUTPUT}, got {output!r}",
+            param_hint="-o/--output",
+        )
+    ctx.obj.output = output.lower()
 
 
 # ============================================================
@@ -355,35 +366,23 @@ def email_list(
             f"--source must be 'syncstore' or 'mail', got {source!r}"
         ))
 
-    filters: dict = {}
-    if mailbox:
-        filters["mailbox"] = mailbox
-    if from_:
-        filters["from"] = from_
-    if subject_substr:
-        filters["subject"] = subject_substr
-    if since:
-        filters["date_from"] = since
-    if until:
-        filters["date_to"] = until
-    if is_read_bool is not None:
-        filters["is_read"] = is_read_bool
-    if is_flagged_bool is not None:
-        filters["is_flagged"] = is_flagged_bool
-    if has_notion_bool is not None:
-        filters["has_notion"] = has_notion_bool
-
-    sync_store = cli.sync_store
-    # sync_store.search_emails caps limit at 50 internally — for PR-2 we accept
-    # this. Wider list 需走 paging (offset)。
-    result = sync_store.search_emails(filters=filters, limit=limit, offset=offset)
+    repo = cli.email_repo
+    result = repo.list_metadata(
+        mailbox=mailbox,
+        status=status,
+        date_from=since,
+        date_to=until,
+        sender_substr=from_,
+        subject_substr=subject_substr,
+        is_read=is_read_bool,
+        is_flagged=is_flagged_bool,
+        has_notion=has_notion_bool,
+        limit=limit,
+        offset=offset,
+    )
     rows = result.get("emails", [])
 
-    # 后置过滤 status (sync_store.search_emails 默认锁 synced/pending)
-    if status:
-        rows = [r for r in rows if r.get("sync_status") == status]
-
-    data = [_row_to_list_item(r) for r in rows]
+    data = [_meta_record_to_list_item(r) for r in rows]
     meta_extra = {
         "total": result.get("total", len(rows)),
         "limit": result.get("limit", limit),
@@ -397,25 +396,25 @@ def email_list(
         emit(cli, data, meta_extra=meta_extra)
 
 
-def _row_to_list_item(row: dict) -> dict:
-    """sync_store row dict → list 输出 item."""
-    page_id = row.get("notion_page_id")
+def _meta_record_to_list_item(meta: "EmailMetadataRecord") -> dict:
+    """EmailMetadataRecord → list 输出 item (含 sync_status + thread_id)."""
+    page_id = meta.notion_page_id
     notion_url = (
         f"https://www.notion.so/{page_id.replace('-', '')}"
         if page_id else None
     )
     return {
-        "internal_id": row.get("internal_id"),
-        "message_id": row.get("message_id"),
-        "thread_id": row.get("thread_id"),
-        "subject": row.get("subject") or "",
-        "sender": row.get("sender") or "",
-        "sender_name": row.get("sender_name"),
-        "date_received": row.get("date_received"),
-        "mailbox": row.get("mailbox"),
-        "is_read": bool(row.get("is_read")),
-        "is_flagged": bool(row.get("is_flagged")),
-        "sync_status": row.get("sync_status"),
+        "internal_id": meta.internal_id,
+        "message_id": meta.message_id,
+        "thread_id": meta.thread_id,
+        "subject": meta.subject,
+        "sender": meta.sender,
+        "sender_name": meta.sender_name,
+        "date_received": meta.date_received,
+        "mailbox": meta.mailbox,
+        "is_read": meta.is_read,
+        "is_flagged": meta.is_flagged,
+        "sync_status": meta.sync_status,
         "notion_page_id": page_id,
         "notion_url": notion_url,
     }
@@ -669,11 +668,20 @@ def email_resync(
                  "回填后再 resync",
         ))
 
+    # Action 推断 (R-16 / PR-2 critic fix #2):
+    # create_email_page_from_sqlite 在 dup-hit + !replace_existing 时直接
+    # return existing_page_id (== meta.notion_page_id), 没真创建新页;
+    # 把这种情况标 'skipped' 而非 'created'。
     if new_page_id is None:
-        # 已 synced 且 replace_existing=False, 跳过
         action = "skipped"
     elif replace_existing and meta.notion_page_id:
         action = "replaced"
+    elif (
+        not replace_existing
+        and meta.notion_page_id
+        and new_page_id == meta.notion_page_id
+    ):
+        action = "skipped"
     else:
         action = "created"
 
