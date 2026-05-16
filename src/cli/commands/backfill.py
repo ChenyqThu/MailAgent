@@ -110,6 +110,7 @@ def _render_backfill_results(
     dry_run: bool,
     target_kind: str,
     target_key: str,
+    data_extra: Optional[dict[str, Any]] = None,
 ) -> typer.Exit:
     """Render LongTaskContext output with the PR-5 backfill JSON contract.
 
@@ -143,6 +144,8 @@ def _render_backfill_results(
         "failed": failed,
         "summary": summary.as_dict(),
     }
+    if data_extra:
+        data.update(data_extra)
     meta = {
         "duration_ms": cli.elapsed_ms(),
         "aborted_by": summary.aborted_reason if summary.aborted else None,
@@ -813,20 +816,18 @@ def backfill_body(
 # ============================================================
 
 
-@app.command("derivatives")
-def backfill_derivatives(
-    ctx: typer.Context,
-    internal_id: Optional[int] = typer.Option(None, "--internal-id", help="仅补单封"),
-    dry_run: bool = typer.Option(False, "--dry-run"),
-    max_failures: int = typer.Option(20, "--max-failures"),
-    progress_every: int = typer.Option(10, "--progress-every"),
-    resume_from: Optional[int] = typer.Option(None, "--resume-from"),
-    allow_concurrent: bool = typer.Option(False, "--allow-concurrent"),
-    output: Optional[str] = typer.Option(None, "-o", "--output"),
-) -> None:
-    """Backfill missing Office-derived attachment rows inline."""
-    cli: "CliContext" = ctx.obj
-    apply_local_output(ctx, output)
+def _run_backfill_derivatives_inline(
+    cli: "CliContext",
+    *,
+    internal_id: Optional[int],
+    dry_run: bool,
+    max_failures: int,
+    progress_every: int,
+    resume_from: Optional[int] = None,
+    allow_concurrent: bool = False,
+    data_extra: Optional[dict[str, Any]] = None,
+) -> typer.Exit:
+    """Run the inline derivatives backfill and return its rendered exit."""
     db_path = cli.cli_config.sync_store_db_path
 
     _common_auth_and_pm2(cli, dry_run=dry_run, allow_concurrent=allow_concurrent)
@@ -852,7 +853,7 @@ def backfill_derivatives(
         payload={"internal_id": internal_id},
     )
     results, summary = ltc.run(units, dry_run=dry_run)
-    raise _render_backfill_results(
+    return _render_backfill_results(
         cli,
         results,
         summary,
@@ -860,4 +861,30 @@ def backfill_derivatives(
         dry_run=dry_run,
         target_kind=target_kind,
         target_key=target_key,
+        data_extra=data_extra,
+    )
+
+
+@app.command("derivatives")
+def backfill_derivatives(
+    ctx: typer.Context,
+    internal_id: Optional[int] = typer.Option(None, "--internal-id", help="仅补单封"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    max_failures: int = typer.Option(20, "--max-failures"),
+    progress_every: int = typer.Option(10, "--progress-every"),
+    resume_from: Optional[int] = typer.Option(None, "--resume-from"),
+    allow_concurrent: bool = typer.Option(False, "--allow-concurrent"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """Backfill missing Office-derived attachment rows inline."""
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+    raise _run_backfill_derivatives_inline(
+        cli,
+        internal_id=internal_id,
+        dry_run=dry_run,
+        max_failures=max_failures,
+        progress_every=progress_every,
+        resume_from=resume_from,
+        allow_concurrent=allow_concurrent,
     )

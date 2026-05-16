@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+import typer
 
 from tests.cli.conftest import extract_last_json_object as _last_json
 
@@ -127,23 +126,104 @@ class TestAttachmentDownload:
 
 
 class TestAttachmentDerive:
-    def test_derive_dry_run_json(self, cli_runner, cli_env, seeded_db):
+    def test_alias_dry_run(self, cli_runner, cli_env, seeded_db):
         result = _invoke(cli_runner, "attachment", "derive", "12345",
                          "--dry-run", "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        assert payload["data"]["stub"] is True
-        assert "PR-4" in payload["data"]["message"]
+        assert payload["data"]["action"] == "backfill-derivatives"
+        assert payload["data"]["mode"] == "inline"
+        assert payload["data"]["dry_run"] is True
+        assert payload["data"]["deprecated_alias"] is True
 
-    def test_derive_non_dry_run_rejected(self, cli_runner, cli_env, seeded_db):
+    def test_alias_real_run(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        def fake_inline(cli, **kwargs):
+            from src.cli.output import emit
+
+            data = {
+                "action": "backfill-derivatives",
+                "mode": "inline",
+                "dry_run": kwargs["dry_run"],
+                "target_kind": "ids",
+                "target_key": f"ids:{kwargs['internal_id']}",
+                "succeeded": [],
+                "failed": [],
+                "summary": {
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "aborted": False,
+                    "aborted_reason": None,
+                    "max_failures_hit": False,
+                },
+            }
+            data.update(kwargs.get("data_extra") or {})
+            emit(cli, data)
+            return typer.Exit(0)
+
+        monkeypatch.setattr(
+            "src.cli.commands.backfill._run_backfill_derivatives_inline",
+            fake_inline,
+        )
         result = _invoke(cli_runner, "attachment", "derive", "12345",
                          "-o", "json", db_path=seeded_db)
-        assert result.exit_code == 2, result.output
+        assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
-        # PR-3 round-5: align attachment derive non-dry-run with error-codes.md
-        # (E_NOT_IMPLEMENTED for "command exists but stub only" cases)
-        assert payload["error"]["code"] == "E_NOT_IMPLEMENTED"
-        assert "PR-4" in payload["error"]["message"]
+        assert payload["data"]["deprecated_alias"] is True
+        assert payload["data"]["dry_run"] is False
+
+    def test_deprecation_warning_in_stderr(self, cli_runner, cli_env, seeded_db):
+        # CliRunner mixes stderr into output in this test suite; the command
+        # itself prints the warning with print(..., file=sys.stderr).
+        result = _invoke(cli_runner, "attachment", "derive", "12345",
+                         "--dry-run", "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        assert "deprecated" in result.output
+
+    def test_alias_forwards_internal_id(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        captured = {}
+
+        def fake_inline(cli, **kwargs):
+            from src.cli.output import emit
+
+            captured.update(kwargs)
+            data = {
+                "action": "backfill-derivatives",
+                "mode": "inline",
+                "dry_run": kwargs["dry_run"],
+                "target_kind": "ids",
+                "target_key": f"ids:{kwargs['internal_id']}",
+                "succeeded": [],
+                "failed": [],
+                "summary": {
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "aborted": False,
+                    "aborted_reason": None,
+                    "max_failures_hit": False,
+                },
+            }
+            data.update(kwargs.get("data_extra") or {})
+            emit(cli, data)
+            return typer.Exit(0)
+
+        monkeypatch.setattr(
+            "src.cli.commands.backfill._run_backfill_derivatives_inline",
+            fake_inline,
+        )
+        result = _invoke(cli_runner, "attachment", "derive", "67890",
+                         "--dry-run", "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        assert captured["internal_id"] == 67890
+        assert captured["dry_run"] is True
+        assert captured["data_extra"] == {"deprecated_alias": True}
 
 
 class TestAttachmentCleanupOrphans:

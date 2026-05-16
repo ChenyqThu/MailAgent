@@ -3,7 +3,7 @@
 PR-3 US-001:
     list      列出邮件的所有附件 (含 derived).
     download  下载附件二进制到 --dest, 或 stdout.
-    derive    PR-3 stub - 真正实现在 PR-4 `backfill derivatives`。
+    derive    Deprecated alias for `backfill derivatives --internal-id N`.
 
 US-002:
     cleanup-orphans  扫盘上没有对应 email_metadata 的孤儿目录 (写操作).
@@ -22,7 +22,6 @@ from src.cli.exceptions import (
     CliError,
     CliInvalidArgError,
     CliNotFoundError,
-    CliNotImplementedError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
 
@@ -220,7 +219,7 @@ def attachment_download(
 
 
 # ============================================================
-# derive (US-001) — PR-3 stub
+# derive (PR-5 US-009) — deprecated alias
 # ============================================================
 
 @app.command("derive")
@@ -229,42 +228,31 @@ def attachment_derive(
     internal_id: int = typer.Argument(..., help="邮件 internal_id"),
     dry_run: bool = typer.Option(
         False, "--dry-run",
-        help="PR-3 stub: dry-run 时仅描述要做什么, 不写盘",
+        help="Forwarded to backfill derivatives dry-run.",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """PR-3 stub. 实现在 PR-4 ``backfill derivatives --internal-id N``.
-
-    PR-3 仅提供命令入口与 dry-run plan, 实跑路径直接拒绝并提示 PR-4 / 临时脚本。
-    """
+    """DEPRECATED — use ``backfill derivatives --internal-id N`` instead."""
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 
-    if dry_run:
-        data = {
-            "internal_id": internal_id,
-            "stub": True,
-            "message": (
-                "PR-3 stub. Office derivation 真正实现在 PR-4 "
-                "'mailagent backfill derivatives --internal-id N'."
-            ),
-            "current_workaround": "python scripts/backfill_derivatives.py",
-        }
-        if cli.output.lower() == "text":
-            print(data["message"])
-            print(f"workaround: {data['current_workaround']}")
-        else:
-            emit(cli, data)
-        return
+    print(
+        "'attachment derive' is deprecated; "
+        "use 'mailagent backfill derivatives --internal-id N' instead.",
+        file=sys.stderr,
+    )
 
-    raise emit_cli_error(cli, CliNotImplementedError(
-        "'attachment derive' non-dry-run path not yet implemented (PR-4 scope).",
-        hint=(
-            "用 'mailagent attachment derive <internal_id> --dry-run' 看 plan, "
-            "或临时跑 'python scripts/backfill_derivatives.py "
-            "--internal-id <id>'."
-        ),
-    ))
+    from src.cli.commands.backfill import _run_backfill_derivatives_inline
+
+    raise _run_backfill_derivatives_inline(
+        cli,
+        internal_id=internal_id,
+        dry_run=dry_run,
+        max_failures=20,
+        progress_every=10,
+        allow_concurrent=False,
+        data_extra={"deprecated_alias": True},
+    )
 
 
 # ============================================================

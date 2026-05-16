@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/attachment-derive.schema.json",
   "title": "mailagent attachment derive",
-  "description": "RFC v2 §4.3 — derive Office 衍生附件. PR-3 仅 dry-run stub; 实跑实现在 PR-4 'backfill derivatives'.",
+  "description": "RFC v2 §4.3 — deprecated alias for 'backfill derivatives --internal-id N'.",
   "oneOf": [
     {
       "type": "object",
@@ -13,13 +13,63 @@
         "schema_version": {"type": "integer", "minimum": 1},
         "data": {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["internal_id", "stub", "message"],
+          "additionalProperties": true,
+          "required": [
+            "action",
+            "mode",
+            "dry_run",
+            "succeeded",
+            "failed",
+            "summary",
+            "deprecated_alias"
+          ],
           "properties": {
-            "internal_id": {"type": "integer", "minimum": 0},
-            "stub": {"const": true},
-            "message": {"type": "string"},
-            "current_workaround": {"type": "string"}
+            "action": {"const": "backfill-derivatives"},
+            "mode": {"const": "inline"},
+            "dry_run": {"type": "boolean"},
+            "target_kind": {"type": "string"},
+            "target_key": {"type": "string"},
+            "deprecated_alias": {"const": true},
+            "succeeded": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["internal_id"],
+                "additionalProperties": true,
+                "properties": {
+                  "internal_id": {"type": "integer"},
+                  "att_id": {"type": "integer"},
+                  "filename": {"type": "string"},
+                  "derived_count": {"type": "integer", "minimum": 0}
+                }
+              }
+            },
+            "failed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["internal_id", "error"],
+                "additionalProperties": true,
+                "properties": {
+                  "internal_id": {"type": "integer"},
+                  "error": {"$ref": "_common.schema.json#/$defs/error"}
+                }
+              }
+            },
+            "summary": {
+              "type": "object",
+              "required": ["total", "succeeded", "failed"],
+              "additionalProperties": true,
+              "properties": {
+                "total": {"type": "integer", "minimum": 0},
+                "succeeded": {"type": "integer", "minimum": 0},
+                "failed": {"type": "integer", "minimum": 0},
+                "skipped": {"type": "integer", "minimum": 0},
+                "aborted": {"type": "boolean"},
+                "aborted_reason": {"type": ["string", "null"]},
+                "max_failures_hit": {"type": "boolean"}
+              }
+            }
           }
         },
         "meta": {"$ref": "_common.schema.json#/$defs/meta"}
