@@ -59,11 +59,13 @@ class CliContext:
             config_path=config_path,
             no_color=no_color,
         )
+        # 注意: ``--api-key`` flag 是用户**提供**的 token (落在 ``ctx.api_key``),
+        # **不是**服务端 expected token。expected 只读 env/.env 中的
+        # ``MAILAGENT_CLI_API_KEY``, 见 src/cli/auth.py:require_auth。
         ctx._cli_config = load_cli_config(
             config_path=config_path,
             flag_overrides={
                 "sync_store_db_path": db_path,
-                "mailagent_cli_api_key": api_key,
             },
         )
         return ctx
