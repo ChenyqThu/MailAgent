@@ -318,10 +318,18 @@ tail -f logs/sync.log
 
 #### Notion 模块 (`src/notion/`)
 
-| 模块 | 职责 |
-|------|------|
-| `client.py` | Notion API 封装（文件上传、页面操作） |
-| `sync.py` | 邮件同步逻辑（线程关系、Parent Item） |
+I-07 拆分后（commit `76abc45`）：`NotionSync` 是 facade，业务逻辑分到 4 个子模块。public API 12 个调用点和构造签名 `NotionSync(*, email_repo, sync_store)` 不变。
+
+| 模块 | 行数 | 职责 |
+|------|------|------|
+| `client.py` | 427 | Notion API 封装（文件上传、页面操作） |
+| `sync.py` | 409 | `NotionSync` facade：构造 4 个子组件 + delegate 所有 public/quasi-public method；R-06 `__new__`/monkeypatch 兼容 hook |
+| `pages.py` | 1145 | `PageOps` — 页面 CRUD + v4 SSoT 桥接 + `create_email_page_v2` 灰度路由（含 R-06 record 调用）|
+| `threads.py` | 281 | `ThreadOps` — `handle_thread_relations` + `update_sub_items` + 线程查询 helpers |
+| `queries.py` | 378 | `QueryOps` — 批量查询 (`query_all_message_ids/row_ids/...`) + reverse sync 写入 (`update_email_flags/update_page_mail_sync_status`) + `update_parent_item` |
+| `_common.py` | 122 | `BEIJING_TZ` / `CreateEmailFromSqliteResult` / `RolloutMetrics`（facade 与 `PageOps` 共享同实例，lazy init 兼容测试 `__new__` bypass）|
+
+调用约定：所有外部模块仍 `from src.notion.sync import NotionSync, CreateEmailFromSqliteResult, BEIJING_TZ`；不要直接 import `PageOps/ThreadOps/QueryOps`（内部组件）。
 
 #### 日历模块 (`src/calendar_notion/`)
 
