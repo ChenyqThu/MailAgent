@@ -2,35 +2,162 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/backfill-body.schema.json",
   "title": "mailagent backfill body",
-  "description": "RFC v2 §4.5 / PR-4 US-005 — subprocess wrap scripts/backfill_email_body.py",
+  "description": "RFC v2 §4.5 / PR-5 US-001 — inline backfill body",
   "oneOf": [
     {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "schema_version", "data", "meta"],
-      "properties": {
-        "status": {"const": "success"},
-        "schema_version": {"type": "integer", "minimum": 1},
-        "data": {"$ref": "#/$defs/data"},
-        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
-      }
+      "$ref": "#/$defs/result_wrapper"
     },
-    {"$ref": "_common.schema.json#/$defs/wrapper_error"}
+    {
+      "$ref": "_common.schema.json#/$defs/wrapper_error"
+    }
   ],
   "$defs": {
+    "result_wrapper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "schema_version",
+        "data",
+        "meta"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "success",
+            "partial_failure",
+            "error"
+          ]
+        },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "data": {
+          "$ref": "#/$defs/data"
+        },
+        "error": {
+          "$ref": "_common.schema.json#/$defs/error"
+        },
+        "meta": {
+          "$ref": "_common.schema.json#/$defs/meta"
+        }
+      }
+    },
     "data": {
       "type": "object",
-      "required": ["action", "dry_run", "script_returncode", "mode"],
+      "required": [
+        "action",
+        "mode",
+        "dry_run",
+        "succeeded",
+        "failed",
+        "summary"
+      ],
       "additionalProperties": true,
       "properties": {
-        "action": {"const": "backfill-body"},
-        "dry_run": {"type": "boolean"},
-        "command": {"type": "string"},
-        "script_returncode": {"type": "integer"},
-        "duration_ms": {"type": "integer", "minimum": 0},
-        "stdout_tail": {"type": "string"},
-        "stderr_tail": {"type": "string"},
-        "mode": {"const": "subprocess"}
+        "action": {
+          "const": "backfill-body"
+        },
+        "mode": {
+          "const": "inline"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "succeeded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "internal_id"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "internal_id": {
+                "type": "integer"
+              },
+              "dead": {
+                "type": "boolean"
+              },
+              "body_format": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "internal_id",
+              "error"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "internal_id": {
+                "type": "integer"
+              },
+              "error": {
+                "$ref": "_common.schema.json#/$defs/error"
+              }
+            }
+          }
+        },
+        "summary": {
+          "$ref": "#/$defs/summary"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total",
+        "succeeded",
+        "failed"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "succeeded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aborted": {
+          "type": "boolean"
+        },
+        "aborted_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_failures_hit": {
+          "type": "boolean"
+        }
       }
     }
   }

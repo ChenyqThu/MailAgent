@@ -77,12 +77,10 @@ class TestPR4SchemaContract:
     ):
         from jsonschema import validate
 
-        run, _ = _fake_run(0)
-        with patch("src.cli.commands.backfill.subprocess.run", run):
-            result = _invoke(
-                cli_runner, "backfill", "body", "--dry-run", "--limit", "5",
-                "-o", "json", db_path=seeded_db,
-            )
+        result = _invoke(
+            cli_runner, "backfill", "body", "--dry-run", "--limit", "5",
+            "-o", "json", db_path=seeded_db,
+        )
         assert result.exit_code == 0, result.output
         payload = _last_json(result.output)
         schema, registry = schema_loader("backfill-body.schema.json")
@@ -93,12 +91,10 @@ class TestPR4SchemaContract:
     ):
         from jsonschema import validate
 
-        run, _ = _fake_run(0)
-        with patch("src.cli.commands.backfill.subprocess.run", run):
-            result = _invoke(
-                cli_runner, "backfill", "derivatives", "--dry-run",
-                "-o", "json", db_path=seeded_db,
-            )
+        result = _invoke(
+            cli_runner, "backfill", "derivatives", "--dry-run",
+            "-o", "json", db_path=seeded_db,
+        )
         assert result.exit_code == 0
         payload = _last_json(result.output)
         schema, registry = schema_loader("backfill-derivatives.schema.json")
