@@ -96,3 +96,192 @@ jsonschema>=4.18 + referencing>=0.30 so install-from-clean has correct deps.
 - Ralph Step 7.5: ai-slop-cleaner pending after critic approves
 - Ralph Step 7.6: post-deslop regression pending
 - Ralph Step 8: /oh-my-claudecode:cancel pending
+
+# PR-4 Ralph Progress Log
+
+Session: 47127ab7-ba20-4067-bcf8-155688823081
+Started: 2026-05-16 (after PR-3 ship at 7b4fec7)
+
+## PR-3 Baseline
+- pytest: 489 passed
+- DB_VERSION: 5
+- CLI groups: 7 (email/admin/attachment/llm/notion/calendar/debug)
+- docs/cli-schema/: 30 schemas + _common + error-codes (9 E_* enums)
+
+## PR-4 Implementation (this Ralph session)
+
+12 user stories, all passes:true at end. Bundled where coupled:
+
+### US-001 — DB_VERSION 5→6 migration (foundation)
+- src/mail/sync_store.py DB_VERSION 5→6
+- cli_checkpoints table (command, target_key PK + payload TEXT)
+- v4_rollout_stats table (id AUTOINCREMENT + indices)
+- SyncStore methods: upsert/get/delete_cli_checkpoint, write/get_latest_v4_rollout_snapshot
+- src/cli/commands/admin.py EXPECTED_DB_VERSION 5→6, REQUIRED_TABLES 加新表
+- tests/mail/test_sync_store_v6_migration.py 7 tests
+
+### US-002 — src/cli/long_task.py (LongTaskContext mixin)
+- SIGINT 二次 (第一次 → exit 7, 第二次 → sys.exit(130))
+- max-failures 熔断 → exit 8 (E_MAX_FAILURES 新加 code)
+- checkpoint UPSERT 每 N=50 unit, resume_from / 自动 from checkpoint
+- Progress: text rich / ndjson stream / json wrapper
+- src/cli/exceptions.py 加 CliMaxFailuresError + CliPM2ConflictError, 修正 CliAbortedError exit_code=7
+- tests/cli/test_long_task.py 14 tests
+
+### US-003 — src/cli/pm2_check.py
+- pm2 jlist subprocess + mail-sync online detection
+- --allow-concurrent / env MAILAGENT_CLI_ALLOW_CONCURRENT bypass
+- FileNotFoundError / TimeoutExpired / JSON parse err → graceful skip
+- tests/cli/test_pm2_check.py 12 tests
+
+### US-004 — email resync batch flags (RFC §4.2)
+- --range LO-HI / --ids 1,2,3 (与 <internal_id> 互斥)
+- --max-failures / --resume-from / --progress-every / --allow-concurrent
+- 走 LongTaskContext + pm2_check; partial_failure wrapper
+- tests/cli/test_email_resync_batch.py 15 tests
+
+### US-005 — backfill body / derivatives (RFC §4.5)
+- src/cli/commands/backfill.py 新 typer App
+- subprocess wrap scripts/backfill_email_body.py / backfill_derivatives.py
+- 互斥校验 (--all vs filters), auth + pm2_check on non-dry-run
+- tests/cli/test_backfill.py 9 tests
+
+### US-006 — project-progress sync (RFC §4.7)
+- src/cli/commands/project_progress.py 新 typer App
+- subprocess wrap scripts/sync_project_progress.py
+- 7 sub-flags 透传, 互斥校验, --first-migration-dry-run 跳过 auth
+- tests/cli/test_project_progress.py 6 tests
+
+### US-007 — init 7 sub-actions (RFC §4.9)
+- src/cli/commands/init.py 新 typer App
+- subprocess wrap scripts/initial_sync.py --action <name>
+- 7 sub-actions: fetch-cache / analyze / fix-properties / fix-critical / update-parents / sync-new / all
+- ACTION_MAP 处理 update-parents → update-all-parents 名称漂移
+- 写动作 (fix-*/update-parents/sync-new/all) require_auth + pm2_check
+- tests/cli/test_init.py 7 tests
+
+### US-008 — R-06 v4_rollout 持久化 (RFC §8 选项 A)
+- NotionSync._route_hit/_miss/_error/_latency_samples/_body_miss_recent (deque maxlen=10)
+- record_route_hit/miss/error + _ensure_rollout_counters (lazy for __new__ bypass)
+- snapshot_rollout_stats: p99 from sorted samples, reset counters (close window)
+- flush_rollout_stats: snapshot → sync_store.write_v4_rollout_snapshot
+- new_watcher._flush_v4_rollout_stats_loop (60s 周期, fire-and-forget asyncio task)
+- src/notion/sync.py create_email_page_v2 灰度分支调 record_route_* (含 latency timing)
+- admin stats _build_v4_rollout_section: 读最新 row + staleness > 300s 加 _warn_stale
+- tests/notion/test_rollout_stats.py 10 tests + tests/cli/test_admin_stats_v4.py 4 tests
+
+### US-009 — admin dead-letter + cleanup-* + repair-parents (RFC §4.8)
+- admin dead-letter list (--limit/--mailbox, 读命令)
+- admin dead-letter retry <id> (写命令, sync_status='pending', retry_count=0)
+- admin cleanup-deadletter (内置实现, --older-than N --no-dry-run --yes)
+- admin cleanup-syncstore/cleanup-duplicates/repair-parents (subprocess wrap)
+- tests/cli/test_admin_deadletter.py 10 tests + tests/cli/test_admin_cleanup.py 6 tests
+
+### US-010 — 长任务测试套件 (e2e)
+- tests/cli/test_long_task_e2e.py 5 tests
+- SIGINT 二次 → exit 130 (mock _on_sigint 直接调)
+- checkpoint resume e2e: abort 后用同 PK 续跑, 自动 resume 从 last_completed+1
+- partial_failure wrapper jsonschema 校验
+- ndjson 每 unit + 末尾 _meta 行
+- PM2 检测 via mock subprocess
+
+### US-011 — schema 文件落位 (~15 新)
+新加 docs/cli-schema/:
+- email-resync-batch.schema.json (含 partial_failure wrapper)
+- backfill-body.schema.json, backfill-derivatives.schema.json
+- project-progress-sync.schema.json
+- init-{fetch-cache,analyze,fix-properties,fix-critical,update-parents,sync-new,all}.schema.json (7 个)
+- admin-dead-letter.schema.json, admin-cleanup.schema.json, admin-repair-parents.schema.json
+- admin-stats-v4-rollout.schema.json
+docs/cli-schema/admin-stats.schema.json 扩 _source enum 加 no_data_yet/error + v4_rollout 字段
+docs/cli-schema/error-codes.md 加 E_PM2_RUNNING (exit 9) + E_MAX_FAILURES (exit 8), exit 130 说明
+tests/cli/test_schema_contract_pr4.py 14 tests 跑每个新 schema 的 validate
+
+### US-012 — CLAUDE.md + progress.txt + PR-3 stub fix
+- CLAUDE.md CLI 章节: 10 个 group, PR-4 batch commands 表, 长任务退出码表 (0/6/7/8/9/130)
+- CLAUDE.md PR-4 ship 行: DB_VERSION 6 / v4_rollout / cli_checkpoints
+- progress.txt: PR-4 ship report (本段)
+- PR-3 5 个 stub: attachment derive alias 到 backfill derivatives (CLAUDE.md 说明);
+  其他 (llm compare-paths / notion page-orphans / notion file-link-audit /
+  calendar expand) 真实现工作量大, 留到 PR-5 (handoff doc 写好)
+
+## Final ship metrics
+
+- pytest: 612 passed (PR-3 489 + PR-4 123 = 612; ≥ 540 目标超额完成)
+- DB_VERSION: 5 → 6 (migrated in-place, idempotent, 6131 邮件 row 不丢)
+- CLI groups: 7 → 10 (+backfill +project-progress +init)
+- docs/cli-schema/: 30 → 45+ schemas
+- Exit codes complete (0/1/2/4/5/6/7/8/9/130)
+- New env vars: MAILAGENT_CLI_ALLOW_CONCURRENT (跳过 PM2 检测)
+- New CLI flags: --range / --ids / --max-failures / --resume-from / --progress-every / --allow-concurrent
+
+## Known limitations / scope decisions
+
+### Subprocess wrap is intentional first-pass (handoff §2.4 risk-table approval)
+
+PR-4 §2.4 risk-table 明确批准: backfill / project-progress / init / admin cleanup-syncstore
+等命令首版走 `subprocess.run scripts/*.py` 透传. 这意味着:
+- subprocess wrap 不接入 LongTaskContext 的 per-unit checkpoint / partial_failure
+- `--max-failures` / `--progress-every` flag 透传给底层脚本, 由脚本自己处理
+- partial_failure wrapper 仅 email resync (US-004) batch 完整接入
+
+PR-5 (docs/pr5-handoff-scripts-migration.md) 范围: 把 subprocess wrap 改为 inline 实现,
+共享 LongTaskContext, 真接入退出码体系. 这是 PR-4 显式 scope-out 的工作.
+
+### PR-3 stubs not converted to real impl in PR-4
+
+- llm compare-paths 非 dry-run: 仍 stub, 用 scripts/compare_llm_path.py 临时替代
+- notion page-orphans / file-link-audit 真修复路径: 仍 stub
+- calendar expand 非 dry-run: 仍 stub (main.py _meeting_expansion_loop 跑)
+- attachment derive: PR-4 用户应改用 `mailagent backfill derivatives`
+  (attachment derive 仍是 stub, alias 没硬连)
+
+这些 5 个 stub 都在 PR-5 handoff 的 US-005..US-009 范围.
+
+### Codex critic round 1 (PR-4 ship 前) fixes
+
+- src/notion/sync.py v4 rollout fallback 现在只覆盖 *pre-side-effect* 错;
+  side-effect 阶段 (create_email_page_from_sqlite 内) 错误必须上抛,
+  避免 duplicate page 风险
+- snapshot_rollout_stats p99 改用 nearest-rank ceil(0.99*n)-1 clamped,
+  小窗 (n<100) 不再被 int(n*.99)-1 underreport
+- admin cleanup-deadletter + dead-letter retry 加 --allow-concurrent + PM2 检测
+  (写命令安全规范)
+
+## Files changed (PR-4)
+
+新增:
+- src/cli/long_task.py
+- src/cli/pm2_check.py
+- src/cli/commands/backfill.py
+- src/cli/commands/project_progress.py
+- src/cli/commands/init.py
+- tests/cli/test_long_task.py
+- tests/cli/test_long_task_e2e.py
+- tests/cli/test_pm2_check.py
+- tests/cli/test_email_resync_batch.py
+- tests/cli/test_backfill.py
+- tests/cli/test_project_progress.py
+- tests/cli/test_init.py
+- tests/cli/test_admin_deadletter.py
+- tests/cli/test_admin_cleanup.py
+- tests/cli/test_admin_stats_v4.py
+- tests/cli/test_schema_contract_pr4.py
+- tests/mail/test_sync_store_v6_migration.py
+- tests/notion/test_rollout_stats.py
+- docs/cli-schema/*.schema.json (~15 个新文件)
+- docs/pr5-handoff-scripts-migration.md (本 session 末尾)
+
+修改:
+- src/mail/sync_store.py (DB_VERSION 6 + 2 张新表 + 6 新方法)
+- src/mail/new_watcher.py (_flush_v4_rollout_stats_loop)
+- src/notion/sync.py (rollout counters + record/snapshot/flush methods + 灰度分支 instrumentation)
+- src/cli/main.py (3 个新 typer App register: backfill + project-progress + init)
+- src/cli/exceptions.py (CliMaxFailuresError + CliPM2ConflictError, CliAbortedError exit 7)
+- src/cli/commands/admin.py (v4_rollout 真实数据 + dead-letter + cleanup-* + repair-parents)
+- src/cli/commands/email.py (resync batch flags + LongTaskContext 集成)
+- tests/cli/conftest.py (default MAILAGENT_CLI_ALLOW_CONCURRENT=true)
+- tests/cli/test_admin.py (db_version 5→6, 加 v4_rollout=no_data_yet 断言)
+- docs/cli-schema/admin-stats.schema.json (扩 enum + v4_rollout 字段)
+- docs/cli-schema/error-codes.md (E_PM2_RUNNING + E_MAX_FAILURES, exit 130)
+- CLAUDE.md (PR-4 CLI 章节 + 退出码表)

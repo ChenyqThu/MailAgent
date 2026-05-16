@@ -58,9 +58,21 @@ class CliPartialFailureError(CliError):
 
 
 class CliAbortedError(CliError):
-    """SIGINT / SIGTERM 主动退出 (RFC §5.2 exit 7) — PR-4 范围占位。"""
+    """SIGINT / SIGTERM 主动退出 (RFC §5.2 exit 7) — PR-4 范围。"""
     code = "E_ABORTED"
     exit_code = 7
+
+
+class CliMaxFailuresError(CliError):
+    """长任务连续失败超 ``--max-failures`` 熔断 (RFC §5.2 exit 8) — PR-4 范围。"""
+    code = "E_MAX_FAILURES"
+    exit_code = 8
+
+
+class CliPM2ConflictError(CliError):
+    """写命令检测到 PM2 ``mail-sync`` 在跑 (RFC §5.2 exit 9) — PR-4 范围。"""
+    code = "E_PM2_RUNNING"
+    exit_code = 9
 
 
 class CliLLMFailedError(CliError):

@@ -555,20 +555,57 @@ def _render_search_text(data: list[dict], meta: dict, no_snippet: bool) -> None:
 
 
 # ============================================================
-# resync (US-005)
+# resync (PR-2 单封 + PR-4 batch flags)
 # ============================================================
 
-# PR-4 范围的 batch flags — PR-2 检测到则拒绝
-PR4_BATCH_FLAGS = {
-    "--range", "--ids", "--internal-ids",
-    "--max-failures", "--resume-from", "--progress-every",
-}
+
+def _parse_id_range(spec: str) -> list[int]:
+    """``--range 53000-53100`` → [53000, 53001, ..., 53100] (闭区间)."""
+    if "-" not in spec:
+        raise CliInvalidArgError(
+            f"--range expects LO-HI (got {spec!r})",
+            hint="Example: --range 53000-53100",
+        )
+    lo_s, hi_s = spec.split("-", 1)
+    try:
+        lo, hi = int(lo_s), int(hi_s)
+    except ValueError:
+        raise CliInvalidArgError(
+            f"--range LO-HI must be integers (got {spec!r})"
+        )
+    if lo > hi:
+        raise CliInvalidArgError(
+            f"--range LO must be <= HI (got {lo}-{hi})"
+        )
+    return list(range(lo, hi + 1))
+
+
+def _parse_id_list(spec: str) -> list[int]:
+    """``--ids 53674,53675,53677`` → [53674, 53675, 53677] (去重保序)."""
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    if not parts:
+        raise CliInvalidArgError("--ids must list at least one internal_id")
+    out: list[int] = []
+    seen: set[int] = set()
+    for p in parts:
+        try:
+            iid = int(p)
+        except ValueError:
+            raise CliInvalidArgError(
+                f"--ids item must be integer (got {p!r})"
+            )
+        if iid not in seen:
+            seen.add(iid)
+            out.append(iid)
+    return out
 
 
 @app.command("resync")
 def email_resync(
     ctx: typer.Context,
-    internal_id: int = typer.Argument(..., help="邮件 internal_id (PR-2 仅支持单封)"),
+    internal_id: Optional[int] = typer.Argument(
+        None, help="单封 internal_id (与 --range / --ids 互斥)",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="只打 plan, 不写 Notion"),
     replace_existing: bool = typer.Option(
         False, "--replace-existing",
@@ -579,40 +616,73 @@ def email_resync(
         help="跳过 thread relations 重建 (diff 验证用)",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
-    # PR-4 占位 flags - 显式拒绝
-    range_: Optional[str] = typer.Option(None, "--range", hidden=True),
-    ids: Optional[str] = typer.Option(None, "--ids", hidden=True),
-    max_failures: Optional[int] = typer.Option(None, "--max-failures", hidden=True),
-    resume_from: Optional[int] = typer.Option(None, "--resume-from", hidden=True),
-    progress_every: Optional[int] = typer.Option(None, "--progress-every", hidden=True),
+    # PR-4 batch flags
+    range_: Optional[str] = typer.Option(
+        None, "--range", help="LO-HI 闭区间 (PR-4): --range 53000-53100",
+    ),
+    ids: Optional[str] = typer.Option(
+        None, "--ids", help="逗号分隔 ids (PR-4): --ids 53674,53675,53677",
+    ),
+    max_failures: int = typer.Option(
+        5, "--max-failures",
+        help="连续失败 N 次熔断 (RFC §5.2 exit 8). 0 = 不熔断",
+    ),
+    resume_from: Optional[int] = typer.Option(
+        None, "--resume-from",
+        help="batch 从 internal_id >= N 续跑 (优先于自动 checkpoint)",
+    ),
+    progress_every: int = typer.Option(
+        50, "--progress-every",
+        help="checkpoint + progress 频率 (每 N unit)",
+    ),
+    allow_concurrent: bool = typer.Option(
+        False, "--allow-concurrent",
+        help="跳过 PM2 mail-sync 冲突检测 (写命令默认拒并行)",
+    ),
 ) -> None:
-    """基于 SQLite SSoT 重传单封邮件到 Notion (RFC v2 §4.2 / §7.3 / PR-2 范围).
+    """基于 SQLite SSoT 重传邮件到 Notion (RFC v2 §4.2 / §7.3 / PR-4 batch).
 
-    PR-2 仅 ``<internal_id>`` 单封 + ``--dry-run`` + ``--replace-existing`` + ``--no-parent``。
-    长任务 ``--range / --ids / --max-failures / --resume-from / --progress-every``
-    是 PR-4 范围 (batch + PM2 检测 + checkpoint), 当前显式拒绝。
+    三种 target 互斥:
+      - 位置参数 ``<internal_id>`` (单封, PR-2 行为)
+      - ``--range LO-HI`` (闭区间)
+      - ``--ids 1,2,3`` (列表)
+
+    Batch 模式走 ``LongTaskContext`` (SIGINT 二次 / max-failures 熔断 / checkpoint),
+    退出码: 0 / 6 partial / 7 SIGINT / 8 max-failures / 9 PM2.
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 
-    # PR-4 batch flags 拒绝
-    illegal = []
-    if range_ is not None:
-        illegal.append("--range")
-    if ids is not None:
-        illegal.append("--ids")
-    if max_failures is not None:
-        illegal.append("--max-failures")
-    if resume_from is not None:
-        illegal.append("--resume-from")
-    if progress_every is not None:
-        illegal.append("--progress-every")
-    if illegal:
+    targets_given = sum(1 for x in (internal_id, range_, ids) if x is not None)
+    if targets_given == 0:
         raise emit_cli_error(cli, CliInvalidArgError(
-            f"Batch flags {illegal} not supported in PR-2 (single-email only); "
-            f"long-task contract (batch / PM2 detect / checkpoint) ships in PR-4",
-            hint="Run one internal_id at a time for now",
+            "Must give <internal_id> or --range LO-HI or --ids 1,2,3"
         ))
+    if targets_given > 1:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "<internal_id>, --range, --ids are mutually exclusive"
+        ))
+
+    # 解析 batch target
+    batch_ids: Optional[list[int]] = None
+    target_kind = "single"
+    target_key = ""
+    if range_ is not None:
+        try:
+            batch_ids = _parse_id_range(range_)
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+        target_kind = "range"
+        target_key = range_
+    elif ids is not None:
+        try:
+            batch_ids = _parse_id_list(ids)
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+        target_kind = "ids"
+        target_key = f"ids:{','.join(str(i) for i in batch_ids[:5])}"
+        if len(batch_ids) > 5:
+            target_key += f"+{len(batch_ids) - 5}"
 
     # 写命令 auth: dry-run 跳过
     if not dry_run:
@@ -620,8 +690,46 @@ def email_resync(
             cli.require_auth()
         except CliError as e:
             raise emit_cli_error(cli, e)
+        # PM2 conflict 检测 (写命令)
+        from src.cli.pm2_check import check_pm2_conflict
+        try:
+            check_pm2_conflict(cli, allow_concurrent=allow_concurrent)
+        except CliError as e:
+            raise emit_cli_error(cli, e)
 
-    # 拉 metadata 给 plan / 校验存在性
+    # Single-id 走原 PR-2 路径
+    if batch_ids is None:
+        return _resync_single(
+            cli, internal_id,  # type: ignore[arg-type]
+            dry_run=dry_run,
+            replace_existing=replace_existing,
+            no_parent=no_parent,
+        )
+
+    # Batch 模式
+    return _resync_batch(
+        cli,
+        internal_ids=batch_ids,
+        target_kind=target_kind,
+        target_key=target_key,
+        dry_run=dry_run,
+        replace_existing=replace_existing,
+        no_parent=no_parent,
+        max_failures=max_failures,
+        resume_from=resume_from,
+        progress_every=progress_every,
+    )
+
+
+def _resync_single(
+    cli: "CliContext",
+    internal_id: int,
+    *,
+    dry_run: bool,
+    replace_existing: bool,
+    no_parent: bool,
+) -> None:
+    """PR-2 单封 resync 路径 (保留向后兼容)."""
     meta = cli.email_repo.get_metadata(internal_id)
     if meta is None:
         raise emit_cli_error(cli, CliNotFoundError(
@@ -646,7 +754,6 @@ def email_resync(
             emit(cli, plan)
         return
 
-    # 实跑 Notion sync — 直接消费结构化 result, 不再推断 (R-19 / critic round 2)
     notion_sync = cli.notion_sync
     try:
         result = asyncio.run(
@@ -659,7 +766,6 @@ def email_resync(
             )
         )
     except ValueError as e:
-        # body / metadata 缺 — Phase 1 之前的老邮件没双写
         raise emit_cli_error(cli, CliNotFoundError(
             str(e),
             hint="Phase 1 之前的邮件正文未双写; 跑 scripts/backfill_email_body.py "
@@ -682,3 +788,112 @@ def email_resync(
         )
     else:
         emit(cli, data)
+
+
+def _resync_batch(
+    cli: "CliContext",
+    *,
+    internal_ids: list[int],
+    target_kind: str,
+    target_key: str,
+    dry_run: bool,
+    replace_existing: bool,
+    no_parent: bool,
+    max_failures: int,
+    resume_from: Optional[int],
+    progress_every: int,
+) -> None:
+    """PR-4 batch resync — 走 LongTaskContext."""
+    from src.cli.long_task import LongTaskContext, emit_long_task_results
+
+    repo = cli.email_repo
+
+    if dry_run:
+        # dry-run: 列出 (internal_id, current_page_id, planned_action)
+        plan_items: list[dict] = []
+        for iid in internal_ids:
+            meta = repo.get_metadata(iid)
+            plan_items.append({
+                "internal_id": iid,
+                "exists": meta is not None,
+                "subject": meta.subject if meta else None,
+                "current_page_id": meta.notion_page_id if meta else None,
+                "action": (
+                    "replace" if replace_existing else "create_or_skip"
+                ) if meta else "skip_missing",
+            })
+        plan_data = {
+            "target_kind": target_kind,
+            "target_key": target_key,
+            "total": len(internal_ids),
+            "replace_existing": replace_existing,
+            "skip_parent_lookup": no_parent,
+            "items": plan_items,
+            "dry_run": True,
+        }
+        if cli.output.lower() == "text":
+            print(f"=== resync batch plan (dry-run, {len(internal_ids)} items) ===")
+            print(f"target: {target_kind}={target_key}")
+            for it in plan_items:
+                marker = "?" if not it["exists"] else ("R" if replace_existing else "C")
+                print(
+                    f"  {marker} {it['internal_id']:>7} "
+                    f"page={(it['current_page_id'] or '-')[:36]} "
+                    f"({(it['subject'] or '<missing>')[:50]})"
+                )
+        else:
+            emit(cli, plan_data)
+        return
+
+    # 实跑 batch
+    notion_sync = cli.notion_sync
+
+    def _make_unit(iid: int):
+        def _runner() -> dict:
+            try:
+                result = asyncio.run(
+                    notion_sync.create_email_page_from_sqlite(
+                        iid,
+                        repo=repo,
+                        sync_store=cli.sync_store,
+                        replace_existing=replace_existing,
+                        skip_parent_lookup=no_parent,
+                    )
+                )
+            except ValueError as e:
+                # body / metadata 缺 — 老邮件未双写
+                raise CliNotFoundError(
+                    f"internal_id={iid} not in SQLite SSoT: {e}",
+                    hint="Run backfill body first",
+                )
+            return {
+                "page_id": result.page_id,
+                "archived_page_id": result.archived_page_id,
+                "action": result.action,
+            }
+        return _runner
+
+    units = [(iid, _make_unit(iid)) for iid in internal_ids]
+
+    ltc = LongTaskContext(
+        cli=cli,
+        command="email-resync",
+        target_kind=target_kind,
+        target_key=target_key,
+        max_failures=max_failures,
+        checkpoint_every=progress_every,
+        progress_every=max(1, progress_every // 5),  # text progress 比 checkpoint 频
+        resume_from=resume_from,
+        payload={
+            "replace_existing": replace_existing,
+            "skip_parent_lookup": no_parent,
+        },
+    )
+    results, summary = ltc.run(units)
+    raise emit_long_task_results(
+        cli, results, summary,
+        extra_meta={
+            "target_kind": target_kind,
+            "target_key": target_key,
+        },
+    )

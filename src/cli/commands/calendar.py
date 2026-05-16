@@ -17,7 +17,6 @@ import typer
 from src.cli.exceptions import (
     CliError,
     CliInvalidArgError,
-    CliNotFoundError,
     CliNotImplementedError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error

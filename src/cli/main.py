@@ -34,11 +34,14 @@ def _print_version(value: bool) -> None:
 # 强制载入整个 src.notion / sqlite 链 (CLI 启动更快 + 测试更容易隔离)。
 from src.cli.commands import admin as _admin_module  # noqa: E402
 from src.cli.commands import attachment as _attachment_module  # noqa: E402
+from src.cli.commands import backfill as _backfill_module  # noqa: E402
 from src.cli.commands import email as _email_module  # noqa: E402
+from src.cli.commands import init as _init_module  # noqa: E402
 from src.cli.commands import llm as _llm_module  # noqa: E402
 from src.cli.commands import calendar as _calendar_module  # noqa: E402
 from src.cli.commands import debug as _debug_module  # noqa: E402
 from src.cli.commands import notion as _notion_module  # noqa: E402
+from src.cli.commands import project_progress as _project_progress_module  # noqa: E402
 
 app.add_typer(_email_module.app, name="email", help="邮件 CRUD / 搜索 / 重传")
 app.add_typer(_admin_module.app, name="admin", help="统计 / 健康 / db-version")
@@ -61,6 +64,18 @@ app.add_typer(
 app.add_typer(
     _debug_module.app, name="debug",
     help="调试: email-source / mail-structure / inline-images / applescript-fetch / notion-page",
+)
+app.add_typer(
+    _backfill_module.app, name="backfill",
+    help="历史回填 body / derivatives (PR-4)",
+)
+app.add_typer(
+    _project_progress_module.app, name="project-progress",
+    help="项目周报同步外挂 (PR-4)",
+)
+app.add_typer(
+    _init_module.app, name="init",
+    help="初始化同步 (PR-4)",
 )
 
 

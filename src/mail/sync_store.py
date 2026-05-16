@@ -95,7 +95,8 @@ class SyncStore:
     # v3 (2026-01): internal_id 主键 + 合并 sync_failures
     # v4 (2026-05): 新增 email_body + email_attachment（body 作为一等公民进 SQLite，SSoT 切换）
     # v5 (2026-05): 新增 email_body_fts FTS5 虚表 + insert/update/delete trigger + 首次 reindex
-    DB_VERSION = 5
+    # v6 (2026-05): 新增 cli_checkpoints (长任务 checkpoint resume) + v4_rollout_stats (R-06 持久化)
+    DB_VERSION = 6
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -395,6 +396,49 @@ class SyncStore:
             reindexed = cursor.rowcount or 0
             if reindexed:
                 logger.info(f"v5 FTS5 reindex: {reindexed} email_body rows indexed")
+
+        # === v6: cli_checkpoints (长任务 checkpoint / resume) ===
+        # PR-4 RFC §5 长任务契约。PK (command, target_key) 保证两个同批
+        # `email resync --range 53000-53100` 不会互相覆盖。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cli_checkpoints (
+                command TEXT NOT NULL,
+                target_kind TEXT NOT NULL,
+                target_key TEXT NOT NULL,
+                last_completed_internal_id INTEGER,
+                succeeded INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                aborted_at REAL,
+                started_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                payload TEXT,
+                PRIMARY KEY (command, target_key)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cli_checkpoints_updated
+            ON cli_checkpoints(updated_at DESC)
+        """)
+
+        # === v6: v4_rollout_stats (R-06 持久化, RFC §8 选项 A) ===
+        # NotionSync 内存累计 (_route_hit / _route_miss / _route_error / latency),
+        # 每 60s flush 一行 (window_seconds), admin stats 读最新行 + staleness.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS v4_rollout_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                flushed_at REAL NOT NULL,
+                from_sqlite_hit INTEGER NOT NULL DEFAULT 0,
+                fallback_miss INTEGER NOT NULL DEFAULT 0,
+                fallback_error INTEGER NOT NULL DEFAULT 0,
+                route_latency_p99_ms REAL NOT NULL DEFAULT 0,
+                body_miss_internal_ids TEXT,
+                window_seconds INTEGER NOT NULL DEFAULT 60
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_v4_rollout_flushed_at
+            ON v4_rollout_stats(flushed_at DESC)
+        """)
 
         # FOREIGN KEY 约束需要 PRAGMA 显式打开（默认关闭，向下兼容）
         cursor.execute("PRAGMA foreign_keys = ON")
@@ -2152,3 +2196,158 @@ class SyncStore:
             except sqlite3.Error as e:
                 logger.error(f"Failed to iter_series_needing_expansion: {e}")
                 return
+
+    # ============================================================
+    # v6: cli_checkpoints (PR-4 长任务 checkpoint / resume)
+    # ============================================================
+
+    def upsert_cli_checkpoint(
+        self,
+        *,
+        command: str,
+        target_kind: str,
+        target_key: str,
+        last_completed_internal_id: Optional[int],
+        succeeded: int,
+        failed: int,
+        payload: Optional[Dict[str, Any]] = None,
+        aborted_at: Optional[float] = None,
+    ) -> None:
+        """UPSERT 长任务 checkpoint 行 (PK: command, target_key)."""
+        now = time.time()
+        payload_json = json.dumps(payload, ensure_ascii=False) if payload else None
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO cli_checkpoints
+                    (command, target_kind, target_key, last_completed_internal_id,
+                     succeeded, failed, aborted_at, started_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(command, target_key) DO UPDATE SET
+                    target_kind = excluded.target_kind,
+                    last_completed_internal_id = excluded.last_completed_internal_id,
+                    succeeded = excluded.succeeded,
+                    failed = excluded.failed,
+                    aborted_at = excluded.aborted_at,
+                    updated_at = excluded.updated_at,
+                    payload = excluded.payload
+                """,
+                (
+                    command,
+                    target_kind,
+                    target_key,
+                    last_completed_internal_id,
+                    int(succeeded),
+                    int(failed),
+                    aborted_at,
+                    now,
+                    now,
+                    payload_json,
+                ),
+            )
+            conn.commit()
+
+    def get_cli_checkpoint(
+        self, command: str, target_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """读单条 checkpoint, 不存在返回 None."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT command, target_kind, target_key, last_completed_internal_id,
+                       succeeded, failed, aborted_at, started_at, updated_at, payload
+                  FROM cli_checkpoints
+                 WHERE command = ? AND target_key = ?
+                """,
+                (command, target_key),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return dict(row)
+
+    def delete_cli_checkpoint(self, command: str, target_key: str) -> bool:
+        """删 checkpoint (任务完成后清理)."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM cli_checkpoints WHERE command = ? AND target_key = ?",
+                (command, target_key),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    # ============================================================
+    # v6: v4_rollout_stats (PR-4 R-06 持久化)
+    # ============================================================
+
+    def write_v4_rollout_snapshot(
+        self,
+        *,
+        from_sqlite_hit: int,
+        fallback_miss: int,
+        fallback_error: int,
+        route_latency_p99_ms: float,
+        body_miss_internal_ids: Optional[List[int]] = None,
+        window_seconds: int = 60,
+        flushed_at: Optional[float] = None,
+    ) -> int:
+        """写一条 v4_rollout 快照, 返回 rowid (id)."""
+        ts = flushed_at if flushed_at is not None else time.time()
+        ids_json = (
+            json.dumps(body_miss_internal_ids, ensure_ascii=False)
+            if body_miss_internal_ids else None
+        )
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO v4_rollout_stats
+                    (flushed_at, from_sqlite_hit, fallback_miss, fallback_error,
+                     route_latency_p99_ms, body_miss_internal_ids, window_seconds)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ts,
+                    int(from_sqlite_hit),
+                    int(fallback_miss),
+                    int(fallback_error),
+                    float(route_latency_p99_ms),
+                    ids_json,
+                    int(window_seconds),
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_latest_v4_rollout(self) -> Optional[Dict[str, Any]]:
+        """读最新一条 v4_rollout snapshot, 不存在返回 None.
+
+        body_miss_internal_ids 字段返回 list[int] 而非 JSON 字符串.
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, flushed_at, from_sqlite_hit, fallback_miss, fallback_error,
+                       route_latency_p99_ms, body_miss_internal_ids, window_seconds
+                  FROM v4_rollout_stats
+                 ORDER BY flushed_at DESC
+                 LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            out = dict(row)
+            raw_ids = out.get("body_miss_internal_ids")
+            if raw_ids:
+                try:
+                    out["body_miss_internal_ids"] = json.loads(raw_ids)
+                except (TypeError, ValueError):
+                    out["body_miss_internal_ids"] = []
+            else:
+                out["body_miss_internal_ids"] = []
+            return out

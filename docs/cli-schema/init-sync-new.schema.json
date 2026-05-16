@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/init-sync-new.schema.json",
+  "title": "mailagent init sync new",
+  "description": "RFC v2 §4.9 / PR-4 US-007 — subprocess wrap initial_sync.py --action sync-new",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "schema_version",
+        "data",
+        "meta"
+      ],
+      "properties": {
+        "status": {
+          "const": "success"
+        },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "data": {
+          "type": "object",
+          "required": [
+            "action",
+            "script_returncode",
+            "mode"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "dry_run": {
+              "type": "boolean"
+            },
+            "command": {
+              "type": "string"
+            },
+            "script_returncode": {
+              "type": "integer"
+            },
+            "duration_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "stdout_tail": {
+              "type": "string"
+            },
+            "stderr_tail": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string"
+            }
+          }
+        },
+        "meta": {
+          "$ref": "_common.schema.json#/$defs/meta"
+        }
+      }
+    },
+    {
+      "$ref": "_common.schema.json#/$defs/wrapper_error"
+    }
+  ]
+}

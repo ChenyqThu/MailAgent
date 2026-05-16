@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-dead-letter.schema.json",
+  "title": "mailagent admin dead-letter list / retry",
+  "description": "RFC v2 §4.8 / PR-4 US-009 — admin dead-letter list/retry",
+  "oneOf": [
+    {"$ref": "#/$defs/list_success"},
+    {"$ref": "#/$defs/retry_success"},
+    {"$ref": "_common.schema.json#/$defs/wrapper_error"}
+  ],
+  "$defs": {
+    "list_success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["internal_id"],
+            "additionalProperties": true,
+            "properties": {
+              "internal_id": {"type": "integer"},
+              "subject": {"type": ["string", "null"]},
+              "sender": {"type": ["string", "null"]},
+              "mailbox": {"type": ["string", "null"]},
+              "retry_count": {"type": ["integer", "null"]},
+              "last_error": {"type": ["string", "null"]},
+              "updated_at": {"type": ["number", "null"]}
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    "retry_success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "required": ["internal_id", "old_status", "new_status"],
+          "additionalProperties": true,
+          "properties": {
+            "internal_id": {"type": "integer"},
+            "old_status": {"type": "string"},
+            "new_status": {"type": "string"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  }
+}

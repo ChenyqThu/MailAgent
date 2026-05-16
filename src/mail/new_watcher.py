@@ -245,6 +245,11 @@ class NewWatcher:
                 self.sync_store.set_last_max_row_id(current_max)
                 logger.info(f"First run, set baseline max_row_id: {current_max}")
 
+        # PR-4 US-008: 启动 v4_rollout flush loop (RFC §8 选项 A)
+        # 每 60s 把 NotionSync 内存累计的路由命中 / miss / error 写一行到
+        # v4_rollout_stats 表; admin stats 读最新行 + staleness.
+        asyncio.create_task(self._flush_v4_rollout_stats_loop())
+
         # 主循环
         while self._running:
             try:
@@ -271,6 +276,41 @@ class NewWatcher:
         """停止监听器"""
         self._running = False
         logger.info("NewWatcher stopped")
+
+    async def _flush_v4_rollout_stats_loop(
+        self,
+        *,
+        interval_seconds: int = 60,
+    ) -> None:
+        """周期性 flush NotionSync 内存累计到 v4_rollout_stats 表 (PR-4 R-06).
+
+        - 间隔 60s
+        - flush 失败仅 warning, 不停 loop
+        - watcher 停时 self._running=False, loop 自然退出
+        """
+        try:
+            notion_sync = self.notion_sync  # type: ignore[attr-defined]
+        except AttributeError:
+            logger.debug(
+                "[v4-rollout] no notion_sync on watcher; skipping flush loop"
+            )
+            return
+        while self._running:
+            try:
+                await asyncio.sleep(interval_seconds)
+                if not self._running:
+                    break
+                if hasattr(notion_sync, "flush_rollout_stats"):
+                    notion_sync.flush_rollout_stats(
+                        sync_store=self.sync_store,
+                        window_seconds=interval_seconds,
+                    )
+            except asyncio.CancelledError:  # pragma: no cover
+                break
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    f"[v4-rollout] flush loop error: {type(exc).__name__}: {exc}"
+                )
 
     async def _poll_cycle(self):
         """单次轮询周期（v3 架构）

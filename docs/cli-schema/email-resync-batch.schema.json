@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/email-resync-batch.schema.json",
+  "title": "mailagent email resync --range/--ids (batch)",
+  "description": "RFC v2 §4.2 / PR-4 US-004 — batch resync wrapper (success / partial_failure / error)",
+  "oneOf": [
+    {"$ref": "#/$defs/success_or_error"},
+    {"$ref": "#/$defs/partial_failure"}
+  ],
+  "$defs": {
+    "success_or_error": {
+      "oneOf": [
+        {"$ref": "_common.schema.json#/$defs/wrapper_success"},
+        {"$ref": "_common.schema.json#/$defs/wrapper_error"}
+      ]
+    },
+    "partial_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "partial_failure"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "required": ["succeeded", "failed", "summary"],
+          "additionalProperties": true,
+          "properties": {
+            "succeeded": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["internal_id"],
+                "additionalProperties": true,
+                "properties": {
+                  "internal_id": {"type": "integer"},
+                  "page_id": {"type": ["string", "null"]},
+                  "action": {
+                    "type": "string",
+                    "enum": ["created", "replaced", "skipped"]
+                  },
+                  "archived_page_id": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "failed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["internal_id", "error"],
+                "additionalProperties": true,
+                "properties": {
+                  "internal_id": {"type": "integer"},
+                  "error": {"$ref": "_common.schema.json#/$defs/error"}
+                }
+              }
+            },
+            "summary": {
+              "type": "object",
+              "required": ["total", "succeeded", "failed"],
+              "additionalProperties": true,
+              "properties": {
+                "total": {"type": "integer", "minimum": 0},
+                "succeeded": {"type": "integer", "minimum": 0},
+                "failed": {"type": "integer", "minimum": 0},
+                "skipped": {"type": "integer", "minimum": 0},
+                "aborted": {"type": "boolean"},
+                "aborted_reason": {"type": ["string", "null"]},
+                "max_failures_hit": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  }
+}

@@ -17,7 +17,7 @@ class TestAdminDbVersion:
     def test_text(self, cli_runner, cli_env, seeded_db):
         result = _invoke_admin(cli_runner, "db-version", db_path=seeded_db)
         assert result.exit_code == 0, result.output
-        assert "5" in result.output
+        assert "6" in result.output
         assert "compatible" in result.output
 
     def test_json(self, cli_runner, cli_env, seeded_db):
@@ -26,15 +26,15 @@ class TestAdminDbVersion:
         )
         assert result.exit_code == 0, result.output
         payload = _extract_last_json_object(result.output)
-        assert payload["data"]["version"] == 5
-        assert payload["data"]["expected"] == 5
+        assert payload["data"]["version"] == 6
+        assert payload["data"]["expected"] == 6
         assert payload["data"]["compatible"] is True
 
     def test_incompat_emits_error_wrapper(
         self, cli_runner, cli_env, seeded_db, monkeypatch,
     ):
         """PR-2 critic fix #3: 不兼容时 status=error E_SCHEMA_MISMATCH, 不再 status=success."""
-        # 临时 patch EXPECTED_DB_VERSION 为 9 (与 seeded_db 的 5 不匹配)
+        # 临时 patch EXPECTED_DB_VERSION 为 9 (与 seeded_db 的 6 不匹配)
         from src.cli.commands import admin
 
         monkeypatch.setattr(admin, "EXPECTED_DB_VERSION", 9)
@@ -55,9 +55,10 @@ class TestAdminHealth:
         assert result.exit_code == 0, result.output
         payload = _extract_last_json_object(result.output)
         assert payload["data"]["healthy"] is True
-        assert payload["data"]["db_version"] == 5
+        assert payload["data"]["db_version"] == 6
         for required in (
             "email_metadata", "email_body", "email_attachment", "email_body_fts",
+            "cli_checkpoints", "v4_rollout_stats",
         ):
             assert required in payload["data"]["tables_present"]
 
@@ -78,6 +79,8 @@ class TestAdminStats:
         assert ss["total_emails"] >= 1
         assert "by_status" in ss
         assert "db_size_mb" in ss
-        # 其他三段 PR-4 占位
-        for sec in ("watcher", "handlers", "v4_rollout"):
+        # watcher / handlers 仍为 PR-4 占位 (PR-2 留下的)
+        for sec in ("watcher", "handlers"):
             assert payload["data"][sec]["_source"] == "not_implemented_in_pr2"
+        # PR-4 R-06: v4_rollout 现走真实路径; 空 DB → no_data_yet
+        assert payload["data"]["v4_rollout"]["_source"] == "no_data_yet"

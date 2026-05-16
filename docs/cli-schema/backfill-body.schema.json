@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/backfill-body.schema.json",
+  "title": "mailagent backfill body",
+  "description": "RFC v2 §4.5 / PR-4 US-005 — subprocess wrap scripts/backfill_email_body.py",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {"$ref": "#/$defs/data"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {"$ref": "_common.schema.json#/$defs/wrapper_error"}
+  ],
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["action", "dry_run", "script_returncode", "mode"],
+      "additionalProperties": true,
+      "properties": {
+        "action": {"const": "backfill-body"},
+        "dry_run": {"type": "boolean"},
+        "command": {"type": "string"},
+        "script_returncode": {"type": "integer"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "stdout_tail": {"type": "string"},
+        "stderr_tail": {"type": "string"},
+        "mode": {"const": "subprocess"}
+      }
+    }
+  }
+}

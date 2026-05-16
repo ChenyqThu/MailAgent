@@ -178,6 +178,8 @@ def cli_env(seeded_db: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
         "MAIL_ACCOUNT_NAME": "test",
         "MAILAGENT_CLI_API_KEY": "",
         "MAILAGENT_CLI_ALLOW_UNAUTH_WRITES": "",
+        # PR-4 US-003: 默认放过 PM2 检测, 个别测试可显式 monkeypatch.delenv 复原
+        "MAILAGENT_CLI_ALLOW_CONCURRENT": "true",
     }
     for k, v in env.items():
         monkeypatch.setenv(k, v)

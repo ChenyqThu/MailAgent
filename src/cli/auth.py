@@ -44,3 +44,27 @@ def require_auth(ctx: "CliContext") -> None:
 
     if not provided or not hmac.compare_digest(expected, provided):
         raise CliAuthError("Invalid or missing API key")
+
+
+def require_auth_and_pm2(
+    ctx: "CliContext",
+    *,
+    dry_run: bool,
+    allow_concurrent: bool,
+) -> None:
+    """写命令安全 gate: ``require_auth`` + PM2 conflict check (PR-4).
+
+    ``dry_run=True`` 直接 return (不烧 auth, 也不查 PM2).
+    任一失败抛对应 ``CliError``, caller 用 ``emit_cli_error`` 包装.
+
+    从 backfill / project-progress / init / admin cleanup-* 共用 (PR-4 deslop
+    pass 把 _common_auth_and_pm2 / _common_cleanup_auth 两份 byte-identical
+    helper 合并到这里).
+    """
+    if dry_run:
+        return
+    require_auth(ctx)
+    # 延迟 import — pm2_check 在 cli 子包内, 避免 auth 模块顶层循环依赖
+    from src.cli.pm2_check import check_pm2_conflict
+
+    check_pm2_conflict(ctx, allow_concurrent=allow_concurrent)

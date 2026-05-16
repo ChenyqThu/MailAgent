@@ -64,6 +64,105 @@ class NotionSync:
         self._email_repo = email_repo
         self._sync_store = sync_store
 
+        # PR-4 R-06: v4 rollout 路由命中计数 (RFC §8 选项 A).
+        from collections import deque
+
+        self._route_hit: int = 0
+        self._route_miss: int = 0
+        self._route_error: int = 0
+        self._route_latency_samples: list[float] = []
+        self._body_miss_recent: "deque[int]" = deque(maxlen=10)
+
+    # ============================================================
+    # PR-4 R-06: v4 rollout 路由命中计数 + flush
+    # ============================================================
+
+    def _ensure_rollout_counters(self) -> None:
+        """Lazy-init for callers that bypass __init__ via __new__ (tests)."""
+        if not hasattr(self, "_route_hit"):
+            from collections import deque
+
+            self._route_hit = 0
+            self._route_miss = 0
+            self._route_error = 0
+            self._route_latency_samples = []
+            self._body_miss_recent = deque(maxlen=10)
+
+    def record_route_hit(self, latency_ms: float = 0.0) -> None:
+        """SQLite 路径命中."""
+        self._ensure_rollout_counters()
+        self._route_hit += 1
+        if latency_ms > 0:
+            self._route_latency_samples.append(float(latency_ms))
+
+    def record_route_miss(self, internal_id: int = 0) -> None:
+        """SQLite body miss → fallback 老路径."""
+        self._ensure_rollout_counters()
+        self._route_miss += 1
+        if internal_id:
+            self._body_miss_recent.append(int(internal_id))
+
+    def record_route_error(self) -> None:
+        """SQLite 路由抛异常 → fallback."""
+        self._ensure_rollout_counters()
+        self._route_error += 1
+
+    def snapshot_rollout_stats(self) -> dict:
+        """返回 dict + reset 计数 (close window).
+
+        p99 用 *nearest-rank* (ceil) 公式 — 整数算术避免浮点漂:
+          idx = ceil(99 * n / 100) - 1 = (99 * n + 99) // 100 - 1, clamped to [0, n-1]
+        小窗 (n < 100) 时自然退化为 max(samples), 避免 ``int(n*.99)-1`` 在 n=2 时
+        返回 min 的问题 (PR-4 codex critic round 1 blocker fix).
+        """
+        self._ensure_rollout_counters()
+        samples = sorted(self._route_latency_samples)
+        if samples:
+            n = len(samples)
+            idx = max(0, min(n - 1, (99 * n + 99) // 100 - 1))
+            p99 = samples[idx]
+        else:
+            p99 = 0.0
+        out = {
+            "from_sqlite_hit": self._route_hit,
+            "fallback_miss": self._route_miss,
+            "fallback_error": self._route_error,
+            "route_latency_p99_ms": p99,
+            "body_miss_internal_ids": list(self._body_miss_recent),
+        }
+        self._route_hit = 0
+        self._route_miss = 0
+        self._route_error = 0
+        self._route_latency_samples.clear()
+        return out
+
+    def flush_rollout_stats(
+        self,
+        sync_store=None,
+        *,
+        window_seconds: int = 60,
+    ) -> Optional[int]:
+        """snapshot + 写入 ``v4_rollout_stats`` 表, 返回 rowid (失败 None)."""
+        store = sync_store if sync_store is not None else self._sync_store
+        if store is None:
+            return None
+        snap = self.snapshot_rollout_stats()
+        try:
+            return store.write_v4_rollout_snapshot(
+                from_sqlite_hit=snap["from_sqlite_hit"],
+                fallback_miss=snap["fallback_miss"],
+                fallback_error=snap["fallback_error"],
+                route_latency_p99_ms=snap["route_latency_p99_ms"],
+                body_miss_internal_ids=snap["body_miss_internal_ids"],
+                window_seconds=window_seconds,
+            )
+        except Exception as exc:  # pragma: no cover
+            from loguru import logger as _logger
+            _logger.warning(
+                f"[v4-rollout] flush failed: {type(exc).__name__}: {exc}"
+            )
+            return None
+
     async def sync_email(self, email: Email) -> bool:
         """同步邮件到 Notion（兼容旧 API）
 
@@ -1015,42 +1114,57 @@ class NotionSync:
         # v4 P4-04：灰度路由 —— NOTION_READ_FROM_SQLITE=true + SQLite 命中 body 时
         # delegate 到 create_email_page_from_sqlite；miss 自动 fallback 走老路径。
         # 默认 false，对生产无副作用；切 true 后正常 sync + resync 都统一走 SSoT。
+        # PR-4 R-06: 路径选择计数 → v4_rollout_stats 表 (RFC §8 选项 A).
+        # PR-4 codex critic round 1: fallback 仅覆盖 *pre-side-effect* 错 (body lookup miss / DB locked);
+        # 一旦进入 create_email_page_from_sqlite (side effect 已开始), 错误必须上抛, 否则可能
+        # 触发老路径再建一张重复页 (duplicate page risk).
+        import time as _time
         from src.config import config as app_config
         if app_config.notion_read_from_sqlite and email.internal_id:
+            _t0 = _time.monotonic()
+            should_route_sqlite = False
             try:
                 repo = self._email_repo
                 sync_store = self._sync_store
+                # pre-side-effect 阶段: 只是查 body 是否存在
                 if repo.get_body(email.internal_id) is not None:
+                    should_route_sqlite = True
+                else:
                     logger.debug(
-                        f"[v4] routing to from-sqlite path: internal_id={email.internal_id}"
+                        f"[v4] SQLite body miss for internal_id={email.internal_id}, "
+                        f"falling back to legacy v2 path"
                     )
-                    # v2 wrapper 历史契约是返回 Optional[str], 这里只抽 page_id (action
-                    # 信息留给 CLI / scripts 直接调 create_email_page_from_sqlite 时消费)
-                    sqlite_result = await self.create_email_page_from_sqlite(
-                        email.internal_id,
-                        repo=repo,
-                        sync_store=sync_store,
-                        meeting_invite=meeting_invite,
-                        calendar_page_id=calendar_page_id,
-                        skip_parent_lookup=skip_parent_lookup,
-                    )
-                    return sqlite_result.page_id
-                logger.debug(
-                    f"[v4] SQLite body miss for internal_id={email.internal_id}, "
-                    f"falling back to legacy v2 path"
-                )
+                    self.record_route_miss(int(email.internal_id))
             except ValueError:
-                # body / metadata 缺失：fallback 老路径
+                # body / metadata lookup 不一致 (Phase 1 之前老邮件): fallback 老路径
                 logger.debug(
                     f"[v4] SQLite resources incomplete for internal_id={email.internal_id}, "
                     f"falling back to legacy v2 path"
                 )
+                self.record_route_miss(int(email.internal_id))
             except Exception as e:
-                # 其他异常（DB locked / 路径解析等）：fallback 但 warning
+                # DB locked / 路径解析等 pre-side-effect 错: fallback 但 warning
                 logger.warning(
-                    f"[v4] SQLite routing failed for internal_id={email.internal_id} "
+                    f"[v4] SQLite pre-route lookup failed for internal_id={email.internal_id} "
                     f"({type(e).__name__}: {e}); falling back to legacy v2 path"
                 )
+                self.record_route_error()
+
+            # side-effect 阶段: 一旦走 create_email_page_from_sqlite, 任何错都必须上抛, 不再 fallback.
+            if should_route_sqlite:
+                logger.debug(
+                    f"[v4] routing to from-sqlite path: internal_id={email.internal_id}"
+                )
+                sqlite_result = await self.create_email_page_from_sqlite(
+                    email.internal_id,
+                    repo=repo,
+                    sync_store=sync_store,
+                    meeting_invite=meeting_invite,
+                    calendar_page_id=calendar_page_id,
+                    skip_parent_lookup=skip_parent_lookup,
+                )
+                self.record_route_hit((_time.monotonic() - _t0) * 1000)
+                return sqlite_result.page_id
 
         try:
             logger.info(f"Creating email page (v2): {email.subject}")

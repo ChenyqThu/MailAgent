@@ -25,13 +25,33 @@
     "section": {
       "type": "object",
       "required": ["_source"],
+      "additionalProperties": true,
       "properties": {
         "_source": {
           "type": "string",
-          "enum": ["live_query", "stats_reporter_last_snapshot", "not_implemented_in_pr2"]
+          "enum": [
+            "live_query",
+            "stats_reporter_last_snapshot",
+            "not_implemented_in_pr2",
+            "no_data_yet",
+            "error"
+          ]
         },
-        "_snapshot_at": {"type": ["string", "null"]},
-        "_warn_if_stale_sec": {"type": ["integer", "null"]}
+        "_snapshot_at": {"type": ["number", "string", "null"]},
+        "_staleness_seconds": {"type": ["integer", "null"]},
+        "_warn_if_stale_sec": {"type": ["integer", "null"]},
+        "_warn_stale": {"type": ["string", "null"]},
+        "_hint": {"type": ["string", "null"]},
+        "_error": {"type": ["string", "null"]},
+        "from_sqlite_hit": {"type": ["integer", "null"], "minimum": 0},
+        "fallback_miss": {"type": ["integer", "null"], "minimum": 0},
+        "fallback_error": {"type": ["integer", "null"], "minimum": 0},
+        "route_latency_p99_ms": {"type": ["number", "null"], "minimum": 0},
+        "body_miss_internal_ids": {
+          "type": ["array", "null"],
+          "items": {"type": "integer"}
+        },
+        "window_seconds": {"type": ["integer", "null"], "minimum": 0}
       }
     },
     "sync_store_section": {

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-stats-v4-rollout.schema.json",
+  "title": "mailagent admin stats --section v4_rollout",
+  "description": "RFC v2 §8 / PR-4 US-008 — v4 rollout 真实指标快照",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "required": ["v4_rollout"],
+      "additionalProperties": true,
+      "properties": {
+        "v4_rollout": {
+          "type": "object",
+          "required": ["_source"],
+          "additionalProperties": true,
+          "properties": {
+            "_source": {
+              "type": "string",
+              "enum": ["stats_reporter_last_snapshot", "no_data_yet", "error"]
+            },
+            "_snapshot_at": {"type": ["number", "null"]},
+            "_staleness_seconds": {"type": ["integer", "null"]},
+            "_warn_stale": {"type": ["string", "null"]},
+            "_hint": {"type": ["string", "null"]},
+            "_error": {"type": ["string", "null"]},
+            "from_sqlite_hit": {"type": ["integer", "null"], "minimum": 0},
+            "fallback_miss": {"type": ["integer", "null"], "minimum": 0},
+            "fallback_error": {"type": ["integer", "null"], "minimum": 0},
+            "route_latency_p99_ms": {"type": ["number", "null"], "minimum": 0},
+            "body_miss_internal_ids": {
+              "type": ["array", "null"],
+              "items": {"type": "integer"}
+            },
+            "window_seconds": {"type": ["integer", "null"], "minimum": 0}
+          }
+        }
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  }
+}
