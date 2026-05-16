@@ -1294,50 +1294,64 @@ class NotionSync:
             return None
 
     async def _handle_thread_relations(self, page_id: str, email: Email):
-        """处理线程关系（新架构：最新邮件为母节点）
+        """处理线程关系（新架构：最新邮件为母节点）.
 
-        核心逻辑：
-        1. 查找同线程所有已有邮件（带日期）
-        2. 比较当前邮件与已有邮件的日期（统一转为北京时间比较）
-        3. 如果当前邮件是最新的 → 设置 Sub-item 包含所有已有邮件
-        4. 如果当前邮件不是最新的 → 设置 Parent Item 指向最新邮件
-
-        Args:
-            page_id: 当前邮件的 page_id
-            email: 当前邮件对象
+        Phase 4 R-02 改造：SQLite SSoT 优先 + Notion fallback。
+        数据源（改造点）：
+        - 优先用 self._email_repo.get_thread_members(...) 从 SQLite 查
+        - SQLite 没找到 + config.thread_relations_fallback_to_notion=True → 兜底 Notion API
+        - thread_relations_fallback_to_notion=False 且 SQLite miss → 直接 return（信任 SSoT）
         """
         thread_id = email.thread_id
         if not thread_id:
             return
 
         try:
-            # 1. 查找同线程所有已有邮件
-            thread_members = await self._find_all_thread_members_with_date(
-                thread_id,
-                exclude_message_id=email.message_id
+            # 1. SQLite 优先 (R-02)
+            sqlite_members = self._email_repo.get_thread_members(
+                thread_id=thread_id,
+                exclude_internal_id=email.internal_id if email.internal_id else None,
+                synced_only=True,
             )
 
+            # 转 dict 列表（兼容后续逻辑 'page_id' / 'date' key）
+            thread_members: List[Dict[str, Any]] = []
+            for m in sqlite_members:
+                if not m.page_id:
+                    continue
+                thread_members.append({
+                    'page_id': m.page_id,
+                    'date': m.date_received or '',
+                })
+
+            # 2. SQLite 空 + 灰度开关允许 → Notion API fallback
             if not thread_members:
-                # 线程中没有其他邮件，当前邮件是唯一的
+                from src.config import config as app_config
+                if app_config.thread_relations_fallback_to_notion:
+                    logger.debug(
+                        f"[R-02] SQLite missed thread {thread_id[:30]}, falling back to Notion API"
+                    )
+                    thread_members = await self._find_all_thread_members_with_date(
+                        thread_id,
+                        exclude_message_id=email.message_id,
+                    )
+
+            if not thread_members:
                 logger.debug(f"No other thread members found, this is the only email in thread")
                 return
 
-            # 2. 获取当前邮件的日期（转换为北京时间）
+            # 3. 当前邮件北京时间
             current_dt = None
             if email.date:
                 if email.date.tzinfo is None:
-                    # naive datetime，假设是北京时间
                     current_dt = email.date.replace(tzinfo=BEIJING_TZ)
                 else:
-                    # 有时区信息，转换为北京时间
                     current_dt = email.date.astimezone(BEIJING_TZ)
 
-            # 3. 找到线程中最新的邮件（转换为北京时间比较）
-            # 为每个成员解析日期
+            # 4. 找最新成员
             for member in thread_members:
                 member['date_dt'] = self._parse_date_to_beijing(member.get('date', ''))
 
-            # 过滤掉日期解析失败的成员
             valid_members = [m for m in thread_members if m.get('date_dt')]
             if not valid_members:
                 logger.warning(f"No valid dates found in thread members, skipping relation handling")
@@ -1346,18 +1360,20 @@ class NotionSync:
             latest_member = max(valid_members, key=lambda x: x['date_dt'])
             latest_dt = latest_member['date_dt']
 
-            # 4. 判断当前邮件是否是最新的（使用 datetime 对象比较，避免时区问题）
             is_current_latest = current_dt is not None and current_dt >= latest_dt
             if is_current_latest:
-                # 当前邮件是最新的 → 设置 Sub-item 包含所有已有邮件
                 all_other_page_ids = [m['page_id'] for m in thread_members]
-                logger.info(f"Current email is the latest ({current_dt} >= {latest_dt}), setting Sub-item with {len(all_other_page_ids)} members")
+                logger.info(
+                    f"Current email is the latest ({current_dt} >= {latest_dt}), "
+                    f"setting Sub-item with {len(all_other_page_ids)} members"
+                )
                 await self.update_sub_items(page_id, all_other_page_ids)
             else:
-                # 当前邮件不是最新的 → 需要更新最新邮件的 Sub-item
                 latest_page_id = latest_member['page_id']
-                logger.info(f"Current email is not the latest ({current_dt} < {latest_dt}), updating latest email's Sub-item")
-                # 获取所有非最新邮件的 page_id（包括当前邮件）
+                logger.info(
+                    f"Current email is not the latest ({current_dt} < {latest_dt}), "
+                    f"updating latest email's Sub-item"
+                )
                 all_non_latest = [m['page_id'] for m in thread_members if m['page_id'] != latest_page_id]
                 all_non_latest.append(page_id)
                 await self.update_sub_items(latest_page_id, all_non_latest)

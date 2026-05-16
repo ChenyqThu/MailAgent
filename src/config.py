@@ -250,6 +250,14 @@ class Config(BaseSettings):
             " create_email_page_from_sqlite；miss 自动 fallback 老路径。"
         ),
     )
+    # v4 Phase 4: thread relations 切 SQLite SSoT (R-02)
+    thread_relations_fallback_to_notion: bool = Field(
+        default=True, env="THREAD_RELATIONS_FALLBACK_TO_NOTION",
+        description=(
+            "_handle_thread_relations 在 SQLite 查不到 thread members 时是否 fallback "
+            "Notion API (v4 R-02 灰度期开关; historic backfill 完成后可关)。"
+        ),
+    )
 
 # 全局配置实例
 config = Config()
