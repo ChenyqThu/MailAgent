@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/debug-applescript-fetch.schema.json",
+  "title": "mailagent debug applescript-fetch",
+  "description": "RFC v2 §4.11 — AppleScriptArm.fetch_email_content_by_id 输出摘要.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["internal_id", "mailbox", "found", "source_size_bytes"],
+          "properties": {
+            "internal_id": {"type": "integer", "minimum": 0},
+            "mailbox": {"type": "string"},
+            "found": {"type": "boolean"},
+            "source_size_bytes": {"type": "integer", "minimum": 0},
+            "message_id": {"type": ["string", "null"]},
+            "subject": {"type": ["string", "null"]},
+            "sender": {"type": ["string", "null"]},
+            "has_attachments": {"type": "boolean"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

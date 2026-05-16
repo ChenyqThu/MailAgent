@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/debug-email-source.schema.json",
+  "title": "mailagent debug email-source",
+  "description": "RFC v2 §4.11 — 邮件 raw MIME 源 (AppleScript 重抽). 默认 stdout, --save-to 写文件后返回元信息.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["internal_id", "size_bytes"],
+          "properties": {
+            "internal_id": {"type": "integer", "minimum": 0},
+            "source": {"type": "string"},
+            "dest_path": {"type": "string"},
+            "size_bytes": {"type": "integer", "minimum": 0},
+            "sha256": {"type": ["string", "null"]},
+            "message_id": {"type": ["string", "null"]}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/debug-mail-structure.schema.json",
+  "title": "mailagent debug mail-structure",
+  "description": "RFC v2 §4.11 — Mail.app 所有 account / mailbox 列表.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accounts", "mailboxes", "total_accounts", "total_mailboxes"],
+          "properties": {
+            "accounts": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "mailboxes": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "total_accounts": {"type": "integer", "minimum": 0},
+            "total_mailboxes": {"type": "integer", "minimum": 0}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

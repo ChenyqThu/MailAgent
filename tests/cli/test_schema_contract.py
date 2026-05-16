@@ -437,5 +437,114 @@ class TestSchemaContract:
         schema, registry = schema_loader("calendar-recurring-replay.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
+    # ============================================================
+    # PR-3 US-008: debug
+    # ============================================================
+
+    def test_debug_email_source_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+        from src.mail import applescript_arm
+
+        monkeypatch.setattr(
+            applescript_arm.AppleScriptArm, "__init__",
+            lambda self, *a, **kw: None,
+        )
+        monkeypatch.setattr(
+            applescript_arm.AppleScriptArm, "fetch_email_content_by_id",
+            lambda self, iid, mb: {"source": "ok", "message_id": "<x>"},
+        )
+        result = _invoke(cli_runner, "debug", "email-source", "12345",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("debug-email-source.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_debug_mail_structure_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+        from src.mail import applescript
+
+        monkeypatch.setattr(
+            applescript.AppleScriptExecutor, "execute",
+            staticmethod(lambda *a, **kw: "iCloud"),
+        )
+        result = _invoke(cli_runner, "debug", "mail-structure", "-o", "json",
+                         db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("debug-mail-structure.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_debug_inline_images_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "debug", "inline-images", "12345",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("debug-inline-images.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_debug_applescript_fetch_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+        from src.mail import applescript_arm
+
+        monkeypatch.setattr(
+            applescript_arm.AppleScriptArm, "__init__",
+            lambda self, *a, **kw: None,
+        )
+        monkeypatch.setattr(
+            applescript_arm.AppleScriptArm, "fetch_email_content_by_id",
+            lambda self, iid, mb: {
+                "source": "abc", "message_id": "<x>",
+                "subject": "s", "sender": "a", "attachments": [],
+            },
+        )
+        result = _invoke(cli_runner, "debug", "applescript-fetch", "12345",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("debug-applescript-fetch.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_debug_notion_page_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from jsonschema import validate
+        from src.notion import client as client_mod
+
+        class StubPages:
+            async def retrieve(self, *, page_id):
+                return {
+                    "id": page_id, "archived": False,
+                    "created_time": "2026-05-01T00:00:00.000Z",
+                    "last_edited_time": "2026-05-15T00:00:00.000Z",
+                    "url": f"https://www.notion.so/{page_id}",
+                    "properties": {},
+                }
+
+        class StubClient:
+            def __init__(self):
+                self.client = type("X", (), {"pages": StubPages()})()
+
+            async def close(self):
+                return None
+
+        monkeypatch.setattr(client_mod, "NotionClient", StubClient)
+        result = _invoke(cli_runner, "debug", "notion-page", "p-1",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("debug-notion-page.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
 
 from tests.cli.conftest import extract_last_json_object as _last_json  # noqa: E402

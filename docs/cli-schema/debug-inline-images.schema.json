@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/debug-inline-images.schema.json",
+  "title": "mailagent debug inline-images",
+  "description": "RFC v2 §4.11 — 单封邮件的 inline image cid 引用 vs attachment 行匹配.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "internal_id", "body_format", "has_inline_images_flag",
+            "inline_refs", "total_refs", "total_matched",
+            "inline_attachments_total"
+          ],
+          "properties": {
+            "internal_id": {"type": "integer", "minimum": 0},
+            "body_format": {"type": "string"},
+            "has_inline_images_flag": {"type": "boolean"},
+            "inline_refs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["cid", "matched"],
+                "properties": {
+                  "cid": {"type": "string"},
+                  "matched": {"type": "boolean"},
+                  "attachment_id": {"type": "integer"},
+                  "filename": {"type": ["string", "null"]},
+                  "is_inline": {"type": "boolean"},
+                  "content_type": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "total_refs": {"type": "integer", "minimum": 0},
+            "total_matched": {"type": "integer", "minimum": 0},
+            "inline_attachments_total": {"type": "integer", "minimum": 0}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

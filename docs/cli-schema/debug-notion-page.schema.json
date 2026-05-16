@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/debug-notion-page.schema.json",
+  "title": "mailagent debug notion-page",
+  "description": "RFC v2 §4.11 — Notion page properties summary (read-only audit).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["page_id", "properties_summary"],
+          "properties": {
+            "page_id": {"type": ["string", "null"]},
+            "archived": {"type": ["boolean", "null"]},
+            "created_time": {"type": ["string", "null"]},
+            "last_edited_time": {"type": ["string", "null"]},
+            "url": {"type": ["string", "null"]},
+            "properties_summary": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}
