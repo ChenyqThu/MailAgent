@@ -423,8 +423,135 @@ class TestNotionFileLinkAudit:
     def test_audit_no_dry_run_rejected(self, cli_runner, cli_env, seeded_db):
         result = _invoke(
             cli_runner, "notion", "file-link-audit",
+            "--no-dry-run", "--yes", "--max-files", "0", "-o", "json",
+            db_path=seeded_db,
+        )
+        assert result.exit_code == 2, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+        assert "--max-files must be > 0" in payload["error"]["message"]
+
+    def test_audit_upload_missing_yes_mocked(
+        self, cli_runner, cli_env, seeded_db, monkeypatch, tmp_path,
+    ):
+        import sqlite3
+        from unittest.mock import AsyncMock, MagicMock
+
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"PDF data")
+
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            conn.execute(
+                """UPDATE email_attachment
+                   SET local_path = ?
+                   WHERE notion_file_id IS NULL""",
+                (str(test_file),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        fake_client = MagicMock()
+        fake_client.upload_file = AsyncMock(return_value="fake-file-id-123")
+        fake_client.close = AsyncMock()
+        monkeypatch.setattr(
+            "src.cli.commands.notion.NotionClient",
+            lambda **kwargs: fake_client,
+        )
+
+        result = _invoke(
+            cli_runner, "notion", "file-link-audit",
+            "--no-dry-run", "--yes", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["mode"] == "inline"
+        assert len(payload["data"]["uploaded"]) == 1
+        assert payload["data"]["uploaded"][0]["notion_file_id"] == "fake-file-id-123"
+        fake_client.upload_file.assert_awaited_once_with(str(test_file))
+
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            rows = conn.execute(
+                """SELECT notion_file_id
+                   FROM email_attachment
+                   WHERE local_path = ?""",
+                (str(test_file),),
+            ).fetchall()
+        finally:
+            conn.close()
+        assert rows[0][0] == "fake-file-id-123"
+
+    def test_audit_real_run_requires_yes(self, cli_runner, cli_env, seeded_db):
+        result = _invoke(
+            cli_runner, "notion", "file-link-audit",
             "--no-dry-run", "-o", "json", db_path=seeded_db,
         )
         assert result.exit_code == 2, result.output
         payload = _last_json(result.output)
         assert payload["error"]["code"] == "E_INVALID_ARG"
+        assert "requires --yes" in payload["error"]["message"]
+
+    def test_audit_max_files_caps(
+        self, cli_runner, cli_env, seeded_db, monkeypatch, tmp_path,
+    ):
+        import sqlite3
+        import time
+        from unittest.mock import AsyncMock, MagicMock
+
+        files = []
+        for idx in range(3):
+            p = tmp_path / f"report-{idx}.pdf"
+            p.write_bytes(f"PDF data {idx}".encode("utf-8"))
+            files.append(p)
+
+        conn = sqlite3.connect(str(seeded_db))
+        try:
+            conn.execute(
+                """UPDATE email_attachment
+                   SET local_path = ?, notion_file_id = NULL
+                   WHERE internal_id = ?""",
+                (str(files[0]), 12345),
+            )
+            now = time.time()
+            for idx in range(1, 3):
+                conn.execute(
+                    """INSERT INTO email_attachment
+                         (internal_id, content_id, filename, content_type, size_bytes,
+                          is_inline, local_path, sha256, derived_from, derived_format,
+                          created_at, schema_version)
+                       VALUES (?, NULL, ?, ?, ?, 0, ?, ?, NULL, NULL, ?, 1)""",
+                    (
+                        12345,
+                        f"report-{idx}.pdf",
+                        "application/pdf",
+                        files[idx].stat().st_size,
+                        str(files[idx]),
+                        str(idx) * 64,
+                        now,
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        fake_client = MagicMock()
+        fake_client.upload_file = AsyncMock(return_value="fake-file-id-capped")
+        fake_client.close = AsyncMock()
+        monkeypatch.setattr(
+            "src.cli.commands.notion.NotionClient",
+            lambda **kwargs: fake_client,
+        )
+
+        result = _invoke(
+            cli_runner, "notion", "file-link-audit",
+            "--no-dry-run", "--yes", "--max-files", "1",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        assert payload["data"]["missing_upload_found"] == 3
+        assert payload["data"]["max_files"] == 1
+        assert len(payload["data"]["uploaded"]) == 1
+        assert fake_client.upload_file.await_count == 1

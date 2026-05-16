@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/notion-file-link-audit.schema.json",
   "title": "mailagent notion file-link-audit",
-  "description": "RFC v2 §4.6 — 审计 email_attachment.notion_file_id (PR-3 只 audit, missing_upload vs ok).",
+  "description": "RFC v2 §4.6 — audit or repair email_attachment.notion_file_id.",
   "oneOf": [
     {
       "type": "object",
@@ -15,10 +15,11 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "audits", "total", "by_status",
+            "mode", "audits", "total", "by_status",
             "limit", "internal_id_filter", "dry_run"
           ],
           "properties": {
+            "mode": {"const": "dry_run"},
             "audits": {
               "type": "array",
               "items": {
@@ -45,7 +46,71 @@
             },
             "limit": {"type": "integer", "minimum": 1},
             "internal_id_filter": {"type": ["integer", "null"]},
-            "dry_run": {"type": "boolean"}
+            "dry_run": {"const": true}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action", "mode", "internal_id_filter", "scanned",
+            "missing_upload_found", "max_files", "archive_dead",
+            "uploaded", "dead_link_archived", "failed", "dry_run"
+          ],
+          "properties": {
+            "action": {"const": "file-link-audit"},
+            "mode": {"const": "inline"},
+            "internal_id_filter": {"type": ["integer", "null"]},
+            "scanned": {"type": "integer", "minimum": 0},
+            "missing_upload_found": {"type": "integer", "minimum": 0},
+            "max_files": {"type": "integer", "minimum": 1},
+            "archive_dead": {"type": "boolean"},
+            "uploaded": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "attachment_id", "internal_id", "filename", "notion_file_id"
+                ],
+                "properties": {
+                  "attachment_id": {"type": "integer", "minimum": 0},
+                  "internal_id": {"type": "integer", "minimum": 0},
+                  "filename": {"type": ["string", "null"]},
+                  "notion_file_id": {"type": "string"}
+                }
+              }
+            },
+            "dead_link_archived": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "failed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["attachment_id", "error"],
+                "properties": {
+                  "attachment_id": {"type": "integer", "minimum": 0},
+                  "error": {"type": "string"}
+                }
+              }
+            },
+            "dry_run": {"const": false}
           }
         },
         "meta": {"$ref": "_common.schema.json#/$defs/meta"}

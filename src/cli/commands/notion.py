@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import typer
@@ -19,6 +20,7 @@ from src.cli.exceptions import (
     CliNotFoundError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
+from src.notion.client import NotionClient
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -529,26 +531,39 @@ def notion_file_link_audit(
         500, "--limit", help="最多扫 N 行 attachment (默认 500)",
     ),
     dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run"),
+    max_files: int = typer.Option(
+        100, "--max-files", help="Repair upper bound on uploads (default 100)",
+    ),
+    archive_dead: bool = typer.Option(
+        False,
+        "--archive-dead",
+        help="Also clear notion_file_id for dead links (best-effort)",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="确认执行非 dry-run 修复"),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """审计 email_attachment.notion_file_id 状态 (PR-3 仅 dry-run, 不修复).
+    """审计 / 修复 email_attachment.notion_file_id 状态.
 
     判定:
       - notion_file_id NULL → 'missing_upload' (本地有附件但 Notion 未上传)
-      - notion_file_id NOT NULL → 'ok' (PR-3 不真去 Notion 验存活, 留 PR-4)
+      - notion_file_id NOT NULL → 'ok' (dead-link 检测当前仅 best-effort)
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 
     if not dry_run:
-        raise emit_cli_error(cli, CliInvalidArgError(
-            "file-link-audit non-dry-run path not implemented in PR-3",
-            hint="PR-3 只标 missing_upload / ok; 修复路径留 PR-4",
-        ))
+        if not yes:
+            raise emit_cli_error(cli, CliInvalidArgError(
+                "Non-dry-run file-link-audit requires --yes confirmation",
+            ))
 
     if limit <= 0:
         raise emit_cli_error(cli, CliInvalidArgError(
             f"--limit must be > 0, got {limit}",
+        ))
+    if max_files <= 0:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--max-files must be > 0, got {max_files}",
         ))
 
     if internal_id is not None:
@@ -563,13 +578,15 @@ def notion_file_link_audit(
     try:
         if internal_id is not None:
             rows = conn.execute(
-                """SELECT id, internal_id, filename, notion_file_id, notion_block_id
+                """SELECT id, internal_id, filename, local_path,
+                          notion_file_id, notion_block_id
                    FROM email_attachment WHERE internal_id = ? LIMIT ?""",
                 (internal_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT id, internal_id, filename, notion_file_id, notion_block_id
+                """SELECT id, internal_id, filename, local_path,
+                          notion_file_id, notion_block_id
                    FROM email_attachment LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -577,9 +594,15 @@ def notion_file_link_audit(
         conn.close()
 
     audits = []
+    missing_uploads = []
+    have_links = []
     by_status = {"missing_upload": 0, "ok": 0}
     for r in rows:
         status = "ok" if r["notion_file_id"] else "missing_upload"
+        if status == "missing_upload":
+            missing_uploads.append(r)
+        else:
+            have_links.append(r)
         by_status[status] += 1
         audits.append({
             "attachment_id": int(r["id"]),
@@ -590,7 +613,20 @@ def notion_file_link_audit(
             "notion_block_id": r["notion_block_id"],
         })
 
+    if not dry_run:
+        _repair_file_links(
+            cli=cli,
+            audits=audits,
+            missing_uploads=missing_uploads,
+            have_links=have_links,
+            internal_id=internal_id,
+            max_files=max_files,
+            archive_dead=archive_dead,
+        )
+        return
+
     data = {
+        "mode": "dry_run",
         "audits": audits,
         "total": len(audits),
         "by_status": by_status,
@@ -611,3 +647,112 @@ def notion_file_link_audit(
             )
     else:
         emit(cli, data)
+
+
+def _repair_file_links(
+    *,
+    cli: "CliContext",
+    audits: list[dict],
+    missing_uploads: list,
+    have_links: list,
+    internal_id: Optional[int],
+    max_files: int,
+    archive_dead: bool,
+) -> None:
+    """Upload local attachments missing Notion file ids and write ids back."""
+    cfg = cli.cli_config
+    repo = cli.email_repo
+    client = NotionClient(token=cfg.notion_token, email_db_id=cfg.email_database_id)
+    uploaded: list[dict] = []
+    failed: list[dict] = []
+    dead_archived: list[dict] = []
+
+    async def _upload_all() -> None:
+        upload_attempts = 0
+        for r in missing_uploads:
+            if upload_attempts >= max_files:
+                break
+            att_id = int(r["id"])
+            local = r["local_path"]
+            if not local:
+                failed.append({
+                    "attachment_id": att_id,
+                    "error": "no local_path",
+                })
+                continue
+
+            local_p = Path(local)
+            if not local_p.is_absolute():
+                local_p = Path.cwd() / local_p
+            if not local_p.is_file():
+                failed.append({
+                    "attachment_id": att_id,
+                    "error": f"file missing: {local_p}",
+                })
+                continue
+
+            upload_attempts += 1
+            try:
+                file_id = await client.upload_file(str(local_p))
+                repo.update_notion_links(
+                    int(r["internal_id"]),
+                    file_id_map={att_id: file_id},
+                )
+                uploaded.append({
+                    "attachment_id": att_id,
+                    "internal_id": int(r["internal_id"]),
+                    "filename": r["filename"],
+                    "notion_file_id": file_id,
+                })
+            except Exception as exc:
+                failed.append({
+                    "attachment_id": att_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+
+    try:
+        if archive_dead and have_links:
+            typer.echo(
+                "warning: --archive-dead dead-link verification is not implemented; "
+                "skipping Notion block walk",
+                err=True,
+            )
+        asyncio.run(_upload_all())
+    finally:
+        try:
+            asyncio.run(client.close())
+        except Exception:
+            pass
+
+    data = {
+        "action": "file-link-audit",
+        "mode": "inline",
+        "internal_id_filter": internal_id,
+        "scanned": len(audits),
+        "missing_upload_found": len(missing_uploads),
+        "max_files": max_files,
+        "archive_dead": archive_dead,
+        "uploaded": uploaded,
+        "dead_link_archived": dead_archived,
+        "failed": failed,
+        "dry_run": False,
+    }
+
+    if cli.output.lower() == "text":
+        print(
+            f"action=file-link-audit scanned={len(audits)} "
+            f"missing_upload={len(missing_uploads)} uploaded={len(uploaded)} "
+            f"failed={len(failed)} max_files={max_files}"
+        )
+        for item in uploaded:
+            print(
+                f"  uploaded att_id={item['attachment_id']} "
+                f"iid={item['internal_id']} file={(item['filename'] or '')[:40]} "
+                f"notion_file_id={item['notion_file_id']}"
+            )
+        for item in failed:
+            print(f"  failed att_id={item['attachment_id']} error={item['error']}")
+    else:
+        emit(cli, data)
+    if failed:
+        raise typer.Exit(code=6)
