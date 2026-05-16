@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/attachment-download.schema.json",
+  "title": "mailagent attachment download",
+  "description": "RFC v2 §4.3 — 附件下载. 默认 stdout 二进制 (无 schema); --dest 写文件返回 JSON 元信息. 失败时走 error wrapper.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attachment_id", "dest_path", "size_bytes"],
+          "properties": {
+            "attachment_id": {"type": "integer", "minimum": 0},
+            "internal_id": {"type": ["integer", "null"]},
+            "filename": {"type": ["string", "null"]},
+            "dest_path": {"type": "string"},
+            "size_bytes": {"type": "integer", "minimum": 0},
+            "sha256": {"type": ["string", "null"]}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

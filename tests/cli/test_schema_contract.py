@@ -144,5 +144,84 @@ class TestSchemaContract:
         schema, registry = schema_loader("admin-stats.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
+    # ============================================================
+    # PR-3 US-001: attachment list / download / derive
+    # ============================================================
+
+    def test_attachment_list_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "attachment", "list", "12345", "-o", "json",
+                         db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("attachment-list.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_attachment_list_not_found_matches_error_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "attachment", "list", "99999",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 1
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("attachment-list.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_attachment_download_with_dest_matches_schema(
+        self, cli_runner, seeded_db_with_real_attachment,
+        monkeypatch, tmp_path, schema_loader,
+    ):
+        from jsonschema import validate
+
+        db_path, _, att_id = seeded_db_with_real_attachment
+        monkeypatch.setenv("NOTION_TOKEN", "x")
+        monkeypatch.setenv("EMAIL_DATABASE_ID", "y")
+        monkeypatch.setenv("USER_EMAIL", "t@example.com")
+        monkeypatch.setenv("MAIL_ACCOUNT_NAME", "t")
+        dest = tmp_path / "outdir" / "x.bin"
+        dest.parent.mkdir()
+        result = _invoke(cli_runner, "attachment", "download", str(att_id),
+                         "--dest", str(dest), "-o", "json", db_path=db_path)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("attachment-download.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_attachment_derive_dry_run_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+
+        result = _invoke(cli_runner, "attachment", "derive", "12345",
+                         "--dry-run", "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("attachment-derive.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    # ============================================================
+    # PR-3 US-002: attachment cleanup-orphans
+    # ============================================================
+
+    def test_attachment_cleanup_orphans_matches_schema(
+        self, cli_runner, cli_env, seeded_db, monkeypatch, tmp_path, schema_loader,
+    ):
+        from jsonschema import validate
+
+        monkeypatch.setenv("ATTACHMENT_STORAGE_DIR", str(tmp_path / "att-co"))
+        result = _invoke(cli_runner, "attachment", "cleanup-orphans",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader(
+            "attachment-cleanup-orphans.schema.json"
+        )
+        validate(instance=payload, schema=schema, registry=registry)
+
 
 from tests.cli.conftest import extract_last_json_object as _last_json  # noqa: E402

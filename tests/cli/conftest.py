@@ -185,6 +185,46 @@ def cli_env(seeded_db: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
 
 @pytest.fixture
+def seeded_db_with_real_attachment(
+    seeded_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, int]:
+    """seeded_db + 把 internal_id=12345 的 attachment local_path 改成 tmp 真实文件.
+
+    Returns ``(db_path, attachment_dir, attachment_id)``.
+
+    需要这条 fixture 是因为 attachment download / cleanup-orphans 真要读写盘,
+    seeded_db 默认的 local_path='data/attachments/12345/report.pdf' 不存在。
+    """
+    attachment_dir = tmp_path / "attachments"
+    (attachment_dir / "12345").mkdir(parents=True, exist_ok=True)
+    payload = b"PDF-FAKE-CONTENT-FOR-TESTS"
+    target = attachment_dir / "12345" / "report.pdf"
+    target.write_bytes(payload)
+
+    # 改 local_path 指向 tmp 真实文件 (用绝对路径; AttachmentStore.read 看到
+    # 绝对路径会直接 p.read_bytes(), 与相对路径走 base_dir.parent.parent 的
+    # 解析逻辑解耦, 测试更稳定)
+    new_local_path = str(target)
+    conn = sqlite3.connect(str(seeded_db))
+    try:
+        cur = conn.execute(
+            "SELECT id FROM email_attachment WHERE internal_id = ? LIMIT 1",
+            (12345,),
+        ).fetchone()
+        att_id = int(cur[0])
+        conn.execute(
+            "UPDATE email_attachment SET local_path = ?, size_bytes = ? WHERE id = ?",
+            (new_local_path, len(payload), att_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("ATTACHMENT_STORAGE_DIR", str(attachment_dir))
+    return seeded_db, attachment_dir, att_id
+
+
+@pytest.fixture
 def empty_cli_env(empty_db: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """空 DB env (用于 not-found 测试)."""
     env = {
