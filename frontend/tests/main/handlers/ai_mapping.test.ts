@@ -12,7 +12,7 @@ import {
   mapReviewStatus,
   mapSentiment,
   parseLabels
-} from '../../../src/electron/main/handlers/ai_mapping'
+} from '../../../src/shared/lib/ai_mapping'
 
 describe('mapPriority', () => {
   test('the 3 production-observed tiers', () => {

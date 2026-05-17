@@ -18,6 +18,7 @@ import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
+import { mapLanguage } from '@shared/lib/ai_mapping'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar } from './EmailToolbar'
@@ -100,7 +101,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const fromParsed = parseSender(email.sender)
   const fromName = email.sender_name || fromParsed.name
   const fromAddr = fromParsed.email || email.sender
-  const langIsEn = ai?.labels_raw?.language === 'English'
+  // Route through mapLanguage so the EN pip survives LLM enum drift
+  // ("English" / "en" / "en-US" all resolve to 'en'). NOTES 2026-05-17 #7.
+  const langRaw = ai?.labels_raw?.language
+  const langIsEn = mapLanguage(typeof langRaw === 'string' ? langRaw : null) === 'en'
   const visibleAttachments = (email.attachments ?? []).filter(
     (a) => !a.is_inline && a.derived_from === null
   )

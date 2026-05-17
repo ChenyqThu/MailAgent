@@ -2,15 +2,11 @@
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-read-normal 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
 >
-  <span
-    aria-hidden="true"
-    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
-  />
   <div
     class="flex items-start gap-2.5"
   >
@@ -43,7 +39,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
@@ -73,10 +69,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -115,15 +111,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-unread-normal 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
 >
-  <span
-    aria-hidden="true"
-    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
-  />
   <div
     class="flex items-start gap-2.5"
   >
@@ -157,7 +149,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
@@ -187,10 +179,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -229,7 +221,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-read-normal 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -266,7 +258,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
@@ -296,10 +288,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -338,7 +330,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-unread-failed 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -376,12 +368,12 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
         <span
-          class="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
+          class="text-micro font-mono uppercase tracking-wide text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
         >
           SYNC FAILED
         </span>
@@ -411,10 +403,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -453,15 +445,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-read-normal 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
 >
-  <span
-    aria-hidden="true"
-    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
-  />
   <div
     class="flex items-start gap-2.5"
   >
@@ -494,7 +482,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
@@ -524,10 +512,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -566,15 +554,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-unread-normal 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
 >
-  <span
-    aria-hidden="true"
-    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
-  />
   <div
     class="flex items-start gap-2.5"
   >
@@ -608,7 +592,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
@@ -638,10 +622,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -680,7 +664,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-read-normal 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -717,7 +701,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
@@ -747,10 +731,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -789,7 +773,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-unread-failed 1`] = `
 <article
-  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -827,12 +811,12 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         </span>
         <span
           aria-label="English"
-          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+          class="lang-pip shrink-0"
         >
           EN
         </span>
         <span
-          class="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
+          class="text-micro font-mono uppercase tracking-wide text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
         >
           SYNC FAILED
         </span>
@@ -862,10 +846,10 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
             aria-hidden="true"
             class="w-1.5 h-1.5 rounded-full bg-crit"
           />
-          critical
+          Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY

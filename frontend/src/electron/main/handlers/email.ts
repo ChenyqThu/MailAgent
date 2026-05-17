@@ -12,7 +12,13 @@ import type { Database, Statement } from 'better-sqlite3'
 import { ipcMain } from 'electron'
 
 import { getDb } from '../db'
-import { mapLanguage, mapPriority, mapReviewStatus, mapSentiment, parseLabels } from './ai_mapping'
+import {
+  mapLanguage,
+  mapPriority,
+  mapReviewStatus,
+  mapSentiment,
+  parseLabels
+} from '@shared/lib/ai_mapping'
 import type { AIFields, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
 import type {
   EmailList_EmailListItem,

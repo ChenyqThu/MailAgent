@@ -127,13 +127,13 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
 
             {failed && (
               <span className="text-micro font-mono uppercase tracking-wide text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0">
-                Sync Failed
+                SYNC FAILED
               </span>
             )}
 
             {isNew && (
               <span className="text-micro font-mono uppercase tracking-wide text-coral bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded shrink-0">
-                New
+                NEW
               </span>
             )}
 
