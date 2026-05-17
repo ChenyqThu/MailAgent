@@ -23,6 +23,6 @@ export class HttpApi implements MailApi {
 
   attachment = {
     list: () => notImplemented('attachment.list'),
-    download: () => notImplemented('attachment.download')
+    localPath: () => notImplemented('attachment.localPath')
   }
 }

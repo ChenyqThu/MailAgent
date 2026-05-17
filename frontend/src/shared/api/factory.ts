@@ -10,13 +10,13 @@ let _instance: MailApi | null = null
 
 export function makeMailApi(): MailApi {
   if (_instance) return _instance
-  const target = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_BUILD_TARGET
-  if (target === 'web') {
-    const baseUrl =
-      (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_BASE_URL ?? '/api'
-    _instance = new HttpApi(baseUrl)
-  } else {
-    _instance = new ElectronApi()
-  }
-  return _instance
+  const env = (import.meta as unknown as { env?: Record<string, string> }).env ?? {}
+  // Hold the freshly constructed instance in a local — TS narrowing can't
+  // track that the module-level `_instance` is non-null after assignment.
+  const created: MailApi =
+    env.VITE_BUILD_TARGET === 'web'
+      ? new HttpApi(env.VITE_API_BASE_URL ?? '/api')
+      : new ElectronApi()
+  _instance = created
+  return created
 }

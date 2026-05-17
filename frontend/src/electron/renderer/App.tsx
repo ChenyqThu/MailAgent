@@ -8,7 +8,7 @@ import '@shared/i18n'
 import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
 
-export default function App(): JSX.Element {
+export default function App(): React.ReactElement {
   useEffect(() => {
     bootAppearance()
   }, [])

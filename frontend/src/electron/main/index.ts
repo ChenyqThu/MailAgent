@@ -2,6 +2,9 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { bootNativeTheme, registerAppearanceIpc } from './appearance'
+import { registerCliLifecycle } from './cli_runner'
+import { registerEmailHandlers } from './handlers/email'
+import { registerAttachmentHandlers } from './handlers/attachment'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -45,6 +48,13 @@ app.whenReady().then(() => {
   // first-paint flash; register appearance IPC sinks for renderer broadcasts.
   bootNativeTheme()
   registerAppearanceIpc()
+  // REVIEW-LOG C-02: install before-quit hook so in-flight CLI subprocesses
+  // get SIGTERM'd instead of orphaned when the user Cmd+Qs mid-call.
+  registerCliLifecycle()
+  // Sprint 1.2: IPC handlers (read-only — SQLite direct, ~4ms).
+  // Write handlers (resync / update-flag) land in Sprint 5 atop cli_runner.
+  registerEmailHandlers()
+  registerAttachmentHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 
