@@ -1,0 +1,19 @@
+{
+  "app": {
+    "title": "MailAgent",
+    "scaffold": "Scaffold ready"
+  },
+  "mailbox": {
+    "inbox": "Inbox",
+    "sent": "Sent"
+  },
+  "ai": {
+    "compose": "Draft reply"
+  },
+  "search": {
+    "placeholder": "Search mail…"
+  },
+  "empty": {
+    "state": "Nothing to show"
+  }
+}

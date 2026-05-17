@@ -1,0 +1,19 @@
+{
+  "app": {
+    "title": "MailAgent",
+    "scaffold": "脚手架就绪"
+  },
+  "mailbox": {
+    "inbox": "收件箱",
+    "sent": "已发送"
+  },
+  "ai": {
+    "compose": "起草回复"
+  },
+  "search": {
+    "placeholder": "搜索邮件…"
+  },
+  "empty": {
+    "state": "没有可显示的内容"
+  }
+}

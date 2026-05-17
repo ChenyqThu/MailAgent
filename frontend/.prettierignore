@@ -1,0 +1,13 @@
+out
+dist
+node_modules
+pnpm-lock.yaml
+LICENSE.md
+tsconfig.json
+tsconfig.*.json
+*.gen.ts
+archive/
+mockup-*.html
+# All SSoT markdown docs are hand-curated and must NOT be reformatted by prettier.
+# Defense in depth: prettier should not touch any *.md under frontend/.
+*.md

@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Token CSS variables. The whole design system swaps from here:
+ *   - data-theme="light" → light ink scale + fg ramp (DESIGN.md §2.1)
+ *   - data-accent="<id>"  → swap the 3 --c-accent-* triples (DESIGN.md §2.7)
+ * Tailwind reads `coral` from rgb(var(--c-accent) / <alpha-value>) so every
+ * `text-coral` / `bg-coral/15` / `border-coral/30` retints on attribute change.
+ */
+:root {
+  /* default (no data-accent) = coral */
+  --c-accent: 229 101 75;
+  --c-accent-hi: 216 88 65;
+  --c-accent-dim: 126 61 50;
+}
+
+:root[data-accent='cobalt'] {
+  --c-accent: 74 120 229;
+  --c-accent-hi: 60 102 207;
+  --c-accent-dim: 48 82 163;
+}
+:root[data-accent='teal'] {
+  --c-accent: 45 181 166;
+  --c-accent-hi: 33 156 142;
+  --c-accent-dim: 24 110 100;
+}
+:root[data-accent='rose'] {
+  --c-accent: 219 91 124;
+  --c-accent-hi: 198 71 105;
+  --c-accent-dim: 140 50 74;
+}
+:root[data-accent='slate'] {
+  --c-accent: 126 134 148;
+  --c-accent-hi: 105 113 127;
+  --c-accent-dim: 74 80 92;
+}
+:root[data-accent='olive'] {
+  --c-accent: 156 165 82;
+  --c-accent-hi: 134 143 70;
+  --c-accent-dim: 94 100 48;
+}
+
+/* Dark mode is the canonical (DESIGN.md §1.3 rule 5); html.dark from Tailwind
+ * darkMode:'class' + data-theme='dark' both flipped by appearance store. */
+html[data-theme='dark'] {
+  background: #0e1013;
+  color: #e8eaee;
+}
+
+/* Light mode token swap (DESIGN.md §2.1) — paint-level fallback before
+ * components inject their tailwind classes. */
+html[data-theme='light'] {
+  background: #fafafa;
+  color: #1a1d22;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+}

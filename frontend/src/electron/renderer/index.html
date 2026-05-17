@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MailAgent</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; connect-src 'self'"
+    />
+    <!--
+      Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>
+      before the renderer paints to avoid FOUC. Mirrors DESIGN.md §17.3.2.
+      Keep this script inline + sync — must run before <body> renders.
+    -->
+    <script>
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('mailagent.themeMode') || 'system'
+          var resolved =
+            stored === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : stored
+          var root = document.documentElement
+          root.setAttribute('data-theme', resolved)
+          root.classList.toggle('dark', resolved === 'dark')
+          var accent = localStorage.getItem('mailagent.accent')
+          if (accent && accent !== 'coral') {
+            root.setAttribute('data-accent', accent)
+          }
+        } catch (e) {
+          /* localStorage may be unavailable; fall through to default dark */
+          document.documentElement.setAttribute('data-theme', 'dark')
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+    <style id="theme-bootstrap">
+      html[data-theme='dark'] {
+        background: #0e1013;
+        color: #e8eaee;
+      }
+      html[data-theme='light'] {
+        background: #fafafa;
+        color: #1a1d22;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

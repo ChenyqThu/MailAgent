@@ -1,0 +1,30 @@
+appId: ink.chenge.mailagent
+productName: MailAgent
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{ARCHITECTURE.md,BACKEND-INTERFACES.md,DESIGN.md,ISLAND-PLUGIN.md,PROJECT-PLAN.md,REMOTE-ACCESS.md,REVIEW-LOG.md,NOTES.md}'
+  - '!mockup-*.html'
+  - '!archive/**'
+asarUnpack:
+  - resources/**
+mac:
+  category: public.app-category.productivity
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSDocumentsFolderUsageDescription: MailAgent reads the local SQLite database under your Documents folder.
+    - NSDownloadsFolderUsageDescription: MailAgent saves email attachments to your Downloads folder when you export them.
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+publish:
+  provider: github
+  owner: chenyqthu
+  repo: MailAgent
