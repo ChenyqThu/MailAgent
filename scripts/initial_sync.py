@@ -1,68 +1,19 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402
 """
-初始化同步脚本
+初始化同步: import-only module。
 
-新架构的初始化流程：
-1. AppleScript 获取邮件（收件箱 + 发件箱）
-2. 写入 SyncStore (email_metadata 表)
-3. 从 Notion 拉取已同步邮件的 message_id
-4. 比对校验，标记已同步的邮件
-5. 提示用户确认后，同步所有 pending 邮件
+DEPRECATED entry-point. Use 'mailagent init <action>' instead.
 
-Usage:
-    # 完整流程（分析 + 同步）
-    python scripts/initial_sync.py
-
-    # 跳过确认步骤
-    python scripts/initial_sync.py --yes
-
-    # 只同步指定数量
-    python scripts/initial_sync.py --limit 100
-
-    # === 分离式执行 ===
-
-    # Phase 1: 仅分析，生成报告
-    python scripts/initial_sync.py --action analyze --output data/analysis.json
-
-    # Phase 2: 基于报告执行操作
-    python scripts/initial_sync.py --action fix-properties --input data/analysis.json
-    python scripts/initial_sync.py --action sync-new --input data/analysis.json --limit 100
-
-    # 可用的 action:
-    #   analyze              仅分析 SyncStore vs Notion + Parent Item 状态
-    #   fix-properties       修复 date/thread_id 不同
-    #   fix-critical         重新同步关键信息不同的邮件（删除旧页面）
-    #   fix-parent           修复缺失 Parent Item（基于 analyze 报告）
-    #   update-all-parents   遍历验证并修复所有 Parent Item（独立分析，推荐）
-    #   sync-thread-heads    同步缺失的线程头
-    #   sync-new             同步新邮件
-    #   all                  执行所有修复和同步
-
-异常分类说明:
-    - matched: 完全匹配（自动标记为已同步）
-    - property_mismatch: date 或 thread_id 不同 → fix-properties 更新属性
-    - critical_mismatch: subject 或 sender 不同 → fix-critical 删除重建
-    - store_only: 仅在 SyncStore → sync-new 同步到 Notion
-    - notion_only: 仅在 Notion（可能已召回）→ 不处理
-    - missing_parent: 缺失 Parent Item → fix-parent 关联
-    - orphan_threads_*: 线程头缺失 → sync-thread-heads 同步
-    - unfixable_thread_heads: 无法修复的线程头（最后输出统计）
+保留的 import 表面 (供 src/cli/commands/init.py 调用):
+    - InitialSync 类
+    - AnalysisReport 类
 """
 
-import asyncio
-import argparse
 import json
-import sys
 import time
-import warnings
-from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
-
-# 添加项目根目录到 Python 路径
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
 
 # 北京时区
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -1709,144 +1660,3 @@ class InitialSync:
             print(f", 邮件找不到 {not_found} 封（已删除记录）")
         else:
             print()
-
-
-async def main():
-    parser = argparse.ArgumentParser(description="MailAgent 初始化同步")
-    parser.add_argument("--yes", "-y", action="store_true", help="跳过确认步骤")
-    parser.add_argument("--limit", "-l", type=int, help="限制同步数量")
-    parser.add_argument("--action", "-a", type=str, choices=[
-        "analyze",           # 仅分析对比（包含 Parent Item 分析）
-        "fetch-cache",       # 仅获取邮件到缓存（预热）
-        "fix-properties",    # 修复 date/thread_id 不同
-        "fix-critical",      # 重新同步关键信息不同的邮件
-        "update-all-parents", # 遍历验证并修复所有 Parent Item（包含线程头同步）
-        "sync-new",          # 同步新邮件
-        "all"                # 执行所有修复和同步
-    ], help="执行指定操作")
-    parser.add_argument("--output", "-o", type=str, help="保存分析报告到 JSON 文件")
-    parser.add_argument("--input", "-i", type=str, help="从 JSON 文件加载分析报告")
-    parser.add_argument("--skip-fetch", action="store_true", help="跳过从 Mail.app 获取邮件（仅对比现有数据）")
-    parser.add_argument("--inbox-count", type=int, default=0, help="收件箱获取数量限制 (0=不限制)")
-    parser.add_argument("--sent-count", type=int, default=0, help="发件箱获取数量限制 (0=不限制)")
-    args = parser.parse_args()
-
-    # 配置日志
-    logger.remove()
-    logger.add(sys.stderr, level="WARNING")
-
-    # 构建邮箱数量限制
-    mailbox_limits = {}
-    if args.inbox_count > 0:
-        mailbox_limits["收件箱"] = args.inbox_count
-    if args.sent_count > 0:
-        mailbox_limits["发件箱"] = args.sent_count
-
-    sync = InitialSync(mailbox_limits=mailbox_limits)
-
-    # 如果指定了输入文件，加载报告
-    if args.input:
-        try:
-            sync.report = AnalysisReport.load(args.input)
-        except Exception as e:
-            print(f"❌ 加载报告失败: {e}")
-            return
-
-    if args.action == "analyze":
-        # 仅分析，不同步
-        # 如果没有指定 count 限制，默认跳过获取（避免无限获取）
-        skip_fetch = args.skip_fetch
-        if not mailbox_limits and not skip_fetch:
-            print("提示: 未指定 --inbox-count/--sent-count，默认跳过获取邮件")
-            print("      如需获取新邮件，请指定数量或使用 --action fetch-cache")
-            skip_fetch = True
-
-        await sync.analyze_only(skip_fetch=skip_fetch)
-
-        # 保存报告
-        if args.output:
-            sync.report.save(args.output)
-
-        print("\n 分析完成！可用的修复操作:")
-        print("   --action fix-properties      修复 date/thread_id 不同")
-        print("   --action fix-critical        重新同步关键信息不同的邮件")
-        print("   --action update-all-parents  遍历验证并修复所有 Parent Item（包含线程头同步）")
-        print("   --action sync-new            同步新邮件")
-        print("   --action all                 执行所有操作")
-        print("\n 提示: 使用 --output 保存报告，后续用 --input 加载快速执行")
-
-    elif args.action == "fetch-cache":
-        # 仅预热缓存，不做 Notion 对比和同步
-        print("=" * 60)
-        print("SyncStore 缓存预热")
-        print("=" * 60)
-        if mailbox_limits:
-            print("\n目标数量:")
-            for mb, count in mailbox_limits.items():
-                print(f"  - {mb}: {count} 封")
-        else:
-            print("\n未指定数量限制，将获取所有邮件")
-            print("提示: 使用 --inbox-count 和 --sent-count 指定数量")
-
-        await sync._fetch_emails_from_applescript()
-
-        # 输出最终统计
-        stats = sync.sync_store.get_stats()
-        print("\n" + "=" * 60)
-        print("缓存预热完成")
-        print("=" * 60)
-        print("\nSyncStore 状态:")
-        print(f"  - 总邮件数: {stats.get('total_emails', 0)}")
-        by_mailbox = stats.get('by_mailbox', {})
-        for mb, count in by_mailbox.items():
-            print(f"    - {mb}: {count} 封")
-        print(f"  - pending: {stats.get('pending', 0)}")
-        print(f"  - synced: {stats.get('synced', 0)}")
-        print(f"  - last_max_row_id: {stats.get('last_max_row_id', 'N/A')}")
-
-    elif args.action:
-        # 如果没有加载报告，先运行分析
-        if not args.input:
-            # 如果没有指定 count 限制，默认跳过获取（避免无限获取）
-            skip_fetch = args.skip_fetch
-            if not mailbox_limits and not skip_fetch:
-                print("提示: 未指定 --inbox-count/--sent-count，默认跳过获取邮件")
-                skip_fetch = True
-            await sync.analyze_only(skip_fetch=skip_fetch)
-
-        # 根据 action 执行对应操作
-        if args.action == "fix-properties":
-            await sync.fix_properties(auto_confirm=args.yes)
-        elif args.action == "fix-critical":
-            await sync.fix_critical_mismatch(auto_confirm=args.yes)
-        elif args.action == "update-all-parents":
-            await sync.update_all_parent_items(auto_confirm=args.yes)
-        elif args.action == "sync-new":
-            await sync.sync_new_emails(limit=args.limit, auto_confirm=args.yes)
-        elif args.action == "all":
-            print("\n" + "=" * 50)
-            print("执行所有修复和同步操作")
-            print("=" * 50)
-
-            await sync.fix_properties(auto_confirm=args.yes)
-            await sync.fix_critical_mismatch(auto_confirm=args.yes)
-            await sync.sync_new_emails(limit=args.limit, auto_confirm=args.yes)
-            await sync.update_all_parent_items(auto_confirm=args.yes)  # 统一更新 Parent Item（包含线程头同步）
-
-            print("\n✅ 所有操作完成！")
-    else:
-        # 默认：运行完整流程
-        await sync.run(auto_confirm=args.yes, limit=args.limit)
-
-    # 关闭 aiohttp session，避免 "Unclosed client session" 警告
-    await sync.notion_sync.client.close()
-
-
-if __name__ == "__main__":
-    warnings.warn(
-        "scripts/initial_sync.py is deprecated; use 'mailagent init <action>' instead. "
-        "Will be removed in PR-6.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    asyncio.run(main())

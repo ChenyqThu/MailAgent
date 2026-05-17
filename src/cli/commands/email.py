@@ -250,7 +250,7 @@ def email_body(
     if body_record is None:
         raise emit_cli_error(cli, CliNotFoundError(
             f"No body in SQLite for internal_id={internal_id}",
-            hint="可能未经 v4 双写; 跑 scripts/backfill_email_body.py 回填",
+            hint="可能未经 v4 双写; 跑 `mailagent backfill body --internal-ids <id>` 回填",
         ))
 
     if fmt == "markdown":
@@ -768,7 +768,7 @@ def _resync_single(
     except ValueError as e:
         raise emit_cli_error(cli, CliNotFoundError(
             str(e),
-            hint="Phase 1 之前的邮件正文未双写; 跑 scripts/backfill_email_body.py "
+            hint="Phase 1 之前的邮件正文未双写; 跑 `mailagent backfill body --internal-ids <id>` "
                  "回填后再 resync",
         ))
 

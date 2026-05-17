@@ -992,7 +992,7 @@ class PageOps:
           供反向同步 / orphan cleanup 复用
 
         适用场景：
-        - ``scripts/resync_notion.py`` 重传历史邮件（不再走 AppleScript）
+        - ``mailagent email resync`` 重传历史邮件（不再走 AppleScript）
         - 灰度切换后正常 sync 路径（P4-04 wrapper 路由）
 
         Raises:

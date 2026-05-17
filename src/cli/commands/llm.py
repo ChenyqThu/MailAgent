@@ -58,7 +58,7 @@ def llm_run(
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """对单封邮件跑 LLM 分类 → 填 Notion AI 字段 (对应 scripts/run_llm_on_email.py)."""
+    """对单封邮件跑 LLM 分类 → 填 Notion AI 字段 (PR-5 起 inline; 取代旧 scripts/run_llm_on_email.py)."""
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 

@@ -2,7 +2,7 @@
 
 > **状态**: 设计稿（2026-05-16）— 等 PR-5（`scripts/*` inline 化 + thin wrapper）合后落地。
 > **作者**: Claude Opus 4.7 (1M context) — 与 backend-review-2026-05.md §6 R-05 对齐，补 PR-5 PRD（`prd.json`）未覆盖的细节。
-> **前置阅读**: [`backend-review-2026-05.md`](./backend-review-2026-05.md) §6 R-05 + §7 D2、[`pr5-handoff-scripts-migration.md`](./pr5-handoff-scripts-migration.md)、`prd.json` 12 stories。
+> **前置阅读**: [`backend-review-2026-05.md`](./backend-review-2026-05.md) §6 R-05 + §7 D2、[`archive/pr5-handoff-scripts-migration.md`](./archive/pr5-handoff-scripts-migration.md)（PR-6 起归档）、`prd.json` 12 stories。
 > **不在范围**: 不动 `src/`，不动 `scripts/`（PR-5 并行在跑），不删任何文件。仅产出 markdown 设计。
 
 ---

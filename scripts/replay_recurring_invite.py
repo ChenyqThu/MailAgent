@@ -1,42 +1,20 @@
-"""回放历史会议邀请邮件，触发周期展开。
+"""
+回放历史会议邀请: import-only module。
 
-用途：
-  - 周期会议展开功能首次上线后，需要把历史的 .ics 邀请重新喂给
-    MeetingInviteSync.process_email，让它建立 recurring_series 行 +
-    展开 horizon 内的所有 occurrences 写入 Notion 日历。
+DEPRECATED entry-point. Use 'mailagent calendar recurring {discover,replay}' instead.
 
-模式：
-  --discover-recurring       扫 SyncStore 内的 .eml/source，列出带 RRULE 的 internal_id（不写入 Notion）
-  --internal-id N            回放单个 internal_id（写入 Notion）
-  --internal-ids N1,N2,...   回放多个 internal_id
-
-示例：
-  # 1. 先扫看哪些历史邀请是周期会议
-  python scripts/replay_recurring_invite.py --discover-recurring --since 2026-04-01
-
-  # 2. 回放指定的两个
-  python scripts/replay_recurring_invite.py --internal-ids 51924,52846
+CLI 调用的导出: discover_recurring / replay_one / _has_calendar_part 函数
 """
 from __future__ import annotations
 
-import argparse
-import asyncio
-import sys
-from pathlib import Path
 from typing import List, Optional
 
-# 确保 src.* 可解析
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+from loguru import logger
 
-from loguru import logger  # noqa: E402
-
-from src.config import config  # noqa: E402
-from src.mail.applescript_arm import AppleScriptArm  # noqa: E402
-from src.mail.icalendar_parser import ICalendarParser  # noqa: E402
-from src.mail.meeting_sync import MeetingInviteSync  # noqa: E402
-from src.mail.sync_store import SyncStore  # noqa: E402
+from src.mail.applescript_arm import AppleScriptArm
+from src.mail.icalendar_parser import ICalendarParser
+from src.mail.meeting_sync import MeetingInviteSync
+from src.mail.sync_store import SyncStore
 
 
 def _has_calendar_part(source: str) -> bool:
@@ -165,80 +143,3 @@ async def replay_one(
     )
     return page_id
 
-
-async def main(args: argparse.Namespace) -> int:
-    sync_store = SyncStore(config.sync_store_db_path)
-    arm = AppleScriptArm()
-
-    if args.discover_recurring:
-        matches = await discover_recurring(
-            sync_store, arm, since=args.since, limit=args.discover_limit
-        )
-        if not matches:
-            print("No recurring invites found in window.")
-            return 0
-        print(f"\nFound {len(matches)} recurring meeting invites:\n")
-        print(f"{'id':>8}  {'method':>8}  {'date':>20}  rrule  subject")
-        print("-" * 100)
-        for m in matches:
-            print(
-                f"{m['internal_id']:>8}  {m['method']:>8}  {m['date'][:19]:>20}  "
-                f"{m['rrule'][:30]:<30}  {m['subject'][:50]}"
-            )
-        return 0
-
-    if not args.internal_ids:
-        print("Need --internal-ids or --discover-recurring", file=sys.stderr)
-        return 2
-
-    meeting_sync = MeetingInviteSync(sync_store=sync_store)
-
-    successes = 0
-    for internal_id in args.internal_ids:
-        # 每封邀请处理前重置统计便于单独看
-        meeting_sync.reset_stats()
-        page_id = await replay_one(internal_id, sync_store, arm, meeting_sync)
-        if page_id is not None:
-            successes += 1
-
-    print(f"\nReplay complete: {successes}/{len(args.internal_ids)} succeeded")
-    return 0 if successes == len(args.internal_ids) else 1
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--discover-recurring", action="store_true",
-                   help="扫 SyncStore 找带 RRULE 的邮件（不写入 Notion）")
-    p.add_argument("--since", type=str, default=None,
-                   help="discover 模式: 仅扫此日期之后的邮件 (YYYY-MM-DD)")
-    p.add_argument("--discover-limit", type=int, default=2000,
-                   help="discover 扫描上限（按 date desc）")
-    p.add_argument("--internal-id", type=int, default=None,
-                   help="单个回放: 邮件 internal_id")
-    p.add_argument("--internal-ids", type=str, default=None,
-                   help="批量回放: 逗号分隔的 internal_id，如 51924,52846")
-    args = p.parse_args()
-
-    ids: List[int] = []
-    if args.internal_id is not None:
-        ids.append(args.internal_id)
-    if args.internal_ids:
-        for s in args.internal_ids.split(","):
-            s = s.strip()
-            if s:
-                ids.append(int(s))
-    args.internal_ids = ids
-    return args
-
-
-if __name__ == "__main__":
-    import warnings
-
-    warnings.warn(
-        "scripts/replay_recurring_invite.py is deprecated; use "
-        "'mailagent calendar recurring replay' instead. Will be removed in PR-6.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    args = parse_args()
-    sys.exit(asyncio.run(main(args)))

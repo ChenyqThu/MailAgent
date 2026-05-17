@@ -157,7 +157,7 @@ Batch 命令自动写 `cli_checkpoints` 表（每 N=50 unit）；中断后用同
 
 **JSON Schema 契约**：[`docs/cli-schema/`](./docs/cli-schema/) 含 45+ schema 文件（含 `_common.schema.json`）+ `error-codes.md` 列 11 个 `E_*` enum（PR-4 新增 `E_MAX_FAILURES` / `E_PM2_RUNNING`）。所有 wrapper 形如 `{status, schema_version: 1, data | error, meta: {duration_ms, ...}}` (RFC §5.1.2)。
 
-**详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7 + [`docs/pr5-handoff-scripts-migration.md`](./docs/pr5-handoff-scripts-migration.md)。**PR-5 已 ship**: 5 个 stub 真接通（llm compare-paths / notion page-orphans / notion file-link-audit / calendar expand / attachment derive）+ 7 个 subprocess wrap 全部 inline 化（backfill body / backfill derivatives / project-progress sync / init {7 actions} / admin cleanup-syncstore / cleanup-duplicates / repair-parents）+ `scripts/dev/` + `scripts/archive/` 子目录归位（29 → dev，4 → archive）+ 11 个 module-with-deprecation 顶层脚本（旧用法 `python scripts/foo.py …` 仍可用 + stderr DeprecationWarning）。DB_VERSION 仍 6，10 个 CLI group / 45+ schema / 退出码体系（0/1/2/4/5/6/7/8/9/130）不变。pytest 650 passed。PR-6 见 [`docs/pr6-handoff-deprecation-cleanup.md`](./docs/pr6-handoff-deprecation-cleanup.md)（4 周 release window 后删 thin wrappers）。
+**详细 spec**：[`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) §4 / §5 / §6 / §7 + [`docs/archive/pr5-handoff-scripts-migration.md`](./docs/archive/pr5-handoff-scripts-migration.md) + [`docs/archive/pr6-handoff-deprecation-cleanup.md`](./docs/archive/pr6-handoff-deprecation-cleanup.md)。**PR-6 已 ship**: 6 个真 thin wrapper 顶层脚本 git rm（backfill_email_body / backfill_derivatives / sync_project_progress / compare_llm_path / run_llm_on_email / resync_notion），5 个 CLI 依赖 module 删 `__main__` 入口保留 class/函数作 import-only（initial_sync / cleanup_syncstore / cleanup_duplicate_message_ids / cleanup_notion_db / replay_recurring_invite）。旧用法 `python scripts/<wrapper>.py …` 现报 `No such file or directory`；改走 `mailagent <group> <action> …` CLI。DB_VERSION 仍 6，10 个 CLI group / 45+ schema / 退出码体系（0/1/2/4/5/6/7/8/9/130）不变。pytest 655 passed。
 
 **典型 agent 调用样例**：
 ```bash
@@ -183,14 +183,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 测试
-python3 scripts/test_notion_api.py      # Notion 连接
-python3 scripts/test_mail_reader.py     # 邮件读取
-python3 scripts/debug_mail_structure.py # 查看邮箱名称
+python3 scripts/dev/test_notion_api.py  # Notion 连接（dev harness）
+python3 scripts/dev/test_mail_reader.py # 邮件读取（dev harness）
+mailagent debug mail-structure          # 查看邮箱名称
 
-# 初始化同步
-python3 scripts/initial_sync.py --action fetch-cache --inbox-count 3000 --sent-count 500
-python3 scripts/initial_sync.py --action analyze
-python3 scripts/initial_sync.py --action all --yes
+# 初始化同步（PR-6 起改走 CLI；旧 python scripts/initial_sync.py 已删 __main__）
+mailagent init fetch-cache --inbox-count 3000 --sent-count 500
+mailagent init analyze
+mailagent init all --yes
 
 # 运行服务
 python3 main.py                         # 前台运行
@@ -726,7 +726,7 @@ brew install --cask font-noto-sans-cjk   # CJK 字体
 ### 邮箱名称错误
 
 ```bash
-python3 scripts/debug_mail_structure.py
+mailagent debug mail-structure
 ```
 
 ### SQLite 无法访问
@@ -743,7 +743,7 @@ python3 scripts/debug_mail_structure.py
 
 编辑 `src/mail/reader.py`，测试：
 ```bash
-python3 scripts/test_mail_reader.py
+python3 scripts/dev/test_mail_reader.py
 ```
 
 ### 修改会议检测
@@ -826,7 +826,7 @@ src/llm_agent/
   processor.py       核心入口：拼 system+user → LLM tool_use → AILabels
   store.py           llm_processing SQLite 表（retry 队列 + cost/latency 记录）
   runner.py          端到端封装（sync_store → arm fetch → parse → LLM → Notion write）
-scripts/run_llm_on_email.py   CLI（--selftest / --dry-run / --internal-id N / --no-overwrite）
+src/cli/commands/llm.py       CLI（`mailagent llm {selftest,run,retry-failed,stats,compare-paths}`；PR-6 起取代旧 scripts/run_llm_on_email.py）
 prompts/
   email_inbox.md     收件箱判定规则（mailbox-specific）
   email_sent.md     发件箱 follow-up 判定规则
@@ -848,16 +848,16 @@ prompts/
 ### CLI
 ```bash
 # 网关健康检查（不烧 token 做真实 Notion 写入）
-python scripts/run_llm_on_email.py --selftest
+mailagent llm selftest
 
 # 单封干跑（看 LLM 输出 + 待写 properties 但不写 Notion）
-python scripts/run_llm_on_email.py --internal-id 51793 --dry-run
+mailagent llm run 51793 --dry-run
 
 # 单封实跑（覆盖已有字段）
-python scripts/run_llm_on_email.py --internal-id 51793 --force
+mailagent llm run 51793 --force
 
 # 范围重跑（保留用户已手改的非空字段）
-python scripts/run_llm_on_email.py --internal-ids 51000-51100 --force --no-overwrite
+mailagent llm run --internal-ids 51000-51100 --force --no-overwrite
 ```
 
 ### 监控
@@ -903,7 +903,7 @@ sqlite3 data/sync_store.db "
 - TTL：默认 `LLM_CACHE_TTL=1h`（`src/config.py`）。`client.py` 无条件发 `anthropic-beta: extended-cache-ttl-2025-04-11` header，所以 1h TTL 在 CRS 和原生 Anthropic 两条路都生效。想强制 5m 就 `LLM_CACHE_TTL=5m`；留空则让网关决定（CRS 默认 1h、原生 Anthropic 默认 5m，会漂，不推荐）。
 - 不伪装 Claude Code：CRS 对非 CC 请求会把 system 迁移到 messages，但会保留 cache_control；只要每次调用 prefix 内容一致，迁移后的 hash 依然稳定、命中照常。伪装（`User-Agent: claude-cli/x.y.z` + `x-app: cli`）在 CRS 检测规则变化时容易碎，**不推荐**。
 - 关开关：`LLM_CACHE_ENABLED=false`（非 Anthropic 协议、或定位 cache 相关故障时）。
-- 命中验证：对同一 internal_id 跑两次 `python scripts/run_llm_on_email.py --internal-id X --force`，第 2 次的 `cache_read_input_tokens` 应 > 0、`cache_creation_input_tokens` 应 = 0（prefix 没变、TTL 没过）。
+- 命中验证：对同一 internal_id 跑两次 `mailagent llm run X --force`，第 2 次的 `cache_read_input_tokens` 应 > 0、`cache_creation_input_tokens` 应 = 0（prefix 没变、TTL 没过）。
 - 典型收益（Sonnet 4.6，100 封/工作日集中到达）：input 约 4400 uncached + 2500 cached；5m cache 命中率 ~75%，月省 ~$13；1h cache ~95%，月省 ~$17。
 
 ### LLM payload vs Notion 页面字段一致性
@@ -964,7 +964,7 @@ src/project_progress/
   notion_schema.py     启动时 schema bootstrap（5min 缓存，自动建 7 个 property，Suspended status 仅 log）
   runner.py            端到端 runner（sync_from_email）
 
-scripts/sync_project_progress.py    CLI
+src/cli/commands/project_progress.py CLI（`mailagent project-progress sync ...`；PR-6 起取代旧 scripts/sync_project_progress.py）
 tests/project_progress/             pytest
 docs/notion_markdown_api.md         Notion Markdown API 探测记录
 ```
@@ -1075,28 +1075,28 @@ xlsx 的 `Project Progress` 里日期头格式多样（`[MM/DD]` / `[M/D]` / `[M
 ### 命令
 ```bash
 # 自动扫最近一封未处理的（默认全 3 sheet）
-python scripts/sync_project_progress.py
+mailagent project-progress sync
 
 # 指定一封
-python scripts/sync_project_progress.py --internal-id 52258
+mailagent project-progress sync --internal-id 52258
 
 # **首次切换迁移 dry-run**（输出预估的 create / Done / Suspended 数量，不写 Notion）
-python scripts/sync_project_progress.py --internal-id 52258 --first-migration-dry-run
+mailagent project-progress sync --internal-id 52258 --first-migration-dry-run
 
 # 仅解析 Ongoing sheet（兼容 v1 行为）
-python scripts/sync_project_progress.py --internal-id 51793 --sheets ongoing
+mailagent project-progress sync --internal-id 51793 --sheets ongoing
 
 # 回填历史（按日期升序 N 封）
-python scripts/sync_project_progress.py --all-history --limit 10
+mailagent project-progress sync --all-history --limit 10
 
 # 干跑（不写 Notion）
-python scripts/sync_project_progress.py --internal-id 52258 --dry-run
+mailagent project-progress sync --internal-id 52258 --dry-run
 
 # 强制重跑 (会用 xlsx 整页 replace 正文)
-python scripts/sync_project_progress.py --internal-id 52258 --force
+mailagent project-progress sync --internal-id 52258 --force
 
 # 一次性回填"项目开始时间"到所有已入库项目页
-python scripts/sync_project_progress.py --internal-id 52258 --backfill-project-start
+mailagent project-progress sync --internal-id 52258 --backfill-project-start
 ```
 
 ### 自动触发（可选）
@@ -1139,7 +1139,7 @@ PROJECT_PROGRESS_SUBJECT_PATTERN=<标题正则，含【项目进度】等关键�
 2. **代码部署**：拉取最新代码（DB 表迁移会在首次启动 `ProjectProgressSyncStore` 时透明完成）
 3. **dry-run 审查**：
    ```bash
-   python scripts/sync_project_progress.py --internal-id <最新 zwf 邮件 id> --first-migration-dry-run
+   mailagent project-progress sync --internal-id <最新 zwf 邮件 id> --first-migration-dry-run
    ```
    输出形如：
    ```
@@ -1246,20 +1246,20 @@ for h in hits:
 
 ```bash
 # Notion 重传（基于 SQLite，不调 AppleScript）
-python scripts/resync_notion.py --internal-id 53675 --dry-run                # 看 plan
-python scripts/resync_notion.py --internal-id 53675 --replace-existing       # archive 老页 → 建新
-python scripts/resync_notion.py --range 53000-53100 --replace-existing
-python scripts/resync_notion.py --internal-ids 53674,53675,53677
+mailagent email resync 53675 --dry-run                                    # 看 plan
+mailagent email resync 53675 --replace-existing                           # archive 老页 → 建新
+mailagent email resync --range 53000-53100 --replace-existing
+mailagent email resync --ids 53674,53675,53677
 
 # Office 衍生附件补救（追加 derived row，不动现有 row；适合 backfill silent fail）
-python scripts/backfill_derivatives.py --dry-run                              # 看候选数
-python scripts/backfill_derivatives.py --internal-id 53677                    # 单封
-python scripts/backfill_derivatives.py                                        # 全量补
+mailagent backfill derivatives --dry-run                                  # 看候选数
+mailagent backfill derivatives --internal-id 53677                        # 单封
+mailagent backfill derivatives                                            # 全量补
 ```
 
 **注意**:
-- `resync_notion.py` 默认 `skip_parent_lookup=True`（diff 验证用），新页不会重建线程关系
-- `backfill_derivatives.py` 补完后，Notion 老页**不会**自动出现 derived 附件；要更新需要 `resync_notion.py --replace-existing`
+- `mailagent email resync` 默认 `skip_parent_lookup=True`（diff 验证用），新页不会重建线程关系
+- `mailagent backfill derivatives` 补完后，Notion 老页**不会**自动出现 derived 附件；要更新需要 `mailagent email resync --replace-existing`
 - 灰度切 `NOTION_READ_FROM_SQLITE=true` 操作步骤见 [`docs/phase4-complete.md`](./docs/phase4-complete.md) §6
 
 ### 关键开关
@@ -1285,7 +1285,7 @@ v4 sync 路径：AppleScript → in-memory Email → **build_storage_payloads + 
 | Phase 1 | ✅ **已上线 2026-05-15** | 双写 MVP；新邮件 sync 时落 SQLite，Web 端可立即切表。43/43 单测通过、生产服务已加载 v4 |
 | Phase 2 | ✅ **已上线 2026-05-15** | LLM processor / handle_fetch_mail_content 直读 SQLite（命中 ~4ms vs AppleScript 1-3s）；P99 latency tracker；回归对比工具就位。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md)。回退开关 `LLM_PREFER_SQLITE_BODY=false` |
 | Phase 3 | ✅ **已上线 2026-05-15** | FTS5 全文索引 + `search_email_bodies` agent 工具；webhook bm25 排序 + snippet 高亮 + mailbox/date 过滤。274/274 单测通过。详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md) |
-| Phase 4 | ✅ **已 ship 2026-05-16（灰度期）** | `create_email_page_from_sqlite` 主入口 + v2 wrapper 路由 (`NOTION_READ_FROM_SQLITE`) + `scripts/resync_notion.py` + `scripts/backfill_derivatives.py`。上传后 `notion_file_id` 回写 SQLite。295/295 单测、3 封灰度切换实测 OK。详见 [`docs/phase4-complete.md`](./docs/phase4-complete.md) |
+| Phase 4 | ✅ **已 ship 2026-05-16（灰度期）** | `create_email_page_from_sqlite` 主入口 + v2 wrapper 路由 (`NOTION_READ_FROM_SQLITE`) + `mailagent email resync` + `mailagent backfill derivatives` CLI（PR-6 起取代旧 `scripts/resync_notion.py` / `scripts/backfill_derivatives.py`）。上传后 `notion_file_id` 回写 SQLite。295/295 单测、3 封灰度切换实测 OK。详见 [`docs/phase4-complete.md`](./docs/phase4-complete.md) |
 | Phase 5 | 未来 | Electron / Web 前端（接口已就位） |
 | **T-01** | 独立 TODO | Notion sync 迁 Markdown API（参考 `src/project_progress/notion_sync.py` 样板） |
 
@@ -1335,18 +1335,18 @@ pytest tests/repository/ tests/events/ -v
 # 在 .env 加: BODY_DUAL_WRITE_ENABLED=false 然后 pm2 restart mail-sync
 ```
 
-### T-02 历史邮件 backfill（脚本就位，2026-05-15）
+### T-02 历史邮件 backfill（CLI 就位，2026-05-15；PR-6 起改走 `mailagent backfill body`）
 
 把 Phase 1 之前已 sync 到 Notion 的 6131 封历史邮件正文回填到 SQLite，让 LLM 路径
 口径统一。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md) §7。
 
 ```bash
 # 单封验证（dry-run）
-python scripts/backfill_email_body.py --internal-ids 53675 --dry-run
+mailagent backfill body --internal-ids 53675 --dry-run
 
 # 全量后台跑（必须先 stop pm2 mail-sync 避免 AppleScript 拥塞）
 pm2 stop mail-sync
-nohup python scripts/backfill_email_body.py --all > logs/backfill.log 2>&1 &
+nohup mailagent backfill body --all > logs/backfill.log 2>&1 &
 # 进度：tail -f logs/backfill.log 或 sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_body"
 # 跑完：pm2 start mail-sync
 ```

@@ -218,7 +218,7 @@ def debug_inline_images(
     if body is None:
         raise emit_cli_error(cli, CliNotFoundError(
             f"No body in SQLite for internal_id={internal_id}",
-            hint="可能未经 v4 双写; 跑 scripts/backfill_email_body.py 回填",
+            hint="可能未经 v4 双写; 跑 `mailagent backfill body --internal-ids <id>` 回填",
         ))
 
     html = body.html or ""

@@ -1667,6 +1667,8 @@ PR-4 之后，webhook-server dashboard.html 加 "v4 Rollout" panel：
 
 ## 9. scripts/ 迁移表（R-05 + D2，**v2 重排**）
 
+> **Status (2026-05-16)**：✅ **PR-5 / PR-6 已完成** —— PR-5 把 13 个 thin wrapper + 29 个 dev / 4 个 archive 迁完位，PR-6 git rm 6 个真 thin wrapper + 5 个 CLI 依赖 module 删 `__main__` 入口收口为 import-only。下方 §9.1 - §9.6 表格保留为历史决策快照；当前形态见 §9.6 "post-PR-6 实际形态"。
+
 **v2 修正**：scripts/ 顶层实测 **44 个文件**（v1 报错 47，已重数）。迁移表 v2 重排：
 
 1. `replay_recurring_invite.py` 从 dev/ 移到核心 CLI（→ `mailagent calendar recurring`）
@@ -1815,6 +1817,46 @@ scripts/
    + 25 个归档/dev = 顶层 18 + 2 子目录共 3 个 deep dir。
 ```
 
+### 9.7 post-PR-6 实际形态（2026-05-16 ship 后）
+
+PR-6 git rm 6 个真 thin wrapper + 5 个 CLI 依赖 module 删 `__main__` 入口后，顶层
+`scripts/` 收口为：
+
+```
+scripts/
+├── __init__.py
+├── archive/                          # 一次性历史 migration / PoC（PR-5 归位）
+│   ├── README.md
+│   ├── migrate_sync_store_v3.py
+│   ├── backfill_internal_id.py
+│   ├── backfill_notion_id.py
+│   └── poc_markdown_api.py
+├── dev/                              # 检查 / 调试 / 旧测试 harness（PR-5 归位，~25 个）
+│   ├── README.md
+│   ├── check_*.py / debug_*.py / inspect_*.py / test_*.py
+│   └── ...
+├── import-only modules（5 个，PR-6 删 __main__ 入口）
+│   ├── initial_sync.py              # CLI 调 InitialSync / AnalysisReport / main()
+│   ├── cleanup_syncstore.py         # CLI 调 show_stats / reset_sync_status
+│   ├── cleanup_duplicate_message_ids.py  # CLI 调 get_all_pages / extract_page_info / archive_page
+│   ├── cleanup_notion_db.py         # CLI 调 NotionDBCleaner
+│   └── replay_recurring_invite.py   # CLI 调 discover_recurring / replay_one
+└── 真 legacy / 系统 hook（5 个）
+    ├── create_reply_draft.sh         # handle_create_draft 调用
+    ├── deploy-webhook.sh             # 运维入口
+    ├── toggle_keep_alive.sh          # macOS 快捷指令绑定
+    ├── html_clipboard.py             # handle_create_draft 调用
+    └── keep_alive.py                 # main.py 导入
+```
+
+**变更要点**:
+- **6 个 git rm**：`backfill_email_body.py` / `backfill_derivatives.py` / `sync_project_progress.py` / `compare_llm_path.py` / `run_llm_on_email.py` / `resync_notion.py`（旧用法直接报 "No such file or directory"）
+- **5 个保留 import-only**：模块 docstring 标 "DEPRECATED — import only"，移除 `if __name__ == '__main__'` + `DeprecationWarning` + `asyncio.run` 入口；CLI inline 仍直调其类 / 函数
+- 顶层 `__init__.py` 保留（CLI `from scripts.X import Y` 依赖 namespace）
+- **PR-6 spec 偏差**：原 spec §2.1 把 `replay_recurring_invite.py` 列入"7 个真 thin wrapper 可删"，但 `src/cli/commands/calendar.py:193,377` 实际 import `discover_recurring` / `replay_one` async 函数 → 整体删会 ImportError，改归 "保留 + 删 `__main__`" 桶
+
+post-PR-6 顶层 `.py` 数：5 import-only + 2 production helper + 1 `__init__.py` = **8 个**（比 PR-5 ship 时 14 个少 6 个，全部为删除的 thin wrapper）。
+
 ---
 
 ## 10. PR 拆分
@@ -1918,26 +1960,25 @@ scripts/
 
 **预估**：3 天（v1 估 2 天偏短，v2 加入 PM2 检测 + checkpoint + 长任务契约对齐）。
 
-### PR-5 — scripts/ 迁移
+### PR-5 — scripts/ 迁移 ✅ **已 ship**（commit 372f494, 2026-05-16）
 
 **变更**:
-- `git mv` 47 个文件到目标位置
-- 顶层 6 个 thin wrappers 改为 forwarding（调 mailagent CLI 内部）
+- `git mv` 33 个文件到 `scripts/dev/` 和 `scripts/archive/`
+- 顶层 13 个 thin wrappers / module-with-`__main__` 接通 CLI（subprocess wrap 全部 inline；5 个 stub 真接通：llm compare-paths / notion page-orphans / notion file-link-audit / calendar expand / attachment derive）
 - 加 `scripts/dev/README.md` 和 `scripts/archive/README.md` 说明归类
 - `docs/CLAUDE.md` 全文 update：`python3 scripts/X.py` → `mailagent <cmd>`
-- 检查 `pm2 ecosystem.config.js` / GitHub Actions / 任何 hardcoded 引用 → 更新
+- pytest 650 → 655 passed（PR-5 final）
 
-**风险**：中（PR diff 大，docs 引用多）。
-**预估**：1-2 天 + reviewer 仔细看 mv 列表。
+### PR-6 — deprecation cleanup ✅ **已 ship**（2026-05-16；4 周 release window 后）
 
-### PR-6 — deprecation cleanup（下一个 release window）
+**实际变更**（与最初 spec 偏差小幅修正）:
+- `git rm` **6** 个真 thin wrapper（spec 原列 7 个，但 `replay_recurring_invite.py` CLI 实际依赖 `discover_recurring` / `replay_one`，整体不能删）：`backfill_email_body.py` / `backfill_derivatives.py` / `sync_project_progress.py` / `compare_llm_path.py` / `run_llm_on_email.py` / `resync_notion.py`
+- **5** 个 CLI 依赖 module 删 `__main__` block 收口为 import-only：`initial_sync.py` / `cleanup_syncstore.py` / `cleanup_duplicate_message_ids.py` / `cleanup_notion_db.py` / `replay_recurring_invite.py`
+- CLAUDE.md / agent-cli-rfc.md 全文搜 `python scripts/<wrapper>.py` 收口为 `mailagent <group> <action>`；保留 dev/ archive/ .sh 提及
+- 归档 `docs/pr5-handoff-scripts-migration.md` + `docs/pr6-handoff-deprecation-cleanup.md` → `docs/archive/`
+- pytest 仍 655 passed；DB_VERSION 仍 6；10 个 CLI group / 45+ schema / 退出码体系（0/1/2/4/5/6/7/8/9/130）不变
 
-**变更**:
-- 等用户 / agent 都迁移到新 CLI 后（约 2-4 周）
-- 删除 thin wrappers
-- 更新文档（不再 mention 老脚本）
-
-**预估**：0.5 天。
+**实际工作量**：0.5 天（同 spec 预估）。
 
 ---
 

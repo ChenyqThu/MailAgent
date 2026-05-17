@@ -1,33 +1,15 @@
 #!/usr/bin/env python3
 """
-Notion 邮件数据库清理脚本
+Notion 邮件数据库清理: import-only module。
 
-功能：
-1. 去重：根据 Message ID 查重，保留创建时间最老的，删除重复的
-2. 设置 Parent Item：根据 Thread ID 关联到对应的父邮件
+DEPRECATED entry-point. Use 'mailagent admin repair-parents' instead.
 
-用法:
-    # 预览模式
-    python3 scripts/cleanup_notion_db.py --dry-run
-
-    # 只执行去重
-    python3 scripts/cleanup_notion_db.py --dedup-only
-
-    # 只执行 Parent Item 设置
-    python3 scripts/cleanup_notion_db.py --parent-only
-
-    # 全部执行
-    python3 scripts/cleanup_notion_db.py
+CLI 调用的导出: NotionDBCleaner 类
 """
 
-import argparse
 import asyncio
-import sys
 from collections import defaultdict
-from pathlib import Path
 from typing import Dict, List
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import config
 
@@ -426,30 +408,3 @@ class NotionDBCleaner:
 
         return True
 
-
-async def main():
-    parser = argparse.ArgumentParser(description="Notion 邮件数据库清理")
-    parser.add_argument("--dry-run", action="store_true", help="预览模式，不实际执行")
-    parser.add_argument("--dedup-only", action="store_true", help="只执行去重")
-    parser.add_argument("--parent-only", action="store_true", help="只执行 Parent Item 设置")
-
-    args = parser.parse_args()
-
-    cleaner = NotionDBCleaner()
-    await cleaner.run(
-        dry_run=args.dry_run,
-        dedup_only=args.dedup_only,
-        parent_only=args.parent_only
-    )
-
-
-if __name__ == "__main__":
-    import warnings
-
-    warnings.warn(
-        "scripts/cleanup_notion_db.py is deprecated; use "
-        "'mailagent admin repair-parents' instead. Will be removed in PR-6.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    asyncio.run(main())
