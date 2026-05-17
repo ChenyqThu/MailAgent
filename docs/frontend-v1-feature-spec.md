@@ -355,5 +355,213 @@ V2 (post-V1):
 
 ---
 
+## 8. 信息架构 + 用户流
+
+### 8.1 顶层导航 (Sidebar / Tab Bar)
+
+```
+┌─ Sidebar (240px, collapsible to icon-only 56px) ──────────┐
+│                                                            │
+│  ⊙ MailAgent          ←─ logo + 版本                       │
+│  ─────────────────────                                     │
+│  📨 Inbox  收件箱 (32) ←─ unread count badge               │
+│  📤 Sent   发件箱                                          │
+│  🔖 Flagged 已标旗     ←─ 跨邮箱 filter                    │
+│  📁 All Mail                                               │
+│  ─────────────────────                                     │
+│  🔍 Search             ←─ cmd+k 快捷                       │
+│  📅 Calendar                                               │
+│  ─────────────────────  ← V1+ 区域                          │
+│  🤖 LLM Dashboard                                          │
+│  📊 Admin (Health/DL)                                      │
+│  ─────────────────────                                     │
+│  ⚙️ Settings           ←─ 底部                              │
+│  ❓ Help (?)                                               │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 主区三栏布局 (mail-style)
+
+```
+┌─Sidebar──┬─Email List (320px)──────┬─Detail Pane (flex)──┐
+│ Inbox  ▮ │ ⊙ Quick Filter Bar     │  ← Back to list     │
+│ Sent     │ ─ Unread Only          │  ─────────────────  │
+│ ...      │ ─ Flagged              │  Subject (h1)       │
+│          │ ─ Has Attachments      │  From: ... To: ...  │
+│          │ ─ Date range           │  Date: ... [AI]     │
+│          │ ─────────────────────  │  ─ Thread Sidebar ─ │
+│          │ Subject preview...     │  HTML body iframe   │
+│          │ sender · date · 🔖     │  (sandboxed)        │
+│          │ ─────────────────────  │  ─ Attachments ─    │
+│          │ Subject 2...           │  📎 file.pdf 1.2MB  │
+│          │ ...                    │  ─ AI Fields ─      │
+│          │                        │  Action: Reply Needed│
+│          │ (virtualized scroll)   │  Priority: Urgent   │
+│          │                        │  ─ Toolbar (V1) ─   │
+│          │                        │  [Resync] [AI Rerun]│
+└──────────┴────────────────────────┴─────────────────────┘
+```
+
+**响应式**: 窗口 <800px 时 Detail 占满, list 收成 hamburger drawer。
+
+### 8.3 用户主流程
+
+#### Flow A: 看邮件 (最高频)
+
+```
+启动
+  ↓
+[首次] /settings 填 API key  ──→  ping mailagent admin health
+  ↓ (success)
+/  (Inbox 默认)
+  ↓ 5s 轮询发现 N 封新邮件
+  ↓ toast "3 封新邮件" + list 顶部 new badge
+  ↓ 点击邮件
+/email/:id (HTML body + AI + 附件)
+  ↓ 滚动看正文
+  ↓ 点击线程节点 → 跳兄弟邮件
+/email/:sibling-id
+  ↓ j/k 上下翻邮件 (不离开 detail)
+```
+
+#### Flow B: 搜索 (中频)
+
+```
+任意页面
+  ↓ cmd+k
+/search?q=...
+  ↓ 输入 query (FTS5 语法 hint)
+  ↓ 结果 list 显示 snippet
+  ↓ 点击结果
+/email/:id (高亮搜索词)
+  ↓ ← back 回搜索 list (保留 query state via URL)
+```
+
+#### Flow C: 写操作 (V1, 低频高价值)
+
+```
+/email/:id
+  ↓ 看到 AI Action 是 "Reply Needed" 但 Notion 没字段
+  ↓ 点 [AI Rerun] 按钮
+弹 confirm dialog "重跑 LLM 会覆盖已有字段?"
+  ↓ Yes
+  ↓ progress bar (CLI fork + stream stdout)
+  ↓ success toast "AI 字段已更新" + invalidate query → UI 自动刷
+  ↓ 继续浏览
+```
+
+#### Flow D: 健康检查 (运维, 偶发)
+
+```
+/admin
+  ↓ 看 Health card 红色 (mailagent admin health failed)
+  ↓ 看 Dead-letter list 有 5 封
+  ↓ 点击 retry 单封
+  ↓ 进度 + log → success / next failure
+  ↓ 切到 /llm 看 cost 是否异常
+  ↓ 切到 SyncStore 状态分布饼图看 fetch_failed 多不多
+```
+
+### 8.4 状态机 (邮件视角)
+
+```
+[backend 视角]
+fetched → synced ───→ AI Reviewed ───→ 已同步 ───→ 已完成
+       ↓                    ↑              ↓ user mark
+   fetch_failed          (LLM)           (Mail.app 取消旗标)
+       ↓
+   dead_letter
+
+[前端视角 — 每个邮件 row 显示]
+- new (sync_status='synced' 且 updated_at < 1h): 蓝点 + 加粗
+- unread (is_read=false): 加粗
+- flagged (is_flagged=true): 🔖
+- has_attachments: 📎
+- ai_processed (AI Action != null): 标签 (颜色按 priority)
+- error (sync_status='failed'): 红 ⚠
+- dead (sync_status='dead_letter'): 灰 + "⚠ Dead" badge
+```
+
+### 8.5 跨页面状态保留
+
+| 状态 | URL 表达? | localStorage? | Zustand? |
+|---|---|---|---|
+| 当前 mailbox | ✅ `/mailbox/:name` | - | - |
+| 搜索 query | ✅ `?q=...` | ✅ 历史 10 条 | - |
+| Filter (unread/flag/date) | ✅ `?filter=...` | - | - |
+| 当前邮件 | ✅ `/email/:id` | - | - |
+| Theme | - | ✅ | ✅ (subscribe) |
+| Sidebar collapsed | - | ✅ | ✅ |
+| API key | - | macOS Keychain | - |
+| TanStack Query cache | - | (sessionStorage opt) | (query client) |
+
+URL-as-source-of-truth 让用户可以分享 link / 浏览器历史可用 / 多窗口独立。
+
+---
+
+## 9. 动效场景清单
+
+> **视觉风格 + 具体动效细节留给 claude design / frontend-design skill 做**。
+> 本节只列 "哪些场景需要动效 + 期望感觉"，不规定具体 timing / easing。
+
+### 9.1 必做动效 (MVP)
+
+| 场景 | 期望感觉 | 类型 | 建议 |
+|---|---|---|---|
+| 邮件列表新邮件到达 | "刚到了" 但不打扰 | slide-in + 蓝点 fade | 顶部 push 200-300ms ease-out, 不抢焦点 |
+| 邮件 list ↔ detail 切换 | 流畅承接，不突兀 | crossfade 或 horizontal slide | 150-200ms |
+| Loading skeleton | "在加载，不是卡死" | shimmer / pulse | Tailwind 自带 animate-pulse |
+| Toast 通知 (success / error / info) | 及时反馈，自动消失 | slide-in top + fade-out | 3s 后 fade |
+| Toolbar 按钮 hover | "可点击" | scale 1.02 + shadow | 100ms |
+| 长任务 progress | "在跑，进度可见" | linear progress bar + log scroll | 实时 stream |
+
+### 9.2 推荐动效 (V1)
+
+| 场景 | 期望感觉 | 类型 |
+|---|---|---|
+| Sidebar collapse / expand | 平滑伸缩 | width transition 200ms |
+| 三栏布局 panel resize 拖拽 | 跟手 | 实时 width 跟随 mouse |
+| 搜索结果 snippet 高亮 | "搜到了" | mark 元素淡黄 background fade-in |
+| 详情页线程 sidebar 滚到当前邮件 | "你在这里" | scrollIntoView smooth + 持续 ring 200ms |
+| AI 字段更新 | "刚更新" | 单个字段背景 flash 蓝色 fade |
+| Dead-letter retry 成功 | 庆祝感 | 单行绿色 flash 然后从 list 消失 |
+| 看板数字变化 (count up) | 数据有变 | react-spring count animation 500ms |
+| Mailbox 切换 | 列表整体过渡 | crossfade 100ms (避免长 stagger) |
+
+### 9.3 慎用 / 不做 (避免)
+
+| 反模式 | 原因 |
+|---|---|
+| 全屏 splash screen | 邮件 app 启动慢的 UX 反感 |
+| 每次点击都 animate | 累 + 拖速度 |
+| Spring bouncy 弹簧 | 不符合"工具类"严肃感（参考 Mimestream 风格） |
+| 长 stagger 列表入场 (>300ms) | 6000+ 邮件场景会"很慢" |
+| Confetti / particles | 邮件 app 不需要游戏化 |
+| 模态对话框过度 backdrop blur | 性能开销 + 干扰阅读 |
+
+### 9.4 设计语言关键词 (给 claude design 用)
+
+- **专业 / 严肃 / 工具**: 参考 Linear / Things 3 / Mimestream / Spark
+- **信息密度高**: 邮件列表 1 行容纳 subject+sender+date+icons，不是 card 风格
+- **本机感**: 与 macOS 原生 Mail.app / Notion / VS Code 风格协调（vibrancy / blur / inset shadow）
+- **中文友好**: 字号 13-14px 中文不会糊（Tailwind 默认 text-sm 是 14px ✓），字重对比 (medium for label / regular for body)
+- **暗色优先**: 邮件长时间阅读，dark mode 是首选；light mode 也支持
+- **品牌色**: 留给你定（建议: 系统蓝 #007AFF 或 Notion 灰 #2C2C2C 系列基础上找一个 accent）
+
+### 9.5 推荐参考
+
+| App | 学什么 | 不学什么 |
+|---|---|---|
+| **Mimestream** (macOS Gmail client) | 三栏布局 / 信息密度 / 本机感 | 颜色偏淡 |
+| **Spark / Superhuman** | 键盘流 / quick action | 复杂度太高 |
+| **Linear** | toolbar / cmd+k / 动效克制 | 偏 web 风 |
+| **Notion** | sidebar / breadcrumb | 加载慢 |
+| **VS Code** | 命令面板 / panel resize / 状态栏 | 主题选项过多 |
+
+---
+
 > 本 spec 与 [`frontend-v1-tech-tradeoffs.md`](./frontend-v1-tech-tradeoffs.md) 配套
 > review，决策完了起 prd.json 进 Sprint 实施。
+>
+> 视觉风格 / 具体动效 / 组件 mockup 留给 `claude design` (frontend-design skill) 做。
