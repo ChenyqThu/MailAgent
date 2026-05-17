@@ -96,7 +96,8 @@ class SyncStore:
     # v4 (2026-05): 新增 email_body + email_attachment（body 作为一等公民进 SQLite，SSoT 切换）
     # v5 (2026-05): 新增 email_body_fts FTS5 虚表 + insert/update/delete trigger + 首次 reindex
     # v6 (2026-05): 新增 cli_checkpoints (长任务 checkpoint resume) + v4_rollout_stats (R-06 持久化)
-    DB_VERSION = 6
+    # v7 (2026-05): 新增 island_dispatch (Island-Sprint 2 ping-island 派发审计 + 14d 评估指标)
+    DB_VERSION = 7
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -438,6 +439,31 @@ class SyncStore:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_v4_rollout_flushed_at
             ON v4_rollout_stats(flushed_at DESC)
+        """)
+
+        # === v7: island_dispatch (Island-Sprint 2 ping-island 派发审计) ===
+        # 来源：frontend/ISLAND-PLUGIN.md §9 评估指标
+        # dispatched_ok = 1 表示 socket 路径成功（即使 ping-island 没回 decision）
+        # response_decision = 用户点的 option id（仅 expectsResponse=true 且用户回应才填）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS island_dispatch (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sent_at REAL NOT NULL,
+                event_type TEXT NOT NULL,
+                session_key TEXT,
+                dispatched_ok INTEGER NOT NULL DEFAULT 0,
+                response_decision TEXT,
+                response_latency_ms INTEGER,
+                internal_id INTEGER
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_island_dispatch_sent_at
+            ON island_dispatch(sent_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_island_dispatch_event_type
+            ON island_dispatch(event_type)
         """)
 
         # 更新数据库版本
@@ -2348,3 +2374,88 @@ class SyncStore:
             else:
                 out["body_miss_internal_ids"] = []
             return out
+
+    # ==================== Island dispatch 审计 (v7) ====================
+
+    def record_island_dispatch(
+        self,
+        *,
+        event_type: str,
+        session_key: str = "",
+        dispatched_ok: bool = False,
+        response_decision: Optional[str] = None,
+        response_latency_ms: int = 0,
+        internal_id: Optional[int] = None,
+    ) -> Optional[int]:
+        """记录一次 ping-island envelope 派发结果（v7 island_dispatch 表）.
+
+        Args:
+            event_type: ``MailReceived`` / ``LLMReviewedUrgent`` 等
+            session_key: ``mailagent:email:<id>``
+            dispatched_ok: socket 是否成功完成 send + recv 流程
+            response_decision: 用户在灵动岛点的 option id（仅 expectsResponse=true）
+            response_latency_ms: 发出到收到 response 的耗时
+            internal_id: 关联邮件，无关事件（如 DeadLetterAccum）传 None
+
+        Returns:
+            新插入行的 id；失败返回 None（不抛，调用方 fail-open）
+        """
+        try:
+            with self._connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO island_dispatch
+                        (sent_at, event_type, session_key, dispatched_ok,
+                         response_decision, response_latency_ms, internal_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        time.time(),
+                        event_type,
+                        session_key or None,
+                        1 if dispatched_ok else 0,
+                        response_decision,
+                        int(response_latency_ms or 0),
+                        int(internal_id) if internal_id is not None else None,
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except sqlite3.Error as e:
+            logger.debug(f"record_island_dispatch failed: {e}")
+            return None
+
+    def get_island_dispatch_stats(self, days: int = 14) -> Dict[str, Any]:
+        """评估指标聚合（最近 N 天，默认 14d）.
+
+        见 ``frontend/ISLAND-PLUGIN.md`` §9 "值得继续维护"四阈值。
+        """
+        since = time.time() - days * 86400
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN dispatched_ok=1 THEN 1 ELSE 0 END) AS ok,
+                    SUM(CASE WHEN response_decision IS NOT NULL THEN 1 ELSE 0 END) AS responded,
+                    SUM(CASE WHEN event_type LIKE '%Urgent' OR event_type LIKE '%Reviewed%' THEN 1 ELSE 0 END) AS urgent_or_reviewed
+                  FROM island_dispatch
+                 WHERE sent_at > ?
+                """,
+                (since,),
+            )
+            row = cursor.fetchone() or {}
+            total = int(row["total"] or 0)
+            ok = int(row["ok"] or 0)
+            responded = int(row["responded"] or 0)
+            return {
+                "days": days,
+                "total": total,
+                "dispatched_ok": ok,
+                "dispatched_ok_rate": (ok / total) if total else 0.0,
+                "responded": responded,
+                "response_rate": (responded / total) if total else 0.0,
+                "urgent_or_reviewed": int(row["urgent_or_reviewed"] or 0),
+            }

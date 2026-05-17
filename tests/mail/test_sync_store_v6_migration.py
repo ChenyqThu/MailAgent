@@ -53,7 +53,10 @@ def _db_version(db_path: str) -> int:
 
 
 def test_fresh_init_at_v6(tmp_path):
-    """fresh DB → v6, 新表 + 必备 v4/v5 表都在."""
+    """fresh DB → 当前最新 schema, 新表 + 必备 v4/v5/v7 表都在.
+
+    DB_VERSION 已升到 7（v7 加 island_dispatch，Island-Sprint 2 派发审计）。
+    """
     db = tmp_path / "sync.db"
     SyncStore(str(db))
     tables = _list_tables(str(db))
@@ -64,8 +67,9 @@ def test_fresh_init_at_v6(tmp_path):
         "email_body_fts",
         "cli_checkpoints",
         "v4_rollout_stats",
+        "island_dispatch",  # v7
     }.issubset(tables)
-    assert _db_version(str(db)) == 6
+    assert _db_version(str(db)) == 7
 
 
 def test_v6_indices_exist(tmp_path):
@@ -77,17 +81,21 @@ def test_v6_indices_exist(tmp_path):
 
 
 def test_idempotent_double_init(tmp_path):
-    """SyncStore() 跑两次, 不报错 + db_version 仍 6."""
+    """SyncStore() 跑两次, 不报错 + db_version 停在当前最新."""
     db = tmp_path / "sync.db"
     SyncStore(str(db))
     SyncStore(str(db))  # 应该幂等
-    assert _db_version(str(db)) == 6
+    assert _db_version(str(db)) == 7
 
 
 def test_v5_to_v6_preserves_existing_rows(tmp_path):
-    """构造 v5 状态 (无新表 + db_version=5), 跑 SyncStore() 升级, 现有 email_metadata 行不丢."""
+    """构造旧 schema 状态, 跑 SyncStore() 升级, 现有 email_metadata 行不丢。
+
+    历史上这个 case 验证 v5→v6 升级；DB_VERSION 已推进到 7（island_dispatch 加入），
+    现在同时验证 v5→v7 升级路径中 v6 / v7 新表全部建好。
+    """
     db = tmp_path / "sync.db"
-    # 先建 v6 DB 拿到完整 schema
+    # 先建当前最新 DB 拿到完整 schema
     SyncStore(str(db))
     # 写一行邮件
     conn = sqlite3.connect(str(db))
@@ -97,17 +105,18 @@ def test_v5_to_v6_preserves_existing_rows(tmp_path):
             "VALUES (?, ?, ?, ?, ?)",
             (12345, "v5 row preserved", "synced", time.time(), time.time()),
         )
-        # 降级 db_version 标 + 删 v6 表模拟 v5 状态
+        # 降级 db_version 标 + 删 v6/v7 表模拟 v5 状态
         conn.execute("UPDATE sync_state SET value='5' WHERE key='db_version'")
         conn.execute("DROP TABLE cli_checkpoints")
         conn.execute("DROP TABLE v4_rollout_stats")
+        conn.execute("DROP TABLE IF EXISTS island_dispatch")
         conn.commit()
     finally:
         conn.close()
 
-    # 重新 init → 升级到 v6
+    # 重新 init → 升级到当前最新（v7）
     SyncStore(str(db))
-    assert _db_version(str(db)) == 6
+    assert _db_version(str(db)) == 7
 
     # 原 email_metadata 行还在
     conn = sqlite3.connect(str(db))
@@ -120,10 +129,11 @@ def test_v5_to_v6_preserves_existing_rows(tmp_path):
     assert row is not None
     assert row[0] == "v5 row preserved"
 
-    # 新表已建
+    # v6 / v7 新表都已建
     tables = _list_tables(str(db))
     assert "cli_checkpoints" in tables
     assert "v4_rollout_stats" in tables
+    assert "island_dispatch" in tables
 
 
 def test_cli_checkpoint_upsert_get_delete(tmp_path):

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 app = typer.Typer(name="admin", help="统计 / 健康 / db-version", no_args_is_help=True)
 
 
-EXPECTED_DB_VERSION = 6
+EXPECTED_DB_VERSION = 7
 REQUIRED_TABLES = (
     "email_metadata",
     "email_body",
@@ -37,6 +37,7 @@ REQUIRED_TABLES = (
     "email_body_fts",
     "cli_checkpoints",
     "v4_rollout_stats",
+    "island_dispatch",  # v7: ping-island Sprint 2 派发审计
 )
 
 

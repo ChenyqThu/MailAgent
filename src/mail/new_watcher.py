@@ -488,6 +488,9 @@ class NewWatcher:
 
                 # 9. 本地 LLM Agent 钩子（非阻塞、异常不影响主流程）
                 self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)
+
+                # 10. ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
+                self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
             else:
                 self.sync_store.mark_failed_v3(internal_id, "Notion sync returned None")
 
@@ -620,6 +623,10 @@ class NewWatcher:
                             f"action_type={labels.get('action_type')} "
                             f"tokens={labels.get('tokens')}"
                         )
+                        # ping-island LLMReviewed[Urgent] hook（默认关）
+                        self._maybe_dispatch_island_reviewed(
+                            email_obj, internal_id, notion_page_id, labels,
+                        )
                     else:
                         logger.warning(
                             f"[llm-hook] failed internal_id={internal_id} "
@@ -631,6 +638,55 @@ class NewWatcher:
             asyncio.create_task(_bg())
         except Exception as e:
             logger.warning(f"[llm-hook] dispatch failed: {e}")
+
+    def _maybe_dispatch_island_received(
+        self, email_obj: Email, internal_id: int, notion_page_id: str
+    ) -> None:
+        """ping-island ``MailReceived`` 派发（默认关，fail-open）.
+
+        在 ``_sync_single_email_v3`` Notion sync 成功后调；envelope 构造与发送都是 fire-and-forget，
+        异常不影响主同步流程。详见 frontend/ISLAND-PLUGIN.md §4.3。
+        """
+        try:
+            from src.notify import island_dispatch
+            if not island_dispatch.is_enabled():
+                return
+            island_dispatch.dispatch_mail_received(
+                internal_id=internal_id,
+                page_id=notion_page_id or "",
+                subject=getattr(email_obj, "subject", "") or "",
+                sender_email=getattr(email_obj, "sender", "") or "",
+                sender_name=getattr(email_obj, "sender_name", "") or "",
+                mailbox=getattr(email_obj, "mailbox", "") or "",
+                is_flagged=bool(getattr(email_obj, "is_flagged", False)),
+                attach_count=len(getattr(email_obj, "attachments", []) or []),
+            )
+        except Exception as e:
+            logger.debug(f"[island-hook] mail_received dispatch failed: {e}")
+
+    def _maybe_dispatch_island_reviewed(
+        self, email_obj: Email, internal_id: int,
+        notion_page_id: str, labels: Dict[str, Any],
+    ) -> None:
+        """ping-island ``LLMReviewed`` / ``LLMReviewedUrgent`` 派发（默认关，fail-open）."""
+        try:
+            from src.notify import island_dispatch
+            if not island_dispatch.is_enabled():
+                return
+            priority = str(labels.get("priority") or "")
+            action = str(labels.get("action_type") or labels.get("action") or "")
+            island_dispatch.dispatch_llm_reviewed(
+                internal_id=internal_id,
+                page_id=notion_page_id or "",
+                subject=getattr(email_obj, "subject", "") or "",
+                sender_email=getattr(email_obj, "sender", "") or "",
+                sender_name=getattr(email_obj, "sender_name", "") or "",
+                mailbox=getattr(email_obj, "mailbox", "") or "",
+                priority=priority,
+                action=action,
+            )
+        except Exception as e:
+            logger.debug(f"[island-hook] llm_reviewed dispatch failed: {e}")
 
     async def _process_llm_retry_queue(self) -> None:
         """重试 LLM 失败的邮件（指数退避：1m/5m/15m/1h/2h）。
