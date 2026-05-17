@@ -83,7 +83,8 @@ describe('DOMPurify body sanitizer (EmailBodyFrame.tsx config)', () => {
   })
 
   test('preserves benign mail HTML (paragraphs, tables, inline images)', () => {
-    const dirty = '<p>Hello <strong>world</strong>!</p><table><tr><td>x</td></tr></table><img src="cid:logo" alt="logo" />'
+    const dirty =
+      '<p>Hello <strong>world</strong>!</p><table><tr><td>x</td></tr></table><img src="cid:logo" alt="logo" />'
     const clean = purify(dirty)
     expect(clean).toContain('<p>')
     expect(clean).toContain('<strong>')

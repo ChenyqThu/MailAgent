@@ -27,7 +27,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         <span
           class="truncate flex-1 text-ink-fg-1"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-2"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"
@@ -129,7 +141,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         <span
           class="truncate flex-1 text-ink-fg font-medium"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-1"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"
@@ -226,7 +250,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         <span
           class="truncate flex-1 text-ink-fg-1"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-2"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"
@@ -324,7 +360,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         <span
           class="truncate flex-1 text-ink-fg font-medium"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-1"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"
@@ -430,7 +478,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         <span
           class="truncate flex-1 text-ink-fg-1"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-2"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"
@@ -532,7 +592,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         <span
           class="truncate flex-1 text-ink-fg font-medium"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-1"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"
@@ -629,7 +701,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         <span
           class="truncate flex-1 text-ink-fg-1"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-2"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"
@@ -727,7 +811,19 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         <span
           class="truncate flex-1 text-ink-fg font-medium"
         >
-          Alice
+          <span>
+            Alice
+          </span>
+          <span
+            class="text-ink-fg-3"
+          >
+             · 
+          </span>
+          <span
+            class="text-ink-fg-1"
+          >
+            alice@example.com
+          </span>
         </span>
         <span
           aria-label="English"

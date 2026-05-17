@@ -19,6 +19,8 @@
     "dev": "electron-vite dev",
     "build": "pnpm run typecheck && electron-vite build",
     "postinstall": "electron-builder install-app-deps",
+    "rebuild:node": "node -e \"const p=require('path'),cp=require('child_process'),root=process.cwd();cp.execFileSync(p.join(root,'node_modules/.pnpm/node_modules/.bin/prebuild-install'),['--runtime=node','--arch=arm64'],{cwd:p.join(root,'node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3'),stdio:'inherit'})\"",
+    "rebuild:electron": "node -e \"const p=require('path'),cp=require('child_process'),root=process.cwd();cp.execFileSync(p.join(root,'node_modules/.pnpm/node_modules/.bin/prebuild-install'),['--runtime=electron','--target=39.8.10','--arch=arm64'],{cwd:p.join(root,'node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3'),stdio:'inherit'})\"",
     "build:unpack": "pnpm run build && electron-builder --dir",
     "build:mac": "electron-vite build && electron-builder --mac",
     "gen:types": "tsx scripts/gen-types.ts"

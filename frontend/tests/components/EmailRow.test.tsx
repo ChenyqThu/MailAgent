@@ -86,10 +86,14 @@ describe('EmailRow — semantic behaviour', () => {
   })
 
   test('lang=zh suppresses the EN pip; lang=en shows it', () => {
-    const enRow = render(<EmailRow email={makeEmail({ lang: 'en' })} selected={false} onSelect={() => {}} />)
+    const enRow = render(
+      <EmailRow email={makeEmail({ lang: 'en' })} selected={false} onSelect={() => {}} />
+    )
     expect(enRow.container.textContent).toContain('EN')
     cleanup()
-    const zhRow = render(<EmailRow email={makeEmail({ lang: 'zh' })} selected={false} onSelect={() => {}} />)
+    const zhRow = render(
+      <EmailRow email={makeEmail({ lang: 'zh' })} selected={false} onSelect={() => {}} />
+    )
     expect(zhRow.container.textContent).not.toContain('EN')
   })
 

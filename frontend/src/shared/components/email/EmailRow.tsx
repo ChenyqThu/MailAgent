@@ -16,6 +16,7 @@ import { Paperclip } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { mapActionLabel } from '@shared/lib/ai_labels'
+import { parseSender, cleanSnippet } from '@shared/lib/mail_parse'
 import { formatRelativeTime } from '@shared/format'
 import type { EnrichedEmailMeta } from '@shared/api/types'
 
@@ -27,14 +28,6 @@ interface Props {
   /** Set when 5s polling notices this id appeared after the prior poll. Fades after 2s. */
   isNew?: boolean
   onSelect(): void
-}
-
-/** Strip the email part to leave just a display name. Falls back to the local-part of the address. */
-function displayName(email: EnrichedEmailMeta): string {
-  if (email.sender_name && email.sender_name.length > 0) return email.sender_name
-  const addr = email.sender ?? ''
-  const at = addr.indexOf('@')
-  return at > 0 ? addr.slice(0, at) : addr
 }
 
 function formatShortTime(iso: string | null | undefined): string {
@@ -49,6 +42,16 @@ function formatShortTime(iso: string | null | undefined): string {
 export function EmailRow({ email, selected, isNew, onSelect }: Props): React.ReactElement {
   const unread = !email.is_read
   const failed = email.sync_status === 'failed' || email.sync_status === 'dead_letter'
+  // `sender_name` is mostly empty in production; the real RFC string is in
+  // `sender` ("Display Name" <addr@domain>). Mockup §5.1 renders both halves
+  // separated by a middot.
+  const parsed = parseSender(email.sender)
+  const senderName = email.sender_name || parsed.name
+  const senderAddr = parsed.email
+  // body_markdown from markdownify of HTML emails often has leading table
+  // separators + image refs. Strip them so the snippet line carries actual
+  // prose like the mockup does.
+  const snippet = cleanSnippet(email.snippet)
 
   return (
     <article
@@ -86,7 +89,8 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
         />
 
         <div className="min-w-0 flex-1">
-          {/* Header row: sender + lang pip + sync-failed pill + relative time. */}
+          {/* Header row: sender (name · email mockup pattern) + lang pip +
+              sync-failed pill + relative time. */}
           <div className="flex items-center gap-2 mb-0.5">
             <span
               className={cn(
@@ -94,7 +98,13 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
                 unread ? 'text-ink-fg font-medium' : 'text-ink-fg-1'
               )}
             >
-              {displayName(email)}
+              {senderName && <span>{senderName}</span>}
+              {senderName && senderAddr && <span className="text-ink-fg-3"> · </span>}
+              {senderAddr ? (
+                <span className={unread ? 'text-ink-fg-1' : 'text-ink-fg-2'}>{senderAddr}</span>
+              ) : (
+                !senderName && <span>{email.sender}</span>
+              )}
             </span>
 
             {email.lang === 'en' && (
@@ -133,10 +143,9 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
             {email.subject || '(no subject)'}
           </div>
 
-          {/* Snippet — empty when LLM hasn't seen body and email_body is missing. */}
-          {email.snippet && (
-            <div className="text-aux text-ink-fg-2 line-clamp-1 mt-0.5">{email.snippet}</div>
-          )}
+          {/* Snippet — markdownify residue (table separators, image refs)
+              stripped via cleanSnippet so we display prose like the mockup. */}
+          {snippet && <div className="text-aux text-ink-fg-2 line-clamp-1 mt-0.5">{snippet}</div>}
 
           {/* Chips row: AI priority + AI action + paperclip count. */}
           <div className="flex items-center gap-1.5 mt-2">
