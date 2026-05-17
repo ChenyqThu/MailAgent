@@ -5,6 +5,7 @@ import { bootNativeTheme, registerAppearanceIpc } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
 import { registerEmailHandlers } from './handlers/email'
 import { registerAttachmentHandlers } from './handlers/attachment'
+import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -87,6 +88,7 @@ app.whenReady().then(() => {
   // Write handlers (resync / update-flag) land in Sprint 5 atop cli_runner.
   registerEmailHandlers()
   registerAttachmentHandlers()
+  registerTranslateHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 
@@ -101,4 +103,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// Sprint 3 §2.2 — abort any in-flight LLM translations on quit so the
+// CLI subprocess teardown (`registerCliLifecycle`) isn't the only path
+// cleaning up async work.
+app.on('before-quit', () => {
+  abortAllTranslations()
 })

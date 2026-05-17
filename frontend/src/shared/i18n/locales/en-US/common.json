@@ -11,7 +11,41 @@
     "compose": "Draft reply"
   },
   "search": {
-    "placeholder": "Search mail…"
+    "placeholder": "Search mail…",
+    "title": "Search",
+    "subtitle": "FTS5 full-text · bm25 ranked · Chinese needs * suffix (e.g. 产品*)",
+    "noResults": "No matches found",
+    "noResultsHint": "Try shorter keywords, or add * suffix for CJK",
+    "blankState": "Type a query to start searching",
+    "count": "{n, plural, =0 {No results} one {1 result} other {# results}}",
+    "error": "Search failed · please retry",
+    "loading": "Searching…",
+    "back": "Back to inbox",
+    "filter": {
+      "allMailboxes": "All mailboxes",
+      "any": "Any time",
+      "since7d": "Past 7 days",
+      "since30d": "Past 30 days"
+    }
+  },
+  "translate": {
+    "label": "Translate",
+    "loading": "Translating…",
+    "failed": "Translation failed · Retry",
+    "retry": "Retry",
+    "showOriginal": "Show original",
+    "showTranslation": "Show translation",
+    "noKey": "LLM API Key not configured — set it in Settings",
+    "noBody": "No body to translate",
+    "banner": "AI translation · for reference only",
+    "inlineCta": "Translate this email to Chinese"
+  },
+  "thread": {
+    "title": "Thread",
+    "empty": "No thread relations",
+    "loadFailed": "Thread load failed",
+    "count": "{n, plural, =1 {1 message} other {# messages}}",
+    "current": "Current"
   },
   "empty": {
     "state": "Nothing to show"

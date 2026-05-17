@@ -8,6 +8,7 @@
 import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router'
 
 import { InboxLayout } from './components/layout/InboxLayout'
+import { SearchLayout } from './components/layout/SearchLayout'
 
 function RootLayout(): React.ReactElement {
   return <Outlet />
@@ -21,8 +22,14 @@ const inboxRoute = createRoute({
   component: InboxLayout
 })
 
+const searchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/search',
+  component: SearchLayout
+})
+
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([inboxRoute])
+  routeTree: rootRoute.addChildren([inboxRoute, searchRoute])
 })
 
 declare module '@tanstack/react-router' {

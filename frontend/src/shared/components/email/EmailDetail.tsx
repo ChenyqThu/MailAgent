@@ -10,18 +10,22 @@
 //       - Attachments 2-col grid
 //       - Footer (internal_id + Notion link)
 
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, Languages, Mail, Sparkles } from 'lucide-react'
+import { ExternalLink, Languages, Mail, RotateCcw, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
 import { mapLanguage } from '@shared/lib/ai_mapping'
+import { useGlobalShortcuts } from '@shared/hooks/useGlobalShortcuts'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
-import { EmailToolbar } from './EmailToolbar'
+import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
+import { TranslatedBody } from './TranslatedBody'
+import { ThreadSidebar } from './ThreadSidebar'
 import { AttachmentList } from './AttachmentList'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 
@@ -35,6 +39,90 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }): R
       <span className="text-ink-fg-2 font-mono text-meta">{label}</span>
       <span className="text-ink-fg-1 break-words">{value}</span>
     </>
+  )
+}
+
+// ---- translation UI views --------------------------------------------------
+
+function TranslationView({
+  status,
+  errorCode,
+  translated,
+  onRetry,
+  onDismiss
+}: {
+  status: TranslateStatus
+  errorCode: string | null
+  translated: string | null
+  onRetry(): void
+  onDismiss(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  if (status === 'loading' || (status === 'translated' && translated === null)) {
+    return (
+      <div className="flex items-center gap-2 text-aux text-ink-fg-2 animate-pulse py-6">
+        <Languages size={13} strokeWidth={2} className="animate-spin" />
+        <span>{t('translate.loading')}</span>
+      </div>
+    )
+  }
+  if (status === 'error') {
+    const isNoKey = errorCode === 'E_NO_LLM_KEY'
+    const isNoBody = errorCode === 'E_NO_BODY'
+    return (
+      <div
+        className={cn(
+          'flex items-start gap-3 px-4 py-3 rounded-md',
+          'text-aux text-fail border border-fail/30 bg-fail/10'
+        )}
+      >
+        <Languages size={14} strokeWidth={2} className="shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <div className="font-medium">
+            {isNoKey
+              ? t('translate.noKey')
+              : isNoBody
+                ? t('translate.noBody')
+                : t('translate.failed')}
+          </div>
+          {errorCode && <div className="text-meta font-mono text-ink-fg-3 mt-1">{errorCode}</div>}
+        </div>
+        {!isNoKey && !isNoBody && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="shrink-0 px-2 py-1 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1"
+          >
+            <RotateCcw size={11} strokeWidth={2} />
+            {t('translate.retry')}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="shrink-0 text-meta font-mono text-ink-fg-3 hover:text-ink-fg-1 px-1"
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
+  // status === 'translated'
+  return (
+    <div>
+      <div className="mb-3 flex items-center gap-2 text-aux text-coral">
+        <Sparkles size={13} strokeWidth={2} />
+        <span className="font-medium">{t('translate.banner')}</span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="ml-auto px-2 py-1 rounded text-meta font-mono text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+        >
+          {t('translate.showOriginal')}
+        </button>
+      </div>
+      <TranslatedBody text={translated ?? ''} />
+    </div>
   )
 }
 
@@ -52,6 +140,24 @@ function EmptyShell({ children }: { children: React.ReactNode }): React.ReactEle
 export function EmailDetail({ internalId }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const [showTranslation, setShowTranslation] = useState(false)
+  const [lastInternalId, setLastInternalId] = useState<number | null>(internalId)
+  // React 19 "Adjusting state on prop change" pattern (react.dev/learn/you-might-not-need-an-effect):
+  // resetting derived state on a prop transition is a render-time concern,
+  // not an effect concern.
+  if (lastInternalId !== internalId) {
+    setLastInternalId(internalId)
+    setShowTranslation(false)
+  }
+
+  // The cleanup is a real side-effect (renderer → main IPC), so it stays
+  // in an effect. No setState in the body — only the unmount-time abort.
+  useEffect(() => {
+    const prior = internalId
+    return () => {
+      if (prior !== null) mailApi.ai.abortTranslate(prior)
+    }
+  }, [internalId, mailApi])
 
   const detailQ = useQuery({
     queryKey: ['email', internalId],
@@ -66,6 +172,38 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     enabled: internalId !== null,
     staleTime: 30_000
   })
+
+  const translationQ = useQuery({
+    queryKey: ['email', internalId, 'translation', 'zh'],
+    queryFn: () => mailApi.ai.translate(internalId as number, 'zh'),
+    enabled: showTranslation && internalId !== null,
+    staleTime: Infinity,
+    // LLM errors shouldn't auto-retry — surface the failure UI and let
+    // the user hit "重试" deliberately (avoids burning quota on a stuck key).
+    retry: false
+  })
+
+  // Toggle / dismiss helpers (codex review M-2): hiding the panel should
+  // also kill the in-flight LLM request so a slow response isn't still
+  // tying up a CRS slot in the background. `abortTranslate` is a no-op
+  // when nothing is in flight, so calling it on the false→true edge too
+  // is harmless.
+  const toggleTranslation = useCallback(() => {
+    if (internalId === null) return
+    setShowTranslation((prev) => {
+      if (prev) mailApi.ai.abortTranslate(internalId)
+      return !prev
+    })
+  }, [internalId, mailApi])
+
+  const dismissTranslation = useCallback(() => {
+    if (internalId !== null) mailApi.ai.abortTranslate(internalId)
+    setShowTranslation(false)
+  }, [internalId, mailApi])
+
+  // ⌥T toggle. The hook short-circuits in editable contexts so typing
+  // "t" in an input doesn't fire (DESIGN.md §9.5).
+  useGlobalShortcuts({ onTranslate: toggleTranslation })
 
   if (internalId === null) {
     return (
@@ -109,9 +247,27 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     (a) => !a.is_inline && a.derived_from === null
   )
 
+  // Translate state → toolbar prop derivation.
+  const translateError = translationQ.error as (Error & { code?: string }) | null
+  const translateStatus: TranslateStatus = !showTranslation
+    ? 'idle'
+    : translationQ.isError
+      ? 'error'
+      : translationQ.isLoading || translationQ.isFetching
+        ? 'loading'
+        : translationQ.data
+          ? 'translated'
+          : 'loading'
+
   return (
     <main aria-label="inbox-main" className="flex-1 min-w-0 bg-ink-3 flex flex-col min-h-0">
-      <EmailToolbar />
+      <EmailToolbar
+        translate={{
+          langIsEn,
+          status: translateStatus,
+          onToggle: toggleTranslation
+        }}
+      />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         <div className="px-8 py-6 max-w-[820px] mx-auto">
@@ -130,23 +286,22 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </h1>
           </div>
 
-          {/* One-tap inline translate — Sprint 3 wires the action */}
-          {langIsEn && (
+          {/* One-tap inline translate — visible only when LLM tagged the
+              email as English AND we're not already showing the translation. */}
+          {langIsEn && !showTranslation && (
             <button
               type="button"
-              disabled
-              title="Sprint 3"
+              onClick={() => setShowTranslation(true)}
+              title={`⌥T · ${t('translate.label')}`}
               className={cn(
                 'mb-5 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md',
                 'text-aux text-coral border border-coral/30 bg-coral/10',
-                'hover:bg-coral/15 transition-colors duration-fast',
-                'disabled:opacity-60 disabled:cursor-not-allowed'
+                'hover:bg-coral/15 transition-colors duration-fast'
               )}
             >
               <Languages size={13} strokeWidth={2} />
-              一键翻译此邮件为中文
-              <span className="text-meta font-mono text-ink-fg-2">·</span>
-              <span className="text-meta font-mono text-ink-fg-2">Sprint 3</span>
+              {t('translate.inlineCta')}
+              <kbd className="ml-0.5">⌥T</kbd>
             </button>
           )}
 
@@ -225,9 +380,30 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </div>
           )}
 
-          {/* Body — sandboxed iframe with .mail-body styles */}
+          {/* Thread sidebar — silent when thread_id is null. */}
+          {email.thread_id && (
+            <div className="mt-6">
+              <ThreadSidebar threadId={email.thread_id} currentInternalId={email.internal_id} />
+            </div>
+          )}
+
+          {/* Body — original sandboxed iframe OR translated markdown.
+              Toggled via EmailToolbar / ⌥T / inline translate banner. */}
           <div className="mt-7">
-            <EmailBodyFrame internalId={email.internal_id} attachments={email.attachments ?? []} />
+            {showTranslation ? (
+              <TranslationView
+                status={translateStatus}
+                errorCode={translateError?.code ?? null}
+                translated={translationQ.data?.translated ?? null}
+                onRetry={() => translationQ.refetch()}
+                onDismiss={dismissTranslation}
+              />
+            ) : (
+              <EmailBodyFrame
+                internalId={email.internal_id}
+                attachments={email.attachments ?? []}
+              />
+            )}
           </div>
 
           {/* Attachments */}
