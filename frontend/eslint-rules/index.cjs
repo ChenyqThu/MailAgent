@@ -1,11 +1,19 @@
-// REVIEW-LOG H-08 / DESIGN.md §14 + §16 + §17. Sprint 0 = skeleton with one
-// demo rule + fixture. Sprint 1 expands to the full 10 non-negotiables (§14
-// items 1-8 + §16 i18n item 9 + §17 theme item 10) and CI gates on `pnpm lint`.
-
-const noRawHex = require('./rules/no-raw-hex.cjs')
+// Local ESLint v9 plugin holding the design-system non-negotiables
+// (DESIGN.md §14 + §16.6 + §17 — see REVIEW-LOG H-08). Each rule has a
+// fixture-test in `eslint-rules/tests/rules.test.cjs` driven by
+// ESLint's RuleTester so the rules themselves cannot regress silently.
 
 module.exports = {
+  meta: { name: 'mailagent-local-rules', version: '0.1.0' },
   rules: {
-    'no-raw-hex': noRawHex
+    'no-raw-hex': require('./rules/no-raw-hex.cjs'),
+    'no-banned-colors': require('./rules/no-banned-colors.cjs'),
+    'no-large-radius': require('./rules/no-large-radius.cjs'),
+    'no-gradient-bg': require('./rules/no-gradient-bg.cjs'),
+    'no-heavy-shadow': require('./rules/no-heavy-shadow.cjs'),
+    'no-grayscale-surface': require('./rules/no-grayscale-surface.cjs'),
+    'no-coral-flood': require('./rules/no-coral-flood.cjs'),
+    'no-cjk-in-mono-size': require('./rules/no-cjk-in-mono-size.cjs'),
+    'no-prefers-color-scheme': require('./rules/no-prefers-color-scheme.cjs')
   }
 }
