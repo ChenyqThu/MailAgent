@@ -93,9 +93,15 @@ export function applyResolvedTheme(): void {
     root.classList.toggle('dark', resolved === 'dark')
     useAppearance.setState({ resolvedTheme: resolved })
     // Electron IPC broadcast (no-op in Web build)
-    const w = window as unknown as { electron?: { send: (ch: string, v: unknown) => void } }
-    w.electron?.send('appearance:theme', resolved)
-    w.electron?.send('appearance:nativeTheme', themeMode)
+    // `@electron-toolkit/preload`'s electronAPI exposes `ipcRenderer.send`,
+    // NOT `electron.send` directly. Sprint 1 had this typo'd — it never fired
+    // because Sprint 1 didn't really run the app; Sprint 2 surfaced it as
+    // "w.electron?.send is not a function" crashing the entire renderer tree.
+    const w = window as unknown as {
+      electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
+    }
+    w.electron?.ipcRenderer?.send('appearance:theme', resolved)
+    w.electron?.ipcRenderer?.send('appearance:nativeTheme', themeMode)
   })
 }
 
@@ -103,8 +109,10 @@ export function applyAccent(accent: AccentId): void {
   const root = document.documentElement
   if (accent === 'coral') root.removeAttribute('data-accent')
   else root.setAttribute('data-accent', accent)
-  const w = window as unknown as { electron?: { send: (ch: string, v: unknown) => void } }
-  w.electron?.send('appearance:accent', accent)
+  const w = window as unknown as {
+    electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
+  }
+  w.electron?.ipcRenderer?.send('appearance:accent', accent)
 }
 
 // Boot: register OS-change listener once. Caller should also call

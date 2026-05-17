@@ -6,6 +6,13 @@ import { registerCliLifecycle } from './cli_runner'
 import { registerEmailHandlers } from './handlers/email'
 import { registerAttachmentHandlers } from './handlers/attachment'
 
+// macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
+// otherwise the menu reads from the Electron binary's Info.plist
+// (CFBundleName="Electron") instead of our product name. Production builds
+// (electron-builder, productName=MailAgent) already get this right via the
+// signed .app bundle's Info.plist; this fixes the dev experience.
+app.setName('MailAgent')
+
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1280,
@@ -13,6 +20,7 @@ function createWindow(): void {
     minWidth: 940,
     minHeight: 600,
     show: false,
+    title: 'MailAgent',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0E1013',
     webPreferences: {
@@ -28,6 +36,25 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+    if (is.dev) {
+      // Open devtools so renderer-side errors are visible without Cmd+Opt+I.
+      // Detached panel keeps the inbox layout undisturbed.
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
+    }
+  })
+
+  // Forward renderer console errors to the main process stdout so they
+  // show up in `pnpm dev`'s log even without devtools open. Sprint 7 will
+  // route these into a proper renderer-log panel; for Sprint 2 stdout is
+  // good enough to catch React render exceptions.
+  mainWindow.webContents.on('console-message', (event) => {
+    const { level, message, sourceId, lineNumber } = event
+    if (level === 'error' || level === 'warning') {
+      console.error(`[renderer:${level}] ${message}\n  at ${sourceId}:${lineNumber}`)
+    }
+  })
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[renderer GONE] reason=${details.reason} exitCode=${details.exitCode}`)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

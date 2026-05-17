@@ -3,9 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <title>MailAgent</title>
+    <!--
+      Content-Security-Policy. `script-src 'self'` alone would block the
+      inline FOUC bootstrap below (no-FOUC requires synchronous inline
+      execution before paint). We allow that one script via its sha256
+      hash — if the FOUC bootstrap changes the hash must be updated.
+      Vite dev server occasionally injects `'unsafe-inline'`-needing
+      hydration scripts; we accept that for dev (host script runs from
+      `'self'` http://localhost:5173) but the prod build path serves the
+      same hash-locked inline script from a file:// origin.
+      connect-src adds `ws:` for vite HMR; `http://localhost:5173` for the
+      dev module server. Production wraps these in is.dev gating.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self' 'sha256-t+kr8R3mep8k6aibvackqI/cdmkoF/XJTsawrcLSI2Y='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; connect-src 'self' ws://localhost:* http://localhost:*"
     />
     <!--
       Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>

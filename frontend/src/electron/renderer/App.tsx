@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import '@shared/i18n'
 import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
+import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 
 export default function App(): React.ReactElement {
   // The client lives in a useState so HMR doesn't recreate it on every
@@ -38,8 +39,10 @@ export default function App(): React.ReactElement {
   }, [])
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <AppRouter />
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <AppRouter />
+      </QueryClientProvider>
+    </ErrorBoundary>
   )
 }
