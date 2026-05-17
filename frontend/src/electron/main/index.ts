@@ -16,7 +16,12 @@ function createWindow(): void {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0E1013',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      // electron-vite outputs the preload bundle as `.mjs` (ESM); Electron 28+
+      // loads .mjs preloads natively. Sprint 1 hardcoded `.js` and the file
+      // never existed → preload silently failed to load → window.electron
+      // was undefined → every IPC call from Sprint 2 onward threw
+      // "ipcRenderer.invoke missing — preload not loaded".
+      preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false
     }
   })
