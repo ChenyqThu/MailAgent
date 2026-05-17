@@ -39,6 +39,16 @@ logs/
 
 # Claude Code
 .omc/
+.claude/worktrees/
+.agents/
+.codex/
+AGENTS.md
+
+# Env backups (含 secrets)
+.env.bak.*
+
+# Python build artifacts
+*.egg-info/
 
 # Project specific
 email-notion-sync/
