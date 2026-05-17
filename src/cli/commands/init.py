@@ -111,7 +111,7 @@ def _run_action_inline(
 
     InitialSyncCls = runner
     if InitialSyncCls is None:
-        from scripts.initial_sync import InitialSync
+        from src.init.initial_sync import InitialSync
         InitialSyncCls = InitialSync
 
     t0 = time.monotonic()
@@ -123,7 +123,7 @@ def _run_action_inline(
 
         report_path = input_path or report_in
         if report_path:
-            from scripts.initial_sync import AnalysisReport
+            from src.init.initial_sync import AnalysisReport
             sync_instance.report = AnalysisReport.load(report_path)
 
         asyncio.run(_dispatch_action(

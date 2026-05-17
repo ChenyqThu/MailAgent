@@ -142,7 +142,7 @@ class TestPR4SchemaContract:
     ):
         from jsonschema import validate
 
-        with patch("scripts.initial_sync.InitialSync", _mock_initial_sync()):
+        with patch("src.init.initial_sync.InitialSync", _mock_initial_sync()):
             result = _invoke(
                 cli_runner, "init", subcmd, "-o", "json", db_path=seeded_db,
             )
@@ -164,7 +164,7 @@ class TestPR4SchemaContract:
         from jsonschema import validate
 
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
-        with patch("scripts.initial_sync.InitialSync", _mock_initial_sync()):
+        with patch("src.init.initial_sync.InitialSync", _mock_initial_sync()):
             result = _invoke(
                 cli_runner, "init", subcmd, "--yes",
                 "-o", "json", db_path=seeded_db,
@@ -178,7 +178,7 @@ class TestPR4SchemaContract:
         from jsonschema import validate
 
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
-        with patch("scripts.initial_sync.InitialSync", _mock_initial_sync()):
+        with patch("src.init.initial_sync.InitialSync", _mock_initial_sync()):
             result = _invoke(
                 cli_runner, "init", "all", "--yes", "--inbox-count", "10",
                 "-o", "json", db_path=seeded_db,
@@ -225,7 +225,7 @@ class TestPR4SchemaContract:
     ):
         from jsonschema import validate
 
-        monkeypatch.setattr("scripts.cleanup_syncstore.show_stats", MagicMock())
+        monkeypatch.setattr("src.cleanup.syncstore.show_stats", MagicMock())
         result = _invoke(
             cli_runner, "admin", "cleanup-syncstore",
             "-o", "json", db_path=seeded_db,
@@ -246,7 +246,7 @@ class TestPR4SchemaContract:
                 self.run = AsyncMock(return_value=True)
 
         monkeypatch.setattr(
-            "scripts.cleanup_notion_db.NotionDBCleaner",
+            "src.cleanup.notion_db.NotionDBCleaner",
             MagicMock(return_value=FakeCleaner()),
         )
         result = _invoke(

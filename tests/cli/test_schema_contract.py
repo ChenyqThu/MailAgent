@@ -418,7 +418,7 @@ class TestSchemaContract:
 
         async def fake_discover(*args, **kwargs):
             return []
-        import scripts.replay_recurring_invite as rr_mod
+        import src.calendar_notion.recurring_invite as rr_mod
         from src.mail import applescript_arm
         monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
         monkeypatch.setattr(

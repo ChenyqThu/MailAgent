@@ -18,7 +18,7 @@ def _invoke(cli_runner, *args, db_path):
 class TestCleanupSyncStore:
     def test_dry_run_smoke(self, cli_runner, cli_env, seeded_db, monkeypatch):
         show_stats = MagicMock()
-        monkeypatch.setattr("scripts.cleanup_syncstore.show_stats", show_stats)
+        monkeypatch.setattr("src.cleanup.syncstore.show_stats", show_stats)
 
         result = _invoke(
             cli_runner, "cleanup-syncstore",
@@ -66,15 +66,15 @@ class TestCleanupDuplicates:
         archive_page = AsyncMock()
         async_client = MagicMock()
         monkeypatch.setattr(
-            "scripts.cleanup_duplicate_message_ids.get_all_pages",
+            "src.cleanup.duplicate_message_ids.get_all_pages",
             fake_get_all_pages,
         )
         monkeypatch.setattr(
-            "scripts.cleanup_duplicate_message_ids.extract_page_info",
+            "src.cleanup.duplicate_message_ids.extract_page_info",
             extract_page_info,
         )
         monkeypatch.setattr(
-            "scripts.cleanup_duplicate_message_ids.archive_page",
+            "src.cleanup.duplicate_message_ids.archive_page",
             archive_page,
         )
         monkeypatch.setattr("notion_client.AsyncClient", async_client)
@@ -106,7 +106,7 @@ class TestRepairParents:
 
         cleaner = FakeCleaner()
         cleaner_cls = MagicMock(return_value=cleaner)
-        monkeypatch.setattr("scripts.cleanup_notion_db.NotionDBCleaner", cleaner_cls)
+        monkeypatch.setattr("src.cleanup.notion_db.NotionDBCleaner", cleaner_cls)
 
         result = _invoke(
             cli_runner, "repair-parents",
@@ -130,7 +130,7 @@ class TestRepairParents:
 
         cleaner = FakeCleaner()
         cleaner_cls = MagicMock(return_value=cleaner)
-        monkeypatch.setattr("scripts.cleanup_notion_db.NotionDBCleaner", cleaner_cls)
+        monkeypatch.setattr("src.cleanup.notion_db.NotionDBCleaner", cleaner_cls)
 
         result = _invoke(
             cli_runner, "repair-parents", "--thread-id", "<thread@x>",

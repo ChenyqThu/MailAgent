@@ -97,7 +97,7 @@ class TestCalendarRecurringDiscover:
                 "method": "REQUEST",
                 "dtstart": "2026-04-01T09:00:00+00:00",
             }]
-        import scripts.replay_recurring_invite as rr_mod
+        import src.calendar_notion.recurring_invite as rr_mod
         monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
         # 防止 AppleScriptArm 真初始化
         from src.mail import applescript_arm
@@ -127,7 +127,7 @@ class TestCalendarRecurringDiscover:
     def test_discover_empty(self, cli_runner, cli_env, seeded_db, monkeypatch):
         async def fake_discover(*args, **kwargs):
             return []
-        import scripts.replay_recurring_invite as rr_mod
+        import src.calendar_notion.recurring_invite as rr_mod
         monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
         from src.mail import applescript_arm
         monkeypatch.setattr(
@@ -197,7 +197,7 @@ class TestCalendarRecurringReplay:
         async def fake_replay_one(internal_id, sync_store, arm, meeting_sync):
             return f"page-{internal_id}"
 
-        import scripts.replay_recurring_invite as rr_mod
+        import src.calendar_notion.recurring_invite as rr_mod
         monkeypatch.setattr(rr_mod, "replay_one", fake_replay_one)
         from src.mail import applescript_arm, meeting_sync as meet_mod
         monkeypatch.setattr(

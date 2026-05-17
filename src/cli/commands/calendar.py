@@ -190,7 +190,7 @@ def calendar_recurring_discover(
     since_eff = since or cli.cli_config.sync_start_date or None
 
     # delegate to scripts.replay_recurring_invite.discover_recurring (现成的 API)
-    from scripts.replay_recurring_invite import discover_recurring
+    from src.calendar_notion.recurring_invite import discover_recurring
     from src.mail.applescript_arm import AppleScriptArm
 
     # PR-3 round-7 fix: 从 CLI cfg 显式注入 mail account / inbox (即使
@@ -374,7 +374,7 @@ def calendar_recurring_replay(
         return
 
     # 实跑: delegate to scripts.replay_recurring_invite.replay_one
-    from scripts.replay_recurring_invite import replay_one
+    from src.calendar_notion.recurring_invite import replay_one
     from src.mail.applescript_arm import AppleScriptArm
     from src.mail.meeting_sync import MeetingInviteSync
 

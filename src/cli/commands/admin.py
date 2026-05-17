@@ -580,7 +580,7 @@ def admin_cleanup_syncstore(
 
     默认 dry-run 仅显示统计；``--no-dry-run --yes`` 会把非 pending 状态重置为 pending。
     """
-    from scripts.cleanup_syncstore import reset_sync_status, show_stats
+    from src.cleanup.syncstore import reset_sync_status, show_stats
     from src.mail.sync_store import SyncStore
 
     cli: "CliContext" = ctx.obj
@@ -645,7 +645,7 @@ def admin_cleanup_duplicates(
 
     from notion_client import AsyncClient
 
-    from scripts.cleanup_duplicate_message_ids import (
+    from src.cleanup.duplicate_message_ids import (
         archive_page,
         extract_page_info,
         get_all_pages,
@@ -737,7 +737,7 @@ def admin_repair_parents(
     """修复 Notion Parent Item 断链关系，默认 dry-run 只预览。"""
     import asyncio
 
-    from scripts.cleanup_notion_db import NotionDBCleaner
+    from src.cleanup.notion_db import NotionDBCleaner
 
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)

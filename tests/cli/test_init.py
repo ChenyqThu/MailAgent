@@ -40,7 +40,7 @@ def _make_mock_initial_sync():
 class TestInitFetchCache:
     def test_fetch_cache_smoke(self, cli_runner, cli_env, seeded_db):
         cls, instance = _make_mock_initial_sync()
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "fetch-cache", "--inbox-count", "100",
                 "--sent-count", "20", "-o", "json", db_path=seeded_db,
@@ -57,7 +57,7 @@ class TestInitFetchCache:
 class TestInitAnalyze:
     def test_skip_fetch_passthrough(self, cli_runner, cli_env, seeded_db):
         cls, instance = _make_mock_initial_sync()
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "analyze", "--skip-fetch",
                 "-o", "json", db_path=seeded_db,
@@ -77,7 +77,7 @@ class TestInitWriteActions:
         monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
         monkeypatch.delenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", raising=False)
         cls, _ = _make_mock_initial_sync()
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "fix-properties", "--yes",
                 "-o", "json", db_path=seeded_db,
@@ -90,7 +90,7 @@ class TestInitWriteActions:
     ):
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         cls, instance = _make_mock_initial_sync()
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "fix-critical", "--yes",
                 "-o", "json", db_path=seeded_db,
@@ -106,7 +106,7 @@ class TestInitWriteActions:
         """update-parents CLI 名 → update_all_parent_items method."""
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         cls, instance = _make_mock_initial_sync()
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "update-parents", "--yes",
                 "-o", "json", db_path=seeded_db,
@@ -119,7 +119,7 @@ class TestInitWriteActions:
     ):
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         cls, instance = _make_mock_initial_sync()
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "sync-new", "--yes",
                 "-o", "json", db_path=seeded_db,
@@ -133,7 +133,7 @@ class TestInitWriteActions:
     def test_init_all_smoke(self, cli_runner, cli_env, seeded_db, monkeypatch):
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         cls, instance = _make_mock_initial_sync()
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "all", "--yes",
                 "--inbox-count", "100",
@@ -151,7 +151,7 @@ class TestInitWriteActions:
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         cls, instance = _make_mock_initial_sync()
         instance.fix_properties = AsyncMock(side_effect=RuntimeError("boom"))
-        with patch("scripts.initial_sync.InitialSync", cls):
+        with patch("src.init.initial_sync.InitialSync", cls):
             result = _invoke(
                 cli_runner, "fix-properties", "--yes",
                 "-o", "json", db_path=seeded_db,
