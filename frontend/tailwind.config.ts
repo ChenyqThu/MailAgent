@@ -36,17 +36,25 @@ export default {
         coral: 'rgb(var(--c-accent) / <alpha-value>)',
         'coral-hover': 'rgb(var(--c-accent-hi) / <alpha-value>)',
         'coral-dim': 'rgb(var(--c-accent-dim) / <alpha-value>)',
-        crit: '#E5634F',
-        urg: '#E89B4A',
-        impt: '#D4A53D',
-        norm: '#7A7F8A',
-        low: '#5A5E68',
-        ok: '#5DBA8C',
-        warn: '#E5B452',
-        fail: '#E36262',
+        // Sprint 4 a11y carry-forward (REVIEW-LOG H-01): on-accent CTA
+        // foreground. Replaces hardcoded `text-white` on `bg-coral/100`
+        // which failed WCAG AA on every accent swatch.
+        'accent-fg': 'rgb(var(--c-accent-fg) / <alpha-value>)',
+        // Sprint 4 a11y carry-forward (REVIEW-LOG H-01): chip palette
+        // moved to CSS variables so dark / light each get a foreground
+        // that clears AA over bg-X/15. See index.css :root + :root[data-theme='light']
+        // blocks for the per-mode triples.
+        crit: 'rgb(var(--c-crit) / <alpha-value>)',
+        urg: 'rgb(var(--c-urg) / <alpha-value>)',
+        impt: 'rgb(var(--c-impt) / <alpha-value>)',
+        norm: 'rgb(var(--c-norm) / <alpha-value>)',
+        low: 'rgb(var(--c-low) / <alpha-value>)',
+        ok: 'rgb(var(--c-ok) / <alpha-value>)',
+        warn: 'rgb(var(--c-warn) / <alpha-value>)',
+        fail: 'rgb(var(--c-fail) / <alpha-value>)',
         dead: '#6B707A',
-        info: '#6FA8DC',
-        ai: '#B58CDB'
+        info: 'rgb(var(--c-info) / <alpha-value>)',
+        ai: 'rgb(var(--c-ai) / <alpha-value>)'
       },
       fontFamily: {
         sans: [

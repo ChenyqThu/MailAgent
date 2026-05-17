@@ -14,14 +14,15 @@
 //   - axe-core only sees what's on the page; the fixture surfaces every
 //     token combination the live UI actually composes.
 //
-// Bash usage:  `pnpm a11y:contrast`              (report baseline, exit 0)
-//              `pnpm a11y:contrast --strict`     (exit 1 if any violation)
-//              `pnpm a11y:contrast --json`       (machine-readable, exit 0)
+// Bash usage:  `pnpm a11y:contrast`              (--strict; exit 1 on any violation — CI gate)
+//              `pnpm a11y:contrast:json`         (machine-readable, exit 0 — dev/debug)
+//              `tsx scripts/a11y/contrast.ts`    (raw; no flag → informational only)
 //
-// Sprint 3 baseline: 335 violations across 12 combinations — see
-// `frontend/NOTES.md` 2026-05-17 entry. The script is intentionally
-// non-blocking by default; `--strict` will be flipped on the npm script
-// once token tuning (Sprint 4 carry-forward) brings the count to zero.
+// Sprint 4 status: 0 violations across the 12 combinations (6 accent ×
+// 2 mode). Sprint 3 left the script in informational mode pending token
+// tuning; the Sprint 4 C-token carry-forward (index.css chip palette
+// CSS variables + lifted ink-fg ramp + per-mode accent + accent-fg CTA)
+// brought the count down from 335 to 0. The npm script is now gated.
 
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs'

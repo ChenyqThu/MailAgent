@@ -24,15 +24,51 @@
   --ink-border: 44 50 59;
   --ink-border-soft: 31 36 43;
 
+  /* Sprint 4 a11y carry-forward (REVIEW-LOG C-08 / H-01):
+   * fg-2 and fg-3 needed brighter values to clear WCAG AA (4.5:1) over
+   * the realistic ink-2/3 surfaces. Sprint 3 baseline = 335 violations;
+   * targeting 0 with the lifts below + chip hue rebalance. */
   --ink-fg: 232 234 238;
-  --ink-fg-1: 164 169 179;
-  --ink-fg-2: 107 112 122;
-  --ink-fg-3: 69 74 83;
+  --ink-fg-1: 192 198 208;
+  --ink-fg-2: 162 168 180;
+  --ink-fg-3: 152 158 170;
 
-  /* Accent — Coral default */
-  --c-accent: 229 101 75;
-  --c-accent-hi: 216 88 65;
-  --c-accent-dim: 126 61 50;
+  /* Accent — Coral default. Sprint 4 a11y carry-forward: luminance
+   * lifted from (229,101,75) → (244,140,114) so `text-coral` reads as
+   * AA over `bg-ink-1/2/3` in dark mode. Designer mockup remains
+   * unambiguously coral; the shift is one step lighter. */
+  --c-accent: 244 140 114;
+  --c-accent-hi: 232 124 98;
+  --c-accent-dim: 138 70 56;
+
+  /* CTA-on-accent foreground. Sprint 4 a11y carry-forward (REVIEW-LOG
+   * H-01): the previous `text-white` on `bg-coral/100` failed WCAG AA
+   * across all 6 accent swatches (mid-luminance accent + pure white text
+   * = ~3.3:1, AA threshold 4.5). A near-black foreground pulls the
+   * ratio to 6+ on every accent, dark and light alike, with no
+   * mockup-visible change beyond CTA legibility. */
+  --c-accent-fg: 15 16 21;
+
+  /* Chip palette — Sprint 4 a11y carry-forward (REVIEW-LOG H-01).
+   *
+   * Sprint 3 used fixed hex (#E5634F etc.) in tailwind.config.ts, which
+   * meant the same red rendered as text on both bg-crit/15 (mostly dark
+   * red over ink-0) and bg-crit/15 (mostly white in light mode). Same
+   * foreground on two opposite backgrounds → one of them always failed
+   * WCAG AA 4.5:1. The new shape splits dark + light luminance per chip
+   * so the foreground gets darker (more contrast) on light surfaces and
+   * stays bright on dark ones. Designer intent (red = critical, etc.)
+   * preserved; only the saturation/luminance tweaked. */
+  --c-crit: 248 144 124;
+  --c-urg: 252 188 116;
+  --c-impt: 242 208 116;
+  --c-norm: 192 198 210;
+  --c-low: 174 180 194;
+  --c-ok: 152 232 192;
+  --c-warn: 252 212 128;
+  --c-fail: 252 152 152;
+  --c-info: 184 214 244;
+  --c-ai: 224 196 244;
 }
 
 :root[data-theme='light'] {
@@ -45,36 +81,98 @@
   --ink-border: 214 217 221;
   --ink-border-soft: 234 235 237;
 
+  /* Sprint 4 a11y carry-forward — light fg-2 / fg-3 darkened so the
+   * dimmer metadata text clears WCAG AA over the off-white ink-2/3
+   * surfaces. fg-3 was the worst offender at 180/184/191 — barely a
+   * step darker than ink-4. */
   --ink-fg: 26 29 34;
-  --ink-fg-1: 91 97 107;
-  --ink-fg-2: 122 127 138;
-  --ink-fg-3: 180 184 191;
+  --ink-fg-1: 48 54 66;
+  --ink-fg-2: 68 74 86;
+  --ink-fg-3: 82 88 100;
+
+  /* CTA-on-accent foreground flips to white in light mode — the light
+   * accent palette is deep enough (e.g. coral 178/66/44 ≈ L 0.07) that
+   * white-on-accent reaches AA again. Dark mode keeps near-black fg. */
+  --c-accent-fg: 255 255 255;
+
+  /* Light-mode chip palette — same role assignments as dark, but the
+   * foreground luminance is dropped so chip text reads as AA over the
+   * bg-X/15 wash (≈ 15% chip color over white). The neutral-on-neutral
+   * pairs (norm / low) needed the steepest drop since gray-on-gray was
+   * the worst-offender baseline. */
+  --c-crit: 138 36 22;
+  --c-urg: 122 64 12;
+  --c-impt: 96 68 14;
+  --c-norm: 54 60 72;
+  --c-low: 38 42 50;
+  --c-ok: 26 96 60;
+  --c-warn: 102 70 18;
+  --c-fail: 130 30 32;
+  --c-info: 24 70 116;
+  --c-ai: 92 58 130;
 }
 
+/* Per-accent dark-mode swatches. Sprint 4 a11y carry-forward: all
+ * 6 swatches brightened one step to ≥ AA over ink-1/2/3 surfaces. */
 :root[data-accent='cobalt'] {
-  --c-accent: 74 120 229;
-  --c-accent-hi: 60 102 207;
-  --c-accent-dim: 48 82 163;
+  --c-accent: 122 162 248;
+  --c-accent-hi: 100 144 240;
+  --c-accent-dim: 56 92 168;
 }
 :root[data-accent='teal'] {
-  --c-accent: 45 181 166;
-  --c-accent-hi: 33 156 142;
-  --c-accent-dim: 24 110 100;
+  --c-accent: 92 212 196;
+  --c-accent-hi: 70 190 174;
+  --c-accent-dim: 30 116 106;
 }
 :root[data-accent='rose'] {
-  --c-accent: 219 91 124;
-  --c-accent-hi: 198 71 105;
-  --c-accent-dim: 140 50 74;
+  --c-accent: 236 132 158;
+  --c-accent-hi: 220 114 140;
+  --c-accent-dim: 148 58 84;
 }
 :root[data-accent='slate'] {
-  --c-accent: 126 134 148;
-  --c-accent-hi: 105 113 127;
-  --c-accent-dim: 74 80 92;
+  --c-accent: 174 184 200;
+  --c-accent-hi: 152 162 178;
+  --c-accent-dim: 80 88 102;
 }
 :root[data-accent='olive'] {
-  --c-accent: 156 165 82;
-  --c-accent-hi: 134 143 70;
-  --c-accent-dim: 94 100 48;
+  --c-accent: 196 208 122;
+  --c-accent-hi: 172 184 106;
+  --c-accent-dim: 100 108 56;
+}
+
+/* Light-mode accent overrides. The bright dark-mode hex would read as
+ * a near-AA pastel over white; light mode wants the opposite end of
+ * the saturation curve (deeper, more chromatic). */
+:root[data-theme='light']:not([data-accent]),
+:root[data-theme='light'][data-accent='coral'] {
+  --c-accent: 146 50 32;
+  --c-accent-hi: 128 42 26;
+  --c-accent-dim: 86 30 18;
+}
+:root[data-theme='light'][data-accent='cobalt'] {
+  --c-accent: 28 68 168;
+  --c-accent-hi: 20 56 148;
+  --c-accent-dim: 14 38 102;
+}
+:root[data-theme='light'][data-accent='teal'] {
+  --c-accent: 10 96 88;
+  --c-accent-hi: 8 84 78;
+  --c-accent-dim: 6 58 54;
+}
+:root[data-theme='light'][data-accent='rose'] {
+  --c-accent: 138 36 66;
+  --c-accent-hi: 122 30 56;
+  --c-accent-dim: 84 22 40;
+}
+:root[data-theme='light'][data-accent='slate'] {
+  --c-accent: 60 68 84;
+  --c-accent-hi: 48 56 72;
+  --c-accent-dim: 32 38 50;
+}
+:root[data-theme='light'][data-accent='olive'] {
+  --c-accent: 76 82 22;
+  --c-accent-hi: 64 70 18;
+  --c-accent-dim: 44 50 14;
 }
 
 /* Pre-paint anchors so the first frame doesn't show "Electron blue". */
@@ -166,13 +264,29 @@ kbd,
   line-height: 1;
   padding: 2px 4px;
   border-radius: 3px;
-  background: rgb(111 168 220 / 0.1);
-  border: 1px solid rgb(111 168 220 / 0.25);
-  color: rgb(111 168 220);
+  /* Sprint 4 a11y — pip pulls from --c-info so the lighter dark-mode
+   * variant + darker light-mode variant both clear AA over their
+   * /10 wash. Sprint 3 hard-coded #6FA8DC (light blue) which read OK
+   * on dark but failed on light (lavender on near-white). */
+  background: rgb(var(--c-info) / 0.16);
+  border: 1px solid rgb(var(--c-info) / 0.42);
+  color: rgb(var(--c-info));
   letter-spacing: 0.04em;
   text-transform: uppercase;
   display: inline-flex;
   align-items: center;
+}
+
+/* ─── <mark> search-snippet highlight — explicit AA both modes ──────── */
+/* Sprint 4 a11y carry-forward — fixed amber bg + near-black text in
+ * BOTH modes (mark stays its own surface independent of theme). White
+ * text on faint amber failed AA in light; black text on saturated amber
+ * passes ~13:1 both directions. */
+mark {
+  background: #fce28a;
+  color: #1a1d22;
+  padding: 0 2px;
+  border-radius: 2px;
 }
 
 /* ─── Traffic-light placeholders (titlebar — real ones from macOS) ──── */

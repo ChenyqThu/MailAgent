@@ -158,7 +158,7 @@ export function EmailToolbar({ translate }: ToolbarProps = {}): React.ReactEleme
         title="Sprint 5"
         className={cn(
           'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md',
-          'bg-coral/100 text-white text-aux font-medium',
+          'bg-coral/100 text-accent-fg text-aux font-medium',
           'hover:bg-coral-hover transition-colors duration-fast',
           'disabled:opacity-70 disabled:cursor-not-allowed'
         )}

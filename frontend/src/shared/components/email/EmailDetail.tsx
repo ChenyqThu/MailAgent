@@ -20,7 +20,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
 import { mapLanguage } from '@shared/lib/ai_mapping'
-import { useGlobalShortcuts } from '@shared/hooks/useGlobalShortcuts'
+import { useShortcut } from '@shared/hooks/useShortcut'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
@@ -201,9 +201,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     setShowTranslation(false)
   }, [internalId, mailApi])
 
-  // ⌥T toggle. The hook short-circuits in editable contexts so typing
+  // ⌥T toggle. `useShortcut` short-circuits in editable contexts so typing
   // "t" in an input doesn't fire (DESIGN.md §9.5).
-  useGlobalShortcuts({ onTranslate: toggleTranslation })
+  useShortcut('alt+t', toggleTranslation)
 
   if (internalId === null) {
     return (
