@@ -1,17 +1,45 @@
-// Sprint 0 scaffold root. Mounts the i18n side-effect import, kicks off the
-// appearance store boot (DOM is already coloured by the inline bootstrap in
-// index.html — this just syncs the zustand store + registers the
-// matchMedia listener for system mode), then hands off to TanStack Router.
+// App root. Three concerns:
+//   1. Side-effect imports: i18n init.
+//   2. Appearance boot — DOM is already coloured by the inline bootstrap in
+//      index.html; this just syncs the zustand store + registers the
+//      matchMedia listener for system mode.
+//   3. TanStack Query provider — Sprint 2 adds it so EmailList's 5s poll
+//      and EmailDetail's cache-by-internal-id reads have a host.
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
 import '@shared/i18n'
 import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
 
 export default function App(): React.ReactElement {
+  // The client lives in a useState so HMR doesn't recreate it on every
+  // edit (would lose the in-flight cache). One QueryClient per renderer
+  // lifetime is the documented pattern.
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            // Stale-while-revalidate baseline. EmailList overrides
+            // refetchInterval at the per-query level; everything else
+            // (mailbox list, AI fields) stays cached until invalidated.
+            staleTime: 30_000,
+            refetchOnWindowFocus: false,
+            retry: 1
+          }
+        }
+      })
+  )
+
   useEffect(() => {
     bootAppearance()
   }, [])
 
-  return <AppRouter />
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AppRouter />
+    </QueryClientProvider>
+  )
 }

@@ -12,6 +12,8 @@ import type { Database, Statement } from 'better-sqlite3'
 import { ipcMain } from 'electron'
 
 import { getDb } from '../db'
+import { mapLanguage, mapPriority, mapReviewStatus, mapSentiment, parseLabels } from './ai_mapping'
+import type { AIFields, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
 import type {
   EmailList_EmailListItem,
   EmailGet_EmailRecord,
@@ -47,6 +49,11 @@ export interface SearchOpts {
   until?: string
   limit?: number
 }
+
+// Frontend-only enriched view shapes (NOT in cli.gen.ts) live in
+// `@shared/api/types` so the renderer's <EmailRow>/<AIFieldsBlock> can read
+// the same TypeScript declarations without crossing the main/renderer
+// boundary. See the module doc in shared/api/types.ts for the rationale.
 
 // ---- raw row shapes (private — never leak to renderer) ----------------------
 
@@ -416,10 +423,157 @@ export function searchEmails(opts: SearchOpts): EmailSearch_SearchHit[] {
   }))
 }
 
+// ---- Enriched list + mailbox + AI fields (renderer-only views) -------------
+
+interface EnrichedRow extends EmailMetadataRow {
+  snippet_raw: string | null
+  lang_raw: string | null
+  priority_raw: string | null
+  action_raw: string | null
+  attach_count: number | null
+}
+
+interface MailboxRow {
+  mailbox: string | null
+  total: number
+  unread: number
+}
+
+interface AIFieldsRow extends EmailMetadataRow {
+  processing_status: string | null
+  labels_json: string | null
+  llm_status: string | null
+}
+
+// Selecting the same metadata columns as LIST_COLS but qualified to the
+// `m.` alias (the LEFT JOINs make bare names ambiguous). Plus the join-
+// derived extras. `is_inline = 0` keeps the user-visible attachment count
+// honest — cid: inline images shouldn't bump the paperclip counter;
+// derived docx→pdf siblings are user-visible so they stay in.
+const ENRICHED_LIST_COLS = `
+    m.internal_id, m.message_id, m.thread_id, m.subject, m.sender, m.sender_name,
+    m.to_addr, m.cc_addr, m.date_received, m.mailbox, m.is_read, m.is_flagged,
+    m.sync_status, m.notion_page_id, m.notion_thread_id, m.sync_error, m.retry_count
+`
+
+const ENRICHED_EXTRA_COLS = `
+    substr(b.body_markdown, 1, 100) AS snippet_raw,
+    json_extract(l.labels_json, '$.language')   AS lang_raw,
+    json_extract(l.labels_json, '$.priority')   AS priority_raw,
+    json_extract(l.labels_json, '$.action_type') AS action_raw,
+    (SELECT COUNT(*) FROM email_attachment a
+     WHERE a.internal_id = m.internal_id AND a.is_inline = 0) AS attach_count
+`
+
+function buildEnrichedWhere(opts: ListOpts): WhereBuild {
+  const { sql, params } = buildListWhere(opts)
+  if (sql.length === 0) return { sql, params }
+  // Re-qualify every bare column reference to the `m.` alias so the JOIN
+  // doesn't trip on ambiguous columns. Cheap regex — no SQL injection
+  // surface because every clause comes from buildListWhere().
+  const qualified = sql.replace(
+    /\b(mailbox|sync_status|date_received|sender|subject|is_read|is_flagged|notion_page_id)\b/g,
+    'm.$1'
+  )
+  return { sql: qualified, params }
+}
+
+function shapeEnrichedItem(row: EnrichedRow): EnrichedEmailMeta {
+  return {
+    ...shapeListItem(row),
+    snippet: row.snippet_raw && row.snippet_raw.length > 0 ? row.snippet_raw : null,
+    lang: mapLanguage(row.lang_raw),
+    ai_priority: mapPriority(row.priority_raw),
+    ai_action: row.action_raw ?? null,
+    attach_count: row.attach_count ?? 0
+  }
+}
+
+export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
+  const db = getDb()
+  const where = buildEnrichedWhere(opts)
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500)
+  const offset = Math.max(opts.offset ?? 0, 0)
+  const sql = `SELECT ${ENRICHED_LIST_COLS}, ${ENRICHED_EXTRA_COLS}
+               FROM email_metadata m
+               LEFT JOIN email_body b      ON b.internal_id = m.internal_id
+               LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
+               ${where.sql}
+               ORDER BY m.date_received DESC NULLS LAST, m.internal_id DESC
+               LIMIT ? OFFSET ?`
+  const rows = prep(db, sql).all(...where.params, limit, offset) as EnrichedRow[]
+  return rows.map(shapeEnrichedItem)
+}
+
+export function listMailboxes(): MailboxSummary[] {
+  const db = getDb()
+  const rows = prep(
+    db,
+    `SELECT mailbox,
+            COUNT(*) AS total,
+            SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread
+       FROM email_metadata
+      WHERE mailbox IS NOT NULL AND mailbox != ''
+      GROUP BY mailbox
+      ORDER BY total DESC`
+  ).all() as MailboxRow[]
+  return rows
+    .filter(
+      (r): r is MailboxRow & { mailbox: string } => r.mailbox !== null && r.mailbox.length > 0
+    )
+    .map((r) => ({
+      mailbox: r.mailbox,
+      total: r.total ?? 0,
+      unread: r.unread ?? 0
+    }))
+}
+
+export function getAIFields(internalId: number): AIFields | null {
+  const db = getDb()
+  const row = prep(
+    db,
+    `SELECT ${LIST_COLS},
+            processing_status,
+            (SELECT labels_json FROM llm_processing WHERE internal_id = ?) AS labels_json,
+            (SELECT status     FROM llm_processing WHERE internal_id = ?) AS llm_status
+       FROM email_metadata
+      WHERE internal_id = ?`
+  ).get(internalId, internalId, internalId) as AIFieldsRow | undefined
+  if (!row) return null
+  const labels = parseLabels(row.labels_json)
+  // labels_json fields we promote — see ai_mapping.ts module doc for the
+  // schema-vs-reality mismatch on `sentiment`.
+  const priorityRaw = labels && typeof labels.priority === 'string' ? labels.priority : null
+  const actionRaw = labels && typeof labels.action_type === 'string' ? labels.action_type : null
+  const sentimentRaw = labels && typeof labels.sentiment === 'string' ? labels.sentiment : null
+  return {
+    internal_id: row.internal_id,
+    processing_status: row.processing_status ?? null,
+    mailbox: row.mailbox ?? null,
+    is_read: asBool(row.is_read),
+    is_flagged: asBool(row.is_flagged),
+    ai_priority: mapPriority(priorityRaw),
+    ai_action: actionRaw,
+    ai_review_status: mapReviewStatus(row.llm_status),
+    sentiment: mapSentiment(sentimentRaw),
+    labels_raw: labels
+  }
+}
+
 // ---- IPC wiring -------------------------------------------------------------
 
 export function registerEmailHandlers(): void {
   ipcMain.handle('email:list', (_evt, opts: ListOpts = {}) => listEmails(opts ?? {}))
+  ipcMain.handle('email:listEnriched', (_evt, opts: ListOpts = {}) =>
+    listEmailsEnriched(opts ?? {})
+  )
+  ipcMain.handle('email:listMailboxes', () => listMailboxes())
+  ipcMain.handle('email:aiFields', (_evt, internalId: number) => {
+    if (!Number.isInteger(internalId) || internalId < 0) {
+      throw new TypeError(`email:aiFields expected non-negative integer, got ${String(internalId)}`)
+    }
+    return getAIFields(internalId)
+  })
   ipcMain.handle('email:get', (_evt, internalId: number) => {
     if (!Number.isInteger(internalId) || internalId < 0) {
       throw new TypeError(`email:get expected non-negative integer, got ${String(internalId)}`)

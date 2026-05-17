@@ -76,6 +76,25 @@ export function buildFixtureDb(): Database.Database {
       body_markdown, subject, sender,
       tokenize='porter unicode61 remove_diacritics 2'
     );
+
+    CREATE TABLE llm_processing (
+      internal_id INTEGER PRIMARY KEY,
+      notion_page_id TEXT,
+      mailbox TEXT,
+      status TEXT,
+      retry_count INTEGER DEFAULT 0,
+      next_retry_at REAL,
+      last_error TEXT,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_input_tokens INTEGER,
+      cache_creation_input_tokens INTEGER,
+      latency_ms INTEGER,
+      labels_json TEXT,
+      created_at REAL,
+      updated_at REAL
+    );
   `)
 
   // Seed a small but realistic spread:
@@ -223,16 +242,25 @@ export function buildFixtureDb(): Database.Database {
   const ftsInsert = db.prepare(
     'INSERT INTO email_body_fts(rowid, body_markdown, subject, sender) VALUES (?, ?, ?, ?)'
   )
-  ftsInsert.run(101, 'Hey, the redis client keeps timing out after 5s.', 'redis timeout debug session', 'alice@example.com')
-  ftsInsert.run(102, '本周 *产品* 评审议程：Notion 集成进度', '本周产品评审 — Notion 集成', 'bob@example.com')
+  ftsInsert.run(
+    101,
+    'Hey, the redis client keeps timing out after 5s.',
+    'redis timeout debug session',
+    'alice@example.com'
+  )
+  ftsInsert.run(
+    102,
+    '本周 *产品* 评审议程：Notion 集成进度',
+    '本周产品评审 — Notion 集成',
+    'bob@example.com'
+  )
 
   // Attachments for 101: a PDF + its derived "preview" PDF.
   const att1 = insertAtt.run({
     internal_id: 101,
     content_id: null,
     filename: 'spec.docx',
-    content_type:
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     size_bytes: 4096,
     is_inline: 0,
     local_path: '/tmp/email-notion-sync/aaa/spec.docx',
@@ -257,6 +285,106 @@ export function buildFixtureDb(): Database.Database {
     notion_file_id: 'notion-file-002',
     notion_block_id: 'notion-block-002',
     created_at: now - 3399
+  })
+  // Inline cid: image on 102 — must NOT bump the user-visible attach_count
+  // (DESIGN.md §5.1 paperclip is for real attachments, not body images).
+  insertAtt.run({
+    internal_id: 102,
+    content_id: 'logo@cid',
+    filename: 'logo.png',
+    content_type: 'image/png',
+    size_bytes: 2048,
+    is_inline: 1,
+    local_path: '/tmp/email-notion-sync/bbb/logo.png',
+    sha256: 'sha-att-3',
+    derived_from: null,
+    derived_format: null,
+    notion_file_id: null,
+    notion_block_id: null,
+    created_at: now - 7000
+  })
+
+  // processing_status on metadata — set per the lifecycle table in
+  // CLAUDE.md "Processing Status 生命周期". 103 (failed) keeps NULL so the
+  // AIFieldsBlock fallback is exercised.
+  db.prepare(
+    `UPDATE email_metadata SET processing_status = 'AI Reviewed' WHERE internal_id = 101`
+  ).run()
+  db.prepare(
+    `UPDATE email_metadata SET processing_status = '已同步'      WHERE internal_id = 102`
+  ).run()
+  db.prepare(
+    `UPDATE email_metadata SET processing_status = '已完成'      WHERE internal_id = 201`
+  ).run()
+
+  // llm_processing seeds. Three scenarios:
+  //   - 101: success + labels_json with full LLM output (incl. emoji priority)
+  //   - 102: failed run, labels_json present from a prior partial write
+  //   - 103: NO row — exercises the "LLM never ran" fallback in getAIFields()
+  const insertLlm = db.prepare(`
+    INSERT INTO llm_processing
+      (internal_id, notion_page_id, mailbox, status,
+       model, input_tokens, output_tokens, cache_read_input_tokens,
+       cache_creation_input_tokens, latency_ms, labels_json, created_at, updated_at)
+    VALUES (@internal_id, @notion_page_id, @mailbox, @status, @model,
+            @input_tokens, @output_tokens, @cache_read_input_tokens,
+            @cache_creation_input_tokens, @latency_ms, @labels_json,
+            @created_at, @updated_at)
+  `)
+  insertLlm.run({
+    internal_id: 101,
+    notion_page_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    mailbox: '收件箱',
+    status: 'success',
+    model: 'claude-sonnet-4-6',
+    input_tokens: 6000,
+    output_tokens: 200,
+    cache_read_input_tokens: 5800,
+    cache_creation_input_tokens: 0,
+    latency_ms: 1500,
+    labels_json: JSON.stringify({
+      ai_summary: 'Alice asked about a redis timeout — needs a reply.',
+      key_points: '- timeout after 5s\n- prod issue',
+      category: '🔧 技术支持',
+      language: 'English',
+      sender_priority: '外部联系人',
+      action_required: true,
+      action_type: '需要回复',
+      priority: '🔴 紧急',
+      urgency_reason: 'prod down',
+      mail_actions: ['⚠️ Flagged'],
+      daily_digest_date: '2026-05-15',
+      related_project: '',
+      mailbox: '收件箱',
+      input_tokens: 6000,
+      output_tokens: 200,
+      cache_read_input_tokens: 5800,
+      cache_creation_input_tokens: 0,
+      model: 'claude-sonnet-4-6',
+      latency_ms: 1500
+    }),
+    created_at: now - 3000,
+    updated_at: now - 3000
+  })
+  insertLlm.run({
+    internal_id: 102,
+    notion_page_id: '11111111-2222-3333-4444-555555555555',
+    mailbox: '收件箱',
+    status: 'failed',
+    model: 'claude-sonnet-4-6',
+    input_tokens: null,
+    output_tokens: null,
+    cache_read_input_tokens: null,
+    cache_creation_input_tokens: null,
+    latency_ms: null,
+    labels_json: JSON.stringify({
+      language: '中文',
+      priority: '🟡 重要',
+      action_type: '需要决策',
+      action_required: true
+    }),
+    created_at: now - 6000,
+    updated_at: now - 6000
   })
 
   return db

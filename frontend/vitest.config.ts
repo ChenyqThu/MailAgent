@@ -7,9 +7,15 @@ import { resolve } from 'node:path'
 
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.ts', 'tests/**/*.test.cjs'],
+    include: ['tests/**/*.test.{ts,tsx,cjs}'],
     environment: 'node',
     pool: 'forks' // better-sqlite3 + native bindings prefer process isolation
+  },
+  // React 19 automatic JSX runtime so .tsx test files don't need an explicit
+  // `import React from 'react'`. Matches the tsconfig.web.json `jsx:react-jsx`
+  // setting electron-vite already runs through esbuild for the renderer.
+  esbuild: {
+    jsx: 'automatic'
   },
   resolve: {
     alias: {

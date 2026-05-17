@@ -20,10 +20,10 @@
 
 import { execa, type ResultPromise, type Result } from 'execa'
 import { app } from 'electron'
-import { sync as whichSync } from 'which'
 
 import { Semaphore } from './sem'
 import { getCliApiKey } from './keychain'
+import { whichSync } from './bin_resolver'
 
 // Resolved lazily on first call. The CLI is shipped by `pip install -e .[cli]`
 // (project CLAUDE.md "CLI" section). If it's missing the app should *say so*

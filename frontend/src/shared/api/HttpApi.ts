@@ -15,8 +15,11 @@ export class HttpApi implements MailApi {
 
   email = {
     list: () => notImplemented('email.list'),
+    listEnriched: () => notImplemented('email.listEnriched'),
+    listMailboxes: () => notImplemented('email.listMailboxes'),
     get: () => notImplemented('email.get'),
     body: () => notImplemented('email.body'),
+    aiFields: () => notImplemented('email.aiFields'),
     search: () => notImplemented('email.search'),
     resync: () => notImplemented('email.resync')
   }

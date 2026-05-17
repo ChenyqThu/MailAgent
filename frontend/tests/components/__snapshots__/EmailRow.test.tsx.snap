@@ -1,0 +1,807 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-read-normal 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <span
+    aria-hidden="true"
+    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
+  />
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="true"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg-1"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg-1"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-unread-normal 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <span
+    aria-hidden="true"
+    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
+  />
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="false"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-coral/100"
+      title="Unread"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg font-medium"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg font-semibold"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-read-normal 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="true"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg-1"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg-1"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-unread-failed 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="false"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-fail"
+      title="Unread"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg font-medium"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
+        >
+          SYNC FAILED
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg font-semibold"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-read-normal 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <span
+    aria-hidden="true"
+    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
+  />
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="true"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg-1"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg-1"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-unread-normal 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast bg-ink-3"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <span
+    aria-hidden="true"
+    class="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100"
+  />
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="false"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-coral/100"
+      title="Unread"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg font-medium"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg font-semibold"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-read-normal 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="true"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg-1"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg-1"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;
+
+exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-unread-failed 1`] = `
+<article
+  class="group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-2"
+  data-internal-id="101"
+  role="button"
+  tabindex="0"
+>
+  <div
+    class="flex items-start gap-2.5"
+  >
+    <span
+      aria-hidden="false"
+      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-fail"
+      title="Unread"
+    />
+    <div
+      class="min-w-0 flex-1"
+    >
+      <div
+        class="flex items-center gap-2 mb-0.5"
+      >
+        <span
+          class="truncate flex-1 text-ink-fg font-medium"
+        >
+          Alice
+        </span>
+        <span
+          aria-label="English"
+          class="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
+        >
+          EN
+        </span>
+        <span
+          class="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
+        >
+          SYNC FAILED
+        </span>
+        <span
+          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
+        >
+          2026/05/14 18:00
+        </span>
+      </div>
+      <div
+        class="truncate text-ink-fg font-semibold"
+      >
+        redis timeout debug session
+      </div>
+      <div
+        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      >
+        Hey, the redis client keeps timing out after 5s.
+      </div>
+      <div
+        class="flex items-center gap-1.5 mt-2"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+        >
+          <span
+            aria-hidden="true"
+            class="w-1.5 h-1.5 rounded-full bg-crit"
+          />
+          critical
+        </span>
+        <span
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+          title="需要回复"
+        >
+          REPLY
+        </span>
+        <span
+          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+            />
+          </svg>
+          <span
+            class="text-meta font-mono tabular-nums"
+          >
+            2
+          </span>
+        </span>
+      </div>
+    </div>
+  </div>
+</article>
+`;

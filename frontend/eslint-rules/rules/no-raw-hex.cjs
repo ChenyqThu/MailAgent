@@ -10,12 +10,7 @@
 
 const HEX = /#[0-9a-fA-F]{3,8}\b/
 
-const ALLOWED_FILES = [
-  /tailwind\.config\.ts$/,
-  /\.css$/,
-  /\.gen\.ts$/,
-  /src\/electron\/main\//
-]
+const ALLOWED_FILES = [/tailwind\.config\.ts$/, /\.css$/, /\.gen\.ts$/, /src\/electron\/main\//]
 
 module.exports = {
   meta: {

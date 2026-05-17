@@ -9,6 +9,7 @@
 // arguments must be structured-clonable.
 
 import type {
+  AIFields,
   AttachmentApi,
   AttachmentMeta,
   BodyOpts,
@@ -16,8 +17,10 @@ import type {
   EmailBody,
   EmailDetail,
   EmailMeta,
+  EnrichedEmailMeta,
   ListOpts,
   MailApi,
+  MailboxSummary,
   ResyncOpts,
   ResyncResult,
   SearchHit,
@@ -44,11 +47,20 @@ class ElectronEmailApi implements EmailApi {
   async list(opts: ListOpts): Promise<EmailMeta[]> {
     return (await invoker()('email:list', opts)) as EmailMeta[]
   }
+  async listEnriched(opts: ListOpts): Promise<EnrichedEmailMeta[]> {
+    return (await invoker()('email:listEnriched', opts)) as EnrichedEmailMeta[]
+  }
+  async listMailboxes(): Promise<MailboxSummary[]> {
+    return (await invoker()('email:listMailboxes')) as MailboxSummary[]
+  }
   async get(internalId: number): Promise<EmailDetail | null> {
     return (await invoker()('email:get', internalId)) as EmailDetail | null
   }
   async body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null> {
     return (await invoker()('email:body', internalId, opts ?? {})) as EmailBody | null
+  }
+  async aiFields(internalId: number): Promise<AIFields | null> {
+    return (await invoker()('email:aiFields', internalId)) as AIFields | null
   }
   async search(opts: SearchOpts): Promise<SearchHit[]> {
     return (await invoker()('email:search', opts)) as SearchHit[]

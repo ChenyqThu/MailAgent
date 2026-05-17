@@ -4,7 +4,20 @@
 // prefix list — generic enough to also catch hover:bg-blue-500 / focus:text-purple-200.
 
 const BANNED = ['blue', 'purple', 'indigo', 'violet', 'fuchsia']
-const PREFIXES = ['bg', 'text', 'border', 'ring', 'from', 'to', 'via', 'shadow', 'fill', 'stroke', 'caret', 'accent']
+const PREFIXES = [
+  'bg',
+  'text',
+  'border',
+  'ring',
+  'from',
+  'to',
+  'via',
+  'shadow',
+  'fill',
+  'stroke',
+  'caret',
+  'accent'
+]
 // e.g. `bg-blue-500`, `hover:text-purple-300`, `dark:ring-indigo-400`. Global
 // flag so a single className string with multiple violations reports each one
 // (`bg-blue-500 text-purple-300` → two errors).
@@ -17,7 +30,9 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: { description: 'Forbid Tailwind blue/purple/indigo families (DESIGN.md §14 #3).' },
-    messages: { banned: 'Banned color family `{{match}}` — route through ink-*, coral, or status tokens.' },
+    messages: {
+      banned: 'Banned color family `{{match}}` — route through ink-*, coral, or status tokens.'
+    },
     schema: []
   },
   create(context) {

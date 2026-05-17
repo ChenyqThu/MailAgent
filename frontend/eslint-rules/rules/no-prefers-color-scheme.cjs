@@ -13,8 +13,7 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description:
-        'Forbid @media (prefers-color-scheme) in component code (DESIGN.md §17 + §16.6).'
+      description: 'Forbid @media (prefers-color-scheme) in component code (DESIGN.md §17 + §16.6).'
     },
     messages: {
       media:

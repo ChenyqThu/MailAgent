@@ -14,8 +14,7 @@ module.exports = {
     type: 'problem',
     docs: { description: 'Forbid raw bg-coral; require explicit alpha (DESIGN.md §14 #8).' },
     messages: {
-      bare:
-        'Bare `bg-coral` reads as a flood fill — use `bg-coral/100` for the one CTA per surface or `bg-coral/<N>` for pills.'
+      bare: 'Bare `bg-coral` reads as a flood fill — use `bg-coral/100` for the one CTA per surface or `bg-coral/<N>` for pills.'
     },
     schema: []
   },

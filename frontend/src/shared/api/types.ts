@@ -27,6 +27,58 @@ export type SearchHit = EmailSearch_SearchHit
 export type AttachmentMeta = AttachmentList_AttachmentItem
 export type ResyncResult = MailagentEmailResync['data']
 
+// ---- Sprint 2 frontend-only enriched views ---------------------------------
+//
+// These three views (listEnriched / listMailboxes / aiFields) are joined by
+// the Electron main handlers from `email_metadata` + `email_body` (snippet) +
+// `llm_processing.labels_json` (AI fields). They deliberately live OUTSIDE
+// `cli.gen.ts` — the backend CLI doesn't return them and the schema-
+// conformance tests treat `cli.gen.ts` as the boundary anchor (REVIEW-LOG
+// C-03). Both the renderer (`shared/api/ElectronApi.ts`) and the handler
+// (`electron/main/handlers/email.ts`) import these names from here so the
+// type stays single-source.
+
+/** DESIGN.md §2.3 / §5.2 — 5-tier priority enum used by <AIBadge> variant. */
+export type AIPriority = 'critical' | 'urgent' | 'important' | 'normal' | 'low'
+
+export interface EnrichedEmailMeta extends EmailList_EmailListItem {
+  /** First ~100 chars of `email_body.body_markdown`; null if body row missing. */
+  snippet: string | null
+  /** ISO 2-letter from `labels_json.language`. `'unknown'` if LLM hasn't seen it. */
+  lang: 'zh' | 'en' | 'unknown'
+  /** Mapped from `labels_json.priority` (emoji-Chinese) to the 5-slug enum. */
+  ai_priority: AIPriority | null
+  /** `labels_json.action_type` — Chinese label passed through verbatim for the chip. */
+  ai_action: string | null
+  /** User-visible attachment count: excludes inline-only images. Includes derived (docx→pdf). */
+  attach_count: number
+}
+
+export interface MailboxSummary {
+  /** NULL-mailbox rows are excluded from this list. */
+  mailbox: string
+  total: number
+  /** Sum of `is_read = 0`. Production data may show all-zero — real-world signal, not a bug. */
+  unread: number
+}
+
+export interface AIFields {
+  internal_id: number
+  processing_status: string | null
+  /** Duplicated from email_metadata for one-shot rendering convenience. */
+  mailbox: string | null
+  is_read: boolean
+  is_flagged: boolean
+  ai_priority: AIPriority | null
+  ai_action: string | null
+  /** Mapped from `llm_processing.status`. Null if no llm_processing row exists. */
+  ai_review_status: 'pending' | 'reviewed' | null
+  /** Passthrough from `labels_json.sentiment` — agent does not emit yet (REVIEW-LOG H-14 follow-up). */
+  sentiment: string | null
+  /** Raw labels blob for Sprint 4 AI Chat context / V1.5 debug. Null if no LLM run. */
+  labels_raw: Record<string, unknown> | null
+}
+
 export interface ListOpts {
   mailbox?: string
   status?: string
@@ -61,8 +113,14 @@ export interface ResyncOpts {
 
 export interface EmailApi {
   list(opts: ListOpts): Promise<EmailMeta[]>
+  /** Sprint 2 — list + body snippet + LLM labels + attach count, all in one IPC. */
+  listEnriched(opts: ListOpts): Promise<EnrichedEmailMeta[]>
+  /** Sprint 2 — sidebar mailbox totals + unread counts. */
+  listMailboxes(): Promise<MailboxSummary[]>
   get(internalId: number): Promise<EmailDetail | null>
   body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null>
+  /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */
+  aiFields(internalId: number): Promise<AIFields | null>
   search(opts: SearchOpts): Promise<SearchHit[]>
   resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult>
 }

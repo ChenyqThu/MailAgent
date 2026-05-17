@@ -124,9 +124,7 @@ const cases: Case[] = [
       { code: "const c = 'bg-coral/100'" },
       { code: "const c = 'bg-coral-hover'" }
     ],
-    invalid: [
-      { code: "const c = 'bg-coral text-white'", errors: [{ messageId: 'bare' }] }
-    ]
+    invalid: [{ code: "const c = 'bg-coral text-white'", errors: [{ messageId: 'bare' }] }]
   },
   {
     rule: 'no-cjk-in-mono-size',
@@ -151,7 +149,7 @@ const cases: Case[] = [
     tester: baseTester,
     valid: [
       {
-        code: "const s = '[data-theme=\\\"dark\\\"] { color: white }'"
+        code: 'const s = \'[data-theme=\\"dark\\"] { color: white }\''
       }
     ],
     invalid: [

@@ -68,7 +68,13 @@ vi.mock('execa', () => ({
   })
 }))
 
-vi.mock('which', () => ({ sync: () => '/usr/local/bin/mailagent' }))
+// bin_resolver wraps `which.sync` so the production main bundle can interop
+// with CJS-only `which@7` without tripping ESM named-export errors. We mock
+// it here instead of mocking 'which' directly — vi.mock only intercepts
+// ESM import graph nodes, not Node's createRequire().
+vi.mock('../../src/electron/main/bin_resolver', () => ({
+  whichSync: () => '/usr/local/bin/mailagent'
+}))
 vi.mock('../../src/electron/main/keychain', () => ({
   getCliApiKey: async () => null
 }))
@@ -226,7 +232,9 @@ describe('CliError dispatch', () => {
       stderr: '',
       exitCode: 9
     }
-    await expect(cliRunner.callCli(['email', 'resync', '1'], { write: true })).rejects.toMatchObject({
+    await expect(
+      cliRunner.callCli(['email', 'resync', '1'], { write: true })
+    ).rejects.toMatchObject({
       errorCode: 'E_PM2_RUNNING',
       exitCode: 9,
       hint: 'stop pm2'

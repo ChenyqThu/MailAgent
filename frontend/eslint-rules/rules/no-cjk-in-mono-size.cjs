@@ -8,12 +8,12 @@
 // 1.10 i18n review + visual spot-check to catch the indirect form.
 
 const MONO_CLASSES = ['text-micro', 'text-meta']
-const CJK_RANGE =
-  /[　-〿぀-ゟ゠-ヿ㐀-䶿一-鿿豈-﫿＀-￯]/
+const CJK_RANGE = /[　-〿぀-ゟ゠-ヿ㐀-䶿一-鿿豈-﫿＀-￯]/
 
 function getClassNameValue(node) {
   // <span className="text-micro">…</span>
-  if (node.value?.type === 'Literal' && typeof node.value.value === 'string') return node.value.value
+  if (node.value?.type === 'Literal' && typeof node.value.value === 'string')
+    return node.value.value
   // <span className={`text-micro ${foo}`}>…</span>
   if (node.value?.type === 'JSXExpressionContainer') {
     const expr = node.value.expression
@@ -42,7 +42,8 @@ function hasMonoSize(classValue) {
 
 function childContainsCjk(child) {
   if (child.type === 'JSXText') return CJK_RANGE.test(child.value)
-  if (child.type === 'Literal' && typeof child.value === 'string') return CJK_RANGE.test(child.value)
+  if (child.type === 'Literal' && typeof child.value === 'string')
+    return CJK_RANGE.test(child.value)
   if (child.type === 'JSXExpressionContainer') {
     const e = child.expression
     if (e.type === 'Literal' && typeof e.value === 'string') return CJK_RANGE.test(e.value)
@@ -57,12 +58,10 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description:
-        'Forbid CJK glyphs at text-micro/text-meta sizes (DESIGN.md §14 #2 / §16.6).'
+      description: 'Forbid CJK glyphs at text-micro/text-meta sizes (DESIGN.md §14 #2 / §16.6).'
     },
     messages: {
-      cjk:
-        'CJK glyph rendered at `{{cls}}` (11–12px mono) — use text-aux (14px) for CN content.'
+      cjk: 'CJK glyph rendered at `{{cls}}` (11–12px mono) — use text-aux (14px) for CN content.'
     },
     schema: []
   },

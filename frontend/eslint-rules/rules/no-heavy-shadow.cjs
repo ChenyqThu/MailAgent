@@ -14,8 +14,7 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description:
-        'Forbid shadow-lg/xl/2xl outside Toast and Island components (DESIGN.md §14 #6).'
+      description: 'Forbid shadow-lg/xl/2xl outside Toast and Island components (DESIGN.md §14 #6).'
     },
     messages: { heavy: 'Heavy shadow `{{cls}}` — surface tiers should carry depth.' },
     schema: []

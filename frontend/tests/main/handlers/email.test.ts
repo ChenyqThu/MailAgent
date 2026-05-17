@@ -236,3 +236,128 @@ describe('attachment shape', () => {
     expect(validateAttachmentList(wrap(rec.attachments))).toBe(true)
   })
 })
+
+// ---- Sprint 2 D0: enriched view IPCs -----------------------------------------
+
+describe('listEmailsEnriched', () => {
+  test('returns rows in date-desc order with body snippet + LLM labels + attach count', () => {
+    const rows = handlers.listEmailsEnriched({ limit: 10 })
+    expect(rows.map((r) => r.internal_id)).toEqual([101, 102, 103, 201])
+
+    // 101 — has body + full LLM labels + 2 non-inline attachments (orig + derived)
+    expect(rows[0].snippet).toMatch(/^Hey, the redis client/)
+    expect(rows[0].lang).toBe('en')
+    expect(rows[0].ai_priority).toBe('critical') // mapped from "🔴 紧急"
+    expect(rows[0].ai_action).toBe('需要回复')
+    expect(rows[0].attach_count).toBe(2)
+
+    // 102 — has CN body + partial LLM labels + only an inline (cid:) attachment
+    // The inline image must NOT bump the user-visible attach_count.
+    expect(rows[1].snippet?.startsWith('本周 *产品*')).toBe(true)
+    expect(rows[1].lang).toBe('zh')
+    expect(rows[1].ai_priority).toBe('important') // mapped from "🟡 重要"
+    expect(rows[1].ai_action).toBe('需要决策')
+    expect(rows[1].attach_count).toBe(0)
+
+    // 103 — fetch_failed, no email_body row, no llm_processing row
+    expect(rows[2].snippet).toBeNull()
+    expect(rows[2].lang).toBe('unknown')
+    expect(rows[2].ai_priority).toBeNull()
+    expect(rows[2].ai_action).toBeNull()
+    expect(rows[2].attach_count).toBe(0)
+
+    // 201 — sent box, has body? no body seeded → snippet null; no LLM row either
+    expect(rows[3].snippet).toBeNull()
+    expect(rows[3].lang).toBe('unknown')
+    expect(rows[3].ai_priority).toBeNull()
+  })
+
+  test('mailbox filter does not trip the JOIN ambiguity (m.mailbox vs llm.mailbox)', () => {
+    const rows = handlers.listEmailsEnriched({ mailbox: '发件箱' })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].internal_id).toBe(201)
+  })
+
+  test('honours isRead + status filters', () => {
+    const rows = handlers.listEmailsEnriched({ status: 'synced', isRead: false })
+    expect(rows.map((r) => r.internal_id)).toEqual([101])
+  })
+
+  test('cli.gen.ts EmailMeta core fields are intact (extends contract)', () => {
+    const row = handlers.listEmailsEnriched({ limit: 1 })[0]!
+    // Schema-anchored fields must still be there and well-shaped
+    expect(typeof row.internal_id).toBe('number')
+    expect(typeof row.subject).toBe('string')
+    expect(typeof row.sender).toBe('string')
+    expect(typeof row.is_read).toBe('boolean')
+    expect(typeof row.is_flagged).toBe('boolean')
+    expect(row.notion_url).toMatch(/^https:\/\/www\.notion\.so\/[a-f0-9]{32}$/)
+  })
+})
+
+describe('listMailboxes', () => {
+  test('aggregates per mailbox with total + unread counts', () => {
+    const rows = handlers.listMailboxes()
+    // 收件箱 has 3 rows (101 unread+flagged, 102 read, 103 unread+failed) → unread=2
+    // 发件箱 has 1 row (201 read) → unread=0
+    expect(rows).toEqual([
+      { mailbox: '收件箱', total: 3, unread: 2 },
+      { mailbox: '发件箱', total: 1, unread: 0 }
+    ])
+  })
+
+  test('excludes NULL / empty-string mailbox rows', () => {
+    // Insert a row with mailbox=NULL; it must not show up in the list.
+    const db = fixtureDb
+    db.prepare(
+      `INSERT INTO email_metadata (internal_id, message_id, subject, sender, mailbox, is_read, is_flagged)
+       VALUES (999, '<orphan@example.com>', 'orphan', 'x@x', NULL, 0, 0)`
+    ).run()
+    try {
+      const rows = handlers.listMailboxes()
+      // Should still be 2 entries (the NULL-mailbox row excluded)
+      expect(rows.map((r) => r.mailbox)).toEqual(['收件箱', '发件箱'])
+    } finally {
+      db.prepare('DELETE FROM email_metadata WHERE internal_id = 999').run()
+    }
+  })
+})
+
+describe('getAIFields', () => {
+  test('decodes labels_json + processing_status + review status for a fully-LLM-processed row', () => {
+    const f = handlers.getAIFields(101)!
+    expect(f.internal_id).toBe(101)
+    expect(f.processing_status).toBe('AI Reviewed')
+    expect(f.mailbox).toBe('收件箱')
+    expect(f.is_read).toBe(false)
+    expect(f.is_flagged).toBe(true)
+    expect(f.ai_priority).toBe('critical')
+    expect(f.ai_action).toBe('需要回复')
+    expect(f.ai_review_status).toBe('reviewed') // llm_status='success' → reviewed
+    expect(f.sentiment).toBeNull() // agent doesn't emit this — REVIEW-LOG H-14 follow-up
+    expect(f.labels_raw).not.toBeNull()
+    expect(f.labels_raw?.category).toBe('🔧 技术支持')
+  })
+
+  test('failed LLM run still surfaces partial labels but review_status = pending', () => {
+    const f = handlers.getAIFields(102)!
+    expect(f.processing_status).toBe('已同步')
+    expect(f.ai_priority).toBe('important')
+    expect(f.ai_action).toBe('需要决策')
+    expect(f.ai_review_status).toBe('pending') // llm_status='failed' → pending
+    expect(f.labels_raw?.language).toBe('中文')
+  })
+
+  test('no llm_processing row at all → ai_* fields null', () => {
+    const f = handlers.getAIFields(103)!
+    expect(f.processing_status).toBeNull()
+    expect(f.ai_priority).toBeNull()
+    expect(f.ai_action).toBeNull()
+    expect(f.ai_review_status).toBeNull()
+    expect(f.labels_raw).toBeNull()
+  })
+
+  test('returns null for a missing internal_id', () => {
+    expect(handlers.getAIFields(99_999)).toBeNull()
+  })
+})
