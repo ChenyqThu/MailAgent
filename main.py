@@ -136,6 +136,42 @@ class EmailNotionSyncApp:
             if self.alerter:
                 self.stats_reporter.add_collector("alerts", lambda: self.alerter.get_stats())
 
+        # ping-island 灵动岛集成（Island-Sprint 2，默认关）
+        self.island_enabled = bool(config.ping_island_enabled)
+        if self.island_enabled:
+            from src.notify import island_dispatch, ping_island as _pi  # 触发 import
+            from src.notify import island_response  # 注册 response dispatcher（被 dispatcher 内 lazy import）
+            # 同步环境变量（dispatcher / reconnect / 模块都从 env 读）
+            os.environ.setdefault("ISLAND_SOCKET_PATH", config.island_socket_path)
+            os.environ.setdefault("ISLAND_SOCKET_TIMEOUT", str(config.island_socket_timeout))
+            os.environ.setdefault("PING_ISLAND_LANG", config.ping_island_lang)
+            os.environ.setdefault("PING_ISLAND_RECONNECT_PROBE_INTERVAL",
+                                  str(config.ping_island_reconnect_probe_interval))
+            os.environ.setdefault("PING_ISLAND_QUEUE_MAX", str(config.ping_island_queue_max))
+            # 首次启用 bootstrap manifest + locale 资源（idempotent）
+            try:
+                from src.notify.island_bootstrap import ensure_plugin_assets
+                ensure_plugin_assets()
+            except Exception as e:
+                logger.warning(f"[island] plugin bootstrap failed (non-fatal): {e}")
+            island_dispatch.init(
+                enabled=True,
+                sync_store=self.watcher.sync_store,
+                account_name=config.mail_account_name,
+                accent=config.island_accent,
+                theme=config.island_theme,
+            )
+            logger.info(
+                f"[island] enabled (socket={config.island_socket_path} "
+                f"timeout={config.island_socket_timeout}s "
+                f"lang={config.ping_island_lang} "
+                f"accent={config.island_accent}/{config.island_theme})"
+            )
+        else:
+            # 也调一次 init() 保证 dispatcher 状态干净；is_enabled() 返回 False
+            from src.notify import island_dispatch
+            island_dispatch.init(enabled=False, sync_store=self.watcher.sync_store)
+
         # 防锁屏保活
         self.keep_alive = None
         if config.keep_alive_enabled:
@@ -215,6 +251,18 @@ class EmailNotionSyncApp:
             # 启动周期会议滚动展开循环
             expansion_task = asyncio.create_task(self._meeting_expansion_loop())
 
+            # 启动 ping-island 重连 / snooze 后台任务（开启时才跑）
+            island_reconnect_task = None
+            island_snooze_task = None
+            if self.island_enabled:
+                from src.notify import island_reconnect, island_snooze
+                island_reconnect_task = asyncio.create_task(
+                    island_reconnect.reconnect_loop(shutdown_event=self._shutdown_event)
+                )
+                island_snooze_task = asyncio.create_task(
+                    island_snooze.tick_loop(shutdown_event=self._shutdown_event)
+                )
+
             # 等待关闭信号
             await self._shutdown_event.wait()
 
@@ -238,6 +286,10 @@ class EmailNotionSyncApp:
                 tasks.append(stats_task)
             if alert_task:
                 tasks.append(alert_task)
+            if island_reconnect_task:
+                tasks.append(island_reconnect_task)
+            if island_snooze_task:
+                tasks.append(island_snooze_task)
             for task in tasks:
                 task.cancel()
                 try:
@@ -393,6 +445,16 @@ class EmailNotionSyncApp:
         dead_count = sync_store_stats.get("dead_letter", 0)
         if dead_count >= config.alert_dead_letter_threshold:
             await self.alerter.alert_dead_letters(dead_count, config.alert_dead_letter_threshold)
+            # ping-island DeadLetterAccum hook（fail-open）
+            try:
+                from src.notify import island_dispatch
+                if island_dispatch.is_enabled():
+                    island_dispatch.dispatch_dead_letter_accum(
+                        count=dead_count,
+                        threshold=config.alert_dead_letter_threshold,
+                    )
+            except Exception as e:
+                logger.debug(f"[island-hook] dead_letter dispatch failed: {e}")
 
         # 4. 雷达不可用
         radar_available = stats.get("radar", {}).get("available", True)

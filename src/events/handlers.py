@@ -321,6 +321,20 @@ class EventHandlers:
 
         logger.info(f"Completed: unflagged {message_id[:40]}")
 
+        # ping-island MailCompleted（默认关，fail-open；清掉 Phase 2 dock icon）
+        try:
+            from src.notify import island_dispatch
+            if internal_id and island_dispatch.is_enabled():
+                island_dispatch.dispatch_mail_completed(
+                    internal_id=internal_id,
+                    page_id=event.get("page_id", "") or "",
+                    subject=(record.get('subject') if isinstance(record, dict)
+                             else getattr(record, 'subject', '')) or "",
+                    mailbox=mailbox or "",
+                )
+        except Exception as e:
+            logger.debug(f"[island-hook] mail_completed dispatch failed: {e}")
+
     async def handle_create_draft(self, event: Dict):
         """创建 Mail.app 回复草稿（Notion 按钮 / Openclaw 触发）"""
         self._stats["create_draft"] += 1

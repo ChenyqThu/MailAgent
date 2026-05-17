@@ -269,5 +269,42 @@ class Config(BaseSettings):
         ),
     )
 
+    # =========================================================================
+    # ping-island 灵动岛集成 (Island-Sprint 2)
+    # 详见 frontend/ISLAND-PLUGIN.md。默认全部关，用户启用前需先装 ping-island.app
+    # =========================================================================
+    ping_island_enabled: bool = Field(
+        default=False, env="PING_ISLAND_ENABLED",
+        description="是否启用 ping-island 派发（默认关）。开关切到 true 后失败 fail-open，不影响主同步。",
+    )
+    island_socket_path: str = Field(
+        default="/tmp/island.sock", env="ISLAND_SOCKET_PATH",
+        description="ping-island Swift daemon 监听的 unix domain socket 路径",
+    )
+    island_socket_timeout: float = Field(
+        default=3.0, env="ISLAND_SOCKET_TIMEOUT",
+        description="connect/sendall/recv 三阶段共享超时（秒，REVIEW-LOG H-16）",
+    )
+    ping_island_lang: str = Field(
+        default="system", env="PING_ISLAND_LANG",
+        description="envelope 标题/预览 i18n locale：system / zh-CN / en-US",
+    )
+    ping_island_reconnect_probe_interval: int = Field(
+        default=300, env="PING_ISLAND_RECONNECT_PROBE_INTERVAL",
+        description="sleep/wake 后探测 socket 文件存在的间隔（秒，H-17）",
+    )
+    ping_island_queue_max: int = Field(
+        default=20, env="PING_ISLAND_QUEUE_MAX",
+        description="发送失败 backlog queue 最大长度（deque maxlen，超出丢老的）",
+    )
+    island_accent: str = Field(
+        default="coral", env="ISLAND_ACCENT",
+        description="灵动岛主题色（前端 DESIGN.md §2.7 六色之一，envelope metadata 透传给 Swift）",
+    )
+    island_theme: str = Field(
+        default="dark", env="ISLAND_THEME",
+        description="灵动岛 light/dark mode（envelope metadata 透传，Swift 端按此切 token）",
+    )
+
 # 全局配置实例
 config = Config()
