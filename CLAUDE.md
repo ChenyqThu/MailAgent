@@ -1287,7 +1287,7 @@ v4 sync 路径：AppleScript → in-memory Email → **build_storage_payloads + 
 | Phase 3 | ✅ **已上线 2026-05-15** | FTS5 全文索引 + `search_email_bodies` agent 工具；webhook bm25 排序 + snippet 高亮 + mailbox/date 过滤。274/274 单测通过。详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md) |
 | Phase 4 | ✅ **已 ship 2026-05-16（灰度期）** | `create_email_page_from_sqlite` 主入口 + v2 wrapper 路由 (`NOTION_READ_FROM_SQLITE`) + `mailagent email resync` + `mailagent backfill derivatives` CLI（PR-6 起取代旧 `scripts/resync_notion.py` / `scripts/backfill_derivatives.py`）。上传后 `notion_file_id` 回写 SQLite。295/295 单测、3 封灰度切换实测 OK。详见 [`docs/phase4-complete.md`](./docs/phase4-complete.md) |
 | Phase 5 | 未来 | Electron / Web 前端（接口已就位） |
-| **T-01** | 独立 TODO | Notion sync 迁 Markdown API（参考 `src/project_progress/notion_sync.py` 样板） |
+| **T-01** | ⛔ 决定不迁 | Notion sync 迁 Markdown API — 评估后 Notion Markdown API 仅支持 page 正文 markdown，不支持 inline image / file_upload block / 复杂 properties，对邮件复杂渲染（cid 内联图、附件 block、AI 字段写入）**不可替代**当前 blocks API 路径。保留现状 |
 
 ### 关键文件
 
@@ -1335,10 +1335,14 @@ pytest tests/repository/ tests/events/ -v
 # 在 .env 加: BODY_DUAL_WRITE_ENABLED=false 然后 pm2 restart mail-sync
 ```
 
-### T-02 历史邮件 backfill（CLI 就位，2026-05-15；PR-6 起改走 `mailagent backfill body`）
+### T-02 历史邮件 backfill ✅ 已完成（2026-05-15 跑完，PR-6 起 CLI 改走 `mailagent backfill body`）
 
-把 Phase 1 之前已 sync 到 Notion 的 6131 封历史邮件正文回填到 SQLite，让 LLM 路径
-口径统一。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md) §7。
+Phase 1 之前已 sync 到 Notion 的历史邮件正文已回填到 SQLite，让 LLM 路径口径统一。
+当前覆盖率：**6031 / 6134 = 98.3%**（差额 103 封是 `fetch_failed` / `dead_letter`，不是 backfill 漏跑）。
+FTS5 索引同步（6031 rows）。详见 [`docs/phase2-complete.md`](./docs/phase2-complete.md) §7。
+
+剩余 103 封死信邮件可走 `mailagent admin dead-letter retry <internal_id>` 单封触发重试，
+backfill 工具本身无需再跑。下方命令保留作回放 / 应急参考：
 
 ```bash
 # 单封验证（dry-run）
