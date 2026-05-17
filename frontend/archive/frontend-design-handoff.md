@@ -34,6 +34,8 @@
 | 5 | [`frontend-integration-spec.md`](./frontend-integration-spec.md) | 后端 4 接口面 + 数据契约 | §4 (SQLite 直读) §7 (数据契约) — 看数据形状决定 UI 字段 |
 | 6 | [`agent-cli-rfc.md`](./agent-cli-rfc.md) | CLI 完整 spec | §4 命令树 — 看 CLI 能力决定 UI 操作按钮 |
 | 7 | [`../CLAUDE.md`](../CLAUDE.md) | 项目总览 (后端架构 / 配置 / Notion DB schema) | 邮件数据库字段 / AI 字段枚举 / Processing Status 语义 |
+| 8 | [`frontend-ping-island-integration.md`](./frontend-ping-island-integration.md) | **V2 已选 Stage B** — fork ping-island 加 MailAgent provider + 邮件专属灵动岛 UI（macOS 本机增强）| designer 暂不需要看；V1 ship 后 1-2 周 Swift |
+| 9 | [`frontend-v2-remote-access.md`](./frontend-v2-remote-access.md) | **V2 已决策** — Electron + 共享 React + Cloudflare Tunnel + Web SPA + PWA 远程访问 | designer 需要意识到：V1 Sprint 0 起就要用 data layer abstraction (`useMailApi()`)，否则 V2 重写 |
 
 **第一次读顺序**: 1（本文）→ 2 §1 §8 §9 → 5 §7 → 7 (Notion 数据库结构)
 

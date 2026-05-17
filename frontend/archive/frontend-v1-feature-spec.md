@@ -283,6 +283,34 @@
 **为什么 V2**: 当前 `prompts/*.md` 直接 git 改 + mtime 热重载，UI 编辑要做 prompt
 版本管理 + diff。
 
+### 3.7 灵动岛通知集成（[ping-island](https://github.com/erha19/ping-island) — 已选 Stage B）
+
+**用户决策（2026-05-16）**: 直接走 **Stage B —— fork ping-island + 加 MailAgent 专属 provider**。
+跳过 Stage A（socket bridge 借 Kimi brand 的 hack）。
+
+Stage B 内容（V1 Electron ship 后启动，~1-2 周 Swift）:
+- fork ping-island，加 `AgentProvider.mail` + `SessionClientBrand.mail`
+- 自家 MailAgent mascot + 邮件专属 session view（subject / sender / AI Action chip / 附件 chip）
+- 点击跳 Mail.app 打开邮件 + Notion deep-link
+- 高优先级 LLM 邮件触发 `intervention.kind=question` + options [去 Mail / 去 Notion / 创建草稿 / Snooze / 完成]
+- 单独 PM2 / launchd 进程跟 mail-sync 本机协同；不影响 V2 远程访问（灵动岛仅 macOS 本机增强）
+
+完整改动清单 / 协议 / push back / 评估指标见 [`frontend-ping-island-integration.md`](./frontend-ping-island-integration.md)。
+
+### 3.8 远程访问（Cloudflare Tunnel + Web SPA + PWA — 已决策）
+
+**用户决策（2026-05-16）**: V1 Electron ship 后启动 V2 远程访问 —— **不上 Postgres**，
+本机 SQLite 仍是 SSoT；新加 **本地 FastAPI** (`127.0.0.1:8200`) 暴露 EmailRepository + CLI wrap；
+**Cloudflare Tunnel** 暴露到 `mail.chenge.ink`；**Cloudflare Access (Zero Trust OAuth 邮箱白名单)** 鉴权；
+前端 **同一份 React** + data layer abstraction，分 Electron / Web 两个 build target；
+移动端走 **Web SPA + PWA** ("添加到主屏幕"伪原生)。
+
+工作量 V1 之上 +4-6 天。远端体验目标：列表 P95 < 500ms / 详情 < 800ms / 搜索 < 1.2s
+（接受比本机 Electron 慢 50-100×）。
+
+**V1 Sprint 0 起的硬约束**：所有 React 组件用 `useMailApi()` 抽象层调数据，不直接 `window.api.email.list`，
+否则 V2 重写。详见 [`frontend-v2-remote-access.md`](./frontend-v2-remote-access.md) §4 §5。
+
 ---
 
 ## 4. Out of V1 范围（确定不做）

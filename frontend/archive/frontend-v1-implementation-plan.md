@@ -16,7 +16,14 @@
 ## 0. TL;DR
 
 V1 是一个 **本机 Electron app**，用户在 macOS 上和 mail-sync 服务同机运行。
-不需要远程部署，不需要多用户。架构最简：
+V1 阶段不做远程访问，但 V2 已规划走 Cloudflare Tunnel + Web SPA + PWA（不上 Postgres，
+见 [`frontend-v2-remote-access.md`](./frontend-v2-remote-access.md)）。
+
+**Sprint 0 起的硬约束（V2 复用前提）**: 所有 React 组件通过 `useMailApi()` data layer
+abstraction 调数据，**不能**直接 `window.api.email.list(...)` —— 否则 V2 Web 端重写。
+IPC 形态见 §3，抽象层契约见 [`frontend-v2-remote-access.md`](./frontend-v2-remote-access.md) §4。
+
+V1 架构最简：
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -41,6 +48,7 @@ V1 是一个 **本机 Electron app**，用户在 macOS 上和 mail-sync 服务�
 ```
 
 预估总工作量：**~8-12 个工作日**（不含设计 + 调优）。
+V2 远程访问 / 灵动岛 Stage B 各 +4-6 天 / +1-2 周，V1 ship 后另算。
 
 ---
 
@@ -269,8 +277,8 @@ renderer 通过 TanStack Query 的 invalidateQueries 触发组件更新。
 
 ## 6. V1 不做
 
-- ❌ 远程模式（FastAPI 中转）— V2 看是否多人 / mobile 再做
-- ❌ 多用户 / OAuth — 仅单用户
+- ❌ 远程模式（FastAPI 中转）— V2 已规划走 Cloudflare Tunnel + Web SPA + PWA，**不上 Postgres**；详见 [`frontend-v2-remote-access.md`](./frontend-v2-remote-access.md)。Sprint 0 起就要用 data layer abstraction（§0 硬约束），V2 才能零改动复用
+- ❌ 多用户 / OAuth — 仅单用户；V2 远程用 Cloudflare Access (Zero Trust OAuth 邮箱白名单)，仍是单人
 - ❌ Push notification / SSE / WS — 轮询足够
 - ❌ 写邮件草稿（前端编辑器）— 走 Mail.app 现有流程
 - ❌ Calendar.app 双向同步 UI — 后端已是只读，前端只展示
