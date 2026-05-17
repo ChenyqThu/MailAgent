@@ -9,6 +9,8 @@
 // reviewers can verify light/dark without diving into Settings (Sprint 6).
 
 import { Monitor, Moon, Search, Sun } from 'lucide-react'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
 import { useAppearance, type AccentId, type ThemeMode } from '@shared/state/appearance'
@@ -40,6 +42,12 @@ export function TitleBar(): React.ReactElement {
   const resolved = useAppearance((s) => s.resolvedTheme)
   const setAccent = useAppearance((s) => s.setAccent)
   const setThemeMode = useAppearance((s) => s.setThemeMode)
+  const navigate = useNavigate()
+  const { t } = useTranslation()
+  // Sprint 3 enables this for /search; Sprint 7 swaps it for the CommandPalette.
+  const currentPath = useRouterState({ select: (s) => s.location.pathname })
+  const searchTarget = currentPath === '/search' ? '/' : '/search'
+  const searchLabel = currentPath === '/search' ? t('search.back') : t('search.title')
 
   return (
     <header
@@ -55,21 +63,21 @@ export function TitleBar(): React.ReactElement {
       {/* Brand label — refined, dim; the inbox is the headline, not us. */}
       <div className="text-aux text-ink-fg-1 font-medium tracking-tight">MailAgent</div>
 
-      {/* Center · ⌘K search/jump (Sprint 7 wires the palette). */}
+      {/* Center · ⌘K search/jump — Sprint 3 navigates to /search; Sprint 7
+          swaps this for the CommandPalette overlay. */}
       <div className="flex-1 flex justify-center">
         <button
           type="button"
-          disabled
-          title="Sprint 7"
+          onClick={() => navigate({ to: searchTarget })}
+          title={searchLabel}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           className={cn(
             'group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2',
-            'hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast',
-            'disabled:opacity-60 disabled:cursor-not-allowed'
+            'hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast'
           )}
         >
           <Search size={13} strokeWidth={2} />
-          <span>搜索 / 跳转</span>
+          <span>{searchLabel}</span>
           <kbd className="group-hover:bg-ink-4">⌘K</kbd>
         </button>
       </div>

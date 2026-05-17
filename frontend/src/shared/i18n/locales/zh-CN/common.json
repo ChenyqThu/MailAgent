@@ -11,7 +11,41 @@
     "compose": "起草回复"
   },
   "search": {
-    "placeholder": "搜索邮件…"
+    "placeholder": "搜索邮件…",
+    "title": "全文搜索",
+    "subtitle": "FTS5 全文 · bm25 排序 · 中文需加 * 后缀通配（如 产品*）",
+    "noResults": "未找到匹配的邮件",
+    "noResultsHint": "试试更短的关键词，或中文加 * 后缀",
+    "blankState": "输入关键词开始搜索",
+    "count": "{n, plural, =0 {无结果} other {# 个结果}}",
+    "error": "搜索失败 · 请重试",
+    "loading": "搜索中…",
+    "back": "返回收件箱",
+    "filter": {
+      "allMailboxes": "全部邮箱",
+      "any": "全部时间",
+      "since7d": "近 7 天",
+      "since30d": "近 30 天"
+    }
+  },
+  "translate": {
+    "label": "翻译",
+    "loading": "翻译中…",
+    "failed": "翻译失败 · 重试",
+    "retry": "重试",
+    "showOriginal": "显示原文",
+    "showTranslation": "显示译文",
+    "noKey": "未配置 LLM API Key — 请在设置中配置",
+    "noBody": "无正文可翻译",
+    "banner": "AI 译文 · 仅供参考",
+    "inlineCta": "一键翻译此邮件为中文"
+  },
+  "thread": {
+    "title": "线程",
+    "empty": "无线程关联",
+    "loadFailed": "线程加载失败",
+    "count": "{n, plural, =1 {1 封} other {# 封}}",
+    "current": "当前"
   },
   "empty": {
     "state": "没有可显示的内容"

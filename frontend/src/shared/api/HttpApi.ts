@@ -17,6 +17,7 @@ export class HttpApi implements MailApi {
     list: () => notImplemented('email.list'),
     listEnriched: () => notImplemented('email.listEnriched'),
     listMailboxes: () => notImplemented('email.listMailboxes'),
+    listByThread: () => notImplemented('email.listByThread'),
     get: () => notImplemented('email.get'),
     body: () => notImplemented('email.body'),
     aiFields: () => notImplemented('email.aiFields'),
@@ -27,5 +28,12 @@ export class HttpApi implements MailApi {
   attachment = {
     list: () => notImplemented('attachment.list'),
     localPath: () => notImplemented('attachment.localPath')
+  }
+
+  ai = {
+    translate: () => notImplemented('ai.translate'),
+    abortTranslate: () => {
+      /* V2 web build will route through fetch + AbortController; Sprint 3 stub. */
+    }
   }
 }

@@ -1,9 +1,17 @@
 // 48px detail toolbar · mockup-inbox.html line 854. The mockup has:
 //   Back | ✦ 起草回复 (coral CTA) · 翻译 EN→中 | 已读 · 已标旗 · 归档 | 重传 · AI 重跑 | (ml-auto) Notion · ⌃/⌄/⋯
 //
-// Sprint 2 ships the UI shell with everything disabled — Sprint 5 wires
-// the real actions via cli_runner write handlers.
+// Sprint 3 wires the Translate button (props-driven); Sprint 5 wires the
+// remaining ghost actions via cli_runner. The Translate button cycles:
+//   idle           → "翻译 EN→中"   (click → start)
+//   translating    → "翻译中…"      (loading state)
+//   showing trans. → "显示原文"      (toggles back to source)
+//   error          → "翻译失败 · 重试" (red, click → refetch)
+//
+// EmailDetail owns the state machine and passes the resolved status here
+// so the toolbar stays pure-presentational.
 
+import { useTranslation } from 'react-i18next'
 import {
   Archive,
   ArrowLeft,
@@ -20,6 +28,20 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+
+export type TranslateStatus = 'idle' | 'loading' | 'translated' | 'error'
+
+interface TranslateProps {
+  /** 'en' → show EN→中 pip; 'zh' → hide pip (translate to English still works
+   *  via ⌥T but the toolbar headline focuses on the most common direction). */
+  langIsEn: boolean
+  status: TranslateStatus
+  onToggle: () => void
+}
+
+interface ToolbarProps {
+  translate?: TranslateProps
+}
 
 function Divider(): React.ReactElement {
   return <div className="w-px h-5 bg-ink-border mx-1 shrink-0" aria-hidden />
@@ -71,7 +93,59 @@ function IconOnly({ icon, title }: { icon: React.ReactNode; title?: string }): R
   )
 }
 
-export function EmailToolbar(): React.ReactElement {
+function TranslateButton({ langIsEn, status, onToggle }: TranslateProps): React.ReactElement {
+  const { t } = useTranslation()
+  const isError = status === 'error'
+  const isLoading = status === 'loading'
+  const isTranslated = status === 'translated'
+
+  const label = isLoading
+    ? t('translate.loading')
+    : isError
+      ? t('translate.failed')
+      : isTranslated
+        ? t('translate.showOriginal')
+        : t('translate.label')
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={`⌥T · ${label}`}
+      className={cn(
+        'flex items-center gap-1.5 px-2 py-1.5 rounded-md text-aux',
+        'transition-colors duration-fast',
+        isError
+          ? 'text-fail hover:bg-fail/10'
+          : isTranslated
+            ? 'text-coral bg-coral/10 hover:bg-coral/15'
+            : 'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+        'disabled:opacity-60 disabled:cursor-not-allowed'
+      )}
+    >
+      <span className="shrink-0 grid place-items-center w-[13px] h-[13px]">
+        <Languages size={13} strokeWidth={2} className={isLoading ? 'animate-spin' : undefined} />
+      </span>
+      <span className="flex items-center gap-1">
+        {label}
+        {langIsEn && !isError && !isLoading && (
+          <span
+            className="lang-pip ml-0.5"
+            style={{
+              background: 'rgb(var(--c-accent) / 0.10)',
+              borderColor: 'rgb(var(--c-accent) / 0.30)',
+              color: 'rgb(var(--c-accent))'
+            }}
+          >
+            EN→中
+          </span>
+        )}
+      </span>
+    </button>
+  )
+}
+
+export function EmailToolbar({ translate }: ToolbarProps = {}): React.ReactElement {
   return (
     <header className="h-[48px] border-b border-ink-border bg-ink-3 flex items-center px-3 gap-1 shrink-0">
       <IconOnly icon={<ArrowLeft size={14} strokeWidth={2} />} title="Back (Esc)" />
@@ -93,21 +167,7 @@ export function EmailToolbar(): React.ReactElement {
         <span>起草回复</span>
       </button>
 
-      <Ghost icon={<Languages size={13} strokeWidth={2} />} title="一键翻译 (⌥T)">
-        <span className="flex items-center gap-1">
-          翻译
-          <span
-            className="lang-pip ml-0.5"
-            style={{
-              background: 'rgb(var(--c-accent) / 0.10)',
-              borderColor: 'rgb(var(--c-accent) / 0.30)',
-              color: 'rgb(var(--c-accent))'
-            }}
-          >
-            EN→中
-          </span>
-        </span>
-      </Ghost>
+      {translate && <TranslateButton {...translate} />}
 
       <Divider />
 

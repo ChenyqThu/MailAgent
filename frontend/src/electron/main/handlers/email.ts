@@ -317,6 +317,26 @@ function prep(db: Database, sql: string): Statement {
   return stmt
 }
 
+/**
+ * Sprint 3 §2.3 — sibling list for the Thread sidebar. Cheap SQL on the
+ * existing `thread_id` index; we deliberately don't join `email_body` /
+ * `llm_processing` because the sidebar only renders the metadata stripe.
+ * Ascending date order so the conversation reads top-to-bottom (mockup
+ * §sidebar).
+ */
+export function listEmailsByThread(threadId: string | null | undefined): EmailList_EmailListItem[] {
+  if (typeof threadId !== 'string' || threadId.length === 0) return []
+  const db = getDb()
+  const rows = prep(
+    db,
+    `SELECT ${LIST_COLS}
+       FROM email_metadata
+      WHERE thread_id = ?
+      ORDER BY date_received ASC NULLS LAST, internal_id ASC`
+  ).all(threadId) as EmailMetadataRow[]
+  return rows.map(shapeListItem)
+}
+
 export function listEmails(opts: ListOpts): EmailList_EmailListItem[] {
   const db = getDb()
   const where = buildListWhere(opts)
@@ -598,4 +618,7 @@ export function registerEmailHandlers(): void {
     }
     return searchEmails(opts)
   })
+  ipcMain.handle('email:listByThread', (_evt, threadId: string | null) =>
+    listEmailsByThread(threadId)
+  )
 }

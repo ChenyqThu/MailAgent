@@ -323,6 +323,54 @@ describe('listMailboxes', () => {
   })
 })
 
+describe('listEmailsByThread', () => {
+  test('returns sibling rows ordered by date ASC for a multi-member thread', () => {
+    const db = fixtureDb
+    // Seed two extra siblings on thread-A so there's a real thread to walk.
+    db.prepare(
+      `INSERT INTO email_metadata
+         (internal_id, message_id, thread_id, subject, sender, mailbox,
+          is_read, is_flagged, sync_status, notion_page_id, date_received)
+       VALUES (104, '<msg-104@example.com>', 'thread-A', 'Re: redis timeout debug session',
+               'alice@example.com', '收件箱', 1, 0, 'synced',
+               'cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee', '2026-05-15T11:00:00+08:00')`
+    ).run()
+    db.prepare(
+      `INSERT INTO email_metadata
+         (internal_id, message_id, thread_id, subject, sender, mailbox,
+          is_read, is_flagged, sync_status, notion_page_id, date_received)
+       VALUES (100, '<msg-100@example.com>', 'thread-A', 'redis timeout debug session',
+               'alice@example.com', '收件箱', 1, 0, 'synced',
+               'dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee', '2026-05-15T07:00:00+08:00')`
+    ).run()
+    try {
+      const rows = handlers.listEmailsByThread('thread-A')
+      // 100 (07:00) → 101 (09:00) → 104 (11:00) chronological ascending
+      expect(rows.map((r) => r.internal_id)).toEqual([100, 101, 104])
+      expect(rows[0].thread_id).toBe('thread-A')
+      expect(rows[0].notion_url).toMatch(/^https:\/\/www\.notion\.so\/[a-f0-9]{32}$/)
+      expect(typeof rows[0].is_read).toBe('boolean')
+    } finally {
+      db.prepare('DELETE FROM email_metadata WHERE internal_id IN (100, 104)').run()
+    }
+  })
+
+  test('single-member thread returns just the one email', () => {
+    const rows = handlers.listEmailsByThread('thread-B')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].internal_id).toBe(102)
+  })
+
+  test('unknown thread_id returns empty list (not null)', () => {
+    expect(handlers.listEmailsByThread('thread-does-not-exist')).toEqual([])
+  })
+
+  test('empty / null thread_id input → empty list', () => {
+    expect(handlers.listEmailsByThread('')).toEqual([])
+    expect(handlers.listEmailsByThread(null as unknown as string)).toEqual([])
+  })
+})
+
 describe('getAIFields', () => {
   test('decodes labels_json + processing_status + review status for a fully-LLM-processed row', () => {
     const f = handlers.getAIFields(101)!

@@ -117,6 +117,9 @@ export interface EmailApi {
   listEnriched(opts: ListOpts): Promise<EnrichedEmailMeta[]>
   /** Sprint 2 — sidebar mailbox totals + unread counts. */
   listMailboxes(): Promise<MailboxSummary[]>
+  /** Sprint 3 — sibling emails of a thread, ascending by date. Empty list
+   *  for unknown/empty threadId so the Thread sidebar can blanket-handle. */
+  listByThread(threadId: string | null): Promise<EmailMeta[]>
   get(internalId: number): Promise<EmailDetail | null>
   body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null>
   /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */
@@ -132,7 +135,33 @@ export interface AttachmentApi {
   localPath(attachmentId: number): Promise<string | null>
 }
 
+// ---- Sprint 3 §2.2 — AI / translation surface ------------------------------
+
+export type TargetLang = 'zh' | 'en'
+
+export interface TranslationResult {
+  internalId: number
+  targetLang: TargetLang
+  translated: string
+  model: string
+  latencyMs: number
+}
+
+export interface AiApi {
+  /**
+   * Translate `email_body.body_markdown` of `internalId` to `targetLang`
+   * (default 'zh'). Runs in main process; API key + endpoint stay there
+   * (REVIEW-LOG C-04). Errors carry a `code` property: E_NO_BODY /
+   * E_NO_LLM_KEY / E_UPSTREAM / E_ABORTED / E_EMPTY_RESPONSE / E_INVALID_ARG.
+   */
+  translate(internalId: number, targetLang?: TargetLang): Promise<TranslationResult>
+  /** Abort an in-flight translation by internalId. Renderer fires this when
+   *  switching emails so the stale request doesn't pollute the new view. */
+  abortTranslate(internalId: number): void
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
+  ai: AiApi
 }

@@ -18,6 +18,7 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "pnpm run typecheck && electron-vite build",
+    "a11y:contrast": "tsx scripts/a11y/contrast.ts",
     "postinstall": "electron-builder install-app-deps && pnpm gen:types",
     "rebuild:node": "node -e \"const p=require('path'),cp=require('child_process'),root=process.cwd();cp.execFileSync(p.join(root,'node_modules/.pnpm/node_modules/.bin/prebuild-install'),['--runtime=node','--arch=arm64'],{cwd:p.join(root,'node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3'),stdio:'inherit'})\"",
     "rebuild:electron": "node -e \"const p=require('path'),cp=require('child_process'),root=process.cwd();cp.execFileSync(p.join(root,'node_modules/.pnpm/node_modules/.bin/prebuild-install'),['--runtime=electron','--target=39.8.10','--arch=arm64'],{cwd:p.join(root,'node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3'),stdio:'inherit'})\"",
@@ -48,6 +49,7 @@
     "zustand": "^5.0.13"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
     "@electron-toolkit/tsconfig": "^2.0.0",
@@ -77,6 +79,7 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "happy-dom": "^20.9.0",
     "json-schema-to-typescript": "^15.0.4",
+    "playwright": "^1.60.0",
     "postcss": "^8.5.14",
     "prettier": "^3.7.4",
     "react": "^19.2.1",
