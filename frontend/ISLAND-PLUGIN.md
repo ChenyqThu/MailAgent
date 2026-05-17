@@ -48,12 +48,34 @@
 
 ---
 
-## 2. fork 改动清单（Swift, ~6 个文件 ~150-300 行 diff，REVIEW-LOG H-10 重估）
+## 2. fork 改动清单（Swift, ~7 个文件 ~150-300 行 diff，2026-05-17 fork-session 实测修正）
 
 > 原文档说"5 个文件 < 200 行"偏低 —— `MailAgentSessionView.swift` 即使骨架版也 ~80-150 行 SwiftUI（邮件字段集与 Claude/Codex session 差异大），应纳入 Sprint 1 必做而非"可选"。
 > `SessionLauncher.swift` 视邮件 intent vs 现有 intent 关系决定是否动（默认不动，邮件不需要"启动 session"语义；详 §2.8）。
 
-### 2.1 `Prototype/Sources/IslandShared/Models.swift`
+### 2.0 实测修正记录（2026-05-17 fork-session 1 review）
+
+开工前在 `~/Documents/ping-island/` 真实代码核对，发现 §2.1/§2.3/§2.4/§2.5 跟实际仓内代码错位，已下面就地修正：
+
+| 错位 | 原 spec | 实测 | 修正位置 |
+|---|---|---|---|
+| **provider 枚举漏列**（H-A）| §2.1 只列 `AgentProvider` | 仓内还有独立的 `SessionProvider`（`PingIsland/Models/SessionProvider.swift:3`），是 `SessionState.provider` 真正的类型；envelope 经 HookPayloadMapper 解码后落到 `SessionProvider`。只加 `AgentProvider.mail` 不够 | §2.1b 新增 |
+| **wire 解码 enum 漏列**（H-E，smoke test 后发现）| §2 没提 | `HookSocketServer.swift:279` 内部还有 `private enum BridgeProvider`（5 cases），是 **socket 上 JSON envelope 解码的真正入口**。`AgentProvider`（Models.swift `BridgeEnvelope.provider`）是 HookPayloadMapper 出 envelope 时用的类型；socket 进 envelope 时 HookSocketServer 用自己的私有 mirror struct + `BridgeProvider` 解 JSON，**再** 经 `BridgeProvider.sessionProvider` extension 映射到 `SessionProvider`。`AgentProvider.mail` 三 enum case 都齐了但 `BridgeProvider.mail` 缺 → `nc -U /tmp/island.sock` 发 `"provider":"mail"` 字符串 silent reject（`Failed to parse bridge envelope` log）。Sprint 1 验证时跑 smoke test 才暴露 | §2.1c 新增 |
+| **registry 位置错**（H-B）| §2.3 说"`HookInstaller.swift` 或同级"| 实际 registry 在 `PingIsland/Models/ClientProfile.swift:547 enum ClientProfileRegistry { static let managedHookProfiles: [ManagedHookClientProfile] = [...] }` 数组里（16 个 profile 已注册），HookInstaller.swift 不直接构造 profile | §2.3 改 |
+| **Mascot 命名错**（H-C）| §2.4 让建 `mascot-mail-*.imageset/` | 仓内 18 个 imageset 全部 PascalCase `*Logo.imageset`（ClaudeLogo / KimiLogo / OpenClawLogo 等），`logoAssetName` 字段实际填 `"ClaudeLogo"` 这种字面值；且 `ManagedHookClientProfile.logoAssetName` 只接受**单个** asset，不能挂 work/personal/dev 三个 | §2.4 改 |
+| **路由方案错**（H-D + §5 深挖）| §2.5 让在 `IslandOpenedContentView.swift` 加 `switch session.provider { case .mail: MailAgentSessionView }` | `IslandOpenedContentView` 实际是 `switch route` 五分支（sessionList / hoverDashboard / attentionNotification / completionNotification / chat），不是 provider 扁平 switch。`IslandExpandedRouteResolver` 是 **provider-agnostic** 的（只看 surface/trigger/contentType/sessions）。Mail event 真正落点是 `.attentionNotification` / `.hoverDashboard` / `.sessionList` 三条 — 全部由 generic `HoverSessionCard`（在 `PingIsland/UI/Views/SessionHoverPreviewView.swift`）渲染，已能通过 `session.title / session.preview / session.intervention.options` 消费 mail 字段；用户主动点 session 进 detail view 才走 `.chat` 分支，邮件不是持久 chat session，不该走那 | §2.5 改 |
+
+**Sprint 1 范围调整**:
+- ✅ 仍按 REVIEW-LOG H-10 建 `MailAgentSessionView.swift` 骨架（subject / senderName / priority chip / aiAction label 4 字段，预留 `openUrl: String?`），满足契约
+- ❌ **不改** `IslandOpenedContentView.swift`（spec §2.5 diff 错位，强行加只会把 mail session 误路由到 chat detail view）
+- ✅ mail metadata 渲染走 generic `HoverSessionCard`，Python plugin 在 envelope 里 `title = subject`, `preview = "From: <sender>"`, `intervention.options = 5 buttons`，零 fork 改动
+- ⏸ MailAgentSessionView 的真实接入点等 **Sprint 4 联调**有真实 envelope 跑通后再决定（detail view 触发条件、是否需要专属 NotchContentType case 等）
+
+→ Sprint 1 真实工作量 **1.5-2 天**（比 H-10 重估的 2-3 天再省一点，因为不动 IslandOpenedContentView）。
+
+### 2.1 `Prototype/Sources/IslandShared/Models.swift` — `AgentProvider`
+
+> wire 层 enum，由 `BridgeEnvelope.provider` 字段使用。
 
 ```diff
  public enum AgentProvider: String, Codable, CaseIterable, Sendable {
@@ -66,7 +88,61 @@
  }
 ```
 
-### 2.2 `PingIsland/Models/ClientProfile.swift`
+### 2.1b `PingIsland/Models/SessionProvider.swift` — `SessionProvider`（2026-05-17 review 补漏）
+
+> session/UI 层 enum，由 `SessionState.provider` 字段使用，独立于 §2.1 的 `AgentProvider`。
+> 实测：envelope 解码后经 `HookPayloadMapper` 转 `SessionState`，落到 `SessionProvider`；UI 视图（`HoverSessionCard` / `IslandOpenedContentView` 等）一律 switch `SessionProvider` 取色/标签。**只加 `AgentProvider.mail` 不够。**
+
+```diff
+ enum SessionProvider: String, Codable, Equatable, Sendable {
+     case claude
+     case codex
+     case copilot
+     case kimi
+     case gemini
++    case mail
+
+     nonisolated var displayName: String {
+         switch self {
+         case .claude:  return "Claude"
+         case .codex:   return "Codex"
+         case .copilot: return "Copilot"
+         case .kimi:    return "Kimi"
+         case .gemini:  return "Gemini"
++        case .mail:    return "MailAgent"
+         }
+     }
+ }
+```
+
+编译时若仓内其他文件出现 missing-case，按"返回 mail brand 主题色 / 兜底字符串"补齐（详 Sprint 1 D 阶段）。
+
+### 2.1c `PingIsland/Services/Hooks/HookSocketServer.swift` — `BridgeProvider`（2026-05-17 smoke test 后补漏）
+
+> wire 解码层 enum，**private 到 HookSocketServer.swift**，是 socket 上 JSON envelope 进入时的真正解码入口（line 279）。
+> 跟 §2.1 的 `AgentProvider` **不是同一个** enum —— HookSocketServer 内部用一套私有 mirror struct（`BridgeEnvelope` / `BridgeProvider` / `BridgeStatus` / `BridgeTerminalContext` ...）反序列化 JSON，**再**通过 `BridgeProvider.sessionProvider` extension（line 1040+）把 wire-enum 映射到 §2.1b 的 `SessionProvider`。
+> `AgentProvider`（在 `Prototype/Sources/IslandShared/Models.swift` 的 public `BridgeEnvelope`）是 ping-island 出 envelope 时用的类型（HookPayloadMapper outbound），socket 入站 envelope 走的是 `BridgeProvider` 这条路径。
+> **后果**：三 enum case（AgentProvider/SessionProvider/SessionClientBrand）都加 `.mail` 后，build 还是绿，但 runtime 发 `"provider":"mail"` 字符串时 `BridgeProvider` Codable 不认 → silent reject + `Failed to parse bridge envelope` warning log → 灵动岛根本不展开。Sprint 1 完工 smoke test（`nc -U /tmp/island.sock` 手发 envelope）才暴露。
+
+```diff
+ private enum BridgeProvider: String, Codable, Sendable {
+     case claude
+     case codex
+     case copilot
+     case kimi
+     case gemini
++    case mail
+ }
+```
+
+还有 2 处依赖 switch 需要扩 `.mail` case：
+
+- `HookSocketServer.swift:780` 内 `let kind: SessionClientKind = ...` switch（决定 SessionClientKind）—— mail 走 plugin-style，fall back 到 matchedProfile?.kind ?? .custom，跟 .copilot/.kimi/.gemini 同模式
+- `HookSocketServer.swift:1042` `BridgeProvider.sessionProvider` extension —— `case .mail: return .mail` 把 wire 层映射到 session 层
+
+**Sprint 1 文件数从 7 → 8**（spec 原 6 + SessionProvider + HookSocketServer）。HANDOFF.md 同步修正。
+
+### 2.2 `PingIsland/Models/ClientProfile.swift` — `SessionClientBrand`
 
 ```diff
  enum SessionClientBrand: String, Codable, Equatable, Sendable {
@@ -85,27 +161,33 @@
  }
 ```
 
-### 2.3 ClientProfile registry — 新增 MailAgent profile
+### 2.3 ClientProfile registry — 新增 MailAgent profile（2026-05-17 review 修正位置）
 
-`PingIsland/Services/Hooks/HookInstaller.swift`（或现有 registry 文件）加：
+⚠️ 原 spec 说 "`PingIsland/Services/Hooks/HookInstaller.swift` 或同级"，**位置错**。
+实际 registry 在 **`PingIsland/Models/ClientProfile.swift:547`** 内 `enum ClientProfileRegistry { static let managedHookProfiles: [ManagedHookClientProfile] = [...] }` 数组（已注册 16 个 profile，含 Hermes / OpenClaw / Qwen / CodeBuddy 等）。在该数组**末尾 append**：
 
 ```swift
+// PingIsland/Models/ClientProfile.swift  内的 ClientProfileRegistry.managedHookProfiles 末尾
 ManagedHookClientProfile(
     id: "mailagent",
     title: "MailAgent",
     subtitle: "邮件 / Mail",
     installationKind: .pluginDirectory,   // 与 Hermes 一致的"插件目录模式"
     alwaysVisibleInSettings: true,
-    logoAssetName: "mascot-mail",          // 资源在 Assets.xcassets 加
+    logoAssetName: "MailLogo",             // ⚠️ PascalCase 跟仓内惯例对齐（详 §2.4）
     prefersBundledLogoOverAppIcon: true,
     localAppBundleIdentifiers: ["com.apple.mail"],
     iconSymbolName: "envelope.fill",
-    configurationRelativePaths: [".mailagent/plugins/ping_island/manifest.json"],
-    activationConfigurationRelativePath: nil,
-    activationEntryName: nil,
+    configurationRelativePath: ".mailagent/plugins/ping_island/manifest.json",
     bridgeSource: "mail",
-    bridgeExtraArguments: [],
-    defaultEnabled: true,
+    bridgeExtraArguments: [
+        "--client-kind", "mailagent",
+        "--client-name", "MailAgent",
+        "--client-origin", "plugin",
+        "--client-originator", "MailAgent",
+        "--thread-source", "mailagent-hooks"
+    ],
+    defaultEnabled: false,                 // 用户在 Settings 主动开（fail-open 默认关，跟 Hermes/OpenClaw 一致）
     brand: .mail,
     events: [
         HookInstallEventDescriptor(name: "MailReceived",      templates: [.plain]),
@@ -121,33 +203,81 @@ ManagedHookClientProfile(
 )
 ```
 
-### 2.4 Mascot 资源 — `PingIsland/Assets.xcassets`
+实测字段名修正：
+- 原 spec 用 `configurationRelativePaths` (复数) / `activationConfigurationRelativePath` / `activationEntryName` — `ManagedHookClientProfile` 的初始化器实际是 `configurationRelativePath`（单数，跟 Hermes 一致）和 `activation*` 可选参数（用默认值即可省略）。详构造签名 `PingIsland/Models/ClientProfile.swift:167-238`。
+- `defaultEnabled` 调为 `false`：与 Hermes/Gemini/OpenClaw 等 plugin 型 profile 一致，避免用户没装 MailAgent plugin 时 Settings 自动尝试连接。
+- `bridgeExtraArguments` 加 `--client-kind mailagent` 等 — 模仿 Hermes profile 的 `claude-style hook bridge` 路径，让 IslandBridge 能正确分流 MailAgent envelope。
 
-至少 3 个 pixel-art 头像（32×32 + @2x + @3x）：
-- `mascot-mail-work.imageset/` — Work mailbox 默认
-- `mascot-mail-personal.imageset/` — Personal mailbox 默认
-- `mascot-mail-dev.imageset/` — Dev mailbox 默认
+### 2.4 Mascot 资源 — `PingIsland/Assets.xcassets`（2026-05-17 review 修正命名）
 
-设计稿走 AI 生成（DALL-E / Midjourney pixel-art style）+ Aseprite 微调。
-存放约定与现有 ping-island mascot 一致。
+⚠️ 原 spec `mascot-mail-{work,personal,dev}.imageset/` 跟仓内惯例不符。实测仓内已注册 18 个 `*Logo.imageset/`（ClaudeLogo / CodexLogo / KimiLogo / HermesLogo / OpenClawLogo 等），`logoAssetName` 字段实际填字面值如 `"ClaudeLogo"`；且 `ManagedHookClientProfile.logoAssetName` 只接受**单个** asset，无法在 profile 层挂 work/personal/dev 三套图。
 
-### 2.5 邮件专属 session view（**Sprint 1 必做骨架** —— REVIEW-LOG H-10 升级）
+**修正约定（分两层）**：
+- **Profile 层（`logoAssetName`）**：单个 `MailLogo.imageset/` —— 用作 Settings → Clients 列表项的 logo，与 ClaudeLogo / KimiLogo 等保持命名一致
+- **View 层（按 mailbox 切换）**：3 个 `MailMascot{Work,Personal,Dev}.imageset/` —— 由 `MailAgentSessionView` 内根据 envelope `metadata["mailagent.mailbox"]` 字段动态选图（profile 层够不到）
 
-`PingIsland/UI/Views/IslandOpenedContentView.swift` 加 `.mail` brand 路由：
+至少 4 个 imageset（32×32 + @2x + @3x，pixel-art style）：
+- `MailLogo.imageset/` — profile 默认 logo（envelope.fill 占位也可）
+- `MailMascotWork.imageset/` — Work mailbox 默认
+- `MailMascotPersonal.imageset/` — Personal mailbox 默认
+- `MailMascotDev.imageset/` — Dev mailbox 默认
 
-```diff
- switch session.provider {
- case .claude, .codex, .gemini, .copilot, .kimi:
-     CodexSessionView(session: session)
-+case .mail:
-+    MailAgentSessionView(session: session)
- }
-```
+Sprint 1 出 PNG 占位即可（复制现有 mascot / 用 sips 生纯色 PNG / 临时复用 envelope.fill SF Symbol），正图设计稿走 AI 生成（DALL-E / Midjourney pixel-art style）+ Aseprite 微调，**Sprint 5 ship 前替换**。
 
-`MailAgentSessionView.swift` 新建 ~80-150 行 SwiftUI 显示邮件专属字段（从 `metadata` 字段读
-`mailagent.subject` / `mailagent.sender` / `mailagent.aiAction` / `mailagent.priority` / `mailagent.attachCount` / `mailagent.notionPageId` 等）。
+### 2.5 邮件专属 session view（**Sprint 1 建骨架，但 Sprint 1 不路由** —— 2026-05-17 review 重写）
 
-Sprint 1 出最简骨架（subject + sender + priority chip）即可；Sprint 4 端到端时补 attach chip / AI chip 等细节。**Sprint 1-3 期间用默认 session view 显示 mail session 会因字段不对齐看起来糊**（codex 5 提示），所以骨架放 Sprint 1。
+⚠️ 原 spec 的 `switch session.provider` diff **错位**。实测 `PingIsland/UI/Views/IslandOpenedContentView.swift:38-95` 是 `switch route`（五分支：`.sessionList` / `.hoverDashboard` / `.attentionNotification(session)` / `.completionNotification(notif)` / `.chat(session)`），不是 provider 扁平 switch；`.chat` 分支里再做 `if liveSession.provider == .claude || .kimi → ChatView else → CodexSessionView`，**也不穷举 provider**。
+
+#### 2.5.1 路由全景（实测 `IslandExpandedRouteResolver`）
+
+`IslandExpandedRouteResolver.resolve(...)` 是 **provider-agnostic** 的，只看 `(surface, trigger, contentType, sessions)`：
+
+| trigger | session 状态 | route | mail event 落点 |
+|---|---|---|---|
+| `.notification` | `intervention != nil` 或 `phase.isWaitingForApproval` | `.attentionNotification(session)` | **MailReceivedUrgent / LLMReviewedUrgent**（带 5-option intervention）|
+| `.notification` | 有 `activeCompletionNotification` | `.completionNotification(notif)` | **MailCompleted** |
+| `.hover` | 有 attention | `.attentionNotification` | hover 时 urgent 邮件浮上来 |
+| `.hover` | 普通 | `.hoverDashboard`（top-3 sessions）| 一般 `MailReceived` 作为 row |
+| `.click` | 有 attention | `.attentionNotification` | 同上 |
+| `.click` | 普通 | `.sessionList`（全部 sessions）| 完整邮件列表 |
+| 任意 trigger + `contentType == .chat(s)` | 用户主动点 session 进 detail | `.chat(session)` | **邮件不应该走这条** —— 邮件不是持久 chat session |
+
+→ mail event 真正的渲染入口是 `.attentionNotification` / `.hoverDashboard` / `.sessionList`，这 3 个都通过 **generic `HoverSessionCard`**（`PingIsland/UI/Views/SessionHoverPreviewView.swift`）渲染，已经能消费 `session.title / session.preview / session.intervention.options` 这套 generic 字段。
+
+#### 2.5.2 Sprint 1 实际做法
+
+- **Python plugin（Sprint 2）** emit envelope 时把 mail 字段映射到 generic 字段：
+  - `title = i18n('mail.received.title', sender=…)`（i18n 后字符串，HoverSessionCard 直接用）
+  - `preview = subject`（一行 subject，HoverSessionCard 渲染为副标题）
+  - `intervention.options = [open_mail, open_notion, create_draft, snooze_1h, mark_done]`（5 个按钮，HoverSessionCard 自动渲染）
+  - `metadata.mailagent.*` —— 留作 Sprint 4 detail view 用
+- **Fork 内 Swift（Sprint 1）**：建 `MailAgentSessionView.swift` 骨架文件，**不路由**：
+  - 字段：`subject` / `senderName` / `priority chip` / `aiAction label` 4 个，预留 `openUrl: String?`（REVIEW-LOG H-12 Mail.app 跳转字段）
+  - ~80 行 SwiftUI
+  - 文件存在 → 满足 REVIEW-LOG H-10 契约（"Sprint 1 至少骨架，subject + sender 是底线"）+ Sprint 4 联调时有现成 view 可路由
+- **不改** `IslandOpenedContentView.swift` —— 等 Sprint 4 联调时根据真实 mail envelope 行为决定接入点（可能加新 `NotchContentType.mailDetail(session)` case，或直接走 `.chat` 复用现有路径）
+
+#### 2.5.3 Sprint 4 联调时的待决议题（占位）
+
+- mail session 是否需要专属的 `NotchContentType.mailDetail(session)` 来跟 chat session 区分？
+- 用户点 mail row 应跳到 MailAgentSessionView（detail view）还是直接调 AppleScript 打开 Mail.app？（spec §3.4 倾向后者，但 MailAgentSessionView 存在意味着前者可选）
+- mail urgent 的 5 个 intervention.options 在 HoverSessionCard 中的渲染是否需要专属布局？（M-11 已经说 Phase 1 pill 只能显 1-3 个，Phase 3 expand 显 5 个）
+
+以上 Sprint 1 不解，Sprint 4 联调时根据真实跑通的行为再决定。
+
+#### 2.5.4 Sprint 1 smoke test 验证边界（2026-05-17 实测记录）
+
+Sprint 1 完工 smoke test 用 `nc -U /tmp/island.sock` 手发 `MailReceived` envelope（带 `expectsResponse: false, status.kind: "notification"`），观察到：
+
+- ✅ **wire 层**：envelope decode 成功（`BridgeProvider.mail` 加齐后无 `Failed to parse bridge envelope` warning）
+- ✅ **`HookPayloadMapper.shouldDeliverEnvelope`**：对 mail envelope 返回 true（只过滤 Qoder-IDE-hosted），envelope 被投递到 session 层
+- ❓ **envelope → SessionState dispatch**：Sprint 1 范围内未验证。`MailReceived` 是 MailAgent 自家事件名，**不在** ping-island 现有的 hook event dispatch 表里（那里只识别 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionStart` 等 Claude/Codex 的事件名）。Sprint 4 联调时需要决定：
+  1. 让 Python plugin emit envelope 时把 `eventType` 映射到 ping-island 认识的事件名（如 `Notification`），靠 `metadata.mailagent.*` 字段区分 → 改动小，但语义糊（mail event 看起来像 generic notification）
+  2. 在 Swift 侧 HookSocketServer / SessionStore 加 mail 事件名识别 → 改动大，但语义清晰；rebase-friendliness 风险增大
+  3. 暂时复用 `Notification` 事件名 + 走 generic HoverSessionCard，Sprint 5 polish 再决定是否做专属事件分支
+- ❌ **Dynamic Island 展开**：Sprint 1 smoke test envelope 是 `MailReceived` 普通通知（无 intervention，非 `waitingForApproval`），按 ping-island Phase 模型本来就**不主动展开刘海** —— 只会 Phase 2 留 dock icon。要测试展开，envelope 要带 intervention（5 选 1 options）或 `status.kind = "waitingForInput"`，那是 Urgent / LLMReviewedUrgent 的语义，属于 Sprint 2/3 Python plugin 真实 emit 时才有
+
+**结论**：Sprint 1 收尾标准是"wire 层 + profile 注册 + skeleton view 文件存在 + Settings UI 显示 MailAgent"。视觉上"灵动岛因 mail envelope 展开"**不在 Sprint 1 范围**，等 Sprint 4 联调 + 解决 §2.5.4 决议题后才能跑通。
 
 ### 2.8 SessionLauncher.swift 是否需要改 — 不需要
 
