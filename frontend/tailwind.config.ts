@@ -13,19 +13,25 @@ export default {
   theme: {
     extend: {
       colors: {
+        // All `ink-*` tokens resolve to CSS variables defined in index.css.
+        // `:root` block holds dark; `:root[data-theme="light"]` block holds
+        // light. DESIGN.md §2.1 maps both sides 1:1. The previous Sprint 1
+        // wiring hardcoded hex values — Light mode toggle changed
+        // data-theme but every `bg-ink-0` stayed dark because Tailwind had
+        // baked the hex at build time.
         ink: {
-          0: '#0E1013',
-          1: '#15181D',
-          2: '#1A1E24',
-          3: '#1F242B',
-          4: '#262C35',
-          5: '#2E343E',
-          border: '#2C323B',
-          'border-soft': '#1F242B',
-          fg: '#E8EAEE',
-          'fg-1': '#A4A9B3',
-          'fg-2': '#6B707A',
-          'fg-3': '#454A53'
+          0: 'rgb(var(--ink-0) / <alpha-value>)',
+          1: 'rgb(var(--ink-1) / <alpha-value>)',
+          2: 'rgb(var(--ink-2) / <alpha-value>)',
+          3: 'rgb(var(--ink-3) / <alpha-value>)',
+          4: 'rgb(var(--ink-4) / <alpha-value>)',
+          5: 'rgb(var(--ink-5) / <alpha-value>)',
+          border: 'rgb(var(--ink-border) / <alpha-value>)',
+          'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+          fg: 'rgb(var(--ink-fg) / <alpha-value>)',
+          'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+          'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+          'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)'
         },
         coral: 'rgb(var(--c-accent) / <alpha-value>)',
         'coral-hover': 'rgb(var(--c-accent-hi) / <alpha-value>)',

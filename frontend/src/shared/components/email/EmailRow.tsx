@@ -1,26 +1,20 @@
-// DESIGN.md §5.1 — list row. The mockup paste uses placeholder field names
-// (`fromName`, `lang`, `shortTime`, `attachCount`, `aiPriority`, etc.) that
-// don't exist on `EnrichedEmailMeta`; we adapt to the real shape and route
-// missing values to the design's "absent" fallback (e.g. no AI labels →
-// `<NoAILabels>` placeholder chips that keep the row height stable so the
-// list doesn't wobble across rows with/without LLM coverage).
+// DESIGN.md §5.1 + mockup-inbox.html row pattern (line 603+). Header line
+// is "Display Name · addr@domain" (parsed from RFC 822), the language pip
+// uses .lang-pip CSS class (mockup convention), priority chip uses
+// `text-X bg-X/15 border-X/30` triplet matching DESIGN.md §2.3, action
+// chip is an English short code so DESIGN.md §14 #2 / §16.6 isn't
+// violated by Chinese at text-micro.
 //
-// AIBadge variant comes from DESIGN.md §5.2; lang pip is inline (one-off,
-// not worth a component for V1).
-//
-// Selected state: 3px coral left border + ink-3 bg (mockup parity). Hover:
-// ink-2 (slightly subtler than mockup's ink-3 so the selected state still
-// reads on top).
+// Sprint 2 sticks with the unread coral dot on the left; the batch
+// checkbox (cb / cb-on) arrives with Sprint 5's BatchActionBar.
 
-import { Paperclip } from 'lucide-react'
+import { Paperclip, Star } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { mapActionLabel } from '@shared/lib/ai_labels'
 import { parseSender, cleanSnippet } from '@shared/lib/mail_parse'
 import { formatRelativeTime } from '@shared/format'
-import type { EnrichedEmailMeta } from '@shared/api/types'
-
-import { AIBadge } from '../ai/AIBadge'
+import type { EnrichedEmailMeta, AIPriority } from '@shared/api/types'
 
 interface Props {
   email: EnrichedEmailMeta
@@ -39,19 +33,31 @@ function formatShortTime(iso: string | null | undefined): string {
   }
 }
 
+// DESIGN.md §2.3 — chip variant per priority. Title-case label per mockup
+// (Critical / Urgent / Important / Normal / Low) at text-micro mono.
+const PRIORITY_LABEL: Record<AIPriority, string> = {
+  critical: 'Critical',
+  urgent: 'Urgent',
+  important: 'Important',
+  normal: 'Normal',
+  low: 'Low'
+}
+const PRIORITY_CHIP: Record<AIPriority, string> = {
+  critical: 'text-crit bg-crit/15 border-crit/30',
+  urgent: 'text-urg bg-urg/15 border-urg/30',
+  important: 'text-impt bg-impt/15 border-impt/30',
+  normal: 'text-norm bg-norm/15 border-norm/30',
+  low: 'text-low bg-low/15 border-low/30'
+}
+
 export function EmailRow({ email, selected, isNew, onSelect }: Props): React.ReactElement {
   const unread = !email.is_read
   const failed = email.sync_status === 'failed' || email.sync_status === 'dead_letter'
-  // `sender_name` is mostly empty in production; the real RFC string is in
-  // `sender` ("Display Name" <addr@domain>). Mockup §5.1 renders both halves
-  // separated by a middot.
   const parsed = parseSender(email.sender)
   const senderName = email.sender_name || parsed.name
   const senderAddr = parsed.email
-  // body_markdown from markdownify of HTML emails often has leading table
-  // separators + image refs. Strip them so the snippet line carries actual
-  // prose like the mockup does.
   const snippet = cleanSnippet(email.snippet)
+  const actionLabel = mapActionLabel(email.ai_action)
 
   return (
     <article
@@ -66,18 +72,15 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
       }}
       data-internal-id={email.internal_id}
       className={cn(
-        'group relative px-4 py-3 border-b border-ink-border-soft cursor-pointer',
+        'row px-4 py-3 border-b border-ink-border-soft cursor-pointer',
         'transition-colors duration-fast',
-        selected ? 'bg-ink-3' : 'hover:bg-ink-2'
+        selected ? 'row-selected bg-ink-4' : 'hover:bg-ink-3'
       )}
     >
-      {/* Selected: 3px coral left edge. Absolute so it doesn't shift the row. */}
-      {selected && (
-        <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-coral/100" aria-hidden />
-      )}
-
       <div className="flex items-start gap-2.5">
-        {/* Unread coral dot — 1.5px, top-aligned with first text line. */}
+        {/* Unread coral dot — 1.5px, top-aligned with first text line. Hidden
+            on read rows but the slot stays (shrink-0 mt-1.5 w-1.5 h-1.5) so
+            row content alignment doesn't shift. */}
         <span
           className={cn(
             'mt-1.5 shrink-0 w-1.5 h-1.5',
@@ -89,8 +92,8 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
         />
 
         <div className="min-w-0 flex-1">
-          {/* Header row: sender (name · email mockup pattern) + lang pip +
-              sync-failed pill + relative time. */}
+          {/* Header row: sender (name + addr) + lang pip + flagged star +
+              sync-failed pill + NEW pill + time. */}
           <div className="flex items-center gap-2 mb-0.5">
             <span
               className={cn(
@@ -103,28 +106,34 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
               {senderAddr ? (
                 <span className={unread ? 'text-ink-fg-1' : 'text-ink-fg-2'}>{senderAddr}</span>
               ) : (
-                !senderName && <span>{email.sender}</span>
+                !senderName && <span className="text-ink-fg-2">{email.sender}</span>
               )}
             </span>
 
+            {email.is_flagged && (
+              <Star
+                size={11}
+                strokeWidth={1.5}
+                className="text-urg shrink-0 fill-current"
+                aria-label="Flagged"
+              />
+            )}
+
             {email.lang === 'en' && (
-              <span
-                className="text-micro font-mono uppercase text-info bg-info/10 border border-info/25 px-1 py-px rounded shrink-0"
-                aria-label="English"
-              >
+              <span className="lang-pip shrink-0" aria-label="English">
                 EN
               </span>
             )}
 
             {failed && (
-              <span className="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0">
-                SYNC FAILED
+              <span className="text-micro font-mono uppercase tracking-wide text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0">
+                Sync Failed
               </span>
             )}
 
             {isNew && (
-              <span className="text-micro font-mono text-coral bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded shrink-0">
-                NEW
+              <span className="text-micro font-mono uppercase tracking-wide text-coral bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded shrink-0">
+                New
               </span>
             )}
 
@@ -133,7 +142,7 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
             </span>
           </div>
 
-          {/* Subject. */}
+          {/* Subject */}
           <div
             className={cn(
               'text-body truncate',
@@ -143,28 +152,44 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
             {email.subject || '(no subject)'}
           </div>
 
-          {/* Snippet — markdownify residue (table separators, image refs)
-              stripped via cleanSnippet so we display prose like the mockup. */}
+          {/* Snippet — cleaned markdown residue so we display real prose. */}
           {snippet && <div className="text-aux text-ink-fg-2 line-clamp-1 mt-0.5">{snippet}</div>}
 
-          {/* Chips row: AI priority + AI action + paperclip count. */}
+          {/* Chip row */}
           <div className="flex items-center gap-1.5 mt-2">
             {email.ai_priority && (
-              <AIBadge priority={email.ai_priority} withDot>
-                {email.ai_priority}
-              </AIBadge>
-            )}
-            {email.ai_action && (
               <span
-                title={email.ai_action}
-                className="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1"
+                className={cn(
+                  'inline-flex items-center gap-1.5 text-micro font-mono uppercase tracking-wide',
+                  'px-1.5 py-0.5 rounded border',
+                  PRIORITY_CHIP[email.ai_priority]
+                )}
               >
-                {mapActionLabel(email.ai_action)}
+                <span
+                  className={cn(
+                    'w-1.5 h-1.5 rounded-full',
+                    email.ai_priority === 'critical' && 'bg-crit',
+                    email.ai_priority === 'urgent' && 'bg-urg',
+                    email.ai_priority === 'important' && 'bg-impt',
+                    email.ai_priority === 'normal' && 'bg-norm',
+                    email.ai_priority === 'low' && 'bg-low'
+                  )}
+                  aria-hidden
+                />
+                {PRIORITY_LABEL[email.ai_priority]}
+              </span>
+            )}
+            {actionLabel && (
+              <span
+                title={email.ai_action ?? undefined}
+                className="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+              >
+                {actionLabel}
               </span>
             )}
             {email.attach_count > 0 && (
               <span className="ml-auto flex items-center gap-1 text-ink-fg-2">
-                <Paperclip size={11} />
+                <Paperclip size={11} strokeWidth={2} />
                 <span className="text-meta font-mono tabular-nums">{email.attach_count}</span>
               </span>
             )}

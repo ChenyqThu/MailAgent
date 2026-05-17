@@ -1,36 +1,63 @@
-// DESIGN.md §5 — detail-pane "AI FIELDS · 8" block. Three columns × eight
-// rows (or grid-cols-3 with auto-flow). Each cell: tiny label above + value
-// below. REVIEW-LOG H-14 set V1 = 8 fields; the V1.5 candidates (Action
-// Items / Tags / Translated Body) stay out until they ship.
+// mockup-inbox.html line 956+ pattern. The 3-col grid uses `gap-px` on a
+// `bg-ink-border` parent — children with `bg-ink-3` then read as cells
+// separated by 1px hairlines. Header strip has model + cost meta on the
+// right. REVIEW-LOG H-14: V1 ships 8 cells, not 11.
 //
-// Sentiment is intentionally rendered with a "—" placeholder when the LLM
-// hasn't emitted it (production data: `labels_json.sentiment` doesn't
-// exist). Better to keep the grid shape stable than collapse cells.
+// Cells:
+//   AI Priority   AI Action     Review Status
+//   Sentiment     Processing    Read
+//   Flagged       Mailbox       Notion
 
-import { useTranslation } from 'react-i18next'
+import { Cpu, ExternalLink, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import type { AIFields } from '@shared/api/types'
-
-import { AIBadge } from './AIBadge'
+import type { AIFields, AIPriority } from '@shared/api/types'
+import { actionLabelChinese } from '@shared/lib/ai_labels'
 
 interface Props {
   fields: AIFields
 }
 
+const PRIORITY_TONE: Record<AIPriority, string> = {
+  critical: 'text-crit',
+  urgent: 'text-urg',
+  important: 'text-impt',
+  normal: 'text-norm',
+  low: 'text-low'
+}
+const PRIORITY_DOT: Record<AIPriority, string> = {
+  critical: 'bg-crit',
+  urgent: 'bg-urg',
+  important: 'bg-impt',
+  normal: 'bg-norm',
+  low: 'bg-low'
+}
+const PRIORITY_LABEL: Record<AIPriority, string> = {
+  critical: 'Critical',
+  urgent: 'Urgent',
+  important: 'Important',
+  normal: 'Normal',
+  low: 'Low'
+}
+
 function Cell({
   label,
-  children
+  children,
+  span
 }: {
   label: string
   children: React.ReactNode
+  span?: 1 | 2
 }): React.ReactElement {
   return (
-    <div>
-      <div className="text-micro font-mono uppercase tracking-widest text-ink-fg-3 mb-1">
+    <div className={cn('px-4 py-3 bg-ink-3', span === 2 && 'col-span-2')}>
+      <div
+        className="text-micro font-mono uppercase text-ink-fg-2"
+        style={{ letterSpacing: '0.08em' }}
+      >
         {label}
       </div>
-      <div className="text-aux text-ink-fg">{children}</div>
+      <div className="mt-1 text-aux">{children}</div>
     </div>
   )
 }
@@ -39,78 +66,96 @@ function Placeholder(): React.ReactElement {
   return <span className="text-ink-fg-3">—</span>
 }
 
-function CheckCell({ value }: { value: boolean }): React.ReactElement {
+function YesNo({
+  value,
+  yesTone = 'text-ok'
+}: {
+  value: boolean
+  yesTone?: string
+}): React.ReactElement {
   return (
     <span
       className={cn(
-        'inline-flex items-center text-meta font-mono uppercase tracking-wide',
-        value ? 'text-ok' : 'text-ink-fg-3'
+        'inline-flex items-center gap-1.5 text-aux font-medium',
+        value ? yesTone : 'text-ink-fg-3'
       )}
     >
       <span
         className={cn(
-          'inline-block w-1.5 h-1.5 rounded-full mr-1.5',
-          value ? 'bg-ok' : 'bg-ink-fg-3'
+          'inline-block w-1.5 h-1.5 rounded-full',
+          value ? yesTone.replace('text-', 'bg-') : 'bg-ink-fg-3'
         )}
-        aria-hidden
       />
-      {value ? 'YES' : 'NO'}
-    </span>
-  )
-}
-
-function ReviewCell({ value }: { value: AIFields['ai_review_status'] }): React.ReactElement {
-  if (value === null) return <Placeholder />
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center text-meta font-mono uppercase tracking-wide',
-        value === 'reviewed' ? 'text-ok' : 'text-warn'
-      )}
-    >
-      {value}
+      {value ? 'Yes' : 'No'}
     </span>
   )
 }
 
 export function AIFieldsBlock({ fields }: Props): React.ReactElement {
-  const { t: _t } = useTranslation()
-  void _t // reserved — i18n keys for cell labels land in Sprint 7 polish
+  const reviewed = fields.ai_review_status === 'reviewed'
   return (
-    <section
-      aria-label="ai-fields"
-      className="rounded-lg border border-ink-border bg-ink-1 px-5 py-4"
-    >
-      <header className="flex items-center justify-between mb-4">
-        <h3 className="text-micro font-mono uppercase tracking-widest text-ink-fg-2">
-          AI Fields
-          <span className="ml-2 text-ink-fg-3 tabular-nums">8</span>
-        </h3>
-      </header>
+    <section aria-label="ai-fields" className="rounded-lg border border-ink-border overflow-hidden">
+      {/* Header strip */}
+      <div className="px-4 py-2 bg-ink-2 border-b border-ink-border flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Cpu size={12} strokeWidth={2} className="text-info" />
+          <span
+            className="text-meta font-mono uppercase text-ink-fg-1"
+            style={{ letterSpacing: '0.06em' }}
+          >
+            AI Fields · 8
+          </span>
+          {fields.ai_review_status && (
+            <span
+              className={cn(
+                'text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border',
+                reviewed ? 'text-ok bg-ok/12 border-ok/30' : 'text-warn bg-warn/12 border-warn/30'
+              )}
+            >
+              {reviewed ? 'Reviewed' : 'Pending'}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 text-meta font-mono text-ink-fg-2">
+          <Sparkles size={11} strokeWidth={2} className="text-ai" />
+          <span>{fields.labels_raw?.model ? String(fields.labels_raw.model) : 'no run'}</span>
+        </div>
+      </div>
 
-      <dl className="grid grid-cols-3 gap-x-6 gap-y-4">
-        <Cell label="AI Action">
-          {fields.ai_action ? (
-            <span title={fields.ai_action} className="text-ink-fg">
-              {fields.ai_action}
+      {/* Grid · gap-px on bg-ink-border creates 1px hairlines between cells */}
+      <div className="grid grid-cols-3 gap-px bg-ink-border">
+        <Cell label="AI Priority">
+          {fields.ai_priority ? (
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 font-medium',
+                PRIORITY_TONE[fields.ai_priority]
+              )}
+            >
+              <span className={cn('w-1.5 h-1.5 rounded-full', PRIORITY_DOT[fields.ai_priority])} />
+              {PRIORITY_LABEL[fields.ai_priority]}
             </span>
           ) : (
             <Placeholder />
           )}
         </Cell>
 
-        <Cell label="AI Priority">
-          {fields.ai_priority ? (
-            <AIBadge priority={fields.ai_priority} withDot>
-              {fields.ai_priority}
-            </AIBadge>
+        <Cell label="AI Action">
+          {actionLabelChinese(fields.ai_action) ? (
+            <span className="text-ink-fg">{actionLabelChinese(fields.ai_action)}</span>
           ) : (
             <Placeholder />
           )}
         </Cell>
 
-        <Cell label="Review">
-          <ReviewCell value={fields.ai_review_status} />
+        <Cell label="Review Status">
+          {fields.ai_review_status ? (
+            <span className={cn('font-medium', reviewed ? 'text-ok' : 'text-warn')}>
+              {reviewed ? 'Reviewed' : 'Pending'}
+            </span>
+          ) : (
+            <Placeholder />
+          )}
         </Cell>
 
         <Cell label="Sentiment">
@@ -121,7 +166,7 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
           )}
         </Cell>
 
-        <Cell label="Status">
+        <Cell label="Processing Status">
           {fields.processing_status ? (
             <span className="text-ink-fg">{fields.processing_status}</span>
           ) : (
@@ -129,18 +174,59 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
           )}
         </Cell>
 
-        <Cell label="Read">
-          <CheckCell value={fields.is_read} />
-        </Cell>
-
-        <Cell label="Flagged">
-          <CheckCell value={fields.is_flagged} />
-        </Cell>
-
         <Cell label="Mailbox">
-          {fields.mailbox ? <span className="text-ink-fg">{fields.mailbox}</span> : <Placeholder />}
+          {fields.mailbox ? (
+            <span className="inline-flex items-center gap-1.5 text-ink-fg">
+              <span className="w-1.5 h-1.5 rounded-full bg-coral/100" />
+              {fields.mailbox}
+            </span>
+          ) : (
+            <Placeholder />
+          )}
         </Cell>
-      </dl>
+
+        <Cell label="Is Read">
+          <YesNo value={fields.is_read} />
+        </Cell>
+
+        <Cell label="Is Flagged">
+          <YesNo value={fields.is_flagged} yesTone="text-urg" />
+        </Cell>
+      </div>
+
+      {/* Footer link — if labels_raw has cost info, surface it as mockup line 962-970 does */}
+      {fields.labels_raw && (
+        <div className="px-4 py-2 bg-ink-2 border-t border-ink-border flex items-center justify-between text-meta font-mono text-ink-fg-2">
+          <div className="flex items-center gap-3">
+            {typeof fields.labels_raw.input_tokens === 'number' && (
+              <span>
+                in{' '}
+                <span className="text-ink-fg-1 tabular-nums">{fields.labels_raw.input_tokens}</span>
+              </span>
+            )}
+            {typeof fields.labels_raw.output_tokens === 'number' && (
+              <span>
+                out{' '}
+                <span className="text-ink-fg-1 tabular-nums">
+                  {fields.labels_raw.output_tokens}
+                </span>
+              </span>
+            )}
+            {typeof fields.labels_raw.latency_ms === 'number' && (
+              <span>{fields.labels_raw.latency_ms}ms</span>
+            )}
+          </div>
+          {typeof fields.labels_raw.daily_digest_date === 'string' && (
+            <a
+              href="#"
+              className="text-coral hover:text-coral-hover inline-flex items-center gap-1"
+            >
+              digest {fields.labels_raw.daily_digest_date}
+              <ExternalLink size={10} strokeWidth={2} />
+            </a>
+          )}
+        </div>
+      )}
     </section>
   )
 }
