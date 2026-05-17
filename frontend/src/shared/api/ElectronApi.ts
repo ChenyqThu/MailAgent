@@ -14,6 +14,12 @@ import type {
   AttachmentApi,
   AttachmentMeta,
   BodyOpts,
+  ChatApi,
+  ChatMessage,
+  ChatSession,
+  ChatStartOpts,
+  ChatStartResult,
+  ChatStreamEnvelope,
   EmailApi,
   EmailBody,
   EmailDetail,
@@ -32,10 +38,16 @@ import type {
 
 type IpcInvoker = (channel: string, ...args: unknown[]) => Promise<unknown>
 type IpcSender = (channel: string, ...args: unknown[]) => void
+type IpcListener = (...args: unknown[]) => void
+type IpcOn = (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => void
+type IpcRemove = (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => void
 
 interface IpcBridge {
   invoke?: IpcInvoker
   send?: IpcSender
+  on?: IpcOn
+  removeListener?: IpcRemove
+  off?: IpcRemove
 }
 
 function invoker(): IpcInvoker {
@@ -56,6 +68,31 @@ function sender(): IpcSender | null {
   const w = window as unknown as { electron?: { ipcRenderer?: IpcBridge } }
   const fn = w.electron?.ipcRenderer?.send
   return typeof fn === 'function' ? fn : null
+}
+
+/**
+ * Subscribe to a main → renderer broadcast channel. Returns an unsubscribe
+ * function; safe to call when the preload bridge is missing (returns a
+ * no-op so the renderer still mounts in a non-Electron test harness).
+ */
+function subscribe(channel: string, listener: IpcListener): () => void {
+  const w = window as unknown as { electron?: { ipcRenderer?: IpcBridge } }
+  const bridge = w.electron?.ipcRenderer
+  const onFn = bridge?.on
+  if (typeof onFn !== 'function') return () => undefined
+
+  // electron-toolkit's electronAPI passes (event, ...args). We strip the
+  // IpcRendererEvent before handing args to the renderer-side handler so
+  // call sites only depend on the data shape, not on Electron internals.
+  const wrapped = (_event: unknown, ...args: unknown[]): void => listener(...args)
+  onFn.call(bridge, channel, wrapped)
+
+  return () => {
+    const removeFn = bridge?.removeListener ?? bridge?.off
+    if (typeof removeFn === 'function') {
+      removeFn.call(bridge, channel, wrapped)
+    }
+  }
 }
 
 class ElectronEmailApi implements EmailApi {
@@ -125,8 +162,42 @@ class ElectronAiApi implements AiApi {
   }
 }
 
+// Mirror of ChatStartEnvelope in src/electron/main/handlers/chat.ts. Same
+// rationale as TranslateEnvelope above (REVIEW-LOG codex M-3): IPC drops
+// custom Error properties, so we route failures through `{ ok: false, code }`.
+type ChatStartEnvelope =
+  | { ok: true; data: ChatStartResult }
+  | { ok: false; code: string; message: string }
+
+class ElectronChatApi implements ChatApi {
+  async start(opts: ChatStartOpts): Promise<ChatStartResult> {
+    const env = (await invoker()('chat:start', opts)) as ChatStartEnvelope
+    if (env.ok) return env.data
+    const err = new Error(env.message) as Error & { code?: string }
+    err.code = env.code
+    throw err
+  }
+  abort(sessionId: number): void {
+    // Same fire-and-forget pattern as ai.abortTranslate (Sprint 3).
+    sender()?.('chat:abort', sessionId)
+  }
+  async listMessages(sessionId: number): Promise<ChatMessage[]> {
+    return (await invoker()('chat:listMessages', sessionId)) as ChatMessage[]
+  }
+  async listSessions(emailId: number): Promise<ChatSession[]> {
+    return (await invoker()('chat:listSessions', emailId)) as ChatSession[]
+  }
+  onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
+    return subscribe('chat:stream', (...args: unknown[]) => {
+      const env = args[0] as ChatStreamEnvelope | undefined
+      if (env && typeof env === 'object') handler(env)
+    })
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()
+  chat: ChatApi = new ElectronChatApi()
 }

@@ -6,6 +6,10 @@ import { registerCliLifecycle } from './cli_runner'
 import { registerEmailHandlers } from './handlers/email'
 import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
+import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
+import { registerChatBackend } from './chat/registry'
+import { CustomApiBackend } from './chat/backends/custom_api'
+import { NotionAgentBackend } from './chat/backends/notion_agent'
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -89,6 +93,12 @@ app.whenReady().then(() => {
   registerEmailHandlers()
   registerAttachmentHandlers()
   registerTranslateHandlers()
+  // Sprint 4 §2.1 — AI chat IPC stream bridge + the two production
+  // backends (Custom API via Anthropic Messages SSE; Notion Agent via
+  // `notion-agent chat --json` subprocess).
+  registerChatBackend(new CustomApiBackend())
+  registerChatBackend(new NotionAgentBackend())
+  registerChatHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 
@@ -105,9 +115,10 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Sprint 3 §2.2 — abort any in-flight LLM translations on quit so the
-// CLI subprocess teardown (`registerCliLifecycle`) isn't the only path
-// cleaning up async work.
+// Sprint 3 §2.2 + Sprint 4 §2.1 — abort any in-flight LLM async work on
+// quit (translation requests + chat streams) so the CLI subprocess
+// teardown (`registerCliLifecycle`) isn't the only path cleaning up.
 app.on('before-quit', () => {
   abortAllTranslations()
+  abortAllChatSessions()
 })

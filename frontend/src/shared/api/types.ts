@@ -160,8 +160,122 @@ export interface AiApi {
   abortTranslate(internalId: number): void
 }
 
+// ---- Sprint 4 §2.1 — AI Chat surface ------------------------------------
+//
+// These types mirror the main-process `chat_db.ts` + `chat/types.ts`
+// shapes. They are duplicated (not imported) because the renderer must
+// not import from `src/electron/main/**` — that would pull in
+// better-sqlite3 + node:fs into the browser bundle. The IPC boundary is
+// the seam; types align by hand and are guarded by the schema-ish unit
+// tests in `tests/main/chat_db.test.ts` + `tests/components/useEmailChat.test.tsx`.
+
+export type ChatBackendKind = 'notion-agent' | 'custom-api'
+export type ChatMessageRole = 'user' | 'assistant' | 'system' | 'tool'
+export type ChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
+
+export interface ChatMessage {
+  id: number
+  session_id: number
+  role: ChatMessageRole
+  content: string
+  tokens_input: number | null
+  tokens_output: number | null
+  cost_usd: number | null
+  model: string | null
+  status: ChatMessageStatus
+  error_message: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface ChatSession {
+  id: number
+  email_id: number
+  backend_kind: ChatBackendKind
+  backend_model: string | null
+  backend_agent_page_id: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface ChatChunkEvent {
+  type: 'chunk'
+  delta: string
+}
+export interface ChatToolCallEvent {
+  type: 'tool_call'
+  name: string
+  args: unknown
+  status: 'running' | 'ok' | 'error'
+  durationMs?: number
+  detail?: string
+}
+export interface ChatUsageEvent {
+  type: 'usage'
+  inputTokens: number
+  outputTokens: number
+  costUsd: number | null
+  model: string | null
+}
+export interface ChatDoneEvent {
+  type: 'done'
+  finalContent: string
+  model: string | null
+}
+export interface ChatErrorEvent {
+  type: 'error'
+  code: string
+  message: string
+}
+
+export type ChatStreamEvent =
+  | ChatChunkEvent
+  | ChatToolCallEvent
+  | ChatUsageEvent
+  | ChatDoneEvent
+  | ChatErrorEvent
+
+export interface ChatStreamEnvelope {
+  sessionId: number
+  messageId: number
+  event: ChatStreamEvent
+}
+
+export interface ChatStartOpts {
+  emailId: number
+  message: string
+  backendKind: ChatBackendKind
+  backendModel?: string | null
+  backendAgentPageId?: string | null
+}
+
+export interface ChatStartResult {
+  sessionId: number
+  userMessageId: number
+  assistantMessageId: number
+}
+
+export interface ChatApi {
+  /**
+   * Open or reuse the (emailId, backendKind, agentPageId) session, append
+   * the user message, kick the backend stream, and return ids the
+   * renderer needs to render an empty assistant bubble. Throws
+   * `Error & { code }` on dispatch failure (E_INVALID_ARG /
+   * E_BACKEND_UNAVAILABLE / E_DISPATCH).
+   */
+  start(opts: ChatStartOpts): Promise<ChatStartResult>
+  /** Fire-and-forget renderer-side cancel. Safe to call when nothing is
+   *  in flight. */
+  abort(sessionId: number): void
+  listMessages(sessionId: number): Promise<ChatMessage[]>
+  listSessions(emailId: number): Promise<ChatSession[]>
+  /** Subscribe to backend stream events. Returns an unsubscribe function. */
+  onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
   ai: AiApi
+  chat: ChatApi
 }

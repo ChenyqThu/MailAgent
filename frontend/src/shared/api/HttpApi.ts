@@ -36,4 +36,16 @@ export class HttpApi implements MailApi {
       /* V2 web build will route through fetch + AbortController; Sprint 3 stub. */
     }
   }
+
+  // Sprint 4 §2.1 — AI Chat (V2 web SPA will route through SSE or a
+  // dedicated /api/chat/stream endpoint; Sprint 4 only stubs).
+  chat = {
+    start: () => notImplemented('chat.start'),
+    abort: () => {
+      /* no-op stub */
+    },
+    listMessages: () => notImplemented('chat.listMessages'),
+    listSessions: () => notImplemented('chat.listSessions'),
+    onStream: (): (() => void) => () => undefined
+  }
 }
