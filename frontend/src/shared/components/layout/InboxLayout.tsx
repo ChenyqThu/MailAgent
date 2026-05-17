@@ -16,12 +16,13 @@ import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
 import { EmailList } from '../email/EmailList'
 import { EmailDetail } from '../email/EmailDetail'
+import { AIChatPanel } from '../chat'
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
   const navigate = useNavigate()
-  // ⌘K → /search. Sprint 4: AI chat ⌘L / ⌥A / ⌘N register inside the panel
-  // itself; this layout-level binding stays focused on cross-cutting nav.
+  // ⌘K → /search. AI chat ⌥B / ⌘↩ register inside the panel itself; this
+  // layout-level binding stays focused on cross-cutting nav.
   const goSearch = useCallback(() => {
     navigate({ to: '/search' })
   }, [navigate])
@@ -33,6 +34,7 @@ export function InboxLayout(): React.ReactElement {
         <Sidebar />
         <EmailList />
         <EmailDetail internalId={activeId} />
+        <AIChatPanel />
       </div>
       <StatusBar />
     </div>

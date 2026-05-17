@@ -49,5 +49,75 @@
   },
   "empty": {
     "state": "没有可显示的内容"
+  },
+  "chat": {
+    "title": "AI 助手",
+    "tabAI": "AI",
+    "tabThread": "线程",
+    "tabSync": "同步",
+    "backend": {
+      "notionAgent": "Notion Agent",
+      "customApi": "Custom API",
+      "selectorLabel": "Backend",
+      "agentSuffix": "· Jarvis",
+      "modelsLabel": "模型"
+    },
+    "context": {
+      "title": "上下文",
+      "emailBody": "邮件全文",
+      "aiFields": "AI 字段 ×{n, number}",
+      "thread": "线程 ×{n, number}",
+      "noContext": "未加载"
+    },
+    "quickActions": {
+      "summarize": "总结",
+      "draft": "起草回复",
+      "translate": "翻译",
+      "extract": "提取动作项",
+      "linkNotion": "关联 Notion"
+    },
+    "composer": {
+      "placeholder": "/命令 或对这封邮件提问… (⌘↩ 发送)",
+      "send": "发送",
+      "sending": "发送中",
+      "cancel": "取消",
+      "regenerate": "重新生成"
+    },
+    "draftReply": {
+      "header": "草稿回复",
+      "send": "发送",
+      "edit": "编辑",
+      "regenerate": "重生成",
+      "openInWindow": "在新窗口打开"
+    },
+    "status": {
+      "thinking": "AI 思考中…",
+      "streaming": "回复中…",
+      "complete": "完成",
+      "aborted": "已取消",
+      "error": "出错"
+    },
+    "empty": {
+      "noEmail": "选中一封邮件开始对话",
+      "noMessages": "向 AI 提问，对当前邮件做总结、回复草稿或提取动作项",
+      "noBackend": "AI 后端不可用，请检查设置"
+    },
+    "error": {
+      "noKey": "未配置 LLM API Key — 请在设置中配置",
+      "quota": "上游额度已用尽，请稍后再试或切换 backend",
+      "network": "网络错误 — 请检查连接",
+      "upstream": "上游 LLM 错误 · 请重试",
+      "abort": "已取消",
+      "agentAuth": "Notion 登录已过期 — 请重新 init notion-agent",
+      "agentNotInstalled": "notion-agent CLI 未安装 — 请运行 pipx install notion-agent-cli",
+      "agentTimeout": "Notion Agent 超时 — 请重试",
+      "modelUnsupported": "当前 backend 不支持该模型"
+    },
+    "toolCall": {
+      "running": "执行中",
+      "ok": "完成",
+      "error": "失败"
+    },
+    "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
   }
 }

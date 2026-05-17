@@ -149,7 +149,14 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
       buffer: true,
       reject: false
     })
-    const { stdout, stderr, exitCode, timedOut, killed } = await child
+    const result = await child
+    const { stdout, stderr, exitCode, timedOut } = result
+    // execa@9 surfaces signal-based termination as `isCanceled`; older
+    // builds used `killed`. Accept both shapes so the type-check stays
+    // happy across the lockfile range.
+    const killed =
+      (result as unknown as { killed?: boolean; isCanceled?: boolean }).killed === true ||
+      (result as unknown as { killed?: boolean; isCanceled?: boolean }).isCanceled === true
 
     if (req.signal.aborted) return
 
@@ -208,9 +215,7 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
     }
 
     const text = parsed.text ?? ''
-    const modelSeen = parsed.thread_id
-      ? `notion-agent:${parsed.thread_id}`
-      : (parsed.model ?? null)
+    const modelSeen = parsed.thread_id ? `notion-agent:${parsed.thread_id}` : (parsed.model ?? null)
 
     yield {
       type: 'tool_call',

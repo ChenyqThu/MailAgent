@@ -49,5 +49,75 @@
   },
   "empty": {
     "state": "Nothing to show"
+  },
+  "chat": {
+    "title": "AI Assistant",
+    "tabAI": "AI",
+    "tabThread": "Thread",
+    "tabSync": "Sync",
+    "backend": {
+      "notionAgent": "Notion Agent",
+      "customApi": "Custom API",
+      "selectorLabel": "Backend",
+      "agentSuffix": "· Jarvis",
+      "modelsLabel": "Models"
+    },
+    "context": {
+      "title": "Context",
+      "emailBody": "Email body",
+      "aiFields": "AI fields × {n, number}",
+      "thread": "Thread × {n, number}",
+      "noContext": "None"
+    },
+    "quickActions": {
+      "summarize": "Summarize",
+      "draft": "Draft reply",
+      "translate": "Translate",
+      "extract": "Extract actions",
+      "linkNotion": "Link to Notion"
+    },
+    "composer": {
+      "placeholder": "/command or ask about this email… (⌘↩ send)",
+      "send": "Send",
+      "sending": "Sending",
+      "cancel": "Cancel",
+      "regenerate": "Regenerate"
+    },
+    "draftReply": {
+      "header": "Draft reply",
+      "send": "Send",
+      "edit": "Edit",
+      "regenerate": "Regenerate",
+      "openInWindow": "Open in window"
+    },
+    "status": {
+      "thinking": "AI thinking…",
+      "streaming": "Streaming…",
+      "complete": "Complete",
+      "aborted": "Aborted",
+      "error": "Error"
+    },
+    "empty": {
+      "noEmail": "Select an email to start the conversation",
+      "noMessages": "Ask the AI to summarize, draft a reply, or extract action items",
+      "noBackend": "AI backend unavailable — check Settings"
+    },
+    "error": {
+      "noKey": "LLM API Key not configured — set it in Settings",
+      "quota": "Upstream quota exhausted — retry later or switch backend",
+      "network": "Network error — check connection",
+      "upstream": "Upstream LLM error · retry",
+      "abort": "Cancelled",
+      "agentAuth": "Notion login expired — re-run notion-agent init",
+      "agentNotInstalled": "notion-agent CLI not installed — run pipx install notion-agent-cli",
+      "agentTimeout": "Notion Agent timed out — retry",
+      "modelUnsupported": "Current backend does not support this model"
+    },
+    "toolCall": {
+      "running": "running",
+      "ok": "ok",
+      "error": "failed"
+    },
+    "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
   }
 }
