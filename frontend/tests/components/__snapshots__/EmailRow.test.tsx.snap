@@ -55,24 +55,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -165,24 +165,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -274,24 +274,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -389,24 +389,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -498,24 +498,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -608,24 +608,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -717,24 +717,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY
@@ -832,24 +832,24 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         redis timeout debug session
       </div>
       <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+        class="text-meta text-ink-fg-3 line-clamp-1 mt-0.5"
       >
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1.5 mt-2"
+        class="flex items-center gap-1 mt-1.5"
       >
         <span
-          class="inline-flex items-center gap-1.5 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
+          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
         >
           <span
             aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
+            class="w-1 h-1 rounded-full bg-crit"
           />
           Critical
         </span>
         <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
           title="需要回复"
         >
           REPLY

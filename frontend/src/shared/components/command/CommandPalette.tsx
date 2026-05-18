@@ -119,6 +119,16 @@ function substringMatch(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.toLowerCase())
 }
 
+// Sprint 10 visual review H-1 — FTS5 `snippet()` wraps hits in literal
+// `<mark>...</mark>` tags so SearchPage can DOMPurify them into a coral
+// highlight. Palette renders the hint as plain text, so without this strip
+// users see literal "<mark>meeting</mark>" inside the row. Strip the tag
+// pair but keep the highlighted substring untouched.
+function stripMarkTags(input: string | null | undefined): string {
+  if (!input) return ''
+  return input.replace(/<\/?mark>/gi, '')
+}
+
 export function CommandPalette(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useCommandPalette((s) => s.open)
@@ -230,7 +240,7 @@ export function CommandPalette(): React.ReactElement | null {
         id: `search:${hit.internal_id}`,
         kind: 'search',
         label: hit.subject ?? t('palette.search.untitled'),
-        hint: hit.snippet ?? hit.sender ?? '',
+        hint: stripMarkTags(hit.snippet) || hit.sender || '',
         icon: <SearchIcon size={14} strokeWidth={1.75} className="text-coral" />,
         // Sprint 8 §2.2 (Sprint 7 ship-review MEDIUM #3) — Enter on a search
         // hit now selects the email and navigates to /inbox so the

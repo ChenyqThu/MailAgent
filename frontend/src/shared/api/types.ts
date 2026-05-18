@@ -57,9 +57,16 @@ export interface EnrichedEmailMeta extends EmailList_EmailListItem {
 export interface MailboxSummary {
   /** NULL-mailbox rows are excluded from this list. */
   mailbox: string
+  /** Excludes `skipped` rows so the count matches what EmailList actually
+   *  shows (Sprint 10 user-acceptance follow-up). */
   total: number
   /** Sum of `is_read = 0`. Production data may show all-zero — real-world signal, not a bug. */
   unread: number
+  /** Sum of `is_flagged = 1`. Powers the Sidebar "已标旗" virtual entry. */
+  flagged: number
+  /** Sum of `sync_status IN ('failed', 'dead_letter')`. Powers the
+   *  "Failed" filter chip + future Sidebar entry. */
+  failed: number
 }
 
 export interface AIFields {

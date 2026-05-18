@@ -463,6 +463,8 @@ interface MailboxRow {
   mailbox: string | null
   total: number
   unread: number
+  flagged: number
+  failed: number
 }
 
 interface AIFieldsRow extends EmailMetadataRow {
@@ -535,11 +537,18 @@ export function listMailboxes(): MailboxSummary[] {
   const db = getDb()
   const rows = prep(
     db,
+    // Sprint 10 user-acceptance follow-up — added `flagged` + `failed` counts
+    // so the Sidebar virtual entries ("已标旗" / "Failed") can show live
+    // numbers instead of hardcoded zero. Excludes `skipped` from total so
+    // headcounts match what the EmailList actually displays.
     `SELECT mailbox,
             COUNT(*) AS total,
-            SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread
+            SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread,
+            SUM(CASE WHEN is_flagged = 1 THEN 1 ELSE 0 END) AS flagged,
+            SUM(CASE WHEN sync_status IN ('failed', 'dead_letter') THEN 1 ELSE 0 END) AS failed
        FROM email_metadata
       WHERE mailbox IS NOT NULL AND mailbox != ''
+        AND sync_status != 'skipped'
       GROUP BY mailbox
       ORDER BY total DESC`
   ).all() as MailboxRow[]
@@ -550,7 +559,9 @@ export function listMailboxes(): MailboxSummary[] {
     .map((r) => ({
       mailbox: r.mailbox,
       total: r.total ?? 0,
-      unread: r.unread ?? 0
+      unread: r.unread ?? 0,
+      flagged: r.flagged ?? 0,
+      failed: r.failed ?? 0
     }))
 }
 

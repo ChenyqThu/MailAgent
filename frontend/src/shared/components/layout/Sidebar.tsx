@@ -30,6 +30,8 @@ import {
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useMailbox } from '@shared/state/mailbox'
+import { useEmailFilter } from '@shared/state/email-filter'
+import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 
 interface SectionProps {
@@ -119,6 +121,8 @@ export function Sidebar(): React.ReactElement {
   const navigate = useNavigate()
   const active = useMailbox((s) => s.active)
   const setActive = useMailbox((s) => s.setActive)
+  const currentFilter = useEmailFilter((s) => s.filter)
+  const setFilter = useEmailFilter((s) => s.setFilter)
 
   const { data } = useQuery({
     queryKey: ['mailboxes'],
@@ -129,9 +133,21 @@ export function Sidebar(): React.ReactElement {
   })
   const mailboxes = data ?? []
 
-  // Compose visible nav. Always show "已标旗" + "所有邮件" virtual entries
-  // matching the mockup; both Sprint 3+ wire-up.
+  // Sprint 10 user-acceptance — sum across all mailboxes so the virtual
+  // "已标旗 / 所有邮件" entries surface real numbers (previously hardcoded 0
+  // for the flagged row). listMailboxes excludes `skipped` rows so these
+  // counts match what the email list actually renders.
   const allTotal = mailboxes.reduce((sum, mb) => sum + mb.total, 0)
+  const flaggedTotal = mailboxes.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
+
+  const handleFlaggedClick = (): void => {
+    setFilter('flagged')
+    void navigate({ to: '/' })
+  }
+  const handleAllMailClick = (): void => {
+    setFilter('all')
+    void navigate({ to: '/' })
+  }
 
   return (
     <aside
@@ -154,13 +170,23 @@ export function Sidebar(): React.ReactElement {
             <Item
               icon={<Star size={15} strokeWidth={1.75} />}
               label={t('sidebar.flagged')}
-              right={<TotalCount count={0} />}
+              selected={currentFilter === 'flagged'}
+              onClick={handleFlaggedClick}
+              right={
+                flaggedTotal > 0 ? (
+                  <UnreadPill count={flaggedTotal} />
+                ) : (
+                  <TotalCount count={flaggedTotal} />
+                )
+              }
             />
           )}
           {mailboxes.length > 0 && (
             <Item
               icon={<Mail size={15} strokeWidth={1.75} />}
               label={t('sidebar.allMail')}
+              selected={currentFilter === 'all'}
+              onClick={handleAllMailClick}
               right={<TotalCount count={allTotal} />}
             />
           )}
@@ -169,20 +195,25 @@ export function Sidebar(): React.ReactElement {
         <div className="my-3 mx-4 border-t border-ink-border-soft" />
 
         <Section label={t('sidebar.section.aiAgents')}>
+          {/* Sprint 10 user-acceptance — AI Agents entries used to be
+              presentational only ("根本点不了" per user feedback). Now they
+              open the AI Chat panel (where backend selection lives) or jump
+              to Settings → AI backends for configuration. */}
           <Item
             icon={<Sparkles size={15} strokeWidth={1.75} />}
             label="Notion Agent"
+            onClick={toggleAIChatPanel}
             right={<span className="w-1.5 h-1.5 rounded-full bg-ok" title={t('sidebar.online')} />}
           />
           <Item
             icon={<Lock size={15} strokeWidth={1.75} />}
             label="Custom API"
-            right={<TotalCount count={3} />}
+            onClick={toggleAIChatPanel}
           />
           <Item
             icon={<History size={15} strokeWidth={1.75} />}
             label={t('sidebar.aiHistory')}
-            right={<TotalCount count={0} />}
+            onClick={() => void navigate({ to: '/settings' })}
           />
         </Section>
 

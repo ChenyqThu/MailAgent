@@ -14,6 +14,7 @@ import { useCallback } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
+import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 
@@ -36,12 +37,19 @@ export function GlobalShortcuts(): null {
     void navigate({ to: '/settings' })
   }, [navigate])
 
+  // Sprint 10 user-acceptance — ⌘L toggles the AI Chat panel (was always
+  // mounted before, see ai-chat-panel.ts module doc).
+  const toggleAIPanel = useCallback(() => {
+    toggleAIChatPanel()
+  }, [])
+
   // `?` requires shift on US/UK keyboards; the parser already keys on the
   // resolved char (which is '?' after shift), so spec='?' matches without
   // having to write 'shift+/'.
   useShortcut('?', openHelp)
   useShortcut('cmd+k', togglePalette)
   useShortcut('cmd+,', goSettings)
+  useShortcut('cmd+l', toggleAIPanel)
 
   return null
 }

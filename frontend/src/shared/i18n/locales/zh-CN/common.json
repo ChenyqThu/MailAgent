@@ -7,6 +7,17 @@
     "inbox": "收件箱",
     "sent": "已发送"
   },
+  "emailList": {
+    "newEmailsCta": "{n, plural, =1 {1 封新邮件 · 点击查看} other {# 封新邮件 · 点击查看}}",
+    "filter": {
+      "unread": "未读",
+      "flagged": "已标旗",
+      "failed": "同步失败"
+    }
+  },
+  "emailDetail": {
+    "notionOpen": "打开"
+  },
   "ai": {
     "compose": "起草回复"
   },
@@ -418,6 +429,7 @@
     "update": {
       "heading": "应用更新",
       "currentVersion": "当前版本",
+      "idle": "尚未检查更新",
       "checkNow": "检查更新",
       "checking": "检查中…",
       "upToDate": "已是最新版本",
@@ -467,13 +479,15 @@
   },
   "titleBar": {
     "island": {
-      "label": "Island",
+      "label": "灵动岛",
       "idle": "灵动岛初始化中…",
       "connected": "灵动岛已连接",
       "degraded": "灵动岛连接异常 — 查看设置",
       "disconnected": "灵动岛未运行 — 启动 ping-island.app",
       "devDisabled": "Dev 模式 · 灵动岛禁用",
       "disabled": "灵动岛已关闭"
-    }
+    },
+    "synced": "已同步",
+    "themeCycle": "主题 · 点击切换"
   }
 }

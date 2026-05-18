@@ -5,7 +5,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, X } from 'lucide-react'
+import { Command, CornerDownLeft, Send, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useShortcut } from '@shared/hooks/useShortcut'
@@ -103,8 +103,14 @@ export function Composer({
             'text-ink-fg-3'
           )}
         >
-          <span className="uppercase tracking-wider">
-            ⌘↩ {t('chat.composer.send').toUpperCase()}
+          {/* Sprint 10 visual review M-1 — `⌘↩` unicode chars render
+              inconsistently at 11px on some macOS fonts. Lucide glyphs (14px
+              line equivalent at strokeWidth=2) read cleanly. zh-CN's "发送"
+              .toUpperCase() is a no-op so cjk-mono swap keeps it legible. */}
+          <span className="inline-flex items-center gap-1 uppercase tracking-wider">
+            <Command size={10} strokeWidth={2.5} className="text-ink-fg-2" />
+            <CornerDownLeft size={10} strokeWidth={2.5} className="text-ink-fg-2" />
+            <span className="ml-1">{t('chat.composer.send').toUpperCase()}</span>
           </span>
           {isStreaming ? (
             <button

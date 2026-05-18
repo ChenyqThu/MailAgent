@@ -960,10 +960,13 @@ function UpdateSection(): React.ReactElement {
 
   // Resolve the status message body for the current state. Keep this as a
   // single switch so a new state is impossible to forget.
+  // idle: the Row directly above already shows "当前版本 v0.0.1", so this
+  // body row reads "尚未检查更新" instead of repeating the version (Sprint 10
+  // visual review HIGH-3).
   let statusMessage: string
   switch (status.state) {
     case 'idle':
-      statusMessage = t('settings.update.currentVersion') + ' v' + status.currentVersion
+      statusMessage = t('settings.update.idle')
       break
     case 'checking':
       statusMessage = t('settings.update.checking')

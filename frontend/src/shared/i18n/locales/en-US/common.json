@@ -7,6 +7,17 @@
     "inbox": "Inbox",
     "sent": "Sent"
   },
+  "emailList": {
+    "newEmailsCta": "{n, plural, =1 {1 new message · click to view} other {# new messages · click to view}}",
+    "filter": {
+      "unread": "Unread",
+      "flagged": "Flagged",
+      "failed": "Sync failed"
+    }
+  },
+  "emailDetail": {
+    "notionOpen": "Open"
+  },
   "ai": {
     "compose": "Draft reply"
   },
@@ -418,6 +429,7 @@
     "update": {
       "heading": "Software updates",
       "currentVersion": "Current version",
+      "idle": "Not yet checked",
       "checkNow": "Check for updates",
       "checking": "Checking…",
       "upToDate": "You're up to date",
@@ -474,6 +486,8 @@
       "disconnected": "ping-island.app not running",
       "devDisabled": "Dev · Dynamic Island disabled",
       "disabled": "Dynamic Island off"
-    }
+    },
+    "synced": "Synced",
+    "themeCycle": "Theme · click to cycle"
   }
 }

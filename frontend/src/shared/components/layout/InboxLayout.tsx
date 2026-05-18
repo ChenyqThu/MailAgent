@@ -6,6 +6,7 @@
 // EmailDetail's max width does.
 
 import { useActiveEmail } from '@shared/state/active-email'
+import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 
 import { TitleBar } from './TitleBar'
 import { Sidebar } from './Sidebar'
@@ -17,6 +18,11 @@ import { BatchActionBar } from '../batch/BatchActionBar'
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
+  // Sprint 10 user-acceptance — AIChatPanel was forced-mounted in the
+  // 1280px layout, leaving EmailDetail < 320px wide. Now it's an on-demand
+  // overlay column toggled via the toolbar icon, ⌘L, or any AI Agents
+  // sidebar entry.
+  const aiPanelVisible = useAIChatPanel((s) => s.visible)
   // Sprint 7 review (opus Nit) — removed local `useShortcut('cmd+k', goSearch)`
   // because `GlobalShortcuts` (mounted in App.tsx) now owns ⌘K → command
   // palette. The palette includes a "Go · Search" navigation entry, so the
@@ -30,7 +36,7 @@ export function InboxLayout(): React.ReactElement {
         <Sidebar />
         <EmailList />
         <EmailDetail internalId={activeId} />
-        <AIChatPanel />
+        {aiPanelVisible && <AIChatPanel />}
       </div>
       {/* Sprint 5 §2.2 / DESIGN.md §5.4 — 52px bar appears when ≥1 row is
           selected (useBatch.selectedIds.length > 0). Renders inline above

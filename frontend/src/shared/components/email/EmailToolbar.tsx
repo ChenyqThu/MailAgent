@@ -22,6 +22,7 @@ import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import {
   Archive,
   ArrowLeft,
+  Bot,
   CheckCheck,
   ChevronDown,
   ChevronUp,
@@ -36,6 +37,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { toggleAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
 
 export type TranslateStatus = 'idle' | 'loading' | 'translated' | 'error'
 
@@ -92,6 +94,10 @@ interface GhostProps {
   icon: React.ReactNode
   children?: React.ReactNode
   title?: string
+  /** Accessible name for the icon-only button. Required for a11y when
+   *  `children` is omitted; falls back to `children` (rendered text) when
+   *  not provided. */
+  ariaLabel?: string
   active?: boolean
   pending?: boolean
   disabled?: boolean
@@ -102,6 +108,7 @@ function Ghost({
   icon,
   children,
   title,
+  ariaLabel,
   active,
   pending,
   disabled,
@@ -114,6 +121,7 @@ function Ghost({
       onClick={onClick}
       disabled={isDisabled}
       title={title}
+      aria-label={ariaLabel}
       className={cn(
         'flex items-center gap-1.5 px-2 py-1.5 rounded-md text-aux',
         'transition-colors duration-fast',
@@ -168,13 +176,16 @@ function TranslateButton({ langIsEn, status, onToggle }: TranslateProps): React.
         ? t('translate.showOriginal')
         : t('translate.label')
 
+  // Sprint 10 user-acceptance — toolbar dropped all text labels (the row
+  // overflowed at 1280px). Keep the EN→中 pip when targeting English
+  // because the pip itself doubles as a status badge (direction signal).
   return (
     <button
       type="button"
       onClick={onToggle}
       title={`⌥T · ${label}`}
       className={cn(
-        'flex items-center gap-1.5 px-2 py-1.5 rounded-md text-aux',
+        'flex items-center gap-1 px-2 py-1.5 rounded-md text-aux',
         'transition-colors duration-fast',
         isError
           ? 'text-fail hover:bg-fail/10'
@@ -187,21 +198,18 @@ function TranslateButton({ langIsEn, status, onToggle }: TranslateProps): React.
       <span className="shrink-0 grid place-items-center w-[13px] h-[13px]">
         <Languages size={13} strokeWidth={2} className={isLoading ? 'animate-spin' : undefined} />
       </span>
-      <span className="flex items-center gap-1">
-        {label}
-        {langIsEn && !isError && !isLoading && (
-          <span
-            className="lang-pip ml-0.5"
-            style={{
-              background: 'rgb(var(--c-accent) / 0.10)',
-              borderColor: 'rgb(var(--c-accent) / 0.30)',
-              color: 'rgb(var(--c-accent))'
-            }}
-          >
-            EN→中
-          </span>
-        )}
-      </span>
+      {langIsEn && !isError && !isLoading && (
+        <span
+          className="lang-pip"
+          style={{
+            background: 'rgb(var(--c-accent) / 0.10)',
+            borderColor: 'rgb(var(--c-accent) / 0.30)',
+            color: 'rgb(var(--c-accent))'
+          }}
+        >
+          EN→中
+        </span>
+      )}
     </button>
   )
 }
@@ -314,6 +322,31 @@ function ResyncConfirmDialog({
 // alongside the centralised trap logic. The selector constant lives there
 // (exported) so any future modal can stay in lockstep.
 
+// Sprint 10 user-acceptance — toolbar gained a toggle for the AI Chat
+// panel since the panel itself is no longer always-mounted. Active state
+// (coral fill) mirrors the zustand visible flag so users can see at a
+// glance whether the panel is showing.
+function AIPanelToggleButton(): React.ReactElement {
+  const { t } = useTranslation()
+  const visible = useAIChatPanel((s) => s.visible)
+  return (
+    <button
+      type="button"
+      onClick={toggleAIChatPanel}
+      title={`⌘L · ${t('chat.title')}`}
+      aria-pressed={visible}
+      className={cn(
+        'p-1.5 rounded transition-colors duration-fast',
+        visible
+          ? 'text-coral bg-coral/10 hover:bg-coral/15'
+          : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+      )}
+    >
+      <Bot size={14} strokeWidth={2} />
+    </button>
+  )
+}
+
 export function EmailToolbar({
   translate,
   onCreateDraft,
@@ -363,25 +396,27 @@ export function EmailToolbar({
       />
       <Divider />
 
-      {/* Primary CTA — coral fill (DESIGN.md §2.2 "one CTA per surface"). */}
+      {/* Primary CTA — coral fill (DESIGN.md §2.2 "one CTA per surface").
+          Sprint 10 user-acceptance — text label dropped to icon-only so
+          the 11-button toolbar fits at 1280px column width. Tooltip carries
+          "R · 起草回复" for discoverability. */}
       <button
         type="button"
         onClick={onCreateDraft}
         disabled={!onCreateDraft || draftState?.pending}
         title={`R · ${draftLabel}`}
         className={cn(
-          'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md',
-          'bg-coral/100 text-accent-fg text-aux font-medium',
+          'flex items-center justify-center w-8 h-8 rounded-md',
+          'bg-coral/100 text-accent-fg',
           'hover:bg-coral-hover transition-colors duration-fast',
           'disabled:opacity-70 disabled:cursor-not-allowed'
         )}
       >
         {draftState?.pending ? (
-          <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+          <Loader2 size={14} strokeWidth={2} className="animate-spin" />
         ) : (
-          <Sparkles size={13} strokeWidth={2} className="fill-current" />
+          <Sparkles size={14} strokeWidth={2} className="fill-current" />
         )}
-        <span>{draftLabel}</span>
       </button>
 
       {translate && <TranslateButton {...translate} />}
@@ -391,52 +426,53 @@ export function EmailToolbar({
       <Ghost
         icon={<CheckCheck size={13} strokeWidth={2} />}
         title={`U · ${readLabel}`}
+        ariaLabel={readLabel}
         active={isRead}
         pending={readState?.pending}
         onClick={onToggleRead}
-      >
-        {readLabel}
-      </Ghost>
+      />
       <Ghost
         icon={<Star size={13} strokeWidth={1.5} className={isFlagged ? 'fill-current' : ''} />}
         title={`S · ${t('toolbar.toggleFlag')}`}
+        ariaLabel={t('toolbar.toggleFlag')}
         active={isFlagged}
         pending={flagState?.pending}
         onClick={onToggleFlag}
-      >
-        {t('toolbar.toggleFlag')}
-      </Ghost>
-      <Ghost icon={<Archive size={13} strokeWidth={2} />} title={`E · ${t('toolbar.archive')}`}>
-        {t('toolbar.archive')}
-      </Ghost>
+      />
+      <Ghost
+        icon={<Archive size={13} strokeWidth={2} />}
+        title={`E · ${t('toolbar.archive')}`}
+        ariaLabel={t('toolbar.archive')}
+      />
 
       <Divider />
 
+      {/* Sprint 10 visual review L-1 — Resync + AI re-run dropped their
+          labels to keep the toolbar from overflowing at 1280px width.
+          Title tooltip preserves the verbal cue for discoverability. */}
       <Ghost
         icon={<RefreshCcw size={13} strokeWidth={2} />}
         title={resyncLabel}
+        ariaLabel={resyncLabel}
         pending={resyncState?.pending}
         onClick={handleResyncClick}
-      >
-        {resyncLabel}
-      </Ghost>
+      />
       <Ghost
         icon={<Zap size={13} strokeWidth={2} />}
         title={llmLabel}
+        ariaLabel={llmLabel}
         pending={llmRunState?.pending}
         onClick={onLlmRun}
-      >
-        {llmLabel}
-      </Ghost>
+      />
 
       <div className="ml-auto flex items-center gap-1">
+        <AIPanelToggleButton />
         <Ghost
           icon={<ExternalLink size={13} strokeWidth={2} />}
           title={t('toolbar.openNotion')}
+          ariaLabel="Notion"
           onClick={openNotion}
-        >
-          Notion
-        </Ghost>
+        />
         <Divider />
         <IconOnly
           icon={<ChevronUp size={14} strokeWidth={2} />}

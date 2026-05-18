@@ -90,8 +90,11 @@ export function StatusBar(): React.ReactElement {
 
       <Segment icon={<Activity size={11} strokeWidth={2} />}>
         <span className="text-ink-fg-3">{t('statusbar.theme')}</span>
-        <span className="text-ink-fg-1 uppercase">{resolved}</span>
+        {/* `resolved` is 'light' | 'dark'; route through the same i18n keys
+            SettingsPage uses so zh-CN reads "浅色 / 深色" not "LIGHT / DARK". */}
+        <span className="text-ink-fg-1">{t(`settings.theme.${resolved}`)}</span>
         <span className="text-ink-fg-3">·</span>
+        {/* Accent ids stay as-is (proper noun-ish brand tokens). */}
         <span className="text-ink-fg-1 capitalize">{accent}</span>
       </Segment>
 

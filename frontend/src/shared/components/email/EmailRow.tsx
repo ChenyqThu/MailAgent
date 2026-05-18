@@ -152,22 +152,25 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
             {email.subject || '(no subject)'}
           </div>
 
-          {/* Snippet — cleaned markdown residue so we display real prose. */}
-          {snippet && <div className="text-aux text-ink-fg-2 line-clamp-1 mt-0.5">{snippet}</div>}
+          {/* Snippet — Sprint 10 visual review M-4: dropped one tier to
+              text-ink-fg-3 + text-meta so the line carries less visual
+              weight; subject stays the dominant cue and the row feels
+              less stuffed at 340px column width. */}
+          {snippet && <div className="text-meta text-ink-fg-3 line-clamp-1 mt-0.5">{snippet}</div>}
 
-          {/* Chip row */}
-          <div className="flex items-center gap-1.5 mt-2">
+          {/* Chip row — tightened mt + chip padding for less vertical noise. */}
+          <div className="flex items-center gap-1 mt-1.5">
             {email.ai_priority && (
               <span
                 className={cn(
-                  'inline-flex items-center gap-1.5 text-micro font-mono uppercase tracking-wide',
-                  'px-1.5 py-0.5 rounded border',
+                  'inline-flex items-center gap-1 text-micro font-mono uppercase tracking-wide',
+                  'px-1 py-0.5 rounded border',
                   PRIORITY_CHIP[email.ai_priority]
                 )}
               >
                 <span
                   className={cn(
-                    'w-1.5 h-1.5 rounded-full',
+                    'w-1 h-1 rounded-full',
                     email.ai_priority === 'critical' && 'bg-crit',
                     email.ai_priority === 'urgent' && 'bg-urg',
                     email.ai_priority === 'important' && 'bg-impt',
@@ -182,7 +185,7 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
             {actionLabel && (
               <span
                 title={email.ai_action ?? undefined}
-                className="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+                className="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
               >
                 {actionLabel}
               </span>

@@ -5,22 +5,22 @@
 //   - "N 封新邮件" CTA pill below header when poll surfaces new ids
 //   - Virtualized rows via react-window v2 with per-row variable height
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { List, type RowComponentProps } from 'react-window'
-import { ChevronDown, MailQuestion, Paperclip, Star } from 'lucide-react'
+import { MailQuestion, Paperclip, Star } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
+import { useEmailFilter, type EmailFilter } from '@shared/state/email-filter'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import type { EnrichedEmailMeta } from '@shared/api/types'
 
 import { EmailRow } from './EmailRow'
-
-type FilterId = 'unread' | 'flagged' | 'failed' | 'all'
 
 interface RowProps {
   emails: ReadonlyArray<EnrichedEmailMeta>
@@ -51,14 +51,18 @@ function VirtualRow({
 }
 
 function rowHeight(index: number, { emails }: RowProps): number {
-  // py-3 (24) + sender (20) + subject (20) + chips (mt-2 = 26) = 90
-  // + snippet (line-clamp-1 = 20 + mt-0.5 = 2) = 112
+  // Sprint 10 user-acceptance — Sprint 2 height was 90/112 but the M-4
+  // chip tightening (text-meta snippet + tighter chip padding) shrunk the
+  // real content height. Old constants left ~16-22px of dead space per
+  // row and tripped the "rows overlap" perception users reported.
+  // New: py-3 (24) + header (20) + subject (20) + chip row (mt-1.5 = 22)
+  // = 86 base; +snippet (text-meta ≈ 16 + mt-0.5 = 18) = 104.
   const e = emails[index]
-  return e?.snippet ? 112 : 90
+  return e?.snippet ? 104 : 86
 }
 
 function applyFilter(
-  filter: FilterId,
+  filter: EmailFilter,
   rows: ReadonlyArray<EnrichedEmailMeta>
 ): EnrichedEmailMeta[] {
   switch (filter) {
@@ -77,30 +81,34 @@ function applyFilter(
 interface FilterChipProps {
   active: boolean
   icon: React.ReactNode
+  /** Accessibility / tooltip label. Not rendered visually since Sprint 10
+   *  dropped chip text to fit the 340px column without wrapping. */
   label: string
   count: number
   onClick(): void
 }
 
+// Sprint 10 user-acceptance — text labels caused the chip strip to wrap
+// at 340px column width (real user complaint). Compressed to icon + count
+// only; tooltip preserves the verbal cue.
 function FilterChip({ active, icon, label, count, onClick }: FilterChipProps): React.ReactElement {
   return (
     <button
       type="button"
       onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
       className={cn(
-        'flex items-center gap-1.5 px-2 py-1 rounded border text-aux transition-colors duration-fast',
+        'flex items-center gap-1 px-1.5 py-1 rounded border transition-colors duration-fast',
         active
           ? 'text-coral bg-coral/15 border-coral/30 hover:bg-coral/20'
           : 'text-ink-fg-1 border-transparent hover:text-ink-fg hover:bg-ink-3'
       )}
     >
       <span className="shrink-0 grid place-items-center w-3 h-3">{icon}</span>
-      <span>{label}</span>
       <span
-        className={cn(
-          'text-meta font-mono tabular-nums ml-0.5',
-          active ? 'text-coral' : 'text-ink-fg-3'
-        )}
+        className={cn('text-meta font-mono tabular-nums', active ? 'text-coral' : 'text-ink-fg-2')}
       >
         {count}
       </span>
@@ -109,11 +117,15 @@ function FilterChip({ active, icon, label, count, onClick }: FilterChipProps): R
 }
 
 export function EmailList(): React.ReactElement {
+  const { t } = useTranslation()
   const mailApi = useMailApi()
   const mailbox = useMailbox((s) => s.active)
   const activeId = useActiveEmail((s) => s.activeInternalId)
   const setActive = useActiveEmail((s) => s.setActive)
-  const [filter, setFilter] = useState<FilterId>('all')
+  // Sprint 10 user-acceptance — filter state lifted to zustand so the
+  // Sidebar "已标旗" virtual entry can flip it on click.
+  const filter = useEmailFilter((s) => s.filter)
+  const setFilter = useEmailFilter((s) => s.setFilter)
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['emails', mailbox],
@@ -170,38 +182,28 @@ export function EmailList(): React.ReactElement {
             {counts.unread} unread · {counts.all} total
           </span>
         </div>
-        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+        <div className="mt-2.5 flex items-center gap-1">
           <FilterChip
             active={filter === 'unread'}
             icon={<span className="w-1.5 h-1.5 rounded-full bg-coral/100" />}
-            label="Unread"
+            label={t('emailList.filter.unread')}
             count={counts.unread}
             onClick={() => setFilter(filter === 'unread' ? 'all' : 'unread')}
           />
           <FilterChip
             active={filter === 'flagged'}
             icon={<Star size={11} strokeWidth={2} className="text-current" />}
-            label="Flagged"
+            label={t('emailList.filter.flagged')}
             count={counts.flagged}
             onClick={() => setFilter(filter === 'flagged' ? 'all' : 'flagged')}
           />
           <FilterChip
             active={filter === 'failed'}
             icon={<MailQuestion size={11} strokeWidth={2} className="text-current" />}
-            label="Failed"
+            label={t('emailList.filter.failed')}
             count={counts.failed}
             onClick={() => setFilter(filter === 'failed' ? 'all' : 'failed')}
           />
-
-          <button
-            type="button"
-            disabled
-            title="Sort (Sprint 3)"
-            className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Latest
-            <ChevronDown size={10} strokeWidth={2.5} />
-          </button>
         </div>
       </header>
 
@@ -212,7 +214,7 @@ export function EmailList(): React.ReactElement {
           className="mx-3 mt-2 px-3 py-2 rounded-md bg-ink-3 border border-ink-border hover:border-coral/40 text-ink-fg text-aux font-medium flex items-center justify-center gap-2 transition-colors duration-fast"
         >
           <span className="w-1.5 h-1.5 rounded-full bg-coral/100 dot-pulse" />
-          {newCount} 封新邮件 · 点击查看
+          {t('emailList.newEmailsCta', { n: newCount })}
         </button>
       )}
 

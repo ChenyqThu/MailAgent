@@ -150,14 +150,16 @@ export function TitleBar(): React.ReactElement {
         <button
           type="button"
           onClick={() => setThemeMode(nextOf(THEME_ORDER, themeMode))}
-          title={`Theme: ${themeMode}${themeMode === 'system' ? ` → ${resolved}` : ''} · click to cycle`}
+          title={`${t('titleBar.themeCycle')} (${t(`settings.theme.${themeMode}`)}${themeMode === 'system' ? ` → ${t(`settings.theme.${resolved}`)}` : ''})`}
           className={cn(
             'flex items-center gap-1.5 px-1.5 py-0.5 rounded',
             'hover:bg-ink-3 hover:text-ink-fg-1 transition-colors duration-fast'
           )}
         >
           <ThemeIcon mode={themeMode} />
-          <span className="capitalize">{themeMode}</span>
+          {/* Theme value runs through settings.theme.* so zh-CN reads
+              "浅色 / 跟随系统 / 深色" instead of raw "light/system/dark". */}
+          <span>{t(`settings.theme.${themeMode}`)}</span>
         </button>
         <span className="text-ink-fg-3">·</span>
 
@@ -180,7 +182,7 @@ export function TitleBar(): React.ReactElement {
 
         <span className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-ok" aria-hidden />
-          <span>Synced</span>
+          <span>{t('titleBar.synced')}</span>
         </span>
       </div>
     </header>

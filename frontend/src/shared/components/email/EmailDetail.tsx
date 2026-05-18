@@ -523,7 +523,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    {t('toolbar.openNotion')}
+                    {/* Sprint 10 visual review L-2 — meta row label already
+                        says "Notion"; using "toolbar.openNotion" 重复了
+                        "Notion" 二次 ("Notion: 在 Notion 打开"). The detail-
+                        specific key trims to just "打开 / Open" so the link
+                        text reads as an action, not a restatement. */}
+                    {t('emailDetail.notionOpen')}
                     <ExternalLink size={11} strokeWidth={2} />
                   </a>
                 }

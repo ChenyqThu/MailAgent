@@ -296,13 +296,17 @@ describe('listEmailsEnriched', () => {
 })
 
 describe('listMailboxes', () => {
-  test('aggregates per mailbox with total + unread counts', () => {
+  test('aggregates per mailbox with total + unread + flagged + failed counts', () => {
     const rows = handlers.listMailboxes()
-    // 收件箱 has 3 rows (101 unread+flagged, 102 read, 103 unread+failed) → unread=2
-    // 发件箱 has 1 row (201 read) → unread=0
+    // 收件箱 has 3 rows (101 unread+flagged, 102 read, 103 unread+failed) →
+    //   total=3, unread=2, flagged=1, failed=1
+    // 发件箱 has 1 row (201 read, synced) → total=1, all-zero counts
+    // Sprint 10 user-acceptance shape: listMailboxes now returns flagged +
+    // failed alongside total + unread so the Sidebar virtual entries can
+    // surface real counts (previous hardcoded 0).
     expect(rows).toEqual([
-      { mailbox: '收件箱', total: 3, unread: 2 },
-      { mailbox: '发件箱', total: 1, unread: 0 }
+      { mailbox: '收件箱', total: 3, unread: 2, flagged: 1, failed: 1 },
+      { mailbox: '发件箱', total: 1, unread: 0, flagged: 0, failed: 0 }
     ])
   })
 

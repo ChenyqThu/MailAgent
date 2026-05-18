@@ -6,9 +6,11 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
+import { X } from 'lucide-react'
 
 import type { AIFields, EmailMeta } from '@shared/api/types'
 import { useActiveEmail } from '@shared/state/active-email'
+import { hideAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailChat } from '@shared/hooks/useEmailChat'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useShortcut } from '@shared/hooks/useShortcut'
@@ -176,7 +178,21 @@ export function AIChatPanel(): React.ReactElement {
     >
       <header className="px-3 h-titlebar flex items-center gap-2 border-b border-ink-border-soft text-aux text-ink-fg font-medium">
         <span className="text-coral">✦</span>
-        {t('chat.title')}
+        <span className="flex-1">{t('chat.title')}</span>
+        {/* Sprint 10 user-acceptance — panel is now on-demand; provide a
+            close affordance so users who opened it via ⌘L or the toolbar
+            icon can dismiss it without re-pressing the shortcut. */}
+        <button
+          type="button"
+          onClick={hideAIChatPanel}
+          aria-label={t('chat.composer.cancel')}
+          className={cn(
+            'p-1 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3',
+            'transition-colors duration-fast'
+          )}
+        >
+          <X size={13} strokeWidth={2} />
+        </button>
       </header>
 
       <BackendSelector value={backend} onChange={setBackend} agentName={agentName} />
