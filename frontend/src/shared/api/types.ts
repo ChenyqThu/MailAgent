@@ -111,6 +111,39 @@ export interface ResyncOpts {
   dryRun?: boolean
 }
 
+// ---- Sprint 5 §2.2 — write surfaces ---------------------------------------
+
+export interface CreateDraftOpts {
+  internalId: number
+  /** Optional plaintext body to prepend above the quoted source.
+   *  Sprint 5 keeps it plaintext; Sprint 6 HTML clipboard ramp adds rich text. */
+  body?: string
+}
+
+export interface CreateDraftResult {
+  internalId: number
+  mailbox: string | null
+  accountName: string | null
+  /** AppleScript-returned draft message id. */
+  draftId: string
+}
+
+export interface LlmRunOpts {
+  dryRun?: boolean
+  /** Overwrite existing AI fields. Without this the CLI no-ops when labels exist. */
+  force?: boolean
+  /** Preserve user-edited non-null fields when force=true. */
+  noOverwrite?: boolean
+}
+
+export interface UpdateFlagOpts {
+  isRead?: boolean
+  isFlagged?: boolean
+  /** Notion DB enum: 未处理 / AI Reviewed / 已同步 / 已完成 / 草稿已创建. */
+  processingStatus?: string
+  dryRun?: boolean
+}
+
 export interface EmailApi {
   list(opts: ListOpts): Promise<EmailMeta[]>
   /** Sprint 2 — list + body snippet + LLM labels + attach count, all in one IPC. */
@@ -125,7 +158,22 @@ export interface EmailApi {
   /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */
   aiFields(internalId: number): Promise<AIFields | null>
   search(opts: SearchOpts): Promise<SearchHit[]>
+  /** Sprint 5 — Notion resync via `mailagent email resync`. Returns whatever
+   *  the CLI's `data` envelope contains (page_id, status, etc.). */
   resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult>
+  /** Sprint 5 — open Mail.app reply window (AppleScript). User edits +
+   *  sends in Mail.app; we don't relay the send. */
+  createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult>
+}
+
+export interface LlmApi {
+  /** Sprint 5 — re-run AI classification for one email via `mailagent llm run`. */
+  run(internalId: number, opts?: LlmRunOpts): Promise<unknown>
+}
+
+export interface NotionWriteApi {
+  /** Sprint 5 — push read/flagged/processing_status to the Notion mail page. */
+  updateFlag(internalId: number, opts: UpdateFlagOpts): Promise<unknown>
 }
 
 export interface AttachmentApi {
@@ -284,4 +332,6 @@ export interface MailApi {
   attachment: AttachmentApi
   ai: AiApi
   chat: ChatApi
+  llm: LlmApi
+  notion: NotionWriteApi
 }

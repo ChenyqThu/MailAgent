@@ -246,13 +246,7 @@ describe('NotionAgentBackend — happy path', () => {
       })
     )
 
-    expect(events.map((e) => e.type)).toEqual([
-      'tool_call',
-      'tool_call',
-      'chunk',
-      'usage',
-      'done'
-    ])
+    expect(events.map((e) => e.type)).toEqual(['tool_call', 'tool_call', 'chunk', 'usage', 'done'])
     const ok = events[1]
     if (ok.type === 'tool_call') expect(ok.status).toBe('ok')
 
@@ -280,7 +274,15 @@ describe('NotionAgentBackend — happy path', () => {
     expect(mockExeca).toHaveBeenCalledTimes(1)
     const call = mockExeca.mock.calls[0]
     expect(call[1]).toEqual(
-      expect.arrayContaining(['chat', 'hi', '--json', '--agent-page-id', 'agent-1', '--model', 'gpt-5.4'])
+      expect.arrayContaining([
+        'chat',
+        'hi',
+        '--json',
+        '--agent-page-id',
+        'agent-1',
+        '--model',
+        'gpt-5.4'
+      ])
     )
   })
 

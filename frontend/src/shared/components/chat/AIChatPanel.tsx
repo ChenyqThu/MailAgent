@@ -4,7 +4,7 @@
 // streaming state / error UI; quick action chips just prefill the composer
 // (Sprint 4 keeps explicit user submit; Sprint 5 may auto-submit).
 
-import { useCallback, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { AIFields, EmailMeta } from '@shared/api/types'
@@ -114,7 +114,16 @@ export function AIChatPanel(): React.ReactElement {
   const aiFieldsCount = aiFields ? countNonNullAiFields(aiFields) : 0
   const threadCount = threadQ.data ?? 0
 
-  const canSend = activeInternalId !== null && !chat.isStreaming
+  // Sprint 5 state machine #4 — disable send while quota cooldown is in
+  // effect (E_QUOTA from upstream). useEmailChat schedules its own
+  // setTimeout to clear `quotaCooldownUntil` once the cooldown lifts, so
+  // we don't compare against Date.now() in render (react-hooks/purity
+  // forbids impure calls during rendering). Trusting the hook's timer to
+  // null the field also keeps the gating signal consistent with the
+  // QuotaCooldownTimer subcomponent rendered below.
+  const quotaCooldownUntil = chat.quotaCooldownUntil
+  const inQuotaCooldown = quotaCooldownUntil !== null
+  const canSend = activeInternalId !== null && !chat.isStreaming && !inQuotaCooldown
   const handleSend = useCallback(
     async (text: string) => {
       if (activeInternalId === null) return
@@ -173,14 +182,36 @@ export function AIChatPanel(): React.ReactElement {
           {errorBanner && (
             <div className="px-3 py-2 mx-3 my-2 rounded-md text-aux text-fail bg-fail/10 border border-fail/30 flex items-start gap-2">
               <span className="flex-1">{t(errorBanner)}</span>
+              {/* Sprint 5 state machine #3 — show Retry CTA only for
+                  network / upstream / agent timeout failures (the hook
+                  surfaces `retryLast` as non-null exactly for that subset).
+                  Other codes (E_NO_LLM_KEY / E_MODEL_UNSUPPORTED) are
+                  user-config issues that a blind retry won't fix. */}
+              {chat.retryLast && (
+                <button
+                  type="button"
+                  onClick={() => void chat.retryLast?.()}
+                  className="text-meta font-mono text-fail hover:bg-fail/15 px-2 py-0.5 rounded transition-colors duration-fast"
+                >
+                  {t('chat.error.retry')}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={chat.clearError}
                 className="text-meta font-mono text-ink-fg-2 hover:text-ink-fg-1"
+                aria-label="dismiss"
               >
                 ×
               </button>
             </div>
+          )}
+
+          {/* Sprint 5 #4 — quota cooldown info row. Surfaces remaining
+              seconds when the upstream returned E_QUOTA in this session.
+              Re-renders every ~250ms via the QuotaCooldownTimer subcomponent. */}
+          {inQuotaCooldown && quotaCooldownUntil !== null && (
+            <QuotaCooldownTimer until={quotaCooldownUntil} />
           )}
 
           {chat.messages.length === 0 ? (
@@ -218,6 +249,35 @@ function countNonNullAiFields(f: AIFields): number {
   if (f.mailbox) n++
   n += 2 // is_read + is_flagged (booleans are always present)
   return n
+}
+
+// Sprint 5 §2.3 state-machine #4 — re-renders every ~250ms so the seconds
+// readout in the chat panel header stays current without polluting the
+// hook owner (`useEmailChat`) with timer state.
+//
+// We hold the "now" timestamp in state so the render body itself stays
+// pure (react-hooks/purity rejects `Date.now()` in render). The
+// setInterval callback is outside render and is allowed to call impure
+// APIs.
+function QuotaCooldownTimer({ until }: { until: number }): React.ReactElement | null {
+  const { t } = useTranslation()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now())
+    }, 250)
+    return (): void => {
+      clearInterval(interval)
+    }
+  }, [])
+  const remainingMs = Math.max(0, until - now)
+  if (remainingMs === 0) return null
+  const seconds = Math.ceil(remainingMs / 1000)
+  return (
+    <div className="px-3 py-1.5 mx-3 mb-2 rounded-md text-meta font-mono text-urg bg-urg/10 border border-urg/30">
+      {t('chat.error.quotaCooldown', { seconds })}
+    </div>
+  )
 }
 
 function mapErrorKey(code: string): string {

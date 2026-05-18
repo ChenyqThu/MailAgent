@@ -139,9 +139,7 @@ describe('SearchPage — query normalisation', () => {
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'redis AND 产品' } })
     vi.advanceTimersByTime(250)
     await waitFor(() =>
-      expect(mockSearch).toHaveBeenCalledWith(
-        expect.objectContaining({ query: 'redis AND 产品' })
-      )
+      expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: 'redis AND 产品' }))
     )
   })
 })

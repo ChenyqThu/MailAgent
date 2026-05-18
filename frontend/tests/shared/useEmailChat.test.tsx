@@ -170,7 +170,13 @@ describe('useEmailChat — initial load', () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
     mockChatListMessages.mockResolvedValue([
       fakeMessage({ id: 100, session_id: 7, role: 'user' }),
-      fakeMessage({ id: 101, session_id: 7, role: 'assistant', status: 'streaming', content: 'so far' })
+      fakeMessage({
+        id: 101,
+        session_id: 7,
+        role: 'assistant',
+        status: 'streaming',
+        content: 'so far'
+      })
     ])
     const { result } = renderHook(() => useEmailChat(101))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
@@ -252,7 +258,13 @@ describe('useEmailChat — send + stream', () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     mockChatListMessages.mockResolvedValue([
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
-      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: 'so far', status: 'streaming' })
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'so far',
+        status: 'streaming'
+      })
     ])
     const { result } = renderHook(() => useEmailChat(101))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
@@ -292,7 +304,13 @@ describe('useEmailChat — send + stream', () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     mockChatListMessages.mockResolvedValue([
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
-      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: 'partial', status: 'streaming' })
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'partial',
+        status: 'streaming'
+      })
     ])
     const { result } = renderHook(() => useEmailChat(101))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
@@ -368,7 +386,13 @@ describe('useEmailChat — send + stream', () => {
     // than silently drop the event.
     mockChatListMessages.mockClear()
     mockChatListMessages.mockResolvedValue([
-      fakeMessage({ id: 50, session_id: 1, role: 'assistant', content: 'recovered', status: 'streaming' })
+      fakeMessage({
+        id: 50,
+        session_id: 1,
+        role: 'assistant',
+        content: 'recovered',
+        status: 'streaming'
+      })
     ])
     act(() => {
       emitStream({
@@ -505,11 +529,117 @@ describe('useEmailChat — abort + lifecycle', () => {
     expect(result.current.error).toBeNull()
   })
 
+  test('E_QUOTA error engages a 5-min cooldown (state machine #4)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+    expect(result.current.quotaCooldownUntil).toBeNull()
+
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'error', code: 'E_QUOTA', message: 'quota exhausted' }
+      })
+    })
+
+    expect(result.current.quotaCooldownUntil).not.toBeNull()
+    // Cooldown lifts ~5 minutes from now; just confirm it's far in the future.
+    if (result.current.quotaCooldownUntil !== null) {
+      expect(result.current.quotaCooldownUntil - Date.now()).toBeGreaterThan(4 * 60 * 1000)
+    }
+  })
+
+  test('retryLast is null when no error / no failed input (state machine #3)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+    expect(result.current.retryLast).toBeNull()
+  })
+
+  test('retryLast resurfaces after a retriable error and re-fires the last input', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    mockChatStart.mockResolvedValue({
+      sessionId: 1,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+
+    // Fire a send + emit a network error to surface retryLast.
+    await act(async () => {
+      await result.current.send({
+        message: 'hi',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6'
+      })
+    })
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'error', code: 'E_NETWORK', message: 'network down' }
+      })
+    })
+    expect(result.current.retryLast).not.toBeNull()
+
+    // Calling retryLast re-fires chat.start with the captured input.
+    mockChatStart.mockClear()
+    await act(async () => {
+      await result.current.retryLast?.()
+    })
+    expect(mockChatStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'hi',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6'
+      })
+    )
+  })
+
+  test('non-retriable error (E_NO_LLM_KEY) keeps retryLast null', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    mockChatStart.mockResolvedValue({
+      sessionId: 1,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+
+    await act(async () => {
+      await result.current.send({ message: 'hi', backendKind: 'custom-api' })
+    })
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'error', code: 'E_NO_LLM_KEY', message: 'no key' }
+      })
+    })
+    expect(result.current.error?.code).toBe('E_NO_LLM_KEY')
+    // Config errors don't get a Retry CTA (blind retry won't fix a missing key).
+    expect(result.current.retryLast).toBeNull()
+  })
+
   test('send() rejects when emailId is null', async () => {
     const { result } = renderHook(() => useEmailChat(null))
-    await expect(
-      result.current.send({ message: 'hi', backendKind: 'custom-api' })
-    ).rejects.toThrow(/no active email/)
+    await expect(result.current.send({ message: 'hi', backendKind: 'custom-api' })).rejects.toThrow(
+      /no active email/
+    )
     expect(mockChatStart).not.toHaveBeenCalled()
   })
 })

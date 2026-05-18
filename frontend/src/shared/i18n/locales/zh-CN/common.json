@@ -10,6 +10,70 @@
   "ai": {
     "compose": "起草回复"
   },
+  "toolbar": {
+    "back": "返回",
+    "draft": "起草回复",
+    "draftPending": "草稿创建中…",
+    "markRead": "已读",
+    "markUnread": "未读",
+    "toggleFlag": "标旗",
+    "archive": "归档",
+    "resync": "重传 Notion",
+    "resyncPending": "重传中…",
+    "llmRun": "AI 重跑",
+    "llmRunPending": "AI 处理中…",
+    "openNotion": "在 Notion 打开",
+    "prev": "上一封",
+    "next": "下一封",
+    "more": "更多"
+  },
+  "toolbarToast": {
+    "draftOk": "已打开 Mail.app 回复草稿",
+    "draftFailNoBin": "未配置 Mail 账户 (MAIL_ACCOUNT_NAME)",
+    "draftFailAuto": "macOS 自动化权限被拒 — 请到设置 → 隐私 → 自动化 开启",
+    "draftFailMail": "Mail.app 拒绝调用 — 请确认 Mail 已打开",
+    "draftFailGeneric": "草稿创建失败",
+    "resyncOk": "已重传到 Notion",
+    "resyncOkDry": "干跑成功 — 未实际写入",
+    "resyncFailAuth": "未配置 CLI API Key — 请在设置中配置",
+    "resyncFailPm2": "mail-sync 服务正在运行,无法并发写;请先停止再重试",
+    "resyncFailGeneric": "重传失败",
+    "llmOk": "AI 已重跑",
+    "llmOkDry": "干跑成功 — 未实际写入",
+    "llmFailGeneric": "AI 重跑失败",
+    "flagOk": "Notion 标记已更新",
+    "flagFailGeneric": "Notion 标记更新失败"
+  },
+  "toolbarConfirm": {
+    "resyncTitle": "确认重传到 Notion?",
+    "resyncBody": "此操作会覆盖 Notion 页面内容。先以 --dry-run 试跑还是直接重传?",
+    "resyncDry": "试跑",
+    "resyncReal": "直接重传",
+    "cancel": "取消"
+  },
+  "batchbar": {
+    "selection": "{n, plural, =1 {已选 1 封} other {已选 # 封}}",
+    "aiClassify": "AI 批量分类",
+    "aiDraft": "AI 批量起草",
+    "translate": "批量翻译",
+    "markRead": "标已读",
+    "archive": "归档",
+    "resync": "重传 Notion",
+    "estimate": "预估 ~{seconds}s · ${cost}",
+    "exit": "退出 (Esc)"
+  },
+  "batchToast": {
+    "running": "{op}: {done}/{total}",
+    "ok": "{op}: {n} 封完成",
+    "partial": "{op}: {done}/{total} 完成,{failed} 失败",
+    "cancelled": "{op}: 已取消({done}/{total} 完成)",
+    "comingSoon": "AI 批量起草将在 V1.5 上线",
+    "cancelTitle": "正在取消批量任务?",
+    "cancelBody": "再次按取消立即终止当前任务并保留已完成的进度。",
+    "cancelStop": "停止排队",
+    "cancelForce": "立即终止",
+    "cancelKeep": "继续"
+  },
   "search": {
     "placeholder": "搜索邮件…",
     "title": "全文搜索",
@@ -111,7 +175,9 @@
       "agentAuth": "Notion 登录已过期 — 请重新 init notion-agent",
       "agentNotInstalled": "notion-agent CLI 未安装 — 请运行 pipx install notion-agent-cli",
       "agentTimeout": "Notion Agent 超时 — 请重试",
-      "modelUnsupported": "当前 backend 不支持该模型"
+      "modelUnsupported": "当前 backend 不支持该模型",
+      "retry": "重试",
+      "quotaCooldown": "额度冷却中 · {seconds} 秒后可再次发送"
     },
     "toolCall": {
       "running": "执行中",

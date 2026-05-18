@@ -13,6 +13,7 @@ import '@shared/i18n'
 import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
+import { ToastContainer } from '@shared/components/Toast'
 
 export default function App(): React.ReactElement {
   // The client lives in a useState so HMR doesn't recreate it on every
@@ -42,6 +43,10 @@ export default function App(): React.ReactElement {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AppRouter />
+        {/* Sprint 5 §2.2 — toast stack mounts once at root so any
+            component (EmailToolbar / BatchActionBar / chat panel) can
+            fire success/error/long-task toasts via the zustand store. */}
+        <ToastContainer />
       </QueryClientProvider>
     </ErrorBoundary>
   )

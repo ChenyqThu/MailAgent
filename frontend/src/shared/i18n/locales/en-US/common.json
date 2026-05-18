@@ -10,6 +10,70 @@
   "ai": {
     "compose": "Draft reply"
   },
+  "toolbar": {
+    "back": "Back",
+    "draft": "Draft reply",
+    "draftPending": "Opening draft…",
+    "markRead": "Read",
+    "markUnread": "Unread",
+    "toggleFlag": "Flag",
+    "archive": "Archive",
+    "resync": "Resync Notion",
+    "resyncPending": "Resyncing…",
+    "llmRun": "Re-run AI",
+    "llmRunPending": "AI processing…",
+    "openNotion": "Open in Notion",
+    "prev": "Previous",
+    "next": "Next",
+    "more": "More"
+  },
+  "toolbarToast": {
+    "draftOk": "Mail.app reply draft opened",
+    "draftFailNoBin": "MAIL_ACCOUNT_NAME not set",
+    "draftFailAuto": "macOS automation denied — open Settings → Privacy → Automation",
+    "draftFailMail": "Mail.app refused — make sure Mail is open",
+    "draftFailGeneric": "Draft creation failed",
+    "resyncOk": "Resynced to Notion",
+    "resyncOkDry": "Dry-run OK — nothing written",
+    "resyncFailAuth": "CLI API key not configured — set it in Settings",
+    "resyncFailPm2": "mail-sync is running — stop it before retrying",
+    "resyncFailGeneric": "Resync failed",
+    "llmOk": "AI re-run complete",
+    "llmOkDry": "Dry-run OK — nothing written",
+    "llmFailGeneric": "AI re-run failed",
+    "flagOk": "Notion flag updated",
+    "flagFailGeneric": "Notion flag update failed"
+  },
+  "toolbarConfirm": {
+    "resyncTitle": "Confirm Notion resync?",
+    "resyncBody": "This will overwrite the Notion page. Run --dry-run first, or push directly?",
+    "resyncDry": "Dry-run",
+    "resyncReal": "Push directly",
+    "cancel": "Cancel"
+  },
+  "batchbar": {
+    "selection": "{n, plural, =1 {1 selected} other {# selected}}",
+    "aiClassify": "AI Classify",
+    "aiDraft": "AI Draft Reply",
+    "translate": "Translate",
+    "markRead": "Mark Read",
+    "archive": "Archive",
+    "resync": "Resync Notion",
+    "estimate": "~{seconds}s · ${cost}",
+    "exit": "Exit (Esc)"
+  },
+  "batchToast": {
+    "running": "{op}: {done}/{total}",
+    "ok": "{op}: {n} done",
+    "partial": "{op}: {done}/{total} done, {failed} failed",
+    "cancelled": "{op}: cancelled ({done}/{total} done)",
+    "comingSoon": "AI Draft batch ships in V1.5",
+    "cancelTitle": "Cancel the batch?",
+    "cancelBody": "Press cancel again to force-stop the current item, keeping completed progress.",
+    "cancelStop": "Stop queuing",
+    "cancelForce": "Force stop",
+    "cancelKeep": "Continue"
+  },
   "search": {
     "placeholder": "Search mail…",
     "title": "Search",
@@ -111,7 +175,9 @@
       "agentAuth": "Notion login expired — re-run notion-agent init",
       "agentNotInstalled": "notion-agent CLI not installed — run pipx install notion-agent-cli",
       "agentTimeout": "Notion Agent timed out — retry",
-      "modelUnsupported": "Current backend does not support this model"
+      "modelUnsupported": "Current backend does not support this model",
+      "retry": "Retry",
+      "quotaCooldown": "Quota cooldown · {seconds}s until next send"
     },
     "toolCall": {
       "running": "running",

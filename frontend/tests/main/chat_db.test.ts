@@ -66,18 +66,16 @@ describe('chat_db — path + schema bootstrap', () => {
     expect(names).toContain('ai_chat_sessions')
     expect(names).toContain('ai_chat_messages')
     expect(names).toContain('chat_db_meta')
-    const ver = db
-      .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
-      .get() as { value: string }
+    const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
+      value: string
+    }
     // Sprint 5 Day 1 (opus L carry-forward): bumped to 2 — metadata column.
     expect(ver.value).toBe('2')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
     const db = getChatDb()
-    const cols = db
-      .prepare('PRAGMA table_info(ai_chat_messages)')
-      .all() as Array<{ name: string }>
+    const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
   })
 
@@ -86,9 +84,9 @@ describe('chat_db — path + schema bootstrap', () => {
     closeChatDb()
     // Second open must succeed without throwing.
     const db = getChatDb()
-    const ver = db
-      .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
-      .get() as { value: string }
+    const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
+      value: string
+    }
     expect(ver.value).toBe('2')
   })
 
@@ -137,13 +135,11 @@ describe('chat_db — path + schema bootstrap', () => {
     seed.close()
 
     const db = getChatDb()
-    const ver = db
-      .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
-      .get() as { value: string }
+    const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
+      value: string
+    }
     expect(ver.value).toBe('2')
-    const cols = db
-      .prepare('PRAGMA table_info(ai_chat_messages)')
-      .all() as Array<{ name: string }>
+    const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // Old data preserved verbatim — the v1-stored thread_id encoding stays
     // in `model`, where notion_agent.extractTurn's backcompat reader picks
@@ -413,11 +409,7 @@ describe('chat_db — abort + cascade', () => {
 
     abortStreamingMessages(a.id)
 
-    expect(
-      listMessages(a.id).find((r) => r.status === 'streaming')
-    ).toBeUndefined()
-    expect(
-      listMessages(b.id).find((r) => r.status === 'streaming')
-    ).toBeTruthy()
+    expect(listMessages(a.id).find((r) => r.status === 'streaming')).toBeUndefined()
+    expect(listMessages(b.id).find((r) => r.status === 'streaming')).toBeTruthy()
   })
 })

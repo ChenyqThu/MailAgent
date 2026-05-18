@@ -63,7 +63,22 @@ export interface UseEmailChatReturn {
   abortCurrent: () => void
   /** Dismiss the error banner. */
   clearError: () => void
+  /** Sprint 5 §2.3 state-machine #3 — re-fire the last failed input, if any.
+   *  Surfaces a `Retry` button next to network / upstream errors. Null when
+   *  there's nothing retryable (initial render, after success, etc.). */
+  retryLast: (() => Promise<void>) | null
+  /** Sprint 5 §2.3 state-machine #4 — epoch millis when the upstream quota
+   *  cooldown lifts, or null when not throttled. AIChatPanel disables
+   *  `send` until this passes; Composer footer surfaces the remaining
+   *  seconds via `useTimeUntil`. */
+  quotaCooldownUntil: number | null
 }
+
+// Sprint 5 §2.3 state-machine #4: quota cooldown duration. The Anthropic
+// `E_QUOTA` reflects either a per-minute or per-day cap upstream; 5 minutes
+// is the conservative midpoint that lets the user keep working without
+// hammering CRS while we wait. Sprint 6 SettingsPage may expose an override.
+const QUOTA_COOLDOWN_MS = 5 * 60 * 1000
 
 export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const mailApi = useMailApi()
@@ -72,6 +87,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null)
   const [error, setError] = useState<ChatError | null>(null)
   const [lastEmailId, setLastEmailId] = useState<number | null>(emailId)
+  /** Sprint 5 state machine #3 — captures the last input that failed so a
+   *  Retry button can re-fire it. Set on every send(); cleared on success
+   *  done event. */
+  const [lastFailedInput, setLastFailedInput] = useState<SendChatInput | null>(null)
+  /** Sprint 5 state machine #4 — epoch millis when the quota cap lifts.
+   *  Set on E_QUOTA error, naturally elapses via the useEffect timer below. */
+  const [quotaCooldownUntil, setQuotaCooldownUntil] = useState<number | null>(null)
 
   // Mirror the latest committed emailId into a ref so `send()` can detect
   // a switch that happened while `chat.start()` was in flight. The closure
@@ -107,6 +129,11 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setMessages([])
     setActiveSessionIdState(null)
     setStreamingMessageId(null)
+    setLastFailedInput(null)
+    // NOTE: do NOT clear quotaCooldownUntil on email switch — the
+    // upstream quota is global to the CRS account; switching emails
+    // doesn't lift the cap. The cooldown timer below clears it on its
+    // own schedule.
   }
 
   // Mirror activeSessionId into a ref so the email-switch cleanup can
@@ -217,15 +244,34 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
 
       if (event.type === 'done') {
         setStreamingMessageId(null)
+        // Sprint 5 #3 — clear the retry buffer once the turn finished cleanly.
+        setLastFailedInput(null)
         // SSoT refresh (catch tool rows + token counts in one network query).
         void refresh(envelope.sessionId)
       } else if (event.type === 'error') {
         setStreamingMessageId(null)
         setError({ code: event.code, message: event.message })
+        // Sprint 5 state machine #4 — engage cooldown on quota cap.
+        if (event.code === 'E_QUOTA') {
+          setQuotaCooldownUntil(Date.now() + QUOTA_COOLDOWN_MS)
+        }
       }
     })
     return unsubscribe
   }, [mailApi, refresh])
+
+  // --- 2.5) quota cooldown self-clear timer --------------------------------
+  // Single timer that wakes when the cooldown lifts; safe to schedule
+  // because cooldown values are monotonically increasing and we only
+  // store one at a time. We always go through setTimeout (even when the
+  // delay is 0) so the state update lands on a fresh tick — calling
+  // setState directly in the effect body trips `react-hooks/set-state-in-effect`.
+  useEffect(() => {
+    if (quotaCooldownUntil === null) return undefined
+    const remaining = Math.max(0, quotaCooldownUntil - Date.now())
+    const t = setTimeout(() => setQuotaCooldownUntil(null), remaining)
+    return (): void => clearTimeout(t)
+  }, [quotaCooldownUntil])
 
   // --- 3) abort on email switch / unmount ----------------------------------
   // `activeSessionRef.current` may still be null at effect-run time (the
@@ -246,6 +292,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         throw new Error('useEmailChat.send: no active email (emailId is null)')
       }
       setError(null)
+      // Sprint 5 #3: capture the input so retryLast() can re-fire it on a
+      // transient failure. Cleared once we observe a `done` event on the
+      // stream subscription.
+      setLastFailedInput(input)
       // Snapshot the email this turn targets BEFORE awaiting. If the user
       // switches emails (or the hook unmounts) while `chat.start()` is in
       // flight, the snapshot diverges from `emailIdRef.current` and we
@@ -291,6 +341,24 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
 
   const clearError = useCallback(() => setError(null), [])
 
+  // Sprint 5 #3 — Retry CTA. Only available when:
+  //   1. we have a captured failed input (set in send())
+  //   2. the error is "retriable" (network / upstream / agent timeout)
+  // Other errors (E_NO_LLM_KEY / E_INVALID_ARG / E_MODEL_UNSUPPORTED) are
+  // user-config issues that a blind retry won't fix — surfacing the button
+  // there would mislead.
+  const isRetriableError = error !== null && RETRIABLE_ERROR_CODES.has(error.code)
+  const retryLast =
+    isRetriableError && lastFailedInput !== null
+      ? async (): Promise<void> => {
+          try {
+            await send(lastFailedInput)
+          } catch {
+            // send() captures errors via setError; nothing extra here.
+          }
+        }
+      : null
+
   return {
     messages,
     streamingMessageId,
@@ -299,6 +367,20 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     activeSessionId,
     send,
     abortCurrent,
-    clearError
+    clearError,
+    retryLast,
+    quotaCooldownUntil
   }
 }
+
+// Sprint 5 #3 — retry surface only on transient upstream issues. The list
+// matches the dispatcher's surfaceable network / upstream codes from
+// custom_api + notion_agent backends. E_ABORTED is intentionally absent —
+// aborts are user-initiated and shouldn't auto-re-fire.
+const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
+  'E_NETWORK',
+  'E_UPSTREAM',
+  'E_NOTION_AGENT_NETWORK',
+  'E_NOTION_AGENT_TIMEOUT',
+  'E_BACKEND_CRASH'
+])

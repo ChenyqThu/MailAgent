@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, Languages, Mail, RotateCcw, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -21,6 +21,7 @@ import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
 import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
+import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
@@ -137,10 +138,44 @@ function EmptyShell({ children }: { children: React.ReactNode }): React.ReactEle
   )
 }
 
+// Sprint 5 §2.2 — single pending bit per write op. Per-button enums let
+// EmailToolbar disable the right control without coupling all 4 to one
+// global "any write in flight" flag (user can re-run AI while a Notion
+// resync is still streaming back).
+type PendingMap = {
+  draft: boolean
+  resync: boolean
+  llmRun: boolean
+  read: boolean
+  flag: boolean
+}
+
+const NO_PENDING: PendingMap = {
+  draft: false,
+  resync: false,
+  llmRun: false,
+  read: false,
+  flag: false
+}
+
+interface WriteErrorShape {
+  code?: string
+  message: string
+}
+
+function asWriteError(err: unknown): WriteErrorShape {
+  if (err instanceof Error) {
+    return { code: (err as Error & { code?: string }).code, message: err.message }
+  }
+  return { message: String(err) }
+}
+
 export function EmailDetail({ internalId }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const queryClient = useQueryClient()
   const [showTranslation, setShowTranslation] = useState(false)
+  const [pending, setPending] = useState<PendingMap>(NO_PENDING)
   const [lastInternalId, setLastInternalId] = useState<number | null>(internalId)
   // React 19 "Adjusting state on prop change" pattern (react.dev/learn/you-might-not-need-an-effect):
   // resetting derived state on a prop transition is a render-time concern,
@@ -148,6 +183,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   if (lastInternalId !== internalId) {
     setLastInternalId(internalId)
     setShowTranslation(false)
+    setPending(NO_PENDING)
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays
@@ -204,6 +240,126 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // ⌥T toggle. `useShortcut` short-circuits in editable contexts so typing
   // "t" in an input doesn't fire (DESIGN.md §9.5).
   useShortcut('alt+t', toggleTranslation)
+
+  // ---- Sprint 5 §2.2 — write action handlers --------------------------------
+  //
+  // Each handler:
+  //   1. flips the per-button `pending` bit
+  //   2. fires the mailApi.* IPC + awaits its envelope
+  //   3. invalidates the `['email', id]` / `['email', id, 'ai']` queries on
+  //      success so the panel re-reads fresh data
+  //   4. surfaces success/error toast with i18n strings
+  //
+  // We don't toggle the pending bit back on a stale internalId — the
+  // setPending(NO_PENDING) reset on prop change covers that.
+
+  const handleCreateDraft = useCallback(async (): Promise<void> => {
+    if (internalId === null) return
+    setPending((p) => ({ ...p, draft: true }))
+    try {
+      await mailApi.email.createDraft({ internalId })
+      toastSuccess(t('toolbarToast.draftOk'))
+    } catch (err) {
+      const e = asWriteError(err)
+      const key =
+        e.code === 'E_AUTOMATION_DENIED'
+          ? 'toolbarToast.draftFailAuto'
+          : e.code === 'E_MAIL_NOT_RUNNING'
+            ? 'toolbarToast.draftFailMail'
+            : e.code === 'E_NO_MAILBOX' || e.code === 'E_NOT_FOUND'
+              ? 'toolbarToast.draftFailNoBin'
+              : 'toolbarToast.draftFailGeneric'
+      toastError(t(key), e.code ? `${e.code} · ${e.message}` : e.message)
+    } finally {
+      setPending((p) => ({ ...p, draft: false }))
+    }
+  }, [internalId, mailApi, t])
+
+  const handleResync = useCallback(
+    async ({ dryRun }: { dryRun: boolean }): Promise<void> => {
+      if (internalId === null) return
+      setPending((p) => ({ ...p, resync: true }))
+      try {
+        await mailApi.email.resync(internalId, { dryRun, replaceExisting: !dryRun })
+        toastSuccess(t(dryRun ? 'toolbarToast.resyncOkDry' : 'toolbarToast.resyncOk'))
+        if (!dryRun) {
+          await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
+          await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+        }
+      } catch (err) {
+        const e = asWriteError(err)
+        const key =
+          e.code === 'E_AUTH'
+            ? 'toolbarToast.resyncFailAuth'
+            : e.code === 'E_PM2_RUNNING' || e.code === 'E_PM2_CONFLICT'
+              ? 'toolbarToast.resyncFailPm2'
+              : 'toolbarToast.resyncFailGeneric'
+        toastError(t(key), e.code ? `${e.code} · ${e.message}` : e.message)
+      } finally {
+        setPending((p) => ({ ...p, resync: false }))
+      }
+    },
+    [internalId, mailApi, queryClient, t]
+  )
+
+  const handleLlmRun = useCallback(async (): Promise<void> => {
+    if (internalId === null) return
+    setPending((p) => ({ ...p, llmRun: true }))
+    try {
+      await mailApi.llm.run(internalId, { force: true })
+      toastSuccess(t('toolbarToast.llmOk'))
+      await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+    } catch (err) {
+      const e = asWriteError(err)
+      toastError(t('toolbarToast.llmFailGeneric'), e.code ? `${e.code} · ${e.message}` : e.message)
+    } finally {
+      setPending((p) => ({ ...p, llmRun: false }))
+    }
+  }, [internalId, mailApi, queryClient, t])
+
+  const handleToggleRead = useCallback(
+    async (currentIsRead: boolean): Promise<void> => {
+      if (internalId === null) return
+      setPending((p) => ({ ...p, read: true }))
+      try {
+        await mailApi.notion.updateFlag(internalId, { isRead: !currentIsRead })
+        toastSuccess(t('toolbarToast.flagOk'))
+        await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
+        await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+      } catch (err) {
+        const e = asWriteError(err)
+        toastError(
+          t('toolbarToast.flagFailGeneric'),
+          e.code ? `${e.code} · ${e.message}` : e.message
+        )
+      } finally {
+        setPending((p) => ({ ...p, read: false }))
+      }
+    },
+    [internalId, mailApi, queryClient, t]
+  )
+
+  const handleToggleFlag = useCallback(
+    async (currentIsFlagged: boolean): Promise<void> => {
+      if (internalId === null) return
+      setPending((p) => ({ ...p, flag: true }))
+      try {
+        await mailApi.notion.updateFlag(internalId, { isFlagged: !currentIsFlagged })
+        toastSuccess(t('toolbarToast.flagOk'))
+        await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
+        await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
+      } catch (err) {
+        const e = asWriteError(err)
+        toastError(
+          t('toolbarToast.flagFailGeneric'),
+          e.code ? `${e.code} · ${e.message}` : e.message
+        )
+      } finally {
+        setPending((p) => ({ ...p, flag: false }))
+      }
+    },
+    [internalId, mailApi, queryClient, t]
+  )
 
   if (internalId === null) {
     return (
@@ -267,6 +423,19 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           status: translateStatus,
           onToggle: toggleTranslation
         }}
+        onCreateDraft={handleCreateDraft}
+        draftState={{ pending: pending.draft }}
+        onResync={handleResync}
+        resyncState={{ pending: pending.resync }}
+        onLlmRun={handleLlmRun}
+        llmRunState={{ pending: pending.llmRun }}
+        onToggleRead={() => void handleToggleRead(email.is_read)}
+        isRead={email.is_read}
+        readState={{ pending: pending.read }}
+        onToggleFlag={() => void handleToggleFlag(email.is_flagged)}
+        isFlagged={email.is_flagged}
+        flagState={{ pending: pending.flag }}
+        notionUrl={email.notion_url}
       />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">

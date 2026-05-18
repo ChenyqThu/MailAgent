@@ -20,20 +20,26 @@ import type {
   ChatStartOpts,
   ChatStartResult,
   ChatStreamEnvelope,
+  CreateDraftOpts,
+  CreateDraftResult,
   EmailApi,
   EmailBody,
   EmailDetail,
   EmailMeta,
   EnrichedEmailMeta,
   ListOpts,
+  LlmApi,
+  LlmRunOpts,
   MailApi,
   MailboxSummary,
+  NotionWriteApi,
   ResyncOpts,
   ResyncResult,
   SearchHit,
   SearchOpts,
   TargetLang,
-  TranslationResult
+  TranslationResult,
+  UpdateFlagOpts
 } from './types'
 
 type IpcInvoker = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -95,6 +101,22 @@ function subscribe(channel: string, listener: IpcListener): () => void {
   }
 }
 
+// Sprint 5 §2.2 — every write IPC returns this envelope so Electron IPC's
+// loss of custom Error properties (codex review M-3) doesn't collapse
+// downstream UI fallback branches. Throw on the renderer side with `code`
+// on the Error instance so call sites can still do `err.code === 'E_AUTH'`.
+type WriteEnvelope<T> =
+  | { ok: true; data: T }
+  | { ok: false; code: string; message: string; hint?: string }
+
+function unwrap<T>(env: WriteEnvelope<T>): T {
+  if (env.ok) return env.data
+  const err = new Error(env.message) as Error & { code?: string; hint?: string }
+  err.code = env.code
+  if (env.hint !== undefined) err.hint = env.hint
+  throw err
+}
+
 class ElectronEmailApi implements EmailApi {
   async list(opts: ListOpts): Promise<EmailMeta[]> {
     return (await invoker()('email:list', opts)) as EmailMeta[]
@@ -121,9 +143,30 @@ class ElectronEmailApi implements EmailApi {
     return (await invoker()('email:search', opts)) as SearchHit[]
   }
   async resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult> {
-    // Wired in Sprint 5 via cli_runner. Renderer can already call it; the
-    // main handler will register at that point.
-    return (await invoker()('email:resync', internalId, opts ?? {})) as ResyncResult
+    const env = (await invoker()('email:resync', internalId, opts ?? {})) as WriteEnvelope<unknown>
+    return unwrap(env) as ResyncResult
+  }
+  async createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
+    const env = (await invoker()('email:createDraft', opts)) as WriteEnvelope<CreateDraftResult>
+    return unwrap(env)
+  }
+}
+
+class ElectronLlmApi implements LlmApi {
+  async run(internalId: number, opts?: LlmRunOpts): Promise<unknown> {
+    const env = (await invoker()('llm:run', internalId, opts ?? {})) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+}
+
+class ElectronNotionWriteApi implements NotionWriteApi {
+  async updateFlag(internalId: number, opts: UpdateFlagOpts): Promise<unknown> {
+    const env = (await invoker()(
+      'notion:updateFlag',
+      internalId,
+      opts ?? {}
+    )) as WriteEnvelope<unknown>
+    return unwrap(env)
   }
 }
 
@@ -200,4 +243,6 @@ export class ElectronApi implements MailApi {
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()
   chat: ChatApi = new ElectronChatApi()
+  llm: LlmApi = new ElectronLlmApi()
+  notion: NotionWriteApi = new ElectronNotionWriteApi()
 }

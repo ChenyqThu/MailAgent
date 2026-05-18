@@ -26,11 +26,12 @@ import {
   __resetChatDispatcher,
   type StreamSink
 } from '../../src/electron/main/chat/dispatcher'
-import {
-  __resetBackendRegistry,
-  registerChatBackend
-} from '../../src/electron/main/chat/registry'
-import type { ChatBackend, ChatStreamEnvelope, ChatStreamEvent } from '../../src/electron/main/chat/types'
+import { __resetBackendRegistry, registerChatBackend } from '../../src/electron/main/chat/registry'
+import type {
+  ChatBackend,
+  ChatStreamEnvelope,
+  ChatStreamEvent
+} from '../../src/electron/main/chat/types'
 
 let tmpDir: string
 
@@ -211,9 +212,7 @@ describe('dispatcher — abort', () => {
     )
     await tickAsync()
 
-    expect(listMessages(r.sessionId).find((m) => m.role === 'assistant')!.status).toBe(
-      'streaming'
-    )
+    expect(listMessages(r.sessionId).find((m) => m.role === 'assistant')!.status).toBe('streaming')
 
     const flipped = abortChatSession(r.sessionId)
     await tickAsync()
@@ -323,12 +322,8 @@ describe('dispatcher — abort', () => {
     abortAllChatSessions()
     await tickAsync()
 
-    expect(listMessages(ra.sessionId).find((m) => m.role === 'assistant')!.status).toBe(
-      'aborted'
-    )
-    expect(listMessages(rb.sessionId).find((m) => m.role === 'assistant')!.status).toBe(
-      'aborted'
-    )
+    expect(listMessages(ra.sessionId).find((m) => m.role === 'assistant')!.status).toBe('aborted')
+    expect(listMessages(rb.sessionId).find((m) => m.role === 'assistant')!.status).toBe('aborted')
   })
 })
 
@@ -551,12 +546,8 @@ describe('dispatcher — multi-session isolation', () => {
     abortChatSession(r1.sessionId)
     await tickAsync()
 
-    expect(listMessages(r1.sessionId).find((m) => m.role === 'assistant')!.status).toBe(
-      'aborted'
-    )
-    expect(listMessages(r2.sessionId).find((m) => m.role === 'assistant')!.status).toBe(
-      'streaming'
-    )
+    expect(listMessages(r1.sessionId).find((m) => m.role === 'assistant')!.status).toBe('aborted')
+    expect(listMessages(r2.sessionId).find((m) => m.role === 'assistant')!.status).toBe('streaming')
 
     abortChatSession(r2.sessionId)
   })

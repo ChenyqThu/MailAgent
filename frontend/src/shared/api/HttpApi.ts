@@ -22,7 +22,11 @@ export class HttpApi implements MailApi {
     body: () => notImplemented('email.body'),
     aiFields: () => notImplemented('email.aiFields'),
     search: () => notImplemented('email.search'),
-    resync: () => notImplemented('email.resync')
+    resync: () => notImplemented('email.resync'),
+    // Sprint 5 §2.2 — V2 web build has no Mail.app on the remote host, so
+    // createDraft must round-trip through the local FastAPI which then runs
+    // osascript on the LAN host. Wired in V2-Sprint 3.
+    createDraft: () => notImplemented('email.createDraft')
   }
 
   attachment = {
@@ -47,5 +51,14 @@ export class HttpApi implements MailApi {
     listMessages: () => notImplemented('chat.listMessages'),
     listSessions: () => notImplemented('chat.listSessions'),
     onStream: (): (() => void) => () => undefined
+  }
+
+  // Sprint 5 §2.2 — CLI-backed writes via the local FastAPI in V2.
+  llm = {
+    run: () => notImplemented('llm.run')
+  }
+
+  notion = {
+    updateFlag: () => notImplemented('notion.updateFlag')
   }
 }

@@ -10,6 +10,8 @@ import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
 import { registerChatBackend } from './chat/registry'
 import { CustomApiBackend } from './chat/backends/custom_api'
 import { NotionAgentBackend } from './chat/backends/notion_agent'
+import { registerWriteOpsHandlers } from './handlers/write_ops'
+import { registerDraftHandlers } from './handlers/draft'
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -99,6 +101,10 @@ app.whenReady().then(() => {
   registerChatBackend(new CustomApiBackend())
   registerChatBackend(new NotionAgentBackend())
   registerChatHandlers()
+  // Sprint 5 §2.2 — Mail.app write commands (createDraft via AppleScript,
+  // resync / llm:run / notion:updateFlag via `mailagent` CLI fork).
+  registerDraftHandlers()
+  registerWriteOpsHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 

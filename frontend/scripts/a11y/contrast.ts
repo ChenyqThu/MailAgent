@@ -137,7 +137,8 @@ async function auditCombo(page: Page, combo: Combo): Promise<ViolationLine[]> {
 }
 
 function formatPlain(lines: ViolationLine[]): string {
-  if (lines.length === 0) return '✓ a11y:contrast — 12 combinations clean (WCAG AA, color-contrast)\n'
+  if (lines.length === 0)
+    return '✓ a11y:contrast — 12 combinations clean (WCAG AA, color-contrast)\n'
 
   // Group by combo for a compact summary; full details on --json only.
   const byCombo = new Map<string, number>()
@@ -200,6 +201,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  log(`a11y:contrast crashed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`)
+  log(`a11y:contrast crashed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
   process.exit(2)
 })
