@@ -85,6 +85,25 @@ function lookupMailbox(internalId: number): EmailMailboxRow | null {
   return row ?? null
 }
 
+/** Sprint 5 ship-review (opus MEDIUM #1): defense-in-depth against an attacker
+ *  who can write to `email_metadata.mailbox` (backend SoT). Control characters
+ *  inside an AppleScript string literal accept newlines verbatim, so a
+ *  mailbox containing `\n` + `end tell` + a malicious tell block COULD inject
+ *  if the quote escape ever drifted. The actual injection vector requires
+ *  also escaping `"` (which we do), but a strict allowlist closes the door
+ *  on every other route at near-zero cost. */
+export function isMailboxNameSafe(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    // C0 controls (0x00-0x1F) + DEL (0x7F): not valid in a Mail.app
+    // mailbox display name, and would break out of the AppleScript line.
+    // (Codepoint iteration rather than control-char regex; eslint
+    // `no-control-regex` disallows literal control chars in regex.)
+    if (code <= 0x1f || code === 0x7f) return false
+  }
+  return true
+}
+
 /** The Mail.app account name we look up the message under. Backend's
  *  `MAIL_ACCOUNT_NAME` env (see project CLAUDE.md) is the canonical
  *  setting — frontend re-reads it so we don't duplicate the contract.
@@ -221,6 +240,17 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
       { code: 'E_NO_MAILBOX' }
     )
   }
+  // Sprint 5 ship-review (opus MEDIUM #1): reject mailbox names that contain
+  // control characters before they reach AppleScript. The quote/backslash
+  // escape stays the primary defense; this is the second layer.
+  if (!isMailboxNameSafe(row.mailbox)) {
+    throw Object.assign(
+      new Error(
+        `mailbox name contains disallowed control chars for internal_id=${opts.internalId}`
+      ),
+      { code: 'E_INVALID_MAILBOX' }
+    )
+  }
   const accountName = getAccountName()
   const trimmedBody =
     typeof opts.body === 'string' && opts.body.length > 0
@@ -289,5 +319,6 @@ export function registerDraftHandlers(): void {
 export const __testing = {
   buildDraftScript,
   classifyAppleScriptError,
+  isMailboxNameSafe,
   lookupMailbox
 }

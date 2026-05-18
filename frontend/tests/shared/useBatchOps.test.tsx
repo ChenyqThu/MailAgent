@@ -12,8 +12,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 
+import i18n from '@shared/i18n'
 import { __resetToastStore, useToastStore } from '../../src/shared/state/toast'
 import { useBatchOps } from '../../src/shared/hooks/useBatchOps'
+
+// Sprint 5 ship-review: useBatchOps now resolves terminal toast strings
+// through i18n. Pin the locale here so the snapshot assertion below is
+// deterministic (en-US is the test default).
+await i18n.changeLanguage('en-US')
 
 beforeEach(() => {
   __resetToastStore()
@@ -127,7 +133,9 @@ describe('useBatchOps — run', () => {
     expect(items.length).toBe(1)
     expect(items[0].variant).toBe('success')
     expect(items[0].title).toContain('translate')
-    expect(items[0].title).toContain('2/2')
+    // en-US batchToast.ok = "{op}: {n} done"
+    expect(items[0].title).toContain('2')
+    expect(items[0].title).toContain('done')
   })
 
   test('zero ids → no-op summary, no toast', async () => {

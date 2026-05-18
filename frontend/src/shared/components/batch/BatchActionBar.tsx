@@ -223,11 +223,12 @@ export function BatchActionBar(): React.ReactElement | null {
               'text-aux text-fail hover:bg-fail/10 px-2 py-1 rounded transition-colors duration-fast'
             )}
           >
-            {ops.cancelStage === 0
-              ? t('batchToast.cancelStop')
-              : ops.cancelStage === 1
-                ? t('batchToast.cancelForce')
-                : t('batchToast.cancelForce')}
+            {/* Sprint 5 ship-review (opus LOW): the two cancelStage>=1
+                branches both surfaced `cancelForce` — visible UX dead zone.
+                Until stage 2's force-stop is wired (Sprint 5.5: renderer-side
+                Promise.race against the in-flight unit), collapse to a binary
+                state. */}
+            {ops.cancelStage === 0 ? t('batchToast.cancelStop') : t('batchToast.cancelForce')}
           </button>
         ) : (
           <button

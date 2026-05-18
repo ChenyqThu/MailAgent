@@ -19,6 +19,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 
+import i18n from '@shared/i18n'
 import { toastError, toastSuccess, useToastStore } from '@shared/state/toast'
 
 export type BatchUnitOutcome =
@@ -117,12 +118,16 @@ export function useBatchOps(): UseBatchOpsReturn {
     setCancelStage(0)
     cancelStageRef.current = 0
 
+    // Sprint 5 ship-review (opus LOW): route terminal strings through i18n
+    // so zh-CN locale doesn't end up with "AI 批量分类: 3/3 done" mixed.
+    // The hook can't call `useTranslation()` (it's an event-time emit), so
+    // we go through the module-level i18n.t.
     if (cancelled) {
-      toastError(`${args.opLabel}: cancelled (${done}/${total} done)`)
+      toastError(i18n.t('batchToast.cancelled', { op: args.opLabel, done, total }))
     } else if (failed === 0) {
-      toastSuccess(`${args.opLabel}: ${done}/${total} done`)
+      toastSuccess(i18n.t('batchToast.ok', { op: args.opLabel, n: done }))
     } else {
-      toastError(`${args.opLabel}: ${done}/${total} done, ${failed} failed`)
+      toastError(i18n.t('batchToast.partial', { op: args.opLabel, done, total, failed }))
     }
 
     return { total, done, failed, cancelled, outcomes }
