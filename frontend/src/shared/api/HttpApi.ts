@@ -55,10 +55,45 @@ export class HttpApi implements MailApi {
 
   // Sprint 5 §2.2 — CLI-backed writes via the local FastAPI in V2.
   llm = {
-    run: () => notImplemented('llm.run')
+    run: () => notImplemented('llm.run'),
+    // Sprint 6 — read-only stats can be served by the FastAPI directly
+    // (no Mac-specific deps). Wired in V2-Sprint 3.
+    stats: () => notImplemented('llm.stats'),
+    selftest: () => notImplemented('llm.selftest')
   }
 
   notion = {
     updateFlag: () => notImplemented('notion.updateFlag')
+  }
+
+  // Sprint 6 §2.2 — admin dashboard / calendar / settings.
+  // V2 web SPA will proxy each of these through the local FastAPI; the
+  // Cloudflare Tunnel + Access combo means the secrets stay on the Mac.
+  admin = {
+    health: () => notImplemented('admin.health'),
+    stats: () => notImplemented('admin.stats'),
+    deadLetterList: () => notImplemented('admin.deadLetterList'),
+    deadLetterRetry: () => notImplemented('admin.deadLetterRetry'),
+    cleanupDeadLetter: () => notImplemented('admin.cleanupDeadLetter')
+  }
+
+  calendar = {
+    recurringDiscover: () => notImplemented('calendar.recurringDiscover'),
+    recurringReplay: () => notImplemented('calendar.recurringReplay'),
+    expand: () => notImplemented('calendar.expand')
+  }
+
+  // Web SPA has no keytar — V2 will surface a "configure on the Mac" hint
+  // instead of a writable form. Reads of `settings.get()` can still proxy
+  // through FastAPI for poll-interval / Notion Agent binding (non-secret).
+  settings = {
+    secretsStatus: () => notImplemented('settings.secretsStatus'),
+    setSecret: () => notImplemented('settings.setSecret'),
+    clearSecret: () => notImplemented('settings.clearSecret'),
+    get: () => notImplemented('settings.get'),
+    set: () => notImplemented('settings.set'),
+    pickFolder: () => notImplemented('settings.pickFolder'),
+    testLlm: () => notImplemented('settings.testLlm'),
+    testCustomApi: () => notImplemented('settings.testCustomApi')
   }
 }

@@ -166,9 +166,186 @@ export interface EmailApi {
   createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult>
 }
 
+// ---- Sprint 6 §2.2 — LLM dashboard surface --------------------------------
+
+export interface LlmStatsData {
+  total: number
+  by_status: Record<string, number>
+  days: number
+  since_ts: number
+  cost: {
+    input_tokens: number
+    output_tokens: number
+    cache_creation_input_tokens: number
+    cache_read_input_tokens: number
+    cache_hit_rate_pct: number
+    avg_latency_ms: number
+    success_rows: number
+  }
+}
+
+export interface LlmSelfTestData {
+  healthy: boolean
+  detail?: string
+  latency_ms?: number
+}
+
 export interface LlmApi {
   /** Sprint 5 — re-run AI classification for one email via `mailagent llm run`. */
   run(internalId: number, opts?: LlmRunOpts): Promise<unknown>
+  /** Sprint 6 — aggregate stats for the LLM dashboard (cost / cache hit / latency). */
+  stats(days?: number): Promise<LlmStatsData>
+  /** Sprint 6 — no-token health probe for the LLM gateway. */
+  selftest(): Promise<LlmSelfTestData>
+}
+
+// ---- Sprint 6 §2.2 — admin dashboard surface ------------------------------
+
+export interface AdminHealthData {
+  db_path: string
+  db_accessible: boolean
+  db_version: number
+  db_version_expected: number
+  schema_ok: boolean
+  tables_present: string[]
+  tables_missing: string[]
+  healthy: boolean
+}
+
+export interface AdminStatsData {
+  watcher?: Record<string, unknown>
+  sync_store?: {
+    total_emails: number
+    by_status: Record<string, number>
+    by_mailbox: Record<string, number>
+    failure_queue: number
+    last_max_row_id: number | null
+    last_sync_time: string | null
+    db_size_mb: number
+    db_size_bytes: number
+    _source?: string
+  }
+  handlers?: Record<string, unknown>
+  v4_rollout?: {
+    from_sqlite_hit: number
+    fallback_miss: number
+    fallback_error: number
+    route_latency_p99_ms: number
+    body_miss_internal_ids: number[]
+    window_seconds: number
+    _staleness_seconds?: number
+    _source?: string
+  }
+}
+
+export interface DeadLetterItem {
+  internal_id: number
+  mailbox: string | null
+  subject: string | null
+  sender: string | null
+  date_received: string | null
+  retry_count: number
+  sync_status: string
+  sync_error: string | null
+  updated_at: string | null
+}
+
+export interface DeadLetterListOpts {
+  limit?: number
+  mailbox?: string
+}
+
+export interface CleanupDeadLetterOpts {
+  olderThan?: number
+  dryRun?: boolean
+}
+
+export interface AdminApi {
+  health(): Promise<AdminHealthData>
+  stats(): Promise<AdminStatsData>
+  deadLetterList(opts?: DeadLetterListOpts): Promise<DeadLetterItem[]>
+  /** Re-arms a dead-letter email for retry (write+auth). Throws Error & { code }
+   *  on failure exactly like the other write methods. */
+  deadLetterRetry(internalId: number): Promise<unknown>
+  /** Run the cleanup-deadletter command (write+auth unless dryRun). */
+  cleanupDeadLetter(opts?: CleanupDeadLetterOpts): Promise<unknown>
+}
+
+// ---- Sprint 6 §2.2 — calendar (recurring meeting) surface -----------------
+
+export interface RecurringInviteItem {
+  internal_id: number
+  subject: string | null
+  organizer: string | null
+  rrule: string | null
+  notion_page_id: string | null
+  first_occurrence: string | null
+  last_occurrence: string | null
+  occurrence_count: number | null
+  date_received: string | null
+}
+
+export interface RecurringDiscoverOpts {
+  /** ISO date (YYYY-MM-DD). Defaults to CLI's "last 30 days" if omitted. */
+  since?: string
+}
+
+export interface RecurringReplayOpts {
+  internalId?: number
+  ids?: number[]
+  dryRun?: boolean
+}
+
+export interface CalendarExpandOpts {
+  horizonWeeks?: number
+  dryRun?: boolean
+}
+
+export interface CalendarApi {
+  recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]>
+  recurringReplay(opts: RecurringReplayOpts): Promise<unknown>
+  expand(opts?: CalendarExpandOpts): Promise<unknown>
+}
+
+// ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------
+
+export type SecretSlot = 'cliApiKey' | 'llmApiKey' | 'customApiKey'
+
+export interface SecretsStatus {
+  cliApiKey: boolean
+  llmApiKey: boolean
+  customApiKey: boolean
+}
+
+export interface PersistentSettings {
+  dbPath: string | null
+  attachmentDir: string | null
+  pollIntervalSec: 5 | 10 | 30 | 0
+  notionAgentPageId: string | null
+  notionAgentName: string | null
+  customApiEndpoint: string | null
+}
+
+export interface PingResult {
+  ok: boolean
+  detail?: string
+  code?: string
+}
+
+export interface SettingsApi {
+  /** Returns booleans only — the secret values never leave keytar. */
+  secretsStatus(): Promise<SecretsStatus>
+  /** Empty string clears the slot; otherwise stores in keytar. */
+  setSecret(slot: SecretSlot, value: string): Promise<SecretsStatus>
+  clearSecret(slot: SecretSlot): Promise<SecretsStatus>
+  get(): Promise<PersistentSettings>
+  set(partial: Partial<PersistentSettings>): Promise<PersistentSettings>
+  /** Native folder picker. Returns absolute path or null on cancel. */
+  pickFolder(title?: string): Promise<string | null>
+  /** Pings the LLM gateway via `mailagent llm selftest`. */
+  testLlm(): Promise<PingResult>
+  /** Soft check: confirms custom-api-key + endpoint configured. */
+  testCustomApi(): Promise<PingResult>
 }
 
 export interface NotionWriteApi {
@@ -334,4 +511,10 @@ export interface MailApi {
   chat: ChatApi
   llm: LlmApi
   notion: NotionWriteApi
+  /** Sprint 6 — admin dashboard data. */
+  admin: AdminApi
+  /** Sprint 6 — recurring meeting list. */
+  calendar: CalendarApi
+  /** Sprint 6 — SettingsPage IPC surface (keytar + persistent settings). */
+  settings: SettingsApi
 }

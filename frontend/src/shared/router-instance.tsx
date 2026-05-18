@@ -7,8 +7,12 @@
 
 import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router'
 
+import { AdminLayout } from './components/layout/AdminLayout'
+import { CalendarLayout } from './components/layout/CalendarLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
+import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
 import { SearchLayout } from './components/layout/SearchLayout'
+import { SettingsLayout } from './components/layout/SettingsLayout'
 
 function RootLayout(): React.ReactElement {
   return <Outlet />
@@ -28,8 +32,40 @@ const searchRoute = createRoute({
   component: SearchLayout
 })
 
+// Sprint 6 §2.2 — secondary routes.
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin',
+  component: AdminLayout
+})
+
+const llmRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/llm',
+  component: LlmDashboardLayout
+})
+
+const calendarRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/calendar',
+  component: CalendarLayout
+})
+
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings',
+  component: SettingsLayout
+})
+
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([inboxRoute, searchRoute])
+  routeTree: rootRoute.addChildren([
+    inboxRoute,
+    searchRoute,
+    adminRoute,
+    llmRoute,
+    calendarRoute,
+    settingsRoute
+  ])
 })
 
 declare module '@tanstack/react-router' {

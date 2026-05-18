@@ -468,3 +468,34 @@ mark {
 .dot-pulse {
   animation: pulse-dot 1.4s ease-in-out infinite;
 }
+
+/* Sprint 6 §2.2 — accent swatch preview pills for SettingsPage.
+ *
+ * The currently-active accent drives --c-accent at :root via data-accent
+ * (see top of this file); these swatch classes always render their own
+ * accent regardless of active state so the picker UI shows all 6 options
+ * side-by-side. rgb() values mirror the data-accent={x} --c-accent stop
+ * upstream (channels-only triplets above) into a 135deg gradient with a
+ * 10% darken stop for dimension.
+ *
+ * Defined in CSS so the .tsx file stays compliant with the
+ * `mailagent/no-raw-hex` lint rule (DESIGN.md §14 #1).
+ */
+.swatch-coral {
+  background: linear-gradient(135deg, rgb(244, 140, 114), rgb(232, 124, 98));
+}
+.swatch-cobalt {
+  background: linear-gradient(135deg, rgb(122, 162, 248), rgb(100, 144, 240));
+}
+.swatch-teal {
+  background: linear-gradient(135deg, rgb(92, 212, 196), rgb(70, 190, 174));
+}
+.swatch-rose {
+  background: linear-gradient(135deg, rgb(236, 132, 158), rgb(220, 114, 140));
+}
+.swatch-slate {
+  background: linear-gradient(135deg, rgb(174, 184, 200), rgb(152, 162, 178));
+}
+.swatch-olive {
+  background: linear-gradient(135deg, rgb(196, 208, 122), rgb(172, 184, 106));
+}

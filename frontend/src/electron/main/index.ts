@@ -12,6 +12,11 @@ import { CustomApiBackend } from './chat/backends/custom_api'
 import { NotionAgentBackend } from './chat/backends/notion_agent'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { registerDraftHandlers } from './handlers/draft'
+// Sprint 6 §2.2 — admin / llm dashboard / calendar / settings IPC handlers.
+import { registerAdminHandlers } from './handlers/admin'
+import { registerLlmStatsHandlers } from './handlers/llm_stats'
+import { registerCalendarHandlers } from './handlers/calendar'
+import { registerSettingsHandlers } from './handlers/settings'
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -105,6 +110,14 @@ app.whenReady().then(() => {
   // resync / llm:run / notion:updateFlag via `mailagent` CLI fork).
   registerDraftHandlers()
   registerWriteOpsHandlers()
+  // Sprint 6 §2.2 — admin dashboard / LLM dashboard / calendar list /
+  // settings page. Each handler group is read-only by default (admin:health,
+  // admin:stats, llm:stats, calendar:recurringDiscover) with separate
+  // write+auth channels for retry / replay / cleanup.
+  registerAdminHandlers()
+  registerLlmStatsHandlers()
+  registerCalendarHandlers()
+  registerSettingsHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 

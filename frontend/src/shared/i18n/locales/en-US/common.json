@@ -185,5 +185,142 @@
       "error": "failed"
     },
     "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
+  },
+  "admin": {
+    "title": "Admin",
+    "healthy": "Healthy",
+    "unhealthy": "Unhealthy",
+    "loading": "Loading…",
+    "retry": "Retry",
+    "retryOk": "Email #{id} re-queued",
+    "retryFail": "Email #{id} retry failed",
+    "dbVersion": "DB version",
+    "tables": "Tables",
+    "allTablesPresent": "All present",
+    "missingTables": "{n} missing",
+    "dbAccessible": "Accessible",
+    "schemaOk": "Schema OK",
+    "syncStore": "Sync store",
+    "totalEmails": "Total emails",
+    "failureQueue": "Failure queue",
+    "failureQueueHint": "Pending retry + dead-letter",
+    "dbSize": "DB size",
+    "lastRowId": "Last row id",
+    "statusDist": "Status distribution",
+    "byMailbox": "By mailbox",
+    "v4Rollout": "v4 SQLite-SSoT rollout",
+    "deadLetter": "Dead-letter",
+    "noDeadLetter": "No dead-letter emails",
+    "col": {
+      "subject": "Subject",
+      "sender": "Sender",
+      "mailbox": "Mailbox",
+      "retries": "Retries",
+      "error": "Error",
+      "updated": "Updated",
+      "action": "Action"
+    }
+  },
+  "llm": {
+    "title": "LLM Dashboard",
+    "loading": "Loading…",
+    "error": "Failed to load · retry",
+    "processed": "Processed",
+    "days": "past {n}d",
+    "inputTokens": "Input tokens",
+    "outputTokens": "Output tokens",
+    "avgLatency": "Avg latency",
+    "statusDist": "Status distribution",
+    "cacheHit": "Cache hit rate",
+    "cacheTokens": "Cache tokens",
+    "selftest": "Self-test",
+    "selftestPending": "Testing…",
+    "selftestOk": "Gateway healthy",
+    "selftestFail": "Gateway unreachable"
+  },
+  "calendar": {
+    "title": "Recurring meetings",
+    "subtitle": "Invitations received since {since}; replay each one to the Notion calendar.",
+    "loading": "Loading…",
+    "empty": "No recurring meetings found",
+    "replay": "Replay",
+    "replayOk": "Email #{id} replayed",
+    "replayFail": "Email #{id} replay failed",
+    "col": {
+      "subject": "Subject",
+      "organizer": "Organizer",
+      "rrule": "RRULE",
+      "firstOccur": "First",
+      "lastOccur": "Last",
+      "count": "Count",
+      "action": "Action"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "appearance": "Appearance",
+    "themeMode": "Theme",
+    "themeModeHint": "Light / Follow system / Dark",
+    "theme": {
+      "light": "Light",
+      "system": "System",
+      "dark": "Dark"
+    },
+    "accent": "Accent",
+    "accentHint": "6 swatches · drives the primary CTA + chip color",
+    "inbox": "Inbox",
+    "pollInterval": "Poll interval",
+    "pollIntervalHint": "New-email check frequency; off disables auto polling.",
+    "aiBackends": "AI backends",
+    "notionAgent": "Notion Agent binding",
+    "notionAgentHint": "Default backend for AI Chat; page_id from `notion-agent agents list`.",
+    "notionAgentIdPlaceholder": "agent page id (UUID-ish)",
+    "notionAgentNamePlaceholder": "Display name (optional)",
+    "customApiEndpoint": "Custom API endpoint",
+    "customApiEndpointHint": "OpenAI-compatible gateway base URL, e.g. https://crs.example.com",
+    "secrets": "Secrets",
+    "cliApiKey": {
+      "label": "CLI API key",
+      "hint": "MAILAGENT_CLI_API_KEY for write commands (resync / re-run AI / flag).",
+      "saved": "CLI API key saved",
+      "cleared": "CLI API key cleared"
+    },
+    "llmApiKey": {
+      "label": "LLM API key",
+      "hint": "Used by translation + Custom API chat backend.",
+      "saved": "LLM API key saved",
+      "cleared": "LLM API key cleared",
+      "pingOk": "LLM gateway healthy",
+      "pingFail": "LLM gateway unreachable"
+    },
+    "customApiKey": {
+      "label": "Custom API key",
+      "hint": "Separate key for self-hosted OpenAI-compatible endpoint.",
+      "saved": "Custom API key saved",
+      "cleared": "Custom API key cleared"
+    },
+    "storage": "Storage",
+    "dbPath": {
+      "label": "Database path",
+      "hint": "Default ~/Documents/MailAgent/data/sync_store.db",
+      "pickerTitle": "Choose SQLite database folder",
+      "saved": "Database path saved"
+    },
+    "attachmentDir": {
+      "label": "Attachment root",
+      "hint": "Default ~/Documents/MailAgent/data/attachments",
+      "pickerTitle": "Choose attachment root folder",
+      "saved": "Attachment root saved"
+    },
+    "about": "About",
+    "save": "Save",
+    "clear": "Clear",
+    "saveFail": "Save failed",
+    "set": "Set",
+    "notSet": "Not set",
+    "secretPlaceholder": "Paste new value to save · current value not shown",
+    "testPing": "Test gateway",
+    "choose": "Choose…",
+    "defaultUsed": "(default)"
   }
 }

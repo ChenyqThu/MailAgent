@@ -9,19 +9,27 @@
 // arguments must be structured-clonable.
 
 import type {
+  AdminApi,
+  AdminHealthData,
+  AdminStatsData,
   AIFields,
   AiApi,
   AttachmentApi,
   AttachmentMeta,
   BodyOpts,
+  CalendarApi,
+  CalendarExpandOpts,
   ChatApi,
   ChatMessage,
   ChatSession,
   ChatStartOpts,
   ChatStartResult,
   ChatStreamEnvelope,
+  CleanupDeadLetterOpts,
   CreateDraftOpts,
   CreateDraftResult,
+  DeadLetterItem,
+  DeadLetterListOpts,
   EmailApi,
   EmailBody,
   EmailDetail,
@@ -30,13 +38,23 @@ import type {
   ListOpts,
   LlmApi,
   LlmRunOpts,
+  LlmSelfTestData,
+  LlmStatsData,
   MailApi,
   MailboxSummary,
   NotionWriteApi,
+  PersistentSettings,
+  PingResult,
+  RecurringDiscoverOpts,
+  RecurringInviteItem,
+  RecurringReplayOpts,
   ResyncOpts,
   ResyncResult,
   SearchHit,
   SearchOpts,
+  SecretSlot,
+  SecretsStatus,
+  SettingsApi,
   TargetLang,
   TranslationResult,
   UpdateFlagOpts
@@ -157,6 +175,73 @@ class ElectronLlmApi implements LlmApi {
     const env = (await invoker()('llm:run', internalId, opts ?? {})) as WriteEnvelope<unknown>
     return unwrap(env)
   }
+  async stats(days = 7): Promise<LlmStatsData> {
+    return (await invoker()('llm:stats', days)) as LlmStatsData
+  }
+  async selftest(): Promise<LlmSelfTestData> {
+    return (await invoker()('llm:selftest')) as LlmSelfTestData
+  }
+}
+
+class ElectronAdminApi implements AdminApi {
+  async health(): Promise<AdminHealthData> {
+    return (await invoker()('admin:health')) as AdminHealthData
+  }
+  async stats(): Promise<AdminStatsData> {
+    return (await invoker()('admin:stats')) as AdminStatsData
+  }
+  async deadLetterList(opts?: DeadLetterListOpts): Promise<DeadLetterItem[]> {
+    return (await invoker()('admin:deadLetterList', opts ?? {})) as DeadLetterItem[]
+  }
+  async deadLetterRetry(internalId: number): Promise<unknown> {
+    const env = (await invoker()('admin:deadLetterRetry', internalId)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async cleanupDeadLetter(opts?: CleanupDeadLetterOpts): Promise<unknown> {
+    const env = (await invoker()('admin:cleanupDeadLetter', opts ?? {})) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+}
+
+class ElectronCalendarApi implements CalendarApi {
+  async recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]> {
+    return (await invoker()('calendar:recurringDiscover', opts ?? {})) as RecurringInviteItem[]
+  }
+  async recurringReplay(opts: RecurringReplayOpts): Promise<unknown> {
+    const env = (await invoker()('calendar:recurringReplay', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async expand(opts?: CalendarExpandOpts): Promise<unknown> {
+    const env = (await invoker()('calendar:expand', opts ?? {})) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+}
+
+class ElectronSettingsApi implements SettingsApi {
+  async secretsStatus(): Promise<SecretsStatus> {
+    return (await invoker()('settings:secrets:status')) as SecretsStatus
+  }
+  async setSecret(slot: SecretSlot, value: string): Promise<SecretsStatus> {
+    return (await invoker()('settings:secrets:set', { secret: slot, value })) as SecretsStatus
+  }
+  async clearSecret(slot: SecretSlot): Promise<SecretsStatus> {
+    return (await invoker()('settings:secrets:clear', slot)) as SecretsStatus
+  }
+  async get(): Promise<PersistentSettings> {
+    return (await invoker()('settings:get')) as PersistentSettings
+  }
+  async set(partial: Partial<PersistentSettings>): Promise<PersistentSettings> {
+    return (await invoker()('settings:set', partial)) as PersistentSettings
+  }
+  async pickFolder(title?: string): Promise<string | null> {
+    return (await invoker()('settings:pickFolder', title)) as string | null
+  }
+  async testLlm(): Promise<PingResult> {
+    return (await invoker()('settings:test:llm')) as PingResult
+  }
+  async testCustomApi(): Promise<PingResult> {
+    return (await invoker()('settings:test:customApi')) as PingResult
+  }
 }
 
 class ElectronNotionWriteApi implements NotionWriteApi {
@@ -245,4 +330,7 @@ export class ElectronApi implements MailApi {
   chat: ChatApi = new ElectronChatApi()
   llm: LlmApi = new ElectronLlmApi()
   notion: NotionWriteApi = new ElectronNotionWriteApi()
+  admin: AdminApi = new ElectronAdminApi()
+  calendar: CalendarApi = new ElectronCalendarApi()
+  settings: SettingsApi = new ElectronSettingsApi()
 }

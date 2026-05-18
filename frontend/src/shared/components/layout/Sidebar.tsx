@@ -8,9 +8,11 @@
 // dim mono otherwise.
 
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import {
   Activity,
   BarChart3,
+  CalendarDays,
   HelpCircle,
   History,
   Inbox,
@@ -111,6 +113,7 @@ const MAILBOX_ICON: Record<string, React.ReactNode> = {
 
 export function Sidebar(): React.ReactElement {
   const mailApi = useMailApi()
+  const navigate = useNavigate()
   const active = useMailbox((s) => s.active)
   const setActive = useMailbox((s) => s.setActive)
 
@@ -197,6 +200,7 @@ export function Sidebar(): React.ReactElement {
             icon={<Search size={15} strokeWidth={1.75} />}
             label="全文搜索"
             right={<kbd>⌘K</kbd>}
+            onClick={() => navigate({ to: '/search' })}
           />
           <Item
             icon={<Languages size={15} strokeWidth={1.75} />}
@@ -212,14 +216,29 @@ export function Sidebar(): React.ReactElement {
             icon={<Activity size={15} strokeWidth={1.75} />}
             label="LLM Dashboard"
             right={<span className="w-1.5 h-1.5 rounded-full bg-warn" title="cache hit 偏低" />}
+            onClick={() => navigate({ to: '/llm' })}
           />
-          <Item icon={<BarChart3 size={15} strokeWidth={1.75} />} label="看板 Admin" />
+          <Item
+            icon={<BarChart3 size={15} strokeWidth={1.75} />}
+            label="看板 Admin"
+            onClick={() => navigate({ to: '/admin' })}
+          />
+          <Item
+            icon={<CalendarDays size={15} strokeWidth={1.75} />}
+            label="日历"
+            onClick={() => navigate({ to: '/calendar' })}
+          />
         </Section>
       </div>
 
       {/* Bottom · Settings + Help (Sprint 6 / Sprint 7) */}
       <div className="border-t border-ink-border-soft p-2 space-y-px">
-        <Item icon={<Settings size={15} strokeWidth={1.75} />} label="设置" right={<kbd>⌘,</kbd>} />
+        <Item
+          icon={<Settings size={15} strokeWidth={1.75} />}
+          label="设置"
+          right={<kbd>⌘,</kbd>}
+          onClick={() => navigate({ to: '/settings' })}
+        />
         <Item
           icon={<HelpCircle size={15} strokeWidth={1.75} />}
           label="快捷键"
