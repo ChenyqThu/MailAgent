@@ -113,20 +113,81 @@ LLMReviewedUrgent → wire=Notification + waitingForInput + 5 options → fork b
 
 ## 2. Sprint 11 工作清单(按交付顺序候选)
 
-### 2.1 Sprint 10 ship-review (强制)
+### 2.0 Sprint 10 ship 实测踩坑 — packaged-only bug 2 个(已修)
 
-Sprint 10 4 commit 跑一次独立 opus 4.7 max-effort `Agent subagent_type=oh-my-claudecode:code-reviewer model=opus`。预期 0 CRITICAL / 0 HIGH(本 Sprint 都是 review carry-forwards 修复 / wire 层映射 / V1.5 polish,改动面浅)。如有 MEDIUM/LOW Day 1 闭。
+**Sprint 10 ship draft v0.0.1 后用户实机装 .dmg,瞬间踩 2 个 packaged-only bug**。dev 模式 / `pnpm build:mac` build 成功的 ✓ 输出 / vitest happy-dom 全过 — 这三个 gate **没一个能 catch 这 2 个 bug**。教训写进 §2.1 Tier 1 任务。
 
-### 2.2 用户验收 bug fix (优先)
+| Bug | Root cause | 修复 commit | 文件 |
+|---|---|---|---|
+| 装 .dmg 后打开显空白 "not found" | TanStack Router 默认 `createBrowserHistory` 读 `window.location.pathname`。packaged Electron 走 `file:///.../app.asar/out/renderer/index.html`,pathname 是整段文件系统路径,**不匹配任何注册的 route** → 落默认 NotFoundRoute。dev 模式走 vite dev server `http://localhost:5173/` 所以从未暴露,vitest happy-dom 默认 `http://localhost/` 也走 browser history 所以 router test 全过 | `e34b83c` | `src/shared/router-instance.tsx` — file:// 协议下切 `createMemoryHistory({initialEntries: ['/']})` |
+| email.listEnriched IPC 报 NODE_MODULE_VERSION 141 vs 140 | better-sqlite3 native binding ABI 双轨: Node 25 (ABI 141,vitest 跑) vs Electron 39 (ABI 140,app 跑)。一份 `.node` 不能同时给两边用。Sprint 8 ship 前最后一次操作是 vitest → `node_modules/.../better-sqlite3.node` 留 ABI 141。`build:mac` 没 chain `rebuild:electron` → electron-builder 把 ABI 141 binding 打进 ASAR.unpacked → 装机起来必报 mismatch。NOTES.md 2026-05-17 已记过这个 dev-time bug,Sprint 8 ship 时漏 chain | 未 commit (sprint10 branch) | `package.json` — `build:mac` 加 `pnpm rebuild:electron &&` prefix,防 ABI 漂回 |
 
-如 §6 验收 checklist 任一项失败,**Sprint 11 Day 1 必修**。验收清单:
-- [ ] 实机 .dmg 安装(右键 → 打开 → 信任 ad-hoc)
+### 2.1 Sprint 11 Day 1 必做 — 3 件并行
+
+#### (1) Tier 1 Playwright Electron E2E smoke (堵死 packaged-only bug class)
+
+这次 Sprint 10 ship 踩的 2 个 bug **都是 build 成功 ≠ 可发布的**典型样本。Tier 1 Playwright Electron 一次堵死整条 bug class — `_electron.launch()` 直接起 packaged `.app`,把 BrowserWindow 当 page driver。**预期 1-2 天投入**,5-10 个 smoke test 覆盖 80% packaged-only 风险。
+
+**Setup**:
+```bash
+cd frontend
+pnpm add -D @playwright/test
+# tests/e2e/playwright.config.ts — 单 darwin/electron project
+# tests/e2e/smoke.spec.ts — 见下方 covers
+# package.json scripts: "test:e2e": "playwright test"
+```
+
+**核心 covers (最少 5 个,优先级排序)**:
+1. **boot → Inbox not NotFound** (e34b83c bug 防再来):
+   ```typescript
+   const app = await electron.launch({ executablePath: 'dist/mac-arm64/MailAgent.app/Contents/MacOS/MailAgent' })
+   const win = await app.firstWindow()
+   await expect(win.locator('[data-testid="email-list"]')).toBeVisible({ timeout: 10_000 })
+   await expect(win.getByText('Not Found')).toHaveCount(0)
+   await app.close()
+   ```
+2. **email.listEnriched IPC works** (ABI bug 防再来):
+   ```typescript
+   await expect(win.locator('.email-row').first()).toBeVisible({ timeout: 15_000 })
+   ```
+3. **⌘K command palette opens** (Sprint 7 keymap regression)
+4. **⌘L AI Chat panel opens** + composer 接受 input
+5. **Settings → 灵动岛 testConnection** → status pill 颜色/文本(Sprint 10 (b) §2.5.4-D 防 fork-side regression)
+6. (可选) **切 en locale** → QuickAction chip 文本变(Sprint 10 (d) 防 i18n drift)
+7. (可选) **详情页 sandbox iframe** 加载(Sprint 2 sandbox 防 CSP regression)
+8. (可选) **email body FTS5 search** 返回 hit(Sprint 3 search 防 schema drift)
+
+**CI gate**: `build:mac` 之后必跑 `pnpm test:e2e` — Sprint 8 我标的"build 成功 ≠ 可发布"就这一刀堵死。
+
+**进 ship pipeline** (Sprint 11 Day 1 写好后, 加进 package.json):
+```json
+"build:mac": "pnpm rebuild:electron && electron-vite build && electron-builder --mac && pnpm test:e2e"
+```
+最后一个 chain 确保不会再发"build 成功但装上空白 / IPC 崩"的 .dmg。
+
+**Tier 2 (Visual Regression) / Tier 3 (axe-core + nut.js) 留 V1.5+** — Tier 1 已堵 80% 风险,Tier 2 等出第一次"主题变更回归"再考虑。
+
+#### (2) Sprint 10 ship-review (强制)
+
+Sprint 10 5 commit (dd455c3 + 844fef2 + a557514 + 1453246 + e34b83c) + 本地 ABI fix 跑一次独立 opus 4.7 max-effort `Agent subagent_type=oh-my-claudecode:code-reviewer model=opus`。预期 0 CRITICAL / 0 HIGH(本 Sprint 都是 review carry-forwards 修复 / wire 层映射 / V1.5 polish / packaged-only bug fix,改动面浅)。如有 MEDIUM/LOW Day 1 闭。
+
+**Review 关注点**(Sprint 10 新加):
+- `router-instance.tsx` file:// 检测是否健壮(SSR / iframe / popup / test runner 等边界)
+- `build:mac` chain 是否能 cross-arch(当前 rebuild:electron 只切 arm64,x64 .dmg 仍 ABI 漂)
+- §2.5.4-D 方案 A wire 映射是否破后续 evaluation 指标查询(`island_dispatch.event_type` 仍存 mail 名,应不破)
+
+#### (3) 用户验收 bug fix (若有)
+
+如 §6 验收 checklist 任一项失败 → **Sprint 11 Day 1 必修**(优先级高于 ship-review,但低于 Tier 1)。验收清单:
+- [x] **实机 .dmg 安装(右键 → 打开 → 信任 ad-hoc)** — 已通过(用户 11:30 报告)
+- [x] **email.listEnriched 列表加载** — 已通过(ABI fix 后)
 - [ ] AI Chat panel ⌘L 打开 + ⌘↩ 发送
 - [ ] Settings → 灵动岛集成 → 测试连接(ping-island 在跑→connected / 关掉→disconnected + 显安装提示 link)
 - [ ] Settings → 应用更新 → 检查更新 → in-app updater 状态机
 - [ ] 切 EN locale → QuickActions chip 触发英文 prompt
+- [ ] **用户下个 session 提的 UI 问题** — 待 session start 时记入
 
-### 2.3 V2 远程访问启动 (大头候选)
+### 2.2 V2 远程访问启动 (大头候选)
 
 详 PROJECT-PLAN.md §4 V2-Sprint 1-5:
 - V2-Sprint 1 (1.5 天): 本地 FastAPI 骨架 + middleware + Cloudflare Access JWT 校验
@@ -135,7 +196,7 @@ Sprint 10 4 commit 跑一次独立 opus 4.7 max-effort `Agent subagent_type=oh-m
 - V2-Sprint 4 (1 天): Cloudflare Tunnel + Access OAuth + PWA manifest + iOS Safari 实测
 - V2-Sprint 5 (1 天): Cloudflare Pages 部署 + 安全 checklist
 
-### 2.4 Island Sprint 5 distribution (可选)
+### 2.3 Island Sprint 5 distribution (可选)
 
 详 ISLAND-PLUGIN.md(本仓内 §11 + 配套仓 `~/Documents/ping-island/`):
 - `scripts/build.sh` 出 .dmg
@@ -143,7 +204,7 @@ Sprint 10 4 commit 跑一次独立 opus 4.7 max-effort `Agent subagent_type=oh-m
 - Sparkle 自动更新接 fork appcast
 - 月度 rebase upstream 流程文档
 
-### 2.5 V1.6 polish (按 appetite 决定)
+### 2.4 V1.6 polish (按 appetite 决定)
 
 | 任务 | 入口 |
 |---|---|
@@ -426,6 +487,9 @@ gh release view v0.0.1 --json assets --jq '.assets | length'
 - ❌ 不要打包公证留 V1.5
 - ❌ **(Sprint 10 新)** 不要让 `BridgeEnvelope.eventType` wire 出非 `Notification` — fork 现有 dispatcher 不识别(方案 A 协议)。如需切方案 B(Swift 加 mail 专属 case),在 fork 端 HookSocketServer 加 case 而非改 wire 层枚举。
 - ❌ **(Sprint 10 新)** 不要从 `emailIdRef.current` 读 chunk envelope 的 emailId(可能跨邮件泄漏) — 走 `sessionMetaRef.get(sessionId).emailId`(L2 模式)。
+- ❌ **(Sprint 10 (c) 实测踩坑新)** 不要用 `pnpm build:mac` 成功 = ship-ready 的判据 — Sprint 10 ship 踩了 2 个 packaged-only bug(router file:// + native ABI mismatch),`pnpm dev` / vitest happy-dom / build:mac ✓ 三个 gate 没一个能 catch。**Sprint 11 必做 Tier 1 Playwright Electron smoke 加进 ship gate**(详 §2.1)。
+- ❌ **(Sprint 10 (c) 实测踩坑新)** 不要在 TanStack Router `createRouter()` 上保留默认 `createBrowserHistory` — packaged Electron 走 `file://` 协议时 pathname 是 fs 路径,落 NotFoundRoute。protocol 是 `file:` 一律切 `createMemoryHistory({initialEntries: ['/']})` (router-instance.tsx 已 wire)。
+- ❌ **(Sprint 10 (c) 实测踩坑新)** 不要在 `build:mac` 跳过 `pnpm rebuild:electron` — vitest 会把 better-sqlite3 / keytar 的 .node binding 切到 Node ABI(141),packaged app 需 Electron ABI(140)。`package.json:build:mac` 已 chain `pnpm rebuild:electron && ...`。手动 invoke `electron-builder --mac` 时也要先跑 `pnpm rebuild:electron`。
 
 ---
 

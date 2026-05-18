@@ -24,7 +24,7 @@
     "rebuild:node": "node -e \"const p=require('path'),cp=require('child_process'),root=process.cwd();try{cp.execFileSync(p.join(root,'node_modules/.pnpm/node_modules/.bin/prebuild-install'),['--runtime=node','--arch=arm64'],{cwd:p.join(root,'node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3'),stdio:'inherit'})}catch(e){if(e.status===null){console.error('prebuild-install completed but exited with signal; binary should be in place')}else{throw e}}\" && codesign --sign - --force node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
     "rebuild:electron": "node -e \"const p=require('path'),cp=require('child_process'),root=process.cwd();try{cp.execFileSync(p.join(root,'node_modules/.pnpm/node_modules/.bin/prebuild-install'),['--runtime=electron','--target=39.8.10','--arch=arm64'],{cwd:p.join(root,'node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3'),stdio:'inherit'})}catch(e){if(e.status===null){console.error('prebuild-install completed but exited with signal; binary should be in place')}else{throw e}}\" && codesign --sign - --force node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
     "build:unpack": "pnpm run build && electron-builder --dir",
-    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:mac": "pnpm rebuild:electron && electron-vite build && electron-builder --mac",
     "gen:types": "tsx scripts/gen-types.ts"
   },
   "dependencies": {
