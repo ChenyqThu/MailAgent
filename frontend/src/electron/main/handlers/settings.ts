@@ -28,6 +28,12 @@ import {
   setLlmApiKey,
   type SecretsStatus
 } from '../keychain'
+// Sprint 6 review (opus MEDIUM #4): dropped dynamic `await import('./llm_stats')`
+// in favour of a static import — they're already eagerly loaded by `index.ts`,
+// so the dynamic ceremony added a Vite warning + extra microtask without any
+// code-split benefit. Static import path is settings → llm_stats → cli_runner
+// → keychain; no circular dependency.
+import { runLlmSelfTest } from './llm_stats'
 
 const SETTINGS_FILE = join(app.getPath('userData'), 'settings.json')
 
@@ -123,7 +129,6 @@ async function pingLlmEndpoint(): Promise<PingResult> {
   // the configured CRS endpoint + handle the no-token health probe, and the
   // CLI is on the user's PATH by the time settings is reachable. This keeps
   // the secret out of the renderer entirely.
-  const { runLlmSelfTest } = await import('./llm_stats')
   try {
     const data = await runLlmSelfTest()
     return { ok: data.healthy, detail: data.detail }

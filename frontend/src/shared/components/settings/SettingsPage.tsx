@@ -140,12 +140,16 @@ function SecretInput({
 
   const submit = async (): Promise<void> => {
     if (!value) return
+    // Sprint 6 review (opus MEDIUM #2): capture + clear SYNCHRONOUSLY before
+    // awaiting. The previous `setValue('')` AFTER `await onSubmit(value)` only
+    // ran on success — on failure the typed secret stayed in React fiber state,
+    // visible to DevTools / extension scrape / heap dump. Now the input is
+    // wiped before the network call, regardless of outcome.
+    const captured = value
+    setValue('')
     setBusy(true)
     try {
-      await onSubmit(value)
-      // Defensive clear — even though submit succeeded, the input value is a
-      // secret and shouldn't linger in the DOM.
-      setValue('')
+      await onSubmit(captured)
     } finally {
       setBusy(false)
     }
