@@ -24,7 +24,7 @@
 | 阀门 | **535 tests passed / 1 skipped** (+44 vs Sprint 8 baseline 491), `pnpm lint` 0, `pnpm typecheck` 0, `pnpm a11y:contrast --strict` **12 组合 clean**, electron-vite build OK, production grep 2 patterns(MAILAGENT_CLI_API_KEY i18n hint + osascript toast hint — Sprint 8 一致非 leak) |
 | 工作模式 | Claude Opus 4.7 max-effort 单线 |
 | 阻塞 | 无 — 全 gate 绿, 进入 Sprint 10 |
-| **Sprint 10 主菜** | (a) Sprint 9 review carry-forwards 闭(待 opus 4.7 code-reviewer 输出); (b) Island Sprint 4 端到端联调 — 需配套 Python plugin 完成(`src/notify/island_dispatch.py` 等) + 真启动 ping-island.app 验证 envelope 真到达; (c) 真 .dmg release 实测 + GitHub Release artifact 上传 |
+| **Sprint 10 主菜** | (a) Sprint 9 review carry-forwards 闭(待 opus 4.7 code-reviewer 输出); (b) Island Sprint 4 端到端联调 — **Python plugin 已在 main** (`e39cc3f` Island-Sprint 2 / PR #2, 2026-05-18 cherry-pick reconcile, 702/702 pytest, 47 个 island_* 单测), 联调只需: 启 ping-island.app fork(`feat/mail-brand`) + `.env` 设 `PING_ISLAND_ENABLED=true` + `pm2 restart mail-sync` 触发 v6→v7 DB migration + 决议 ISLAND-PLUGIN §2.5.4 三方案(推荐 A: Python 端 eventType 映射 `Notification` + `metadata.*` 区分); (c) 真 .dmg release 实测 + GitHub Release artifact 上传 |
 
 ---
 
@@ -130,10 +130,10 @@ Sprint 9 frontend 端 ship 完,但仍需:
 
 | 阶段 | 内容 |
 |---|---|
-| Python plugin 配套 | 后端仓 `src/notify/island_dispatch.py` + `src/notify/ping_island.py` 实现 (ISLAND-PLUGIN.md §4.3 邮件流 5 个事件 hook 入口); 用同样 wire 协议 §3.1 |
+| **Python plugin 配套** ✅ 已 ship (`e39cc3f`) | `src/notify/{ping_island,island_dispatch,island_response,island_snooze,island_reconnect,island_envelope,island_i18n,island_bootstrap}.py` 全部在 main(8 个模块 + 4 个 hook 点 + 47 单测 + DB_VERSION 7 + `island_dispatch` 表 + 14d 评估指标聚合)。同样 wire 协议 §3.1 + H-12/H-16/H-17/H-18/M-13/M-14/M-15 决议全落实。详 ISLAND-PLUGIN §4 + memory `project_mailagent_island_sprint2_done` |
 | 真启动 ping-island.app | `~/Documents/ping-island/feat/mail-brand` Xcode build + 装到 /Applications |
 | 端到端验证 | 主同步邮件 → Python plugin 发 envelope → ping-island 弹 phase 1 灵动岛; Electron 改主题 → ping-island repaint; Electron AI Chat composer.send → ping-island 显 AI 起草中 phase / done 时显草稿 ready |
-| Sprint 4 dispatch 决议 (ISLAND-PLUGIN §2.5.4) | mail eventType 名 (MailReceived / LLMReviewed 等)目前不在 ping-island 现 dispatch 表;决定是否 (a) 让 Python plugin emit Notification eventType + 用 metadata.* 区分 (b) Swift fork 加 mail event 识别 (c) 复用 Notification 走 generic HoverSessionCard |
+| **Sprint 4 dispatch 决议 (ISLAND-PLUGIN §2.5.4) — Sprint 10 启动前必决** | mail eventType 名 (MailReceived / LLMReviewed 等)目前不在 ping-island 现 dispatch 表;决定是否 (a) 让 Python plugin emit Notification eventType + 用 metadata.* 区分 (b) Swift fork 加 mail event 识别 (c) 复用 Notification 走 generic HoverSessionCard。**推荐先走 A**(0 Swift 改动 / 30 min Python `island_dispatch.py` eventType 映射 / rebase-friendly);用 1-2 周后觉得语义糊再切 B |
 
 ### 2.3 真 .dmg release 实测
 
@@ -298,10 +298,17 @@ Sprint 10 启动后用 5 分钟整理 `frontend/NOTES.md`. Sprint 9 review carry
 
 ## 9. 启动 checklist
 
+> **0. Git topology context (2026-05-18 reconcile)**
+> 本轮 reconcile 已把 Sprint 0-9 + Island-Sprint 2 Phase 2 全部合进 main 并 force-push 到 origin。
+> - local `main` ⟷ `origin/main` 完全对齐 (顶 `e39cc3f`)
+> - 6 个旧 sprint 分支 (sprint3/4/5/6/8/9) 都是 main 祖先, 可安全删
+> - 旧 ahead/behind 漂移已彻底消除
+
 ```bash
-# 1. 拉最新 + 切分支
-cd ~/Documents/MailAgent && git pull
-git checkout main && git merge sprint9   # Sprint 9 主线已 ship
+# 1. 拉最新 + 切分支 + 清理旧 sprint 分支
+cd ~/Documents/MailAgent && git fetch origin
+git checkout main && git pull --ff-only origin main   # 应已对齐 e39cc3f
+git branch -d sprint3 sprint4 sprint5 sprint6 sprint8 sprint9  # 全是 main 祖先,安全可删
 git checkout -b sprint10
 cd frontend && pnpm install
 
@@ -312,9 +319,17 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools pnpm typecheck  # 0
 DEVELOPER_DIR=/Library/Developer/CommandLineTools pnpm a11y:contrast  # ✓ 12 组合 clean
 DEVELOPER_DIR=/Library/Developer/CommandLineTools pnpm exec electron-vite build  # ✓
 
-# 3. mailagent CLI 可用?
+# 3. mailagent CLI 可用 + 后端 DB 状态
 which mailagent && mailagent --version
-mailagent admin health -o json  # 探一下后端 DB 可读
+mailagent admin health -o json  # 首跑可能报 E_SCHEMA_MISMATCH (db=6, expected=7), 见 3a
+
+# 3a. 后端 DB v6→v7 migration (Island Sprint 2 新加 `island_dispatch` 表)
+#     SyncStore._init_database 用 CREATE TABLE IF NOT EXISTS + INSERT OR REPLACE,
+#     idempotent 零数据风险, pm2 restart 即触发
+pm2 restart mail-sync && sleep 3
+pm2 logs mail-sync --lines 10 --nostream  # 看 "SyncStore initialized" + "v7"
+mailagent admin health -o json | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print('db_version=', d['db_version'], 'healthy=', d['healthy'], 'island_dispatch in tables=', 'island_dispatch' in d['tables_present'])"
+# 预期: db_version=7, healthy=True, island_dispatch in tables=True
 
 # 4. Mail.app 自动化权限确认 (Sprint 5 复用)
 
@@ -324,16 +339,24 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools pnpm dev
 # → 设置 → 灵动岛集成 区 (应显 dev-disabled state + Socket 路径)
 # → 点击 测试连接 应转 connected (如 ping-island.app 在跑) 或 disconnected (如 socket 缺)
 
-# 6. (可选) ping-island 端到端联调
-# git clone fork-with-mail-brand → xcodebuild → 装 .app → 启动 → 重跑 5 步
-# 详 Sprint 10 §2.2
+# 6. (可选,但 Sprint 10 主菜) ping-island 端到端联调
+# - cd ~/Documents/ping-island && git checkout feat/mail-brand
+# - 在 Xcode 打开 PingIsland.xcodeproj → Run (scheme PingIsland) → 装到 /Applications
+# - 主仓 .env: PING_ISLAND_ENABLED=true
+# - pm2 restart mail-sync && pm2 logs mail-sync | grep '\[island\]'
+#   预期: [island] enabled (socket=/tmp/island.sock timeout=3.0s ...)
+# - 等一封新邮件或手动触发, sqlite3 data/sync_store.db "SELECT * FROM island_dispatch ORDER BY sent_at DESC LIMIT 3;"
+#   预期: dispatched_ok=1 + event_type=MailReceived
+# - 决议 §2.5.4 三方案 (推荐 A: Python eventType 映射 Notification + metadata.* 区分)
+# 详 §2.2
 
 # 7. 必读 (~25 min):
-# - frontend/PROJECT-PLAN.md §3 Island Sprint 拆分 (Sprint 10 看 Island-Sprint 2 接入 + Sprint 4 联调)
-# - frontend/SPRINT9-HANDOFF.md §2 + §10 (本文档)
-# - frontend/ISLAND-PLUGIN.md §3 + §4 + §8 (wire 协议 + Python plugin + 主题色同步)
+# - frontend/PROJECT-PLAN.md §3 Island Sprint 拆分 (Sprint 10 看 Sprint 4 联调)
+# - frontend/SPRINT9-HANDOFF.md §0 §2 §10 (本文档)
+# - frontend/ISLAND-PLUGIN.md §2.5.4 (Sprint 4 dispatch 决议三方案) + §3 wire + §4 Python plugin + §8 主题色同步
 # - frontend/NOTES.md (Sprint 8/9 review carry-forwards)
 # - frontend/DESIGN.md §13 项目结构
+# - 后端 CLAUDE.md "ping-island 灵动岛集成" 段 (env + table + smoke 命令)
 
 # 8. Day 1 顺手关 cheap Sprint 9 review carry-forwards (待 opus 4.7 review 输出)
 ```
