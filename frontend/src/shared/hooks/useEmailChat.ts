@@ -310,7 +310,18 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // Mirror the in-memory value into localStorage so a reload inside the
   // window restores the throttle. Read happens via the useState lazy
   // initializer above; this effect handles every subsequent update.
+  //
+  // Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — skip the first
+  // mount. The lazy initializer already read from localStorage, so the
+  // mount-time effect would just write back the same value (one redundant
+  // `setItem` per hook lifetime). Trivial cost individually, but the panel
+  // remounts on every email switch, so this is a per-click win.
+  const firstCooldownEffectRef = useRef(true)
   useEffect(() => {
+    if (firstCooldownEffectRef.current) {
+      firstCooldownEffectRef.current = false
+      return
+    }
     try {
       if (typeof localStorage === 'undefined') return
       if (quotaCooldownUntil === null) {
@@ -342,10 +353,6 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         throw new Error('useEmailChat.send: no active email (emailId is null)')
       }
       setError(null)
-      // Sprint 5 #3: capture the input so retryLast() can re-fire it on a
-      // transient failure. Cleared once we observe a `done` event on the
-      // stream subscription.
-      setLastFailedInput(input)
       // Snapshot the email this turn targets BEFORE awaiting. If the user
       // switches emails (or the hook unmounts) while `chat.start()` is in
       // flight, the snapshot diverges from `emailIdRef.current` and we
@@ -365,13 +372,21 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         // current email's panel must not flip to streaming on a sessionId
         // it didn't subscribe to.
         mailApi.chat.abort(result.sessionId)
-        // Sprint 6 Day 1 (opus LOW carry-forward) — the captured input is
-        // logically dead once we've already aborted the stranded session.
-        // Clearing it keeps retryLast correctly null and frees the closed-over
-        // object instead of pinning it through this hook's lifetime.
-        setLastFailedInput(null)
+        // Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — we no
+        // longer set `lastFailedInput` BEFORE the stranded check (the
+        // earlier Sprint 5 ordering had a tiny race window where a stranded
+        // send would leave the closure-captured input visible to retryLast,
+        // even though `error !== null` gating made it unreachable in
+        // practice). After move + post-check return, lastFailedInput stays
+        // at its prior value — null on first send, or the previous send's
+        // input which is still the right thing to retry.
         return result
       }
+      // Capture the input AFTER the stranded check so it only persists
+      // when this send is committed to the active email. Cleared once we
+      // observe a `done` event on the stream subscription (success) or
+      // promoted to retry on a transient error.
+      setLastFailedInput(input)
       setActiveSessionIdState(result.sessionId)
       activeSessionRef.current = result.sessionId
       setStreamingMessageId(result.assistantMessageId)

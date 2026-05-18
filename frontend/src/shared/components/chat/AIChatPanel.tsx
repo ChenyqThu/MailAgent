@@ -16,20 +16,17 @@ import { useQuery } from '@tanstack/react-query'
 
 import { cn } from '@shared/lib/cn'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
+import {
+  STORAGE_AGENT_ID,
+  STORAGE_AGENT_NAME,
+  STORAGE_CHANGE_EVENT
+} from '@shared/state/notion-agent-storage'
 
 import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
 import { MessageList } from './MessageList'
 import { QuickActions } from './QuickActions'
-
-const STORAGE_AGENT_ID = 'mailagent.notionAgent.pageId'
-const STORAGE_AGENT_NAME = 'mailagent.notionAgent.name'
-/** Custom event Sprint 6 SettingsPage dispatches after persisting the
- *  Notion Agent binding, so already-mounted panels pick up the change
- *  without a remount (the browser `storage` event only fires cross-tab).
- *  Sprint 4 review (codex L carry-forward). */
-const STORAGE_CHANGE_EVENT = 'mailagent:notion-agent-storage'
 
 function readStored(key: string): string | null {
   try {

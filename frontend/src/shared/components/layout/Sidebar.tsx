@@ -9,6 +9,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 import {
   Activity,
   BarChart3,
@@ -29,6 +30,7 @@ import {
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useMailbox } from '@shared/state/mailbox'
+import { openKeyboardHelp } from '@shared/state/keyboard-help'
 
 interface SectionProps {
   label: string
@@ -112,6 +114,7 @@ const MAILBOX_ICON: Record<string, React.ReactNode> = {
 }
 
 export function Sidebar(): React.ReactElement {
+  const { t } = useTranslation()
   const mailApi = useMailApi()
   const navigate = useNavigate()
   const active = useMailbox((s) => s.active)
@@ -136,7 +139,7 @@ export function Sidebar(): React.ReactElement {
       className={cn('w-60 shrink-0 bg-ink-1 border-r border-ink-border flex flex-col')}
     >
       <div className="flex-1 overflow-y-auto scrollbar-thin py-2.5">
-        <Section label="Mailboxes">
+        <Section label={t('sidebar.section.mailboxes')}>
           {mailboxes.map((mb) => (
             <Item
               key={mb.mailbox}
@@ -150,14 +153,14 @@ export function Sidebar(): React.ReactElement {
           {mailboxes.length > 0 && (
             <Item
               icon={<Star size={15} strokeWidth={1.75} />}
-              label="已标旗"
+              label={t('sidebar.flagged')}
               right={<TotalCount count={0} />}
             />
           )}
           {mailboxes.length > 0 && (
             <Item
               icon={<Mail size={15} strokeWidth={1.75} />}
-              label="所有邮件"
+              label={t('sidebar.allMail')}
               right={<TotalCount count={allTotal} />}
             />
           )}
@@ -165,11 +168,11 @@ export function Sidebar(): React.ReactElement {
 
         <div className="my-3 mx-4 border-t border-ink-border-soft" />
 
-        <Section label="AI Agents">
+        <Section label={t('sidebar.section.aiAgents')}>
           <Item
             icon={<Sparkles size={15} strokeWidth={1.75} />}
             label="Notion Agent"
-            right={<span className="w-1.5 h-1.5 rounded-full bg-ok" title="online" />}
+            right={<span className="w-1.5 h-1.5 rounded-full bg-ok" title={t('sidebar.online')} />}
           />
           <Item
             icon={<Lock size={15} strokeWidth={1.75} />}
@@ -178,14 +181,14 @@ export function Sidebar(): React.ReactElement {
           />
           <Item
             icon={<History size={15} strokeWidth={1.75} />}
-            label="AI 会话历史"
+            label={t('sidebar.aiHistory')}
             right={<TotalCount count={0} />}
           />
         </Section>
 
         <div className="my-3 mx-4 border-t border-ink-border-soft" />
 
-        <Section label="Accounts">
+        <Section label={t('sidebar.section.accounts')}>
           <Item
             icon={<span className="w-2 h-2 rounded-full bg-coral/100" />}
             label="chenge.ink"
@@ -195,37 +198,39 @@ export function Sidebar(): React.ReactElement {
 
         <div className="my-3 mx-4 border-t border-ink-border-soft" />
 
-        <Section label="Tools">
+        <Section label={t('sidebar.section.tools')}>
           <Item
             icon={<Search size={15} strokeWidth={1.75} />}
-            label="全文搜索"
+            label={t('sidebar.search')}
             right={<kbd>⌘K</kbd>}
             onClick={() => navigate({ to: '/search' })}
           />
           <Item
             icon={<Languages size={15} strokeWidth={1.75} />}
-            label="一键翻译"
+            label={t('sidebar.translate')}
             right={<kbd>⌥T</kbd>}
           />
         </Section>
 
         <div className="my-3 mx-4 border-t border-ink-border-soft" />
 
-        <Section label="Ops">
+        <Section label={t('sidebar.section.ops')}>
           <Item
             icon={<Activity size={15} strokeWidth={1.75} />}
-            label="LLM Dashboard"
-            right={<span className="w-1.5 h-1.5 rounded-full bg-warn" title="cache hit 偏低" />}
+            label={t('sidebar.llmDashboard')}
+            right={
+              <span className="w-1.5 h-1.5 rounded-full bg-warn" title={t('sidebar.cacheWarn')} />
+            }
             onClick={() => navigate({ to: '/llm' })}
           />
           <Item
             icon={<BarChart3 size={15} strokeWidth={1.75} />}
-            label="看板 Admin"
+            label={t('sidebar.admin')}
             onClick={() => navigate({ to: '/admin' })}
           />
           <Item
             icon={<CalendarDays size={15} strokeWidth={1.75} />}
-            label="日历"
+            label={t('sidebar.calendar')}
             onClick={() => navigate({ to: '/calendar' })}
           />
         </Section>
@@ -235,14 +240,20 @@ export function Sidebar(): React.ReactElement {
       <div className="border-t border-ink-border-soft p-2 space-y-px">
         <Item
           icon={<Settings size={15} strokeWidth={1.75} />}
-          label="设置"
+          label={t('sidebar.settings')}
           right={<kbd>⌘,</kbd>}
           onClick={() => navigate({ to: '/settings' })}
         />
         <Item
           icon={<HelpCircle size={15} strokeWidth={1.75} />}
-          label="快捷键"
+          label={t('sidebar.shortcuts')}
           right={<kbd>?</kbd>}
+          onClick={() => {
+            // Sprint 7 D2 — open the keyboard help modal via the shared
+            // helper (mounted at root in `App.tsx`). The helper guards
+            // SSR / pre-mount calls.
+            openKeyboardHelp()
+          }}
         />
       </div>
     </aside>

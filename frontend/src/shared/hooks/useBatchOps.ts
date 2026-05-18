@@ -113,6 +113,15 @@ export function useBatchOps(): UseBatchOpsReturn {
       const forceStopPromise = new Promise<typeof FORCE_STOP>((res) => {
         forceStopResolverRef.current = (): void => res(FORCE_STOP)
       })
+      // Sprint 7 Day 1 (Sprint 6 review opus MEDIUM #3 carry-forward) — the
+      // .catch on `unitPromise` is INTENTIONAL: it short-circuits a unit
+      // rejection into a typed `{ ok: false, err }` so the Promise.race below
+      // never observes an unhandled rejection. When force-stop wins the race,
+      // `unitPromise` keeps running in the background and its catch handler
+      // produces a `UnitResult` we then drop on the floor. That's by contract
+      // — the CLI subprocess server-side keeps its own checkpoint/resume
+      // ledger; the renderer's only job is to stop blocking the loop. The
+      // dropped object is GC'd once the catch resolves, no leak.
       const unitPromise: Promise<UnitResult> = args
         .unit(id)
         .then((data): UnitResult => ({ ok: true, data }))
@@ -125,6 +134,10 @@ export function useBatchOps(): UseBatchOpsReturn {
 
       if (winner === FORCE_STOP) {
         cancelled = true
+        // void-mark the stranded promise so eslint / future readers know
+        // we deliberately dropped it (the .catch above keeps node from
+        // logging an unhandledRejection).
+        void unitPromise
         break
       }
       if (winner.ok) {

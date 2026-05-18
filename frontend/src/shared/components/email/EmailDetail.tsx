@@ -523,7 +523,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    在 Notion 打开
+                    {t('toolbar.openNotion')}
                     <ExternalLink size={11} strokeWidth={2} />
                   </a>
                 }
@@ -595,7 +595,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                 rel="noopener noreferrer"
                 className="text-aux text-coral hover:text-coral-hover transition-colors duration-fast inline-flex items-center gap-1"
               >
-                在 Notion 打开
+                {t('toolbar.openNotion')}
                 <ExternalLink size={12} strokeWidth={2} />
               </a>
             )}

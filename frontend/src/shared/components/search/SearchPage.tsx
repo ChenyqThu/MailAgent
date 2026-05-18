@@ -25,6 +25,8 @@ import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useActiveEmail } from '@shared/state/active-email'
 import { formatRelativeTime } from '@shared/format'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { parseSender } from '@shared/lib/mail_parse'
 import { normalizeFtsQuery } from '@shared/lib/search_query'
 import type { MailboxSummary, SearchHit } from '@shared/api/types'
@@ -287,27 +289,45 @@ export function SearchPage(): React.ReactElement {
       {/* Result list */}
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {normalised.length === 0 && (
-          <div className="px-6 py-20 text-center text-aux text-ink-fg-2">
-            <SearchIcon size={32} strokeWidth={1.25} className="inline-block opacity-30 mb-3" />
-            <div>{t('search.blankState')}</div>
-          </div>
+          <EmptyState
+            icon={
+              <SearchIcon size={32} strokeWidth={1.25} className="opacity-30" />
+            }
+            title={t('search.blankState')}
+          />
         )}
 
         {normalised.length > 0 && searchQ.isLoading && (
-          <div className="px-6 py-12 text-aux text-ink-fg-2 animate-pulse">
-            {t('search.loading')}
+          <div className="px-3 py-4 space-y-2">
+            <SkeletonRow />
+            <SkeletonRow />
+            <SkeletonRow />
+            <SkeletonRow />
           </div>
         )}
 
         {normalised.length > 0 && searchQ.isError && (
-          <div className="px-6 py-12 text-aux text-fail">{t('search.error')}</div>
+          <EmptyState
+            icon={<SearchIcon size={20} strokeWidth={1.75} className="text-fail" />}
+            title={t('search.error')}
+            action={
+              <button
+                type="button"
+                onClick={() => void searchQ.refetch()}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-aux text-coral border border-coral/30 hover:bg-coral/10 transition-colors duration-fast"
+              >
+                {t('translate.retry')}
+              </button>
+            }
+          />
         )}
 
         {normalised.length > 0 && !searchQ.isLoading && !searchQ.isError && hits.length === 0 && (
-          <div className="px-6 py-20 text-center text-aux text-ink-fg-2">
-            <div className="mb-2">{t('search.noResults')}</div>
-            <div className="text-meta font-mono text-ink-fg-3">{t('search.noResultsHint')}</div>
-          </div>
+          <EmptyState
+            icon={<SearchIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
+            title={t('search.noResults')}
+            hint={t('search.noResultsHint')}
+          />
         )}
 
         {normalised.length > 0 && hits.length > 0 && (

@@ -37,20 +37,13 @@ import type { PersistentSettings, SecretSlot } from '@shared/api/types'
 import { useAppearance, type AccentId, type ThemeMode } from '@shared/state/appearance'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
+import {
+  STORAGE_AGENT_ID,
+  STORAGE_AGENT_NAME,
+  dispatchAgentStorageEvent
+} from '@shared/state/notion-agent-storage'
 import { toastError, toastSuccess } from '@shared/state/toast'
-
-// localStorage keys that AIChatPanel watches (Sprint 4 codex L carry-forward).
-const STORAGE_AGENT_ID = 'mailagent.notionAgent.pageId'
-const STORAGE_AGENT_NAME = 'mailagent.notionAgent.name'
-const STORAGE_CHANGE_EVENT = 'mailagent:notion-agent-storage'
-
-function dispatchAgentStorageEvent(): void {
-  try {
-    window.dispatchEvent(new Event(STORAGE_CHANGE_EVENT))
-  } catch {
-    // SSR / privacy mode — harmless to skip.
-  }
-}
 
 const ACCENTS: AccentId[] = ['coral', 'cobalt', 'teal', 'rose', 'slate', 'olive']
 // Swatch background gradients live in `index.css` (.swatch-<id>) so the
@@ -239,8 +232,11 @@ export function SettingsPage(): React.ReactElement {
 
   if (!settingsQ.data || !secretsQ.data) {
     return (
-      <div className="px-6 py-10 text-aux text-ink-fg-2 text-center">
-        {t('settings.title')} · {t('admin.loading')}
+      <div className="px-6 py-5 space-y-6 max-w-[920px]">
+        <h1 className="text-display text-ink-fg font-semibold">{t('settings.title')}</h1>
+        <Skeleton rows={4} />
+        <Skeleton rows={5} />
+        <Skeleton rows={3} />
       </div>
     )
   }

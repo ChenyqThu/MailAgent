@@ -15,7 +15,7 @@
 
 import { app, dialog, ipcMain } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { isAbsolute, join, normalize } from 'path'
 
 import {
   clearCliApiKey,
@@ -72,10 +72,53 @@ function readSettings(): PersistentSettings {
   }
 }
 
+// Sprint 7 Day 1 (Sprint 6 review opus MEDIUM #1 carry-forward) — gate
+// `dbPath` / `attachmentDir` through a path-validation check before we ever
+// persist them. Sprint 7 wires `better-sqlite3.Database(s.dbPath)` directly
+// off this value (alongside the existing fs.readFile attachment lookup), so
+// any traversal sequence or relative segment passed through the IPC would
+// open a file outside the user's chosen scope.
+//
+// Policy:
+//   - null is always accepted (means "fall back to default").
+//   - non-string is rejected (drops out of the partial).
+//   - string must be absolute AND not contain a `..` traversal segment
+//     anywhere in the raw value. Anything else is dropped silently — the
+//     renderer keeps showing the previous value, no DoS via spammy errors.
+//
+// IMPORTANT: we inspect the RAW string for `..` segments, not the normalized
+// one — `path.normalize('/Users/me/../../etc/passwd')` returns `/etc/passwd`
+// (the `..` is collapsed away), which would silently let a traversal slip
+// through if we only looked at the normalized form. We still call normalize
+// to confirm the result remains absolute (a leading `..` could escape into
+// `..` territory on some platforms).
+//
+// We deliberately do NOT check existence here: the user can configure a
+// path for a drive that's mounted on next boot. Read-time will fail loud.
+function isSafeUserPath(value: string): boolean {
+  if (value.length === 0) return false
+  if (!isAbsolute(value)) return false
+  // Raw-segment scan — must run before normalization.
+  const rawSegments = value.split(/[/\\]/).filter(Boolean)
+  if (rawSegments.includes('..')) return false
+  // Normalize as a paranoid second check: the normalized form must remain
+  // absolute (defends against constructed inputs that pass isAbsolute() but
+  // resolve into a relative path after normalize on this platform).
+  const normalized = normalize(value)
+  if (!isAbsolute(normalized)) return false
+  return true
+}
+
 function sanitize(raw: Partial<PersistentSettings>): Partial<PersistentSettings> {
   const out: Partial<PersistentSettings> = {}
-  if (typeof raw.dbPath === 'string' || raw.dbPath === null) out.dbPath = raw.dbPath
-  if (typeof raw.attachmentDir === 'string' || raw.attachmentDir === null) {
+  if (raw.dbPath === null) {
+    out.dbPath = null
+  } else if (typeof raw.dbPath === 'string' && isSafeUserPath(raw.dbPath)) {
+    out.dbPath = raw.dbPath
+  }
+  if (raw.attachmentDir === null) {
+    out.attachmentDir = null
+  } else if (typeof raw.attachmentDir === 'string' && isSafeUserPath(raw.attachmentDir)) {
     out.attachmentDir = raw.attachmentDir
   }
   if (
@@ -236,6 +279,7 @@ export const __testing = {
   readSettings,
   writeSettings,
   sanitize,
+  isSafeUserPath,
   DEFAULTS,
   SETTINGS_FILE
 }

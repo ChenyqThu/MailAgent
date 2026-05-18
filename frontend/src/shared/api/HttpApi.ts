@@ -83,9 +83,10 @@ export class HttpApi implements MailApi {
     expand: () => notImplemented('calendar.expand')
   }
 
-  // Web SPA has no keytar — V2 will surface a "configure on the Mac" hint
-  // instead of a writable form. Reads of `settings.get()` can still proxy
-  // through FastAPI for poll-interval / Notion Agent binding (non-secret).
+  // Web SPA has no OS credential store — V2 will surface a "configure on
+  // the Mac" hint instead of a writable form. Reads of `settings.get()`
+  // can still proxy through FastAPI for poll-interval / Notion Agent
+  // binding (non-secret).
   settings = {
     secretsStatus: () => notImplemented('settings.secretsStatus'),
     setSecret: () => notImplemented('settings.setSecret'),

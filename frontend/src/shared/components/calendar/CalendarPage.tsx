@@ -13,6 +13,8 @@ import { Calendar as CalendarIcon, Play, RefreshCw } from 'lucide-react'
 import type { RecurringInviteItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 const RANGES: Array<{ label: string; offsetDays: number }> = [
@@ -22,10 +24,19 @@ const RANGES: Array<{ label: string; offsetDays: number }> = [
   { label: '1y', offsetDays: 365 }
 ]
 
+// Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — switch to
+// local-date arithmetic. The CLI's `--since` window is parsed against the
+// service's local clock (CST), so a UTC-anchored offset would skew by ~8h
+// at midnight (e.g. user clicking "90d" at 23:50 CST would query 91 days
+// back). Local Date math + manual YYYY-MM-DD format keeps the renderer's
+// notion of "today" aligned with the CLI.
 function offsetIsoDate(days: number): string {
   const d = new Date()
-  d.setUTCDate(d.getUTCDate() - days)
-  return d.toISOString().slice(0, 10)
+  d.setDate(d.getDate() - days)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 function fmtIso(iso: string | null): string {
@@ -163,11 +174,17 @@ export function CalendarPage(): React.ReactElement {
 
       <section className="rounded-md border border-ink-border bg-ink-2 overflow-hidden">
         {listQ.isLoading ? (
-          <div className="px-3 py-6 text-aux text-ink-fg-2 text-center">
-            {t('calendar.loading')}
+          <div>
+            <SkeletonRow />
+            <SkeletonRow />
+            <SkeletonRow />
           </div>
         ) : (listQ.data?.length ?? 0) === 0 ? (
-          <div className="px-3 py-6 text-aux text-ink-fg-2 text-center">{t('calendar.empty')}</div>
+          <EmptyState
+            icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
+            title={t('calendar.empty')}
+            hint={t('calendar.emptyHint')}
+          />
         ) : (
           <table className="w-full text-aux">
             <thead className="bg-ink-3">

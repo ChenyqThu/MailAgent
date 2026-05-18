@@ -19,6 +19,8 @@ import { Activity, Sparkles, Zap } from 'lucide-react'
 import type { LlmStatsData } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { SkeletonCard } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 const RANGES: Array<{ label: string; days: number }> = [
@@ -164,10 +166,18 @@ function StatusDonut({ counts }: { counts: Record<string, number> }): React.Reac
 }
 
 // Simple gauge (0..100) for cache hit rate.
+//
+// Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — widen the
+// info band so a real cache miss-rate that hovers around 30% doesn't
+// flicker between warn/info on every refetch. New thresholds:
+//   - >= 70%  → ok (target met)
+//   - >= 20%  → info (working, not yet hot)
+//   - <  20%  → warn (cold cache; system likely cold-started)
+// 20% is loose enough that a single retry-storm minute doesn't flip it,
+// and tight enough that a sustained miss rate still surfaces yellow.
 function CacheGauge({ pct }: { pct: number }): React.ReactElement {
   const clamped = Math.max(0, Math.min(100, pct))
-  // Hit rate < 30% = warn, >= 70% = ok, otherwise neutral.
-  const color = clamped >= 70 ? 'bg-ok' : clamped >= 30 ? 'bg-info' : 'bg-warn'
+  const color = clamped >= 70 ? 'bg-ok' : clamped >= 20 ? 'bg-info' : 'bg-warn'
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-aux">
@@ -313,13 +323,15 @@ export function LlmDashboardPage(): React.ReactElement {
                 </div>
                 <div className="grid grid-cols-2 gap-3 text-aux">
                   <div>
-                    <div className="text-meta text-ink-fg-3 mb-0.5">creation</div>
+                    <div className="text-meta text-ink-fg-3 mb-0.5">
+                      {t('llm.cacheTokensCreation')}
+                    </div>
                     <div className="font-mono tabular-nums text-ink-fg">
                       {fmtTokens(cost.cache_creation_input_tokens)}
                     </div>
                   </div>
                   <div>
-                    <div className="text-meta text-ink-fg-3 mb-0.5">read</div>
+                    <div className="text-meta text-ink-fg-3 mb-0.5">{t('llm.cacheTokensRead')}</div>
                     <div className="font-mono tabular-nums text-ink-fg">
                       {fmtTokens(cost.cache_read_input_tokens)}
                     </div>
@@ -332,13 +344,30 @@ export function LlmDashboardPage(): React.ReactElement {
       )}
 
       {statsQ.isLoading && (
-        <div className="px-3 py-6 text-aux text-ink-fg-2 text-center">{t('llm.loading')}</div>
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </section>
       )}
       {statsQ.isError && (
-        <div className="px-3 py-6 text-aux text-fail text-center flex items-center justify-center gap-2">
-          <Activity size={14} strokeWidth={2} />
-          {t('llm.error')}
-        </div>
+        <EmptyState
+          icon={<Activity size={20} strokeWidth={1.75} className="text-fail" />}
+          title={t('llm.error')}
+          action={
+            <button
+              type="button"
+              onClick={() => void statsQ.refetch()}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-aux',
+                'text-coral border border-coral/30 hover:bg-coral/10 transition-colors duration-fast'
+              )}
+            >
+              {t('admin.retry')}
+            </button>
+          }
+        />
       )}
     </div>
   )

@@ -15,24 +15,8 @@
 
 import { ipcMain } from 'electron'
 
-import { CliError, callCli } from '../cli_runner'
-
-type WriteEnvelope<T> =
-  | { ok: true; data: T }
-  | { ok: false; code: string; message: string; hint?: string }
-
-function envelopeFromCli<T>(p: Promise<unknown>): Promise<WriteEnvelope<T>> {
-  return p.then(
-    (data): WriteEnvelope<T> => ({ ok: true, data: data as T }),
-    (err: unknown): WriteEnvelope<T> => {
-      if (err instanceof CliError) {
-        return { ok: false, code: err.errorCode, message: err.message, hint: err.hint }
-      }
-      const message = err instanceof Error ? err.message : String(err)
-      return { ok: false, code: 'E_DISPATCH', message }
-    }
-  )
-}
+import { callCli } from '../cli_runner'
+import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
 const READ_TIMEOUT_MS = 15_000
 const WRITE_TIMEOUT_MS = 60_000
@@ -137,17 +121,6 @@ export async function runCleanupDeadLetter(opts: CleanupDeadLetterOpts = {}): Pr
     needsAuth: !opts.dryRun,
     timeoutMs: WRITE_TIMEOUT_MS
   })
-}
-
-function ensureInternalId(value: unknown, channel: string): WriteEnvelope<never> | number {
-  if (!Number.isInteger(value) || (value as number) < 0) {
-    return {
-      ok: false,
-      code: 'E_INVALID_ARG',
-      message: `${channel}: expected non-negative integer internalId, got ${String(value)}`
-    }
-  }
-  return value as number
 }
 
 export function registerAdminHandlers(): void {

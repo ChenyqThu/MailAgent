@@ -1,0 +1,343 @@
+// Sprint 7 D3 — ⌘K Command Palette.
+//
+// Surfaces three command categories at once:
+//   1. Navigation — /inbox · /search · /admin · /llm · /calendar · /settings
+//   2. Mailbox switch — every mailbox from the live `email:listMailboxes` IPC
+//   3. Email search — first 8 hits from the live FTS5 search (debounced
+//      250ms) when the input has 2+ chars
+//
+// Karpathy simplicity: no `cmdk` dep. Substring filtering is enough for
+// our command count (~10 items); FTS5 search is already debounced server-
+// side via tanstack-query staleTime. Total surface < 250 LoC.
+//
+// Keyboard:
+//   Esc                   → close
+//   ↑ / ↓                 → move highlight
+//   Enter                 → execute highlighted
+//   Tab                   → wrap focus to the input (skip exit)
+//
+// A11y: role=combobox + role=listbox + aria-activedescendant follow the
+// W3C combobox pattern.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
+import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
+import {
+  ArrowRight,
+  BarChart3,
+  CalendarDays,
+  Cog,
+  Inbox,
+  Mail,
+  Search as SearchIcon,
+  Sparkles
+} from 'lucide-react'
+
+import { cn } from '@shared/lib/cn'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { useMailbox } from '@shared/state/mailbox'
+import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
+
+type CommandKind = 'nav' | 'mailbox' | 'search'
+
+interface Command {
+  id: string
+  kind: CommandKind
+  /** Display label. */
+  label: string
+  /** Optional secondary line (route path, snippet, etc). */
+  hint?: string
+  icon: React.ReactNode
+  run: () => void
+}
+
+interface NavSpec {
+  id: string
+  labelKey: string
+  to: '/' | '/search' | '/admin' | '/llm' | '/calendar' | '/settings'
+  icon: React.ReactNode
+}
+
+const NAV_COMMANDS: ReadonlyArray<NavSpec> = [
+  {
+    id: 'inbox',
+    labelKey: 'palette.nav.inbox',
+    to: '/',
+    icon: <Inbox size={14} strokeWidth={1.75} />
+  },
+  {
+    id: 'search',
+    labelKey: 'palette.nav.search',
+    to: '/search',
+    icon: <SearchIcon size={14} strokeWidth={1.75} />
+  },
+  {
+    id: 'admin',
+    labelKey: 'palette.nav.admin',
+    to: '/admin',
+    icon: <BarChart3 size={14} strokeWidth={1.75} />
+  },
+  {
+    id: 'llm',
+    labelKey: 'palette.nav.llm',
+    to: '/llm',
+    icon: <Sparkles size={14} strokeWidth={1.75} />
+  },
+  {
+    id: 'calendar',
+    labelKey: 'palette.nav.calendar',
+    to: '/calendar',
+    icon: <CalendarDays size={14} strokeWidth={1.75} />
+  },
+  {
+    id: 'settings',
+    labelKey: 'palette.nav.settings',
+    to: '/settings',
+    icon: <Cog size={14} strokeWidth={1.75} />
+  }
+]
+
+function useDebouncedValue<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms)
+    return (): void => clearTimeout(t)
+  }, [value, ms])
+  return v
+}
+
+function substringMatch(haystack: string, needle: string): boolean {
+  if (needle.length === 0) return true
+  return haystack.toLowerCase().includes(needle.toLowerCase())
+}
+
+export function CommandPalette(): React.ReactElement | null {
+  const { t } = useTranslation()
+  const open = useCommandPalette((s) => s.open)
+  const mailApi = useMailApi()
+  const navigate = useNavigate()
+  const setActiveMailbox = useMailbox((s) => s.setActive)
+
+  const [query, setQuery] = useState('')
+  const [highlight, setHighlight] = useState(0)
+  // Track previous open state to reset query/highlight inside render on
+  // open transitions (react.dev "Adjusting state on prop change") — keeps
+  // the renderer from doing a flash of stale data and avoids the
+  // `react-hooks/set-state-in-effect` lint that a useEffect+setState would
+  // trigger.
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    if (open) {
+      setQuery('')
+      setHighlight(0)
+    }
+  }
+  const debouncedQuery = useDebouncedValue(query, 250)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  // Focus the input on every open transition. The reset lives in the
+  // adjust-on-prop-change block above; this effect's only job is the
+  // imperative DOM call (allowed inside an effect — it's the documented
+  // pattern for synchronizing with external systems like the focus model).
+  useEffect(() => {
+    if (!open) return
+    const id = window.setTimeout(() => inputRef.current?.focus(), 0)
+    return (): void => window.clearTimeout(id)
+  }, [open])
+
+  // Mailboxes — cheap (cached in the same query the Sidebar uses).
+  const mailboxesQ = useQuery({
+    queryKey: ['mailboxes'],
+    queryFn: () => mailApi.email.listMailboxes(),
+    staleTime: 30_000,
+    enabled: open
+  })
+  // FTS5 search results — only when 2+ chars typed.
+  const searchQ = useQuery({
+    queryKey: ['palette', 'search', debouncedQuery],
+    queryFn: () =>
+      mailApi.email.search({
+        query: debouncedQuery.trim(),
+        limit: 8
+      }),
+    staleTime: 30_000,
+    enabled: open && debouncedQuery.trim().length >= 2
+  })
+
+  // Build the flat command list (filtered by `query`).
+  const commands: Command[] = useMemo(() => {
+    const out: Command[] = []
+
+    for (const nav of NAV_COMMANDS) {
+      const label = t(nav.labelKey)
+      if (!substringMatch(label, query)) continue
+      out.push({
+        id: `nav:${nav.id}`,
+        kind: 'nav',
+        label,
+        hint: nav.to,
+        icon: nav.icon,
+        run: () => {
+          closeCommandPalette()
+          void navigate({ to: nav.to })
+        }
+      })
+    }
+
+    for (const mb of mailboxesQ.data ?? []) {
+      const label = t('palette.mailbox.go', { name: mb.mailbox })
+      if (!substringMatch(label, query) && !substringMatch(mb.mailbox, query)) continue
+      out.push({
+        id: `mailbox:${mb.mailbox}`,
+        kind: 'mailbox',
+        label,
+        hint: t('palette.mailbox.hint', { unread: mb.unread, total: mb.total }),
+        icon: <Mail size={14} strokeWidth={1.75} />,
+        run: () => {
+          closeCommandPalette()
+          setActiveMailbox(mb.mailbox)
+          void navigate({ to: '/' })
+        }
+      })
+    }
+
+    for (const hit of searchQ.data ?? []) {
+      out.push({
+        id: `search:${hit.internal_id}`,
+        kind: 'search',
+        label: hit.subject ?? t('palette.search.untitled'),
+        hint: hit.snippet ?? hit.sender ?? '',
+        icon: <SearchIcon size={14} strokeWidth={1.75} className="text-coral" />,
+        run: () => {
+          closeCommandPalette()
+          void navigate({ to: '/search' })
+        }
+      })
+    }
+
+    return out
+  }, [t, query, mailboxesQ.data, searchQ.data, navigate, setActiveMailbox])
+
+  // Clamp highlight inside render — same "Adjusting state on prop change"
+  // pattern. Reading `commands.length` directly during render keeps the
+  // displayed highlight consistent with the (just-derived) list size, with
+  // no extra frame where a stale index points past the end.
+  if (commands.length > 0 && highlight >= commands.length) {
+    setHighlight(Math.max(0, commands.length - 1))
+  } else if (commands.length === 0 && highlight !== 0) {
+    setHighlight(0)
+  }
+
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        closeCommandPalette()
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setHighlight((h) => (commands.length === 0 ? 0 : (h + 1) % commands.length))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setHighlight((h) =>
+          commands.length === 0 ? 0 : (h - 1 + commands.length) % commands.length
+        )
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        const cmd = commands[highlight]
+        if (cmd) cmd.run()
+        return
+      }
+    },
+    [commands, highlight]
+  )
+
+  if (!open) return null
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('palette.aria.label')}
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[14vh]"
+      onClick={closeCommandPalette}
+      onKeyDown={onKeyDown}
+    >
+      <div
+        ref={dialogRef}
+        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          'w-[560px] max-h-[60vh] rounded-lg bg-ink-2 border border-ink-border',
+          'shadow-[0_8px_24px_rgba(0,0,0,0.35)] flex flex-col overflow-hidden'
+        )}
+      >
+        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-ink-border-soft">
+          <SearchIcon size={14} strokeWidth={1.75} className="text-ink-fg-2" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('palette.placeholder')}
+            aria-autocomplete="list"
+            aria-controls="palette-listbox"
+            className={cn(
+              'flex-1 bg-transparent text-body text-ink-fg placeholder:text-ink-fg-3',
+              'focus:outline-none'
+            )}
+          />
+          <kbd className="text-meta font-mono text-ink-fg-3 px-1.5 py-0.5 rounded border border-ink-border">
+            Esc
+          </kbd>
+        </div>
+        <ul
+          id="palette-listbox"
+          role="listbox"
+          aria-label={t('palette.aria.list')}
+          className="flex-1 overflow-y-auto scrollbar-thin"
+        >
+          {commands.length === 0 && (
+            <li className="px-3 py-6 text-aux text-ink-fg-2 text-center">
+              {searchQ.isFetching && debouncedQuery.length >= 2
+                ? t('palette.searching')
+                : t('palette.noResults')}
+            </li>
+          )}
+          {commands.map((cmd, idx) => (
+            <li
+              key={cmd.id}
+              role="option"
+              aria-selected={idx === highlight}
+              onMouseEnter={() => setHighlight(idx)}
+              onClick={cmd.run}
+              className={cn(
+                'flex items-center gap-2 px-3 py-2 cursor-pointer',
+                'transition-colors duration-fast',
+                idx === highlight ? 'bg-coral/15' : 'hover:bg-ink-3'
+              )}
+            >
+              <span className="shrink-0 grid place-items-center w-[18px] h-[18px] text-ink-fg-2">
+                {cmd.icon}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-aux text-ink-fg truncate">{cmd.label}</div>
+                {cmd.hint && <div className="text-meta text-ink-fg-3 truncate">{cmd.hint}</div>}
+              </div>
+              <ArrowRight size={12} strokeWidth={2} className="text-ink-fg-3 shrink-0" />
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>,
+    document.body
+  )
+}

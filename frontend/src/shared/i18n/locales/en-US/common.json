@@ -114,6 +114,84 @@
   "empty": {
     "state": "Nothing to show"
   },
+  "shortcutHelp": {
+    "title": "Keyboard shortcuts",
+    "close": "Close",
+    "soon": "soon",
+    "soonHint": "Defined in the design but not wired in V1",
+    "footer": "Press ? any time to open this panel",
+    "scope": {
+      "global": "Global",
+      "inbox": "Inbox",
+      "row": "Row",
+      "chat": "AI chat"
+    },
+    "binding": {
+      "commandPalette": "Command palette",
+      "settings": "Open settings",
+      "shortcutHelp": "Show keyboard help",
+      "nextEmail": "Next email",
+      "prevEmail": "Previous email",
+      "reply": "AI draft reply",
+      "forward": "Forward",
+      "toggleRead": "Toggle read / unread",
+      "toggleFlag": "Toggle flag",
+      "archive": "Archive",
+      "delete": "Delete",
+      "translate": "Translate this email",
+      "toggleBatchSelect": "Toggle batch select",
+      "openAiPanel": "Open AI panel",
+      "switchBackend": "Switch AI backend",
+      "sendChat": "Send AI message",
+      "newChat": "New AI conversation",
+      "toggleIsland": "Toggle Dynamic Island"
+    }
+  },
+  "palette": {
+    "placeholder": "Search commands or mail…",
+    "noResults": "No matches · try a different query",
+    "searching": "Searching…",
+    "aria": {
+      "label": "Command palette",
+      "list": "Command list"
+    },
+    "nav": {
+      "inbox": "Go · Inbox",
+      "search": "Go · Search",
+      "admin": "Go · Admin",
+      "llm": "Go · LLM dashboard",
+      "calendar": "Go · Calendar",
+      "settings": "Go · Settings"
+    },
+    "mailbox": {
+      "go": "Switch to mailbox · {name}",
+      "hint": "{unread} unread · {total} total"
+    },
+    "search": {
+      "untitled": "(no subject)"
+    }
+  },
+  "sidebar": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "accounts": "Accounts",
+      "tools": "Tools",
+      "ops": "Ops"
+    },
+    "flagged": "Flagged",
+    "allMail": "All mail",
+    "aiHistory": "AI history",
+    "search": "Search",
+    "translate": "Translate",
+    "llmDashboard": "LLM Dashboard",
+    "admin": "Admin",
+    "calendar": "Calendar",
+    "settings": "Settings",
+    "shortcuts": "Shortcuts",
+    "online": "online",
+    "cacheWarn": "Cache hit rate low"
+  },
   "chat": {
     "title": "AI Assistant",
     "tabAI": "AI",
@@ -194,6 +272,12 @@
     "retry": "Retry",
     "retryOk": "Email #{id} re-queued",
     "retryFail": "Email #{id} retry failed",
+    "timeAgo": {
+      "seconds": "{n}s ago",
+      "minutes": "{n}m ago",
+      "hours": "{n}h ago",
+      "days": "{n}d ago"
+    },
     "dbVersion": "DB version",
     "tables": "Tables",
     "allTablesPresent": "All present",
@@ -211,6 +295,7 @@
     "v4Rollout": "v4 SQLite-SSoT rollout",
     "deadLetter": "Dead-letter",
     "noDeadLetter": "No dead-letter emails",
+    "noDeadLetterHint": "All sync failures recovered; the pipeline is healthy.",
     "col": {
       "subject": "Subject",
       "sender": "Sender",
@@ -233,6 +318,8 @@
     "statusDist": "Status distribution",
     "cacheHit": "Cache hit rate",
     "cacheTokens": "Cache tokens",
+    "cacheTokensCreation": "Write",
+    "cacheTokensRead": "Hit",
     "selftest": "Self-test",
     "selftestPending": "Testing…",
     "selftestOk": "Gateway healthy",
@@ -243,6 +330,7 @@
     "subtitle": "Invitations received since {since}; replay each one to the Notion calendar.",
     "loading": "Loading…",
     "empty": "No recurring meetings found",
+    "emptyHint": "Widen the time range, or confirm .ics invites synced.",
     "replay": "Replay",
     "replayOk": "Email #{id} replayed",
     "replayFail": "Email #{id} replay failed",

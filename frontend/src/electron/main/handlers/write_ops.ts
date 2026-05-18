@@ -25,7 +25,8 @@
 
 import { ipcMain } from 'electron'
 
-import { CliError, callCli } from '../cli_runner'
+import { callCli } from '../cli_runner'
+import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
 // ---- request shapes -------------------------------------------------------
 
@@ -51,40 +52,12 @@ export interface UpdateFlagOpts {
   dryRun?: boolean
 }
 
-// ---- envelope --------------------------------------------------------------
-
-export type WriteEnvelope<T> =
-  | { ok: true; data: T }
-  | { ok: false; code: string; message: string; hint?: string }
-
-function envelopeFromCli<T>(p: Promise<unknown>): Promise<WriteEnvelope<T>> {
-  return p.then(
-    (data): WriteEnvelope<T> => ({ ok: true, data: data as T }),
-    (err: unknown): WriteEnvelope<T> => {
-      if (err instanceof CliError) {
-        return {
-          ok: false,
-          code: err.errorCode,
-          message: err.message,
-          hint: err.hint
-        }
-      }
-      const message = err instanceof Error ? err.message : String(err)
-      return { ok: false, code: 'E_DISPATCH', message }
-    }
-  )
-}
-
-function ensureInternalId(value: unknown, ipcChannel: string): WriteEnvelope<never> | number {
-  if (!Number.isInteger(value) || (value as number) < 0) {
-    return {
-      ok: false,
-      code: 'E_INVALID_ARG',
-      message: `${ipcChannel}: expected non-negative integer internalId, got ${String(value)}`
-    }
-  }
-  return value as number
-}
+// Sprint 7 Day 1 — `WriteEnvelope<T>`, `envelopeFromCli`, `ensureInternalId`
+// were extracted to `src/electron/main/lib/envelope.ts` (Sprint 6 review opus
+// LOW carry-forward — the same three pieces lived in admin.ts / calendar.ts
+// / write_ops.ts and risked drift). Re-exported here so the published surface
+// of this module is unchanged for tests / external imports.
+export type { WriteEnvelope } from '../lib/envelope'
 
 // ---- CLI arg builders -----------------------------------------------------
 

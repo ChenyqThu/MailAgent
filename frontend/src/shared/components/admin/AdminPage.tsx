@@ -17,6 +17,8 @@ import { Activity, AlertCircle, CheckCircle2, Database, RefreshCw } from 'lucide
 import type { DeadLetterItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 function formatBytes(bytes: number): string {
@@ -26,19 +28,37 @@ function formatBytes(bytes: number): string {
   return `${(mb / 1024).toFixed(2)} GB`
 }
 
-function formatRelative(iso: string | null): string {
+// Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — route through
+// i18n so zh-CN renders "X 秒前" instead of "Xs ago". ICU plurals would be
+// overkill for these unit suffixes (zh has no plural form; en's "1s" vs
+// "Xs" is acceptable as-is for a stats card), so we hand the count + unit
+// to `t()` and let the locale's `admin.timeAgo.{seconds,minutes,hours,days}`
+// template do the formatting.
+function formatRelative(
+  iso: string | null,
+  t: (key: string, vars?: Record<string, unknown>) => string
+): string {
   if (!iso) return '—'
   const ts = Date.parse(iso)
   if (Number.isNaN(ts)) return iso
   const delta = Date.now() - ts
   const seconds = Math.floor(delta / 1000)
-  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 60) return t('admin.timeAgo.seconds', { n: seconds })
   const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 60) return t('admin.timeAgo.minutes', { n: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return t('admin.timeAgo.hours', { n: hours })
   const days = Math.floor(hours / 24)
-  return `${days}d ago`
+  return t('admin.timeAgo.days', { n: days })
+}
+
+/** Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — cap native
+ *  tooltip strings so a multi-MB Anthropic error blob doesn't OOM the
+ *  browser's tooltip layer. The visible cell already truncates via
+ *  `max-w-[...] truncate`; the title attribute was the un-bounded leak. */
+function clampTitle(s: string | null | undefined, max = 500): string {
+  if (!s) return ''
+  return s.length <= max ? s : `${s.slice(0, max)}…`
 }
 
 function HealthPill({ healthy }: { healthy: boolean }): React.ReactElement {
@@ -143,13 +163,13 @@ function DeadLetterRow({ item, onRetry, pending }: DeadLetterRowProps): React.Re
       </td>
       <td
         className="px-3 py-2 text-aux text-ink-fg max-w-[280px] truncate"
-        title={item.subject ?? ''}
+        title={clampTitle(item.subject)}
       >
         {item.subject ?? '—'}
       </td>
       <td
         className="px-3 py-2 text-aux text-ink-fg-1 max-w-[200px] truncate"
-        title={item.sender ?? ''}
+        title={clampTitle(item.sender)}
       >
         {item.sender ?? '—'}
       </td>
@@ -159,11 +179,11 @@ function DeadLetterRow({ item, onRetry, pending }: DeadLetterRowProps): React.Re
       </td>
       <td
         className="px-3 py-2 text-aux text-fail max-w-[280px] truncate"
-        title={item.sync_error ?? ''}
+        title={clampTitle(item.sync_error)}
       >
         {item.sync_error ?? '—'}
       </td>
-      <td className="px-3 py-2 text-aux text-ink-fg-2">{formatRelative(item.updated_at)}</td>
+      <td className="px-3 py-2 text-aux text-ink-fg-2">{formatRelative(item.updated_at, t)}</td>
       <td className="px-3 py-2 text-right">
         <button
           type="button"
@@ -288,7 +308,7 @@ export function AdminPage(): React.ReactElement {
             <StatCard
               label={t('admin.dbSize')}
               value={formatBytes(stats.db_size_bytes)}
-              hint={stats.last_sync_time ? formatRelative(stats.last_sync_time) : undefined}
+              hint={stats.last_sync_time ? formatRelative(stats.last_sync_time, t) : undefined}
             />
             <StatCard label={t('admin.lastRowId')} value={stats.last_max_row_id ?? '—'} />
           </div>
@@ -351,11 +371,17 @@ export function AdminPage(): React.ReactElement {
         </h2>
         <div className="rounded-md border border-ink-border bg-ink-2 overflow-hidden">
           {dlQ.isLoading ? (
-            <div className="px-3 py-6 text-aux text-ink-fg-2 text-center">{t('admin.loading')}</div>
-          ) : (dlQ.data?.length ?? 0) === 0 ? (
-            <div className="px-3 py-6 text-aux text-ink-fg-2 text-center">
-              {t('admin.noDeadLetter')}
+            <div>
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
             </div>
+          ) : (dlQ.data?.length ?? 0) === 0 ? (
+            <EmptyState
+              icon={<CheckCircle2 size={20} strokeWidth={1.75} className="text-ok" />}
+              title={t('admin.noDeadLetter')}
+              hint={t('admin.noDeadLetterHint')}
+            />
           ) : (
             <table className="w-full text-aux">
               <thead className="bg-ink-3">

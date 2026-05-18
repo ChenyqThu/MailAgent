@@ -219,20 +219,23 @@ function ResyncConfirmDialog({
   onPush
 }: ResyncConfirmProps): React.ReactElement | null {
   const { t } = useTranslation()
-  // Sprint 6 Day 1 (opus Nit carry-forward) — refs to wire a Tab focus-trap
-  // across the dialog's three actionable buttons. Plain react-focus-lock
-  // would do this in ~3 lines but pulling a dep just for one dialog feels
-  // over-spec; the hand-rolled trap below is ~15 LoC.
-  const cancelRef = useRef<HTMLButtonElement>(null)
-  const dryRef = useRef<HTMLButtonElement>(null)
-  const pushRef = useRef<HTMLButtonElement>(null)
+  // Sprint 7 Day 1 (Sprint 6 review opus Nit carry-forward) — switch from
+  // ref-per-button to a querySelectorAll-based focus-trap. The old shape
+  // hard-coded "cancel ↔ dry ↔ push" boundary checks; adding a 4th button
+  // (or wiring in a textarea) would silently break the trap. The query-based
+  // version walks every focusable in the dialog at Tab time, so future
+  // additions keep cycling correctly with no maintenance.
+  const dialogRef = useRef<HTMLDivElement>(null)
 
-  // Initial focus → cancel (lowest-risk option, matches platform convention
-  // of "Escape-equivalent" being default). Skipped on closed transitions so
-  // we don't blip focus into nothing when the dialog unmounts.
+  // Initial focus → first focusable in the dialog. Same UX as before
+  // (cancel happens to be the first source-order button), but now driven
+  // by the live DOM so future markup additions don't break the default.
   useEffect(() => {
     if (!open) return
-    cancelRef.current?.focus()
+    const root = dialogRef.current
+    if (!root) return
+    const first = root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+    first?.focus()
   }, [open])
 
   const handleKeyDown = useCallback(
@@ -244,22 +247,28 @@ function ResyncConfirmDialog({
         return
       }
       if (e.key !== 'Tab') return
-      // Focus-trap loop. The dialog has exactly 3 focusable items in source
-      // order: cancel → dry → push. Tab wraps push→cancel; Shift+Tab wraps
-      // cancel→push. Anything else inside the dialog falls through to the
-      // browser's natural Tab handling (today only the 3 buttons exist, but
-      // future fields would still cycle correctly because we only intercept
-      // the boundary cases below).
-      const active = document.activeElement
+      const root = dialogRef.current
+      if (!root) return
+      // Collect all currently-focusable elements in source order. Buttons
+      // with `disabled` are filtered (querySelector returns them, browser
+      // skips them on real Tab walks, so we mirror that to keep the wrap
+      // boundary correct).
+      const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1
+      )
+      if (focusables.length === 0) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      const active = document.activeElement as HTMLElement | null
       if (e.shiftKey) {
-        if (active === cancelRef.current) {
+        if (active === first || !root.contains(active)) {
           e.preventDefault()
-          pushRef.current?.focus()
+          last.focus()
         }
       } else {
-        if (active === pushRef.current) {
+        if (active === last) {
           e.preventDefault()
-          cancelRef.current?.focus()
+          first.focus()
         }
       }
     },
@@ -267,10 +276,10 @@ function ResyncConfirmDialog({
   )
 
   if (!open) return null
-  // Sprint 6 Day 1 (opus Nit carry-forward) — Portal to document.body so
-  // the dialog's lifecycle is independent of the toolbar mount tree. Plain
-  // `<dialog>` would clash with our coral focus ring conventions; hand-
-  // rolled modal stays small + matches DESIGN.md §5 dialog inset.
+  // Portal to document.body so the dialog's lifecycle is independent of
+  // the toolbar mount tree. Plain `<dialog>` would clash with our coral
+  // focus ring conventions; hand-rolled modal stays small + matches
+  // DESIGN.md §5 dialog inset.
   return createPortal(
     <div
       role="dialog"
@@ -281,6 +290,7 @@ function ResyncConfirmDialog({
       onKeyDown={handleKeyDown}
     >
       <div
+        ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
         className={cn(
           'w-[440px] rounded-lg bg-ink-2 border border-ink-border p-5',
@@ -295,7 +305,6 @@ function ResyncConfirmDialog({
         </p>
         <div className="flex items-center gap-2 justify-end">
           <button
-            ref={cancelRef}
             type="button"
             onClick={onCancel}
             className={cn(
@@ -307,7 +316,6 @@ function ResyncConfirmDialog({
             {t('toolbarConfirm.cancel')}
           </button>
           <button
-            ref={dryRef}
             type="button"
             onClick={onDry}
             className={cn(
@@ -320,7 +328,6 @@ function ResyncConfirmDialog({
             {t('toolbarConfirm.resyncDry')}
           </button>
           <button
-            ref={pushRef}
             type="button"
             onClick={onPush}
             className={cn(
@@ -338,6 +345,11 @@ function ResyncConfirmDialog({
     document.body
   )
 }
+
+/** querySelectorAll target for focus-trap walks. Mirrors the W3C
+ *  ATAG "focusable elements" set. */
+const FOCUSABLE_SELECTOR =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
 export function EmailToolbar({
   translate,

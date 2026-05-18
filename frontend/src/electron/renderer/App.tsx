@@ -14,6 +14,9 @@ import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
+import { CommandPalette } from '@shared/components/command/CommandPalette'
+import { GlobalShortcuts } from '@shared/components/keyboard/GlobalShortcuts'
+import { KeyboardHelpModal } from '@shared/components/keyboard/KeyboardHelpModal'
 
 export default function App(): React.ReactElement {
   // The client lives in a useState so HMR doesn't recreate it on every
@@ -47,6 +50,12 @@ export default function App(): React.ReactElement {
             component (EmailToolbar / BatchActionBar / chat panel) can
             fire success/error/long-task toasts via the zustand store. */}
         <ToastContainer />
+        {/* Sprint 7 D2 — `?` / ⌘K / ⌘, bindings + the modals they open.
+            GlobalShortcuts must live inside the router so useNavigate() in
+            cmd+, can resolve. */}
+        <GlobalShortcuts />
+        <KeyboardHelpModal />
+        <CommandPalette />
       </QueryClientProvider>
     </ErrorBoundary>
   )

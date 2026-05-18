@@ -114,6 +114,84 @@
   "empty": {
     "state": "没有可显示的内容"
   },
+  "shortcutHelp": {
+    "title": "键盘快捷键",
+    "close": "关闭",
+    "soon": "即将上线",
+    "soonHint": "已在设计规范中,V1 暂未接通",
+    "footer": "按 ? 随时打开此面板",
+    "scope": {
+      "global": "全局",
+      "inbox": "收件箱",
+      "row": "邮件行",
+      "chat": "AI 对话"
+    },
+    "binding": {
+      "commandPalette": "命令面板",
+      "settings": "打开设置",
+      "shortcutHelp": "显示快捷键帮助",
+      "nextEmail": "下一封邮件",
+      "prevEmail": "上一封邮件",
+      "reply": "AI 起草回复",
+      "forward": "转发",
+      "toggleRead": "切换已读/未读",
+      "toggleFlag": "切换旗标",
+      "archive": "归档",
+      "delete": "删除",
+      "translate": "翻译当前邮件",
+      "toggleBatchSelect": "切换批量选择",
+      "openAiPanel": "打开 AI 面板",
+      "switchBackend": "切换 AI 后端",
+      "sendChat": "发送 AI 消息",
+      "newChat": "新建 AI 对话",
+      "toggleIsland": "切换灵动岛"
+    }
+  },
+  "palette": {
+    "placeholder": "搜索命令或邮件…",
+    "noResults": "无匹配项 · 试试其他关键词",
+    "searching": "搜索中…",
+    "aria": {
+      "label": "命令面板",
+      "list": "命令列表"
+    },
+    "nav": {
+      "inbox": "前往 · 收件箱",
+      "search": "前往 · 全文搜索",
+      "admin": "前往 · 看板",
+      "llm": "前往 · LLM 看板",
+      "calendar": "前往 · 日历",
+      "settings": "前往 · 设置"
+    },
+    "mailbox": {
+      "go": "切换到邮箱 · {name}",
+      "hint": "{unread} 未读 · 共 {total} 封"
+    },
+    "search": {
+      "untitled": "(无主题)"
+    }
+  },
+  "sidebar": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "accounts": "Accounts",
+      "tools": "Tools",
+      "ops": "Ops"
+    },
+    "flagged": "已标旗",
+    "allMail": "所有邮件",
+    "aiHistory": "AI 会话历史",
+    "search": "全文搜索",
+    "translate": "一键翻译",
+    "llmDashboard": "LLM Dashboard",
+    "admin": "看板 Admin",
+    "calendar": "日历",
+    "settings": "设置",
+    "shortcuts": "快捷键",
+    "online": "在线",
+    "cacheWarn": "缓存命中率偏低"
+  },
   "chat": {
     "title": "AI 助手",
     "tabAI": "AI",
@@ -194,6 +272,12 @@
     "retry": "重试",
     "retryOk": "邮件 #{id} 已重新入队",
     "retryFail": "邮件 #{id} 重试失败",
+    "timeAgo": {
+      "seconds": "{n} 秒前",
+      "minutes": "{n} 分钟前",
+      "hours": "{n} 小时前",
+      "days": "{n} 天前"
+    },
     "dbVersion": "DB 版本",
     "tables": "表数",
     "allTablesPresent": "全部就位",
@@ -211,6 +295,7 @@
     "v4Rollout": "v4 SQLite-SSoT 灰度",
     "deadLetter": "死信队列",
     "noDeadLetter": "无死信邮件",
+    "noDeadLetterHint": "所有同步失败的邮件已重试成功;系统运行正常",
     "col": {
       "subject": "标题",
       "sender": "发件人",
@@ -233,6 +318,8 @@
     "statusDist": "状态分布",
     "cacheHit": "缓存命中率",
     "cacheTokens": "缓存 token",
+    "cacheTokensCreation": "写入",
+    "cacheTokensRead": "命中",
     "selftest": "Self-test",
     "selftestPending": "测试中…",
     "selftestOk": "网关健康",
@@ -243,6 +330,7 @@
     "subtitle": "扫描 {since} 起的邀请,可单独重放到 Notion 日历",
     "loading": "加载中…",
     "empty": "未发现周期会议",
+    "emptyHint": "调整时间范围或确认 .ics 邀请已被同步",
     "replay": "重放",
     "replayOk": "邮件 #{id} 重放完成",
     "replayFail": "邮件 #{id} 重放失败",

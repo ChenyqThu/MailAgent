@@ -80,3 +80,46 @@ describe('settings.sanitize', () => {
     expect(__testing.DEFAULTS.attachmentDir).toBeNull()
   })
 })
+
+// Sprint 7 D1 (Sprint 6 review opus MEDIUM #1 carry-forward) — `dbPath` /
+// `attachmentDir` are wired into `better-sqlite3.Database(...)` + fs reads in
+// Sprint 7+. Any traversal sequence or relative path supplied via the IPC
+// must be rejected at the sanitize boundary so a malicious renderer message
+// can't escape the user's chosen scope.
+describe('settings.sanitize path validation (MEDIUM #1)', () => {
+  test('accepts absolute path without traversal', () => {
+    expect(__testing.isSafeUserPath('/Users/me/db.sqlite')).toBe(true)
+    expect(__testing.isSafeUserPath('/var/folders/abc/data')).toBe(true)
+  })
+
+  test('rejects relative paths', () => {
+    expect(__testing.isSafeUserPath('./db.sqlite')).toBe(false)
+    expect(__testing.isSafeUserPath('data/sync_store.db')).toBe(false)
+    expect(__testing.isSafeUserPath('')).toBe(false)
+  })
+
+  test('rejects traversal segments', () => {
+    expect(__testing.isSafeUserPath('/Users/me/../../etc/passwd')).toBe(false)
+    expect(__testing.isSafeUserPath('/Users/me/foo/..')).toBe(false)
+  })
+
+  test('sanitize drops non-absolute dbPath silently', () => {
+    expect(__testing.sanitize({ dbPath: './evil.db' })).toEqual({})
+    expect(__testing.sanitize({ attachmentDir: '../escape' })).toEqual({})
+  })
+
+  test('sanitize drops traversal-bearing absolute path', () => {
+    expect(__testing.sanitize({ dbPath: '/Users/me/../../private/etc' })).toEqual({})
+  })
+
+  test('sanitize accepts safe absolute path', () => {
+    expect(__testing.sanitize({ dbPath: '/Users/me/db.sqlite' })).toEqual({
+      dbPath: '/Users/me/db.sqlite'
+    })
+  })
+
+  test('sanitize allows null to clear path (DEFAULTS fallback)', () => {
+    expect(__testing.sanitize({ dbPath: null })).toEqual({ dbPath: null })
+    expect(__testing.sanitize({ attachmentDir: null })).toEqual({ attachmentDir: null })
+  })
+})
