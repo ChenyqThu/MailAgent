@@ -5,7 +5,13 @@
 // the route count grows. HMR loss on edits to this file is the expected
 // trade-off — every other module HMRs normally.
 
-import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet
+} from '@tanstack/react-router'
 
 import { AdminLayout } from './components/layout/AdminLayout'
 import { CalendarLayout } from './components/layout/CalendarLayout'
@@ -74,6 +80,19 @@ const settingsRoute = createRoute({
   component: SettingsLayout
 })
 
+// Sprint 10 (c) packaged-app fix — TanStack Router defaults to
+// `createBrowserHistory`, which reads `window.location.pathname`. In a packaged
+// Electron app the renderer loads via `file:///.../app.asar/out/renderer/index.html`
+// so the pathname is the full filesystem path, not `/`, and no registered
+// route matches → users see the default "Not Found" screen with no UI.
+//
+// Detect "real `file://` protocol, not a dev server" and fall through to
+// `createMemoryHistory({initialEntries: ['/']})`. In dev (vite serves the page
+// over http://localhost) we stay on browser history so URL changes show up in
+// devtools and HMR navigation works as expected.
+const isPackagedFileProtocol =
+  typeof window !== 'undefined' && window.location?.protocol === 'file:'
+
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     inboxRoute,
@@ -82,7 +101,8 @@ export const router = createRouter({
     llmRoute,
     calendarRoute,
     settingsRoute
-  ])
+  ]),
+  history: isPackagedFileProtocol ? createMemoryHistory({ initialEntries: ['/'] }) : undefined
 })
 
 declare module '@tanstack/react-router' {
