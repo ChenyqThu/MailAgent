@@ -805,3 +805,175 @@ describe('useEmailChat — abort + lifecycle', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('useEmailChat — Sprint 10 reviewer L1/L2/L3 island envelope contracts', () => {
+  // We need to drive the Date.now()-based 500ms throttle gate without freezing
+  // React's setTimeout-based scheduling (which waitFor + the hook's useEffect
+  // bookkeeping depend on). vitest's `toFake: ['Date']` keeps `setTimeout` /
+  // `queueMicrotask` real while making `vi.setSystemTime(...)` shift Date.now()
+  // freely.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-05-18T00:00:00.000Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  test('L1 throttle — 3 chunks within 500ms emit aiDraftStream once', async () => {
+    mockChatListSessions.mockResolvedValue([])
+    mockChatStart.mockResolvedValue({
+      sessionId: 5,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 5, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 5, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
+
+    await act(async () => {
+      await result.current.send({
+        message: 'compose',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6',
+        senderName: 'John Smith',
+        subject: 'Q1 plan'
+      })
+    })
+
+    // L3 — AIDraftStart fired with the plumbed-through sender/subject.
+    expect(stableMailApi.island.aiDraftStart).toHaveBeenCalledTimes(1)
+    expect(stableMailApi.island.aiDraftStart).toHaveBeenCalledWith({
+      emailId: 101,
+      senderName: 'John Smith',
+      subject: 'Q1 plan',
+      prompt: 'compose'
+    })
+
+    // First chunk → emits (last-fire was 0 ms, gate `now - last >= 500`
+    // is true on the first event).
+    act(() => {
+      emitStream({ sessionId: 5, messageId: 101, event: { type: 'chunk', delta: 'aaa' } })
+    })
+    // Within the 500ms window — second chunk should NOT emit.
+    vi.setSystemTime(new Date('2026-05-18T00:00:00.100Z'))
+    act(() => {
+      emitStream({ sessionId: 5, messageId: 101, event: { type: 'chunk', delta: 'bbb' } })
+    })
+    // Still within 500ms — third chunk also throttled.
+    vi.setSystemTime(new Date('2026-05-18T00:00:00.300Z'))
+    act(() => {
+      emitStream({ sessionId: 5, messageId: 101, event: { type: 'chunk', delta: 'ccc' } })
+    })
+
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenCalledTimes(1)
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenCalledWith({
+      emailId: 101,
+      streamedChars: 3 // "aaa".length — first emit captures content at that moment
+    })
+
+    // Advance past the 500ms gate — next chunk fires again.
+    vi.setSystemTime(new Date('2026-05-18T00:00:00.700Z'))
+    act(() => {
+      emitStream({ sessionId: 5, messageId: 101, event: { type: 'chunk', delta: 'ddd' } })
+    })
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenCalledTimes(2)
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenLastCalledWith({
+      emailId: 101,
+      streamedChars: 12 // "aaa"+"bbb"+"ccc"+"ddd"
+    })
+  })
+
+  test('L1 trailing flush — done event emits final aiDraftStream + aiDraftReady', async () => {
+    mockChatListSessions.mockResolvedValue([])
+    mockChatStart.mockResolvedValue({
+      sessionId: 5,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 5, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 5, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
+    await act(async () => {
+      await result.current.send({
+        message: 'hi',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6',
+        senderName: 'Alice',
+        subject: 'Demo'
+      })
+    })
+
+    // Emit a single chunk that lands on the gate (count becomes 1).
+    act(() => {
+      emitStream({ sessionId: 5, messageId: 101, event: { type: 'chunk', delta: 'aaa' } })
+    })
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenCalledTimes(1)
+
+    // Emit done — should emit the trailing AIDraftStream + then AIDraftReady,
+    // using sender/subject from the session-meta map (L3).
+    act(() => {
+      emitStream({
+        sessionId: 5,
+        messageId: 101,
+        event: { type: 'done', finalContent: 'aaa final', model: 'claude-sonnet-4-6' }
+      })
+    })
+
+    // Trailing flush — 2nd stream emit captures final char count.
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenCalledTimes(2)
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenLastCalledWith({
+      emailId: 101,
+      streamedChars: 3 // streamedCharsRef stayed at "aaa".length
+    })
+    expect(stableMailApi.island.aiDraftReady).toHaveBeenCalledTimes(1)
+    expect(stableMailApi.island.aiDraftReady).toHaveBeenCalledWith({
+      emailId: 101,
+      senderName: 'Alice',
+      subject: 'Demo',
+      preview: 'aaa final'
+    })
+  })
+
+  test('L2 — session-meta map binds emailId at send() so chunk envelopes never leak', async () => {
+    // Defensive contract: aiDraftStream's emailId comes from the session
+    // metadata map keyed by the chunk's sessionId, NOT from emailIdRef.
+    // Even if a future refactor flipped emailIdRef under us, the envelope
+    // payload would still target the email the session originated on.
+    mockChatListSessions.mockResolvedValue([])
+    mockChatStart.mockResolvedValue({
+      sessionId: 5,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 5, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 5, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
+
+    await act(async () => {
+      await result.current.send({
+        message: 'compose',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6',
+        senderName: 'Author A',
+        subject: 'Email 101'
+      })
+    })
+    act(() => {
+      emitStream({ sessionId: 5, messageId: 101, event: { type: 'chunk', delta: 'xxx' } })
+    })
+    expect(stableMailApi.island.aiDraftStream).toHaveBeenCalledTimes(1)
+    // emailId on the wire equals the email at send() time (101), not whatever
+    // the hook's current `emailId` prop happens to be.
+    expect(stableMailApi.island.aiDraftStream.mock.calls[0][0].emailId).toBe(101)
+  })
+})

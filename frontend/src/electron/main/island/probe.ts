@@ -20,11 +20,12 @@ import { existsSync } from 'fs'
 import { buildPing } from './envelope'
 import { resolveSocketPath, sendEnvelope, type SendOutcome } from './sender'
 
-/** Default probe cadence: 60s during dev, 5min in production. The probe is
- *  cheap (1 syscall + at most 1 socket open) so even 60s burns < 1 CPU-ms /
- *  hour. Production extends the cadence so a sleeping ping-island doesn't
- *  rack up false-negative noise in the Settings page. */
-const PROBE_INTERVAL_MS_DEV = 60_000
+/** Default probe cadence: 5 min in production. The probe is cheap (1 syscall
+ *  + at most 1 socket open). When `is.dev=true`, `registerIslandHandlers`
+ *  passes `devDisabled: true` and the loop short-circuits — there's no
+ *  separate dev cadence because we never run the loop under dev anyway.
+ *  Reviewer Nit-1: removed PROBE_INTERVAL_MS_DEV (was exported but dead;
+ *  docstring claimed "60s during dev" which contradicted actual behaviour). */
 const PROBE_INTERVAL_MS_PROD = 300_000
 
 export type IslandConnectionState =
@@ -63,6 +64,12 @@ let _status: IslandStatus = {
 const listeners: Set<IslandStatusListener> = new Set()
 let probeTimer: ReturnType<typeof setInterval> | null = null
 let _intervalMs: number = PROBE_INTERVAL_MS_PROD
+/** Sticky latch set by `startProbeLoop({devDisabled: true})`. Reviewer M3:
+ *  once dev-disabled, `setIslandEnabled(true)` should NOT clear it. Cleared
+ *  only by a fresh `startProbeLoop({devDisabled: false})` (next `app.whenReady`
+ *  cycle) or `__resetForTesting`. */
+let _devDisabled: boolean = false
+let _warmupTimer: ReturnType<typeof setTimeout> | null = null
 
 export function getIslandStatus(): IslandStatus {
   return _status
@@ -133,14 +140,22 @@ export interface StartProbeOpts {
 
 export function startProbeLoop(opts?: StartProbeOpts): void {
   if (probeTimer !== null) return
+  // Reviewer M2: capture _intervalMs BEFORE the dev-disabled early return so
+  // a later `setIslandEnabled(true)` picks up a caller-supplied interval
+  // even when the first startup short-circuited.
+  _intervalMs = opts?.intervalMs ?? PROBE_INTERVAL_MS_PROD
   if (opts?.devDisabled) {
+    _devDisabled = true
     setStatus({ state: 'dev-disabled', lastProbeAt: null, lastError: null })
     return
   }
-  _intervalMs = opts?.intervalMs ?? PROBE_INTERVAL_MS_PROD
+  _devDisabled = false
   // Run one probe near startup so the renderer's first status fetch returns
   // a useful state (idle → connected/disconnected) instead of the seed.
-  setTimeout(() => {
+  // Reviewer L6: track the handle so `stopProbeLoop` can cancel it before it
+  // fires, avoiding a stray probe right after a quick disable.
+  _warmupTimer = setTimeout(() => {
+    _warmupTimer = null
     void probeOnce()
   }, 100)
   probeTimer = setInterval(() => {
@@ -149,6 +164,10 @@ export function startProbeLoop(opts?: StartProbeOpts): void {
 }
 
 export function stopProbeLoop(): void {
+  if (_warmupTimer !== null) {
+    clearTimeout(_warmupTimer)
+    _warmupTimer = null
+  }
   if (probeTimer !== null) {
     clearInterval(probeTimer)
     probeTimer = null
@@ -156,11 +175,22 @@ export function stopProbeLoop(): void {
 }
 
 /** Toggle the integration on/off from Settings. `enabled=false` parks the
- *  status at 'disabled' and skips probes until re-enabled. */
+ *  status at 'disabled' and skips probes until re-enabled.
+ *
+ *  Reviewer M3: when the bridge was started in `dev-disabled` mode (i.e.
+ *  `startProbeLoop({devDisabled: true})` set the `_devDisabled` latch), a
+ *  manual `setIslandEnabled(true)` must NOT silently start the probe loop —
+ *  that contradicts the "dev-disabled means no auto-probe ever" contract.
+ *  Settings can still trigger one-shot `probeOnce()` to test the path. */
 export function setIslandEnabled(enabled: boolean): IslandStatus {
   if (!enabled) {
     stopProbeLoop()
     setStatus({ state: 'disabled', lastProbeAt: null, lastError: null })
+    return _status
+  }
+  if (_devDisabled) {
+    // Park back at dev-disabled — auto-probe stays off until next launch.
+    setStatus({ state: 'dev-disabled', lastProbeAt: null, lastError: null })
     return _status
   }
   setStatus({ state: 'idle', lastProbeAt: null, lastError: null })
@@ -172,6 +202,8 @@ export function setIslandEnabled(enabled: boolean): IslandStatus {
 export function __resetForTesting(socketPath?: string): void {
   stopProbeLoop()
   listeners.clear()
+  _devDisabled = false
+  _intervalMs = PROBE_INTERVAL_MS_PROD
   _status = {
     state: 'idle',
     socketPath: socketPath ?? resolveSocketPath(),
@@ -180,9 +212,21 @@ export function __resetForTesting(socketPath?: string): void {
   }
 }
 
+/** Reviewer L5: feed envelope send outcomes into the IslandStatus state
+ *  machine so a transient ping-island crash flips the renderer pill within
+ *  one envelope rather than waiting up to 5 min for the next probe tick.
+ *  Skips when the bridge is parked at 'disabled' / 'dev-disabled' so a
+ *  send attempted while the latch is sticky doesn't override the latch. */
+export function reportSendOutcome(outcome: SendOutcome): void {
+  if (_status.state === 'disabled' || _status.state === 'dev-disabled') return
+  const mapped = outcomeToState(outcome)
+  setStatus({ state: mapped.state, lastProbeAt: Date.now(), lastError: mapped.error })
+}
+
 export const __testing = {
   setStatus,
   outcomeToState,
-  PROBE_INTERVAL_MS_DEV,
-  PROBE_INTERVAL_MS_PROD
+  PROBE_INTERVAL_MS_PROD,
+  getDevDisabledLatch: (): boolean => _devDisabled,
+  getIntervalMs: (): number => _intervalMs
 }

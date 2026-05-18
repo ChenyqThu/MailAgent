@@ -31,6 +31,7 @@ import {
   buildAppearanceChange,
   getIslandStatus,
   probeOnce,
+  reportSendOutcome,
   sendEnvelope,
   setIslandEnabled,
   startProbeLoop,
@@ -79,28 +80,34 @@ export function registerIslandHandlers(opts?: RegisterIslandOpts): void {
   })
 
   // ---- ephemeral envelopes (fire-and-forget) ------------------------------
+  //
+  // Reviewer L5: each send's outcome feeds back into the IslandStatus state
+  // machine. We keep the fire-and-forget contract (no `await`, no exposed
+  // promise) but chain a `.then` so a transient ping-island crash flips the
+  // renderer pill within a single envelope round-trip instead of waiting up
+  // to one probe interval (5 min) for the next loop tick to notice.
   ipcMain.on('island:appearance', (_evt, payload: unknown) => {
     if (!isAppearancePayload(payload)) return
     if (!isOperable()) return
-    void sendEnvelope(buildAppearanceChange(payload))
+    void sendEnvelope(buildAppearanceChange(payload)).then(reportSendOutcome)
   })
 
   ipcMain.on('island:aiDraftStart', (_evt, payload: unknown) => {
     if (!isStartPayload(payload)) return
     if (!isOperable()) return
-    void sendEnvelope(buildAIDraftStart(payload))
+    void sendEnvelope(buildAIDraftStart(payload)).then(reportSendOutcome)
   })
 
   ipcMain.on('island:aiDraftStream', (_evt, payload: unknown) => {
     if (!isStreamPayload(payload)) return
     if (!isOperable()) return
-    void sendEnvelope(buildAIDraftStream(payload))
+    void sendEnvelope(buildAIDraftStream(payload)).then(reportSendOutcome)
   })
 
   ipcMain.on('island:aiDraftReady', (_evt, payload: unknown) => {
     if (!isReadyPayload(payload)) return
     if (!isOperable()) return
-    void sendEnvelope(buildAIDraftReady(payload))
+    void sendEnvelope(buildAIDraftReady(payload)).then(reportSendOutcome)
   })
 
   // ---- probe → broadcast --------------------------------------------------

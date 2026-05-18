@@ -217,6 +217,23 @@ describe('sendEnvelope: happy paths', () => {
     if (out.ok) expect(out.response).toBeNull()
   })
 
+  test('reviewer M1: close WITHOUT prior connect → reason=unknown (RST masquerade)', async () => {
+    // Some platforms surface "kernel rejected the connect" or "peer accepted
+    // then immediately RST" only through `'close'` (no `'connect'`, no
+    // `'error'`). The pre-Sprint-10 default `ok:true response:null` masked
+    // these as healthy probes; Sprint 10 (a) Day 1 close treats them as
+    // `unknown` failures so the probe state machine flips degraded.
+    const fake = makeFakeSocket()
+    const promise = sendEnvelope(buildPing(), { factory: factoryReturning(fake) })
+    fake.fire('close')
+    const out = await promise
+    expect(out.ok).toBe(false)
+    if (!out.ok) {
+      expect(out.reason).toBe('unknown')
+      expect(out.detail).toContain('closed before connect')
+    }
+  })
+
   test('write closes write-half via socket.end (POSIX shutdown SHUT_WR)', async () => {
     const fake = makeFakeSocket()
     const promise = sendEnvelope(buildPing(), { factory: factoryReturning(fake) })

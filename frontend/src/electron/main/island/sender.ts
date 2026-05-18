@@ -67,21 +67,30 @@ export function resolveSocketPath(opts?: SendOpts): string {
 export function resolveTimeoutMs(opts?: SendOpts): number {
   const fromOpts = opts?.timeoutMs
   if (typeof fromOpts === 'number' && Number.isFinite(fromOpts)) return fromOpts
-  const envRaw = process.env.ISLAND_SOCKET_TIMEOUT
+  // Reviewer L4: env is now interpreted in milliseconds to match the
+  // `_MS` constant suffix and the default value `3_000`. `ISLAND_SOCKET_TIMEOUT_MS`
+  // is the canonical name; `ISLAND_SOCKET_TIMEOUT` is kept as an alias for
+  // continuity (Sprint 9 shipped it briefly, but treat the value as ms here
+  // — anyone who set `=3000` expecting 3 s gets exactly 3 s instead of 3000 s).
+  const envRaw = process.env.ISLAND_SOCKET_TIMEOUT_MS ?? process.env.ISLAND_SOCKET_TIMEOUT
   if (envRaw !== undefined) {
     const parsed = parseFloat(envRaw)
-    if (Number.isFinite(parsed) && parsed > 0) return Math.round(parsed * 1000)
+    if (Number.isFinite(parsed) && parsed > 0) return Math.round(parsed)
   }
   return DEFAULT_TIMEOUT_MS
 }
 
 /** Bottom-half worker — exposed for tests so the connection factory + clock
- *  can be substituted. Production callers should use {@link sendEnvelope}. */
+ *  can be substituted. Production callers should use {@link sendEnvelope}.
+ *
+ *  Reviewer Nit-3: per-event listener overloads narrow `chunkRaw` to `Buffer`
+ *  at the call site, removing the `as Buffer` cast in `socket.on('data', …)`. */
 export interface SocketLike {
-  on(
-    event: 'connect' | 'data' | 'end' | 'close' | 'error',
-    listener: (...a: unknown[]) => void
-  ): this
+  on(event: 'connect', listener: () => void): this
+  on(event: 'data', listener: (chunk: Buffer) => void): this
+  on(event: 'end', listener: () => void): this
+  on(event: 'close', listener: () => void): this
+  on(event: 'error', listener: (err: NodeJS.ErrnoException) => void): this
   write(chunk: Buffer, cb?: (err?: Error | null) => void): boolean
   end(): void
   destroy(err?: Error): void
@@ -139,6 +148,10 @@ export function sendEnvelope(
     let response = Buffer.alloc(0)
     let settled = false
     let timeoutId: ReturnType<typeof setTimeout> | null = null
+    /** Reviewer M1: track whether `'connect'` ever fired so a `'close'`-only
+     *  termination can distinguish "peer accepted then RST" (real failure)
+     *  from "peer half-closed after our write" (legit fail-open success). */
+    let connectFired = false
 
     const settle = (outcome: SendOutcome): void => {
       if (settled) return
@@ -157,6 +170,7 @@ export function sendEnvelope(
     }, timeoutMs)
 
     socket.on('connect', () => {
+      connectFired = true
       socket.write(bytes, (writeErr) => {
         if (writeErr) {
           settle({ ok: false, reason: 'unknown', detail: writeErr.message })
@@ -169,8 +183,7 @@ export function sendEnvelope(
       })
     })
 
-    socket.on('data', (chunkRaw: unknown) => {
-      const chunk = chunkRaw as Buffer
+    socket.on('data', (chunk: Buffer) => {
       response = Buffer.concat([response, chunk])
       if (response.length > MAX_RESPONSE_BYTES) {
         settle({
@@ -200,14 +213,23 @@ export function sendEnvelope(
     })
 
     socket.on('close', () => {
-      // Most platforms emit 'end' before 'close', but if the peer hangs up
-      // without writing anything (or ENOENT before connect), 'close' fires
-      // alone. Treat as silent success only when we have no other signal.
-      if (!settled) settle({ ok: true, response: null })
+      if (settled) return
+      // Reviewer M1: a `'close'` with NO prior `'connect'` and NO prior
+      // `'error'` means the kernel either rejected the connect outright
+      // (some platforms surface this only through `'close'`) OR the peer
+      // accepted then immediately RST. Either way, treat as `unknown`
+      // failure so the probe state machine doesn't see it as healthy.
+      if (!connectFired) {
+        settle({ ok: false, reason: 'unknown', detail: 'closed before connect' })
+        return
+      }
+      // `'connect'` did fire — the write half-close was acknowledged by the
+      // peer dropping the connection without writing a body. This is the
+      // legit "one-shot peer" pattern: silent success.
+      settle({ ok: true, response: null })
     })
 
-    socket.on('error', (errRaw: unknown) => {
-      const err = errRaw as NodeJS.ErrnoException
+    socket.on('error', (err: NodeJS.ErrnoException) => {
       const code = err.code ?? ''
       if (code === 'ENOENT') {
         settle({ ok: false, reason: 'enoent', detail: err.message })
@@ -226,8 +248,10 @@ export function sendEnvelope(
   })
 }
 
-/** Wire-level constants exposed for tests + UI hints (Settings page shows
- *  the resolved socket path read-only). */
+/** Wire-level constants exposed for tests. The Settings page does NOT consume
+ *  these — it reads the resolved socket path from `useIslandStore.socketPath`
+ *  (mirrored via `getIslandStatus()`). Reviewer Nit-2: comment kept tests-only
+ *  so the next reader doesn't grep for a phantom UI hint usage. */
 export const __wire = {
   MAX_ENVELOPE_BYTES,
   MAX_RESPONSE_BYTES,

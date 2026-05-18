@@ -129,17 +129,25 @@ export function AIChatPanel(): React.ReactElement {
       if (activeInternalId === null) return
       setDraft('')
       try {
+        // Sprint 10 reviewer L3 — plumb the active email's senderName +
+        // subject through to useEmailChat so the AIDraftStart / AIDraftReady
+        // envelopes show real labels in the ping-island card (`AI 起草中 /
+        // <senderName>` instead of `... / —`). detailQ resolves from the same
+        // mailApi.email.get query AIChatPanel renders elsewhere, so by the
+        // time the user clicks send we almost always have the meta cached.
         await chat.send({
           message: text,
           backendKind: backend.kind,
           backendModel: backend.model,
-          backendAgentPageId: backend.agentPageId
+          backendAgentPageId: backend.agentPageId,
+          senderName: detailQ.data?.sender_name ?? null,
+          subject: detailQ.data?.subject ?? null
         })
       } catch {
         // Errors are surfaced via chat.error; nothing else to do here.
       }
     },
-    [activeInternalId, backend, chat]
+    [activeInternalId, backend, chat, detailQ.data]
   )
 
   const handlePickAction = useCallback((prompt: string) => setDraft(prompt), [])
