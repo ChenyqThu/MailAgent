@@ -642,4 +642,141 @@ describe('useEmailChat — abort + lifecycle', () => {
     )
     expect(mockChatStart).not.toHaveBeenCalled()
   })
+
+  // Sprint 6 Day 1 (opus LOW carry-forward) — broadened RETRIABLE_ERROR_CODES.
+  // E_NOTION_AGENT_FAIL + raw Anthropic mid-stream types should now surface
+  // a Retry CTA so the user can re-fire instead of being stuck.
+  test('E_NOTION_AGENT_FAIL is retriable (Sprint 6 Day 1)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    mockChatStart.mockResolvedValue({
+      sessionId: 1,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+
+    await act(async () => {
+      await result.current.send({ message: 'hi', backendKind: 'notion-agent' })
+    })
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'error', code: 'E_NOTION_AGENT_FAIL', message: 'notion-agent exited 1' }
+      })
+    })
+    expect(result.current.error?.code).toBe('E_NOTION_AGENT_FAIL')
+    expect(result.current.retryLast).not.toBeNull()
+  })
+
+  test('Anthropic raw mid-stream overloaded_error is retriable (Sprint 6 Day 1)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    mockChatStart.mockResolvedValue({
+      sessionId: 1,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+
+    await act(async () => {
+      await result.current.send({ message: 'hi', backendKind: 'custom-api' })
+    })
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'error', code: 'overloaded_error', message: 'Claude is overloaded' }
+      })
+    })
+    expect(result.current.retryLast).not.toBeNull()
+  })
+
+  // Sprint 6 Day 1 (opus LOW carry-forward) — quotaCooldownUntil now
+  // persists to localStorage so a reload inside the 5-min window still
+  // throttles. The lazy useState initializer reads the persisted value on
+  // mount; the setter mirrors via useEffect.
+  //
+  // happy-dom 20.x ships a file-backed localStorage that throws unless the
+  // `--localstorage-file` flag was provided; we don't want to plumb that
+  // into vitest just for one test, so each case installs a per-test
+  // in-memory stub via vi.stubGlobal + tears it down with restoreAllMocks
+  // (covered by the existing afterEach).
+  function withStubbedStorage(seed: Record<string, string> = {}): Record<string, string> {
+    const memory: Record<string, string> = { ...seed }
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k in memory ? memory[k] : null),
+      setItem: (k: string, v: string) => {
+        memory[k] = v
+      },
+      removeItem: (k: string) => {
+        delete memory[k]
+      },
+      clear: () => {
+        for (const k of Object.keys(memory)) delete memory[k]
+      },
+      key: (i: number) => Object.keys(memory)[i] ?? null,
+      get length() {
+        return Object.keys(memory).length
+      }
+    })
+    return memory
+  }
+
+  test('quotaCooldownUntil hydrates from localStorage on mount', async () => {
+    const future = Date.now() + 240_000
+    withStubbedStorage({ 'mailagent.chat.quotaCooldownUntil': String(future) })
+    mockChatListSessions.mockResolvedValue([])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
+    expect(result.current.quotaCooldownUntil).toBe(future)
+    vi.unstubAllGlobals()
+  })
+
+  test('quotaCooldownUntil ignores expired localStorage entry', async () => {
+    const memory = withStubbedStorage({
+      'mailagent.chat.quotaCooldownUntil': String(Date.now() - 5000)
+    })
+    mockChatListSessions.mockResolvedValue([])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
+    expect(result.current.quotaCooldownUntil).toBeNull()
+    // Expired entry was GC'd on read.
+    expect(memory['mailagent.chat.quotaCooldownUntil']).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
+
+  test('E_QUOTA error persists cooldown to localStorage', async () => {
+    const memory = withStubbedStorage()
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'error', code: 'E_QUOTA', message: 'quota exhausted' }
+      })
+    })
+    await waitFor(() =>
+      expect(memory['mailagent.chat.quotaCooldownUntil']).toBeDefined()
+    )
+    expect(parseInt(memory['mailagent.chat.quotaCooldownUntil']!, 10)).toBe(
+      result.current.quotaCooldownUntil!
+    )
+    vi.unstubAllGlobals()
+  })
 })

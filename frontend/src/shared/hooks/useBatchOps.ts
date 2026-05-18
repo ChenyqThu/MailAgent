@@ -50,6 +50,13 @@ export interface UseBatchOpsReturn {
   cancel(): void
 }
 
+// Sprint 6 Day 1 (opus LOW carry-forward) — force-stop sentinel. Stage 2
+// cancel resolves the in-flight unit's race promise with this constant so
+// the loop knows to break without awaiting the still-running unit. We do
+// NOT kill the CLI subprocess from the renderer (the CLI owns its own
+// checkpoint+resume contract); we just stop letting it mutate UI state.
+const FORCE_STOP = Symbol('force-stop')
+
 export function useBatchOps(): UseBatchOpsReturn {
   const [running, setRunning] = useState(false)
   const [cancelStage, setCancelStage] = useState<0 | 1 | 2>(0)
@@ -58,6 +65,11 @@ export function useBatchOps(): UseBatchOpsReturn {
   // synchronously inside the loop to avoid React batching delays.
   const toastIdRef = useRef<number | null>(null)
   const cancelStageRef = useRef<0 | 1 | 2>(0)
+  // Sprint 6 Day 1 — populated for each iteration of the run loop; cancel()
+  // calls this to make the in-flight unit lose Promise.race. Cleared after
+  // each unit settles so a stale resolver from the prior iteration can't
+  // accidentally fire on the next one.
+  const forceStopResolverRef = useRef<(() => void) | null>(null)
 
   const run = useCallback(async (args: BatchRunArgs): Promise<BatchSummary> => {
     const total = args.ids.length
@@ -82,20 +94,46 @@ export function useBatchOps(): UseBatchOpsReturn {
     let failed = 0
     let cancelled = false
 
+    type UnitResult = { ok: true; data: unknown } | { ok: false; err: unknown }
+
     for (let i = 0; i < total; i++) {
-      // Cancel stage 1 (drain): stop queuing. Stage 2 (force): bail out.
+      // Cancel stage 1 (drain): stop queuing. Stage 2 also breaks here on
+      // the iteration AFTER force-stop landed (the in-flight unit already
+      // race-lost below).
       if (cancelStageRef.current >= 1) {
         cancelled = true
         break
       }
       const id = args.ids[i]
-      try {
-        const data = await args.unit(id)
-        outcomes.push({ ok: true, id, data })
+
+      // Sprint 6 Day 1 — wire stage 2 force-stop via Promise.race. The
+      // forceStopPromise resolves only when cancel() is called from stage 1
+      // (i.e. the second cancel press). Race-losing leaves the CLI
+      // subprocess running server-side, but the renderer stops waiting.
+      const forceStopPromise = new Promise<typeof FORCE_STOP>((res) => {
+        forceStopResolverRef.current = (): void => res(FORCE_STOP)
+      })
+      const unitPromise: Promise<UnitResult> = args
+        .unit(id)
+        .then((data): UnitResult => ({ ok: true, data }))
+        .catch((err): UnitResult => ({ ok: false, err }))
+
+      const winner = await Promise.race([unitPromise, forceStopPromise])
+      // Clear so a later cancel() press doesn't fire a stale resolver into
+      // the next iteration's freshly-installed one.
+      forceStopResolverRef.current = null
+
+      if (winner === FORCE_STOP) {
+        cancelled = true
+        break
+      }
+      if (winner.ok) {
+        outcomes.push({ ok: true, id, data: winner.data })
         done++
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        const code = err instanceof Error ? (err as Error & { code?: string }).code : undefined
+      } else {
+        const msg = winner.err instanceof Error ? winner.err.message : String(winner.err)
+        const code =
+          winner.err instanceof Error ? (winner.err as Error & { code?: string }).code : undefined
         outcomes.push({ ok: false, id, code, message: msg })
         failed++
       }
@@ -114,6 +152,7 @@ export function useBatchOps(): UseBatchOpsReturn {
     // Terminal toast: replace the sticky progress one with a success / error.
     useToastStore.getState().dismiss(toastId)
     toastIdRef.current = null
+    forceStopResolverRef.current = null
     setRunning(false)
     setCancelStage(0)
     cancelStageRef.current = 0
@@ -141,6 +180,9 @@ export function useBatchOps(): UseBatchOpsReturn {
     } else if (cancelStageRef.current === 1) {
       cancelStageRef.current = 2
       setCancelStage(2)
+      // Sprint 6 Day 1 — wake the in-flight unit's race. The CLI subprocess
+      // keeps running server-side; the renderer just drops the result.
+      forceStopResolverRef.current?.()
     }
   }, [])
 

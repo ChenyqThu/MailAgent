@@ -53,6 +53,20 @@ export const MAX_VISIBLE = 4
 const DEFAULT_TTL_MS = 3000
 
 let _nextId = 1
+// Sprint 6 Day 1 (opus LOW carry-forward): track auto-dismiss timer ids so
+// `dismiss()` can cancel a still-pending timer instead of letting the
+// closure live + no-op. Stored module-side rather than on the Toast model
+// so the zustand state stays a plain serializable shape — and so a Toast
+// pushed by demote (over-cap drop) can have its lingering timer cleared.
+const _timers = new Map<number, ReturnType<typeof setTimeout>>()
+
+function clearTimerFor(id: number): void {
+  const tid = _timers.get(id)
+  if (tid !== undefined) {
+    clearTimeout(tid)
+    _timers.delete(id)
+  }
+}
 
 export const useToastStore = create<ToastStore>((set, get) => ({
   items: [],
@@ -69,19 +83,26 @@ export const useToastStore = create<ToastStore>((set, get) => ({
     }
     set((s) => {
       const next = [...s.items, toast]
-      // Demote oldest if over cap.
-      while (next.length > MAX_VISIBLE) next.shift()
+      // Demote oldest if over cap — also clear their pending timers so the
+      // closures don't sit in the event loop trying to dismiss a toast
+      // that's no longer in the queue.
+      while (next.length > MAX_VISIBLE) {
+        const dropped = next.shift()
+        if (dropped) clearTimerFor(dropped.id)
+      }
       return { items: next }
     })
     // Schedule auto-dismiss only when TTL > 0 AND no progress (sticky).
     const ttl = toast.ttlMs ?? DEFAULT_TTL_MS
     if (ttl > 0 && toast.progress === undefined) {
-      setTimeout(() => {
+      const tid = setTimeout(() => {
+        _timers.delete(id)
         // Re-check that the toast still exists — it may have been dismissed
         // or replaced by an update with progress (which makes it sticky).
         const cur = get().items.find((t) => t.id === id)
         if (cur && cur.progress === undefined) get().dismiss(id)
       }, ttl)
+      _timers.set(id, tid)
     }
     return id
   },
@@ -91,9 +112,12 @@ export const useToastStore = create<ToastStore>((set, get) => ({
     }))
   },
   dismiss(id) {
+    clearTimerFor(id)
     set((s) => ({ items: s.items.filter((t) => t.id !== id) }))
   },
   clear() {
+    for (const tid of _timers.values()) clearTimeout(tid)
+    _timers.clear()
     set({ items: [] })
   }
 }))
@@ -119,6 +143,8 @@ export function toastInfo(title: string, detail?: string): number {
 
 /** Test escape — reset the monotonic id + clear queue between cases. */
 export function __resetToastStore(): void {
+  for (const tid of _timers.values()) clearTimeout(tid)
+  _timers.clear()
   _nextId = 1
   useToastStore.setState({ items: [] })
 }

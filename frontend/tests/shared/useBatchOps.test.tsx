@@ -160,4 +160,49 @@ describe('useBatchOps — run', () => {
     act(() => result.current.cancel())
     expect(result.current.cancelStage).toBe(2)
   })
+
+  // Sprint 6 Day 1 (opus LOW carry-forward) — stage 2 cancel now races the
+  // in-flight unit via Promise.race against a force-stop sentinel. The unit
+  // promise stays pending forever; the race-loss is what breaks the loop.
+  // Without the fix, stage 2 was dead semantic (loop only checked >=1, so
+  // the in-flight unit had to settle before the loop noticed).
+  test('cancel stage 2 force-stops the in-flight unit (Sprint 6 Day 1)', async () => {
+    // Unit never resolves on its own — only force-stop unwedges it.
+    const unit = vi.fn().mockImplementation(() => new Promise(() => {}))
+    const { result } = renderHook(() => useBatchOps())
+
+    let runPromise!: Promise<Awaited<ReturnType<typeof result.current.run>>>
+    act(() => {
+      runPromise = result.current.run({
+        ids: [42, 43, 44],
+        opLabel: 'translate',
+        unit
+      })
+    })
+
+    // Let the loop enter iteration 0 and start awaiting unit(42).
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // First cancel: stage 1 (drain). The in-flight unit is still pending,
+    // so the loop is still parked inside Promise.race.
+    act(() => {
+      result.current.cancel()
+    })
+    expect(result.current.cancelStage).toBe(1)
+
+    // Second cancel: stage 2 (force). Resolves the race promise so the loop
+    // exits without waiting for unit(42) to finish.
+    act(() => {
+      result.current.cancel()
+    })
+
+    const summary = await runPromise
+    expect(summary.cancelled).toBe(true)
+    expect(summary.done).toBe(0)
+    expect(summary.failed).toBe(0)
+    // unit(42) was started but only its race partner resolved; unit(43) /
+    // unit(44) were never reached.
+    expect(unit).toHaveBeenCalledTimes(1)
+  })
 })

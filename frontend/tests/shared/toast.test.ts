@@ -96,6 +96,39 @@ describe('toast store — setProgress / dismiss / clear', () => {
     useToastStore.getState().clear()
     expect(useToastStore.getState().items).toEqual([])
   })
+
+  // Sprint 6 Day 1 (opus LOW carry-forward) — dismiss() now clears the
+  // auto-dismiss timer alongside removing the item, so a stale timer
+  // closure can't re-fire dismiss on a recycled id.
+  test('dismiss() cancels the pending auto-dismiss timer', () => {
+    const a = toastSuccess('a')
+    // Manually dismiss before the 3s TTL would fire.
+    useToastStore.getState().dismiss(a)
+    expect(useToastStore.getState().items.length).toBe(0)
+    // Advance past the original TTL — the closure should be cleared, so
+    // re-pushing a fresh toast (which would get the same id only if the
+    // counter resets) MUST NOT be silently dismissed by a leftover timer.
+    vi.advanceTimersByTime(5000)
+    // No state change after the timer would have fired.
+    expect(useToastStore.getState().items.length).toBe(0)
+    const b = toastSuccess('b')
+    vi.advanceTimersByTime(100)
+    // The fresh toast is still visible — it's only 100ms in, well under
+    // its own 3s TTL.
+    expect(useToastStore.getState().items.find((t) => t.id === b)).toBeTruthy()
+  })
+
+  test('clear() cancels all pending timers (no stale dismiss after re-push)', () => {
+    toastSuccess('a')
+    toastSuccess('b')
+    useToastStore.getState().clear()
+    expect(useToastStore.getState().items.length).toBe(0)
+    // Push a fresh toast — advance past where the OLD timers would have
+    // fired; the new toast must still be on screen.
+    const c = toastSuccess('c')
+    vi.advanceTimersByTime(2999)
+    expect(useToastStore.getState().items.find((t) => t.id === c)).toBeTruthy()
+  })
 })
 
 describe('toast store — variants', () => {

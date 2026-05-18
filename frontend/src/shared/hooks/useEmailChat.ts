@@ -80,6 +80,35 @@ export interface UseEmailChatReturn {
 // hammering CRS while we wait. Sprint 6 SettingsPage may expose an override.
 const QUOTA_COOLDOWN_MS = 5 * 60 * 1000
 
+// Sprint 6 Day 1 (opus LOW carry-forward) — persist cooldown across reloads
+// so an app restart inside the 5-min window doesn't unmute the user back
+// into another upstream 429. Cosmetic fix; the in-memory path was already
+// correct for the common case.
+const QUOTA_COOLDOWN_STORAGE_KEY = 'mailagent.chat.quotaCooldownUntil'
+
+function readPersistedQuotaCooldown(): number | null {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    const v = localStorage.getItem(QUOTA_COOLDOWN_STORAGE_KEY)
+    if (v === null) return null
+    const ts = parseInt(v, 10)
+    if (!Number.isFinite(ts)) {
+      localStorage.removeItem(QUOTA_COOLDOWN_STORAGE_KEY)
+      return null
+    }
+    // Lazy GC: stale entries clean themselves up on next read.
+    if (ts <= Date.now()) {
+      localStorage.removeItem(QUOTA_COOLDOWN_STORAGE_KEY)
+      return null
+    }
+    return ts
+  } catch {
+    // localStorage unavailable (privacy mode, SSR, etc.) — in-memory fallback
+    // still works for the current session.
+    return null
+  }
+}
+
 export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const mailApi = useMailApi()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -92,8 +121,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
    *  done event. */
   const [lastFailedInput, setLastFailedInput] = useState<SendChatInput | null>(null)
   /** Sprint 5 state machine #4 — epoch millis when the quota cap lifts.
-   *  Set on E_QUOTA error, naturally elapses via the useEffect timer below. */
-  const [quotaCooldownUntil, setQuotaCooldownUntil] = useState<number | null>(null)
+   *  Set on E_QUOTA error, naturally elapses via the useEffect timer below.
+   *  Sprint 6 Day 1: lazy initializer reads from localStorage so an app
+   *  restart inside the 5-min cooldown still respects the throttle. */
+  const [quotaCooldownUntil, setQuotaCooldownUntil] = useState<number | null>(() =>
+    readPersistedQuotaCooldown()
+  )
 
   // Mirror the latest committed emailId into a ref so `send()` can detect
   // a switch that happened while `chat.start()` was in flight. The closure
@@ -273,6 +306,23 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     return (): void => clearTimeout(t)
   }, [quotaCooldownUntil])
 
+  // --- 2.6) quota cooldown localStorage sync (Sprint 6 Day 1) ---------------
+  // Mirror the in-memory value into localStorage so a reload inside the
+  // window restores the throttle. Read happens via the useState lazy
+  // initializer above; this effect handles every subsequent update.
+  useEffect(() => {
+    try {
+      if (typeof localStorage === 'undefined') return
+      if (quotaCooldownUntil === null) {
+        localStorage.removeItem(QUOTA_COOLDOWN_STORAGE_KEY)
+      } else {
+        localStorage.setItem(QUOTA_COOLDOWN_STORAGE_KEY, String(quotaCooldownUntil))
+      }
+    } catch {
+      // localStorage unavailable — cooldown still works in-memory.
+    }
+  }, [quotaCooldownUntil])
+
   // --- 3) abort on email switch / unmount ----------------------------------
   // `activeSessionRef.current` may still be null at effect-run time (the
   // session id arrives from the async `listSessions` promise) — reading
@@ -315,6 +365,11 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         // current email's panel must not flip to streaming on a sessionId
         // it didn't subscribe to.
         mailApi.chat.abort(result.sessionId)
+        // Sprint 6 Day 1 (opus LOW carry-forward) — the captured input is
+        // logically dead once we've already aborted the stranded session.
+        // Clearing it keeps retryLast correctly null and frees the closed-over
+        // object instead of pinning it through this hook's lifetime.
+        setLastFailedInput(null)
         return result
       }
       setActiveSessionIdState(result.sessionId)
@@ -377,10 +432,24 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
 // matches the dispatcher's surfaceable network / upstream codes from
 // custom_api + notion_agent backends. E_ABORTED is intentionally absent —
 // aborts are user-initiated and shouldn't auto-re-fire.
+//
+// Sprint 6 Day 1 (opus LOW carry-forward) — broaden the set:
+//   - E_NOTION_AGENT_FAIL: notion-agent CLI exited non-zero on a mid-stream
+//     transient (Notion API rate, network blip). The dispatcher passes this
+//     through unwrapped; retry usually succeeds on the next attempt.
+//   - overloaded_error / rate_limit_error / api_error: raw Anthropic
+//     mid-stream `error.type` strings that the custom_api backend can emit
+//     verbatim when the upstream sends an SSE `error` chunk instead of a
+//     graceful end. "Claude is overloaded" is the headline case — retry
+//     typically clears within 30s.
 const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   'E_NETWORK',
   'E_UPSTREAM',
   'E_NOTION_AGENT_NETWORK',
   'E_NOTION_AGENT_TIMEOUT',
-  'E_BACKEND_CRASH'
+  'E_NOTION_AGENT_FAIL',
+  'E_BACKEND_CRASH',
+  'overloaded_error',
+  'rate_limit_error',
+  'api_error'
 ])

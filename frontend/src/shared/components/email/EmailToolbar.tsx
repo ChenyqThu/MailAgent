@@ -15,7 +15,8 @@
 // `AI 重跑` + `已读 / 已标旗` go through without confirm — they're
 // trivially reversible.
 
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
@@ -218,16 +219,66 @@ function ResyncConfirmDialog({
   onPush
 }: ResyncConfirmProps): React.ReactElement | null {
   const { t } = useTranslation()
+  // Sprint 6 Day 1 (opus Nit carry-forward) — refs to wire a Tab focus-trap
+  // across the dialog's three actionable buttons. Plain react-focus-lock
+  // would do this in ~3 lines but pulling a dep just for one dialog feels
+  // over-spec; the hand-rolled trap below is ~15 LoC.
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const dryRef = useRef<HTMLButtonElement>(null)
+  const pushRef = useRef<HTMLButtonElement>(null)
+
+  // Initial focus → cancel (lowest-risk option, matches platform convention
+  // of "Escape-equivalent" being default). Skipped on closed transitions so
+  // we don't blip focus into nothing when the dialog unmounts.
+  useEffect(() => {
+    if (!open) return
+    cancelRef.current?.focus()
+  }, [open])
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        onCancel()
+        return
+      }
+      if (e.key !== 'Tab') return
+      // Focus-trap loop. The dialog has exactly 3 focusable items in source
+      // order: cancel → dry → push. Tab wraps push→cancel; Shift+Tab wraps
+      // cancel→push. Anything else inside the dialog falls through to the
+      // browser's natural Tab handling (today only the 3 buttons exist, but
+      // future fields would still cycle correctly because we only intercept
+      // the boundary cases below).
+      const active = document.activeElement
+      if (e.shiftKey) {
+        if (active === cancelRef.current) {
+          e.preventDefault()
+          pushRef.current?.focus()
+        }
+      } else {
+        if (active === pushRef.current) {
+          e.preventDefault()
+          cancelRef.current?.focus()
+        }
+      }
+    },
+    [onCancel]
+  )
+
   if (!open) return null
-  // Plain `<dialog>` would clash with our coral focus ring conventions;
-  // hand-rolled modal stays small + matches DESIGN.md §5 dialog inset.
-  return (
+  // Sprint 6 Day 1 (opus Nit carry-forward) — Portal to document.body so
+  // the dialog's lifecycle is independent of the toolbar mount tree. Plain
+  // `<dialog>` would clash with our coral focus ring conventions; hand-
+  // rolled modal stays small + matches DESIGN.md §5 dialog inset.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="resync-confirm-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={onCancel}
+      onKeyDown={handleKeyDown}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -244,40 +295,47 @@ function ResyncConfirmDialog({
         </p>
         <div className="flex items-center gap-2 justify-end">
           <button
+            ref={cancelRef}
             type="button"
             onClick={onCancel}
             className={cn(
               'px-3 py-1.5 rounded-md text-aux text-ink-fg-1',
-              'hover:bg-ink-4 transition-colors duration-fast'
+              'hover:bg-ink-4 transition-colors duration-fast',
+              'focus:outline-none focus:ring-2 focus:ring-coral/60'
             )}
           >
             {t('toolbarConfirm.cancel')}
           </button>
           <button
+            ref={dryRef}
             type="button"
             onClick={onDry}
             className={cn(
               'px-3 py-1.5 rounded-md text-aux',
               'text-ink-fg border border-ink-border',
-              'hover:bg-ink-4 transition-colors duration-fast'
+              'hover:bg-ink-4 transition-colors duration-fast',
+              'focus:outline-none focus:ring-2 focus:ring-coral/60'
             )}
           >
             {t('toolbarConfirm.resyncDry')}
           </button>
           <button
+            ref={pushRef}
             type="button"
             onClick={onPush}
             className={cn(
               'px-3 py-1.5 rounded-md text-aux font-medium',
               'bg-coral/100 text-accent-fg hover:bg-coral-hover',
-              'transition-colors duration-fast'
+              'transition-colors duration-fast',
+              'focus:outline-none focus:ring-2 focus:ring-accent-fg/40'
             )}
           >
             {t('toolbarConfirm.resyncReal')}
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
