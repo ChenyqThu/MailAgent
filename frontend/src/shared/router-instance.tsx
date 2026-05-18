@@ -13,9 +13,26 @@ import { InboxLayout } from './components/layout/InboxLayout'
 import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
 import { SearchLayout } from './components/layout/SearchLayout'
 import { SettingsLayout } from './components/layout/SettingsLayout'
+// Sprint 7 D2 — `?` / ⌘K / ⌘, bindings + the modals they open.
+// MUST mount inside `RouterProvider` (i.e. inside this rootRoute layout),
+// otherwise the `useNavigate()` call in GlobalShortcuts / CommandPalette
+// fires a "useRouter must be used inside a <RouterProvider> component"
+// warning every keypress. App.tsx originally tried to mount these as
+// RouterProvider's sibling — co-located here so they share the router
+// context with the rest of the route tree.
+import { CommandPalette } from './components/command/CommandPalette'
+import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
+import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 
 function RootLayout(): React.ReactElement {
-  return <Outlet />
+  return (
+    <>
+      <Outlet />
+      <GlobalShortcuts />
+      <KeyboardHelpModal />
+      <CommandPalette />
+    </>
+  )
 }
 
 const rootRoute = createRootRoute({ component: RootLayout })

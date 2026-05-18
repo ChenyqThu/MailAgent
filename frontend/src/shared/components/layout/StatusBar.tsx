@@ -97,7 +97,9 @@ export function StatusBar(): React.ReactElement {
 
       <span className="ml-auto flex items-center gap-1.5">
         <Layers size={11} strokeWidth={2} className="text-ink-fg-3" />
-        <span className="text-ink-fg-3">{t('statusbar.version', { version: status.currentVersion })}</span>
+        <span className="text-ink-fg-3">
+          {t('statusbar.version', { version: status.currentVersion })}
+        </span>
         {status.state === 'downloaded' && (
           <>
             <span className="text-ink-fg-3">·</span>

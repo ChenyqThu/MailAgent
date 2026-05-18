@@ -14,9 +14,6 @@ import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
-import { CommandPalette } from '@shared/components/command/CommandPalette'
-import { GlobalShortcuts } from '@shared/components/keyboard/GlobalShortcuts'
-import { KeyboardHelpModal } from '@shared/components/keyboard/KeyboardHelpModal'
 
 export default function App(): React.ReactElement {
   // The client lives in a useState so HMR doesn't recreate it on every
@@ -45,17 +42,17 @@ export default function App(): React.ReactElement {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
+        {/* Sprint 7 D2 fix (Sprint 8 verify): GlobalShortcuts +
+            KeyboardHelpModal + CommandPalette moved into rootRoute's
+            RootLayout (see `src/shared/router-instance.tsx`) — they call
+            useNavigate(), which must resolve inside RouterProvider, not as
+            its sibling here. */}
         <AppRouter />
         {/* Sprint 5 §2.2 — toast stack mounts once at root so any
             component (EmailToolbar / BatchActionBar / chat panel) can
-            fire success/error/long-task toasts via the zustand store. */}
+            fire success/error/long-task toasts via the zustand store.
+            Toast is router-agnostic, so it stays outside the router. */}
         <ToastContainer />
-        {/* Sprint 7 D2 — `?` / ⌘K / ⌘, bindings + the modals they open.
-            GlobalShortcuts must live inside the router so useNavigate() in
-            cmd+, can resolve. */}
-        <GlobalShortcuts />
-        <KeyboardHelpModal />
-        <CommandPalette />
       </QueryClientProvider>
     </ErrorBoundary>
   )

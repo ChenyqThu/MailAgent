@@ -745,10 +745,7 @@ function UpdateSection(): React.ReactElement {
     try {
       await mailApi.updater.check()
     } catch (err) {
-      toastError(
-        t('settings.update.heading'),
-        err instanceof Error ? err.message : String(err)
-      )
+      toastError(t('settings.update.heading'), err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
@@ -759,10 +756,7 @@ function UpdateSection(): React.ReactElement {
     try {
       await mailApi.updater.download()
     } catch (err) {
-      toastError(
-        t('settings.update.heading'),
-        err instanceof Error ? err.message : String(err)
-      )
+      toastError(t('settings.update.heading'), err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
