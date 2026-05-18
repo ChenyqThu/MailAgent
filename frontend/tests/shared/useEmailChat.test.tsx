@@ -128,6 +128,18 @@ beforeEach(() => {
   streamHandlers.length = 0
   mockChatListSessions.mockResolvedValue([])
   mockChatListMessages.mockResolvedValue([])
+  // Sprint 7 review (opus HIGH) — defensive localStorage cleanup.
+  // `useEmailChat`'s lazy initializer reads `mailagent.chat.quotaCooldownUntil`
+  // at mount. Sprint 7 added more localStorage-touching tests (keyboard-help,
+  // command-palette, sidebar.* keys). If a prior worker left a future-dated
+  // cooldown ts in localStorage, fresh `useEmailChat()` mounts would start
+  // in cooldown state and the stream-event tests at line ~300 would observe
+  // stale `tokens_output: null` instead of the patched-from-done value.
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.clear()
+  } catch {
+    /* happy-dom file-backed localStorage may throw; ignore */
+  }
 })
 
 afterEach(() => {

@@ -76,13 +76,19 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     wired: true
   },
   // ── Inbox ─────────────────────────────────────────────────────────────
+  // Sprint 7 review (opus Nit) — `wired` flags here track "registered via
+  // useShortcut and producing the documented behavior today", NOT design
+  // intent. J / K / R / U / S / X are spec'd in DESIGN §9.5 but never made
+  // it to a `useShortcut(...)` call (the inbox handler set landed pre-Sprint
+  // 4's keyboard refactor). Help modal shows them with a "soon" pill until
+  // Sprint 8 wires the EmailList row navigation contract.
   {
     id: 'nextEmail',
     spec: 'j',
     display: 'J',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.nextEmail',
-    wired: true
+    wired: false
   },
   {
     id: 'prevEmail',
@@ -90,7 +96,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'K',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.prevEmail',
-    wired: true
+    wired: false
   },
   {
     id: 'reply',
@@ -98,7 +104,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'R',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.reply',
-    wired: true
+    wired: false
   },
   {
     id: 'forward',
@@ -114,7 +120,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'U',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.toggleRead',
-    wired: true
+    wired: false
   },
   {
     id: 'toggleFlag',
@@ -122,7 +128,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'S',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.toggleFlag',
-    wired: true
+    wired: false
   },
   {
     id: 'archive',
@@ -155,7 +161,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'X',
     scope: 'row',
     labelKey: 'shortcutHelp.binding.toggleBatchSelect',
-    wired: true
+    wired: false
   },
   // ── Chat ──────────────────────────────────────────────────────────────
   {

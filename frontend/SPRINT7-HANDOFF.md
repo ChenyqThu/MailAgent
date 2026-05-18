@@ -82,6 +82,23 @@
 | `[TODO en]` 残留 | 0 |
 | hard-coded CJK literal (除 mailbox icon placeholder + QuickActions LLM prompts) | 0 |
 
+### 1.2.1 Sprint 7 ship-review opus 4.7 max-effort verdict — APPROVE-with-follow-ups
+
+opus 4.7 code-reviewer subagent 跑出 **0 CRITICAL / 1 HIGH / 4 MEDIUM / 5 LOW / 3 Nit** (13 findings).
+本 sprint 后续 commit 闭 **HIGH + 3 MEDIUM + 2 Nit (6 项)**:
+
+| Severity | Fix | File |
+|---|---|---|
+| HIGH | `useEmailChat.test.tsx` beforeEach 加 `localStorage.clear()` 防 worker pollution — Sprint 7 加的 keyboard-help / palette / cooldown 测试都摸 localStorage,reviewer cold-run 复现 stream-event test 偶 fail | `tests/shared/useEmailChat.test.tsx:126-140` |
+| MEDIUM | CommandPalette 加 querySelectorAll Tab focus-trap (同 KeyboardHelpModal + ResyncConfirmDialog pattern) | `CommandPalette.tsx:onKeyDown` |
+| MEDIUM | CommandPalette a11y combobox 完整化: `role="combobox"` + `aria-haspopup=listbox` + `aria-expanded` + `aria-activedescendant=palette-opt-N` + `<li id="palette-opt-N">` | `CommandPalette.tsx` |
+| MEDIUM | CommandPalette `scrollIntoView({block:'nearest'})` on highlight change — 50+ FTS 命中时 ArrowDown 不再丢焦点出视口 | `CommandPalette.tsx` |
+| MEDIUM | `useBatchOps` 用 `batchToast.running` i18n key 代替 raw template (separator / RTL 友好) | `useBatchOps.ts:86, 159` |
+| Nit | `keymap.ts` `wired: true → false` 给 6 个未真 useShortcut 注册的 binding (nextEmail/prevEmail/reply/toggleRead/toggleFlag/toggleBatchSelect) — 之前 help modal 误标 "ready" | `keymap.ts` |
+| Nit | 删 `InboxLayout.tsx` 重复 `useShortcut('cmd+k', goSearch)` (GlobalShortcuts 已 owns ⌘K → palette,palette 含 Go·Search 项) | `InboxLayout.tsx:8-30` |
+
+剩余 5 LOW + 1 MEDIUM (StrictMode adjust-state warning) + 1 Nit (SkeletonRow WIDTH_CLASS hardening) 留 Sprint 8 (低优,非 user-facing).
+
 ### 1.3 测试覆盖
 
 | 文件 | 新测试 | 覆盖 |

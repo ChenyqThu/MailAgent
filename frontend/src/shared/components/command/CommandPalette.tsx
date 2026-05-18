@@ -8,16 +8,20 @@
 //
 // Karpathy simplicity: no `cmdk` dep. Substring filtering is enough for
 // our command count (~10 items); FTS5 search is already debounced server-
-// side via tanstack-query staleTime. Total surface < 250 LoC.
+// side via tanstack-query staleTime. Total surface < 350 LoC.
 //
 // Keyboard:
 //   Esc                   → close
-//   ↑ / ↓                 → move highlight
+//   ↑ / ↓                 → move highlight (+ scroll into view)
 //   Enter                 → execute highlighted
-//   Tab                   → wrap focus to the input (skip exit)
+//   Tab / Shift+Tab       → cycle focus inside the palette
+//                           (querySelectorAll focus-trap, same pattern as
+//                            KeyboardHelpModal + ResyncConfirmDialog)
 //
-// A11y: role=combobox + role=listbox + aria-activedescendant follow the
-// W3C combobox pattern.
+// A11y: input has role=combobox + aria-haspopup=listbox + aria-controls +
+// aria-activedescendant pointing to the highlighted option id. Each option
+// row carries role=option + aria-selected + an id of `palette-opt-<idx>`
+// so VoiceOver / NVDA actually announces the highlighted command.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -39,6 +43,9 @@ import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useMailbox } from '@shared/state/mailbox'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
+
+const FOCUSABLE_SELECTOR =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
 type CommandKind = 'nav' | 'mailbox' | 'search'
 
@@ -257,9 +264,46 @@ export function CommandPalette(): React.ReactElement | null {
         if (cmd) cmd.run()
         return
       }
+      // Sprint 7 review (opus MEDIUM) — Tab focus-trap inside the palette.
+      // Without this Tab escapes behind the backdrop (aria-modal claim was
+      // not honoured pre-fix).
+      if (e.key === 'Tab') {
+        const root = dialogRef.current
+        if (!root) return
+        const focusables = Array.from(
+          root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
+        ).filter((el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1)
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const active = document.activeElement as HTMLElement | null
+        if (e.shiftKey) {
+          if (active === first || !root.contains(active)) {
+            e.preventDefault()
+            last.focus()
+          }
+        } else {
+          if (active === last || !root.contains(active)) {
+            e.preventDefault()
+            first.focus()
+          }
+        }
+        return
+      }
     },
     [commands, highlight]
   )
+
+  // Sprint 7 review (opus MEDIUM) — scroll the highlighted option into view
+  // so ArrowDown past the visible viewport doesn't strand the user. Uses
+  // `block: 'nearest'` so the input + already-visible rows don't jitter.
+  useEffect(() => {
+    if (!open) return
+    const root = dialogRef.current
+    if (!root) return
+    const opt = root.querySelector<HTMLElement>(`#palette-opt-${highlight}`)
+    opt?.scrollIntoView({ block: 'nearest' })
+  }, [open, highlight])
 
   if (!open) return null
 
@@ -285,11 +329,15 @@ export function CommandPalette(): React.ReactElement | null {
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('palette.placeholder')}
             aria-autocomplete="list"
+            aria-haspopup="listbox"
+            aria-expanded={true}
             aria-controls="palette-listbox"
+            aria-activedescendant={commands.length > 0 ? `palette-opt-${highlight}` : undefined}
             className={cn(
               'flex-1 bg-transparent text-body text-ink-fg placeholder:text-ink-fg-3',
               'focus:outline-none'
@@ -315,6 +363,7 @@ export function CommandPalette(): React.ReactElement | null {
           {commands.map((cmd, idx) => (
             <li
               key={cmd.id}
+              id={`palette-opt-${idx}`}
               role="option"
               aria-selected={idx === highlight}
               onMouseEnter={() => setHighlight(idx)}

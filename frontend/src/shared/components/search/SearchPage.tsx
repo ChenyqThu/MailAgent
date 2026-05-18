@@ -290,9 +290,7 @@ export function SearchPage(): React.ReactElement {
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {normalised.length === 0 && (
           <EmptyState
-            icon={
-              <SearchIcon size={32} strokeWidth={1.25} className="opacity-30" />
-            }
+            icon={<SearchIcon size={32} strokeWidth={1.25} className="opacity-30" />}
             title={t('search.blankState')}
           />
         )}

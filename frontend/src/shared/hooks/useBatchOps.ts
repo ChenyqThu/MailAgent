@@ -81,9 +81,13 @@ export function useBatchOps(): UseBatchOpsReturn {
     cancelStageRef.current = 0
 
     const store = useToastStore.getState()
+    // Sprint 7 review (opus MEDIUM) — route initial title through i18n so the
+    // separator ("批量分类: 3/10" vs "AI Classify: 3/10" vs Arabic RTL) lives
+    // in the locale files. Same i18n key the per-unit progress patch uses
+    // below so the format stays consistent across the toast's lifetime.
     const toastId = store.push({
       variant: 'info',
-      title: `${args.opLabel}: 0/${total}`,
+      title: i18n.t('batchToast.running', { op: args.opLabel, done: 0, total }),
       progress: 0,
       ttlMs: 0
     })
@@ -154,11 +158,15 @@ export function useBatchOps(): UseBatchOpsReturn {
       const completed = done + failed
       useToastStore.getState().setProgress(toastId, completed / total)
       // Mutating title — push a new toast would spam the corner; we patch
-      // the existing entry in place via store internals.
+      // the existing entry in place via store internals. i18n via the same
+      // `batchToast.running` key as the initial push for separator parity.
+      const nextTitle = i18n.t('batchToast.running', {
+        op: args.opLabel,
+        done: completed,
+        total
+      })
       useToastStore.setState((s) => ({
-        items: s.items.map((t) =>
-          t.id === toastId ? { ...t, title: `${args.opLabel}: ${completed}/${total}` } : t
-        )
+        items: s.items.map((t) => (t.id === toastId ? { ...t, title: nextTitle } : t))
       }))
     }
 

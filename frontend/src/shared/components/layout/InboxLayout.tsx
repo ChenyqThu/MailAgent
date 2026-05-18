@@ -5,11 +5,7 @@
 // detail and the right edge; the grid here doesn't need to change — only
 // EmailDetail's max width does.
 
-import { useCallback } from 'react'
-import { useNavigate } from '@tanstack/react-router'
-
 import { useActiveEmail } from '@shared/state/active-email'
-import { useShortcut } from '@shared/hooks/useShortcut'
 
 import { TitleBar } from './TitleBar'
 import { Sidebar } from './Sidebar'
@@ -21,13 +17,12 @@ import { BatchActionBar } from '../batch/BatchActionBar'
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
-  const navigate = useNavigate()
-  // ⌘K → /search. AI chat ⌥B / ⌘↩ register inside the panel itself; this
-  // layout-level binding stays focused on cross-cutting nav.
-  const goSearch = useCallback(() => {
-    navigate({ to: '/search' })
-  }, [navigate])
-  useShortcut('cmd+k', goSearch)
+  // Sprint 7 review (opus Nit) — removed local `useShortcut('cmd+k', goSearch)`
+  // because `GlobalShortcuts` (mounted in App.tsx) now owns ⌘K → command
+  // palette. The palette includes a "Go · Search" navigation entry, so the
+  // user can still reach /search from the same keystroke — without
+  // double-firing two handlers (LIFO + non-consuming open() would have
+  // navigated AND opened the palette on the same press).
   return (
     <div className="flex flex-col h-full bg-ink-0 text-ink-fg">
       <TitleBar />
