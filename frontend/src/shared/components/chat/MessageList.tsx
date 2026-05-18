@@ -69,6 +69,10 @@ function ToolCallRow({ payload }: { payload: ToolPayload }): React.ReactElement 
 function DraftPreviewCard({ content }: { content: string }): React.ReactElement {
   const { t } = useTranslation()
   const headerKlass = useCjkMonoSwap('text-micro font-mono uppercase tracking-wider')
+  // Sprint 5 ship-review (codex MEDIUM #2): draft action buttons resolve to
+  // zh-CN strings ('发送' / '重生成' / '编辑') under CJK locale. The text-meta
+  // mono floor (12px) is sub-Chinese-floor per DESIGN.md §1.3 / §14 #2.
+  const actionKlass = useCjkMonoSwap('text-meta font-mono')
   // Strip the DRAFT REPLY header before piping into TranslatedBody so the
   // marker only shows in the card chrome, not twice.
   const body = content
@@ -86,7 +90,7 @@ function DraftPreviewCard({ content }: { content: string }): React.ReactElement 
         </span>
       </div>
       <TranslatedBody text={body} />
-      <div className="mt-3 flex items-center gap-2 text-meta font-mono">
+      <div className={cn('mt-3 flex items-center gap-2', actionKlass)}>
         <button
           type="button"
           className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-coral/100 text-accent-fg hover:bg-coral-hover transition-colors duration-fast"

@@ -234,13 +234,19 @@ const _queue = new CliQueue()
  * directly so the singleton's before-quit cleanup applies.
  */
 export async function callCli(args: string[], opts: RunOpts = {}): Promise<unknown> {
-  let fullArgs = ['-o', 'json', ...args]
+  // Sprint 5 ship-review (codex HIGH): `--api-key` is a root Typer option on
+  // the `mailagent` CLI (src/cli/main.py:82), NOT a subcommand option. It
+  // MUST come BEFORE the subcommand name; appending it at the end yields
+  // `No such option: --api-key` and breaks every keyed write. `-o json`
+  // is also a global, so we group globals up front.
+  const globals: string[] = ['-o', 'json']
   if (opts.needsAuth) {
     const apiKey = await getCliApiKey()
-    if (apiKey) fullArgs = [...fullArgs, '--api-key', apiKey]
+    if (apiKey) globals.push('--api-key', apiKey)
     // No key configured is not an error here — `mailagent` itself enforces the
     // policy via MAILAGENT_CLI_API_KEY env and will exit 4 (AUTH) if needed.
   }
+  const fullArgs = [...globals, ...args]
   return _queue.run(fullArgs, opts)
 }
 

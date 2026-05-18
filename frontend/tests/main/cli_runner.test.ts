@@ -75,8 +75,9 @@ vi.mock('execa', () => ({
 vi.mock('../../src/electron/main/bin_resolver', () => ({
   whichSync: () => '/usr/local/bin/mailagent'
 }))
+const _getCliApiKey = vi.fn(async () => null as string | null)
 vi.mock('../../src/electron/main/keychain', () => ({
-  getCliApiKey: async () => null
+  getCliApiKey: () => _getCliApiKey()
 }))
 vi.mock('electron', () => ({
   app: { on: vi.fn() }
@@ -84,6 +85,7 @@ vi.mock('electron', () => ({
 
 // Import after mocks.
 const cliRunner = await import('../../src/electron/main/cli_runner')
+const { execa } = await import('execa')
 
 // ---- helpers ----------------------------------------------------------------
 
@@ -308,6 +310,37 @@ describe('AbortController + killAll', () => {
       isCanceled: true
     })
     await expect(call).rejects.toMatchObject({ errorCode: 'E_ABORTED' })
+  })
+
+  test('Sprint 5 ship-review (codex HIGH): --api-key sits BEFORE the subcommand, not after', async () => {
+    // mailagent CLI defines `--api-key` as a root Typer option (see
+    // src/cli/main.py:82). Appending it after `email resync ...` yields
+    // `No such option: --api-key`. This test pins the argv shape so a
+    // regression that moves it back to the tail fails loudly.
+    _getCliApiKey.mockResolvedValueOnce('cr_TEST_KEY_VALUE')
+    scriptedResults.push({
+      stdout: JSON.stringify({ status: 'success', data: { ok: true } }),
+      stderr: '',
+      exitCode: 0
+    })
+    await cliRunner.callCli(['email', 'resync', '53675'], {
+      write: true,
+      needsAuth: true
+    })
+    const execaCalls = (vi.mocked(execa) as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    const lastCall = execaCalls[execaCalls.length - 1]
+    const argv = lastCall[1] as string[]
+    // Globals first, subcommand second.
+    expect(argv.indexOf('--api-key')).toBeLessThan(argv.indexOf('email'))
+    expect(argv).toEqual([
+      '-o',
+      'json',
+      '--api-key',
+      'cr_TEST_KEY_VALUE',
+      'email',
+      'resync',
+      '53675'
+    ])
   })
 
   test('killAll sends SIGTERM to in-flight subprocesses', async () => {

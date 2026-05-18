@@ -14,6 +14,9 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useQuery } from '@tanstack/react-query'
 
+import { cn } from '@shared/lib/cn'
+import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
+
 import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
@@ -155,6 +158,11 @@ export function AIChatPanel(): React.ReactElement {
   )
 
   const errorBanner = chat.error ? mapErrorKey(chat.error.code) : null
+  // Sprint 5 ship-review (codex MEDIUM #2): retry CTA + dismiss icon live on
+  // the error banner; both surfaces resolve to zh-CN text under CJK locale.
+  // Swap text-meta mono → text-aux so the 14px CJK floor (DESIGN.md §14 #2)
+  // holds.
+  const retryActionKlass = useCjkMonoSwap('text-meta font-mono')
 
   return (
     <aside
@@ -191,7 +199,12 @@ export function AIChatPanel(): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => void chat.retryLast?.()}
-                  className="text-meta font-mono text-fail hover:bg-fail/15 px-2 py-0.5 rounded transition-colors duration-fast"
+                  className={cn(
+                    // (codex MEDIUM #2 ship-review) zh-CN "重试" should not
+                    // render at 12px mono — swap to text-aux for CJK locales.
+                    retryActionKlass,
+                    'text-fail hover:bg-fail/15 px-2 py-0.5 rounded transition-colors duration-fast'
+                  )}
                 >
                   {t('chat.error.retry')}
                 </button>
@@ -199,7 +212,7 @@ export function AIChatPanel(): React.ReactElement {
               <button
                 type="button"
                 onClick={chat.clearError}
-                className="text-meta font-mono text-ink-fg-2 hover:text-ink-fg-1"
+                className={cn(retryActionKlass, 'text-ink-fg-2 hover:text-ink-fg-1')}
                 aria-label="dismiss"
               >
                 ×
@@ -262,6 +275,10 @@ function countNonNullAiFields(f: AIFields): number {
 function QuotaCooldownTimer({ until }: { until: number }): React.ReactElement | null {
   const { t } = useTranslation()
   const [now, setNow] = useState(() => Date.now())
+  // (codex MEDIUM #2) zh-CN "额度冷却中 · X 秒后可再次发送" should sit at
+  // text-aux for CJK; English "Quota cooldown · Xs until next send" can stay
+  // mono.
+  const bannerKlass = useCjkMonoSwap('text-meta font-mono')
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(Date.now())
@@ -274,7 +291,12 @@ function QuotaCooldownTimer({ until }: { until: number }): React.ReactElement | 
   if (remainingMs === 0) return null
   const seconds = Math.ceil(remainingMs / 1000)
   return (
-    <div className="px-3 py-1.5 mx-3 mb-2 rounded-md text-meta font-mono text-urg bg-urg/10 border border-urg/30">
+    <div
+      className={cn(
+        'px-3 py-1.5 mx-3 mb-2 rounded-md text-urg bg-urg/10 border border-urg/30',
+        bannerKlass
+      )}
+    >
       {t('chat.error.quotaCooldown', { seconds })}
     </div>
   )
