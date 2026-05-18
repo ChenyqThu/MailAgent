@@ -25,6 +25,7 @@
     "rebuild:electron": "node -e \"const p=require('path'),cp=require('child_process'),root=process.cwd();try{cp.execFileSync(p.join(root,'node_modules/.pnpm/node_modules/.bin/prebuild-install'),['--runtime=electron','--target=39.8.10','--arch=arm64'],{cwd:p.join(root,'node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3'),stdio:'inherit'})}catch(e){if(e.status===null){console.error('prebuild-install completed but exited with signal; binary should be in place')}else{throw e}}\" && codesign --sign - --force node_modules/.pnpm/better-sqlite3@12.10.0/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
     "build:unpack": "pnpm run build && electron-builder --dir",
     "build:mac": "pnpm rebuild:electron && electron-vite build && electron-builder --mac",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
     "gen:types": "tsx scripts/gen-types.ts"
   },
   "dependencies": {
@@ -55,6 +56,7 @@
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
     "@electron-toolkit/tsconfig": "^2.0.0",
+    "@playwright/test": "^1.60.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
