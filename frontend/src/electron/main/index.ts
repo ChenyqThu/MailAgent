@@ -19,6 +19,11 @@ import { registerCalendarHandlers } from './handlers/calendar'
 import { registerSettingsHandlers } from './handlers/settings'
 // Sprint 8 §2.2 — electron-updater bridge (auto-updater state + IPC).
 import { registerUpdaterHandlers } from './handlers/updater'
+// Sprint 9 §2.2 — ping-island bridge (unix socket sender + appearance / AI
+// draft envelopes + connection probe). The probe loop is auto-skipped in
+// dev mode so a developer without ping-island.app doesn't see spurious
+// probe-failure noise in the log.
+import { registerIslandHandlers } from './handlers/island'
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -136,6 +141,10 @@ app.whenReady().then(() => {
     updaterStub = autoUpdater as unknown as import('./handlers/updater').AutoUpdaterLike
   }
   registerUpdaterHandlers({ updater: updaterStub })
+  // Sprint 9 §2.2 — register the IPC channels before createWindow so the
+  // renderer's first `island:status` invoke (on TitleBar mount) hits a
+  // handler that exists. Probe loop runs in production only.
+  registerIslandHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 

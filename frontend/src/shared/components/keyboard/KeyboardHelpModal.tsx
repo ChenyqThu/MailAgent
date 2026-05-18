@@ -8,17 +8,15 @@
 // the backdrop closes. Tab cycles within the modal via the same
 // querySelectorAll focus-trap pattern as ResyncConfirmDialog.
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Keyboard, X } from 'lucide-react'
 
+import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
 import { SCOPE_ORDER, type ShortcutDef, type ShortcutScope, groupByScope } from '@shared/keymap'
 import { closeKeyboardHelp, useKeyboardHelp } from '@shared/state/keyboard-help'
-
-const FOCUSABLE_SELECTOR =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
 function ShortcutRow({ def }: { def: ShortcutDef }): React.ReactElement {
   const { t } = useTranslation()
@@ -62,7 +60,12 @@ function ScopeSection({
   return (
     <section className="space-y-1">
       <h3
-        className="text-micro font-mono uppercase text-ink-fg-2 px-2 pt-2"
+        // Sprint 9 D4.2 (Sprint 7 review LOW #5) — tabIndex={0} so VoiceOver
+        // can rotor-browse the scope headings + Tab focus lands on them.
+        // Without this, NVDA/VoiceOver users can hear the heading via
+        // navigation but can't anchor focus on it.
+        tabIndex={0}
+        className="text-micro font-mono uppercase text-ink-fg-2 px-2 pt-2 focus:outline-none focus:ring-1 focus:ring-coral/40 rounded"
         style={{ letterSpacing: '0.08em' }}
       >
         {t(`shortcutHelp.scope.${scope}`)}
@@ -79,55 +82,27 @@ function ScopeSection({
 export function KeyboardHelpModal(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useKeyboardHelp((s) => s.open)
-  const dialogRef = useRef<HTMLDivElement>(null)
   // Sprint 8 §2.2 (Sprint 7 ship-review MEDIUM #2) — focus fallback target
   // so the React onKeyDown handler on the outer dialog stays alive even
   // when the modal has zero focusable descendants. `tabIndex={-1}` makes
   // the backdrop programmatically focusable without listing it in Tab order.
   const backdropRef = useRef<HTMLDivElement>(null)
+  // Sprint 9 D4.1 — focus-trap hook centralises the querySelectorAll
+  // boundary handling. dialogRef goes on the inner panel.
+  const { dialogRef, handleTab } = useFocusTrap({ open, fallbackRef: backdropRef })
 
-  // Focus first focusable on open; fall back to the backdrop so onKeyDown
-  // (which only fires from focused descendants) still routes Esc.
-  useEffect(() => {
-    if (!open) return
-    const root = dialogRef.current
-    const first = root?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
-    if (first) {
-      first.focus()
-    } else {
-      backdropRef.current?.focus()
-    }
-  }, [open])
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      closeKeyboardHelp()
-      return
-    }
-    if (e.key !== 'Tab') return
-    const root = dialogRef.current
-    if (!root) return
-    const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-      (el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1
-    )
-    if (focusables.length === 0) return
-    const first = focusables[0]
-    const last = focusables[focusables.length - 1]
-    const active = document.activeElement as HTMLElement | null
-    if (e.shiftKey) {
-      if (active === first || !root.contains(active)) {
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === 'Escape') {
         e.preventDefault()
-        last.focus()
+        e.stopPropagation()
+        closeKeyboardHelp()
+        return
       }
-    } else {
-      if (active === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-  }, [])
+      handleTab(e)
+    },
+    [handleTab]
+  )
 
   if (!open) return null
 

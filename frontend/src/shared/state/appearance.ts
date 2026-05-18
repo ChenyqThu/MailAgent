@@ -102,6 +102,17 @@ export function applyResolvedTheme(): void {
     }
     w.electron?.ipcRenderer?.send('appearance:theme', resolved)
     w.electron?.ipcRenderer?.send('appearance:nativeTheme', themeMode)
+    // Sprint 9 §2.3 — broadcast a combined (accent, theme) snapshot to the
+    // ping-island bridge. main/handlers/island.ts wraps this into a
+    // `AppearanceChange` envelope; ping-island's fork uses metadata.* to
+    // repaint accent + theme. The send is silently no-op'd by main when
+    // the integration is disabled / dev-disabled / disconnected, so the
+    // renderer never has to gate on connection state itself.
+    const { accent: currentAccent } = useAppearance.getState()
+    w.electron?.ipcRenderer?.send('island:appearance', {
+      accent: currentAccent,
+      theme: resolved
+    })
   })
 }
 
@@ -113,6 +124,16 @@ export function applyAccent(accent: AccentId): void {
     electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
   }
   w.electron?.ipcRenderer?.send('appearance:accent', accent)
+  // Sprint 9 §2.3 — combined payload (see applyResolvedTheme above). We
+  // read resolvedTheme from the store rather than the OS media query so
+  // the system→dark/light resolution stays consistent across both code
+  // paths (an active accent flip during a system-theme transition would
+  // otherwise race the rAF in applyResolvedTheme).
+  const { resolvedTheme } = useAppearance.getState()
+  w.electron?.ipcRenderer?.send('island:appearance', {
+    accent,
+    theme: resolvedTheme
+  })
 }
 
 // Boot: register OS-change listener once. Caller should also call

@@ -174,6 +174,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // (effect cleanups run BEFORE the next ref-update effect fires, so
   // the ref still holds the previous-commit value at cleanup time).
   const activeSessionRef = useRef<number | null>(null)
+  // Sprint 9 §2.3 — throttle the AIDraftStream envelope to once / 500ms.
+  // streamedCharsRef tracks the cumulative chunked length; lastStreamFireRef
+  // remembers the wall-clock timestamp of the last island.aiDraftStream
+  // emit so the ping-island peer doesn't get an envelope per token.
+  const streamedCharsRef = useRef(0)
+  const lastStreamFireRef = useRef(0)
   useEffect(() => {
     activeSessionRef.current = activeSessionId
   }, [activeSessionId])
@@ -249,10 +255,24 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         const next = [...prev]
         const updated: ChatMessage = { ...next[idx] }
         switch (event.type) {
-          case 'chunk':
+          case 'chunk': {
             updated.content = updated.content + event.delta
             updated.status = 'streaming'
+            // Sprint 9 §2.3 — throttled AIDraftStream envelope. Cumulative
+            // char count is the simplest progress signal ping-island can
+            // render in the Phase 1 pill (`…2.4k chars`) without us having
+            // to thread a percent estimate through every backend.
+            streamedCharsRef.current = updated.content.length
+            const streamEmailId = emailIdRef.current
+            if (streamEmailId !== null && Date.now() - lastStreamFireRef.current >= 500) {
+              lastStreamFireRef.current = Date.now()
+              mailApi.island.aiDraftStream({
+                emailId: streamEmailId,
+                streamedChars: streamedCharsRef.current
+              })
+            }
             break
+          }
           case 'usage':
             updated.tokens_input = event.inputTokens
             updated.tokens_output = event.outputTokens
@@ -281,6 +301,19 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         setLastFailedInput(null)
         // SSoT refresh (catch tool rows + token counts in one network query).
         void refresh(envelope.sessionId)
+        // Sprint 9 §2.3 — AIDraftReady envelope. Preview is the first 240
+        // chars of the final assistant message so the island can render a
+        // glanceable summary before the user switches back to MailAgent.
+        const readyEmailId = emailIdRef.current
+        if (readyEmailId !== null) {
+          const preview = (event.finalContent || '').slice(0, 240)
+          mailApi.island.aiDraftReady({
+            emailId: readyEmailId,
+            senderName: null,
+            subject: null,
+            preview
+          })
+        }
       } else if (event.type === 'error') {
         setStreamingMessageId(null)
         setError({ code: event.code, message: event.message })
@@ -390,6 +423,17 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       setActiveSessionIdState(result.sessionId)
       activeSessionRef.current = result.sessionId
       setStreamingMessageId(result.assistantMessageId)
+      // Sprint 9 §2.3 — fire AIDraftStart envelope. Reset throttle counters
+      // before the first stream chunk arrives; the main side fails open if
+      // ping-island isn't running.
+      streamedCharsRef.current = 0
+      lastStreamFireRef.current = 0
+      mailApi.island.aiDraftStart({
+        emailId: myEmail,
+        senderName: null,
+        subject: null,
+        prompt: input.message
+      })
       await refresh(result.sessionId)
       return result
     },

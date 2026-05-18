@@ -35,6 +35,12 @@ import type {
   EmailDetail,
   EmailMeta,
   EnrichedEmailMeta,
+  IslandAIDraftReadyPayload,
+  IslandAIDraftStartPayload,
+  IslandAIDraftStreamPayload,
+  IslandApi,
+  IslandAppearancePayload,
+  IslandStatus,
   ListOpts,
   LlmApi,
   LlmRunOpts,
@@ -325,6 +331,36 @@ class ElectronChatApi implements ChatApi {
   }
 }
 
+class ElectronIslandApi implements IslandApi {
+  async status(): Promise<IslandStatus> {
+    return (await invoker()('island:status')) as IslandStatus
+  }
+  async testConnection(): Promise<IslandStatus> {
+    return (await invoker()('island:testConnection')) as IslandStatus
+  }
+  async setEnabled(enabled: boolean): Promise<IslandStatus> {
+    return (await invoker()('island:setEnabled', enabled)) as IslandStatus
+  }
+  appearance(payload: IslandAppearancePayload): void {
+    sender()?.('island:appearance', payload)
+  }
+  aiDraftStart(payload: IslandAIDraftStartPayload): void {
+    sender()?.('island:aiDraftStart', payload)
+  }
+  aiDraftStream(payload: IslandAIDraftStreamPayload): void {
+    sender()?.('island:aiDraftStream', payload)
+  }
+  aiDraftReady(payload: IslandAIDraftReadyPayload): void {
+    sender()?.('island:aiDraftReady', payload)
+  }
+  onEvent(handler: (status: IslandStatus) => void): () => void {
+    return subscribe('island:event', (...args: unknown[]) => {
+      const s = args[0] as IslandStatus | undefined
+      if (s && typeof s === 'object') handler(s)
+    })
+  }
+}
+
 class ElectronUpdaterApi implements UpdaterApi {
   async status(): Promise<UpdaterStatus> {
     return (await invoker()('updater:status')) as UpdaterStatus
@@ -357,4 +393,5 @@ export class ElectronApi implements MailApi {
   calendar: CalendarApi = new ElectronCalendarApi()
   settings: SettingsApi = new ElectronSettingsApi()
   updater: UpdaterApi = new ElectronUpdaterApi()
+  island: IslandApi = new ElectronIslandApi()
 }

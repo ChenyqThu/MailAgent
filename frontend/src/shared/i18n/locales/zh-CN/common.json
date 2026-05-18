@@ -424,6 +424,29 @@
       "error": "更新检查失败:{message}",
       "devDisabled": "Dev 模式下 auto-updater 已禁用,仅打包版本可用",
       "channel": "GitHub Releases · ad-hoc 签名"
+    },
+    "island": {
+      "heading": "灵动岛集成",
+      "channel": "ping-island · /tmp/island.sock · ad-hoc",
+      "statusLabel": "连接状态",
+      "socketPath": "Socket 路径",
+      "testConnection": "测试连接",
+      "enable": "启用灵动岛",
+      "enableHint": "未运行 ping-island.app 时仍可启用;主进程 fail-open 不会阻塞同步",
+      "testing": "测试中…",
+      "testOk": "灵动岛连接正常",
+      "testFail": "灵动岛连接失败",
+      "lastProbe": "上次探测 {agoSec}s 前",
+      "toggleOn": "开",
+      "toggleOff": "关",
+      "state": {
+        "idle": "未探测",
+        "connected": "已连接",
+        "degraded": "连接异常",
+        "disconnected": "未运行",
+        "devDisabled": "Dev 模式 · 已禁用",
+        "disabled": "已关闭"
+      }
     }
   },
   "statusbar": {
@@ -434,5 +457,16 @@
     "theme": "主题",
     "llmIdle": "空闲",
     "updateReady": "更新就绪"
+  },
+  "titleBar": {
+    "island": {
+      "label": "Island",
+      "idle": "灵动岛初始化中…",
+      "connected": "灵动岛已连接",
+      "degraded": "灵动岛连接异常 — 查看设置",
+      "disconnected": "灵动岛未运行 — 启动 ping-island.app",
+      "devDisabled": "Dev 模式 · 灵动岛禁用",
+      "disabled": "灵动岛已关闭"
+    }
   }
 }

@@ -8,12 +8,16 @@
 // Sprint 2 also exposes theme + accent click-cycle on the right cluster so
 // reviewers can verify light/dark without diving into Settings (Sprint 6).
 
+import { useEffect } from 'react'
 import { Monitor, Moon, Search, Sun } from 'lucide-react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
+import type { IslandConnectionState } from '@shared/api/types'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { useAppearance, type AccentId, type ThemeMode } from '@shared/state/appearance'
+import { islandStateI18nKey, setIslandStatus, useIslandStore } from '@shared/state/island'
 
 const ACCENT_LABEL: Record<AccentId, string> = {
   coral: 'Coral',
@@ -36,6 +40,25 @@ function ThemeIcon({ mode }: { mode: ThemeMode }): React.ReactElement {
   return <Monitor size={11} strokeWidth={2} />
 }
 
+// Sprint 9 §2.3 — TitleBar Island indicator color mapping. The right-cluster
+// pill carries one visual cue (the dot color) + a hover title. Connected =
+// ok-green; degraded = warn-amber; disconnected/idle/disabled = neutral grey
+// so a sleeping ping-island doesn't paint the chrome as "error".
+function islandDotClass(state: IslandConnectionState): string {
+  switch (state) {
+    case 'connected':
+      return 'bg-ok'
+    case 'degraded':
+      return 'bg-warn'
+    case 'idle':
+    case 'disconnected':
+    case 'dev-disabled':
+    case 'disabled':
+    default:
+      return 'bg-ink-fg-3'
+  }
+}
+
 export function TitleBar(): React.ReactElement {
   const accent = useAppearance((s) => s.accent)
   const themeMode = useAppearance((s) => s.themeMode)
@@ -44,6 +67,29 @@ export function TitleBar(): React.ReactElement {
   const setThemeMode = useAppearance((s) => s.setThemeMode)
   const navigate = useNavigate()
   const { t } = useTranslation()
+  const mailApi = useMailApi()
+  const islandStatus = useIslandStore((s) => s.status)
+
+  // Sprint 9 §2.3 — hydrate the island store on mount + subscribe to live
+  // probe broadcasts. Mirrors the UpdateSection pattern (SettingsPage). If
+  // we're running in the HttpApi V2 stub the hydrate throws; we swallow it
+  // so the renderer still renders the (idle) initial state.
+  useEffect(() => {
+    let cancelled = false
+    void mailApi.island
+      .status()
+      .then((s) => {
+        if (!cancelled) setIslandStatus(s)
+      })
+      .catch(() => {
+        /* HttpApi V2 stub — keep initial state */
+      })
+    const unsubscribe = mailApi.island.onEvent((next) => setIslandStatus(next))
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [mailApi])
   // Sprint 3 enables this for /search; Sprint 7 swaps it for the CommandPalette.
   const currentPath = useRouterState({ select: (s) => s.location.pathname })
   const searchTarget = currentPath === '/search' ? '/' : '/search'
@@ -87,9 +133,17 @@ export function TitleBar(): React.ReactElement {
         className="flex items-center gap-3 text-meta font-mono text-ink-fg-2"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <span className="flex items-center gap-1.5" title="Dynamic Island plugin (Sprint Island-4)">
-          <span className="w-3 h-1.5 rounded-full bg-ink-fg-3" aria-hidden />
-          <span>Island</span>
+        <span
+          className="flex items-center gap-1.5"
+          title={t(`titleBar.island.${islandStateI18nKey(islandStatus.state)}`, {
+            defaultValue: islandStatus.state
+          })}
+        >
+          <span
+            className={cn('w-1.5 h-1.5 rounded-full', islandDotClass(islandStatus.state))}
+            aria-hidden
+          />
+          <span>{t('titleBar.island.label')}</span>
         </span>
         <span className="text-ink-fg-3">·</span>
 

@@ -109,4 +109,28 @@ export class HttpApi implements MailApi {
     quitAndInstall: () => notImplemented('updater.quitAndInstall'),
     onEvent: (): (() => void) => () => undefined
   }
+
+  // Sprint 9 §2.3 — ping-island bridge lives on the Mac host. From a remote
+  // browser the V2 FastAPI could surface a read-only "island connected?"
+  // status, but emitting envelopes from the web tab would race the local
+  // Electron process and confuse the session model. Web stubs are no-ops;
+  // remote users see the island indicator inactive in the TitleBar.
+  island = {
+    status: () => notImplemented('island.status'),
+    testConnection: () => notImplemented('island.testConnection'),
+    setEnabled: () => notImplemented('island.setEnabled'),
+    appearance: (): void => {
+      /* no-op stub */
+    },
+    aiDraftStart: (): void => {
+      /* no-op stub */
+    },
+    aiDraftStream: (): void => {
+      /* no-op stub */
+    },
+    aiDraftReady: (): void => {
+      /* no-op stub */
+    },
+    onEvent: (): (() => void) => () => undefined
+  }
 }

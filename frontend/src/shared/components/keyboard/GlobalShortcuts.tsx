@@ -14,7 +14,7 @@ import { useCallback } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
-import { openCommandPalette } from '@shared/state/command-palette'
+import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 
 export function GlobalShortcuts(): null {
@@ -24,8 +24,12 @@ export function GlobalShortcuts(): null {
     openKeyboardHelp()
   }, [])
 
-  const openPalette = useCallback(() => {
-    openCommandPalette()
+  // Sprint 9 D4.2 (Sprint 7 review LOW #1) — ⌘K now toggles the palette
+  // instead of just opening it, so a second ⌘K dismisses without forcing
+  // Esc. The `toggle()` method existed on the zustand store since Sprint 7
+  // but was unreachable (dead code) until now.
+  const togglePalette = useCallback(() => {
+    useCommandPalette.getState().toggle()
   }, [])
 
   const goSettings = useCallback(() => {
@@ -36,7 +40,7 @@ export function GlobalShortcuts(): null {
   // resolved char (which is '?' after shift), so spec='?' matches without
   // having to write 'shift+/'.
   useShortcut('?', openHelp)
-  useShortcut('cmd+k', openPalette)
+  useShortcut('cmd+k', togglePalette)
   useShortcut('cmd+,', goSettings)
 
   return null

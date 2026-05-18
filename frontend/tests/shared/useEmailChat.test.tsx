@@ -71,6 +71,19 @@ const {
           if (i >= 0) handlers.splice(i, 1)
         }
       }
+    },
+    // Sprint 9 §2.3 — useEmailChat fires AIDraftStart/Stream/Ready envelopes
+    // via the island bridge. The mock keeps them as plain spies so tests
+    // can assert call count + payload shape if they care.
+    island: {
+      status: vi.fn(),
+      testConnection: vi.fn(),
+      setEnabled: vi.fn(),
+      appearance: vi.fn(),
+      aiDraftStart: vi.fn(),
+      aiDraftStream: vi.fn(),
+      aiDraftReady: vi.fn(),
+      onEvent: vi.fn(() => () => undefined)
     }
   }
   return {

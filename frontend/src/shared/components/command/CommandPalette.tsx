@@ -28,6 +28,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
+import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import {
   ArrowRight,
   BarChart3,
@@ -44,9 +45,6 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
-
-const FOCUSABLE_SELECTOR =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
 type CommandKind = 'nav' | 'mailbox' | 'search'
 
@@ -147,7 +145,9 @@ export function CommandPalette(): React.ReactElement | null {
   }
   const debouncedQuery = useDebouncedValue(query, 250)
   const inputRef = useRef<HTMLInputElement>(null)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  // Sprint 9 D4.1 — shared focus-trap hook. Replaces the inline
+  // querySelectorAll Tab cycle that previously lived in onKeyDown.
+  const { dialogRef, handleTab } = useFocusTrap({ open })
 
   // Focus the input on every open transition. The reset lives in the
   // adjust-on-prop-change block above; this effect's only job is the
@@ -170,6 +170,12 @@ export function CommandPalette(): React.ReactElement | null {
     enabled: open
   })
   // FTS5 search results — only when 2+ chars typed.
+  // Sprint 9 D4.2 (Sprint 7 review LOW #3) — explicit `placeholderData:
+  // undefined` so a stale snippet from the previous query doesn't render
+  // under the new query string while react-query refetches. tanstack v5's
+  // default is already `undefined` (no carry-over), but setting it
+  // explicitly documents intent and protects against a future default
+  // flip to `keepPreviousData` style behaviour.
   const searchQ = useQuery({
     queryKey: ['palette', 'search', debouncedQuery],
     queryFn: () =>
@@ -178,6 +184,7 @@ export function CommandPalette(): React.ReactElement | null {
         limit: 8
       }),
     staleTime: 30_000,
+    placeholderData: undefined,
     enabled: open && debouncedQuery.trim().length >= 2
   })
 
@@ -277,34 +284,14 @@ export function CommandPalette(): React.ReactElement | null {
         if (cmd) cmd.run()
         return
       }
-      // Sprint 7 review (opus MEDIUM) — Tab focus-trap inside the palette.
-      // Without this Tab escapes behind the backdrop (aria-modal claim was
-      // not honoured pre-fix).
+      // Sprint 9 D4.1 — Tab cycle delegated to useFocusTrap. Behaviour
+      // (forward + reverse wrap with `!root.contains(active)` guard)
+      // unchanged.
       if (e.key === 'Tab') {
-        const root = dialogRef.current
-        if (!root) return
-        const focusables = Array.from(
-          root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
-        ).filter((el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1)
-        if (focusables.length === 0) return
-        const first = focusables[0]
-        const last = focusables[focusables.length - 1]
-        const active = document.activeElement as HTMLElement | null
-        if (e.shiftKey) {
-          if (active === first || !root.contains(active)) {
-            e.preventDefault()
-            last.focus()
-          }
-        } else {
-          if (active === last || !root.contains(active)) {
-            e.preventDefault()
-            first.focus()
-          }
-        }
-        return
+        handleTab(e)
       }
     },
-    [commands, highlight]
+    [commands, highlight, handleTab]
   )
 
   // Sprint 7 review (opus MEDIUM) — scroll the highlighted option into view
@@ -316,7 +303,10 @@ export function CommandPalette(): React.ReactElement | null {
     if (!root) return
     const opt = root.querySelector<HTMLElement>(`#palette-opt-${highlight}`)
     opt?.scrollIntoView({ block: 'nearest' })
-  }, [open, highlight])
+    // `dialogRef` is a stable ref object from useFocusTrap (its identity
+    // never changes across renders), so including it in deps is a no-op
+    // at runtime while satisfying the exhaustive-deps rule.
+  }, [open, highlight, dialogRef])
 
   if (!open) return null
 

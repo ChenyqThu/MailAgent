@@ -424,6 +424,29 @@
       "error": "Update check failed: {message}",
       "devDisabled": "Auto-updater disabled in dev (packaged builds only)",
       "channel": "GitHub Releases · ad-hoc signed"
+    },
+    "island": {
+      "heading": "Dynamic Island integration",
+      "channel": "ping-island · /tmp/island.sock · ad-hoc",
+      "statusLabel": "Connection",
+      "socketPath": "Socket path",
+      "testConnection": "Test connection",
+      "enable": "Enable Dynamic Island",
+      "enableHint": "Safe to leave on when ping-island.app is not running; main process fails open without blocking sync.",
+      "testing": "Probing…",
+      "testOk": "Island connected",
+      "testFail": "Island probe failed",
+      "lastProbe": "Last probe {agoSec}s ago",
+      "toggleOn": "On",
+      "toggleOff": "Off",
+      "state": {
+        "idle": "Not probed",
+        "connected": "Connected",
+        "degraded": "Degraded",
+        "disconnected": "Not running",
+        "devDisabled": "Dev · disabled",
+        "disabled": "Off"
+      }
     }
   },
   "statusbar": {
@@ -434,5 +457,16 @@
     "theme": "theme",
     "llmIdle": "IDLE",
     "updateReady": "Update ready"
+  },
+  "titleBar": {
+    "island": {
+      "label": "Island",
+      "idle": "Dynamic Island warming up…",
+      "connected": "Dynamic Island connected",
+      "degraded": "Dynamic Island degraded — see Settings",
+      "disconnected": "ping-island.app not running",
+      "devDisabled": "Dev · Dynamic Island disabled",
+      "disabled": "Dynamic Island off"
+    }
   }
 }

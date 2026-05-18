@@ -30,14 +30,21 @@ import {
   KeyRound,
   Loader2,
   Paintbrush,
+  Radio,
   RefreshCw,
   Sparkles
 } from 'lucide-react'
 
-import type { PersistentSettings, SecretSlot, UpdaterStatus } from '@shared/api/types'
+import type {
+  IslandStatus as IslandStatusType,
+  PersistentSettings,
+  SecretSlot,
+  UpdaterStatus
+} from '@shared/api/types'
 import { useAppearance, type AccentId, type ThemeMode } from '@shared/state/appearance'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpdaterStore, setUpdaterStatus } from '@shared/state/updater'
+import { islandStateI18nKey, setIslandStatus, useIslandStore } from '@shared/state/island'
 import { cn } from '@shared/lib/cn'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import {
@@ -663,9 +670,172 @@ function SettingsForm({ initialSettings, initialSecrets }: SettingsFormProps): R
       {/* Updates */}
       <UpdateSection />
 
+      {/* Sprint 9 §2.3 — ping-island connection status + manual probe. */}
+      <IslandSection />
+
       {/* About */}
       <AboutSection />
     </div>
+  )
+}
+
+// ----- Island bridge -------------------------------------------------------
+//
+// Sprint 9 §2.3 — settings surface for the ping-island connection. Pattern
+// mirrors UpdateSection: pull a snapshot on mount + subscribe to live events
+// so navigating away cleans up cleanly. The "test connection" CTA triggers
+// `island:testConnection` which runs `probeOnce()` synchronously on main and
+// returns the new status — the same Ping envelope mail-sync uses, so a green
+// here means the bridge is also live for the Python plugin's mail events.
+
+function islandDotClass(state: IslandStatusType['state']): string {
+  switch (state) {
+    case 'connected':
+      return 'bg-ok'
+    case 'degraded':
+      return 'bg-warn'
+    default:
+      return 'bg-ink-fg-3'
+  }
+}
+
+function IslandSection(): React.ReactElement {
+  const { t } = useTranslation()
+  const mailApi = useMailApi()
+  const status = useIslandStore((s) => s.status)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void mailApi.island
+      .status()
+      .then((s) => {
+        if (!cancelled) setIslandStatus(s)
+      })
+      .catch(() => {
+        /* HttpApi V2 stub */
+      })
+    const unsubscribe = mailApi.island.onEvent((next) => setIslandStatus(next))
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [mailApi])
+
+  const stateKey = islandStateI18nKey(status.state)
+  const stateLabel = t(`settings.island.state.${stateKey}`, { defaultValue: status.state })
+
+  const handleTest = useCallback(async (): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const next = await mailApi.island.testConnection()
+      setIslandStatus(next)
+      if (next.state === 'connected') {
+        toastSuccess(t('settings.island.testOk'))
+      } else {
+        toastError(t('settings.island.testFail'), next.lastError ?? next.state)
+      }
+    } catch (err) {
+      toastError(t('settings.island.testFail'), err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, mailApi, t])
+
+  const isEnabled = status.state !== 'disabled'
+  const handleToggle = useCallback(
+    async (next: boolean): Promise<void> => {
+      try {
+        const after = await mailApi.island.setEnabled(next)
+        setIslandStatus(after)
+      } catch (err) {
+        toastError(t('settings.island.testFail'), err instanceof Error ? err.message : String(err))
+      }
+    },
+    [mailApi, t]
+  )
+
+  return (
+    <section>
+      <SectionTitle icon={<Radio size={16} strokeWidth={1.75} />}>
+        {t('settings.island.heading')}
+      </SectionTitle>
+      <div className="rounded-md border border-ink-border bg-ink-2 px-4">
+        <Row label={t('settings.island.statusLabel')} hint={t('settings.island.channel')}>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-meta font-mono',
+                status.state === 'connected'
+                  ? 'bg-ok/15 text-ok'
+                  : status.state === 'degraded'
+                    ? 'bg-warn/15 text-warn'
+                    : 'bg-ink-3 text-ink-fg-2'
+              )}
+            >
+              <span className={cn('w-1.5 h-1.5 rounded-full', islandDotClass(status.state))} />
+              {stateLabel}
+            </span>
+            <button
+              type="button"
+              onClick={() => void handleTest()}
+              disabled={busy || status.state === 'disabled'}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-aux',
+                'text-coral border border-coral/30 hover:bg-coral/10',
+                'transition-colors duration-fast',
+                'disabled:opacity-60 disabled:cursor-not-allowed'
+              )}
+            >
+              {busy ? (
+                <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+              ) : (
+                <RefreshCw size={13} strokeWidth={2} />
+              )}
+              {busy ? t('settings.island.testing') : t('settings.island.testConnection')}
+            </button>
+          </div>
+        </Row>
+        <Row label={t('settings.island.socketPath')} hint={undefined}>
+          <div
+            className={cn(
+              'rounded-md bg-ink-3 border border-ink-border px-2.5 py-1.5',
+              'text-aux text-ink-fg font-mono truncate'
+            )}
+            title={status.socketPath}
+          >
+            {status.socketPath}
+          </div>
+        </Row>
+        <Row label={t('settings.island.enable')} hint={t('settings.island.enableHint')}>
+          <div className="inline-flex rounded-md border border-ink-border bg-ink-3 p-0.5">
+            <button
+              type="button"
+              onClick={() => void handleToggle(true)}
+              className={cn(
+                'px-3 py-1 text-aux rounded transition-colors duration-fast',
+                isEnabled ? 'bg-coral/15 text-coral font-medium' : 'text-ink-fg-1 hover:text-ink-fg'
+              )}
+            >
+              {t('settings.island.toggleOn')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleToggle(false)}
+              className={cn(
+                'px-3 py-1 text-aux rounded transition-colors duration-fast',
+                !isEnabled
+                  ? 'bg-coral/15 text-coral font-medium'
+                  : 'text-ink-fg-1 hover:text-ink-fg'
+              )}
+            >
+              {t('settings.island.toggleOff')}
+            </button>
+          </div>
+        </Row>
+      </div>
+    </section>
   )
 }
 

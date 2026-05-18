@@ -15,9 +15,10 @@
 // `AI 重跑` + `已读 / 已标旗` go through without confirm — they're
 // trivially reversible.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
+import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import {
   Archive,
   ArrowLeft,
@@ -219,24 +220,11 @@ function ResyncConfirmDialog({
   onPush
 }: ResyncConfirmProps): React.ReactElement | null {
   const { t } = useTranslation()
-  // Sprint 7 Day 1 (Sprint 6 review opus Nit carry-forward) — switch from
-  // ref-per-button to a querySelectorAll-based focus-trap. The old shape
-  // hard-coded "cancel ↔ dry ↔ push" boundary checks; adding a 4th button
-  // (or wiring in a textarea) would silently break the trap. The query-based
-  // version walks every focusable in the dialog at Tab time, so future
-  // additions keep cycling correctly with no maintenance.
-  const dialogRef = useRef<HTMLDivElement>(null)
-
-  // Initial focus → first focusable in the dialog. Same UX as before
-  // (cancel happens to be the first source-order button), but now driven
-  // by the live DOM so future markup additions don't break the default.
-  useEffect(() => {
-    if (!open) return
-    const root = dialogRef.current
-    if (!root) return
-    const first = root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
-    first?.focus()
-  }, [open])
+  // Sprint 9 D4.1 (Sprint 7 review LOW #2 carry-forward) — shared focus-trap
+  // hook replaces the inline querySelectorAll boundary handling. Behaviour
+  // unchanged: cancel is the first focusable (initial focus target), Tab
+  // wraps to the last; Shift-Tab cycles in reverse.
+  const { dialogRef, handleTab } = useFocusTrap({ open })
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -246,33 +234,9 @@ function ResyncConfirmDialog({
         onCancel()
         return
       }
-      if (e.key !== 'Tab') return
-      const root = dialogRef.current
-      if (!root) return
-      // Collect all currently-focusable elements in source order. Buttons
-      // with `disabled` are filtered (querySelector returns them, browser
-      // skips them on real Tab walks, so we mirror that to keep the wrap
-      // boundary correct).
-      const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-        (el) => !(el as HTMLButtonElement).disabled && el.tabIndex !== -1
-      )
-      if (focusables.length === 0) return
-      const first = focusables[0]
-      const last = focusables[focusables.length - 1]
-      const active = document.activeElement as HTMLElement | null
-      if (e.shiftKey) {
-        if (active === first || !root.contains(active)) {
-          e.preventDefault()
-          last.focus()
-        }
-      } else {
-        if (active === last) {
-          e.preventDefault()
-          first.focus()
-        }
-      }
+      handleTab(e)
     },
-    [onCancel]
+    [onCancel, handleTab]
   )
 
   if (!open) return null
@@ -346,10 +310,9 @@ function ResyncConfirmDialog({
   )
 }
 
-/** querySelectorAll target for focus-trap walks. Mirrors the W3C
- *  ATAG "focusable elements" set. */
-const FOCUSABLE_SELECTOR =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+// Sprint 9 D4.1 — `FOCUSABLE_SELECTOR` lifted to `@shared/hooks/useFocusTrap`
+// alongside the centralised trap logic. The selector constant lives there
+// (exported) so any future modal can stay in lockstep.
 
 export function EmailToolbar({
   translate,
