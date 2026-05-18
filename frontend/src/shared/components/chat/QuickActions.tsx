@@ -14,34 +14,37 @@ interface Props {
 interface ActionDef {
   key: string
   labelKey: string
-  prompt: string
+  /** Sprint 10 (d) V1.5 polish — both label AND prompt go through i18n so an
+   *  en-US user gets an English prompt body (not just an English chip label
+   *  followed by a Chinese instruction the LLM will reply in Chinese to). */
+  promptKey: string
 }
 
 const ACTIONS: ActionDef[] = [
   {
     key: 'summarize',
     labelKey: 'chat.quickActions.summarize',
-    prompt: '请用 3-5 个要点总结这封邮件的核心内容、发件人意图、需要我做什么。'
+    promptKey: 'chat.quickActions.summarizePrompt'
   },
   {
     key: 'draft',
     labelKey: 'chat.quickActions.draft',
-    prompt: '基于这封邮件，请帮我起草一份合适的回复（中文）。'
+    promptKey: 'chat.quickActions.draftPrompt'
   },
   {
     key: 'translate',
     labelKey: 'chat.quickActions.translate',
-    prompt: '把这封邮件翻译成中文（保留语义、邮件礼仪、格式）。'
+    promptKey: 'chat.quickActions.translatePrompt'
   },
   {
     key: 'extract',
     labelKey: 'chat.quickActions.extract',
-    prompt: '请从这封邮件中提取所有动作项 (action items)：谁要做什么、什么时候、给谁回。'
+    promptKey: 'chat.quickActions.extractPrompt'
   },
   {
     key: 'linkNotion',
     labelKey: 'chat.quickActions.linkNotion',
-    prompt: '在我的 Notion workspace 里找到与这封邮件相关的项目页面，列出 3 个最相关的。'
+    promptKey: 'chat.quickActions.linkNotionPrompt'
   }
 ]
 
@@ -54,7 +57,7 @@ export function QuickActions({ onPick, disabled = false }: Props): React.ReactEl
           key={a.key}
           type="button"
           disabled={disabled}
-          onClick={() => onPick(a.prompt)}
+          onClick={() => onPick(t(a.promptKey))}
           className={cn(
             'rounded-full px-2.5 py-1 text-aux',
             'text-ink-fg-1 border border-ink-border bg-ink-3',

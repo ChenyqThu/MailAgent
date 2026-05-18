@@ -744,6 +744,12 @@ function IslandSection(): React.ReactElement {
   }, [busy, mailApi, t])
 
   const isEnabled = status.state !== 'disabled'
+  // Sprint 10 (d) V1.5 polish — show an "install ping-island" hint when the
+  // probe sees an empty `/tmp/island.sock` AND the integration isn't user-
+  // disabled. ENOENT = peer not installed (or not running). 'degraded' is
+  // ambiguous (protocol error / timeout — could be a fork-side bug), but
+  // 'disconnected' is the explicit "we tried, nothing answered" state.
+  const showInstallHint = status.state === 'disconnected'
   const handleToggle = useCallback(
     async (next: boolean): Promise<void> => {
       try {
@@ -834,6 +840,19 @@ function IslandSection(): React.ReactElement {
             </button>
           </div>
         </Row>
+        {showInstallHint && (
+          <div className="py-3 border-t border-ink-border-soft text-meta text-ink-fg-2 leading-relaxed">
+            {t('settings.island.installHint')}{' '}
+            <a
+              href="https://github.com/ChenyqThu/ping-island/tree/feat/mail-brand"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-coral hover:underline"
+            >
+              {t('settings.island.installLinkLabel')}
+            </a>
+          </div>
+        )}
       </div>
     </section>
   )

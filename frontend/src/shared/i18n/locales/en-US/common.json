@@ -216,7 +216,12 @@
       "draft": "Draft reply",
       "translate": "Translate",
       "extract": "Extract actions",
-      "linkNotion": "Link to Notion"
+      "linkNotion": "Link to Notion",
+      "summarizePrompt": "Summarize this email in 3-5 bullet points: core content, sender's intent, what they want me to do.",
+      "draftPrompt": "Based on this email, draft an appropriate reply for me (in English).",
+      "translatePrompt": "Translate this email into English (preserve meaning, email etiquette, formatting).",
+      "extractPrompt": "Extract every action item from this email: who needs to do what, by when, reply to whom.",
+      "linkNotionPrompt": "Find pages in my Notion workspace related to this email and list the 3 most relevant ones."
     },
     "composer": {
       "placeholder": "/command or ask about this email… (⌘↩ send)",
@@ -439,6 +444,8 @@
       "lastProbe": "Last probe {agoSec}s ago",
       "toggleOn": "On",
       "toggleOff": "Off",
+      "installHint": "/tmp/island.sock missing — ping-island.app is not running or not installed.",
+      "installLinkLabel": "Get the fork (feat/mail-brand)",
       "state": {
         "idle": "Not probed",
         "connected": "Connected",
