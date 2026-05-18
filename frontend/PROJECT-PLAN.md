@@ -3,7 +3,7 @@
 > 完整项目计划 SSoT。覆盖 V1 扩大版 Electron（~12-16 天）+ V2 远程访问（+4-6 天）+
 > Island Hybrid（+1-2 周 Swift）三条线，强调**最大化并行开发**。
 >
-> **状态**: 2026-05-16 立项。用户决策已拍板。等 Sprint 0 启动。
+> **状态**: 2026-05-17 — **L1 V1 Electron 主线 Sprint 0-8 全 ship**(8 Sprints / 24 commits / 491 tests passed / 0 lint / 0 typecheck / 12 a11y 组合 clean / electron-vite + electron-builder 全绿)。等 L2 Island Hybrid 启动(独立 Swift fork)、L3 V2 远程访问(FastAPI + Cloudflare Tunnel)、Sprint 9+ 可选 polish。
 >
 > **关联**:
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — 三条线如何协同
@@ -26,6 +26,28 @@
 
 ---
 
+## 0.5. Sprint 进度速查（2026-05-17 更新）
+
+| Sprint | 范围 | 状态 | Commit | 测试增量 | 实际工期 |
+|---|---|---|---|---|---|
+| Sprint 0 | 工程脚手架 + i18n/主题骨架 + ESLint 自定义 rules | ✅ ship | (合入 Sprint 1) | 0 baseline | ~1 天 |
+| Sprint 1 | 数据层 + IPC handlers + Inbox 主框架 + light spot-check | ✅ ship | (合入 sprint3) | +47 | ~2 天 |
+| Sprint 2 | Inbox 三栏 + EmailDetail + AIFieldsBlock + sandboxed iframe | ✅ ship | `186d2c9` | +73 (47→120) | ~2 天 |
+| Sprint 3 | FTS5 搜索 + 翻译 + ThreadSidebar + a11y 12 组合 | ✅ ship | `0ccc4df` | +55 (120→175) | ~2 天 |
+| Sprint 4 | AI Chat panel + Notion Agent + Custom API + ai_chat.db + useShortcut 单 bus | ✅ ship | `30e5578` `343eb05` `8d00d81` `745e36a` | +121 (175→296) | ~3-4 天 |
+| Sprint 5 | 写操作 + 批量 AI + Toast + EmailToolbar + BatchActionBar + 状态机 | ✅ ship | `2d7a128` `0533eba` `c94d2b0` `c6ddcd2` | +89 (296→385) | ~2 天 |
+| Sprint 6 | /admin + /llm + /calendar + /settings 4 路由 + keytar 三槽 | ✅ ship | `2dab813` `911b337` `29638f0` | +47 (385→432) | ~1.5 天 |
+| Sprint 7 | global keymap SSoT + `?` help modal + `⌘K` palette + EmptyState/Skeleton + i18n complete sweep | ✅ ship | `683284a` `4142e7a` | +36 (432→468) | ~3.5 小时 |
+| Sprint 8 | electron-builder .dmg ad-hoc + electron-updater + GitHub Releases + INSTALL.md + 3 Sprint 7 review MEDIUM | ✅ ship | `ec4f51e` | +23 (468→491) | ~2.5 小时 |
+| Sprint 9+ | (可选) Sprint 7/8 review LOW polish + QuickActions LLM prompt i18n + 真 .dmg release 实测 | ⏸ pending | — | — | 灵活 |
+
+**L1 V1 Electron 主线全 ship**:8 Sprints / 24 commits / 491 tests passed | 1 skipped / 0 lint / 0 typecheck / 12 a11y WCAG AA 组合 clean / electron-vite build OK / electron-builder mac DMG+ZIP × arm64+x64 配置就位 / 用户向 INSTALL.md 完整。
+
+**L2 Island Hybrid**:⏸ 未启动(独立 Swift fork,Day 1 起即可与 L1 完全并行)。
+**L3 V2 远程访问**:⏸ 未启动(L1 Sprint 5 后即可起 FastAPI,Web SPA 复用 `useMailApi()` data layer)。
+
+---
+
 ## 1. 总览路线图
 
 ```
@@ -34,15 +56,16 @@ L1   ░░░░░░░░░░░░░░░░░░░░░░░░░
 L2   ──░░░░░░░░░░░░░░░░░░░░░         ← Island fork + plugin (并行起步)
 L3                            ──░░░░░░░░░░░░  ← V2 远程 (L1 框架就绪后启动)
 
-里程碑:
-  ▲ Day 2:  Sprint 0 完工（脚手架 + tailwind/shadcn）
-  ▲ Day 6:  Sprint 2 完工（Inbox + 详情 + AI Fields block）
-  ▲ Day 9:  Sprint 3 完工（搜索 + 线程 + 翻译）
-  ▲ Day 11: Sprint 4 完工（AI Chat Panel + Notion Agent）
-  ▲ Day 13: Sprint 5 完工（批量 AI ops + 写操作）
-  ▲ Day 15: V1 ship (含 polish)
-  ▲ Day 18: Island 接入端到端联调
-  ▲ Day 21: V2 远程 ship
+里程碑（✅ 已达成 / ⏸ pending）:
+  ✅ Day 2:  Sprint 0 完工（脚手架 + tailwind/shadcn）
+  ✅ Day 6:  Sprint 2 完工（Inbox + 详情 + AI Fields block）
+  ✅ Day 9:  Sprint 3 完工（搜索 + 线程 + 翻译）
+  ✅ Day 11: Sprint 4 完工（AI Chat Panel + Notion Agent）
+  ✅ Day 13: Sprint 5 完工（批量 AI ops + 写操作）
+  ✅ Day 14: Sprint 6 完工（/admin /llm /calendar /settings）
+  ✅ Day 14: Sprint 7 完工（keymap SSoT + ? help + ⌘K + EmptyState/Skeleton + i18n sweep）
+  ✅ Day 14: Sprint 8 完工（electron-builder .dmg + electron-updater + INSTALL.md）
+  ⏸ Sprint 9+: 真 .dmg release 实测 + 可选 polish + L2 Island / L3 V2
 ```
 
 ---
@@ -53,26 +76,26 @@ V1 范围已按 designer mockup 扩大 — 比 archive 里 `frontend-v1-implemen
 增加：AI Chat panel + Notion Agent 双 backend + 批量 AI 操作 + 一键翻译 + 主题色切换 +
 完整快捷键体系。
 
-### Sprint 0 — 工程脚手架（**1-2 天**）
+### Sprint 0 — 工程脚手架（**1-2 天**）✅ ship
 
-- [ ] `pnpm create electron-vite` 模板初始化（React + TypeScript）
-- [ ] 安装：`pnpm add better-sqlite3 execa keytar zustand @tanstack/react-query @tanstack/react-router lucide-react workbox-precaching i18next react-i18next i18next-browser-languagedetector i18next-icu`
-- [ ] 安装 shadcn primitives 按 [DESIGN.md §12](./DESIGN.md)：`button badge command toast tooltip dialog dropdown-menu input textarea tabs`
-- [ ] 拷 `tailwind.config.ts` from [DESIGN.md §11](./DESIGN.md)
-- [ ] 拷 `:root` CSS variable 主题色块 from [DESIGN.md §2.7](./DESIGN.md)
-- [ ] 项目结构 from [DESIGN.md §13](./DESIGN.md) + [ARCHITECTURE.md §5](./ARCHITECTURE.md)
-- [ ] **数据层抽象骨架** — `shared/api/types.ts` MailApi interface + `shared/api/factory.ts` makeMailApi()
-- [ ] `shared/api/ElectronApi.ts` 占位（throw `'not implemented'`），renderer 通过 useMailApi() 获取（**真实现 Sprint 1**）
-- [ ] `useMailApi()` hook 实现（singleton 缓存）
-- [ ] **Schema codegen 骨架（REVIEW-LOG C-03）** — `pnpm add -D json-schema-to-typescript`；脚本 `pnpm gen:types` 从 `../docs/cli-schema/*.schema.json` 生成 `shared/types/cli.gen.ts`；Sprint 1 起的 IPC handler 与 EmailRepository 共用 SoT
-- [ ] electron main IPC contextBridge 骨架（preload 暴露 `window.electron`）
-- [ ] better-sqlite3 singleton + 路径检测（默认 `~/Documents/MailAgent/data/sync_store.db`）
-- [ ] keytar 集成 + 首次启动引导（settings 页面占位）
-- [ ] TanStack Router setup + Provider
-- [ ] **i18n 骨架 (DESIGN.md §16)** — `src/shared/i18n/index.ts` initReactI18next + browser-languagedetector + i18next-icu（ICU plural/select）；`locales/{zh-CN,en-US}/common.json` 占位 5 个 key；Suspense fallback 防 flash；`Intl` formatter wrapper in `shared/format/`（封装 TZ / RelativeTimeFormat / 文件大小）
-- [ ] **三态主题骨架 (DESIGN.md §17)** — `shared/state/appearance.ts` `themeMode ∈ {system,dark,light}` + `accent ∈ 6 swatch`；`applyResolvedTheme()` 接 `(prefers-color-scheme: dark)` MediaQuery listener；**op-id + rAF 串行 guard（REVIEW-LOG C-06）**；Electron main process `BrowserWindow` 创建前设 `nativeTheme.themeSource`；`index.html` inline bootstrap script 防 FOUC（REVIEW-LOG C-07）
-- [ ] **ESLint 自定义 rules 骨架（REVIEW-LOG H-08 新增任务）** — `eslint-plugin-local-rules` 引入；DESIGN.md §14 八条非协商 + i18n + 三态主题第 9/10 条每条至少 1 个 fixture test。Sprint 1 末 CI 引入。
-- [ ] `pnpm dev` 跑通空白窗口
+- [x] `pnpm create electron-vite` 模板初始化（React + TypeScript）
+- [x] 安装：`pnpm add better-sqlite3 execa keytar zustand @tanstack/react-query @tanstack/react-router lucide-react workbox-precaching i18next react-i18next i18next-browser-languagedetector i18next-icu`
+- [x] 安装 shadcn primitives 按 [DESIGN.md §12](./DESIGN.md)：`button badge command toast tooltip dialog dropdown-menu input textarea tabs`
+- [x] 拷 `tailwind.config.ts` from [DESIGN.md §11](./DESIGN.md)
+- [x] 拷 `:root` CSS variable 主题色块 from [DESIGN.md §2.7](./DESIGN.md)
+- [x] 项目结构 from [DESIGN.md §13](./DESIGN.md) + [ARCHITECTURE.md §5](./ARCHITECTURE.md)
+- [x] **数据层抽象骨架** — `shared/api/types.ts` MailApi interface + `shared/api/factory.ts` makeMailApi()
+- [x] `shared/api/ElectronApi.ts` 占位（throw `'not implemented'`），renderer 通过 useMailApi() 获取（**真实现 Sprint 1**）
+- [x] `useMailApi()` hook 实现（singleton 缓存）
+- [x] **Schema codegen 骨架（REVIEW-LOG C-03）** — `pnpm add -D json-schema-to-typescript`；脚本 `pnpm gen:types` 从 `../docs/cli-schema/*.schema.json` 生成 `shared/types/cli.gen.ts`；Sprint 1 起的 IPC handler 与 EmailRepository 共用 SoT
+- [x] electron main IPC contextBridge 骨架（preload 暴露 `window.electron`）
+- [x] better-sqlite3 singleton + 路径检测（默认 `~/Documents/MailAgent/data/sync_store.db`）
+- [x] keytar 集成 + 首次启动引导（settings 页面占位)
+- [x] TanStack Router setup + Provider
+- [x] **i18n 骨架 (DESIGN.md §16)** — `src/shared/i18n/index.ts` initReactI18next + browser-languagedetector + i18next-icu（ICU plural/select）；`locales/{zh-CN,en-US}/common.json` 占位 5 个 key；Suspense fallback 防 flash；`Intl` formatter wrapper in `shared/format/`（封装 TZ / RelativeTimeFormat / 文件大小）
+- [x] **三态主题骨架 (DESIGN.md §17)** — `shared/state/appearance.ts` `themeMode ∈ {system,dark,light}` + `accent ∈ 6 swatch`；`applyResolvedTheme()` 接 `(prefers-color-scheme: dark)` MediaQuery listener；**op-id + rAF 串行 guard（REVIEW-LOG C-06）**；Electron main process `BrowserWindow` 创建前设 `nativeTheme.themeSource`；`index.html` inline bootstrap script 防 FOUC（REVIEW-LOG C-07）
+- [x] **ESLint 自定义 rules 骨架（REVIEW-LOG H-08 新增任务）** — `eslint-plugin-local-rules` 引入；DESIGN.md §14 八条非协商 + i18n + 三态主题第 9/10 条每条至少 1 个 fixture test。Sprint 1 末 CI 引入。
+- [x] `pnpm dev` 跑通空白窗口
 
 **Sprint 0 完工 checklist**:
 - ✅ Electron 窗口能打开
@@ -86,138 +109,151 @@ V1 范围已按 designer mockup 扩大 — 比 archive 里 `frontend-v1-implemen
 - ✅ `pnpm lint` 跑通，自定义 rules 0 violation（空骨架阶段）
 - ✅ **本 Sprint i18n 字符串 review**（REVIEW-LOG M-10）：扫存量 `[TODO en]`，补 en-US 翻译，确保为 0
 
-### Sprint 1 — 数据层 + 主框架（**2-3 天**）
+### Sprint 1 — 数据层 + 主框架（**2-3 天**）✅ ship
 
-- [ ] `src/electron/main/db.ts` — better-sqlite3 singleton + WAL + busy_timeout
-- [ ] `src/electron/main/handlers/email.ts` — list / get / body / search 4 IPC handler **走 `shared/types/cli.gen.ts` schema 验证返回形状**（REVIEW-LOG C-03）
-- [ ] `src/electron/main/handlers/attachment.ts` — list / localPath
-- [ ] `src/electron/main/cli_runner.ts` — REVIEW-LOG C-02 重写版本（CliQueue + AbortController + 全退出码分发 + path cache）
-- [ ] `ElectronApi.email.list/get/body/search()` 真实现（IPC invoke）
-- [ ] Zustand stores: `mailbox.ts` (active mailbox) / `appearance.ts` (theme) / `batch.ts` (selectedIds)
-- [ ] TitleBar 36px + StatusBar 24px 组件（[DESIGN.md §5](./DESIGN.md)）
-- [ ] Sidebar 240px 框架 + section header（[DESIGN.md §3.3](./DESIGN.md) English UPPERCASE mono）
-- [ ] 主题色 popover 接入 title bar `<dot> Coral` 入口
-- [ ] **Light mode visual spot-check（REVIEW-LOG C-08）** — EmailRow / AIBadge / Toolbar / Composer / Sidebar 5 个核心组件双 mode 截屏对比；发现明显视觉崩坏立即修 token 或回到 designer
-- [ ] CI 引入 ESLint 自定义 rules（Sprint 0 已搭骨架）
-- [ ] 单测：fixture sync_store.db 跑 4 个 email handler + CliQueue concurrent test + 全退出码分发 test
-- [ ] **i18n 字符串 review**（REVIEW-LOG M-10）
+- [x] `src/electron/main/db.ts` — better-sqlite3 singleton + WAL + busy_timeout
+- [x] `src/electron/main/handlers/email.ts` — list / get / body / search 4 IPC handler **走 `shared/types/cli.gen.ts` schema 验证返回形状**（REVIEW-LOG C-03）
+- [x] `src/electron/main/handlers/attachment.ts` — list / localPath
+- [x] `src/electron/main/cli_runner.ts` — REVIEW-LOG C-02 重写版本（CliQueue + AbortController + 全退出码分发 + path cache）
+- [x] `ElectronApi.email.list/get/body/search()` 真实现（IPC invoke）
+- [x] Zustand stores: `mailbox.ts` (active mailbox) / `appearance.ts` (theme) / `batch.ts` (selectedIds)
+- [x] TitleBar 36px + StatusBar 24px 组件（[DESIGN.md §5](./DESIGN.md)）
+- [x] Sidebar 240px 框架 + section header（[DESIGN.md §3.3](./DESIGN.md) English UPPERCASE mono）
+- [x] 主题色 popover 接入 title bar `<dot> Coral` 入口
+- [x] **Light mode visual spot-check（REVIEW-LOG C-08）** — EmailRow / AIBadge / Toolbar / Composer / Sidebar 5 个核心组件双 mode 截屏对比；发现明显视觉崩坏立即修 token 或回到 designer
+- [x] CI 引入 ESLint 自定义 rules（Sprint 0 已搭骨架）
+- [x] 单测：fixture sync_store.db 跑 4 个 email handler + CliQueue concurrent test + 全退出码分发 test
+- [x] **i18n 字符串 review**（REVIEW-LOG M-10）
 
-### Sprint 2 — Inbox 三栏（**2-3 天**）
+### Sprint 2 — Inbox 三栏（**2-3 天**）✅ ship `186d2c9`
 
-- [ ] EmailList 列 340px + 列头 + filter chips + virtualized rows (`react-window`)
-- [ ] `<EmailRow>` 组件 — 严格 paste from [DESIGN.md §5.1](./DESIGN.md)
+- [x] EmailList 列 340px + 列头 + filter chips + virtualized rows (`react-window`)
+- [x] `<EmailRow>` 组件 — 严格 paste from [DESIGN.md §5.1](./DESIGN.md)
   - 1.5px unread coral dot / lang pip / paperclip / AI priority chip / AI action chip
   - 失败行 SYNC FAILED pill
   - selected 状态 3px coral 左边
-- [ ] `<EmailDetail>` flex-1 — toolbar + body + AI Fields block + 附件
-- [ ] **`<AIFieldsBlock>` (3×11 grid)** — 11 个 AI 字段紧凑显示
-- [ ] 邮件正文：sandboxed iframe (srcdoc + sandbox=allow-same-origin) + DOMPurify
-- [ ] Inline image (cid:) 替换为本机 `file://` 路径
-- [ ] 5s 轮询新邮件 + new row badge
-- [ ] 键盘 J/K 切邮件
+- [x] `<EmailDetail>` flex-1 — toolbar + body + AI Fields block + 附件
+- [x] **`<AIFieldsBlock>` (3×11 grid)** — 11 个 AI 字段紧凑显示
+- [x] 邮件正文：sandboxed iframe (srcdoc + sandbox=allow-same-origin) + DOMPurify
+- [x] Inline image (cid:) 替换为本机 `file://` 路径
+- [x] 5s 轮询新邮件 + new row badge
+- [x] 键盘 J/K 切邮件
 
-### Sprint 3 — 搜索 + 线程 + 翻译（**1.5-2 天**）
+### Sprint 3 — 搜索 + 线程 + 翻译（**1.5-2 天**）✅ ship `0ccc4df`
 
-- [ ] `/search` 路由 FTS5 接入（IPC handler 直查 `email_body_fts MATCH ?` + bm25 + snippet）
-- [ ] 搜索结果 snippet 高亮（DOMPurify 安全渲染 `<mark>`）
-- [ ] mailbox / date range / has_attachments filter
-- [ ] 详情页加 `<ThreadSidebar>` (折叠在右 Panel `Thread` tab)
-- [ ] **翻译 EN→中**: 详情页 inline 按钮 + toolbar 按钮，调 Custom API（默认 GPT-5 / Claude） → 暂存 `email_metadata.translated_body_md` 字段（V1 不持久化也可，仅会话内 cache）
-- [ ] 一键翻译 ETA 显示
+- [x] `/search` 路由 FTS5 接入（IPC handler 直查 `email_body_fts MATCH ?` + bm25 + snippet）
+- [x] 搜索结果 snippet 高亮（DOMPurify 安全渲染 `<mark>`）
+- [x] mailbox / date range / has_attachments filter
+- [x] 详情页加 `<ThreadSidebar>` (折叠在右 Panel `Thread` tab)
+- [x] **翻译 EN→中**: 详情页 inline 按钮 + toolbar 按钮，调 Custom API（默认 GPT-5 / Claude） → 暂存 `email_metadata.translated_body_md` 字段（V1 不持久化也可，仅会话内 cache）
+- [x] 一键翻译 ETA 显示
+- [x] **bonus**: a11y --strict gate 12 组合 0 violation（Sprint 3 → Sprint 4 closure）
 
-### Sprint 4 — AI Chat Panel + Notion Agent（**6-9 天**，REVIEW-LOG C-04 重估）
+### Sprint 4 — AI Chat Panel + Notion Agent（**6-9 天**，REVIEW-LOG C-04 重估）✅ ship `30e5578` `343eb05` `8d00d81` `745e36a`
 
 > 原估 2-3 天严重低估。codex 3 揭示漏掉的层：Electron main IPC bridge / 独立 chat LLM 层（不能复用 `LLMProcessor.process_email` 批处理路径）/ 状态机粒度。
 
 **UI 组件层（~2-3 天）**:
-- [ ] `<AIChatPanel>` 360px 右侧固定 — 严格 paste from [DESIGN.md §5.3](./DESIGN.md)
-- [ ] Tabs: AI / Thread / Sync（默认 AI）
-- [ ] **`<BackendSelector>`** — Notion Agent · Jarvis（默认）+ Custom API 行 + 备选 chips (`claude-sonnet-4-6` / `gpt-5.4` / `claude-opus-4-7`)
-- [ ] **`<ContextChips>`** — 已加载 邮件全文 · 8 AI fields（REVIEW-LOG H-14）· Thread 4 · Notion 2 项目
-- [ ] `<MessageList>` — user bubble (`bg-ink-4` rounded-br-sm) + assistant bubble (no bg) + system divider；virtualization (react-window) 长对话
-- [ ] **`<ToolCallRow>`** — mono 11.5px log line，arrow `text-info` + dot color by status
-- [ ] **`<DraftPreviewCard>`** — coral ring + DRAFT REPLY header + 发送/重生成/编辑/在新窗口
-- [ ] **`<Composer>`** — textarea growable + footer slash/attach affordance + 圆形 send button + `⌘↩` send + 取消按钮（流式中）
-- [ ] **`<QuickActions>`** chips — 总结 / 起草回复 / 翻译 / 提取动作项 / 关联 Notion
+- [x] `<AIChatPanel>` 360px 右侧固定 — 严格 paste from [DESIGN.md §5.3](./DESIGN.md)
+- [x] Tabs: AI / Thread / Sync（默认 AI）
+- [x] **`<BackendSelector>`** — Notion Agent · Jarvis（默认）+ Custom API 行 + 备选 chips (`claude-sonnet-4-6` / `gpt-5.4` / `claude-opus-4-7`)
+- [x] **`<ContextChips>`** — 已加载 邮件全文 · 8 AI fields（REVIEW-LOG H-14）· Thread 4 · Notion 2 项目
+- [x] `<MessageList>` — user bubble (`bg-ink-4` rounded-br-sm) + assistant bubble (no bg) + system divider；virtualization (react-window) 长对话
+- [x] **`<ToolCallRow>`** — mono 11.5px log line，arrow `text-info` + dot color by status
+- [x] **`<DraftPreviewCard>`** — coral ring + DRAFT REPLY header + 发送/重生成/编辑/在新窗口
+- [x] **`<Composer>`** — textarea growable + footer slash/attach affordance + 圆形 send button + `⌘↩` send + 取消按钮（流式中）
+- [x] **`<QuickActions>`** chips — 总结 / 起草回复 / 翻译 / 提取动作项 / 关联 Notion
 
 **Electron main IPC stream bridge 层（~2 天，REVIEW-LOG C-04 / M-08）**:
-- [ ] `src/electron/main/handlers/ai_chat.ts` —— **API key 不能进 renderer bundle**，所有 LLM 调用走 main process subprocess pipe + IPC chunk stream 推 renderer
-- [ ] CSP 策略：renderer 禁连外网，只能 IPC 给 main
-- [ ] `cancel` IPC：renderer 切邮件 / 关 panel 时通过 AbortController 关 in-flight subprocess
-- [ ] `useEmailChat` React hook：订阅 IPC 流式 chunk → 维护 messages state；处理 streaming 中断 / 网络断开 / quota exceeded 4 个状态机
+- [x] `src/electron/main/handlers/ai_chat.ts` —— **API key 不能进 renderer bundle**，所有 LLM 调用走 main process subprocess pipe + IPC chunk stream 推 renderer
+- [x] CSP 策略：renderer 禁连外网，只能 IPC 给 main
+- [x] `cancel` IPC：renderer 切邮件 / 关 panel 时通过 AbortController 关 in-flight subprocess
+- [x] `useEmailChat` React hook：订阅 IPC 流式 chunk → 维护 messages state；处理 streaming 中断 / 网络断开 / quota exceeded 4 个状态机
 
 **独立 chat LLM 层（~1.5-2 天）**:
-- [ ] 新建 `src/electron/main/llm_chat/` 目录 —— **不复用** `src/llm_agent/processor.py`（那是批处理 tool_use，非流式 chat）
-- [ ] Anthropic Messages stream 路径（claude-* 模型）：直连 CRS 或原生 Anthropic，cache_control 透传
-- [ ] OpenAI Chat Completions stream 路径（gpt-* / gemini-* / codex-* 模型）：CRS 强制 `stream=true`，逐 chunk parse
-- [ ] Notion Agent CLI 路径：`notion-agent chat <prompt> --agent-page-id <id> --json --stream`，pipe stdout 解析
-- [ ] 多轮上下文管理：超过 token 阈值时 truncate 早期 message 或 LLM summary
+- [x] 新建 `src/electron/main/chat/` 目录 —— **不复用** `src/llm_agent/processor.py`（那是批处理 tool_use，非流式 chat）
+- [x] Anthropic Messages stream 路径（claude-* 模型）：直连 CRS 或原生 Anthropic，cache_control 透传
+- [x] OpenAI Chat Completions stream 路径（gpt-* / gemini-* / codex-* 模型）：CRS 强制 `stream=true`，逐 chunk parse
+- [x] Notion Agent CLI 路径：`notion-agent chat <prompt> --agent-page-id <id> --json --stream`，pipe stdout 解析
+- [x] 多轮上下文管理：超过 token 阈值时 truncate 早期 message 或 LLM summary
 
 **前端独立 SQLite 持久化层（~0.5-1 天，REVIEW-LOG C-05 / M-06）**:
-- [ ] **不在 `sync_store.db` 加表**（违反后端 DB_VERSION 升级流程）
-- [ ] 前端独立 `~/.mailagent/frontend/ai_chat.db` —— `ai_chat_sessions` + `ai_chat_messages` 双表（schema 见 BACKEND-INTERFACES.md §4.5.1）
-- [ ] better-sqlite3 第二个 connection 给 ai_chat.db
-- [ ] 写入：每条 user message + assistant 流式 chunk 完成 + status (pending/streaming/complete/error/aborted) + tokens + cost
-- [ ] 切邮件中断时把 streaming message 改 aborted 不重放
+- [x] **不在 `sync_store.db` 加表**（违反后端 DB_VERSION 升级流程）
+- [x] 前端独立 `~/.mailagent/frontend/ai_chat.db` —— `ai_chat_sessions` + `ai_chat_messages` 双表（schema 见 BACKEND-INTERFACES.md §4.5.1；Sprint 5 起 v2 schema 加 `metadata JSON`）
+- [x] better-sqlite3 第二个 connection 给 ai_chat.db
+- [x] 写入：每条 user message + assistant 流式 chunk 完成 + status (pending/streaming/complete/error/aborted) + tokens + cost
+- [x] 切邮件中断时把 streaming message 改 aborted 不重放
 
 **i18n + 三态主题 + a11y（~0.5-1 天）**:
-- [ ] 所有 AI panel JSX 字符串走 `t()` —— 流式中的 "AI 思考中..." / "已取消" / 错误提示都要 i18n key
-- [ ] DraftPreviewCard / ToolCallRow 双主题视觉验证（light/dark 各跑一遍）
-- [ ] 键盘 a11y：Tab 在 BackendSelector / Composer / send button 间走通，VoiceOver 报对
+- [x] 所有 AI panel JSX 字符串走 `t()` —— 流式中的 "AI 思考中..." / "已取消" / 错误提示都要 i18n key
+- [x] DraftPreviewCard / ToolCallRow 双主题视觉验证（light/dark 各跑一遍）
+- [x] 键盘 a11y：Tab 在 BackendSelector / Composer / send button 间走通，VoiceOver 报对
+- [x] **bonus**: useShortcut 单 document.keydown bus 重写（Sprint 3 review opus H-1 carry-forward），LIFO precedence + editable target gating；a11y 335 → 0 violations
 
-### Sprint 5 — 写操作 + 批量 AI 操作（**1.5-2 天**）
+### Sprint 5 — 写操作 + 批量 AI 操作（**1.5-2 天**）✅ ship `2d7a128` `0533eba` `c94d2b0` `c6ddcd2`
 
-- [ ] `<Toolbar>` 详情页 — `✦ 起草回复` (coral fill 唯一 primary) + 翻译 / 重传 Notion / AI 重跑（ghost）
-- [ ] CLI fork wrapper `src/electron/main/cli_runner.ts` — execa + JSON 解析 + 退出码→错误码 + stream stdout
-- [ ] `email:resync` / `notion:update-flag` / `llm:run` IPC handler
-- [ ] **`<BatchActionBar>` 52px** — 严格 paste from [DESIGN.md §5.4](./DESIGN.md)
+- [x] `<Toolbar>` 详情页 — `✦ 起草回复` (coral fill 唯一 primary) + 翻译 / 重传 Notion / AI 重跑（ghost）
+- [x] CLI fork wrapper `src/electron/main/cli_runner.ts` — execa + JSON 解析 + 退出码→错误码 + stream stdout（Sprint 1 已搭骨架，Sprint 5 真用）
+- [x] `email:resync` / `notion:update-flag` / `llm:run` IPC handler（含 `email:createDraft` AppleScript）
+- [x] **`<BatchActionBar>` 52px** — 严格 paste from [DESIGN.md §5.4](./DESIGN.md)
   - 出现在 `selectedIds.length > 0` 时
-  - AI 批量分类 / AI 批量起草回复 / 批量翻译 EN→中（coral text + coral/10 fill 三个 AI 头牌）
+  - AI 批量分类 / AI 批量起草回复（V1.5 coming-soon toast）/ 批量翻译 EN→中（coral text + coral/10 fill 三个 AI 头牌）
   - 维护 ops: 标已读 / 归档 / 重传 Notion（ghost）
   - 右边显示 `queued · est. ~4.2s · $0.018`
-- [ ] 长任务（backfill body / batch resync）— 进度条 + SIGINT 二次确认 dialog
-- [ ] Toast (shadcn) — top-right slide-in，3s auto-dismiss with progress bar
+- [x] 长任务（batch resync）— 顺序 loop runner + 两段式 cancel + 进度 toast + SIGINT 二次确认 dialog
+- [x] Toast (shadcn-equivalent) — top-right slide-in，3s auto-dismiss with progress bar
+- [x] **bonus**: useEmailChat 状态机 #3 (retry CTA on retriable errors) + #4 (E_QUOTA 5min cooldown auto-clear timer)；ResyncConfirmDialog 三按钮（dry-run / 直接重传 / 取消）+ querySelectorAll focus-trap
 
-### Sprint 6 — 看板 + LLM dashboard + 设置（**1.5 天**）
+### Sprint 6 — 看板 + LLM dashboard + 设置（**1.5 天**）✅ ship `2dab813` `911b337` `29638f0`
 
-- [ ] `/admin` 看板 — health + DB stats + dead-letter list（CLI `mailagent admin stats/health/dead-letter`）
-- [ ] `/llm` dashboard — 处理状态分布 + cost 趋势（D3 / Recharts）+ cache hit rate
-- [ ] `/calendar` 列表 — 周期会议 recurring discover/replay
-- [ ] `/settings` 完整页：
-  - API key 输入（keytar 写入）+ test ping 按钮
-  - DB 路径（folder picker）
-  - 附件根目录
-  - 轮询频率 (5s / 10s / 30s / off)
-  - 主题色（6 swatch 选）
-  - Notion Agent page_id 绑定
-  - Custom API endpoint + key
-  - About + GitHub link
+- [x] `/admin` 看板 — health + DB stats + dead-letter list（CLI `mailagent admin stats/health/dead-letter`）
+- [x] `/llm` dashboard — 处理状态分布 + cost 趋势（自绘 SVG，未引 D3/Recharts 依赖以减体积）+ cache hit rate
+- [x] `/calendar` 列表 — 周期会议 recurring discover/replay
+- [x] `/settings` 完整页：
+  - [x] API key 输入（keytar 写入 3 槽位：cli / llm / customApi）+ test ping 按钮
+  - [x] DB 路径（folder picker + isSafeUserPath 校验）
+  - [x] 附件根目录（同上）
+  - [x] 轮询频率 (5s / 10s / 30s / off)
+  - [x] 主题色（6 swatch 选）+ 三态主题（Light / System / Dark segmented）
+  - [x] Notion Agent page_id 绑定（+ localStorage 同步给已 mount 的 AIChatPanel）
+  - [x] Custom API endpoint + key
+  - [x] About + GitHub link
+- [x] **bonus**: SecretInput 同步 wipe value 防 secret 留在 React fiber state（Sprint 6 review opus MEDIUM #2 fix）；动态 import 改静态（MEDIUM #4 fix）
 
-### Sprint 7 — Polish + 打包（**1.5 天**）
+### Sprint 7 — Polish（**1.5 天 → 实际 3.5 小时**）✅ ship `683284a` `4142e7a`
 
-- [ ] 三态主题切换 UI（Settings → Appearance：Light / System / Dark segmented control + accent 6 swatch；[DESIGN.md §17.4](./DESIGN.md)）；执行 `pnpm a11y:contrast` 验证 18 组合（6 accent × 3 mode）全 WCAG AA 通过
-- [ ] i18n 完整 review：所有 JSX 字符串走 `t()`；存量 `[TODO en]` ≤ 0；切语言（System / 简体中文 / English）实测；Island plugin Python 端 envelope title/preview 也从 `~/.mailagent/plugins/ping_island/locales/{lang}/island.json` 读
-- [ ] 全局快捷键注册（[DESIGN.md §9.5](./DESIGN.md) 全表，从 `shared/keymap.ts` 单一 SSoT 读）
-- [ ] `?` 弹出快捷键 help 模态
-- [ ] CommandPalette `⌘K`（shadcn `<Command>`）— 模糊搜邮件 / 切 mailbox / 跳设置
-- [ ] 错误 toast / loading 骨架屏统一
-- [ ] Empty state（空收件箱 / 零结果）
-- [ ] `electron-builder` macOS .dmg ad-hoc 签名（先不公证）
-- [ ] auto-updater (electron-updater + GitHub Releases)
-- [ ] README + 安装指南
+> 原 Sprint 7 spec 包含「Polish + 打包」两件事，实际拆为 Sprint 7（polish）+ Sprint 8（打包+分发）。
+
+- [x] 三态主题切换 UI（Settings → Appearance：Light / System / Dark segmented control + accent 6 swatch；Sprint 6 已落地）；执行 `pnpm a11y:contrast --strict` 验证 12 组合（6 accent × 2 mode）全 WCAG AA 通过（原 spec 18 组合 — 实际 system 是 dark/light 解析结果，不算独立组合）
+- [x] i18n 完整 review：所有 JSX 字符串走 `t()`；存量 `[TODO en]` 0 残留；切语言（System / 简体中文 / English）实测；Sidebar 8 zh + EmailDetail 2 zh + admin timeAgo + llm cacheTokens 全清；340 keys 双 locale parity
+- [x] 全局快捷键注册（[DESIGN.md §9.5](./DESIGN.md) 全表，从 `src/shared/keymap.ts` 单一 SSoT 读）— 18 binding 含 id/spec/display/scope/labelKey/wired 元数据
+- [x] `?` 弹出快捷键 help 模态（Portal + querySelectorAll focus-trap + 4 scope section + "soon" pill for wired=false）
+- [x] CommandPalette `⌘K`（不引 cmdk 依赖，Karpathy 简化）— 6 nav + 实时 mailbox switch + FTS5 search（2+ chars debounced 250ms）
+- [x] 错误 toast 统一（Sprint 5 已搭）/ loading 骨架屏统一（`<Skeleton>` + `<SkeletonCard>` + `<SkeletonRow>`）
+- [x] Empty state（`<EmptyState>` icon + title + hint + action 复合组件；SearchPage / AdminPage / CalendarPage / LlmDashboard 全用）
+
+> 「打包 + 分发」移到 Sprint 8。
+
+### Sprint 8 — 打包 + 分发（**1.5 天 → 实际 2.5 小时**）✅ ship `ec4f51e`
+
+- [x] `electron-builder` macOS .dmg ad-hoc 签名（先不公证）— identity=null + hardenedRuntime + entitlements.mac.plist 8 entitlements + mac.target {dmg+zip} × {arm64+x64} 4 product + minimumSystemVersion=12.0
+- [x] auto-updater (electron-updater + GitHub Releases) — 8-state 状态机 + AutoUpdaterLike 注入抽口 + autoDownload=false + 启动 10s production auto-check + Settings UpdateSection UI + StatusBar dynamic version
+- [x] README + 安装指南（用户向 `INSTALL.md` ~280 行 / 8 章：适配 / 后端 / 安装 / 首次配置 / 日常 / 故障排查 / 升级 / 卸载）
+- [x] **bonus**: Sprint 7 review opus 4.7 max-effort verdict APPROVE-with-follow-ups 的 3 MEDIUM 全 Day 1 闭（M1 settings.dbPath → db.ts:resolveDbPath() 接通 lib/path-guard.ts SSoT；M2 KeyboardHelpModal + CommandPalette outer dialog `tabIndex={-1}` Esc 兜底；M3 CommandPalette search-hit → setActiveEmail + navigate '/'）+ LOW Top-3 `palette.search.untitled` i18n 漏补
 
 **V1 ship checklist**:
 - ✅ Inbox 三栏正常打开 + 列表能加载
 - ✅ 详情页 HTML 渲染（沙箱）+ AI Fields + 附件
 - ✅ AI Chat panel：Notion Agent 默认能用 + Custom API 切换
 - ✅ 翻译 EN→中能跑
-- ✅ 批量 AI 操作能跑（至少 AI 批量分类）
+- ✅ 批量 AI 操作能跑（至少 AI 批量分类；AI 批量起草留 V1.5 coming-soon toast）
 - ✅ 全文搜索能跑
-- ✅ 主题色切换能跑（6 色）
-- ✅ 设置页 keytar / DB 路径 / Notion Agent 绑定能用
-- ✅ 全局快捷键 J/K/R/⌘K 能用
-- ✅ macOS .dmg 能装能跑
-- ✅ Lint: `pnpm lint:design` 0 violation（[DESIGN.md §14](./DESIGN.md) 八条非协商）
+- ✅ 主题色切换能跑（6 色 × 3 主题模式）
+- ✅ 设置页 keytar（3 槽位）/ DB 路径 / Notion Agent 绑定能用
+- ✅ 全局快捷键 J/K/R/⌘K/⌘,/? 能用
+- ✅ macOS .dmg 打包配置就位（`pnpm build:mac` 产出 dmg+zip × arm64+x64 + blockmap + latest-mac.yml 给 auto-updater）
+- ⚠️  真机 .dmg 安装实测 + GitHub Release artifact 上传留 Sprint 9 release day(`gh release create v0.0.1 --draft`)
+- ✅ Lint: `pnpm lint` 0 violation（DESIGN.md §14 八条非协商 + i18n + 三态主题第 9/10 条）+ `pnpm typecheck` 0 + `pnpm a11y:contrast --strict` 12 组合 clean
 
 ---
 
@@ -385,20 +421,21 @@ V1 范围已按 designer mockup 扩大 — 比 archive 里 `frontend-v1-implemen
 
 ## 6. 风险 / 缓解
 
-| 风险 | 概率 | 影响 | 缓解 |
+| 风险 | 概率 | 影响 | 状态 / 缓解 |
 |---|---|---|---|
-| Notion Agent CLI (`notion-agent-cli`) 行为不稳定 | 中 | 中 | **Sprint 0 启动前** PoC 验证 `--json --stream` + tool-call response（REVIEW-LOG M-05）；fallback 路径 Custom API |
-| better-sqlite3 跨 Electron 版本 binary 兼容 | 低 | 中 | `electron-rebuild` 自动 |
-| ping-island upstream 主分支大改 | 中 | 中 | fork minimal（6 文件 ~150-300 行 diff，REVIEW-LOG H-10），rebase 容易 |
-| Cloudflare Access JWT 校验复杂度（key rotation） | 中 | 高 | **REVIEW-LOG C-01 已修**：`PyJWKClient` 按 kid 缓存 + unknown 自动 refresh |
-| 邮件 HTML 含恶意 JS / phishing 链接 | 高 | 高 | sandboxed iframe + DOMPurify + 阻止外链跳出 + 显示确认 dialog |
-| AI panel 流式 token 卡顿 | 中 | 低 | Electron main IPC chunk stream + renderer 增量 setState；避免每 token 重渲染整个 message list |
-| **AI Chat panel 写回 11 AI fields 与 Notion Custom Agent 冲突**（REVIEW-LOG H-15）| 中 | 中 | Sprint 4 前确认 Notion Email Agent 已关或 prompt 已限 `Processing Status = 未处理`；验证 Sprint 4 用例 |
-| 大邮箱（6000+）列表初次加载卡 | 高 | 中 | `react-window` 虚拟滚动 + 后端 LIMIT/OFFSET 分页 |
-| Mac 关机 → 远端 V2 断 | 高 | 中 | `caffeinate -d -i -m -s` 常驻；外接显示器 |
-| Designer mockup 与 backend schema 错配 | 中 | 中 | Sprint 1 末做一次 schema/mockup 对账（8 AI fields V1 + 3 V1.5 候选 / Processing Status enum / 5 priority，REVIEW-LOG H-14）|
-| **macOS sleep/restart 后 Island socket 静默丢通知**（REVIEW-LOG H-17）| 高 | 低 | `island_reconnect.py` 5min probe + send queue + exponential backoff |
-| **Mockup 仅 dark mode，light mode 视觉无人出**（REVIEW-LOG C-08）| 高 | 中 | Sprint 1 末 spot-check 5 个核心组件；视觉崩坏立即修 token；Sprint 3 末跑 a11y 12 组合 lint |
+| Notion Agent CLI (`notion-agent-cli`) 行为不稳定 | 中 | 中 | ✅ **Sprint 4 验证通过**：`notion_agent.ts` backend 把 `thread_id` 编进 ai_chat.db v2 schema `metadata` 字段；E_AGENT_AUTH / E_AGENT_NOT_INSTALLED 兜底走 useEmailChat 状态机 |
+| better-sqlite3 跨 Electron 版本 binary 兼容 | 低 | 中 | ✅ **Sprint 1 已踩坑修复**：electron-builder install-app-deps 对 Node v22.16 (ABI 140) 不替 .node binary；`pnpm rebuild:electron` 走 prebuild-install 强 install |
+| ping-island upstream 主分支大改 | 中 | 中 | ⏸ L2 未启动；fork minimal（6 文件 ~150-300 行 diff，REVIEW-LOG H-10），rebase 容易 |
+| Cloudflare Access JWT 校验复杂度（key rotation） | 中 | 高 | ⏸ L3 未启动；**REVIEW-LOG C-01 已修**：`PyJWKClient` 按 kid 缓存 + unknown 自动 refresh |
+| 邮件 HTML 含恶意 JS / phishing 链接 | 高 | 高 | ✅ **Sprint 2 落地**：sandboxed iframe (srcdoc + sandbox=allow-same-origin) + DOMPurify + `<embed>/<object>/<iframe>` strip + ALLOWED_URI_REGEXP=/^https?:\/\// |
+| AI panel 流式 token 卡顿 | 中 | 低 | ✅ **Sprint 4 落地**：main process IPC chunk stream + renderer 增量 setState；MessageList 仅 scrollIntoView when 距底部 ≤80px |
+| **AI Chat panel 写回 11 AI fields 与 Notion Custom Agent 冲突**（REVIEW-LOG H-15）| 中 | 中 | ✅ **Sprint 4 决策**：Chat panel 不写 AI fields（仅显示 + 上下文)；写 Notion 只走 `email:resync` / `notion:updateFlag`，跟 Notion Custom Agent 完全分离 |
+| 大邮箱（6000+）列表初次加载卡 | 高 | 中 | ✅ **Sprint 2 落地**：`react-window` 虚拟滚动 + IPC handler 拼接 EnrichedEmailMeta + 后端 LIMIT/OFFSET |
+| Mac 关机 → 远端 V2 断 | 高 | 中 | ⏸ L3 未启动；后端 `caffeinate -d -i -m -s` 常驻已有方案 |
+| Designer mockup 与 backend schema 错配 | 中 | 中 | ✅ **Sprint 1/2 已对账**：8 V1 AI fields 全 mapped；`labels_json.sentiment` 未 emit → AIFieldsBlock 渲 `—` 占位 |
+| **macOS sleep/restart 后 Island socket 静默丢通知**（REVIEW-LOG H-17）| 高 | 低 | ⏸ L2 未启动；`island_reconnect.py` 5min probe + send queue + exponential backoff（设计就位） |
+| **Mockup 仅 dark mode，light mode 视觉无人出**（REVIEW-LOG C-08）| 高 | 中 | ✅ **Sprint 3/4 a11y 闭环**：`pnpm a11y:contrast --strict` 12 组合 0 violation;CSS variables chip palette + per-mode accent overrides + `--c-accent-fg` |
+| 真机 .dmg 实测 + GitHub Release artifact 上传 | 中 | 中 | ⏸ Sprint 9 release day：`pnpm build:mac` 配置全就位（Sprint 8），剩 `gh release create v0.0.1 --draft` 触发 GitHub Actions 上传 dmg+zip+blockmap+latest-mac.yml → 实机右键打开 → in-app updater 验证 |
 
 ---
 
@@ -418,17 +455,17 @@ V1 范围已按 designer mockup 扩大 — 比 archive 里 `frontend-v1-implemen
 
 ## 8. Sprint 启动前 checklist
 
-V1 Sprint 0 启动前要确认：
+V1 Sprint 0 启动前要确认（**全部 ✅ 已达成，2026-05-17**）：
 
-- [ ] Node 20 + pnpm 9 装好
-- [ ] `notion-agent-cli` 装好（`pipx install notion-agent-cli`）并验证 **`notion-agent chat <prompt> --json --stream` 跑通流式 + tool-call response 至少 1 个 tool 调用回执**（REVIEW-LOG M-05 — 原 checklist 只验 `--json` 不验 stream）
-- [ ] Notion Custom Agent 已建好，拿到 `agent_page_id`
-- [ ] **关 Notion Email Agent automation 或加 prompt 限 `Processing Status = 未处理`**（REVIEW-LOG H-15 —— 防 AI Chat 写回字段与 Notion automation 双跑撞车）
-- [ ] Cloudflare 账号已登（V2 需要）
-- [ ] Apple Developer 证书评估（V1 ad-hoc 签名先够，公开 release 才需要 $99/y）
-- [ ] git 仓库 `frontend/` 子目录已就位（mockups + DESIGN.md 已在）
-- [ ] `.env.example` 加 V1 / V2 / Island 全套配置项（mockup 设置页提示用户填什么）
-- [ ] **v4 SQLite-SSoT Phase 4 灰度切完**（REVIEW-LOG L-06）：`NOTION_READ_FROM_SQLITE=true` 至少 3 封实测 OK，避免 V1 启动撞 Phase 4 灰度期
+- [x] Node 20 + pnpm（实际 pnpm 10）装好
+- [x] `notion-agent-cli` 装好（`pipx install notion-agent-cli`）并验证 **`notion-agent chat <prompt> --json --stream` 跑通流式 + tool-call response 至少 1 个 tool 调用回执**（REVIEW-LOG M-05 — 原 checklist 只验 `--json` 不验 stream）
+- [x] Notion Custom Agent 已建好，拿到 `agent_page_id`
+- [x] **关 Notion Email Agent automation 或加 prompt 限 `Processing Status = 未处理`**（REVIEW-LOG H-15 —— Sprint 4 已决策 AI Chat panel 不写 11 AI fields，从根上避免冲突）
+- [ ] Cloudflare 账号已登（V2 需要 — V1 ship 不阻塞）
+- [x] Apple Developer 证书评估 — Sprint 8 ad-hoc 签名先够（公开 release 才需要 $99/y）
+- [x] git 仓库 `frontend/` 子目录已就位（mockups + DESIGN.md 已在）
+- [x] `.env.example` 加 V1 配置项（V2 / Island 待 L2/L3 启动时补）
+- [x] **v4 SQLite-SSoT Phase 4 灰度切完**（REVIEW-LOG L-06）：`NOTION_READ_FROM_SQLITE=true` 至少 3 封实测 OK
 
 Island Sprint 1 启动前要确认：
 
