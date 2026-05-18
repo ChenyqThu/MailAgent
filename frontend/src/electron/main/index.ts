@@ -17,6 +17,8 @@ import { registerAdminHandlers } from './handlers/admin'
 import { registerLlmStatsHandlers } from './handlers/llm_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
 import { registerSettingsHandlers } from './handlers/settings'
+// Sprint 8 §2.2 — electron-updater bridge (auto-updater state + IPC).
+import { registerUpdaterHandlers } from './handlers/updater'
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -118,6 +120,22 @@ app.whenReady().then(() => {
   registerLlmStatsHandlers()
   registerCalendarHandlers()
   registerSettingsHandlers()
+  // Sprint 8 §2.2 — electron-updater bridge.
+  //
+  // We pass the real `autoUpdater` lazily (require-after-app-ready) so test
+  // harnesses can opt-out by stubbing the module — see
+  // `tests/main/updater.test.ts`. The handler registration itself is
+  // unconditional; in dev mode the handler will record `state: 'dev-disabled'`
+  // and skip the auto-tick (electron-updater can't read app-update.yml until
+  // packaged), but the IPC channels still respond so the SettingsPage UI
+  // shows the dev sentinel instead of throwing on `updater:status`.
+  let updaterStub: import('./handlers/updater').AutoUpdaterLike | undefined
+  if (!is.dev) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
+    updaterStub = autoUpdater as unknown as import('./handlers/updater').AutoUpdaterLike
+  }
+  registerUpdaterHandlers({ updater: updaterStub })
 
   ipcMain.on('ping', () => console.log('pong'))
 

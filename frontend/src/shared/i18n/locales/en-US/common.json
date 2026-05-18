@@ -409,6 +409,30 @@
     "secretPlaceholder": "Paste new value to save · current value not shown",
     "testPing": "Test gateway",
     "choose": "Choose…",
-    "defaultUsed": "(default)"
+    "defaultUsed": "(default)",
+    "update": {
+      "heading": "Software updates",
+      "currentVersion": "Current version",
+      "checkNow": "Check for updates",
+      "checking": "Checking…",
+      "upToDate": "You're up to date",
+      "available": "New version available: v{version}",
+      "downloadCta": "Download update",
+      "downloading": "Downloading… {percent}%",
+      "readyToInstall": "Downloaded v{version} — restart to install",
+      "restartCta": "Restart & install",
+      "error": "Update check failed: {message}",
+      "devDisabled": "Auto-updater disabled in dev (packaged builds only)",
+      "channel": "GitHub Releases · ad-hoc signed"
+    }
+  },
+  "statusbar": {
+    "version": "v{version}",
+    "synced": "Synced",
+    "mailbox": "mailbox",
+    "llm": "llm",
+    "theme": "theme",
+    "llmIdle": "IDLE",
+    "updateReady": "Update ready"
   }
 }

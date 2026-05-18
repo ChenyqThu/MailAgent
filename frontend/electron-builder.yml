@@ -6,24 +6,68 @@ files:
   - '!**/.vscode/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md,INSTALL.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!{ARCHITECTURE.md,BACKEND-INTERFACES.md,DESIGN.md,ISLAND-PLUGIN.md,PROJECT-PLAN.md,REMOTE-ACCESS.md,REVIEW-LOG.md,NOTES.md}'
+  - '!SPRINT*-HANDOFF.md'
   - '!mockup-*.html'
   - '!archive/**'
+  - '!eslint-rules/**'
+  - '!scripts/**'
+  - '!tests/**'
+  - '!playwright.config.*'
 asarUnpack:
   - resources/**
 mac:
   category: public.app-category.productivity
+  # Sprint 8 §2.2 — ad-hoc 签名先够（identity: null 走 ad-hoc，no Apple
+  # Developer ID; auto-updater 走 GitHub Releases zip blockmap，不需 notarize）。
+  # 公证留 V1.5 — 需 $99/y Apple Developer 账号 + .p8 / .p12 + provisioning。
+  identity: null
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  extendInfo:
-    - NSDocumentsFolderUsageDescription: MailAgent reads the local SQLite database under your Documents folder.
-    - NSDownloadsFolderUsageDescription: MailAgent saves email attachments to your Downloads folder when you export them.
   notarize: false
+  # arm64 主战场（Apple Silicon dev box）。x64 同时打出供 Intel mac 用户;
+  # universal 包会膨胀 ~2x size，单独 arch 更精简。
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    # zip 是 electron-updater 必需的 channel：autoUpdater 通过
+    # latest-mac.yml + <name>-<version>-mac.zip.blockmap 做增量。
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  minimumSystemVersion: '12.0'
+  extendInfo:
+    NSDocumentsFolderUsageDescription: MailAgent reads the local SQLite database under your Documents folder.
+    NSDownloadsFolderUsageDescription: MailAgent saves email attachments to your Downloads folder when you export them.
+    NSAppleEventsUsageDescription: MailAgent uses Mail.app and Notion automation events to create draft replies and open email pages.
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
+  # DMG 安装窗口布局：左边 .app，右边 Applications 链接。背景图不画 — 走
+  # electron-builder 默认深色棋盘背景，足够清晰。Sprint 8 ad-hoc 签名 + DMG
+  # 安装即可,不做 background.png 装饰（V1.5 polish 时再加）。
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 200
+      type: link
+      path: /Applications
+    - x: 400
+      y: 200
+      type: file
 npmRebuild: false
+# auto-updater 通过 GitHub Releases 走 publish；上传产物（dmg + zip + blockmap +
+# latest-mac.yml）到 release，electron-updater 起来后 checkForUpdates() 读
+# repository latest tag 比对。
 publish:
   provider: github
   owner: chenyqthu

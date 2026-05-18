@@ -57,7 +57,9 @@ import type {
   SettingsApi,
   TargetLang,
   TranslationResult,
-  UpdateFlagOpts
+  UpdateFlagOpts,
+  UpdaterApi,
+  UpdaterStatus
 } from './types'
 
 type IpcInvoker = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -323,6 +325,27 @@ class ElectronChatApi implements ChatApi {
   }
 }
 
+class ElectronUpdaterApi implements UpdaterApi {
+  async status(): Promise<UpdaterStatus> {
+    return (await invoker()('updater:status')) as UpdaterStatus
+  }
+  async check(): Promise<UpdaterStatus> {
+    return (await invoker()('updater:check')) as UpdaterStatus
+  }
+  async download(): Promise<UpdaterStatus> {
+    return (await invoker()('updater:download')) as UpdaterStatus
+  }
+  async quitAndInstall(): Promise<void> {
+    await invoker()('updater:quitAndInstall')
+  }
+  onEvent(handler: (status: UpdaterStatus) => void): () => void {
+    return subscribe('updater:event', (...args: unknown[]) => {
+      const s = args[0] as UpdaterStatus | undefined
+      if (s && typeof s === 'object') handler(s)
+    })
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
@@ -333,4 +356,5 @@ export class ElectronApi implements MailApi {
   admin: AdminApi = new ElectronAdminApi()
   calendar: CalendarApi = new ElectronCalendarApi()
   settings: SettingsApi = new ElectronSettingsApi()
+  updater: UpdaterApi = new ElectronUpdaterApi()
 }

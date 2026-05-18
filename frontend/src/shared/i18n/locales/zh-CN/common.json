@@ -409,6 +409,30 @@
     "secretPlaceholder": "粘贴新值后保存 · 当前值不显示",
     "testPing": "测试网关",
     "choose": "选择…",
-    "defaultUsed": "(使用默认)"
+    "defaultUsed": "(使用默认)",
+    "update": {
+      "heading": "应用更新",
+      "currentVersion": "当前版本",
+      "checkNow": "检查更新",
+      "checking": "检查中…",
+      "upToDate": "已是最新版本",
+      "available": "发现新版本 v{version}",
+      "downloadCta": "下载更新",
+      "downloading": "下载中… {percent}%",
+      "readyToInstall": "已下载 v{version},重启即可安装",
+      "restartCta": "重启并安装",
+      "error": "更新检查失败:{message}",
+      "devDisabled": "Dev 模式下 auto-updater 已禁用,仅打包版本可用",
+      "channel": "GitHub Releases · ad-hoc 签名"
+    }
+  },
+  "statusbar": {
+    "version": "v{version}",
+    "synced": "已同步",
+    "mailbox": "邮箱",
+    "llm": "llm",
+    "theme": "主题",
+    "llmIdle": "空闲",
+    "updateReady": "更新就绪"
   }
 }

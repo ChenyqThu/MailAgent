@@ -97,4 +97,16 @@ export class HttpApi implements MailApi {
     testLlm: () => notImplemented('settings.testLlm'),
     testCustomApi: () => notImplemented('settings.testCustomApi')
   }
+
+  // Sprint 8 §2.2 — Web SPA has no in-app updater (the browser handles its
+  // own caching; the host Mac runs electron-builder + GitHub Releases). On
+  // V2 we'll surface "the Mac host is on version X" via the FastAPI's
+  // /api/version endpoint, but the user can't trigger updates from web.
+  updater = {
+    status: () => notImplemented('updater.status'),
+    check: () => notImplemented('updater.check'),
+    download: () => notImplemented('updater.download'),
+    quitAndInstall: () => notImplemented('updater.quitAndInstall'),
+    onEvent: (): (() => void) => () => undefined
+  }
 }

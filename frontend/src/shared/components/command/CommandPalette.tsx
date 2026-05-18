@@ -42,6 +42,7 @@ import {
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useMailbox } from '@shared/state/mailbox'
+import { useActiveEmail } from '@shared/state/active-email'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 
 const FOCUSABLE_SELECTOR =
@@ -127,6 +128,8 @@ export function CommandPalette(): React.ReactElement | null {
   const navigate = useNavigate()
   const setActiveMailbox = useMailbox((s) => s.setActive)
 
+  const setActiveEmail = useActiveEmail((s) => s.setActive)
+
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
   // Track previous open state to reset query/highlight inside render on
@@ -150,6 +153,9 @@ export function CommandPalette(): React.ReactElement | null {
   // adjust-on-prop-change block above; this effect's only job is the
   // imperative DOM call (allowed inside an effect — it's the documented
   // pattern for synchronizing with external systems like the focus model).
+  // The outer dialog div carries tabIndex={-1} so if focus somehow exits
+  // the palette (e.g. a Tab through a future cmdk-style tool row), the
+  // backdrop is still a valid keydown target.
   useEffect(() => {
     if (!open) return
     const id = window.setTimeout(() => inputRef.current?.focus(), 0)
@@ -219,15 +225,22 @@ export function CommandPalette(): React.ReactElement | null {
         label: hit.subject ?? t('palette.search.untitled'),
         hint: hit.snippet ?? hit.sender ?? '',
         icon: <SearchIcon size={14} strokeWidth={1.75} className="text-coral" />,
+        // Sprint 8 §2.2 (Sprint 7 ship-review MEDIUM #3) — Enter on a search
+        // hit now selects the email and navigates to /inbox so the
+        // EmailDetail pane lands on the right row. The previous "back to
+        // /search" path forced the user to re-type their query and click
+        // the result a second time, which broke the only useful path
+        // through the palette.
         run: () => {
           closeCommandPalette()
-          void navigate({ to: '/search' })
+          setActiveEmail(hit.internal_id)
+          void navigate({ to: '/' })
         }
       })
     }
 
     return out
-  }, [t, query, mailboxesQ.data, searchQ.data, navigate, setActiveMailbox])
+  }, [t, query, mailboxesQ.data, searchQ.data, navigate, setActiveMailbox, setActiveEmail])
 
   // Clamp highlight inside render — same "Adjusting state on prop change"
   // pattern. Reading `commands.length` directly during render keeps the
@@ -312,7 +325,8 @@ export function CommandPalette(): React.ReactElement | null {
       role="dialog"
       aria-modal="true"
       aria-label={t('palette.aria.label')}
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[14vh]"
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[14vh] focus:outline-none"
       onClick={closeCommandPalette}
       onKeyDown={onKeyDown}
     >

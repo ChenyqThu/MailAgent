@@ -1,0 +1,10 @@
+# electron-updater dev-mode override — `pnpm dev` 跑 autoUpdater 时读这份
+# 而不是 production 的 app-update.yml（后者由 electron-builder 在打包时生成
+# 进 .app/Contents/Resources/app-update.yml）。dev 模式下整 GitHub 元数据
+# 走真 release feed，但不会真下载 — autoUpdater 只 simulate update flow。
+#
+# 若想完全关掉 dev 中的 update check：在 `updater.ts` 里 `if (is.dev) return`
+# 跳过 `initAutoUpdater` 即可（Sprint 8 默认就是这种行为）。
+provider: github
+owner: chenyqthu
+repo: MailAgent

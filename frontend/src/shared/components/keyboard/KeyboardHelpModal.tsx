@@ -80,13 +80,23 @@ export function KeyboardHelpModal(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useKeyboardHelp((s) => s.open)
   const dialogRef = useRef<HTMLDivElement>(null)
+  // Sprint 8 §2.2 (Sprint 7 ship-review MEDIUM #2) — focus fallback target
+  // so the React onKeyDown handler on the outer dialog stays alive even
+  // when the modal has zero focusable descendants. `tabIndex={-1}` makes
+  // the backdrop programmatically focusable without listing it in Tab order.
+  const backdropRef = useRef<HTMLDivElement>(null)
 
-  // Focus first focusable on open.
+  // Focus first focusable on open; fall back to the backdrop so onKeyDown
+  // (which only fires from focused descendants) still routes Esc.
   useEffect(() => {
     if (!open) return
     const root = dialogRef.current
-    if (!root) return
-    root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus()
+    const first = root?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+    if (first) {
+      first.focus()
+    } else {
+      backdropRef.current?.focus()
+    }
   }, [open])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -125,10 +135,12 @@ export function KeyboardHelpModal(): React.ReactElement | null {
 
   return createPortal(
     <div
+      ref={backdropRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="kbd-help-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 focus:outline-none"
       onClick={closeKeyboardHelp}
       onKeyDown={handleKeyDown}
     >

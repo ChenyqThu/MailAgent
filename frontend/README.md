@@ -27,6 +27,10 @@
 - `mockup-inbox.html` — 三栏 inbox + 360px AI Chat panel + 批量操作 bar
 - `mockup-dynamic-island.html` — 灵动岛 Plugin 8 场景 (V4 = Hybrid 方案)
 
+终端用户（非开发者）：看 [`INSTALL.md`](./INSTALL.md) — 安装 / 首次配置 /
+故障排查 / 升级 / 卸载完整指南。Sprint 8 起 .dmg + auto-updater + 用户向
+README 都已就位。
+
 历史归档：[`archive/`](./archive/) — 7 份早期规划文档（被 ARCHITECTURE / PROJECT-PLAN / ISLAND-PLUGIN / REMOTE-ACCESS / BACKEND-INTERFACES 5 份新文档取代或精简）
 
 ---

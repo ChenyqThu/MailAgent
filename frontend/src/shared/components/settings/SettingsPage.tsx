@@ -18,7 +18,7 @@
 // FastAPI). A custom event is dispatched after every write so already-
 // mounted panels refresh without a remount.
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -30,12 +30,14 @@ import {
   KeyRound,
   Loader2,
   Paintbrush,
+  RefreshCw,
   Sparkles
 } from 'lucide-react'
 
-import type { PersistentSettings, SecretSlot } from '@shared/api/types'
+import type { PersistentSettings, SecretSlot, UpdaterStatus } from '@shared/api/types'
 import { useAppearance, type AccentId, type ThemeMode } from '@shared/state/appearance'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useUpdaterStore, setUpdaterStatus } from '@shared/state/updater'
 import { cn } from '@shared/lib/cn'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import {
@@ -658,27 +660,217 @@ function SettingsForm({ initialSettings, initialSecrets }: SettingsFormProps): R
         </div>
       </section>
 
+      {/* Updates */}
+      <UpdateSection />
+
       {/* About */}
-      <section>
-        <SectionTitle icon={<ExternalLink size={16} strokeWidth={1.75} />}>
-          {t('settings.about')}
-        </SectionTitle>
-        <div className="rounded-md border border-ink-border bg-ink-2 p-4 text-aux text-ink-fg-1 leading-relaxed space-y-2">
-          <div>
-            <span className="text-ink-fg font-medium">MailAgent</span>
-            <span className="text-ink-fg-3 ml-2">v0.0.1</span>
-          </div>
-          <a
-            href="https://github.com/chenyqthu/MailAgent"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-coral hover:underline inline-flex items-center gap-1"
-          >
-            github.com/chenyqthu/MailAgent
-            <ExternalLink size={11} strokeWidth={2} />
-          </a>
-        </div>
-      </section>
+      <AboutSection />
     </div>
+  )
+}
+
+// ----- About + Updates -----------------------------------------------------
+//
+// Sprint 8 §2.2 — auto-updater integration. The About block now reads the
+// real `app.getVersion()` (via `updater:status` IPC) and exposes a
+// "Check for updates" CTA that drives the autoUpdater state machine.
+// Subscribing to `updater:event` lets the UI update while the user reads
+// the page (download progress, etc.) without re-mounting.
+
+function AboutSection(): React.ReactElement {
+  const { t } = useTranslation()
+  const version = useUpdaterStore((s) => s.status.currentVersion)
+  return (
+    <section>
+      <SectionTitle icon={<ExternalLink size={16} strokeWidth={1.75} />}>
+        {t('settings.about')}
+      </SectionTitle>
+      <div className="rounded-md border border-ink-border bg-ink-2 p-4 text-aux text-ink-fg-1 leading-relaxed space-y-2">
+        <div>
+          <span className="text-ink-fg font-medium">MailAgent</span>
+          <span className="text-ink-fg-3 ml-2 font-mono">v{version}</span>
+        </div>
+        <a
+          href="https://github.com/chenyqthu/MailAgent"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-coral hover:underline inline-flex items-center gap-1"
+        >
+          github.com/chenyqthu/MailAgent
+          <ExternalLink size={11} strokeWidth={2} />
+        </a>
+      </div>
+    </section>
+  )
+}
+
+function UpdateSection(): React.ReactElement {
+  const { t } = useTranslation()
+  const mailApi = useMailApi()
+  const status = useUpdaterStore((s) => s.status)
+  const [busy, setBusy] = useState(false)
+
+  // Hydrate from main + subscribe to live events. We pull once on mount via
+  // `updater.status()` to avoid showing the zustand initial (0.0.0) seed,
+  // then keep the store fresh through the broadcast channel. Unsubscribe
+  // on unmount so a navigation away doesn't hold a stale listener.
+  useEffect(() => {
+    let cancelled = false
+    void mailApi.updater
+      .status()
+      .then((s) => {
+        if (!cancelled) setUpdaterStatus(s)
+      })
+      .catch(() => {
+        /* HttpApi V2 stub throws; renderer keeps initial state. */
+      })
+    const unsubscribe = mailApi.updater.onEvent((next: UpdaterStatus) => {
+      setUpdaterStatus(next)
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [mailApi])
+
+  const isDev = status.state === 'dev-disabled'
+  const isChecking = status.state === 'checking'
+  const isDownloading = status.state === 'downloading'
+  const isDownloaded = status.state === 'downloaded'
+  const hasUpdate = status.state === 'available'
+
+  const handleCheck = useCallback(async (): Promise<void> => {
+    if (isDev || busy) return
+    setBusy(true)
+    try {
+      await mailApi.updater.check()
+    } catch (err) {
+      toastError(
+        t('settings.update.heading'),
+        err instanceof Error ? err.message : String(err)
+      )
+    } finally {
+      setBusy(false)
+    }
+  }, [isDev, busy, mailApi, t])
+
+  const handleDownload = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    try {
+      await mailApi.updater.download()
+    } catch (err) {
+      toastError(
+        t('settings.update.heading'),
+        err instanceof Error ? err.message : String(err)
+      )
+    } finally {
+      setBusy(false)
+    }
+  }, [mailApi, t])
+
+  const handleRestart = useCallback((): void => {
+    // Fire-and-forget. The app quits before this promise resolves so any
+    // .catch wouldn't run anyway.
+    void mailApi.updater.quitAndInstall()
+    toastSuccess(t('settings.update.restartCta'))
+  }, [mailApi, t])
+
+  // Resolve the status message body for the current state. Keep this as a
+  // single switch so a new state is impossible to forget.
+  let statusMessage: string
+  switch (status.state) {
+    case 'idle':
+      statusMessage = t('settings.update.currentVersion') + ' v' + status.currentVersion
+      break
+    case 'checking':
+      statusMessage = t('settings.update.checking')
+      break
+    case 'available':
+      statusMessage = t('settings.update.available', {
+        version: status.latestVersion ?? '?'
+      })
+      break
+    case 'not-available':
+      statusMessage = t('settings.update.upToDate')
+      break
+    case 'downloading':
+      statusMessage = t('settings.update.downloading', {
+        percent: status.downloadPercent ?? 0
+      })
+      break
+    case 'downloaded':
+      statusMessage = t('settings.update.readyToInstall', {
+        version: status.latestVersion ?? '?'
+      })
+      break
+    case 'error':
+      statusMessage = t('settings.update.error', { message: status.message ?? '' })
+      break
+    case 'dev-disabled':
+      statusMessage = t('settings.update.devDisabled')
+      break
+  }
+
+  return (
+    <section>
+      <SectionTitle icon={<RefreshCw size={16} strokeWidth={1.75} />}>
+        {t('settings.update.heading')}
+      </SectionTitle>
+      <div className="rounded-md border border-ink-border bg-ink-2 px-4">
+        <Row label={t('settings.update.currentVersion')} hint={t('settings.update.channel')}>
+          <div className="text-aux text-ink-fg font-mono">v{status.currentVersion}</div>
+        </Row>
+        <Row label={statusMessage} hint={undefined}>
+          <div className="flex items-center gap-2">
+            {!isDownloaded && (
+              <button
+                type="button"
+                onClick={() => void handleCheck()}
+                disabled={isDev || busy || isChecking || isDownloading}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-aux',
+                  'text-coral border border-coral/30 hover:bg-coral/10',
+                  'transition-colors duration-fast',
+                  'disabled:opacity-60 disabled:cursor-not-allowed'
+                )}
+              >
+                {isChecking || busy ? (
+                  <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={13} strokeWidth={2} />
+                )}
+                {isChecking ? t('settings.update.checking') : t('settings.update.checkNow')}
+              </button>
+            )}
+            {hasUpdate && (
+              <button
+                type="button"
+                onClick={() => void handleDownload()}
+                disabled={busy}
+                className={cn(
+                  'px-3 py-1.5 rounded-md text-aux font-medium',
+                  'bg-coral/100 text-accent-fg hover:bg-coral-hover transition-colors duration-fast',
+                  'disabled:opacity-60 disabled:cursor-not-allowed'
+                )}
+              >
+                {t('settings.update.downloadCta')}
+              </button>
+            )}
+            {isDownloaded && (
+              <button
+                type="button"
+                onClick={handleRestart}
+                className={cn(
+                  'px-3 py-1.5 rounded-md text-aux font-medium',
+                  'bg-coral/100 text-accent-fg hover:bg-coral-hover transition-colors duration-fast'
+                )}
+              >
+                {t('settings.update.restartCta')}
+              </button>
+            )}
+          </div>
+        </Row>
+      </div>
+    </section>
   )
 }

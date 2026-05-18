@@ -504,6 +504,46 @@ export interface ChatApi {
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }
 
+// ---- Sprint 8 §2.2 — auto-updater surface ---------------------------------
+
+export type UpdaterState =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+  | 'dev-disabled'
+
+export interface UpdaterStatus {
+  state: UpdaterState
+  /** From `app.getVersion()` (package.json at build time). */
+  currentVersion: string
+  latestVersion: string | null
+  /** 0-100; defined only while state === 'downloading'. */
+  downloadPercent: number | null
+  message: string | null
+  /** Epoch ms of the last state transition. */
+  updatedAt: number
+}
+
+export interface UpdaterApi {
+  /** Synchronous snapshot of the current status (single IPC roundtrip). */
+  status(): Promise<UpdaterStatus>
+  /** Trigger `autoUpdater.checkForUpdates()`. Returns the post-call status —
+   *  events typically follow asynchronously so subscribe via `onEvent`. */
+  check(): Promise<UpdaterStatus>
+  /** Trigger `autoUpdater.downloadUpdate()` (only valid when state ===
+   *  'available'). Returns the post-call status. */
+  download(): Promise<UpdaterStatus>
+  /** Trigger `autoUpdater.quitAndInstall(false, true)`. Quits the app, so
+   *  there's nothing useful to return. */
+  quitAndInstall(): Promise<void>
+  /** Subscribe to status broadcasts. Returns an unsubscribe function. */
+  onEvent(handler: (status: UpdaterStatus) => void): () => void
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
@@ -517,4 +557,6 @@ export interface MailApi {
   calendar: CalendarApi
   /** Sprint 6 — SettingsPage IPC surface (keytar + persistent settings). */
   settings: SettingsApi
+  /** Sprint 8 — electron-updater bridge (current version + check / download / install). */
+  updater: UpdaterApi
 }
