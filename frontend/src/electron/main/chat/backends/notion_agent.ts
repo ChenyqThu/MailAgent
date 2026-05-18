@@ -109,17 +109,29 @@ function extractTurn(req: ChatStreamRequest): {
   const lastUser = [...req.history].reverse().find((m) => m.role === 'user')
   const prompt = lastUser?.content ?? ''
 
-  // Find a thread_id from a prior assistant row's stored model/metadata.
-  // We don't have a dedicated `thread_id` column on ai_chat_messages
-  // (the backend-specific column would bloat the shared schema), so
-  // notion_agent backend stores it inside the assistant row's `model`
-  // field for now using the `notion-agent:<thread_id>` convention. If
-  // the row's model field doesn't carry one, this is the first turn.
+  // Find a thread_id from a prior assistant row. Sprint 4 review (opus L)
+  // moved thread_id out of the `model` column hack into the structured
+  // `metadata` JSON column (ai_chat.db schema v2). For backward read of
+  // v1-written rows, fall back to the `notion-agent:<id>` model prefix.
   let threadId: string | null = null
   for (let i = req.history.length - 1; i >= 0; i--) {
     const m = req.history[i]
-    if (m.role !== 'assistant' || !m.model) continue
-    if (m.model.startsWith('notion-agent:')) {
+    if (m.role !== 'assistant') continue
+    // v2+: parsed metadata JSON.
+    if (m.metadata) {
+      try {
+        const meta = JSON.parse(m.metadata) as Record<string, unknown>
+        const v = meta['thread_id']
+        if (typeof v === 'string' && v.length > 0) {
+          threadId = v
+          break
+        }
+      } catch {
+        // malformed metadata — ignore and try older formats below.
+      }
+    }
+    // v1 backcompat: `model = 'notion-agent:<thread_id>'`.
+    if (m.model && m.model.startsWith('notion-agent:')) {
       threadId = m.model.slice('notion-agent:'.length)
       break
     }
@@ -251,7 +263,16 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
     }
 
     const text = parsed.text ?? ''
-    const modelSeen = parsed.thread_id ? `notion-agent:${parsed.thread_id}` : (parsed.model ?? null)
+    // Sprint 4 review (opus L carry-forward): emit the upstream model
+    // verbatim and put the thread_id in `metadata` (orchestrator persists
+    // it into ai_chat_messages.metadata for the next turn's
+    // `--thread-id`). v1-written rows that still carry
+    // `model = 'notion-agent:<id>'` keep working via the backcompat read
+    // in extractTurn().
+    const modelSeen = parsed.model ?? null
+    const metadata: Record<string, unknown> | null = parsed.thread_id
+      ? { thread_id: parsed.thread_id }
+      : null
 
     yield {
       type: 'tool_call',
@@ -269,12 +290,14 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
       inputTokens: parsed.usage?.input_tokens ?? 0,
       outputTokens: parsed.usage?.output_tokens ?? 0,
       costUsd: null,
-      model: modelSeen
+      model: modelSeen,
+      metadata
     }
     yield {
       type: 'done',
       finalContent: text,
-      model: modelSeen
+      model: modelSeen,
+      metadata
     }
   } catch (err) {
     if (req.signal.aborted) return

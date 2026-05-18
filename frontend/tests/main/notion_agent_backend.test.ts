@@ -46,17 +46,24 @@ function userMsg(content: string, id = 1): ChatMessage {
     model: null,
     status: 'complete',
     error_message: null,
+    metadata: null,
     created_at: Date.now(),
     updated_at: Date.now()
   }
 }
 
-function assistantMsg(content: string, model: string | null, id = 2): ChatMessage {
+function assistantMsg(
+  content: string,
+  model: string | null,
+  id = 2,
+  metadata: string | null = null
+): ChatMessage {
   return {
     ...userMsg('', id),
     role: 'assistant',
     content,
-    model
+    model,
+    metadata
   }
 }
 
@@ -127,18 +134,63 @@ describe('NotionAgentBackend — extractTurn helper', () => {
     expect(prompt).toBe('second')
   })
 
-  test('extracts thread_id from prior assistant.model encoded as notion-agent:<id>', () => {
+  test('extracts thread_id from prior assistant.metadata (v2 schema)', () => {
     const { threadId } = __testing.extractTurn({
       history: [
         userMsg('hi', 1),
-        assistantMsg('hello', 'notion-agent:thr-abc', 2),
+        assistantMsg('hello', 'claude-sonnet-4-6', 2, '{"thread_id":"thr-new"}'),
         userMsg('follow up', 3)
       ],
       model: null,
       agentPageId: 'a1',
       signal: new AbortController().signal
     })
-    expect(threadId).toBe('thr-abc')
+    expect(threadId).toBe('thr-new')
+  })
+
+  test('falls back to legacy `notion-agent:<id>` model column for v1-written rows', () => {
+    // Sprint 5 Day 1 (opus L carry-forward): users with pre-migration
+    // ai_chat.db rows have thread_id encoded in `model`, not metadata.
+    // The reader must keep working until they roll past those turns.
+    const { threadId } = __testing.extractTurn({
+      history: [
+        userMsg('hi', 1),
+        assistantMsg('hello', 'notion-agent:thr-old', 2 /* no metadata */),
+        userMsg('follow up', 3)
+      ],
+      model: null,
+      agentPageId: 'a1',
+      signal: new AbortController().signal
+    })
+    expect(threadId).toBe('thr-old')
+  })
+
+  test('metadata takes precedence over the legacy model encoding when both present', () => {
+    const { threadId } = __testing.extractTurn({
+      history: [
+        userMsg('hi', 1),
+        assistantMsg('hello', 'notion-agent:thr-old', 2, '{"thread_id":"thr-new"}'),
+        userMsg('follow up', 3)
+      ],
+      model: null,
+      agentPageId: 'a1',
+      signal: new AbortController().signal
+    })
+    expect(threadId).toBe('thr-new')
+  })
+
+  test('malformed metadata JSON falls through to the model column', () => {
+    const { threadId } = __testing.extractTurn({
+      history: [
+        userMsg('hi', 1),
+        assistantMsg('hello', 'notion-agent:thr-fallback', 2, '{not-json'),
+        userMsg('follow up', 3)
+      ],
+      model: null,
+      agentPageId: 'a1',
+      signal: new AbortController().signal
+    })
+    expect(threadId).toBe('thr-fallback')
   })
 
   test('thread_id is null when no prior assistant carried one', () => {
@@ -178,6 +230,7 @@ describe('NotionAgentBackend — happy path', () => {
       stdout: JSON.stringify({
         text: 'Hello back.',
         thread_id: 'thr-001',
+        model: 'claude-sonnet-4-6',
         usage: { input_tokens: 14, output_tokens: 5 }
       }),
       exitCode: 0
@@ -206,17 +259,21 @@ describe('NotionAgentBackend — happy path', () => {
     const chunk = events[2]
     if (chunk.type === 'chunk') expect(chunk.delta).toBe('Hello back.')
 
+    // Sprint 5 Day 1 (opus L carry-forward): model column carries the
+    // real upstream model name; thread_id rides in metadata.
     const usage = events[3]
     if (usage.type === 'usage') {
       expect(usage.inputTokens).toBe(14)
       expect(usage.outputTokens).toBe(5)
-      expect(usage.model).toBe('notion-agent:thr-001')
+      expect(usage.model).toBe('claude-sonnet-4-6')
+      expect(usage.metadata).toEqual({ thread_id: 'thr-001' })
     }
 
     const done = events[4]
     if (done.type === 'done') {
       expect(done.finalContent).toBe('Hello back.')
-      expect(done.model).toBe('notion-agent:thr-001')
+      expect(done.model).toBe('claude-sonnet-4-6')
+      expect(done.metadata).toEqual({ thread_id: 'thr-001' })
     }
 
     // execa called with the expected argv shape.
@@ -227,7 +284,7 @@ describe('NotionAgentBackend — happy path', () => {
     )
   })
 
-  test('reuses thread_id from history (--thread-id appended)', async () => {
+  test('reuses thread_id from history metadata (v2: --thread-id appended)', async () => {
     mockExecaResult({
       stdout: JSON.stringify({ text: 'and another', thread_id: 'thr-001' }),
       exitCode: 0
@@ -237,6 +294,30 @@ describe('NotionAgentBackend — happy path', () => {
       backend.stream({
         history: [
           userMsg('hi', 1),
+          assistantMsg('hello', 'claude-sonnet-4-6', 2, '{"thread_id":"thr-001"}'),
+          userMsg('follow up', 3)
+        ],
+        model: null,
+        agentPageId: 'agent-1',
+        signal: new AbortController().signal
+      })
+    )
+    const argv = mockExeca.mock.calls[0][1] as string[]
+    expect(argv).toContain('--thread-id')
+    expect(argv).toContain('thr-001')
+  })
+
+  test('reuses thread_id from v1 legacy `notion-agent:<id>` model field', async () => {
+    mockExecaResult({
+      stdout: JSON.stringify({ text: 'and another', thread_id: 'thr-001' }),
+      exitCode: 0
+    })
+    const backend = new NotionAgentBackend()
+    await collect(
+      backend.stream({
+        history: [
+          userMsg('hi', 1),
+          // v1-written row: no metadata, thread_id stuffed in model.
           assistantMsg('hello', 'notion-agent:thr-001', 2),
           userMsg('follow up', 3)
         ],

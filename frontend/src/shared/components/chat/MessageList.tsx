@@ -8,6 +8,7 @@ import { CheckCheck, ExternalLink, Loader2, RotateCcw, Sparkles, X } from 'lucid
 
 import { cn } from '@shared/lib/cn'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
+import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import type { ChatMessage } from '@shared/api/types'
 
 interface Props {
@@ -67,6 +68,7 @@ function ToolCallRow({ payload }: { payload: ToolPayload }): React.ReactElement 
 
 function DraftPreviewCard({ content }: { content: string }): React.ReactElement {
   const { t } = useTranslation()
+  const headerKlass = useCjkMonoSwap('text-micro font-mono uppercase tracking-wider')
   // Strip the DRAFT REPLY header before piping into TranslatedBody so the
   // marker only shows in the card chrome, not twice.
   const body = content
@@ -79,7 +81,7 @@ function DraftPreviewCard({ content }: { content: string }): React.ReactElement 
     >
       <div className="flex items-center gap-2 mb-2">
         <Sparkles size={12} strokeWidth={2} className="text-coral" />
-        <span className="text-micro font-mono uppercase tracking-wider text-coral font-medium">
+        <span className={cn(headerKlass, 'text-coral font-medium')}>
           {t('chat.draftReply.header')}
         </span>
       </div>
@@ -187,12 +189,29 @@ function AssistantBubble({
 // state machine #1 (REVIEW-LOG C-04 carry-forward).
 const MAX_RENDERED_MESSAGES = 40
 
+/** Distance from the bottom edge (px) at which we still consider the user
+ *  "reading the latest" — within this band a new chunk will auto-scroll;
+ *  past it (user scrolled up to re-read) we leave them alone. Sprint 4
+ *  review (opus L carry-forward). */
+const AUTO_SCROLL_BAND_PX = 80
+
 export function MessageList({ messages, streamingMessageId }: Props): React.ReactElement {
   const { t } = useTranslation()
+  // (opus M) CJK-safe class for the truncated / system divider strings —
+  // both resolve to Chinese under zh-CN locale and would otherwise render
+  // at the 11px mono floor that DESIGN.md §14 #2 forbids.
+  const dividerKlass = useCjkMonoSwap('text-micro font-mono uppercase tracking-wider')
+  const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Scroll to bottom when content arrives (new message, chunk delta).
+  // Scroll to bottom on new content — but only if the user is already
+  // near the bottom. Otherwise an auto-scroll during streaming would
+  // hijack manual reading of earlier turns.
   useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const distance = container.scrollHeight - container.scrollTop - container.clientHeight
+    if (distance > AUTO_SCROLL_BAND_PX) return
     bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
   }, [messages])
 
@@ -207,7 +226,7 @@ export function MessageList({ messages, streamingMessageId }: Props): React.Reac
   if (truncated > 0) {
     rendered.push(
       <div key="__truncated__" className="px-3 py-2 text-center">
-        <span className="text-micro font-mono text-ink-fg-3 uppercase tracking-wider">
+        <span className={cn(dividerKlass, 'text-ink-fg-3')}>
           {t('chat.truncated', { n: truncated })}
         </span>
       </div>
@@ -238,16 +257,17 @@ export function MessageList({ messages, streamingMessageId }: Props): React.Reac
     } else if (m.role === 'system') {
       rendered.push(
         <div key={m.id} className="px-3 py-2 text-center">
-          <span className="text-micro font-mono text-ink-fg-3 uppercase tracking-wider">
-            {m.content}
-          </span>
+          <span className={cn(dividerKlass, 'text-ink-fg-3')}>{m.content}</span>
         </div>
       )
     }
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-3 py-3">
+    <div
+      ref={containerRef}
+      className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-3 py-3"
+    >
       {rendered}
       <div ref={bottomRef} />
     </div>

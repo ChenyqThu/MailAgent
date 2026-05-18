@@ -184,6 +184,10 @@ export interface ChatMessage {
   model: string | null
   status: ChatMessageStatus
   error_message: string | null
+  /** JSON-encoded backend-specific extras (e.g. notion_agent thread_id).
+   *  Renderer treats it as opaque — only the backend that wrote it knows
+   *  how to read it. See ai_chat.db schema_version 2 (Sprint 4 opus L). */
+  metadata: string | null
   created_at: number
   updated_at: number
 }
@@ -216,11 +220,13 @@ export interface ChatUsageEvent {
   outputTokens: number
   costUsd: number | null
   model: string | null
+  metadata?: Record<string, unknown> | null
 }
 export interface ChatDoneEvent {
   type: 'done'
   finalContent: string
   model: string | null
+  metadata?: Record<string, unknown> | null
 }
 export interface ChatErrorEvent {
   type: 'error'

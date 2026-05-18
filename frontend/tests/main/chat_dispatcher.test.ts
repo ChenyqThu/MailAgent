@@ -365,7 +365,7 @@ describe('dispatcher — error paths', () => {
     }
   })
 
-  test('backend yields ErrorEvent → message flips to error but stream may continue', async () => {
+  test('backend yields ErrorEvent → message flips to error and stops the stream', async () => {
     registerChatBackend(
       fakeBackend('custom-api', [
         { type: 'chunk', delta: 'so far so good' },
@@ -387,6 +387,40 @@ describe('dispatcher — error paths', () => {
     const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
     expect(assistant.status).toBe('error')
     expect(assistant.error_message).toBe('quota exhausted')
+    expect(sink.events.map((e) => e.event.type)).toEqual(['chunk', 'error'])
+  })
+
+  test('sawError defensive break drops events emitted AFTER error (codex N carry-forward)', async () => {
+    // A misbehaving backend that emits chunks + done past an error. Pre-fix
+    // dispatcher would flip the assistant from error → complete on the
+    // trailing done event and persist the post-error chunk into content.
+    registerChatBackend(
+      fakeBackend('custom-api', [
+        { type: 'chunk', delta: 'partial' },
+        { type: 'error', code: 'E_QUOTA', message: 'quota exhausted' },
+        { type: 'chunk', delta: 'should-be-dropped' },
+        { type: 'done', finalContent: 'wrong final', model: null }
+      ])
+    )
+    const sink = recordingSink()
+    const r = await startChat(
+      {
+        emailId: 101,
+        userMessage: 'hi',
+        backendKind: 'custom-api',
+        backendModel: null,
+        backendAgentPageId: null
+      },
+      sink
+    )
+    await tickAsync()
+    const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
+    expect(assistant.status).toBe('error')
+    expect(assistant.error_message).toBe('quota exhausted')
+    // Content is whatever was buffered BEFORE the error, never the
+    // "wrong final" overwrite.
+    expect(assistant.content).toBe('partial')
+    // Sink only saw events up to + including the error.
     expect(sink.events.map((e) => e.event.type)).toEqual(['chunk', 'error'])
   })
 
@@ -531,6 +565,76 @@ describe('dispatcher — multi-session isolation', () => {
     // No backend registered, no session created — call should return 0.
     getOrCreateSession({ emailId: 1, backendKind: 'custom-api' }) // create empty
     expect(abortChatSession(99999)).toBe(0)
+  })
+})
+
+describe('dispatcher — metadata pass-through (opus L carry-forward)', () => {
+  test('done event with metadata JSON-encodes into assistant row', async () => {
+    registerChatBackend(
+      fakeBackend('notion-agent', [
+        { type: 'chunk', delta: 'hi back' },
+        {
+          type: 'usage',
+          inputTokens: 4,
+          outputTokens: 2,
+          costUsd: null,
+          model: 'claude-sonnet-4-6',
+          metadata: { thread_id: 'thr-xyz' }
+        },
+        {
+          type: 'done',
+          finalContent: 'hi back',
+          model: 'claude-sonnet-4-6',
+          metadata: { thread_id: 'thr-xyz' }
+        }
+      ])
+    )
+    const sink = recordingSink()
+    const r = await startChat(
+      {
+        emailId: 101,
+        userMessage: 'hi',
+        backendKind: 'notion-agent',
+        backendModel: null,
+        backendAgentPageId: 'agent-1'
+      },
+      sink
+    )
+    await tickAsync()
+    const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
+    expect(assistant.metadata).toBe('{"thread_id":"thr-xyz"}')
+    expect(assistant.model).toBe('claude-sonnet-4-6')
+  })
+
+  test('metadata observed mid-stream survives a later done without metadata', async () => {
+    registerChatBackend(
+      fakeBackend('notion-agent', [
+        {
+          type: 'usage',
+          inputTokens: 4,
+          outputTokens: 2,
+          costUsd: null,
+          model: null,
+          metadata: { thread_id: 'thr-mid' }
+        },
+        { type: 'chunk', delta: 'ok' },
+        { type: 'done', finalContent: 'ok', model: null }
+      ])
+    )
+    const sink = recordingSink()
+    const r = await startChat(
+      {
+        emailId: 101,
+        userMessage: 'hi',
+        backendKind: 'notion-agent',
+        backendModel: null,
+        backendAgentPageId: 'agent-1'
+      },
+      sink
+    )
+    await tickAsync()
+    const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
+    expect(assistant.metadata).toBe('{"thread_id":"thr-mid"}')
   })
 })
 

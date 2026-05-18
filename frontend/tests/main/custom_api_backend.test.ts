@@ -41,6 +41,7 @@ function userMsg(content: string, id = 1): ChatMessage {
     model: null,
     status: 'complete',
     error_message: null,
+    metadata: null,
     created_at: Date.now(),
     updated_at: Date.now()
   }

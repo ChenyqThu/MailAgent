@@ -69,7 +69,16 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db
       .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('1')
+    // Sprint 5 Day 1 (opus L carry-forward): bumped to 2 — metadata column.
+    expect(ver.value).toBe('2')
+  })
+
+  test('fresh DB schema includes the v2 metadata column', () => {
+    const db = getChatDb()
+    const cols = db
+      .prepare('PRAGMA table_info(ai_chat_messages)')
+      .all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('metadata')
   })
 
   test('re-opening an existing DB does not re-run migrations (idempotent)', () => {
@@ -80,7 +89,70 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db
       .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('1')
+    expect(ver.value).toBe('2')
+  })
+
+  test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
+    // Hand-build a v1 DB that the Sprint 4 ship would have created, then
+    // let getChatDb() upgrade it. Verifies that an installed user with
+    // pre-Sprint 5 ai_chat.db doesn't lose data on first launch.
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_id INTEGER NOT NULL,
+        backend_kind TEXT NOT NULL,
+        backend_model TEXT,
+        backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (email_id, backend_kind, backend_agent_page_id)
+      );
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tokens_input INTEGER,
+        tokens_output INTEGER,
+        cost_usd REAL,
+        model TEXT,
+        status TEXT NOT NULL,
+        error_message TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '1');
+      INSERT INTO ai_chat_sessions
+        (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+        VALUES (101, 'notion-agent', NULL, 'agent-1', 0, 0);
+      INSERT INTO ai_chat_messages
+        (session_id, role, content, status, model, created_at, updated_at)
+        VALUES (1, 'assistant', 'hi', 'complete', 'notion-agent:thr-old', 0, 0);
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    const ver = db
+      .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
+      .get() as { value: string }
+    expect(ver.value).toBe('2')
+    const cols = db
+      .prepare('PRAGMA table_info(ai_chat_messages)')
+      .all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('metadata')
+    // Old data preserved verbatim — the v1-stored thread_id encoding stays
+    // in `model`, where notion_agent.extractTurn's backcompat reader picks
+    // it up.
+    const row = db
+      .prepare("SELECT model, metadata FROM ai_chat_messages WHERE role = 'assistant'")
+      .get() as { model: string; metadata: string | null }
+    expect(row.model).toBe('notion-agent:thr-old')
+    expect(row.metadata).toBeNull()
   })
 
   test('opening a future-version DB refuses to load', () => {
@@ -261,6 +333,28 @@ describe('chat_db — messages', () => {
     })
     expect(() => updateMessage(msg.id, {})).not.toThrow()
     expect(getMessage(msg.id)?.content).toBe('hi')
+  })
+
+  test('appendMessage + updateMessage round-trip the metadata blob (v2)', () => {
+    // Sprint 5 Day 1 (opus L carry-forward): notion_agent backend writes
+    // its thread_id here so future turns can read it back without abusing
+    // the `model` column.
+    const session = getOrCreateSession({ emailId: 101, backendKind: 'notion-agent' })
+    const msg = appendMessage({
+      sessionId: session.id,
+      role: 'assistant',
+      content: 'hi',
+      status: 'complete',
+      metadata: JSON.stringify({ thread_id: 'thr-abc' })
+    })
+    expect(msg.metadata).toBe('{"thread_id":"thr-abc"}')
+    const fresh = getMessage(msg.id)!
+    expect(fresh.metadata).toBe('{"thread_id":"thr-abc"}')
+    updateMessage(msg.id, { metadata: JSON.stringify({ thread_id: 'thr-renamed' }) })
+    expect(getMessage(msg.id)!.metadata).toBe('{"thread_id":"thr-renamed"}')
+    // Clearing metadata is supported via explicit null patch.
+    updateMessage(msg.id, { metadata: null })
+    expect(getMessage(msg.id)!.metadata).toBeNull()
   })
 })
 

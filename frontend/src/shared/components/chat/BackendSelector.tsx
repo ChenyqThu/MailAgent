@@ -11,6 +11,7 @@
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
+import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import type { ChatBackendKind } from '@shared/api/types'
 
 export interface BackendChoice {
@@ -29,12 +30,16 @@ const CUSTOM_API_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'] as
 
 export function BackendSelector({ value, onChange, agentName }: Props): React.ReactElement {
   const { t } = useTranslation()
+  // (opus M) agentName is user-pasted; can be Chinese. The header label
+  // itself is "Backend" (EN) but agentName lives in the same row.
+  const labelKlass = useCjkMonoSwap('text-meta font-mono uppercase tracking-wider')
+  const agentNameKlass = useCjkMonoSwap('text-meta font-mono')
 
   const isNotionAgent = value.kind === 'notion-agent'
 
   return (
     <div className="px-3 pt-3 pb-2 border-b border-ink-border-soft">
-      <div className="flex items-center gap-2 text-meta font-mono text-ink-fg-3 mb-2 uppercase tracking-wider">
+      <div className={cn('flex items-center gap-2 mb-2', labelKlass, 'text-ink-fg-3')}>
         {t('chat.backend.selectorLabel')}
       </div>
       <div className="flex items-center gap-1.5 text-aux">
@@ -57,7 +62,7 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
         >
           {t('chat.backend.notionAgent')}
           {agentName && (
-            <span className="ml-1 text-meta font-mono text-ink-fg-2">· {agentName}</span>
+            <span className={cn('ml-1', agentNameKlass, 'text-ink-fg-2')}>· {agentName}</span>
           )}
         </button>
         <button

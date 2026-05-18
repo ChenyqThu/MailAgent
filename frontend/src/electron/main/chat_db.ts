@@ -48,6 +48,12 @@ export interface ChatMessage {
   model: string | null
   status: MessageStatus
   error_message: string | null
+  // schema_version=2 (Sprint 4 review opus L carry-forward): JSON blob
+  // for backend-specific data that doesn't fit the shared columns. Used
+  // today by notion_agent to persist thread_id without abusing the
+  // `model` column. Null when no extras. NEVER store secrets here —
+  // the field crosses the IPC boundary.
+  metadata: string | null
   created_at: number
   updated_at: number
 }
@@ -69,6 +75,7 @@ export interface AppendMessageInput {
   tokensOutput?: number | null
   costUsd?: number | null
   errorMessage?: string | null
+  metadata?: string | null
 }
 
 export interface UpdateMessagePatch {
@@ -79,11 +86,12 @@ export interface UpdateMessagePatch {
   costUsd?: number | null
   errorMessage?: string | null
   model?: string | null
+  metadata?: string | null
 }
 
 // ── path resolution ─────────────────────────────────────────────────────
 
-const CHAT_DB_VERSION = 1
+const CHAT_DB_VERSION = 2
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -155,6 +163,15 @@ function migrate(db: Database.Database): void {
 
         CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
       `)
+    }
+    if (current < 2) {
+      // Sprint 4 review (opus L carry-forward): drop the `model = 'notion-agent:<id>'`
+      // hack used by Sprint 4 ship to encode thread_id, and store it in a
+      // structured JSON column instead. Existing rows keep their `model`
+      // value for backward read in `notion_agent.extractTurn()` — the
+      // backend prefers metadata when present, falls back to the prefix
+      // hack for v1-written rows.
+      db.exec('ALTER TABLE ai_chat_messages ADD COLUMN metadata TEXT')
     }
     db.prepare("INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', ?)").run(
       String(CHAT_DB_VERSION)
@@ -280,8 +297,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     .prepare(
       `INSERT INTO ai_chat_messages
         (session_id, role, content, tokens_input, tokens_output, cost_usd,
-         model, status, error_message, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         model, status, error_message, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.sessionId,
@@ -293,6 +310,7 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       input.model ?? null,
       input.status,
       input.errorMessage ?? null,
+      input.metadata ?? null,
       now,
       now
     )
@@ -310,6 +328,7 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     model: input.model ?? null,
     status: input.status,
     error_message: input.errorMessage ?? null,
+    metadata: input.metadata ?? null,
     created_at: now,
     updated_at: now
   }
@@ -347,6 +366,10 @@ export function updateMessage(messageId: number, patch: UpdateMessagePatch): voi
   if (patch.model !== undefined) {
     fields.push('model = ?')
     params.push(patch.model)
+  }
+  if (patch.metadata !== undefined) {
+    fields.push('metadata = ?')
+    params.push(patch.metadata)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

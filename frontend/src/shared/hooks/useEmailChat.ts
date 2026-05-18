@@ -73,6 +73,29 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const [error, setError] = useState<ChatError | null>(null)
   const [lastEmailId, setLastEmailId] = useState<number | null>(emailId)
 
+  // Mirror the latest committed emailId into a ref so `send()` can detect
+  // a switch that happened while `chat.start()` was in flight. The closure
+  // captures the emailId at call time; the ref reflects the latest render's
+  // value. Comparing the two at resolve catches stale-send (codex High
+  // carry-forward). Ref is written from an effect, never during render
+  // (react-hooks/refs lint rule).
+  const emailIdRef = useRef(emailId)
+  useEffect(() => {
+    emailIdRef.current = emailId
+  }, [emailId])
+
+  // Track whether the component is still mounted so a `chat.start()` that
+  // resolves after unmount can abort the stranded session and skip the
+  // setState calls (the same React warning that motivated the stale-send
+  // guard would log a "setState on unmounted component" otherwise).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   // React 19 "Adjusting state on prop change" (react.dev/learn/you-might-not-need-an-effect).
   // When emailId switches, reset derived state synchronously inside
   // render rather than via an effect — keeps the renderer from showing
@@ -223,6 +246,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         throw new Error('useEmailChat.send: no active email (emailId is null)')
       }
       setError(null)
+      // Snapshot the email this turn targets BEFORE awaiting. If the user
+      // switches emails (or the hook unmounts) while `chat.start()` is in
+      // flight, the snapshot diverges from `emailIdRef.current` and we
+      // know to abort the stranded session instead of touching state for
+      // the wrong email (codex High carry-forward).
+      const myEmail = emailId
       const result = await mailApi.chat.start({
         emailId,
         message: input.message,
@@ -230,6 +259,14 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         backendModel: input.backendModel ?? null,
         backendAgentPageId: input.backendAgentPageId ?? null
       })
+      if (!mountedRef.current || emailIdRef.current !== myEmail) {
+        // Email moved on (or hook unmounted) before the dispatcher returned.
+        // Abort the stranded session and skip the state mutations — the
+        // current email's panel must not flip to streaming on a sessionId
+        // it didn't subscribe to.
+        mailApi.chat.abort(result.sessionId)
+        return result
+      }
       setActiveSessionIdState(result.sessionId)
       activeSessionRef.current = result.sessionId
       setStreamingMessageId(result.assistantMessageId)
@@ -240,8 +277,17 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   )
 
   const abortCurrent = useCallback(() => {
-    if (activeSessionRef.current !== null) mailApi.chat.abort(activeSessionRef.current)
-  }, [mailApi])
+    const sid = activeSessionRef.current
+    if (sid === null) return
+    mailApi.chat.abort(sid)
+    // Sprint 4 review (codex M carry-forward): the IPC abort doesn't push a
+    // `chat:stream` event back, so without a local update the panel would
+    // stay in `isStreaming = true` until the next event lands (or never,
+    // if the backend died). Clear the streaming id immediately and pull
+    // the canonical `aborted` row off the SSoT so the UI reflects state.
+    setStreamingMessageId(null)
+    void refresh(sid)
+  }, [mailApi, refresh])
 
   const clearError = useCallback(() => setError(null), [])
 

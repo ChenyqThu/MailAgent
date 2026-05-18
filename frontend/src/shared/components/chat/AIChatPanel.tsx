@@ -4,7 +4,7 @@
 // streaming state / error UI; quick action chips just prefill the composer
 // (Sprint 4 keeps explicit user submit; Sprint 5 may auto-submit).
 
-import { useCallback, useState } from 'react'
+import { useCallback, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { AIFields, EmailMeta } from '@shared/api/types'
@@ -22,6 +22,11 @@ import { QuickActions } from './QuickActions'
 
 const STORAGE_AGENT_ID = 'mailagent.notionAgent.pageId'
 const STORAGE_AGENT_NAME = 'mailagent.notionAgent.name'
+/** Custom event Sprint 6 SettingsPage dispatches after persisting the
+ *  Notion Agent binding, so already-mounted panels pick up the change
+ *  without a remount (the browser `storage` event only fires cross-tab).
+ *  Sprint 4 review (codex L carry-forward). */
+const STORAGE_CHANGE_EVENT = 'mailagent:notion-agent-storage'
 
 function readStored(key: string): string | null {
   try {
@@ -30,6 +35,22 @@ function readStored(key: string): string | null {
     return null
   }
 }
+
+function subscribeToAgentStorage(callback: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  window.addEventListener('storage', callback)
+  window.addEventListener(STORAGE_CHANGE_EVENT, callback)
+  return () => {
+    window.removeEventListener('storage', callback)
+    window.removeEventListener(STORAGE_CHANGE_EVENT, callback)
+  }
+}
+
+// Module-level snapshot getters — passing a fresh closure each render
+// would defeat useSyncExternalStore's identity-based bail-out.
+const getAgentIdSnapshot = (): string | null => readStored(STORAGE_AGENT_ID)
+const getAgentNameSnapshot = (): string | null => readStored(STORAGE_AGENT_NAME)
+const getServerSnapshot = (): null => null
 
 export function AIChatPanel(): React.ReactElement {
   const { t } = useTranslation()
@@ -40,8 +61,21 @@ export function AIChatPanel(): React.ReactElement {
   // a localStorage seam so power users can paste their `agent_page_id`
   // straight from `notion-agent agents list --json` to enable the
   // Notion Agent backend without an in-app UI yet.
-  const agentPageId = readStored(STORAGE_AGENT_ID)
-  const agentName = readStored(STORAGE_AGENT_NAME)
+  //
+  // Sprint 4 review (codex L carry-forward): subscribe via
+  // useSyncExternalStore so a Settings write reaches this panel without
+  // a remount. Settings should `window.dispatchEvent(new Event(
+  // 'mailagent:notion-agent-storage'))` after persisting.
+  const agentPageId = useSyncExternalStore(
+    subscribeToAgentStorage,
+    getAgentIdSnapshot,
+    getServerSnapshot
+  )
+  const agentName = useSyncExternalStore(
+    subscribeToAgentStorage,
+    getAgentNameSnapshot,
+    getServerSnapshot
+  )
 
   const [backend, setBackend] = useState<BackendChoice>({
     kind: agentPageId ? 'notion-agent' : 'custom-api',

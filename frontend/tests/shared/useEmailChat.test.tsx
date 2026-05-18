@@ -103,6 +103,7 @@ function fakeMessage(over: Partial<ChatMessage>): ChatMessage {
     model: null,
     status: 'complete',
     error_message: null,
+    metadata: null,
     created_at: 1_700_000_000_000,
     updated_at: 1_700_000_000_000,
     ...over
@@ -415,6 +416,85 @@ describe('useEmailChat — abort + lifecycle', () => {
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
     act(() => result.current.abortCurrent())
     expect(mockChatAbort).toHaveBeenCalledWith(7)
+  })
+
+  test('abortCurrent() clears streamingMessageId + refreshes (codex M carry-forward)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'hi' }),
+      fakeMessage({
+        id: 101,
+        session_id: 7,
+        role: 'assistant',
+        content: 'partial',
+        status: 'streaming'
+      })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+
+    // The SSoT refresh after the abort should pull the row in its
+    // canonical post-abort shape — streaming flipped to 'aborted'.
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'hi' }),
+      fakeMessage({
+        id: 101,
+        session_id: 7,
+        role: 'assistant',
+        content: 'partial',
+        status: 'aborted'
+      })
+    ])
+
+    act(() => result.current.abortCurrent())
+
+    // Sync drop of streamingMessageId so the UI exits its "Streaming…" state
+    // immediately rather than after the next chat:stream event lands.
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+
+    await waitFor(() => {
+      const assistant = result.current.messages.find((m) => m.id === 101)!
+      expect(assistant.status).toBe('aborted')
+    })
+  })
+
+  test('send() resolved after email switch aborts the stranded session (codex High carry-forward)', async () => {
+    // chat.start hangs so we can switch email mid-promise.
+    mockChatListSessions.mockResolvedValue([])
+    mockChatListMessages.mockResolvedValue([])
+    let resolveStart: ((v: ChatStartResult) => void) | null = null
+    mockChatStart.mockImplementation(
+      () =>
+        new Promise<ChatStartResult>((res) => {
+          resolveStart = res
+        })
+    )
+
+    const { result, rerender } = renderHook(({ id }: { id: number | null }) => useEmailChat(id), {
+      initialProps: { id: 101 }
+    })
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalledWith(101))
+
+    // Fire send() — promise stays pending.
+    let sendPromise: Promise<ChatStartResult> | null = null
+    act(() => {
+      sendPromise = result.current.send({ message: 'hi', backendKind: 'custom-api' })
+    })
+    await waitFor(() => expect(resolveStart).not.toBeNull())
+
+    // Switch email before the pending start() resolves.
+    rerender({ id: 202 })
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalledWith(202))
+
+    // Now resolve start() — the hook should detect the stale generation
+    // and abort instead of mutating state for email 101.
+    resolveStart!({ sessionId: 999, userMessageId: 1000, assistantMessageId: 1001 })
+    await sendPromise
+
+    expect(mockChatAbort).toHaveBeenCalledWith(999)
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.activeSessionId).toBeNull()
   })
 
   test('clearError() resets the error slot', async () => {

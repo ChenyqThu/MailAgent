@@ -209,6 +209,15 @@ async function runStream(args: RunStreamArgs): Promise<void> {
   let buffer = ''
   let lastUsage: { input: number; output: number; cost: number | null } | null = null
   let modelSeen: string | null = model
+  let metadataSeen: Record<string, unknown> | null = null
+  // Sprint 4 review (codex N carry-forward): once a backend emits an `error`
+  // event, stop persisting and forwarding subsequent events. Today neither
+  // notion_agent nor custom_api emits `error` then keeps streaming, but a
+  // future backend that did would flip the assistant row error → complete
+  // (or worse, leak chunks past the surfaced failure). Sticky flag + break
+  // gives us the safe behavior without depending on backend authors to
+  // remember.
+  let sawError = false
 
   function forward(event: ChatStreamEvent): void {
     sink.send({ sessionId, messageId: assistantMessageId, event })
@@ -223,6 +232,7 @@ async function runStream(args: RunStreamArgs): Promise<void> {
       signal: ac.signal
     })) {
       if (ac.signal.aborted) break
+      if (sawError) break // (codex N) defensive: error already surfaced.
 
       switch (event.type) {
         case 'chunk': {
@@ -260,18 +270,21 @@ async function runStream(args: RunStreamArgs): Promise<void> {
             cost: event.costUsd
           }
           modelSeen = event.model ?? modelSeen
+          if (event.metadata) metadataSeen = { ...(metadataSeen ?? {}), ...event.metadata }
           forward(event)
           break
         }
         case 'done': {
           modelSeen = event.model ?? modelSeen
+          if (event.metadata) metadataSeen = { ...(metadataSeen ?? {}), ...event.metadata }
           updateMessage(assistantMessageId, {
             status: 'complete',
             content: event.finalContent || buffer,
             model: modelSeen,
             tokensInput: lastUsage?.input ?? null,
             tokensOutput: lastUsage?.output ?? null,
-            costUsd: lastUsage?.cost ?? null
+            costUsd: lastUsage?.cost ?? null,
+            metadata: metadataSeen ? JSON.stringify(metadataSeen) : null
           })
           forward(event)
           break
@@ -280,12 +293,11 @@ async function runStream(args: RunStreamArgs): Promise<void> {
           updateMessage(assistantMessageId, {
             status: 'error',
             errorMessage: event.message,
-            model: modelSeen
+            model: modelSeen,
+            metadata: metadataSeen ? JSON.stringify(metadataSeen) : null
           })
           forward(event)
-          // Don't break the for-await — the backend chose to emit error
-          // and may follow with `done` or simply finish; either way the
-          // DB now reflects the failure.
+          sawError = true
           break
         }
       }

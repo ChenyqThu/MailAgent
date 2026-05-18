@@ -9,6 +9,7 @@ import { Send, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useShortcut } from '@shared/hooks/useShortcut'
+import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 
 interface Props {
   /** Renderer-controlled draft text. Lifted so QuickActions can prefill it. */
@@ -35,6 +36,9 @@ export function Composer({
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
   const [focused, setFocused] = useState(false)
+  // (opus M) `chat.composer.send` resolves to "发送" under zh-CN —
+  // .toUpperCase() is a no-op on CJK and the 11px mono floor is unreadable.
+  const footerKlass = useCjkMonoSwap('text-micro font-mono')
 
   const submit = useCallback(() => {
     const trimmed = value.trim()
@@ -42,15 +46,22 @@ export function Composer({
     onSend(trimmed)
   }, [canSend, isStreaming, onSend, value])
 
-  // ⌘↩ to send. allowInEditable: true so the textarea focus doesn't gate
-  // the shortcut. Disabled when streaming or not allowed.
+  // ⌘↩ to send. Sprint 4 review (opus M carry-forward): `enabled: focused`
+  // killed the shortcut whenever the user clicked a tool row or the
+  // BackendSelector. Scope to "anywhere inside the AI panel" via aria-label
+  // instead — composer textarea, quick-action chips, and BackendSelector
+  // all sit under `aria-label="ai-chat-panel"` (see AIChatPanel root).
   useShortcut(
     'cmd+enter',
     () => {
+      if (typeof document === 'undefined') return
+      const active = document.activeElement
+      if (!(active instanceof HTMLElement)) return
+      if (!active.closest('[aria-label="ai-chat-panel"]')) return
       submit()
       return true
     },
-    { allowInEditable: true, enabled: focused }
+    { allowInEditable: true }
   )
 
   return (
@@ -85,7 +96,13 @@ export function Composer({
             el.style.height = Math.min(el.scrollHeight, 160) + 'px'
           }}
         />
-        <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between text-micro font-mono text-ink-fg-3">
+        <div
+          className={cn(
+            'absolute bottom-2 left-3 right-3 flex items-center justify-between',
+            footerKlass,
+            'text-ink-fg-3'
+          )}
+        >
           <span className="uppercase tracking-wider">
             ⌘↩ {t('chat.composer.send').toUpperCase()}
           </span>

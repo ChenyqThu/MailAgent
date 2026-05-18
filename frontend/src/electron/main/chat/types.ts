@@ -44,6 +44,10 @@ export interface UsageEvent {
   outputTokens: number
   costUsd: number | null
   model: string | null
+  /** Backend-specific structured payload (e.g. notion-agent thread_id) the
+   *  orchestrator JSON-encodes into ai_chat_messages.metadata. Optional —
+   *  custom-api backend leaves it null. Sprint 4 review (opus L). */
+  metadata?: Record<string, unknown> | null
 }
 
 /** Successful completion. `finalContent` is the post-stream canonical
@@ -53,6 +57,9 @@ export interface DoneEvent {
   type: 'done'
   finalContent: string
   model: string | null
+  /** See UsageEvent.metadata — orchestrator merges this with any prior
+   *  metadata observed on usage events (last-write-wins). */
+  metadata?: Record<string, unknown> | null
 }
 
 /** Backend-internal failure. Orchestrator maps to renderer error UI. */
