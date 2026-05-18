@@ -25,7 +25,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 
 import { whichSync } from '../../bin_resolver'
-import type { ChatBackend, ChatStreamEvent, ChatStreamRequest } from '../types'
+import type { ChatBackend, ChatStreamEvent, ChatStreamRequest, EmailContext } from '../types'
 
 const REQUEST_DEADLINE_MS = 90_000 // generous: Notion AI itself can be slow
 
@@ -72,6 +72,27 @@ interface NotionAgentResponse {
     input_tokens?: number
     output_tokens?: number
   }
+}
+
+function formatEmailContextHeader(ctx: EmailContext | null): string {
+  if (!ctx) return ''
+  const lines: string[] = ['[Email currently open]']
+  if (ctx.subject) lines.push(`Subject: ${ctx.subject}`)
+  if (ctx.senderName || ctx.senderAddr) {
+    const name = ctx.senderName ?? ''
+    const addr = ctx.senderAddr ?? ''
+    lines.push(`From: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
+  }
+  if (ctx.dateIso) lines.push(`Date: ${ctx.dateIso}`)
+  lines.push('')
+  if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {
+    lines.push('Body:')
+    lines.push(ctx.bodyMarkdown)
+  } else {
+    lines.push('Body: (not available)')
+  }
+  lines.push('')
+  return lines.join('\n')
 }
 
 /** Extract the user message + any prior assistant turns to feed back to
@@ -125,8 +146,15 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
     return
   }
 
+  // Sprint 4 review (Opus H-1): prepend the email context so notion-agent's
+  // upstream chat sees the actual email body, not just the user's question.
+  // Multi-turn follow-ups skip the header (thread_id carries it forward
+  // server-side; redundant inclusion eats tokens for no gain).
+  const ctxHeader = threadId ? '' : formatEmailContextHeader(req.emailContext)
+  const enrichedPrompt = ctxHeader.length > 0 ? `${ctxHeader}[User question]\n${prompt}` : prompt
+
   const bin = resolveNotionAgentBin()
-  const args = ['chat', prompt, '--json', '--agent-page-id', req.agentPageId]
+  const args = ['chat', enrichedPrompt, '--json', '--agent-page-id', req.agentPageId]
   if (threadId) args.push('--thread-id', threadId)
   if (req.model) args.push('--model', req.model)
 
@@ -177,19 +205,27 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
       return
     }
     if (exitCode !== 0) {
-      const detail = stderr ? stderr.slice(0, 200) : `exit code ${exitCode}`
+      // Sprint 4 review (codex Critical): notion-agent occasionally prints
+      // the token_v2 cookie value into stderr on auth failures
+      // (`token_v2=v03%3A...` shows up in pipx-installed builds with verbose
+      // logging). Classifying the exit on the main side first, then
+      // returning a fixed safe message, prevents the cookie bytes from
+      // crossing the IPC boundary into the renderer envelope. The full
+      // stderr is still available via `pnpm dev` console for triage.
+      const code = classifyExit(exitCode, stderr)
+      const safeMessage = safeErrorMessage(code, exitCode)
       yield {
         type: 'tool_call',
         name: 'notion-agent chat',
         args: toolEvent.args,
         status: 'error',
         durationMs: Date.now() - startTime,
-        detail
+        detail: safeMessage
       }
       yield {
         type: 'error',
-        code: classifyExit(exitCode, stderr),
-        message: detail
+        code,
+        message: safeMessage
       }
       return
     }
@@ -267,6 +303,23 @@ function classifyExit(exitCode: number | null | undefined, stderr: string): stri
   return 'E_NOTION_AGENT_FAIL'
 }
 
+/** Map a classified error code to a renderer-safe message. The raw
+ *  stderr stays in the main-process log; the renderer only sees the
+ *  generic phrasing so a token_v2 cookie that printed to stderr never
+ *  crosses the IPC boundary. */
+function safeErrorMessage(code: string, exitCode: number | null | undefined): string {
+  switch (code) {
+    case 'E_NOTION_AGENT_AUTH':
+      return 'notion-agent authentication failed — re-run `notion-agent init`'
+    case 'E_NOTION_AGENT_NETWORK':
+      return 'notion-agent network error — check connection / Cloudflare'
+    case 'E_NOTION_AGENT_NOT_INSTALLED':
+      return 'notion-agent CLI not found on PATH'
+    default:
+      return `notion-agent exited with code ${exitCode ?? '?'}`
+  }
+}
+
 export class NotionAgentBackend implements ChatBackend {
   readonly kind = 'notion-agent' as const
 
@@ -277,5 +330,7 @@ export class NotionAgentBackend implements ChatBackend {
 
 export const __testing = {
   classifyExit,
-  extractTurn
+  extractTurn,
+  formatEmailContextHeader,
+  safeErrorMessage
 }

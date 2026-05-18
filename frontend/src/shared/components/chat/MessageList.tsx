@@ -198,7 +198,10 @@ export function MessageList({ messages, streamingMessageId }: Props): React.Reac
 
   const total = messages.length
   const truncated = Math.max(0, total - MAX_RENDERED_MESSAGES)
-  const visible = truncated > 0 ? messages.slice(-MAX_RENDERED_MESSAGES) : messages
+  // Sprint 4 review (codex low): the truncation divider itself counts
+  // toward the visible cap — keep total rendered elements ≤ MAX_RENDERED_MESSAGES.
+  const sliceSize = truncated > 0 ? MAX_RENDERED_MESSAGES - 1 : MAX_RENDERED_MESSAGES
+  const visible = total > sliceSize ? messages.slice(-sliceSize) : messages
 
   const rendered: React.ReactElement[] = []
   if (truncated > 0) {

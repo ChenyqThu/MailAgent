@@ -23,8 +23,55 @@ import {
   type BackendKind,
   type ChatMessage
 } from '../chat_db'
+import { getDb } from '../db'
 import { getChatBackend } from './registry'
-import type { ChatStreamEnvelope, ChatStreamEvent } from './types'
+import type { ChatStreamEnvelope, ChatStreamEvent, EmailContext } from './types'
+
+// Sprint 4 review (Opus H-1): cap the email body we ship to the model so
+// a giant marketing email doesn't blow the context window. Matches the
+// Sprint 3 translate.ts limit + backend LLM_BODY_MAX_CHARS.
+const MAX_BODY_CHARS = 12_000
+
+/** Pull the active email's metadata + markdown body from the SQLite SSoT
+ *  so the backend's system prompt can actually include the email content.
+ *  Returns null when the row is missing or the DB is unreachable (chat
+ *  still works, the model just won't see the email). */
+function loadEmailContext(emailId: number): EmailContext | null {
+  try {
+    const db = getDb()
+    const row = db
+      .prepare(
+        `SELECT m.internal_id, m.subject, m.sender_name, m.sender, m.date_received,
+                b.body_markdown
+           FROM email_metadata m
+           LEFT JOIN email_body b ON b.internal_id = m.internal_id
+          WHERE m.internal_id = ?`
+      )
+      .get(emailId) as
+      | {
+          internal_id: number
+          subject: string | null
+          sender_name: string | null
+          sender: string | null
+          date_received: string | null
+          body_markdown: string | null
+        }
+      | undefined
+    if (!row) return null
+    const body =
+      typeof row.body_markdown === 'string' ? row.body_markdown.slice(0, MAX_BODY_CHARS) : null
+    return {
+      internalId: row.internal_id,
+      subject: row.subject,
+      senderName: row.sender_name,
+      senderAddr: row.sender,
+      dateIso: row.date_received,
+      bodyMarkdown: body && body.length > 0 ? body : null
+    }
+  } catch {
+    return null
+  }
+}
 
 export interface StartChatInput {
   emailId: number
@@ -50,12 +97,20 @@ export interface StreamSink {
   send(envelope: ChatStreamEnvelope): void
 }
 
-/** Concrete sink used in production — wraps `webContents.send`. */
+/** Concrete sink used in production — wraps `webContents.send` with a
+ *  TOCTOU-safe try/catch (Sprint 4 review codex M-3): a window destroyed
+ *  between `isDestroyed()` and `send()` would throw out of the dispatch
+ *  loop and abort the entire run; swallowing the throw keeps the DB
+ *  writes finishing even though the renderer is gone. */
 export function makeWebContentsSink(webContents: WebContents): StreamSink {
   return {
     send(envelope: ChatStreamEnvelope): void {
       if (webContents.isDestroyed()) return
-      webContents.send('chat:stream', envelope)
+      try {
+        webContents.send('chat:stream', envelope)
+      } catch {
+        // Renderer-side IPC destroyed mid-tick — DB persistence keeps going.
+      }
     }
   }
 }
@@ -104,6 +159,7 @@ export async function startChat(input: StartChatInput, sink: StreamSink): Promis
   _inflight.set(session.id, ac)
 
   const backend = getChatBackend(input.backendKind)
+  const emailContext = loadEmailContext(input.emailId)
 
   // Kick off the consumer loop without awaiting — handler returns ids
   // immediately so the renderer can mount the empty bubble.
@@ -114,6 +170,7 @@ export async function startChat(input: StartChatInput, sink: StreamSink): Promis
     history: listMessages(session.id),
     model: input.backendModel,
     agentPageId: input.backendAgentPageId,
+    emailContext,
     ac,
     sink
   })
@@ -132,12 +189,23 @@ interface RunStreamArgs {
   history: ChatMessage[]
   model: string | null
   agentPageId: string | null
+  emailContext: EmailContext | null
   ac: AbortController
   sink: StreamSink
 }
 
 async function runStream(args: RunStreamArgs): Promise<void> {
-  const { sessionId, assistantMessageId, backend, history, model, agentPageId, ac, sink } = args
+  const {
+    sessionId,
+    assistantMessageId,
+    backend,
+    history,
+    model,
+    agentPageId,
+    emailContext,
+    ac,
+    sink
+  } = args
   let buffer = ''
   let lastUsage: { input: number; output: number; cost: number | null } | null = null
   let modelSeen: string | null = model
@@ -151,6 +219,7 @@ async function runStream(args: RunStreamArgs): Promise<void> {
       history,
       model,
       agentPageId,
+      emailContext,
       signal: ac.signal
     })) {
       if (ac.signal.aborted) break

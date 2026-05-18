@@ -187,6 +187,9 @@ function countNonNullAiFields(f: AIFields): number {
 }
 
 function mapErrorKey(code: string): string {
+  // Sprint 4 review (Opus High #2): every emit-site in the dispatcher /
+  // backends gets a dedicated key; unmapped codes still fall through to
+  // chat.error.upstream so the banner renders something useful.
   switch (code) {
     case 'E_NO_LLM_KEY':
       return 'chat.error.noKey'
@@ -198,12 +201,21 @@ function mapErrorKey(code: string): string {
       return 'chat.error.abort'
     case 'E_NOTION_AGENT_AUTH':
       return 'chat.error.agentAuth'
+    case 'E_NOTION_AGENT_NETWORK':
+    case 'E_NETWORK':
+      return 'chat.error.network'
     case 'E_NOTION_AGENT_NOT_INSTALLED':
       return 'chat.error.agentNotInstalled'
     case 'E_NOTION_AGENT_TIMEOUT':
       return 'chat.error.agentTimeout'
     case 'E_MODEL_UNSUPPORTED':
       return 'chat.error.modelUnsupported'
+    case 'E_NOTION_AGENT_PARSE':
+    case 'E_NOTION_AGENT_FAIL':
+    case 'E_BACKEND_CRASH':
+    case 'E_BACKEND_UNAVAILABLE':
+    case 'E_INVALID_ARG':
+    case 'E_LOAD':
     default:
       return 'chat.error.upstream'
   }

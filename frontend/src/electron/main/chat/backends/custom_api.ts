@@ -22,11 +22,12 @@
 //   (usage), and `message_stop`. Anything else passes through silently.
 
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../../llm_settings'
-import type { ChatBackend, ChatStreamEvent, ChatStreamRequest } from '../types'
+import type { ChatBackend, ChatStreamEvent, ChatStreamRequest, EmailContext } from '../types'
 
-// Cap on the input we hand the model — same value Sprint 3 translate.ts
-// used + matches backend `LLM_BODY_MAX_CHARS`.
-const MAX_INPUT_TOKENS = 4096
+// Anthropic `max_tokens` caps the model's RESPONSE length (not input).
+// Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
+// typical token density.
+const MAX_OUTPUT_TOKENS = 4096
 const REQUEST_DEADLINE_MS = 60_000
 
 interface AnthropicMessage {
@@ -75,14 +76,38 @@ function buildAnthropicMessages(req: ChatStreamRequest): AnthropicMessage[] {
   return out
 }
 
-function buildSystemPrompt(): string {
-  return [
+function buildSystemPrompt(ctx: EmailContext | null): string {
+  const lines = [
     'You are the AI assistant inside MailAgent, a macOS email client.',
     'The user is asking about the email currently open in the inbox panel.',
     'Be terse, concrete, and cite specific sentences from the email when relevant.',
     'Respond in the same language as the user message unless the user asks for translation.',
     'Use markdown when it improves readability (lists, code blocks, links). Keep prose tight.'
-  ].join('\n')
+  ]
+  // Sprint 4 review (Opus H-1): inline the email content into the system
+  // prompt so the model actually sees the email the user is asking about.
+  // Without this block, queries like "summarize this email" arrive at
+  // the upstream with zero email content and the system prompt's "the
+  // email currently open" claim becomes a lie.
+  if (ctx) {
+    lines.push('', '--- Email currently open ---')
+    if (ctx.subject) lines.push(`Subject: ${ctx.subject}`)
+    if (ctx.senderName || ctx.senderAddr) {
+      const name = ctx.senderName ?? ''
+      const addr = ctx.senderAddr ?? ''
+      lines.push(`From: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
+    }
+    if (ctx.dateIso) lines.push(`Date: ${ctx.dateIso}`)
+    lines.push('')
+    if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {
+      lines.push('Body (markdown):')
+      lines.push(ctx.bodyMarkdown)
+    } else {
+      lines.push('Body: (not available)')
+    }
+    lines.push('--- End email ---')
+  }
+  return lines.join('\n')
 }
 
 interface SseParseState {
@@ -131,7 +156,7 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   const baseUrl = getLlmBaseUrl()
   const model = req.model ?? getLlmModel()
   const messages = buildAnthropicMessages(req)
-  const systemPrompt = buildSystemPrompt()
+  const systemPrompt = buildSystemPrompt(req.emailContext)
 
   const timeoutAc = new AbortController()
   const timer = setTimeout(() => timeoutAc.abort(), REQUEST_DEADLINE_MS)
@@ -156,7 +181,7 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
       },
       body: JSON.stringify({
         model,
-        max_tokens: MAX_INPUT_TOKENS,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: systemPrompt,
         messages,
         stream: true
@@ -178,16 +203,15 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   if (!response.ok) {
     clearTimeout(timer)
     req.signal.removeEventListener('abort', onParentAbort)
-    let detail = ''
-    try {
-      detail = (await response.text()).slice(0, 200)
-    } catch {
-      /* ignore */
-    }
+    // Sprint 4 review (codex high): upstream gateways occasionally echo
+    // request headers (including an `Authorization: Bearer …`) into 4xx
+    // / 5xx HTML error pages. Forwarding the raw body to the renderer
+    // would leak those bytes into the IPC envelope. Stick to status
+    // codes; the main-process log still has the body for triage.
     yield {
       type: 'error',
       code: response.status === 429 ? 'E_QUOTA' : 'E_UPSTREAM',
-      message: `LLM API ${response.status}: ${detail}`
+      message: `LLM API ${response.status}`
     }
     return
   }
@@ -206,6 +230,11 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   let outputTokens = 0
   let modelSeen: string | null = model
   let accumulated = ''
+  // Sprint 4 review (codex M-2): once the upstream emits an Anthropic
+  // `error` event, the model has stopped producing usable output —
+  // suppress the trailing `usage`/`done` so the assistant row doesn't
+  // flip back to `complete` over the error.
+  let sawError = false
 
   try {
     while (true) {
@@ -250,6 +279,7 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
             break
           case 'error': {
             const errObj = (e as { error?: { type?: string; message?: string } }).error
+            sawError = true
             yield {
               type: 'error',
               code: errObj?.type ?? 'E_UPSTREAM',
@@ -271,6 +301,10 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   }
 
   if (req.signal.aborted) return
+  // Sprint 4 review (codex M-2): once an Anthropic `error` event landed
+  // mid-stream, don't paper over it with a trailing usage/done — the
+  // assistant row would flip back to `complete` and lose the error.
+  if (sawError) return
 
   yield {
     type: 'usage',

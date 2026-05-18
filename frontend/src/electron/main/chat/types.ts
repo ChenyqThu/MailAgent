@@ -66,6 +66,20 @@ export type ChatStreamEvent = ChunkEvent | ToolCallEvent | UsageEvent | DoneEven
 
 // ── orchestrator → backend inputs ────────────────────────────────────────
 
+/** Email context the backend should inline into its system prompt so the
+ *  assistant actually sees the email the panel is asking about. Loaded
+ *  by the dispatcher from the SQLite SSoT on session start; null when
+ *  no email is open or the row is missing. */
+export interface EmailContext {
+  internalId: number
+  subject: string | null
+  senderName: string | null
+  senderAddr: string | null
+  dateIso: string | null
+  /** Markdown form. Already capped at the dispatcher to MAX_BODY_CHARS. */
+  bodyMarkdown: string | null
+}
+
 export interface ChatStreamRequest {
   /** Sequential chat history including the just-inserted user message
    *  the orchestrator wants the backend to respond to. The backend
@@ -75,6 +89,11 @@ export interface ChatStreamRequest {
   model: string | null
   /** Notion-only: identifies the Custom Agent to overlay (Jarvis etc.). */
   agentPageId: string | null
+  /** Email context — subject + from + date + body markdown — to inline
+   *  into the backend's system/user prompt. Sprint 4 review (Opus H-1):
+   *  without this, the user's "summarize this email" would reach the
+   *  upstream model with zero email content. */
+  emailContext: EmailContext | null
   /** Cancellation signal — orchestrator aborts this when the user switches
    *  emails / closes the AI panel / hits the explicit cancel button. */
   signal: AbortSignal
