@@ -279,7 +279,20 @@ Sprint 1 完工 smoke test 用 `nc -U /tmp/island.sock` 手发 `MailReceived` en
 
 **结论**：Sprint 1 收尾标准是"wire 层 + profile 注册 + skeleton view 文件存在 + Settings UI 显示 MailAgent"。视觉上"灵动岛因 mail envelope 展开"**不在 Sprint 1 范围**，等 Sprint 4 联调 + 解决 §2.5.4 决议题后才能跑通。
 
-#### 2.5.4-D 决议（Sprint 10 启动前，2026-05-18）— 选定方案 A
+#### 2.5.4-D 决议（Sprint 10 启动前，2026-05-18）— ✅ 方案 A 已落实 + smoke 验证
+
+**状态**：✅ **已落实**（2026-05-18 §9-6 smoke 触发 → 同日完成 Python + Frontend wire 映射 + 测试断言更新 + nc smoke 二次验证）
+
+**触发 smoke 实测**（Sprint 10 §9-6 端到端联调）:
+- 现状（pre-Plan-A）envelope `eventType="MailReceived"` 经 `nc -U /tmp/island.sock` 发出 → ping-island fork log 停在 `Received bridge envelope provider=mail event=MailReceived` debug line → **不走 dispatch / 灵动岛不展开**
+- 原因：`MailReceived` 不在 ping-island fork 现有 hook event dispatcher 识别表里（仅认 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionStart`）
+- **判据满足** → 落方案 A 代码（commit Sprint 10 §9-6）
+
+**Post-Plan-A smoke 验证** （2026-05-18 同日，Python `nc`-style 直发）:
+- `MailReceived` envelope → wire `eventType="Notification"` + `metadata.mailagent.eventType="MailReceived"` → fork 接受 0 bytes 返回(non-blocking notification path)
+- `LLMReviewedUrgent` envelope（`waitingForInput` + 5 options） → wire `eventType="Notification"` → fork 端 **block 等用户点 option**（客户端 3s timeout，符合预期）→ **证明 fork 走 attentionNotification phase + 5 option intervention 渲染**
+
+**落地实现**:
 
 | 维度 | 方案 A ✅（选定） | 方案 B | 方案 C |
 |---|---|---|---|
@@ -332,15 +345,13 @@ Sprint 1 完工 smoke test 用 `nc -U /tmp/island.sock` 手发 `MailReceived` en
 
 4. **评估指标语义**:`island_dispatch.event_type` SQLite 列继续存 Python dataclass `event_type` 字段（mail 名），保持已有 47 单测 + 现网评估查询不破。
 
-**落地时机 / 验证条件**:
+**落地结果（2026-05-18 §9-6 smoke 后同日完成）**:
 
-- **预判**：ping-island 现有 hook dispatch 表只识别 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionStart` 等通用 hook 事件名（HookSocketServer.swift §2.1c），未知 eventType 走 fall-back 路径可能 Phase 2 dock icon silent 或 attentionNotification 不展开
-- **触发改代码的判据**：Sprint 10 ping-island.app 装机 smoke test 后，envelope 现状下确认以下**任一**失效 → 落代码:
-  1. `LLMReviewedUrgent` envelope（带 `expectsResponse=true` + `status.kind="waitingForInput"`）应触发 Phase 1 Arrive 展开 + 5 option 渲染 — 实测如果不展开
-  2. `MailCompleted` envelope（`status.kind="completed"` + 同 sessionKey）应清掉 Phase 2 dock icon — 实测如果不清
-  3. `MailReceived` 普通通知不展开本来就预期；但 dock icon 应该在 hover 时展开 hoverDashboard — 实测如果 hover 无响应
-- **如 fall-back 路径足以承接**（极小概率，但 ping-island 的 attentionNotification 路由是 provider-agnostic，可能凭 generic 字段就能展开）：本节决议归档作"文档说明"，不落代码改动；§2.5.4 状态从"决议待落"转"已验证 fall-back 可用，方案 A 不必动手"。
-- **预期落地工时**：~30-45 min（Python envelope 5 行 + frontend envelope.ts 5 行 + 测试断言 6-8 处）— 与 SPRINT9-HANDOFF.md §0 估算一致。
+- 后端 `src/notify/island_envelope.py:33-71`：`_WIRE_EVENT_MAP` 10 项 + `_resolve_wire_event_type()` + `to_wire_dict()` body["eventType"] 走映射 + body["metadata"]["mailagent.eventType"] 双写
+- 前端 `frontend/src/electron/main/island/envelope.ts:46-72`：`_WIRE_EVENT_MAP` 5 项 + `BridgeEnvelope.eventType` 类型从 `IslandEventType` 改窄为 `IslandWireEventType = 'Notification'` + `commonShell()` 内构造 metadata 加 `mailagent.eventType`
+- 测试：后端 `tests/notify/test_island_envelope.py` +2（`test_envelope_wire_event_map_all_mail_events` 验 10 mail 事件全映射 + `test_envelope_wire_passes_through_native_notification` 验真 Notification 不变）；前端 `tests/main/island_envelope.test.ts` 6 处 eventType 断言改 `'Notification'` + 加 `metadata['mailagent.eventType']` 对应断言
+- 总测试：后端 47→49 / 前端 535→543（其中 +8 来自 Sprint 9 review carry-forwards + 2 missing tests）— 全绿
+- 实际工时：~30 min（按预估）
 
 **手动 smoke test 协议**（Sprint 10 §9-6 内执行 — 在装好 ping-island.app fork `feat/mail-brand` 之后）:
 
@@ -380,7 +391,7 @@ echo '{
 #    对照看是否触发同一展开行为
 ```
 
-**决议责任人**：Sprint 10 主开发；smoke test 实测后 24h 内更新 §2.5.4-D 状态（"待验证 / 已验证 fall-back / 已落方案 A"三选一）。
+**决议归档**：Sprint 10 (b) §9-6 端到端联调 2026-05-18 同日 close — wire 层 dispatch 走通；剩余工作（mail metadata 进 envelope / mailbox-specific mascot / 真 .dmg release）按 SPRINT9-HANDOFF.md §2.4 V1.5 polish 节奏推进，§2.5.4-D 本身已 ship 不再 churn。
 
 ### 2.8 SessionLauncher.swift 是否需要改 — 不需要
 

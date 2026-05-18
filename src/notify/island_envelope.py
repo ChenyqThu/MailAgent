@@ -26,6 +26,37 @@ SWIFT_DATE_EPOCH_OFFSET = 978307200.0
 # REVIEW-LOG H-18: envelope JSON 上限 64 KiB
 ENVELOPE_MAX_BYTES = 64 * 1024
 
+# Sprint 10 (b) §2.5.4-D 方案 A 落地（2026-05-18 实测触发）:
+# Sprint 1 smoke 验证 envelope 走到 ping-island ``Received bridge envelope`` debug
+# 行就停 —— mail 自家 eventType 不在 fork 现有 hook dispatch 表里（仅识别
+# ``UserPromptSubmit`` / ``PreToolUse`` / ``Notification`` / ``Stop`` / ``SessionStart``）。
+# 方案 A: wire 层 ``eventType`` 一律映射到 ``"Notification"`` 让 fork dispatcher
+# 接住；原 mail 事件名（``MailReceived`` / ``LLMReviewedUrgent`` 等）放进
+# ``metadata["mailagent.eventType"]`` 给后端评估指标 / 调试 / 未来切方案 B 用。
+# Python ``BridgeEnvelope.event_type`` dataclass 字段保持 mail 名（``island_dispatch``
+# SQLite 表 + 现网评估查询 + 47 个单测断言不破）。
+_WIRE_EVENT_MAP: Dict[str, str] = {
+    "MailReceived": "Notification",
+    "MailReceivedUrgent": "Notification",
+    "LLMReviewed": "Notification",
+    "LLMReviewedUrgent": "Notification",  # 配合 status.kind=waitingForInput + expectsResponse=true 让 ping-island 走 attentionNotification phase
+    "MailCompleted": "Notification",       # status.kind=completed 触发 dock icon 清理
+    "SyncFailed": "Notification",
+    "DeadLetterAccum": "Notification",
+    "AIDraftStart": "Notification",
+    "AIDraftStream": "Notification",
+    "AIDraftReady": "Notification",        # status.kind=completed
+}
+
+
+def _resolve_wire_event_type(event_type: str) -> str:
+    """把内部 mail event 名翻译成 ping-island fork 已识别的 hook event 名。
+
+    未列入 ``_WIRE_EVENT_MAP`` 的 event_type（含真 ``"Notification"`` 用作
+    ping/health probe）原样返回，保留客户端语义。
+    """
+    return _WIRE_EVENT_MAP.get(event_type, event_type)
+
 
 def swift_now() -> float:
     """生成 Swift Date 兼容时间戳（自 2001-01-01 UTC 秒数）."""
@@ -88,12 +119,26 @@ class BridgeEnvelope:
     envelope_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_wire_dict(self) -> Dict[str, Any]:
-        """生成可 ``json.dumps`` 的 dict（不做大小裁剪）."""
+        """生成可 ``json.dumps`` 的 dict（不做大小裁剪）.
+
+        Sprint 10 (b) §2.5.4-D 方案 A: ``eventType`` 在 wire 层走 ``_WIRE_EVENT_MAP``
+        翻译到 ``"Notification"`` 让 ping-island fork dispatcher 接住；原 mail
+        event 名通过 ``metadata["mailagent.eventType"]`` 透传给 fork 端 metadata
+        consumer / 后端评估指标 / 未来切方案 B（Swift 端识别 mail 专属 case）。
+        """
+        wire_event = _resolve_wire_event_type(self.event_type)
+        # metadata 双写: 原内部 mail event 名进 metadata.mailagent.eventType
+        # （deepcopy 不必要，外层 to_wire_dict 拿到的 metadata 已经是 dict 字面
+        # 拷贝、且全部 stringify 在 body 序列化时进行）。
+        meta_with_event: Dict[str, str] = {
+            **{k: str(v) for k, v in self.metadata.items()},
+            "mailagent.eventType": self.event_type,
+        }
         status: Dict[str, Any] = {"kind": self.status_kind, "detail": self.status_detail}
         body: Dict[str, Any] = {
             "id": self.envelope_id,
             "provider": "mail",
-            "eventType": self.event_type,
+            "eventType": wire_event,
             "sessionKey": self.session_key,
             "title": self.title,
             "preview": self.preview,
@@ -104,7 +149,7 @@ class BridgeEnvelope:
                 self.intervention.to_dict() if self.intervention is not None else None
             ),
             "expectsResponse": self.expects_response,
-            "metadata": {k: str(v) for k, v in self.metadata.items()},
+            "metadata": meta_with_event,
             "sentAt": swift_now(),
         }
         # 顶上注入 sessionID 供 intervention.sessionID fallback

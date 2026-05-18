@@ -33,13 +33,40 @@ def test_envelope_wire_shape_minimum_fields():
     )
     body = env.to_wire_dict()
     assert body["provider"] == "mail"
-    assert body["eventType"] == "MailReceived"
+    # Sprint 10 (b) §2.5.4-D 方案 A: wire 层 eventType 翻译成 ping-island 已识别
+    # 的 "Notification"；原 mail event 名进 metadata.mailagent.eventType。
+    assert body["eventType"] == "Notification"
+    assert body["metadata"]["mailagent.eventType"] == "MailReceived"
     assert body["sessionKey"] == "mailagent:email:42"
     assert body["intervention"] is None
     assert body["expectsResponse"] is False
     assert "sentAt" in body
     # status.kind 默认 notification
     assert body["status"]["kind"] == "notification"
+
+
+def test_envelope_wire_event_map_all_mail_events():
+    """All 10 mail events 在 wire 层都 collapse 到 "Notification"."""
+    mail_events = [
+        "MailReceived", "MailReceivedUrgent",
+        "LLMReviewed", "LLMReviewedUrgent",
+        "MailCompleted", "SyncFailed", "DeadLetterAccum",
+        "AIDraftStart", "AIDraftStream", "AIDraftReady",
+    ]
+    for ev in mail_events:
+        env = BridgeEnvelope(event_type=ev, session_key=f"k:{ev}", title="t")
+        body = env.to_wire_dict()
+        assert body["eventType"] == "Notification", f"{ev} should map to Notification"
+        assert body["metadata"]["mailagent.eventType"] == ev
+
+
+def test_envelope_wire_passes_through_native_notification():
+    """envelope.event_type='Notification'（如 reconnect ping）原样 wire 出，metadata
+    仍写真值 — 调用方 / fork dispatcher 能区分 ping 还是 mail event。"""
+    env = BridgeEnvelope(event_type="Notification", session_key="mailagent:system:ping", title="ping")
+    body = env.to_wire_dict()
+    assert body["eventType"] == "Notification"
+    assert body["metadata"]["mailagent.eventType"] == "Notification"
 
 
 def test_envelope_intervention_session_id_propagated():
