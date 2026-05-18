@@ -279,6 +279,109 @@ Sprint 1 完工 smoke test 用 `nc -U /tmp/island.sock` 手发 `MailReceived` en
 
 **结论**：Sprint 1 收尾标准是"wire 层 + profile 注册 + skeleton view 文件存在 + Settings UI 显示 MailAgent"。视觉上"灵动岛因 mail envelope 展开"**不在 Sprint 1 范围**，等 Sprint 4 联调 + 解决 §2.5.4 决议题后才能跑通。
 
+#### 2.5.4-D 决议（Sprint 10 启动前，2026-05-18）— 选定方案 A
+
+| 维度 | 方案 A ✅（选定） | 方案 B | 方案 C |
+|---|---|---|---|
+| 描述 | Python+Electron wire 层把 `eventType` 一律映射到 ping-island 已识别的 `"Notification"`，原 mail event 名（`MailReceived` / `LLMReviewedUrgent` / `AIDraftStream` 等 12 个）放进 `metadata["mailagent.eventType"]` 区分 | 在 Swift fork 内 HookSocketServer / SessionStore 加 mail 专属事件名识别 | 复用 `Notification` 走 generic HoverSessionCard，但不写 `metadata.mailagent.eventType` |
+| 改动面 | **Python 1 处** (`src/notify/island_envelope.py:to_wire_dict()` 加映射表 + metadata 双写) + **Frontend 1 处** (`frontend/src/electron/main/island/envelope.ts:commonShell()` 同) + 2 个测试断言修 | Swift HookSocketServer eventType 解码增 case + SessionStore phase 路由分支 + ~3-5 处 fork 改动 | Python + Frontend 同 A，但只改 wire eventType，不加 metadata key |
+| Swift fork rebase 摩擦 | 0（fork 不动） | ⚠️ 每月 upstream rebase 风险 | 0 |
+| 语义损失 | 仅"wire 层"语义模糊（看上去都是 Notification），但 `metadata.mailagent.eventType` 完整保留原名给评估指标 / 调试用 | 0 | 中等 — 评估指标 `island_dispatch.event_type` 列只有 Python dataclass 值，wire 层 ping-island 端无原 event 信息 |
+| 后续升级路径 | 任意时刻可平滑切到 B：Swift 端只需在解码后读 `metadata.mailagent.eventType` 走专属分支即可，不需要回改 Python | — | 切 A 需补 metadata 双写 |
+
+**决议落地范围**（Sprint 10 Day 1 或与 ping-island.app smoke test 同周期）:
+
+1. **后端 `src/notify/island_envelope.py:to_wire_dict()`** 加映射 + metadata 双写：
+   ```python
+   _WIRE_EVENT_MAP: Dict[str, str] = {
+       "MailReceived": "Notification",
+       "MailReceivedUrgent": "Notification",  # 配合 status.kind=waitingForInput + expectsResponse=true 走 attentionNotification
+       "LLMReviewed": "Notification",
+       "LLMReviewedUrgent": "Notification",
+       "MailCompleted": "Notification",       # status.kind=completed 触发 dock icon 清理
+       "SyncFailed": "Notification",
+       "DeadLetterAccum": "Notification",
+       "AIDraftStart": "Notification",
+       "AIDraftStream": "Notification",
+       "AIDraftReady": "Notification",        # status.kind=completed
+   }
+   wire_event = _WIRE_EVENT_MAP.get(self.event_type, self.event_type)
+   body["eventType"] = wire_event
+   body["metadata"]["mailagent.eventType"] = self.event_type  # 原名留指标 / 调试
+   ```
+   保留 dataclass 字段 `event_type` 为 mail event 名（`island_dispatch` 表存的也是 mail name，与现网评估指标一致）。
+
+2. **前端 `frontend/src/electron/main/island/envelope.ts:commonShell()`** 加同向映射：
+   ```typescript
+   const WIRE_EVENT_MAP: Record<IslandEventType, 'Notification'> = {
+     AppearanceChange: 'Notification',
+     AIDraftStart: 'Notification',
+     AIDraftStream: 'Notification',
+     AIDraftReady: 'Notification',
+     Ping: 'Notification',
+   }
+   // commonShell 内构造 envelope 时:
+   eventType: WIRE_EVENT_MAP[eventType],
+   metadata: { ...metadata, 'mailagent.eventType': eventType }
+   ```
+   `BridgeEnvelope.eventType` TypeScript 类型从 `IslandEventType` 改为 `'Notification'`（wire 层窄）；保留 builder 入参 `IslandEventType` 给调用方语义清晰；测试断言改为 `envelope.eventType === 'Notification'` + `envelope.metadata['mailagent.eventType'] === 'AppearanceChange'`。
+
+3. **测试断言修**:
+   - `tests/notify/test_island_envelope.py:36` `body["eventType"] == "MailReceived"` → `body["eventType"] == "Notification"` + 新增 `body["metadata"]["mailagent.eventType"] == "MailReceived"`
+   - `frontend/tests/main/island_envelope.test.ts` 13 个测试里凡涉及 `eventType` 断言的 4-5 处同改
+
+4. **评估指标语义**:`island_dispatch.event_type` SQLite 列继续存 Python dataclass `event_type` 字段（mail 名），保持已有 47 单测 + 现网评估查询不破。
+
+**落地时机 / 验证条件**:
+
+- **预判**：ping-island 现有 hook dispatch 表只识别 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionStart` 等通用 hook 事件名（HookSocketServer.swift §2.1c），未知 eventType 走 fall-back 路径可能 Phase 2 dock icon silent 或 attentionNotification 不展开
+- **触发改代码的判据**：Sprint 10 ping-island.app 装机 smoke test 后，envelope 现状下确认以下**任一**失效 → 落代码:
+  1. `LLMReviewedUrgent` envelope（带 `expectsResponse=true` + `status.kind="waitingForInput"`）应触发 Phase 1 Arrive 展开 + 5 option 渲染 — 实测如果不展开
+  2. `MailCompleted` envelope（`status.kind="completed"` + 同 sessionKey）应清掉 Phase 2 dock icon — 实测如果不清
+  3. `MailReceived` 普通通知不展开本来就预期；但 dock icon 应该在 hover 时展开 hoverDashboard — 实测如果 hover 无响应
+- **如 fall-back 路径足以承接**（极小概率，但 ping-island 的 attentionNotification 路由是 provider-agnostic，可能凭 generic 字段就能展开）：本节决议归档作"文档说明"，不落代码改动；§2.5.4 状态从"决议待落"转"已验证 fall-back 可用，方案 A 不必动手"。
+- **预期落地工时**：~30-45 min（Python envelope 5 行 + frontend envelope.ts 5 行 + 测试断言 6-8 处）— 与 SPRINT9-HANDOFF.md §0 估算一致。
+
+**手动 smoke test 协议**（Sprint 10 §9-6 内执行 — 在装好 ping-island.app fork `feat/mail-brand` 之后）:
+
+```bash
+# 1. 启 ping-island.app，确认 /tmp/island.sock 存在
+ls -la /tmp/island.sock
+
+# 2. 现状（unmodified envelope）发 LLMReviewedUrgent 测试展开
+echo '{
+  "id": "test-urgent-1",
+  "provider": "mail",
+  "eventType": "LLMReviewedUrgent",
+  "sessionKey": "mailagent:email:99999",
+  "title": "测试 / Test Sender",
+  "preview": "Urgent test envelope",
+  "cwd": null,
+  "status": {"kind": "waitingForInput", "detail": null},
+  "terminalContext": {},
+  "intervention": {
+    "id": "iv-1", "sessionID": "mailagent:email:99999", "kind": "question",
+    "title": "Urgent test", "message": "test intervention",
+    "options": [
+      {"id": "open_mail", "title": "Open Mail"},
+      {"id": "snooze_1h", "title": "Snooze"}
+    ], "rawContext": {}
+  },
+  "expectsResponse": true,
+  "metadata": {"mailagent.internalId": "99999"},
+  "sentAt": '"$(python3 -c 'import time; print(time.time()-978307200)')"'
+}' | nc -U /tmp/island.sock
+
+# 观察：刘海是否 Phase 1 Arrive 展开 + 5 option 渲染
+# - 如展开 → fall-back 可用，§2.5.4-D 归档为"无需落代码"
+# - 如不展开 → 落方案 A 改 envelope 层 + 重测
+
+# 3. 重复 test 用 eventType="Notification" + metadata.mailagent.eventType="LLMReviewedUrgent"
+#    对照看是否触发同一展开行为
+```
+
+**决议责任人**：Sprint 10 主开发；smoke test 实测后 24h 内更新 §2.5.4-D 状态（"待验证 / 已验证 fall-back / 已落方案 A"三选一）。
+
 ### 2.8 SessionLauncher.swift 是否需要改 — 不需要
 
 ping-island 的 `SessionLauncher.swift` 负责"在外部 app 中启动 Claude/Codex session"（如打开终端 + 执行 `claude` 命令）。邮件流不是"启动 session" 语义，而是"通知 + 跳转到现有 Mail.app/MailAgent.app"，应通过 `BridgeResponse.decision` 走 §3.4 dispatch，**不 hijack** SessionLauncher。
