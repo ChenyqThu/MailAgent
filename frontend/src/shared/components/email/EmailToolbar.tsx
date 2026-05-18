@@ -22,7 +22,6 @@ import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import {
   Archive,
   ArrowLeft,
-  Bot,
   CheckCheck,
   ChevronDown,
   ChevronUp,
@@ -326,6 +325,9 @@ function ResyncConfirmDialog({
 // panel since the panel itself is no longer always-mounted. Active state
 // (coral fill) mirrors the zustand visible flag so users can see at a
 // glance whether the panel is showing.
+//
+// Icon: Sparkles (same as draft CTA / AI tab) — one symbol for "AI-touched"
+// actions across the toolbar so users learn the glyph once.
 function AIPanelToggleButton(): React.ReactElement {
   const { t } = useTranslation()
   const visible = useAIChatPanel((s) => s.visible)
@@ -342,7 +344,7 @@ function AIPanelToggleButton(): React.ReactElement {
           : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
       )}
     >
-      <Bot size={14} strokeWidth={2} />
+      <Sparkles size={14} strokeWidth={2} className={visible ? 'fill-current' : ''} />
     </button>
   )
 }
@@ -389,7 +391,7 @@ export function EmailToolbar({
   const readLabel = isRead ? t('toolbar.markUnread') : t('toolbar.markRead')
 
   return (
-    <header className="h-[48px] border-b border-ink-border bg-ink-3 flex items-center px-3 gap-1 shrink-0">
+    <header className="h-11 border-b border-ink-border bg-ink-3 flex items-center px-3 gap-1 shrink-0">
       <IconOnly
         icon={<ArrowLeft size={14} strokeWidth={2} />}
         title={`${t('toolbar.back')} (Esc)`}

@@ -50,7 +50,7 @@ function Cell({
   span?: 1 | 2
 }): React.ReactElement {
   return (
-    <div className={cn('px-4 py-3 bg-ink-3', span === 2 && 'col-span-2')}>
+    <div className={cn('px-3 py-2 bg-ink-3', span === 2 && 'col-span-2')}>
       <div
         className="text-micro font-mono uppercase text-ink-fg-2"
         style={{ letterSpacing: '0.08em' }}
@@ -96,7 +96,7 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
   return (
     <section aria-label="ai-fields" className="rounded-lg border border-ink-border overflow-hidden">
       {/* Header strip */}
-      <div className="px-4 py-2 bg-ink-2 border-b border-ink-border flex items-center justify-between">
+      <div className="px-3 py-1.5 bg-ink-2 border-b border-ink-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={12} strokeWidth={2} className="text-info" />
           <span
@@ -196,7 +196,7 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
 
       {/* Footer link — if labels_raw has cost info, surface it as mockup line 962-970 does */}
       {fields.labels_raw && (
-        <div className="px-4 py-2 bg-ink-2 border-t border-ink-border flex items-center justify-between text-meta font-mono text-ink-fg-2">
+        <div className="px-3 py-1.5 bg-ink-2 border-t border-ink-border flex items-center justify-between text-meta font-mono text-ink-fg-2">
           <div className="flex items-center gap-3">
             {typeof fields.labels_raw.input_tokens === 'number' && (
               <span>

@@ -44,7 +44,7 @@ function Section({ label, children }: SectionProps): React.ReactElement {
     <>
       <div className="px-3 pb-1">
         <h2
-          className={cn('text-micro font-mono uppercase text-ink-fg-2 px-2 py-1.5')}
+          className={cn('text-micro font-mono uppercase text-ink-fg-2 px-2 py-1')}
           style={{ letterSpacing: '0.08em' }}
         >
           {label}
@@ -70,7 +70,7 @@ function Item({ icon, label, selected, onClick, right }: ItemProps): React.React
       type="button"
       onClick={onClick}
       className={cn(
-        'row relative w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md',
+        'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
         selected
           ? 'row-selected bg-ink-4 text-ink-fg font-medium'

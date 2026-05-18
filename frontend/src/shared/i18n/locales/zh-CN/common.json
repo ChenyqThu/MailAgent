@@ -234,6 +234,11 @@
       "extractPrompt": "请从这封邮件中提取所有动作项 (action items)：谁要做什么、什么时候、给谁回。",
       "linkNotionPrompt": "在我的 Notion workspace 里找到与这封邮件相关的项目页面，列出 3 个最相关的。"
     },
+    "messageActions": {
+      "regenerate": "重生成",
+      "copy": "复制",
+      "toNotion": "转 Notion"
+    },
     "composer": {
       "placeholder": "/命令 或对这封邮件提问… (⌘↩ 发送)",
       "send": "发送",

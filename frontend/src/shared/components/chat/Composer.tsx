@@ -1,15 +1,20 @@
-// Sprint 4 §6.6 — composer textarea + round send button.
+// Sprint 4 §6.6 — composer textarea + send button.
 // ⌘↩ shortcut wired here via useShortcut (Sprint 4 Day 1 keydown bus).
 // allowInEditable: true so the binding fires when focus is in our own
 // textarea.
+//
+// V1 redesign (Sprint 10 polish): mirrors mockup-inbox.html lines 1334-1358.
+// Footer is a dedicated row beneath the textarea (no `absolute` overlap),
+// the send button is a squared-off `rounded-md` 28×28 chip that turns
+// coral on hover, and the affordance strip is English mono so the
+// 12px text-meta floor is on-spec.
 
 import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Command, CornerDownLeft, Send, X } from 'lucide-react'
+import { ArrowUp, Paperclip, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useShortcut } from '@shared/hooks/useShortcut'
-import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 
 interface Props {
   /** Renderer-controlled draft text. Lifted so QuickActions can prefill it. */
@@ -23,6 +28,10 @@ interface Props {
   isStreaming: boolean
   /** Disable send when there's no active email or backend is missing. */
   canSend: boolean
+  /** Short, ASCII-safe label for the active backend (e.g. "Jarvis", "sonnet-4-6").
+   *  Rendered in the footer next to ⌘↩ so the user always sees what they'll
+   *  be sending to. */
+  backendName: string
 }
 
 export function Composer({
@@ -31,14 +40,12 @@ export function Composer({
   onSend,
   onCancel,
   isStreaming,
-  canSend
+  canSend,
+  backendName
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
   const [focused, setFocused] = useState(false)
-  // (opus M) `chat.composer.send` resolves to "发送" under zh-CN —
-  // .toUpperCase() is a no-op on CJK and the 11px mono floor is unreadable.
-  const footerKlass = useCjkMonoSwap('text-micro font-mono')
 
   const submit = useCallback(() => {
     const trimmed = value.trim()
@@ -64,80 +71,104 @@ export function Composer({
     { allowInEditable: true }
   )
 
+  const sendDisabled = !canSend || value.trim().length === 0
+  const sendTitle = `${t('chat.composer.send')} (⌘↩)`
+
   return (
-    <div className="px-3 py-3 border-t border-ink-border-soft">
+    <div className="px-3 py-3 border-t border-ink-border-soft bg-ink-2">
       <div
         className={cn(
-          'relative rounded-lg bg-ink-3 border transition-colors duration-fast',
+          'rounded-md bg-ink-3 border transition-colors duration-fast',
           focused ? 'border-coral/50' : 'border-ink-border'
         )}
       >
-        <textarea
-          ref={taRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          rows={2}
-          placeholder={t('chat.composer.placeholder')}
-          aria-label={t('chat.composer.placeholder')}
-          className={cn(
-            'w-full resize-none bg-transparent text-body text-ink-fg',
-            'px-3 pt-2 pb-9',
-            'placeholder:text-ink-fg-3',
-            'focus:outline-none',
-            'max-h-40 overflow-y-auto scrollbar-thin'
-          )}
-          // grow up to 8 lines then scroll. Implementation idiom from
-          // mockup-inbox.html — height auto + max-h.
-          onInput={(e) => {
-            const el = e.currentTarget
-            el.style.height = 'auto'
-            el.style.height = Math.min(el.scrollHeight, 160) + 'px'
-          }}
-        />
-        <div
-          className={cn(
-            'absolute bottom-2 left-3 right-3 flex items-center justify-between',
-            footerKlass,
-            'text-ink-fg-3'
-          )}
-        >
-          {/* Sprint 10 visual review M-1 — `⌘↩` unicode chars render
-              inconsistently at 11px on some macOS fonts. Lucide glyphs (14px
-              line equivalent at strokeWidth=2) read cleanly. zh-CN's "发送"
-              .toUpperCase() is a no-op so cjk-mono swap keeps it legible. */}
-          <span className="inline-flex items-center gap-1 uppercase tracking-wider">
-            <Command size={10} strokeWidth={2.5} className="text-ink-fg-2" />
-            <CornerDownLeft size={10} strokeWidth={2.5} className="text-ink-fg-2" />
-            <span className="ml-1">{t('chat.composer.send').toUpperCase()}</span>
+        <div className="px-3 pt-2.5 pb-1">
+          <textarea
+            ref={taRef}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            rows={2}
+            placeholder={t('chat.composer.placeholder')}
+            aria-label={t('chat.composer.placeholder')}
+            className={cn(
+              'w-full resize-none bg-transparent text-body text-ink-fg leading-snug',
+              'placeholder:text-ink-fg-3',
+              'focus:outline-none',
+              'max-h-40 overflow-y-auto scrollbar-thin'
+            )}
+            // grow up to ~8 lines then scroll. Implementation idiom from
+            // mockup-inbox.html — height auto + max-h.
+            onInput={(e) => {
+              const el = e.currentTarget
+              el.style.height = 'auto'
+              el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+            }}
+          />
+        </div>
+
+        {/* Footer affordance strip — English-mono only, sits at text-meta */}
+        <div className="flex items-center gap-2 px-2.5 py-1.5 border-t border-ink-border-soft">
+          <button
+            type="button"
+            className={cn(
+              'inline-flex items-center gap-1 text-meta font-mono',
+              'text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast'
+            )}
+            title="Attach context"
+          >
+            <Paperclip size={11} strokeWidth={2} />
+            attach
+          </button>
+          <span className="text-ink-fg-3 text-meta font-mono">·</span>
+          <button
+            type="button"
+            className={cn(
+              'text-meta font-mono text-ink-fg-2',
+              'hover:text-ink-fg transition-colors duration-fast'
+            )}
+          >
+            /slash
+          </button>
+          <span className="text-ink-fg-3 text-meta font-mono">·</span>
+          <span className="text-meta font-mono text-ink-fg-2">@thread</span>
+
+          <span className="ml-auto inline-flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+            <span className="truncate max-w-[120px]">{backendName}</span>
+            <kbd>⌘↩</kbd>
           </span>
+
           {isStreaming ? (
             <button
               type="button"
               onClick={onCancel}
               aria-label={t('chat.composer.cancel')}
+              title={t('chat.composer.cancel')}
               className={cn(
-                'inline-flex items-center justify-center w-7 h-7 rounded-full',
-                'bg-ink-4 text-ink-fg-1 hover:bg-ink-5 transition-colors duration-fast'
+                'ml-1 w-7 h-7 rounded-md grid place-items-center',
+                'bg-ink-4 hover:bg-coral text-ink-fg-1 hover:text-accent-fg',
+                'transition-colors duration-fast'
               )}
             >
-              <X size={13} strokeWidth={2} />
+              <X size={12} strokeWidth={2.5} />
             </button>
           ) : (
             <button
               type="button"
               onClick={submit}
-              disabled={!canSend || value.trim().length === 0}
+              disabled={sendDisabled}
               aria-label={t('chat.composer.send')}
+              title={sendTitle}
               className={cn(
-                'inline-flex items-center justify-center w-7 h-7 rounded-full transition-colors duration-fast',
-                value.trim().length === 0 || !canSend
+                'ml-1 w-7 h-7 rounded-md grid place-items-center',
+                'transition-colors duration-fast',
+                sendDisabled
                   ? 'bg-ink-4 text-ink-fg-3 cursor-not-allowed'
-                  : 'bg-coral/100 text-accent-fg hover:bg-coral-hover'
+                  : 'bg-ink-4 hover:bg-coral text-ink-fg-1 hover:text-accent-fg'
               )}
             >
-              <Send size={13} strokeWidth={2} className="-ml-0.5" />
+              <ArrowUp size={12} strokeWidth={2.5} />
             </button>
           )}
         </div>

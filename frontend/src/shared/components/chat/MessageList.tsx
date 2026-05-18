@@ -1,12 +1,20 @@
 // Sprint 4 §6 — chat message list. Renders user / assistant / tool / system
 // rows per DESIGN.md §6.2-§6.5. Inlines the bubble + tool-row + draft-card
 // components since none of them are reused outside the panel.
+//
+// V1 redesign (Sprint 10 polish): DraftPreviewCard adopts the mockup's
+// three-section shape (mockup-inbox.html lines 1278-1304): mono header
+// strip with recipient, body region, footer button row with bg tints —
+// far more visual weight than a single bordered <div> can carry.
+// Assistant messages additionally render a per-message footer row
+// (regenerate / copy / 转 Notion) per DESIGN.md §6.2.
 
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckCheck, ExternalLink, Loader2, RotateCcw, Sparkles, X } from 'lucide-react'
+import { Bookmark, Copy, ExternalLink, Loader2, RotateCcw, Send, Sparkles, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { toastSuccess } from '@shared/state/toast'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import type { ChatMessage } from '@shared/api/types'
@@ -56,23 +64,24 @@ function ToolCallRow({ payload }: { payload: ToolPayload }): React.ReactElement 
       )}
       title={payload.detail ?? undefined}
     >
+      <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotColor)} aria-label={statusLabel} />
       <span className="text-info">→</span>
       <span>{payload.name ?? 'tool'}</span>
       {payload.durationMs !== undefined && (
         <span className="text-ink-fg-3">· {formatMs(payload.durationMs)}</span>
       )}
-      <span className={cn('w-1.5 h-1.5 rounded-full', dotColor)} aria-label={statusLabel} />
     </div>
   )
 }
 
-function DraftPreviewCard({ content }: { content: string }): React.ReactElement {
+function DraftPreviewCard({
+  content,
+  recipient
+}: {
+  content: string
+  recipient?: string | null
+}): React.ReactElement {
   const { t } = useTranslation()
-  const headerKlass = useCjkMonoSwap('text-micro font-mono uppercase tracking-wider')
-  // Sprint 5 ship-review (codex MEDIUM #2): draft action buttons resolve to
-  // zh-CN strings ('发送' / '重生成' / '编辑') under CJK locale. The text-meta
-  // mono floor (12px) is sub-Chinese-floor per DESIGN.md §1.3 / §14 #2.
-  const actionKlass = useCjkMonoSwap('text-meta font-mono')
   // Strip the DRAFT REPLY header before piping into TranslatedBody so the
   // marker only shows in the card chrome, not twice.
   const body = content
@@ -81,40 +90,84 @@ function DraftPreviewCard({ content }: { content: string }): React.ReactElement 
     .trim()
   return (
     <div
-      className={cn('rounded-md p-3 my-2', 'border border-coral/30 ring-2 ring-coral/5 bg-ink-3')}
+      className={cn(
+        'rounded-md overflow-hidden my-2',
+        'border border-coral/30 ring-2 ring-coral/5'
+      )}
     >
-      <div className="flex items-center gap-2 mb-2">
-        <Sparkles size={12} strokeWidth={2} className="text-coral" />
-        <span className={cn(headerKlass, 'text-coral font-medium')}>
-          {t('chat.draftReply.header')}
+      {/* Header — mono "DRAFT REPLY" caption + recipient */}
+      <div
+        className={cn(
+          'px-3 py-2 border-b border-ink-border-soft bg-ink-2/40',
+          'flex items-center justify-between'
+        )}
+      >
+        <div className="flex items-center gap-1.5">
+          <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
+          <span className="text-meta font-mono uppercase tracking-wider text-ink-fg-1">
+            {/* mockup hard-codes EN "Draft Reply" — keep the chrome caption
+                English-mono regardless of locale so the 12px floor is on-spec */}
+            DRAFT REPLY
+          </span>
+        </div>
+        <span className="text-meta font-mono text-ink-fg-2 truncate max-w-[180px]">
+          {recipient ? `to: ${recipient}` : 'to: —'}
         </span>
       </div>
-      <TranslatedBody text={body} />
-      <div className={cn('mt-3 flex items-center gap-2', actionKlass)}>
+
+      {/* Body */}
+      <div className="px-3 py-2.5 text-aux text-ink-fg space-y-2 bg-ink-3">
+        <TranslatedBody text={body} />
+      </div>
+
+      {/* Footer — coral primary action + secondary text buttons */}
+      <div
+        className={cn(
+          'px-3 py-2 border-t border-ink-border-soft bg-ink-2/40',
+          'flex items-center gap-2'
+        )}
+      >
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-coral/100 text-accent-fg hover:bg-coral-hover transition-colors duration-fast"
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded',
+            'text-aux text-accent-fg bg-coral hover:bg-coral-hover',
+            'transition-colors duration-fast'
+          )}
         >
-          <CheckCheck size={11} strokeWidth={2} />
+          <Send size={11} strokeWidth={2.5} />
           {t('chat.draftReply.send')}
         </button>
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-ink-fg-1 hover:bg-ink-4 transition-colors duration-fast"
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-aux',
+            'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+            'transition-colors duration-fast'
+          )}
         >
           <RotateCcw size={11} strokeWidth={2} />
           {t('chat.draftReply.regenerate')}
         </button>
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-ink-fg-1 hover:bg-ink-4 transition-colors duration-fast"
+          className={cn(
+            'inline-flex items-center px-2 py-1.5 rounded text-aux',
+            'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+            'transition-colors duration-fast'
+          )}
         >
           {t('chat.draftReply.edit')}
         </button>
         <button
           type="button"
-          className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg-1 transition-colors duration-fast"
           aria-label={t('chat.draftReply.openInWindow')}
+          title={t('chat.draftReply.openInWindow')}
+          className={cn(
+            'ml-auto inline-flex items-center px-2 py-1.5 rounded text-aux',
+            'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+            'transition-colors duration-fast'
+          )}
         >
           <ExternalLink size={11} strokeWidth={2} />
         </button>
@@ -129,11 +182,49 @@ function UserBubble({ content }: { content: string }): React.ReactElement {
       <div
         className={cn(
           'max-w-[85%] rounded-lg rounded-br-sm px-3 py-2',
-          'bg-ink-4 text-ink-fg text-body whitespace-pre-wrap break-words'
+          'bg-ink-4 text-ink-fg text-body whitespace-pre-wrap break-words leading-snug'
         )}
       >
         {content}
       </div>
+    </div>
+  )
+}
+
+function AssistantMessageFooter(): React.ReactElement {
+  const { t } = useTranslation()
+  // V1 placeholders — IPC wiring lands in V1.5. Each button toasts "即将上线".
+  const soon = (): void => {
+    toastSuccess(t('shortcutHelp.soon'))
+  }
+  return (
+    <div className="flex items-center gap-2 pt-1 text-meta font-mono text-ink-fg-2">
+      <button
+        type="button"
+        onClick={soon}
+        className="inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast"
+      >
+        <RotateCcw size={11} strokeWidth={2} />
+        {t('chat.draftReply.regenerate')}
+      </button>
+      <span className="text-ink-fg-3">·</span>
+      <button
+        type="button"
+        onClick={soon}
+        className="inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast"
+      >
+        <Copy size={11} strokeWidth={2} />
+        {t('chat.messageActions.copy')}
+      </button>
+      <span className="text-ink-fg-3">·</span>
+      <button
+        type="button"
+        onClick={soon}
+        className="inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast"
+      >
+        <Bookmark size={11} strokeWidth={2} />
+        {t('chat.messageActions.toNotion')}
+      </button>
     </div>
   )
 }
@@ -173,15 +264,48 @@ function AssistantBubble({
       </div>
     )
   }
+
+  // Optional metadata header (mockup lines 1171-1175). Only renders when a
+  // backend supplies model/cost — V1 dispatcher doesn't populate this yet,
+  // so the guard is `((m as any).metadata?.model)` and we silently skip
+  // when missing.
+  const meta = (message as unknown as { metadata?: { model?: string; cost?: string; duration?: string } }).metadata
+  const showHeader = Boolean(meta?.model)
+
   if (DRAFT_REPLY_MARKER.test(message.content)) {
-    return <DraftPreviewCard content={message.content} />
+    return (
+      <div className="space-y-2">
+        {showHeader && meta?.model && (
+          <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+            <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
+            <span>{meta.model}</span>
+            {meta.duration && <span className="text-ink-fg-3">· {meta.duration}</span>}
+            {meta.cost && <span className="text-ink-fg-3">· {meta.cost}</span>}
+          </div>
+        )}
+        <DraftPreviewCard content={message.content} />
+        {!isStreaming && <AssistantMessageFooter />}
+      </div>
+    )
   }
+
   return (
-    <div className="text-body text-ink-fg leading-relaxed">
-      <TranslatedBody text={message.content || ' '} />
-      {isStreaming && (
-        <span className="inline-block ml-0.5 w-1.5 h-3.5 -mb-0.5 bg-coral/60 animate-pulse" />
+    <div className="space-y-2">
+      {showHeader && meta?.model && (
+        <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+          <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
+          <span>{meta.model}</span>
+          {meta.duration && <span className="text-ink-fg-3">· {meta.duration}</span>}
+          {meta.cost && <span className="text-ink-fg-3">· {meta.cost}</span>}
+        </div>
       )}
+      <div className="text-body text-ink-fg leading-relaxed">
+        <TranslatedBody text={message.content || ' '} />
+        {isStreaming && (
+          <span className="inline-block ml-0.5 w-1.5 h-3.5 -mb-0.5 bg-coral/60 animate-pulse" />
+        )}
+      </div>
+      {!isStreaming && <AssistantMessageFooter />}
     </div>
   )
 }

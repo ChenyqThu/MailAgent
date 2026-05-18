@@ -234,6 +234,11 @@
       "extractPrompt": "Extract every action item from this email: who needs to do what, by when, reply to whom.",
       "linkNotionPrompt": "Find pages in my Notion workspace related to this email and list the 3 most relevant ones."
     },
+    "messageActions": {
+      "regenerate": "Regenerate",
+      "copy": "Copy",
+      "toNotion": "To Notion"
+    },
     "composer": {
       "placeholder": "/command or ask about this email… (⌘↩ send)",
       "send": "Send",

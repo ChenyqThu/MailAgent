@@ -587,11 +587,18 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </div>
           )}
 
-          {/* Footer */}
+          {/* Footer — mockup-inbox.html line 1075-1084. internal_id + message_id
+              stub left, Notion link right. Dev "Sprint 2 functional view"
+              placeholder dropped (no longer relevant in V1 ship). */}
           <div className="mt-8 pt-5 border-t border-ink-border-soft flex items-center justify-between text-aux">
             <div className="text-meta font-mono text-ink-fg-2">
-              <Sparkles size={11} strokeWidth={2} className="inline-block mr-1 text-info" />
-              Sprint 2 detail · functional view
+              internal_id {email.internal_id}
+              {email.message_id && (
+                <>
+                  {' '}
+                  · message_id {email.message_id.slice(1, 9)}…
+                </>
+              )}
             </div>
             {email.notion_url && (
               <a

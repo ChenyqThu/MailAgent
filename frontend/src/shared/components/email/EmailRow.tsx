@@ -72,7 +72,11 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
       }}
       data-internal-id={email.internal_id}
       className={cn(
-        'row px-4 py-3 border-b border-ink-border-soft cursor-pointer',
+        // Sprint 10 round-2 density: py-3 (12) → py-2 (8) — user perceived
+        // rows as overlapping at narrow viewports. mockup spec is py-3
+        // (Mimestream parity) but Spark/Linear tier is 8-12; we shift to
+        // the tight end without breaking the 14px CJK floor on text.
+        'row px-4 py-2 border-b border-ink-border-soft cursor-pointer',
         'transition-colors duration-fast',
         selected ? 'row-selected bg-ink-4' : 'hover:bg-ink-3'
       )}
@@ -152,25 +156,27 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
             {email.subject || '(no subject)'}
           </div>
 
-          {/* Snippet — Sprint 10 visual review M-4: dropped one tier to
-              text-ink-fg-3 + text-meta so the line carries less visual
-              weight; subject stays the dominant cue and the row feels
-              less stuffed at 340px column width. */}
-          {snippet && <div className="text-meta text-ink-fg-3 line-clamp-1 mt-0.5">{snippet}</div>}
+          {/* Snippet — DESIGN.md §1.3 / §14 #2 CJK floor: snippet may carry
+              中文 so it must be ≥ text-aux (14px). Sprint 10 M-4 had dropped
+              to text-meta which violated the floor; we keep the visual weight
+              dialed down via text-ink-fg-2 instead. */}
+          {snippet && <div className="text-aux text-ink-fg-2 line-clamp-1 mt-0.5">{snippet}</div>}
 
-          {/* Chip row — tightened mt + chip padding for less vertical noise. */}
-          <div className="flex items-center gap-1 mt-1.5">
+          {/* Chip row — round-2 tightening: mt-1.5 → mt-1, gap-1 → gap-1.5
+              (chip-to-chip gap slightly opens up since chip body got
+              denser via shorter py). */}
+          <div className="flex items-center gap-1.5 mt-1">
             {email.ai_priority && (
               <span
                 className={cn(
                   'inline-flex items-center gap-1 text-micro font-mono uppercase tracking-wide',
-                  'px-1 py-0.5 rounded border',
+                  'px-1.5 py-0.5 rounded border',
                   PRIORITY_CHIP[email.ai_priority]
                 )}
               >
                 <span
                   className={cn(
-                    'w-1 h-1 rounded-full',
+                    'w-1.5 h-1.5 rounded-full',
                     email.ai_priority === 'critical' && 'bg-crit',
                     email.ai_priority === 'urgent' && 'bg-urg',
                     email.ai_priority === 'important' && 'bg-impt',
@@ -185,7 +191,7 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
             {actionLabel && (
               <span
                 title={email.ai_action ?? undefined}
-                className="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
+                className="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
               >
                 {actionLabel}
               </span>
