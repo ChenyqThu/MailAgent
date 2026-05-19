@@ -41,6 +41,12 @@ interface Props {
   selected: boolean
   /** Set when 5s polling notices this id appeared after the prior poll. */
   isNew?: boolean
+  /** Sprint 14 round 10 — thread bundle children keep the avatar column
+   *  but render it invisibly, so the avatar slot becomes a 32px indent
+   *  that visually marks the child row as folded under its head.  The
+   *  row layout (grid 32px+1fr) is unchanged so sender / subject /
+   *  meta columns still align with the head's. */
+  noAvatar?: boolean
   onSelect(): void
 }
 
@@ -148,7 +154,13 @@ const deleteSvg = (
   </svg>
 )
 
-export function EmailRow({ email, selected, isNew, onSelect }: Props): React.ReactElement {
+export function EmailRow({
+  email,
+  selected,
+  isNew,
+  noAvatar,
+  onSelect
+}: Props): React.ReactElement {
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
   const batchMode = useBatch((s) => s.mode)
@@ -268,8 +280,16 @@ export function EmailRow({ email, selected, isNew, onSelect }: Props): React.Rea
         aria-checked={batchIsSelected}
         aria-hidden={batchMode === 'off'}
       />
-      <span className={cn('avatar', `avatar-${slot}`)} aria-hidden>
-        {initials}
+      <span
+        className={cn('avatar', `avatar-${slot}`)}
+        aria-hidden
+        // Sprint 14 round 10 — thread children keep the avatar slot to
+        // preserve the 32px+1fr grid (so sender/subject columns align
+        // across head and children), but render it invisible.  Visual
+        // result: a tidy 32px indent that reads as "folded under".
+        style={noAvatar ? { visibility: 'hidden' } : undefined}
+      >
+        {noAvatar ? '' : initials}
       </span>
 
       <div className="row-content">

@@ -1291,7 +1291,11 @@ body:not([data-batch-mode='true']) #batch-bar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 14px 5px;
+  /* Sprint 14 round 10 — pull the chevron 3px to the left so it lines
+   * up vertically with the thread-bundle chevron column in EmailList.
+   * Chevron centre: padding-left 11 + width 10 / 2 = 16px from row
+   * left, matching the thread chevron's centre at left-2 + 8 = 16px. */
+  padding: 7px 14px 5px 11px;
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 10.5px;
   text-transform: uppercase;

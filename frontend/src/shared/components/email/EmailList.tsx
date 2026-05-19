@@ -126,74 +126,69 @@ function VirtualRow({
       </div>
     )
   }
+  // Sprint 14 round 10 — every email row (solitary / thread head /
+  // thread child) wraps a fixed-width chevron column on the left so
+  // the avatar / sender column lands at the same x position for every
+  // row.  The chevron is absolute-positioned at top:21px which lines
+  // its centre (12px glyph) up with the 32px avatar disc's centre
+  // (row padding-top 9px + avatar margin-top 2px + 16px disc-radius =
+  // 27px from row top → chevron top 21px).
   const t = item.thread
-  if (t && t.isHead) {
-    // Thread head — prepend a chevron button outside EmailRow; clicking
-    // toggles the bundle without triggering row selection.
-    return (
-      <div style={style} className="flex items-stretch">
-        <button
-          type="button"
-          aria-label="toggle-thread"
-          aria-expanded={t.expanded}
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleThread(t.threadId)
-          }}
-          className={cn(
-            'w-5 shrink-0 flex items-center justify-center',
-            'text-ink-fg-2 hover:text-ink-fg',
-            'transition-colors duration-fast'
-          )}
-        >
-          <ChevronDown
-            size={12}
-            strokeWidth={2}
-            className={cn(
-              'transition-transform duration-base ease-out',
-              t.expanded ? 'rotate-0' : '-rotate-90'
-            )}
-          />
-        </button>
-        <div className="flex-1 min-w-0">
-          <EmailRow
-            email={item.email}
-            selected={item.email.internal_id === activeId}
-            isNew={newIds.has(item.email.internal_id)}
-            onSelect={() => onSelect(item.email.internal_id)}
-          />
-        </div>
-      </div>
-    )
-  }
-  if (t && !t.isHead) {
-    // Thread child — indent under the head, no chevron.  The vertical
-    // hairline gives a subtle visual tether to the head row.
-    return (
-      <div style={style} className="flex items-stretch bg-ink-1/30">
-        <div className="w-5 shrink-0 flex justify-center">
-          <span className="w-px bg-ink-border-soft" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <EmailRow
-            email={item.email}
-            selected={item.email.internal_id === activeId}
-            isNew={newIds.has(item.email.internal_id)}
-            onSelect={() => onSelect(item.email.internal_id)}
-          />
-        </div>
-      </div>
-    )
-  }
-  // Solitary message — original full-width row.
+  const isHead = t?.isHead === true
+  const isChild = t !== undefined && !t.isHead
   return (
-    <div style={style}>
-      <EmailRow
-        email={item.email}
-        selected={item.email.internal_id === activeId}
-        isNew={newIds.has(item.email.internal_id)}
-        onSelect={() => onSelect(item.email.internal_id)}
-      />
+    <div
+      style={style}
+      className={cn(
+        'flex items-stretch',
+        // Child rows get a subtle inset wash so the bundle reads as a
+        // grouped block.  Background swatch is the same as the read-
+        // mail surface, just slightly more saturated by the parent
+        // glass-2 underneath.
+        isChild && 'bg-ink-1/35'
+      )}
+    >
+      <div className="thread-col w-6 shrink-0 relative">
+        {isHead && (
+          <button
+            type="button"
+            aria-label="toggle-thread"
+            aria-expanded={t!.expanded}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleThread(t!.threadId)
+            }}
+            className={cn(
+              'absolute top-[21px] left-2',
+              'w-4 h-4 flex items-center justify-center rounded',
+              'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+              'transition-colors duration-fast'
+            )}
+          >
+            <ChevronDown
+              size={12}
+              strokeWidth={2}
+              className={cn(
+                'transition-transform duration-base ease-out',
+                t!.expanded ? 'rotate-0' : '-rotate-90'
+              )}
+            />
+          </button>
+        )}
+        {isChild && (
+          // Thin vertical tether tying child rows to their head.
+          <span aria-hidden className="absolute top-0 bottom-0 left-3 w-px bg-ink-border-soft" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <EmailRow
+          email={item.email}
+          selected={item.email.internal_id === activeId}
+          isNew={newIds.has(item.email.internal_id)}
+          noAvatar={isChild}
+          onSelect={() => onSelect(item.email.internal_id)}
+        />
+      </div>
     </div>
   )
 }
@@ -297,7 +292,14 @@ interface ThreadGroup {
 function groupByThread(emails: ReadonlyArray<EnrichedEmailMeta>): ThreadGroup[] {
   const byTid = new Map<string, EnrichedEmailMeta[]>()
   const solo: ThreadGroup[] = []
+  // Sprint 14 round 10 — de-dupe by internal_id while partitioning so
+  // an email cannot surface twice (once as a thread head / child and
+  // again as a solitary row).  User feedback: "同一封邮件不应该出现
+  // 两次, 如果被折叠到线程里, 就不应该出现在主线程里".
+  const seen = new Set<number>()
   for (const e of emails) {
+    if (seen.has(e.internal_id)) continue
+    seen.add(e.internal_id)
     if (e.thread_id) {
       const arr = byTid.get(e.thread_id) ?? []
       arr.push(e)
