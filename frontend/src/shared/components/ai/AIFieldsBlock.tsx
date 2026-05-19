@@ -138,8 +138,11 @@ function ReplyDraftHero({ markdown }: { markdown: string }): React.ReactElement 
       </div>
       <pre
         className={cn(
-          'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words',
-          'max-h-[260px] overflow-y-auto scrollbar-thin m-0'
+          'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
+          // Sprint 14 round 14 — no max-height / inner scrollbar; the
+          // outer email-pane container is the single scroll surface,
+          // long replies push the rest of the page down.  User: "邮件
+          // 标题、元数据、AI Field、正文内容应该在一个页面,用一个滚动条".
         )}
       >
         {markdown}

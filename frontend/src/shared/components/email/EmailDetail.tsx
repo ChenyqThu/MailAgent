@@ -480,55 +480,68 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {/* Sprint 13 round 7 user feedback: "email detail 的宽度不设上
-            限". The mockup pinned the detail column to `max-w-[820px]` so
-            text would not span a 1600px monitor, but the user prefers
-            the full toolbar width. Body is still constrained by the iframe
-            host width, so reading-line length on very wide screens is
-            mediated by the email content itself.
+        {/* Sprint 14 round 14 user feedback: "邮件标题、元数据、AI Field、
+            正文内容(含历史线程内容)应该在一个页面, 用一个滚动条. 先实现
+            这个, 再考虑向上滚动冻结标题栏试试".
 
-            Sprint 13 round 8 — round 7 took the user's "现在是冻结元数据
-            和 AI Fields" line as a feature request and wrapped meta +
-            AIFields in `position: sticky`. It read as a description of
-            (perceived) current behaviour instead; the sticky strip ate
-            so much vertical space that the body became un-scrollable.
-            Reverted to natural single-column flow. AI Fields精简 (7
-            cells) stays — that part of round 7 is fine. */}
-        <div className="px-8 py-6">
-          {/* Subject block — EN lang pip + tracking-tight headline */}
-          <div className="flex items-start gap-3 mb-1.5">
-            {langIsEn && (
-              <span
-                className="lang-pip mt-2 shrink-0"
-                style={{ fontSize: '11px', padding: '3px 6px' }}
-              >
-                EN
-              </span>
-            )}
-            <h1 className="text-subj font-semibold text-ink-fg leading-snug tracking-tight flex-1 break-words">
-              {email.subject || '(no subject)'}
-            </h1>
-          </div>
+            Layout: ONE scroll container above (this <div>).  All inner
+            sections (subject / meta / AI / body iframe / attachments)
+            live in normal flow so the email pane has exactly one
+            scrollbar.  iframe sets overflow:hidden + scrolling="no"
+            (EmailBodyFrame round 7) so the body iframe never paints a
+            second scrollbar; height syncs via postMessage.
 
-          {/* One-tap inline translate — visible only when LLM tagged the
-              email as English AND we're not already showing the translation. */}
-          {langIsEn && !showTranslation && (
-            <button
-              type="button"
-              onClick={() => setShowTranslation(true)}
-              title={`⌥T · ${t('translate.label')}`}
-              className={cn(
-                'mt-2 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md',
-                'text-aux text-coral border border-coral/30 bg-coral/10',
-                'hover:bg-coral/15 transition-colors duration-fast'
-              )}
-            >
-              <Languages size={13} strokeWidth={2} />
-              {t('translate.inlineCta')}
-              <kbd className="ml-0.5">⌥T</kbd>
-            </button>
+            Sticky subject (round 14 试探性): just the title strip
+            stays pinned at the top while the user scrolls down. The
+            strip is ~60px (h1 + optional lang banner) so plenty of
+            scroll room remains for the body — this is the same trick
+            round 8 tried with meta + AIFields, but only the subject is
+            cheap enough to keep without strangling the scroll area. */}
+        <div
+          className={cn(
+            'sticky top-0 z-10',
+            'bg-ink-3/95 backdrop-blur-xl',
+            'border-b border-ink-border-soft'
           )}
+        >
+          <div className="px-8 pt-6 pb-3">
+            {/* Subject block — EN lang pip + tracking-tight headline */}
+            <div className="flex items-start gap-3">
+              {langIsEn && (
+                <span
+                  className="lang-pip mt-2 shrink-0"
+                  style={{ fontSize: '11px', padding: '3px 6px' }}
+                >
+                  EN
+                </span>
+              )}
+              <h1 className="text-subj font-semibold text-ink-fg leading-snug tracking-tight flex-1 break-words">
+                {email.subject || '(no subject)'}
+              </h1>
+            </div>
 
+            {/* One-tap inline translate — visible only when LLM tagged the
+                email as English AND we're not already showing the translation. */}
+            {langIsEn && !showTranslation && (
+              <button
+                type="button"
+                onClick={() => setShowTranslation(true)}
+                title={`⌥T · ${t('translate.label')}`}
+                className={cn(
+                  'mt-2 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md',
+                  'text-aux text-coral border border-coral/30 bg-coral/10',
+                  'hover:bg-coral/15 transition-colors duration-fast'
+                )}
+              >
+                <Languages size={13} strokeWidth={2} />
+                {t('translate.inlineCta')}
+                <kbd className="ml-0.5">⌥T</kbd>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="px-8 pt-4 pb-6">
           {/* Meta grid — Sprint 13 round 9 user feedback:
                 - "To/CC 仍然没正确显示。(默认显示 100 字符吧, 可以 more
                   展开)" — Cc moves back into the default rows; both To
