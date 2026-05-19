@@ -166,7 +166,12 @@
     "empty": "无线程关联",
     "loadFailed": "线程加载失败",
     "count": "{n, plural, =1 {1 封} other {# 封}}",
-    "current": "当前"
+    "current": "当前",
+    "bundleTitle": "对话中早期邮件",
+    "bundleSummary": "{n, plural, =1 {1 封早期邮件} other {# 封早期邮件}}",
+    "expandAll": "全部展开",
+    "collapseAll": "全部收起",
+    "loading": "加载中…"
   },
   "empty": {
     "state": "没有可显示的内容"

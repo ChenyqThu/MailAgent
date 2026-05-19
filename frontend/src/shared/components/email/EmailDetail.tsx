@@ -37,6 +37,7 @@ import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { TranslatedBody } from './TranslatedBody'
 import { AttachmentList } from './AttachmentList'
+import { ThreadBundle } from './ThreadBundle'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 
 interface Props {
@@ -470,15 +471,14 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             host width, so reading-line length on very wide screens is
             mediated by the email content itself.
 
-            Layout split for Sprint 13 round 7 frozen-header request
-            ("向下滚动时，冻结元数据和 AI Fields"):
-              ┌─ subject + inline translate banner (scrolls away)
-              ├─ STICKY: meta + AIFieldsBlock (always visible)
-              └─ body + attachments + footer (scrolls under sticky)
-            Toolbar is implicitly frozen by the parent flex column. */}
-
-        {/* Subject + lang banner — scrolls away with the body. */}
-        <div className="px-8 pt-6 pb-3">
+            Sprint 13 round 8 — round 7 took the user's "现在是冻结元数据
+            和 AI Fields" line as a feature request and wrapped meta +
+            AIFields in `position: sticky`. It read as a description of
+            (perceived) current behaviour instead; the sticky strip ate
+            so much vertical space that the body became un-scrollable.
+            Reverted to natural single-column flow. AI Fields精简 (7
+            cells) stays — that part of round 7 is fine. */}
+        <div className="px-8 py-6">
           {/* Subject block — EN lang pip + tracking-tight headline */}
           <div className="flex items-start gap-3 mb-1.5">
             {langIsEn && (
@@ -512,137 +512,139 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               <kbd className="ml-0.5">⌥T</kbd>
             </button>
           )}
-        </div>
 
-        {/* STICKY frozen header — meta + AI Fields. position:sticky needs
-            (a) an ancestor with `overflow-y: auto` (the scroll container
-            above) and (b) no intermediate ancestor with `overflow:hidden`.
-            Both hold here. bg-ink-3/95 + backdrop-blur-xl gives a Liquid
-            Glass surface over the scrolling content so body text doesn't
-            bleed through the sticky strip. */}
-        <div
-          className={cn(
-            'sticky top-0 z-10',
-            'bg-ink-3/95 backdrop-blur-xl',
-            'border-y border-ink-border-soft'
-          )}
-        >
-          <div className="px-8 py-4 space-y-4">
-            {/* Meta grid — 80px label column, mockup-faithful.
-              Sprint 13 round 7 user feedback:
-                - "To 字段没显示" — was rendered but visually crowded by
-                  the auto-expanded Cc row above it; the truncated empty-
-                  string fallback `'—'` also disappeared into the noise.
-                  Now To always renders on its own row with a real value
-                  or the muted placeholder.
-                - "CC 字段，属性字段可以做个 ▾ XX more properties 的折叠".
-                  Cc + future secondary props live in `morePropsRows`,
-                  collapsed by default with a small mockup-style toggle
-                  underneath the visible rows.
-                - "ID 之类的字段可以直接隐藏 (一般不用。mailbox 也隐藏)" —
-                  Mailbox row, message_id and internal_id are gone from
-                  the UI (still accessible via the toolbar dots /
-                  `mailagent email get -o json` for power users). */}
-            {(() => {
-              const morePropsRows: { label: string; value: React.ReactNode }[] = []
-              if (email.cc_addr && email.cc_addr.length > 0) {
-                morePropsRows.push({ label: 'Cc', value: email.cc_addr })
-              }
-              return (
-                <>
-                  <dl className="mt-1 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux">
-                    <MetaRow
-                      label="From"
-                      value={
-                        <>
-                          {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
-                          {fromName && fromAddr && <span className="text-ink-fg-2"> · </span>}
-                          <span className="text-ink-fg-2">{fromAddr}</span>
-                        </>
-                      }
-                    />
-                    <MetaRow
-                      label="To"
-                      value={
-                        email.to_addr && email.to_addr.length > 0 ? (
-                          <span className="text-ink-fg-1">{email.to_addr}</span>
-                        ) : (
-                          <span className="text-ink-fg-3">—</span>
-                        )
-                      }
-                    />
-                    {email.date_received && (
-                      <MetaRow
-                        label="Date"
-                        value={
-                          <span className="font-mono text-meta">
-                            {formatDate(email.date_received)}
-                            <span className="text-ink-fg-2">
-                              {' '}
-                              · {formatRelativeTime(email.date_received)}
-                            </span>
-                          </span>
-                        }
-                      />
-                    )}
-                    {propsExpanded &&
-                      morePropsRows.map((row) => (
-                        <MetaRow key={row.label} label={row.label} value={row.value} />
-                      ))}
-                  </dl>
-                  {morePropsRows.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setPropsExpanded((v) => !v)}
-                      className={cn(
-                        'mt-2 inline-flex items-center gap-1 text-meta text-ink-fg-2',
-                        'hover:text-ink-fg-1 transition-colors duration-fast',
-                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 rounded'
-                      )}
-                      aria-expanded={propsExpanded}
-                    >
-                      {propsExpanded ? (
-                        <>
-                          <ChevronUp size={11} strokeWidth={2} />
-                          {t('emailDetail.fewerProps')}
-                        </>
+          {/* Meta grid — Sprint 13 round 8 user feedback "属性折叠没实现":
+              round 7 only put Cc into the collapsed section, so when the
+              email had no Cc the toggle never appeared.  Round 8 widens
+              `morePropsRows` to also carry Mailbox / internal_id /
+              message_id so the chevron is reliably present and the
+              "hidden by default" affordance the user asked for is real.
+              From/To/Date stay visible at all times. */}
+          {(() => {
+            const morePropsRows: { label: string; value: React.ReactNode }[] = []
+            if (email.cc_addr && email.cc_addr.length > 0) {
+              morePropsRows.push({ label: 'Cc', value: email.cc_addr })
+            }
+            if (email.mailbox) {
+              morePropsRows.push({
+                label: 'Mailbox',
+                value: (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-coral/100" />
+                    {email.mailbox}
+                  </span>
+                )
+              })
+            }
+            morePropsRows.push({
+              label: 'internal_id',
+              value: <span className="font-mono text-meta">{email.internal_id}</span>
+            })
+            if (email.message_id) {
+              morePropsRows.push({
+                label: 'message_id',
+                value: <span className="font-mono text-meta break-all">{email.message_id}</span>
+              })
+            }
+            return (
+              <>
+                <dl className="mt-1 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux">
+                  <MetaRow
+                    label="From"
+                    value={
+                      <>
+                        {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
+                        {fromName && fromAddr && <span className="text-ink-fg-2"> · </span>}
+                        <span className="text-ink-fg-2">{fromAddr}</span>
+                      </>
+                    }
+                  />
+                  <MetaRow
+                    label="To"
+                    value={
+                      email.to_addr && email.to_addr.length > 0 ? (
+                        <span className="text-ink-fg-1">{email.to_addr}</span>
                       ) : (
-                        <>
-                          <ChevronDown size={11} strokeWidth={2} />
-                          {t('emailDetail.moreProps', { n: morePropsRows.length })}
-                        </>
-                      )}
-                    </button>
+                        <span className="text-ink-fg-3">—</span>
+                      )
+                    }
+                  />
+                  {email.date_received && (
+                    <MetaRow
+                      label="Date"
+                      value={
+                        <span className="font-mono text-meta">
+                          {formatDate(email.date_received)}
+                          <span className="text-ink-fg-2">
+                            {' '}
+                            · {formatRelativeTime(email.date_received)}
+                          </span>
+                        </span>
+                      }
+                    />
                   )}
-                </>
-              )
-            })()}
+                  {propsExpanded &&
+                    morePropsRows.map((row) => (
+                      <MetaRow key={row.label} label={row.label} value={row.value} />
+                    ))}
+                </dl>
+                {morePropsRows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPropsExpanded((v) => !v)}
+                    className={cn(
+                      'mt-2 inline-flex items-center gap-1 text-meta text-ink-fg-2',
+                      'hover:text-ink-fg-1 transition-colors duration-fast',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 rounded'
+                    )}
+                    aria-expanded={propsExpanded}
+                  >
+                    {propsExpanded ? (
+                      <>
+                        <ChevronUp size={11} strokeWidth={2} />
+                        {t('emailDetail.fewerProps')}
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown size={11} strokeWidth={2} />
+                        {t('emailDetail.moreProps', { n: morePropsRows.length })}
+                      </>
+                    )}
+                  </button>
+                )}
+              </>
+            )
+          })()}
 
-            {/* AI Fields */}
-            {ai && <AIFieldsBlock fields={ai} />}
-          </div>
-        </div>
-        {/* End of sticky frozen header. */}
+          {/* AI Fields */}
+          {ai && (
+            <div className="mt-6">
+              <AIFieldsBlock fields={ai} />
+            </div>
+          )}
 
-        {/* Sprint 13 round 6 user feedback: thread sidebar removed.
-            Outlook-style "older messages collapsed under the latest"
-            treatment is Sprint 14 — see NOTES.md 2026-05-20. */}
+          {/* Sprint 13 round 6 user feedback: thread sidebar removed.
+              Outlook-style "older messages collapsed under the latest"
+              treatment is Sprint 14 — see NOTES.md 2026-05-20. */}
 
-        {/* Body + attachments + footer — scroll under the sticky header. */}
-        <div className="px-8 pt-6 pb-6">
           {/* Body — original sandboxed iframe OR translated markdown.
               Toggled via EmailToolbar / ⌥T / inline translate banner. */}
-          {showTranslation ? (
-            <TranslationView
-              status={translateStatus}
-              errorCode={translateError?.code ?? null}
-              translated={translationQ.data?.translated ?? null}
-              onRetry={() => translationQ.refetch()}
-              onDismiss={dismissTranslation}
-            />
-          ) : (
-            <EmailBodyFrame internalId={email.internal_id} attachments={email.attachments ?? []} />
-          )}
+          <div className="mt-7">
+            {showTranslation ? (
+              <TranslationView
+                status={translateStatus}
+                errorCode={translateError?.code ?? null}
+                translated={translationQ.data?.translated ?? null}
+                onRetry={() => translationQ.refetch()}
+                onDismiss={dismissTranslation}
+              />
+            ) : (
+              <EmailBodyFrame
+                internalId={email.internal_id}
+                attachments={email.attachments ?? []}
+              />
+            )}
+          </div>
 
           {/* Attachments — AttachmentList renders null when no visible
               originals exist, so the wrapper div would leave a blank
@@ -651,6 +653,17 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           {allAttachments.length > 0 && (
             <div className="mt-8">
               <AttachmentList attachments={allAttachments} />
+            </div>
+          )}
+
+          {/* Sprint 14 主菜 — ThreadBundle. Outlook-style 同线程邮件
+              折叠区: 把同 thread_id 的早期邮件按 date_received DESC 列在
+              主面板下方, 默认折叠仅显发件人 / 主题 / 时间, 点击展开嵌入
+              mini EmailBodyFrame. 当前 active 邮件不重复显示 (主面板已有).
+              thread_id null 或者无 sibling → ThreadBundle 返回 null. */}
+          {email.thread_id && (
+            <div className="mt-8">
+              <ThreadBundle threadId={email.thread_id} currentInternalId={email.internal_id} />
             </div>
           )}
 

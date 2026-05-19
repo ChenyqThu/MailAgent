@@ -1,35 +1,35 @@
-// Sprint 13 round 7 user feedback: "AI Fields 的 review 没有按照 mockup
-// 实现 + AI 字段需要做一下精炼和精简，避免太多字段".
+// Sprint 13 round 8 user feedback: "AI Summary 和 Suggest Reply 是最
+// 重要的". Round 7 collapsed everything into a flat 3-col grid — the
+// two cells that read like *actions* (Summary + Reply Suggestion) lost
+// their visual hierarchy.  Round 8 brings them back as hero strips at
+// the top of the block:
 //
-// mockup-inbox.html L955-1021 ships a flat 11-cell grid (no hero summary
-// strip, no signal row). Sprint 12 round-6 added both — visually busier
-// but drifted from the mockup. This rewrite collapses the layout to a
-// single 3-col grid, mirrors mockup's `bg-ink-2 header / bg-ink-3 cell
-// over bg-ink-border gutters`, and trims the field set down to seven:
+//   ┌─────────────────────────────────────────────────────────────────┐
+//   │ Header (icon · "AI Fields · N" · Reviewed · model)              │
+//   ├─────────────────────────────────────────────────────────────────┤
+//   │ ✦ Summary                                                       │
+//   │ AI summary, 2-3 lines, coral-tinted hero strip                  │
+//   ├─────────────────────────────────────────────────────────────────┤
+//   │ ✎ Reply Suggestion                                              │
+//   │ Markdown draft, dashed accent border, copy-to-clipboard          │
+//   ├─────────────────────────────────────────────────────────────────┤
+//   │ Priority · Action · Sender · Category · Project · Urgency       │
+//   │ (3-col grid, mockup divider style)                              │
+//   └─────────────────────────────────────────────────────────────────┘
 //
-//   Priority (chip dot) · Action · Sender Priority (chip dot)
-//   Category · Project · Urgency Reason
-//   ┌────────────────────────────────────────────────────────┐
-//   │ Summary (col-span-3, multi-line)                       │
-//   └────────────────────────────────────────────────────────┘
+// Data feed:
+//   ai_summary           — LLM labels_json key (was already wired)
+//   reply_suggestion_md  — LLM labels_json key.  store.py used to pop
+//                          this before saving the audit blob; round 8
+//                          stopped stripping it so it survives into
+//                          email.aiFields.labels_raw.
 //
-// We drop Sentiment / Language / Has Action Items / Daily Digest. They
-// were the lowest-signal cells (Sentiment is unused, Language already
-// surfaces as the EN pip near the subject, Has Action Items duplicated
-// Action, Daily Digest had its own link nobody clicked). They're still
-// in the labels_json payload — re-introducing a cell is one entry in
-// `extraCells` away.
-//
-// Data feed: AIFields.labels_raw is the freeform JSON dict written by
-// the LLM run. Field-name discovery:
+// Field-name discovery (kept from round 6 / 7 — labels_json key audit):
 //   sqlite3 data/sync_store.db "SELECT DISTINCT json_each.key FROM
 //   llm_processing, json_each(labels_json)"
-// returns ai_summary / category / language / sender_priority /
-// action_required / action_type / priority / urgency_reason /
-// mail_actions / daily_digest_date / related_project / model /
-// latency_ms / token counts.
 
-import { Cpu } from 'lucide-react'
+import { useState } from 'react'
+import { ClipboardCheck, Copy, Cpu, Sparkles, MessageSquare } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
@@ -70,18 +70,11 @@ function pickString(raw: Record<string, unknown> | null, key: string): string | 
 interface CellSpec {
   label: string
   value: React.ReactNode
-  colSpan?: 1 | 2 | 3
 }
 
-function GridCell({ label, value, colSpan }: CellSpec): React.ReactElement {
+function GridCell({ label, value }: CellSpec): React.ReactElement {
   return (
-    <div
-      className={cn(
-        'aif-cell px-4 py-3 bg-ink-3',
-        colSpan === 3 && 'col-span-3',
-        colSpan === 2 && 'col-span-2'
-      )}
-    >
+    <div className="aif-cell px-4 py-3 bg-ink-3">
       <div
         className="text-micro font-mono uppercase tracking-wider text-ink-fg-2"
         style={{ letterSpacing: '0.08em' }}
@@ -93,12 +86,76 @@ function GridCell({ label, value, colSpan }: CellSpec): React.ReactElement {
   )
 }
 
+// Reply Suggestion content is markdown the LLM wrote (see
+// llm_agent/processor.py:185 prompt — "`reply_suggestion_md` 仅在
+// action_required=true 时填"). We render it preformatted so the user
+// sees the source they can paste/edit, with a one-click copy button.
+function ReplyDraftHero({ markdown }: { markdown: string }): React.ReactElement {
+  const [copied, setCopied] = useState(false)
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(markdown)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1400)
+    } catch {
+      // Clipboard may be denied in sandbox; the textarea below stays
+      // selectable so the user can ⌘C manually.
+    }
+  }
+  return (
+    <div
+      className="aif-reply px-4 py-3 border-b border-ink-border"
+      style={{
+        background: 'rgb(var(--c-accent) / 0.04)',
+        boxShadow: 'inset 0 0 0 1px rgb(var(--c-accent) / 0.12)'
+      }}
+    >
+      <div className="flex items-center gap-2 mb-1.5">
+        <MessageSquare size={11} strokeWidth={2.25} className="text-coral" />
+        <span
+          className="text-micro font-mono uppercase tracking-wider text-coral"
+          style={{ letterSpacing: '0.08em' }}
+        >
+          Reply Suggestion
+        </span>
+        <button
+          type="button"
+          onClick={copy}
+          aria-label="Copy reply draft"
+          className={cn(
+            'ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded',
+            'text-[10px] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+            'transition-colors duration-fast'
+          )}
+        >
+          {copied ? (
+            <ClipboardCheck size={10} strokeWidth={2.25} />
+          ) : (
+            <Copy size={10} strokeWidth={2.25} />
+          )}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre
+        className={cn(
+          'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words',
+          'max-h-[260px] overflow-y-auto scrollbar-thin m-0'
+        )}
+      >
+        {markdown}
+      </pre>
+    </div>
+  )
+}
+
 export function AIFieldsBlock({ fields }: Props): React.ReactElement {
   const raw = fields.labels_raw
   const reviewed = fields.ai_review_status === 'reviewed'
   const pending = fields.ai_review_status === 'pending'
 
   const summary = pickString(raw, 'ai_summary') ?? pickString(raw, 'summary')
+  const replyMarkdown =
+    pickString(raw, 'reply_suggestion_md') ?? pickString(raw, 'reply_suggestion')
   const category = pickString(raw, 'category')
   const project = pickString(raw, 'related_project') ?? pickString(raw, 'project')
   const senderPriority = pickString(raw, 'sender_priority')
@@ -106,10 +163,9 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
   const model = pickString(raw, 'model')
   const actionLabel = actionLabelChinese(fields.ai_action)
 
-  // Build the cell list in mockup order. Cells whose source is null
-  // collapse out, so a sparse labels_json doesn't leave blank squares.
+  // Secondary classifiers — keep the grid mockup-faithful but trimmed
+  // to the high-signal cells the user actually reads.
   const cells: CellSpec[] = []
-
   if (fields.ai_priority) {
     cells.push({
       label: 'Priority',
@@ -149,12 +205,8 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
     })
   }
 
-  // Total non-empty count for the "AI Fields · N" header pill — counts
-  // summary too even though it lives outside `cells` (col-span-3).
-  const nonNullCount = cells.length + (summary ? 1 : 0)
-
-  // Pad the visible 3-col row so cells before Summary don't dangle on
-  // their own gutter row. Only fills the first row of non-summary cells.
+  // Total non-empty count surfaced in the header pill.
+  const nonNullCount = cells.length + (summary ? 1 : 0) + (replyMarkdown ? 1 : 0)
   const padCount = cells.length % 3 === 0 ? 0 : 3 - (cells.length % 3)
 
   return (
@@ -162,13 +214,7 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
       aria-label="ai-fields"
       className="ai-fields rounded-lg border border-ink-border overflow-hidden"
     >
-      {/* Header — icon + "AI Fields · N" + reviewed chip + model name on
-          right. Mockup L957-970: bg-ink-2 strip, mono label, ok-green
-          Reviewed chip when ai_review_status === 'reviewed'.
-
-          Note: header uses bg-ink-2 (slightly darker than the cell
-          bg-ink-3) so the section header reads as a strip even when the
-          parent surface is glass-3. */}
+      {/* Header — icon + "AI Fields · N" + reviewed chip + model name */}
       <div className="px-4 py-2 bg-ink-2 border-b border-ink-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={12} strokeWidth={2} className="text-info" />
@@ -192,25 +238,39 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
         {model && <div className="text-meta font-mono text-ink-fg-1">{model}</div>}
       </div>
 
-      {/* 3-col grid — mockup L971. `gap-px` over `bg-ink-border` gives
-          us the hairline divider grid; cells override with `bg-ink-3`. */}
-      {(cells.length > 0 || summary) && (
+      {/* Summary hero — coral-tinted strip.  This is the single sentence
+          the user reads first to decide whether to open the body. */}
+      {summary && (
+        <div
+          className="aif-summary px-4 py-3 border-b border-ink-border"
+          style={{ background: 'rgb(var(--c-accent) / 0.06)' }}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <Sparkles size={11} strokeWidth={2.25} className="text-coral" />
+            <span
+              className="text-micro font-mono uppercase tracking-wider text-coral"
+              style={{ letterSpacing: '0.08em' }}
+            >
+              Summary
+            </span>
+          </div>
+          <div className="text-aux text-ink-fg leading-snug">{summary}</div>
+        </div>
+      )}
+
+      {/* Reply Suggestion hero — accent-ringed draft card with copy. */}
+      {replyMarkdown && <ReplyDraftHero markdown={replyMarkdown} />}
+
+      {/* 3-col secondary grid — bg-ink-border gutter + bg-ink-3 cells. */}
+      {cells.length > 0 && (
         <div className="grid grid-cols-3 gap-px bg-ink-border">
           {cells.map((cell, idx) => (
             <GridCell key={`${cell.label}-${idx}`} {...cell} />
           ))}
-          {/* Filler cells to round out the row before summary. */}
           {padCount > 0 &&
             Array.from({ length: padCount }).map((_, i) => (
               <div key={`pad-${i}`} className="bg-ink-3" aria-hidden />
             ))}
-          {summary && (
-            <GridCell
-              label="Summary"
-              colSpan={3}
-              value={<span className="text-ink-fg leading-snug">{summary}</span>}
-            />
-          )}
         </div>
       )}
     </section>

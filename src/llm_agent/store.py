@@ -102,8 +102,12 @@ class LLMProcessingStore:
             labels_dict = asdict(labels_obj) if hasattr(labels_obj, "__dataclass_fields__") else dict(labels_obj or {})
         except Exception:
             labels_dict = {}
-        # Strip potentially large reply text before saving (audit-only blob)
-        labels_dict.pop("reply_suggestion_md", None)
+        # Sprint 13 round 8 — keep `reply_suggestion_md` in the SQLite
+        # blob so the frontend AIFieldsBlock can render it as a hero.
+        # Notion remains the canonical "Reply Suggestion" property (rich
+        # text), but the markdown source we used to write it is small
+        # enough to live next to ai_summary in labels_json.  Truncation
+        # (4000 chars below) is the only safety belt.
         labels_json = json.dumps(labels_dict, ensure_ascii=False)[:4000]
 
         with self._conn() as c:

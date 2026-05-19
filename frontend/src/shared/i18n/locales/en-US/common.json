@@ -166,7 +166,12 @@
     "empty": "No thread relations",
     "loadFailed": "Thread load failed",
     "count": "{n, plural, =1 {1 message} other {# messages}}",
-    "current": "Current"
+    "current": "Current",
+    "bundleTitle": "Earlier messages",
+    "bundleSummary": "{n, plural, =1 {1 earlier message} other {# earlier messages}}",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all",
+    "loading": "Loading…"
   },
   "empty": {
     "state": "Nothing to show"

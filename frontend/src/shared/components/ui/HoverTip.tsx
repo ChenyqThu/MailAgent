@@ -53,16 +53,14 @@ export function HoverTip({
             // strings have no spaces. `w-max` lets short labels stay
             // single-line — only longs hit the 150px ceiling.
             'w-max max-w-[150px] whitespace-pre-line break-words text-center',
-            // Sprint 13 round 7 — small + muted to read like a system
-            // tooltip rather than a fully-weighted label. text-micro
-            // (11px) matches the Navi popover scale; text-ink-fg-2 is
-            // the light-gray ramp used for caption metadata.
-            // Deliberately NOT `font-mono` — DESIGN.md §14 #2 bans CJK at
-            // mono 11/12px ("韩式糊字号"); HoverTip carries i18n verbs
-            // including zh-CN, so we render in sans here. The mono lint
-            // rule (eslint-rules/no-cjk-in-mono-size) only catches mono
-            // sizes, so this stays compliant.
-            'text-micro text-ink-fg-2 px-1.5 py-0.5 rounded',
+            // Sprint 13 round 8 user feedback — "再小 2 个号" from
+            // text-micro (11px). 9px arbitrary value approaches the
+            // macOS mini-control caption (Navi-style). Deliberately
+            // NOT `font-mono` so CJK glyphs don't go mossy at this
+            // size (DESIGN.md §14 #2 bans CJK at mono 11/12px). Sans
+            // 9px stays legible enough for hover labels which are
+            // glanceable, not body copy.
+            'text-[9px] leading-none text-ink-fg-2 px-1.5 py-1 rounded',
             'glass-pop pointer-events-none select-none',
             'shadow-[0_4px_12px_rgba(0,0,0,0.35)]',
             side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'

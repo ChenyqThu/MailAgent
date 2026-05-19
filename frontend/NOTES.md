@@ -6,17 +6,15 @@
 
 ## TODO
 
-- 2026-05-20 — **Sprint 14 · Outlook-style 同线程邮件折叠** — Sprint 13 round 6
-  把 ThreadSidebar 完全删了 (用户 "线程可以去掉")。Sprint 14 重做:
-  EmailDetail 主面板下方追加一个折叠区, 把同 thread_id 的早期邮件
-  按 date_received DESC 排列, 默认折叠仅显示标题 + 发件人 + 日期, 点击
-  展开嵌入 mini EmailBodyFrame。最新邮件 (当前 active) 永远展开。参考
-  Outlook desktop 邮件会话折叠 UX。涉及:
-  (a) 新组件 ThreadBundle.tsx 替代旧 ThreadSidebar — 不是侧栏, 是底部折叠
-  (b) EmailDetail.tsx 在 AttachmentList 之后挂 ThreadBundle (thread_id 不
-      为 null 时)
-  (c) listByThread 已有 IPC, 不需要新 backend
-  (d) i18n: 加 emailDetail.thread.* keys (count / older / collapse all 等)
+- 2026-05-20 — **Sprint 14 · Outlook-style 同线程邮件折叠 — ✅ ship round 8**
+  ThreadBundle.tsx 落地 (`src/shared/components/email/ThreadBundle.tsx`).
+  在 EmailDetail.tsx AttachmentList 之后挂载 (thread_id 非 null 时).
+  listByThread IPC 拉同 thread 邮件 → 过滤 currentInternalId → 按
+  date_received DESC 排. 每条 ThreadItem 默认折叠 (发件人 / 主题 / 时间)
+  点击展开按需 fetch email.get 拿到 attachments + body, 嵌入 EmailBodyFrame.
+  Bundle header 提供"全部展开 / 全部收起". i18n thread.bundleTitle /
+  bundleSummary / expandAll / collapseAll / loading 加在现有 thread.*
+  namespace 下 (zh + en).
 - 2026-05-20 — **Backend bug — `email_attachment.content_id` 全是同一 GUID** —
   `sqlite3 data/sync_store.db "SELECT internal_id, content_id FROM email_attachment WHERE content_id IS NOT NULL"`
   返回所有行 content_id = `002C7F7F-B242-44BF-B72A-D3C7ED45EACC`（Apple Mail 默认占位）。
