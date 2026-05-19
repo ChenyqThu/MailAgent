@@ -270,6 +270,32 @@ class Config(BaseSettings):
     )
 
     # =========================================================================
+    # Sprint 15: SQLite SSoT inversion (email_outbox + FanoutWorker)
+    # 详见 SPRINT15-HANDOFF.md §3 + .claude/plans/ultrathink-sprint-15-handoff*.md
+    # =========================================================================
+    mailagent_outbox_enabled: bool = Field(
+        default=False, env="MAILAGENT_OUTBOX_ENABLED",
+        description=(
+            "是否启用 email_outbox + FanoutWorker 异步派发 (Sprint 15 SSoT inversion)。"
+            "默认 false 灰度期 —— 关闭时 reverse handler 走老 AppleScript 直调路径。"
+            "切 true: 前端 `mailagent email flag` / 反向 webhook → outbox → fanout "
+            "异步派发到 Mail.app + Notion. 灰度切换详 SPRINT15-HANDOFF.md §3.5。"
+        ),
+    )
+    mailagent_outbox_poll_interval_sec: int = Field(
+        default=5, env="MAILAGENT_OUTBOX_POLL_INTERVAL_SEC",
+        description="FanoutWorker 主循环 poll 间隔（秒），默认 5。",
+    )
+    mailagent_outbox_max_attempts: int = Field(
+        default=5, env="MAILAGENT_OUTBOX_MAX_ATTEMPTS",
+        description="单条 outbox 重试次数上限；达到后晋升 dead_letter 并飞书告警。",
+    )
+    mailagent_outbox_concurrency: int = Field(
+        default=3, env="MAILAGENT_OUTBOX_CONCURRENCY",
+        description="FanoutWorker tick 最大并发 fanout 数（gated by asyncio.Semaphore）。",
+    )
+
+    # =========================================================================
     # ping-island 灵动岛集成 (Island-Sprint 2)
     # 详见 frontend/ISLAND-PLUGIN.md。默认全部关，用户启用前需先装 ping-island.app
     # =========================================================================

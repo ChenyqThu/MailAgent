@@ -43,6 +43,45 @@ class EmailNotionSyncApp:
         # 事件处理器引用（用于 stats）
         self._event_handlers = None
 
+        # Sprint 15: SQLite SSoT inversion — outbox + FanoutWorker
+        # 默认关闭（灰度期）；开启后异步派发 email flag / processing_status 到
+        # Mail.app + Notion，handler 走 intent 路径不再直接 AppleScript。
+        # 详 SPRINT15-HANDOFF.md §3 + .claude/plans/ultrathink-sprint-15-handoff*.md
+        self.outbox_repo = None
+        self.fanout_worker = None
+        if config.mailagent_outbox_enabled:
+            from src.sync import (
+                FanoutWorker,
+                MailAppFanout,
+                NotionFanout,
+                OutboxRepository,
+            )
+            self.outbox_repo = OutboxRepository(config.sync_store_db_path)
+            mailapp_fanout = MailAppFanout(
+                sync_store=self.watcher.sync_store,
+                arm=self.watcher.arm,
+            )
+            notion_fanout = NotionFanout(
+                sync_store=self.watcher.sync_store,
+                notion_sync=self.watcher.notion_sync,
+            )
+            self.fanout_worker = FanoutWorker(
+                outbox_repo=self.outbox_repo,
+                mailapp_fanout=mailapp_fanout,
+                notion_fanout=notion_fanout,
+                poll_interval_sec=config.mailagent_outbox_poll_interval_sec,
+                concurrency=config.mailagent_outbox_concurrency,
+                max_attempts=config.mailagent_outbox_max_attempts,
+            )
+            logger.info(
+                f"[outbox] FanoutWorker configured "
+                f"(poll={config.mailagent_outbox_poll_interval_sec}s, "
+                f"concurrency={config.mailagent_outbox_concurrency}, "
+                f"max_attempts={config.mailagent_outbox_max_attempts})"
+            )
+        else:
+            logger.info("[outbox] FanoutWorker disabled (MAILAGENT_OUTBOX_ENABLED=false)")
+
         # 飞书告警通知
         self.alerter = None
         if config.alert_enabled and config.alert_feishu_webhook_url:
@@ -251,6 +290,11 @@ class EmailNotionSyncApp:
             # 启动周期会议滚动展开循环
             expansion_task = asyncio.create_task(self._meeting_expansion_loop())
 
+            # Sprint 15: 启动 outbox FanoutWorker（如果配置开启）
+            fanout_task = None
+            if self.fanout_worker:
+                fanout_task = asyncio.create_task(self.fanout_worker.run())
+
             # 启动 ping-island 重连 / snooze 后台任务（开启时才跑）
             island_reconnect_task = None
             island_snooze_task = None
@@ -273,6 +317,9 @@ class EmailNotionSyncApp:
             await self.watcher.stop()
             if self.redis_consumer:
                 await self.redis_consumer.stop()
+            if self.fanout_worker:
+                self.fanout_worker.stop()
+                logger.info(f"[outbox] fanout_worker.stats={self.fanout_worker.stats}")
 
             # 发送停止告警
             if self.alerter:
@@ -290,6 +337,8 @@ class EmailNotionSyncApp:
                 tasks.append(island_reconnect_task)
             if island_snooze_task:
                 tasks.append(island_snooze_task)
+            if fanout_task:
+                tasks.append(fanout_task)
             for task in tasks:
                 task.cancel()
                 try:
