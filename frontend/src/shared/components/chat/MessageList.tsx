@@ -64,7 +64,10 @@ function ToolCallRow({ payload }: { payload: ToolPayload }): React.ReactElement 
       )}
       title={payload.detail ?? undefined}
     >
-      <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotColor)} aria-label={statusLabel} />
+      <span
+        className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotColor)}
+        aria-label={statusLabel}
+      />
       <span className="text-info">→</span>
       <span>{payload.name ?? 'tool'}</span>
       {payload.durationMs !== undefined && (
@@ -131,7 +134,7 @@ function DraftPreviewCard({
           type="button"
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded',
-            'text-aux text-accent-fg bg-coral hover:bg-coral-hover',
+            'text-aux text-accent-fg bg-coral/100 hover:bg-coral-hover',
             'transition-colors duration-fast'
           )}
         >
@@ -269,7 +272,9 @@ function AssistantBubble({
   // backend supplies model/cost — V1 dispatcher doesn't populate this yet,
   // so the guard is `((m as any).metadata?.model)` and we silently skip
   // when missing.
-  const meta = (message as unknown as { metadata?: { model?: string; cost?: string; duration?: string } }).metadata
+  const meta = (
+    message as unknown as { metadata?: { model?: string; cost?: string; duration?: string } }
+  ).metadata
   const showHeader = Boolean(meta?.model)
 
   if (DRAFT_REPLY_MARKER.test(message.content)) {

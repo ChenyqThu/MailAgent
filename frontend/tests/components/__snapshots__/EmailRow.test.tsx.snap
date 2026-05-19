@@ -2,7 +2,7 @@
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-read-normal 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -60,7 +60,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
@@ -111,7 +111,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-unread-normal 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -170,7 +170,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
@@ -221,7 +221,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-read-normal 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -279,7 +279,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
@@ -330,7 +330,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-unread-failed 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -394,7 +394,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
@@ -445,7 +445,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-read-normal 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -503,7 +503,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
@@ -554,7 +554,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-unread-normal 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -613,7 +613,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
@@ -664,7 +664,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-read-normal 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -722,7 +722,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
@@ -773,7 +773,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-unread-failed 1`] = `
 <article
-  class="row px-4 py-3 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
   data-internal-id="101"
   role="button"
   tabindex="0"
@@ -837,7 +837,7 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         Hey, the redis client keeps timing out after 5s.
       </div>
       <div
-        class="flex items-center gap-1 mt-1.5"
+        class="flex items-center gap-1.5 mt-1"
       >
         <span
           class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"

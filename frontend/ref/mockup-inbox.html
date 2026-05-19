@@ -1,0 +1,3495 @@
+<!doctype html>
+<!--
+  MailAgent · Inbox (V1 visual mockup · enriched with AI chat + batch + translate)
+
+  Surface stack (left → right):
+    Sidebar 240  |  List 340  |  Detail flex-1  |  Right Panel 360 (✦ AI / Thread / Sync)
+  Plus: batch action bar pinned above the 24px status bar when ≥1 row selected.
+
+  Visual contract:
+    - Dark mode is canonical. `:root[data-theme="light"]` swap left to DESIGN.md.
+    - 14px floor for any Chinese-bearing text. 11–12px mono is English-only
+      (timestamps, IDs, counts, kbd, section headers).
+    - Accent is now CSS-variable driven (--c-accent). Coral is the default;
+      user picks another in View → Appearance (title-bar button). The same
+      4 placements per surface rule applies:
+        1. sidebar-selected-mailbox left edge
+        2. list-selected-row left edge
+        3. ✦ AI tab indicator (underline + active text)
+        4. ✦ 起草回复 primary toolbar button
+      "重传 Notion" / "AI 重跑" demoted to ghost — AI is the headline now.
+
+  Theme system:
+    - One :root block declares --c-accent / --c-accent-hi / --c-accent-dim.
+    - Tailwind's `coral` color binds to rgb(var(--c-accent) / <alpha-value>),
+      so every `text-coral`, `bg-coral/15`, `border-coral/30` etc. follows.
+    - JS at the bottom toggles `data-accent` on <html> and persists to
+      localStorage; the Dynamic Island mockup reads the same key.
+    - 6 presets: Coral · Cobalt · Teal · Rose · Slate · Olive (no Tailwind
+      default blue, no purple/violet — per user brief).
+
+  See DESIGN.md for tokens, component contracts, AI chat conventions,
+  Dynamic Island lifecycle, motion system, and light-mode mapping.
+-->
+<html lang="zh-CN" data-locale="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title data-i18n="titleBar.docTitle">MailAgent · 收件箱</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            /* Ink ramp now binds to CSS variables (defined in :root and
+               swapped by :root[data-theme="light"]). The /<alpha-value/>
+               token lets Tailwind generate the translucent surfaces the
+               Liquid Glass layers need — e.g. `bg-ink-1/55 backdrop-blur-xl`. */
+            ink: {
+              0: 'rgb(var(--ink-0) / <alpha-value>)',
+              1: 'rgb(var(--ink-1) / <alpha-value>)',
+              2: 'rgb(var(--ink-2) / <alpha-value>)',
+              3: 'rgb(var(--ink-3) / <alpha-value>)',
+              4: 'rgb(var(--ink-4) / <alpha-value>)',
+              5: 'rgb(var(--ink-5) / <alpha-value>)',
+              border:        'rgb(var(--ink-border)      / <alpha-value>)',
+              'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+              fg:     'rgb(var(--ink-fg)   / <alpha-value>)',
+              'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+              'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+              'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)',
+            },
+            /* Coral is the DEFAULT accent. In production these tokens
+               are bound to CSS variables that Settings → Appearance
+               swaps live. See <style>:root and the theme popover below. */
+            coral:         'rgb(var(--c-accent)      / <alpha-value>)',
+            'coral-hover': 'rgb(var(--c-accent-hi)   / <alpha-value>)',
+            'coral-dim':   'rgb(var(--c-accent-dim)  / <alpha-value>)',
+            crit: '#E5634F',
+            urg:  '#E89B4A',
+            impt: '#D4A53D',
+            norm: '#7A7F8A',
+            low:  '#5A5E68',
+            ok:   '#5DBA8C',
+            warn: '#E5B452',
+            fail: '#E36262',
+            dead: '#6B707A',
+            info: '#6FA8DC',
+            ai:   '#B58CDB',  /* reserved for ✦ AI affordance — used SPARINGLY */
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"',
+                   '"PingFang SC"', '"Helvetica Neue"', 'system-ui', 'sans-serif'],
+            display: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"',
+                      '"PingFang SC"', 'system-ui', 'sans-serif'],
+            mono: ['ui-monospace', '"SF Mono"', '"JetBrains Mono"', 'Menlo', 'monospace'],
+          },
+          fontSize: {
+            micro: ['11px', '14px'],
+            meta:  ['12px', '16px'],
+            aux:   ['14px', '20px'],
+            body:  ['14px', '20px'],
+            lead:  ['15px', '22px'],
+            subj:  ['22px', '30px'],
+          },
+          spacing: {
+            titlebar: '36px',
+            statusbar: '24px',
+            batchbar: '52px',
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* ─── Theme tokens — accent (preset) + ink (light/dark) ──────────
+       Coral remains the default accent. New in this revision: the
+       ink ramp is also CSS-variable driven so `:root[data-theme="light"]`
+       can swap it without touching markup. Combined with the new
+       `--glass-*` filter tuple, that's all the plumbing needed to
+       deliver Apple's Liquid Glass aesthetic in both modes.
+
+       Surface stack:
+         ░░░ wallpaper (body::before, fixed, aurora gradient)
+         ▒▒▒ chrome layer  → .glass    (ink-1 @ ~55% + heavy blur)
+         ▓▓▓ panel layer   → .glass-2  (ink-2 @ ~45% + heavy blur)
+         ███ content layer → .glass-3  (ink-3 @ ~72% + medium blur)
+         ░░░ popover       → .glass-pop(ink-2 @ ~80% + heavy blur + ring)
+
+       The aurora behind the glass is tinted with the live accent
+       so swapping accent re-colors the whole window subtly. */
+    :root {
+      /* Accent (default = coral). Same contract as before. */
+      --c-accent:     229 101 75;
+      --c-accent-hi:  216  88  65;
+      --c-accent-dim: 126  61  50;
+
+      /* Ink ramp — RGB triples (no alpha) so Tailwind `bg-ink-N/<n>`
+         works for the translucent layers Liquid Glass needs. */
+      --ink-0:            14  16  19;
+      --ink-1:            21  24  29;
+      --ink-2:            26  30  36;
+      --ink-3:            31  36  43;
+      --ink-4:            38  44  53;
+      --ink-5:            46  52  62;
+      --ink-border:       44  50  59;
+      --ink-border-soft:  31  36  43;
+      --ink-fg:          232 234 238;
+      --ink-fg-1:        164 169 179;
+      --ink-fg-2:        107 112 122;
+      --ink-fg-3:         69  74  83;
+
+      /* Wallpaper · dark — aurora with an accent-tinted highlight at
+         top-left. Pinned to the viewport via body::before so glass
+         surfaces blur a stable colorful field instead of scrolling
+         content. */
+      --wallpaper:
+        radial-gradient(60vw 60vh at  8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95%  8%, rgba( 74,120,229,0.22),       transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18),      transparent 70%),
+        linear-gradient(180deg, #06080B 0%, #0A0C10 100%);
+
+      /* Glass filter tuples — saturation boost is the Apple signature
+         (~180%) that pulls color through the blur. */
+      --glass:    saturate(180%) blur(28px);
+      --glass-lg: saturate(180%) blur(40px);
+
+      /* Glass surface stroke — a hairline that picks up the
+         under-surface light. White at 6–10% reads as "glass edge". */
+      --glass-stroke: rgb(255 255 255 / 0.08);
+
+      /* Per-mode shadow recipe for popovers. Dark uses heavy black drop. */
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.07),
+        0 24px 60px rgba(0,0,0,0.55),
+        0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"] { --c-accent:  74 120 229; --c-accent-hi:  60 102 207; --c-accent-dim:  48  82 163; }
+    :root[data-accent="teal"]   { --c-accent:  45 181 166; --c-accent-hi:  33 156 142; --c-accent-dim:  24 110 100; }
+    :root[data-accent="rose"]   { --c-accent: 219  91 124; --c-accent-hi: 198  71 105; --c-accent-dim: 140  50  74; }
+    :root[data-accent="slate"]  { --c-accent: 126 134 148; --c-accent-hi: 105 113 127; --c-accent-dim:  74  80  92; }
+    :root[data-accent="olive"]  { --c-accent: 156 165  82; --c-accent-hi: 134 143  70; --c-accent-dim:  94 100  48; }
+
+    /* ─── Light theme — pure token swap, no markup or class changes ── */
+    :root[data-theme="light"] {
+      --ink-0:           250 250 250;
+      --ink-1:           242 242 244;
+      --ink-2:           248 249 251;
+      --ink-3:           255 255 255;
+      --ink-4:           225 227 230;
+      --ink-5:           213 216 222;
+      --ink-border:      214 218 224;
+      --ink-border-soft: 230 232 237;
+      --ink-fg:           26  29  34;
+      --ink-fg-1:         91  97 107;
+      --ink-fg-2:        122 128 138;
+      --ink-fg-3:        178 184 192;
+
+      /* Wallpaper · light — softer aurora on warm paper. */
+      --wallpaper:
+        radial-gradient(60vw 60vh at  8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95%  6%, rgba(110,160,255,0.32),       transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22),      transparent 70%),
+        linear-gradient(180deg, #F6F7FB 0%, #ECEEF4 100%);
+
+      --glass-stroke: rgb(255 255 255 / 0.70);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.85),
+        0 18px 50px rgba(18,24,46,0.16),
+        0 4px 14px rgba(18,24,46,0.10);
+    }
+
+    html, body { background: transparent; overscroll-behavior: none; color-scheme: dark; }
+    :root[data-theme="light"] { color-scheme: light; }
+    body {
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      font-feature-settings: 'ss01', 'cv11';
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: -1;
+      background: var(--wallpaper);
+      background-attachment: fixed;
+      pointer-events: none;
+      transition: background 320ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* ─── Liquid Glass utility layers ─────────────────────────────── */
+    .glass {
+      background-color: rgb(var(--ink-1) / 0.55);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .glass-2 {
+      background-color: rgb(var(--ink-2) / 0.45);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    /* Detail pane (col 3). Previously 0.72 — too opaque to show wallpaper.
+       Dropped to 0.55 + heavier blur so the aurora bleed is unmistakable,
+       and the inner content tiles (AI Fields cells, attachment cards) are
+       lifted to a translucent treatment via `.aif-*` / `.tile` so they
+       don't paint the entire pane back to solid. */
+    .glass-3 {
+      background-color: rgb(var(--ink-3) / 0.55);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    /* Inner content surfaces sitting on a glass pane — keep them legible
+       (still tinted ink) but let some wallpaper through so the glass
+       reads as glass, not as a sheet of paper on glass.
+
+       Hierarchy: glass-3 (0.55) < aif-cell (0.62) < aif-head (0.70).
+       That's enough contrast to read "panel inside pane" without
+       collapsing the glass. */
+    .ai-fields            { background: transparent; }
+    .ai-fields .aif-head  { background-color: rgb(var(--ink-2) / 0.70); }
+    .ai-fields .aif-grid  { background-color: rgb(var(--ink-border) / 0.45); }
+    .ai-fields .aif-cell  { background-color: rgb(var(--ink-3) / 0.62); }
+    .tile                  { background-color: rgb(var(--ink-2) / 0.62); }
+    .tile:hover            { background-color: rgb(var(--ink-4) / 0.78); }
+    .glass-pop {
+      background-color: rgb(var(--ink-2) / 0.82);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke);
+      box-shadow: var(--pop-shadow);
+    }
+    /* Honour accessibility opt-outs — flatten to opaque ink and skip
+       the blur. Layout and contrast stay identical. */
+    @media (prefers-reduced-transparency: reduce) {
+      .glass    { background-color: rgb(var(--ink-1)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-2  { background-color: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-3  { background-color: rgb(var(--ink-3)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-pop{ background-color: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    }
+
+    .tl       { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .tl-close { background: #FF5F57; }
+    .tl-min   { background: #FEBC2E; }
+    .tl-max   { background: #28C840; }
+
+    .row { position: relative; }
+    .row-selected::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: rgb(var(--c-accent));
+    }
+
+    /* Slim scrollbar (Mimestream/Linear-style) — uses fg-tint so it
+       reads on both light and dark surfaces. */
+    .scrollbar-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb {
+      background: rgb(var(--ink-fg) / 0.14);
+      border: 2px solid transparent;
+      background-clip: padding-box;
+      border-radius: 8px;
+    }
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb { background: rgb(var(--ink-fg) / 0.28); background-clip: padding-box; }
+
+    kbd {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11px; line-height: 1;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: rgb(var(--ink-fg) / 0.06);
+      color: rgb(var(--ink-fg-1));
+      border: 1px solid rgb(var(--ink-border));
+      border-bottom-width: 2px;
+    }
+
+    /* HTML email body — Sentry-shaped placeholder. All chrome colours
+       go through CSS variables so light mode flips automatically. */
+    .mail-body { color: rgb(var(--ink-fg) / 0.86); font-size: 14px; line-height: 1.7; }
+    .mail-body h2 { color: rgb(var(--ink-fg)); font-size: 16px; font-weight: 600; margin: 18px 0 8px; letter-spacing: -0.01em; }
+    .mail-body p  { margin: 0 0 12px; }
+    .mail-body strong { color: rgb(var(--ink-fg)); font-weight: 600; }
+    .mail-body code {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 12.5px;
+      background: rgba(232,155,74,0.12);
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: #E89B4A;
+    }
+    .mail-body pre {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 12.5px;
+      background: rgb(var(--ink-fg) / 0.06);
+      border: 1px solid rgb(var(--ink-border));
+      border-radius: 6px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      color: rgb(var(--ink-fg-1));
+      line-height: 1.6;
+      margin: 12px 0;
+    }
+    .mail-body pre .err  { color: #E36262; }
+    .mail-body pre .num  { color: rgb(var(--ink-fg-2)); }
+    .mail-body pre .key  { color: #6FA8DC; }
+    .mail-body a {
+      color: rgb(var(--c-accent));
+      text-decoration: underline;
+      text-decoration-color: rgb(var(--c-accent) / 0.4);
+      text-underline-offset: 3px;
+    }
+    .mail-body a:hover { text-decoration-color: rgb(var(--c-accent)); }
+    .mail-body blockquote {
+      border-left: 2px solid rgb(var(--ink-border));
+      padding-left: 14px;
+      color: rgb(var(--ink-fg-2));
+      margin: 14px 0;
+    }
+    .mail-body ul { padding-left: 22px; margin: 0 0 12px; }
+    .mail-body li { margin-bottom: 4px; }
+
+    /* AI panel — message thread + tool-call lines + streaming cursor */
+    .ai-tool-row {
+      display: flex; align-items: center; gap: 6px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11.5px; line-height: 1.6;
+      color: rgb(var(--ink-fg-2));
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgb(var(--ink-fg) / 0.04);
+      width: max-content;
+      max-width: 100%;
+    }
+    .ai-tool-row .arrow { color: #6FA8DC; }
+    .ai-tool-row .dot-ok { width: 5px; height: 5px; border-radius: 50%; background: #5DBA8C; flex-shrink: 0; }
+    .ai-tool-row .dot-run { width: 5px; height: 5px; border-radius: 50%; background: #E89B4A; flex-shrink: 0; animation: pulse-dot 1.2s ease-in-out infinite; }
+    @keyframes pulse-dot { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+    .cursor-blink {
+      display: inline-block; width: 7px; height: 14px;
+      background: rgb(var(--c-accent)); margin-left: 1px;
+      vertical-align: -2px;
+      animation: blink 1s steps(2) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* Custom mini checkbox for batch select */
+    .cb {
+      width: 14px; height: 14px; border-radius: 3px;
+      border: 1.5px solid rgb(var(--ink-fg-3));
+      display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.12s ease;
+    }
+    .cb:hover { border-color: rgb(var(--ink-fg-2)); background: rgb(var(--ink-3)); }
+    .cb.cb-on { border-color: rgb(var(--c-accent)); background: rgb(var(--c-accent)); }
+    .cb.cb-on::after {
+      content: ''; width: 7px; height: 4px;
+      border-left: 1.5px solid white; border-bottom: 1.5px solid white;
+      transform: rotate(-45deg) translate(1px,-1px);
+    }
+
+    /* ─── Floating batch action bar ──────────────────────────────────
+       Per design comment (2026-05-18): the batch bar floats above the
+       content panes, starting to the RIGHT of the main nav so the nav
+       itself is never obscured. Sits above the 24px status bar with
+       breathing room and a soft drop. Width follows the nav-collapse
+       state via --app-nav-w (JS-driven, mirrors data-collapsed). */
+    :root { --app-nav-w: 240px; }
+    #batch-bar.floating {
+      position: fixed;
+      left: calc(var(--app-nav-w, 240px) + 16px);
+      right: 16px;
+      bottom: calc(24px + 12px); /* statusbar + gap */
+      height: 56px;
+      padding-inline: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--glass-stroke);
+      background-color: rgb(var(--ink-2) / 0.82);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      box-shadow: var(--pop-shadow);
+      z-index: 40;
+      transition:
+        left 260ms cubic-bezier(0.32, 0.72, 0, 1),
+        opacity 160ms ease,
+        transform 200ms cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    #batch-bar.floating.hidden {
+      display: flex !important;          /* keep layout, fade out */
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+      pointer-events: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #batch-bar.floating { transition: none; }
+      #batch-bar.floating.hidden { transform: none; }
+    }
+    /* batch-empty: 0 rows selected → dim the batch action buttons; the
+       selection counter, "选全部 N 封", clear, and × stay fully bright. */
+    #batch-bar.batch-empty > button:not(#batch-select-all):not(#batch-clear),
+    #batch-bar.batch-empty > .ml-auto {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+
+    /* Batch mode toggle. Default is OFF: row checkboxes, the floating
+       batch bar, and the "N selected" badge in the list meta line are all
+       hidden — the inbox looks like a normal reading view. The 批量
+       button (#batch-enter) in the list header sets
+       body[data-batch-mode="true"], revealing them; the × on the bar
+       (or Esc) clears it again. Hiding via CSS keeps a single DOM tree
+       for both states — no second file to drift. */
+    body:not([data-batch-mode="true"]) .cb         { display: none !important; }
+    body:not([data-batch-mode="true"]) #batch-bar  { display: none !important; }
+    body:not([data-batch-mode="true"]) .batch-only { display: none !important; }
+    body[data-batch-mode="true"]       #batch-enter { display: none !important; }
+
+    /* Language pip (EN / ZH / JP) */
+    .lang-pip {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10px; line-height: 1;
+      padding: 2px 4px; border-radius: 3px;
+      background: rgba(111,168,220,0.12);
+      border: 1px solid rgba(111,168,220,0.30);
+      color: #6FA8DC;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    /* AI tab — accent underline indicator */
+    .tab-active {
+      color: rgb(var(--c-accent));
+      position: relative;
+    }
+    .tab-active::after {
+      content: ''; position: absolute; bottom: -1px; left: 8px; right: 8px;
+      height: 2px; background: rgb(var(--c-accent)); border-radius: 1px;
+    }
+
+    /* Quick action chip in AI panel */
+    .qchip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border-radius: 999px;
+      font-size: 13px; line-height: 1;
+      color: rgb(var(--ink-fg-1));
+      background: rgb(var(--ink-fg) / 0.04);
+      border: 1px solid rgb(var(--ink-border));
+      transition: all 0.12s;
+      cursor: pointer;
+    }
+    .qchip:hover { background: rgb(var(--ink-fg) / 0.08); color: rgb(var(--ink-fg)); border-color: rgb(var(--ink-fg-3)); }
+
+    /* Right-pane (AI tab) background — now part of the Liquid Glass
+       stack. Linear gradient between two translucent ink layers gives
+       a faint vertical sheen on top of the wallpaper. */
+    .ai-bg {
+      background:
+        linear-gradient(180deg,
+          rgb(var(--ink-2) / 0.50) 0%,
+          rgb(var(--ink-1) / 0.55) 100%);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+
+    /* Draft preview card has an accent ring (it IS the primary output) */
+    .draft-card {
+      background: rgb(var(--ink-3) / 0.85);
+      -webkit-backdrop-filter: blur(18px);
+              backdrop-filter: blur(18px);
+      border: 1px solid rgb(var(--c-accent) / 0.30);
+      box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.06);
+    }
+
+    /* ─── Theme picker popover ────────────────────────────────────── */
+    .theme-popover {
+      position: fixed;
+      top: 44px;
+      right: 12px;
+      width: 264px;
+      background-color: rgb(var(--ink-2) / 0.82);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke);
+      border-radius: 12px;
+      box-shadow: var(--pop-shadow);
+      z-index: 60;
+      overflow: hidden;
+    }
+    .swatch {
+      width: 36px; height: 36px;
+      border-radius: 999px;
+      border: 0;
+      cursor: pointer;
+      position: relative;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.2);
+      transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .swatch:hover { transform: scale(1.06); }
+    .swatch[aria-checked="true"] {
+      box-shadow:
+        0 0 0 2px rgb(var(--ink-2)),
+        0 0 0 4px rgb(var(--c-accent));
+    }
+    .swatch[aria-checked="true"]::after {
+      content: '';
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+      background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 14px 14px no-repeat;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.4));
+    }
+
+    /* ─── App nav shell — collapse contract ───────────────────────
+       Shared across inbox · search · settings · admin. The aside
+       itself never changes shape per screen; only `data-collapsed`
+       flips. Width animates; labels/badges/section headers/kbd
+       collapse out; icons stay centered and grow slightly so the
+       icon-only rail is still tappable. State persists to
+       localStorage["mailagent.nav.collapsed"] and broadcasts via
+       the storage event so pop-outs stay in sync. */
+    .app-nav {
+      width: 240px;
+      flex-shrink: 0;
+      transition: width 260ms cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .app-nav[data-collapsed="true"] { width: 56px; }
+    .app-nav[data-collapsed="true"] .app-nav-header {
+      justify-content: center;
+      padding: 0.375rem 0;
+    }
+    .app-nav[data-collapsed="true"] a > span:not(.app-nav-keep),
+    .app-nav[data-collapsed="true"] a > kbd,
+    .app-nav[data-collapsed="true"] .app-nav-section-header,
+    .app-nav[data-collapsed="true"] .app-nav-account,
+    .app-nav[data-collapsed="true"] .app-nav-account-popover { display: none !important; }
+    /* Section spacers stay visible when collapsed — they become the
+       short dashes that group icons by category (the user explicitly
+       asked for "不同分类的 icon 加分隔符隔开一些"). */
+    .app-nav[data-collapsed="true"] .app-nav-section-spacer {
+      margin-inline: 0.625rem;
+      margin-block: 0.5rem;
+    }
+    .app-nav[data-collapsed="true"] .app-nav-avatar-row { display: flex; }
+    .app-nav[data-collapsed="true"] nav a,
+    .app-nav[data-collapsed="true"] .app-nav-bottom a {
+      justify-content: center;
+      padding-inline: 0.25rem;
+      padding-block: 0.5rem;
+    }
+    /* Slightly larger icons when collapsed — easier hit target +
+       compensates for missing label. CSS width on <svg> overrides
+       the inline width="15" attribute. */
+    .app-nav[data-collapsed="true"] nav a > svg,
+    .app-nav[data-collapsed="true"] .app-nav-bottom a > svg {
+      width: 19px;
+      height: 19px;
+    }
+    .app-nav[data-collapsed="true"] .app-nav-chevron-collapse { display: none; }
+    .app-nav:not([data-collapsed="true"]) .app-nav-chevron-expand { display: none; }
+
+    /* Label cross-fade — softens the abrupt display:none flip
+       during the width transition. The labels still toggle, this
+       just makes the brief overlap less jarring. */
+    .app-nav nav a > span:not(.app-nav-keep),
+    .app-nav nav a > kbd,
+    .app-nav-bottom a > span,
+    .app-nav-bottom a > kbd,
+    .app-nav-account,
+    .app-nav-section-header {
+      transition: opacity 140ms ease;
+    }
+
+    /* Account dropdown popover — sits below the nav header, glass
+       surface that picks up the active theme. */
+    .app-nav-account-popover {
+      background: rgba(28, 28, 30, 0.94);
+      backdrop-filter: blur(24px) saturate(1.6);
+      -webkit-backdrop-filter: blur(24px) saturate(1.6);
+    }
+    :root[data-theme="light"] .app-nav-account-popover {
+      background: rgba(252, 252, 252, 0.98);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .app-nav,
+      .app-nav nav a > span,
+      .app-nav-account,
+      .app-nav-section-header { transition: none; }
+    }
+
+    /* Smooth cross-fade when the user flips dark <-> light. Backgrounds
+       and borders both transition; text colour stays instant so reading
+       focus isn't disturbed mid-transition. */
+    .glass, .glass-2, .glass-3, .glass-pop, .ai-bg,
+    .theme-popover, .draft-card, .cb, .qchip, .ai-tool-row, kbd,
+    [class*="bg-ink-"], [class*="border-ink-"] {
+      transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1),
+                  border-color     280ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* ─── Email list refactor (Outlook-inspired) ──────────────────────
+       Layout contract per row (340px pane → 308px inner):
+         · col 1  32px   avatar (or checkbox in batch mode)
+         · col 2  flex   content (sender · subject · body · AI strip)
+       Right cluster (flag · pin · attach · important · delete) sits
+       inline on the subject row; delete is opacity-0 unless row is
+       hovered. Time lives on the sender row, right-aligned.
+
+       Visual states encoded as data-attributes:
+         · data-read = "false" → unread, accent dot + bold
+         · data-flag = "none" | "flagged" | "done"
+           none    → flag icon faint, only crisp on hover
+           flagged → coral flag, row gets 7% coral wash
+           done    → green check, row gets 6% green wash + subject struck
+         · data-pinned = "true" → row lives in 📌 group, pin filled cobalt
+         · data-important = "true" → ❗ icon shown on subject row
+         · data-priority = crit | urg | impt | norm | low → AI strip hue */
+    .email-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 0 10px;
+      padding: 9px 14px 10px;
+      border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
+      cursor: pointer;
+      transition: background 120ms ease;
+    }
+    .email-row:hover { background: rgb(var(--ink-3) / 0.55); }
+    .email-row.is-selected { background: rgb(var(--ink-4) / 0.7); }
+    .email-row.is-selected::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: rgb(var(--c-accent));
+    }
+
+    /* Avatar / cb share grid cell so batch-mode can swap without reflow */
+    .email-row > .avatar,
+    .email-row > .cb {
+      grid-column: 1; grid-row: 1 / span 3;
+      align-self: start;
+      justify-self: center;
+      margin-top: 2px;
+    }
+    .email-row > .cb { margin-top: 5px; }
+
+    .email-row > .row-content {
+      grid-column: 2; grid-row: 1 / span 3;
+      min-width: 0;
+    }
+
+    /* Avatar — initials in a 32px disc. Six hue rotations + grey for
+       external/unknown senders. Subtle inner highlight reads as glass. */
+    .avatar {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 11.5px; font-weight: 600;
+      letter-spacing: 0.02em;
+      color: rgba(255,255,255,0.96);
+      text-transform: uppercase;
+      flex-shrink: 0;
+      box-shadow:
+        inset 0 0 0 1px rgb(255 255 255 / 0.08),
+        0 1px 2px rgba(0,0,0,0.25);
+      user-select: none;
+    }
+    .avatar-1 { background: linear-gradient(135deg, #6FA8DC, #4A78E5); }
+    .avatar-2 { background: linear-gradient(135deg, #B58CDB, #8060C0); }
+    .avatar-3 { background: linear-gradient(135deg, #E89B4A, #C77B3A); }
+    .avatar-4 { background: linear-gradient(135deg, #5DBA8C, #3D8A6C); }
+    .avatar-5 { background: linear-gradient(135deg, #E5634F, #C04E3A); }
+    .avatar-6 { background: linear-gradient(135deg, #DB5B7C, #B0405E); }
+    .avatar-ext { background: linear-gradient(135deg, #8C95A3, #5A6172); }
+
+    body[data-batch-mode="true"] .email-row > .avatar { display: none; }
+
+    /* Sender / time line — sender wraps in one-line ellipsis, time stays
+       right-aligned. Recipient hint is mid-grey, sits next to sender so
+       the visible text reads "Sender, recipient, recipient2…". */
+    .row-top {
+      display: flex; align-items: center; gap: 6px;
+      min-width: 0;
+    }
+    .sender-line {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 13.5px; line-height: 1.35;
+      color: rgb(var(--ink-fg));
+    }
+    .sender-line .sender-name { font-weight: 500; }
+    .sender-line .recipient-hint {
+      color: rgb(var(--ink-fg-2));
+      font-weight: 400;
+    }
+    .row-time {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-fg-2));
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Subject row — text on the left flex-truncates, action cluster
+       on the right is fixed-width and never shrinks. The cluster lives
+       on this row (not below) so it stays visually anchored to the
+       email's identity, like Outlook. */
+    .subject-row {
+      display: flex; align-items: center; gap: 6px;
+      margin-top: 2px;
+      min-width: 0;
+    }
+    .subject-text {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 13.5px; line-height: 1.4;
+      color: rgb(var(--ink-fg));
+    }
+    .body-preview {
+      margin-top: 1px;
+      font-size: 12.5px;
+      color: rgb(var(--ink-fg-2));
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      line-height: 1.45;
+    }
+
+    /* Unread treatment — sender + subject go bold + ink-fg, plus a
+       4px accent dot at the row's left edge (sits *inside* the padding,
+       won't fight the selection 3px stripe because of left-margin). */
+    .email-row[data-read="false"] .sender-name,
+    .email-row[data-read="false"] .subject-text { font-weight: 600; }
+    .email-row[data-read="false"] .row-time { color: rgb(var(--c-accent)); }
+    .email-row[data-read="false"]::after {
+      content: '';
+      position: absolute; left: 6px; top: 18px;
+      width: 5px; height: 5px; border-radius: 50%;
+      background: rgb(var(--c-accent));
+    }
+    .email-row.is-selected[data-read="false"]::after { display: none; }
+    .email-row[data-read="true"] .sender-name { color: rgb(var(--ink-fg-1)); font-weight: 400; }
+    .email-row[data-read="true"] .subject-text { color: rgb(var(--ink-fg-1)); }
+
+    /* Flag state row washes — subtle, never compete with selection */
+    .email-row[data-flag="flagged"] { background: rgba(229,99,79,0.05); }
+    .email-row[data-flag="flagged"]:hover { background: rgba(229,99,79,0.10); }
+    .email-row[data-flag="done"] { background: rgba(93,186,140,0.05); }
+    .email-row[data-flag="done"]:hover { background: rgba(93,186,140,0.10); }
+    .email-row[data-flag="done"] .subject-text {
+      color: rgb(var(--ink-fg-2));
+      text-decoration: line-through;
+      text-decoration-color: rgb(var(--ink-fg-3));
+      text-decoration-thickness: 1px;
+    }
+    .email-row[data-flag="done"] .body-preview { opacity: 0.75; }
+
+    /* External sender pill (Outlook 外部 badge) */
+    .ext-pill {
+      display: inline-flex; align-items: center;
+      font-size: 9.5px; font-weight: 600;
+      padding: 1px 4px; border-radius: 2.5px;
+      background: rgb(var(--ink-fg) / 0.06);
+      border: 1px solid rgb(var(--ink-border));
+      color: rgb(var(--ink-fg-1));
+      letter-spacing: 0.04em;
+      margin-right: 4px;
+      flex-shrink: 0;
+      text-transform: none;
+      vertical-align: middle;
+    }
+
+    /* Thread chevron (for grouped threads in pinned group) */
+    .thread-chev {
+      width: 11px; height: 11px;
+      color: rgb(var(--ink-fg-3));
+      flex-shrink: 0;
+      margin-right: 2px;
+      transition: transform 0.18s ease;
+    }
+
+    /* ─── Row action icons ─────────────────────────────────────────────
+       Tight inline cluster. Each icon is a 18×18 hit target with an
+       11×11 glyph so users on a trackpad can still aim. Order matches
+       Outlook: flag, pin, attach (indicator), important (indicator),
+       delete (hover only).
+
+       Conditional rendering is data-driven: indicators (attach, important)
+       only render in markup when the underlying data is true; the flag
+       and pin buttons always render and reflect state via data-* / aria. */
+    /* Icon cluster sits on the SENDER row (top line) in Outlook-style;
+       time drops to the subject row. Cluster gets a wider footprint
+       (~130px for 5 icons @ 22px + gaps) so sender-line truncates
+       a bit earlier — by design: identity (sender + recipients) is
+       allowed to ellipsize, action affordances are not. */
+    .row-actions {
+      display: inline-flex; align-items: center; gap: 2px;
+      flex-shrink: 0;
+    }
+    .row-actions .ricon {
+      width: 22px; height: 22px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: rgb(var(--ink-fg-3));
+      background: transparent; border: 0; padding: 0;
+      cursor: pointer;
+      border-radius: 5px;
+      transition: color 0.12s, background 0.12s, opacity 0.12s;
+    }
+    .row-actions .ricon:hover { background: rgb(var(--ink-4) / 0.7); }
+    /* Glyph sizing — overrides the 11×11 inline attrs on every SVG.
+       Reads at a glance from the trackpad without looking like an
+       app-bar icon. */
+    .row-actions .ricon svg { display: block; width: 14px; height: 14px; }
+
+    /* Flag — 3-state cycler */
+    .ricon-flag[data-flag-state="0"]               { color: rgb(var(--ink-fg-3)); opacity: 0.55; }
+    .email-row:hover .ricon-flag[data-flag-state="0"] { opacity: 1; }
+    .ricon-flag[data-flag-state="1"]               { color: #E5634F; opacity: 1; }
+    .ricon-flag[data-flag-state="1"] svg path      { fill: currentColor; }
+    .ricon-flag[data-flag-state="2"]               { color: #5DBA8C; opacity: 1; }
+
+    /* Pin — pressed = cobalt-blue, like Outlook */
+    .ricon-pin[aria-pressed="false"]               { color: rgb(var(--ink-fg-3)); opacity: 0.55; }
+    .email-row:hover .ricon-pin[aria-pressed="false"] { opacity: 1; }
+    .ricon-pin[aria-pressed="true"]                { color: #4A78E5; opacity: 1; }
+    .ricon-pin[aria-pressed="true"] svg path       { fill: currentColor; }
+
+    /* Indicators (attach, important) — always shown when present */
+    .ricon-attach    { color: rgb(var(--ink-fg-2)); cursor: default; }
+    /* Important — red warning triangle, LINE style (no filled circle). The
+       previous filled-red-disc didn't sit in the same visual family as the
+       flag / pin / attach line-icons; this matches that vocabulary while
+       staying loud enough to read as a real warning. */
+    .ricon-important { color: #E5634F; cursor: default; }
+    .ricon-important svg { fill: none; stroke: currentColor; }
+    .ricon-important svg circle { fill: currentColor; stroke: none; }
+
+    /* Delete — floats out of the inline cluster, into the row's
+       bottom-right corner as a small chip. Hidden by default; row-hover
+       fades it in. No layout reservation in .row-actions — flex doesn't
+       allocate space for absolute children, so the cluster width is
+       driven by what's actually visible (flag / pin / attach / important). */
+    .ricon-delete {
+      position: absolute;
+      right: 12px; bottom: 6px;
+      width: 26px; height: 26px;
+      border-radius: 6px;
+      color: rgb(var(--ink-fg-1));
+      background: rgb(var(--ink-2) / 0.92);
+      border: 1px solid rgb(var(--ink-border));
+      box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
+      -webkit-backdrop-filter: blur(10px);
+              backdrop-filter: blur(10px);
+      opacity: 0;
+      transform: translateY(2px);
+      transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s, background 0.12s;
+      z-index: 2;
+    }
+    .email-row:hover .ricon-delete { opacity: 1; transform: translateY(0); }
+    .ricon-delete:hover {
+      color: #E5634F;
+      background: rgba(229,99,79,0.14);
+      border-color: rgba(229,99,79,0.40);
+    }
+    /* Override the cluster-icon glyph sizing for the floating chip — a
+       13×13 trash glyph reads at the larger 26×26 hit. */
+    .row-actions .ricon-delete svg { width: 13px; height: 13px; }
+
+    /* ─── AI strip — one line, refined ─────────────────────────────────
+       Replaces the previous 2-pill row. Tight mono row with a colored
+       priority dot, the priority word, separators, and 1-2 secondary
+       signals (reply-needed, due, category). Always reads "AI says…"
+       without shouting. */
+    .ai-strip {
+      display: flex; align-items: center;
+      gap: 6px;
+      margin-top: 5px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10.5px; line-height: 1;
+      color: rgb(var(--ink-fg-2));
+      letter-spacing: 0.02em;
+      min-width: 0;
+    }
+    .ai-strip .pdot {
+      width: 5px; height: 5px; border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .ai-strip .pname { font-weight: 600; letter-spacing: 0.04em; }
+    .ai-strip .sep { color: rgb(var(--ink-fg-3)); }
+    .ai-strip .ai-bit {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .ai-strip .ai-due { color: rgb(var(--ink-fg-1)); }
+    .ai-strip .ai-reply { color: rgb(var(--ink-fg-1)); }
+
+    .email-row[data-priority="crit"] .pname,
+    .email-row[data-priority="crit"] .pdot { color: #E5634F; }
+    .email-row[data-priority="crit"] .pdot { background: #E5634F; }
+    .email-row[data-priority="urg"] .pname,
+    .email-row[data-priority="urg"] .pdot { color: #E89B4A; }
+    .email-row[data-priority="urg"] .pdot { background: #E89B4A; }
+    .email-row[data-priority="impt"] .pname,
+    .email-row[data-priority="impt"] .pdot { color: #D4A53D; }
+    .email-row[data-priority="impt"] .pdot { background: #D4A53D; }
+    .email-row[data-priority="norm"] .pname,
+    .email-row[data-priority="norm"] .pdot { color: #7A7F8A; }
+    .email-row[data-priority="norm"] .pdot { background: #7A7F8A; }
+    .email-row[data-priority="low"] .pname,
+    .email-row[data-priority="low"] .pdot { color: #5A5E68; }
+    .email-row[data-priority="low"] .pdot { background: #5A5E68; }
+
+    /* ─── Group header (collapsible, sticky) ──────────────────────────
+       Reads like a date-range section divider but is interactive: click
+       toggles data-collapsed on the section, which hides .group-rows.
+
+       Frosted glass: the background is a vertical gradient between
+       ink-1 / ink-2 at low alpha so the wallpaper actually bleeds
+       through (an 0.85 alpha solid read as opaque ink, no glass). The
+       saturate(180%) blur(40px) backdrop-filter does the real lift,
+       and an inset 0 -1px 0 highlight gives the bottom hairline the
+       Mimestream/Outlook sheen. */
+    .group { background: transparent; }
+    .group-header {
+      position: sticky; top: 0; z-index: 3;
+      display: flex; align-items: center;
+      gap: 6px;
+      padding: 7px 14px 5px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgb(var(--ink-fg-2));
+      cursor: pointer;
+      user-select: none;
+      background:
+        linear-gradient(180deg,
+          rgb(var(--ink-1) / 0.62) 0%,
+          rgb(var(--ink-2) / 0.55) 100%);
+      -webkit-backdrop-filter: saturate(180%) blur(28px);
+              backdrop-filter: saturate(180%) blur(28px);
+      border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.7);
+      box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+      transition: color 0.12s, background 0.12s;
+    }
+    @media (prefers-reduced-transparency: reduce) {
+      .group-header {
+        background: rgb(var(--ink-1));
+        -webkit-backdrop-filter: none;
+                backdrop-filter: none;
+      }
+    }
+    .group-header:hover { color: rgb(var(--ink-fg-1)); }
+    .group-chev {
+      width: 10px; height: 10px;
+      transition: transform 0.18s ease;
+      flex-shrink: 0;
+    }
+    .group[data-collapsed="true"] .group-chev { transform: rotate(-90deg); }
+    .group[data-collapsed="true"] .group-rows { display: none; }
+    .group-count {
+      margin-left: auto;
+      font-size: 10px;
+      color: rgb(var(--ink-fg-3));
+    }
+    .group-pin-glyph {
+      width: 11px; height: 11px;
+      color: rgb(var(--c-accent));
+      flex-shrink: 0;
+    }
+
+    /* ─── Inbox tabs (重点 / 其他) ────────────────────────────────────── */
+    .inbox-tabs {
+      display: inline-flex;
+      align-items: center;
+      background: rgb(var(--ink-3) / 0.6);
+      border: 1px solid rgb(var(--ink-border-soft));
+      border-radius: 999px;
+      padding: 2px;
+    }
+    .inbox-tab {
+      padding: 3px 11px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: rgb(var(--ink-fg-2));
+      cursor: pointer;
+      background: transparent; border: 0;
+      transition: color 0.12s, background 0.12s;
+    }
+    .inbox-tab:hover { color: rgb(var(--ink-fg)); }
+    .inbox-tab.is-active {
+      background: rgb(var(--ink-fg) / 0.10);
+      color: rgb(var(--ink-fg));
+      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+    }
+    :root[data-theme="light"] .inbox-tab.is-active {
+      background: rgb(255 255 255 / 0.9);
+    }
+
+    /* ─── Filter popover (top-right of list pane) ───────────────────── */
+    .filter-pop {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 8px;
+      width: 248px;
+      z-index: 30;
+      background: rgb(var(--ink-2) / 0.92);
+      border: 1px solid var(--glass-stroke);
+      border-radius: 10px;
+      box-shadow: var(--pop-shadow);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      overflow: hidden;
+    }
+    .filter-section {
+      padding: 8px 10px 8px;
+      border-bottom: 1px solid rgb(var(--ink-border-soft));
+    }
+    .filter-section:last-of-type { border-bottom: 0; }
+    .filter-section-head {
+      display: flex; align-items: center;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgb(var(--ink-fg-2));
+      padding: 4px 4px 6px;
+    }
+    .filter-section-head .links { margin-left: auto; display: inline-flex; gap: 6px; }
+    .filter-section-head .links button {
+      background: none; border: 0; cursor: pointer;
+      font-size: 10px;
+      color: rgb(var(--ink-fg-2));
+      padding: 2px 4px;
+      border-radius: 3px;
+      transition: color 0.12s, background 0.12s;
+    }
+    .filter-section-head .links button:hover {
+      color: rgb(var(--c-accent));
+      background: rgb(var(--ink-3) / 0.6);
+    }
+    .filter-option {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 6px;
+      font-size: 12.5px;
+      color: rgb(var(--ink-fg));
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.1s;
+    }
+    .filter-option:hover { background: rgb(var(--ink-3) / 0.55); }
+    .filter-option .cb-mini {
+      width: 13px; height: 13px;
+      border-radius: 3px;
+      border: 1.5px solid rgb(var(--ink-fg-3));
+      display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.1s, border-color 0.1s;
+    }
+    .filter-option[data-checked="true"] .cb-mini {
+      background: rgb(var(--c-accent));
+      border-color: rgb(var(--c-accent));
+    }
+    .filter-option[data-checked="true"] .cb-mini::after {
+      content: ''; width: 6px; height: 3px;
+      border-left: 1.5px solid white; border-bottom: 1.5px solid white;
+      transform: rotate(-45deg) translate(1px, -1px);
+    }
+    .filter-option .label { flex: 1; min-width: 0; }
+    .filter-option .count {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11px;
+      color: rgb(var(--ink-fg-2));
+      flex-shrink: 0;
+    }
+    .filter-option .pri-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* Filter button — quiet by default, loud when a filter is active.
+       Active = NOT every option checked (i.e. user has narrowed the view).
+       Treatment is two-layer:
+         · tinted accent background, so the icon clearly reads "ON"
+         · a red badge dot in the top-right corner, so even at a glance
+           across the list pane you can tell the inbox is filtered.
+       Accent for the button surface (mode), red for the dot (alert) —
+       different roles, different colors. */
+    .filter-btn { position: relative; }
+    .filter-btn[data-active="true"] {
+      color: rgb(var(--c-accent));
+      background: rgb(var(--c-accent) / 0.14);
+    }
+    .filter-btn[data-active="true"]:hover {
+      background: rgb(var(--c-accent) / 0.22);
+    }
+    .filter-btn[data-active="true"]::after {
+      content: '';
+      position: absolute; top: 1px; right: 1px;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #E5634F;
+      box-shadow: 0 0 0 2px rgb(var(--ink-2));
+    }
+  </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden text-ink-fg font-sans antialiased flex flex-col">
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     macOS title bar (36px) — added "Open Island connected" status
+═══════════════════════════════════════════════════════════════════════ -->
+<header class="glass h-titlebar border-b border-ink-border/60 flex items-center px-3 select-none shrink-0">
+  <div class="flex items-center gap-2 mr-4">
+    <span class="tl tl-close" title="Close"></span>
+    <span class="tl tl-min"   title="Minimize"></span>
+    <span class="tl tl-max"   title="Zoom"></span>
+  </div>
+
+  <div class="text-aux text-ink-fg-1 font-medium tracking-tight">MailAgent</div>
+
+  <div class="flex-1 flex justify-center">
+    <button
+      class="group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition"
+      data-i18n-attr="aria-label:titleBar.searchHint"
+      aria-label="搜索 / 跳转"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span data-i18n="titleBar.searchHint">搜索 / 跳转</span>
+      <kbd class="group-hover:bg-ink-4">⌘K</kbd>
+    </button>
+  </div>
+
+  <div class="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+    <span class="flex items-center gap-1.5" title="Open Island notch overlay connected">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="6" rx="3" fill="currentColor"/></svg>
+      <span>Island</span>
+    </span>
+    <span class="text-ink-fg-3">·</span>
+    <!-- Locale toggle — flips :root[data-locale] between zh-CN and en.
+         Same idiom as the theme toggle; cycles in one click. Owns the
+         I18N_DICT walker at the bottom (DESIGN.md §2.10). -->
+    <button
+      id="locale-toggle"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="切换语言 (⌥G)"
+      data-i18n-attr="title:titleBar.localeTooltip,aria-label:titleBar.localeAria"
+      aria-label="切换语言"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      <span class="group-hover:text-ink-fg" id="locale-label">中文</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <!-- Theme toggle — flips :root[data-theme] between dark and light.
+         The sun/moon swap is purely cosmetic; the token-level work
+         happens in the :root[data-theme="light"] block. -->
+    <button
+      id="theme-toggle"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="Toggle light / dark (⌥L)"
+      data-i18n-attr="title:titleBar.themeTooltip,aria-label:titleBar.themeAria"
+      aria-label="Toggle theme"
+    >
+      <svg id="theme-icon-dark"  width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <!-- Theme label stays English in both locales — DESIGN.md §2.10 + Apple convention. -->
+      <span class="group-hover:text-ink-fg" id="theme-label">Dark</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <!-- Appearance — opens accent-color popover. Real product feature
+         (View → Accent Color in the macOS menu); rendered here as the
+         live entry point so the picker is one click from anywhere. -->
+    <button
+      id="appearance-btn"
+      aria-haspopup="true"
+      aria-expanded="false"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="Accent color (View → Appearance)"
+      data-i18n-attr="title:titleBar.accentTooltip,aria-label:titleBar.accentAria"
+    >
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-coral shadow-[0_0_0_1px_rgba(0,0,0,0.25)]"></span>
+      <!-- Accent name is a proper noun (Coral/Cobalt/...) — stays as-is across locales. -->
+      <span class="group-hover:text-ink-fg" id="appearance-label">Coral</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5" data-i18n-attr="title:titleBar.syncTooltip">
+      <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+      <span><span data-i18n="status.synced">Synced</span> · 5s · 14:32:08</span>
+    </span>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     APPEARANCE POPOVER (macOS-style) — anchors under the title-bar
+     accent button. This is REAL product UI: changing the swatch rebinds
+     the :root CSS variables, persists to localStorage, and broadcasts
+     the new accent to the Island over the unix-socket. The whole UI
+     (badges, chips, focus rings, draft-card ring, Dynamic Island pill)
+     reads from the same --c-accent token, so the swap is atomic.
+═══════════════════════════════════════════════════════════════════════ -->
+<div id="theme-popover" class="theme-popover hidden">
+  <div class="px-3.5 py-2.5 border-b border-ink-border-soft flex items-center justify-between">
+    <div class="text-aux text-ink-fg font-medium" data-i18n="popover.accentTitle">Accent Color</div>
+    <!-- Mono uppercase meta — §3.3 — stays English in both locales. -->
+    <span class="text-micro font-mono text-ink-fg-2">View → Appearance</span>
+  </div>
+  <div class="p-4">
+    <div class="grid grid-cols-3 gap-y-4 gap-x-2 place-items-center">
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="coral"  aria-checked="true"  style="background: #E5654B;" title="Coral"></button>
+        <span class="text-meta font-mono text-ink-fg-1">Coral</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="cobalt" aria-checked="false" style="background: #4A78E5;" title="Cobalt"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Cobalt</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="teal"   aria-checked="false" style="background: #2DB5A6;" title="Teal"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Teal</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="rose"   aria-checked="false" style="background: #DB5B7C;" title="Rose"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Rose</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="slate"  aria-checked="false" style="background: #7E8694;" title="Slate"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Slate</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="olive"  aria-checked="false" style="background: #9CA552;" title="Olive"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Olive</span>
+      </div>
+    </div>
+  </div>
+  <div class="px-3.5 py-2 border-t border-ink-border-soft flex items-center gap-2">
+    <svg class="text-ink-fg-2 shrink-0" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span class="text-meta text-ink-fg-1 leading-snug" data-i18n="popover.accentNote">Affects toolbar · chips · selected row · Island accent. Stored locally.</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Main · Sidebar | List | Detail | Right Panel (✦ AI / Thread / Sync)
+═══════════════════════════════════════════════════════════════════════ -->
+<!-- Body is `flex flex-col`; main grows to fill whatever vertical space
+     is left after titlebar/batch-bar/statusbar. When batch bar is hidden
+     (no selection), main automatically reclaims its 52px. -->
+<main class="flex flex-1 min-h-0">
+
+  <!-- ──── MAIN NAV (240px / 56px collapsed) ──────────────────────────
+       Single source of truth across inbox · search · settings · admin.
+       Toggle button at top right collapses to icon rail; state lives
+       in localStorage["mailagent.nav.collapsed"] and stays consistent
+       across pop-out windows via the storage event (see IIFE). -->
+  <aside data-app-nav data-collapsed="false" class="app-nav glass border-r border-ink-border/60 flex flex-col relative">
+    <!-- Nav header — same row: account selector (left, takes width) +
+         collapse toggle (right). Collapses to centered chevron only. -->
+    <div class="app-nav-header flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft/60 shrink-0">
+      <button data-account-toggle
+              type="button"
+              class="app-nav-account flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-ink-3/70 transition group"
+              aria-haspopup="true" aria-expanded="false"
+              title="lucien.chen@tp-link.com — 切换账户"
+              aria-label="切换邮箱账户">
+        <span class="text-micro font-mono text-ink-fg bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0 leading-snug">tp-link</span>
+        <span class="text-body text-ink-fg font-medium truncate flex-1 text-left">lucien.chen</span>
+        <svg class="text-ink-fg-2 group-hover:text-ink-fg shrink-0 transition" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <button data-app-nav-toggle
+              class="w-7 h-7 rounded-md hover:bg-ink-3 hover:text-ink-fg text-ink-fg-2 flex items-center justify-center transition shrink-0"
+              title="Collapse / expand navigation (⌥B)"
+              data-i18n-attr="title:nav.toggleTitle,aria-label:nav.toggleAria"
+              aria-label="Collapse navigation">
+        <svg class="app-nav-chevron-collapse" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        <svg class="app-nav-chevron-expand"   width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
+
+    <!-- Collapsed-only avatar row — initial-letter circle in accent
+         color, sits below the chevron toggle. Clicking expands the
+         nav (popover would not fit at 56px). Hidden by default;
+         CSS flips display:flex when data-collapsed="true". -->
+    <div class="app-nav-avatar-row items-center justify-center py-2 border-b border-ink-border-soft/60 shrink-0" style="display: none;">
+      <button data-account-toggle
+              type="button"
+              class="w-9 h-9 rounded-full text-white font-semibold text-aux flex items-center justify-center shadow-[0_0_0_2px_rgba(255,255,255,0.05)] hover:brightness-110 transition"
+              style="background: var(--c-accent);"
+              title="lucien.chen@tp-link.com — 展开切换账户"
+              aria-label="切换账户">L</button>
+    </div>
+
+    <!-- Account dropdown popover — anchored under the header in
+         expanded mode. Inert in collapsed mode (CSS hides it). -->
+    <div data-account-popover class="app-nav-account-popover hidden absolute z-50 left-2 right-2 top-[44px] rounded-lg border border-ink-border shadow-2xl py-1">
+      <button class="account-option flex items-center gap-2 px-2.5 py-2 w-full text-left hover:bg-ink-3 transition" data-account="tp-link" data-active="true">
+        <span class="text-micro font-mono text-ink-fg bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0">tp-link</span>
+        <span class="text-body text-ink-fg font-medium flex-1 truncate">lucien.chen</span>
+        <svg class="text-coral shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </button>
+      <button class="account-option flex items-center gap-2 px-2.5 py-2 w-full text-left hover:bg-ink-3 transition" data-account="gmail">
+        <span class="text-micro font-mono text-ink-fg-1 bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0">gmail</span>
+        <span class="text-body text-ink-fg-1 flex-1 truncate">s1021964827</span>
+        <span class="text-meta font-mono text-ink-fg-3">4</span>
+      </button>
+      <button class="account-option flex items-center gap-2 px-2.5 py-2 w-full text-left hover:bg-ink-3 transition" data-account="icloud">
+        <span class="text-micro font-mono text-ink-fg-1 bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0">icloud</span>
+        <span class="text-body text-ink-fg-1 flex-1 truncate">lucien</span>
+        <span class="text-meta font-mono text-ink-fg-3">0</span>
+      </button>
+      <div class="border-t border-ink-border-soft my-1 mx-2"></div>
+      <button class="account-option flex items-center gap-2 px-2.5 py-1.5 w-full text-left hover:bg-ink-3 transition text-ink-fg-2">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span class="text-body italic">添加账户...</span>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin py-2.5">
+
+      <!-- MAILBOXES -->
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">Mailboxes</h2>
+      </div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-inbox.html" class="row row-selected flex items-center gap-2.5 px-2 py-1.5 rounded-md bg-ink-4 text-ink-fg">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="text-body flex-1 font-medium" data-i18n="nav.inbox">收件箱</span>
+          <span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">32</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.outbox">发件箱</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.flagged">已标旗</span>
+          <span class="text-meta font-mono text-ink-fg-2">7</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.allMail">所有邮件</span>
+          <span class="text-meta font-mono text-ink-fg-2">6,184</span>
+        </a>
+      </nav>
+
+      <div class="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft"></div>
+
+      <!-- AI AGENTS (new — surfaces both LLM backends) -->
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">AI Agents</h2>
+      </div>
+      <nav class="px-2 space-y-px">
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg hover:bg-ink-3 transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2v4"/><path d="M12 18v4"/><path d="m4.93 4.93 2.83 2.83"/><path d="m16.24 16.24 2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="m4.93 19.07 2.83-2.83"/><path d="m16.24 7.76 2.83-2.83"/></svg>
+          <!-- Notion Agent / Custom API — proper nouns, stay across locales. -->
+          <span class="text-body flex-1">Notion Agent</span>
+          <span class="w-1.5 h-1.5 rounded-full bg-ok" title="online · token_v2 valid"></span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span class="text-body flex-1">Custom API</span>
+          <span class="text-meta font-mono text-ink-fg-2">3</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.aiSessions">AI 会话历史</span>
+          <span class="text-meta font-mono text-ink-fg-2">128</span>
+        </a>
+      </nav>
+
+      <div class="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft"></div>
+
+      <!-- VIEW — top-level dashboards. Search lives in title-bar ⌘K, translate
+           lives in the email toolbar/body, so they are intentionally NOT in nav. -->
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">View</h2>
+      </div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-admin.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          <!-- "LLM Dashboard" — proper noun for the admin surface. Stays as-is. -->
+          <span class="text-body flex-1">LLM Dashboard</span>
+          <span class="w-1.5 h-1.5 rounded-full bg-warn" title="cache hit 偏低" data-i18n-attr="title:ops.cacheLowTooltip"></span>
+        </a>
+        <a href="mockup-admin.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          <span class="text-body flex-1" data-i18n="ops.admin">看板 Admin</span>
+          <span class="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded">5 DL</span>
+        </a>
+      </nav>
+    </div>
+
+    <!-- Bottom: settings + help -->
+    <div class="app-nav-bottom border-t border-ink-border-soft p-2 space-y-px">
+      <a href="mockup-settings.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span class="text-body flex-1" data-i18n="bottom.settings">设置</span>
+        <kbd>⌘,</kbd>
+      </a>
+      <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span class="text-body flex-1" data-i18n="bottom.shortcuts">快捷键</span>
+        <kbd>?</kbd>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ──── EMAIL LIST (340px) ───────────────────────────────────────── -->
+  <section class="glass-2 w-[340px] shrink-0 border-r border-ink-border/60 flex flex-col">
+
+    <!-- relative wrapper anchors the filter popover -->
+    <div class="px-3 pt-3 pb-2.5 border-b border-ink-border-soft relative">
+      <div class="flex items-center justify-between gap-2">
+        <!-- Focused / Other tabs (Outlook-style pill switch). "其他" is
+             intentionally not wired here — it surfaces auto-filtered
+             non-essential mail in production. -->
+        <div class="inbox-tabs" role="tablist" aria-label="Inbox view">
+          <button class="inbox-tab is-active" role="tab" data-tab="focused" aria-selected="true" data-i18n="list.tab.focused">重点</button>
+          <button class="inbox-tab" role="tab" data-tab="other" aria-selected="false" data-i18n="list.tab.other">其他</button>
+        </div>
+        <!-- Right cluster: batch entry + filter trigger -->
+        <div class="flex items-center gap-1">
+          <button id="batch-enter" type="button"
+             class="w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition"
+             title="进入批量模式"
+             aria-label="进入批量模式">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><polyline points="14 17 16.5 19.5 21 14"/></svg>
+          </button>
+          <button id="filter-btn" type="button"
+             class="filter-btn w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition"
+             title="过滤邮件（优先级 / 类别）"
+             aria-label="过滤邮件"
+             aria-haspopup="true"
+             aria-expanded="false"
+             aria-controls="filter-pop"
+             data-active="false">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Meta sub-line — selection counter (batch only) + unread/total -->
+      <div class="mt-2 flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+        <span class="batch-only">
+          <span data-i18n="list.meta.selected" data-i18n-n="0">0 已选</span>
+          <span class="text-ink-fg-3"> · </span>
+        </span>
+        <span data-i18n="list.meta.unread" data-i18n-n="32">32 未读</span>
+        <span class="text-ink-fg-3"> · </span>
+        <span data-i18n="list.meta.total" data-i18n-n="184">总计 184</span>
+        <span class="ml-auto" id="filter-summary" aria-live="polite"></span>
+      </div>
+
+      <!-- Filter popover (anchored to right edge of header).
+           Multi-select for priority + category. Default = all checked.
+           Live count reflects how many rows would survive the filter. -->
+      <div id="filter-pop" class="filter-pop hidden" role="dialog" aria-label="过滤邮件">
+        <div class="filter-section">
+          <div class="filter-section-head">
+            <span>Priority</span>
+            <span class="links">
+              <button data-filter-all="priority">全选</button>
+              <button data-filter-none="priority">清除</button>
+            </span>
+          </div>
+          <label class="filter-option" data-filter="priority" data-value="crit" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="pri-dot" style="background:#E5634F"></span>
+            <span class="label">Critical</span>
+            <span class="count">1</span>
+          </label>
+          <label class="filter-option" data-filter="priority" data-value="urg" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="pri-dot" style="background:#E89B4A"></span>
+            <span class="label">Urgent</span>
+            <span class="count">3</span>
+          </label>
+          <label class="filter-option" data-filter="priority" data-value="impt" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="pri-dot" style="background:#D4A53D"></span>
+            <span class="label">Important</span>
+            <span class="count">3</span>
+          </label>
+          <label class="filter-option" data-filter="priority" data-value="norm" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="pri-dot" style="background:#7A7F8A"></span>
+            <span class="label">Normal</span>
+            <span class="count">3</span>
+          </label>
+          <label class="filter-option" data-filter="priority" data-value="low" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="pri-dot" style="background:#5A5E68"></span>
+            <span class="label">Low</span>
+            <span class="count">2</span>
+          </label>
+        </div>
+        <div class="filter-section">
+          <div class="filter-section-head">
+            <span>Category</span>
+            <span class="links">
+              <button data-filter-all="category">全选</button>
+              <button data-filter-none="category">清除</button>
+            </span>
+          </div>
+          <label class="filter-option" data-filter="category" data-value="alert" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="label">告警 · 系统监控</span>
+            <span class="count">3</span>
+          </label>
+          <label class="filter-option" data-filter="category" data-value="project" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="label">项目协作</span>
+            <span class="count">3</span>
+          </label>
+          <label class="filter-option" data-filter="category" data-value="notify" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="label">通知 · 提及</span>
+            <span class="count">2</span>
+          </label>
+          <label class="filter-option" data-filter="category" data-value="billing" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="label">账单 · 收据</span>
+            <span class="count">1</span>
+          </label>
+          <label class="filter-option" data-filter="category" data-value="auto" data-checked="true">
+            <span class="cb-mini"></span>
+            <span class="label">自动归档</span>
+            <span class="count">3</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto scrollbar-thin" id="email-list-scroll">
+
+      <!-- ════════════════════════════════════════════════════════════════
+           GROUP · 📌 已固定 — sticks to top; always shown even if empty
+           Cards in here have data-pinned="true" so their pin glyph reads
+           as pressed (cobalt). Click pin again unpins → moves into time
+           group. (Visual demo only — no mutation in mockup.)
+      ════════════════════════════════════════════════════════════════ -->
+      <section class="group" data-group="pinned" data-collapsed="false">
+        <header class="group-header" role="button" aria-expanded="true">
+          <svg class="group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          <svg class="group-pin-glyph" viewBox="0 0 24 24" fill="currentColor"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg>
+          <span>已固定</span>
+          <span class="group-count">2</span>
+        </header>
+        <div class="group-rows">
+
+          <!-- ROW · SELECTED · unread · Urgent · 2 attach · important · pinned -->
+          <article class="row email-row is-selected"
+                   data-read="false" data-flag="none"
+                   data-pinned="true" data-important="true"
+                   data-priority="urg" data-category="alert">
+            <span class="cb cb-on" title="已选 · batch mode"></span>
+            <div class="avatar avatar-3">SE</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">Sentry</span><span class="recipient-hint">, oncall@chenge.ink</span>
+                </span>
+                <span class="row-time">14:23</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">[Alert] MailAgent prod: TimeoutError (Notion API)</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="true" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <span class="ricon ricon-attach" aria-label="附件 · 2"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>
+                  <span class="ricon ricon-important" aria-label="重要"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13.5"/><circle cx="12" cy="17" r="1" stroke="none" fill="currentColor"/></svg></span>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">ReadTimeout — handle_ai_reviewed exceeded 30s when calling notion.pages.update for page_id=4a8c…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">URGENT</span>
+                <span class="sep">·</span>
+                <span class="ai-reply">需回复</span>
+                <span class="sep">·</span>
+                <span class="ai-due">Due 18:00</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- ROW · unread · Critical · pinned -->
+          <article class="row email-row"
+                   data-read="false" data-flag="none"
+                   data-pinned="true" data-important="false"
+                   data-priority="crit" data-category="alert">
+            <span class="cb cb-on"></span>
+            <div class="avatar avatar-5">PD</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">PagerDuty</span><span class="recipient-hint">, oncall@chenge.ink</span>
+                </span>
+                <span class="row-time">14:08</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">[P1] webhook-server 8100 · HTTP 502 from upstream</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="true" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">Triggered: nginx → mailagent-webhook (PM2 process down). 您是 oncall.</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">CRITICAL</span>
+                <span class="sep">·</span>
+                <span class="ai-reply">需回复</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════════════════
+           GROUP · 今天
+      ════════════════════════════════════════════════════════════════ -->
+      <section class="group" data-group="today" data-collapsed="false">
+        <header class="group-header" role="button" aria-expanded="true">
+          <svg class="group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>今天 · 5/18</span>
+          <span class="group-count">4</span>
+        </header>
+        <div class="group-rows">
+
+          <!-- ROW · unread · Important · Notion mention -->
+          <article class="row email-row"
+                   data-read="false" data-flag="none"
+                   data-pinned="false" data-important="true"
+                   data-priority="impt" data-category="notify">
+            <span class="cb cb-on"></span>
+            <div class="avatar avatar-2">NO</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="sender-name">Notion</span><span class="recipient-hint">, 张敏 邀请</span>
+                </span>
+                <span class="row-time">13:51</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">你被添加到「2026 Q2 OKR · ENBU 产品线」</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <span class="ricon ricon-important" aria-label="重要"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13.5"/><circle cx="12" cy="17" r="1" stroke="none" fill="currentColor"/></svg></span>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">@Yuanquan Chen, 张敏 邀请你成为 editor。本季 OKR 起草中，请在 5/20 前确认你的 Key Results…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">IMPORTANT</span>
+                <span class="sep">·</span>
+                <span>项目协作</span>
+                <span class="sep">·</span>
+                <span class="ai-due">截止 5/20</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- ROW · unread · Urgent · FLAGGED demo (state-1) -->
+          <article class="row email-row"
+                   data-read="false" data-flag="flagged"
+                   data-pinned="false" data-important="true"
+                   data-priority="urg" data-category="project">
+            <span class="cb"></span>
+            <div class="avatar avatar-1">JL</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="sender-name">Jemma Luo</span><span class="recipient-hint">, Tracy Grosh, Lucien</span>
+                </span>
+                <span class="row-time">13:30</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">Action Required – POC Support for v4 SSoT migration</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="1" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <span class="ricon ricon-attach" aria-label="附件 · 1"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>
+                  <span class="ricon ricon-important" aria-label="重要"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13.5"/><circle cx="12" cy="17" r="1" stroke="none" fill="currentColor"/></svg></span>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">Hi Team, I have changed the email addresses to mailagent.support@chenge.ink for all POC tickets…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">URGENT</span>
+                <span class="sep">·</span>
+                <span class="ai-reply">需回复</span>
+                <span class="sep">·</span>
+                <span>项目协作</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- ROW · read · Normal · GitHub PR -->
+          <article class="row email-row"
+                   data-read="true" data-flag="none"
+                   data-pinned="false" data-important="false"
+                   data-priority="norm" data-category="project">
+            <span class="cb"></span>
+            <div class="avatar avatar-ext">GH</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">GitHub</span><span class="recipient-hint">, forrest</span>
+                </span>
+                <span class="row-time">12:55</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">[open-design/skills] PR #218 review requested</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">forrest opened pull request: bumps figma-context-mcp from 0.4 to 0.5, adds dark-mode token stories…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">NORMAL</span>
+                <span class="sep">·</span>
+                <span>需 Review</span>
+                <span class="sep">·</span>
+                <span>关联 PR #218</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- ROW · unread · Important · attach · Stripe -->
+          <article class="row email-row"
+                   data-read="false" data-flag="none"
+                   data-pinned="false" data-important="false"
+                   data-priority="impt" data-category="billing">
+            <span class="cb"></span>
+            <div class="avatar avatar-2">ST</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">Stripe</span><span class="recipient-hint">, receipts</span>
+                </span>
+                <span class="row-time">10:04</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">Receipt for May 2026 · $42.00 paid to Anthropic</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <span class="ricon ricon-attach" aria-label="附件 · 1"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">You paid Anthropic — Claude API usage May 1–15. Receipt #ch_3PqL2…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">IMPORTANT</span>
+                <span class="sep">·</span>
+                <span>账单 · 收据</span>
+                <span class="sep">·</span>
+                <span>自动归档</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════════════════
+           GROUP · 昨天
+      ════════════════════════════════════════════════════════════════ -->
+      <section class="group" data-group="yesterday" data-collapsed="false">
+        <header class="group-header" role="button" aria-expanded="true">
+          <svg class="group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>昨天 · 5/17</span>
+          <span class="group-count">3</span>
+        </header>
+        <div class="group-rows">
+
+          <!-- ROW · unread · Urgent · Vercel -->
+          <article class="row email-row"
+                   data-read="false" data-flag="none"
+                   data-pinned="false" data-important="false"
+                   data-priority="urg" data-category="alert">
+            <span class="cb"></span>
+            <div class="avatar avatar-ext">VC</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">Vercel</span><span class="recipient-hint">, no-reply</span>
+                </span>
+                <span class="row-time">19:42</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">Build failed · mailagent-frontend@main</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">TypeScript error in src/email-list/EmailRow.tsx:24 — Property 'mailbox' does not exist on EmailMeta…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">URGENT</span>
+                <span class="sep">·</span>
+                <span class="ai-reply">需修复</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- ROW · read · Normal · 张敏 -->
+          <article class="row email-row"
+                   data-read="true" data-flag="none"
+                   data-pinned="false" data-important="false"
+                   data-priority="norm" data-category="project">
+            <span class="cb"></span>
+            <div class="avatar avatar-4">ZM</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="sender-name">张敏</span><span class="recipient-hint">, Lucien, Yuanquan</span>
+                </span>
+                <span class="row-time">15:55</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">Re: [飞书] 周报 — w20 项目进度对齐 (4)</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">Yuanquan: 这周 MailAgent 这块的 v4 SSoT 迁移基本收口了，6184 封邮件全部迁完没 body_miss…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">NORMAL</span>
+                <span class="sep">·</span>
+                <span class="ai-reply">需回复</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- ROW · read · Low · Anthropic -->
+          <article class="row email-row"
+                   data-read="true" data-flag="none"
+                   data-pinned="false" data-important="false"
+                   data-priority="low" data-category="auto">
+            <span class="cb"></span>
+            <div class="avatar avatar-3">AN</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">Anthropic</span><span class="recipient-hint">, updates</span>
+                </span>
+                <span class="row-time">09:18</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">Your April 2026 Claude API usage summary</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">Total: 12.4M input tokens · 1.7M output · cache hit 84.2% · $38.42 charged…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">LOW</span>
+                <span class="sep">·</span>
+                <span>账单 · 月报</span>
+                <span class="sep">·</span>
+                <span>自动归档</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════════════════
+           GROUP · 本周早些时候
+      ════════════════════════════════════════════════════════════════ -->
+      <section class="group" data-group="this-week" data-collapsed="false">
+        <header class="group-header" role="button" aria-expanded="true">
+          <svg class="group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>本周早些时候</span>
+          <span class="group-count">2</span>
+        </header>
+        <div class="group-rows">
+
+          <!-- ROW · read · Normal · sync FAILED -->
+          <article class="row email-row"
+                   data-read="true" data-flag="none"
+                   data-pinned="false" data-important="false"
+                   data-priority="norm" data-category="notify">
+            <span class="cb"></span>
+            <div class="avatar avatar-6">LI</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">Linear</span><span class="recipient-hint">, notifications</span>
+                </span>
+                <span class="row-time">5/16</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">ENG-1421 · was assigned to you · "MailAgent V1 前端脚手架"</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview" style="color: rgba(229,99,79,0.85);">Notion API 429 rate_limited · 已重试 3 次 · 进入 dead_letter</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">NORMAL</span>
+                <span class="sep">·</span>
+                <span style="color:#E36262">同步失败 · 可重试</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- ROW · read · DONE state (3-state flag demo) · cron digest -->
+          <article class="row email-row"
+                   data-read="true" data-flag="done"
+                   data-pinned="false" data-important="false"
+                   data-priority="impt" data-category="auto">
+            <span class="cb"></span>
+            <div class="avatar avatar-1">MA</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="sender-name">MailAgent</span><span class="recipient-hint">, cron@local</span>
+                </span>
+                <span class="row-time">5/15</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">[Cron] mailagent daily-digest 2026-05-15 · 47 邮件 / 12 项目</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="2" aria-label="切换旗标 · 已完成"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">今日处理: 47 收件 · 11 飞书通知 · 0 dead_letter · cost $0.34 · cache hit 87.1%…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">IMPORTANT</span>
+                <span class="sep">·</span>
+                <span style="color:#5DBA8C">已处理 ✓</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════════════════
+           GROUP · 上周
+      ════════════════════════════════════════════════════════════════ -->
+      <section class="group" data-group="last-week" data-collapsed="false">
+        <header class="group-header" role="button" aria-expanded="true">
+          <svg class="group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>上周</span>
+          <span class="group-count">1</span>
+        </header>
+        <div class="group-rows">
+
+          <!-- ROW · read · Low · Apple -->
+          <article class="row email-row"
+                   data-read="true" data-flag="none"
+                   data-pinned="false" data-important="false"
+                   data-priority="low" data-category="auto">
+            <span class="cb"></span>
+            <div class="avatar avatar-ext">AP</div>
+            <div class="row-content">
+              <div class="row-top">
+                <span class="sender-line">
+                  <span class="ext-pill">外部</span><span class="sender-name">Apple</span><span class="recipient-hint">, noreply</span>
+                </span>
+                <span class="row-time">5/11</span>
+              </div>
+              <div class="subject-row">
+                <span class="subject-text">iCloud Mail · 验证你的 Apple ID 登录</span>
+                <span class="row-actions">
+                  <button class="ricon ricon-flag" data-flag-state="0" aria-label="切换旗标"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></button>
+                  <button class="ricon ricon-pin" aria-pressed="false" aria-label="切换置顶"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"/></svg></button>
+                  <button class="ricon ricon-delete" aria-label="删除"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+                </span>
+              </div>
+              <div class="body-preview">您的 Apple ID 在 MacBook Pro (M3 Max, macOS 26.1) 上登录，验证码 487-291…</div>
+              <div class="ai-strip">
+                <span class="pdot"></span>
+                <span class="pname">LOW</span>
+                <span class="sep">·</span>
+                <span>自动归档</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <div class="px-4 py-6 text-center text-meta font-mono text-ink-fg-3">
+        — <span data-i18n="list.footer.endOfList">end of list</span> · LIMIT 50 / 184 · <span data-i18n="list.footer.loadMore">load more</span> —
+      </div>
+    </div>
+  </section>
+
+  <!-- ──── DETAIL PANE (flex 1) ─────────────────────────────────────── -->
+  <section class="glass-3 flex-1 min-w-0 flex flex-col">
+
+    <!-- Toolbar -->
+    <header class="h-[48px] border-b border-ink-border flex items-center px-3 gap-1 shrink-0">
+      <button class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-4" title="Back (Esc)" data-i18n-attr="title:toolbar.back,aria-label:toolbar.back">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      </button>
+      <div class="w-px h-5 bg-ink-border mx-1"></div>
+
+      <!-- Primary AI action — coral fill, icon-only (THE headline). Label surfaces on hover/native tooltip. -->
+      <button class="flex items-center justify-center p-1.5 rounded-md bg-coral text-white hover:bg-coral-hover transition" title="✦ 起草回复 (⌘⏎)" aria-label="✦ 起草回复" data-i18n-attr="title:toolbar.draftTooltip,aria-label:toolbar.draft">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+      </button>
+
+      <!-- Translate — icon only, ghost -->
+      <button class="flex items-center justify-center p-1.5 rounded-md text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition" title="一键翻译 (⌥T)" aria-label="一键翻译" data-i18n-attr="title:toolbar.translateTooltip,aria-label:toolbar.translate">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+      </button>
+
+      <div class="w-px h-5 bg-ink-border mx-1"></div>
+
+      <button class="flex items-center justify-center p-1.5 rounded-md text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition" title="已读 (R)" aria-label="标为已读" data-i18n-attr="title:toolbar.markReadTooltip,aria-label:toolbar.markRead">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      </button>
+      <button class="flex items-center justify-center p-1.5 rounded-md text-urg hover:bg-ink-4 transition" title="已标旗 (F)" aria-label="切换标旗" data-i18n-attr="title:toolbar.flagTooltip,aria-label:toolbar.flag">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15" stroke="currentColor"/></svg>
+      </button>
+      <button class="flex items-center justify-center p-1.5 rounded-md text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition" title="归档 (E)" aria-label="归档" data-i18n-attr="title:toolbar.archiveTooltip,aria-label:toolbar.archive">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+      </button>
+
+      <div class="w-px h-5 bg-ink-border mx-1"></div>
+
+      <button class="flex items-center justify-center p-1.5 rounded-md text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition" title="重传 Notion" aria-label="重传 Notion" data-i18n-attr="title:toolbar.retryNotion,aria-label:toolbar.retryNotion">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3.6-7.2"/><path d="M21 3v6h-6"/></svg>
+      </button>
+      <button class="flex items-center justify-center p-1.5 rounded-md text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition" title="AI 重跑" aria-label="AI 重跑分类" data-i18n-attr="title:toolbar.rerunAITooltip,aria-label:toolbar.rerunAI">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+      </button>
+
+      <div class="ml-auto flex items-center gap-1">
+        <button class="flex items-center justify-center p-1.5 rounded-md text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition" title="在 Notion 中打开" aria-label="在 Notion 中打开" data-i18n-attr="title:toolbar.openNotion,aria-label:toolbar.openNotion">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </button>
+        <div class="w-px h-5 bg-ink-border mx-1"></div>
+        <button class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-4" title="Previous (K)" data-i18n-attr="title:toolbar.prevTooltip">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+        </button>
+        <button class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-4" title="Next (J)" data-i18n-attr="title:toolbar.nextTooltip">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <button class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-4" title="More" data-i18n-attr="title:toolbar.more">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        </button>
+        <div class="w-px h-5 bg-ink-border mx-1"></div>
+        <!-- AI panel toggle — collapsed by default; opens the right-side AI panel. -->
+        <button id="aiPanelToggle" class="flex items-center justify-center p-1.5 rounded-md text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition" title="✦ AI 面板 (⌘⇧A)" aria-label="切换 AI 面板" aria-expanded="false" aria-controls="aiPanel">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Content scroll (now single column — thread moved to right panel) -->
+    <div class="flex-1 overflow-y-auto scrollbar-thin">
+      <div class="px-8 py-6 max-w-[820px]">
+
+        <!-- Subject + contextual language banner -->
+        <div class="flex items-start gap-3 mb-1.5">
+          <span class="lang-pip mt-2 shrink-0" style="font-size: 11px; padding: 3px 6px;">EN</span>
+          <h1 class="text-subj font-semibold text-ink-fg leading-snug tracking-tight flex-1">
+            [Alert] MailAgent prod: <code class="font-mono bg-fail/10 text-fail px-1.5 py-0.5 rounded text-[18px]">TimeoutError</code> (Notion API rate limit) in <code class="font-mono text-ink-fg-1 text-[18px]">handle_ai_reviewed</code>
+          </h1>
+        </div>
+        <!-- One-tap translate inline (close to subject, where the eye lands) -->
+        <button class="mb-5 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-coral border border-coral/30 bg-coral/10 hover:bg-coral/15 transition">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+          <span data-i18n="detail.translateInline">一键翻译此邮件为中文</span>
+        </button>
+
+        <!-- header meta block -->
+        <div class="mt-1 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux">
+          <span class="text-ink-fg-2 font-mono">From</span>
+          <span class="text-ink-fg"><span class="font-medium">Sentry</span> <span class="text-ink-fg-2">&lt;alerts@sentry.io&gt;</span></span>
+          <span class="text-ink-fg-2 font-mono">To</span>
+          <span class="text-ink-fg-1">me@chenge.ink, <span class="text-ink-fg-2">oncall@chenge.ink</span></span>
+          <!-- Meta labels (From/To/Date/Mailbox/Thread) are English-mono per §3.3 — stay across locales. -->
+          <span class="text-ink-fg-2 font-mono">Date</span>
+          <span class="text-ink-fg-1 font-mono">2026-05-16 14:23:08 GMT+8 · <span class="text-ink-fg-2" data-i18n="detail.relTimeAgo" data-i18n-n="14">14 分钟前</span></span>
+          <span class="text-ink-fg-2 font-mono">Mailbox</span>
+          <span class="text-ink-fg-1 flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-coral"></span> chenge.ink
+          </span>
+          <span class="text-ink-fg-2 font-mono">Thread</span>
+          <span class="text-ink-fg-1">
+            <a href="#" class="text-coral hover:text-coral-hover" data-i18n="detail.threadCount" data-i18n-n="4">本对话 4 封</a>
+            <span class="text-ink-fg-2 ml-2">· internal_id 8472</span>
+          </span>
+        </div>
+
+        <!-- AI fields block — 11 fields, hierarchy: Summary → signal pills → meta grid
+             Uses .ai-fields/.aif-* so each tile is translucent (§2.8 inner
+             content tile recipe) rather than solid ink-2/3 — that's what
+             lets the glass-3 pane read AS glass behind it. -->
+        <div class="ai-fields mt-6 border border-ink-border rounded-lg overflow-hidden">
+          <div class="aif-head px-4 py-2 border-b border-ink-border flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <svg class="text-info" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+              <span class="text-meta font-mono uppercase tracking-wider text-ink-fg-1">AI Fields · 11</span>
+              <span class="text-micro font-mono text-ok bg-ok/12 border border-ok/30 px-1.5 py-0.5 rounded">Reviewed</span>
+            </div>
+            <div class="text-meta font-mono text-ink-fg-1">claude-3.5-sonnet</div>
+          </div>
+
+          <!-- Summary — hero, full width, warm accent so the eye lands here first -->
+          <div class="aif-summary px-4 py-3 border-b border-ink-border bg-coral/[0.06]">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-1 h-1 rounded-full bg-coral"></span>
+              <span class="text-micro font-mono uppercase tracking-wider text-coral">Summary</span>
+            </div>
+            <div class="text-body text-ink-fg leading-snug">handle_ai_reviewed 调 notion.pages.update 超 30s，Notion 当前 API rate limited (3 req/s)。建议短期 backoff + 长期上 batch endpoint。</div>
+          </div>
+
+          <!-- Signal row — the 4 fields that drive action (Priority / Action / Due / Sender) -->
+          <div class="aif-signals px-4 py-2.5 border-b border-ink-border flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <span class="inline-flex items-center gap-1.5 text-aux text-urg font-medium">
+              <span class="w-1.5 h-1.5 rounded-full bg-urg"></span> Urgent
+            </span>
+            <span class="text-ink-fg-3">·</span>
+            <span class="text-aux text-ink-fg">Reply Needed</span>
+            <span class="text-ink-fg-3">·</span>
+            <span class="inline-flex items-center gap-1.5 text-aux text-urg font-mono">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              Due 今天 18:00
+            </span>
+            <span class="text-ink-fg-3">·</span>
+            <span class="inline-flex items-center gap-1.5 text-aux text-impt">
+              <span class="w-1.5 h-1.5 rounded-full bg-impt"></span> Sender · Important
+            </span>
+          </div>
+
+          <!-- Meta grid — the remaining 6 classification fields, dense 3-col -->
+          <div class="aif-grid grid grid-cols-3 gap-px">
+            <div class="aif-cell px-4 py-2.5">
+              <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Category</div>
+              <div class="mt-0.5 text-aux text-ink-fg-1 truncate">告警 · 系统监控</div>
+            </div>
+            <div class="aif-cell px-4 py-2.5">
+              <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Project</div>
+              <div class="mt-0.5 text-aux text-ink-fg-1 truncate">MailAgent · v4 SSoT</div>
+            </div>
+            <div class="aif-cell px-4 py-2.5">
+              <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Sentiment</div>
+              <div class="mt-0.5 text-aux text-ink-fg-1 truncate">中性 · 工单</div>
+            </div>
+            <div class="aif-cell px-4 py-2.5">
+              <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Language</div>
+              <div class="mt-0.5 text-aux font-mono text-ink-fg-1">en</div>
+            </div>
+            <div class="aif-cell px-4 py-2.5">
+              <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Action Items</div>
+              <div class="mt-0.5 text-aux text-ink-fg-1">是 · <span class="font-mono">3</span></div>
+            </div>
+            <div class="aif-cell px-4 py-2.5">
+              <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Daily Digest</div>
+              <div class="mt-0.5 text-aux text-coral hover:text-coral-hover"><a href="#">2026-05-16 ↗</a></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mail body -->
+        <div class="mt-7 mail-body">
+          <p>A new event <strong>TimeoutError: HTTPSConnectionPool(host='api.notion.com')</strong> just hit your project <code>mailagent-prod</code>.</p>
+          <h2>Event details</h2>
+          <p>This is the 12th occurrence of this fingerprint in the last 1 hour. It is currently <strong>regressing</strong> — last seen as resolved on 2026-04-22 in release <code>v4.3.1</code>.</p>
+          <pre><span class="key">File</span>  src/events/handlers.py, line <span class="num">218</span>, in handle_ai_reviewed
+    notion.pages.update(page_id=meta.notion_page_id, properties=props)
+<span class="key">File</span>  src/notion/client.py, line <span class="num">94</span>, in update
+    return self._http.post(url, json=body, timeout=<span class="num">30</span>)
+<span class="key">File</span>  httpx/_client.py, line <span class="num">1845</span>, in post
+    raise <span class="err">ReadTimeout</span>("The read operation timed out")
+
+<span class="err">httpx.ReadTimeout: timed out</span></pre>
+          <h2>Affected requests</h2>
+          <ul>
+            <li><code>page_id=4a8c…d4f1</code> — 3 retries, all timed out</li>
+            <li><code>page_id=7b21…0e9c</code> — 2 retries, then dead_letter</li>
+            <li><code>page_id=ff03…22a8</code> — recovered after 4th retry</li>
+          </ul>
+          <blockquote>This event was matched against your <strong>oncall · backend · p1</strong> alert rule. View it on <a href="#">Sentry</a> · Snooze · Mark as resolved.</blockquote>
+        </div>
+
+        <!-- Attachments -->
+        <div class="mt-8">
+          <div class="flex items-center gap-2 mb-3">
+            <svg class="text-ink-fg-2" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <span class="text-meta font-mono uppercase tracking-wider text-ink-fg-1">Attachments · 2</span>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <a href="#" class="tile flex items-center gap-3 px-3 py-2.5 rounded-md border border-ink-border hover:border-ink-fg-3 transition">
+              <div class="w-9 h-9 rounded-md bg-fail/10 border border-fail/25 grid place-items-center shrink-0">
+                <svg class="text-fail" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-aux text-ink-fg font-medium truncate">stack-trace.log</div>
+                <div class="text-meta font-mono text-ink-fg-2">14.2 KB · text/plain</div>
+              </div>
+              <button class="text-ink-fg-2 hover:text-ink-fg" title="Download"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+            </a>
+            <a href="#" class="tile flex items-center gap-3 px-3 py-2.5 rounded-md border border-ink-border hover:border-ink-fg-3 transition">
+              <div class="w-9 h-9 rounded-md bg-info/10 border border-info/25 grid place-items-center shrink-0">
+                <svg class="text-info" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-aux text-ink-fg font-medium truncate">sentry-screenshot.png</div>
+                <div class="text-meta font-mono text-ink-fg-2">218 KB · image/png</div>
+              </div>
+              <button class="text-ink-fg-2 hover:text-ink-fg" title="Preview"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            </a>
+          </div>
+        </div>
+
+        <div class="mt-8 pt-5 border-t border-ink-border-soft flex items-center justify-between text-aux">
+          <div class="flex items-center gap-2 text-ink-fg-2">
+            <span class="text-meta font-mono">internal_id 8472 · message_id 04a31f…</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button class="text-aux text-ink-fg-1 hover:text-ink-fg transition" data-i18n="detail.viewSource">查看原文 (.eml)</button>
+            <span class="text-ink-fg-3">·</span>
+            <button class="text-aux text-coral hover:text-coral-hover transition" data-i18n="detail.openInNotion">在 Notion 打开 ↗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──── RIGHT PANEL · 360px ──────────────────────────────────────── -->
+  <!--    Tabs: ✦ AI (default) · Thread (4) · Sync                      -->
+  <!--    Collapsed by default; toggled via the ✦ button in the detail  -->
+  <!--    toolbar (right cluster). Close button below restores hidden.   -->
+  <aside id="aiPanel" class="w-[360px] shrink-0 border-l border-ink-border/60 flex flex-col ai-bg hidden">
+
+    <!-- Tab bar -->
+    <div class="h-10 border-b border-ink-border flex items-center px-1 shrink-0">
+      <button class="tab-active flex items-center gap-1.5 px-3 py-2 text-aux font-medium">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+        AI
+      </button>
+      <button class="flex items-center gap-1.5 px-3 py-2 text-aux text-ink-fg-1 hover:text-ink-fg transition">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        Thread
+        <span class="text-micro font-mono text-ink-fg-2">4</span>
+      </button>
+      <button class="flex items-center gap-1.5 px-3 py-2 text-aux text-ink-fg-1 hover:text-ink-fg transition">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+        Sync
+      </button>
+      <div class="ml-auto pr-1 flex items-center gap-1">
+        <button class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-4" title="New AI conversation (⌘N)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-4" title="History">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        </button>
+        <div class="w-px h-4 bg-ink-border mx-0.5"></div>
+        <button id="aiPanelClose" class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-4" title="收起 AI 面板 (⌘⇧A)" aria-label="收起 AI 面板">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Backend selector (Notion Agent / Custom API) -->
+    <div class="px-3 py-2.5 border-b border-ink-border-soft">
+      <button class="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md bg-ink-3 border border-ink-border hover:border-ink-fg-3 transition group">
+        <span class="w-7 h-7 rounded-md bg-coral/15 border border-coral/30 grid place-items-center shrink-0">
+          <svg class="text-coral" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+        </span>
+        <div class="min-w-0 flex-1 text-left">
+          <div class="flex items-center gap-1.5">
+            <span class="text-body text-ink-fg font-medium truncate">Notion Agent · Jarvis</span>
+            <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+          </div>
+          <div class="text-meta font-mono text-ink-fg-2 truncate">notion-agent-cli · token_v2 · persona_overlay</div>
+        </div>
+        <svg class="text-ink-fg-2 group-hover:text-ink-fg shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
+
+    <!-- Context chips — what the AI can see right now -->
+    <div class="px-3 py-2 border-b border-ink-border-soft flex items-center gap-1.5 flex-wrap text-meta">
+      <!-- "Ctx" stays English mono — §3.3 section-header convention. -->
+      <span class="font-mono uppercase tracking-wider text-ink-fg-2 mr-0.5">Ctx</span>
+      <span class="font-mono px-1.5 py-0.5 rounded text-ink-fg-1 bg-ink-3 border border-ink-border-soft" data-i18n="ai.context.mail">邮件全文</span>
+      <span class="font-mono px-1.5 py-0.5 rounded text-ink-fg-1 bg-ink-3 border border-ink-border-soft" data-i18n="ai.context.fields">AI 11 fields</span>
+      <span class="font-mono px-1.5 py-0.5 rounded text-ink-fg-1 bg-ink-3 border border-ink-border-soft" data-i18n="ai.context.thread" data-i18n-n="4">Thread · 4</span>
+      <span class="font-mono px-1.5 py-0.5 rounded text-ok bg-ok/10 border border-ok/25" data-i18n="ai.context.notion" data-i18n-n="2">Notion · 2 项目</span>
+    </div>
+
+    <!-- Conversation scroll -->
+    <div class="flex-1 overflow-y-auto scrollbar-thin px-3 py-3 space-y-4">
+
+      <!-- system divider -->
+      <div class="flex items-center gap-2 text-meta font-mono text-ink-fg-3">
+        <div class="flex-1 h-px bg-ink-border-soft"></div>
+        <span>2026-05-16 14:24 · ctx 4.2k</span>
+        <div class="flex-1 h-px bg-ink-border-soft"></div>
+      </div>
+
+      <!-- user msg #1 -->
+      <div class="flex justify-end">
+        <div class="max-w-[85%] bg-ink-4 px-3 py-2 rounded-lg rounded-br-sm text-body text-ink-fg leading-snug">
+          总结这封邮件，附 3 条行动项，关联 Notion 里现有的项目。
+        </div>
+      </div>
+
+      <!-- assistant msg #1 -->
+      <div class="space-y-2">
+        <div class="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+          <svg class="text-coral" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+          <span>Notion Agent · Jarvis</span>
+          <span class="text-ink-fg-3">·</span>
+          <span>2.4s · $0.0034</span>
+        </div>
+        <!-- tool calls -->
+        <div class="space-y-1">
+          <div class="ai-tool-row">
+            <span class="dot-ok"></span>
+            <span class="arrow">→</span>
+            <span>notion-agent agents route "处理告警"</span>
+            <span class="text-ink-fg-3">·</span>
+            <span>0.4s</span>
+          </div>
+          <div class="ai-tool-row">
+            <span class="dot-ok"></span>
+            <span class="arrow">→</span>
+            <span>notion.databases.query Projects [✓ 2]</span>
+            <span class="text-ink-fg-3">·</span>
+            <span>0.8s</span>
+          </div>
+          <div class="ai-tool-row">
+            <span class="dot-ok"></span>
+            <span class="arrow">→</span>
+            <span>read mail#8472 body + 11 ai_fields</span>
+            <span class="text-ink-fg-3">·</span>
+            <span>cached</span>
+          </div>
+        </div>
+        <!-- response body -->
+        <div class="text-body text-ink-fg leading-relaxed pt-1">
+          Sentry 告警显示 <span class="font-mono text-urg">handle_ai_reviewed</span> 在调用 Notion 时连续 12 次超过 30s 读超时；上次回归发生在 v4.3.1 (4/22)。当前 Notion API 限速 3 req/s，瓶颈是逐条 update 而不是 batch。
+        </div>
+        <!-- action item cards -->
+        <div class="space-y-1.5 pt-1">
+          <a href="#" class="block px-2.5 py-2 rounded-md bg-ink-3 border border-ink-border-soft hover:border-ink-fg-3 transition">
+            <div class="flex items-start gap-2">
+              <span class="text-micro font-mono text-coral mt-0.5">01</span>
+              <div class="min-w-0 flex-1">
+                <div class="text-aux text-ink-fg leading-snug">短期：给 notion.pages.update 加 exponential backoff (3 → 9 → 27s)</div>
+                <div class="mt-1 flex items-center gap-2 text-meta font-mono text-ink-fg-2">
+                  <span class="text-ok">↗ MailAgent · v4 SSoT</span>
+                  <span class="text-ink-fg-3">·</span>
+                  <span>est. 2h</span>
+                </div>
+              </div>
+            </div>
+          </a>
+          <a href="#" class="block px-2.5 py-2 rounded-md bg-ink-3 border border-ink-border-soft hover:border-ink-fg-3 transition">
+            <div class="flex items-start gap-2">
+              <span class="text-micro font-mono text-coral mt-0.5">02</span>
+              <div class="min-w-0 flex-1">
+                <div class="text-aux text-ink-fg leading-snug">长期：迁到 notion.pages.batchUpdate (内测) — 把 47 条/分钟降到 4 条</div>
+                <div class="mt-1 flex items-center gap-2 text-meta font-mono text-ink-fg-2">
+                  <span class="text-ok">↗ MailAgent · 性能优化 Q2</span>
+                  <span class="text-ink-fg-3">·</span>
+                  <span>est. 1d</span>
+                </div>
+              </div>
+            </div>
+          </a>
+          <a href="#" class="block px-2.5 py-2 rounded-md bg-ink-3 border border-ink-border-soft hover:border-ink-fg-3 transition">
+            <div class="flex items-start gap-2">
+              <span class="text-micro font-mono text-coral mt-0.5">03</span>
+              <div class="min-w-0 flex-1">
+                <div class="text-aux text-ink-fg leading-snug">监控：把 dead_letter 阈值从 5 调到 3，触发飞书加红色告警</div>
+                <div class="mt-1 flex items-center gap-2 text-meta font-mono text-ink-fg-2">
+                  <span class="text-ink-fg-1">↗ 待关联</span>
+                  <span class="text-ink-fg-3">·</span>
+                  <span>est. 20m</span>
+                </div>
+              </div>
+            </div>
+          </a>
+        </div>
+        <!-- per-msg footer actions -->
+        <div class="flex items-center gap-2 pt-1 text-meta font-mono text-ink-fg-2">
+          <button class="hover:text-ink-fg transition">↺ 重生成</button>
+          <span class="text-ink-fg-3">·</span>
+          <button class="hover:text-ink-fg transition">📋 复制</button>
+          <span class="text-ink-fg-3">·</span>
+          <button class="hover:text-ink-fg transition">📌 转 Notion</button>
+        </div>
+      </div>
+
+      <!-- user msg #2 -->
+      <div class="flex justify-end">
+        <div class="max-w-[85%] bg-ink-4 px-3 py-2 rounded-lg rounded-br-sm text-body text-ink-fg leading-snug">
+          起草回复给 oncall · 中文 · 简短 · 直接报已加 backoff，长期方案 follow up。
+        </div>
+      </div>
+
+      <!-- assistant msg #2 — STREAMING -->
+      <div class="space-y-2">
+        <div class="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+          <svg class="text-coral animate-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          <span>Notion Agent · drafting…</span>
+          <span class="text-ink-fg-3">·</span>
+          <span>1.1s · streaming</span>
+        </div>
+        <div class="ai-tool-row">
+          <span class="dot-run"></span>
+          <span class="arrow">→</span>
+          <span>drafting reply · 中文 · ≤3 段</span>
+        </div>
+
+        <!-- Draft preview card (coral ring — this IS the primary AI output) -->
+        <div class="draft-card rounded-md overflow-hidden">
+          <div class="px-3 py-2 border-b border-ink-border-soft flex items-center justify-between bg-ink-2/40">
+            <div class="flex items-center gap-1.5">
+              <svg class="text-coral" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+              <span class="text-meta font-mono uppercase tracking-wider text-ink-fg-1">Draft Reply</span>
+            </div>
+            <span class="text-meta font-mono text-ink-fg-2">to: oncall@chenge.ink</span>
+          </div>
+          <div class="px-3 py-2.5 text-aux text-ink-fg space-y-2">
+            <div class="text-ink-fg-1">Subject: <span class="text-ink-fg">Re: [Alert] MailAgent prod TimeoutError — 已加 backoff</span></div>
+            <div class="leading-relaxed">
+              Hi oncall —<br>
+              已经把 <span class="font-mono text-urg">notion.pages.update</span> 的 exponential backoff (3→9→27s) 加上，prod 已部署 <span class="font-mono text-ink-fg-1">v4.3.2</span>。最近一小时没新 dead_letter。<br>
+              长期方案 (batch endpoint) 排到 <span class="text-coral">MailAgent · 性能优化 Q2</span>，预计本周内出第一版补丁<span class="cursor-blink"></span>
+            </div>
+          </div>
+          <div class="px-3 py-2 border-t border-ink-border-soft bg-ink-2/40 flex items-center gap-2">
+            <button class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-aux text-white bg-coral hover:bg-coral-hover transition">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              发送
+            </button>
+            <button class="px-2 py-1.5 rounded text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition">↺ 重生成</button>
+            <button class="px-2 py-1.5 rounded text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition">✎ 编辑</button>
+            <button class="ml-auto px-2 py-1.5 rounded text-aux text-ink-fg-2 hover:text-ink-fg transition">▭ 在新窗口</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick action chips -->
+    <div class="px-3 py-2 border-t border-ink-border-soft flex items-center gap-1.5 flex-wrap">
+      <button class="qchip">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>
+        <span data-i18n="ai.qa.summarize">总结</span>
+      </button>
+      <button class="qchip">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        <span data-i18n="ai.qa.draft">起草回复</span>
+      </button>
+      <button class="qchip">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/></svg>
+        <span data-i18n="ai.qa.translate">翻译</span>
+      </button>
+      <button class="qchip">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span data-i18n="ai.qa.extract">提取动作项</span>
+      </button>
+      <button class="qchip">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        <span data-i18n="ai.qa.linkNotion">关联 Notion</span>
+      </button>
+    </div>
+
+    <!-- Composer -->
+    <div class="border-t border-ink-border bg-ink-2 p-2.5">
+      <div class="rounded-md bg-ink-3 border border-ink-border focus-within:border-coral/50 transition">
+        <div class="px-3 pt-2.5 pb-1">
+          <textarea
+            rows="2"
+            placeholder="/命令 或对这封邮件提问… (⌘↩ 发送)"
+            data-i18n-attr="placeholder:ai.composer.placeholder"
+            class="w-full bg-transparent resize-none outline-none text-body text-ink-fg placeholder:text-ink-fg-3 leading-snug"></textarea>
+        </div>
+        <div class="flex items-center gap-0.5 px-2 py-1.5 border-t border-ink-border-soft">
+          <button class="w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 grid place-items-center transition" title="附件" aria-label="附件">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <button class="w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 grid place-items-center transition" title="@提及 上下文" aria-label="@提及 上下文">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
+          </button>
+          <button class="w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 grid place-items-center transition" title="切换模型 · claude-3.5" aria-label="切换模型">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>
+          </button>
+          <span class="ml-auto flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+            <span>Jarvis</span>
+            <kbd>⌘↩</kbd>
+          </span>
+          <button class="ml-1 w-7 h-7 rounded-md bg-ink-4 hover:bg-coral text-ink-fg-1 hover:text-white grid place-items-center transition" title="Send (⌘↩)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     BATCH ACTION BAR — floating (DESIGN.md §6.8 · revised 2026-05-18)
+     Appears ONLY when ≥1 row is selected. Lives outside <main> as a
+     fixed-position floating panel so it never overlaps the left nav;
+     its `left` offset is bound to `--app-nav-w` and synced from the
+     nav's data-collapsed state by the script at the bottom.
+═══════════════════════════════════════════════════════════════════════ -->
+<div
+  id="batch-bar"
+  class="floating flex items-center gap-2 whitespace-nowrap"
+  role="toolbar"
+  aria-label="批量操作"
+>
+  <!-- selection count + clear -->
+  <div class="flex items-center gap-2">
+    <span class="w-7 h-7 rounded-md bg-coral/15 border border-coral/30 grid place-items-center">
+      <span class="text-meta font-mono font-semibold text-coral" data-batch-count>0</span>
+    </span>
+    <span class="text-aux text-ink-fg" data-i18n="batch.selected" data-i18n-n="0">已选 0 封</span>
+    <button id="batch-select-all" class="text-aux text-ink-fg-2 hover:text-ink-fg transition px-1" data-i18n="batch.selectAll" data-i18n-n="184">选全部 184 封</button>
+    <button id="batch-clear" class="text-aux text-ink-fg-2 hover:text-ink-fg transition px-1" data-i18n="batch.clear">清除</button>
+  </div>
+
+  <div class="w-px h-5 bg-ink-border mx-1"></div>
+
+  <!-- Batch ops: mark read · flag · mark done · archive -->
+  <button class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5 12 14l9-5.5"/><path d="M3 8.5v9A1.5 1.5 0 0 0 4.5 19h15a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="m3 8.5 9-5.5 9 5.5"/></svg>
+    <span data-i18n="batch.markRead">标记已读</span>
+  </button>
+  <button class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V4h12l-2 4 2 4H4"/></svg>
+    <span data-i18n="batch.toggleFlag">旗标 / 取消</span>
+  </button>
+  <button class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="8 12 11 15 16 9"/></svg>
+    <span data-i18n="batch.markDone">标记完成</span>
+  </button>
+  <button class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+    <span data-i18n="batch.archive">归档</span>
+  </button>
+
+  <div class="w-px h-5 bg-ink-border mx-1 ml-auto"></div>
+
+  <kbd>Esc</kbd>
+  <button id="batch-exit" type="button" class="text-ink-fg-2 hover:text-ink-fg p-1.5 rounded transition hover:bg-ink-3 grid place-items-center" title="退出批量模式 (Esc)" aria-label="退出批量" data-i18n-attr="title:batch.exitTooltip,aria-label:batch.exitAria">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Bottom status bar (24px)
+═══════════════════════════════════════════════════════════════════════ -->
+<footer class="glass h-statusbar border-t border-ink-border/60 text-meta font-mono text-ink-fg-2 flex items-center px-3 gap-3 shrink-0 select-none">
+  <span class="flex items-center gap-1.5 cursor-help" title="mail-sync · online&#10;pm2 pid 41872&#10;上次同步 11:32:08&#10;SQLite · 6,184 rows · 38 MB&#10;FTS5 · index synced">
+    <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+    mail-sync
+  </span>
+  <span class="text-ink-fg-3">|</span>
+  <span class="cursor-help" title="LLM · cache hit 87.1%&#10;p95 412ms&#10;model claude-3.5">llm <span class="text-ok">87%</span></span>
+  <span class="text-ink-fg-3">|</span>
+  <span class="flex items-center gap-1.5 cursor-help" title="Dynamic Island · v0.4.1 · idle&#10;v4 rollout 100%">
+    <span class="w-1.5 h-1.5 rounded-full bg-coral"></span>
+    Island
+  </span>
+  <span class="ml-auto flex items-center gap-3">
+    <span class="cursor-help" title="5 条失败任务待复查 · 点击查看">dead_letter <span class="text-fail">5</span></span>
+    <span class="text-ink-fg-3">|</span>
+    <span class="cursor-help" title="build 0.1.0-dev · 2026-05-16">0.1.0-dev</span>
+  </span>
+</footer>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Toast (sample state) — true top-right of viewport, dismissible
+═══════════════════════════════════════════════════════════════════════ -->
+<div id="ai-toast" class="fixed top-12 right-6 w-[320px] z-50 pointer-events-none transition-all duration-200 ease-out">
+  <div class="pointer-events-auto glass-pop border border-ok/30 rounded-md overflow-hidden">
+    <div class="flex items-start gap-3 p-3">
+      <div class="w-6 h-6 rounded-full bg-ok/15 border border-ok/30 grid place-items-center shrink-0">
+        <svg class="text-ok" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="text-aux text-ink-fg font-medium" data-i18n="toast.aiUpdated">AI 字段已更新</div>
+        <div class="text-meta text-ink-fg-2 mt-0.5">internal_id 8472 · 11 fields · <span class="font-mono">387ms</span> · <span class="text-ok">claude-3.5</span></div>
+      </div>
+      <button
+        type="button"
+        aria-label="关闭通知"
+        data-i18n-attr="aria-label:toast.dismiss"
+        onclick="(function(b){var t=document.getElementById('ai-toast');t.style.opacity='0';t.style.transform='translateY(-6px)';setTimeout(function(){t.remove();},180);})(this)"
+        class="shrink-0 w-6 h-6 -m-1 grid place-items-center rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3/60 transition">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="h-0.5 bg-ok/30">
+      <div class="h-full bg-ok" style="width: 38%;"></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     THEME · accent picker wiring
+     Production: this lives in Electron main process state and broadcasts
+     to the SwiftUI Island over a unix-socket. Mockup version persists in
+     localStorage; the Island mockup reads the same key, so opening both
+     in browser tabs and switching here updates the island too on refresh.
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+  /* ─── i18n (zh-CN / en) ───────────────────────────────────────────
+     DESIGN.md §2.10 contract. The dictionary lives inline so the
+     mockup is self-contained; production splits it into
+     src/i18n/{locale}/{namespace}.json modules.
+
+     What this IIFE owns:
+       - I18N_DICT — string table for both locales.
+       - applyLocale(loc) — walks data-i18n / data-i18n-attr nodes
+         and rewrites text + attribute content. Skips subtrees
+         tagged data-i18n-skip (used to opt out email-content
+         regions that should stay in source language).
+       - Title-bar globe toggle + ⌥G shortcut + localStorage.
+
+     Conventions enforced by §2.10:
+       - Section headers (`MAILBOXES`, `AI FIELDS · 11`) stay English
+         UPPERCASE mono in both locales — they have no data-i18n.
+       - lang-pip (`EN` / `中` on email rows) is content-language
+         and never flips with UI locale.
+       - Email subject / body / sender / AI-generated text are
+         user data — they have no data-i18n attribute either. */
+  (function () {
+    const KEY_LOCALE = 'mailagent.locale';
+    const DEFAULT_LOC = 'zh-CN';
+
+    const I18N_DICT = {
+      'zh-CN': {
+        'titleBar.docTitle':     'MailAgent · 收件箱',
+        'titleBar.searchHint':   '搜索 / 跳转',
+        'titleBar.localeTooltip':'切换语言 (⌥G)',
+        'titleBar.localeAria':   '切换语言',
+        'titleBar.themeTooltip': '切换浅色 / 深色 (⌥L)',
+        'titleBar.themeAria':    '切换主题',
+        'titleBar.accentTooltip':'强调色 (查看 → 外观)',
+        'titleBar.accentAria':   '强调色',
+        'titleBar.syncTooltip':  '最近同步 14:32:08',
+        'status.synced':         '已同步',
+        'popover.accentTitle':   '强调色',
+        'popover.accentNote':    '影响工具栏 · 选中行 · 状态芯片 · Island 强调色。仅本地保存。',
+        'nav.inbox':             '收件箱',
+        'nav.outbox':            '发件箱',
+        'nav.flagged':           '已标旗',
+        'nav.allMail':           '所有邮件',
+        'nav.aiSessions':        'AI 会话历史',
+        'ops.admin':             '看板 Admin',
+        'ops.cacheLowTooltip':   '缓存命中率偏低',
+        'bottom.settings':       '设置',
+        'bottom.shortcuts':      '快捷键',
+        'list.title':            '收件箱',
+        'list.tab.focused':      '重点',
+        'list.tab.other':        '其他',
+        'list.meta.selected':    '{n} 已选',
+        'list.meta.unread':      '{n} 未读',
+        'list.meta.total':       '总计 {n}',
+        'list.filter.unread':    '未读',
+        'list.filter.flagged':   '已标旗',
+        'list.filter.attach':    '附件',
+        'list.sort.latest':      '最新',
+        'list.footer.endOfList': '已到列表底',
+        'list.footer.loadMore':  '加载更多',
+        'toolbar.back':          '返回 (Esc)',
+        'toolbar.draft':         '✦ 起草回复',
+        'toolbar.draftTooltip':  '✦ 起草回复 (⌘⏎)',
+        'toolbar.translate':     '一键翻译',
+        'toolbar.translateTooltip':'一键翻译 (⌥T)',
+        'toolbar.markRead':      '标为已读',
+        'toolbar.markReadTooltip':'标为已读 (R)',
+        'toolbar.flag':          '切换标旗',
+        'toolbar.flagTooltip':   '切换标旗 (F)',
+        'toolbar.archive':       '归档',
+        'toolbar.archiveTooltip':'归档 (E)',
+        'toolbar.retryNotion':   '重传 Notion',
+        'toolbar.rerunAI':       'AI 重跑分类',
+        'toolbar.rerunAITooltip':'AI 重跑分类',
+        'toolbar.openNotion':    '在 Notion 中打开',
+        'toolbar.prevTooltip':   '上一封 (K)',
+        'toolbar.nextTooltip':   '下一封 (J)',
+        'toolbar.more':          '更多',
+        'detail.translateInline':'一键翻译此邮件为中文',
+        'detail.threadCount':    '本对话 {n} 封',
+        'detail.relTimeAgo':     '{n} 分钟前',
+        'detail.viewSource':     '查看原文 (.eml)',
+        'detail.openInNotion':   '在 Notion 打开 ↗',
+        'ai.context.mail':       '邮件全文',
+        'ai.context.fields':     'AI · 11 fields',
+        'ai.context.thread':     'Thread · {n}',
+        'ai.context.notion':     'Notion · {n} 项目',
+        'ai.qa.summarize':       '总结',
+        'ai.qa.draft':           '起草回复',
+        'ai.qa.translate':       '翻译',
+        'ai.qa.extract':         '提取动作项',
+        'ai.qa.linkNotion':      '关联 Notion',
+        'ai.composer.placeholder':'/命令 或对这封邮件提问… (⌘↩ 发送)',
+        'batch.selected':        '已选 {n} 封',
+        'batch.selectAll':       '选全部 {n} 封',
+        'batch.clear':           '清除',
+        'batch.markRead':        '标记已读',
+        'batch.toggleFlag':      '旗标 / 取消',
+        'batch.markDone':        '标记完成',
+        'batch.archive':         '归档',
+        'batch.exitTooltip':     '退出批量 (Esc)',
+        'batch.exitAria':        '退出批量',
+        'toast.aiUpdated':       'AI 字段已更新',
+        'toast.dismiss':         '关闭通知',
+      },
+      'en': {
+        'titleBar.docTitle':     'MailAgent · Inbox',
+        'titleBar.searchHint':   'Search / Jump',
+        'titleBar.localeTooltip':'Switch language (⌥G)',
+        'titleBar.localeAria':   'Switch language',
+        'titleBar.themeTooltip': 'Toggle light / dark (⌥L)',
+        'titleBar.themeAria':    'Toggle theme',
+        'titleBar.accentTooltip':'Accent color (View → Appearance)',
+        'titleBar.accentAria':   'Accent color',
+        'titleBar.syncTooltip':  'Last sync 14:32:08',
+        'status.synced':         'Synced',
+        'popover.accentTitle':   'Accent Color',
+        'popover.accentNote':    'Affects toolbar · chips · selected row · Island accent. Stored locally.',
+        'nav.inbox':             'Inbox',
+        'nav.outbox':            'Outbox',
+        'nav.flagged':           'Flagged',
+        'nav.allMail':           'All Mail',
+        'nav.aiSessions':        'AI Sessions',
+        'ops.admin':             'Admin',
+        'ops.cacheLowTooltip':   'Cache hit rate is low',
+        'bottom.settings':       'Settings',
+        'bottom.shortcuts':      'Shortcuts',
+        'list.title':            'Inbox',
+        'list.tab.focused':      'Focused',
+        'list.tab.other':        'Other',
+        'list.meta.selected':    '{n} selected',
+        'list.meta.unread':      '{n} unread',
+        'list.meta.total':       '{n} total',
+        'list.filter.unread':    'Unread',
+        'list.filter.flagged':   'Flagged',
+        'list.filter.attach':    'Attachments',
+        'list.sort.latest':      'Latest',
+        'list.footer.endOfList': 'end of list',
+        'list.footer.loadMore':  'load more',
+        'toolbar.back':          'Back (Esc)',
+        'toolbar.draft':         '✦ Draft Reply',
+        'toolbar.draftTooltip':  '✦ Draft Reply (⌘⏎)',
+        'toolbar.translate':     'Translate',
+        'toolbar.translateTooltip':'Translate (⌥T)',
+        'toolbar.markRead':      'Mark as Read',
+        'toolbar.markReadTooltip':'Mark as Read (R)',
+        'toolbar.flag':          'Toggle Flag',
+        'toolbar.flagTooltip':   'Toggle Flag (F)',
+        'toolbar.archive':       'Archive',
+        'toolbar.archiveTooltip':'Archive (E)',
+        'toolbar.retryNotion':   'Retry Notion',
+        'toolbar.rerunAI':       'Re-run AI Classify',
+        'toolbar.rerunAITooltip':'Re-run AI Classify',
+        'toolbar.openNotion':    'Open in Notion',
+        'toolbar.prevTooltip':   'Previous (K)',
+        'toolbar.nextTooltip':   'Next (J)',
+        'toolbar.more':          'More',
+        'detail.translateInline':'Translate this email to Chinese',
+        'detail.threadCount':    '{n} in this thread',
+        'detail.relTimeAgo':     '{n} min ago',
+        'detail.viewSource':     'View source (.eml)',
+        'detail.openInNotion':   'Open in Notion ↗',
+        'ai.context.mail':       'Mail Body',
+        'ai.context.fields':     'AI · 11 fields',
+        'ai.context.thread':     'Thread · {n}',
+        'ai.context.notion':     'Notion · {n} projects',
+        'ai.qa.summarize':       'Summarize',
+        'ai.qa.draft':           'Draft Reply',
+        'ai.qa.translate':       'Translate',
+        'ai.qa.extract':         'Extract Actions',
+        'ai.qa.linkNotion':      'Link Notion',
+        'ai.composer.placeholder':'/command or ask about this email… (⌘↩ to send)',
+        'batch.selected':        '{n} selected',
+        'batch.selectAll':       'Select all {n}',
+        'batch.clear':           'Clear',
+        'batch.markRead':        'Mark Read',
+        'batch.toggleFlag':      'Flag / Unflag',
+        'batch.markDone':        'Mark Done',
+        'batch.archive':         'Archive',
+        'batch.exitTooltip':     'Exit batch mode (Esc)',
+        'batch.exitAria':        'Exit batch',
+        'toast.aiUpdated':       'AI fields updated',
+        'toast.dismiss':         'Dismiss',
+      },
+    };
+    /* Expose for cross-IIFE access (theme/accent broadcasts to Island
+       want to attach the locale too in production wiring). */
+    window.__I18N_DICT = I18N_DICT;
+
+    const root  = document.documentElement;
+    const btn   = document.getElementById('locale-toggle');
+    const label = document.getElementById('locale-label');
+
+    function interp(s, n) {
+      return (n != null) ? String(s).replace('{n}', String(n)) : s;
+    }
+
+    function applyLocale(loc) {
+      if (!I18N_DICT[loc]) loc = DEFAULT_LOC;
+      const dict = I18N_DICT[loc];
+
+      // textContent — every [data-i18n] node, unless under data-i18n-skip.
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        if (el.closest('[data-i18n-skip]')) return;
+        const key = el.getAttribute('data-i18n');
+        if (!dict[key]) return;
+        const n = el.getAttribute('data-i18n-n');
+        el.textContent = interp(dict[key], n);
+      });
+
+      // attributes — title / aria-label / placeholder via
+      // data-i18n-attr="attr:key,attr:key".
+      document.querySelectorAll('[data-i18n-attr]').forEach((el) => {
+        el.getAttribute('data-i18n-attr').split(',').forEach((pair) => {
+          const [attr, key] = pair.split(':').map((s) => s.trim());
+          if (dict[key]) el.setAttribute(attr, dict[key]);
+        });
+      });
+
+      // <title> tag has data-i18n too.
+      const docTitleEl = document.querySelector('title[data-i18n]');
+      if (docTitleEl) {
+        const k = docTitleEl.getAttribute('data-i18n');
+        if (dict[k]) document.title = dict[k];
+      }
+
+      // <html lang> + data-locale + persist + label.
+      root.lang = loc;
+      root.dataset.locale = loc;
+      try { localStorage.setItem(KEY_LOCALE, loc); } catch (e) {}
+      if (label) label.textContent = (loc === 'zh-CN') ? '中文' : 'English';
+    }
+
+    // First-run: stored choice > navigator.language > default.
+    const stored = (function () { try { return localStorage.getItem(KEY_LOCALE); } catch (e) { return null; } })();
+    const nav    = (navigator.language || '').toLowerCase();
+    const initial = stored || (nav.startsWith('zh') ? 'zh-CN' : 'en');
+    applyLocale(initial);
+
+    btn.addEventListener('click', () => {
+      applyLocale(root.dataset.locale === 'zh-CN' ? 'en' : 'zh-CN');
+    });
+    document.addEventListener('keydown', (e) => {
+      // ⌥G — toggle locale. Mnemonic: G as in "globe".
+      if (e.altKey && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        applyLocale(root.dataset.locale === 'zh-CN' ? 'en' : 'zh-CN');
+      }
+    });
+
+    /* Expose so production wiring (or other IIFEs) can re-run after
+       dynamically inserting nodes — e.g. when the batch bar updates
+       the [data-batch-count] number, we re-apply just the batch keys. */
+    window.__applyLocale = applyLocale;
+  })();
+
+  /* ─── Theme (dark / light) ─────────────────────────────────────────
+     The chosen theme is persisted in localStorage and applied as
+     `data-theme="light"` on <html>. Dark is the absence of the
+     attribute (canonical state). If the user has never picked a
+     theme, fall back to the OS preference. Production: this hook
+     also broadcasts to the Island over the unix socket so its
+     materials swap in lock-step. */
+  (function () {
+    const KEY_THEME = 'mailagent.theme';
+    const root      = document.documentElement;
+    const btn       = document.getElementById('theme-toggle');
+    const label     = document.getElementById('theme-label');
+    const iconDark  = document.getElementById('theme-icon-dark');
+    const iconLight = document.getElementById('theme-icon-light');
+
+    function applyTheme(theme) {
+      const isLight = theme === 'light';
+      if (isLight) {
+        root.dataset.theme = 'light';
+        root.classList.remove('dark');
+      } else {
+        delete root.dataset.theme;
+        root.classList.add('dark');
+      }
+      iconDark.classList.toggle('hidden', isLight);
+      iconLight.classList.toggle('hidden', !isLight);
+      label.textContent = isLight ? 'Light' : 'Dark';
+      btn.setAttribute('aria-pressed', String(isLight));
+      try { localStorage.setItem(KEY_THEME, isLight ? 'light' : 'dark'); } catch (e) {}
+    }
+
+    const stored = (function () { try { return localStorage.getItem(KEY_THEME); } catch (e) { return null; } })();
+    const sys    = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    applyTheme(stored || sys);
+
+    btn.addEventListener('click', () => {
+      applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+    });
+    document.addEventListener('keydown', (e) => {
+      // ⌥L — toggle theme. Mirrors macOS's "Control panel" theme switch.
+      if (e.altKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+      }
+    });
+
+    // If the user never explicitly picked, follow OS changes live.
+    if (!stored && window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: light)')
+        .addEventListener('change', (e) => applyTheme(e.matches ? 'light' : 'dark'));
+    }
+  })();
+
+  /* ─── Accent picker (unchanged contract) ─────────────────────────── */
+  (function () {
+    const ACCENTS = {
+      coral:  { hex: '#E5654B', label: 'Coral'  },
+      cobalt: { hex: '#4A78E5', label: 'Cobalt' },
+      teal:   { hex: '#2DB5A6', label: 'Teal'   },
+      rose:   { hex: '#DB5B7C', label: 'Rose'   },
+      slate:  { hex: '#7E8694', label: 'Slate'  },
+      olive:  { hex: '#9CA552', label: 'Olive'  },
+    };
+    const KEY = 'mailagent.accent';
+
+    const btn      = document.getElementById('appearance-btn');
+    const popover  = document.getElementById('theme-popover');
+    const labelEl  = document.getElementById('appearance-label');
+    const swatches = popover.querySelectorAll('[data-accent]');
+
+    function apply(name) {
+      if (!ACCENTS[name]) name = 'coral';
+      if (name === 'coral') document.documentElement.removeAttribute('data-accent');
+      else                  document.documentElement.dataset.accent = name;
+
+      labelEl.textContent = ACCENTS[name].label;
+      // The little dot in the title-bar button mirrors the accent so the
+      // change is visible even when the popover is closed.
+      btn.querySelector('span.inline-block').style.background = ACCENTS[name].hex;
+
+      swatches.forEach(s => {
+        s.setAttribute('aria-checked', s.dataset.accent === name ? 'true' : 'false');
+      });
+      try { localStorage.setItem(KEY, name); } catch (e) {}
+    }
+
+    apply(localStorage.getItem(KEY) || 'coral');
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = !popover.classList.contains('hidden');
+      popover.classList.toggle('hidden', open);
+      btn.setAttribute('aria-expanded', String(!open));
+    });
+
+    swatches.forEach(s => {
+      s.addEventListener('click', () => apply(s.dataset.accent));
+    });
+
+    document.addEventListener('click', (e) => {
+      if (popover.classList.contains('hidden')) return;
+      if (popover.contains(e.target) || btn.contains(e.target)) return;
+      popover.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !popover.classList.contains('hidden')) {
+        popover.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+
+  /* ─── Batch mode ──────────────────────────────────────────────────
+     The batch action bar (DESIGN.md §6.8) is hidden by default and
+     appears as soon as the user selects ≥1 row. Selecting is two-fold:
+       · click the row checkbox → toggle that row only
+       · "选全部 N 封" / "清除" → bulk
+       · Esc / × button → exit batch mode
+     Opening an email (clicking elsewhere in the row) is intentionally
+     left independent of the checkbox state — same convention as Mail.app.
+
+     The selection-count text in the bar is sourced from `[data-batch-count]`
+     so all three places (badge number, "已选 N 封", aria-label) stay in
+     lock-step from a single update path. */
+  (function () {
+    const bar          = document.getElementById('batch-bar');
+    const counts       = bar.querySelectorAll('[data-batch-count]');
+    const selectAllBtn = document.getElementById('batch-select-all');
+    const clearBtn     = document.getElementById('batch-clear');
+    const exitBtn      = document.getElementById('batch-exit');
+    // The "已选 {n} 封" / "选全部 {n} 封" spans use data-i18n + data-i18n-n
+    // (DESIGN.md §2.10) — render() updates data-i18n-n then asks the
+    // locale IIFE to re-interpolate. The plain count badge keeps
+    // data-batch-count for its number-only fast path.
+    const selectedLabel = bar.querySelector('[data-i18n="batch.selected"]');
+    const selectAllLbl  = bar.querySelector('[data-i18n="batch.selectAll"]');
+    // Scope: only checkboxes inside <article class="row"> in the list pane.
+    // The .cb on the email body / draft card etc. would have no row.
+    const rowCheckboxes = () => Array.from(document.querySelectorAll('article.row .cb'));
+
+    function selectedCount() {
+      return rowCheckboxes().filter(cb => cb.classList.contains('cb-on')).length;
+    }
+
+    function render() {
+      const n = selectedCount();
+      counts.forEach(el => { el.textContent = String(n); });
+      if (selectedLabel) selectedLabel.setAttribute('data-i18n-n', String(n));
+      if (window.__applyLocale) {
+        window.__applyLocale(document.documentElement.dataset.locale || 'zh-CN');
+      }
+      // On the batch page the bar is the page's primary affordance — keep
+      // it visible even at 0 selections so the user can always exit. The
+      // primary AI actions dim themselves when nothing is selected.
+      bar.setAttribute('aria-hidden', 'false');
+      bar.classList.toggle('batch-empty', n === 0);
+    }
+
+    // Click a checkbox → toggle. stopPropagation so clicking the box
+    // doesn't also open the email (clicking the row body still opens it).
+    document.addEventListener('click', (e) => {
+      const cb = e.target.closest('article.row .cb');
+      if (!cb) return;
+      e.stopPropagation();
+      e.preventDefault();
+      cb.classList.toggle('cb-on');
+      render();
+    });
+
+    selectAllBtn.addEventListener('click', () => {
+      rowCheckboxes().forEach(cb => cb.classList.add('cb-on'));
+      render();
+    });
+
+    function clearAll() {
+      rowCheckboxes().forEach(cb => cb.classList.remove('cb-on'));
+      render();
+    }
+    clearBtn.addEventListener('click', clearAll);
+
+    // Batch mode toggle. The 批量 button in the list header turns it
+    // ON; the × on the bar (or Esc) turns it OFF and clears any
+    // pending selection so reopening starts from a clean slate.
+    const enterBtn = document.getElementById('batch-enter');
+    function setBatchMode(on) {
+      if (on) {
+        document.body.setAttribute('data-batch-mode', 'true');
+      } else {
+        document.body.removeAttribute('data-batch-mode');
+        clearAll();
+      }
+    }
+    if (enterBtn) enterBtn.addEventListener('click', () => setBatchMode(true));
+    if (exitBtn)  exitBtn .addEventListener('click', () => setBatchMode(false));
+
+    document.addEventListener('keydown', (e) => {
+      // Esc exits batch mode and returns to the normal reading view.
+      // The accent-popover handler earlier in the file runs first and
+      // consumes Esc when its popover is open, so this only fires when
+      // no popover is up.
+      if (e.key === 'Escape' && document.body.getAttribute('data-batch-mode') === 'true') {
+        setBatchMode(false);
+      }
+    });
+
+    render(); // sync with whatever the markup ships pre-checked (demo: 3)
+  })();
+
+  /* ─── Sync floating batch bar offset to nav width ──────────────────
+     The floating bar lives outside <main>, so it can't inherit the
+     sidebar's width via flex. Mirror data-collapsed → --app-nav-w on
+     :root and let CSS handle the calc(). */
+  (function () {
+    const nav = document.querySelector('[data-app-nav]');
+    if (!nav) return;
+    function sync() {
+      const w = nav.getAttribute('data-collapsed') === 'true' ? '56px' : '240px';
+      document.documentElement.style.setProperty('--app-nav-w', w);
+    }
+    sync();
+    new MutationObserver(sync).observe(nav, { attributes: true, attributeFilter: ['data-collapsed'] });
+  })();
+
+  /* ─── App nav collapse ─────────────────────────────────────────────
+     Persists to localStorage["mailagent.nav.collapsed"] ("1"/"0") so
+     the choice survives reloads and is shared across pop-out windows
+     via the `storage` event. ⌥B is a power-user shortcut (B as in
+     "bar"). Reduced-motion is honored at the CSS layer. */
+  (function () {
+    const KEY = 'mailagent.nav.collapsed';
+    const navs = document.querySelectorAll('[data-app-nav]');
+    if (!navs.length) return;
+
+    function apply(val) {
+      const v = val ? 'true' : 'false';
+      navs.forEach(n => n.setAttribute('data-collapsed', v));
+    }
+
+    const stored = (function () { try { return localStorage.getItem(KEY); } catch (e) { return null; } })();
+    apply(stored === '1');
+
+    document.querySelectorAll('[data-app-nav-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cur = navs[0].getAttribute('data-collapsed') === 'true';
+        const next = !cur;
+        apply(next);
+        try { localStorage.setItem(KEY, next ? '1' : '0'); } catch (e) {}
+      });
+    });
+
+    window.addEventListener('storage', e => {
+      if (e.key === KEY) apply(e.newValue === '1');
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        const cur = navs[0].getAttribute('data-collapsed') === 'true';
+        const next = !cur;
+        apply(next);
+        try { localStorage.setItem(KEY, next ? '1' : '0'); } catch (e2) {}
+      }
+    });
+  })();
+
+  /* ─── Account selector dropdown ────────────────────────────────────
+     Clicking the account button (expanded mode) toggles the popover.
+     Clicking the avatar (collapsed mode) expands the nav first — the
+     popover doesn't fit at 56px. Selecting an account dispatches a
+     `mailagent:account-changed` event so other pages stay in sync via
+     storage. Outside-click + Escape close. */
+  (function () {
+    const triggers = document.querySelectorAll('[data-account-toggle]');
+    const popovers = document.querySelectorAll('[data-account-popover]');
+    const navs = document.querySelectorAll('[data-app-nav]');
+    if (!triggers.length || !popovers.length) return;
+
+    function isCollapsed() {
+      return navs[0] && navs[0].getAttribute('data-collapsed') === 'true';
+    }
+    function closePops() {
+      popovers.forEach(p => p.classList.add('hidden'));
+      triggers.forEach(t => t.setAttribute('aria-expanded', 'false'));
+    }
+    function openPops() {
+      popovers.forEach(p => p.classList.remove('hidden'));
+      triggers.forEach(t => t.setAttribute('aria-expanded', 'true'));
+    }
+
+    triggers.forEach(t => {
+      t.addEventListener('click', e => {
+        e.stopPropagation();
+        if (isCollapsed()) {
+          // Expand nav first; user can click the account button next.
+          navs.forEach(n => n.setAttribute('data-collapsed', 'false'));
+          try { localStorage.setItem('mailagent.nav.collapsed', '0'); } catch (e2) {}
+          return;
+        }
+        const open = !popovers[0].classList.contains('hidden');
+        if (open) closePops(); else openPops();
+      });
+    });
+
+    document.querySelectorAll('.account-option[data-account]').forEach(opt => {
+      opt.addEventListener('click', e => {
+        e.stopPropagation();
+        // Real product would swap mailboxes; mockup just marks active.
+        document.querySelectorAll('.account-option[data-active]').forEach(o => o.removeAttribute('data-active'));
+        opt.setAttribute('data-active', 'true');
+        closePops();
+      });
+    });
+
+    document.addEventListener('click', e => {
+      if (e.target.closest('[data-account-popover]')) return;
+      if (e.target.closest('[data-account-toggle]')) return;
+      closePops();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') closePops();
+    });
+  })();
+
+  /* ─── AI panel show/hide ───────────────────────────────────────────
+     Collapsed by default. The ✦ button in the detail toolbar opens it,
+     the × button in the panel header (and ⌘⇧A) closes it. Position is
+     persisted to localStorage so a reload restores the user's choice. */
+  (function aiPanelToggle() {
+    const panel = document.getElementById('aiPanel');
+    const openBtn = document.getElementById('aiPanelToggle');
+    const closeBtn = document.getElementById('aiPanelClose');
+    if (!panel || !openBtn) return;
+
+    const KEY = 'mailagent.aiPanel.open';
+    const apply = (open) => {
+      panel.classList.toggle('hidden', !open);
+      openBtn.setAttribute('aria-expanded', String(open));
+      openBtn.classList.toggle('text-coral', open);
+      openBtn.classList.toggle('text-ink-fg-1', !open);
+      try { localStorage.setItem(KEY, open ? '1' : '0'); } catch (e) {}
+    };
+
+    let initial = false;
+    try { initial = localStorage.getItem(KEY) === '1'; } catch (e) {}
+    apply(initial);
+
+    openBtn.addEventListener('click', () => apply(panel.classList.contains('hidden')));
+    if (closeBtn) closeBtn.addEventListener('click', () => apply(false));
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+        e.preventDefault();
+        apply(panel.classList.contains('hidden'));
+      }
+    });
+  })();
+
+  /* ─── Email list — flag · pin · delete · group · filter ────────────
+     Five small IIFEs that share the row event surface. Each handler
+     stops propagation so the underlying row-open behavior (clicking
+     anywhere else on the row) stays independent of the inline
+     actions, mirroring Apple Mail / Outlook conventions. */
+  (function emailListInteractions() {
+    const list = document.getElementById('email-list-scroll');
+    if (!list) return;
+
+    /* Layout swap — actions on the sender row, time on the subject row.
+       Outlook's rhythm: line 1 reads "who · [actions]", line 2 reads
+       "subject · time". Done at runtime so we don't have to hand-edit
+       every <article>; safe because all click handlers below are
+       delegated, so re-parenting doesn't lose any listeners. */
+    list.querySelectorAll('article.email-row').forEach(function (row) {
+      const top = row.querySelector('.row-top');
+      const subject = row.querySelector('.subject-row');
+      const time = row.querySelector('.row-time');
+      const actions = row.querySelector('.row-actions');
+      if (top && actions && actions.parentElement !== top) top.appendChild(actions);
+      if (subject && time && time.parentElement !== subject) subject.appendChild(time);
+    });
+
+    /* Flag 3-state cycle: 0 → 1 (flagged · coral) → 2 (done · green) → 0
+       Also flips the row's `data-flag` so the row bg wash + struck
+       subject toggle from CSS. The svg inside the button is swapped
+       between flag and check glyphs as we cycle so the icon matches
+       its state without relying on data attributes alone. */
+    const FLAG_SVGS = {
+      flag:  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>',
+      check: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    };
+
+    function setFlagState(btn, state) {
+      const row = btn.closest('.email-row');
+      btn.setAttribute('data-flag-state', String(state));
+      btn.innerHTML = (state === 2) ? FLAG_SVGS.check : FLAG_SVGS.flag;
+      const flagName = ['none', 'flagged', 'done'][state];
+      if (row) row.setAttribute('data-flag', flagName);
+      btn.setAttribute('aria-label',
+        state === 0 ? '标旗' :
+        state === 1 ? '标为完成' : '清除旗标');
+    }
+
+    list.addEventListener('click', (e) => {
+      // Flag — cycle 3 states
+      const flagBtn = e.target.closest('.ricon-flag');
+      if (flagBtn) {
+        e.stopPropagation();
+        e.preventDefault();
+        const cur = parseInt(flagBtn.getAttribute('data-flag-state') || '0', 10);
+        setFlagState(flagBtn, (cur + 1) % 3);
+        return;
+      }
+
+      // Pin — flip pressed state, swap svg fill
+      const pinBtn = e.target.closest('.ricon-pin');
+      if (pinBtn) {
+        e.stopPropagation();
+        e.preventDefault();
+        const cur = pinBtn.getAttribute('aria-pressed') === 'true';
+        pinBtn.setAttribute('aria-pressed', String(!cur));
+        const row = pinBtn.closest('.email-row');
+        if (row) row.setAttribute('data-pinned', String(!cur));
+        return;
+      }
+
+      // Delete — animate row out (height collapse + fade)
+      const delBtn = e.target.closest('.ricon-delete');
+      if (delBtn) {
+        e.stopPropagation();
+        e.preventDefault();
+        const row = delBtn.closest('.email-row');
+        if (!row) return;
+        const h = row.getBoundingClientRect().height;
+        row.style.height = h + 'px';
+        // Force reflow so the next frame can animate from the fixed height.
+        // eslint-disable-next-line no-unused-expressions
+        row.offsetHeight;
+        row.style.transition = 'height 180ms ease, opacity 140ms ease, padding 180ms ease';
+        row.style.overflow = 'hidden';
+        row.style.opacity = '0';
+        row.style.height = '0px';
+        row.style.paddingTop = '0';
+        row.style.paddingBottom = '0';
+        setTimeout(() => {
+          const group = row.closest('.group');
+          row.remove();
+          // Decrement the group's count badge (cosmetic).
+          if (group) {
+            const cnt = group.querySelector('.group-count');
+            if (cnt) {
+              const n = Math.max(0, parseInt(cnt.textContent, 10) - 1);
+              cnt.textContent = String(n);
+            }
+          }
+        }, 200);
+        return;
+      }
+
+      // Group header — toggle collapsed
+      const ghead = e.target.closest('.group-header');
+      if (ghead) {
+        const grp = ghead.closest('.group');
+        if (!grp) return;
+        const collapsed = grp.getAttribute('data-collapsed') === 'true';
+        grp.setAttribute('data-collapsed', String(!collapsed));
+        ghead.setAttribute('aria-expanded', String(collapsed));
+        return;
+      }
+    });
+  })();
+
+  /* ─── Inbox tabs (重点 / 其他) — visual toggle only in mockup ───── */
+  (function inboxTabs() {
+    const tabs = document.querySelectorAll('.inbox-tab');
+    tabs.forEach(t => {
+      t.addEventListener('click', () => {
+        tabs.forEach(o => { o.classList.remove('is-active'); o.setAttribute('aria-selected', 'false'); });
+        t.classList.add('is-active');
+        t.setAttribute('aria-selected', 'true');
+      });
+    });
+  })();
+
+  /* ─── Filter popover ──────────────────────────────────────────────
+     · Click filter button → toggle popover
+     · Click an option → flips data-checked
+     · "全选" / "清除" links operate on a section
+     · Filter button gains data-active="true" when not every option is
+       checked, with a small accent dot that mirrors the section header
+       counter chips (P1 style — never shouts).
+     · Outside-click + Esc close.
+     · Live: rows whose `data-priority` or `data-category` are unchecked
+       get .filter-hidden, plus group headers update their visible count. */
+  (function filterPopover() {
+    const btn = document.getElementById('filter-btn');
+    const pop = document.getElementById('filter-pop');
+    const summary = document.getElementById('filter-summary');
+    if (!btn || !pop) return;
+
+    function open()  { pop.classList.remove('hidden'); btn.setAttribute('aria-expanded', 'true'); }
+    function close() { pop.classList.add('hidden');    btn.setAttribute('aria-expanded', 'false'); }
+
+    function selectedValues(facet) {
+      return Array.from(pop.querySelectorAll(`[data-filter="${facet}"][data-checked="true"]`))
+        .map(el => el.getAttribute('data-value'));
+    }
+    function totalForFacet(facet) {
+      return pop.querySelectorAll(`[data-filter="${facet}"]`).length;
+    }
+
+    function applyFilter() {
+      const pri = new Set(selectedValues('priority'));
+      const cat = new Set(selectedValues('category'));
+      const rows = document.querySelectorAll('.email-row');
+      let visible = 0;
+      rows.forEach(r => {
+        const p = r.getAttribute('data-priority');
+        const c = r.getAttribute('data-category');
+        const keep = pri.has(p) && cat.has(c);
+        r.style.display = keep ? '' : 'none';
+        if (keep) visible++;
+      });
+      // Per-group visible count
+      document.querySelectorAll('.group').forEach(g => {
+        const live = g.querySelectorAll('.email-row:not([style*="display: none"])').length;
+        const badge = g.querySelector('.group-count');
+        if (badge) badge.textContent = String(live);
+        g.style.display = live === 0 ? 'none' : '';
+      });
+
+      const priFull = selectedValues('priority').length === totalForFacet('priority');
+      const catFull = selectedValues('category').length === totalForFacet('category');
+      const active = !(priFull && catFull);
+      btn.setAttribute('data-active', String(active));
+      if (summary) {
+        summary.textContent = active ? `已过滤 · ${visible}` : '';
+      }
+    }
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (pop.classList.contains('hidden')) open(); else close();
+    });
+
+    pop.addEventListener('click', (e) => {
+      // bulk links
+      const allBtn = e.target.closest('[data-filter-all]');
+      if (allBtn) {
+        const facet = allBtn.getAttribute('data-filter-all');
+        pop.querySelectorAll(`[data-filter="${facet}"]`).forEach(o => o.setAttribute('data-checked', 'true'));
+        applyFilter();
+        return;
+      }
+      const noneBtn = e.target.closest('[data-filter-none]');
+      if (noneBtn) {
+        const facet = noneBtn.getAttribute('data-filter-none');
+        pop.querySelectorAll(`[data-filter="${facet}"]`).forEach(o => o.setAttribute('data-checked', 'false'));
+        applyFilter();
+        return;
+      }
+      // single option
+      const opt = e.target.closest('.filter-option');
+      if (opt) {
+        e.preventDefault();
+        const cur = opt.getAttribute('data-checked') === 'true';
+        opt.setAttribute('data-checked', String(!cur));
+        applyFilter();
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (pop.classList.contains('hidden')) return;
+      if (pop.contains(e.target) || btn.contains(e.target)) return;
+      close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !pop.classList.contains('hidden')) close();
+    });
+  })();
+</script>
+
+</body>
+</html>

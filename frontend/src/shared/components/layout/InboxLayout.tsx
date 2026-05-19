@@ -5,8 +5,12 @@
 // detail and the right edge; the grid here doesn't need to change — only
 // EmailDetail's max width does.
 
+import { useEffect } from 'react'
+import { useSearch } from '@tanstack/react-router'
+
 import { useActiveEmail } from '@shared/state/active-email'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { useEmailFilter } from '@shared/state/email-filter'
 
 import { TitleBar } from './TitleBar'
 import { Sidebar } from './Sidebar'
@@ -18,6 +22,17 @@ import { BatchActionBar } from '../batch/BatchActionBar'
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
+  // Sprint 11 V1.4 — URL ↔ store sync. The route's `validateSearch` clamps
+  // unknown values to 'inbox', so `urlView` is always a real EmailView
+  // (the optional type just lets `navigate({to:'/'})` skip the search arg).
+  // The Sidebar writes view → URL on click; this effect handles the
+  // reverse path so deep-links (`/?view=flagged`) hydrate the store.
+  const urlView = useSearch({ from: '/', select: (s) => s.view ?? 'inbox' })
+  const storeView = useEmailFilter((s) => s.view)
+  const setView = useEmailFilter((s) => s.setView)
+  useEffect(() => {
+    if (urlView !== storeView) setView(urlView)
+  }, [urlView, storeView, setView])
   // Sprint 10 user-acceptance — AIChatPanel was forced-mounted in the
   // 1280px layout, leaving EmailDetail < 320px wide. Now it's an on-demand
   // overlay column toggled via the toolbar icon, ⌘L, or any AI Agents
@@ -30,7 +45,7 @@ export function InboxLayout(): React.ReactElement {
   // double-firing two handlers (LIFO + non-consuming open() would have
   // navigated AND opened the palette on the same press).
   return (
-    <div className="flex flex-col h-full bg-ink-0 text-ink-fg">
+    <div className="flex flex-col h-full text-ink-fg">
       <TitleBar />
       <div className="flex flex-1 min-h-0">
         <Sidebar />

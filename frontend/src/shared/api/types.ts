@@ -331,6 +331,9 @@ export interface PersistentSettings {
   notionAgentPageId: string | null
   notionAgentName: string | null
   customApiEndpoint: string | null
+  /** Owner's email — sourced from repo-root `.env` USER_EMAIL on every
+   *  settings:get read. Read-only; the renderer doesn't write this. */
+  userEmail: string | null
 }
 
 export interface PingResult {

@@ -1,0 +1,1245 @@
+<!doctype html>
+<!--
+  MailAgent · Settings (⌘,) — full preferences window.
+
+  Substitutes the popover-only accent picker with the complete preferences
+  surface. Native macOS feel: 36px title bar + 180px left rail + content
+  pane on a `.glass-3` surface. No AI panel (this is a focused settings
+  window — see HANDOFF.md §3.2).
+
+  Sticky "Unsaved changes · Discard · Save" bar follows the same
+  visibility contract as the inbox batch bar — only appears when the user
+  has actually edited a field.
+-->
+<html lang="zh-CN" data-locale="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title data-i18n="titleBar.docTitle">MailAgent · 偏好设置</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: {
+              0: 'rgb(var(--ink-0) / <alpha-value>)',
+              1: 'rgb(var(--ink-1) / <alpha-value>)',
+              2: 'rgb(var(--ink-2) / <alpha-value>)',
+              3: 'rgb(var(--ink-3) / <alpha-value>)',
+              4: 'rgb(var(--ink-4) / <alpha-value>)',
+              5: 'rgb(var(--ink-5) / <alpha-value>)',
+              border:        'rgb(var(--ink-border)      / <alpha-value>)',
+              'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+              fg:     'rgb(var(--ink-fg)   / <alpha-value>)',
+              'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+              'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+              'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)',
+            },
+            coral:         'rgb(var(--c-accent)      / <alpha-value>)',
+            'coral-hover': 'rgb(var(--c-accent-hi)   / <alpha-value>)',
+            'coral-dim':   'rgb(var(--c-accent-dim)  / <alpha-value>)',
+            crit: '#E5634F',
+            urg:  '#E89B4A',
+            impt: '#D4A53D',
+            norm: '#7A7F8A',
+            low:  '#5A5E68',
+            ok:   '#5DBA8C',
+            warn: '#E5B452',
+            fail: '#E36262',
+            dead: '#6B707A',
+            info: '#6FA8DC',
+            ai:   '#B58CDB',
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"',
+                   '"PingFang SC"', '"Helvetica Neue"', 'system-ui', 'sans-serif'],
+            display: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"',
+                      '"PingFang SC"', 'system-ui', 'sans-serif'],
+            mono: ['ui-monospace', '"SF Mono"', '"JetBrains Mono"', 'Menlo', 'monospace'],
+          },
+          fontSize: {
+            micro: ['11px', '14px'],
+            meta:  ['12px', '16px'],
+            aux:   ['14px', '20px'],
+            body:  ['14px', '20px'],
+            lead:  ['15px', '22px'],
+            subj:  ['22px', '30px'],
+          },
+          spacing: {
+            titlebar: '36px',
+            statusbar: '24px',
+            batchbar: '52px',
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    :root {
+      --c-accent:     229 101 75;
+      --c-accent-hi:  216  88  65;
+      --c-accent-dim: 126  61  50;
+
+      --ink-0:            14  16  19;
+      --ink-1:            21  24  29;
+      --ink-2:            26  30  36;
+      --ink-3:            31  36  43;
+      --ink-4:            38  44  53;
+      --ink-5:            46  52  62;
+      --ink-border:       44  50  59;
+      --ink-border-soft:  31  36  43;
+      --ink-fg:          232 234 238;
+      --ink-fg-1:        164 169 179;
+      --ink-fg-2:        107 112 122;
+      --ink-fg-3:         69  74  83;
+
+      --wallpaper:
+        radial-gradient(60vw 60vh at  8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95%  8%, rgba( 74,120,229,0.22),       transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18),      transparent 70%),
+        linear-gradient(180deg, #06080B 0%, #0A0C10 100%);
+
+      --glass:    saturate(180%) blur(28px);
+      --glass-lg: saturate(180%) blur(40px);
+      --glass-stroke: rgb(255 255 255 / 0.08);
+
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.07),
+        0 24px 60px rgba(0,0,0,0.55),
+        0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"] { --c-accent:  74 120 229; --c-accent-hi:  60 102 207; --c-accent-dim:  48  82 163; }
+    :root[data-accent="teal"]   { --c-accent:  45 181 166; --c-accent-hi:  33 156 142; --c-accent-dim:  24 110 100; }
+    :root[data-accent="rose"]   { --c-accent: 219  91 124; --c-accent-hi: 198  71 105; --c-accent-dim: 140  50  74; }
+    :root[data-accent="slate"]  { --c-accent: 126 134 148; --c-accent-hi: 105 113 127; --c-accent-dim:  74  80  92; }
+    :root[data-accent="olive"]  { --c-accent: 156 165  82; --c-accent-hi: 134 143  70; --c-accent-dim:  94 100  48; }
+
+    :root[data-theme="light"] {
+      --ink-0:           250 250 250;
+      --ink-1:           242 242 244;
+      --ink-2:           248 249 251;
+      --ink-3:           255 255 255;
+      --ink-4:           225 227 230;
+      --ink-5:           213 216 222;
+      --ink-border:      214 218 224;
+      --ink-border-soft: 230 232 237;
+      --ink-fg:           26  29  34;
+      --ink-fg-1:         91  97 107;
+      --ink-fg-2:        122 128 138;
+      --ink-fg-3:        178 184 192;
+
+      --wallpaper:
+        radial-gradient(60vw 60vh at  8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95%  6%, rgba(110,160,255,0.32),       transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22),      transparent 70%),
+        linear-gradient(180deg, #F6F7FB 0%, #ECEEF4 100%);
+
+      --glass-stroke: rgb(255 255 255 / 0.70);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.85),
+        0 18px 50px rgba(18,24,46,0.16),
+        0 4px 14px rgba(18,24,46,0.10);
+    }
+
+    html, body { background: transparent; overscroll-behavior: none; color-scheme: dark; }
+    :root[data-theme="light"] { color-scheme: light; }
+    body {
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      font-feature-settings: 'ss01', 'cv11';
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: -1;
+      background: var(--wallpaper);
+      background-attachment: fixed;
+      pointer-events: none;
+      transition: background 320ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .glass {
+      background-color: rgb(var(--ink-1) / 0.55);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .glass-2 {
+      background-color: rgb(var(--ink-2) / 0.45);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .glass-3 {
+      background-color: rgb(var(--ink-3) / 0.55);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .tile           { background-color: rgb(var(--ink-2) / 0.62); }
+    .tile:hover     { background-color: rgb(var(--ink-4) / 0.78); }
+    .glass-pop {
+      background-color: rgb(var(--ink-2) / 0.82);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke);
+      box-shadow: var(--pop-shadow);
+    }
+    @media (prefers-reduced-transparency: reduce) {
+      .glass    { background-color: rgb(var(--ink-1)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-2  { background-color: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-3  { background-color: rgb(var(--ink-3)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-pop{ background-color: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    }
+
+    .tl       { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .tl-close { background: #FF5F57; }
+    .tl-min   { background: #FEBC2E; }
+    .tl-max   { background: #28C840; }
+
+    .scrollbar-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb {
+      background: rgb(var(--ink-fg) / 0.14);
+      border: 2px solid transparent;
+      background-clip: padding-box;
+      border-radius: 8px;
+    }
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb { background: rgb(var(--ink-fg) / 0.28); background-clip: padding-box; }
+
+    kbd {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11px; line-height: 1;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: rgb(var(--ink-fg) / 0.06);
+      color: rgb(var(--ink-fg-1));
+      border: 1px solid rgb(var(--ink-border));
+      border-bottom-width: 2px;
+    }
+
+    /* Settings-specific: nav row indicator */
+    .nav-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      color: rgb(var(--ink-fg-1));
+      font-size: 14px; line-height: 20px;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.12s;
+    }
+    .nav-row:hover { background: rgb(var(--ink-fg) / 0.06); color: rgb(var(--ink-fg)); }
+    .nav-row.nav-on {
+      background: rgb(var(--ink-3) / 0.85);
+      color: rgb(var(--ink-fg));
+    }
+    .nav-row.nav-on::before {
+      content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
+      width: 2px; background: rgb(var(--c-accent)); border-radius: 1px;
+    }
+
+    /* Toggle pill — 32×18 */
+    .tog {
+      position: relative; width: 32px; height: 18px;
+      border-radius: 999px; background: rgb(var(--ink-4));
+      border: 1px solid rgb(var(--ink-border));
+      cursor: pointer; flex-shrink: 0;
+      transition: background-color 0.16s;
+    }
+    .tog::after {
+      content: ''; position: absolute; top: 1px; left: 1px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: rgb(var(--ink-fg)); transition: transform 0.18s cubic-bezier(0.4,0,0.2,1);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    }
+    .tog.tog-on  { background: rgb(var(--c-accent)); border-color: rgb(var(--c-accent-hi)); }
+    .tog.tog-on::after { transform: translateX(14px); background: white; }
+
+    /* Custom radio */
+    .rad {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 1.5px solid rgb(var(--ink-fg-3));
+      display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0; cursor: pointer;
+      transition: all 0.12s;
+    }
+    .rad:hover { border-color: rgb(var(--ink-fg-2)); }
+    .rad.rad-on { border-color: rgb(var(--c-accent)); }
+    .rad.rad-on::after {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: rgb(var(--c-accent));
+    }
+
+    /* Slider track */
+    .slider-track {
+      position: relative; height: 4px; border-radius: 2px;
+      background: rgb(var(--ink-4));
+    }
+    .slider-fill { position: absolute; height: 100%; border-radius: 2px; background: rgb(var(--c-accent)); }
+    .slider-thumb {
+      position: absolute; top: -6px; width: 16px; height: 16px;
+      border-radius: 50%; background: white;
+      box-shadow: 0 0 0 1px rgb(var(--ink-border)), 0 2px 4px rgba(0,0,0,0.25);
+      cursor: pointer;
+    }
+
+    /* Theme popover */
+    .theme-popover {
+      position: fixed;
+      top: 44px; right: 12px; width: 264px;
+      background-color: rgb(var(--ink-2) / 0.82);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke);
+      border-radius: 12px;
+      box-shadow: var(--pop-shadow);
+      z-index: 60;
+      overflow: hidden;
+    }
+    .swatch {
+      width: 36px; height: 36px;
+      border-radius: 999px; border: 0; cursor: pointer; position: relative;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.2);
+      transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .swatch:hover { transform: scale(1.06); }
+    .swatch[aria-checked="true"] { box-shadow: 0 0 0 2px rgb(var(--ink-2)), 0 0 0 4px rgb(var(--c-accent)); }
+    .swatch[aria-checked="true"]::after {
+      content: ''; position: absolute; inset: 0;
+      background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 14px 14px no-repeat;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.4));
+    }
+    /* Inline accent grid (Appearance section) — same swatch shape, spacious */
+    .swatch-grid .swatch { width: 44px; height: 44px; }
+
+    /* ─── App nav shell — collapse contract (shared across screens) ─ */
+    .app-nav { width: 240px; flex-shrink: 0; transition: width 260ms cubic-bezier(0.32, 0.72, 0, 1); position: relative; }
+    .app-nav[data-collapsed="true"] { width: 56px; }
+    .app-nav[data-collapsed="true"] .app-nav-header { justify-content: center; padding: 0.375rem 0; }
+    .app-nav[data-collapsed="true"] a > span:not(.app-nav-keep),
+    .app-nav[data-collapsed="true"] a > kbd,
+    .app-nav[data-collapsed="true"] .app-nav-section-header,
+    .app-nav[data-collapsed="true"] .app-nav-account,
+    .app-nav[data-collapsed="true"] .app-nav-account-popover { display: none !important; }
+    .app-nav[data-collapsed="true"] .app-nav-section-spacer { margin-inline: 0.625rem; margin-block: 0.5rem; }
+    .app-nav[data-collapsed="true"] .app-nav-avatar-row { display: flex; }
+    .app-nav[data-collapsed="true"] nav a,
+    .app-nav[data-collapsed="true"] .app-nav-bottom a {
+      justify-content: center; padding-inline: 0.25rem; padding-block: 0.5rem;
+    }
+    .app-nav[data-collapsed="true"] nav a > svg,
+    .app-nav[data-collapsed="true"] .app-nav-bottom a > svg { width: 19px; height: 19px; }
+    .app-nav[data-collapsed="true"] .app-nav-chevron-collapse { display: none; }
+    .app-nav:not([data-collapsed="true"]) .app-nav-chevron-expand { display: none; }
+    .app-nav nav a > span:not(.app-nav-keep), .app-nav nav a > kbd,
+    .app-nav-bottom a > span, .app-nav-bottom a > kbd,
+    .app-nav-account, .app-nav-section-header { transition: opacity 140ms ease; }
+    .app-nav-account-popover { background: rgba(28,28,30,0.94); backdrop-filter: blur(24px) saturate(1.6); -webkit-backdrop-filter: blur(24px) saturate(1.6); }
+    :root[data-theme="light"] .app-nav-account-popover { background: rgba(252,252,252,0.98); }
+    @media (prefers-reduced-motion: reduce) { .app-nav, .app-nav-account, .app-nav-section-header { transition: none; } }
+
+    .glass, .glass-2, .glass-3, .glass-pop, .theme-popover, .tile, kbd,
+    [class*="bg-ink-"], [class*="border-ink-"] {
+      transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1),
+                  border-color     280ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+  </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden text-ink-fg font-sans antialiased flex flex-col">
+
+<!-- ─── Title bar (36px) ───────────────────────────────────────────────── -->
+<header class="glass h-titlebar border-b border-ink-border/60 flex items-center px-3 select-none shrink-0">
+  <div class="flex items-center gap-2 mr-4">
+    <span class="tl tl-close" title="Close"></span>
+    <span class="tl tl-min"   title="Minimize"></span>
+    <span class="tl tl-max"   title="Zoom"></span>
+  </div>
+
+  <div class="text-aux text-ink-fg-1 font-medium tracking-tight" data-i18n="titleBar.brandSuffix">MailAgent · 偏好设置</div>
+
+  <div class="flex-1 flex justify-center">
+    <button class="group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span data-i18n="settings.searchSettings">搜索设置</span>
+      <kbd class="group-hover:bg-ink-4">⌘F</kbd>
+    </button>
+  </div>
+
+  <div class="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+    <span class="flex items-center gap-1.5" title="Open Island notch overlay connected">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="6" rx="3" fill="currentColor"/></svg>
+      <span>Island</span>
+    </span>
+    <span class="text-ink-fg-3">·</span>
+    <button
+      id="locale-toggle"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="切换语言 (⌥G)"
+      data-i18n-attr="title:titleBar.localeTooltip,aria-label:titleBar.localeAria"
+      aria-label="切换语言">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      <span class="group-hover:text-ink-fg" id="locale-label">中文</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button
+      id="theme-toggle"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="Toggle light / dark (⌥L)"
+      data-i18n-attr="title:titleBar.themeTooltip,aria-label:titleBar.themeAria"
+      aria-label="Toggle theme">
+      <svg id="theme-icon-dark"  width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <span class="group-hover:text-ink-fg" id="theme-label">Dark</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button
+      id="appearance-btn"
+      aria-haspopup="true" aria-expanded="false"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="Accent color"
+      data-i18n-attr="title:titleBar.accentTooltip,aria-label:titleBar.accentAria">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-coral shadow-[0_0_0_1px_rgba(0,0,0,0.25)]"></span>
+      <span class="group-hover:text-ink-fg" id="appearance-label">Coral</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5" data-i18n-attr="title:titleBar.syncTooltip">
+      <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+      <span><span data-i18n="status.synced">Synced</span> · 5s · 14:32:08</span>
+    </span>
+  </div>
+</header>
+
+<!-- ─── Appearance popover (shared with inbox) ─────────────────────────── -->
+<div id="theme-popover" class="theme-popover hidden">
+  <div class="px-3.5 py-2.5 border-b border-ink-border-soft flex items-center justify-between">
+    <div class="text-aux text-ink-fg font-medium" data-i18n="popover.accentTitle">Accent Color</div>
+    <span class="text-micro font-mono text-ink-fg-2">View → Appearance</span>
+  </div>
+  <div class="p-4">
+    <div class="grid grid-cols-3 gap-y-4 gap-x-2 place-items-center">
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="coral"  aria-checked="true"  style="background: #E5654B;" title="Coral"></button><span class="text-meta font-mono text-ink-fg-1">Coral</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="cobalt" aria-checked="false" style="background: #4A78E5;" title="Cobalt"></button><span class="text-meta font-mono text-ink-fg-2">Cobalt</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="teal"   aria-checked="false" style="background: #2DB5A6;" title="Teal"></button><span class="text-meta font-mono text-ink-fg-2">Teal</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="rose"   aria-checked="false" style="background: #DB5B7C;" title="Rose"></button><span class="text-meta font-mono text-ink-fg-2">Rose</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="slate"  aria-checked="false" style="background: #7E8694;" title="Slate"></button><span class="text-meta font-mono text-ink-fg-2">Slate</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="olive"  aria-checked="false" style="background: #9CA552;" title="Olive"></button><span class="text-meta font-mono text-ink-fg-2">Olive</span></div>
+    </div>
+  </div>
+  <div class="px-3.5 py-2 border-t border-ink-border-soft flex items-center gap-2">
+    <svg class="text-ink-fg-2 shrink-0" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span class="text-meta text-ink-fg-1 leading-snug" data-i18n="popover.accentNote">Affects toolbar · chips · selected row · Island accent. Stored locally.</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Main · Left rail (180) | Content pane
+═══════════════════════════════════════════════════════════════════════ -->
+<main class="flex flex-1 min-h-0">
+
+  <!-- ─── MAIN NAV (240px / 56px collapsed) ──────────────────────────
+       Verbatim from mockup-inbox.html — single source across screens.
+       Chevron at top right collapses to 56px icon rail; state lives
+       in localStorage["mailagent.nav.collapsed"]. The "设置" row at
+       the bottom shows `row-selected` to indicate the current page. -->
+  <aside data-app-nav data-collapsed="false" class="app-nav glass border-r border-ink-border/60 flex flex-col relative">
+    <div class="app-nav-header flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft/60 shrink-0">
+      <button data-account-toggle type="button"
+              class="app-nav-account flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-ink-3/70 transition group"
+              aria-haspopup="true" aria-expanded="false"
+              title="lucien.chen@tp-link.com — 切换账户" aria-label="切换邮箱账户">
+        <span class="text-micro font-mono text-ink-fg bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0 leading-snug">tp-link</span>
+        <span class="text-body text-ink-fg font-medium truncate flex-1 text-left">lucien.chen</span>
+        <svg class="text-ink-fg-2 group-hover:text-ink-fg shrink-0 transition" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <button data-app-nav-toggle
+              class="w-7 h-7 rounded-md hover:bg-ink-3 hover:text-ink-fg text-ink-fg-2 flex items-center justify-center transition shrink-0"
+              title="Collapse / expand navigation (⌥B)" aria-label="Collapse navigation">
+        <svg class="app-nav-chevron-collapse" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        <svg class="app-nav-chevron-expand"   width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
+    <div class="app-nav-avatar-row items-center justify-center py-2 border-b border-ink-border-soft/60 shrink-0" style="display: none;">
+      <button data-account-toggle type="button"
+              class="w-9 h-9 rounded-full text-white font-semibold text-aux flex items-center justify-center shadow-[0_0_0_2px_rgba(255,255,255,0.05)] hover:brightness-110 transition"
+              style="background: var(--c-accent);"
+              title="lucien.chen@tp-link.com — 展开切换账户" aria-label="切换账户">L</button>
+    </div>
+    <div data-account-popover class="app-nav-account-popover hidden absolute z-50 left-2 right-2 top-[44px] rounded-lg border border-ink-border shadow-2xl py-1">
+      <button class="account-option flex items-center gap-2 px-2.5 py-2 w-full text-left hover:bg-ink-3 transition" data-account="tp-link" data-active="true">
+        <span class="text-micro font-mono text-ink-fg bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0">tp-link</span>
+        <span class="text-body text-ink-fg font-medium flex-1 truncate">lucien.chen</span>
+        <svg class="text-coral shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </button>
+      <button class="account-option flex items-center gap-2 px-2.5 py-2 w-full text-left hover:bg-ink-3 transition" data-account="gmail">
+        <span class="text-micro font-mono text-ink-fg-1 bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0">gmail</span>
+        <span class="text-body text-ink-fg-1 flex-1 truncate">s1021964827</span>
+        <span class="text-meta font-mono text-ink-fg-3">4</span>
+      </button>
+      <button class="account-option flex items-center gap-2 px-2.5 py-2 w-full text-left hover:bg-ink-3 transition" data-account="icloud">
+        <span class="text-micro font-mono text-ink-fg-1 bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0">icloud</span>
+        <span class="text-body text-ink-fg-1 flex-1 truncate">lucien</span>
+        <span class="text-meta font-mono text-ink-fg-3">0</span>
+      </button>
+      <div class="border-t border-ink-border-soft my-1 mx-2"></div>
+      <button class="account-option flex items-center gap-2 px-2.5 py-1.5 w-full text-left hover:bg-ink-3 transition text-ink-fg-2">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span class="text-body italic">添加账户...</span>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin py-2.5">
+
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">Mailboxes</h2>
+      </div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-inbox.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="收件箱">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="text-body flex-1 font-medium" data-i18n="nav.inbox">收件箱</span>
+          <span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">32</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="发件箱">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.outbox">发件箱</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="已标旗">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.flagged">已标旗</span>
+          <span class="text-meta font-mono text-ink-fg-2">7</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="所有邮件">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.allMail">所有邮件</span>
+          <span class="text-meta font-mono text-ink-fg-2">6,184</span>
+        </a>
+      </nav>
+
+      <div class="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft"></div>
+
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">AI Agents</h2>
+      </div>
+      <nav class="px-2 space-y-px">
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg hover:bg-ink-3 transition" title="Notion Agent">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2v4"/><path d="M12 18v4"/><path d="m4.93 4.93 2.83 2.83"/><path d="m16.24 16.24 2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="m4.93 19.07 2.83-2.83"/><path d="m16.24 7.76 2.83-2.83"/></svg>
+          <span class="text-body flex-1">Notion Agent</span>
+          <span class="w-1.5 h-1.5 rounded-full bg-ok" title="online · token_v2 valid"></span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="Custom API">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span class="text-body flex-1">Custom API</span>
+          <span class="text-meta font-mono text-ink-fg-2">3</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="AI 会话历史">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.aiSessions">AI 会话历史</span>
+          <span class="text-meta font-mono text-ink-fg-2">128</span>
+        </a>
+      </nav>
+
+      <div class="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft"></div>
+
+      <!-- VIEW — top-level dashboards. Search lives in title-bar ⌘K, translate
+           lives in the email toolbar/body, so they are intentionally NOT in nav. -->
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">View</h2>
+      </div>
+      <nav class="px-2 space-y-px">
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="LLM Dashboard">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          <span class="text-body flex-1">LLM Dashboard</span>
+          <span class="w-1.5 h-1.5 rounded-full bg-warn" title="cache hit 偏低"></span>
+        </a>
+        <a href="mockup-admin.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="看板 Admin">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          <span class="text-body flex-1" data-i18n="ops.admin">看板 Admin</span>
+          <span class="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded">5 DL</span>
+        </a>
+      </nav>
+    </div>
+
+    <div class="app-nav-bottom border-t border-ink-border-soft p-2 space-y-px">
+      <a href="mockup-settings.html" class="row row-selected flex items-center gap-2.5 px-2 py-1.5 rounded-md bg-ink-4 text-ink-fg transition" title="设置">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span class="text-body flex-1 font-medium" data-i18n="bottom.settings">设置</span>
+        <kbd>⌘,</kbd>
+      </a>
+      <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition" title="快捷键">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span class="text-body flex-1" data-i18n="bottom.shortcuts">快捷键</span>
+        <kbd>?</kbd>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ─── Settings section nav (180px) ─────────────────────────────── -->
+  <aside class="w-[180px] glass-2 border-r border-ink-border/60 shrink-0 flex flex-col">
+    <div class="px-3 pt-3 pb-1.5">
+      <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 px-2.5 mb-1.5">SETTINGS</div>
+      <nav class="space-y-px">
+        <div class="nav-row" data-tab="general">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span data-i18n="settings.tab.general">常规</span>
+        </div>
+        <div class="nav-row" data-tab="accounts">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          <span data-i18n="settings.tab.accounts">账户</span>
+          <span class="ml-auto text-micro font-mono text-ink-fg-2">3</span>
+        </div>
+        <div class="nav-row nav-on" data-tab="appearance">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125 0-.952.766-1.688 1.688-1.688H16.5c3.04 0 5.5-2.46 5.5-5.5C22 6.04 17.52 2 12 2z"/></svg>
+          <span data-i18n="settings.tab.appearance">外观</span>
+        </div>
+        <div class="nav-row" data-tab="ai">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span>AI</span>
+        </div>
+        <div class="nav-row" data-tab="shortcuts">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+          <span data-i18n="settings.tab.shortcuts">快捷键</span>
+        </div>
+        <div class="nav-row" data-tab="sync">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span data-i18n="settings.tab.sync">同步</span>
+        </div>
+        <div class="nav-row" data-tab="island">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="6" rx="3" fill="currentColor"/></svg>
+          <span data-i18n="settings.tab.island">灵动岛</span>
+        </div>
+        <div class="nav-row" data-tab="privacy">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span data-i18n="settings.tab.privacy">隐私与数据</span>
+        </div>
+      </nav>
+    </div>
+    <div class="mt-auto px-3 py-3 border-t border-ink-border-soft text-micro font-mono text-ink-fg-2">
+      <div class="flex items-center justify-between"><span>build</span><span>0.1.0-dev</span></div>
+      <div class="flex items-center justify-between"><span>schema</span><span>v14</span></div>
+    </div>
+  </aside>
+
+  <!-- ─── Content pane ─────────────────────────────────────────────── -->
+  <section class="flex-1 min-w-0 overflow-y-auto scrollbar-thin">
+    <div class="glass-3 min-h-full">
+      <div class="max-w-[760px] mx-auto px-10 py-8 pb-24">
+
+        <!-- Header — "APPEARANCE" mono section header stays English (§3.3). -->
+        <header class="mb-7">
+          <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-1">APPEARANCE</div>
+          <h1 class="text-[26px] leading-tight font-semibold tracking-tight" data-i18n="settings.appearance.title">外观</h1>
+          <p class="text-aux text-ink-fg-1 mt-1.5" data-i18n="settings.appearance.intro">控制强调色、主题、AI 面板宽度与正文密度。在两种主题下分别预览。</p>
+        </header>
+
+        <!-- Accent color block -->
+        <div class="mb-7">
+          <div class="flex items-end justify-between mb-2.5">
+            <h2 class="text-lead font-medium" data-i18n="settings.appearance.accent">强调色</h2>
+            <span class="text-meta font-mono text-ink-fg-2">6 prebuilt</span>
+          </div>
+          <div class="tile rounded-lg p-5 border border-ink-border-soft">
+            <div class="swatch-grid grid grid-cols-6 gap-x-2 gap-y-3 place-items-center mb-3">
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch swatch-2" data-accent2="coral"  aria-checked="true"  style="background: #E5654B;" title="Coral"></button><span class="text-meta font-mono text-ink-fg-1">Coral</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch swatch-2" data-accent2="cobalt" aria-checked="false" style="background: #4A78E5;" title="Cobalt"></button><span class="text-meta font-mono text-ink-fg-2">Cobalt</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch swatch-2" data-accent2="teal"   aria-checked="false" style="background: #2DB5A6;" title="Teal"></button><span class="text-meta font-mono text-ink-fg-2">Teal</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch swatch-2" data-accent2="rose"   aria-checked="false" style="background: #DB5B7C;" title="Rose"></button><span class="text-meta font-mono text-ink-fg-2">Rose</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch swatch-2" data-accent2="slate"  aria-checked="false" style="background: #7E8694;" title="Slate"></button><span class="text-meta font-mono text-ink-fg-2">Slate</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch swatch-2" data-accent2="olive"  aria-checked="false" style="background: #9CA552;" title="Olive"></button><span class="text-meta font-mono text-ink-fg-2">Olive</span></div>
+            </div>
+            <p class="text-meta text-ink-fg-2 leading-relaxed" data-i18n="settings.appearance.accentNote">同步至灵动岛通知边框、收件列表选中条、AI 起草按钮、批量栏徽章。每次切换都会广播到 /var/run/mailagent.sock。</p>
+          </div>
+        </div>
+
+        <!-- Language block (NEW — §2.10 i18n) -->
+        <div class="mb-7">
+          <div class="flex items-end justify-between mb-2.5">
+            <h2 class="text-lead font-medium" data-i18n="settings.language.title">语言</h2>
+            <span class="text-meta font-mono text-ink-fg-2">⌥G</span>
+          </div>
+          <div class="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
+            <label class="flex items-center gap-3 px-4 py-3 cursor-pointer">
+              <span class="rad rad-on" data-radio-group="locale" data-value="zh-CN"></span>
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.language.zh">简体中文</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.language.zhMeta">界面文案 · 工具栏 · 设置 · AI 快捷动作。邮件正文不参与翻译。</div>
+              </div>
+              <span class="text-meta font-mono text-ink-fg-2">zh-CN</span>
+            </label>
+            <label class="flex items-center gap-3 px-4 py-3 cursor-pointer">
+              <span class="rad" data-radio-group="locale" data-value="en"></span>
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.language.en">English</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.language.enMeta">UI · toolbar · settings · AI quick actions. Email body never auto-translated.</div>
+              </div>
+              <span class="text-meta font-mono text-ink-fg-2">en</span>
+            </label>
+          </div>
+          <p class="text-meta text-ink-fg-2 mt-2.5 leading-relaxed" data-i18n="settings.language.note">单声道 / 列表头（如 MAILBOXES · AI FIELDS · ATTACHMENTS）保持英文等宽体，与正文字号、密度均无关。详见 DESIGN.md §2.10 / §3.3。</p>
+        </div>
+
+        <!-- Theme block -->
+        <div class="mb-7">
+          <div class="flex items-end justify-between mb-2.5">
+            <h2 class="text-lead font-medium" data-i18n="settings.theme.title">主题</h2>
+            <span class="text-meta font-mono text-ink-fg-2">⌥L</span>
+          </div>
+          <div class="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
+            <label class="flex items-center gap-3 px-4 py-3 cursor-pointer">
+              <span class="rad" data-radio-group="theme" data-value="auto"></span>
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.theme.auto">跟随系统</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.theme.autoMeta">macOS 切换时一并切换，开机即用</div>
+              </div>
+              <span class="text-meta font-mono text-ink-fg-2">recommended</span>
+            </label>
+            <label class="flex items-center gap-3 px-4 py-3 cursor-pointer">
+              <span class="rad rad-on" data-radio-group="theme" data-value="dark"></span>
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.theme.dark">深色</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.theme.darkMeta">画布主色 #06080B → #0A0C10，玻璃在其之上</div>
+              </div>
+            </label>
+            <label class="flex items-center gap-3 px-4 py-3 cursor-pointer">
+              <span class="rad" data-radio-group="theme" data-value="light"></span>
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.theme.light">浅色</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.theme.lightMeta">画布主色 #F6F7FB → #ECEEF4，强调色再走暖色调</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- AI panel width -->
+        <div class="mb-7">
+          <div class="flex items-end justify-between mb-2.5">
+            <h2 class="text-lead font-medium" data-i18n="settings.aiWidth.title">AI 面板宽度</h2>
+            <span class="text-meta font-mono text-ink-fg-2"><span id="ai-w">360</span> px</span>
+          </div>
+          <div class="tile rounded-lg p-5 border border-ink-border-soft">
+            <div class="slider-track">
+              <div class="slider-fill" style="width: 40%;"></div>
+              <div class="slider-thumb" style="left: calc(40% - 8px);"></div>
+            </div>
+            <div class="flex items-center justify-between mt-2 text-meta font-mono text-ink-fg-2">
+              <span><span data-i18n="settings.aiWidth.tight">紧凑</span> 320</span>
+              <span><span data-i18n="settings.aiWidth.default">默认</span> 360</span>
+              <span><span data-i18n="settings.aiWidth.wide">宽</span> 420</span>
+            </div>
+            <p class="text-meta text-ink-fg-2 mt-3 leading-relaxed" data-i18n="settings.aiWidth.note">影响 ✦ AI / Thread / Sync 三标签的右侧栏。较小窗口下若总宽 < 1280px，AI 面板会自动折叠为标签按钮（参见 DESIGN.md §15 Open Q1）。</p>
+          </div>
+        </div>
+
+        <!-- List density -->
+        <div class="mb-7">
+          <div class="flex items-end justify-between mb-2.5">
+            <h2 class="text-lead font-medium" data-i18n="settings.density.title">列表密度</h2>
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <button class="tile rounded-lg p-3.5 border border-ink-border-soft text-left">
+              <div class="text-aux font-medium mb-2" data-i18n="settings.density.comfortable">舒适</div>
+              <div class="space-y-1.5">
+                <div class="h-1.5 rounded bg-ink-4 w-3/4"></div>
+                <div class="h-1.5 rounded bg-ink-4 w-1/2"></div>
+              </div>
+              <div class="text-micro font-mono text-ink-fg-2 mt-3">72 px / row</div>
+            </button>
+            <button class="tile rounded-lg p-3.5 border border-coral/40 text-left ring-1 ring-coral/30">
+              <div class="text-aux font-medium mb-2"><span data-i18n="settings.density.compact">紧凑</span> <span class="text-coral text-micro font-mono ml-1">current</span></div>
+              <div class="space-y-1">
+                <div class="h-1 rounded bg-ink-4 w-3/4"></div>
+                <div class="h-1 rounded bg-ink-4 w-1/2"></div>
+                <div class="h-1 rounded bg-ink-4 w-2/3"></div>
+              </div>
+              <div class="text-micro font-mono text-ink-fg-2 mt-3">56 px / row</div>
+            </button>
+            <button class="tile rounded-lg p-3.5 border border-ink-border-soft text-left">
+              <!-- "Mimestream" is a proper-noun preset name — stays. -->
+              <div class="text-aux font-medium mb-2">Mimestream</div>
+              <div class="space-y-0.5">
+                <div class="h-px bg-ink-4 w-3/4"></div>
+                <div class="h-px bg-ink-4 w-1/2"></div>
+                <div class="h-px bg-ink-4 w-2/3"></div>
+                <div class="h-px bg-ink-4 w-1/2"></div>
+              </div>
+              <div class="text-micro font-mono text-ink-fg-2 mt-3">40 px / row</div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Font size override -->
+        <div class="mb-7">
+          <div class="flex items-end justify-between mb-2.5">
+            <h2 class="text-lead font-medium" data-i18n="settings.fontSize.title">正文字号</h2>
+            <span class="text-meta font-mono text-ink-fg-2">14 px / 20 lh</span>
+          </div>
+          <div class="tile rounded-lg p-5 border border-ink-border-soft">
+            <div class="flex items-center gap-3">
+              <button class="w-8 h-8 rounded-md bg-ink-4 hover:bg-ink-5 text-ink-fg-1 transition flex items-center justify-center text-meta">A−</button>
+              <div class="flex-1 slider-track">
+                <div class="slider-fill" style="width: 50%;"></div>
+                <div class="slider-thumb" style="left: calc(50% - 8px);"></div>
+              </div>
+              <button class="w-8 h-8 rounded-md bg-ink-4 hover:bg-ink-5 text-ink-fg-1 transition flex items-center justify-center text-aux">A+</button>
+            </div>
+            <p class="text-meta text-ink-fg-2 mt-3 leading-relaxed" data-i18n="settings.fontSize.note">下限 14 px（DESIGN.md §1.3 中文字号红线，不可低于）。上限 18 px。</p>
+          </div>
+        </div>
+
+        <!-- Reduce transparency -->
+        <div class="mb-7">
+          <div class="flex items-end justify-between mb-2.5">
+            <h2 class="text-lead font-medium" data-i18n="settings.a11y.title">无障碍</h2>
+          </div>
+          <div class="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
+            <div class="flex items-center gap-3 px-4 py-3.5">
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.a11y.reduceTransparency">尊重「降低透明度」系统偏好</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.a11y.reduceTransparencyMeta">玻璃面板退化为不透明 ink，无运动模糊；保留布局与对比度</div>
+              </div>
+              <span class="tog tog-on" data-tog></span>
+            </div>
+            <div class="flex items-center gap-3 px-4 py-3.5">
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.a11y.reduceMotion">减弱动画</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.a11y.reduceMotionMeta">关闭主题渐变、AI 流式光标、批量条上滑动画</div>
+              </div>
+              <span class="tog" data-tog></span>
+            </div>
+            <div class="flex items-center gap-3 px-4 py-3.5">
+              <div class="flex-1 min-w-0">
+                <div class="text-aux font-medium" data-i18n="settings.a11y.focusRing">高对比度焦点环</div>
+                <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="settings.a11y.focusRingMeta">键盘焦点显示 2 px 实线环，颜色取强调色</div>
+              </div>
+              <span class="tog" data-tog></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Unsaved-changes bar — hidden by default, follows batch-bar pattern
+═══════════════════════════════════════════════════════════════════════ -->
+<div id="save-bar"
+     class="hidden glass-pop fixed bottom-8 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 rounded-lg flex items-center gap-3"
+     aria-hidden="true">
+  <span class="w-1.5 h-1.5 rounded-full bg-coral"></span>
+  <span class="text-aux" data-i18n="settings.unsaved" data-i18n-n="3">有未保存的更改 · 3 项</span>
+  <span class="w-px h-4 bg-ink-border-soft"></span>
+  <button id="save-discard" class="text-aux text-ink-fg-1 hover:text-ink-fg px-2 py-1 rounded hover:bg-ink-3/60 transition" data-i18n="settings.discard">放弃</button>
+  <button id="save-apply"  class="text-aux text-white bg-coral hover:bg-coral-hover px-3 py-1 rounded transition font-medium" data-i18n="settings.save">保存</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Status bar (24px)
+═══════════════════════════════════════════════════════════════════════ -->
+<footer class="glass h-statusbar border-t border-ink-border/60 text-meta font-mono text-ink-fg-2 flex items-center px-3 gap-3 shrink-0 select-none">
+  <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span>preferences</span>
+  <span class="text-ink-fg-3">|</span>
+  <span>section <span class="text-ink-fg-1">appearance</span></span>
+  <span class="text-ink-fg-3">|</span>
+  <span>schema v14</span>
+  <span class="ml-auto flex items-center gap-3">
+    <span>~/Library/Application Support/MailAgent/prefs.plist</span>
+    <span class="text-ink-fg-3">|</span>
+    <span>0.1.0-dev</span>
+  </span>
+</footer>
+
+<script>
+  /* ─── i18n (zh-CN / en) — DESIGN.md §2.10 ─────────────────────────
+     Settings has its own deep dictionary for the appearance pane,
+     plus shared chrome keys used by the title bar + popover. The
+     "Language" section is wired bidirectionally:
+       - clicking title-bar globe toggles + ticks the rad-on row,
+       - clicking a row applies the locale + ticks itself. */
+  (function () {
+    const KEY_LOCALE = 'mailagent.locale';
+    const DEFAULT_LOC = 'zh-CN';
+
+    const I18N_DICT = {
+      'zh-CN': {
+        'titleBar.docTitle':         'MailAgent · 偏好设置',
+        'titleBar.brandSuffix':      'MailAgent · 偏好设置',
+        'titleBar.localeTooltip':    '切换语言 (⌥G)',
+        'titleBar.localeAria':       '切换语言',
+        'titleBar.themeTooltip':     '切换浅色 / 深色 (⌥L)',
+        'titleBar.themeAria':        '切换主题',
+        'titleBar.accentTooltip':    '强调色',
+        'titleBar.accentAria':       '强调色',
+        'titleBar.syncTooltip':      '最近同步 14:32:08',
+        'status.synced':             '已同步',
+        'popover.accentTitle':       '强调色',
+        'popover.accentNote':        '影响工具栏 · 选中行 · 状态芯片 · Island 强调色。仅本地保存。',
+        'settings.searchSettings':   '搜索设置',
+        'settings.tab.general':      '常规',
+        'settings.tab.accounts':     '账户',
+        'settings.tab.appearance':   '外观',
+        'settings.tab.shortcuts':    '快捷键',
+        'settings.tab.sync':         '同步',
+        'settings.tab.island':       '灵动岛',
+        'settings.tab.privacy':      '隐私与数据',
+        'settings.appearance.title': '外观',
+        'settings.appearance.intro': '控制强调色、主题、AI 面板宽度与正文密度。在两种主题下分别预览。',
+        'settings.appearance.accent':'强调色',
+        'settings.appearance.accentNote': '同步至灵动岛通知边框、收件列表选中条、AI 起草按钮、批量栏徽章。每次切换都会广播到 /var/run/mailagent.sock。',
+        'settings.language.title':   '语言',
+        'settings.language.zh':      '简体中文',
+        'settings.language.zhMeta':  '界面文案 · 工具栏 · 设置 · AI 快捷动作。邮件正文不参与翻译。',
+        'settings.language.en':      'English',
+        'settings.language.enMeta':  'UI · toolbar · settings · AI quick actions. Email body never auto-translated.',
+        'settings.language.note':    '单声道 / 列表头（如 MAILBOXES · AI FIELDS · ATTACHMENTS）保持英文等宽体，与正文字号、密度均无关。详见 DESIGN.md §2.10 / §3.3。',
+        'settings.theme.title':      '主题',
+        'settings.theme.auto':       '跟随系统',
+        'settings.theme.autoMeta':   'macOS 切换时一并切换，开机即用',
+        'settings.theme.dark':       '深色',
+        'settings.theme.darkMeta':   '画布主色 #06080B → #0A0C10，玻璃在其之上',
+        'settings.theme.light':      '浅色',
+        'settings.theme.lightMeta':  '画布主色 #F6F7FB → #ECEEF4，强调色再走暖色调',
+        'settings.aiWidth.title':    'AI 面板宽度',
+        'settings.aiWidth.tight':    '紧凑',
+        'settings.aiWidth.default':  '默认',
+        'settings.aiWidth.wide':     '宽',
+        'settings.aiWidth.note':     '影响 ✦ AI / Thread / Sync 三标签的右侧栏。较小窗口下若总宽 < 1280px，AI 面板会自动折叠为标签按钮（参见 DESIGN.md §15 Open Q1）。',
+        'settings.density.title':    '列表密度',
+        'settings.density.comfortable': '舒适',
+        'settings.density.compact':  '紧凑',
+        'settings.fontSize.title':   '正文字号',
+        'settings.fontSize.note':    '下限 14 px（DESIGN.md §1.3 中文字号红线，不可低于）。上限 18 px。',
+        'settings.a11y.title':       '无障碍',
+        'settings.a11y.reduceTransparency':     '尊重「降低透明度」系统偏好',
+        'settings.a11y.reduceTransparencyMeta': '玻璃面板退化为不透明 ink，无运动模糊；保留布局与对比度',
+        'settings.a11y.reduceMotion':           '减弱动画',
+        'settings.a11y.reduceMotionMeta':       '关闭主题渐变、AI 流式光标、批量条上滑动画',
+        'settings.a11y.focusRing':              '高对比度焦点环',
+        'settings.a11y.focusRingMeta':          '键盘焦点显示 2 px 实线环，颜色取强调色',
+        'settings.unsaved':          '有未保存的更改 · {n} 项',
+        'settings.discard':          '放弃',
+        'settings.save':             '保存',
+      },
+      'en': {
+        'titleBar.docTitle':         'MailAgent · Preferences',
+        'titleBar.brandSuffix':      'MailAgent · Preferences',
+        'titleBar.localeTooltip':    'Switch language (⌥G)',
+        'titleBar.localeAria':       'Switch language',
+        'titleBar.themeTooltip':     'Toggle light / dark (⌥L)',
+        'titleBar.themeAria':        'Toggle theme',
+        'titleBar.accentTooltip':    'Accent color',
+        'titleBar.accentAria':       'Accent color',
+        'titleBar.syncTooltip':      'Last sync 14:32:08',
+        'status.synced':             'Synced',
+        'popover.accentTitle':       'Accent Color',
+        'popover.accentNote':        'Affects toolbar · chips · selected row · Island accent. Stored locally.',
+        'settings.searchSettings':   'Search settings',
+        'settings.tab.general':      'General',
+        'settings.tab.accounts':     'Accounts',
+        'settings.tab.appearance':   'Appearance',
+        'settings.tab.shortcuts':    'Shortcuts',
+        'settings.tab.sync':         'Sync',
+        'settings.tab.island':       'Dynamic Island',
+        'settings.tab.privacy':      'Privacy & Data',
+        'settings.appearance.title': 'Appearance',
+        'settings.appearance.intro': 'Control accent, theme, AI panel width, and content density. Preview in both themes.',
+        'settings.appearance.accent':'Accent Color',
+        'settings.appearance.accentNote': 'Syncs to the Dynamic Island notification ring, list selection edge, AI draft button, batch-bar badge. Broadcast to /var/run/mailagent.sock on every change.',
+        'settings.language.title':   'Language',
+        'settings.language.zh':      'Simplified Chinese',
+        'settings.language.zhMeta':  '界面文案 · 工具栏 · 设置 · AI 快捷动作。邮件正文不参与翻译。',
+        'settings.language.en':      'English',
+        'settings.language.enMeta':  'UI · toolbar · settings · AI quick actions. Email body never auto-translated.',
+        'settings.language.note':    'Mono section headers (MAILBOXES · AI FIELDS · ATTACHMENTS) stay English regardless of locale — design intent, not a gap. See DESIGN.md §2.10 / §3.3.',
+        'settings.theme.title':      'Theme',
+        'settings.theme.auto':       'Match system',
+        'settings.theme.autoMeta':   'Flips with macOS at boot and live',
+        'settings.theme.dark':       'Dark',
+        'settings.theme.darkMeta':   'Canvas #06080B → #0A0C10 with glass over it',
+        'settings.theme.light':      'Light',
+        'settings.theme.lightMeta':  'Canvas #F6F7FB → #ECEEF4, accent warms a notch',
+        'settings.aiWidth.title':    'AI Panel Width',
+        'settings.aiWidth.tight':    'Tight',
+        'settings.aiWidth.default':  'Default',
+        'settings.aiWidth.wide':     'Wide',
+        'settings.aiWidth.note':     'Affects the right rail with ✦ AI / Thread / Sync. Under 1280 px total width the AI panel folds into a tab rail — see DESIGN.md §15 Open Q1.',
+        'settings.density.title':    'List Density',
+        'settings.density.comfortable': 'Comfortable',
+        'settings.density.compact':  'Compact',
+        'settings.fontSize.title':   'Body Size',
+        'settings.fontSize.note':    'Floor: 14 px (DESIGN.md §1.3 Chinese type rule). Ceiling: 18 px.',
+        'settings.a11y.title':       'Accessibility',
+        'settings.a11y.reduceTransparency':     'Honor "Reduce Transparency" system pref',
+        'settings.a11y.reduceTransparencyMeta': 'Glass panels flatten to opaque ink, no motion blur; layout and contrast preserved',
+        'settings.a11y.reduceMotion':           'Reduce Motion',
+        'settings.a11y.reduceMotionMeta':       'Disable theme crossfade, AI streaming cursor, batch-bar slide-in',
+        'settings.a11y.focusRing':              'High-contrast focus ring',
+        'settings.a11y.focusRingMeta':          'Keyboard focus shows a 2 px solid ring tinted with the accent color',
+        'settings.unsaved':          'Unsaved changes · {n}',
+        'settings.discard':          'Discard',
+        'settings.save':             'Save',
+      },
+    };
+    window.__I18N_DICT = I18N_DICT;
+
+    const root  = document.documentElement;
+    const btn   = document.getElementById('locale-toggle');
+    const label = document.getElementById('locale-label');
+
+    function interp(s, n) { return (n != null) ? String(s).replace('{n}', String(n)) : s; }
+
+    function applyLocale(loc) {
+      if (!I18N_DICT[loc]) loc = DEFAULT_LOC;
+      const dict = I18N_DICT[loc];
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        if (el.closest('[data-i18n-skip]')) return;
+        const key = el.getAttribute('data-i18n');
+        if (!dict[key]) return;
+        const n = el.getAttribute('data-i18n-n');
+        el.textContent = interp(dict[key], n);
+      });
+      document.querySelectorAll('[data-i18n-attr]').forEach((el) => {
+        el.getAttribute('data-i18n-attr').split(',').forEach((pair) => {
+          const [attr, key] = pair.split(':').map((s) => s.trim());
+          if (dict[key]) el.setAttribute(attr, dict[key]);
+        });
+      });
+      const docTitleEl = document.querySelector('title[data-i18n]');
+      if (docTitleEl) {
+        const k = docTitleEl.getAttribute('data-i18n');
+        if (dict[k]) document.title = dict[k];
+      }
+      root.lang = loc;
+      root.dataset.locale = loc;
+      try { localStorage.setItem(KEY_LOCALE, loc); } catch (e) {}
+      if (label) label.textContent = (loc === 'zh-CN') ? '中文' : 'English';
+
+      // Two-way binding with the Language radio group in the pane.
+      document.querySelectorAll('[data-radio-group="locale"]').forEach((rad) => {
+        rad.classList.toggle('rad-on', rad.dataset.value === loc);
+      });
+    }
+
+    const stored = (function () { try { return localStorage.getItem(KEY_LOCALE); } catch (e) { return null; } })();
+    const nav    = (navigator.language || '').toLowerCase();
+    const initial = stored || (nav.startsWith('zh') ? 'zh-CN' : 'en');
+    applyLocale(initial);
+
+    btn.addEventListener('click', () => {
+      applyLocale(root.dataset.locale === 'zh-CN' ? 'en' : 'zh-CN');
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        applyLocale(root.dataset.locale === 'zh-CN' ? 'en' : 'zh-CN');
+      }
+    });
+
+    // Radio rows in the Language section drive the same applyLocale.
+    document.querySelectorAll('[data-radio-group="locale"]').forEach((rad) => {
+      rad.addEventListener('click', () => {
+        applyLocale(rad.dataset.value);
+        // Mark dirty so the save bar surfaces — same UX as theme/accent.
+        if (typeof markDirty === 'function') markDirty();
+      });
+    });
+
+    window.__applyLocale = applyLocale;
+  })();
+
+  /* Theme (dark / light) — shared contract with inbox */
+  (function () {
+    const KEY_THEME = 'mailagent.theme';
+    const root      = document.documentElement;
+    const btn       = document.getElementById('theme-toggle');
+    const label     = document.getElementById('theme-label');
+    const iconDark  = document.getElementById('theme-icon-dark');
+    const iconLight = document.getElementById('theme-icon-light');
+
+    function applyTheme(theme) {
+      const isLight = theme === 'light';
+      if (isLight) { root.dataset.theme = 'light'; root.classList.remove('dark'); }
+      else         { delete root.dataset.theme;    root.classList.add('dark'); }
+      iconDark.classList.toggle('hidden', isLight);
+      iconLight.classList.toggle('hidden', !isLight);
+      label.textContent = isLight ? 'Light' : 'Dark';
+      btn.setAttribute('aria-pressed', String(isLight));
+      try { localStorage.setItem(KEY_THEME, isLight ? 'light' : 'dark'); } catch (e) {}
+    }
+    const stored = (function () { try { return localStorage.getItem(KEY_THEME); } catch (e) { return null; } })();
+    const sys = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    applyTheme(stored || sys);
+    btn.addEventListener('click', () => applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light'));
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+      }
+    });
+    if (!stored && window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => applyTheme(e.matches ? 'light' : 'dark'));
+    }
+  })();
+
+  /* Accent picker — same swatch contract, plus inline accent grid mirror */
+  (function () {
+    const ACCENTS = {
+      coral:  { hex: '#E5654B', label: 'Coral'  },
+      cobalt: { hex: '#4A78E5', label: 'Cobalt' },
+      teal:   { hex: '#2DB5A6', label: 'Teal'   },
+      rose:   { hex: '#DB5B7C', label: 'Rose'   },
+      slate:  { hex: '#7E8694', label: 'Slate'  },
+      olive:  { hex: '#9CA552', label: 'Olive'  },
+    };
+    const KEY = 'mailagent.accent';
+    const btn      = document.getElementById('appearance-btn');
+    const popover  = document.getElementById('theme-popover');
+    const labelEl  = document.getElementById('appearance-label');
+    const swatches = popover.querySelectorAll('[data-accent]');
+    const inline   = document.querySelectorAll('[data-accent2]');
+
+    function apply(name) {
+      if (!ACCENTS[name]) name = 'coral';
+      if (name === 'coral') document.documentElement.removeAttribute('data-accent');
+      else                  document.documentElement.dataset.accent = name;
+      labelEl.textContent = ACCENTS[name].label;
+      btn.querySelector('span.inline-block').style.background = ACCENTS[name].hex;
+      swatches.forEach(s => s.setAttribute('aria-checked', s.dataset.accent === name ? 'true' : 'false'));
+      inline   .forEach(s => s.setAttribute('aria-checked', s.dataset.accent2 === name ? 'true' : 'false'));
+      try { localStorage.setItem(KEY, name); } catch (e) {}
+    }
+    apply(localStorage.getItem(KEY) || 'coral');
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = !popover.classList.contains('hidden');
+      popover.classList.toggle('hidden', open);
+      btn.setAttribute('aria-expanded', String(!open));
+    });
+    swatches.forEach(s => s.addEventListener('click', () => { apply(s.dataset.accent); markDirty(); }));
+    inline   .forEach(s => s.addEventListener('click', () => { apply(s.dataset.accent2); markDirty(); }));
+    document.addEventListener('click', (e) => {
+      if (popover.classList.contains('hidden')) return;
+      if (popover.contains(e.target) || btn.contains(e.target)) return;
+      popover.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !popover.classList.contains('hidden')) {
+        popover.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+
+  /* Dirty-state save bar — mirror batch-bar visibility contract */
+  let _dirty = false;
+  function markDirty() {
+    _dirty = true;
+    const bar = document.getElementById('save-bar');
+    bar.classList.remove('hidden');
+    bar.setAttribute('aria-hidden', 'false');
+  }
+  function clearDirty() {
+    _dirty = false;
+    const bar = document.getElementById('save-bar');
+    bar.classList.add('hidden');
+    bar.setAttribute('aria-hidden', 'true');
+  }
+  document.getElementById('save-discard').addEventListener('click', clearDirty);
+  document.getElementById('save-apply').addEventListener('click', clearDirty);
+
+  /* Toggles + radios */
+  document.querySelectorAll('[data-tog]').forEach(t => {
+    t.addEventListener('click', () => { t.classList.toggle('tog-on'); markDirty(); });
+  });
+  document.querySelectorAll('[data-radio-group]').forEach(r => {
+    r.addEventListener('click', () => {
+      const group = r.dataset.radioGroup;
+      document.querySelectorAll('[data-radio-group="' + group + '"]').forEach(x => x.classList.remove('rad-on'));
+      r.classList.add('rad-on');
+      markDirty();
+    });
+  });
+
+  /* Sidebar nav (visual only — content section labeled as Appearance) */
+  document.querySelectorAll('.nav-row[data-tab]').forEach(n => {
+    n.addEventListener('click', () => {
+      document.querySelectorAll('.nav-row[data-tab]').forEach(x => x.classList.remove('nav-on'));
+      n.classList.add('nav-on');
+    });
+  });
+
+  /* ─── App nav collapse (shared shell) ──────────────────────────── */
+  (function () {
+    const KEY = 'mailagent.nav.collapsed';
+    const navs = document.querySelectorAll('[data-app-nav]');
+    if (!navs.length) return;
+    function apply(val) {
+      const v = val ? 'true' : 'false';
+      navs.forEach(n => n.setAttribute('data-collapsed', v));
+    }
+    const stored = (function () { try { return localStorage.getItem(KEY); } catch (e) { return null; } })();
+    apply(stored === '1');
+    document.querySelectorAll('[data-app-nav-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cur = navs[0].getAttribute('data-collapsed') === 'true';
+        const next = !cur;
+        apply(next);
+        try { localStorage.setItem(KEY, next ? '1' : '0'); } catch (e) {}
+      });
+    });
+    window.addEventListener('storage', e => {
+      if (e.key === KEY) apply(e.newValue === '1');
+    });
+    document.addEventListener('keydown', e => {
+      if (e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        const cur = navs[0].getAttribute('data-collapsed') === 'true';
+        const next = !cur;
+        apply(next);
+        try { localStorage.setItem(KEY, next ? '1' : '0'); } catch (e2) {}
+      }
+    });
+  })();
+
+  /* ─── Account selector dropdown ─────────────────────────────────── */
+  (function () {
+    const triggers = document.querySelectorAll('[data-account-toggle]');
+    const popovers = document.querySelectorAll('[data-account-popover]');
+    const navs = document.querySelectorAll('[data-app-nav]');
+    if (!triggers.length || !popovers.length) return;
+    function isCollapsed() { return navs[0] && navs[0].getAttribute('data-collapsed') === 'true'; }
+    function closePops() { popovers.forEach(p => p.classList.add('hidden')); triggers.forEach(t => t.setAttribute('aria-expanded', 'false')); }
+    function openPops() { popovers.forEach(p => p.classList.remove('hidden')); triggers.forEach(t => t.setAttribute('aria-expanded', 'true')); }
+    triggers.forEach(t => {
+      t.addEventListener('click', e => {
+        e.stopPropagation();
+        if (isCollapsed()) {
+          navs.forEach(n => n.setAttribute('data-collapsed', 'false'));
+          try { localStorage.setItem('mailagent.nav.collapsed', '0'); } catch (e2) {}
+          return;
+        }
+        const open = !popovers[0].classList.contains('hidden');
+        if (open) closePops(); else openPops();
+      });
+    });
+    document.querySelectorAll('.account-option[data-account]').forEach(opt => {
+      opt.addEventListener('click', e => {
+        e.stopPropagation();
+        document.querySelectorAll('.account-option[data-active]').forEach(o => o.removeAttribute('data-active'));
+        opt.setAttribute('data-active', 'true');
+        closePops();
+      });
+    });
+    document.addEventListener('click', e => {
+      if (e.target.closest('[data-account-popover]')) return;
+      if (e.target.closest('[data-account-toggle]')) return;
+      closePops();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closePops(); });
+  })();
+</script>
+
+</body>
+</html>

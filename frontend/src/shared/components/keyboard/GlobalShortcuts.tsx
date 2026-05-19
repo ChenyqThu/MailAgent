@@ -12,11 +12,13 @@
 
 import { useCallback } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import i18n from '@shared/i18n'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
+import { useNavCollapsed } from '@shared/state/nav-shell'
 
 export function GlobalShortcuts(): null {
   const navigate = useNavigate()
@@ -43,6 +45,16 @@ export function GlobalShortcuts(): null {
     toggleAIChatPanel()
   }, [])
 
+  // Sprint 11 V1.4 — nav-shell collapse + locale toggle.
+  const toggleNav = useCallback(() => {
+    useNavCollapsed.getState().toggle()
+  }, [])
+  const toggleLocale = useCallback(() => {
+    const cur = (i18n.resolvedLanguage ?? i18n.language ?? 'zh-CN') as 'zh-CN' | 'en-US'
+    const next: 'zh-CN' | 'en-US' = cur === 'zh-CN' ? 'en-US' : 'zh-CN'
+    void i18n.changeLanguage(next)
+  }, [])
+
   // `?` requires shift on US/UK keyboards; the parser already keys on the
   // resolved char (which is '?' after shift), so spec='?' matches without
   // having to write 'shift+/'.
@@ -50,6 +62,8 @@ export function GlobalShortcuts(): null {
   useShortcut('cmd+k', togglePalette)
   useShortcut('cmd+,', goSettings)
   useShortcut('cmd+l', toggleAIPanel)
+  useShortcut('alt+b', toggleNav)
+  useShortcut('alt+g', toggleLocale)
 
   return null
 }

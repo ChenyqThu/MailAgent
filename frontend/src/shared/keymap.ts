@@ -173,9 +173,12 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     wired: false
   },
   {
+    // Sprint 11 V1.4 — moved from `alt+b` to `alt+shift+b`. The bare
+    // `alt+b` now globally toggles the nav-shell collapse per DESIGN.md
+    // §2.11. ⌥⇧B keeps chat backend switching reachable without ceremony.
     id: 'switchBackend',
-    spec: 'alt+b',
-    display: '⌥B',
+    spec: 'alt+shift+b',
+    display: '⌥⇧B',
     scope: 'chat',
     labelKey: 'shortcutHelp.binding.switchBackend',
     wired: true
@@ -204,6 +207,23 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     scope: 'global',
     labelKey: 'shortcutHelp.binding.toggleIsland',
     wired: false
+  },
+  // ── Sprint 11 V1.4 — nav-shell + locale toggles ────────────────────
+  {
+    id: 'toggleNav',
+    spec: 'alt+b',
+    display: '⌥B',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.toggleNav',
+    wired: true
+  },
+  {
+    id: 'toggleLocale',
+    spec: 'alt+g',
+    display: '⌥G',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.toggleLocale',
+    wired: true
   }
 ] as const
 

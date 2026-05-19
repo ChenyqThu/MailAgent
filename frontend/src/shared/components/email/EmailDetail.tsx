@@ -593,12 +593,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           <div className="mt-8 pt-5 border-t border-ink-border-soft flex items-center justify-between text-aux">
             <div className="text-meta font-mono text-ink-fg-2">
               internal_id {email.internal_id}
-              {email.message_id && (
-                <>
-                  {' '}
-                  · message_id {email.message_id.slice(1, 9)}…
-                </>
-              )}
+              {email.message_id && <> · message_id {email.message_id.slice(1, 9)}…</>}
             </div>
             {email.notion_url && (
               <a

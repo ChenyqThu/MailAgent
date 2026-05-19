@@ -1,74 +1,113 @@
-// DESIGN.md §3.3 + §5 — 240px sidebar. Five fixed sections with English
-// UPPERCASE mono headers. Sprint 2 wires only MAILBOXES to live data
-// (email:listMailboxes IPC); ACCOUNTS / AI AGENTS / TOOLS / OPS surface
-// placeholder rows that visually match the mockup so the rail isn't bare.
+// Sprint 11 V1.4 — DESIGN.md §2.11 single-shell nav contract.
 //
-// Selected mailbox: bg-ink-4 + 3px coral edge via .row-selected (CSS) for
-// the mockup-faithful left-edge accent. Unread count: coral pill when > 0,
-// dim mono otherwise.
+// 240/56 dual width state. Account header on top (badge + local-part +
+// caret + collapse chevron). Avatar monogram visible only in collapsed
+// mode. Three section groups, EXACTLY: MAILBOXES, AI AGENTS, VIEW
+// (DESIGN.md §2.11 lint rule #2: three and only three section headers).
+// Bottom strip: 设置 + 快捷键. The whole shell mounts on every page that
+// uses it (InboxLayout / SearchLayout / PageFrame); cross-page state
+// (collapsed) survives in localStorage + storage event (state/nav-shell).
+//
+// Visual class names (`app-nav`, `app-nav-account`, `app-nav-avatar-row`,
+// `app-nav-section-header`, `app-nav-section-spacer`, `app-nav-keep`,
+// `app-nav-bottom`, `app-nav-chevron-*`, `row-selected`) are load-bearing
+// hooks from §2.11 — they live in authored CSS (index.css) and survive
+// Tailwind purge. Do NOT replace with Tailwind utilities.
 
+import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   Activity,
   BarChart3,
   CalendarDays,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   HelpCircle,
   History,
   Inbox,
-  Languages,
-  Lock,
   Mail,
-  Search,
   Send,
   Settings,
   Sparkles,
-  Star
+  Star,
+  Sliders
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
-import { useEmailFilter } from '@shared/state/email-filter'
+import { useNavCollapsed } from '@shared/state/nav-shell'
 import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
+import { deriveAccount } from '@shared/lib/account'
 
-interface SectionProps {
-  label: string
-  children: React.ReactNode
-}
+import { AccountSwitcherPopover } from './AccountSwitcherPopover'
 
-function Section({ label, children }: SectionProps): React.ReactElement {
-  return (
-    <>
-      <div className="px-3 pb-1">
-        <h2
-          className={cn('text-micro font-mono uppercase text-ink-fg-2 px-2 py-1')}
-          style={{ letterSpacing: '0.08em' }}
-        >
-          {label}
-        </h2>
-      </div>
-      <nav className="px-2 space-y-px">{children}</nav>
-    </>
-  )
-}
-
-interface ItemProps {
+interface NavRowProps {
   icon: React.ReactNode
   label: string
   selected?: boolean
   onClick?: () => void
-  /** Right-side display: coral pill (unread > 0) or dim mono count, or any node. */
   right?: React.ReactNode
+  /** Disabled coming-soon row — DESIGN.md §9.4. */
+  disabled?: boolean
+  /** Tooltip surfaced on hover (esp. for disabled rows). */
+  title?: string
 }
 
-function Item({ icon, label, selected, onClick, right }: ItemProps): React.ReactElement {
+/** Inject `shrink-0` on the Lucide svg so it doesn't compress in flex
+ *  layouts, while leaving the caller's existing className alone. The
+ *  svg is rendered as a DIRECT child of <a>/<button> so the §2.11
+ *  collapsed-mode CSS rule `a > svg / button > svg` can swap the size
+ *  15→19 — and so the collapsed hide rule `> span:not(.app-nav-keep)`
+ *  never accidentally hides the icon. */
+function renderIcon(icon: React.ReactNode): React.ReactNode {
+  if (!isValidElement<{ className?: string }>(icon)) return icon
+  return cloneElement(icon, {
+    className: cn('shrink-0', icon.props.className)
+  })
+}
+
+function NavRow({
+  icon,
+  label,
+  selected,
+  onClick,
+  right,
+  disabled,
+  title
+}: NavRowProps): React.ReactElement {
+  // Disabled rows render as a non-interactive <div> per DESIGN.md §9.4 —
+  // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
+  // `.row-selected` capability. Screenreaders announce aria-disabled.
+  if (disabled) {
+    return (
+      <div
+        role="link"
+        aria-disabled="true"
+        tabIndex={-1}
+        title={title}
+        data-disabled="true"
+        className={cn(
+          'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
+          'text-body text-left text-ink-fg-1 opacity-50 cursor-not-allowed'
+        )}
+      >
+        {renderIcon(icon)}
+        <span className="flex-1 truncate">{label}</span>
+        {right && <span className="shrink-0">{right}</span>}
+      </div>
+    )
+  }
   return (
     <button
       type="button"
       onClick={onClick}
+      title={title}
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
@@ -77,24 +116,24 @@ function Item({ icon, label, selected, onClick, right }: ItemProps): React.React
           : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
       )}
     >
-      <span className="shrink-0 grid place-items-center w-[15px] h-[15px] text-ink-fg-2">
-        {icon}
-      </span>
+      {renderIcon(icon)}
       <span className="flex-1 truncate">{label}</span>
       {right && <span className="shrink-0">{right}</span>}
     </button>
   )
 }
 
+/** Coral pill for the inbox unread count. Mockup §2.11 keeps the pill
+ *  visible even when count=0 (the bordered chip is a constant affordance
+ *  signalling "this row tracks unread"). The fg colour dims when 0 so the
+ *  zero state still reads as "no new mail" without yelling. */
 function UnreadPill({ count }: { count: number }): React.ReactElement {
-  if (count === 0) {
-    return <span className="text-meta font-mono text-ink-fg-3 tabular-nums">{count}</span>
-  }
   return (
     <span
       className={cn(
         'text-micro font-mono tabular-nums px-1.5 py-0.5 rounded',
-        'text-ink-fg bg-coral/15 border border-coral/30'
+        'border border-coral/30 bg-coral/15',
+        count > 0 ? 'text-ink-fg' : 'text-ink-fg-3'
       )}
     >
       {count}
@@ -110,20 +149,35 @@ function TotalCount({ count }: { count: number }): React.ReactElement {
   )
 }
 
-const MAILBOX_ICON: Record<string, React.ReactNode> = {
-  收件箱: <Inbox size={15} strokeWidth={1.75} />,
-  发件箱: <Send size={15} strokeWidth={1.75} />
+/** Notion Agent online indicator. The `.app-nav-keep` class keeps the dot
+ *  visible in collapsed mode (the one color anchor in the icon-only rail). */
+function OnlineDot({ online }: { online: boolean }): React.ReactElement {
+  return (
+    <span
+      className={cn('app-nav-keep w-1.5 h-1.5 rounded-full', online ? 'bg-ok' : 'bg-ink-fg-3')}
+    />
+  )
+}
+
+const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
+  inbox: <Inbox size={15} strokeWidth={1.75} />,
+  outbox: <Send size={15} strokeWidth={1.75} />,
+  flagged: <Star size={15} strokeWidth={1.75} />,
+  all: <Mail size={15} strokeWidth={1.75} />
 }
 
 export function Sidebar(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const navigate = useNavigate()
-  const active = useMailbox((s) => s.active)
-  const setActive = useMailbox((s) => s.setActive)
-  const currentFilter = useEmailFilter((s) => s.filter)
-  const setFilter = useEmailFilter((s) => s.setFilter)
+  const collapsed = useNavCollapsed((s) => s.collapsed)
+  const toggleCollapsed = useNavCollapsed((s) => s.toggle)
+  const view = useEmailFilter((s) => s.view)
+  const setView = useEmailFilter((s) => s.setView)
+  const setActiveMailbox = useMailbox((s) => s.setActive)
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
 
+  // Mailbox counts — live data, every 60s background refresh.
   const { data } = useQuery({
     queryKey: ['mailboxes'],
     queryFn: () => mailApi.email.listMailboxes(),
@@ -133,158 +187,276 @@ export function Sidebar(): React.ReactElement {
   })
   const mailboxes = data ?? []
 
-  // Sprint 10 user-acceptance — sum across all mailboxes so the virtual
-  // "已标旗 / 所有邮件" entries surface real numbers (previously hardcoded 0
-  // for the flagged row). listMailboxes excludes `skipped` rows so these
-  // counts match what the email list actually renders.
+  // Settings — drives the account header (notionAgentName) + Notion Agent
+  // online dot (presence of notionAgentPageId).
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => mailApi.settings.get(),
+    staleTime: 60_000
+  })
+  // Sprint 11 user-feedback — owner email comes from .env USER_EMAIL via
+  // settings.userEmail (loaded by main/handlers/settings.ts on every read).
+  // Falls back to notionAgentName if .env doesn't have USER_EMAIL.
+  const accountEmail = settings?.userEmail ?? settings?.notionAgentName ?? null
+  const account = deriveAccount(accountEmail)
+  const notionAgentOnline = (settings?.notionAgentPageId ?? null) !== null
+
+  // Aggregate counts for virtual rows (flagged / all-mail).
+  const inboxRow = mailboxes.find((m) => m.mailbox === '收件箱')
+  const inboxUnread = inboxRow?.unread ?? 0
   const allTotal = mailboxes.reduce((sum, mb) => sum + mb.total, 0)
   const flaggedTotal = mailboxes.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
 
-  const handleFlaggedClick = (): void => {
-    setFilter('flagged')
-    void navigate({ to: '/' })
+  // MAILBOXES selection: only when we're on the inbox route. Other routes
+  // (settings, admin, etc.) leave all MAILBOXES rows unselected. Plus the
+  // VIEW rows derive selection from pathname so §2.11 lint rule #4
+  // (`row-selected` count ≤ 1) holds for free.
+  const onInbox = pathname === '/'
+  const selectedView = onInbox ? view : null
+
+  // Account popover — anchored under the header row. Outside-click /
+  // Escape dismiss + add-account ghost row live in AccountSwitcherPopover.
+  // The trigger button (`accountButtonRef`) is passed as the anchorRef so
+  // clicks on it don't dismiss the popover (the trigger toggles open).
+  // Route-change dismissal is delegated to the popover's outside-click
+  // listener — clicks on sidebar nav rows fall outside the popover bounds
+  // and outside the anchor, so the popover's own handler closes it.
+  const [accountOpen, setAccountOpen] = useState(false)
+  const accountButtonRef = useRef<HTMLButtonElement>(null)
+
+  const handleViewClick = (next: EmailView): void => {
+    setView(next)
+    // Keep useMailbox.active in lockstep for the StatusBar mailbox segment.
+    // inbox/outbox map cleanly to concrete Mail.app mailboxes; the virtual
+    // flagged/all views use a descriptive label so StatusBar reads sensibly.
+    if (next === 'inbox') setActiveMailbox('收件箱')
+    else if (next === 'outbox') setActiveMailbox('发件箱')
+    // flagged + all leave activeMailbox alone — they are cross-mailbox views.
+    void navigate({ to: '/', search: { view: next } })
   }
-  const handleAllMailClick = (): void => {
-    setFilter('all')
-    void navigate({ to: '/' })
+
+  const handleAvatarClick = (): void => {
+    if (collapsed) {
+      // Expand the shell first so the popover has room to render, then
+      // open the dropdown — same idiom as DESIGN.md §2.11 spec.
+      toggleCollapsed()
+      // Defer popover open one tick so the width transition starts first.
+      window.setTimeout(() => setAccountOpen(true), 60)
+    } else {
+      setAccountOpen((o) => !o)
+    }
   }
 
   return (
     <aside
+      data-app-nav
+      data-collapsed={collapsed ? 'true' : 'false'}
       aria-label="primary"
-      className={cn('w-60 shrink-0 bg-ink-1 border-r border-ink-border flex flex-col')}
+      className={cn('app-nav glass border-r border-ink-border/60 flex flex-col relative')}
     >
+      {/* ── Header row · account selector + collapse chevron ───────────── */}
+      <div className="app-nav-header flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft shrink-0">
+        <button
+          ref={accountButtonRef}
+          type="button"
+          onClick={() => setAccountOpen((o) => !o)}
+          className={cn(
+            'app-nav-account flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md',
+            'hover:bg-ink-3 transition-colors duration-fast group'
+          )}
+          aria-haspopup="menu"
+          aria-expanded={accountOpen}
+          title={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
+        >
+          {account.badge && (
+            <span className="text-micro font-mono px-1 py-[1px] rounded bg-ink-3 border border-ink-border-soft text-ink-fg-1 shrink-0">
+              {account.badge}
+            </span>
+          )}
+          <span className="text-body text-ink-fg truncate">{account.localPart}</span>
+          <ChevronDown
+            size={11}
+            strokeWidth={2}
+            className={cn(
+              'shrink-0 text-ink-fg-2 transition-transform duration-fast',
+              accountOpen && 'rotate-180'
+            )}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          className="shrink-0 p-1 rounded hover:bg-ink-3 text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
+          title={t('nav.toggleTitle')}
+          aria-label={t('nav.toggleAria')}
+        >
+          <ChevronLeft className="app-nav-chevron-collapse" size={13} strokeWidth={2} />
+          <ChevronRight className="app-nav-chevron-expand" size={13} strokeWidth={2} />
+        </button>
+      </div>
+
+      {/* ── Avatar monogram row (visible only when collapsed) ─────────── */}
+      <div
+        className="app-nav-avatar-row items-center justify-center py-2 border-b border-ink-border-soft shrink-0"
+        style={{ display: 'none' }}
+      >
+        <button
+          type="button"
+          onClick={handleAvatarClick}
+          className="w-9 h-9 rounded-full flex items-center justify-center text-aux font-medium shadow-sm"
+          style={{
+            background: 'rgb(var(--c-accent))',
+            color: 'rgb(var(--c-accent-fg))'
+          }}
+          title={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
+          aria-label={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
+        >
+          {account.monogram}
+        </button>
+      </div>
+
+      {/* ── Account dropdown popover (expanded only — V1 single account) ─ */}
+      {accountOpen && !collapsed && (
+        <AccountSwitcherPopover
+          account={account}
+          anchorRef={accountButtonRef}
+          onClose={() => setAccountOpen(false)}
+          onAddAccount={() => {
+            setAccountOpen(false)
+            void navigate({ to: '/settings' })
+          }}
+        />
+      )}
+
+      {/* ── Body · 3 groups (MAILBOXES / AI AGENTS / VIEW) ─────────────── */}
       <div className="flex-1 overflow-y-auto scrollbar-thin py-2.5">
-        <Section label={t('sidebar.section.mailboxes')}>
-          {mailboxes.map((mb) => (
-            <Item
-              key={mb.mailbox}
-              icon={MAILBOX_ICON[mb.mailbox] ?? <Mail size={15} strokeWidth={1.75} />}
-              label={mb.mailbox}
-              selected={mb.mailbox === active}
-              onClick={() => setActive(mb.mailbox)}
-              right={<UnreadPill count={mb.unread} />}
-            />
-          ))}
-          {mailboxes.length > 0 && (
-            <Item
-              icon={<Star size={15} strokeWidth={1.75} />}
-              label={t('sidebar.flagged')}
-              selected={currentFilter === 'flagged'}
-              onClick={handleFlaggedClick}
-              right={
-                flaggedTotal > 0 ? (
-                  <UnreadPill count={flaggedTotal} />
-                ) : (
-                  <TotalCount count={flaggedTotal} />
-                )
-              }
-            />
-          )}
-          {mailboxes.length > 0 && (
-            <Item
-              icon={<Mail size={15} strokeWidth={1.75} />}
-              label={t('sidebar.allMail')}
-              selected={currentFilter === 'all'}
-              onClick={handleAllMailClick}
-              right={<TotalCount count={allTotal} />}
-            />
-          )}
-        </Section>
+        {/* MAILBOXES */}
+        <div className="app-nav-section-header px-3 pb-1">
+          <h2
+            className="text-micro font-mono uppercase text-ink-fg-2 px-2 py-1"
+            style={{ letterSpacing: '0.08em' }}
+          >
+            {t('nav.section.mailboxes')}
+          </h2>
+        </div>
+        <nav className="px-2 space-y-px">
+          <NavRow
+            icon={MAILBOX_ICON.inbox}
+            label={t('nav.inbox')}
+            selected={selectedView === 'inbox'}
+            onClick={() => handleViewClick('inbox')}
+            right={<UnreadPill count={inboxUnread} />}
+          />
+          {/* Mockup §2.11: outbox row has no right-side count (developers
+              don't typically have unread sent mail). Drop the right slot
+              entirely so the row reads "发件箱" alone. */}
+          <NavRow
+            icon={MAILBOX_ICON.outbox}
+            label={t('nav.outbox')}
+            selected={selectedView === 'outbox'}
+            onClick={() => handleViewClick('outbox')}
+          />
+          <NavRow
+            icon={MAILBOX_ICON.flagged}
+            label={t('nav.flagged')}
+            selected={selectedView === 'flagged'}
+            onClick={() => handleViewClick('flagged')}
+            right={
+              flaggedTotal > 0 ? (
+                <UnreadPill count={flaggedTotal} />
+              ) : (
+                <TotalCount count={flaggedTotal} />
+              )
+            }
+          />
+          <NavRow
+            icon={MAILBOX_ICON.all}
+            label={t('nav.allMail')}
+            selected={selectedView === 'all'}
+            onClick={() => handleViewClick('all')}
+            right={<TotalCount count={allTotal} />}
+          />
+        </nav>
 
-        <div className="my-3 mx-4 border-t border-ink-border-soft" />
+        <div className="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft" />
 
-        <Section label={t('sidebar.section.aiAgents')}>
-          {/* Sprint 10 user-acceptance — AI Agents entries used to be
-              presentational only ("根本点不了" per user feedback). Now they
-              open the AI Chat panel (where backend selection lives) or jump
-              to Settings → AI backends for configuration. */}
-          <Item
+        {/* AI AGENTS */}
+        <div className="app-nav-section-header px-3 pb-1">
+          <h2
+            className="text-micro font-mono uppercase text-ink-fg-2 px-2 py-1"
+            style={{ letterSpacing: '0.08em' }}
+          >
+            {t('nav.section.aiAgents')}
+          </h2>
+        </div>
+        <nav className="px-2 space-y-px">
+          <NavRow
             icon={<Sparkles size={15} strokeWidth={1.75} />}
             label="Notion Agent"
             onClick={toggleAIChatPanel}
-            right={<span className="w-1.5 h-1.5 rounded-full bg-ok" title={t('sidebar.online')} />}
+            right={<OnlineDot online={notionAgentOnline} />}
           />
-          <Item
-            icon={<Lock size={15} strokeWidth={1.75} />}
+          <NavRow
+            icon={<Sliders size={15} strokeWidth={1.75} />}
             label="Custom API"
             onClick={toggleAIChatPanel}
           />
-          <Item
+          {/* AI 会话历史 — disabled (no chat history table yet). DESIGN.md §9.4. */}
+          <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
-            label={t('sidebar.aiHistory')}
-            onClick={() => void navigate({ to: '/settings' })}
+            label={t('nav.aiSessions')}
+            disabled
+            title={t('nav.aiSessionsSoon')}
           />
-        </Section>
+        </nav>
 
-        <div className="my-3 mx-4 border-t border-ink-border-soft" />
+        <div className="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft" />
 
-        <Section label={t('sidebar.section.accounts')}>
-          <Item
-            icon={<span className="w-2 h-2 rounded-full bg-coral/100" />}
-            label="chenge.ink"
-            right={<TotalCount count={allTotal} />}
-          />
-        </Section>
-
-        <div className="my-3 mx-4 border-t border-ink-border-soft" />
-
-        <Section label={t('sidebar.section.tools')}>
-          <Item
-            icon={<Search size={15} strokeWidth={1.75} />}
-            label={t('sidebar.search')}
-            right={<kbd>⌘K</kbd>}
-            onClick={() => navigate({ to: '/search' })}
-          />
-          <Item
-            icon={<Languages size={15} strokeWidth={1.75} />}
-            label={t('sidebar.translate')}
-            right={<kbd>⌥T</kbd>}
-          />
-        </Section>
-
-        <div className="my-3 mx-4 border-t border-ink-border-soft" />
-
-        <Section label={t('sidebar.section.ops')}>
-          <Item
+        {/* VIEW (LLM Dashboard / 看板 Admin / 日历) — pathname-driven selection */}
+        <div className="app-nav-section-header px-3 pb-1">
+          <h2
+            className="text-micro font-mono uppercase text-ink-fg-2 px-2 py-1"
+            style={{ letterSpacing: '0.08em' }}
+          >
+            {t('nav.section.view')}
+          </h2>
+        </div>
+        <nav className="px-2 space-y-px">
+          <NavRow
             icon={<Activity size={15} strokeWidth={1.75} />}
-            label={t('sidebar.llmDashboard')}
-            right={
-              <span className="w-1.5 h-1.5 rounded-full bg-warn" title={t('sidebar.cacheWarn')} />
-            }
-            onClick={() => navigate({ to: '/llm' })}
+            label="LLM Dashboard"
+            selected={pathname.startsWith('/admin/llm') || pathname === '/llm'}
+            onClick={() => navigate({ to: '/admin/llm' })}
           />
-          <Item
+          <NavRow
             icon={<BarChart3 size={15} strokeWidth={1.75} />}
-            label={t('sidebar.admin')}
-            onClick={() => navigate({ to: '/admin' })}
+            label={t('nav.adminKanban')}
+            selected={pathname === '/admin/kanban' || pathname === '/admin'}
+            onClick={() => navigate({ to: '/admin/kanban' })}
           />
-          <Item
+          <NavRow
             icon={<CalendarDays size={15} strokeWidth={1.75} />}
-            label={t('sidebar.calendar')}
-            onClick={() => navigate({ to: '/calendar' })}
+            label={t('nav.calendar')}
+            selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
+            onClick={() => navigate({ to: '/admin/calendar' })}
           />
-        </Section>
+        </nav>
       </div>
 
-      {/* Bottom · Settings + Help (Sprint 6 / Sprint 7) */}
-      <div className="border-t border-ink-border-soft p-2 space-y-px">
-        <Item
+      {/* ── Bottom strip · 设置 + 快捷键 ──────────────────────────────── */}
+      <div className="app-nav-bottom border-t border-ink-border-soft p-2 space-y-px">
+        <NavRow
           icon={<Settings size={15} strokeWidth={1.75} />}
-          label={t('sidebar.settings')}
-          right={<kbd>⌘,</kbd>}
+          label={t('nav.settings')}
+          selected={pathname === '/settings'}
           onClick={() => navigate({ to: '/settings' })}
+          right={<kbd>⌘,</kbd>}
         />
-        <Item
+        <NavRow
           icon={<HelpCircle size={15} strokeWidth={1.75} />}
-          label={t('sidebar.shortcuts')}
+          label={t('nav.shortcuts')}
+          onClick={openKeyboardHelp}
           right={<kbd>?</kbd>}
-          onClick={() => {
-            // Sprint 7 D2 — open the keyboard help modal via the shared
-            // helper (mounted at root in `App.tsx`). The helper guards
-            // SSR / pre-mount calls.
-            openKeyboardHelp()
-          }}
         />
       </div>
     </aside>

@@ -70,11 +70,7 @@ export function ContextChips({
       )}
     >
       {/* Section label — English mono caption (never goes through CJK swap) */}
-      <span
-        className={cn(
-          'text-meta font-mono uppercase tracking-wider text-ink-fg-2 mr-0.5'
-        )}
-      >
+      <span className={cn('text-meta font-mono uppercase tracking-wider text-ink-fg-2 mr-0.5')}>
         Ctx
       </span>
 

@@ -62,10 +62,13 @@ interface Command {
 interface NavSpec {
   id: string
   labelKey: string
-  to: '/' | '/search' | '/admin' | '/llm' | '/calendar' | '/settings'
+  to: '/' | '/search' | '/admin/llm' | '/admin/kanban' | '/admin/calendar' | '/settings'
   icon: React.ReactNode
 }
 
+// Sprint 11 V1.4 — route reorg: `/admin/{llm,kanban,calendar}` replaced the
+// flat `/admin /llm /calendar`. palette.nav.admin still labels the dead-letter
+// dashboard; its target is now /admin/kanban.
 const NAV_COMMANDS: ReadonlyArray<NavSpec> = [
   {
     id: 'inbox',
@@ -82,19 +85,19 @@ const NAV_COMMANDS: ReadonlyArray<NavSpec> = [
   {
     id: 'admin',
     labelKey: 'palette.nav.admin',
-    to: '/admin',
+    to: '/admin/kanban',
     icon: <BarChart3 size={14} strokeWidth={1.75} />
   },
   {
     id: 'llm',
     labelKey: 'palette.nav.llm',
-    to: '/llm',
+    to: '/admin/llm',
     icon: <Sparkles size={14} strokeWidth={1.75} />
   },
   {
     id: 'calendar',
     labelKey: 'palette.nav.calendar',
-    to: '/calendar',
+    to: '/admin/calendar',
     icon: <CalendarDays size={14} strokeWidth={1.75} />
   },
   {

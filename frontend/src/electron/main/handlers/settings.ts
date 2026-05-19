@@ -54,6 +54,11 @@ export interface PersistentSettings {
   notionAgentName: string | null
   /** Custom-API base URL — the key lives in keytar (custom-api-key). */
   customApiEndpoint: string | null
+  /** Sprint 11 V1.4 — owner's email address, surfaced in the nav-shell
+   *  account header. Sourced from the repo-root `.env` USER_EMAIL key at
+   *  every settings:get read (NOT user-writable). The Sidebar's
+   *  `deriveAccount(userEmail)` derives the badge + monogram from this. */
+  userEmail: string | null
 }
 
 const DEFAULTS: PersistentSettings = {
@@ -62,17 +67,51 @@ const DEFAULTS: PersistentSettings = {
   pollIntervalSec: 5,
   notionAgentPageId: null,
   notionAgentName: null,
-  customApiEndpoint: null
+  customApiEndpoint: null,
+  userEmail: null
+}
+
+/** Sprint 11 V1.4 — read USER_EMAIL from the repo-root `.env`. The file is
+ *  the same one the Python backend reads, so the owner-of-the-SQLite-SSoT
+ *  edits one source. Search order: process.env (shell-injected),
+ *  $MAILAGENT_ENV_FILE override, dev cwd `../.env` (cwd=frontend), packaged
+ *  install at `~/Documents/MailAgent/.env`. First hit wins. */
+function loadUserEmailFromEnv(): string | null {
+  const shellVar = process.env.USER_EMAIL
+  if (shellVar && shellVar.includes('@')) return shellVar.trim()
+  const candidates: string[] = []
+  if (process.env.MAILAGENT_ENV_FILE) candidates.push(process.env.MAILAGENT_ENV_FILE)
+  candidates.push(join(process.cwd(), '..', '.env'))
+  try {
+    candidates.push(join(app.getPath('home'), 'Documents', 'MailAgent', '.env'))
+  } catch {
+    /* app not ready — skip the home candidate */
+  }
+  for (const p of candidates) {
+    try {
+      const txt = readFileSync(p, 'utf8')
+      const match = txt.match(/^\s*USER_EMAIL\s*=\s*(.+?)\s*$/m)
+      if (match && match[1].includes('@')) {
+        return match[1].replace(/^["']|["']$/g, '').trim()
+      }
+    } catch {
+      /* candidate not found, try next */
+    }
+  }
+  return null
 }
 
 function readSettings(): PersistentSettings {
+  let persisted: Partial<PersistentSettings> = {}
   try {
-    if (!existsSync(SETTINGS_FILE)) return { ...DEFAULTS }
-    const raw = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')) as Partial<PersistentSettings>
-    return { ...DEFAULTS, ...sanitize(raw) }
+    if (existsSync(SETTINGS_FILE)) {
+      persisted = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')) as Partial<PersistentSettings>
+    }
   } catch {
-    return { ...DEFAULTS }
+    /* corrupt file — fall through to defaults */
   }
+  const userEmail = loadUserEmailFromEnv()
+  return { ...DEFAULTS, ...sanitize(persisted), userEmail }
 }
 
 // Sprint 7 Day 1 (Sprint 6 review opus MEDIUM #1) — `isSafeUserPath` moved

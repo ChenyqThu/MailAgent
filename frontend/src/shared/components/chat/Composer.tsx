@@ -147,7 +147,7 @@ export function Composer({
               title={t('chat.composer.cancel')}
               className={cn(
                 'ml-1 w-7 h-7 rounded-md grid place-items-center',
-                'bg-ink-4 hover:bg-coral text-ink-fg-1 hover:text-accent-fg',
+                'bg-ink-4 hover:bg-coral/100 text-ink-fg-1 hover:text-accent-fg',
                 'transition-colors duration-fast'
               )}
             >
@@ -165,7 +165,7 @@ export function Composer({
                 'transition-colors duration-fast',
                 sendDisabled
                   ? 'bg-ink-4 text-ink-fg-3 cursor-not-allowed'
-                  : 'bg-ink-4 hover:bg-coral text-ink-fg-1 hover:text-accent-fg'
+                  : 'bg-ink-4 hover:bg-coral/100 text-ink-fg-1 hover:text-accent-fg'
               )}
             >
               <ArrowUp size={12} strokeWidth={2.5} />

@@ -14,11 +14,11 @@ import { MailQuestion, Paperclip, Star } from 'lucide-react'
 import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
-import { useEmailFilter, type EmailFilter } from '@shared/state/email-filter'
+import { useEmailFilter, type EmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
-import type { EnrichedEmailMeta } from '@shared/api/types'
+import type { EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 
 import { EmailRow } from './EmailRow'
 
@@ -116,20 +116,43 @@ function FilterChip({ active, icon, label, count, onClick }: FilterChipProps): R
   )
 }
 
+// Sprint 11 V1.4 — view → list-query opts. The four sidebar MAILBOXES rows
+// (收件箱/发件箱/已标旗/所有邮件) are now the primary list selector;
+// CommandPalette's setActiveMailbox still drives `useMailbox.active` for
+// StatusBar display, but the query itself runs off `view`.
+function listOptsForView(view: EmailView): ListOpts {
+  if (view === 'inbox') return { mailbox: '收件箱', limit: 100 }
+  if (view === 'outbox') return { mailbox: '发件箱', limit: 100 }
+  if (view === 'flagged') return { isFlagged: true, limit: 100 }
+  return { limit: 100 }
+}
+
+function headerKeyForView(view: EmailView): string {
+  if (view === 'inbox') return 'nav.inbox'
+  if (view === 'outbox') return 'nav.outbox'
+  if (view === 'flagged') return 'nav.flagged'
+  return 'nav.allMail'
+}
+
 export function EmailList(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
-  const mailbox = useMailbox((s) => s.active)
+  const activeMailbox = useMailbox((s) => s.active)
   const activeId = useActiveEmail((s) => s.activeInternalId)
   const setActive = useActiveEmail((s) => s.setActive)
   // Sprint 10 user-acceptance — filter state lifted to zustand so the
   // Sidebar "已标旗" virtual entry can flip it on click.
   const filter = useEmailFilter((s) => s.filter)
   const setFilter = useEmailFilter((s) => s.setFilter)
+  const view = useEmailFilter((s) => s.view)
+  const headerLabel = t(headerKeyForView(view))
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['emails', mailbox],
-    queryFn: () => mailApi.email.listEnriched({ mailbox, limit: 100 }),
+    // `activeMailbox` is included in the key so a CommandPalette mailbox
+    // switch (which sets useMailbox but not view) still re-queries — keeps
+    // the inbox/outbox virtual views responsive to either mutation source.
+    queryKey: ['emails', view, activeMailbox],
+    queryFn: () => mailApi.email.listEnriched(listOptsForView(view)),
     refetchInterval: 5000,
     refetchIntervalInBackground: false
   })
@@ -177,7 +200,7 @@ export function EmailList(): React.ReactElement {
       {/* Header */}
       <header className="px-4 pt-3 pb-2.5 border-b border-ink-border-soft">
         <div className="flex items-baseline justify-between">
-          <h1 className="text-lead font-semibold text-ink-fg tracking-tight">{mailbox}</h1>
+          <h1 className="text-lead font-semibold text-ink-fg tracking-tight">{headerLabel}</h1>
           <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
             {counts.unread} unread · {counts.all} total
           </span>

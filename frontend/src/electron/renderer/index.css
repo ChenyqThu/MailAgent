@@ -69,6 +69,27 @@
   --c-fail: 252 152 152;
   --c-info: 184 214 244;
   --c-ai: 224 196 244;
+
+  /* Sprint 11 V1.4 chrome — glass material tuples used by the nav-shell
+   * account popover + theme popover. Saturation 180% pulls accent color
+   * through the blur (Apple signature). --pop-shadow is the dark recipe;
+   * :root[data-theme='light'] overrides --glass-stroke + --pop-shadow. */
+  --glass: saturate(180%) blur(28px);
+  --glass-lg: saturate(180%) blur(40px);
+  --glass-stroke: rgb(255 255 255 / 0.08);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    0 24px 60px rgba(0, 0, 0, 0.55),
+    0 6px 16px rgba(0, 0, 0, 0.4);
+
+  /* Aurora wallpaper tinted with the live accent — sits behind the
+   * Liquid-Glass chrome panes so the blur picks up colour from the
+   * accent. body::before pulls this in via `background: var(--wallpaper)`. */
+  --wallpaper:
+    radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+    radial-gradient(55vw 60vh at 95% 6%, rgba(80, 140, 255, 0.22), transparent 65%),
+    radial-gradient(60vw 55vh at 50% 110%, rgba(160, 110, 255, 0.18), transparent 70%),
+    linear-gradient(180deg, #0e1013 0%, #15181d 100%);
 }
 
 :root[data-theme='light'] {
@@ -110,6 +131,22 @@
   --c-fail: 130 30 32;
   --c-info: 24 70 116;
   --c-ai: 92 58 130;
+
+  /* Glass surface stroke flips to a translucent white so the hairline
+   * remains visible against the brighter paper. Pop-shadow softens too —
+   * dark drop on warm paper would feel out of character. */
+  --glass-stroke: rgb(255 255 255 / 0.7);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.85),
+    0 18px 50px rgba(18, 24, 46, 0.16),
+    0 4px 14px rgba(18, 24, 46, 0.1);
+
+  /* Lighter aurora on warm paper for light mode. */
+  --wallpaper:
+    radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+    radial-gradient(55vw 60vh at 95% 6%, rgba(110, 160, 255, 0.32), transparent 65%),
+    radial-gradient(60vw 55vh at 50% 110%, rgba(180, 140, 235, 0.22), transparent 70%),
+    linear-gradient(180deg, #f6f7fb 0%, #eceef4 100%);
 }
 
 /* Per-accent dark-mode swatches. Sprint 4 a11y carry-forward: all
@@ -499,3 +536,234 @@ mark {
 .swatch-olive {
   background: linear-gradient(135deg, rgb(196, 208, 122), rgb(172, 184, 106));
 }
+
+/* ─── Sprint 11 V1.4 — Liquid Glass material layers ──────────────────
+ * Mockup ref §2.8 Liquid Glass over an aurora wallpaper. Chrome surfaces
+ * pick ink-1 (sidebar/titlebar/statusbar), interior list pane is ink-2,
+ * and the email detail pane is ink-3. The wallpaper bleeds through via
+ * `body::before` (declared in this block) and each `.glass-*` class
+ * applies the same blur filter at progressively higher opacities so the
+ * deeper into the layout you go, the less aurora shows. */
+html,
+body {
+  background: transparent;
+  overscroll-behavior: none;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--wallpaper);
+  background-attachment: fixed;
+  pointer-events: none;
+  transition: background 320ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.glass {
+  background-color: rgb(var(--ink-1) / 0.55);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+}
+.glass-2 {
+  background-color: rgb(var(--ink-2) / 0.45);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+}
+.glass-3 {
+  background-color: rgb(var(--ink-3) / 0.55);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+}
+.glass-pop {
+  background-color: rgb(var(--ink-2) / 0.82);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+  border: 1px solid var(--glass-stroke);
+  box-shadow: var(--pop-shadow);
+}
+/* Honour accessibility opt-outs — flatten to opaque ink and skip the
+ * blur. Layout and contrast stay identical. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background-color: rgb(var(--ink-1));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .glass-2 {
+    background-color: rgb(var(--ink-2));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .glass-3 {
+    background-color: rgb(var(--ink-3));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .glass-pop {
+    background-color: rgb(var(--ink-2));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* ─── Sprint 11 V1.4 — Theme picker popover (TitleBar Accent picker) ──
+ * Ported verbatim from frontend/ref/mockup-inbox.html lines 504-540. The
+ * AccentPickerPopover.tsx renders a 264px fixed-position card with a 3×2
+ * grid of 36px swatch buttons; selected swatch carries 2px coral ring +
+ * inset white check via ::after. Lives in authored CSS (not Tailwind
+ * utilities) so Tailwind purge cannot touch the class names. */
+.theme-popover {
+  position: fixed;
+  top: 44px;
+  right: 12px;
+  width: 264px;
+  background-color: rgb(var(--ink-2) / 0.82);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+  border: 1px solid var(--glass-stroke);
+  border-radius: 12px;
+  box-shadow: var(--pop-shadow);
+  z-index: 60;
+  overflow: hidden;
+}
+.swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 0;
+  cursor: pointer;
+  position: relative;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.swatch:hover {
+  transform: scale(1.06);
+}
+.swatch[aria-checked='true'] {
+  box-shadow:
+    0 0 0 2px rgb(var(--ink-2)),
+    0 0 0 4px rgb(var(--c-accent));
+}
+.swatch[aria-checked='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>")
+    center / 14px 14px no-repeat;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
+
+/* ─── Sprint 11 V1.4 — App nav shell collapse contract ────────────────
+ * DESIGN.md §2.11. The aside never changes shape per screen — only
+ * `data-collapsed` flips. Width animates; labels / badges / section
+ * headers / kbd / popover collapse out; icons stay centered and grow
+ * 15→19px so the icon-only rail is still tappable. State persists to
+ * localStorage["mailagent.nav.collapsed"] (managed by state/nav-shell.ts)
+ * and broadcasts via the storage event so pop-out windows stay in sync.
+ *
+ * Authored CSS class names are load-bearing per §2.11 hooks list —
+ * Tailwind never sees these so the contract survives purge. */
+.app-nav {
+  width: 240px;
+  flex-shrink: 0;
+  transition: width 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.app-nav[data-collapsed='true'] {
+  width: 56px;
+}
+.app-nav[data-collapsed='true'] .app-nav-header {
+  justify-content: center;
+  padding: 0.375rem 0;
+}
+.app-nav[data-collapsed='true'] a > span:not(.app-nav-keep),
+.app-nav[data-collapsed='true'] a > kbd,
+.app-nav[data-collapsed='true'] button > span:not(.app-nav-keep),
+.app-nav[data-collapsed='true'] button > kbd,
+.app-nav[data-collapsed='true'] .app-nav-section-header,
+.app-nav[data-collapsed='true'] .app-nav-account,
+.app-nav[data-collapsed='true'] .app-nav-account-popover {
+  display: none !important;
+}
+/* Section spacers stay visible when collapsed — the only thing separating
+ * one group of icons from another in the icon-only rail. */
+.app-nav[data-collapsed='true'] .app-nav-section-spacer {
+  margin-inline: 0.625rem;
+  margin-block: 0.5rem;
+}
+.app-nav[data-collapsed='true'] .app-nav-avatar-row {
+  display: flex;
+}
+.app-nav[data-collapsed='true'] nav a,
+.app-nav[data-collapsed='true'] nav button,
+.app-nav[data-collapsed='true'] .app-nav-bottom a,
+.app-nav[data-collapsed='true'] .app-nav-bottom button {
+  justify-content: center;
+  padding-inline: 0.25rem;
+  padding-block: 0.5rem;
+}
+/* Slightly larger icons when collapsed — easier hit target + compensates
+ * for the missing label. CSS width on <svg> overrides any inline width.
+ * Lucide icons render as direct <svg> children of the button/anchor/div
+ * (NavRow disabled branch uses <div role="link">); the !important guards
+ * against a Lucide `width` HTML attribute outranking the bare CSS rule. */
+.app-nav[data-collapsed='true'] nav a > svg,
+.app-nav[data-collapsed='true'] nav button > svg,
+.app-nav[data-collapsed='true'] nav div > svg,
+.app-nav[data-collapsed='true'] .app-nav-bottom a > svg,
+.app-nav[data-collapsed='true'] .app-nav-bottom button > svg,
+.app-nav[data-collapsed='true'] .app-nav-bottom div > svg {
+  width: 19px !important;
+  height: 19px !important;
+}
+.app-nav[data-collapsed='true'] .app-nav-chevron-collapse {
+  display: none;
+}
+.app-nav:not([data-collapsed='true']) .app-nav-chevron-expand {
+  display: none;
+}
+
+/* Label cross-fade — softens the abrupt display:none flip during the
+ * width transition. The labels still toggle; this just makes the brief
+ * overlap less jarring (140ms linear < 260ms width). */
+.app-nav nav a > span:not(.app-nav-keep),
+.app-nav nav a > kbd,
+.app-nav nav button > span:not(.app-nav-keep),
+.app-nav nav button > kbd,
+.app-nav-bottom a > span,
+.app-nav-bottom a > kbd,
+.app-nav-bottom button > span,
+.app-nav-bottom button > kbd,
+.app-nav-account,
+.app-nav-section-header {
+  transition: opacity 140ms linear;
+}
+
+/* Account dropdown popover — sits below the nav header; glass surface
+ * that picks up the active theme. Dark + light variants. */
+.app-nav-account-popover {
+  background: rgba(28, 28, 30, 0.94);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+}
+:root[data-theme='light'] .app-nav-account-popover {
+  background: rgba(252, 252, 252, 0.98);
+}
+
+/* Reduced-motion: flatten chrome transitions. Layout identical. */
+@media (prefers-reduced-motion: reduce) {
+  .app-nav,
+  .app-nav nav a > span,
+  .app-nav nav button > span,
+  .app-nav-account,
+  .app-nav-section-header {
+    transition: none;
+  }
+  .swatch {
+    transition: none;
+  }
+}
+

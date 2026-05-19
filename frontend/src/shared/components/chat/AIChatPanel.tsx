@@ -156,8 +156,10 @@ export function AIChatPanel(): React.ReactElement {
   const handlePickAction = useCallback((prompt: string) => setDraft(prompt), [])
   const handleCancel = useCallback(() => chat.abortCurrent(), [chat])
 
-  // ⌥B — toggle backend kind (DESIGN.md §9.5).
-  useShortcut('alt+b', () =>
+  // ⌥⇧B — toggle backend kind. Sprint 11 V1.4 moved from bare ⌥B because
+  // the global nav-shell collapse claimed that keystroke per DESIGN.md
+  // §2.11. Backend cycling is rare enough that the extra modifier is fine.
+  useShortcut('alt+shift+b', () =>
     setBackend((cur) =>
       cur.kind === 'notion-agent'
         ? { kind: 'custom-api', model: cur.model ?? 'claude-sonnet-4-6', agentPageId: null }
@@ -192,7 +194,14 @@ export function AIChatPanel(): React.ReactElement {
           onClick={() => setTab('thread')}
           // Inline SVG to match mockup; lucide MessageCircle has too much padding.
           icon={
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
             </svg>
           }
@@ -203,7 +212,14 @@ export function AIChatPanel(): React.ReactElement {
           active={tab === 'sync'}
           onClick={() => setTab('sync')}
           icon={
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
               <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
               <path d="M21 3v5h-5" />
               <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
@@ -361,9 +377,7 @@ function TabButton({
     >
       <span className="shrink-0">{icon}</span>
       {label}
-      {badge && (
-        <span className="text-micro font-mono text-ink-fg-2 ml-0.5">{badge}</span>
-      )}
+      {badge && <span className="text-micro font-mono text-ink-fg-2 ml-0.5">{badge}</span>}
     </button>
   )
 }

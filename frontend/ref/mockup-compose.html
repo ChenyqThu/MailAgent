@@ -1,0 +1,659 @@
+<!doctype html>
+<!--
+  MailAgent · Compose — dedicated compose window for new mail / forward-as-new.
+  (Inline reply still lives in the AI panel.)
+
+  Title bar + content + status bar. Top: recipients/subject as .tile-flavored
+  rows with chip autocomplete. Body: .glass-3 surface, mail-body type recipe.
+  Right rail (320): AI assistant in compose mode — quick chips + draft preview.
+  The Send button is the one coral fill on this screen.
+-->
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MailAgent · 新邮件</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: {
+              0: 'rgb(var(--ink-0) / <alpha-value>)',
+              1: 'rgb(var(--ink-1) / <alpha-value>)',
+              2: 'rgb(var(--ink-2) / <alpha-value>)',
+              3: 'rgb(var(--ink-3) / <alpha-value>)',
+              4: 'rgb(var(--ink-4) / <alpha-value>)',
+              5: 'rgb(var(--ink-5) / <alpha-value>)',
+              border:        'rgb(var(--ink-border)      / <alpha-value>)',
+              'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+              fg:     'rgb(var(--ink-fg)   / <alpha-value>)',
+              'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+              'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+              'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)',
+            },
+            coral:         'rgb(var(--c-accent)      / <alpha-value>)',
+            'coral-hover': 'rgb(var(--c-accent-hi)   / <alpha-value>)',
+            'coral-dim':   'rgb(var(--c-accent-dim)  / <alpha-value>)',
+            crit: '#E5634F', urg:  '#E89B4A', impt: '#D4A53D',
+            norm: '#7A7F8A', low:  '#5A5E68',
+            ok:   '#5DBA8C', warn: '#E5B452', fail: '#E36262',
+            dead: '#6B707A', info: '#6FA8DC', ai:   '#B58CDB',
+          },
+          fontFamily: {
+            sans: ['-apple-system','BlinkMacSystemFont','"SF Pro Text"','"PingFang SC"','"Helvetica Neue"','system-ui','sans-serif'],
+            display: ['-apple-system','BlinkMacSystemFont','"SF Pro Display"','"PingFang SC"','system-ui','sans-serif'],
+            mono: ['ui-monospace','"SF Mono"','"JetBrains Mono"','Menlo','monospace'],
+          },
+          fontSize: {
+            micro: ['11px','14px'], meta: ['12px','16px'],
+            aux: ['14px','20px'], body: ['14px','20px'],
+            lead: ['15px','22px'], subj: ['22px','30px'],
+          },
+          spacing: { titlebar: '36px', statusbar: '24px', batchbar: '52px' },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    :root {
+      --c-accent: 229 101 75; --c-accent-hi: 216 88 65; --c-accent-dim: 126 61 50;
+      --ink-0: 14 16 19; --ink-1: 21 24 29; --ink-2: 26 30 36; --ink-3: 31 36 43;
+      --ink-4: 38 44 53; --ink-5: 46 52 62;
+      --ink-border: 44 50 59; --ink-border-soft: 31 36 43;
+      --ink-fg: 232 234 238; --ink-fg-1: 164 169 179;
+      --ink-fg-2: 107 112 122; --ink-fg-3: 69 74 83;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 8%, rgba(74,120,229,0.22), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18), transparent 70%),
+        linear-gradient(180deg, #06080B 0%, #0A0C10 100%);
+      --glass: saturate(180%) blur(28px);
+      --glass-lg: saturate(180%) blur(40px);
+      --glass-stroke: rgb(255 255 255 / 0.08);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.07),
+        0 24px 60px rgba(0,0,0,0.55),
+        0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"] { --c-accent: 74 120 229; --c-accent-hi: 60 102 207; --c-accent-dim: 48 82 163; }
+    :root[data-accent="teal"]   { --c-accent: 45 181 166; --c-accent-hi: 33 156 142; --c-accent-dim: 24 110 100; }
+    :root[data-accent="rose"]   { --c-accent: 219 91 124; --c-accent-hi: 198 71 105; --c-accent-dim: 140 50 74; }
+    :root[data-accent="slate"]  { --c-accent: 126 134 148; --c-accent-hi: 105 113 127; --c-accent-dim: 74 80 92; }
+    :root[data-accent="olive"]  { --c-accent: 156 165 82; --c-accent-hi: 134 143 70; --c-accent-dim: 94 100 48; }
+
+    :root[data-theme="light"] {
+      --ink-0: 250 250 250; --ink-1: 242 242 244; --ink-2: 248 249 251; --ink-3: 255 255 255;
+      --ink-4: 225 227 230; --ink-5: 213 216 222;
+      --ink-border: 214 218 224; --ink-border-soft: 230 232 237;
+      --ink-fg: 26 29 34; --ink-fg-1: 91 97 107;
+      --ink-fg-2: 122 128 138; --ink-fg-3: 178 184 192;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 6%, rgba(110,160,255,0.32), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22), transparent 70%),
+        linear-gradient(180deg, #F6F7FB 0%, #ECEEF4 100%);
+      --glass-stroke: rgb(255 255 255 / 0.70);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.85),
+        0 18px 50px rgba(18,24,46,0.16),
+        0 4px 14px rgba(18,24,46,0.10);
+    }
+
+    html, body { background: transparent; overscroll-behavior: none; color-scheme: dark; }
+    :root[data-theme="light"] { color-scheme: light; }
+    body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-feature-settings: 'ss01','cv11'; }
+    body::before {
+      content: ''; position: fixed; inset: 0; z-index: -1;
+      background: var(--wallpaper); background-attachment: fixed;
+      pointer-events: none;
+      transition: background 320ms cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .glass    { background-color: rgb(var(--ink-1) / 0.55); backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg); }
+    .glass-2  { background-color: rgb(var(--ink-2) / 0.45); backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg); }
+    .glass-3  { background-color: rgb(var(--ink-3) / 0.55); backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg); }
+    .glass-pop {
+      background-color: rgb(var(--ink-2) / 0.82);
+      backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke); box-shadow: var(--pop-shadow);
+    }
+    .ai-bg {
+      background:
+        linear-gradient(180deg,
+          rgb(var(--ink-2) / 0.50) 0%,
+          rgb(var(--ink-1) / 0.55) 100%);
+      backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg);
+    }
+    .tile       { background-color: rgb(var(--ink-2) / 0.62); }
+    .tile:hover { background-color: rgb(var(--ink-4) / 0.78); }
+    @media (prefers-reduced-transparency: reduce) {
+      .glass,.glass-2,.glass-3,.glass-pop,.ai-bg { backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .glass { background-color: rgb(var(--ink-1)); }
+      .glass-2 { background-color: rgb(var(--ink-2)); }
+      .glass-3 { background-color: rgb(var(--ink-3)); }
+      .glass-pop { background-color: rgb(var(--ink-2)); }
+      .ai-bg { background: rgb(var(--ink-1)); }
+    }
+
+    .tl { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .tl-close { background: #FF5F57; }
+    .tl-min { background: #FEBC2E; }
+    .tl-max { background: #28C840; }
+
+    .scrollbar-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: rgb(var(--ink-fg) / 0.14); border: 2px solid transparent; background-clip: padding-box; border-radius: 8px; }
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb { background: rgb(var(--ink-fg) / 0.28); background-clip: padding-box; }
+
+    kbd {
+      font-family: ui-monospace,'SF Mono',monospace;
+      font-size: 11px; line-height: 1; padding: 2px 5px; border-radius: 4px;
+      background: rgb(var(--ink-fg) / 0.06); color: rgb(var(--ink-fg-1));
+      border: 1px solid rgb(var(--ink-border)); border-bottom-width: 2px;
+    }
+
+    .mail-body { color: rgb(var(--ink-fg) / 0.92); font-size: 14px; line-height: 1.7; }
+    .mail-body p { margin: 0 0 12px; }
+    .mail-body strong { color: rgb(var(--ink-fg)); font-weight: 600; }
+    .mail-body code {
+      font-family: ui-monospace,'SF Mono',monospace; font-size: 12.5px;
+      background: rgba(232,155,74,0.12); padding: 1px 6px; border-radius: 4px; color: #E89B4A;
+    }
+
+    /* Recipient field row (.tile-flavored) */
+    .field-row {
+      display: grid;
+      grid-template-columns: 64px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 9px 12px 9px 14px;
+      border-bottom: 1px solid rgb(var(--ink-border-soft));
+      background: rgb(var(--ink-2) / 0.40);
+      transition: background-color 0.12s;
+    }
+    .field-row:hover { background: rgb(var(--ink-3) / 0.55); }
+    .field-row:focus-within { background: rgb(var(--ink-3) / 0.78); }
+    .field-row .field-label {
+      font-family: ui-monospace,'SF Mono',monospace;
+      font-size: 11px; line-height: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: rgb(var(--ink-fg-2));
+      font-weight: 500;
+    }
+    .field-row input {
+      background: transparent; border: 0; outline: 0;
+      color: rgb(var(--ink-fg)); font-size: 14px; line-height: 22px;
+      width: 100%; font-family: inherit;
+    }
+    .field-row input::placeholder { color: rgb(var(--ink-fg-3)); }
+
+    /* Recipient chip */
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 2px 4px 2px 2px;
+      border-radius: 999px;
+      background: rgb(var(--ink-4));
+      border: 1px solid rgb(var(--ink-border));
+      font-size: 13px; line-height: 1; color: rgb(var(--ink-fg));
+    }
+    .pill .avatar {
+      width: 18px; height: 18px; border-radius: 50%;
+      background: rgb(var(--ink-5));
+      display: grid; place-items: center;
+      font-family: ui-monospace,'SF Mono',monospace;
+      font-size: 10px; color: rgb(var(--ink-fg-1));
+    }
+    .pill .close {
+      margin-left: 2px; padding: 0 4px;
+      color: rgb(var(--ink-fg-2));
+      cursor: pointer;
+    }
+    .pill .close:hover { color: rgb(var(--ink-fg)); }
+
+    /* AI panel helpers (compose-mode) */
+    .qchip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border-radius: 999px;
+      font-size: 13px; line-height: 1;
+      color: rgb(var(--ink-fg-1));
+      background: rgb(var(--ink-fg) / 0.04);
+      border: 1px solid rgb(var(--ink-border));
+      transition: all 0.12s; cursor: pointer;
+    }
+    .qchip:hover {
+      background: rgb(var(--ink-fg) / 0.08);
+      color: rgb(var(--ink-fg));
+      border-color: rgb(var(--ink-fg-3));
+    }
+    .draft-card {
+      background: rgb(var(--ink-3) / 0.85);
+      backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgb(var(--c-accent) / 0.30);
+      box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.06);
+    }
+
+    /* Theme popover */
+    .theme-popover {
+      position: fixed; top: 44px; right: 12px; width: 264px;
+      background-color: rgb(var(--ink-2) / 0.82);
+      backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke);
+      border-radius: 12px; box-shadow: var(--pop-shadow); z-index: 60; overflow: hidden;
+    }
+    .swatch {
+      width: 36px; height: 36px; border-radius: 999px;
+      border: 0; cursor: pointer; position: relative;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.2);
+      transition: transform 0.15s cubic-bezier(0.4,0,0.2,1);
+    }
+    .swatch:hover { transform: scale(1.06); }
+    .swatch[aria-checked="true"] { box-shadow: 0 0 0 2px rgb(var(--ink-2)), 0 0 0 4px rgb(var(--c-accent)); }
+    .swatch[aria-checked="true"]::after {
+      content: ''; position: absolute; inset: 0;
+      background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 14px 14px no-repeat;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.4));
+    }
+
+    /* Editor toolbar */
+    .editor-btn {
+      width: 28px; height: 28px; border-radius: 6px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: rgb(var(--ink-fg-1));
+      background: transparent;
+      transition: all 0.12s;
+    }
+    .editor-btn:hover { background: rgb(var(--ink-fg) / 0.06); color: rgb(var(--ink-fg)); }
+    .editor-btn.is-on { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+
+    .glass, .glass-2, .glass-3, .glass-pop, .ai-bg, .theme-popover, .tile, kbd, .pill, .qchip,
+    [class*="bg-ink-"], [class*="border-ink-"] {
+      transition: background-color 280ms cubic-bezier(0.4,0,0.2,1),
+                  border-color     280ms cubic-bezier(0.4,0,0.2,1);
+    }
+  </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden text-ink-fg font-sans antialiased flex flex-col">
+
+<!-- ─── Title bar ───────────────────────────────────────────────────────── -->
+<header class="glass h-titlebar border-b border-ink-border/60 flex items-center px-3 select-none shrink-0">
+  <div class="flex items-center gap-2 mr-3">
+    <span class="tl tl-close"></span><span class="tl tl-min"></span><span class="tl tl-max"></span>
+  </div>
+  <!-- Pop-out breadcrumb chip — compose is a separate Electron window
+       (⌘N or ⌘⇧⏎ from inbox, HANDOFF §3.5). The chip closes this
+       window and returns focus to the main inbox frame. -->
+  <a href="mockup-inbox.html" onclick="if(window.opener){window.close();return false;}" class="group flex items-center gap-1.5 px-2 py-0.5 -my-1 mr-3 rounded-md text-meta font-mono text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition shrink-0" title="Close window and return to inbox">
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+    <span>Inbox</span>
+  </a>
+  <div class="flex items-center gap-2 min-w-0">
+    <span class="text-aux text-ink-fg-1 font-medium tracking-tight">新邮件</span>
+    <span class="text-meta font-mono text-ink-fg-2 truncate">· Re: 合同审阅 · v3 草稿请确认</span>
+  </div>
+  <div class="flex-1 flex justify-center">
+    <button class="group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span>搜索 / 跳转</span>
+      <kbd class="group-hover:bg-ink-4">⌘K</kbd>
+    </button>
+  </div>
+  <div class="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+    <span class="flex items-center gap-1.5"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="6" rx="3" fill="currentColor"/></svg><span>Island</span></span>
+    <span class="text-ink-fg-3">·</span>
+    <button id="theme-toggle" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="Toggle light / dark (⌥L)" aria-label="Toggle theme">
+      <svg id="theme-icon-dark"  width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <span class="group-hover:text-ink-fg" id="theme-label">Dark</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button id="appearance-btn" aria-haspopup="true" aria-expanded="false" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="Accent color">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-coral shadow-[0_0_0_1px_rgba(0,0,0,0.25)]"></span>
+      <span class="group-hover:text-ink-fg" id="appearance-label">Coral</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span><span>draft auto-saved · 14:32:36</span></span>
+  </div>
+</header>
+
+<!-- Appearance popover -->
+<div id="theme-popover" class="theme-popover hidden">
+  <div class="px-3.5 py-2.5 border-b border-ink-border-soft flex items-center justify-between">
+    <div class="text-aux text-ink-fg font-medium">Accent Color</div>
+    <span class="text-micro font-mono text-ink-fg-2">View → Appearance</span>
+  </div>
+  <div class="p-4">
+    <div class="grid grid-cols-3 gap-y-4 gap-x-2 place-items-center">
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="coral"  aria-checked="true"  style="background: #E5654B;"></button><span class="text-meta font-mono text-ink-fg-1">Coral</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="cobalt" aria-checked="false" style="background: #4A78E5;"></button><span class="text-meta font-mono text-ink-fg-2">Cobalt</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="teal"   aria-checked="false" style="background: #2DB5A6;"></button><span class="text-meta font-mono text-ink-fg-2">Teal</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="rose"   aria-checked="false" style="background: #DB5B7C;"></button><span class="text-meta font-mono text-ink-fg-2">Rose</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="slate"  aria-checked="false" style="background: #7E8694;"></button><span class="text-meta font-mono text-ink-fg-2">Slate</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="olive"  aria-checked="false" style="background: #9CA552;"></button><span class="text-meta font-mono text-ink-fg-2">Olive</span></div>
+    </div>
+  </div>
+  <div class="px-3.5 py-2 border-t border-ink-border-soft flex items-center gap-2">
+    <svg class="text-ink-fg-2 shrink-0" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span class="text-meta text-ink-fg-1 leading-snug">Affects toolbar · chips · selected row · Island accent. Stored locally.</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Main · Editor (flex-1) | AI rail (320)
+═══════════════════════════════════════════════════════════════════════ -->
+<main class="flex flex-1 min-h-0">
+
+  <!-- ─── Editor column ────────────────────────────────────────────── -->
+  <section class="flex-1 min-w-0 flex flex-col glass-3 border-r border-ink-border/60">
+
+    <!-- Recipients block -->
+    <div class="border-b border-ink-border/60">
+      <div class="field-row">
+        <span class="field-label">From</span>
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="pill">
+            <span class="avatar">CH</span>
+            <span>chen@anthropic.com</span>
+            <span class="text-meta font-mono text-ink-fg-2 ml-1">(Gmail)</span>
+          </span>
+        </div>
+        <button class="text-meta font-mono text-ink-fg-2 hover:text-ink-fg transition">切换账户 ▾</button>
+      </div>
+
+      <div class="field-row">
+        <span class="field-label">To</span>
+        <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+          <span class="pill">
+            <span class="avatar">YL</span>
+            <span>叶律师</span>
+            <span class="text-meta font-mono text-ink-fg-2 ml-1">&lt;ye@yang.law&gt;</span>
+            <span class="close">×</span>
+          </span>
+          <span class="pill">
+            <span class="avatar">FN</span>
+            <span>finance@mailagent.dev</span>
+            <span class="close">×</span>
+          </span>
+          <input placeholder="添加收件人 · 输入姓名或邮箱" />
+        </div>
+        <div class="flex items-center gap-1 text-meta font-mono text-ink-fg-2">
+          <button class="px-1.5 py-0.5 rounded hover:bg-ink-3/60 hover:text-ink-fg transition">Cc</button>
+          <span class="text-ink-fg-3">·</span>
+          <button class="px-1.5 py-0.5 rounded hover:bg-ink-3/60 hover:text-ink-fg transition">Bcc</button>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <span class="field-label">Cc</span>
+        <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+          <span class="pill">
+            <span class="avatar">LZ</span>
+            <span>liz@anthropic.com</span>
+            <span class="close">×</span>
+          </span>
+          <input placeholder="抄送" />
+        </div>
+        <span class="text-meta font-mono text-ink-fg-2">1</span>
+      </div>
+
+      <div class="field-row">
+        <span class="field-label">Subject</span>
+        <input value="Re: 合同审阅 · v3 草稿请确认" class="text-aux font-medium" />
+        <span class="text-meta font-mono text-ink-fg-2">28 / 78 chars</span>
+      </div>
+    </div>
+
+    <!-- Editor body -->
+    <div class="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
+      <div class="max-w-[760px] mx-auto px-10 pt-7 pb-12 mail-body" contenteditable="true" spellcheck="false">
+        <p>叶律师，你好：</p>
+        <p>感谢周五电话沟通。<strong>v3 草稿</strong>整体已收，重点条款看下来还有三处需要再确认：</p>
+        <p>1. <strong>§4.2 退出条款</strong>：双方均可单方面解约的措辞过宽，建议改为「书面通知 + 30 日冷静期」。<br>
+        2. <strong>§7 知识产权</strong>：当前仅约定「项目期间」归属，需扩展到「项目结束后 12 个月」的衍生作品。<br>
+        3. <strong>附件 A 报价表</strong>：第 3 项 <code>MailAgent · Island 集成</code> 漏写「按月计费」，请补上 <code>monthly</code> 标记。</p>
+        <p>其他条款我这边没意见。能否在<strong>明天（5/19）下午</strong>之前给到 v4？我们这周内要走签字流程。</p>
+        <p>另外，AI 已自动整理过本邮件上下文并同步到 Notion 项目页 ↗。如需查看完整改动记录，可看 <code>db_CONTRACT/2026-Q2/v3-redline</code>。</p>
+        <p>—<br>陈源全 · MailAgent</p>
+      </div>
+    </div>
+
+    <!-- Bottom toolbar -->
+    <div class="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 flex items-center gap-2">
+      <button class="editor-btn is-on" title="加粗 ⌘B"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/></svg></button>
+      <button class="editor-btn" title="斜体 ⌘I"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="4" x2="10" y2="4"/><line x1="14" y1="20" x2="5" y2="20"/><line x1="15" y1="4" x2="9" y2="20"/></svg></button>
+      <button class="editor-btn" title="下划线 ⌘U"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg></button>
+      <span class="w-px h-5 bg-ink-border-soft mx-1"></span>
+      <button class="editor-btn" title="无序列表"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
+      <button class="editor-btn" title="代码"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></button>
+      <button class="editor-btn" title="链接 ⌘K"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+      <span class="w-px h-5 bg-ink-border-soft mx-1"></span>
+      <button class="editor-btn" title="附件"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+      <span class="text-meta font-mono text-ink-fg-2 ml-auto">RTF · UTF-8 · 286 chars · 4 paragraphs</span>
+      <button class="text-meta font-mono text-ink-fg-2 hover:text-ink-fg transition px-1.5 py-0.5 rounded hover:bg-ink-3/60">⇄ 纯文本</button>
+    </div>
+
+    <!-- Send dock -->
+    <div class="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2.5 flex items-center gap-2">
+      <button class="px-3.5 py-1.5 rounded-md bg-coral hover:bg-coral-hover text-white text-aux font-medium transition flex items-center gap-1.5">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        <span>发送</span>
+        <kbd class="ml-1 bg-white/15 text-white/80 border-white/20">⌘⏎</kbd>
+      </button>
+      <button class="px-2.5 py-1.5 rounded-md bg-ink-3 hover:bg-ink-4 text-ink-fg-1 text-aux transition border border-ink-border flex items-center gap-1.5">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span>定时发送 · 周一 09:00</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <span class="w-px h-5 bg-ink-border-soft mx-1"></span>
+      <button class="px-2.5 py-1.5 rounded-md bg-ink-3 hover:bg-ink-4 text-ink-fg-1 text-aux transition border border-ink-border">保存草稿 ⌘S</button>
+      <button class="px-2.5 py-1.5 rounded-md bg-ink-3 hover:bg-ink-4 text-ink-fg-1 text-aux transition border border-ink-border">丢弃</button>
+      <div class="ml-auto flex items-center gap-2">
+        <span class="text-meta font-mono text-ink-fg-2 flex items-center gap-1.5">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          1 attachment · contract-v3.pdf · 412 KB
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── AI rail (320) ────────────────────────────────────────────── -->
+  <aside class="w-[320px] ai-bg shrink-0 flex flex-col">
+
+    <div class="px-4 pt-3.5 pb-2 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-ai text-lg leading-none">✦</span>
+        <span class="text-aux font-medium">AI · 撰写助手</span>
+      </div>
+      <span class="text-micro font-mono text-ink-fg-2">claude-3.5</span>
+    </div>
+
+    <div class="px-4 pb-2 text-meta text-ink-fg-2 leading-relaxed">
+      已读取上下文：原邮件「合同审阅 v3」+ Notion 页面 <span class="font-mono text-ink-fg-1">db_CONTRACT/v3-redline</span> + 附件 1 份。
+    </div>
+
+    <div class="px-4 py-2.5 border-y border-ink-border-soft">
+      <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-2">快捷重写</div>
+      <div class="flex flex-wrap gap-1.5">
+        <button class="qchip">更简短</button>
+        <button class="qchip">更正式</button>
+        <button class="qchip">英文版本</button>
+        <button class="qchip">加礼貌结尾</button>
+        <button class="qchip">提取行动项</button>
+        <button class="qchip">引用 §4.2</button>
+      </div>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 pt-3 pb-2 space-y-3">
+      <!-- Draft suggestion card -->
+      <div class="draft-card rounded-lg p-3.5">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="text-ai">✦</span>
+            <span class="text-aux font-medium">建议重写 · 更正式版本</span>
+          </div>
+          <span class="text-micro font-mono text-ink-fg-2">412ms</span>
+        </div>
+        <div class="text-aux text-ink-fg-1 leading-relaxed">
+          <p class="mb-2">叶律师：</p>
+          <p class="mb-2">v3 草稿已收，整体接近最终态。还有 3 处建议复议：<strong>§4.2 退出条款</strong>需加书面通知 + 30 日冷静期；<strong>§7 知识产权</strong>需扩展至项目结束后 12 个月；<strong>附件 A 第 3 项</strong>缺 monthly 标记。</p>
+          <p>烦请在 <strong>5/19 下午</strong>前出 v4，本周内走签字。</p>
+        </div>
+        <div class="flex items-center gap-1.5 mt-3">
+          <button class="px-2.5 py-1 rounded bg-coral hover:bg-coral-hover text-white text-meta font-medium transition">应用</button>
+          <button class="px-2.5 py-1 rounded bg-ink-4 hover:bg-ink-5 text-ink-fg-1 text-meta transition">仅替换段落</button>
+          <button class="px-2 py-1 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition" title="重新生成">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Translation preview -->
+      <div class="tile rounded-lg p-3.5 border border-ink-border-soft">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <svg class="text-info" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6"/><path d="M4 14l6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="M22 22l-5-10-5 10"/><path d="M14 18h6"/></svg>
+            <span class="text-aux font-medium">EN · 翻译预览</span>
+          </div>
+          <span class="text-micro font-mono text-ink-fg-2">218ms</span>
+        </div>
+        <p class="text-aux text-ink-fg-1 leading-relaxed line-clamp-4">
+          Counsel Ye, thanks for Friday's call. The v3 draft is close to final, with three remaining items: §4.2 exit clause needs a 30-day cooling-off period; §7 IP ownership should extend to 12 months post-engagement; the rate sheet's item 3 is missing the <code>monthly</code> flag…
+        </p>
+        <div class="flex items-center gap-1.5 mt-3">
+          <button class="px-2.5 py-1 rounded bg-ink-4 hover:bg-ink-5 text-ink-fg-1 text-meta transition">替换正文</button>
+          <button class="px-2.5 py-1 rounded text-ink-fg-2 hover:text-ink-fg text-meta transition">作为附件发送</button>
+        </div>
+      </div>
+
+      <!-- Tone check -->
+      <div class="rounded-lg p-3 border border-info/30 bg-info/8" style="background: rgba(111,168,220,0.06);">
+        <div class="flex items-start gap-2.5">
+          <svg class="text-info shrink-0 mt-0.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <div class="text-aux text-ink-fg-1 leading-snug">
+            语气检测：<strong class="text-ink-fg">中性 · 0.78</strong>。对法律函件而言略偏口语化，建议在结尾加致谢段。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Composer -->
+    <div class="border-t border-ink-border-soft px-4 py-3">
+      <div class="tile rounded-lg p-2.5 border border-ink-border-soft">
+        <textarea
+          placeholder="问 AI 写下一段，或让它解释 §7 条款…"
+          class="w-full bg-transparent text-aux text-ink-fg outline-none resize-none placeholder:text-ink-fg-3"
+          rows="2"></textarea>
+        <div class="flex items-center justify-between mt-1">
+          <div class="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+            <span>ctx 4.2k</span><span class="text-ink-fg-3">·</span><span>temp 0.4</span>
+          </div>
+          <button class="px-2.5 py-1 rounded bg-coral hover:bg-coral-hover text-white text-meta font-medium transition">发送</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- ─── Status bar ──────────────────────────────────────────────────────── -->
+<footer class="glass h-statusbar border-t border-ink-border/60 text-meta font-mono text-ink-fg-2 flex items-center px-3 gap-3 shrink-0 select-none">
+  <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-coral"></span>composing</span>
+  <span class="text-ink-fg-3">|</span>
+  <span>draft <span class="text-ink-fg-1">d_2173</span> · auto-saved 14:32:36</span>
+  <span class="text-ink-fg-3">|</span>
+  <span>spell <span class="text-ok">ok</span></span>
+  <span class="ml-auto flex items-center gap-3">
+    <span>llm <span class="text-ok">87%</span></span>
+    <span class="text-ink-fg-3">|</span>
+    <span>0.1.0-dev · compose</span>
+  </span>
+</footer>
+
+<script>
+  /* Theme toggle */
+  (function () {
+    const KEY_THEME = 'mailagent.theme';
+    const root      = document.documentElement;
+    const btn       = document.getElementById('theme-toggle');
+    const label     = document.getElementById('theme-label');
+    const iconDark  = document.getElementById('theme-icon-dark');
+    const iconLight = document.getElementById('theme-icon-light');
+    function applyTheme(theme) {
+      const isLight = theme === 'light';
+      if (isLight) { root.dataset.theme = 'light'; root.classList.remove('dark'); }
+      else         { delete root.dataset.theme;    root.classList.add('dark'); }
+      iconDark.classList.toggle('hidden', isLight);
+      iconLight.classList.toggle('hidden', !isLight);
+      label.textContent = isLight ? 'Light' : 'Dark';
+      btn.setAttribute('aria-pressed', String(isLight));
+      try { localStorage.setItem(KEY_THEME, isLight ? 'light' : 'dark'); } catch (e) {}
+    }
+    const stored = (function () { try { return localStorage.getItem(KEY_THEME); } catch (e) { return null; } })();
+    const sys = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    applyTheme(stored || sys);
+    btn.addEventListener('click', () => applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light'));
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+      }
+    });
+    if (!stored && window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => applyTheme(e.matches ? 'light' : 'dark'));
+    }
+  })();
+
+  /* Accent picker */
+  (function () {
+    const ACCENTS = {
+      coral:  { hex: '#E5654B', label: 'Coral'  },
+      cobalt: { hex: '#4A78E5', label: 'Cobalt' },
+      teal:   { hex: '#2DB5A6', label: 'Teal'   },
+      rose:   { hex: '#DB5B7C', label: 'Rose'   },
+      slate:  { hex: '#7E8694', label: 'Slate'  },
+      olive:  { hex: '#9CA552', label: 'Olive'  },
+    };
+    const KEY = 'mailagent.accent';
+    const btn      = document.getElementById('appearance-btn');
+    const popover  = document.getElementById('theme-popover');
+    const labelEl  = document.getElementById('appearance-label');
+    const swatches = popover.querySelectorAll('[data-accent]');
+    function apply(name) {
+      if (!ACCENTS[name]) name = 'coral';
+      if (name === 'coral') document.documentElement.removeAttribute('data-accent');
+      else                  document.documentElement.dataset.accent = name;
+      labelEl.textContent = ACCENTS[name].label;
+      btn.querySelector('span.inline-block').style.background = ACCENTS[name].hex;
+      swatches.forEach(s => s.setAttribute('aria-checked', s.dataset.accent === name ? 'true' : 'false'));
+      try { localStorage.setItem(KEY, name); } catch (e) {}
+    }
+    apply(localStorage.getItem(KEY) || 'coral');
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = !popover.classList.contains('hidden');
+      popover.classList.toggle('hidden', open);
+      btn.setAttribute('aria-expanded', String(!open));
+    });
+    swatches.forEach(s => s.addEventListener('click', () => apply(s.dataset.accent)));
+    document.addEventListener('click', (e) => {
+      if (popover.classList.contains('hidden')) return;
+      if (popover.contains(e.target) || btn.contains(e.target)) return;
+      popover.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !popover.classList.contains('hidden')) {
+        popover.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+</script>
+
+</body>
+</html>

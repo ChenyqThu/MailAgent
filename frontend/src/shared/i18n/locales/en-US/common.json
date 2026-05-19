@@ -155,7 +155,9 @@
       "switchBackend": "Switch AI backend",
       "sendChat": "Send AI message",
       "newChat": "New AI conversation",
-      "toggleIsland": "Toggle Dynamic Island"
+      "toggleIsland": "Toggle Dynamic Island",
+      "toggleNav": "Toggle navigation",
+      "toggleLocale": "Toggle language"
     }
   },
   "palette": {
@@ -202,6 +204,30 @@
     "shortcuts": "Shortcuts",
     "online": "online",
     "cacheWarn": "Cache hit rate low"
+  },
+  "nav": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "view": "View"
+    },
+    "inbox": "Inbox",
+    "outbox": "Outbox",
+    "flagged": "Flagged",
+    "allMail": "All mail",
+    "aiSessions": "AI sessions",
+    "aiSessionsSoon": "Coming soon — chat history not yet wired",
+    "adminKanban": "Admin",
+    "calendar": "Calendar",
+    "settings": "Settings",
+    "shortcuts": "Shortcuts",
+    "toggleTitle": "Collapse / expand navigation (⌥B)",
+    "toggleAria": "Toggle navigation",
+    "online": "online",
+    "account": {
+      "add": "Add account…",
+      "tooltip": "{email} — switch account"
+    }
   },
   "chat": {
     "title": "AI Assistant",
@@ -493,6 +519,18 @@
       "disabled": "Dynamic Island off"
     },
     "synced": "Synced",
-    "themeCycle": "Theme · click to cycle"
+    "themeCycle": "Theme · click to cycle",
+    "accent": {
+      "label": "Accent",
+      "title": "Accent Color",
+      "tooltip": "Pick accent (View → Appearance)",
+      "aria": "Pick accent color",
+      "note": "Affects toolbar · chips · selected row · Island. Stored locally."
+    },
+    "locale": {
+      "label": "Language",
+      "tooltip": "Switch language (⌥G)",
+      "aria": "Switch language"
+    }
   }
 }

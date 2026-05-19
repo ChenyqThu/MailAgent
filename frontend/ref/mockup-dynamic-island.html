@@ -1,0 +1,1327 @@
+<!doctype html>
+<!--
+  MailAgent · Dynamic Island — V4 (Ping Island plugin model)
+
+  WHAT CHANGED FROM V3
+  ────────────────────
+  V3 still drew the island as something MailAgent renders itself.
+  Per user direction: MailAgent will NOT build its own notch overlay.
+  Instead, MailAgent ships a plugin / hook that registers with
+  Ping Island (https://github.com/erha19/ping-island), an
+  Apache-2.0 macOS menubar app that already does the notch overlay
+  for AI coding sessions (Claude / Codex / Gemini / Hermes / Qwen
+  / Kimi / OpenCode / Cursor / Qoder / CodeBuddy / Copilot).
+
+  V4 reframes this mockup as MailAgent's PATCH on top of Ping Island:
+
+    1. MailAgent's mail-sync daemon → emits events
+    2. Plugin at ~/.mailagent/plugins/ping_island/ → translates events
+       into Ping Island's hook protocol
+    3. Ping Island renders the events using its existing notch UI
+    4. MailAgent contributes:
+        a. Custom pixel-art mascots (Work / Personal / Dev accounts)
+        b. Email-specific event handlers (new mail / AI draft / sync
+           error / dead-letter)
+        c. Deep-link jump targets (opens MailAgent.app + selects email)
+        d. Buddy-detach companion (Ping Island v0.5.0+) that shows a
+           live unread counter
+
+  Visual language strictly follows the real ping-island screenshot
+  (docs/images/notch-panel.png from the repo):
+    - Black panel with rounded bottom corners glued to screen top
+    - Vertical session list, one row per active item
+    - Avatar 32×32 rounded square w/ pixel mascot
+    - Row content: "Island" eyebrow + bold-white title + gray sub
+    - Right-side dual pill tags: agent name + terminal/source + time
+
+  4-phase lifecycle (Ping Island language: "先感知，再展开"):
+    Phase 1 · Arrive  — panel expands for a new important event
+    Phase 2 · Compact — collapses to notch + (Critical only) side dot
+    Phase 3 · Hover   — re-expands into multi-row session list
+    Phase 4 · Jump    — click row → MailAgent.app + email selected
+
+  Theme parity: --c-accent reads localStorage (mailagent.accent) and
+  follows the user's inbox pick. Ping Island itself is theme-neutral
+  (always black panel); accent only tints the small MailAgent-specific
+  affordances inside the rows (AI badge, draft preview, action button).
+-->
+<html lang="zh-CN" data-locale="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MailAgent · Ping Island plugin · v4</title>
+  <!--
+    i18n scope (DESIGN.md §2.10):
+
+    This file is a *spec document* for the Ping Island bridge plugin, not
+    a runtime MailAgent UI screen. Ping Island.app renders the actual
+    notch overlay; MailAgent only emits JSON events via bridge.py
+    (see §6 below). Therefore the mock `.pi-row` content shown here is
+    EXAMPLE PAYLOAD from a zh-CN user — an `en` user would see the same
+    rows with English `title` / `sub` strings produced by bridge.py
+    reading `localStorage["mailagent.locale"]` before serializing the
+    event. The bridge contract is owned by mail-sync, not by this
+    document.
+
+    The architectural spec prose (§1–§7) intentionally stays in Chinese
+    because it's a designer/eng review doc, not user-visible chrome.
+    It carries `data-i18n-skip` on the body wrapper so that if the
+    locale walker is ever loaded here it does not touch the spec text.
+  -->
+
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: {
+              0: '#0E1013', 1: '#15181D', 2: '#1A1E24', 3: '#1F242B', 4: '#262C35', 5: '#2E343E',
+              border: '#2C323B', 'border-soft': '#1F242B',
+              fg: '#E8EAEE', 'fg-1': '#A4A9B3', 'fg-2': '#6B707A', 'fg-3': '#454A53',
+            },
+            accent:      'rgb(var(--c-accent)      / <alpha-value>)',
+            'accent-hi': 'rgb(var(--c-accent-hi)   / <alpha-value>)',
+            crit: '#E5634F', urg: '#E89B4A', impt: '#D4A53D', norm: '#7A7F8A', low: '#5A5E68',
+            ok: '#5DBA8C', warn: '#E5B452', fail: '#E36262', dead: '#6B707A',
+            info: '#6FA8DC',
+            pi: {
+              /* Ping Island canonical UI colors — extracted from the
+                 reference screenshot (notch-panel.png). These stay fixed
+                 regardless of MailAgent's user-chosen accent — the
+                 Ping Island shell is theme-neutral. */
+              shell:     '#000000',
+              divider:   '#1A1A1A',
+              eyebrow:   '#7A7F8A',
+              title:     '#FFFFFF',
+              sub:       '#A4A9B3',
+              tag:       '#1F242B',
+              tagFg:     '#A4A9B3',
+              tagBorder: '#2C323B',
+              hover:     '#161616',
+              focused:   '#1A1A1A',
+            },
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', '"PingFang SC"', 'system-ui', 'sans-serif'],
+            mono: ['ui-monospace', '"SF Mono"', '"JetBrains Mono"', 'Menlo', 'monospace'],
+          },
+          fontSize: {
+            micro: ['11px', '14px'],
+            meta:  ['12px', '16px'],
+            aux:   ['14px', '20px'],
+            body:  ['14px', '20px'],
+            lead:  ['15px', '22px'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* ─── Theme tokens — synced with mockup-inbox.html / DESIGN.md ───── */
+    :root {
+      --c-accent:    229 101 75;
+      --c-accent-hi: 216  88  65;
+    }
+    :root[data-accent="cobalt"] { --c-accent: 74 120 229;  --c-accent-hi: 60 102 207; }
+    :root[data-accent="teal"]   { --c-accent: 45 181 166;  --c-accent-hi: 33 156 142; }
+    :root[data-accent="rose"]   { --c-accent: 219 91 124;  --c-accent-hi: 198 71 105; }
+    :root[data-accent="slate"]  { --c-accent: 126 134 148; --c-accent-hi: 105 113 127; }
+    :root[data-accent="olive"]  { --c-accent: 156 165  82; --c-accent-hi: 134 143  70; }
+
+    html, body { background: #0E1013; }
+    body { -webkit-font-smoothing: antialiased; }
+
+    kbd {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10px; line-height: 1;
+      padding: 2px 5px; border-radius: 4px;
+      background: rgba(255,255,255,0.06);
+      color: #A4A9B3;
+      border: 1px solid #2C323B;
+      border-bottom-width: 2px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       .pi-shell · the Ping Island notch overlay.
+       Owned by Ping Island.app — MailAgent does NOT render this.
+       Shapes here mirror the real Ping Island UI so reviewers
+       understand what MailAgent's events look like INSIDE it.
+       ═══════════════════════════════════════════════════════════════ */
+    .pi-shell {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+      transition:
+        width  0.22s cubic-bezier(.4,0,.2,1),
+        height 0.22s cubic-bezier(.4,0,.2,1),
+        border-radius 0.22s cubic-bezier(.4,0,.2,1);
+      z-index: 10;
+    }
+    .pi-shell-idle {
+      width: 200px;
+      height: 32px;
+      border-radius: 0 0 18px 18px;
+    }
+    .pi-shell-expanded {
+      border-radius: 0 0 24px 24px;
+      padding: 40px 12px 12px 12px;
+      box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,0.04),
+        0 18px 48px rgba(0,0,0,0.65),
+        0 4px 12px rgba(0,0,0,0.45);
+    }
+    .pi-shell-cam {
+      position: absolute;
+      top: 11px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: #1a1a1a;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+      pointer-events: none;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       .pi-row · ONE session row inside the Ping Island panel.
+       Structure mirrors the real screenshot top-to-bottom:
+
+         [avatar 32×32]  Island                    [agent] [terminal] <time>
+                         Bold-white title line
+                         Light-gray sub-text line
+       ═══════════════════════════════════════════════════════════════ */
+    .pi-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 4px;
+      border-radius: 8px;
+      transition: background 0.15s;
+      cursor: pointer;
+    }
+    .pi-row:hover    { background: #161616; }
+    .pi-row.focused  { background: #1A1A1A; }
+    .pi-row + .pi-row { border-top: 1px solid #1A1A1A; border-radius: 0 0 8px 8px; }
+    .pi-row + .pi-row.focused { border-top-color: transparent; }
+
+    .pi-avatar {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: grid; place-items: center;
+      flex-shrink: 0;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .pi-eyebrow {
+      font-size: 11px;
+      color: #7A7F8A;
+      line-height: 1;
+      margin-bottom: 3px;
+      letter-spacing: 0.01em;
+    }
+    .pi-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #FFFFFF;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pi-sub {
+      font-size: 12px;
+      color: #A4A9B3;
+      line-height: 1.4;
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pi-tag {
+      font-size: 11px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      padding: 2px 7px;
+      border-radius: 5px;
+      background: #1F242B;
+      color: #A4A9B3;
+      border: 1px solid #2C323B;
+      white-space: nowrap;
+      line-height: 1.5;
+    }
+    .pi-time {
+      font-size: 11px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      color: #6B707A;
+      white-space: nowrap;
+      line-height: 1.5;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       Pixel-art mascots — MailAgent ships 3, registered with Ping
+       Island's mascot registry (`ctx.register_mascot(...)`). Drawn
+       in CSS with box-shadow stacking (no asset files) so this
+       mockup renders without external GIFs.
+       ═══════════════════════════════════════════════════════════════ */
+    .mascot { width: 24px; height: 24px; position: relative; image-rendering: pixelated; }
+    .mascot::before, .mascot::after {
+      content: ''; position: absolute; width: 2px; height: 2px; background: transparent;
+    }
+
+    /* mascot · Postman (work account) — orange envelope-courier */
+    .mascot-postman {
+      background:
+        radial-gradient(circle at 50% 32%, #F8C99C 0 24%, transparent 25%),     /* face */
+        linear-gradient(180deg, #C26A3E 0 50%, #8E4423 50% 100%);                /* hat + body */
+      border-radius: 2px;
+      box-shadow:
+        inset 2px 5px 0 0 #000,    /* eye */
+        inset -2px 5px 0 0 #000;   /* eye */
+    }
+    .mascot-postman::after {
+      left: 9px; top: 13px; width: 6px; height: 1px; background: #5A2E15;
+      box-shadow: 0 4px 0 0 #FFF; /* envelope stripe */
+    }
+
+    /* mascot · Pidgeon (personal account) — gray pigeon w/ note */
+    .mascot-pidgeon {
+      background:
+        radial-gradient(circle at 50% 35%, #C8CDD4 0 32%, transparent 33%),
+        linear-gradient(180deg, #6B707A 0 50%, #454A53 50% 100%);
+      border-radius: 50% 50% 30% 30%;
+      box-shadow:
+        inset 2px 6px 0 0 #000,
+        inset -2px 6px 0 0 #000;
+    }
+    .mascot-pidgeon::after {
+      left: 10px; top: 14px; width: 4px; height: 3px; background: #FFF; border-radius: 1px;
+    }
+
+    /* mascot · Octocat-Bot (dev account) — green terminal bot */
+    .mascot-devbot {
+      background:
+        radial-gradient(circle at 50% 35%, #3D5045 0 30%, transparent 31%),
+        linear-gradient(180deg, #5DBA8C 0 50%, #2E6E48 50% 100%);
+      border-radius: 4px;
+      box-shadow:
+        inset 3px 5px 0 0 #A8FFB8,    /* glowing eye */
+        inset -3px 5px 0 0 #A8FFB8;
+    }
+    .mascot-devbot::after {
+      left: 8px; top: 16px; width: 8px; height: 1px; background: #A8FFB8;
+    }
+
+    /* avatar background tints behind mascot */
+    .pi-avatar-mailagent { background: rgba(var(--c-accent), 0.14); }
+    .pi-avatar-work      { background: #2A1F14; }
+    .pi-avatar-personal  { background: #1F2024; }
+    .pi-avatar-dev       { background: #122017; }
+    .pi-avatar-claude    { background: #2B2014; }
+    .pi-avatar-codex     { background: #0E1A2A; }
+
+    /* ═══════════════════════════════════════════════════════════════
+       Claude / Codex mock avatars (shown alongside MailAgent rows in
+       multi-tool monitor scene — proves MailAgent coexists with
+       Ping Island's existing AI-coding-session rows).
+       ═══════════════════════════════════════════════════════════════ */
+    .mascot-claude {
+      width: 24px; height: 24px;
+      background:
+        radial-gradient(circle at 50% 40%, #E89B4A 0 35%, transparent 36%),
+        linear-gradient(180deg, #C2701F 0 50%, #8B4A11 50% 100%);
+      border-radius: 50%;
+      box-shadow: inset 2px 7px 0 0 #000, inset -2px 7px 0 0 #000;
+    }
+    .mascot-codex {
+      width: 24px; height: 24px;
+      background:
+        linear-gradient(180deg, #4A78E5 0 50%, #1F3B7A 50% 100%);
+      border-radius: 3px;
+      box-shadow: inset 0 5px 0 1px #FFF, inset 2px 8px 0 0 #000, inset -2px 8px 0 0 #000;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       Status indicators on the avatar (corner pip for priority/state).
+       Critical pulses; other states are static.
+       ═══════════════════════════════════════════════════════════════ */
+    .pi-avatar-pip {
+      position: absolute;
+      right: -2px; bottom: -2px;
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      border: 2px solid #000;
+    }
+    .pip-crit { background: #E5634F; animation: pi-pulse 1.6s infinite; }
+    .pip-urg  { background: #E89B4A; }
+    .pip-ai   { background: rgb(var(--c-accent)); }
+    .pip-ok   { background: #5DBA8C; }
+    .pip-fail { background: #E36262; }
+    @keyframes pi-pulse {
+      0%   { box-shadow: 0 0 0 0  rgba(229,99,79,0.7); }
+      70%  { box-shadow: 0 0 0 5px rgba(229,99,79,0); }
+      100% { box-shadow: 0 0 0 0  rgba(229,99,79,0); }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
+       Action buttons appearing INSIDE a Ping Island row when the
+       row is .focused and the event needs user input (Ping Island's
+       canonical "input.required" pattern — used by Claude for tool
+       approval, by MailAgent for AI-draft send-or-edit).
+       ═══════════════════════════════════════════════════════════════ */
+    .pi-btn {
+      height: 32px; border-radius: 8px;
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 6px;
+      font-size: 13px; font-weight: 500; line-height: 1;
+      padding: 0 12px;
+      transition: background 0.15s, transform 0.1s;
+      cursor: pointer;
+    }
+    .pi-btn:active { transform: translateY(1px); }
+    .pi-btn-light  { background: #FFFFFF; color: #000; }
+    .pi-btn-light:hover  { background: #F0F0F0; }
+    .pi-btn-dark   { background: #1F242B; color: #FFF; border: 1px solid #2C323B; }
+    .pi-btn-dark:hover   { background: #262C35; }
+    .pi-btn-sh-light { font-family: ui-monospace, monospace; font-size: 11px; color: rgba(0,0,0,0.5); }
+    .pi-btn-sh-dark  { font-family: ui-monospace, monospace; font-size: 11px; color: rgba(255,255,255,0.4); }
+
+    /* AI draft preview block (Ping Island's "Approve" pattern, mapped) */
+    .pi-draft-block {
+      background: rgba(255,255,255,0.025);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 12px; line-height: 1.65;
+      color: rgba(255,255,255,0.85);
+      margin: 6px 0;
+    }
+    .pi-draft-block .di-add  {
+      display: block;
+      background: rgba(93,186,140,0.10);
+      color: #A8DCBA;
+      padding: 0 6px; margin: 0 -6px;
+    }
+
+    /* Buddy detach companion — floats outside the screen */
+    .buddy-float {
+      position: absolute;
+      width: 64px; height: 64px;
+      filter: drop-shadow(0 8px 18px rgba(0,0,0,0.55));
+      animation: buddy-bob 2.6s ease-in-out infinite;
+    }
+    .buddy-float .mascot {
+      width: 56px; height: 56px;
+      border-radius: 12px;
+    }
+    .buddy-counter {
+      position: absolute;
+      top: -4px; right: -8px;
+      min-width: 22px; height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      background: rgb(var(--c-accent));
+      color: #fff;
+      font-size: 11px; font-weight: 700; line-height: 22px;
+      text-align: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    }
+    @keyframes buddy-bob {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-4px); }
+    }
+    .buddy-sparkle {
+      position: absolute;
+      pointer-events: none;
+      width: 6px; height: 6px;
+      background: rgb(var(--c-accent));
+      border-radius: 50%;
+      opacity: 0.7;
+    }
+
+    /* Compact resting dock pill — only Critical shows, hugs the notch */
+    .pi-dock {
+      position: absolute;
+      top: 5px;
+      height: 22px;
+      min-width: 22px;
+      padding: 0 7px;
+      background: #000;
+      border-radius: 999px;
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 6px;
+      box-shadow:
+        0 0 0 1.5px rgba(229,99,79,0.55),
+        0 6px 14px rgba(0,0,0,0.5);
+      z-index: 12;
+      cursor: pointer;
+    }
+    .pi-dock-dot { width: 8px; height: 8px; border-radius: 50%; background: #E5634F; animation: pi-pulse 1.6s infinite; }
+
+    /* Wallpaper for hero context */
+    .wallpaper {
+      background:
+        radial-gradient(ellipse 60% 60% at 20% 30%, rgba(var(--c-accent), 0.10) 0%, transparent 50%),
+        radial-gradient(ellipse 50% 50% at 80% 70%, rgba(74,158,255,0.06) 0%, transparent 50%),
+        linear-gradient(180deg, #1a1d24 0%, #0e1013 100%);
+    }
+    .grid-bg {
+      background-image:
+        linear-gradient(to right, rgba(255,255,255,0.022) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,0.022) 1px, transparent 1px);
+      background-size: 16px 16px;
+    }
+    .menubar {
+      height: 28px;
+      background: rgba(0,0,0,0.42);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .phase-tag {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 2px 6px; border-radius: 3px;
+      background: rgba(var(--c-accent), 0.12);
+      color: rgb(var(--c-accent));
+      border: 1px solid rgba(var(--c-accent), 0.3);
+    }
+    .arrow-east {
+      width: 28px; height: 1px; background: #454A53; position: relative;
+    }
+    .arrow-east::after {
+      content: ''; position: absolute; right: 0; top: -3px;
+      width: 0; height: 0;
+      border-left: 5px solid #454A53;
+      border-top: 3px solid transparent;
+      border-bottom: 3px solid transparent;
+    }
+
+    .matrix-yes { color: rgb(var(--c-accent)); }
+    .matrix-no  { color: #454A53; }
+
+    /* code blocks */
+    pre.code {
+      background: #0a0c10;
+      border: 1px solid #1F242B;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 12.5px; line-height: 1.6;
+      color: #C8CDD4;
+      overflow-x: auto;
+    }
+    pre.code .k { color: #E89B4A; }      /* keyword */
+    pre.code .s { color: #A8DCBA; }      /* string */
+    pre.code .c { color: #6B707A; font-style: italic; } /* comment */
+    pre.code .t { color: rgb(var(--c-accent)); } /* type */
+    pre.code .n { color: #6FA8DC; }      /* number / literal */
+  </style>
+</head>
+
+<body class="min-h-screen text-ink-fg font-sans antialiased" data-i18n-skip>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     HEADER
+═══════════════════════════════════════════════════════════════════════ -->
+<header class="border-b border-ink-border bg-ink-1">
+  <div class="max-w-[1280px] mx-auto px-8 py-5">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <a href="./mockup-inbox.html" class="text-aux text-ink-fg-2 hover:text-ink-fg transition">← back to inbox</a>
+        <span class="text-ink-fg-3">·</span>
+        <h1 class="text-lead font-semibold tracking-tight">MailAgent · Ping Island plugin</h1>
+        <span class="text-meta font-mono text-ink-fg-2 px-1.5 py-0.5 rounded bg-ink-3 border border-ink-border">v4 · patch on ping-island</span>
+      </div>
+      <div class="flex items-center gap-3 text-aux text-ink-fg-2">
+        <span>upstream · <a href="https://github.com/erha19/ping-island" class="text-accent hover:text-accent-hi">erha19/ping-island</a></span>
+      </div>
+    </div>
+    <p class="mt-2 text-aux text-ink-fg-1 max-w-[920px]">
+      MailAgent <span class="text-ink-fg">不自己渲染灵动岛</span>。直接复用开源的 <span class="text-ink-fg">Ping Island</span>（Apache-2.0 · macOS 菜单栏应用 · 已支持 12+ 编码 Agent），通过它的官方 hook 协议把邮件事件喂进去 — Ping Island 的 notch UI 负责渲染。
+      MailAgent 这一侧的贡献只有 <span class="text-ink-fg">4 件事</span>：邮件事件 → Ping Island event 的翻译层 · 3 只专属 mascot · "跳转邮件" deep-link handler · buddy-detach 时显示未读计数。
+    </p>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §1 · ARCHITECTURE — how MailAgent plugs into Ping Island
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pt-10 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§1 · 集成架构</h2>
+    <span class="text-aux text-ink-fg-2">两个进程 · 一条 unix socket · 零 UI 重复</span>
+  </div>
+  <p class="text-aux text-ink-fg-1 max-w-[860px] mb-6">
+    Ping Island 是独立的 macOS App（用户走 brew 或 DMG 安装），<span class="text-ink-fg">MailAgent.app</span> 是另一个独立 Electron 进程。
+    两者通过 Ping Island 已有的 hook plugin 机制对接 — MailAgent 安装时往 <span class="font-mono text-ink-fg">~/.mailagent/plugins/ping_island/</span> 写一份配置和一个轻量 bridge 脚本，Ping Island 启动时自动发现并加载。
+    <span class="text-ink-fg">不需要 fork Ping Island 源码</span>，也不需要发布定制版本。
+  </p>
+
+  <div class="bg-ink-1 border border-ink-border rounded-xl p-6">
+    <pre class="code"><span class="c">/* 数据流 · 一封 Critical 邮件从到达到点击 */</span>
+
+<span class="t">IMAP / Gmail API</span>
+  ↓
+<span class="t">mail-sync (Python daemon)</span>  ── LLM 分类 → priority=critical
+  ↓                            <span class="c">emits event over local socket</span>
+<span class="t">~/.mailagent/plugins/ping_island/bridge.py</span>
+  ↓                            <span class="c">translates to Ping Island hook format</span>
+<span class="t">Ping Island.app</span>           <span class="c">renders notch UI · plays sound · routes click</span>
+  ↓                            <span class="c">user clicks → deep-link mailagent://open?id=...</span>
+<span class="t">MailAgent.app (Electron)</span>   <span class="c">activates · opens email detail pane</span></pre>
+
+    <div class="grid grid-cols-3 gap-4 mt-6">
+      <div class="bg-ink-2 border border-ink-border-soft rounded-lg p-4">
+        <div class="text-meta font-mono text-accent mb-1">MailAgent ships (write)</div>
+        <ul class="text-aux text-ink-fg-1 space-y-1.5 mt-2 leading-relaxed">
+          <li>· bridge.py（~120 行）</li>
+          <li>· 3 只 mascot（CSS / GIF）</li>
+          <li>· deep-link scheme handler</li>
+          <li>· 设置页里的 "启用 Ping Island" 开关</li>
+        </ul>
+      </div>
+      <div class="bg-ink-2 border border-ink-border-soft rounded-lg p-4">
+        <div class="text-meta font-mono text-ink-fg-1 mb-1">Ping Island provides</div>
+        <ul class="text-aux text-ink-fg-1 space-y-1.5 mt-2 leading-relaxed">
+          <li>· notch 渲染 · morph 动画</li>
+          <li>· hover 预览 · 列表合并</li>
+          <li>· 多客户端事件归一化</li>
+          <li>· Buddy 离岛（v0.5.0+）</li>
+          <li>· 主题包 / 音效引擎</li>
+        </ul>
+      </div>
+      <div class="bg-ink-2 border border-ink-border-soft rounded-lg p-4">
+        <div class="text-meta font-mono text-ink-fg-1 mb-1">MailAgent skips</div>
+        <ul class="text-aux text-ink-fg-1 space-y-1.5 mt-2 leading-relaxed">
+          <li>· 自渲染 notch overlay</li>
+          <li>· SwiftUI overlay App</li>
+          <li>· 自定义动画引擎</li>
+          <li>· macOS 14+ 版本适配</li>
+          <li>· accessibility 权限</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §2 · NOTCH SCENES — 4 scenes inside the real Ping Island shell
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§2 · 岛上四种 MailAgent 场景</h2>
+    <span class="text-aux text-ink-fg-2">视觉对照 ping-island/docs/images/notch-panel.png</span>
+  </div>
+  <p class="text-aux text-ink-fg-1 max-w-[860px] mb-6">
+    Ping Island 的核心 UI 是 <span class="text-ink-fg">垂直会话列表</span> — 每行一个 active session。MailAgent 把每封需要处理的邮件包装成一个 session 喂给它，于是邮件行和 Claude / Codex 行<span class="text-ink-fg">混合显示</span>在同一个面板里。下面 4 个场景就是面板在不同事件下的真实呈现。
+  </p>
+
+  <div class="grid grid-cols-2 gap-6">
+
+    <!-- ─── SCENE 1 · MIXED MONITOR (3 tools coexist) ────────────────── -->
+    <div class="bg-ink-1 border border-ink-border rounded-xl overflow-hidden">
+      <div class="px-5 py-3 border-b border-ink-border-soft flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="phase-tag">Scene 1</span>
+          <span class="text-aux text-ink-fg font-medium">Mixed monitor</span>
+          <span class="text-aux text-ink-fg-2">· 多客户端共存</span>
+        </div>
+        <span class="text-meta font-mono text-ink-fg-2">5 active</span>
+      </div>
+      <div class="grid-bg wallpaper relative" style="min-height: 420px;">
+        <div class="pi-shell pi-shell-expanded" style="width: 400px;">
+          <span class="pi-shell-cam"></span>
+
+          <!-- MailAgent row · Critical (focused) -->
+          <div class="pi-row focused">
+            <div class="pi-avatar pi-avatar-work">
+              <div class="mascot mascot-postman"></div>
+              <span class="pi-avatar-pip pip-crit"></span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">MailAgent · 工作邮箱</div>
+              <div class="pi-title">webhook 8100 · HTTP 502 持续 14m</div>
+              <div class="pi-sub">PagerDuty · prod incident · @oncall 已被点名</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0 pt-1">
+              <span class="pi-tag">MailAgent</span>
+              <span class="pi-time">&lt;1m</span>
+            </div>
+          </div>
+
+          <!-- Claude row -->
+          <div class="pi-row">
+            <div class="pi-avatar pi-avatar-claude">
+              <div class="mascot-claude"></div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">Claude Code</div>
+              <div class="pi-title">Need a quick answer</div>
+              <div class="pi-sub">Claude is waiting for a quick direction before it can continue.</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0 pt-1">
+              <span class="pi-tag">Claude Code</span>
+              <span class="pi-time">2m</span>
+            </div>
+          </div>
+
+          <!-- MailAgent row · AI draft ready -->
+          <div class="pi-row">
+            <div class="pi-avatar pi-avatar-mailagent">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--c-accent))" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 3 L9 8 M9 16 L9 21 M3 9 L8 9 M16 9 L21 9 M5 5 L7 7 M17 5 L15 7 M5 19 L7 17 M17 19 L15 17"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+              <span class="pi-avatar-pip pip-ai"></span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">MailAgent · AI draft</div>
+              <div class="pi-title">Re: 季度回顾 · 草稿就绪</div>
+              <div class="pi-sub">Claude 3.5 · 142 tokens · est. $0.0021 · 等待发送确认</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0 pt-1">
+              <span class="pi-tag">MailAgent</span>
+              <span class="pi-time">5m</span>
+            </div>
+          </div>
+
+          <!-- Codex row -->
+          <div class="pi-row">
+            <div class="pi-avatar pi-avatar-codex">
+              <div class="mascot-codex"></div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">Codex</div>
+              <div class="pi-title">Review the hook parser before next release</div>
+              <div class="pi-sub">You can you double-check the file mapping?</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0 pt-1">
+              <span class="pi-tag">Codex</span>
+              <span class="pi-time">32s</span>
+            </div>
+          </div>
+
+          <!-- MailAgent row · sync error -->
+          <div class="pi-row">
+            <div class="pi-avatar pi-avatar-dev">
+              <div class="mascot mascot-devbot"></div>
+              <span class="pi-avatar-pip pip-fail"></span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">MailAgent · sync error</div>
+              <div class="pi-title">Notion 同步失败 · 2 条 dead-letter</div>
+              <div class="pi-sub">409 conflict · 数据库 schema 未匹配 · 重试 3/3 已耗尽</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0 pt-1">
+              <span class="pi-tag">MailAgent</span>
+              <span class="pi-time">12m</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-ink-border-soft text-aux text-ink-fg-1">
+        Ping Island 同一个面板里 <span class="text-accent font-medium">3 条 MailAgent 邮件行</span> + <span class="text-ink-fg">Claude / Codex 编码会话行</span> 同列。MailAgent 行通过 <span class="font-mono text-ink-fg">tag = "MailAgent"</span> 与编码客户端区分。
+      </div>
+    </div>
+
+    <!-- ─── SCENE 2 · INPUT REQUIRED — AI draft confirm ───────────────── -->
+    <div class="bg-ink-1 border border-ink-border rounded-xl overflow-hidden">
+      <div class="px-5 py-3 border-b border-ink-border-soft flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="phase-tag">Scene 2</span>
+          <span class="text-aux text-ink-fg font-medium">Input required</span>
+          <span class="text-aux text-ink-fg-2">· AI 草稿确认</span>
+        </div>
+        <span class="text-meta font-mono text-ink-fg-2">input.required</span>
+      </div>
+      <div class="grid-bg wallpaper relative" style="min-height: 420px;">
+        <div class="pi-shell pi-shell-expanded" style="width: 400px;">
+          <span class="pi-shell-cam"></span>
+
+          <div class="pi-row focused">
+            <div class="pi-avatar pi-avatar-mailagent">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--c-accent))" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 3 L9 8 M9 16 L9 21 M3 9 L8 9 M16 9 L21 9"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+              <span class="pi-avatar-pip pip-ai"></span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">MailAgent · AI draft</div>
+              <div class="pi-title">Re: Q3 OKR · 已生成回复</div>
+              <div class="pi-sub">to: anna@acme.com · Claude 3.5 · 142 tok · $0.0021</div>
+
+              <div class="pi-draft-block">
+                <span class="block">Hi Anna,</span>
+                <span class="di-add">+ Thanks for the Q3 numbers — the 18% YoY lift on</span>
+                <span class="di-add">+ enterprise renewals is the headline. I'll loop in...</span>
+                <span class="block opacity-60">...</span>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2 mt-2">
+                <button class="pi-btn pi-btn-dark">
+                  <span>编辑</span>
+                  <span class="pi-btn-sh-dark">⌘E</span>
+                </button>
+                <button class="pi-btn pi-btn-light">
+                  <span>发送</span>
+                  <span class="pi-btn-sh-light">⌘⏎</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-ink-border-soft text-aux text-ink-fg-1">
+        映射到 Ping Island 的 <span class="font-mono text-ink-fg">input.required</span> 事件（同 Claude 的工具批准） · 白色按钮 = 主操作 · 深色按钮 = 次操作 · 快捷键内联。
+      </div>
+    </div>
+
+    <!-- ─── SCENE 3 · TASK ACKNOWLEDGE — single Critical arrival ──────── -->
+    <div class="bg-ink-1 border border-ink-border rounded-xl overflow-hidden">
+      <div class="px-5 py-3 border-b border-ink-border-soft flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="phase-tag">Scene 3</span>
+          <span class="text-aux text-ink-fg font-medium">Task acknowledge</span>
+          <span class="text-aux text-ink-fg-2">· 新邮件到达</span>
+        </div>
+        <span class="text-meta font-mono text-ink-fg-2">task.acknowledge</span>
+      </div>
+      <div class="grid-bg wallpaper relative" style="min-height: 420px;">
+        <div class="pi-shell pi-shell-expanded" style="width: 380px;">
+          <span class="pi-shell-cam"></span>
+
+          <div class="pi-row focused">
+            <div class="pi-avatar pi-avatar-work">
+              <div class="mascot mascot-postman"></div>
+              <span class="pi-avatar-pip pip-crit"></span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">MailAgent · 工作邮箱 · Critical</div>
+              <div class="pi-title">webhook 8100 · HTTP 502</div>
+              <div class="pi-sub">from: alerts@pagerduty.com · 持续 14m · @oncall</div>
+
+              <div class="grid grid-cols-2 gap-2 mt-3">
+                <button class="pi-btn pi-btn-dark">
+                  <span>稍后</span>
+                  <span class="pi-btn-sh-dark">⌘.</span>
+                </button>
+                <button class="pi-btn pi-btn-light">
+                  <span>打开</span>
+                  <span class="pi-btn-sh-light">⌘⏎</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="absolute bottom-4 left-1/2 -translate-x-1/2 text-meta font-mono text-ink-fg-2 whitespace-nowrap">
+          hold 4s → collapse · pip 留在刘海左侧
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-ink-border-soft text-aux text-ink-fg-1">
+        新邮件到达 · Ping Island 自动展开 4s · 之后缩回 + 留一个 22 × 22 红色 pip 在刘海侧 · 仅 Critical 邮件保留 pip。
+      </div>
+    </div>
+
+    <!-- ─── SCENE 4 · TASK COMPLETE — synced · click to jump ──────────── -->
+    <div class="bg-ink-1 border border-ink-border rounded-xl overflow-hidden">
+      <div class="px-5 py-3 border-b border-ink-border-soft flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="phase-tag">Scene 4</span>
+          <span class="text-aux text-ink-fg font-medium">Task complete</span>
+          <span class="text-aux text-ink-fg-2">· 已处理 · 跳转</span>
+        </div>
+        <span class="text-meta font-mono text-ink-fg-2">task.complete</span>
+      </div>
+      <div class="grid-bg wallpaper relative" style="min-height: 420px;">
+        <div class="pi-shell pi-shell-expanded" style="width: 380px;">
+          <span class="pi-shell-cam"></span>
+
+          <div class="pi-row focused">
+            <div class="pi-avatar pi-avatar-personal">
+              <div class="mascot mascot-pidgeon"></div>
+              <span class="pi-avatar-pip pip-ok"></span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">MailAgent · 已同步</div>
+              <div class="pi-title">Re: 周末聚餐安排</div>
+              <div class="pi-sub" style="color: #5DBA8C;">Done — click to jump</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0 pt-1">
+              <kbd>⌘⏎</kbd>
+              <span class="pi-time">just now</span>
+            </div>
+          </div>
+
+          <div class="pi-row">
+            <div class="pi-avatar pi-avatar-mailagent">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--c-accent))" stroke-width="2.2"><circle cx="12" cy="12" r="3"/></svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="pi-eyebrow">MailAgent · queue</div>
+              <div class="pi-title">2 封邮件等待 AI 分类</div>
+              <div class="pi-sub">est. 1.2s · 1.4s · 队列稳定</div>
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0 pt-1">
+              <span class="pi-tag">MailAgent</span>
+              <span class="pi-time">queued</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-ink-border-soft text-aux text-ink-fg-1">
+        Ping Island 的 <span class="font-mono text-ink-fg">task.complete</span> 终态 · 副标变绿 "Done — click to jump" · 点击触发 <span class="font-mono text-ink-fg">mailagent://open?id=...</span> deep link · 队列后续条目接力为 focused。
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §3 · MASCOT SYSTEM — 3 pixel-art mascots MailAgent ships
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§3 · 专属 Mascot 系统</h2>
+    <span class="text-aux text-ink-fg-2">每个账号一只 · 上桌即认</span>
+  </div>
+  <p class="text-aux text-ink-fg-1 max-w-[860px] mb-6">
+    Ping Island 给每个客户端预留一个 mascot 位（Claude 是橙色绒球、Codex 是蓝键盘块、Qwen 是薄荷围巾卡皮巴拉…）。MailAgent 注册 3 只，<span class="text-ink-fg">按账号绑定</span>而不是按事件类型 — 这样用户扫一眼就知道是哪个收件箱出的事。
+  </p>
+
+  <div class="grid grid-cols-3 gap-5">
+
+    <div class="bg-ink-1 border border-ink-border rounded-xl p-5">
+      <div class="flex items-center gap-4 mb-4">
+        <div class="pi-avatar pi-avatar-work" style="width:56px; height:56px; border-radius:14px;">
+          <div class="mascot mascot-postman" style="width:42px; height:42px;"></div>
+        </div>
+        <div>
+          <div class="text-lead font-semibold text-ink-fg">Postman</div>
+          <div class="text-meta font-mono text-ink-fg-2">id: <span class="text-ink-fg">mailagent.work</span></div>
+        </div>
+      </div>
+      <div class="text-aux text-ink-fg-1 leading-relaxed">
+        工作账号 · 橙色信使造型 · 严肃但有人味。绑给 <span class="text-ink-fg">@company.com</span> 域邮件。
+      </div>
+      <div class="mt-4 pt-3 border-t border-ink-border-soft text-meta font-mono text-ink-fg-2">
+        accent: <span class="text-[#C26A3E]">#C26A3E</span> · pip: 红 / 橙 / 绿
+      </div>
+    </div>
+
+    <div class="bg-ink-1 border border-ink-border rounded-xl p-5">
+      <div class="flex items-center gap-4 mb-4">
+        <div class="pi-avatar pi-avatar-personal" style="width:56px; height:56px; border-radius:14px;">
+          <div class="mascot mascot-pidgeon" style="width:42px; height:42px;"></div>
+        </div>
+        <div>
+          <div class="text-lead font-semibold text-ink-fg">Pidgeon</div>
+          <div class="text-meta font-mono text-ink-fg-2">id: <span class="text-ink-fg">mailagent.personal</span></div>
+        </div>
+      </div>
+      <div class="text-aux text-ink-fg-1 leading-relaxed">
+        个人账号 · 灰鸽子衔信 · 安静、低优先级气质。绑给 Gmail / iCloud 私人地址。
+      </div>
+      <div class="mt-4 pt-3 border-t border-ink-border-soft text-meta font-mono text-ink-fg-2">
+        accent: <span class="text-[#6B707A]">#6B707A</span> · pip: 蓝 / 绿
+      </div>
+    </div>
+
+    <div class="bg-ink-1 border border-ink-border rounded-xl p-5">
+      <div class="flex items-center gap-4 mb-4">
+        <div class="pi-avatar pi-avatar-dev" style="width:56px; height:56px; border-radius:14px;">
+          <div class="mascot mascot-devbot" style="width:42px; height:42px;"></div>
+        </div>
+        <div>
+          <div class="text-lead font-semibold text-ink-fg">DevBot</div>
+          <div class="text-meta font-mono text-ink-fg-2">id: <span class="text-ink-fg">mailagent.dev</span></div>
+        </div>
+      </div>
+      <div class="text-aux text-ink-fg-1 leading-relaxed">
+        开发者通知 · 绿色终端 bot · 给 GitHub / Sentry / Vercel / Stripe 等机器人邮件。
+      </div>
+      <div class="mt-4 pt-3 border-t border-ink-border-soft text-meta font-mono text-ink-fg-2">
+        accent: <span class="text-[#5DBA8C]">#5DBA8C</span> · pip: 红 / 绿 / 灰
+      </div>
+    </div>
+
+  </div>
+
+  <div class="mt-5 bg-ink-1 border border-ink-border-soft rounded-lg px-5 py-3 text-aux text-ink-fg-1 leading-relaxed">
+    <span class="text-ink-fg font-medium">用户可在 MailAgent 设置页里覆盖账号 → mascot 映射</span> · 也可关闭 mascot（回退到 Ping Island 默认通用图标）· 上面用 CSS 像素拼出来仅作 mockup 示意，<span class="font-mono text-ink-fg">v1 出图后导出为 36 × 36 GIF</span> 走 Ping Island 的 <span class="font-mono text-ink-fg">MascotView</span> 导出流程。
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §4 · EVENT MAPPING — MailAgent events ↔ Ping Island event categories
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§4 · 事件映射表</h2>
+    <span class="text-aux text-ink-fg-2">MailAgent → Ping Island canonical events</span>
+  </div>
+  <p class="text-aux text-ink-fg-1 max-w-[860px] mb-6">
+    Ping Island 把所有 Agent 事件归一化成 5 类（来自它的音效引擎事件 schema）：<span class="font-mono text-ink-fg">task.acknowledge · input.required · task.complete · task.error · resource.limit</span>。MailAgent 只需要把自家事件投射到这 5 个槽里 — 它的 UI / 音效 / 路由就免费拿到。
+  </p>
+
+  <div class="bg-ink-1 border border-ink-border rounded-xl overflow-hidden">
+    <table class="w-full text-aux">
+      <thead class="bg-ink-2 text-meta font-mono text-ink-fg-2 uppercase tracking-wider">
+        <tr>
+          <th class="text-left px-5 py-3 font-medium">MailAgent event</th>
+          <th class="text-left px-4 py-3 font-medium">→ Ping Island category</th>
+          <th class="text-center px-3 py-3 font-medium">Phase 1 (arrive)</th>
+          <th class="text-center px-3 py-3 font-medium">Phase 2 (rest pip)</th>
+          <th class="text-left px-4 py-3 font-medium">默认动作</th>
+          <th class="text-left px-4 py-3 font-medium">mascot pip</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-ink-border-soft">
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">mail.arrived (Critical)</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">task.acknowledge</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-4 py-3 text-ink-fg-1">Open · Snooze</td>
+          <td class="px-4 py-3"><span class="inline-block w-2 h-2 rounded-full bg-crit"></span> <span class="text-meta font-mono text-ink-fg-1">crit (pulse)</span></td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">mail.arrived (Urgent)</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">task.acknowledge</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-4 py-3 text-ink-fg-1">Open · Snooze</td>
+          <td class="px-4 py-3"><span class="inline-block w-2 h-2 rounded-full bg-urg"></span> <span class="text-meta font-mono text-ink-fg-1">urg</span></td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">mail.arrived (Important)</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">task.acknowledge</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-no">—</td>
+          <td class="px-4 py-3 text-ink-fg-1">flash 2.5s · 不留 pip</td>
+          <td class="px-4 py-3 text-ink-fg-2 text-meta font-mono">—</td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">mail.arrived (Normal / Low)</td>
+          <td class="px-4 py-3 text-meta text-ink-fg-2">—</td>
+          <td class="px-3 py-3 text-center matrix-no">—</td>
+          <td class="px-3 py-3 text-center matrix-no">—</td>
+          <td class="px-4 py-3 text-ink-fg-2">完全不进岛</td>
+          <td class="px-4 py-3 text-meta font-mono text-ink-fg-2">—</td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">ai.draft.ready</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">input.required</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-4 py-3 text-ink-fg-1">发送 · 编辑 · 重生成</td>
+          <td class="px-4 py-3"><span class="inline-block w-2 h-2 rounded-full bg-accent"></span> <span class="text-meta font-mono text-ink-fg-1">ai</span></td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">ai.ask.user</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">input.required</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-4 py-3 text-ink-fg-1">⌘1 / ⌘2 / ⌘3 选答</td>
+          <td class="px-4 py-3"><span class="inline-block w-2 h-2 rounded-full" style="background:#5BC0BE"></span> <span class="text-meta font-mono text-ink-fg-1">ask</span></td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">sync.complete (batch)</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">task.complete</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-no">—</td>
+          <td class="px-4 py-3 text-ink-fg-1">"Done — click to jump" 2s</td>
+          <td class="px-4 py-3"><span class="inline-block w-2 h-2 rounded-full bg-ok"></span> <span class="text-meta font-mono text-ink-fg-1">ok</span></td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">sync.failed (≥1 dead-letter)</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">task.error</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-4 py-3 text-ink-fg-1">Retry · Open /admin</td>
+          <td class="px-4 py-3"><span class="inline-block w-2 h-2 rounded-full bg-fail"></span> <span class="text-meta font-mono text-ink-fg-1">fail</span></td>
+        </tr>
+        <tr class="hover:bg-ink-2/40">
+          <td class="px-5 py-3 text-ink-fg">llm.budget.warning</td>
+          <td class="px-4 py-3 font-mono text-meta text-accent">resource.limit</td>
+          <td class="px-3 py-3 text-center matrix-yes">●</td>
+          <td class="px-3 py-3 text-center matrix-no">—</td>
+          <td class="px-4 py-3 text-ink-fg-1">flash · 打开 /llm 看板</td>
+          <td class="px-4 py-3 text-meta font-mono text-ink-fg-2">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §5 · INSTALL — what MailAgent writes to disk
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§5 · 安装契约</h2>
+    <span class="text-aux text-ink-fg-2">MailAgent 设置页 → 启用 Ping Island 集成</span>
+  </div>
+  <p class="text-aux text-ink-fg-1 max-w-[860px] mb-6">
+    用户开关一打开，MailAgent 检测到本机有 <span class="font-mono text-ink-fg">/Applications/Ping Island.app</span> 后，往 <span class="font-mono text-ink-fg">~/.mailagent/plugins/ping_island/</span> 写一份配置 + 一个 bridge 脚本。Ping Island 启动时按它的 plugin 协议自动发现 — <span class="text-ink-fg">不需要用户改 Ping Island 设置</span>。
+  </p>
+
+  <div class="grid grid-cols-2 gap-6">
+    <div class="bg-ink-1 border border-ink-border rounded-xl p-5">
+      <div class="text-meta font-mono text-ink-fg-2 uppercase tracking-wider mb-3">directory layout</div>
+      <pre class="code"><span class="c">~/.mailagent/plugins/ping_island/</span>
+├── <span class="t">manifest.json</span>      <span class="c"># registration with Ping Island</span>
+├── <span class="t">bridge.py</span>          <span class="c"># socket → hook event translator</span>
+├── <span class="t">mascots/</span>           <span class="c"># 3 × 36px GIF</span>
+│   ├── postman.gif
+│   ├── pidgeon.gif
+│   └── devbot.gif
+└── <span class="t">sounds/</span>            <span class="c"># optional pack</span>
+    ├── openpeon.json
+    ├── mail-arrived.wav
+    └── sync-failed.wav</pre>
+    </div>
+
+    <div class="bg-ink-1 border border-ink-border rounded-xl p-5">
+      <div class="text-meta font-mono text-ink-fg-2 uppercase tracking-wider mb-3">manifest.json</div>
+      <pre class="code">{
+  <span class="s">"plugin_id"</span>:    <span class="s">"mailagent"</span>,
+  <span class="s">"display_name"</span>: <span class="s">"MailAgent"</span>,
+  <span class="s">"version"</span>:      <span class="s">"1.0.0"</span>,
+  <span class="s">"socket"</span>:       <span class="s">"unix:///tmp/mailagent.sock"</span>,
+  <span class="s">"mascots"</span>: {
+    <span class="s">"work"</span>:     <span class="s">"mascots/postman.gif"</span>,
+    <span class="s">"personal"</span>: <span class="s">"mascots/pidgeon.gif"</span>,
+    <span class="s">"dev"</span>:      <span class="s">"mascots/devbot.gif"</span>
+  },
+  <span class="s">"deep_link_scheme"</span>: <span class="s">"mailagent"</span>,
+  <span class="s">"jump_template"</span>:    <span class="s">"mailagent://open?id={id}"</span>,
+  <span class="s">"event_categories"</span>: [
+    <span class="s">"task.acknowledge"</span>,
+    <span class="s">"input.required"</span>,
+    <span class="s">"task.complete"</span>,
+    <span class="s">"task.error"</span>,
+    <span class="s">"resource.limit"</span>
+  ]
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §6 · BRIDGE PROTOCOL — TypeScript event types
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§6 · Bridge 协议</h2>
+    <span class="text-aux text-ink-fg-2">事件载荷的形状</span>
+  </div>
+  <p class="text-aux text-ink-fg-1 max-w-[860px] mb-6">
+    mail-sync daemon 把这个形状的 JSON 推到 <span class="font-mono text-ink-fg">/tmp/mailagent.sock</span>，bridge.py 读取后翻译成 Ping Island 期望的 hook event 格式发到 Ping Island 的内部端口。反向（"我点击了"）走 macOS deep-link scheme，无需再开一条 socket。
+  </p>
+
+  <div class="bg-ink-1 border border-ink-border rounded-xl p-5">
+    <pre class="code"><span class="c">// MailAgent → Bridge (向上推)</span>
+<span class="k">type</span> <span class="t">MailAgentEvent</span> =
+  | { kind: <span class="s">'mail.arrived'</span>,    id: <span class="t">string</span>, account: <span class="t">AccountId</span>,
+      priority: <span class="s">'critical'</span> | <span class="s">'urgent'</span> | <span class="s">'important'</span> | <span class="s">'normal'</span> | <span class="s">'low'</span>,
+      subject: <span class="t">string</span>, from: <span class="t">string</span>, snippet: <span class="t">string</span>, tag?: <span class="t">string</span> }
+  | { kind: <span class="s">'ai.draft.ready'</span>,  id: <span class="t">string</span>, mail_id: <span class="t">string</span>,
+      model: <span class="t">string</span>, tokens: <span class="t">number</span>, cost_usd: <span class="t">number</span>, preview: <span class="t">string</span> }
+  | { kind: <span class="s">'ai.ask.user'</span>,     id: <span class="t">string</span>, mail_id: <span class="t">string</span>,
+      question: <span class="t">string</span>, choices: <span class="t">string</span>[] <span class="c">/* 2-4 */</span> }
+  | { kind: <span class="s">'sync.complete'</span>,   batch_size: <span class="t">number</span>, duration_ms: <span class="t">number</span> }
+  | { kind: <span class="s">'sync.failed'</span>,     dead_letter_count: <span class="t">number</span>, last_error: <span class="t">string</span> }
+  | { kind: <span class="s">'llm.budget.warning'</span>, used_usd: <span class="t">number</span>, budget_usd: <span class="t">number</span> }
+  | { kind: <span class="s">'accent'</span>,          value: <span class="t">AccentName</span> }; <span class="c">/* theme sync */</span>
+
+<span class="c">// Bridge → MailAgent (向下回调) — via macOS URL scheme handler</span>
+<span class="c">// mailagent://open?id=&lt;mail_id&gt;</span>
+<span class="c">// mailagent://action?id=&lt;event_id&gt;&amp;action=send|edit|snooze|retry</span>
+<span class="c">// mailagent://answer?id=&lt;event_id&gt;&amp;choice=&lt;index&gt;</span></pre>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §7 · BUDDY DETACH — pixel-art companion (Ping Island v0.5.0+)
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§7 · Buddy 离岛</h2>
+    <span class="text-aux text-ink-fg-2">长按刘海 · 向上拖出 · 悬浮陪伴</span>
+  </div>
+  <p class="text-aux text-ink-fg-1 max-w-[860px] mb-6">
+    Ping Island v0.5.0+ 支持把当前 mascot 从刘海里拖出来，作为独立 floating window 一直在桌面上。MailAgent 这一侧不写代码 — 但<span class="text-ink-fg">在 mascot 上贴一个未读邮件 counter</span>，让它从"装饰"变成"一直能看见的实时提示"。
+  </p>
+
+  <div class="bg-ink-1 border border-ink-border rounded-xl overflow-hidden">
+    <div class="grid-bg wallpaper relative" style="min-height: 340px;">
+      <!-- Compact notch with Postman avatar visible -->
+      <div class="pi-shell pi-shell-expanded" style="width: 320px;">
+        <span class="pi-shell-cam"></span>
+        <div class="pi-row focused">
+          <div class="pi-avatar pi-avatar-work">
+            <div class="mascot mascot-postman"></div>
+            <span class="pi-avatar-pip pip-crit"></span>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="pi-eyebrow">MailAgent · 工作邮箱</div>
+            <div class="pi-title">12 unread · 2 critical</div>
+            <div class="pi-sub">长按头像 · 向上拖出刘海</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detached buddy floating top-right -->
+      <div class="buddy-float" style="top: 60px; right: 80px;">
+        <div class="pi-avatar pi-avatar-work" style="width:56px; height:56px; border-radius:14px;">
+          <div class="mascot mascot-postman" style="width:42px; height:42px;"></div>
+        </div>
+        <div class="buddy-counter">12</div>
+        <div class="buddy-sparkle" style="top:-4px; left:-6px;"></div>
+        <div class="buddy-sparkle" style="bottom:0; right:-8px; width:4px; height:4px;"></div>
+      </div>
+
+      <!-- Drag arrow -->
+      <svg class="absolute" style="top:32px; right:160px;" width="140" height="60" viewBox="0 0 140 60" fill="none" stroke="#A4A9B3" stroke-width="1.5" stroke-dasharray="4 4">
+        <path d="M10 50 Q 50 10 130 28" stroke-linecap="round" />
+        <path d="M125 22 L132 28 L125 34" fill="none" stroke-linejoin="round" />
+      </svg>
+
+      <div class="absolute bottom-6 left-8 max-w-[300px]">
+        <div class="text-meta font-mono text-ink-fg-2 mb-2">DETACHED BUDDY · floats on desktop</div>
+        <div class="text-aux text-ink-fg leading-relaxed">
+          浮在桌面上 · 可随手拖到任意位置 · counter 实时更新未读总数
+        </div>
+        <div class="text-aux text-ink-fg-1 leading-relaxed mt-2">
+          点击 buddy → 打开 MailAgent 主窗口 · 双击 → 触发"标记所有为已读"
+        </div>
+      </div>
+    </div>
+    <div class="bg-ink-2 px-5 py-3 border-t border-ink-border-soft text-aux text-ink-fg-1">
+      <span class="text-ink-fg font-medium">MailAgent 这一侧只贡献两件事</span> · ① 把"未读总数"作为 metadata 推给 Ping Island · ② 在 manifest 里声明 <span class="font-mono text-ink-fg">buddy_double_click: "mark.all.read"</span>。其他全部用 Ping Island 的原生离岛能力。
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     §8 · SPEC SHEET — sizing / motion / keyboard / routing
+═══════════════════════════════════════════════════════════════════════ -->
+<section class="px-8 pb-12 max-w-[1280px] mx-auto">
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-lead font-semibold tracking-tight">§8 · 规格表</h2>
+    <span class="text-aux text-ink-fg-2">MailAgent 实现侧需要遵守的硬约束</span>
+  </div>
+
+  <div class="bg-ink-1 border border-ink-border rounded-xl overflow-hidden">
+    <div class="grid grid-cols-4 divide-x divide-ink-border-soft">
+      <div class="p-5">
+        <div class="text-meta font-mono text-ink-fg-2 uppercase tracking-wider mb-3">Sizing</div>
+        <ul class="text-aux text-ink-fg-1 space-y-2 leading-relaxed">
+          <li><span class="text-ink-fg">Mascot GIF</span> — 36 × 36, transparent bg, ≤ 12 KB</li>
+          <li><span class="text-ink-fg">Title</span> — ≤ 36 字符（含中文计 2）</li>
+          <li><span class="text-ink-fg">Subtitle</span> — ≤ 60 字符</li>
+          <li><span class="text-ink-fg">Tag</span> — 单 tag · ≤ 12 字符</li>
+          <li><span class="text-ink-fg">Preview</span> — ≤ 4 行 · ≤ 240 字符</li>
+        </ul>
+      </div>
+      <div class="p-5">
+        <div class="text-meta font-mono text-ink-fg-2 uppercase tracking-wider mb-3">Motion</div>
+        <ul class="text-aux text-ink-fg-1 space-y-2 leading-relaxed">
+          <li><span class="text-ink-fg">由 Ping Island 控制</span></li>
+          <li>arrive hold = 4 s（不要在 event 里覆盖）</li>
+          <li>Important flash = 2.5 s · 不留 pip</li>
+          <li>complete "click to jump" 提示 = 2 s</li>
+          <li>动作按钮反馈 ≤ 150 ms</li>
+        </ul>
+      </div>
+      <div class="p-5">
+        <div class="text-meta font-mono text-ink-fg-2 uppercase tracking-wider mb-3">Keyboard</div>
+        <ul class="text-aux text-ink-fg-1 space-y-2 leading-relaxed">
+          <li><kbd>⌘⏎</kbd> — open focused</li>
+          <li><kbd>J</kbd> / <kbd>K</kbd> — 切 focused</li>
+          <li><kbd>⌘E</kbd> — secondary action (edit / retry)</li>
+          <li><kbd>⌘.</kbd> — snooze</li>
+          <li><kbd>⌘1</kbd>–<kbd>⌘4</kbd> — answer ask choices</li>
+          <li><kbd>⌥I</kbd> — 强制展开岛（Ping Island 内置）</li>
+        </ul>
+      </div>
+      <div class="p-5">
+        <div class="text-meta font-mono text-ink-fg-2 uppercase tracking-wider mb-3">Routing</div>
+        <ul class="text-aux text-ink-fg-1 space-y-2 leading-relaxed">
+          <li>click row → <span class="font-mono text-ink-fg">mailagent://open?id=</span></li>
+          <li>click 主按钮 → <span class="font-mono text-ink-fg">mailagent://action?...</span></li>
+          <li>click pip → 等同 click row</li>
+          <li>click buddy → 主窗口聚焦</li>
+          <li>双击 buddy → mark.all.read</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     FOOTER · THEME PARITY — 6 swatches that mirror inbox theme picker
+═══════════════════════════════════════════════════════════════════════ -->
+<footer class="border-t border-ink-border bg-ink-1">
+  <div class="max-w-[1280px] mx-auto px-8 py-6">
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <div>
+        <div class="text-aux text-ink-fg font-medium">主题色与 inbox 共享</div>
+        <div class="text-meta text-ink-fg-2 mt-1">
+          MailAgent 设置页改色 → bridge 推一条 <span class="font-mono text-ink-fg">{ kind: 'accent', value }</span> → Ping Island 在 MailAgent 自己渲染的部分（draft block / AI badge / 主按钮 ring）跟着变 · 面板黑底不变。
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-meta font-mono text-ink-fg-2 uppercase tracking-wider mr-2">accent</span>
+        <button data-set-accent="coral"  class="w-9 h-9 rounded-lg" style="background:#E5654B" title="Coral"></button>
+        <button data-set-accent="cobalt" class="w-9 h-9 rounded-lg" style="background:#4A78E5" title="Cobalt"></button>
+        <button data-set-accent="teal"   class="w-9 h-9 rounded-lg" style="background:#2DB5A6" title="Teal"></button>
+        <button data-set-accent="rose"   class="w-9 h-9 rounded-lg" style="background:#DB5B7C" title="Rose"></button>
+        <button data-set-accent="slate"  class="w-9 h-9 rounded-lg" style="background:#7E8694" title="Slate"></button>
+        <button data-set-accent="olive"  class="w-9 h-9 rounded-lg" style="background:#9CA552" title="Olive"></button>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  /* Theme parity — read accent from localStorage (shared with inbox) and
+     wire the swatch buttons. In production this state lives in Electron
+     main and is broadcast to the Island bridge over the unix-socket. */
+  (function () {
+    const saved = localStorage.getItem('mailagent.accent');
+    if (saved && ['coral','cobalt','teal','rose','slate','olive'].includes(saved)) {
+      document.documentElement.dataset.accent = saved;
+    }
+    const ring = (btn) => {
+      document.querySelectorAll('[data-set-accent]').forEach(b => {
+        b.classList.remove('ring-2','ring-accent','ring-offset-2','ring-offset-ink-1');
+      });
+      btn.classList.add('ring-2','ring-accent','ring-offset-2','ring-offset-ink-1');
+    };
+    document.querySelectorAll('[data-set-accent]').forEach(btn => {
+      const v = btn.dataset.setAccent;
+      if ((saved || 'coral') === v) ring(btn);
+      btn.addEventListener('click', () => {
+        if (v === 'coral') document.documentElement.removeAttribute('data-accent');
+        else document.documentElement.dataset.accent = v;
+        localStorage.setItem('mailagent.accent', v);
+        ring(btn);
+      });
+    });
+  })();
+</script>
+
+</body>
+</html>

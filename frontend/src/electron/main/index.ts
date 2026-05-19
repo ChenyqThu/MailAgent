@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { bootNativeTheme, registerAppearanceIpc } from './appearance'
@@ -90,6 +90,52 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('ink.chenge.mailagent')
+
+  // Sprint 11 user-feedback — dev-mode dock icon. Packaged builds inherit
+  // the icon from electron-builder's `directories.buildResources: build`
+  // (auto-applies `build/icon.icns` to the .app bundle); dev mode still
+  // shows the generic Electron icon unless we set it explicitly here.
+  // PNG path is more reliable than .icns for app.dock.setIcon on macOS in
+  // dev mode (some macOS versions silently ignore .icns runtime overrides).
+  if (process.platform === 'darwin' && app.dock && is.dev) {
+    const iconPath = join(__dirname, '../../build/icons/1024.png')
+    try {
+      app.dock.setIcon(iconPath)
+      console.log('[dock] dev icon set:', iconPath)
+    } catch (err) {
+      console.warn('[dock] dev icon load failed:', iconPath, err)
+    }
+  }
+
+  // Sprint 11 user-feedback — macOS app menu name. Electron's binary
+  // Info.plist hardcodes CFBundleName="Electron" so the leftmost macOS
+  // app menu reads "Electron" in dev. Rebuild the app menu with the
+  // product name explicitly to fix it. `app.setName` (done at module
+  // load) drives `{appName}` substitution in the role labels — but the
+  // menu first item label needs to be set explicitly because macOS hides
+  // the literal label of the first menu and renders the app's CFBundleName.
+  if (process.platform === 'darwin') {
+    const appMenu = Menu.buildFromTemplate([
+      {
+        label: 'MailAgent',
+        submenu: [
+          { role: 'about', label: 'About MailAgent' },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide', label: 'Hide MailAgent' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit', label: 'Quit MailAgent' }
+        ]
+      },
+      { role: 'editMenu' },
+      { role: 'viewMenu' },
+      { role: 'windowMenu' }
+    ])
+    Menu.setApplicationMenu(appMenu)
+  }
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

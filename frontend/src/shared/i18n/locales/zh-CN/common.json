@@ -155,7 +155,9 @@
       "switchBackend": "切换 AI 后端",
       "sendChat": "发送 AI 消息",
       "newChat": "新建 AI 对话",
-      "toggleIsland": "切换灵动岛"
+      "toggleIsland": "切换灵动岛",
+      "toggleNav": "折叠/展开导航",
+      "toggleLocale": "切换语言"
     }
   },
   "palette": {
@@ -202,6 +204,30 @@
     "shortcuts": "快捷键",
     "online": "在线",
     "cacheWarn": "缓存命中率偏低"
+  },
+  "nav": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "view": "View"
+    },
+    "inbox": "收件箱",
+    "outbox": "发件箱",
+    "flagged": "已标旗",
+    "allMail": "所有邮件",
+    "aiSessions": "AI 会话历史",
+    "aiSessionsSoon": "即将上线 — 会话历史尚未接入后端",
+    "adminKanban": "看板 Admin",
+    "calendar": "日历",
+    "settings": "设置",
+    "shortcuts": "快捷键",
+    "toggleTitle": "折叠/展开导航 (⌥B)",
+    "toggleAria": "折叠导航",
+    "online": "在线",
+    "account": {
+      "add": "添加账户...",
+      "tooltip": "{email} — 切换账户"
+    }
   },
   "chat": {
     "title": "AI 助手",
@@ -493,6 +519,18 @@
       "disabled": "灵动岛已关闭"
     },
     "synced": "已同步",
-    "themeCycle": "主题 · 点击切换"
+    "themeCycle": "主题 · 点击切换",
+    "accent": {
+      "label": "强调色",
+      "title": "强调色",
+      "tooltip": "选择强调色 (查看 → 外观)",
+      "aria": "选择强调色",
+      "note": "影响工具栏 · 标签 · 选中行 · 灵动岛 · 仅本机保存"
+    },
+    "locale": {
+      "label": "语言",
+      "tooltip": "切换语言 (⌥G)",
+      "aria": "切换语言"
+    }
   }
 }
