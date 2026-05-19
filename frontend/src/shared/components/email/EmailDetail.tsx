@@ -23,6 +23,8 @@ import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { HoverTip } from '@shared/components/ui/HoverTip'
+
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { TranslatedBody } from './TranslatedBody'
@@ -207,6 +209,18 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     queryFn: () => mailApi.email.aiFields(internalId as number),
     enabled: internalId !== null,
     staleTime: 30_000
+  })
+
+  // Sprint 13 — thread sibling count for the meta-grid Thread row
+  // ("本对话 N 封"). ThreadSidebar fires the same query for its accordion;
+  // TanStack Query dedupes (same key) so this is a free lookup.
+  const threadId = detailQ.data?.thread_id ?? null
+  const threadCountQ = useQuery({
+    queryKey: ['email', threadId, 'thread-count'],
+    queryFn: () => mailApi.email.listByThread(threadId),
+    enabled: threadId !== null,
+    staleTime: 30_000,
+    select: (rows) => rows.length
   })
 
   const translationQ = useQuery({
@@ -516,38 +530,34 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                 </span>
               }
             />
-            {email.notion_url && (
+            {/* Thread row — mockup-inbox L2128-2132. Pairs the sibling
+                count (coral link, scrolls to ThreadSidebar) with the
+                stable internal_id so power users can copy-paste it into
+                CLI commands without rooting through the footer. */}
+            {email.thread_id && (
               <MetaRow
-                label="Notion"
+                label="Thread"
                 value={
-                  <a
-                    href={email.notion_url}
-                    className="text-coral hover:text-coral-hover inline-flex items-center gap-1"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {/* Sprint 10 visual review L-2 — meta row label already
-                        says "Notion"; using "toolbar.openNotion" 重复了
-                        "Notion" 二次 ("Notion: 在 Notion 打开"). The detail-
-                        specific key trims to just "打开 / Open" so the link
-                        text reads as an action, not a restatement. */}
-                    {t('emailDetail.notionOpen')}
-                    <ExternalLink size={11} strokeWidth={2} />
-                  </a>
+                  <span className="text-ink-fg-1">
+                    <a
+                      href="#thread-sidebar"
+                      className="text-coral hover:text-coral-hover"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        document
+                          .getElementById('thread-sidebar')
+                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }}
+                    >
+                      {t('emailDetail.threadCount', { n: threadCountQ.data ?? 1 })}
+                    </a>
+                    <span className="text-ink-fg-2 ml-2 font-mono text-meta">
+                      · internal_id {email.internal_id}
+                    </span>
+                  </span>
                 }
               />
             )}
-            <MetaRow
-              label="ID"
-              value={
-                <span className="font-mono text-meta text-ink-fg-2">
-                  internal_id {email.internal_id}
-                  {email.message_id && (
-                    <span className="ml-2">· msg {email.message_id.slice(1, 9)}…</span>
-                  )}
-                </span>
-              }
-            />
           </dl>
 
           {/* AI Fields */}
@@ -557,9 +567,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </div>
           )}
 
-          {/* Thread sidebar — silent when thread_id is null. */}
+          {/* Thread sidebar — silent when thread_id is null. Anchor id
+              powers the "本对话 N 封" link in the meta grid above. */}
           {email.thread_id && (
-            <div className="mt-6">
+            <div id="thread-sidebar" className="mt-6 scroll-mt-16">
               <ThreadSidebar threadId={email.thread_id} currentInternalId={email.internal_id} />
             </div>
           )}
@@ -593,25 +604,51 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </div>
           )}
 
-          {/* Footer — mockup-inbox.html line 1075-1084. internal_id + message_id
-              stub left, Notion link right. Dev "Sprint 2 functional view"
-              placeholder dropped (no longer relevant in V1 ship). */}
+          {/* Footer — mockup-inbox.html L2257-2266. Left: internal_id +
+              message_id mono blob. Right: "查看原文 (.eml)" (Sprint 14 待
+              CLI wiring) · "在 Notion 打开 ↗". */}
           <div className="mt-8 pt-5 border-t border-ink-border-soft flex items-center justify-between text-aux">
-            <div className="text-meta font-mono text-ink-fg-2">
-              internal_id {email.internal_id}
-              {email.message_id && <> · message_id {email.message_id.slice(1, 9)}…</>}
+            <div className="flex items-center gap-2 text-ink-fg-2">
+              <span className="text-meta font-mono">
+                internal_id {email.internal_id}
+                {email.message_id && <> · message_id {email.message_id.slice(1, 9)}…</>}
+              </span>
             </div>
-            {email.notion_url && (
-              <a
-                href={email.notion_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-aux text-coral hover:text-coral-hover transition-colors duration-fast inline-flex items-center gap-1"
-              >
-                {t('toolbar.openNotion')}
-                <ExternalLink size={12} strokeWidth={2} />
-              </a>
-            )}
+            <div className="flex items-center gap-3">
+              {/* View source (.eml) — backend has `mailagent debug
+                  email-source <id>` but no IPC wrapper yet. Sprint 14
+                  will land it; for now HoverTip explains the gap so the
+                  affordance is discoverable without being a lie. */}
+              <HoverTip text={t('emailDetail.viewSourceBlocked')} side="top">
+                <button
+                  type="button"
+                  disabled
+                  data-disabled=""
+                  tabIndex={-1}
+                  className={cn(
+                    'text-aux text-ink-fg-3 opacity-50 cursor-not-allowed',
+                    'transition-colors duration-fast'
+                  )}
+                  onClick={() => toastSuccess(t('emailDetail.viewSourceBlocked'))}
+                >
+                  {t('emailDetail.viewSource')}
+                </button>
+              </HoverTip>
+              {email.notion_url && (
+                <>
+                  <span className="text-ink-fg-3">·</span>
+                  <a
+                    href={email.notion_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-aux text-coral hover:text-coral-hover transition-colors duration-fast inline-flex items-center gap-1"
+                  >
+                    {t('toolbar.openNotion')}
+                    <ExternalLink size={12} strokeWidth={2} />
+                  </a>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>

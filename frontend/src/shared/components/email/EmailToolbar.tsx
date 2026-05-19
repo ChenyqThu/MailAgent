@@ -95,13 +95,14 @@ interface ToolbarProps {
 
 // ─── Density observer ───────────────────────────────────────────────────
 
-function useContainerDensity<T extends HTMLElement>(
-  ref: React.RefObject<T | null>
-): Density {
-  const [width, setWidth] = useState<number>(() => {
-    if (typeof window === 'undefined') return 1280
-    return ref.current?.getBoundingClientRect().width ?? 1280
-  })
+function useContainerDensity<T extends HTMLElement>(ref: React.RefObject<T | null>): Density {
+  // Default 1280 covers the desktop ship target. The very first render
+  // resolves to `wide` (most labels visible) — the effect below kicks in
+  // immediately after mount and re-renders with the real width, so worst
+  // case the user sees one paint with optimistic label visibility before
+  // the layout settles. Better than reading ref.current during render
+  // (React 19 lint rule + happy-dom Render Phase guard).
+  const [width, setWidth] = useState<number>(1280)
   useEffect(() => {
     const node = ref.current
     if (!node) return
@@ -248,7 +249,13 @@ interface IconOnlyBtnProps {
   onClick?: () => void
 }
 
-function IconOnlyBtn({ icon, label, active, pressed, onClick }: IconOnlyBtnProps): React.ReactElement {
+function IconOnlyBtn({
+  icon,
+  label,
+  active,
+  pressed,
+  onClick
+}: IconOnlyBtnProps): React.ReactElement {
   const isDisabled = !onClick
   const btn = (
     <button
@@ -519,7 +526,10 @@ export function EmailToolbar({
       ref={containerRef}
       className="h-11 border-b border-ink-border bg-ink-3 flex items-center px-3 gap-1 shrink-0"
     >
-      <IconOnlyBtn icon={<ArrowLeft size={14} strokeWidth={2} />} label={`${t('toolbar.back')} · Esc`} />
+      <IconOnlyBtn
+        icon={<ArrowLeft size={14} strokeWidth={2} />}
+        label={`${t('toolbar.back')} · Esc`}
+      />
       <Divider />
 
       {/* Primary CTA — DESIGN.md §2.2 "one CTA per surface". Sprint 13:
@@ -625,7 +635,10 @@ export function EmailToolbar({
           label={`${t('toolbar.next')} · J`}
           onClick={onNext}
         />
-        <IconOnlyBtn icon={<MoreHorizontal size={14} strokeWidth={2} />} label={t('toolbar.more')} />
+        <IconOnlyBtn
+          icon={<MoreHorizontal size={14} strokeWidth={2} />}
+          label={t('toolbar.more')}
+        />
       </div>
 
       <ResyncConfirmDialog

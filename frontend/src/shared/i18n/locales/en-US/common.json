@@ -48,7 +48,10 @@
     }
   },
   "emailDetail": {
-    "notionOpen": "Open"
+    "notionOpen": "Open",
+    "threadCount": "{n, plural, =1 {1 in thread} other {# in thread}}",
+    "viewSource": "View source (.eml)",
+    "viewSourceBlocked": "View source · awaiting Sprint 14 wiring of `mailagent debug email-source`"
   },
   "ai": {
     "compose": "Draft reply"

@@ -48,7 +48,10 @@
     }
   },
   "emailDetail": {
-    "notionOpen": "打开"
+    "notionOpen": "打开",
+    "threadCount": "本对话 {n, plural, =1 {1 封} other {# 封}}",
+    "viewSource": "查看原文 (.eml)",
+    "viewSourceBlocked": "查看原文 · 等待 Sprint 14 接 mailagent debug email-source"
   },
   "ai": {
     "compose": "起草回复"

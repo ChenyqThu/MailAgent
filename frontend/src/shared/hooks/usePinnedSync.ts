@@ -56,12 +56,7 @@ export function useTogglePin(): (internalId: number) => Promise<void> {
   const queryClient = useQueryClient()
   const togglePinOptimistic = usePinned((s) => s.togglePinOptimistic)
 
-  const mutation = useMutation<
-    boolean | null,
-    Error,
-    PinVars,
-    { rollback: () => void }
-  >({
+  const mutation = useMutation<boolean | null, Error, PinVars, { rollback: () => void }>({
     mutationFn: ({ id, targetPinned }: PinVars) => mailApi.email.pin(id, targetPinned),
     onMutate: async ({ id, targetPinned }) => {
       await queryClient.cancelQueries({ queryKey: PINNED_KEY })
