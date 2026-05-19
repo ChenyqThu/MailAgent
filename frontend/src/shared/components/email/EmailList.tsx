@@ -152,11 +152,14 @@ function VirtualRow({
     >
       <div className="thread-col w-6 shrink-0 relative">
         {isHead && (
-          // Sprint 14 round 12 — chevron click target expanded to the
-          // full chevron column.  Previous w-4 h-4 target was a 16x16
-          // box at top:21 which felt unreachable ("有的线程头点不了");
-          // now the entire 24px col is the hit target, glyph still
-          // sits at the avatar-centre line via pt-[21px].
+          // Sprint 14 round 16 — clicking anywhere in the chevron column
+          // both selects the head email AND toggles the thread bundle.
+          // Previous behaviour: chevron only toggled, so users hitting
+          // the left edge of a head row got no selection ("有时候无法
+          // 点到需要的母邮件").  Combining the two actions on one click
+          // matches the intent ("点这条线程"): become active + expand /
+          // collapse.  Body area of the row (avatar/sender/etc) still
+          // does a pure select via EmailRow's own onClick.
           <button
             type="button"
             aria-label="toggle-thread"
@@ -164,6 +167,7 @@ function VirtualRow({
             onClick={(e) => {
               e.stopPropagation()
               onToggleThread(t!.threadId)
+              onSelect(item.email.internal_id)
             }}
             className={cn(
               'absolute inset-0 flex items-start justify-center pt-[21px]',
@@ -195,10 +199,12 @@ function VirtualRow({
           selected={item.bundleSelected}
           isNew={newIds.has(item.email.internal_id)}
           noAvatar={isChild}
-          // Children come from listByThread (no snippet / AI fields), so
-          // render the row as a single-line digest to stay visually
-          // consistent across siblings.
-          compact={isChild}
+          // Sprint 14 round 16 — children also show snippet + AI strip
+          // when the data is available (visible-set children come from
+          // listEnriched and DO carry it; cross-mailbox supplement
+          // children carry minimal data so those rows just render
+          // shorter on their own).  Removed the blanket `compact`
+          // suppression — content parity with the head is the goal.
           onSelect={() => onSelect(item.email.internal_id)}
         />
       </div>
@@ -211,12 +217,12 @@ function rowHeight(index: number, { rows }: RowProps): number {
   if (!r) return 28
   if (r.type === 'header') return 28
   if (r.type === 'loader') return 44
-  // Sprint 14 round 12 — thread children render compact (no snippet /
-  // AI strip).  round 13: 42px clipped the subject row — EmailRow needs
-  // ~18px sender-line + ~21px subject-row + 19px padding ≈ 58px, so
-  // 60px is the right floor (matches the no-snippet / no-AI fallback
-  // for solitary rows).  Heads and solitary rows stay dynamic 60-100px.
-  if (r.thread !== undefined && r.thread.isHead === false) return 60
+  // Sprint 14 round 16 — thread children no longer forced into a
+  // compact 60px row; they pick their height from the same snippet +
+  // AI strip rules as heads / solitary rows.  Visible-set children
+  // (listEnriched) carry full enriched fields and get the long layout;
+  // supplement-only children (listByThread, no snippet / AI) fall
+  // through to the 60px no-snippet branch naturally.
   const e = r.email
   const snippetReal = cleanSnippet(e.snippet)
   const hasSnippet = Boolean(snippetReal)
