@@ -11,9 +11,10 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, Paperclip, X } from 'lucide-react'
+import { AtSign, ArrowUp, Cpu, Paperclip, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useShortcut } from '@shared/hooks/useShortcut'
 
 interface Props {
@@ -75,7 +76,9 @@ export function Composer({
   const sendTitle = `${t('chat.composer.send')} (⌘↩)`
 
   return (
-    <div className="px-3 py-3 border-t border-ink-border-soft bg-ink-2">
+    // mockup L2514 — `border-t border-ink-border bg-ink-2 p-2.5`. p-2.5 (10px)
+    // not p-3 (12px); border above is `border-ink-border` not `-soft`.
+    <div className="p-2.5 border-t border-ink-border bg-ink-2">
       <div
         className={cn(
           'rounded-md bg-ink-3 border transition-colors duration-fast',
@@ -108,32 +111,59 @@ export function Composer({
           />
         </div>
 
-        {/* Footer affordance strip — English-mono only, sits at text-meta */}
-        <div className="flex items-center gap-2 px-2.5 py-1.5 border-t border-ink-border-soft">
-          <button
-            type="button"
-            className={cn(
-              'inline-flex items-center gap-1 text-meta font-mono',
-              'text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast'
-            )}
-            title="Attach context"
-          >
-            <Paperclip size={11} strokeWidth={2} />
-            attach
-          </button>
-          <span className="text-ink-fg-3 text-meta font-mono">·</span>
-          <button
-            type="button"
-            className={cn(
-              'text-meta font-mono text-ink-fg-2',
-              'hover:text-ink-fg transition-colors duration-fast'
-            )}
-          >
-            /slash
-          </button>
-          <span className="text-ink-fg-3 text-meta font-mono">·</span>
-          <span className="text-meta font-mono text-ink-fg-2">@thread</span>
+        {/* Footer affordance strip — mockup L2523-2540. Three 7×7 icon
+            buttons (attach / @mention / model switch), backend name +
+            ⌘↩ kbd hint pinned right, then the send button (rounded-md
+            7×7, hover → coral). attach + @mention disabled with
+            HoverTip TODO; model click points at the BackendSelector
+            Alt row above (the canonical model picker). */}
+        <div className="flex items-center gap-0.5 px-2 py-1.5 border-t border-ink-border-soft">
+          <HoverTip text={t('chat.composer.attachBlocked')} side="top">
+            <button
+              type="button"
+              disabled
+              aria-label={t('chat.composer.attach')}
+              data-disabled=""
+              tabIndex={-1}
+              className={cn(
+                'w-7 h-7 rounded-md grid place-items-center',
+                'text-ink-fg-3 opacity-50 cursor-not-allowed'
+              )}
+            >
+              <Paperclip size={13} strokeWidth={2} />
+            </button>
+          </HoverTip>
+          <HoverTip text={t('chat.composer.mentionBlocked')} side="top">
+            <button
+              type="button"
+              disabled
+              aria-label={t('chat.composer.mention')}
+              data-disabled=""
+              tabIndex={-1}
+              className={cn(
+                'w-7 h-7 rounded-md grid place-items-center',
+                'text-ink-fg-3 opacity-50 cursor-not-allowed'
+              )}
+            >
+              <AtSign size={13} strokeWidth={2} />
+            </button>
+          </HoverTip>
+          <HoverTip text={t('chat.composer.modelHint')} side="top">
+            <button
+              type="button"
+              aria-label={t('chat.composer.model')}
+              className={cn(
+                'w-7 h-7 rounded-md grid place-items-center',
+                'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+                'transition-colors duration-fast'
+              )}
+            >
+              <Cpu size={13} strokeWidth={2} />
+            </button>
+          </HoverTip>
 
+          {/* Backend label + ⌘↩ kbd — `ml-auto` shoves the affordance
+              icons left and the send button stays at the right edge. */}
           <span className="ml-auto inline-flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
             <span className="truncate max-w-[120px]">{backendName}</span>
             <kbd>⌘↩</kbd>

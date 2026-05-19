@@ -319,7 +319,13 @@
       "send": "发送",
       "sending": "发送中",
       "cancel": "取消",
-      "regenerate": "重新生成"
+      "regenerate": "重新生成",
+      "attach": "附件",
+      "attachBlocked": "附件上下文 · 等待 Sprint 14 接入",
+      "mention": "@提及上下文",
+      "mentionBlocked": "@提及 · 等待 Sprint 14 接入",
+      "model": "切换模型",
+      "modelHint": "在 Backend selector 中切换模型 (Alt 行 chip)"
     },
     "draftReply": {
       "header": "草稿回复",

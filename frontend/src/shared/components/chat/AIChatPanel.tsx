@@ -274,7 +274,7 @@ export function AIChatPanel(): React.ReactElement {
           }
           label={t('chat.tabSync')}
         />
-        <div className="ml-auto pr-2 flex items-center gap-1">
+        <div className="ml-auto pr-1 flex items-center gap-1">
           {/* + New chat — real wiring: chat.newSession() (Sprint 13). Resets
               activeSessionId so next send creates a fresh session. */}
           <HoverTip text={`${t('chat.newChat')}\n${t('chat.newChatHint')}`} side="bottom">

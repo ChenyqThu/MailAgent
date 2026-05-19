@@ -319,7 +319,13 @@
       "send": "Send",
       "sending": "Sending",
       "cancel": "Cancel",
-      "regenerate": "Regenerate"
+      "regenerate": "Regenerate",
+      "attach": "Attach",
+      "attachBlocked": "Attach context · awaiting Sprint 14 wiring",
+      "mention": "@mention",
+      "mentionBlocked": "@mention · awaiting Sprint 14 wiring",
+      "model": "Switch model",
+      "modelHint": "Switch model in the Backend selector (Alt row chips)"
     },
     "draftReply": {
       "header": "Draft reply",

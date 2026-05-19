@@ -456,7 +456,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="px-8 py-6 max-w-[820px] mx-auto">
+        {/* mockup-inbox.html L2100 — `max-w-[820px]` 限宽 + **左对齐**
+            (无 mx-auto)。把这块改成居中后整页视觉重心偏移，导致 toolbar
+            和正文左缘错位 — Sprint 13 visual bug fix。 */}
+        <div className="px-8 py-6 max-w-[820px]">
           {/* Subject block — EN lang pip + tracking-tight headline */}
           <div className="flex items-start gap-3 mb-1.5">
             {langIsEn && (
