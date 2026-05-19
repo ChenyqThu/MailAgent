@@ -374,11 +374,14 @@ function AssistantBubble({
   const showHeader = Boolean(model || isStreaming)
   const headerMeta = (
     <>
-      <Sparkles
-        size={11}
-        strokeWidth={isStreaming ? 2.5 : 0}
-        className={cn('text-coral shrink-0', isStreaming ? 'animate-spin' : 'fill-coral')}
-      />
+      {/* Sprint 13 — Loader2 spinner during streaming (mockup L2448 path
+          shape), Sparkles ✦ when complete (mockup L2353). Mixing a star
+          icon with `animate-spin` reads as a glitch rather than progress. */}
+      {isStreaming ? (
+        <Loader2 size={11} strokeWidth={2.5} className="text-coral shrink-0 animate-spin" />
+      ) : (
+        <Sparkles size={11} strokeWidth={0} className="text-coral fill-coral shrink-0" />
+      )}
       <span>{isStreaming ? t('chat.status.streaming') : (model ?? 'AI')}</span>
       {totalTokens !== null && (
         <>
