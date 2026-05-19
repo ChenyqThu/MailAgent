@@ -53,11 +53,6 @@ function pickString(raw: Record<string, unknown> | null, key: string): string | 
   const v = raw[key]
   return typeof v === 'string' && v.trim().length > 0 ? v : null
 }
-function pickNumber(raw: Record<string, unknown> | null, key: string): number | null {
-  if (!raw) return null
-  const v = raw[key]
-  return typeof v === 'number' && Number.isFinite(v) ? v : null
-}
 
 interface CellSpec {
   label: string
@@ -86,14 +81,28 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
   const reviewed = fields.ai_review_status === 'reviewed'
   const pending = fields.ai_review_status === 'pending'
 
-  const summary = pickString(raw, 'summary') ?? pickString(raw, 'one_liner')
+  // Sprint 13 round 6 — field names corrected against the real LLM output.
+  // sqlite3 data/sync_store.db "SELECT DISTINCT json_each.key FROM
+  // llm_processing, json_each(labels_json)" returns: ai_summary / key_points
+  // / category / language / sender_priority / action_required / action_type
+  // / priority / urgency_reason / mail_actions / daily_digest_date /
+  // related_project / model / latency_ms / token counts.
+  //
+  // Previous code probed `summary` / `project` / `due_date` / `action_items`
+  // — none of which exist. That's why "AI Summary 没用了" — we were reading
+  // a key the agent never wrote.
+  const summary = pickString(raw, 'ai_summary') ?? pickString(raw, 'summary')
   const category = pickString(raw, 'category')
-  const project = pickString(raw, 'project')
+  const project = pickString(raw, 'related_project') ?? pickString(raw, 'project')
   const language = pickString(raw, 'language')
   const dailyDigest = pickString(raw, 'daily_digest_date')
-  const due = pickString(raw, 'due_date') ?? pickString(raw, 'sla') ?? pickString(raw, 'due')
+  const senderPriority = pickString(raw, 'sender_priority')
+  const urgencyReason = pickString(raw, 'urgency_reason')
+  const actionRequired =
+    raw && typeof raw.action_required === 'boolean' ? raw.action_required : null
+  const mailActions =
+    raw && Array.isArray(raw.mail_actions) ? (raw.mail_actions as unknown[]) : null
   const model = pickString(raw, 'model')
-  const actionItemsCount = pickNumber(raw, 'action_items') ?? pickNumber(raw, 'action_item_count')
   const actionLabel = actionLabelChinese(fields.ai_action)
 
   // Count of non-null fields (for the "AI Fields · N" header pill).
@@ -108,7 +117,8 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
     project,
     language,
     dailyDigest,
-    due
+    senderPriority,
+    urgencyReason
   ]
   const nonNullCount = countables.filter((v) => v !== null && v !== undefined).length
 
@@ -122,13 +132,18 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
       value: <span className="font-mono">{language}</span>
     })
   }
-  if (actionItemsCount !== null) {
+  if (actionRequired !== null) {
     gridCells.push({
       label: 'Action Items',
-      value: (
-        <span>
-          是 · <span className="font-mono tabular-nums">{actionItemsCount}</span>
+      value: actionRequired ? (
+        <span className="text-urg">
+          是
+          {mailActions && mailActions.length > 0 && (
+            <span className="font-mono tabular-nums text-ink-fg-2"> · {mailActions.length}</span>
+          )}
         </span>
+      ) : (
+        <span className="text-ink-fg-2">否</span>
       )
     })
   }
@@ -136,10 +151,10 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
     gridCells.push({
       label: 'Daily Digest',
       value: (
-        <a href="#" className="text-coral hover:text-coral-hover inline-flex items-center gap-1">
+        <span className="text-coral inline-flex items-center gap-1">
           <span className="font-mono">{dailyDigest}</span>
           <ExternalLink size={10} strokeWidth={2} />
-        </a>
+        </span>
       )
     })
   }
@@ -203,8 +218,11 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
         </div>
       )}
 
-      {/* Signals — priority + action + due + sender(important) */}
-      {(fields.ai_priority || actionLabel || due) && (
+      {/* Signal row — mockup L2159-2174. Four "action drivers" rendered
+          with `·` separators: Priority · Action · Urgency reason · Sender.
+          Each piece guarded so missing fields collapse cleanly (the
+          common-case email may only have 1–2 of these). */}
+      {(fields.ai_priority || actionLabel || urgencyReason || senderPriority) && (
         <div className="aif-signals px-4 py-2.5 border-b border-ink-border flex flex-wrap items-center gap-x-4 gap-y-1.5">
           {fields.ai_priority && (
             <span
@@ -219,11 +237,22 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
           )}
           {fields.ai_priority && actionLabel && <span className="text-ink-fg-3">·</span>}
           {actionLabel && <span className="text-aux text-ink-fg">{actionLabel}</span>}
-          {(fields.ai_priority || actionLabel) && due && <span className="text-ink-fg-3">·</span>}
-          {due && (
+          {(fields.ai_priority || actionLabel) && urgencyReason && (
+            <span className="text-ink-fg-3">·</span>
+          )}
+          {urgencyReason && (
             <span className="inline-flex items-center gap-1.5 text-aux text-urg font-mono">
               <Clock size={11} strokeWidth={2.25} />
-              {due}
+              {urgencyReason}
+            </span>
+          )}
+          {(fields.ai_priority || actionLabel || urgencyReason) && senderPriority && (
+            <span className="text-ink-fg-3">·</span>
+          )}
+          {senderPriority && (
+            <span className="inline-flex items-center gap-1.5 text-aux text-impt">
+              <span className="w-1.5 h-1.5 rounded-full bg-impt" />
+              {senderPriority}
             </span>
           )}
         </div>

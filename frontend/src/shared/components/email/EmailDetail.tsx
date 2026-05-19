@@ -28,7 +28,6 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { TranslatedBody } from './TranslatedBody'
-import { ThreadSidebar } from './ThreadSidebar'
 import { AttachmentList } from './AttachmentList'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 
@@ -211,17 +210,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     staleTime: 30_000
   })
 
-  // Sprint 13 — thread sibling count for the meta-grid Thread row
-  // ("本对话 N 封"). ThreadSidebar fires the same query for its accordion;
-  // TanStack Query dedupes (same key) so this is a free lookup.
-  const threadId = detailQ.data?.thread_id ?? null
-  const threadCountQ = useQuery({
-    queryKey: ['email', threadId, 'thread-count'],
-    queryFn: () => mailApi.email.listByThread(threadId),
-    enabled: threadId !== null,
-    staleTime: 30_000,
-    select: (rows) => rows.length
-  })
+  // Sprint 13 round 6 — thread count query removed alongside the
+  // Thread meta-row + sidebar. AIChatPanel still has its own
+  // listByThread call for the Ctx chips; TanStack Query dedupes per
+  // key so re-introducing here is cheap should Sprint 14 need it.
 
   const translationQ = useQuery({
     queryKey: ['email', internalId, 'translation', 'zh'],
@@ -538,34 +530,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                 </span>
               }
             />
-            {/* Thread row — mockup-inbox L2128-2132. Pairs the sibling
-                count (coral link, scrolls to ThreadSidebar) with the
-                stable internal_id so power users can copy-paste it into
-                CLI commands without rooting through the footer. */}
-            {email.thread_id && (
-              <MetaRow
-                label="Thread"
-                value={
-                  <span className="text-ink-fg-1">
-                    <a
-                      href="#thread-sidebar"
-                      className="text-coral hover:text-coral-hover"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        document
-                          .getElementById('thread-sidebar')
-                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                      }}
-                    >
-                      {t('emailDetail.threadCount', { n: threadCountQ.data ?? 1 })}
-                    </a>
-                    <span className="text-ink-fg-2 ml-2 font-mono text-meta">
-                      · internal_id {email.internal_id}
-                    </span>
-                  </span>
-                }
-              />
-            )}
+            {/* Sprint 13 round 6 — Thread meta-row + sidebar removed
+                (user feedback: "线程可以去掉"). Sprint 14 will surface
+                sibling messages as an Outlook-style collapsed bundle
+                UNDER the latest mail; see NOTES.md 2026-05-20.
+                internal_id remains accessible in the footer. */}
           </dl>
 
           {/* AI Fields */}
@@ -575,13 +544,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </div>
           )}
 
-          {/* Thread sidebar — silent when thread_id is null. Anchor id
-              powers the "本对话 N 封" link in the meta grid above. */}
-          {email.thread_id && (
-            <div id="thread-sidebar" className="mt-6 scroll-mt-16">
-              <ThreadSidebar threadId={email.thread_id} currentInternalId={email.internal_id} />
-            </div>
-          )}
+          {/* Sprint 13 round 6 user feedback: thread sidebar removed.
+              Outlook-style "older messages collapsed under the latest"
+              treatment is Sprint 14 — see NOTES.md 2026-05-20. */}
 
           {/* Body — original sandboxed iframe OR translated markdown.
               Toggled via EmailToolbar / ⌥T / inline translate banner. */}
