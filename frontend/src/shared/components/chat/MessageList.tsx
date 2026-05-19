@@ -361,24 +361,46 @@ function AssistantBubble({
     )
   }
 
-  // Optional metadata header (mockup lines 1171-1175). Only renders when a
-  // backend supplies model/cost — V1 dispatcher doesn't populate this yet,
-  // so the guard is `((m as any).metadata?.model)` and we silently skip
-  // when missing.
-  const meta = (
-    message as unknown as { metadata?: { model?: string; cost?: string; duration?: string } }
-  ).metadata
-  const showHeader = Boolean(meta?.model)
+  // Sprint 13 fix — header reads real ChatMessage fields (model / cost_usd /
+  // token counts) instead of a stale `metadata.model` object that was never
+  // populated. mockup L2351-2357 + L2447-2452: "Notion Agent · Jarvis · 2.4s
+  // · $0.0034" / "Notion Agent · drafting…  ·  1.1s · streaming".
+  const model = message.model
+  const costUsd = message.cost_usd
+  const totalTokens =
+    (message.tokens_input ?? 0) + (message.tokens_output ?? 0) > 0
+      ? (message.tokens_input ?? 0) + (message.tokens_output ?? 0)
+      : null
+  const showHeader = Boolean(model || isStreaming)
+  const headerMeta = (
+    <>
+      <Sparkles
+        size={11}
+        strokeWidth={isStreaming ? 2.5 : 0}
+        className={cn('text-coral shrink-0', isStreaming ? 'animate-spin' : 'fill-coral')}
+      />
+      <span>{isStreaming ? t('chat.status.streaming') : (model ?? 'AI')}</span>
+      {totalTokens !== null && (
+        <>
+          <span className="text-ink-fg-3">·</span>
+          <span className="tabular-nums">{totalTokens.toLocaleString()}t</span>
+        </>
+      )}
+      {costUsd !== null && costUsd > 0 && (
+        <>
+          <span className="text-ink-fg-3">·</span>
+          <span className="tabular-nums">${costUsd.toFixed(4)}</span>
+        </>
+      )}
+    </>
+  )
 
   if (DRAFT_REPLY_MARKER.test(message.content)) {
     return (
       <div className="space-y-2">
-        {showHeader && meta?.model && (
+        {showHeader && (
           <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
-            <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
-            <span>{meta.model}</span>
-            {meta.duration && <span className="text-ink-fg-3">· {meta.duration}</span>}
-            {meta.cost && <span className="text-ink-fg-3">· {meta.cost}</span>}
+            {headerMeta}
           </div>
         )}
         <DraftPreviewCard
@@ -394,12 +416,9 @@ function AssistantBubble({
 
   return (
     <div className="space-y-2">
-      {showHeader && meta?.model && (
+      {showHeader && (
         <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
-          <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
-          <span>{meta.model}</span>
-          {meta.duration && <span className="text-ink-fg-3">· {meta.duration}</span>}
-          {meta.cost && <span className="text-ink-fg-3">· {meta.cost}</span>}
+          {headerMeta}
         </div>
       )}
       <div className="text-body text-ink-fg leading-relaxed">
