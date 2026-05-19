@@ -254,36 +254,20 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
       }
       return whole
     })
+    // Sprint 14 round 15 — no inline <script>.  iframe sandbox is
+    // `allow-same-origin` *without* `allow-scripts`, so any inline
+    // script we put inside srcDoc would never execute and the iframe
+    // height would stay frozen at its initial value (= long emails
+    // got clipped).  Instead the parent measures `contentDocument
+    // .body.scrollHeight` directly (allowed by same-origin) and runs
+    // its own ResizeObserver against it.
     return `<!doctype html>
 <html data-theme="${resolvedTheme}">
 <head>
   <meta charset="utf-8" />
   <style>${BODY_CSS}</style>
 </head>
-<body>${sanitized}<script>
-  // Sprint 13 — auto-resize iframe to fit content so the email body
-  // doesn't get an arbitrary 60vh cap. ResizeObserver fires both on
-  // initial paint and on image load completion (lazy-loaded images
-  // grow the body after first measure).
-  (function () {
-    function reportHeight() {
-      var h = Math.max(
-        document.documentElement.scrollHeight,
-        document.body.scrollHeight
-      );
-      window.parent.postMessage({ type: 'mailagent:body-height', h: h }, '*');
-    }
-    if (typeof ResizeObserver !== 'undefined') {
-      new ResizeObserver(reportHeight).observe(document.body);
-    }
-    document.querySelectorAll('img').forEach(function (img) {
-      if (!img.complete) img.addEventListener('load', reportHeight);
-      img.addEventListener('error', reportHeight);
-    });
-    window.addEventListener('load', reportHeight);
-    reportHeight();
-  })();
-</script></body>
+<body>${sanitized}</body>
 </html>`
   }, [bodyQ.data, byCid, byBaseName, resolvedTheme])
 
@@ -315,38 +299,84 @@ interface BodyIframeProps {
 function BodyIframe({ srcDoc }: BodyIframeProps): React.ReactElement {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   // 400px initial keeps the layout from flashing tiny while the iframe
-  // measures itself; once the first message lands the height jumps to
-  // the real value.
+  // measures itself; once `measure()` lands the height jumps to the
+  // real value.
   const [height, setHeight] = useState<number>(400)
 
   useEffect(() => {
-    function onMessage(e: MessageEvent): void {
-      // Only accept messages from our own iframe — sandbox same-origin
-      // means contentWindow.origin matches window.origin, but the source
-      // identity check is the actual gate.
-      if (e.source !== iframeRef.current?.contentWindow) return
-      const data = e.data as { type?: string; h?: number } | null
-      if (!data || data.type !== 'mailagent:body-height') return
-      if (typeof data.h !== 'number' || !Number.isFinite(data.h)) return
-      // Clamp to a sane range — very tall messages still scroll the
-      // OUTER container (the email pane) since the iframe is part of
-      // that scroll context.
-      const next = Math.max(120, Math.min(Math.round(data.h), 20000))
+    const iframe = iframeRef.current
+    if (!iframe) return
+
+    function readScrollHeight(): number | null {
+      const doc = iframe!.contentDocument
+      if (!doc) return null
+      const html = doc.documentElement
+      const body = doc.body
+      const h = Math.max(
+        html?.scrollHeight ?? 0,
+        body?.scrollHeight ?? 0,
+        html?.offsetHeight ?? 0,
+        body?.offsetHeight ?? 0
+      )
+      return h > 0 ? h : null
+    }
+
+    function measure(): void {
+      const h = readScrollHeight()
+      if (h === null) return
+      // Clamp to a sane range. 80_000 covers very long marketing
+      // newsletters or stack-trace blobs; we still rely on the OUTER
+      // scroll container to actually scroll past the visible region.
+      const next = Math.max(120, Math.min(Math.round(h), 80000))
       setHeight((prev) => (Math.abs(prev - next) < 2 ? prev : next))
     }
-    window.addEventListener('message', onMessage)
-    return (): void => window.removeEventListener('message', onMessage)
-  }, [])
+
+    let ro: ResizeObserver | null = null
+    function setupObservers(): void {
+      const doc = iframe!.contentDocument
+      const body = doc?.body
+      if (!body) return
+      ro?.disconnect()
+      ro = new ResizeObserver(() => measure())
+      ro.observe(body)
+      // Re-measure when images / fonts finish loading inside the doc.
+      doc!.querySelectorAll('img').forEach((img) => {
+        if (img.complete) return
+        img.addEventListener('load', measure, { once: true })
+        img.addEventListener('error', measure, { once: true })
+      })
+      measure()
+    }
+
+    function onLoad(): void {
+      setupObservers()
+    }
+    iframe.addEventListener('load', onLoad)
+    // Same-origin srcDoc may already have its document parsed before
+    // React attaches the load listener; cover that case explicitly.
+    if (iframe.contentDocument?.readyState === 'complete') {
+      setupObservers()
+    }
+
+    return (): void => {
+      iframe.removeEventListener('load', onLoad)
+      ro?.disconnect()
+    }
+  }, [srcDoc])
 
   return (
     <iframe
       ref={iframeRef}
       title="email-body"
+      // Sprint 14 round 15 — sandbox stays `allow-same-origin` (no
+      // `allow-scripts`).  Parent measures body height directly via
+      // contentDocument so the iframe doesn't need to run any code
+      // of its own.
       sandbox="allow-same-origin"
       // Sprint 13 round 7 — `scrolling="no"` is the legacy-but-still-
       // honoured signal to suppress the iframe scrollbar even if our
-      // height under-shoots the body by a pixel. Modern Chromium reads
-      // it and matches our overflow:hidden inside the document.
+      // height under-shoots the body by a pixel.  Modern Chromium
+      // reads it and matches our overflow:hidden inside the document.
       scrolling="no"
       srcDoc={srcDoc}
       style={{ height: `${height}px` }}
