@@ -11,6 +11,14 @@
 //   • ricon-pin → toggles SQLite-backed pinned set via useTogglePin (v8).
 //   • ricon-delete → marks processing_status='已完成' (archive semantics).
 //
+// TODO (deprecated path — see frontend/NOTES.md 2026-05-19 strategic entry):
+//   `notion.updateFlag` 走的是 Notion → automation webhook → Mail.app 反向链路,
+//   是 v3「Notion 是状态 SSoT」时代的产物。SQLite v4 SSoT 收尾会把所有 mutating
+//   操作切到「前端 → SQLite → 单向 fanout 到 Mail.app + Notion」, 这里 4 处
+//   `mailApi.notion.updateFlag(...)` 都要换成新的 `email.flag` IPC。届时
+//   handle_flag_changed / handle_completed 反向同步 handler 也会退化成
+//   「Notion 端意图通知 → 写 SQLite intent」, 不再直接调 AppleScript。
+//
 // CSS class names are the contract — see index.css Sprint 12 block.
 
 import { useCallback, useMemo } from 'react'

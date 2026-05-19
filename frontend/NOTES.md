@@ -6,6 +6,20 @@
 
 ## TODO
 
+- 2026-05-19 — **Strategic / 系列化改动** — 当前 EmailRow flag 三态切换走 `mailApi.notion.updateFlag(...)` →
+  `mailagent notion update-flag <id> ...` CLI → **Notion `Is Read` / `Is Flagged` / `Processing Status` 字段更新** → Notion
+  automation webhook → Redis 队列 → `handle_flag_changed` 反向同步到 Mail.app。这个回环（Notion → Mail.app + SQLite）
+  是 v3 时代「Notion 是状态 SSoT」假设下的产物。SQLite v4 SSoT 落地后方向应反转：**所有 mutating 操作都从前端
+  → SQLite → 单向 fanout 到 Mail.app + Notion**，Notion 仅作为只读镜像 + 接口调用触发器（即 Notion 上手改 = 「请求」
+  而非「事实」，依然回 webhook，但 handler 改成「写 SQLite → fanout」而非「直接改 Mail.app」）。涉及面：
+  (a) `notion.updateFlag` IPC → 新增 `email.flag` / `email.updateLocalFlag` IPC，直写 `email_metadata.is_read / is_flagged
+  / processing_status` + 排队两条 fanout job（一个 Mail.app AppleScript，一个 Notion `pages.update`）；
+  (b) `handle_flag_changed` / `handle_completed` / `handle_ai_reviewed` 反向同步 handler 退化成「Notion 端意图通知 →
+  写 SQLite intent」，不再直接调 AppleScript；fanout worker 才是唯一 Mail.app/Notion writer；
+  (c) `notion.updateFlag` 在 EmailRow.tsx:208/211/218/229 + `MessageList.tsx` (drop?) + 任何 createDraft / Quick action
+  callsite 都要切；HttpApi V2 stub 同步改；
+  (d) SyncStore 加 `email_flag_pending`/outbox 表 + Mail.app / Notion fanout idempotency 校验，避免 webhook ↔ outbox
+  循环。 → 这是 SQLite-SSoT 收尾的一大块，要单独立 Sprint。先把 EmailRow 当下 path 标 deprecated 注释，行为不动。
 - 2026-05-17 — `src/shared/types/cli.gen.ts` is gitignored (codegen output); fresh checkout must run `pnpm gen:types` once before `pnpm typecheck` works. Consider wiring it into `postinstall` (alongside `electron-builder install-app-deps`) so new clones never see a typecheck miss.
 - 2026-05-17 — `EmailGet_EmailRecord.cc_addr` schema declares it as required string but the SQLite column is nullable; DAO substitutes `''` for `null`. If a callsite ever needs to distinguish "no CC" from "empty CC string" we'll have to widen the schema. Low priority — Sprint 2 EmailDetail just renders the string.
 - 2026-05-17 — `notion_url` is built as `https://www.notion.so/<id-no-dashes>` because the workspace prefix is private. Sprint 6 SettingsPage should let the user set a workspace-scoped prefix (`/omadanetworks/...`) for direct deep-links.
