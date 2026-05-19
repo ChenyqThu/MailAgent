@@ -20,7 +20,12 @@ from typing import List, Optional, TYPE_CHECKING
 
 import typer
 
-from src.cli.exceptions import CliError, CliInvalidArgError, CliSchemaError
+from src.cli.exceptions import (
+    CliError,
+    CliInvalidArgError,
+    CliNotFoundError,
+    CliSchemaError,
+)
 from src.cli.output import apply_local_output, emit, emit_cli_error
 
 if TYPE_CHECKING:
@@ -800,3 +805,257 @@ def admin_repair_parents(
         emit(cli, data)
     if not data["ok"]:
         raise typer.Exit(code=1)
+
+
+# ============================================================
+# Sprint 15 Stage 3: admin config show / get / set
+# ============================================================
+#
+# 让前端 / agent / 看板能 typed-access 所有 .env 配置；前端「设置」页直接走
+# `admin config show` / `set` 不用手工编辑 .env。
+#
+# 敏感字段自动脱敏（name 含 token/secret/password/api_key），`--show-secrets`
+# 显示原值（需要 auth, 即使是 show / get 命令）。`set` 是写命令, 全场要 auth。
+#
+# 详 SPRINT15-HANDOFF.md scope 决策 #3: 写 .env 文件持久化, restart 生效
+# (不做运行时 hot-reload)。
+
+config_app = typer.Typer(
+    name="config",
+    help="读 / 写 .env 配置 (Sprint 15)",
+    no_args_is_help=True,
+)
+
+# 字段名包含这几个 suffix 自动 mask 输出 (不区分大小写)
+SENSITIVE_FIELD_PARTS = ("token", "secret", "password", "api_key")
+
+
+def _is_sensitive(field_name: str) -> bool:
+    n = field_name.lower()
+    return any(part in n for part in SENSITIVE_FIELD_PARTS)
+
+
+def _mask_value(value) -> str:
+    if value is None or value == "":
+        return "<unset>"
+    s = str(value)
+    if len(s) <= 6:
+        return "***"
+    return f"***{s[-4:]}"
+
+
+def _collect_settings(cli, *, show_secrets: bool) -> dict:
+    """反射 cli.cli_config 拿所有字段值. 敏感字段按 flag 决定 mask."""
+    cfg = cli.cli_config
+    fields_info = cfg.model_fields
+    out: dict[str, dict] = {}
+    for name, field_info in fields_info.items():
+        try:
+            value = getattr(cfg, name)
+        except Exception:
+            value = None
+        env_var = (field_info.alias or name).upper()
+        if _is_sensitive(name) and not show_secrets:
+            display_value = _mask_value(value)
+        else:
+            display_value = value
+        out[name] = {
+            "env_var": env_var,
+            "value": display_value,
+            "default": field_info.default,
+            "description": field_info.description or "",
+            "sensitive": _is_sensitive(name),
+        }
+    return out
+
+
+def _coerce_value(value: str, annotation):
+    """字符串 → annotation 类型 (bool / int / float / str / Optional[T])."""
+    import typing as _typing
+
+    origin = _typing.get_origin(annotation)
+    if origin is _typing.Union:
+        args = [a for a in _typing.get_args(annotation) if a is not type(None)]
+        if args:
+            annotation = args[0]
+
+    if annotation is bool:
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off", ""):
+            return False
+        raise ValueError(f"cannot coerce {value!r} to bool")
+    if annotation is int:
+        return int(value)
+    if annotation is float:
+        return float(value)
+    return str(value)
+
+
+def _resolve_env_file(cli) -> Path:
+    """找 .env 文件实际路径. config_path > MAILAGENT_CONFIG env > 项目根 .env."""
+    import os
+
+    config_path = (
+        getattr(cli, "config_path", None)
+        or os.environ.get("MAILAGENT_CONFIG")
+        or ".env"
+    )
+    return Path(config_path).resolve()
+
+
+@config_app.command("show")
+def admin_config_show(
+    ctx: typer.Context,
+    key: Optional[str] = typer.Option(None, "--key", help="只显示指定字段"),
+    show_secrets: bool = typer.Option(
+        False, "--show-secrets",
+        help="显示敏感字段原值 (token / secret / password / api_key; 需 auth)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """列出所有 Settings 字段 + 当前值. 敏感字段默认脱敏 (***last4)."""
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    if show_secrets:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    all_settings = _collect_settings(cli, show_secrets=show_secrets)
+
+    if key:
+        if key not in all_settings:
+            raise emit_cli_error(cli, CliNotFoundError(
+                f"Unknown config key: {key!r}",
+                hint="Run `mailagent admin config show` to list all valid keys.",
+            ))
+        emit(cli, {"key": key, **all_settings[key]})
+    else:
+        emit(cli, {"settings": all_settings, "count": len(all_settings)})
+
+
+@config_app.command("get")
+def admin_config_get(
+    ctx: typer.Context,
+    key: str = typer.Argument(..., help="配置字段名 (Pydantic field name)"),
+    show_secrets: bool = typer.Option(
+        False, "--show-secrets", help="显示敏感字段原值 (需 auth)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """读单个配置字段."""
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    if show_secrets:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    all_settings = _collect_settings(cli, show_secrets=show_secrets)
+    if key not in all_settings:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Unknown config key: {key!r}",
+            hint="Run `mailagent admin config show` to list all valid keys.",
+        ))
+    emit(cli, {"key": key, **all_settings[key]})
+
+
+@config_app.command("set")
+def admin_config_set(
+    ctx: typer.Context,
+    key: str = typer.Argument(..., help="配置字段名 (Pydantic field name)"),
+    value: str = typer.Argument(..., help="新值 (字符串; bool / int / float 自动 coerce)"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="只显示 diff, 不实际写 .env; 跳过 auth",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="跳过 diff 确认 (CLI 当前无交互, 该 flag 为 future-proof)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """写 .env 文件持久化配置. set 后需 `pm2 restart mail-sync` 才能让运行时生效.
+
+    流程: 字段名校验 → 类型 coerce → diff → auth → atomic .env write (python-dotenv).
+    Atomic guarantee 来自 dotenv set_key 的 tmp + replace 模式。保留注释 / 空行 / 段落。
+
+    敏感字段（token / secret / password / api_key）的 old_value / new_value 在
+    返回 envelope 中 mask, 避免 log 落盘泄漏 (text mode 也走 mask)。
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    cfg = cli.cli_config
+    fields_info = cfg.model_fields
+    if key not in fields_info:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Unknown config key: {key!r}",
+            hint="Run `mailagent admin config show` to list all valid keys.",
+        ))
+
+    field_info = fields_info[key]
+    env_var = (field_info.alias or key).upper()
+
+    # 类型 coerce + validate
+    try:
+        coerced = _coerce_value(value, field_info.annotation)
+    except (ValueError, TypeError) as exc:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"Type validation failed for {key}: {exc}",
+            hint=(
+                f"Field {key} expects type {field_info.annotation}; "
+                "for bool use true/false/yes/no/on/off."
+            ),
+        ))
+
+    old_value = getattr(cfg, key, None)
+    sensitive = _is_sensitive(key)
+
+    diff = {
+        "key": key,
+        "env_var": env_var,
+        "old_value": _mask_value(old_value) if sensitive else old_value,
+        "new_value": _mask_value(coerced) if sensitive else coerced,
+        "sensitive": sensitive,
+    }
+
+    if dry_run:
+        emit(cli, {"dry_run": True, **diff})
+        return
+
+    # 写命令 auth (dry-run 跳过)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    # 找 .env 文件 + atomic write
+    env_file = _resolve_env_file(cli)
+    if not env_file.exists():
+        env_file.touch()  # python-dotenv set_key 要求文件存在
+
+    try:
+        from dotenv import set_key as _dotenv_set_key
+        # dotenv 把所有值都序列化成 str; bool True → "True" 是 pydantic 能 parse 的
+        _dotenv_set_key(str(env_file), env_var, str(coerced), quote_mode="auto")
+    except Exception as exc:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f".env write failed: {exc}",
+        ))
+
+    emit(cli, {
+        "dry_run": False,
+        **diff,
+        "env_file": str(env_file),
+        "restart_required": True,
+    })
+
+
+# 挂到 admin app
+app.add_typer(config_app, name="config")

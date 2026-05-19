@@ -100,6 +100,14 @@ class Config(BaseSettings):
     stats_report_interval: int = Field(default=60, env="STATS_REPORT_INTERVAL", description="统计上报间隔(秒)")
     stats_report_token: str = Field(default="", env="STATS_REPORT_TOKEN", description="上报认证 token（默认复用 WEBHOOK_SECRET）")
 
+    # Sprint 15 Stage 3: webhook-server 看板登录密码
+    # 之前只在 .env.example 文档化, 不在 Settings 里 — 前端 admin config show 拿不到。
+    # 留空 = 禁用 /dashboard 入口 (API 不受影响)
+    dashboard_password: str = Field(
+        default="", env="DASHBOARD_PASSWORD",
+        description="webhook-server 看板登录密码; 留空则禁用 /dashboard 入口"
+    )
+
     # 飞书告警机器人配置
     alert_feishu_webhook_url: str = Field(default="", env="ALERT_FEISHU_WEBHOOK_URL", description="飞书告警机器人 webhook URL")
     alert_feishu_webhook_secret: str = Field(default="", env="ALERT_FEISHU_WEBHOOK_SECRET", description="飞书告警 webhook 签名密钥")
