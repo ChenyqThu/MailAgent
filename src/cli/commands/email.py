@@ -1043,3 +1043,187 @@ def email_list_pinned(
             print(iid)
     else:
         emit(cli, {"pinned_ids": ids, "count": len(ids)})
+
+
+# ============================================================
+# Sprint 15: email flag — 写 SQLite intent + outbox 双 target
+# ============================================================
+
+@app.command("flag")
+def email_flag(
+    ctx: typer.Context,
+    internal_id: Optional[int] = typer.Argument(
+        None, help="单封 internal_id (与 --ids 互斥)",
+    ),
+    is_read: Optional[bool] = typer.Option(
+        None, "--is-read/--no-is-read",
+        help="标记已读 (true) / 未读 (false); 未指定 = 不动",
+    ),
+    is_flagged: Optional[bool] = typer.Option(
+        None, "--is-flagged/--no-is-flagged",
+        help="设置旗标 (true) / 取消旗标 (false); 未指定 = 不动",
+    ),
+    processing_status: Optional[str] = typer.Option(
+        None, "--processing-status",
+        help=(
+            "Notion Processing Status 字段值 (如 已完成 / AI Reviewed). "
+            "仅写 outbox(target=notion), SQLite 不存此字段"
+        ),
+    ),
+    ids: Optional[str] = typer.Option(
+        None, "--ids", help="逗号分隔批量: --ids 53674,53675,53677",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="只打 plan, 不写 SQLite / outbox; 跳过 auth + pm2 check",
+    ),
+    allow_concurrent: bool = typer.Option(
+        False, "--allow-concurrent",
+        help="跳过 PM2 mail-sync 冲突检测 (写命令默认拒并行)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """Sprint 15 SSoT inversion: 写 flag / processing_status intent 到 SQLite + outbox.
+
+    前端 BatchActionBar / EmailRow flag 三态切换走本命令；intent 立即落 SQLite
+    (echo prevention)，FanoutWorker (mail-sync 进程内) 异步派发到 Mail.app + Notion。
+
+    target 互斥:
+      - 位置参数 ``<internal_id>`` (单封)
+      - ``--ids 1,2,3`` (列表批量)
+
+    至少给一个 flag 改动: ``--is-read`` / ``--is-flagged`` / ``--processing-status``
+
+    Source 标记为 'cli', 不触发 echo prevention; outbox 写双 target (mailapp + notion),
+    FanoutWorker 异步派发。详见 SPRINT15-HANDOFF.md §3.3 (C) + .claude/plans/
+    ultrathink-sprint-15-handoff*.md Stage 1.6。
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    # 至少一个 flag 改动
+    if is_read is None and is_flagged is None and processing_status is None:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "must give at least one of --is-read / --is-flagged / --processing-status",
+            hint=(
+                "Example: mailagent email flag 53675 --is-read --is-flagged "
+                "--processing-status '已完成'"
+            ),
+        ))
+
+    # target 解析（单封 vs --ids 互斥）
+    if internal_id is None and ids is None:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "must give <internal_id> or --ids 1,2,3",
+        ))
+    if internal_id is not None and ids is not None:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "<internal_id> and --ids are mutually exclusive",
+        ))
+    if ids is not None:
+        try:
+            target_ids = _parse_id_list(ids)
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+    else:
+        target_ids = [internal_id]  # type: ignore[list-item]
+
+    # 构造完整 payload (fanout 自己挑相关字段)
+    payload: dict = {}
+    if is_read is not None:
+        payload["is_read"] = is_read
+    if is_flagged is not None:
+        payload["is_flagged"] = is_flagged
+    if processing_status is not None:
+        payload["processing_status"] = processing_status
+
+    # MailAppFanout 只读 is_read / is_flagged, processing_status 让它跳过
+    mailapp_payload = {k: v for k, v in payload.items() if k in ("is_read", "is_flagged")}
+
+    # dry-run: 跳过 auth + pm2; 直接 emit plan
+    if dry_run:
+        plan = {
+            "dry_run": True,
+            "internal_ids": target_ids,
+            "payload": payload,
+            "would_enqueue": [
+                {
+                    "internal_id": iid,
+                    "mailapp_payload": mailapp_payload,
+                    "notion_payload": payload,
+                }
+                for iid in target_ids
+            ],
+        }
+        emit(cli, plan, meta_extra={"count": len(target_ids)})
+        return
+
+    # auth + pm2 check
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    from src.cli.pm2_check import check_pm2_conflict
+    try:
+        check_pm2_conflict(cli, allow_concurrent=allow_concurrent)
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    # 执行: 每封邮件写 SQLite (echo prevention) + outbox 双 target
+    from src.sync.outbox import OutboxRepository
+
+    repo = cli.email_repo
+    sync_store = cli.sync_store  # 保证 v10 schema
+    outbox_repo = OutboxRepository(cli.cli_config.sync_store_db_path)
+
+    updated: list[int] = []
+    outbox_entries: list[dict] = []
+    not_found: list[int] = []
+
+    for iid in target_ids:
+        meta = repo.get_metadata(iid)
+        if meta is None:
+            not_found.append(iid)
+            continue
+
+        # 立即 update_local_flags 做 echo prevention (only is_read/is_flagged
+        # are local fields; processing_status is Notion-only)
+        new_read = bool(is_read) if is_read is not None else bool(meta.is_read)
+        new_flagged = bool(is_flagged) if is_flagged is not None else bool(meta.is_flagged)
+        sync_store.update_local_flags(iid, new_read, new_flagged)
+
+        # outbox 双 target: mailapp + notion, source='cli'
+        oid_mailapp = outbox_repo.enqueue(
+            internal_id=iid,
+            op_type="flag_sync",
+            target="mailapp",
+            payload=mailapp_payload,
+            source="cli",
+        ) if mailapp_payload else None
+        oid_notion = outbox_repo.enqueue(
+            internal_id=iid,
+            op_type="flag_sync",
+            target="notion",
+            payload=payload,
+            source="cli",
+        )
+        updated.append(iid)
+        outbox_entries.append({
+            "internal_id": iid,
+            "mailapp_outbox_id": oid_mailapp,
+            "notion_outbox_id": oid_notion,
+        })
+
+    data = {
+        "dry_run": False,
+        "updated_ids": updated,
+        "payload": payload,
+        "outbox_entries": outbox_entries,
+    }
+    if not_found:
+        data["not_found"] = not_found
+
+    emit(
+        cli, data,
+        meta_extra={"count": len(updated), "not_found_count": len(not_found)},
+    )

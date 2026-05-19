@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/email-flag.schema.json",
+  "title": "mailagent email flag",
+  "description": "Sprint 15 SSoT inversion — 写 flag / processing_status intent 到 SQLite + outbox 双 target. 详 SPRINT15-HANDOFF.md §3.3 (C).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "oneOf": [
+        {"$ref": "#/$defs/flag_plan"},
+        {"$ref": "#/$defs/flag_result"}
+      ]
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  },
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "description": "实际写入的字段子集（仅出现用户传 --is-read / --is-flagged / --processing-status 的那些）",
+      "additionalProperties": false,
+      "properties": {
+        "is_read": {"type": "boolean"},
+        "is_flagged": {"type": "boolean"},
+        "processing_status": {
+          "type": "string",
+          "description": "Notion Processing Status (例 已完成 / AI Reviewed); 不写 SQLite, 只入 outbox(target=notion)"
+        }
+      }
+    },
+    "flag_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dry_run", "internal_ids", "payload", "would_enqueue"],
+      "properties": {
+        "dry_run": {"const": true},
+        "internal_ids": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "payload": {"$ref": "#/$defs/payload"},
+        "would_enqueue": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["internal_id", "mailapp_payload", "notion_payload"],
+            "properties": {
+              "internal_id": {"type": "integer"},
+              "mailapp_payload": {"$ref": "#/$defs/payload"},
+              "notion_payload": {"$ref": "#/$defs/payload"}
+            }
+          }
+        }
+      }
+    },
+    "flag_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dry_run", "updated_ids", "payload", "outbox_entries"],
+      "properties": {
+        "dry_run": {"const": false},
+        "updated_ids": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "payload": {"$ref": "#/$defs/payload"},
+        "outbox_entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["internal_id", "mailapp_outbox_id", "notion_outbox_id"],
+            "properties": {
+              "internal_id": {"type": "integer", "minimum": 0},
+              "mailapp_outbox_id": {
+                "description": "新建/合并的 outbox 行 id; -1 表 echo prevention silent skip; null 表 mailapp_payload 为空 (例如只传 --processing-status)",
+                "oneOf": [
+                  {"type": "integer", "minimum": -1},
+                  {"type": "null"}
+                ]
+              },
+              "notion_outbox_id": {
+                "type": "integer",
+                "description": "Notion target outbox id; source='cli' 不被 echo prevention 拒"
+              }
+            }
+          }
+        },
+        "not_found": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0},
+          "description": "请求 ID 中 email_metadata 找不到的 (前端 ID 与 SQLite 不一致时出现)"
+        }
+      }
+    }
+  }
+}
