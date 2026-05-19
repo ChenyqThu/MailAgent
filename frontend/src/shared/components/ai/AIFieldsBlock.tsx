@@ -74,7 +74,7 @@ interface CellSpec {
 
 function GridCell({ label, value }: CellSpec): React.ReactElement {
   return (
-    <div className="aif-cell px-4 py-3 bg-ink-3">
+    <div className="aif-cell px-4 py-2 bg-ink-3">
       <div
         className="text-micro font-mono uppercase tracking-wider text-ink-fg-2"
         style={{ letterSpacing: '0.08em' }}
@@ -104,13 +104,13 @@ function ReplyDraftHero({ markdown }: { markdown: string }): React.ReactElement 
   }
   return (
     <div
-      className="aif-reply px-4 py-3 border-b border-ink-border"
+      className="aif-reply px-4 py-2.5 border-b border-ink-border"
       style={{
         background: 'rgb(var(--c-accent) / 0.04)',
         boxShadow: 'inset 0 0 0 1px rgb(var(--c-accent) / 0.12)'
       }}
     >
-      <div className="flex items-center gap-2 mb-1.5">
+      <div className="flex items-center gap-2 mb-1">
         <MessageSquare size={11} strokeWidth={2.25} className="text-coral" />
         <span
           className="text-micro font-mono uppercase tracking-wider text-coral"
@@ -217,8 +217,11 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
       aria-label="ai-fields"
       className="ai-fields rounded-lg border border-ink-border overflow-hidden"
     >
-      {/* Header — icon + "AI Fields · N" + reviewed chip + model name */}
-      <div className="px-4 py-2 bg-ink-2 border-b border-ink-border flex items-center justify-between">
+      {/* Header — icon + "AI Fields · N" + reviewed chip + model name.
+          Sprint 14 round 20: tighter — py-2 → py-1.5, chip dropped one
+          step to text-[10px], BadgeCheck/Clock icons 10→8px so the
+          whole strip reads as a single thin caption bar. */}
+      <div className="px-4 py-1.5 bg-ink-2 border-b border-ink-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={12} strokeWidth={2} className="text-info" />
           <span
@@ -228,22 +231,17 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
             AI Fields · {nonNullCount}
           </span>
           {(reviewed || pending) && (
-            // Sprint 13 round 9 — chip carries an icon now so the
-            // "verified" status reads at a glance.  BadgeCheck is the
-            // standard macOS / iOS verified-badge glyph; Clock is the
-            // matching pending counterpart.  Both shipped flat (no
-            // border) to feel like a status pill rather than a card.
             <span
               className={cn(
-                'inline-flex items-center gap-1 text-micro font-mono uppercase tracking-wide',
-                'px-1.5 py-0.5 rounded',
+                'inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide',
+                'leading-none px-1.5 py-[3px] rounded',
                 reviewed ? 'text-ok bg-ok/12' : 'text-warn bg-warn/12'
               )}
             >
               {reviewed ? (
-                <BadgeCheck size={10} strokeWidth={2.25} />
+                <BadgeCheck size={9} strokeWidth={2.25} />
               ) : (
-                <Clock size={10} strokeWidth={2.25} />
+                <Clock size={9} strokeWidth={2.25} />
               )}
               {reviewed ? 'Reviewed' : 'Pending'}
             </span>
@@ -256,7 +254,7 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
           the user reads first to decide whether to open the body. */}
       {summary && (
         <div
-          className="aif-summary px-4 py-3 border-b border-ink-border"
+          className="aif-summary px-4 py-2 border-b border-ink-border"
           style={{ background: 'rgb(var(--c-accent) / 0.06)' }}
         >
           <div className="flex items-center gap-2 mb-1">

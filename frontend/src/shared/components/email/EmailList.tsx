@@ -600,23 +600,18 @@ export function EmailList(): React.ReactElement {
     () => applyMultiFilter(chipFiltered, selectedPriorities, selectedCategories),
     [chipFiltered, selectedPriorities, selectedCategories]
   )
-  const orderedIds = useMemo(() => filtered.map((r) => r.internal_id), [filtered])
 
   // Limit useNewlyAddedIds to the first page so paginated reads don't make
   // the entire newly-loaded slab flash "NEW".
   const firstPageIds = useMemo(() => allIdsFirstPage(all), [all])
   const newIds = useNewlyAddedIds(firstPageIds)
 
-  const firstId = orderedIds[0]
-  if (
-    firstId !== undefined &&
-    (activeId === null || !orderedIds.includes(activeId)) &&
-    activeId !== firstId
-  ) {
-    queueMicrotask(() => setActive(firstId))
-  }
-
-  useEmailKeyboardNav(orderedIds)
+  // `orderedIds` (a.k.a. selectable ids in the list) is computed AFTER
+  // threadGroups below so cross-mailbox thread heads / supplement
+  // children also count as selectable.  Without this, the auto-reset
+  // effect kicked the active id back to the first visible inbox email
+  // every time the user clicked a thread head whose freshest message
+  // was an outbox reply ("有的是我最新回的邮件...这种现在好像点击不了").
 
   const counts = useMemo(() => {
     let unread = 0
@@ -718,6 +713,30 @@ export function EmailList(): React.ReactElement {
     () => groupByThread(filtered, threadSupplement),
     [filtered, threadSupplement]
   )
+
+  // Selectable ids = every email rendered in the list (heads + visible
+  // children).  Used by keyboard nav and the active-reset effect so a
+  // cross-mailbox supplement head can become active without being
+  // immediately yanked back.
+  const orderedIds = useMemo(() => {
+    const ids: number[] = []
+    for (const g of threadGroups) {
+      ids.push(g.head.internal_id)
+      for (const c of g.children) ids.push(c.internal_id)
+    }
+    return ids
+  }, [threadGroups])
+
+  const firstId = orderedIds[0]
+  if (
+    firstId !== undefined &&
+    (activeId === null || !orderedIds.includes(activeId)) &&
+    activeId !== firstId
+  ) {
+    queueMicrotask(() => setActive(firstId))
+  }
+
+  useEmailKeyboardNav(orderedIds)
   const buckets = useMemo(() => partitionByDate(threadGroups, pinnedSet), [threadGroups, pinnedSet])
 
   // Show the loader sentinel when we still have headroom (no end-of-data
