@@ -22,7 +22,9 @@ import { useShortcut } from '@shared/hooks/useShortcut'
 import { useQuery } from '@tanstack/react-query'
 
 import { cn } from '@shared/lib/cn'
+import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
+import { toastError, toastSuccess } from '@shared/state/toast'
 import {
   STORAGE_AGENT_ID,
   STORAGE_AGENT_NAME,
@@ -32,7 +34,7 @@ import {
 import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
-import { MessageList } from './MessageList'
+import { MessageList, type DraftHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
 
 type PanelTab = 'ai' | 'thread' | 'sync'
@@ -133,6 +135,50 @@ export function AIChatPanel(): React.ReactElement {
   const quotaCooldownUntil = chat.quotaCooldownUntil
   const inQuotaCooldown = quotaCooldownUntil !== null
   const canSend = activeInternalId !== null && !chat.isStreaming && !inQuotaCooldown
+
+  // Sprint 13 — DraftPreviewCard buttons. send → real mailApi.email.createDraft;
+  // regenerate → chat.retryLast (only when retry is available); edit + popout
+  // are intentionally `coming in Sprint 14` toasts so the user can see the
+  // affordance without us pretending to wire something that isn't.
+  const [draftSending, setDraftSending] = useState(false)
+  const handleDraftSend = useCallback(
+    async (body: string) => {
+      if (activeInternalId === null) return
+      setDraftSending(true)
+      try {
+        await mailApi.email.createDraft({ internalId: activeInternalId, body })
+        toastSuccess(t('chat.draftReply.toast.sendOk'))
+      } catch (err) {
+        const e = err as { code?: string; message?: string }
+        const key =
+          e.code === 'E_AUTOMATION_DENIED'
+            ? 'chat.draftReply.toast.sendFailAuto'
+            : e.code === 'E_MAIL_NOT_RUNNING'
+              ? 'chat.draftReply.toast.sendFailMail'
+              : e.code === 'E_NO_MAILBOX' || e.code === 'E_NOT_FOUND'
+                ? 'chat.draftReply.toast.sendFailNoBin'
+                : 'chat.draftReply.toast.sendFailGeneric'
+        const detail = e.code ? `${e.code} · ${e.message ?? ''}` : (e.message ?? String(err))
+        toastError(t(key), detail)
+      } finally {
+        setDraftSending(false)
+      }
+    },
+    [activeInternalId, mailApi, t]
+  )
+  // chat.retryLast resends whatever the user last asked. For a draft turn
+  // that's "起草回复给 oncall…" → produces a fresh draft. If retryLast is
+  // null (no last failed input on file), DraftPreviewCard surfaces the
+  // `regenPending` hint via HoverTip instead of pretending the button works.
+  const draftHandlers: DraftHandlers = {
+    onSend: handleDraftSend,
+    onRegenerate: chat.retryLast ?? null,
+    onEdit: undefined, // Sprint 14 — inline editor
+    onOpenInWindow: undefined, // Sprint 14 — popout decision
+    isSending: draftSending,
+    recipient: detailQ.data?.sender ?? null
+  }
+
   const handleSend = useCallback(
     async (text: string) => {
       if (activeInternalId === null) return
@@ -229,41 +275,50 @@ export function AIChatPanel(): React.ReactElement {
           label={t('chat.tabSync')}
         />
         <div className="ml-auto pr-2 flex items-center gap-1">
-          <button
-            type="button"
-            aria-label={t('shortcutHelp.binding.newChat')}
-            title={t('shortcutHelp.binding.newChat')}
-            onClick={() => chat.clearError?.()}
-            className={cn(
-              'text-ink-fg-2 hover:text-ink-fg p-1.5 rounded',
-              'transition-colors duration-fast hover:bg-ink-4'
-            )}
-          >
-            <Plus size={13} strokeWidth={2} />
-          </button>
-          <button
-            type="button"
-            aria-label="History"
-            title="History"
-            className={cn(
-              'text-ink-fg-2 hover:text-ink-fg p-1.5 rounded',
-              'transition-colors duration-fast hover:bg-ink-4'
-            )}
-          >
-            <History size={13} strokeWidth={2} />
-          </button>
-          <button
-            type="button"
-            onClick={hideAIChatPanel}
-            aria-label={t('chat.composer.cancel')}
-            title={t('chat.composer.cancel')}
-            className={cn(
-              'text-ink-fg-2 hover:text-ink-fg p-1.5 rounded',
-              'transition-colors duration-fast hover:bg-ink-4'
-            )}
-          >
-            <X size={13} strokeWidth={2} />
-          </button>
+          {/* + New chat — real wiring: chat.newSession() (Sprint 13). Resets
+              activeSessionId so next send creates a fresh session. */}
+          <HoverTip text={`${t('chat.newChat')}\n${t('chat.newChatHint')}`} side="bottom">
+            <button
+              type="button"
+              aria-label={t('chat.newChat')}
+              onClick={() => chat.newSession()}
+              className={cn(
+                'text-ink-fg-2 hover:text-ink-fg p-1.5 rounded',
+                'transition-colors duration-fast hover:bg-ink-4'
+              )}
+            >
+              <Plus size={13} strokeWidth={2} />
+            </button>
+          </HoverTip>
+          {/* History — Sprint 14 will surface session switcher sidebar. */}
+          <HoverTip text={t('chat.historyBlocked')} side="bottom">
+            <button
+              type="button"
+              aria-label={t('chat.history')}
+              disabled
+              data-disabled=""
+              tabIndex={-1}
+              className={cn(
+                'p-1.5 rounded transition-colors duration-fast',
+                'text-ink-fg-3 opacity-50 cursor-not-allowed'
+              )}
+            >
+              <History size={13} strokeWidth={2} />
+            </button>
+          </HoverTip>
+          <HoverTip text={t('chat.closePanel')} side="bottom">
+            <button
+              type="button"
+              onClick={hideAIChatPanel}
+              aria-label={t('chat.closePanel')}
+              className={cn(
+                'text-ink-fg-2 hover:text-ink-fg p-1.5 rounded',
+                'transition-colors duration-fast hover:bg-ink-4'
+              )}
+            >
+              <X size={13} strokeWidth={2} />
+            </button>
+          </HoverTip>
         </div>
       </div>
 
@@ -326,6 +381,7 @@ export function AIChatPanel(): React.ReactElement {
                 <MessageList
                   messages={chat.messages}
                   streamingMessageId={chat.streamingMessageId}
+                  draftHandlers={draftHandlers}
                 />
               )}
 

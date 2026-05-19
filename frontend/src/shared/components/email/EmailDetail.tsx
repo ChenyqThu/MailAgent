@@ -399,9 +399,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // ("English" / "en" / "en-US" all resolve to 'en'). NOTES 2026-05-17 #7.
   const langRaw = ai?.labels_raw?.language
   const langIsEn = mapLanguage(typeof langRaw === 'string' ? langRaw : null) === 'en'
-  const visibleAttachments = (email.attachments ?? []).filter(
-    (a) => !a.is_inline && a.derived_from === null
-  )
+  // Sprint 13 — AttachmentList now owns the inline / derived filter so it
+  // can surface derived-from children inline as "→ pdf · 142 KB" chips
+  // instead of cluttering the grid with sibling tiles. We just hand it
+  // the full list.
+  const allAttachments = email.attachments ?? []
 
   // Translate state → toolbar prop derivation.
   const translateError = translationQ.error as (Error & { code?: string }) | null
@@ -435,6 +437,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onToggleFlag={() => void handleToggleFlag(email.is_flagged)}
         isFlagged={email.is_flagged}
         flagState={{ pending: pending.flag }}
+        isImportant={email.is_important === true}
         notionUrl={email.notion_url}
       />
 
@@ -580,10 +583,13 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             )}
           </div>
 
-          {/* Attachments */}
-          {visibleAttachments.length > 0 && (
+          {/* Attachments — AttachmentList renders null when no visible
+              originals exist, so the wrapper div would leave a blank
+              `mt-8` if we kept it unconditional. Gate on the unfiltered
+              count first (cheap) then let the component pick what to show. */}
+          {allAttachments.length > 0 && (
             <div className="mt-8">
-              <AttachmentList attachments={visibleAttachments} />
+              <AttachmentList attachments={allAttachments} />
             </div>
           )}
 

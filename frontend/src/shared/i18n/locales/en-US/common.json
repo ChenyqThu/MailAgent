@@ -60,7 +60,10 @@
     "markRead": "Read",
     "markUnread": "Unread",
     "toggleFlag": "Flag",
+    "important": "Important",
+    "importantHint": "Sender-marked importance (Importance / X-Priority) · read-only",
     "archive": "Archive",
+    "archiveBlocked": "Archive · awaiting CLI in Sprint 14",
     "resync": "Resync Notion",
     "resyncPending": "Resyncing…",
     "llmRun": "Re-run AI",
@@ -272,6 +275,11 @@
     "tabAI": "AI",
     "tabThread": "Thread",
     "tabSync": "Sync",
+    "newChat": "New chat · ⌘N",
+    "newChatHint": "Reset the current thread · next send opens a fresh session",
+    "history": "History",
+    "historyBlocked": "Chat history · awaiting Sprint 14 sidebar",
+    "closePanel": "Hide panel · ⌘L",
     "backend": {
       "notionAgent": "Notion Agent",
       "customApi": "Custom API",
@@ -313,9 +321,20 @@
     "draftReply": {
       "header": "Draft reply",
       "send": "Send",
+      "sending": "Opening in Mail.app…",
       "edit": "Edit",
       "regenerate": "Regenerate",
-      "openInWindow": "Open in window"
+      "openInWindow": "Open in window",
+      "toast": {
+        "sendOk": "Draft opened in Mail.app",
+        "sendFailGeneric": "Draft creation failed",
+        "sendFailAuto": "macOS automation denied — open Settings → Privacy → Automation",
+        "sendFailMail": "Mail.app refused — make sure Mail is open",
+        "sendFailNoBin": "MAIL_ACCOUNT_NAME not configured",
+        "editPending": "Inline editor planned for Sprint 14 — please edit ✎ in Mail.app for now",
+        "popoutPending": "Popout window planned for Sprint 14 — see SPRINT13-HANDOFF §3.2",
+        "regenPending": "Regenerate requires this turn to have started with a draft prompt"
+      }
     },
     "status": {
       "thinking": "AI thinking…",

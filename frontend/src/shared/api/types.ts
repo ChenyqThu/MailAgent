@@ -21,7 +21,18 @@ import type {
 } from '@shared/types/cli.gen'
 
 export type EmailMeta = EmailList_EmailListItem
-export type EmailDetail = EmailGet_EmailRecord
+/**
+ * EmailDetail = schema-typed EmailGet_EmailRecord + the fields the Electron
+ * main handler returns that the cli-schema codegen doesn't yet expose.
+ * Sprint 14 should fold these into email-get.schema.json + `pnpm gen:types`.
+ *
+ *   - `is_important` — v9 RFC-header importance bit, written by
+ *     `reader._parse_importance` and surfaced verbatim by
+ *     `handlers/email.ts:520` (asBool of the SQLite column).
+ */
+export type EmailDetail = EmailGet_EmailRecord & {
+  is_important?: boolean
+}
 export type EmailBody = NonNullable<MailagentEmailBody['data']>
 export type SearchHit = EmailSearch_SearchHit
 export type AttachmentMeta = AttachmentList_AttachmentItem

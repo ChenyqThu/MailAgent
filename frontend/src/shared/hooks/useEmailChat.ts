@@ -69,6 +69,12 @@ export interface UseEmailChatReturn {
   abortCurrent: () => void
   /** Dismiss the error banner. */
   clearError: () => void
+  /** Sprint 13 — "+ New conversation" affordance. Aborts the active
+   *  stream, clears renderer-side messages/error, and unsets
+   *  activeSessionId so the next `send()` opens a fresh session for the
+   *  current email. Backend keeps the older session row intact; a Sprint
+   *  14 history sidebar will surface a switcher. */
+  newSession: () => void
   /** Sprint 5 §2.3 state-machine #3 — re-fire the last failed input, if any.
    *  Surfaces a `Retry` button next to network / upstream errors. Null when
    *  there's nothing retryable (initial render, after success, etc.). */
@@ -511,6 +517,28 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
 
   const clearError = useCallback(() => setError(null), [])
 
+  // Sprint 13 — "+ New conversation" affordance. Resets renderer-side
+  // session state so the next `send()` opens a fresh session for the
+  // current email. Aborts any in-flight stream first so its `done` event
+  // doesn't land on a freshly-blanked message list. The backend doesn't
+  // (yet) honour a `forceNew` flag; on the next `chat.start` it'll create
+  // a new SQLite row because the renderer no longer carries activeSessionId.
+  //
+  // NOTE: ai_chat.db keeps the older session intact — Sprint 14's session
+  // history sidebar will surface a switcher; until then the previous
+  // conversation is simply not visible until the panel reloads.
+  const newSession = useCallback(() => {
+    const sid = activeSessionRef.current
+    if (sid !== null) mailApi.chat.abort(sid)
+    sessionMetaRef.current.delete(sid ?? -1)
+    setActiveSessionIdState(null)
+    activeSessionRef.current = null
+    setMessages([])
+    setStreamingMessageId(null)
+    setError(null)
+    setLastFailedInput(null)
+  }, [mailApi])
+
   // Sprint 5 #3 — Retry CTA. Only available when:
   //   1. we have a captured failed input (set in send())
   //   2. the error is "retriable" (network / upstream / agent timeout)
@@ -538,6 +566,7 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     send,
     abortCurrent,
     clearError,
+    newSession,
     retryLast,
     quotaCooldownUntil
   }

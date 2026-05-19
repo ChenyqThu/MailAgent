@@ -60,7 +60,10 @@
     "markRead": "已读",
     "markUnread": "未读",
     "toggleFlag": "标旗",
+    "important": "重要",
+    "importantHint": "邮件头标记为重要 (Importance / X-Priority) · 只读",
     "archive": "归档",
+    "archiveBlocked": "归档 · 等待 Sprint 14 接 CLI",
     "resync": "重传 Notion",
     "resyncPending": "重传中…",
     "llmRun": "AI 重跑",
@@ -272,6 +275,11 @@
     "tabAI": "AI",
     "tabThread": "线程",
     "tabSync": "同步",
+    "newChat": "新会话 · ⌘N",
+    "newChatHint": "重置当前对话 · 下一次发送会开启新 session",
+    "history": "会话历史",
+    "historyBlocked": "会话历史 · 等待 Sprint 14 侧栏",
+    "closePanel": "收起面板 · ⌘L",
     "backend": {
       "notionAgent": "Notion Agent",
       "customApi": "Custom API",
@@ -313,9 +321,20 @@
     "draftReply": {
       "header": "草稿回复",
       "send": "发送",
+      "sending": "打开 Mail.app 中…",
       "edit": "编辑",
       "regenerate": "重生成",
-      "openInWindow": "在新窗口打开"
+      "openInWindow": "在新窗口打开",
+      "toast": {
+        "sendOk": "草稿已在 Mail.app 中打开",
+        "sendFailGeneric": "草稿创建失败",
+        "sendFailAuto": "macOS 自动化权限被拒 — 请到 设置 → 隐私 → 自动化 开启",
+        "sendFailMail": "Mail.app 拒绝调用 — 请确认 Mail 已打开",
+        "sendFailNoBin": "未配置 Mail 账户 (MAIL_ACCOUNT_NAME)",
+        "editPending": "内联编辑器规划在 Sprint 14 — 暂时请用 ✎ Mail.app 修改",
+        "popoutPending": "Popout 窗口规划在 Sprint 14 — 见 SPRINT13-HANDOFF §3.2",
+        "regenPending": "重生成需先发起本轮草稿 prompt"
+      }
     },
     "status": {
       "thinking": "AI 思考中…",
