@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 app = typer.Typer(name="admin", help="统计 / 健康 / db-version", no_args_is_help=True)
 
 
-EXPECTED_DB_VERSION = 7
+EXPECTED_DB_VERSION = 10
 REQUIRED_TABLES = (
     "email_metadata",
     "email_body",
@@ -38,6 +38,7 @@ REQUIRED_TABLES = (
     "cli_checkpoints",
     "v4_rollout_stats",
     "island_dispatch",  # v7: ping-island Sprint 2 派发审计
+    "email_outbox",     # v10: SQLite SSoT inversion (Sprint 15)
 )
 
 
@@ -285,7 +286,11 @@ def admin_db_version(
     if not compatible:
         raise emit_cli_error(cli, CliSchemaError(
             f"db_version={version} mismatch (expected {EXPECTED_DB_VERSION})",
-            hint="Run migration to bring schema to v6; see docs/architecture_v4_sqlite_ssot.md",
+            hint=(
+                f"Run migration to bring schema to v{EXPECTED_DB_VERSION}; "
+                "restart mail-sync to trigger SyncStore._init_database() auto-migrate. "
+                "See docs/architecture_v4_sqlite_ssot.md + SPRINT15-HANDOFF.md."
+            ),
             context={
                 "db_path": db_path,
                 "version": version,

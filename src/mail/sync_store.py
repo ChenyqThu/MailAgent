@@ -101,7 +101,12 @@ class SyncStore:
     #               仅在 SQLite + CLI 暴露；主进程独占写、Electron 前端 readonly 经 CLI 子进程 toggle）
     # v9 (2026-05): email_metadata 增加 is_important（邮件原生重要性，由 reader._parse_importance
     #               从 Importance / X-Priority / X-MSMail-Priority header 提取；前端 ❗ 角标用）
-    DB_VERSION = 9
+    # v10 (2026-05): email_outbox 表 —— Sprint 15 SQLite SSoT inversion 的基础设施。
+    #                所有 mutating 操作（前端 flag / processing_status 变更、Notion webhook 反向同步）
+    #                以 intent 形式落库，FanoutWorker 异步派发到 Mail.app + Notion。
+    #                Echo prevention: source='notion_webhook' + target='notion' 被强制 silent skip
+    #                避免回环。详见 SPRINT15-HANDOFF.md §3.3-§3.4。
+    DB_VERSION = 10
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -518,6 +523,48 @@ class SyncStore:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_is_important
             ON email_metadata(is_important) WHERE is_important = 1
+        """)
+
+        # === v10: email_outbox 表（Sprint 15 SQLite SSoT inversion）===
+        # 所有 mutating 操作（flag / processing_status / 反向 webhook 同步）以 intent 落库，
+        # FanoutWorker 异步派发到 Mail.app + Notion。详 SPRINT15-HANDOFF.md §3。
+        # target='mailapp' | 'notion' —— 单 op 拆两条入队，每条独立失败重试
+        # source='frontend' | 'notion_webhook' | 'cli' —— echo prevention 依据
+        # status 状态机: pending → processing → done | failed → (retry) | dead_letter
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_outbox (
+                outbox_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                internal_id   INTEGER NOT NULL,
+                op_type       TEXT NOT NULL,
+                target        TEXT NOT NULL,
+                payload_json  TEXT NOT NULL,
+                source        TEXT,
+                status        TEXT NOT NULL DEFAULT 'pending',
+                attempts      INTEGER NOT NULL DEFAULT 0,
+                last_error    TEXT,
+                next_retry_at REAL,
+                created_at    REAL NOT NULL,
+                updated_at    REAL NOT NULL,
+                CHECK (target IN ('mailapp','notion')),
+                CHECK (status IN ('pending','processing','done','failed','dead_letter')),
+                FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
+            )
+        """)
+        # 调度索引：FanoutWorker poll_ready 主路径 (status, next_retry_at)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_outbox_pending
+            ON email_outbox(status, next_retry_at)
+            WHERE status IN ('pending','failed')
+        """)
+        # 邮件级查询索引（admin queue-depth / 调试用）
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_outbox_internal_id
+            ON email_outbox(internal_id)
+        """)
+        # 派发分类索引（per-target 统计 / fanout 分流）
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_outbox_target_status
+            ON email_outbox(target, status)
         """)
 
         # 更新数据库版本

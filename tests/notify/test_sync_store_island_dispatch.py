@@ -9,8 +9,9 @@ from src.mail.sync_store import SyncStore
 
 
 def test_db_version_bumped_to_7(tmp_path: Path):
+    """v7 ship 时定的 baseline；后续 v8/v9/v10 演进只检查 island_dispatch 仍在 + 版本 >= 7。"""
     store = SyncStore(str(tmp_path / "test.db"))
-    assert store.DB_VERSION == 7
+    assert store.DB_VERSION >= 7
     # 表存在
     with store._connection() as conn:
         cur = conn.cursor()
