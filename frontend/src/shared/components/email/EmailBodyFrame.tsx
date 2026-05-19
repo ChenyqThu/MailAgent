@@ -57,13 +57,23 @@ const BODY_CSS = `
     margin: 0;
     padding: 0;
     background: transparent;
-    /* Sprint 13 — body width follows the iframe (which is w-full of the
-       max-w-[820px] container). Long tables / fixed-width newsletter
-       layouts would otherwise overflow horizontally; force every block
+    /* Sprint 13 — body width follows the iframe (which is w-full of
+       the detail column). Long tables / fixed-width newsletter layouts
+       would otherwise overflow horizontally; force every block
        container to live within the available width. */
     max-width: 100%;
     overflow-wrap: break-word;
     word-break: break-word;
+    /* Sprint 13 round 7 user feedback: single scroll container. The
+       iframe element itself follows body.scrollHeight via postMessage,
+       so the iframe viewport is always sized to the content - but the
+       OS still reserves a scrollbar gutter inside the iframe document
+       when overflow is auto/visible and the WebKit renderer decides
+       to paint one on the height transition. Forcing overflow:hidden
+       on the inner document guarantees only the OUTER scroll
+       container (the email pane) ever paints a scrollbar. */
+    overflow: hidden;
+    height: auto;
   }
   body {
     color: rgb(var(--ink-fg-1));
@@ -333,6 +343,11 @@ function BodyIframe({ srcDoc }: BodyIframeProps): React.ReactElement {
       ref={iframeRef}
       title="email-body"
       sandbox="allow-same-origin"
+      // Sprint 13 round 7 — `scrolling="no"` is the legacy-but-still-
+      // honoured signal to suppress the iframe scrollbar even if our
+      // height under-shoots the body by a pixel. Modern Chromium reads
+      // it and matches our overflow:hidden inside the document.
+      scrolling="no"
       srcDoc={srcDoc}
       style={{ height: `${height}px` }}
       className="w-full border-0 bg-transparent block"

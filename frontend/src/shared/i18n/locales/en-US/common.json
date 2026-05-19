@@ -51,7 +51,9 @@
     "notionOpen": "Open",
     "threadCount": "{n, plural, =1 {1 in thread} other {# in thread}}",
     "viewSource": "View source (.eml)",
-    "viewSourceBlocked": "View source · awaiting Sprint 14 wiring of `mailagent debug email-source`"
+    "viewSourceBlocked": "View source · awaiting Sprint 14 wiring of `mailagent debug email-source`",
+    "moreProps": "{n, plural, =1 {1 more property} other {# more properties}}",
+    "fewerProps": "Fewer properties"
   },
   "ai": {
     "compose": "Draft reply"

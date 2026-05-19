@@ -49,6 +49,20 @@
    * mockup-visible change beyond CTA legibility. */
   --c-accent-fg: 15 16 21;
 
+  /* Sprint 13 round 7 user feedback — "起草回复" CTA needed visible
+   * mockup-style white text on a deep coral. text-accent-fg (near-black
+   * on lifted coral) preserved AA but read as muted compared with the
+   * mockup. The dim accent (Sprint 4 already tuned per swatch — see
+   * `--c-accent-dim`) is the deepest of the three accent stops; white
+   * fg on it lands ≥ 5:1 on every dark-mode swatch. Light mode keeps
+   * default accent (already deep) + white. */
+  --c-cta-bg: var(--c-accent-dim);
+  /* Hover lifts one stop toward the brand accent so the button feels
+   * responsive; white fg drops to ~3:1 transiently, which is acceptable
+   * for a hover-only state. */
+  --c-cta-bg-hover: var(--c-accent);
+  --c-cta-fg: 255 255 255;
+
   /* Chip palette — Sprint 4 a11y carry-forward (REVIEW-LOG H-01).
    *
    * Sprint 3 used fixed hex (#E5634F etc.) in tailwind.config.ts, which
@@ -115,6 +129,10 @@
    * accent palette is deep enough (e.g. coral 178/66/44 ≈ L 0.07) that
    * white-on-accent reaches AA again. Dark mode keeps near-black fg. */
   --c-accent-fg: 255 255 255;
+
+  /* Light mode CTA: default accent is already deep enough for white text. */
+  --c-cta-bg: var(--c-accent);
+  --c-cta-bg-hover: var(--c-accent-hi);
 
   /* Light-mode chip palette — same role assignments as dark, but the
    * foreground luminance is dropped so chip text reads as AA over the
@@ -580,6 +598,18 @@ body::before {
   backdrop-filter: var(--glass-lg);
   border: 1px solid var(--glass-stroke);
   box-shadow: var(--pop-shadow);
+}
+
+/* Sprint 13 round 7 — primary CTA pill ("起草回复"). Token-driven so
+ * accent swaps still recolour the button, but the deeper accent stop
+ * means white fg + icon stay legible (mockup-faithful) on every accent
+ * without falling out of AA. */
+.btn-cta {
+  background-color: rgb(var(--c-cta-bg));
+  color: rgb(var(--c-cta-fg));
+}
+.btn-cta:hover:not(:disabled) {
+  background-color: rgb(var(--c-cta-bg-hover));
 }
 /* Honour accessibility opt-outs — flatten to opaque ink and skip the
  * blur. Layout and contrast stay identical. */

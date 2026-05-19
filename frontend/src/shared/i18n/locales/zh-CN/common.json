@@ -51,7 +51,9 @@
     "notionOpen": "打开",
     "threadCount": "本对话 {n, plural, =1 {1 封} other {# 封}}",
     "viewSource": "查看原文 (.eml)",
-    "viewSourceBlocked": "查看原文 · 等待 Sprint 14 接 mailagent debug email-source"
+    "viewSourceBlocked": "查看原文 · 等待 Sprint 14 接 mailagent debug email-source",
+    "moreProps": "{n, plural, =1 {更多属性 · 1} other {更多属性 · #}}",
+    "fewerProps": "收起属性"
   },
   "ai": {
     "compose": "起草回复"

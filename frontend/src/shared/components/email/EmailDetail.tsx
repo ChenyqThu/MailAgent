@@ -13,7 +13,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, Languages, Mail, RotateCcw, Sparkles } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  Languages,
+  Mail,
+  RotateCcw,
+  Sparkles
+} from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -177,6 +185,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const queryClient = useQueryClient()
   const [showTranslation, setShowTranslation] = useState(false)
   const [pending, setPending] = useState<PendingMap>(NO_PENDING)
+  const [propsExpanded, setPropsExpanded] = useState(false)
   const [lastInternalId, setLastInternalId] = useState<number | null>(internalId)
   // React 19 "Adjusting state on prop change" pattern (react.dev/learn/you-might-not-need-an-effect):
   // resetting derived state on a prop transition is a render-time concern,
@@ -185,6 +194,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     setLastInternalId(internalId)
     setShowTranslation(false)
     setPending(NO_PENDING)
+    setPropsExpanded(false)
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays
@@ -453,10 +463,22 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {/* mockup-inbox.html L2100 — `max-w-[820px]` 限宽 + **左对齐**
-            (无 mx-auto)。把这块改成居中后整页视觉重心偏移，导致 toolbar
-            和正文左缘错位 — Sprint 13 visual bug fix。 */}
-        <div className="px-8 py-6 max-w-[820px]">
+        {/* Sprint 13 round 7 user feedback: "email detail 的宽度不设上
+            限". The mockup pinned the detail column to `max-w-[820px]` so
+            text would not span a 1600px monitor, but the user prefers
+            the full toolbar width. Body is still constrained by the iframe
+            host width, so reading-line length on very wide screens is
+            mediated by the email content itself.
+
+            Layout split for Sprint 13 round 7 frozen-header request
+            ("向下滚动时，冻结元数据和 AI Fields"):
+              ┌─ subject + inline translate banner (scrolls away)
+              ├─ STICKY: meta + AIFieldsBlock (always visible)
+              └─ body + attachments + footer (scrolls under sticky)
+            Toolbar is implicitly frozen by the parent flex column. */}
+
+        {/* Subject + lang banner — scrolls away with the body. */}
+        <div className="px-8 pt-6 pb-3">
           {/* Subject block — EN lang pip + tracking-tight headline */}
           <div className="flex items-start gap-3 mb-1.5">
             {langIsEn && (
@@ -480,7 +502,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               onClick={() => setShowTranslation(true)}
               title={`⌥T · ${t('translate.label')}`}
               className={cn(
-                'mb-5 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md',
+                'mt-2 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md',
                 'text-aux text-coral border border-coral/30 bg-coral/10',
                 'hover:bg-coral/15 transition-colors duration-fast'
               )}
@@ -490,82 +512,137 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               <kbd className="ml-0.5">⌥T</kbd>
             </button>
           )}
+        </div>
 
-          {/* Meta grid — 80px label column, mockup-faithful */}
-          <dl className="mt-1 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux">
-            <MetaRow
-              label="From"
-              value={
-                <>
-                  {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
-                  {fromName && fromAddr && <span className="text-ink-fg-2"> · </span>}
-                  <span className="text-ink-fg-2">{fromAddr}</span>
-                </>
-              }
-            />
-            <MetaRow label="To" value={email.to_addr || '—'} />
-            {email.cc_addr && email.cc_addr.length > 0 && (
-              <MetaRow label="Cc" value={email.cc_addr} />
-            )}
-            {email.date_received && (
-              <MetaRow
-                label="Date"
-                value={
-                  <span className="font-mono text-meta">
-                    {formatDate(email.date_received)}
-                    <span className="text-ink-fg-2">
-                      {' '}
-                      · {formatRelativeTime(email.date_received)}
-                    </span>
-                  </span>
-                }
-              />
-            )}
-            <MetaRow
-              label="Mailbox"
-              value={
-                <span className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-coral/100" />
-                  {email.mailbox || '—'}
-                </span>
-              }
-            />
-            {/* Sprint 13 round 6 — Thread meta-row + sidebar removed
-                (user feedback: "线程可以去掉"). Sprint 14 will surface
-                sibling messages as an Outlook-style collapsed bundle
-                UNDER the latest mail; see NOTES.md 2026-05-20.
-                internal_id remains accessible in the footer. */}
-          </dl>
-
-          {/* AI Fields */}
-          {ai && (
-            <div className="mt-6">
-              <AIFieldsBlock fields={ai} />
-            </div>
+        {/* STICKY frozen header — meta + AI Fields. position:sticky needs
+            (a) an ancestor with `overflow-y: auto` (the scroll container
+            above) and (b) no intermediate ancestor with `overflow:hidden`.
+            Both hold here. bg-ink-3/95 + backdrop-blur-xl gives a Liquid
+            Glass surface over the scrolling content so body text doesn't
+            bleed through the sticky strip. */}
+        <div
+          className={cn(
+            'sticky top-0 z-10',
+            'bg-ink-3/95 backdrop-blur-xl',
+            'border-y border-ink-border-soft'
           )}
+        >
+          <div className="px-8 py-4 space-y-4">
+            {/* Meta grid — 80px label column, mockup-faithful.
+              Sprint 13 round 7 user feedback:
+                - "To 字段没显示" — was rendered but visually crowded by
+                  the auto-expanded Cc row above it; the truncated empty-
+                  string fallback `'—'` also disappeared into the noise.
+                  Now To always renders on its own row with a real value
+                  or the muted placeholder.
+                - "CC 字段，属性字段可以做个 ▾ XX more properties 的折叠".
+                  Cc + future secondary props live in `morePropsRows`,
+                  collapsed by default with a small mockup-style toggle
+                  underneath the visible rows.
+                - "ID 之类的字段可以直接隐藏 (一般不用。mailbox 也隐藏)" —
+                  Mailbox row, message_id and internal_id are gone from
+                  the UI (still accessible via the toolbar dots /
+                  `mailagent email get -o json` for power users). */}
+            {(() => {
+              const morePropsRows: { label: string; value: React.ReactNode }[] = []
+              if (email.cc_addr && email.cc_addr.length > 0) {
+                morePropsRows.push({ label: 'Cc', value: email.cc_addr })
+              }
+              return (
+                <>
+                  <dl className="mt-1 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux">
+                    <MetaRow
+                      label="From"
+                      value={
+                        <>
+                          {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
+                          {fromName && fromAddr && <span className="text-ink-fg-2"> · </span>}
+                          <span className="text-ink-fg-2">{fromAddr}</span>
+                        </>
+                      }
+                    />
+                    <MetaRow
+                      label="To"
+                      value={
+                        email.to_addr && email.to_addr.length > 0 ? (
+                          <span className="text-ink-fg-1">{email.to_addr}</span>
+                        ) : (
+                          <span className="text-ink-fg-3">—</span>
+                        )
+                      }
+                    />
+                    {email.date_received && (
+                      <MetaRow
+                        label="Date"
+                        value={
+                          <span className="font-mono text-meta">
+                            {formatDate(email.date_received)}
+                            <span className="text-ink-fg-2">
+                              {' '}
+                              · {formatRelativeTime(email.date_received)}
+                            </span>
+                          </span>
+                        }
+                      />
+                    )}
+                    {propsExpanded &&
+                      morePropsRows.map((row) => (
+                        <MetaRow key={row.label} label={row.label} value={row.value} />
+                      ))}
+                  </dl>
+                  {morePropsRows.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setPropsExpanded((v) => !v)}
+                      className={cn(
+                        'mt-2 inline-flex items-center gap-1 text-meta text-ink-fg-2',
+                        'hover:text-ink-fg-1 transition-colors duration-fast',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 rounded'
+                      )}
+                      aria-expanded={propsExpanded}
+                    >
+                      {propsExpanded ? (
+                        <>
+                          <ChevronUp size={11} strokeWidth={2} />
+                          {t('emailDetail.fewerProps')}
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown size={11} strokeWidth={2} />
+                          {t('emailDetail.moreProps', { n: morePropsRows.length })}
+                        </>
+                      )}
+                    </button>
+                  )}
+                </>
+              )
+            })()}
 
-          {/* Sprint 13 round 6 user feedback: thread sidebar removed.
-              Outlook-style "older messages collapsed under the latest"
-              treatment is Sprint 14 — see NOTES.md 2026-05-20. */}
+            {/* AI Fields */}
+            {ai && <AIFieldsBlock fields={ai} />}
+          </div>
+        </div>
+        {/* End of sticky frozen header. */}
 
+        {/* Sprint 13 round 6 user feedback: thread sidebar removed.
+            Outlook-style "older messages collapsed under the latest"
+            treatment is Sprint 14 — see NOTES.md 2026-05-20. */}
+
+        {/* Body + attachments + footer — scroll under the sticky header. */}
+        <div className="px-8 pt-6 pb-6">
           {/* Body — original sandboxed iframe OR translated markdown.
               Toggled via EmailToolbar / ⌥T / inline translate banner. */}
-          <div className="mt-7">
-            {showTranslation ? (
-              <TranslationView
-                status={translateStatus}
-                errorCode={translateError?.code ?? null}
-                translated={translationQ.data?.translated ?? null}
-                onRetry={() => translationQ.refetch()}
-                onDismiss={dismissTranslation}
-              />
-            ) : (
-              <EmailBodyFrame
-                internalId={email.internal_id}
-                attachments={email.attachments ?? []}
-              />
-            )}
-          </div>
+          {showTranslation ? (
+            <TranslationView
+              status={translateStatus}
+              errorCode={translateError?.code ?? null}
+              translated={translationQ.data?.translated ?? null}
+              onRetry={() => translationQ.refetch()}
+              onDismiss={dismissTranslation}
+            />
+          ) : (
+            <EmailBodyFrame internalId={email.internal_id} attachments={email.attachments ?? []} />
+          )}
 
           {/* Attachments — AttachmentList renders null when no visible
               originals exist, so the wrapper div would leave a blank
@@ -577,16 +654,13 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </div>
           )}
 
-          {/* Footer — mockup-inbox.html L2257-2266. Left: internal_id +
-              message_id mono blob. Right: "查看原文 (.eml)" (Sprint 14 待
-              CLI wiring) · "在 Notion 打开 ↗". */}
-          <div className="mt-8 pt-5 border-t border-ink-border-soft flex items-center justify-between text-aux">
-            <div className="flex items-center gap-2 text-ink-fg-2">
-              <span className="text-meta font-mono">
-                internal_id {email.internal_id}
-                {email.message_id && <> · message_id {email.message_id.slice(1, 9)}…</>}
-              </span>
-            </div>
+          {/* Footer — Sprint 13 round 7 user feedback: "ID 之类的字段可
+              以直接隐藏 (一般不用)". The internal_id + message_id mono
+              blob lived on the left of this row; gone. Power users can
+              still pull them via `mailagent -o json email get <id>` or
+              the toolbar Notion link. Right side keeps "查看原文 .eml"
+              (Sprint 14 待 CLI wiring) and "在 Notion 打开 ↗". */}
+          <div className="mt-8 pt-5 border-t border-ink-border-soft flex items-center justify-end text-aux">
             <div className="flex items-center gap-3">
               {/* View source (.eml) — backend has `mailagent debug
                   email-source <id>` but no IPC wrapper yet. Sprint 14

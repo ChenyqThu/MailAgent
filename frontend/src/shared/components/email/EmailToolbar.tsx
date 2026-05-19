@@ -213,6 +213,12 @@ function PrimaryBtn({
   // Squared 8x8 chip when icon-only (matches mockup L2046) — width opens to
   // pill shape when label is visible.
   const padClass = showLabel ? 'gap-1.5 px-3 py-1.5' : 'w-8 h-8'
+  // Sprint 13 round 7 — switched from `bg-coral text-accent-fg` to the
+  // dedicated CTA tokens (`--c-cta-bg` + `--c-cta-fg`, both in index.css).
+  // User feedback: 起草回复 on a coral fill needed visible white text
+  // + white icon (mockup-faithful). text-accent-fg (near-black) read as
+  // muted. The CTA token uses the deeper accent stop so white fg still
+  // clears AA on every accent swatch.
   const btn = (
     <button
       type="button"
@@ -222,9 +228,9 @@ function PrimaryBtn({
       className={cn(
         'flex items-center justify-center rounded-md',
         padClass,
-        'bg-coral/100 text-accent-fg text-aux font-medium',
-        'hover:bg-coral-hover transition-colors duration-fast',
-        'disabled:opacity-70 disabled:cursor-not-allowed'
+        'text-aux font-medium transition-colors duration-fast',
+        'disabled:opacity-70 disabled:cursor-not-allowed',
+        'btn-cta'
       )}
     >
       <span className="shrink-0 grid place-items-center w-[14px] h-[14px]">
