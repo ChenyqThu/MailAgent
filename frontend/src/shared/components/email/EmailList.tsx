@@ -699,15 +699,34 @@ export function EmailList(): React.ReactElement {
     }))
   })
 
+  // Sprint 14 round 21 — supplement merge respects enriched data.
+  // listByThread returns the bare EmailMeta shape (no snippet / AI
+  // fields).  If the same internal_id already lives in `all` (the
+  // mailbox-scoped listEnriched result), we use that fuller record —
+  // otherwise we fall back to `enrichDefaults`.  Without this, an
+  // inbox-resident email that happens to be the thread's freshest but
+  // is filtered out by the focused/other tab (e.g. priority=low) ends
+  // up surfacing as the thread head via supplement *without* its
+  // snippet / ai_priority / ai_action, even though those fields are
+  // sitting right there in `all`.  User: "53876 这封邮件,为啥
+  // emaillist 没有显示正文摘要和 AI 优先级/建议字段啊".
+  const enrichedById = useMemo(() => {
+    const m = new Map<number, EnrichedEmailMeta>()
+    for (const e of all) m.set(e.internal_id, e)
+    return m
+  }, [all])
   const threadSupplement = useMemo(() => {
     const m = new Map<string, EnrichedEmailMeta[]>()
     uniqueThreadIds.forEach((tid, i) => {
       const data = threadQueries[i]?.data
       if (!data) return
-      m.set(tid, data.map(enrichDefaults))
+      m.set(
+        tid,
+        data.map((meta) => enrichedById.get(meta.internal_id) ?? enrichDefaults(meta))
+      )
     })
     return m
-  }, [uniqueThreadIds, threadQueries])
+  }, [uniqueThreadIds, threadQueries, enrichedById])
 
   const threadGroups = useMemo(
     () => groupByThread(filtered, threadSupplement),
