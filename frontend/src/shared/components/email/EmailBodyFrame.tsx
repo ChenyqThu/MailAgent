@@ -254,6 +254,34 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
       }
       return whole
     })
+    // Sprint 14 round 17 — terminal-fix for inline images.
+    // `src/repository/storage_payload_builder.py` rewrites the
+    // original `cid:xxx` href to `attachments/{internal_id}/{filename}`
+    // before saving body_html to SQLite.  The renderer never sees the
+    // `cid:` prefix anymore, only the relative path.  Resolve that
+    // relative path against the data-URL map (byBaseName) here so the
+    // iframe gets a real renderable src — independent of how broken
+    // the original Content-ID header was.
+    const localPathPattern = new RegExp(
+      `(?<attr>src|href)=(?<q>["'])attachments/${internalId}/(?<file>[^"']+)\\k<q>`,
+      'gi'
+    )
+    sanitized = sanitized.replace(localPathPattern, (_whole, ...rest) => {
+      const groups = rest[rest.length - 1] as Record<string, string>
+      const fn = (groups.file ?? '').toLowerCase()
+      const attr = groups.attr ?? 'src'
+      const q = groups.q ?? '"'
+      let hit = byBaseName.get(fn)
+      if (!hit) {
+        const dot = fn.lastIndexOf('.')
+        if (dot > 0) hit = byBaseName.get(fn.slice(0, dot))
+      }
+      if (hit) return `${attr}=${q}${hit}${q}`
+      // No matching attachment loaded yet (or filename mismatch) —
+      // leave the original ref so the user still sees a broken-image
+      // glyph rather than the data:URL pipeline failing silently.
+      return _whole
+    })
     // Sprint 14 round 15 — no inline <script>.  iframe sandbox is
     // `allow-same-origin` *without* `allow-scripts`, so any inline
     // script we put inside srcDoc would never execute and the iframe
@@ -269,7 +297,7 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
 </head>
 <body>${sanitized}</body>
 </html>`
-  }, [bodyQ.data, byCid, byBaseName, resolvedTheme])
+  }, [bodyQ.data, byCid, byBaseName, internalId, resolvedTheme])
 
   if (bodyQ.isError) {
     return (
