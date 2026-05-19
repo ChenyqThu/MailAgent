@@ -119,6 +119,9 @@ class EmailNotionSyncApp:
                 # v4: 让 handle_fetch_mail_content 优先读 SQLite SSoT，
                 # 历史未双写邮件自动 fallback 到 AppleScript
                 email_repo=self.watcher.email_repo,
+                # Sprint 15: 启用 outbox 时 handle_flag_changed/completed/ai_reviewed
+                # 改写为 intent 模式，由 FanoutWorker 异步派发
+                outbox_repo=self.outbox_repo,
             )
             self._event_handlers = handlers
 
