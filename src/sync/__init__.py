@@ -12,6 +12,9 @@ FanoutWorker (fanout.py):
     .claude/plans/ultrathink-sprint-15-handoff-twinkly-nebula.md
 """
 
+from src.sync.fanout import FanoutWorker
+from src.sync.mailapp_fanout import MailAppFanout
+from src.sync.notion_fanout import NotionFanout
 from src.sync.outbox import (
     OutboxEntry,
     OutboxRepository,
@@ -19,6 +22,9 @@ from src.sync.outbox import (
 )
 
 __all__ = [
+    "FanoutWorker",
+    "MailAppFanout",
+    "NotionFanout",
     "OutboxEntry",
     "OutboxRepository",
     "OutboxStats",
