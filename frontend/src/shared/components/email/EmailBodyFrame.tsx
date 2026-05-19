@@ -70,15 +70,18 @@ const BODY_CSS = `
   code {
     font-family: ui-monospace, 'SF Mono', monospace;
     font-size: 12.5px;
-    background: rgb(232 155 74 / 0.10);
+    background: rgba(232, 155, 74, 0.12);
     padding: 1px 6px;
     border-radius: 4px;
-    color: rgb(232 155 74);
+    color: #E89B4A;
   }
   pre {
     font-family: ui-monospace, 'SF Mono', monospace;
     font-size: 12.5px;
-    background: rgb(var(--ink-0) / 0.5);
+    /* Match mockup .mail-body pre — ink-fg tint at 6% so the glass-3
+       parent still bleeds through; ink-0/0.5 (older value) read as a
+       solid dark slab in dark mode and washed out everything behind. */
+    background: rgb(var(--ink-fg) / 0.06);
     border: 1px solid rgb(var(--ink-border));
     border-radius: 6px;
     padding: 14px 16px;
@@ -88,6 +91,12 @@ const BODY_CSS = `
     margin: 12px 0;
   }
   pre code { background: transparent; padding: 0; color: inherit; }
+  /* mockup §2210 stack-trace spans — used when a sender ships HTML with
+     these semantic classes (Sentry, Bugsnag, GitHub PR diffs). Safe to
+     keep around — selectors are no-ops on plain-text bodies. */
+  pre .err { color: #E36262; }
+  pre .num { color: rgb(var(--ink-fg-2)); }
+  pre .key { color: #6FA8DC; }
   a {
     color: rgb(var(--c-accent));
     text-decoration: underline;
