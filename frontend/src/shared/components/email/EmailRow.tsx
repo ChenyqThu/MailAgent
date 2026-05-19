@@ -47,6 +47,11 @@ interface Props {
    *  row layout (grid 32px+1fr) is unchanged so sender / subject /
    *  meta columns still align with the head's. */
   noAvatar?: boolean
+  /** Sprint 14 round 12 — compact mode skips the body-preview snippet
+   *  and the AI strip.  Used by thread children whose data comes from
+   *  listByThread (no snippet / AI fields) so the row reads as a
+   *  single-line digest with sender + subject + time only. */
+  compact?: boolean
   onSelect(): void
 }
 
@@ -159,6 +164,7 @@ export function EmailRow({
   selected,
   isNew,
   noAvatar,
+  compact,
   onSelect
 }: Props): React.ReactElement {
   const mailApi = useMailApi()
@@ -356,9 +362,9 @@ export function EmailRow({
           </span>
         </div>
 
-        {snippet && <div className="body-preview">{snippet}</div>}
+        {snippet && !compact && <div className="body-preview">{snippet}</div>}
 
-        {aiStripVisible && (
+        {aiStripVisible && !compact && (
           <div className="ai-strip">
             {email.ai_priority && (
               <>

@@ -152,6 +152,11 @@ function VirtualRow({
     >
       <div className="thread-col w-6 shrink-0 relative">
         {isHead && (
+          // Sprint 14 round 12 — chevron click target expanded to the
+          // full chevron column.  Previous w-4 h-4 target was a 16x16
+          // box at top:21 which felt unreachable ("有的线程头点不了");
+          // now the entire 24px col is the hit target, glyph still
+          // sits at the avatar-centre line via pt-[21px].
           <button
             type="button"
             aria-label="toggle-thread"
@@ -161,9 +166,8 @@ function VirtualRow({
               onToggleThread(t!.threadId)
             }}
             className={cn(
-              'absolute top-[21px] left-2',
-              'w-4 h-4 flex items-center justify-center rounded',
-              'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+              'absolute inset-0 flex items-start justify-center pt-[21px]',
+              'text-ink-fg-2 hover:text-ink-fg',
               'transition-colors duration-fast'
             )}
           >
@@ -191,6 +195,10 @@ function VirtualRow({
           selected={item.bundleSelected}
           isNew={newIds.has(item.email.internal_id)}
           noAvatar={isChild}
+          // Children come from listByThread (no snippet / AI fields), so
+          // render the row as a single-line digest to stay visually
+          // consistent across siblings.
+          compact={isChild}
           onSelect={() => onSelect(item.email.internal_id)}
         />
       </div>
@@ -203,6 +211,11 @@ function rowHeight(index: number, { rows }: RowProps): number {
   if (!r) return 28
   if (r.type === 'header') return 28
   if (r.type === 'loader') return 44
+  // Sprint 14 round 12 — thread children render compact, single-line
+  // digest (no snippet / AI strip).  All siblings share the same short
+  // height so the bundle reads as a coherent indented stack regardless
+  // of which listByThread row carries enriched data.
+  if (r.thread !== undefined && r.thread.isHead === false) return 42
   const e = r.email
   const snippetReal = cleanSnippet(e.snippet)
   const hasSnippet = Boolean(snippetReal)
