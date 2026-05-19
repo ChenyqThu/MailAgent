@@ -815,6 +815,7 @@ class SyncStore:
         """
         now = time.time()
 
+        ok = False
         with self._connection() as conn:
             cursor = conn.cursor()
 
@@ -832,12 +833,26 @@ class SyncStore:
 
                 conn.commit()
                 logger.debug(f"Marked synced: internal_id={internal_id}")
-                return True
+                ok = True
 
             except sqlite3.Error as e:
                 logger.error(f"Failed to mark synced: {e}")
                 conn.rollback()
-                return False
+                ok = False
+
+        # Sprint 15 Stage 2: SSE publish (out of transaction, silent on failure)
+        if ok:
+            try:
+                from src.events.publisher import safe_publish
+                safe_publish(
+                    "email.synced",
+                    internal_id=internal_id,
+                    data={"notion_page_id": notion_page_id},
+                    source="new_watcher",
+                )
+            except Exception:
+                pass
+        return ok
 
     def mark_failed_v3(self, internal_id: int, error: str, max_retries: int = 5) -> bool:
         """标记 Notion 同步失败（v3 架构，使用 internal_id）
@@ -1056,6 +1071,17 @@ class SyncStore:
 
                     conn.commit()
                     logger.warning(f"Marked as dead_letter: internal_id={internal_id}")
+                    # Sprint 15 Stage 2: SSE publish
+                    try:
+                        from src.events.publisher import safe_publish
+                        safe_publish(
+                            "email.dead_letter",
+                            internal_id=internal_id,
+                            data={"retry_count": current_retry, "error": (error or "")[:200]},
+                            source="sync_store",
+                        )
+                    except Exception:
+                        pass
                     return True
 
                 # 计算下次重试时间（指数退避：1min, 5min, 15min, 1h, 2h）
@@ -1075,6 +1101,22 @@ class SyncStore:
 
                 conn.commit()
                 logger.warning(f"Marked {status}: internal_id={internal_id}, retry #{current_retry} in {delay}s")
+                # Sprint 15 Stage 2: SSE publish
+                try:
+                    from src.events.publisher import safe_publish
+                    safe_publish(
+                        "email.failed",
+                        internal_id=internal_id,
+                        data={
+                            "status": status,
+                            "retry_count": current_retry,
+                            "next_retry_at": next_retry,
+                            "error": (error or "")[:200],
+                        },
+                        source="sync_store",
+                    )
+                except Exception:
+                    pass
                 return True
 
             except sqlite3.Error as e:

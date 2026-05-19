@@ -193,6 +193,19 @@ class OutboxRepository:
                 f"[outbox] enqueued outbox_id={outbox_id} "
                 f"(internal_id={internal_id}, op_type={op_type}, target={target}, source={source})"
             )
+            # Sprint 15 Stage 2: SSE publish (silent on failure)
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "outbox.enqueued",
+                internal_id=internal_id,
+                data={
+                    "outbox_id": outbox_id,
+                    "op_type": op_type,
+                    "target": target,
+                    "source": source,
+                },
+                source="outbox",
+            )
             return outbox_id
         finally:
             conn.close()
@@ -327,9 +340,18 @@ class OutboxRepository:
                 (now, outbox_id),
             )
             conn.commit()
-            return cursor.rowcount > 0
+            changed = cursor.rowcount > 0
         finally:
             conn.close()
+        # Sprint 15 Stage 2: SSE publish (out of DB transaction, silent on failure)
+        if changed:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "outbox.done",
+                data={"outbox_id": outbox_id},
+                source="outbox",
+            )
+        return changed
 
     def mark_failed(
         self,
@@ -383,7 +405,7 @@ class OutboxRepository:
                 f"[outbox] mark_failed outbox_id={outbox_id} attempts={new_attempts} "
                 f"status={new_status} retry_at={next_retry}"
             )
-            return {
+            result = {
                 "outbox_id": outbox_id,
                 "attempts": new_attempts,
                 "status": new_status,
@@ -391,6 +413,19 @@ class OutboxRepository:
             }
         finally:
             conn.close()
+        # Sprint 15 Stage 2: SSE publish (silent on failure)
+        from src.events.publisher import safe_publish
+        safe_publish(
+            f"outbox.{new_status}",  # outbox.failed or outbox.dead_letter
+            data={
+                "outbox_id": outbox_id,
+                "attempts": new_attempts,
+                "last_error": (error or "")[:200],
+                "next_retry_at": next_retry,
+            },
+            source="outbox",
+        )
+        return result
 
     def retry_dead_letter(self, outbox_id: int) -> bool:
         """把 dead_letter 行重置为 pending, attempts=0 (admin 介入用)."""

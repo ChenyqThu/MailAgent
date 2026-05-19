@@ -153,6 +153,22 @@ class LLMProcessingStore:
                 ),
             )
             c.commit()
+        # Sprint 15 Stage 2: SSE publish (out of transaction)
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "llm.success",
+                internal_id=internal_id,
+                data={
+                    "model": labels_dict.get("model") or "",
+                    "input_tokens": int(labels_dict.get("input_tokens") or 0),
+                    "output_tokens": int(labels_dict.get("output_tokens") or 0),
+                    "latency_ms": int(labels_dict.get("latency_ms") or 0),
+                },
+                source="llm_agent",
+            )
+        except Exception:
+            pass
 
     def mark_failed(
         self, internal_id: int, error: str, max_retries: int
@@ -188,12 +204,27 @@ class LLMProcessingStore:
                 (internal_id, status, new_retries, next_retry, (error or "")[:500], now, now),
             )
             c.commit()
-            return {
-                "internal_id": internal_id,
-                "retry_count": new_retries,
-                "status": status,
-                "next_retry_at": next_retry,
-            }
+        # Sprint 15 Stage 2: SSE publish (out of transaction)
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "llm.failed" if status == "failed" else "llm.gave_up",
+                internal_id=internal_id,
+                data={
+                    "retry_count": new_retries,
+                    "next_retry_at": next_retry,
+                    "error": (error or "")[:200],
+                },
+                source="llm_agent",
+            )
+        except Exception:
+            pass
+        return {
+            "internal_id": internal_id,
+            "retry_count": new_retries,
+            "status": status,
+            "next_retry_at": next_retry,
+        }
 
     # ---- readers -----------------------------------------------------------
 

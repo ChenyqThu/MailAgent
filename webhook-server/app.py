@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
 # Config
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -712,6 +713,60 @@ async def health():
         return HealthResponse(status="ok", redis="connected")
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Redis: {e}")
+
+
+# Sprint 15 Stage 2: SSE event stream
+# 订阅 Redis pub/sub channel mailagent:events:v1, 转发给前端 / 看板 / 外部观察者。
+# 事件来源: src/events/publisher.py (OutboxRepository / sync_store / llm_agent 等
+# 接入点 publish JSON 事件). 详 docs/sse-events.md。
+SSE_CHANNEL = "mailagent:events:v1"
+SSE_HEARTBEAT_SEC = 15
+
+
+@app.get(
+    "/api/events/stream",
+    tags=["运维"],
+    summary="SSE 实时事件流",
+    description=(
+        "Server-Sent Events long-lived 连接，订阅 mail-sync 进程通过 Redis "
+        "pub/sub 推送的实时事件 (邮件 sync / outbox 派发 / LLM 处理 / 死信)。"
+        "客户端: `curl -N -H 'X-Webhook-Token: <secret>' "
+        "<base>/api/events/stream`. 鉴权与 /api/command 一致。"
+        "无认证客户端 → 401. 每 15s 发 ping 心跳防中间件断连。"
+        "事件 schema 详 docs/sse-events.md。"
+    ),
+)
+async def stream_events(request: Request):
+    _check_auth(request)
+
+    pubsub = redis_pool.pubsub()
+    await pubsub.subscribe(SSE_CHANNEL)
+
+    async def event_gen():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True,
+                    timeout=SSE_HEARTBEAT_SEC,
+                )
+                if msg and msg.get("type") == "message":
+                    data = msg.get("data")
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8", errors="replace")
+                    yield {"event": "mailagent", "data": data}
+                else:
+                    # timeout 周期心跳, 防 nginx / cloudflare 30-60s 默认断
+                    yield {"event": "ping", "data": ""}
+        finally:
+            try:
+                await pubsub.unsubscribe(SSE_CHANNEL)
+                await pubsub.close()
+            except Exception:
+                pass
+
+    return EventSourceResponse(event_gen())
 
 
 @app.get(
