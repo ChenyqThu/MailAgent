@@ -16,6 +16,37 @@ from src.config import config
 # 北京时区 (UTC+8)
 BEIJING_TZ = timezone(timedelta(hours=8))
 
+
+def _parse_importance(
+    importance: Optional[str],
+    x_priority: Optional[str],
+    x_msmail_priority: Optional[str],
+) -> bool:
+    """归一化邮件原生重要性 header → bool。
+
+    优先级：Importance > X-Priority > X-MSMail-Priority。
+    任一 source 命中 high → True，命中 normal/low → False，缺省 → False。
+    """
+    if importance:
+        v = importance.strip().lower()
+        if v == "high":
+            return True
+        if v in ("normal", "low"):
+            return False
+    if x_priority:
+        # 1 / 2 = High，3 = Normal，4 / 5 = Low；老 MUA 偶尔写 "1 (Highest)".
+        token = x_priority.strip().split()[0] if x_priority.strip() else ""
+        if token in ("1", "2"):
+            return True
+        if token in ("3", "4", "5"):
+            return False
+    if x_msmail_priority:
+        v = x_msmail_priority.strip().lower()
+        if v == "high":
+            return True
+    return False
+
+
 class EmailReader:
     """邮件读取器"""
 
@@ -531,6 +562,14 @@ class EmailReader:
             sender_raw = msg.get("From", "")
             to = msg.get("To", "")
             cc = msg.get("Cc", "")
+            # v9: 原生重要性。Outlook 用 X-MSMail-Priority + Importance；
+            # RFC 4021 标 Importance: high/normal/low；老 Mail 客户端走
+            # X-Priority: 1 (highest) ... 5 (lowest)。归一化到一个 bool。
+            is_important = _parse_importance(
+                msg.get("Importance"),
+                msg.get("X-Priority"),
+                msg.get("X-MSMail-Priority"),
+            )
 
             # 2. 提取日期
             email_date = None
@@ -684,7 +723,8 @@ class EmailReader:
                 is_read=is_read,
                 is_flagged=is_flagged,
                 attachments=attachments,
-                thread_id=thread_id
+                thread_id=thread_id,
+                is_important=is_important,
             )
 
             logger.debug(f"Parsed email from source: {subject}")

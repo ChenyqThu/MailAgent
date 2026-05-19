@@ -50,8 +50,16 @@ export interface EnrichedEmailMeta extends EmailList_EmailListItem {
   ai_priority: AIPriority | null
   /** `labels_json.action_type` — Chinese label passed through verbatim for the chip. */
   ai_action: string | null
+  /** `labels_json.category` — LLM-emitted closed enum (CATEGORY_ENUM in
+   *  src/llm_agent/schema.py), passed through verbatim (e.g. "💼 产品管理").
+   *  Null if no LLM run yet. Drives the filter popover's Category section. */
+  ai_category: string | null
   /** User-visible attachment count: excludes inline-only images. Includes derived (docx→pdf). */
   attach_count: number
+  /** v9 — 邮件原生重要性（reader._parse_importance: Importance / X-Priority /
+   *  X-MSMail-Priority 任一为 high → true）。EmailRow 的 ❗ 角标读这个字段，
+   *  与 LLM 推断的 ai_priority 互相独立。 */
+  is_important: boolean
 }
 
 export interface MailboxSummary {
@@ -171,6 +179,14 @@ export interface EmailApi {
   /** Sprint 5 — open Mail.app reply window (AppleScript). User edits +
    *  sends in Mail.app; we don't relay the send. */
   createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult>
+  /** v8 — set pinned (true) / unpinned (false) via the `mailagent email
+   *  pin/unpin` CLI. Returns the new state, or null on E_NOT_FOUND. The
+   *  renderer's optimistic store reconciles against the next
+   *  listPinnedIds refetch. */
+  pin(internalId: number, pinned: boolean): Promise<boolean | null>
+  /** v8 — current set of pinned internal_ids (pinned_at DESC). Drives
+   *  the `pinned` zustand store and the "📌 已固定" group in EmailList. */
+  listPinnedIds(): Promise<number[]>
 }
 
 // ---- Sprint 6 §2.2 — LLM dashboard surface --------------------------------

@@ -1,16 +1,24 @@
-// Batch selection state for Sprint 5 BatchActionBar (DESIGN.md §5.4).
-// Sprint 1 ships the store + toggling primitives; the bar UI binds in
-// Sprint 5 along with `AI 批量分类 / AI 批量起草 / 批量翻译` operations.
+// Sprint 5 batch selection store, extended in Sprint 12 with a `mode`
+// toggle (off / on) and `enter` / `exit` helpers — the floating
+// BatchActionBar gates its visibility on this mode rather than on
+// `selectedIds.length > 0` (so the bar persists while the user clears
+// the selection but keeps batching).
 //
-// `selectedIds` is exposed as `ReadonlyArray` for stable referential equality
-// in React; mutations always go through the action methods. We keep the
-// internal store as a Set for O(1) toggle/has, then snapshot to a sorted
-// array on every mutation so list selectors can use `===` to skip re-renders.
+// `selectedIds` is exposed as `ReadonlyArray<number>` for stable
+// referential equality across renders; mutations always go through the
+// action methods. The Set lives at module scope so a stale React snapshot
+// can never expose a mutable reference.
 
 import { create } from 'zustand'
 
+export type BatchMode = 'off' | 'on'
+
 interface BatchStore {
+  mode: BatchMode
   selectedIds: ReadonlyArray<number>
+  enter(): void
+  exit(): void
+  setMode(next: BatchMode): void
   toggle(id: number): void
   toggleMany(ids: ReadonlyArray<number>): void
   isSelected(id: number): boolean
@@ -18,14 +26,32 @@ interface BatchStore {
   selectAll(ids: ReadonlyArray<number>): void
 }
 
-// The Set lives at module scope rather than on the store so a stale React
-// snapshot can never expose a mutable reference. Every mutation rebuilds the
-// `selectedIds` array.
 const inner = new Set<number>()
 const snapshot = (): number[] => Array.from(inner.values()).sort((a, b) => a - b)
 
+function syncBodyAttr(mode: BatchMode): void {
+  if (typeof document === 'undefined') return
+  if (mode === 'on') document.body.dataset.batchMode = 'true'
+  else delete document.body.dataset.batchMode
+}
+
 export const useBatch = create<BatchStore>((set) => ({
+  mode: 'off',
   selectedIds: [],
+  enter() {
+    syncBodyAttr('on')
+    set({ mode: 'on' })
+  },
+  exit() {
+    inner.clear()
+    syncBodyAttr('off')
+    set({ mode: 'off', selectedIds: [] })
+  },
+  setMode(next) {
+    if (next === 'off') inner.clear()
+    syncBodyAttr(next)
+    set({ mode: next, selectedIds: next === 'off' ? [] : snapshot() })
+  },
   toggle(id) {
     if (inner.has(id)) inner.delete(id)
     else inner.add(id)
@@ -39,8 +65,6 @@ export const useBatch = create<BatchStore>((set) => ({
     set({ selectedIds: snapshot() })
   },
   isSelected(id) {
-    // Hit the live Set so keyboard repeat (J/K + Shift) never sees a stale
-    // view between a mutation and React's next render.
     return inner.has(id)
   },
   clear() {

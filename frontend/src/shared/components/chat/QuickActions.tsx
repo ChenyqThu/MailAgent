@@ -73,13 +73,7 @@ export function QuickActions({ onPick, disabled = false }: Props): React.ReactEl
             type="button"
             disabled={disabled}
             onClick={() => onPick(t(a.promptKey))}
-            className={cn(
-              'inline-flex items-center gap-1.5',
-              'rounded-full px-2.5 py-1 text-aux',
-              'text-ink-fg-1 border border-ink-border bg-ink-3',
-              'hover:bg-ink-4 hover:border-ink-fg-3 transition-colors duration-fast',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
+            className={cn('qchip', disabled && 'opacity-50 cursor-not-allowed')}
           >
             <Icon size={11} strokeWidth={2} />
             {t(a.labelKey)}

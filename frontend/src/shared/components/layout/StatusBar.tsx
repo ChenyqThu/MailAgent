@@ -1,7 +1,10 @@
-// 24px bottom status bar — keeps the Sprint 10 6-segment layout (Sync ·
-// Island · Mailbox · LLM · Theme/Accent · Version) but each segment now
-// carries a `title=` tooltip so hovering surfaces multi-line detail
-// without changing the cursor. No `cursor-help` (no question-mark mouse).
+// 24px bottom status bar — Sprint 10 6-segment layout (Sync · Island ·
+// Mailbox · LLM · Theme/Accent · Version). Sprint 12.6 user-feedback —
+// removed the floating HoverTip overlay: the segment label already shows
+// every field the tooltip would have shown (mailbox name, theme/accent,
+// version), so the popup was pure visual repetition. We keep `title=` so
+// the OS-level tooltip still surfaces multi-line detail after a long
+// hover, just without our own floating chip.
 
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -9,7 +12,6 @@ import { Activity, Cpu, Database, Layers } from 'lucide-react'
 
 import type { IslandConnectionState } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
-import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useAppearance } from '@shared/state/appearance'
 import { useMailbox } from '@shared/state/mailbox'
 import { useUpdaterStore, setUpdaterStatus } from '@shared/state/updater'
@@ -43,10 +45,10 @@ interface SegmentProps {
 
 function Segment({ icon, title, children }: SegmentProps): React.ReactElement {
   return (
-    <HoverTip text={title} className="gap-1.5">
+    <span className="inline-flex items-center gap-1.5" title={title}>
       {icon}
       {children}
-    </HoverTip>
+    </span>
   )
 }
 
@@ -160,7 +162,7 @@ export function StatusBar(): React.ReactElement {
         <span className="text-ink-fg-1 capitalize">{accent}</span>
       </Segment>
 
-      <HoverTip text={versionTooltip} className="ml-auto gap-1.5">
+      <span className="ml-auto inline-flex items-center gap-1.5" title={versionTooltip}>
         <Layers size={11} strokeWidth={2} className="text-ink-fg-3" />
         <span className="text-ink-fg-3">
           {t('statusbar.version', { version: status.currentVersion })}
@@ -171,7 +173,7 @@ export function StatusBar(): React.ReactElement {
             <span className="text-coral">{t('statusbar.updateReady')}</span>
           </>
         )}
-      </HoverTip>
+      </span>
     </footer>
   )
 }

@@ -1,67 +1,143 @@
-// 340px middle column · mockup-inbox.html line 566+. Layout:
-//   - bg-ink-2 (one tier brighter than sidebar/titlebar bg-ink-1)
-//   - Header: mailbox H1 (text-lead font-semibold) + selection/unread/total
-//     counts strip + filter chips row with icons
-//   - "N 封新邮件" CTA pill below header when poll surfaces new ids
-//   - Virtualized rows via react-window v2 with per-row variable height
+// Sprint 12 — Inbox list pane per mockup-inbox.html lines 1430-2596.
+// Sprint 12.5 adds:
+//   • Focused / Other tab dual-bucket (focused = signal mail; other =
+//     low-priority + auto-archive bucket).
+//   • Filter popover with priority + category multi-select.
+//   • Date group headers with click-to-collapse persistence.
+//   • Pinned virtual group at the top (driven by usePinned localStorage).
+//   • Infinite scroll — initial 100 rows, +100 each time the list nears
+//     the end (react-window v2 onRowsRendered).
+//   • Real batch mode (cb checkboxes via row + floating BatchActionBar).
+//
+// CSS classes (.inbox-tabs / .filter-pop / .group-header / .filter-option)
+// live in index.css Sprint 12 block.
 
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { List, type RowComponentProps } from 'react-window'
-import { MailQuestion, Paperclip, Star } from 'lucide-react'
+import { Filter, ListChecks, Mail } from 'lucide-react'
 
-import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
-import { useEmailFilter, type EmailFilter, type EmailView } from '@shared/state/email-filter'
+import {
+  ALL_CATEGORIES,
+  ALL_PRIORITIES,
+  useEmailFilter,
+  type EmailCategory,
+  type EmailFilter,
+  type EmailView
+} from '@shared/state/email-filter'
+import { useGroupCollapse, type GroupKey } from '@shared/state/group-collapse'
+import { useBatch } from '@shared/state/batch'
+import { usePinned } from '@shared/state/pinned'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
-import type { EnrichedEmailMeta, ListOpts } from '@shared/api/types'
+import { usePinnedSync } from '@shared/hooks/usePinnedSync'
+import { cleanSnippet } from '@shared/lib/mail_parse'
+import { actionLabelChinese } from '@shared/lib/ai_labels'
+import type { AIPriority, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 
 import { EmailRow } from './EmailRow'
+import { BatchActionBar } from './BatchActionBar'
+
+// ─── Row union ────────────────────────────────────────────────────────
+type ListRow =
+  | { type: 'header'; key: GroupKey; label: string; count: number; collapsed: boolean }
+  | { type: 'email'; email: EnrichedEmailMeta; groupKey: GroupKey }
+  | { type: 'loader' }
 
 interface RowProps {
-  emails: ReadonlyArray<EnrichedEmailMeta>
+  rows: ReadonlyArray<ListRow>
   activeId: number | null
   newIds: ReadonlySet<number>
   onSelect(id: number): void
+  onToggleGroup(key: GroupKey): void
 }
 
 function VirtualRow({
   index,
   style,
-  emails,
+  rows,
   activeId,
   newIds,
-  onSelect
+  onSelect,
+  onToggleGroup
 }: RowComponentProps<RowProps>): React.ReactElement {
-  const email = emails[index]
+  const item = rows[index]
+  if (!item) return <div style={style} />
+  if (item.type === 'loader') {
+    return (
+      <div style={style} className="px-4 py-3 text-center text-meta font-mono text-ink-fg-3">
+        — loading more…
+      </div>
+    )
+  }
+  if (item.type === 'header') {
+    return (
+      <div style={style}>
+        <header
+          className="group-header"
+          role="button"
+          tabIndex={0}
+          aria-expanded={!item.collapsed}
+          onClick={() => onToggleGroup(item.key)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onToggleGroup(item.key)
+            }
+          }}
+          data-collapsed={item.collapsed ? 'true' : 'false'}
+        >
+          <svg className="group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+          {item.key === 'pinned' && (
+            <svg className="group-pin-glyph" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z" />
+            </svg>
+          )}
+          <span>{item.label}</span>
+          <span className="group-count">{item.count}</span>
+        </header>
+      </div>
+    )
+  }
   return (
     <div style={style}>
       <EmailRow
-        email={email}
-        selected={email.internal_id === activeId}
-        isNew={newIds.has(email.internal_id)}
-        onSelect={() => onSelect(email.internal_id)}
+        email={item.email}
+        selected={item.email.internal_id === activeId}
+        isNew={newIds.has(item.email.internal_id)}
+        onSelect={() => onSelect(item.email.internal_id)}
       />
     </div>
   )
 }
 
-function rowHeight(index: number, { emails }: RowProps): number {
-  // Sprint 10 user-acceptance — Sprint 2 height was 90/112 but the M-4
-  // chip tightening (text-meta snippet + tighter chip padding) shrunk the
-  // real content height. Old constants left ~16-22px of dead space per
-  // row and tripped the "rows overlap" perception users reported.
-  // New: py-3 (24) + header (20) + subject (20) + chip row (mt-1.5 = 22)
-  // = 86 base; +snippet (text-meta ≈ 16 + mt-0.5 = 18) = 104.
-  const e = emails[index]
-  return e?.snippet ? 104 : 86
+function rowHeight(index: number, { rows }: RowProps): number {
+  const r = rows[index]
+  if (!r) return 28
+  if (r.type === 'header') return 28
+  if (r.type === 'loader') return 44
+  const e = r.email
+  const snippetReal = cleanSnippet(e.snippet)
+  const hasSnippet = Boolean(snippetReal)
+  const hasAiStrip = Boolean(
+    e.ai_priority ||
+    actionLabelChinese(e.ai_action) ||
+    e.sync_status === 'failed' ||
+    e.sync_status === 'dead_letter'
+  )
+  if (hasSnippet && hasAiStrip) return 100
+  if (hasSnippet) return 84
+  if (hasAiStrip) return 78
+  return 60
 }
 
-function applyFilter(
+function applyChipFilter(
   filter: EmailFilter,
   rows: ReadonlyArray<EnrichedEmailMeta>
 ): EnrichedEmailMeta[] {
@@ -78,61 +154,133 @@ function applyFilter(
   }
 }
 
-interface FilterChipProps {
-  active: boolean
-  icon: React.ReactNode
-  /** Accessibility / tooltip label. Not rendered visually since Sprint 10
-   *  dropped chip text to fit the 340px column without wrapping. */
-  label: string
-  count: number
-  onClick(): void
+// Focused / Other split is purely priority-driven now — LLM CATEGORY_ENUM
+// has no "low-signal" bucket, so we use `ai_priority === 'low'` as the
+// authoritative signal. Rows without an LLM run (ai_priority === null) stay
+// in Focused so newly-arrived mail never silently lands in Other.
+function applyTab(
+  tab: 'focused' | 'other',
+  rows: ReadonlyArray<EnrichedEmailMeta>
+): EnrichedEmailMeta[] {
+  if (tab === 'other') return rows.filter((r) => r.ai_priority === 'low')
+  return rows.filter((r) => r.ai_priority !== 'low')
 }
 
-// Sprint 10 user-acceptance — text labels caused the chip strip to wrap
-// at 340px column width (real user complaint). Compressed to icon + count
-// only; tooltip preserves the verbal cue.
-function FilterChip({ active, icon, label, count, onClick }: FilterChipProps): React.ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      className={cn(
-        'flex items-center gap-1 px-1.5 py-1 rounded border transition-colors duration-fast',
-        active
-          ? 'text-coral bg-coral/15 border-coral/30 hover:bg-coral/20'
-          : 'text-ink-fg-1 border-transparent hover:text-ink-fg hover:bg-ink-3'
-      )}
-    >
-      <span className="shrink-0 grid place-items-center w-3 h-3">{icon}</span>
-      <span
-        className={cn('text-meta font-mono tabular-nums', active ? 'text-coral' : 'text-ink-fg-2')}
-      >
-        {count}
-      </span>
-    </button>
-  )
+/** Strict literal match against LLM CATEGORY_ENUM — `email.ai_category`
+ *  is the verbatim emoji-prefixed Chinese label so `Set.has()` works. */
+function categoryOf(e: EnrichedEmailMeta): EmailCategory | null {
+  if (!e.ai_category) return null
+  return e.ai_category as EmailCategory
 }
 
-// Sprint 11 V1.4 — view → list-query opts. The four sidebar MAILBOXES rows
-// (收件箱/发件箱/已标旗/所有邮件) are now the primary list selector;
-// CommandPalette's setActiveMailbox still drives `useMailbox.active` for
-// StatusBar display, but the query itself runs off `view`.
-function listOptsForView(view: EmailView): ListOpts {
-  if (view === 'inbox') return { mailbox: '收件箱', limit: 100 }
-  if (view === 'outbox') return { mailbox: '发件箱', limit: 100 }
-  if (view === 'flagged') return { isFlagged: true, limit: 100 }
-  return { limit: 100 }
+function applyMultiFilter(
+  rows: ReadonlyArray<EnrichedEmailMeta>,
+  priorities: ReadonlySet<AIPriority>,
+  categories: ReadonlySet<EmailCategory>
+): EnrichedEmailMeta[] {
+  const fullPri = priorities.size === ALL_PRIORITIES.length
+  const fullCat = categories.size === ALL_CATEGORIES.length
+  if (fullPri && fullCat) return rows.slice()
+  return rows.filter((r) => {
+    if (!fullPri) {
+      if (r.ai_priority === null || !priorities.has(r.ai_priority)) return false
+    }
+    if (!fullCat) {
+      // Unclassified rows (no LLM run yet) are kept regardless of category
+      // selection — hiding them would make newly-arrived mail invisible
+      // until the LLM catches up.
+      const c = categoryOf(r)
+      if (c !== null && !categories.has(c)) return false
+    }
+    return true
+  })
 }
 
-function headerKeyForView(view: EmailView): string {
-  if (view === 'inbox') return 'nav.inbox'
-  if (view === 'outbox') return 'nav.outbox'
-  if (view === 'flagged') return 'nav.flagged'
-  return 'nav.allMail'
+// ─── Date-grouping ────────────────────────────────────────────────────
+function startOfDay(d: Date): Date {
+  const x = new Date(d)
+  x.setHours(0, 0, 0, 0)
+  return x
 }
+
+function partitionByDate(
+  emails: ReadonlyArray<EnrichedEmailMeta>,
+  pinnedSet: ReadonlySet<number>
+): Record<GroupKey, EnrichedEmailMeta[]> {
+  const now = new Date()
+  const today = startOfDay(now)
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const dayMon = (today.getDay() + 6) % 7
+  const weekStart = new Date(today)
+  weekStart.setDate(today.getDate() - dayMon)
+  const lastWeekStart = new Date(weekStart)
+  lastWeekStart.setDate(weekStart.getDate() - 7)
+
+  const buckets: Record<GroupKey, EnrichedEmailMeta[]> = {
+    pinned: [],
+    today: [],
+    yesterday: [],
+    thisWeek: [],
+    lastWeek: [],
+    older: []
+  }
+
+  for (const e of emails) {
+    if (pinnedSet.has(e.internal_id)) {
+      buckets.pinned.push(e)
+      continue
+    }
+    if (!e.date_received) {
+      buckets.older.push(e)
+      continue
+    }
+    const d = new Date(e.date_received)
+    if (d >= today) buckets.today.push(e)
+    else if (d >= yesterday) buckets.yesterday.push(e)
+    else if (d >= weekStart) buckets.thisWeek.push(e)
+    else if (d >= lastWeekStart) buckets.lastWeek.push(e)
+    else buckets.older.push(e)
+  }
+  return buckets
+}
+
+function flattenGroups(
+  buckets: Record<GroupKey, EnrichedEmailMeta[]>,
+  labels: Record<GroupKey, string>,
+  collapsedOf: (key: GroupKey) => boolean,
+  appendLoader: boolean
+): ListRow[] {
+  const order: GroupKey[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'lastWeek', 'older']
+  const out: ListRow[] = []
+  for (const key of order) {
+    const group = buckets[key]
+    if (group.length === 0) continue
+    const collapsed = collapsedOf(key)
+    out.push({
+      type: 'header',
+      key,
+      label: labels[key],
+      count: group.length,
+      collapsed
+    })
+    if (collapsed) continue
+    for (const e of group) out.push({ type: 'email', email: e, groupKey: key })
+  }
+  if (appendLoader) out.push({ type: 'loader' })
+  return out
+}
+
+// ─── List query opts per Sidebar view ────────────────────────────────
+function listOptsForView(view: EmailView, limit: number): ListOpts {
+  if (view === 'inbox') return { mailbox: '收件箱', limit }
+  if (view === 'outbox') return { mailbox: '发件箱', limit }
+  if (view === 'flagged') return { isFlagged: true, limit }
+  return { limit }
+}
+
+const PAGE_SIZE = 100
+const MAX_PAGES = 30 // safety cap — 3000 rows is enough for visual scrolling
 
 export function EmailList(): React.ReactElement {
   const { t } = useTranslation()
@@ -140,39 +288,112 @@ export function EmailList(): React.ReactElement {
   const activeMailbox = useMailbox((s) => s.active)
   const activeId = useActiveEmail((s) => s.activeInternalId)
   const setActive = useActiveEmail((s) => s.setActive)
-  // Sprint 10 user-acceptance — filter state lifted to zustand so the
-  // Sidebar "已标旗" virtual entry can flip it on click.
   const filter = useEmailFilter((s) => s.filter)
   const setFilter = useEmailFilter((s) => s.setFilter)
   const view = useEmailFilter((s) => s.view)
-  const headerLabel = t(headerKeyForView(view))
+  const tab = useEmailFilter((s) => s.tab)
+  const setTab = useEmailFilter((s) => s.setTab)
+  const selectedPriorities = useEmailFilter((s) => s.selectedPriorities)
+  const selectedCategories = useEmailFilter((s) => s.selectedCategories)
+  const togglePriority = useEmailFilter((s) => s.togglePriority)
+  const toggleCategory = useEmailFilter((s) => s.toggleCategory)
+  const setPriorities = useEmailFilter((s) => s.setPriorities)
+  const setCategories = useEmailFilter((s) => s.setCategories)
+  const allPrioritiesSelected = useEmailFilter((s) => s.allPrioritiesSelected)
+  const allCategoriesSelected = useEmailFilter((s) => s.allCategoriesSelected)
+  const resetAll = useEmailFilter((s) => s.resetAll)
 
+  // Subscribe to the `collapsed` map itself (not the `isCollapsed` accessor
+  // function — the function reference is stable across `toggle()` calls so
+  // useMemo dependants would never re-flatten on a click).
+  const collapsedMap = useGroupCollapse((s) => s.collapsed)
+  const toggleGroup = useGroupCollapse((s) => s.toggle)
+  const isCollapsed = useCallback(
+    (k: GroupKey): boolean => collapsedMap[k] === true,
+    [collapsedMap]
+  )
+  // Keep `usePinned` mirror in sync with the SQLite-backed pinned list.
+  // Mount-side IPC poll (10s) + invalidation after togglePin — no
+  // localStorage path; switching machines / windows reconciles.
+  usePinnedSync()
+  const pinnedList = usePinned((s) => s.pinned)
+  const pinnedSet = useMemo(() => new Set<number>(pinnedList), [pinnedList])
+
+  const batchMode = useBatch((s) => s.mode)
+  const enterBatch = useBatch((s) => s.enter)
+  const exitBatch = useBatch((s) => s.exit)
+
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [pageCount, setPageCount] = useState(1)
+  // React 19 "Adjusting state on prop change" pattern — paging resets on
+  // view transition without scheduling an effect (see EmailDetail.tsx for
+  // the same pattern).
+  const [lastView, setLastView] = useState(view)
+  if (lastView !== view) {
+    setLastView(view)
+    setPageCount(1)
+  }
+  // Sprint 12.6 user-feedback — outside-click previously checked the whole
+  // header container, which meant clicking on the inbox tabs / batch button
+  // inside the header kept the popover open. We now scope the "inside"
+  // check to just the popover + its trigger button, so clicking anywhere
+  // else (header whitespace, list rows, status bar, …) closes it.
+  const filterTriggerRef = useRef<HTMLButtonElement>(null)
+  const filterPopoverRef = useRef<HTMLDivElement>(null)
+
+  // Outside-click + Esc → close filter popover
+  useEffect(() => {
+    if (!filterOpen) return
+    function onClickAway(ev: MouseEvent): void {
+      const target = ev.target as Node | null
+      if (!target) return
+      if (filterPopoverRef.current?.contains(target)) return
+      if (filterTriggerRef.current?.contains(target)) return
+      setFilterOpen(false)
+    }
+    function onKey(ev: KeyboardEvent): void {
+      if (ev.key === 'Escape') setFilterOpen(false)
+    }
+    document.addEventListener('mousedown', onClickAway)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClickAway)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [filterOpen])
+
+  // Sprint 12.5 — pageCount drives the LIMIT clause; offset=0 because the
+  // backend sorts by date_received DESC and we re-fetch the full window.
+  // SQLite read is ~4ms per page so re-querying is cheaper than maintaining
+  // a useInfiniteQuery cursor chain in the renderer.
+  const fetchLimit = Math.min(pageCount * PAGE_SIZE, MAX_PAGES * PAGE_SIZE)
   const { data, isLoading, isError, error } = useQuery({
-    // `activeMailbox` is included in the key so a CommandPalette mailbox
-    // switch (which sets useMailbox but not view) still re-queries — keeps
-    // the inbox/outbox virtual views responsive to either mutation source.
-    queryKey: ['emails', view, activeMailbox],
-    queryFn: () => mailApi.email.listEnriched(listOptsForView(view)),
+    queryKey: ['emails', view, activeMailbox, fetchLimit],
+    queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit)),
     refetchInterval: 5000,
     refetchIntervalInBackground: false
   })
 
   const all = useMemo(() => data ?? [], [data])
-  const filtered = useMemo(() => applyFilter(filter, all), [filter, all])
+  const tabFiltered = useMemo(() => applyTab(tab, all), [tab, all])
+  const chipFiltered = useMemo(() => applyChipFilter(filter, tabFiltered), [filter, tabFiltered])
+  const filtered = useMemo(
+    () => applyMultiFilter(chipFiltered, selectedPriorities, selectedCategories),
+    [chipFiltered, selectedPriorities, selectedCategories]
+  )
   const orderedIds = useMemo(() => filtered.map((r) => r.internal_id), [filtered])
 
-  const allIds = useMemo(() => all.map((r) => r.internal_id), [all])
-  const newIds = useNewlyAddedIds(allIds)
+  // Limit useNewlyAddedIds to the first page so paginated reads don't make
+  // the entire newly-loaded slab flash "NEW".
+  const firstPageIds = useMemo(() => allIdsFirstPage(all), [all])
+  const newIds = useNewlyAddedIds(firstPageIds)
 
-  // Stale-id recovery (mailbox switch).
   const firstId = orderedIds[0]
   if (
     firstId !== undefined &&
     (activeId === null || !orderedIds.includes(activeId)) &&
     activeId !== firstId
   ) {
-    // queueMicrotask defers the setActive past current render so we don't
-    // trigger the "setState in render" warning.
     queueMicrotask(() => setActive(firstId))
   }
 
@@ -190,58 +411,247 @@ export function EmailList(): React.ReactElement {
     return { all: all.length, unread, flagged, failed }
   }, [all])
 
-  const newCount = newIds.size
+  // Per-category live count (for the filter popover hint).
+  const categoryCounts = useMemo(() => {
+    const out: Record<EmailCategory, number> = {
+      '💼 产品管理': 0,
+      '🤝 会议通知': 0,
+      '🛠️ 技术讨论': 0,
+      '👥 团队协作': 0,
+      '📊 项目管理': 0,
+      '🔔 系统通知': 0,
+      '🌐 外部沟通': 0
+    }
+    for (const e of all) {
+      const c = categoryOf(e)
+      if (c !== null) out[c] += 1
+    }
+    return out
+  }, [all])
+  const priorityCounts = useMemo(() => {
+    const out: Record<AIPriority, number> = {
+      critical: 0,
+      urgent: 0,
+      important: 0,
+      normal: 0,
+      low: 0
+    }
+    for (const e of all) if (e.ai_priority) out[e.ai_priority] += 1
+    return out
+  }, [all])
+
+  const groupLabels: Record<GroupKey, string> = useMemo(
+    () => ({
+      pinned: t('emailList.group.pinned'),
+      today: t('emailList.group.today'),
+      yesterday: t('emailList.group.yesterday'),
+      thisWeek: t('emailList.group.thisWeek'),
+      lastWeek: t('emailList.group.lastWeek'),
+      older: t('emailList.group.older')
+    }),
+    [t]
+  )
+
+  const buckets = useMemo(() => partitionByDate(filtered, pinnedSet), [filtered, pinnedSet])
+
+  // Show the loader sentinel when we still have headroom (no end-of-data
+  // signal from this query shape — we stop the loader if a fetch returned
+  // less than the requested limit, meaning there are no more rows).
+  const reachedEnd = all.length < fetchLimit
+  const showLoader = !reachedEnd && pageCount < MAX_PAGES
+
+  const rows = useMemo(
+    () => flattenGroups(buckets, groupLabels, isCollapsed, showLoader),
+    [buckets, groupLabels, isCollapsed, showLoader]
+  )
+
+  const priActive = !allPrioritiesSelected()
+  const catActive = !allCategoriesSelected()
+  const filterActive = filter !== 'all' || priActive || catActive
+
+  const handleRowsRendered = useCallback(
+    (range: { stopIndex: number }) => {
+      // Load next page when we're within 8 rows of the rendered bottom.
+      if (range.stopIndex >= rows.length - 8 && showLoader) {
+        setPageCount((c) => Math.min(c + 1, MAX_PAGES))
+      }
+    },
+    [rows.length, showLoader]
+  )
+
+  const visibleIds = useMemo(() => orderedIds, [orderedIds])
 
   return (
     <section
       aria-label="email-list"
-      className="w-[340px] shrink-0 bg-ink-2 border-r border-ink-border flex flex-col min-h-0"
+      className="w-[340px] shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
     >
-      {/* Header */}
-      <header className="px-4 pt-3 pb-2.5 border-b border-ink-border-soft">
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-lead font-semibold text-ink-fg tracking-tight">{headerLabel}</h1>
-          <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
-            {counts.unread} unread · {counts.all} total
+      {/* Header — Focused/Other tabs · batch + filter cluster · meta line */}
+      <div className="relative px-3 pt-3 pb-2.5 border-b border-ink-border-soft">
+        <div className="flex items-center justify-between gap-2">
+          <div className="inbox-tabs" role="tablist" aria-label={t('list.tab.aria')}>
+            <button
+              type="button"
+              className={tab === 'focused' ? 'inbox-tab is-active' : 'inbox-tab'}
+              role="tab"
+              aria-selected={tab === 'focused'}
+              onClick={() => setTab('focused')}
+            >
+              {t('list.tab.focused')}
+            </button>
+            <button
+              type="button"
+              className={tab === 'other' ? 'inbox-tab is-active' : 'inbox-tab'}
+              role="tab"
+              aria-selected={tab === 'other'}
+              onClick={() => setTab('other')}
+            >
+              {t('list.tab.other')}
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className={
+                batchMode === 'on'
+                  ? 'w-7 h-7 rounded-md text-coral bg-coral/10 flex items-center justify-center transition-colors duration-fast'
+                  : 'w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast'
+              }
+              title={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
+              aria-label={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
+              aria-pressed={batchMode === 'on'}
+              onClick={() => (batchMode === 'on' ? exitBatch() : enterBatch())}
+            >
+              <ListChecks size={13} strokeWidth={2} />
+            </button>
+            <button
+              ref={filterTriggerRef}
+              type="button"
+              className="filter-btn w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast"
+              title={t('list.filter.button')}
+              aria-label={t('list.filter.button')}
+              aria-haspopup="true"
+              aria-expanded={filterOpen}
+              aria-controls="filter-pop"
+              data-active={filterActive ? 'true' : 'false'}
+              onClick={() => setFilterOpen((o) => !o)}
+            >
+              <Filter size={13} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2 flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+          <span className="tabular-nums">
+            {counts.unread} {t('list.meta.unread')}
           </span>
+          <span className="text-ink-fg-3">·</span>
+          <span className="tabular-nums">
+            {t('list.meta.total')} {counts.all}
+          </span>
+          {filterActive && (
+            <>
+              <span className="text-ink-fg-3">·</span>
+              <button
+                type="button"
+                className="text-coral hover:text-coral-hover transition-colors duration-fast"
+                onClick={() => {
+                  resetAll()
+                  setFilter('all')
+                }}
+              >
+                {t('list.filter.reset')}
+              </button>
+            </>
+          )}
         </div>
-        <div className="mt-2.5 flex items-center gap-1">
-          <FilterChip
-            active={filter === 'unread'}
-            icon={<span className="w-1.5 h-1.5 rounded-full bg-coral/100" />}
-            label={t('emailList.filter.unread')}
-            count={counts.unread}
-            onClick={() => setFilter(filter === 'unread' ? 'all' : 'unread')}
-          />
-          <FilterChip
-            active={filter === 'flagged'}
-            icon={<Star size={11} strokeWidth={2} className="text-current" />}
-            label={t('emailList.filter.flagged')}
-            count={counts.flagged}
-            onClick={() => setFilter(filter === 'flagged' ? 'all' : 'flagged')}
-          />
-          <FilterChip
-            active={filter === 'failed'}
-            icon={<MailQuestion size={11} strokeWidth={2} className="text-current" />}
-            label={t('emailList.filter.failed')}
-            count={counts.failed}
-            onClick={() => setFilter(filter === 'failed' ? 'all' : 'failed')}
-          />
-        </div>
-      </header>
 
-      {/* "N 封新邮件" CTA pill — shows when poll surfaces new ids */}
-      {newCount > 0 && (
-        <button
-          type="button"
-          className="mx-3 mt-2 px-3 py-2 rounded-md bg-ink-3 border border-ink-border hover:border-coral/40 text-ink-fg text-aux font-medium flex items-center justify-center gap-2 transition-colors duration-fast"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-coral/100 dot-pulse" />
-          {t('emailList.newEmailsCta', { n: newCount })}
-        </button>
-      )}
+        {filterOpen && (
+          <div
+            ref={filterPopoverRef}
+            id="filter-pop"
+            className="filter-pop"
+            role="dialog"
+            aria-label={t('list.filter.button')}
+          >
+            <FilterSection
+              title={t('list.filter.status')}
+              onSelectAll={() => setFilter('all')}
+              onClear={() => setFilter('all')}
+            >
+              {(['all', 'unread', 'flagged', 'failed'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className="filter-option"
+                  data-checked={filter === opt ? 'true' : 'false'}
+                  onClick={() => setFilter(opt)}
+                >
+                  <span className="cb-mini" aria-hidden />
+                  <span className="label">
+                    {opt === 'all' ? t('list.filter.all') : t(`emailList.filter.${opt}`)}
+                  </span>
+                  <span className="count tabular-nums">
+                    {opt === 'all' ? counts.all : counts[opt]}
+                  </span>
+                </button>
+              ))}
+            </FilterSection>
 
-      {/* Body */}
+            <FilterSection
+              title={t('list.filter.priority')}
+              onSelectAll={() => setPriorities(new Set(ALL_PRIORITIES))}
+              onClear={() => setPriorities(new Set())}
+            >
+              {ALL_PRIORITIES.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className="filter-option"
+                  data-checked={selectedPriorities.has(p) ? 'true' : 'false'}
+                  onClick={() => togglePriority(p)}
+                >
+                  <span className="cb-mini" aria-hidden />
+                  <span className={`pri-dot ${priDotClass(p)}`} aria-hidden />
+                  <span className="label">{capitalize(p)}</span>
+                  <span className="count tabular-nums">{priorityCounts[p]}</span>
+                </button>
+              ))}
+            </FilterSection>
+
+            <FilterSection
+              title={t('list.filter.category')}
+              onSelectAll={() => setCategories(new Set(ALL_CATEGORIES))}
+              onClear={() => setCategories(new Set())}
+            >
+              {ALL_CATEGORIES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className="filter-option"
+                  data-checked={selectedCategories.has(c) ? 'true' : 'false'}
+                  onClick={() => toggleCategory(c)}
+                >
+                  <span className="cb-mini" aria-hidden />
+                  {/* LLM CATEGORY_ENUM is emoji-prefixed Chinese; we render
+                      the verbatim string so the popover matches what the
+                      backend stores. Future EN locale would translate the
+                      tail of the string, not the leading emoji. */}
+                  <span className="label">{c}</span>
+                  <span className="count tabular-nums">{categoryCounts[c]}</span>
+                </button>
+              ))}
+            </FilterSection>
+          </div>
+        )}
+      </div>
+
+      {/* Sprint 12.6 — removed the "N 封新邮件 · 点击查看" CTA pill. The
+          list already auto-refreshes every 5s (refetchInterval), so newly
+          arrived mail surfaces at the top without any click. The row-level
+          NEW chip (driven by useNewlyAddedIds) still flashes for 2s as a
+          visual "just-arrived" cue. */}
+
       <div className="flex-1 min-h-0">
         {isLoading && <div className="p-6 text-aux text-ink-fg-2 animate-pulse">Loading…</div>}
         {isError && (
@@ -249,28 +659,88 @@ export function EmailList(): React.ReactElement {
             {error instanceof Error ? error.message : String(error)}
           </div>
         )}
-        {!isLoading && !isError && filtered.length === 0 && (
+        {!isLoading && !isError && rows.length === 0 && (
           <div className="px-6 py-12 text-center text-aux text-ink-fg-2">
-            <Paperclip size={20} strokeWidth={1.5} className="inline-block opacity-30 mb-2" />
-            <div>没有可显示的内容</div>
+            <Mail size={20} strokeWidth={1.5} className="inline-block opacity-30 mb-2" />
+            <div>{t('empty.state')}</div>
           </div>
         )}
-        {!isLoading && !isError && filtered.length > 0 && (
+        {!isLoading && !isError && rows.length > 0 && (
           <List<RowProps>
             rowComponent={VirtualRow}
-            rowCount={filtered.length}
+            rowCount={rows.length}
             rowHeight={rowHeight}
             rowProps={{
-              emails: filtered,
+              rows,
               activeId,
               newIds,
-              onSelect: setActive
+              onSelect: setActive,
+              onToggleGroup: toggleGroup
             }}
+            onRowsRendered={handleRowsRendered}
             className="scrollbar-thin"
             style={{ height: '100%' }}
           />
         )}
       </div>
+
+      <BatchActionBar visibleIds={visibleIds} />
     </section>
+  )
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+function allIdsFirstPage(all: ReadonlyArray<EnrichedEmailMeta>): number[] {
+  // Slice the first PAGE_SIZE ids so paginated load-more doesn't flicker
+  // every later row as "newly arrived" (useNewlyAddedIds diffs the array
+  // by membership; appended ids would all read as new).
+  return all.slice(0, PAGE_SIZE).map((r) => r.internal_id)
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+// Priority dot uses the same Tailwind tokens as the EmailRow .pdot states.
+// No raw hex — DESIGN.md §14 #1 routes every chip colour through the
+// `--c-{crit,urg,impt,norm,low}` variables exposed in index.css.
+const PRIORITY_DOT_CLASS: Record<AIPriority, string> = {
+  critical: 'bg-crit',
+  urgent: 'bg-urg',
+  important: 'bg-impt',
+  normal: 'bg-norm',
+  low: 'bg-low'
+}
+function priDotClass(p: AIPriority): string {
+  return PRIORITY_DOT_CLASS[p]
+}
+
+function FilterSection({
+  title,
+  onSelectAll,
+  onClear,
+  children
+}: {
+  title: string
+  onSelectAll: () => void
+  onClear: () => void
+  children: React.ReactNode
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="filter-section">
+      <div className="filter-section-head">
+        <span>{title}</span>
+        <span className="links">
+          <button type="button" onClick={onSelectAll}>
+            {t('list.filter.selectAll')}
+          </button>
+          <button type="button" onClick={onClear}>
+            {t('list.filter.clearLink')}
+          </button>
+        </span>
+      </div>
+      {children}
+    </div>
   )
 }

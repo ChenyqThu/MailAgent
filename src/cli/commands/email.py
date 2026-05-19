@@ -897,3 +897,149 @@ def _resync_batch(
             "target_key": target_key,
         },
     )
+
+
+# ============================================================
+# PIN (v8) — front-end "置顶" persistence
+# ============================================================
+
+def _emit_pin_result(
+    cli: "CliContext",
+    *,
+    internal_id: int,
+    pinned: bool,
+    changed: bool,
+    dry_run: bool,
+) -> None:
+    emit(cli, {
+        "internal_id": internal_id,
+        "is_pinned": pinned,
+        "changed": changed,
+        "dry_run": dry_run,
+    })
+
+
+@app.command("pin")
+def email_pin(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="邮件 internal_id"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只显示将要发生的状态, 不写 SQLite"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """置顶邮件（写 email_metadata.is_pinned=1 + pinned_at=now）。
+
+    Mail.app 没有 pin 概念；该字段仅作本地 / 前端持久化，
+    pm2 mail-sync 主进程不读不写它。Electron 也走同一份 SQLite，
+    所以 CLI 改完前端 5s 内 refetch 自动看到。
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    # v8 schema (is_pinned + pinned_at) is owned by SyncStore.__init__'s
+    # ALTER TABLE migration; touching `cli.sync_store` here makes the pin
+    # command self-sufficient when pm2 mail-sync hasn't been restarted yet
+    # against the v8-aware codebase.
+    _ = cli.sync_store
+    repo = cli.email_repo
+
+    meta = repo.get_metadata(internal_id)
+    if meta is None:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email with internal_id={internal_id} not found",
+            hint="Use 'mailagent email list' to find available IDs",
+        ))
+    already = bool(meta.is_pinned)
+
+    if dry_run:
+        _emit_pin_result(
+            cli,
+            internal_id=internal_id,
+            pinned=True,
+            changed=not already,
+            dry_run=True,
+        )
+        return
+
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    result = repo.set_pin(internal_id, True)
+    if result is None:
+        # race: 写命令之间被删
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email with internal_id={internal_id} disappeared mid-write",
+        ))
+    _emit_pin_result(
+        cli,
+        internal_id=internal_id,
+        pinned=True,
+        changed=not already,
+        dry_run=False,
+    )
+
+
+@app.command("unpin")
+def email_unpin(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="邮件 internal_id"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只显示将要发生的状态, 不写 SQLite"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """取消置顶（写 is_pinned=0, pinned_at=NULL）。"""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    _ = cli.sync_store  # ensure v8 schema (see email_pin docstring)
+    repo = cli.email_repo
+
+    meta = repo.get_metadata(internal_id)
+    if meta is None:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email with internal_id={internal_id} not found",
+        ))
+    was = bool(meta.is_pinned)
+
+    if dry_run:
+        _emit_pin_result(
+            cli,
+            internal_id=internal_id,
+            pinned=False,
+            changed=was,
+            dry_run=True,
+        )
+        return
+
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    repo.set_pin(internal_id, False)
+    _emit_pin_result(
+        cli,
+        internal_id=internal_id,
+        pinned=False,
+        changed=was,
+        dry_run=False,
+    )
+
+
+@app.command("list-pinned")
+def email_list_pinned(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """列出当前所有置顶邮件的 internal_id（pinned_at DESC）。
+
+    用于前端启动时拉取置顶列表（取代 localStorage）。
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    _ = cli.sync_store  # ensure v8 schema (see email_pin docstring)
+    repo = cli.email_repo
+    ids = repo.list_pinned_ids()
+    if cli.output.lower() == "text":
+        for iid in ids:
+            print(iid)
+    else:
+        emit(cli, {"pinned_ids": ids, "count": len(ids)})

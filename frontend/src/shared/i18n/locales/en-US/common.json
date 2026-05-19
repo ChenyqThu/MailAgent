@@ -8,11 +8,43 @@
     "sent": "Sent"
   },
   "emailList": {
-    "newEmailsCta": "{n, plural, =1 {1 new message · click to view} other {# new messages · click to view}}",
     "filter": {
       "unread": "Unread",
       "flagged": "Flagged",
       "failed": "Sync failed"
+    },
+    "group": {
+      "pinned": "Pinned",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "thisWeek": "Earlier this week",
+      "lastWeek": "Last week",
+      "older": "Older"
+    }
+  },
+  "list": {
+    "tab": {
+      "focused": "Focused",
+      "other": "Other",
+      "aria": "Inbox view"
+    },
+    "meta": {
+      "unread": "unread",
+      "total": "total"
+    },
+    "batch": {
+      "enter": "Enter batch mode",
+      "exit": "Exit batch mode"
+    },
+    "filter": {
+      "button": "Filter mail",
+      "status": "Status",
+      "priority": "Priority",
+      "category": "Category",
+      "all": "All",
+      "reset": "Reset",
+      "selectAll": "All",
+      "clearLink": "Clear"
     }
   },
   "emailDetail": {
@@ -63,15 +95,21 @@
     "cancel": "Cancel"
   },
   "batchbar": {
+    "aria": "Bulk actions",
     "selection": "{n, plural, =1 {1 selected} other {# selected}}",
+    "selectAll": "Select all {n}",
+    "clear": "Clear",
     "aiClassify": "AI Classify",
     "aiDraft": "AI Draft Reply",
     "translate": "Translate",
     "markRead": "Mark Read",
+    "toggleFlag": "Toggle flag",
+    "markDone": "Mark Done",
     "archive": "Archive",
     "resync": "Resync Notion",
     "estimate": "~{seconds}s · ${cost}",
-    "exit": "Exit (Esc)"
+    "exit": "Exit (Esc)",
+    "exitTooltip": "Exit batch mode (Esc)"
   },
   "batchToast": {
     "running": "{op}: {done}/{total}",

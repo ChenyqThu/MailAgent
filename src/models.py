@@ -35,6 +35,9 @@ class Email:
     thread_id: Optional[str] = None  # 线程标识（从 References/In-Reply-To 提取）
     mailbox: str = "收件箱"  # 邮箱类型: 收件箱 / 发件箱
     internal_id: Optional[int] = None  # v3: AppleScript id = SQLite ROWID
+    # v9 (2026-05-19): 邮件原生重要性 — Importance: High / X-Priority: 1 / 2
+    # 或 X-MSMail-Priority: High → True；其余 → False。供前端 ❗ 角标使用。
+    is_important: bool = False
 
     def __post_init__(self):
         """验证数据"""

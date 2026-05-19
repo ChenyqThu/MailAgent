@@ -2,87 +2,105 @@
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-read-normal 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row email-row is-selected"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="true"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="true"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg-1"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-2"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg-1"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -91,19 +109,140 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>
@@ -111,88 +250,105 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selected-unread-normal 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row email-row is-selected"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="false"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="false"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-coral/100"
-      title="Unread"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg font-medium"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-1"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg font-semibold"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -201,19 +357,140 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>
@@ -221,87 +498,105 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-read-normal 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row email-row"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="true"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="true"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg-1"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-2"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg-1"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -310,19 +605,140 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>
@@ -330,93 +746,105 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unselected-unread-failed 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row email-row"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="false"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="false"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-fail"
-      title="Unread"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg font-medium"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-1"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-micro font-mono uppercase tracking-wide text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
-        >
-          SYNC FAILED
-        </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg font-semibold"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -425,19 +853,150 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-failed ai-bit"
+      >
+        SYNC FAILED
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>
@@ -445,87 +1004,105 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-read-normal 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row email-row is-selected"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="true"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="true"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg-1"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-2"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg-1"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -534,19 +1111,140 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>
@@ -554,88 +1252,105 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · selected-unread-normal 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast row-selected bg-ink-4"
+  class="row email-row is-selected"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="false"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="false"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-coral/100"
-      title="Unread"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg font-medium"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-1"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg font-semibold"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -644,19 +1359,140 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>
@@ -664,87 +1500,105 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-read-normal 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row email-row"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="true"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="true"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg-1"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-2"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg-1"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -753,19 +1607,140 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>
@@ -773,93 +1748,105 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
 
 exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unselected-unread-failed 1`] = `
 <article
-  class="row px-4 py-2 border-b border-ink-border-soft cursor-pointer transition-colors duration-fast hover:bg-ink-3"
+  class="row email-row"
+  data-flag="none"
+  data-important="true"
   data-internal-id="101"
+  data-pinned="false"
+  data-priority="crit"
+  data-read="false"
   role="button"
   tabindex="0"
 >
-  <div
-    class="flex items-start gap-2.5"
+  <span
+    aria-checked="false"
+    aria-hidden="true"
+    class="cb"
+    role="checkbox"
+  />
+  <span
+    aria-hidden="true"
+    class="avatar avatar-5"
   >
-    <span
-      aria-hidden="false"
-      class="mt-1.5 shrink-0 w-1.5 h-1.5 rounded-full bg-fail"
-      title="Unread"
-    />
+    AL
+  </span>
+  <div
+    class="row-content"
+  >
     <div
-      class="min-w-0 flex-1"
+      class="row-top"
     >
-      <div
-        class="flex items-center gap-2 mb-0.5"
+      <span
+        class="sender-line"
       >
         <span
-          class="truncate flex-1 text-ink-fg font-medium"
+          class="sender-name"
         >
-          <span>
-            Alice
-          </span>
-          <span
-            class="text-ink-fg-3"
-          >
-             · 
-          </span>
-          <span
-            class="text-ink-fg-1"
-          >
-            alice@example.com
-          </span>
+          Alice
         </span>
         <span
+          class="recipient-hint"
+        >
+          , 
+          alice@example.com
+        </span>
+         
+        <span
           aria-label="English"
-          class="lang-pip shrink-0"
+          class="lang-pip"
         >
           EN
         </span>
-        <span
-          class="text-micro font-mono uppercase tracking-wide text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded shrink-0"
-        >
-          SYNC FAILED
-        </span>
-        <span
-          class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums"
-        >
-          2026/05/14 18:00
-        </span>
-      </div>
-      <div
-        class="truncate text-ink-fg font-semibold"
+      </span>
+      <span
+        class="row-time"
+      >
+        2026/05/14 18:00
+      </span>
+    </div>
+    <div
+      class="subject-row"
+    >
+      <span
+        class="subject-text"
       >
         redis timeout debug session
-      </div>
-      <div
-        class="text-aux text-ink-fg-2 line-clamp-1 mt-0.5"
+      </span>
+      <span
+        class="row-actions"
       >
-        Hey, the redis client keeps timing out after 5s.
-      </div>
-      <div
-        class="flex items-center gap-1.5 mt-1"
-      >
-        <span
-          class="inline-flex items-center gap-1 font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border text-crit bg-crit/15 border-crit/30"
-        >
-          <span
-            aria-hidden="true"
-            class="w-1.5 h-1.5 rounded-full bg-crit"
-          />
-          Critical
-        </span>
-        <span
-          class="inline-flex items-center text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border border-ink-border text-ink-fg-1 bg-ink-3"
-          title="需要回复"
-        >
-          REPLY
-        </span>
-        <span
-          class="ml-auto flex items-center gap-1 text-ink-fg-2"
+        <button
+          aria-label="Toggle flag"
+          class="ricon ricon-flag"
+          data-flag-state="0"
+          type="button"
         >
           <svg
-            aria-hidden="true"
-            class="lucide lucide-paperclip"
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <path
+              d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
+            />
+            <line
+              x1="4"
+              x2="4"
+              y1="22"
+              y2="15"
+            />
+          </svg>
+        </button>
+        <button
+          aria-label="Toggle pin"
+          aria-pressed="false"
+          class="ricon ricon-pin"
+          type="button"
+        >
+          <svg
             fill="none"
             height="11"
             stroke="currentColor"
@@ -868,19 +1855,150 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
             stroke-width="2"
             viewBox="0 0 24 24"
             width="11"
-            xmlns="http://www.w3.org/2000/svg"
           >
             <path
-              d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+              d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
             />
           </svg>
-          <span
-            class="text-meta font-mono tabular-nums"
+        </button>
+        <span
+          aria-label="2 attachments"
+          class="ricon ricon-attach"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
           >
-            2
-          </span>
+            <path
+              d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+            />
+          </svg>
         </span>
-      </div>
+        <span
+          aria-label="Important"
+          class="ricon ricon-important"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <line
+              x1="12"
+              x2="12"
+              y1="7"
+              y2="13"
+            />
+            <circle
+              cx="12"
+              cy="17"
+              fill="currentColor"
+              r="1"
+              stroke="none"
+            />
+          </svg>
+        </span>
+        <button
+          aria-label="Archive"
+          class="ricon ricon-delete"
+          type="button"
+        >
+          <svg
+            fill="none"
+            height="11"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="11"
+          >
+            <polyline
+              points="3 6 5 6 21 6"
+            />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+            />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div
+      class="body-preview"
+    >
+      Hey, the redis client keeps timing out after 5s.
+    </div>
+    <div
+      class="ai-strip"
+    >
+      <span
+        aria-hidden="true"
+        class="pdot"
+      />
+      <span
+        class="pname"
+      >
+        CRITICAL
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-reply ai-bit"
+        title="需要回复"
+      >
+        需要回复
+      </span>
+      <span
+        class="sep"
+      >
+        ·
+      </span>
+      <span
+        class="ai-failed ai-bit"
+      >
+        SYNC FAILED
+      </span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-ink-fg-3"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-paperclip"
+          fill="none"
+          height="10"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="10"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"
+          />
+        </svg>
+        <span
+          class="tabular-nums"
+        >
+          2
+        </span>
+      </span>
     </div>
   </div>
 </article>

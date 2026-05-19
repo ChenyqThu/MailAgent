@@ -94,9 +94,7 @@ export function ThemePickerPopover(): React.ReactElement {
           }
         >
           <div className="px-3 pt-2 pb-1.5 border-b border-ink-border-soft">
-            <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2">
-              Theme
-            </div>
+            <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Theme</div>
           </div>
           <div className="py-1">
             {THEME_OPTIONS.map((opt) => {

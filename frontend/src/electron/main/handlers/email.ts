@@ -76,6 +76,8 @@ interface EmailMetadataRow {
   mailbox: string | null
   is_read: number
   is_flagged: number
+  // v9 — 邮件原生重要性（Importance / X-Priority 头部归一化）。
+  is_important: number | null
   sync_status: string | null
   notion_page_id: string | null
   notion_thread_id: string | null
@@ -290,6 +292,7 @@ function buildListWhere(opts: ListOpts): WhereBuild {
 const LIST_COLS = `
     internal_id, message_id, thread_id, subject, sender, sender_name,
     to_addr, cc_addr, date_received, mailbox, is_read, is_flagged,
+    is_important,
     sync_status, notion_page_id, notion_thread_id, sync_error, retry_count
 `
 
@@ -456,6 +459,7 @@ interface EnrichedRow extends EmailMetadataRow {
   lang_raw: string | null
   priority_raw: string | null
   action_raw: string | null
+  category_raw: string | null
   attach_count: number | null
 }
 
@@ -481,6 +485,7 @@ interface AIFieldsRow extends EmailMetadataRow {
 const ENRICHED_LIST_COLS = `
     m.internal_id, m.message_id, m.thread_id, m.subject, m.sender, m.sender_name,
     m.to_addr, m.cc_addr, m.date_received, m.mailbox, m.is_read, m.is_flagged,
+    m.is_important,
     m.sync_status, m.notion_page_id, m.notion_thread_id, m.sync_error, m.retry_count
 `
 
@@ -489,6 +494,7 @@ const ENRICHED_EXTRA_COLS = `
     json_extract(l.labels_json, '$.language')   AS lang_raw,
     json_extract(l.labels_json, '$.priority')   AS priority_raw,
     json_extract(l.labels_json, '$.action_type') AS action_raw,
+    json_extract(l.labels_json, '$.category')   AS category_raw,
     (SELECT COUNT(*) FROM email_attachment a
      WHERE a.internal_id = m.internal_id AND a.is_inline = 0) AS attach_count
 `
@@ -509,10 +515,16 @@ function buildEnrichedWhere(opts: ListOpts): WhereBuild {
 function shapeEnrichedItem(row: EnrichedRow): EnrichedEmailMeta {
   return {
     ...shapeListItem(row),
+    // v9 — 邮件原生 Importance/X-Priority 头部归一化（reader._parse_importance），
+    // 给 EmailRow 的 ❗ 角标用，不再从 ai_priority 推断。
+    is_important: asBool(row.is_important),
     snippet: row.snippet_raw && row.snippet_raw.length > 0 ? row.snippet_raw : null,
     lang: mapLanguage(row.lang_raw),
     ai_priority: mapPriority(row.priority_raw),
     ai_action: row.action_raw ?? null,
+    // LLM CATEGORY_ENUM literal (e.g. "💼 产品管理"); pass through verbatim so
+    // the filter popover can match against the same string the LLM emitted.
+    ai_category: row.category_raw ?? null,
     attach_count: row.attach_count ?? 0
   }
 }
@@ -597,6 +609,29 @@ export function getAIFields(internalId: number): AIFields | null {
   }
 }
 
+// ---- Pin (v8) read path — front-end "置顶" persistence -------------------
+//
+// SQLite is the source of truth (CLI writes via `mailagent email pin/unpin`
+// in write_ops.ts; pm2 mail-sync never touches is_pinned, so there is no
+// race). The renderer can SELECT directly through better-sqlite3 since
+// the connection is readonly — that path is fast and avoids forking a
+// `mailagent email list-pinned` subprocess on every 10s refetch.
+
+interface PinRow {
+  internal_id: number
+}
+
+export function listPinnedEmailIds(): number[] {
+  const db = getDb()
+  const rows = prep(
+    db,
+    `SELECT internal_id FROM email_metadata
+      WHERE is_pinned = 1
+      ORDER BY pinned_at DESC, internal_id DESC`
+  ).all() as PinRow[]
+  return rows.map((r) => r.internal_id)
+}
+
 // ---- IPC wiring -------------------------------------------------------------
 
 export function registerEmailHandlers(): void {
@@ -632,4 +667,9 @@ export function registerEmailHandlers(): void {
   ipcMain.handle('email:listByThread', (_evt, threadId: string | null) =>
     listEmailsByThread(threadId)
   )
+  // v8 — listPinnedIds is a readonly SQLite SELECT, wired here. The
+  // write path (email:pin / email:unpin) lives in write_ops.ts and forks
+  // the `mailagent email pin / unpin` CLI per the renderer-readonly rule
+  // (db.ts comment / REVIEW-LOG C-05).
+  ipcMain.handle('email:listPinnedIds', () => listPinnedEmailIds())
 }

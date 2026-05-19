@@ -26,7 +26,9 @@ export class HttpApi implements MailApi {
     // Sprint 5 §2.2 — V2 web build has no Mail.app on the remote host, so
     // createDraft must round-trip through the local FastAPI which then runs
     // osascript on the LAN host. Wired in V2-Sprint 3.
-    createDraft: () => notImplemented('email.createDraft')
+    createDraft: () => notImplemented('email.createDraft'),
+    pin: () => notImplemented('email.pin'),
+    listPinnedIds: () => notImplemented('email.listPinnedIds')
   }
 
   attachment = {

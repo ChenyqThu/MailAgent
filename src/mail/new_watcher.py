@@ -453,6 +453,13 @@ class NewWatcher:
             # 设置 internal_id（v3 架构）
             email_obj.internal_id = internal_id
 
+            # v9 — 邮件原生重要性（Importance / X-Priority header）落 SQLite，
+            # 给前端 ❗ 角标用。reader._parse_importance 在 parse 时已经填好。
+            if email_obj.is_important:
+                self.sync_store.update_after_fetch(
+                    internal_id, {'is_important': True}
+                )
+
             # 5. 日期过滤：早于 sync_start_date 的邮件不同步到 Notion
             if self.sync_start_date and email_obj.date:
                 email_date = email_obj.date

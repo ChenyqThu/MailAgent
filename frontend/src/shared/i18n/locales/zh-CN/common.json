@@ -8,11 +8,43 @@
     "sent": "已发送"
   },
   "emailList": {
-    "newEmailsCta": "{n, plural, =1 {1 封新邮件 · 点击查看} other {# 封新邮件 · 点击查看}}",
     "filter": {
       "unread": "未读",
       "flagged": "已标旗",
       "failed": "同步失败"
+    },
+    "group": {
+      "pinned": "已固定",
+      "today": "今天",
+      "yesterday": "昨天",
+      "thisWeek": "本周早些时候",
+      "lastWeek": "上周",
+      "older": "更早"
+    }
+  },
+  "list": {
+    "tab": {
+      "focused": "重点",
+      "other": "其他",
+      "aria": "收件箱视图"
+    },
+    "meta": {
+      "unread": "未读",
+      "total": "总计"
+    },
+    "batch": {
+      "enter": "进入批量模式",
+      "exit": "退出批量模式"
+    },
+    "filter": {
+      "button": "过滤邮件",
+      "status": "状态",
+      "priority": "优先级",
+      "category": "类别",
+      "all": "全部",
+      "reset": "清除过滤",
+      "selectAll": "全选",
+      "clearLink": "清除"
     }
   },
   "emailDetail": {
@@ -63,15 +95,21 @@
     "cancel": "取消"
   },
   "batchbar": {
+    "aria": "批量操作",
     "selection": "{n, plural, =1 {已选 1 封} other {已选 # 封}}",
+    "selectAll": "选全部 {n} 封",
+    "clear": "清除",
     "aiClassify": "AI 批量分类",
     "aiDraft": "AI 批量起草",
     "translate": "批量翻译",
     "markRead": "标已读",
+    "toggleFlag": "旗标 / 取消",
+    "markDone": "标记完成",
     "archive": "归档",
     "resync": "重传 Notion",
     "estimate": "预估 ~{seconds}s · ${cost}",
-    "exit": "退出 (Esc)"
+    "exit": "退出 (Esc)",
+    "exitTooltip": "退出批量模式 (Esc)"
   },
   "batchToast": {
     "running": "{op}: {done}/{total}",

@@ -54,21 +54,13 @@ function ToolCallRow({ payload }: { payload: ToolPayload }): React.ReactElement 
   const { t } = useTranslation()
   const status = payload.status ?? 'ok'
   const statusLabel = t(`chat.toolCall.${status}`)
-  const dotColor =
-    status === 'running' ? 'bg-urg animate-pulse' : status === 'error' ? 'bg-fail' : 'bg-ok'
+  const dotKlass = status === 'running' ? 'dot-run' : status === 'error' ? 'dot-err' : 'dot-ok'
+  // Sprint 12 — use the authored .ai-tool-row recipe in index.css so the
+  // monospace pill matches mockup-inbox.html lines 2360-2380 verbatim.
   return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-2 px-2 py-0.5 rounded',
-        'text-micro font-mono text-ink-fg-2 bg-ink-4/50'
-      )}
-      title={payload.detail ?? undefined}
-    >
-      <span
-        className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotColor)}
-        aria-label={statusLabel}
-      />
-      <span className="text-info">→</span>
+    <div className="ai-tool-row" title={payload.detail ?? undefined}>
+      <span className={dotKlass} aria-label={statusLabel} />
+      <span className="arrow">→</span>
       <span>{payload.name ?? 'tool'}</span>
       {payload.durationMs !== undefined && (
         <span className="text-ink-fg-3">· {formatMs(payload.durationMs)}</span>
@@ -91,13 +83,10 @@ function DraftPreviewCard({
     .replace(DRAFT_REPLY_MARKER, '')
     .replace(/^[#:\s]+/m, '')
     .trim()
+  // Sprint 12 — .draft-card recipe (coral ring + faint glow + glass bg)
+  // lives in index.css so the chrome reads as the AI's headline output.
   return (
-    <div
-      className={cn(
-        'rounded-md overflow-hidden my-2',
-        'border border-coral/30 ring-2 ring-coral/5'
-      )}
-    >
+    <div className="draft-card my-2">
       {/* Header — mono "DRAFT REPLY" caption + recipient */}
       <div
         className={cn(
@@ -306,9 +295,7 @@ function AssistantBubble({
       )}
       <div className="text-body text-ink-fg leading-relaxed">
         <TranslatedBody text={message.content || ' '} />
-        {isStreaming && (
-          <span className="inline-block ml-0.5 w-1.5 h-3.5 -mb-0.5 bg-coral/60 animate-pulse" />
-        )}
+        {isStreaming && <span className="cursor-blink" aria-hidden />}
       </div>
       {!isStreaming && <AssistantMessageFooter />}
     </div>
@@ -388,9 +375,12 @@ export function MessageList({ messages, streamingMessageId }: Props): React.Reac
         )
       }
     } else if (m.role === 'system') {
+      // Sprint 12 — flanked-hairline divider per mockup-inbox.html line 2337.
       rendered.push(
-        <div key={m.id} className="px-3 py-2 text-center">
-          <span className={cn(dividerKlass, 'text-ink-fg-3')}>{m.content}</span>
+        <div key={m.id} className="px-3 py-1 flex items-center gap-2">
+          <div className="flex-1 h-px bg-ink-border-soft" />
+          <span className={cn(dividerKlass, 'text-ink-fg-3 shrink-0')}>{m.content}</span>
+          <div className="flex-1 h-px bg-ink-border-soft" />
         </div>
       )
     }

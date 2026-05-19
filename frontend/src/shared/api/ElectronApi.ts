@@ -176,6 +176,21 @@ class ElectronEmailApi implements EmailApi {
     const env = (await invoker()('email:createDraft', opts)) as WriteEnvelope<CreateDraftResult>
     return unwrap(env)
   }
+  async pin(internalId: number, pinned: boolean): Promise<boolean | null> {
+    // Write IPC → envelope. CLI returns {internal_id, is_pinned, changed,
+    // dry_run}; we only surface `is_pinned` (boolean) to the renderer.
+    const env = (await invoker()('email:pin', internalId, pinned)) as WriteEnvelope<{
+      internal_id: number
+      is_pinned: boolean
+      changed: boolean
+      dry_run: boolean
+    } | null>
+    const data = unwrap(env)
+    return data?.is_pinned ?? null
+  }
+  async listPinnedIds(): Promise<number[]> {
+    return (await invoker()('email:listPinnedIds')) as number[]
+  }
 }
 
 class ElectronLlmApi implements LlmApi {

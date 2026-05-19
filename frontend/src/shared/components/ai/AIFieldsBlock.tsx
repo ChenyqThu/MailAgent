@@ -1,18 +1,26 @@
-// mockup-inbox.html line 956+ pattern. The 3-col grid uses `gap-px` on a
-// `bg-ink-border` parent — children with `bg-ink-3` then read as cells
-// separated by 1px hairlines. Header strip has model + cost meta on the
-// right. REVIEW-LOG H-14: V1 ships 8 cells, not 11.
+// Sprint 12 — three-tier layout per mockup-inbox.html lines 2135-2203.
 //
-// Cells:
-//   AI Priority   AI Action     Review Status
-//   Sentiment     Processing    Read
-//   Flagged       Mailbox       Notion
+//   ┌─────────────────────────────────────────────────────────┐
+//   │ aif-head    (icon · "AI Fields · N" · Reviewed · model) │
+//   ├─────────────────────────────────────────────────────────┤
+//   │ aif-summary (coral hero with the AI summary one-liner)  │
+//   ├─────────────────────────────────────────────────────────┤
+//   │ aif-signals (priority dot · action · due · sender)      │
+//   ├─────────────────────────────────────────────────────────┤
+//   │ aif-grid    (3-col 1-line cells — secondary classifiers)│
+//   └─────────────────────────────────────────────────────────┘
+//
+// Data feed: AIFields.labels_raw is freeform JSON from the LLM run; we
+// look up `summary`, `category`, `project`, `language`, `daily_digest_date`,
+// `action_items`, `due_date`, `sla`, `model` keys when present and silently
+// hide cells whose source is null. The CSS lives in mockup index.css
+// (.ai-fields .aif-head / .aif-grid / .aif-cell / .aif-summary / .aif-signals).
 
-import { Cpu, ExternalLink, Sparkles } from 'lucide-react'
+import { Clock, Cpu, ExternalLink, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import type { AIFields, AIPriority } from '@shared/api/types'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
+import type { AIFields, AIPriority } from '@shared/api/types'
 
 interface Props {
   fields: AIFields
@@ -40,72 +48,119 @@ const PRIORITY_LABEL: Record<AIPriority, string> = {
   low: 'Low'
 }
 
-function Cell({
-  label,
-  children,
-  span
-}: {
+function pickString(raw: Record<string, unknown> | null, key: string): string | null {
+  if (!raw) return null
+  const v = raw[key]
+  return typeof v === 'string' && v.trim().length > 0 ? v : null
+}
+function pickNumber(raw: Record<string, unknown> | null, key: string): number | null {
+  if (!raw) return null
+  const v = raw[key]
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+interface CellSpec {
   label: string
-  children: React.ReactNode
-  span?: 1 | 2
-}): React.ReactElement {
+  value: React.ReactNode
+}
+
+function GridCell({ label, value }: CellSpec): React.ReactElement {
   return (
-    <div className={cn('px-3 py-2 bg-ink-3', span === 2 && 'col-span-2')}>
+    <div className="aif-cell px-3.5 py-2.5">
       <div
         className="text-micro font-mono uppercase text-ink-fg-2"
         style={{ letterSpacing: '0.08em' }}
       >
         {label}
       </div>
-      <div className="mt-1 text-aux">{children}</div>
+      <div className="mt-0.5 text-aux text-ink-fg-1 truncate">{value}</div>
     </div>
   )
 }
 
-function Placeholder(): React.ReactElement {
-  return <span className="text-ink-fg-3">—</span>
-}
-
-function YesNo({
-  value,
-  yesTone = 'text-ok'
-}: {
-  value: boolean
-  yesTone?: string
-}): React.ReactElement {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 text-aux font-medium',
-        value ? yesTone : 'text-ink-fg-3'
-      )}
-    >
-      <span
-        className={cn(
-          'inline-block w-1.5 h-1.5 rounded-full',
-          value ? yesTone.replace('text-', 'bg-') : 'bg-ink-fg-3'
-        )}
-      />
-      {value ? 'Yes' : 'No'}
-    </span>
-  )
-}
-
 export function AIFieldsBlock({ fields }: Props): React.ReactElement {
+  const raw = fields.labels_raw
   const reviewed = fields.ai_review_status === 'reviewed'
+  const pending = fields.ai_review_status === 'pending'
+
+  const summary = pickString(raw, 'summary') ?? pickString(raw, 'one_liner')
+  const category = pickString(raw, 'category')
+  const project = pickString(raw, 'project')
+  const language = pickString(raw, 'language')
+  const dailyDigest = pickString(raw, 'daily_digest_date')
+  const due = pickString(raw, 'due_date') ?? pickString(raw, 'sla') ?? pickString(raw, 'due')
+  const model = pickString(raw, 'model')
+  const actionItemsCount = pickNumber(raw, 'action_items') ?? pickNumber(raw, 'action_item_count')
+  const actionLabel = actionLabelChinese(fields.ai_action)
+
+  // Count of non-null fields (for the "AI Fields · N" header pill).
+  const countables = [
+    fields.ai_priority,
+    fields.ai_action,
+    fields.ai_review_status,
+    fields.sentiment,
+    fields.processing_status,
+    summary,
+    category,
+    project,
+    language,
+    dailyDigest,
+    due
+  ]
+  const nonNullCount = countables.filter((v) => v !== null && v !== undefined).length
+
+  const gridCells: CellSpec[] = []
+  if (category) gridCells.push({ label: 'Category', value: category })
+  if (project) gridCells.push({ label: 'Project', value: project })
+  if (fields.sentiment) gridCells.push({ label: 'Sentiment', value: fields.sentiment })
+  if (language) {
+    gridCells.push({
+      label: 'Language',
+      value: <span className="font-mono">{language}</span>
+    })
+  }
+  if (actionItemsCount !== null) {
+    gridCells.push({
+      label: 'Action Items',
+      value: (
+        <span>
+          是 · <span className="font-mono tabular-nums">{actionItemsCount}</span>
+        </span>
+      )
+    })
+  }
+  if (dailyDigest) {
+    gridCells.push({
+      label: 'Daily Digest',
+      value: (
+        <a href="#" className="text-coral hover:text-coral-hover inline-flex items-center gap-1">
+          <span className="font-mono">{dailyDigest}</span>
+          <ExternalLink size={10} strokeWidth={2} />
+        </a>
+      )
+    })
+  }
+  if (fields.processing_status && !category) {
+    // Surface processing status when no other category-ish data exists.
+    gridCells.push({ label: 'Processing', value: fields.processing_status })
+  }
+
   return (
-    <section aria-label="ai-fields" className="rounded-lg border border-ink-border overflow-hidden">
-      {/* Header strip */}
-      <div className="px-3 py-1.5 bg-ink-2 border-b border-ink-border flex items-center justify-between">
+    <section
+      aria-label="ai-fields"
+      className="ai-fields rounded-lg border border-ink-border overflow-hidden"
+    >
+      {/* Header — icon + "AI Fields · N" + reviewed chip + model name (right) */}
+      <div className="aif-head px-4 py-2 border-b border-ink-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={12} strokeWidth={2} className="text-info" />
           <span
-            className="text-meta font-mono uppercase text-ink-fg-1"
+            className="text-meta font-mono uppercase tracking-wider text-ink-fg-1"
             style={{ letterSpacing: '0.06em' }}
           >
-            AI Fields · 8
+            AI Fields · {nonNullCount}
           </span>
-          {fields.ai_review_status && (
+          {(reviewed || pending) && (
             <span
               className={cn(
                 'text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border',
@@ -116,114 +171,92 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 text-meta font-mono text-ink-fg-2">
-          <Sparkles size={11} strokeWidth={2} className="text-ai" />
-          <span>{fields.labels_raw?.model ? String(fields.labels_raw.model) : 'no run'}</span>
-        </div>
+        {model && (
+          <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+            <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
+            <span>{model}</span>
+          </div>
+        )}
       </div>
 
-      {/* Grid · gap-px on bg-ink-border creates 1px hairlines between cells */}
-      <div className="grid grid-cols-3 gap-px bg-ink-border">
-        <Cell label="AI Priority">
-          {fields.ai_priority ? (
+      {/* Summary — coral-tinted hero strip */}
+      {summary && (
+        <div
+          className="aif-summary px-4 py-3 border-b border-ink-border"
+          style={{ background: 'rgb(var(--c-accent) / 0.06)' }}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-1 h-1 rounded-full bg-coral/100" />
+            <span
+              className="text-micro font-mono uppercase tracking-wider text-coral"
+              style={{ letterSpacing: '0.08em' }}
+            >
+              Summary
+            </span>
+          </div>
+          <div className="text-body text-ink-fg leading-snug">{summary}</div>
+        </div>
+      )}
+
+      {/* Signals — priority + action + due + sender(important) */}
+      {(fields.ai_priority || actionLabel || due) && (
+        <div className="aif-signals px-4 py-2.5 border-b border-ink-border flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          {fields.ai_priority && (
             <span
               className={cn(
-                'inline-flex items-center gap-1.5 font-medium',
+                'inline-flex items-center gap-1.5 text-aux font-medium',
                 PRIORITY_TONE[fields.ai_priority]
               )}
             >
               <span className={cn('w-1.5 h-1.5 rounded-full', PRIORITY_DOT[fields.ai_priority])} />
               {PRIORITY_LABEL[fields.ai_priority]}
             </span>
-          ) : (
-            <Placeholder />
           )}
-        </Cell>
-
-        <Cell label="AI Action">
-          {actionLabelChinese(fields.ai_action) ? (
-            <span className="text-ink-fg">{actionLabelChinese(fields.ai_action)}</span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Review Status">
-          {fields.ai_review_status ? (
-            <span className={cn('font-medium', reviewed ? 'text-ok' : 'text-warn')}>
-              {reviewed ? 'Reviewed' : 'Pending'}
+          {fields.ai_priority && actionLabel && <span className="text-ink-fg-3">·</span>}
+          {actionLabel && <span className="text-aux text-ink-fg">{actionLabel}</span>}
+          {(fields.ai_priority || actionLabel) && due && <span className="text-ink-fg-3">·</span>}
+          {due && (
+            <span className="inline-flex items-center gap-1.5 text-aux text-urg font-mono">
+              <Clock size={11} strokeWidth={2.25} />
+              {due}
             </span>
-          ) : (
-            <Placeholder />
           )}
-        </Cell>
+        </div>
+      )}
 
-        <Cell label="Sentiment">
-          {fields.sentiment ? (
-            <span className="text-ink-fg">{fields.sentiment}</span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
+      {/* Meta grid — 3-col secondary classifiers */}
+      {gridCells.length > 0 && (
+        <div className="aif-grid grid grid-cols-3 gap-px">
+          {gridCells.map((cell, idx) => (
+            <GridCell key={`${cell.label}-${idx}`} {...cell} />
+          ))}
+          {/* Fill blank cells so the grid renders cleanly even when count
+              isn't a multiple of 3 — empty cells keep the divider grid intact. */}
+          {gridCells.length % 3 !== 0 &&
+            Array.from({ length: 3 - (gridCells.length % 3) }).map((_, i) => (
+              <div key={`pad-${i}`} className="aif-cell px-3.5 py-2.5" aria-hidden />
+            ))}
+        </div>
+      )}
 
-        <Cell label="Processing Status">
-          {fields.processing_status ? (
-            <span className="text-ink-fg">{fields.processing_status}</span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Mailbox">
-          {fields.mailbox ? (
-            <span className="inline-flex items-center gap-1.5 text-ink-fg">
-              <span className="w-1.5 h-1.5 rounded-full bg-coral/100" />
-              {fields.mailbox}
-            </span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Is Read">
-          <YesNo value={fields.is_read} />
-        </Cell>
-
-        <Cell label="Is Flagged">
-          <YesNo value={fields.is_flagged} yesTone="text-urg" />
-        </Cell>
-      </div>
-
-      {/* Footer link — if labels_raw has cost info, surface it as mockup line 962-970 does */}
-      {fields.labels_raw && (
-        <div className="px-3 py-1.5 bg-ink-2 border-t border-ink-border flex items-center justify-between text-meta font-mono text-ink-fg-2">
+      {/* Footer — token / latency usage when LLM emitted them */}
+      {raw && (
+        <div className="px-4 py-2 bg-ink-2/40 border-t border-ink-border flex items-center justify-between text-meta font-mono text-ink-fg-2">
           <div className="flex items-center gap-3">
-            {typeof fields.labels_raw.input_tokens === 'number' && (
+            {typeof raw.input_tokens === 'number' && (
               <span>
-                in{' '}
-                <span className="text-ink-fg-1 tabular-nums">{fields.labels_raw.input_tokens}</span>
+                in <span className="text-ink-fg-1 tabular-nums">{raw.input_tokens}</span>
               </span>
             )}
-            {typeof fields.labels_raw.output_tokens === 'number' && (
+            {typeof raw.output_tokens === 'number' && (
               <span>
-                out{' '}
-                <span className="text-ink-fg-1 tabular-nums">
-                  {fields.labels_raw.output_tokens}
-                </span>
+                out <span className="text-ink-fg-1 tabular-nums">{raw.output_tokens}</span>
               </span>
             )}
-            {typeof fields.labels_raw.latency_ms === 'number' && (
-              <span>{fields.labels_raw.latency_ms}ms</span>
-            )}
+            {typeof raw.latency_ms === 'number' && <span>{raw.latency_ms}ms</span>}
           </div>
-          {typeof fields.labels_raw.daily_digest_date === 'string' && (
-            <a
-              href="#"
-              className="text-coral hover:text-coral-hover inline-flex items-center gap-1"
-            >
-              digest {fields.labels_raw.daily_digest_date}
-              <ExternalLink size={10} strokeWidth={2} />
-            </a>
+          {typeof raw.cache_read_input_tokens === 'number' && raw.cache_read_input_tokens > 0 && (
+            <span className="text-ok">cache · hit</span>
           )}
         </div>
       )}

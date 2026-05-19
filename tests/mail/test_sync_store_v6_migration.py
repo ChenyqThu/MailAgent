@@ -55,7 +55,8 @@ def _db_version(db_path: str) -> int:
 def test_fresh_init_at_v6(tmp_path):
     """fresh DB → 当前最新 schema, 新表 + 必备 v4/v5/v7 表都在.
 
-    DB_VERSION 已升到 7（v7 加 island_dispatch，Island-Sprint 2 派发审计）。
+    DB_VERSION 已升到 8（v8 加 email_metadata.is_pinned + pinned_at，
+    前端置顶持久化字段；schema 上是 ALTER TABLE ADD COLUMN，无新表）。
     """
     db = tmp_path / "sync.db"
     SyncStore(str(db))
@@ -69,7 +70,7 @@ def test_fresh_init_at_v6(tmp_path):
         "v4_rollout_stats",
         "island_dispatch",  # v7
     }.issubset(tables)
-    assert _db_version(str(db)) == 7
+    assert _db_version(str(db)) == 9
 
 
 def test_v6_indices_exist(tmp_path):
@@ -85,7 +86,7 @@ def test_idempotent_double_init(tmp_path):
     db = tmp_path / "sync.db"
     SyncStore(str(db))
     SyncStore(str(db))  # 应该幂等
-    assert _db_version(str(db)) == 7
+    assert _db_version(str(db)) == 9
 
 
 def test_v5_to_v6_preserves_existing_rows(tmp_path):
@@ -116,7 +117,7 @@ def test_v5_to_v6_preserves_existing_rows(tmp_path):
 
     # 重新 init → 升级到当前最新（v7）
     SyncStore(str(db))
-    assert _db_version(str(db)) == 7
+    assert _db_version(str(db)) == 9
 
     # 原 email_metadata 行还在
     conn = sqlite3.connect(str(db))

@@ -123,25 +123,43 @@ function NavRow({
   )
 }
 
-/** Coral pill for the inbox unread count. Mockup §2.11 keeps the pill
- *  visible even when count=0 (the bordered chip is a constant affordance
- *  signalling "this row tracks unread"). The fg colour dims when 0 so the
- *  zero state still reads as "no new mail" without yelling. */
-function UnreadPill({ count }: { count: number }): React.ReactElement {
+/** Right-side count for a sidebar row. Sprint 12.6 user-feedback:
+ *  - count = 0 → nothing (the row reads as "no signal").
+ *  - count > 0 + not selected → bare mono number (low-attention default).
+ *  - count > 0 + selected → coral pill (high-attention highlight,
+ *    matches the selected row chrome).
+ *  Both inbox/flagged virtual entries use this; total-only entries
+ *  (`all mail`) fall through to plain `TotalCount` since they are not
+ *  unread-tracking. */
+function CountRight({
+  count,
+  selected
+}: {
+  count: number
+  selected: boolean
+}): React.ReactElement | null {
+  if (count <= 0) return null
+  if (selected) {
+    return (
+      <span
+        className={cn(
+          'text-micro font-mono tabular-nums px-1.5 py-0.5 rounded',
+          'border border-coral/30 bg-coral/15 text-ink-fg'
+        )}
+      >
+        {count}
+      </span>
+    )
+  }
   return (
-    <span
-      className={cn(
-        'text-micro font-mono tabular-nums px-1.5 py-0.5 rounded',
-        'border border-coral/30 bg-coral/15',
-        count > 0 ? 'text-ink-fg' : 'text-ink-fg-3'
-      )}
-    >
-      {count}
+    <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
+      {count.toLocaleString('en-US')}
     </span>
   )
 }
 
-function TotalCount({ count }: { count: number }): React.ReactElement {
+function TotalCount({ count }: { count: number }): React.ReactElement | null {
+  if (count <= 0) return null
   return (
     <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
       {count.toLocaleString('en-US')}
@@ -345,7 +363,11 @@ export function Sidebar(): React.ReactElement {
             label={t('nav.inbox')}
             selected={selectedView === 'inbox'}
             onClick={() => handleViewClick('inbox')}
-            right={<UnreadPill count={inboxUnread} />}
+            right={
+              inboxUnread > 0 ? (
+                <CountRight count={inboxUnread} selected={selectedView === 'inbox'} />
+              ) : undefined
+            }
           />
           {/* Mockup §2.11: outbox row has no right-side count (developers
               don't typically have unread sent mail). Drop the right slot
@@ -363,10 +385,8 @@ export function Sidebar(): React.ReactElement {
             onClick={() => handleViewClick('flagged')}
             right={
               flaggedTotal > 0 ? (
-                <UnreadPill count={flaggedTotal} />
-              ) : (
-                <TotalCount count={flaggedTotal} />
-              )
+                <CountRight count={flaggedTotal} selected={selectedView === 'flagged'} />
+              ) : undefined
             }
           />
           <NavRow
@@ -374,7 +394,7 @@ export function Sidebar(): React.ReactElement {
             label={t('nav.allMail')}
             selected={selectedView === 'all'}
             onClick={() => handleViewClick('all')}
-            right={<TotalCount count={allTotal} />}
+            right={allTotal > 0 ? <TotalCount count={allTotal} /> : undefined}
           />
         </nav>
 

@@ -4,9 +4,14 @@
 // is one of the five core components that need a light/dark visual sanity
 // check. We snapshot 8 combinations (dark × light × selected × unread ×
 // failed) so a regression to any token swap is caught in CI.
+//
+// Sprint 12.5 — EmailRow now uses `useQueryClient` for invalidating the
+// list after flag/archive writes, so every render needs a
+// QueryClientProvider in the tree.
 
 import { describe, expect, test, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { EmailRow } from '../../src/shared/components/email/EmailRow'
 import type { EnrichedEmailMeta } from '../../src/shared/api/types'
@@ -31,8 +36,26 @@ function makeEmail(over: Partial<EnrichedEmailMeta> = {}): EnrichedEmailMeta {
     ai_priority: 'critical',
     ai_action: '需要回复',
     attach_count: 2,
+    // v9 — 邮件原生 Importance 头部归一化。默认 true 保留 base fixture 的
+    // 「critical priority + ❗ 重要」语义；测试要 cover 非重要场景就 override。
+    is_important: true,
     ...over
   }
+}
+
+function renderRow(props: {
+  email: EnrichedEmailMeta
+  selected: boolean
+  isNew?: boolean
+}): ReturnType<typeof render> {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } }
+  })
+  return render(
+    <QueryClientProvider client={qc}>
+      <EmailRow {...props} onSelect={() => {}} />
+    </QueryClientProvider>
+  )
 }
 
 function applyTheme(theme: 'dark' | 'light'): void {
@@ -63,60 +86,77 @@ describe('EmailRow — 8 combo render snapshots (DESIGN.md §5.1)', () => {
           is_read: !v.unread,
           sync_status: v.failed ? 'failed' : 'synced'
         })
-        const { container } = render(
-          <EmailRow email={email} selected={v.selected} onSelect={() => {}} />
-        )
-        // Use the outer <article> only — strips React 19's render wrapper
-        // div noise so the snapshot stays stable across React minor bumps.
-        expect(container.firstChild).toMatchSnapshot()
+        const { container } = renderRow({ email, selected: v.selected })
+        // Drill past the wrapper div + QueryClientProvider so the snapshot
+        // is just the <article>.
+        const article = container.querySelector('article.email-row')
+        expect(article).not.toBeNull()
+        expect(article).toMatchSnapshot()
       })
     }
   }
 })
 
 describe('EmailRow — semantic behaviour', () => {
-  test('chip renders English short code, not the Chinese verbatim (lint §14 #2)', () => {
+  test('ai-strip surfaces the Chinese action label (mockup-inbox.html row pattern)', () => {
+    // Sprint 12 — row's `ai-strip` is a mono single-line signal row that
+    // shows the Chinese action label verbatim ("需要回复"), NOT an ASCII
+    // shortcode. The original Sprint 2 `mapActionLabel` (REPLY/READ/…)
+    // chip was retired with the visual rework.
     const email = makeEmail({ ai_action: '需要回复' })
-    const { container } = render(<EmailRow email={email} selected={false} onSelect={() => {}} />)
-    // The chip text should be the ASCII shortcode.
-    expect(container.textContent).toContain('REPLY')
-    // The full Chinese stays on the title= attribute for hover-reveal.
-    const chip = container.querySelector('[title="需要回复"]')
-    expect(chip).not.toBeNull()
+    const { container } = renderRow({ email, selected: false })
+    expect(container.textContent).toContain('需要回复')
+    const aiBit = container.querySelector('[title="需要回复"]')
+    expect(aiBit).not.toBeNull()
   })
 
   test('lang=zh suppresses the EN pip; lang=en shows it', () => {
-    const enRow = render(
-      <EmailRow email={makeEmail({ lang: 'en' })} selected={false} onSelect={() => {}} />
-    )
+    const enRow = renderRow({ email: makeEmail({ lang: 'en' }), selected: false })
     expect(enRow.container.textContent).toContain('EN')
     cleanup()
-    const zhRow = render(
-      <EmailRow email={makeEmail({ lang: 'zh' })} selected={false} onSelect={() => {}} />
-    )
+    const zhRow = renderRow({ email: makeEmail({ lang: 'zh' }), selected: false })
     expect(zhRow.container.textContent).not.toContain('EN')
   })
 
-  test('isNew adds a NEW pill that disappears when prop is undefined', () => {
-    const withBadge = render(
-      <EmailRow email={makeEmail()} selected={false} isNew onSelect={() => {}} />
-    )
+  test('isNew adds a NEW chip in the ai-strip', () => {
+    // Sprint 12 — NEW now lives at the end of the .ai-strip (mono mockup
+    // line), so it still reads as a chip but inside the priority row.
+    const withBadge = renderRow({ email: makeEmail(), selected: false, isNew: true })
     expect(withBadge.container.textContent).toContain('NEW')
     cleanup()
-    const without = render(<EmailRow email={makeEmail()} selected={false} onSelect={() => {}} />)
+    const without = renderRow({ email: makeEmail(), selected: false })
     expect(without.container.textContent).not.toContain('NEW')
   })
 
   test('sender_name absent → falls back to local-part of address', () => {
     const email = makeEmail({ sender_name: null, sender: 'bob.smith@corp.com' })
-    const { container } = render(<EmailRow email={email} selected={false} onSelect={() => {}} />)
+    const { container } = renderRow({ email, selected: false })
     expect(container.textContent).toContain('bob.smith')
   })
 
-  test('attach_count=0 omits the paperclip', () => {
+  test('attach_count=0 omits the .ricon-attach indicator', () => {
     const email = makeEmail({ attach_count: 0 })
-    const { container } = render(<EmailRow email={email} selected={false} onSelect={() => {}} />)
-    // The `lucide-react` Paperclip renders an <svg>; we assert by class hook.
-    expect(container.querySelector('svg')).toBeNull()
+    const { container } = renderRow({ email, selected: false })
+    expect(container.querySelector('.ricon-attach')).toBeNull()
+    cleanup()
+    const withAttach = renderRow({ email: makeEmail({ attach_count: 2 }), selected: false })
+    expect(withAttach.container.querySelector('.ricon-attach')).not.toBeNull()
+  })
+
+  test('data-* attributes drive CSS state (read / flag / priority)', () => {
+    // Sprint 12 — row state is data-attribute driven so authored CSS can
+    // handle the read/flag/priority washes without per-state JSX branches.
+    const { container } = renderRow({
+      email: makeEmail({
+        is_read: false,
+        is_flagged: true,
+        ai_priority: 'urgent'
+      }),
+      selected: false
+    })
+    const article = container.querySelector('article.email-row')
+    expect(article?.getAttribute('data-read')).toBe('false')
+    expect(article?.getAttribute('data-flag')).toBe('flagged')
+    expect(article?.getAttribute('data-priority')).toBe('urg')
   })
 })

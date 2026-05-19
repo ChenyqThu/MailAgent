@@ -97,7 +97,11 @@ class SyncStore:
     # v5 (2026-05): 新增 email_body_fts FTS5 虚表 + insert/update/delete trigger + 首次 reindex
     # v6 (2026-05): 新增 cli_checkpoints (长任务 checkpoint resume) + v4_rollout_stats (R-06 持久化)
     # v7 (2026-05): 新增 island_dispatch (Island-Sprint 2 ping-island 派发审计 + 14d 评估指标)
-    DB_VERSION = 7
+    # v8 (2026-05): email_metadata 增加 is_pinned + pinned_at（前端置顶持久化，Mail.app 无此概念，
+    #               仅在 SQLite + CLI 暴露；主进程独占写、Electron 前端 readonly 经 CLI 子进程 toggle）
+    # v9 (2026-05): email_metadata 增加 is_important（邮件原生重要性，由 reader._parse_importance
+    #               从 Importance / X-Priority / X-MSMail-Priority header 提取；前端 ❗ 角标用）
+    DB_VERSION = 9
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -179,6 +183,8 @@ class SyncStore:
                     return
 
         # v3 架构：email_metadata 表（internal_id 为主键）
+        # v8: is_pinned / pinned_at —— 前端置顶 / pin 持久化
+        # v9: is_important —— 邮件原生重要性（Importance / X-Priority header）
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_metadata (
                 internal_id INTEGER PRIMARY KEY,
@@ -200,7 +206,10 @@ class SyncStore:
                 retry_count INTEGER DEFAULT 0,
                 next_retry_at REAL,
                 created_at REAL,
-                updated_at REAL
+                updated_at REAL,
+                is_pinned INTEGER DEFAULT 0,
+                pinned_at REAL,
+                is_important INTEGER DEFAULT 0
             )
         """)
 
@@ -466,6 +475,51 @@ class SyncStore:
             ON island_dispatch(event_type)
         """)
 
+        # === v8: email_metadata 增加 is_pinned + pinned_at ===
+        # 旧 v7 库已经有 email_metadata 表（无 is_pinned 列）→ ALTER TABLE 补
+        # 新建库走上面的 CREATE TABLE IF NOT EXISTS 已经带这俩列
+        # PRAGMA 检测列是否存在 → 避免重复迁移失败（IF NOT EXISTS 对 ADD COLUMN 不可用）
+        try:
+            cursor.execute("PRAGMA table_info(email_metadata)")
+            existing_cols = {r[1] for r in cursor.fetchall()}
+            if 'is_pinned' not in existing_cols:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN is_pinned INTEGER DEFAULT 0"
+                )
+                logger.info("v8 migration: added email_metadata.is_pinned")
+            if 'pinned_at' not in existing_cols:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN pinned_at REAL"
+                )
+                logger.info("v8 migration: added email_metadata.pinned_at")
+        except sqlite3.OperationalError as e:
+            # 表不存在等罕见情形（理论上前面的 CREATE TABLE IF NOT EXISTS 已经建好）
+            logger.warning(f"v8 migration: skipped is_pinned ADD COLUMN ({e})")
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_is_pinned
+            ON email_metadata(is_pinned) WHERE is_pinned = 1
+        """)
+
+        # === v9: email_metadata 增加 is_important（邮件原生重要性）===
+        # 旧 v8 库已有 email_metadata 表（无 is_important 列）→ ALTER TABLE 补。
+        # 历史邮件（无 raw MIME 重解析）默认 0；后续 sync 的新邮件会写入真值。
+        try:
+            cursor.execute("PRAGMA table_info(email_metadata)")
+            cols_v9 = {r[1] for r in cursor.fetchall()}
+            if 'is_important' not in cols_v9:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN is_important INTEGER DEFAULT 0"
+                )
+                logger.info("v9 migration: added email_metadata.is_important")
+        except sqlite3.OperationalError as e:
+            logger.warning(f"v9 migration: skipped is_important ADD COLUMN ({e})")
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_is_important
+            ON email_metadata(is_important) WHERE is_important = 1
+        """)
+
         # 更新数据库版本
         cursor.execute("""
             INSERT OR REPLACE INTO sync_state (key, value, updated_at)
@@ -649,7 +703,8 @@ class SyncStore:
         allowed_fields = {
             'message_id', 'thread_id', 'subject', 'sender', 'sender_name',
             'to_addr', 'cc_addr', 'date_received', 'is_read', 'is_flagged',
-            'sync_status', 'sync_error'
+            'sync_status', 'sync_error',
+            'is_important',  # v9 — 邮件原生重要性（reader._parse_importance 提取）
         }
         set_parts = []
         values = []
@@ -657,7 +712,7 @@ class SyncStore:
         for key, value in data.items():
             if key in allowed_fields:
                 set_parts.append(f"{key} = ?")
-                if key in ('is_read', 'is_flagged'):
+                if key in ('is_read', 'is_flagged', 'is_important'):
                     values.append(1 if value else 0)
                 else:
                     values.append(value)
@@ -782,6 +837,111 @@ class SyncStore:
                 logger.error(f"Failed to mark skipped: {e}")
                 conn.rollback()
                 return False
+
+    # ==================== v8: 置顶 / pin ====================
+
+    def get_pin(self, internal_id: int) -> bool:
+        """读取邮件置顶状态（不存在视为未置顶，返回 False）。"""
+        with self._connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT is_pinned FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,),
+                ).fetchone()
+                if row is None:
+                    return False
+                return bool(row['is_pinned'])
+            except sqlite3.Error as e:
+                logger.error(f"Failed to get pin state for {internal_id}: {e}")
+                return False
+
+    def set_pin(self, internal_id: int, pinned: bool) -> bool:
+        """设置邮件置顶状态。
+
+        Args:
+            internal_id: 邮件内部 ID
+            pinned: 是否置顶；True → is_pinned=1 + pinned_at=now，False → 清零
+
+        Returns:
+            True 表示状态从 ``not pinned`` ↔ ``pinned`` 真的翻转过；
+            False 表示状态未变化（idempotent no-op）或邮件不存在 / SQL 错误。
+            邮件不存在时直接 False（caller 自行决定是否抛 NotFound，
+            可结合 ``self.get(internal_id) is None`` 区分）。
+        """
+        with self._connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT is_pinned FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,),
+                ).fetchone()
+                if row is None:
+                    return False
+                current = bool(row['is_pinned'])
+                target = bool(pinned)
+                if current == target:
+                    return False  # no-op，让 caller 区分 changed/unchanged
+                now = time.time()
+                conn.execute(
+                    """UPDATE email_metadata
+                          SET is_pinned = ?,
+                              pinned_at = ?,
+                              updated_at = ?
+                        WHERE internal_id = ?""",
+                    (
+                        1 if target else 0,
+                        now if target else None,
+                        now,
+                        internal_id,
+                    ),
+                )
+                conn.commit()
+                logger.debug(
+                    f"set_pin: internal_id={internal_id} pinned={target}"
+                )
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to set pin for {internal_id}: {e}")
+                conn.rollback()
+                return False
+
+    def toggle_pin(self, internal_id: int) -> Optional[bool]:
+        """翻转置顶状态。
+
+        Returns:
+            新的置顶状态（True / False）；邮件不存在返回 None。
+        """
+        with self._connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT is_pinned FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                new_state = not bool(row['is_pinned'])
+            except sqlite3.Error as e:
+                logger.error(
+                    f"Failed to read pin for toggle on {internal_id}: {e}"
+                )
+                return None
+        # 走同一份 set_pin 逻辑，确保 pinned_at + updated_at 时间戳一致
+        self.set_pin(internal_id, new_state)
+        return new_state
+
+    def get_pinned_at(self, internal_id: int) -> Optional[float]:
+        """读取置顶时间戳（未置顶 / 不存在 → None）。"""
+        with self._connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT pinned_at FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                return row['pinned_at']
+            except sqlite3.Error as e:
+                logger.error(f"Failed to get pinned_at for {internal_id}: {e}")
+                return None
 
     def _update_for_retry(
         self,

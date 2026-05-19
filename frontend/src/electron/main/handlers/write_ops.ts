@@ -9,6 +9,8 @@
 //
 // Channels:
 //   email:resync       → mailagent email resync <id> [--dry-run|--replace-existing|--no-parent]
+//   email:pin          → mailagent email pin <id> [--dry-run]
+//   email:unpin        → mailagent email unpin <id> [--dry-run]
 //   llm:run            → mailagent llm run <id> [--dry-run|--force|--no-overwrite]
 //   notion:updateFlag  → mailagent notion update-flag <id> [--is-read|--is-flagged|--processing-status]
 //
@@ -33,6 +35,10 @@ import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/en
 export interface ResyncOpts {
   replaceExisting?: boolean
   skipParentLookup?: boolean
+  dryRun?: boolean
+}
+
+export interface PinOpts {
   dryRun?: boolean
 }
 
@@ -69,6 +75,12 @@ function resyncArgs(internalId: number, opts: ResyncOpts): string[] {
   return args
 }
 
+function pinArgs(internalId: number, pinned: boolean, opts: PinOpts): string[] {
+  const args = ['email', pinned ? 'pin' : 'unpin', String(internalId)]
+  if (opts.dryRun) args.push('--dry-run')
+  return args
+}
+
 function llmRunArgs(internalId: number, opts: LlmRunOpts): string[] {
   const args = ['llm', 'run', String(internalId)]
   if (opts.dryRun) args.push('--dry-run')
@@ -102,12 +114,26 @@ const RESYNC_TIMEOUT_MS = 120_000
 const LLM_RUN_TIMEOUT_MS = 90_000
 /** notion update-flag is a single PATCH; bounded short. */
 const UPDATE_FLAG_TIMEOUT_MS = 30_000
+/** pin / unpin is a single-row UPDATE; bounded very short. */
+const PIN_TIMEOUT_MS = 10_000
 
 export async function runResync(internalId: number, opts: ResyncOpts = {}): Promise<unknown> {
   return callCli(resyncArgs(internalId, opts), {
     write: !opts.dryRun,
     needsAuth: !opts.dryRun,
     timeoutMs: RESYNC_TIMEOUT_MS
+  })
+}
+
+export async function runPin(
+  internalId: number,
+  pinned: boolean,
+  opts: PinOpts = {}
+): Promise<unknown> {
+  return callCli(pinArgs(internalId, pinned, opts), {
+    write: !opts.dryRun,
+    needsAuth: !opts.dryRun,
+    timeoutMs: PIN_TIMEOUT_MS
   })
 }
 
@@ -139,6 +165,27 @@ export function registerWriteOpsHandlers(): void {
       const idOrErr = ensureInternalId(internalId, 'email:resync')
       if (typeof idOrErr !== 'number') return idOrErr
       return envelopeFromCli(runResync(idOrErr, opts ?? {}))
+    }
+  )
+
+  ipcMain.handle(
+    'email:pin',
+    async (
+      _evt,
+      internalId: unknown,
+      pinned: unknown,
+      opts: PinOpts = {}
+    ): Promise<WriteEnvelope<unknown>> => {
+      const idOrErr = ensureInternalId(internalId, 'email:pin')
+      if (typeof idOrErr !== 'number') return idOrErr
+      if (typeof pinned !== 'boolean') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: `email:pin expected boolean pinned, got ${typeof pinned}`
+        }
+      }
+      return envelopeFromCli(runPin(idOrErr, pinned, opts ?? {}))
     }
   )
 
