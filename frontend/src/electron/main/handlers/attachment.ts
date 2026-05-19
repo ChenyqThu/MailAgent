@@ -6,10 +6,11 @@
 // scope; see BACKEND-INTERFACES.md §4.4).
 
 import { readFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join } from 'node:path'
 
 import { ipcMain } from 'electron'
 
-import { getDb } from '../db'
+import { getDb, resolveDbPath } from '../db'
 import type { AttachmentList_AttachmentItem } from '@shared/types/cli.gen'
 
 interface AttachmentRow {
@@ -94,8 +95,20 @@ export async function readAttachmentAsDataUrl(attachmentId: number): Promise<str
     | { local_path: string | null; content_type: string | null; filename: string }
     | undefined
   if (!row || row.local_path === null) return null
+  // Sprint 14 round 18 — local_path is stored relative ("data/attach-
+  // ments/<id>/<file>") because the backend writes from the project
+  // root.  Electron's main process cwd is the .app bundle / dev
+  // dir, not the project root, so readFile() with the relative path
+  // ENOENTs silently and we fall back to a broken image in the
+  // iframe.  Resolve against the db dir's parent (= project root —
+  // db itself lives at <root>/data/sync_store.db).
+  let absPath = row.local_path
+  if (!isAbsolute(absPath)) {
+    const root = dirname(dirname(resolveDbPath()))
+    absPath = join(root, absPath)
+  }
   try {
-    const bytes = await readFile(row.local_path)
+    const bytes = await readFile(absPath)
     const mime = row.content_type ?? guessMimeFromName(row.filename)
     return `data:${mime};base64,${bytes.toString('base64')}`
   } catch {
