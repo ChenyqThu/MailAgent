@@ -395,6 +395,12 @@ export interface AttachmentApi {
   /** Returns a `file://`-safe local absolute path, or null if the attachment
    *  hasn't been persisted to disk (e.g. inline images that live only in MIME). */
   localPath(attachmentId: number): Promise<string | null>
+  /** Sprint 13 — same content as `localPath` but inlined as a
+   *  `data:<mime>;base64,...` URL. The sandboxed body iframe can't load
+   *  `file://` URLs (same-origin policy under srcdoc) so inline images
+   *  (cid: refs) substitute the data URL instead. Returns null when
+   *  the file is missing or the read fails. */
+  readDataUrl(attachmentId: number): Promise<string | null>
 }
 
 // ---- Sprint 3 §2.2 — AI / translation surface ------------------------------

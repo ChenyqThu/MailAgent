@@ -9,7 +9,7 @@
 // coral on hover, and the affordance strip is English mono so the
 // 12px text-meta floor is on-spec.
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AtSign, ArrowUp, Cpu, Paperclip, X } from 'lucide-react'
 
@@ -33,6 +33,14 @@ interface Props {
    *  Rendered in the footer next to ⌘↩ so the user always sees what they'll
    *  be sending to. */
   backendName: string
+  /** Sprint 13 — model dropdown lives in the Composer footer's Cpu button.
+   *  Only meaningful for Custom API backend (Notion Agent has no model
+   *  picker — the agent decides). Pass null + empty options to disable. */
+  currentModel?: string | null
+  availableModels?: ReadonlyArray<string>
+  onModelChange?(model: string): void
+  /** Hides the model picker entirely (used by Notion Agent backend kind). */
+  modelPickerDisabled?: boolean
 }
 
 export function Composer({
@@ -42,11 +50,36 @@ export function Composer({
   onCancel,
   isStreaming,
   canSend,
-  backendName
+  backendName,
+  currentModel,
+  availableModels,
+  onModelChange,
+  modelPickerDisabled
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
   const [focused, setFocused] = useState(false)
+  // Sprint 13 — model picker popover state. Open via the Cpu button in
+  // the footer; closed by Escape, outside click, or model select.
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const modelPickerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    const handler = (e: MouseEvent): void => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+        setModelPickerOpen(false)
+      }
+    }
+    const escHandler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setModelPickerOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    document.addEventListener('keydown', escHandler)
+    return (): void => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('keydown', escHandler)
+    }
+  }, [modelPickerOpen])
 
   const submit = useCallback(() => {
     const trimmed = value.trim()
@@ -148,19 +181,94 @@ export function Composer({
               <AtSign size={13} strokeWidth={2} />
             </button>
           </HoverTip>
-          <HoverTip text={t('chat.composer.modelHint')} side="top">
-            <button
-              type="button"
-              aria-label={t('chat.composer.model')}
-              className={cn(
-                'w-7 h-7 rounded-md grid place-items-center',
-                'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
-                'transition-colors duration-fast'
-              )}
+          {/* Sprint 13 — mockup L2530 真模型切换 button. Notion Agent 时
+              modelPickerDisabled=true 因为 agent 自己决定模型 (没有
+              picker 概念)。Custom API 时点击弹 popover 列出可选 models.
+              Popover anchored to button via relative wrapper. */}
+          <div className="relative" ref={modelPickerRef}>
+            <HoverTip
+              text={
+                modelPickerDisabled
+                  ? t('chat.composer.modelHint')
+                  : `${t('chat.composer.model')} · ${currentModel ?? '—'}`
+              }
+              side="top"
             >
-              <Cpu size={13} strokeWidth={2} />
-            </button>
-          </HoverTip>
+              <button
+                type="button"
+                disabled={modelPickerDisabled}
+                onClick={() => {
+                  if (!modelPickerDisabled) setModelPickerOpen((v) => !v)
+                }}
+                aria-label={t('chat.composer.model')}
+                aria-expanded={modelPickerOpen}
+                aria-haspopup="menu"
+                data-disabled={modelPickerDisabled ? '' : undefined}
+                tabIndex={modelPickerDisabled ? -1 : 0}
+                className={cn(
+                  'w-7 h-7 rounded-md grid place-items-center',
+                  'transition-colors duration-fast',
+                  modelPickerDisabled
+                    ? 'text-ink-fg-3 opacity-50 cursor-not-allowed'
+                    : modelPickerOpen
+                      ? 'text-coral bg-coral/10'
+                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                )}
+              >
+                <Cpu size={13} strokeWidth={2} />
+              </button>
+            </HoverTip>
+
+            {modelPickerOpen &&
+              !modelPickerDisabled &&
+              availableModels &&
+              availableModels.length > 0 && (
+                // mockup-faithful glass popover anchored above the Cpu button.
+                // Width auto-fits the widest model id (claude-opus-4-7 ≈ 110px);
+                // padding matches Sprint 11 .glass-pop recipe.
+                <div
+                  role="menu"
+                  aria-label={t('chat.composer.model')}
+                  className={cn(
+                    'absolute z-50 bottom-full mb-1.5 left-0',
+                    'min-w-[160px] rounded-md py-1',
+                    'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
+                  )}
+                >
+                  {availableModels.map((m) => {
+                    const active = m === currentModel
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        onClick={() => {
+                          onModelChange?.(m)
+                          setModelPickerOpen(false)
+                        }}
+                        className={cn(
+                          'w-full text-left px-3 py-1.5 text-meta font-mono',
+                          'flex items-center gap-2 whitespace-nowrap',
+                          active
+                            ? 'text-coral bg-coral/10'
+                            : 'text-ink-fg-1 hover:bg-ink-4 hover:text-ink-fg',
+                          'transition-colors duration-fast'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'w-1.5 h-1.5 rounded-full shrink-0',
+                            active ? 'bg-coral/100' : 'bg-ink-fg-3'
+                          )}
+                        />
+                        {m}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+          </div>
 
           {/* Backend label + ⌘↩ kbd — `ml-auto` shoves the affordance
               icons left and the send button stays at the right edge. */}

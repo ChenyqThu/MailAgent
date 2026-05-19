@@ -617,8 +617,13 @@ export function EmailToolbar({
         onClick={onLlmRun}
       />
 
+      {/* mockup L2076-2095 right cluster order:
+            Open Notion · Divider · Prev · Next · More · Divider · AIPanelToggle
+          AIPanelToggle sits at the **very right** because it's the "open
+          right panel" affordance — visually anchored to the panel it
+          controls. Sprint 13 user feedback: previous order (Toggle first)
+          read like a primary action rather than the panel handle. */}
       <div className="ml-auto flex items-center gap-1">
-        <AIPanelToggleButton />
         <IconOnlyBtn
           icon={<ExternalLink size={13} strokeWidth={2} />}
           label={t('toolbar.openNotion')}
@@ -639,6 +644,8 @@ export function EmailToolbar({
           icon={<MoreHorizontal size={14} strokeWidth={2} />}
           label={t('toolbar.more')}
         />
+        <Divider />
+        <AIPanelToggleButton />
       </div>
 
       <ResyncConfirmDialog

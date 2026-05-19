@@ -1,17 +1,17 @@
 // Sprint 4 §6 — context chips header. Shows what's loaded into the current
-// turn's prompt so the user has a one-glance answer to "what did the AI
-// see?". Click to expand / toggle each scope (V1 just shows; toggle UI
-// lands in V1.5 once we have per-scope `included: boolean` plumbing).
+// turn's prompt so the user has a one-glance answer to "what did the AI see?".
 //
-// V1 redesign (Sprint 10 polish): mirrors mockup-inbox.html lines 1144-1150.
-// `Ctx` section label is an English mono caption — never CJK — so the
-// chip area itself can adopt a tighter mono visual rhythm. Chip *content*
-// can be CJK ("邮件全文" / "线程") so chips themselves run at text-aux
-// (14px) to clear DESIGN.md §14 #2.
+// Sprint 13 user-feedback rewrite — mockup-inbox.html L2323-2331 keeps every
+// chip at `text-meta font-mono` (12px) regardless of locale, including the
+// Chinese-bearing ones ("邮件全文" / "Notion · 2 项目"). DESIGN.md §14 #2's
+// 14px CJK floor would normally upgrade these to text-aux, but the mockup is
+// explicit that this chip strip is the **section-header floor** (English-mono
+// "Ctx" caption + CJK content rendered in a tight 12px row to keep visual
+// density tight). Sprint 12 added a CJK-mono swap that scaled chip content to
+// text-aux — that's what the user flagged as "ctx 样式也没遵循". Removed.
 
 import { useTranslation } from 'react-i18next'
 import { cn } from '@shared/lib/cn'
-import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 
 interface Props {
   hasEmailBody: boolean
@@ -29,10 +29,6 @@ export function ContextChips({
   notionProjectCount = 0
 }: Props): React.ReactElement {
   const { t } = useTranslation()
-  // chip labels can resolve to "邮件全文" / "线程 ×N" — CJK content must sit at
-  // ≥14px (text-aux) per DESIGN.md §1.3 / §14 #2. Mono is fine for ASCII tail.
-  const chipKlass = useCjkMonoSwap('text-meta font-mono')
-  const noneKlass = useCjkMonoSwap('text-meta font-mono')
 
   interface Chip {
     key: string
@@ -55,7 +51,6 @@ export function ContextChips({
     },
     {
       key: 'notion',
-      // Mockup-style label: "Notion · N 项目" — English head + CJK tail
       label: `Notion · ${notionProjectCount} 项目`,
       active: notionProjectCount > 0,
       tone: 'ok'
@@ -63,42 +58,38 @@ export function ContextChips({
   ]
 
   return (
+    // mockup L2324: `px-3 py-2 border-b border-ink-border-soft flex
+    // items-center gap-1.5 flex-wrap text-meta`. text-meta on the wrapper
+    // sets the size for the inner chips at the same time as the "Ctx" label.
     <div
       className={cn(
-        'px-3 py-2 flex items-center gap-1.5 flex-wrap',
+        'px-3 py-2 flex items-center gap-1.5 flex-wrap text-meta',
         'border-b border-ink-border-soft'
       )}
     >
-      {/* Section label — English mono caption (never goes through CJK swap) */}
-      <span className={cn('text-meta font-mono uppercase tracking-wider text-ink-fg-2 mr-0.5')}>
-        Ctx
-      </span>
+      {/* Ctx caption — English mono per DESIGN.md §3.3 section-header rule */}
+      <span className="font-mono uppercase tracking-wider text-ink-fg-2 mr-0.5">Ctx</span>
 
       {chips.every((c) => !c.active) ? (
-        <span className={cn(noneKlass, 'text-ink-fg-3')}>{t('chat.context.noContext')}</span>
+        <span className="font-mono text-ink-fg-3">{t('chat.context.noContext')}</span>
       ) : (
         chips
           .filter((c) => c.active)
           .map((c) =>
             c.tone === 'ok' ? (
+              // Notion chip — green-tinted to call out "the AI can read your
+              // Notion workspace". mockup L2330.
               <span
                 key={c.key}
-                className={cn(
-                  chipKlass,
-                  'px-1.5 py-0.5 rounded',
-                  'text-ok bg-ok/10 border border-ok/25'
-                )}
+                className="font-mono px-1.5 py-0.5 rounded text-ok bg-ok/10 border border-ok/25"
               >
                 {c.label}
               </span>
             ) : (
+              // Default chip — ink-3 surface, soft border (mockup L2327-2329).
               <span
                 key={c.key}
-                className={cn(
-                  chipKlass,
-                  'px-1.5 py-0.5 rounded',
-                  'text-ink-fg-1 bg-ink-3 border border-ink-border-soft'
-                )}
+                className="font-mono px-1.5 py-0.5 rounded text-ink-fg-1 bg-ink-3 border border-ink-border-soft"
               >
                 {c.label}
               </span>

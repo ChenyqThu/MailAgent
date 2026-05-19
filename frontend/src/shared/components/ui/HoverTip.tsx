@@ -45,7 +45,14 @@ export function HoverTip({
         <span
           role="tooltip"
           className={cn(
-            'absolute z-50 left-1/2 -translate-x-1/2 whitespace-pre-line',
+            'absolute z-50 left-1/2 -translate-x-1/2',
+            // Sprint 13 user-feedback — width caps at 150px and wraps to
+            // multiple lines for long verbs (e.g. zh-CN "归档 · 等待 Sprint
+            // 14 接 CLI" → 2 lines). `whitespace-pre-line` already honours
+            // explicit \n; `break-words` forces wrap mid-word when zh-CN
+            // strings have no spaces. `w-max` lets short labels stay
+            // single-line — only longs hit the 150px ceiling.
+            'w-max max-w-[150px] whitespace-pre-line break-words text-center',
             'text-meta font-mono text-ink-fg px-2 py-1 rounded',
             'glass-pop pointer-events-none select-none',
             'shadow-[0_4px_12px_rgba(0,0,0,0.35)]',

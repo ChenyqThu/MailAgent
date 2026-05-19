@@ -5,6 +5,8 @@
 // FastAPI `/api/attachment/{id}/download` StreamingResponse (out of Sprint 1
 // scope; see BACKEND-INTERFACES.md §4.4).
 
+import { readFile } from 'node:fs/promises'
+
 import { ipcMain } from 'electron'
 
 import { getDb } from '../db'
@@ -66,6 +68,43 @@ export function getAttachmentLocalPath(attachmentId: number): string | null {
   return row?.local_path ?? null
 }
 
+// Sprint 13 — inline-image data URL. The sandboxed body iframe (srcdoc,
+// `sandbox="allow-same-origin"`, no allow-scripts) cannot load `file://`
+// URLs even when Electron disables web security for the renderer — the
+// iframe inherits a stricter same-origin context where file: is opaque.
+// Round-tripping the bytes as `data:<mime>;base64,...` sidesteps the
+// barrier; payload size is bounded by typical inline screenshot size
+// (≤ 1 MB → base64 ~1.4 MB, well below the IPC message ceiling).
+function guessMimeFromName(name: string): string {
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.svg')) return 'image/svg+xml'
+  if (lower.endsWith('.heic')) return 'image/heic'
+  return 'application/octet-stream'
+}
+
+export async function readAttachmentAsDataUrl(attachmentId: number): Promise<string | null> {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT local_path, content_type, filename FROM email_attachment WHERE id = ?')
+    .get(attachmentId) as
+    | { local_path: string | null; content_type: string | null; filename: string }
+    | undefined
+  if (!row || row.local_path === null) return null
+  try {
+    const bytes = await readFile(row.local_path)
+    const mime = row.content_type ?? guessMimeFromName(row.filename)
+    return `data:${mime};base64,${bytes.toString('base64')}`
+  } catch {
+    // ENOENT or sandbox denied — silent null so the iframe falls back
+    // to the broken-image glyph rather than crashing the panel.
+    return null
+  }
+}
+
 export function registerAttachmentHandlers(): void {
   ipcMain.handle('attachment:list', (_evt, internalId: number) => {
     if (!Number.isInteger(internalId) || internalId < 0) {
@@ -82,5 +121,13 @@ export function registerAttachmentHandlers(): void {
       )
     }
     return getAttachmentLocalPath(attachmentId)
+  })
+  ipcMain.handle('attachment:readDataUrl', async (_evt, attachmentId: number) => {
+    if (!Number.isInteger(attachmentId) || attachmentId < 0) {
+      throw new TypeError(
+        `attachment:readDataUrl expected non-negative integer, got ${String(attachmentId)}`
+      )
+    }
+    return readAttachmentAsDataUrl(attachmentId)
   })
 }

@@ -285,6 +285,9 @@ class ElectronAttachmentApi implements AttachmentApi {
   async localPath(attachmentId: number): Promise<string | null> {
     return (await invoker()('attachment:localPath', attachmentId)) as string | null
   }
+  async readDataUrl(attachmentId: number): Promise<string | null> {
+    return (await invoker()('attachment:readDataUrl', attachmentId)) as string | null
+  }
 }
 
 // Mirror of TranslateEnvelope in src/electron/main/handlers/translate.ts.

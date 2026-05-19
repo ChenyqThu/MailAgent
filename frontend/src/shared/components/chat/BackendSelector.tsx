@@ -1,11 +1,17 @@
 // Sprint 4 §6.1 — backend selector at the top of the AI panel.
-// V1 redesign (Sprint 10 polish): mirrors mockup-inbox.html lines 1118-1141.
-// Single hero card showing the active backend + 1-line meta + chevron;
-// below it an "Alt" row of 3 model chips for one-tap swap to Custom API,
-// plus a "+ add" affordance routing to Settings for new endpoints.
+//
+// Sprint 13 user-feedback rewrite: mockup-inbox.html L2307-2321 is a SINGLE
+// hero-card button (icon + title + meta + ok dot + chevron). The "Alt" row
+// (model chips) we added in Sprint 10 was a Sprint-decision that the mockup
+// doesn't authorise — model switching belongs to the Composer footer Cpu
+// button (mockup L2530 `title="切换模型 · claude-3.5"`).
+//
+// Click behaviour: still toggles backend KIND (Notion Agent ⇄ Custom API).
+// A full popover dropdown surface ("pick from N agents / N custom keys") is
+// scoped to Sprint 14 alongside Settings polish — for now the toggle
+// matches the ⌥⇧B shortcut and is enough for the V1 ship.
 
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from '@tanstack/react-router'
 import { ChevronDown, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -23,24 +29,13 @@ interface Props {
   agentName?: string | null
 }
 
-const CUSTOM_API_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'] as const
-
-// Short alias for the Alt-row chips so 360px panel doesn't wrap. The full
-// model id stays in the underlying BackendChoice (so the dispatcher still
-// gets `claude-sonnet-4-6`), just the chip label is trimmed for fit. Title
-// attribute carries the full id on hover for discoverability.
-const MODEL_ALIAS: Record<string, string> = {
-  'claude-sonnet-4-6': 'sonnet-4-6',
-  'claude-opus-4-7': 'opus-4-7',
-  'gpt-5.4': 'gpt-5.4'
-}
+const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
 
 export function BackendSelector({ value, onChange, agentName }: Props): React.ReactElement {
   const { t } = useTranslation()
-  const navigate = useNavigate()
 
   const isNotionAgent = value.kind === 'notion-agent'
-  const activeModel = value.model ?? CUSTOM_API_MODELS[0]
+  const activeModel = value.model ?? DEFAULT_CUSTOM_MODEL
 
   // Hero card title — Notion Agent surfaces the user-provided agent name
   // (English or CJK) so it has to clear the 14px floor; Custom API uses a
@@ -48,6 +43,8 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
   const heroTitle = isNotionAgent
     ? `${t('chat.backend.notionAgent')} · ${agentName ?? 'Jarvis'}`
     : `${t('chat.backend.customApi')} · ${activeModel}`
+  // Meta line — ASCII mono short summary of how this backend talks. Stays
+  // English at text-meta 12px (the 14px floor only applies to CJK).
   const heroMeta = isNotionAgent
     ? 'notion-agent-cli · token_v2 · persona_overlay'
     : `openai-compat · ${activeModel}`
@@ -97,48 +94,6 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
           className="text-ink-fg-2 group-hover:text-ink-fg shrink-0 transition-colors duration-fast"
         />
       </button>
-
-      {/* Alt row — quick-pick model chips. English-only labels (mono model ids
-          + "Alt" / "+ add") so text-meta 12px is on-spec. flex-wrap so 360px
-          panel never clips the "+ add" affordance — mockup model aliases are
-          shorter (claude-3.5 / gpt-5 / deepseek-v3) so it fits single-row
-          there; we degrade to 2 rows on narrow viewports rather than clip. */}
-      <div className="mt-1.5 flex flex-wrap items-center gap-1 px-0.5">
-        <span className="text-micro font-mono uppercase tracking-wider text-ink-fg-2 pr-1">
-          Alt
-        </span>
-        {CUSTOM_API_MODELS.map((m) => {
-          const active = !isNotionAgent && activeModel === m
-          return (
-            <button
-              key={m}
-              type="button"
-              aria-pressed={active}
-              onClick={() => onChange({ kind: 'custom-api', model: m, agentPageId: null })}
-              title={m}
-              className={cn(
-                'text-meta font-mono px-1.5 py-0.5 rounded whitespace-nowrap',
-                'transition-colors duration-fast',
-                active
-                  ? 'text-coral bg-coral/10 border border-coral/30'
-                  : 'text-ink-fg-1 bg-ink-3 border border-ink-border hover:border-ink-fg-3'
-              )}
-            >
-              {MODEL_ALIAS[m] ?? m}
-            </button>
-          )
-        })}
-        <button
-          type="button"
-          onClick={() => void navigate({ to: '/settings' })}
-          className={cn(
-            'text-meta font-mono px-1.5 py-0.5 rounded',
-            'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast'
-          )}
-        >
-          + add
-        </button>
-      </div>
     </div>
   )
 }

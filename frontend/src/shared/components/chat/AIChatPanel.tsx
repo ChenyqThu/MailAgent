@@ -394,6 +394,19 @@ export function AIChatPanel(): React.ReactElement {
                 isStreaming={chat.isStreaming}
                 canSend={canSend}
                 backendName={backendName}
+                // Sprint 13 — model switcher lives in Composer Cpu button
+                // (mockup L2530). Notion Agent has no model picker — the
+                // agent decides; Custom API exposes the 3 supported models.
+                currentModel={backend.kind === 'custom-api' ? backend.model : null}
+                availableModels={
+                  backend.kind === 'custom-api'
+                    ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4']
+                    : []
+                }
+                onModelChange={(model) =>
+                  setBackend({ kind: 'custom-api', model, agentPageId: null })
+                }
+                modelPickerDisabled={backend.kind === 'notion-agent'}
               />
             </>
           )}

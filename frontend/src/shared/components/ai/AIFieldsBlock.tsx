@@ -16,7 +16,7 @@
 // hide cells whose source is null. The CSS lives in mockup index.css
 // (.ai-fields .aif-head / .aif-grid / .aif-cell / .aif-summary / .aif-signals).
 
-import { Clock, Cpu, ExternalLink, Sparkles } from 'lucide-react'
+import { Clock, Cpu, ExternalLink } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
@@ -65,10 +65,13 @@ interface CellSpec {
 }
 
 function GridCell({ label, value }: CellSpec): React.ReactElement {
+  // mockup L2178 — `aif-cell px-4 py-2.5`. Sprint 12 used px-3.5 which
+  // pulled the label too close to the divider line; sprint 13 user
+  // feedback flagged the inconsistency.
   return (
-    <div className="aif-cell px-3.5 py-2.5">
+    <div className="aif-cell px-4 py-2.5">
       <div
-        className="text-micro font-mono uppercase text-ink-fg-2"
+        className="text-micro font-mono uppercase tracking-wider text-ink-fg-2"
         style={{ letterSpacing: '0.08em' }}
       >
         {label}
@@ -172,10 +175,12 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
           )}
         </div>
         {model && (
-          <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
-            <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
-            <span>{model}</span>
-          </div>
+          // mockup L2146 — model name only, no ✦ icon, text-ink-fg-1
+          // (brighter than ink-fg-2). Sprint 12 added a coral Sparkles
+          // for visual symmetry with the head-left ✦, but the mockup is
+          // explicit: right side is just the model id in mono so the
+          // "AI Fields · N" caption stays the single brand mark.
+          <div className="text-meta font-mono text-ink-fg-1">{model}</div>
         )}
       </div>
 
@@ -234,32 +239,15 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
               isn't a multiple of 3 — empty cells keep the divider grid intact. */}
           {gridCells.length % 3 !== 0 &&
             Array.from({ length: 3 - (gridCells.length % 3) }).map((_, i) => (
-              <div key={`pad-${i}`} className="aif-cell px-3.5 py-2.5" aria-hidden />
+              <div key={`pad-${i}`} className="aif-cell px-4 py-2.5" aria-hidden />
             ))}
         </div>
       )}
 
-      {/* Footer — token / latency usage when LLM emitted them */}
-      {raw && (
-        <div className="px-4 py-2 bg-ink-2/40 border-t border-ink-border flex items-center justify-between text-meta font-mono text-ink-fg-2">
-          <div className="flex items-center gap-3">
-            {typeof raw.input_tokens === 'number' && (
-              <span>
-                in <span className="text-ink-fg-1 tabular-nums">{raw.input_tokens}</span>
-              </span>
-            )}
-            {typeof raw.output_tokens === 'number' && (
-              <span>
-                out <span className="text-ink-fg-1 tabular-nums">{raw.output_tokens}</span>
-              </span>
-            )}
-            {typeof raw.latency_ms === 'number' && <span>{raw.latency_ms}ms</span>}
-          </div>
-          {typeof raw.cache_read_input_tokens === 'number' && raw.cache_read_input_tokens > 0 && (
-            <span className="text-ok">cache · hit</span>
-          )}
-        </div>
-      )}
+      {/* Sprint 12 added a token-usage footer; mockup L2202 ends at the
+          meta grid. Sprint 13 user-feedback: AIFieldsBlock should be
+          mockup-faithful. Token cost data is still available in the
+          /llm dashboard (LlmDashboardPage). */}
     </section>
   )
 }

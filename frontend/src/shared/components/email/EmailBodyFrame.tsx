@@ -140,35 +140,46 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
     [attachments]
   )
 
-  const localPathQueries = useQueries({
+  // Sprint 13 — inline images go through `attachment:readDataUrl` which
+  // returns a `data:<mime>;base64,...` URL. The previous `file://` path
+  // failed silently inside the sandboxed srcdoc iframe (same-origin
+  // policy denies file: under a synthesised about:srcdoc origin) — that's
+  // what the user was seeing as missing inline images.
+  const dataUrlQueries = useQueries({
     queries: inlineAttachments.map((a) => ({
-      queryKey: ['attachment', a.id, 'localPath'],
-      queryFn: () => mailApi.attachment.localPath(a.id),
+      queryKey: ['attachment', a.id, 'dataUrl'],
+      queryFn: () => mailApi.attachment.readDataUrl(a.id),
       staleTime: Infinity
     }))
   })
 
   const inlineMap = useMemo(() => {
-    const entries: Array<{ cid: string; localPath: string }> = []
+    const entries: Array<{ cid: string; dataUrl: string }> = []
     for (let i = 0; i < inlineAttachments.length; i++) {
       const cid = inlineAttachments[i]!.content_id as string
-      const path = localPathQueries[i]?.data
-      if (typeof path === 'string' && path.length > 0) {
-        entries.push({ cid, localPath: path })
+      const dataUrl = dataUrlQueries[i]?.data
+      if (typeof dataUrl === 'string' && dataUrl.length > 0) {
+        entries.push({ cid, dataUrl })
       }
     }
     return entries
-  }, [inlineAttachments, localPathQueries])
+  }, [inlineAttachments, dataUrlQueries])
 
   const srcDoc = useMemo(() => {
     const html = bodyQ.data?.content
     if (typeof html !== 'string' || html.length === 0) return null
     let sanitized = DOMPurify.sanitize(html, PURIFY_OPTS)
     for (const entry of inlineMap) {
+      // `cid:` refs come quoted (src="cid:foo@bar") or unquoted in some
+      // legacy clients — match both. The data: URL itself contains no
+      // quote chars (base64 + ;), safe to slot in unescaped.
       const cidEscaped = entry.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const pattern = new RegExp(`(["'])cid:${cidEscaped}\\1`, 'gi')
-      const fileUrl = `file://${encodeURI(entry.localPath)}`
-      sanitized = sanitized.replace(pattern, `$1${fileUrl}$1`)
+      const quotedPattern = new RegExp(`(["'])cid:${cidEscaped}\\1`, 'gi')
+      sanitized = sanitized.replace(quotedPattern, `$1${entry.dataUrl}$1`)
+      // Fallback: unquoted reference (rare, but some mailer-daemons emit it).
+      const bareUrl = `cid:${entry.cid}`
+      const bareEscaped = bareUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      sanitized = sanitized.replace(new RegExp(bareEscaped, 'gi'), entry.dataUrl)
     }
     return `<!doctype html>
 <html data-theme="${resolvedTheme}">
