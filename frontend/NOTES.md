@@ -6,6 +6,18 @@
 
 ## TODO
 
+- 2026-05-20 — **Backend bug — `email_attachment.content_id` 全是同一 GUID** —
+  `sqlite3 data/sync_store.db "SELECT internal_id, content_id FROM email_attachment WHERE content_id IS NOT NULL"`
+  返回所有行 content_id = `002C7F7F-B242-44BF-B72A-D3C7ED45EACC`（Apple Mail 默认占位）。
+  HTML body 引用却是规范的 `cid:image001.png@01D283A3.7269CD10`。这导致前端
+  EmailBodyFrame 按 content_id exact match 永远 miss → 内联图片不显示。
+  当前 Sprint 13 前端 workaround：
+  (a) 加 filename-base 反推（cid: 前 `@` 部分匹配 `attachment.filename` 或去
+      掉扩展名），
+  (b) 同时新增 IPC `attachment:readDataUrl` 绕 sandbox file:// 限制。
+  **真修需要在 `src/mail/reader.py` _extract_html_thread_cid_inline_images 中**
+  正确解析每个 MIME part 的 Content-ID 头并 1:1 写到 `email_attachment.content_id`
+  而非沿用 Apple-Mail 占位。Sprint 14 reader.py 重构时一并处理。
 - 2026-05-19 — **Strategic / 系列化改动** — 当前 EmailRow flag 三态切换走 `mailApi.notion.updateFlag(...)` →
   `mailagent notion update-flag <id> ...` CLI → **Notion `Is Read` / `Is Flagged` / `Processing Status` 字段更新** → Notion
   automation webhook → Redis 队列 → `handle_flag_changed` 反向同步到 Mail.app。这个回环（Notion → Mail.app + SQLite）

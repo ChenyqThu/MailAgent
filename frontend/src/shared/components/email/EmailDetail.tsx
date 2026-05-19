@@ -432,7 +432,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           : 'loading'
 
   return (
-    <main aria-label="inbox-main" className="flex-1 min-w-0 bg-ink-3 flex flex-col min-h-0">
+    // mockup L2036 — `<section class="glass-3 flex-1 min-w-0 flex flex-col">`.
+    // Previous `bg-ink-3` was a solid ink, not the Liquid Glass surface; that's
+    // what the user flagged as "正文背景没统一 mockup 毛玻璃风格". `.glass-3`
+    // (authored in index.css) layers a translucent ink-3 on top of the
+    // wallpaper + backdrop-filter blur(40px).
+    <main aria-label="inbox-main" className="flex-1 min-w-0 glass-3 flex flex-col min-h-0">
       <EmailToolbar
         translate={{
           langIsEn,

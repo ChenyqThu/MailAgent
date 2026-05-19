@@ -10,7 +10,7 @@
 // current accent + ink-* tokens so theme/accent swaps re-tint the iframe
 // content too.
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import DOMPurify from 'dompurify'
 
@@ -23,10 +23,18 @@ interface Props {
   attachments: NonNullable<EmailDetail['attachments']>
 }
 
+// DOMPurify URI regex — allow data: ONLY for image MIME types (so an
+// attacker can't slip `data:text/html` payloads), plus the usual safe
+// schemes. Without this, the default regex strips `data:image/png;base64,...`
+// even though we wrote it ourselves to fix the inline-image rendering.
+const SAFE_URI_REGEXP =
+  /^(?:(?:https?|mailto|tel|callto|sms|cid|xmpp|data:image\/(?:png|jpe?g|gif|webp|svg\+xml|heic)):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i
+
 const PURIFY_OPTS = {
   USE_PROFILES: { html: true },
   FORBID_TAGS: ['iframe', 'object', 'embed', 'form', 'input', 'button'],
-  FORBID_ATTR: ['target', 'onerror', 'onclick', 'onload']
+  FORBID_ATTR: ['target', 'onerror', 'onclick', 'onload'],
+  ALLOWED_URI_REGEXP: SAFE_URI_REGEXP
 }
 
 const BODY_CSS = `
@@ -45,16 +53,28 @@ const BODY_CSS = `
     --ink-fg-2: 122 127 138;
     --ink-border: 214 217 221;
   }
-  body {
+  html, body {
     margin: 0;
     padding: 0;
     background: transparent;
+    /* Sprint 13 — body width follows the iframe (which is w-full of the
+       max-w-[820px] container). Long tables / fixed-width newsletter
+       layouts would otherwise overflow horizontally; force every block
+       container to live within the available width. */
+    max-width: 100%;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+  body {
     color: rgb(var(--ink-fg-1));
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
     font-size: 14px;
     line-height: 1.7;
     font-feature-settings: 'ss01', 'cv11';
   }
+  /* Defensive: every direct block should respect parent width so a
+     newsletter <div style="width: 800px"> doesn't blow out the iframe. */
+  body * { max-width: 100%; }
   h1, h2, h3 {
     color: rgb(var(--ink-fg));
     font-weight: 600;
@@ -113,10 +133,15 @@ const BODY_CSS = `
   ul, ol { padding-left: 22px; margin: 0 0 12px; }
   li { margin-bottom: 4px; }
   img { max-width: 100%; height: auto; border-radius: 6px; }
-  table { border-collapse: collapse; max-width: 100%; }
+  /* Override <table width="600"> attributes (common in HTML newsletter
+     boilerplate) so the email body re-flows when the user shrinks the
+     column. !important wins over inline style="width:600px" from the
+     senders MUA. */
+  table { border-collapse: collapse; max-width: 100% !important; width: auto !important; table-layout: auto; }
   table td, table th {
     border: 1px solid rgb(var(--ink-border));
     padding: 6px 10px; font-size: 13px;
+    word-break: break-word;
   }
   hr {
     border: 0;
@@ -135,61 +160,122 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
     staleTime: Infinity
   })
 
-  const inlineAttachments = useMemo(
-    () => attachments.filter((a) => a.is_inline && typeof a.content_id === 'string'),
+  // Sprint 13 — every image-typed attachment is a *candidate* for inline
+  // replacement, not just rows with is_inline=true. Reader sometimes
+  // mis-tags is_inline (Apple Mail's Content-Disposition is unreliable)
+  // and — separately — DB content_id can collide on a single Apple-Mail
+  // GUID across attachments (backend bug; Sprint 14 reader.py rework).
+  // We therefore (a) widen the candidate set, (b) pre-fetch all data
+  // URLs, and (c) match by content_id first then fall back to filename
+  // basename (cid:image001.png@xxx → filename "image001.png").
+  const imageCandidates = useMemo(
+    () =>
+      attachments.filter((a) => {
+        if (typeof a.content_id === 'string' && a.content_id.length > 0) return true
+        const ct = (a.content_type ?? '').toLowerCase()
+        if (ct.startsWith('image/')) return true
+        const name = a.filename.toLowerCase()
+        return /\.(png|jpe?g|gif|webp|svg|heic)$/.test(name)
+      }),
     [attachments]
   )
 
-  // Sprint 13 — inline images go through `attachment:readDataUrl` which
-  // returns a `data:<mime>;base64,...` URL. The previous `file://` path
-  // failed silently inside the sandboxed srcdoc iframe (same-origin
-  // policy denies file: under a synthesised about:srcdoc origin) — that's
-  // what the user was seeing as missing inline images.
   const dataUrlQueries = useQueries({
-    queries: inlineAttachments.map((a) => ({
+    queries: imageCandidates.map((a) => ({
       queryKey: ['attachment', a.id, 'dataUrl'],
       queryFn: () => mailApi.attachment.readDataUrl(a.id),
       staleTime: Infinity
     }))
   })
 
-  const inlineMap = useMemo(() => {
-    const entries: Array<{ cid: string; dataUrl: string }> = []
-    for (let i = 0; i < inlineAttachments.length; i++) {
-      const cid = inlineAttachments[i]!.content_id as string
-      const dataUrl = dataUrlQueries[i]?.data
-      if (typeof dataUrl === 'string' && dataUrl.length > 0) {
-        entries.push({ cid, dataUrl })
+  // Build two lookup tables for the cid → dataUrl resolver:
+  //   - byCid (primary): exact `Content-ID` match
+  //   - byBaseName (fallback): filename without extension (lowercase)
+  //     for use when reader gave every attachment the same wrong GUID
+  const { byCid, byBaseName } = useMemo(() => {
+    const byCid = new Map<string, string>()
+    const byBaseName = new Map<string, string>()
+    for (let i = 0; i < imageCandidates.length; i++) {
+      const att = imageCandidates[i]!
+      const url = dataUrlQueries[i]?.data
+      if (typeof url !== 'string' || url.length === 0) continue
+      if (typeof att.content_id === 'string' && att.content_id.length > 0) {
+        byCid.set(att.content_id.toLowerCase(), url)
       }
+      // Filename can be `image001.png` or `image001` — index both forms
+      // so HTML refs like `cid:image001.png@01D...` and `cid:image001@xxx`
+      // resolve.
+      const filename = att.filename.toLowerCase()
+      byBaseName.set(filename, url)
+      const dot = filename.lastIndexOf('.')
+      if (dot > 0) byBaseName.set(filename.slice(0, dot), url)
     }
-    return entries
-  }, [inlineAttachments, dataUrlQueries])
+    return { byCid, byBaseName }
+  }, [imageCandidates, dataUrlQueries])
 
   const srcDoc = useMemo(() => {
     const html = bodyQ.data?.content
     if (typeof html !== 'string' || html.length === 0) return null
     let sanitized = DOMPurify.sanitize(html, PURIFY_OPTS)
-    for (const entry of inlineMap) {
-      // `cid:` refs come quoted (src="cid:foo@bar") or unquoted in some
-      // legacy clients — match both. The data: URL itself contains no
-      // quote chars (base64 + ;), safe to slot in unescaped.
-      const cidEscaped = entry.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const quotedPattern = new RegExp(`(["'])cid:${cidEscaped}\\1`, 'gi')
-      sanitized = sanitized.replace(quotedPattern, `$1${entry.dataUrl}$1`)
-      // Fallback: unquoted reference (rare, but some mailer-daemons emit it).
-      const bareUrl = `cid:${entry.cid}`
-      const bareEscaped = bareUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      sanitized = sanitized.replace(new RegExp(bareEscaped, 'gi'), entry.dataUrl)
-    }
+    // Sprint 13 — single-pass rewrite of EVERY `cid:...` in the body so
+    // we don't depend on the backend's content_id mapping (which is
+    // broken for Apple-Mail-shaped GUIDs across attachments). For each
+    // match, try content_id exact match first, then filename basename,
+    // then leave the cid: in place (image will render as broken-glyph
+    // and the user can see something is wrong).
+    const cidRefPattern = /cid:([^"'\s>)]+)/gi
+    sanitized = sanitized.replace(cidRefPattern, (whole, rawCid: string) => {
+      const cid = rawCid.toLowerCase()
+      // 1) exact content_id
+      const direct = byCid.get(cid)
+      if (direct) return direct
+      // 2) strip `@<domain>` suffix → match filename basename
+      const before = cid.split('@')[0]
+      if (before) {
+        const hit = byBaseName.get(before)
+        if (hit) return hit
+        // 3) sometimes refs include only the basename without the extension
+        const dot = before.lastIndexOf('.')
+        if (dot > 0) {
+          const noExt = before.slice(0, dot)
+          const hit2 = byBaseName.get(noExt)
+          if (hit2) return hit2
+        }
+      }
+      return whole
+    })
     return `<!doctype html>
 <html data-theme="${resolvedTheme}">
 <head>
   <meta charset="utf-8" />
   <style>${BODY_CSS}</style>
 </head>
-<body>${sanitized}</body>
+<body>${sanitized}<script>
+  // Sprint 13 — auto-resize iframe to fit content so the email body
+  // doesn't get an arbitrary 60vh cap. ResizeObserver fires both on
+  // initial paint and on image load completion (lazy-loaded images
+  // grow the body after first measure).
+  (function () {
+    function reportHeight() {
+      var h = Math.max(
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight
+      );
+      window.parent.postMessage({ type: 'mailagent:body-height', h: h }, '*');
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(reportHeight).observe(document.body);
+    }
+    document.querySelectorAll('img').forEach(function (img) {
+      if (!img.complete) img.addEventListener('load', reportHeight);
+      img.addEventListener('error', reportHeight);
+    });
+    window.addEventListener('load', reportHeight);
+    reportHeight();
+  })();
+</script></body>
 </html>`
-  }, [bodyQ.data, inlineMap, resolvedTheme])
+  }, [bodyQ.data, byCid, byBaseName, resolvedTheme])
 
   if (bodyQ.isError) {
     return (
@@ -204,12 +290,52 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
   if (srcDoc === null) {
     return <div className="text-aux text-ink-fg-2">(empty body)</div>
   }
+  return <BodyIframe srcDoc={srcDoc} key={internalId} />
+}
+
+// Sprint 13 — separate component so the postMessage listener + height
+// state live in one place, and remounting on email switch (via `key=`)
+// resets height cleanly. The iframe inner script (see srcDoc above)
+// reports `{ type: 'mailagent:body-height', h: number }` whenever its
+// body resizes (ResizeObserver) or images finish loading.
+interface BodyIframeProps {
+  srcDoc: string
+}
+
+function BodyIframe({ srcDoc }: BodyIframeProps): React.ReactElement {
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  // 400px initial keeps the layout from flashing tiny while the iframe
+  // measures itself; once the first message lands the height jumps to
+  // the real value.
+  const [height, setHeight] = useState<number>(400)
+
+  useEffect(() => {
+    function onMessage(e: MessageEvent): void {
+      // Only accept messages from our own iframe — sandbox same-origin
+      // means contentWindow.origin matches window.origin, but the source
+      // identity check is the actual gate.
+      if (e.source !== iframeRef.current?.contentWindow) return
+      const data = e.data as { type?: string; h?: number } | null
+      if (!data || data.type !== 'mailagent:body-height') return
+      if (typeof data.h !== 'number' || !Number.isFinite(data.h)) return
+      // Clamp to a sane range — very tall messages still scroll the
+      // OUTER container (the email pane) since the iframe is part of
+      // that scroll context.
+      const next = Math.max(120, Math.min(Math.round(data.h), 20000))
+      setHeight((prev) => (Math.abs(prev - next) < 2 ? prev : next))
+    }
+    window.addEventListener('message', onMessage)
+    return (): void => window.removeEventListener('message', onMessage)
+  }, [])
+
   return (
     <iframe
+      ref={iframeRef}
       title="email-body"
       sandbox="allow-same-origin"
       srcDoc={srcDoc}
-      className="w-full min-h-[60vh] border-0 bg-transparent"
+      style={{ height: `${height}px` }}
+      className="w-full border-0 bg-transparent block"
     />
   )
 }
