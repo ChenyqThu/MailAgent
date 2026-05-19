@@ -834,6 +834,52 @@ body::before {
   background: rgb(var(--c-accent));
 }
 
+/* Sprint 14 round 11 — wrapper owns the row's hover / selected chrome
+ * when EmailList renders threads.  Putting the wash + the accent bar
+ * on the wrapper (rather than the EmailRow article) lets the chevron
+ * column share the selected wash and pushes the 3px coral bar to the
+ * very left edge of the list, not the left edge of the row content
+ * 24px in.  User feedback: "选中邮件的最左侧加重标记也是要在最左侧
+ * (包括折叠 icon)".
+ *   data-selected="true"   = the active email belongs to this thread,
+ *                            so wrap (head + every child) reads as one.
+ *   data-child="true"      = this row is a folded child; subtle inset
+ *                            tint so the bundle reads as grouped. */
+.thread-row-wrap {
+  position: relative;
+  transition: background 120ms ease;
+}
+.thread-row-wrap:hover {
+  background: rgb(var(--ink-3) / 0.55);
+}
+.thread-row-wrap[data-child='true']:not([data-selected='true']) {
+  background: rgb(var(--ink-1) / 0.35);
+}
+.thread-row-wrap[data-selected='true'] {
+  background: rgb(var(--ink-4) / 0.7);
+}
+.thread-row-wrap[data-selected='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: rgb(var(--c-accent));
+  pointer-events: none;
+}
+/* When the wrapper paints the chrome the inner article must yield
+ * (otherwise we'd get a double wash + double bar 24px in). */
+.thread-row-wrap .email-row.is-selected {
+  background: transparent;
+}
+.thread-row-wrap .email-row.is-selected::before {
+  display: none;
+}
+.thread-row-wrap:hover .email-row {
+  background: transparent;
+}
+
 /* Avatar / cb share the same grid cell so batch-mode can swap without reflow */
 .email-row > .avatar,
 .email-row > .cb {

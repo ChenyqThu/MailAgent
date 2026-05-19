@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { List, type RowComponentProps } from 'react-window'
 import { ChevronDown, Filter, ListChecks, Mail } from 'lucide-react'
 
@@ -38,7 +38,7 @@ import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { cleanSnippet } from '@shared/lib/mail_parse'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
-import type { AIPriority, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
+import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 
 import { EmailRow } from './EmailRow'
 import { BatchActionBar } from './BatchActionBar'
@@ -64,6 +64,11 @@ type ListRow =
       email: EnrichedEmailMeta
       groupKey: GroupKey
       thread?: ThreadRowInfo
+      /** Sprint 14 round 11 — true when the active email is part of
+       *  this row's thread bundle (head + every child).  Drives both
+       *  the wrapper selected wash and the coral accent bar so the
+       *  whole bundle reads as one selection unit. */
+      bundleSelected: boolean
     }
   | { type: 'loader' }
 
@@ -80,7 +85,9 @@ function VirtualRow({
   index,
   style,
   rows,
-  activeId,
+  // activeId is folded into `item.bundleSelected` at flatten time so the
+  // row component itself only needs the rest.  The prop stays in
+  // RowProps so the List parent re-renders rows when active changes.
   newIds,
   onSelect,
   onToggleGroup,
@@ -139,14 +146,9 @@ function VirtualRow({
   return (
     <div
       style={style}
-      className={cn(
-        'flex items-stretch',
-        // Child rows get a subtle inset wash so the bundle reads as a
-        // grouped block.  Background swatch is the same as the read-
-        // mail surface, just slightly more saturated by the parent
-        // glass-2 underneath.
-        isChild && 'bg-ink-1/35'
-      )}
+      className="thread-row-wrap flex items-stretch"
+      data-selected={item.bundleSelected ? 'true' : 'false'}
+      data-child={isChild ? 'true' : 'false'}
     >
       <div className="thread-col w-6 shrink-0 relative">
         {isHead && (
@@ -183,7 +185,10 @@ function VirtualRow({
       <div className="flex-1 min-w-0">
         <EmailRow
           email={item.email}
-          selected={item.email.internal_id === activeId}
+          // Sprint 14 round 11 — selected = thread-wide. Wrapper paints
+          // the wash + bar so EmailRow stays visually neutral but still
+          // emits the right a11y / data-state.
+          selected={item.bundleSelected}
           isNew={newIds.has(item.email.internal_id)}
           noAvatar={isChild}
           onSelect={() => onSelect(item.email.internal_id)}
@@ -289,13 +294,20 @@ interface ThreadGroup {
   children: EnrichedEmailMeta[]
 }
 
-function groupByThread(emails: ReadonlyArray<EnrichedEmailMeta>): ThreadGroup[] {
+function groupByThread(
+  emails: ReadonlyArray<EnrichedEmailMeta>,
+  // Sprint 14 round 11 — listByThread supplement keyed by thread_id.
+  // Each entry is the FULL thread fetched cross-mailbox so the bundle
+  // contains every message, not just the ones that survived the
+  // current mailbox / chip / category filter.  Missing tid → fall back
+  // to whatever the visible `emails` list contained.
+  threadSupplement: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMeta>>
+): ThreadGroup[] {
   const byTid = new Map<string, EnrichedEmailMeta[]>()
   const solo: ThreadGroup[] = []
-  // Sprint 14 round 10 — de-dupe by internal_id while partitioning so
-  // an email cannot surface twice (once as a thread head / child and
-  // again as a solitary row).  User feedback: "同一封邮件不应该出现
-  // 两次, 如果被折叠到线程里, 就不应该出现在主线程里".
+  // De-dupe by internal_id while partitioning so an email cannot
+  // surface twice.  User feedback: "同一封邮件不应该出现两次, 如果被
+  // 折叠到线程里, 就不应该出现在主线程里".
   const seen = new Set<number>()
   for (const e of emails) {
     if (seen.has(e.internal_id)) continue
@@ -308,6 +320,19 @@ function groupByThread(emails: ReadonlyArray<EnrichedEmailMeta>): ThreadGroup[] 
       solo.push({ threadId: null, head: e, children: [] })
     }
   }
+  // Merge supplement messages for every visible thread.  Skip ids we
+  // already collected from the visible list so the same email can't
+  // appear twice across visible-set + supplement.
+  for (const [tid, arr] of byTid) {
+    const supplement = threadSupplement.get(tid)
+    if (!supplement) continue
+    for (const s of supplement) {
+      if (seen.has(s.internal_id)) continue
+      seen.add(s.internal_id)
+      arr.push(s)
+    }
+  }
+
   const groups: ThreadGroup[] = []
   for (const [tid, arr] of byTid) {
     arr.sort((a, b) => (b.date_received ?? '').localeCompare(a.date_received ?? ''))
@@ -348,8 +373,21 @@ function partitionByDate(
     older: []
   }
 
+  // Sprint 14 round 11 — thread-level pinning. User feedback: "固定也
+  // 是整个线程固定". If ANY message inside the bundle is pinned, the
+  // whole thread surfaces in the pinned bucket.  Date bucketing only
+  // considers the head's date (the freshest message), per "时间分组
+  // 不考虑折叠内的邮件,只考虑线程最新邮件".
+  const isThreadPinned = (g: ThreadGroup): boolean => {
+    if (pinnedSet.has(g.head.internal_id)) return true
+    for (const c of g.children) {
+      if (pinnedSet.has(c.internal_id)) return true
+    }
+    return false
+  }
+
   for (const g of groups) {
-    if (pinnedSet.has(g.head.internal_id)) {
+    if (isThreadPinned(g)) {
       buckets.pinned.push(g)
       continue
     }
@@ -372,6 +410,7 @@ function flattenGroups(
   labels: Record<GroupKey, string>,
   collapsedOf: (key: GroupKey) => boolean,
   threadCollapsed: ReadonlySet<string>,
+  activeId: number | null,
   appendLoader: boolean
 ): ListRow[] {
   const order: GroupKey[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'lastWeek', 'older']
@@ -380,24 +419,31 @@ function flattenGroups(
     const groupArr = buckets[key]
     if (groupArr.length === 0) continue
     const collapsed = collapsedOf(key)
-    // Group count = total messages (head + children across all threads)
-    // so the header shows the human-truthful number, not the bundle count.
-    const total = groupArr.reduce((acc, g) => acc + 1 + g.children.length, 0)
+    // Sprint 14 round 11 — count = visible thread heads (a.k.a. bundles
+    // shown in this group), NOT total messages.  User feedback: "时间
+    // 分组不考虑折叠内的邮件,只考虑线程最新邮件 (也就是折叠的母邮件)".
     out.push({
       type: 'header',
       key,
       label: labels[key],
-      count: total,
+      count: groupArr.length,
       collapsed
     })
     if (collapsed) continue
     for (const g of groupArr) {
       const isThreadHead = g.threadId !== null && g.children.length > 0
       const expanded = isThreadHead ? !threadCollapsed.has(g.threadId!) : false
+      // bundleSelected — does activeId belong anywhere in this thread?
+      // For solitary rows we still set it from the head id so the same
+      // wrapper chrome (wash + accent bar) covers solitary selections.
+      const bundleSelected =
+        activeId !== null &&
+        (g.head.internal_id === activeId || g.children.some((c) => c.internal_id === activeId))
       out.push({
         type: 'email',
         email: g.head,
         groupKey: key,
+        bundleSelected,
         thread: isThreadHead
           ? {
               isHead: true,
@@ -412,6 +458,7 @@ function flattenGroups(
           out.push({
             type: 'email',
             email: child,
+            bundleSelected,
             groupKey: key,
             thread: { isHead: false, threadId: g.threadId! }
           })
@@ -618,7 +665,39 @@ export function EmailList(): React.ReactElement {
     })
   }, [])
 
-  const threadGroups = useMemo(() => groupByThread(filtered), [filtered])
+  // Sprint 14 round 11 — cross-mailbox thread completion.  listEnriched
+  // is mailbox-scoped, so a thread that spans inbox + outbox shows up
+  // truncated in the list.  For each visible thread_id we hit
+  // listByThread (which queries SQLite without a mailbox filter), then
+  // hand the supplement to groupByThread which merges by internal_id.
+  const uniqueThreadIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const e of all) if (e.thread_id) set.add(e.thread_id)
+    return Array.from(set)
+  }, [all])
+
+  const threadQueries = useQueries({
+    queries: uniqueThreadIds.map((tid) => ({
+      queryKey: ['email', 'thread', tid],
+      queryFn: () => mailApi.email.listByThread(tid),
+      staleTime: 60_000
+    }))
+  })
+
+  const threadSupplement = useMemo(() => {
+    const m = new Map<string, EnrichedEmailMeta[]>()
+    uniqueThreadIds.forEach((tid, i) => {
+      const data = threadQueries[i]?.data
+      if (!data) return
+      m.set(tid, data.map(enrichDefaults))
+    })
+    return m
+  }, [uniqueThreadIds, threadQueries])
+
+  const threadGroups = useMemo(
+    () => groupByThread(filtered, threadSupplement),
+    [filtered, threadSupplement]
+  )
   const buckets = useMemo(() => partitionByDate(threadGroups, pinnedSet), [threadGroups, pinnedSet])
 
   // Show the loader sentinel when we still have headroom (no end-of-data
@@ -628,8 +707,8 @@ export function EmailList(): React.ReactElement {
   const showLoader = !reachedEnd && pageCount < MAX_PAGES
 
   const rows = useMemo(
-    () => flattenGroups(buckets, groupLabels, isCollapsed, threadCollapsed, showLoader),
-    [buckets, groupLabels, isCollapsed, threadCollapsed, showLoader]
+    () => flattenGroups(buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader),
+    [buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader]
   )
 
   const priActive = !allPrioritiesSelected()
@@ -867,6 +946,25 @@ function allIdsFirstPage(all: ReadonlyArray<EnrichedEmailMeta>): number[] {
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+// Sprint 14 round 11 — listByThread returns the bare EmailMeta shape
+// (no snippet / ai_* fields).  Thread children are rendered with the
+// same EmailRow component used by the head, so we widen each row to
+// EnrichedEmailMeta with safe defaults.  The empty AI fields make the
+// child rows render the simpler 60-78px layout (no ai-strip / snippet)
+// which reads well under the head.
+function enrichDefaults(m: EmailMeta): EnrichedEmailMeta {
+  return {
+    ...m,
+    snippet: null,
+    lang: 'unknown',
+    ai_priority: null,
+    ai_action: null,
+    ai_category: null,
+    attach_count: 0,
+    is_important: false
+  }
 }
 
 // Priority dot uses the same Tailwind tokens as the EmailRow .pdot states.

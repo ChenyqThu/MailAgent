@@ -23,8 +23,6 @@ import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
-import { HoverTip } from '@shared/components/ui/HoverTip'
-
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { TranslatedBody } from './TranslatedBody'
@@ -569,6 +567,25 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                 value: <span className="font-mono text-meta break-all">{email.message_id}</span>
               })
             }
+            if (email.notion_url) {
+              morePropsRows.push({
+                label: 'Notion URL',
+                value: (
+                  <a
+                    href={email.notion_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={cn(
+                      'inline-flex items-center gap-1 text-coral hover:text-coral-hover',
+                      'transition-colors duration-fast break-all'
+                    )}
+                  >
+                    {email.notion_url}
+                    <ExternalLink size={11} strokeWidth={2} />
+                  </a>
+                )
+              })
+            }
             return (
               <>
                 <dl className="mt-1 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux">
@@ -714,49 +731,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               ThreadBundle.tsx 保留供 Sprint 15+ 可能的 "完整 thread
               视图" 复用, 但当前不挂在 DOM 上. */}
 
-          {/* Footer — Sprint 13 round 7 user feedback: "ID 之类的字段可
-              以直接隐藏 (一般不用)". The internal_id + message_id mono
-              blob lived on the left of this row; gone. Power users can
-              still pull them via `mailagent -o json email get <id>` or
-              the toolbar Notion link. Right side keeps "查看原文 .eml"
-              (Sprint 14 待 CLI wiring) and "在 Notion 打开 ↗". */}
-          <div className="mt-8 pt-5 border-t border-ink-border-soft flex items-center justify-end text-aux">
-            <div className="flex items-center gap-3">
-              {/* View source (.eml) — backend has `mailagent debug
-                  email-source <id>` but no IPC wrapper yet. Sprint 14
-                  will land it; for now HoverTip explains the gap so the
-                  affordance is discoverable without being a lie. */}
-              <HoverTip text={t('emailDetail.viewSourceBlocked')} side="top">
-                <button
-                  type="button"
-                  disabled
-                  data-disabled=""
-                  tabIndex={-1}
-                  className={cn(
-                    'text-aux text-ink-fg-3 opacity-50 cursor-not-allowed',
-                    'transition-colors duration-fast'
-                  )}
-                  onClick={() => toastSuccess(t('emailDetail.viewSourceBlocked'))}
-                >
-                  {t('emailDetail.viewSource')}
-                </button>
-              </HoverTip>
-              {email.notion_url && (
-                <>
-                  <span className="text-ink-fg-3">·</span>
-                  <a
-                    href={email.notion_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-aux text-coral hover:text-coral-hover transition-colors duration-fast inline-flex items-center gap-1"
-                  >
-                    {t('toolbar.openNotion')}
-                    <ExternalLink size={12} strokeWidth={2} />
-                  </a>
-                </>
-              )}
-            </div>
-          </div>
+          {/* Sprint 14 round 11 — footer 删除. "查看原文 .eml" 是空 CTA
+              (没 CLI wiring) 现在不出现; "在 Notion 打开" 跟 toolbar 顶部
+              的 ExternalLink 按钮 (`toolbar.openNotion`) 重复, 也删. Notion
+              URL 改为 morePropsRows 默认折叠的属性, 用户需要时点 "更多
+              属性" 展开能看到. */}
         </div>
       </div>
     </main>
