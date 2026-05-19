@@ -15,18 +15,26 @@
   Bundle header 提供"全部展开 / 全部收起". i18n thread.bundleTitle /
   bundleSummary / expandAll / collapseAll / loading 加在现有 thread.*
   namespace 下 (zh + en).
-- 2026-05-20 — **Backend bug — `email_attachment.content_id` 全是同一 GUID** —
-  `sqlite3 data/sync_store.db "SELECT internal_id, content_id FROM email_attachment WHERE content_id IS NOT NULL"`
-  返回所有行 content_id = `002C7F7F-B242-44BF-B72A-D3C7ED45EACC`（Apple Mail 默认占位）。
-  HTML body 引用却是规范的 `cid:image001.png@01D283A3.7269CD10`。这导致前端
-  EmailBodyFrame 按 content_id exact match 永远 miss → 内联图片不显示。
-  当前 Sprint 13 前端 workaround：
-  (a) 加 filename-base 反推（cid: 前 `@` 部分匹配 `attachment.filename` 或去
-      掉扩展名），
-  (b) 同时新增 IPC `attachment:readDataUrl` 绕 sandbox file:// 限制。
-  **真修需要在 `src/mail/reader.py` _extract_html_thread_cid_inline_images 中**
-  正确解析每个 MIME part 的 Content-ID 头并 1:1 写到 `email_attachment.content_id`
-  而非沿用 Apple-Mail 占位。Sprint 14 reader.py 重构时一并处理。
+- 2026-05-20 — **内联图片不显示 — ✅ Sprint 14 round 17 + 18 已修**
+  原诊断 (2026-05-20 早些) 怀疑 `email_attachment.content_id` 全占位 GUID 是
+  根因, 实际是误判 (那个 GUID 只是单一邮件的占位, 抽样邮件如 53830 的
+  content_id 是正确的 `image001.png@01DCE7A0.E52EB7A0`).
+  真根因 (round 17/18 各修一半):
+  (round 17) backend `src/repository/storage_payload_builder.py:_rewrite_cid
+  _to_local` 在落库前把 body_html 里的 `<img src="cid:xxx">` 改成
+  `<img src="attachments/<id>/<file>">` 相对路径. 前端 EmailBodyFrame 只 hook
+  了 `cid:` 重写, 对 `attachments/...` 相对路径不动 → 浏览器在 srcdoc iframe
+  内 fetch 相对路径同源解析失败 → 破图. 加第二段 regex rewrite 命中
+  `attachments/<internalId>/<file>` 形, 按 filename 在 byBaseName 内换成
+  data: URL.
+  (round 18) 但 round 17 ship 时图片仍不显示, 真挖到底是
+  `frontend/src/electron/main/handlers/attachment.ts:readAttachmentAsDataUrl`
+  用 `readFile(row.local_path)` 直接传 SQLite 里存的相对路径
+  "data/attachments/<id>/<file>". Electron main process 的 cwd 不是 project
+  root (生产 .app bundle, dev 是别处), readFile ENOENT → catch null →
+  前端 dataUrl 拿不到 → byBaseName 空 → rewrite 找不到 url → 破图. 修:
+  resolve 成绝对路径 `dirname(dirname(resolveDbPath())) + local_path` 再读.
+  node 脚本真验过 readFile 拿到 139657 bytes.
 - 2026-05-19 — **Strategic / 系列化改动** — 当前 EmailRow flag 三态切换走 `mailApi.notion.updateFlag(...)` →
   `mailagent notion update-flag <id> ...` CLI → **Notion `Is Read` / `Is Flagged` / `Processing Status` 字段更新** → Notion
   automation webhook → Redis 队列 → `handle_flag_changed` 反向同步到 Mail.app。这个回环（Notion → Mail.app + SQLite）

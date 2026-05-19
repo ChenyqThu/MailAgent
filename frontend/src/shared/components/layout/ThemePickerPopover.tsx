@@ -7,6 +7,7 @@
 // Persistence still goes through `useAppearance.setThemeMode`.
 
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Monitor, Moon, Sun } from 'lucide-react'
 
@@ -79,52 +80,59 @@ export function ThemePickerPopover(): React.ReactElement {
         <span>{t(`settings.theme.${themeMode}`)}</span>
       </button>
 
-      {open && (
-        <div
-          ref={popoverRef}
-          role="dialog"
-          aria-label={t('titleBar.themeCycle')}
-          className="theme-popover glass-pop"
-          style={
-            {
-              right: '88px',
-              width: '180px',
-              WebkitAppRegion: 'no-drag'
-            } as React.CSSProperties
-          }
-        >
-          <div className="px-3 pt-2 pb-1.5 border-b border-ink-border-soft">
-            <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2">Theme</div>
-          </div>
-          <div className="py-1">
-            {THEME_OPTIONS.map((opt) => {
-              const active = themeMode === opt.id
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => {
-                    setThemeMode(opt.id)
-                    setOpen(false)
-                  }}
-                  className={cn(
-                    'w-full flex items-center gap-2 px-3 py-1.5 text-aux text-left',
-                    'transition-colors duration-fast',
-                    active
-                      ? 'row-selected bg-ink-4 text-ink-fg font-medium'
-                      : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
-                  )}
-                >
-                  <span className="shrink-0 grid place-items-center w-[14px] h-[14px] text-ink-fg-2">
-                    {opt.icon}
-                  </span>
-                  <span className="flex-1">{t(`settings.theme.${opt.id}`)}</span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
+      {/* Sprint 14 round 19 — Portal to body so popover paints above any
+          later-DOM stacking context (e.g. EmailDetail's sticky strip).
+          See AccentPickerPopover for the same fix. */}
+      {open &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            role="dialog"
+            aria-label={t('titleBar.themeCycle')}
+            className="theme-popover glass-pop"
+            style={
+              {
+                right: '88px',
+                width: '180px',
+                WebkitAppRegion: 'no-drag'
+              } as React.CSSProperties
+            }
+          >
+            <div className="px-3 pt-2 pb-1.5 border-b border-ink-border-soft">
+              <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2">
+                Theme
+              </div>
+            </div>
+            <div className="py-1">
+              {THEME_OPTIONS.map((opt) => {
+                const active = themeMode === opt.id
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      setThemeMode(opt.id)
+                      setOpen(false)
+                    }}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-3 py-1.5 text-aux text-left',
+                      'transition-colors duration-fast',
+                      active
+                        ? 'row-selected bg-ink-4 text-ink-fg font-medium'
+                        : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+                    )}
+                  >
+                    <span className="shrink-0 grid place-items-center w-[14px] h-[14px] text-ink-fg-2">
+                      {opt.icon}
+                    </span>
+                    <span className="flex-1">{t(`settings.theme.${opt.id}`)}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>,
+          document.body
+        )}
     </>
   )
 }
