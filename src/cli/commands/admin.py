@@ -56,11 +56,15 @@ def admin_stats(
     ctx: typer.Context,
     section: Optional[str] = typer.Option(
         None, "--section",
-        help="watcher / sync_store / handlers / v4_rollout / all",
+        help="watcher / sync_store / handlers / v4_rollout / outbox / all",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """汇总服务运行状态 — PR-2 MVP: 仅 sync_store live_query 段填充, 其余 not_implemented_in_pr2."""
+    """汇总服务运行状态 — PR-2 MVP: 仅 sync_store live_query 段填充, 其余 not_implemented_in_pr2.
+
+    Sprint 15 Stage 4 加 outbox section: OutboxRepository.get_stats() 反查
+    by_status / by_target / age_buckets / total。
+    """
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
 
@@ -81,11 +85,15 @@ def admin_stats(
     # PR-4 R-06: v4_rollout 真实数据 (RFC §8 选项 A).
     v4_section = _build_v4_rollout_section(cli)
 
+    # Sprint 15: outbox 队列分布
+    outbox_section = _build_outbox_section(cli)
+
     full_data = {
         "watcher": {"_source": "not_implemented_in_pr2"},
         "sync_store": sync_store_section,
         "handlers": {"_source": "not_implemented_in_pr2"},
         "v4_rollout": v4_section,
+        "outbox": outbox_section,
     }
 
     if section and section.lower() != "all":
@@ -1059,3 +1067,270 @@ def admin_config_set(
 
 # 挂到 admin app
 app.add_typer(config_app, name="config")
+
+
+# ============================================================
+# Sprint 15 Stage 4: 管理面补全
+# ============================================================
+#
+# 新增 3 个独立命令 + admin stats --section outbox 扩展, 让前端 Dashboard 拿到
+# 综合状态视图, 不再让 SQL 散落到 CLAUDE.md。
+#
+# - admin fts-health   FTS5 索引完整性 (body vs fts 行数 gap + integrity)
+# - admin pm2-status   PM2 mail-sync 进程状态（前端避免与主进程冲突时用）
+# - admin queue-depth  综合队列: sync_store / outbox / llm_processing
+
+
+def _build_outbox_section(cli: "CliContext") -> dict:
+    """OutboxRepository.get_stats() → admin stats outbox section."""
+    try:
+        from src.sync.outbox import OutboxRepository
+        cfg = cli.cli_config
+        repo = OutboxRepository(cfg.sync_store_db_path)
+        stats = repo.get_stats()
+        return {
+            "_source": "live_query",
+            "total": stats.total,
+            "by_status": stats.by_status,
+            "by_target": stats.by_target,
+            "age_buckets": stats.age_buckets,
+        }
+    except Exception as exc:
+        return {
+            "_source": "error",
+            "_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+@app.command("fts-health")
+def admin_fts_health(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """FTS5 索引健康度: email_body vs email_body_fts 行数对比 + integrity_check.
+
+    返回:
+      body_rows / fts_rows / gap (>0 表示 reindex 落后) /
+      integrity_check ('ok' or error msg) / fts_size_bytes (近似).
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    cfg = cli.cli_config
+    db_path = cfg.sync_store_db_path
+    data: dict = {}
+    try:
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        try:
+            body_rows = conn.execute("SELECT COUNT(*) FROM email_body").fetchone()[0]
+            fts_rows = conn.execute("SELECT COUNT(*) FROM email_body_fts").fetchone()[0]
+            data["body_rows"] = int(body_rows)
+            data["fts_rows"] = int(fts_rows)
+            data["gap"] = int(body_rows) - int(fts_rows)
+
+            # FTS5 integrity-check
+            try:
+                conn.execute(
+                    "INSERT INTO email_body_fts(email_body_fts) VALUES('integrity-check')"
+                )
+                data["integrity_check"] = "ok"
+            except sqlite3.OperationalError as exc:
+                data["integrity_check"] = str(exc)[:200]
+
+            # 文件大小 (粗略, fts 与 main DB 共享文件)
+            try:
+                data["fts_size_bytes"] = Path(db_path).stat().st_size
+            except OSError:
+                data["fts_size_bytes"] = None
+        finally:
+            conn.close()
+    except Exception as exc:
+        raise emit_cli_error(cli, CliError(
+            f"fts-health failed: {type(exc).__name__}: {exc}",
+        ))
+
+    data["healthy"] = data["gap"] == 0 and data["integrity_check"] == "ok"
+
+    if cli.output.lower() == "text":
+        print(f"body_rows         {data['body_rows']}")
+        print(f"fts_rows          {data['fts_rows']}")
+        print(f"gap               {data['gap']}")
+        print(f"integrity_check   {data['integrity_check']}")
+        print(f"healthy           {data['healthy']}")
+    else:
+        emit(cli, data)
+
+
+@app.command("pm2-status")
+def admin_pm2_status(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """PM2 mail-sync 主进程状态. 前端避免与主进程并发冲突时用.
+
+    返回:
+      pm2_available (CLI 是否安装) /
+      mail_sync (online/pid/uptime_sec/memory_mb/cpu_percent/restart_count) | null
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    import json as _json
+    import subprocess as _subprocess
+    import time as _time
+
+    data: dict = {
+        "pm2_available": False,
+        "mail_sync": None,
+        "checked_at": _time.time(),
+    }
+    try:
+        result = _subprocess.run(
+            ["pm2", "jlist"],
+            capture_output=True, text=True, timeout=5.0,
+        )
+        data["pm2_available"] = result.returncode == 0
+        if result.returncode != 0:
+            data["error"] = f"pm2 jlist exit {result.returncode}: {result.stderr[:200]}"
+        else:
+            try:
+                procs = _json.loads(result.stdout or "[]")
+            except _json.JSONDecodeError:
+                data["error"] = "pm2 jlist output not JSON"
+                procs = []
+            for proc in procs:
+                if not isinstance(proc, dict):
+                    continue
+                if proc.get("name") != "mail-sync":
+                    continue
+                env = proc.get("pm2_env") or {}
+                monit = proc.get("monit") or {}
+                uptime_sec = None
+                if env.get("pm_uptime"):
+                    uptime_sec = max(
+                        0,
+                        int(_time.time() - env["pm_uptime"] / 1000),
+                    )
+                data["mail_sync"] = {
+                    "name": proc.get("name"),
+                    "pid": proc.get("pid"),
+                    "online": env.get("status") == "online",
+                    "status": env.get("status"),
+                    "uptime_sec": uptime_sec,
+                    "memory_mb": (
+                        round(monit.get("memory", 0) / 1024 / 1024, 2)
+                        if monit.get("memory") else None
+                    ),
+                    "cpu_percent": monit.get("cpu"),
+                    "restart_count": env.get("restart_time"),
+                }
+                break
+    except FileNotFoundError:
+        data["pm2_available"] = False
+        data["error"] = "pm2 CLI not installed"
+    except _subprocess.TimeoutExpired:
+        data["pm2_available"] = False
+        data["error"] = "pm2 jlist timeout (>5s)"
+    except Exception as exc:
+        data["pm2_available"] = False
+        data["error"] = f"{type(exc).__name__}: {exc}"
+
+    if cli.output.lower() == "text":
+        print(f"pm2_available     {data['pm2_available']}")
+        if data["mail_sync"]:
+            ms = data["mail_sync"]
+            print(f"mail-sync         {ms['status']} pid={ms['pid']} uptime={ms['uptime_sec']}s")
+            print(f"  memory_mb       {ms['memory_mb']}")
+            print(f"  cpu_percent     {ms['cpu_percent']}")
+            print(f"  restart_count   {ms['restart_count']}")
+        else:
+            print("mail-sync         (not running)")
+        if "error" in data:
+            print(f"error             {data['error']}")
+    else:
+        emit(cli, data)
+
+
+@app.command("queue-depth")
+def admin_queue_depth(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """综合队列视图. 前端 Dashboard 一次拉所有 backlog 看一眼就清楚.
+
+    返回:
+      sync_store: {pending, fetch_failed, failed, dead_letter}
+      outbox:     {pending, processing, failed, dead_letter}
+      llm_processing: {pending, failed, gave_up}
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    cfg = cli.cli_config
+    data: dict = {}
+
+    # sync_store
+    try:
+        ss_stats = cli.sync_store.get_stats()
+        by_status = ss_stats.get("by_status", {}) or {}
+        data["sync_store"] = {
+            "pending": int(by_status.get("pending", 0)),
+            "fetch_failed": int(by_status.get("fetch_failed", 0)),
+            "failed": int(by_status.get("failed", 0)),
+            "dead_letter": int(by_status.get("dead_letter", 0)),
+            "synced": int(by_status.get("synced", 0)),
+            "skipped": int(by_status.get("skipped", 0)),
+        }
+    except Exception as exc:
+        data["sync_store"] = {"_error": f"{type(exc).__name__}: {exc}"}
+
+    # outbox
+    try:
+        from src.sync.outbox import OutboxRepository
+        repo = OutboxRepository(cfg.sync_store_db_path)
+        outbox_stats = repo.get_stats()
+        data["outbox"] = {
+            "pending": outbox_stats.by_status.get("pending", 0),
+            "processing": outbox_stats.by_status.get("processing", 0),
+            "failed": outbox_stats.by_status.get("failed", 0),
+            "dead_letter": outbox_stats.by_status.get("dead_letter", 0),
+            "done": outbox_stats.by_status.get("done", 0),
+            "total": outbox_stats.total,
+        }
+    except Exception as exc:
+        data["outbox"] = {"_error": f"{type(exc).__name__}: {exc}"}
+
+    # llm_processing
+    try:
+        conn = sqlite3.connect(cfg.sync_store_db_path, timeout=5.0)
+        try:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_processing'"
+            )
+            has_table = cursor.fetchone() is not None
+            if has_table:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) FROM llm_processing GROUP BY status"
+                ).fetchall()
+                llm = {r[0]: int(r[1]) for r in rows}
+                data["llm_processing"] = {
+                    "pending": llm.get("pending", 0),
+                    "failed": llm.get("failed", 0),
+                    "gave_up": llm.get("gave_up", 0),
+                    "success": llm.get("success", 0),
+                    "total": sum(llm.values()),
+                }
+            else:
+                data["llm_processing"] = {"_source": "table_missing"}
+        finally:
+            conn.close()
+    except Exception as exc:
+        data["llm_processing"] = {"_error": f"{type(exc).__name__}: {exc}"}
+
+    if cli.output.lower() == "text":
+        for sec_name, sec_data in data.items():
+            print(f"== {sec_name} ==")
+            for k, v in sec_data.items():
+                print(f"  {k:20}{v}")
+    else:
+        emit(cli, data)

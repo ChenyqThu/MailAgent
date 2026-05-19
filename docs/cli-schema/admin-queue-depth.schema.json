@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-queue-depth.schema.json",
+  "title": "mailagent admin queue-depth",
+  "description": "Sprint 15 Stage 4 — 综合队列视图. 前端 Dashboard 一次拉所有 backlog 状态",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sync_store", "outbox", "llm_processing"],
+      "properties": {
+        "sync_store": {
+          "type": "object",
+          "description": "email_metadata.sync_status 分布",
+          "properties": {
+            "pending": {"type": "integer"},
+            "fetch_failed": {"type": "integer"},
+            "failed": {"type": "integer"},
+            "dead_letter": {"type": "integer"},
+            "synced": {"type": "integer"},
+            "skipped": {"type": "integer"},
+            "_error": {"type": "string"}
+          }
+        },
+        "outbox": {
+          "type": "object",
+          "description": "email_outbox.status 分布 (Sprint 15)",
+          "properties": {
+            "pending": {"type": "integer"},
+            "processing": {"type": "integer"},
+            "failed": {"type": "integer"},
+            "dead_letter": {"type": "integer"},
+            "done": {"type": "integer"},
+            "total": {"type": "integer"},
+            "_error": {"type": "string"}
+          }
+        },
+        "llm_processing": {
+          "type": "object",
+          "description": "llm_processing.status 分布",
+          "properties": {
+            "pending": {"type": "integer"},
+            "failed": {"type": "integer"},
+            "gave_up": {"type": "integer"},
+            "success": {"type": "integer"},
+            "total": {"type": "integer"},
+            "_source": {"type": "string", "description": "'table_missing' if table not created"},
+            "_error": {"type": "string"}
+          }
+        }
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  }
+}

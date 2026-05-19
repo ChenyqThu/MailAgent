@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-pm2-status.schema.json",
+  "title": "mailagent admin pm2-status",
+  "description": "Sprint 15 Stage 4 — PM2 mail-sync 主进程状态. 前端写命令并发安全 / dashboard 用",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pm2_available", "mail_sync", "checked_at"],
+      "properties": {
+        "pm2_available": {
+          "type": "boolean",
+          "description": "true = pm2 CLI 安装且 jlist 成功"
+        },
+        "mail_sync": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "online", "status"],
+              "properties": {
+                "name": {"type": "string"},
+                "pid": {"type": ["integer", "null"]},
+                "online": {"type": "boolean"},
+                "status": {"type": ["string", "null"], "description": "online / stopped / errored / launching"},
+                "uptime_sec": {"type": ["integer", "null"]},
+                "memory_mb": {"type": ["number", "null"]},
+                "cpu_percent": {"type": ["number", "null"]},
+                "restart_count": {"type": ["integer", "null"]}
+              }
+            }
+          ]
+        },
+        "checked_at": {"type": "number"},
+        "error": {"type": "string", "description": "可选, pm2 不可用时的错误描述"}
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  }
+}

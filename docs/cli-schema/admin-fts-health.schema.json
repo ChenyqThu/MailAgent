@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-fts-health.schema.json",
+  "title": "mailagent admin fts-health",
+  "description": "Sprint 15 Stage 4 — FTS5 索引健康度. body_rows vs fts_rows 对比 + integrity_check",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body_rows", "fts_rows", "gap", "integrity_check", "healthy"],
+      "properties": {
+        "body_rows": {"type": "integer", "minimum": 0},
+        "fts_rows": {"type": "integer", "minimum": 0},
+        "gap": {
+          "type": "integer",
+          "description": "body_rows - fts_rows; > 0 表示 FTS 索引落后, reindex 可补"
+        },
+        "integrity_check": {
+          "type": "string",
+          "description": "'ok' 或 SQLite error msg (截断到 200 字符)"
+        },
+        "fts_size_bytes": {
+          "type": ["integer", "null"],
+          "description": "近似值: 整个 sync_store.db 文件大小 (FTS 与主数据共享)"
+        },
+        "healthy": {
+          "type": "boolean",
+          "description": "true = gap=0 且 integrity_check='ok'"
+        }
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  }
+}
