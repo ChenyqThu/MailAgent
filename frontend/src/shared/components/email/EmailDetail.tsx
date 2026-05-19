@@ -13,15 +13,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  ChevronDown,
-  ChevronUp,
-  ExternalLink,
-  Languages,
-  Mail,
-  RotateCcw,
-  Sparkles
-} from 'lucide-react'
+import { ChevronDown, ExternalLink, Languages, Mail, RotateCcw, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -37,7 +29,6 @@ import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { TranslatedBody } from './TranslatedBody'
 import { AttachmentList } from './AttachmentList'
-import { ThreadBundle } from './ThreadBundle'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 
 interface Props {
@@ -50,6 +41,33 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }): R
       <span className="text-ink-fg-2 font-mono text-meta">{label}</span>
       <span className="text-ink-fg-1 break-words">{value}</span>
     </>
+  )
+}
+
+// Sprint 13 round 9 — long recipient list collapser.  100 ASCII chars
+// or ~50 CJK glyphs is roughly two display lines at text-aux; beyond
+// that the To/Cc row dominates the meta grid and crowds out everything
+// below.  Inline "more"/"less" button on the right-hand side keeps the
+// full address book one click away.
+function ExpandableValue({ text, max = 100 }: { text: string; max?: number }): React.ReactElement {
+  const { t } = useTranslation()
+  const [shown, setShown] = useState(false)
+  if (text.length <= max) return <span className="text-ink-fg-1">{text}</span>
+  return (
+    <span className="text-ink-fg-1">
+      {shown ? text : text.slice(0, max).trimEnd() + '… '}
+      <button
+        type="button"
+        onClick={() => setShown((v) => !v)}
+        className={cn(
+          'text-[10px] text-coral hover:text-coral-hover',
+          'transition-colors duration-fast ml-1 align-baseline',
+          'focus:outline-none focus-visible:underline'
+        )}
+      >
+        {shown ? t('emailDetail.less') : t('emailDetail.more')}
+      </button>
+    </span>
   )
 }
 
@@ -513,18 +531,23 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </button>
           )}
 
-          {/* Meta grid — Sprint 13 round 8 user feedback "属性折叠没实现":
-              round 7 only put Cc into the collapsed section, so when the
-              email had no Cc the toggle never appeared.  Round 8 widens
-              `morePropsRows` to also carry Mailbox / internal_id /
-              message_id so the chevron is reliably present and the
-              "hidden by default" affordance the user asked for is real.
-              From/To/Date stay visible at all times. */}
+          {/* Meta grid — Sprint 13 round 9 user feedback:
+                - "To/CC 仍然没正确显示。(默认显示 100 字符吧, 可以 more
+                  展开)" — Cc moves back into the default rows; both To
+                  and Cc now use <ExpandableValue> which renders the
+                  first 100 chars + an inline "more" link when the full
+                  string is longer.
+                - "属性折叠字体小一些, 加动态效果平滑一下现在太生硬" —
+                  the chevron rotates with a 220ms ease-out transition,
+                  the collapsed body lives in a CSS grid-rows 0fr↔1fr
+                  wrapper so opening/closing eases the height in/out
+                  (no jarring layout snap).
+              Default rows: From / To / Cc / Date.
+              Collapsed rows (mockup chevron): Mailbox / internal_id /
+              message_id.  These rarely-needed bits stay reachable but
+              do not crowd the header.  */}
           {(() => {
             const morePropsRows: { label: string; value: React.ReactNode }[] = []
-            if (email.cc_addr && email.cc_addr.length > 0) {
-              morePropsRows.push({ label: 'Cc', value: email.cc_addr })
-            }
             if (email.mailbox) {
               morePropsRows.push({
                 label: 'Mailbox',
@@ -563,12 +586,15 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                     label="To"
                     value={
                       email.to_addr && email.to_addr.length > 0 ? (
-                        <span className="text-ink-fg-1">{email.to_addr}</span>
+                        <ExpandableValue text={email.to_addr} />
                       ) : (
                         <span className="text-ink-fg-3">—</span>
                       )
                     }
                   />
+                  {email.cc_addr && email.cc_addr.length > 0 && (
+                    <MetaRow label="Cc" value={<ExpandableValue text={email.cc_addr} />} />
+                  )}
                   {email.date_received && (
                     <MetaRow
                       label="Date"
@@ -583,34 +609,60 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                       }
                     />
                   )}
-                  {propsExpanded &&
-                    morePropsRows.map((row) => (
-                      <MetaRow key={row.label} label={row.label} value={row.value} />
-                    ))}
                 </dl>
+
+                {/* Collapsible section — Mailbox / internal_id /
+                    message_id. CSS grid-rows trick: collapsed = 0fr,
+                    expanded = 1fr, with the inner row at min-height: 0
+                    so it can shrink past content. ease-out 220ms matches
+                    `duration-base` token. */}
                 {morePropsRows.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setPropsExpanded((v) => !v)}
-                    className={cn(
-                      'mt-2 inline-flex items-center gap-1 text-meta text-ink-fg-2',
-                      'hover:text-ink-fg-1 transition-colors duration-fast',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 rounded'
-                    )}
-                    aria-expanded={propsExpanded}
-                  >
-                    {propsExpanded ? (
-                      <>
-                        <ChevronUp size={11} strokeWidth={2} />
-                        {t('emailDetail.fewerProps')}
-                      </>
-                    ) : (
-                      <>
-                        <ChevronDown size={11} strokeWidth={2} />
-                        {t('emailDetail.moreProps', { n: morePropsRows.length })}
-                      </>
-                    )}
-                  </button>
+                  <>
+                    <div
+                      aria-hidden={!propsExpanded}
+                      className={cn(
+                        'grid transition-[grid-template-rows] duration-base ease-out',
+                        propsExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                      )}
+                    >
+                      <div className="overflow-hidden min-h-0">
+                        <dl
+                          className={cn(
+                            'mt-1.5 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux',
+                            'transition-opacity duration-base ease-out',
+                            propsExpanded ? 'opacity-100' : 'opacity-0'
+                          )}
+                        >
+                          {morePropsRows.map((row) => (
+                            <MetaRow key={row.label} label={row.label} value={row.value} />
+                          ))}
+                        </dl>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setPropsExpanded((v) => !v)}
+                      className={cn(
+                        'mt-1.5 inline-flex items-center gap-1 text-[10px] text-ink-fg-2',
+                        'hover:text-ink-fg-1 transition-colors duration-fast',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 rounded'
+                      )}
+                      aria-expanded={propsExpanded}
+                    >
+                      <ChevronDown
+                        size={10}
+                        strokeWidth={2}
+                        className={cn(
+                          'transition-transform duration-base ease-out',
+                          propsExpanded && 'rotate-180'
+                        )}
+                      />
+                      {propsExpanded
+                        ? t('emailDetail.fewerProps')
+                        : t('emailDetail.moreProps', { n: morePropsRows.length })}
+                    </button>
+                  </>
                 )}
               </>
             )
@@ -656,16 +708,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             </div>
           )}
 
-          {/* Sprint 14 主菜 — ThreadBundle. Outlook-style 同线程邮件
-              折叠区: 把同 thread_id 的早期邮件按 date_received DESC 列在
-              主面板下方, 默认折叠仅显发件人 / 主题 / 时间, 点击展开嵌入
-              mini EmailBodyFrame. 当前 active 邮件不重复显示 (主面板已有).
-              thread_id null 或者无 sibling → ThreadBundle 返回 null. */}
-          {email.thread_id && (
-            <div className="mt-8">
-              <ThreadBundle threadId={email.thread_id} currentInternalId={email.internal_id} />
-            </div>
-          )}
+          {/* Sprint 14 round 9 — ThreadBundle 撤出 EmailDetail. 真正
+              的 Outlook thread 折叠在邮件列表里 (head row + indented
+              children), 不在邮件正文底部. EmailList 重做承担此行为;
+              ThreadBundle.tsx 保留供 Sprint 15+ 可能的 "完整 thread
+              视图" 复用, 但当前不挂在 DOM 上. */}
 
           {/* Footer — Sprint 13 round 7 user feedback: "ID 之类的字段可
               以直接隐藏 (一般不用)". The internal_id + message_id mono

@@ -16,8 +16,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { List, type RowComponentProps } from 'react-window'
-import { Filter, ListChecks, Mail } from 'lucide-react'
+import { ChevronDown, Filter, ListChecks, Mail } from 'lucide-react'
 
+import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
 import {
@@ -43,9 +44,27 @@ import { EmailRow } from './EmailRow'
 import { BatchActionBar } from './BatchActionBar'
 
 // ─── Row union ────────────────────────────────────────────────────────
+//
+// Sprint 14 round 9 — Outlook-style thread bundling.  Rows of type
+// 'email' carry an optional `thread` block:
+//   • isHead = true  → row is the most-recent message of a thread that
+//     has ≥ 1 sibling; chevron prepended (rotates with expanded state),
+//     clicking toggles the bundle.  childCount drives the "+N" hint.
+//   • isHead = false → row is an older sibling.  Indented to the right.
+// Rows without a `thread` block are solitary messages, rendered exactly
+// like before round 9.
+type ThreadRowInfo =
+  | { isHead: true; threadId: string; childCount: number; expanded: boolean }
+  | { isHead: false; threadId: string }
+
 type ListRow =
   | { type: 'header'; key: GroupKey; label: string; count: number; collapsed: boolean }
-  | { type: 'email'; email: EnrichedEmailMeta; groupKey: GroupKey }
+  | {
+      type: 'email'
+      email: EnrichedEmailMeta
+      groupKey: GroupKey
+      thread?: ThreadRowInfo
+    }
   | { type: 'loader' }
 
 interface RowProps {
@@ -54,6 +73,7 @@ interface RowProps {
   newIds: ReadonlySet<number>
   onSelect(id: number): void
   onToggleGroup(key: GroupKey): void
+  onToggleThread(threadId: string): void
 }
 
 function VirtualRow({
@@ -63,7 +83,8 @@ function VirtualRow({
   activeId,
   newIds,
   onSelect,
-  onToggleGroup
+  onToggleGroup,
+  onToggleThread
 }: RowComponentProps<RowProps>): React.ReactElement {
   const item = rows[index]
   if (!item) return <div style={style} />
@@ -105,6 +126,66 @@ function VirtualRow({
       </div>
     )
   }
+  const t = item.thread
+  if (t && t.isHead) {
+    // Thread head — prepend a chevron button outside EmailRow; clicking
+    // toggles the bundle without triggering row selection.
+    return (
+      <div style={style} className="flex items-stretch">
+        <button
+          type="button"
+          aria-label="toggle-thread"
+          aria-expanded={t.expanded}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleThread(t.threadId)
+          }}
+          className={cn(
+            'w-5 shrink-0 flex items-center justify-center',
+            'text-ink-fg-2 hover:text-ink-fg',
+            'transition-colors duration-fast'
+          )}
+        >
+          <ChevronDown
+            size={12}
+            strokeWidth={2}
+            className={cn(
+              'transition-transform duration-base ease-out',
+              t.expanded ? 'rotate-0' : '-rotate-90'
+            )}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <EmailRow
+            email={item.email}
+            selected={item.email.internal_id === activeId}
+            isNew={newIds.has(item.email.internal_id)}
+            onSelect={() => onSelect(item.email.internal_id)}
+          />
+        </div>
+      </div>
+    )
+  }
+  if (t && !t.isHead) {
+    // Thread child — indent under the head, no chevron.  The vertical
+    // hairline gives a subtle visual tether to the head row.
+    return (
+      <div style={style} className="flex items-stretch bg-ink-1/30">
+        <div className="w-5 shrink-0 flex justify-center">
+          <span className="w-px bg-ink-border-soft" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <EmailRow
+            email={item.email}
+            selected={item.email.internal_id === activeId}
+            isNew={newIds.has(item.email.internal_id)}
+            onSelect={() => onSelect(item.email.internal_id)}
+          />
+        </div>
+      </div>
+    )
+  }
+  // Solitary message — original full-width row.
   return (
     <div style={style}>
       <EmailRow
@@ -203,10 +284,49 @@ function startOfDay(d: Date): Date {
   return x
 }
 
+// Sprint 14 round 9 — Outlook-style thread bundle.  Same-thread rows
+// collapse into a single "head" plus N indented children.  The bundle
+// is keyed by thread_id; emails without a thread_id (or whose thread
+// only has one email in the current list) are treated as solitary.
+interface ThreadGroup {
+  threadId: string | null
+  head: EnrichedEmailMeta
+  children: EnrichedEmailMeta[]
+}
+
+function groupByThread(emails: ReadonlyArray<EnrichedEmailMeta>): ThreadGroup[] {
+  const byTid = new Map<string, EnrichedEmailMeta[]>()
+  const solo: ThreadGroup[] = []
+  for (const e of emails) {
+    if (e.thread_id) {
+      const arr = byTid.get(e.thread_id) ?? []
+      arr.push(e)
+      byTid.set(e.thread_id, arr)
+    } else {
+      solo.push({ threadId: null, head: e, children: [] })
+    }
+  }
+  const groups: ThreadGroup[] = []
+  for (const [tid, arr] of byTid) {
+    arr.sort((a, b) => (b.date_received ?? '').localeCompare(a.date_received ?? ''))
+    if (arr.length === 1) {
+      // Single-message thread is functionally solitary — no chevron.
+      groups.push({ threadId: null, head: arr[0]!, children: [] })
+    } else {
+      groups.push({ threadId: tid, head: arr[0]!, children: arr.slice(1) })
+    }
+  }
+  groups.push(...solo)
+  // Stable ordering by head date_received DESC keeps day-bucketing
+  // deterministic across re-renders.
+  groups.sort((a, b) => (b.head.date_received ?? '').localeCompare(a.head.date_received ?? ''))
+  return groups
+}
+
 function partitionByDate(
-  emails: ReadonlyArray<EnrichedEmailMeta>,
+  groups: ReadonlyArray<ThreadGroup>,
   pinnedSet: ReadonlySet<number>
-): Record<GroupKey, EnrichedEmailMeta[]> {
+): Record<GroupKey, ThreadGroup[]> {
   const now = new Date()
   const today = startOfDay(now)
   const yesterday = new Date(today)
@@ -217,7 +337,7 @@ function partitionByDate(
   const lastWeekStart = new Date(weekStart)
   lastWeekStart.setDate(weekStart.getDate() - 7)
 
-  const buckets: Record<GroupKey, EnrichedEmailMeta[]> = {
+  const buckets: Record<GroupKey, ThreadGroup[]> = {
     pinned: [],
     today: [],
     yesterday: [],
@@ -226,46 +346,76 @@ function partitionByDate(
     older: []
   }
 
-  for (const e of emails) {
-    if (pinnedSet.has(e.internal_id)) {
-      buckets.pinned.push(e)
+  for (const g of groups) {
+    if (pinnedSet.has(g.head.internal_id)) {
+      buckets.pinned.push(g)
       continue
     }
-    if (!e.date_received) {
-      buckets.older.push(e)
+    if (!g.head.date_received) {
+      buckets.older.push(g)
       continue
     }
-    const d = new Date(e.date_received)
-    if (d >= today) buckets.today.push(e)
-    else if (d >= yesterday) buckets.yesterday.push(e)
-    else if (d >= weekStart) buckets.thisWeek.push(e)
-    else if (d >= lastWeekStart) buckets.lastWeek.push(e)
-    else buckets.older.push(e)
+    const d = new Date(g.head.date_received)
+    if (d >= today) buckets.today.push(g)
+    else if (d >= yesterday) buckets.yesterday.push(g)
+    else if (d >= weekStart) buckets.thisWeek.push(g)
+    else if (d >= lastWeekStart) buckets.lastWeek.push(g)
+    else buckets.older.push(g)
   }
   return buckets
 }
 
 function flattenGroups(
-  buckets: Record<GroupKey, EnrichedEmailMeta[]>,
+  buckets: Record<GroupKey, ThreadGroup[]>,
   labels: Record<GroupKey, string>,
   collapsedOf: (key: GroupKey) => boolean,
+  threadCollapsed: ReadonlySet<string>,
   appendLoader: boolean
 ): ListRow[] {
   const order: GroupKey[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'lastWeek', 'older']
   const out: ListRow[] = []
   for (const key of order) {
-    const group = buckets[key]
-    if (group.length === 0) continue
+    const groupArr = buckets[key]
+    if (groupArr.length === 0) continue
     const collapsed = collapsedOf(key)
+    // Group count = total messages (head + children across all threads)
+    // so the header shows the human-truthful number, not the bundle count.
+    const total = groupArr.reduce((acc, g) => acc + 1 + g.children.length, 0)
     out.push({
       type: 'header',
       key,
       label: labels[key],
-      count: group.length,
+      count: total,
       collapsed
     })
     if (collapsed) continue
-    for (const e of group) out.push({ type: 'email', email: e, groupKey: key })
+    for (const g of groupArr) {
+      const isThreadHead = g.threadId !== null && g.children.length > 0
+      const expanded = isThreadHead ? !threadCollapsed.has(g.threadId!) : false
+      out.push({
+        type: 'email',
+        email: g.head,
+        groupKey: key,
+        thread: isThreadHead
+          ? {
+              isHead: true,
+              threadId: g.threadId!,
+              childCount: g.children.length,
+              expanded
+            }
+          : undefined
+      })
+      if (isThreadHead && expanded) {
+        for (const child of g.children) {
+          out.push({
+            type: 'email',
+            email: child,
+            groupKey: key,
+            thread: { isHead: false, threadId: g.threadId! }
+          })
+        }
+      }
+    }
   }
   if (appendLoader) out.push({ type: 'loader' })
   return out
@@ -452,7 +602,22 @@ export function EmailList(): React.ReactElement {
     [t]
   )
 
-  const buckets = useMemo(() => partitionByDate(filtered, pinnedSet), [filtered, pinnedSet])
+  // Sprint 14 round 9 — thread bundling. Same thread_id rows roll up
+  // under their newest message; the user toggles each bundle with the
+  // prepended chevron.  Default = expanded (Outlook behaviour); only
+  // explicit user clicks add an entry to `threadCollapsed`.
+  const [threadCollapsed, setThreadCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleThread = useCallback((threadId: string) => {
+    setThreadCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(threadId)) next.delete(threadId)
+      else next.add(threadId)
+      return next
+    })
+  }, [])
+
+  const threadGroups = useMemo(() => groupByThread(filtered), [filtered])
+  const buckets = useMemo(() => partitionByDate(threadGroups, pinnedSet), [threadGroups, pinnedSet])
 
   // Show the loader sentinel when we still have headroom (no end-of-data
   // signal from this query shape — we stop the loader if a fetch returned
@@ -461,8 +626,8 @@ export function EmailList(): React.ReactElement {
   const showLoader = !reachedEnd && pageCount < MAX_PAGES
 
   const rows = useMemo(
-    () => flattenGroups(buckets, groupLabels, isCollapsed, showLoader),
-    [buckets, groupLabels, isCollapsed, showLoader]
+    () => flattenGroups(buckets, groupLabels, isCollapsed, threadCollapsed, showLoader),
+    [buckets, groupLabels, isCollapsed, threadCollapsed, showLoader]
   )
 
   const priActive = !allPrioritiesSelected()
@@ -675,7 +840,8 @@ export function EmailList(): React.ReactElement {
               activeId,
               newIds,
               onSelect: setActive,
-              onToggleGroup: toggleGroup
+              onToggleGroup: toggleGroup,
+              onToggleThread: toggleThread
             }}
             onRowsRendered={handleRowsRendered}
             className="scrollbar-thin"

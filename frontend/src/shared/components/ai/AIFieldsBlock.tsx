@@ -29,7 +29,7 @@
 //   llm_processing, json_each(labels_json)"
 
 import { useState } from 'react'
-import { ClipboardCheck, Copy, Cpu, Sparkles, MessageSquare } from 'lucide-react'
+import { BadgeCheck, ClipboardCheck, Clock, Copy, Cpu, MessageSquare, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
@@ -225,12 +225,23 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
             AI Fields · {nonNullCount}
           </span>
           {(reviewed || pending) && (
+            // Sprint 13 round 9 — chip carries an icon now so the
+            // "verified" status reads at a glance.  BadgeCheck is the
+            // standard macOS / iOS verified-badge glyph; Clock is the
+            // matching pending counterpart.  Both shipped flat (no
+            // border) to feel like a status pill rather than a card.
             <span
               className={cn(
-                'text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border',
-                reviewed ? 'text-ok bg-ok/12 border-ok/30' : 'text-warn bg-warn/12 border-warn/30'
+                'inline-flex items-center gap-1 text-micro font-mono uppercase tracking-wide',
+                'px-1.5 py-0.5 rounded',
+                reviewed ? 'text-ok bg-ok/12' : 'text-warn bg-warn/12'
               )}
             >
+              {reviewed ? (
+                <BadgeCheck size={10} strokeWidth={2.25} />
+              ) : (
+                <Clock size={10} strokeWidth={2.25} />
+              )}
               {reviewed ? 'Reviewed' : 'Pending'}
             </span>
           )}

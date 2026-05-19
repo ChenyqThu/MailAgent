@@ -53,7 +53,9 @@
     "viewSource": "查看原文 (.eml)",
     "viewSourceBlocked": "查看原文 · 等待 Sprint 14 接 mailagent debug email-source",
     "moreProps": "{n, plural, =1 {更多属性 · 1} other {更多属性 · #}}",
-    "fewerProps": "收起属性"
+    "fewerProps": "收起属性",
+    "more": "more",
+    "less": "less"
   },
   "ai": {
     "compose": "起草回复"
