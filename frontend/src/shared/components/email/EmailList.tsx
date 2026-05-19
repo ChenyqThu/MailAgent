@@ -593,7 +593,27 @@ export function EmailList(): React.ReactElement {
     refetchIntervalInBackground: false
   })
 
+  // Sprint 14 round 22 — cross-mailbox enrichment source.  Thread
+  // bundles can pull in emails from the OTHER mailbox via listByThread
+  // supplement; those rows arrive as bare EmailMeta (no snippet / AI
+  // fields).  We fetch the other side's listEnriched in parallel so
+  // when supplement merge looks up the row, it finds the enriched
+  // version.  User: "email list 里对我发出的邮件,只有发件人/标题行,
+  // 没有正文摘要行和 AI 行".
+  const crossMailbox = view === 'inbox' ? '发件箱' : view === 'outbox' ? '收件箱' : null
+  const crossQ = useQuery({
+    queryKey: ['emails', 'cross', crossMailbox, fetchLimit],
+    queryFn: () =>
+      crossMailbox
+        ? mailApi.email.listEnriched({ mailbox: crossMailbox, limit: fetchLimit })
+        : Promise.resolve([]),
+    enabled: crossMailbox !== null,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: false
+  })
+
   const all = useMemo(() => data ?? [], [data])
+  const crossAll = useMemo(() => crossQ.data ?? [], [crossQ.data])
   const tabFiltered = useMemo(() => applyTab(tab, all), [tab, all])
   const chipFiltered = useMemo(() => applyChipFilter(filter, tabFiltered), [filter, tabFiltered])
   const filtered = useMemo(
@@ -712,9 +732,13 @@ export function EmailList(): React.ReactElement {
   // emaillist 没有显示正文摘要和 AI 优先级/建议字段啊".
   const enrichedById = useMemo(() => {
     const m = new Map<number, EnrichedEmailMeta>()
+    // Cross-mailbox rows first; same-mailbox `all` overwrites if a
+    // collision (theoretically impossible since SQLite mailbox is a
+    // column, but the merge order makes intent explicit).
+    for (const e of crossAll) m.set(e.internal_id, e)
     for (const e of all) m.set(e.internal_id, e)
     return m
-  }, [all])
+  }, [all, crossAll])
   const threadSupplement = useMemo(() => {
     const m = new Map<string, EnrichedEmailMeta[]>()
     uniqueThreadIds.forEach((tid, i) => {
