@@ -211,11 +211,12 @@ function rowHeight(index: number, { rows }: RowProps): number {
   if (!r) return 28
   if (r.type === 'header') return 28
   if (r.type === 'loader') return 44
-  // Sprint 14 round 12 — thread children render compact, single-line
-  // digest (no snippet / AI strip).  All siblings share the same short
-  // height so the bundle reads as a coherent indented stack regardless
-  // of which listByThread row carries enriched data.
-  if (r.thread !== undefined && r.thread.isHead === false) return 42
+  // Sprint 14 round 12 — thread children render compact (no snippet /
+  // AI strip).  round 13: 42px clipped the subject row — EmailRow needs
+  // ~18px sender-line + ~21px subject-row + 19px padding ≈ 58px, so
+  // 60px is the right floor (matches the no-snippet / no-AI fallback
+  // for solitary rows).  Heads and solitary rows stay dynamic 60-100px.
+  if (r.thread !== undefined && r.thread.isHead === false) return 60
   const e = r.email
   const snippetReal = cleanSnippet(e.snippet)
   const hasSnippet = Boolean(snippetReal)
