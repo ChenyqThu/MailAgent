@@ -424,6 +424,34 @@ class NewWatcher:
         for email_meta in pending_emails:
             await self._sync_single_email_v3(email_meta)
 
+    def _persist_email_metadata_after_parse(self, internal_id: int, email_obj) -> None:
+        """把 reader 解析出的 MIME header 字段写回 SQLite metadata.
+
+        SQLite radar 第一次写入只拿到 internal_id + subject + sender + date
+        (AppleScript surface 属性);  to / cc / sender_name / Importance 这些
+        头部字段必须等 reader.parse_email_source 解析完整 MIME 才有.  之前
+        update_after_fetch 仅写 message_id / thread_id / subject / sender,
+        导致 to_addr 与 cc_addr 在 SQLite 永远是空 (历史 6300+ 封全空,
+        backfill 走 scripts/dev/backfill_to_cc.py 通过 Notion API 反拉).
+
+        放在这里而不是每个调用点 inline 是因为正向 sync + 两条 retry 路径
+        都要走一次, 防止再漏写.
+        """
+        patch: Dict[str, Any] = {}
+        if email_obj.to:
+            patch['to_addr'] = email_obj.to
+        if email_obj.cc:
+            patch['cc_addr'] = email_obj.cc
+        if email_obj.sender_name:
+            patch['sender_name'] = email_obj.sender_name
+        if patch:
+            try:
+                self.sync_store.update_after_fetch(internal_id, patch)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist parsed metadata for %s: %s", internal_id, exc
+                )
+
     async def _sync_single_email_v3(self, email_meta: Dict[str, Any]):
         """同步单封邮件（v3 架构）
 
@@ -475,6 +503,12 @@ class NewWatcher:
 
             # 设置 internal_id（v3 架构）
             email_obj.internal_id = internal_id
+
+            # 把 reader 解析出的完整 MIME header 字段写回 SQLite metadata
+            # (to/cc/sender_name). 之前漏写, 6000+ 封历史邮件 to_addr/cc_addr
+            # 全空, 历史邮件 backfill 走 `mailagent backfill body` (顺手补
+            # metadata) 或 `mailagent backfill metadata --source notion` (快).
+            self._persist_email_metadata_after_parse(internal_id, email_obj)
 
             # v9 — 邮件原生重要性（Importance / X-Priority header）落 SQLite，
             # 给前端 ❗ 角标用。reader._parse_importance 在 parse 时已经填好。
@@ -882,6 +916,11 @@ class NewWatcher:
 
                 # 设置 internal_id（v3 架构）
                 email_obj.internal_id = internal_id
+
+                # 把 reader 解析出的完整 MIME header 字段写回 SQLite metadata
+                # (to/cc/sender_name). 主 sync 路径同步落地, 见 _sync_single_
+                # email_v3 内同样调用; 抽 helper 避免两条路径再次漏写.
+                self._persist_email_metadata_after_parse(internal_id, email_obj)
 
                 # v4: 双写邮件正文 + 附件到 SQLite（重试路径同样需要双写）
                 self._maybe_dual_write_body(
