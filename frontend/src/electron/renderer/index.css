@@ -833,19 +833,43 @@ body::before {
  * 列表所有行的 avatar / sender 列对齐 x 轴. */
 .email-row {
   position: relative;
+  /* react-window 给的 row slot 高度 (100/84/78/60) 略大于 article 内容真实
+   * 高度 (padding + grid tracks ≈ 92/77/72/56), 不撑满会在每行底部留 ~5-7px
+   * 透明带 — thread child 的 wash / data-flag wash / is-selected accent bar
+   * 都画在 article 上, 透明带导致左侧深色点缀栏在 bundle 展开时不连续.
+   * height:100% 让背景填满整个 slot, 多余空间作为 grid track 余白留在底部
+   * (align-content: normal → start), 各 grid item 几何不变. */
+  height: 100%;
   display: grid;
   grid-template-columns: var(--chevron-col-w) var(--avatar-size) 1fr;
   gap: 0 8px;
   padding: 9px 14px 10px 8px;
-  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
+  /* 行间分割线从 chevron 列之后开始, 让 thread child / flagged / selected
+   * 的深色 wash 在左侧 chevron-col 区域 (24px) 跨行连续. 直接 border-bottom
+   * 会贯穿整行 1px 把 wash 切断, 改用 linear-gradient 背景画底部 1px 横线
+   * 仅覆盖 avatar + content 区段, 视觉等同 border-bottom 但 thread bundle
+   * 内的"深色点缀栏"完全连续.
+   * 注: 因为这里用 background-image, 下方所有状态 (hover/selected/data-flag/
+   * data-thread='child') 必须用 background-color 而非 background shorthand,
+   * 否则会被 shorthand 重置 → 分割线消失. */
+  background-image: linear-gradient(
+    to right,
+    transparent 0,
+    transparent var(--chevron-col-w),
+    rgb(var(--ink-border-soft) / 0.5) var(--chevron-col-w),
+    rgb(var(--ink-border-soft) / 0.5) 100%
+  );
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 1px;
   cursor: pointer;
-  transition: background 120ms ease;
+  transition: background-color 120ms ease;
 }
 .email-row:hover {
-  background: rgb(var(--ink-3) / 0.55);
+  background-color: rgb(var(--ink-3) / 0.55);
 }
 .email-row.is-selected {
-  background: rgb(var(--ink-4) / 0.7);
+  background-color: rgb(var(--ink-4) / 0.7);
 }
 .email-row.is-selected::before {
   content: '';
@@ -862,7 +886,7 @@ body::before {
  * .email-row 上, 自然 cover chevron 区域. child row 的 subtle inset tint
  * 通过 data-thread='child' attribute 走 .email-row 自身的 selector. */
 .email-row[data-thread='child']:not(.is-selected) {
-  background: rgb(var(--ink-1) / 0.35);
+  background-color: rgb(var(--ink-1) / 0.35);
 }
 
 /* Sprint 17 — thread chevron-cell 占第一格. 单封邮件 cell 内为空但保留宽度
@@ -1147,18 +1171,20 @@ body:not([data-batch-mode='true']) #batch-bar {
   color: rgb(var(--ink-fg-1));
 }
 
-/* Flag state row washes — subtle, never compete with selection */
+/* Flag state row washes — subtle, never compete with selection.
+ * background-color (not shorthand) — 见 .email-row base 注释, 保留底部
+ * gradient 分割线. */
 .email-row[data-flag='flagged'] {
-  background: rgba(229, 99, 79, 0.05);
+  background-color: rgba(229, 99, 79, 0.05);
 }
 .email-row[data-flag='flagged']:hover {
-  background: rgba(229, 99, 79, 0.1);
+  background-color: rgba(229, 99, 79, 0.1);
 }
 .email-row[data-flag='done'] {
-  background: rgba(93, 186, 140, 0.05);
+  background-color: rgba(93, 186, 140, 0.05);
 }
 .email-row[data-flag='done']:hover {
-  background: rgba(93, 186, 140, 0.1);
+  background-color: rgba(93, 186, 140, 0.1);
 }
 .email-row[data-flag='done'] .subject-text {
   color: rgb(var(--ink-fg-2));
