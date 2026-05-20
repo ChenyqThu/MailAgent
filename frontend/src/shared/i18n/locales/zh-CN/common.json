@@ -517,9 +517,272 @@
     },
     "accent": "强调色",
     "accentHint": "6 种 swatch · 影响主 CTA 与 chip 染色",
-    "inbox": "收件箱",
-    "pollInterval": "Fallback 轮询",
-    "pollIntervalHint": "SSE 断线时的兜底轮询周期,off 表示禁用自动轮询",
+    "save": "保存",
+    "clear": "清除",
+    "saveFail": "保存失败",
+    "set": "已设置",
+    "notSet": "未设置",
+    "secretPlaceholder": "粘贴新值后保存 · 当前值不显示",
+    "testPing": "测试网关",
+    "choose": "选择…",
+    "defaultUsed": "(使用默认)",
+    "about": "关于",
+    "tabs": {
+      "general": "通用",
+      "accounts": "账户",
+      "sync": "同步",
+      "ai": "AI Agent",
+      "notifications": "通知",
+      "integrations": "集成",
+      "realtime": "实时与存储",
+      "island": "灵动岛与更新"
+    },
+    "accounts": {
+      "notion": {
+        "title": "Notion 集成",
+        "token": {
+          "label": "Notion Token",
+          "helper": "Integration token,以 ntn_ 或 secret_ 开头",
+          "placeholder": "ntn_xxx 或 secret_xxx"
+        },
+        "databaseId": {
+          "label": "邮件数据库 ID",
+          "helper": "Email Inbox 数据库的 UUID"
+        },
+        "calendarDatabaseId": {
+          "label": "日历数据库 ID",
+          "helper": "可选 — 留空则跳过会议邀请同步"
+        }
+      },
+      "mail": {
+        "title": "Mail.app",
+        "userEmail": {
+          "label": "用户邮箱",
+          "helper": "Sidebar 显示头像 / 反向同步 actor 匹配"
+        },
+        "accountName": {
+          "label": "Mail.app 账户名",
+          "helper": "在 Mail.app 偏好设置 → 账户里看到的名字"
+        },
+        "inboxName": {
+          "label": "收件箱名",
+          "helper": "AppleScript 用,默认 收件箱"
+        },
+        "sentName": {
+          "label": "发件箱名",
+          "helper": "AppleScript 用,默认 已发送邮件"
+        }
+      }
+    },
+    "sync": {
+      "window": {
+        "title": "同步窗口",
+        "helper": "决定 SQLite radar 起始位置与时间过滤"
+      },
+      "cadence": {
+        "title": "节拍"
+      },
+      "calendar": {
+        "title": "日历同步",
+        "syncMode": {
+          "label": "采集来源",
+          "helper": "AppleScript 走 Calendar.app,EventKit 走原生 framework"
+        },
+        "pastDays": {
+          "label": "过去多少天",
+          "helper": "回溯历史事件用"
+        },
+        "futureDays": {
+          "label": "未来多少天",
+          "helper": "向前扩展窗口"
+        }
+      },
+      "dateMode": {
+        "label": "起始模式",
+        "helper": "fixed 固定日期; relative 从今天向前回溯 N 天",
+        "fixed": "固定日期",
+        "relative": "相对天数"
+      },
+      "startDate": {
+        "label": "起始日期",
+        "helper": "fixed 模式 — 早于此日期的邮件跳过"
+      },
+      "lookbackDays": {
+        "label": "回溯天数",
+        "helper": "relative 模式 — 从今天向前 N 天"
+      },
+      "mailboxes": {
+        "label": "监听邮箱",
+        "helper": "逗号分隔; SQLite radar 同步这些邮箱的新邮件",
+        "placeholder": "收件箱,发件箱"
+      },
+      "radarInterval": {
+        "label": "SQLite radar 间隔",
+        "helper": "秒 — 检测新邮件频率"
+      },
+      "reverseInterval": {
+        "label": "反向同步间隔",
+        "helper": "秒 — Notion 反向 → Mail.app 轮询"
+      },
+      "healthInterval": {
+        "label": "健康检查间隔",
+        "helper": "秒 — 发现漏同步邮件"
+      }
+    },
+    "ai": {
+      "title": "本地 LLM Agent",
+      "helper": "AI 分类 / 优先级 / Daily Digest relation 由本地 LLM 接管(取代 Notion Email Agent)",
+      "enabled": {
+        "label": "启用本地 LLM",
+        "helper": "需先在 Notion 端暂停 Email Agent 或加 Status 过滤"
+      },
+      "apiBase": {
+        "label": "网关 base URL",
+        "helper": "Anthropic Messages 兼容端点,默认 https://crs.chenge.ink/api"
+      },
+      "apiKey": {
+        "label": "LLM API Key",
+        "helper": "双写 keychain + .env,翻译 / chat / LLM agent 共用"
+      },
+      "model": {
+        "label": "主模型",
+        "helper": "fallback 失败时上抛 LLMCallError 进重试队列"
+      },
+      "fallbacks": {
+        "label": "Fallback 链",
+        "helper": "主模型挂掉时按序兜底; 跨协议自动 cache miss"
+      },
+      "contextPageId": {
+        "label": "Context 页面 ID",
+        "helper": "Email Agent Context markdown 页;30min TTL 缓存"
+      },
+      "cache": {
+        "title": "Prompt 缓存",
+        "helper": "Sonnet 4.6 ≥ 2048 token 时自动命中; OpenAI 协议无缓存",
+        "enabled": {
+          "label": "启用 prompt cache",
+          "helper": "命中节省 ~90% input cost; 关闭 = 调试用"
+        },
+        "ttl": {
+          "label": "缓存 TTL",
+          "helper": "1h 需 extended-cache-ttl beta header,客户端已自动带"
+        }
+      },
+      "testGateway": {
+        "label": "网关健康检查",
+        "helper": "不烧 token,只 ping /v1/messages",
+        "button": "测试连接",
+        "running": "测试中…",
+        "ok": "LLM 网关健康",
+        "fail": "LLM 网关不可达"
+      }
+    },
+    "notifications": {
+      "feishu": {
+        "title": "飞书应用机器人",
+        "helper": "重要邮件推送 + 交互回复按钮 → Openclaw",
+        "enabled": {
+          "label": "启用飞书通知",
+          "helper": "需配置 App ID + Secret + Chat ID"
+        },
+        "appId": {
+          "label": "App ID",
+          "helper": "飞书开发者后台 → 凭证与基础信息"
+        },
+        "appSecret": {
+          "label": "App Secret",
+          "helper": "保存到 .env,Python 启动时读"
+        },
+        "chatId": {
+          "label": "Chat ID",
+          "helper": "目标群聊或个人 chat_id"
+        }
+      },
+      "alert": {
+        "title": "飞书告警机器人",
+        "helper": "服务异常 / dead_letter 累积 / 雷达不可用时告警",
+        "enabled": {
+          "label": "启用告警",
+          "helper": "走自定义机器人 webhook,跟应用机器人独立"
+        },
+        "webhookUrl": {
+          "label": "Webhook URL",
+          "helper": "飞书群机器人 webhook 地址"
+        },
+        "webhookSecret": {
+          "label": "签名密钥",
+          "helper": "可选 — 配置后请求体签名校验"
+        },
+        "levels": {
+          "label": "告警级别",
+          "helper": "逗号分隔: critical, error, warning, info"
+        }
+      }
+    },
+    "integrations": {
+      "projectProgress": {
+        "title": "项目周报同步",
+        "helper": "消费每周项目进度邮件,抽 xlsx 上 Notion 项目库",
+        "enabled": {
+          "label": "启用同步",
+          "helper": "总开关 — CLI / 钩子都依赖它"
+        },
+        "autoSync": {
+          "label": "自动触发",
+          "helper": "主同步检测到目标邮件后后台 dispatch"
+        },
+        "databaseId": {
+          "label": "项目库 ID",
+          "helper": "Notion 项目进度数据库 UUID"
+        },
+        "filterBu": {
+          "label": "BU 过滤",
+          "helper": "精确匹配 xlsx 的 BU 列,其他 BU 项目忽略"
+        },
+        "subjectPattern": {
+          "label": "标题正则",
+          "helper": "识别项目周报邮件的 subject 匹配"
+        },
+        "sender": {
+          "label": "发件人(可选)",
+          "helper": "留空 → 仅按 subject;配置 → sender + subject 双判定"
+        }
+      },
+      "office": {
+        "title": "Office 附件转换",
+        "helper": "docx/pptx → PDF(LibreOffice), xlsx → CSV(pandas)",
+        "enabled": {
+          "label": "启用转换",
+          "helper": "依赖 LibreOffice + python-calamine"
+        }
+      },
+      "stats": {
+        "title": "运行统计上报",
+        "helper": "定期把 sync / reverse / handlers 计数上报到看板",
+        "url": {
+          "label": "看板 URL",
+          "helper": "POST /api/stats/report 端点"
+        },
+        "token": {
+          "label": "上报 token",
+          "helper": "Bearer 认证;为空 → 仅在 webhook-server 端禁认证时可用"
+        }
+      },
+      "dashboard": {
+        "password": {
+          "label": "看板登录密码",
+          "helper": "webhook-server /dashboard 登录页;为空则禁用看板"
+        }
+      },
+      "cli": {
+        "title": "CLI 鉴权",
+        "helper": "外部 agent 调写命令的 API key",
+        "apiKey": {
+          "label": "MAILAGENT_CLI_API_KEY",
+          "helper": "双写 keychain + .env,main 进程和 Python CLI 共用"
+        }
+      }
+    },
     "realtime": {
       "label": "实时事件",
       "hint": "SSE 推送连接状态; 断线后下方轮询周期作为兜底。",
@@ -531,59 +794,118 @@
       "idle": "等待启动",
       "reconnect": "立即重连",
       "reconnectRequested": "已请求重连",
-      "reconnectFailed": "重连失败"
+      "reconnectFailed": "重连失败",
+      "sse": {
+        "title": "SSE 实时连接",
+        "helper": "主进程 events_bridge 持有本机 9200 长连接",
+        "enabled": {
+          "label": "启用 SSE server",
+          "helper": "关掉 → 渲染层只能轮询(retro 模式)"
+        }
+      },
+      "redis": {
+        "title": "Redis 事件源",
+        "helper": "Notion webhook → Redis 队列 → 反向同步",
+        "enabled": {
+          "label": "启用 Redis 消费",
+          "helper": "需配置 REDIS_URL"
+        },
+        "url": {
+          "label": "Redis URL",
+          "helper": "redis://host:port[?db=N]"
+        }
+      },
+      "body": {
+        "title": "正文双写",
+        "helper": "Sprint 14 v4 SSoT — 新邮件同时落 SQLite + Notion",
+        "dualWrite": {
+          "label": "启用双写",
+          "helper": "关掉 → 仅 Notion 单源,LLM / 重传性能下降 100x"
+        }
+      }
     },
-    "aiBackends": "AI 后端",
-    "notionAgent": "Notion Agent 绑定",
-    "notionAgentHint": "AI Chat 默认 backend; page_id 从 notion-agent agents list 取",
-    "notionAgentIdPlaceholder": "agent page id (UUID 形)",
-    "notionAgentNamePlaceholder": "显示名 (可选)",
-    "customApiEndpoint": "Custom API 端点",
-    "customApiEndpointHint": "OpenAI 兼容网关 base URL,例 https://crs.example.com",
-    "secrets": "密钥",
-    "cliApiKey": {
-      "label": "CLI API Key",
-      "hint": "写命令 (重传/AI 重跑/标记) 需要的 MAILAGENT_CLI_API_KEY",
-      "saved": "CLI API Key 已保存",
-      "cleared": "CLI API Key 已清除"
+    "advanced": {
+      "title": "高级",
+      "toggle": "展开高级设置",
+      "helper": "内部参数与只读路径; 改之前请确认你知道在做什么",
+      "logLevel": {
+        "label": "日志级别",
+        "helper": "DEBUG / INFO / WARNING / ERROR"
+      },
+      "syncMode": {
+        "label": "同步模式",
+        "helper": "hybrid 走 SQLite radar + AppleScript; applescript_only 退回旧路径"
+      },
+      "outbox": {
+        "enabled": {
+          "label": "Outbox 灰度",
+          "helper": "Sprint 15 反向同步走 outbox + FanoutWorker"
+        },
+        "poll": {
+          "label": "FanoutWorker 轮询(秒)",
+          "helper": "默认 5"
+        },
+        "attempts": {
+          "label": "Outbox 重试上限",
+          "helper": "失败累积超过此值 → 进死信"
+        },
+        "concurrency": {
+          "label": "Outbox 并发",
+          "helper": "fanout 最大并行 worker 数"
+        }
+      },
+      "stats": {
+        "interval": {
+          "label": "看板上报间隔(秒)",
+          "helper": "STATS_REPORT_INTERVAL"
+        }
+      },
+      "sse": {
+        "host": {
+          "label": "SSE 本机 host",
+          "helper": "渲染层硬绑 127.0.0.1,修改会导致前端连不上"
+        },
+        "port": {
+          "label": "SSE 本机端口",
+          "helper": "渲染层硬绑 9200,修改会导致前端连不上"
+        }
+      },
+      "dbPath": {
+        "label": "SQLite 路径",
+        "helper": "默认 ~/Documents/MailAgent/data/sync_store.db",
+        "pickerTitle": "选择 SQLite 目录"
+      },
+      "attachmentDir": {
+        "label": "附件目录",
+        "helper": "默认 ~/Documents/MailAgent/data/attachments",
+        "pickerTitle": "选择附件目录"
+      },
+      "path": {
+        "default": "默认路径",
+        "choose": "选择…"
+      }
     },
-    "llmApiKey": {
-      "label": "LLM API Key",
-      "hint": "翻译 + Custom API chat backend 使用",
-      "saved": "LLM API Key 已保存",
-      "cleared": "LLM API Key 已清除",
-      "pingOk": "LLM 网关健康",
-      "pingFail": "LLM 网关不可达"
+    "restart": {
+      "required": "需要重启 mail-sync",
+      "moreKeys": " 等 {count} 项",
+      "cta": "立即重启",
+      "cancel": "取消",
+      "dismiss": "稍后",
+      "confirmTitle": "确认重启 mail-sync?",
+      "confirmBody": "重启会中断正在同步的批次,通常 5-10 秒恢复。已更改的字段重启后才生效。",
+      "restarting": "重启中…",
+      "success": "服务已重启",
+      "failed": "重启失败",
+      "statusProbeSlow": "服务状态确认超时,请稍后在状态栏复核",
+      "notOnline": "mail-sync 当前状态: {state}",
+      "pm2NotFound": "pm2 未找到",
+      "pm2NotFoundHint": "请在终端运行: pm2 restart mail-sync"
     },
-    "customApiKey": {
-      "label": "Custom API Key",
-      "hint": "自托管 OpenAI 兼容端点的独立 key",
-      "saved": "Custom API Key 已保存",
-      "cleared": "Custom API Key 已清除"
+    "unsavedBar": {
+      "message": "有未保存的更改 · {count} 项",
+      "save": "保存",
+      "discard": "放弃"
     },
-    "storage": "存储",
-    "dbPath": {
-      "label": "数据库路径",
-      "hint": "默认 ~/Documents/MailAgent/data/sync_store.db",
-      "pickerTitle": "选择 SQLite 数据库目录",
-      "saved": "数据库路径已保存"
-    },
-    "attachmentDir": {
-      "label": "附件根目录",
-      "hint": "默认 ~/Documents/MailAgent/data/attachments",
-      "pickerTitle": "选择附件根目录",
-      "saved": "附件目录已保存"
-    },
-    "about": "关于",
-    "save": "保存",
-    "clear": "清除",
-    "saveFail": "保存失败",
-    "set": "已设置",
-    "notSet": "未设置",
-    "secretPlaceholder": "粘贴新值后保存 · 当前值不显示",
-    "testPing": "测试网关",
-    "choose": "选择…",
-    "defaultUsed": "(使用默认)",
     "update": {
       "heading": "应用更新",
       "currentVersion": "当前版本",
