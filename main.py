@@ -29,24 +29,14 @@ class EmailNotionSyncApp:
             sync_store_path=config.sync_store_db_path
         )
 
-        # 反向同步（Notion -> Mail.app + 飞书通知）
-        from src.mail.reverse_sync import NotionToMailSync
-        # Redis 事件启用时，跳过轮询通知（由 Redis handler 负责，避免重复）
-        skip_notify = bool(config.redis_events_enabled and config.redis_url)
-        self.reverse_sync = NotionToMailSync(
-            notion_sync=self.watcher.notion_sync,
-            arm=self.watcher.arm,
-            sync_store=self.watcher.sync_store,
-            skip_notify=skip_notify,
-        )
-
         # 事件处理器引用（用于 stats）
         self._event_handlers = None
 
         # Sprint 15: SQLite SSoT inversion — outbox + FanoutWorker
         # 默认关闭（灰度期）；开启后异步派发 email flag / processing_status 到
-        # Mail.app + Notion，handler 走 intent 路径不再直接 AppleScript。
-        # 详 SPRINT15-HANDOFF.md §3 + .claude/plans/ultrathink-sprint-15-handoff*.md
+        # Mail.app + Notion，handler / reverse_sync_poll 走 intent 路径不再
+        # 直接 AppleScript。详 SPRINT15-HANDOFF.md §3 + plan。
+        # 必须先于 reverse_sync 构造（reverse_sync 需注入 outbox_repo）。
         self.outbox_repo = None
         self.fanout_worker = None
         if config.mailagent_outbox_enabled:
@@ -81,6 +71,20 @@ class EmailNotionSyncApp:
             )
         else:
             logger.info("[outbox] FanoutWorker disabled (MAILAGENT_OUTBOX_ENABLED=false)")
+
+        # 反向同步（Notion -> Mail.app + 飞书通知）
+        # Sprint 15: 注入 outbox_repo 后 sync_single_page 改写 SQLite intent + outbox
+        # 不再直调 AppleScript (跟 webhook handle_* / CLI 完全统一)。
+        from src.mail.reverse_sync import NotionToMailSync
+        # Redis 事件启用时，跳过轮询通知（由 Redis handler 负责，避免重复）
+        skip_notify = bool(config.redis_events_enabled and config.redis_url)
+        self.reverse_sync = NotionToMailSync(
+            notion_sync=self.watcher.notion_sync,
+            arm=self.watcher.arm,
+            sync_store=self.watcher.sync_store,
+            skip_notify=skip_notify,
+            outbox_repo=self.outbox_repo,
+        )
 
         # 飞书告警通知
         self.alerter = None

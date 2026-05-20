@@ -1,15 +1,29 @@
 """
-反向同步模块: Notion -> Mail.app
+反向同步模块: Notion -> Mail.app (轮询路径 B)
 
 当 AI 审核完邮件后，根据 Action Type 同步操作到 Mail.app，并对重要邮件发送飞书通知。
 
 Action Type → Mail.app 操作映射:
 - 需要回复/需要决策/需要Review/需要会议/需要跟进/等待响应 → 设置旗标
 - 仅供参考/已完结 → 标记已读
+
+Sprint 15 起 (架构纯净化, hotfix 2):
+  outbox_repo 注入时, sync_single_page 改写 SQLite intent + outbox.enqueue
+  (target='mailapp', source='reverse_sync_poll'), 不再直调 AppleScript.
+  FanoutWorker 异步消费派发, 跟 webhook 路径 A / handle_ai_reviewed / CLI
+  email flag 完全统一。admin queue-depth 100% 覆盖反向写; 失败统一进
+  outbox 重试 / dead_letter。
+
+  update_page_mail_sync_status (Synced to Mail checkbox + Processing Status)
+  仍走直接调 (跟 handle_ai_reviewed 一致): 这是 Notion 端状态机标记, 不进
+  outbox, 否则 query_pages_for_reverse_sync 的 filter 失效 -> 下次轮询又拉
+  同一批 page 导致 outbox 重复入队。
+
+  outbox_repo=None 时走老路径 (灰度回退兼容)。
 """
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
 from src.mail.applescript_arm import AppleScriptArm
@@ -36,6 +50,7 @@ class NotionToMailSync:
         arm: AppleScriptArm = None,
         sync_store: SyncStore = None,
         skip_notify: bool = False,
+        outbox_repo: Optional[Any] = None,
     ):
         if notion_sync is None:
             raise TypeError(
@@ -45,6 +60,8 @@ class NotionToMailSync:
         self.arm = arm or AppleScriptArm()
         self.sync_store = sync_store
         self._skip_notify = skip_notify
+        # Sprint 15: 注入后 sync_single_page 改 outbox 路径 (架构纯净化)
+        self.outbox_repo = outbox_repo
         self.last_check: Optional[datetime] = None
         self.sync_count = 0
         self.error_count = 0
@@ -141,21 +158,26 @@ class NotionToMailSync:
                 return False
             return True
 
-        # 根据 Action Type 决定操作
-        if ai_action in self.FLAG_ACTIONS:
-            success = self._do_mark_read_and_flag(internal_id, message_id, mailbox)
-        elif ai_action in self.READ_ACTIONS:
-            success = self._do_mark_read(internal_id, message_id, mailbox)
+        # Sprint 15 新路径: outbox enabled → 写 intent + outbox, fanout 异步派发
+        if self.outbox_repo is not None:
+            success = self._enqueue_outbox(internal_id, ai_action, msg_short)
         else:
-            if ai_action:
-                logger.warning(f"Unknown action '{ai_action}', defaulting to mark as read")
-            success = self._do_mark_read(internal_id, message_id, mailbox)
+            # 老路径: 直调 AppleScript + update_local_flags (灰度回退兼容)
+            if ai_action in self.FLAG_ACTIONS:
+                success = self._do_mark_read_and_flag(internal_id, message_id, mailbox)
+            elif ai_action in self.READ_ACTIONS:
+                success = self._do_mark_read(internal_id, message_id, mailbox)
+            else:
+                if ai_action:
+                    logger.warning(f"Unknown action '{ai_action}', defaulting to mark as read")
+                success = self._do_mark_read(internal_id, message_id, mailbox)
+            # 老路径下立即写 SQLite (echo prevention)
+            self._update_store_flags(internal_id, ai_action)
 
         # 操作失败（邮件可能已被删除），仍标记已同步防止无限重试
         if not success:
             logger.warning(f"Mail.app action failed (email may be deleted), marking synced: {msg_short}")
 
-        self._update_store_flags(internal_id, ai_action)
         try:
             await self.notion_sync.update_page_mail_sync_status(
                 page_id, synced=True, processing_status="已同步"
@@ -166,6 +188,64 @@ class NotionToMailSync:
             return False
 
         return True
+
+    def _compute_payload_and_target(
+        self, ai_action: str, record: Optional[Dict]
+    ) -> Tuple[Dict[str, bool], bool, bool]:
+        """ai_action + 当前 SQLite state → outbox payload + 目标 (is_read, is_flagged).
+
+        - FLAG_ACTIONS: payload {is_read:True, is_flagged:True}, target 双 True
+        - READ_ACTIONS / 未知 / 空: payload {is_read:True}, is_flagged 保留 current
+
+        payload 只含真要改的字段; MailAppFanout 看 payload 决定调哪个 AppleScript.
+        target 用于 update_local_flags 立即写 SQLite intent (echo prevention).
+        """
+        current_flagged = bool(record.get("is_flagged", False)) if record else False
+
+        if ai_action in self.FLAG_ACTIONS:
+            return {"is_read": True, "is_flagged": True}, True, True
+        # READ_ACTIONS / 未知 → 仅标已读, is_flagged 不动
+        return {"is_read": True}, True, current_flagged
+
+    def _enqueue_outbox(self, internal_id: int, ai_action: str, msg_short: str) -> bool:
+        """outbox 路径: update_local_flags (echo prevention) + enqueue outbox.
+
+        与 handle_ai_reviewed (source='ai_reviewed_handler') / handle_flag_changed
+        (source='notion_webhook') 同模式; 这里 source='reverse_sync_poll' 标识
+        本路径, 便于 debug / 审计区分。
+
+        target='mailapp' only — Notion 端是 intent 来源, 不回写 Notion outbox
+        (跟 handle_flag_changed 一致防回环)。Notion 端 Processing Status / Synced
+        to Mail 标记走 update_page_mail_sync_status 直接调 (带外 ack, 不进 outbox)。
+        """
+        try:
+            record = self.sync_store.get(internal_id) if self.sync_store else None
+            payload, target_read, target_flagged = self._compute_payload_and_target(
+                ai_action, record
+            )
+
+            # 立即 update_local_flags — echo prevention, 让下一轮 SQLite Radar 不
+            # 把 fanout 即将派发的状态作为新 diff 触发反向链路
+            if self.sync_store:
+                self.sync_store.update_local_flags(
+                    internal_id, target_read, target_flagged
+                )
+
+            outbox_id = self.outbox_repo.enqueue(
+                internal_id=internal_id,
+                op_type="flag_sync",
+                target="mailapp",
+                payload=payload,
+                source="reverse_sync_poll",
+            )
+            logger.info(
+                f"[reverse_sync→outbox] internal_id={internal_id} "
+                f"outbox_id={outbox_id} payload={payload} ({msg_short})"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"reverse_sync outbox enqueue failed: {e}")
+            return False
 
     def _lookup_internal_id(self, message_id: str) -> Optional[int]:
         # 1. SyncStore 查找
