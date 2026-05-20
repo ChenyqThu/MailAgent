@@ -14,6 +14,14 @@ import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
+import { useEventBridge } from '@shared/hooks/useEventBridge'
+
+/** Sprint 16 — must live inside QueryClientProvider because useEventBridge
+ *  uses useQueryClient(). One mount per App lifetime; no UI of its own. */
+function EventBridgeMount(): null {
+  useEventBridge()
+  return null
+}
 
 export default function App(): React.ReactElement {
   // The client lives in a useState so HMR doesn't recreate it on every
@@ -42,6 +50,7 @@ export default function App(): React.ReactElement {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
+        <EventBridgeMount />
         {/* Sprint 7 D2 fix (Sprint 8 verify): GlobalShortcuts +
             KeyboardHelpModal + CommandPalette moved into rootRoute's
             RootLayout (see `src/shared/router-instance.tsx`) — they call

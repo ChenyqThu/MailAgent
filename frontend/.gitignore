@@ -7,3 +7,9 @@ out
 .env
 .env.local
 .DS_Store
+
+# Playwright outputs
+test-results/
+tests/e2e/screenshots/
+tests/e2e/a11y-reports/
+playwright-report/

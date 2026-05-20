@@ -7,6 +7,56 @@
     "inbox": "Inbox",
     "sent": "Sent"
   },
+  "emailList": {
+    "filter": {
+      "unread": "Unread",
+      "flagged": "Flagged",
+      "failed": "Sync failed"
+    },
+    "group": {
+      "pinned": "Pinned",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "thisWeek": "Earlier this week",
+      "lastWeek": "Last week",
+      "older": "Older"
+    }
+  },
+  "list": {
+    "tab": {
+      "focused": "Focused",
+      "other": "Other",
+      "aria": "Inbox view"
+    },
+    "meta": {
+      "unread": "unread",
+      "total": "total"
+    },
+    "batch": {
+      "enter": "Enter batch mode",
+      "exit": "Exit batch mode"
+    },
+    "filter": {
+      "button": "Filter mail",
+      "status": "Status",
+      "priority": "Priority",
+      "category": "Category",
+      "all": "All",
+      "reset": "Reset",
+      "selectAll": "All",
+      "clearLink": "Clear"
+    }
+  },
+  "emailDetail": {
+    "notionOpen": "Open",
+    "threadCount": "{n, plural, =1 {1 in thread} other {# in thread}}",
+    "viewSource": "View source (.eml)",
+    "viewSourceBlocked": "View source · awaiting Sprint 14 wiring of `mailagent debug email-source`",
+    "moreProps": "{n, plural, =1 {1 more property} other {# more properties}}",
+    "fewerProps": "Fewer properties",
+    "more": "more",
+    "less": "less"
+  },
   "ai": {
     "compose": "Draft reply"
   },
@@ -17,7 +67,10 @@
     "markRead": "Read",
     "markUnread": "Unread",
     "toggleFlag": "Flag",
+    "important": "Important",
+    "importantHint": "Sender-marked importance (Importance / X-Priority) · read-only",
     "archive": "Archive",
+    "archiveBlocked": "Archive · awaiting CLI in Sprint 14",
     "resync": "Resync Notion",
     "resyncPending": "Resyncing…",
     "llmRun": "Re-run AI",
@@ -52,15 +105,21 @@
     "cancel": "Cancel"
   },
   "batchbar": {
+    "aria": "Bulk actions",
     "selection": "{n, plural, =1 {1 selected} other {# selected}}",
+    "selectAll": "Select all {n}",
+    "clear": "Clear",
     "aiClassify": "AI Classify",
     "aiDraft": "AI Draft Reply",
     "translate": "Translate",
     "markRead": "Mark Read",
+    "toggleFlag": "Toggle flag",
+    "markDone": "Mark Done",
     "archive": "Archive",
     "resync": "Resync Notion",
     "estimate": "~{seconds}s · ${cost}",
-    "exit": "Exit (Esc)"
+    "exit": "Exit (Esc)",
+    "exitTooltip": "Exit batch mode (Esc)"
   },
   "batchToast": {
     "running": "{op}: {done}/{total}",
@@ -109,7 +168,12 @@
     "empty": "No thread relations",
     "loadFailed": "Thread load failed",
     "count": "{n, plural, =1 {1 message} other {# messages}}",
-    "current": "Current"
+    "current": "Current",
+    "bundleTitle": "Earlier messages",
+    "bundleSummary": "{n, plural, =1 {1 earlier message} other {# earlier messages}}",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all",
+    "loading": "Loading…"
   },
   "empty": {
     "state": "Nothing to show"
@@ -144,20 +208,26 @@
       "switchBackend": "Switch AI backend",
       "sendChat": "Send AI message",
       "newChat": "New AI conversation",
-      "toggleIsland": "Toggle Dynamic Island"
+      "toggleIsland": "Toggle Dynamic Island",
+      "toggleNav": "Toggle navigation",
+      "toggleLocale": "Toggle language"
     }
   },
   "palette": {
-    "placeholder": "Search commands or mail…",
+    "placeholder": "Search mail · jump to mailbox · run AI action…",
     "noResults": "No matches · try a different query",
     "searching": "Searching…",
+    "lang": {
+      "detected": "Detected input language",
+      "zh": "中",
+      "en": "EN"
+    },
     "aria": {
-      "label": "Command palette",
-      "list": "Command list"
+      "label": "Command palette · search and jump",
+      "list": "Search results"
     },
     "nav": {
       "inbox": "Go · Inbox",
-      "search": "Go · Search",
       "admin": "Go · Admin",
       "llm": "Go · LLM dashboard",
       "calendar": "Go · Calendar",
@@ -165,10 +235,45 @@
     },
     "mailbox": {
       "go": "Switch to mailbox · {name}",
-      "hint": "{unread} unread · {total} total"
+      "hint": "{unread} unread · {total} total",
+      "matchedSuffix": "{n, plural, one {# match} other {# matches}} for \"{query}\""
     },
-    "search": {
-      "untitled": "(no subject)"
+    "jump": {
+      "aiHistory": "AI conversations",
+      "aiHistoryMeta": "Open AI panel",
+      "admin": "Admin kanban",
+      "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health"
+    },
+    "email": {
+      "countLabel": "{n} / {total}",
+      "untitled": "(no subject)",
+      "emptyTitle": "No matching emails",
+      "emptyHint": "Try a shorter query, or append * for Chinese terms (e.g. 产品*)"
+    },
+    "actions": {
+      "subtitle": "on {n, plural, one {# result} other {# results}}",
+      "aside": "Notion Agent · Jarvis",
+      "markAllRead": "Mark all as read",
+      "markAllReadMeta": "{n, plural, one {# email} other {# emails}} · instant local · syncs to Mail.app + Notion",
+      "reRunAi": "Re-run AI classify",
+      "reRunAiMeta": "{n, plural, one {# email} other {# emails}} · overwrite 11 fields · old versions archived to ai_history",
+      "summarize": "Draft a summary for this result set",
+      "summarizeMeta": "{n, plural, one {# email} other {# emails}} · coming soon",
+      "soon": "Soon",
+      "running": "Running…",
+      "doneToast": "Processed {n, plural, one {# email} other {# emails}}",
+      "errToast": "Action failed"
+    },
+    "kbd": {
+      "navigate": "navigate",
+      "selectGroup": "select group",
+      "open": "open",
+      "newWindow": "new window",
+      "dismiss": "dismiss",
+      "run": "run"
+    },
+    "footer": {
+      "fts5Healthy": "FTS5"
     }
   },
   "sidebar": {
@@ -192,11 +297,40 @@
     "online": "online",
     "cacheWarn": "Cache hit rate low"
   },
+  "nav": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "view": "View"
+    },
+    "inbox": "Inbox",
+    "outbox": "Outbox",
+    "flagged": "Flagged",
+    "allMail": "All mail",
+    "aiSessions": "AI sessions",
+    "aiSessionsSoon": "Coming soon — chat history not yet wired",
+    "adminKanban": "Admin",
+    "calendar": "Calendar",
+    "settings": "Settings",
+    "shortcuts": "Shortcuts",
+    "toggleTitle": "Collapse / expand navigation (⌥B)",
+    "toggleAria": "Toggle navigation",
+    "online": "online",
+    "account": {
+      "add": "Add account…",
+      "tooltip": "{email} — switch account"
+    }
+  },
   "chat": {
     "title": "AI Assistant",
     "tabAI": "AI",
     "tabThread": "Thread",
     "tabSync": "Sync",
+    "newChat": "New chat · ⌘N",
+    "newChatHint": "Reset the current thread · next send opens a fresh session",
+    "history": "History",
+    "historyBlocked": "Chat history · awaiting Sprint 14 sidebar",
+    "closePanel": "Hide panel · ⌘L",
     "backend": {
       "notionAgent": "Notion Agent",
       "customApi": "Custom API",
@@ -216,21 +350,48 @@
       "draft": "Draft reply",
       "translate": "Translate",
       "extract": "Extract actions",
-      "linkNotion": "Link to Notion"
+      "linkNotion": "Link to Notion",
+      "summarizePrompt": "Summarize this email in 3-5 bullet points: core content, sender's intent, what they want me to do.",
+      "draftPrompt": "Based on this email, draft an appropriate reply for me (in English).",
+      "translatePrompt": "Translate this email into English (preserve meaning, email etiquette, formatting).",
+      "extractPrompt": "Extract every action item from this email: who needs to do what, by when, reply to whom.",
+      "linkNotionPrompt": "Find pages in my Notion workspace related to this email and list the 3 most relevant ones."
+    },
+    "messageActions": {
+      "regenerate": "Regenerate",
+      "copy": "Copy",
+      "toNotion": "To Notion"
     },
     "composer": {
       "placeholder": "/command or ask about this email… (⌘↩ send)",
       "send": "Send",
       "sending": "Sending",
       "cancel": "Cancel",
-      "regenerate": "Regenerate"
+      "regenerate": "Regenerate",
+      "attach": "Attach",
+      "attachBlocked": "Attach context · awaiting Sprint 14 wiring",
+      "mention": "@mention",
+      "mentionBlocked": "@mention · awaiting Sprint 14 wiring",
+      "model": "Switch model",
+      "modelHint": "Switch model in the Backend selector (Alt row chips)"
     },
     "draftReply": {
       "header": "Draft reply",
       "send": "Send",
+      "sending": "Opening in Mail.app…",
       "edit": "Edit",
       "regenerate": "Regenerate",
-      "openInWindow": "Open in window"
+      "openInWindow": "Open in window",
+      "toast": {
+        "sendOk": "Draft opened in Mail.app",
+        "sendFailGeneric": "Draft creation failed",
+        "sendFailAuto": "macOS automation denied — open Settings → Privacy → Automation",
+        "sendFailMail": "Mail.app refused — make sure Mail is open",
+        "sendFailNoBin": "MAIL_ACCOUNT_NAME not configured",
+        "editPending": "Inline editor planned for Sprint 14 — please edit ✎ in Mail.app for now",
+        "popoutPending": "Popout window planned for Sprint 14 — see SPRINT13-HANDOFF §3.2",
+        "regenPending": "Regenerate requires this turn to have started with a draft prompt"
+      }
     },
     "status": {
       "thinking": "AI thinking…",
@@ -357,8 +518,21 @@
     "accent": "Accent",
     "accentHint": "6 swatches · drives the primary CTA + chip color",
     "inbox": "Inbox",
-    "pollInterval": "Poll interval",
-    "pollIntervalHint": "New-email check frequency; off disables auto polling.",
+    "pollInterval": "Fallback poll",
+    "pollIntervalHint": "Fallback polling cadence used while SSE is down; off disables it.",
+    "realtime": {
+      "label": "Realtime events",
+      "hint": "SSE push connection status; the poll cadence below is the fallback when disconnected.",
+      "connected": "Connected · live sync",
+      "connecting": "Connecting…",
+      "reconnecting": "Reconnecting…",
+      "disconnected": "Disconnected · falling back to polling",
+      "disabled": "Disabled",
+      "idle": "Awaiting start",
+      "reconnect": "Reconnect now",
+      "reconnectRequested": "Reconnect requested",
+      "reconnectFailed": "Reconnect failed"
+    },
     "aiBackends": "AI backends",
     "notionAgent": "Notion Agent binding",
     "notionAgentHint": "Default backend for AI Chat; page_id from `notion-agent agents list`.",
@@ -413,6 +587,7 @@
     "update": {
       "heading": "Software updates",
       "currentVersion": "Current version",
+      "idle": "Not yet checked",
       "checkNow": "Check for updates",
       "checking": "Checking…",
       "upToDate": "You're up to date",
@@ -439,6 +614,8 @@
       "lastProbe": "Last probe {agoSec}s ago",
       "toggleOn": "On",
       "toggleOff": "Off",
+      "installHint": "/tmp/island.sock missing — ping-island.app is not running or not installed.",
+      "installLinkLabel": "Get the fork (feat/mail-brand)",
       "state": {
         "idle": "Not probed",
         "connected": "Connected",
@@ -456,7 +633,21 @@
     "llm": "llm",
     "theme": "theme",
     "llmIdle": "IDLE",
-    "updateReady": "Update ready"
+    "updateReady": "Update ready",
+    "sync": {
+      "label": "Sync",
+      "live": "live",
+      "connecting": "connecting",
+      "reconnecting": "reconnecting",
+      "fallbackTpl": "offline · poll {seconds}s",
+      "fallbackOff": "offline · poll off",
+      "idle": "idle",
+      "disabled": "disabled",
+      "tooltipConnected": "SSE push, live sync",
+      "tooltipFallback": "SSE offline; fallback poll every {seconds}s",
+      "tooltipFallbackOff": "SSE offline; fallback poll disabled (Settings → Realtime events)",
+      "tooltipDisabled": "Realtime events disabled"
+    }
   },
   "titleBar": {
     "island": {
@@ -467,6 +658,20 @@
       "disconnected": "ping-island.app not running",
       "devDisabled": "Dev · Dynamic Island disabled",
       "disabled": "Dynamic Island off"
+    },
+    "synced": "Synced",
+    "themeCycle": "Theme · click to cycle",
+    "accent": {
+      "label": "Accent",
+      "title": "Accent Color",
+      "tooltip": "Pick accent (View → Appearance)",
+      "aria": "Pick accent color",
+      "note": "Affects toolbar · chips · selected row · Island. Stored locally."
+    },
+    "locale": {
+      "label": "Language",
+      "tooltip": "Switch language (⌥G)",
+      "aria": "Switch language"
     }
   }
 }

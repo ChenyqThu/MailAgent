@@ -39,13 +39,37 @@ export function swiftSentAt(now: number = Date.now()): number {
 export type IslandProvider = 'mail'
 
 /** Event names the Electron side emits. The Python plugin owns the
- *  mail-flow events; we own appearance + AI draft. */
+ *  mail-flow events; we own appearance + AI draft.
+ *
+ *  Sprint 10 (b) §2.5.4-D 方案 A: this is the SEMANTIC event name we keep
+ *  in builder API + island_dispatch SQLite + tests. On the wire we map all
+ *  of these to ping-island's known `"Notification"` hook (the fork's
+ *  dispatcher only recognises `UserPromptSubmit` / `PreToolUse` /
+ *  `Notification` / `Stop` / `SessionStart`), and stash the real semantic
+ *  name in `metadata['mailagent.eventType']` for the fork to consume / for
+ *  future Plan B (Swift fork adds mail-specific case). */
 export type IslandEventType =
   | 'AppearanceChange'
   | 'AIDraftStart'
   | 'AIDraftStream'
   | 'AIDraftReady'
   | 'Ping'
+
+/** Wire-layer event name. Always `"Notification"` after Sprint 10 (b) — see
+ *  `_WIRE_EVENT_MAP` below + ISLAND-PLUGIN.md §2.5.4-D. */
+export type IslandWireEventType = 'Notification'
+
+/** Sprint 10 (b) §2.5.4-D Plan A — semantic → wire event mapping. Always
+ *  collapses to `"Notification"` so ping-island's existing hook dispatcher
+ *  accepts the envelope; consumers read `metadata.mailagent.eventType` to
+ *  recover the original intent. */
+const _WIRE_EVENT_MAP: Record<IslandEventType, IslandWireEventType> = {
+  AppearanceChange: 'Notification',
+  AIDraftStart: 'Notification',
+  AIDraftStream: 'Notification',
+  AIDraftReady: 'Notification',
+  Ping: 'Notification'
+}
 
 /** ping-island `Status.kind`. Mirrors the Swift `SessionState.Phase` mapping
  *  in HookPayloadMapper. */
@@ -54,7 +78,10 @@ export type IslandStatusKind = 'notification' | 'waitingForInput' | 'completed' 
 export interface BridgeEnvelope {
   id: string
   provider: IslandProvider
-  eventType: IslandEventType
+  /** Sprint 10 (b) §2.5.4-D Plan A — `"Notification"` on the wire so
+   *  ping-island's dispatcher accepts the frame. The original semantic
+   *  event lives in `metadata['mailagent.eventType']`. */
+  eventType: IslandWireEventType
   sessionKey: string
   title: string
   preview: string
@@ -125,7 +152,11 @@ function commonShell(
   return {
     id: randomUUID(),
     provider: 'mail',
-    eventType,
+    // Sprint 10 (b) §2.5.4-D Plan A — wire event collapses to "Notification",
+    // semantic event preserved in metadata.mailagent.eventType so consumers
+    // (ping-island fork / future Plan B Swift case / Settings debug) can
+    // still distinguish AppearanceChange from AIDraftStream from Ping.
+    eventType: _WIRE_EVENT_MAP[eventType],
     sessionKey,
     title,
     preview,
@@ -134,7 +165,7 @@ function commonShell(
     terminalContext: {},
     intervention: null,
     expectsResponse: opts?.expectsResponse ?? false,
-    metadata,
+    metadata: { ...metadata, 'mailagent.eventType': eventType },
     sentAt: swiftSentAt(opts?.now)
   }
 }

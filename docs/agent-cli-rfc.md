@@ -466,6 +466,48 @@ mailagent email delete <internal_id> [--yes]
 
   Examples:
     $ mailagent email delete 53675 --yes
+
+mailagent email flag [<internal_id>] [--is-read/--no-is-read] \
+                     [--is-flagged/--no-is-flagged] \
+                     [--processing-status STATUS] [--ids 1,2,3] \
+                     [--dry-run] [--allow-concurrent] [-o {text,json,yaml}]
+
+  Sprint 15 SSoT inversion 写入端 — 把 flag / processing_status intent 写入
+  SQLite + email_outbox 双 target (mailapp + notion)，FanoutWorker 异步派发
+  到 Mail.app + Notion 两端。前端 BatchActionBar / EmailRow flag 三态切换走
+  本命令；intent 立即落 SQLite（echo prevention 同 sync radar），FanoutWorker
+  在 mail-sync 进程内消费。
+
+  target 互斥:
+    - <internal_id> 单封
+    - --ids 1,2,3   列表批量
+  至少给一个改动: --is-read / --is-flagged / --processing-status
+
+  payload 字段:
+    --is-read / --no-is-read     立即写 SQLite email_metadata.is_read +
+                                  outbox(mailapp+notion).payload.is_read
+    --is-flagged / --no-is-flagged 立即写 SQLite + outbox 同上
+    --processing-status STATUS    仅写 outbox(target=notion).payload；SQLite
+                                  不存此字段（Notion-owned property）
+
+  Source 标记 'cli'，不触发 OutboxRepository echo prevention（只有
+  source='notion_webhook' + target='notion' 才被 silent skip）。
+
+  Outbox 行：每封邮件最多 2 行（mailapp + notion）；
+  纯 --processing-status 时 mailapp_payload 为空 → mailapp_outbox_id=null。
+
+  灰度: MAILAGENT_OUTBOX_ENABLED=true 时由 FanoutWorker 异步派发；关闭时
+  本命令仍能写 outbox（intent 留存），fanout 不消费。
+
+  exit code: 0 / 4 auth / 9 PM2 / 2 invalid arg。
+
+  Examples:
+    $ mailagent email flag 53675 --is-read --dry-run -o json
+    $ mailagent email flag 53675 --is-flagged --is-read
+    $ mailagent email flag --ids 53674,53675,53677 --is-flagged
+    $ mailagent email flag 53675 --no-is-flagged --processing-status '已完成'
+    $ mailagent email flag 53675 --processing-status 'AI Reviewed' \
+        --allow-concurrent
 ```
 
 ### 4.3 attachment

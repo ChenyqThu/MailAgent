@@ -93,10 +93,39 @@ describe('EmailToolbar — write button wiring', () => {
   })
 
   test('notionUrl renders a Notion button that opens in a new tab on click', () => {
+    // Sprint 13 — aria-label changed from hardcoded "Notion" to translated
+    // `toolbar.openNotion` ("在 Notion 打开") when EmailToolbar migrated to
+    // the IconOnlyBtn primitive (single source: label drives both
+    // aria-label and HoverTip text).
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     render(<EmailToolbar notionUrl="https://notion.so/foo" />)
-    fireEvent.click(screen.getByRole('button', { name: /^Notion$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /在 Notion 打开/ }))
     expect(open).toHaveBeenCalledWith('https://notion.so/foo', '_blank', 'noopener,noreferrer')
     open.mockRestore()
+  })
+
+  test('Sprint 13 — Archive button is data-disabled + carries the blocked hint', () => {
+    // Backend has no `mailagent email archive` CLI; the button stays in the
+    // mockup layout but never fires. data-disabled + opacity-50 + aria-label
+    // make the state visible to keyboard / screen-reader users.
+    render(<EmailToolbar />)
+    const archive = screen.getByRole('button', { name: /^归档$/ })
+    expect((archive as HTMLButtonElement).disabled).toBe(true)
+    expect(archive.getAttribute('data-disabled')).toBe('')
+    expect(archive.tabIndex).toBe(-1)
+  })
+
+  test('Sprint 13 — isImportant=true surfaces the ❗ passive indicator', () => {
+    render(<EmailToolbar isImportant={true} />)
+    // The indicator is a `<span role="img">`, not a button — clicking it
+    // does nothing because the backend has no email.markImportant write.
+    const indicator = screen.getByRole('img', { name: /重要/ })
+    expect(indicator).toBeTruthy()
+    expect(indicator.getAttribute('data-disabled')).toBe('')
+  })
+
+  test('Sprint 13 — isImportant=false hides the ❗ indicator entirely', () => {
+    render(<EmailToolbar isImportant={false} />)
+    expect(screen.queryByRole('img', { name: /重要/ })).toBeNull()
   })
 })

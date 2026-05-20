@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MailAgent — Icon Spec</title>
+    <style>
+      :root {
+        --bg: #fafafa;
+        --surface: #ffffff;
+        --surface-warm: var(--surface);
+        --fg: #111111;
+        --fg-2: var(--fg);
+        --muted: #6b6b6b;
+        --meta: var(--muted);
+        --border: #e5e5e5;
+        --border-soft: var(--border);
+        --accent: #2f6feb;
+        --accent-on: #ffffff;
+        --success: #17a34a;
+        --warn: #eab308;
+        --danger: #dc2626;
+        --font-display: "Inter", -apple-system, system-ui, sans-serif;
+        --font-body: "Inter", -apple-system, system-ui, sans-serif;
+        --font-mono: ui-monospace, "JetBrains Mono", monospace;
+        --text-xs: 12px;
+        --text-sm: 14px;
+        --text-base: 16px;
+        --text-lg: 20px;
+        --text-xl: 24px;
+        --text-2xl: 32px;
+        --text-3xl: 48px;
+        --leading-body: 1.5;
+        --leading-tight: 1.2;
+        --tracking-display: -0.01em;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --space-5: 20px;
+        --space-6: 24px;
+        --space-8: 32px;
+        --space-12: 48px;
+        --space-20: 80px;
+        --radius-sm: 8px;
+        --radius-md: 12px;
+        --radius-lg: 16px;
+        --container-max: 1200px;
+
+        /* brand colors lifted from the new icon mark itself */
+        --brand-cobalt: #2f4fe8;     /* 信号蓝 — 信封主体 + 边缘光 */
+        --brand-beacon: #6a8eff;     /* 高光蓝 — 信封内反光 */
+        --brand-starlight: #eaf1ff;  /* 星光白 — 环形光轨 + 闪点 */
+        --brand-midnight: #0d1659;   /* 午夜蓝 — squircle 边缘最深处 */
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--font-body);
+        font-size: var(--text-base);
+        line-height: var(--leading-body);
+        -webkit-font-smoothing: antialiased;
+      }
+      .container {
+        max-width: var(--container-max);
+        margin-inline: auto;
+        padding-inline: var(--space-6);
+      }
+      section {
+        padding-block: var(--space-20);
+      }
+      section + section {
+        border-top: 1px solid var(--border);
+      }
+      h1,
+      h2,
+      h3 {
+        font-family: var(--font-display);
+        line-height: var(--leading-tight);
+        margin: 0;
+      }
+      h1 {
+        font-size: var(--text-3xl);
+        font-weight: 600;
+        letter-spacing: var(--tracking-display);
+      }
+      h2 {
+        font-size: var(--text-2xl);
+        font-weight: 600;
+        letter-spacing: var(--tracking-display);
+      }
+      h3 {
+        font-size: var(--text-lg);
+        font-weight: 600;
+      }
+      p {
+        margin: 0;
+      }
+      .eyebrow {
+        font-size: var(--text-xs);
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 500;
+      }
+      .lead {
+        font-size: var(--text-lg);
+        color: var(--muted);
+        max-width: 60ch;
+      }
+      .body-muted {
+        color: var(--muted);
+      }
+      .body-sm {
+        font-size: var(--text-sm);
+      }
+      .stack-3 > * + * {
+        margin-block-start: var(--space-3);
+      }
+      .stack-4 > * + * {
+        margin-block-start: var(--space-4);
+      }
+      .stack-6 > * + * {
+        margin-block-start: var(--space-6);
+      }
+
+      /* ─── Hero ───────────────────────────────────────── */
+      .hero {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--space-20);
+        align-items: center;
+      }
+      @media (max-width: 900px) {
+        .hero {
+          grid-template-columns: 1fr;
+          gap: var(--space-12);
+        }
+      }
+      .hero-img {
+        width: 100%;
+        max-width: 480px;
+        aspect-ratio: 1 / 1;
+        background:
+          url("mailagent_logo.png") center / contain no-repeat,
+          repeating-conic-gradient(
+            #f5f5f5 0% 25%,
+            #ffffff 0% 50%
+          ) 0 0 / 32px 32px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--border);
+      }
+      .hero-meta {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: var(--space-2) var(--space-4);
+        font-size: var(--text-sm);
+        margin-block-start: var(--space-6);
+      }
+      .hero-meta dt {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 0;
+      }
+      .hero-meta dd {
+        margin: 0;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+      }
+
+      /* ─── Size ladder ────────────────────────────────── */
+      .ladder {
+        display: flex;
+        align-items: flex-end;
+        gap: var(--space-8);
+        flex-wrap: wrap;
+        margin-block-start: var(--space-8);
+        padding: var(--space-8);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+      }
+      .rung {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-2);
+      }
+      .rung img {
+        display: block;
+        border-radius: 22%;
+        image-rendering: -webkit-optimize-contrast;
+      }
+      .rung .label {
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      /* ─── Dock simulation ────────────────────────────── */
+      .docks {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--space-6);
+        margin-block-start: var(--space-8);
+      }
+      @media (max-width: 900px) {
+        .docks {
+          grid-template-columns: 1fr;
+        }
+      }
+      .dock-frame {
+        border-radius: var(--radius-lg);
+        padding: var(--space-12) var(--space-6) var(--space-4);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-4);
+        position: relative;
+        overflow: hidden;
+      }
+      .dock-frame.light {
+        background: linear-gradient(180deg, #cfe1ff 0%, #f5d8b6 100%);
+      }
+      .dock-frame.dark {
+        background: linear-gradient(180deg, #0d1117 0%, #2a1f3a 100%);
+      }
+      .dock-frame .wallpaper-label {
+        position: absolute;
+        top: var(--space-3);
+        left: var(--space-4);
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        letter-spacing: 0.04em;
+      }
+      .dock-frame.light .wallpaper-label {
+        color: #1a1a1a;
+      }
+      .dock-frame.dark .wallpaper-label {
+        color: #ffffff;
+      }
+      .dock {
+        display: flex;
+        align-items: end;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 22px;
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+      }
+      .dock-frame.light .dock {
+        background: rgba(255, 255, 255, 0.45);
+      }
+      .dock-frame.dark .dock {
+        background: rgba(40, 40, 50, 0.55);
+        border-color: rgba(255, 255, 255, 0.1);
+      }
+      .dock-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 14px;
+        background-size: cover;
+        background-position: center;
+        flex-shrink: 0;
+        transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
+      }
+      .dock-icon:hover {
+        transform: translateY(-8px) scale(1.15);
+      }
+      .dock-icon.mail {
+        background-image: url("mailagent_logo.png");
+        position: relative;
+      }
+      .dock-icon.mail::after {
+        content: "3";
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #ff453a;
+        color: white;
+        font-size: 11px;
+        font-weight: 600;
+        font-family: var(--font-display);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.9);
+      }
+      .dock-icon.placeholder {
+        background: linear-gradient(135deg, #6e7681 0%, #484f58 100%);
+      }
+      .dock-icon.placeholder.finder {
+        background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
+      }
+      .dock-icon.placeholder.safari {
+        background: linear-gradient(135deg, #06aef0 0%, #006d9e 100%);
+      }
+      .dock-icon.placeholder.terminal {
+        background: linear-gradient(135deg, #2c2c2e 0%, #1c1c1e 100%);
+      }
+      .dock-icon.placeholder.calendar {
+        background: linear-gradient(180deg, #ffffff 0%, #ffffff 100%);
+        position: relative;
+      }
+      .dock-icon.placeholder.calendar::before {
+        content: "18";
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--font-display);
+        font-weight: 600;
+        font-size: 20px;
+        color: #ff453a;
+        margin-top: 6px;
+      }
+
+      /* ─── Code blocks ────────────────────────────────── */
+      pre {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--space-5);
+        font-family: var(--font-mono);
+        font-size: var(--text-sm);
+        line-height: 1.6;
+        overflow-x: auto;
+        margin: 0;
+      }
+      pre .comment {
+        color: var(--muted);
+      }
+      pre .accent {
+        color: var(--accent);
+      }
+      pre .green {
+        color: var(--success);
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--space-6);
+        margin-block-start: var(--space-6);
+      }
+      @media (max-width: 900px) {
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--space-6);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-3);
+      }
+
+      /* ─── Palette tokens ─────────────────────────────── */
+      .palette {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: var(--space-3);
+        margin-block-start: var(--space-6);
+      }
+      .swatch {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        background: var(--surface);
+      }
+      .swatch .chip {
+        height: 96px;
+        display: block;
+      }
+      .swatch .meta {
+        padding: var(--space-3);
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+      }
+      .swatch .meta strong {
+        color: var(--fg);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+
+  <body>
+    <main class="container">
+      <!-- Hero -->
+      <section data-od-id="hero">
+        <div class="hero">
+          <div class="hero-img" role="img" aria-label="MailAgent app icon, 1024×1024"></div>
+          <div class="stack-4">
+            <p class="eyebrow">Icon Spec · v2.0 · 2026-05-18</p>
+            <h1>MailAgent — 轨道信使</h1>
+            <p class="lead">
+              深蓝信封 + 环形光轨 + 一颗指北星。从「邮件投递」延伸到
+              「智能体巡航」—— 区别于系统自带 Mail 的纯白纸卡，也避开了
+              SaaS 邮件应用的扁平蓝渐变。
+            </p>
+            <dl class="hero-meta">
+              <dt>背景</dt>
+              <dd>#0D1659 → #2F4FE8 · 午夜到信号蓝（径向）</dd>
+              <dt>主体</dt>
+              <dd>#6A8EFF · 信封发光蓝</dd>
+              <dt>高光</dt>
+              <dd>#EAF1FF · 环形光轨 + 晶体闪光</dd>
+              <dt>形状</dt>
+              <dd>macOS squircle，180px 圆角 @1024</dd>
+              <dt>主图</dt>
+              <dd>mailagent_logo.png · 1024 × 1024</dd>
+            </dl>
+          </div>
+        </div>
+      </section>
+
+      <!-- Palette -->
+      <section data-od-id="palette">
+        <div class="stack-3">
+          <p class="eyebrow">Brand palette</p>
+          <h2>四色光谱，一束焦点。</h2>
+          <p class="body-muted">
+            icon 用一束蓝光带动整个层级 —— 信号蓝是主体，星光白是闪点，
+            午夜蓝是边缘，高光蓝穿插其间。延伸到 app 内时只在 CTA 和状态
+            上动用信号蓝；星光白做空态背景；午夜蓝只在 hero / 顶栏深底
+            出现，不下放到正文。
+          </p>
+        </div>
+        <div class="palette">
+          <div class="swatch">
+            <span class="chip" style="background: #2f4fe8"></span>
+            <div class="meta"><strong>Cobalt</strong><span>#2F4FE8</span></div>
+          </div>
+          <div class="swatch">
+            <span class="chip" style="background: #6a8eff"></span>
+            <div class="meta"><strong>Beacon</strong><span>#6A8EFF</span></div>
+          </div>
+          <div class="swatch">
+            <span class="chip" style="background: #eaf1ff"></span>
+            <div class="meta"><strong>Starlight</strong><span>#EAF1FF</span></div>
+          </div>
+          <div class="swatch">
+            <span class="chip" style="background: #0d1659"></span>
+            <div class="meta"><strong>Midnight</strong><span>#0D1659</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Size ladder -->
+      <section data-od-id="sizes">
+        <div class="stack-3">
+          <p class="eyebrow">Size ladder — readability check</p>
+          <h2>16×16 能不能认出来，是 icon 的真正考验。</h2>
+          <p class="body-muted">
+            环形光轨在 64 以下基本消失，闪光晶体在 32 以下融成一团 ——
+            这是发光 mark 的可接受退化方式。到 16 时只剩一个蓝色信封
+            剪影，但邮件应用的识别度仍然在。
+          </p>
+        </div>
+        <div class="ladder">
+          <div class="rung">
+            <img src="mailagent_logo.png" width="1024" height="1024" style="width:256px;height:256px" alt="icon at 1024" />
+            <span class="label">1024</span>
+          </div>
+          <div class="rung">
+            <img src="mailagent_logo.png" width="512" height="512" style="width:128px;height:128px" alt="icon at 512" />
+            <span class="label">512</span>
+          </div>
+          <div class="rung">
+            <img src="mailagent_logo.png" width="256" height="256" alt="icon at 256" />
+            <span class="label">256</span>
+          </div>
+          <div class="rung">
+            <img src="mailagent_logo.png" width="128" height="128" alt="icon at 128" />
+            <span class="label">128</span>
+          </div>
+          <div class="rung">
+            <img src="mailagent_logo.png" width="64" height="64" alt="icon at 64" />
+            <span class="label">64</span>
+          </div>
+          <div class="rung">
+            <img src="mailagent_logo.png" width="32" height="32" alt="icon at 32" />
+            <span class="label">32</span>
+          </div>
+          <div class="rung">
+            <img src="mailagent_logo.png" width="16" height="16" alt="icon at 16" />
+            <span class="label">16</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Dock simulation -->
+      <section data-od-id="dock">
+        <div class="stack-3">
+          <p class="eyebrow">macOS Dock — context simulation</p>
+          <h2>Dock 上的真实手感（hover 试试）</h2>
+          <p class="body-muted">
+            通知红点是 macOS 系统自动在图标外面渲染的 badge —— 不在 icon
+            文件里。环形光轨已经是 icon 的一部分，不要在 icon 内再画
+            badge。鼠标悬停可以预览 Dock 放大效果。
+          </p>
+        </div>
+        <div class="docks">
+          <div class="dock-frame light">
+            <span class="wallpaper-label">Light wallpaper</span>
+            <div class="dock">
+              <div class="dock-icon placeholder finder" title="Finder"></div>
+              <div class="dock-icon placeholder safari" title="Safari"></div>
+              <div class="dock-icon mail" title="MailAgent (3 unread)"></div>
+              <div class="dock-icon placeholder calendar" title="Calendar"></div>
+              <div class="dock-icon placeholder terminal" title="Terminal"></div>
+            </div>
+          </div>
+          <div class="dock-frame dark">
+            <span class="wallpaper-label">Dark wallpaper</span>
+            <div class="dock">
+              <div class="dock-icon placeholder finder"></div>
+              <div class="dock-icon placeholder safari"></div>
+              <div class="dock-icon mail" title="MailAgent (3 unread)"></div>
+              <div class="dock-icon placeholder calendar"></div>
+              <div class="dock-icon placeholder terminal"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Electron pipeline -->
+      <section data-od-id="pipeline">
+        <div class="stack-3">
+          <p class="eyebrow">Electron build pipeline</p>
+          <h2>一张 1024 PNG → 全平台格式</h2>
+          <p class="body-muted">
+            项目里已经写好了
+            <code style="font-family: var(--font-mono); font-size: 0.9em">build-icons.sh</code>
+            —— 用 macOS 自带的
+            <code style="font-family: var(--font-mono); font-size: 0.9em">sips</code>
+            和
+            <code style="font-family: var(--font-mono); font-size: 0.9em">iconutil</code>
+            生成
+            <code style="font-family: var(--font-mono); font-size: 0.9em">.icns</code>
+            ；如果装了 ImageMagick 也会顺便出
+            <code style="font-family: var(--font-mono); font-size: 0.9em">.ico</code>
+            。不需要 electron-icon-builder。
+          </p>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>1. 准备透明底主图</h3>
+            <p class="body-sm body-muted">
+              当前 png 外部是纯白。先用 ImageMagick 把白底抠成透明（或者
+              在 Preview 里 instant alpha），再喂给打包脚本 —— 蓝色信封
+              的边缘光辉在透明底上才显得「漂浮」而不是被白框框死。
+            </p>
+<pre><span class="comment"># 1) 抠掉白底 → icon-1024.png（透明）</span>
+<span class="comment"># 方法 A：装了 ImageMagick</span>
+magick mailagent_logo.png \
+  -fuzz 5% -transparent white \
+  -resize 1024x1024 \
+  icon-1024.png
+
+<span class="comment"># 方法 B：纯 macOS 工具</span>
+sips -s format png \
+  -z 1024 1024 \
+  mailagent_logo.png \
+  --out icon-1024.png
+<span class="comment"># 然后 Preview.app 打开 → 选取 → Instant Alpha</span>
+<span class="comment"># 点白色区域 → delete → ⌘S</span></pre>
+          </div>
+          <div class="card">
+            <h3>2. 一键打包</h3>
+            <p class="body-sm body-muted">
+              脚本会在
+              <code style="font-family: var(--font-mono); font-size: 0.9em">./build/</code>
+              下产出 <code style="font-family: var(--font-mono); font-size: 0.9em">icon.icns</code> /
+              <code style="font-family: var(--font-mono); font-size: 0.9em">icon.ico</code> /
+              <code style="font-family: var(--font-mono); font-size: 0.9em">icons/{16…1024}.png</code>。
+            </p>
+<pre><span class="comment"># 2) 跑脚本</span>
+./build-icons.sh icon-1024.png
+
+<span class="comment"># 产出</span>
+build/
+├── icon.icns         <span class="comment"># macOS — Dock / Finder</span>
+├── icon.ico          <span class="comment"># Windows — taskbar / .exe</span>
+└── icons/
+    ├── 16.png   32.png   64.png
+    ├── 128.png  256.png  512.png
+    └── 1024.png</pre>
+          </div>
+        </div>
+
+        <div class="card" style="margin-block-start: var(--space-6)">
+          <h3>3. electron-builder 配置</h3>
+          <p class="body-sm body-muted">
+            打包脚本产出的文件名和 electron-builder 默认期望一致，
+            写在
+            <code style="font-family: var(--font-mono); font-size: 0.9em">package.json</code>
+            或
+            <code style="font-family: var(--font-mono); font-size: 0.9em">electron-builder.yml</code>
+            里：
+          </p>
+<pre>{
+  "build": {
+    "appId": "com.mailagent.app",
+    "productName": "MailAgent",
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "icon": "build/icons"
+    }
+  }
+}</pre>
+        </div>
+
+        <div class="card" style="margin-block-start: var(--space-6)">
+          <h3>4. 开发期窗口图标（可选）</h3>
+          <p class="body-sm body-muted">
+            <code style="font-family: var(--font-mono); font-size: 0.9em">BrowserWindow</code>
+            的
+            <code style="font-family: var(--font-mono); font-size: 0.9em">icon</code>
+            选项只在 Linux / Windows 上生效；macOS 用打包后的
+            <code style="font-family: var(--font-mono); font-size: 0.9em">.icns</code>
+            。开发期想看到 Dock icon 改对，最简单是写一个
+            <code style="font-family: var(--font-mono); font-size: 0.9em">app.dock.setIcon()</code>
+            ：
+          </p>
+<pre><span class="comment">// main.ts</span>
+<span class="accent">import</span> { app, BrowserWindow, nativeImage } <span class="accent">from</span> <span class="green">'electron'</span>;
+<span class="accent">import</span> path <span class="accent">from</span> <span class="green">'node:path'</span>;
+
+app.whenReady().then(() =&gt; {
+  <span class="comment">// dev Dock icon (macOS only)</span>
+  <span class="accent">if</span> (process.platform === <span class="green">'darwin'</span>) {
+    app.dock?.setIcon(
+      nativeImage.createFromPath(
+        path.join(__dirname, <span class="green">'../build/icons/512.png'</span>)
+      )
+    );
+  }
+
+  <span class="accent">const</span> win = <span class="accent">new</span> BrowserWindow({
+    width: 1200,
+    height: 800,
+    icon: path.join(__dirname, <span class="green">'../build/icons/512.png'</span>),
+  });
+});</pre>
+        </div>
+      </section>
+
+      <!-- Q&A: do you need .ico -->
+      <section data-od-id="faq">
+        <div class="stack-3">
+          <p class="eyebrow">FAQ</p>
+          <h2>需要哪些格式？</h2>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>macOS — <code style="font-family: var(--font-mono); font-size: 0.9em">.icns</code> 必需</h3>
+            <p class="body-sm body-muted">
+              <code style="font-family: var(--font-mono); font-size: 0.9em">.app</code>
+              bundle 必须用 <code style="font-family: var(--font-mono); font-size: 0.9em">.icns</code>
+              ，否则 Dock / Finder / Spotlight 会回退到通用文件图标。
+              脚本里
+              <code style="font-family: var(--font-mono); font-size: 0.9em">iconutil</code>
+              已经处理好了。
+            </p>
+          </div>
+          <div class="card">
+            <h3>Windows — <code style="font-family: var(--font-mono); font-size: 0.9em">.ico</code> 建议</h3>
+            <p class="body-sm body-muted">
+              即使只发 macOS，也建议生成 <code style="font-family: var(--font-mono); font-size: 0.9em">.ico</code>
+              —— 文件只有几十 KB，未来出 Windows 版不用重做。
+              脚本会自动跳过（如果没装 ImageMagick）。
+            </p>
+          </div>
+          <div class="card">
+            <h3>Linux — PNG 集</h3>
+            <p class="body-sm body-muted">
+              <code style="font-family: var(--font-mono); font-size: 0.9em">.deb</code> /
+              <code style="font-family: var(--font-mono); font-size: 0.9em">.AppImage</code> /
+              <code style="font-family: var(--font-mono); font-size: 0.9em">.rpm</code>
+              用多尺寸 PNG 目录。electron-builder 指向
+              <code style="font-family: var(--font-mono); font-size: 0.9em">build/icons/</code>
+              即可。
+            </p>
+          </div>
+          <div class="card">
+            <h3>灵动岛 / 通知中心？</h3>
+            <p class="body-sm body-muted">
+              都用同一张主图 —— 灵动岛会自动 mask 成圆形（环形光轨
+              会被裁掉边缘一小圈），通知中心会自动加圆角。如果想在
+              灵动岛上做更克制的版本，可以单独导出一个只保留信封剪影、
+              去掉光环的 SVG。
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

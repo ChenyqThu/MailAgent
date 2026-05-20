@@ -91,6 +91,23 @@ class Config(BaseSettings):
     redis_db: int = Field(default=2, env="REDIS_DB", description="Redis DB 号（默认 2，MailAgent 专用）")
     redis_events_enabled: bool = Field(default=False, env="REDIS_EVENTS_ENABLED", description="是否启用 Redis 事件消费")
 
+    # Sprint 16: mail-sync 进程内本地 SSE endpoint
+    # Electron main 直连 127.0.0.1:9200/api/events/stream (0 RTT), V2 web 后续走
+    # cloudflared 映射. 整个 server 由 main.py 启动; 关闭这个开关时不暴露端口,
+    # 前端 events_bridge 自动 fallback 到轮询.
+    mailagent_sse_enabled: bool = Field(
+        default=True, env="MAILAGENT_SSE_ENABLED",
+        description="是否在 mail-sync 进程内启动本地 SSE server (前端 Electron 直连)",
+    )
+    sse_local_host: str = Field(
+        default="127.0.0.1", env="SSE_LOCAL_HOST",
+        description="SSE server 绑定地址 (默认 127.0.0.1 仅本地; 0.0.0.0 暴露公网需自带 token)",
+    )
+    sse_local_port: int = Field(
+        default=9200, env="SSE_LOCAL_PORT",
+        description="SSE server 监听端口",
+    )
+
     # 初始化同步配置
     init_batch_size: int = Field(default=100, env="INIT_BATCH_SIZE", description="初始化时每批获取邮件数量")
     applescript_timeout: int = Field(default=200, env="APPLESCRIPT_TIMEOUT", description="AppleScript超时时间(秒)")
@@ -99,6 +116,14 @@ class Config(BaseSettings):
     stats_report_url: str = Field(default="", env="STATS_REPORT_URL", description="看板统计上报 URL（如 https://mailagent.chenge.ink/api/stats/report）")
     stats_report_interval: int = Field(default=60, env="STATS_REPORT_INTERVAL", description="统计上报间隔(秒)")
     stats_report_token: str = Field(default="", env="STATS_REPORT_TOKEN", description="上报认证 token（默认复用 WEBHOOK_SECRET）")
+
+    # Sprint 15 Stage 3: webhook-server 看板登录密码
+    # 之前只在 .env.example 文档化, 不在 Settings 里 — 前端 admin config show 拿不到。
+    # 留空 = 禁用 /dashboard 入口 (API 不受影响)
+    dashboard_password: str = Field(
+        default="", env="DASHBOARD_PASSWORD",
+        description="webhook-server 看板登录密码; 留空则禁用 /dashboard 入口"
+    )
 
     # 飞书告警机器人配置
     alert_feishu_webhook_url: str = Field(default="", env="ALERT_FEISHU_WEBHOOK_URL", description="飞书告警机器人 webhook URL")
@@ -267,6 +292,32 @@ class Config(BaseSettings):
             "_handle_thread_relations 在 SQLite 查不到 thread members 时是否 fallback "
             "Notion API (v4 R-02 灰度期开关; historic backfill 完成后可关)。"
         ),
+    )
+
+    # =========================================================================
+    # Sprint 15: SQLite SSoT inversion (email_outbox + FanoutWorker)
+    # 详见 SPRINT15-HANDOFF.md §3 + .claude/plans/ultrathink-sprint-15-handoff*.md
+    # =========================================================================
+    mailagent_outbox_enabled: bool = Field(
+        default=False, env="MAILAGENT_OUTBOX_ENABLED",
+        description=(
+            "是否启用 email_outbox + FanoutWorker 异步派发 (Sprint 15 SSoT inversion)。"
+            "默认 false 灰度期 —— 关闭时 reverse handler 走老 AppleScript 直调路径。"
+            "切 true: 前端 `mailagent email flag` / 反向 webhook → outbox → fanout "
+            "异步派发到 Mail.app + Notion. 灰度切换详 SPRINT15-HANDOFF.md §3.5。"
+        ),
+    )
+    mailagent_outbox_poll_interval_sec: int = Field(
+        default=5, env="MAILAGENT_OUTBOX_POLL_INTERVAL_SEC",
+        description="FanoutWorker 主循环 poll 间隔（秒），默认 5。",
+    )
+    mailagent_outbox_max_attempts: int = Field(
+        default=5, env="MAILAGENT_OUTBOX_MAX_ATTEMPTS",
+        description="单条 outbox 重试次数上限；达到后晋升 dead_letter 并飞书告警。",
+    )
+    mailagent_outbox_concurrency: int = Field(
+        default=3, env="MAILAGENT_OUTBOX_CONCURRENCY",
+        description="FanoutWorker tick 最大并发 fanout 数（gated by asyncio.Semaphore）。",
     )
 
     # =========================================================================

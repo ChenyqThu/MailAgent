@@ -33,8 +33,12 @@ import type {
   EmailApi,
   EmailBody,
   EmailDetail,
+  EmailFlagOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  EventsApi,
+  EventsStatus,
+  SseEvent,
   IslandAIDraftReadyPayload,
   IslandAIDraftStartPayload,
   IslandAIDraftStreamPayload,
@@ -56,8 +60,8 @@ import type {
   RecurringReplayOpts,
   ResyncOpts,
   ResyncResult,
-  SearchHit,
   SearchOpts,
+  SearchResult,
   SecretSlot,
   SecretsStatus,
   SettingsApi,
@@ -165,8 +169,8 @@ class ElectronEmailApi implements EmailApi {
   async aiFields(internalId: number): Promise<AIFields | null> {
     return (await invoker()('email:aiFields', internalId)) as AIFields | null
   }
-  async search(opts: SearchOpts): Promise<SearchHit[]> {
-    return (await invoker()('email:search', opts)) as SearchHit[]
+  async search(opts: SearchOpts): Promise<SearchResult> {
+    return (await invoker()('email:search', opts)) as SearchResult
   }
   async resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult> {
     const env = (await invoker()('email:resync', internalId, opts ?? {})) as WriteEnvelope<unknown>
@@ -174,6 +178,29 @@ class ElectronEmailApi implements EmailApi {
   }
   async createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
     const env = (await invoker()('email:createDraft', opts)) as WriteEnvelope<CreateDraftResult>
+    return unwrap(env)
+  }
+  async pin(internalId: number, pinned: boolean): Promise<boolean | null> {
+    // Write IPC → envelope. CLI returns {internal_id, is_pinned, changed,
+    // dry_run}; we only surface `is_pinned` (boolean) to the renderer.
+    const env = (await invoker()('email:pin', internalId, pinned)) as WriteEnvelope<{
+      internal_id: number
+      is_pinned: boolean
+      changed: boolean
+      dry_run: boolean
+    } | null>
+    const data = unwrap(env)
+    return data?.is_pinned ?? null
+  }
+  async listPinnedIds(): Promise<number[]> {
+    return (await invoker()('email:listPinnedIds')) as number[]
+  }
+  async flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown> {
+    // Same envelope contract as the other write IPCs. The CLI returns its
+    // structured `data` block (updated_ids / outbox_entries / not_found) on
+    // success; on failure the envelope carries E_PM2_RUNNING / E_AUTH /
+    // E_INVALID_ARG etc. for the renderer to branch on.
+    const env = (await invoker()('email:flag', internalId, opts ?? {})) as WriteEnvelope<unknown>
     return unwrap(env)
   }
 }
@@ -269,6 +296,9 @@ class ElectronAttachmentApi implements AttachmentApi {
   }
   async localPath(attachmentId: number): Promise<string | null> {
     return (await invoker()('attachment:localPath', attachmentId)) as string | null
+  }
+  async readDataUrl(attachmentId: number): Promise<string | null> {
+    return (await invoker()('attachment:readDataUrl', attachmentId)) as string | null
   }
 }
 
@@ -382,6 +412,27 @@ class ElectronUpdaterApi implements UpdaterApi {
   }
 }
 
+class ElectronEventsApi implements EventsApi {
+  async status(): Promise<EventsStatus> {
+    return (await invoker()('events:status')) as EventsStatus
+  }
+  async reconnect(): Promise<EventsStatus> {
+    return (await invoker()('events:reconnect')) as EventsStatus
+  }
+  onEvent(handler: (event: SseEvent) => void): () => void {
+    return subscribe('events:received', (...args: unknown[]) => {
+      const ev = args[0] as SseEvent | undefined
+      if (ev && typeof ev === 'object') handler(ev)
+    })
+  }
+  onStatus(handler: (status: EventsStatus) => void): () => void {
+    return subscribe('events:status', (...args: unknown[]) => {
+      const s = args[0] as EventsStatus | undefined
+      if (s && typeof s === 'object') handler(s)
+    })
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
@@ -394,4 +445,5 @@ export class ElectronApi implements MailApi {
   settings: SettingsApi = new ElectronSettingsApi()
   updater: UpdaterApi = new ElectronUpdaterApi()
   island: IslandApi = new ElectronIslandApi()
+  events: EventsApi = new ElectronEventsApi()
 }

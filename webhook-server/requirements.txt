@@ -2,3 +2,5 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 redis[hiredis]>=5.0.0
 python-multipart>=0.0.6
+# Sprint 15 Stage 2: SSE endpoint /api/events/stream
+sse-starlette>=2.1.0

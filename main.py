@@ -29,7 +29,52 @@ class EmailNotionSyncApp:
             sync_store_path=config.sync_store_db_path
         )
 
+        # 事件处理器引用（用于 stats）
+        self._event_handlers = None
+
+        # Sprint 15: SQLite SSoT inversion — outbox + FanoutWorker
+        # 默认关闭（灰度期）；开启后异步派发 email flag / processing_status 到
+        # Mail.app + Notion，handler / reverse_sync_poll 走 intent 路径不再
+        # 直接 AppleScript。详 SPRINT15-HANDOFF.md §3 + plan。
+        # 必须先于 reverse_sync 构造（reverse_sync 需注入 outbox_repo）。
+        self.outbox_repo = None
+        self.fanout_worker = None
+        if config.mailagent_outbox_enabled:
+            from src.sync import (
+                FanoutWorker,
+                MailAppFanout,
+                NotionFanout,
+                OutboxRepository,
+            )
+            self.outbox_repo = OutboxRepository(config.sync_store_db_path)
+            mailapp_fanout = MailAppFanout(
+                sync_store=self.watcher.sync_store,
+                arm=self.watcher.arm,
+            )
+            notion_fanout = NotionFanout(
+                sync_store=self.watcher.sync_store,
+                notion_sync=self.watcher.notion_sync,
+            )
+            self.fanout_worker = FanoutWorker(
+                outbox_repo=self.outbox_repo,
+                mailapp_fanout=mailapp_fanout,
+                notion_fanout=notion_fanout,
+                poll_interval_sec=config.mailagent_outbox_poll_interval_sec,
+                concurrency=config.mailagent_outbox_concurrency,
+                max_attempts=config.mailagent_outbox_max_attempts,
+            )
+            logger.info(
+                f"[outbox] FanoutWorker configured "
+                f"(poll={config.mailagent_outbox_poll_interval_sec}s, "
+                f"concurrency={config.mailagent_outbox_concurrency}, "
+                f"max_attempts={config.mailagent_outbox_max_attempts})"
+            )
+        else:
+            logger.info("[outbox] FanoutWorker disabled (MAILAGENT_OUTBOX_ENABLED=false)")
+
         # 反向同步（Notion -> Mail.app + 飞书通知）
+        # Sprint 15: 注入 outbox_repo 后 sync_single_page 改写 SQLite intent + outbox
+        # 不再直调 AppleScript (跟 webhook handle_* / CLI 完全统一)。
         from src.mail.reverse_sync import NotionToMailSync
         # Redis 事件启用时，跳过轮询通知（由 Redis handler 负责，避免重复）
         skip_notify = bool(config.redis_events_enabled and config.redis_url)
@@ -38,10 +83,8 @@ class EmailNotionSyncApp:
             arm=self.watcher.arm,
             sync_store=self.watcher.sync_store,
             skip_notify=skip_notify,
+            outbox_repo=self.outbox_repo,
         )
-
-        # 事件处理器引用（用于 stats）
-        self._event_handlers = None
 
         # 飞书告警通知
         self.alerter = None
@@ -80,6 +123,9 @@ class EmailNotionSyncApp:
                 # v4: 让 handle_fetch_mail_content 优先读 SQLite SSoT，
                 # 历史未双写邮件自动 fallback 到 AppleScript
                 email_repo=self.watcher.email_repo,
+                # Sprint 15: 启用 outbox 时 handle_flag_changed/completed/ai_reviewed
+                # 改写为 intent 模式，由 FanoutWorker 异步派发
+                outbox_repo=self.outbox_repo,
             )
             self._event_handlers = handlers
 
@@ -251,6 +297,28 @@ class EmailNotionSyncApp:
             # 启动周期会议滚动展开循环
             expansion_task = asyncio.create_task(self._meeting_expansion_loop())
 
+            # Sprint 15: 启动 outbox FanoutWorker（如果配置开启）
+            fanout_task = None
+            if self.fanout_worker:
+                fanout_task = asyncio.create_task(self.fanout_worker.run())
+
+            # Sprint 16: 启动本地 SSE server (mail-sync 进程内)
+            # 前端 Electron main 直连 127.0.0.1:9200, 0 RTT;
+            # 失败 silent (主链路不受影响, 前端自动 fallback 轮询).
+            self._sse_runner = None
+            if config.mailagent_sse_enabled:
+                try:
+                    from src.sse_server import start_sse_server
+                    self._sse_runner = await start_sse_server(
+                        host=config.sse_local_host,
+                        port=config.sse_local_port,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[sse] failed to start (frontend will fallback to polling): {e}"
+                    )
+                    self._sse_runner = None
+
             # 启动 ping-island 重连 / snooze 后台任务（开启时才跑）
             island_reconnect_task = None
             island_snooze_task = None
@@ -273,6 +341,9 @@ class EmailNotionSyncApp:
             await self.watcher.stop()
             if self.redis_consumer:
                 await self.redis_consumer.stop()
+            if self.fanout_worker:
+                self.fanout_worker.stop()
+                logger.info(f"[outbox] fanout_worker.stats={self.fanout_worker.stats}")
 
             # 发送停止告警
             if self.alerter:
@@ -290,12 +361,22 @@ class EmailNotionSyncApp:
                 tasks.append(island_reconnect_task)
             if island_snooze_task:
                 tasks.append(island_snooze_task)
+            if fanout_task:
+                tasks.append(fanout_task)
             for task in tasks:
                 task.cancel()
                 try:
                     await task
                 except asyncio.CancelledError:
                     pass
+
+            # Sprint 16: 关闭 SSE server (cleanup runner + 等待 in-flight client 断开)
+            if self._sse_runner is not None:
+                try:
+                    await self._sse_runner.cleanup()
+                    logger.info("[sse] server shut down")
+                except Exception as e:
+                    logger.warning(f"[sse] cleanup failed: {e}")
 
             # 关闭反向同步资源
             await self.reverse_sync.close()

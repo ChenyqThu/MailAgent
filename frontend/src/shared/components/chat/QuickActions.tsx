@@ -1,9 +1,16 @@
 // Sprint 4 §6.7 — quick action chips above the composer. Each chip
-// injects a pre-built user message and (in Sprint 5) auto-submits. For
-// Sprint 4 we only inject — the user still hits ⌘↩ to send so they can
-// edit the prefab before committing.
+// injects a pre-built user message and (in V1.5) auto-submits. For V1
+// we only inject — the user still hits ⌘↩ to send so they can edit the
+// prefab before committing.
+//
+// V1 redesign (Sprint 10 polish): mirrors mockup-inbox.html lines 1310-1329.
+// Each chip pairs an 11px Lucide icon with its label so the row reads as
+// a toolbar, not a forgettable text-only pill bar.
 
 import { useTranslation } from 'react-i18next'
+import { AlignLeft, Languages, Link2, ListChecks, Send } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+
 import { cn } from '@shared/lib/cn'
 
 interface Props {
@@ -14,57 +21,65 @@ interface Props {
 interface ActionDef {
   key: string
   labelKey: string
-  prompt: string
+  /** Sprint 10 (d) V1.5 polish — both label AND prompt go through i18n so an
+   *  en-US user gets an English prompt body (not just an English chip label
+   *  followed by a Chinese instruction the LLM will reply in Chinese to). */
+  promptKey: string
+  icon: LucideIcon
 }
 
 const ACTIONS: ActionDef[] = [
   {
     key: 'summarize',
     labelKey: 'chat.quickActions.summarize',
-    prompt: '请用 3-5 个要点总结这封邮件的核心内容、发件人意图、需要我做什么。'
+    promptKey: 'chat.quickActions.summarizePrompt',
+    icon: AlignLeft
   },
   {
     key: 'draft',
     labelKey: 'chat.quickActions.draft',
-    prompt: '基于这封邮件，请帮我起草一份合适的回复（中文）。'
+    promptKey: 'chat.quickActions.draftPrompt',
+    icon: Send
   },
   {
     key: 'translate',
     labelKey: 'chat.quickActions.translate',
-    prompt: '把这封邮件翻译成中文（保留语义、邮件礼仪、格式）。'
+    promptKey: 'chat.quickActions.translatePrompt',
+    icon: Languages
   },
   {
     key: 'extract',
     labelKey: 'chat.quickActions.extract',
-    prompt: '请从这封邮件中提取所有动作项 (action items)：谁要做什么、什么时候、给谁回。'
+    promptKey: 'chat.quickActions.extractPrompt',
+    icon: ListChecks
   },
   {
     key: 'linkNotion',
     labelKey: 'chat.quickActions.linkNotion',
-    prompt: '在我的 Notion workspace 里找到与这封邮件相关的项目页面，列出 3 个最相关的。'
+    promptKey: 'chat.quickActions.linkNotionPrompt',
+    icon: Link2
   }
 ]
 
 export function QuickActions({ onPick, disabled = false }: Props): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <div className="px-3 pt-2 flex flex-wrap gap-1.5">
-      {ACTIONS.map((a) => (
-        <button
-          key={a.key}
-          type="button"
-          disabled={disabled}
-          onClick={() => onPick(a.prompt)}
-          className={cn(
-            'rounded-full px-2.5 py-1 text-aux',
-            'text-ink-fg-1 border border-ink-border bg-ink-3',
-            'hover:bg-ink-4 hover:border-ink-fg-3 transition-colors duration-fast',
-            'disabled:opacity-50 disabled:cursor-not-allowed'
-          )}
-        >
-          {t(a.labelKey)}
-        </button>
-      ))}
+    <div className="px-3 py-2 flex flex-wrap gap-1.5 border-t border-ink-border-soft">
+      {ACTIONS.map((a) => {
+        const Icon = a.icon
+        return (
+          <button
+            key={a.key}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(t(a.promptKey))}
+            className={cn('qchip', disabled && 'opacity-50 cursor-not-allowed')}
+          >
+            <Icon size={11} strokeWidth={2} />
+            {t(a.labelKey)}
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -1,0 +1,526 @@
+<!doctype html>
+<!--
+  MailAgent · Onboarding — first-run, 4-step modal-feel.
+
+  This is the ONE screen allowed to drop the title bar + status bar chrome
+  (HANDOFF.md §2 rule 3). The wallpaper IS the surface; the 720×560 card
+  sits on top.
+
+  4 steps: Welcome → Account → AI backend → Appearance → enter inbox.
+  Step dot indicator; reversible back button; the full accent grid +
+  theme radio mirrors mockup-settings.html §Appearance.
+-->
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MailAgent · 欢迎</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: {
+              0: 'rgb(var(--ink-0) / <alpha-value>)',
+              1: 'rgb(var(--ink-1) / <alpha-value>)',
+              2: 'rgb(var(--ink-2) / <alpha-value>)',
+              3: 'rgb(var(--ink-3) / <alpha-value>)',
+              4: 'rgb(var(--ink-4) / <alpha-value>)',
+              5: 'rgb(var(--ink-5) / <alpha-value>)',
+              border:        'rgb(var(--ink-border)      / <alpha-value>)',
+              'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+              fg:     'rgb(var(--ink-fg)   / <alpha-value>)',
+              'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+              'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+              'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)',
+            },
+            coral:         'rgb(var(--c-accent)      / <alpha-value>)',
+            'coral-hover': 'rgb(var(--c-accent-hi)   / <alpha-value>)',
+            'coral-dim':   'rgb(var(--c-accent-dim)  / <alpha-value>)',
+            ok:   '#5DBA8C', warn: '#E5B452', fail: '#E36262',
+            info: '#6FA8DC', ai:   '#B58CDB',
+          },
+          fontFamily: {
+            sans: ['-apple-system','BlinkMacSystemFont','"SF Pro Text"','"PingFang SC"','"Helvetica Neue"','system-ui','sans-serif'],
+            display: ['-apple-system','BlinkMacSystemFont','"SF Pro Display"','"PingFang SC"','system-ui','sans-serif'],
+            mono: ['ui-monospace','"SF Mono"','"JetBrains Mono"','Menlo','monospace'],
+          },
+          fontSize: {
+            micro: ['11px','14px'], meta: ['12px','16px'],
+            aux: ['14px','20px'], body: ['14px','20px'],
+            lead: ['15px','22px'], subj: ['22px','30px'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    :root {
+      --c-accent: 229 101 75; --c-accent-hi: 216 88 65; --c-accent-dim: 126 61 50;
+      --ink-0: 14 16 19; --ink-1: 21 24 29; --ink-2: 26 30 36; --ink-3: 31 36 43;
+      --ink-4: 38 44 53; --ink-5: 46 52 62;
+      --ink-border: 44 50 59; --ink-border-soft: 31 36 43;
+      --ink-fg: 232 234 238; --ink-fg-1: 164 169 179;
+      --ink-fg-2: 107 112 122; --ink-fg-3: 69 74 83;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 8%, rgba(74,120,229,0.22), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18), transparent 70%),
+        linear-gradient(180deg, #06080B 0%, #0A0C10 100%);
+      --glass: saturate(180%) blur(28px);
+      --glass-lg: saturate(180%) blur(40px);
+      --glass-stroke: rgb(255 255 255 / 0.08);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.07),
+        0 24px 60px rgba(0,0,0,0.55),
+        0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"] { --c-accent: 74 120 229; --c-accent-hi: 60 102 207; --c-accent-dim: 48 82 163; }
+    :root[data-accent="teal"]   { --c-accent: 45 181 166; --c-accent-hi: 33 156 142; --c-accent-dim: 24 110 100; }
+    :root[data-accent="rose"]   { --c-accent: 219 91 124; --c-accent-hi: 198 71 105; --c-accent-dim: 140 50 74; }
+    :root[data-accent="slate"]  { --c-accent: 126 134 148; --c-accent-hi: 105 113 127; --c-accent-dim: 74 80 92; }
+    :root[data-accent="olive"]  { --c-accent: 156 165 82; --c-accent-hi: 134 143 70; --c-accent-dim: 94 100 48; }
+
+    :root[data-theme="light"] {
+      --ink-0: 250 250 250; --ink-1: 242 242 244; --ink-2: 248 249 251; --ink-3: 255 255 255;
+      --ink-4: 225 227 230; --ink-5: 213 216 222;
+      --ink-border: 214 218 224; --ink-border-soft: 230 232 237;
+      --ink-fg: 26 29 34; --ink-fg-1: 91 97 107;
+      --ink-fg-2: 122 128 138; --ink-fg-3: 178 184 192;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 6%, rgba(110,160,255,0.32), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22), transparent 70%),
+        linear-gradient(180deg, #F6F7FB 0%, #ECEEF4 100%);
+      --glass-stroke: rgb(255 255 255 / 0.70);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.85),
+        0 18px 50px rgba(18,24,46,0.16),
+        0 4px 14px rgba(18,24,46,0.10);
+    }
+
+    html, body { background: transparent; overscroll-behavior: none; color-scheme: dark; }
+    :root[data-theme="light"] { color-scheme: light; }
+    body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-feature-settings: 'ss01','cv11'; }
+    body::before {
+      content: ''; position: fixed; inset: 0; z-index: -1;
+      background: var(--wallpaper); background-attachment: fixed;
+      pointer-events: none;
+      transition: background 320ms cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .glass-pop {
+      background-color: rgb(var(--ink-2) / 0.82);
+      backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke); box-shadow: var(--pop-shadow);
+    }
+    .tile       { background-color: rgb(var(--ink-2) / 0.62); }
+    .tile:hover { background-color: rgb(var(--ink-4) / 0.78); }
+    @media (prefers-reduced-transparency: reduce) {
+      .glass-pop { backdrop-filter: none; -webkit-backdrop-filter: none; background-color: rgb(var(--ink-2)); }
+    }
+
+    kbd {
+      font-family: ui-monospace,'SF Mono',monospace;
+      font-size: 11px; line-height: 1; padding: 2px 5px; border-radius: 4px;
+      background: rgb(var(--ink-fg) / 0.06); color: rgb(var(--ink-fg-1));
+      border: 1px solid rgb(var(--ink-border)); border-bottom-width: 2px;
+    }
+
+    /* Step dot indicator */
+    .step-dot { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--ink-fg-3)); transition: all 0.18s; }
+    .step-dot.is-on   { background: rgb(var(--c-accent)); width: 22px; border-radius: 999px; }
+    .step-dot.is-done { background: rgb(var(--c-accent) / 0.40); }
+
+    /* Custom radio */
+    .rad {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 1.5px solid rgb(var(--ink-fg-3));
+      display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0; cursor: pointer;
+      transition: all 0.12s;
+    }
+    .rad:hover { border-color: rgb(var(--ink-fg-2)); }
+    .rad.rad-on { border-color: rgb(var(--c-accent)); }
+    .rad.rad-on::after {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: rgb(var(--c-accent));
+    }
+
+    /* Swatches */
+    .swatch {
+      width: 44px; height: 44px; border-radius: 999px;
+      border: 0; cursor: pointer; position: relative;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.2);
+      transition: transform 0.15s cubic-bezier(0.4,0,0.2,1);
+    }
+    .swatch:hover { transform: scale(1.06); }
+    .swatch[aria-checked="true"] { box-shadow: 0 0 0 2px rgb(var(--ink-2)), 0 0 0 4px rgb(var(--c-accent)); }
+    .swatch[aria-checked="true"]::after {
+      content: ''; position: absolute; inset: 0;
+      background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 16px 16px no-repeat;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.4));
+    }
+
+    .step { display: none; }
+    .step.is-active { display: flex; }
+
+    .glass-pop, .tile, kbd,
+    [class*="bg-ink-"], [class*="border-ink-"] {
+      transition: background-color 280ms cubic-bezier(0.4,0,0.2,1),
+                  border-color     280ms cubic-bezier(0.4,0,0.2,1);
+    }
+  </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden text-ink-fg font-sans antialiased grid place-items-center select-none">
+
+<!-- ─── Top-right: theme + accent (no full chrome) ──────────────────────── -->
+<div class="fixed top-5 right-5 flex items-center gap-2 text-meta font-mono text-ink-fg-2 z-50">
+  <button id="theme-toggle" class="flex items-center gap-1.5 px-2 py-1 rounded glass-pop hover:text-ink-fg transition" title="Toggle theme (⌥L)">
+    <svg id="theme-icon-dark"  width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+    <span id="theme-label">Dark</span>
+  </button>
+</div>
+
+<!-- ─── Card ────────────────────────────────────────────────────────────── -->
+<section class="glass-pop rounded-2xl w-[720px] h-[560px] flex flex-col overflow-hidden">
+
+  <!-- Top: brand + step dots -->
+  <header class="px-7 pt-6 pb-3 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <!-- Glyph -->
+      <div class="w-7 h-7 rounded-md bg-coral grid place-items-center shadow-[0_0_0_1px_rgba(0,0,0,0.3)]">
+        <svg class="text-white" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      </div>
+      <span class="text-aux font-medium tracking-tight">MailAgent</span>
+      <span class="text-meta font-mono text-ink-fg-2 ml-1">0.1.0-dev</span>
+    </div>
+
+    <div id="step-dots" class="flex items-center gap-1.5">
+      <span class="step-dot is-on"   data-dot="1"></span>
+      <span class="step-dot"         data-dot="2"></span>
+      <span class="step-dot"         data-dot="3"></span>
+      <span class="step-dot"         data-dot="4"></span>
+    </div>
+
+    <div class="text-meta font-mono text-ink-fg-2">
+      <span id="step-count">1</span> / 4
+    </div>
+  </header>
+
+  <!-- Steps -->
+  <div class="flex-1 min-h-0">
+
+    <!-- ── Step 1 · Welcome ───────────────────────────────────────── -->
+    <div class="step is-active flex-col h-full" data-step="1">
+      <div class="flex-1 px-7 pt-3 pb-6 flex flex-col justify-center max-w-[520px] mx-auto">
+        <div class="text-micro font-mono uppercase tracking-wider text-coral mb-2">STEP 01 · WELCOME</div>
+        <h1 class="text-[28px] leading-tight font-semibold tracking-tight mb-3">为你的邮件配上 AI 副驾。</h1>
+        <p class="text-aux text-ink-fg-1 leading-relaxed">
+          MailAgent 是一款单用户 macOS 邮件客户端。AI 副驾常驻右栏 —
+          自动分类、起草回复、提取行动项、同步至 Notion；重要邮件直接出现在
+          <strong>灵动岛</strong>，无需切走当前任务。
+        </p>
+        <p class="text-aux text-ink-fg-2 leading-relaxed mt-3">
+          整个过程只需 3 步：连一个邮箱账户、连一个 AI 后端、挑一个强调色。
+          所有数据离线保存在 SQLite，<span class="font-mono">~/Library/Application Support/MailAgent</span>。
+        </p>
+        <div class="mt-5 flex items-center gap-3 text-meta text-ink-fg-2">
+          <div class="flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-ok"></span><span>本地优先</span>
+          </div>
+          <span class="text-ink-fg-3">·</span>
+          <div class="flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-info"></span><span>多账户 IMAP</span>
+          </div>
+          <span class="text-ink-fg-3">·</span>
+          <div class="flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-coral"></span><span>灵动岛桥接</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 2 · Account ───────────────────────────────────────── -->
+    <div class="step flex-col h-full" data-step="2">
+      <div class="flex-1 px-7 pt-3 pb-6 flex flex-col">
+        <div class="text-micro font-mono uppercase tracking-wider text-coral mb-2">STEP 02 · ACCOUNT</div>
+        <h2 class="text-[22px] leading-tight font-semibold tracking-tight mb-2">连接一个邮箱账户。</h2>
+        <p class="text-aux text-ink-fg-1 leading-relaxed mb-5">
+          后续可在「设置 · 账户」添加更多账户。OAuth 凭据存储在 macOS Keychain，IMAP 密码用 AES-256 加密。
+        </p>
+
+        <div class="grid grid-cols-3 gap-3">
+          <button class="tile rounded-lg p-4 border border-ink-border-soft text-left flex flex-col gap-2 h-[140px] hover:border-coral/40 transition">
+            <div class="w-9 h-9 rounded-md bg-ink-4 grid place-items-center">
+              <svg class="text-warn" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            </div>
+            <div class="text-aux font-medium mt-auto">Gmail</div>
+            <div class="text-meta text-ink-fg-2">OAuth · 推荐</div>
+          </button>
+
+          <button class="tile rounded-lg p-4 border border-coral/40 text-left flex flex-col gap-2 h-[140px] ring-1 ring-coral/30">
+            <div class="w-9 h-9 rounded-md bg-ink-4 grid place-items-center">
+              <svg class="text-info" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/><path d="M2 7l10 5 10-5"/></svg>
+            </div>
+            <div class="text-aux font-medium mt-auto">iCloud Mail</div>
+            <div class="text-meta text-coral">已选择 · OAuth</div>
+          </button>
+
+          <button class="tile rounded-lg p-4 border border-ink-border-soft text-left flex flex-col gap-2 h-[140px] hover:border-coral/40 transition">
+            <div class="w-9 h-9 rounded-md bg-ink-4 grid place-items-center">
+              <svg class="text-ink-fg-1" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
+            </div>
+            <div class="text-aux font-medium mt-auto">IMAP / SMTP</div>
+            <div class="text-meta text-ink-fg-2">通用 · 手动配置</div>
+          </button>
+        </div>
+
+        <div class="mt-5 tile rounded-lg p-4 border border-ink-border-soft">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-aux font-medium">iCloud · 授权</div>
+            <span class="text-micro font-mono text-ok flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span>已连接 · chen@me.com</span>
+          </div>
+          <div class="text-meta text-ink-fg-2 leading-relaxed font-mono space-y-0.5">
+            <div><span class="text-ink-fg-1">imap.mail.me.com</span> · 993 · SSL</div>
+            <div><span class="text-ink-fg-1">smtp.mail.me.com</span> · 587 · STARTTLS</div>
+            <div>检测到 4 个文件夹 · 收件箱 / 已发送 / 草稿 / 归档</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 3 · AI Backend ────────────────────────────────────── -->
+    <div class="step flex-col h-full" data-step="3">
+      <div class="flex-1 px-7 pt-3 pb-6 flex flex-col">
+        <div class="text-micro font-mono uppercase tracking-wider text-coral mb-2">STEP 03 · AI BACKEND</div>
+        <h2 class="text-[22px] leading-tight font-semibold tracking-tight mb-2">连接一个 AI 后端。</h2>
+        <p class="text-aux text-ink-fg-1 leading-relaxed mb-5">
+          MailAgent 不内置 LLM。请连接你已有的 Notion Agent 或任何 OpenAI 兼容接口。
+        </p>
+
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          <label class="tile rounded-lg p-3.5 border border-coral/40 ring-1 ring-coral/30 cursor-pointer flex items-start gap-3">
+            <span class="rad rad-on mt-0.5"></span>
+            <div class="flex-1 min-w-0">
+              <div class="text-aux font-medium">Notion Agent <span class="text-micro font-mono text-ink-fg-2 ml-1">CLI</span></div>
+              <div class="text-meta text-ink-fg-2 mt-0.5 leading-snug">本地 CLI · 离线 fallback · 共享 Notion 工作区</div>
+            </div>
+          </label>
+          <label class="tile rounded-lg p-3.5 border border-ink-border-soft cursor-pointer flex items-start gap-3 hover:border-coral/40 transition">
+            <span class="rad mt-0.5"></span>
+            <div class="flex-1 min-w-0">
+              <div class="text-aux font-medium">Custom API <span class="text-micro font-mono text-ink-fg-2 ml-1">OpenAI 兼容</span></div>
+              <div class="text-meta text-ink-fg-2 mt-0.5 leading-snug">任意 URL · Bearer Token · 用于 Claude / 自托管</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="tile rounded-lg p-4 border border-ink-border-soft">
+          <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-2.5">NOTION AGENT · 设置</div>
+          <div class="space-y-2.5">
+            <div>
+              <label class="text-meta text-ink-fg-2 mb-1 block">CLI 路径</label>
+              <div class="flex items-center gap-2">
+                <input value="/usr/local/bin/notion-agent" class="flex-1 bg-ink-3 border border-ink-border rounded px-2.5 py-1.5 text-aux font-mono outline-none focus:border-coral" />
+                <button class="px-2.5 py-1.5 rounded-md bg-ink-4 hover:bg-ink-5 text-ink-fg-1 text-meta transition border border-ink-border">浏览…</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-meta text-ink-fg-2 mb-1 block">默认工作区</label>
+              <select class="w-full bg-ink-3 border border-ink-border rounded px-2.5 py-1.5 text-aux outline-none focus:border-coral appearance-none cursor-pointer">
+                <option>MailAgent · Personal</option>
+              </select>
+            </div>
+            <div class="flex items-center justify-between pt-1">
+              <button class="text-meta font-mono text-coral hover:text-coral-hover transition">测试连接</button>
+              <span class="text-micro font-mono text-ok flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span>ping 312ms · model claude-3.5-sonnet</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 4 · Appearance ────────────────────────────────────── -->
+    <div class="step flex-col h-full" data-step="4">
+      <div class="flex-1 px-7 pt-3 pb-6 flex flex-col">
+        <div class="text-micro font-mono uppercase tracking-wider text-coral mb-2">STEP 04 · APPEARANCE</div>
+        <h2 class="text-[22px] leading-tight font-semibold tracking-tight mb-2">选一个强调色与主题。</h2>
+        <p class="text-aux text-ink-fg-1 leading-relaxed mb-5">
+          强调色会同时作用于灵动岛通知、列表选中条与 AI 起草按钮。你随时可以在「设置 · 外观」里改。
+        </p>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div class="tile rounded-lg p-4 border border-ink-border-soft">
+            <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-3">强调色</div>
+            <div class="grid grid-cols-3 gap-y-3 gap-x-2 place-items-center">
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="coral"  aria-checked="true"  style="background: #E5654B;"></button><span class="text-meta font-mono text-ink-fg-1">Coral</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="cobalt" aria-checked="false" style="background: #4A78E5;"></button><span class="text-meta font-mono text-ink-fg-2">Cobalt</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="teal"   aria-checked="false" style="background: #2DB5A6;"></button><span class="text-meta font-mono text-ink-fg-2">Teal</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="rose"   aria-checked="false" style="background: #DB5B7C;"></button><span class="text-meta font-mono text-ink-fg-2">Rose</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="slate"  aria-checked="false" style="background: #7E8694;"></button><span class="text-meta font-mono text-ink-fg-2">Slate</span></div>
+              <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="olive"  aria-checked="false" style="background: #9CA552;"></button><span class="text-meta font-mono text-ink-fg-2">Olive</span></div>
+            </div>
+          </div>
+          <div class="tile rounded-lg p-4 border border-ink-border-soft flex flex-col">
+            <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-3">主题</div>
+            <div class="space-y-px divide-y divide-ink-border-soft border border-ink-border-soft rounded-md overflow-hidden">
+              <label class="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer hover:bg-ink-3/60">
+                <span class="rad" data-radio-group="theme" data-value="auto"></span>
+                <div class="text-aux flex-1">跟随系统</div>
+              </label>
+              <label class="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer hover:bg-ink-3/60">
+                <span class="rad rad-on" data-radio-group="theme" data-value="dark"></span>
+                <div class="text-aux flex-1">深色</div>
+                <span class="text-meta font-mono text-coral">current</span>
+              </label>
+              <label class="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer hover:bg-ink-3/60">
+                <span class="rad" data-radio-group="theme" data-value="light"></span>
+                <div class="text-aux flex-1">浅色</div>
+              </label>
+            </div>
+            <div class="mt-auto pt-3 text-meta text-ink-fg-2 leading-relaxed">
+              ⌥L 切换主题 · 透明度跟随系统「降低透明度」偏好。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Footer / nav -->
+  <footer class="border-t border-ink-border-soft px-7 py-3.5 flex items-center gap-3">
+    <button id="onb-back" class="text-aux text-ink-fg-2 hover:text-ink-fg px-2.5 py-1.5 rounded transition" disabled>← 上一步</button>
+    <div class="ml-auto flex items-center gap-2">
+      <button id="onb-skip" class="text-meta font-mono text-ink-fg-2 hover:text-ink-fg px-2.5 py-1.5 rounded transition">跳过</button>
+      <button id="onb-next" class="px-4 py-1.5 rounded-md bg-coral hover:bg-coral-hover text-white text-aux font-medium transition flex items-center gap-1.5">
+        <span id="onb-next-label">开始</span>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </button>
+    </div>
+  </footer>
+</section>
+
+<!-- Hint -->
+<div class="fixed bottom-5 left-1/2 -translate-x-1/2 text-micro font-mono text-ink-fg-2 flex items-center gap-2">
+  <kbd>⏎</kbd><span>继续</span>
+  <span class="text-ink-fg-3">·</span>
+  <kbd>⎋</kbd><span>稍后</span>
+  <span class="text-ink-fg-3">·</span>
+  <kbd>⌥L</kbd><span>切换主题</span>
+</div>
+
+<script>
+  /* Theme toggle */
+  (function () {
+    const KEY_THEME = 'mailagent.theme';
+    const root      = document.documentElement;
+    const btn       = document.getElementById('theme-toggle');
+    const label     = document.getElementById('theme-label');
+    const iconDark  = document.getElementById('theme-icon-dark');
+    const iconLight = document.getElementById('theme-icon-light');
+    function applyTheme(theme) {
+      const isLight = theme === 'light';
+      if (isLight) { root.dataset.theme = 'light'; root.classList.remove('dark'); }
+      else         { delete root.dataset.theme;    root.classList.add('dark'); }
+      iconDark.classList.toggle('hidden', isLight);
+      iconLight.classList.toggle('hidden', !isLight);
+      label.textContent = isLight ? 'Light' : 'Dark';
+      btn.setAttribute('aria-pressed', String(isLight));
+      try { localStorage.setItem(KEY_THEME, isLight ? 'light' : 'dark'); } catch (e) {}
+    }
+    const stored = (function () { try { return localStorage.getItem(KEY_THEME); } catch (e) { return null; } })();
+    const sys = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    applyTheme(stored || sys);
+    btn.addEventListener('click', () => applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light'));
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+      }
+    });
+  })();
+
+  /* Accent — onboarding has no popover, just the inline grid on step 4 */
+  (function () {
+    const ACCENTS = ['coral','cobalt','teal','rose','slate','olive'];
+    const KEY = 'mailagent.accent';
+    function apply(name) {
+      if (!ACCENTS.includes(name)) name = 'coral';
+      if (name === 'coral') document.documentElement.removeAttribute('data-accent');
+      else                  document.documentElement.dataset.accent = name;
+      document.querySelectorAll('.swatch[data-accent]').forEach(s => {
+        s.setAttribute('aria-checked', s.dataset.accent === name ? 'true' : 'false');
+      });
+      try { localStorage.setItem(KEY, name); } catch (e) {}
+    }
+    apply(localStorage.getItem(KEY) || 'coral');
+    document.querySelectorAll('.swatch[data-accent]').forEach(s => {
+      s.addEventListener('click', () => apply(s.dataset.accent));
+    });
+  })();
+
+  /* Radio groups */
+  document.querySelectorAll('[data-radio-group]').forEach(r => {
+    r.addEventListener('click', () => {
+      const group = r.dataset.radioGroup;
+      document.querySelectorAll('[data-radio-group="' + group + '"]').forEach(x => x.classList.remove('rad-on'));
+      r.classList.add('rad-on');
+    });
+  });
+
+  /* Step navigation */
+  (function () {
+    const TOTAL = 4;
+    const LABELS = ['开始', '下一步', '下一步', '进入收件箱'];
+    let cur = 1;
+
+    const back    = document.getElementById('onb-back');
+    const next    = document.getElementById('onb-next');
+    const nextLbl = document.getElementById('onb-next-label');
+    const count   = document.getElementById('step-count');
+
+    function render() {
+      document.querySelectorAll('.step').forEach(s => {
+        s.classList.toggle('is-active', String(cur) === s.dataset.step);
+      });
+      document.querySelectorAll('.step-dot').forEach(d => {
+        const n = +d.dataset.dot;
+        d.classList.remove('is-on','is-done');
+        if (n === cur)      d.classList.add('is-on');
+        else if (n < cur)   d.classList.add('is-done');
+      });
+      count.textContent = String(cur);
+      nextLbl.textContent = LABELS[cur - 1];
+      back.disabled = cur === 1;
+      back.classList.toggle('opacity-40', cur === 1);
+      back.classList.toggle('pointer-events-none', cur === 1);
+    }
+
+    next.addEventListener('click', () => {
+      if (cur < TOTAL) { cur += 1; render(); }
+      else { /* would navigate to mockup-inbox.html in product */ }
+    });
+    back.addEventListener('click', () => {
+      if (cur > 1) { cur -= 1; render(); }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter')       { e.preventDefault(); next.click(); }
+      else if (e.key === 'Escape') { e.preventDefault(); /* skip → inbox */ }
+      else if (e.key === 'ArrowLeft'  && cur > 1)     { e.preventDefault(); back.click(); }
+      else if (e.key === 'ArrowRight' && cur < TOTAL) { e.preventDefault(); next.click(); }
+    });
+
+    render();
+  })();
+</script>
+
+</body>
+</html>

@@ -21,11 +21,38 @@ import type {
 } from '@shared/types/cli.gen'
 
 export type EmailMeta = EmailList_EmailListItem
-export type EmailDetail = EmailGet_EmailRecord
+/**
+ * EmailDetail = schema-typed EmailGet_EmailRecord + the fields the Electron
+ * main handler returns that the cli-schema codegen doesn't yet expose.
+ * Sprint 14 should fold these into email-get.schema.json + `pnpm gen:types`.
+ *
+ *   - `is_important` — v9 RFC-header importance bit, written by
+ *     `reader._parse_importance` and surfaced verbatim by
+ *     `handlers/email.ts:520` (asBool of the SQLite column).
+ */
+export type EmailDetail = EmailGet_EmailRecord & {
+  is_important?: boolean
+}
 export type EmailBody = NonNullable<MailagentEmailBody['data']>
 export type SearchHit = EmailSearch_SearchHit
 export type AttachmentMeta = AttachmentList_AttachmentItem
 export type ResyncResult = MailagentEmailResync['data']
+
+/**
+ * Search-module 1:1 mockup-search.html — IPC wrapper around `SearchHit[]`.
+ *
+ * The palette footer needs the FTS5 indexed-row total to render
+ * "N of total_indexed" (mockup-search.html line 798). Returning it inline
+ * with the hits keeps the palette to a single IPC roundtrip per keystroke
+ * (debounce 250ms × ~4ms each = effectively free).
+ *
+ * Both fields are required; an empty query still returns `items: []` plus
+ * the cached `total_indexed`.
+ */
+export interface SearchResult {
+  items: SearchHit[]
+  total_indexed: number
+}
 
 // ---- Sprint 2 frontend-only enriched views ---------------------------------
 //
@@ -50,16 +77,37 @@ export interface EnrichedEmailMeta extends EmailList_EmailListItem {
   ai_priority: AIPriority | null
   /** `labels_json.action_type` — Chinese label passed through verbatim for the chip. */
   ai_action: string | null
+  /** `labels_json.category` — LLM-emitted closed enum (CATEGORY_ENUM in
+   *  src/llm_agent/schema.py), passed through verbatim (e.g. "💼 产品管理").
+   *  Null if no LLM run yet. Drives the filter popover's Category section. */
+  ai_category: string | null
   /** User-visible attachment count: excludes inline-only images. Includes derived (docx→pdf). */
   attach_count: number
+  /** v9 — 邮件原生重要性（reader._parse_importance: Importance / X-Priority /
+   *  X-MSMail-Priority 任一为 high → true）。EmailRow 的 ❗ 角标读这个字段，
+   *  与 LLM 推断的 ai_priority 互相独立。 */
+  is_important: boolean
+  /** Sprint 15 D 块 — Notion Processing Status 镜像 (CLI email flag 写, 反向
+   *  webhook handler 也维护). EmailRow 用 `processing_status === '已完成'`
+   *  判 'done' 三态显示 (v3 的 sync_status==='deleted' 判定永远 false, 已失效).
+   *  可能值: '未处理' / 'AI Reviewed' / '已同步' / '已完成' / '草稿已创建';
+   *  老邮件未被任何写入触达时为 null. */
+  processing_status: string | null
 }
 
 export interface MailboxSummary {
   /** NULL-mailbox rows are excluded from this list. */
   mailbox: string
+  /** Excludes `skipped` rows so the count matches what EmailList actually
+   *  shows (Sprint 10 user-acceptance follow-up). */
   total: number
   /** Sum of `is_read = 0`. Production data may show all-zero — real-world signal, not a bug. */
   unread: number
+  /** Sum of `is_flagged = 1`. Powers the Sidebar "已标旗" virtual entry. */
+  flagged: number
+  /** Sum of `sync_status IN ('failed', 'dead_letter')`. Powers the
+   *  "Failed" filter chip + future Sidebar entry. */
+  failed: number
 }
 
 export interface AIFields {
@@ -144,6 +192,28 @@ export interface UpdateFlagOpts {
   dryRun?: boolean
 }
 
+/**
+ * Sprint 15 — `mailagent email flag` opts. Mirrors `EmailFlagOpts` declared
+ * in `src/electron/main/handlers/write_ops.ts` (same shape, kept duplicated
+ * to keep main / renderer free of cross-imports — same convention as
+ * `UpdateFlagOpts`).
+ *
+ * Replaces the v3 `notion.updateFlag` path: writes SQLite flag intent + a
+ * dual-target outbox row (mailapp + notion), then mail-sync's FanoutWorker
+ * dispatches both sides async. Pass `internalId = null` + `opts.ids = [...]`
+ * to batch (single CLI fork enqueues N×2 outbox rows).
+ */
+export interface EmailFlagOpts {
+  isRead?: boolean
+  isFlagged?: boolean
+  processingStatus?: string
+  /** Batch mode: ids ↔ internalId are mutually exclusive at the CLI level. */
+  ids?: number[]
+  /** Default true. Mail-sync is always online in production, so the CLI's
+   *  pm2 conflict check must be bypassed. */
+  allowConcurrent?: boolean
+}
+
 export interface EmailApi {
   list(opts: ListOpts): Promise<EmailMeta[]>
   /** Sprint 2 — list + body snippet + LLM labels + attach count, all in one IPC. */
@@ -157,13 +227,41 @@ export interface EmailApi {
   body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null>
   /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */
   aiFields(internalId: number): Promise<AIFields | null>
-  search(opts: SearchOpts): Promise<SearchHit[]>
+  /**
+   * Search-module 1:1 mockup-search.html — returns wrapped
+   * `{ items, total_indexed }` so the palette footer can render
+   * "N of total_indexed" without a second IPC roundtrip.
+   */
+  search(opts: SearchOpts): Promise<SearchResult>
   /** Sprint 5 — Notion resync via `mailagent email resync`. Returns whatever
    *  the CLI's `data` envelope contains (page_id, status, etc.). */
   resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult>
   /** Sprint 5 — open Mail.app reply window (AppleScript). User edits +
    *  sends in Mail.app; we don't relay the send. */
   createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult>
+  /** v8 — set pinned (true) / unpinned (false) via the `mailagent email
+   *  pin/unpin` CLI. Returns the new state, or null on E_NOT_FOUND. The
+   *  renderer's optimistic store reconciles against the next
+   *  listPinnedIds refetch. */
+  pin(internalId: number, pinned: boolean): Promise<boolean | null>
+  /** v8 — current set of pinned internal_ids (pinned_at DESC). Drives
+   *  the `pinned` zustand store and the "📌 已固定" group in EmailList. */
+  listPinnedIds(): Promise<number[]>
+  /**
+   * Sprint 15 — SSoT inversion. Writes flag / processing_status intent to
+   * SQLite (with echo-prevention) + a dual-target outbox row (mailapp +
+   * notion). The mail-sync FanoutWorker then dispatches both sides async,
+   * so this method returns as soon as the SQL has landed — actual Mail.app
+   * / Notion mutations follow within ~5-10s.
+   *
+   * Single email: `flag(<id>, {isFlagged: true})`.
+   * Batch: `flag(null, {ids: [...], isRead: true})` — one CLI fork, N×2
+   * outbox rows. The two modes are mutually exclusive at the CLI level.
+   *
+   * Replaces `mailApi.notion.updateFlag(...)`; the old method stays during
+   * Sprint 15 grayscale (frontend/SPRINT15-D handoff §6).
+   */
+  flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown>
 }
 
 // ---- Sprint 6 §2.2 — LLM dashboard surface --------------------------------
@@ -324,6 +422,9 @@ export interface PersistentSettings {
   notionAgentPageId: string | null
   notionAgentName: string | null
   customApiEndpoint: string | null
+  /** Owner's email — sourced from repo-root `.env` USER_EMAIL on every
+   *  settings:get read. Read-only; the renderer doesn't write this. */
+  userEmail: string | null
 }
 
 export interface PingResult {
@@ -358,6 +459,12 @@ export interface AttachmentApi {
   /** Returns a `file://`-safe local absolute path, or null if the attachment
    *  hasn't been persisted to disk (e.g. inline images that live only in MIME). */
   localPath(attachmentId: number): Promise<string | null>
+  /** Sprint 13 — same content as `localPath` but inlined as a
+   *  `data:<mime>;base64,...` URL. The sandboxed body iframe can't load
+   *  `file://` URLs (same-origin policy under srcdoc) so inline images
+   *  (cid: refs) substitute the data URL instead. Returns null when
+   *  the file is missing or the read fails. */
+  readDataUrl(attachmentId: number): Promise<string | null>
 }
 
 // ---- Sprint 3 §2.2 — AI / translation surface ------------------------------
@@ -622,6 +729,57 @@ export interface UpdaterApi {
   onEvent(handler: (status: UpdaterStatus) => void): () => void
 }
 
+// ---- Sprint 16 §SSE — events bridge surface ----------------------------
+
+/** Sprint 16 — SSE event types. 后端 publish 点见 src/events/publisher.py
+ *  + docs/sse-events.md. */
+export type SseEventType =
+  | 'email.synced'
+  | 'email.failed'
+  | 'email.dead_letter'
+  | 'email.flag_changed'
+  | 'outbox.enqueued'
+  | 'outbox.done'
+  | 'outbox.failed'
+  | 'outbox.dead_letter'
+  | 'llm.success'
+  | 'llm.failed'
+  | 'llm.gave_up'
+
+export interface SseEvent {
+  event_type: SseEventType | string
+  ts: number
+  internal_id: number | null
+  data: Record<string, unknown>
+  source: string
+}
+
+export type EventsConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'reconnecting'
+  | 'disabled'
+
+export interface EventsStatus {
+  state: EventsConnectionState
+  lastError: string | null
+  lastEventTs: number | null
+  url: string
+}
+
+export interface EventsApi {
+  /** Current snapshot (idempotent invoke). */
+  status(): Promise<EventsStatus>
+  /** 立即重连 — 清退避 / 取消当前 fetch / 启新 attempt; 返回新 status. */
+  reconnect(): Promise<EventsStatus>
+  /** Subscribe to incoming SSE events; returns unsubscribe fn. */
+  onEvent(handler: (event: SseEvent) => void): () => void
+  /** Subscribe to connection-state changes; returns unsubscribe fn. */
+  onStatus(handler: (status: EventsStatus) => void): () => void
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
@@ -639,4 +797,6 @@ export interface MailApi {
   updater: UpdaterApi
   /** Sprint 9 — ping-island bridge (status + appearance broadcast + AI draft envelopes). */
   island: IslandApi
+  /** Sprint 16 — SSE events bridge (replaces 5s polling). */
+  events: EventsApi
 }

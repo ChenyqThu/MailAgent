@@ -279,6 +279,120 @@ Sprint 1 完工 smoke test 用 `nc -U /tmp/island.sock` 手发 `MailReceived` en
 
 **结论**：Sprint 1 收尾标准是"wire 层 + profile 注册 + skeleton view 文件存在 + Settings UI 显示 MailAgent"。视觉上"灵动岛因 mail envelope 展开"**不在 Sprint 1 范围**，等 Sprint 4 联调 + 解决 §2.5.4 决议题后才能跑通。
 
+#### 2.5.4-D 决议（Sprint 10 启动前，2026-05-18）— ✅ 方案 A 已落实 + smoke 验证
+
+**状态**：✅ **已落实**（2026-05-18 §9-6 smoke 触发 → 同日完成 Python + Frontend wire 映射 + 测试断言更新 + nc smoke 二次验证）
+
+**触发 smoke 实测**（Sprint 10 §9-6 端到端联调）:
+- 现状（pre-Plan-A）envelope `eventType="MailReceived"` 经 `nc -U /tmp/island.sock` 发出 → ping-island fork log 停在 `Received bridge envelope provider=mail event=MailReceived` debug line → **不走 dispatch / 灵动岛不展开**
+- 原因：`MailReceived` 不在 ping-island fork 现有 hook event dispatcher 识别表里（仅认 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionStart`）
+- **判据满足** → 落方案 A 代码（commit Sprint 10 §9-6）
+
+**Post-Plan-A smoke 验证** （2026-05-18 同日，Python `nc`-style 直发）:
+- `MailReceived` envelope → wire `eventType="Notification"` + `metadata.mailagent.eventType="MailReceived"` → fork 接受 0 bytes 返回(non-blocking notification path)
+- `LLMReviewedUrgent` envelope（`waitingForInput` + 5 options） → wire `eventType="Notification"` → fork 端 **block 等用户点 option**（客户端 3s timeout，符合预期）→ **证明 fork 走 attentionNotification phase + 5 option intervention 渲染**
+
+**落地实现**:
+
+| 维度 | 方案 A ✅（选定） | 方案 B | 方案 C |
+|---|---|---|---|
+| 描述 | Python+Electron wire 层把 `eventType` 一律映射到 ping-island 已识别的 `"Notification"`，原 mail event 名（`MailReceived` / `LLMReviewedUrgent` / `AIDraftStream` 等 12 个）放进 `metadata["mailagent.eventType"]` 区分 | 在 Swift fork 内 HookSocketServer / SessionStore 加 mail 专属事件名识别 | 复用 `Notification` 走 generic HoverSessionCard，但不写 `metadata.mailagent.eventType` |
+| 改动面 | **Python 1 处** (`src/notify/island_envelope.py:to_wire_dict()` 加映射表 + metadata 双写) + **Frontend 1 处** (`frontend/src/electron/main/island/envelope.ts:commonShell()` 同) + 2 个测试断言修 | Swift HookSocketServer eventType 解码增 case + SessionStore phase 路由分支 + ~3-5 处 fork 改动 | Python + Frontend 同 A，但只改 wire eventType，不加 metadata key |
+| Swift fork rebase 摩擦 | 0（fork 不动） | ⚠️ 每月 upstream rebase 风险 | 0 |
+| 语义损失 | 仅"wire 层"语义模糊（看上去都是 Notification），但 `metadata.mailagent.eventType` 完整保留原名给评估指标 / 调试用 | 0 | 中等 — 评估指标 `island_dispatch.event_type` 列只有 Python dataclass 值，wire 层 ping-island 端无原 event 信息 |
+| 后续升级路径 | 任意时刻可平滑切到 B：Swift 端只需在解码后读 `metadata.mailagent.eventType` 走专属分支即可，不需要回改 Python | — | 切 A 需补 metadata 双写 |
+
+**决议落地范围**（Sprint 10 Day 1 或与 ping-island.app smoke test 同周期）:
+
+1. **后端 `src/notify/island_envelope.py:to_wire_dict()`** 加映射 + metadata 双写：
+   ```python
+   _WIRE_EVENT_MAP: Dict[str, str] = {
+       "MailReceived": "Notification",
+       "MailReceivedUrgent": "Notification",  # 配合 status.kind=waitingForInput + expectsResponse=true 走 attentionNotification
+       "LLMReviewed": "Notification",
+       "LLMReviewedUrgent": "Notification",
+       "MailCompleted": "Notification",       # status.kind=completed 触发 dock icon 清理
+       "SyncFailed": "Notification",
+       "DeadLetterAccum": "Notification",
+       "AIDraftStart": "Notification",
+       "AIDraftStream": "Notification",
+       "AIDraftReady": "Notification",        # status.kind=completed
+   }
+   wire_event = _WIRE_EVENT_MAP.get(self.event_type, self.event_type)
+   body["eventType"] = wire_event
+   body["metadata"]["mailagent.eventType"] = self.event_type  # 原名留指标 / 调试
+   ```
+   保留 dataclass 字段 `event_type` 为 mail event 名（`island_dispatch` 表存的也是 mail name，与现网评估指标一致）。
+
+2. **前端 `frontend/src/electron/main/island/envelope.ts:commonShell()`** 加同向映射：
+   ```typescript
+   const WIRE_EVENT_MAP: Record<IslandEventType, 'Notification'> = {
+     AppearanceChange: 'Notification',
+     AIDraftStart: 'Notification',
+     AIDraftStream: 'Notification',
+     AIDraftReady: 'Notification',
+     Ping: 'Notification',
+   }
+   // commonShell 内构造 envelope 时:
+   eventType: WIRE_EVENT_MAP[eventType],
+   metadata: { ...metadata, 'mailagent.eventType': eventType }
+   ```
+   `BridgeEnvelope.eventType` TypeScript 类型从 `IslandEventType` 改为 `'Notification'`（wire 层窄）；保留 builder 入参 `IslandEventType` 给调用方语义清晰；测试断言改为 `envelope.eventType === 'Notification'` + `envelope.metadata['mailagent.eventType'] === 'AppearanceChange'`。
+
+3. **测试断言修**:
+   - `tests/notify/test_island_envelope.py:36` `body["eventType"] == "MailReceived"` → `body["eventType"] == "Notification"` + 新增 `body["metadata"]["mailagent.eventType"] == "MailReceived"`
+   - `frontend/tests/main/island_envelope.test.ts` 13 个测试里凡涉及 `eventType` 断言的 4-5 处同改
+
+4. **评估指标语义**:`island_dispatch.event_type` SQLite 列继续存 Python dataclass `event_type` 字段（mail 名），保持已有 47 单测 + 现网评估查询不破。
+
+**落地结果（2026-05-18 §9-6 smoke 后同日完成）**:
+
+- 后端 `src/notify/island_envelope.py:33-71`：`_WIRE_EVENT_MAP` 10 项 + `_resolve_wire_event_type()` + `to_wire_dict()` body["eventType"] 走映射 + body["metadata"]["mailagent.eventType"] 双写
+- 前端 `frontend/src/electron/main/island/envelope.ts:46-72`：`_WIRE_EVENT_MAP` 5 项 + `BridgeEnvelope.eventType` 类型从 `IslandEventType` 改窄为 `IslandWireEventType = 'Notification'` + `commonShell()` 内构造 metadata 加 `mailagent.eventType`
+- 测试：后端 `tests/notify/test_island_envelope.py` +2（`test_envelope_wire_event_map_all_mail_events` 验 10 mail 事件全映射 + `test_envelope_wire_passes_through_native_notification` 验真 Notification 不变）；前端 `tests/main/island_envelope.test.ts` 6 处 eventType 断言改 `'Notification'` + 加 `metadata['mailagent.eventType']` 对应断言
+- 总测试：后端 47→49 / 前端 535→543（其中 +8 来自 Sprint 9 review carry-forwards + 2 missing tests）— 全绿
+- 实际工时：~30 min（按预估）
+
+**手动 smoke test 协议**（Sprint 10 §9-6 内执行 — 在装好 ping-island.app fork `feat/mail-brand` 之后）:
+
+```bash
+# 1. 启 ping-island.app，确认 /tmp/island.sock 存在
+ls -la /tmp/island.sock
+
+# 2. 现状（unmodified envelope）发 LLMReviewedUrgent 测试展开
+echo '{
+  "id": "test-urgent-1",
+  "provider": "mail",
+  "eventType": "LLMReviewedUrgent",
+  "sessionKey": "mailagent:email:99999",
+  "title": "测试 / Test Sender",
+  "preview": "Urgent test envelope",
+  "cwd": null,
+  "status": {"kind": "waitingForInput", "detail": null},
+  "terminalContext": {},
+  "intervention": {
+    "id": "iv-1", "sessionID": "mailagent:email:99999", "kind": "question",
+    "title": "Urgent test", "message": "test intervention",
+    "options": [
+      {"id": "open_mail", "title": "Open Mail"},
+      {"id": "snooze_1h", "title": "Snooze"}
+    ], "rawContext": {}
+  },
+  "expectsResponse": true,
+  "metadata": {"mailagent.internalId": "99999"},
+  "sentAt": '"$(python3 -c 'import time; print(time.time()-978307200)')"'
+}' | nc -U /tmp/island.sock
+
+# 观察：刘海是否 Phase 1 Arrive 展开 + 5 option 渲染
+# - 如展开 → fall-back 可用，§2.5.4-D 归档为"无需落代码"
+# - 如不展开 → 落方案 A 改 envelope 层 + 重测
+
+# 3. 重复 test 用 eventType="Notification" + metadata.mailagent.eventType="LLMReviewedUrgent"
+#    对照看是否触发同一展开行为
+```
+
+**决议归档**：Sprint 10 (b) §9-6 端到端联调 2026-05-18 同日 close — wire 层 dispatch 走通；剩余工作（mail metadata 进 envelope / mailbox-specific mascot / 真 .dmg release）按 SPRINT9-HANDOFF.md §2.4 V1.5 polish 节奏推进，§2.5.4-D 本身已 ship 不再 churn。
+
 ### 2.8 SessionLauncher.swift 是否需要改 — 不需要
 
 ping-island 的 `SessionLauncher.swift` 负责"在外部 app 中启动 Claude/Codex session"（如打开终端 + 执行 `claude` 命令）。邮件流不是"启动 session" 语义，而是"通知 + 跳转到现有 Mail.app/MailAgent.app"，应通过 `BridgeResponse.decision` 走 §3.4 dispatch，**不 hijack** SessionLauncher。

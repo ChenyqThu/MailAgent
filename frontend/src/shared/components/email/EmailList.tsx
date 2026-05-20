@@ -1,64 +1,202 @@
-// 340px middle column · mockup-inbox.html line 566+. Layout:
-//   - bg-ink-2 (one tier brighter than sidebar/titlebar bg-ink-1)
-//   - Header: mailbox H1 (text-lead font-semibold) + selection/unread/total
-//     counts strip + filter chips row with icons
-//   - "N 封新邮件" CTA pill below header when poll surfaces new ids
-//   - Virtualized rows via react-window v2 with per-row variable height
+// Sprint 12 — Inbox list pane per mockup-inbox.html lines 1430-2596.
+// Sprint 12.5 adds:
+//   • Focused / Other tab dual-bucket (focused = signal mail; other =
+//     low-priority + auto-archive bucket).
+//   • Filter popover with priority + category multi-select.
+//   • Date group headers with click-to-collapse persistence.
+//   • Pinned virtual group at the top (driven by usePinned localStorage).
+//   • Infinite scroll — initial 100 rows, +100 each time the list nears
+//     the end (react-window v2 onRowsRendered).
+//   • Real batch mode (cb checkboxes via row + floating BatchActionBar).
+//
+// CSS classes (.inbox-tabs / .filter-pop / .group-header / .filter-option)
+// live in index.css Sprint 12 block.
 
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { List, type RowComponentProps } from 'react-window'
-import { ChevronDown, MailQuestion, Paperclip, Star } from 'lucide-react'
+import { Filter, ListChecks, Mail } from 'lucide-react'
 
-import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
+import {
+  ALL_CATEGORIES,
+  ALL_PRIORITIES,
+  useEmailFilter,
+  type EmailCategory,
+  type EmailFilter,
+  type EmailView
+} from '@shared/state/email-filter'
+import { useGroupCollapse, type GroupKey } from '@shared/state/group-collapse'
+import { useThreadCollapse } from '@shared/state/thread-collapse'
+import { useBatch } from '@shared/state/batch'
+import { usePinned } from '@shared/state/pinned'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
-import type { EnrichedEmailMeta } from '@shared/api/types'
+import { usePinnedSync } from '@shared/hooks/usePinnedSync'
+import { usePollingFallback } from '@shared/hooks/usePollingFallback'
+import { cleanSnippet } from '@shared/lib/mail_parse'
+import { actionLabelChinese } from '@shared/lib/ai_labels'
+import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 
 import { EmailRow } from './EmailRow'
+import { BatchActionBar } from './BatchActionBar'
 
-type FilterId = 'unread' | 'flagged' | 'failed' | 'all'
+// ─── Row union ────────────────────────────────────────────────────────
+//
+// Sprint 14 round 9 — Outlook-style thread bundling.  Rows of type
+// 'email' carry an optional `thread` block:
+//   • isHead = true  → row is the most-recent message of a thread that
+//     has ≥ 1 sibling; chevron prepended (rotates with expanded state),
+//     clicking toggles the bundle.  childCount drives the "+N" hint.
+//   • isHead = false → row is an older sibling.  Indented to the right.
+// Rows without a `thread` block are solitary messages, rendered exactly
+// like before round 9.
+type ThreadRowInfo =
+  | { isHead: true; threadId: string; childCount: number; expanded: boolean }
+  | { isHead: false; threadId: string }
+
+type ListRow =
+  | { type: 'header'; key: GroupKey; label: string; count: number; collapsed: boolean }
+  | {
+      type: 'email'
+      email: EnrichedEmailMeta
+      groupKey: GroupKey
+      thread?: ThreadRowInfo
+      /** Sprint 14 round 11 — true when the active email is part of
+       *  this row's thread bundle (head + every child).  Drives both
+       *  the wrapper selected wash and the coral accent bar so the
+       *  whole bundle reads as one selection unit. */
+      bundleSelected: boolean
+    }
+  | { type: 'loader' }
 
 interface RowProps {
-  emails: ReadonlyArray<EnrichedEmailMeta>
+  rows: ReadonlyArray<ListRow>
   activeId: number | null
   newIds: ReadonlySet<number>
   onSelect(id: number): void
+  onToggleGroup(key: GroupKey): void
+  onToggleThread(threadId: string): void
 }
 
 function VirtualRow({
   index,
   style,
-  emails,
-  activeId,
+  rows,
+  // activeId is folded into `item.bundleSelected` at flatten time so the
+  // row component itself only needs the rest.  The prop stays in
+  // RowProps so the List parent re-renders rows when active changes.
   newIds,
-  onSelect
+  onSelect,
+  onToggleGroup,
+  onToggleThread
 }: RowComponentProps<RowProps>): React.ReactElement {
-  const email = emails[index]
+  const item = rows[index]
+  if (!item) return <div style={style} />
+  if (item.type === 'loader') {
+    return (
+      <div style={style} className="px-4 py-3 text-center text-meta font-mono text-ink-fg-3">
+        — loading more…
+      </div>
+    )
+  }
+  if (item.type === 'header') {
+    return (
+      <div style={style}>
+        <header
+          className="group-header"
+          role="button"
+          tabIndex={0}
+          aria-expanded={!item.collapsed}
+          onClick={() => onToggleGroup(item.key)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onToggleGroup(item.key)
+            }
+          }}
+          data-collapsed={item.collapsed ? 'true' : 'false'}
+        >
+          <svg className="group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+          {item.key === 'pinned' && (
+            <svg className="group-pin-glyph" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z" />
+            </svg>
+          )}
+          <span>{item.label}</span>
+          <span className="group-count">{item.count}</span>
+        </header>
+      </div>
+    )
+  }
+  // Sprint 17 — thread chevron 从外层 div 移到 EmailRow grid 第一格 (.email-row
+  // > .thread-chevron-cell). flag / done / selected wash + 未读 dot 现在共享同
+  // 一个 article 容器, 染色和定位能 cover chevron 区域. data-thread='head|child|
+  // none' 在 EmailRow article 上, CSS 据此渲染竖向 tether 线 (child).
+  const t = item.thread
+  const isHead = t?.isHead === true
+  const isChild = t !== undefined && !t.isHead
+  const threadChevron = t
+    ? {
+        isHead,
+        isChild,
+        // 仅 head 行有 expanded 字段; child 不渲染 chevron 所以 false 即可
+        expanded: t.isHead ? t.expanded : false,
+        onToggle: isHead
+          ? () => {
+              onToggleThread(t.threadId)
+              onSelect(item.email.internal_id)
+            }
+          : undefined
+      }
+    : undefined
   return (
     <div style={style}>
       <EmailRow
-        email={email}
-        selected={email.internal_id === activeId}
-        isNew={newIds.has(email.internal_id)}
-        onSelect={() => onSelect(email.internal_id)}
+        email={item.email}
+        selected={item.bundleSelected}
+        isNew={newIds.has(item.email.internal_id)}
+        noAvatar={isChild}
+        threadChevron={threadChevron}
+        onSelect={() => onSelect(item.email.internal_id)}
       />
     </div>
   )
 }
 
-function rowHeight(index: number, { emails }: RowProps): number {
-  // py-3 (24) + sender (20) + subject (20) + chips (mt-2 = 26) = 90
-  // + snippet (line-clamp-1 = 20 + mt-0.5 = 2) = 112
-  const e = emails[index]
-  return e?.snippet ? 112 : 90
+function rowHeight(index: number, { rows }: RowProps): number {
+  const r = rows[index]
+  if (!r) return 28
+  if (r.type === 'header') return 28
+  if (r.type === 'loader') return 44
+  // Sprint 14 round 16 — thread children no longer forced into a
+  // compact 60px row; they pick their height from the same snippet +
+  // AI strip rules as heads / solitary rows.  Visible-set children
+  // (listEnriched) carry full enriched fields and get the long layout;
+  // supplement-only children (listByThread, no snippet / AI) fall
+  // through to the 60px no-snippet branch naturally.
+  const e = r.email
+  const snippetReal = cleanSnippet(e.snippet)
+  const hasSnippet = Boolean(snippetReal)
+  const hasAiStrip = Boolean(
+    e.ai_priority ||
+    actionLabelChinese(e.ai_action) ||
+    e.sync_status === 'failed' ||
+    e.sync_status === 'dead_letter'
+  )
+  if (hasSnippet && hasAiStrip) return 100
+  if (hasSnippet) return 84
+  if (hasAiStrip) return 78
+  return 60
 }
 
-function applyFilter(
-  filter: FilterId,
+function applyChipFilter(
+  filter: EmailFilter,
   rows: ReadonlyArray<EnrichedEmailMeta>
 ): EnrichedEmailMeta[] {
   switch (filter) {
@@ -74,74 +212,387 @@ function applyFilter(
   }
 }
 
-interface FilterChipProps {
-  active: boolean
-  icon: React.ReactNode
-  label: string
-  count: number
-  onClick(): void
+// Focused / Other split is purely priority-driven now — LLM CATEGORY_ENUM
+// has no "low-signal" bucket, so we use `ai_priority === 'low'` as the
+// authoritative signal. Rows without an LLM run (ai_priority === null) stay
+// in Focused so newly-arrived mail never silently lands in Other.
+function applyTab(
+  tab: 'focused' | 'other',
+  rows: ReadonlyArray<EnrichedEmailMeta>
+): EnrichedEmailMeta[] {
+  if (tab === 'other') return rows.filter((r) => r.ai_priority === 'low')
+  return rows.filter((r) => r.ai_priority !== 'low')
 }
 
-function FilterChip({ active, icon, label, count, onClick }: FilterChipProps): React.ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex items-center gap-1.5 px-2 py-1 rounded border text-aux transition-colors duration-fast',
-        active
-          ? 'text-coral bg-coral/15 border-coral/30 hover:bg-coral/20'
-          : 'text-ink-fg-1 border-transparent hover:text-ink-fg hover:bg-ink-3'
-      )}
-    >
-      <span className="shrink-0 grid place-items-center w-3 h-3">{icon}</span>
-      <span>{label}</span>
-      <span
-        className={cn(
-          'text-meta font-mono tabular-nums ml-0.5',
-          active ? 'text-coral' : 'text-ink-fg-3'
-        )}
-      >
-        {count}
-      </span>
-    </button>
-  )
+/** Strict literal match against LLM CATEGORY_ENUM — `email.ai_category`
+ *  is the verbatim emoji-prefixed Chinese label so `Set.has()` works. */
+function categoryOf(e: EnrichedEmailMeta): EmailCategory | null {
+  if (!e.ai_category) return null
+  return e.ai_category as EmailCategory
 }
+
+function applyMultiFilter(
+  rows: ReadonlyArray<EnrichedEmailMeta>,
+  priorities: ReadonlySet<AIPriority>,
+  categories: ReadonlySet<EmailCategory>
+): EnrichedEmailMeta[] {
+  const fullPri = priorities.size === ALL_PRIORITIES.length
+  const fullCat = categories.size === ALL_CATEGORIES.length
+  if (fullPri && fullCat) return rows.slice()
+  return rows.filter((r) => {
+    if (!fullPri) {
+      if (r.ai_priority === null || !priorities.has(r.ai_priority)) return false
+    }
+    if (!fullCat) {
+      // Unclassified rows (no LLM run yet) are kept regardless of category
+      // selection — hiding them would make newly-arrived mail invisible
+      // until the LLM catches up.
+      const c = categoryOf(r)
+      if (c !== null && !categories.has(c)) return false
+    }
+    return true
+  })
+}
+
+// ─── Date-grouping ────────────────────────────────────────────────────
+function startOfDay(d: Date): Date {
+  const x = new Date(d)
+  x.setHours(0, 0, 0, 0)
+  return x
+}
+
+// Sprint 14 round 9 — Outlook-style thread bundle.  Same-thread rows
+// collapse into a single "head" plus N indented children.  The bundle
+// is keyed by thread_id; emails without a thread_id (or whose thread
+// only has one email in the current list) are treated as solitary.
+interface ThreadGroup {
+  threadId: string | null
+  head: EnrichedEmailMeta
+  children: EnrichedEmailMeta[]
+}
+
+function groupByThread(
+  emails: ReadonlyArray<EnrichedEmailMeta>,
+  // Sprint 14 round 11 — listByThread supplement keyed by thread_id.
+  // Each entry is the FULL thread fetched cross-mailbox so the bundle
+  // contains every message, not just the ones that survived the
+  // current mailbox / chip / category filter.  Missing tid → fall back
+  // to whatever the visible `emails` list contained.
+  threadSupplement: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMeta>>
+): ThreadGroup[] {
+  const byTid = new Map<string, EnrichedEmailMeta[]>()
+  const solo: ThreadGroup[] = []
+  // De-dupe by internal_id while partitioning so an email cannot
+  // surface twice.  User feedback: "同一封邮件不应该出现两次, 如果被
+  // 折叠到线程里, 就不应该出现在主线程里".
+  const seen = new Set<number>()
+  for (const e of emails) {
+    if (seen.has(e.internal_id)) continue
+    seen.add(e.internal_id)
+    if (e.thread_id) {
+      const arr = byTid.get(e.thread_id) ?? []
+      arr.push(e)
+      byTid.set(e.thread_id, arr)
+    } else {
+      solo.push({ threadId: null, head: e, children: [] })
+    }
+  }
+  // Merge supplement messages for every visible thread.  Skip ids we
+  // already collected from the visible list so the same email can't
+  // appear twice across visible-set + supplement.
+  for (const [tid, arr] of byTid) {
+    const supplement = threadSupplement.get(tid)
+    if (!supplement) continue
+    for (const s of supplement) {
+      if (seen.has(s.internal_id)) continue
+      seen.add(s.internal_id)
+      arr.push(s)
+    }
+  }
+
+  const groups: ThreadGroup[] = []
+  for (const [tid, arr] of byTid) {
+    arr.sort((a, b) => (b.date_received ?? '').localeCompare(a.date_received ?? ''))
+    if (arr.length === 1) {
+      // Single-message thread is functionally solitary — no chevron.
+      groups.push({ threadId: null, head: arr[0]!, children: [] })
+    } else {
+      groups.push({ threadId: tid, head: arr[0]!, children: arr.slice(1) })
+    }
+  }
+  groups.push(...solo)
+  // Stable ordering by head date_received DESC keeps day-bucketing
+  // deterministic across re-renders.
+  groups.sort((a, b) => (b.head.date_received ?? '').localeCompare(a.head.date_received ?? ''))
+  return groups
+}
+
+function partitionByDate(
+  groups: ReadonlyArray<ThreadGroup>,
+  pinnedSet: ReadonlySet<number>
+): Record<GroupKey, ThreadGroup[]> {
+  const now = new Date()
+  const today = startOfDay(now)
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const dayMon = (today.getDay() + 6) % 7
+  const weekStart = new Date(today)
+  weekStart.setDate(today.getDate() - dayMon)
+  const lastWeekStart = new Date(weekStart)
+  lastWeekStart.setDate(weekStart.getDate() - 7)
+
+  const buckets: Record<GroupKey, ThreadGroup[]> = {
+    pinned: [],
+    today: [],
+    yesterday: [],
+    thisWeek: [],
+    lastWeek: [],
+    older: []
+  }
+
+  // Sprint 14 round 11 — thread-level pinning. User feedback: "固定也
+  // 是整个线程固定". If ANY message inside the bundle is pinned, the
+  // whole thread surfaces in the pinned bucket.  Date bucketing only
+  // considers the head's date (the freshest message), per "时间分组
+  // 不考虑折叠内的邮件,只考虑线程最新邮件".
+  const isThreadPinned = (g: ThreadGroup): boolean => {
+    if (pinnedSet.has(g.head.internal_id)) return true
+    for (const c of g.children) {
+      if (pinnedSet.has(c.internal_id)) return true
+    }
+    return false
+  }
+
+  for (const g of groups) {
+    if (isThreadPinned(g)) {
+      buckets.pinned.push(g)
+      continue
+    }
+    if (!g.head.date_received) {
+      buckets.older.push(g)
+      continue
+    }
+    const d = new Date(g.head.date_received)
+    if (d >= today) buckets.today.push(g)
+    else if (d >= yesterday) buckets.yesterday.push(g)
+    else if (d >= weekStart) buckets.thisWeek.push(g)
+    else if (d >= lastWeekStart) buckets.lastWeek.push(g)
+    else buckets.older.push(g)
+  }
+  return buckets
+}
+
+function flattenGroups(
+  buckets: Record<GroupKey, ThreadGroup[]>,
+  labels: Record<GroupKey, string>,
+  collapsedOf: (key: GroupKey) => boolean,
+  threadCollapsed: ReadonlySet<string>,
+  activeId: number | null,
+  appendLoader: boolean
+): ListRow[] {
+  const order: GroupKey[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'lastWeek', 'older']
+  const out: ListRow[] = []
+  for (const key of order) {
+    const groupArr = buckets[key]
+    if (groupArr.length === 0) continue
+    const collapsed = collapsedOf(key)
+    // Sprint 14 round 11 — count = visible thread heads (a.k.a. bundles
+    // shown in this group), NOT total messages.  User feedback: "时间
+    // 分组不考虑折叠内的邮件,只考虑线程最新邮件 (也就是折叠的母邮件)".
+    out.push({
+      type: 'header',
+      key,
+      label: labels[key],
+      count: groupArr.length,
+      collapsed
+    })
+    if (collapsed) continue
+    for (const g of groupArr) {
+      const isThreadHead = g.threadId !== null && g.children.length > 0
+      const expanded = isThreadHead ? !threadCollapsed.has(g.threadId!) : false
+      // bundleSelected — does activeId belong anywhere in this thread?
+      // For solitary rows we still set it from the head id so the same
+      // wrapper chrome (wash + accent bar) covers solitary selections.
+      const bundleSelected =
+        activeId !== null &&
+        (g.head.internal_id === activeId || g.children.some((c) => c.internal_id === activeId))
+      out.push({
+        type: 'email',
+        email: g.head,
+        groupKey: key,
+        bundleSelected,
+        thread: isThreadHead
+          ? {
+              isHead: true,
+              threadId: g.threadId!,
+              childCount: g.children.length,
+              expanded
+            }
+          : undefined
+      })
+      if (isThreadHead && expanded) {
+        for (const child of g.children) {
+          out.push({
+            type: 'email',
+            email: child,
+            bundleSelected,
+            groupKey: key,
+            thread: { isHead: false, threadId: g.threadId! }
+          })
+        }
+      }
+    }
+  }
+  if (appendLoader) out.push({ type: 'loader' })
+  return out
+}
+
+// ─── List query opts per Sidebar view ────────────────────────────────
+function listOptsForView(view: EmailView, limit: number): ListOpts {
+  if (view === 'inbox') return { mailbox: '收件箱', limit }
+  if (view === 'outbox') return { mailbox: '发件箱', limit }
+  if (view === 'flagged') return { isFlagged: true, limit }
+  return { limit }
+}
+
+const PAGE_SIZE = 100
+const MAX_PAGES = 30 // safety cap — 3000 rows is enough for visual scrolling
 
 export function EmailList(): React.ReactElement {
+  const { t } = useTranslation()
   const mailApi = useMailApi()
-  const mailbox = useMailbox((s) => s.active)
+  const activeMailbox = useMailbox((s) => s.active)
   const activeId = useActiveEmail((s) => s.activeInternalId)
   const setActive = useActiveEmail((s) => s.setActive)
-  const [filter, setFilter] = useState<FilterId>('all')
+  const filter = useEmailFilter((s) => s.filter)
+  const setFilter = useEmailFilter((s) => s.setFilter)
+  const view = useEmailFilter((s) => s.view)
+  const tab = useEmailFilter((s) => s.tab)
+  const setTab = useEmailFilter((s) => s.setTab)
+  const selectedPriorities = useEmailFilter((s) => s.selectedPriorities)
+  const selectedCategories = useEmailFilter((s) => s.selectedCategories)
+  const togglePriority = useEmailFilter((s) => s.togglePriority)
+  const toggleCategory = useEmailFilter((s) => s.toggleCategory)
+  const setPriorities = useEmailFilter((s) => s.setPriorities)
+  const setCategories = useEmailFilter((s) => s.setCategories)
+  const allPrioritiesSelected = useEmailFilter((s) => s.allPrioritiesSelected)
+  const allCategoriesSelected = useEmailFilter((s) => s.allCategoriesSelected)
+  const resetAll = useEmailFilter((s) => s.resetAll)
 
+  // Subscribe to the `collapsed` map itself (not the `isCollapsed` accessor
+  // function — the function reference is stable across `toggle()` calls so
+  // useMemo dependants would never re-flatten on a click).
+  const collapsedMap = useGroupCollapse((s) => s.collapsed)
+  const toggleGroup = useGroupCollapse((s) => s.toggle)
+  const isCollapsed = useCallback(
+    (k: GroupKey): boolean => collapsedMap[k] === true,
+    [collapsedMap]
+  )
+  // Keep `usePinned` mirror in sync with the SQLite-backed pinned list.
+  // Mount-side IPC poll (10s) + invalidation after togglePin — no
+  // localStorage path; switching machines / windows reconciles.
+  usePinnedSync()
+  const pinnedList = usePinned((s) => s.pinned)
+  const pinnedSet = useMemo(() => new Set<number>(pinnedList), [pinnedList])
+
+  const batchMode = useBatch((s) => s.mode)
+  const enterBatch = useBatch((s) => s.enter)
+  const exitBatch = useBatch((s) => s.exit)
+
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [pageCount, setPageCount] = useState(1)
+  // React 19 "Adjusting state on prop change" pattern — paging resets on
+  // view transition without scheduling an effect (see EmailDetail.tsx for
+  // the same pattern).
+  const [lastView, setLastView] = useState(view)
+  if (lastView !== view) {
+    setLastView(view)
+    setPageCount(1)
+  }
+  // Sprint 12.6 user-feedback — outside-click previously checked the whole
+  // header container, which meant clicking on the inbox tabs / batch button
+  // inside the header kept the popover open. We now scope the "inside"
+  // check to just the popover + its trigger button, so clicking anywhere
+  // else (header whitespace, list rows, status bar, …) closes it.
+  const filterTriggerRef = useRef<HTMLButtonElement>(null)
+  const filterPopoverRef = useRef<HTMLDivElement>(null)
+
+  // Outside-click + Esc → close filter popover
+  useEffect(() => {
+    if (!filterOpen) return
+    function onClickAway(ev: MouseEvent): void {
+      const target = ev.target as Node | null
+      if (!target) return
+      if (filterPopoverRef.current?.contains(target)) return
+      if (filterTriggerRef.current?.contains(target)) return
+      setFilterOpen(false)
+    }
+    function onKey(ev: KeyboardEvent): void {
+      if (ev.key === 'Escape') setFilterOpen(false)
+    }
+    document.addEventListener('mousedown', onClickAway)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClickAway)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [filterOpen])
+
+  // Sprint 12.5 — pageCount drives the LIMIT clause; offset=0 because the
+  // backend sorts by date_received DESC and we re-fetch the full window.
+  // SQLite read is ~4ms per page so re-querying is cheaper than maintaining
+  // a useInfiniteQuery cursor chain in the renderer.
+  const fetchLimit = Math.min(pageCount * PAGE_SIZE, MAX_PAGES * PAGE_SIZE)
+  // Sprint 16 — 主推送从 SSE 来 (useEventBridge invalidate ['emails']);
+  // pollingInterval 仅作为 SSE 断线 fallback. SSE connected 时 fallback=false.
+  const pollingInterval = usePollingFallback()
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['emails', mailbox],
-    queryFn: () => mailApi.email.listEnriched({ mailbox, limit: 100 }),
-    refetchInterval: 5000,
+    queryKey: ['emails', view, activeMailbox, fetchLimit],
+    queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit)),
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false
+  })
+
+  // Sprint 14 round 22 — cross-mailbox enrichment source.  Thread
+  // bundles can pull in emails from the OTHER mailbox via listByThread
+  // supplement; those rows arrive as bare EmailMeta (no snippet / AI
+  // fields).  We fetch the other side's listEnriched in parallel so
+  // when supplement merge looks up the row, it finds the enriched
+  // version.  User: "email list 里对我发出的邮件,只有发件人/标题行,
+  // 没有正文摘要行和 AI 行".
+  const crossMailbox = view === 'inbox' ? '发件箱' : view === 'outbox' ? '收件箱' : null
+  const crossQ = useQuery({
+    queryKey: ['emails', 'cross', crossMailbox, fetchLimit],
+    queryFn: () =>
+      crossMailbox
+        ? mailApi.email.listEnriched({ mailbox: crossMailbox, limit: fetchLimit })
+        : Promise.resolve([]),
+    enabled: crossMailbox !== null,
+    // Sprint 16 — 同 EmailList 主查询, SSE 驱动 invalidate; polling 作 fallback
+    refetchInterval: pollingInterval,
     refetchIntervalInBackground: false
   })
 
   const all = useMemo(() => data ?? [], [data])
-  const filtered = useMemo(() => applyFilter(filter, all), [filter, all])
-  const orderedIds = useMemo(() => filtered.map((r) => r.internal_id), [filtered])
+  const crossAll = useMemo(() => crossQ.data ?? [], [crossQ.data])
+  const tabFiltered = useMemo(() => applyTab(tab, all), [tab, all])
+  const chipFiltered = useMemo(() => applyChipFilter(filter, tabFiltered), [filter, tabFiltered])
+  const filtered = useMemo(
+    () => applyMultiFilter(chipFiltered, selectedPriorities, selectedCategories),
+    [chipFiltered, selectedPriorities, selectedCategories]
+  )
 
-  const allIds = useMemo(() => all.map((r) => r.internal_id), [all])
-  const newIds = useNewlyAddedIds(allIds)
+  // Limit useNewlyAddedIds to the first page so paginated reads don't make
+  // the entire newly-loaded slab flash "NEW".
+  const firstPageIds = useMemo(() => allIdsFirstPage(all), [all])
+  const newIds = useNewlyAddedIds(firstPageIds)
 
-  // Stale-id recovery (mailbox switch).
-  const firstId = orderedIds[0]
-  if (
-    firstId !== undefined &&
-    (activeId === null || !orderedIds.includes(activeId)) &&
-    activeId !== firstId
-  ) {
-    // queueMicrotask defers the setActive past current render so we don't
-    // trigger the "setState in render" warning.
-    queueMicrotask(() => setActive(firstId))
-  }
-
-  useEmailKeyboardNav(orderedIds)
+  // `orderedIds` (a.k.a. selectable ids in the list) is computed AFTER
+  // threadGroups below so cross-mailbox thread heads / supplement
+  // children also count as selectable.  Without this, the auto-reset
+  // effect kicked the active id back to the first visible inbox email
+  // every time the user clicked a thread head whose freshest message
+  // was an outbox reply ("有的是我最新回的邮件...这种现在好像点击不了").
 
   const counts = useMemo(() => {
     let unread = 0
@@ -155,68 +606,339 @@ export function EmailList(): React.ReactElement {
     return { all: all.length, unread, flagged, failed }
   }, [all])
 
-  const newCount = newIds.size
+  // Per-category live count (for the filter popover hint).
+  const categoryCounts = useMemo(() => {
+    const out: Record<EmailCategory, number> = {
+      '💼 产品管理': 0,
+      '🤝 会议通知': 0,
+      '🛠️ 技术讨论': 0,
+      '👥 团队协作': 0,
+      '📊 项目管理': 0,
+      '🔔 系统通知': 0,
+      '🌐 外部沟通': 0
+    }
+    for (const e of all) {
+      const c = categoryOf(e)
+      if (c !== null) out[c] += 1
+    }
+    return out
+  }, [all])
+  const priorityCounts = useMemo(() => {
+    const out: Record<AIPriority, number> = {
+      critical: 0,
+      urgent: 0,
+      important: 0,
+      normal: 0,
+      low: 0
+    }
+    for (const e of all) if (e.ai_priority) out[e.ai_priority] += 1
+    return out
+  }, [all])
+
+  const groupLabels: Record<GroupKey, string> = useMemo(
+    () => ({
+      pinned: t('emailList.group.pinned'),
+      today: t('emailList.group.today'),
+      yesterday: t('emailList.group.yesterday'),
+      thisWeek: t('emailList.group.thisWeek'),
+      lastWeek: t('emailList.group.lastWeek'),
+      older: t('emailList.group.older')
+    }),
+    [t]
+  )
+
+  // Sprint 14 round 9 — thread bundling. Same thread_id rows roll up
+  // under their newest message; the user toggles each bundle with the
+  // prepended chevron. Default = expanded (Outlook behaviour); explicit
+  // user clicks add an entry to `threadCollapsed`.
+  //
+  // Sprint 17 — 从 useState 迁到 zustand + localStorage 持久化 (用户反馈
+  // "邮件展开折叠状态似乎没有记忆, 老是忽然自己展开了"). React state 在
+  // route 切换 / SSE invalidate / pnpm dev HMR 时会重置, store 保活到
+  // localStorage 跨会话恒久.
+  const threadCollapsed = useThreadCollapse((s) => s.collapsed)
+  const toggleThread = useThreadCollapse((s) => s.toggle)
+
+  // Sprint 14 round 11 — cross-mailbox thread completion.  listEnriched
+  // is mailbox-scoped, so a thread that spans inbox + outbox shows up
+  // truncated in the list.  For each visible thread_id we hit
+  // listByThread (which queries SQLite without a mailbox filter), then
+  // hand the supplement to groupByThread which merges by internal_id.
+  const uniqueThreadIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const e of all) if (e.thread_id) set.add(e.thread_id)
+    return Array.from(set)
+  }, [all])
+
+  const threadQueries = useQueries({
+    queries: uniqueThreadIds.map((tid) => ({
+      queryKey: ['email', 'thread', tid],
+      queryFn: () => mailApi.email.listByThread(tid),
+      staleTime: 60_000
+    }))
+  })
+
+  // Sprint 14 round 21 — supplement merge respects enriched data.
+  // listByThread returns the bare EmailMeta shape (no snippet / AI
+  // fields).  If the same internal_id already lives in `all` (the
+  // mailbox-scoped listEnriched result), we use that fuller record —
+  // otherwise we fall back to `enrichDefaults`.  Without this, an
+  // inbox-resident email that happens to be the thread's freshest but
+  // is filtered out by the focused/other tab (e.g. priority=low) ends
+  // up surfacing as the thread head via supplement *without* its
+  // snippet / ai_priority / ai_action, even though those fields are
+  // sitting right there in `all`.  User: "53876 这封邮件,为啥
+  // emaillist 没有显示正文摘要和 AI 优先级/建议字段啊".
+  const enrichedById = useMemo(() => {
+    const m = new Map<number, EnrichedEmailMeta>()
+    // Cross-mailbox rows first; same-mailbox `all` overwrites if a
+    // collision (theoretically impossible since SQLite mailbox is a
+    // column, but the merge order makes intent explicit).
+    for (const e of crossAll) m.set(e.internal_id, e)
+    for (const e of all) m.set(e.internal_id, e)
+    return m
+  }, [all, crossAll])
+  const threadSupplement = useMemo(() => {
+    const m = new Map<string, EnrichedEmailMeta[]>()
+    uniqueThreadIds.forEach((tid, i) => {
+      const data = threadQueries[i]?.data
+      if (!data) return
+      m.set(
+        tid,
+        data.map((meta) => enrichedById.get(meta.internal_id) ?? enrichDefaults(meta))
+      )
+    })
+    return m
+  }, [uniqueThreadIds, threadQueries, enrichedById])
+
+  const threadGroups = useMemo(
+    () => groupByThread(filtered, threadSupplement),
+    [filtered, threadSupplement]
+  )
+
+  // Selectable ids = every email rendered in the list (heads + visible
+  // children).  Used by keyboard nav and the active-reset effect so a
+  // cross-mailbox supplement head can become active without being
+  // immediately yanked back.
+  const orderedIds = useMemo(() => {
+    const ids: number[] = []
+    for (const g of threadGroups) {
+      ids.push(g.head.internal_id)
+      for (const c of g.children) ids.push(c.internal_id)
+    }
+    return ids
+  }, [threadGroups])
+
+  const firstId = orderedIds[0]
+  if (
+    firstId !== undefined &&
+    (activeId === null || !orderedIds.includes(activeId)) &&
+    activeId !== firstId
+  ) {
+    queueMicrotask(() => setActive(firstId))
+  }
+
+  useEmailKeyboardNav(orderedIds)
+  const buckets = useMemo(() => partitionByDate(threadGroups, pinnedSet), [threadGroups, pinnedSet])
+
+  // Show the loader sentinel when we still have headroom (no end-of-data
+  // signal from this query shape — we stop the loader if a fetch returned
+  // less than the requested limit, meaning there are no more rows).
+  const reachedEnd = all.length < fetchLimit
+  const showLoader = !reachedEnd && pageCount < MAX_PAGES
+
+  const rows = useMemo(
+    () => flattenGroups(buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader),
+    [buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader]
+  )
+
+  const priActive = !allPrioritiesSelected()
+  const catActive = !allCategoriesSelected()
+  const filterActive = filter !== 'all' || priActive || catActive
+
+  const handleRowsRendered = useCallback(
+    (range: { stopIndex: number }) => {
+      // Load next page when we're within 8 rows of the rendered bottom.
+      if (range.stopIndex >= rows.length - 8 && showLoader) {
+        setPageCount((c) => Math.min(c + 1, MAX_PAGES))
+      }
+    },
+    [rows.length, showLoader]
+  )
+
+  const visibleIds = useMemo(() => orderedIds, [orderedIds])
 
   return (
     <section
       aria-label="email-list"
-      className="w-[340px] shrink-0 bg-ink-2 border-r border-ink-border flex flex-col min-h-0"
+      className="w-[340px] shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
     >
-      {/* Header */}
-      <header className="px-4 pt-3 pb-2.5 border-b border-ink-border-soft">
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-lead font-semibold text-ink-fg tracking-tight">{mailbox}</h1>
-          <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
-            {counts.unread} unread · {counts.all} total
+      {/* Header — Focused/Other tabs · batch + filter cluster · meta line */}
+      <div className="relative px-3 pt-3 pb-2.5 border-b border-ink-border-soft">
+        <div className="flex items-center justify-between gap-2">
+          <div className="inbox-tabs" role="tablist" aria-label={t('list.tab.aria')}>
+            <button
+              type="button"
+              className={tab === 'focused' ? 'inbox-tab is-active' : 'inbox-tab'}
+              role="tab"
+              aria-selected={tab === 'focused'}
+              onClick={() => setTab('focused')}
+            >
+              {t('list.tab.focused')}
+            </button>
+            <button
+              type="button"
+              className={tab === 'other' ? 'inbox-tab is-active' : 'inbox-tab'}
+              role="tab"
+              aria-selected={tab === 'other'}
+              onClick={() => setTab('other')}
+            >
+              {t('list.tab.other')}
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className={
+                batchMode === 'on'
+                  ? 'w-7 h-7 rounded-md text-coral bg-coral/10 flex items-center justify-center transition-colors duration-fast'
+                  : 'w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast'
+              }
+              title={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
+              aria-label={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
+              aria-pressed={batchMode === 'on'}
+              onClick={() => (batchMode === 'on' ? exitBatch() : enterBatch())}
+            >
+              <ListChecks size={13} strokeWidth={2} />
+            </button>
+            <button
+              ref={filterTriggerRef}
+              type="button"
+              className="filter-btn w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast"
+              title={t('list.filter.button')}
+              aria-label={t('list.filter.button')}
+              aria-haspopup="true"
+              aria-expanded={filterOpen}
+              aria-controls="filter-pop"
+              data-active={filterActive ? 'true' : 'false'}
+              onClick={() => setFilterOpen((o) => !o)}
+            >
+              <Filter size={13} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2 flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+          <span className="tabular-nums">
+            {counts.unread} {t('list.meta.unread')}
           </span>
+          <span className="text-ink-fg-3">·</span>
+          <span className="tabular-nums">
+            {t('list.meta.total')} {counts.all}
+          </span>
+          {filterActive && (
+            <>
+              <span className="text-ink-fg-3">·</span>
+              <button
+                type="button"
+                className="text-coral hover:text-coral-hover transition-colors duration-fast"
+                onClick={() => {
+                  resetAll()
+                  setFilter('all')
+                }}
+              >
+                {t('list.filter.reset')}
+              </button>
+            </>
+          )}
         </div>
-        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
-          <FilterChip
-            active={filter === 'unread'}
-            icon={<span className="w-1.5 h-1.5 rounded-full bg-coral/100" />}
-            label="Unread"
-            count={counts.unread}
-            onClick={() => setFilter(filter === 'unread' ? 'all' : 'unread')}
-          />
-          <FilterChip
-            active={filter === 'flagged'}
-            icon={<Star size={11} strokeWidth={2} className="text-current" />}
-            label="Flagged"
-            count={counts.flagged}
-            onClick={() => setFilter(filter === 'flagged' ? 'all' : 'flagged')}
-          />
-          <FilterChip
-            active={filter === 'failed'}
-            icon={<MailQuestion size={11} strokeWidth={2} className="text-current" />}
-            label="Failed"
-            count={counts.failed}
-            onClick={() => setFilter(filter === 'failed' ? 'all' : 'failed')}
-          />
 
-          <button
-            type="button"
-            disabled
-            title="Sort (Sprint 3)"
-            className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast disabled:opacity-50 disabled:cursor-not-allowed"
+        {filterOpen && (
+          <div
+            ref={filterPopoverRef}
+            id="filter-pop"
+            className="filter-pop"
+            role="dialog"
+            aria-label={t('list.filter.button')}
           >
-            Latest
-            <ChevronDown size={10} strokeWidth={2.5} />
-          </button>
-        </div>
-      </header>
+            <FilterSection
+              title={t('list.filter.status')}
+              onSelectAll={() => setFilter('all')}
+              onClear={() => setFilter('all')}
+            >
+              {(['all', 'unread', 'flagged', 'failed'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className="filter-option"
+                  data-checked={filter === opt ? 'true' : 'false'}
+                  onClick={() => setFilter(opt)}
+                >
+                  <span className="cb-mini" aria-hidden />
+                  <span className="label">
+                    {opt === 'all' ? t('list.filter.all') : t(`emailList.filter.${opt}`)}
+                  </span>
+                  <span className="count tabular-nums">
+                    {opt === 'all' ? counts.all : counts[opt]}
+                  </span>
+                </button>
+              ))}
+            </FilterSection>
 
-      {/* "N 封新邮件" CTA pill — shows when poll surfaces new ids */}
-      {newCount > 0 && (
-        <button
-          type="button"
-          className="mx-3 mt-2 px-3 py-2 rounded-md bg-ink-3 border border-ink-border hover:border-coral/40 text-ink-fg text-aux font-medium flex items-center justify-center gap-2 transition-colors duration-fast"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-coral/100 dot-pulse" />
-          {newCount} 封新邮件 · 点击查看
-        </button>
-      )}
+            <FilterSection
+              title={t('list.filter.priority')}
+              onSelectAll={() => setPriorities(new Set(ALL_PRIORITIES))}
+              onClear={() => setPriorities(new Set())}
+            >
+              {ALL_PRIORITIES.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className="filter-option"
+                  data-checked={selectedPriorities.has(p) ? 'true' : 'false'}
+                  onClick={() => togglePriority(p)}
+                >
+                  <span className="cb-mini" aria-hidden />
+                  <span className={`pri-dot ${priDotClass(p)}`} aria-hidden />
+                  <span className="label">{capitalize(p)}</span>
+                  <span className="count tabular-nums">{priorityCounts[p]}</span>
+                </button>
+              ))}
+            </FilterSection>
 
-      {/* Body */}
+            <FilterSection
+              title={t('list.filter.category')}
+              onSelectAll={() => setCategories(new Set(ALL_CATEGORIES))}
+              onClear={() => setCategories(new Set())}
+            >
+              {ALL_CATEGORIES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className="filter-option"
+                  data-checked={selectedCategories.has(c) ? 'true' : 'false'}
+                  onClick={() => toggleCategory(c)}
+                >
+                  <span className="cb-mini" aria-hidden />
+                  {/* LLM CATEGORY_ENUM is emoji-prefixed Chinese; we render
+                      the verbatim string so the popover matches what the
+                      backend stores. Future EN locale would translate the
+                      tail of the string, not the leading emoji. */}
+                  <span className="label">{c}</span>
+                  <span className="count tabular-nums">{categoryCounts[c]}</span>
+                </button>
+              ))}
+            </FilterSection>
+          </div>
+        )}
+      </div>
+
+      {/* Sprint 12.6 — removed the "N 封新邮件 · 点击查看" CTA pill. The
+          list already auto-refreshes every 5s (refetchInterval), so newly
+          arrived mail surfaces at the top without any click. The row-level
+          NEW chip (driven by useNewlyAddedIds) still flashes for 2s as a
+          visual "just-arrived" cue. */}
+
       <div className="flex-1 min-h-0">
         {isLoading && <div className="p-6 text-aux text-ink-fg-2 animate-pulse">Loading…</div>}
         {isError && (
@@ -224,28 +946,111 @@ export function EmailList(): React.ReactElement {
             {error instanceof Error ? error.message : String(error)}
           </div>
         )}
-        {!isLoading && !isError && filtered.length === 0 && (
+        {!isLoading && !isError && rows.length === 0 && (
           <div className="px-6 py-12 text-center text-aux text-ink-fg-2">
-            <Paperclip size={20} strokeWidth={1.5} className="inline-block opacity-30 mb-2" />
-            <div>没有可显示的内容</div>
+            <Mail size={20} strokeWidth={1.5} className="inline-block opacity-30 mb-2" />
+            <div>{t('empty.state')}</div>
           </div>
         )}
-        {!isLoading && !isError && filtered.length > 0 && (
+        {!isLoading && !isError && rows.length > 0 && (
           <List<RowProps>
             rowComponent={VirtualRow}
-            rowCount={filtered.length}
+            rowCount={rows.length}
             rowHeight={rowHeight}
             rowProps={{
-              emails: filtered,
+              rows,
               activeId,
               newIds,
-              onSelect: setActive
+              onSelect: setActive,
+              onToggleGroup: toggleGroup,
+              onToggleThread: toggleThread
             }}
+            onRowsRendered={handleRowsRendered}
             className="scrollbar-thin"
             style={{ height: '100%' }}
           />
         )}
       </div>
+
+      <BatchActionBar visibleIds={visibleIds} />
     </section>
+  )
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+function allIdsFirstPage(all: ReadonlyArray<EnrichedEmailMeta>): number[] {
+  // Slice the first PAGE_SIZE ids so paginated load-more doesn't flicker
+  // every later row as "newly arrived" (useNewlyAddedIds diffs the array
+  // by membership; appended ids would all read as new).
+  return all.slice(0, PAGE_SIZE).map((r) => r.internal_id)
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+// Sprint 14 round 11 — listByThread returns the bare EmailMeta shape
+// (no snippet / ai_* fields).  Thread children are rendered with the
+// same EmailRow component used by the head, so we widen each row to
+// EnrichedEmailMeta with safe defaults.  The empty AI fields make the
+// child rows render the simpler 60-78px layout (no ai-strip / snippet)
+// which reads well under the head.
+function enrichDefaults(m: EmailMeta): EnrichedEmailMeta {
+  return {
+    ...m,
+    snippet: null,
+    lang: 'unknown',
+    ai_priority: null,
+    ai_action: null,
+    ai_category: null,
+    attach_count: 0,
+    is_important: false,
+    // Sprint 16 — thread child defaults to no done state (parent is the head row;
+    // children rarely have processing_status visible in the bundled view anyway).
+    processing_status: null
+  }
+}
+
+// Priority dot uses the same Tailwind tokens as the EmailRow .pdot states.
+// No raw hex — DESIGN.md §14 #1 routes every chip colour through the
+// `--c-{crit,urg,impt,norm,low}` variables exposed in index.css.
+const PRIORITY_DOT_CLASS: Record<AIPriority, string> = {
+  critical: 'bg-crit',
+  urgent: 'bg-urg',
+  important: 'bg-impt',
+  normal: 'bg-norm',
+  low: 'bg-low'
+}
+function priDotClass(p: AIPriority): string {
+  return PRIORITY_DOT_CLASS[p]
+}
+
+function FilterSection({
+  title,
+  onSelectAll,
+  onClear,
+  children
+}: {
+  title: string
+  onSelectAll: () => void
+  onClear: () => void
+  children: React.ReactNode
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="filter-section">
+      <div className="filter-section-head">
+        <span>{title}</span>
+        <span className="links">
+          <button type="button" onClick={onSelectAll}>
+            {t('list.filter.selectAll')}
+          </button>
+          <button type="button" onClick={onClear}>
+            {t('list.filter.clearLink')}
+          </button>
+        </span>
+      </div>
+      {children}
+    </div>
   )
 }

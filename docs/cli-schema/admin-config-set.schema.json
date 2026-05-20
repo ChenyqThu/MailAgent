@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-config-set.schema.json",
+  "title": "mailagent admin config set",
+  "description": "Sprint 15 Stage 3 — 持久化写 .env. 敏感字段 old_value / new_value 在 envelope 中 mask. restart_required=true 提示前端需 pm2 restart 让运行时生效",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "oneOf": [
+        {"$ref": "#/$defs/dry_run"},
+        {"$ref": "#/$defs/applied"}
+      ]
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  },
+  "$defs": {
+    "_common_fields": {
+      "type": "object",
+      "required": ["key", "env_var", "old_value", "new_value", "sensitive"],
+      "properties": {
+        "key": {"type": "string"},
+        "env_var": {"type": "string"},
+        "old_value": {"description": "字段原值; sensitive=true 时 mask"},
+        "new_value": {"description": "字段新值 (已 coerce 类型); sensitive=true 时 mask"},
+        "sensitive": {"type": "boolean"}
+      }
+    },
+    "dry_run": {
+      "allOf": [
+        {"$ref": "#/$defs/_common_fields"},
+        {
+          "type": "object",
+          "required": ["dry_run"],
+          "properties": {"dry_run": {"const": true}}
+        }
+      ]
+    },
+    "applied": {
+      "allOf": [
+        {"$ref": "#/$defs/_common_fields"},
+        {
+          "type": "object",
+          "required": ["dry_run", "env_file", "restart_required"],
+          "properties": {
+            "dry_run": {"const": false},
+            "env_file": {"type": "string", "description": "绝对路径"},
+            "restart_required": {
+              "const": true,
+              "description": "set 不触发运行时 hot-reload; 需 pm2 restart mail-sync"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

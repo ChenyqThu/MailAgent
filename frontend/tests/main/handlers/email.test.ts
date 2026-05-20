@@ -195,8 +195,11 @@ describe('getEmailBody', () => {
 })
 
 describe('searchEmails (FTS5)', () => {
+  // Sprint 16 — searchEmails 返回 SearchResult { items, total_indexed };
+  // 之前直接返 SearchHit[]; 测试用 .items 拿数组保持原断言形状.
   test('English word hit', () => {
-    const hits = handlers.searchEmails({ query: 'redis', limit: 10 })
+    const result = handlers.searchEmails({ query: 'redis', limit: 10 })
+    const hits = result.items
     expect(hits).toHaveLength(1)
     expect(hits[0]?.internal_id).toBe(101)
     expect(hits[0]?.snippet ?? '').toContain('<mark>')
@@ -207,26 +210,50 @@ describe('searchEmails (FTS5)', () => {
   })
 
   test('CJK prefix-wildcard hit (DESIGN.md note: unicode61 needs * for plain CN)', () => {
-    const hits = handlers.searchEmails({ query: '产品*', limit: 10 })
+    const hits = handlers.searchEmails({ query: '产品*', limit: 10 }).items
     expect(hits.length).toBeGreaterThanOrEqual(1)
     expect(hits[0]?.internal_id).toBe(102)
   })
 
   test('mailbox filter narrows results', () => {
-    const all = handlers.searchEmails({ query: 'notion', limit: 10 })
-    const sent = handlers.searchEmails({ query: 'notion', mailbox: '发件箱', limit: 10 })
+    const all = handlers.searchEmails({ query: 'notion', limit: 10 }).items
+    const sent = handlers.searchEmails({ query: 'notion', mailbox: '发件箱', limit: 10 }).items
     expect(sent.length).toBeLessThanOrEqual(all.length)
   })
 
-  test('empty query short-circuits to []', () => {
-    expect(handlers.searchEmails({ query: '   ', limit: 10 })).toEqual([])
+  test('empty query short-circuits to {items:[], total_indexed:N}', () => {
+    const r = handlers.searchEmails({ query: '   ', limit: 10 })
+    expect(r.items).toEqual([])
+    expect(typeof r.total_indexed).toBe('number')
   })
 
   test('rank is monotonically non-decreasing (smaller = better per bm25)', () => {
-    const hits = handlers.searchEmails({ query: 'redis OR 产品*', limit: 10 })
+    const hits = handlers.searchEmails({ query: 'redis OR 产品*', limit: 10 }).items
     for (let i = 1; i < hits.length; i++) {
       expect(hits[i]!.rank).toBeGreaterThanOrEqual(hits[i - 1]!.rank)
     }
+  })
+
+  test('hits carry ai_priority + lang from llm_processing LEFT JOIN', () => {
+    // Sprint 16 search-module — hits expose mapped priority + language so
+    // the palette EmailHitRow can render priority chip + lang-pip without
+    // a follow-up IPC. Email 101 in the fixture has "🔴 紧急" → critical
+    // and English body. Email 102 has "🟡 重要" → important + Chinese.
+    const r101 = handlers.searchEmails({ query: 'redis', limit: 5 }).items[0]
+    expect(r101?.ai_priority).toBe('critical')
+    expect(r101?.lang).toBe('en')
+
+    const r102 = handlers.searchEmails({ query: '产品*', limit: 5 }).items[0]
+    expect(r102?.ai_priority).toBe('important')
+    expect(r102?.lang).toBe('zh')
+  })
+
+  test('total_indexed reflects email_body_fts row count and survives empty query', () => {
+    // The fixture inserts body rows for emails 101 + 102 (103/201 are body-less).
+    const blank = handlers.searchEmails({ query: '', limit: 0 })
+    const withHits = handlers.searchEmails({ query: 'redis', limit: 5 })
+    expect(blank.total_indexed).toBeGreaterThan(0)
+    expect(withHits.total_indexed).toBe(blank.total_indexed)
   })
 })
 
@@ -296,13 +323,17 @@ describe('listEmailsEnriched', () => {
 })
 
 describe('listMailboxes', () => {
-  test('aggregates per mailbox with total + unread counts', () => {
+  test('aggregates per mailbox with total + unread + flagged + failed counts', () => {
     const rows = handlers.listMailboxes()
-    // 收件箱 has 3 rows (101 unread+flagged, 102 read, 103 unread+failed) → unread=2
-    // 发件箱 has 1 row (201 read) → unread=0
+    // 收件箱 has 3 rows (101 unread+flagged, 102 read, 103 unread+failed) →
+    //   total=3, unread=2, flagged=1, failed=1
+    // 发件箱 has 1 row (201 read, synced) → total=1, all-zero counts
+    // Sprint 10 user-acceptance shape: listMailboxes now returns flagged +
+    // failed alongside total + unread so the Sidebar virtual entries can
+    // surface real counts (previous hardcoded 0).
     expect(rows).toEqual([
-      { mailbox: '收件箱', total: 3, unread: 2 },
-      { mailbox: '发件箱', total: 1, unread: 0 }
+      { mailbox: '收件箱', total: 3, unread: 2, flagged: 1, failed: 1 },
+      { mailbox: '发件箱', total: 1, unread: 0, flagged: 0, failed: 0 }
     ])
   })
 

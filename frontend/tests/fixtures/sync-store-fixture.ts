@@ -34,7 +34,14 @@ export function buildFixtureDb(): Database.Database {
       created_at REAL,
       updated_at REAL,
       processing_status TEXT,
-      web_action_at REAL
+      web_action_at REAL,
+      -- v8 / v9 columns the DAO now SELECTs as part of LIST_COLS — adding
+      -- them here keeps the in-memory fixture schema-aligned with the live
+      -- sync_store.db so handler reads don't OperationalError once the
+      -- better-sqlite3 native binding ABI is rebuilt.
+      is_pinned INTEGER DEFAULT 0,
+      pinned_at REAL,
+      is_important INTEGER DEFAULT 0
     );
     CREATE INDEX idx_email_date ON email_metadata(date_received DESC);
     CREATE INDEX idx_email_sync_status ON email_metadata(sync_status);

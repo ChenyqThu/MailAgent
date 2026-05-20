@@ -108,6 +108,13 @@ class EmailMetadataRecord:
     next_retry_at: Optional[float]
     created_at: float
     updated_at: float
+    # v8: 前端置顶 / pin（Mail.app 无此概念；仅本地 + Notion mirror 不写）
+    is_pinned: bool = False
+    pinned_at: Optional[float] = None
+    # v9: 邮件原生重要性（Importance / X-Priority / X-MSMail-Priority 任一为
+    # high → True）。由 reader._parse_importance 在 parse 阶段填好，前端
+    # EmailRow 的 ❗ 角标读这个字段。
+    is_important: bool = False
 
     @property
     def notion_url(self) -> Optional[str]:
@@ -290,7 +297,8 @@ class EmailRepository:
                           sender_name, to_addr, cc_addr, date_received, mailbox,
                           is_read, is_flagged, sync_status,
                           notion_page_id, notion_thread_id, sync_error,
-                          retry_count, next_retry_at, created_at, updated_at
+                          retry_count, next_retry_at, created_at, updated_at,
+                          is_pinned, pinned_at, is_important
                    FROM email_metadata WHERE internal_id = ?""",
                 (internal_id,),
             ).fetchone()
@@ -317,6 +325,9 @@ class EmailRepository:
                 next_retry_at=row["next_retry_at"],
                 created_at=row["created_at"] or 0.0,
                 updated_at=row["updated_at"] or 0.0,
+                is_pinned=bool(row["is_pinned"]),
+                pinned_at=row["pinned_at"],
+                is_important=bool(row["is_important"]),
             )
         finally:
             conn.close()
@@ -397,6 +408,8 @@ class EmailRepository:
         subject_substr: Optional[str] = None,
         is_read: Optional[bool] = None,
         is_flagged: Optional[bool] = None,
+        is_pinned: Optional[bool] = None,
+        is_important: Optional[bool] = None,
         has_notion: Optional[bool] = None,
         limit: int = 50,
         offset: int = 0,
@@ -441,6 +454,12 @@ class EmailRepository:
         if is_flagged is not None:
             clauses.append("is_flagged = ?")
             params.append(1 if is_flagged else 0)
+        if is_pinned is not None:
+            clauses.append("is_pinned = ?")
+            params.append(1 if is_pinned else 0)
+        if is_important is not None:
+            clauses.append("is_important = ?")
+            params.append(1 if is_important else 0)
         if has_notion is True:
             clauses.append("notion_page_id IS NOT NULL")
         elif has_notion is False:
@@ -461,9 +480,10 @@ class EmailRepository:
                            sender_name, to_addr, cc_addr, date_received, mailbox,
                            is_read, is_flagged, sync_status,
                            notion_page_id, notion_thread_id, sync_error,
-                           retry_count, next_retry_at, created_at, updated_at
+                           retry_count, next_retry_at, created_at, updated_at,
+                           is_pinned, pinned_at, is_important
                       FROM email_metadata{where_clause}
-                  ORDER BY date_received DESC
+                  ORDER BY is_pinned DESC, is_important DESC, date_received DESC
                      LIMIT ? OFFSET ?""",
                 params + [limit, offset],
             ).fetchall()
@@ -490,6 +510,9 @@ class EmailRepository:
                     next_retry_at=r["next_retry_at"],
                     created_at=r["created_at"] or 0.0,
                     updated_at=r["updated_at"] or 0.0,
+                    is_pinned=bool(r["is_pinned"]),
+                    pinned_at=r["pinned_at"],
+                    is_important=bool(r["is_important"]),
                 )
                 for r in rows
             ]
@@ -787,6 +810,71 @@ class EmailRepository:
         except Exception:
             conn.rollback()
             raise
+        finally:
+            conn.close()
+
+    # ============================================================
+    # PIN (v8) — front-end "置顶" persistence
+    # ============================================================
+
+    def set_pin(self, internal_id: int, pinned: bool) -> Optional[bool]:
+        """置顶 / 取消置顶。
+
+        Returns:
+            True/False — 新的置顶状态（成功）；
+            None — 邮件不存在。
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT is_pinned FROM email_metadata WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            target = 1 if pinned else 0
+            now = time.time()
+            conn.execute(
+                """UPDATE email_metadata
+                      SET is_pinned = ?,
+                          pinned_at = ?,
+                          updated_at = ?
+                    WHERE internal_id = ?""",
+                (target, now if pinned else None, now, internal_id),
+            )
+            conn.commit()
+            return bool(target)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def toggle_pin(self, internal_id: int) -> Optional[bool]:
+        """翻转置顶状态。Returns 新状态 / None（邮件不存在）。"""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT is_pinned FROM email_metadata WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            new_state = not bool(row["is_pinned"])
+        finally:
+            conn.close()
+        return self.set_pin(internal_id, new_state)
+
+    def list_pinned_ids(self) -> list[int]:
+        """所有置顶邮件的 internal_id（pinned_at DESC，最近置顶在前）。"""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """SELECT internal_id FROM email_metadata
+                    WHERE is_pinned = 1
+                    ORDER BY pinned_at DESC NULLS LAST, internal_id DESC"""
+            ).fetchall()
+            return [r["internal_id"] for r in rows]
         finally:
             conn.close()
 

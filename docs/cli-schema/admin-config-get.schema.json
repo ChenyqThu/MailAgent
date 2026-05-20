@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/admin-config-get.schema.json",
+  "title": "mailagent admin config get",
+  "description": "Sprint 15 Stage 3 — 读单字段 (敏感字段默认 mask, --show-secrets 需 auth)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "schema_version", "data", "meta"],
+  "properties": {
+    "status": {"const": "success"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "env_var", "value", "default", "description", "sensitive"],
+      "properties": {
+        "key": {"type": "string"},
+        "env_var": {"type": "string"},
+        "value": {},
+        "default": {},
+        "description": {"type": "string"},
+        "sensitive": {"type": "boolean"}
+      }
+    },
+    "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+  }
+}

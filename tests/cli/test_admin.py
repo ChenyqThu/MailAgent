@@ -17,7 +17,7 @@ class TestAdminDbVersion:
     def test_text(self, cli_runner, cli_env, seeded_db):
         result = _invoke_admin(cli_runner, "db-version", db_path=seeded_db)
         assert result.exit_code == 0, result.output
-        assert "7" in result.output
+        assert "10" in result.output
         assert "compatible" in result.output
 
     def test_json(self, cli_runner, cli_env, seeded_db):
@@ -26,8 +26,8 @@ class TestAdminDbVersion:
         )
         assert result.exit_code == 0, result.output
         payload = _extract_last_json_object(result.output)
-        assert payload["data"]["version"] == 7
-        assert payload["data"]["expected"] == 7
+        assert payload["data"]["version"] == 10
+        assert payload["data"]["expected"] == 10
         assert payload["data"]["compatible"] is True
 
     def test_incompat_emits_error_wrapper(
@@ -55,10 +55,10 @@ class TestAdminHealth:
         assert result.exit_code == 0, result.output
         payload = _extract_last_json_object(result.output)
         assert payload["data"]["healthy"] is True
-        assert payload["data"]["db_version"] == 7
+        assert payload["data"]["db_version"] == 10
         for required in (
             "email_metadata", "email_body", "email_attachment", "email_body_fts",
-            "cli_checkpoints", "v4_rollout_stats", "island_dispatch",
+            "cli_checkpoints", "v4_rollout_stats", "island_dispatch", "email_outbox",
         ):
             assert required in payload["data"]["tables_present"]
 

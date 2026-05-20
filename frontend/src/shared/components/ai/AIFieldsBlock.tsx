@@ -1,18 +1,39 @@
-// mockup-inbox.html line 956+ pattern. The 3-col grid uses `gap-px` on a
-// `bg-ink-border` parent — children with `bg-ink-3` then read as cells
-// separated by 1px hairlines. Header strip has model + cost meta on the
-// right. REVIEW-LOG H-14: V1 ships 8 cells, not 11.
+// Sprint 13 round 8 user feedback: "AI Summary 和 Suggest Reply 是最
+// 重要的". Round 7 collapsed everything into a flat 3-col grid — the
+// two cells that read like *actions* (Summary + Reply Suggestion) lost
+// their visual hierarchy.  Round 8 brings them back as hero strips at
+// the top of the block:
 //
-// Cells:
-//   AI Priority   AI Action     Review Status
-//   Sentiment     Processing    Read
-//   Flagged       Mailbox       Notion
+//   ┌─────────────────────────────────────────────────────────────────┐
+//   │ Header (icon · "AI Fields · N" · Reviewed · model)              │
+//   ├─────────────────────────────────────────────────────────────────┤
+//   │ ✦ Summary                                                       │
+//   │ AI summary, 2-3 lines, coral-tinted hero strip                  │
+//   ├─────────────────────────────────────────────────────────────────┤
+//   │ ✎ Reply Suggestion                                              │
+//   │ Markdown draft, dashed accent border, copy-to-clipboard          │
+//   ├─────────────────────────────────────────────────────────────────┤
+//   │ Priority · Action · Sender · Category · Project · Urgency       │
+//   │ (3-col grid, mockup divider style)                              │
+//   └─────────────────────────────────────────────────────────────────┘
+//
+// Data feed:
+//   ai_summary           — LLM labels_json key (was already wired)
+//   reply_suggestion_md  — LLM labels_json key.  store.py used to pop
+//                          this before saving the audit blob; round 8
+//                          stopped stripping it so it survives into
+//                          email.aiFields.labels_raw.
+//
+// Field-name discovery (kept from round 6 / 7 — labels_json key audit):
+//   sqlite3 data/sync_store.db "SELECT DISTINCT json_each.key FROM
+//   llm_processing, json_each(labels_json)"
 
-import { Cpu, ExternalLink, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { BadgeCheck, ClipboardCheck, Clock, Copy, Cpu, MessageSquare, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import type { AIFields, AIPriority } from '@shared/api/types'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
+import type { AIFields, AIPriority } from '@shared/api/types'
 
 interface Props {
   fields: AIFields
@@ -40,191 +61,228 @@ const PRIORITY_LABEL: Record<AIPriority, string> = {
   low: 'Low'
 }
 
-function Cell({
-  label,
-  children,
-  span
-}: {
+function pickString(raw: Record<string, unknown> | null, key: string): string | null {
+  if (!raw) return null
+  const v = raw[key]
+  return typeof v === 'string' && v.trim().length > 0 ? v : null
+}
+
+interface CellSpec {
   label: string
-  children: React.ReactNode
-  span?: 1 | 2
-}): React.ReactElement {
+  value: React.ReactNode
+}
+
+function GridCell({ label, value }: CellSpec): React.ReactElement {
   return (
-    <div className={cn('px-4 py-3 bg-ink-3', span === 2 && 'col-span-2')}>
+    <div className="aif-cell px-4 py-2 bg-ink-3">
       <div
-        className="text-micro font-mono uppercase text-ink-fg-2"
+        className="text-micro font-mono uppercase tracking-wider text-ink-fg-2"
         style={{ letterSpacing: '0.08em' }}
       >
         {label}
       </div>
-      <div className="mt-1 text-aux">{children}</div>
+      <div className="mt-1 text-aux text-ink-fg-1 leading-snug">{value}</div>
     </div>
   )
 }
 
-function Placeholder(): React.ReactElement {
-  return <span className="text-ink-fg-3">—</span>
-}
-
-function YesNo({
-  value,
-  yesTone = 'text-ok'
-}: {
-  value: boolean
-  yesTone?: string
-}): React.ReactElement {
+// Reply Suggestion content is markdown the LLM wrote (see
+// llm_agent/processor.py:185 prompt — "`reply_suggestion_md` 仅在
+// action_required=true 时填"). We render it preformatted so the user
+// sees the source they can paste/edit, with a one-click copy button.
+function ReplyDraftHero({ markdown }: { markdown: string }): React.ReactElement {
+  const [copied, setCopied] = useState(false)
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(markdown)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1400)
+    } catch {
+      // Clipboard may be denied in sandbox; the textarea below stays
+      // selectable so the user can ⌘C manually.
+    }
+  }
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 text-aux font-medium',
-        value ? yesTone : 'text-ink-fg-3'
-      )}
+    <div
+      className="aif-reply px-4 py-2.5 border-b border-ink-border"
+      style={{
+        background: 'rgb(var(--c-accent) / 0.04)',
+        boxShadow: 'inset 0 0 0 1px rgb(var(--c-accent) / 0.12)'
+      }}
     >
-      <span
+      <div className="flex items-center gap-2 mb-1">
+        <MessageSquare size={11} strokeWidth={2.25} className="text-coral" />
+        <span
+          className="text-micro font-mono uppercase tracking-wider text-coral"
+          style={{ letterSpacing: '0.08em' }}
+        >
+          Reply Suggestion
+        </span>
+        <button
+          type="button"
+          onClick={copy}
+          aria-label="Copy reply draft"
+          className={cn(
+            'ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded',
+            'text-[10px] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+            'transition-colors duration-fast'
+          )}
+        >
+          {copied ? (
+            <ClipboardCheck size={10} strokeWidth={2.25} />
+          ) : (
+            <Copy size={10} strokeWidth={2.25} />
+          )}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre
         className={cn(
-          'inline-block w-1.5 h-1.5 rounded-full',
-          value ? yesTone.replace('text-', 'bg-') : 'bg-ink-fg-3'
+          'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
+          // Sprint 14 round 14 — no max-height / inner scrollbar; the
+          // outer email-pane container is the single scroll surface,
+          // long replies push the rest of the page down.  User: "邮件
+          // 标题、元数据、AI Field、正文内容应该在一个页面,用一个滚动条".
         )}
-      />
-      {value ? 'Yes' : 'No'}
-    </span>
+      >
+        {markdown}
+      </pre>
+    </div>
   )
 }
 
 export function AIFieldsBlock({ fields }: Props): React.ReactElement {
+  const raw = fields.labels_raw
   const reviewed = fields.ai_review_status === 'reviewed'
+  const pending = fields.ai_review_status === 'pending'
+
+  const summary = pickString(raw, 'ai_summary') ?? pickString(raw, 'summary')
+  const replyMarkdown =
+    pickString(raw, 'reply_suggestion_md') ?? pickString(raw, 'reply_suggestion')
+  const category = pickString(raw, 'category')
+  const project = pickString(raw, 'related_project') ?? pickString(raw, 'project')
+  const senderPriority = pickString(raw, 'sender_priority')
+  const urgencyReason = pickString(raw, 'urgency_reason')
+  const model = pickString(raw, 'model')
+  const actionLabel = actionLabelChinese(fields.ai_action)
+
+  // Secondary classifiers — keep the grid mockup-faithful but trimmed
+  // to the high-signal cells the user actually reads.
+  const cells: CellSpec[] = []
+  if (fields.ai_priority) {
+    cells.push({
+      label: 'Priority',
+      value: (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 font-medium',
+            PRIORITY_TONE[fields.ai_priority]
+          )}
+        >
+          <span className={cn('w-1.5 h-1.5 rounded-full', PRIORITY_DOT[fields.ai_priority])} />
+          {PRIORITY_LABEL[fields.ai_priority]}
+        </span>
+      )
+    })
+  }
+  if (actionLabel) {
+    cells.push({ label: 'Action', value: <span className="text-ink-fg">{actionLabel}</span> })
+  }
+  if (senderPriority) {
+    cells.push({
+      label: 'Sender Priority',
+      value: (
+        <span className="inline-flex items-center gap-1.5 text-impt">
+          <span className="w-1.5 h-1.5 rounded-full bg-impt" />
+          {senderPriority}
+        </span>
+      )
+    })
+  }
+  if (category) cells.push({ label: 'Category', value: category })
+  if (project) cells.push({ label: 'Project', value: project })
+  if (urgencyReason) {
+    cells.push({
+      label: 'Urgency Reason',
+      value: <span className="text-urg">{urgencyReason}</span>
+    })
+  }
+
+  // Total non-empty count surfaced in the header pill.
+  const nonNullCount = cells.length + (summary ? 1 : 0) + (replyMarkdown ? 1 : 0)
+  const padCount = cells.length % 3 === 0 ? 0 : 3 - (cells.length % 3)
+
   return (
-    <section aria-label="ai-fields" className="rounded-lg border border-ink-border overflow-hidden">
-      {/* Header strip */}
-      <div className="px-4 py-2 bg-ink-2 border-b border-ink-border flex items-center justify-between">
+    <section
+      aria-label="ai-fields"
+      className="ai-fields rounded-lg border border-ink-border overflow-hidden"
+    >
+      {/* Header — icon + "AI Fields · N" + reviewed chip + model name.
+          Sprint 14 round 20: tighter — py-2 → py-1.5, chip dropped one
+          step to text-[10px], BadgeCheck/Clock icons 10→8px so the
+          whole strip reads as a single thin caption bar. */}
+      <div className="px-4 py-1.5 bg-ink-2 border-b border-ink-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={12} strokeWidth={2} className="text-info" />
           <span
-            className="text-meta font-mono uppercase text-ink-fg-1"
+            className="text-meta font-mono uppercase tracking-wider text-ink-fg-1"
             style={{ letterSpacing: '0.06em' }}
           >
-            AI Fields · 8
+            AI Fields · {nonNullCount}
           </span>
-          {fields.ai_review_status && (
+          {(reviewed || pending) && (
             <span
               className={cn(
-                'text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border',
-                reviewed ? 'text-ok bg-ok/12 border-ok/30' : 'text-warn bg-warn/12 border-warn/30'
+                'inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide',
+                'leading-none px-1.5 py-[3px] rounded',
+                reviewed ? 'text-ok bg-ok/12' : 'text-warn bg-warn/12'
               )}
             >
+              {reviewed ? (
+                <BadgeCheck size={9} strokeWidth={2.25} />
+              ) : (
+                <Clock size={9} strokeWidth={2.25} />
+              )}
               {reviewed ? 'Reviewed' : 'Pending'}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 text-meta font-mono text-ink-fg-2">
-          <Sparkles size={11} strokeWidth={2} className="text-ai" />
-          <span>{fields.labels_raw?.model ? String(fields.labels_raw.model) : 'no run'}</span>
-        </div>
+        {model && <div className="text-meta font-mono text-ink-fg-1">{model}</div>}
       </div>
 
-      {/* Grid · gap-px on bg-ink-border creates 1px hairlines between cells */}
-      <div className="grid grid-cols-3 gap-px bg-ink-border">
-        <Cell label="AI Priority">
-          {fields.ai_priority ? (
+      {/* Summary hero — coral-tinted strip.  This is the single sentence
+          the user reads first to decide whether to open the body. */}
+      {summary && (
+        <div
+          className="aif-summary px-4 py-2 border-b border-ink-border"
+          style={{ background: 'rgb(var(--c-accent) / 0.06)' }}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <Sparkles size={11} strokeWidth={2.25} className="text-coral" />
             <span
-              className={cn(
-                'inline-flex items-center gap-1.5 font-medium',
-                PRIORITY_TONE[fields.ai_priority]
-              )}
+              className="text-micro font-mono uppercase tracking-wider text-coral"
+              style={{ letterSpacing: '0.08em' }}
             >
-              <span className={cn('w-1.5 h-1.5 rounded-full', PRIORITY_DOT[fields.ai_priority])} />
-              {PRIORITY_LABEL[fields.ai_priority]}
+              Summary
             </span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="AI Action">
-          {actionLabelChinese(fields.ai_action) ? (
-            <span className="text-ink-fg">{actionLabelChinese(fields.ai_action)}</span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Review Status">
-          {fields.ai_review_status ? (
-            <span className={cn('font-medium', reviewed ? 'text-ok' : 'text-warn')}>
-              {reviewed ? 'Reviewed' : 'Pending'}
-            </span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Sentiment">
-          {fields.sentiment ? (
-            <span className="text-ink-fg">{fields.sentiment}</span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Processing Status">
-          {fields.processing_status ? (
-            <span className="text-ink-fg">{fields.processing_status}</span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Mailbox">
-          {fields.mailbox ? (
-            <span className="inline-flex items-center gap-1.5 text-ink-fg">
-              <span className="w-1.5 h-1.5 rounded-full bg-coral/100" />
-              {fields.mailbox}
-            </span>
-          ) : (
-            <Placeholder />
-          )}
-        </Cell>
-
-        <Cell label="Is Read">
-          <YesNo value={fields.is_read} />
-        </Cell>
-
-        <Cell label="Is Flagged">
-          <YesNo value={fields.is_flagged} yesTone="text-urg" />
-        </Cell>
-      </div>
-
-      {/* Footer link — if labels_raw has cost info, surface it as mockup line 962-970 does */}
-      {fields.labels_raw && (
-        <div className="px-4 py-2 bg-ink-2 border-t border-ink-border flex items-center justify-between text-meta font-mono text-ink-fg-2">
-          <div className="flex items-center gap-3">
-            {typeof fields.labels_raw.input_tokens === 'number' && (
-              <span>
-                in{' '}
-                <span className="text-ink-fg-1 tabular-nums">{fields.labels_raw.input_tokens}</span>
-              </span>
-            )}
-            {typeof fields.labels_raw.output_tokens === 'number' && (
-              <span>
-                out{' '}
-                <span className="text-ink-fg-1 tabular-nums">
-                  {fields.labels_raw.output_tokens}
-                </span>
-              </span>
-            )}
-            {typeof fields.labels_raw.latency_ms === 'number' && (
-              <span>{fields.labels_raw.latency_ms}ms</span>
-            )}
           </div>
-          {typeof fields.labels_raw.daily_digest_date === 'string' && (
-            <a
-              href="#"
-              className="text-coral hover:text-coral-hover inline-flex items-center gap-1"
-            >
-              digest {fields.labels_raw.daily_digest_date}
-              <ExternalLink size={10} strokeWidth={2} />
-            </a>
-          )}
+          <div className="text-aux text-ink-fg leading-snug">{summary}</div>
+        </div>
+      )}
+
+      {/* Reply Suggestion hero — accent-ringed draft card with copy. */}
+      {replyMarkdown && <ReplyDraftHero markdown={replyMarkdown} />}
+
+      {/* 3-col secondary grid — bg-ink-border gutter + bg-ink-3 cells. */}
+      {cells.length > 0 && (
+        <div className="grid grid-cols-3 gap-px bg-ink-border">
+          {cells.map((cell, idx) => (
+            <GridCell key={`${cell.label}-${idx}`} {...cell} />
+          ))}
+          {padCount > 0 &&
+            Array.from({ length: padCount }).map((_, i) => (
+              <div key={`pad-${i}`} className="bg-ink-3" aria-hidden />
+            ))}
         </div>
       )}
     </section>

@@ -1,21 +1,55 @@
 // Sprint 4 §6 — chat message list. Renders user / assistant / tool / system
 // rows per DESIGN.md §6.2-§6.5. Inlines the bubble + tool-row + draft-card
 // components since none of them are reused outside the panel.
+//
+// V1 redesign (Sprint 10 polish): DraftPreviewCard adopts the mockup's
+// three-section shape (mockup-inbox.html lines 1278-1304): mono header
+// strip with recipient, body region, footer button row with bg tints —
+// far more visual weight than a single bordered <div> can carry.
+// Assistant messages additionally render a per-message footer row
+// (regenerate / copy / 转 Notion) per DESIGN.md §6.2.
 
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckCheck, ExternalLink, Loader2, RotateCcw, Sparkles, X } from 'lucide-react'
+import { Bookmark, Copy, ExternalLink, Loader2, RotateCcw, Send, Sparkles, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { toastSuccess } from '@shared/state/toast'
+import { HoverTip } from '@shared/components/ui/HoverTip'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import type { ChatMessage } from '@shared/api/types'
+
+/** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
+ *  handlers; if a panel doesn't (e.g. read-only conversation viewer), the
+ *  card renders the buttons as data-disabled with a HoverTip explaining
+ *  why (matches DESIGN.md §9.4 disabled treatment). */
+export interface DraftHandlers {
+  /** Open a Mail.app reply draft populated with `body`. AIChatPanel wires
+   *  this to `mailApi.email.createDraft({ internalId, body })`. */
+  onSend?: (body: string) => void | Promise<void>
+  /** Re-fire the last user prompt that produced this draft. AIChatPanel
+   *  wires this to `chat.retryLast` when available; null disables the
+   *  button + surfaces the `chat.draftReply.toast.regenPending` hint. */
+  onRegenerate?: (() => void | Promise<void>) | null
+  /** Inline editor — Sprint 14 placeholder. Toast TODO until wired. */
+  onEdit?: () => void
+  /** Popout window — Sprint 14 decision. Toast TODO until wired. */
+  onOpenInWindow?: () => void
+  /** Disable send + show spinner during the IPC round-trip. */
+  isSending?: boolean
+  /** "to: …" header recipient. AIChatPanel resolves from email.to_addr or
+   *  the parsed `from` (reply-to). */
+  recipient?: string | null
+}
 
 interface Props {
   messages: ReadonlyArray<ChatMessage>
   streamingMessageId: number | null
   /** Surface area for the "regenerate" button on the last assistant message. */
   onRegenerate?: () => void
+  /** Sprint 13 — wired by AIChatPanel; flows down to DraftPreviewCard. */
+  draftHandlers?: DraftHandlers
 }
 
 const DRAFT_REPLY_MARKER = /^\s*(?:#+\s*)?DRAFT REPLY\b/i
@@ -46,78 +80,191 @@ function ToolCallRow({ payload }: { payload: ToolPayload }): React.ReactElement 
   const { t } = useTranslation()
   const status = payload.status ?? 'ok'
   const statusLabel = t(`chat.toolCall.${status}`)
-  const dotColor =
-    status === 'running' ? 'bg-urg animate-pulse' : status === 'error' ? 'bg-fail' : 'bg-ok'
+  const dotKlass = status === 'running' ? 'dot-run' : status === 'error' ? 'dot-err' : 'dot-ok'
+  // Sprint 12 — use the authored .ai-tool-row recipe in index.css so the
+  // monospace pill matches mockup-inbox.html lines 2360-2380 verbatim.
   return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-2 px-2 py-0.5 rounded',
-        'text-micro font-mono text-ink-fg-2 bg-ink-4/50'
-      )}
-      title={payload.detail ?? undefined}
-    >
-      <span className="text-info">→</span>
+    <div className="ai-tool-row" title={payload.detail ?? undefined}>
+      <span className={dotKlass} aria-label={statusLabel} />
+      <span className="arrow">→</span>
       <span>{payload.name ?? 'tool'}</span>
       {payload.durationMs !== undefined && (
         <span className="text-ink-fg-3">· {formatMs(payload.durationMs)}</span>
       )}
-      <span className={cn('w-1.5 h-1.5 rounded-full', dotColor)} aria-label={statusLabel} />
     </div>
   )
 }
 
-function DraftPreviewCard({ content }: { content: string }): React.ReactElement {
+function DraftPreviewCard({
+  content,
+  recipient,
+  handlers,
+  isStreaming
+}: {
+  content: string
+  recipient?: string | null
+  handlers?: DraftHandlers
+  /** True while the assistant message is still streaming chunks; send is
+   *  blocked until the draft body settles to avoid creating a partial draft. */
+  isStreaming: boolean
+}): React.ReactElement {
   const { t } = useTranslation()
-  const headerKlass = useCjkMonoSwap('text-micro font-mono uppercase tracking-wider')
-  // Sprint 5 ship-review (codex MEDIUM #2): draft action buttons resolve to
-  // zh-CN strings ('发送' / '重生成' / '编辑') under CJK locale. The text-meta
-  // mono floor (12px) is sub-Chinese-floor per DESIGN.md §1.3 / §14 #2.
-  const actionKlass = useCjkMonoSwap('text-meta font-mono')
   // Strip the DRAFT REPLY header before piping into TranslatedBody so the
   // marker only shows in the card chrome, not twice.
   const body = content
     .replace(DRAFT_REPLY_MARKER, '')
     .replace(/^[#:\s]+/m, '')
     .trim()
+
+  const onSend = handlers?.onSend
+  const onRegenerate = handlers?.onRegenerate
+  const onEdit = handlers?.onEdit
+  const onOpenInWindow = handlers?.onOpenInWindow
+  const isSending = handlers?.isSending === true
+
+  // Send is only enabled once the stream finishes (otherwise the draft body
+  // would be truncated mid-sentence). Backend has no partial-send semantics.
+  const sendDisabled = !onSend || isStreaming || isSending || body.length === 0
+  // Regenerate piggybacks on chat.retryLast — if that's null (no failed
+  // input on file, or no chat instance), surface a HoverTip explanation.
+  const regenDisabled = !onRegenerate || isStreaming || isSending
+  // Edit + popout currently surface "coming in Sprint 14" toasts. The
+  // buttons still render so the layout matches the mockup; HoverTip
+  // explains why they're informational only.
+  const editTipKey = onEdit ? 'chat.draftReply.edit' : 'chat.draftReply.toast.editPending'
+  const popoutTipKey = onOpenInWindow
+    ? 'chat.draftReply.openInWindow'
+    : 'chat.draftReply.toast.popoutPending'
+  const regenTipKey = regenDisabled
+    ? 'chat.draftReply.toast.regenPending'
+    : 'chat.draftReply.regenerate'
+  const sendTipKey = isStreaming
+    ? 'chat.status.streaming'
+    : isSending
+      ? 'chat.draftReply.sending'
+      : !onSend
+        ? 'chat.draftReply.toast.sendFailNoBin'
+        : 'chat.draftReply.send'
+
+  // Sprint 12 — .draft-card recipe (coral ring + faint glow + glass bg)
+  // lives in index.css so the chrome reads as the AI's headline output.
   return (
-    <div
-      className={cn('rounded-md p-3 my-2', 'border border-coral/30 ring-2 ring-coral/5 bg-ink-3')}
-    >
-      <div className="flex items-center gap-2 mb-2">
-        <Sparkles size={12} strokeWidth={2} className="text-coral" />
-        <span className={cn(headerKlass, 'text-coral font-medium')}>
-          {t('chat.draftReply.header')}
+    <div className="draft-card my-2">
+      {/* Header — mono "DRAFT REPLY" caption + recipient */}
+      <div
+        className={cn(
+          'px-3 py-2 border-b border-ink-border-soft bg-ink-2/40',
+          'flex items-center justify-between'
+        )}
+      >
+        <div className="flex items-center gap-1.5">
+          <Sparkles size={11} strokeWidth={0} className="fill-coral text-coral" />
+          <span className="text-meta font-mono uppercase tracking-wider text-ink-fg-1">
+            {/* mockup hard-codes EN "Draft Reply" — keep the chrome caption
+                English-mono regardless of locale so the 12px floor is on-spec */}
+            DRAFT REPLY
+          </span>
+        </div>
+        <span className="text-meta font-mono text-ink-fg-2 truncate max-w-[180px]">
+          {recipient ? `to: ${recipient}` : 'to: —'}
         </span>
       </div>
-      <TranslatedBody text={body} />
-      <div className={cn('mt-3 flex items-center gap-2', actionKlass)}>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-coral/100 text-accent-fg hover:bg-coral-hover transition-colors duration-fast"
-        >
-          <CheckCheck size={11} strokeWidth={2} />
-          {t('chat.draftReply.send')}
-        </button>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-ink-fg-1 hover:bg-ink-4 transition-colors duration-fast"
-        >
-          <RotateCcw size={11} strokeWidth={2} />
-          {t('chat.draftReply.regenerate')}
-        </button>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-ink-fg-1 hover:bg-ink-4 transition-colors duration-fast"
-        >
-          {t('chat.draftReply.edit')}
-        </button>
-        <button
-          type="button"
-          className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg-1 transition-colors duration-fast"
-          aria-label={t('chat.draftReply.openInWindow')}
-        >
-          <ExternalLink size={11} strokeWidth={2} />
-        </button>
+
+      {/* Body */}
+      <div className="px-3 py-2.5 text-aux text-ink-fg space-y-2 bg-ink-3">
+        <TranslatedBody text={body} />
+      </div>
+
+      {/* Footer — coral primary action + secondary text buttons. Each button
+          is HoverTip-wrapped so the disabled-reason or shortcut is always
+          one cursor-rest away. */}
+      <div
+        className={cn(
+          'px-3 py-2 border-t border-ink-border-soft bg-ink-2/40',
+          'flex items-center gap-2'
+        )}
+      >
+        <HoverTip text={t(sendTipKey)} side="top">
+          <button
+            type="button"
+            onClick={onSend ? () => void onSend(body) : undefined}
+            disabled={sendDisabled}
+            aria-label={t('chat.draftReply.send')}
+            data-disabled={sendDisabled ? '' : undefined}
+            tabIndex={sendDisabled ? -1 : 0}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded',
+              'text-aux text-accent-fg bg-coral/100 hover:bg-coral-hover',
+              'transition-colors duration-fast',
+              'disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+          >
+            {isSending ? (
+              <Loader2 size={11} strokeWidth={2.5} className="animate-spin" />
+            ) : (
+              <Send size={11} strokeWidth={2.5} />
+            )}
+            {isSending ? t('chat.draftReply.sending') : t('chat.draftReply.send')}
+          </button>
+        </HoverTip>
+
+        <HoverTip text={t(regenTipKey)} side="top">
+          <button
+            type="button"
+            onClick={onRegenerate ? () => void onRegenerate() : undefined}
+            disabled={regenDisabled}
+            aria-label={t('chat.draftReply.regenerate')}
+            data-disabled={regenDisabled ? '' : undefined}
+            tabIndex={regenDisabled ? -1 : 0}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-aux',
+              'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+              'transition-colors duration-fast',
+              'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
+            )}
+          >
+            <RotateCcw size={11} strokeWidth={2} />
+            {t('chat.draftReply.regenerate')}
+          </button>
+        </HoverTip>
+
+        <HoverTip text={t(editTipKey)} side="top">
+          <button
+            type="button"
+            onClick={onEdit ?? undefined}
+            disabled={!onEdit}
+            aria-label={t('chat.draftReply.edit')}
+            data-disabled={!onEdit ? '' : undefined}
+            tabIndex={!onEdit ? -1 : 0}
+            className={cn(
+              'inline-flex items-center px-2 py-1.5 rounded text-aux',
+              'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+              'transition-colors duration-fast',
+              'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
+            )}
+          >
+            {t('chat.draftReply.edit')}
+          </button>
+        </HoverTip>
+
+        <HoverTip text={t(popoutTipKey)} side="top" className="ml-auto">
+          <button
+            type="button"
+            onClick={onOpenInWindow ?? undefined}
+            disabled={!onOpenInWindow}
+            aria-label={t('chat.draftReply.openInWindow')}
+            data-disabled={!onOpenInWindow ? '' : undefined}
+            tabIndex={!onOpenInWindow ? -1 : 0}
+            className={cn(
+              'inline-flex items-center px-2 py-1.5 rounded text-aux',
+              'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
+              'transition-colors duration-fast',
+              'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-2'
+            )}
+          >
+            <ExternalLink size={11} strokeWidth={2} />
+          </button>
+        </HoverTip>
       </div>
     </div>
   )
@@ -129,7 +276,7 @@ function UserBubble({ content }: { content: string }): React.ReactElement {
       <div
         className={cn(
           'max-w-[85%] rounded-lg rounded-br-sm px-3 py-2',
-          'bg-ink-4 text-ink-fg text-body whitespace-pre-wrap break-words'
+          'bg-ink-4 text-ink-fg text-body whitespace-pre-wrap break-words leading-snug'
         )}
       >
         {content}
@@ -138,12 +285,52 @@ function UserBubble({ content }: { content: string }): React.ReactElement {
   )
 }
 
+function AssistantMessageFooter(): React.ReactElement {
+  const { t } = useTranslation()
+  // V1 placeholders — IPC wiring lands in V1.5. Each button toasts "即将上线".
+  const soon = (): void => {
+    toastSuccess(t('shortcutHelp.soon'))
+  }
+  return (
+    <div className="flex items-center gap-2 pt-1 text-meta font-mono text-ink-fg-2">
+      <button
+        type="button"
+        onClick={soon}
+        className="inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast"
+      >
+        <RotateCcw size={11} strokeWidth={2} />
+        {t('chat.draftReply.regenerate')}
+      </button>
+      <span className="text-ink-fg-3">·</span>
+      <button
+        type="button"
+        onClick={soon}
+        className="inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast"
+      >
+        <Copy size={11} strokeWidth={2} />
+        {t('chat.messageActions.copy')}
+      </button>
+      <span className="text-ink-fg-3">·</span>
+      <button
+        type="button"
+        onClick={soon}
+        className="inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast"
+      >
+        <Bookmark size={11} strokeWidth={2} />
+        {t('chat.messageActions.toNotion')}
+      </button>
+    </div>
+  )
+}
+
 function AssistantBubble({
   message,
-  isStreaming
+  isStreaming,
+  draftHandlers
 }: {
   message: ChatMessage
   isStreaming: boolean
+  draftHandlers?: DraftHandlers
 }): React.ReactElement {
   const { t } = useTranslation()
   // Empty + streaming: render the thinking pulse instead of an empty bubble.
@@ -173,15 +360,75 @@ function AssistantBubble({
       </div>
     )
   }
-  if (DRAFT_REPLY_MARKER.test(message.content)) {
-    return <DraftPreviewCard content={message.content} />
-  }
-  return (
-    <div className="text-body text-ink-fg leading-relaxed">
-      <TranslatedBody text={message.content || ' '} />
-      {isStreaming && (
-        <span className="inline-block ml-0.5 w-1.5 h-3.5 -mb-0.5 bg-coral/60 animate-pulse" />
+
+  // Sprint 13 fix — header reads real ChatMessage fields (model / cost_usd /
+  // token counts) instead of a stale `metadata.model` object that was never
+  // populated. mockup L2351-2357 + L2447-2452: "Notion Agent · Jarvis · 2.4s
+  // · $0.0034" / "Notion Agent · drafting…  ·  1.1s · streaming".
+  const model = message.model
+  const costUsd = message.cost_usd
+  const totalTokens =
+    (message.tokens_input ?? 0) + (message.tokens_output ?? 0) > 0
+      ? (message.tokens_input ?? 0) + (message.tokens_output ?? 0)
+      : null
+  const showHeader = Boolean(model || isStreaming)
+  const headerMeta = (
+    <>
+      {/* Sprint 13 — Loader2 spinner during streaming (mockup L2448 path
+          shape), Sparkles ✦ when complete (mockup L2353). Mixing a star
+          icon with `animate-spin` reads as a glitch rather than progress. */}
+      {isStreaming ? (
+        <Loader2 size={11} strokeWidth={2.5} className="text-coral shrink-0 animate-spin" />
+      ) : (
+        <Sparkles size={11} strokeWidth={0} className="text-coral fill-coral shrink-0" />
       )}
+      <span>{isStreaming ? t('chat.status.streaming') : (model ?? 'AI')}</span>
+      {totalTokens !== null && (
+        <>
+          <span className="text-ink-fg-3">·</span>
+          <span className="tabular-nums">{totalTokens.toLocaleString()}t</span>
+        </>
+      )}
+      {costUsd !== null && costUsd > 0 && (
+        <>
+          <span className="text-ink-fg-3">·</span>
+          <span className="tabular-nums">${costUsd.toFixed(4)}</span>
+        </>
+      )}
+    </>
+  )
+
+  if (DRAFT_REPLY_MARKER.test(message.content)) {
+    return (
+      <div className="space-y-2">
+        {showHeader && (
+          <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+            {headerMeta}
+          </div>
+        )}
+        <DraftPreviewCard
+          content={message.content}
+          recipient={draftHandlers?.recipient ?? null}
+          handlers={draftHandlers}
+          isStreaming={isStreaming}
+        />
+        {!isStreaming && <AssistantMessageFooter />}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {showHeader && (
+        <div className="flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
+          {headerMeta}
+        </div>
+      )}
+      <div className="text-body text-ink-fg leading-relaxed">
+        <TranslatedBody text={message.content || ' '} />
+        {isStreaming && <span className="cursor-blink" aria-hidden />}
+      </div>
+      {!isStreaming && <AssistantMessageFooter />}
     </div>
   )
 }
@@ -199,7 +446,11 @@ const MAX_RENDERED_MESSAGES = 40
  *  review (opus L carry-forward). */
 const AUTO_SCROLL_BAND_PX = 80
 
-export function MessageList({ messages, streamingMessageId }: Props): React.ReactElement {
+export function MessageList({
+  messages,
+  streamingMessageId,
+  draftHandlers
+}: Props): React.ReactElement {
   const { t } = useTranslation()
   // (opus M) CJK-safe class for the truncated / system divider strings —
   // both resolve to Chinese under zh-CN locale and would otherwise render
@@ -246,7 +497,11 @@ export function MessageList({ messages, streamingMessageId }: Props): React.Reac
     } else if (m.role === 'assistant') {
       rendered.push(
         <div key={m.id} className="px-3">
-          <AssistantBubble message={m} isStreaming={m.id === streamingMessageId} />
+          <AssistantBubble
+            message={m}
+            isStreaming={m.id === streamingMessageId}
+            draftHandlers={draftHandlers}
+          />
         </div>
       )
     } else if (m.role === 'tool') {
@@ -259,9 +514,12 @@ export function MessageList({ messages, streamingMessageId }: Props): React.Reac
         )
       }
     } else if (m.role === 'system') {
+      // Sprint 12 — flanked-hairline divider per mockup-inbox.html line 2337.
       rendered.push(
-        <div key={m.id} className="px-3 py-2 text-center">
-          <span className={cn(dividerKlass, 'text-ink-fg-3')}>{m.content}</span>
+        <div key={m.id} className="px-3 py-1 flex items-center gap-2">
+          <div className="flex-1 h-px bg-ink-border-soft" />
+          <span className={cn(dividerKlass, 'text-ink-fg-3 shrink-0')}>{m.content}</span>
+          <div className="flex-1 h-px bg-ink-border-soft" />
         </div>
       )
     }

@@ -20,16 +20,40 @@
 
 import { execa, type ResultPromise, type Result } from 'execa'
 import { app } from 'electron'
+import { existsSync } from 'fs'
+import { homedir } from 'os'
+import { join } from 'path'
 
 import { Semaphore } from './sem'
 import { getCliApiKey } from './keychain'
 import { whichSync } from './bin_resolver'
 
 // Resolved lazily on first call. The CLI is shipped by `pip install -e .[cli]`
-// (project CLAUDE.md "CLI" section). If it's missing the app should *say so*
-// loudly with an actionable hint rather than fall back to a bare PATH lookup
-// that surfaces as a confusing ENOENT mid-IPC.
+// (project CLAUDE.md "CLI" section). Electron's GUI process inherits launchd
+// PATH (not the user shell's PATH), so the project's `venv/bin/mailagent`
+// isn't visible to `which`. Resolution order:
+//   1. $MAILAGENT_BIN (explicit override)
+//   2. <projectRoot>/venv/bin/mailagent — derived from db.ts's
+//      `~/Documents/MailAgent/...` default, matching the dev layout
+//   3. PATH lookup via `which`
 let _binCache: string | null = null
+
+function projectVenvBin(): string {
+  // Mirror db.ts's project-root default; users following the README clone
+  // into ~/Documents/MailAgent and `pip install -e .[cli]` lands the CLI
+  // under venv/bin. Override via MAILAGENT_BIN for any non-default layout.
+  return join(homedir(), 'Documents', 'MailAgent', 'venv', 'bin', 'mailagent')
+}
+
+/** Project root for the CLI's working directory — the path that contains
+ *  `.env`, which pydantic's BaseSettings reads at import time. Same default
+ *  layout as `projectVenvBin()` / db.ts; override via $MAILAGENT_PROJECT_ROOT. */
+export function getProjectRoot(): string {
+  const fromEnv = process.env['MAILAGENT_PROJECT_ROOT']
+  if (fromEnv && fromEnv.length > 0) return fromEnv
+  return join(homedir(), 'Documents', 'MailAgent')
+}
+
 export function getMailagentBin(): string {
   if (_binCache !== null) return _binCache
   const fromEnv = process.env['MAILAGENT_BIN']
@@ -37,12 +61,18 @@ export function getMailagentBin(): string {
     _binCache = fromEnv
     return _binCache
   }
+  const venvBin = projectVenvBin()
+  if (existsSync(venvBin)) {
+    _binCache = venvBin
+    return _binCache
+  }
   const found = whichSync('mailagent', { nothrow: true })
   if (!found) {
     throw new CliError(
       'E_NO_BIN',
       -1,
-      'mailagent CLI not on PATH. Install with `pip install -e .[cli]` or set MAILAGENT_BIN.'
+      `mailagent CLI not found. Tried $MAILAGENT_BIN, ${venvBin}, and PATH. ` +
+        'Install with `pip install -e .[cli]` or set MAILAGENT_BIN.'
     )
   }
   _binCache = found
@@ -138,6 +168,12 @@ class CliQueue {
       buffer: true,
       lines: false,
       all: false,
+      // Run the CLI from the project root so pydantic's BaseSettings picks
+      // up `.env` (NOTION_TOKEN / EMAIL_DATABASE_ID / USER_EMAIL — required
+      // fields). Electron's app cwd is the .app bundle in production, not
+      // the repo; without this the CLI dies in `Config()` before reaching
+      // typer and surfaces as exit=1 / E_GENERIC with a python traceback.
+      cwd: getProjectRoot(),
       env: { ...process.env }
     })
     this.inFlight.add(sub)

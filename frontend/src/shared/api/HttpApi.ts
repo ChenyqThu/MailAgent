@@ -26,12 +26,20 @@ export class HttpApi implements MailApi {
     // Sprint 5 §2.2 — V2 web build has no Mail.app on the remote host, so
     // createDraft must round-trip through the local FastAPI which then runs
     // osascript on the LAN host. Wired in V2-Sprint 3.
-    createDraft: () => notImplemented('email.createDraft')
+    createDraft: () => notImplemented('email.createDraft'),
+    pin: () => notImplemented('email.pin'),
+    listPinnedIds: () => notImplemented('email.listPinnedIds'),
+    // Sprint 15 §3.3 — SSoT inversion. V2 will proxy through the local
+    // FastAPI which then forks the `mailagent email flag` CLI on the Mac
+    // host (same write path as Electron build), so all mutating semantics
+    // stay on the host process. Wired in V2-Sprint 3.
+    flag: () => notImplemented('email.flag')
   }
 
   attachment = {
     list: () => notImplemented('attachment.list'),
-    localPath: () => notImplemented('attachment.localPath')
+    localPath: () => notImplemented('attachment.localPath'),
+    readDataUrl: () => notImplemented('attachment.readDataUrl')
   }
 
   ai = {
@@ -108,6 +116,17 @@ export class HttpApi implements MailApi {
     download: () => notImplemented('updater.download'),
     quitAndInstall: () => notImplemented('updater.quitAndInstall'),
     onEvent: (): (() => void) => () => undefined
+  }
+
+  // Sprint 16 §SSE — events bridge stub.
+  // V2 web build 后续会接 cloudflared 映射的 mail-sync 本地 9200 SSE endpoint
+  // (浏览器原生 EventSource); 当前 sprint 不接入, 远端纯轮询. status/reconnect
+  // 还有意义 (前端能 polling fallback); onEvent/onStatus 返回 noop unsubscribe.
+  events = {
+    status: () => notImplemented('events.status'),
+    reconnect: () => notImplemented('events.reconnect'),
+    onEvent: (): (() => void) => () => undefined,
+    onStatus: (): (() => void) => () => undefined
   }
 
   // Sprint 9 §2.3 — ping-island bridge lives on the Mac host. From a remote

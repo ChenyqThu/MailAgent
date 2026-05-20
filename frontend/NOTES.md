@@ -6,6 +6,49 @@
 
 ## TODO
 
+- 2026-05-20 — **Sprint 14 · Outlook-style 同线程邮件折叠 — ✅ ship round 8**
+  ThreadBundle.tsx 落地 (`src/shared/components/email/ThreadBundle.tsx`).
+  在 EmailDetail.tsx AttachmentList 之后挂载 (thread_id 非 null 时).
+  listByThread IPC 拉同 thread 邮件 → 过滤 currentInternalId → 按
+  date_received DESC 排. 每条 ThreadItem 默认折叠 (发件人 / 主题 / 时间)
+  点击展开按需 fetch email.get 拿到 attachments + body, 嵌入 EmailBodyFrame.
+  Bundle header 提供"全部展开 / 全部收起". i18n thread.bundleTitle /
+  bundleSummary / expandAll / collapseAll / loading 加在现有 thread.*
+  namespace 下 (zh + en).
+- 2026-05-20 — **内联图片不显示 — ✅ Sprint 14 round 17 + 18 已修**
+  原诊断 (2026-05-20 早些) 怀疑 `email_attachment.content_id` 全占位 GUID 是
+  根因, 实际是误判 (那个 GUID 只是单一邮件的占位, 抽样邮件如 53830 的
+  content_id 是正确的 `image001.png@01DCE7A0.E52EB7A0`).
+  真根因 (round 17/18 各修一半):
+  (round 17) backend `src/repository/storage_payload_builder.py:_rewrite_cid
+  _to_local` 在落库前把 body_html 里的 `<img src="cid:xxx">` 改成
+  `<img src="attachments/<id>/<file>">` 相对路径. 前端 EmailBodyFrame 只 hook
+  了 `cid:` 重写, 对 `attachments/...` 相对路径不动 → 浏览器在 srcdoc iframe
+  内 fetch 相对路径同源解析失败 → 破图. 加第二段 regex rewrite 命中
+  `attachments/<internalId>/<file>` 形, 按 filename 在 byBaseName 内换成
+  data: URL.
+  (round 18) 但 round 17 ship 时图片仍不显示, 真挖到底是
+  `frontend/src/electron/main/handlers/attachment.ts:readAttachmentAsDataUrl`
+  用 `readFile(row.local_path)` 直接传 SQLite 里存的相对路径
+  "data/attachments/<id>/<file>". Electron main process 的 cwd 不是 project
+  root (生产 .app bundle, dev 是别处), readFile ENOENT → catch null →
+  前端 dataUrl 拿不到 → byBaseName 空 → rewrite 找不到 url → 破图. 修:
+  resolve 成绝对路径 `dirname(dirname(resolveDbPath())) + local_path` 再读.
+  node 脚本真验过 readFile 拿到 139657 bytes.
+- 2026-05-19 — **Strategic / 系列化改动** — 当前 EmailRow flag 三态切换走 `mailApi.notion.updateFlag(...)` →
+  `mailagent notion update-flag <id> ...` CLI → **Notion `Is Read` / `Is Flagged` / `Processing Status` 字段更新** → Notion
+  automation webhook → Redis 队列 → `handle_flag_changed` 反向同步到 Mail.app。这个回环（Notion → Mail.app + SQLite）
+  是 v3 时代「Notion 是状态 SSoT」假设下的产物。SQLite v4 SSoT 落地后方向应反转：**所有 mutating 操作都从前端
+  → SQLite → 单向 fanout 到 Mail.app + Notion**，Notion 仅作为只读镜像 + 接口调用触发器（即 Notion 上手改 = 「请求」
+  而非「事实」，依然回 webhook，但 handler 改成「写 SQLite → fanout」而非「直接改 Mail.app」）。涉及面：
+  (a) `notion.updateFlag` IPC → 新增 `email.flag` / `email.updateLocalFlag` IPC，直写 `email_metadata.is_read / is_flagged
+  / processing_status` + 排队两条 fanout job（一个 Mail.app AppleScript，一个 Notion `pages.update`）；
+  (b) `handle_flag_changed` / `handle_completed` / `handle_ai_reviewed` 反向同步 handler 退化成「Notion 端意图通知 →
+  写 SQLite intent」，不再直接调 AppleScript；fanout worker 才是唯一 Mail.app/Notion writer；
+  (c) `notion.updateFlag` 在 EmailRow.tsx:208/211/218/229 + `MessageList.tsx` (drop?) + 任何 createDraft / Quick action
+  callsite 都要切；HttpApi V2 stub 同步改；
+  (d) SyncStore 加 `email_flag_pending`/outbox 表 + Mail.app / Notion fanout idempotency 校验，避免 webhook ↔ outbox
+  循环。 → 这是 SQLite-SSoT 收尾的一大块，要单独立 Sprint。先把 EmailRow 当下 path 标 deprecated 注释，行为不动。
 - 2026-05-17 — `src/shared/types/cli.gen.ts` is gitignored (codegen output); fresh checkout must run `pnpm gen:types` once before `pnpm typecheck` works. Consider wiring it into `postinstall` (alongside `electron-builder install-app-deps`) so new clones never see a typecheck miss.
 - 2026-05-17 — `EmailGet_EmailRecord.cc_addr` schema declares it as required string but the SQLite column is nullable; DAO substitutes `''` for `null`. If a callsite ever needs to distinguish "no CC" from "empty CC string" we'll have to widen the schema. Low priority — Sprint 2 EmailDetail just renders the string.
 - 2026-05-17 — `notion_url` is built as `https://www.notion.so/<id-no-dashes>` because the workspace prefix is private. Sprint 6 SettingsPage should let the user set a workspace-scoped prefix (`/omadanetworks/...`) for direct deep-links.
@@ -103,3 +146,28 @@
   - **(opus Nit)** `EmailToolbar.ResyncConfirmDialog` Tab focus-trap only handles 3-button boundary case; adding a 4th button breaks the trap. Switch to `react-focus-lock` OR collect focusables via querySelectorAll. **File**: `EmailToolbar.tsx:253-264`.
   - **(opus Nit)** `Sidebar.tsx` hard-codes 8 Chinese labels (已标旗 / 所有邮件 / AI 会话历史 / 一键翻译 / 看板 Admin / 日历 / 设置 / 快捷键) — Sprint 7 i18n sweep target. Add `sidebar.*` keys. **File**: `Sidebar.tsx:154,161,181,207,222,228,237,244`.
   - **(opus Nit)** `EmailDetail.tsx:526,598` hard-codes `"在 Notion 打开"` — should use existing `toolbar.openNotion` key. **File**: `EmailDetail.tsx:526,598`.
+- 2026-05-18 — Sprint 10 启动 — Sprint 9 baseline 五绿(Sprint 9 ship 后第一次再跑): `pnpm test` **535 passed | 1 skipped** / `pnpm lint` 0 / `pnpm typecheck` 0 / `pnpm a11y:contrast --strict` 12 组合 clean / `pnpm exec electron-vite build` OK (renderer 1521 kB). git topology reconcile: sprint3/4/5/6/8/9 6 个旧分支删,`sprint10` checkout 自 main (e050f20). 后端 `pm2 restart mail-sync` 触发 DB v6→v7 migration, `mailagent admin health -o json` 验 `db_version=7 healthy=True island_dispatch in tables_present=True`。
+- 2026-05-18 — Sprint 10 — ISLAND-PLUGIN §2.5.4-D mail eventType dispatch 决议: 选定**方案 A** (Python+frontend wire 层把 eventType 一律映射到 ping-island 已识别的 `"Notification"`,原 mail event 名进 `metadata["mailagent.eventType"]`)。落地范围 ~30-45min: backend `src/notify/island_envelope.py:to_wire_dict()` + frontend `src/electron/main/island/envelope.ts:commonShell()` + 6-8 处测试断言(test_island_envelope.py:36 + tests/main/island_envelope.test.ts 4-5 处)。落地时机: ping-island.app 装机 smoke test 验证 fall-back 行为 — 如 `LLMReviewedUrgent`(`waitingForInput`+`expectsResponse:true`) 不展开 Phase 1 / `MailCompleted`(`completed`) 不清 dock icon → 落代码; 如 fall-back 足够 → §2.5.4-D 归档为"无需落代码"。详 [`ISLAND-PLUGIN.md §2.5.4-D`](./ISLAND-PLUGIN.md)。
+- 2026-05-18 — Sprint 10 启动 — Sprint 9 review (opus 4.7 max-effort, **APPROVE-with-follow-ups**, 0 CRITICAL / 0 HIGH / 3 MEDIUM / 6 LOW / 3 Nit) — Sprint 10 Day 1 关:
+  - **(opus MEDIUM #1)** `sender.ts:171-176` `'close'` 默认 resolve `{ok:true, response:null}` 把"接受了但 RST 重置 / 没真 connect"的失败掩成成功 → probe state machine 误报 healthy。Fix: track `connectFired` flag,`'close'` 未见 `'connect'` 且无前置 error 时 settle `{ok:false, reason:'unknown', detail:'closed before connect'}`。**File**: `src/electron/main/island/sender.ts:171-176`。
+  - **(opus MEDIUM #2)** `probe.ts:155-158` `_intervalMs = opts?.intervalMs ?? PROBE_INTERVAL_MS_PROD` 在 `devDisabled` 早返前不会跑(line 141 直接 return)→ 后续 `setIslandEnabled(true)` 调 `startProbeLoop({intervalMs: _intervalMs})` 时 `_intervalMs` 还是初始值;如果未来 caller 传自定义 `intervalMs`(测试用 30s)→ 静默丢。Fix: 在 devDisabled 早返前 capture 或让 setIslandEnabled 接受显式 intervalMs。**File**: `src/electron/main/island/probe.ts:140-158`。
+  - **(opus MEDIUM #3)** `probe.ts:163-168` dev 模式下 `setIslandEnabled(true)` 把 `'dev-disabled'` 清成 `'idle'` 然后启 probe loop — 违反"dev 模式不自动 probe"语义。Fix: 加 `_devDisabled` module-scope latch,`setIslandEnabled(true)` 在 `is.dev` 时保持 dev-disabled state。**File**: `src/electron/main/island/probe.ts:163-168`。
+  - **(opus LOW)** `useEmailChat.ts:265-272` 500ms throttle 漏发最后一个 chunk → island pill 字符数 stale(从 "1.2k chars" 跳 "ready" 而非 "1.4k chars"→"ready")。Fix: AIDraftReady 前补一发 trailing AIDraftStream(final len);或用 `{trailing:true}` throttle。**File**: `src/shared/hooks/useEmailChat.ts:304`。
+  - **(opus LOW)** `useEmailChat.ts:266-274` 跨邮件 stream chunk 泄漏 — 用户切邮件 A→B 时 A 的 chunk 已派发但 `emailIdRef.current` 现在指 B → emit `AIDraftStream({emailId: B, streamedChars: A's_content_length})`。Fix: session start 时 capture emailId(`activeSessionRef`-style),与 chunk 实际所属 email 比对(sessionId equality 也 OK)。**File**: `src/shared/hooks/useEmailChat.ts:266`。
+  - **(opus LOW)** `useEmailChat.ts:307-314` AIDraftStart/Ready 一直传 `{senderName: null, subject: null}` → island card 显 "AI 起草中 / —" 永久。Fix: 从 `useActiveEmail()` 或 email detail query 拉真实 senderName/subject。**File**: `src/shared/hooks/useEmailChat.ts:307-314`。
+  - **(opus LOW)** `sender.ts:69-72` ENV `ISLAND_SOCKET_TIMEOUT` 解析成秒(`parseFloat * 1000`)但常量后缀是 `_MS` + default `3_000`(ms) — 单位混乱;用户设 `ISLAND_SOCKET_TIMEOUT=3000` 期望 3s 会得 3000s。Fix: 改 env 名为 `_SECONDS` 或改成 ms 解析+default `'3000'` + 文档。**File**: `src/electron/main/island/sender.ts:69-72`。
+  - **(opus LOW)** `handlers/island.ts:103-114` envelope send 失败仅 `void` 掉,不反馈 `IslandStatus` → probe 5min 内透明;transient ping-island crash 5min 看不到。Fix(optional): `outcomeToState` 反馈给 setStatus;或文档说明 5min worst case。**File**: `src/electron/main/handlers/island.ts:103-114`。
+  - **(opus LOW)** `probe.ts:140-148` 100ms warm-up `setTimeout` 不可取消;`setIslandEnabled(false)` 在 100ms 内调用,warm-up `probeOnce()` 仍 fire(probeOnce 内 disabled latch short-circuit,实际无害)。Fix(defensive): 跟 warm-up handle,`stopProbeLoop()` 时 clear。**File**: `src/electron/main/island/probe.ts:140-148`。
+  - **(opus LOW)** `appearance.ts:115-122` 主题+accent 双变时 `applyResolvedTheme`+`applyAccent` 双 fire `island:appearance` envelope;ping-island 按 `sessionKey` collapse 无害,但 main process 多 burn 一次 socket connect。Fix(optional): rAF 合并或 main 端 debounce。**File**: `src/shared/state/appearance.ts:115-122`。
+  - **(opus Nit)** `probe.ts:185-188` `__testing.PROBE_INTERVAL_MS_DEV` exported 但 dev/prod 路径都用 PROD,死 export;docstring 说"60s dev/5min prod"与现实不符。Fix: 消费或删。
+  - **(opus Nit)** `sender.ts:209-211` `__wire.DEFAULT_SOCKET_PATH` 注释说"for Settings page hint"但 Settings 实际走 `useIslandStore.socketPath` — 注释误导。Fix: 改注释为 "wire-level constants for tests"。
+  - **(opus Nit)** `sender.ts:151` `(chunkRaw: unknown) =>` cast `as Buffer` — 建议加 `SocketLike` per-event listener overload(`on('data', (b: Buffer) => …)`)。
+  - **Missing tests**: useEmailChat 500ms throttle behaviour + probe-loop `disabled→idle→connected` 流转 — 测试 gap (reviewer HIGH conf)。Sprint 10 Day 1 补 2 个 vitest 子集。
+  - reviewer 总评 verdict: APPROVE-with-follow-ups — 3 MEDIUMs 是 pre-production papercuts 不阻断 ship;最易触达的 real-world bug 是 LOW 跨邮件 stream chunk 泄漏(`useEmailChat:266`),修复极简。SOLID/SRP clean(envelope/sender/probe/handler 边界),renderer/main 边界 clean(`net`/`fs` 不入 renderer),i18n 372/372 parity 验过,red lines(C-04 / C-05 / H-15)全过。
+- 2026-05-18 — Sprint 10 (b) §9-6 端到端联调 + §2.5.4-D 方案 A 落地:
+  - **Smoke pre-Plan-A**(用户在 ping-island fork `feat/mail-brand` Debug build 跑 + .env 加 `PING_ISLAND_ENABLED=true` + `pm2 restart mail-sync`): `nc -U /tmp/island.sock` 发 `MailReceived` envelope → fork log 停在 `Received bridge envelope provider=mail event=MailReceived` debug → **不走 dispatch / 灵动岛不展开**。原因: `MailReceived` 不在 fork hook event dispatcher 识别表里(仅认 `UserPromptSubmit`/`PreToolUse`/`Notification`/`Stop`/`SessionStart`) → 触发 §2.5.4-D 落代码判据。
+  - **方案 A 实现**: 后端 `src/notify/island_envelope.py:33-71` 加 `_WIRE_EVENT_MAP` 10 项 + `_resolve_wire_event_type()` + `to_wire_dict()` 内 wire eventType 走映射 + metadata 双写;前端 `frontend/src/electron/main/island/envelope.ts:46-72` 加 `_WIRE_EVENT_MAP` 5 项 + `BridgeEnvelope.eventType` 类型从 `IslandEventType` 改窄为 `IslandWireEventType = 'Notification'` + `commonShell()` 构造 metadata 加 `mailagent.eventType`。Python dataclass `event_type` 字段保持 mail 名(`island_dispatch` SQLite 表 + 评估指标 + 47 后端单测断言不破)。
+  - **测试更新**: 后端 `test_island_envelope.py` +2 验全 10 mail 事件 wire 映射 + 真 Notification 不变 → 47→49 passed;前端 `tests/main/island_envelope.test.ts` 6 处 eventType 断言改 `'Notification'` + 加 `metadata['mailagent.eventType']` 对应断言;`tests/main/island_sender.test.ts` / `tests/main/island_handler.test.ts` / `tests/shared/useEmailChat.test.tsx` 不需改(都走 builder API,wire 抽象封闭)。
+  - **Post-Plan-A smoke 验证**: Python `nc`-style 直发: (1) `MailReceived` mapped envelope → fork 接受 0 bytes 返回(non-blocking notification path) → wire OK;(2) `LLMReviewedUrgent` mapped envelope(`waitingForInput` + 5 options + `expectsResponse=true`) → fork 端 **block 等用户点 option**,客户端 3s timeout(符合预期) → **证明 fork 走 attentionNotification phase + 5 option intervention 渲染 — Phase 1 Arrive 展开真实生效**。
+  - Gates 全绿: 后端 pytest `tests/notify/` 49 passed / 前端 `pnpm test` 543 passed | 1 skipped(与 Sprint 10 (a) Day 1 baseline 持平,因前端只改断言不加 test) / `pnpm lint` 0 / `pnpm typecheck` 0。
+  - §2.5.4-D 状态: "待落" → **已落实 + smoke 验证 + 归档**。详 [`ISLAND-PLUGIN.md §2.5.4-D`](./ISLAND-PLUGIN.md)。

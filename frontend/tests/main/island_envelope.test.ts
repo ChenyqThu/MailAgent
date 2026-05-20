@@ -39,7 +39,11 @@ describe('island envelope: buildAppearanceChange', () => {
   test('shape carries provider/eventType/sessionKey + metadata', () => {
     const env = buildAppearanceChange({ accent: 'cobalt', theme: 'dark' })
     expect(env.provider).toBe('mail')
-    expect(env.eventType).toBe('AppearanceChange')
+    // Sprint 10 (b) §2.5.4-D Plan A — wire eventType collapses to
+    // 'Notification' so ping-island's dispatcher accepts the frame; the
+    // semantic event lives in metadata.mailagent.eventType.
+    expect(env.eventType).toBe('Notification')
+    expect(env.metadata['mailagent.eventType']).toBe('AppearanceChange')
     expect(env.sessionKey).toBe('mailagent:system:appearance')
     expect(env.status.kind).toBe('notification')
     expect(env.expectsResponse).toBe(false)
@@ -72,7 +76,8 @@ describe('island envelope: AI draft 3-phase builders', () => {
       subject: 'Catch Up meeting SaaS 2026 Plan',
       prompt: '请帮我起草一份回复,简短礼貌'
     })
-    expect(env.eventType).toBe('AIDraftStart')
+    expect(env.eventType).toBe('Notification')
+    expect(env.metadata['mailagent.eventType']).toBe('AIDraftStart')
     expect(env.sessionKey).toBe('mailagent:chat:53675')
     expect(env.metadata['mailagent.internalId']).toBe('53675')
     expect(env.metadata['mailagent.senderName']).toBe('John Smith')
@@ -104,7 +109,8 @@ describe('island envelope: AI draft 3-phase builders', () => {
 
   test('AIDraftStream metadata = phase=stream + streamedChars', () => {
     const env = buildAIDraftStream({ emailId: 42, streamedChars: 1024 })
-    expect(env.eventType).toBe('AIDraftStream')
+    expect(env.eventType).toBe('Notification')
+    expect(env.metadata['mailagent.eventType']).toBe('AIDraftStream')
     expect(env.sessionKey).toBe('mailagent:chat:42')
     expect(env.metadata['mailagent.draftPhase']).toBe('stream')
     expect(env.metadata['mailagent.streamedChars']).toBe('1024')
@@ -117,7 +123,8 @@ describe('island envelope: AI draft 3-phase builders', () => {
       subject: 'RE: Catch Up',
       preview: 'Hi John, thanks for the heads-up.'
     })
-    expect(env.eventType).toBe('AIDraftReady')
+    expect(env.eventType).toBe('Notification')
+    expect(env.metadata['mailagent.eventType']).toBe('AIDraftReady')
     expect(env.status.kind).toBe('completed')
     expect(env.metadata['mailagent.draftPhase']).toBe('ready')
     expect(env.preview).toContain('Hi John')
@@ -134,7 +141,8 @@ describe('island envelope: AI draft 3-phase builders', () => {
 describe('island envelope: buildPing', () => {
   test('liveness metadata + system sessionKey', () => {
     const env = buildPing()
-    expect(env.eventType).toBe('Ping')
+    expect(env.eventType).toBe('Notification')
+    expect(env.metadata['mailagent.eventType']).toBe('Ping')
     expect(env.sessionKey).toBe('mailagent:system:ping')
     expect(env.metadata['mailagent.kind']).toBe('liveness')
     expect(env.expectsResponse).toBe(false)
@@ -148,7 +156,8 @@ describe('island envelope: serializeEnvelope', () => {
     expect(Buffer.isBuffer(bytes)).toBe(true)
     const parsed = JSON.parse(bytes.toString('utf8'))
     expect(parsed.provider).toBe('mail')
-    expect(parsed.eventType).toBe('AppearanceChange')
+    expect(parsed.eventType).toBe('Notification')
+    expect(parsed.metadata['mailagent.eventType']).toBe('AppearanceChange')
     expect(parsed.metadata['mailagent.accent']).toBe('coral')
   })
 

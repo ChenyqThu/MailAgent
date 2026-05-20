@@ -45,6 +45,7 @@ import { useAppearance, type AccentId, type ThemeMode } from '@shared/state/appe
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpdaterStore, setUpdaterStatus } from '@shared/state/updater'
 import { islandStateI18nKey, setIslandStatus, useIslandStore } from '@shared/state/island'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import { cn } from '@shared/lib/cn'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import {
@@ -118,6 +119,116 @@ function StatusPill({ set }: { set: boolean }): React.ReactElement {
       <span className={cn('w-1.5 h-1.5 rounded-full', set ? 'bg-ok' : 'bg-ink-fg-3')} />
       {set ? t('settings.set') : t('settings.notSet')}
     </span>
+  )
+}
+
+// Sprint 16 — SSE realtime status indicator + reconnect 按钮.
+//
+// 连接好时显示绿点 + "实时同步"; 重连中橙点 + 旋转 icon; 断线红点 + "立即重连"
+// 按钮. 用户可以在 SSE 断线时直接点重连, 或通过下面的 pollInterval 决定 fallback
+// 周期. 所有可见文案走 i18n (settings.realtime.*).
+function RealtimeStatusRow(): React.ReactElement {
+  const { t } = useTranslation()
+  const status = useEventsStatusStore((s) => s.status)
+  const mailApi = useMailApi()
+  const [reconnecting, setReconnecting] = useState(false)
+
+  const handleReconnect = async (): Promise<void> => {
+    setReconnecting(true)
+    try {
+      await mailApi.events.reconnect()
+      toastSuccess(t('settings.realtime.reconnectRequested'))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(t('settings.realtime.reconnectFailed'), msg)
+    } finally {
+      setTimeout(() => setReconnecting(false), 600)
+    }
+  }
+
+  const stateBadge: { dot: string; chip: string; label: string } = (() => {
+    switch (status.state) {
+      case 'connected':
+        return {
+          dot: 'bg-ok',
+          chip: 'bg-ok/15 text-ok',
+          label: t('settings.realtime.connected')
+        }
+      case 'connecting':
+        return {
+          dot: 'bg-coral/100 animate-pulse',
+          chip: 'bg-coral/15 text-coral',
+          label: t('settings.realtime.connecting')
+        }
+      case 'reconnecting':
+        return {
+          dot: 'bg-coral/100 animate-pulse',
+          chip: 'bg-coral/15 text-coral',
+          label: t('settings.realtime.reconnecting')
+        }
+      case 'disconnected':
+        return {
+          dot: 'bg-fail',
+          chip: 'bg-fail/15 text-fail',
+          label: t('settings.realtime.disconnected')
+        }
+      case 'disabled':
+        return {
+          dot: 'bg-ink-fg-3',
+          chip: 'bg-ink-3 text-ink-fg-2',
+          label: t('settings.realtime.disabled')
+        }
+      case 'idle':
+      default:
+        return {
+          dot: 'bg-ink-fg-3',
+          chip: 'bg-ink-3 text-ink-fg-2',
+          label: t('settings.realtime.idle')
+        }
+    }
+  })()
+
+  const showReconnect = status.state !== 'connected' && status.state !== 'disabled'
+
+  return (
+    <Row label={t('settings.realtime.label')} hint={t('settings.realtime.hint')}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-meta font-mono',
+            stateBadge.chip
+          )}
+        >
+          <span className={cn('w-1.5 h-1.5 rounded-full', stateBadge.dot)} />
+          {stateBadge.label}
+        </span>
+        {showReconnect && (
+          <button
+            type="button"
+            onClick={() => void handleReconnect()}
+            disabled={reconnecting}
+            className={cn(
+              'inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-aux',
+              'text-coral border border-coral/30 bg-coral/10 hover:bg-coral/15',
+              'transition-colors duration-fast',
+              'disabled:opacity-60 disabled:cursor-not-allowed'
+            )}
+          >
+            {reconnecting ? (
+              <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <RefreshCw size={12} strokeWidth={2} />
+            )}
+            {t('settings.realtime.reconnect')}
+          </button>
+        )}
+        {status.lastError && (
+          <span className="text-meta font-mono text-ink-fg-3 break-all" title={status.lastError}>
+            {status.lastError.length > 60 ? status.lastError.slice(0, 60) + '…' : status.lastError}
+          </span>
+        )}
+      </div>
+    </Row>
   )
 }
 
@@ -444,6 +555,7 @@ function SettingsForm({ initialSettings, initialSecrets }: SettingsFormProps): R
           {t('settings.inbox')}
         </SectionTitle>
         <div className="rounded-md border border-ink-border bg-ink-2 px-4">
+          <RealtimeStatusRow />
           <Row label={t('settings.pollInterval')} hint={t('settings.pollIntervalHint')}>
             <div className="inline-flex rounded-md border border-ink-border bg-ink-3 p-0.5">
               {POLL_OPTIONS.map((opt) => (
@@ -744,6 +856,12 @@ function IslandSection(): React.ReactElement {
   }, [busy, mailApi, t])
 
   const isEnabled = status.state !== 'disabled'
+  // Sprint 10 (d) V1.5 polish — show an "install ping-island" hint when the
+  // probe sees an empty `/tmp/island.sock` AND the integration isn't user-
+  // disabled. ENOENT = peer not installed (or not running). 'degraded' is
+  // ambiguous (protocol error / timeout — could be a fork-side bug), but
+  // 'disconnected' is the explicit "we tried, nothing answered" state.
+  const showInstallHint = status.state === 'disconnected'
   const handleToggle = useCallback(
     async (next: boolean): Promise<void> => {
       try {
@@ -834,6 +952,19 @@ function IslandSection(): React.ReactElement {
             </button>
           </div>
         </Row>
+        {showInstallHint && (
+          <div className="py-3 border-t border-ink-border-soft text-meta text-ink-fg-2 leading-relaxed">
+            {t('settings.island.installHint')}{' '}
+            <a
+              href="https://github.com/ChenyqThu/ping-island/tree/feat/mail-brand"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-coral hover:underline"
+            >
+              {t('settings.island.installLinkLabel')}
+            </a>
+          </div>
+        )}
       </div>
     </section>
   )
@@ -941,10 +1072,13 @@ function UpdateSection(): React.ReactElement {
 
   // Resolve the status message body for the current state. Keep this as a
   // single switch so a new state is impossible to forget.
+  // idle: the Row directly above already shows "当前版本 v0.0.1", so this
+  // body row reads "尚未检查更新" instead of repeating the version (Sprint 10
+  // visual review HIGH-3).
   let statusMessage: string
   switch (status.state) {
     case 'idle':
-      statusMessage = t('settings.update.currentVersion') + ' v' + status.currentVersion
+      statusMessage = t('settings.update.idle')
       break
     case 'checking':
       statusMessage = t('settings.update.checking')

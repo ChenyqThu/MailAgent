@@ -1,0 +1,1434 @@
+<!doctype html>
+<!--
+  MailAgent · ⌘K Search + Jump Palette (V1 visual mockup)
+
+  Surface stack:
+    title bar (36px)
+      ↓
+    blurred + dimmed inbox backdrop (the inbox is *softly* visible behind)
+      ↓
+    centered command pane (720px wide, anchored 80px from top, .glass-pop)
+      ↓
+    status bar (24px) — pills tailored: "FTS5 · 18ms · 5 of 1,247"
+
+  Result groups (DESIGN-equivalent of section-headers · UPPERCASE mono · English):
+    JUMP        — mailboxes, accounts, AI agents (≤3 rows)
+    EMAIL       — virtualized FTS5 hits · sender · subject · time · priority chip
+    AI ACTIONS  — "为本结果集起草摘要", "全部标为已读", "重跑 AI 分类"
+
+  Contract (HANDOFF §3.1):
+    - Result row reuses inbox <EmailRow> class system (priority chip, lang-pip,
+      cb-on, row-selected) so a hit in the palette and a row in the list look
+      lineage-identical.
+    - Esc dismisses; clicking the dim backdrop dismisses (in the mockup this
+      logs to console, in production it returns focus to the inbox).
+    - Last query persists to localStorage `mailagent.search.lastQuery` so the
+      palette re-opens with the previous search pre-filled — Linear / Raycast
+      pattern.
+    - Keyboard hints right-edge per row: ⏎ open · ⌘⏎ in new window · ⇥ select
+      group. Selected row uses the same coral 3px left edge as inbox.
+    - Language-detect pip in input right-hand side; updates EN ↔ 中 as the
+      user types (mockup ships EN because the demo query is English).
+    - No new tokens. Every color goes through DESIGN.md §2.
+
+  Carry-forward:
+    - 4 chrome panels (title bar, sidebar, list, detail) and the AI panel are
+      reduced to translucent shapes behind the dim so the user knows where
+      they are without being distracted.
+    - Status bar pills shift to search context: "FTS5 idx · 18ms · 5/1,247".
+    - AI panel stays present in the backdrop (DESIGN §1.3 rule 4 — AI is
+      always-on) but is greyed out.
+-->
+<html lang="zh-CN" data-locale="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title data-i18n="titleBar.docTitle">MailAgent · 搜索</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: {
+              0: 'rgb(var(--ink-0) / <alpha-value>)',
+              1: 'rgb(var(--ink-1) / <alpha-value>)',
+              2: 'rgb(var(--ink-2) / <alpha-value>)',
+              3: 'rgb(var(--ink-3) / <alpha-value>)',
+              4: 'rgb(var(--ink-4) / <alpha-value>)',
+              5: 'rgb(var(--ink-5) / <alpha-value>)',
+              border:        'rgb(var(--ink-border)      / <alpha-value>)',
+              'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+              fg:     'rgb(var(--ink-fg)   / <alpha-value>)',
+              'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+              'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+              'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)',
+            },
+            coral:         'rgb(var(--c-accent)      / <alpha-value>)',
+            'coral-hover': 'rgb(var(--c-accent-hi)   / <alpha-value>)',
+            'coral-dim':   'rgb(var(--c-accent-dim)  / <alpha-value>)',
+            crit: '#E5634F',
+            urg:  '#E89B4A',
+            impt: '#D4A53D',
+            norm: '#7A7F8A',
+            low:  '#5A5E68',
+            ok:   '#5DBA8C',
+            warn: '#E5B452',
+            fail: '#E36262',
+            dead: '#6B707A',
+            info: '#6FA8DC',
+            ai:   '#B58CDB',
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"',
+                   '"PingFang SC"', '"Helvetica Neue"', 'system-ui', 'sans-serif'],
+            display: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"',
+                      '"PingFang SC"', 'system-ui', 'sans-serif'],
+            mono: ['ui-monospace', '"SF Mono"', '"JetBrains Mono"', 'Menlo', 'monospace'],
+          },
+          fontSize: {
+            micro: ['11px', '14px'],
+            meta:  ['12px', '16px'],
+            aux:   ['14px', '20px'],
+            body:  ['14px', '20px'],
+            lead:  ['15px', '22px'],
+            subj:  ['22px', '30px'],
+          },
+          spacing: {
+            titlebar: '36px',
+            statusbar: '24px',
+            batchbar: '52px',
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* ─── Theme tokens — verbatim from mockup-inbox.html ──────────────── */
+    :root {
+      --c-accent:     229 101 75;
+      --c-accent-hi:  216  88  65;
+      --c-accent-dim: 126  61  50;
+
+      --ink-0:            14  16  19;
+      --ink-1:            21  24  29;
+      --ink-2:            26  30  36;
+      --ink-3:            31  36  43;
+      --ink-4:            38  44  53;
+      --ink-5:            46  52  62;
+      --ink-border:       44  50  59;
+      --ink-border-soft:  31  36  43;
+      --ink-fg:          232 234 238;
+      --ink-fg-1:        164 169 179;
+      --ink-fg-2:        107 112 122;
+      --ink-fg-3:         69  74  83;
+
+      --wallpaper:
+        radial-gradient(60vw 60vh at  8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95%  8%, rgba( 74,120,229,0.22),       transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18),      transparent 70%),
+        linear-gradient(180deg, #06080B 0%, #0A0C10 100%);
+
+      --glass:    saturate(180%) blur(28px);
+      --glass-lg: saturate(180%) blur(40px);
+
+      --glass-stroke: rgb(255 255 255 / 0.08);
+
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.07),
+        0 24px 60px rgba(0,0,0,0.55),
+        0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"] { --c-accent:  74 120 229; --c-accent-hi:  60 102 207; --c-accent-dim:  48  82 163; }
+    :root[data-accent="teal"]   { --c-accent:  45 181 166; --c-accent-hi:  33 156 142; --c-accent-dim:  24 110 100; }
+    :root[data-accent="rose"]   { --c-accent: 219  91 124; --c-accent-hi: 198  71 105; --c-accent-dim: 140  50  74; }
+    :root[data-accent="slate"]  { --c-accent: 126 134 148; --c-accent-hi: 105 113 127; --c-accent-dim:  74  80  92; }
+    :root[data-accent="olive"]  { --c-accent: 156 165  82; --c-accent-hi: 134 143  70; --c-accent-dim:  94 100  48; }
+
+    :root[data-theme="light"] {
+      --ink-0:           250 250 250;
+      --ink-1:           242 242 244;
+      --ink-2:           248 249 251;
+      --ink-3:           255 255 255;
+      --ink-4:           225 227 230;
+      --ink-5:           213 216 222;
+      --ink-border:      214 218 224;
+      --ink-border-soft: 230 232 237;
+      --ink-fg:           26  29  34;
+      --ink-fg-1:         91  97 107;
+      --ink-fg-2:        122 128 138;
+      --ink-fg-3:        178 184 192;
+
+      --wallpaper:
+        radial-gradient(60vw 60vh at  8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95%  6%, rgba(110,160,255,0.32),       transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22),      transparent 70%),
+        linear-gradient(180deg, #F6F7FB 0%, #ECEEF4 100%);
+
+      --glass-stroke: rgb(255 255 255 / 0.70);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.85),
+        0 18px 50px rgba(18,24,46,0.16),
+        0 4px 14px rgba(18,24,46,0.10);
+    }
+
+    html, body { background: transparent; overscroll-behavior: none; color-scheme: dark; }
+    :root[data-theme="light"] { color-scheme: light; }
+    body {
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      font-feature-settings: 'ss01', 'cv11';
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: -1;
+      background: var(--wallpaper);
+      background-attachment: fixed;
+      pointer-events: none;
+      transition: background 320ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* ─── Liquid Glass utility layers — verbatim ─────────────────────── */
+    .glass {
+      background-color: rgb(var(--ink-1) / 0.55);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .glass-2 {
+      background-color: rgb(var(--ink-2) / 0.45);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .glass-3 {
+      background-color: rgb(var(--ink-3) / 0.55);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .glass-pop {
+      background-color: rgb(var(--ink-2) / 0.82);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke);
+      box-shadow: var(--pop-shadow);
+    }
+    .ai-bg {
+      background:
+        linear-gradient(180deg,
+          rgb(var(--ink-2) / 0.50) 0%,
+          rgb(var(--ink-1) / 0.55) 100%);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+    }
+    .tile                  { background-color: rgb(var(--ink-2) / 0.62); }
+    .tile:hover            { background-color: rgb(var(--ink-4) / 0.78); }
+    @media (prefers-reduced-transparency: reduce) {
+      .glass    { background-color: rgb(var(--ink-1)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-2  { background-color: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-3  { background-color: rgb(var(--ink-3)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .glass-pop{ background-color: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+      .ai-bg    { background: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    }
+
+    .tl       { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .tl-close { background: #FF5F57; }
+    .tl-min   { background: #FEBC2E; }
+    .tl-max   { background: #28C840; }
+
+    .row { position: relative; }
+    .row-selected::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: rgb(var(--c-accent));
+    }
+
+    .scrollbar-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb {
+      background: rgb(var(--ink-fg) / 0.14);
+      border: 2px solid transparent;
+      background-clip: padding-box;
+      border-radius: 8px;
+    }
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb { background: rgb(var(--ink-fg) / 0.28); background-clip: padding-box; }
+
+    kbd {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11px; line-height: 1;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: rgb(var(--ink-fg) / 0.06);
+      color: rgb(var(--ink-fg-1));
+      border: 1px solid rgb(var(--ink-border));
+      border-bottom-width: 2px;
+    }
+
+    /* Language pip (EN / ZH / JP) */
+    .lang-pip {
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 10px; line-height: 1;
+      padding: 2px 4px; border-radius: 3px;
+      background: rgba(111,168,220,0.12);
+      border: 1px solid rgba(111,168,220,0.30);
+      color: #6FA8DC;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .qchip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border-radius: 999px;
+      font-size: 13px; line-height: 1;
+      color: rgb(var(--ink-fg-1));
+      background: rgb(var(--ink-fg) / 0.04);
+      border: 1px solid rgb(var(--ink-border));
+      transition: all 0.12s;
+      cursor: pointer;
+    }
+    .qchip:hover { background: rgb(var(--ink-fg) / 0.08); color: rgb(var(--ink-fg)); border-color: rgb(var(--ink-fg-3)); }
+
+    /* ─── Theme picker popover — verbatim ──────────────────────────── */
+    .theme-popover {
+      position: fixed;
+      top: 44px;
+      right: 12px;
+      width: 264px;
+      background-color: rgb(var(--ink-2) / 0.82);
+      -webkit-backdrop-filter: var(--glass-lg);
+              backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke);
+      border-radius: 12px;
+      box-shadow: var(--pop-shadow);
+      z-index: 80;
+      overflow: hidden;
+    }
+    .swatch {
+      width: 36px; height: 36px;
+      border-radius: 999px;
+      border: 0;
+      cursor: pointer;
+      position: relative;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.2);
+      transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .swatch:hover { transform: scale(1.06); }
+    .swatch[aria-checked="true"] {
+      box-shadow:
+        0 0 0 2px rgb(var(--ink-2)),
+        0 0 0 4px rgb(var(--c-accent));
+    }
+    .swatch[aria-checked="true"]::after {
+      content: '';
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+      background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 14px 14px no-repeat;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.4));
+    }
+
+    .glass, .glass-2, .glass-3, .glass-pop, .ai-bg,
+    .theme-popover, .qchip, kbd,
+    [class*="bg-ink-"], [class*="border-ink-"] {
+      transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1),
+                  border-color     280ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* ─── Search palette specifics ──────────────────────────────────── */
+
+    /* The "veil" that sits between the soft-blurred inbox backdrop and the
+       command pane. It does the heavy dim work so the pane reads above
+       its surroundings. Click on it dismisses (production: focus returns
+       to whatever the inbox had focused). */
+    .palette-veil {
+      position: fixed; inset: 36px 0 24px 0;   /* below title bar, above status bar */
+      background: rgb(var(--ink-0) / 0.55);
+      -webkit-backdrop-filter: saturate(120%) blur(10px);
+              backdrop-filter: saturate(120%) blur(10px);
+      z-index: 40;
+    }
+    /* Reduced-transparency: drop the backdrop-filter, deepen the dim. */
+    @media (prefers-reduced-transparency: reduce) {
+      .palette-veil {
+        background: rgb(var(--ink-0) / 0.86);
+        -webkit-backdrop-filter: none;
+                backdrop-filter: none;
+      }
+    }
+
+    /* The command pane itself — uses the .glass-pop recipe but anchored
+       as a positioned overlay rather than a floating popover. */
+    .palette-pane {
+      position: fixed;
+      top: 96px;          /* 36 titlebar + 60 air */
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(720px, calc(100vw - 32px));
+      max-height: calc(100vh - 36px - 24px - 96px - 32px);
+      z-index: 50;
+      display: flex; flex-direction: column;
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    /* Input row — 44px tall per HANDOFF §3.1. */
+    .palette-input {
+      width: 100%;
+      height: 44px;
+      background: transparent;
+      border: 0;
+      outline: none;
+      color: rgb(var(--ink-fg));
+      font-size: 16px;
+      line-height: 1;
+      font-family: inherit;
+      caret-color: rgb(var(--c-accent));
+    }
+    .palette-input::placeholder { color: rgb(var(--ink-fg-2)); }
+
+    /* Result row — same vertical rhythm as inbox row (py-2.5) but slightly
+       tighter because we're stacking three groups in one pane. */
+    .pal-row {
+      position: relative;
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: rgb(var(--ink-fg-1));
+    }
+    .pal-row:hover { background: rgb(var(--ink-fg) / 0.04); }
+    .pal-row.is-selected {
+      background: rgb(var(--c-accent) / 0.10);
+      color: rgb(var(--ink-fg));
+    }
+    .pal-row.is-selected::before {
+      content: ''; position: absolute; left: 4px; top: 8px; bottom: 8px;
+      width: 3px; background: rgb(var(--c-accent)); border-radius: 2px;
+    }
+    /* Keyboard hints only visible on the selected row to keep the list
+       quiet. Same pattern as Linear / Raycast. */
+    .pal-hint { display: none; }
+    .pal-row.is-selected .pal-hint { display: inline-flex; }
+
+    /* Empty-state tile (used when query produces no email hits — referenced
+       in HANDOFF §3.1 final paragraph). Reuse `.tile` translucency. */
+    .empty-tile {
+      display: grid; place-items: center;
+      padding: 18px 16px;
+      border-radius: 8px;
+      gap: 6px;
+      color: rgb(var(--ink-fg-2));
+    }
+
+    /* The faded inbox skeleton behind the veil. It's not a screenshot —
+       it's the actual layout boxes, drawn at the right proportions, so
+       the user knows what they were doing before they pressed ⌘K. */
+    .behind-inbox > * { opacity: 0.6; }
+
+    /* ─── App nav shell — collapse contract ───────────────────────
+       Mirrors mockup-inbox.html so the ghost backdrop behind the
+       palette respects the collapsed-vs-expanded state the user set
+       in the inbox. State is read once on page load — pop-out windows
+       stay in sync via the `storage` event. */
+    .app-nav {
+      width: 240px;
+      flex-shrink: 0;
+      transition: width 260ms cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .app-nav[data-collapsed="true"] { width: 56px; }
+    .app-nav[data-collapsed="true"] .app-nav-header { justify-content: center; padding: 0.375rem 0; }
+    .app-nav[data-collapsed="true"] a > span:not(.app-nav-keep),
+    .app-nav[data-collapsed="true"] div.row > span:not(.app-nav-keep),
+    .app-nav[data-collapsed="true"] div.flex.items-center > span:not(.app-nav-keep),
+    .app-nav[data-collapsed="true"] a > kbd,
+    .app-nav[data-collapsed="true"] .app-nav-section-header,
+    .app-nav[data-collapsed="true"] .app-nav-account { display: none !important; }
+    .app-nav[data-collapsed="true"] .app-nav-section-spacer { margin-inline: 0.625rem; margin-block: 0.5rem; }
+    .app-nav[data-collapsed="true"] .app-nav-avatar-row { display: flex; }
+    .app-nav[data-collapsed="true"] nav a,
+    .app-nav[data-collapsed="true"] nav .row,
+    .app-nav[data-collapsed="true"] nav > div,
+    .app-nav[data-collapsed="true"] .app-nav-bottom a {
+      justify-content: center;
+      padding-inline: 0.25rem;
+      padding-block: 0.5rem;
+    }
+    .app-nav[data-collapsed="true"] nav a > svg,
+    .app-nav[data-collapsed="true"] nav .row > svg,
+    .app-nav[data-collapsed="true"] nav > div > svg,
+    .app-nav[data-collapsed="true"] .app-nav-bottom a > svg { width: 19px; height: 19px; }
+    .app-nav[data-collapsed="true"] .app-nav-chevron-collapse { display: none; }
+    .app-nav:not([data-collapsed="true"]) .app-nav-chevron-expand { display: none; }
+    @media (prefers-reduced-motion: reduce) {
+      .app-nav { transition: none; }
+    }
+  </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden text-ink-fg font-sans antialiased flex flex-col">
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     macOS title bar (36px) — verbatim from inbox
+═══════════════════════════════════════════════════════════════════════ -->
+<header class="glass h-titlebar border-b border-ink-border/60 flex items-center px-3 select-none shrink-0 relative z-[60]">
+  <div class="flex items-center gap-2 mr-4">
+    <span class="tl tl-close" title="Close"></span>
+    <span class="tl tl-min"   title="Minimize"></span>
+    <span class="tl tl-max"   title="Zoom"></span>
+  </div>
+
+  <div class="text-aux text-ink-fg-1 font-medium tracking-tight">MailAgent</div>
+
+  <div class="flex-1 flex justify-center">
+    <button class="group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span data-i18n="titleBar.searchHint">搜索 / 跳转</span>
+      <kbd class="group-hover:bg-ink-4">⌘K</kbd>
+    </button>
+  </div>
+
+  <div class="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+    <span class="flex items-center gap-1.5" title="Open Island notch overlay connected">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="6" rx="3" fill="currentColor"/></svg>
+      <span>Island</span>
+    </span>
+    <span class="text-ink-fg-3">·</span>
+    <!-- Locale toggle (zh-CN ↔ en) — DESIGN.md §2.10. -->
+    <button
+      id="locale-toggle"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="切换语言 (⌥G)"
+      data-i18n-attr="title:titleBar.localeTooltip,aria-label:titleBar.localeAria"
+      aria-label="切换语言"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      <span class="group-hover:text-ink-fg" id="locale-label">中文</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button
+      id="theme-toggle"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="Toggle light / dark (⌥L)"
+      aria-label="Toggle theme"
+      data-i18n-attr="title:titleBar.themeTooltip,aria-label:titleBar.themeAria"
+    >
+      <svg id="theme-icon-dark"  width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <span class="group-hover:text-ink-fg" id="theme-label">Dark</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button
+      id="appearance-btn"
+      aria-haspopup="true"
+      aria-expanded="false"
+      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group"
+      title="Accent color (View → Appearance)"
+      data-i18n-attr="title:titleBar.accentTooltip,aria-label:titleBar.accentAria"
+    >
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-coral shadow-[0_0_0_1px_rgba(0,0,0,0.25)]"></span>
+      <span class="group-hover:text-ink-fg" id="appearance-label">Coral</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5" data-i18n-attr="title:titleBar.syncTooltip">
+      <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+      <span><span data-i18n="status.synced">Synced</span> · 5s · 14:32:08</span>
+    </span>
+  </div>
+</header>
+
+<!-- Theme picker popover — verbatim. Anchors above the palette layer
+     because the popover is the user's escape hatch even when the
+     palette is open. -->
+<div id="theme-popover" class="theme-popover hidden">
+  <div class="px-3.5 py-2.5 border-b border-ink-border-soft flex items-center justify-between">
+    <div class="text-aux text-ink-fg font-medium" data-i18n="popover.accentTitle">Accent Color</div>
+    <span class="text-micro font-mono text-ink-fg-2">View → Appearance</span>
+  </div>
+  <div class="p-4">
+    <div class="grid grid-cols-3 gap-y-4 gap-x-2 place-items-center">
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="coral"  aria-checked="true"  style="background: #E5654B;" title="Coral"></button>
+        <span class="text-meta font-mono text-ink-fg-1">Coral</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="cobalt" aria-checked="false" style="background: #4A78E5;" title="Cobalt"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Cobalt</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="teal"   aria-checked="false" style="background: #2DB5A6;" title="Teal"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Teal</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="rose"   aria-checked="false" style="background: #DB5B7C;" title="Rose"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Rose</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="slate"  aria-checked="false" style="background: #7E8694;" title="Slate"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Slate</span>
+      </div>
+      <div class="flex flex-col items-center gap-1.5">
+        <button class="swatch" data-accent="olive"  aria-checked="false" style="background: #9CA552;" title="Olive"></button>
+        <span class="text-meta font-mono text-ink-fg-2">Olive</span>
+      </div>
+    </div>
+  </div>
+  <div class="px-3.5 py-2 border-t border-ink-border-soft flex items-center gap-2">
+    <svg class="text-ink-fg-2 shrink-0" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span class="text-meta text-ink-fg-1 leading-snug" data-i18n="popover.accentNote">Affects toolbar · chips · selected row · Island accent. Stored locally.</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     INBOX BACKDROP — drawn so the user remembers what's behind. Reduced
+     opacity + the .palette-veil dimmer above so it never competes with
+     the palette for attention. Same surface stack as inbox: sidebar 240 ·
+     list 340 · detail flex · AI panel 360.
+═══════════════════════════════════════════════════════════════════════ -->
+<main class="flex flex-1 min-h-0 behind-inbox">
+
+  <aside data-app-nav data-collapsed="false" class="app-nav glass border-r border-ink-border/60 flex flex-col">
+    <div class="app-nav-header flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft/60 shrink-0 pointer-events-none">
+      <div class="app-nav-account flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md">
+        <span class="text-micro font-mono text-ink-fg-3 bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0 leading-snug">tp-link</span>
+        <span class="text-body text-ink-fg-3 font-medium truncate flex-1 text-left">lucien.chen</span>
+        <svg class="text-ink-fg-3 shrink-0" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div class="w-7 h-7 rounded-md text-ink-fg-3 flex items-center justify-center shrink-0">
+        <svg class="app-nav-chevron-collapse" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        <svg class="app-nav-chevron-expand"   width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    </div>
+    <div class="app-nav-avatar-row items-center justify-center py-2 border-b border-ink-border-soft/60 shrink-0 pointer-events-none" style="display: none;">
+      <div class="w-9 h-9 rounded-full text-white font-semibold text-aux flex items-center justify-center opacity-70"
+           style="background: var(--c-accent);">L</div>
+    </div>
+    <div class="flex-1 overflow-hidden py-2.5 pointer-events-none">
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">Mailboxes</h2>
+      </div>
+      <div class="px-2 space-y-px">
+        <div class="row row-selected flex items-center gap-2.5 px-2 py-1.5 rounded-md bg-ink-4 text-ink-fg">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="text-body flex-1 font-medium" data-i18n="nav.inbox">收件箱</span>
+          <span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">32</span>
+        </div>
+        <div class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.outbox">发件箱</span>
+        </div>
+        <div class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          <span class="text-body flex-1" data-i18n="nav.flagged">已标旗</span>
+          <span class="text-meta font-mono text-ink-fg-2">7</span>
+        </div>
+      </div>
+
+      <div class="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft"></div>
+
+      <div class="app-nav-section-header px-3 pb-1">
+        <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">AI Agents</h2>
+      </div>
+      <div class="px-2 space-y-px">
+        <div class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg">
+          <span class="app-nav-keep w-1.5 h-1.5 rounded-full bg-ok"></span>
+          <span class="text-body flex-1">Notion Agent</span>
+        </div>
+        <div class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1">
+          <span class="app-nav-keep w-1.5 h-1.5 rounded-full bg-ink-fg-3"></span>
+          <span class="text-body flex-1">Custom API</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="glass-2 w-[340px] shrink-0 border-r border-ink-border/60 flex flex-col">
+    <div class="px-4 pt-3 pb-2.5 border-b border-ink-border-soft pointer-events-none">
+      <div class="flex items-baseline justify-between">
+        <h1 class="text-lead font-semibold text-ink-fg tracking-tight" data-i18n="list.title">收件箱</h1>
+        <span class="text-meta font-mono text-ink-fg-2">
+          <span data-i18n="list.meta.unread" data-i18n-n="32">32 unread</span>
+          <span class="text-ink-fg-3"> · </span>
+          <span data-i18n="list.meta.total" data-i18n-n="184">184 total</span>
+        </span>
+      </div>
+    </div>
+    <div class="flex-1 overflow-hidden pointer-events-none">
+      <!-- 3 ghost rows — enough to suggest the list shape -->
+      <div class="px-4 py-3 border-b border-ink-border-soft">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-coral mt-0.5"></span>
+          <span class="text-aux text-ink-fg flex-1 truncate">Sentry · alerts@sentry.io</span>
+          <span class="text-meta font-mono text-ink-fg-2 tabular-nums">14:23</span>
+        </div>
+        <div class="text-body text-ink-fg font-semibold truncate pl-3.5">[Alert] MailAgent prod: TimeoutError</div>
+      </div>
+      <div class="px-4 py-3 border-b border-ink-border-soft">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-coral mt-0.5"></span>
+          <span class="text-aux text-ink-fg flex-1 truncate">PagerDuty · noreply@pagerduty.com</span>
+          <span class="text-meta font-mono text-ink-fg-2 tabular-nums">14:08</span>
+        </div>
+        <div class="text-body text-ink-fg font-semibold truncate pl-3.5">[P1] webhook-server 8100: 502</div>
+      </div>
+      <div class="px-4 py-3 border-b border-ink-border-soft">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-ink-fg-3 mt-0.5"></span>
+          <span class="text-aux text-ink-fg-1 flex-1 truncate">陈舸 · ge@chenge.ink</span>
+          <span class="text-meta font-mono text-ink-fg-2 tabular-nums">12:51</span>
+        </div>
+        <div class="text-body text-ink-fg-1 truncate pl-3.5">Q2 OKR · 邮件助理 · 评审反馈</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="glass-3 flex-1 min-w-0 flex flex-col">
+    <div class="flex-1 pointer-events-none p-6">
+      <div class="text-subj text-ink-fg font-semibold tracking-tight">[Alert] MailAgent prod: TimeoutError</div>
+      <div class="text-meta font-mono text-ink-fg-2 mt-2">Sentry · alerts@sentry.io · 14:23</div>
+    </div>
+  </section>
+
+  <aside class="ai-bg w-[360px] shrink-0 border-l border-ink-border/60 flex flex-col">
+    <div class="h-10 border-b border-ink-border/60 flex items-center px-3 text-aux text-ink-fg-1 gap-3 pointer-events-none">
+      <span class="text-coral">✦ AI</span>
+      <span class="text-ink-fg-3">·</span>
+      <span class="text-meta font-mono text-ink-fg-2">Thread 4</span>
+    </div>
+  </aside>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     PALETTE VEIL — soft dim that mutes the inbox backdrop
+═══════════════════════════════════════════════════════════════════════ -->
+<div id="palette-veil" class="palette-veil" role="presentation"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     COMMAND PANE — the actual search palette
+═══════════════════════════════════════════════════════════════════════ -->
+<section
+  id="palette-pane"
+  class="palette-pane glass-pop"
+  role="dialog"
+  aria-modal="true"
+  aria-label="Search and jump"
+>
+
+  <!-- ─── Input row ────────────────────────────────────────────────── -->
+  <div class="px-4 h-12 flex items-center gap-3 border-b border-ink-border-soft shrink-0">
+    <svg class="text-ink-fg-2 shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    <input
+      id="palette-input"
+      type="text"
+      class="palette-input flex-1"
+      placeholder="Search mail · jump to mailbox · run AI action…"
+      data-i18n-attr="placeholder:palette.inputPlaceholder"
+      autocomplete="off"
+      spellcheck="false"
+      value="notion timeout"
+    />
+    <!-- Language detect pip — sourced from a tiny browser-side detector
+         in production; here it's hardcoded EN because the demo query is
+         English-only. Switches to "中" when ≥40% CJK chars seen.
+         The pip is *content* language and does NOT swap with UI locale
+         (DESIGN.md §2.10 rule 4). -->
+    <span id="lang-pip" class="lang-pip" title="Detected language: English">EN</span>
+    <button
+      id="palette-clear"
+      class="text-ink-fg-2 hover:text-ink-fg p-1 rounded hover:bg-ink-fg/[0.08] transition shrink-0"
+      title="Clear (Esc)"
+      aria-label="Clear search"
+      data-i18n-attr="title:palette.clearTooltip,aria-label:palette.clearAria"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+
+  <!-- ─── Result groups (scrollable body) ──────────────────────────── -->
+  <div class="flex-1 overflow-y-auto scrollbar-thin py-2">
+
+    <!-- ── JUMP ────────────────────────────────────────────────────── -->
+    <div class="px-3 pt-1.5">
+      <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5 flex items-center gap-2">
+        <span>Jump</span>
+        <span class="text-ink-fg-3">·</span>
+        <span class="text-ink-fg-3">3</span>
+      </h2>
+    </div>
+    <div class="px-3 space-y-px">
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        </span>
+        <span class="text-body flex-1">收件箱 · <span class="text-ink-fg-2">含 “notion timeout” 的 5 封</span></span>
+        <span class="text-meta font-mono text-ink-fg-2 mr-2">32 unread</span>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2">
+          <kbd>⏎</kbd> open
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/></svg>
+        </span>
+        <span class="text-body flex-1">AI 会话历史 · <span class="text-ink-fg-2">3 次关于 “notion” 的对话</span></span>
+        <span class="text-meta font-mono text-ink-fg-2 mr-2">last 14:08</span>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2">
+          <kbd>⏎</kbd> open
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </span>
+        <span class="text-body flex-1">看板 Admin · <span class="text-ink-fg-2">dead-letter 5 · 含 “timeout”</span></span>
+        <span class="text-micro font-mono text-fail bg-fail/10 border border-fail/25 px-1.5 py-0.5 rounded">5 DL</span>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 ml-2">
+          <kbd>⏎</kbd> open
+        </span>
+      </div>
+
+    </div>
+
+    <!-- ── EMAIL — FTS5 hits, sender · subject · time · priority chip ─ -->
+    <div class="px-3 pt-3">
+      <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5 flex items-center gap-2">
+        <span>Email</span>
+        <span class="text-ink-fg-3">·</span>
+        <span class="text-ink-fg-3">5 of 1,247</span>
+        <span class="ml-auto flex items-center gap-1.5 text-ink-fg-3 normal-case tracking-normal">
+          <span class="w-1 h-1 rounded-full bg-ok"></span>
+          <span>FTS5 · 18ms</span>
+        </span>
+      </h2>
+    </div>
+    <div class="px-3 space-y-px">
+
+      <!-- Selected row — coral 3px edge, mono kbd hints right-aligned -->
+      <div class="pal-row is-selected" data-result-id="8472">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="text-aux text-ink-fg font-medium truncate">Sentry · alerts@sentry.io</span>
+            <span class="lang-pip shrink-0">EN</span>
+            <span class="text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded text-urg bg-urg/15 border border-urg/30 shrink-0">Urgent</span>
+            <span class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums">14:23</span>
+          </div>
+          <div class="text-body text-ink-fg mt-0.5 truncate">
+            [Alert] MailAgent prod: <mark class="bg-coral/25 text-ink-fg rounded px-0.5">Notion</mark> API <mark class="bg-coral/25 text-ink-fg rounded px-0.5">timeout</mark>
+          </div>
+          <div class="text-meta text-ink-fg-2 mt-1 truncate">
+            ReadTimeout — handle_ai_reviewed exceeded 30s when calling
+            <mark class="bg-coral/15 text-ink-fg-1 rounded px-0.5">notion</mark>.pages.update for page_id=4a8c…
+          </div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> open
+          <span class="text-ink-fg-3">·</span>
+          <kbd>⌘⏎</kbd> new window
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="text-aux text-ink-fg-1 truncate">Notion · automated@notion.so</span>
+            <span class="lang-pip shrink-0">EN</span>
+            <span class="text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded text-impt bg-impt/15 border border-impt/30 shrink-0">Important</span>
+            <span class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums">Mon</span>
+          </div>
+          <div class="text-body text-ink-fg-1 mt-0.5 truncate">
+            <mark class="bg-coral/25 text-ink-fg rounded px-0.5">Notion</mark> API · rate limit policy update for integrations
+          </div>
+          <div class="text-meta text-ink-fg-2 mt-1 truncate">
+            Effective May 22, requests to /v1/pages will be capped at 3 rps per token. Existing…
+          </div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> open
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="text-aux text-ink-fg-1 truncate">陈舸 · ge@chenge.ink</span>
+            <span class="text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded text-norm bg-norm/15 border border-norm/30 shrink-0">Normal</span>
+            <span class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums">Sun</span>
+          </div>
+          <div class="text-body text-ink-fg-1 mt-0.5 truncate">
+            Re: MailAgent Q2 OKR · 把 <mark class="bg-coral/25 text-ink-fg rounded px-0.5">Notion</mark> 写回这件事先放一放
+          </div>
+          <div class="text-meta text-ink-fg-2 mt-1 truncate">
+            Notion Agent 这块我们先稳定 read，write 等下 sprint 再加 retry 机制…
+          </div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> open
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="text-aux text-ink-fg-1 truncate">GitHub Actions · noreply@github.com</span>
+            <span class="lang-pip shrink-0">EN</span>
+            <span class="text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded text-low bg-low/15 border border-low/30 shrink-0">Low</span>
+            <span class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums">May 12</span>
+          </div>
+          <div class="text-body text-ink-fg-1 mt-0.5 truncate">
+            workflow run “backfill-<mark class="bg-coral/25 text-ink-fg rounded px-0.5">notion</mark>-ai-fields” completed
+          </div>
+          <div class="text-meta text-ink-fg-2 mt-1 truncate">
+            Re-classified 1,184 emails · 0 dead-letters · total cost $0.92 · cache hit 91%…
+          </div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> open
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span class="text-aux text-ink-fg-1 truncate">Linear · notifications@linear.app</span>
+            <span class="lang-pip shrink-0">EN</span>
+            <span class="text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded text-low bg-low/15 border border-low/30 shrink-0">Low</span>
+            <span class="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums">May 10</span>
+          </div>
+          <div class="text-body text-ink-fg-1 mt-0.5 truncate">
+            ENG-204 · Investigate <mark class="bg-coral/25 text-ink-fg rounded px-0.5">Notion</mark> write-path <mark class="bg-coral/25 text-ink-fg rounded px-0.5">timeout</mark> retries
+          </div>
+          <div class="text-meta text-ink-fg-2 mt-1 truncate">
+            Status moved Backlog → In Progress by @chenge. Linked to email#8472 via mail-link…
+          </div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> open
+        </span>
+      </div>
+
+    </div>
+
+    <!-- ── AI ACTIONS — pre-canned actions over the current result set ─ -->
+    <div class="px-3 pt-3">
+      <h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5 flex items-center gap-2">
+        <span>AI Actions</span>
+        <span class="text-ink-fg-3">·</span>
+        <span class="text-ink-fg-3">on these 5 results</span>
+        <span class="ml-auto flex items-center gap-1.5 text-ink-fg-3 normal-case tracking-normal">
+          <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+          <span>Notion Agent · Jarvis</span>
+        </span>
+      </h2>
+    </div>
+    <div class="px-3 space-y-px pb-1">
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-coral shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5z"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="text-body text-ink-fg" data-i18n="search.action.summarize">为本结果集起草摘要</div>
+          <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="search.action.summarizeMeta">5 封 · 预计 ~3.6s · ~$0.012 · 写入 ai_session 关联</div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> <span data-i18n="palette.kbd.run">run</span>
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="text-body text-ink-fg" data-i18n="search.action.markRead">全部标为已读</div>
+          <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="search.action.markReadMeta">5 封 · 本地即时 · 同步至 IMAP 4 个账号</div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> <span data-i18n="palette.kbd.run">run</span>
+        </span>
+      </div>
+
+      <div class="pal-row">
+        <span class="w-5 h-5 grid place-items-center text-info shrink-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15A9 9 0 1 1 18 5.51L23 10"/></svg>
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="text-body text-ink-fg" data-i18n="search.action.reclassify">重跑 AI 分类（覆盖 11 字段）</div>
+          <div class="text-meta text-ink-fg-2 mt-0.5" data-i18n="search.action.reclassifyMeta">5 封 · ~6.0s · ~$0.045 · 旧版本归档至 ai_history</div>
+        </div>
+        <span class="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0 ml-2">
+          <kbd>⏎</kbd> <span data-i18n="palette.kbd.run">run</span>
+        </span>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- ─── Footer — global hints + perf meta ────────────────────────── -->
+  <footer class="px-3 h-8 border-t border-ink-border-soft flex items-center gap-3 text-micro font-mono text-ink-fg-2 shrink-0">
+    <span class="flex items-center gap-1.5">
+      <kbd>↑</kbd><kbd>↓</kbd>
+      <span class="normal-case" data-i18n="palette.kbd.navigate">navigate</span>
+    </span>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5">
+      <kbd>⇥</kbd>
+      <span class="normal-case" data-i18n="palette.kbd.selectGroup">select group</span>
+    </span>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5">
+      <kbd>⏎</kbd>
+      <span class="normal-case" data-i18n="palette.kbd.open">open</span>
+    </span>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5">
+      <kbd>⌘⏎</kbd>
+      <span class="normal-case" data-i18n="palette.kbd.newWindow">in new window</span>
+    </span>
+    <span class="text-ink-fg-3">·</span>
+    <span class="flex items-center gap-1.5">
+      <kbd>esc</kbd>
+      <span class="normal-case" data-i18n="palette.kbd.dismiss">dismiss</span>
+    </span>
+
+    <span class="ml-auto flex items-center gap-2">
+      <span class="flex items-center gap-1">
+        <span class="w-1 h-1 rounded-full bg-ok"></span>
+        <span>FTS5</span>
+      </span>
+      <span class="text-ink-fg-3">·</span>
+      <span class="tabular-nums">18ms</span>
+      <span class="text-ink-fg-3">·</span>
+      <span class="tabular-nums">5 of 1,247</span>
+    </span>
+  </footer>
+
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Bottom status bar (24px) — pills tailored to search context
+═══════════════════════════════════════════════════════════════════════ -->
+<footer class="glass h-statusbar border-t border-ink-border/60 text-meta font-mono text-ink-fg-2 flex items-center px-3 gap-3 shrink-0 select-none relative z-[60]">
+  <span class="flex items-center gap-1.5 cursor-help" title="FTS5 · 1,247 indexed rows · last rebuild 11:12">
+    <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+    fts5 <span class="text-ok">idx ok</span>
+  </span>
+  <span class="text-ink-fg-3">|</span>
+  <span class="cursor-help" title="Query latency · 18ms · matches 5">query <span class="text-ink-fg-1 tabular-nums">18ms</span> · <span class="tabular-nums">5</span>/<span class="tabular-nums">1,247</span></span>
+  <span class="text-ink-fg-3">|</span>
+  <span class="flex items-center gap-1.5 cursor-help" title="Last query &quot;notion timeout&quot; restored from localStorage">
+    <span class="w-1.5 h-1.5 rounded-full bg-coral"></span>
+    last <span class="text-ink-fg-1">“notion timeout”</span>
+  </span>
+  <span class="ml-auto flex items-center gap-3">
+    <span class="cursor-help" title="AI Actions backend">notion-agent <span class="text-ok">on</span></span>
+    <span class="text-ink-fg-3">|</span>
+    <span class="cursor-help" title="build 0.1.0-dev · 2026-05-18">0.1.0-dev</span>
+  </span>
+</footer>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Scripts — theme · accent · palette behavior
+═══════════════════════════════════════════════════════════════════════ -->
+<script>
+  /* ─── i18n (zh-CN / en) ───────────────────────────────────────────
+     DESIGN.md §2.10 — every chrome string is dictionary-resolved.
+     Search-screen-specific keys live in `palette.*` and `search.*`;
+     shared chrome (title bar, popover, nav, list meta) shares the
+     same namespaces as inbox so the keys stay identical. */
+  (function () {
+    const KEY_LOCALE = 'mailagent.locale';
+    const DEFAULT_LOC = 'zh-CN';
+
+    const I18N_DICT = {
+      'zh-CN': {
+        'titleBar.docTitle':       'MailAgent · 搜索',
+        'titleBar.searchHint':     '搜索 / 跳转',
+        'titleBar.localeTooltip':  '切换语言 (⌥G)',
+        'titleBar.localeAria':     '切换语言',
+        'titleBar.themeTooltip':   '切换浅色 / 深色 (⌥L)',
+        'titleBar.themeAria':      '切换主题',
+        'titleBar.accentTooltip':  '强调色 (查看 → 外观)',
+        'titleBar.accentAria':     '强调色',
+        'titleBar.syncTooltip':    '最近同步 14:32:08',
+        'status.synced':           '已同步',
+        'popover.accentTitle':     '强调色',
+        'popover.accentNote':      '影响工具栏 · 选中行 · 状态芯片 · Island 强调色。仅本地保存。',
+        'nav.inbox':               '收件箱',
+        'nav.outbox':              '发件箱',
+        'nav.flagged':             '已标旗',
+        'list.title':              '收件箱',
+        'list.meta.unread':        '{n} 未读',
+        'list.meta.total':         '总计 {n}',
+        'palette.inputPlaceholder':'搜索邮件 · 跳转到信箱 · 运行 AI 动作…',
+        'palette.clearTooltip':    '清除 (Esc)',
+        'palette.clearAria':       '清除搜索',
+        'palette.kbd.navigate':    '上下移动',
+        'palette.kbd.selectGroup': '切换分组',
+        'palette.kbd.open':        '打开',
+        'palette.kbd.newWindow':   '新窗口打开',
+        'palette.kbd.dismiss':     '关闭',
+        'palette.kbd.run':         '运行',
+        'search.action.summarize':       '为本结果集起草摘要',
+        'search.action.summarizeMeta':   '5 封 · 预计 ~3.6s · ~$0.012 · 写入 ai_session 关联',
+        'search.action.markRead':        '全部标为已读',
+        'search.action.markReadMeta':    '5 封 · 本地即时 · 同步至 IMAP 4 个账号',
+        'search.action.reclassify':      '重跑 AI 分类（覆盖 11 字段）',
+        'search.action.reclassifyMeta':  '5 封 · ~6.0s · ~$0.045 · 旧版本归档至 ai_history',
+      },
+      'en': {
+        'titleBar.docTitle':       'MailAgent · Search',
+        'titleBar.searchHint':     'Search / Jump',
+        'titleBar.localeTooltip':  'Switch language (⌥G)',
+        'titleBar.localeAria':     'Switch language',
+        'titleBar.themeTooltip':   'Toggle light / dark (⌥L)',
+        'titleBar.themeAria':      'Toggle theme',
+        'titleBar.accentTooltip':  'Accent color (View → Appearance)',
+        'titleBar.accentAria':     'Accent color',
+        'titleBar.syncTooltip':    'Last sync 14:32:08',
+        'status.synced':           'Synced',
+        'popover.accentTitle':     'Accent Color',
+        'popover.accentNote':      'Affects toolbar · chips · selected row · Island accent. Stored locally.',
+        'nav.inbox':               'Inbox',
+        'nav.outbox':              'Outbox',
+        'nav.flagged':             'Flagged',
+        'list.title':              'Inbox',
+        'list.meta.unread':        '{n} unread',
+        'list.meta.total':         '{n} total',
+        'palette.inputPlaceholder':'Search mail · jump to mailbox · run AI action…',
+        'palette.clearTooltip':    'Clear (Esc)',
+        'palette.clearAria':       'Clear search',
+        'palette.kbd.navigate':    'navigate',
+        'palette.kbd.selectGroup': 'select group',
+        'palette.kbd.open':        'open',
+        'palette.kbd.newWindow':   'in new window',
+        'palette.kbd.dismiss':     'dismiss',
+        'palette.kbd.run':         'run',
+        'search.action.summarize':       'Draft summary for this result set',
+        'search.action.summarizeMeta':   '5 emails · ~3.6s · ~$0.012 · writes to ai_session',
+        'search.action.markRead':        'Mark all as read',
+        'search.action.markReadMeta':    '5 emails · instant local · syncs to 4 IMAP accounts',
+        'search.action.reclassify':      'Re-run AI classify (overwrite 11 fields)',
+        'search.action.reclassifyMeta':  '5 emails · ~6.0s · ~$0.045 · old versions go to ai_history',
+      },
+    };
+    window.__I18N_DICT = I18N_DICT;
+
+    const root  = document.documentElement;
+    const btn   = document.getElementById('locale-toggle');
+    const label = document.getElementById('locale-label');
+
+    function interp(s, n) { return (n != null) ? String(s).replace('{n}', String(n)) : s; }
+
+    function applyLocale(loc) {
+      if (!I18N_DICT[loc]) loc = DEFAULT_LOC;
+      const dict = I18N_DICT[loc];
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        if (el.closest('[data-i18n-skip]')) return;
+        const key = el.getAttribute('data-i18n');
+        if (!dict[key]) return;
+        const n = el.getAttribute('data-i18n-n');
+        el.textContent = interp(dict[key], n);
+      });
+      document.querySelectorAll('[data-i18n-attr]').forEach((el) => {
+        el.getAttribute('data-i18n-attr').split(',').forEach((pair) => {
+          const [attr, key] = pair.split(':').map((s) => s.trim());
+          if (dict[key]) el.setAttribute(attr, dict[key]);
+        });
+      });
+      const docTitleEl = document.querySelector('title[data-i18n]');
+      if (docTitleEl) {
+        const k = docTitleEl.getAttribute('data-i18n');
+        if (dict[k]) document.title = dict[k];
+      }
+      root.lang = loc;
+      root.dataset.locale = loc;
+      try { localStorage.setItem(KEY_LOCALE, loc); } catch (e) {}
+      if (label) label.textContent = (loc === 'zh-CN') ? '中文' : 'English';
+    }
+
+    const stored = (function () { try { return localStorage.getItem(KEY_LOCALE); } catch (e) { return null; } })();
+    const nav    = (navigator.language || '').toLowerCase();
+    const initial = stored || (nav.startsWith('zh') ? 'zh-CN' : 'en');
+    applyLocale(initial);
+
+    btn.addEventListener('click', () => {
+      applyLocale(root.dataset.locale === 'zh-CN' ? 'en' : 'zh-CN');
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        applyLocale(root.dataset.locale === 'zh-CN' ? 'en' : 'zh-CN');
+      }
+    });
+
+    window.__applyLocale = applyLocale;
+  })();
+
+  /* ─── Theme (dark / light) — verbatim from inbox ─────────────────── */
+  (function () {
+    const KEY_THEME = 'mailagent.theme';
+    const root      = document.documentElement;
+    const btn       = document.getElementById('theme-toggle');
+    const label     = document.getElementById('theme-label');
+    const iconDark  = document.getElementById('theme-icon-dark');
+    const iconLight = document.getElementById('theme-icon-light');
+
+    function applyTheme(theme) {
+      const isLight = theme === 'light';
+      if (isLight) {
+        root.dataset.theme = 'light';
+        root.classList.remove('dark');
+      } else {
+        delete root.dataset.theme;
+        root.classList.add('dark');
+      }
+      iconDark.classList.toggle('hidden', isLight);
+      iconLight.classList.toggle('hidden', !isLight);
+      label.textContent = isLight ? 'Light' : 'Dark';
+      btn.setAttribute('aria-pressed', String(isLight));
+      try { localStorage.setItem(KEY_THEME, isLight ? 'light' : 'dark'); } catch (e) {}
+    }
+
+    const stored = (function () { try { return localStorage.getItem(KEY_THEME); } catch (e) { return null; } })();
+    const sys    = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    applyTheme(stored || sys);
+
+    btn.addEventListener('click', () => {
+      applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+      }
+    });
+
+    if (!stored && window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: light)')
+        .addEventListener('change', (e) => applyTheme(e.matches ? 'light' : 'dark'));
+    }
+  })();
+
+  /* ─── Accent picker — verbatim from inbox ────────────────────────── */
+  (function () {
+    const ACCENTS = {
+      coral:  { hex: '#E5654B', label: 'Coral'  },
+      cobalt: { hex: '#4A78E5', label: 'Cobalt' },
+      teal:   { hex: '#2DB5A6', label: 'Teal'   },
+      rose:   { hex: '#DB5B7C', label: 'Rose'   },
+      slate:  { hex: '#7E8694', label: 'Slate'  },
+      olive:  { hex: '#9CA552', label: 'Olive'  },
+    };
+    const KEY = 'mailagent.accent';
+
+    const btn      = document.getElementById('appearance-btn');
+    const popover  = document.getElementById('theme-popover');
+    const labelEl  = document.getElementById('appearance-label');
+    const swatches = popover.querySelectorAll('[data-accent]');
+
+    function apply(name) {
+      if (!ACCENTS[name]) name = 'coral';
+      if (name === 'coral') document.documentElement.removeAttribute('data-accent');
+      else                  document.documentElement.dataset.accent = name;
+
+      labelEl.textContent = ACCENTS[name].label;
+      btn.querySelector('span.inline-block').style.background = ACCENTS[name].hex;
+
+      swatches.forEach(s => {
+        s.setAttribute('aria-checked', s.dataset.accent === name ? 'true' : 'false');
+      });
+      try { localStorage.setItem(KEY, name); } catch (e) {}
+    }
+
+    apply(localStorage.getItem(KEY) || 'coral');
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = !popover.classList.contains('hidden');
+      popover.classList.toggle('hidden', open);
+      btn.setAttribute('aria-expanded', String(!open));
+    });
+
+    swatches.forEach(s => {
+      s.addEventListener('click', () => apply(s.dataset.accent));
+    });
+
+    document.addEventListener('click', (e) => {
+      if (popover.classList.contains('hidden')) return;
+      if (popover.contains(e.target) || btn.contains(e.target)) return;
+      popover.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !popover.classList.contains('hidden')) {
+        popover.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+
+  /* ─── Palette behavior ────────────────────────────────────────────
+     - Last query persists to localStorage `mailagent.search.lastQuery`.
+       Restored on load so re-opening the palette feels like resuming.
+     - ↑ / ↓ moves selection across all .pal-row elements (across
+       groups — Linear-style continuous selection, not group-scoped).
+     - ⇥ jumps to the next group's first row.
+     - Esc / click on the veil dismisses (in this mockup, it dims the
+       palette so the user can see the dismissal happen; production
+       would unmount the dialog and restore focus to the inbox).
+     - Language pip is updated by a tiny ratio detector — ≥40% CJK
+       characters → "中", otherwise "EN". */
+  (function () {
+    const KEY_QUERY = 'mailagent.search.lastQuery';
+
+    const input   = document.getElementById('palette-input');
+    const veil    = document.getElementById('palette-veil');
+    const pane    = document.getElementById('palette-pane');
+    const clearBn = document.getElementById('palette-clear');
+    const langPip = document.getElementById('lang-pip');
+
+    /* Restore last query on load. */
+    try {
+      const last = localStorage.getItem(KEY_QUERY);
+      if (last) input.value = last;
+    } catch (e) {}
+
+    function detectLang(s) {
+      if (!s) return 'EN';
+      const cjk = (s.match(/[一-鿿぀-ヿ]/g) || []).length;
+      return cjk / s.length >= 0.4 ? '中' : 'EN';
+    }
+
+    function persist() {
+      try { localStorage.setItem(KEY_QUERY, input.value); } catch (e) {}
+      langPip.textContent = detectLang(input.value);
+    }
+    input.addEventListener('input', persist);
+    persist();
+
+    clearBn.addEventListener('click', () => {
+      input.value = '';
+      persist();
+      input.focus();
+    });
+
+    /* Selection navigation across all .pal-row. */
+    const rows = () => Array.from(document.querySelectorAll('.pal-row'));
+    function selectedIndex() {
+      const arr = rows();
+      return arr.findIndex(r => r.classList.contains('is-selected'));
+    }
+    function select(idx) {
+      const arr = rows();
+      if (arr.length === 0) return;
+      const clamped = Math.max(0, Math.min(arr.length - 1, idx));
+      arr.forEach((r, i) => r.classList.toggle('is-selected', i === clamped));
+      arr[clamped].scrollIntoView({ block: 'nearest' });
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        select(selectedIndex() + 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        select(selectedIndex() - 1);
+      } else if (e.key === 'Tab' && !e.shiftKey) {
+        /* Jump to next group's first row. Groups are delimited by <h2>. */
+        e.preventDefault();
+        const arr = rows();
+        const cur = selectedIndex();
+        if (cur < 0) { select(0); return; }
+        const curGroup = arr[cur].closest('div.space-y-px');
+        let next = arr.findIndex((r, i) => i > cur && r.closest('div.space-y-px') !== curGroup);
+        if (next === -1) next = 0;
+        select(next);
+      } else if (e.key === 'Escape') {
+        /* In production this returns focus to the inbox. In the mockup
+           we just fade the palette so the user can see the dismissal. */
+        if (!pane.classList.contains('opacity-0')) {
+          pane.style.transition = 'opacity 180ms cubic-bezier(0.4, 0, 0.2, 1)';
+          pane.style.opacity = '0';
+          veil.style.transition = 'opacity 180ms cubic-bezier(0.4, 0, 0.2, 1)';
+          veil.style.opacity = '0';
+          setTimeout(() => {
+            pane.style.opacity = '';
+            veil.style.opacity = '';
+          }, 800);
+        }
+      }
+    });
+
+    /* Click rows to select them (and visually confirm — opening would
+       navigate away in production). */
+    rows().forEach(r => {
+      r.addEventListener('mouseenter', () => {
+        /* hover-to-select is the Linear / Raycast convention; the
+           keyboard arrow handler still wins because hover lifts
+           naturally as the cursor moves */
+      });
+      r.addEventListener('click', () => {
+        rows().forEach(x => x.classList.toggle('is-selected', x === r));
+      });
+    });
+
+    /* Click on the veil dismisses. */
+    veil.addEventListener('click', () => {
+      pane.style.transition = 'opacity 180ms cubic-bezier(0.4, 0, 0.2, 1)';
+      pane.style.opacity = '0';
+      veil.style.transition = 'opacity 180ms cubic-bezier(0.4, 0, 0.2, 1)';
+      veil.style.opacity = '0';
+      setTimeout(() => {
+        pane.style.opacity = '';
+        veil.style.opacity = '';
+      }, 800);
+    });
+
+    /* Autofocus the input on load — the palette is "the screen". */
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  })();
+
+  /* ─── App nav collapse — passive sync ────────────────────────────
+     The palette overlay sits over the (faded) inbox shell, so the
+     ghost sidebar respects the user's collapse preference from the
+     inbox. Read once + listen for storage events. No toggle binding —
+     the search overlay itself doesn't surface collapse controls; the
+     user dismisses and toggles in inbox. */
+  (function () {
+    const KEY = 'mailagent.nav.collapsed';
+    const navs = document.querySelectorAll('[data-app-nav]');
+    if (!navs.length) return;
+    function apply(val) {
+      const v = val ? 'true' : 'false';
+      navs.forEach(n => n.setAttribute('data-collapsed', v));
+    }
+    const stored = (function () { try { return localStorage.getItem(KEY); } catch (e) { return null; } })();
+    apply(stored === '1');
+    window.addEventListener('storage', e => {
+      if (e.key === KEY) apply(e.newValue === '1');
+    });
+  })();
+</script>
+
+</body>
+</html>

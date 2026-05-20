@@ -39,6 +39,12 @@ export interface SendChatInput {
   backendKind: ChatBackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
+  /** Sprint 10 reviewer L3 — populates the AIDraftStart/Ready envelope so
+   *  ping-island can render `AI 起草中 / <senderName>` instead of `... / —`.
+   *  Caller (AIChatPanel) reads these from the active email's detail query
+   *  before calling `send()`. */
+  senderName?: string | null
+  subject?: string | null
 }
 
 export interface ChatError {
@@ -63,6 +69,12 @@ export interface UseEmailChatReturn {
   abortCurrent: () => void
   /** Dismiss the error banner. */
   clearError: () => void
+  /** Sprint 13 — "+ New conversation" affordance. Aborts the active
+   *  stream, clears renderer-side messages/error, and unsets
+   *  activeSessionId so the next `send()` opens a fresh session for the
+   *  current email. Backend keeps the older session row intact; a Sprint
+   *  14 history sidebar will surface a switcher. */
+  newSession: () => void
   /** Sprint 5 §2.3 state-machine #3 — re-fire the last failed input, if any.
    *  Surfaces a `Retry` button next to network / upstream errors. Null when
    *  there's nothing retryable (initial render, after success, etc.). */
@@ -180,6 +192,19 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // emit so the ping-island peer doesn't get an envelope per token.
   const streamedCharsRef = useRef(0)
   const lastStreamFireRef = useRef(0)
+  // Sprint 10 reviewer L2: session-scoped meta map for the island envelopes
+  // (emailId / senderName / subject). `send()` puts on session start; the
+  // stream subscription reads on chunk/done; 'done' / 'error' delete. Using
+  // a sessionId-keyed map (vs. reading emailIdRef on each chunk) makes the
+  // cross-email cumulative-char-leak case structurally impossible — the
+  // envelope's emailId comes from the same closure write that created the
+  // session, not from whichever email is mounted when the chunk arrives.
+  interface SessionIslandMeta {
+    emailId: number
+    senderName: string | null
+    subject: string | null
+  }
+  const sessionMetaRef = useRef<Map<number, SessionIslandMeta>>(new Map())
   useEffect(() => {
     activeSessionRef.current = activeSessionId
   }, [activeSessionId])
@@ -262,12 +287,18 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
             // char count is the simplest progress signal ping-island can
             // render in the Phase 1 pill (`…2.4k chars`) without us having
             // to thread a percent estimate through every backend.
+            //
+            // Sprint 10 L2 — emailId from the session-meta map keyed by the
+            // chunk's own sessionId. `emailIdRef.current` could point at a
+            // different email if the user switched mid-stream; the map
+            // entry was written when this session started so it stays bound
+            // to the originating email for the session's lifetime.
             streamedCharsRef.current = updated.content.length
-            const streamEmailId = emailIdRef.current
-            if (streamEmailId !== null && Date.now() - lastStreamFireRef.current >= 500) {
+            const meta = sessionMetaRef.current.get(envelope.sessionId)
+            if (meta && Date.now() - lastStreamFireRef.current >= 500) {
               lastStreamFireRef.current = Date.now()
               mailApi.island.aiDraftStream({
-                emailId: streamEmailId,
+                emailId: meta.emailId,
                 streamedChars: streamedCharsRef.current
               })
             }
@@ -301,18 +332,32 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         setLastFailedInput(null)
         // SSoT refresh (catch tool rows + token counts in one network query).
         void refresh(envelope.sessionId)
-        // Sprint 9 §2.3 — AIDraftReady envelope. Preview is the first 240
-        // chars of the final assistant message so the island can render a
-        // glanceable summary before the user switches back to MailAgent.
-        const readyEmailId = emailIdRef.current
-        if (readyEmailId !== null) {
+        // Sprint 9 §2.3 + Sprint 10 reviewer L1/L3 — final island envelope
+        // sequence. L1: emit one trailing AIDraftStream with the final char
+        // count so the Phase 1 pill ends on a truthful number (the 500 ms
+        // throttle would otherwise drop the last burst of chunks). L3:
+        // senderName / subject come from the session-meta map populated at
+        // send() time, so the ping-island Ready card reads `AI 草稿就绪 /
+        // <real sender>` instead of `... / —`.
+        const meta = sessionMetaRef.current.get(envelope.sessionId)
+        if (meta) {
           const preview = (event.finalContent || '').slice(0, 240)
+          // Trailing flush (L1) — only if we've streamed anything, to avoid a
+          // bogus 0-char stream emit on backends that send `done` straight
+          // after `start` with no chunks (rare but possible).
+          if (streamedCharsRef.current > 0) {
+            mailApi.island.aiDraftStream({
+              emailId: meta.emailId,
+              streamedChars: streamedCharsRef.current
+            })
+          }
           mailApi.island.aiDraftReady({
-            emailId: readyEmailId,
-            senderName: null,
-            subject: null,
+            emailId: meta.emailId,
+            senderName: meta.senderName,
+            subject: meta.subject,
             preview
           })
+          sessionMetaRef.current.delete(envelope.sessionId)
         }
       } else if (event.type === 'error') {
         setStreamingMessageId(null)
@@ -321,6 +366,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         if (event.code === 'E_QUOTA') {
           setQuotaCooldownUntil(Date.now() + QUOTA_COOLDOWN_MS)
         }
+        // L2 cleanup — session won't produce more events; drop the meta entry
+        // to keep the map from growing across long sessions with frequent retries.
+        sessionMetaRef.current.delete(envelope.sessionId)
       }
     })
     return unsubscribe
@@ -426,12 +474,23 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       // Sprint 9 §2.3 — fire AIDraftStart envelope. Reset throttle counters
       // before the first stream chunk arrives; the main side fails open if
       // ping-island isn't running.
+      // Sprint 10 L2/L3 — populate the session-meta map so the stream
+      // subscription can read sessionId → {emailId, senderName, subject}
+      // without trusting emailIdRef across email switches, and so the Ready
+      // envelope can label the card with the real sender.
       streamedCharsRef.current = 0
       lastStreamFireRef.current = 0
+      const senderName = input.senderName ?? null
+      const subject = input.subject ?? null
+      sessionMetaRef.current.set(result.sessionId, {
+        emailId: myEmail,
+        senderName,
+        subject
+      })
       mailApi.island.aiDraftStart({
         emailId: myEmail,
-        senderName: null,
-        subject: null,
+        senderName,
+        subject,
         prompt: input.message
       })
       await refresh(result.sessionId)
@@ -450,10 +509,35 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     // if the backend died). Clear the streaming id immediately and pull
     // the canonical `aborted` row off the SSoT so the UI reflects state.
     setStreamingMessageId(null)
+    // Sprint 10 L2 — drop the meta entry; no more envelopes will fire for
+    // this session.
+    sessionMetaRef.current.delete(sid)
     void refresh(sid)
   }, [mailApi, refresh])
 
   const clearError = useCallback(() => setError(null), [])
+
+  // Sprint 13 — "+ New conversation" affordance. Resets renderer-side
+  // session state so the next `send()` opens a fresh session for the
+  // current email. Aborts any in-flight stream first so its `done` event
+  // doesn't land on a freshly-blanked message list. The backend doesn't
+  // (yet) honour a `forceNew` flag; on the next `chat.start` it'll create
+  // a new SQLite row because the renderer no longer carries activeSessionId.
+  //
+  // NOTE: ai_chat.db keeps the older session intact — Sprint 14's session
+  // history sidebar will surface a switcher; until then the previous
+  // conversation is simply not visible until the panel reloads.
+  const newSession = useCallback(() => {
+    const sid = activeSessionRef.current
+    if (sid !== null) mailApi.chat.abort(sid)
+    sessionMetaRef.current.delete(sid ?? -1)
+    setActiveSessionIdState(null)
+    activeSessionRef.current = null
+    setMessages([])
+    setStreamingMessageId(null)
+    setError(null)
+    setLastFailedInput(null)
+  }, [mailApi])
 
   // Sprint 5 #3 — Retry CTA. Only available when:
   //   1. we have a captured failed input (set in send())
@@ -482,6 +566,7 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     send,
     abortCurrent,
     clearError,
+    newSession,
     retryLast,
     quotaCooldownUntil
   }

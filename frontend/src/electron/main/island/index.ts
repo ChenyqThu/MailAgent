@@ -37,6 +37,7 @@ export {
 export {
   getIslandStatus,
   probeOnce,
+  reportSendOutcome,
   setIslandEnabled,
   startProbeLoop,
   stopProbeLoop,

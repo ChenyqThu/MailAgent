@@ -53,9 +53,10 @@ def _db_version(db_path: str) -> int:
 
 
 def test_fresh_init_at_v6(tmp_path):
-    """fresh DB → 当前最新 schema, 新表 + 必备 v4/v5/v7 表都在.
+    """fresh DB → 当前最新 schema, 新表 + 必备 v4/v5/v7/v10 表都在.
 
-    DB_VERSION 已升到 7（v7 加 island_dispatch，Island-Sprint 2 派发审计）。
+    DB_VERSION 演进：v8 加 email_metadata.is_pinned + pinned_at（ALTER ADD COLUMN，无新表）；
+    v9 加 email_metadata.is_important（同上）；v10 加 email_outbox 表（Sprint 15 SSoT inversion）。
     """
     db = tmp_path / "sync.db"
     SyncStore(str(db))
@@ -68,8 +69,9 @@ def test_fresh_init_at_v6(tmp_path):
         "cli_checkpoints",
         "v4_rollout_stats",
         "island_dispatch",  # v7
+        "email_outbox",     # v10
     }.issubset(tables)
-    assert _db_version(str(db)) == 7
+    assert _db_version(str(db)) == 10
 
 
 def test_v6_indices_exist(tmp_path):
@@ -85,7 +87,7 @@ def test_idempotent_double_init(tmp_path):
     db = tmp_path / "sync.db"
     SyncStore(str(db))
     SyncStore(str(db))  # 应该幂等
-    assert _db_version(str(db)) == 7
+    assert _db_version(str(db)) == 10
 
 
 def test_v5_to_v6_preserves_existing_rows(tmp_path):
@@ -114,9 +116,9 @@ def test_v5_to_v6_preserves_existing_rows(tmp_path):
     finally:
         conn.close()
 
-    # 重新 init → 升级到当前最新（v7）
+    # 重新 init → 升级到当前最新（v10）
     SyncStore(str(db))
-    assert _db_version(str(db)) == 7
+    assert _db_version(str(db)) == 10
 
     # 原 email_metadata 行还在
     conn = sqlite3.connect(str(db))
@@ -129,11 +131,12 @@ def test_v5_to_v6_preserves_existing_rows(tmp_path):
     assert row is not None
     assert row[0] == "v5 row preserved"
 
-    # v6 / v7 新表都已建
+    # v6 / v7 / v10 新表都已建
     tables = _list_tables(str(db))
     assert "cli_checkpoints" in tables
     assert "v4_rollout_stats" in tables
     assert "island_dispatch" in tables
+    assert "email_outbox" in tables
 
 
 def test_cli_checkpoint_upsert_get_delete(tmp_path):

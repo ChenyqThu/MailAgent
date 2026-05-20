@@ -20,7 +20,12 @@ from typing import List, Optional, TYPE_CHECKING
 
 import typer
 
-from src.cli.exceptions import CliError, CliInvalidArgError, CliSchemaError
+from src.cli.exceptions import (
+    CliError,
+    CliInvalidArgError,
+    CliNotFoundError,
+    CliSchemaError,
+)
 from src.cli.output import apply_local_output, emit, emit_cli_error
 
 if TYPE_CHECKING:
@@ -29,7 +34,7 @@ if TYPE_CHECKING:
 app = typer.Typer(name="admin", help="统计 / 健康 / db-version", no_args_is_help=True)
 
 
-EXPECTED_DB_VERSION = 7
+EXPECTED_DB_VERSION = 10
 REQUIRED_TABLES = (
     "email_metadata",
     "email_body",
@@ -38,6 +43,7 @@ REQUIRED_TABLES = (
     "cli_checkpoints",
     "v4_rollout_stats",
     "island_dispatch",  # v7: ping-island Sprint 2 派发审计
+    "email_outbox",     # v10: SQLite SSoT inversion (Sprint 15)
 )
 
 
@@ -50,11 +56,15 @@ def admin_stats(
     ctx: typer.Context,
     section: Optional[str] = typer.Option(
         None, "--section",
-        help="watcher / sync_store / handlers / v4_rollout / all",
+        help="watcher / sync_store / handlers / v4_rollout / outbox / all",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """汇总服务运行状态 — PR-2 MVP: 仅 sync_store live_query 段填充, 其余 not_implemented_in_pr2."""
+    """汇总服务运行状态 — PR-2 MVP: 仅 sync_store live_query 段填充, 其余 not_implemented_in_pr2.
+
+    Sprint 15 Stage 4 加 outbox section: OutboxRepository.get_stats() 反查
+    by_status / by_target / age_buckets / total。
+    """
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
 
@@ -75,11 +85,15 @@ def admin_stats(
     # PR-4 R-06: v4_rollout 真实数据 (RFC §8 选项 A).
     v4_section = _build_v4_rollout_section(cli)
 
+    # Sprint 15: outbox 队列分布
+    outbox_section = _build_outbox_section(cli)
+
     full_data = {
         "watcher": {"_source": "not_implemented_in_pr2"},
         "sync_store": sync_store_section,
         "handlers": {"_source": "not_implemented_in_pr2"},
         "v4_rollout": v4_section,
+        "outbox": outbox_section,
     }
 
     if section and section.lower() != "all":
@@ -285,7 +299,11 @@ def admin_db_version(
     if not compatible:
         raise emit_cli_error(cli, CliSchemaError(
             f"db_version={version} mismatch (expected {EXPECTED_DB_VERSION})",
-            hint="Run migration to bring schema to v6; see docs/architecture_v4_sqlite_ssot.md",
+            hint=(
+                f"Run migration to bring schema to v{EXPECTED_DB_VERSION}; "
+                "restart mail-sync to trigger SyncStore._init_database() auto-migrate. "
+                "See docs/architecture_v4_sqlite_ssot.md + SPRINT15-HANDOFF.md."
+            ),
             context={
                 "db_path": db_path,
                 "version": version,
@@ -795,3 +813,524 @@ def admin_repair_parents(
         emit(cli, data)
     if not data["ok"]:
         raise typer.Exit(code=1)
+
+
+# ============================================================
+# Sprint 15 Stage 3: admin config show / get / set
+# ============================================================
+#
+# 让前端 / agent / 看板能 typed-access 所有 .env 配置；前端「设置」页直接走
+# `admin config show` / `set` 不用手工编辑 .env。
+#
+# 敏感字段自动脱敏（name 含 token/secret/password/api_key），`--show-secrets`
+# 显示原值（需要 auth, 即使是 show / get 命令）。`set` 是写命令, 全场要 auth。
+#
+# 详 SPRINT15-HANDOFF.md scope 决策 #3: 写 .env 文件持久化, restart 生效
+# (不做运行时 hot-reload)。
+
+config_app = typer.Typer(
+    name="config",
+    help="读 / 写 .env 配置 (Sprint 15)",
+    no_args_is_help=True,
+)
+
+# 字段名包含这几个 suffix 自动 mask 输出 (不区分大小写)
+SENSITIVE_FIELD_PARTS = ("token", "secret", "password", "api_key")
+
+
+def _is_sensitive(field_name: str) -> bool:
+    n = field_name.lower()
+    return any(part in n for part in SENSITIVE_FIELD_PARTS)
+
+
+def _mask_value(value) -> str:
+    if value is None or value == "":
+        return "<unset>"
+    s = str(value)
+    if len(s) <= 6:
+        return "***"
+    return f"***{s[-4:]}"
+
+
+def _collect_settings(cli, *, show_secrets: bool) -> dict:
+    """反射 cli.cli_config 拿所有字段值. 敏感字段按 flag 决定 mask."""
+    cfg = cli.cli_config
+    fields_info = cfg.model_fields
+    out: dict[str, dict] = {}
+    for name, field_info in fields_info.items():
+        try:
+            value = getattr(cfg, name)
+        except Exception:
+            value = None
+        env_var = (field_info.alias or name).upper()
+        if _is_sensitive(name) and not show_secrets:
+            display_value = _mask_value(value)
+        else:
+            display_value = value
+        out[name] = {
+            "env_var": env_var,
+            "value": display_value,
+            "default": field_info.default,
+            "description": field_info.description or "",
+            "sensitive": _is_sensitive(name),
+        }
+    return out
+
+
+def _coerce_value(value: str, annotation):
+    """字符串 → annotation 类型 (bool / int / float / str / Optional[T])."""
+    import typing as _typing
+
+    origin = _typing.get_origin(annotation)
+    if origin is _typing.Union:
+        args = [a for a in _typing.get_args(annotation) if a is not type(None)]
+        if args:
+            annotation = args[0]
+
+    if annotation is bool:
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off", ""):
+            return False
+        raise ValueError(f"cannot coerce {value!r} to bool")
+    if annotation is int:
+        return int(value)
+    if annotation is float:
+        return float(value)
+    return str(value)
+
+
+def _resolve_env_file(cli) -> Path:
+    """找 .env 文件实际路径. config_path > MAILAGENT_CONFIG env > 项目根 .env."""
+    import os
+
+    config_path = (
+        getattr(cli, "config_path", None)
+        or os.environ.get("MAILAGENT_CONFIG")
+        or ".env"
+    )
+    return Path(config_path).resolve()
+
+
+@config_app.command("show")
+def admin_config_show(
+    ctx: typer.Context,
+    key: Optional[str] = typer.Option(None, "--key", help="只显示指定字段"),
+    show_secrets: bool = typer.Option(
+        False, "--show-secrets",
+        help="显示敏感字段原值 (token / secret / password / api_key; 需 auth)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """列出所有 Settings 字段 + 当前值. 敏感字段默认脱敏 (***last4)."""
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    if show_secrets:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    all_settings = _collect_settings(cli, show_secrets=show_secrets)
+
+    if key:
+        if key not in all_settings:
+            raise emit_cli_error(cli, CliNotFoundError(
+                f"Unknown config key: {key!r}",
+                hint="Run `mailagent admin config show` to list all valid keys.",
+            ))
+        emit(cli, {"key": key, **all_settings[key]})
+    else:
+        emit(cli, {"settings": all_settings, "count": len(all_settings)})
+
+
+@config_app.command("get")
+def admin_config_get(
+    ctx: typer.Context,
+    key: str = typer.Argument(..., help="配置字段名 (Pydantic field name)"),
+    show_secrets: bool = typer.Option(
+        False, "--show-secrets", help="显示敏感字段原值 (需 auth)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """读单个配置字段."""
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    if show_secrets:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    all_settings = _collect_settings(cli, show_secrets=show_secrets)
+    if key not in all_settings:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Unknown config key: {key!r}",
+            hint="Run `mailagent admin config show` to list all valid keys.",
+        ))
+    emit(cli, {"key": key, **all_settings[key]})
+
+
+@config_app.command("set")
+def admin_config_set(
+    ctx: typer.Context,
+    key: str = typer.Argument(..., help="配置字段名 (Pydantic field name)"),
+    value: str = typer.Argument(..., help="新值 (字符串; bool / int / float 自动 coerce)"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="只显示 diff, 不实际写 .env; 跳过 auth",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="跳过 diff 确认 (CLI 当前无交互, 该 flag 为 future-proof)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """写 .env 文件持久化配置. set 后需 `pm2 restart mail-sync` 才能让运行时生效.
+
+    流程: 字段名校验 → 类型 coerce → diff → auth → atomic .env write (python-dotenv).
+    Atomic guarantee 来自 dotenv set_key 的 tmp + replace 模式。保留注释 / 空行 / 段落。
+
+    敏感字段（token / secret / password / api_key）的 old_value / new_value 在
+    返回 envelope 中 mask, 避免 log 落盘泄漏 (text mode 也走 mask)。
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    cfg = cli.cli_config
+    fields_info = cfg.model_fields
+    if key not in fields_info:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Unknown config key: {key!r}",
+            hint="Run `mailagent admin config show` to list all valid keys.",
+        ))
+
+    field_info = fields_info[key]
+    env_var = (field_info.alias or key).upper()
+
+    # 类型 coerce + validate
+    try:
+        coerced = _coerce_value(value, field_info.annotation)
+    except (ValueError, TypeError) as exc:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"Type validation failed for {key}: {exc}",
+            hint=(
+                f"Field {key} expects type {field_info.annotation}; "
+                "for bool use true/false/yes/no/on/off."
+            ),
+        ))
+
+    old_value = getattr(cfg, key, None)
+    sensitive = _is_sensitive(key)
+
+    diff = {
+        "key": key,
+        "env_var": env_var,
+        "old_value": _mask_value(old_value) if sensitive else old_value,
+        "new_value": _mask_value(coerced) if sensitive else coerced,
+        "sensitive": sensitive,
+    }
+
+    if dry_run:
+        emit(cli, {"dry_run": True, **diff})
+        return
+
+    # 写命令 auth (dry-run 跳过)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    # 找 .env 文件 + atomic write
+    env_file = _resolve_env_file(cli)
+    if not env_file.exists():
+        env_file.touch()  # python-dotenv set_key 要求文件存在
+
+    try:
+        from dotenv import set_key as _dotenv_set_key
+        # dotenv 把所有值都序列化成 str; bool True → "True" 是 pydantic 能 parse 的
+        _dotenv_set_key(str(env_file), env_var, str(coerced), quote_mode="auto")
+    except Exception as exc:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f".env write failed: {exc}",
+        ))
+
+    emit(cli, {
+        "dry_run": False,
+        **diff,
+        "env_file": str(env_file),
+        "restart_required": True,
+    })
+
+
+# 挂到 admin app
+app.add_typer(config_app, name="config")
+
+
+# ============================================================
+# Sprint 15 Stage 4: 管理面补全
+# ============================================================
+#
+# 新增 3 个独立命令 + admin stats --section outbox 扩展, 让前端 Dashboard 拿到
+# 综合状态视图, 不再让 SQL 散落到 CLAUDE.md。
+#
+# - admin fts-health   FTS5 索引完整性 (body vs fts 行数 gap + integrity)
+# - admin pm2-status   PM2 mail-sync 进程状态（前端避免与主进程冲突时用）
+# - admin queue-depth  综合队列: sync_store / outbox / llm_processing
+
+
+def _build_outbox_section(cli: "CliContext") -> dict:
+    """OutboxRepository.get_stats() → admin stats outbox section."""
+    try:
+        from src.sync.outbox import OutboxRepository
+        cfg = cli.cli_config
+        repo = OutboxRepository(cfg.sync_store_db_path)
+        stats = repo.get_stats()
+        return {
+            "_source": "live_query",
+            "total": stats.total,
+            "by_status": stats.by_status,
+            "by_target": stats.by_target,
+            "age_buckets": stats.age_buckets,
+        }
+    except Exception as exc:
+        return {
+            "_source": "error",
+            "_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+@app.command("fts-health")
+def admin_fts_health(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """FTS5 索引健康度: email_body vs email_body_fts 行数对比 + integrity_check.
+
+    返回:
+      body_rows / fts_rows / gap (>0 表示 reindex 落后) /
+      integrity_check ('ok' or error msg) / fts_size_bytes (近似).
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    cfg = cli.cli_config
+    db_path = cfg.sync_store_db_path
+    data: dict = {}
+    try:
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        try:
+            body_rows = conn.execute("SELECT COUNT(*) FROM email_body").fetchone()[0]
+            fts_rows = conn.execute("SELECT COUNT(*) FROM email_body_fts").fetchone()[0]
+            data["body_rows"] = int(body_rows)
+            data["fts_rows"] = int(fts_rows)
+            data["gap"] = int(body_rows) - int(fts_rows)
+
+            # FTS5 integrity-check
+            try:
+                conn.execute(
+                    "INSERT INTO email_body_fts(email_body_fts) VALUES('integrity-check')"
+                )
+                data["integrity_check"] = "ok"
+            except sqlite3.OperationalError as exc:
+                data["integrity_check"] = str(exc)[:200]
+
+            # 文件大小 (粗略, fts 与 main DB 共享文件)
+            try:
+                data["fts_size_bytes"] = Path(db_path).stat().st_size
+            except OSError:
+                data["fts_size_bytes"] = None
+        finally:
+            conn.close()
+    except Exception as exc:
+        raise emit_cli_error(cli, CliError(
+            f"fts-health failed: {type(exc).__name__}: {exc}",
+        ))
+
+    data["healthy"] = data["gap"] == 0 and data["integrity_check"] == "ok"
+
+    if cli.output.lower() == "text":
+        print(f"body_rows         {data['body_rows']}")
+        print(f"fts_rows          {data['fts_rows']}")
+        print(f"gap               {data['gap']}")
+        print(f"integrity_check   {data['integrity_check']}")
+        print(f"healthy           {data['healthy']}")
+    else:
+        emit(cli, data)
+
+
+@app.command("pm2-status")
+def admin_pm2_status(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """PM2 mail-sync 主进程状态. 前端避免与主进程并发冲突时用.
+
+    返回:
+      pm2_available (CLI 是否安装) /
+      mail_sync (online/pid/uptime_sec/memory_mb/cpu_percent/restart_count) | null
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    import json as _json
+    import subprocess as _subprocess
+    import time as _time
+
+    data: dict = {
+        "pm2_available": False,
+        "mail_sync": None,
+        "checked_at": _time.time(),
+    }
+    try:
+        result = _subprocess.run(
+            ["pm2", "jlist"],
+            capture_output=True, text=True, timeout=5.0,
+        )
+        data["pm2_available"] = result.returncode == 0
+        if result.returncode != 0:
+            data["error"] = f"pm2 jlist exit {result.returncode}: {result.stderr[:200]}"
+        else:
+            try:
+                procs = _json.loads(result.stdout or "[]")
+            except _json.JSONDecodeError:
+                data["error"] = "pm2 jlist output not JSON"
+                procs = []
+            for proc in procs:
+                if not isinstance(proc, dict):
+                    continue
+                if proc.get("name") != "mail-sync":
+                    continue
+                env = proc.get("pm2_env") or {}
+                monit = proc.get("monit") or {}
+                uptime_sec = None
+                if env.get("pm_uptime"):
+                    uptime_sec = max(
+                        0,
+                        int(_time.time() - env["pm_uptime"] / 1000),
+                    )
+                data["mail_sync"] = {
+                    "name": proc.get("name"),
+                    "pid": proc.get("pid"),
+                    "online": env.get("status") == "online",
+                    "status": env.get("status"),
+                    "uptime_sec": uptime_sec,
+                    "memory_mb": (
+                        round(monit.get("memory", 0) / 1024 / 1024, 2)
+                        if monit.get("memory") else None
+                    ),
+                    "cpu_percent": monit.get("cpu"),
+                    "restart_count": env.get("restart_time"),
+                }
+                break
+    except FileNotFoundError:
+        data["pm2_available"] = False
+        data["error"] = "pm2 CLI not installed"
+    except _subprocess.TimeoutExpired:
+        data["pm2_available"] = False
+        data["error"] = "pm2 jlist timeout (>5s)"
+    except Exception as exc:
+        data["pm2_available"] = False
+        data["error"] = f"{type(exc).__name__}: {exc}"
+
+    if cli.output.lower() == "text":
+        print(f"pm2_available     {data['pm2_available']}")
+        if data["mail_sync"]:
+            ms = data["mail_sync"]
+            print(f"mail-sync         {ms['status']} pid={ms['pid']} uptime={ms['uptime_sec']}s")
+            print(f"  memory_mb       {ms['memory_mb']}")
+            print(f"  cpu_percent     {ms['cpu_percent']}")
+            print(f"  restart_count   {ms['restart_count']}")
+        else:
+            print("mail-sync         (not running)")
+        if "error" in data:
+            print(f"error             {data['error']}")
+    else:
+        emit(cli, data)
+
+
+@app.command("queue-depth")
+def admin_queue_depth(
+    ctx: typer.Context,
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """综合队列视图. 前端 Dashboard 一次拉所有 backlog 看一眼就清楚.
+
+    返回:
+      sync_store: {pending, fetch_failed, failed, dead_letter}
+      outbox:     {pending, processing, failed, dead_letter}
+      llm_processing: {pending, failed, gave_up}
+    """
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+
+    cfg = cli.cli_config
+    data: dict = {}
+
+    # sync_store
+    try:
+        ss_stats = cli.sync_store.get_stats()
+        by_status = ss_stats.get("by_status", {}) or {}
+        data["sync_store"] = {
+            "pending": int(by_status.get("pending", 0)),
+            "fetch_failed": int(by_status.get("fetch_failed", 0)),
+            "failed": int(by_status.get("failed", 0)),
+            "dead_letter": int(by_status.get("dead_letter", 0)),
+            "synced": int(by_status.get("synced", 0)),
+            "skipped": int(by_status.get("skipped", 0)),
+        }
+    except Exception as exc:
+        data["sync_store"] = {"_error": f"{type(exc).__name__}: {exc}"}
+
+    # outbox
+    try:
+        from src.sync.outbox import OutboxRepository
+        repo = OutboxRepository(cfg.sync_store_db_path)
+        outbox_stats = repo.get_stats()
+        data["outbox"] = {
+            "pending": outbox_stats.by_status.get("pending", 0),
+            "processing": outbox_stats.by_status.get("processing", 0),
+            "failed": outbox_stats.by_status.get("failed", 0),
+            "dead_letter": outbox_stats.by_status.get("dead_letter", 0),
+            "done": outbox_stats.by_status.get("done", 0),
+            "total": outbox_stats.total,
+        }
+    except Exception as exc:
+        data["outbox"] = {"_error": f"{type(exc).__name__}: {exc}"}
+
+    # llm_processing
+    try:
+        conn = sqlite3.connect(cfg.sync_store_db_path, timeout=5.0)
+        try:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_processing'"
+            )
+            has_table = cursor.fetchone() is not None
+            if has_table:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) FROM llm_processing GROUP BY status"
+                ).fetchall()
+                llm = {r[0]: int(r[1]) for r in rows}
+                data["llm_processing"] = {
+                    "pending": llm.get("pending", 0),
+                    "failed": llm.get("failed", 0),
+                    "gave_up": llm.get("gave_up", 0),
+                    "success": llm.get("success", 0),
+                    "total": sum(llm.values()),
+                }
+            else:
+                data["llm_processing"] = {"_source": "table_missing"}
+        finally:
+            conn.close()
+    except Exception as exc:
+        data["llm_processing"] = {"_error": f"{type(exc).__name__}: {exc}"}
+
+    if cli.output.lower() == "text":
+        for sec_name, sec_data in data.items():
+            print(f"== {sec_name} ==")
+            for k, v in sec_data.items():
+                print(f"  {k:20}{v}")
+    else:
+        emit(cli, data)

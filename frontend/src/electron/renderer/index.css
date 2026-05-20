@@ -49,6 +49,20 @@
    * mockup-visible change beyond CTA legibility. */
   --c-accent-fg: 15 16 21;
 
+  /* Sprint 13 round 7 user feedback — "起草回复" CTA needed visible
+   * mockup-style white text on a deep coral. text-accent-fg (near-black
+   * on lifted coral) preserved AA but read as muted compared with the
+   * mockup. The dim accent (Sprint 4 already tuned per swatch — see
+   * `--c-accent-dim`) is the deepest of the three accent stops; white
+   * fg on it lands ≥ 5:1 on every dark-mode swatch. Light mode keeps
+   * default accent (already deep) + white. */
+  --c-cta-bg: var(--c-accent-dim);
+  /* Hover lifts one stop toward the brand accent so the button feels
+   * responsive; white fg drops to ~3:1 transiently, which is acceptable
+   * for a hover-only state. */
+  --c-cta-bg-hover: var(--c-accent);
+  --c-cta-fg: 255 255 255;
+
   /* Chip palette — Sprint 4 a11y carry-forward (REVIEW-LOG H-01).
    *
    * Sprint 3 used fixed hex (#E5634F etc.) in tailwind.config.ts, which
@@ -69,6 +83,27 @@
   --c-fail: 252 152 152;
   --c-info: 184 214 244;
   --c-ai: 224 196 244;
+
+  /* Sprint 11 V1.4 chrome — glass material tuples used by the nav-shell
+   * account popover + theme popover. Saturation 180% pulls accent color
+   * through the blur (Apple signature). --pop-shadow is the dark recipe;
+   * :root[data-theme='light'] overrides --glass-stroke + --pop-shadow. */
+  --glass: saturate(180%) blur(28px);
+  --glass-lg: saturate(180%) blur(40px);
+  --glass-stroke: rgb(255 255 255 / 0.08);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    0 24px 60px rgba(0, 0, 0, 0.55),
+    0 6px 16px rgba(0, 0, 0, 0.4);
+
+  /* Aurora wallpaper tinted with the live accent — sits behind the
+   * Liquid-Glass chrome panes so the blur picks up colour from the
+   * accent. body::before pulls this in via `background: var(--wallpaper)`. */
+  --wallpaper:
+    radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+    radial-gradient(55vw 60vh at 95% 6%, rgba(80, 140, 255, 0.22), transparent 65%),
+    radial-gradient(60vw 55vh at 50% 110%, rgba(160, 110, 255, 0.18), transparent 70%),
+    linear-gradient(180deg, #0e1013 0%, #15181d 100%);
 }
 
 :root[data-theme='light'] {
@@ -95,6 +130,10 @@
    * white-on-accent reaches AA again. Dark mode keeps near-black fg. */
   --c-accent-fg: 255 255 255;
 
+  /* Light mode CTA: default accent is already deep enough for white text. */
+  --c-cta-bg: var(--c-accent);
+  --c-cta-bg-hover: var(--c-accent-hi);
+
   /* Light-mode chip palette — same role assignments as dark, but the
    * foreground luminance is dropped so chip text reads as AA over the
    * bg-X/15 wash (≈ 15% chip color over white). The neutral-on-neutral
@@ -110,6 +149,22 @@
   --c-fail: 130 30 32;
   --c-info: 24 70 116;
   --c-ai: 92 58 130;
+
+  /* Glass surface stroke flips to a translucent white so the hairline
+   * remains visible against the brighter paper. Pop-shadow softens too —
+   * dark drop on warm paper would feel out of character. */
+  --glass-stroke: rgb(255 255 255 / 0.7);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.85),
+    0 18px 50px rgba(18, 24, 46, 0.16),
+    0 4px 14px rgba(18, 24, 46, 0.1);
+
+  /* Lighter aurora on warm paper for light mode. */
+  --wallpaper:
+    radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+    radial-gradient(55vw 60vh at 95% 6%, rgba(110, 160, 255, 0.32), transparent 65%),
+    radial-gradient(60vw 55vh at 50% 110%, rgba(180, 140, 235, 0.22), transparent 70%),
+    linear-gradient(180deg, #f6f7fb 0%, #eceef4 100%);
 }
 
 /* Per-accent dark-mode swatches. Sprint 4 a11y carry-forward: all
@@ -499,3 +554,1261 @@ mark {
 .swatch-olive {
   background: linear-gradient(135deg, rgb(196, 208, 122), rgb(172, 184, 106));
 }
+
+/* ─── Sprint 11 V1.4 — Liquid Glass material layers ──────────────────
+ * Mockup ref §2.8 Liquid Glass over an aurora wallpaper. Chrome surfaces
+ * pick ink-1 (sidebar/titlebar/statusbar), interior list pane is ink-2,
+ * and the email detail pane is ink-3. The wallpaper bleeds through via
+ * `body::before` (declared in this block) and each `.glass-*` class
+ * applies the same blur filter at progressively higher opacities so the
+ * deeper into the layout you go, the less aurora shows. */
+html,
+body {
+  background: transparent;
+  overscroll-behavior: none;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--wallpaper);
+  background-attachment: fixed;
+  pointer-events: none;
+  transition: background 320ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.glass {
+  background-color: rgb(var(--ink-1) / 0.55);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+}
+.glass-2 {
+  background-color: rgb(var(--ink-2) / 0.45);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+}
+.glass-3 {
+  background-color: rgb(var(--ink-3) / 0.55);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+}
+.glass-pop {
+  background-color: rgb(var(--ink-2) / 0.82);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+  border: 1px solid var(--glass-stroke);
+  box-shadow: var(--pop-shadow);
+}
+
+/* Sprint 13 round 7 — primary CTA pill ("起草回复"). Token-driven so
+ * accent swaps still recolour the button, but the deeper accent stop
+ * means white fg + icon stay legible (mockup-faithful) on every accent
+ * without falling out of AA. */
+.btn-cta {
+  background-color: rgb(var(--c-cta-bg));
+  color: rgb(var(--c-cta-fg));
+}
+.btn-cta:hover:not(:disabled) {
+  background-color: rgb(var(--c-cta-bg-hover));
+}
+/* Honour accessibility opt-outs — flatten to opaque ink and skip the
+ * blur. Layout and contrast stay identical. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background-color: rgb(var(--ink-1));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .glass-2 {
+    background-color: rgb(var(--ink-2));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .glass-3 {
+    background-color: rgb(var(--ink-3));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .glass-pop {
+    background-color: rgb(var(--ink-2));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* ─── Sprint 11 V1.4 — Theme picker popover (TitleBar Accent picker) ──
+ * Ported verbatim from frontend/ref/mockup-inbox.html lines 504-540. The
+ * AccentPickerPopover.tsx renders a 264px fixed-position card with a 3×2
+ * grid of 36px swatch buttons; selected swatch carries 2px coral ring +
+ * inset white check via ::after. Lives in authored CSS (not Tailwind
+ * utilities) so Tailwind purge cannot touch the class names. */
+.theme-popover {
+  position: fixed;
+  top: 44px;
+  right: 12px;
+  width: 264px;
+  background-color: rgb(var(--ink-2) / 0.82);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+  border: 1px solid var(--glass-stroke);
+  border-radius: 12px;
+  box-shadow: var(--pop-shadow);
+  z-index: 60;
+  overflow: hidden;
+}
+.swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 0;
+  cursor: pointer;
+  position: relative;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.swatch:hover {
+  transform: scale(1.06);
+}
+.swatch[aria-checked='true'] {
+  box-shadow:
+    0 0 0 2px rgb(var(--ink-2)),
+    0 0 0 4px rgb(var(--c-accent));
+}
+.swatch[aria-checked='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>")
+    center / 14px 14px no-repeat;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
+
+/* ─── Sprint 11 V1.4 — App nav shell collapse contract ────────────────
+ * DESIGN.md §2.11. The aside never changes shape per screen — only
+ * `data-collapsed` flips. Width animates; labels / badges / section
+ * headers / kbd / popover collapse out; icons stay centered and grow
+ * 15→19px so the icon-only rail is still tappable. State persists to
+ * localStorage["mailagent.nav.collapsed"] (managed by state/nav-shell.ts)
+ * and broadcasts via the storage event so pop-out windows stay in sync.
+ *
+ * Authored CSS class names are load-bearing per §2.11 hooks list —
+ * Tailwind never sees these so the contract survives purge. */
+.app-nav {
+  width: 240px;
+  flex-shrink: 0;
+  transition: width 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.app-nav[data-collapsed='true'] {
+  width: 56px;
+}
+.app-nav[data-collapsed='true'] .app-nav-header {
+  justify-content: center;
+  padding: 0.375rem 0;
+}
+.app-nav[data-collapsed='true'] a > span:not(.app-nav-keep),
+.app-nav[data-collapsed='true'] a > kbd,
+.app-nav[data-collapsed='true'] button > span:not(.app-nav-keep),
+.app-nav[data-collapsed='true'] button > kbd,
+.app-nav[data-collapsed='true'] .app-nav-section-header,
+.app-nav[data-collapsed='true'] .app-nav-account,
+.app-nav[data-collapsed='true'] .app-nav-account-popover {
+  display: none !important;
+}
+/* Section spacers stay visible when collapsed — the only thing separating
+ * one group of icons from another in the icon-only rail. */
+.app-nav[data-collapsed='true'] .app-nav-section-spacer {
+  margin-inline: 0.625rem;
+  margin-block: 0.5rem;
+}
+.app-nav[data-collapsed='true'] .app-nav-avatar-row {
+  display: flex;
+}
+.app-nav[data-collapsed='true'] nav a,
+.app-nav[data-collapsed='true'] nav button,
+.app-nav[data-collapsed='true'] .app-nav-bottom a,
+.app-nav[data-collapsed='true'] .app-nav-bottom button {
+  justify-content: center;
+  padding-inline: 0.25rem;
+  padding-block: 0.5rem;
+}
+/* Slightly larger icons when collapsed — easier hit target + compensates
+ * for the missing label. CSS width on <svg> overrides any inline width.
+ * Lucide icons render as direct <svg> children of the button/anchor/div
+ * (NavRow disabled branch uses <div role="link">); the !important guards
+ * against a Lucide `width` HTML attribute outranking the bare CSS rule. */
+.app-nav[data-collapsed='true'] nav a > svg,
+.app-nav[data-collapsed='true'] nav button > svg,
+.app-nav[data-collapsed='true'] nav div > svg,
+.app-nav[data-collapsed='true'] .app-nav-bottom a > svg,
+.app-nav[data-collapsed='true'] .app-nav-bottom button > svg,
+.app-nav[data-collapsed='true'] .app-nav-bottom div > svg {
+  width: 19px !important;
+  height: 19px !important;
+}
+.app-nav[data-collapsed='true'] .app-nav-chevron-collapse {
+  display: none;
+}
+.app-nav:not([data-collapsed='true']) .app-nav-chevron-expand {
+  display: none;
+}
+
+/* Label cross-fade — softens the abrupt display:none flip during the
+ * width transition. The labels still toggle; this just makes the brief
+ * overlap less jarring (140ms linear < 260ms width). */
+.app-nav nav a > span:not(.app-nav-keep),
+.app-nav nav a > kbd,
+.app-nav nav button > span:not(.app-nav-keep),
+.app-nav nav button > kbd,
+.app-nav-bottom a > span,
+.app-nav-bottom a > kbd,
+.app-nav-bottom button > span,
+.app-nav-bottom button > kbd,
+.app-nav-account,
+.app-nav-section-header {
+  transition: opacity 140ms linear;
+}
+
+/* Account dropdown popover — sits below the nav header; glass surface
+ * that picks up the active theme. Dark + light variants. */
+.app-nav-account-popover {
+  background: rgba(28, 28, 30, 0.94);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+}
+:root[data-theme='light'] .app-nav-account-popover {
+  background: rgba(252, 252, 252, 0.98);
+}
+
+/* Reduced-motion: flatten chrome transitions. Layout identical. */
+@media (prefers-reduced-motion: reduce) {
+  .app-nav,
+  .app-nav nav a > span,
+  .app-nav nav button > span,
+  .app-nav-account,
+  .app-nav-section-header {
+    transition: none;
+  }
+  .swatch {
+    transition: none;
+  }
+}
+
+/* ─── Sprint 12 — Inbox EmailRow + List + AI chat sub-components ─────
+ * Ported from frontend/ref/mockup-inbox.html lines 630-1129 + 351-502.
+ * Authored CSS not Tailwind utilities so the class names are load-bearing
+ * (data-* attribute selectors, sticky group header z-index, etc. that
+ * Tailwind can't express in markup).
+ *
+ * Convention: row state is data-driven (`data-read` / `data-flag` /
+ * `data-pinned` / `data-important` / `data-priority`) so EmailRow.tsx
+ * stays declarative — no React class-toggle dance for read/flag washes. */
+
+/* ─── EmailRow — chevron(24) + avatar(32) + content(1fr) grid ────────── */
+/* Sprint 17 — thread chevron 从外层 wrap div 移到 row 内的第一格 grid cell.
+ * 这样 flag / done / selected 的 wash + 未读 dot 都跟 chevron 共享同一 row
+ * 容器, 高亮能 cover 折叠 icon 区域 (用户反馈: "flag 邮件的高亮背景, 也要
+ * cover 前面的折叠区域"). 单封邮件 chevron-cell 为空但保留 24px 占位,
+ * 列表所有行的 avatar / sender 列对齐 x 轴. */
+.email-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px 32px 1fr;
+  gap: 0 8px;
+  padding: 9px 14px 10px 8px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.email-row:hover {
+  background: rgb(var(--ink-3) / 0.55);
+}
+.email-row.is-selected {
+  background: rgb(var(--ink-4) / 0.7);
+}
+.email-row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: rgb(var(--c-accent));
+}
+
+/* Sprint 17 — thread chevron 直接在 .email-row 第一格 grid cell 内, 不再
+ * 需要外层 .thread-row-wrap. selected wash / accent bar / flag wash 都画在
+ * .email-row 上, 自然 cover chevron 区域. child row 的 subtle inset tint
+ * 通过 data-thread='child' attribute 走 .email-row 自身的 selector. */
+.email-row[data-thread='child']:not(.is-selected) {
+  background: rgb(var(--ink-1) / 0.35);
+}
+
+/* Sprint 17 — thread chevron-cell 占第一格. 单封邮件 cell 内为空但保留宽度
+ * (列对齐). thread head 显示可点 chevron, thread child 显示竖向 tether 线. */
+.email-row > .thread-chevron-cell {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  position: relative;
+  width: 24px;
+  height: 100%;
+  align-self: stretch;
+  justify-self: stretch;
+}
+.thread-chevron-btn {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  /* chevron 12×12 顶端落在 row 顶下 21px → center = 21 + 6 = 27px,
+   * 与 avatar center (padding-top 9 + margin-top 2 + radius 16 = 27px) 对齐. */
+  padding-top: 21px;
+  color: rgb(var(--ink-fg-2));
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.thread-chevron-btn:hover {
+  color: rgb(var(--ink-fg));
+}
+.thread-chevron-tether {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: rgb(var(--ink-border-soft));
+}
+/* Avatar / cb share the second grid cell so batch-mode can swap without reflow */
+.email-row > .avatar,
+.email-row > .cb {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: start;
+  justify-self: center;
+  margin-top: 2px;
+}
+.email-row > .cb {
+  margin-top: 5px;
+}
+.email-row > .row-content {
+  grid-column: 3;
+  grid-row: 1 / span 3;
+  min-width: 0;
+}
+
+/* Avatar — 32px disc with initials. 6 hue rotations + grey for ext senders.
+ * Subtle inner highlight reads as glass; hash(sender) picks the slot. */
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.96);
+  text-transform: uppercase;
+  flex-shrink: 0;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.25);
+  user-select: none;
+}
+.avatar-1 {
+  background: linear-gradient(135deg, #6fa8dc, #4a78e5);
+}
+.avatar-2 {
+  background: linear-gradient(135deg, #b58cdb, #8060c0);
+}
+.avatar-3 {
+  background: linear-gradient(135deg, #e89b4a, #c77b3a);
+}
+.avatar-4 {
+  background: linear-gradient(135deg, #5dba8c, #3d8a6c);
+}
+.avatar-5 {
+  background: linear-gradient(135deg, #e5634f, #c04e3a);
+}
+.avatar-6 {
+  background: linear-gradient(135deg, #db5b7c, #b0405e);
+}
+.avatar-ext {
+  background: linear-gradient(135deg, #8c95a3, #5a6172);
+}
+body[data-batch-mode='true'] .email-row > .avatar {
+  display: none;
+}
+
+/* Batch mode visibility gates — ported from mockup-inbox.html lines 436-446.
+ * Default = batch OFF: row checkboxes (.cb) and the floating batch action
+ * bar (#batch-bar) are hidden, so the inbox reads as a normal mail list.
+ * The list-header batch button sets body[data-batch-mode='true'] (via the
+ * useBatch store's syncBodyAttr helper) and reveals both. Single source of
+ * truth = body attribute, so CSS handles the swap with no JSX branches. */
+body:not([data-batch-mode='true']) .cb {
+  display: none !important;
+}
+body:not([data-batch-mode='true']) #batch-bar {
+  display: none !important;
+}
+
+/* Floating batch action bar — fixed at the bottom edge of the inbox column,
+ * right of the sidebar. The `--app-nav-w` custom property is set by the
+ * nav-shell store (240px expanded, 56px collapsed) so the bar reflows with
+ * the sidebar without measuring. Sits above the 24px status bar. */
+#batch-bar.floating {
+  position: fixed;
+  left: calc(var(--app-nav-w, 240px) + 16px);
+  right: 16px;
+  bottom: calc(24px + 12px);
+  height: 56px;
+  padding-inline: 14px;
+  border-radius: 14px;
+  border: 1px solid rgb(var(--ink-border) / 0.7);
+  background-color: rgb(var(--ink-2) / 0.92);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.32),
+    0 2px 6px rgba(0, 0, 0, 0.2);
+  z-index: 40;
+  transition:
+    left 260ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 160ms ease,
+    transform 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+/* 0 selected — dim the bulk-op buttons (but keep the count badge, the
+ * "select all N", "clear" links, kbd Esc, and × close bright). */
+#batch-bar.batch-empty > button:not([data-batch-keep]):not(:last-child),
+#batch-bar.batch-empty > .ml-auto {
+  opacity: 0.45;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  #batch-bar.floating {
+    transition: none;
+  }
+}
+
+/* Sender + time line — sender wraps in one-line ellipsis, time stays right. */
+.row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sender-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: rgb(var(--ink-fg));
+}
+.sender-line .sender-name {
+  font-weight: 500;
+}
+.sender-line .recipient-hint {
+  color: rgb(var(--ink-fg-2));
+  font-weight: 400;
+}
+.row-time {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* External sender pill (Outlook 外部 badge) */
+.ext-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2.5px;
+  background: rgb(var(--ink-fg) / 0.06);
+  border: 1px solid rgb(var(--ink-border));
+  color: rgb(var(--ink-fg-1));
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+  flex-shrink: 0;
+  text-transform: none;
+  vertical-align: middle;
+}
+
+/* Subject row — text on the left flex-truncates, action cluster on the
+ * right is fixed-width and never shrinks. */
+.subject-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  min-width: 0;
+}
+.subject-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: rgb(var(--ink-fg));
+}
+.body-preview {
+  margin-top: 1px;
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg-2));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.45;
+}
+
+/* Unread treatment — sender + subject go bold + accent color, plus a small
+ * accent dot positioned at the same x as the thread chevron column center
+ * and vertically aligned to the subject row center (Sprint 17 user feedback:
+ * "未读小圆点垂直位置和标题行垂直居中, 水平位置和折叠 icon 水平居中").
+ * dot radius +1px (was 5px diameter → now 6px → radius 3px). */
+.email-row[data-read='false'] .sender-name,
+.email-row[data-read='false'] .subject-text {
+  font-weight: 600;
+  color: rgb(var(--c-accent));
+}
+.email-row[data-read='false'] .row-time {
+  color: rgb(var(--c-accent));
+}
+.email-row[data-read='false']::after {
+  content: '';
+  position: absolute;
+  /* chevron-cell x center = padding-left 8 + cell width 24 / 2 = 20;
+   * dot 6×6 → left = 20 - 3 = 17 */
+  left: 17px;
+  /* subject-row vertical center (相对 row.top):
+   *   padding-top 9 + sender-line (font 13.5 × line-height 1.35 ≈ 18)
+   *   + margin-top 2 + subject 行高/2 (13.5 × 1.4 / 2 ≈ 9.45) ≈ 38.5px
+   * dot 6×6 → top = 38.5 - 3 = 35.5 ≈ 36px */
+  top: 36px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+  pointer-events: none;
+}
+.email-row.is-selected[data-read='false']::after {
+  display: none;
+}
+.email-row[data-read='true'] .sender-name {
+  color: rgb(var(--ink-fg-1));
+  font-weight: 400;
+}
+.email-row[data-read='true'] .subject-text {
+  color: rgb(var(--ink-fg-1));
+}
+
+/* Flag state row washes — subtle, never compete with selection */
+.email-row[data-flag='flagged'] {
+  background: rgba(229, 99, 79, 0.05);
+}
+.email-row[data-flag='flagged']:hover {
+  background: rgba(229, 99, 79, 0.1);
+}
+.email-row[data-flag='done'] {
+  background: rgba(93, 186, 140, 0.05);
+}
+.email-row[data-flag='done']:hover {
+  background: rgba(93, 186, 140, 0.1);
+}
+.email-row[data-flag='done'] .subject-text {
+  color: rgb(var(--ink-fg-2));
+  text-decoration: line-through;
+  text-decoration-color: rgb(var(--ink-fg-3));
+  text-decoration-thickness: 1px;
+}
+.email-row[data-flag='done'] .body-preview {
+  opacity: 0.75;
+}
+
+/* ─── Row action icons (flag · pin · attach · important · delete) ─── */
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.row-actions .ricon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-3));
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 5px;
+  transition:
+    color 0.12s,
+    background 0.12s,
+    opacity 0.12s;
+}
+.row-actions .ricon:hover {
+  background: rgb(var(--ink-4) / 0.7);
+}
+.row-actions .ricon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+/* Flag — 3-state cycler (0=off, 1=flagged coral, 2=done green) */
+.ricon-flag[data-flag-state='0'] {
+  color: rgb(var(--ink-fg-3));
+  opacity: 0.55;
+}
+.email-row:hover .ricon-flag[data-flag-state='0'] {
+  opacity: 1;
+}
+.ricon-flag[data-flag-state='1'] {
+  color: #e5634f;
+  opacity: 1;
+}
+.ricon-flag[data-flag-state='1'] svg path {
+  fill: currentColor;
+}
+.ricon-flag[data-flag-state='2'] {
+  color: #5dba8c;
+  opacity: 1;
+}
+/* Pin — pressed = cobalt-blue */
+.ricon-pin[aria-pressed='false'] {
+  color: rgb(var(--ink-fg-3));
+  opacity: 0.55;
+}
+.email-row:hover .ricon-pin[aria-pressed='false'] {
+  opacity: 1;
+}
+.ricon-pin[aria-pressed='true'] {
+  color: #4a78e5;
+  opacity: 1;
+}
+.ricon-pin[aria-pressed='true'] svg path {
+  fill: currentColor;
+}
+.ricon-attach {
+  color: rgb(var(--ink-fg-2));
+  cursor: default;
+}
+.ricon-important {
+  color: #e5634f;
+  cursor: default;
+}
+.ricon-important svg {
+  fill: none;
+  stroke: currentColor;
+}
+.ricon-important svg circle {
+  fill: currentColor;
+  stroke: none;
+}
+/* Delete — floats out of the cluster into the row's bottom-right corner;
+ * hidden by default, fades in on row-hover. */
+.ricon-delete {
+  position: absolute;
+  right: 12px;
+  bottom: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-2) / 0.92);
+  border: 1px solid rgb(var(--ink-border));
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  transform: translateY(2px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease,
+    color 0.12s,
+    background 0.12s;
+  z-index: 2;
+}
+.email-row:hover .ricon-delete {
+  opacity: 1;
+  transform: translateY(0);
+}
+.ricon-delete:hover {
+  color: #e5634f;
+  background: rgba(229, 99, 79, 0.14);
+  border-color: rgba(229, 99, 79, 0.4);
+}
+.row-actions .ricon-delete svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ─── AI strip — one-line mono signal row ───────────────────────────── */
+.ai-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  line-height: 1;
+  color: rgb(var(--ink-fg-2));
+  letter-spacing: 0.02em;
+  min-width: 0;
+}
+.ai-strip .pdot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ai-strip .pname {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.ai-strip .sep {
+  color: rgb(var(--ink-fg-3));
+}
+.ai-strip .ai-bit {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-strip .ai-due {
+  color: rgb(var(--ink-fg-1));
+}
+.ai-strip .ai-reply {
+  color: rgb(var(--ink-fg-1));
+}
+.ai-strip .ai-failed {
+  color: #e36262;
+}
+.ai-strip .ai-done {
+  color: #5dba8c;
+}
+.email-row[data-priority='crit'] .pname,
+.email-row[data-priority='crit'] .pdot {
+  color: #e5634f;
+}
+.email-row[data-priority='crit'] .pdot {
+  background: #e5634f;
+}
+.email-row[data-priority='urg'] .pname,
+.email-row[data-priority='urg'] .pdot {
+  color: #e89b4a;
+}
+.email-row[data-priority='urg'] .pdot {
+  background: #e89b4a;
+}
+.email-row[data-priority='impt'] .pname,
+.email-row[data-priority='impt'] .pdot {
+  color: #d4a53d;
+}
+.email-row[data-priority='impt'] .pdot {
+  background: #d4a53d;
+}
+.email-row[data-priority='norm'] .pname,
+.email-row[data-priority='norm'] .pdot {
+  color: #7a7f8a;
+}
+.email-row[data-priority='norm'] .pdot {
+  background: #7a7f8a;
+}
+.email-row[data-priority='low'] .pname,
+.email-row[data-priority='low'] .pdot {
+  color: #5a5e68;
+}
+.email-row[data-priority='low'] .pdot {
+  background: #5a5e68;
+}
+
+/* ─── Group header — sticky date divider above row clusters ─────────── */
+.group {
+  background: transparent;
+}
+.group-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Sprint 14 round 10 — pull the chevron 3px to the left so it lines
+   * up vertically with the thread-bundle chevron column in EmailList.
+   * Chevron centre: padding-left 11 + width 10 / 2 = 16px from row
+   * left, matching the thread chevron's centre at left-2 + 8 = 16px. */
+  padding: 7px 14px 5px 11px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  user-select: none;
+  background: linear-gradient(180deg, rgb(var(--ink-1) / 0.62) 0%, rgb(var(--ink-2) / 0.55) 100%);
+  -webkit-backdrop-filter: saturate(180%) blur(28px);
+  backdrop-filter: saturate(180%) blur(28px);
+  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.7);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  transition:
+    color 0.12s,
+    background 0.12s;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .group-header {
+    background: rgb(var(--ink-1));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+.group-header:hover {
+  color: rgb(var(--ink-fg-1));
+}
+.group-chev {
+  width: 10px;
+  height: 10px;
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
+/* Sprint 12.6 — collapsed header points the chevron right (›) instead of
+ * down (v). The data-* attribute is set on .group-header (the <header>
+ * itself in EmailList.tsx), not on a missing .group parent — the old
+ * `.group[data-collapsed=…]` selector matched nothing. */
+.group-header[data-collapsed='true'] .group-chev {
+  transform: rotate(-90deg);
+}
+.group-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+}
+.group-pin-glyph {
+  width: 11px;
+  height: 11px;
+  color: rgb(var(--c-accent));
+  flex-shrink: 0;
+}
+
+/* ─── Inbox tabs (Focused / Other pill switch) ──────────────────────── */
+.inbox-tabs {
+  display: inline-flex;
+  align-items: center;
+  background: rgb(var(--ink-3) / 0.6);
+  border: 1px solid rgb(var(--ink-border-soft));
+  border-radius: 999px;
+  padding: 2px;
+}
+.inbox-tab {
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  transition:
+    color 0.12s,
+    background 0.12s;
+}
+.inbox-tab:hover {
+  color: rgb(var(--ink-fg));
+}
+.inbox-tab.is-active {
+  background: rgb(var(--ink-fg) / 0.1);
+  color: rgb(var(--ink-fg));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+:root[data-theme='light'] .inbox-tab.is-active {
+  background: rgb(255 255 255 / 0.9);
+}
+
+/* ─── Filter popover ─────────────────────────────────────────────────── */
+.filter-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 8px;
+  width: 248px;
+  z-index: 30;
+  background: rgb(var(--ink-2) / 0.92);
+  border: 1px solid var(--glass-stroke);
+  border-radius: 10px;
+  box-shadow: var(--pop-shadow);
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+  overflow: hidden;
+}
+.filter-section {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+}
+.filter-section:last-of-type {
+  border-bottom: 0;
+}
+.filter-section-head {
+  display: flex;
+  align-items: center;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgb(var(--ink-fg-2));
+  padding: 4px 4px 6px;
+}
+.filter-section-head .links {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}
+.filter-section-head .links button {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: 10px;
+  color: rgb(var(--ink-fg-2));
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition:
+    color 0.12s,
+    background 0.12s;
+}
+.filter-section-head .links button:hover {
+  color: rgb(var(--c-accent));
+  background: rgb(var(--ink-3) / 0.6);
+}
+.filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg));
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+.filter-option:hover {
+  background: rgb(var(--ink-3) / 0.55);
+}
+.filter-option .cb-mini {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  border: 1.5px solid rgb(var(--ink-fg-3));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
+}
+.filter-option[data-checked='true'] .cb-mini {
+  background: rgb(var(--c-accent));
+  border-color: rgb(var(--c-accent));
+}
+.filter-option[data-checked='true'] .cb-mini::after {
+  content: '';
+  width: 6px;
+  height: 3px;
+  border-left: 1.5px solid white;
+  border-bottom: 1.5px solid white;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+.filter-option .label {
+  flex: 1;
+  min-width: 0;
+}
+.filter-option .count {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  flex-shrink: 0;
+}
+.filter-option .pri-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Filter button — quiet by default, loud when a filter narrows the view.
+ * Two-layer treatment: accent surface tint for the mode + red badge dot
+ * for the alert (different roles, different colors). */
+.filter-btn {
+  position: relative;
+}
+.filter-btn[data-active='true'] {
+  color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent) / 0.14);
+}
+.filter-btn[data-active='true']:hover {
+  background: rgb(var(--c-accent) / 0.22);
+}
+.filter-btn[data-active='true']::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e5634f;
+  box-shadow: 0 0 0 2px rgb(var(--ink-2));
+}
+
+/* ─── AI Chat panel — ai-bg sheen + ai-tool-row + qchip + draft-card ── */
+/* Override the earlier solid-gradient .ai-bg with mockup's Liquid Glass
+ * version: linear gradient between two translucent ink layers + backdrop
+ * blur so the panel reads as glass over the aurora wallpaper. */
+.ai-bg {
+  background: linear-gradient(
+    180deg,
+    rgb(var(--ink-2) / 0.5) 0%,
+    rgb(var(--ink-1) / 0.55) 100%
+  );
+  -webkit-backdrop-filter: var(--glass-lg);
+  backdrop-filter: var(--glass-lg);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .ai-bg {
+    background: linear-gradient(180deg, rgb(var(--ink-2)) 0%, rgb(var(--ink-1)) 100%);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* AI tool-call row — mono one-liner showing a backend tool invocation
+ * inside an assistant message (DESIGN.md §6.3). */
+.ai-tool-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: rgb(var(--ink-fg-2));
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgb(var(--ink-fg) / 0.04);
+  max-width: 100%;
+}
+.ai-tool-row .arrow {
+  color: #6fa8dc;
+}
+.ai-tool-row .dot-ok {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #5dba8c;
+  flex-shrink: 0;
+}
+.ai-tool-row .dot-run {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e89b4a;
+  flex-shrink: 0;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+.ai-tool-row .dot-err {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e36262;
+  flex-shrink: 0;
+}
+
+/* Quick-action chip — rounded pill in the AI panel's chip bar. */
+.qchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-fg) / 0.04);
+  border: 1px solid rgb(var(--ink-border));
+  transition: all 0.12s;
+  cursor: pointer;
+}
+.qchip:hover {
+  background: rgb(var(--ink-fg) / 0.08);
+  color: rgb(var(--ink-fg));
+  border-color: rgb(var(--ink-fg-3));
+}
+
+/* Draft preview card — coral ring + faint glow because the draft IS the
+ * primary AI output (the one place we lean on color for emphasis). */
+.draft-card {
+  background: rgb(var(--ink-3) / 0.85);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgb(var(--c-accent) / 0.3);
+  box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.06);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* Streaming text cursor — blinks at end of an in-flight assistant message. */
+.cursor-blink {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: rgb(var(--c-accent));
+  margin-left: 1px;
+  vertical-align: -2px;
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ─── Search palette (⌘K) — 1:1 mockup-search.html §palette-* ───────────
+ *
+ * Surface stack drawn over the live app:
+ *   palette-veil  (z 40) — soft dim + blur of whatever is behind
+ *   palette-pane  (z 50) — 720px glass-pop pane, anchored 96px from top
+ *
+ * Inset on .palette-veil (36px / 24px) carves out the title bar and
+ * status bar so chrome stays interactive. Reduced-transparency users get
+ * a deeper opaque dim instead of the blur.
+ *
+ * .pal-row is shared by all three result groups (JUMP / EMAIL / AI
+ * ACTIONS); selection state is render-driven (React sets `.is-selected`
+ * on the highlighted item) so keyboard ↑↓/Tab and mouse hover land on
+ * the same visual. Hint kbds only on the selected row keep the list
+ * quiet — Linear / Raycast pattern.
+ */
+.palette-veil {
+  position: fixed;
+  inset: 36px 0 24px 0;
+  background: rgb(var(--ink-0) / 0.55);
+  -webkit-backdrop-filter: saturate(120%) blur(10px);
+  backdrop-filter: saturate(120%) blur(10px);
+  z-index: 40;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .palette-veil {
+    background: rgb(var(--ink-0) / 0.86);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.palette-pane {
+  position: fixed;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 36px - 24px - 96px - 32px);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  height: 44px;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: rgb(var(--ink-fg));
+  font-size: 16px;
+  line-height: 1;
+  font-family: inherit;
+  caret-color: rgb(var(--c-accent));
+}
+.palette-input::placeholder {
+  color: rgb(var(--ink-fg-2));
+}
+
+.pal-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: rgb(var(--ink-fg-1));
+}
+.pal-row:hover {
+  background: rgb(var(--ink-fg) / 0.04);
+}
+.pal-row.is-selected {
+  background: rgb(var(--c-accent) / 0.1);
+  color: rgb(var(--ink-fg));
+}
+.pal-row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  background: rgb(var(--c-accent));
+  border-radius: 2px;
+}
+
+/* Disabled rows (e.g. AI Action "summarize" pending wiring) — readable but
+ * unmistakably inert. No hover highlight, no coral edge even when the
+ * keyboard cursor passes through. */
+.pal-row[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pal-row[aria-disabled='true']:hover {
+  background: transparent;
+}
+.pal-row[aria-disabled='true'].is-selected {
+  background: rgb(var(--ink-fg) / 0.03);
+}
+.pal-row[aria-disabled='true'].is-selected::before {
+  display: none;
+}
+
+/* Keyboard hint chip cluster — only visible on the highlighted row, both
+ * for noise reduction and to teach users which row their kbd will act on. */
+.pal-hint {
+  display: none;
+}
+.pal-row.is-selected .pal-hint {
+  display: inline-flex;
+}
+
+/* Empty-state tile (used when a group has zero matches in current query). */
+.empty-tile {
+  display: grid;
+  place-items: center;
+  padding: 18px 16px;
+  border-radius: 8px;
+  gap: 6px;
+  color: rgb(var(--ink-fg-2));
+}
+
