@@ -187,7 +187,7 @@ describe('CommandPalette — query normalisation', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() =>
       expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: 'redis' }))
     )
@@ -199,7 +199,7 @@ describe('CommandPalette — query normalisation', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '产品' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() =>
       expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: '产品*' }))
     )
@@ -211,7 +211,7 @@ describe('CommandPalette — query normalisation', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis AND 产品' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() =>
       expect(mockSearch).toHaveBeenCalledWith(
         expect.objectContaining({ query: 'redis AND 产品' })
@@ -232,7 +232,7 @@ describe('CommandPalette — email hits + AI Actions', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() => screen.getByText('Email'))
     // Subject "redis timeout debug session" is wrapped by highlightTerms
     // into `<mark>redis</mark> timeout debug session` — text nodes split
@@ -255,7 +255,7 @@ describe('CommandPalette — email hits + AI Actions', () => {
     fireEvent.change(screen.getByRole('combobox'), {
       target: { value: 'nothingmatches' }
     })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() => screen.getByText('未找到匹配的邮件'))
     expect(screen.queryByText('AI Actions')).toBeNull()
   })
@@ -267,7 +267,7 @@ describe('CommandPalette — email hits + AI Actions', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() => screen.getByText('AI Actions'))
     expect(screen.getByText('全部标为已读')).toBeTruthy()
     expect(screen.getByText('重跑 AI 分类')).toBeTruthy()
@@ -284,7 +284,7 @@ describe('CommandPalette — interactions', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     // Hit row text is split by `<mark>` — query the snippet suffix instead.
     await waitFor(() => screen.getByText(/timeout debug session/))
     // Click the option element (the whole row) rather than the subject
@@ -296,7 +296,9 @@ describe('CommandPalette — interactions', () => {
     expect(emailRow).toBeTruthy()
     fireEvent.click(emailRow!)
     expect(mockSetActive).toHaveBeenCalledWith(101)
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    // navigate now carries the inferred view so EmailList lands on the
+    // mailbox that contains the hit (mockup row 101 is in '收件箱' → 'inbox').
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/', search: { view: 'inbox' } })
     expect(useCommandPalette.getState().open).toBe(false)
   })
 
@@ -318,7 +320,7 @@ describe('CommandPalette — interactions', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() => screen.getByText('全部标为已读'))
     fireEvent.click(screen.getByText('全部标为已读'))
     await waitFor(() =>
@@ -338,7 +340,7 @@ describe('CommandPalette — interactions', () => {
     renderPalette()
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis' } })
-    vi.advanceTimersByTime(300)
+    await vi.advanceTimersByTimeAsync(300)
     await waitFor(() => screen.getByText('重跑 AI 分类'))
     fireEvent.click(screen.getByText('重跑 AI 分类'))
     await waitFor(() => {

@@ -37,6 +37,42 @@ class LLMProcessingStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def reset_stale_pending(self, *, threshold_sec: int = 300) -> int:
+        """启动时调用 — pending 状态超 threshold_sec 的 row 转 failed +
+        next_retry_at=now, 让 retry 队列接管.
+
+        场景: LLM 调用中途 mail-sync 被 pm2 restart 直接 kill, row 卡
+        status='pending' 永远不被 retry 队列拉 (retry queue 只看 status='failed').
+        启动时一次性扫一遍 stale pending → failed, 把这些卡住的邮件还回流水线.
+
+        Args:
+            threshold_sec: pending 持续多久算 stale (默认 300s = 5 min).
+                单次 LLM 调用应在 30-90s 完成, 5min 是宽松的容错窗口.
+
+        Returns:
+            被 reset 的 row 数.
+        """
+        now = time.time()
+        cutoff = now - threshold_sec
+        with self._conn() as c:
+            cursor = c.execute(
+                """
+                UPDATE llm_processing
+                   SET status = 'failed',
+                       next_retry_at = ?,
+                       last_error = COALESCE(
+                           last_error,
+                           'stale pending — process killed mid-flight, auto-reset on startup'
+                       ),
+                       updated_at = ?
+                 WHERE status = 'pending'
+                   AND updated_at < ?
+                """,
+                (now, now, cutoff),
+            )
+            c.commit()
+            return cursor.rowcount
+
     def _ensure_schema(self) -> None:
         with self._conn() as c:
             c.execute(

@@ -864,7 +864,9 @@ body::before {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 19px;
+  /* chevron 12×12 顶端落在 row 顶下 21px → center = 21 + 6 = 27px,
+   * 与 avatar center (padding-top 9 + margin-top 2 + radius 16 = 27px) 对齐. */
+  padding-top: 21px;
   color: rgb(var(--ink-fg-2));
   background: transparent;
   border: 0;
@@ -1094,9 +1096,11 @@ body:not([data-batch-mode='true']) #batch-bar {
   /* chevron-cell x center = padding-left 8 + cell width 24 / 2 = 20;
    * dot 6×6 → left = 20 - 3 = 17 */
   left: 17px;
-  /* subject-row center ≈ padding-top 9 + sender-line 17 + margin-top 2 +
-   * subject 行高/2 9 = ~37; dot 6×6 → top = 37 - 3 = 34 */
-  top: 34px;
+  /* subject-row vertical center (相对 row.top):
+   *   padding-top 9 + sender-line (font 13.5 × line-height 1.35 ≈ 18)
+   *   + margin-top 2 + subject 行高/2 (13.5 × 1.4 / 2 ≈ 9.45) ≈ 38.5px
+   * dot 6×6 → top = 38.5 - 3 = 35.5 ≈ 36px */
+  top: 36px;
   width: 6px;
   height: 6px;
   border-radius: 50%;

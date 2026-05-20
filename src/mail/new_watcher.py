@@ -177,6 +177,21 @@ class NewWatcher:
                 logger.info(
                     f"[llm-agent] enabled (model={settings.llm_model} base={settings.llm_api_base})"
                 )
+                # Sprint 17 — 启动时 reset 卡 pending > 5min 的 LLM row.
+                # 场景: 上次 mail-sync 被 pm2 restart 直接 kill, LLM 调用中途
+                # 死掉 row 留在 status='pending', retry queue 只看 'failed' 永远
+                # 不会重试. 启动一次性扫一遍 → failed + next_retry_at=now, 让
+                # _process_llm_retry_queue 接管.
+                try:
+                    reset_n = self._llm_runner._store.reset_stale_pending(
+                        threshold_sec=300
+                    )
+                    if reset_n > 0:
+                        logger.info(
+                            f"[llm-agent] reset {reset_n} stale pending row(s) → failed (will retry)"
+                        )
+                except Exception as e:
+                    logger.warning(f"[llm-agent] reset_stale_pending failed (non-fatal): {e}")
             except Exception as e:
                 logger.warning(f"[llm-agent] init failed, disabling: {e}")
                 self._llm_runner = None

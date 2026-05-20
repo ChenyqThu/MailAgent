@@ -66,6 +66,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
+import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { showAIChatPanel } from '@shared/state/ai-chat-panel'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -209,6 +210,17 @@ export function CommandPalette(): React.ReactElement | null {
   const queryClient = useQueryClient()
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const setActiveEmail = useActiveEmail((s) => s.setActive)
+  const setView = useEmailFilter((s) => s.setView)
+
+  // Pick the EmailList view that will surface a hit's mailbox so the
+  // row is actually visible after we navigate('/'). '收件箱' / '发件箱'
+  // have first-class views; anything else falls back to 'all' which
+  // spans every mailbox.
+  const viewForMailbox = useCallback((mailbox: string | null | undefined): EmailView => {
+    if (mailbox === '收件箱') return 'inbox'
+    if (mailbox === '发件箱') return 'outbox'
+    return 'all'
+  }, [])
 
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
@@ -481,9 +493,16 @@ export function CommandPalette(): React.ReactElement | null {
         group: 'email',
         indexInGroup: i,
         run: () => {
+          // Search hit may live in a mailbox the user isn't currently
+          // viewing. Sync view + mailbox so EmailList actually scrolls
+          // to + highlights the row instead of silently jumping the
+          // EmailDetail pane while the list shows nothing selected.
+          const targetView = viewForMailbox(h.mailbox)
           closeCommandPalette()
+          setView(targetView)
+          if (h.mailbox) setActiveMailbox(h.mailbox)
           setActiveEmail(h.internal_id)
-          void navigate({ to: '/' })
+          void navigate({ to: '/', search: { view: targetView } })
         }
       })
     )
@@ -730,9 +749,12 @@ export function CommandPalette(): React.ReactElement | null {
                         setHighlight={setHighlight}
                         queryTerms={queryTerms}
                         onActivate={() => {
+                          const targetView = viewForMailbox(h.mailbox)
                           closeCommandPalette()
+                          setView(targetView)
+                          if (h.mailbox) setActiveMailbox(h.mailbox)
                           setActiveEmail(h.internal_id)
-                          void navigate({ to: '/' })
+                          void navigate({ to: '/', search: { view: targetView } })
                         }}
                       />
                     )
