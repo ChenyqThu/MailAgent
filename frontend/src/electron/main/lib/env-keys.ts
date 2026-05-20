@@ -88,7 +88,15 @@ export const MANAGED_ENV_KEYS = [
 
   // — Island (PR D IslandUpdatesTab)
   'PING_ISLAND_ENABLED',
-  'ISLAND_SOCKET_PATH'
+  'ISLAND_SOCKET_PATH',
+
+  // — Advanced / readonly display (PR F RealtimeStorageTab disclosure).
+  // These two land here so `env:get` returns them for read-only rendering,
+  // but EnvField control="readonly" never calls env:set on them, so the
+  // whitelist branch in `env:set` returns "no change" if anything ever
+  // tries (renderer code shouldn't, this is belt + suspenders).
+  'SSE_LOCAL_HOST',
+  'SSE_LOCAL_PORT'
 ] as const
 
 export type ManagedEnvKey = (typeof MANAGED_ENV_KEYS)[number]

@@ -14,10 +14,13 @@ import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
+import type { PersistentSettings } from '@shared/api/types'
 
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
+import { AdvancedDisclosure } from '../parts/AdvancedDisclosure'
+import { PathPicker } from '../parts/PathPicker'
 
 function StatusChip({
   status
@@ -169,10 +172,154 @@ export function RealtimeStorageTab(): React.ReactElement {
         />
       </Section>
 
-      {/* PR F: AdvancedDisclosure with Tier 2 fields (LOG_LEVEL / Outbox 4 项
-          / SYNC_MODE / STATS_REPORT_INTERVAL / readonly SSE_LOCAL_{HOST,PORT}
-          / dbPath / attachmentDir folder pickers) lands at the bottom of this
-          section in a separate PR. */}
+      <AdvancedSubsection />
     </>
+  )
+}
+
+function AdvancedSubsection(): React.ReactElement {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const [settings, setSettings] = React.useState<PersistentSettings | null>(null)
+
+  React.useEffect(() => {
+    let cancelled = false
+    void api.settings
+      .get()
+      .then((s) => {
+        if (!cancelled) setSettings(s)
+      })
+      .catch(() => {
+        /* HttpApi V2 stub — ignore on web build */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  return (
+    <Section title={t('settings.advanced.title', { defaultValue: '高级' })}>
+      <AdvancedDisclosure
+        label={t('settings.advanced.toggle', { defaultValue: '展开高级设置' })}
+        helper={t('settings.advanced.helper', {
+          defaultValue: '内部参数与只读路径; 改之前请确认你知道在做什么.'
+        })}
+      >
+        <EnvField
+          envKey="LOG_LEVEL"
+          control="select"
+          label={t('settings.advanced.logLevel.label', { defaultValue: '日志级别' })}
+          helper={t('settings.advanced.logLevel.helper', { defaultValue: '应用与 CLI 日志' })}
+          options={[
+            { value: 'DEBUG', label: 'DEBUG' },
+            { value: 'INFO', label: 'INFO' },
+            { value: 'WARNING', label: 'WARNING' },
+            { value: 'ERROR', label: 'ERROR' }
+          ]}
+        />
+        <EnvField
+          envKey="SYNC_MODE"
+          control="select"
+          label={t('settings.advanced.syncMode.label', { defaultValue: '同步模式' })}
+          helper={t('settings.advanced.syncMode.helper', {
+            defaultValue: 'hybrid 走 SQLite radar + AppleScript, applescript_only 退回旧路径'
+          })}
+          options={[
+            { value: 'hybrid', label: 'hybrid' },
+            { value: 'applescript_only', label: 'applescript_only' }
+          ]}
+        />
+        <EnvField
+          envKey="MAILAGENT_OUTBOX_ENABLED"
+          control="toggle"
+          label={t('settings.advanced.outbox.enabled.label', { defaultValue: 'Outbox 灰度' })}
+          helper={t('settings.advanced.outbox.enabled.helper', {
+            defaultValue: 'Sprint 15 反向同步路径切换'
+          })}
+        />
+        <EnvField
+          envKey="MAILAGENT_OUTBOX_POLL_INTERVAL_SEC"
+          control="number"
+          label={t('settings.advanced.outbox.poll.label', { defaultValue: 'FanoutWorker 轮询' })}
+          helper={t('settings.advanced.outbox.poll.helper', { defaultValue: '秒' })}
+          min={1}
+          max={60}
+        />
+        <EnvField
+          envKey="MAILAGENT_OUTBOX_MAX_ATTEMPTS"
+          control="number"
+          label={t('settings.advanced.outbox.attempts.label', { defaultValue: 'Outbox 重试上限' })}
+          helper={t('settings.advanced.outbox.attempts.helper', {
+            defaultValue: '失败后进死信前重试次数'
+          })}
+          min={1}
+          max={20}
+        />
+        <EnvField
+          envKey="MAILAGENT_OUTBOX_CONCURRENCY"
+          control="number"
+          label={t('settings.advanced.outbox.concurrency.label', {
+            defaultValue: 'Outbox 并发'
+          })}
+          helper={t('settings.advanced.outbox.concurrency.helper', {
+            defaultValue: 'fanout 同时最多多少'
+          })}
+          min={1}
+          max={10}
+        />
+        <EnvField
+          envKey="STATS_REPORT_INTERVAL"
+          control="number"
+          label={t('settings.advanced.stats.interval.label', { defaultValue: '看板上报间隔' })}
+          helper={t('settings.advanced.stats.interval.helper', { defaultValue: '秒' })}
+          min={10}
+          max={3600}
+        />
+        <EnvField
+          envKey="SSE_LOCAL_HOST"
+          control="readonly"
+          label={t('settings.advanced.sse.host.label', { defaultValue: 'SSE 本机 host' })}
+          helper={t('settings.advanced.sse.host.helper', {
+            defaultValue: '渲染层硬绑 127.0.0.1, 修改会导致前端连不上'
+          })}
+        />
+        <EnvField
+          envKey="SSE_LOCAL_PORT"
+          control="readonly"
+          label={t('settings.advanced.sse.port.label', { defaultValue: 'SSE 本机端口' })}
+          helper={t('settings.advanced.sse.port.helper', {
+            defaultValue: '渲染层硬绑 9200, 修改会导致前端连不上'
+          })}
+        />
+        <PathPicker
+          settingsKey="dbPath"
+          label={t('settings.advanced.dbPath.label', { defaultValue: 'SQLite 路径' })}
+          helper={t('settings.advanced.dbPath.helper', {
+            defaultValue: '默认 ~/Documents/MailAgent/data/sync_store.db'
+          })}
+          pickerTitle={
+            t('settings.advanced.dbPath.pickerTitle', { defaultValue: '选择 SQLite 目录' }) ??
+            undefined
+          }
+          currentPath={settings?.dbPath ?? null}
+          onPersisted={(next) => setSettings((cur) => (cur ? { ...cur, dbPath: next } : cur))}
+        />
+        <PathPicker
+          settingsKey="attachmentDir"
+          label={t('settings.advanced.attachmentDir.label', { defaultValue: '附件目录' })}
+          helper={t('settings.advanced.attachmentDir.helper', {
+            defaultValue: '默认 ~/Documents/MailAgent/data/attachments'
+          })}
+          pickerTitle={
+            t('settings.advanced.attachmentDir.pickerTitle', { defaultValue: '选择附件目录' }) ??
+            undefined
+          }
+          currentPath={settings?.attachmentDir ?? null}
+          onPersisted={(next) =>
+            setSettings((cur) => (cur ? { ...cur, attachmentDir: next } : cur))
+          }
+        />
+      </AdvancedDisclosure>
+    </Section>
   )
 }
