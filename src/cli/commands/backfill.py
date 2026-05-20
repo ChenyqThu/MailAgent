@@ -1084,25 +1084,104 @@ def _backfill_one_metadata(
     return result
 
 
+def _backfill_one_metadata_via_applescript(
+    record: _BackfillRecord,
+    arm: AppleScriptArm,
+    reader: EmailReader,
+    sync_store: SyncStore,
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """AppleScript fetch + reader.parse 路径, 只写 metadata 不动 body / 附件.
+
+    用于补 Notion 端也丢失 to/cc 的历史邮件 (NOTION_READ_FROM_SQLITE=true
+    切换后 Notion 端 To/CC 也被 v4 路径覆写空). 跟 `backfill body --force`
+    时间相当 (AppleScript fetch 是瓶颈, ~500ms-1s/封, 6300 封 ~1.5-2h),
+    但不重写已有完整 body, 安全 + 不浪费 SQLite write IO.
+    """
+    iid = int(record["internal_id"])
+    mailbox = record["mailbox"]
+    full = arm.fetch_email_content_by_id(iid, mailbox)
+    if not full:
+        return {
+            "ok": True,
+            "skipped": "applescript_fetch_failed",
+            "subject": str(record.get("subject") or "")[:60],
+        }
+
+    source = _source_text(full.get("source", ""))
+    email = reader.parse_email_source(
+        source,
+        record.get("message_id") or full.get("message_id", ""),
+        is_read=bool(record.get("is_read")),
+        is_flagged=bool(record.get("is_flagged")),
+    )
+    if email is None:
+        return {"ok": True, "skipped": "parse_failed"}
+
+    patch: dict[str, Any] = {}
+    if email.to:
+        patch["to_addr"] = email.to
+    if email.cc:
+        patch["cc_addr"] = email.cc
+    if email.sender_name:
+        patch["sender_name"] = email.sender_name
+    if email.is_important:
+        patch["is_important"] = True
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "patched": sorted(patch.keys()),
+        "to_len": len(email.to or ""),
+        "cc_len": len(email.cc or ""),
+        "sender_name_len": len(email.sender_name or ""),
+        "is_important": bool(email.is_important),
+    }
+    if not patch:
+        result["skipped"] = "no_data_in_mime"
+        return result
+    if dry_run:
+        result["dry_run"] = True
+        return result
+
+    sync_store.update_after_fetch(iid, patch)
+    return result
+
+
 def _make_metadata_units(
     records: list[_BackfillRecord],
     *,
-    notion_client: Any,
+    source: str,
+    notion_client: Optional[Any] = None,
+    arm: Optional[AppleScriptArm] = None,
+    reader: Optional[EmailReader] = None,
     sync_store: SyncStore,
     dry_run: bool,
 ) -> list[tuple[int, Any]]:
     def _make_unit(record: _BackfillRecord):
-        def _runner() -> dict[str, Any]:
+        if source == "applescript":
+            def _runner_as() -> dict[str, Any]:
+                return _backfill_one_metadata_via_applescript(
+                    record, arm, reader, sync_store, dry_run=dry_run,  # type: ignore[arg-type]
+                )
+            return _runner_as
+
+        def _runner_notion() -> dict[str, Any]:
             return _backfill_one_metadata(
                 record, notion_client, sync_store, dry_run=dry_run,
             )
-        return _runner
+        return _runner_notion
     return [(int(rec["internal_id"]), _make_unit(rec)) for rec in records]
 
 
 @app.command("metadata")
 def backfill_metadata(
     ctx: typer.Context,
+    source: str = typer.Option(
+        "notion", "--source",
+        help="数据源: 'notion' (REST 反拉 sender_name) 或 'applescript' "
+             "(AppleScript fetch + reader.parse 拿完整 to/cc/sender_name/is_important)",
+    ),
     since_date: Optional[str] = typer.Option(
         None, "--since-date", help="YYYY-MM-DD",
     ),
@@ -1129,16 +1208,28 @@ def backfill_metadata(
     allow_concurrent: bool = typer.Option(False, "--allow-concurrent"),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """从 Notion API 反拉 To/Cc/Sender Name 写回 SQLite metadata.
+    """补 SQLite metadata (to/cc/sender_name/is_important) — 不动 body.
 
-    Sprint 18 #3 修复前, 6000+ 历史邮件 SQLite to_addr/cc_addr 全空.
-    跟 ``backfill body`` 的区别: 仅 metadata, 不动 body / 附件; 走 Notion
-    REST 反拉, ~200-400ms/封, 6300 封约 15-25 分钟; 跟 pm2 mail-sync
-    并发跑安全 (WAL + 不抢 AppleScript).
+    `--source` 选择数据源:
+
+    - ``notion`` (默认): Notion REST 反拉 page properties. 快 (~200-400ms/封,
+      6300 封 15-25min), 跟 pm2 mail-sync 并发跑安全 (WAL + 不抢 AppleScript).
+      但若 NOTION_READ_FROM_SQLITE=true 启用后历史邮件 Notion 端 To/CC 也是
+      空 (v4 路径从空 SQLite 读 → 写空 Notion), 此模式只能补 sender_name.
+
+    - ``applescript``: AppleScript fetch + reader.parse, 拿到原始 MIME 头部
+      解析出完整 to/cc/sender_name/is_important. 慢 (~500ms-1s/封, 6300 封
+      ~1.5-2h), 期间应停 pm2 mail-sync 避免抢 AppleScript. 跟
+      ``backfill body --force`` 时间相当但不重写已有完整 body.
     """
     cli: "CliContext" = ctx.obj
     apply_local_output(ctx, output)
     db_path = cli.cli_config.sync_store_db_path
+
+    if source not in ("notion", "applescript"):
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--source must be 'notion' or 'applescript', got {source!r}",
+        ))
 
     other_filters = any(
         v is not None for v in (since_date, until_date, mailbox, internal_ids, limit)
@@ -1171,28 +1262,43 @@ def backfill_metadata(
             limit=limit,
         )
 
-    # notion-client 的 sync Client; AsyncClient 不能在 LongTaskContext sync
-    # unit 里直接 await, 这里直接用 sync 版本省心.
-    from notion_client import Client as NotionSyncClient
-    notion_client = NotionSyncClient(auth=cfg.notion_token)
+    # 按 source 路由数据源 client
+    notion_client: Optional[Any] = None
+    arm: Optional[AppleScriptArm] = None
+    reader: Optional[EmailReader] = None
+    if source == "notion":
+        # notion-client 的 sync Client; AsyncClient 不能在 LongTaskContext sync
+        # unit 里直接 await, 这里直接用 sync 版本省心.
+        from notion_client import Client as NotionSyncClient
+        notion_client = NotionSyncClient(auth=cfg.notion_token)
+    else:  # applescript
+        arm = AppleScriptArm(
+            account_name=cfg.mail_account_name, inbox_name=cfg.mail_inbox_name,
+        )
+        reader = EmailReader()
 
     units = _make_metadata_units(
         records,
+        source=source,
         notion_client=notion_client,
+        arm=arm,
+        reader=reader,
         sync_store=cli.sync_store,
         dry_run=dry_run,
     )
 
     if internal_ids:
-        target_kind, target_key = "ids", internal_ids
+        target_kind, target_key_base = "ids", internal_ids
     elif all_:
-        target_kind, target_key = "all", "all"
+        target_kind, target_key_base = "all", "all"
     else:
         target_kind = "filtered"
-        target_key = (
+        target_key_base = (
             f"f:{since_date or ''}:{until_date or ''}:"
             f"{mailbox or ''}:{limit or ''}"
         )
+    # source 进 target_key, notion / applescript 两条路径不串 checkpoint
+    target_key = f"{source}:{target_key_base}"
 
     ltc = LongTaskContext(
         cli=cli,
@@ -1204,6 +1310,7 @@ def backfill_metadata(
         progress_every=max(1, progress_every // 5),
         resume_from=resume_from,
         payload={
+            "source": source,
             "force": force,
             "mailbox": mailbox,
             "since_date": since_date,
