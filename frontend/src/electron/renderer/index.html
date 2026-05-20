@@ -17,7 +17,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-t+kr8R3mep8k6aibvackqI/cdmkoF/XJTsawrcLSI2Y='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; connect-src 'self' ws://localhost:* http://localhost:*"
+      content="default-src 'self'; script-src 'self' 'sha256-JWOW0ZmF4KlXR10H32vpWS66AIWsa1+1swsTHiO0YpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; connect-src 'self' ws://localhost:* http://localhost:*"
     />
     <!--
       Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>
@@ -40,6 +40,10 @@
           var accent = localStorage.getItem('mailagent.accent')
           if (accent && accent !== 'coral') {
             root.setAttribute('data-accent', accent)
+          }
+          var surface = localStorage.getItem('mailagent.surface')
+          if (surface === 'solid' || surface === 'liquid') {
+            root.setAttribute('data-surface', surface)
           }
         } catch (e) {
           /* localStorage may be unavailable; fall through to default dark */

@@ -990,10 +990,21 @@
       "aria": "Pick accent color",
       "note": "Affects toolbar · chips · selected row · Island. Stored locally."
     },
+    "surface": {
+      "title": "Surface Material",
+      "tooltip": "Switch Frosted / Solid / Liquid (View → Appearance)",
+      "aria": "Pick surface material",
+      "note": "Affects chrome + all panel backgrounds. Stored locally."
+    },
     "locale": {
       "label": "Language",
       "tooltip": "Switch language (⌥G)",
       "aria": "Switch language"
     }
+  },
+  "surface": {
+    "frosted": "Frosted",
+    "solid": "Solid",
+    "liquid": "Liquid"
   }
 }
