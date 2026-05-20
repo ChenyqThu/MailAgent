@@ -19,6 +19,7 @@ import { useCommandPalette } from '@shared/state/command-palette'
 
 import { AccentPickerPopover } from './AccentPickerPopover'
 import { LocalePicker } from './LocalePicker'
+import { SurfacePickerPopover } from './SurfacePickerPopover'
 import { ThemePickerPopover } from './ThemePickerPopover'
 
 export function TitleBar(): React.ReactElement {
@@ -71,6 +72,8 @@ export function TitleBar(): React.ReactElement {
           WebkitAppRegion: 'no-drag' on their <button> element. */}
       <div className="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
         <AccentPickerPopover />
+        <span className="text-ink-fg-3">·</span>
+        <SurfacePickerPopover />
         <span className="text-ink-fg-3">·</span>
         <ThemePickerPopover />
         <span className="text-ink-fg-3">·</span>

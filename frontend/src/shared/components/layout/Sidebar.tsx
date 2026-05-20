@@ -344,7 +344,10 @@ export function Sidebar(): React.ReactElement {
           onClose={() => setAccountOpen(false)}
           onAddAccount={() => {
             setAccountOpen(false)
-            void navigate({ to: '/settings' })
+            // Sprint 18 PR C — `/settings` requires `tab` search param. Land
+            // the user on Accounts since that's where they came to set up
+            // a new account.
+            void navigate({ to: '/settings', search: { tab: 'accounts' } })
           }}
         />
       )}
@@ -424,11 +427,12 @@ export function Sidebar(): React.ReactElement {
             label="Custom API"
             onClick={toggleAIChatPanel}
           />
-          {/* AI 会话历史 — disabled (no chat history table yet). DESIGN.md §9.4. */}
+          {/* AI 会话历史 — Sprint 18 review: chat history table 还没做, 但
+              用户希望视觉上恢复可用态 (不灰禁). 留 onClick noop, 点击没反应
+              是预期行为, 等会话历史功能 ship 后再接上跳转. */}
           <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
             label={t('nav.aiSessions')}
-            disabled
             title={t('nav.aiSessionsSoon')}
           />
         </nav>
@@ -472,7 +476,7 @@ export function Sidebar(): React.ReactElement {
           icon={<Settings size={15} strokeWidth={1.75} />}
           label={t('nav.settings')}
           selected={pathname === '/settings'}
-          onClick={() => navigate({ to: '/settings' })}
+          onClick={() => navigate({ to: '/settings', search: { tab: 'general' } })}
           right={<kbd>⌘,</kbd>}
         />
         <NavRow

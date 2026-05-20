@@ -6,17 +6,28 @@ import { create } from 'zustand'
 
 export type ThemeMode = 'system' | 'dark' | 'light'
 export type AccentId = 'coral' | 'cobalt' | 'teal' | 'rose' | 'slate' | 'olive'
+// Sprint 18 #4 — 表面材质风格. 跟 themeMode / accent 平行的第三个独立维度,
+// 让用户在主题色之外也能控制 glass-*  的视觉:
+//   frosted (默认): 半透 + backdrop blur (Apple Liquid Glass 的轻量版)
+//   solid:           不透明 + 无 backdrop, 性能最好, 也是 prefers-reduced-
+//                    transparency 的等价物
+//   liquid:          更高 alpha + 高 blur + saturate + brightness + 高光,
+//                    模拟 Apple Liquid Glass / iOS 26 全量样式
+export type SurfaceStyle = 'frosted' | 'solid' | 'liquid'
 
 interface AppearanceStore {
   themeMode: ThemeMode
   resolvedTheme: 'dark' | 'light'
   accent: AccentId
+  surface: SurfaceStyle
   setThemeMode(next: ThemeMode): void
   setAccent(next: AccentId): void
+  setSurface(next: SurfaceStyle): void
 }
 
 const THEME_KEY = 'mailagent.themeMode'
 const ACCENT_KEY = 'mailagent.accent'
+const SURFACE_KEY = 'mailagent.surface'
 
 function readTheme(): ThemeMode {
   try {
@@ -47,6 +58,16 @@ function readAccent(): AccentId {
   return 'coral'
 }
 
+function readSurface(): SurfaceStyle {
+  try {
+    const v = localStorage.getItem(SURFACE_KEY)
+    if (v === 'frosted' || v === 'solid' || v === 'liquid') return v
+  } catch {
+    /* ignore */
+  }
+  return 'frosted'
+}
+
 function readResolved(themeMode: ThemeMode): 'dark' | 'light' {
   if (themeMode !== 'system') return themeMode
   if (typeof window === 'undefined') return 'dark'
@@ -59,6 +80,7 @@ export const useAppearance = create<AppearanceStore>((set) => ({
   themeMode: initialTheme,
   resolvedTheme: readResolved(initialTheme),
   accent: readAccent(),
+  surface: readSurface(),
   setThemeMode(next) {
     try {
       localStorage.setItem(THEME_KEY, next)
@@ -76,6 +98,15 @@ export const useAppearance = create<AppearanceStore>((set) => ({
     }
     set({ accent: next })
     applyAccent(next)
+  },
+  setSurface(next) {
+    try {
+      localStorage.setItem(SURFACE_KEY, next)
+    } catch {
+      /* ignore */
+    }
+    set({ surface: next })
+    applySurface(next)
   }
 }))
 
@@ -144,6 +175,16 @@ export function applyAccent(accent: AccentId): void {
   scheduleIslandAppearance()
 }
 
+// Sprint 18 #4 — Surface 是 UI 视觉风格, 不广播到 Island (Island 是 ping-
+// island 单独的视觉, 没有 glass-* layer 共享需求). 默认 'frosted' 不写
+// attribute, 让 CSS 的 base .glass-* 自然生效; solid / liquid 才写 attribute
+// 触发 :root[data-surface='...'] selector 覆盖.
+export function applySurface(surface: SurfaceStyle): void {
+  const root = document.documentElement
+  if (surface === 'frosted') root.removeAttribute('data-surface')
+  else root.setAttribute('data-surface', surface)
+}
+
 // Boot: register OS-change listener once. Caller should also call
 // applyResolvedTheme() once after mount to commit initial state (the inline
 // bootstrap in index.html already set the DOM before paint — this just keeps
@@ -151,6 +192,7 @@ export function applyAccent(accent: AccentId): void {
 export function bootAppearance(): void {
   applyResolvedTheme()
   applyAccent(useAppearance.getState().accent)
+  applySurface(useAppearance.getState().surface)
   if (typeof window === 'undefined') return
   const mq = window.matchMedia('(prefers-color-scheme: dark)')
   mq.addEventListener('change', () => {

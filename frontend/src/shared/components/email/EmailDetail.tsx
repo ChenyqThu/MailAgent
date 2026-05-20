@@ -544,7 +544,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         <div
           className={cn(
             'sticky top-0 z-10',
-            'bg-ink-3/95 backdrop-blur-xl',
+            // sticky 标题区: 既要 glass 通透, 又要不透明到能挡住滚动到下面的
+            // 邮件正文 (不然滚动时 subject 后面会看到正文穿透). 上调 alpha 到
+            // 0.78 + 更大 blur + saturate, 比 .glass-3 (0.55) 厚一些, 比原来
+            // 的 95 透很多, 既有玻璃感也满足 sticky overlay 的视觉契约.
+            'bg-ink-3/[0.78] backdrop-blur-2xl backdrop-saturate-150',
             'border-b border-ink-border-soft'
           )}
         >

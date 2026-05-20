@@ -1,6 +1,10 @@
 // Paste-ready from DESIGN.md §11. accent reads from CSS variables defined in
 // src/electron/renderer/index.css per §2.7 — one --c-accent swap re-skins the UI.
 import type { Config } from 'tailwindcss'
+// Sprint 18 — Radix data-state animations (open/closed, side, etc.) need the
+// tailwindcss-animate plugin. It ships only utility classes (`animate-in`,
+// `data-[state=open]:animate-in`, …); no theme additions, no token changes.
+import animate from 'tailwindcss-animate'
 
 export default {
   darkMode: 'class',
@@ -107,5 +111,5 @@ export default {
       }
     }
   },
-  plugins: []
+  plugins: [animate]
 } satisfies Config
