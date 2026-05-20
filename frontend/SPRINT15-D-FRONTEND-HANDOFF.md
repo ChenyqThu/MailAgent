@@ -7,7 +7,11 @@
 >
 > **后端报告**：[`../docs/sprint15-backend-complete.md`](../docs/sprint15-backend-complete.md)
 >
-> **当前分支**：`sprint15-backend`（10 atomic commits + 1 hotfix `942c6c4`）
+> **当前分支**：`sprint15-backend`（12 atomic commits + 2 hotfixes：`942c6c4` fanout idempotency + `61abab9` 路径 B 迁 outbox）
+>
+> **架构纯净化完成**：hotfix 2 把 `NotionToMailSync` 30s 轮询路径也迁 outbox，
+> 所有反向写都走 SQLite intent + FanoutWorker 派发，admin queue-depth 100%
+> 覆盖。前端 Dashboard 拉这一个接口就能看到全部 backlog。
 
 ---
 

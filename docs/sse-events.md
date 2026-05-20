@@ -46,10 +46,22 @@ es.addEventListener('mailagent', e => {
   "data": {                                    // 事件特定 payload (见下)
     "notion_page_id": "page-uuid-abc"
   },
-  "source": "new_watcher"                      // mailagent / outbox / sync_store /
-                                                // new_watcher / llm_agent / cli
+  "source": "new_watcher"                      // 见 source 取值表
 }
 ```
+
+**Source 取值**（outbox 入队来源标识 + SSE 事件来源）:
+
+| source | 触发处 | 含义 |
+|---|---|---|
+| `cli` | `mailagent email flag` 命令 | 前端 IPC fork CLI 写入 |
+| `notion_webhook` | `handle_flag_changed` / `handle_completed` | Notion 端用户手改 property, automation 触发 |
+| `ai_reviewed_handler` | `handle_ai_reviewed` | AI 完成审核后系统主动派发 (mailapp + notion 双 target) |
+| `reverse_sync_poll` | `NotionToMailSync.sync_single_page` | 30s 轮询的 webhook 兜底 (Sprint 15 hotfix 2 起统一走 outbox) |
+| `outbox` | `OutboxRepository.mark_done/failed` | outbox 自身状态变更 SSE 事件 |
+| `sync_store` | `SyncStore.mark_synced_v3 / _update_for_retry` | 邮件级事件 |
+| `new_watcher` | `_sync_single_email_v3` | 新邮件 sync 成功 |
+| `llm_agent` | `LLMProcessingStore.mark_success/failed` | LLM 处理完成 |
 
 ## 事件类型
 

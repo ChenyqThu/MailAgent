@@ -1,8 +1,31 @@
 # Sprint 15 后端完成报告
 
-**Branch**: `sprint15-backend` (9 atomic commits)
-**Status**: ✅ Backend ship, awaiting 前端 D 块切换 + 灰度切换
-**Last regression**: 851/851 pytest passed (2026-05-19)
+**Branch**: `sprint15-backend` (12 atomic commits + 2 hotfixes)
+**Status**: ✅ Backend ship + 生产灰度通过 + hotfix 2 路径 B 也迁 outbox（架构纯净）
+**Last regression**: 864/864 pytest passed (2026-05-19)
+
+---
+
+## Hotfix 2 — 路径 B 迁 outbox（架构纯净化, commit `61abab9`）
+
+Sprint 15 ship 后, 反向同步两条路径并存:
+- **路径 A** (webhook → `handle_flag_changed`): 已切 outbox ✓
+- **路径 B** (`NotionToMailSync.sync_single_page` 30s 轮询): **仍直调 AppleScript** ✗
+
+Hotfix 2 把路径 B 也迁 outbox, 让 SQLite 真正成为 mutating 操作的唯一 intent
+聚合点。改动:
+- `src/mail/reverse_sync.py`: `__init__` 加 `outbox_repo` 注入; `sync_single_page`
+  加 outbox 分支调 `_enqueue_outbox`（写 SQLite + outbox(target='mailapp',
+  source='reverse_sync_poll')）; 老路径保留作灰度回退兼容
+- `main.py`: outbox setup 上移到 `NotionToMailSync` 构造之前注入 `outbox_repo`
+- `tests/mail/test_reverse_sync_outbox.py` 12 cases 覆盖
+
+收益:
+- `admin queue-depth` 100% 覆盖所有反向写
+- 失败统一进 outbox 重试 / dead_letter, 不再依赖下次 30s 轮询补救
+- SSE `outbox.enqueued/done/failed` 完整覆盖反向路径
+- source 字段区分 `notion_webhook` / `ai_reviewed_handler` / `reverse_sync_poll` /
+  `cli` 便于 debug 分流
 
 ---
 
@@ -26,9 +49,13 @@ C `mailagent email flag` CLI + D 前端 callsite 切换）的 A+B+C 全部 ship�
 
 ---
 
-## 9 个 Atomic Commits
+## 12 个 Atomic Commits + 2 Hotfixes
 
 ```
+61abab9 (hotfix 2) reverse_sync 路径 B 迁 outbox, 架构纯净化
+2293121 docs(frontend): Sprint 15 D 块前端 callsite 切换 handoff
+942c6c4 (hotfix 1) fanout 不再用 SQLite cache 做 idempotency
+8b4f342 stage 5 — backend completion report + 灰度切换指引
 942f755 stage 4 — admin fts-health + pm2-status + queue-depth + stats outbox
 6086149 stage 3 — admin config CLI + .env 补全 + dashboard_password
 be28e8e stage 2 — SSE publisher + endpoint + 4 接入点

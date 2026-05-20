@@ -52,7 +52,7 @@ pm2 logs <name> --lines 20 --nostream
 - 邮件内容、附件、线程关系同步
 - 自动识别邮件中的会议邀请（iCalendar）并创建日程
 - AI 分类与处理（通过 Notion）
-- 双向 Flag 同步（已读/旗标状态 Mail.app ↔ Notion）
+- 双向 Flag 同步（已读/旗标状态 Mail.app ↔ Notion，Sprint 15 起统一走 outbox + FanoutWorker 异步派发）
 - 飞书应用机器人通知（重要邮件推送 + 交互式回复按钮 → Openclaw）
 - Notion Webhook → Redis → Mail.app 实时事件驱动
 - Office 附件自动转换（docx/pptx→PDF, xlsx→CSV）并作为额外附件上传
@@ -61,6 +61,60 @@ pm2 logs <name> --lines 20 --nostream
 - 使用 `internal_id`（SQLite ROWID = AppleScript id）作为主键
 - AppleScript 查询性能提升 **127 倍**（~1s vs ~100s）
 - 支持大邮箱（6-7 万封邮件）
+
+**Sprint 15 — SQLite SSoT inversion**（2026-05 灰度上线）
+所有 mutating 操作（flag / processing_status 变化）反转方向, SQLite 是写入
+intent 聚合点, FanoutWorker 异步派发到 Mail.app + Notion。
+
+```
+            ┌──────────────────────────────────────────┐
+            │  SQLite (SSoT) — sync_store.db v10       │
+            │  email_metadata + email_outbox + ...     │
+            └──┬───────────────────────────────────────┘
+               │
+   ┌───────────┼──────────────────────────────┬──────────────┐
+   ▼           ▼                              ▼              ▼
+┌────────┐  ┌──────────────┐         ┌──────────────┐  ┌─────────┐
+│Mail.app│  │ 前端/CLI     │         │FanoutWorker  │  │  Notion │
+│(本机)  │  │ writers      │         │(mail-sync 内)│  │  Cloud  │
+└───┬────┘  │ - email flag │         │              │  └────┬────┘
+    │       │ - BatchAction│         │ poll 5s,     │       │
+    │       └──────┬───────┘         │ async dispatch│      │
+    │              │                 │ - AppleScript│       │
+    │ ①正向 sync   │ ②写 SQLite      │ - Notion API │       │
+    │  SQLite Radar│   intent +      └──────┬───────┘       │
+    │  → Notion    │   outbox.enqueue       │               │
+    │              │   双 target            │ ③消费 outbox  │
+    │              │   (mailapp+notion)     │               │
+    └──────────────┴────────────────────────┴───────────────┘
+                   ↑                                        │
+                   │ ④反向 — Notion → SQLite + Mail.app     │
+                   │   两条路径都走 outbox 路径 (架构统一)    │
+                   │                                        │
+              ┌────┴──────────────────┐                     │
+              │ 路径 A: webhook (实时) │←────── webhook ─────┘
+              │  handle_flag_changed   │       (Notion 端
+              │  → write SQLite        │        用户改 property
+              │  → outbox(mailapp,     │        触发 automation)
+              │    source=notion_webhook)
+              │
+              │ 路径 B: 轮询 30s        │
+              │  NotionToMailSync       │
+              │  → write SQLite         │
+              │  → outbox(mailapp,      │
+              │    source=reverse_sync_poll)
+              └──────────────────────────
+```
+
+**核心特性**：
+- DB v10 新表 `email_outbox`（13 列, CHECK target/status, FK CASCADE）
+- `OutboxRepository.enqueue` echo prevention: source='notion_webhook' +
+  target='notion' silent skip 防回环
+- `FanoutWorker` asyncio loop 消费, AppleScript / Notion API 本身幂等所以
+  fanout 不做 SQLite-based idempotency short-circuit
+- 灰度开关 `MAILAGENT_OUTBOX_ENABLED=false` 时 handler + reverse_sync 都
+  退回老 AppleScript 直调路径（回退兼容）
+- 详见 `docs/sprint15-backend-complete.md` + `frontend/SPRINT15-HANDOFF.md` §3
 
 **技术栈：**
 - Python >=3.9（本地开发 3.11+，远程 webhook-server 3.9+）
@@ -282,7 +336,7 @@ tail -f logs/sync.log
 | `meeting_sync.py` | 会议邀请检测与同步 |
 | `icalendar_parser.py` | iCalendar 解析器 |
 | `health_check.py` | 健康检查（发现遗漏邮件） |
-| `reverse_sync.py` | 反向同步（Notion → Mail.app + 飞书通知 + Processing Status 更新） |
+| `reverse_sync.py` | 反向同步（Notion → Mail.app + 飞书通知 + Processing Status 更新）。Sprint 15 起 outbox_repo 注入时 `sync_single_page` 写 SQLite intent + outbox.enqueue(target='mailapp', source='reverse_sync_poll')，不再直调 AppleScript |
 
 #### 通知模块 (`src/notify/`)
 
@@ -302,7 +356,7 @@ tail -f logs/sync.log
 | 模块 | 职责 |
 |------|------|
 | `redis_consumer.py` | Redis BLPOP 队列消费者（自动重连） |
-| `handlers.py` | Webhook 事件处理器（flag_changed / ai_reviewed / completed / create_draft / query_mail / fetch_mail_content / page_updated） |
+| `handlers.py` | Webhook 事件处理器（flag_changed / ai_reviewed / completed / create_draft / query_mail / fetch_mail_content / page_updated）。Sprint 15 起 outbox_repo 注入时 flag_changed / completed / ai_reviewed 写 outbox(target='mailapp') 不再直调 AppleScript |
 
 #### Webhook Server (`webhook-server/`)
 
@@ -481,28 +535,37 @@ Processing Status 状态流转:
 | `已同步` | 已同步到 Mail.app | 反向同步成功后自动 | 不再处理 |
 | `已完成` | 用户已处理（如已回复） | 用户手动 / Mail.app 取消旗标 | 移除旗标 |
 
-**反向同步 Action Type 映射：**
+**反向同步 Action Type 映射（Sprint 15 后 outbox 路径）：**
 
-| Action Type | Mail.app 操作 | 飞书通知 |
-|------------|--------------|---------|
-| 需要回复/需要决策/需要Review/需要会议/需要跟进/等待响应 | 标记已读 + 设旗标 | 紧急/重要时推送卡片（含「✨ 优化回复」「📝 创建草稿」按钮 → Openclaw） |
-| 仅供参考/已完结 | 标记已读 | 否 |
+| Action Type | Outbox payload (target=mailapp) | 飞书通知 |
+|------------|---------------------------------|---------|
+| 需要回复/需要决策/需要Review/需要会议/需要跟进/等待响应 | `{is_read: true, is_flagged: true}` | 紧急/重要时推送卡片（含「✨ 优化回复」「📝 创建草稿」按钮 → Openclaw） |
+| 仅供参考/已完结 | `{is_read: true}` (is_flagged 不动) | 否 |
 
 **双向完成闭环：**
 - Mail.app 取消旗标 → 正向同步 → Notion `Is Flagged=False` + `Processing Status=已完成`
-- Notion 标记 `已完成` → webhook `?event=completed` → 移除 Mail.app 旗标
+- Notion 标记 `已完成` → webhook `?event=completed` → outbox(target=mailapp) → fanout 移除 Mail.app 旗标
 
-**Webhook 事件类型：**
+**Webhook 事件类型（Sprint 15 outbox 路径）：**
 
 | 事件 | 触发条件 | 处理动作 |
 |------|---------|---------|
-| `flag_changed` | Is Read / Is Flagged 变化 | 同步到 Mail.app |
-| `ai_reviewed` | Processing Status → AI Reviewed | Mail.app 标旗 + 飞书通知 + 状态更新为已同步 |
-| `completed` | Processing Status → 已完成 | 移除 Mail.app 旗标 |
-| `create_draft` | Notion 按钮触发 | 调用脚本创建 Mail.app 回复草稿 + 状态更新为草稿已创建 |
+| `flag_changed` | Is Read / Is Flagged 变化 | handler 写 SQLite + outbox(target=mailapp, source=notion_webhook) → fanout 同步到 Mail.app |
+| `ai_reviewed` | Processing Status → AI Reviewed | handler 写 SQLite + outbox(target=mailapp, source=ai_reviewed_handler) + outbox(target=notion, processing_status=已同步) + 飞书通知 |
+| `completed` | Processing Status → 已完成 | handler 写 SQLite + outbox(target=mailapp, payload={is_flagged:False, is_read:True}) → fanout 移除 Mail.app 旗标 |
+| `create_draft` | Notion 按钮触发 | AppleScript 直调创建草稿（不走 outbox，独立交互） |
 | `query_mail` | 外部系统查询 | 搜索邮件元数据（支持 `source=syncstore` 已同步 或 `source=mail` 全量 ~24k） |
-| `fetch_mail_content` | 外部系统查询 | 通过 internal_id 获取邮件完整正文（AppleScript ~1-3s） |
+| `fetch_mail_content` | 外部系统查询 | 通过 internal_id 获取邮件完整正文（SQLite SSoT 优先，miss fallback AppleScript） |
 | `page_updated` | 通用事件 | 自动路由到上述处理器 |
+
+**反向同步两条路径并存**（Sprint 15 后两条都走 outbox，架构纯净）：
+
+| 路径 | 触发 | source 标识 | 说明 |
+|---|---|---|---|
+| A: webhook | Notion automation 实时 push | `notion_webhook` | 用户在 Notion 端改 property 立即触发 |
+| B: 轮询 30s | `NotionToMailSync.check_and_sync` | `reverse_sync_poll` | webhook 漏掉的兜底（webhook-server 挂 / 网络断 / automation 没触发） |
+
+**Echo prevention**：`OutboxRepository.enqueue` 强制 `source='notion_webhook' + target='notion'` silent skip，防止 Notion → handler → outbox → fanout → Notion automation → 死循环。 path B 用 source='reverse_sync_poll' 跟前者隔离，admin queue-depth + SSE 可以按 source 分流统计。
 
 #### 4. 内联图片处理
 
