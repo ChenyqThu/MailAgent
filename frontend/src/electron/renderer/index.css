@@ -130,7 +130,7 @@
    * 跟 Sprint 17 EmailRow 几何 SSoT 同款 pattern.
    *
    * Layout (mockup main row 800px 内):
-   *   --settings-rail-w        180  Settings 节 nav 宽 (主 nav 240 + 节 180 + 内容)
+   *   --settings-rail-w        200  Settings 节 nav 宽 (review round 6: +20px, 让英文 tab label 不截断)
    *   --settings-content-max-w 760  内容区 max-width (mockup max-w-[760px])
    *   --settings-content-px    40   左右 padding (mockup px-10)
    *   --settings-content-py    32   顶部 padding (mockup py-8)
@@ -146,7 +146,7 @@
    *   --slider-track-h / --slider-thumb-size  4 / 16     Slider
    *   --swatch-size-inline / --swatch-size-pop  44 / 36  Accent swatch
    *   --save-bar-bottom  32                               浮动保存 pill (PR E reserved) */
-  --settings-rail-w: 180px;
+  --settings-rail-w: 200px;
   --settings-content-max-w: 760px;
   --settings-content-px: 2.5rem;
   --settings-content-py: 2rem;

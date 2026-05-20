@@ -16,6 +16,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
 import type { PersistentSettings } from '@shared/api/types'
 
+import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
@@ -101,6 +102,13 @@ export function RealtimeStorageTab(): React.ReactElement {
 
   return (
     <>
+      <PageHeader
+        eyebrow={t('settings.realtime.page.eyebrow', { defaultValue: 'REALTIME & STORAGE' })}
+        title={t('settings.realtime.page.title', { defaultValue: '实时与存储' })}
+        description={t('settings.realtime.page.intro', {
+          defaultValue: 'SSE 事件总线、Redis 队列与附件 / SQLite 本地存储路径。'
+        })}
+      />
       <Section title={t('settings.realtime.sse.title')} helper={t('settings.realtime.sse.helper')}>
         <Row label={t('settings.realtime.label')} helper={t('settings.realtime.hint')}>
           <div className="flex items-center gap-2 flex-wrap">

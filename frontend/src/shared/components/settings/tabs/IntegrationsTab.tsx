@@ -10,6 +10,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
@@ -19,6 +20,13 @@ export function IntegrationsTab(): React.ReactElement {
 
   return (
     <>
+      <PageHeader
+        eyebrow={t('settings.integrations.page.eyebrow', { defaultValue: 'INTEGRATIONS' })}
+        title={t('settings.integrations.page.title', { defaultValue: '集成' })}
+        description={t('settings.integrations.page.intro', {
+          defaultValue: '项目周报同步、Office 文档转换、看板上报与 CLI 鉴权。'
+        })}
+      />
       <Section
         title={t('settings.integrations.projectProgress.title')}
         helper={t('settings.integrations.projectProgress.helper')}

@@ -4,6 +4,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
 
@@ -12,6 +13,13 @@ export function SyncTab(): React.ReactElement {
 
   return (
     <>
+      <PageHeader
+        eyebrow={t('settings.sync.page.eyebrow', { defaultValue: 'SYNC' })}
+        title={t('settings.sync.page.title', { defaultValue: '同步' })}
+        description={t('settings.sync.page.intro', {
+          defaultValue: 'SQLite radar 同步窗口、节拍与日历采集范围。'
+        })}
+      />
       <Section title={t('settings.sync.window.title')} helper={t('settings.sync.window.helper')}>
         <EnvField
           envKey="SYNC_DATE_MODE"

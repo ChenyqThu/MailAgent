@@ -7,6 +7,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
 
@@ -15,6 +16,13 @@ export function AccountsTab(): React.ReactElement {
 
   return (
     <>
+      <PageHeader
+        eyebrow={t('settings.accounts.page.eyebrow', { defaultValue: 'ACCOUNTS' })}
+        title={t('settings.accounts.page.title', { defaultValue: '账户' })}
+        description={t('settings.accounts.page.intro', {
+          defaultValue: 'Notion 集成凭据与 Mail.app 邮箱账户配置。'
+        })}
+      />
       <Section title={t('settings.accounts.notion.title')}>
         <EnvField
           envKey="NOTION_TOKEN"

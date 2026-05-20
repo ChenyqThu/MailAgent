@@ -1,25 +1,35 @@
 // Sprint 18 §PR C — 180px Settings 节 nav.
-//
-// Renders the Radix Tabs.List (vertical) — 8 个 Tab trigger 顺序对齐 plan.
-// 每个 trigger 一 lucide-react icon + 中文 label (走 i18n; key 在 PR G 加).
-// "SETTINGS" micro 标题在顶部,版本 / About link 在底部 (footer 借自老
-// SettingsPage AboutSection — 这里用静态版本号 + GitHub link).
+// Sprint 18 review — 视觉跟 mockup-settings.html 的 settings rail 完整对齐:
+//   - 顶部 SETTINGS eyebrow:   `text-micro font-mono uppercase
+//     tracking-wider text-ink-fg-2 px-2.5 mb-1.5` (mockup line 580)
+//   - 底部 footer:             `mt-auto px-3 py-3 border-t
+//     border-ink-border-soft text-micro font-mono text-ink-fg-2`,
+//     内容用 key/value flex justify-between 表格风格 (mockup line 614-617)
+//   - active 态由 tabs.tsx 的 vertical variant 接管, 这里只管几何.
 //
 // 几何变量:
-//   width            = var(--settings-rail-w, 180px)
-//   nav-row 样式来自 ui/tabs.tsx orientation=vertical (Sprint 18 PR A 内置
-//     active 态 .ink-3/85 bg + coral 2px 左 indicator).
+//   width = var(--settings-rail-w, 180px)
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bell, Bot, ExternalLink, Palette, Plug, Radio, RefreshCw, User, Wifi } from 'lucide-react'
+import {
+  Bell,
+  Bot,
+  Palette,
+  Plug,
+  Radio,
+  RefreshCw,
+  User,
+  Wifi,
+  type LucideIcon
+} from 'lucide-react'
 
 import { TabsList, TabsTrigger } from '@shared/components/ui/tabs'
 import { useUpdaterStore } from '@shared/state/updater'
 
 interface TabEntry {
   value: string
-  Icon: React.ComponentType<{ className?: string }>
+  Icon: LucideIcon
   labelKey: string
 }
 
@@ -40,35 +50,52 @@ export function SettingsRail(): React.ReactElement {
 
   return (
     <aside
-      className="glass-2 border-r border-ink-border-soft shrink-0 flex flex-col"
-      style={{ width: 'var(--settings-rail-w, 180px)' }}
+      aria-label="settings sections"
+      // mockup: `w-[180px] glass-2 border-r border-ink-border/60 shrink-0
+      // flex flex-col`. `h-full min-h-0` 保证 flex-col 链拉满高度,
+      // footer mt-auto 才贴底.
+      className="glass-2 border-r border-ink-border/60 shrink-0 flex flex-col h-full min-h-0"
+      style={{ width: 'var(--settings-rail-w, 200px)' }}
     >
-      <div className="px-3 pt-3 pb-1.5">
+      {/* nav — mockup `<div class="px-3 pt-3 pb-1.5">` 包 eyebrow + nav
+          rows. flex-1 + overflow-y-auto 让 8 个 tab 在窄高视窗下能滚,
+          rail 自身高度不超 viewport. */}
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-3 pt-3 pb-1.5">
         <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2 px-2.5 mb-1.5">
           {t('settings.title', { defaultValue: 'SETTINGS' })}
         </div>
-        <TabsList className="flex-col items-stretch gap-0.5 bg-transparent p-0">
+        {/* w-full 让 TabsList 撑满 rail 宽度 (基础类 `inline-flex` 默认只裹
+            到最长 tab 文字, 选中/hover bg 因此窄于 rail). review round 10 —
+            修复 rail +20px 后 active bg 仍贴左半边的视觉. */}
+        <TabsList className="flex-col items-stretch gap-px bg-transparent p-0 w-full">
           {TAB_ORDER.map(({ value, Icon, labelKey }) => (
             <TabsTrigger key={value} value={value} className="w-full">
-              <Icon className="size-4 shrink-0" />
+              <Icon className="size-3.5 shrink-0" strokeWidth={2} />
               <span className="truncate">{t(labelKey, { defaultValue: value })}</span>
             </TabsTrigger>
           ))}
         </TabsList>
       </div>
-      <div className="mt-auto px-3 py-3 border-t border-ink-border-soft">
-        <div className="text-meta font-mono text-ink-fg-2 mb-1.5">
-          MailAgent <span className="text-ink-fg-3">v{version}</span>
+      {/* footer — mockup-settings.html line 614-617 字面对齐:
+          `text-micro font-mono text-ink-fg-2` 容器, 两行 key/value
+          `flex justify-between`. 不加任何 inline style 也不加 important
+          修饰符 — review round 7: 用户确认应保留 mockup text-micro 标准. */}
+      <div className="shrink-0 mt-auto px-3 py-3 border-t border-ink-border-soft text-micro font-mono text-ink-fg-2">
+        <div className="flex items-center justify-between">
+          <span>version</span>
+          <span>v{version}</span>
         </div>
-        <a
-          href="https://github.com/chenyqthu/MailAgent"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-meta text-coral hover:underline inline-flex items-center gap-1"
-        >
-          GitHub
-          <ExternalLink className="size-3" />
-        </a>
+        <div className="flex items-center justify-between">
+          <span>repo</span>
+          <a
+            href="https://github.com/chenyqthu/MailAgent"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-coral transition-colors duration-fast"
+          >
+            GitHub
+          </a>
+        </div>
       </div>
     </aside>
   )

@@ -132,17 +132,32 @@ export function RestartBanner(): React.ReactElement | null {
 
   return (
     <>
+      {/* Sprint 18 review (round 5) — banner 沿用 EmailDetail sticky 标题区
+          同款方案 (EmailDetail.tsx §line 544-554):
+          - `sticky top-0 z-10` 在 section overflow-y-auto 内部锚顶
+          - 背景 `bg-ink-3/[0.78] backdrop-blur-2xl backdrop-saturate-150` —
+            既保持玻璃通透, 又厚到能挡住下方 content 滚到 banner 后面
+          - 仅 `border-b` 不画顶/侧边, 避免 glass-pop 的 1px 白边
+          - 左侧 4px coral 实线竖条 (跟 row-selected 同视觉语言)
+          - position 走 tailwind class, 不再加 inline `position: sticky` 因为
+            旧版 `relative` 冲突已经清除了 (`relative` 已删).
+        */}
       <div
         role="status"
         aria-live="polite"
         className={cn(
-          'sticky top-0 z-30',
-          'border-b border-warn/30 bg-warn/10',
-          'px-[var(--settings-content-px,2.5rem)] py-2.5',
+          'sticky top-0 z-10',
+          'bg-ink-3/[0.78] backdrop-blur-2xl backdrop-saturate-150',
+          'border-b border-ink-border-soft',
+          'px-[var(--settings-content-px,2.5rem)] py-3',
           'flex items-center gap-3'
         )}
       >
-        <AlertTriangle className="size-4 shrink-0 text-warn" aria-hidden="true" />
+        <span
+          aria-hidden="true"
+          className="absolute inset-y-0 left-0 w-1 bg-coral"
+        />
+        <AlertTriangle className="size-4 shrink-0 text-coral" aria-hidden="true" />
         <div className="flex-1 min-w-0 text-aux text-ink-fg-1">
           <span className="font-medium text-ink-fg">
             {t('settings.restart.required', { defaultValue: '需要重启 mail-sync' })}
@@ -166,7 +181,10 @@ export function RestartBanner(): React.ReactElement | null {
           size="sm"
           onClick={() => setConfirmOpen(true)}
           disabled={restarting}
-          className="shrink-0"
+          // Button default variant 用 `text-accent-fg`, dark theme 下解析为
+          // near-black (15 16 21), 在 coral 背景上视觉读起来"深字深底".
+          // 这里强制 `text-white` 让 CTA 字色固定为浅色, 跨主题都对比强.
+          className="shrink-0 text-white"
         >
           {restarting ? (
             <>

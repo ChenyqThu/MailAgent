@@ -102,7 +102,9 @@ function buildSyncView(
 }
 
 function Sep(): React.ReactElement {
-  return <span className="text-ink-fg-3 px-2">·</span>
+  // mockup-inbox.html line 2604 / mockup-settings.html line 845 都用 pipe `|`
+  // + `text-ink-fg-3` 单色, 间距由父容器 `gap-3` 控制 (segment 自身不加 px).
+  return <span className="text-ink-fg-3">|</span>
 }
 
 interface SegmentProps {
@@ -179,11 +181,17 @@ export function StatusBar(): React.ReactElement {
   }`
 
   return (
+    // review round 10 — 正式方案: Tailwind `text-micro` (11px, 跟主 Sidebar
+    // section header / SettingsRail eyebrow 同档) + `leading-[12px]` 覆盖
+    // text-micro 默认 14px lh, 让 24px 高 statusbar 里两行更紧.
+    // 不再加 inline fontSize 兜底 — 如果这次又被 cache 卡住, 重启 pnpm dev
+    // 才是正解, 而不是绕开 Tailwind 系统.
     <footer
       className={cn(
         'h-statusbar shrink-0 glass border-t border-ink-border/60',
-        'flex items-center px-3 select-none',
-        'text-meta font-mono text-ink-fg-2'
+        'flex items-center px-3 gap-3 select-none',
+        'font-mono text-ink-fg-2',
+        'text-micro leading-[12px]'
       )}
     >
       <Segment

@@ -42,23 +42,39 @@ export const TabsTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       'relative inline-flex items-center whitespace-nowrap rounded-md',
-      'text-aux font-medium ring-offset-ink-1',
+      // Sprint 18 review — 默认 font-normal, 选中态才加 font-medium. 旧版
+      // 全 font-medium 让 SettingsRail 的 8 个 tab 都看起来加粗, 跟主
+      // Sidebar 风格不一致 (Sidebar 默认 font-normal, selected 才 medium).
+      'text-aux font-normal ring-offset-ink-1',
       'transition-colors duration-fast ease-standard',
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40',
       'disabled:pointer-events-none disabled:opacity-50',
-      'text-ink-fg-2 hover:text-ink-fg',
-      'data-[state=active]:text-ink-fg',
+      'text-ink-fg-1 hover:text-ink-fg',
       // Horizontal default: coral underline (matches RightPanel pattern)
       'data-[orientation=horizontal]:justify-center data-[orientation=horizontal]:px-3 data-[orientation=horizontal]:py-1.5',
       'data-[orientation=horizontal]:border-b-2 data-[orientation=horizontal]:border-transparent',
-      'data-[orientation=horizontal][data-state=active]:border-coral',
-      // Vertical (Settings rail): justify-start, gap for icon + label, ink-3 fill on active
+      'data-[orientation=horizontal]:data-[state=active]:font-medium data-[orientation=horizontal]:data-[state=active]:text-ink-fg',
+      'data-[orientation=horizontal]:data-[state=active]:border-coral',
+      // Vertical (Settings rail) — 跟主 Sidebar `.row-selected` 同源:
+      // active = `bg-ink-4 text-ink-fg font-medium` + 3px coral 左条
+      // inset-y-0 (全高).
+      //
+      // ⚠️ 链式 data-attr 语法: Tailwind 要求每个 data-attr 是独立 variant,
+      // 用 `:` 串起来 (data-[a=x]:data-[b=y]:bg-foo). 旧版用
+      // `data-[a=x][data-b=y]:` 把两个 attr 塞一个 `[...]` 里 Tailwind 不认
+      // → JIT 静默不生成 CSS → active 态完全无效. (这是 Sprint 18 review
+      // 用户报"选中没高亮"的根因.)
       'data-[orientation=vertical]:justify-start data-[orientation=vertical]:gap-2.5',
       'data-[orientation=vertical]:px-2.5 data-[orientation=vertical]:py-[7px]',
-      'data-[orientation=vertical]:hover:bg-ink-fg/[0.06]',
-      'data-[orientation=vertical][data-state=active]:bg-ink-3/85 data-[orientation=vertical][data-state=active]:text-ink-fg',
-      'data-[orientation=vertical][data-state=active]:before:absolute data-[orientation=vertical][data-state=active]:before:left-0 data-[orientation=vertical][data-state=active]:before:top-1/2 data-[orientation=vertical][data-state=active]:before:-translate-y-1/2',
-      'data-[orientation=vertical][data-state=active]:before:h-4 data-[orientation=vertical][data-state=active]:before:w-[2px] data-[orientation=vertical][data-state=active]:before:rounded-full data-[orientation=vertical][data-state=active]:before:bg-coral/100',
+      'data-[orientation=vertical]:hover:bg-ink-3 data-[orientation=vertical]:hover:text-ink-fg',
+      'data-[orientation=vertical]:data-[state=active]:bg-ink-4',
+      'data-[orientation=vertical]:data-[state=active]:text-ink-fg',
+      'data-[orientation=vertical]:data-[state=active]:font-medium',
+      'data-[orientation=vertical]:data-[state=active]:before:absolute',
+      'data-[orientation=vertical]:data-[state=active]:before:left-0',
+      'data-[orientation=vertical]:data-[state=active]:before:inset-y-0',
+      'data-[orientation=vertical]:data-[state=active]:before:w-[3px]',
+      'data-[orientation=vertical]:data-[state=active]:before:bg-coral',
       className
     )}
     {...props}

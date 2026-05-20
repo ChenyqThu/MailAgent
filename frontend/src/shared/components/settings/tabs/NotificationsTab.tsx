@@ -4,6 +4,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
 
@@ -12,6 +13,13 @@ export function NotificationsTab(): React.ReactElement {
 
   return (
     <>
+      <PageHeader
+        eyebrow={t('settings.notifications.page.eyebrow', { defaultValue: 'NOTIFICATIONS' })}
+        title={t('settings.notifications.page.title', { defaultValue: '通知' })}
+        description={t('settings.notifications.page.intro', {
+          defaultValue: '飞书应用机器人推送重要邮件 · 告警机器人推送服务异常。'
+        })}
+      />
       <Section
         title={t('settings.notifications.feishu.title')}
         helper={t('settings.notifications.feishu.helper')}

@@ -517,6 +517,37 @@
     },
     "accent": "Accent",
     "accentHint": "6 swatches · drives the primary CTA + chip color",
+    "general": {
+      "page": {
+        "intro": "Accent, theme, language and glass material. Preferences stay local."
+      },
+      "accent": {
+        "meta": "6 prebuilt",
+        "note": "Drives the toolbar, selected row, status chips, Island accent and batch-bar badge. Each change broadcasts to the ping-island bridge."
+      },
+      "language": {
+        "title": "Language",
+        "zh": "简体中文",
+        "zhMeta": "UI · toolbar · settings · AI quick actions. Email body is never auto-translated.",
+        "en": "English",
+        "enMeta": "UI · toolbar · settings · AI quick actions. Email body never auto-translated.",
+        "note": "List headers (MAILBOXES · AI FIELDS · ATTACHMENTS) stay in English mono, unaffected by body font size or density."
+      },
+      "theme": {
+        "title": "Theme",
+        "recommended": "recommended",
+        "systemMeta": "Follows macOS appearance toggle — works out of the box.",
+        "darkMeta": "Canvas #06080B → #0A0C10, glass surfaces on top.",
+        "lightMeta": "Canvas #F6F7FB → #ECEEF4, accent shifts warmer."
+      },
+      "surface": {
+        "title": "Surface",
+        "meta": "3 styles",
+        "frostedMeta": "Frosted · semi-transparent + backdrop blur, lightweight Liquid Glass.",
+        "solidMeta": "Solid · opaque, no blur. Best perf, matches prefers-reduced-transparency.",
+        "liquidMeta": "Liquid · richer alpha + saturate + inset highlight, iOS 26 feel."
+      }
+    },
     "save": "Save",
     "clear": "Clear",
     "saveFail": "Save failed",

@@ -517,6 +517,37 @@
     },
     "accent": "强调色",
     "accentHint": "6 种 swatch · 影响主 CTA 与 chip 染色",
+    "general": {
+      "page": {
+        "intro": "控制强调色、主题、语言与界面材质。所有偏好仅保存在本机。"
+      },
+      "accent": {
+        "meta": "6 prebuilt",
+        "note": "同步至灵动岛通知边框、收件列表选中条、AI 起草按钮、批量栏徽章。每次切换都会广播到 ping-island 桥接。"
+      },
+      "language": {
+        "title": "语言",
+        "zh": "简体中文",
+        "zhMeta": "界面文案 · 工具栏 · 设置 · AI 快捷动作。邮件正文不参与翻译。",
+        "en": "English",
+        "enMeta": "UI · toolbar · settings · AI quick actions. Email body never auto-translated.",
+        "note": "列表头 (MAILBOXES · AI FIELDS · ATTACHMENTS) 保持英文等宽体,与正文字号/密度无关。"
+      },
+      "theme": {
+        "title": "主题",
+        "recommended": "recommended",
+        "systemMeta": "macOS 切换时一并切换,开机即用",
+        "darkMeta": "画布主色 #06080B → #0A0C10,玻璃在其之上",
+        "lightMeta": "画布主色 #F6F7FB → #ECEEF4,强调色再走暖色调"
+      },
+      "surface": {
+        "title": "界面材质",
+        "meta": "3 styles",
+        "frostedMeta": "毛玻璃 · 半透 + backdrop blur,Apple Liquid Glass 轻量版",
+        "solidMeta": "纯色 · 不透 + 无 blur,性能最好,prefers-reduced-transparency 等价",
+        "liquidMeta": "液态玻璃 · 更高 alpha + saturate + 顶部高光,模拟 iOS 26"
+      }
+    },
     "save": "保存",
     "clear": "清除",
     "saveFail": "保存失败",

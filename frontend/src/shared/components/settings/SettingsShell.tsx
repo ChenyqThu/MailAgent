@@ -60,10 +60,21 @@ export function SettingsShell(): React.ReactElement {
       value={tab}
       onValueChange={handleTabChange}
       orientation="vertical"
-      className="flex flex-1 min-h-0 overflow-hidden"
+      // Sprint 18 review — SettingsLayout passes `mainClassName="flex"`
+      // 让 <main> 变成 row flex 容器, 这里 Tabs root 直接 stretch 填高度.
+      // `min-w-0` 让长 content 行 (env path / tag-list) 在 flex 子项中
+      // 正确 shrink, 不会强行撑爆父级宽度.
+      className="flex flex-1 min-h-0 min-w-0"
     >
       <SettingsRail />
-      <section className="glass-3 flex-1 min-w-0 overflow-y-auto scrollbar-thin">
+      {/* Sprint 18 review (round 5) — 单滚动条 + sticky banner (EmailDetail
+          §line 526-554 同款方案): section 自己是唯一 scroll container,
+          RestartBanner 作 sticky top-0 z-10 直接子, 滚动正文时 banner 保
+          冻结. content 容器只负责 max-w + padding, 不创建二级 scroll. */}
+      <section
+        aria-label="settings content"
+        className="glass-3 flex-1 min-w-0 min-h-0 overflow-y-auto scrollbar-thin"
+      >
         <RestartBanner />
         <div
           className="mx-auto"

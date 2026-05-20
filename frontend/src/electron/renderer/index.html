@@ -14,10 +14,20 @@
       same hash-locked inline script from a file:// origin.
       connect-src adds `ws:` for vite HMR; `http://localhost:5173` for the
       dev module server. Production wraps these in is.dev gating.
+
+      img-src whitelist (review round 9):
+        - 'self' / data: / file:     本地资源 / inline data URI / 本地附件
+        - https://*.onecdn.static.microsoft  Office/Outlook 邮件正文里嵌的
+                                              sysfile.svg 等附件类型图标
+                                              (line 16 起源全是 Microsoft CDN)
+      安全权衡: 加这个 CDN 意味着任何邮件都可以从该域加载图片. Microsoft CDN
+      不是已知 tracking 域, 只服务静态资源 — 加入白名单只为让 Outlook 邮件
+      正文里的附件 icon 正常渲染. 不为更广的 *.microsoft.com / *.office.com
+      开口子, 那些可能包含 tracking pixel.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-JWOW0ZmF4KlXR10H32vpWS66AIWsa1+1swsTHiO0YpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; connect-src 'self' ws://localhost:* http://localhost:*"
+      content="default-src 'self'; script-src 'self' 'sha256-JWOW0ZmF4KlXR10H32vpWS66AIWsa1+1swsTHiO0YpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:*"
     />
     <!--
       Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>

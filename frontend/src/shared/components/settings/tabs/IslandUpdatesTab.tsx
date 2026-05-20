@@ -21,6 +21,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
 import { Button } from '@shared/components/ui/button'
 
+import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
@@ -281,8 +282,16 @@ function UpdaterSubsection(): React.ReactElement {
 }
 
 export function IslandUpdatesTab(): React.ReactElement {
+  const { t } = useTranslation()
   return (
     <>
+      <PageHeader
+        eyebrow={t('settings.island.page.eyebrow', { defaultValue: 'ISLAND & UPDATES' })}
+        title={t('settings.island.page.title', { defaultValue: '灵动岛与更新' })}
+        description={t('settings.island.page.intro', {
+          defaultValue: 'ping-island 桥接状态与应用自动更新通道。'
+        })}
+      />
       <IslandSubsection />
       <UpdaterSubsection />
     </>

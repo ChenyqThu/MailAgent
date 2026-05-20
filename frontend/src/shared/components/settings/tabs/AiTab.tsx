@@ -14,6 +14,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { Button } from '@shared/components/ui/button'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
@@ -42,6 +43,13 @@ export function AiTab(): React.ReactElement {
 
   return (
     <>
+      <PageHeader
+        eyebrow={t('settings.ai.page.eyebrow', { defaultValue: 'AI AGENT' })}
+        title={t('settings.ai.page.title', { defaultValue: 'AI Agent' })}
+        description={t('settings.ai.page.intro', {
+          defaultValue: '本地 LLM 网关、模型路由与 prompt cache 配置。'
+        })}
+      />
       <Section title={t('settings.ai.title')} helper={t('settings.ai.helper')}>
         <EnvField
           envKey="LLM_AGENT_ENABLED"
