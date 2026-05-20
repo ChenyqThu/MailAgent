@@ -86,8 +86,7 @@ export default {
       },
       spacing: {
         titlebar: '36px',
-        statusbar: '24px',
-        batchbar: '52px'
+        statusbar: '24px'
       },
       transitionTimingFunction: {
         standard: 'cubic-bezier(0.4, 0, 0.2, 1)'
