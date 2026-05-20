@@ -1672,3 +1672,129 @@ body:not([data-batch-mode='true']) #batch-bar {
   }
 }
 
+/* ─── Search palette (⌘K) — 1:1 mockup-search.html §palette-* ───────────
+ *
+ * Surface stack drawn over the live app:
+ *   palette-veil  (z 40) — soft dim + blur of whatever is behind
+ *   palette-pane  (z 50) — 720px glass-pop pane, anchored 96px from top
+ *
+ * Inset on .palette-veil (36px / 24px) carves out the title bar and
+ * status bar so chrome stays interactive. Reduced-transparency users get
+ * a deeper opaque dim instead of the blur.
+ *
+ * .pal-row is shared by all three result groups (JUMP / EMAIL / AI
+ * ACTIONS); selection state is render-driven (React sets `.is-selected`
+ * on the highlighted item) so keyboard ↑↓/Tab and mouse hover land on
+ * the same visual. Hint kbds only on the selected row keep the list
+ * quiet — Linear / Raycast pattern.
+ */
+.palette-veil {
+  position: fixed;
+  inset: 36px 0 24px 0;
+  background: rgb(var(--ink-0) / 0.55);
+  -webkit-backdrop-filter: saturate(120%) blur(10px);
+  backdrop-filter: saturate(120%) blur(10px);
+  z-index: 40;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .palette-veil {
+    background: rgb(var(--ink-0) / 0.86);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.palette-pane {
+  position: fixed;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 36px - 24px - 96px - 32px);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  height: 44px;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: rgb(var(--ink-fg));
+  font-size: 16px;
+  line-height: 1;
+  font-family: inherit;
+  caret-color: rgb(var(--c-accent));
+}
+.palette-input::placeholder {
+  color: rgb(var(--ink-fg-2));
+}
+
+.pal-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: rgb(var(--ink-fg-1));
+}
+.pal-row:hover {
+  background: rgb(var(--ink-fg) / 0.04);
+}
+.pal-row.is-selected {
+  background: rgb(var(--c-accent) / 0.1);
+  color: rgb(var(--ink-fg));
+}
+.pal-row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  background: rgb(var(--c-accent));
+  border-radius: 2px;
+}
+
+/* Disabled rows (e.g. AI Action "summarize" pending wiring) — readable but
+ * unmistakably inert. No hover highlight, no coral edge even when the
+ * keyboard cursor passes through. */
+.pal-row[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pal-row[aria-disabled='true']:hover {
+  background: transparent;
+}
+.pal-row[aria-disabled='true'].is-selected {
+  background: rgb(var(--ink-fg) / 0.03);
+}
+.pal-row[aria-disabled='true'].is-selected::before {
+  display: none;
+}
+
+/* Keyboard hint chip cluster — only visible on the highlighted row, both
+ * for noise reduction and to teach users which row their kbd will act on. */
+.pal-hint {
+  display: none;
+}
+.pal-row.is-selected .pal-hint {
+  display: inline-flex;
+}
+
+/* Empty-state tile (used when a group has zero matches in current query). */
+.empty-tile {
+  display: grid;
+  place-items: center;
+  padding: 18px 16px;
+  border-radius: 8px;
+  gap: 6px;
+  color: rgb(var(--ink-fg-2));
+}
+

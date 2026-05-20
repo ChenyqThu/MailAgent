@@ -60,8 +60,8 @@ import type {
   RecurringReplayOpts,
   ResyncOpts,
   ResyncResult,
-  SearchHit,
   SearchOpts,
+  SearchResult,
   SecretSlot,
   SecretsStatus,
   SettingsApi,
@@ -169,8 +169,8 @@ class ElectronEmailApi implements EmailApi {
   async aiFields(internalId: number): Promise<AIFields | null> {
     return (await invoker()('email:aiFields', internalId)) as AIFields | null
   }
-  async search(opts: SearchOpts): Promise<SearchHit[]> {
-    return (await invoker()('email:search', opts)) as SearchHit[]
+  async search(opts: SearchOpts): Promise<SearchResult> {
+    return (await invoker()('email:search', opts)) as SearchResult
   }
   async resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult> {
     const env = (await invoker()('email:resync', internalId, opts ?? {})) as WriteEnvelope<unknown>

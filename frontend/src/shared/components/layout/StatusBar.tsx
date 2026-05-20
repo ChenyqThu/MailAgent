@@ -10,12 +10,14 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Activity, Cpu, Database, Layers } from 'lucide-react'
 
-import type { IslandConnectionState } from '@shared/api/types'
+import type { EventsConnectionState, IslandConnectionState } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useAppearance } from '@shared/state/appearance'
 import { useMailbox } from '@shared/state/mailbox'
 import { useUpdaterStore, setUpdaterStatus } from '@shared/state/updater'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { islandStateI18nKey, setIslandStatus, useIslandStore } from '@shared/state/island'
 
 function islandDotClass(state: IslandConnectionState): string {
@@ -30,6 +32,72 @@ function islandDotClass(state: IslandConnectionState): string {
     case 'disabled':
     default:
       return 'bg-ink-fg-3'
+  }
+}
+
+// Sprint 16 — sync segment view-model based on SSE state + fallback polling.
+// Returns dot color class, short label (live / connecting / 断线·兜底Ns / …)
+// and a verbose tooltip string. All visible text comes from i18n.
+interface SyncView {
+  dot: string
+  label: string
+  tooltip: string
+}
+
+function buildSyncView(
+  t: (k: string, opts?: Record<string, unknown>) => string,
+  sseState: EventsConnectionState,
+  fallbackMs: number | false
+): SyncView {
+  const fallbackSec =
+    typeof fallbackMs === 'number' && fallbackMs > 0 ? Math.round(fallbackMs / 1000) : null
+  switch (sseState) {
+    case 'connected':
+      return {
+        dot: 'bg-ok',
+        label: t('statusbar.sync.live'),
+        tooltip: t('statusbar.sync.tooltipConnected')
+      }
+    case 'connecting':
+      return {
+        dot: 'bg-coral/100 animate-pulse',
+        label: t('statusbar.sync.connecting'),
+        tooltip: t('statusbar.sync.tooltipConnected')
+      }
+    case 'reconnecting':
+      return {
+        dot: 'bg-coral/100 animate-pulse',
+        label: t('statusbar.sync.reconnecting'),
+        tooltip:
+          fallbackSec !== null
+            ? t('statusbar.sync.tooltipFallback', { seconds: fallbackSec })
+            : t('statusbar.sync.tooltipFallbackOff')
+      }
+    case 'disconnected':
+      return {
+        dot: 'bg-fail',
+        label:
+          fallbackSec !== null
+            ? t('statusbar.sync.fallbackTpl', { seconds: fallbackSec })
+            : t('statusbar.sync.fallbackOff'),
+        tooltip:
+          fallbackSec !== null
+            ? t('statusbar.sync.tooltipFallback', { seconds: fallbackSec })
+            : t('statusbar.sync.tooltipFallbackOff')
+      }
+    case 'disabled':
+      return {
+        dot: 'bg-ink-fg-3',
+        label: t('statusbar.sync.disabled'),
+        tooltip: t('statusbar.sync.tooltipDisabled')
+      }
+    case 'idle':
+    default:
+      return {
+        dot: 'bg-ink-fg-3',
+        label: t('statusbar.sync.idle'),
+        tooltip: t('statusbar.sync.tooltipDisabled')
+      }
   }
 }
 
@@ -60,6 +128,10 @@ export function StatusBar(): React.ReactElement {
   const mailApi = useMailApi()
   const islandStatus = useIslandStore((s) => s.status)
   const status = useUpdaterStore((s) => s.status)
+  // Sprint 16 — sync segment 真实状态: SSE 连接状态 + fallback polling 周期
+  const sseState = useEventsStatusStore((s) => s.status.state)
+  const fallbackMs = usePollingFallback()
+  const sync = buildSyncView(t, sseState, fallbackMs)
 
   // Sprint 8 §2.2 — version hydrate + live event subscribe.
   useEffect(() => {
@@ -115,12 +187,11 @@ export function StatusBar(): React.ReactElement {
       )}
     >
       <Segment
-        icon={<span className="w-1.5 h-1.5 rounded-full bg-ok" aria-hidden />}
-        title={`${t('statusbar.synced')} · ${t('statusbar.mailbox')} ${active}`}
+        icon={<span className={cn('w-1.5 h-1.5 rounded-full', sync.dot)} aria-hidden />}
+        title={`${t('statusbar.sync.label')} · ${sync.tooltip}`}
       >
-        <span>{t('statusbar.synced')}</span>
-        <span className="text-ink-fg-3">·</span>
-        <span className="text-ink-fg-1">5s</span>
+        <span className="text-ink-fg-3">{t('statusbar.sync.label')}</span>
+        <span className="text-ink-fg-1">{sync.label}</span>
       </Segment>
       <Sep />
 

@@ -214,16 +214,20 @@
     }
   },
   "palette": {
-    "placeholder": "Search commands or mail…",
+    "placeholder": "Search mail · jump to mailbox · run AI action…",
     "noResults": "No matches · try a different query",
     "searching": "Searching…",
+    "lang": {
+      "detected": "Detected input language",
+      "zh": "中",
+      "en": "EN"
+    },
     "aria": {
-      "label": "Command palette",
-      "list": "Command list"
+      "label": "Command palette · search and jump",
+      "list": "Search results"
     },
     "nav": {
       "inbox": "Go · Inbox",
-      "search": "Go · Search",
       "admin": "Go · Admin",
       "llm": "Go · LLM dashboard",
       "calendar": "Go · Calendar",
@@ -231,10 +235,45 @@
     },
     "mailbox": {
       "go": "Switch to mailbox · {name}",
-      "hint": "{unread} unread · {total} total"
+      "hint": "{unread} unread · {total} total",
+      "matchedSuffix": "{n, plural, one {# match} other {# matches}} for \"{query}\""
     },
-    "search": {
-      "untitled": "(no subject)"
+    "jump": {
+      "aiHistory": "AI conversations",
+      "aiHistoryMeta": "Open AI panel",
+      "admin": "Admin kanban",
+      "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health"
+    },
+    "email": {
+      "countLabel": "{n} / {total}",
+      "untitled": "(no subject)",
+      "emptyTitle": "No matching emails",
+      "emptyHint": "Try a shorter query, or append * for Chinese terms (e.g. 产品*)"
+    },
+    "actions": {
+      "subtitle": "on {n, plural, one {# result} other {# results}}",
+      "aside": "Notion Agent · Jarvis",
+      "markAllRead": "Mark all as read",
+      "markAllReadMeta": "{n, plural, one {# email} other {# emails}} · instant local · syncs to Mail.app + Notion",
+      "reRunAi": "Re-run AI classify",
+      "reRunAiMeta": "{n, plural, one {# email} other {# emails}} · overwrite 11 fields · old versions archived to ai_history",
+      "summarize": "Draft a summary for this result set",
+      "summarizeMeta": "{n, plural, one {# email} other {# emails}} · coming soon",
+      "soon": "Soon",
+      "running": "Running…",
+      "doneToast": "Processed {n, plural, one {# email} other {# emails}}",
+      "errToast": "Action failed"
+    },
+    "kbd": {
+      "navigate": "navigate",
+      "selectGroup": "select group",
+      "open": "open",
+      "newWindow": "new window",
+      "dismiss": "dismiss",
+      "run": "run"
+    },
+    "footer": {
+      "fts5Healthy": "FTS5"
     }
   },
   "sidebar": {
@@ -479,8 +518,21 @@
     "accent": "Accent",
     "accentHint": "6 swatches · drives the primary CTA + chip color",
     "inbox": "Inbox",
-    "pollInterval": "Poll interval",
-    "pollIntervalHint": "New-email check frequency; off disables auto polling.",
+    "pollInterval": "Fallback poll",
+    "pollIntervalHint": "Fallback polling cadence used while SSE is down; off disables it.",
+    "realtime": {
+      "label": "Realtime events",
+      "hint": "SSE push connection status; the poll cadence below is the fallback when disconnected.",
+      "connected": "Connected · live sync",
+      "connecting": "Connecting…",
+      "reconnecting": "Reconnecting…",
+      "disconnected": "Disconnected · falling back to polling",
+      "disabled": "Disabled",
+      "idle": "Awaiting start",
+      "reconnect": "Reconnect now",
+      "reconnectRequested": "Reconnect requested",
+      "reconnectFailed": "Reconnect failed"
+    },
     "aiBackends": "AI backends",
     "notionAgent": "Notion Agent binding",
     "notionAgentHint": "Default backend for AI Chat; page_id from `notion-agent agents list`.",
@@ -581,7 +633,21 @@
     "llm": "llm",
     "theme": "theme",
     "llmIdle": "IDLE",
-    "updateReady": "Update ready"
+    "updateReady": "Update ready",
+    "sync": {
+      "label": "Sync",
+      "live": "live",
+      "connecting": "connecting",
+      "reconnecting": "reconnecting",
+      "fallbackTpl": "offline · poll {seconds}s",
+      "fallbackOff": "offline · poll off",
+      "idle": "idle",
+      "disabled": "disabled",
+      "tooltipConnected": "SSE push, live sync",
+      "tooltipFallback": "SSE offline; fallback poll every {seconds}s",
+      "tooltipFallbackOff": "SSE offline; fallback poll disabled (Settings → Realtime events)",
+      "tooltipDisabled": "Realtime events disabled"
+    }
   },
   "titleBar": {
     "island": {

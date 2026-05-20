@@ -62,7 +62,7 @@ interface Command {
 interface NavSpec {
   id: string
   labelKey: string
-  to: '/' | '/search' | '/admin/llm' | '/admin/kanban' | '/admin/calendar' | '/settings'
+  to: '/' | '/admin/llm' | '/admin/kanban' | '/admin/calendar' | '/settings'
   icon: React.ReactNode
 }
 
@@ -76,12 +76,8 @@ const NAV_COMMANDS: ReadonlyArray<NavSpec> = [
     to: '/',
     icon: <Inbox size={14} strokeWidth={1.75} />
   },
-  {
-    id: 'search',
-    labelKey: 'palette.nav.search',
-    to: '/search',
-    icon: <SearchIcon size={14} strokeWidth={1.75} />
-  },
+  // Sprint 14+ — /search route 已移除, search 现在直接走本 palette overlay
+  // (see router-instance.tsx:9); 不需要导航条目.
   {
     id: 'admin',
     labelKey: 'palette.nav.admin',
@@ -238,7 +234,9 @@ export function CommandPalette(): React.ReactElement | null {
       })
     }
 
-    for (const hit of searchQ.data ?? []) {
+    // SearchResult = { items: SearchHit[]; total_indexed: number } —
+    // 解构到 items 拿数组 (types.ts:52); total_indexed 由 footer 单独显示.
+    for (const hit of searchQ.data?.items ?? []) {
       out.push({
         id: `search:${hit.internal_id}`,
         kind: 'search',

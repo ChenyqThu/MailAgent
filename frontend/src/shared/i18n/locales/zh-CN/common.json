@@ -214,16 +214,20 @@
     }
   },
   "palette": {
-    "placeholder": "搜索命令或邮件…",
+    "placeholder": "搜索邮件 · 跳转到信箱 · 运行 AI 动作…",
     "noResults": "无匹配项 · 试试其他关键词",
     "searching": "搜索中…",
+    "lang": {
+      "detected": "检测到的输入语言",
+      "zh": "中",
+      "en": "EN"
+    },
     "aria": {
-      "label": "命令面板",
-      "list": "命令列表"
+      "label": "命令面板 · 搜索 / 跳转",
+      "list": "搜索结果"
     },
     "nav": {
       "inbox": "前往 · 收件箱",
-      "search": "前往 · 全文搜索",
       "admin": "前往 · 看板",
       "llm": "前往 · LLM 看板",
       "calendar": "前往 · 日历",
@@ -231,10 +235,45 @@
     },
     "mailbox": {
       "go": "切换到邮箱 · {name}",
-      "hint": "{unread} 未读 · 共 {total} 封"
+      "hint": "{unread} 未读 · 共 {total} 封",
+      "matchedSuffix": "含 \"{query}\" 的 {n, plural, one {# 封} other {# 封}}"
     },
-    "search": {
-      "untitled": "(无主题)"
+    "jump": {
+      "aiHistory": "AI 会话",
+      "aiHistoryMeta": "打开 AI 面板",
+      "admin": "看板 Admin",
+      "adminMeta": "dead-letter {n, plural, =0 {0} other {#}} · 队列健康"
+    },
+    "email": {
+      "countLabel": "{n} / {total}",
+      "untitled": "(无主题)",
+      "emptyTitle": "未找到匹配的邮件",
+      "emptyHint": "试试更短的关键词,或中文加 * 后缀(如 产品*)"
+    },
+    "actions": {
+      "subtitle": "对当前 {n, plural, one {# 个结果} other {# 个结果}}",
+      "aside": "Notion Agent · Jarvis",
+      "markAllRead": "全部标为已读",
+      "markAllReadMeta": "{n, plural, other {# 封}} · 本地即时 · 同步至 Mail.app + Notion",
+      "reRunAi": "重跑 AI 分类",
+      "reRunAiMeta": "{n, plural, other {# 封}} · 覆盖 11 字段 · 旧版本归档至 ai_history",
+      "summarize": "为本结果集起草摘要",
+      "summarizeMeta": "{n, plural, other {# 封}} · 即将上线",
+      "soon": "即将上线",
+      "running": "运行中…",
+      "doneToast": "{n, plural, other {# 封}} 已处理",
+      "errToast": "动作失败"
+    },
+    "kbd": {
+      "navigate": "上下移动",
+      "selectGroup": "切换分组",
+      "open": "打开",
+      "newWindow": "新窗口打开",
+      "dismiss": "关闭",
+      "run": "运行"
+    },
+    "footer": {
+      "fts5Healthy": "FTS5"
     }
   },
   "sidebar": {
@@ -479,8 +518,21 @@
     "accent": "强调色",
     "accentHint": "6 种 swatch · 影响主 CTA 与 chip 染色",
     "inbox": "收件箱",
-    "pollInterval": "轮询频率",
-    "pollIntervalHint": "新邮件检测频率,off 表示禁用自动轮询",
+    "pollInterval": "Fallback 轮询",
+    "pollIntervalHint": "SSE 断线时的兜底轮询周期,off 表示禁用自动轮询",
+    "realtime": {
+      "label": "实时事件",
+      "hint": "SSE 推送连接状态; 断线后下方轮询周期作为兜底。",
+      "connected": "已连接 · 实时同步",
+      "connecting": "连接中…",
+      "reconnecting": "重连中…",
+      "disconnected": "已断开 · 走 fallback 轮询",
+      "disabled": "已禁用",
+      "idle": "等待启动",
+      "reconnect": "立即重连",
+      "reconnectRequested": "已请求重连",
+      "reconnectFailed": "重连失败"
+    },
     "aiBackends": "AI 后端",
     "notionAgent": "Notion Agent 绑定",
     "notionAgentHint": "AI Chat 默认 backend; page_id 从 notion-agent agents list 取",
@@ -581,7 +633,21 @@
     "llm": "llm",
     "theme": "主题",
     "llmIdle": "空闲",
-    "updateReady": "更新就绪"
+    "updateReady": "更新就绪",
+    "sync": {
+      "label": "同步",
+      "live": "实时",
+      "connecting": "连接中",
+      "reconnecting": "重连中",
+      "fallbackTpl": "断线 · 兜底 {seconds}s",
+      "fallbackOff": "断线 · 兜底关",
+      "idle": "等待",
+      "disabled": "已禁用",
+      "tooltipConnected": "SSE 推送实时同步",
+      "tooltipFallback": "SSE 断线;每 {seconds}s 兜底拉取",
+      "tooltipFallbackOff": "SSE 断线;兜底轮询已关 (设置 → 实时事件)",
+      "tooltipDisabled": "实时事件已禁用"
+    }
   },
   "titleBar": {
     "island": {

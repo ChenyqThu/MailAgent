@@ -124,11 +124,11 @@ function StatusPill({ set }: { set: boolean }): React.ReactElement {
 
 // Sprint 16 — SSE realtime status indicator + reconnect 按钮.
 //
-// 连接好时显示绿点 + "实时同步"; 重连中黄点 + 旋转 icon; 断线红点 + "立即重连" 按钮.
-// 用户可以在 SSE 断线时直接点重连, 或通过下面的 pollInterval 决定 fallback 周期.
-//
-// 字串 hardcode 中文 — i18n 未来再迁; 加 i18n key 与功能 ship 解耦.
+// 连接好时显示绿点 + "实时同步"; 重连中橙点 + 旋转 icon; 断线红点 + "立即重连"
+// 按钮. 用户可以在 SSE 断线时直接点重连, 或通过下面的 pollInterval 决定 fallback
+// 周期. 所有可见文案走 i18n (settings.realtime.*).
 function RealtimeStatusRow(): React.ReactElement {
+  const { t } = useTranslation()
   const status = useEventsStatusStore((s) => s.status)
   const mailApi = useMailApi()
   const [reconnecting, setReconnecting] = useState(false)
@@ -137,10 +137,10 @@ function RealtimeStatusRow(): React.ReactElement {
     setReconnecting(true)
     try {
       await mailApi.events.reconnect()
-      toastSuccess('已请求重连')
+      toastSuccess(t('settings.realtime.reconnectRequested'))
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      toastError('重连失败', msg)
+      toastError(t('settings.realtime.reconnectFailed'), msg)
     } finally {
       setTimeout(() => setReconnecting(false), 600)
     }
@@ -149,32 +149,41 @@ function RealtimeStatusRow(): React.ReactElement {
   const stateBadge: { dot: string; chip: string; label: string } = (() => {
     switch (status.state) {
       case 'connected':
-        return { dot: 'bg-ok', chip: 'bg-ok/15 text-ok', label: '已连接 · 实时同步' }
+        return {
+          dot: 'bg-ok',
+          chip: 'bg-ok/15 text-ok',
+          label: t('settings.realtime.connected')
+        }
       case 'connecting':
+        return {
+          dot: 'bg-coral/100 animate-pulse',
+          chip: 'bg-coral/15 text-coral',
+          label: t('settings.realtime.connecting')
+        }
       case 'reconnecting':
         return {
           dot: 'bg-coral/100 animate-pulse',
           chip: 'bg-coral/15 text-coral',
-          label: status.state === 'reconnecting' ? '重连中…' : '连接中…'
+          label: t('settings.realtime.reconnecting')
         }
       case 'disconnected':
         return {
           dot: 'bg-fail',
           chip: 'bg-fail/15 text-fail',
-          label: '已断开 · 走 fallback 轮询'
+          label: t('settings.realtime.disconnected')
         }
       case 'disabled':
         return {
           dot: 'bg-ink-fg-3',
           chip: 'bg-ink-3 text-ink-fg-2',
-          label: '已禁用'
+          label: t('settings.realtime.disabled')
         }
       case 'idle':
       default:
         return {
           dot: 'bg-ink-fg-3',
           chip: 'bg-ink-3 text-ink-fg-2',
-          label: '等待启动'
+          label: t('settings.realtime.idle')
         }
     }
   })()
@@ -182,7 +191,7 @@ function RealtimeStatusRow(): React.ReactElement {
   const showReconnect = status.state !== 'connected' && status.state !== 'disabled'
 
   return (
-    <Row label="实时事件" hint="SSE 推送连接状态; 断线后下面的轮询周期作为兜底。">
+    <Row label={t('settings.realtime.label')} hint={t('settings.realtime.hint')}>
       <div className="flex items-center gap-2 flex-wrap">
         <span
           className={cn(
@@ -210,7 +219,7 @@ function RealtimeStatusRow(): React.ReactElement {
             ) : (
               <RefreshCw size={12} strokeWidth={2} />
             )}
-            立即重连
+            {t('settings.realtime.reconnect')}
           </button>
         )}
         {status.lastError && (

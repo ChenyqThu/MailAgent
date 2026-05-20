@@ -16,7 +16,16 @@
     "meta": {
       "allOf": [
         {"$ref": "_common.schema.json#/$defs/meta"},
-        {"required": ["duration_ms", "query", "total_hits", "limit"]}
+        {
+          "required": ["duration_ms", "query", "total_hits", "limit"],
+          "properties": {
+            "total_indexed": {
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "description": "FTS5 indexed row count — drives palette footer 'N of total_indexed'"
+            }
+          }
+        }
       ]
     }
   },
@@ -40,7 +49,17 @@
           "description": "FTS5 snippet() 高亮片段; --no-snippet 时省略"
         },
         "notion_page_id": {"type": ["string", "null"]},
-        "notion_url": {"type": ["string", "null"]}
+        "notion_url": {"type": ["string", "null"]},
+        "ai_priority": {
+          "type": ["string", "null"],
+          "enum": ["critical", "urgent", "important", "normal", "low", null],
+          "description": "Frontend palette — drives priority chip in palette EmailHitRow. Mapped from llm_processing.labels_json.priority via LEFT JOIN. null when LLM hasn't classified yet."
+        },
+        "lang": {
+          "type": ["string", "null"],
+          "enum": ["zh", "en", "unknown", null],
+          "description": "Frontend palette — drives lang-pip in palette EmailHitRow. Mapped from llm_processing.labels_json.language. 'unknown' when LLM hasn't classified yet."
+        }
       }
     }
   }

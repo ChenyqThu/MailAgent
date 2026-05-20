@@ -5,10 +5,12 @@
 // the route count grows. HMR loss on edits to this file is the expected
 // trade-off — every other module HMRs normally.
 //
-// Sprint 11 V1.4 — route tree reorganised per the new SSoT design:
+// Sprint 11 V1.4 — route tree reorganised per the new SSoT design.
+// Search-module 1:1 mockup-search.html — `/search` route removed; the
+// command palette (⌘K overlay) is now the sole search entry, per
+// mockup-search.html design intent. SearchLayout / SearchPage deleted.
 //
 //   /                  → InboxLayout  (?view=outbox|flagged|all swaps filter)
-//   /search            → SearchLayout  (also reachable as ⌘K overlay)
 //   /admin             → parent route, no component of its own
 //     /admin/llm       → LlmDashboardLayout    (was /llm)
 //     /admin/kanban    → AdminLayout           (was /admin)
@@ -30,7 +32,6 @@ import { AdminLayout } from './components/layout/AdminLayout'
 import { CalendarLayout } from './components/layout/CalendarLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
 import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
-import { SearchLayout } from './components/layout/SearchLayout'
 import { SettingsLayout } from './components/layout/SettingsLayout'
 // Sprint 7 D2 — `?` / ⌘K / ⌘, bindings + the modals they open.
 // MUST mount inside `RouterProvider` (i.e. inside this rootRoute layout),
@@ -87,12 +88,6 @@ const inboxRoute = createRoute({
   }
 })
 
-const searchRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/search',
-  component: SearchLayout
-})
-
 // `/admin` is a parent route that only renders <Outlet/> — visit a child
 // directly (/admin/llm, /admin/kanban, /admin/calendar). The Sidebar +
 // CommandPalette always navigate to a specific child, never to `/admin`
@@ -144,7 +139,6 @@ const isPackagedFileProtocol =
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     inboxRoute,
-    searchRoute,
     adminRoute.addChildren([adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),

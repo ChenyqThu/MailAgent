@@ -19,7 +19,7 @@ import {
   mapSentiment,
   parseLabels
 } from '@shared/lib/ai_mapping'
-import type { AIFields, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
+import type { AIFields, EnrichedEmailMeta, MailboxSummary, SearchResult } from '@shared/api/types'
 import type {
   EmailList_EmailListItem,
   EmailGet_EmailRecord,
@@ -122,6 +122,12 @@ interface SearchRow {
   rank: number
   snippet: string | null
   notion_page_id: string | null
+  // Search-module 1:1 mockup-search.html — LEFT JOIN llm_processing extracts
+  // these so the palette EmailHitRow can render priority chip + lang-pip
+  // without a second IPC roundtrip per hit. Either may be null when the LLM
+  // hasn't classified the email yet (e.g. fresh mail, or LLM gave up).
+  priority_raw: string | null
+  lang_raw: string | null
 }
 
 // ---- shaping helpers --------------------------------------------------------
@@ -400,8 +406,22 @@ export function getEmailBody(
   }
 }
 
-export function searchEmails(opts: SearchOpts): EmailSearch_SearchHit[] {
-  if (!opts.query || opts.query.trim().length === 0) return []
+// Cached COUNT(*) for the palette footer `N of total_indexed` segment.
+// email_body_fts is small (~3k rows in production); prepared-statement cache
+// already amortises parse cost across calls.
+export function getEmailBodyFtsCount(): number {
+  const db = getDb()
+  const row = prep(db, `SELECT COUNT(*) AS n FROM email_body_fts`).get() as
+    | { n: number }
+    | undefined
+  return row?.n ?? 0
+}
+
+export function searchEmails(opts: SearchOpts): SearchResult {
+  const total_indexed = getEmailBodyFtsCount()
+  if (!opts.query || opts.query.trim().length === 0) {
+    return { items: [], total_indexed }
+  }
   const db = getDb()
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const filterClauses: string[] = []
@@ -422,6 +442,12 @@ export function searchEmails(opts: SearchOpts): EmailSearch_SearchHit[] {
   // FTS5 bm25 returns negative scores where smaller (more negative) = more
   // relevant. We re-emit the value as-is per email-search.schema.json
   // convention ("bm25 score - 越小越相关").
+  //
+  // Search-module 1:1 mockup-search.html — LEFT JOIN llm_processing pulls
+  // priority + language out of labels_json so the palette EmailHitRow
+  // renders priority chip + lang-pip without a per-hit follow-up IPC.
+  // LEFT (not INNER) so emails the LLM hasn't classified yet still appear
+  // — those land with null priority + 'unknown' lang.
   const sql = `
     SELECT
       m.internal_id           AS internal_id,
@@ -431,15 +457,18 @@ export function searchEmails(opts: SearchOpts): EmailSearch_SearchHit[] {
       m.mailbox               AS mailbox,
       bm25(email_body_fts)    AS rank,
       snippet(email_body_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
-      m.notion_page_id        AS notion_page_id
+      m.notion_page_id        AS notion_page_id,
+      json_extract(l.labels_json, '$.priority') AS priority_raw,
+      json_extract(l.labels_json, '$.language') AS lang_raw
     FROM email_body_fts
     JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
+    LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
     WHERE email_body_fts MATCH ?
     ${filterSql}
     ORDER BY rank ASC
     LIMIT ?`
   const rows = prep(db, sql).all(opts.query, ...filterParams, limit) as SearchRow[]
-  return rows.map((row) => ({
+  const items: EmailSearch_SearchHit[] = rows.map((row) => ({
     internal_id: row.internal_id,
     subject: row.subject ?? '',
     sender: row.sender ?? '',
@@ -448,8 +477,11 @@ export function searchEmails(opts: SearchOpts): EmailSearch_SearchHit[] {
     rank: row.rank,
     snippet: row.snippet,
     notion_page_id: row.notion_page_id,
-    notion_url: notionUrl(row.notion_page_id)
+    notion_url: notionUrl(row.notion_page_id),
+    ai_priority: mapPriority(row.priority_raw),
+    lang: mapLanguage(row.lang_raw)
   }))
+  return { items, total_indexed }
 }
 
 // ---- Enriched list + mailbox + AI fields (renderer-only views) -------------

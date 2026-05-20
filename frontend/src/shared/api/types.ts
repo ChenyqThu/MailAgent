@@ -38,6 +38,22 @@ export type SearchHit = EmailSearch_SearchHit
 export type AttachmentMeta = AttachmentList_AttachmentItem
 export type ResyncResult = MailagentEmailResync['data']
 
+/**
+ * Search-module 1:1 mockup-search.html — IPC wrapper around `SearchHit[]`.
+ *
+ * The palette footer needs the FTS5 indexed-row total to render
+ * "N of total_indexed" (mockup-search.html line 798). Returning it inline
+ * with the hits keeps the palette to a single IPC roundtrip per keystroke
+ * (debounce 250ms × ~4ms each = effectively free).
+ *
+ * Both fields are required; an empty query still returns `items: []` plus
+ * the cached `total_indexed`.
+ */
+export interface SearchResult {
+  items: SearchHit[]
+  total_indexed: number
+}
+
 // ---- Sprint 2 frontend-only enriched views ---------------------------------
 //
 // These three views (listEnriched / listMailboxes / aiFields) are joined by
@@ -211,7 +227,12 @@ export interface EmailApi {
   body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null>
   /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */
   aiFields(internalId: number): Promise<AIFields | null>
-  search(opts: SearchOpts): Promise<SearchHit[]>
+  /**
+   * Search-module 1:1 mockup-search.html — returns wrapped
+   * `{ items, total_indexed }` so the palette footer can render
+   * "N of total_indexed" without a second IPC roundtrip.
+   */
+  search(opts: SearchOpts): Promise<SearchResult>
   /** Sprint 5 — Notion resync via `mailagent email resync`. Returns whatever
    *  the CLI's `data` envelope contains (page_id, status, etc.). */
   resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult>
