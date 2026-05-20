@@ -350,16 +350,41 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     }
   }, [internalId, mailApi, queryClient, t])
 
+  // Sprint 15 D 块 — Optimistic UI for read/flag toggle. 直接 setQueryData
+  // 让 detail panel 瞬时翻, 避免 CLI fork 500ms + invalidate 双重 await 卡顿;
+  // 同步更新 ['emails'] 列表 cache, 这样 EmailRow 不需要等 5s poll 也能反映新
+  // 状态. CLI 失败再 invalidate 回真值 + toast.
+  const optimisticDetail = useCallback(
+    (patch: Record<string, unknown>) => {
+      if (internalId === null) return
+      queryClient.setQueryData(['email', internalId], (old: unknown) =>
+        old && typeof old === 'object' ? { ...(old as object), ...patch } : old
+      )
+      queryClient.setQueriesData({ queryKey: ['emails'] }, (old: unknown) => {
+        if (!Array.isArray(old)) return old
+        return old.map((e) =>
+          e && typeof e === 'object' && (e as { internal_id?: number }).internal_id === internalId
+            ? { ...(e as object), ...patch }
+            : e
+        )
+      })
+    },
+    [internalId, queryClient]
+  )
+
   const handleToggleRead = useCallback(
     async (currentIsRead: boolean): Promise<void> => {
       if (internalId === null) return
+      const target = !currentIsRead
       setPending((p) => ({ ...p, read: true }))
+      optimisticDetail({ is_read: target })
       try {
-        await mailApi.notion.updateFlag(internalId, { isRead: !currentIsRead })
+        await mailApi.email.flag(internalId, { isRead: target })
         toastSuccess(t('toolbarToast.flagOk'))
+      } catch (err) {
+        // Rollback — refetch to真实 SQLite state
         await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
         await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
-      } catch (err) {
         const e = asWriteError(err)
         toastError(
           t('toolbarToast.flagFailGeneric'),
@@ -369,19 +394,21 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         setPending((p) => ({ ...p, read: false }))
       }
     },
-    [internalId, mailApi, queryClient, t]
+    [internalId, mailApi, optimisticDetail, queryClient, t]
   )
 
   const handleToggleFlag = useCallback(
     async (currentIsFlagged: boolean): Promise<void> => {
       if (internalId === null) return
+      const target = !currentIsFlagged
       setPending((p) => ({ ...p, flag: true }))
+      optimisticDetail({ is_flagged: target })
       try {
-        await mailApi.notion.updateFlag(internalId, { isFlagged: !currentIsFlagged })
+        await mailApi.email.flag(internalId, { isFlagged: target })
         toastSuccess(t('toolbarToast.flagOk'))
+      } catch (err) {
         await queryClient.invalidateQueries({ queryKey: ['email', internalId] })
         await queryClient.invalidateQueries({ queryKey: ['email', internalId, 'ai'] })
-      } catch (err) {
         const e = asWriteError(err)
         toastError(
           t('toolbarToast.flagFailGeneric'),
@@ -391,7 +418,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         setPending((p) => ({ ...p, flag: false }))
       }
     },
-    [internalId, mailApi, queryClient, t]
+    [internalId, mailApi, optimisticDetail, queryClient, t]
   )
 
   if (internalId === null) {

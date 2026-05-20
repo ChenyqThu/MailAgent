@@ -302,6 +302,23 @@ class EmailNotionSyncApp:
             if self.fanout_worker:
                 fanout_task = asyncio.create_task(self.fanout_worker.run())
 
+            # Sprint 16: 启动本地 SSE server (mail-sync 进程内)
+            # 前端 Electron main 直连 127.0.0.1:9200, 0 RTT;
+            # 失败 silent (主链路不受影响, 前端自动 fallback 轮询).
+            self._sse_runner = None
+            if config.mailagent_sse_enabled:
+                try:
+                    from src.sse_server import start_sse_server
+                    self._sse_runner = await start_sse_server(
+                        host=config.sse_local_host,
+                        port=config.sse_local_port,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[sse] failed to start (frontend will fallback to polling): {e}"
+                    )
+                    self._sse_runner = None
+
             # 启动 ping-island 重连 / snooze 后台任务（开启时才跑）
             island_reconnect_task = None
             island_snooze_task = None
@@ -352,6 +369,14 @@ class EmailNotionSyncApp:
                     await task
                 except asyncio.CancelledError:
                     pass
+
+            # Sprint 16: 关闭 SSE server (cleanup runner + 等待 in-flight client 断开)
+            if self._sse_runner is not None:
+                try:
+                    await self._sse_runner.cleanup()
+                    logger.info("[sse] server shut down")
+                except Exception as e:
+                    logger.warning(f"[sse] cleanup failed: {e}")
 
             # 关闭反向同步资源
             await self.reverse_sync.close()

@@ -101,12 +101,15 @@ class SyncStore:
     #               仅在 SQLite + CLI 暴露；主进程独占写、Electron 前端 readonly 经 CLI 子进程 toggle）
     # v9 (2026-05): email_metadata 增加 is_important（邮件原生重要性，由 reader._parse_importance
     #               从 Importance / X-Priority / X-MSMail-Priority header 提取；前端 ❗ 角标用）
+    # v11 (Sprint 16, 2026-05): listEnriched 性能优化索引 (mailbox+sync_status+date_received /
+    #                          is_flagged partial / email_attachment(internal_id, is_inline)).
+    #                          纯加索引非破坏, 老 db 重启自动 CREATE INDEX IF NOT EXISTS.
     # v10 (2026-05): email_outbox 表 —— Sprint 15 SQLite SSoT inversion 的基础设施。
     #                所有 mutating 操作（前端 flag / processing_status 变更、Notion webhook 反向同步）
     #                以 intent 形式落库，FanoutWorker 异步派发到 Mail.app + Notion。
     #                Echo prevention: source='notion_webhook' + target='notion' 被强制 silent skip
     #                避免回环。详见 SPRINT15-HANDOFF.md §3.3-§3.4。
-    DB_VERSION = 10
+    DB_VERSION = 11
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -565,6 +568,29 @@ class SyncStore:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_outbox_target_status
             ON email_outbox(target, status)
+        """)
+
+        # === v11 (Sprint 16): listEnriched 性能优化索引 ===
+        # 前端 EmailList 5s 轮询全量 listEnriched (3 表 LEFT JOIN + COUNT 子查询),
+        # 加上 SQLite WAL busy_timeout 阻塞主线程, 现进入卡顿. 加 3 个索引覆盖
+        # listEnriched 的 WHERE + ORDER + 子聚合, p99 从 200-500ms 降到 10-30ms.
+        # 纯加索引非破坏, IF NOT EXISTS 幂等; 老 db 重启即生效.
+
+        # WHERE mailbox=? AND sync_status=? ORDER BY date_received DESC — 默认列表 view
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_meta_listing
+            ON email_metadata(mailbox, sync_status, date_received DESC)
+        """)
+        # "已标旗" 虚拟入口 (Sidebar) 用; partial index 减小尺寸
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_meta_flagged_only
+            ON email_metadata(date_received DESC)
+            WHERE is_flagged = 1
+        """)
+        # attach_count LEFT JOIN 聚合 (handlers/email.ts:listEnriched)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_attachment_visible
+            ON email_attachment(internal_id, is_inline)
         """)
 
         # 更新数据库版本
@@ -1903,21 +1929,45 @@ class SyncStore:
                 }
         return result
 
-    def update_local_flags(self, internal_id: int, is_read: bool, is_flagged: bool):
+    def update_local_flags(
+        self,
+        internal_id: int,
+        is_read: bool,
+        is_flagged: bool,
+        processing_status: Optional[str] = None,
+    ):
         """更新本地存储的 read/flagged 状态（不触发 Notion 同步）
+
+        Sprint 15 D 块: processing_status 也镜像到 SQLite, 让前端 listEnriched
+        能立即读到 done 状态 (processing_status='已完成'), 不等 Notion fanout.
 
         Args:
             internal_id: 邮件 internal_id
             is_read: 新的已读状态
             is_flagged: 新的旗标状态
+            processing_status: 新的 Notion Processing Status 镜像值. None 表示不动
+                (e.g. 只改 flag 不改 status 的场景). 空串 '' 视为清空.
         """
         with self._connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE email_metadata
-                SET is_read = ?, is_flagged = ?, updated_at = ?
-                WHERE internal_id = ?
-            """, (1 if is_read else 0, 1 if is_flagged else 0, time.time(), internal_id))
+            if processing_status is None:
+                cursor.execute("""
+                    UPDATE email_metadata
+                    SET is_read = ?, is_flagged = ?, updated_at = ?
+                    WHERE internal_id = ?
+                """, (1 if is_read else 0, 1 if is_flagged else 0, time.time(), internal_id))
+            else:
+                cursor.execute("""
+                    UPDATE email_metadata
+                    SET is_read = ?, is_flagged = ?, processing_status = ?, updated_at = ?
+                    WHERE internal_id = ?
+                """, (
+                    1 if is_read else 0,
+                    1 if is_flagged else 0,
+                    processing_status,
+                    time.time(),
+                    internal_id,
+                ))
             conn.commit()
 
     def get_stats(self) -> SyncStoreStats:

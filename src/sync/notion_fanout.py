@@ -96,4 +96,24 @@ class NotionFanout:
             f"page_id={notion_page_id} read={target_read} "
             f"flagged={target_flagged} status={target_processing_status or '-'}"
         )
+
+        # Sprint 16 — publish 让前端 SSE 路由 invalidate (含 processing_status,
+        # 用于前端 done 状态 / Notion 镜像刷新).
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "email.flag_changed",
+                internal_id=internal_id,
+                data={
+                    "target": "notion",
+                    "is_read": target_read,
+                    "is_flagged": target_flagged,
+                    "processing_status": target_processing_status or None,
+                    "outbox_source": entry.source,
+                },
+                source="notion_fanout",
+            )
+        except Exception:
+            pass
+
         return (True, "done")

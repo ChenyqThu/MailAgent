@@ -38,6 +38,7 @@ import {
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -195,12 +196,14 @@ export function Sidebar(): React.ReactElement {
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
-  // Mailbox counts — live data, every 60s background refresh.
+  // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
+  // polling 作 SSE 断线 fallback.
+  const pollingInterval = usePollingFallback()
   const { data } = useQuery({
     queryKey: ['mailboxes'],
     queryFn: () => mailApi.email.listMailboxes(),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: pollingInterval,
     refetchIntervalInBackground: false
   })
   const mailboxes = data ?? []

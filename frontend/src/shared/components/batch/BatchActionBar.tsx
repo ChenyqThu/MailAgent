@@ -8,7 +8,7 @@
 //   - `批量翻译`     → loops `ai.translate` per id with targetLang='zh'
 //
 // Maintenance ops (right of the AI cluster):
-//   - `标已读`       → loops `notion.updateFlag(id, { isRead: true })`
+//   - `标已读`       → loops `email.flag(id, { isRead: true })` (Sprint 15 D)
 //   - `归档`         → V1.5 (no backend write yet)
 //   - `重传 Notion`  → loops `email.resync(id, { replaceExisting: true })`
 //
@@ -132,10 +132,13 @@ export function BatchActionBar(): React.ReactElement | null {
   }, [ops, selectedIds, mailApi, t])
 
   const runMarkRead = useCallback(async (): Promise<void> => {
+    // Sprint 15 D — single-row email.flag through useBatchOps's loop+progress
+    // wrapper. We deliberately keep the per-id call here (rather than batching
+    // via --ids) so the toast progress bar + cancel UX stays intact.
     await ops.run({
       ids: selectedIds,
       opLabel: t('batchbar.markRead'),
-      unit: (id) => mailApi.notion.updateFlag(id, { isRead: true })
+      unit: (id) => mailApi.email.flag(id, { isRead: true })
     })
   }, [ops, selectedIds, mailApi, t])
 

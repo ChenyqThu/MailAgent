@@ -30,6 +30,7 @@ import {
   runResync,
   runLlmRun,
   runUpdateFlag,
+  runEmailFlag,
   type WriteEnvelope
 } from '../../src/electron/main/handlers/write_ops'
 
@@ -106,6 +107,100 @@ describe('write_ops — argv builders', () => {
       '已完成'
     ])
   })
+
+  // ---- Sprint 15 D — email:flag args ---------------------------------------
+  //
+  // The flag uses typer's `--flag/--no-flag` pattern (NOT `--flag <bool>` like
+  // `notion update-flag`), so we emit bare tokens.  The handler defaults
+  // `--allow-concurrent` ON because mail-sync is always online in the
+  // frontend's environment; opts.allowConcurrent === false opts out.
+
+  test('emailFlag single-row minimal — isRead=true emits --is-read + --allow-concurrent', () => {
+    expect(__testing.emailFlagArgs(53675, { isRead: true })).toEqual([
+      'email',
+      'flag',
+      '53675',
+      '--is-read',
+      '--allow-concurrent'
+    ])
+  })
+
+  test('emailFlag single-row — isRead=false flips to --no-is-read', () => {
+    expect(__testing.emailFlagArgs(53675, { isRead: false })).toEqual([
+      'email',
+      'flag',
+      '53675',
+      '--no-is-read',
+      '--allow-concurrent'
+    ])
+  })
+
+  test('emailFlag emits --processing-status with the literal string', () => {
+    expect(__testing.emailFlagArgs(53675, { processingStatus: '已完成' })).toEqual([
+      'email',
+      'flag',
+      '53675',
+      '--processing-status',
+      '已完成',
+      '--allow-concurrent'
+    ])
+  })
+
+  test('emailFlag combines is-read + is-flagged + processing-status in one call', () => {
+    expect(
+      __testing.emailFlagArgs(53675, {
+        isRead: true,
+        isFlagged: false,
+        processingStatus: '已完成'
+      })
+    ).toEqual([
+      'email',
+      'flag',
+      '53675',
+      '--is-read',
+      '--no-is-flagged',
+      '--processing-status',
+      '已完成',
+      '--allow-concurrent'
+    ])
+  })
+
+  test('emailFlag batch — opts.ids replaces positional id', () => {
+    // BatchActionBar collapses N emails into one CLI fork via --ids.
+    expect(__testing.emailFlagArgs(null, { ids: [1, 2, 3], isRead: true })).toEqual([
+      'email',
+      'flag',
+      '--ids',
+      '1,2,3',
+      '--is-read',
+      '--allow-concurrent'
+    ])
+  })
+
+  test('emailFlag allowConcurrent=false drops the bypass flag', () => {
+    expect(
+      __testing.emailFlagArgs(53675, { isFlagged: true, allowConcurrent: false })
+    ).toEqual(['email', 'flag', '53675', '--is-flagged'])
+  })
+
+  test('emailFlag empty ids array falls back to positional id', () => {
+    // Edge case: caller passed both. Empty array means "no batch" so the
+    // positional id wins; this matches the handler's `opts.ids.length > 0`
+    // batch-mode guard.
+    expect(__testing.emailFlagArgs(53675, { ids: [], isFlagged: true })).toEqual([
+      'email',
+      'flag',
+      '53675',
+      '--is-flagged',
+      '--allow-concurrent'
+    ])
+  })
+
+  test('emailFlag throws when neither internalId nor ids supplied', () => {
+    // Caller-contract violation; the IPC handler should have short-circuited
+    // already, but the builder defends against UI bugs.
+    expect(() => __testing.emailFlagArgs(null, { isRead: true })).toThrow(/internalId or opts.ids/)
+  })
 })
 
 describe('write_ops — runResync / runLlmRun / runUpdateFlag → callCli plumbing', () => {
@@ -143,6 +238,51 @@ describe('write_ops — runResync / runLlmRun / runUpdateFlag → callCli plumbi
       ['notion', 'update-flag', '53675', '--is-flagged', 'false'],
       expect.objectContaining({ timeoutMs: 30_000 })
     )
+  })
+
+  // Sprint 15 D — `email:flag` is always a write + always needs auth; even
+  // dry-run support isn't plumbed yet (the CLI has --dry-run but the renderer
+  // never exercises it). Timeout matches updateFlag (30s) since both are
+  // bounded SQL inserts; fanout dispatch is async on mail-sync's side.
+
+  test('emailFlag forwards write:true + needsAuth:true + 30s timeout (single)', async () => {
+    mockCallCli.mockResolvedValueOnce({
+      status: 'success',
+      data: { dry_run: false, updated_ids: [53675] }
+    })
+    await runEmailFlag(53675, { isFlagged: true })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['email', 'flag', '53675', '--is-flagged', '--allow-concurrent'],
+      expect.objectContaining({ write: true, needsAuth: true, timeoutMs: 30_000 })
+    )
+  })
+
+  test('emailFlag batch — single CLI fork enqueues N×2 outbox rows', async () => {
+    mockCallCli.mockResolvedValueOnce({
+      status: 'success',
+      data: { dry_run: false, updated_ids: [1, 2, 3] }
+    })
+    await runEmailFlag(null, { ids: [1, 2, 3], isRead: true })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['email', 'flag', '--ids', '1,2,3', '--is-read', '--allow-concurrent'],
+      expect.objectContaining({ write: true, needsAuth: true, timeoutMs: 30_000 })
+    )
+    // One call — not three. This is the whole point of --ids batching.
+    expect(mockCallCli).toHaveBeenCalledTimes(1)
+  })
+
+  test('emailFlag E_PM2_RUNNING surfaces verbatim through envelope (CliError → code)', async () => {
+    mockCallCli.mockRejectedValueOnce(
+      new CliError('E_PM2_RUNNING', 9, 'pass --allow-concurrent to bypass')
+    )
+    const env = await __testing.envelopeFromCli<unknown>(
+      runEmailFlag(53675, { isFlagged: true })
+    )
+    expect(env.ok).toBe(false)
+    if (!env.ok) {
+      expect(env.code).toBe('E_PM2_RUNNING')
+      expect(env.hint).toBe('pass --allow-concurrent to bypass')
+    }
   })
 })
 

@@ -45,6 +45,7 @@ import { useAppearance, type AccentId, type ThemeMode } from '@shared/state/appe
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpdaterStore, setUpdaterStatus } from '@shared/state/updater'
 import { islandStateI18nKey, setIslandStatus, useIslandStore } from '@shared/state/island'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import { cn } from '@shared/lib/cn'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import {
@@ -118,6 +119,107 @@ function StatusPill({ set }: { set: boolean }): React.ReactElement {
       <span className={cn('w-1.5 h-1.5 rounded-full', set ? 'bg-ok' : 'bg-ink-fg-3')} />
       {set ? t('settings.set') : t('settings.notSet')}
     </span>
+  )
+}
+
+// Sprint 16 — SSE realtime status indicator + reconnect 按钮.
+//
+// 连接好时显示绿点 + "实时同步"; 重连中黄点 + 旋转 icon; 断线红点 + "立即重连" 按钮.
+// 用户可以在 SSE 断线时直接点重连, 或通过下面的 pollInterval 决定 fallback 周期.
+//
+// 字串 hardcode 中文 — i18n 未来再迁; 加 i18n key 与功能 ship 解耦.
+function RealtimeStatusRow(): React.ReactElement {
+  const status = useEventsStatusStore((s) => s.status)
+  const mailApi = useMailApi()
+  const [reconnecting, setReconnecting] = useState(false)
+
+  const handleReconnect = async (): Promise<void> => {
+    setReconnecting(true)
+    try {
+      await mailApi.events.reconnect()
+      toastSuccess('已请求重连')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError('重连失败', msg)
+    } finally {
+      setTimeout(() => setReconnecting(false), 600)
+    }
+  }
+
+  const stateBadge: { dot: string; chip: string; label: string } = (() => {
+    switch (status.state) {
+      case 'connected':
+        return { dot: 'bg-ok', chip: 'bg-ok/15 text-ok', label: '已连接 · 实时同步' }
+      case 'connecting':
+      case 'reconnecting':
+        return {
+          dot: 'bg-coral/100 animate-pulse',
+          chip: 'bg-coral/15 text-coral',
+          label: status.state === 'reconnecting' ? '重连中…' : '连接中…'
+        }
+      case 'disconnected':
+        return {
+          dot: 'bg-fail',
+          chip: 'bg-fail/15 text-fail',
+          label: '已断开 · 走 fallback 轮询'
+        }
+      case 'disabled':
+        return {
+          dot: 'bg-ink-fg-3',
+          chip: 'bg-ink-3 text-ink-fg-2',
+          label: '已禁用'
+        }
+      case 'idle':
+      default:
+        return {
+          dot: 'bg-ink-fg-3',
+          chip: 'bg-ink-3 text-ink-fg-2',
+          label: '等待启动'
+        }
+    }
+  })()
+
+  const showReconnect = status.state !== 'connected' && status.state !== 'disabled'
+
+  return (
+    <Row label="实时事件" hint="SSE 推送连接状态; 断线后下面的轮询周期作为兜底。">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-meta font-mono',
+            stateBadge.chip
+          )}
+        >
+          <span className={cn('w-1.5 h-1.5 rounded-full', stateBadge.dot)} />
+          {stateBadge.label}
+        </span>
+        {showReconnect && (
+          <button
+            type="button"
+            onClick={() => void handleReconnect()}
+            disabled={reconnecting}
+            className={cn(
+              'inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-aux',
+              'text-coral border border-coral/30 bg-coral/10 hover:bg-coral/15',
+              'transition-colors duration-fast',
+              'disabled:opacity-60 disabled:cursor-not-allowed'
+            )}
+          >
+            {reconnecting ? (
+              <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <RefreshCw size={12} strokeWidth={2} />
+            )}
+            立即重连
+          </button>
+        )}
+        {status.lastError && (
+          <span className="text-meta font-mono text-ink-fg-3 break-all" title={status.lastError}>
+            {status.lastError.length > 60 ? status.lastError.slice(0, 60) + '…' : status.lastError}
+          </span>
+        )}
+      </div>
+    </Row>
   )
 }
 
@@ -444,6 +546,7 @@ function SettingsForm({ initialSettings, initialSecrets }: SettingsFormProps): R
           {t('settings.inbox')}
         </SectionTitle>
         <div className="rounded-md border border-ink-border bg-ink-2 px-4">
+          <RealtimeStatusRow />
           <Row label={t('settings.pollInterval')} hint={t('settings.pollIntervalHint')}>
             <div className="inline-flex rounded-md border border-ink-border bg-ink-3 p-0.5">
               {POLL_OPTIONS.map((opt) => (

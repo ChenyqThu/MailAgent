@@ -461,6 +461,9 @@ interface EnrichedRow extends EmailMetadataRow {
   action_raw: string | null
   category_raw: string | null
   attach_count: number | null
+  // Sprint 15 D 块: Notion Processing Status 镜像 (CLI email flag 写, 反向
+  // handler 也维护). EmailRow 用它判断 'done' 三态显示, 不再依赖 sync_status.
+  processing_status: string | null
 }
 
 interface MailboxRow {
@@ -486,7 +489,8 @@ const ENRICHED_LIST_COLS = `
     m.internal_id, m.message_id, m.thread_id, m.subject, m.sender, m.sender_name,
     m.to_addr, m.cc_addr, m.date_received, m.mailbox, m.is_read, m.is_flagged,
     m.is_important,
-    m.sync_status, m.notion_page_id, m.notion_thread_id, m.sync_error, m.retry_count
+    m.sync_status, m.notion_page_id, m.notion_thread_id, m.sync_error, m.retry_count,
+    m.processing_status
 `
 
 const ENRICHED_EXTRA_COLS = `
@@ -495,8 +499,10 @@ const ENRICHED_EXTRA_COLS = `
     json_extract(l.labels_json, '$.priority')   AS priority_raw,
     json_extract(l.labels_json, '$.action_type') AS action_raw,
     json_extract(l.labels_json, '$.category')   AS category_raw,
-    (SELECT COUNT(*) FROM email_attachment a
-     WHERE a.internal_id = m.internal_id AND a.is_inline = 0) AS attach_count
+    -- Sprint 16 perf: attach_count 改 LEFT JOIN 聚合 (之前用相关子查询, 每行
+    -- 一次全表扫描; 500 行 → 500 次扫). 配合 v11 的 (internal_id, is_inline)
+    -- 索引, listEnriched 整体延迟从 ~200-500ms 降到 ~10-30ms.
+    COALESCE(a.attach_count, 0) AS attach_count
 `
 
 function buildEnrichedWhere(opts: ListOpts): WhereBuild {
@@ -525,7 +531,9 @@ function shapeEnrichedItem(row: EnrichedRow): EnrichedEmailMeta {
     // LLM CATEGORY_ENUM literal (e.g. "💼 产品管理"); pass through verbatim so
     // the filter popover can match against the same string the LLM emitted.
     ai_category: row.category_raw ?? null,
-    attach_count: row.attach_count ?? 0
+    attach_count: row.attach_count ?? 0,
+    // Sprint 15 D 块: Notion Processing Status 镜像. EmailRow 用它判 done 三态.
+    processing_status: row.processing_status ?? null
   }
 }
 
@@ -538,6 +546,11 @@ export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
                FROM email_metadata m
                LEFT JOIN email_body b      ON b.internal_id = m.internal_id
                LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
+               LEFT JOIN (
+                 SELECT internal_id, COUNT(*) AS attach_count
+                 FROM email_attachment WHERE is_inline = 0
+                 GROUP BY internal_id
+               ) a ON a.internal_id = m.internal_id
                ${where.sql}
                ORDER BY m.date_received DESC NULLS LAST, m.internal_id DESC
                LIMIT ? OFFSET ?`

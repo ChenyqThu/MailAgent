@@ -101,4 +101,23 @@ class MailAppFanout:
             f"[mailapp-fanout] applied internal_id={internal_id} "
             f"read={target_read} flagged={target_flagged}"
         )
+
+        # Sprint 16 — 派发完成后 publish 让前端 SSE 拿到 internal_id 级精准 invalidate
+        # (outbox.done 只带 outbox_id, 前端不知道哪封邮件变了 → 整列 invalidate 太粗).
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "email.flag_changed",
+                internal_id=internal_id,
+                data={
+                    "target": "mailapp",
+                    "is_read": target_read,
+                    "is_flagged": target_flagged,
+                    "outbox_source": entry.source,
+                },
+                source="mailapp_fanout",
+            )
+        except Exception:
+            pass  # SSE failure 不能烧穿 fanout 主链路
+
         return (True, "done")

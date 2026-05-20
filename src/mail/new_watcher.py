@@ -383,6 +383,14 @@ class NewWatcher:
         await self._process_llm_retry_queue()
 
         # 7. 检测 read/flagged 变化并同步到 Notion
+        #
+        # Sprint 15 SSoT inversion 下 sync_store 是状态真源, Mail.app 是 fanout 派发
+        # 的镜像; 把 Mail.app 当 drift truth 反向覆盖 sync_store + Notion 会跟前端 /
+        # CLI 的 intent race (前端写 sync_store=True, fanout 还未派发到 Mail.app 时
+        # Mail.app 还是 False -> 本函数会把 sync_store 拉回 False 并把 Notion
+        # processing_status 错误地设为 '已完成', 进而触发 handle_completed unflag,
+        # 形成死循环). 已在 _detect_and_sync_flag_changes 函数体内 short-circuit;
+        # 调用保留以便后续切换到"真 drift -> outbox(notion)"语义时复用。
         await self._detect_and_sync_flag_changes()
 
     async def _process_pending_emails(self):
@@ -881,72 +889,31 @@ class NewWatcher:
                 self.sync_store.mark_failed_v3(internal_id, str(e))
 
     async def _detect_and_sync_flag_changes(self):
-        """检测 Mail.app 中邮件 read/flagged 变化并同步到 Notion
+        """[DEPRECATED Sprint 15 — disabled, see commit log]
 
-        流程：
-        1. 从 Mail.app SQLite 查询最近 1000 封邮件的 read/flagged
-        2. 与 SyncStore 存储的值对比
-        3. 有变化的更新 Notion 页面 + SyncStore
+        v3 设计: 把 Mail.app 当 drift truth, diff vs SQLite stored 后直调
+            `notion_sync.update_email_flags()` 反向写 Notion + 覆盖 sync_store.
+
+        Sprint 15 SSoT inversion 下这个语义彻底反了:
+          - sync_store 才是状态真源, Mail.app / Notion 都是 fanout 的镜像
+          - 前端 / CLI / handler 写完 sync_store 后, fanout 派发是异步的, Mail.app
+            会有 ~5s 窗口跟 sync_store 不一致 -> 旧函数会把那个窗口判为 "drift"
+            并:
+              1. 把 sync_store 拉回 Mail.app stale 值 (破坏前端 intent)
+              2. 写 Notion processing_status='已完成' (触发 handle_completed unflag)
+              3. 形成 flag/unflag 死循环 (实测见 logs/sprint15-d-handoff)
+
+        修复: 函数体 short-circuit return. 调用点 (_poll_cycle 第 7 步) 暂时保留,
+        待真要"Mail.app 端用户手改 -> 写 outbox(notion)"的反向语义设计时复用本钩子.
+
+        当前用户场景:
+          - 前端点 flag -> CLI 写 sync_store + outbox -> fanout 派发到 Mail/Notion
+          - Notion 端 automation -> webhook -> handle_flag_changed/completed
+            (二者都走 outbox, 也是单向)
+          - macOS Mail.app 端用户直接改 flag: 暂时不会反向同步到 Notion (需要后续
+            设计真 drift 检测 + 写 outbox(notion) 路径, 不能直调 Notion API).
         """
-        if not self.radar or not self.radar.is_available():
-            return
-
-        try:
-            # 1. 查询 Mail.app 当前 flags
-            current_flags = self.radar.get_recent_flags(limit=3000)
-            if not current_flags:
-                return
-
-            # 2. 从 SyncStore 获取已同步邮件的存储 flags
-            stored_flags = self.sync_store.get_synced_flags(list(current_flags.keys()))
-            if not stored_flags:
-                return
-
-            # 3. 对比找出变化
-            changes = []
-            for iid, current in current_flags.items():
-                stored = stored_flags.get(iid)
-                if not stored:
-                    continue
-                if current['is_read'] != stored['is_read'] or current['is_flagged'] != stored['is_flagged']:
-                    # 取消旗标 (True→False) 表示用户已处理，标记为已完成
-                    unflagged = stored['is_flagged'] and not current['is_flagged']
-                    changes.append({
-                        'internal_id': iid,
-                        'is_read': current['is_read'],
-                        'is_flagged': current['is_flagged'],
-                        'notion_page_id': stored['notion_page_id'],
-                        'unflagged': unflagged,
-                    })
-
-            if not changes:
-                return
-
-            logger.info(f"Detected {len(changes)} flag changes, syncing to Notion...")
-
-            # 4. 批量更新 Notion + SyncStore（每周期最多 10 个，避免阻塞）
-            for change in changes[:10]:
-                try:
-                    # 取消旗标 → 标记已完成
-                    status = "已完成" if change.get('unflagged') else ""
-                    await self.notion_sync.update_email_flags(
-                        change['notion_page_id'],
-                        change['is_read'],
-                        change['is_flagged'],
-                        processing_status=status
-                    )
-                    self.sync_store.update_local_flags(
-                        change['internal_id'],
-                        change['is_read'],
-                        change['is_flagged']
-                    )
-                    self._stats["flag_changes_synced"] += 1
-                    logger.debug(f"Flag synced: {change['internal_id']} read={change['is_read']} flagged={change['is_flagged']}")
-                except Exception as e:
-                    logger.error(f"Failed to sync flags for {change['internal_id']}: {e}")
-
-        except Exception as e:
-            logger.error(f"Flag change detection failed: {e}")
+        return
 
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

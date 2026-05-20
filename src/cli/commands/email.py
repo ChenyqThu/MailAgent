@@ -1186,11 +1186,16 @@ def email_flag(
             not_found.append(iid)
             continue
 
-        # 立即 update_local_flags 做 echo prevention (only is_read/is_flagged
-        # are local fields; processing_status is Notion-only)
+        # 立即 update_local_flags 做 echo prevention.
+        # Sprint 15 D 块: processing_status 也镜像到 SQLite (列已存在), 让前端
+        # listEnriched 能立即读到 done 状态 (processing_status='已完成'),
+        # 不需要等 fanout 派发 Notion 完成. None 时不动 SQLite 该字段.
         new_read = bool(is_read) if is_read is not None else bool(meta.is_read)
         new_flagged = bool(is_flagged) if is_flagged is not None else bool(meta.is_flagged)
-        sync_store.update_local_flags(iid, new_read, new_flagged)
+        sync_store.update_local_flags(
+            iid, new_read, new_flagged,
+            processing_status=processing_status,
+        )
 
         # outbox 双 target: mailapp + notion, source='cli'
         oid_mailapp = outbox_repo.enqueue(

@@ -14,6 +14,7 @@ import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { usePinned } from '@shared/state/pinned'
 import { toastError } from '@shared/state/toast'
 
@@ -23,15 +24,16 @@ const PINNED_KEY = ['pinnedIds'] as const
 export function usePinnedSync(): void {
   const mailApi = useMailApi()
   const setPinned = usePinned((s) => s.setPinned)
+  // Sprint 16 — togglePin onSettled 已经 invalidate, 单机单窗口不需 polling.
+  // 多窗口 / CLI 改 pin 的同步靠 SSE 断线 fallback (usePollingFallback) 兜底.
+  // pins 没有专门的 SSE event 类型, 但 fallback polling 周期能拉到最新值.
+  const pollingInterval = usePollingFallback()
 
   const { data } = useQuery({
     queryKey: PINNED_KEY,
     queryFn: () => mailApi.email.listPinnedIds(),
-    // 10s background poll — pins are user-driven and infrequent, polling
-    // exists only to pick up changes from other windows / the CLI.
-    refetchInterval: 10_000,
+    refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
-    // No stale check on focus — togglePin already invalidates on success.
     staleTime: 5_000
   })
 

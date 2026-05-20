@@ -36,6 +36,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
+import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { cleanSnippet } from '@shared/lib/mail_parse'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
 import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
@@ -586,10 +587,13 @@ export function EmailList(): React.ReactElement {
   // SQLite read is ~4ms per page so re-querying is cheaper than maintaining
   // a useInfiniteQuery cursor chain in the renderer.
   const fetchLimit = Math.min(pageCount * PAGE_SIZE, MAX_PAGES * PAGE_SIZE)
+  // Sprint 16 — 主推送从 SSE 来 (useEventBridge invalidate ['emails']);
+  // pollingInterval 仅作为 SSE 断线 fallback. SSE connected 时 fallback=false.
+  const pollingInterval = usePollingFallback()
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['emails', view, activeMailbox, fetchLimit],
     queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit)),
-    refetchInterval: 5000,
+    refetchInterval: pollingInterval,
     refetchIntervalInBackground: false
   })
 
@@ -608,7 +612,8 @@ export function EmailList(): React.ReactElement {
         ? mailApi.email.listEnriched({ mailbox: crossMailbox, limit: fetchLimit })
         : Promise.resolve([]),
     enabled: crossMailbox !== null,
-    refetchInterval: 5000,
+    // Sprint 16 — 同 EmailList 主查询, SSE 驱动 invalidate; polling 作 fallback
+    refetchInterval: pollingInterval,
     refetchIntervalInBackground: false
   })
 
@@ -1045,7 +1050,10 @@ function enrichDefaults(m: EmailMeta): EnrichedEmailMeta {
     ai_action: null,
     ai_category: null,
     attach_count: 0,
-    is_important: false
+    is_important: false,
+    // Sprint 16 — thread child defaults to no done state (parent is the head row;
+    // children rarely have processing_status visible in the bundled view anyway).
+    processing_status: null
   }
 }
 

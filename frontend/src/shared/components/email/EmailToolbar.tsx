@@ -10,9 +10,10 @@
 //
 // Backend wiring status:
 //   - Draft Reply / Translate / Resync / AI Re-run — real CLI/IPC paths
-//   - Mark Read / Mark Flag — go through `mailApi.notion.updateFlag`,
-//     marked DEPRECATED (NOTES.md 2026-05-19 strategic). Sprint 14 swaps
-//     to `email.flag` once the SQLite SSoT fanout worker lands.
+//   - Mark Read / Mark Flag — Sprint 15 D 块已切到 `mailApi.email.flag(...)`
+//     (parent EmailDetail handles the call; this toolbar only emits
+//     `onToggleRead` / `onToggleFlag` callbacks). SSoT inversion: writes
+//     SQLite intent + outbox dual target, FanoutWorker async dispatch.
 //   - Mark Important — no write path. Backend writes the bit from RFC
 //     headers (Importance / X-Priority / X-MSMail-Priority). We render a
 //     passive ❗ indicator when isImportant=true; clicking is not a thing.
@@ -554,9 +555,9 @@ export function EmailToolbar({
 
       <Divider />
 
-      {/* Mark Read / Mark Flag — DEPRECATED path (NOTES.md 2026-05-19).
-          notion.updateFlag → notion automation → Mail.app reverse sync.
-          SQLite SSoT inversion Sprint will swap to email.flag(). */}
+      {/* Mark Read / Mark Flag — Sprint 15 D 块: parent EmailDetail's
+          handleToggleRead / handleToggleFlag now call `mailApi.email.flag()`
+          (SSoT inversion: SQLite intent + outbox dual fanout). */}
       <GhostBtn
         icon={<CheckCheck size={13} strokeWidth={2} />}
         label={readLabel}

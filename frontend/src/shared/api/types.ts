@@ -71,6 +71,12 @@ export interface EnrichedEmailMeta extends EmailList_EmailListItem {
    *  X-MSMail-Priority 任一为 high → true）。EmailRow 的 ❗ 角标读这个字段，
    *  与 LLM 推断的 ai_priority 互相独立。 */
   is_important: boolean
+  /** Sprint 15 D 块 — Notion Processing Status 镜像 (CLI email flag 写, 反向
+   *  webhook handler 也维护). EmailRow 用 `processing_status === '已完成'`
+   *  判 'done' 三态显示 (v3 的 sync_status==='deleted' 判定永远 false, 已失效).
+   *  可能值: '未处理' / 'AI Reviewed' / '已同步' / '已完成' / '草稿已创建';
+   *  老邮件未被任何写入触达时为 null. */
+  processing_status: string | null
 }
 
 export interface MailboxSummary {
@@ -170,6 +176,28 @@ export interface UpdateFlagOpts {
   dryRun?: boolean
 }
 
+/**
+ * Sprint 15 — `mailagent email flag` opts. Mirrors `EmailFlagOpts` declared
+ * in `src/electron/main/handlers/write_ops.ts` (same shape, kept duplicated
+ * to keep main / renderer free of cross-imports — same convention as
+ * `UpdateFlagOpts`).
+ *
+ * Replaces the v3 `notion.updateFlag` path: writes SQLite flag intent + a
+ * dual-target outbox row (mailapp + notion), then mail-sync's FanoutWorker
+ * dispatches both sides async. Pass `internalId = null` + `opts.ids = [...]`
+ * to batch (single CLI fork enqueues N×2 outbox rows).
+ */
+export interface EmailFlagOpts {
+  isRead?: boolean
+  isFlagged?: boolean
+  processingStatus?: string
+  /** Batch mode: ids ↔ internalId are mutually exclusive at the CLI level. */
+  ids?: number[]
+  /** Default true. Mail-sync is always online in production, so the CLI's
+   *  pm2 conflict check must be bypassed. */
+  allowConcurrent?: boolean
+}
+
 export interface EmailApi {
   list(opts: ListOpts): Promise<EmailMeta[]>
   /** Sprint 2 — list + body snippet + LLM labels + attach count, all in one IPC. */
@@ -198,6 +226,21 @@ export interface EmailApi {
   /** v8 — current set of pinned internal_ids (pinned_at DESC). Drives
    *  the `pinned` zustand store and the "📌 已固定" group in EmailList. */
   listPinnedIds(): Promise<number[]>
+  /**
+   * Sprint 15 — SSoT inversion. Writes flag / processing_status intent to
+   * SQLite (with echo-prevention) + a dual-target outbox row (mailapp +
+   * notion). The mail-sync FanoutWorker then dispatches both sides async,
+   * so this method returns as soon as the SQL has landed — actual Mail.app
+   * / Notion mutations follow within ~5-10s.
+   *
+   * Single email: `flag(<id>, {isFlagged: true})`.
+   * Batch: `flag(null, {ids: [...], isRead: true})` — one CLI fork, N×2
+   * outbox rows. The two modes are mutually exclusive at the CLI level.
+   *
+   * Replaces `mailApi.notion.updateFlag(...)`; the old method stays during
+   * Sprint 15 grayscale (frontend/SPRINT15-D handoff §6).
+   */
+  flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown>
 }
 
 // ---- Sprint 6 §2.2 — LLM dashboard surface --------------------------------
@@ -665,6 +708,57 @@ export interface UpdaterApi {
   onEvent(handler: (status: UpdaterStatus) => void): () => void
 }
 
+// ---- Sprint 16 §SSE — events bridge surface ----------------------------
+
+/** Sprint 16 — SSE event types. 后端 publish 点见 src/events/publisher.py
+ *  + docs/sse-events.md. */
+export type SseEventType =
+  | 'email.synced'
+  | 'email.failed'
+  | 'email.dead_letter'
+  | 'email.flag_changed'
+  | 'outbox.enqueued'
+  | 'outbox.done'
+  | 'outbox.failed'
+  | 'outbox.dead_letter'
+  | 'llm.success'
+  | 'llm.failed'
+  | 'llm.gave_up'
+
+export interface SseEvent {
+  event_type: SseEventType | string
+  ts: number
+  internal_id: number | null
+  data: Record<string, unknown>
+  source: string
+}
+
+export type EventsConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'reconnecting'
+  | 'disabled'
+
+export interface EventsStatus {
+  state: EventsConnectionState
+  lastError: string | null
+  lastEventTs: number | null
+  url: string
+}
+
+export interface EventsApi {
+  /** Current snapshot (idempotent invoke). */
+  status(): Promise<EventsStatus>
+  /** 立即重连 — 清退避 / 取消当前 fetch / 启新 attempt; 返回新 status. */
+  reconnect(): Promise<EventsStatus>
+  /** Subscribe to incoming SSE events; returns unsubscribe fn. */
+  onEvent(handler: (event: SseEvent) => void): () => void
+  /** Subscribe to connection-state changes; returns unsubscribe fn. */
+  onStatus(handler: (status: EventsStatus) => void): () => void
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
@@ -682,4 +776,6 @@ export interface MailApi {
   updater: UpdaterApi
   /** Sprint 9 — ping-island bridge (status + appearance broadcast + AI draft envelopes). */
   island: IslandApi
+  /** Sprint 16 — SSE events bridge (replaces 5s polling). */
+  events: EventsApi
 }

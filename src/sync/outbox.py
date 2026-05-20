@@ -327,7 +327,16 @@ class OutboxRepository:
     def mark_done(self, outbox_id: int) -> bool:
         now = time.time()
         conn = self._connect()
+        # Sprint 16: 先取 internal_id (同一连接) — SSE publish 时附带, 前端可以
+        # 精准 invalidate ['email', id] / ['emails'] cache, 不用整列 refetch.
+        internal_id: Optional[int] = None
         try:
+            row = conn.execute(
+                "SELECT internal_id FROM email_outbox WHERE outbox_id = ?",
+                (outbox_id,),
+            ).fetchone()
+            if row is not None:
+                internal_id = int(row["internal_id"])
             cursor = conn.execute(
                 """
                 UPDATE email_outbox
@@ -348,6 +357,7 @@ class OutboxRepository:
             from src.events.publisher import safe_publish
             safe_publish(
                 "outbox.done",
+                internal_id=internal_id,
                 data={"outbox_id": outbox_id},
                 source="outbox",
             )

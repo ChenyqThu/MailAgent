@@ -192,7 +192,13 @@ class TestCompletedWithOutbox:
         sync_store.update_local_flags(5001, False, True)
 
         await handlers_with_outbox.handle_completed({
-            "properties": {"message_id": "<msg-uuid@example.com>"},
+            "properties": {
+                "message_id": "<msg-uuid@example.com>",
+                # Sprint 15 D 块: handle_completed 现在强守护, 必须 webhook 真带
+                # processing_status='已完成' 才动手. 模拟 Notion automation 真实
+                # payload.
+                "processing_status": "已完成",
+            },
         })
 
         arm.set_flag_by_id.assert_not_called()
@@ -210,11 +216,36 @@ class TestCompletedWithOutbox:
     ):
         # stored_flagged 默认 False → 直接 return
         await handlers_with_outbox.handle_completed({
-            "properties": {"message_id": "<msg-uuid@example.com>"},
+            "properties": {
+                "message_id": "<msg-uuid@example.com>",
+                "processing_status": "已完成",
+            },
         })
 
         rows = outbox_repo.list_by_internal_id(5001)
         assert len(rows) == 0
+
+    async def test_guard_skips_when_processing_status_not_completed(
+        self, handlers_with_outbox, outbox_repo, sync_store
+    ):
+        """Sprint 15 D 块 hotfix: 即使邮件 stored is_flagged=True, 没有
+        processing_status='已完成' 的 webhook 不该 unflag."""
+        sync_store.update_local_flags(5001, False, True)
+
+        await handlers_with_outbox.handle_completed({
+            "properties": {
+                "message_id": "<msg-uuid@example.com>",
+                # processing_status 缺失 — Sprint 15 之前会无条件 unflag,
+                # 修复后必须 short-circuit
+            },
+        })
+
+        rows = outbox_repo.list_by_internal_id(5001)
+        assert len(rows) == 0
+
+        # SQLite 状态保持不变 (SQLite 用 INTEGER 存 bool, get() 返回 dict 含 1/0)
+        record = sync_store.get(5001)
+        assert bool(record["is_flagged"]) is True
 
 
 class TestCompletedWithoutOutbox:
@@ -223,7 +254,10 @@ class TestCompletedWithoutOutbox:
     ):
         sync_store.update_local_flags(5001, False, True)
         await handlers_no_outbox.handle_completed({
-            "properties": {"message_id": "<msg-uuid@example.com>"},
+            "properties": {
+                "message_id": "<msg-uuid@example.com>",
+                "processing_status": "已完成",
+            },
         })
         arm.set_flag_by_id.assert_called_once()
         arm.mark_as_read_by_id.assert_called_once()

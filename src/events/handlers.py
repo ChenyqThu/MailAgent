@@ -378,13 +378,31 @@ class EventHandlers:
                 logger.warning(f"Webhook: failed to update Notion status: {e}")
 
     async def handle_completed(self, event: Dict):
-        """处理用户标记已完成事件: 移除 Mail.app 旗标"""
+        """处理用户标记已完成事件: 移除 Mail.app 旗标
+
+        Sprint 15 D 块守护: 必须 event.properties.processing_status (或 alias
+        ai_review_status) == '已完成' 才动手. 之前 _detect_and_sync_flag_changes
+        bug 会把 Notion processing_status 错写为'已完成', 触发本 handler 把用户
+        刚 flag 的邮件 unflag, 形成死循环 (handoff §诊断). 即便 _detect 已禁,
+        加一层 defensive guard 防止未来其它 race 误触发.
+        """
         self._stats["completed"] += 1
         props = event.get("properties", {})
         message_id = props.get("message_id", "")
 
         if not message_id:
             logger.warning(f"completed event missing message_id: {event.get('id')}")
+            return
+
+        # Sprint 15 D 块: 强守护. props 里可能既没 processing_status 也没
+        # ai_review_status 字段 (Notion webhook 只送变更字段), 这种 webhook 不可信,
+        # 不该 unflag.
+        status = (props.get("processing_status") or props.get("ai_review_status") or "")
+        if status != "已完成":
+            logger.debug(
+                f"handle_completed: skipped, processing_status={status!r} (not '已完成') "
+                f"for {message_id[:40]}"
+            )
             return
 
         record = self.sync_store.get_by_message_id(message_id)

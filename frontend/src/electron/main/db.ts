@@ -67,7 +67,10 @@ export function getDb(): Database.Database {
   }
   _db = new Database(path, { readonly: true, fileMustExist: true })
   _db.pragma('journal_mode = WAL')
-  _db.pragma('busy_timeout = 2000')
+  // Sprint 16 perf — main 线程被锁阻塞 2s 是不可接受 (Electron single thread,
+  // UI 会卡死). 500ms 已经够 SQLite WAL writer 完成一次正常事务 (~10ms typical);
+  // 真锁住超过 500ms 则报错让上层 retry, 不应该让 IPC 调用挂死.
+  _db.pragma('busy_timeout = 500')
   return _db
 }
 

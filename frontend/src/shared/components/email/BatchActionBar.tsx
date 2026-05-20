@@ -53,31 +53,36 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
   const empty = selected === 0
   const total = visibleIds.length
 
-  async function runBulk(label: string, op: (id: number) => Promise<unknown>): Promise<void> {
+  // Sprint 15 D — replaced N×IPC fork loop with a single `email.flag(--ids)` call.
+  // The CLI inserts N×2 outbox rows in one transaction; FanoutWorker on
+  // mail-sync's side dispatches Mail.app + Notion async. Error aggregation
+  // comes from the CLI's returned shape:
+  //   {updated_ids: [...], not_found?: [...], outbox_entries: [...]}.
+  async function runBulk(
+    label: string,
+    payload: { isRead?: boolean; isFlagged?: boolean; processingStatus?: string }
+  ): Promise<void> {
     if (selectedIds.length === 0) return
     const ids = [...selectedIds]
-    let ok = 0
-    let failed = 0
-    // Run in parallel — single-row notion.updateFlag calls are cheap.
-    // Each rejection lands in `failed`; we report the aggregate.
-    await Promise.all(
-      ids.map((id) =>
-        op(id).then(
-          () => {
-            ok += 1
-          },
-          () => {
-            failed += 1
-          }
-        )
-      )
-    )
-    if (failed === 0) {
-      toastSuccess(`${label}: ${ok} 封完成`)
-    } else if (ok === 0) {
-      toastError(`${label} 失败`, `${failed} 封失败`)
-    } else {
-      toastError(`${label}: ${ok}/${ids.length}`, `${failed} 封失败`)
+    try {
+      const result = (await mailApi.email.flag(null, { ids, ...payload })) as {
+        updated_ids?: number[]
+        not_found?: number[]
+      }
+      const ok = result?.updated_ids?.length ?? 0
+      const failed = result?.not_found?.length ?? 0
+      if (failed === 0) {
+        toastSuccess(`${label}: ${ok} 封完成`)
+      } else if (ok === 0) {
+        toastError(`${label} 失败`, `${failed} 封未找到`)
+      } else {
+        toastError(`${label}: ${ok}/${ids.length}`, `${failed} 封未找到`)
+      }
+    } catch (err) {
+      // Single CLI call → single failure surface (E_AUTH / E_PM2_RUNNING /
+      // network). Whole batch failed; no partial state to report.
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(`${label} 失败`, msg)
     }
     await queryClient.invalidateQueries({ queryKey: ['emails'] })
   }
@@ -117,11 +122,7 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
       <button
         type="button"
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
-        onClick={() =>
-          void runBulk(t('batchbar.markRead'), (id) =>
-            mailApi.notion.updateFlag(id, { isRead: true })
-          )
-        }
+        onClick={() => void runBulk(t('batchbar.markRead'), { isRead: true })}
       >
         <Mail size={13} strokeWidth={2} />
         <span>{t('batchbar.markRead')}</span>
@@ -129,11 +130,7 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
       <button
         type="button"
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
-        onClick={() =>
-          void runBulk(t('batchbar.toggleFlag'), (id) =>
-            mailApi.notion.updateFlag(id, { isFlagged: true })
-          )
-        }
+        onClick={() => void runBulk(t('batchbar.toggleFlag'), { isFlagged: true })}
       >
         <Flag size={13} strokeWidth={2} />
         <span>{t('batchbar.toggleFlag')}</span>
@@ -142,12 +139,10 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
         type="button"
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
         onClick={() =>
-          void runBulk(t('batchbar.markDone'), (id) =>
-            mailApi.notion.updateFlag(id, {
-              isFlagged: false,
-              processingStatus: '已完成'
-            })
-          )
+          void runBulk(t('batchbar.markDone'), {
+            isFlagged: false,
+            processingStatus: '已完成'
+          })
         }
       >
         <CheckCircle2 size={13} strokeWidth={2} />
@@ -157,12 +152,10 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
         type="button"
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
         onClick={() =>
-          void runBulk(t('batchbar.archive'), (id) =>
-            mailApi.notion.updateFlag(id, {
-              isFlagged: false,
-              processingStatus: '已完成'
-            })
-          )
+          void runBulk(t('batchbar.archive'), {
+            isFlagged: false,
+            processingStatus: '已完成'
+          })
         }
       >
         <Archive size={13} strokeWidth={2} />

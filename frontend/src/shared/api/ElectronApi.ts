@@ -33,8 +33,12 @@ import type {
   EmailApi,
   EmailBody,
   EmailDetail,
+  EmailFlagOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  EventsApi,
+  EventsStatus,
+  SseEvent,
   IslandAIDraftReadyPayload,
   IslandAIDraftStartPayload,
   IslandAIDraftStreamPayload,
@@ -190,6 +194,14 @@ class ElectronEmailApi implements EmailApi {
   }
   async listPinnedIds(): Promise<number[]> {
     return (await invoker()('email:listPinnedIds')) as number[]
+  }
+  async flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown> {
+    // Same envelope contract as the other write IPCs. The CLI returns its
+    // structured `data` block (updated_ids / outbox_entries / not_found) on
+    // success; on failure the envelope carries E_PM2_RUNNING / E_AUTH /
+    // E_INVALID_ARG etc. for the renderer to branch on.
+    const env = (await invoker()('email:flag', internalId, opts ?? {})) as WriteEnvelope<unknown>
+    return unwrap(env)
   }
 }
 
@@ -400,6 +412,27 @@ class ElectronUpdaterApi implements UpdaterApi {
   }
 }
 
+class ElectronEventsApi implements EventsApi {
+  async status(): Promise<EventsStatus> {
+    return (await invoker()('events:status')) as EventsStatus
+  }
+  async reconnect(): Promise<EventsStatus> {
+    return (await invoker()('events:reconnect')) as EventsStatus
+  }
+  onEvent(handler: (event: SseEvent) => void): () => void {
+    return subscribe('events:received', (...args: unknown[]) => {
+      const ev = args[0] as SseEvent | undefined
+      if (ev && typeof ev === 'object') handler(ev)
+    })
+  }
+  onStatus(handler: (status: EventsStatus) => void): () => void {
+    return subscribe('events:status', (...args: unknown[]) => {
+      const s = args[0] as EventsStatus | undefined
+      if (s && typeof s === 'object') handler(s)
+    })
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
@@ -412,4 +445,5 @@ export class ElectronApi implements MailApi {
   settings: SettingsApi = new ElectronSettingsApi()
   updater: UpdaterApi = new ElectronUpdaterApi()
   island: IslandApi = new ElectronIslandApi()
+  events: EventsApi = new ElectronEventsApi()
 }

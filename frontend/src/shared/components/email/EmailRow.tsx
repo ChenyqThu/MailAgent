@@ -7,21 +7,19 @@
 //
 // Sprint 12.5 (this revision): real action wiring
 //   • cb checkbox visible in batch mode (CSS-gated via body[data-batch-mode]).
-//   • ricon-flag → 3-state cycle (none → flagged → done) via notion.updateFlag.
+//   • ricon-flag → 3-state cycle (none → flagged → done) via email.flag (Sprint 15).
 //   • ricon-pin → toggles SQLite-backed pinned set via useTogglePin (v8).
 //   • ricon-delete → marks processing_status='已完成' (archive semantics).
 //
-// TODO (deprecated path — see frontend/NOTES.md 2026-05-19 strategic entry):
-//   `notion.updateFlag` 走的是 Notion → automation webhook → Mail.app 反向链路,
-//   是 v3「Notion 是状态 SSoT」时代的产物。SQLite v4 SSoT 收尾会把所有 mutating
-//   操作切到「前端 → SQLite → 单向 fanout 到 Mail.app + Notion」, 这里 4 处
-//   `mailApi.notion.updateFlag(...)` 都要换成新的 `email.flag` IPC。届时
-//   handle_flag_changed / handle_completed 反向同步 handler 也会退化成
-//   「Notion 端意图通知 → 写 SQLite intent」, 不再直接调 AppleScript。
+// Sprint 15 D 块 — 4 处 ricon-flag / ricon-delete callsite 已切到
+// `mailApi.email.flag(...)` (SSoT inversion: 写 SQLite intent + outbox 双 target,
+// FanoutWorker 异步派发 Mail.app + Notion). 回退路径见
+// `frontend/SPRINT15-D-FRONTEND-HANDOFF.md` §8 — 老 `mailApi.notion.updateFlag`
+// 在 ElectronApi.ts / HttpApi.ts 仍保留, 一周稳定期后删除.
 //
 // CSS class names are the contract — see index.css Sprint 12 block.
 
-import { useCallback, useMemo } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Paperclip } from 'lucide-react'
 
@@ -159,7 +157,7 @@ const deleteSvg = (
   </svg>
 )
 
-export function EmailRow({
+function EmailRowInner({
   email,
   selected,
   isNew,
@@ -176,7 +174,10 @@ export function EmailRow({
   const togglePin = useTogglePin()
 
   const unread = !email.is_read
-  const isDone = email.sync_status === 'deleted' // archived / completed sentinel
+  // Sprint 15 D 块: 'done' 三态用 Notion Processing Status 镜像判. 之前用
+  // `sync_status === 'deleted'` 永远 false (sync_status 没这个枚举值), 导致
+  // done 状态 / 绿色 check icon 从来不显示.
+  const isDone = email.processing_status === '已完成'
   const isFlagged = email.is_flagged && !isDone
   const failed = email.sync_status === 'failed' || email.sync_status === 'dead_letter'
   const parsed = parseSender(email.sender)
@@ -227,41 +228,74 @@ export function EmailRow({
     await queryClient.invalidateQueries({ queryKey: ['emails'] })
   }, [queryClient])
 
+  // Sprint 15 D 块 — Optimistic UI helper.
+  //
+  // CLI fork (~500ms-1s Python startup) + invalidate refetch 的连环 await 让
+  // 点 flag 后 UI 反应卡顿好几秒. 改成 TanStack Query 的 optimistic update 模式:
+  //   1. 立即把目标状态写回 ['emails'] cache, UI 瞬时翻
+  //   2. 后台跑 CLI; SQLite 已经被 CLI 写入新状态, 后续真 refetch 会一致
+  //   3. CLI 失败 -> rollback (invalidateQueries 把 cache 重读到真实状态) + toast
+  //
+  // 我们 mutate 所有 ['emails', ...] query key 的 cache (列表 / mailbox 切分等),
+  // 因为 EmailList 的 useQuery key 可能是 ['emails', mailbox, view]. setQueriesData
+  // 的 type predicate 让我们一次性命中所有.
+  const optimisticPatch = useCallback(
+    (patch: Partial<EnrichedEmailMeta>) => {
+      queryClient.setQueriesData<EnrichedEmailMeta[]>({ queryKey: ['emails'] }, (old) => {
+        if (!Array.isArray(old)) return old
+        return old.map((e) => (e.internal_id === email.internal_id ? { ...e, ...patch } : e))
+      })
+    },
+    [email.internal_id, queryClient]
+  )
+
   const handleFlagClick = useCallback(async () => {
+    // 计算目标状态 + CLI opts.  三态 cycle:
+    //   none(0)    → flagged(1)  : isFlagged=true,  processing_status 不动
+    //   flagged(1) → done(2)     : isFlagged=false, processing_status='已完成'
+    //   done(2)    → none(0)     : isFlagged=false, processing_status='已同步'
+    //                              (写非 '已完成' 才能脱离 isDone, 不能省略 status)
+    let patch: Partial<EnrichedEmailMeta>
+    let opts: { isFlagged?: boolean; processingStatus?: string }
+    if (flagState === '0') {
+      patch = { is_flagged: true }
+      opts = { isFlagged: true }
+    } else if (flagState === '1') {
+      patch = { is_flagged: false, processing_status: '已完成' }
+      opts = { isFlagged: false, processingStatus: '已完成' }
+    } else {
+      patch = { is_flagged: false, processing_status: '已同步' }
+      opts = { isFlagged: false, processingStatus: '已同步' }
+    }
+    // Optimistic — UI 瞬时翻
+    optimisticPatch(patch)
     try {
-      if (flagState === '0') {
-        // none → flagged
-        await mailApi.notion.updateFlag(email.internal_id, { isFlagged: true })
-      } else if (flagState === '1') {
-        // flagged → done (clear flag + processing_status=已完成)
-        await mailApi.notion.updateFlag(email.internal_id, {
-          isFlagged: false,
-          processingStatus: '已完成'
-        })
-      } else {
-        // done → none (clear processing — write empty processing isn't supported,
-        // we just toggle flag back; the user can clear status in Notion).
-        await mailApi.notion.updateFlag(email.internal_id, { isFlagged: false })
-      }
-      await invalidate()
+      await mailApi.email.flag(email.internal_id, opts)
+      // 成功: CLI 已写 SQLite, 下一次 refetch 会拿到一致数据. 不主动 invalidate
+      // 避免一来一回的双重渲染; EmailList 自身的 5s poll 会拉真实 state, 失败时
+      // 才回放真值.
     } catch (err) {
+      // 失败: rollback cache 到 SQLite 真值 + toast
+      await invalidate()
       const msg = err instanceof Error ? err.message : String(err)
       toastError('Flag toggle failed', msg)
     }
-  }, [email.internal_id, flagState, invalidate, mailApi])
+  }, [email.internal_id, flagState, invalidate, mailApi, optimisticPatch])
 
   const handleDeleteClick = useCallback(async () => {
+    // Archive 语义同 flagged→done — 直接进 'done' 终态
+    optimisticPatch({ is_flagged: false, processing_status: '已完成' })
     try {
-      await mailApi.notion.updateFlag(email.internal_id, {
+      await mailApi.email.flag(email.internal_id, {
         isFlagged: false,
         processingStatus: '已完成'
       })
-      await invalidate()
     } catch (err) {
+      await invalidate()
       const msg = err instanceof Error ? err.message : String(err)
       toastError('Archive failed', msg)
     }
-  }, [email.internal_id, invalidate, mailApi])
+  }, [email.internal_id, invalidate, mailApi, optimisticPatch])
 
   const cbClass = useMemo(() => cn('cb', batchIsSelected && 'cb-on'), [batchIsSelected])
 
@@ -406,3 +440,42 @@ export function EmailRow({
     </article>
   )
 }
+
+// Sprint 16 perf — 列表 ~1000 行时 5s SSE invalidate 后 React Query 全列 fresh
+// data 引用变, 不 memo 会触发全列 render. 自定义 equality 只比较 EmailRow 真正
+//用到的 email 字段 + 父级稳定 props; onSelect 是父用 useCallback 稳定化的引用,
+// 按引用比较即可.
+const EMAIL_ROW_EMAIL_KEYS = [
+  'internal_id',
+  'is_read',
+  'is_flagged',
+  'processing_status',
+  'sync_status',
+  'snippet',
+  'ai_priority',
+  'ai_action',
+  'is_important',
+  'date_received',
+  'attach_count',
+  'subject',
+  'sender',
+  'sender_name',
+  'lang'
+] as const
+
+function emailRowPropsEqual(prev: Props, next: Props): boolean {
+  if (prev.selected !== next.selected) return false
+  if (prev.isNew !== next.isNew) return false
+  if (prev.noAvatar !== next.noAvatar) return false
+  if (prev.compact !== next.compact) return false
+  if (prev.onSelect !== next.onSelect) return false
+  const a = prev.email
+  const b = next.email
+  if (a === b) return true
+  for (const k of EMAIL_ROW_EMAIL_KEYS) {
+    if (a[k] !== b[k]) return false
+  }
+  return true
+}
+
+export const EmailRow = memo(EmailRowInner, emailRowPropsEqual)

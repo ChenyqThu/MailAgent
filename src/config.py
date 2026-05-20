@@ -91,6 +91,23 @@ class Config(BaseSettings):
     redis_db: int = Field(default=2, env="REDIS_DB", description="Redis DB 号（默认 2，MailAgent 专用）")
     redis_events_enabled: bool = Field(default=False, env="REDIS_EVENTS_ENABLED", description="是否启用 Redis 事件消费")
 
+    # Sprint 16: mail-sync 进程内本地 SSE endpoint
+    # Electron main 直连 127.0.0.1:9200/api/events/stream (0 RTT), V2 web 后续走
+    # cloudflared 映射. 整个 server 由 main.py 启动; 关闭这个开关时不暴露端口,
+    # 前端 events_bridge 自动 fallback 到轮询.
+    mailagent_sse_enabled: bool = Field(
+        default=True, env="MAILAGENT_SSE_ENABLED",
+        description="是否在 mail-sync 进程内启动本地 SSE server (前端 Electron 直连)",
+    )
+    sse_local_host: str = Field(
+        default="127.0.0.1", env="SSE_LOCAL_HOST",
+        description="SSE server 绑定地址 (默认 127.0.0.1 仅本地; 0.0.0.0 暴露公网需自带 token)",
+    )
+    sse_local_port: int = Field(
+        default=9200, env="SSE_LOCAL_PORT",
+        description="SSE server 监听端口",
+    )
+
     # 初始化同步配置
     init_batch_size: int = Field(default=100, env="INIT_BATCH_SIZE", description="初始化时每批获取邮件数量")
     applescript_timeout: int = Field(default=200, env="APPLESCRIPT_TIMEOUT", description="AppleScript超时时间(秒)")
