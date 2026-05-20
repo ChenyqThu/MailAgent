@@ -344,7 +344,10 @@ export function Sidebar(): React.ReactElement {
           onClose={() => setAccountOpen(false)}
           onAddAccount={() => {
             setAccountOpen(false)
-            void navigate({ to: '/settings' })
+            // Sprint 18 PR C — `/settings` requires `tab` search param. Land
+            // the user on Accounts since that's where they came to set up
+            // a new account.
+            void navigate({ to: '/settings', search: { tab: 'accounts' } })
           }}
         />
       )}
@@ -472,7 +475,7 @@ export function Sidebar(): React.ReactElement {
           icon={<Settings size={15} strokeWidth={1.75} />}
           label={t('nav.settings')}
           selected={pathname === '/settings'}
-          onClick={() => navigate({ to: '/settings' })}
+          onClick={() => navigate({ to: '/settings', search: { tab: 'general' } })}
           right={<kbd>⌘,</kbd>}
         />
         <NavRow

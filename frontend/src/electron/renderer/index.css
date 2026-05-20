@@ -122,6 +122,49 @@
   --chevron-col-w: 24px;
   --unread-dot-top: 36px;
   --unread-dot-left: 17px;
+
+  /* Sprint 18 — Settings 三列 + Tile + Control 几何 SSoT.
+   * mockup-settings.html 的数值集中在此, parts/EnvField / parts/Section /
+   * parts/Row / ui/switch / ui/radio-group / ui/slider 都通过 Tailwind
+   * arbitrary value `var(--name, default)` 读取. 调整一处 :root 改全局,
+   * 跟 Sprint 17 EmailRow 几何 SSoT 同款 pattern.
+   *
+   * Layout (mockup main row 800px 内):
+   *   --settings-rail-w        180  Settings 节 nav 宽 (主 nav 240 + 节 180 + 内容)
+   *   --settings-content-max-w 760  内容区 max-width (mockup max-w-[760px])
+   *   --settings-content-px    40   左右 padding (mockup px-10)
+   *   --settings-content-py    32   顶部 padding (mockup py-8)
+   *   --settings-content-pb    96   底部 padding (留 RestartBanner / save bar)
+   *   --settings-block-gap     28   Section 间距 (mockup mb-7)
+   *   --settings-tile-px       16   Row 水平 padding (mockup px-4)
+   *   --settings-tile-py       14   Row 垂直 padding (mockup py-3.5)
+   *
+   * Controls (mockup .tog / .rad / .slider):
+   *   --tog-w / --tog-h / --tog-thumb     32 / 18 / 14   Switch
+   *   --tog-thumb-travel  14                              translate-x on checked
+   *   --rad-size / --rad-dot              14 / 6          Radio
+   *   --slider-track-h / --slider-thumb-size  4 / 16     Slider
+   *   --swatch-size-inline / --swatch-size-pop  44 / 36  Accent swatch
+   *   --save-bar-bottom  32                               浮动保存 pill (PR E reserved) */
+  --settings-rail-w: 180px;
+  --settings-content-max-w: 760px;
+  --settings-content-px: 2.5rem;
+  --settings-content-py: 2rem;
+  --settings-content-pb: 6rem;
+  --settings-block-gap: 1.75rem;
+  --settings-tile-px: 1rem;
+  --settings-tile-py: 0.875rem;
+  --tog-w: 32px;
+  --tog-h: 18px;
+  --tog-thumb: 14px;
+  --tog-thumb-travel: 14px;
+  --rad-size: 14px;
+  --rad-dot: 6px;
+  --slider-track-h: 4px;
+  --slider-thumb-size: 16px;
+  --swatch-size-inline: 44px;
+  --swatch-size-pop: 36px;
+  --save-bar-bottom: 2rem;
 }
 
 :root[data-theme='light'] {

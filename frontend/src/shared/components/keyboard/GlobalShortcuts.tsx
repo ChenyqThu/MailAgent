@@ -36,7 +36,10 @@ export function GlobalShortcuts(): null {
   }, [])
 
   const goSettings = useCallback(() => {
-    void navigate({ to: '/settings' })
+    // Sprint 18 PR C — `/settings` now requires a `tab` search param
+    // (validateSearch in router-instance.tsx). ⌘, lands the user on the
+    // first tab; deep-linking to a specific tab is handled by SettingsRail.
+    void navigate({ to: '/settings', search: { tab: 'general' } })
   }, [navigate])
 
   // Sprint 10 user-acceptance — ⌘L toggles the AI Chat panel (was always

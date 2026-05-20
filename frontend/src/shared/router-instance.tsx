@@ -117,10 +117,34 @@ const adminCalendarRoute = createRoute({
   component: CalendarLayout
 })
 
+// Sprint 18 §PR C — `?tab=` deep-link. Validated enum so a malformed link
+// (`/settings?tab=rogue`) silently falls back to "general" rather than
+// rendering a blank pane. Tab order mirrors SettingsRail (the user-facing
+// nav). The cast through `as SettingsTab` after the includes() check is
+// safe — includes() narrows on string literals.
+export const SETTINGS_TABS = [
+  'general',
+  'accounts',
+  'sync',
+  'ai',
+  'notifications',
+  'integrations',
+  'realtime',
+  'island'
+] as const
+export type SettingsTab = (typeof SETTINGS_TABS)[number]
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: SettingsLayout
+  component: SettingsLayout,
+  validateSearch: (search: Record<string, unknown>): { tab: SettingsTab } => {
+    const t = search.tab
+    if (typeof t === 'string' && (SETTINGS_TABS as readonly string[]).includes(t)) {
+      return { tab: t as SettingsTab }
+    }
+    return { tab: 'general' }
+  }
 })
 
 // Sprint 10 (c) packaged-app fix — TanStack Router defaults to
