@@ -22,6 +22,7 @@ import { Tabs, TabsContent } from '@shared/components/ui/tabs'
 import { useEnvStore } from '@shared/state/env'
 import { SETTINGS_TABS, type SettingsTab } from '@shared/router-instance'
 
+import { RestartBanner } from './RestartBanner'
 import { SettingsRail } from './SettingsRail'
 import { AccountsTab } from './tabs/AccountsTab'
 import { AiTab } from './tabs/AiTab'
@@ -63,7 +64,7 @@ export function SettingsShell(): React.ReactElement {
     >
       <SettingsRail />
       <section className="glass-3 flex-1 min-w-0 overflow-y-auto scrollbar-thin">
-        {/* PR E hook point: <RestartBanner /> mounts sticky-top here. */}
+        <RestartBanner />
         <div
           className="mx-auto"
           style={{
