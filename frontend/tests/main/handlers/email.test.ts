@@ -233,6 +233,28 @@ describe('searchEmails (FTS5)', () => {
       expect(hits[i]!.rank).toBeGreaterThanOrEqual(hits[i - 1]!.rank)
     }
   })
+
+  test('hits carry ai_priority + lang from llm_processing LEFT JOIN', () => {
+    // Sprint 16 search-module — hits expose mapped priority + language so
+    // the palette EmailHitRow can render priority chip + lang-pip without
+    // a follow-up IPC. Email 101 in the fixture has "🔴 紧急" → critical
+    // and English body. Email 102 has "🟡 重要" → important + Chinese.
+    const r101 = handlers.searchEmails({ query: 'redis', limit: 5 }).items[0]
+    expect(r101?.ai_priority).toBe('critical')
+    expect(r101?.lang).toBe('en')
+
+    const r102 = handlers.searchEmails({ query: '产品*', limit: 5 }).items[0]
+    expect(r102?.ai_priority).toBe('important')
+    expect(r102?.lang).toBe('zh')
+  })
+
+  test('total_indexed reflects email_body_fts row count and survives empty query', () => {
+    // The fixture inserts body rows for emails 101 + 102 (103/201 are body-less).
+    const blank = handlers.searchEmails({ query: '', limit: 0 })
+    const withHits = handlers.searchEmails({ query: 'redis', limit: 5 })
+    expect(blank.total_indexed).toBeGreaterThan(0)
+    expect(withHits.total_indexed).toBe(blank.total_indexed)
+  })
 })
 
 describe('attachment shape', () => {

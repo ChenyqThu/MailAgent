@@ -16,9 +16,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { List, type RowComponentProps } from 'react-window'
-import { ChevronDown, Filter, ListChecks, Mail } from 'lucide-react'
+import { Filter, ListChecks, Mail } from 'lucide-react'
 
-import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
 import {
@@ -30,6 +29,7 @@ import {
   type EmailView
 } from '@shared/state/email-filter'
 import { useGroupCollapse, type GroupKey } from '@shared/state/group-collapse'
+import { useThreadCollapse } from '@shared/state/thread-collapse'
 import { useBatch } from '@shared/state/batch'
 import { usePinned } from '@shared/state/pinned'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -134,81 +134,37 @@ function VirtualRow({
       </div>
     )
   }
-  // Sprint 14 round 10 — every email row (solitary / thread head /
-  // thread child) wraps a fixed-width chevron column on the left so
-  // the avatar / sender column lands at the same x position for every
-  // row.  The chevron is absolute-positioned at top:21px which lines
-  // its centre (12px glyph) up with the 32px avatar disc's centre
-  // (row padding-top 9px + avatar margin-top 2px + 16px disc-radius =
-  // 27px from row top → chevron top 21px).
+  // Sprint 17 — thread chevron 从外层 div 移到 EmailRow grid 第一格 (.email-row
+  // > .thread-chevron-cell). flag / done / selected wash + 未读 dot 现在共享同
+  // 一个 article 容器, 染色和定位能 cover chevron 区域. data-thread='head|child|
+  // none' 在 EmailRow article 上, CSS 据此渲染竖向 tether 线 (child).
   const t = item.thread
   const isHead = t?.isHead === true
   const isChild = t !== undefined && !t.isHead
-  return (
-    <div
-      style={style}
-      className="thread-row-wrap flex items-stretch"
-      data-selected={item.bundleSelected ? 'true' : 'false'}
-      data-child={isChild ? 'true' : 'false'}
-    >
-      <div className="thread-col w-6 shrink-0 relative">
-        {isHead && (
-          // Sprint 14 round 16 — clicking anywhere in the chevron column
-          // both selects the head email AND toggles the thread bundle.
-          // Previous behaviour: chevron only toggled, so users hitting
-          // the left edge of a head row got no selection ("有时候无法
-          // 点到需要的母邮件").  Combining the two actions on one click
-          // matches the intent ("点这条线程"): become active + expand /
-          // collapse.  Body area of the row (avatar/sender/etc) still
-          // does a pure select via EmailRow's own onClick.
-          <button
-            type="button"
-            aria-label="toggle-thread"
-            aria-expanded={t!.expanded}
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleThread(t!.threadId)
+  const threadChevron = t
+    ? {
+        isHead,
+        isChild,
+        // 仅 head 行有 expanded 字段; child 不渲染 chevron 所以 false 即可
+        expanded: t.isHead ? t.expanded : false,
+        onToggle: isHead
+          ? () => {
+              onToggleThread(t.threadId)
               onSelect(item.email.internal_id)
-            }}
-            className={cn(
-              'absolute inset-0 flex items-start justify-center pt-[21px]',
-              'text-ink-fg-2 hover:text-ink-fg',
-              'transition-colors duration-fast'
-            )}
-          >
-            <ChevronDown
-              size={12}
-              strokeWidth={2}
-              className={cn(
-                'transition-transform duration-base ease-out',
-                t!.expanded ? 'rotate-0' : '-rotate-90'
-              )}
-            />
-          </button>
-        )}
-        {isChild && (
-          // Thin vertical tether tying child rows to their head.
-          <span aria-hidden className="absolute top-0 bottom-0 left-3 w-px bg-ink-border-soft" />
-        )}
-      </div>
-      <div className="flex-1 min-w-0">
-        <EmailRow
-          email={item.email}
-          // Sprint 14 round 11 — selected = thread-wide. Wrapper paints
-          // the wash + bar so EmailRow stays visually neutral but still
-          // emits the right a11y / data-state.
-          selected={item.bundleSelected}
-          isNew={newIds.has(item.email.internal_id)}
-          noAvatar={isChild}
-          // Sprint 14 round 16 — children also show snippet + AI strip
-          // when the data is available (visible-set children come from
-          // listEnriched and DO carry it; cross-mailbox supplement
-          // children carry minimal data so those rows just render
-          // shorter on their own).  Removed the blanket `compact`
-          // suppression — content parity with the head is the goal.
-          onSelect={() => onSelect(item.email.internal_id)}
-        />
-      </div>
+            }
+          : undefined
+      }
+    : undefined
+  return (
+    <div style={style}>
+      <EmailRow
+        email={item.email}
+        selected={item.bundleSelected}
+        isNew={newIds.has(item.email.internal_id)}
+        noAvatar={isChild}
+        threadChevron={threadChevron}
+        onSelect={() => onSelect(item.email.internal_id)}
+      />
     </div>
   )
 }
@@ -693,17 +649,15 @@ export function EmailList(): React.ReactElement {
 
   // Sprint 14 round 9 — thread bundling. Same thread_id rows roll up
   // under their newest message; the user toggles each bundle with the
-  // prepended chevron.  Default = expanded (Outlook behaviour); only
-  // explicit user clicks add an entry to `threadCollapsed`.
-  const [threadCollapsed, setThreadCollapsed] = useState<ReadonlySet<string>>(() => new Set())
-  const toggleThread = useCallback((threadId: string) => {
-    setThreadCollapsed((prev) => {
-      const next = new Set(prev)
-      if (next.has(threadId)) next.delete(threadId)
-      else next.add(threadId)
-      return next
-    })
-  }, [])
+  // prepended chevron. Default = expanded (Outlook behaviour); explicit
+  // user clicks add an entry to `threadCollapsed`.
+  //
+  // Sprint 17 — 从 useState 迁到 zustand + localStorage 持久化 (用户反馈
+  // "邮件展开折叠状态似乎没有记忆, 老是忽然自己展开了"). React state 在
+  // route 切换 / SSE invalidate / pnpm dev HMR 时会重置, store 保活到
+  // localStorage 跨会话恒久.
+  const threadCollapsed = useThreadCollapse((s) => s.collapsed)
+  const toggleThread = useThreadCollapse((s) => s.toggle)
 
   // Sprint 14 round 11 — cross-mailbox thread completion.  listEnriched
   // is mailbox-scoped, so a thread that spans inbox + outbox shows up

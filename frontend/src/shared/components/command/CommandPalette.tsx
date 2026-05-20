@@ -1,231 +1,333 @@
-// Sprint 7 D3 — ⌘K Command Palette.
+// Search-module 1:1 mockup-search.html — ⌘K command palette + jump.
 //
-// Surfaces three command categories at once:
-//   1. Navigation — /inbox · /search · /admin · /llm · /calendar · /settings
-//   2. Mailbox switch — every mailbox from the live `email:listMailboxes` IPC
-//   3. Email search — first 8 hits from the live FTS5 search (debounced
-//      250ms) when the input has 2+ chars
+// Replaces the Sprint 7 D3 / Sprint 9 D4 simplified palette. This rewrite
+// brings the visual + interaction model strictly in line with the design
+// SSoT at frontend/ref/mockup-search.html: a 720px glass-pop overlay on
+// top of a soft-blurred app backdrop, with three result groups (JUMP /
+// EMAIL / AI ACTIONS) and continuous keyboard navigation across them.
 //
-// Karpathy simplicity: no `cmdk` dep. Substring filtering is enough for
-// our command count (~10 items); FTS5 search is already debounced server-
-// side via tanstack-query staleTime. Total surface < 350 LoC.
+// Surface stack drawn over the live app:
+//   .palette-veil (z 40) — inset 36px / 24px so title bar + status bar stay
+//                          interactive; backdrop-filter blurs whatever was
+//                          behind, dimmed by ink-0/55. Click dismisses.
+//   .palette-pane (z 50) — 720px centered glass-pop with input + scrollable
+//                          result list + footer (kbd hints + FTS5 stats).
 //
-// Keyboard:
-//   Esc                   → close
-//   ↑ / ↓                 → move highlight (+ scroll into view)
-//   Enter                 → execute highlighted
-//   Tab / Shift+Tab       → cycle focus inside the palette
-//                           (querySelectorAll focus-trap, same pattern as
-//                            KeyboardHelpModal + ResyncConfirmDialog)
+// Result groups (always rendered in this order, empties skipped):
+//   1. JUMP — top mailboxes (filtered by current query if any) + "open AI
+//      panel" + Admin kanban shortcut. Cheap reads, no IPC bombing.
+//   2. EMAIL — FTS5 hits, max MAX_EMAIL_HITS. subject + sender lang-pip +
+//      priority chip + time, plus snippet (already <mark>-tagged by the
+//      backend snippet() call). Subject highlighted client-side via
+//      highlightTerms util — backend snippet() only covers body_markdown.
+//   3. AI ACTIONS — only when EMAIL has hits. Currently markAllRead +
+//      reRunAi are wired; summarize is held with a Soon pill until the
+//      AIChatPanel learns batch context.
 //
-// A11y: input has role=combobox + aria-haspopup=listbox + aria-controls +
-// aria-activedescendant pointing to the highlighted option id. Each option
-// row carries role=option + aria-selected + an id of `palette-opt-<idx>`
-// so VoiceOver / NVDA actually announces the highlighted command.
+// Keyboard contract:
+//   Esc           → close palette
+//   ↑ / ↓         → continuous flat index over [jump,email,actions]
+//   Tab / Shift+Tab → jump to first row of next / previous non-empty group
+//   Enter         → run() the highlighted entry
+//   ⌘Enter        → V1 alias of Enter (true "new window" pop-out is a
+//                   future detail-window sprint; mockup line 1003 hints
+//                   at it via `pal-hint`)
+//
+// FTS5 + Chinese:
+//   - debounced 250ms via useDebouncedValue
+//   - normalizeFtsQuery (shared util) appends `*` to trailing CJK token
+//     so `产品` matches `本周产品评审` — fixes the pre-rewrite palette bug
+//     where this normalisation lived only inside SearchPage.
+//
+// Persistence:
+//   localStorage `mailagent.search.lastQuery` — restored on every open
+//   transition (Linear / Raycast pattern, mockup line 1289-1313).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useFocusTrap } from '@shared/hooks/useFocusTrap'
+import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
 import {
-  ArrowRight,
   BarChart3,
-  CalendarDays,
-  Cog,
-  Inbox,
+  Check,
+  Folder,
+  History,
   Mail,
+  RotateCcw,
   Search as SearchIcon,
-  Sparkles
+  Sparkle,
+  X
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
+import { showAIChatPanel } from '@shared/state/ai-chat-panel'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
+import { toastError, toastSuccess } from '@shared/state/toast'
+import { normalizeFtsQuery } from '@shared/lib/search_query'
+import { extractTerms, highlightTerms } from '@shared/lib/highlight_terms'
+import { parseSender } from '@shared/lib/mail_parse'
+import { formatRelativeTime } from '@shared/format'
+import type { AIPriority, MailboxSummary, SearchHit, SearchResult } from '@shared/api/types'
 
-type CommandKind = 'nav' | 'mailbox' | 'search'
+// ─── Tunables ──────────────────────────────────────────────────────────
 
-interface Command {
-  id: string
-  kind: CommandKind
-  /** Display label. */
-  label: string
-  /** Optional secondary line (route path, snippet, etc). */
-  hint?: string
-  icon: React.ReactNode
-  run: () => void
+const LAST_QUERY_KEY = 'mailagent.search.lastQuery'
+const MAX_EMAIL_HITS = 8
+const MAX_JUMP_MAILBOXES = 3
+const DEBOUNCE_MS = 250
+const CJK_RATIO_THRESHOLD = 0.4
+const CJK_RE = /[一-鿿㐀-䶿豈-﫿぀-ヿ]/g
+// DOMPurify Config uses mutable arrays — keep the literals plain so the
+// types match without an `as const` cast (which would mark them readonly).
+const SNIPPET_PURIFY: DOMPurifyConfig = { ALLOWED_TAGS: ['mark'], ALLOWED_ATTR: [] }
+
+const PRIORITY_LABEL: Record<AIPriority, string> = {
+  critical: 'CRITICAL',
+  urgent: 'URGENT',
+  important: 'IMPORTANT',
+  normal: 'NORMAL',
+  low: 'LOW'
+}
+const PRIORITY_CLASS: Record<AIPriority, string> = {
+  critical: 'text-crit bg-crit/15 border-crit/30',
+  urgent: 'text-urg bg-urg/15 border-urg/30',
+  important: 'text-impt bg-impt/15 border-impt/30',
+  normal: 'text-norm bg-norm/15 border-norm/30',
+  low: 'text-low bg-low/15 border-low/30'
 }
 
-interface NavSpec {
-  id: string
-  labelKey: string
-  to: '/' | '/admin/llm' | '/admin/kanban' | '/admin/calendar' | '/settings'
-  icon: React.ReactNode
-}
+type Group = 'jump' | 'email' | 'actions'
 
-// Sprint 11 V1.4 — route reorg: `/admin/{llm,kanban,calendar}` replaced the
-// flat `/admin /llm /calendar`. palette.nav.admin still labels the dead-letter
-// dashboard; its target is now /admin/kanban.
-const NAV_COMMANDS: ReadonlyArray<NavSpec> = [
-  {
-    id: 'inbox',
-    labelKey: 'palette.nav.inbox',
-    to: '/',
-    icon: <Inbox size={14} strokeWidth={1.75} />
-  },
-  // Sprint 14+ — /search route 已移除, search 现在直接走本 palette overlay
-  // (see router-instance.tsx:9); 不需要导航条目.
-  {
-    id: 'admin',
-    labelKey: 'palette.nav.admin',
-    to: '/admin/kanban',
-    icon: <BarChart3 size={14} strokeWidth={1.75} />
-  },
-  {
-    id: 'llm',
-    labelKey: 'palette.nav.llm',
-    to: '/admin/llm',
-    icon: <Sparkles size={14} strokeWidth={1.75} />
-  },
-  {
-    id: 'calendar',
-    labelKey: 'palette.nav.calendar',
-    to: '/admin/calendar',
-    icon: <CalendarDays size={14} strokeWidth={1.75} />
-  },
-  {
-    id: 'settings',
-    labelKey: 'palette.nav.settings',
-    to: '/settings',
-    icon: <Cog size={14} strokeWidth={1.75} />
-  }
-]
+// ─── Tiny helpers ──────────────────────────────────────────────────────
+
+function detectLang(s: string): 'zh' | 'en' {
+  if (!s) return 'en'
+  const matches = s.match(CJK_RE)
+  const ratio = matches ? matches.length / s.length : 0
+  return ratio >= CJK_RATIO_THRESHOLD ? 'zh' : 'en'
+}
 
 function useDebouncedValue<T>(value: T, ms: number): T {
   const [v, setV] = useState(value)
   useEffect(() => {
-    const t = setTimeout(() => setV(value), ms)
-    return (): void => clearTimeout(t)
+    const tid = window.setTimeout(() => setV(value), ms)
+    return (): void => window.clearTimeout(tid)
   }, [value, ms])
   return v
 }
 
-function substringMatch(haystack: string, needle: string): boolean {
-  if (needle.length === 0) return true
-  return haystack.toLowerCase().includes(needle.toLowerCase())
+function safeRead(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? ''
+  } catch {
+    return ''
+  }
+}
+function safeWrite(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* privacy mode — drop the persist, in-memory state still works */
+  }
 }
 
-// Sprint 10 visual review H-1 — FTS5 `snippet()` wraps hits in literal
-// `<mark>...</mark>` tags so SearchPage can DOMPurify them into a coral
-// highlight. Palette renders the hint as plain text, so without this strip
-// users see literal "<mark>meeting</mark>" inside the row. Strip the tag
-// pair but keep the highlighted substring untouched.
-function stripMarkTags(input: string | null | undefined): string {
-  if (!input) return ''
-  return input.replace(/<\/?mark>/gi, '')
+function shortTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  try {
+    return formatRelativeTime(iso)
+  } catch {
+    return ''
+  }
 }
+
+// ─── Small subcomponents ───────────────────────────────────────────────
+
+interface GroupHeaderProps {
+  title: string
+  countLabel?: string
+  subtitle?: string
+  aside?: React.ReactNode
+}
+
+function GroupHeader({ title, countLabel, subtitle, aside }: GroupHeaderProps): React.ReactElement {
+  // Mockup line 750-754 — UPPERCASE mono ASCII titles ("Jump" / "Email" /
+  // "AI Actions"). DESIGN.md §14 forbids CJK in mono so the title literal
+  // stays English even under zh-CN; right-hand subtitle / aside can be
+  // localised because they render at normal-case body weight.
+  return (
+    <h2 className="text-micro font-mono uppercase tracking-[0.08em] text-ink-fg-2 px-5 py-1.5 flex items-center gap-2">
+      <span>{title}</span>
+      {countLabel !== undefined && (
+        <>
+          <span className="text-ink-fg-3">·</span>
+          <span className="text-ink-fg-3 tabular-nums">{countLabel}</span>
+        </>
+      )}
+      {subtitle && (
+        <>
+          <span className="text-ink-fg-3">·</span>
+          <span className="text-ink-fg-3 normal-case tracking-normal">{subtitle}</span>
+        </>
+      )}
+      {aside && (
+        <span className="ml-auto flex items-center gap-1.5 text-ink-fg-3 normal-case tracking-normal">
+          {aside}
+        </span>
+      )}
+    </h2>
+  )
+}
+
+function KbdHint({ keys, label }: { keys: string; label: string }): React.ReactElement {
+  return (
+    <span className="flex items-center gap-1.5">
+      <kbd className="text-micro font-mono px-1 py-px rounded bg-ink-fg/[0.06] border border-ink-border text-ink-fg-1 leading-none">
+        {keys}
+      </kbd>
+      <span className="normal-case">{label}</span>
+    </span>
+  )
+}
+
+function FooterDot(): React.ReactElement {
+  return <span className="text-ink-fg-3">·</span>
+}
+
+// ─── Main component ────────────────────────────────────────────────────
 
 export function CommandPalette(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useCommandPalette((s) => s.open)
   const mailApi = useMailApi()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const setActiveMailbox = useMailbox((s) => s.setActive)
-
   const setActiveEmail = useActiveEmail((s) => s.setActive)
 
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
-  // Track previous open state to reset query/highlight inside render on
-  // open transitions (react.dev "Adjusting state on prop change") — keeps
-  // the renderer from doing a flash of stale data and avoids the
-  // `react-hooks/set-state-in-effect` lint that a useEffect+setState would
-  // trigger.
+  const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
+  const [actionRunning, setActionRunning] = useState<string | null>(null)
+  // Adjust-on-prop-change pattern (react.dev): reset query + highlight when
+  // the palette transitions closed→open. Prefer lastQuery prefill so the
+  // user can rebound to whatever they had typed last session.
   const [prevOpen, setPrevOpen] = useState(open)
   if (prevOpen !== open) {
     setPrevOpen(open)
     if (open) {
-      setQuery('')
+      const prefill = safeRead(LAST_QUERY_KEY)
+      setQuery(prefill)
       setHighlight(0)
+      setLastLatencyMs(null)
+      setActionRunning(null)
     }
   }
-  const debouncedQuery = useDebouncedValue(query, 250)
+
   const inputRef = useRef<HTMLInputElement>(null)
-  // Sprint 9 D4.1 — shared focus-trap hook. Replaces the inline
-  // querySelectorAll Tab cycle that previously lived in onKeyDown.
+  const veilRef = useRef<HTMLDivElement>(null)
   const { dialogRef, handleTab } = useFocusTrap({ open })
 
-  // Focus the input on every open transition. The reset lives in the
-  // adjust-on-prop-change block above; this effect's only job is the
-  // imperative DOM call (allowed inside an effect — it's the documented
-  // pattern for synchronizing with external systems like the focus model).
-  // The outer dialog div carries tabIndex={-1} so if focus somehow exits
-  // the palette (e.g. a Tab through a future cmdk-style tool row), the
-  // backdrop is still a valid keydown target.
+  // Focus input on open transition + persist query on every change.
   useEffect(() => {
     if (!open) return
-    const id = window.setTimeout(() => inputRef.current?.focus(), 0)
-    return (): void => window.clearTimeout(id)
+    const tid = window.setTimeout(() => inputRef.current?.focus(), 0)
+    return (): void => window.clearTimeout(tid)
   }, [open])
+  useEffect(() => {
+    if (!open) return
+    safeWrite(LAST_QUERY_KEY, query)
+  }, [open, query])
 
-  // Mailboxes — cheap (cached in the same query the Sidebar uses).
+  const debouncedRaw = useDebouncedValue(query, DEBOUNCE_MS)
+  const normalised = useMemo(() => normalizeFtsQuery(debouncedRaw), [debouncedRaw])
+  const queryTerms = useMemo(() => extractTerms(debouncedRaw), [debouncedRaw])
+  const lang = detectLang(query)
+  const langLabel = lang === 'zh' ? t('palette.lang.zh') : t('palette.lang.en')
+
   const mailboxesQ = useQuery({
     queryKey: ['mailboxes'],
     queryFn: () => mailApi.email.listMailboxes(),
     staleTime: 30_000,
     enabled: open
   })
-  // FTS5 search results — only when 2+ chars typed.
-  // Sprint 9 D4.2 (Sprint 7 review LOW #3) — explicit `placeholderData:
-  // undefined` so a stale snippet from the previous query doesn't render
-  // under the new query string while react-query refetches. tanstack v5's
-  // default is already `undefined` (no carry-over), but setting it
-  // explicitly documents intent and protects against a future default
-  // flip to `keepPreviousData` style behaviour.
-  const searchQ = useQuery({
-    queryKey: ['palette', 'search', debouncedQuery],
-    queryFn: () =>
-      mailApi.email.search({
-        query: debouncedQuery.trim(),
-        limit: 8
-      }),
+  const mailboxes: MailboxSummary[] = mailboxesQ.data ?? []
+
+  // Single search query covers both "user typed something" and "open the
+  // palette to baseline-load total_indexed for the footer". The IPC handler
+  // returns empty items + cached COUNT in ~1ms for blank queries.
+  const searchQ = useQuery<SearchResult>({
+    queryKey: ['palette', 'search', normalised],
+    queryFn: async () => {
+      const isEmpty = normalised.length === 0
+      const t0 = performance.now()
+      const r = await mailApi.email.search({
+        query: isEmpty ? '' : normalised,
+        limit: isEmpty ? 0 : MAX_EMAIL_HITS
+      })
+      if (!isEmpty) {
+        setLastLatencyMs(Math.round(performance.now() - t0))
+      }
+      return r
+    },
     staleTime: 30_000,
     placeholderData: undefined,
-    enabled: open && debouncedQuery.trim().length >= 2
+    enabled: open
   })
 
-  // Build the flat command list (filtered by `query`).
-  const commands: Command[] = useMemo(() => {
-    const out: Command[] = []
+  const hits: SearchHit[] = searchQ.data?.items ?? []
+  const totalIndexed = searchQ.data?.total_indexed ?? null
+  const isSearching = searchQ.isFetching && normalised.length > 0
 
-    for (const nav of NAV_COMMANDS) {
-      const label = t(nav.labelKey)
-      if (!substringMatch(label, query)) continue
-      out.push({
-        id: `nav:${nav.id}`,
-        kind: 'nav',
-        label,
-        hint: nav.to,
-        icon: nav.icon,
-        run: () => {
-          closeCommandPalette()
-          void navigate({ to: nav.to })
-        }
-      })
-    }
+  // ──────────────────────────────────────────────────────────────────
+  // JUMP items — mailbox-matches + open-AI-panel + admin shortcut
+  // ──────────────────────────────────────────────────────────────────
 
-    for (const mb of mailboxesQ.data ?? []) {
-      const label = t('palette.mailbox.go', { name: mb.mailbox })
-      if (!substringMatch(label, query) && !substringMatch(mb.mailbox, query)) continue
+  interface JumpRow {
+    id: string
+    icon: React.ReactNode
+    label: React.ReactNode
+    aside?: React.ReactNode
+    run(): void
+  }
+
+  const jumpItems: JumpRow[] = useMemo(() => {
+    const out: JumpRow[] = []
+    const q = debouncedRaw.trim()
+    const baseList =
+      q.length === 0
+        ? mailboxes.slice(0, MAX_JUMP_MAILBOXES)
+        : mailboxes
+            .filter((m) => m.mailbox.toLowerCase().includes(q.toLowerCase()))
+            .slice(0, MAX_JUMP_MAILBOXES)
+
+    for (const mb of baseList) {
+      const matchedCount = hits.filter((h) => h.mailbox === mb.mailbox).length
+      const showMatch = q.length > 0 && matchedCount > 0
+      const trailing = showMatch
+        ? t('palette.mailbox.matchedSuffix', { query: q, n: matchedCount })
+        : t('palette.mailbox.hint', { unread: mb.unread, total: mb.total })
       out.push({
         id: `mailbox:${mb.mailbox}`,
-        kind: 'mailbox',
-        label,
-        hint: t('palette.mailbox.hint', { unread: mb.unread, total: mb.total }),
-        icon: <Mail size={14} strokeWidth={1.75} />,
+        icon: <Folder size={14} strokeWidth={1.75} />,
+        label: (
+          <span className="text-body flex-1 truncate">
+            <span className="text-ink-fg font-medium">{mb.mailbox}</span>
+            <span className="text-ink-fg-3 mx-1">·</span>
+            <span className="text-ink-fg-2">{trailing}</span>
+          </span>
+        ),
+        aside:
+          mb.unread > 0 ? (
+            <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
+              {mb.unread} unread
+            </span>
+          ) : null,
         run: () => {
           closeCommandPalette()
           setActiveMailbox(mb.mailbox)
@@ -234,41 +336,195 @@ export function CommandPalette(): React.ReactElement | null {
       })
     }
 
-    // SearchResult = { items: SearchHit[]; total_indexed: number } —
-    // 解构到 items 拿数组 (types.ts:52); total_indexed 由 footer 单独显示.
-    for (const hit of searchQ.data?.items ?? []) {
+    // Always offer the AI panel jump + admin kanban shortcut as static rows
+    // so users can ⌘K → ⏎ to surface them without typing.
+    out.push({
+      id: 'jump:ai-history',
+      icon: <History size={14} strokeWidth={1.75} />,
+      label: (
+        <span className="text-body flex-1 truncate">
+          <span className="text-ink-fg font-medium">{t('palette.jump.aiHistory')}</span>
+          <span className="text-ink-fg-3 mx-1">·</span>
+          <span className="text-ink-fg-2">{t('palette.jump.aiHistoryMeta')}</span>
+        </span>
+      ),
+      run: () => {
+        closeCommandPalette()
+        showAIChatPanel()
+      }
+    })
+    out.push({
+      id: 'jump:admin',
+      icon: <BarChart3 size={14} strokeWidth={1.75} />,
+      label: (
+        <span className="text-body flex-1 truncate">
+          <span className="text-ink-fg font-medium">{t('palette.jump.admin')}</span>
+          <span className="text-ink-fg-3 mx-1">·</span>
+          <span className="text-ink-fg-2">{t('palette.jump.adminMeta', { n: 0 })}</span>
+        </span>
+      ),
+      run: () => {
+        closeCommandPalette()
+        void navigate({ to: '/admin/kanban' })
+      }
+    })
+    return out
+  }, [debouncedRaw, hits, mailboxes, navigate, setActiveMailbox, t])
+
+  // ──────────────────────────────────────────────────────────────────
+  // AI ACTIONS — wired markAllRead + reRunAi; summarize disabled with Soon
+  // ──────────────────────────────────────────────────────────────────
+
+  interface ActionRow {
+    id: string
+    icon: React.ReactNode
+    label: string
+    meta: string
+    iconTone: 'ok' | 'info' | 'coral'
+    disabled?: boolean
+    soon?: boolean
+    run(): Promise<void>
+  }
+
+  const actionItems: ActionRow[] = useMemo(() => {
+    if (hits.length === 0) return []
+    const ids = hits.map((h) => h.internal_id)
+    return [
+      {
+        id: 'action:markAllRead',
+        iconTone: 'ok',
+        icon: <Check size={14} strokeWidth={1.75} />,
+        label: t('palette.actions.markAllRead'),
+        meta: t('palette.actions.markAllReadMeta', { n: hits.length }),
+        async run() {
+          setActionRunning('action:markAllRead')
+          try {
+            await mailApi.email.flag(null, {
+              ids,
+              isRead: true,
+              allowConcurrent: true
+            })
+            toastSuccess(t('palette.actions.doneToast', { n: hits.length }))
+            await queryClient.invalidateQueries({ queryKey: ['emails'] })
+            closeCommandPalette()
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            toastError(t('palette.actions.errToast'), msg)
+          } finally {
+            setActionRunning(null)
+          }
+        }
+      },
+      {
+        id: 'action:reRunAi',
+        iconTone: 'info',
+        icon: <RotateCcw size={14} strokeWidth={1.75} />,
+        label: t('palette.actions.reRunAi'),
+        meta: t('palette.actions.reRunAiMeta', { n: hits.length }),
+        async run() {
+          setActionRunning('action:reRunAi')
+          try {
+            const settled = await Promise.allSettled(
+              hits.map((h) => mailApi.llm.run(h.internal_id, { force: true }))
+            )
+            const ok = settled.filter((r) => r.status === 'fulfilled').length
+            if (ok < hits.length) {
+              const firstErr = settled.find((r) => r.status === 'rejected') as
+                | PromiseRejectedResult
+                | undefined
+              const msg = firstErr ? String(firstErr.reason) : ''
+              toastError(t('palette.actions.errToast'), `${ok}/${hits.length} · ${msg}`)
+            } else {
+              toastSuccess(t('palette.actions.doneToast', { n: ok }))
+            }
+            await queryClient.invalidateQueries({ queryKey: ['emails'] })
+            closeCommandPalette()
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            toastError(t('palette.actions.errToast'), msg)
+          } finally {
+            setActionRunning(null)
+          }
+        }
+      },
+      {
+        id: 'action:summarize',
+        iconTone: 'coral',
+        icon: <Sparkle size={14} strokeWidth={1.75} />,
+        label: t('palette.actions.summarize'),
+        meta: t('palette.actions.summarizeMeta', { n: hits.length }),
+        disabled: true,
+        soon: true,
+        async run() {
+          /* disabled — wired in a future sprint when AIChatPanel accepts batch context */
+        }
+      }
+    ]
+  }, [hits, mailApi, queryClient, t])
+
+  // ──────────────────────────────────────────────────────────────────
+  // Flat index for ↑↓ + Tab keyboard navigation
+  // ──────────────────────────────────────────────────────────────────
+
+  interface FlatEntry {
+    group: Group
+    indexInGroup: number
+    disabled?: boolean
+    run(): void | Promise<void>
+  }
+
+  const flat: FlatEntry[] = useMemo(() => {
+    const out: FlatEntry[] = []
+    jumpItems.forEach((j, i) => out.push({ group: 'jump', indexInGroup: i, run: j.run }))
+    hits.forEach((h, i) =>
       out.push({
-        id: `search:${hit.internal_id}`,
-        kind: 'search',
-        label: hit.subject ?? t('palette.search.untitled'),
-        hint: stripMarkTags(hit.snippet) || hit.sender || '',
-        icon: <SearchIcon size={14} strokeWidth={1.75} className="text-coral" />,
-        // Sprint 8 §2.2 (Sprint 7 ship-review MEDIUM #3) — Enter on a search
-        // hit now selects the email and navigates to /inbox so the
-        // EmailDetail pane lands on the right row. The previous "back to
-        // /search" path forced the user to re-type their query and click
-        // the result a second time, which broke the only useful path
-        // through the palette.
+        group: 'email',
+        indexInGroup: i,
         run: () => {
           closeCommandPalette()
-          setActiveEmail(hit.internal_id)
+          setActiveEmail(h.internal_id)
           void navigate({ to: '/' })
         }
       })
-    }
-
+    )
+    actionItems.forEach((a, i) =>
+      out.push({
+        group: 'actions',
+        indexInGroup: i,
+        disabled: a.disabled,
+        run: () => a.run()
+      })
+    )
     return out
-  }, [t, query, mailboxesQ.data, searchQ.data, navigate, setActiveMailbox, setActiveEmail])
+  }, [jumpItems, hits, actionItems, navigate, setActiveEmail])
 
-  // Clamp highlight inside render — same "Adjusting state on prop change"
-  // pattern. Reading `commands.length` directly during render keeps the
-  // displayed highlight consistent with the (just-derived) list size, with
-  // no extra frame where a stale index points past the end.
-  if (commands.length > 0 && highlight >= commands.length) {
-    setHighlight(Math.max(0, commands.length - 1))
-  } else if (commands.length === 0 && highlight !== 0) {
+  // Clamp highlight in render (no extra paint cycle).
+  if (flat.length > 0 && highlight >= flat.length) {
+    setHighlight(Math.max(0, flat.length - 1))
+  } else if (flat.length === 0 && highlight !== 0) {
     setHighlight(0)
   }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Keyboard handler
+  // ──────────────────────────────────────────────────────────────────
+
+  const jumpToGroupBoundary = useCallback(
+    (forward: boolean) => {
+      if (flat.length === 0) return
+      const order: Group[] = ['jump', 'email', 'actions']
+      const present = order.filter((g) => flat.some((f) => f.group === g))
+      if (present.length <= 1) return
+      const curGroup = flat[highlight]?.group ?? present[0]
+      const idx = present.indexOf(curGroup)
+      const nextGroup = forward
+        ? present[(idx + 1) % present.length]
+        : present[(idx - 1 + present.length) % present.length]
+      const target = flat.findIndex((f) => f.group === nextGroup)
+      if (target >= 0) setHighlight(target)
+    },
+    [flat, highlight]
+  )
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -279,68 +535,84 @@ export function CommandPalette(): React.ReactElement | null {
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setHighlight((h) => (commands.length === 0 ? 0 : (h + 1) % commands.length))
+        if (flat.length === 0) return
+        setHighlight((h) => (h + 1) % flat.length)
         return
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setHighlight((h) =>
-          commands.length === 0 ? 0 : (h - 1 + commands.length) % commands.length
-        )
+        if (flat.length === 0) return
+        setHighlight((h) => (h - 1 + flat.length) % flat.length)
         return
       }
       if (e.key === 'Enter') {
         e.preventDefault()
-        const cmd = commands[highlight]
-        if (cmd) cmd.run()
+        const entry = flat[highlight]
+        if (entry && !entry.disabled) void entry.run()
         return
       }
-      // Sprint 9 D4.1 — Tab cycle delegated to useFocusTrap. Behaviour
-      // (forward + reverse wrap with `!root.contains(active)` guard)
-      // unchanged.
       if (e.key === 'Tab') {
-        handleTab(e)
+        if (flat.length === 0) {
+          handleTab(e)
+          return
+        }
+        e.preventDefault()
+        jumpToGroupBoundary(!e.shiftKey)
       }
     },
-    [commands, highlight, handleTab]
+    [flat, handleTab, highlight, jumpToGroupBoundary]
   )
 
-  // Sprint 7 review (opus MEDIUM) — scroll the highlighted option into view
-  // so ArrowDown past the visible viewport doesn't strand the user. Uses
-  // `block: 'nearest'` so the input + already-visible rows don't jitter.
+  // Scroll highlighted option into view (keyboard nav past viewport).
   useEffect(() => {
     if (!open) return
     const root = dialogRef.current
     if (!root) return
-    const opt = root.querySelector<HTMLElement>(`#palette-opt-${highlight}`)
+    const opt = root.querySelector<HTMLElement>(`[data-flat-idx="${highlight}"]`)
     opt?.scrollIntoView({ block: 'nearest' })
-    // `dialogRef` is a stable ref object from useFocusTrap (its identity
-    // never changes across renders), so including it in deps is a no-op
-    // at runtime while satisfying the exhaustive-deps rule.
   }, [open, highlight, dialogRef])
 
   if (!open) return null
 
+  const hasHits = hits.length > 0
+  const hasQuery = normalised.length > 0
+  const countLabel =
+    totalIndexed === null
+      ? `${hits.length}`
+      : t('palette.email.countLabel', { n: hits.length, total: totalIndexed })
+
+  // Pre-compute flat index offsets for each group so renderer can stamp
+  // data-flat-idx without recomputing during the map.
+  let cursor = 0
+  const jumpStartIdx = cursor
+  cursor += jumpItems.length
+  const emailStartIdx = cursor
+  cursor += hits.length
+  const actionStartIdx = cursor
+
   return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={t('palette.aria.label')}
-      tabIndex={-1}
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[14vh] focus:outline-none"
-      onClick={closeCommandPalette}
-      onKeyDown={onKeyDown}
-    >
+    <>
+      {/* ─ Veil — soft dim + blur of the app behind. Click dismisses. ─ */}
       <div
+        ref={veilRef}
+        className="palette-veil"
+        role="presentation"
+        onClick={closeCommandPalette}
+      />
+
+      {/* ─ Pane — the actual palette dialog. ─ */}
+      <section
         ref={dialogRef}
-        onClick={(e) => e.stopPropagation()}
-        className={cn(
-          'w-[560px] max-h-[60vh] rounded-lg bg-ink-2 border border-ink-border',
-          'shadow-[0_8px_24px_rgba(0,0,0,0.35)] flex flex-col overflow-hidden'
-        )}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('palette.aria.label')}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+        className="palette-pane glass-pop"
       >
-        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-ink-border-soft">
-          <SearchIcon size={14} strokeWidth={1.75} className="text-ink-fg-2" />
+        {/* Input row */}
+        <div className="px-4 h-12 flex items-center gap-3 border-b border-ink-border-soft shrink-0">
+          <SearchIcon size={15} strokeWidth={2} className="text-ink-fg-2 shrink-0" />
           <input
             ref={inputRef}
             type="text"
@@ -348,60 +620,357 @@ export function CommandPalette(): React.ReactElement | null {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('palette.placeholder')}
+            autoComplete="off"
+            spellCheck={false}
             aria-autocomplete="list"
-            aria-haspopup="listbox"
-            aria-expanded={true}
             aria-controls="palette-listbox"
-            aria-activedescendant={commands.length > 0 ? `palette-opt-${highlight}` : undefined}
-            className={cn(
-              'flex-1 bg-transparent text-body text-ink-fg placeholder:text-ink-fg-3',
-              'focus:outline-none'
-            )}
+            aria-expanded={true}
+            aria-activedescendant={flat.length > 0 ? `palette-opt-${highlight}` : undefined}
+            className="palette-input flex-1"
           />
-          <kbd className="text-meta font-mono text-ink-fg-3 px-1.5 py-0.5 rounded border border-ink-border">
-            Esc
-          </kbd>
+          <span
+            className="lang-pip shrink-0"
+            title={t('palette.lang.detected')}
+            aria-label={t('palette.lang.detected')}
+          >
+            {langLabel}
+          </span>
+          {query.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setQuery('')
+                inputRef.current?.focus()
+              }}
+              title="Clear"
+              aria-label="Clear search"
+              className="text-ink-fg-2 hover:text-ink-fg p-1 rounded hover:bg-ink-fg/[0.08] transition shrink-0"
+            >
+              <X size={14} strokeWidth={2} />
+            </button>
+          )}
         </div>
+
+        {/* Result body */}
         <ul
           id="palette-listbox"
           role="listbox"
           aria-label={t('palette.aria.list')}
-          className="flex-1 overflow-y-auto scrollbar-thin"
+          className="flex-1 overflow-y-auto scrollbar-thin py-2"
         >
-          {commands.length === 0 && (
-            <li className="px-3 py-6 text-aux text-ink-fg-2 text-center">
-              {searchQ.isFetching && debouncedQuery.length >= 2
-                ? t('palette.searching')
-                : t('palette.noResults')}
-            </li>
+          {/* JUMP group */}
+          {jumpItems.length > 0 && (
+            <>
+              <GroupHeader title="Jump" countLabel={String(jumpItems.length)} />
+              <div className="px-3 space-y-px">
+                {jumpItems.map((j, i) => {
+                  const idx = jumpStartIdx + i
+                  const selected = idx === highlight
+                  return (
+                    <li
+                      key={j.id}
+                      role="option"
+                      id={`palette-opt-${idx}`}
+                      data-flat-idx={idx}
+                      aria-selected={selected}
+                      onMouseEnter={() => setHighlight(idx)}
+                      onClick={j.run}
+                      className={cn('pal-row', selected && 'is-selected')}
+                    >
+                      <span className="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+                        {j.icon}
+                      </span>
+                      {j.label}
+                      {j.aside && <span className="shrink-0 mr-2">{j.aside}</span>}
+                      <span className="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0">
+                        <kbd className="text-micro font-mono px-1 py-px rounded bg-ink-fg/[0.06] border border-ink-border text-ink-fg-1 leading-none">
+                          ⏎
+                        </kbd>
+                        <span>{t('palette.kbd.open')}</span>
+                      </span>
+                    </li>
+                  )
+                })}
+              </div>
+            </>
           )}
-          {commands.map((cmd, idx) => (
-            <li
-              key={cmd.id}
-              id={`palette-opt-${idx}`}
-              role="option"
-              aria-selected={idx === highlight}
-              onMouseEnter={() => setHighlight(idx)}
-              onClick={cmd.run}
+
+          {/* EMAIL group — rendered whenever the user typed something so
+              the empty-tile has a home. Aside shows live latency + FTS5
+              health dot. */}
+          {hasQuery && (
+            <>
+              <GroupHeader
+                title="Email"
+                countLabel={countLabel}
+                aside={
+                  <>
+                    <span className="w-1 h-1 rounded-full bg-ok" aria-hidden />
+                    <span>{t('palette.footer.fts5Healthy')}</span>
+                    {lastLatencyMs !== null && (
+                      <>
+                        <FooterDot />
+                        <span className="tabular-nums">{lastLatencyMs}ms</span>
+                      </>
+                    )}
+                  </>
+                }
+              />
+              {hasHits ? (
+                <div className="px-3 space-y-px">
+                  {hits.map((h, i) => {
+                    const idx = emailStartIdx + i
+                    const selected = idx === highlight
+                    return (
+                      <EmailHitRow
+                        key={h.internal_id}
+                        hit={h}
+                        flatIdx={idx}
+                        selected={selected}
+                        setHighlight={setHighlight}
+                        queryTerms={queryTerms}
+                        onActivate={() => {
+                          closeCommandPalette()
+                          setActiveEmail(h.internal_id)
+                          void navigate({ to: '/' })
+                        }}
+                      />
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="px-5">
+                  <div className="empty-tile">
+                    <SearchIcon
+                      size={18}
+                      strokeWidth={1.75}
+                      className="text-ink-fg-3"
+                      aria-hidden
+                    />
+                    <div className="text-aux text-ink-fg-1">
+                      {isSearching ? t('palette.searching') : t('palette.email.emptyTitle')}
+                    </div>
+                    {!isSearching && (
+                      <div className="text-meta text-ink-fg-3">{t('palette.email.emptyHint')}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* AI ACTIONS group */}
+          {actionItems.length > 0 && (
+            <>
+              <GroupHeader
+                title="AI Actions"
+                subtitle={t('palette.actions.subtitle', { n: hits.length })}
+                aside={
+                  <>
+                    <span className="w-1.5 h-1.5 rounded-full bg-ok" aria-hidden />
+                    <span>{t('palette.actions.aside')}</span>
+                  </>
+                }
+              />
+              <div className="px-3 space-y-px pb-1">
+                {actionItems.map((a, i) => {
+                  const idx = actionStartIdx + i
+                  const selected = idx === highlight
+                  const isRunning = actionRunning === a.id
+                  const disabled = a.disabled || isRunning
+                  return (
+                    <li
+                      key={a.id}
+                      role="option"
+                      id={`palette-opt-${idx}`}
+                      data-flat-idx={idx}
+                      aria-selected={selected}
+                      aria-disabled={disabled || undefined}
+                      onMouseEnter={() => setHighlight(idx)}
+                      onClick={disabled ? undefined : () => void a.run()}
+                      className={cn('pal-row', selected && 'is-selected')}
+                    >
+                      <span
+                        className={cn(
+                          'w-5 h-5 grid place-items-center shrink-0',
+                          a.iconTone === 'ok' && 'text-ok',
+                          a.iconTone === 'info' && 'text-info',
+                          a.iconTone === 'coral' && 'text-coral'
+                        )}
+                      >
+                        {a.icon}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-body text-ink-fg flex items-center gap-2">
+                          <span className="truncate">{a.label}</span>
+                          {a.soon && (
+                            <span className="text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded text-ink-fg-2 bg-ink-fg/[0.06] border border-ink-border-soft shrink-0">
+                              {t('palette.actions.soon')}
+                            </span>
+                          )}
+                          {isRunning && (
+                            <span className="text-meta font-mono text-ink-fg-3 animate-pulse">
+                              {t('palette.actions.running')}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-meta text-ink-fg-2 truncate mt-0.5">{a.meta}</div>
+                      </div>
+                      <span className="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0">
+                        <kbd className="text-micro font-mono px-1 py-px rounded bg-ink-fg/[0.06] border border-ink-border text-ink-fg-1 leading-none">
+                          ⏎
+                        </kbd>
+                        <span>{t('palette.kbd.run')}</span>
+                      </span>
+                    </li>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </ul>
+
+        {/* Footer — kbd hints + FTS5 stats. Mockup line 985-1020. */}
+        <footer className="px-3 h-8 border-t border-ink-border-soft flex items-center gap-3 text-micro font-mono text-ink-fg-2 shrink-0">
+          <KbdHint keys="↑↓" label={t('palette.kbd.navigate')} />
+          <FooterDot />
+          <KbdHint keys="⇥" label={t('palette.kbd.selectGroup')} />
+          <FooterDot />
+          <KbdHint keys="⏎" label={t('palette.kbd.open')} />
+          <FooterDot />
+          <KbdHint keys="⌘⏎" label={t('palette.kbd.newWindow')} />
+          <FooterDot />
+          <KbdHint keys="esc" label={t('palette.kbd.dismiss')} />
+
+          <span className="ml-auto flex items-center gap-2">
+            <span className="w-1 h-1 rounded-full bg-ok" aria-hidden />
+            <span>{t('palette.footer.fts5Healthy')}</span>
+            {lastLatencyMs !== null && (
+              <>
+                <FooterDot />
+                <span className="tabular-nums">{lastLatencyMs}ms</span>
+              </>
+            )}
+            {totalIndexed !== null && (
+              <>
+                <FooterDot />
+                <span className="tabular-nums">
+                  {t('palette.email.countLabel', { n: hits.length, total: totalIndexed })}
+                </span>
+              </>
+            )}
+          </span>
+        </footer>
+      </section>
+    </>,
+    document.body
+  )
+}
+
+// ─── EmailHitRow — extracted because the JSX is dense + heavy ────────
+
+interface EmailHitRowProps {
+  hit: SearchHit
+  flatIdx: number
+  selected: boolean
+  setHighlight(idx: number): void
+  queryTerms: ReadonlyArray<string>
+  onActivate(): void
+}
+
+function EmailHitRow({
+  hit,
+  flatIdx,
+  selected,
+  setHighlight,
+  queryTerms,
+  onActivate
+}: EmailHitRowProps): React.ReactElement {
+  const { t } = useTranslation()
+  const parsed = parseSender(hit.sender)
+  const senderName = parsed.name || parsed.email.split('@')[0] || hit.sender
+  const senderAddr = parsed.email
+  const time = shortTime(hit.date_received)
+
+  // Subject + snippet — both wrapped via DOMPurify before injecting because
+  // user content reaches the DOM. highlightTerms entity-encodes everything
+  // else; backend snippet() inserts literal <mark> only.
+  const subjectHtml = useMemo(
+    () => DOMPurify.sanitize(highlightTerms(hit.subject, queryTerms), SNIPPET_PURIFY),
+    [hit.subject, queryTerms]
+  )
+  const snippetHtml = useMemo(
+    () => (hit.snippet ? DOMPurify.sanitize(hit.snippet, SNIPPET_PURIFY) : ''),
+    [hit.snippet]
+  )
+
+  return (
+    <li
+      role="option"
+      id={`palette-opt-${flatIdx}`}
+      data-flat-idx={flatIdx}
+      aria-selected={selected}
+      onMouseEnter={() => setHighlight(flatIdx)}
+      onClick={onActivate}
+      className={cn('pal-row', selected && 'is-selected')}
+    >
+      <span className="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
+        <Mail size={14} strokeWidth={1.75} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-aux text-ink-fg font-medium truncate">
+            {senderName}
+            {senderAddr && (
+              <>
+                <span className="text-ink-fg-3"> · </span>
+                <span className="text-ink-fg-2">{senderAddr}</span>
+              </>
+            )}
+          </span>
+          {hit.lang === 'en' && (
+            <span className="lang-pip shrink-0" aria-label="English">
+              EN
+            </span>
+          )}
+          {hit.ai_priority && (
+            <span
               className={cn(
-                'flex items-center gap-2 px-3 py-2 cursor-pointer',
-                'transition-colors duration-fast',
-                idx === highlight ? 'bg-coral/15' : 'hover:bg-ink-3'
+                'text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0',
+                PRIORITY_CLASS[hit.ai_priority]
               )}
             >
-              <span className="shrink-0 grid place-items-center w-[18px] h-[18px] text-ink-fg-2">
-                {cmd.icon}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-aux text-ink-fg truncate">{cmd.label}</div>
-                {cmd.hint && <div className="text-meta text-ink-fg-3 truncate">{cmd.hint}</div>}
-              </div>
-              <ArrowRight size={12} strokeWidth={2} className="text-ink-fg-3 shrink-0" />
-            </li>
-          ))}
-        </ul>
+              {PRIORITY_LABEL[hit.ai_priority]}
+            </span>
+          )}
+          {time && (
+            <span className="text-meta font-mono text-ink-fg-2 shrink-0 tabular-nums">{time}</span>
+          )}
+        </div>
+        <div
+          className="text-body text-ink-fg mt-0.5 truncate [&_mark]:bg-coral/25 [&_mark]:text-ink-fg [&_mark]:rounded [&_mark]:px-0.5"
+          dangerouslySetInnerHTML={{
+            __html: subjectHtml || hit.subject || t('palette.email.untitled')
+          }}
+        />
+        {snippetHtml && (
+          <div
+            className="text-meta text-ink-fg-2 mt-1 line-clamp-2 [&_mark]:bg-coral/15 [&_mark]:text-ink-fg-1 [&_mark]:rounded [&_mark]:px-0.5"
+            dangerouslySetInnerHTML={{ __html: snippetHtml }}
+          />
+        )}
       </div>
-    </div>,
-    document.body
+      <span className="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0">
+        <kbd className="text-micro font-mono px-1 py-px rounded bg-ink-fg/[0.06] border border-ink-border text-ink-fg-1 leading-none">
+          ⏎
+        </kbd>
+        <span>{t('palette.kbd.open')}</span>
+        <span className="text-ink-fg-3">·</span>
+        <kbd className="text-micro font-mono px-1 py-px rounded bg-ink-fg/[0.06] border border-ink-border text-ink-fg-1 leading-none">
+          ⌘⏎
+        </kbd>
+        <span>{t('palette.kbd.newWindow')}</span>
+      </span>
+    </li>
   )
 }

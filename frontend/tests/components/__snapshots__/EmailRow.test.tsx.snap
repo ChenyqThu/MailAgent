@@ -9,9 +9,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
   data-pinned="false"
   data-priority="crit"
   data-read="true"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"
@@ -257,9 +262,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
   data-pinned="false"
   data-priority="crit"
   data-read="false"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"
@@ -505,9 +515,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
   data-pinned="false"
   data-priority="crit"
   data-read="true"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"
@@ -753,9 +768,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
   data-pinned="false"
   data-priority="crit"
   data-read="false"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"
@@ -1011,9 +1031,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
   data-pinned="false"
   data-priority="crit"
   data-read="true"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"
@@ -1259,9 +1284,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
   data-pinned="false"
   data-priority="crit"
   data-read="false"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"
@@ -1507,9 +1537,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
   data-pinned="false"
   data-priority="crit"
   data-read="true"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"
@@ -1755,9 +1790,14 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
   data-pinned="false"
   data-priority="crit"
   data-read="false"
+  data-thread="none"
   role="button"
   tabindex="0"
 >
+  <span
+    aria-hidden="true"
+    class="thread-chevron-cell"
+  />
   <span
     aria-checked="false"
     aria-hidden="true"

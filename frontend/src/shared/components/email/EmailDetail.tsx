@@ -10,7 +10,7 @@
 //       - Attachments 2-col grid
 //       - Footer (internal_id + Notion link)
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Languages, Mail, RotateCcw, Sparkles } from 'lucide-react'
@@ -420,6 +420,23 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     },
     [internalId, mailApi, optimisticDetail, queryClient, t]
   )
+
+  // Sprint 17 — 打开未读邮件自动标已读 (Outlook / Apple Mail / Gmail 标准 UX).
+  // optimistic 立即翻 UI; CLI 在背景跑, 失败静默 (auto-markRead 是辅助, 不该
+  // 打扰用户). useRef 记录已 marked 的 id 防止 cache invalidate 后重渲再次触发
+  // (虽然 optimistic 已经把 is_read 写回 cache, 但 race 安全起见加这层防护).
+  const autoMarkedRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    if (internalId === null) return
+    const data = detailQ.data
+    if (!data || data.is_read) return
+    if (autoMarkedRef.current.has(internalId)) return
+    autoMarkedRef.current.add(internalId)
+    optimisticDetail({ is_read: true })
+    void mailApi.email.flag(internalId, { isRead: true }).catch(() => {
+      // 静默 — auto-markRead 失败不打扰用户; 用户仍可在 toolbar 手动标
+    })
+  }, [internalId, detailQ.data, mailApi, optimisticDetail])
 
   if (internalId === null) {
     return (

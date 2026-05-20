@@ -807,13 +807,18 @@ body::before {
  * `data-pinned` / `data-important` / `data-priority`) so EmailRow.tsx
  * stays declarative — no React class-toggle dance for read/flag washes. */
 
-/* ─── EmailRow — Outlook-inspired 32px avatar + content grid ────────── */
+/* ─── EmailRow — chevron(24) + avatar(32) + content(1fr) grid ────────── */
+/* Sprint 17 — thread chevron 从外层 wrap div 移到 row 内的第一格 grid cell.
+ * 这样 flag / done / selected 的 wash + 未读 dot 都跟 chevron 共享同一 row
+ * 容器, 高亮能 cover 折叠 icon 区域 (用户反馈: "flag 邮件的高亮背景, 也要
+ * cover 前面的折叠区域"). 单封邮件 chevron-cell 为空但保留 24px 占位,
+ * 列表所有行的 avatar / sender 列对齐 x 轴. */
 .email-row {
   position: relative;
   display: grid;
-  grid-template-columns: 32px 1fr;
-  gap: 0 10px;
-  padding: 9px 14px 10px;
+  grid-template-columns: 24px 32px 1fr;
+  gap: 0 8px;
+  padding: 9px 14px 10px 8px;
   border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
   cursor: pointer;
   transition: background 120ms ease;
@@ -834,56 +839,53 @@ body::before {
   background: rgb(var(--c-accent));
 }
 
-/* Sprint 14 round 11 — wrapper owns the row's hover / selected chrome
- * when EmailList renders threads.  Putting the wash + the accent bar
- * on the wrapper (rather than the EmailRow article) lets the chevron
- * column share the selected wash and pushes the 3px coral bar to the
- * very left edge of the list, not the left edge of the row content
- * 24px in.  User feedback: "选中邮件的最左侧加重标记也是要在最左侧
- * (包括折叠 icon)".
- *   data-selected="true"   = the active email belongs to this thread,
- *                            so wrap (head + every child) reads as one.
- *   data-child="true"      = this row is a folded child; subtle inset
- *                            tint so the bundle reads as grouped. */
-.thread-row-wrap {
-  position: relative;
-  transition: background 120ms ease;
-}
-.thread-row-wrap:hover {
-  background: rgb(var(--ink-3) / 0.55);
-}
-.thread-row-wrap[data-child='true']:not([data-selected='true']) {
+/* Sprint 17 — thread chevron 直接在 .email-row 第一格 grid cell 内, 不再
+ * 需要外层 .thread-row-wrap. selected wash / accent bar / flag wash 都画在
+ * .email-row 上, 自然 cover chevron 区域. child row 的 subtle inset tint
+ * 通过 data-thread='child' attribute 走 .email-row 自身的 selector. */
+.email-row[data-thread='child']:not(.is-selected) {
   background: rgb(var(--ink-1) / 0.35);
 }
-.thread-row-wrap[data-selected='true'] {
-  background: rgb(var(--ink-4) / 0.7);
+
+/* Sprint 17 — thread chevron-cell 占第一格. 单封邮件 cell 内为空但保留宽度
+ * (列对齐). thread head 显示可点 chevron, thread child 显示竖向 tether 线. */
+.email-row > .thread-chevron-cell {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  position: relative;
+  width: 24px;
+  height: 100%;
+  align-self: stretch;
+  justify-self: stretch;
 }
-.thread-row-wrap[data-selected='true']::before {
-  content: '';
+.thread-chevron-btn {
   position: absolute;
-  left: 0;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 19px;
+  color: rgb(var(--ink-fg-2));
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.thread-chevron-btn:hover {
+  color: rgb(var(--ink-fg));
+}
+.thread-chevron-tether {
+  position: absolute;
   top: 0;
   bottom: 0;
-  width: 3px;
-  background: rgb(var(--c-accent));
-  pointer-events: none;
+  left: 50%;
+  width: 1px;
+  background: rgb(var(--ink-border-soft));
 }
-/* When the wrapper paints the chrome the inner article must yield
- * (otherwise we'd get a double wash + double bar 24px in). */
-.thread-row-wrap .email-row.is-selected {
-  background: transparent;
-}
-.thread-row-wrap .email-row.is-selected::before {
-  display: none;
-}
-.thread-row-wrap:hover .email-row {
-  background: transparent;
-}
-
-/* Avatar / cb share the same grid cell so batch-mode can swap without reflow */
+/* Avatar / cb share the second grid cell so batch-mode can swap without reflow */
 .email-row > .avatar,
 .email-row > .cb {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 1 / span 3;
   align-self: start;
   justify-self: center;
@@ -893,7 +895,7 @@ body::before {
   margin-top: 5px;
 }
 .email-row > .row-content {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 1 / span 3;
   min-width: 0;
 }
@@ -1073,12 +1075,15 @@ body:not([data-batch-mode='true']) #batch-bar {
   line-height: 1.45;
 }
 
-/* Unread treatment — sender + subject go bold + ink-fg, plus a small accent
- * dot pinned at the row's left edge (sits inside the padding, doesn't
- * fight the 3px selection stripe because the dot's left = 6px). */
+/* Unread treatment — sender + subject go bold + accent color, plus a small
+ * accent dot positioned at the same x as the thread chevron column center
+ * and vertically aligned to the subject row center (Sprint 17 user feedback:
+ * "未读小圆点垂直位置和标题行垂直居中, 水平位置和折叠 icon 水平居中").
+ * dot radius +1px (was 5px diameter → now 6px → radius 3px). */
 .email-row[data-read='false'] .sender-name,
 .email-row[data-read='false'] .subject-text {
   font-weight: 600;
+  color: rgb(var(--c-accent));
 }
 .email-row[data-read='false'] .row-time {
   color: rgb(var(--c-accent));
@@ -1086,12 +1091,17 @@ body:not([data-batch-mode='true']) #batch-bar {
 .email-row[data-read='false']::after {
   content: '';
   position: absolute;
-  left: 6px;
-  top: 18px;
-  width: 5px;
-  height: 5px;
+  /* chevron-cell x center = padding-left 8 + cell width 24 / 2 = 20;
+   * dot 6×6 → left = 20 - 3 = 17 */
+  left: 17px;
+  /* subject-row center ≈ padding-top 9 + sender-line 17 + margin-top 2 +
+   * subject 行高/2 9 = ~37; dot 6×6 → top = 37 - 3 = 34 */
+  top: 34px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: rgb(var(--c-accent));
+  pointer-events: none;
 }
 .email-row.is-selected[data-read='false']::after {
   display: none;

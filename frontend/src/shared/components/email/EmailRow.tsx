@@ -21,7 +21,7 @@
 
 import { memo, useCallback, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Paperclip } from 'lucide-react'
+import { ChevronDown, Paperclip } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
@@ -50,7 +50,23 @@ interface Props {
    *  listByThread (no snippet / AI fields) so the row reads as a
    *  single-line digest with sender + subject + time only. */
   compact?: boolean
+  /** Sprint 17 — 线程折叠 icon / 占位列 (见 ThreadChevronProps doc).
+   *  undefined → 单封, 第一格空; isHead → 显示可点 chevron; isChild → 渲染
+   *  竖向 tether 线表示属于父线程 bundle. */
+  threadChevron?: ThreadChevronProps
   onSelect(): void
+}
+
+/**
+ * Sprint 17 — thread chevron 从 EmailList 的外层 wrapper div 内移到 EmailRow
+ * 的第一格 grid cell, 让 flag/done/selected wash + 未读 dot 跟 chevron 共享
+ * 同一个 row 容器 (背景能 cover 折叠 icon 区域).
+ */
+export interface ThreadChevronProps {
+  isHead?: boolean
+  isChild?: boolean
+  expanded?: boolean
+  onToggle?: () => void
 }
 
 const PRIORITY_SLUG: Record<AIPriority, 'crit' | 'urg' | 'impt' | 'norm' | 'low'> = {
@@ -163,6 +179,7 @@ function EmailRowInner({
   isNew,
   noAvatar,
   compact,
+  threadChevron,
   onSelect
 }: Props): React.ReactElement {
   const mailApi = useMailApi()
@@ -311,8 +328,33 @@ function EmailRowInner({
       data-pinned={String(pinned)}
       data-important={String(important)}
       data-priority={email.ai_priority ? PRIORITY_SLUG[email.ai_priority] : 'norm'}
+      data-thread={threadChevron?.isHead ? 'head' : threadChevron?.isChild ? 'child' : 'none'}
       className={cn('row email-row', selected && 'is-selected')}
     >
+      {/* Sprint 17 — 第一格 chevron-cell (24px). 单封邮件空; thread head 显示
+          可点 chevron; child 显示竖向 tether 线. flag / selected / unread-dot
+          的背景与定位都基于这格 (CSS .email-row.thread-chevron-cell). */}
+      <span className="thread-chevron-cell" aria-hidden={!threadChevron?.isHead}>
+        {threadChevron?.isHead && (
+          <button
+            type="button"
+            aria-label="toggle-thread"
+            aria-expanded={threadChevron.expanded ?? false}
+            onClick={stopAnd(() => threadChevron.onToggle?.())}
+            className="thread-chevron-btn"
+          >
+            <ChevronDown
+              size={12}
+              strokeWidth={2}
+              className={cn(
+                'transition-transform duration-base ease-out',
+                threadChevron.expanded ? 'rotate-0' : '-rotate-90'
+              )}
+            />
+          </button>
+        )}
+        {threadChevron?.isChild && <span aria-hidden className="thread-chevron-tether" />}
+      </span>
       {/* Batch checkbox — visible when body[data-batch-mode='true']. */}
       <span
         className={cbClass}
@@ -463,12 +505,25 @@ const EMAIL_ROW_EMAIL_KEYS = [
   'lang'
 ] as const
 
+function threadChevronEqual(
+  a: ThreadChevronProps | undefined,
+  b: ThreadChevronProps | undefined
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  // 故意不比较 onToggle 引用 — 父组件 (VirtualRow) 每帧重建闭包, 但 toggle
+  // 行为只依赖 threadId, memo 效用不该被新引用打穿. isHead/isChild/expanded
+  // 一致即视为同一条 chevron 视觉状态.
+  return a.isHead === b.isHead && a.isChild === b.isChild && a.expanded === b.expanded
+}
+
 function emailRowPropsEqual(prev: Props, next: Props): boolean {
   if (prev.selected !== next.selected) return false
   if (prev.isNew !== next.isNew) return false
   if (prev.noAvatar !== next.noAvatar) return false
   if (prev.compact !== next.compact) return false
   if (prev.onSelect !== next.onSelect) return false
+  if (!threadChevronEqual(prev.threadChevron, next.threadChevron)) return false
   const a = prev.email
   const b = next.email
   if (a === b) return true
