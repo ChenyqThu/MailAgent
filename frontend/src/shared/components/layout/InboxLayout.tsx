@@ -18,7 +18,6 @@ import { StatusBar } from './StatusBar'
 import { EmailList } from '../email/EmailList'
 import { EmailDetail } from '../email/EmailDetail'
 import { AIChatPanel } from '../chat'
-import { BatchActionBar } from '../batch/BatchActionBar'
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
@@ -53,11 +52,9 @@ export function InboxLayout(): React.ReactElement {
         <EmailDetail internalId={activeId} />
         {aiPanelVisible && <AIChatPanel />}
       </div>
-      {/* Sprint 5 §2.2 / DESIGN.md §5.4 — 52px bar appears when ≥1 row is
-          selected (useBatch.selectedIds.length > 0). Renders inline above
-          StatusBar so the bar lives in the same chrome tier as the title
-          bar. */}
-      <BatchActionBar />
+      {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar
+          (Sprint 12 设计, components/email/BatchActionBar.tsx) 由 EmailList
+          portal 到 document.body, 不再需要在 chrome 这层 mount. */}
       <StatusBar />
     </div>
   )

@@ -110,15 +110,13 @@ function avatarInitials(name: string): string {
 }
 
 const flagSvg = (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
     <line x1="4" y1="22" x2="4" y2="15" />
   </svg>
 )
 const doneSvg = (
   <svg
-    width="11"
-    height="11"
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
@@ -131,8 +129,6 @@ const doneSvg = (
 )
 const pinSvg = (
   <svg
-    width="11"
-    height="11"
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
@@ -144,7 +140,7 @@ const pinSvg = (
   </svg>
 )
 const attachSvg = (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
   </svg>
 )
@@ -152,8 +148,6 @@ const attachSvg = (
 // 与之前的三角形 warning 区分：圆形传递的是「重要邮件」语义而非「⚠️ 警告」。
 const importantSvg = (
   <svg
-    width="11"
-    height="11"
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
@@ -167,7 +161,7 @@ const importantSvg = (
   </svg>
 )
 const deleteSvg = (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
     <polyline points="3 6 5 6 21 6" />
     <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
   </svg>

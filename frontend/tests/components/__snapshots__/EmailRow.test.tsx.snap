@@ -82,11 +82,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -107,13 +105,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -126,11 +122,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -143,13 +137,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -178,11 +170,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"
@@ -335,11 +325,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -360,13 +348,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -379,11 +365,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -396,13 +380,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -431,11 +413,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · selec
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"
@@ -588,11 +568,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -613,13 +591,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -632,11 +608,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -649,13 +623,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -684,11 +656,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"
@@ -841,11 +811,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -866,13 +834,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -885,11 +851,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -902,13 +866,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -937,11 +899,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > dark · unsel
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"
@@ -1104,11 +1064,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -1129,13 +1087,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -1148,11 +1104,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -1165,13 +1119,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -1200,11 +1152,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"
@@ -1357,11 +1307,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -1382,13 +1330,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -1401,11 +1347,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -1418,13 +1362,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -1453,11 +1395,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · sele
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"
@@ -1610,11 +1550,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -1635,13 +1573,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -1654,11 +1590,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -1671,13 +1605,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -1706,11 +1638,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"
@@ -1863,11 +1793,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"
@@ -1888,13 +1816,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M16 4v6.59l3.71 3.71A1 1 0 0 1 19 16h-6v5l-1 1-1-1v-5H5a1 1 0 0 1-.71-1.71L8 10.59V4a1 1 0 0 1-1-1V2h10v1a1 1 0 0 1-1 1z"
@@ -1907,11 +1833,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <path
               d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
@@ -1924,13 +1848,11 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-linecap="round"
             stroke-linejoin="round"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <circle
               cx="12"
@@ -1959,11 +1881,9 @@ exports[`EmailRow — 8 combo render snapshots (DESIGN.md §5.1) > light · unse
         >
           <svg
             fill="none"
-            height="11"
             stroke="currentColor"
             stroke-width="2"
             viewBox="0 0 24 24"
-            width="11"
           >
             <polyline
               points="3 6 5 6 21 6"

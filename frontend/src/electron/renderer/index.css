@@ -104,6 +104,24 @@
     radial-gradient(55vw 60vh at 95% 6%, rgba(80, 140, 255, 0.22), transparent 65%),
     radial-gradient(60vw 55vh at 50% 110%, rgba(160, 110, 255, 0.18), transparent 70%),
     linear-gradient(180deg, #0e1013 0%, #15181d 100%);
+
+  /* Sprint 17 — EmailRow 第一/二列几何 SSoT.
+   * chevron-cell / avatar 圆 / 未读 dot 的对齐参数集中在这里, 避免散布
+   * 在多个 CSS rule 里手算 padding/margin/radius 反推. 修改 avatar 大小
+   * 或 chevron 列宽时只动这一段, 其他规则自动 follow.
+   *
+   * --unread-dot-{top,left}: 未读 dot (6×6) 直接的 CSS top/left 值
+   * (已经 = subject 行垂直中心 - dot 半径, 写绝对值避免 dot rule 里再
+   * calc(- 3px) 与直径耦合). top 36 ≈ row-pt 9 + sender-line(13.5×1.35
+   * ≈18) + subject-row.mt 2 + subject 行高/2(13.5×1.4/2 ≈9.5) - dot.r 3.
+   * left 17 = row-pl 8 + chevron-col-w 24 / 2 - dot.r 3. row padding 或
+   * 字号 改变 → 这两个值要同步重算 (没法纯 calc 因为依赖 inherited
+   * line-height resolution). */
+  --avatar-size: 32px;
+  --avatar-mt: 2px;
+  --chevron-col-w: 24px;
+  --unread-dot-top: 36px;
+  --unread-dot-left: 17px;
 }
 
 :root[data-theme='light'] {
@@ -816,7 +834,7 @@ body::before {
 .email-row {
   position: relative;
   display: grid;
-  grid-template-columns: 24px 32px 1fr;
+  grid-template-columns: var(--chevron-col-w) var(--avatar-size) 1fr;
   gap: 0 8px;
   padding: 9px 14px 10px 8px;
   border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
@@ -848,28 +866,40 @@ body::before {
 }
 
 /* Sprint 17 — thread chevron-cell 占第一格. 单封邮件 cell 内为空但保留宽度
- * (列对齐). thread head 显示可点 chevron, thread child 显示竖向 tether 线. */
+ * (列对齐). thread head 显示可点 chevron, thread child 显示竖向 tether 线.
+ *
+ * cell 高度由默认 align-self: stretch 拉满整行 grid track (= row content
+ * 高度), 不需要显式 height: 100% / align-self: stretch — child tether 线
+ * (top: 0; bottom: 0; absolute) 自然覆盖整行高度. */
 .email-row > .thread-chevron-cell {
   grid-column: 1;
-  grid-row: 1 / span 3;
+  grid-row: 1;
   position: relative;
-  width: 24px;
-  height: 100%;
-  align-self: stretch;
-  justify-self: stretch;
+  width: var(--chevron-col-w);
 }
+/* Sprint 17 — chevron 与 avatar 在 row 内同 y 几何对齐.
+ *
+ * chevron-cell (position: relative) 是 chevron-btn 的 containing block.
+ * cell 顶边 = grid track 1 top = row.padding-top — row 顶 padding 已经
+ * 被 grid 吃掉. chevron-btn 相对 cell 只需再下移 --avatar-mt (= avatar
+ * 的同名 margin) 就能与 avatar 顶端对齐. height = --avatar-size → 内部
+ * flex center 让 chevron 中心落在 avatar 圆心.
+ *
+ * row 字号/行高调整 → row 总高变, 但 avatar 几何 (mt + size) 不变,
+ * chevron 对齐恒久. avatar 大小调整 → :root 变量改一处, 这里自动 follow. */
 .thread-chevron-btn {
   position: absolute;
-  inset: 0;
+  top: var(--avatar-mt);
+  left: 0;
+  right: 0;
+  height: var(--avatar-size);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  /* chevron 12×12 顶端落在 row 顶下 21px → center = 21 + 6 = 27px,
-   * 与 avatar center (padding-top 9 + margin-top 2 + radius 16 = 27px) 对齐. */
-  padding-top: 21px;
   color: rgb(var(--ink-fg-2));
   background: transparent;
   border: 0;
+  padding: 0;
   cursor: pointer;
   transition: color 120ms ease;
 }
@@ -888,25 +918,27 @@ body::before {
 .email-row > .avatar,
 .email-row > .cb {
   grid-column: 2;
-  grid-row: 1 / span 3;
+  grid-row: 1;
   align-self: start;
   justify-self: center;
-  margin-top: 2px;
+  margin-top: var(--avatar-mt);
 }
 .email-row > .cb {
-  margin-top: 5px;
+  /* cb visual center 比 avatar 圆心略低 — checkbox 9×9 不是圆盘, 用 calc
+   * 保留 avatar-mt SSoT 同时让 cb 多偏 3px (5 = 2 + 3). */
+  margin-top: calc(var(--avatar-mt) + 3px);
 }
 .email-row > .row-content {
   grid-column: 3;
-  grid-row: 1 / span 3;
+  grid-row: 1;
   min-width: 0;
 }
 
 /* Avatar — 32px disc with initials. 6 hue rotations + grey for ext senders.
  * Subtle inner highlight reads as glass; hash(sender) picks the slot. */
 .avatar {
-  width: 32px;
-  height: 32px;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
@@ -1093,14 +1125,11 @@ body:not([data-batch-mode='true']) #batch-bar {
 .email-row[data-read='false']::after {
   content: '';
   position: absolute;
-  /* chevron-cell x center = padding-left 8 + cell width 24 / 2 = 20;
-   * dot 6×6 → left = 20 - 3 = 17 */
-  left: 17px;
-  /* subject-row vertical center (相对 row.top):
-   *   padding-top 9 + sender-line (font 13.5 × line-height 1.35 ≈ 18)
-   *   + margin-top 2 + subject 行高/2 (13.5 × 1.4 / 2 ≈ 9.45) ≈ 38.5px
-   * dot 6×6 → top = 38.5 - 3 = 35.5 ≈ 36px */
-  top: 36px;
+  /* dot 6×6 的 top/left 值. 变量定义在 :root 几何 SSoT 段
+   * (--unread-dot-{top,left}), 改 row padding / 字号 / chevron 列宽时
+   * 去那里调一处. */
+  left: var(--unread-dot-left);
+  top: var(--unread-dot-top);
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1169,6 +1198,9 @@ body:not([data-batch-mode='true']) #batch-bar {
   background: rgb(var(--ink-4) / 0.7);
 }
 .row-actions .ricon svg {
+  /* CSS 是 icon sizing 的 SSoT — inline SVG 不再带 width/height attr
+   * (Sprint 17 改造前 attr=11 与此处 14 冲突, 实际渲染按 CSS 14).
+   * 改尺寸只动这一处. */
   display: block;
   width: 14px;
   height: 14px;
