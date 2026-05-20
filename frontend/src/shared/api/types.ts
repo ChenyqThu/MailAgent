@@ -780,6 +780,75 @@ export interface EventsApi {
   onStatus(handler: (status: EventsStatus) => void): () => void
 }
 
+// ---- Sprint 18 §PR B — repo-root .env read/write + pm2 services surface --
+//
+// Settings tabs (PR D) read the resolved `.env` once via env:get + cache it
+// in zustand; on field-blur they call env:set({KEY: value}) which atomic-
+// writes the file and returns restartRequired=true. RestartBanner (PR E)
+// then surfaces and calls services:restart('mail-sync').
+
+/** Mirror of `EnvSnapshot` in `electron/main/handlers/env.ts`. SECRET keys
+ *  carry only '***' (set) or '' (unset) — plaintext never crosses IPC. */
+export interface EnvSnapshot {
+  path: string
+  exists: boolean
+  values: Record<string, string>
+  managedKeys: readonly string[]
+  secretKeys: string[]
+}
+
+export type EnvSetResult =
+  | { ok: true; path: string; changedKeys: string[]; restartRequired: boolean }
+  | {
+      ok: false
+      path: string
+      error: { code: 'E_INVALID_KEY' | 'E_NOT_FOUND' | 'E_WRITE'; message: string }
+    }
+
+export interface EnvApi {
+  /** Read the resolved `.env` snapshot. Secret values redacted. */
+  get(): Promise<EnvSnapshot>
+  /** Merge-write keys into the resolved `.env`. `null` value comments out
+   *  the line (preserves the key for future re-enable). Returns a result
+   *  envelope (not an exception) so the renderer can branch on error codes
+   *  without losing the `code` property through the IPC structured-clone. */
+  set(patch: Record<string, string | null>): Promise<EnvSetResult>
+}
+
+export type ServiceTarget = 'mail-sync' | 'calendar-sync' | 'all'
+
+export interface ServiceRestartResult {
+  ok: boolean
+  target: string
+  exitCode: number | null
+  stdout: string
+  stderr: string
+  error?: {
+    code: 'E_PM2_NOT_FOUND' | 'E_PM2_FAILED' | 'E_TIMEOUT' | 'E_INVALID_ARG'
+    message: string
+    /** Set on E_PM2_NOT_FOUND so the renderer toast can quote the exact
+     *  terminal command. */
+    fallbackCommand?: string
+  }
+}
+
+export interface ServiceStatus {
+  name: 'mail-sync' | 'calendar-sync'
+  state: 'online' | 'stopped' | 'errored' | 'unknown'
+  pid: number | null
+  uptimeMs: number | null
+  cpu: number | null
+  memMB: number | null
+}
+
+export interface ServicesApi {
+  /** Spawn `pm2 restart <target>`. Default target = `mail-sync`. */
+  restart(target?: ServiceTarget): Promise<ServiceRestartResult>
+  /** `pm2 jlist` → both known service slots, even when pm2 doesn't list one
+   *  (returns `state: 'unknown'`). */
+  status(): Promise<ServiceStatus[]>
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
@@ -799,4 +868,11 @@ export interface MailApi {
   island: IslandApi
   /** Sprint 16 — SSE events bridge (replaces 5s polling). */
   events: EventsApi
+  /** Sprint 18 §PR B — repo-root .env read/write. Settings tabs use this to
+   *  persist managed ENV keys directly to the file Python services read. */
+  env: EnvApi
+  /** Sprint 18 §PR B — pm2 restart/status bridge. Wired to the
+   *  RestartBanner (PR E) "立即重启" CTA after env:set returns
+   *  restartRequired=true. */
+  services: ServicesApi
 }

@@ -36,8 +36,15 @@ import type {
   EmailFlagOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  EnvApi,
+  EnvSetResult,
+  EnvSnapshot,
   EventsApi,
   EventsStatus,
+  ServiceRestartResult,
+  ServiceStatus,
+  ServiceTarget,
+  ServicesApi,
   SseEvent,
   IslandAIDraftReadyPayload,
   IslandAIDraftStartPayload,
@@ -433,6 +440,28 @@ class ElectronEventsApi implements EventsApi {
   }
 }
 
+// Sprint 18 §PR B — repo-root .env + pm2 services. Both APIs are pure
+// thin IPC bridges; no caching here (cache lives in useEnvStore on the
+// renderer side, refreshed on demand).
+
+class ElectronEnvApi implements EnvApi {
+  async get(): Promise<EnvSnapshot> {
+    return (await invoker()('env:get')) as EnvSnapshot
+  }
+  async set(patch: Record<string, string | null>): Promise<EnvSetResult> {
+    return (await invoker()('env:set', patch)) as EnvSetResult
+  }
+}
+
+class ElectronServicesApi implements ServicesApi {
+  async restart(target?: ServiceTarget): Promise<ServiceRestartResult> {
+    return (await invoker()('services:restart', target)) as ServiceRestartResult
+  }
+  async status(): Promise<ServiceStatus[]> {
+    return (await invoker()('services:status')) as ServiceStatus[]
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
@@ -446,4 +475,6 @@ export class ElectronApi implements MailApi {
   updater: UpdaterApi = new ElectronUpdaterApi()
   island: IslandApi = new ElectronIslandApi()
   events: EventsApi = new ElectronEventsApi()
+  env: EnvApi = new ElectronEnvApi()
+  services: ServicesApi = new ElectronServicesApi()
 }

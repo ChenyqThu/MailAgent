@@ -25,6 +25,12 @@ import { registerUpdaterHandlers } from './handlers/updater'
 // dev mode so a developer without ping-island.app doesn't see spurious
 // probe-failure noise in the log.
 import { registerIslandHandlers } from './handlers/island'
+// Sprint 18 §PR B — repo-root .env read/write (env:get/:set) + pm2 restart
+// bridge (services:restart/:status). Settings tabs use env:set on blur to
+// persist managed keys to the Python-side .env, then surface RestartBanner
+// (PR E) that calls services:restart('mail-sync').
+import { registerEnvHandlers } from './handlers/env'
+import { registerServicesHandlers } from './handlers/services'
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -196,6 +202,11 @@ app.whenReady().then(() => {
   // renderer's first `island:status` invoke (on TitleBar mount) hits a
   // handler that exists. Probe loop runs in production only.
   registerIslandHandlers()
+  // Sprint 18 §PR B — env:* read/write + services:* pm2 control. Must be
+  // wired before createWindow so SettingsPage's first env:get on mount has
+  // a handler to hit. Both registrations are side-effect-only (no state).
+  registerEnvHandlers()
+  registerServicesHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 

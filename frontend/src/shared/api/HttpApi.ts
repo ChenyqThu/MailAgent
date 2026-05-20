@@ -129,6 +129,21 @@ export class HttpApi implements MailApi {
     onStatus: (): (() => void) => () => undefined
   }
 
+  // Sprint 18 §PR B — repo-root .env IPC + pm2 services bridge.
+  // V2 web build has no `.env` access (the Mac host file is invisible from a
+  // remote browser session) and cannot spawn pm2 directly; V2-Sprint will
+  // surface a "edit on the Mac" hint via the FastAPI instead. Both surfaces
+  // throw notImplemented so a misdirected web-side call surfaces clearly.
+  env = {
+    get: () => notImplemented('env.get'),
+    set: () => notImplemented('env.set')
+  }
+
+  services = {
+    restart: () => notImplemented('services.restart'),
+    status: () => notImplemented('services.status')
+  }
+
   // Sprint 9 §2.3 — ping-island bridge lives on the Mac host. From a remote
   // browser the V2 FastAPI could surface a read-only "island connected?"
   // status, but emitting envelopes from the web tab would race the local

@@ -31,6 +31,10 @@ import {
 // Sprint 8 §2.2 — shared with `db.ts:settingsDbPathOverride()` so the
 // IPC sanitizer and the actual DB-open call validate paths identically.
 import { isSafeUserPath } from '../lib/path-guard'
+// Sprint 18 §PR B — single source of truth for the `.env` path. The
+// USER_EMAIL reader below used to keep its own candidate list; now it
+// resolves the same file that env:* IPC and the Python CLI consume.
+import { resolveEnvPath } from '../lib/env-path'
 // Sprint 6 review (opus MEDIUM #4): dropped dynamic `await import('./llm_stats')`
 // in favour of a static import — they're already eagerly loaded by `index.ts`,
 // so the dynamic ceremony added a Vite warning + extra microtask without any
@@ -73,30 +77,22 @@ const DEFAULTS: PersistentSettings = {
 
 /** Sprint 11 V1.4 — read USER_EMAIL from the repo-root `.env`. The file is
  *  the same one the Python backend reads, so the owner-of-the-SQLite-SSoT
- *  edits one source. Search order: process.env (shell-injected),
- *  $MAILAGENT_ENV_FILE override, dev cwd `../.env` (cwd=frontend), packaged
- *  install at `~/Documents/MailAgent/.env`. First hit wins. */
+ *  edits one source. Sprint 18 §PR B — candidate resolution moved to
+ *  `lib/env-path.ts:resolveEnvPath()` so env:* IPC and this reader share
+ *  one truth. The shell-override (`process.env.USER_EMAIL`) still wins for
+ *  ad-hoc dev sessions. */
 function loadUserEmailFromEnv(): string | null {
   const shellVar = process.env.USER_EMAIL
   if (shellVar && shellVar.includes('@')) return shellVar.trim()
-  const candidates: string[] = []
-  if (process.env.MAILAGENT_ENV_FILE) candidates.push(process.env.MAILAGENT_ENV_FILE)
-  candidates.push(join(process.cwd(), '..', '.env'))
   try {
-    candidates.push(join(app.getPath('home'), 'Documents', 'MailAgent', '.env'))
-  } catch {
-    /* app not ready — skip the home candidate */
-  }
-  for (const p of candidates) {
-    try {
-      const txt = readFileSync(p, 'utf8')
-      const match = txt.match(/^\s*USER_EMAIL\s*=\s*(.+?)\s*$/m)
-      if (match && match[1].includes('@')) {
-        return match[1].replace(/^["']|["']$/g, '').trim()
-      }
-    } catch {
-      /* candidate not found, try next */
+    const p = resolveEnvPath()
+    const txt = readFileSync(p, 'utf8')
+    const match = txt.match(/^\s*USER_EMAIL\s*=\s*(.+?)\s*$/m)
+    if (match && match[1].includes('@')) {
+      return match[1].replace(/^["']|["']$/g, '').trim()
     }
+  } catch {
+    /* .env unreadable — fall through to null */
   }
   return null
 }
