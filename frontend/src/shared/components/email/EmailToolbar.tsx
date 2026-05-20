@@ -531,7 +531,11 @@ export function EmailToolbar({
   return (
     <header
       ref={containerRef}
-      className="h-11 border-b border-ink-border bg-ink-3 flex items-center px-3 gap-1 shrink-0"
+      // EmailDetail 的 <main> 是 .glass-3 (ink-3/0.55 + backdrop blur).
+      // 之前这里用 bg-ink-3 纯色, 把毛玻璃盖死了; 现在改 .glass-2 (ink-2/0.45,
+      // 比 glass-3 略深一点形成层次), 既保留 toolbar 与正文的视觉分层, 又让
+      // 后面的 wallpaper 仍能透过来.
+      className="h-11 border-b border-ink-border-soft glass-2 flex items-center px-3 gap-1 shrink-0"
     >
       <IconOnlyBtn
         icon={<ArrowLeft size={14} strokeWidth={2} />}
