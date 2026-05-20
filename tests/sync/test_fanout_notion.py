@@ -163,13 +163,24 @@ class TestSkipConditions:
 # Idempotency
 # ============================================================
 
-class TestIdempotency:
-    async def test_noop_flag_unchanged_no_status(self, fanout, sync_store, notion_sync):
-        """flag 与 current 一致 + 无 processing_status → noop."""
+class TestAlwaysCallsNotionApi:
+    """Stage 1.6 fix: 不基于 SQLite cache 做 idempotency, payload 有 notion
+    字段就调 update_email_flags (Notion pages.update 幂等). 字段都没有才 noop."""
+
+    async def test_payload_matches_current_still_calls(self, fanout, sync_store, notion_sync):
+        """SQLite cache 跟 payload 一致, 仍要调 Notion (cache≠Notion 真实状态)."""
         entry = _make_entry(payload={"is_read": False, "is_flagged": False})
         ok, detail = await fanout.execute(entry)
         assert ok is True
-        assert detail == "noop_idempotent"
+        assert detail == "done"
+        notion_sync.update_email_flags.assert_called_once()
+
+    async def test_empty_payload_returns_no_change(self, fanout, sync_store, notion_sync):
+        """payload 没 is_read/is_flagged/processing_status → noop_no_change."""
+        entry = _make_entry(payload={"some_other_key": "ignored"})
+        ok, detail = await fanout.execute(entry)
+        assert ok is True
+        assert detail == "noop_no_change"
         notion_sync.update_email_flags.assert_not_called()
 
 

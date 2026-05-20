@@ -37,10 +37,16 @@ class MailAppFanout:
     async def execute(self, entry: OutboxEntry) -> Tuple[bool, str]:
         """执行一条 mailapp outbox.
 
+        语义: payload 显式列出的字段才调 AppleScript (字段没在 payload 里 = 不动).
+        AppleScript set read status / set flagged status 本身幂等, 重复调无害,
+        所以不再用 SQLite cache 做 short-circuit (Stage 1.4 后 CLI / handler 端
+        会先 update_local_flags 做 echo prevention, 那是 SQLite cache 跟 payload
+        早就一致 — 一致 ≠ Mail.app 真实状态已同步).
+
         Returns:
             (success, detail)
             - (True, 'done') — AppleScript 写成功 + sync_store 更新
-            - (True, 'noop_idempotent') — payload 与 current state 一致, 跳过
+            - (True, 'noop_no_change') — payload 没有任何 mailapp 关心的字段
             - (True, 'noop_email_missing') — sync_store 找不到 internal_id, 跳过
               (邮件被删后 outbox 仍有残留 → CASCADE 一般会清, 此处兜底)
             - (False, error_message)
@@ -52,28 +58,22 @@ class MailAppFanout:
         if record is None:
             return (True, "noop_email_missing")
 
-        current_read = bool(record.get("is_read", False))
-        current_flagged = bool(record.get("is_flagged", False))
         mailbox = record.get("mailbox")
 
-        target_read = bool(payload["is_read"]) if "is_read" in payload else current_read
-        target_flagged = (
-            bool(payload["is_flagged"]) if "is_flagged" in payload else current_flagged
-        )
+        has_read = "is_read" in payload
+        has_flagged = "is_flagged" in payload
+        if not (has_read or has_flagged):
+            return (True, "noop_no_change")
 
-        if target_read == current_read and target_flagged == current_flagged:
-            # 状态已经一致，无需调 AppleScript
-            logger.debug(
-                f"[mailapp-fanout] noop idempotent: internal_id={internal_id} "
-                f"read={target_read} flagged={target_flagged}"
-            )
-            return (True, "noop_idempotent")
+        target_read = bool(payload["is_read"]) if has_read else None
+        target_flagged = bool(payload["is_flagged"]) if has_flagged else None
 
         # 调 AppleScript（blocking subprocess） — 包到 to_thread 不阻塞 event loop
+        # 不做 SQLite-based idempotency: AppleScript 本身幂等, 直接调更可靠
         errors = []
         ok = True
 
-        if target_read != current_read:
+        if has_read:
             success = await asyncio.to_thread(
                 self.arm.mark_as_read_by_id, internal_id, target_read, mailbox
             )
@@ -81,7 +81,7 @@ class MailAppFanout:
                 ok = False
                 errors.append(f"mark_as_read_by_id failed (target={target_read})")
 
-        if target_flagged != current_flagged:
+        if has_flagged:
             success = await asyncio.to_thread(
                 self.arm.set_flag_by_id, internal_id, target_flagged, mailbox
             )
@@ -92,18 +92,13 @@ class MailAppFanout:
         if not ok:
             return (False, "; ".join(errors))
 
-        # echo prevention：同步 SQLite 当前 state 防止下次 SQLite radar 误检
-        try:
-            self.sync_store.update_local_flags(internal_id, target_read, target_flagged)
-        except Exception as e:
-            # 不致命，至少 AppleScript 写成功了
-            logger.warning(
-                f"[mailapp-fanout] update_local_flags failed internal_id={internal_id}: {e}"
-            )
+        # 不再 update_local_flags: CLI / handler 端在 enqueue 之前已经做了
+        # echo prevention 写 SQLite, fanout 这里写就是 idempotent no-op,
+        # 且必须传两个 bool (target_read/flagged 可能 None) — 移走保持职责清晰:
+        # fanout 只负责对外 API, SQLite cache 同步由发起端做。
 
         logger.info(
             f"[mailapp-fanout] applied internal_id={internal_id} "
-            f"read={target_read} flagged={target_flagged} "
-            f"(was read={current_read} flagged={current_flagged})"
+            f"read={target_read} flagged={target_flagged}"
         )
         return (True, "done")

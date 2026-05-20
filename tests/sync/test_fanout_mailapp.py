@@ -1,11 +1,18 @@
-"""MailAppFanout 单测（Sprint 15 Stage 1.3）.
+"""MailAppFanout 单测（Sprint 15 Stage 1.3 + 1.6 fanout-no-shortcircuit fix）.
+
+设计说明 (post Stage 1.6):
+  Stage 1.4 把 CLI handler 端 update_local_flags 移到 enqueue 之前做 echo
+  prevention, 这导致 fanout 时 SQLite cache 跟 payload 已经一致 — 一致不
+  代表 Mail.app 真实状态已同步。所以 MailAppFanout 不能用 SQLite 做
+  idempotency short-circuit，必须永远调 AppleScript (set read/flagged
+  status 本身幂等, 无副作用)。
 
 覆盖:
-- 基础: 状态变化 → arm 调用 + sync_store.update_local_flags 同步
-- Idempotency: payload == current 状态 → noop_idempotent, 不调 AppleScript
-- Email missing: sync_store 找不到 → noop_email_missing
+- 基础: 调 AppleScript + sync_store.update_local_flags 同步
+- 部分: payload 只含 is_read / 只含 is_flagged → 只调对应 arm
+- noop_no_change: payload 不含 mailapp 关心字段 → 跳过 arm
+- noop_email_missing: sync_store 找不到 → 跳过
 - AppleScript failure: arm 返回 False → fanout 失败
-- 部分变化: 只 is_read 变 / 只 is_flagged 变
 - mailbox 从 sync_store 取
 """
 
@@ -88,7 +95,8 @@ class TestBasicExecution:
         assert detail == "done"
         arm.mark_as_read_by_id.assert_called_once_with(1001, True, "收件箱")
         arm.set_flag_by_id.assert_not_called()
-        sync_store.update_local_flags.assert_called_once_with(1001, True, False)
+        # fanout 不再写 SQLite (echo prevention 由 CLI/handler 端做)
+        sync_store.update_local_flags.assert_not_called()
 
     async def test_is_flagged_change_calls_arm(self, fanout, sync_store, arm):
         entry = _make_entry(payload={"is_flagged": True})
@@ -97,7 +105,7 @@ class TestBasicExecution:
         assert detail == "done"
         arm.set_flag_by_id.assert_called_once_with(1001, True, "收件箱")
         arm.mark_as_read_by_id.assert_not_called()
-        sync_store.update_local_flags.assert_called_once_with(1001, False, True)
+        sync_store.update_local_flags.assert_not_called()
 
     async def test_both_changes(self, fanout, sync_store, arm):
         entry = _make_entry(payload={"is_read": True, "is_flagged": True})
@@ -105,7 +113,7 @@ class TestBasicExecution:
         assert ok is True
         arm.mark_as_read_by_id.assert_called_once()
         arm.set_flag_by_id.assert_called_once()
-        sync_store.update_local_flags.assert_called_once_with(1001, True, True)
+        sync_store.update_local_flags.assert_not_called()
 
     async def test_mailbox_passed_through(self, fanout, sync_store, arm):
         sync_store.get.return_value = {
@@ -120,31 +128,30 @@ class TestBasicExecution:
 # Idempotency
 # ============================================================
 
-class TestIdempotency:
-    async def test_noop_when_state_matches(self, fanout, sync_store, arm):
-        """Current is_read=False is_flagged=False; payload 也写 False → noop."""
+class TestAlwaysCallsAppleScript:
+    """Stage 1.6 fix: 不基于 SQLite cache 做 idempotency, payload 字段在
+    就调 AppleScript (AppleScript 本身幂等), 字段不在就跳过对应调用."""
+
+    async def test_payload_matches_current_still_calls(self, fanout, sync_store, arm):
+        """SQLite cache 跟 payload 一致, 仍要调 AppleScript (cache≠Mail.app 真实)."""
         entry = _make_entry(payload={"is_read": False, "is_flagged": False})
         ok, detail = await fanout.execute(entry)
         assert ok is True
-        assert detail == "noop_idempotent"
-        arm.mark_as_read_by_id.assert_not_called()
-        arm.set_flag_by_id.assert_not_called()
-        sync_store.update_local_flags.assert_not_called()
+        assert detail == "done"
+        arm.mark_as_read_by_id.assert_called_once_with(1001, False, "收件箱")
+        arm.set_flag_by_id.assert_called_once_with(1001, False, "收件箱")
 
-    async def test_noop_when_payload_partial_matches_current(self, fanout, sync_store, arm):
-        """Current is_read=True, payload 只指定 is_read=True → noop."""
-        sync_store.get.return_value = {
-            "internal_id": 1001, "is_read": True, "is_flagged": False, "mailbox": "收件箱"
-        }
+    async def test_payload_only_is_read_skips_set_flag(self, fanout, sync_store, arm):
+        """payload 不含 is_flagged → set_flag_by_id 不调用."""
         entry = _make_entry(payload={"is_read": True})
         ok, detail = await fanout.execute(entry)
         assert ok is True
-        assert detail == "noop_idempotent"
-        arm.mark_as_read_by_id.assert_not_called()
+        assert detail == "done"
+        arm.mark_as_read_by_id.assert_called_once_with(1001, True, "收件箱")
+        arm.set_flag_by_id.assert_not_called()
 
-    async def test_payload_unspecified_key_preserved(self, fanout, sync_store, arm):
-        """Current is_read=True is_flagged=True; payload 只指定 is_flagged=False.
-        is_read 保持 True (不变), is_flagged 翻 False (变化) → 只调 set_flag."""
+    async def test_payload_only_is_flagged_skips_mark_read(self, fanout, sync_store, arm):
+        """payload 只指定 is_flagged → 只调 set_flag."""
         sync_store.get.return_value = {
             "internal_id": 1001, "is_read": True, "is_flagged": True, "mailbox": "收件箱"
         }
@@ -154,8 +161,15 @@ class TestIdempotency:
         assert detail == "done"
         arm.mark_as_read_by_id.assert_not_called()
         arm.set_flag_by_id.assert_called_once_with(1001, False, "收件箱")
-        # update_local_flags 持久 (is_read=True, is_flagged=False)
-        sync_store.update_local_flags.assert_called_once_with(1001, True, False)
+
+    async def test_empty_payload_returns_no_change(self, fanout, sync_store, arm):
+        """payload 没 is_read/is_flagged → noop_no_change."""
+        entry = _make_entry(payload={"processing_status": "已完成"})  # 不归 mailapp 管
+        ok, detail = await fanout.execute(entry)
+        assert ok is True
+        assert detail == "noop_no_change"
+        arm.mark_as_read_by_id.assert_not_called()
+        arm.set_flag_by_id.assert_not_called()
 
 
 # ============================================================
@@ -200,11 +214,4 @@ class TestFailureHandling:
         assert "mark_as_read_by_id failed" in detail
         assert "set_flag_by_id failed" in detail
 
-    async def test_update_local_flags_exception_not_fatal(self, fanout, sync_store, arm):
-        """sync_store.update_local_flags 抛异常不应该让 fanout 失败
-        (AppleScript 已经写成功了, 不能因为 echo prevention 失败就重试整条 outbox)."""
-        sync_store.update_local_flags.side_effect = RuntimeError("disk full")
-        entry = _make_entry(payload={"is_read": True})
-        ok, detail = await fanout.execute(entry)
-        assert ok is True
-        assert detail == "done"
+    # test_update_local_flags_exception_not_fatal 删除 — fanout 不再写 SQLite

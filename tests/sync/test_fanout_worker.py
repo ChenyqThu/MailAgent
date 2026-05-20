@@ -111,7 +111,7 @@ class TestTickHappyPath:
         assert repo.get(oid_n).status == "done"
 
     async def test_noop_counted_as_done(self, repo, worker, mailapp_fanout):
-        mailapp_fanout.execute = AsyncMock(return_value=(True, "noop_idempotent"))
+        mailapp_fanout.execute = AsyncMock(return_value=(True, "noop_no_change"))
         oid = repo.enqueue(internal_id=1001, op_type="flag_sync", target="mailapp", payload={})
 
         worker._sem = asyncio.Semaphore(worker.concurrency)

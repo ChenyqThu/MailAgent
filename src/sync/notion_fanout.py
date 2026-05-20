@@ -33,10 +33,16 @@ class NotionFanout:
     async def execute(self, entry: OutboxEntry) -> Tuple[bool, str]:
         """执行一条 notion outbox.
 
+        语义: payload 显式列出的 is_read/is_flagged/processing_status 才传给
+        Notion API. Notion pages.update 是幂等的, 不用 SQLite cache 做
+        short-circuit (Stage 1.4 后 CLI / handler 端已 update_local_flags 做
+        echo prevention, SQLite cache 跟 payload 早就一致 — 一致 ≠ Notion 真实
+        状态已同步).
+
         Returns:
             (success, detail)
             - (True, 'done') — Notion API 写成功
-            - (True, 'noop_idempotent') — payload 与 current state 一致
+            - (True, 'noop_no_change') — payload 没 notion 关心的字段
             - (True, 'noop_email_missing') — sync_store 找不到 internal_id
             - (True, 'noop_no_page_id') — 邮件还没同步到 Notion (page_id NULL)
             - (False, error_message)
@@ -56,25 +62,24 @@ class NotionFanout:
             )
             return (True, "noop_no_page_id")
 
-        current_read = bool(record.get("is_read", False))
-        current_flagged = bool(record.get("is_flagged", False))
-
-        target_read = bool(payload["is_read"]) if "is_read" in payload else current_read
-        target_flagged = (
-            bool(payload["is_flagged"]) if "is_flagged" in payload else current_flagged
-        )
+        has_read = "is_read" in payload
+        has_flagged = "is_flagged" in payload
         target_processing_status = payload.get("processing_status", "")
 
-        # 只 processing_status 变化也算 work, 不要 idempotent skip
-        flag_unchanged = (
-            target_read == current_read and target_flagged == current_flagged
+        if not (has_read or has_flagged or target_processing_status):
+            return (True, "noop_no_change")
+
+        # NotionSync.update_email_flags 要求 is_read + is_flagged 同时传 bool.
+        # payload 没有的字段用 SQLite cache 兜底 (Stage 1.4 后 CLI 已 sync 同值,
+        # 跟 payload 一致; 灰度期可能有轻微 stale 风险但 Notion 端被覆盖到的也
+        # 仍是 mailagent 期望的最新 intent state)
+        target_read = (
+            bool(payload["is_read"]) if has_read else bool(record.get("is_read", False))
         )
-        if flag_unchanged and not target_processing_status:
-            logger.debug(
-                f"[notion-fanout] noop idempotent: internal_id={internal_id} "
-                f"page_id={notion_page_id}"
-            )
-            return (True, "noop_idempotent")
+        target_flagged = (
+            bool(payload["is_flagged"]) if has_flagged
+            else bool(record.get("is_flagged", False))
+        )
 
         try:
             await self.notion_sync.update_email_flags(
