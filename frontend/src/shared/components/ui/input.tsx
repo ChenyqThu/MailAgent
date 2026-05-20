@@ -1,0 +1,33 @@
+// Sprint 18 — shadcn Input primitive.
+//
+// Pure HTML <input> wrapper with token-aware styling. The `type=number`
+// spinner-button suppression keeps EnvField's custom step-buttons (PR D) as
+// the single way to bump a numeric value — native spinners ignore i18n and
+// look out-of-place on the macOS chrome.
+
+import * as React from 'react'
+
+import { cn } from '@shared/lib/cn'
+
+export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
+
+export const Input = React.forwardRef<HTMLInputElement, InputProps>(
+  ({ className, type, ...props }, ref) => (
+    <input
+      type={type}
+      ref={ref}
+      className={cn(
+        'flex h-8 w-full rounded-md border border-ink-border bg-ink-2 px-3',
+        'text-aux text-ink-fg placeholder:text-ink-fg-3',
+        'transition-colors duration-fast ease-standard',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 focus-visible:border-coral/60',
+        'disabled:cursor-not-allowed disabled:opacity-50',
+        '[&[type=number]::-webkit-inner-spin-button]:appearance-none',
+        '[&[type=number]::-webkit-outer-spin-button]:appearance-none',
+        className
+      )}
+      {...props}
+    />
+  )
+)
+Input.displayName = 'Input'
