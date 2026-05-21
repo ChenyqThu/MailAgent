@@ -135,9 +135,14 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // Record<number, string | null> so a "no first user message" hit
   // (assistant-only seeded session) is distinct from "not loaded yet".
   const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
+
+  const chat = useEmailChat(activeInternalId)
+
+  // Sprint 14 PR G polish — lazy-load preview effect. Lives AFTER
+  // `chat = useEmailChat(...)` so the JSX hoisting ordering lint
+  // ("Cannot access before declared") is satisfied — `chat.sessions`
+  // is the trigger, but the const is only valid past line 173.
   useEffect(() => {
-    // Only spend the IPC round-trips when the user actually sees the
-    // sidebar; opening it later triggers this same effect via deps.
     if (!sidebarOpen) return
     const missing = chat.sessions.filter((s) => !(s.id in sessionPreviews))
     if (missing.length === 0) return
@@ -150,8 +155,8 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           const preview = firstUser?.content?.trim() ?? null
           return [s.id, preview === null ? null : preview.slice(0, 80)] as const
         } catch {
-          // Best-effort: a failed fetch just leaves the cell as `null`
-          // so the sidebar falls back to backend label + time.
+          // Non-critical fetch: the sidebar shows backend label + time
+          // when a preview entry stays null.
           return [s.id, null] as const
         }
       })
@@ -167,8 +172,6 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
       cancelled = true
     }
   }, [sidebarOpen, chat.sessions, sessionPreviews, mailApi])
-
-  const chat = useEmailChat(activeInternalId)
 
   // Pull AI fields + email detail (for thread_id) + thread sibling count
   // for the ContextChips header.
