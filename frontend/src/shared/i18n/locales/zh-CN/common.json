@@ -350,7 +350,8 @@
       "customApi": "Custom API",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
-      "modelsLabel": "模型"
+      "modelsLabel": "模型",
+      "openSettings": "管理 AI 后端 · 设置 → AI"
     },
     "context": {
       "title": "上下文",

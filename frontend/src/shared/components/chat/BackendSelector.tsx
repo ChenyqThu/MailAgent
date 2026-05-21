@@ -12,9 +12,11 @@
 // matches the ⌥⇧B shortcut and is enough for the V1 ship.
 
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, Sparkles } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { ChevronDown, Settings, Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { HoverTip } from '@shared/components/ui/HoverTip'
 import type { ChatBackendKind } from '@shared/api/types'
 
 export interface BackendChoice {
@@ -33,6 +35,7 @@ const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
 
 export function BackendSelector({ value, onChange, agentName }: Props): React.ReactElement {
   const { t } = useTranslation()
+  const navigate = useNavigate()
 
   const isNotionAgent = value.kind === 'notion-agent'
   const activeModel = value.model ?? DEFAULT_CUSTOM_MODEL
@@ -61,8 +64,18 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
     }
   }
 
+  // Sprint 14 PR F — Settings AI tab deep link. Sprint 18 Settings landed
+  // the AI tab as the canonical place to manage Notion Agent / Custom API
+  // keys, models, persona overlays; clicking the gear jumps there without
+  // forcing the user to backtrack through the Sidebar. e.stopPropagation
+  // keeps the click from also flipping the backend kind.
+  const openSettings = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    void navigate({ to: '/settings', search: { tab: 'ai' } })
+  }
+
   return (
-    <div className="px-3 py-2.5 border-b border-ink-border-soft">
+    <div className="px-3 py-2.5 border-b border-ink-border-soft relative">
       <button
         type="button"
         onClick={toggleBackend}
@@ -94,6 +107,23 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
           className="text-ink-fg-2 group-hover:text-ink-fg shrink-0 transition-colors duration-fast"
         />
       </button>
+      {/* Settings shortcut — absolute overlay on the hero card's top-right
+          corner. Sibling-positioned (not nested in the hero button) so the
+          DOM stays valid + e.stopPropagation can't be relied on alone. */}
+      <HoverTip text={t('chat.backend.openSettings')} side="bottom">
+        <button
+          type="button"
+          onClick={openSettings}
+          aria-label={t('chat.backend.openSettings')}
+          className={cn(
+            'absolute top-3.5 right-5 p-1 rounded',
+            'text-ink-fg-3 hover:text-ink-fg hover:bg-ink-4',
+            'transition-colors duration-fast'
+          )}
+        >
+          <Settings size={11} strokeWidth={2} />
+        </button>
+      </HoverTip>
     </div>
   )
 }

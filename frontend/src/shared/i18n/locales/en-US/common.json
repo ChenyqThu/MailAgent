@@ -350,7 +350,8 @@
       "customApi": "Custom API",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
-      "modelsLabel": "Models"
+      "modelsLabel": "Models",
+      "openSettings": "Manage AI backends · Settings → AI"
     },
     "context": {
       "title": "Context",
