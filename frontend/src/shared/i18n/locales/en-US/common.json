@@ -381,6 +381,9 @@
       "copy": "Copy",
       "toNotion": "To Notion"
     },
+    "attachment": {
+      "remove": "Remove attachment"
+    },
     "mention": {
       "title": "Mention emails",
       "searchAria": "Search emails to mention",
@@ -402,8 +405,8 @@
       "sending": "Sending",
       "cancel": "Cancel",
       "regenerate": "Regenerate",
-      "attach": "Attach",
-      "attachBlocked": "Attach context · awaiting Sprint 14 wiring",
+      "attach": "Attach file · text inlined, binary as metadata only",
+      "attachBlocked": "Attach context · pick an active email first",
       "mention": "@-mention email context",
       "mentionBlocked": "@-mention · pick an active email first",
       "model": "Switch model",

@@ -16,6 +16,11 @@ import { AtSign, ArrowUp, Cpu, Paperclip, X } from 'lucide-react'
 import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useShortcut } from '@shared/hooks/useShortcut'
+import {
+  type ChatAttachment,
+  formatAttachmentSize,
+  readAttachment
+} from '@shared/lib/chat-attachments'
 import type { SearchHit } from '@shared/api/types'
 
 import { MentionPopover } from './MentionPopover'
@@ -51,6 +56,12 @@ interface Props {
   mentions?: ReadonlyArray<SearchHit>
   onAddMention?(hit: SearchHit): void
   onRemoveMention?(internalId: number): void
+  /** Sprint 14 PR C — file attachments (in-memory MVP). Same chip-stack
+   *  treatment as mentions; AIChatPanel owns the state + reads the text
+   *  content into the user message at send time. */
+  attachments?: ReadonlyArray<ChatAttachment>
+  onAddAttachment?(attachment: ChatAttachment): void
+  onRemoveAttachment?(id: string): void
 }
 
 export function Composer({
@@ -67,16 +78,44 @@ export function Composer({
   modelPickerDisabled,
   mentions = [],
   onAddMention,
-  onRemoveMention
+  onRemoveMention,
+  attachments = [],
+  onAddAttachment,
+  onRemoveAttachment
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [focused, setFocused] = useState(false)
   // Sprint 14 PR D — @-mention popover open state. Local to Composer
   // because AIChatPanel only needs the resolved mentions list, not the
   // popover lifecycle. Outside-click + Escape close inside the popover.
   const [mentionOpen, setMentionOpen] = useState(false)
   const mentionEnabled = onAddMention !== undefined && onRemoveMention !== undefined
+  const attachEnabled = onAddAttachment !== undefined && onRemoveAttachment !== undefined
+
+  // Sprint 14 PR C — file picker handler. Reads selected files via the
+  // FileReader API (renderer-side, no IPC) and pushes each one through
+  // onAddAttachment. Reset the input value after consumption so the
+  // same file can be re-selected after a remove + re-add cycle.
+  const handleFilePick = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const files = e.target.files
+      if (!files || files.length === 0 || !onAddAttachment) return
+      for (const file of Array.from(files)) {
+        try {
+          const a = await readAttachment(file)
+          onAddAttachment(a)
+        } catch {
+          // FileReader threw — usually a sandbox / permission case we
+          // can't recover from in the renderer. Skip silently; the
+          // chip simply doesn't appear and the user can try again.
+        }
+      }
+      e.target.value = ''
+    },
+    [onAddAttachment]
+  )
   // Sprint 13 — model picker popover state. Open via the Cpu button in
   // the footer; closed by Escape, outside click, or model select.
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
@@ -130,6 +169,41 @@ export function Composer({
     // mockup L2514 — `border-t border-ink-border bg-ink-2 p-2.5`. p-2.5 (10px)
     // not p-3 (12px); border above is `border-ink-border` not `-soft`.
     <div className="p-2.5 border-t border-ink-border bg-ink-2">
+      {/* Sprint 14 PR C — attachment chip stack. Text-content attachments
+          are rendered with the same chip chrome as mentions (coral
+          accent) so the user has a single visual idiom for "I added
+          extra context to this turn". Binary attachments still render
+          a chip but the send-time block surfaces metadata only. */}
+      {attachments.length > 0 && (
+        <ul className="flex flex-wrap gap-1 px-1 pb-1.5">
+          {attachments.map((a) => (
+            <li
+              key={a.id}
+              className={cn(
+                'inline-flex items-center gap-1 max-w-[220px]',
+                'px-1.5 py-0.5 rounded',
+                'bg-ink-3 border border-ink-border',
+                'text-micro text-ink-fg'
+              )}
+              title={`${a.filename} (${formatAttachmentSize(a.sizeBytes)})`}
+            >
+              <Paperclip size={9} strokeWidth={2} className="text-ink-fg-2 shrink-0" />
+              <span className="truncate">{a.filename}</span>
+              <span className="text-ink-fg-3 font-mono shrink-0">
+                {formatAttachmentSize(a.sizeBytes)}
+              </span>
+              <button
+                type="button"
+                onClick={() => onRemoveAttachment?.(a.id)}
+                aria-label={t('chat.attachment.remove')}
+                className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+              >
+                <X size={9} strokeWidth={2} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       {/* Sprint 14 PR D — mention chip stack lives ABOVE the textarea
           container (separate row so the chips never collide with the
           text caret). Each chip shows the subject + a remove X; the
@@ -202,16 +276,34 @@ export function Composer({
             HoverTip TODO; model click points at the BackendSelector
             Alt row above (the canonical model picker). */}
         <div className="flex items-center gap-0.5 px-2 py-1.5 border-t border-ink-border-soft">
-          <HoverTip text={t('chat.composer.attachBlocked')} side="top">
+          {/* Sprint 14 PR C — attach button. Hidden file input does the
+              picking; the visible button just triggers it via ref.
+              multiple lets users add a batch in one open. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={(e) => void handleFilePick(e)}
+            className="hidden"
+            aria-hidden="true"
+            tabIndex={-1}
+          />
+          <HoverTip
+            text={attachEnabled ? t('chat.composer.attach') : t('chat.composer.attachBlocked')}
+            side="top"
+          >
             <button
               type="button"
-              disabled
+              disabled={!attachEnabled}
               aria-label={t('chat.composer.attach')}
-              data-disabled=""
-              tabIndex={-1}
+              onClick={() => attachEnabled && fileInputRef.current?.click()}
+              tabIndex={attachEnabled ? 0 : -1}
+              data-disabled={attachEnabled ? undefined : ''}
               className={cn(
                 'w-7 h-7 rounded-md grid place-items-center',
-                'text-ink-fg-3 opacity-50 cursor-not-allowed'
+                attachEnabled
+                  ? 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                  : 'text-ink-fg-3 opacity-50 cursor-not-allowed'
               )}
             >
               <Paperclip size={13} strokeWidth={2} />

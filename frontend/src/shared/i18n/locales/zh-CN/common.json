@@ -381,6 +381,9 @@
       "copy": "复制",
       "toNotion": "转 Notion"
     },
+    "attachment": {
+      "remove": "移除附件"
+    },
     "mention": {
       "title": "引用邮件",
       "searchAria": "搜索要引用的邮件",
@@ -402,8 +405,8 @@
       "sending": "发送中",
       "cancel": "取消",
       "regenerate": "重新生成",
-      "attach": "附件",
-      "attachBlocked": "附件上下文 · 等待 Sprint 14 接入",
+      "attach": "添加附件 · 文本类直读，二进制仅传文件名",
+      "attachBlocked": "附件上下文 · 选中一封邮件后再使用",
       "mention": "@提及邮件上下文",
       "mentionBlocked": "@提及 · 选中一封邮件后再使用",
       "model": "切换模型",

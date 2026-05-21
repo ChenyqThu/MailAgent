@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { History, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 
 import type { AIFields, EmailMeta, SearchHit } from '@shared/api/types'
+import { type ChatAttachment, buildAttachmentBlock } from '@shared/lib/chat-attachments'
 import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailChat } from '@shared/hooks/useEmailChat'
@@ -122,6 +123,11 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // markdown body via mailApi.email.body so the LLM sees real text,
   // not just the snippet excerpt. Cleared on successful send.
   const [mentions, setMentions] = useState<SearchHit[]>([])
+  // Sprint 14 PR C — attachment chip stack (in-memory MVP). The chat
+  // backends don't yet speak vision protocols, so attachments ride in
+  // the user-message body as a `[Attached files]` block (text content
+  // for parseable files, metadata-only for binaries). Cleared on send.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
 
   const chat = useEmailChat(activeInternalId)
 
@@ -272,12 +278,17 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     async (text: string) => {
       if (activeInternalId === null) return
       setDraft('')
-      // Snapshot mentions before clearing so the prompt builder sees the
-      // chips even though the chip stack flips to empty in the same tick.
-      const snapshot = mentions
+      // Snapshot mentions + attachments before clearing so the prompt
+      // builder sees the chips even though the chip stacks flip to
+      // empty in the same tick.
+      const mentionSnapshot = mentions
+      const attachmentSnapshot = attachments
       setMentions([])
-      const mentionContext = await buildMentionContext(snapshot)
-      const message = mentionContext.length > 0 ? `${mentionContext}${text}` : text
+      setAttachments([])
+      const mentionContext = await buildMentionContext(mentionSnapshot)
+      const attachmentContext = buildAttachmentBlock(attachmentSnapshot)
+      const prefix = `${attachmentContext}${mentionContext}`
+      const message = prefix.length > 0 ? `${prefix}${text}` : text
       try {
         await chat.send({
           message,
@@ -294,7 +305,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         // "fire-and-forget after dispatch" contract.
       }
     },
-    [activeInternalId, backend, buildMentionContext, chat, detailQ.data, mentions]
+    [activeInternalId, attachments, backend, buildMentionContext, chat, detailQ.data, mentions]
   )
 
   const handleAddMention = useCallback((hit: SearchHit) => {
@@ -303,6 +314,14 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
 
   const handleRemoveMention = useCallback((internalId: number) => {
     setMentions((cur) => cur.filter((m) => m.internal_id !== internalId))
+  }, [])
+
+  const handleAddAttachment = useCallback((attachment: ChatAttachment) => {
+    setAttachments((cur) => [...cur, attachment])
+  }, [])
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((cur) => cur.filter((a) => a.id !== id))
   }, [])
 
   const handlePickAction = useCallback((prompt: string) => setDraft(prompt), [])
@@ -567,6 +586,9 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                     mentions={mentions}
                     onAddMention={handleAddMention}
                     onRemoveMention={handleRemoveMention}
+                    attachments={attachments}
+                    onAddAttachment={handleAddAttachment}
+                    onRemoveAttachment={handleRemoveAttachment}
                     // Sprint 13 — model switcher lives in Composer Cpu button
                     // (mockup L2530). Notion Agent has no model picker — the
                     // agent decides; Custom API exposes the 3 supported models.
