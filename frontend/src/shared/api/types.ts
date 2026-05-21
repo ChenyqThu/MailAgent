@@ -637,6 +637,12 @@ export interface ChatApi {
    * transparent (WAL + busy_timeout already configured in chat_db.ts).
    */
   openPopout(emailId: number): void
+  /**
+   * Sprint 14 PR J — delete a session + its message rows (CASCADE).
+   * Fire-and-forget; caller (useEmailChat.deleteSession) updates
+   * renderer state synchronously after dispatching.
+   */
+  deleteSession(sessionId: number): void
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }

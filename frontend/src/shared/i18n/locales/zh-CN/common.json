@@ -347,7 +347,10 @@
       "justNow": "刚刚",
       "minutesAgo": "{n} 分钟前",
       "hoursAgo": "{n} 小时前",
-      "daysAgo": "{n} 天前"
+      "daysAgo": "{n} 天前",
+      "delete": "删除会话",
+      "deleteConfirm": "确认删除 · 该操作不可撤销",
+      "deleteCancel": "取消"
     },
     "backend": {
       "notionAgent": "Notion Agent",

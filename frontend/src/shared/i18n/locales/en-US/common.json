@@ -347,7 +347,10 @@
       "justNow": "just now",
       "minutesAgo": "{n}m ago",
       "hoursAgo": "{n}h ago",
-      "daysAgo": "{n}d ago"
+      "daysAgo": "{n}d ago",
+      "delete": "Delete session",
+      "deleteConfirm": "Confirm delete · cannot be undone",
+      "deleteCancel": "Cancel"
     },
     "backend": {
       "notionAgent": "Notion Agent",

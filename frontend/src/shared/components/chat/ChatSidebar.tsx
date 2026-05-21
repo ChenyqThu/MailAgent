@@ -13,8 +13,9 @@
 // time meta inside each item.
 
 import type { TFunction } from 'i18next'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, X } from 'lucide-react'
+import { Check, Plus, Trash2, X } from 'lucide-react'
 
 import type { ChatSession } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -31,6 +32,10 @@ interface ChatSidebarProps {
   onSelectSession: (sessionId: number) => void
   onNewSession: () => void
   onClose: () => void
+  /** Sprint 14 PR J — delete a session. SessionItem surfaces an inline
+   *  confirm step before invoking, so the parent only gets called when
+   *  the user actually committed to dropping the conversation. */
+  onDeleteSession?: (sessionId: number) => void
 }
 
 export function ChatSidebar({
@@ -39,7 +44,8 @@ export function ChatSidebar({
   previews,
   onSelectSession,
   onNewSession,
-  onClose
+  onClose,
+  onDeleteSession
 }: ChatSidebarProps): React.ReactElement {
   const { t } = useTranslation()
   return (
@@ -96,6 +102,7 @@ export function ChatSidebar({
               active={session.id === activeSessionId}
               preview={previews?.[session.id]}
               onSelect={() => onSelectSession(session.id)}
+              onDelete={onDeleteSession ? () => onDeleteSession(session.id) : undefined}
             />
           ))}
         </ul>
@@ -112,13 +119,18 @@ interface SessionItemProps {
    *  in this session); string = the preview to display. */
   preview?: string | null
   onSelect: () => void
+  /** Sprint 14 PR J — delete affordance. Undefined hides the trash
+   *  icon (read-only sidebar callers). Click → enters inline confirm
+   *  mode; second click on the checkmark commits. */
+  onDelete?: () => void
 }
 
 function SessionItem({
   session,
   active,
   preview,
-  onSelect
+  onSelect,
+  onDelete
 }: SessionItemProps): React.ReactElement {
   const { t } = useTranslation()
   const backendLabel = formatBackendLabel(session, t)
@@ -129,31 +141,91 @@ function SessionItem({
   // either still loading (undefined) or explicitly empty (null).
   const hasPreview = typeof preview === 'string' && preview.length > 0
   const primary = hasPreview ? preview : backendLabel
+  // Sprint 14 PR J — inline delete confirm. The trash icon's first
+  // click flips into "confirm" mode (icon morphs to a check + an X);
+  // the check commits the delete, the X (or Escape) reverts. Keeps
+  // accidental clicks safe without a heavyweight modal.
+  const [confirming, setConfirming] = useState(false)
   return (
     <li role="option" aria-selected={active}>
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-label={active ? t('chat.sidebar.itemAriaActive') : t('chat.sidebar.itemAriaSwitch')}
-        aria-current={active ? 'true' : undefined}
-        className={cn(
-          'w-full text-left px-2 py-1.5 rounded transition-colors duration-fast',
-          'flex flex-col gap-0.5 group',
-          active ? 'bg-ink-4 text-ink-fg ring-1 ring-c-accent/30' : 'text-ink-fg-1 hover:bg-ink-3'
-        )}
-      >
-        <span className="text-meta truncate" title={primary}>
-          {primary}
-        </span>
-        <span
+      <div className="relative group">
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-label={active ? t('chat.sidebar.itemAriaActive') : t('chat.sidebar.itemAriaSwitch')}
+          aria-current={active ? 'true' : undefined}
           className={cn(
-            'text-micro font-mono truncate',
-            active ? 'text-ink-fg-2' : 'text-ink-fg-3'
+            'w-full text-left px-2 py-1.5 rounded transition-colors duration-fast',
+            'flex flex-col gap-0.5',
+            // Right-pad to leave room for the trash icon overlay so a
+            // long preview never collides with the icon's hit-area.
+            onDelete && 'pr-8',
+            active ? 'bg-ink-4 text-ink-fg ring-1 ring-c-accent/30' : 'text-ink-fg-1 hover:bg-ink-3'
           )}
         >
-          {hasPreview ? `${backendLabel} · ${time}` : time}
-        </span>
-      </button>
+          <span className="text-meta truncate" title={primary}>
+            {primary}
+          </span>
+          <span
+            className={cn(
+              'text-micro font-mono truncate',
+              active ? 'text-ink-fg-2' : 'text-ink-fg-3'
+            )}
+          >
+            {hasPreview ? `${backendLabel} · ${time}` : time}
+          </span>
+        </button>
+        {onDelete &&
+          (confirming ? (
+            <span className="absolute top-1 right-1 flex items-center gap-0.5">
+              <HoverTip text={t('chat.sidebar.deleteConfirm')} side="left">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDelete()
+                  }}
+                  aria-label={t('chat.sidebar.deleteConfirm')}
+                  className="p-1 rounded bg-fail/15 text-fail hover:bg-fail/25 transition-colors duration-fast"
+                >
+                  <Check size={11} strokeWidth={2.5} />
+                </button>
+              </HoverTip>
+              <HoverTip text={t('chat.sidebar.deleteCancel')} side="left">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setConfirming(false)
+                  }}
+                  aria-label={t('chat.sidebar.deleteCancel')}
+                  className="p-1 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+                >
+                  <X size={11} strokeWidth={2.5} />
+                </button>
+              </HoverTip>
+            </span>
+          ) : (
+            <HoverTip text={t('chat.sidebar.delete')} side="left">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setConfirming(true)
+                }}
+                aria-label={t('chat.sidebar.delete')}
+                className={cn(
+                  'absolute top-1 right-1 p-1 rounded',
+                  'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                  'transition-opacity duration-fast',
+                  'text-ink-fg-3 hover:text-fail hover:bg-fail/10'
+                )}
+              >
+                <Trash2 size={11} strokeWidth={2} />
+              </button>
+            </HoverTip>
+          ))}
+      </div>
     </li>
   )
 }

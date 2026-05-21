@@ -559,6 +559,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
             onSelectSession={(sid) => void chat.selectSession(sid)}
             onNewSession={() => chat.newSession()}
             onClose={() => setSidebarOpen(false)}
+            onDeleteSession={(sid) => chat.deleteSession(sid)}
           />
         )}
         <div className="flex-1 flex flex-col min-h-0">

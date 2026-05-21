@@ -378,6 +378,11 @@ class ElectronChatApi implements ChatApi {
     if (!Number.isInteger(emailId) || emailId < 0) return
     sender()?.('window:openChatPopout', emailId)
   }
+  deleteSession(sessionId: number): void {
+    // Fire-and-forget — chat_db's CASCADE FK takes care of message rows.
+    if (!Number.isInteger(sessionId) || sessionId < 0) return
+    sender()?.('chat:deleteSession', sessionId)
+  }
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
     return subscribe('chat:stream', (...args: unknown[]) => {
       const env = args[0] as ChatStreamEnvelope | undefined

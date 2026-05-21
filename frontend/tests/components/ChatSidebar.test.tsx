@@ -264,6 +264,84 @@ describe('ChatSidebar — preview (Sprint 14 PR G polish)', () => {
   })
 })
 
+describe('ChatSidebar — delete affordance (Sprint 14 PR J)', () => {
+  test('without onDeleteSession prop the trash icon does NOT render', () => {
+    render(
+      <ChatSidebar
+        sessions={[fakeSession({ id: 7 })]}
+        activeSessionId={7}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.queryByLabelText(i18n.t('chat.sidebar.delete'))).toBeNull()
+  })
+
+  test('with onDeleteSession trash icon appears + inline confirm flow', () => {
+    const onDelete = vi.fn()
+    render(
+      <ChatSidebar
+        sessions={[fakeSession({ id: 7 })]}
+        activeSessionId={7}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+        onDeleteSession={onDelete}
+      />
+    )
+    // First click — opens confirm (replaces trash with check + cancel).
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.sidebar.delete')))
+    expect(onDelete).not.toHaveBeenCalled()
+    expect(screen.getByLabelText(i18n.t('chat.sidebar.deleteConfirm'))).toBeTruthy()
+
+    // Click the check — commits.
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.sidebar.deleteConfirm')))
+    expect(onDelete).toHaveBeenCalledTimes(1)
+    expect(onDelete).toHaveBeenCalledWith(7)
+  })
+
+  test('cancel button reverts back to non-confirming state', () => {
+    const onDelete = vi.fn()
+    render(
+      <ChatSidebar
+        sessions={[fakeSession({ id: 7 })]}
+        activeSessionId={7}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+        onDeleteSession={onDelete}
+      />
+    )
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.sidebar.delete')))
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.sidebar.deleteCancel')))
+    expect(onDelete).not.toHaveBeenCalled()
+    // Trash icon back, confirm UI gone.
+    expect(screen.getByLabelText(i18n.t('chat.sidebar.delete'))).toBeTruthy()
+    expect(screen.queryByLabelText(i18n.t('chat.sidebar.deleteConfirm'))).toBeNull()
+  })
+
+  test('clicking trash does NOT bubble to onSelectSession', () => {
+    const onSelect = vi.fn()
+    const onDelete = vi.fn()
+    render(
+      <ChatSidebar
+        sessions={[fakeSession({ id: 7 })]}
+        activeSessionId={7}
+        onSelectSession={onSelect}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+        onDeleteSession={onDelete}
+      />
+    )
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.sidebar.delete')))
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.sidebar.deleteConfirm')))
+    // Clicking the trash → confirm → check should NOT also fire the
+    // parent button's onSelect (e.stopPropagation guards in SessionItem).
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+})
+
 describe('ChatSidebar — relative time formatter', () => {
   test('< 1 min ago → justNow', () => {
     render(

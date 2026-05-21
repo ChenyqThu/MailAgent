@@ -15,6 +15,7 @@
 import { BrowserWindow, ipcMain } from 'electron'
 
 import {
+  deleteSession,
   listMessages,
   listSessionsForEmail,
   type BackendKind,
@@ -112,6 +113,17 @@ export function registerChatHandlers(): void {
   ipcMain.handle('chat:listSessions', async (_evt, emailId: number): Promise<ChatSession[]> => {
     if (!Number.isInteger(emailId) || emailId < 0) return []
     return listSessionsForEmail(emailId)
+  })
+
+  // Sprint 14 PR J — sidebar trash icon → user-confirmed delete.
+  // CASCADE FK on ai_chat_messages drops the message rows automatically;
+  // any in-flight stream on that session was already aborted by the
+  // renderer (useEmailChat.deleteSession calls chat.abort first). Bad
+  // sessionId silently no-ops because Number.isInteger gate above keeps
+  // garbage from the SQLite layer.
+  ipcMain.on('chat:deleteSession', (_evt, sessionId: number) => {
+    if (!Number.isInteger(sessionId) || sessionId < 0) return
+    deleteSession(sessionId)
   })
 
   // Sprint 14 PR B — chat:editMessage. Same envelope shape as chat:start

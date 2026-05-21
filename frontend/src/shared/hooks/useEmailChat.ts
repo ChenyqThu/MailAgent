@@ -115,6 +115,11 @@ export interface UseEmailChatReturn {
    *  `Error & { code }` on dispatch failure (the error also lands in
    *  `error` for banner display). */
   editMessage: (input: EditChatInput) => Promise<ChatStartResult>
+  /** Sprint 14 PR J — delete a session. Aborts any in-flight stream on
+   *  the target session, removes the row from the sessions list, and
+   *  if it was the active session resets to "no session" (matching
+   *  newSession()'s renderer state shape). */
+  deleteSession: (sessionId: number) => void
 }
 
 // Sprint 5 §2.3 state-machine #4: quota cooldown duration. The Anthropic
@@ -644,6 +649,28 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     [activeSessionId, mailApi, refresh]
   )
 
+  // Sprint 14 PR J — delete a session. Cascades to messages on the
+  // backend via the chat_db FK; on the renderer we abort any in-flight
+  // stream first, scrub the local sessions list, and reset active
+  // session state when the deleted session was active.
+  const deleteSession = useCallback(
+    (sessionId: number): void => {
+      if (sessionId === activeSessionRef.current) {
+        mailApi.chat.abort(sessionId)
+        sessionMetaRef.current.delete(sessionId)
+        setActiveSessionIdState(null)
+        activeSessionRef.current = null
+        setMessages([])
+        setStreamingMessageId(null)
+        setLastFailedInput(null)
+        setError(null)
+      }
+      mailApi.chat.deleteSession(sessionId)
+      setSessions((cur) => cur.filter((s) => s.id !== sessionId))
+    },
+    [mailApi]
+  )
+
   // Sprint 14 PR A — switch the renderer to a different session for the
   // current email (sidebar click). Aborts any in-flight stream on the
   // currently-active session, loads the target session's messages, and
@@ -708,7 +735,8 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     quotaCooldownUntil,
     sessions,
     selectSession,
-    editMessage
+    editMessage,
+    deleteSession
   }
 }
 
