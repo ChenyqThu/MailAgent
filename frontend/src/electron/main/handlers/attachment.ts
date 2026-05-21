@@ -66,7 +66,13 @@ export function getAttachmentLocalPath(attachmentId: number): string | null {
   const row = db
     .prepare('SELECT local_path FROM email_attachment WHERE id = ?')
     .get(attachmentId) as { local_path: string | null } | undefined
-  return row?.local_path ?? null
+  const stored = row?.local_path ?? null
+  if (stored === null) return null
+  // Mirror readAttachmentAsDataUrl's resolution: stored paths are
+  // relative to the project root (where the backend writes from),
+  // but the renderer needs an absolute file:// URL to open.
+  if (isAbsolute(stored)) return stored
+  return join(dirname(dirname(resolveDbPath())), stored)
 }
 
 // Sprint 13 — inline-image data URL. The sandboxed body iframe (srcdoc,
