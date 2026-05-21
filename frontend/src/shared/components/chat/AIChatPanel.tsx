@@ -247,7 +247,11 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const draftHandlers: DraftHandlers = {
     onSend: handleDraftSend,
     onRegenerate: chat.retryLast ?? null,
-    onEdit: undefined, // Sprint 14 — inline editor (assistant draft edit, separate flow)
+    // Sprint 14 PR I — onEdit is the "enter edit mode" trigger; the
+    // inline editor lives inside DraftPreviewCard, parent only needs
+    // to signal intent (noop fn opts the feature in without forwarding
+    // text state up). Read-only chat viewers can leave this undefined.
+    onEdit: () => {},
     onOpenInWindow: fullScreen ? undefined : handleDraftOpenInWindow,
     isSending: draftSending,
     recipient: detailQ.data?.sender ?? null

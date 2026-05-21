@@ -415,8 +415,10 @@
     "draftReply": {
       "header": "Draft reply",
       "send": "Send",
+      "sendEdited": "Send edited draft",
       "sending": "Opening in Mail.app…",
-      "edit": "Edit",
+      "edit": "Edit draft",
+      "exitEdit": "Cancel edit · Esc",
       "regenerate": "Regenerate",
       "openInWindow": "Open in window",
       "toast": {

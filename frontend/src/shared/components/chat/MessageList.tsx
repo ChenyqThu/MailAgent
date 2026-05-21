@@ -151,16 +151,44 @@ function DraftPreviewCard({
   const onOpenInWindow = handlers?.onOpenInWindow
   const isSending = handlers?.isSending === true
 
+  // Sprint 14 PR I — inline editor for the AI-drafted reply. Users can
+  // tweak the body before opening a Mail.app draft; useful when the AI
+  // got the tone close but the user wants to swap a phrase. editedBody
+  // resets to the cleaned `body` every time `body` changes (new draft
+  // turn) but only while editing is false, so an in-progress edit
+  // survives a no-op rerender.
+  const [editing, setEditing] = useState(false)
+  const [editedBody, setEditedBody] = useState(body)
+  const [lastBody, setLastBody] = useState(body)
+  if (body !== lastBody) {
+    setLastBody(body)
+    if (!editing) setEditedBody(body)
+  }
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => {
+    if (editing) editTextareaRef.current?.focus()
+  }, [editing])
+
+  // What we'll actually send. When editing, the live `editedBody` wins —
+  // pressing Send while in edit mode commits the changes implicitly.
+  const finalBody = editing ? editedBody : body
+
   // Send is only enabled once the stream finishes (otherwise the draft body
   // would be truncated mid-sentence). Backend has no partial-send semantics.
-  const sendDisabled = !onSend || isStreaming || isSending || body.length === 0
+  const sendDisabled = !onSend || isStreaming || isSending || finalBody.trim().length === 0
   // Regenerate piggybacks on chat.retryLast — if that's null (no failed
   // input on file, or no chat instance), surface a HoverTip explanation.
   const regenDisabled = !onRegenerate || isStreaming || isSending
-  // Edit + popout currently surface "coming in Sprint 14" toasts. The
-  // buttons still render so the layout matches the mockup; HoverTip
-  // explains why they're informational only.
-  const editTipKey = onEdit ? 'chat.draftReply.edit' : 'chat.draftReply.toast.editPending'
+  // Sprint 14 PR I — onEdit is now the "enter edit mode" trigger; the
+  // actual inline editor lives entirely in this component. Parent sets
+  // onEdit to a callable (even a noop) to opt-in; the toast pending
+  // copy is still surfaced when onEdit is undefined for read-only chat
+  // viewers.
+  const editTipKey = onEdit
+    ? editing
+      ? 'chat.draftReply.exitEdit'
+      : 'chat.draftReply.edit'
+    : 'chat.draftReply.toast.editPending'
   const popoutTipKey = onOpenInWindow
     ? 'chat.draftReply.openInWindow'
     : 'chat.draftReply.toast.popoutPending'
@@ -173,7 +201,9 @@ function DraftPreviewCard({
       ? 'chat.draftReply.sending'
       : !onSend
         ? 'chat.draftReply.toast.sendFailNoBin'
-        : 'chat.draftReply.send'
+        : editing
+          ? 'chat.draftReply.sendEdited'
+          : 'chat.draftReply.send'
 
   // Sprint 12 — .draft-card recipe (coral ring + faint glow + glass bg)
   // lives in index.css so the chrome reads as the AI's headline output.
@@ -199,9 +229,35 @@ function DraftPreviewCard({
         </span>
       </div>
 
-      {/* Body */}
+      {/* Body — Sprint 14 PR I — flip to a textarea when the user clicks
+          Edit. The textarea inherits the same coral focus-ring as the
+          composer so the affordance is consistent. Closing edit mode is
+          implicit on Send (uses editedBody) or via the same edit button
+          (toggle off → revert to read-only TranslatedBody). */}
       <div className="px-3 py-2.5 text-aux text-ink-fg space-y-2 bg-ink-3">
-        <TranslatedBody text={body} />
+        {editing ? (
+          <textarea
+            ref={editTextareaRef}
+            value={editedBody}
+            onChange={(e) => setEditedBody(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setEditedBody(body)
+                setEditing(false)
+              }
+            }}
+            rows={6}
+            aria-label={t('chat.draftReply.edit')}
+            className={cn(
+              'w-full resize-y bg-ink-2 text-ink-fg text-aux leading-snug',
+              'min-h-[120px] max-h-[400px] px-2 py-1.5 rounded',
+              'ring-1 ring-c-accent/40 focus:ring-c-accent focus:outline-none'
+            )}
+          />
+        ) : (
+          <TranslatedBody text={body} />
+        )}
       </div>
 
       {/* Footer — coral primary action + secondary text buttons. Each button
@@ -216,7 +272,17 @@ function DraftPreviewCard({
         <HoverTip text={t(sendTipKey)} side="top">
           <button
             type="button"
-            onClick={onSend ? () => void onSend(body) : undefined}
+            onClick={
+              onSend
+                ? () => {
+                    void onSend(finalBody)
+                    // Exiting edit mode after send keeps the chip-stack
+                    // mental model tidy — the draft is "shipped", no
+                    // reason to keep showing an editable surface.
+                    if (editing) setEditing(false)
+                  }
+                : undefined
+            }
             disabled={sendDisabled}
             aria-label={t('chat.draftReply.send')}
             data-disabled={sendDisabled ? '' : undefined}
@@ -260,19 +326,36 @@ function DraftPreviewCard({
         <HoverTip text={t(editTipKey)} side="top">
           <button
             type="button"
-            onClick={onEdit ?? undefined}
+            onClick={
+              onEdit
+                ? () => {
+                    if (editing) {
+                      // Cancel — revert + leave edit mode without
+                      // touching the user's draft text on the next turn.
+                      setEditedBody(body)
+                      setEditing(false)
+                    } else {
+                      setEditing(true)
+                      onEdit()
+                    }
+                  }
+                : undefined
+            }
             disabled={!onEdit}
-            aria-label={t('chat.draftReply.edit')}
+            aria-label={editing ? t('chat.draftReply.exitEdit') : t('chat.draftReply.edit')}
+            aria-pressed={editing}
             data-disabled={!onEdit ? '' : undefined}
             tabIndex={!onEdit ? -1 : 0}
             className={cn(
               'inline-flex items-center px-2 py-1.5 rounded text-aux',
-              'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+              editing
+                ? 'text-c-accent bg-c-accent/10 hover:bg-c-accent/15'
+                : 'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
               'transition-colors duration-fast',
               'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
             )}
           >
-            {t('chat.draftReply.edit')}
+            {editing ? t('chat.draftReply.exitEdit') : t('chat.draftReply.edit')}
           </button>
         </HoverTip>
 

@@ -415,8 +415,10 @@
     "draftReply": {
       "header": "草稿回复",
       "send": "发送",
+      "sendEdited": "发送编辑后的草稿",
       "sending": "打开 Mail.app 中…",
-      "edit": "编辑",
+      "edit": "编辑草稿",
+      "exitEdit": "取消编辑 · Esc",
       "regenerate": "重生成",
       "openInWindow": "在新窗口打开",
       "toast": {
