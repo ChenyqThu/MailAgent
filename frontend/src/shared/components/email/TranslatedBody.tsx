@@ -1,25 +1,25 @@
-// Sprint 3 §2.2 — translated-body display.
+// Sprint 3 §2.2 — markdown → safe HTML body renderer.
 //
-// The LLM returns markdown (per `prompts/` system message convention) so a
-// full markdown→HTML pass would be the most faithful render. We deliberately
-// stay minimal here: a regex pass covering the inline patterns email content
-// actually uses (bold, italic, inline code, http(s) links, headings, list
-// bullets, blockquote prefixes) wrapped through DOMPurify so escaped HTML
-// in the source stays escaped. Block-level structure (paragraphs, lists)
-// falls back to `whitespace-pre-wrap`, which keeps the source visually
-// recognisable without dragging in a markdown library on Sprint 3.
+// 原本是邮件翻译 (markdown 单调路径) 的渲染层; Sprint Immersive-Translate 后
+// 邮件翻译改走沉浸式注入 (不再渲染独立译文 panel), 但本组件被 AIChat 的
+// MessageList 复用 — 它本质上是一个 inline-markdown → DOMPurified HTML 渲染器,
+// 跟翻译解耦。命名沿用 TranslatedBody 是因为重命名/搬位置会牵连一连串 import,
+// 收益不大; 等下次清理 chat 渲染层时再统一。
+//
+// 渲染能力 (邮件 / AI 回复都用得上):
+//   - inline: **bold** / *italic* / ~~strike~~ / `code` / [text](url)
+//   - block: heading (#-######) / list (- / *) / numbered list / blockquote (>)
+//   - 段落 split: 双换行 → <p>; 单换行 → <br>
+//   - URL linkify (http(s):// only, mailto/data 不处理)
+//
+// 不支持: 真 list 嵌套 / table / image / HTML 包裹 — 邮件回复 + AI 回复
+// 不需要这些, markdown 复杂度刻意压在低位以保 sanitize 路径简单。
 
 import { useMemo } from 'react'
 import DOMPurify from 'dompurify'
 
-import type { TranslationSegment } from '@shared/api/types'
-
 interface Props {
   text: string
-  /** Bilingual segment pairs. When provided, renders the source paragraph
-   *  followed by an italic + dimmed translation block, repeating per pair.
-   *  Otherwise the legacy monolingual `text` path runs. */
-  segments?: TranslationSegment[]
 }
 
 function escapeHtml(s: string): string {
@@ -76,8 +76,6 @@ function renderBlock(raw: string): string {
     const items = lines.map((l) => `<li>${renderInline(l.replace(/^\s*\d+\.\s+/, ''))}</li>`)
     return `<ol>${items.join('')}</ol>`
   }
-  // Paragraph — single newlines become <br>, double newlines split into
-  // separate <p> via the splitter below.
   return `<p>${renderInline(trimmed).replace(/\n/g, '<br>')}</p>`
 }
 
@@ -108,10 +106,6 @@ const ALLOWED_TAGS = [
 function markdownToSafeHtml(md: string): string {
   const blocks = md.split(/\n\s*\n/)
   const rendered = blocks.map(renderBlock).join('\n')
-  // Codex review M-4: USE_PROFILES.html *adds to* the tag set rather than
-  // replacing it, so the explicit allow-list was effectively looser than
-  // it read. Dropping the profile + pinning the URI scheme leaves an
-  // unambiguous positive list.
   return DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS,
     ALLOWED_ATTR: ['href', 'target', 'rel'],
@@ -119,41 +113,7 @@ function markdownToSafeHtml(md: string): string {
   })
 }
 
-export function TranslatedBody({ text, segments }: Props): React.ReactElement {
-  // Bilingual path — render each {src, tgt} as a pair: source rendered as
-  // normal mail body, translation rendered below in italic + dim text-fg-2
-  // so visual distinction works without a leading marker.
-  const pairs = useMemo(() => {
-    if (!segments || segments.length === 0) return null
-    return segments.map((seg, idx) => ({
-      key: idx,
-      src: markdownToSafeHtml(seg.src),
-      tgt: markdownToSafeHtml(seg.tgt)
-    }))
-  }, [segments])
-
-  const monolingualHtml = useMemo(() => (pairs === null ? markdownToSafeHtml(text) : ''), [
-    pairs,
-    text
-  ])
-
-  if (pairs !== null) {
-    return (
-      <div className="mail-body break-words">
-        {pairs.map((p) => (
-          <div key={p.key} className="bilingual-segment mb-4 last:mb-0">
-            <div dangerouslySetInnerHTML={{ __html: p.src }} />
-            <div
-              className="italic text-ink-fg-2 mt-1 [&_p]:my-0 [&_li]:my-0"
-              dangerouslySetInnerHTML={{ __html: p.tgt }}
-            />
-          </div>
-        ))}
-      </div>
-    )
-  }
-
-  return (
-    <div className="mail-body break-words" dangerouslySetInnerHTML={{ __html: monolingualHtml }} />
-  )
+export function TranslatedBody({ text }: Props): React.ReactElement {
+  const html = useMemo(() => markdownToSafeHtml(text), [text])
+  return <div className="mail-body break-words" dangerouslySetInnerHTML={{ __html: html }} />
 }

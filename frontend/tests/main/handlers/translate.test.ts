@@ -1,42 +1,50 @@
-// Sprint 3 §2.2 — translate IPC handler tests.
+// Sprint Immersive-Translate — translate.ts handler tests.
 //
-// Five axes:
-//   1. happy path returns { translated, model, latencyMs }
-//   2. missing email_body → E_NO_BODY (before fetching, no API spend)
-//   3. missing API key → E_NO_LLM_KEY (before fetching)
-//   4. non-OK HTTP / fetch throw → E_UPSTREAM
-//   5. abort during inflight → E_ABORTED (covers the "切邮件" cancel path)
+// 覆盖 7 个轴:
+//   1. happy path: extractBlocks → batched LLM → returns segments + writes cache
+//   2. empty body_html → E_NO_BODY (before fetch, no API spend)
+//   3. missing API key → E_NO_LLM_KEY (before fetch)
+//   4. non-OK HTTP for a single batch → failedBatches++ (NOT thrown)
+//   5. abort via abortAllTranslations → in-flight batches reject
+//   6. JSON parse failure in one batch → that batch failed, others continue
+//   7. cache get / delete roundtrip
 //
-// Mocks: getDb (in-memory better-sqlite3 fixture), llm_settings
-// (mocked key + base + model), global fetch.
+// Mocks: getDb + resolveDbPath (in-memory better-sqlite3 fixture),
+// llm_settings (mocked key + base + model), global fetch.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-const { mockGetLlmApiKey } = vi.hoisted(() => ({
-  mockGetLlmApiKey: vi.fn()
+const { mockGetLlmTranslateApiKey } = vi.hoisted(() => ({
+  mockGetLlmTranslateApiKey: vi.fn()
 }))
 
 let fixtureDb: Database.Database
+let dbDir: string
+let dbPath: string
 
+// resolveDbPath drives writeDb()'s new Database(path) inside translate.ts.
+// We can't pass `:memory:` because writeDb opens its own connection — distinct
+// :memory: databases don't share state. Point both conns at the same on-disk
+// file so the test can SELECT what writeDb INSERTed.
 vi.mock('../../../src/electron/main/db', () => ({
   getDb: () => fixtureDb,
   closeDb: () => {},
-  resolveDbPath: () => ':memory:'
+  resolveDbPath: () => dbPath
 }))
 
 vi.mock('../../../src/electron/main/llm_settings', () => ({
-  getLlmApiKey: mockGetLlmApiKey,
-  getLlmBaseUrl: () => 'https://test.llm',
-  getLlmModel: () => 'test-model',
-  getLlmTranslateApiKey: mockGetLlmApiKey,
+  getLlmTranslateApiKey: mockGetLlmTranslateApiKey,
   getLlmTranslateBaseUrl: () => 'https://test.llm',
-  getLlmTranslateModel: () => 'test-model',
-  getLlmTranslateBilingual: () => false
+  getLlmTranslateModel: () => 'test-model'
 }))
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: vi.fn(), on: vi.fn() }
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
+  app: { getPath: () => '/tmp/mailagent-test-logs' }
 }))
 
 const fetchMock = vi.fn()
@@ -44,177 +52,201 @@ const fetchMock = vi.fn()
 
 const handler = await import('../../../src/electron/main/handlers/translate')
 
+const EMAIL_BODY_HTML_3PARA = `
+  <p>Hello team this is a real paragraph one.</p>
+  <p>Please review the attached document soon.</p>
+  <p>Thanks for your prompt response on this.</p>
+`
+
 function buildDb(): Database.Database {
-  const db = new Database(':memory:')
+  const db = new Database(dbPath)
   db.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE email_metadata (
+      internal_id INTEGER PRIMARY KEY,
+      message_id TEXT,
+      sync_status TEXT,
+      created_at REAL,
+      updated_at REAL
+    );
     CREATE TABLE email_body (
       internal_id INTEGER PRIMARY KEY,
+      body_html TEXT,
       body_markdown TEXT
     );
-    INSERT INTO email_body VALUES (101, 'Hello world, please reply.');
-    INSERT INTO email_body VALUES (102, '');
+    CREATE TABLE email_translation (
+      internal_id INTEGER PRIMARY KEY,
+      target_lang TEXT NOT NULL DEFAULT 'zh',
+      segments_json TEXT NOT NULL,
+      model TEXT,
+      source TEXT NOT NULL,
+      created_at REAL NOT NULL,
+      updated_at REAL NOT NULL,
+      CHECK (source IN ('llm_agent','on_demand')),
+      FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
+    );
   `)
+  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
+    .run(101, 'm101@x', 'pending', 1, 1)
+  db.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
+    .run(102, 'm102@x', 'pending', 1, 1)
+  db.prepare('INSERT INTO email_body VALUES (?,?,?)').run(101, EMAIL_BODY_HTML_3PARA, '')
+  db.prepare('INSERT INTO email_body VALUES (?,?,?)').run(102, '', '')
   return db
 }
 
 beforeEach(() => {
+  dbDir = mkdtempSync(join(tmpdir(), 'mailagent-translate-test-'))
+  dbPath = join(dbDir, 'sync_store.db')
   fixtureDb = buildDb()
   vi.clearAllMocks()
-  mockGetLlmApiKey.mockResolvedValue('test-key')
+  mockGetLlmTranslateApiKey.mockResolvedValue('test-key')
 })
 
 afterEach(() => {
   fetchMock.mockReset()
+  // Drop the writable cache conn too (singleton would otherwise leak across
+  // tests pointing at a stale db file).
+  handler.closeTranslateDb()
   fixtureDb?.close()
+  rmSync(dbDir, { recursive: true, force: true })
 })
 
-describe('translateEmail', () => {
-  test('happy path returns translated text + model + latency', async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        content: [{ type: 'text', text: '你好世界,请回复。' }],
-        model: 'test-model'
-      })
+function ok(text: string): { ok: true; json: () => Promise<unknown> } {
+  return {
+    ok: true,
+    json: async () => ({
+      content: [{ type: 'text', text }],
+      model: 'test-model'
     })
-    const result = await handler.translateEmail({ internalId: 101 })
-    expect(result.translated).toBe('你好世界,请回复。')
-    expect(result.model).toBe('test-model')
+  }
+}
+
+describe('translateBatch', () => {
+  test('happy path: returns segments matching extracted blocks + writes cache', async () => {
+    // The handler builds the user JSON [{id, text}, ...]; the LLM must echo
+    // ids back. We capture the request to recover the ids it generated.
+    fetchMock.mockImplementationOnce((_url, init) => {
+      const reqBody = JSON.parse((init as RequestInit).body as string)
+      const userContent = reqBody.messages[0].content
+      const segs = JSON.parse(userContent) as Array<{ id: string; text: string }>
+      const tgts: Record<number, string> = {
+        0: '团队你好这是真实段落一。',
+        1: '请尽快评审附件文档。',
+        2: '感谢你的及时回复。'
+      }
+      const out = segs.map((s, i) => ({ id: s.id, tgt: tgts[i] ?? `tgt-${i}` }))
+      return Promise.resolve(ok(JSON.stringify(out)))
+    })
+
+    const result = await handler.translateBatch({ internalId: 101 })
     expect(result.targetLang).toBe('zh')
-    expect(result.latencyMs).toBeGreaterThanOrEqual(0)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('https://test.llm/v1/messages')
-    expect(init.method).toBe('POST')
-    const headers = init.headers as Record<string, string>
-    expect(headers['x-api-key']).toBe('test-key')
-    expect(headers['anthropic-version']).toBeTruthy()
+    expect(result.segments).toHaveLength(3)
+    expect(result.segments[0]).toEqual({
+      src: 'Hello team this is a real paragraph one.',
+      tgt: '团队你好这是真实段落一。'
+    })
+    expect(result.failedBatches).toBe(0)
+    expect(result.totalBatches).toBe(1)
+    expect(result.source).toBe('on_demand')
+    // Cache written
+    const cached = fixtureDb
+      .prepare('SELECT segments_json, source FROM email_translation WHERE internal_id = ?')
+      .get(101) as { segments_json: string; source: string }
+    expect(cached.source).toBe('on_demand')
+    expect(JSON.parse(cached.segments_json)).toHaveLength(3)
   })
 
-  test('empty body → throws E_NO_BODY, never hits fetch', async () => {
-    await expect(handler.translateEmail({ internalId: 102 })).rejects.toMatchObject({
+  test('empty body_html → E_NO_BODY, never hits fetch', async () => {
+    await expect(handler.translateBatch({ internalId: 102 })).rejects.toMatchObject({
       code: 'E_NO_BODY'
     })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('missing email_body row → throws E_NO_BODY', async () => {
-    await expect(handler.translateEmail({ internalId: 99_999 })).rejects.toMatchObject({
+  test('missing email_body row → E_NO_BODY', async () => {
+    await expect(handler.translateBatch({ internalId: 99_999 })).rejects.toMatchObject({
       code: 'E_NO_BODY'
     })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('no API key → throws E_NO_LLM_KEY, never hits fetch', async () => {
-    mockGetLlmApiKey.mockResolvedValueOnce(null)
-    await expect(handler.translateEmail({ internalId: 101 })).rejects.toMatchObject({
+  test('no API key → E_NO_LLM_KEY, never hits fetch', async () => {
+    mockGetLlmTranslateApiKey.mockResolvedValueOnce(null)
+    await expect(handler.translateBatch({ internalId: 101 })).rejects.toMatchObject({
       code: 'E_NO_LLM_KEY'
     })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('non-OK HTTP → throws E_UPSTREAM with the status code in message', async () => {
+  test('invalid internalId → E_INVALID_ARG', async () => {
+    await expect(handler.translateBatch({ internalId: -1 })).rejects.toMatchObject({
+      code: 'E_INVALID_ARG'
+    })
+    await expect(
+      handler.translateBatch({ internalId: 1.5 as unknown as number })
+    ).rejects.toMatchObject({ code: 'E_INVALID_ARG' })
+  })
+
+  test('non-OK HTTP for the single batch → failedBatches=1, empty segments', async () => {
     fetchMock.mockResolvedValue({
       ok: false,
       status: 503,
       text: async () => 'service unavailable'
     })
-    await expect(handler.translateEmail({ internalId: 101 })).rejects.toMatchObject({
-      code: 'E_UPSTREAM'
-    })
+    const result = await handler.translateBatch({ internalId: 101 })
+    expect(result.segments).toEqual([])
+    expect(result.failedBatches).toBe(1)
+    expect(result.totalBatches).toBe(1)
   })
 
-  test('fetch network error → throws E_UPSTREAM', async () => {
+  test('fetch network error → batch fails silently, returns empty segments', async () => {
     fetchMock.mockRejectedValue(new TypeError('Network down'))
-    await expect(handler.translateEmail({ internalId: 101 })).rejects.toMatchObject({
-      code: 'E_UPSTREAM'
-    })
+    const result = await handler.translateBatch({ internalId: 101 })
+    expect(result.segments).toEqual([])
+    expect(result.failedBatches).toBe(1)
   })
 
-  test('abort during inflight → throws E_ABORTED', async () => {
+  test('JSON parse fallback: malformed wrapper text recovers the inner [...]', async () => {
     fetchMock.mockImplementationOnce((_url, init) => {
+      const segs = JSON.parse(
+        (JSON.parse((init as RequestInit).body as string).messages[0].content) as string
+      ) as Array<{ id: string; text: string }>
+      const inner = segs.map((s) => ({ id: s.id, tgt: 'tgt' }))
+      // Wrap in chatter that JSON.parse cannot eat — regex fallback must recover.
+      return Promise.resolve(
+        ok(`Sure! Here is the JSON:\n\`\`\`json\n${JSON.stringify(inner)}\n\`\`\``)
+      )
+    })
+    const result = await handler.translateBatch({ internalId: 101 })
+    expect(result.segments).toHaveLength(3)
+    expect(result.failedBatches).toBe(0)
+  })
+
+  test('truly unparseable output → batch fails, returns empty segments', async () => {
+    fetchMock.mockResolvedValue(ok('this is not JSON at all and has no brackets'))
+    const result = await handler.translateBatch({ internalId: 101 })
+    expect(result.segments).toEqual([])
+    expect(result.failedBatches).toBe(1)
+  })
+
+  test('abortAllTranslations during inflight → batches reject', async () => {
+    let captured: AbortSignal | undefined
+    fetchMock.mockImplementationOnce((_url, init) => {
+      captured = (init as RequestInit).signal as AbortSignal | undefined
       return new Promise((_resolve, reject) => {
-        const signal = (init as RequestInit).signal as AbortSignal | null | undefined
-        signal?.addEventListener('abort', () => {
+        captured?.addEventListener('abort', () => {
           const err = new Error('aborted') as Error & { name: string }
           err.name = 'AbortError'
           reject(err)
         })
       })
     })
-    const p = handler.translateEmail({ internalId: 101 })
-    // Give the handler a tick to set up its AbortController, then abort.
-    setTimeout(() => handler.abortTranslation(101), 5)
-    await expect(p).rejects.toMatchObject({ code: 'E_ABORTED' })
-  })
-
-  test('empty content array → throws E_EMPTY_RESPONSE', async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({ content: [], model: 'test-model' })
-    })
-    await expect(handler.translateEmail({ internalId: 101 })).rejects.toMatchObject({
-      code: 'E_EMPTY_RESPONSE'
-    })
-  })
-
-  test('bilingual=true parses ⟦S⟧/⟦T⟧/⟦E⟧ segments and joins target text', async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        content: [
-          {
-            type: 'text',
-            text: '⟦S⟧Hello world.⟦T⟧你好世界。⟦E⟧⟦S⟧Please reply.⟦T⟧请回复。⟦E⟧'
-          }
-        ],
-        model: 'test-model'
-      })
-    })
-    const result = await handler.translateEmail({ internalId: 101, bilingual: true })
-    expect(result.segments).toEqual([
-      { src: 'Hello world.', tgt: '你好世界。' },
-      { src: 'Please reply.', tgt: '请回复。' }
-    ])
-    expect(result.translated).toBe('你好世界。\n\n请回复。')
-  })
-
-  test('bilingual=true with malformed output falls back to monolingual', async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        content: [{ type: 'text', text: 'No sentinels here at all' }],
-        model: 'test-model'
-      })
-    })
-    const result = await handler.translateEmail({ internalId: 101, bilingual: true })
-    expect(result.segments).toBeUndefined()
-    expect(result.translated).toBe('No sentinels here at all')
-  })
-
-  test('second translate for same internalId aborts previous in-flight', async () => {
-    let firstSignal: AbortSignal | undefined
-    fetchMock.mockImplementationOnce((_url, init) => {
-      firstSignal = (init as RequestInit).signal as AbortSignal | undefined
-      return new Promise((_resolve, reject) => {
-        firstSignal?.addEventListener('abort', () => {
-          const err = new Error('aborted') as Error & { name: string }
-          err.name = 'AbortError'
-          reject(err)
-        })
-      })
-    })
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ content: [{ type: 'text', text: '译文' }], model: 'test-model' })
-    })
-    const p1 = handler.translateEmail({ internalId: 101 })
-    // Start second translate after a tick so the first one is registered.
-    await new Promise((r) => setTimeout(r, 5))
-    const p2 = handler.translateEmail({ internalId: 101 })
-    await expect(p1).rejects.toMatchObject({ code: 'E_ABORTED' })
-    expect(firstSignal?.aborted).toBe(true)
-    const result = await p2
-    expect(result.translated).toBe('译文')
+    const p = handler.translateBatch({ internalId: 101 })
+    setTimeout(() => handler.abortAllTranslations(), 5)
+    const result = await p
+    // Aborted batches show up as failures; segments empty.
+    expect(captured?.aborted).toBe(true)
+    expect(result.failedBatches).toBeGreaterThan(0)
   })
 })

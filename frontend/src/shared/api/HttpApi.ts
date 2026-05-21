@@ -43,7 +43,9 @@ export class HttpApi implements MailApi {
   }
 
   ai = {
-    translate: () => notImplemented('ai.translate'),
+    translateBatch: () => notImplemented('ai.translateBatch'),
+    getCached: () => notImplemented('ai.getCached'),
+    deleteCached: () => notImplemented('ai.deleteCached'),
     abortTranslate: () => {
       /* V2 web build will route through fetch + AbortController; Sprint 3 stub. */
     }

@@ -70,3 +70,49 @@
 - 邮件 Date 转 **UTC+8（Asia/Shanghai）** 的日期，格式 `YYYY-MM-DD`。
 - 例：`2026-04-23T22:30:00-07:00`（PT）→ UTC+8 是 `2026-04-24T13:30:00+08:00` → 填 `2026-04-24`。
 - 不确定则留空字符串（脚本会跳过 Daily Digest relation）。
+
+## Translation Segments（沉浸式翻译，仅 language != '中文' 时填）
+
+如果你判定 `language` 是 `English` / `Japanese` / `Korean` / `Spanish` / `French` / `German` / `Russian` / `Other`，请同时按邮件正文的自然段落顺序填 `translation_segments` 数组；中文邮件（`language='中文'`）必须留空数组 `[]`。
+
+### 段落定义
+- 一个 `<p>` / `<li>` / `<h1-h6>` / `<td>` / `<blockquote>` / `<dt>` / `<dd>` 即一段。
+- 邮件正文 `body_text` 里以**空行**或换行分隔的自然段落 ≈ 一个 DOM 段落。
+
+### 每段 segment 的字段
+- **`src`**: 该段原文 plaintext **verbatim 子串**，长度 30-300 字符。
+  - 必须能在邮件正文中精确搜到（程序后续用 `textContent.includes(src)` fuzzy 匹配 DOM 节点注入译文，**src 偏离原文就会 inject 失败**）。
+  - 长段落 > 300 字符时，**取段落首句**作为定位锚（含足够特征词），不要硬截字符数。
+  - 不要包含 markdown 标记（`**`、`*`、`` ` `` 等不要带进 src），只要 plaintext。
+  - 不要 trim 标点之外的任何字符。
+- **`tgt`**: 该段对应的**简体中文（mainland 用法）**译文。
+  - 翻译完整段落语义，不仅仅翻 src 子串。
+  - 保留 URL / 邮件地址 / 代码标识符 / 产品名 / 人名 verbatim（不音译）。
+  - 不要在 tgt 里加段号、引号、markdown 包裹。
+
+### 选段顺序与跳过
+- 段落顺序与邮件正文顺序一致（自上而下）。
+- 跳过：纯标点 / 纯空白 / 长度 < 4 字符的段落；已是中文的段落不翻；签名块（`Best,\nLucien` 这种）可以翻也可以跳过。
+- 段数没有上限，但**不要拆得过细**：一个 `<p>` 即使含多句也算一段。
+
+### 示例
+
+英文邮件正文（部分）：
+```
+Hi team,
+
+We need to align on the Q3 roadmap before Friday.
+The deadline cannot slip — Gary already committed to the customer.
+
+Please review the attached spec and reply with comments.
+```
+
+→ `translation_segments`:
+```json
+[
+  {"src": "Hi team,", "tgt": "团队你好，"},
+  {"src": "We need to align on the Q3 roadmap before Friday.", "tgt": "我们需要在周五之前对齐 Q3 路线图。"},
+  {"src": "The deadline cannot slip — Gary already committed to the customer.", "tgt": "deadline 不能推迟 —— Gary 已经向客户承诺过了。"},
+  {"src": "Please review the attached spec and reply with comments.", "tgt": "请评审附件中的规格说明并回复意见。"}
+]
+```

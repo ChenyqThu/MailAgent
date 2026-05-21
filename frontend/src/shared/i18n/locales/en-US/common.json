@@ -158,6 +158,7 @@
     "retry": "Retry",
     "showOriginal": "Show original",
     "showTranslation": "Show translation",
+    "retranslate": "Re-translate",
     "noKey": "LLM API Key not configured — set it in Settings",
     "noBody": "No body to translate",
     "banner": "AI translation · for reference only",
@@ -766,10 +767,6 @@
       "translateModel": {
         "label": "Translation model",
         "helper": "Used only for email translation; defaults to Haiku (~3-5× faster than Sonnet, quality is enough)"
-      },
-      "translateBilingual": {
-        "label": "Bilingual view",
-        "helper": "When on, each source paragraph is followed by an italic translation; when off, only the translation is shown"
       },
       "fallbacks": {
         "label": "Fallback chain",

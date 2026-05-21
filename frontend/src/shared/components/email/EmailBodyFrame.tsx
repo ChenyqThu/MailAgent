@@ -16,11 +16,15 @@ import DOMPurify from 'dompurify'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useAppearance } from '@shared/state/appearance'
-import type { EmailDetail } from '@shared/api/types'
+import type { EmailDetail, TranslationSegment } from '@shared/api/types'
 
 interface Props {
   internalId: number
   attachments: NonNullable<EmailDetail['attachments']>
+  /** Immersive translation segments. When non-null, the iframe DOM is mutated
+   *  in-place to insert a translated `<div>` after each matched block. Switch
+   *  to null to clear all injected translations and show the original. */
+  translations?: TranslationSegment[] | null
 }
 
 // DOMPurify URI regex — allow data: ONLY for image MIME types (so an
@@ -158,9 +162,43 @@ const BODY_CSS = `
     border-top: 1px solid rgb(var(--ink-border));
     margin: 16px 0;
   }
+  /* Sprint Immersive-Translate — inline 译文块。注入到原段落 (p/li/h*/td/
+     blockquote) 之后, 视觉上斜体 + 灰色 + 左侧细线表明非原文。padding-left
+     14px 跟 blockquote 对齐, 让译文有 "引用" 的视觉关联。line-height 略小
+     是为了让译文不挤掉原文行高。 */
+  .mailagent-translation {
+    font-style: italic;
+    color: rgb(var(--ink-fg-2));
+    opacity: 0.92;
+    border-left: 2px solid rgb(var(--c-accent) / 0.45);
+    padding: 4px 0 4px 14px;
+    margin: 4px 0 12px;
+    line-height: 1.65;
+    font-size: 13.5px;
+    background: rgb(var(--c-accent) / 0.04);
+    border-radius: 2px;
+  }
+  /* 译文块内常见 inline 节点继承上下文颜色, 别让 a 抢眼 */
+  .mailagent-translation a { color: rgb(var(--c-accent) / 0.85); }
+  /* table 单元格里的译文用 block 形态会撑爆 td; 强制 display:block 并
+     在内部加微 margin 让单元格能容纳。 */
+  td > .mailagent-translation,
+  th > .mailagent-translation {
+    display: block;
+    margin: 4px 0 0;
+  }
+  /* li 里同理 — 跟原 list-item bullet 对齐 */
+  li > .mailagent-translation {
+    display: block;
+    margin: 2px 0 6px;
+  }
 `
 
-export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactElement {
+export function EmailBodyFrame({
+  internalId,
+  attachments,
+  translations
+}: Props): React.ReactElement {
   const mailApi = useMailApi()
   const resolvedTheme = useAppearance((s) => s.resolvedTheme)
 
@@ -312,7 +350,13 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
   if (srcDoc === null) {
     return <div className="text-aux text-ink-fg-2">(empty body)</div>
   }
-  return <BodyIframe srcDoc={srcDoc} key={internalId} />
+  return (
+    <BodyIframe
+      srcDoc={srcDoc}
+      key={internalId}
+      translations={translations ?? null}
+    />
+  )
 }
 
 // Sprint 13 — separate component so the postMessage listener + height
@@ -322,14 +366,85 @@ export function EmailBodyFrame({ internalId, attachments }: Props): React.ReactE
 // body resizes (ResizeObserver) or images finish loading.
 interface BodyIframeProps {
   srcDoc: string
+  /** Immersive translation segments to inject after each matching block.
+   *  null clears any prior injection. */
+  translations: TranslationSegment[] | null
 }
 
-function BodyIframe({ srcDoc }: BodyIframeProps): React.ReactElement {
+// Block-level selector mirrors what html-extractor.ts hands to the LLM so
+// the renderer's match space matches the LLM's input space.
+const BLOCK_SELECTOR_RENDER = 'p, li, h1, h2, h3, h4, h5, h6, td, blockquote, dt, dd'
+
+function escapeHtmlText(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** Strip whitespace + lowercase for fuzzy textContent matching. CJK chars
+ *  unaffected; en/zh punctuation differences (full-width vs half-width)
+ *  remain — we don't normalize those because LLM should copy src verbatim. */
+function normalizeForMatch(s: string): string {
+  return s.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+/** Remove any previously-injected translation nodes from the iframe doc. */
+function clearInjectedTranslations(doc: Document): void {
+  doc.querySelectorAll('.mailagent-translation').forEach((n) => n.remove())
+}
+
+/** Insert a translation `<div>` after each block node whose textContent
+ *  matches `src` (either contains src or is contained in src — handles
+ *  LLM trimming + the case where a paragraph spans multiple `<p>`s). Each
+ *  node is matched at most once across the whole pass. */
+function injectTranslations(doc: Document, segments: TranslationSegment[]): number {
+  clearInjectedTranslations(doc)
+  const nodes = Array.from(doc.querySelectorAll(BLOCK_SELECTOR_RENDER)) as HTMLElement[]
+  // Pre-compute normalized textContent once per node — querySelectorAll
+  // returns reasonable counts (<= a few hundred), and we re-walk it per
+  // segment, so caching pays off.
+  const normalized = nodes.map((n) => normalizeForMatch(n.textContent ?? ''))
+  const used = new Set<number>()
+  let injected = 0
+  for (const seg of segments) {
+    const srcNorm = normalizeForMatch(seg.src)
+    if (srcNorm.length === 0) continue
+    let matched = -1
+    for (let i = 0; i < nodes.length; i++) {
+      if (used.has(i)) continue
+      const t = normalized[i]
+      if (!t) continue
+      if (t.includes(srcNorm) || srcNorm.includes(t)) {
+        matched = i
+        break
+      }
+    }
+    if (matched < 0) continue
+    used.add(matched)
+    const div = doc.createElement('div')
+    div.className = 'mailagent-translation'
+    // Tgt is plain text from LLM (per prompt rule "no markdown wrapper");
+    // escape defensively in case a malicious sender slipped HTML into src
+    // that LLM echoed back, or LLM hallucinated tags.
+    div.innerHTML = escapeHtmlText(seg.tgt)
+    nodes[matched]!.insertAdjacentElement('afterend', div)
+    injected++
+  }
+  return injected
+}
+
+function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactElement {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   // 400px initial keeps the layout from flashing tiny while the iframe
   // measures itself; once `measure()` lands the height jumps to the
   // real value.
   const [height, setHeight] = useState<number>(400)
+  // Track whether the iframe document is ready so the translations-only
+  // effect can run inject without waiting for srcDoc to change.
+  const [docReady, setDocReady] = useState(false)
 
   useEffect(() => {
     const iframe = iframeRef.current
@@ -374,6 +489,7 @@ function BodyIframe({ srcDoc }: BodyIframeProps): React.ReactElement {
         img.addEventListener('error', measure, { once: true })
       })
       measure()
+      setDocReady(true)
     }
 
     function onLoad(): void {
@@ -389,8 +505,25 @@ function BodyIframe({ srcDoc }: BodyIframeProps): React.ReactElement {
     return (): void => {
       iframe.removeEventListener('load', onLoad)
       ro?.disconnect()
+      setDocReady(false)
     }
   }, [srcDoc])
+
+  // Translation inject — runs on (translations | docReady | srcDoc) change.
+  // srcDoc inclusion guarantees we re-inject after the iframe re-renders
+  // (e.g. theme switch rebuilds srcDoc; without this dep we'd lose the
+  // injection after a re-render).
+  useEffect(() => {
+    if (!docReady) return
+    const iframe = iframeRef.current
+    const doc = iframe?.contentDocument
+    if (!doc) return
+    if (!translations || translations.length === 0) {
+      clearInjectedTranslations(doc)
+      return
+    }
+    injectTranslations(doc, translations)
+  }, [translations, docReady, srcDoc])
 
   return (
     <iframe

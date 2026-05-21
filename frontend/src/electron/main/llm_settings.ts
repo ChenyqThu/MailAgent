@@ -78,12 +78,6 @@ export function getLlmTranslateModel(): string {
   return 'claude-haiku-4-5'
 }
 
-/** Whether bilingual (source-above, translation-below) mode is enabled. */
-export function getLlmTranslateBilingual(): boolean {
-  const v = process.env['LLM_TRANSLATE_BILINGUAL']
-  return v === 'true' || v === '1'
-}
-
 /**
  * Translate-specific base URL. Empty/unset → fall back to the main LLM
  * gateway. Lets users point translation at a faster regional endpoint or a

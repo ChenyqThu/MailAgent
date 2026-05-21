@@ -158,6 +158,7 @@
     "retry": "重试",
     "showOriginal": "显示原文",
     "showTranslation": "显示译文",
+    "retranslate": "重新翻译",
     "noKey": "未配置 LLM API Key — 请在设置中配置",
     "noBody": "无正文可翻译",
     "banner": "AI 译文 · 仅供参考",
@@ -766,10 +767,6 @@
       "translateModel": {
         "label": "翻译模型",
         "helper": "邮件正文翻译专用; 默认 Haiku (~3-5× 比 Sonnet 快, 翻译质量足够)"
-      },
-      "translateBilingual": {
-        "label": "双语对照",
-        "helper": "开启后每段原文下方显示斜体译文; 关闭时只显示译文"
       },
       "fallbacks": {
         "label": "Fallback 链",

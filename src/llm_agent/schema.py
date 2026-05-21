@@ -173,6 +173,33 @@ EMAIL_TOOL_SCHEMA = {
                     "填项目名称；否则留空字符串。"
                 ),
             },
+            "translation_segments": {
+                "type": "array",
+                "description": (
+                    "沉浸式翻译缓存 — 仅在 language != '中文' 时填写。"
+                    "按邮件正文段落（一个 <p>/<li>/<h*>/<td>/<blockquote> 算一段）的自然顺序输出。"
+                    "每个 segment.src 必须是邮件正文中该段落的 verbatim 子串（plaintext, 不含 "
+                    "markdown 标记, 长度 30-300 字符；过长段落取首句作为定位锚），用于程序后续 "
+                    "fuzzy 匹配 DOM 节点。tgt 是该段对应的简体中文 mainland 用法译文。"
+                    "保留 URL / 邮件地址 / 代码标识符 / 产品名 verbatim。"
+                    "中文邮件留空数组 []；不要为已是中文的段落生成翻译。"
+                ),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["src", "tgt"],
+                    "properties": {
+                        "src": {
+                            "type": "string",
+                            "description": "原文段落 verbatim 子串（plaintext, 30-300 字符）。",
+                        },
+                        "tgt": {
+                            "type": "string",
+                            "description": "简体中文译文。",
+                        },
+                    },
+                },
+            },
         },
     },
 }

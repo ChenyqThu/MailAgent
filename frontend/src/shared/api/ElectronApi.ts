@@ -79,7 +79,8 @@ import type {
   SecretsStatus,
   SettingsApi,
   TargetLang,
-  TranslationResult,
+  TranslateBatchResult,
+  TranslationCache,
   UpdateFlagOpts,
   UpdaterApi,
   UpdaterStatus
@@ -320,28 +321,40 @@ class ElectronAttachmentApi implements AttachmentApi {
 // free. Codex review M-3 — Electron IPC does NOT preserve custom Error
 // properties; the envelope makes the failure shape explicit.
 type TranslateEnvelope =
-  | { ok: true; data: TranslationResult }
+  | { ok: true; data: TranslateBatchResult }
   | { ok: false; code: string; message: string }
 
 class ElectronAiApi implements AiApi {
-  async translate(
+  async translateBatch(
     internalId: number,
-    targetLang?: TargetLang,
-    options?: { bilingual?: boolean }
-  ): Promise<TranslationResult> {
-    const env = (await invoker()('email:translate', {
+    targetLang?: TargetLang
+  ): Promise<TranslateBatchResult> {
+    const env = (await invoker()('translate:batch', {
       internalId,
-      targetLang,
-      bilingual: options?.bilingual
+      targetLang
     })) as TranslateEnvelope
     if (env.ok) return env.data
     const err = new Error(env.message) as Error & { code?: string }
     err.code = env.code
     throw err
   }
+  async getCached(
+    internalId: number,
+    targetLang?: TargetLang
+  ): Promise<TranslationCache | null> {
+    return (await invoker()(
+      'translation:get',
+      internalId,
+      targetLang
+    )) as TranslationCache | null
+  }
+  async deleteCached(internalId: number, targetLang?: TargetLang): Promise<boolean> {
+    return (await invoker()('translation:delete', internalId, targetLang)) as boolean
+  }
   abortTranslate(internalId: number): void {
-    // Fire-and-forget — main side just drops the AbortController. No reply
-    // needed; the in-flight `translate()` promise resolves with E_ABORTED.
+    // Fire-and-forget — main side aborts every in-flight batch for this id.
+    // No reply needed; the in-flight `translateBatch()` Promise returns
+    // whatever partial segments it had completed.
     sender()?.('email:translateAbort', internalId)
   }
 }

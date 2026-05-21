@@ -19,6 +19,7 @@ from src.repository.email_repository import (
     ThreadMember,
 )
 from src.repository.storage_payload_builder import build_storage_payloads
+from src.repository.translation import TranslationRepository
 
 __all__ = [
     "AttachmentPayload",
@@ -31,5 +32,6 @@ __all__ = [
     "EmailRepository",
     "EmailSearchHit",
     "ThreadMember",
+    "TranslationRepository",
     "build_storage_payloads",
 ]

@@ -232,12 +232,6 @@ export function AiTab(): React.ReactElement {
           helper={t('settings.ai.translateModel.helper')}
           placeholder="claude-haiku-4-5"
         />
-        <EnvField
-          envKey="LLM_TRANSLATE_BILINGUAL"
-          control="toggle"
-          label={t('settings.ai.translateBilingual.label')}
-          helper={t('settings.ai.translateBilingual.helper')}
-        />
       </Section>
 
       <Section title={t('settings.ai.cache.title')} helper={t('settings.ai.cache.helper')}>

@@ -109,7 +109,12 @@ class SyncStore:
     #                以 intent 形式落库，FanoutWorker 异步派发到 Mail.app + Notion。
     #                Echo prevention: source='notion_webhook' + target='notion' 被强制 silent skip
     #                避免回环。详见 SPRINT15-HANDOFF.md §3.3-§3.4。
-    DB_VERSION = 11
+    # v12 (Sprint Immersive-Translate, 2026-05): email_translation 表 —— 沉浸式翻译缓存。
+    #                Path A (LLM 分类顺带, source='llm_agent') + Path B (用户点翻译, source='on_demand')
+    #                双路径写入同一表; segments_json 形状 [{src, tgt}] 统一. 单语言 (zh) 设计,
+    #                internal_id PK + FK CASCADE; 重新翻译先 DELETE 再 INSERT.
+    #                详见 frontend/SPRINT-IMMERSIVE-TRANSLATE-HANDOFF.md.
+    DB_VERSION = 12
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -591,6 +596,36 @@ class SyncStore:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_attachment_visible
             ON email_attachment(internal_id, is_inline)
+        """)
+
+        # === v12 (Sprint Immersive-Translate): email_translation 缓存表 ===
+        # 沉浸式翻译双路径共享缓存层：
+        #   - Path A (source='llm_agent'): LLM 邮件分类时 tool_use 同时返回
+        #     translation_segments, LLMRunner 在 mark_success 后写入。
+        #   - Path B (source='on_demand'): 用户点击 "翻译" 按钮触发的 batch
+        #     翻译, 前端 translate.ts:translate:batch 写入。
+        # 设计：单语言 (zh) — 用户主语言确定，无多语言并存需求；
+        #       internal_id PK + FK CASCADE — 删邮件自动清缓存；
+        #       segments_json 是 JSON 数组 [{src, tgt}, ...]，src 是原文段落
+        #       verbatim (≤300 字符), tgt 是简体中文译文。前端 EmailBodyFrame
+        #       用 textContent.includes(src) fuzzy 配对 DOM 节点注入译文。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_translation (
+                internal_id   INTEGER PRIMARY KEY,
+                target_lang   TEXT NOT NULL DEFAULT 'zh',
+                segments_json TEXT NOT NULL,
+                model         TEXT,
+                source        TEXT NOT NULL,
+                created_at    REAL NOT NULL,
+                updated_at    REAL NOT NULL,
+                CHECK (source IN ('llm_agent','on_demand')),
+                FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
+            )
+        """)
+        # source 维度统计 (admin / debug 看 LLM 路径覆盖率)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_translation_source
+            ON email_translation(source)
         """)
 
         # 更新数据库版本

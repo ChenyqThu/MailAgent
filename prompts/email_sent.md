@@ -60,3 +60,15 @@
 
 ## Daily Digest Date
 跟收件箱规则一样：邮件 Date 转 **UTC+8（Asia/Shanghai）** 的日期，格式 `YYYY-MM-DD`。不确定留空。
+
+## Translation Segments（沉浸式翻译，仅 language != '中文' 时填）
+
+发件箱的发出邮件如果是英文 / 其他非中文，同样填 `translation_segments`（让 Lucien 在 UI 上能看到自己发出邮件的中文版本，便于快速回顾）。规则与收件箱一致：
+
+- **段落定义**: 一个 `<p>` / `<li>` / `<h1-h6>` / `<td>` / `<blockquote>` 算一段；空行分隔的自然段亦然。
+- **`src`**: 原文 plaintext verbatim 子串，30-300 字符；长段取首句锚。不带 markdown 标记。**程序用 `textContent.includes(src)` 匹配 DOM，src 偏离原文则 inject 失败。**
+- **`tgt`**: 简体中文 mainland 用法译文，保留 URL / 邮件地址 / 代码标识符 / 人名 verbatim。
+- 中文邮件留空数组 `[]`。
+- 顺序与邮件正文一致；跳过纯标点 / 短于 4 字符 / 已是中文的段落。
+
+发件箱的 LLM 调用频率比收件箱低（每天通常只有几封发件），写入 `translation_segments` 对 token 成本影响很小。

@@ -83,6 +83,9 @@ class AILabels:
     reply_suggestion_md: str = ""
     daily_digest_date: str = ""
     related_project: str = ""
+    # 沉浸式翻译: LLM 返回的段落对 [{src, tgt}, ...]; 仅 language != '中文' 时非空。
+    # LLMRunner mark_success 后写入 email_translation 表 (DB v12).
+    translation_segments: List[Dict[str, str]] = field(default_factory=list)
     # meta
     mailbox: str = ""
     input_tokens: int = 0
@@ -321,6 +324,36 @@ class LLMProcessor:
             logger.warning(f"[llm] invalid daily_digest_date {daily_digest_date!r}; dropping")
             daily_digest_date = ""
 
+        # 沉浸式翻译: 形状校验 list[{src, tgt}]; 单段过长截 1000 字符防爆。
+        # 翻译写库的最终校验在 TranslationRepository._validate_segments;
+        # 这里只丢明显畸形的项, 让 LLM 偶尔的乱序 / 缺字段不污染下游。
+        raw_segments = ti.get("translation_segments")
+        translation_segments: List[Dict[str, str]] = []
+        if isinstance(raw_segments, list):
+            for seg in raw_segments:
+                if not isinstance(seg, dict):
+                    continue
+                src = seg.get("src")
+                tgt = seg.get("tgt")
+                if not isinstance(src, str) or not isinstance(tgt, str):
+                    continue
+                src_s = src.strip()[:1000]
+                tgt_s = tgt.strip()[:1000]
+                if src_s and tgt_s:
+                    translation_segments.append({"src": src_s, "tgt": tgt_s})
+            if translation_segments and language == "中文":
+                # 中文邮件 LLM 不应该填 translation_segments; 出现说明 prompt 没遵守,
+                # 但不致命, 仅 log 一次让人工排查 prompt 质量
+                logger.warning(
+                    f"[llm] translation_segments populated despite language='中文' "
+                    f"({len(translation_segments)} segs); dropping"
+                )
+                translation_segments = []
+        elif raw_segments is not None:
+            logger.warning(
+                f"[llm] translation_segments not a list: {type(raw_segments).__name__}; dropping"
+            )
+
         return AILabels(
             ai_summary=(ti.get("ai_summary") or "")[:2000],
             key_points=(ti.get("key_points") or "").strip(),
@@ -335,6 +368,7 @@ class LLMProcessor:
             reply_suggestion_md=(ti.get("reply_suggestion_md") or "").strip(),
             daily_digest_date=daily_digest_date,
             related_project=(ti.get("related_project") or "").strip(),
+            translation_segments=translation_segments,
             mailbox=mailbox,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
