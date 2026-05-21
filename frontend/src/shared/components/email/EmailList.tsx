@@ -169,7 +169,7 @@ function VirtualRow({
   )
 }
 
-function rowHeight(index: number, { rows }: RowProps): number {
+function rowHeight(index: number, { rows, newIds }: RowProps): number {
   const r = rows[index]
   if (!r) return 28
   if (r.type === 'header') return 28
@@ -183,11 +183,15 @@ function rowHeight(index: number, { rows }: RowProps): number {
   const e = r.email
   const snippetReal = cleanSnippet(e.snippet)
   const hasSnippet = Boolean(snippetReal)
+  // `isNew` flips ai-strip on (renders "NEW" chip in EmailRow). Must mirror
+  // EmailRow.tsx aiStripVisible exactly — otherwise the slot under-counts and
+  // the chip clips into the next row's separator.
   const hasAiStrip = Boolean(
     e.ai_priority ||
     actionLabelChinese(e.ai_action) ||
     e.sync_status === 'failed' ||
-    e.sync_status === 'dead_letter'
+    e.sync_status === 'dead_letter' ||
+    newIds.has(e.internal_id)
   )
   if (hasSnippet && hasAiStrip) return 100
   if (hasSnippet) return 84
