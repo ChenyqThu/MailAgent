@@ -17,7 +17,10 @@ import type { WebContents } from 'electron'
 import {
   abortStreamingMessages,
   appendMessage,
+  deleteMessagesFromId,
+  getMessage,
   getOrCreateSession,
+  getSession,
   listMessages,
   updateMessage,
   type BackendKind,
@@ -323,6 +326,108 @@ async function runStream(args: RunStreamArgs): Promise<void> {
     forward({ type: 'error', code: 'E_BACKEND_CRASH', message })
   } finally {
     if (_inflight.get(sessionId) === ac) _inflight.delete(sessionId)
+  }
+}
+
+// Sprint 14 PR B — inline edit. Drops `editingMessageId` and the tail
+// after it, then appends a fresh user message with `newContent` + an
+// empty streaming assistant message in the same session, and reruns
+// the backend stream. Reuses runStream's IPC/DB plumbing so all the
+// edge cases (abort, error event, partial DB writes) flow through one
+// path. Returns the new ids so the renderer can pre-render the empty
+// assistant bubble, matching startChat's contract.
+export interface EditChatInput {
+  sessionId: number
+  editingMessageId: number
+  newContent: string
+  backendKind: BackendKind
+  backendModel: string | null
+  backendAgentPageId: string | null
+}
+
+export async function editChatMessage(
+  input: EditChatInput,
+  sink: StreamSink
+): Promise<StartChatResult> {
+  if (!Number.isInteger(input.sessionId) || input.sessionId < 0) {
+    throw new Error(`editChatMessage: invalid sessionId ${input.sessionId}`)
+  }
+  if (!Number.isInteger(input.editingMessageId) || input.editingMessageId < 0) {
+    throw new Error(`editChatMessage: invalid editingMessageId ${input.editingMessageId}`)
+  }
+  if (typeof input.newContent !== 'string' || input.newContent.length === 0) {
+    throw new Error('editChatMessage: newContent must be a non-empty string')
+  }
+
+  const session = getSession(input.sessionId)
+  if (!session) {
+    const err = new Error(`session ${input.sessionId} not found`) as Error & { code?: string }
+    err.code = 'E_NOT_FOUND'
+    throw err
+  }
+  const editing = getMessage(input.editingMessageId)
+  if (!editing || editing.session_id !== input.sessionId) {
+    const err = new Error(
+      `message ${input.editingMessageId} not in session ${input.sessionId}`
+    ) as Error & { code?: string }
+    err.code = 'E_NOT_FOUND'
+    throw err
+  }
+  if (editing.role !== 'user') {
+    const err = new Error(
+      `message ${input.editingMessageId} is role=${editing.role}; only user messages can be edited`
+    ) as Error & { code?: string }
+    err.code = 'E_INVALID_ARG'
+    throw err
+  }
+
+  // Pre-empt any in-flight stream before mutating DB rows so the
+  // soon-to-be-deleted assistant row doesn't get a late chunk write.
+  abortChatSession(input.sessionId)
+
+  // Drop editing user message + everything after it. The fresh user
+  // message we append below will land with a new id and current
+  // created_at, so the assistant turn that follows reads naturally as
+  // "the user said X, the assistant replied Y" without a stale tail.
+  deleteMessagesFromId(input.sessionId, input.editingMessageId)
+
+  const userMsg = appendMessage({
+    sessionId: input.sessionId,
+    role: 'user',
+    content: input.newContent,
+    status: 'complete'
+  })
+
+  const assistantMsg = appendMessage({
+    sessionId: input.sessionId,
+    role: 'assistant',
+    content: '',
+    status: 'streaming',
+    model: input.backendModel
+  })
+
+  const ac = new AbortController()
+  _inflight.set(input.sessionId, ac)
+
+  const backend = getChatBackend(input.backendKind)
+  const emailContext = loadEmailContext(session.email_id)
+
+  void runStream({
+    sessionId: input.sessionId,
+    assistantMessageId: assistantMsg.id,
+    backend,
+    history: listMessages(input.sessionId),
+    model: input.backendModel,
+    agentPageId: input.backendAgentPageId,
+    emailContext,
+    ac,
+    sink
+  })
+
+  return {
+    sessionId: input.sessionId,
+    userMessageId: userMsg.id,
+    assistantMessageId: assistantMsg.id
   }
 }
 

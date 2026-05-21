@@ -25,6 +25,7 @@ import {
   abortStreamingMessages,
   appendMessage,
   closeChatDb,
+  deleteMessagesFromId,
   deleteSession,
   getChatDb,
   getMessage,
@@ -351,6 +352,83 @@ describe('chat_db — messages', () => {
     // Clearing metadata is supported via explicit null patch.
     updateMessage(msg.id, { metadata: null })
     expect(getMessage(msg.id)!.metadata).toBeNull()
+  })
+
+  // Sprint 14 PR B — inline edit truncate helper.
+  test('deleteMessagesFromId removes the named id + everything after it', () => {
+    const session = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    const m1 = appendMessage({
+      sessionId: session.id,
+      role: 'user',
+      content: 'first user',
+      status: 'complete'
+    })
+    appendMessage({
+      sessionId: session.id,
+      role: 'assistant',
+      content: 'first reply',
+      status: 'complete'
+    })
+    const m3 = appendMessage({
+      sessionId: session.id,
+      role: 'user',
+      content: 'second user',
+      status: 'complete'
+    })
+    appendMessage({
+      sessionId: session.id,
+      role: 'assistant',
+      content: 'second reply',
+      status: 'complete'
+    })
+
+    // Truncate from the second user message — should remove m3 + m4
+    // (the second user + its assistant reply) but leave m1 + m2 intact.
+    const removed = deleteMessagesFromId(session.id, m3.id)
+    expect(removed).toBe(2)
+
+    const survivors = listMessages(session.id)
+    expect(survivors.map((m) => m.id)).toEqual([m1.id, m1.id + 1])
+    expect(survivors.map((m) => m.content)).toEqual(['first user', 'first reply'])
+  })
+
+  test('deleteMessagesFromId is scoped to the session — sibling sessions untouched', () => {
+    const sessionA = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    const sessionB = getOrCreateSession({ emailId: 102, backendKind: 'custom-api' })
+    const aUser = appendMessage({
+      sessionId: sessionA.id,
+      role: 'user',
+      content: 'A1',
+      status: 'complete'
+    })
+    appendMessage({
+      sessionId: sessionB.id,
+      role: 'user',
+      content: 'B1',
+      status: 'complete'
+    })
+
+    // Deleting from sessionA's user msg id MUST NOT also delete the
+    // numerically-equal-or-greater row in sessionB (the SQL ROWID space
+    // is shared across sessions; without the session_id filter, the
+    // helper would scorched-earth other sessions).
+    const removed = deleteMessagesFromId(sessionA.id, aUser.id)
+    expect(removed).toBe(1)
+    expect(listMessages(sessionA.id)).toEqual([])
+    expect(listMessages(sessionB.id)).toHaveLength(1)
+  })
+
+  test('deleteMessagesFromId on an unknown id is a 0-row no-op', () => {
+    const session = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    appendMessage({
+      sessionId: session.id,
+      role: 'user',
+      content: 'lone',
+      status: 'complete'
+    })
+    const removed = deleteMessagesFromId(session.id, 999_999)
+    expect(removed).toBe(0)
+    expect(listMessages(session.id)).toHaveLength(1)
   })
 })
 

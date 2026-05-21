@@ -35,7 +35,7 @@ import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { ChatSidebar } from './ChatSidebar'
 import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
-import { MessageList, type DraftHandlers } from './MessageList'
+import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
 
 type PanelTab = 'ai' | 'thread' | 'sync'
@@ -180,10 +180,33 @@ export function AIChatPanel(): React.ReactElement {
   const draftHandlers: DraftHandlers = {
     onSend: handleDraftSend,
     onRegenerate: chat.retryLast ?? null,
-    onEdit: undefined, // Sprint 14 — inline editor
+    onEdit: undefined, // Sprint 14 — inline editor (assistant draft edit, separate flow)
     onOpenInWindow: undefined, // Sprint 14 — popout decision
     isSending: draftSending,
     recipient: detailQ.data?.sender ?? null
+  }
+
+  // Sprint 14 PR B — user-message inline edit handlers. Closes over the
+  // current backend choice so a mid-conversation backend switch (alt+
+  // shift+b) means the edit re-streams with the new model. Errors land
+  // in chat.error → the panel's error banner (no separate toast surface
+  // for editor failures, the banner already handles network/upstream
+  // codes consistently with send).
+  const handleEditUserMessage = useCallback(
+    async (messageId: number, newContent: string): Promise<void> => {
+      await chat.editMessage({
+        messageId,
+        newContent,
+        backendKind: backend.kind,
+        backendModel: backend.model,
+        backendAgentPageId: backend.agentPageId
+      })
+    },
+    [chat, backend]
+  )
+  const userHandlers: UserHandlers = {
+    onEdit: handleEditUserMessage,
+    isStreaming: chat.isStreaming
   }
 
   const handleSend = useCallback(
@@ -413,6 +436,7 @@ export function AIChatPanel(): React.ReactElement {
                       messages={chat.messages}
                       streamingMessageId={chat.streamingMessageId}
                       draftHandlers={draftHandlers}
+                      userHandlers={userHandlers}
                     />
                   )}
 

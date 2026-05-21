@@ -376,6 +376,13 @@
       "copy": "Copy",
       "toNotion": "To Notion"
     },
+    "message": {
+      "edit": "Edit · resend",
+      "editing": "Editing message",
+      "editBlocked": "Wait for the reply to finish before editing",
+      "save": "Save & resend · ⌘↩",
+      "cancel": "Cancel · Esc"
+    },
     "composer": {
       "placeholder": "/command or ask about this email… (⌘↩ send)",
       "send": "Send",

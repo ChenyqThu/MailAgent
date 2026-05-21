@@ -47,6 +47,21 @@ export interface SendChatInput {
   subject?: string | null
 }
 
+// Sprint 14 PR B — inline message edit. The caller (MessageList) supplies
+// the user-message id being edited + the new content + the backend
+// choice. Hook truncates the dispatcher state (abort current stream +
+// drop tail messages) and re-streams the assistant reply.
+export interface EditChatInput {
+  /** ai_chat_messages.id of the user message being edited. Backend
+   *  rejects with E_INVALID_ARG if this id points at a non-user role. */
+  messageId: number
+  /** Replacement content. Backend rejects empty strings. */
+  newContent: string
+  backendKind: ChatBackendKind
+  backendModel?: string | null
+  backendAgentPageId?: string | null
+}
+
 export interface ChatError {
   code: string
   message: string
@@ -93,6 +108,13 @@ export interface UseEmailChatReturn {
    *  current email. Aborts any in-flight stream, loads the target session's
    *  messages, and points `activeSessionId` at the new session. */
   selectSession: (sessionId: number) => Promise<void>
+  /** Sprint 14 PR B — edit a user message and re-stream the assistant
+   *  reply. Backend truncates messages from `messageId` onward, appends
+   *  a fresh user row with the new content, then runs the same dispatcher
+   *  loop send() uses. Resolves with the new ids; rejects with
+   *  `Error & { code }` on dispatch failure (the error also lands in
+   *  `error` for banner display). */
+  editMessage: (input: EditChatInput) => Promise<ChatStartResult>
 }
 
 // Sprint 5 §2.3 state-machine #4: quota cooldown duration. The Anthropic
@@ -584,6 +606,44 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setLastFailedInput(null)
   }, [mailApi])
 
+  // Sprint 14 PR B — edit a user message and re-stream. The hook owns
+  // the activeSession + streamingMessageId state machine, so editMessage
+  // mirrors send()'s post-IPC bookkeeping (clear error / set streaming
+  // target / refresh from SSoT). Differences from send:
+  //   - no SendChatInput.senderName/subject — island envelopes are an
+  //     onboarding signal for the first send of a turn; an edit is a
+  //     mid-turn correction, not a new draft event
+  //   - no chat.start; the backend's `editChatMessage` truncates +
+  //     appends + re-streams in one IPC call
+  //   - no stranded-send guard — editMessage requires an active session
+  //     that already belongs to the current email; switching emails
+  //     would have nulled activeSessionId before the user could click
+  //     edit
+  const editMessage = useCallback(
+    async (input: EditChatInput): Promise<ChatStartResult> => {
+      if (activeSessionId === null) {
+        throw new Error('useEmailChat.editMessage: no active session')
+      }
+      setError(null)
+      const result = await mailApi.chat.editMessage({
+        sessionId: activeSessionId,
+        editingMessageId: input.messageId,
+        newContent: input.newContent,
+        backendKind: input.backendKind,
+        backendModel: input.backendModel ?? null,
+        backendAgentPageId: input.backendAgentPageId ?? null
+      })
+      setStreamingMessageId(result.assistantMessageId)
+      activeSessionRef.current = result.sessionId
+      // Refresh the message list so the truncated tail + the freshly
+      // appended user row land in `messages` before the first stream
+      // chunk arrives. listMessages is the authoritative ordering.
+      await refresh(result.sessionId)
+      return result
+    },
+    [activeSessionId, mailApi, refresh]
+  )
+
   // Sprint 14 PR A — switch the renderer to a different session for the
   // current email (sidebar click). Aborts any in-flight stream on the
   // currently-active session, loads the target session's messages, and
@@ -647,7 +707,8 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     retryLast,
     quotaCooldownUntil,
     sessions,
-    selectSession
+    selectSession,
+    editMessage
   }
 }
 

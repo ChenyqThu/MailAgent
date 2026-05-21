@@ -20,6 +20,7 @@ import type {
   CalendarApi,
   CalendarExpandOpts,
   ChatApi,
+  ChatEditOpts,
   ChatMessage,
   ChatSession,
   ChatStartOpts,
@@ -359,6 +360,16 @@ class ElectronChatApi implements ChatApi {
   }
   async listSessions(emailId: number): Promise<ChatSession[]> {
     return (await invoker()('chat:listSessions', emailId)) as ChatSession[]
+  }
+  async editMessage(opts: ChatEditOpts): Promise<ChatStartResult> {
+    // Same envelope shape as `start` — Electron IPC strips custom Error
+    // properties, so the main process wraps dispatch failures in
+    // `{ ok: false, code, message }`.
+    const env = (await invoker()('chat:editMessage', opts)) as ChatStartEnvelope
+    if (env.ok) return env.data
+    const err = new Error(env.message) as Error & { code?: string }
+    err.code = env.code
+    throw err
   }
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
     return subscribe('chat:stream', (...args: unknown[]) => {

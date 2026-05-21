@@ -376,6 +376,13 @@
       "copy": "复制",
       "toNotion": "转 Notion"
     },
+    "message": {
+      "edit": "编辑 · 改后重新询问",
+      "editing": "编辑消息",
+      "editBlocked": "AI 正在回复 · 等回复完再编辑",
+      "save": "保存并重发 · ⌘↩",
+      "cancel": "取消 · Esc"
+    },
     "composer": {
       "placeholder": "/命令 或对这封邮件提问… (⌘↩ 发送)",
       "send": "发送",

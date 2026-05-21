@@ -587,6 +587,20 @@ export interface ChatStartOpts {
   backendAgentPageId?: string | null
 }
 
+// Sprint 14 PR B — inline message edit. The renderer sends the session +
+// the user-message id being edited + the replacement content + the same
+// backend choice fields chat.start uses (model can change between edits).
+// Backend truncates everything from `editingMessageId` onward, appends a
+// fresh user row with `newContent`, and re-streams the assistant turn.
+export interface ChatEditOpts {
+  sessionId: number
+  editingMessageId: number
+  newContent: string
+  backendKind: ChatBackendKind
+  backendModel?: string | null
+  backendAgentPageId?: string | null
+}
+
 export interface ChatStartResult {
   sessionId: number
   userMessageId: number
@@ -607,6 +621,14 @@ export interface ChatApi {
   abort(sessionId: number): void
   listMessages(sessionId: number): Promise<ChatMessage[]>
   listSessions(emailId: number): Promise<ChatSession[]>
+  /**
+   * Sprint 14 PR B — truncate session messages from `editingMessageId`
+   * onward, append a new user message with `newContent`, and re-stream
+   * the assistant reply. Throws `Error & { code }` on dispatch failure
+   * (E_INVALID_ARG / E_NOT_FOUND / E_BACKEND_UNAVAILABLE / E_DISPATCH).
+   * Only user-role messages can be edited.
+   */
+  editMessage(opts: ChatEditOpts): Promise<ChatStartResult>
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }

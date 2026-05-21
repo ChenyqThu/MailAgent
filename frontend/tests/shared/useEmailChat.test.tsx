@@ -36,6 +36,7 @@ const {
   stableMailApi,
   mockChatStart,
   mockChatAbort,
+  mockChatEditMessage,
   mockChatListMessages,
   mockChatListSessions,
   streamHandlers
@@ -43,6 +44,7 @@ const {
   const handlers: Array<(env: ChatStreamEnvelope) => void> = []
   const mockChatStart = vi.fn<(o: unknown) => Promise<ChatStartResult>>()
   const mockChatAbort = vi.fn()
+  const mockChatEditMessage = vi.fn<(o: unknown) => Promise<ChatStartResult>>()
   const mockChatListMessages = vi.fn<(id: number) => Promise<ChatMessage[]>>()
   const mockChatListSessions = vi.fn<(id: number) => Promise<ChatSession[]>>()
   const stableMailApi = {
@@ -62,6 +64,7 @@ const {
     chat: {
       start: mockChatStart,
       abort: mockChatAbort,
+      editMessage: mockChatEditMessage,
       listMessages: mockChatListMessages,
       listSessions: mockChatListSessions,
       onStream: (handler: (env: ChatStreamEnvelope) => void): (() => void) => {
@@ -90,6 +93,7 @@ const {
     stableMailApi,
     mockChatStart,
     mockChatAbort,
+    mockChatEditMessage,
     mockChatListMessages,
     mockChatListSessions,
     streamHandlers: handlers
@@ -975,5 +979,135 @@ describe('useEmailChat — Sprint 10 reviewer L1/L2/L3 island envelope contracts
     // emailId on the wire equals the email at send() time (101), not whatever
     // the hook's current `emailId` prop happens to be.
     expect(stableMailApi.island.aiDraftStream.mock.calls[0][0].emailId).toBe(101)
+  })
+})
+
+// Sprint 14 PR B — editMessage hook action.
+describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
+  test('throws when no active session', async () => {
+    const { result } = renderHook(() => useEmailChat(null))
+    await expect(
+      result.current.editMessage({
+        messageId: 1,
+        newContent: 'x',
+        backendKind: 'custom-api',
+        backendModel: 'claude'
+      })
+    ).rejects.toThrow(/no active session/)
+    expect(mockChatEditMessage).not.toHaveBeenCalled()
+  })
+
+  test('forwards opts with the active session id and bumps streaming target', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'old' }),
+      fakeMessage({ id: 101, session_id: 7, role: 'assistant', content: 'reply' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(7))
+
+    // editMessage backend returns the new ids the dispatcher freshly
+    // allocated after truncating the user row.
+    mockChatEditMessage.mockResolvedValue({
+      sessionId: 7,
+      userMessageId: 200,
+      assistantMessageId: 201
+    })
+    // refresh() after edit pulls the canonical post-truncate row set.
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 200, session_id: 7, role: 'user', content: 'edited' }),
+      fakeMessage({
+        id: 201,
+        session_id: 7,
+        role: 'assistant',
+        content: '',
+        status: 'streaming'
+      })
+    ])
+
+    await act(async () => {
+      await result.current.editMessage({
+        messageId: 100,
+        newContent: 'edited',
+        backendKind: 'custom-api',
+        backendModel: 'claude'
+      })
+    })
+
+    expect(mockChatEditMessage).toHaveBeenCalledWith({
+      sessionId: 7,
+      editingMessageId: 100,
+      newContent: 'edited',
+      backendKind: 'custom-api',
+      backendModel: 'claude',
+      backendAgentPageId: null
+    })
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(201))
+    expect(result.current.messages.map((m) => m.id)).toEqual([200, 201])
+  })
+
+  test('clears prior error before dispatching the edit (matches send() contract)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 7, role: 'user' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(7))
+
+    // Simulate a prior error landed on the panel — editMessage should
+    // wipe it on dispatch so the user doesn't see "old error" + "edit
+    // just queued" side by side.
+    act(() => {
+      emitStream({
+        sessionId: 7,
+        messageId: 100,
+        event: { type: 'error', code: 'E_NETWORK', message: 'transient' }
+      })
+    })
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+
+    mockChatEditMessage.mockResolvedValue({
+      sessionId: 7,
+      userMessageId: 200,
+      assistantMessageId: 201
+    })
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 200, session_id: 7, role: 'user' }),
+      fakeMessage({ id: 201, session_id: 7, role: 'assistant', status: 'streaming' })
+    ])
+
+    await act(async () => {
+      await result.current.editMessage({
+        messageId: 100,
+        newContent: 'try again',
+        backendKind: 'custom-api',
+        backendModel: 'claude'
+      })
+    })
+    expect(result.current.error).toBeNull()
+  })
+
+  test('propagates dispatch failures so the caller (UserBubble) keeps editor open', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 7, role: 'user' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(7))
+
+    const err = new Error('cannot edit assistant') as Error & { code?: string }
+    err.code = 'E_INVALID_ARG'
+    mockChatEditMessage.mockRejectedValueOnce(err)
+
+    await act(async () => {
+      await expect(
+        result.current.editMessage({
+          messageId: 100,
+          newContent: 'x',
+          backendKind: 'custom-api',
+          backendModel: 'claude'
+        })
+      ).rejects.toMatchObject({ code: 'E_INVALID_ARG' })
+    })
   })
 })
