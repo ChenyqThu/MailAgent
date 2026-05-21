@@ -250,6 +250,24 @@ export function Composer({
             onChange={(e) => onChange(e.target.value)}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
+            // Sprint 14 PR G polish — `@` keystroke surfaces the mention
+            // popover so users don't have to mouse to the AtSign icon.
+            // The `@` character itself still types into the textarea
+            // (no preventDefault) so a typo "@bob" stays editable. The
+            // popover's input gets focus inside its own useEffect, so
+            // the user's next keystrokes land on the search field.
+            onKeyDown={(e) => {
+              if (
+                e.key === '@' &&
+                !e.metaKey &&
+                !e.ctrlKey &&
+                !e.altKey &&
+                mentionEnabled &&
+                !mentionOpen
+              ) {
+                setMentionOpen(true)
+              }
+            }}
             rows={2}
             placeholder={t('chat.composer.placeholder')}
             aria-label={t('chat.composer.placeholder')}

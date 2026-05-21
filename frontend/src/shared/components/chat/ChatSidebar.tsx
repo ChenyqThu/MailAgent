@@ -23,6 +23,11 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 interface ChatSidebarProps {
   sessions: ReadonlyArray<ChatSession>
   activeSessionId: number | null
+  /** Sprint 14 PR G polish — first user-message preview per session,
+   *  lazy-loaded by AIChatPanel when the sidebar opens. Missing key
+   *  means "not loaded yet"; explicit null means "no user message in
+   *  this session" (e.g. seeded by automation, never user-driven). */
+  previews?: Record<number, string | null>
   onSelectSession: (sessionId: number) => void
   onNewSession: () => void
   onClose: () => void
@@ -31,6 +36,7 @@ interface ChatSidebarProps {
 export function ChatSidebar({
   sessions,
   activeSessionId,
+  previews,
   onSelectSession,
   onNewSession,
   onClose
@@ -88,6 +94,7 @@ export function ChatSidebar({
               key={session.id}
               session={session}
               active={session.id === activeSessionId}
+              preview={previews?.[session.id]}
               onSelect={() => onSelectSession(session.id)}
             />
           ))}
@@ -100,13 +107,28 @@ export function ChatSidebar({
 interface SessionItemProps {
   session: ChatSession
   active: boolean
+  /** Sprint 14 PR G polish — undefined = lazy fetch in-flight (show
+   *  backend label as fallback); null = explicitly empty (no user msg
+   *  in this session); string = the preview to display. */
+  preview?: string | null
   onSelect: () => void
 }
 
-function SessionItem({ session, active, onSelect }: SessionItemProps): React.ReactElement {
+function SessionItem({
+  session,
+  active,
+  preview,
+  onSelect
+}: SessionItemProps): React.ReactElement {
   const { t } = useTranslation()
   const backendLabel = formatBackendLabel(session, t)
   const time = formatRelativeTime(session.updated_at, t)
+  // Sprint 14 PR G polish — line 1 prefers the first user-message
+  // preview (more informative than "Custom API · sonnet-4-6" repeated
+  // across every row); fall back to backend label when the preview is
+  // either still loading (undefined) or explicitly empty (null).
+  const hasPreview = typeof preview === 'string' && preview.length > 0
+  const primary = hasPreview ? preview : backendLabel
   return (
     <li role="option" aria-selected={active}>
       <button
@@ -120,14 +142,16 @@ function SessionItem({ session, active, onSelect }: SessionItemProps): React.Rea
           active ? 'bg-ink-4 text-ink-fg ring-1 ring-c-accent/30' : 'text-ink-fg-1 hover:bg-ink-3'
         )}
       >
-        <span className="text-meta truncate">{backendLabel}</span>
+        <span className="text-meta truncate" title={primary}>
+          {primary}
+        </span>
         <span
           className={cn(
             'text-micro font-mono truncate',
             active ? 'text-ink-fg-2' : 'text-ink-fg-3'
           )}
         >
-          {time}
+          {hasPreview ? `${backendLabel} · ${time}` : time}
         </span>
       </button>
     </li>

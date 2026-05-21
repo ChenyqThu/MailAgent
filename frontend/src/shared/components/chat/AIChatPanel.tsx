@@ -128,6 +128,45 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // the user-message body as a `[Attached files]` block (text content
   // for parseable files, metadata-only for binaries). Cleared on send.
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+  // Sprint 14 PR G polish — sidebar session preview cache. Lazy-loaded
+  // when the sidebar opens; one listMessages call per uncached session
+  // (5-10 ms each against the local SQLite, comfortable even for a
+  // power user with ~30 sessions on the same email). Stored as
+  // Record<number, string | null> so a "no first user message" hit
+  // (assistant-only seeded session) is distinct from "not loaded yet".
+  const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
+  useEffect(() => {
+    // Only spend the IPC round-trips when the user actually sees the
+    // sidebar; opening it later triggers this same effect via deps.
+    if (!sidebarOpen) return
+    const missing = chat.sessions.filter((s) => !(s.id in sessionPreviews))
+    if (missing.length === 0) return
+    let cancelled = false
+    void Promise.all(
+      missing.map(async (s) => {
+        try {
+          const msgs = await mailApi.chat.listMessages(s.id)
+          const firstUser = msgs.find((m) => m.role === 'user')
+          const preview = firstUser?.content?.trim() ?? null
+          return [s.id, preview === null ? null : preview.slice(0, 80)] as const
+        } catch {
+          // Best-effort: a failed fetch just leaves the cell as `null`
+          // so the sidebar falls back to backend label + time.
+          return [s.id, null] as const
+        }
+      })
+    ).then((pairs) => {
+      if (cancelled) return
+      setSessionPreviews((cur) => {
+        const next = { ...cur }
+        for (const [id, preview] of pairs) next[id] = preview
+        return next
+      })
+    })
+    return (): void => {
+      cancelled = true
+    }
+  }, [sidebarOpen, chat.sessions, sessionPreviews, mailApi])
 
   const chat = useEmailChat(activeInternalId)
 
@@ -504,6 +543,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           <ChatSidebar
             sessions={chat.sessions}
             activeSessionId={chat.activeSessionId}
+            previews={sessionPreviews}
             onSelectSession={(sid) => void chat.selectSession(sid)}
             onNewSession={() => chat.newSession()}
             onClose={() => setSidebarOpen(false)}

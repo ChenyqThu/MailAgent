@@ -199,6 +199,71 @@ describe('ChatSidebar — backend label routing', () => {
   })
 })
 
+describe('ChatSidebar — preview (Sprint 14 PR G polish)', () => {
+  test('with preview string renders preview as primary, backend label demoted to meta line', () => {
+    const sessions = [
+      fakeSession({ id: 7, backend_kind: 'custom-api', backend_model: 'claude-sonnet-4-6' })
+    ]
+    render(
+      <ChatSidebar
+        sessions={sessions}
+        activeSessionId={7}
+        previews={{ 7: '帮我总结这封邮件' }}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText('帮我总结这封邮件')).toBeTruthy()
+    // Backend label still appears on the meta line, alongside the time.
+    expect(screen.getByText(/claude-sonnet-4-6/)).toBeTruthy()
+  })
+
+  test('missing preview key (still loading) falls back to backend label as primary', () => {
+    const sessions = [fakeSession({ id: 7, backend_model: 'gpt-5.4' })]
+    render(
+      <ChatSidebar
+        sessions={sessions}
+        activeSessionId={7}
+        previews={{}}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText('gpt-5.4')).toBeTruthy()
+  })
+
+  test('explicit null preview (assistant-only session) falls back to backend label', () => {
+    const sessions = [fakeSession({ id: 7, backend_model: 'gpt-5.4' })]
+    render(
+      <ChatSidebar
+        sessions={sessions}
+        activeSessionId={7}
+        previews={{ 7: null }}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText('gpt-5.4')).toBeTruthy()
+  })
+
+  test('previews omitted entirely (legacy callers) still renders', () => {
+    const sessions = [fakeSession({ id: 7, backend_model: 'claude-opus-4-7' })]
+    render(
+      <ChatSidebar
+        sessions={sessions}
+        activeSessionId={7}
+        onSelectSession={vi.fn()}
+        onNewSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText('claude-opus-4-7')).toBeTruthy()
+  })
+})
+
 describe('ChatSidebar — relative time formatter', () => {
   test('< 1 min ago → justNow', () => {
     render(
