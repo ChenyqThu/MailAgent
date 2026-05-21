@@ -331,6 +331,10 @@
     "history": "History",
     "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
+    "popout": {
+      "button": "Open in window",
+      "close": "Close window"
+    },
     "sidebar": {
       "title": "History",
       "empty": "No previous sessions · send the first message to start one",

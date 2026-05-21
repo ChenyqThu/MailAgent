@@ -629,6 +629,14 @@ export interface ChatApi {
    * Only user-role messages can be edited.
    */
   editMessage(opts: ChatEditOpts): Promise<ChatStartResult>
+  /**
+   * Sprint 14 PR E — spawn a dedicated popout window pinned to the
+   * given email's AI chat. Fire-and-forget: the new window shows
+   * itself; no resolved promise. Same ai_chat.db backing store as the
+   * main inbox panel, so flipping between the two windows is
+   * transparent (WAL + busy_timeout already configured in chat_db.ts).
+   */
+  openPopout(emailId: number): void
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }

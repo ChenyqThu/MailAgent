@@ -371,6 +371,13 @@ class ElectronChatApi implements ChatApi {
     err.code = env.code
     throw err
   }
+  openPopout(emailId: number): void {
+    // Fire-and-forget; main process spawns the BrowserWindow + handles
+    // load + show lifecycle. Bad emailId is silently dropped by the
+    // handler — renderer validates the input upstream anyway.
+    if (!Number.isInteger(emailId) || emailId < 0) return
+    sender()?.('window:openChatPopout', emailId)
+  }
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
     return subscribe('chat:stream', (...args: unknown[]) => {
       const env = args[0] as ChatStreamEnvelope | undefined

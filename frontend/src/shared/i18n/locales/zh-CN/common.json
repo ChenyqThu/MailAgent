@@ -331,6 +331,10 @@
     "history": "会话历史",
     "historyHint": "切换历史会话 · ⇧⌥H",
     "closePanel": "收起面板 · ⌘L",
+    "popout": {
+      "button": "在独立窗口打开",
+      "close": "关闭窗口"
+    },
     "sidebar": {
       "title": "会话历史",
       "empty": "暂无历史会话 · 发送第一条消息后会出现在这里",

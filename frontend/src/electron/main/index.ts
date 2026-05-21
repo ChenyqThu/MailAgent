@@ -95,6 +95,55 @@ function createWindow(): void {
   }
 }
 
+// Sprint 14 PR E — chat popout chrome. Spawned by the renderer via
+// `window:openChatPopout` IPC; carries the email id through the URL
+// search string so renderer/main.tsx can boot the popout shell before
+// React.render. Sized smaller than the main window since the popout
+// only hosts a single AI chat panel (no inbox / detail / settings).
+function createPopoutWindow(emailId: number): void {
+  const popout = new BrowserWindow({
+    width: 480,
+    height: 760,
+    minWidth: 360,
+    minHeight: 520,
+    show: false,
+    title: 'MailAgent — AI Chat',
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#0E1013',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.mjs'),
+      sandbox: false
+    }
+  })
+
+  popout.on('ready-to-show', () => {
+    popout.show()
+  })
+
+  popout.webContents.on('console-message', (event) => {
+    const { level, message, sourceId, lineNumber } = event
+    if (level === 'error' || level === 'warning') {
+      console.error(`[popout:${level}] ${message}\n  at ${sourceId}:${lineNumber}`)
+    }
+  })
+
+  popout.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  const search = `popout=1&email=${emailId}`
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    popout.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
+  } else {
+    // Electron's loadFile accepts a `search` option that materialises
+    // as `?popout=1&email=N` in window.location.search inside the
+    // renderer — same shape the dev loadURL path produces, so the
+    // bootPopoutModeFromQuery parser handles both transparently.
+    popout.loadFile(join(__dirname, '../renderer/index.html'), { search })
+  }
+}
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('ink.chenge.mailagent')
 
@@ -209,6 +258,15 @@ app.whenReady().then(() => {
   registerServicesHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
+
+  // Sprint 14 PR E — popout opener. Fire-and-forget from the renderer
+  // (the new BrowserWindow shows itself via ready-to-show); no return
+  // value or envelope. Bad emailId is silently dropped — the renderer
+  // already validates Number.isInteger before sending.
+  ipcMain.on('window:openChatPopout', (_evt, emailId: number) => {
+    if (!Number.isInteger(emailId) || emailId < 0) return
+    createPopoutWindow(emailId)
+  })
 
   createWindow()
 

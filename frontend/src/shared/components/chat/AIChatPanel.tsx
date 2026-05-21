@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
-import { History, Plus, Sparkles, X } from 'lucide-react'
+import { History, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 
 import type { AIFields, EmailMeta } from '@shared/api/types'
 import { useActiveEmail } from '@shared/state/active-email'
@@ -75,7 +75,15 @@ function backendShortLabel(b: BackendChoice, agentName: string | null): string {
   return parts.length > 2 ? parts.slice(-3).join('-') : model
 }
 
-export function AIChatPanel(): React.ReactElement {
+interface AIChatPanelProps {
+  /** Sprint 14 PR E — full-window popout mode. When true the panel
+   *  drops its 360px fixed width + closes-the-panel header button (no
+   *  inbox to return to from a popout window) and the close hover
+   *  switches to a "close window" semantic via window.close(). */
+  fullScreen?: boolean
+}
+
+export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const activeInternalId = useActiveEmail((s) => s.activeInternalId)
@@ -177,11 +185,19 @@ export function AIChatPanel(): React.ReactElement {
   // that's "起草回复给 oncall…" → produces a fresh draft. If retryLast is
   // null (no last failed input on file), DraftPreviewCard surfaces the
   // `regenPending` hint via HoverTip instead of pretending the button works.
+  // Sprint 14 PR E — DraftPreviewCard's popout button opens the same
+  // dedicated window the TabBar Maximize2 icon does; inside the popout
+  // itself the button is hidden (recursive popout has no use case).
+  const handleDraftOpenInWindow = useCallback(() => {
+    if (activeInternalId === null) return
+    mailApi.chat.openPopout(activeInternalId)
+  }, [activeInternalId, mailApi])
+
   const draftHandlers: DraftHandlers = {
     onSend: handleDraftSend,
     onRegenerate: chat.retryLast ?? null,
     onEdit: undefined, // Sprint 14 — inline editor (assistant draft edit, separate flow)
-    onOpenInWindow: undefined, // Sprint 14 — popout decision
+    onOpenInWindow: fullScreen ? undefined : handleDraftOpenInWindow,
     isSending: draftSending,
     recipient: detailQ.data?.sender ?? null
   }
@@ -260,7 +276,12 @@ export function AIChatPanel(): React.ReactElement {
   return (
     <aside
       aria-label="ai-chat-panel"
-      className="w-[360px] shrink-0 border-l border-ink-border ai-bg flex flex-col min-h-0"
+      className={cn(
+        'border-l border-ink-border ai-bg flex flex-col min-h-0',
+        // Sprint 14 PR E — popout fills the whole window; inbox use
+        // case keeps the 360px right-rail fixed-width contract.
+        fullScreen ? 'flex-1 w-full border-l-0' : 'w-[360px] shrink-0'
+      )}
     >
       {/* ── Tab bar (40px) — AI / Thread / Sync + New / History / Close ── */}
       <div className="h-10 border-b border-ink-border flex items-center px-1 shrink-0">
@@ -344,11 +365,45 @@ export function AIChatPanel(): React.ReactElement {
               <History size={13} strokeWidth={2} />
             </button>
           </HoverTip>
-          <HoverTip text={t('chat.closePanel')} side="bottom">
+          {/* Sprint 14 PR E — popout button (inbox-only). Spawns a
+              dedicated BrowserWindow pinned to the active email's
+              chat. fullScreen=true is the popout itself; it would be
+              recursive nonsense to popout-from-a-popout, so the
+              button hides there. Disabled when no email is selected. */}
+          {!fullScreen && (
+            <HoverTip text={t('chat.popout.button')} side="bottom">
+              <button
+                type="button"
+                aria-label={t('chat.popout.button')}
+                disabled={activeInternalId === null}
+                onClick={() => {
+                  if (activeInternalId === null) return
+                  mailApi.chat.openPopout(activeInternalId)
+                }}
+                className={cn(
+                  'p-1.5 rounded transition-colors duration-fast',
+                  activeInternalId === null
+                    ? 'text-ink-fg-3 opacity-50 cursor-not-allowed'
+                    : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                )}
+              >
+                <Maximize2 size={13} strokeWidth={2} />
+              </button>
+            </HoverTip>
+          )}
+          <HoverTip text={fullScreen ? t('chat.popout.close') : t('chat.closePanel')} side="bottom">
             <button
               type="button"
-              onClick={hideAIChatPanel}
-              aria-label={t('chat.closePanel')}
+              // Sprint 14 PR E — the popout's close button closes the
+              // dedicated BrowserWindow (window.close fires `closed`
+              // → Electron tears down the renderer instance). Inbox
+              // panel still calls hideAIChatPanel which just hides
+              // the 360px right rail in the main window.
+              onClick={() => {
+                if (fullScreen) window.close()
+                else hideAIChatPanel()
+              }}
+              aria-label={fullScreen ? t('chat.popout.close') : t('chat.closePanel')}
               className={cn(
                 'text-ink-fg-2 hover:text-ink-fg p-1.5 rounded',
                 'transition-colors duration-fast hover:bg-ink-4'
