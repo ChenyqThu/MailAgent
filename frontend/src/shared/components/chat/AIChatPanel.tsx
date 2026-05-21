@@ -9,7 +9,7 @@
 // conversation / History / Close affordances. Mirrors mockup-inbox.html
 // lines 1093-1116. Non-AI tabs paint a placeholder until V1.5 wires them.
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { History, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 
