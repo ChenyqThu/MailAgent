@@ -329,8 +329,22 @@
     "newChat": "New chat · ⌘N",
     "newChatHint": "Reset the current thread · next send opens a fresh session",
     "history": "History",
-    "historyBlocked": "Chat history · awaiting Sprint 14 sidebar",
+    "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
+    "sidebar": {
+      "title": "History",
+      "empty": "No previous sessions · send the first message to start one",
+      "newSession": "New chat",
+      "close": "Close sidebar",
+      "itemAriaActive": "Current session",
+      "itemAriaSwitch": "Switch to this session",
+      "messageCount": "{n, plural, =0 {0 messages} =1 {1 message} other {# messages}}",
+      "untitled": "Untitled session",
+      "justNow": "just now",
+      "minutesAgo": "{n}m ago",
+      "hoursAgo": "{n}h ago",
+      "daysAgo": "{n}d ago"
+    },
     "backend": {
       "notionAgent": "Notion Agent",
       "customApi": "Custom API",

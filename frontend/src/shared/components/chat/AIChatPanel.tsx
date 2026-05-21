@@ -15,7 +15,7 @@ import { History, Plus, Sparkles, X } from 'lucide-react'
 
 import type { AIFields, EmailMeta } from '@shared/api/types'
 import { useActiveEmail } from '@shared/state/active-email'
-import { hideAIChatPanel } from '@shared/state/ai-chat-panel'
+import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailChat } from '@shared/hooks/useEmailChat'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useShortcut } from '@shared/hooks/useShortcut'
@@ -32,6 +32,7 @@ import {
 } from '@shared/state/notion-agent-storage'
 
 import { BackendSelector, type BackendChoice } from './BackendSelector'
+import { ChatSidebar } from './ChatSidebar'
 import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers } from './MessageList'
@@ -95,6 +96,12 @@ export function AIChatPanel(): React.ReactElement {
   )
 
   const [tab, setTab] = useState<PanelTab>('ai')
+  // Sprint 14 PR A — session history sidebar. Open/close state lives in
+  // the panel store so a remount (email switch) doesn't drop the user's
+  // preference, and the value is persisted to localStorage from there.
+  const sidebarOpen = useAIChatPanel((s) => s.sidebarOpen)
+  const toggleSidebar = useAIChatPanel((s) => s.toggleSidebar)
+  const setSidebarOpen = useAIChatPanel((s) => s.setSidebarOpen)
   const [backend, setBackend] = useState<BackendChoice>({
     kind: agentPageId ? 'notion-agent' : 'custom-api',
     model: agentPageId ? null : 'claude-sonnet-4-6',
@@ -213,6 +220,11 @@ export function AIChatPanel(): React.ReactElement {
     )
   )
 
+  // Sprint 14 PR A — ⇧⌥H toggles the session history sidebar. Picked the
+  // same Alt-modifier family as ⇧⌥B (backend) so the panel's "Alt = AI
+  // panel actions" mnemonic stays consistent.
+  useShortcut('alt+shift+h', () => toggleSidebar())
+
   const errorBanner = chat.error ? mapErrorKey(chat.error.code) : null
   // Sprint 5 ship-review (codex MEDIUM #2): retry CTA + dismiss icon live on
   // the error banner; both surfaces resolve to zh-CN text under CJK locale.
@@ -290,17 +302,20 @@ export function AIChatPanel(): React.ReactElement {
               <Plus size={13} strokeWidth={2} />
             </button>
           </HoverTip>
-          {/* History — Sprint 14 will surface session switcher sidebar. */}
-          <HoverTip text={t('chat.historyBlocked')} side="bottom">
+          {/* Sprint 14 PR A — History button toggles the session sidebar
+              (left rail inside the panel). aria-pressed reflects state so
+              screen readers announce the toggle correctly. */}
+          <HoverTip text={`${t('chat.history')}\n${t('chat.historyHint')}`} side="bottom">
             <button
               type="button"
               aria-label={t('chat.history')}
-              disabled
-              data-disabled=""
-              tabIndex={-1}
+              aria-pressed={sidebarOpen}
+              onClick={() => toggleSidebar()}
               className={cn(
                 'p-1.5 rounded transition-colors duration-fast',
-                'text-ink-fg-3 opacity-50 cursor-not-allowed'
+                sidebarOpen
+                  ? 'bg-ink-4 text-ink-fg'
+                  : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
               )}
             >
               <History size={13} strokeWidth={2} />
@@ -322,96 +337,114 @@ export function AIChatPanel(): React.ReactElement {
         </div>
       </div>
 
-      {tab !== 'ai' ? (
-        <TabPlaceholder
-          label={tab === 'thread' ? t('chat.tabThread') : t('chat.tabSync')}
-          subline={t('shortcutHelp.soon')}
-        />
-      ) : (
-        <>
-          <BackendSelector value={backend} onChange={setBackend} agentName={agentName} />
-          <ContextChips
-            hasEmailBody={activeInternalId !== null}
-            aiFieldsCount={aiFieldsCount}
-            threadCount={threadCount}
-            notionProjectCount={0}
+      {/* Sprint 14 PR A — wrap sidebar + main column in a flex row so the
+          collapsible history rail can sit left-of the BackendSelector /
+          MessageList / Composer stack. min-h-0 keeps the children's
+          overflow-auto regions correctly scrollable inside the parent
+          flex-col aside. */}
+      <div className="flex-1 flex min-h-0">
+        {sidebarOpen && tab === 'ai' && (
+          <ChatSidebar
+            sessions={chat.sessions}
+            activeSessionId={chat.activeSessionId}
+            onSelectSession={(sid) => void chat.selectSession(sid)}
+            onNewSession={() => chat.newSession()}
+            onClose={() => setSidebarOpen(false)}
           />
-
-          {activeInternalId === null ? (
-            <div className="flex-1 flex items-center justify-center px-6 text-aux text-ink-fg-2 text-center">
-              {t('chat.empty.noEmail')}
-            </div>
+        )}
+        <div className="flex-1 flex flex-col min-h-0">
+          {tab !== 'ai' ? (
+            <TabPlaceholder
+              label={tab === 'thread' ? t('chat.tabThread') : t('chat.tabSync')}
+              subline={t('shortcutHelp.soon')}
+            />
           ) : (
             <>
-              {errorBanner && (
-                <div className="px-3 py-2 mx-3 my-2 rounded-md text-aux text-fail bg-fail/10 border border-fail/30 flex items-start gap-2">
-                  <span className="flex-1">{t(errorBanner)}</span>
-                  {chat.retryLast && (
-                    <button
-                      type="button"
-                      onClick={() => void chat.retryLast?.()}
-                      className={cn(
-                        retryActionKlass,
-                        'text-fail hover:bg-fail/15 px-2 py-0.5 rounded transition-colors duration-fast'
-                      )}
-                    >
-                      {t('chat.error.retry')}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={chat.clearError}
-                    className={cn(retryActionKlass, 'text-ink-fg-2 hover:text-ink-fg-1')}
-                    aria-label="dismiss"
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
+              <BackendSelector value={backend} onChange={setBackend} agentName={agentName} />
+              <ContextChips
+                hasEmailBody={activeInternalId !== null}
+                aiFieldsCount={aiFieldsCount}
+                threadCount={threadCount}
+                notionProjectCount={0}
+              />
 
-              {inQuotaCooldown && quotaCooldownUntil !== null && (
-                <QuotaCooldownTimer until={quotaCooldownUntil} />
-              )}
-
-              {chat.messages.length === 0 ? (
+              {activeInternalId === null ? (
                 <div className="flex-1 flex items-center justify-center px-6 text-aux text-ink-fg-2 text-center">
-                  {t('chat.empty.noMessages')}
+                  {t('chat.empty.noEmail')}
                 </div>
               ) : (
-                <MessageList
-                  messages={chat.messages}
-                  streamingMessageId={chat.streamingMessageId}
-                  draftHandlers={draftHandlers}
-                />
-              )}
+                <>
+                  {errorBanner && (
+                    <div className="px-3 py-2 mx-3 my-2 rounded-md text-aux text-fail bg-fail/10 border border-fail/30 flex items-start gap-2">
+                      <span className="flex-1">{t(errorBanner)}</span>
+                      {chat.retryLast && (
+                        <button
+                          type="button"
+                          onClick={() => void chat.retryLast?.()}
+                          className={cn(
+                            retryActionKlass,
+                            'text-fail hover:bg-fail/15 px-2 py-0.5 rounded transition-colors duration-fast'
+                          )}
+                        >
+                          {t('chat.error.retry')}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={chat.clearError}
+                        className={cn(retryActionKlass, 'text-ink-fg-2 hover:text-ink-fg-1')}
+                        aria-label="dismiss"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
 
-              <QuickActions onPick={handlePickAction} disabled={chat.isStreaming} />
-              <Composer
-                value={draft}
-                onChange={setDraft}
-                onSend={handleSend}
-                onCancel={handleCancel}
-                isStreaming={chat.isStreaming}
-                canSend={canSend}
-                backendName={backendName}
-                // Sprint 13 — model switcher lives in Composer Cpu button
-                // (mockup L2530). Notion Agent has no model picker — the
-                // agent decides; Custom API exposes the 3 supported models.
-                currentModel={backend.kind === 'custom-api' ? backend.model : null}
-                availableModels={
-                  backend.kind === 'custom-api'
-                    ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4']
-                    : []
-                }
-                onModelChange={(model) =>
-                  setBackend({ kind: 'custom-api', model, agentPageId: null })
-                }
-                modelPickerDisabled={backend.kind === 'notion-agent'}
-              />
+                  {inQuotaCooldown && quotaCooldownUntil !== null && (
+                    <QuotaCooldownTimer until={quotaCooldownUntil} />
+                  )}
+
+                  {chat.messages.length === 0 ? (
+                    <div className="flex-1 flex items-center justify-center px-6 text-aux text-ink-fg-2 text-center">
+                      {t('chat.empty.noMessages')}
+                    </div>
+                  ) : (
+                    <MessageList
+                      messages={chat.messages}
+                      streamingMessageId={chat.streamingMessageId}
+                      draftHandlers={draftHandlers}
+                    />
+                  )}
+
+                  <QuickActions onPick={handlePickAction} disabled={chat.isStreaming} />
+                  <Composer
+                    value={draft}
+                    onChange={setDraft}
+                    onSend={handleSend}
+                    onCancel={handleCancel}
+                    isStreaming={chat.isStreaming}
+                    canSend={canSend}
+                    backendName={backendName}
+                    // Sprint 13 — model switcher lives in Composer Cpu button
+                    // (mockup L2530). Notion Agent has no model picker — the
+                    // agent decides; Custom API exposes the 3 supported models.
+                    currentModel={backend.kind === 'custom-api' ? backend.model : null}
+                    availableModels={
+                      backend.kind === 'custom-api'
+                        ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4']
+                        : []
+                    }
+                    onModelChange={(model) =>
+                      setBackend({ kind: 'custom-api', model, agentPageId: null })
+                    }
+                    modelPickerDisabled={backend.kind === 'notion-agent'}
+                  />
+                </>
+              )}
             </>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </aside>
   )
 }

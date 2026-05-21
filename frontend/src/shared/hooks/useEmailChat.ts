@@ -32,7 +32,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
-import type { ChatBackendKind, ChatMessage, ChatStartResult } from '../api/types'
+import type { ChatBackendKind, ChatMessage, ChatSession, ChatStartResult } from '../api/types'
 
 export interface SendChatInput {
   message: string
@@ -84,6 +84,15 @@ export interface UseEmailChatReturn {
    *  `send` until this passes; Composer footer surfaces the remaining
    *  seconds via `useTimeUntil`. */
   quotaCooldownUntil: number | null
+  /** Sprint 14 PR A — all sessions for the current email, ordered by
+   *  updated_at DESC. Surfaced to the history sidebar; refreshed on email
+   *  switch + after each successful `send()` (which may have created a
+   *  fresh session row). */
+  sessions: ChatSession[]
+  /** Sprint 14 PR A — switch the renderer to a different session for the
+   *  current email. Aborts any in-flight stream, loads the target session's
+   *  messages, and points `activeSessionId` at the new session. */
+  selectSession: (sessionId: number) => Promise<void>
 }
 
 // Sprint 5 §2.3 state-machine #4: quota cooldown duration. The Anthropic
@@ -128,6 +137,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null)
   const [error, setError] = useState<ChatError | null>(null)
   const [lastEmailId, setLastEmailId] = useState<number | null>(emailId)
+  // Sprint 14 PR A — sessions for the current email; surfaced to the
+  // history sidebar. Loaded by effect #1 on email switch, refreshed
+  // after each successful send (which may have created a new row).
+  const [sessions, setSessions] = useState<ChatSession[]>([])
   /** Sprint 5 state machine #3 — captures the last input that failed so a
    *  Retry button can re-fire it. Set on every send(); cleared on success
    *  done event. */
@@ -175,6 +188,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setActiveSessionIdState(null)
     setStreamingMessageId(null)
     setLastFailedInput(null)
+    // Sprint 14 PR A — sessions are email-scoped; clear so the sidebar
+    // doesn't briefly show the previous email's history while effect #1
+    // re-fetches.
+    setSessions([])
     // NOTE: do NOT clear quotaCooldownUntil on email switch — the
     // upstream quota is global to the CRS account; switching emails
     // doesn't lift the cap. The cooldown timer below clears it on its
@@ -232,15 +249,18 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     let cancelled = false
     void (async (): Promise<void> => {
       try {
-        const sessions = await mailApi.chat.listSessions(emailId)
+        const fetched = await mailApi.chat.listSessions(emailId)
         if (cancelled) return
-        if (sessions.length === 0) {
+        // Sprint 14 PR A — persist to state so the sidebar can render
+        // them; order is already updated_at DESC from the DB query.
+        setSessions(fetched)
+        if (fetched.length === 0) {
           setActiveSessionIdState(null)
           setMessages([])
           setStreamingMessageId(null)
           return
         }
-        const latest = sessions[0]
+        const latest = fetched[0]
         setActiveSessionIdState(latest.id)
         await refresh(latest.id)
       } catch (err) {
@@ -428,6 +448,23 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   }, [emailId, mailApi])
 
   // --- 4) public actions ---------------------------------------------------
+
+  // Sprint 14 PR A — pull a fresh sessions list for the active email.
+  // Triggered after each send so a newly-created session row (e.g.
+  // after `newSession()` + first send) appears in the sidebar without
+  // forcing an email re-mount. Best-effort: errors stay silent because
+  // the sidebar is non-critical UX. Defined before `send` so the send
+  // useCallback's dep array can reference it without a TDZ.
+  const refreshSessions = useCallback(async (): Promise<void> => {
+    if (emailId === null) return
+    try {
+      const fresh = await mailApi.chat.listSessions(emailId)
+      setSessions(fresh)
+    } catch {
+      // Sidebar is non-critical; swallow.
+    }
+  }, [emailId, mailApi])
+
   const send = useCallback(
     async (input: SendChatInput): Promise<ChatStartResult> => {
       if (emailId === null) {
@@ -494,9 +531,17 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         prompt: input.message
       })
       await refresh(result.sessionId)
+      // Sprint 14 PR A — pull the sessions list so the sidebar reflects
+      // the just-bumped updated_at (and any newly-created session row
+      // from a post-newSession() send). Best-effort + fire-and-forget;
+      // refreshSessions swallows errors. refreshSessions's emailId
+      // closure was captured at send-time — matches `myEmail` above, so
+      // a stranded send that flunked the post-await guard above never
+      // reaches this line.
+      void refreshSessions()
       return result
     },
-    [emailId, mailApi, refresh]
+    [emailId, mailApi, refresh, refreshSessions]
   )
 
   const abortCurrent = useCallback(() => {
@@ -524,9 +569,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // (yet) honour a `forceNew` flag; on the next `chat.start` it'll create
   // a new SQLite row because the renderer no longer carries activeSessionId.
   //
-  // NOTE: ai_chat.db keeps the older session intact — Sprint 14's session
-  // history sidebar will surface a switcher; until then the previous
-  // conversation is simply not visible until the panel reloads.
+  // Sprint 14 PR A — the history sidebar surfaces a switcher. The
+  // previous session row is preserved in ai_chat.db and shows up in the
+  // sidebar; user can switch back via `selectSession` below.
   const newSession = useCallback(() => {
     const sid = activeSessionRef.current
     if (sid !== null) mailApi.chat.abort(sid)
@@ -538,6 +583,38 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setError(null)
     setLastFailedInput(null)
   }, [mailApi])
+
+  // Sprint 14 PR A — switch the renderer to a different session for the
+  // current email (sidebar click). Aborts any in-flight stream on the
+  // currently-active session, loads the target session's messages, and
+  // re-points `activeSessionId`. If the target session has a streaming
+  // assistant message still in flight on the backend, `refresh()` will
+  // surface it as the new streamingMessageId so the panel resumes the
+  // live stream (stream subscription is sessionId-keyed, so the existing
+  // listener picks it up automatically).
+  const selectSession = useCallback(
+    async (sessionId: number): Promise<void> => {
+      if (emailId === null) return
+      if (sessionId === activeSessionRef.current) return
+      const prev = activeSessionRef.current
+      if (prev !== null) {
+        mailApi.chat.abort(prev)
+        sessionMetaRef.current.delete(prev)
+      }
+      setError(null)
+      setLastFailedInput(null)
+      setStreamingMessageId(null)
+      setActiveSessionIdState(sessionId)
+      activeSessionRef.current = sessionId
+      try {
+        await refresh(sessionId)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        setError({ code: 'E_LOAD', message })
+      }
+    },
+    [emailId, mailApi, refresh]
+  )
 
   // Sprint 5 #3 — Retry CTA. Only available when:
   //   1. we have a captured failed input (set in send())
@@ -568,7 +645,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     clearError,
     newSession,
     retryLast,
-    quotaCooldownUntil
+    quotaCooldownUntil,
+    sessions,
+    selectSession
   }
 }
 

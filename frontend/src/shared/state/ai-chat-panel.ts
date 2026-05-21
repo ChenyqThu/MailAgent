@@ -15,6 +15,38 @@ interface AIChatPanelStore {
   visible: boolean
   setVisible(next: boolean): void
   toggle(): void
+  // Sprint 14 PR A — session history sidebar. Default collapsed so the
+  // 360 px panel stays roomy for the message list; user toggles via the
+  // history button in the tab bar (AIChatPanel.tsx). Persisted in
+  // localStorage by useAIChatSidebarPersist() so a reload restores the
+  // last open/closed state.
+  sidebarOpen: boolean
+  setSidebarOpen(next: boolean): void
+  toggleSidebar(): void
+}
+
+const SIDEBAR_STORAGE_KEY = 'mailagent.chat.sidebarOpen'
+
+function readPersistedSidebar(): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false
+    return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writePersistedSidebar(open: boolean): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    if (open) {
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, '1')
+    } else {
+      localStorage.removeItem(SIDEBAR_STORAGE_KEY)
+    }
+  } catch {
+    // localStorage unavailable — in-memory state still works for the session.
+  }
 }
 
 export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
@@ -24,6 +56,16 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
   },
   toggle() {
     set({ visible: !get().visible })
+  },
+  sidebarOpen: readPersistedSidebar(),
+  setSidebarOpen(next) {
+    set({ sidebarOpen: next })
+    writePersistedSidebar(next)
+  },
+  toggleSidebar() {
+    const next = !get().sidebarOpen
+    set({ sidebarOpen: next })
+    writePersistedSidebar(next)
   }
 }))
 

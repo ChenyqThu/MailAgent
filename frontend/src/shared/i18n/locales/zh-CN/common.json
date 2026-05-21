@@ -329,8 +329,22 @@
     "newChat": "新会话 · ⌘N",
     "newChatHint": "重置当前对话 · 下一次发送会开启新 session",
     "history": "会话历史",
-    "historyBlocked": "会话历史 · 等待 Sprint 14 侧栏",
+    "historyHint": "切换历史会话 · ⇧⌥H",
     "closePanel": "收起面板 · ⌘L",
+    "sidebar": {
+      "title": "会话历史",
+      "empty": "暂无历史会话 · 发送第一条消息后会出现在这里",
+      "newSession": "新会话",
+      "close": "关闭侧栏",
+      "itemAriaActive": "当前会话",
+      "itemAriaSwitch": "切换到此会话",
+      "messageCount": "{n, plural, =0 {0 条} =1 {1 条消息} other {# 条消息}}",
+      "untitled": "未命名会话",
+      "justNow": "刚刚",
+      "minutesAgo": "{n} 分钟前",
+      "hoursAgo": "{n} 小时前",
+      "daysAgo": "{n} 天前"
+    },
     "backend": {
       "notionAgent": "Notion Agent",
       "customApi": "Custom API",
