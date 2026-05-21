@@ -41,6 +41,9 @@ export function MentionPopover({
   const mailApi = useMailApi()
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
+  // Sprint 14 PR H — keyboard nav. ↑/↓ moves highlight; Enter selects.
+  // Reset to 0 every time `hits` changes (new query → fresh list).
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
   // "Adjusting state on prop change" — react.dev pattern. When `open`
   // flips to false, blank query + debounced inside render rather than
   // via useEffect so the next render already shows the empty state
@@ -100,6 +103,31 @@ export function MentionPopover({
   const hits: SearchHit[] = searchQ.data?.items ?? []
   const isSearching = searchQ.isFetching && normalised.length > 0
 
+  // Adjust highlight index when the hit list shrinks under us (e.g.
+  // user kept typing and the new query returns fewer results). Render-
+  // time setState ("Adjusting on prop change" pattern) instead of a
+  // post-render useEffect so the first paint already shows a valid
+  // highlight.
+  const maxIndex = Math.max(0, hits.length - 1)
+  if (highlightedIndex > maxIndex) {
+    setHighlightedIndex(maxIndex)
+  }
+
+  function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
+    if (hits.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlightedIndex((cur) => Math.min(cur + 1, hits.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlightedIndex((cur) => Math.max(cur - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const hit = hits[highlightedIndex]
+      if (hit) onSelect(hit)
+    }
+  }
+
   if (!open) return null
   return (
     <div
@@ -123,8 +151,13 @@ export function MentionPopover({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onInputKeyDown}
           placeholder={t('chat.mention.placeholder')}
           aria-label={t('chat.mention.searchAria')}
+          aria-activedescendant={
+            hits[highlightedIndex] ? `mention-hit-${hits[highlightedIndex].internal_id}` : undefined
+          }
+          aria-controls="mention-results"
           className={cn(
             'flex-1 bg-transparent text-aux text-ink-fg',
             'placeholder:text-ink-fg-3 outline-none border-0'
@@ -144,12 +177,19 @@ export function MentionPopover({
         </div>
       ) : (
         <ul
+          id="mention-results"
           role="listbox"
           aria-label={t('chat.mention.title')}
           className="flex-1 max-h-[240px] overflow-y-auto py-1"
         >
-          {hits.map((hit) => (
-            <MentionItem key={hit.internal_id} hit={hit} onSelect={onSelect} />
+          {hits.map((hit, idx) => (
+            <MentionItem
+              key={hit.internal_id}
+              hit={hit}
+              highlighted={idx === highlightedIndex}
+              onSelect={onSelect}
+              onHover={() => setHighlightedIndex(idx)}
+            />
           ))}
         </ul>
       )}
@@ -159,24 +199,33 @@ export function MentionPopover({
 
 interface MentionItemProps {
   hit: SearchHit
+  highlighted: boolean
   onSelect(hit: SearchHit): void
+  onHover(): void
 }
 
-function MentionItem({ hit, onSelect }: MentionItemProps): React.ReactElement {
+function MentionItem({
+  hit,
+  highlighted,
+  onSelect,
+  onHover
+}: MentionItemProps): React.ReactElement {
   // SearchHit only exposes a bare `sender` (email address); the friendlier
   // `sender_name` lives on EmailDetail but isn't included in FTS5 search
   // hits. Display the address as-is — agents reading the popup can match
   // it to their mental model.
   const senderLabel = hit.sender || '—'
   return (
-    <li role="option">
+    <li role="option" id={`mention-hit-${hit.internal_id}`} aria-selected={highlighted}>
       <button
         type="button"
         onClick={() => onSelect(hit)}
+        onMouseEnter={onHover}
         className={cn(
           'w-full text-left px-2.5 py-1.5',
-          'hover:bg-ink-3 transition-colors duration-fast',
-          'flex flex-col gap-0.5'
+          'transition-colors duration-fast',
+          'flex flex-col gap-0.5',
+          highlighted ? 'bg-ink-3' : 'hover:bg-ink-3'
         )}
       >
         <span className="text-meta text-ink-fg truncate">{hit.subject || '(无主题)'}</span>

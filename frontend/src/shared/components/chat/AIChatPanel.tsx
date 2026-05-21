@@ -382,6 +382,14 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // panel actions" mnemonic stays consistent.
   useShortcut('alt+shift+h', () => toggleSidebar())
 
+  // Sprint 14 PR H — ⇧⌥W spawns the popout window for the active email
+  // (no-op when no email is selected). Same Alt-shift family as ⇧⌥B /
+  // ⇧⌥H above — "Alt = AI panel actions" mnemonic.
+  useShortcut('alt+shift+w', () => {
+    if (activeInternalId === null) return
+    mailApi.chat.openPopout(activeInternalId)
+  })
+
   const errorBanner = chat.error ? mapErrorKey(chat.error.code) : null
   // Sprint 5 ship-review (codex MEDIUM #2): retry CTA + dismiss icon live on
   // the error banner; both surfaces resolve to zh-CN text under CJK locale.

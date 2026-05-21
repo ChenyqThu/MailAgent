@@ -332,7 +332,7 @@
     "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
     "popout": {
-      "button": "Open in window",
+      "button": "Open in window · ⇧⌥W",
       "close": "Close window"
     },
     "sidebar": {
@@ -405,9 +405,9 @@
       "sending": "Sending",
       "cancel": "Cancel",
       "regenerate": "Regenerate",
-      "attach": "Attach file · text inlined, binary as metadata only",
+      "attach": "Attach file · ⌘O · text inlined, binary as metadata only",
       "attachBlocked": "Attach context · pick an active email first",
-      "mention": "@-mention email context",
+      "mention": "@-mention email context · ⌘⇧M",
       "mentionBlocked": "@-mention · pick an active email first",
       "model": "Switch model",
       "modelHint": "Switch model in the Backend selector (Alt row chips)"

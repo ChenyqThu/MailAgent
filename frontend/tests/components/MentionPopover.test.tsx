@@ -146,6 +146,45 @@ describe('MentionPopover — search', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  test('ArrowDown/ArrowUp + Enter selects highlighted hit (Sprint 14 PR H)', async () => {
+    const hit1 = fakeHit({ internal_id: 1, subject: 'first', sender: 'a@x.com' })
+    const hit2 = fakeHit({ internal_id: 2, subject: 'second', sender: 'b@x.com' })
+    const hit3 = fakeHit({ internal_id: 3, subject: 'third', sender: 'c@x.com' })
+    mockEmailSearch.mockResolvedValue({
+      items: [hit1, hit2, hit3],
+      total_indexed: 3
+    } as unknown as SearchResult)
+    const { onSelect } = renderPopover({ open: true })
+    const input = screen.getByLabelText(i18n.t('chat.mention.searchAria'))
+    fireEvent.change(input, { target: { value: 'x' } })
+    await waitFor(() => expect(screen.getByText('first')).toBeTruthy())
+
+    // Initial highlight is on hit1 (index 0). ArrowDown twice moves to hit3.
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    // ArrowUp once moves back to hit2 (index 1).
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith(hit2)
+  })
+
+  test('ArrowDown past last item clamps to last (no wrap-around)', async () => {
+    const hit1 = fakeHit({ internal_id: 1, subject: 'only-one' })
+    mockEmailSearch.mockResolvedValue({
+      items: [hit1],
+      total_indexed: 1
+    } as unknown as SearchResult)
+    const { onSelect } = renderPopover({ open: true })
+    const input = screen.getByLabelText(i18n.t('chat.mention.searchAria'))
+    fireEvent.change(input, { target: { value: 'x' } })
+    await waitFor(() => expect(screen.getByText('only-one')).toBeTruthy())
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith(hit1)
+  })
+
   test('empty result set surfaces the noResults copy', async () => {
     mockEmailSearch.mockResolvedValue({ items: [], total_indexed: 0 } as unknown as SearchResult)
     renderPopover({ open: true })

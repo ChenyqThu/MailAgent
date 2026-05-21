@@ -149,18 +149,65 @@ export function Composer({
   // BackendSelector. Scope to "anywhere inside the AI panel" via aria-label
   // instead — composer textarea, quick-action chips, and BackendSelector
   // all sit under `aria-label="ai-chat-panel"` (see AIChatPanel root).
+  function isInsidePanel(): boolean {
+    if (typeof document === 'undefined') return false
+    const active = document.activeElement
+    if (!(active instanceof HTMLElement)) return false
+    return active.closest('[aria-label="ai-chat-panel"]') !== null
+  }
+
   useShortcut(
     'cmd+enter',
     () => {
-      if (typeof document === 'undefined') return
-      const active = document.activeElement
-      if (!(active instanceof HTMLElement)) return
-      if (!active.closest('[aria-label="ai-chat-panel"]')) return
+      if (!isInsidePanel()) return
       submit()
       return true
     },
     { allowInEditable: true }
   )
+
+  // Sprint 14 PR H — ⌘O picks an attachment file. Browser default for
+  // ⌘O is "Open File" which Electron doesn't honour in renderer, so
+  // overriding is free of side effects. Returning `true` from the
+  // handler stops the shortcut bus from cascading the keystroke
+  // elsewhere (matching cmd+enter above).
+  useShortcut(
+    'cmd+o',
+    () => {
+      if (!isInsidePanel() || !attachEnabled) return
+      fileInputRef.current?.click()
+      return true
+    },
+    { allowInEditable: true }
+  )
+
+  // Sprint 14 PR H — ⌘⇧M toggles the mention popover. Picked the same
+  // shift-modifier family the panel uses elsewhere (⇧⌥B backend,
+  // ⇧⌥H history) so the "shift-modifier = AI panel action" mental
+  // model stays consistent. ⌘ instead of ⌥ because the @-mention is
+  // composer-scoped — same mod group as ⌘↩ send / ⌘O attach.
+  useShortcut(
+    'cmd+shift+m',
+    () => {
+      if (!isInsidePanel() || !mentionEnabled) return
+      setMentionOpen((cur) => !cur)
+      return true
+    },
+    { allowInEditable: true }
+  )
+
+  // Sprint 14 PR H — auto-focus textarea once a streaming reply ends so
+  // the user can immediately type the next prompt without reaching for
+  // the mouse. Track the previous isStreaming via ref so a mount-time
+  // false→false transition does NOT steal focus from the BackendSelector
+  // / Composer / wherever the user clicked first.
+  const prevStreamingRef = useRef(false)
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming) {
+      taRef.current?.focus()
+    }
+    prevStreamingRef.current = isStreaming
+  }, [isStreaming])
 
   const sendDisabled = !canSend || value.trim().length === 0
   const sendTitle = `${t('chat.composer.send')} (⌘↩)`
