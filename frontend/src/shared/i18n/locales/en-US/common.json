@@ -381,6 +381,14 @@
       "copy": "Copy",
       "toNotion": "To Notion"
     },
+    "mention": {
+      "title": "Mention emails",
+      "searchAria": "Search emails to mention",
+      "placeholder": "Search by keyword…",
+      "hint": "Type a keyword to search referenceable emails",
+      "noResults": "No emails match \"{query}\"",
+      "remove": "Remove mention"
+    },
     "message": {
       "edit": "Edit · resend",
       "editing": "Editing message",
@@ -396,8 +404,8 @@
       "regenerate": "Regenerate",
       "attach": "Attach",
       "attachBlocked": "Attach context · awaiting Sprint 14 wiring",
-      "mention": "@mention",
-      "mentionBlocked": "@mention · awaiting Sprint 14 wiring",
+      "mention": "@-mention email context",
+      "mentionBlocked": "@-mention · pick an active email first",
       "model": "Switch model",
       "modelHint": "Switch model in the Backend selector (Alt row chips)"
     },

@@ -16,6 +16,9 @@ import { AtSign, ArrowUp, Cpu, Paperclip, X } from 'lucide-react'
 import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useShortcut } from '@shared/hooks/useShortcut'
+import type { SearchHit } from '@shared/api/types'
+
+import { MentionPopover } from './MentionPopover'
 
 interface Props {
   /** Renderer-controlled draft text. Lifted so QuickActions can prefill it. */
@@ -41,6 +44,13 @@ interface Props {
   onModelChange?(model: string): void
   /** Hides the model picker entirely (used by Notion Agent backend kind). */
   modelPickerDisabled?: boolean
+  /** Sprint 14 PR D — currently selected @-mention emails. Rendered as a
+   *  chip stack above the textarea. AIChatPanel owns the state so the
+   *  list survives send (we prepend each chip's subject + snippet to
+   *  the message body before clearing it on the next render). */
+  mentions?: ReadonlyArray<SearchHit>
+  onAddMention?(hit: SearchHit): void
+  onRemoveMention?(internalId: number): void
 }
 
 export function Composer({
@@ -54,11 +64,19 @@ export function Composer({
   currentModel,
   availableModels,
   onModelChange,
-  modelPickerDisabled
+  modelPickerDisabled,
+  mentions = [],
+  onAddMention,
+  onRemoveMention
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
   const [focused, setFocused] = useState(false)
+  // Sprint 14 PR D — @-mention popover open state. Local to Composer
+  // because AIChatPanel only needs the resolved mentions list, not the
+  // popover lifecycle. Outside-click + Escape close inside the popover.
+  const [mentionOpen, setMentionOpen] = useState(false)
+  const mentionEnabled = onAddMention !== undefined && onRemoveMention !== undefined
   // Sprint 13 — model picker popover state. Open via the Cpu button in
   // the footer; closed by Escape, outside click, or model select.
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
@@ -112,6 +130,39 @@ export function Composer({
     // mockup L2514 — `border-t border-ink-border bg-ink-2 p-2.5`. p-2.5 (10px)
     // not p-3 (12px); border above is `border-ink-border` not `-soft`.
     <div className="p-2.5 border-t border-ink-border bg-ink-2">
+      {/* Sprint 14 PR D — mention chip stack lives ABOVE the textarea
+          container (separate row so the chips never collide with the
+          text caret). Each chip shows the subject + a remove X; the
+          send handler in AIChatPanel reads `mentions` at submit time
+          to prepend a "Referenced email" block to the LLM prompt. */}
+      {mentions.length > 0 && (
+        <ul className="flex flex-wrap gap-1 px-1 pb-1.5">
+          {mentions.map((m) => (
+            <li
+              key={m.internal_id}
+              className={cn(
+                'inline-flex items-center gap-1 max-w-[200px]',
+                'px-1.5 py-0.5 rounded',
+                'bg-coral/10 border border-coral/30',
+                'text-micro text-ink-fg'
+              )}
+            >
+              <AtSign size={9} strokeWidth={2} className="text-coral shrink-0" />
+              <span className="truncate" title={m.subject}>
+                {m.subject || `#${m.internal_id}`}
+              </span>
+              <button
+                type="button"
+                onClick={() => onRemoveMention?.(m.internal_id)}
+                aria-label={t('chat.mention.remove')}
+                className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+              >
+                <X size={9} strokeWidth={2} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div
         className={cn(
           'rounded-md bg-ink-3 border transition-colors duration-fast',
@@ -166,21 +217,45 @@ export function Composer({
               <Paperclip size={13} strokeWidth={2} />
             </button>
           </HoverTip>
-          <HoverTip text={t('chat.composer.mentionBlocked')} side="top">
-            <button
-              type="button"
-              disabled
-              aria-label={t('chat.composer.mention')}
-              data-disabled=""
-              tabIndex={-1}
-              className={cn(
-                'w-7 h-7 rounded-md grid place-items-center',
-                'text-ink-fg-3 opacity-50 cursor-not-allowed'
-              )}
+          {/* Sprint 14 PR D — @-mention button. Wired only when both
+              onAddMention + onRemoveMention props are provided (the
+              AIChatPanel passes them; read-only viewers can skip them
+              entirely → the button renders disabled like before). */}
+          <div className="relative">
+            <HoverTip
+              text={mentionEnabled ? t('chat.composer.mention') : t('chat.composer.mentionBlocked')}
+              side="top"
             >
-              <AtSign size={13} strokeWidth={2} />
-            </button>
-          </HoverTip>
+              <button
+                type="button"
+                disabled={!mentionEnabled}
+                aria-label={t('chat.composer.mention')}
+                onClick={() => mentionEnabled && setMentionOpen((cur) => !cur)}
+                tabIndex={mentionEnabled ? 0 : -1}
+                data-disabled={mentionEnabled ? undefined : ''}
+                className={cn(
+                  'w-7 h-7 rounded-md grid place-items-center',
+                  mentionEnabled
+                    ? mentionOpen
+                      ? 'text-coral bg-coral/10'
+                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                    : 'text-ink-fg-3 opacity-50 cursor-not-allowed'
+                )}
+              >
+                <AtSign size={13} strokeWidth={2} />
+              </button>
+            </HoverTip>
+            {mentionEnabled && (
+              <MentionPopover
+                open={mentionOpen}
+                onClose={() => setMentionOpen(false)}
+                onSelect={(hit) => {
+                  onAddMention?.(hit)
+                  setMentionOpen(false)
+                }}
+              />
+            )}
+          </div>
           {/* Sprint 13 — mockup L2530 真模型切换 button. Notion Agent 时
               modelPickerDisabled=true 因为 agent 自己决定模型 (没有
               picker 概念)。Custom API 时点击弹 popover 列出可选 models.

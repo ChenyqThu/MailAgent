@@ -381,6 +381,14 @@
       "copy": "复制",
       "toNotion": "转 Notion"
     },
+    "mention": {
+      "title": "引用邮件",
+      "searchAria": "搜索要引用的邮件",
+      "placeholder": "按关键字搜索邮件…",
+      "hint": "输入关键字以搜索可引用的邮件",
+      "noResults": "未找到与 \"{query}\" 相关的邮件",
+      "remove": "移除引用"
+    },
     "message": {
       "edit": "编辑 · 改后重新询问",
       "editing": "编辑消息",
@@ -396,8 +404,8 @@
       "regenerate": "重新生成",
       "attach": "附件",
       "attachBlocked": "附件上下文 · 等待 Sprint 14 接入",
-      "mention": "@提及上下文",
-      "mentionBlocked": "@提及 · 等待 Sprint 14 接入",
+      "mention": "@提及邮件上下文",
+      "mentionBlocked": "@提及 · 选中一封邮件后再使用",
       "model": "切换模型",
       "modelHint": "在 Backend selector 中切换模型 (Alt 行 chip)"
     },

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { History, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 
-import type { AIFields, EmailMeta } from '@shared/api/types'
+import type { AIFields, EmailMeta, SearchHit } from '@shared/api/types'
 import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailChat } from '@shared/hooks/useEmailChat'
@@ -116,6 +116,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     agentPageId: agentPageId ?? null
   })
   const [draft, setDraft] = useState('')
+  // Sprint 14 PR D — @-mention chip stack. Each chip carries a SearchHit
+  // so we can pull its subject + sender + bm25 snippet inline when
+  // composing the prompt. handleSend below resolves each chip's full
+  // markdown body via mailApi.email.body so the LLM sees real text,
+  // not just the snippet excerpt. Cleared on successful send.
+  const [mentions, setMentions] = useState<SearchHit[]>([])
 
   const chat = useEmailChat(activeInternalId)
 
@@ -225,13 +231,56 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     isStreaming: chat.isStreaming
   }
 
+  // Sprint 14 PR D — prepend a "[Referenced emails]" block to the user
+  // message so the LLM sees subject + sender + a body excerpt for each
+  // chip. We resolve the full markdown body via mailApi.email.body
+  // (server-side cached, ~3-5ms in v4 SQLite SSoT mode) and cap each
+  // snippet at 600 chars; the cap keeps an N-email mention from
+  // blowing the context window on a chatty thread. Best-effort: if
+  // body() fails (network/DB), we fall back to the FTS5 snippet.
+  const buildMentionContext = useCallback(
+    async (hits: ReadonlyArray<SearchHit>): Promise<string> => {
+      if (hits.length === 0) return ''
+      const blocks = await Promise.all(
+        hits.map(async (m) => {
+          let excerpt = (m.snippet ?? '').replace(/<\/?mark>/g, '').trim()
+          try {
+            const body = await mailApi.email.body(m.internal_id, { format: 'markdown' })
+            const content = body?.content
+            if (typeof content === 'string' && content.length > 0) {
+              excerpt = content.slice(0, 600).trim()
+            }
+          } catch {
+            // Fall back to the bm25 snippet we already had.
+          }
+          const dateLabel = m.date_received ?? '—'
+          const subject = m.subject || '(no subject)'
+          return [
+            `- #${m.internal_id} "${subject}" — ${m.sender ?? ''} — ${dateLabel}`,
+            excerpt.length > 0 ? `  ${excerpt}` : null
+          ]
+            .filter((s) => s !== null)
+            .join('\n')
+        })
+      )
+      return `[Referenced emails]\n${blocks.join('\n\n')}\n\n---\n\n`
+    },
+    [mailApi]
+  )
+
   const handleSend = useCallback(
     async (text: string) => {
       if (activeInternalId === null) return
       setDraft('')
+      // Snapshot mentions before clearing so the prompt builder sees the
+      // chips even though the chip stack flips to empty in the same tick.
+      const snapshot = mentions
+      setMentions([])
+      const mentionContext = await buildMentionContext(snapshot)
+      const message = mentionContext.length > 0 ? `${mentionContext}${text}` : text
       try {
         await chat.send({
-          message: text,
+          message,
           backendKind: backend.kind,
           backendModel: backend.model,
           backendAgentPageId: backend.agentPageId,
@@ -240,10 +289,21 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         })
       } catch {
         // Errors are surfaced via chat.error; nothing else to do here.
+        // The mentions chip stack is already cleared — the user can
+        // re-add them if they want to retry. Matches send()'s
+        // "fire-and-forget after dispatch" contract.
       }
     },
-    [activeInternalId, backend, chat, detailQ.data]
+    [activeInternalId, backend, buildMentionContext, chat, detailQ.data, mentions]
   )
+
+  const handleAddMention = useCallback((hit: SearchHit) => {
+    setMentions((cur) => (cur.some((m) => m.internal_id === hit.internal_id) ? cur : [...cur, hit]))
+  }, [])
+
+  const handleRemoveMention = useCallback((internalId: number) => {
+    setMentions((cur) => cur.filter((m) => m.internal_id !== internalId))
+  }, [])
 
   const handlePickAction = useCallback((prompt: string) => setDraft(prompt), [])
   const handleCancel = useCallback(() => chat.abortCurrent(), [chat])
@@ -504,6 +564,9 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                     isStreaming={chat.isStreaming}
                     canSend={canSend}
                     backendName={backendName}
+                    mentions={mentions}
+                    onAddMention={handleAddMention}
+                    onRemoveMention={handleRemoveMention}
                     // Sprint 13 — model switcher lives in Composer Cpu button
                     // (mockup L2530). Notion Agent has no model picker — the
                     // agent decides; Custom API exposes the 3 supported models.
