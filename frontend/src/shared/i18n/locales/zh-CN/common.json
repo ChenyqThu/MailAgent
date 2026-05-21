@@ -410,6 +410,7 @@
       "regenerate": "重新生成",
       "attach": "添加附件 · ⌘O · 文本类直读，二进制仅传文件名",
       "attachBlocked": "附件上下文 · 选中一封邮件后再使用",
+      "attachReadFail": "附件读取失败",
       "mention": "@提及邮件上下文 · ⌘⇧M",
       "mentionBlocked": "@提及 · 选中一封邮件后再使用",
       "model": "切换模型",

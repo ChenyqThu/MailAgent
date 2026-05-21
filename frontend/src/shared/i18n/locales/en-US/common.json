@@ -410,6 +410,7 @@
       "regenerate": "Regenerate",
       "attach": "Attach file · ⌘O · text inlined, binary as metadata only",
       "attachBlocked": "Attach context · pick an active email first",
+      "attachReadFail": "Attachment read failed",
       "mention": "@-mention email context · ⌘⇧M",
       "mentionBlocked": "@-mention · pick an active email first",
       "model": "Switch model",

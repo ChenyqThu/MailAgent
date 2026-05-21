@@ -21,6 +21,7 @@ import {
   formatAttachmentSize,
   readAttachment
 } from '@shared/lib/chat-attachments'
+import { toastError } from '@shared/state/toast'
 import type { SearchHit } from '@shared/api/types'
 
 import { MentionPopover } from './MentionPopover'
@@ -102,19 +103,26 @@ export function Composer({
     async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
       const files = e.target.files
       if (!files || files.length === 0 || !onAddAttachment) return
+      const failed: string[] = []
       for (const file of Array.from(files)) {
         try {
           const a = await readAttachment(file)
           onAddAttachment(a)
         } catch {
-          // FileReader threw — usually a sandbox / permission case we
-          // can't recover from in the renderer. Skip silently; the
-          // chip simply doesn't appear and the user can try again.
+          // Sprint 14 review LOW fix — surface read failures via toast
+          // so the user knows why nothing showed up (sandbox refused
+          // FileReader access, file got renamed between pick + read,
+          // etc.). Batch the filenames so a multi-pick with one bad
+          // file produces one toast, not N.
+          failed.push(file.name)
         }
+      }
+      if (failed.length > 0) {
+        toastError(t('chat.composer.attachReadFail'), failed.join(', '))
       }
       e.target.value = ''
     },
-    [onAddAttachment]
+    [onAddAttachment, t]
   )
   // Sprint 13 — model picker popover state. Open via the Cpu button in
   // the footer; closed by Escape, outside click, or model select.

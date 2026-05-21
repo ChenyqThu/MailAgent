@@ -88,7 +88,11 @@ describe('buildAttachmentBlock', () => {
     const block = buildAttachmentBlock([
       makeAttachment({ filename: 'notes.md', content: 'hello world' })
     ])
-    expect(block).toContain('[Attached files]')
+    // Sprint 14 review HIGH fix — header now carries explicit
+    // "untrusted user-uploaded content" framing to resist prompt
+    // injection. The bare "[Attached files]" prefix is still present.
+    expect(block).toContain('[Attached files')
+    expect(block).toContain('untrusted')
     expect(block).toContain('notes.md')
     expect(block).toContain('hello world')
     expect(block).toMatch(/```\nhello world\n```/)
@@ -102,14 +106,18 @@ describe('buildAttachmentBlock', () => {
     expect(block).not.toContain('```')
   })
 
-  test('multiple attachments separated by blank lines', () => {
+  test('multiple attachments separated by newlines', () => {
     const block = buildAttachmentBlock([
       makeAttachment({ id: 'a', filename: 'a.txt', content: 'A' }),
       makeAttachment({ id: 'b', filename: 'b.txt', content: 'B' })
     ])
-    // Block items separated by `\n\n` (the renderer prepends one
-    // blank line between blocks so they read as distinct entries).
-    expect(block).toMatch(/```\nA\n```\n\n- b\.txt/)
+    // Sprint 14 review HIGH fix — items separated by single newline
+    // inside the joined block (header line + each entry as its own
+    // joined-with-`\n` segment). Both filenames + their fenced bodies
+    // must appear in order.
+    expect(block.indexOf('a.txt')).toBeLessThan(block.indexOf('b.txt'))
+    expect(block).toMatch(/```\nA\n```/)
+    expect(block).toMatch(/```\nB\n```/)
   })
 
   test('ends with the `---` separator the LLM uses as a context divider', () => {
