@@ -18,6 +18,7 @@ import { registerAdminHandlers } from './handlers/admin'
 import { registerLlmStatsHandlers } from './handlers/llm_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
 import { registerSettingsHandlers } from './handlers/settings'
+import { registerPromptHandlers } from './handlers/prompts'
 // Sprint 8 §2.2 — electron-updater bridge (auto-updater state + IPC).
 import { registerUpdaterHandlers } from './handlers/updater'
 // Sprint 9 §2.2 — ping-island bridge (unix socket sender + appearance / AI
@@ -231,6 +232,7 @@ app.whenReady().then(() => {
   registerLlmStatsHandlers()
   registerCalendarHandlers()
   registerSettingsHandlers()
+  registerPromptHandlers()
   // Sprint 8 §2.2 — electron-updater bridge.
   //
   // We pass the real `autoUpdater` lazily (require-after-app-ready) so test

@@ -28,7 +28,11 @@ vi.mock('../../../src/electron/main/db', () => ({
 vi.mock('../../../src/electron/main/llm_settings', () => ({
   getLlmApiKey: mockGetLlmApiKey,
   getLlmBaseUrl: () => 'https://test.llm',
-  getLlmModel: () => 'test-model'
+  getLlmModel: () => 'test-model',
+  getLlmTranslateApiKey: mockGetLlmApiKey,
+  getLlmTranslateBaseUrl: () => 'https://test.llm',
+  getLlmTranslateModel: () => 'test-model',
+  getLlmTranslateBilingual: () => false
 }))
 
 vi.mock('electron', () => ({
@@ -152,6 +156,40 @@ describe('translateEmail', () => {
     await expect(handler.translateEmail({ internalId: 101 })).rejects.toMatchObject({
       code: 'E_EMPTY_RESPONSE'
     })
+  })
+
+  test('bilingual=true parses ⟦S⟧/⟦T⟧/⟦E⟧ segments and joins target text', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [
+          {
+            type: 'text',
+            text: '⟦S⟧Hello world.⟦T⟧你好世界。⟦E⟧⟦S⟧Please reply.⟦T⟧请回复。⟦E⟧'
+          }
+        ],
+        model: 'test-model'
+      })
+    })
+    const result = await handler.translateEmail({ internalId: 101, bilingual: true })
+    expect(result.segments).toEqual([
+      { src: 'Hello world.', tgt: '你好世界。' },
+      { src: 'Please reply.', tgt: '请回复。' }
+    ])
+    expect(result.translated).toBe('你好世界。\n\n请回复。')
+  })
+
+  test('bilingual=true with malformed output falls back to monolingual', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'text', text: 'No sentinels here at all' }],
+        model: 'test-model'
+      })
+    })
+    const result = await handler.translateEmail({ internalId: 101, bilingual: true })
+    expect(result.segments).toBeUndefined()
+    expect(result.translated).toBe('No sentinels here at all')
   })
 
   test('second translate for same internalId aborts previous in-flight', async () => {

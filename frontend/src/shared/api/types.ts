@@ -407,11 +407,12 @@ export interface CalendarApi {
 
 // ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------
 
-export type SecretSlot = 'cliApiKey' | 'llmApiKey' | 'customApiKey'
+export type SecretSlot = 'cliApiKey' | 'llmApiKey' | 'llmTranslateApiKey' | 'customApiKey'
 
 export interface SecretsStatus {
   cliApiKey: boolean
   llmApiKey: boolean
+  llmTranslateApiKey: boolean
   customApiKey: boolean
 }
 
@@ -471,12 +472,29 @@ export interface AttachmentApi {
 
 export type TargetLang = 'zh' | 'en'
 
+export interface TranslationSegment {
+  /** Source paragraph copied verbatim by the model. */
+  src: string
+  /** Translation of the segment. */
+  tgt: string
+}
+
 export interface TranslationResult {
   internalId: number
   targetLang: TargetLang
+  /** Joined target text. In bilingual mode this is `segments.map(s=>s.tgt)`
+   *  joined by blank lines so monolingual callers keep working. */
   translated: string
+  /** Populated only when bilingual mode is requested AND the model produced
+   *  parseable segments. */
+  segments?: TranslationSegment[]
   model: string
   latencyMs: number
+}
+
+export interface TranslateOptions {
+  /** When omitted the main process consults LLM_TRANSLATE_BILINGUAL. */
+  bilingual?: boolean
 }
 
 export interface AiApi {
@@ -486,7 +504,11 @@ export interface AiApi {
    * (REVIEW-LOG C-04). Errors carry a `code` property: E_NO_BODY /
    * E_NO_LLM_KEY / E_UPSTREAM / E_ABORTED / E_EMPTY_RESPONSE / E_INVALID_ARG.
    */
-  translate(internalId: number, targetLang?: TargetLang): Promise<TranslationResult>
+  translate(
+    internalId: number,
+    targetLang?: TargetLang,
+    options?: TranslateOptions
+  ): Promise<TranslationResult>
   /** Abort an in-flight translation by internalId. Renderer fires this when
    *  switching emails so the stale request doesn't pollute the new view. */
   abortTranslate(internalId: number): void
@@ -885,6 +907,34 @@ export interface ServicesApi {
   status(): Promise<ServiceStatus[]>
 }
 
+// ---- LLM prompt files ---------------------------------------------------
+
+export type PromptSlot = 'inbox' | 'sent'
+
+export interface PromptInfo {
+  slot: PromptSlot
+  path: string
+  exists: boolean
+}
+
+export interface PromptContent extends PromptInfo {
+  content: string
+}
+
+export type PromptWriteResult =
+  | { ok: true; info: PromptInfo }
+  | { ok: false; code: string; message: string }
+
+export interface PromptsApi {
+  /** List both prompt slots with their resolved on-disk paths. The renderer
+   *  uses `exists` to decide whether to surface a "未配置 / 保存后创建" hint. */
+  list(): Promise<{ inbox: PromptInfo; sent: PromptInfo }>
+  /** Read one prompt's content. Missing file returns `{exists:false, content:''}`. */
+  read(slot: PromptSlot): Promise<PromptContent>
+  /** Write content to the resolved path; auto-mkdir parent. */
+  write(slot: PromptSlot, content: string): Promise<PromptWriteResult>
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
@@ -911,4 +961,6 @@ export interface MailApi {
    *  RestartBanner (PR E) "立即重启" CTA after env:set returns
    *  restartRequired=true. */
   services: ServicesApi
+  /** LLM prompt file CRUD (inbox / sent markdown). */
+  prompts: PromptsApi
 }

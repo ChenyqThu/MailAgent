@@ -40,7 +40,7 @@ function labelString(node: React.ReactNode, fallback: string): string {
 }
 
 interface EnvSecretFieldProps {
-  envKey: 'LLM_API_KEY' | 'MAILAGENT_CLI_API_KEY'
+  envKey: 'LLM_API_KEY' | 'LLM_TRANSLATE_API_KEY' | 'MAILAGENT_CLI_API_KEY'
   keytarSlot: SecretSlot
   label: React.ReactNode
   helper?: React.ReactNode

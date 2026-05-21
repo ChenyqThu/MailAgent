@@ -12,8 +12,14 @@
 import { useMemo } from 'react'
 import DOMPurify from 'dompurify'
 
+import type { TranslationSegment } from '@shared/api/types'
+
 interface Props {
   text: string
+  /** Bilingual segment pairs. When provided, renders the source paragraph
+   *  followed by an italic + dimmed translation block, repeating per pair.
+   *  Otherwise the legacy monolingual `text` path runs. */
+  segments?: TranslationSegment[]
 }
 
 function escapeHtml(s: string): string {
@@ -79,38 +85,75 @@ function renderBlock(raw: string): string {
 // even if the markdown layer let one through.
 const HTTP_URI = /^https?:\/\//i
 
-export function TranslatedBody({ text }: Props): React.ReactElement {
-  const html = useMemo(() => {
-    const blocks = text.split(/\n\s*\n/)
-    const rendered = blocks.map(renderBlock).join('\n')
-    // Codex review M-4: USE_PROFILES.html *adds to* the tag set rather than
-    // replacing it, so the explicit allow-list was effectively looser than
-    // it read. Dropping the profile + pinning the URI scheme leaves an
-    // unambiguous positive list.
-    return DOMPurify.sanitize(rendered, {
-      ALLOWED_TAGS: [
-        'p',
-        'br',
-        'strong',
-        'em',
-        'code',
-        'a',
-        'h1',
-        'h2',
-        'h3',
-        'h4',
-        'h5',
-        'h6',
-        'ul',
-        'ol',
-        'li',
-        'blockquote',
-        'span'
-      ],
-      ALLOWED_ATTR: ['href', 'target', 'rel'],
-      ALLOWED_URI_REGEXP: HTTP_URI
-    })
-  }, [text])
+const ALLOWED_TAGS = [
+  'p',
+  'br',
+  'strong',
+  'em',
+  'code',
+  'a',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'li',
+  'blockquote',
+  'span'
+]
 
-  return <div className="mail-body break-words" dangerouslySetInnerHTML={{ __html: html }} />
+function markdownToSafeHtml(md: string): string {
+  const blocks = md.split(/\n\s*\n/)
+  const rendered = blocks.map(renderBlock).join('\n')
+  // Codex review M-4: USE_PROFILES.html *adds to* the tag set rather than
+  // replacing it, so the explicit allow-list was effectively looser than
+  // it read. Dropping the profile + pinning the URI scheme leaves an
+  // unambiguous positive list.
+  return DOMPurify.sanitize(rendered, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR: ['href', 'target', 'rel'],
+    ALLOWED_URI_REGEXP: HTTP_URI
+  })
+}
+
+export function TranslatedBody({ text, segments }: Props): React.ReactElement {
+  // Bilingual path — render each {src, tgt} as a pair: source rendered as
+  // normal mail body, translation rendered below in italic + dim text-fg-2
+  // so visual distinction works without a leading marker.
+  const pairs = useMemo(() => {
+    if (!segments || segments.length === 0) return null
+    return segments.map((seg, idx) => ({
+      key: idx,
+      src: markdownToSafeHtml(seg.src),
+      tgt: markdownToSafeHtml(seg.tgt)
+    }))
+  }, [segments])
+
+  const monolingualHtml = useMemo(() => (pairs === null ? markdownToSafeHtml(text) : ''), [
+    pairs,
+    text
+  ])
+
+  if (pairs !== null) {
+    return (
+      <div className="mail-body break-words">
+        {pairs.map((p) => (
+          <div key={p.key} className="bilingual-segment mb-4 last:mb-0">
+            <div dangerouslySetInnerHTML={{ __html: p.src }} />
+            <div
+              className="italic text-ink-fg-2 mt-1 [&_p]:my-0 [&_li]:my-0"
+              dangerouslySetInnerHTML={{ __html: p.tgt }}
+            />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mail-body break-words" dangerouslySetInnerHTML={{ __html: monolingualHtml }} />
+  )
 }

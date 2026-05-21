@@ -21,11 +21,13 @@ import {
   clearCliApiKey,
   clearCustomApiKey,
   clearLlmApiKey,
+  clearLlmTranslateApiKey,
   getCustomApiKey,
   getSecretsStatus,
   setCliApiKey,
   setCustomApiKey,
   setLlmApiKey,
+  setLlmTranslateApiKey,
   type SecretsStatus
 } from '../keychain'
 // Sprint 8 §2.2 — shared with `db.ts:settingsDbPathOverride()` so the
@@ -160,7 +162,7 @@ function writeSettings(s: PersistentSettings): void {
 }
 
 export interface SecretWriteRequest {
-  secret: 'cliApiKey' | 'llmApiKey' | 'customApiKey'
+  secret: 'cliApiKey' | 'llmApiKey' | 'llmTranslateApiKey' | 'customApiKey'
   value: string
 }
 
@@ -225,6 +227,9 @@ export function registerSettingsHandlers(): void {
         case 'llmApiKey':
           await setLlmApiKey(req.value)
           break
+        case 'llmTranslateApiKey':
+          await setLlmTranslateApiKey(req.value)
+          break
         case 'customApiKey':
           await setCustomApiKey(req.value)
           break
@@ -244,6 +249,9 @@ export function registerSettingsHandlers(): void {
           break
         case 'llmApiKey':
           await clearLlmApiKey()
+          break
+        case 'llmTranslateApiKey':
+          await clearLlmTranslateApiKey()
           break
         case 'customApiKey':
           await clearCustomApiKey()

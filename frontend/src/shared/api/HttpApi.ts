@@ -144,6 +144,15 @@ export class HttpApi implements MailApi {
     status: () => notImplemented('services.status')
   }
 
+  // Web SPA has no direct fs access to the Mac host's prompt files. The V2
+  // FastAPI could surface read-only views later; for now web users edit
+  // prompts on the Mac.
+  prompts = {
+    list: () => notImplemented('prompts.list'),
+    read: () => notImplemented('prompts.read'),
+    write: () => notImplemented('prompts.write')
+  }
+
   // Sprint 9 §2.3 — ping-island bridge lives on the Mac host. From a remote
   // browser the V2 FastAPI could surface a read-only "island connected?"
   // status, but emitting envelopes from the web tab would race the local

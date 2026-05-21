@@ -722,6 +722,55 @@
         "label": "主模型",
         "helper": "fallback 失败时上抛 LLMCallError 进重试队列"
       },
+      "prompts": {
+        "title": "Prompt 配置",
+        "helper": "LLM 邮件分类的 markdown 提示词文件路径与编辑入口",
+        "loading": "加载中…",
+        "save": "保存",
+        "saved": "已保存",
+        "saveFailed": "保存失败",
+        "loadFailed": "加载提示词失败",
+        "listFailed": "读取提示词列表失败",
+        "pathHint": "{path}",
+        "willCreate": "{path} (保存后自动创建)",
+        "placeholder": "用 markdown 编辑提示词;保存即生效(Python 端 mtime 热重载)",
+        "editButton": "编辑",
+        "editHelperExists": "{path}",
+        "editHelperMissing": "{path} · 当前文件不存在,点编辑后保存会自动创建",
+        "inbox": {
+          "pathLabel": "收件箱 prompt 路径",
+          "pathHelper": "相对仓库根目录;留空 = prompts/email_inbox.md",
+          "editLabel": "编辑收件箱 prompt",
+          "editTitle": "编辑收件箱 prompt"
+        },
+        "sent": {
+          "pathLabel": "发件箱 prompt 路径",
+          "pathHelper": "相对仓库根目录;留空 = prompts/email_sent.md",
+          "editLabel": "编辑发件箱 prompt",
+          "editTitle": "编辑发件箱 prompt"
+        }
+      },
+      "translate": {
+        "title": "邮件翻译",
+        "helper": "Electron 主进程翻译流水线;独立 gateway/key/model + 双语对照"
+      },
+      "translateBaseUrl": {
+        "label": "翻译网关 URL",
+        "helper": "留空 = 跟随主 LLM 网关; 可独立指向更快的翻译专用端点",
+        "placeholder": "留空跟随主网关"
+      },
+      "translateApiKey": {
+        "label": "翻译 API Key",
+        "helper": "留空 = 跟随主 LLM API Key; 双写 keychain + .env 独立计费/限额时设置"
+      },
+      "translateModel": {
+        "label": "翻译模型",
+        "helper": "邮件正文翻译专用; 默认 Haiku (~3-5× 比 Sonnet 快, 翻译质量足够)"
+      },
+      "translateBilingual": {
+        "label": "双语对照",
+        "helper": "开启后每段原文下方显示斜体译文; 关闭时只显示译文"
+      },
       "fallbacks": {
         "label": "Fallback 链",
         "helper": "主模型挂掉时按序兜底; 跨协议自动 cache miss"

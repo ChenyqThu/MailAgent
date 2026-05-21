@@ -63,6 +63,11 @@ import type {
   NotionWriteApi,
   PersistentSettings,
   PingResult,
+  PromptContent,
+  PromptInfo,
+  PromptSlot,
+  PromptsApi,
+  PromptWriteResult,
   RecurringDiscoverOpts,
   RecurringInviteItem,
   RecurringReplayOpts,
@@ -319,10 +324,15 @@ type TranslateEnvelope =
   | { ok: false; code: string; message: string }
 
 class ElectronAiApi implements AiApi {
-  async translate(internalId: number, targetLang?: TargetLang): Promise<TranslationResult> {
+  async translate(
+    internalId: number,
+    targetLang?: TargetLang,
+    options?: { bilingual?: boolean }
+  ): Promise<TranslationResult> {
     const env = (await invoker()('email:translate', {
       internalId,
-      targetLang
+      targetLang,
+      bilingual: options?.bilingual
     })) as TranslateEnvelope
     if (env.ok) return env.data
     const err = new Error(env.message) as Error & { code?: string }
@@ -485,6 +495,18 @@ class ElectronServicesApi implements ServicesApi {
   }
 }
 
+class ElectronPromptsApi implements PromptsApi {
+  async list(): Promise<{ inbox: PromptInfo; sent: PromptInfo }> {
+    return (await invoker()('prompts:list')) as { inbox: PromptInfo; sent: PromptInfo }
+  }
+  async read(slot: PromptSlot): Promise<PromptContent> {
+    return (await invoker()('prompts:read', slot)) as PromptContent
+  }
+  async write(slot: PromptSlot, content: string): Promise<PromptWriteResult> {
+    return (await invoker()('prompts:write', { slot, content })) as PromptWriteResult
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
@@ -500,4 +522,5 @@ export class ElectronApi implements MailApi {
   events: EventsApi = new ElectronEventsApi()
   env: EnvApi = new ElectronEnvApi()
   services: ServicesApi = new ElectronServicesApi()
+  prompts: PromptsApi = new ElectronPromptsApi()
 }

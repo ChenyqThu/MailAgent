@@ -1,5 +1,10 @@
-// Sprint 18 §PR D — AI Agent tab. 本地 LLM (CRS 网关) + cache 配置 + test
-// gateway button (settings:test:llm IPC).
+// AI Agent tab. Split into three Sections so the visual grouping mirrors
+// the actual feature boundaries:
+//   1. 本地 LLM Agent     — gateway + main model + cache (Python-side LLM agent)
+//   2. Prompt 配置         — paths + edit-in-place for the inbox / sent
+//                            markdown prompts the Python agent loads
+//   3. 翻译                 — Electron-main translation flow (independent
+//                            gateway/key/model + bilingual toggle)
 //
 // LLM_API_KEY 走 <EnvSecretField> 双写 (keytar + .env): main 进程的
 // translate + Custom-API chat backend 从 keytar 读, Python LLM agent 从
@@ -8,22 +13,51 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2 } from 'lucide-react'
+import { Loader2, FileText } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { Button } from '@shared/components/ui/button'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import type { PromptInfo, PromptSlot } from '@shared/api/types'
 
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
+import { PromptEditorDialog } from '../parts/PromptEditorDialog'
 
 export function AiTab(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
   const [testing, setTesting] = React.useState(false)
+  const [promptInfo, setPromptInfo] = React.useState<{
+    inbox: PromptInfo | null
+    sent: PromptInfo | null
+  }>({ inbox: null, sent: null })
+  const [editorSlot, setEditorSlot] = React.useState<PromptSlot | null>(null)
+
+  React.useEffect(() => {
+    let active = true
+    api.prompts
+      .list()
+      .then((r) => {
+        if (!active) return
+        setPromptInfo({ inbox: r.inbox, sent: r.sent })
+      })
+      .catch((err: Error) => {
+        if (!active) return
+        toastError(t('settings.ai.prompts.listFailed'), err.message)
+      })
+    return () => {
+      active = false
+    }
+  }, [api.prompts, t])
+
+  async function refreshPrompts(): Promise<void> {
+    const r = await api.prompts.list()
+    setPromptInfo({ inbox: r.inbox, sent: r.sent })
+  }
 
   async function handleTestGateway(): Promise<void> {
     setTesting(true)
@@ -47,9 +81,10 @@ export function AiTab(): React.ReactElement {
         eyebrow={t('settings.ai.page.eyebrow', { defaultValue: 'AI AGENT' })}
         title={t('settings.ai.page.title', { defaultValue: 'AI Agent' })}
         description={t('settings.ai.page.intro', {
-          defaultValue: '本地 LLM 网关、模型路由与 prompt cache 配置。'
+          defaultValue: '本地 LLM 网关、模型路由、prompt 配置与邮件翻译。'
         })}
       />
+
       <Section title={t('settings.ai.title')} helper={t('settings.ai.helper')}>
         <EnvField
           envKey="LLM_AGENT_ENABLED"
@@ -107,6 +142,104 @@ export function AiTab(): React.ReactElement {
         </Row>
       </Section>
 
+      <Section
+        title={t('settings.ai.prompts.title')}
+        helper={t('settings.ai.prompts.helper')}
+      >
+        <EnvField
+          envKey="LLM_INBOX_PROMPT_PATH"
+          control="text"
+          label={t('settings.ai.prompts.inbox.pathLabel')}
+          helper={t('settings.ai.prompts.inbox.pathHelper')}
+          placeholder="prompts/email_inbox.md"
+        />
+        <Row
+          label={t('settings.ai.prompts.inbox.editLabel')}
+          helper={
+            promptInfo.inbox?.exists
+              ? t('settings.ai.prompts.editHelperExists', {
+                  path: promptInfo.inbox.path
+                })
+              : t('settings.ai.prompts.editHelperMissing', {
+                  path: promptInfo.inbox?.path ?? ''
+                })
+          }
+        >
+          <Button
+            onClick={() => setEditorSlot('inbox')}
+            variant="secondary"
+            size="sm"
+            disabled={promptInfo.inbox === null}
+          >
+            <FileText className="size-3.5" />
+            {t('settings.ai.prompts.editButton')}
+          </Button>
+        </Row>
+        <EnvField
+          envKey="LLM_SENT_PROMPT_PATH"
+          control="text"
+          label={t('settings.ai.prompts.sent.pathLabel')}
+          helper={t('settings.ai.prompts.sent.pathHelper')}
+          placeholder="prompts/email_sent.md"
+        />
+        <Row
+          label={t('settings.ai.prompts.sent.editLabel')}
+          helper={
+            promptInfo.sent?.exists
+              ? t('settings.ai.prompts.editHelperExists', {
+                  path: promptInfo.sent.path
+                })
+              : t('settings.ai.prompts.editHelperMissing', {
+                  path: promptInfo.sent?.path ?? ''
+                })
+          }
+        >
+          <Button
+            onClick={() => setEditorSlot('sent')}
+            variant="secondary"
+            size="sm"
+            disabled={promptInfo.sent === null}
+          >
+            <FileText className="size-3.5" />
+            {t('settings.ai.prompts.editButton')}
+          </Button>
+        </Row>
+      </Section>
+
+      <Section
+        title={t('settings.ai.translate.title')}
+        helper={t('settings.ai.translate.helper')}
+      >
+        <EnvField
+          envKey="LLM_TRANSLATE_BASE_URL"
+          control="text"
+          label={t('settings.ai.translateBaseUrl.label')}
+          helper={t('settings.ai.translateBaseUrl.helper')}
+          placeholder={t('settings.ai.translateBaseUrl.placeholder', {
+            defaultValue: '留空 = 跟随主网关'
+          })}
+        />
+        <EnvSecretField
+          envKey="LLM_TRANSLATE_API_KEY"
+          keytarSlot="llmTranslateApiKey"
+          label={t('settings.ai.translateApiKey.label')}
+          helper={t('settings.ai.translateApiKey.helper')}
+        />
+        <EnvField
+          envKey="LLM_TRANSLATE_MODEL"
+          control="text"
+          label={t('settings.ai.translateModel.label')}
+          helper={t('settings.ai.translateModel.helper')}
+          placeholder="claude-haiku-4-5"
+        />
+        <EnvField
+          envKey="LLM_TRANSLATE_BILINGUAL"
+          control="toggle"
+          label={t('settings.ai.translateBilingual.label')}
+          helper={t('settings.ai.translateBilingual.helper')}
+        />
+      </Section>
+
       <Section title={t('settings.ai.cache.title')} helper={t('settings.ai.cache.helper')}>
         <EnvField
           envKey="LLM_CACHE_ENABLED"
@@ -125,6 +258,17 @@ export function AiTab(): React.ReactElement {
           ]}
         />
       </Section>
+
+      <PromptEditorDialog
+        slot={editorSlot}
+        open={editorSlot !== null}
+        onClose={() => {
+          setEditorSlot(null)
+          // Refresh list so the helper text reflects exists=true after the
+          // first write turned a missing file into a real one.
+          void refreshPrompts()
+        }}
+      />
     </>
   )
 }

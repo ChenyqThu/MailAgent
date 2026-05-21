@@ -23,6 +23,8 @@ import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import type { TranslationSegment } from '@shared/api/types'
+
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { TranslatedBody } from './TranslatedBody'
@@ -75,12 +77,14 @@ function TranslationView({
   status,
   errorCode,
   translated,
+  segments,
   onRetry,
   onDismiss
 }: {
   status: TranslateStatus
   errorCode: string | null
   translated: string | null
+  segments: TranslationSegment[] | null
   onRetry(): void
   onDismiss(): void
 }): React.ReactElement {
@@ -148,7 +152,7 @@ function TranslationView({
           {t('translate.showOriginal')}
         </button>
       </div>
-      <TranslatedBody text={translated ?? ''} />
+      <TranslatedBody text={translated ?? ''} segments={segments ?? undefined} />
     </div>
   )
 }
@@ -765,6 +769,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                 status={translateStatus}
                 errorCode={translateError?.code ?? null}
                 translated={translationQ.data?.translated ?? null}
+                segments={translationQ.data?.segments ?? null}
                 onRetry={() => translationQ.refetch()}
                 onDismiss={dismissTranslation}
               />

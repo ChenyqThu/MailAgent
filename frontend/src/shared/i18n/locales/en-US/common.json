@@ -722,6 +722,55 @@
         "label": "Primary model",
         "helper": "If all fallbacks fail, errors are queued for retry"
       },
+      "prompts": {
+        "title": "Prompt configuration",
+        "helper": "Markdown prompt file paths + in-place editor for the Python LLM agent",
+        "loading": "Loading…",
+        "save": "Save",
+        "saved": "Saved",
+        "saveFailed": "Save failed",
+        "loadFailed": "Failed to load prompt",
+        "listFailed": "Failed to list prompts",
+        "pathHint": "{path}",
+        "willCreate": "{path} (will be created on save)",
+        "placeholder": "Edit the prompt in markdown. Saved files reload via mtime watch.",
+        "editButton": "Edit",
+        "editHelperExists": "{path}",
+        "editHelperMissing": "{path} · file does not exist; saving in the editor will create it",
+        "inbox": {
+          "pathLabel": "Inbox prompt path",
+          "pathHelper": "Relative to repo root; empty = prompts/email_inbox.md",
+          "editLabel": "Edit inbox prompt",
+          "editTitle": "Edit inbox prompt"
+        },
+        "sent": {
+          "pathLabel": "Sent prompt path",
+          "pathHelper": "Relative to repo root; empty = prompts/email_sent.md",
+          "editLabel": "Edit sent prompt",
+          "editTitle": "Edit sent prompt"
+        }
+      },
+      "translate": {
+        "title": "Email translation",
+        "helper": "Electron-main translation pipeline; independent gateway/key/model + bilingual"
+      },
+      "translateBaseUrl": {
+        "label": "Translation gateway URL",
+        "helper": "Empty = follow the main LLM gateway; can point at a faster dedicated endpoint",
+        "placeholder": "Empty = follow main gateway"
+      },
+      "translateApiKey": {
+        "label": "Translation API key",
+        "helper": "Empty = follow main LLM key; dual-writes to keychain + .env when set"
+      },
+      "translateModel": {
+        "label": "Translation model",
+        "helper": "Used only for email translation; defaults to Haiku (~3-5× faster than Sonnet, quality is enough)"
+      },
+      "translateBilingual": {
+        "label": "Bilingual view",
+        "helper": "When on, each source paragraph is followed by an italic translation; when off, only the translation is shown"
+      },
       "fallbacks": {
         "label": "Fallback chain",
         "helper": "Tried in order when the primary fails; cross-protocol = cache miss"
