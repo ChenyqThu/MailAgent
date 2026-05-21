@@ -466,6 +466,12 @@ export interface AttachmentApi {
    *  (cid: refs) substitute the data URL instead. Returns null when
    *  the file is missing or the read fails. */
   readDataUrl(attachmentId: number): Promise<string | null>
+  /** Copy the on-disk attachment into the user's ~/Downloads, returning the
+   *  final absolute path. Collides safely (appends `_1`, `_2`, …). Returns
+   *  null when the row has no on-disk content or the source file is missing.
+   *  Renderer cannot open `file://` URLs from the dev-server origin, so this
+   *  exists as the user-visible "download attachment" affordance. */
+  download(attachmentId: number): Promise<string | null>
 }
 
 // ---- Immersive translate (DB v12) ------------------------------------------

@@ -55,7 +55,7 @@ function pickIconTone(att: Attachment): IconTone {
 
 export function AttachmentList({ attachments }: Props): React.ReactElement | null {
   const mailApi = useMailApi()
-  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
 
   // Bucket the rows: visible originals (non-inline, no `derived_from`)
   // become tiles; the rest get indexed by parent so the parent tile can
@@ -82,17 +82,22 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
   // the parent doesn't have to repeat the count logic.
   if (visible.length === 0) return null
 
-  async function open(id: number): Promise<void> {
-    setError(null)
+  // Renderer can't navigate to `file://` from a `http://localhost:5173`
+  // origin (Chromium "Not allowed to load local resource"). Round-trip
+  // through the main process and copy the file into ~/Downloads instead —
+  // matches the user's mental model of "download this attachment".
+  async function download(id: number): Promise<void> {
+    setNotice(null)
     try {
-      const path = await mailApi.attachment.localPath(id)
-      if (!path) {
-        setError('Attachment not yet downloaded.')
+      const target = await mailApi.attachment.download(id)
+      if (target === null) {
+        setNotice({ tone: 'err', text: 'Attachment file is missing on disk.' })
         return
       }
-      window.open(`file://${encodeURI(path)}`, '_blank', 'noopener')
+      const basename = target.split('/').pop() ?? target
+      setNotice({ tone: 'ok', text: `Saved to ~/Downloads/${basename}` })
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setNotice({ tone: 'err', text: err instanceof Error ? err.message : String(err) })
     }
   }
 
@@ -108,7 +113,11 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
         </span>
       </div>
 
-      {error && <div className="mb-2 text-aux text-fail">{error}</div>}
+      {notice && (
+        <div className={cn('mb-2 text-aux', notice.tone === 'ok' ? 'text-ok' : 'text-fail')}>
+          {notice.text}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2">
         {visible.map((a) => {
@@ -119,7 +128,7 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
             <button
               key={a.id}
               type="button"
-              onClick={() => void open(a.id)}
+              onClick={() => void download(a.id)}
               className={cn(
                 'group flex items-start gap-3 px-3 py-2.5 rounded-md',
                 'border border-ink-border bg-ink-2',
@@ -162,13 +171,13 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
                         tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation()
-                          void open(d.id)
+                          void download(d.id)
                         }}
                         onKeyDown={(e) => {
                           if (e.key !== 'Enter' && e.key !== ' ') return
                           e.preventDefault()
                           e.stopPropagation()
-                          void open(d.id)
+                          void download(d.id)
                         }}
                         className={cn(
                           'inline-flex items-center gap-1 px-1.5 py-0.5 rounded',

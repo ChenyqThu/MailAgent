@@ -5,8 +5,10 @@
 // FastAPI `/api/attachment/{id}/download` StreamingResponse (out of Sprint 1
 // scope; see BACKEND-INTERFACES.md §4.4).
 
-import { readFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join } from 'node:path'
+import { access, copyFile, mkdir, readFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, extname, isAbsolute, join } from 'node:path'
 
 import { ipcMain } from 'electron'
 
@@ -124,6 +126,51 @@ export async function readAttachmentAsDataUrl(attachmentId: number): Promise<str
   }
 }
 
+// Copy the attachment into ~/Downloads with collision-safe renaming.
+// Chromium refuses `window.open('file://...')` from a `http://localhost:5173`
+// origin (dev server) — even in Electron with sandbox:false — so the renderer
+// cannot navigate to the on-disk path directly. A real download IPC keeps the
+// UX intuitive (matches Mail.app's "Save Attachment…" behaviour) and works
+// across dev / packaged builds. Returns the final absolute path, or null if
+// the source is missing or the row has no on-disk content.
+export async function downloadAttachmentToDownloads(
+  attachmentId: number
+): Promise<string | null> {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT local_path, filename FROM email_attachment WHERE id = ?')
+    .get(attachmentId) as { local_path: string | null; filename: string } | undefined
+  if (!row || row.local_path === null) return null
+
+  let src = row.local_path
+  if (!isAbsolute(src)) src = join(dirname(dirname(resolveDbPath())), src)
+  try {
+    await access(src, fsConstants.R_OK)
+  } catch {
+    return null
+  }
+
+  const downloadsDir = join(homedir(), 'Downloads')
+  await mkdir(downloadsDir, { recursive: true })
+
+  const ext = extname(row.filename)
+  const stem = ext ? row.filename.slice(0, -ext.length) : row.filename
+  let target = join(downloadsDir, row.filename)
+  let counter = 1
+  // Collision: file already exists → append `_1`, `_2`, … before extension.
+  while (true) {
+    try {
+      await access(target, fsConstants.F_OK)
+      target = join(downloadsDir, `${stem}_${counter}${ext}`)
+      counter += 1
+    } catch {
+      break
+    }
+  }
+  await copyFile(src, target)
+  return target
+}
+
 export function registerAttachmentHandlers(): void {
   ipcMain.handle('attachment:list', (_evt, internalId: number) => {
     if (!Number.isInteger(internalId) || internalId < 0) {
@@ -148,5 +195,13 @@ export function registerAttachmentHandlers(): void {
       )
     }
     return readAttachmentAsDataUrl(attachmentId)
+  })
+  ipcMain.handle('attachment:download', async (_evt, attachmentId: number) => {
+    if (!Number.isInteger(attachmentId) || attachmentId < 0) {
+      throw new TypeError(
+        `attachment:download expected non-negative integer, got ${String(attachmentId)}`
+      )
+    }
+    return downloadAttachmentToDownloads(attachmentId)
   })
 }
