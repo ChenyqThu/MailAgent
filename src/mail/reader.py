@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import os
 import hashlib
+import re
 import email
 from email import policy
 from email.utils import parsedate_to_datetime
@@ -514,6 +515,14 @@ class EmailReader:
                             except Exception as e:
                                 logger.warning(f"Failed to extract inline content {cid}: {e}")
 
+            # 4. 提取无 Content-ID 但 Disposition=attachment 的 part
+            #    （含 message/rfc822 嵌套邮件 — Mail.app `mail attachments`
+            #    AppleScript 接口看不到嵌套邮件，必须从 MIME 直接抽）
+            if msg.is_multipart():
+                seen_filenames = {item['filename'] for item in inline_images}
+                for part in self._iter_parts_skip_rfc822_children(msg):
+                    self._extract_non_cid_attachment(part, inline_images, seen_filenames)
+
             return html_content, thread_id, cid_map, inline_images, email_date
 
         except Exception as e:
@@ -625,7 +634,10 @@ class EmailReader:
             regular_attachments = []  # 常规附件（从 MIME 提取）
 
             if msg.is_multipart():
-                for part in msg.walk():
+                # 用变种 walk: 遇到 message/rfc822 不下钻其子 part
+                # （嵌套邮件作为一个整体 .eml 附件落地，子 part 不该被
+                #  外层再当成独立附件抽一遍）
+                for part in self._iter_parts_skip_rfc822_children(msg):
                     content_id = part.get("Content-ID")
                     disposition = part.get("Content-Disposition", "")
                     part_content_type = part.get_content_type()
@@ -685,10 +697,29 @@ class EmailReader:
                             except Exception as e:
                                 logger.warning(f"Failed to extract inline content {cid}: {e}")
 
-                    elif disposition.lower().startswith("attachment") and filename:
-                        # 常规附件（无 Content-ID，有 Content-Disposition: attachment）
+                    elif disposition.lower().startswith("attachment") or part_content_type == "message/rfc822":
+                        # 常规附件（无 Content-ID，有 disposition=attachment 或
+                        # 是嵌套邮件 message/rfc822）。rfc822 通常没有
+                        # filename 头、且本身是 multipart 容器 — 走特殊
+                        # 序列化路径取其完整 bytes 作 .eml，并从内层
+                        # Subject 兜底文件名。
                         try:
-                            payload = part.get_payload(decode=True)
+                            if part_content_type == "message/rfc822":
+                                inner_payload = part.get_payload()
+                                inner_msg = inner_payload[0] if isinstance(inner_payload, list) and inner_payload else inner_payload
+                                inner_subject = ''
+                                if hasattr(inner_msg, 'get'):
+                                    inner_subject = (inner_msg.get('Subject', '') or '').strip()
+                                if not filename:
+                                    base = re.sub(r'[\\/:*?"<>|\r\n\t]+', '_', inner_subject) if inner_subject else ''
+                                    filename = f"{base}.eml" if base else f"forwarded-{len(regular_attachments) + 1}.eml"
+                                elif not filename.lower().endswith('.eml'):
+                                    filename = f"{filename}.eml"
+                                payload = part.as_bytes()
+                            else:
+                                if not filename:
+                                    continue  # 普通附件必须有文件名
+                                payload = part.get_payload(decode=True)
                             if payload:
                                 regular_attachments.append({
                                     'filename': filename,
@@ -697,9 +728,9 @@ class EmailReader:
                                     'is_inline': False,
                                     'data': payload
                                 })
-                                logger.debug(f"Extracted regular attachment: {filename}")
+                                logger.debug(f"Extracted regular attachment: {filename} ({len(payload)}B, {part_content_type})")
                         except Exception as e:
-                            logger.warning(f"Failed to extract attachment {filename}: {e}")
+                            logger.warning(f"Failed to extract attachment {filename!r} ({part_content_type}): {e}")
 
             # 6. 保存附件（MIME 提取的内联图片和常规附件，跳过 AppleScript）
             all_extracted = inline_images + regular_attachments
@@ -801,6 +832,79 @@ class EmailReader:
 
         # 3. 回退到声明的 Content-Type
         return declared_type
+
+    @staticmethod
+    def _iter_parts_skip_rfc822_children(msg) -> "list":
+        """walk() 变种：遇到 message/rfc822 part 时返回该 part 本身，
+        但不下钻其内部子 part（嵌套邮件的内容会作为整体 .eml 落地，
+        子 part 不该被外层再当独立附件抽一遍）。
+        """
+        out = []
+        stack = [msg]
+        while stack:
+            cur = stack.pop()
+            out.append(cur)
+            if cur.is_multipart() and cur.get_content_type() != 'message/rfc822':
+                # iter_parts() 保序，逆序 push 保持遍历顺序
+                children = list(cur.iter_parts())
+                for child in reversed(children):
+                    stack.append(child)
+        return out
+
+    def _extract_non_cid_attachment(self, part, inline_images: list, seen_filenames: set) -> None:
+        """提取无 Content-ID 但带 disposition=attachment 的 part（含 rfc822 嵌套邮件）。
+        命中即 append 到 inline_images，并更新 seen_filenames 防止与
+        AppleScript 路径重复保存（下游 _save_and_load_attachments 已按
+        filename 去重）。
+        """
+        ct = part.get_content_type()
+        disp = (part.get('Content-Disposition', '') or '').strip().lower()
+        is_attachment = disp.startswith('attachment')
+        is_rfc822 = ct == 'message/rfc822'
+        if not (is_attachment or is_rfc822):
+            return
+        # 已有 Content-ID 的走上一段 CID 分支，这里不重复处理
+        if part.get('Content-ID'):
+            return
+        # 已知非附件类型
+        if ct.startswith(('text/calendar', 'text/vcard', 'application/ics')):
+            return
+
+        try:
+            if is_rfc822:
+                # 嵌套邮件整体序列化为 .eml，filename 取嵌套 Subject
+                inner_payload = part.get_payload()
+                inner_msg = inner_payload[0] if isinstance(inner_payload, list) and inner_payload else inner_payload
+                inner_subject = ''
+                if hasattr(inner_msg, 'get'):
+                    inner_subject = (inner_msg.get('Subject', '') or '').strip()
+                base = re.sub(r'[\\/:*?"<>|\r\n\t]+', '_', inner_subject) if inner_subject else ''
+                filename = f"{base}.eml" if base else f"forwarded-{len(inline_images) + 1}.eml"
+                data = part.as_bytes()
+                content_type = 'message/rfc822'
+            else:
+                data = part.get_payload(decode=True)
+                if not data:
+                    return
+                filename = part.get_filename() or part.get_param('name')
+                if not filename:
+                    return  # 无名字 + 非 rfc822，跳过
+                content_type = ct
+
+            if filename in seen_filenames:
+                return  # 已被 CID 分支或前一个 attachment part 处理过
+            seen_filenames.add(filename)
+
+            inline_images.append({
+                'filename': filename,
+                'content_type': content_type,
+                'content_id': None,
+                'is_inline': False,
+                'data': data,
+            })
+            logger.debug(f"Extracted non-CID MIME attachment: {filename} ({len(data)} bytes, type={content_type})")
+        except Exception as e:
+            logger.warning(f"Failed to extract non-CID attachment ({ct}): {e}")
 
     @staticmethod
     def _get_content_type(file_path: Path) -> str:
