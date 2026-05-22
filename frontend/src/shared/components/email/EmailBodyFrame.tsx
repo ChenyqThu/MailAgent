@@ -541,6 +541,13 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
   // srcDoc inclusion guarantees we re-inject after the iframe re-renders
   // (e.g. theme switch rebuilds srcDoc; without this dep we'd lose the
   // injection after a re-render).
+  //
+  // After inject/clear we manually re-measure on the next animation frame.
+  // ResizeObserver on the iframe body *usually* fires after layout but in
+  // practice has been observed to miss the post-mutation shrink — switching
+  // 译文 → 原文 left the iframe at the larger height, painting empty space
+  // below the original content. rAF guarantees we measure after layout
+  // settles, and setHeight cuts the gap.
   useEffect(() => {
     if (!docReady) return
     const iframe = iframeRef.current
@@ -548,9 +555,24 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     if (!doc) return
     if (!translations || translations.length === 0) {
       clearInjectedTranslations(doc)
-      return
+    } else {
+      injectTranslations(doc, translations)
     }
-    injectTranslations(doc, translations)
+    const raf = requestAnimationFrame(() => {
+      const html = doc.documentElement
+      const body = doc.body
+      const h = Math.max(
+        html?.scrollHeight ?? 0,
+        body?.scrollHeight ?? 0,
+        html?.offsetHeight ?? 0,
+        body?.offsetHeight ?? 0
+      )
+      if (h > 0) {
+        const next = Math.max(120, Math.min(Math.round(h), 80000))
+        setHeight((prev) => (Math.abs(prev - next) < 2 ? prev : next))
+      }
+    })
+    return (): void => cancelAnimationFrame(raf)
   }, [translations, docReady, srcDoc])
 
   return (
