@@ -47,6 +47,9 @@ AGENTS.md
 # Env backups (含 secrets)
 .env.bak.*
 
+# DavMail PoC 工作目录 (含 client_id 伪装 config 和 OAuth token, 整体不进 git history)
+davmail-poc/
+
 # Python build artifacts
 *.egg-info/
 

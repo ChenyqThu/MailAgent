@@ -42,7 +42,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict, Union
+from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
 
 
@@ -109,7 +109,19 @@ class SyncStore:
     #                以 intent 形式落库，FanoutWorker 异步派发到 Mail.app + Notion。
     #                Echo prevention: source='notion_webhook' + target='notion' 被强制 silent skip
     #                避免回环。详见 SPRINT15-HANDOFF.md §3.3-§3.4。
-    DB_VERSION = 11
+    # v12 (Sprint Immersive-Translate, 2026-05): email_translation 表 —— 沉浸式翻译缓存。
+    #                Path A (LLM 分类顺带, source='llm_agent') + Path B (用户点翻译, source='on_demand')
+    #                双路径写入同一表; segments_json 形状 [{src, tgt}] 统一. 单语言 (zh) 设计,
+    #                internal_id PK + FK CASCADE; 重新翻译先 DELETE 再 INSERT.
+    #                详见 frontend/SPRINT-IMMERSIVE-TRANSLATE-HANDOFF.md.
+    # v13 (Sprint 16 dual-backend, 2026-05): email_metadata 加 imap_uidvalidity / imap_uid /
+    #                backend_origin 三列, 支持 DavMail backend (IMAP) 与 AppleScript backend
+    #                共存. backend_origin='applescript' → internal_id = Mail.app ROWID (<10^9);
+    #                backend_origin='davmail' → internal_id = sync_state['davmail_next_internal_id']
+    #                自增 (起点 1_000_000_000, 永不与 ROWID 冲突). 通过 allocate_davmail_internal_id()
+    #                atomic 分配. 详见 plan §"主键 / 邮件标识策略" 方案 D +
+    #                docs/dual-backend-architecture-handoff.md.
+    DB_VERSION = 13
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -217,7 +229,10 @@ class SyncStore:
                 updated_at REAL,
                 is_pinned INTEGER DEFAULT 0,
                 pinned_at REAL,
-                is_important INTEGER DEFAULT 0
+                is_important INTEGER DEFAULT 0,
+                imap_uidvalidity INTEGER,
+                imap_uid INTEGER,
+                backend_origin TEXT DEFAULT 'applescript'
             )
         """)
 
@@ -592,6 +607,87 @@ class SyncStore:
             CREATE INDEX IF NOT EXISTS idx_email_attachment_visible
             ON email_attachment(internal_id, is_inline)
         """)
+
+        # === v12 (Sprint Immersive-Translate): email_translation 缓存表 ===
+        # 沉浸式翻译双路径共享缓存层：
+        #   - Path A (source='llm_agent'): LLM 邮件分类时 tool_use 同时返回
+        #     translation_segments, LLMRunner 在 mark_success 后写入。
+        #   - Path B (source='on_demand'): 用户点击 "翻译" 按钮触发的 batch
+        #     翻译, 前端 translate.ts:translate:batch 写入。
+        # 设计：单语言 (zh) — 用户主语言确定，无多语言并存需求；
+        #       internal_id PK + FK CASCADE — 删邮件自动清缓存；
+        #       segments_json 是 JSON 数组 [{src, tgt}, ...]，src 是原文段落
+        #       verbatim (≤300 字符), tgt 是简体中文译文。前端 EmailBodyFrame
+        #       用 textContent.includes(src) fuzzy 配对 DOM 节点注入译文。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_translation (
+                internal_id   INTEGER PRIMARY KEY,
+                target_lang   TEXT NOT NULL DEFAULT 'zh',
+                segments_json TEXT NOT NULL,
+                model         TEXT,
+                source        TEXT NOT NULL,
+                created_at    REAL NOT NULL,
+                updated_at    REAL NOT NULL,
+                CHECK (source IN ('llm_agent','on_demand')),
+                FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
+            )
+        """)
+        # source 维度统计 (admin / debug 看 LLM 路径覆盖率)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_translation_source
+            ON email_translation(source)
+        """)
+
+        # === v13 (Sprint 16 dual-backend): email_metadata 加 imap_uidvalidity / imap_uid /
+        # backend_origin 三列, 支持 DavMail (IMAP) backend 与 AppleScript backend 单 driver
+        # 显式切换. 详见 plan §"主键 / 邮件标识策略" 方案 D.
+        try:
+            cursor.execute("PRAGMA table_info(email_metadata)")
+            cols_v13 = {r[1] for r in cursor.fetchall()}
+            if 'imap_uidvalidity' not in cols_v13:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN imap_uidvalidity INTEGER"
+                )
+                logger.info("v13 migration: added email_metadata.imap_uidvalidity")
+            if 'imap_uid' not in cols_v13:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN imap_uid INTEGER"
+                )
+                logger.info("v13 migration: added email_metadata.imap_uid")
+            if 'backend_origin' not in cols_v13:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN backend_origin TEXT DEFAULT 'applescript'"
+                )
+                logger.info("v13 migration: added email_metadata.backend_origin (default 'applescript')")
+            # Sprint 15 D 块漏的 ALTER TABLE — update_local_flags(processing_status) 假设
+            # email_metadata 有 processing_status 列, 但当时只加了写入路径没加 schema.
+            # 顺手补上 (idempotent, 跟 v13 一并跑).
+            if 'processing_status' not in cols_v13:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN processing_status TEXT"
+                )
+                logger.info("v13 migration: added email_metadata.processing_status (Sprint 15 D backfill)")
+        except sqlite3.OperationalError as e:
+            logger.warning(f"v13 migration: skipped ADD COLUMN ({e})")
+
+        # 索引: imap_uid 反查 (DavMail backend fetch_email_by_id 快路径) — partial 减小尺寸
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_imap_uid
+            ON email_metadata(imap_uidvalidity, imap_uid)
+            WHERE imap_uid IS NOT NULL
+        """)
+        # backend_origin 分组统计 / 灰度对账用
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_backend_origin
+            ON email_metadata(backend_origin)
+        """)
+
+        # 初始化 davmail internal_id 自增序列 (起点 1_000_000_000, 永不与 Mail.app ROWID 冲突).
+        # SQLite INTEGER PRIMARY KEY 不能 ALTER 成 AUTOINCREMENT, 用 sync_state KV 维护.
+        cursor.execute("""
+            INSERT OR IGNORE INTO sync_state (key, value, updated_at)
+            VALUES ('davmail_next_internal_id', '1000000000', ?)
+        """, (time.time(),))
 
         # 更新数据库版本
         cursor.execute("""
@@ -1180,22 +1276,92 @@ class SyncStore:
         return False
 
     def _save_email_v3(self, email: Dict[str, Any]) -> bool:
-        """v3 架构保存邮件（internal_id 为主键）"""
+        """v3 架构保存邮件（internal_id 为主键）.
+
+        v13 新增字段 (向后兼容, 老调用方不传 = 默认值):
+            imap_uidvalidity / imap_uid: DavMail backend 必填; AppleScript 留 None
+            backend_origin: 'applescript' (default) | 'davmail' — 标记 internal_id 是谁生成的
+
+        ## Cross-backend merge protection (Sprint 16 dual-backend cutover 安全网)
+
+        触发场景: backend 切换后, 同一封邮件可能被两个 backend 各看到一次 (e.g. 切到
+        davmail 后, davmail 抓到该邮件分配了 >=10^9 的新 internal_id; 而该邮件的
+        message_id 已经在 applescript 时代写过 row=小 ROWID). 老逻辑用 ``INSERT OR
+        REPLACE`` → message_id UNIQUE 约束 → 老 row 整行被删 → ``notion_page_id``
+        / ``sync_status='synced'`` / ``thread_id`` 等同步状态全丢, Notion 端孤儿.
+
+        修复策略: 写入前 SELECT 同 message_id 的 row, 如果存在但 internal_id 不同 →
+        UPDATE 老 row 的 backend-related 字段 (imap_uid / imap_uidvalidity 等), 保留
+        notion_page_id / sync_status / thread_id / notion_thread_id 不动. 新分配的
+        internal_id 浪费 (sequence 不回收, 但无害).
+
+        SQLite SSoT 视角: internal_id 仅是邮件代号, 长度不同代表 origin 不同, 不影响
+        message_id 这个对外唯一标识 — 一封 message_id 在 sync_store 只能有一条记录.
+        """
         internal_id = email['internal_id']
+        message_id = email.get('message_id')
         now = time.time()
 
         with self._connection() as conn:
             cursor = conn.cursor()
 
             try:
+                # === Cross-backend merge guard ===
+                # 仅在 message_id 非空时检查 (None 不会触发 UNIQUE 冲突, 是 v3 pending 邮件).
+                if message_id:
+                    existing = cursor.execute(
+                        "SELECT internal_id, sync_status, notion_page_id, "
+                        "notion_thread_id, thread_id, backend_origin "
+                        "FROM email_metadata WHERE message_id = ?",
+                        (message_id,),
+                    ).fetchone()
+                    if existing is not None and existing['internal_id'] != internal_id:
+                        # 跨 backend 切换产生的 dup. UPDATE 老 row 的 davmail 字段,
+                        # 保留同步状态.
+                        old_iid = existing['internal_id']
+                        old_origin = existing['backend_origin']
+                        new_origin = email.get('backend_origin', 'applescript')
+                        logger.info(
+                            f"[sync_store] cross-backend merge: message_id={message_id[:40]!r} "
+                            f"already at internal_id={old_iid} (origin={old_origin!r}); "
+                            f"merging new internal_id={internal_id} (origin={new_origin!r}) "
+                            f"— keep notion_page_id/sync_status, update imap_uid"
+                        )
+                        cursor.execute(
+                            """UPDATE email_metadata
+                               SET imap_uid = COALESCE(?, imap_uid),
+                                   imap_uidvalidity = COALESCE(?, imap_uidvalidity),
+                                   thread_id = COALESCE(thread_id, ?),
+                                   sender_name = COALESCE(NULLIF(sender_name, ''), ?),
+                                   to_addr = COALESCE(NULLIF(to_addr, ''), ?),
+                                   cc_addr = COALESCE(NULLIF(cc_addr, ''), ?),
+                                   updated_at = ?
+                               WHERE internal_id = ?""",
+                            (
+                                email.get('imap_uid'),
+                                email.get('imap_uidvalidity'),
+                                email.get('thread_id'),
+                                email.get('sender_name', ''),
+                                email.get('to_addr', ''),
+                                email.get('cc_addr', ''),
+                                now,
+                                old_iid,
+                            ),
+                        )
+                        conn.commit()
+                        return True
+
+                # === 正常路径: 全新 row 或 internal_id 已存在 (同 backend 内重复触发) ===
                 cursor.execute("""
                     INSERT OR REPLACE INTO email_metadata
                     (internal_id, message_id, thread_id, subject, sender, sender_name,
                      to_addr, cc_addr, date_received, mailbox,
                      is_read, is_flagged, sync_status, notion_page_id,
                      notion_thread_id, sync_error, retry_count, next_retry_at,
+                     imap_uidvalidity, imap_uid, backend_origin,
                      created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?,
                             COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, (
@@ -1217,6 +1383,9 @@ class SyncStore:
                     email.get('sync_error'),
                     email.get('retry_count', 0),
                     email.get('next_retry_at'),
+                    email.get('imap_uidvalidity'),
+                    email.get('imap_uid'),
+                    email.get('backend_origin', 'applescript'),
                     internal_id,
                     now,
                     now
@@ -1230,6 +1399,44 @@ class SyncStore:
                 logger.error(f"Failed to save email (v3): {e}")
                 conn.rollback()
                 return False
+
+    def allocate_davmail_internal_id(self) -> int:
+        """Atomic 分配下一个 davmail internal_id (起点 1_000_000_000).
+
+        v13: DavMail backend 抓新邮件时调用, 拿到 ID 后传给 save_email(backend_origin='davmail').
+        SQLite INTEGER PRIMARY KEY 不能 ALTER 成 AUTOINCREMENT, 用 sync_state KV 维护序列.
+        BEGIN IMMEDIATE 锁住 sync_state 行避免并发冲突.
+
+        Returns:
+            下一个可用的 internal_id (>= 1_000_000_000).
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                cursor.execute(
+                    "SELECT value FROM sync_state WHERE key = 'davmail_next_internal_id'"
+                )
+                row = cursor.fetchone()
+                next_id = int(row['value']) if row else 1_000_000_000
+                cursor.execute(
+                    """UPDATE sync_state SET value = ?, updated_at = ?
+                       WHERE key = 'davmail_next_internal_id'""",
+                    (str(next_id + 1), time.time()),
+                )
+                if cursor.rowcount == 0:
+                    # 第一次分配, sync_state 还没这一行 (理论上 _init_database 已经 INSERT OR IGNORE)
+                    cursor.execute(
+                        """INSERT INTO sync_state (key, value, updated_at)
+                           VALUES ('davmail_next_internal_id', ?, ?)""",
+                        (str(next_id + 1), time.time()),
+                    )
+                conn.commit()
+                return next_id
+            except sqlite3.Error as e:
+                conn.rollback()
+                logger.error(f"allocate_davmail_internal_id failed: {e}")
+                raise
 
     def _save_email_compat(self, email: Dict[str, Any]) -> bool:
         """兼容模式保存邮件（message_id 为主键，生成临时 internal_id）

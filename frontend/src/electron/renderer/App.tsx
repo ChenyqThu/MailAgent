@@ -14,7 +14,9 @@ import { bootAppearance } from '@shared/state/appearance'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
+import { PopoutShell } from '@shared/components/chat/PopoutShell'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
+import { usePopoutMode } from '@shared/state/popout-mode'
 
 /** Sprint 16 — must live inside QueryClientProvider because useEventBridge
  *  uses useQueryClient(). One mount per App lifetime; no UI of its own. */
@@ -47,16 +49,32 @@ export default function App(): React.ReactElement {
     bootAppearance()
   }, [])
 
+  // Sprint 14 PR E — popout window mounts a dedicated chrome instead of
+  // the inbox router. The flag was set by renderer/main.tsx before
+  // React.render so this first read is already correct (no flash of
+  // inbox UI). Popout shell bypasses TanStack Router entirely; that
+  // means no Sidebar / EmailList / Settings inside the popout — which
+  // is the whole point of the dedicated window.
+  const isPopout = usePopoutMode((s) => s.isPopout)
+
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
+        {/* EventBridge needs QueryClient but doesn't read router state,
+            so it stays here regardless of popout vs inbox shell. */}
         <EventBridgeMount />
-        {/* Sprint 7 D2 fix (Sprint 8 verify): GlobalShortcuts +
-            KeyboardHelpModal + CommandPalette moved into rootRoute's
-            RootLayout (see `src/shared/router-instance.tsx`) — they call
-            useNavigate(), which must resolve inside RouterProvider, not as
-            its sibling here. */}
-        <AppRouter />
+        {isPopout ? (
+          <PopoutShell />
+        ) : (
+          <>
+            {/* Sprint 7 D2 fix (Sprint 8 verify): GlobalShortcuts +
+                KeyboardHelpModal + CommandPalette moved into rootRoute's
+                RootLayout (see `src/shared/router-instance.tsx`) — they
+                call useNavigate(), which must resolve inside
+                RouterProvider, not as its sibling here. */}
+            <AppRouter />
+          </>
+        )}
         {/* Sprint 5 §2.2 — toast stack mounts once at root so any
             component (EmailToolbar / BatchActionBar / chat panel) can
             fire success/error/long-task toasts via the zustand store.

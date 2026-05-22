@@ -357,5 +357,69 @@ class Config(BaseSettings):
         description="灵动岛 light/dark mode（envelope metadata 透传，Swift 端按此切 token）",
     )
 
+    # =========================================================================
+    # Sprint 16 dual-backend (2026-05): 邮件后端 single-driver 显式切换
+    # AppleScript + Mail.app (FALLBACK, 默认) ⇄ DavMail IMAP/SMTP (PRIMARY)
+    # 详见 plan: ~/.claude/plans/ultrathink-docs-dual-backend-*.md
+    # 切换协议: 改下方 MAILAGENT_BACKEND + pm2 restart mail-sync
+    # =========================================================================
+    mailagent_backend: str = Field(
+        default="applescript", env="MAILAGENT_BACKEND",
+        description=(
+            "邮件后端选择: 'applescript' (默认, Mail.app + AppleScript v3 路径) | "
+            "'davmail' (DavMail IMAP/SMTP, PRIMARY when 切换). 启动时 backend factory "
+            "probe 失败 → BackendStartupError + print 切换提示 + exit(1) (PM2 autorestart=false). "
+            "切换是手动 single-driver, 没有自动 fallback. davmail 模式启动前确认 "
+            "`pm2 ls | grep davmail-poc` online."
+        ),
+    )
+    davmail_imap_host: str = Field(
+        default="127.0.0.1", env="DAVMAIL_HOST",
+        description="DavMail JVM bind 地址 (PM2 davmail-poc 默认仅 127.0.0.1, 勿暴露公网)",
+    )
+    davmail_imap_port: int = Field(
+        default=1143, env="DAVMAIL_IMAP_PORT", description="DavMail IMAP 端口",
+    )
+    davmail_smtp_port: int = Field(
+        default=1025, env="DAVMAIL_SMTP_PORT", description="DavMail SMTP submission 端口",
+    )
+    davmail_cipher_key: str = Field(
+        default="", env="DAVMAIL_POC_CIPHER_KEY",
+        description=(
+            "DavMail StringEncryptor password (= IMAP/SMTP AUTH password). "
+            "留空时 fallback 默认 'mailagent-poc-shared-key' 跟 davmail-poc/ 一致. "
+            "改这个值要同步清 davmail-poc/token/token.dat 重新走 OAuth manual flow. "
+            "见 davmail-poc/POC-RESULTS.md §StringEncryptor."
+        ),
+    )
+    davmail_drafts_folder: str = Field(
+        default="", env="DAVMAIL_DRAFTS_FOLDER",
+        description=(
+            "DavMail IMAP Drafts 文件夹名 (例 'INBOX/Drafts', 'Drafts', '草稿'). "
+            "留空时 startup probe 通过 IMAP LIST SPECIAL-USE \\Drafts 标志自动探测. "
+            "Outlook 中文环境通常是 'Drafts' 或 'INBOX/Drafts'."
+        ),
+    )
+    davmail_poll_interval_sec: int = Field(
+        default=30, env="DAVMAIL_POLL_INTERVAL_SEC",
+        description=(
+            "DavMail backend IMAP STATUS UIDNEXT 轮询间隔 (秒). 默认 30s — "
+            "PoC 实测 IDLE 不推送 fallback polling, 邮件应用 minute 级 latency 够用. "
+            "AppleScript backend 仍走 radar_poll_interval (默认 5s)."
+        ),
+    )
+    davmail_caldav_port: int = Field(
+        default=1080, env="DAVMAIL_CALDAV_PORT",
+        description="DavMail CalDAV 端口 (Phase C.2 — LLM agent 拿日程 context)",
+    )
+    llm_caldav_context_enabled: bool = Field(
+        default=False, env="LLM_CALDAV_CONTEXT_ENABLED",
+        description=(
+            "Phase C.2 — LLM agent 处理邮件时, 是否注入'今日/本周日程' context. "
+            "依赖: `pip install caldav` + DavMail 1080 端口 online. 默认关闭, 启用前先"
+            "试 caldav 连接是否 OK (见 davmail-poc/test_caldav.py)."
+        ),
+    )
+
 # 全局配置实例
 config = Config()

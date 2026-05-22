@@ -39,11 +39,14 @@ export class HttpApi implements MailApi {
   attachment = {
     list: () => notImplemented('attachment.list'),
     localPath: () => notImplemented('attachment.localPath'),
-    readDataUrl: () => notImplemented('attachment.readDataUrl')
+    readDataUrl: () => notImplemented('attachment.readDataUrl'),
+    download: () => notImplemented('attachment.download')
   }
 
   ai = {
-    translate: () => notImplemented('ai.translate'),
+    translateBatch: () => notImplemented('ai.translateBatch'),
+    getCached: () => notImplemented('ai.getCached'),
+    deleteCached: () => notImplemented('ai.deleteCached'),
     abortTranslate: () => {
       /* V2 web build will route through fetch + AbortController; Sprint 3 stub. */
     }
@@ -142,6 +145,15 @@ export class HttpApi implements MailApi {
   services = {
     restart: () => notImplemented('services.restart'),
     status: () => notImplemented('services.status')
+  }
+
+  // Web SPA has no direct fs access to the Mac host's prompt files. The V2
+  // FastAPI could surface read-only views later; for now web users edit
+  // prompts on the Mac.
+  prompts = {
+    list: () => notImplemented('prompts.list'),
+    read: () => notImplemented('prompts.read'),
+    write: () => notImplemented('prompts.write')
   }
 
   // Sprint 9 §2.3 — ping-island bridge lives on the Mac host. From a remote

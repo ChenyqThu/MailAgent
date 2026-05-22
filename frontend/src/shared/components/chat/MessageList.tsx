@@ -9,9 +9,20 @@
 // Assistant messages additionally render a per-message footer row
 // (regenerate / copy / 转 Notion) per DESIGN.md §6.2.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bookmark, Copy, ExternalLink, Loader2, RotateCcw, Send, Sparkles, X } from 'lucide-react'
+import {
+  Bookmark,
+  Check,
+  Copy,
+  ExternalLink,
+  Loader2,
+  Pencil,
+  RotateCcw,
+  Send,
+  Sparkles,
+  X
+} from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { toastSuccess } from '@shared/state/toast'
@@ -43,6 +54,22 @@ export interface DraftHandlers {
   recipient?: string | null
 }
 
+// Sprint 14 PR B — inline editor handlers. The hook owns the truncate +
+// re-stream wiring; this component just calls onEdit with the new content
+// once the user commits the edit. AIChatPanel injects a real onEdit; a
+// read-only viewer can leave it undefined → the edit affordance disappears
+// (no hover icon, no aria entry point).
+export interface UserHandlers {
+  /** Commit the edit. Returns a Promise so the UI can flip the bubble
+   *  back out of edit mode only after the dispatcher accepts the new
+   *  content (saves users from a half-committed state on IPC failure). */
+  onEdit?: (messageId: number, newContent: string) => void | Promise<void>
+  /** True iff any message in the session is currently streaming. Edit
+   *  is disabled while a turn is in flight — race-y to truncate from
+   *  underneath the active assistant. */
+  isStreaming?: boolean
+}
+
 interface Props {
   messages: ReadonlyArray<ChatMessage>
   streamingMessageId: number | null
@@ -50,6 +77,8 @@ interface Props {
   onRegenerate?: () => void
   /** Sprint 13 — wired by AIChatPanel; flows down to DraftPreviewCard. */
   draftHandlers?: DraftHandlers
+  /** Sprint 14 PR B — wired by AIChatPanel; flows down to UserBubble. */
+  userHandlers?: UserHandlers
 }
 
 const DRAFT_REPLY_MARKER = /^\s*(?:#+\s*)?DRAFT REPLY\b/i
@@ -122,16 +151,44 @@ function DraftPreviewCard({
   const onOpenInWindow = handlers?.onOpenInWindow
   const isSending = handlers?.isSending === true
 
+  // Sprint 14 PR I — inline editor for the AI-drafted reply. Users can
+  // tweak the body before opening a Mail.app draft; useful when the AI
+  // got the tone close but the user wants to swap a phrase. editedBody
+  // resets to the cleaned `body` every time `body` changes (new draft
+  // turn) but only while editing is false, so an in-progress edit
+  // survives a no-op rerender.
+  const [editing, setEditing] = useState(false)
+  const [editedBody, setEditedBody] = useState(body)
+  const [lastBody, setLastBody] = useState(body)
+  if (body !== lastBody) {
+    setLastBody(body)
+    if (!editing) setEditedBody(body)
+  }
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => {
+    if (editing) editTextareaRef.current?.focus()
+  }, [editing])
+
+  // What we'll actually send. When editing, the live `editedBody` wins —
+  // pressing Send while in edit mode commits the changes implicitly.
+  const finalBody = editing ? editedBody : body
+
   // Send is only enabled once the stream finishes (otherwise the draft body
   // would be truncated mid-sentence). Backend has no partial-send semantics.
-  const sendDisabled = !onSend || isStreaming || isSending || body.length === 0
+  const sendDisabled = !onSend || isStreaming || isSending || finalBody.trim().length === 0
   // Regenerate piggybacks on chat.retryLast — if that's null (no failed
   // input on file, or no chat instance), surface a HoverTip explanation.
   const regenDisabled = !onRegenerate || isStreaming || isSending
-  // Edit + popout currently surface "coming in Sprint 14" toasts. The
-  // buttons still render so the layout matches the mockup; HoverTip
-  // explains why they're informational only.
-  const editTipKey = onEdit ? 'chat.draftReply.edit' : 'chat.draftReply.toast.editPending'
+  // Sprint 14 PR I — onEdit is now the "enter edit mode" trigger; the
+  // actual inline editor lives entirely in this component. Parent sets
+  // onEdit to a callable (even a noop) to opt-in; the toast pending
+  // copy is still surfaced when onEdit is undefined for read-only chat
+  // viewers.
+  const editTipKey = onEdit
+    ? editing
+      ? 'chat.draftReply.exitEdit'
+      : 'chat.draftReply.edit'
+    : 'chat.draftReply.toast.editPending'
   const popoutTipKey = onOpenInWindow
     ? 'chat.draftReply.openInWindow'
     : 'chat.draftReply.toast.popoutPending'
@@ -144,7 +201,9 @@ function DraftPreviewCard({
       ? 'chat.draftReply.sending'
       : !onSend
         ? 'chat.draftReply.toast.sendFailNoBin'
-        : 'chat.draftReply.send'
+        : editing
+          ? 'chat.draftReply.sendEdited'
+          : 'chat.draftReply.send'
 
   // Sprint 12 — .draft-card recipe (coral ring + faint glow + glass bg)
   // lives in index.css so the chrome reads as the AI's headline output.
@@ -170,9 +229,35 @@ function DraftPreviewCard({
         </span>
       </div>
 
-      {/* Body */}
+      {/* Body — Sprint 14 PR I — flip to a textarea when the user clicks
+          Edit. The textarea inherits the same coral focus-ring as the
+          composer so the affordance is consistent. Closing edit mode is
+          implicit on Send (uses editedBody) or via the same edit button
+          (toggle off → revert to read-only TranslatedBody). */}
       <div className="px-3 py-2.5 text-aux text-ink-fg space-y-2 bg-ink-3">
-        <TranslatedBody text={body} />
+        {editing ? (
+          <textarea
+            ref={editTextareaRef}
+            value={editedBody}
+            onChange={(e) => setEditedBody(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setEditedBody(body)
+                setEditing(false)
+              }
+            }}
+            rows={6}
+            aria-label={t('chat.draftReply.edit')}
+            className={cn(
+              'w-full resize-y bg-ink-2 text-ink-fg text-aux leading-snug',
+              'min-h-[120px] max-h-[400px] px-2 py-1.5 rounded',
+              'ring-1 ring-c-accent/40 focus:ring-c-accent focus:outline-none'
+            )}
+          />
+        ) : (
+          <TranslatedBody text={body} />
+        )}
       </div>
 
       {/* Footer — coral primary action + secondary text buttons. Each button
@@ -187,7 +272,17 @@ function DraftPreviewCard({
         <HoverTip text={t(sendTipKey)} side="top">
           <button
             type="button"
-            onClick={onSend ? () => void onSend(body) : undefined}
+            onClick={
+              onSend
+                ? () => {
+                    void onSend(finalBody)
+                    // Exiting edit mode after send keeps the chip-stack
+                    // mental model tidy — the draft is "shipped", no
+                    // reason to keep showing an editable surface.
+                    if (editing) setEditing(false)
+                  }
+                : undefined
+            }
             disabled={sendDisabled}
             aria-label={t('chat.draftReply.send')}
             data-disabled={sendDisabled ? '' : undefined}
@@ -231,19 +326,36 @@ function DraftPreviewCard({
         <HoverTip text={t(editTipKey)} side="top">
           <button
             type="button"
-            onClick={onEdit ?? undefined}
+            onClick={
+              onEdit
+                ? () => {
+                    if (editing) {
+                      // Cancel — revert + leave edit mode without
+                      // touching the user's draft text on the next turn.
+                      setEditedBody(body)
+                      setEditing(false)
+                    } else {
+                      setEditing(true)
+                      onEdit()
+                    }
+                  }
+                : undefined
+            }
             disabled={!onEdit}
-            aria-label={t('chat.draftReply.edit')}
+            aria-label={editing ? t('chat.draftReply.exitEdit') : t('chat.draftReply.edit')}
+            aria-pressed={editing}
             data-disabled={!onEdit ? '' : undefined}
             tabIndex={!onEdit ? -1 : 0}
             className={cn(
               'inline-flex items-center px-2 py-1.5 rounded text-aux',
-              'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
+              editing
+                ? 'text-c-accent bg-c-accent/10 hover:bg-c-accent/15'
+                : 'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4',
               'transition-colors duration-fast',
               'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
             )}
           >
-            {t('chat.draftReply.edit')}
+            {editing ? t('chat.draftReply.exitEdit') : t('chat.draftReply.edit')}
           </button>
         </HoverTip>
 
@@ -270,9 +382,167 @@ function DraftPreviewCard({
   )
 }
 
-function UserBubble({ content }: { content: string }): React.ReactElement {
+interface UserBubbleProps {
+  messageId: number
+  content: string
+  handlers?: UserHandlers
+}
+
+function UserBubble({ messageId, content, handlers }: UserBubbleProps): React.ReactElement {
+  const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(content)
+  const [committing, setCommitting] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  // Sprint 14 PR B — draft state is only meaningful while editing; on
+  // exit (cancel/save) we don't care that draft drifts from content,
+  // because the read-only branch below never reads draft. enterEdit()
+  // resets draft to the current `content` at click time, so we don't
+  // need a useEffect to keep them in sync — that would also trip the
+  // react-hooks/no-set-state-in-effect lint per Sprint 18 review.
+
+  // Auto-focus + select on entering edit mode; the user can either
+  // type to replace or arrow-key to refine.
+  useEffect(() => {
+    if (!editing) return
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [editing])
+
+  const onEdit = handlers?.onEdit
+  const sessionStreaming = handlers?.isStreaming === true
+  const canEdit = onEdit !== undefined && !sessionStreaming
+  const canSave = canEdit && draft.trim().length > 0 && draft !== content && !committing
+
+  function enterEdit(): void {
+    if (!canEdit) return
+    setDraft(content)
+    setEditing(true)
+  }
+
+  function cancelEdit(): void {
+    setDraft(content)
+    setEditing(false)
+  }
+
+  async function commitEdit(): Promise<void> {
+    if (!canSave || !onEdit) return
+    setCommitting(true)
+    try {
+      await onEdit(messageId, draft)
+      setEditing(false)
+    } catch {
+      // Hook surfaces the failure via its `error` slot; keep the editor
+      // open so the user doesn't lose their typing on a transient IPC
+      // failure (the AIChatPanel banner explains what went wrong).
+    } finally {
+      setCommitting(false)
+    }
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
+    // ⌘↩ commits (matches Composer's send shortcut) — Escape cancels.
+    // Plain Enter is left untouched so users can insert newlines inside
+    // a multi-line edit; the prompt is freeform text, not a single-line
+    // input.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      void commitEdit()
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelEdit()
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-col items-end gap-1.5">
+        <textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={3}
+          aria-label={t('chat.message.editing')}
+          className={cn(
+            'w-[85%] max-w-[85%] rounded-lg rounded-br-sm px-3 py-2',
+            'bg-ink-3 text-ink-fg text-body leading-snug resize-y min-h-[60px] max-h-40',
+            'ring-1 ring-c-accent/40 focus:ring-c-accent focus:outline-none'
+          )}
+        />
+        <div className="flex items-center gap-1 text-meta font-mono text-ink-fg-2">
+          <button
+            type="button"
+            onClick={cancelEdit}
+            aria-label={t('chat.message.cancel')}
+            disabled={committing}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-0.5 rounded',
+              'hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast',
+              committing && 'opacity-50 cursor-not-allowed'
+            )}
+          >
+            <X size={11} strokeWidth={2} />
+            {t('chat.message.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void commitEdit()}
+            aria-label={t('chat.message.save')}
+            disabled={!canSave}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-0.5 rounded',
+              'transition-colors duration-fast',
+              canSave ? 'text-c-accent hover:bg-c-accent/15' : 'text-ink-fg-3 cursor-not-allowed'
+            )}
+          >
+            {committing ? (
+              <Loader2 size={11} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <Check size={11} strokeWidth={2} />
+            )}
+            {t('chat.message.save')}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex justify-end">
+    <div className="flex justify-end group">
+      {/* Edit affordance — hover-only chip to the left of the bubble.
+          group/group-hover keeps the icon out of the layout flow until
+          the user actually mouses over the message. Disabled with a
+          HoverTip when the session is streaming so we don't visually
+          suggest editing is OK and then silently no-op. */}
+      {onEdit !== undefined && (
+        <HoverTip
+          text={sessionStreaming ? t('chat.message.editBlocked') : t('chat.message.edit')}
+          side="top"
+        >
+          <button
+            type="button"
+            onClick={enterEdit}
+            disabled={!canEdit}
+            aria-label={t('chat.message.edit')}
+            className={cn(
+              'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              'transition-opacity duration-fast',
+              'self-center mr-1 p-1 rounded',
+              canEdit
+                ? 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3'
+                : 'text-ink-fg-3 cursor-not-allowed'
+            )}
+          >
+            <Pencil size={11} strokeWidth={2} />
+          </button>
+        </HoverTip>
+      )}
       <div
         className={cn(
           'max-w-[85%] rounded-lg rounded-br-sm px-3 py-2',
@@ -449,7 +719,8 @@ const AUTO_SCROLL_BAND_PX = 80
 export function MessageList({
   messages,
   streamingMessageId,
-  draftHandlers
+  draftHandlers,
+  userHandlers
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   // (opus M) CJK-safe class for the truncated / system divider strings —
@@ -491,7 +762,7 @@ export function MessageList({
     if (m.role === 'user') {
       rendered.push(
         <div key={m.id} className="px-3">
-          <UserBubble content={m.content} />
+          <UserBubble messageId={m.id} content={m.content} handlers={userHandlers} />
         </div>
       )
     } else if (m.role === 'assistant') {

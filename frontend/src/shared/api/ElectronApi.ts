@@ -20,6 +20,7 @@ import type {
   CalendarApi,
   CalendarExpandOpts,
   ChatApi,
+  ChatEditOpts,
   ChatMessage,
   ChatSession,
   ChatStartOpts,
@@ -62,6 +63,11 @@ import type {
   NotionWriteApi,
   PersistentSettings,
   PingResult,
+  PromptContent,
+  PromptInfo,
+  PromptSlot,
+  PromptsApi,
+  PromptWriteResult,
   RecurringDiscoverOpts,
   RecurringInviteItem,
   RecurringReplayOpts,
@@ -73,7 +79,8 @@ import type {
   SecretsStatus,
   SettingsApi,
   TargetLang,
-  TranslationResult,
+  TranslateBatchResult,
+  TranslationCache,
   UpdateFlagOpts,
   UpdaterApi,
   UpdaterStatus
@@ -307,6 +314,9 @@ class ElectronAttachmentApi implements AttachmentApi {
   async readDataUrl(attachmentId: number): Promise<string | null> {
     return (await invoker()('attachment:readDataUrl', attachmentId)) as string | null
   }
+  async download(attachmentId: number): Promise<string | null> {
+    return (await invoker()('attachment:download', attachmentId)) as string | null
+  }
 }
 
 // Mirror of TranslateEnvelope in src/electron/main/handlers/translate.ts.
@@ -314,12 +324,15 @@ class ElectronAttachmentApi implements AttachmentApi {
 // free. Codex review M-3 — Electron IPC does NOT preserve custom Error
 // properties; the envelope makes the failure shape explicit.
 type TranslateEnvelope =
-  | { ok: true; data: TranslationResult }
+  | { ok: true; data: TranslateBatchResult }
   | { ok: false; code: string; message: string }
 
 class ElectronAiApi implements AiApi {
-  async translate(internalId: number, targetLang?: TargetLang): Promise<TranslationResult> {
-    const env = (await invoker()('email:translate', {
+  async translateBatch(
+    internalId: number,
+    targetLang?: TargetLang
+  ): Promise<TranslateBatchResult> {
+    const env = (await invoker()('translate:batch', {
       internalId,
       targetLang
     })) as TranslateEnvelope
@@ -328,9 +341,23 @@ class ElectronAiApi implements AiApi {
     err.code = env.code
     throw err
   }
+  async getCached(
+    internalId: number,
+    targetLang?: TargetLang
+  ): Promise<TranslationCache | null> {
+    return (await invoker()(
+      'translation:get',
+      internalId,
+      targetLang
+    )) as TranslationCache | null
+  }
+  async deleteCached(internalId: number, targetLang?: TargetLang): Promise<boolean> {
+    return (await invoker()('translation:delete', internalId, targetLang)) as boolean
+  }
   abortTranslate(internalId: number): void {
-    // Fire-and-forget — main side just drops the AbortController. No reply
-    // needed; the in-flight `translate()` promise resolves with E_ABORTED.
+    // Fire-and-forget — main side aborts every in-flight batch for this id.
+    // No reply needed; the in-flight `translateBatch()` Promise returns
+    // whatever partial segments it had completed.
     sender()?.('email:translateAbort', internalId)
   }
 }
@@ -359,6 +386,28 @@ class ElectronChatApi implements ChatApi {
   }
   async listSessions(emailId: number): Promise<ChatSession[]> {
     return (await invoker()('chat:listSessions', emailId)) as ChatSession[]
+  }
+  async editMessage(opts: ChatEditOpts): Promise<ChatStartResult> {
+    // Same envelope shape as `start` — Electron IPC strips custom Error
+    // properties, so the main process wraps dispatch failures in
+    // `{ ok: false, code, message }`.
+    const env = (await invoker()('chat:editMessage', opts)) as ChatStartEnvelope
+    if (env.ok) return env.data
+    const err = new Error(env.message) as Error & { code?: string }
+    err.code = env.code
+    throw err
+  }
+  openPopout(emailId: number): void {
+    // Fire-and-forget; main process spawns the BrowserWindow + handles
+    // load + show lifecycle. Bad emailId is silently dropped by the
+    // handler — renderer validates the input upstream anyway.
+    if (!Number.isInteger(emailId) || emailId < 0) return
+    sender()?.('window:openChatPopout', emailId)
+  }
+  deleteSession(sessionId: number): void {
+    // Fire-and-forget — chat_db's CASCADE FK takes care of message rows.
+    if (!Number.isInteger(sessionId) || sessionId < 0) return
+    sender()?.('chat:deleteSession', sessionId)
   }
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
     return subscribe('chat:stream', (...args: unknown[]) => {
@@ -462,6 +511,18 @@ class ElectronServicesApi implements ServicesApi {
   }
 }
 
+class ElectronPromptsApi implements PromptsApi {
+  async list(): Promise<{ inbox: PromptInfo; sent: PromptInfo }> {
+    return (await invoker()('prompts:list')) as { inbox: PromptInfo; sent: PromptInfo }
+  }
+  async read(slot: PromptSlot): Promise<PromptContent> {
+    return (await invoker()('prompts:read', slot)) as PromptContent
+  }
+  async write(slot: PromptSlot, content: string): Promise<PromptWriteResult> {
+    return (await invoker()('prompts:write', { slot, content })) as PromptWriteResult
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
@@ -477,4 +538,5 @@ export class ElectronApi implements MailApi {
   events: EventsApi = new ElectronEventsApi()
   env: EnvApi = new ElectronEnvApi()
   services: ServicesApi = new ElectronServicesApi()
+  prompts: PromptsApi = new ElectronPromptsApi()
 }

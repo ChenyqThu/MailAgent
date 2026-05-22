@@ -15,6 +15,7 @@ import keytar from 'keytar'
 const SERVICE = 'ink.chenge.mailagent'
 const ACCOUNT_CLI = 'cli-api-key'
 const ACCOUNT_LLM = 'llm-api-key'
+const ACCOUNT_LLM_TRANSLATE = 'llm-translate-api-key'
 const ACCOUNT_CUSTOM_API = 'custom-api-key'
 
 async function readSecret(account: string): Promise<string | null> {
@@ -48,6 +49,16 @@ export async function clearLlmApiKey(): Promise<boolean> {
   return keytar.deletePassword(SERVICE, ACCOUNT_LLM)
 }
 
+export async function getLlmTranslateApiKey(): Promise<string | null> {
+  return readSecret(ACCOUNT_LLM_TRANSLATE)
+}
+export async function setLlmTranslateApiKey(value: string): Promise<void> {
+  return writeSecret(ACCOUNT_LLM_TRANSLATE, value)
+}
+export async function clearLlmTranslateApiKey(): Promise<boolean> {
+  return keytar.deletePassword(SERVICE, ACCOUNT_LLM_TRANSLATE)
+}
+
 export async function getCustomApiKey(): Promise<string | null> {
   return readSecret(ACCOUNT_CUSTOM_API)
 }
@@ -64,14 +75,21 @@ export async function clearCustomApiKey(): Promise<boolean> {
 export interface SecretsStatus {
   cliApiKey: boolean
   llmApiKey: boolean
+  llmTranslateApiKey: boolean
   customApiKey: boolean
 }
 
 export async function getSecretsStatus(): Promise<SecretsStatus> {
-  const [cli, llm, custom] = await Promise.all([getCliApiKey(), getLlmApiKey(), getCustomApiKey()])
+  const [cli, llm, llmTr, custom] = await Promise.all([
+    getCliApiKey(),
+    getLlmApiKey(),
+    getLlmTranslateApiKey(),
+    getCustomApiKey()
+  ])
   return {
     cliApiKey: cli !== null && cli.length > 0,
     llmApiKey: llm !== null && llm.length > 0,
+    llmTranslateApiKey: llmTr !== null && llmTr.length > 0,
     customApiKey: custom !== null && custom.length > 0
   }
 }

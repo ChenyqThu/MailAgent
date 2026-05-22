@@ -407,11 +407,12 @@ export interface CalendarApi {
 
 // ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------
 
-export type SecretSlot = 'cliApiKey' | 'llmApiKey' | 'customApiKey'
+export type SecretSlot = 'cliApiKey' | 'llmApiKey' | 'llmTranslateApiKey' | 'customApiKey'
 
 export interface SecretsStatus {
   cliApiKey: boolean
   llmApiKey: boolean
+  llmTranslateApiKey: boolean
   customApiKey: boolean
 }
 
@@ -465,30 +466,82 @@ export interface AttachmentApi {
    *  (cid: refs) substitute the data URL instead. Returns null when
    *  the file is missing or the read fails. */
   readDataUrl(attachmentId: number): Promise<string | null>
+  /** Copy the on-disk attachment into the user's ~/Downloads, returning the
+   *  final absolute path. Collides safely (appends `_1`, `_2`, …). Returns
+   *  null when the row has no on-disk content or the source file is missing.
+   *  Renderer cannot open `file://` URLs from the dev-server origin, so this
+   *  exists as the user-visible "download attachment" affordance. */
+  download(attachmentId: number): Promise<string | null>
 }
 
-// ---- Sprint 3 §2.2 — AI / translation surface ------------------------------
+// ---- Immersive translate (DB v12) ------------------------------------------
+//
+// 翻译路径双轨制：
+//   - Path A (LLM 分类顺带): src/llm_agent/runner.py 在 LLM 分类时同步返回
+//     translation_segments, 写 email_translation 表 (source='llm_agent').
+//   - Path B (用户按 "翻译"): translateBatch IPC, html-extractor 抽块级 →
+//     pLimit(2) batches of 10 → 写 email_translation 表 (source='on_demand').
+//
+// Renderer 不在乎是哪条路径写的, 拿到 segments 后让 EmailBodyFrame 通过
+// iframe.contentDocument 用 textContent.includes(src) fuzzy 配对 DOM 节点
+// 注入译文。
 
 export type TargetLang = 'zh' | 'en'
 
-export interface TranslationResult {
+export interface TranslationSegment {
+  /** Source paragraph plaintext, verbatim substring of the email body
+   *  paragraph. Used to fuzzy-match DOM nodes in the iframe via
+   *  `textContent.includes(src)`. */
+  src: string
+  /** Translation of the segment (Simplified Chinese, mainland usage). */
+  tgt: string
+}
+
+/** Cached translation envelope (returned by AiApi.getCached and AiApi.translateBatch). */
+export interface TranslationCache {
   internalId: number
   targetLang: TargetLang
-  translated: string
-  model: string
+  segments: TranslationSegment[]
+  /** Provenance — 'llm_agent' (Path A) | 'on_demand' (Path B). null on
+   *  ad-hoc results before they're persisted. */
+  source: string | null
+  /** Model that produced the translation; empty string if empty cache. */
+  model: string | null
+  /** Unix seconds when the cache row was written; null for un-persisted result. */
+  fetchedAt: number | null
+}
+
+/** Result of translateBatch — TranslationCache + batch run statistics. */
+export interface TranslateBatchResult extends TranslationCache {
   latencyMs: number
+  /** Number of batches that failed (LLM error / JSON parse / abort). When 0,
+   *  the translation is complete. Renderer shows a partial-failure banner
+   *  when this is > 0 but segments.length > 0. */
+  failedBatches: number
+  totalBatches: number
 }
 
 export interface AiApi {
   /**
-   * Translate `email_body.body_markdown` of `internalId` to `targetLang`
-   * (default 'zh'). Runs in main process; API key + endpoint stay there
-   * (REVIEW-LOG C-04). Errors carry a `code` property: E_NO_BODY /
-   * E_NO_LLM_KEY / E_UPSTREAM / E_ABORTED / E_EMPTY_RESPONSE / E_INVALID_ARG.
+   * Run an on-demand batch translation of an email's body (Path B). Extracts
+   * block-level paragraphs from body_html in the main process, batches them
+   * (10 per request, 2 concurrent), calls the LLM gateway, and writes the
+   * result to email_translation (DB v12). Returns the full TranslateBatchResult
+   * including failedBatches for partial-failure UX.
+   *
+   * API key + endpoint stay in the main process (REVIEW-LOG C-04). Errors
+   * carry `code`: E_NO_BODY / E_NO_LLM_KEY / E_INVALID_ARG / E_UPSTREAM.
    */
-  translate(internalId: number, targetLang?: TargetLang): Promise<TranslationResult>
-  /** Abort an in-flight translation by internalId. Renderer fires this when
-   *  switching emails so the stale request doesn't pollute the new view. */
+  translateBatch(internalId: number, targetLang?: TargetLang): Promise<TranslateBatchResult>
+  /** Read cached translation segments from email_translation table. Returns
+   *  null on cache miss. Used to render the immersive translation on email
+   *  open without re-running the LLM. */
+  getCached(internalId: number, targetLang?: TargetLang): Promise<TranslationCache | null>
+  /** Delete the cached translation row. Renderer fires this before
+   *  re-translation so the new run overwrites cleanly. */
+  deleteCached(internalId: number, targetLang?: TargetLang): Promise<boolean>
+  /** Abort all in-flight batches for `internalId`. Renderer fires this when
+   *  switching emails so stale batches don't keep CRS slots wedged. */
   abortTranslate(internalId: number): void
 }
 
@@ -587,6 +640,20 @@ export interface ChatStartOpts {
   backendAgentPageId?: string | null
 }
 
+// Sprint 14 PR B — inline message edit. The renderer sends the session +
+// the user-message id being edited + the replacement content + the same
+// backend choice fields chat.start uses (model can change between edits).
+// Backend truncates everything from `editingMessageId` onward, appends a
+// fresh user row with `newContent`, and re-streams the assistant turn.
+export interface ChatEditOpts {
+  sessionId: number
+  editingMessageId: number
+  newContent: string
+  backendKind: ChatBackendKind
+  backendModel?: string | null
+  backendAgentPageId?: string | null
+}
+
 export interface ChatStartResult {
   sessionId: number
   userMessageId: number
@@ -607,6 +674,28 @@ export interface ChatApi {
   abort(sessionId: number): void
   listMessages(sessionId: number): Promise<ChatMessage[]>
   listSessions(emailId: number): Promise<ChatSession[]>
+  /**
+   * Sprint 14 PR B — truncate session messages from `editingMessageId`
+   * onward, append a new user message with `newContent`, and re-stream
+   * the assistant reply. Throws `Error & { code }` on dispatch failure
+   * (E_INVALID_ARG / E_NOT_FOUND / E_BACKEND_UNAVAILABLE / E_DISPATCH).
+   * Only user-role messages can be edited.
+   */
+  editMessage(opts: ChatEditOpts): Promise<ChatStartResult>
+  /**
+   * Sprint 14 PR E — spawn a dedicated popout window pinned to the
+   * given email's AI chat. Fire-and-forget: the new window shows
+   * itself; no resolved promise. Same ai_chat.db backing store as the
+   * main inbox panel, so flipping between the two windows is
+   * transparent (WAL + busy_timeout already configured in chat_db.ts).
+   */
+  openPopout(emailId: number): void
+  /**
+   * Sprint 14 PR J — delete a session + its message rows (CASCADE).
+   * Fire-and-forget; caller (useEmailChat.deleteSession) updates
+   * renderer state synchronously after dispatching.
+   */
+  deleteSession(sessionId: number): void
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }
@@ -849,6 +938,34 @@ export interface ServicesApi {
   status(): Promise<ServiceStatus[]>
 }
 
+// ---- LLM prompt files ---------------------------------------------------
+
+export type PromptSlot = 'inbox' | 'sent'
+
+export interface PromptInfo {
+  slot: PromptSlot
+  path: string
+  exists: boolean
+}
+
+export interface PromptContent extends PromptInfo {
+  content: string
+}
+
+export type PromptWriteResult =
+  | { ok: true; info: PromptInfo }
+  | { ok: false; code: string; message: string }
+
+export interface PromptsApi {
+  /** List both prompt slots with their resolved on-disk paths. The renderer
+   *  uses `exists` to decide whether to surface a "未配置 / 保存后创建" hint. */
+  list(): Promise<{ inbox: PromptInfo; sent: PromptInfo }>
+  /** Read one prompt's content. Missing file returns `{exists:false, content:''}`. */
+  read(slot: PromptSlot): Promise<PromptContent>
+  /** Write content to the resolved path; auto-mkdir parent. */
+  write(slot: PromptSlot, content: string): Promise<PromptWriteResult>
+}
+
 export interface MailApi {
   email: EmailApi
   attachment: AttachmentApi
@@ -875,4 +992,6 @@ export interface MailApi {
    *  RestartBanner (PR E) "立即重启" CTA after env:set returns
    *  restartRequired=true. */
   services: ServicesApi
+  /** LLM prompt file CRUD (inbox / sent markdown). */
+  prompts: PromptsApi
 }

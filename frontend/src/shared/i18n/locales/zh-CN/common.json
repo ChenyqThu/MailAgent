@@ -55,10 +55,30 @@
     "moreProps": "{n, plural, =1 {更多属性 · 1} other {更多属性 · #}}",
     "fewerProps": "收起属性",
     "more": "more",
-    "less": "less"
+    "less": "less",
+    "lightbox": {
+      "ariaLabel": "图片预览",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "rotate": "旋转",
+      "reset": "重置",
+      "close": "关闭"
+    }
   },
   "ai": {
-    "compose": "起草回复"
+    "compose": "起草回复",
+    "replySuggestion": {
+      "collapse": "折叠",
+      "expand": "展开",
+      "edit": "编辑",
+      "save": "保存",
+      "cancel": "取消",
+      "craft": "创建草稿",
+      "crafting": "创建中…",
+      "copy": "复制",
+      "copied": "已复制",
+      "editedTag": "已编辑"
+    }
   },
   "toolbar": {
     "back": "返回",
@@ -158,6 +178,7 @@
     "retry": "重试",
     "showOriginal": "显示原文",
     "showTranslation": "显示译文",
+    "retranslate": "重新翻译",
     "noKey": "未配置 LLM API Key — 请在设置中配置",
     "noBody": "无正文可翻译",
     "banner": "AI 译文 · 仅供参考",
@@ -329,14 +350,41 @@
     "newChat": "新会话 · ⌘N",
     "newChatHint": "重置当前对话 · 下一次发送会开启新 session",
     "history": "会话历史",
-    "historyBlocked": "会话历史 · 等待 Sprint 14 侧栏",
+    "historyHint": "切换历史会话 · ⇧⌥H",
     "closePanel": "收起面板 · ⌘L",
+    "popout": {
+      "button": "在独立窗口打开 · ⇧⌥W",
+      "close": "关闭窗口"
+    },
+    "sidebar": {
+      "title": "会话历史",
+      "empty": "暂无历史会话 · 发送第一条消息后会出现在这里",
+      "newSession": "新会话",
+      "close": "关闭侧栏",
+      "itemAriaActive": "当前会话",
+      "itemAriaSwitch": "切换到此会话",
+      "messageCount": "{n, plural, =0 {0 条} =1 {1 条消息} other {# 条消息}}",
+      "untitled": "未命名会话",
+      "justNow": "刚刚",
+      "minutesAgo": "{n} 分钟前",
+      "hoursAgo": "{n} 小时前",
+      "daysAgo": "{n} 天前",
+      "delete": "删除会话",
+      "deleteConfirm": "确认删除 · 该操作不可撤销",
+      "deleteCancel": "取消"
+    },
     "backend": {
       "notionAgent": "Notion Agent",
       "customApi": "Custom API",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
-      "modelsLabel": "模型"
+      "modelsLabel": "模型",
+      "openSettings": "管理 AI 后端 · 设置 → AI"
+    },
+    "onboarding": {
+      "notConfigured": "{backend} 未配置",
+      "hint": "前往设置完成 {backend} 配置后即可在此与 AI 对话。",
+      "openSettings": "前往设置 → AI"
     },
     "context": {
       "title": "上下文",
@@ -362,24 +410,45 @@
       "copy": "复制",
       "toNotion": "转 Notion"
     },
+    "attachment": {
+      "remove": "移除附件"
+    },
+    "mention": {
+      "title": "引用邮件",
+      "searchAria": "搜索要引用的邮件",
+      "placeholder": "按关键字搜索邮件…",
+      "hint": "输入关键字以搜索可引用的邮件",
+      "noResults": "未找到与 \"{query}\" 相关的邮件",
+      "remove": "移除引用"
+    },
+    "message": {
+      "edit": "编辑 · 改后重新询问",
+      "editing": "编辑消息",
+      "editBlocked": "AI 正在回复 · 等回复完再编辑",
+      "save": "保存并重发 · ⌘↩",
+      "cancel": "取消 · Esc"
+    },
     "composer": {
       "placeholder": "/命令 或对这封邮件提问… (⌘↩ 发送)",
       "send": "发送",
       "sending": "发送中",
       "cancel": "取消",
       "regenerate": "重新生成",
-      "attach": "附件",
-      "attachBlocked": "附件上下文 · 等待 Sprint 14 接入",
-      "mention": "@提及上下文",
-      "mentionBlocked": "@提及 · 等待 Sprint 14 接入",
+      "attach": "添加附件 · ⌘O · 文本类直读，二进制仅传文件名",
+      "attachBlocked": "附件上下文 · 选中一封邮件后再使用",
+      "attachReadFail": "附件读取失败",
+      "mention": "@提及邮件上下文 · ⌘⇧M",
+      "mentionBlocked": "@提及 · 选中一封邮件后再使用",
       "model": "切换模型",
       "modelHint": "在 Backend selector 中切换模型 (Alt 行 chip)"
     },
     "draftReply": {
       "header": "草稿回复",
       "send": "发送",
+      "sendEdited": "发送编辑后的草稿",
       "sending": "打开 Mail.app 中…",
-      "edit": "编辑",
+      "edit": "编辑草稿",
+      "exitEdit": "取消编辑 · Esc",
       "regenerate": "重生成",
       "openInWindow": "在新窗口打开",
       "toast": {
@@ -678,6 +747,51 @@
       "model": {
         "label": "主模型",
         "helper": "fallback 失败时上抛 LLMCallError 进重试队列"
+      },
+      "prompts": {
+        "title": "Prompt 配置",
+        "helper": "LLM 邮件分类的 markdown 提示词文件路径与编辑入口",
+        "loading": "加载中…",
+        "save": "保存",
+        "saved": "已保存",
+        "saveFailed": "保存失败",
+        "loadFailed": "加载提示词失败",
+        "listFailed": "读取提示词列表失败",
+        "pathHint": "{path}",
+        "willCreate": "{path} (保存后自动创建)",
+        "placeholder": "用 markdown 编辑提示词;保存即生效(Python 端 mtime 热重载)",
+        "editButton": "编辑",
+        "editHelperExists": "{path}",
+        "editHelperMissing": "{path} · 当前文件不存在,点编辑后保存会自动创建",
+        "inbox": {
+          "pathLabel": "收件箱 prompt 路径",
+          "pathHelper": "相对仓库根目录;留空 = prompts/email_inbox.md",
+          "editLabel": "编辑收件箱 prompt",
+          "editTitle": "编辑收件箱 prompt"
+        },
+        "sent": {
+          "pathLabel": "发件箱 prompt 路径",
+          "pathHelper": "相对仓库根目录;留空 = prompts/email_sent.md",
+          "editLabel": "编辑发件箱 prompt",
+          "editTitle": "编辑发件箱 prompt"
+        }
+      },
+      "translate": {
+        "title": "邮件翻译",
+        "helper": "Electron 主进程翻译流水线;独立 gateway/key/model + 双语对照"
+      },
+      "translateBaseUrl": {
+        "label": "翻译网关 URL",
+        "helper": "留空 = 跟随主 LLM 网关; 可独立指向更快的翻译专用端点",
+        "placeholder": "留空跟随主网关"
+      },
+      "translateApiKey": {
+        "label": "翻译 API Key",
+        "helper": "留空 = 跟随主 LLM API Key; 双写 keychain + .env 独立计费/限额时设置"
+      },
+      "translateModel": {
+        "label": "翻译模型",
+        "helper": "邮件正文翻译专用; 默认 Haiku (~3-5× 比 Sonnet 快, 翻译质量足够)"
       },
       "fallbacks": {
         "label": "Fallback 链",

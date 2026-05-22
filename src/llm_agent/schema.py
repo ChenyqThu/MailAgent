@@ -83,16 +83,19 @@ EMAIL_TOOL_SCHEMA = {
             "ai_summary": {
                 "type": "string",
                 "description": (
-                    "2-4 句摘要。收件箱：这封邮件说了什么/我需要做什么；"
-                    "发件箱：我请求了什么/期望的响应是什么。最多 2000 字。"
+                    "**必须用简体中文（mainland 用法）写 2-4 句摘要**，即使原邮件是英文也要总结成中文。"
+                    "收件箱：这封邮件说了什么 / 我需要做什么；"
+                    "发件箱：我请求了什么 / 期望的响应是什么。"
+                    "URL / 邮件地址 / 代码标识符 / 产品名 / 人名保留 verbatim 不音译。最多 2000 字。"
                 ),
                 "maxLength": 2000,
             },
             "key_points": {
                 "type": "string",
                 "description": (
-                    "关键信息点，每条一行（待办事项、决策点、截止日期、数据、结论、风险）。"
+                    "**每行用简体中文**列出关键信息点（待办事项、决策点、截止日期、数据、结论、风险）。"
                     "多行用 \\n 分隔。没有则留空字符串。"
+                    "URL / 邮件地址 / 代码标识符 / 产品名保留 verbatim。"
                 ),
             },
             "category": {
@@ -172,6 +175,33 @@ EMAIL_TOOL_SCHEMA = {
                     "可选。若邮件与 reference context 中『当前重点项目』之一明确相关，"
                     "填项目名称；否则留空字符串。"
                 ),
+            },
+            "translation_segments": {
+                "type": "array",
+                "description": (
+                    "沉浸式翻译缓存 — 仅在 language != '中文' 时填写。"
+                    "按邮件正文段落（一个 <p>/<li>/<h*>/<td>/<blockquote> 算一段）的自然顺序输出。"
+                    "每个 segment.src 必须是邮件正文中该段落的 verbatim 子串（plaintext, 不含 "
+                    "markdown 标记, 长度 30-300 字符；过长段落取首句作为定位锚），用于程序后续 "
+                    "fuzzy 匹配 DOM 节点。tgt 是该段对应的简体中文 mainland 用法译文。"
+                    "保留 URL / 邮件地址 / 代码标识符 / 产品名 verbatim。"
+                    "中文邮件留空数组 []；不要为已是中文的段落生成翻译。"
+                ),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["src", "tgt"],
+                    "properties": {
+                        "src": {
+                            "type": "string",
+                            "description": "原文段落 verbatim 子串（plaintext, 30-300 字符）。",
+                        },
+                        "tgt": {
+                            "type": "string",
+                            "description": "简体中文译文。",
+                        },
+                    },
+                },
             },
         },
     },

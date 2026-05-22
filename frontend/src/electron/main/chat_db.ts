@@ -392,6 +392,29 @@ export function getMessage(messageId: number): ChatMessage | null {
 }
 
 /**
+ * Sprint 14 PR B — delete `fromMessageId` and every message in the same
+ * session that came after it (inclusive of `fromMessageId`). Used by
+ * inline edit: editing a user message truncates the conversation back
+ * to that turn so the dispatcher can re-stream a fresh assistant reply.
+ *
+ * Returns the number of rows removed. Idempotent — calling on an empty
+ * range silently returns 0 instead of throwing.
+ *
+ * Why `>= ?` rather than `> ?`: the caller appends a fresh user message
+ * via `appendMessage` after this returns; keeping the old user row would
+ * leave duplicate user turns in the history. We delete the whole tail
+ * and recreate the edit as a new row to keep `created_at` ordering
+ * truthful.
+ */
+export function deleteMessagesFromId(sessionId: number, fromMessageId: number): number {
+  const db = getChatDb()
+  const result = db
+    .prepare('DELETE FROM ai_chat_messages WHERE session_id = ? AND id >= ?')
+    .run(sessionId, fromMessageId)
+  return result.changes
+}
+
+/**
  * Mark any in-flight (streaming / pending) message in this session as
  * aborted. Called when the renderer switches the active email or the
  * panel is closed mid-stream. Returns the number of rows flipped (used

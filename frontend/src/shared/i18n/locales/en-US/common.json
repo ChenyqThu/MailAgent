@@ -55,10 +55,30 @@
     "moreProps": "{n, plural, =1 {1 more property} other {# more properties}}",
     "fewerProps": "Fewer properties",
     "more": "more",
-    "less": "less"
+    "less": "less",
+    "lightbox": {
+      "ariaLabel": "Image preview",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "rotate": "Rotate",
+      "reset": "Reset",
+      "close": "Close"
+    }
   },
   "ai": {
-    "compose": "Draft reply"
+    "compose": "Draft reply",
+    "replySuggestion": {
+      "collapse": "Collapse",
+      "expand": "Expand",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "craft": "Craft Draft",
+      "crafting": "Crafting…",
+      "copy": "Copy",
+      "copied": "Copied",
+      "editedTag": "edited"
+    }
   },
   "toolbar": {
     "back": "Back",
@@ -158,6 +178,7 @@
     "retry": "Retry",
     "showOriginal": "Show original",
     "showTranslation": "Show translation",
+    "retranslate": "Re-translate",
     "noKey": "LLM API Key not configured — set it in Settings",
     "noBody": "No body to translate",
     "banner": "AI translation · for reference only",
@@ -329,14 +350,41 @@
     "newChat": "New chat · ⌘N",
     "newChatHint": "Reset the current thread · next send opens a fresh session",
     "history": "History",
-    "historyBlocked": "Chat history · awaiting Sprint 14 sidebar",
+    "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
+    "popout": {
+      "button": "Open in window · ⇧⌥W",
+      "close": "Close window"
+    },
+    "sidebar": {
+      "title": "History",
+      "empty": "No previous sessions · send the first message to start one",
+      "newSession": "New chat",
+      "close": "Close sidebar",
+      "itemAriaActive": "Current session",
+      "itemAriaSwitch": "Switch to this session",
+      "messageCount": "{n, plural, =0 {0 messages} =1 {1 message} other {# messages}}",
+      "untitled": "Untitled session",
+      "justNow": "just now",
+      "minutesAgo": "{n}m ago",
+      "hoursAgo": "{n}h ago",
+      "daysAgo": "{n}d ago",
+      "delete": "Delete session",
+      "deleteConfirm": "Confirm delete · cannot be undone",
+      "deleteCancel": "Cancel"
+    },
     "backend": {
       "notionAgent": "Notion Agent",
       "customApi": "Custom API",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
-      "modelsLabel": "Models"
+      "modelsLabel": "Models",
+      "openSettings": "Manage AI backends · Settings → AI"
+    },
+    "onboarding": {
+      "notConfigured": "{backend} not configured",
+      "hint": "Finish the {backend} setup to start a conversation here.",
+      "openSettings": "Go to Settings → AI"
     },
     "context": {
       "title": "Context",
@@ -362,24 +410,45 @@
       "copy": "Copy",
       "toNotion": "To Notion"
     },
+    "attachment": {
+      "remove": "Remove attachment"
+    },
+    "mention": {
+      "title": "Mention emails",
+      "searchAria": "Search emails to mention",
+      "placeholder": "Search by keyword…",
+      "hint": "Type a keyword to search referenceable emails",
+      "noResults": "No emails match \"{query}\"",
+      "remove": "Remove mention"
+    },
+    "message": {
+      "edit": "Edit · resend",
+      "editing": "Editing message",
+      "editBlocked": "Wait for the reply to finish before editing",
+      "save": "Save & resend · ⌘↩",
+      "cancel": "Cancel · Esc"
+    },
     "composer": {
       "placeholder": "/command or ask about this email… (⌘↩ send)",
       "send": "Send",
       "sending": "Sending",
       "cancel": "Cancel",
       "regenerate": "Regenerate",
-      "attach": "Attach",
-      "attachBlocked": "Attach context · awaiting Sprint 14 wiring",
-      "mention": "@mention",
-      "mentionBlocked": "@mention · awaiting Sprint 14 wiring",
+      "attach": "Attach file · ⌘O · text inlined, binary as metadata only",
+      "attachBlocked": "Attach context · pick an active email first",
+      "attachReadFail": "Attachment read failed",
+      "mention": "@-mention email context · ⌘⇧M",
+      "mentionBlocked": "@-mention · pick an active email first",
       "model": "Switch model",
       "modelHint": "Switch model in the Backend selector (Alt row chips)"
     },
     "draftReply": {
       "header": "Draft reply",
       "send": "Send",
+      "sendEdited": "Send edited draft",
       "sending": "Opening in Mail.app…",
-      "edit": "Edit",
+      "edit": "Edit draft",
+      "exitEdit": "Cancel edit · Esc",
       "regenerate": "Regenerate",
       "openInWindow": "Open in window",
       "toast": {
@@ -678,6 +747,51 @@
       "model": {
         "label": "Primary model",
         "helper": "If all fallbacks fail, errors are queued for retry"
+      },
+      "prompts": {
+        "title": "Prompt configuration",
+        "helper": "Markdown prompt file paths + in-place editor for the Python LLM agent",
+        "loading": "Loading…",
+        "save": "Save",
+        "saved": "Saved",
+        "saveFailed": "Save failed",
+        "loadFailed": "Failed to load prompt",
+        "listFailed": "Failed to list prompts",
+        "pathHint": "{path}",
+        "willCreate": "{path} (will be created on save)",
+        "placeholder": "Edit the prompt in markdown. Saved files reload via mtime watch.",
+        "editButton": "Edit",
+        "editHelperExists": "{path}",
+        "editHelperMissing": "{path} · file does not exist; saving in the editor will create it",
+        "inbox": {
+          "pathLabel": "Inbox prompt path",
+          "pathHelper": "Relative to repo root; empty = prompts/email_inbox.md",
+          "editLabel": "Edit inbox prompt",
+          "editTitle": "Edit inbox prompt"
+        },
+        "sent": {
+          "pathLabel": "Sent prompt path",
+          "pathHelper": "Relative to repo root; empty = prompts/email_sent.md",
+          "editLabel": "Edit sent prompt",
+          "editTitle": "Edit sent prompt"
+        }
+      },
+      "translate": {
+        "title": "Email translation",
+        "helper": "Electron-main translation pipeline; independent gateway/key/model + bilingual"
+      },
+      "translateBaseUrl": {
+        "label": "Translation gateway URL",
+        "helper": "Empty = follow the main LLM gateway; can point at a faster dedicated endpoint",
+        "placeholder": "Empty = follow main gateway"
+      },
+      "translateApiKey": {
+        "label": "Translation API key",
+        "helper": "Empty = follow main LLM key; dual-writes to keychain + .env when set"
+      },
+      "translateModel": {
+        "label": "Translation model",
+        "helper": "Used only for email translation; defaults to Haiku (~3-5× faster than Sonnet, quality is enough)"
       },
       "fallbacks": {
         "label": "Fallback chain",

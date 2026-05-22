@@ -29,14 +29,32 @@
 //   llm_processing, json_each(labels_json)"
 
 import { useState } from 'react'
-import { BadgeCheck, ClipboardCheck, Clock, Copy, Cpu, MessageSquare, Sparkles } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import {
+  BadgeCheck,
+  ChevronDown,
+  ClipboardCheck,
+  Clock,
+  Copy,
+  Cpu,
+  FilePenLine,
+  MessageSquare,
+  Pencil,
+  Sparkles
+} from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { toastError, toastSuccess } from '@shared/state/toast'
 import type { AIFields, AIPriority } from '@shared/api/types'
 
 interface Props {
   fields: AIFields
+  /** Sprint 18 follow-up — required by the Reply Suggestion `Craft` button
+   *  to call `email.createDraft({ internalId, body })`. EmailDetail passes
+   *  `email.internal_id` straight through. */
+  internalId: number
 }
 
 const PRIORITY_TONE: Record<AIPriority, string> = {
@@ -88,13 +106,46 @@ function GridCell({ label, value }: CellSpec): React.ReactElement {
 
 // Reply Suggestion content is markdown the LLM wrote (see
 // llm_agent/processor.py:185 prompt — "`reply_suggestion_md` 仅在
-// action_required=true 时填"). We render it preformatted so the user
-// sees the source they can paste/edit, with a one-click copy button.
-function ReplyDraftHero({ markdown }: { markdown: string }): React.ReactElement {
+// action_required=true 时填"). Sprint 18 follow-up bolts on:
+//   · collapse toggle (default expanded; chevron flips state)
+//   · inline Edit (textarea → Save commits to local state, Copy + Craft
+//     pick up the edited copy until the AI re-runs and overwrites markdown)
+//   · Craft button — round-trips through email.createDraft to open a
+//     Mail.app reply window prefilled with the (possibly edited) body.
+function ReplyDraftHero({
+  markdown,
+  internalId
+}: {
+  markdown: string
+  internalId: number
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const mailApi = useMailApi()
   const [copied, setCopied] = useState(false)
+  // Default collapsed — Reply Suggestion is one strip among many on the
+  // email detail; user opens it explicitly when they want to act on it.
+  const [collapsed, setCollapsed] = useState(true)
+  const [editing, setEditing] = useState(false)
+  const [editedBody, setEditedBody] = useState(markdown)
+  const [crafting, setCrafting] = useState(false)
+
+  // Reset edited body when a fresh AI reply overwrites markdown — but only
+  // when the user is NOT actively editing, so an in-progress edit survives
+  // a no-op rerender. Mirrors the DraftPreviewCard pattern in chat/MessageList.
+  const [lastMarkdown, setLastMarkdown] = useState(markdown)
+  if (markdown !== lastMarkdown) {
+    setLastMarkdown(markdown)
+    if (!editing) setEditedBody(markdown)
+  }
+
+  // Effective body for Copy / Craft. We treat any divergence from the
+  // original `markdown` as a user edit and stick with it; reverting is
+  // available via "Cancel" while editing or by clearing the textarea.
+  const effectiveBody = editedBody !== markdown ? editedBody : markdown
+
   const copy = async (): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(markdown)
+      await navigator.clipboard.writeText(effectiveBody)
       setCopied(true)
       setTimeout(() => setCopied(false), 1400)
     } catch {
@@ -102,6 +153,48 @@ function ReplyDraftHero({ markdown }: { markdown: string }): React.ReactElement 
       // selectable so the user can ⌘C manually.
     }
   }
+
+  const craft = async (): Promise<void> => {
+    if (crafting) return
+    setCrafting(true)
+    try {
+      await mailApi.email.createDraft({ internalId, body: effectiveBody })
+      toastSuccess(t('chat.draftReply.toast.sendOk'))
+    } catch (err) {
+      const e = err as { code?: string; message?: string }
+      const key =
+        e.code === 'E_AUTOMATION_DENIED'
+          ? 'chat.draftReply.toast.sendFailAuto'
+          : e.code === 'E_MAIL_NOT_RUNNING'
+            ? 'chat.draftReply.toast.sendFailMail'
+            : e.code === 'E_NO_MAILBOX' || e.code === 'E_NOT_FOUND'
+              ? 'chat.draftReply.toast.sendFailNoBin'
+              : 'chat.draftReply.toast.sendFailGeneric'
+      const detail = e.code ? `${e.code} · ${e.message ?? ''}` : (e.message ?? String(err))
+      toastError(t(key), detail)
+    } finally {
+      setCrafting(false)
+    }
+  }
+
+  const cancelEdit = (): void => {
+    setEditing(false)
+    setEditedBody(markdown)
+  }
+  const saveEdit = (): void => {
+    setEditing(false)
+  }
+  const startEdit = (): void => {
+    setEditedBody(effectiveBody)
+    setEditing(true)
+    setCollapsed(false)
+  }
+
+  const actionBtn =
+    'inline-flex items-center gap-1 px-2 py-1 rounded text-micro ' +
+    'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast ' +
+    'disabled:opacity-50 disabled:hover:bg-transparent'
+
   return (
     <div
       className="aif-reply px-4 py-2.5 border-b border-ink-border"
@@ -110,48 +203,129 @@ function ReplyDraftHero({ markdown }: { markdown: string }): React.ReactElement 
         boxShadow: 'inset 0 0 0 1px rgb(var(--c-accent) / 0.12)'
       }}
     >
-      <div className="flex items-center gap-2 mb-1">
-        <MessageSquare size={11} strokeWidth={2.25} className="text-coral" />
-        <span
-          className="text-micro font-mono uppercase tracking-wider text-coral"
-          style={{ letterSpacing: '0.08em' }}
-        >
-          Reply Suggestion
-        </span>
+      <div className={cn('flex items-center gap-2', !collapsed && 'mb-1')}>
+        {/* Whole title strip is a single click target — chevron + icon +
+            caption all flip the collapsed state. Chevron rotates rather
+            than swapping ChevronRight/ChevronDown so the vertical
+            metrics stay identical between states (was a ~1px header
+            jitter on toggle). Negative margins keep the hover halo
+            tight without shifting siblings. */}
         <button
           type="button"
-          onClick={copy}
-          aria-label="Copy reply draft"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-label={t(collapsed ? 'ai.replySuggestion.expand' : 'ai.replySuggestion.collapse')}
+          aria-expanded={!collapsed}
           className={cn(
-            'ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded',
-            'text-[10px] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4',
-            'transition-colors duration-fast'
+            // Same vertical box as actionBtn (px-2 py-1) so the row height
+            // doesn't change between collapsed (button alone) and expanded
+            // (button + Edit/Craft/Copy siblings) states — otherwise the
+            // title gets re-centered 2px lower when the taller actionBtn
+            // siblings appear.
+            'flex items-center gap-2 -ml-2 px-2 py-1 rounded cursor-pointer',
+            'hover:bg-coral/10 transition-colors duration-fast'
           )}
         >
-          {copied ? (
-            <ClipboardCheck size={10} strokeWidth={2.25} />
-          ) : (
-            <Copy size={10} strokeWidth={2.25} />
-          )}
-          {copied ? 'Copied' : 'Copy'}
+          <ChevronDown
+            size={12}
+            strokeWidth={2.25}
+            className={cn(
+              'text-coral transition-transform duration-fast',
+              collapsed && '-rotate-90'
+            )}
+          />
+          <MessageSquare size={12} strokeWidth={2.25} className="text-coral" />
+          <span
+            className="text-micro font-mono uppercase tracking-wider text-coral"
+            style={{ letterSpacing: '0.08em' }}
+          >
+            Reply Suggestion
+            {editedBody !== markdown && (
+              <span className="ml-1 text-ink-fg-2 normal-case">
+                · {t('ai.replySuggestion.editedTag')}
+              </span>
+            )}
+          </span>
         </button>
-      </div>
-      <pre
-        className={cn(
-          'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
-          // Sprint 14 round 14 — no max-height / inner scrollbar; the
-          // outer email-pane container is the single scroll surface,
-          // long replies push the rest of the page down.  User: "邮件
-          // 标题、元数据、AI Field、正文内容应该在一个页面,用一个滚动条".
+        {!collapsed && (
+          <div className="ml-auto flex items-center gap-1">
+            {editing ? (
+              <>
+                <button type="button" onClick={cancelEdit} className={actionBtn}>
+                  {t('ai.replySuggestion.cancel')}
+                </button>
+                <button type="button" onClick={saveEdit} className={actionBtn}>
+                  <ClipboardCheck size={12} strokeWidth={2.25} />
+                  {t('ai.replySuggestion.save')}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={startEdit}
+                  aria-label={t('ai.replySuggestion.edit')}
+                  className={actionBtn}
+                >
+                  <Pencil size={12} strokeWidth={2.25} />
+                  {t('ai.replySuggestion.edit')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void craft()}
+                  disabled={crafting || effectiveBody.trim().length === 0}
+                  aria-label={t('ai.replySuggestion.craft')}
+                  className={actionBtn}
+                >
+                  <FilePenLine size={12} strokeWidth={2.25} />
+                  {t(crafting ? 'ai.replySuggestion.crafting' : 'ai.replySuggestion.craft')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void copy()}
+                  aria-label={t('ai.replySuggestion.copy')}
+                  className={actionBtn}
+                >
+                  {copied ? (
+                    <ClipboardCheck size={12} strokeWidth={2.25} />
+                  ) : (
+                    <Copy size={12} strokeWidth={2.25} />
+                  )}
+                  {t(copied ? 'ai.replySuggestion.copied' : 'ai.replySuggestion.copy')}
+                </button>
+              </>
+            )}
+          </div>
         )}
-      >
-        {markdown}
-      </pre>
+      </div>
+      {!collapsed &&
+        (editing ? (
+          <textarea
+            value={editedBody}
+            onChange={(e) => setEditedBody(e.target.value)}
+            rows={Math.min(Math.max(editedBody.split('\n').length, 5), 16)}
+            className={cn(
+              'w-full mt-1 px-2 py-1.5 rounded border border-ink-border-soft',
+              'bg-ink-2 text-aux text-ink-fg leading-snug font-sans',
+              'focus:outline-none focus:border-coral resize-y'
+            )}
+          />
+        ) : (
+          <pre
+            className={cn(
+              'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
+              // Sprint 14 round 14 — no max-height / inner scrollbar; the
+              // outer email-pane container is the single scroll surface,
+              // long replies push the rest of the page down.
+            )}
+          >
+            {effectiveBody}
+          </pre>
+        ))}
     </div>
   )
 }
 
-export function AIFieldsBlock({ fields }: Props): React.ReactElement {
+export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement {
   const raw = fields.labels_raw
   const reviewed = fields.ai_review_status === 'reviewed'
   const pending = fields.ai_review_status === 'pending'
@@ -270,8 +444,9 @@ export function AIFieldsBlock({ fields }: Props): React.ReactElement {
         </div>
       )}
 
-      {/* Reply Suggestion hero — accent-ringed draft card with copy. */}
-      {replyMarkdown && <ReplyDraftHero markdown={replyMarkdown} />}
+      {/* Reply Suggestion hero — accent-ringed draft card with collapse /
+          edit / craft (open Mail.app draft) / copy actions. */}
+      {replyMarkdown && <ReplyDraftHero markdown={replyMarkdown} internalId={internalId} />}
 
       {/* 3-col secondary grid — bg-ink-border gutter + bg-ink-3 cells. */}
       {cells.length > 0 && (

@@ -2,6 +2,15 @@
 
 你在处理 Lucien 发件箱里的邮件。核心问题：**我发出的邮件，对方响应了吗？我需要跟进吗？**
 
+## 输出语言（硬约束）
+
+- **`ai_summary` / `key_points` / `urgency_reason` 用简体中文（mainland 用法）。** 即使原邮件是英文，summary 也必须翻译/总结成中文 — Lucien 的工作 UI 是中文，英文 summary 等于没总结。
+- `ai_summary` 中文写 2-4 句：我请求了什么 / 期望的响应 / 当前等待状态。
+- `key_points` 每行中文。URL / 邮件地址 / 代码标识符 / 产品名 / 人名保留 verbatim。
+- `urgency_reason` 中文 1-3 句。
+- `reply_suggestion_md`（reminder 草稿）跟随原邮件语言。
+- 枚举字段严格按 schema enum 给值。
+
 ## 分析顺序
 1. 读 Subject + 正文首段，理清我的请求 / 问题 / 通知。
 2. 看 To / CC，识别收件人身份（对照 reference context 里的 Sender Priority 映射，此时语义变为「收件人重要性」）。
@@ -60,3 +69,19 @@
 
 ## Daily Digest Date
 跟收件箱规则一样：邮件 Date 转 **UTC+8（Asia/Shanghai）** 的日期，格式 `YYYY-MM-DD`。不确定留空。
+
+## Translation Segments（沉浸式翻译，**英文/非中文邮件必填**）
+
+**触发条件**：`language` 判定结果 != `中文` → 必须填 `translation_segments`。`language='中文'` → 留空数组 `[]`。
+
+**程序契约**：后端会自动把 `translation_segments` 写进 SQLite 缓存 (`email_translation.segments_json`)；前端 UI 打开此邮件时按段落渲染中文译文到原文下方。漏填会导致用户手动点 "翻译" 重跑（浪费 token），形状错误等同漏填。
+
+规则与收件箱一致：
+
+- **段落定义**: 一个 `<p>` / `<li>` / `<h1-h6>` / `<td>` / `<blockquote>` 算一段；空行分隔的自然段亦然。
+- **`src`**: 原文 plaintext verbatim 子串，30-300 字符；长段取首句锚。不带 markdown 标记。**程序用 `textContent.includes(src)` 匹配 DOM，src 偏离原文则 inject 失败。**
+- **`tgt`**: 简体中文 mainland 用法译文，保留 URL / 邮件地址 / 代码标识符 / 人名 verbatim。
+- 中文邮件留空数组 `[]`。
+- 顺序与邮件正文一致；跳过纯标点 / 短于 4 字符 / 已是中文的段落。
+
+发件箱的 LLM 调用频率比收件箱低（每天通常只有几封发件），写入 `translation_segments` 对 token 成本影响很小。

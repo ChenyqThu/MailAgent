@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  appendMessage,
   closeChatDb,
   getOrCreateSession,
   listMessages,
@@ -22,6 +23,7 @@ import {
 import {
   abortAllChatSessions,
   abortChatSession,
+  editChatMessage,
   startChat,
   __resetChatDispatcher,
   type StreamSink
@@ -697,5 +699,174 @@ describe('dispatcher — sink behaviour', () => {
     // (dispatcher classified the sink throw as a backend crash) — we
     // accept both, but assistant must NOT be left at 'streaming'.
     expect(['complete', 'error']).toContain(assistant.status)
+  })
+})
+
+// Sprint 14 PR B — inline edit (truncate + re-stream).
+describe('dispatcher — editChatMessage', () => {
+  test('truncates tail + appends new user/assistant + streams reply', async () => {
+    registerChatBackend(
+      fakeBackend('custom-api', [
+        { type: 'chunk', delta: 'edited reply' },
+        { type: 'done', finalContent: 'edited reply', model: 'claude' }
+      ])
+    )
+    // Seed a session with a user→assistant→user→assistant tail.
+    const session = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    const userA = appendMessage({
+      sessionId: session.id,
+      role: 'user',
+      content: 'first ask',
+      status: 'complete'
+    })
+    appendMessage({
+      sessionId: session.id,
+      role: 'assistant',
+      content: 'first reply',
+      status: 'complete'
+    })
+    const userB = appendMessage({
+      sessionId: session.id,
+      role: 'user',
+      content: 'second ask',
+      status: 'complete'
+    })
+    appendMessage({
+      sessionId: session.id,
+      role: 'assistant',
+      content: 'second reply',
+      status: 'complete'
+    })
+
+    const sink = recordingSink()
+    const result = await editChatMessage(
+      {
+        sessionId: session.id,
+        editingMessageId: userB.id,
+        newContent: 'edited ask',
+        backendKind: 'custom-api',
+        backendModel: 'claude',
+        backendAgentPageId: null
+      },
+      sink
+    )
+    expect(result.sessionId).toBe(session.id)
+    await tickAsync(8)
+
+    const after = listMessages(session.id)
+    // userA + its assistant reply survive; userB + tail were truncated;
+    // editChatMessage appended a fresh user + assistant pair.
+    expect(after).toHaveLength(4)
+    expect(after.map((m) => m.content)).toEqual([
+      'first ask',
+      'first reply',
+      'edited ask',
+      'edited reply'
+    ])
+    expect(after[2].role).toBe('user')
+    expect(after[3].role).toBe('assistant')
+    expect(after[3].status).toBe('complete')
+    // Original userB id is gone (the row was truncated, not reused).
+    expect(after.find((m) => m.id === userB.id)).toBeUndefined()
+    expect(after.find((m) => m.id === userA.id)).toBeDefined()
+  })
+
+  test('rejects an assistant message id with E_INVALID_ARG', async () => {
+    registerChatBackend(fakeBackend('custom-api', [{ type: 'done', finalContent: '' }]))
+    const session = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    appendMessage({ sessionId: session.id, role: 'user', content: 'q', status: 'complete' })
+    const assistant = appendMessage({
+      sessionId: session.id,
+      role: 'assistant',
+      content: 'a',
+      status: 'complete'
+    })
+
+    await expect(
+      editChatMessage(
+        {
+          sessionId: session.id,
+          editingMessageId: assistant.id,
+          newContent: 'try edit assistant',
+          backendKind: 'custom-api',
+          backendModel: 'claude',
+          backendAgentPageId: null
+        },
+        recordingSink()
+      )
+    ).rejects.toMatchObject({ code: 'E_INVALID_ARG' })
+    // Existing rows untouched on rejection.
+    expect(listMessages(session.id)).toHaveLength(2)
+  })
+
+  test('rejects an unknown session with E_NOT_FOUND', async () => {
+    registerChatBackend(fakeBackend('custom-api', [{ type: 'done', finalContent: '' }]))
+    await expect(
+      editChatMessage(
+        {
+          sessionId: 9999,
+          editingMessageId: 1,
+          newContent: 'x',
+          backendKind: 'custom-api',
+          backendModel: null,
+          backendAgentPageId: null
+        },
+        recordingSink()
+      )
+    ).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+  })
+
+  test('rejects an editingMessageId that belongs to a different session', async () => {
+    registerChatBackend(fakeBackend('custom-api', [{ type: 'done', finalContent: '' }]))
+    const sessionA = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    const sessionB = getOrCreateSession({ emailId: 102, backendKind: 'custom-api' })
+    const orphan = appendMessage({
+      sessionId: sessionB.id,
+      role: 'user',
+      content: 'wrong session',
+      status: 'complete'
+    })
+
+    await expect(
+      editChatMessage(
+        {
+          sessionId: sessionA.id,
+          editingMessageId: orphan.id,
+          newContent: 'cross-session',
+          backendKind: 'custom-api',
+          backendModel: null,
+          backendAgentPageId: null
+        },
+        recordingSink()
+      )
+    ).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    expect(listMessages(sessionB.id)).toHaveLength(1)
+  })
+
+  test('rejects empty newContent before touching the DB', async () => {
+    registerChatBackend(fakeBackend('custom-api', [{ type: 'done', finalContent: '' }]))
+    const session = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    const user = appendMessage({
+      sessionId: session.id,
+      role: 'user',
+      content: 'q',
+      status: 'complete'
+    })
+
+    await expect(
+      editChatMessage(
+        {
+          sessionId: session.id,
+          editingMessageId: user.id,
+          newContent: '',
+          backendKind: 'custom-api',
+          backendModel: null,
+          backendAgentPageId: null
+        },
+        recordingSink()
+      )
+    ).rejects.toThrow(/non-empty string/)
+    // Pre-validation rejection: the user row remains untouched.
+    expect(listMessages(session.id)).toHaveLength(1)
   })
 })

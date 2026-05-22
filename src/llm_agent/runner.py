@@ -22,7 +22,7 @@ from loguru import logger
 from src.config import config as cfg
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.reader import EmailReader
-from src.repository import AttachmentStore, EmailRepository
+from src.repository import AttachmentStore, EmailRepository, TranslationRepository
 
 from .client import LLMCallError
 from .notion_writer import AIFieldsWriter
@@ -89,6 +89,10 @@ class LLMRunner:
         self._store = store or LLMProcessingStore(db_path=effective_db_path)
         self._arm: Optional[AppleScriptArm] = None
         self._reader: Optional[EmailReader] = None
+        # v12 沉浸式翻译: LLM 分类时 tool_use 顺带返回 translation_segments,
+        # 在 mark_success 之前写入 email_translation 缓存表 (Path A)。
+        # 失败静默 — 翻译是 nice-to-have, 不阻 LLM 分类主流程。
+        self._translation_repo = TranslationRepository(db_path=effective_db_path)
 
     async def close(self):
         try:
@@ -210,6 +214,22 @@ class LLMRunner:
 
         if not dry_run:
             self._store.mark_success(internal_id, labels, page_id=notion_page_id)
+            # v12 Path A: LLM 分类顺带翻译写入缓存。仅在 LLM 返回 translation_segments
+            # 且 language != '中文' 时写; processor._parse 已经做了 language 过滤,
+            # 这里只需检查 segments 非空。任何失败 (FK / DB lock / json 等) silent
+            # warning, 不冲掉 mark_success 的成功状态。
+            if labels.translation_segments:
+                try:
+                    self._translation_repo.save_segments(
+                        internal_id,
+                        labels.translation_segments,
+                        model=labels.model,
+                        source="llm_agent",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[llm-runner] translation save failed for internal_id={internal_id}: {e}"
+                    )
 
         return {
             "ok": True,

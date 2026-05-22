@@ -15,6 +15,7 @@
 import { BrowserWindow, ipcMain } from 'electron'
 
 import {
+  deleteSession,
   listMessages,
   listSessionsForEmail,
   type BackendKind,
@@ -24,6 +25,7 @@ import {
 import {
   abortAllChatSessions,
   abortChatSession,
+  editChatMessage,
   makeWebContentsSink,
   startChat,
   type StartChatResult
@@ -32,6 +34,19 @@ import {
 export interface ChatStartOpts {
   emailId: number
   message: string
+  backendKind: BackendKind
+  backendModel?: string | null
+  backendAgentPageId?: string | null
+}
+
+// Sprint 14 PR B — payload for inline message edit. Same backend choice
+// shape as ChatStartOpts so the IPC layer can keep a single envelope
+// type; only the body changes (sessionId + editingMessageId + newContent
+// instead of emailId + message).
+export interface ChatEditOpts {
+  sessionId: number
+  editingMessageId: number
+  newContent: string
   backendKind: BackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
@@ -99,6 +114,76 @@ export function registerChatHandlers(): void {
     if (!Number.isInteger(emailId) || emailId < 0) return []
     return listSessionsForEmail(emailId)
   })
+
+  // Sprint 14 PR J — sidebar trash icon → user-confirmed delete.
+  // CASCADE FK on ai_chat_messages drops the message rows automatically;
+  // any in-flight stream on that session was already aborted by the
+  // renderer (useEmailChat.deleteSession calls chat.abort first). Bad
+  // sessionId silently no-ops because Number.isInteger gate above keeps
+  // garbage from the SQLite layer.
+  ipcMain.on('chat:deleteSession', (_evt, sessionId: number) => {
+    if (!Number.isInteger(sessionId) || sessionId < 0) return
+    deleteSession(sessionId)
+  })
+
+  // Sprint 14 PR B — chat:editMessage. Same envelope shape as chat:start
+  // (renderer awaits ok=true|false), since both ultimately wrap a
+  // dispatcher promise + spawn a background runStream consumer.
+  ipcMain.handle(
+    'chat:editMessage',
+    async (evt, opts: ChatEditOpts): Promise<ChatStartEnvelope> => {
+      const valid = validateEditOpts(opts)
+      if (typeof valid === 'string') {
+        return { ok: false, code: 'E_INVALID_ARG', message: valid }
+      }
+      const win = BrowserWindow.fromWebContents(evt.sender)
+      if (!win) {
+        return {
+          ok: false,
+          code: 'E_NO_WINDOW',
+          message: 'chat:editMessage fired without a BrowserWindow'
+        }
+      }
+      try {
+        const sink = makeWebContentsSink(evt.sender)
+        const data = await editChatMessage(
+          {
+            sessionId: valid.sessionId,
+            editingMessageId: valid.editingMessageId,
+            newContent: valid.newContent,
+            backendKind: valid.backendKind,
+            backendModel: valid.backendModel ?? null,
+            backendAgentPageId: valid.backendAgentPageId ?? null
+          },
+          sink
+        )
+        return { ok: true, data }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const codeAttr =
+          err instanceof Error && typeof (err as Error & { code?: unknown }).code === 'string'
+            ? (err as Error & { code: string }).code
+            : null
+        const code =
+          codeAttr ??
+          (message.includes('No chat backend registered') ? 'E_BACKEND_UNAVAILABLE' : 'E_DISPATCH')
+        return { ok: false, code, message }
+      }
+    }
+  )
+}
+
+function validateEditOpts(opts: ChatEditOpts | undefined): ChatEditOpts | string {
+  if (!opts) return 'opts missing'
+  if (!Number.isInteger(opts.sessionId) || opts.sessionId < 0)
+    return 'sessionId must be a non-negative integer'
+  if (!Number.isInteger(opts.editingMessageId) || opts.editingMessageId < 0)
+    return 'editingMessageId must be a non-negative integer'
+  if (typeof opts.newContent !== 'string' || opts.newContent.length === 0)
+    return 'newContent must be a non-empty string'
+  if (opts.backendKind !== 'notion-agent' && opts.backendKind !== 'custom-api')
+    return `backendKind must be 'notion-agent' or 'custom-api', got ${opts.backendKind}`
+  return opts
 }
 
 export { abortAllChatSessions }

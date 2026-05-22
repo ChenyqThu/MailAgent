@@ -12,8 +12,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ExternalLink, Languages, Mail, RotateCcw, Sparkles } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -25,7 +25,6 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
-import { TranslatedBody } from './TranslatedBody'
 import { AttachmentList } from './AttachmentList'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 
@@ -69,86 +68,58 @@ function ExpandableValue({ text, max = 100 }: { text: string; max?: number }): R
   )
 }
 
-// ---- translation UI views --------------------------------------------------
+// ---- immersive translation banner ------------------------------------------
 
-function TranslationView({
-  status,
+/** 错误 banner: 紧贴 subject 下方显示。仅 translateMut 出错时挂出, 用户可
+ *  retry / dismiss。沉浸式架构下译文显示在 EmailBodyFrame 内嵌, 这里只承担
+ *  错误反馈。 */
+function TranslationErrorBanner({
   errorCode,
-  translated,
   onRetry,
   onDismiss
 }: {
-  status: TranslateStatus
   errorCode: string | null
-  translated: string | null
   onRetry(): void
   onDismiss(): void
 }): React.ReactElement {
   const { t } = useTranslation()
-  if (status === 'loading' || (status === 'translated' && translated === null)) {
-    return (
-      <div className="flex items-center gap-2 text-aux text-ink-fg-2 animate-pulse py-6">
-        <Languages size={13} strokeWidth={2} className="animate-spin" />
-        <span>{t('translate.loading')}</span>
-      </div>
-    )
-  }
-  if (status === 'error') {
-    const isNoKey = errorCode === 'E_NO_LLM_KEY'
-    const isNoBody = errorCode === 'E_NO_BODY'
-    return (
-      <div
-        className={cn(
-          'flex items-start gap-3 px-4 py-3 rounded-md',
-          'text-aux text-fail border border-fail/30 bg-fail/10'
-        )}
-      >
-        <Languages size={14} strokeWidth={2} className="shrink-0 mt-0.5" />
-        <div className="flex-1">
-          <div className="font-medium">
-            {isNoKey
-              ? t('translate.noKey')
-              : isNoBody
-                ? t('translate.noBody')
-                : t('translate.failed')}
-          </div>
-          {errorCode && <div className="text-meta font-mono text-ink-fg-3 mt-1">{errorCode}</div>}
-        </div>
-        {!isNoKey && !isNoBody && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="shrink-0 px-2 py-1 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1"
-          >
-            <RotateCcw size={11} strokeWidth={2} />
-            {t('translate.retry')}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="shrink-0 text-meta font-mono text-ink-fg-3 hover:text-ink-fg-1 px-1"
-        >
-          ×
-        </button>
-      </div>
-    )
-  }
-  // status === 'translated'
+  const isNoKey = errorCode === 'E_NO_LLM_KEY'
+  const isNoBody = errorCode === 'E_NO_BODY'
   return (
-    <div>
-      <div className="mb-3 flex items-center gap-2 text-aux text-coral">
-        <Sparkles size={13} strokeWidth={2} />
-        <span className="font-medium">{t('translate.banner')}</span>
+    <div
+      className={cn(
+        'mt-2 flex items-start gap-3 px-3 py-2 rounded-md',
+        'text-aux text-fail border border-fail/30 bg-fail/10'
+      )}
+    >
+      <Languages size={14} strokeWidth={2} className="shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <div className="font-medium">
+          {isNoKey
+            ? t('translate.noKey')
+            : isNoBody
+              ? t('translate.noBody')
+              : t('translate.failed')}
+        </div>
+        {errorCode && <div className="text-meta font-mono text-ink-fg-3 mt-1">{errorCode}</div>}
+      </div>
+      {!isNoKey && !isNoBody && (
         <button
           type="button"
-          onClick={onDismiss}
-          className="ml-auto px-2 py-1 rounded text-meta font-mono text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+          onClick={onRetry}
+          className="shrink-0 px-2 py-1 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1"
         >
-          {t('translate.showOriginal')}
+          <RotateCcw size={11} strokeWidth={2} />
+          {t('translate.retry')}
         </button>
-      </div>
-      <TranslatedBody text={translated ?? ''} />
+      )}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="shrink-0 text-meta font-mono text-ink-fg-3 hover:text-ink-fg-1 px-1"
+      >
+        ×
+      </button>
     </div>
   )
 }
@@ -237,38 +208,113 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     staleTime: 30_000
   })
 
-  // Sprint 13 round 6 — thread count query removed alongside the
-  // Thread meta-row + sidebar. AIChatPanel still has its own
-  // listByThread call for the Ctx chips; TanStack Query dedupes per
-  // key so re-introducing here is cheap should Sprint 14 need it.
+  // ---- immersive translation ----------------------------------------------
+  //
+  // 双路径数据流:
+  //   - Path A: LLM 分类时顺带写 email_translation (source='llm_agent') →
+  //             用户打开邮件即命中 cache, 自动 inject。
+  //   - Path B: 用户按 "翻译" 触发 translateBatch (source='on_demand') →
+  //             跑完写 cache 并 invalidate cacheQ, 自动 inject。
+  //
+  // showTranslation:
+  //   - true 时把 cache.segments 透传给 EmailBodyFrame 触发 inject;
+  //   - false 时传 null 触发 clear。
+  // cache 命中 + langIsEn 时, useEffect 自动把 showTranslation 翻 true (默认开)。
 
-  const translationQ = useQuery({
+  const translationCacheQ = useQuery({
     queryKey: ['email', internalId, 'translation', 'zh'],
-    queryFn: () => mailApi.ai.translate(internalId as number, 'zh'),
-    enabled: showTranslation && internalId !== null,
+    queryFn: () => mailApi.ai.getCached(internalId as number, 'zh'),
+    enabled: internalId !== null,
     staleTime: Infinity,
-    // LLM errors shouldn't auto-retry — surface the failure UI and let
-    // the user hit "重试" deliberately (avoids burning quota on a stuck key).
     retry: false
   })
 
-  // Toggle / dismiss helpers (codex review M-2): hiding the panel should
-  // also kill the in-flight LLM request so a slow response isn't still
-  // tying up a CRS slot in the background. `abortTranslate` is a no-op
-  // when nothing is in flight, so calling it on the false→true edge too
-  // is harmless.
+  // 翻译失败的 banner state (mutation 不写 cacheQ.error, 单独承接)
+  const [translateError, setTranslateError] = useState<{ code: string; message: string } | null>(
+    null
+  )
+
+  const translateMut = useMutation({
+    mutationFn: async () => {
+      if (internalId === null) throw new Error('no email selected')
+      return mailApi.ai.translateBatch(internalId, 'zh')
+    },
+    onSuccess: () => {
+      setTranslateError(null)
+      setShowTranslation(true)
+      // 让 cacheQ 重新拉, 同时 translateBatch 已经写 cache; queryClient.setQueryData
+      // 直接放结果可省一次 IPC, 但 getCached 返 source/fetchedAt 等 meta 字段,
+      // 用 invalidate 让 cacheQ 重读保持口径一致。
+      if (internalId !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: ['email', internalId, 'translation', 'zh']
+        })
+      }
+    },
+    onError: (err: unknown) => {
+      const e = err instanceof Error ? err : new Error(String(err))
+      const code = (e as Error & { code?: string }).code ?? 'E_UPSTREAM'
+      setTranslateError({ code, message: e.message })
+    }
+  })
+
+  const retranslateMut = useMutation({
+    mutationFn: async () => {
+      if (internalId === null) throw new Error('no email selected')
+      await mailApi.ai.deleteCached(internalId, 'zh')
+      return mailApi.ai.translateBatch(internalId, 'zh')
+    },
+    onSuccess: () => {
+      setTranslateError(null)
+      setShowTranslation(true)
+      if (internalId !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: ['email', internalId, 'translation', 'zh']
+        })
+      }
+    },
+    onError: (err: unknown) => {
+      const e = err instanceof Error ? err : new Error(String(err))
+      const code = (e as Error & { code?: string }).code ?? 'E_UPSTREAM'
+      setTranslateError({ code, message: e.message })
+    }
+  })
+
+  // Cache 命中 + 仍是同一封邮件 → 默认 ON (Path A 让用户打开即看双语)。
+  // useRef 防止用户手动 dismiss 后又被 effect 翻回 ON (auto-on 仅触发一次)。
+  const autoOnFiredRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    if (internalId === null) return
+    if (autoOnFiredRef.current.has(internalId)) return
+    const cache = translationCacheQ.data
+    if (cache && cache.segments.length > 0) {
+      autoOnFiredRef.current.add(internalId)
+      setShowTranslation(true)
+    }
+  }, [internalId, translationCacheQ.data])
+
+  // 显示原文 / 显示译文 切换。在 Path B 翻译中按显示原文不取消 mutation, 因为
+  // 写 cache 是有价值的; 用户随时可以再切回译文。
   const toggleTranslation = useCallback(() => {
     if (internalId === null) return
-    setShowTranslation((prev) => {
-      if (prev) mailApi.ai.abortTranslate(internalId)
-      return !prev
-    })
-  }, [internalId, mailApi])
+    setShowTranslation((prev) => !prev)
+  }, [internalId])
 
-  const dismissTranslation = useCallback(() => {
-    if (internalId !== null) mailApi.ai.abortTranslate(internalId)
-    setShowTranslation(false)
-  }, [internalId, mailApi])
+  // "翻译" 按钮: 没 cache 时启动 translateBatch (Path B)
+  const startTranslate = useCallback(() => {
+    setTranslateError(null)
+    translateMut.mutate()
+  }, [translateMut])
+
+  // "重新翻译": delete + 重跑
+  const retranslate = useCallback(() => {
+    setTranslateError(null)
+    retranslateMut.mutate()
+  }, [retranslateMut])
+
+  const dismissTranslateError = useCallback(() => {
+    setTranslateError(null)
+  }, [])
 
   // ⌥T toggle. `useShortcut` short-circuits in editable contexts so typing
   // "t" in an input doesn't fire (DESIGN.md §9.5).
@@ -483,16 +529,16 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const allAttachments = email.attachments ?? []
 
   // Translate state → toolbar prop derivation.
-  const translateError = translationQ.error as (Error & { code?: string }) | null
-  const translateStatus: TranslateStatus = !showTranslation
-    ? 'idle'
-    : translationQ.isError
-      ? 'error'
-      : translationQ.isLoading || translationQ.isFetching
-        ? 'loading'
-        : translationQ.data
-          ? 'translated'
-          : 'loading'
+  const cache = translationCacheQ.data
+  const hasCache = !!cache && cache.segments.length > 0
+  const isTranslating = translateMut.isPending || retranslateMut.isPending
+  const translateStatus: TranslateStatus = translateError
+    ? 'error'
+    : isTranslating
+      ? 'loading'
+      : showTranslation && hasCache
+        ? 'translated'
+        : 'idle'
 
   return (
     // mockup L2036 — `<section class="glass-3 flex-1 min-w-0 flex flex-col">`.
@@ -505,7 +551,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         translate={{
           langIsEn,
           status: translateStatus,
-          onToggle: toggleTranslation
+          // 没 cache 时点击启动 batch 翻译; 有 cache 时纯 toggle 显示/隐藏。
+          onToggle: hasCache ? toggleTranslation : startTranslate
         }}
         onCreateDraft={handleCreateDraft}
         draftState={{ pending: pending.draft }}
@@ -568,12 +615,16 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               </h1>
             </div>
 
-            {/* One-tap inline translate — visible only when LLM tagged the
-                email as English AND we're not already showing the translation. */}
-            {langIsEn && !showTranslation && (
+            {/* One-tap inline translate — 沉浸式翻译入口。三态:
+                  - 无 cache + 非翻译中: "翻译" 按钮启动 batch
+                  - 有 cache + 隐藏中:   "显示翻译" 按钮 toggle
+                  - 有 cache + 显示中:   "显示原文" + "重新翻译" 两按钮
+                  - 翻译中: spinner + 文本
+                langIsEn 才显示 — 中文邮件没有翻译概念。 */}
+            {langIsEn && !isTranslating && !hasCache && (
               <button
                 type="button"
-                onClick={() => setShowTranslation(true)}
+                onClick={startTranslate}
                 title={`⌥T · ${t('translate.label')}`}
                 className={cn(
                   'mt-2 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md',
@@ -585,6 +636,65 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                 {t('translate.inlineCta')}
                 <kbd className="ml-0.5">⌥T</kbd>
               </button>
+            )}
+            {langIsEn && !isTranslating && hasCache && !showTranslation && (
+              <button
+                type="button"
+                onClick={toggleTranslation}
+                title={`⌥T · ${t('translate.showTranslation')}`}
+                className={cn(
+                  'mt-2 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md',
+                  'text-aux text-coral border border-coral/30 bg-coral/10',
+                  'hover:bg-coral/15 transition-colors duration-fast'
+                )}
+              >
+                <Languages size={13} strokeWidth={2} />
+                {t('translate.showTranslation')}
+                <kbd className="ml-0.5">⌥T</kbd>
+              </button>
+            )}
+            {langIsEn && !isTranslating && hasCache && showTranslation && (
+              <div className="mt-2 inline-flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleTranslation}
+                  title={`⌥T · ${t('translate.showOriginal')}`}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md',
+                    'text-aux text-ink-fg-1 border border-ink-border bg-ink-4/40',
+                    'hover:bg-ink-4 transition-colors duration-fast'
+                  )}
+                >
+                  <Languages size={13} strokeWidth={2} />
+                  {t('translate.showOriginal')}
+                </button>
+                <button
+                  type="button"
+                  onClick={retranslate}
+                  title={t('translate.retranslate')}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md',
+                    'text-aux text-ink-fg-2 border border-ink-border bg-transparent',
+                    'hover:bg-ink-4/40 hover:text-ink-fg-1 transition-colors duration-fast'
+                  )}
+                >
+                  <RotateCcw size={11} strokeWidth={2} />
+                  {t('translate.retranslate')}
+                </button>
+              </div>
+            )}
+            {isTranslating && (
+              <div className="mt-2 inline-flex items-center gap-2 text-aux text-ink-fg-2 animate-pulse">
+                <Languages size={13} strokeWidth={2} className="animate-spin" />
+                <span>{t('translate.loading')}</span>
+              </div>
+            )}
+            {translateError && (
+              <TranslationErrorBanner
+                errorCode={translateError.code}
+                onRetry={() => (hasCache ? retranslate() : startTranslate())}
+                onDismiss={dismissTranslateError}
+              />
             )}
           </div>
         </div>
@@ -749,7 +859,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           {/* AI Fields */}
           {ai && (
             <div className="mt-6">
-              <AIFieldsBlock fields={ai} />
+              <AIFieldsBlock fields={ai} internalId={email.internal_id} />
             </div>
           )}
 
@@ -757,23 +867,17 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               Outlook-style "older messages collapsed under the latest"
               treatment is Sprint 14 — see NOTES.md 2026-05-20. */}
 
-          {/* Body — original sandboxed iframe OR translated markdown.
-              Toggled via EmailToolbar / ⌥T / inline translate banner. */}
+          {/* Body — sandboxed iframe.  沉浸式翻译: showTranslation + hasCache
+              时把 segments 透传给 EmailBodyFrame, 由其在 iframe.contentDocument
+              上用 textContent.includes(src) fuzzy 配对 DOM 节点, 在每段原文
+              之后注入译文 div (CSS .mailagent-translation: italic + 灰色 +
+              左侧细线). showTranslation=false 时传 null 触发 clear。 */}
           <div className="mt-7">
-            {showTranslation ? (
-              <TranslationView
-                status={translateStatus}
-                errorCode={translateError?.code ?? null}
-                translated={translationQ.data?.translated ?? null}
-                onRetry={() => translationQ.refetch()}
-                onDismiss={dismissTranslation}
-              />
-            ) : (
-              <EmailBodyFrame
-                internalId={email.internal_id}
-                attachments={email.attachments ?? []}
-              />
-            )}
+            <EmailBodyFrame
+              internalId={email.internal_id}
+              attachments={email.attachments ?? []}
+              translations={showTranslation && hasCache ? cache!.segments : null}
+            />
           </div>
 
           {/* Attachments — AttachmentList renders null when no visible

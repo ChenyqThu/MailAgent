@@ -1,13 +1,19 @@
-// Sprint 3 §2.2 — translated-body display.
+// Sprint 3 §2.2 — markdown → safe HTML body renderer.
 //
-// The LLM returns markdown (per `prompts/` system message convention) so a
-// full markdown→HTML pass would be the most faithful render. We deliberately
-// stay minimal here: a regex pass covering the inline patterns email content
-// actually uses (bold, italic, inline code, http(s) links, headings, list
-// bullets, blockquote prefixes) wrapped through DOMPurify so escaped HTML
-// in the source stays escaped. Block-level structure (paragraphs, lists)
-// falls back to `whitespace-pre-wrap`, which keeps the source visually
-// recognisable without dragging in a markdown library on Sprint 3.
+// 原本是邮件翻译 (markdown 单调路径) 的渲染层; Sprint Immersive-Translate 后
+// 邮件翻译改走沉浸式注入 (不再渲染独立译文 panel), 但本组件被 AIChat 的
+// MessageList 复用 — 它本质上是一个 inline-markdown → DOMPurified HTML 渲染器,
+// 跟翻译解耦。命名沿用 TranslatedBody 是因为重命名/搬位置会牵连一连串 import,
+// 收益不大; 等下次清理 chat 渲染层时再统一。
+//
+// 渲染能力 (邮件 / AI 回复都用得上):
+//   - inline: **bold** / *italic* / ~~strike~~ / `code` / [text](url)
+//   - block: heading (#-######) / list (- / *) / numbered list / blockquote (>)
+//   - 段落 split: 双换行 → <p>; 单换行 → <br>
+//   - URL linkify (http(s):// only, mailto/data 不处理)
+//
+// 不支持: 真 list 嵌套 / table / image / HTML 包裹 — 邮件回复 + AI 回复
+// 不需要这些, markdown 复杂度刻意压在低位以保 sanitize 路径简单。
 
 import { useMemo } from 'react'
 import DOMPurify from 'dompurify'
@@ -70,8 +76,6 @@ function renderBlock(raw: string): string {
     const items = lines.map((l) => `<li>${renderInline(l.replace(/^\s*\d+\.\s+/, ''))}</li>`)
     return `<ol>${items.join('')}</ol>`
   }
-  // Paragraph — single newlines become <br>, double newlines split into
-  // separate <p> via the splitter below.
   return `<p>${renderInline(trimmed).replace(/\n/g, '<br>')}</p>`
 }
 
@@ -79,38 +83,37 @@ function renderBlock(raw: string): string {
 // even if the markdown layer let one through.
 const HTTP_URI = /^https?:\/\//i
 
-export function TranslatedBody({ text }: Props): React.ReactElement {
-  const html = useMemo(() => {
-    const blocks = text.split(/\n\s*\n/)
-    const rendered = blocks.map(renderBlock).join('\n')
-    // Codex review M-4: USE_PROFILES.html *adds to* the tag set rather than
-    // replacing it, so the explicit allow-list was effectively looser than
-    // it read. Dropping the profile + pinning the URI scheme leaves an
-    // unambiguous positive list.
-    return DOMPurify.sanitize(rendered, {
-      ALLOWED_TAGS: [
-        'p',
-        'br',
-        'strong',
-        'em',
-        'code',
-        'a',
-        'h1',
-        'h2',
-        'h3',
-        'h4',
-        'h5',
-        'h6',
-        'ul',
-        'ol',
-        'li',
-        'blockquote',
-        'span'
-      ],
-      ALLOWED_ATTR: ['href', 'target', 'rel'],
-      ALLOWED_URI_REGEXP: HTTP_URI
-    })
-  }, [text])
+const ALLOWED_TAGS = [
+  'p',
+  'br',
+  'strong',
+  'em',
+  'code',
+  'a',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'li',
+  'blockquote',
+  'span'
+]
 
+function markdownToSafeHtml(md: string): string {
+  const blocks = md.split(/\n\s*\n/)
+  const rendered = blocks.map(renderBlock).join('\n')
+  return DOMPurify.sanitize(rendered, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR: ['href', 'target', 'rel'],
+    ALLOWED_URI_REGEXP: HTTP_URI
+  })
+}
+
+export function TranslatedBody({ text }: Props): React.ReactElement {
+  const html = useMemo(() => markdownToSafeHtml(text), [text])
   return <div className="mail-body break-words" dangerouslySetInnerHTML={{ __html: html }} />
 }
