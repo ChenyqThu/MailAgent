@@ -1,139 +1,133 @@
-// Sprint 5 §2.2 — Mail.app reply-draft AppleScript handler.
+// Mail.app reply-draft IPC handler — covers the script-spawn path that
+// `createDraft` delegates to. We mock execa / better-sqlite3 lookup at the
+// edges of the dispatcher in integration tests; here we just lock in the
+// pure helpers:
 //
-// `osascript -e` is sandboxed via execa. Tests mock execa to assert:
-//   - mailbox lookup queries email_metadata
-//   - escapeAppleScriptString covers backslash + quote
-//   - buildDraftScript branches on known/unknown account
-//   - classifyAppleScriptError maps stderr to E_AUTOMATION_DENIED /
-//     E_MAIL_NOT_RUNNING / E_NOT_FOUND / E_APPLESCRIPT
-//
-// We do NOT exercise the live osascript path (would mutate the user's
-// Mail.app); Sprint 5 manual QA covers that.
+//   - buildDraftCommand     → argv shape for create_reply_draft.sh
+//   - parseScriptOutput     → tolerates trailing whitespace + interleaved logs
+//   - classifyScriptError   → stderr / script-error keywords → E_* codes
 
 import { describe, expect, test } from 'vitest'
 
-import { __testing, escapeAppleScriptString } from '../../src/electron/main/handlers/draft'
+import { __testing } from '../../src/electron/main/handlers/draft'
 
-describe('escapeAppleScriptString', () => {
-  test('escapes backslashes first, then double quotes (order matters)', () => {
-    expect(escapeAppleScriptString('a\\b')).toBe('a\\\\b')
-    expect(escapeAppleScriptString('say "hi"')).toBe('say \\"hi\\"')
-    // backslash + quote should both be escaped, in order:
-    // raw `\"` → `\\"` (backslash doubled) → `\\\"` (quote escaped) =
-    // `\\\\\"` literal in the test string.
-    expect(escapeAppleScriptString('\\"')).toBe('\\\\\\"')
-  })
+const { buildDraftCommand, parseScriptOutput, classifyScriptError } = __testing
 
-  test('passes through plain ASCII + CJK + newlines verbatim', () => {
-    expect(escapeAppleScriptString('Re: 周报\n请查阅。')).toBe('Re: 周报\n请查阅。')
-  })
-})
-
-describe('buildDraftScript', () => {
-  test('known account branch — targeted "of account ...whose id is N" lookup', () => {
-    const script = __testing.buildDraftScript({
+describe('buildDraftCommand', () => {
+  test('without account → no --account flag', () => {
+    const { cmd, args } = buildDraftCommand({
+      scriptPath: '/repo/scripts/create_reply_draft.sh',
       internalId: 53675,
       mailbox: '收件箱',
-      account: 'me@example.com',
-      body: null
-    })
-    expect(script).toContain('tell application "Mail"')
-    expect(script).toContain('mailbox "收件箱"')
-    expect(script).toContain('of account "me@example.com"')
-    expect(script).toContain('whose id is 53675')
-    expect(script).toContain('reply origMsg with opening window')
-    expect(script).toContain('return id of draftMsg as string')
-  })
-
-  test('unknown account branch — loops `every account` until match', () => {
-    const script = __testing.buildDraftScript({
-      internalId: 99,
-      mailbox: '收件箱',
       account: null,
-      body: null
+      replyText: 'Hi Alice, …'
     })
-    expect(script).toContain('repeat with acct in every account')
-    expect(script).toContain('of mailbox "收件箱" of acct whose id is 99')
-    expect(script).toContain('exit repeat')
-    expect(script).toContain('internal_id not found in any account')
+    expect(cmd).toBe('bash')
+    expect(args[0]).toBe('/repo/scripts/create_reply_draft.sh')
+    expect(args).toContain('--mode')
+    const modeIdx = args.indexOf('--mode')
+    expect(args[modeIdx + 1]).toBe('reply-all')
+    expect(args).toContain('--internal-id')
+    expect(args[args.indexOf('--internal-id') + 1]).toBe('53675')
+    expect(args).toContain('--mailbox')
+    expect(args[args.indexOf('--mailbox') + 1]).toBe('收件箱')
+    expect(args).toContain('--reply-text')
+    expect(args[args.indexOf('--reply-text') + 1]).toBe('Hi Alice, …')
+    expect(args).not.toContain('--account')
   })
 
-  test('body prefill prepends to existing reply body with double-newline gap', () => {
-    const script = __testing.buildDraftScript({
+  test('with account → appends --account flag', () => {
+    const { args } = buildDraftCommand({
+      scriptPath: '/repo/scripts/create_reply_draft.sh',
       internalId: 1,
-      mailbox: '收件箱',
-      account: 'me@x',
-      body: 'Hi Alice,\nThanks!'
+      mailbox: 'INBOX',
+      account: 'Exchange',
+      replyText: 'ok'
     })
-    expect(script).toContain('set content of draftMsg to ')
-    expect(script).toContain('"Hi Alice,\nThanks!"')
-    // The script prepends the new body, then a double newline, then the
-    // original quoted content.
-    expect(script).toMatch(/"\s*&\s*return\s*&\s*return\s*&\s*\(content of draftMsg as string\)/)
-  })
-
-  test('escapes quotes / backslashes in mailbox + account + body so AppleScript parses', () => {
-    const script = __testing.buildDraftScript({
-      internalId: 1,
-      mailbox: 'q"u\\ote',
-      account: 'a"b',
-      body: 'c"d'
-    })
-    expect(script).toContain('mailbox "q\\"u\\\\ote"')
-    expect(script).toContain('account "a\\"b"')
-    expect(script).toContain('"c\\"d"')
+    expect(args).toContain('--account')
+    expect(args[args.indexOf('--account') + 1]).toBe('Exchange')
   })
 })
 
-describe('isMailboxNameSafe (Sprint 5 ship-review opus MEDIUM #1)', () => {
-  test('plain ASCII + CJK passes', () => {
-    expect(__testing.isMailboxNameSafe('收件箱')).toBe(true)
-    expect(__testing.isMailboxNameSafe('INBOX')).toBe(true)
-    expect(__testing.isMailboxNameSafe('Sent · 已发送')).toBe(true)
+describe('parseScriptOutput', () => {
+  test('plain JSON success object parses', () => {
+    const out = parseScriptOutput('{"success":true,"method":"reply_all_internal_id"}')
+    expect(out?.success).toBe(true)
+    expect(out?.method).toBe('reply_all_internal_id')
   })
 
-  test('rejects newline / carriage return / NUL (defense-in-depth against AppleScript injection)', () => {
-    expect(__testing.isMailboxNameSafe('Inbox\nend tell')).toBe(false)
-    expect(__testing.isMailboxNameSafe('Inbox\r')).toBe(false)
-    expect(__testing.isMailboxNameSafe('Inbox\0')).toBe(false)
-    // Esc + other C0 controls
-    expect(__testing.isMailboxNameSafe('Inbox\x1b[m')).toBe(false)
-    expect(__testing.isMailboxNameSafe('Inbox\t')).toBe(false)
+  test('tolerates trailing whitespace', () => {
+    const out = parseScriptOutput('  {"success":true,"method":"reply_all"}\n\n')
+    expect(out?.success).toBe(true)
+  })
+
+  test('picks the last JSON object when debug lines precede it', () => {
+    const out = parseScriptOutput(
+      ['Paste retry attempt 2/3', 'verify: ok', '{"success":true,"method":"reply_all"}'].join('\n')
+    )
+    expect(out?.success).toBe(true)
+  })
+
+  test('empty stdout → null', () => {
+    expect(parseScriptOutput('')).toBeNull()
+    expect(parseScriptOutput('   \n')).toBeNull()
+  })
+
+  test('non-JSON tail → null', () => {
+    expect(parseScriptOutput('garbage output')).toBeNull()
   })
 })
 
-describe('classifyAppleScriptError', () => {
-  test('automation-denied stderr → E_AUTOMATION_DENIED + actionable hint', () => {
-    const c = __testing.classifyAppleScriptError({
+describe('classifyScriptError', () => {
+  test('automation-denied → E_AUTOMATION_DENIED + actionable hint', () => {
+    const c = classifyScriptError({
       stderr: 'osascript is not allowed assistive access',
-      message: 'osascript exit 1'
+      scriptError: null
     })
     expect(c.code).toBe('E_AUTOMATION_DENIED')
     expect(c.message).toMatch(/System Settings/)
   })
 
   test('Mail not running → E_MAIL_NOT_RUNNING', () => {
-    const c = __testing.classifyAppleScriptError({
+    const c = classifyScriptError({
       stderr: 'execution error: Mail got an error: Can’t get message',
-      message: ''
+      scriptError: null
     })
     expect(c.code).toBe('E_MAIL_NOT_RUNNING')
   })
 
-  test('not_found error from our own throw → E_NOT_FOUND', () => {
-    const c = __testing.classifyAppleScriptError({
-      stderr: 'execution error: internal_id not found in any account',
-      message: ''
+  test('script error "not found in any account" → E_NOT_FOUND', () => {
+    const c = classifyScriptError({
+      stderr: '',
+      scriptError: 'internal_id not found in any account'
     })
     expect(c.code).toBe('E_NOT_FOUND')
   })
 
-  test('unknown stderr → E_APPLESCRIPT (default)', () => {
-    const c = __testing.classifyAppleScriptError({
+  test('paste verification failure → E_NOT_FOUND with the script message', () => {
+    const c = classifyScriptError({
+      stderr: 'verify: clipboard not updated',
+      scriptError: 'Paste verification failed after retries'
+    })
+    expect(c.code).toBe('E_NOT_FOUND')
+    expect(c.message).toContain('Paste verification failed')
+  })
+
+  test('unknown stderr → E_APPLESCRIPT with detail snippet', () => {
+    const c = classifyScriptError({
       stderr: 'segfault',
-      message: 'osascript exit -1'
+      scriptError: null
     })
     expect(c.code).toBe('E_APPLESCRIPT')
     expect(c.message).toContain('segfault')
+  })
+
+  test('script error trumps stderr in the detail message', () => {
+    const c = classifyScriptError({
+      stderr: 'noise',
+      scriptError: 'New mode requires --to and --subject'
+    })
+    expect(c.code).toBe('E_APPLESCRIPT')
+    expect(c.message).toContain('--to and --subject')
   })
 })

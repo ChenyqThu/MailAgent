@@ -1,24 +1,21 @@
-// Sprint 5 §2.2 — Mail.app reply-draft IPC handler.
+// Mail.app reply-draft IPC handler.
 //
-// `email:createDraft` opens a Mail.app reply window pre-filled with the
-// quoted source message. The user types/edits in Mail.app and clicks send
-// there — we don't send through our process (sending mail from the user's
-// account requires the same Mail.app credentials that already flow through
-// the macOS Mail database, and opening a draft is the only path that
-// triggers Mail.app's standard "Reply From" account picker).
+// `email:createDraft` opens a Mail.app **reply-all** draft pre-filled with the
+// caller's markdown body, copy-pastes it via NSPasteboard so rich text
+// survives, then ⌘S to save into Drafts and ⌘W to close — the same pipeline
+// the backend uses for `handle_create_draft` (see `src/events/handlers.py`).
+// We do NOT compose AppleScript inline anymore: the previous frontend-only
+// path called `set content of draftMsg` which only takes plaintext, losing
+// every list / bold / link the LLM produced. Delegating to
+// `scripts/create_reply_draft.sh` gives us the same UX as a Notion webhook
+// trigger (reply-all + clipboard paste + save).
 //
-// The implementation is intentionally minimal for V1:
-//   - tell Mail.app to `reply` the source message `with opening window`
-//   - if `body` is supplied AND the user opted into prefill, set the
-//     content (plaintext). Markdown / HTML clipboard pasting is Sprint 6
-//     (Path A in MEMORY.md uses NSPasteboard).
-//   - no recipients override — Mail.app populates To / Cc / Subject from
-//     the source message; the user can edit them in the compose window.
-//
-// Why AppleScript and not a CLI: `mailagent` doesn't expose a draft-creation
-// command (the backend handles draft creation via Notion webhook → Redis
-// → osascript on the same host; the frontend bypasses that round-trip and
-// runs the AppleScript directly).
+// Why a shell script and not pure TS:
+//   1. `scripts/html_clipboard.py` already converts markdown → HTML +
+//      writes NSPasteboardTypeHTML via PyObjC; rewriting that in JS would
+//      duplicate a lot of `AppKit` interop;
+//   2. the shell script's System Events `keystroke "v"` retry/verify loop
+//      survives Mail.app focus drift better than a one-shot osascript.
 //
 // Permissions: macOS prompts for Automation access on first run ("Allow
 // MailAgent to control Mail.app"). The user MUST accept the prompt for
@@ -28,14 +25,18 @@
 
 import { ipcMain } from 'electron'
 import { execa } from 'execa'
+import { existsSync } from 'fs'
+import { join } from 'path'
 
 import { getDb } from '../db'
+import { getProjectRoot } from '../cli_runner'
 
 // ---- request / response shapes ---------------------------------------------
 
 export interface CreateDraftOpts {
   internalId: number
-  /** Optional plaintext body to prepend above the quoted source. */
+  /** Markdown body the user typed / accepted; converted to HTML by
+   *  `scripts/html_clipboard.py` inside the bash pipeline before pasting. */
   body?: string
 }
 
@@ -43,6 +44,9 @@ export interface CreateDraftResult {
   internalId: number
   mailbox: string | null
   accountName: string | null
+  /** The shell script's `method` field — e.g. `reply_all_internal_id`,
+   *  `reply_all_message_id`, `standalone_fallback`. Stored so the renderer
+   *  can render the toast with provenance ("via Reply-All by internal id"). */
   draftId: string
 }
 
@@ -52,23 +56,15 @@ export type CreateDraftEnvelope =
 
 // ---- limits / config -------------------------------------------------------
 
-/** Mail.app's first AppleScript invocation can be slow on a cold launch. */
-const APPLESCRIPT_TIMEOUT_MS = 30_000
+/** Bash script's paste-retry loop can take 5-10s on cold Mail.app launch.
+ *  Match the backend `handle_create_draft` 120s budget so we don't pre-empt
+ *  a slow but otherwise-healthy draft creation. */
+const SCRIPT_TIMEOUT_MS = 120_000
 
-/** Hard upper bound on body length we'll inject into AppleScript — avoids
- *  pathological osascript -e arg sizes and limits the surface for escaping
- *  edge cases. Real reply drafts top out well below this. */
-const MAX_BODY_CHARS = 8000
-
-// ---- AppleScript string escaping ------------------------------------------
-
-/** Escape a JS string for use inside an AppleScript double-quoted literal.
- *  AppleScript's lexer needs `\\` for backslash and `\"` for quote; other
- *  printable chars pass through. Newlines stay literal — AppleScript
- *  string literals accept embedded line breaks. */
-export function escapeAppleScriptString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-}
+/** Hard upper bound on body length we'll forward to the shell pipeline.
+ *  Real reply drafts top out well below this; the script itself doesn't
+ *  enforce a limit so we cap here to keep argv reasonable. */
+const MAX_BODY_CHARS = 50_000
 
 // ---- mailbox lookup --------------------------------------------------------
 
@@ -85,143 +81,132 @@ function lookupMailbox(internalId: number): EmailMailboxRow | null {
   return row ?? null
 }
 
-/** Sprint 5 ship-review (opus MEDIUM #1): defense-in-depth against an attacker
- *  who can write to `email_metadata.mailbox` (backend SoT). Control characters
- *  inside an AppleScript string literal accept newlines verbatim, so a
- *  mailbox containing `\n` + `end tell` + a malicious tell block COULD inject
- *  if the quote escape ever drifted. The actual injection vector requires
- *  also escaping `"` (which we do), but a strict allowlist closes the door
- *  on every other route at near-zero cost. */
-export function isMailboxNameSafe(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i)
-    // C0 controls (0x00-0x1F) + DEL (0x7F): not valid in a Mail.app
-    // mailbox display name, and would break out of the AppleScript line.
-    // (Codepoint iteration rather than control-char regex; eslint
-    // `no-control-regex` disallows literal control chars in regex.)
-    if (code <= 0x1f || code === 0x7f) return false
-  }
-  return true
-}
-
-/** The Mail.app account name we look up the message under. Backend's
- *  `MAIL_ACCOUNT_NAME` env (see project CLAUDE.md) is the canonical
- *  setting — frontend re-reads it so we don't duplicate the contract.
- *  Sprint 6 SettingsPage will add a UI override. Returns null if not set;
- *  the AppleScript path then degrades to "any account" lookup. */
+/** The Mail.app account name the script looks up the source message under.
+ *  Backend's `MAIL_ACCOUNT_NAME` env (see project CLAUDE.md) is canonical.
+ *  Falls back to the script's built-in `Exchange` default when unset. */
 function getAccountName(): string | null {
   const fromEnv = process.env['MAIL_ACCOUNT_NAME']
   if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv
   return null
 }
 
-// ---- AppleScript composition ----------------------------------------------
+// ---- shell-script invocation ----------------------------------------------
 
-interface ScriptOpts {
+export interface DraftCommand {
+  cmd: string
+  args: string[]
+  scriptPath: string
+}
+
+/** Build the bash invocation for `scripts/create_reply_draft.sh`. Exported
+ *  so a unit test can assert argv shape without touching the live
+ *  Mail.app / clipboard. */
+export function buildDraftCommand(opts: {
+  scriptPath: string
   internalId: number
   mailbox: string
   account: string | null
-  body: string | null
-}
-
-/** Build the AppleScript that opens a reply draft. When `account` is null
- *  we walk every account looking for a message whose internal id matches —
- *  slower (Mail.app loops) but still bounded since each account's index is
- *  hashed by message id. The script returns the draft id (or "" on a
- *  permission denial that returned silently). */
-export function buildDraftScript(opts: ScriptOpts): string {
-  const id = opts.internalId
-  const mbEsc = escapeAppleScriptString(opts.mailbox)
-  const acctEsc = opts.account ? escapeAppleScriptString(opts.account) : null
-  const bodyEsc = opts.body ? escapeAppleScriptString(opts.body) : null
-
-  // Branch 1: known account. Targeted lookup via `whose id is <int>`.
-  if (acctEsc) {
-    const setBody = bodyEsc
-      ? `set content of draftMsg to ("${bodyEsc}" & return & return & (content of draftMsg as string))`
-      : ''
-    return [
-      'tell application "Mail"',
-      '  activate',
-      `  set origMsg to first message of mailbox "${mbEsc}" of account "${acctEsc}" whose id is ${id}`,
-      '  set draftMsg to reply origMsg with opening window',
-      setBody,
-      '  return id of draftMsg as string',
-      'end tell'
-    ]
-      .filter((line) => line.length > 0)
-      .join('\n')
-  }
-
-  // Branch 2: unknown account. Iterate accounts until we find one that
-  // owns this internal id. Stops at the first match.
-  const setBody = bodyEsc
-    ? `      set content of draftMsg to ("${bodyEsc}" & return & return & (content of draftMsg as string))`
-    : ''
-  return [
-    'tell application "Mail"',
-    '  activate',
-    '  set draftId to ""',
-    '  repeat with acct in every account',
-    '    try',
-    `      set origMsg to first message of mailbox "${mbEsc}" of acct whose id is ${id}`,
-    '      set draftMsg to reply origMsg with opening window',
-    setBody,
-    '      set draftId to id of draftMsg as string',
-    '      exit repeat',
-    '    on error',
-    '      -- mailbox not in this account, keep looking',
-    '    end try',
-    '  end repeat',
-    '  if draftId is "" then error "internal_id not found in any account" number -2700',
-    '  return draftId',
-    'end tell'
+  replyText: string
+}): DraftCommand {
+  const args = [
+    opts.scriptPath,
+    '--mode',
+    'reply-all',
+    '--reply-text',
+    opts.replyText,
+    '--mailbox',
+    opts.mailbox,
+    '--internal-id',
+    String(opts.internalId)
   ]
-    .filter((line) => line.length > 0)
-    .join('\n')
+  if (opts.account) {
+    args.push('--account', opts.account)
+  }
+  return { cmd: 'bash', args, scriptPath: opts.scriptPath }
 }
 
-// ---- AppleScript invocation -----------------------------------------------
-
-interface ExecaShape {
-  stdout: string | unknown
-  stderr: string | unknown
-  exitCode?: number | null
+interface ScriptOutcome {
+  success: boolean
+  method?: string
+  error?: string
 }
 
-function classifyAppleScriptError(err: unknown): { code: string; message: string } {
-  const e = err as Partial<ExecaShape> & { exitCode?: number | null; message?: string }
-  const stderr = typeof e.stderr === 'string' ? e.stderr : ''
-  const lower = stderr.toLowerCase()
-  if (lower.includes('not allowed assistive access') || lower.includes('not authorized')) {
+/** Best-effort parse of the script's JSON line. The shell writes a single
+ *  JSON object on stdout; we tolerate trailing whitespace and embedded
+ *  debug lines by scanning for the last `{...}` block. */
+export function parseScriptOutput(stdout: string): ScriptOutcome | null {
+  const trimmed = stdout.trim()
+  if (trimmed.length === 0) return null
+  // The script logs progress to stderr but `success:` JSON sits alone on
+  // stdout. If somehow extra lines slipped in, pick the last `{ ... }`.
+  const last = trimmed.lastIndexOf('{')
+  if (last < 0) return null
+  const tail = trimmed.slice(last)
+  try {
+    const parsed = JSON.parse(tail) as ScriptOutcome
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+/** Map a script-side error message to one of the error codes the renderer's
+ *  toast-key switch already understands (see `MessageList.tsx` /
+ *  `AIFieldsBlock.tsx`). Pure function — exported for tests. */
+export function classifyScriptError(payload: { stderr: string; scriptError: string | null }): {
+  code: string
+  message: string
+} {
+  const haystack = [payload.stderr, payload.scriptError ?? ''].join('\n').toLowerCase()
+  if (
+    haystack.includes('not allowed assistive access') ||
+    haystack.includes('not authorized') ||
+    haystack.includes('automation')
+  ) {
     return {
       code: 'E_AUTOMATION_DENIED',
       message:
         'macOS blocked AppleScript automation. Allow MailAgent in System Settings → Privacy & Security → Automation → Mail.'
     }
   }
-  if (lower.includes('execution error: mail got an error: can')) {
+  if (
+    haystack.includes('mail got an error: can') ||
+    haystack.includes('mail.app refused') ||
+    haystack.includes('is it open')
+  ) {
     return { code: 'E_MAIL_NOT_RUNNING', message: 'Mail.app refused — is it open?' }
   }
-  if (lower.includes('internal_id not found')) {
-    return { code: 'E_NOT_FOUND', message: 'Source message not found in any Mail.app account' }
+  if (
+    haystack.includes('not found in any account') ||
+    haystack.includes('paste verification failed')
+  ) {
+    return {
+      code: 'E_NOT_FOUND',
+      message: payload.scriptError ?? 'Source message not found / paste verification failed'
+    }
   }
-  // stderr usually has the real Mail.app error context; `e.message` is
-  // typically just "Command failed with exit code N" from execa. Prefer
-  // stderr when it has anything substantive.
-  const trimmed = stderr.trim()
-  if (trimmed.length > 0) {
-    return { code: 'E_APPLESCRIPT', message: `osascript failed: ${trimmed.slice(0, 200)}` }
+  const detail = payload.scriptError ?? payload.stderr.trim()
+  if (detail.length > 0) {
+    return {
+      code: 'E_APPLESCRIPT',
+      message: `create_reply_draft.sh failed: ${detail.slice(0, 200)}`
+    }
   }
-  return {
-    code: 'E_APPLESCRIPT',
-    message: e.message ?? 'osascript failed: unknown error'
-  }
+  return { code: 'E_APPLESCRIPT', message: 'create_reply_draft.sh failed: unknown error' }
 }
 
 export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
   if (!Number.isInteger(opts.internalId) || opts.internalId < 0) {
     throw Object.assign(new Error('createDraft: internalId must be non-negative integer'), {
+      code: 'E_INVALID_ARG'
+    })
+  }
+  const replyText =
+    typeof opts.body === 'string' && opts.body.trim().length > 0
+      ? opts.body.slice(0, MAX_BODY_CHARS)
+      : ''
+  if (replyText.length === 0) {
+    throw Object.assign(new Error('createDraft: body (reply markdown) is required'), {
       code: 'E_INVALID_ARG'
     })
   }
@@ -240,59 +225,60 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
       { code: 'E_NO_MAILBOX' }
     )
   }
-  // Sprint 5 ship-review (opus MEDIUM #1): reject mailbox names that contain
-  // control characters before they reach AppleScript. The quote/backslash
-  // escape stays the primary defense; this is the second layer.
-  if (!isMailboxNameSafe(row.mailbox)) {
-    throw Object.assign(
-      new Error(
-        `mailbox name contains disallowed control chars for internal_id=${opts.internalId}`
-      ),
-      { code: 'E_INVALID_MAILBOX' }
-    )
+  const scriptPath = join(getProjectRoot(), 'scripts', 'create_reply_draft.sh')
+  if (!existsSync(scriptPath)) {
+    throw Object.assign(new Error(`create_reply_draft.sh not found at ${scriptPath}`), {
+      code: 'E_NOT_FOUND'
+    })
   }
+
   const accountName = getAccountName()
-  const trimmedBody =
-    typeof opts.body === 'string' && opts.body.length > 0
-      ? opts.body.slice(0, MAX_BODY_CHARS)
-      : null
-  const script = buildDraftScript({
+  const { cmd, args } = buildDraftCommand({
+    scriptPath,
     internalId: opts.internalId,
     mailbox: row.mailbox,
     account: accountName,
-    body: trimmedBody
+    replyText
   })
 
-  const result = await execa('osascript', ['-e', script], {
-    timeout: APPLESCRIPT_TIMEOUT_MS,
+  const result = await execa(cmd, args, {
+    timeout: SCRIPT_TIMEOUT_MS,
     reject: false,
-    buffer: true
+    buffer: true,
+    // Homebrew / PyObjC python3 typically lives outside Electron's default
+    // PATH. Augmenting the env keeps the script's `python3` shebang lookup
+    // working in packaged builds without forcing the user to add to PATH.
+    env: {
+      ...process.env,
+      PATH: `${process.env.PATH ?? ''}:/usr/local/bin:/opt/homebrew/bin:/usr/bin`
+    }
   })
 
-  const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : ''
+  const stdout = typeof result.stdout === 'string' ? result.stdout : ''
   const stderr = typeof result.stderr === 'string' ? result.stderr : ''
   const exitCode = result.exitCode ?? -1
 
   if (result.timedOut) {
-    throw Object.assign(
-      new Error(`osascript exceeded ${APPLESCRIPT_TIMEOUT_MS}ms creating draft`),
-      { code: 'E_TIMEOUT' }
-    )
-  }
-  if (exitCode !== 0) {
-    const { code, message } = classifyAppleScriptError({
-      stderr,
-      message: stderr || `osascript exit ${exitCode}`
+    throw Object.assign(new Error(`create_reply_draft.sh exceeded ${SCRIPT_TIMEOUT_MS}ms`), {
+      code: 'E_TIMEOUT'
     })
-    throw Object.assign(new Error(message), { code })
   }
 
-  return {
-    internalId: opts.internalId,
-    mailbox: row.mailbox,
-    accountName,
-    draftId: stdout
+  const outcome = parseScriptOutput(stdout)
+  if (exitCode === 0 && outcome?.success === true) {
+    return {
+      internalId: opts.internalId,
+      mailbox: row.mailbox,
+      accountName,
+      draftId: outcome.method ?? 'reply_all'
+    }
   }
+
+  const { code, message } = classifyScriptError({
+    stderr,
+    scriptError: outcome?.error ?? null
+  })
+  throw Object.assign(new Error(message), { code })
 }
 
 // ---- IPC wiring ------------------------------------------------------------
@@ -317,8 +303,8 @@ export function registerDraftHandlers(): void {
 }
 
 export const __testing = {
-  buildDraftScript,
-  classifyAppleScriptError,
-  isMailboxNameSafe,
-  lookupMailbox
+  buildDraftCommand,
+  classifyScriptError,
+  lookupMailbox,
+  parseScriptOutput
 }
