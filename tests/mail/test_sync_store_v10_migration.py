@@ -64,7 +64,7 @@ def test_fresh_init_at_v10(tmp_path):
     assert "idx_outbox_internal_id" in indexes
     assert "idx_outbox_target_status" in indexes
 
-    assert _db_version(str(db)) == 10
+    assert _db_version(str(db)) == 13  # bumped to v13 (dual-backend)
 
 
 def test_email_outbox_schema_columns(tmp_path):
@@ -113,7 +113,7 @@ def test_v9_to_v10_preserves_existing_rows(tmp_path):
 
     # 重新 init → 升级到 v10
     SyncStore(str(db))
-    assert _db_version(str(db)) == 10
+    assert _db_version(str(db)) == 13  # bumped to v13 (dual-backend)
 
     # 原 email_metadata 行还在
     conn = sqlite3.connect(str(db))
@@ -136,7 +136,7 @@ def test_idempotent_double_init(tmp_path):
     db = tmp_path / "sync.db"
     SyncStore(str(db))
     SyncStore(str(db))
-    assert _db_version(str(db)) == 10
+    assert _db_version(str(db)) == 13  # bumped to v13 (dual-backend)
 
 
 def test_email_outbox_target_check_constraint(tmp_path):

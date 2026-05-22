@@ -77,6 +77,7 @@ class NewWatcher:
         mailboxes: List[str] = None,
         poll_interval: int = 5,
         sync_store_path: str = "data/sync_store.db"
+        backend=None,
     ):
         """初始化监听器
 
@@ -84,31 +85,44 @@ class NewWatcher:
             mailboxes: 要监听的邮箱列表，默认 ["收件箱", "发件箱"]
             poll_interval: 轮询间隔（秒），默认 5
             sync_store_path: SyncStore 数据库路径
+            backend: 可选 IMailBackend 实例 (Sprint 16 dual-backend).
+                传入时 self.arm / self.radar 复用 backend 内部 wrapping;
+                None 默认 → 自己构造 arm/radar 走老路径 (向后兼容).
 
         Raises:
             RuntimeError: 如果关键组件初始化失败
         """
         self.mailboxes = mailboxes or ["收件箱", "发件箱"]
         self.poll_interval = poll_interval
+        self.backend = backend  # Sprint 16 dual-backend: 可选注入 IMailBackend
 
         # 解析同步起始日期
         self.sync_start_date = _parse_sync_start_date()
         if self.sync_start_date:
             logger.info(f"Sync start date: {self.sync_start_date.strftime('%Y-%m-%d')} (emails before this date will be cached but not synced to Notion)")
 
-        # 初始化组件（带错误检查）
-        try:
-            self.radar = SQLiteRadar(mailboxes=self.mailboxes, account_url_prefix=settings.mail_account_url_prefix)
-            if not self.radar.is_available():
-                logger.warning("SQLite radar not available, will rely on AppleScript only")
-        except Exception as e:
-            logger.error(f"Failed to initialize SQLite radar: {e}")
-            self.radar = None
+        # 初始化 SQLiteRadar + AppleScriptArm
+        # Sprint 16 dual-backend: 如果 backend 传入 → self.arm/radar 直接从 backend 拿
+        #   (AppleScriptBackend.arm/radar 是同一对象, 行为 100% 兼容; DavMailBackend 暂时
+        #   没有 arm/radar 属性, 自循环主路径走 backend.* 方法 — Phase B 完成 19 处适配后启用).
+        # backend=None (默认, 老调用方兼容) → 自己构造 arm/radar 跟现状一致.
+        if backend is not None and hasattr(backend, 'radar') and hasattr(backend, 'arm'):
+            self.radar = backend.radar
+            self.arm = backend.arm
+            logger.info(f"[dual-backend] NewWatcher 使用 backend={type(backend).__name__} (arm/radar 来自 backend)")
+        else:
+            try:
+                self.radar = SQLiteRadar(mailboxes=self.mailboxes, account_url_prefix=settings.mail_account_url_prefix)
+                if not self.radar.is_available():
+                    logger.warning("SQLite radar not available, will rely on AppleScript only")
+            except Exception as e:
+                logger.error(f"Failed to initialize SQLite radar: {e}")
+                self.radar = None
 
-        self.arm = AppleScriptArm(
-            account_name=settings.mail_account_name,
-            inbox_name=settings.mail_inbox_name
-        )
+            self.arm = AppleScriptArm(
+                account_name=settings.mail_account_name,
+                inbox_name=settings.mail_inbox_name
+            )
 
         try:
             self.sync_store = SyncStore(sync_store_path)
