@@ -162,24 +162,23 @@ const BODY_CSS = `
     border-top: 1px solid rgb(var(--ink-border));
     margin: 16px 0;
   }
-  /* Sprint Immersive-Translate — inline 译文块。注入到原段落 (p/li/h*/td/
-     blockquote) 之后, 视觉上斜体 + 灰色 + 左侧细线表明非原文。padding-left
-     14px 跟 blockquote 对齐, 让译文有 "引用" 的视觉关联。line-height 略小
-     是为了让译文不挤掉原文行高。 */
+  /* Sprint Immersive-Translate — inline 译文块。沉浸式插件标志样式: 蓝色
+     斜体 + 左侧蓝线 + 浅蓝背景, 跟原文 (ink-fg) 视觉对比明显。颜色复用
+     EmailBodyFrame 已有的 #6FA8DC (pre .key 也用这个), 跟整体 light/dark
+     主题相容。背景透明度低 (0.06) 不抢眼但仍能区分段落。 */
   .mailagent-translation {
     font-style: italic;
-    color: rgb(var(--ink-fg-2));
-    opacity: 0.92;
-    border-left: 2px solid rgb(var(--c-accent) / 0.45);
+    color: #6FA8DC;
+    border-left: 2px solid rgb(111 168 220 / 0.6);
     padding: 4px 0 4px 14px;
     margin: 4px 0 12px;
     line-height: 1.65;
     font-size: 13.5px;
-    background: rgb(var(--c-accent) / 0.04);
+    background: rgb(111 168 220 / 0.06);
     border-radius: 2px;
   }
   /* 译文块内常见 inline 节点继承上下文颜色, 别让 a 抢眼 */
-  .mailagent-translation a { color: rgb(var(--c-accent) / 0.85); }
+  .mailagent-translation a { color: inherit; text-decoration-color: rgb(111 168 220 / 0.4); }
   /* table 单元格里的译文用 block 形态会撑爆 td; 强制 display:block 并
      在内部加微 margin 让单元格能容纳。 */
   td > .mailagent-translation,
