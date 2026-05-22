@@ -13,14 +13,56 @@ PoC 实测 (davmail-poc/test_caldav.py):
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger
 
 if TYPE_CHECKING:
     from src.config import Config
+
+
+def _safe_value(vevent: Any, attr: str, default: str = "") -> str:
+    """从 vobject vEvent 安全拿一个属性的 ``.value``, 全部失败 fallback default.
+
+    review HIGH #6: 原来用 ``getattr(vevent, attr, None).value`` 在 vobject
+    属性是 list (多 SUMMARY) / 空 SUMMARY / 不存在 等场景会 AttributeError 被外
+    层 try/except 整 event 静默吞. 改成显式 try + 多 case 处理.
+    """
+    if not hasattr(vevent, attr):
+        return default
+    try:
+        prop = getattr(vevent, attr)
+        # vobject 有时返回 list (多值 property), 取第一个
+        if isinstance(prop, list):
+            prop = prop[0] if prop else None
+        if prop is None:
+            return default
+        val = getattr(prop, "value", None)
+        if val is None:
+            return default
+        if isinstance(val, list):
+            val = val[0] if val else ""
+        return str(val) if val else default
+    except Exception:
+        return default
+
+
+def _coerce_aware(dt: Any) -> Optional[datetime]:
+    """date / datetime → tz-aware datetime (UTC). 失败 None.
+
+    review MEDIUM: 跨 date/datetime 混合场景 (e.g. dtstart=datetime, dtend=date) 旧
+    代码 ``e.end - e.start`` 会 TypeError 被静默 catch. 统一归一一次.
+    """
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    if isinstance(dt, date):
+        return datetime.combine(dt, datetime.min.time(), timezone.utc)
+    return None
 
 
 @dataclass
@@ -58,10 +100,11 @@ class CalDAVReader:
         self.host = getattr(cfg, "davmail_imap_host", "") or "127.0.0.1"
         self.port = int(getattr(cfg, "davmail_caldav_port", 0) or 1080)
         self.user = cfg.user_email
-        # cipher key 跟 IMAP/SMTP 共享 (DavMail StringEncryptor 同一 password)
-        self.password = (
-            getattr(cfg, "davmail_cipher_key", "") or "mailagent-poc-shared-key"
-        )
+        # cipher key 跟 IMAP/SMTP 共享 (DavMail StringEncryptor 同一 password). 走
+        # imap_client.get_cipher_key 而非自己硬编码 fallback (review MEDIUM: 消除
+        # 第二处 PoC 默认值硬编码).
+        from src.mail.backend.imap_client import get_cipher_key
+        self.password = get_cipher_key(cfg)
         self._client = None
         self._principal = None
 
@@ -133,7 +176,8 @@ class CalDAVReader:
             return start <= es < end
 
         all_events = [e for e in all_events if _in_window(e)]
-        all_events.sort(key=lambda e: e.start.astimezone(timezone.utc) if e.start.tzinfo else e.start.replace(tzinfo=timezone.utc))
+        # _parse_event 保证 e.start tz-aware, 不再做 fallback (MEDIUM: 删 dead branch).
+        all_events.sort(key=lambda e: e.start.astimezone(timezone.utc))
         return all_events
 
     def list_today_events(self) -> list[CalendarEvent]:
@@ -149,51 +193,72 @@ class CalDAVReader:
         return self.list_events()
 
     def _parse_event(self, raw_event) -> Optional[CalendarEvent]:
-        """caldav.Event → CalendarEvent dataclass."""
+        """caldav.Event → CalendarEvent dataclass.
+
+        修复 (review HIGH #6 + MEDIUM):
+        - summary/location/organizer/url/description 全部用 ``_safe_value`` 防御,
+          避免空 SUMMARY / 多 SUMMARY / list value 触发 AttributeError 被外层 try 吞掉.
+        - dtstart/dtend 混合 date/datetime 统一通过 ``_coerce_aware`` 归一 tz-aware datetime,
+          避免 ``e.end - e.start`` TypeError.
+        - all_day 判定看原始 dtstart 类型 (date 而非 datetime).
+        """
         try:
             vobj = raw_event.vobject_instance
             if vobj is None:
                 return None
             vevent = vobj.vevent
-            summary = str(getattr(vevent, "summary", None).value if hasattr(vevent, "summary") else "")
-            dtstart = vevent.dtstart.value if hasattr(vevent, "dtstart") else None
-            dtend = vevent.dtend.value if hasattr(vevent, "dtend") else None
-            if dtstart is None or dtend is None:
+            summary = _safe_value(vevent, "summary", "")
+
+            dtstart_raw = None
+            dtend_raw = None
+            if hasattr(vevent, "dtstart"):
+                try:
+                    dtstart_raw = vevent.dtstart.value
+                except Exception:
+                    dtstart_raw = None
+            if hasattr(vevent, "dtend"):
+                try:
+                    dtend_raw = vevent.dtend.value
+                except Exception:
+                    dtend_raw = None
+            if dtstart_raw is None:
                 return None
-            is_all_day = not isinstance(dtstart, datetime)
-            if is_all_day:
-                # date → datetime (00:00 UTC)
-                dtstart = datetime.combine(dtstart, datetime.min.time(), timezone.utc)
-                dtend = datetime.combine(dtend, datetime.min.time(), timezone.utc)
-            elif dtstart.tzinfo is None:
-                dtstart = dtstart.replace(tzinfo=timezone.utc)
-            if isinstance(dtend, datetime) and dtend.tzinfo is None:
-                dtend = dtend.replace(tzinfo=timezone.utc)
+            is_all_day = not isinstance(dtstart_raw, datetime)
+            dtstart = _coerce_aware(dtstart_raw)
+            # dtend 缺失常见 (RFC 5545 允许), 用 dtstart + 1h 兜底
+            dtend = _coerce_aware(dtend_raw) if dtend_raw is not None else None
+            if dtstart is None:
+                return None
+            if dtend is None:
+                dtend = dtstart + timedelta(hours=1)
 
-            location = ""
-            if hasattr(vevent, "location") and vevent.location.value:
-                location = str(vevent.location.value)
-            organizer = ""
-            if hasattr(vevent, "organizer") and vevent.organizer.value:
-                organizer = str(vevent.organizer.value).replace("mailto:", "")
+            location = _safe_value(vevent, "location", "")
+            organizer_raw = _safe_value(vevent, "organizer", "")
+            organizer = organizer_raw.replace("mailto:", "") if organizer_raw else ""
 
-            attendees = []
-            if hasattr(vevent, "attendee_list"):
-                for att in vevent.attendee_list:
-                    val = str(att.value).replace("mailto:", "")
-                    if val and val.lower() not in attendees:
-                        attendees.append(val)
-            elif hasattr(vevent, "attendee"):
-                val = str(vevent.attendee.value).replace("mailto:", "")
-                attendees.append(val)
+            attendees: list[str] = []
+            try:
+                if hasattr(vevent, "attendee_list"):
+                    for att in vevent.attendee_list:
+                        try:
+                            val = str(att.value).replace("mailto:", "").strip()
+                        except Exception:
+                            continue
+                        if val and val.lower() not in (a.lower() for a in attendees):
+                            attendees.append(val)
+                elif hasattr(vevent, "attendee"):
+                    try:
+                        val = str(vevent.attendee.value).replace("mailto:", "").strip()
+                        if val:
+                            attendees.append(val)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
-            description = str(vevent.description.value) if hasattr(vevent, "description") else ""
-            url = ""
-            if hasattr(vevent, "url") and vevent.url.value:
-                url = str(vevent.url.value)
-            elif "teams.microsoft.com" in description.lower():
-                # 简单提取第一个 https url
-                import re
+            description = _safe_value(vevent, "description", "")
+            url = _safe_value(vevent, "url", "")
+            if not url and "teams.microsoft.com" in description.lower():
                 m = re.search(r"https?://[^\s<>\"']+", description)
                 if m:
                     url = m.group(0)

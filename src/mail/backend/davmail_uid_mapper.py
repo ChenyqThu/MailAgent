@@ -49,11 +49,19 @@ class DavMailUidMapper:
         self.max_failures_per_batch = max_failures_per_batch
 
     def count_pending(self) -> int:
-        """统计还需 backfill 的邮件数."""
-        with sqlite3.connect(self.cfg.sync_store_db_path) as conn:
+        """统计还需 backfill 的邮件数.
+
+        review NIT: 旧版用 ``backend_origin IN ('applescript', NULL)`` — SQLite
+        ``IN (NULL)`` 永远 false (NULL 等于性按 IS 算), 真实结果是只统计了
+        ``backend_origin='applescript'`` 的行, NULL backend_origin 的存量邮件被漏算.
+        改用显式 ``= 'applescript' OR IS NULL`` (跟 ``_fetch_batch_to_backfill`` 一致).
+        """
+        with sqlite3.connect(self.cfg.sync_store_db_path, timeout=5.0) as conn:
+            conn.execute("PRAGMA busy_timeout = 5000")
             row = conn.execute(
                 """SELECT COUNT(*) FROM email_metadata
-                   WHERE backend_origin IN ('applescript', NULL) AND imap_uid IS NULL
+                   WHERE (backend_origin = 'applescript' OR backend_origin IS NULL)
+                     AND imap_uid IS NULL
                      AND message_id IS NOT NULL"""
             ).fetchone()
             return int(row[0]) if row else 0
@@ -125,7 +133,8 @@ class DavMailUidMapper:
 
     def _fetch_batch_to_backfill(self, after_internal_id: int) -> list[tuple[int, str, str]]:
         """SELECT (internal_id, message_id, mailbox) batch_size 条邮件, 排除已处理."""
-        with sqlite3.connect(self.cfg.sync_store_db_path) as conn:
+        with sqlite3.connect(self.cfg.sync_store_db_path, timeout=5.0) as conn:
+            conn.execute("PRAGMA busy_timeout = 5000")
             rows = conn.execute(
                 """SELECT internal_id, message_id, mailbox FROM email_metadata
                    WHERE (backend_origin = 'applescript' OR backend_origin IS NULL)
@@ -141,13 +150,19 @@ class DavMailUidMapper:
     async def _backfill_one_batch(
         self, batch: list[tuple[int, str, str]]
     ) -> dict:
-        """处理一批 — 单 IMAP 连接 reuse, 每条 SEARCH HEADER Message-ID + UPDATE."""
+        """处理一批 — 单 IMAP 连接 reuse, 单 SQLite 连接 + executemany 批量 UPDATE.
+
+        review HIGH #7: 旧版每条 UID 命中/缺失都 ``sqlite3.connect`` 一次, 50/batch ×
+        8857 邮件 → 8857 次 connect (~3-5ms each on macOS APFS), 整体 ~30-45s 纯连接
+        开销, 并发跟主 mail-sync loop 抢 GIL. 改成单连接 + 累积 UPDATE + 末尾
+        executemany, 阻塞时间从 N×latency 降到 一次 commit.
+        """
         processed = 0
         backfilled = 0
         missing = 0
         failed = 0
 
-        # 同步 IMAP 在 to_thread 里跑, 避免阻塞 event loop
+        # 同步 IMAP + SQLite 在 to_thread 里跑, 避免阻塞 event loop
         def _sync_backfill():
             nonlocal processed, backfilled, missing, failed
             try:
@@ -156,7 +171,12 @@ class DavMailUidMapper:
                 logger.error(f"[davmail-uid-mapper] IMAP connect failed: {e}")
                 # 整批标 failed
                 failed += len(batch)
+                processed += len(batch)
                 return
+
+            # 累积 UPDATE 参数, 末尾 executemany 一次性提交
+            backfill_params: list[tuple[int, Optional[int], int]] = []  # (uid, uv, iid)
+            missing_params: list[tuple[int]] = []  # (iid,) — 标 -1 表示永久 miss
 
             try:
                 # 按 mailbox 分组减少 SELECT
@@ -166,10 +186,10 @@ class DavMailUidMapper:
                     by_mailbox[mbox].append((iid, mid))
 
                 from src.mail.backend.davmail_backend import (
-                    DavMailBackend, _mailbox_to_imap,
+                    DavMailBackend,
+                    _mailbox_to_imap,
+                    _read_uidvalidity_from_select,
                 )
-                # 拿 uidvalidity 一次性, 每个 mailbox 内 SELECT 后 STATUS
-                uv_cache: dict[str, Optional[int]] = {}
 
                 for mbox, items in by_mailbox.items():
                     imap_box = _mailbox_to_imap(mbox)
@@ -179,59 +199,60 @@ class DavMailUidMapper:
                         failed += len(items)
                         processed += len(items)
                         continue
-                    # uidvalidity
-                    if mbox not in uv_cache:
-                        typ, data = imap.status(imap_box, "(UIDVALIDITY)")
-                        if typ == "OK" and data:
-                            uv_str = DavMailBackend._extract_status_value(
-                                data[0], "UIDVALIDITY"
-                            )
-                            uv_cache[mbox] = int(uv_str) if uv_str else None
-
-                    uv = uv_cache.get(mbox)
+                    # UIDVALIDITY 从 SELECT 响应读 (CRITICAL #3 协议合规, 不再调 STATUS 同 mailbox)
+                    uv = _read_uidvalidity_from_select(imap)
 
                     for iid, mid in items:
                         processed += 1
-                        uid = DavMailBackend._lookup_uid_by_message_id(imap, mid)
+                        try:
+                            uid = DavMailBackend._lookup_uid_by_message_id(imap, mid)
+                        except Exception as e:
+                            logger.warning(
+                                f"[davmail-uid-mapper] lookup iid={iid} failed: {e}"
+                            )
+                            failed += 1
+                            continue
                         if uid:
-                            # UPDATE email_metadata
-                            try:
-                                with sqlite3.connect(self.cfg.sync_store_db_path) as conn:
-                                    conn.execute(
-                                        """UPDATE email_metadata
-                                           SET imap_uid = ?, imap_uidvalidity = ?
-                                           WHERE internal_id = ?""",
-                                        (uid, uv, iid),
-                                    )
-                                    conn.commit()
-                                backfilled += 1
-                            except Exception as e:
-                                logger.warning(
-                                    f"[davmail-uid-mapper] UPDATE iid={iid} failed: {e}"
-                                )
-                                failed += 1
+                            backfill_params.append((int(uid), uv, int(iid)))
+                            backfilled += 1
                         else:
-                            # 没找到 (邮件被删 / 在别的 mailbox) — 标 -1 表示永久 miss
-                            try:
-                                with sqlite3.connect(self.cfg.sync_store_db_path) as conn:
-                                    conn.execute(
-                                        """UPDATE email_metadata
-                                           SET imap_uid = -1
-                                           WHERE internal_id = ?""",
-                                        (iid,),
-                                    )
-                                    conn.commit()
-                                missing += 1
-                            except Exception as e:
-                                logger.warning(
-                                    f"[davmail-uid-mapper] mark missing iid={iid} failed: {e}"
-                                )
-                                failed += 1
+                            missing_params.append((int(iid),))
+                            missing += 1
             finally:
                 try:
                     imap.logout()
                 except Exception:
                     pass
+
+            # 单 SQLite 连接 + busy_timeout + executemany 一次性 commit
+            if not backfill_params and not missing_params:
+                return
+            try:
+                with sqlite3.connect(self.cfg.sync_store_db_path, timeout=10.0) as conn:
+                    conn.execute("PRAGMA busy_timeout = 10000")
+                    if backfill_params:
+                        conn.executemany(
+                            """UPDATE email_metadata
+                               SET imap_uid = ?, imap_uidvalidity = ?
+                               WHERE internal_id = ?""",
+                            backfill_params,
+                        )
+                    if missing_params:
+                        conn.executemany(
+                            """UPDATE email_metadata SET imap_uid = -1
+                               WHERE internal_id = ?""",
+                            missing_params,
+                        )
+                    conn.commit()
+            except Exception as e:
+                logger.error(
+                    f"[davmail-uid-mapper] batch UPDATE failed "
+                    f"(backfill={len(backfill_params)} missing={len(missing_params)}): {e}"
+                )
+                # 把累积的 backfill+missing 重新算成 failed (上游会重试整批)
+                failed += backfilled + missing
+                backfilled = 0
+                missing = 0
 
         await asyncio.to_thread(_sync_backfill)
         return {

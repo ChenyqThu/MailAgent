@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Callable, Awaitable, Dict, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Dict, Optional
 from loguru import logger
 
 from src.mail.applescript_arm import AppleScriptArm
@@ -22,6 +22,9 @@ from src.notify.feishu import FeishuNotifier
 from src.notion.sync import NotionSync
 from src.repository import EmailRepository
 from src.sync.outbox import OutboxRepository
+
+if TYPE_CHECKING:
+    from src.mail.backend.base import IMailBackend
 
 
 class EventHandlers:
@@ -38,7 +41,7 @@ class EventHandlers:
         result_callback: Optional[Callable[[str, Dict], Awaitable[None]]] = None,
         email_repo: Optional[EmailRepository] = None,
         outbox_repo: Optional[OutboxRepository] = None,
-        backend=None,
+        backend: Optional["IMailBackend"] = None,
     ):
         self.arm = arm
         self.sync_store = sync_store
@@ -688,6 +691,25 @@ class EventHandlers:
                 from html_clipboard import md_to_html
                 html = md_to_html(reply_suggestion)
 
+            # In-Reply-To: 原邮件 Message-ID 加 <> 包裹
+            in_reply_to: Optional[str] = None
+            references: Optional[str] = None
+            msg_id_clean = (message_id or "").strip().strip("<>")
+            if msg_id_clean:
+                in_reply_to = f"<{msg_id_clean}>"
+                # References chain (HIGH #4): Outlook 线程 fold 看 References 内任意
+                # message-id 命中即归同线程; 用 thread_id (= 原线程头 msgid) + 原邮件
+                # msgid 拼链, 覆盖大多数 reply 场景. 嵌套深的 chain 不完美但够用 —
+                # cutover 后若发现 thread fold 失败再扩 (TODO: 走 backend.fetch 拿
+                # raw References).
+                tid = (record.get("thread_id") if record else "") or ""
+                tid_clean = tid.strip().strip("<>")
+                chunks: list[str] = []
+                if tid_clean and tid_clean != msg_id_clean:
+                    chunks.append(f"<{tid_clean}>")
+                chunks.append(in_reply_to)
+                references = " ".join(chunks)
+
             # 4. DraftRequest + backend.append_draft
             draft = DraftRequest(
                 mode=mode,
@@ -696,7 +718,8 @@ class EventHandlers:
                 subject=subject or "(no subject)",
                 reply_text=plain_text,
                 reply_html=html,
-                in_reply_to=f"<{message_id}>" if message_id and not message_id.startswith("<") else (message_id or None),
+                in_reply_to=in_reply_to,
+                references=references,
             )
             logger.info(
                 f"create_draft (davmail/IMAP APPEND): mode={mode} "
@@ -737,21 +760,36 @@ class EventHandlers:
 
     @staticmethod
     def _split_addrs(addrs: str) -> list[str]:
-        """split RFC 822 to/cc 字段 (semicolon 或 comma 分隔), 提纯 email 地址."""
+        """split RFC 822 to/cc 字段, 提纯 email 地址.
+
+        review MEDIUM: 旧版 ``split(",")`` 在 ``"LastName, FirstName" <a@b>`` 这种含
+        逗号的 quoted display name 会错切. 改用 stdlib ``email.utils.getaddresses``
+        正确处理 quoted string / IDN / nested groups.
+        """
         if not addrs:
             return []
+        from email.utils import getaddresses
+        # 先把分号换成逗号 (Outlook 习惯 semicolon-separated; RFC 5322 要求 comma).
+        normalized = addrs.replace(";", ",")
         out: list[str] = []
-        for piece in addrs.replace(";", ",").split(","):
-            piece = piece.strip()
-            if not piece:
-                continue
-            # 取 < > 内的; 没有就原样
-            if "<" in piece and ">" in piece:
-                start = piece.index("<")
-                end = piece.index(">", start)
-                out.append(piece[start + 1:end].strip())
-            else:
-                out.append(piece)
+        try:
+            pairs = getaddresses([normalized])
+            for _name, email in pairs:
+                email = (email or "").strip()
+                if email:
+                    out.append(email)
+        except Exception:
+            # 极端 malformed input → 退回旧式 split (best-effort, 别整个 crash)
+            for piece in normalized.split(","):
+                piece = piece.strip()
+                if not piece:
+                    continue
+                if "<" in piece and ">" in piece:
+                    start = piece.index("<")
+                    end = piece.index(">", start)
+                    out.append(piece[start + 1:end].strip())
+                else:
+                    out.append(piece)
         return out
 
     async def _publish(self, event_id: str, result: Dict):

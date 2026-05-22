@@ -32,15 +32,37 @@ class DavMailConnectionError(RuntimeError):
 _DRAFTS_FLAG_PATTERN = re.compile(rb"\\Drafts", re.IGNORECASE)
 
 
+_POC_DEFAULT_CIPHER_KEY = "mailagent-poc-shared-key"
+
+
 def get_cipher_key(cfg: "Config") -> str:
     """从配置拿 DavMail cipher key (StringEncryptor password).
 
-    优先 cfg.davmail_cipher_key, fallback `davmail-poc/` 的默认值 (兼容现有 PoC 实例).
+    优先 ``cfg.davmail_cipher_key``. 留空时:
+      - 若 ``cfg.davmail_poc_mode=True`` 或 env ``DAVMAIL_POC_MODE=1`` → fallback
+        到 PoC 默认值, 兼容 ``davmail-poc/`` 共享实例.
+      - 否则 raise ``DavMailConnectionError``, 避免生产环境无声 fallback 导致
+        BadPaddingException → token 失效 → 用户莫名其妙 (review MEDIUM).
     """
     val = getattr(cfg, "davmail_cipher_key", "") or ""
-    if not val:
-        val = "mailagent-poc-shared-key"
-    return val
+    if val:
+        return val
+    import os as _os
+    poc_mode = bool(getattr(cfg, "davmail_poc_mode", False)) or (
+        _os.environ.get("DAVMAIL_POC_MODE", "").lower() in ("1", "true", "yes")
+    )
+    if poc_mode:
+        logger.warning(
+            "[imap-client] DAVMAIL_CIPHER_KEY empty + POC mode on → "
+            "using PoC default cipher key (NOT for production)"
+        )
+        return _POC_DEFAULT_CIPHER_KEY
+    raise DavMailConnectionError(
+        "DAVMAIL_CIPHER_KEY required when MAILAGENT_BACKEND=davmail. "
+        "Set DAVMAIL_CIPHER_KEY in .env to match your local DavMail StringEncryptor "
+        "password (see davmail-poc/POC-RESULTS.md §StringEncryptor). "
+        "For PoC/dev only: set DAVMAIL_POC_MODE=1 to fall back to the shared PoC key."
+    )
 
 
 def imap_connect(cfg: "Config", *, timeout: int = 60) -> imaplib.IMAP4:
@@ -171,12 +193,12 @@ def discover_drafts_folder(imap: imaplib.IMAP4) -> Optional[str]:
     except Exception as e:
         logger.warning(f"[imap-client] LIST SPECIAL-USE failed: {e}")
 
-    # Fallback: 试常见名字
+    # Fallback: 试常见名字. 不在循环里调 imap.close() 触发 EXPUNGE/状态机切换 — 让
+    # imap_session context manager 自己 logout 即可 (review HIGH #1).
     for candidate in ("INBOX/Drafts", "Drafts", "草稿", "[Gmail]/Drafts"):
         try:
             typ, _ = imap.select(candidate, readonly=True)
             if typ == "OK":
-                imap.close()
                 logger.debug(f"[imap-client] found Drafts via fallback: {candidate!r}")
                 return candidate
         except Exception:

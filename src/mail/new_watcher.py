@@ -27,11 +27,11 @@ Usage:
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Optional, Any, Callable, Awaitable
+from typing import List, Dict, Optional, Any
 from loguru import logger
 
 from src.config import config as settings
-from src.models import Email, Attachment
+from src.models import Email
 from src.mail.sqlite_radar import SQLiteRadar
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.sync_store import SyncStore
@@ -103,8 +103,10 @@ class NewWatcher:
 
         # 初始化 SQLiteRadar + AppleScriptArm
         # Sprint 16 dual-backend: 如果 backend 传入 → self.arm/radar 直接从 backend 拿
-        #   (AppleScriptBackend.arm/radar 是同一对象, 行为 100% 兼容; DavMailBackend 暂时
-        #   没有 arm/radar 属性, 自循环主路径走 backend.* 方法 — Phase B 完成 19 处适配后启用).
+        #   - AppleScriptBackend: self.arm = 真 AppleScriptArm, self.radar = 真 SQLiteRadar
+        #   - DavMailBackend: self.arm = self, self.radar = self (alias 兼容层, 转发到
+        #     IMAP STORE/FETCH/SEARCH); davmail mode 下 NewWatcher._poll_cycle 调
+        #     self.radar.get_new_emails → DavMailBackend.get_new_emails (IMAP UID SEARCH).
         # backend=None (默认, 老调用方兼容) → 自己构造 arm/radar 跟现状一致.
         if backend is not None and hasattr(backend, 'radar') and hasattr(backend, 'arm'):
             self.radar = backend.radar
@@ -373,6 +375,14 @@ class NewWatcher:
                     logger.info(f"SQLite found {len(new_emails)} new emails")
 
                     # 3. 立即写入 SyncStore（internal_id 为主键，message_id=NULL）
+                    #
+                    # Sprint 16 dual-backend (review CRITICAL #2):
+                    # - AppleScript 路径: internal_id = Mail.app ROWID (radar 给的), message_id=None
+                    #   (等下面 _process_pending_emails 抓 MIME 时填); 不传 imap_uid/imap_uidvalidity/
+                    #   backend_origin → sync_store 默认 backend_origin='applescript', imap_uid=NULL.
+                    # - DavMail 路径: backend.get_new_emails 已经分配独立 internal_id (>=10^9) +
+                    #   填好 imap_uid/imap_uidvalidity/backend_origin='davmail' + 解析了 message_id
+                    #   (IMAP UID FETCH 直接拿 header). 这里只需透传, 不要丢字段.
                     for email_meta in new_emails:
                         internal_id = email_meta['internal_id']
 
@@ -382,19 +392,38 @@ class NewWatcher:
                             logger.debug(f"Email {internal_id} already in SyncStore, skipping")
                             continue
 
-                        # 写入 SyncStore（pending 状态，等待 AppleScript 获取完整内容）
-                        self.sync_store.save_email({
+                        backend_origin = email_meta.get('backend_origin')
+                        payload = {
                             'internal_id': internal_id,
-                            'message_id': None,  # 后续由 AppleScript 填充
+                            # davmail 已解析的 message_id 透传; AppleScript 路径仍 None (等 MIME 抓回)
+                            'message_id': email_meta.get('message_id'),
                             'subject': email_meta.get('subject', ''),
-                            'sender': email_meta.get('sender_email', ''),
+                            'sender': (
+                                email_meta.get('sender')
+                                or email_meta.get('sender_email', '')
+                            ),
+                            'sender_name': email_meta.get('sender_name', ''),
                             'date_received': email_meta.get('date_received', ''),
                             'mailbox': email_meta.get('mailbox', '收件箱'),
                             'is_read': email_meta.get('is_read', False),
                             'is_flagged': email_meta.get('is_flagged', False),
-                            'sync_status': 'pending'
-                        })
-                        logger.debug(f"Added email {internal_id} to SyncStore (pending)")
+                            'thread_id': email_meta.get('thread_id'),
+                            'sync_status': 'pending',
+                        }
+                        # v13 davmail 字段透传 (AppleScript 路径不传, sync_store 默认 'applescript' + NULL)
+                        if backend_origin:
+                            payload['backend_origin'] = backend_origin
+                        if email_meta.get('imap_uid') is not None:
+                            payload['imap_uid'] = email_meta.get('imap_uid')
+                        if email_meta.get('imap_uidvalidity') is not None:
+                            payload['imap_uidvalidity'] = email_meta.get('imap_uidvalidity')
+
+                        self.sync_store.save_email(payload)
+                        logger.debug(
+                            f"Added email {internal_id} to SyncStore "
+                            f"(pending, origin={backend_origin or 'applescript'}, "
+                            f"imap_uid={email_meta.get('imap_uid')})"
+                        )
 
                 # 4. 更新 last_max_row_id（立即持久化）
                 self.sync_store.set_last_max_row_id(current_max)
