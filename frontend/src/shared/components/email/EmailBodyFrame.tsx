@@ -537,26 +537,28 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     }
   }, [srcDoc])
 
-  // Translation inject — translations 是显式 React prop, 切换是用户点击事件,
-  // 不需要 ResizeObserver / MutationObserver 间接探测。直接做三件事:
-  //   1) mutate DOM (添加/删除 .mailagent-translation)
-  //   2) 强制同步 reflow (read offsetHeight 触发 layout)
-  //   3) 同步 setHeight (直接 set, 不用 functional setter / abs threshold —
-  //      之前两版加了 rAF + MutationObserver 都没让 height shrink 生效,
-  //      根因是 abs<2 阈值搭 React batching 导致 next 值被吞或者 setHeight
-  //      没真生效, 这版改成无脑同步直 set 解决。)
+  // Translation inject — 用户切换译文/原文时同步:
+  //   1) mutate DOM
+  //   2) void offsetHeight 强制 sync reflow
+  //   3) 读 scrollHeight 拿 layout 后真实值
+  //   4) imperative iframe.style.height = ... 直接写 (bypass React state +
+  //      re-render 调度时序), 同时 setHeight 让 state 跟 DOM 同步避免
+  //      ResizeObserver 后续 measure 拿到 stale state 又 setHeight 回大值。
+  //
+  // 为什么 imperative: 此前 setHeight + React re-render 链路实测没让 iframe
+  // 视觉高度缩 — 用户验证 "切回原文底部留大片空白"。imperative 写 DOM 在当前
+  // 帧立即生效, 不依赖 React 调度 / 不依赖任何 observer fire 时机。
   useEffect(() => {
     if (!docReady) return
     const iframe = iframeRef.current
     const doc = iframe?.contentDocument
-    if (!doc?.body) return
+    if (!iframe || !doc?.body) return
     if (!translations || translations.length === 0) {
       clearInjectedTranslations(doc)
     } else {
       injectTranslations(doc, translations)
     }
-    // void read forces a sync layout pass — without this, scrollHeight may
-    // still report the pre-mutation value.
+    // force sync layout
     void doc.body.offsetHeight
     const html = doc.documentElement
     const body = doc.body
@@ -567,7 +569,12 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
       body.offsetHeight
     )
     if (h > 0) {
-      setHeight(Math.max(120, Math.min(Math.round(h), 80000)))
+      const next = Math.max(120, Math.min(Math.round(h), 80000))
+      // imperative write — 立即生效, 不等 React commit
+      iframe.style.height = `${next}px`
+      // sync state 防 ResizeObserver 后续 measure 用 stale prev 又 setHeight
+      // 回大值 (Math.abs(prev - next) < 2 阈值在 prev=stale 时可能误吞 update)
+      setHeight(next)
     }
   }, [translations, docReady, srcDoc])
 
