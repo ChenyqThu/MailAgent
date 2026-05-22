@@ -408,6 +408,18 @@ class Config(BaseSettings):
             "AppleScript backend 仍走 radar_poll_interval (默认 5s)."
         ),
     )
+    davmail_caldav_port: int = Field(
+        default=1080, env="DAVMAIL_CALDAV_PORT",
+        description="DavMail CalDAV 端口 (Phase C.2 — LLM agent 拿日程 context)",
+    )
+    llm_caldav_context_enabled: bool = Field(
+        default=False, env="LLM_CALDAV_CONTEXT_ENABLED",
+        description=(
+            "Phase C.2 — LLM agent 处理邮件时, 是否注入'今日/本周日程' context. "
+            "依赖: `pip install caldav` + DavMail 1080 端口 online. 默认关闭, 启用前先"
+            "试 caldav 连接是否 OK (见 davmail-poc/test_caldav.py)."
+        ),
+    )
 
 # 全局配置实例
 config = Config()

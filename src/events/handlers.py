@@ -38,6 +38,7 @@ class EventHandlers:
         result_callback: Optional[Callable[[str, Dict], Awaitable[None]]] = None,
         email_repo: Optional[EmailRepository] = None,
         outbox_repo: Optional[OutboxRepository] = None,
+        backend=None,
     ):
         self.arm = arm
         self.sync_store = sync_store
@@ -50,6 +51,10 @@ class EventHandlers:
         # 改写为「写 SQLite intent + outbox」, 不直调 AppleScript / NotionSync。
         # 详 SPRINT15-HANDOFF.md §3.3 (B) + plan Stage 1.4。
         self.outbox_repo = outbox_repo
+        # Sprint 16 dual-backend: 注入 IMailBackend 让 handle_create_draft 在 davmail
+        # 模式下走 IMAP APPEND 替代 scripts/create_reply_draft.sh AppleScript GUI 注入.
+        # arm 仍保留作 AppleScript 兼容接口 (davmail mode 下 arm = backend).
+        self.backend = backend
         self._result_callback = result_callback
         self._radar = None  # 延迟初始化
         self._stats = {
@@ -465,7 +470,12 @@ class EventHandlers:
             logger.debug(f"[island-hook] mail_completed dispatch failed: {e}")
 
     async def handle_create_draft(self, event: Dict):
-        """创建 Mail.app 回复草稿（Notion 按钮 / Openclaw 触发）"""
+        """创建邮件回复草稿（Notion 按钮 / Openclaw 触发）.
+
+        Sprint 16 dual-backend:
+          - davmail mode: 走 backend.append_draft (IMAP APPEND 到 Drafts), 富文本完美
+          - applescript mode (默认): 走 scripts/create_reply_draft.sh (GUI 注入老路径)
+        """
         self._stats["create_draft"] += 1
         import time as _time
         _t0 = _time.monotonic()
@@ -496,6 +506,17 @@ class EventHandlers:
             record = self.sync_store.get_by_message_id(message_id)
             if record:
                 internal_id = record.get('internal_id') if isinstance(record, dict) else getattr(record, 'internal_id', None)
+
+        # Sprint 16 dual-backend: davmail mode 走 IMAP APPEND, 不走 sh GUI 注入
+        if self.backend is not None and getattr(self.backend, 'backend_origin', '') == 'davmail':
+            await self._create_draft_via_imap(
+                event=event, event_id=event_id, page_id=page_id,
+                internal_id=internal_id, message_id=message_id,
+                reply_suggestion=reply_suggestion,
+                reply_suggestion_rich=reply_suggestion_rich,
+                props=props, mailbox=mailbox, _t0=_t0,
+            )
+            return
 
         # 预设剪贴板（在 Mail.app 打开前完成 HTML 转换）
         clipboard_ready = False
@@ -599,6 +620,139 @@ class EventHandlers:
                     os.unlink(clipboard_html_file)
                 except OSError:
                     pass
+
+    async def _create_draft_via_imap(
+        self, *, event, event_id, page_id, internal_id, message_id,
+        reply_suggestion, reply_suggestion_rich, props, mailbox, _t0,
+    ):
+        """Phase B.3: davmail mode 走 IMAP APPEND 创建草稿 (替代 AppleScript GUI 注入).
+
+        步骤:
+          1. 从 sync_store.get(internal_id) 拿原邮件 metadata (sender/to_addr/cc_addr/subject)
+          2. 按 mode (reply-all / reply / new) 计算收件人; merge props extra_to/cc
+          3. rich_text → HTML (notion_rich_text.rich_text_to_html) 或 markdown → HTML
+             (html_clipboard.md_to_html); plain text 用 reply_suggestion 原值
+          4. 拼 DraftRequest → self.backend.append_draft → DraftAppendResult
+          5. publish result + Notion Processing Status='草稿已创建'
+        """
+        import time as _time
+        from src.config import config as _cfg
+        from src.mail.backend import DraftRequest
+
+        try:
+            self_email = (_cfg.user_email or "").lower().strip()
+            mode = props.get("mode", "reply-all")
+            extra_to = [e.strip() for e in (props.get("extra_to") or "").split(",") if e.strip()]
+            extra_cc = [e.strip() for e in (props.get("extra_cc") or "").split(",") if e.strip()]
+            subject = props.get("subject", "")
+
+            # 1. 原邮件 metadata
+            record = self.sync_store.get(internal_id) if internal_id else None
+
+            # 2. 计算收件人
+            to_list: list[str] = []
+            cc_list: list[str] = []
+            if mode == "new":
+                if props.get("to_email") or props.get("to"):
+                    to_list = [props.get("to_email") or props.get("to")]
+            elif record:
+                orig_from = (record.get("sender") or "").strip()
+                orig_to = self._split_addrs(record.get("to_addr") or "")
+                orig_cc = self._split_addrs(record.get("cc_addr") or "")
+                if mode == "reply":
+                    to_list = [orig_from] if orig_from else []
+                else:  # reply-all
+                    candidates = ([orig_from] if orig_from else []) + orig_to
+                    to_list = [a for a in candidates if a.lower() != self_email]
+                    cc_list = [a for a in orig_cc if a.lower() != self_email]
+                # subject 自动加 Re: 前缀
+                if not subject:
+                    orig_subj = record.get("subject", "")
+                    subject = orig_subj if orig_subj.lower().startswith("re:") else f"Re: {orig_subj}"
+            to_list = list(dict.fromkeys(to_list + extra_to))  # dedup 保序
+            cc_list = list(dict.fromkeys(cc_list + extra_cc))
+
+            # 3. 拼 HTML + plain text
+            html: Optional[str] = None
+            plain_text = reply_suggestion or "(rich text body)"
+            if reply_suggestion_rich:
+                from src.converter.notion_rich_text import rich_text_to_html
+                html = rich_text_to_html(reply_suggestion_rich)
+            elif reply_suggestion:
+                import sys
+                script_path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts"
+                )
+                if script_path not in sys.path:
+                    sys.path.insert(0, script_path)
+                from html_clipboard import md_to_html
+                html = md_to_html(reply_suggestion)
+
+            # 4. DraftRequest + backend.append_draft
+            draft = DraftRequest(
+                mode=mode,
+                internal_id_for_threading=internal_id,
+                to=to_list, cc=cc_list,
+                subject=subject or "(no subject)",
+                reply_text=plain_text,
+                reply_html=html,
+                in_reply_to=f"<{message_id}>" if message_id and not message_id.startswith("<") else (message_id or None),
+            )
+            logger.info(
+                f"create_draft (davmail/IMAP APPEND): mode={mode} "
+                f"to={len(to_list)} cc={len(cc_list)} subject={subject[:40]!r} "
+                f"html_len={len(html) if html else 0}"
+            )
+
+            result = self.backend.append_draft(draft)
+            _t2 = _time.monotonic()
+
+            if result.success:
+                logger.info(
+                    f"create_draft: done | method=imap_append uid={result.appended_uid} "
+                    f"folder={result.drafts_folder!r} total={_t2 - _t0:.1f}s"
+                )
+                if page_id and self.notion_sync:
+                    await self.notion_sync.update_page_mail_sync_status(
+                        page_id, synced=True, processing_status="草稿已创建"
+                    )
+                self._stats["create_draft_success"] += 1
+                await self._publish(event_id, {
+                    "status": "success",
+                    "method": "imap_append",
+                    "appended_uid": result.appended_uid,
+                    "drafts_folder": result.drafts_folder,
+                })
+            else:
+                self._stats["create_draft_error"] += 1
+                logger.error(f"create_draft (davmail): IMAP APPEND failed: {result.error}")
+                await self._publish(event_id, {
+                    "status": "error",
+                    "error": f"IMAP APPEND failed: {result.error}",
+                })
+        except Exception as e:
+            self._stats["create_draft_error"] += 1
+            logger.error(f"create_draft (davmail) error: {e}", exc_info=True)
+            await self._publish(event_id, {"status": "error", "error": f"davmail draft: {e}"})
+
+    @staticmethod
+    def _split_addrs(addrs: str) -> list[str]:
+        """split RFC 822 to/cc 字段 (semicolon 或 comma 分隔), 提纯 email 地址."""
+        if not addrs:
+            return []
+        out: list[str] = []
+        for piece in addrs.replace(";", ",").split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            # 取 < > 内的; 没有就原样
+            if "<" in piece and ">" in piece:
+                start = piece.index("<")
+                end = piece.index(">", start)
+                out.append(piece[start + 1:end].strip())
+            else:
+                out.append(piece)
+        return out
 
     async def _publish(self, event_id: str, result: Dict):
         """发布事件执行结果到 Redis"""

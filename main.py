@@ -157,6 +157,9 @@ class EmailNotionSyncApp:
                 # Sprint 15: 启用 outbox 时 handle_flag_changed/completed/ai_reviewed
                 # 改写为 intent 模式，由 FanoutWorker 异步派发
                 outbox_repo=self.outbox_repo,
+                # Sprint 16 dual-backend: davmail mode 下 handle_create_draft 走
+                # backend.append_draft (IMAP APPEND), applescript mode 仍走 sh GUI 注入
+                backend=self.backend,
             )
             self._event_handlers = handlers
 
@@ -328,6 +331,16 @@ class EmailNotionSyncApp:
             # 启动周期会议滚动展开循环
             expansion_task = asyncio.create_task(self._meeting_expansion_loop())
 
+            # Phase C.1 — davmail mode 下 fire-and-forget backfill task, 把 applescript
+            # 时代抓的存量邮件 imap_uid 副字段补齐 (DavMailBackend.fetch_email_by_id
+            # 快路径准备). 延迟 10s 避免跟其他启动 task 抢资源.
+            uid_backfill_task = None
+            if self.backend.backend_origin == "davmail":
+                from src.mail.backend.davmail_uid_mapper import schedule_backfill_task
+                uid_backfill_task = asyncio.create_task(
+                    schedule_backfill_task(config, self.watcher.sync_store, delay_sec=10)
+                )
+
             # Sprint 15: 启动 outbox FanoutWorker（如果配置开启）
             fanout_task = None
             if self.fanout_worker:
@@ -382,6 +395,8 @@ class EmailNotionSyncApp:
 
             # 取消任务
             tasks = [watcher_task, reverse_task, expansion_task]
+            if uid_backfill_task:
+                tasks.append(uid_backfill_task)
             if redis_task:
                 tasks.append(redis_task)
             if stats_task:
