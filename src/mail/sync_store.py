@@ -48,10 +48,30 @@ from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
 
 
-# 时区基线: mail.app SQLite radar 拿到的 date_received 是本地北京时间 naive 字符串
-# (mail.app 显示给用户的时间); davmail IMAP 路径拿的 RFC 822 Date 带原始 tz. 统一归
-# 一成 ISO 8601 带 tz, 让前端按字符串排序跟 Outlook 服务端口径一致.
-_BEIJING_TZ = timezone(timedelta(hours=8))
+def _local_tz():
+    """返回 IANA ``ZoneInfo`` (含 DST 规则). 优先 /etc/localtime 软链, fallback fixed offset.
+
+    mail.app SQLite radar 用 ``datetime(ts, 'unixepoch', 'localtime')`` 转 Unix
+    timestamp 成本地 naive 字符串 — 跟 mail.app GUI 显示给用户的时间一致. 关键是同一封
+    邮件在不同月份 (DST vs 标准时间) tz 偏移不同, 不能用 ``datetime.now().astimezone()``
+    硬拿当前 offset (会让所有历史邮件用今天的 DST 状态, 跨边界时错 1h).
+
+    用 ``zoneinfo.ZoneInfo("America/Los_Angeles")`` 这种 IANA zone 自动按每个 datetime
+    的具体日期决定 PDT (-07) / PST (-08).
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        import os
+        import re
+        # macOS /etc/localtime -> /var/db/timezone/zoneinfo/America/Los_Angeles
+        link = os.readlink("/etc/localtime")
+        m = re.search(r"zoneinfo/(.+)$", link)
+        if m:
+            return ZoneInfo(m.group(1))
+    except Exception:
+        pass
+    # Fallback: 当前时刻的固定 offset (跨 DST 边界时 ~1h 误差)
+    return datetime.now().astimezone().tzinfo or timezone.utc
 
 
 def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
@@ -59,21 +79,22 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
 
     输入支持:
     - 已是 ISO with tz: ``2026-05-22T14:30:00+08:00`` → 原样返回
-    - ISO naive: ``2026-01-27T23:01:25`` → 加 ``+08:00``
-    - space-separated naive (mail.app SQLite radar): ``2026-05-19 04:23:53`` →
-      ``2026-05-19T04:23:53+08:00``
+    - ISO naive: ``2026-01-27T23:01:25`` → 加系统本地 tz
+    - space-separated naive (mail.app SQLite radar 用 ``datetime(ts, 'unixepoch',
+      'localtime')`` 输出, 是**系统本地 tz** naive): ``2026-05-19 04:23:53`` →
+      ``2026-05-19T04:23:53-07:00`` (假设系统 PDT)
     - RFC 822 (旧 davmail 兜底): ``Fri, 22 May 2026 14:30:00 +0800`` → ISO 8601
     - 空 / 解析失败: 原样返回 (上层别 break)
 
-    Sprint 16 cutover: 存量 5146 space_naive + 2 iso_naive 行通过
-    ``scripts/dev/normalize_date_received_iso.py`` 一次性归一; 未来新写入
-    经此 helper 保证不再产生 naive.
+    Sprint 16 cutover: ``_local_tz()`` 动态拿系统 tz 而非硬编码 ``+08:00`` —
+    上一版本 hard-code 北京时区导致 PDT 用户的 5148 行被标错 tz.
     """
     if not value:
         return value
     s = value.strip()
     if not s:
         return value
+    local_tz = _local_tz()
     # 已是 ISO with tz (T 加 +HH:MM / -HH:MM / Z)
     if "T" in s and (s.endswith("Z") or "+" in s[10:] or "-" in s[10:]):
         return s
@@ -82,7 +103,10 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
         try:
             dt = datetime.fromisoformat(s)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=_BEIJING_TZ)
+                # 加 system tz (含 DST 自动识别)
+                dt = dt.replace(tzinfo=local_tz)
+                # 但 Python tzinfo 加上去不一定带 DST, 用 astimezone re-resolve 一次
+                dt = dt.astimezone(local_tz)
             return dt.isoformat()
         except (TypeError, ValueError):
             pass
@@ -91,7 +115,8 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
         try:
             dt = datetime.fromisoformat(s.replace(" ", "T", 1))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=_BEIJING_TZ)
+                dt = dt.replace(tzinfo=local_tz)
+                dt = dt.astimezone(local_tz)
             return dt.isoformat()
         except (TypeError, ValueError):
             pass
@@ -101,7 +126,7 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
         if dt is None:
             return value
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_BEIJING_TZ)
+            dt = dt.replace(tzinfo=local_tz)
         return dt.isoformat()
     except Exception:
         return value
