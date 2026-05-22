@@ -41,9 +41,70 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
+
+
+# 时区基线: mail.app SQLite radar 拿到的 date_received 是本地北京时间 naive 字符串
+# (mail.app 显示给用户的时间); davmail IMAP 路径拿的 RFC 822 Date 带原始 tz. 统一归
+# 一成 ISO 8601 带 tz, 让前端按字符串排序跟 Outlook 服务端口径一致.
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
+    """把 date_received 归一成 ISO 8601 带 tz 字符串.
+
+    输入支持:
+    - 已是 ISO with tz: ``2026-05-22T14:30:00+08:00`` → 原样返回
+    - ISO naive: ``2026-01-27T23:01:25`` → 加 ``+08:00``
+    - space-separated naive (mail.app SQLite radar): ``2026-05-19 04:23:53`` →
+      ``2026-05-19T04:23:53+08:00``
+    - RFC 822 (旧 davmail 兜底): ``Fri, 22 May 2026 14:30:00 +0800`` → ISO 8601
+    - 空 / 解析失败: 原样返回 (上层别 break)
+
+    Sprint 16 cutover: 存量 5146 space_naive + 2 iso_naive 行通过
+    ``scripts/dev/normalize_date_received_iso.py`` 一次性归一; 未来新写入
+    经此 helper 保证不再产生 naive.
+    """
+    if not value:
+        return value
+    s = value.strip()
+    if not s:
+        return value
+    # 已是 ISO with tz (T 加 +HH:MM / -HH:MM / Z)
+    if "T" in s and (s.endswith("Z") or "+" in s[10:] or "-" in s[10:]):
+        return s
+    # ISO naive: 2026-01-27T23:01:25
+    if "T" in s and len(s) >= 19:
+        try:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_BEIJING_TZ)
+            return dt.isoformat()
+        except (TypeError, ValueError):
+            pass
+    # space-separated: 2026-05-19 04:23:53
+    if " " in s and len(s) >= 19 and s[10] == " ":
+        try:
+            dt = datetime.fromisoformat(s.replace(" ", "T", 1))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_BEIJING_TZ)
+            return dt.isoformat()
+        except (TypeError, ValueError):
+            pass
+    # RFC 822 fallback (e.g. davmail 早期 path / 万一漏掉 normalize)
+    try:
+        dt = parsedate_to_datetime(s)
+        if dt is None:
+            return value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_BEIJING_TZ)
+        return dt.isoformat()
+    except Exception:
+        return value
 
 
 class SyncStoreStats(TypedDict, total=False):
@@ -1373,7 +1434,7 @@ class SyncStore:
                     email.get('sender_name', ''),
                     email.get('to_addr', ''),
                     email.get('cc_addr', ''),
-                    email.get('date_received', ''),
+                    _normalize_date_received_iso(email.get('date_received', '')) or '',
                     email.get('mailbox', '收件箱'),
                     1 if email.get('is_read') else 0,
                     1 if email.get('is_flagged') else 0,
