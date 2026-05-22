@@ -458,8 +458,8 @@ export function searchEmails(opts: SearchOpts): SearchResult {
       bm25(email_body_fts)    AS rank,
       snippet(email_body_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
       m.notion_page_id        AS notion_page_id,
-      json_extract(l.labels_json, '$.priority') AS priority_raw,
-      json_extract(l.labels_json, '$.language') AS lang_raw
+      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority') END AS priority_raw,
+      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language') END AS lang_raw
     FROM email_body_fts
     JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
     LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
@@ -525,12 +525,16 @@ const ENRICHED_LIST_COLS = `
     m.processing_status
 `
 
+// CASE WHEN json_valid(...) 守卫: labels_json 在罕见场景下会是 malformed JSON
+// (LLM 输出超长被截断 / 写入路径异常), SQLite json_extract 遇到非法值会抛
+// "malformed JSON" 整个 query 失败 → listEnriched 整页崩, 前端永远拉不到数据.
+// 加 json_valid 包一层, 非法 row 返回 NULL (该行 AI 字段空着, 但不影响其他行).
 const ENRICHED_EXTRA_COLS = `
     substr(b.body_markdown, 1, 100) AS snippet_raw,
-    json_extract(l.labels_json, '$.language')   AS lang_raw,
-    json_extract(l.labels_json, '$.priority')   AS priority_raw,
-    json_extract(l.labels_json, '$.action_type') AS action_raw,
-    json_extract(l.labels_json, '$.category')   AS category_raw,
+    CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language')   END AS lang_raw,
+    CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority')   END AS priority_raw,
+    CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.action_type') END AS action_raw,
+    CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.category')   END AS category_raw,
     -- Sprint 16 perf: attach_count 改 LEFT JOIN 聚合 (之前用相关子查询, 每行
     -- 一次全表扫描; 500 行 → 500 次扫). 配合 v11 的 (internal_id, is_inline)
     -- 索引, listEnriched 整体延迟从 ~200-500ms 降到 ~10-30ms.

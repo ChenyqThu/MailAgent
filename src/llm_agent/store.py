@@ -22,6 +22,38 @@ from src.config import config as cfg
 _BACKOFF = [60, 300, 900, 3600, 7200]
 
 
+def _truncate_long_fields(d: Dict[str, Any], *, max_field_chars: int = 3500) -> Dict[str, Any]:
+    """截 dict 内**字段值**而非整个 JSON 字符串, 保证序列化后仍是合法 JSON.
+
+    Sprint 16 cutover 加固: 老代码 ``json.dumps(d)[:4000]`` 把 JSON 字符串硬切 →
+    字段中间被切, JSON 不合法, 前端 ``json_extract`` 整页 query 失败.
+
+    策略: 对超长 str 字段截到 ``max_field_chars`` + 加 ``…[truncated]`` marker;
+    对 list[str] / list[dict] 做浅截 (整个元素裁短). 不动 int/float/bool/None.
+    """
+    if not isinstance(d, dict):
+        return d
+    out: Dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, str) and len(v) > max_field_chars:
+            out[k] = v[:max_field_chars] + "…[truncated]"
+        elif isinstance(v, list):
+            new_list: list = []
+            for item in v:
+                if isinstance(item, str) and len(item) > max_field_chars:
+                    new_list.append(item[:max_field_chars] + "…[truncated]")
+                elif isinstance(item, dict):
+                    new_list.append(_truncate_long_fields(item, max_field_chars=max_field_chars // 2))
+                else:
+                    new_list.append(item)
+            out[k] = new_list
+        elif isinstance(v, dict):
+            out[k] = _truncate_long_fields(v, max_field_chars=max_field_chars // 2)
+        else:
+            out[k] = v
+    return out
+
+
 def _backoff_for(retry_count: int) -> float:
     idx = min(retry_count, len(_BACKOFF) - 1)
     return time.time() + _BACKOFF[idx]
@@ -142,9 +174,21 @@ class LLMProcessingStore:
         # blob so the frontend AIFieldsBlock can render it as a hero.
         # Notion remains the canonical "Reply Suggestion" property (rich
         # text), but the markdown source we used to write it is small
-        # enough to live next to ai_summary in labels_json.  Truncation
-        # (4000 chars below) is the only safety belt.
-        labels_json = json.dumps(labels_dict, ensure_ascii=False)[:4000]
+        # enough to live next to ai_summary in labels_json.
+        #
+        # Cutover hardening: 老代码 ``json.dumps(...)[:4000]`` 暴力截字符串,
+        # 字段中间被切断 → labels_json 不再是合法 JSON, 前端
+        # ``json_extract(labels_json, '$.x')`` 整页 query 抛 malformed JSON
+        # → EmailList 拉不到任何邮件 (Sprint 16 实测 internal_id=54214 触发).
+        # 改成 dict 内部截字段 + 末尾 fallback 重序列化, 保证 JSON valid.
+        labels_dict = _truncate_long_fields(labels_dict, max_field_chars=3500)
+        labels_json = json.dumps(labels_dict, ensure_ascii=False)
+        # 二次保险: 极端情况下 ensure_ascii=False 仍可能突破限制 (CJK 字符多),
+        # 再 sanity 检查; 超长就把 reply_suggestion_md 整段裁掉再 dump.
+        if len(labels_json) > 8000:
+            safe_dict = {k: v for k, v in labels_dict.items()
+                         if k != "reply_suggestion_md"}
+            labels_json = json.dumps(safe_dict, ensure_ascii=False)
 
         with self._conn() as c:
             c.execute(
