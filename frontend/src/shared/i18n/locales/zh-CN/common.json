@@ -55,7 +55,15 @@
     "moreProps": "{n, plural, =1 {更多属性 · 1} other {更多属性 · #}}",
     "fewerProps": "收起属性",
     "more": "more",
-    "less": "less"
+    "less": "less",
+    "lightbox": {
+      "ariaLabel": "图片预览",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "rotate": "旋转",
+      "reset": "重置",
+      "close": "关闭"
+    }
   },
   "ai": {
     "compose": "起草回复",

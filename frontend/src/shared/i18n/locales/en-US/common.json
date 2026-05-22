@@ -55,7 +55,15 @@
     "moreProps": "{n, plural, =1 {1 more property} other {# more properties}}",
     "fewerProps": "Fewer properties",
     "more": "more",
-    "less": "less"
+    "less": "less",
+    "lightbox": {
+      "ariaLabel": "Image preview",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "rotate": "Rotate",
+      "reset": "Reset",
+      "close": "Close"
+    }
   },
   "ai": {
     "compose": "Draft reply",

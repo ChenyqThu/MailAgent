@@ -10,9 +10,12 @@
 // current accent + ink-* tokens so theme/accent swaps re-tint the iframe
 // content too.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQueries, useQuery } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import DOMPurify from 'dompurify'
+import { Minus, Plus, RotateCw, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useAppearance } from '@shared/state/appearance'
@@ -146,7 +149,21 @@ const BODY_CSS = `
   }
   ul, ol { padding-left: 22px; margin: 0 0 12px; }
   li { margin-bottom: 4px; }
-  img { max-width: 100%; height: auto; border-radius: 6px; }
+  /* Sprint 18 — preserve aspect ratio + open lightbox on click.
+     Outlook / Gmail templates often inline width="600" height="400" on
+     <img> tags; when max-width:100% kicks in and only width shrinks,
+     the inline height attribute keeps the image stretched. height:auto
+     !important overrides the inline attribute so the browser re-computes
+     height from the intrinsic ratio. object-fit:contain is a belt-and-
+     suspenders guard for cases where both width and height are set as
+     inline style. cursor:zoom-in hints clickability. */
+  img {
+    max-width: 100%;
+    height: auto !important;
+    object-fit: contain;
+    border-radius: 6px;
+    cursor: zoom-in;
+  }
   /* Override <table width="600"> attributes (common in HTML newsletter
      boilerplate) so the email body re-flows when the user shrinks the
      column. !important wins over inline style="width:600px" from the
@@ -336,6 +353,10 @@ export function EmailBodyFrame({
 </html>`
   }, [bodyQ.data, byCid, byBaseName, internalId, resolvedTheme])
 
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
+  const handleImageClick = useCallback((src: string) => setPreviewSrc(src), [])
+  const closePreview = useCallback(() => setPreviewSrc(null), [])
+
   if (bodyQ.isError) {
     return (
       <div className="text-aux text-fail">
@@ -350,11 +371,15 @@ export function EmailBodyFrame({
     return <div className="text-aux text-ink-fg-2">(empty body)</div>
   }
   return (
-    <BodyIframe
-      srcDoc={srcDoc}
-      key={internalId}
-      translations={translations ?? null}
-    />
+    <>
+      <BodyIframe
+        srcDoc={srcDoc}
+        key={internalId}
+        translations={translations ?? null}
+        onImageClick={handleImageClick}
+      />
+      {previewSrc !== null && <ImageLightbox src={previewSrc} onClose={closePreview} />}
+    </>
   )
 }
 
@@ -368,6 +393,9 @@ interface BodyIframeProps {
   /** Immersive translation segments to inject after each matching block.
    *  null clears any prior injection. */
   translations: TranslationSegment[] | null
+  /** Called with the resolved data: URL when the user clicks an <img>.
+   *  Parent opens a lightbox with that URL. */
+  onImageClick: (src: string) => void
 }
 
 // Block-level selector mirrors html-extractor.ts so renderer's match space ==
@@ -464,7 +492,7 @@ function injectTranslations(doc: Document, segments: TranslationSegment[]): numb
   return injected
 }
 
-function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactElement {
+function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): React.ReactElement {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   // 400px initial keeps the layout from flashing tiny while the iframe
   // measures itself; once `measure()` lands the height jumps to the
@@ -508,10 +536,25 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
       ro?.disconnect()
       ro = new ResizeObserver(() => measure())
       ro.observe(body)
+      // Sprint 18 — every <img> gets:
+      //   1. load/error listener → re-measure height when async decode lands
+      //   2. click listener → open lightbox preview with resolved src
+      // Iframe sandbox blocks scripts, so the listeners must be attached
+      // from the parent (allowed by allow-same-origin). preventDefault on
+      // click matters because some senders wrap <img> in <a> for tracking;
+      // sandbox blocks the popup anyway and we want predictable preview.
       doc!.querySelectorAll('img').forEach((img) => {
-        if (img.complete) return
-        img.addEventListener('load', measure, { once: true })
-        img.addEventListener('error', measure, { once: true })
+        const el = img as HTMLImageElement
+        if (!el.complete) {
+          el.addEventListener('load', measure, { once: true })
+          el.addEventListener('error', measure, { once: true })
+        }
+        el.addEventListener('click', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          const src = el.currentSrc || el.src
+          if (src) onImageClick(src)
+        })
       })
       measure()
       setDocReady(true)
@@ -586,5 +629,190 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
       style={{ height: `${height}px` }}
       className="w-full border-0 bg-transparent block"
     />
+  )
+}
+
+// Sprint 18 — inline-image lightbox.
+//
+// Renders a full-viewport overlay (portal'd to body so parent transforms
+// don't break fixed positioning) with the clicked image centered and a
+// toolbar for zoom / rotate / reset / close.
+//
+// Controls:
+//   - wheel        zoom toward cursor (cap 0.1 .. 8)
+//   - drag         pan when zoomed in (cursor: grab/grabbing)
+//   - +/- buttons  ±25 % zoom
+//   - rotate btn   +90° step
+//   - reset btn    restore scale/rotation/pan
+//   - Esc          close
+//
+// We render with `position: fixed` outside any clipping ancestor — the
+// email pane has overflow-hidden via the iframe styling, so a same-tree
+// modal would get clipped. createPortal sidesteps that.
+
+const SCALE_MIN = 0.1
+const SCALE_MAX = 8
+
+interface ImageLightboxProps {
+  src: string
+  onClose: () => void
+}
+
+function ImageLightbox({ src, onClose }: ImageLightboxProps): React.ReactPortal | null {
+  const { t } = useTranslation()
+  const [scale, setScale] = useState(1)
+  const [rotation, setRotation] = useState(0)
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const dragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(
+    null
+  )
+
+  const reset = useCallback(() => {
+    setScale(1)
+    setRotation(0)
+    setPan({ x: 0, y: 0 })
+  }, [])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key === '+' || e.key === '=') {
+        setScale((s) => Math.min(SCALE_MAX, s * 1.25))
+      } else if (e.key === '-' || e.key === '_') {
+        setScale((s) => Math.max(SCALE_MIN, s / 1.25))
+      } else if (e.key === 'r' || e.key === 'R') {
+        setRotation((r) => (r + 90) % 360)
+      } else if (e.key === '0') {
+        reset()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return (): void => window.removeEventListener('keydown', onKey)
+  }, [onClose, reset])
+
+  function onWheel(e: React.WheelEvent<HTMLDivElement>): void {
+    e.preventDefault()
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+    setScale((s) => Math.max(SCALE_MIN, Math.min(SCALE_MAX, s * factor)))
+  }
+
+  function onPointerDown(e: React.PointerEvent<HTMLImageElement>): void {
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    dragRef.current = { startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y }
+  }
+  function onPointerMove(e: React.PointerEvent<HTMLImageElement>): void {
+    const d = dragRef.current
+    if (!d) return
+    setPan({ x: d.panX + (e.clientX - d.startX), y: d.panY + (e.clientY - d.startY) })
+  }
+  function onPointerUp(e: React.PointerEvent<HTMLImageElement>): void {
+    if (dragRef.current && (e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) {
+      ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+    }
+    dragRef.current = null
+  }
+
+  // Click on the backdrop (not the image / not the toolbar) closes the
+  // lightbox — common UX pattern.
+  function onBackdropClick(e: React.MouseEvent<HTMLDivElement>): void {
+    if (e.target === e.currentTarget) onClose()
+  }
+
+  const node = (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('emailDetail.lightbox.ariaLabel')}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-ink-0/85 backdrop-blur-sm"
+      onClick={onBackdropClick}
+      onWheel={onWheel}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        style={{
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale}) rotate(${rotation}deg)`,
+          transition: dragRef.current ? 'none' : 'transform 120ms ease',
+          maxWidth: '92vw',
+          maxHeight: '88vh',
+          cursor: scale > 1 ? 'grab' : 'default',
+          userSelect: 'none',
+          willChange: 'transform'
+        }}
+      />
+      <div
+        className="pointer-events-auto absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-ink-border-soft bg-ink-1/85 px-2 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.4)] backdrop-blur-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <LightboxBtn
+          label={`${t('emailDetail.lightbox.zoomOut')} (-)`}
+          onClick={() => setScale((s) => Math.max(SCALE_MIN, s / 1.25))}
+        >
+          <Minus className="size-4" />
+        </LightboxBtn>
+        <span className="min-w-[3.5rem] text-center font-mono text-aux text-ink-fg-1 tabular-nums">
+          {Math.round(scale * 100)}%
+        </span>
+        <LightboxBtn
+          label={`${t('emailDetail.lightbox.zoomIn')} (+)`}
+          onClick={() => setScale((s) => Math.min(SCALE_MAX, s * 1.25))}
+        >
+          <Plus className="size-4" />
+        </LightboxBtn>
+        <span className="mx-1 h-5 w-px bg-ink-border-soft" />
+        <LightboxBtn
+          label={`${t('emailDetail.lightbox.rotate')} (R)`}
+          onClick={() => setRotation((r) => (r + 90) % 360)}
+        >
+          <RotateCw className="size-4" />
+        </LightboxBtn>
+        <button
+          type="button"
+          onClick={reset}
+          className="rounded-md px-2 py-1 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg"
+          aria-label={`${t('emailDetail.lightbox.reset')} (0)`}
+        >
+          {t('emailDetail.lightbox.reset')}
+        </button>
+        <span className="mx-1 h-5 w-px bg-ink-border-soft" />
+        <LightboxBtn label={`${t('emailDetail.lightbox.close')} (Esc)`} onClick={onClose}>
+          <X className="size-4" />
+        </LightboxBtn>
+      </div>
+    </div>
+  )
+
+  if (typeof document === 'undefined') return null
+  return createPortal(node, document.body)
+}
+
+function LightboxBtn({
+  label,
+  onClick,
+  children
+}: {
+  label: string
+  onClick: () => void
+  children: React.ReactNode
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="rounded-md p-1.5 text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus:outline-none focus:ring-2 focus:ring-coral/40"
+    >
+      {children}
+    </button>
   )
 }
