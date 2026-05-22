@@ -226,9 +226,13 @@ class NotionToMailSync:
 
             # 立即 update_local_flags — echo prevention, 让下一轮 SQLite Radar 不
             # 把 fanout 即将派发的状态作为新 diff 触发反向链路
+            # Sprint 16 收尾 (codex 审 P0): sync_single_page() 同步把 Notion 标成
+            # Processing Status=已同步, SQLite 这边也要镜像, 否则前端 listEnriched
+            # 跟 Notion 看到的状态不一致.
             if self.sync_store:
                 self.sync_store.update_local_flags(
-                    internal_id, target_read, target_flagged
+                    internal_id, target_read, target_flagged,
+                    processing_status='已同步',
                 )
 
             outbox_id = self.outbox_repo.enqueue(
@@ -337,7 +341,12 @@ class NotionToMailSync:
             if ai_action in self.FLAG_ACTIONS:
                 is_flagged = True
 
-            self.sync_store.update_local_flags(internal_id, bool(is_read), bool(is_flagged))
+            # Sprint 16 收尾 (codex 审 P1): 老路径 fallback 同样镜像 ps='已同步'.
+            # 语义跟 outbox 主路径 _enqueue_outbox 一致, 不同的只是派发方式.
+            self.sync_store.update_local_flags(
+                internal_id, bool(is_read), bool(is_flagged),
+                processing_status='已同步',
+            )
         except Exception as e:
             logger.warning(f"Failed to update store flags for echo prevention: {e}")
 

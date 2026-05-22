@@ -433,9 +433,14 @@ class EventHandlers:
         internal_id = record.get('internal_id') if isinstance(record, dict) else getattr(record, 'internal_id', None)
         mailbox = record.get('mailbox') if isinstance(record, dict) else getattr(record, 'mailbox', None)
         stored_flagged = bool(record.get('is_flagged') if isinstance(record, dict) else getattr(record, 'is_flagged', False))
+        stored_read = bool(record.get('is_read') if isinstance(record, dict) else getattr(record, 'is_read', False))
+        stored_ps = (record.get('processing_status') if isinstance(record, dict) else getattr(record, 'processing_status', '')) or ''
 
-        if not stored_flagged:
-            logger.debug(f"Already unflagged, skipping: {message_id[:40]}")
+        # Sprint 16 收尾 (codex 审 P1): early return 只在 "三个目标状态都已满足" 时才退,
+        # 否则即便 flag 已是 False, 也要补 ps='已完成' 镜像. 防 Notion webhook 明确带
+        # Processing Status=已完成 但 SQLite ps 字段保持空的 SSoT 漏洞.
+        if not stored_flagged and stored_read and stored_ps == '已完成':
+            logger.debug(f"Already in completed state, skipping: {message_id[:40]}")
             return
 
         # Sprint 15 新路径：outbox enabled
