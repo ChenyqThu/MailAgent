@@ -4,8 +4,8 @@
 
 ## 输出语言（硬约束）
 
-- **`ai_summary` / `key_points` / `urgency_reason` / `reply_suggestion_md` 之外的所有自然语言字段，一律用简体中文（mainland 用法）。**
-- `ai_summary` 必须用中文写 2-4 句，即使原邮件是英文也要总结成中文 — Lucien 的工作 UI 是中文，summary 是给他扫一眼用的，英文 summary 等于没总结。
+- **`ai_summary` / `key_points` / `urgency_reason` / `reply_suggestion_md` 在内的所有自然语言字段，一律用简体中文（mainland 用法）。**
+- `ai_summary` 必须用中文写 2-6 句，即使原邮件是英文也要总结成中文 — Lucien 的工作 UI 是中文，summary 是给他扫一眼用的，英文 summary 等于没总结。
 - `key_points` 同理：每行用中文写。原邮件里的 URL / 邮件地址 / 代码标识符 / 产品名 / 人名保留 verbatim 不音译。
 - `urgency_reason` 中文 1-3 句。
 - `reply_suggestion_md` 是给对方回信用的，**跟随原邮件语言**（英文邮件用英文回，中文邮件用中文回），见下方专门小节。
