@@ -387,9 +387,17 @@ class Config(BaseSettings):
         default="", env="DAVMAIL_POC_CIPHER_KEY",
         description=(
             "DavMail StringEncryptor password (= IMAP/SMTP AUTH password). "
-            "留空时 fallback 默认 'mailagent-poc-shared-key' 跟 davmail-poc/ 一致. "
-            "改这个值要同步清 davmail-poc/token/token.dat 重新走 OAuth manual flow. "
-            "见 davmail-poc/POC-RESULTS.md §StringEncryptor."
+            "留空时若 davmail_poc_mode=True 走 fallback 默认 'mailagent-poc-shared-key' "
+            "跟 davmail-poc/ 一致. 改这个值要同步清 davmail-poc/token/token.dat 重新走 "
+            "OAuth manual flow. 见 davmail-poc/POC-RESULTS.md §StringEncryptor."
+        ),
+    )
+    davmail_poc_mode: bool = Field(
+        default=False, env="DAVMAIL_POC_MODE",
+        description=(
+            "PoC/dev 兜底: davmail_cipher_key 留空时是否 fallback 到默认 PoC key. "
+            "生产 / 多用户场景必须 False (默认), 强制配置真实 cipher key 避免无声 "
+            "fallback 导致 BadPaddingException."
         ),
     )
     davmail_drafts_folder: str = Field(
