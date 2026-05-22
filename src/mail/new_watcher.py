@@ -189,7 +189,12 @@ class NewWatcher:
                 from src.llm_agent.runner import LLMRunner
                 # v4: 把 EmailRepository 注入给 runner → processor，
                 # 让 LLM hook 直读 SQLite markdown body，免去重新正则剥 HTML
-                self._llm_runner = LLMRunner(repo=self.email_repo)
+                # Sprint 16: backend 注入让 davmail mode 下 LLM 走 IMAP fetch
+                # (而非 AppleScript whose-id 抓不到 internal_id >= 10^9)
+                self._llm_runner = LLMRunner(
+                    repo=self.email_repo,
+                    backend=self.backend,
+                )
                 logger.info(
                     f"[llm-agent] enabled (model={settings.llm_model} base={settings.llm_api_base})"
                 )

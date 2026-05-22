@@ -65,6 +65,7 @@ class LLMRunner:
         *,
         db_path: Optional[str] = None,
         attachment_storage_dir: Optional[str] = None,
+        backend: Any = None,
     ):
         # v4 SSoT: 让 processor 优先读 SQLite markdown body。若未传 repo，
         # 默认基于 cfg 路径构造一个（让 CLI 也享受新路径，不增加调用方负担）。
@@ -87,7 +88,11 @@ class LLMRunner:
             self._processor = processor
         self._writer = writer or AIFieldsWriter()
         self._store = store or LLMProcessingStore(db_path=effective_db_path)
-        self._arm: Optional[AppleScriptArm] = None
+        self._arm: Optional[Any] = None
+        # Sprint 16 dual-backend: 优先用 backend.arm (davmail mode 走 IMAP fetch
+        # 自身实现; applescript mode 也 OK, AppleScriptBackend.arm 是真 AppleScriptArm).
+        # 没传 backend 时 fallback 老路径 lazy-init AppleScriptArm.
+        self._backend = backend
         self._reader: Optional[EmailReader] = None
         # v12 沉浸式翻译: LLM 分类时 tool_use 顺带返回 translation_segments,
         # 在 mark_success 之前写入 email_translation 缓存表 (Path A)。
@@ -100,8 +105,17 @@ class LLMRunner:
         except Exception:
             pass
 
-    def _lazy_arm(self) -> AppleScriptArm:
-        if self._arm is None:
+    def _lazy_arm(self):
+        """返回 arm/backend-like 对象, 满足 ``fetch_email_content_by_id(iid, mailbox)`` 契约.
+
+        davmail mode (backend 注入): 用 ``backend.arm`` (DavMailBackend.arm == self,
+        实际 IMAP UID FETCH). applescript mode / 没传 backend: lazy-init AppleScriptArm.
+        """
+        if self._arm is not None:
+            return self._arm
+        if self._backend is not None and hasattr(self._backend, "arm"):
+            self._arm = self._backend.arm
+        else:
             self._arm = AppleScriptArm()
         return self._arm
 

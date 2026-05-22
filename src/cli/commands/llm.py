@@ -42,6 +42,28 @@ app = typer.Typer(
 )
 
 
+def _maybe_create_davmail_backend(cli: "CliContext"):
+    """Sprint 16 dual-backend: cfg.mailagent_backend='davmail' 时返回 DavMailBackend
+    实例 (probe ok), 让 LLM runner 走 IMAP fetch 而非 AppleScript ``whose id`` (后者
+    对 davmail-origin internal_id >= 10^9 无法定位).
+
+    applescript mode 或 davmail probe 失败时返回 None, runner fallback 老路径
+    (lazy-init AppleScriptArm) 兼容.
+    """
+    from src.config import config as global_cfg
+    backend_name = getattr(global_cfg, "mailagent_backend", "applescript")
+    if backend_name != "davmail":
+        return None
+    try:
+        from src.mail.backend.factory import create_backend
+        return create_backend(global_cfg, sync_store=cli.sync_store)
+    except Exception as e:
+        # CLI 不应因 backend probe 失败崩 — fallback AppleScript 老路径 + warn
+        from loguru import logger
+        logger.warning(f"[cli] davmail backend probe failed, fallback AppleScript: {e}")
+        return None
+
+
 # ============================================================
 # run (US-003)
 # ============================================================
@@ -71,9 +93,11 @@ def llm_run(
     from src.llm_agent.runner import LLMRunner
 
     cfg = cli.cli_config
+    backend = _maybe_create_davmail_backend(cli)
     runner = LLMRunner(
         db_path=cfg.sync_store_db_path,
         attachment_storage_dir=cfg.attachment_storage_dir,
+        backend=backend,
     )
     try:
         result = asyncio.run(runner.run_for_internal_id(
@@ -233,6 +257,7 @@ def llm_retry_failed(
         store=store,
         db_path=cli.cli_config.sync_store_db_path,
         attachment_storage_dir=cli.cli_config.attachment_storage_dir,
+        backend=_maybe_create_davmail_backend(cli),
     )
     items: list[dict] = []
     succeeded = 0
