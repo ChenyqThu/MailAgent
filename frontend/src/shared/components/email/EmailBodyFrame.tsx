@@ -503,23 +503,16 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     }
 
     let ro: ResizeObserver | null = null
-    let mo: MutationObserver | null = null
     function setupObservers(): void {
       const doc = iframe!.contentDocument
       const body = doc?.body
       if (!body) return
+      // ResizeObserver 保留 — 用于图片 / 字体异步加载完成后的高度刷新。
+      // 不处理 translation inject/clear (那是显式 React 事件, 直接在
+      // useEffect 里同步 setHeight 就够了, 不需要 observer 间接触发)。
       ro?.disconnect()
       ro = new ResizeObserver(() => measure())
       ro.observe(body)
-      // MutationObserver — clearInjectedTranslations / injectTranslations
-      // 删/加 .mailagent-translation 节点时, ResizeObserver 不一定及时
-      // fire (实测切换译文 → 原文后 iframe 仍按译文撑大尺寸渲染, 底下留
-      // 空白); MutationObserver 对 DOM mutation 同步响应, requestAnimationFrame
-      // 内 measure 等 layout 落定。两层叠加保证 height shrink 立即生效。
-      mo?.disconnect()
-      mo = new MutationObserver(() => requestAnimationFrame(measure))
-      mo.observe(body, { childList: true, subtree: true })
-      // Re-measure when images / fonts finish loading inside the doc.
       doc!.querySelectorAll('img').forEach((img) => {
         if (img.complete) return
         img.addEventListener('load', measure, { once: true })
@@ -533,8 +526,6 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
       setupObservers()
     }
     iframe.addEventListener('load', onLoad)
-    // Same-origin srcDoc may already have its document parsed before
-    // React attaches the load listener; cover that case explicitly.
     if (iframe.contentDocument?.readyState === 'complete') {
       setupObservers()
     }
@@ -542,47 +533,42 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     return (): void => {
       iframe.removeEventListener('load', onLoad)
       ro?.disconnect()
-      mo?.disconnect()
       setDocReady(false)
     }
   }, [srcDoc])
 
-  // Translation inject — runs on (translations | docReady | srcDoc) change.
-  // srcDoc inclusion guarantees we re-inject after the iframe re-renders
-  // (e.g. theme switch rebuilds srcDoc; without this dep we'd lose the
-  // injection after a re-render).
-  //
-  // After inject/clear we manually re-measure on the next animation frame.
-  // ResizeObserver on the iframe body *usually* fires after layout but in
-  // practice has been observed to miss the post-mutation shrink — switching
-  // 译文 → 原文 left the iframe at the larger height, painting empty space
-  // below the original content. rAF guarantees we measure after layout
-  // settles, and setHeight cuts the gap.
+  // Translation inject — translations 是显式 React prop, 切换是用户点击事件,
+  // 不需要 ResizeObserver / MutationObserver 间接探测。直接做三件事:
+  //   1) mutate DOM (添加/删除 .mailagent-translation)
+  //   2) 强制同步 reflow (read offsetHeight 触发 layout)
+  //   3) 同步 setHeight (直接 set, 不用 functional setter / abs threshold —
+  //      之前两版加了 rAF + MutationObserver 都没让 height shrink 生效,
+  //      根因是 abs<2 阈值搭 React batching 导致 next 值被吞或者 setHeight
+  //      没真生效, 这版改成无脑同步直 set 解决。)
   useEffect(() => {
     if (!docReady) return
     const iframe = iframeRef.current
     const doc = iframe?.contentDocument
-    if (!doc) return
+    if (!doc?.body) return
     if (!translations || translations.length === 0) {
       clearInjectedTranslations(doc)
     } else {
       injectTranslations(doc, translations)
     }
-    const raf = requestAnimationFrame(() => {
-      const html = doc.documentElement
-      const body = doc.body
-      const h = Math.max(
-        html?.scrollHeight ?? 0,
-        body?.scrollHeight ?? 0,
-        html?.offsetHeight ?? 0,
-        body?.offsetHeight ?? 0
-      )
-      if (h > 0) {
-        const next = Math.max(120, Math.min(Math.round(h), 80000))
-        setHeight((prev) => (Math.abs(prev - next) < 2 ? prev : next))
-      }
-    })
-    return (): void => cancelAnimationFrame(raf)
+    // void read forces a sync layout pass — without this, scrollHeight may
+    // still report the pre-mutation value.
+    void doc.body.offsetHeight
+    const html = doc.documentElement
+    const body = doc.body
+    const h = Math.max(
+      html?.scrollHeight ?? 0,
+      body.scrollHeight,
+      html?.offsetHeight ?? 0,
+      body.offsetHeight
+    )
+    if (h > 0) {
+      setHeight(Math.max(120, Math.min(Math.round(h), 80000)))
+    }
   }, [translations, docReady, srcDoc])
 
   return (
