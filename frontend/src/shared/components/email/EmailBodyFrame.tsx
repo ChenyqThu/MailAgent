@@ -395,10 +395,26 @@ function clearInjectedTranslations(doc: Document): void {
   doc.querySelectorAll('.mailagent-translation').forEach((n) => n.remove())
 }
 
-/** Insert a translation `<div>` after each block node whose textContent
- *  matches `src` (either contains src or is contained in src — handles
- *  LLM trimming + the case where a paragraph spans multiple `<p>`s). Each
- *  node is matched at most once across the whole pass. */
+/** Tags whose `afterend` insertion is invalid HTML — putting a `<div>` next to
+ *  a `<li>` puts it inside `<ul>/<ol>` (only li allowed); next to `<td>` puts
+ *  it inside `<tr>` (only td/th allowed); next to `<dt>/<dd>` puts it inside
+ *  `<dl>` (only dt/dd allowed). Browsers silently re-parent the misplaced
+ *  div, dragging the translation outside the list/table/dl and breaking both
+ *  layout and order.
+ *
+ *  For these we instead append the translation div as a CHILD of the matched
+ *  node. `.mailagent-translation` has `display: block` inside `td/li` (see
+ *  BODY_CSS), so the translation stacks below the original content within
+ *  the same cell/list item — order preserved, no re-parenting.
+ *
+ *  `p / h1-h6 / blockquote / div` accept block siblings freely, so afterend
+ *  is fine for them. */
+const APPEND_AS_CHILD = new Set(['LI', 'TD', 'TH', 'DT', 'DD'])
+
+/** Insert a translation `<div>` after / inside each block node whose
+ *  textContent matches `src` (either contains src or is contained in src —
+ *  handles LLM trimming + paragraph-spanning cases). Each node is matched
+ *  at most once across the whole pass. */
 function injectTranslations(doc: Document, segments: TranslationSegment[]): number {
   clearInjectedTranslations(doc)
   const nodes = Array.from(doc.querySelectorAll(BLOCK_SELECTOR_RENDER)) as HTMLElement[]
@@ -423,13 +439,18 @@ function injectTranslations(doc: Document, segments: TranslationSegment[]): numb
     }
     if (matched < 0) continue
     used.add(matched)
+    const target = nodes[matched]!
     const div = doc.createElement('div')
     div.className = 'mailagent-translation'
     // Tgt is plain text from LLM (per prompt rule "no markdown wrapper");
     // escape defensively in case a malicious sender slipped HTML into src
     // that LLM echoed back, or LLM hallucinated tags.
     div.innerHTML = escapeHtmlText(seg.tgt)
-    nodes[matched]!.insertAdjacentElement('afterend', div)
+    if (APPEND_AS_CHILD.has(target.tagName)) {
+      target.appendChild(div)
+    } else {
+      target.insertAdjacentElement('afterend', div)
+    }
     injected++
   }
   return injected
