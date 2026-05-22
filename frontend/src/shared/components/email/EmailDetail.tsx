@@ -859,7 +859,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           {/* AI Fields */}
           {ai && (
             <div className="mt-6">
-              <AIFieldsBlock fields={ai} />
+              <AIFieldsBlock fields={ai} internalId={email.internal_id} />
             </div>
           )}
 

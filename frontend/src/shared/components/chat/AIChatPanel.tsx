@@ -4,16 +4,17 @@
 // streaming state / error UI; quick action chips just prefill the composer
 // (Sprint 4 keeps explicit user submit; Sprint 5 may auto-submit).
 //
-// V1 redesign (Sprint 10 polish): header is a 40px tab bar (AI / Thread / Sync)
-// with a coral underline indicator on the active tab, plus right-side New
-// conversation / History / Close affordances. Mirrors mockup-inbox.html
-// lines 1093-1116. Non-AI tabs paint a placeholder until V1.5 wires them.
+// V1 redesign (Sprint 10 polish): header is a 40px tab bar showing the
+// panel title + right-side New / History / Popout / Close affordances.
+// Sprint 18 follow-up: dropped the Thread / Sync placeholder tabs — they
+// never carried real surfaces and the noise distracted from the AI flow.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
-import { History, Maximize2, Plus, Sparkles, X } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
 
-import type { AIFields, EmailMeta, SearchHit } from '@shared/api/types'
+import type { AIFields, ChatBackendKind, EmailMeta, SearchHit } from '@shared/api/types'
 import { type ChatAttachment, buildAttachmentBlock } from '@shared/lib/chat-attachments'
 import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
@@ -38,8 +39,6 @@ import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
-
-type PanelTab = 'ai' | 'thread' | 'sync'
 
 function readStored(key: string): string | null {
   try {
@@ -86,6 +85,7 @@ interface AIChatPanelProps {
 
 export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): React.ReactElement {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const mailApi = useMailApi()
   const activeInternalId = useActiveEmail((s) => s.activeInternalId)
 
@@ -104,7 +104,6 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     getServerSnapshot
   )
 
-  const [tab, setTab] = useState<PanelTab>('ai')
   // Sprint 14 PR A — session history sidebar. Open/close state lives in
   // the panel store so a remount (email switch) doesn't drop the user's
   // preference, and the value is persisted to localStorage from there.
@@ -197,6 +196,21 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     select: (rows: EmailMeta[]) => rows.length
   })
 
+  // Sprint 18 follow-up — drive the onboarding placeholder. `notion-agent`
+  // is configured iff the `agentPageId` localStorage seam holds a value;
+  // `custom-api` needs the keychain slot `customApiKey` to be set.
+  // staleTime keeps the secret-status probe cheap when the user flips
+  // backend kinds repeatedly without leaving the panel.
+  const secretsQ = useQuery({
+    queryKey: ['settings', 'secrets-status'],
+    queryFn: () => mailApi.settings.secretsStatus(),
+    staleTime: 30_000
+  })
+  const backendConfigured = useMemo(() => {
+    if (backend.kind === 'notion-agent') return (agentPageId ?? null) !== null
+    return secretsQ.data?.customApiKey === true
+  }, [backend.kind, agentPageId, secretsQ.data?.customApiKey])
+
   const aiFields: AIFields | null = aiQ.data ?? null
   const aiFieldsCount = aiFields ? countNonNullAiFields(aiFields) : 0
   const threadCount = threadQ.data ?? 0
@@ -253,9 +267,13 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // Sprint 14 PR E — DraftPreviewCard's popout button opens the same
   // dedicated window the TabBar Maximize2 icon does; inside the popout
   // itself the button is hidden (recursive popout has no use case).
+  // Sprint 18 follow-up: also collapse the right-rail panel so the
+  // inbox reclaims the column once the conversation moves into its
+  // dedicated window.
   const handleDraftOpenInWindow = useCallback(() => {
     if (activeInternalId === null) return
     mailApi.chat.openPopout(activeInternalId)
+    hideAIChatPanel()
   }, [activeInternalId, mailApi])
 
   const draftHandlers: DraftHandlers = {
@@ -437,6 +455,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   useShortcut('alt+shift+w', () => {
     if (activeInternalId === null) return
     mailApi.chat.openPopout(activeInternalId)
+    hideAIChatPanel()
   })
 
   const errorBanner = chat.error ? mapErrorKey(chat.error.code) : null
@@ -458,54 +477,15 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         fullScreen ? 'flex-1 w-full border-l-0' : 'w-[360px] shrink-0'
       )}
     >
-      {/* ── Tab bar (40px) — AI / Thread / Sync + New / History / Close ── */}
-      <div className="h-10 border-b border-ink-border flex items-center px-1 shrink-0">
-        <TabButton
-          active={tab === 'ai'}
-          onClick={() => setTab('ai')}
-          icon={<Sparkles size={13} strokeWidth={0} className="fill-current" />}
-          label={t('chat.tabAI')}
-        />
-        <TabButton
-          active={tab === 'thread'}
-          onClick={() => setTab('thread')}
-          // Inline SVG to match mockup; lucide MessageCircle has too much padding.
-          icon={
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </svg>
-          }
-          label={t('chat.tabThread')}
-          badge={threadCount > 0 ? String(threadCount) : null}
-        />
-        <TabButton
-          active={tab === 'sync'}
-          onClick={() => setTab('sync')}
-          icon={
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-              <path d="M21 3v5h-5" />
-              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-              <path d="M3 21v-5h5" />
-            </svg>
-          }
-          label={t('chat.tabSync')}
-        />
-        <div className="ml-auto pr-1 flex items-center gap-1">
+      {/* ── Header bar (40px) — title + New / History / Popout / Close ──
+          Sprint 18 follow-up: dropped the Thread / Sync placeholder tabs.
+          They were never wired and the noise distracted from the AI flow. */}
+      <div className="h-10 border-b border-ink-border flex items-center px-3 shrink-0">
+        <div className="flex items-center gap-1.5 text-aux font-medium text-ink-fg">
+          <Sparkles size={13} strokeWidth={0} className="fill-coral text-coral" />
+          {t('chat.title')}
+        </div>
+        <div className="ml-auto flex items-center gap-1">
           {/* + New chat — real wiring: chat.newSession() (Sprint 13). Resets
               activeSessionId so next send creates a fresh session. */}
           <HoverTip text={`${t('chat.newChat')}\n${t('chat.newChatHint')}`} side="bottom">
@@ -554,6 +534,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                 onClick={() => {
                   if (activeInternalId === null) return
                   mailApi.chat.openPopout(activeInternalId)
+                  hideAIChatPanel()
                 }}
                 className={cn(
                   'p-1.5 rounded transition-colors duration-fast',
@@ -596,7 +577,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           overflow-auto regions correctly scrollable inside the parent
           flex-col aside. */}
       <div className="flex-1 flex min-h-0">
-        {sidebarOpen && tab === 'ai' && (
+        {sidebarOpen && (
           <ChatSidebar
             sessions={chat.sessions}
             activeSessionId={chat.activeSessionId}
@@ -608,101 +589,97 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           />
         )}
         <div className="flex-1 flex flex-col min-h-0">
-          {tab !== 'ai' ? (
-            <TabPlaceholder
-              label={tab === 'thread' ? t('chat.tabThread') : t('chat.tabSync')}
-              subline={t('shortcutHelp.soon')}
+          <BackendSelector value={backend} onChange={setBackend} agentName={agentName} />
+          <ContextChips
+            hasEmailBody={activeInternalId !== null}
+            aiFieldsCount={aiFieldsCount}
+            threadCount={threadCount}
+            notionProjectCount={0}
+          />
+
+          {!backendConfigured ? (
+            <BackendOnboarding
+              kind={backend.kind}
+              onOpenSettings={() => void navigate({ to: '/settings', search: { tab: 'ai' } })}
             />
+          ) : activeInternalId === null ? (
+            <div className="flex-1 flex items-center justify-center px-6 text-aux text-ink-fg-2 text-center">
+              {t('chat.empty.noEmail')}
+            </div>
           ) : (
             <>
-              <BackendSelector value={backend} onChange={setBackend} agentName={agentName} />
-              <ContextChips
-                hasEmailBody={activeInternalId !== null}
-                aiFieldsCount={aiFieldsCount}
-                threadCount={threadCount}
-                notionProjectCount={0}
-              />
+              {errorBanner && (
+                <div className="px-3 py-2 mx-3 my-2 rounded-md text-aux text-fail bg-fail/10 border border-fail/30 flex items-start gap-2">
+                  <span className="flex-1">{t(errorBanner)}</span>
+                  {chat.retryLast && (
+                    <button
+                      type="button"
+                      onClick={() => void chat.retryLast?.()}
+                      className={cn(
+                        retryActionKlass,
+                        'text-fail hover:bg-fail/15 px-2 py-0.5 rounded transition-colors duration-fast'
+                      )}
+                    >
+                      {t('chat.error.retry')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={chat.clearError}
+                    className={cn(retryActionKlass, 'text-ink-fg-2 hover:text-ink-fg-1')}
+                    aria-label="dismiss"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
 
-              {activeInternalId === null ? (
+              {inQuotaCooldown && quotaCooldownUntil !== null && (
+                <QuotaCooldownTimer until={quotaCooldownUntil} />
+              )}
+
+              {chat.messages.length === 0 ? (
                 <div className="flex-1 flex items-center justify-center px-6 text-aux text-ink-fg-2 text-center">
-                  {t('chat.empty.noEmail')}
+                  {t('chat.empty.noMessages')}
                 </div>
               ) : (
-                <>
-                  {errorBanner && (
-                    <div className="px-3 py-2 mx-3 my-2 rounded-md text-aux text-fail bg-fail/10 border border-fail/30 flex items-start gap-2">
-                      <span className="flex-1">{t(errorBanner)}</span>
-                      {chat.retryLast && (
-                        <button
-                          type="button"
-                          onClick={() => void chat.retryLast?.()}
-                          className={cn(
-                            retryActionKlass,
-                            'text-fail hover:bg-fail/15 px-2 py-0.5 rounded transition-colors duration-fast'
-                          )}
-                        >
-                          {t('chat.error.retry')}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={chat.clearError}
-                        className={cn(retryActionKlass, 'text-ink-fg-2 hover:text-ink-fg-1')}
-                        aria-label="dismiss"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  )}
-
-                  {inQuotaCooldown && quotaCooldownUntil !== null && (
-                    <QuotaCooldownTimer until={quotaCooldownUntil} />
-                  )}
-
-                  {chat.messages.length === 0 ? (
-                    <div className="flex-1 flex items-center justify-center px-6 text-aux text-ink-fg-2 text-center">
-                      {t('chat.empty.noMessages')}
-                    </div>
-                  ) : (
-                    <MessageList
-                      messages={chat.messages}
-                      streamingMessageId={chat.streamingMessageId}
-                      draftHandlers={draftHandlers}
-                      userHandlers={userHandlers}
-                    />
-                  )}
-
-                  <QuickActions onPick={handlePickAction} disabled={chat.isStreaming} />
-                  <Composer
-                    value={draft}
-                    onChange={setDraft}
-                    onSend={handleSend}
-                    onCancel={handleCancel}
-                    isStreaming={chat.isStreaming}
-                    canSend={canSend}
-                    backendName={backendName}
-                    mentions={mentions}
-                    onAddMention={handleAddMention}
-                    onRemoveMention={handleRemoveMention}
-                    attachments={attachments}
-                    onAddAttachment={handleAddAttachment}
-                    onRemoveAttachment={handleRemoveAttachment}
-                    // Sprint 13 — model switcher lives in Composer Cpu button
-                    // (mockup L2530). Notion Agent has no model picker — the
-                    // agent decides; Custom API exposes the 3 supported models.
-                    currentModel={backend.kind === 'custom-api' ? backend.model : null}
-                    availableModels={
-                      backend.kind === 'custom-api'
-                        ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4']
-                        : []
-                    }
-                    onModelChange={(model) =>
-                      setBackend({ kind: 'custom-api', model, agentPageId: null })
-                    }
-                    modelPickerDisabled={backend.kind === 'notion-agent'}
-                  />
-                </>
+                <MessageList
+                  messages={chat.messages}
+                  streamingMessageId={chat.streamingMessageId}
+                  draftHandlers={draftHandlers}
+                  userHandlers={userHandlers}
+                />
               )}
+
+              <QuickActions onPick={handlePickAction} disabled={chat.isStreaming} />
+              <Composer
+                value={draft}
+                onChange={setDraft}
+                onSend={handleSend}
+                onCancel={handleCancel}
+                isStreaming={chat.isStreaming}
+                canSend={canSend}
+                backendName={backendName}
+                mentions={mentions}
+                onAddMention={handleAddMention}
+                onRemoveMention={handleRemoveMention}
+                attachments={attachments}
+                onAddAttachment={handleAddAttachment}
+                onRemoveAttachment={handleRemoveAttachment}
+                // Sprint 13 — model switcher lives in Composer Cpu button
+                // (mockup L2530). Notion Agent has no model picker — the
+                // agent decides; Custom API exposes the 3 supported models.
+                currentModel={backend.kind === 'custom-api' ? backend.model : null}
+                availableModels={
+                  backend.kind === 'custom-api'
+                    ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4']
+                    : []
+                }
+                onModelChange={(model) =>
+                  setBackend({ kind: 'custom-api', model, agentPageId: null })
+                }
+                modelPickerDisabled={backend.kind === 'notion-agent'}
+              />
             </>
           )}
         </div>
@@ -711,54 +688,47 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   )
 }
 
-// ─── Tab pieces ───────────────────────────────────────────────────────────
+// ─── Onboarding placeholder ──────────────────────────────────────────────
+//
+// Sprint 18 follow-up — when the user picks a backend kind whose
+// credentials haven't been set up (Notion Agent: agent page_id missing,
+// Custom API: keychain slot empty), surface a short "not configured"
+// card with a one-click jump into Settings → AI. Avoids the wall-of-
+// text Composer interaction with a backend that can't speak yet.
 
-interface TabButtonProps {
-  active: boolean
-  onClick(): void
-  icon: React.ReactNode
-  label: string
-  badge?: string | null
-}
-
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-  badge = null
-}: TabButtonProps): React.ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        'flex items-center gap-1.5 px-3 py-2 text-aux font-medium',
-        'transition-colors duration-fast',
-        active ? 'tab-active' : 'text-ink-fg-1 hover:text-ink-fg'
-      )}
-    >
-      <span className="shrink-0">{icon}</span>
-      {label}
-      {badge && <span className="text-micro font-mono text-ink-fg-2 ml-0.5">{badge}</span>}
-    </button>
-  )
-}
-
-function TabPlaceholder({
-  label,
-  subline
+function BackendOnboarding({
+  kind,
+  onOpenSettings
 }: {
-  label: string
-  subline: string
+  kind: ChatBackendKind
+  onOpenSettings(): void
 }): React.ReactElement {
+  const { t } = useTranslation()
+  const backendLabel =
+    kind === 'notion-agent' ? t('chat.backend.notionAgent') : t('chat.backend.customApi')
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-6 text-center gap-2">
-      <span className="text-aux text-ink-fg-2">
-        {label}
-        <span className="text-ink-fg-3"> · {subline}</span>
-      </span>
+    <div className="flex-1 flex flex-col items-center justify-center px-6 text-center gap-3">
+      <div className="w-10 h-10 rounded-lg grid place-items-center bg-coral/15 border border-coral/30">
+        <Settings size={18} strokeWidth={2} className="text-coral" />
+      </div>
+      <div className="text-aux text-ink-fg">
+        {t('chat.onboarding.notConfigured', { backend: backendLabel })}
+      </div>
+      <div className="text-meta text-ink-fg-2 max-w-[260px]">
+        {t('chat.onboarding.hint', { backend: backendLabel })}
+      </div>
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        className={cn(
+          'mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
+          'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
+          'transition-colors duration-fast'
+        )}
+      >
+        <Settings size={12} strokeWidth={2} />
+        {t('chat.onboarding.openSettings')}
+      </button>
     </div>
   )
 }

@@ -58,7 +58,19 @@
     "less": "less"
   },
   "ai": {
-    "compose": "起草回复"
+    "compose": "起草回复",
+    "replySuggestion": {
+      "collapse": "折叠",
+      "expand": "展开",
+      "edit": "编辑",
+      "save": "保存",
+      "cancel": "取消",
+      "craft": "创建草稿",
+      "crafting": "创建中…",
+      "copy": "复制",
+      "copied": "已复制",
+      "editedTag": "已编辑"
+    }
   },
   "toolbar": {
     "back": "返回",
@@ -360,6 +372,11 @@
       "agentSuffix": "· Jarvis",
       "modelsLabel": "模型",
       "openSettings": "管理 AI 后端 · 设置 → AI"
+    },
+    "onboarding": {
+      "notConfigured": "{backend} 未配置",
+      "hint": "前往设置完成 {backend} 配置后即可在此与 AI 对话。",
+      "openSettings": "前往设置 → AI"
     },
     "context": {
       "title": "上下文",

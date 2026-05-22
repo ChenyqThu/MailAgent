@@ -58,7 +58,19 @@
     "less": "less"
   },
   "ai": {
-    "compose": "Draft reply"
+    "compose": "Draft reply",
+    "replySuggestion": {
+      "collapse": "Collapse",
+      "expand": "Expand",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "craft": "Craft Draft",
+      "crafting": "Crafting…",
+      "copy": "Copy",
+      "copied": "Copied",
+      "editedTag": "edited"
+    }
   },
   "toolbar": {
     "back": "Back",
@@ -360,6 +372,11 @@
       "agentSuffix": "· Jarvis",
       "modelsLabel": "Models",
       "openSettings": "Manage AI backends · Settings → AI"
+    },
+    "onboarding": {
+      "notConfigured": "{backend} not configured",
+      "hint": "Finish the {backend} setup to start a conversation here.",
+      "openSettings": "Go to Settings → AI"
     },
     "context": {
       "title": "Context",
