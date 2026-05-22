@@ -8,13 +8,19 @@ from loguru import logger
 _NOTION_LINK_SCHEMES = ("http://", "https://", "mailto:", "tel:")
 # URL 内部任何空白字符都会被 Notion 拒收
 _LINK_WHITESPACE_RE = re.compile(r"\s")
+# URL-encoded angle brackets — 邮件正文 placeholder 模式 (例如
+# ``http://%3ccontroller-domain%3e/path`` / ``https://%3CController-IP%3E:8843``).
+# Notion API 解码后会看到 ``<...>`` placeholder, 判定 hostname 非法 → "Invalid URL for link"
+# 整封 dead_letter. (~2026-05 internal_id=54043 命中, html_converter sanitize 漏过.)
+_LINK_PLACEHOLDER_RE = re.compile(r"%3[cCeE]")
 
 
 def _sanitize_link_url(url: Optional[str]) -> Optional[str]:
     """规范化 link.url：合法返回截断后的安全 URL，否则返回 None（调用方应退化成纯文本）。
 
-    Notion 对 link.url 校验比 HTML 宽松度低：含空格/换行/中文字符 / 非白名单协议都会触发
-    "Invalid URL for link"。本函数集中过滤，避免把脏 URL 喂给 Notion API。
+    Notion 对 link.url 校验比 HTML 宽松度低：含空格/换行/中文字符 / 非白名单协议 /
+    含 URL-encoded ``<`` ``>`` (placeholder pattern) 都会触发 "Invalid URL for link"。
+    本函数集中过滤，避免把脏 URL 喂给 Notion API 触发 dead_letter。
     """
     if not url:
         return None
@@ -28,6 +34,10 @@ def _sanitize_link_url(url: Optional[str]) -> Optional[str]:
     try:
         candidate.encode("ascii")
     except UnicodeEncodeError:
+        return None
+    # Reject URL-encoded angle brackets — 这是 placeholder ``<controller-domain>`` /
+    # ``<Controller-IP>`` 经 HTML escape 后的形式, Notion 解码后判 hostname 非法.
+    if _LINK_PLACEHOLDER_RE.search(candidate):
         return None
     return candidate[:2000]
 
