@@ -230,6 +230,34 @@ describe('translateBatch', () => {
     expect(result.failedBatches).toBe(1)
   })
 
+  test('lenient rescue: tgt with unescaped nested quotes still parses (real-world LLM bug)', async () => {
+    // Real LLM output captured 2026-05-22 (translate.log internalId=54094):
+    // LLM emitted `""思科 PCI 合规解决方案""` with unescaped quotes inside tgt,
+    // crashing strict JSON.parse and dumping a 10-segment batch. Lenient
+    // parser must rescue id-anchored items.
+    fetchMock.mockImplementationOnce((_url, init) => {
+      const reqBody = JSON.parse((init as RequestInit).body as string)
+      const userContent = reqBody.messages[0].content as string
+      const segs = JSON.parse(userContent) as Array<{ id: string; text: string }>
+      // Build a malformed response — first tgt has unescaped quotes, others
+      // are fine. Strict JSON.parse will fail on the whole thing; lenient
+      // rescue must still get the segments back.
+      const parts = segs.map((s, i) => {
+        if (i === 0) return `{"id":"${s.id}","tgt":""产品" 的中文翻译"}`
+        return `{"id":"${s.id}","tgt":"翻译 ${i}"}`
+      })
+      return Promise.resolve(ok(`[${parts.join(',')}]`))
+    })
+    const result = await handler.translateBatch({ internalId: 101 })
+    // 3 segments extracted from EMAIL_BODY_HTML_3PARA. Lenient parser
+    // recovers all 3 ids despite the JSON syntax error on the first.
+    expect(result.segments).toHaveLength(3)
+    expect(result.failedBatches).toBe(0)
+    // First segment's tgt contains the rescued content (quotes preserved
+    // since we trim escape syntax, not the content itself).
+    expect(result.segments[0]?.tgt).toContain('产品')
+  })
+
   test('abortAllTranslations during inflight → batches reject', async () => {
     let captured: AbortSignal | undefined
     fetchMock.mockImplementationOnce((_url, init) => {

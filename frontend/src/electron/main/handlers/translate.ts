@@ -274,29 +274,51 @@ function batchSystemPromptFor(target: TargetLang): string {
     '- Preserve URLs, email addresses, code identifiers, product names, and people names verbatim.',
     '- Translate the FULL meaning of each text into the target language, not literal word-for-word.',
     '- If a paragraph is already in the target language, output it verbatim as tgt.',
+    '- **CRITICAL JSON SAFETY**: tgt strings MUST NOT contain raw ASCII double quotes (").',
+    '  If you need to quote a phrase, use Chinese 「」 quotes for Chinese tgt, or escape as \\".',
+    '  Unescaped " inside tgt breaks JSON parsing and the whole batch is lost.',
     '- Output ONLY the JSON array. No preamble, no commentary, no ```json fence, no trailing prose.'
   ].join('\n')
 }
 
 /** Tolerant JSON-array parser for LLM output.
  *
- * 1. Try strict JSON.parse.
- * 2. If it fails, regex-extract the first `[...]` block and parse that.
- * 3. Validate shape: array of {id: string, tgt: string}; drop malformed items.
+ * Three-stage:
+ *   1. Strict JSON.parse.
+ *   2. Regex-extract the first `[...]` block, JSON.parse that.
+ *   3. **Lenient item-by-item** scanner — anchors on `"id":"..."` markers
+ *      and grabs the associated `"tgt":"..."` value tolerating unescaped
+ *      double quotes inside (a real-world failure mode: LLMs frequently
+ *      emit `"tgt":""Cisco PCI Compliance""` when quoting proper nouns,
+ *      which crashes strict JSON.parse and dumps the whole batch).
+ *
+ * Validates shape: each item must have string id + non-empty string tgt.
  */
 function parseBatchJson(raw: string): Array<{ id: string; tgt: string }> | null {
-  let candidate: unknown
+  // Stage 1: strict JSON
   try {
-    candidate = JSON.parse(raw)
+    const candidate = JSON.parse(raw)
+    const out = shapeCheckArray(candidate)
+    if (out !== null) return out
   } catch {
-    const m = raw.match(/\[[\s\S]*\]/)
-    if (!m) return null
+    /* fall through */
+  }
+  // Stage 2: regex slice [...]
+  const m = raw.match(/\[[\s\S]*\]/)
+  if (m) {
     try {
-      candidate = JSON.parse(m[0])
+      const candidate = JSON.parse(m[0])
+      const out = shapeCheckArray(candidate)
+      if (out !== null) return out
     } catch {
-      return null
+      /* fall through */
     }
   }
+  // Stage 3: lenient item-by-item rescue
+  return parseLeniently(raw)
+}
+
+function shapeCheckArray(candidate: unknown): Array<{ id: string; tgt: string }> | null {
   if (!Array.isArray(candidate)) return null
   const out: Array<{ id: string; tgt: string }> = []
   for (const item of candidate) {
@@ -304,9 +326,56 @@ function parseBatchJson(raw: string): Array<{ id: string; tgt: string }> | null 
     const id = (item as { id?: unknown }).id
     const tgt = (item as { tgt?: unknown }).tgt
     if (typeof id !== 'string' || typeof tgt !== 'string') continue
+    if (tgt.trim().length === 0) continue
     out.push({ id, tgt: tgt.trim() })
   }
-  return out
+  return out.length > 0 ? out : null
+}
+
+/** Last-resort scanner: locate every `"id":"<8 hex>"` then capture the tgt
+ *  value up to the next item boundary (next `"id":` or end-of-string). The
+ *  tgt slice is then trimmed of its enclosing quote-and-brace artifacts.
+ *  Tolerates unescaped `"` inside tgt values that crash strict JSON. */
+function parseLeniently(raw: string): Array<{ id: string; tgt: string }> | null {
+  const idRe = /"id"\s*:\s*"([a-f0-9]{4,32})"/g
+  const anchors: Array<{ id: string; afterId: number }> = []
+  let m: RegExpExecArray | null
+  while ((m = idRe.exec(raw)) !== null) {
+    anchors.push({ id: m[1]!, afterId: m.index + m[0].length })
+  }
+  if (anchors.length === 0) return null
+
+  const out: Array<{ id: string; tgt: string }> = []
+  for (let i = 0; i < anchors.length; i++) {
+    const cur = anchors[i]!
+    const end = i + 1 < anchors.length ? anchors[i + 1]!.afterId - 7 : raw.length
+    // -7 to back off the next anchor's `"id":"…` prefix; we want to land in
+    // the inter-item gap, not inside the next id literal.
+    const segment = raw.slice(cur.afterId, end)
+    // Find `"tgt":"…"` and take everything between the opening quote and the
+    // LAST closing `"` followed by item-end (`}` then , or ]).
+    const tgtStart = segment.search(/"tgt"\s*:\s*"/)
+    if (tgtStart < 0) continue
+    const valStartMatch = segment.slice(tgtStart).match(/"tgt"\s*:\s*"/)
+    if (!valStartMatch) continue
+    const valStart = tgtStart + valStartMatch[0].length
+    // Trim from the end backwards: find the last "} (object close), drop
+    // anything trailing it; the closing `"` immediately before `}` is the
+    // string terminator. If `}` not found, take to end-of-segment.
+    let valEnd = segment.lastIndexOf('}')
+    if (valEnd < 0) valEnd = segment.length
+    // The last `"` before `}` is the closing quote.
+    let closingQuote = segment.lastIndexOf('"', valEnd - 1)
+    if (closingQuote <= valStart) closingQuote = segment.length
+    let tgt = segment.slice(valStart, closingQuote)
+    // Unescape common JSON escapes we expect LLM to emit correctly.
+    tgt = tgt.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\')
+    tgt = tgt.trim()
+    if (tgt.length > 0) {
+      out.push({ id: cur.id, tgt })
+    }
+  }
+  return out.length > 0 ? out : null
 }
 
 interface MessagesResponse {
