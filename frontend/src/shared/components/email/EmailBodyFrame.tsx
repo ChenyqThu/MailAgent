@@ -503,6 +503,7 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     }
 
     let ro: ResizeObserver | null = null
+    let mo: MutationObserver | null = null
     function setupObservers(): void {
       const doc = iframe!.contentDocument
       const body = doc?.body
@@ -510,6 +511,14 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
       ro?.disconnect()
       ro = new ResizeObserver(() => measure())
       ro.observe(body)
+      // MutationObserver — clearInjectedTranslations / injectTranslations
+      // 删/加 .mailagent-translation 节点时, ResizeObserver 不一定及时
+      // fire (实测切换译文 → 原文后 iframe 仍按译文撑大尺寸渲染, 底下留
+      // 空白); MutationObserver 对 DOM mutation 同步响应, requestAnimationFrame
+      // 内 measure 等 layout 落定。两层叠加保证 height shrink 立即生效。
+      mo?.disconnect()
+      mo = new MutationObserver(() => requestAnimationFrame(measure))
+      mo.observe(body, { childList: true, subtree: true })
       // Re-measure when images / fonts finish loading inside the doc.
       doc!.querySelectorAll('img').forEach((img) => {
         if (img.complete) return
@@ -533,6 +542,7 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     return (): void => {
       iframe.removeEventListener('load', onLoad)
       ro?.disconnect()
+      mo?.disconnect()
       setDocReady(false)
     }
   }, [srcDoc])
