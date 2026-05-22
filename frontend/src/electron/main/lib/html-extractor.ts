@@ -30,8 +30,12 @@ export interface ExtractedBlock {
   text: string
 }
 
-// 块级 selector — 邮件正文里承载语义段的元素
-const BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, td, blockquote, dt, dd'
+// 块级 selector — 邮件正文里承载语义段的元素。
+// 必须含 div 因为 Outlook / Gmail 默认用 <div> 而非 <p> 包段落 (实测 54094
+// 整封邮件 0 个 <p> 全是 div+span)。但 div 是通用容器, 极易抽到 "整封邮件
+// 文本" 这种巨长 outer node, 所以在 extractBlocks 里加 leaf 过滤: 只抽不含
+// 其他 BLOCK 后代的叶子节点。
+const BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, td, blockquote, dt, dd, div'
 
 // 父节点为这些时跳过：代码块/脚本/样式里抽出来翻是没意义的
 const SKIP_ANCESTORS = new Set(['code', 'pre', 'script', 'style', 'noscript'])
@@ -140,6 +144,12 @@ export function extractBlocks(html: string): ExtractedBlock[] {
   const out: ExtractedBlock[] = []
   for (const node of nodes) {
     if (hasSkipAncestor(node)) continue
+    // Leaf filter: skip nodes that themselves contain another BLOCK descendant.
+    // Without this, an outer <div> wrapping the entire email body matches the
+    // selector and dumps the full-text textContent — too long + 重复内容会
+    // 让 LLM 拿到错位的 batch。我们只想要 "段落级" 叶子 (含 inline 子节点
+    // 如 span/b/a/br 但不含 div/p/li 等其它 block)。
+    if (node.querySelector(BLOCK_SELECTOR)) continue
     // .text 是 node-html-parser 的 textContent (含子节点所有 text 拼接)
     const raw = node.text ?? ''
     const text = raw.replace(/\s+/g, ' ').trim()

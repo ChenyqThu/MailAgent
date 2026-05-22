@@ -370,9 +370,12 @@ interface BodyIframeProps {
   translations: TranslationSegment[] | null
 }
 
-// Block-level selector mirrors what html-extractor.ts hands to the LLM so
-// the renderer's match space matches the LLM's input space.
-const BLOCK_SELECTOR_RENDER = 'p, li, h1, h2, h3, h4, h5, h6, td, blockquote, dt, dd'
+// Block-level selector mirrors html-extractor.ts so renderer's match space ==
+// LLM's input space. Must include 'div' because Outlook/Gmail wrap paragraphs
+// in <div> not <p>; extractor's leaf-filter (skip blocks containing other
+// blocks) is mirrored here in injectTranslations so we still match the right
+// per-paragraph node and not the giant wrapper div around the whole body.
+const BLOCK_SELECTOR_RENDER = 'p, li, h1, h2, h3, h4, h5, h6, td, blockquote, dt, dd, div'
 
 function escapeHtmlText(s: string): string {
   return s
@@ -417,7 +420,12 @@ const APPEND_AS_CHILD = new Set(['LI', 'TD', 'TH', 'DT', 'DD'])
  *  at most once across the whole pass. */
 function injectTranslations(doc: Document, segments: TranslationSegment[]): number {
   clearInjectedTranslations(doc)
-  const nodes = Array.from(doc.querySelectorAll(BLOCK_SELECTOR_RENDER)) as HTMLElement[]
+  // Mirror html-extractor leaf filter: keep only nodes that don't contain
+  // another BLOCK descendant. Without this, an outer wrapper <div> around
+  // the entire email matches first (its textContent includes every src) and
+  // every translation gets appended to one giant container — chaos.
+  const all = Array.from(doc.querySelectorAll(BLOCK_SELECTOR_RENDER)) as HTMLElement[]
+  const nodes = all.filter((n) => n.querySelector(BLOCK_SELECTOR_RENDER) === null)
   // Pre-compute normalized textContent once per node — querySelectorAll
   // returns reasonable counts (<= a few hundred), and we re-walk it per
   // segment, so caching pays off.
