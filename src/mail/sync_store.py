@@ -1281,14 +1281,77 @@ class SyncStore:
         v13 新增字段 (向后兼容, 老调用方不传 = 默认值):
             imap_uidvalidity / imap_uid: DavMail backend 必填; AppleScript 留 None
             backend_origin: 'applescript' (default) | 'davmail' — 标记 internal_id 是谁生成的
+
+        ## Cross-backend merge protection (Sprint 16 dual-backend cutover 安全网)
+
+        触发场景: backend 切换后, 同一封邮件可能被两个 backend 各看到一次 (e.g. 切到
+        davmail 后, davmail 抓到该邮件分配了 >=10^9 的新 internal_id; 而该邮件的
+        message_id 已经在 applescript 时代写过 row=小 ROWID). 老逻辑用 ``INSERT OR
+        REPLACE`` → message_id UNIQUE 约束 → 老 row 整行被删 → ``notion_page_id``
+        / ``sync_status='synced'`` / ``thread_id`` 等同步状态全丢, Notion 端孤儿.
+
+        修复策略: 写入前 SELECT 同 message_id 的 row, 如果存在但 internal_id 不同 →
+        UPDATE 老 row 的 backend-related 字段 (imap_uid / imap_uidvalidity 等), 保留
+        notion_page_id / sync_status / thread_id / notion_thread_id 不动. 新分配的
+        internal_id 浪费 (sequence 不回收, 但无害).
+
+        SQLite SSoT 视角: internal_id 仅是邮件代号, 长度不同代表 origin 不同, 不影响
+        message_id 这个对外唯一标识 — 一封 message_id 在 sync_store 只能有一条记录.
         """
         internal_id = email['internal_id']
+        message_id = email.get('message_id')
         now = time.time()
 
         with self._connection() as conn:
             cursor = conn.cursor()
 
             try:
+                # === Cross-backend merge guard ===
+                # 仅在 message_id 非空时检查 (None 不会触发 UNIQUE 冲突, 是 v3 pending 邮件).
+                if message_id:
+                    existing = cursor.execute(
+                        "SELECT internal_id, sync_status, notion_page_id, "
+                        "notion_thread_id, thread_id, backend_origin "
+                        "FROM email_metadata WHERE message_id = ?",
+                        (message_id,),
+                    ).fetchone()
+                    if existing is not None and existing['internal_id'] != internal_id:
+                        # 跨 backend 切换产生的 dup. UPDATE 老 row 的 davmail 字段,
+                        # 保留同步状态.
+                        old_iid = existing['internal_id']
+                        old_origin = existing['backend_origin']
+                        new_origin = email.get('backend_origin', 'applescript')
+                        logger.info(
+                            f"[sync_store] cross-backend merge: message_id={message_id[:40]!r} "
+                            f"already at internal_id={old_iid} (origin={old_origin!r}); "
+                            f"merging new internal_id={internal_id} (origin={new_origin!r}) "
+                            f"— keep notion_page_id/sync_status, update imap_uid"
+                        )
+                        cursor.execute(
+                            """UPDATE email_metadata
+                               SET imap_uid = COALESCE(?, imap_uid),
+                                   imap_uidvalidity = COALESCE(?, imap_uidvalidity),
+                                   thread_id = COALESCE(thread_id, ?),
+                                   sender_name = COALESCE(NULLIF(sender_name, ''), ?),
+                                   to_addr = COALESCE(NULLIF(to_addr, ''), ?),
+                                   cc_addr = COALESCE(NULLIF(cc_addr, ''), ?),
+                                   updated_at = ?
+                               WHERE internal_id = ?""",
+                            (
+                                email.get('imap_uid'),
+                                email.get('imap_uidvalidity'),
+                                email.get('thread_id'),
+                                email.get('sender_name', ''),
+                                email.get('to_addr', ''),
+                                email.get('cc_addr', ''),
+                                now,
+                                old_iid,
+                            ),
+                        )
+                        conn.commit()
+                        return True
+
+                # === 正常路径: 全新 row 或 internal_id 已存在 (同 backend 内重复触发) ===
                 cursor.execute("""
                     INSERT OR REPLACE INTO email_metadata
                     (internal_id, message_id, thread_id, subject, sender, sender_name,
