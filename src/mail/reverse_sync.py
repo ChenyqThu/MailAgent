@@ -187,6 +187,38 @@ class NotionToMailSync:
             logger.error(f"Failed to update Notion sync status: {e}")
             return False
 
+        # v14 (Sprint 16 收尾, codex P1): 把 Notion 端的 AI props 回写 SQLite SSoT
+        # (Custom Agent / 人工改的 label 会被本路径拿到, 但之前只用于飞书通知不入库).
+        # 失败 non-fatal — 反向同步主流程不受影响.
+        try:
+            external_labels = {}
+            if ai_action:
+                external_labels["action_type"] = ai_action
+            for src_key, dst_key in (
+                ("ai_priority", "priority"),
+                ("ai_summary", "ai_summary"),
+                ("category", "category"),
+                ("reply_suggestion", "reply_suggestion_md"),
+            ):
+                val = page.get(src_key, "")
+                if val:
+                    external_labels[dst_key] = val
+            if external_labels:
+                from src.llm_agent.store import LLMProcessingStore
+                if not hasattr(self, "_llm_store_lazy"):
+                    self._llm_store_lazy = LLMProcessingStore()
+                self._llm_store_lazy.upsert_external_labels(
+                    internal_id, external_labels,
+                    source="reverse_sync_poll",
+                    notion_page_id=page_id,
+                    mailbox=mailbox or None,
+                )
+        except Exception as e:
+            logger.warning(
+                f"upsert_external_labels failed (non-fatal) for "
+                f"internal_id={internal_id}: {e}"
+            )
+
         return True
 
     def _compute_payload_and_target(

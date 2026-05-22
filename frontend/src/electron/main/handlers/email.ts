@@ -40,6 +40,9 @@ export interface ListOpts {
   isRead?: boolean
   isFlagged?: boolean
   hasNotion?: boolean
+  /** Restrict to a specific set of internal_id values. 配合其他 filter
+   *  叠加 (AND), 主要给 pinned-supplement / 已知 id 批量取 enriched 用. */
+  internalIds?: number[]
   limit?: number
   offset?: number
 }
@@ -291,6 +294,13 @@ function buildListWhere(opts: ListOpts): WhereBuild {
   if (opts.hasNotion !== undefined) {
     clauses.push(opts.hasNotion ? 'notion_page_id IS NOT NULL' : 'notion_page_id IS NULL')
   }
+  if (opts.internalIds && opts.internalIds.length > 0) {
+    // 实测 pinned 数量 < 100, 远低于 SQLite 默认 999 param cap. 真的超了
+    // better-sqlite3 会抛, 调用方截断.
+    const placeholders = opts.internalIds.map(() => '?').join(',')
+    clauses.push(`internal_id IN (${placeholders})`)
+    params.push(...opts.internalIds)
+  }
   const sql = clauses.length === 0 ? '' : 'WHERE ' + clauses.join(' AND ')
   return { sql, params }
 }
@@ -349,7 +359,11 @@ export function listEmailsByThread(threadId: string | null | undefined): EmailLi
 export function listEmails(opts: ListOpts): EmailList_EmailListItem[] {
   const db = getDb()
   const where = buildListWhere(opts)
-  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500)
+  // 前端 EmailList.MAX_PAGES * PAGE_SIZE = 3000, backend cap 必须 ≥ 它,
+  // 否则 fetchLimit > 500 后 backend 截到 500 → all.length < fetchLimit
+  // → reachedEnd 误判 true → 滚到底不再触发分页. SQLite 拿 3000 行 ~50ms,
+  // IPC 序列化 ~100-200ms, 仍可接受.
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 3000)
   const offset = Math.max(opts.offset ?? 0, 0)
   const sql = `SELECT ${LIST_COLS}
                FROM email_metadata
@@ -458,7 +472,9 @@ export function searchEmails(opts: SearchOpts): SearchResult {
       bm25(email_body_fts)    AS rank,
       snippet(email_body_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
       m.notion_page_id        AS notion_page_id,
-      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority') END AS priority_raw,
+      COALESCE(m.ai_priority,
+        CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority') END
+      ) AS priority_raw,
       CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language') END AS lang_raw
     FROM email_body_fts
     JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
@@ -532,8 +548,14 @@ const ENRICHED_LIST_COLS = `
 const ENRICHED_EXTRA_COLS = `
     substr(b.body_markdown, 1, 100) AS snippet_raw,
     CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language')   END AS lang_raw,
-    CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority')   END AS priority_raw,
-    CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.action_type') END AS action_raw,
+    -- v14: priority / action_type 走主表列 (走索引) + COALESCE fallback labels_json
+    -- 兼容存量未 backfill 邮件. 全量 backfill 后 json_extract 路径可退役.
+    COALESCE(m.ai_priority,
+      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority') END
+    ) AS priority_raw,
+    COALESCE(m.ai_action,
+      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.action_type') END
+    ) AS action_raw,
     CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.category')   END AS category_raw,
     -- Sprint 16 perf: attach_count 改 LEFT JOIN 聚合 (之前用相关子查询, 每行
     -- 一次全表扫描; 500 行 → 500 次扫). 配合 v11 的 (internal_id, is_inline)
@@ -548,7 +570,7 @@ function buildEnrichedWhere(opts: ListOpts): WhereBuild {
   // doesn't trip on ambiguous columns. Cheap regex — no SQL injection
   // surface because every clause comes from buildListWhere().
   const qualified = sql.replace(
-    /\b(mailbox|sync_status|date_received|sender|subject|is_read|is_flagged|notion_page_id)\b/g,
+    /\b(mailbox|sync_status|date_received|sender|subject|is_read|is_flagged|notion_page_id|internal_id)\b/g,
     'm.$1'
   )
   return { sql: qualified, params }
@@ -576,7 +598,11 @@ function shapeEnrichedItem(row: EnrichedRow): EnrichedEmailMeta {
 export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
   const db = getDb()
   const where = buildEnrichedWhere(opts)
-  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500)
+  // 前端 EmailList.MAX_PAGES * PAGE_SIZE = 3000, backend cap 必须 ≥ 它,
+  // 否则 fetchLimit > 500 后 backend 截到 500 → all.length < fetchLimit
+  // → reachedEnd 误判 true → 滚到底不再触发分页. SQLite 拿 3000 行 ~50ms,
+  // IPC 序列化 ~100-200ms, 仍可接受.
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 3000)
   const offset = Math.max(opts.offset ?? 0, 0)
   const sql = `SELECT ${ENRICHED_LIST_COLS}, ${ENRICHED_EXTRA_COLS}
                FROM email_metadata m

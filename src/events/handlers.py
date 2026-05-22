@@ -397,6 +397,49 @@ class EventHandlers:
             except Exception as e:
                 logger.warning(f"Webhook: failed to update Notion status: {e}")
 
+        # v14 (Sprint 16 收尾, codex P1): Notion webhook 带的 AI props 回写
+        # llm_processing.labels_json + 双写 email_metadata.ai_priority/ai_action.
+        # 之前外部源 (Notion Custom Agent / 人工改) 的 AI labels 只用于飞书通知,
+        # 不入 SQLite, 前端 listEnriched 仅看本地 LLM 产出 → SSoT 缺一层. 修复:
+        if internal_id:
+            try:
+                # AILabels schema 字段命名 (priority/action_type) vs Notion property
+                # 命名 (ai_priority/ai_action) 映射. 仅传非空字段, COALESCE 不覆盖
+                # 已有 labels_json (本地 LLM 产出比外部源权威, 这层只补外部漏掉的).
+                external_labels = {}
+                if ai_priority:
+                    external_labels["priority"] = ai_priority
+                if ai_action:
+                    external_labels["action_type"] = ai_action
+                # 其他 AI props (full_props from _fetch_full_page_props or webhook 直送)
+                for src_key, dst_key in (
+                    ("ai_summary", "ai_summary"),
+                    ("category", "category"),
+                    ("language", "language"),
+                    ("sender_priority", "sender_priority"),
+                    ("reply_suggestion", "reply_suggestion_md"),
+                    ("key_points", "key_points"),
+                ):
+                    src = locals().get("full_props", props) or props
+                    val = src.get(src_key, "")
+                    if val:
+                        external_labels[dst_key] = val
+                if external_labels:
+                    from src.llm_agent.store import LLMProcessingStore
+                    if not hasattr(self, "_llm_store_lazy"):
+                        self._llm_store_lazy = LLMProcessingStore()
+                    self._llm_store_lazy.upsert_external_labels(
+                        internal_id, external_labels,
+                        source="ai_reviewed_handler",
+                        notion_page_id=page_id or None,
+                        mailbox=mailbox or None,
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"upsert_external_labels failed (non-fatal) for "
+                    f"internal_id={internal_id}: {e}"
+                )
+
     async def handle_completed(self, event: Dict):
         """处理用户标记已完成事件: 移除 Mail.app 旗标
 

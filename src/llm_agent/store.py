@@ -232,6 +232,22 @@ class LLMProcessingStore:
                     now,
                 ),
             )
+            # v14 (Sprint 16 收尾): 双写主表列 — labels.priority + labels.action_type
+            # 镜像到 email_metadata.ai_priority / ai_action 让前端走索引排序/过滤.
+            # labels_json 全量仍保留作 backup + 其他 AI 字段 (ai_summary 等).
+            ai_priority = (labels_dict.get("priority") or "").strip() or None
+            ai_action = (labels_dict.get("action_type") or "").strip() or None
+            if ai_priority is not None or ai_action is not None:
+                c.execute(
+                    """
+                    UPDATE email_metadata
+                       SET ai_priority = COALESCE(?, ai_priority),
+                           ai_action = COALESCE(?, ai_action),
+                           updated_at = ?
+                     WHERE internal_id = ?
+                    """,
+                    (ai_priority, ai_action, now, internal_id),
+                )
             c.commit()
         # Sprint 15 Stage 2: SSE publish (out of transaction)
         try:
@@ -249,6 +265,88 @@ class LLMProcessingStore:
             )
         except Exception:
             pass
+
+    def upsert_external_labels(
+        self,
+        internal_id: int,
+        labels: Dict[str, Any],
+        source: str = "notion",
+        notion_page_id: Optional[str] = None,
+        mailbox: Optional[str] = None,
+    ) -> None:
+        """v14 (Sprint 16 收尾, codex 审 P1): 把外部源 (Notion Custom Agent / 人工
+        在 Notion 端改的) AI labels 写回 SQLite, 保证 listEnriched 看到完整状态.
+
+        跟 mark_success 区别:
+        - 不带 token usage 指标 (外部源没 model/tokens/latency 等可观测项)
+        - status='success' (前端 mapReviewStatus 把 success 映射成 reviewed)
+        - 同样写 labels_json + 双写主表列 (ai_priority / ai_action)
+        - 已存在 row 时 UPDATE labels_json 但保留旧 token usage 等指标
+
+        Args:
+            internal_id: 邮件 PK
+            labels: 来源 props dict, 期望含 ai_summary/key_points/category/language/
+                sender_priority/action_required/action_type/priority/urgency_reason/
+                reply_suggestion_md 等; **schema 跟 AILabels 字段名严格一致**
+                (priority / action_type, 不是 ai_priority / ai_action — 后者是 Notion
+                property 命名).
+            source: 'notion' / 'manual' / 其他, 仅用于 audit 不入 SQL
+            notion_page_id / mailbox: 可选, 没有就保留旧值
+        """
+        now = time.time()
+        # 跟 mark_success 一致的字段裁剪 + JSON valid 守卫
+        labels_dict = _truncate_long_fields(dict(labels), max_field_chars=3500)
+        labels_json = json.dumps(labels_dict, ensure_ascii=False)
+        if len(labels_json) > 8000:
+            safe_dict = {k: v for k, v in labels_dict.items()
+                         if k != "reply_suggestion_md"}
+            labels_json = json.dumps(safe_dict, ensure_ascii=False)
+
+        ai_priority = (labels_dict.get("priority") or "").strip() or None
+        ai_action = (labels_dict.get("action_type") or "").strip() or None
+
+        with self._conn() as c:
+            c.execute(
+                """
+                INSERT INTO llm_processing
+                    (internal_id, notion_page_id, mailbox, status, retry_count,
+                     next_retry_at, last_error, model,
+                     input_tokens, output_tokens,
+                     cache_read_input_tokens, cache_creation_input_tokens,
+                     latency_ms, labels_json, created_at, updated_at)
+                VALUES (?, ?, ?, 'success', 0, NULL, NULL, ?,
+                        NULL, NULL, NULL, NULL, NULL, ?, ?, ?)
+                ON CONFLICT(internal_id) DO UPDATE SET
+                    notion_page_id=COALESCE(excluded.notion_page_id, notion_page_id),
+                    mailbox=COALESCE(excluded.mailbox, mailbox),
+                    status='success',
+                    last_error=NULL,
+                    labels_json=excluded.labels_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    internal_id,
+                    notion_page_id,
+                    mailbox,
+                    f"external:{source}",
+                    labels_json,
+                    now,
+                    now,
+                ),
+            )
+            # 双写 email_metadata 主表列 (同 mark_success)
+            if ai_priority is not None or ai_action is not None:
+                c.execute(
+                    """
+                    UPDATE email_metadata
+                       SET ai_priority = COALESCE(?, ai_priority),
+                           ai_action = COALESCE(?, ai_action),
+                           updated_at = ?
+                     WHERE internal_id = ?
+                    """,
+                    (ai_priority, ai_action, now, internal_id),
+                )
+            c.commit()
 
     def mark_failed(
         self, internal_id: int, error: str, max_retries: int

@@ -207,7 +207,7 @@ class SyncStore:
     #                自增 (起点 1_000_000_000, 永不与 ROWID 冲突). 通过 allocate_davmail_internal_id()
     #                atomic 分配. 详见 plan §"主键 / 邮件标识策略" 方案 D +
     #                docs/dual-backend-architecture-handoff.md.
-    DB_VERSION = 13
+    DB_VERSION = 14
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -756,6 +756,28 @@ class SyncStore:
         except sqlite3.OperationalError as e:
             logger.warning(f"v13 migration: skipped ADD COLUMN ({e})")
 
+        # ==================== v14 migration: AI 字段提升为主表列 ====================
+        # 把 ai_priority / ai_action 从 llm_processing.labels_json (JSON 间接查) 提升为
+        # email_metadata 主表列, 让前端按这两个字段排序 / 过滤可走索引 (json_extract 不走).
+        # labels_json 仍保留全量作 backup (其他 AI 字段如 ai_summary / key_points /
+        # reply_suggestion_md / category / language 不进主表, 走 JSON 灵活扩展).
+        # 主写路径: LLMProcessingStore.mark_success + upsert_external_labels(source='notion')
+        try:
+            cursor.execute("PRAGMA table_info(email_metadata)")
+            cols_v14 = {r[1] for r in cursor.fetchall()}
+            if 'ai_priority' not in cols_v14:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN ai_priority TEXT"
+                )
+                logger.info("v14 migration: added email_metadata.ai_priority")
+            if 'ai_action' not in cols_v14:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN ai_action TEXT"
+                )
+                logger.info("v14 migration: added email_metadata.ai_action")
+        except sqlite3.OperationalError as e:
+            logger.warning(f"v14 migration: skipped ADD COLUMN ({e})")
+
         # 索引: imap_uid 反查 (DavMail backend fetch_email_by_id 快路径) — partial 减小尺寸
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_imap_uid
@@ -766,6 +788,17 @@ class SyncStore:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_backend_origin
             ON email_metadata(backend_origin)
+        """)
+        # v14: AI 字段索引 (partial - 仅非 NULL, 大幅减小索引尺寸)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_ai_priority
+            ON email_metadata(ai_priority)
+            WHERE ai_priority IS NOT NULL
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_ai_action
+            ON email_metadata(ai_action)
+            WHERE ai_action IS NOT NULL
         """)
 
         # 初始化 davmail internal_id 自增序列 (起点 1_000_000_000, 永不与 Mail.app ROWID 冲突).
@@ -2261,6 +2294,42 @@ class SyncStore:
                     time.time(),
                     internal_id,
                 ))
+            conn.commit()
+
+    def update_ai_main_columns(
+        self,
+        internal_id: int,
+        ai_priority: Optional[str] = None,
+        ai_action: Optional[str] = None,
+    ) -> None:
+        """v14: 把 AI 标签镜像到 email_metadata 主表列 (走索引).
+
+        LLMProcessingStore.mark_success / upsert_external_labels 内部调; labels_json
+        仍保留全量作 backup. 仅 priority / action_type 进主表 (高频排序过滤).
+        其他 AI 字段 (ai_summary / key_points / reply_suggestion_md / category /
+        language) 仍走 labels_json json_extract.
+
+        Args:
+            ai_priority: 新 priority 值 (None 不动, 空串清空)
+            ai_action: 新 action_type 值 (None 不动, 空串清空)
+        """
+        sets, args = [], []
+        if ai_priority is not None:
+            sets.append("ai_priority = ?")
+            args.append(ai_priority or None)  # 空串 → NULL
+        if ai_action is not None:
+            sets.append("ai_action = ?")
+            args.append(ai_action or None)
+        if not sets:
+            return
+        sets.append("updated_at = ?")
+        args.append(time.time())
+        args.append(internal_id)
+        with self._connection() as conn:
+            conn.execute(
+                f"UPDATE email_metadata SET {', '.join(sets)} WHERE internal_id = ?",
+                args,
+            )
             conn.commit()
 
     def get_stats(self) -> SyncStoreStats:
