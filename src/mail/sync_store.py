@@ -42,7 +42,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict, Union
+from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
 
 
@@ -659,6 +659,14 @@ class SyncStore:
                     "ALTER TABLE email_metadata ADD COLUMN backend_origin TEXT DEFAULT 'applescript'"
                 )
                 logger.info("v13 migration: added email_metadata.backend_origin (default 'applescript')")
+            # Sprint 15 D 块漏的 ALTER TABLE — update_local_flags(processing_status) 假设
+            # email_metadata 有 processing_status 列, 但当时只加了写入路径没加 schema.
+            # 顺手补上 (idempotent, 跟 v13 一并跑).
+            if 'processing_status' not in cols_v13:
+                cursor.execute(
+                    "ALTER TABLE email_metadata ADD COLUMN processing_status TEXT"
+                )
+                logger.info("v13 migration: added email_metadata.processing_status (Sprint 15 D backfill)")
         except sqlite3.OperationalError as e:
             logger.warning(f"v13 migration: skipped ADD COLUMN ({e})")
 

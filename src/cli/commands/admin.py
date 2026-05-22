@@ -27,6 +27,9 @@ from src.cli.exceptions import (
     CliSchemaError,
 )
 from src.cli.output import apply_local_output, emit, emit_cli_error
+# 跟 SyncStore.DB_VERSION 同步避免漂移 (Sprint 16 v13: dual-backend 加 imap_uid/
+# imap_uidvalidity/backend_origin 三列). 导入而非硬编码, 后续 ALTER TABLE 升版本时不会漏改 CLI 端.
+from src.mail.sync_store import SyncStore as _SyncStore
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -34,7 +37,7 @@ if TYPE_CHECKING:
 app = typer.Typer(name="admin", help="统计 / 健康 / db-version", no_args_is_help=True)
 
 
-EXPECTED_DB_VERSION = 10
+EXPECTED_DB_VERSION = _SyncStore.DB_VERSION
 REQUIRED_TABLES = (
     "email_metadata",
     "email_body",

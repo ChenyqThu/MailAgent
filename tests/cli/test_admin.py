@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from src.mail.sync_store import SyncStore
 from tests.cli.conftest import extract_last_json_object as _extract_last_json_object
+
+# 跟 SyncStore.DB_VERSION 同步, 避免每次升 schema 都改硬编码 (Sprint 16 v13).
+_DB_VERSION = SyncStore.DB_VERSION
 
 
 def _invoke_admin(cli_runner, *args, db_path):
@@ -17,7 +21,7 @@ class TestAdminDbVersion:
     def test_text(self, cli_runner, cli_env, seeded_db):
         result = _invoke_admin(cli_runner, "db-version", db_path=seeded_db)
         assert result.exit_code == 0, result.output
-        assert "10" in result.output
+        assert str(_DB_VERSION) in result.output
         assert "compatible" in result.output
 
     def test_json(self, cli_runner, cli_env, seeded_db):
@@ -26,8 +30,8 @@ class TestAdminDbVersion:
         )
         assert result.exit_code == 0, result.output
         payload = _extract_last_json_object(result.output)
-        assert payload["data"]["version"] == 10
-        assert payload["data"]["expected"] == 10
+        assert payload["data"]["version"] == _DB_VERSION
+        assert payload["data"]["expected"] == _DB_VERSION
         assert payload["data"]["compatible"] is True
 
     def test_incompat_emits_error_wrapper(
@@ -55,7 +59,7 @@ class TestAdminHealth:
         assert result.exit_code == 0, result.output
         payload = _extract_last_json_object(result.output)
         assert payload["data"]["healthy"] is True
-        assert payload["data"]["db_version"] == 10
+        assert payload["data"]["db_version"] == _DB_VERSION
         for required in (
             "email_metadata", "email_body", "email_attachment", "email_body_fts",
             "cli_checkpoints", "v4_rollout_stats", "island_dispatch", "email_outbox",
