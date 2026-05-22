@@ -277,7 +277,13 @@ class EventHandlers:
 
             if self.outbox_repo is not None:
                 payload = {'is_read': True, 'is_flagged': target_flagged}
-                self.sync_store.update_local_flags(internal_id, True, target_flagged)
+                # Sprint 16 收尾: SSoT 反转修复 — 同步把 processing_status='已同步' 镜像到
+                # SQLite (原本只写 outbox payload 给 Notion 派发, SQLite 字段一直为空,
+                # 前端 listEnriched 读 SQLite 看不到状态). 跟 update_email_flags Notion 端写
+                # 的'已同步'保持口径一致.
+                self.sync_store.update_local_flags(
+                    internal_id, True, target_flagged, processing_status='已同步'
+                )
                 outbox_id = self.outbox_repo.enqueue(
                     internal_id=internal_id,
                     op_type='flag_sync',
@@ -291,13 +297,19 @@ class EventHandlers:
                 )
             else:
                 # 老路径
+                # Sprint 16 收尾: 老路径同样镜像 processing_status='已同步' 到 SQLite,
+                # 跟 outbox 主路径口径一致, 前端 listEnriched 立即读到 done 状态.
                 if target_flagged:
                     self.arm.mark_as_read_by_id(internal_id, True, mailbox)
                     self.arm.set_flag_by_id(internal_id, True, mailbox)
-                    self.sync_store.update_local_flags(internal_id, True, True)
+                    self.sync_store.update_local_flags(
+                        internal_id, True, True, processing_status='已同步'
+                    )
                 else:
                     self.arm.mark_as_read_by_id(internal_id, True, mailbox)
-                    self.sync_store.update_local_flags(internal_id, True, False)
+                    self.sync_store.update_local_flags(
+                        internal_id, True, False, processing_status='已同步'
+                    )
 
         # 飞书通知：重要/紧急 且 需要行动（发件箱不通知）
         notify_priorities = {"🔴 紧急", "🟡 重要"}
@@ -430,7 +442,11 @@ class EventHandlers:
         # source='notion_webhook' + target='notion' 会被 echo prevention silent skip
         # 所以只写 target='mailapp'（Notion 那边用户已经手改, 不需要回写）
         if self.outbox_repo is not None and internal_id:
-            self.sync_store.update_local_flags(internal_id, True, False)
+            # Sprint 16 收尾: SSoT 反转修复 — 同步把 processing_status='已完成' 镜像到
+            # SQLite, 前端能立即区分"已同步" vs "已完成". guard 已校验 Notion 端是'已完成'.
+            self.sync_store.update_local_flags(
+                internal_id, True, False, processing_status='已完成'
+            )
             outbox_id = self.outbox_repo.enqueue(
                 internal_id=internal_id,
                 op_type='flag_sync',
@@ -452,9 +468,11 @@ class EventHandlers:
                 self.arm.set_flag(message_id, False, mailbox)
                 self.arm.mark_as_read(message_id, True, mailbox)
 
-            # Echo prevention
+            # Echo prevention + Sprint 16 SSoT 镜像 processing_status='已完成'
             if internal_id:
-                self.sync_store.update_local_flags(internal_id, True, False)
+                self.sync_store.update_local_flags(
+                    internal_id, True, False, processing_status='已完成'
+                )
 
             logger.info(f"Completed: unflagged {message_id[:40]}")
 
