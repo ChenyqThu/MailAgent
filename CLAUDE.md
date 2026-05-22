@@ -116,10 +116,78 @@ intent 聚合点, FanoutWorker 异步派发到 Mail.app + Notion。
   退回老 AppleScript 直调路径（回退兼容）
 - 详见 `docs/sprint15-backend-complete.md` + `frontend/SPRINT15-HANDOFF.md` §3
 
+**Sprint 16 — Dual-Backend (DavMail + AppleScript)**（2026-05-22 cutover 上线）
+
+把单一 "Mail.app + AppleScript" 后端重构成可切换的双 backend, **davmail 模式为当前主路径**, AppleScript 保留作 emergency fallback. 解决 AppleScript GUI 注入富文本痛点 + 跨平台部署铺路 + EWS 2026-10 关停应对.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Application Layer (new_watcher / FanoutWorker / handler)│
+│        depends on  →  IMailBackend Protocol              │
+└──────────────────────────────────────────────────────────┘
+                          ▲
+                  ┌───────┴────────┐
+                  │                │
+          ┌───────┴────────┐ ┌─────┴──────────────┐
+          │ DavMailBackend │ │ AppleScriptBackend │
+          │ (PRIMARY)      │ │ (FALLBACK)         │
+          │                │ │                    │
+          │ - SMTP (1025)  │ │ - applescript_arm  │
+          │ - IMAP (1143)  │ │ - sqlite_radar     │
+          │ - CalDAV(1080) │ │                    │
+          └───────┬────────┘ └─────────┬──────────┘
+                  │                    │
+          ┌───────┴────────┐ ┌─────────┴──────────┐
+          │ DavMail JVM    │ │ macOS Mail.app +   │
+          │ (PM2 managed)  │ │ Envelope Index SQL │
+          │ → EWS / Graph  │ │                    │
+          └────────────────┘ └────────────────────┘
+```
+
+**核心特性**：
+- `src/mail/backend/` 抽象核心: `base.py` (`IMailBackend` Protocol, 8 个方法), `types.py` (EmailContent / EmailMeta / DraftRequest), `factory.py` (probe + create_backend), `imap_client.py` (IMAP/SMTP context manager + cipher key), `applescript_backend.py` (FALLBACK wrapper), `davmail_backend.py` (~700 行 PRIMARY IMAP/SMTP impl), `davmail_uid_mapper.py` (后台 UID backfill 任务)
+- **主键策略 (B 副字段)**: `email_metadata.internal_id` PK 不变. AppleScript 时代 `internal_id = Mail.app SQLite ROWID (< 10^9)`. DavMail 时代 `internal_id = allocate_davmail_internal_id() ≥ 10^9` (DB v13 新增 `sync_sequence` 表 AUTOINCREMENT). `(imap_uidvalidity, imap_uid)` 副字段定位 IMAP 端实际邮件. `backend_origin` 列标记哪个 backend 生成的
+- **alias 兼容层**: `DavMailBackend.arm = self`, `self.radar = self` — NewWatcher / fanout / handler 19+ 处 `self.arm.fetch_email_content_by_id` / `self.radar.check_for_changes` 调用零改动支持 davmail mode
+- **Cross-backend merge guard**: `_save_email_v3` 当 message_id UNIQUE 冲突时不 INSERT OR REPLACE 杀老 row, 只 UPDATE backend 字段, 保留 `notion_page_id` / `sync_status='synced'` / `thread_id`. 防 cutover 时数据丢失
+- **正向 sync (davmail 路径)**: `IMAP STATUS UIDNEXT` polling (~30s 间隔) → `radar.check_for_changes` 检测 → `UID FETCH BODY[]` (~236ms vs AppleScript ~1s, 4× 快) → 后续 NotionSync + LLM 路径不变
+- **反向 sync (Sprint 15 outbox 派发)**: `FanoutWorker` 调 `backend.arm.set_flag` → `IMAP UID STORE +\Flagged +\Seen` 同步生效, 1:1 映射
+- **草稿创建 (Craft 按钮)**: davmail 模式 `IMAP APPEND` 到 Drafts folder (含 SPECIAL-USE detection + fallback), 富文本 multipart/alternative + In-Reply-To 线程折叠. applescript 模式 fallback 走 `scripts/create_reply_draft.sh` 老路径
+- **DB v13 schema**: `email_metadata` 加 3 列 (`imap_uidvalidity` / `imap_uid` / `backend_origin`) + 2 索引 (`idx_imap_uid` / `idx_backend_origin`). `sync_sequence` 新表 AUTOINCREMENT seq for davmail internal_id 分配
+- **LLM runner backend 注入**: `LLMRunner(backend=...)` 让 LLM fetch 路径走 `backend.arm` (davmail mode 走 IMAP fetch ~236ms 而非 AppleScript ~1s)
+- **CalDAV LLM context (机会主义, 未启用)**: `src/calendar_notion/caldav_reader.py` + `build_llm_caldav_context` 已实现, 通过 DavMail CalDAV 直读 Outlook 服务端日历给 LLM 注入"今日日程" — 等观察期满 + prompt 调优再启用
+- **`date_received` SSoT 时区归一**: 入口 `_normalize_date_received_iso` helper + `_local_tz()` 用 `/etc/localtime` 解析 IANA zone 自动处理 DST. cutover 时一次性 backfill 5153 行 (5月 `-07:00` / 1月 `-08:00`), 现 8899/8899 全 iso_with_tz
+
+**切换 / 回切（一行 .env 改动）**:
+```bash
+# 切到 davmail
+echo 'MAILAGENT_BACKEND=davmail' >> .env
+echo 'DAVMAIL_POC_MODE=1' >> .env       # PoC 期间用共享 cipher key, 生产前必须改 DAVMAIL_CIPHER_KEY
+pm2 restart mail-sync
+
+# 回切 applescript (emergency)
+sed -i.bak 's/^MAILAGENT_BACKEND=davmail/MAILAGENT_BACKEND=applescript/' .env
+# 关键: marker reset 到 Mail.app ROWID, 否则 applescript 看 davmail UIDNEXT 永远 has_new=False
+sqlite3 data/sync_store.db "UPDATE sync_state SET value = (SELECT MAX(internal_id) FROM email_metadata WHERE backend_origin='applescript') WHERE key='last_max_row_id';"
+pm2 restart mail-sync
+```
+
+**死硬约束**:
+- 当前 DavMail 用 Outlook for Windows well-known client_id 伪装 (PoC), **不可上生产** — 需走公司 IT 审批 (推荐直接申请 Graph API 应用)
+- EWS 2026-10-01 关停, DavMail 6.7 仍走 EWS, Graph 路线图 (Issue #404) 未 merge — 见 [`docs/roadmap-post-cutover.md`](./docs/roadmap-post-cutover.md) §5.1 双轨方案
+- AppleScript fallback 路径**始终可用** — 任何重构都必须保证 emergency 回切不丢数据
+
+**详见**:
+- [`docs/sprint16-cutover-complete.md`](./docs/sprint16-cutover-complete.md) — Sprint 16 全程纪要 (含 5 个 cutover-only bug 修复细节)
+- [`docs/dual-backend-architecture-handoff.md`](./docs/dual-backend-architecture-handoff.md) — 设计 + 5 个决策点
+- [`docs/dual-backend-phase-abc-handoff.md`](./docs/dual-backend-phase-abc-handoff.md) — Phase A/B/C 实施 handoff
+- [`docs/next-session-handoff.md`](./docs/next-session-handoff.md) — cold-pickup
+- [`docs/roadmap-post-cutover.md`](./docs/roadmap-post-cutover.md) — 短中长期 roadmap
+
 **技术栈：**
 - Python >=3.9（本地开发 3.11+，远程 webhook-server 3.9+）
-- AppleScript（Mail.app 交互）
-- SQLite（状态存储 + 变化检测）
+- AppleScript（Mail.app 交互, fallback 路径）
+- **DavMail 6.7 (JVM)** — Sprint 16 起主路径, IMAP/SMTP/CalDAV 桥接 EWS
+- SQLite（状态存储 + 变化检测 + v4 SSoT）
 - Notion API（notion-client）
 - BeautifulSoup/lxml（HTML 解析）
 - Pydantic（配置管理）
@@ -666,6 +734,20 @@ CREATE TABLE thread_head_cache (
 |------|--------|------|
 | `INIT_BATCH_SIZE` | `100` | 初始化每批获取数量 |
 | `APPLESCRIPT_TIMEOUT` | `200` | 超时时间（秒） |
+
+### Dual-Backend 配置（Sprint 16 起）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MAILAGENT_BACKEND` | `applescript` | 主 backend 选择：`applescript`（macOS Mail.app）或 `davmail`（DavMail IMAP/SMTP 桥）。2026-05-22 cutover 后生产 = `davmail` |
+| `DAVMAIL_HOST` | `127.0.0.1` | DavMail JVM 监听地址（PM2 `davmail-poc` 进程） |
+| `DAVMAIL_IMAP_PORT` | `1143` | IMAP 端口（fetch + flag store） |
+| `DAVMAIL_SMTP_PORT` | `1025` | SMTP 端口（draft append + outbound send） |
+| `DAVMAIL_USER` | `""` | 邮箱地址（同 `USER_EMAIL`） |
+| `DAVMAIL_CIPHER_KEY` | `""` | StringEncryptor 密码，必须跟本机 DavMail `davmail.properties` 的 cipher key 一致。生产模式下必填 |
+| `DAVMAIL_POC_MODE` | `false` | PoC 模式 fallback：true 时 `DAVMAIL_CIPHER_KEY` 空也用默认 `"mailagent-poc-shared-key"`（**非生产**） |
+| `DAVMAIL_INBOX_NAME` | `INBOX` | IMAP 端 inbox folder 名 |
+| `DAVMAIL_DRAFTS_NAME` | `""` | Drafts folder 名（留空自动 SPECIAL-USE detection + fallback `Drafts`/`已保存`/`草稿`） |
 
 ### 飞书通知配置
 

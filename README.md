@@ -1,12 +1,14 @@
 # MailAgent
 
-macOS 邮件实时同步到 Notion，支持 AI 自动分类与处理。
+邮件实时同步到 Notion，支持 AI 自动分类与处理。
+
+> **2026-05-22 起**：默认 backend 已从 macOS Mail.app + AppleScript 切换到 **DavMail IMAP/SMTP/CalDAV**（详见 [`docs/sprint16-cutover-complete.md`](./docs/sprint16-cutover-complete.md)）。AppleScript 路径保留作 emergency fallback。配置项 `MAILAGENT_BACKEND=davmail|applescript` 一行切换。
 
 ## 功能概览
 
 | 功能 | 数据源 | 说明 |
 |------|--------|------|
-| **邮件同步** | Mail.app | 邮件内容、附件、线程关系同步到 Notion |
+| **邮件同步** | DavMail IMAP（主）/ Mail.app（fallback） | 邮件内容、附件、线程关系同步到 Notion |
 | **会议邀请识别** | 邮件中的 .ics | 自动解析会议邀请创建日程 |
 | **双向 Flag 同步** | Mail.app ↔ Notion | 已读/旗标状态实时双向同步 |
 | **AI 分类处理** | Notion Automation 或本地 LLM | Notion Email Agent 或本地 Anthropic 兼容 LLM（见 [docs/LLM_AGENT_SETUP.md](./docs/LLM_AGENT_SETUP.md)） |
@@ -62,10 +64,16 @@ NOTION_TOKEN=ntn_xxx...           # Notion Integration Token
 EMAIL_DATABASE_ID=xxx...          # 邮件数据库 ID
 CALENDAR_DATABASE_ID=xxx...       # 日历数据库 ID
 USER_EMAIL=your@email.com
-MAIL_ACCOUNT_NAME=Exchange        # Mail.app 账户名
+MAIL_ACCOUNT_NAME=Exchange        # Mail.app 账户名 (applescript backend 用)
+
+# Dual-backend (Sprint 16 起)：
+MAILAGENT_BACKEND=davmail         # davmail | applescript
+DAVMAIL_USER=your@email.com
+DAVMAIL_CIPHER_KEY=xxx            # 跟本机 davmail.properties 一致 (生产必填)
+# DAVMAIL_POC_MODE=1              # PoC 模式默认共享 key (非生产)
 ```
 
-完整配置参见 `.env.example`
+DavMail 自动启动 (PM2 进程 `davmail-poc`)：参见 [`davmail-poc/POC-RESULTS.md`](./davmail-poc/POC-RESULTS.md) (本地 gitignored)。完整配置参见 `.env.example`
 
 ### 3. 系统权限
 
@@ -254,6 +262,10 @@ MailAgent/
 ## 开发文档
 
 - [架构设计](./docs/new_architecture_design.md)
+- [v4 SQLite SSoT 架构](./docs/architecture_v4_sqlite_ssot.md)
+- [Sprint 16 dual-backend cutover](./docs/sprint16-cutover-complete.md) — DavMail 切换全程纪要
+- [Dual-backend 设计 + 决策](./docs/dual-backend-architecture-handoff.md)
+- [Post-cutover roadmap](./docs/roadmap-post-cutover.md) — 短中长期任务（含 EWS 2026-10 关停应对）
 - [初始同步指南](./docs/initial_sync.md)
 - [LLM Agent 启用清单](./docs/LLM_AGENT_SETUP.md)
 - [开发指南](./CLAUDE.md)
