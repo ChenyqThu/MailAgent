@@ -400,6 +400,38 @@ class Config(BaseSettings):
             "fallback 导致 BadPaddingException."
         ),
     )
+    davmail_fetch_timeout_sec: int = Field(
+        default=120, env="DAVMAIL_FETCH_TIMEOUT_SEC",
+        description=(
+            "DavMail IMAP fetch_email_by_id 单次操作 timeout (秒). "
+            "默认 120s, uid-mapper 后台并发跑时单封 fetch 偶发超时 (原 60s 过紧). "
+            "极端大邮件 (~MB attachment) 可适当调大到 180s."
+        ),
+    )
+    davmail_uid_backfill_enabled: bool = Field(
+        default=True, env="DAVMAIL_UID_BACKFILL_ENABLED",
+        description=(
+            "是否启用 uid-mapper 后台 backfill (cutover 后给 applescript 时代邮件补 imap_uid). "
+            "EWS throttling 期间可临时设 false 让 davmail 喘息. 关闭后老邮件反向 flag / "
+            "fetch 仍能用 message_id 慢路径 (~1s vs ~200ms 快路径)."
+        ),
+    )
+    davmail_uid_backfill_batch_size: int = Field(
+        default=20, env="DAVMAIL_UID_BACKFILL_BATCH_SIZE",
+        description=(
+            "uid-mapper 单批 IMAP SEARCH HEADER 数量 (默认 20, 原 50). "
+            "调小避免 davmail 端 EWS searchMessages 突发 → Microsoft throttling. "
+            "20 × ~150ms = ~3s/batch, 跟正向 sync poll 不抢资源."
+        ),
+    )
+    davmail_uid_backfill_sleep_sec: float = Field(
+        default=3.0, env="DAVMAIL_UID_BACKFILL_SLEEP_SEC",
+        description=(
+            "uid-mapper 每批之间 sleep (秒). 给 davmail 端 EWS 调用喘息窗口, "
+            "避免 throttling. 8857 封邮件 / 20 = ~443 批 × 3s = ~22min 加额外延迟 "
+            "(原本 ~3min). 用速度换稳定性."
+        ),
+    )
     davmail_drafts_folder: str = Field(
         default="", env="DAVMAIL_DRAFTS_FOLDER",
         description=(

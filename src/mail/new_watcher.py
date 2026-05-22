@@ -518,8 +518,9 @@ class NewWatcher:
             # 1. 通过 internal_id 获取完整邮件内容（127x 性能提升）
             full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
             if not full_email:
-                logger.warning(f"Failed to fetch email content by id {internal_id}")
-                self.sync_store.mark_fetch_failed(internal_id, "AppleScript fetch failed")
+                backend_name = type(self.arm).__name__
+                logger.warning(f"Failed to fetch email content by id {internal_id} (backend={backend_name})")
+                self.sync_store.mark_fetch_failed(internal_id, f"fetch_email_content_by_id returned None (backend={backend_name})")
                 return
 
             # 2. AppleScript 成功，更新 SyncStore 元数据（填充 message_id、thread_id）
@@ -911,8 +912,9 @@ class NewWatcher:
                     full_email = self.arm.fetch_email_content_by_id(internal_id, mailbox)
 
                     if not full_email:
-                        logger.warning(f"Retry fetch failed for {internal_id}")
-                        self.sync_store.mark_fetch_failed(internal_id, "AppleScript fetch failed on retry")
+                        backend_name = type(self.arm).__name__
+                        logger.warning(f"Retry fetch failed for {internal_id} (backend={backend_name})")
+                        self.sync_store.mark_fetch_failed(internal_id, f"fetch_email_content_by_id returned None on retry (backend={backend_name})")
                         continue
 
                     # 获取成功，更新元数据

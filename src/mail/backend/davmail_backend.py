@@ -255,7 +255,13 @@ class DavMailBackend(IMailBackend):
     # =========================================================================
 
     def probe_readiness(self) -> tuple[bool, str]:
-        """启动 probe: TCP 1143/1025 + IMAP LOGIN + SELECT INBOX + 探测 Drafts 文件夹."""
+        """启动 probe: TCP 1143/1025 + IMAP LOGIN + NOOP.
+
+        Sprint 16 收尾修复: 原本 SELECT INBOX 触发 davmail → EWS searchMessages
+        (~8.5s) 会让 mail-sync crash-loop 时 1min 内累积 60+ EWS 调用打爆
+        Microsoft 端 throttling. 改成 NOOP (~150ms, 纯协议级) + 仅在 drafts_folder
+        未知时探测一次. 已知 drafts_folder 时彻底跳过 EWS 调用.
+        """
         for port in (self.imap_port, self.smtp_port):
             ok, detail = probe_tcp(self.host, port, timeout=2.0)
             if not ok:
@@ -267,16 +273,12 @@ class DavMailBackend(IMailBackend):
             return False, f"IMAP LOGIN failed: {e}"
 
         try:
-            typ, data = imap.select("INBOX", readonly=True)
+            # 轻量 NOOP 替代 SELECT INBOX (后者触发 EWS searchMessages)
+            typ, _ = imap.noop()
             if typ != "OK":
-                return False, f"SELECT INBOX failed: {data}"
+                return False, "IMAP NOOP failed"
 
-            # CRITICAL #3: UIDVALIDITY 从 SELECT 响应读 (RFC 3501 §7.1), 不调 STATUS
-            uv = _read_uidvalidity_from_select(imap)
-            if uv:
-                self.inbox_uidvalidity = uv
-
-            # 探测 Drafts (如果配置没显式给)
+            # 探测 Drafts (仅当未配置时, 一次性)
             if not self.drafts_folder:
                 self.drafts_folder = discover_drafts_folder(imap) or "Drafts"
         finally:
@@ -286,8 +288,7 @@ class DavMailBackend(IMailBackend):
                 pass
 
         return True, (
-            f"DavMail OK (uidvalidity={self.inbox_uidvalidity}, "
-            f"drafts={self.drafts_folder!r})"
+            f"DavMail OK (drafts={self.drafts_folder!r}, probe=NOOP)"
         )
 
     def health_status(self) -> BackendHealth:
@@ -393,8 +394,11 @@ class DavMailBackend(IMailBackend):
         )
         message_id = record.get("message_id") or ""
 
+        # Sprint 16 收尾: timeout 60→120s. uid-mapper 后台并发跑时单封 fetch 偶发超时,
+        # 让正向 sync 路径有更宽容窗口 (cfg.davmail_fetch_timeout_sec 可调, 默认 120s)
+        fetch_timeout = int(getattr(self.cfg, "davmail_fetch_timeout_sec", 120))
         try:
-            with imap_session(self.cfg, timeout=60) as imap:
+            with imap_session(self.cfg, timeout=fetch_timeout) as imap:
                 typ, _ = imap.select(imap_box, readonly=True)
                 if typ != "OK":
                     logger.warning(f"[davmail-backend] SELECT {imap_box!r} failed")
@@ -443,6 +447,51 @@ class DavMailBackend(IMailBackend):
                 if typ != "OK" or not data:
                     return None
 
+                # Sprint 16 收尾: stale UID 检测 + message_id fallback.
+                # 现象: Outlook 端移动 / 规则处理 / 重排会让 server 端 UID 变 (例如
+                # 147766 → 147767, UIDVALIDITY 不变). IMAP UID FETCH 返回 typ=OK 但
+                # data=[None] (server 说邮件不在该 UID), 我们错误判定 valid 进 parse → None.
+                # Fix: 第一次 fetch 失败 (data[0] is None 或 parse 返回 None) 时, fallback
+                # 到 message_id IMAP SEARCH HEADER 反查新 UID + 回写 sync_store + 重 fetch.
+                stale_uid_fetch = (
+                    not data[0]  # data=[None] 或 data=[b'']
+                    or (isinstance(data[0], (bytes, bytearray)) and not data[0])
+                )
+                ec = None if stale_uid_fetch else self._parse_fetch_response(
+                    data, internal_id, imap_box
+                )
+                if ec:
+                    return ec
+
+                # 快路径 stale, fallback 到 message_id 反查 (仅当 message_id 已知)
+                if not message_id:
+                    logger.warning(
+                        f"[davmail-backend] imap_uid={imap_uid} stale for "
+                        f"internal_id={internal_id} AND no message_id → give up"
+                    )
+                    return None
+
+                logger.info(
+                    f"[davmail-backend] imap_uid={imap_uid} stale for "
+                    f"internal_id={internal_id}, fallback message_id reverse lookup"
+                )
+                new_uid = self._lookup_uid_by_message_id(imap, message_id)
+                if not new_uid or new_uid == imap_uid:
+                    return None  # 反查也失败 / 跟原来一样 (邮件确实没了)
+
+                # 命中新 UID, 回写 sync_store, 再 fetch
+                try:
+                    self._update_sync_store_uid(internal_id, new_uid, current_uv)
+                except Exception as e:
+                    logger.warning(
+                        f"[davmail-backend] update_sync_store_uid failed (non-fatal): {e}"
+                    )
+                typ, data = imap.uid(
+                    "fetch", str(new_uid),
+                    "(UID INTERNALDATE FLAGS RFC822.SIZE BODY.PEEK[])",
+                )
+                if typ != "OK" or not data or not data[0]:
+                    return None
                 return self._parse_fetch_response(data, internal_id, imap_box)
         except Exception as e:
             logger.error(f"[davmail-backend] fetch_email_by_id({internal_id}) failed: {e}")

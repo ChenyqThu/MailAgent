@@ -30,8 +30,10 @@ if TYPE_CHECKING:
 _PROGRESS_KEY = "davmail_backfill_progress"
 _LAST_INTERNAL_ID_KEY = "davmail_backfill_last_internal_id"
 
-# IMAP UID SEARCH HEADER 反查特别耗时, 单条 ~100-300ms, 限制并发避免压垮 DavMail
-_DEFAULT_BATCH_SIZE = 50
+# IMAP UID SEARCH HEADER 反查特别耗时, 单条 ~100-300ms, 限制并发避免压垮 DavMail.
+# Sprint 16 收尾: batch 50→20 + sleep_between=3s, 防 EWS searchMessages throttling.
+_DEFAULT_BATCH_SIZE = 20
+_DEFAULT_SLEEP_BETWEEN_SEC = 3.0
 
 
 class DavMailUidMapper:
@@ -42,11 +44,13 @@ class DavMailUidMapper:
         *,
         batch_size: int = _DEFAULT_BATCH_SIZE,
         max_failures_per_batch: int = 20,
+        sleep_between_batches_sec: float = _DEFAULT_SLEEP_BETWEEN_SEC,
     ):
         self.cfg = cfg
         self.sync_store = sync_store
         self.batch_size = batch_size
         self.max_failures_per_batch = max_failures_per_batch
+        self.sleep_between_batches_sec = sleep_between_batches_sec
 
     def count_pending(self) -> int:
         """统计还需 backfill 的邮件数.
@@ -114,6 +118,10 @@ class DavMailUidMapper:
                     f"({result['failed']}) >= max ({self.max_failures_per_batch})"
                 )
                 break
+
+            # Sprint 16 收尾: 每批 sleep 给 davmail 端 EWS 喘息, 防 throttling
+            if self.sleep_between_batches_sec > 0:
+                await asyncio.sleep(self.sleep_between_batches_sec)
 
         elapsed = int(time.time() - t0)
         self.sync_store.set_state(
@@ -263,11 +271,23 @@ class DavMailUidMapper:
 
 async def schedule_backfill_task(cfg: "Config", sync_store: "SyncStore", delay_sec: int = 10):
     """供 main.py 调用 — 延迟 N 秒启动 backfill task (避免跟启动其他 task 抢资源)."""
+    # Sprint 16 收尾: 加 enabled 开关 + 从 cfg 读限流参数, 防 EWS throttling
+    if not getattr(cfg, "davmail_uid_backfill_enabled", True):
+        logger.info("[davmail-uid-mapper] disabled via DAVMAIL_UID_BACKFILL_ENABLED=false, skip")
+        return
+
     await asyncio.sleep(delay_sec)
-    mapper = DavMailUidMapper(cfg, sync_store)
+    mapper = DavMailUidMapper(
+        cfg, sync_store,
+        batch_size=int(getattr(cfg, "davmail_uid_backfill_batch_size", _DEFAULT_BATCH_SIZE)),
+        sleep_between_batches_sec=float(getattr(cfg, "davmail_uid_backfill_sleep_sec", _DEFAULT_SLEEP_BETWEEN_SEC)),
+    )
     pending = mapper.count_pending()
     if pending == 0:
         logger.info("[davmail-uid-mapper] no pending emails, skip backfill")
         return
-    logger.info(f"[davmail-uid-mapper] scheduling backfill ({pending} emails)")
+    logger.info(
+        f"[davmail-uid-mapper] scheduling backfill ({pending} emails, "
+        f"batch={mapper.batch_size}, sleep_between={mapper.sleep_between_batches_sec}s)"
+    )
     await mapper.run_backfill()

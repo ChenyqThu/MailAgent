@@ -33,6 +33,28 @@ class EmailNotionSyncApp:
             print(f"\n❌ {e}", file=sys.stderr)
             if e.fallback_hint:
                 print(f"   → {e.fallback_hint}\n", file=sys.stderr)
+            # Sprint 16: probe 失败立即发飞书告警 (alerter 还没主流程初始化, 临时一次性发)
+            # 注意: asyncio 顶部已 import, 这里不要 re-import, 否则触发 UnboundLocalError
+            # ("cannot access local variable 'asyncio'") 把整个 __init__ 当 local scope
+            if config.alert_feishu_webhook_url and config.alert_enabled:
+                try:
+                    from src.notify.alert import FeishuAlertNotifier
+                    _tmp_alerter = FeishuAlertNotifier(
+                        webhook_url=config.alert_feishu_webhook_url,
+                        webhook_secret=config.alert_feishu_webhook_secret,
+                        enabled=config.alert_enabled,
+                        levels=[lv.strip() for lv in config.alert_levels.split(',')],
+                        cooldown=config.alert_cooldown,
+                    )
+                    asyncio.run(_tmp_alerter.send_alert(
+                        level="critical",
+                        title=f"MailAgent 启动失败: {config.mailagent_backend} backend probe 不过",
+                        message=f"{e}\n\n切换提示: {e.fallback_hint or '无'}\n\n服务已退出, 不会自动重启 (autorestart=false).",
+                        alert_key=f"backend_startup_fail:{config.mailagent_backend}",
+                    ))
+                    asyncio.run(_tmp_alerter.close())
+                except Exception as alert_err:
+                    print(f"⚠️ 同时尝试发飞书告警也失败: {alert_err}", file=sys.stderr)
             sys.exit(1)
 
         # Sprint 16: davmail 模式自动禁用 keep_alive (IMAP/SMTP 不需要 UI session).
@@ -595,6 +617,35 @@ class EmailNotionSyncApp:
                 await self.alerter.alert_redis_disconnected(
                     rc_stats.get("last_error", "unknown")
                 )
+
+        # 6. davmail fetch 突增 (Sprint 16 收尾): davmail mode 下检查最近 10min
+        # 进入 fetch_failed 的邮件数, 超阈值 → 飞书告警 (alerter 内置 cooldown 防刷)
+        if self.backend and self.backend.backend_origin == "davmail":
+            try:
+                import sqlite3 as _sql
+                with _sql.connect(config.sync_store_db_path, timeout=5.0) as _conn:
+                    row = _conn.execute(
+                        "SELECT COUNT(*) FROM email_metadata "
+                        "WHERE sync_status='fetch_failed' "
+                        "  AND backend_origin='davmail' "
+                        "  AND updated_at > strftime('%s','now') - 600"
+                    ).fetchone()
+                    recent_fail = (row[0] if row else 0)
+                if recent_fail >= 3:
+                    await self.alerter.send_alert(
+                        level="error",
+                        title=f"DavMail fetch 突增: 最近 10min {recent_fail} 封 fetch_failed",
+                        message=(
+                            f"backend=davmail 最近 10min 共 {recent_fail} 封邮件 "
+                            f"fetch_email_by_id 失败 (含 IMAP timeout / SELECT 失败 / "
+                            f"UIDVALIDITY mismatch). 看 pm2 logs mail-sync | "
+                            f"grep davmail-backend 定位; uid-mapper 后台跑可能加剧 "
+                            f"IMAP 并发, 必要时调大 DAVMAIL_FETCH_TIMEOUT_SEC."
+                        ),
+                        alert_key="davmail_fetch_burst",
+                    )
+            except Exception as e:
+                logger.debug(f"[alert] davmail fetch burst check failed: {e}")
 
     async def _stats_reporter_loop(self):
         """看板统计上报循环"""
