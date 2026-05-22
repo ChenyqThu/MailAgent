@@ -35,22 +35,7 @@ class EmailNotionSyncApp:
                 print(f"   → {e.fallback_hint}\n", file=sys.stderr)
             sys.exit(1)
 
-        # Phase A 阶段: davmail 模式 backend probe 通过, 但 NewWatcher 主循环 + fanout/
-        # handler/reverse_sync 的 wire (19+ 处 self.arm/self.radar) 还未适配 backend
-        # 抽象. 当前先阻断启动, 等 Phase B 完成 wire 后放开.
-        if self.backend.backend_origin == "davmail":
-            print(
-                "\n⛔ davmail backend probe ok, 但 mail-sync 主进程 wire 仍在进行 (Phase B).\n"
-                "   当前 NewWatcher / FanoutWorker / EventHandlers / reverse_sync 仍直接调\n"
-                "   AppleScript arm; davmail 主流程 wire 完成前请切回 applescript:\n"
-                "     sed -i.bak 's/^MAILAGENT_BACKEND=.*/MAILAGENT_BACKEND=applescript/' .env\n"
-                "     pm2 restart mail-sync\n",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
         # Sprint 16: davmail 模式自动禁用 keep_alive (IMAP/SMTP 不需要 UI session).
-        # (当前 Phase A davmail 直接阻断, 这条防御暂时跑不到; Phase B 完成后启用)
         if self.backend.backend_origin == "davmail" and config.keep_alive_enabled:
             logger.info(
                 "[main] keep_alive 自动禁用 (davmail backend 走 IMAP/SMTP, 不需要 UI session)"

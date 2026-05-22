@@ -99,6 +99,18 @@ class DavMailBackend(IMailBackend):
         self.inbox_uidvalidity: Optional[int] = None
         self.last_op_latency_ms: Optional[int] = None
 
+        # Phase B: 让 NewWatcher / fanout / handler 的 self.arm / self.radar 调用直接 work.
+        # davmail backend 自己实现 AppleScriptArm + SQLiteRadar 的兼容接口 (alias methods 在
+        # class 底部 #=== Arm/Radar 兼容层 ===). 这避免改 NewWatcher 19 处 / handler / fanout
+        # 内部代码, 切换 backend 完全透明.
+        self.arm = self
+        self.radar = self
+        # NewWatcher health-check / dashboard 用 radar.db_path (None 表示无本地 db)
+        self.db_path = None
+        # davmail radar 内存缓存 marker (sync_store 持久化由 NewWatcher 通过
+        # sync_store.set_last_max_row_id 完成, 跟 AppleScript 模式一致路径)
+        self._cached_marker: Optional[int] = None
+
     # =========================================================================
     # 启动 / 健康检查
     # =========================================================================
@@ -280,9 +292,11 @@ class DavMailBackend(IMailBackend):
     def fetch_recent(
         self, count: int, *, mailbox: Optional[str] = None
     ) -> list[EmailMeta]:
-        """IMAP UID SEARCH ALL 取末尾 count 个 UID → BATCH FETCH headers."""
+        """IMAP UID SEARCH ALL 取末尾 count 个 UID → BATCH FETCH headers.
+
+        Phase B: 复用 _parse_batch_headers (跟 get_new_emails 共享解析逻辑).
+        """
         imap_box = _mailbox_to_imap(mailbox)
-        result: list[EmailMeta] = []
         try:
             with imap_session(self.cfg, timeout=60) as imap:
                 typ, _ = imap.select(imap_box, readonly=True)
@@ -294,26 +308,31 @@ class DavMailBackend(IMailBackend):
                     return []
                 uids = data[0].split()
                 tail = uids[-count:] if len(uids) > count else uids
-
                 if not tail:
                     return []
                 uid_seq = b",".join(tail).decode()
                 typ, data = imap.uid(
                     "fetch", uid_seq,
-                    "(UID FLAGS BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
+                    "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS "
+                    "(MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
                 )
                 if typ != "OK" or not data:
                     return []
-                # NOTE: Phase A.3 简化 — 完整 batch header 解析推到 Phase A 末优化
-                # 这里给个 stub: 返回空, 标 TODO. fetch_recent 暂时不被主链路调用
-                # (new_watcher 主路径走 detect_new_emails + fetch_email_by_id).
-                logger.info(
-                    f"[davmail-backend] fetch_recent({count}) — Phase A.3 stub, "
-                    f"returning empty list; got {len(tail)} UIDs"
-                )
+                dicts = self._parse_batch_headers(data)
+                return [
+                    EmailMeta(
+                        message_id=d["message_id"], internal_id=d["internal_id"],
+                        subject=d["subject"], sender=d["sender"],
+                        date_received=d["date_received"], is_read=d["is_read"],
+                        is_flagged=d["is_flagged"], thread_id=d["thread_id"],
+                        mailbox=imap_box, imap_uid=d["imap_uid"],
+                        imap_uidvalidity=d["imap_uidvalidity"],
+                    )
+                    for d in dicts
+                ]
         except Exception as e:
             logger.error(f"[davmail-backend] fetch_recent failed: {e}")
-        return result
+            return []
 
     # =========================================================================
     # 反向 sync — UID STORE
@@ -552,6 +571,214 @@ class DavMailBackend(IMailBackend):
         if draft.reply_html:
             msg.add_alternative(draft.reply_html, subtype="html")
         return msg.as_bytes()
+
+    # =========================================================================
+    # Arm/Radar 兼容层 (Phase B): 让 NewWatcher / fanout / handler 的 self.arm.*
+    # / self.radar.* 调用在 davmail mode 直接 work, 不需要改 19+ 处调用代码.
+    # =========================================================================
+
+    # --- AppleScriptArm 兼容接口 ---
+
+    def fetch_email_content_by_id(
+        self, internal_id: int, mailbox: Optional[str] = None
+    ) -> Optional[dict]:
+        """AppleScriptArm.fetch_email_content_by_id 兼容 — 返回 legacy dict."""
+        ec = self.fetch_email_by_id(internal_id, mailbox=mailbox)
+        return ec.to_legacy_dict() if ec else None
+
+    def fetch_email_by_message_id(
+        self, message_id: str, mailbox: Optional[str] = None
+    ) -> Optional[dict]:
+        """通过 message_id IMAP SEARCH HEADER 反查 + FETCH. legacy dict 返回."""
+        if not message_id:
+            return None
+        imap_box = _mailbox_to_imap(mailbox)
+        try:
+            with imap_session(self.cfg, timeout=60) as imap:
+                typ, _ = imap.select(imap_box, readonly=True)
+                if typ != "OK":
+                    return None
+                imap_uid = self._lookup_uid_by_message_id(imap, message_id)
+                if not imap_uid:
+                    return None
+                typ, data = imap.uid(
+                    "fetch", str(imap_uid),
+                    "(UID INTERNALDATE FLAGS RFC822.SIZE BODY.PEEK[])",
+                )
+                if typ != "OK" or not data:
+                    return None
+                # 此处 internal_id 未知 — 用占位 (调用方通常只用 dict 的 message_id/subject 等)
+                ec = self._parse_fetch_response(data, internal_id=-1, imap_box=imap_box)
+                return ec.to_legacy_dict() if ec else None
+        except Exception as e:
+            logger.error(f"[davmail-backend] fetch_email_by_message_id failed: {e}")
+            return None
+
+    def fetch_emails_by_position(
+        self, count: int, mailbox: Optional[str] = None
+    ) -> list[dict]:
+        """AppleScriptArm.fetch_emails_by_position 兼容 — IMAP UID SEARCH ALL 末尾 N 封."""
+        metas = self.fetch_recent(count, mailbox=mailbox)
+        return [
+            {
+                "message_id": m.message_id, "id": m.internal_id,
+                "subject": m.subject, "sender": m.sender,
+                "date_received": m.date_received, "is_read": m.is_read,
+                "is_flagged": m.is_flagged, "thread_id": m.thread_id,
+            }
+            for m in metas
+        ]
+
+    def mark_as_read_by_id(
+        self, internal_id: int, read: bool = True, mailbox: Optional[str] = None
+    ) -> bool:
+        """AppleScriptArm.mark_as_read_by_id 兼容."""
+        return self.mark_as_read(internal_id, read, mailbox=mailbox)
+
+    def set_flag_by_id(
+        self, internal_id: int, flagged: bool = True, mailbox: Optional[str] = None
+    ) -> bool:
+        """AppleScriptArm.set_flag_by_id 兼容."""
+        return self.set_flag(internal_id, flagged, mailbox=mailbox)
+
+    def extract_thread_id(self, source: str) -> Optional[str]:
+        """AppleScriptArm.extract_thread_id 兼容 — 从 raw MIME 提取 thread_id."""
+        if not source:
+            return None
+        try:
+            import email
+            msg = email.message_from_string(source)
+            references = msg.get("References")
+            if references:
+                refs = references.strip().split()
+                if refs:
+                    return refs[0].strip().strip("<>")
+            in_reply_to = msg.get("In-Reply-To")
+            if in_reply_to:
+                return in_reply_to.strip().strip("<>")
+        except Exception as e:
+            logger.warning(f"[davmail-backend] extract_thread_id failed: {e}")
+        return None
+
+    # --- SQLiteRadar 兼容接口 ---
+
+    def is_available(self) -> bool:
+        """SQLiteRadar.is_available 兼容 — TCP probe IMAP 端口."""
+        ok, _ = probe_tcp(self.host, self.imap_port, timeout=2.0)
+        return ok
+
+    def get_current_max_row_id(self) -> int:
+        """SQLiteRadar.get_current_max_row_id 兼容 — 返回当前 IMAP UIDNEXT.
+
+        DavMail marker = uidnext (int). uidvalidity 内部缓存在 self.inbox_uidvalidity,
+        变化时 detect_new_emails / check_for_changes 会 log warning. 主循环用 uidnext
+        作为 SyncStore.last_max_row_id 持久化.
+        """
+        try:
+            with imap_session(self.cfg, timeout=30) as imap:
+                typ, data = imap.status("INBOX", "(UIDNEXT UIDVALIDITY)")
+                if typ == "OK" and data:
+                    uidnext = self._extract_status_value(data[0], "UIDNEXT")
+                    uv = self._extract_status_value(data[0], "UIDVALIDITY")
+                    if uv:
+                        self.inbox_uidvalidity = int(uv)
+                    if uidnext:
+                        return int(uidnext)
+        except Exception as e:
+            logger.warning(f"[davmail-backend] get_current_max_row_id failed: {e}")
+        return 0
+
+    def check_for_changes(
+        self, last_max_row_id: int
+    ) -> tuple[bool, int, int]:
+        """SQLiteRadar.check_for_changes 兼容 — STATUS UIDNEXT 比对.
+
+        Returns: (has_new, current_uidnext, estimated_new_count)
+        """
+        current = self.get_current_max_row_id()
+        if current == 0:
+            return (False, last_max_row_id, 0)
+        delta = current - int(last_max_row_id or 0)
+        return (delta > 0, current, max(0, delta))
+
+    def get_new_emails(self, since_row_id: int) -> list[dict]:
+        """SQLiteRadar.get_new_emails 兼容 — IMAP UID SEARCH UID > since + BATCH FETCH."""
+        try:
+            with imap_session(self.cfg, timeout=60) as imap:
+                typ, _ = imap.select("INBOX", readonly=True)
+                if typ != "OK":
+                    return []
+                # IMAP UID SEARCH: UID since_row_id+1:*
+                search_arg = f"{int(since_row_id) + 1}:*"
+                typ, data = imap.uid("search", None, "UID", search_arg)
+                if typ != "OK" or not data or not data[0]:
+                    return []
+                uids = data[0].split()
+                if not uids:
+                    return []
+                uid_seq = b",".join(uids).decode()
+                typ, data = imap.uid(
+                    "fetch", uid_seq,
+                    "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS "
+                    "(MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
+                )
+                if typ != "OK" or not data:
+                    return []
+                return self._parse_batch_headers(data)
+        except Exception as e:
+            logger.error(f"[davmail-backend] get_new_emails failed: {e}")
+            return []
+
+    def set_last_max_row_id(self, row_id: int) -> None:
+        """SQLiteRadar.set_last_max_row_id 兼容 — 内存缓存 (持久化走 sync_store)."""
+        self._cached_marker = int(row_id) if row_id else None
+
+    def get_last_max_row_id(self) -> int:
+        """SQLiteRadar.get_last_max_row_id 兼容."""
+        return self._cached_marker or 0
+
+    def _parse_batch_headers(self, data: list) -> list[dict]:
+        """从 batch FETCH HEADER.FIELDS 响应解析出 legacy dict list."""
+        results: list[dict] = []
+        for item in data:
+            if not (isinstance(item, tuple) and len(item) >= 2):
+                continue
+            meta = item[0].decode("utf-8", errors="replace") if isinstance(item[0], (bytes, bytearray)) else str(item[0])
+            uid_str = self._extract_status_value(item[0] if isinstance(item[0], (bytes, bytearray)) else item[0].encode(), "UID")
+            uid = int(uid_str) if uid_str else 0
+            flags = []
+            if "\\Seen" in meta:
+                flags.append("\\Seen")
+            if "\\Flagged" in meta:
+                flags.append("\\Flagged")
+            try:
+                from email.parser import BytesParser
+                msg = BytesParser().parsebytes(bytes(item[1]) if isinstance(item[1], (bytes, bytearray)) else item[1].encode())
+            except Exception:
+                continue
+            message_id = (msg.get("Message-ID") or "").strip().strip("<>")
+            references = msg.get("References") or ""
+            in_reply_to = msg.get("In-Reply-To") or ""
+            thread_id = None
+            if references:
+                refs = references.strip().split()
+                if refs:
+                    thread_id = refs[0].strip("<>")
+            elif in_reply_to:
+                thread_id = in_reply_to.strip().strip("<>")
+            results.append({
+                "message_id": message_id,
+                "internal_id": uid,  # davmail mode: internal_id == imap_uid for new emails
+                "subject": _decode_mime_header(msg.get("Subject")),
+                "sender": _decode_mime_header(msg.get("From")),
+                "date_received": msg.get("Date") or "",
+                "is_read": "\\Seen" in flags,
+                "is_flagged": "\\Flagged" in flags,
+                "thread_id": thread_id,
+                "imap_uid": uid,
+                "imap_uidvalidity": self.inbox_uidvalidity,
+            })
+        return results
 
     @staticmethod
     def _parse_appenduid(data: list) -> Optional[int]:

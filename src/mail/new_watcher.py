@@ -76,7 +76,7 @@ class NewWatcher:
         self,
         mailboxes: List[str] = None,
         poll_interval: int = 5,
-        sync_store_path: str = "data/sync_store.db"
+        sync_store_path: str = "data/sync_store.db",
         backend=None,
     ):
         """初始化监听器
