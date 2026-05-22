@@ -479,16 +479,11 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     if (!iframe) return
 
     function readScrollHeight(): number | null {
-      const doc = iframe!.contentDocument
-      if (!doc) return null
-      const html = doc.documentElement
-      const body = doc.body
-      const h = Math.max(
-        html?.scrollHeight ?? 0,
-        body?.scrollHeight ?? 0,
-        html?.offsetHeight ?? 0,
-        body?.offsetHeight ?? 0
-      )
+      // 只读 body.scrollHeight: documentElement (html) 在 iframe 内是
+      // viewport-locked (至少 fill iframe 当前 height), 用它会自锁导致
+      // iframe 永远缩不下来。body 是 height:auto, 才反映真实内容。
+      const body = iframe!.contentDocument?.body
+      const h = body?.scrollHeight ?? 0
       return h > 0 ? h : null
     }
 
@@ -558,24 +553,19 @@ function BodyIframe({ srcDoc, translations }: BodyIframeProps): React.ReactEleme
     } else {
       injectTranslations(doc, translations)
     }
-    // force sync layout
     void doc.body.offsetHeight
-    const html = doc.documentElement
-    const body = doc.body
-    const h = Math.max(
-      html?.scrollHeight ?? 0,
-      body.scrollHeight,
-      html?.offsetHeight ?? 0,
-      body.offsetHeight
-    )
-    if (h > 0) {
-      const next = Math.max(120, Math.min(Math.round(h), 80000))
-      // imperative write — 立即生效, 不等 React commit
-      iframe.style.height = `${next}px`
-      // sync state 防 ResizeObserver 后续 measure 用 stale prev 又 setHeight
-      // 回大值 (Math.abs(prev - next) < 2 阈值在 prev=stale 时可能误吞 update)
-      setHeight(next)
-    }
+    // BUG ROOT CAUSE (诊断 console log 抓到):
+    //   原 measure 算法用 Math.max(html.scrollHeight, body.scrollHeight,
+    //   html.offsetHeight, body.offsetHeight)。html (documentElement) 在
+    //   iframe 内是 **viewport-locked** — 至少撑满 iframe element 视口高度,
+    //   所以 html.scrollHeight === 当前 iframe.style.height 形成自锁:
+    //     - inject 后 iframe = 1858, body = 1858, html = 1858 → ok 写 1858
+    //     - clear 后 body shrinks 到 954, BUT html 仍 = 1858 (跟 viewport),
+    //       Math.max(1858, 954, ...) = 1858 → iframe 永远缩不下来
+    //   只读 body.scrollHeight (body 是 height:auto, 真实跟内容) 才对。
+    const next = Math.max(120, Math.min(Math.round(doc.body.scrollHeight), 80000))
+    iframe.style.height = `${next}px`
+    setHeight(next)
   }, [translations, docReady, srcDoc])
 
   return (
