@@ -1084,3 +1084,126 @@ def calendar_replay(
         )
     else:
         emit(cli, data)
+
+
+# ============================================================
+# Phase 2.1 — RSVP (接受/暂定/拒绝 iTIP REPLY)
+# 通过 DavMail SMTP 把回应发回原 invite 的 organizer.
+# ============================================================
+
+_RSVP_ALIAS = {
+    "accept": "ACCEPTED",
+    "accepted": "ACCEPTED",
+    "yes": "ACCEPTED",
+    "tentative": "TENTATIVE",
+    "tent": "TENTATIVE",
+    "maybe": "TENTATIVE",
+    "decline": "DECLINED",
+    "declined": "DECLINED",
+    "no": "DECLINED",
+    "reject": "DECLINED",
+}
+
+
+@app.command("rsvp")
+def calendar_rsvp(
+    ctx: typer.Context,
+    ical_uid: str = typer.Argument(..., help="vEvent UID (RFC 5545)"),
+    response: str = typer.Argument(
+        ..., help="accept / tentative / decline (大小写不敏感; 接受常见同义词)",
+    ),
+    recurrence_id: Optional[str] = typer.Option(
+        None, "--recurrence-id",
+        help="非空 = RSVP 单次跳脱 occurrence; 留空 = 整系列",
+    ),
+    source: Optional[str] = typer.Option(
+        None, "--source",
+        help=f"限定 source ∈ {_VALID_EVENT_SOURCES}; "
+             "留空 = 按 caldav→email_ics→legacy 顺序自动查",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="仅查 row + 拼 plan, 不发 SMTP (无需 auth, 返回 body_preview)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """发 iTIP REPLY (接受/暂定/拒绝) 给原 invite 的 organizer (Phase 2.1).
+
+    通过 DavMail SMTP (127.0.0.1:1025) 把 ``text/calendar; method=REPLY``
+    邮件发给组织者. Outlook/Exchange Calendar Assistant 异步更新 organizer
+    端 attendee 的 PARTSTAT.
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    # 1. 标准化 response → PARTSTAT
+    response_key = response.strip().lower()
+    response_status = _RSVP_ALIAS.get(response_key)
+    if response_status is None:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"response={response!r} unknown; valid: "
+            f"{sorted(set(_RSVP_ALIAS.keys()))}",
+        ))
+
+    # 2. source 校验
+    if source and source not in _VALID_EVENT_SOURCES:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--source={source!r} not in {_VALID_EVENT_SOURCES}",
+        ))
+
+    # 3. auth check (write op, dry-run 跳过)
+    if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    from src.calendar_sync import CalendarEventRepository
+    from src.calendar_sync.rsvp import send_rsvp
+    from src.config import config as global_cfg
+
+    repo = CalendarEventRepository(cli.cli_config.sync_store_db_path)
+
+    try:
+        result = send_rsvp(
+            repo, global_cfg,
+            ical_uid=ical_uid,
+            response_status=response_status,
+            recurrence_id=recurrence_id,
+            source=source,
+            dry_run=dry_run,
+        )
+    except ValueError as e:
+        raise emit_cli_error(cli, CliNotFoundError(str(e)))
+    except Exception as e:
+        raise emit_cli_error(cli, CliError(
+            f"rsvp failed: {e}",
+            hint="检查 DavMail SMTP 端口可达 (127.0.0.1:1025) + cipher key 正确 + organizer 邮箱有效",
+        ))
+
+    data = {
+        "action": result["action"],
+        "ical_uid": result["ical_uid"],
+        "recurrence_id": result["recurrence_id"],
+        "source": result["source"],
+        "response_status": result["response_status"],
+        "to_email": result["to_email"],
+        "dry_run": result.get("dry_run", False),
+    }
+    if result.get("body_preview"):
+        data["body_preview"] = result["body_preview"]
+
+    if cli.output.lower() == "text":
+        if dry_run:
+            print(
+                f"[dry-run] would send RSVP: status={result['response_status']} "
+                f"to={result['to_email']} source={result['source']}"
+            )
+            print(f"  body preview:\n{result['body_preview']}")
+        else:
+            print(
+                f"rsvp sent: status={result['response_status']} "
+                f"to={result['to_email']} ical_uid={result['ical_uid']!r}"
+            )
+    else:
+        emit(cli, data)

@@ -24,6 +24,7 @@ import type {
   CalendarSyncStateItem,
   EventGetOpts,
   EventReplayOpts,
+  EventRsvpOpts,
   EventsListOpts,
   SyncNowOpts,
   ChatApi,
@@ -307,6 +308,12 @@ class ElectronCalendarApi implements CalendarApi {
   // Phase 2.4 — replay calendar_event 行到 Notion (any source)
   async eventReplay(opts: EventReplayOpts): Promise<unknown> {
     const env = (await invoker()('calendar:eventReplay', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+
+  // Phase 2.1 — RSVP iTIP REPLY to organizer
+  async eventRsvp(opts: EventRsvpOpts): Promise<unknown> {
+    const env = (await invoker()('calendar:eventRsvp', opts)) as WriteEnvelope<unknown>
     return unwrap(env)
   }
 }

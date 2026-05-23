@@ -28,8 +28,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Optional
 
-from loguru import logger
-
 from src.calendar_sync.expander import expand_in_window
 
 if TYPE_CHECKING:
@@ -341,6 +339,24 @@ class CalendarEventRepository:
                 WHERE id = ?
                 """,
                 (notion_page_id, time.time(), event_id),
+            )
+            conn.commit()
+
+    def update_response_status(self, event_id: int, response_status: str) -> None:
+        """Phase 2.1 — RSVP 发送 iTIP REPLY 后更新本地 response_status.
+
+        服务端 (Outlook/Exchange) 收到 REPLY 后异步更新 organizer 端 attendee
+        PARTSTAT, 下次 caldav sync 也会反映. 此 method 立即在本地 SQLite 写,
+        让前端 drawer 不必等下次 sync 才看到状态变化.
+        """
+        with self._conn_ctx() as conn:
+            conn.execute(
+                """
+                UPDATE calendar_event
+                SET response_status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (response_status, time.time(), event_id),
             )
             conn.commit()
 

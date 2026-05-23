@@ -143,6 +143,43 @@ export async function runEventReplay(opts: EventReplayOpts): Promise<unknown> {
   })
 }
 
+// ============================================================
+// Phase 2.1 — calendar:eventRsvp (发 iTIP REPLY 给 organizer)
+// 通过 DavMail SMTP submission 把 text/calendar; method=REPLY 邮件发到组织者,
+// Outlook/Exchange Calendar Assistant 解析后更新 organizer 端 attendee 的 PARTSTAT.
+// ============================================================
+
+export type RsvpResponse = 'accept' | 'tentative' | 'decline'
+
+export interface EventRsvpOpts {
+  /** vEvent UID (RFC 5545); 必填. */
+  icalUid: string
+  /** accept / tentative / decline (CLI 端 case-insensitive + 同义词). */
+  response: RsvpResponse
+  /** 非空 = RSVP 单次跳脱 occurrence; 留空 = 整系列. */
+  recurrenceId?: string | null
+  /** 限定 source; 留空 = caldav → email_ics → legacy 自动查. */
+  source?: 'caldav' | 'email_ics' | 'legacy_calendar_app'
+  /** True = 仅查 row + 拼 plan, 不发 SMTP (无需 auth). */
+  dryRun?: boolean
+}
+
+export async function runEventRsvp(opts: EventRsvpOpts): Promise<unknown> {
+  const args = ['calendar', 'rsvp', opts.icalUid, opts.response]
+  if (opts.recurrenceId) {
+    args.push('--recurrence-id', opts.recurrenceId)
+  }
+  if (opts.source) {
+    args.push('--source', opts.source)
+  }
+  if (opts.dryRun) args.push('--dry-run')
+  return callCli(args, {
+    write: !opts.dryRun,
+    needsAuth: !opts.dryRun,
+    timeoutMs: WRITE_TIMEOUT_MS
+  })
+}
+
 export interface CalendarExpandOpts {
   horizonWeeks?: number
   dryRun?: boolean
@@ -651,6 +688,27 @@ export function registerCalendarHandlers(): void {
       return envelopeFromCli(runEventReplay(opts))
     }
   )
+  // Phase 2.1 — calendar:eventRsvp (发 iTIP REPLY 给 organizer)
+  ipcMain.handle(
+    'calendar:eventRsvp',
+    async (_evt, opts: EventRsvpOpts): Promise<WriteEnvelope<unknown>> => {
+      if (!opts || !opts.icalUid) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'calendar:eventRsvp requires icalUid'
+        }
+      }
+      if (!opts.response || !['accept', 'tentative', 'decline'].includes(opts.response)) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: `calendar:eventRsvp response must be accept/tentative/decline, got ${opts.response}`
+        }
+      }
+      return envelopeFromCli(runEventRsvp(opts))
+    }
+  )
 }
 
 export const __testing = {
@@ -663,6 +721,7 @@ export const __testing = {
   runCalendarNames,
   runSyncNow,
   runEventReplay,
+  runEventRsvp,
   expandInWindow,
   envelopeFromCli
 }

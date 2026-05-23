@@ -17,6 +17,7 @@ import {
   __testing,
   runCalendarExpand,
   runEventReplay,
+  runEventRsvp,
   runRecurringDiscover,
   runRecurringReplay
 } from '../../src/electron/main/handlers/calendar'
@@ -208,6 +209,50 @@ describe('calendar — runEventReplay', () => {
     expect(mockCallCli).toHaveBeenCalledWith(
       ['calendar', 'replay', 'u', '--source', 'email_ics'],
       { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+})
+
+// Phase 2.1 — calendar:eventRsvp (发 iTIP REPLY 给 organizer)
+describe('calendar — runEventRsvp', () => {
+  test('accept: positional + write+auth + 120s', async () => {
+    mockCallCli.mockResolvedValue({ action: 'sent', to_email: 'org@x.com' })
+    await runEventRsvp({ icalUid: 'uid-a', response: 'accept' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'rsvp', 'uid-a', 'accept'],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('decline with recurrenceId + source', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventRsvp({
+      icalUid: 'uid-x',
+      response: 'decline',
+      recurrenceId: '2026-05-30T10:00:00Z',
+      source: 'caldav'
+    })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      [
+        'calendar',
+        'rsvp',
+        'uid-x',
+        'decline',
+        '--recurrence-id',
+        '2026-05-30T10:00:00Z',
+        '--source',
+        'caldav'
+      ],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('tentative dry-run skips write+auth', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventRsvp({ icalUid: 'uid-y', response: 'tentative', dryRun: true })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'rsvp', 'uid-y', 'tentative', '--dry-run'],
+      { write: false, needsAuth: false, timeoutMs: 120_000 }
     )
   })
 })

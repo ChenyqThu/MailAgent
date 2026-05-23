@@ -573,6 +573,22 @@ export interface EventReplayOpts {
   dryRun?: boolean
 }
 
+// Phase 2.1 — RSVP iTIP REPLY to organizer (drawer accept/tentative/decline button).
+export type RsvpResponse = 'accept' | 'tentative' | 'decline'
+
+export interface EventRsvpOpts {
+  /** vEvent UID (RFC 5545); 必填. */
+  icalUid: string
+  /** accept / tentative / decline. */
+  response: RsvpResponse
+  /** 非空 = RSVP 单次跳脱 occurrence; 留空 = 整系列 REPLY. */
+  recurrenceId?: string | null
+  /** 限定 source; 留空 = caldav → email_ics → legacy 自动查. */
+  source?: CalendarEventSource
+  /** True = 仅查 row + 拼 plan, 不发 SMTP (无需 auth). */
+  dryRun?: boolean
+}
+
 export interface CalendarApi {
   recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]>
   recurringReplay(opts: RecurringReplayOpts): Promise<unknown>
@@ -587,6 +603,9 @@ export interface CalendarApi {
 
   // Phase 2.4 — 重导出 calendar_event 行到 Notion (any source)
   eventReplay(opts: EventReplayOpts): Promise<unknown>
+
+  // Phase 2.1 — 发 iTIP REPLY 给 organizer (accept/tentative/decline)
+  eventRsvp(opts: EventRsvpOpts): Promise<unknown>
 }
 
 // ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------

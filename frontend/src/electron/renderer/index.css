@@ -2896,6 +2896,8 @@ body:not([data-batch-mode='true']) #batch-bar {
   word-break: break-all;
 }
 .dw-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+/* Phase 2.1 — 3 个 RSVP button (接受/暂定/拒绝). data-current='true' 高亮当前
+ * response_status; :disabled 标 RSVP mutation 进行中 (cursor: wait). */
 .dw-act {
   flex: 1;
   height: 32px;
@@ -2903,12 +2905,29 @@ body:not([data-batch-mode='true']) #batch-bar {
   font-size: 13px;
   border: 1px solid rgb(var(--ink-border));
   background: rgb(var(--ink-3) / 0.5);
-  color: rgb(var(--ink-fg-3));
-  cursor: not-allowed;
+  color: rgb(var(--ink-fg));
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
+  padding: 0 8px;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.dw-act:hover:not(:disabled):not([data-current='true']) {
+  background: rgb(var(--ink-3) / 0.85);
+  border-color: rgb(var(--ink-border) / 1.4);
+}
+.dw-act:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.dw-act[data-current='true'] {
+  background: rgb(var(--c-accent) / 0.16);
+  border-color: rgb(var(--c-accent) / 0.4);
+  color: rgb(var(--c-accent));
+  font-weight: 600;
 }
 
 .empty-field {

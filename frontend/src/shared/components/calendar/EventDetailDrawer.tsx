@@ -6,16 +6,20 @@
 // dw-foot 的 [接受/暂定/拒绝] 按钮在 Phase 2 写能力上线前一律 disabled
 // (cursor:not-allowed), 视觉上提示 "stub".
 
-import { Check, ExternalLink, Mail, MapPin, User, Users, Video, X } from 'lucide-react'
+import { Check, ExternalLink, Loader2, Mail, MapPin, User, Users, Video, X } from 'lucide-react'
 import { useEffect } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-import { useCalendarEvent } from './hooks/useCalendarEvents'
+import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import type {
   CalendarEventAttendee,
   CalendarEventOccurrence,
-  CalendarEventSource
+  CalendarEventSource,
+  RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { toastError, toastSuccess } from '@shared/state/toast'
 
 // 与会者头像 — mockup 同色, 6 色循环按 index.
 const ATT_HUES = ['#6FA8DC', '#B58CDB', '#E89B4A', '#5DBA8C', '#E5634F', '#DB5B7C']
@@ -137,6 +141,56 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
       }
     : null
   const { data: detail, isLoading } = useCalendarEvent(opts)
+
+  // Phase 2.1 — RSVP mutation. 走 mailApi.calendar.eventRsvp → DavMail SMTP
+  // submission → Outlook Calendar Assistant 异步更新 organizer 端 PARTSTAT.
+  // 成功后 invalidate eventsList + event detail query, 让本地 response_status
+  // (后端 repo.update_response_status 已写) 即刻反映到 UI.
+  const mailApi = useMailApi()
+  const qc = useQueryClient()
+  const rsvpMut = useMutation({
+    mutationFn: (response: RsvpResponse) => {
+      if (!occurrence) throw new Error('no occurrence selected')
+      return mailApi.calendar.eventRsvp({
+        icalUid: occurrence.ical_uid,
+        response,
+        recurrenceId: occurrence.recurrence_id,
+        source: occurrence.source as CalendarEventSource
+      })
+    },
+    onSuccess: (_d, response) => {
+      const labels: Record<RsvpResponse, string> = {
+        accept: '已接受',
+        tentative: '暂定',
+        decline: '已拒绝'
+      }
+      toastSuccess(`RSVP ${labels[response]} 已发送给组织者`)
+      void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
+      void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
+    },
+    onError: (err: unknown, response) => {
+      const e = err as Error
+      toastError(`发送 RSVP (${response}) 失败`, e.message || '未知错误')
+    }
+  })
+
+  const handleRsvp = (response: RsvpResponse): void => {
+    if (!occurrence) return
+    const labels: Record<RsvpResponse, string> = {
+      accept: '接受',
+      tentative: '暂定',
+      decline: '拒绝'
+    }
+    const organizer = (occurrence.organizer || '').replace(/^mailto:/i, '')
+    const ok = window.confirm(
+      `确认 [${labels[response]}] 并把回应发回组织者?\n\n` +
+        `事件: ${occurrence.summary || '(无标题)'}\n` +
+        `组织者: ${organizer || '(未知)'}\n\n` +
+        `此操作会通过 DavMail SMTP 立即发邮件给组织者, 不可撤销.`
+    )
+    if (!ok) return
+    rsvpMut.mutate(response)
+  }
 
   // ESC closes
   useEffect(() => {
@@ -302,12 +356,56 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
             </div>
 
             <div className="dw-foot">
-              <div className="dw-actions" title="Phase 2 — RSVP 写能力尚未上线">
-                <span className="dw-act">
-                  <Check size={13} strokeWidth={2} /> 接受
-                </span>
-                <span className="dw-act">暂定</span>
-                <span className="dw-act">拒绝</span>
+              {/* Phase 2.1 — 3 个真 RSVP button. data-current 高亮当前
+                  response_status; rsvpMut.isPending 全部 disabled cursor:wait. */}
+              <div className="dw-actions">
+                <button
+                  type="button"
+                  className="dw-act"
+                  data-current={
+                    (occurrence.response_status || '').toUpperCase() === 'ACCEPTED'
+                  }
+                  disabled={rsvpMut.isPending}
+                  onClick={() => handleRsvp('accept')}
+                  title="接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者"
+                >
+                  {rsvpMut.isPending && rsvpMut.variables === 'accept' ? (
+                    <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                  ) : (
+                    <Check size={13} strokeWidth={2} />
+                  )}
+                  接受
+                </button>
+                <button
+                  type="button"
+                  className="dw-act"
+                  data-current={
+                    (occurrence.response_status || '').toUpperCase() === 'TENTATIVE'
+                  }
+                  disabled={rsvpMut.isPending}
+                  onClick={() => handleRsvp('tentative')}
+                  title="暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者"
+                >
+                  {rsvpMut.isPending && rsvpMut.variables === 'tentative' && (
+                    <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                  )}
+                  暂定
+                </button>
+                <button
+                  type="button"
+                  className="dw-act"
+                  data-current={
+                    (occurrence.response_status || '').toUpperCase() === 'DECLINED'
+                  }
+                  disabled={rsvpMut.isPending}
+                  onClick={() => handleRsvp('decline')}
+                  title="拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者"
+                >
+                  {rsvpMut.isPending && rsvpMut.variables === 'decline' && (
+                    <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                  )}
+                  拒绝
+                </button>
               </div>
               <div className="fm">
                 UID: {occurrence.ical_uid}
