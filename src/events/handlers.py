@@ -670,6 +670,16 @@ class EventHandlers:
                     await self.notion_sync.update_page_mail_sync_status(
                         page_id, synced=True, processing_status="草稿已创建"
                     )
+                # §4.5.6 SSoT 反转: 镜像到 SQLite, 让前端 listEnriched 立即
+                # 看到状态变更, 不等 Notion fanout 回灌. record 来自 line 580
+                # get_by_message_id, applescript 路径下保持 read/flag 不变.
+                if internal_id and record and self.sync_store:
+                    self.sync_store.update_local_flags(
+                        internal_id,
+                        bool(record.get("is_read", 0)),
+                        bool(record.get("is_flagged", 0)),
+                        processing_status="草稿已创建",
+                    )
                 self._stats["create_draft_success"] += 1
                 await self._publish(event_id, {"status": "success", **result})
             else:
@@ -809,6 +819,16 @@ class EventHandlers:
                 if page_id and self.notion_sync:
                     await self.notion_sync.update_page_mail_sync_status(
                         page_id, synced=True, processing_status="草稿已创建"
+                    )
+                # §4.5.6 SSoT 反转: 镜像到 SQLite, 让前端 listEnriched 立即
+                # 看到状态变更, 不等 Notion fanout 回灌. record 来自 line 724
+                # get(internal_id), davmail IMAP APPEND 路径下保持 read/flag 不变.
+                if internal_id and record and self.sync_store:
+                    self.sync_store.update_local_flags(
+                        internal_id,
+                        bool(record.get("is_read", 0)),
+                        bool(record.get("is_flagged", 0)),
+                        processing_status="草稿已创建",
                     )
                 self._stats["create_draft_success"] += 1
                 await self._publish(event_id, {
