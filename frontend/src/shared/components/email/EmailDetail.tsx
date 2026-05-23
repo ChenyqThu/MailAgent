@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -35,7 +35,7 @@ interface Props {
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }): React.ReactElement {
   return (
     <>
-      <span className="text-ink-fg-2 font-mono text-meta">{label}</span>
+      <span className="text-ink-fg-2 font-mono text-aux">{label}</span>
       <span className="text-ink-fg-1 break-words">{value}</span>
     </>
   )
@@ -194,18 +194,24 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     }
   }, [internalId, mailApi])
 
+  // 切邮件时 (queryKey 含 internalId) 用 keepPreviousData 让上一封 detail/ai
+  // 数据继续显示直到新数据到达, 避免整面板闪 Loading 态 + body iframe 卸载重挂
+  // 这种 ~200-1000ms 的卡顿. translationCacheQ 不加是因为它驱动 auto-on
+  // effect, 旧 cache 不能漏给新邮件.
   const detailQ = useQuery({
     queryKey: ['email', internalId],
     queryFn: () => mailApi.email.get(internalId as number),
     enabled: internalId !== null,
-    staleTime: 30_000
+    staleTime: 30_000,
+    placeholderData: keepPreviousData
   })
 
   const aiQ = useQuery({
     queryKey: ['email', internalId, 'ai'],
     queryFn: () => mailApi.email.aiFields(internalId as number),
     enabled: internalId !== null,
-    staleTime: 30_000
+    staleTime: 30_000,
+    placeholderData: keepPreviousData
   })
 
   // ---- immersive translation ----------------------------------------------
@@ -728,14 +734,17 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                 )
               })
             }
+            // `-ml-px` 抵 SF Mono 字符 left side bearing — 它比系统 sans 多
+             // 1-2px, 不加的话 mono value 起点会比 sans value (Mailbox /
+             // Notion URL) 视觉偏右一截.
             morePropsRows.push({
               label: 'internal_id',
-              value: <span className="font-mono text-meta">{email.internal_id}</span>
+              value: <span className="font-mono text-aux -ml-px">{email.internal_id}</span>
             })
             if (email.message_id) {
               morePropsRows.push({
                 label: 'message_id',
-                value: <span className="font-mono text-meta break-all">{email.message_id}</span>
+                value: <span className="font-mono text-aux break-all -ml-px">{email.message_id}</span>
               })
             }
             if (email.notion_url) {
@@ -759,7 +768,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             }
             return (
               <>
-                <dl className="mt-1 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux">
+                <dl className="mt-1 grid grid-cols-[96px_1fr] gap-y-1.5 gap-x-3 text-aux">
                   <MetaRow
                     label="From"
                     value={
@@ -787,7 +796,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                     <MetaRow
                       label="Date"
                       value={
-                        <span className="font-mono text-meta">
+                        <span className="font-mono text-aux">
                           {formatDate(email.date_received)}
                           <span className="text-ink-fg-2">
                             {' '}
@@ -816,7 +825,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                       <div className="overflow-hidden min-h-0">
                         <dl
                           className={cn(
-                            'mt-1.5 grid grid-cols-[80px_1fr] gap-y-1.5 gap-x-3 text-aux',
+                            'mt-1.5 grid grid-cols-[96px_1fr] gap-y-1.5 gap-x-3 text-aux',
                             'transition-opacity duration-base ease-out',
                             propsExpanded ? 'opacity-100' : 'opacity-0'
                           )}
@@ -832,14 +841,14 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                       type="button"
                       onClick={() => setPropsExpanded((v) => !v)}
                       className={cn(
-                        'mt-1.5 inline-flex items-center gap-1 text-[10px] text-ink-fg-2',
+                        'mt-1.5 inline-flex items-center gap-1 text-meta text-ink-fg-2',
                         'hover:text-ink-fg-1 transition-colors duration-fast',
                         'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 rounded'
                       )}
                       aria-expanded={propsExpanded}
                     >
                       <ChevronDown
-                        size={10}
+                        size={12}
                         strokeWidth={2}
                         className={cn(
                           'transition-transform duration-base ease-out',
