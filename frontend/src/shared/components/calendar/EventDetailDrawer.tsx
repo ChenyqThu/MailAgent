@@ -6,10 +6,11 @@
 // dw-foot 的 [接受/暂定/拒绝] 按钮在 Phase 2 写能力上线前一律 disabled
 // (cursor:not-allowed), 视觉上提示 "stub".
 
-import { Check, ExternalLink, Loader2, Mail, MapPin, User, Users, Video, X } from 'lucide-react'
-import { useEffect } from 'react'
+import { Check, ExternalLink, Loader2, Mail, MapPin, Pencil, Trash2, User, Users, Video, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
+import { EventFormModal } from './EventFormModal'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type {
@@ -190,6 +191,40 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
     )
     if (!ok) return
     rsvpMut.mutate(response)
+  }
+
+  // Phase 2.3 — edit / delete owner ops (CalDAV PUT / DELETE).
+  // Edit 跟 RSVP 区别: owner 改自己日历, attendees 收到通知; RSVP 是 attendee
+  // 给 organizer 回应 PARTSTAT. 两条独立路径.
+  const [editModalOpen, setEditModalOpen] = useState(false)
+  const deleteMut = useMutation({
+    mutationFn: () => {
+      if (!occurrence) throw new Error('no occurrence selected')
+      return mailApi.calendar.eventDelete({
+        icalUid: occurrence.ical_uid
+      })
+    },
+    onSuccess: () => {
+      toastSuccess('事件已删除, ~60s 内同步到本地视图')
+      void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
+      void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
+      onClose()
+    },
+    onError: (err: unknown) => {
+      const e = err as Error
+      toastError('删除事件失败', e.message || '未知错误')
+    }
+  })
+
+  const handleDelete = (): void => {
+    if (!occurrence) return
+    const ok = window.confirm(
+      `确认删除事件 [${occurrence.summary || '(无标题)'}]?\n\n` +
+        `此操作直接通过 CalDAV DELETE 删除 Exchange 端日历事件, 不可撤销.\n` +
+        `与会者会收到取消通知.`
+    )
+    if (!ok) return
+    deleteMut.mutate()
   }
 
   // ESC closes
@@ -407,6 +442,42 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
                   拒绝
                 </button>
               </div>
+
+              {/* Phase 2.3 — owner ops: [编辑] [删除]
+                  跟 RSVP (attendee 视角) 分两行视觉区分. caldav-only events
+                  始终启用; email_ics events 在 CalDAV 端也是同一资源, 可改.
+                  删除是 danger action, 红色描边强调. */}
+              <div className="dw-actions mt-1.5">
+                <button
+                  type="button"
+                  className="dw-act"
+                  disabled={deleteMut.isPending}
+                  onClick={() => setEditModalOpen(true)}
+                  title="编辑事件 — 通过 CalDAV PUT 改 Exchange 端"
+                >
+                  <Pencil size={12} strokeWidth={2} />
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  className="dw-act"
+                  disabled={deleteMut.isPending}
+                  onClick={handleDelete}
+                  style={{
+                    color: 'rgb(227, 98, 98)',
+                    borderColor: 'rgba(227, 98, 98, 0.4)'
+                  }}
+                  title="删除事件 — 通过 CalDAV DELETE, 与会者会收取消通知"
+                >
+                  {deleteMut.isPending ? (
+                    <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={12} strokeWidth={2} />
+                  )}
+                  删除
+                </button>
+              </div>
+
               <div className="fm">
                 UID: {occurrence.ical_uid}
                 <br />
@@ -417,6 +488,13 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
           </>
         )}
       </aside>
+
+      {/* Phase 2.3 — edit modal (occurrence 预填 = edit 语义) */}
+      <EventFormModal
+        open={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        occurrence={editModalOpen ? occurrence : null}
+      />
     </>
   )
 }

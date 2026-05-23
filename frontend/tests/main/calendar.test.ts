@@ -16,8 +16,11 @@ import { CliError } from '../../src/electron/main/cli_runner'
 import {
   __testing,
   runCalendarExpand,
+  runEventCreate,
+  runEventDelete,
   runEventReplay,
   runEventRsvp,
+  runEventUpdate,
   runRecurringDiscover,
   runRecurringReplay
 } from '../../src/electron/main/handlers/calendar'
@@ -253,6 +256,142 @@ describe('calendar — runEventRsvp', () => {
     expect(mockCallCli).toHaveBeenCalledWith(
       ['calendar', 'rsvp', 'uid-y', 'tentative', '--dry-run'],
       { write: false, needsAuth: false, timeoutMs: 120_000 }
+    )
+  })
+})
+
+// Phase 2.2 — calendar:eventCreate (CalDAV PUT new event)
+describe('calendar — runEventCreate', () => {
+  test('minimal: summary + start + end', async () => {
+    mockCallCli.mockResolvedValue({ action: 'created', ical_uid: 'new-uid' })
+    await runEventCreate({
+      summary: 'Sync',
+      startIso: '2026-05-30T14:00:00+08:00',
+      endIso: '2026-05-30T15:00:00+08:00'
+    })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      [
+        'calendar',
+        'create',
+        '--summary',
+        'Sync',
+        '--start',
+        '2026-05-30T14:00:00+08:00',
+        '--end',
+        '2026-05-30T15:00:00+08:00'
+      ],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('full payload: location + description + attendees + status', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventCreate({
+      summary: 'Sync',
+      startIso: '2026-05-30T14:00:00Z',
+      endIso: '2026-05-30T15:00:00Z',
+      location: 'Room A',
+      description: 'Q1 plan',
+      status: 'TENTATIVE',
+      calendarName: 'Work',
+      attendees: [
+        { email: 'a@x.com', name: 'Alice' },
+        { email: 'b@x.com' }
+      ]
+    })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      [
+        'calendar', 'create',
+        '--summary', 'Sync',
+        '--start', '2026-05-30T14:00:00Z',
+        '--end', '2026-05-30T15:00:00Z',
+        '--location', 'Room A',
+        '--description', 'Q1 plan',
+        '--calendar', 'Work',
+        '--status', 'TENTATIVE',
+        '--attendee', 'a@x.com,Alice',
+        '--attendee', 'b@x.com'
+      ],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('attendee with empty email is skipped', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventCreate({
+      summary: 'x',
+      startIso: '2026-05-30T14:00:00Z',
+      endIso: '2026-05-30T15:00:00Z',
+      attendees: [{ email: '' }, { email: 'real@x.com' }]
+    })
+    const args = mockCallCli.mock.calls[0][0]
+    expect(args.filter((a) => a === '--attendee')).toHaveLength(1)
+  })
+})
+
+// Phase 2.3 — calendar:eventUpdate
+describe('calendar — runEventUpdate', () => {
+  test('uid + summary only', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({ icalUid: 'uid-x', summary: 'New title' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'update', 'uid-x', '--summary', 'New title'],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('multi field update + noSequenceBump', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({
+      icalUid: 'uid-x',
+      summary: 'New',
+      startIso: '2026-05-30T14:00:00Z',
+      endIso: '2026-05-30T15:00:00Z',
+      location: 'Room B',
+      status: 'CANCELLED',
+      noSequenceBump: true
+    })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      [
+        'calendar', 'update', 'uid-x',
+        '--summary', 'New',
+        '--start', '2026-05-30T14:00:00Z',
+        '--end', '2026-05-30T15:00:00Z',
+        '--location', 'Room B',
+        '--status', 'CANCELLED',
+        '--no-sequence-bump'
+      ],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('empty location explicitly passes empty string', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({ icalUid: 'uid-x', location: '' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'update', 'uid-x', '--location', ''],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+})
+
+// Phase 2.3 — calendar:eventDelete
+describe('calendar — runEventDelete', () => {
+  test('uid + --yes always passed', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventDelete({ icalUid: 'uid-x' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'delete', 'uid-x', '--yes'],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('with calendarName flag', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventDelete({ icalUid: 'uid-x', calendarName: 'Work' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'delete', 'uid-x', '--yes', '--calendar', 'Work'],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
     )
   })
 })

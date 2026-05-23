@@ -22,9 +22,12 @@ import type {
   CalendarEventOccurrence,
   CalendarExpandOpts,
   CalendarSyncStateItem,
+  EventCreateOpts,
+  EventDeleteOpts,
   EventGetOpts,
   EventReplayOpts,
   EventRsvpOpts,
+  EventUpdateOpts,
   EventsListOpts,
   SyncNowOpts,
   ChatApi,
@@ -314,6 +317,22 @@ class ElectronCalendarApi implements CalendarApi {
   // Phase 2.1 — RSVP iTIP REPLY to organizer
   async eventRsvp(opts: EventRsvpOpts): Promise<unknown> {
     const env = (await invoker()('calendar:eventRsvp', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+
+  // Phase 2.2 — CalDAV PUT 新建事件
+  async eventCreate(opts: EventCreateOpts): Promise<unknown> {
+    const env = (await invoker()('calendar:eventCreate', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+
+  // Phase 2.3 — CalDAV PUT update / DELETE
+  async eventUpdate(opts: EventUpdateOpts): Promise<unknown> {
+    const env = (await invoker()('calendar:eventUpdate', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async eventDelete(opts: EventDeleteOpts): Promise<unknown> {
+    const env = (await invoker()('calendar:eventDelete', opts)) as WriteEnvelope<unknown>
     return unwrap(env)
   }
 }

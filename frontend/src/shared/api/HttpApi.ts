@@ -120,7 +120,11 @@ export class HttpApi implements MailApi {
     // Phase 2.4 — replay calendar_event 行到 Notion (Electron 模式可用)
     eventReplay: () => notImplemented('calendar.eventReplay'),
     // Phase 2.1 — RSVP iTIP REPLY (Electron 模式可用)
-    eventRsvp: () => notImplemented('calendar.eventRsvp')
+    eventRsvp: () => notImplemented('calendar.eventRsvp'),
+    // Phase 2.2/2.3 — CalDAV PUT/DELETE (Electron 模式可用)
+    eventCreate: () => notImplemented('calendar.eventCreate'),
+    eventUpdate: () => notImplemented('calendar.eventUpdate'),
+    eventDelete: () => notImplemented('calendar.eventDelete')
   }
 
   // Web SPA has no OS credential store — V2 will surface a "configure on

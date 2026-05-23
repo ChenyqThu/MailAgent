@@ -180,6 +180,95 @@ export async function runEventRsvp(opts: EventRsvpOpts): Promise<unknown> {
   })
 }
 
+// ============================================================
+// Phase 2.2/2.3 — calendar event CRUD (CalDAV PUT/DELETE)
+// 直接改 Exchange 端日历资源 (跟 RSVP 是不同语义: owner ops vs attendee reply).
+// ============================================================
+
+export interface EventAttendeeInput {
+  email: string
+  name?: string
+}
+
+export interface EventCreateOpts {
+  summary: string
+  /** ISO datetime with tz (必填); e.g. '2026-05-30T14:00:00+08:00' or 'Z' 结尾. */
+  startIso: string
+  endIso: string
+  location?: string
+  description?: string
+  attendees?: EventAttendeeInput[]
+  /** 目标 calendar 名; 留空 = 默认 (Outlook 主日历). */
+  calendarName?: string
+  /** 默认 CONFIRMED. */
+  status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
+}
+
+export async function runEventCreate(opts: EventCreateOpts): Promise<unknown> {
+  const args = [
+    'calendar',
+    'create',
+    '--summary',
+    opts.summary,
+    '--start',
+    opts.startIso,
+    '--end',
+    opts.endIso
+  ]
+  if (opts.location) args.push('--location', opts.location)
+  if (opts.description) args.push('--description', opts.description)
+  if (opts.calendarName) args.push('--calendar', opts.calendarName)
+  if (opts.status) args.push('--status', opts.status)
+  for (const a of opts.attendees || []) {
+    if (!a.email) continue
+    args.push('--attendee', a.name ? `${a.email},${a.name}` : a.email)
+  }
+  return callCli(args, { write: true, needsAuth: true, timeoutMs: WRITE_TIMEOUT_MS })
+}
+
+export interface EventUpdateOpts {
+  icalUid: string
+  /** All optional — 不传 = 保留原值. */
+  summary?: string
+  startIso?: string
+  endIso?: string
+  location?: string
+  description?: string
+  attendees?: EventAttendeeInput[]
+  status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
+  calendarName?: string
+  /** 默认 SEQUENCE +1 (RFC 5545 标准). */
+  noSequenceBump?: boolean
+}
+
+export async function runEventUpdate(opts: EventUpdateOpts): Promise<unknown> {
+  const args = ['calendar', 'update', opts.icalUid]
+  if (opts.summary !== undefined) args.push('--summary', opts.summary)
+  if (opts.startIso !== undefined) args.push('--start', opts.startIso)
+  if (opts.endIso !== undefined) args.push('--end', opts.endIso)
+  if (opts.location !== undefined) args.push('--location', opts.location)
+  if (opts.description !== undefined) args.push('--description', opts.description)
+  if (opts.status !== undefined) args.push('--status', opts.status)
+  if (opts.calendarName) args.push('--calendar', opts.calendarName)
+  if (opts.noSequenceBump) args.push('--no-sequence-bump')
+  for (const a of opts.attendees || []) {
+    if (!a.email) continue
+    args.push('--attendee', a.name ? `${a.email},${a.name}` : a.email)
+  }
+  return callCli(args, { write: true, needsAuth: true, timeoutMs: WRITE_TIMEOUT_MS })
+}
+
+export interface EventDeleteOpts {
+  icalUid: string
+  calendarName?: string
+}
+
+export async function runEventDelete(opts: EventDeleteOpts): Promise<unknown> {
+  const args = ['calendar', 'delete', opts.icalUid, '--yes']
+  if (opts.calendarName) args.push('--calendar', opts.calendarName)
+  return callCli(args, { write: true, needsAuth: true, timeoutMs: WRITE_TIMEOUT_MS })
+}
+
 export interface CalendarExpandOpts {
   horizonWeeks?: number
   dryRun?: boolean
@@ -709,6 +798,48 @@ export function registerCalendarHandlers(): void {
       return envelopeFromCli(runEventRsvp(opts))
     }
   )
+  // Phase 2.2 — calendar:eventCreate (CalDAV PUT 新建事件)
+  ipcMain.handle(
+    'calendar:eventCreate',
+    async (_evt, opts: EventCreateOpts): Promise<WriteEnvelope<unknown>> => {
+      if (!opts || !opts.summary || !opts.startIso || !opts.endIso) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'calendar:eventCreate requires summary + startIso + endIso'
+        }
+      }
+      return envelopeFromCli(runEventCreate(opts))
+    }
+  )
+  // Phase 2.3 — calendar:eventUpdate (CalDAV PUT 更新事件)
+  ipcMain.handle(
+    'calendar:eventUpdate',
+    async (_evt, opts: EventUpdateOpts): Promise<WriteEnvelope<unknown>> => {
+      if (!opts || !opts.icalUid) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'calendar:eventUpdate requires icalUid'
+        }
+      }
+      return envelopeFromCli(runEventUpdate(opts))
+    }
+  )
+  // Phase 2.3 — calendar:eventDelete (CalDAV DELETE 删除事件)
+  ipcMain.handle(
+    'calendar:eventDelete',
+    async (_evt, opts: EventDeleteOpts): Promise<WriteEnvelope<unknown>> => {
+      if (!opts || !opts.icalUid) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'calendar:eventDelete requires icalUid'
+        }
+      }
+      return envelopeFromCli(runEventDelete(opts))
+    }
+  )
 }
 
 export const __testing = {
@@ -722,6 +853,9 @@ export const __testing = {
   runSyncNow,
   runEventReplay,
   runEventRsvp,
+  runEventCreate,
+  runEventUpdate,
+  runEventDelete,
   expandInWindow,
   envelopeFromCli
 }

@@ -7,8 +7,10 @@
 // 切到 mockup class (.nav-btn / .today-btn / .view-chip / .sync-pill),
 // 不再用 Tailwind inline. sync tip CSS-only hover 触发, 移除 useState.
 
-import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
+import { ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react'
 
+import { EventFormModal } from './EventFormModal'
 import {
   useCalendarSyncTrigger,
   useCalendarSyncStatus,
@@ -71,6 +73,9 @@ export function CalendarToolbar({
   // 30s tick — 让 sync-pill 的 "上次同步 N 秒前" 字串自然走时, 不靠 syncStatus
   // 数据引用变化也能刷.
   useNowTick()
+
+  // Phase 2.2 — [+ 新建] 按钮 → 弹 EventFormModal (occurrence=null = create 语义)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
 
   const showDateNav = view === 'today' || view === 'week' || view === 'month'
   const head = syncStatus?.[0]
@@ -142,6 +147,18 @@ export function CalendarToolbar({
         ))}
       </div>
 
+      {/* Phase 2.2 — [+ 新建] (CalDAV PUT 新事件), 放在 sync 左边强调 primary action */}
+      <button
+        type="button"
+        className="nav-btn"
+        style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
+        onClick={() => setCreateModalOpen(true)}
+        title="新建事件 — 直接写到 Exchange (CalDAV PUT)"
+      >
+        <Plus size={13} strokeWidth={2.2} />
+        <span>新建</span>
+      </button>
+
       {/* sync — nav-btn 拉宽 (mockup inline style) + sync-pill CSS-only hover tip */}
       <div className="flex items-center gap-2">
         <button
@@ -193,6 +210,13 @@ export function CalendarToolbar({
           </div>
         </div>
       </div>
+
+      {/* Phase 2.2 — create modal (occurrence=null = create 语义) */}
+      <EventFormModal
+        open={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        occurrence={null}
+      />
     </div>
   )
 }

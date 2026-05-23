@@ -589,6 +589,47 @@ export interface EventRsvpOpts {
   dryRun?: boolean
 }
 
+// Phase 2.2/2.3 — calendar event CRUD via CalDAV PUT/DELETE.
+export type EventStatusCode = 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
+
+export interface EventAttendeeInput {
+  email: string
+  name?: string
+}
+
+export interface EventCreateOpts {
+  summary: string
+  /** ISO datetime with tz (必填); e.g. '2026-05-30T14:00:00+08:00' or 'Z' 结尾. */
+  startIso: string
+  endIso: string
+  location?: string
+  description?: string
+  attendees?: EventAttendeeInput[]
+  /** 目标 calendar 名; 留空 = 默认 (Outlook 主日历). */
+  calendarName?: string
+  status?: EventStatusCode
+}
+
+export interface EventUpdateOpts {
+  icalUid: string
+  /** All optional — 不传 = 保留原值. */
+  summary?: string
+  startIso?: string
+  endIso?: string
+  location?: string
+  description?: string
+  attendees?: EventAttendeeInput[]
+  status?: EventStatusCode
+  calendarName?: string
+  /** 默认 SEQUENCE +1 (RFC 5545 标准). */
+  noSequenceBump?: boolean
+}
+
+export interface EventDeleteOpts {
+  icalUid: string
+  calendarName?: string
+}
+
 export interface CalendarApi {
   recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]>
   recurringReplay(opts: RecurringReplayOpts): Promise<unknown>
@@ -606,6 +647,11 @@ export interface CalendarApi {
 
   // Phase 2.1 — 发 iTIP REPLY 给 organizer (accept/tentative/decline)
   eventRsvp(opts: EventRsvpOpts): Promise<unknown>
+
+  // Phase 2.2/2.3 — CalDAV PUT/DELETE (create / update / delete event)
+  eventCreate(opts: EventCreateOpts): Promise<unknown>
+  eventUpdate(opts: EventUpdateOpts): Promise<unknown>
+  eventDelete(opts: EventDeleteOpts): Promise<unknown>
 }
 
 // ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------

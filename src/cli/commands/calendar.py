@@ -1207,3 +1207,273 @@ def calendar_rsvp(
             )
     else:
         emit(cli, data)
+
+
+# ============================================================
+# Phase 2.2/2.3 — calendar event CRUD (CalDAV PUT/DELETE)
+# 通过 DavMail CalDAV (1080) 在 Exchange 端 create / update / delete events.
+# 跟 RSVP 不同: owner 自己改日历资源, EWS 异步通知 attendees; 跟 iTIP REPLY 是
+# attendee 给 organizer 回应 PARTSTAT 两个独立路径.
+# ============================================================
+
+_VALID_EVENT_STATUS = ("CONFIRMED", "TENTATIVE", "CANCELLED")
+
+
+def _parse_iso_datetime_strict(s: str, field: str) -> datetime:
+    """ISO datetime with tz required; naive 拒绝. 'Z' 后缀 → '+00:00'."""
+    s_clean = s.strip()
+    # Python 3.11 fromisoformat 接受 'Z', 老版本要替换
+    if s_clean.endswith("Z"):
+        s_clean = s_clean[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s_clean)
+    except ValueError as e:
+        raise CliInvalidArgError(
+            f"--{field}={s!r} not valid ISO datetime "
+            f"(e.g. '2026-05-30T14:00:00+08:00' or '2026-05-30T06:00:00Z')"
+        ) from e
+    if dt.tzinfo is None:
+        raise CliInvalidArgError(
+            f"--{field}={s!r} naive datetime not allowed; must include tz offset, "
+            f"e.g. '2026-05-30T14:00:00+08:00'"
+        )
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_attendees(attendee_specs: list[str]) -> list[dict]:
+    """``--attendee 'email[,name]'`` 多个 → list of dict."""
+    out: list[dict] = []
+    for spec in attendee_specs:
+        parts = spec.split(",", 1)
+        email = parts[0].strip()
+        if not email or "@" not in email:
+            raise CliInvalidArgError(
+                f"--attendee={spec!r} not valid; expected 'email[,name]'"
+            )
+        entry = {"email": email}
+        if len(parts) == 2 and parts[1].strip():
+            entry["name"] = parts[1].strip()
+        out.append(entry)
+    return out
+
+
+@app.command("create")
+def calendar_create(
+    ctx: typer.Context,
+    summary: str = typer.Option(..., "--summary", help="事件标题 (必填)"),
+    start: str = typer.Option(
+        ..., "--start",
+        help="ISO datetime 含 tz; e.g. '2026-05-30T14:00:00+08:00' 或 'Z' 结尾",
+    ),
+    end: str = typer.Option(..., "--end", help="ISO datetime 含 tz (同上)"),
+    location: Optional[str] = typer.Option(None, "--location"),
+    description: Optional[str] = typer.Option(None, "--description"),
+    attendee: list[str] = typer.Option(
+        None, "--attendee",
+        help="附加 attendee, 格式 'email[,name]'; 可多次传 (--attendee a@x.com --attendee 'b@y.com,Bob')",
+    ),
+    calendar_name: Optional[str] = typer.Option(
+        None, "--calendar", help="目标 calendar 名; 留空 = 默认 (Outlook 主日历)",
+    ),
+    status: str = typer.Option(
+        "CONFIRMED", "--status", help=f"事件状态 ∈ {_VALID_EVENT_STATUS}",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """通过 CalDAV PUT 在 Exchange 创建新事件 (Phase 2.2)."""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if status not in _VALID_EVENT_STATUS:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--status={status!r} not in {_VALID_EVENT_STATUS}",
+        ))
+    try:
+        dtstart = _parse_iso_datetime_strict(start, "start")
+        dtend = _parse_iso_datetime_strict(end, "end")
+    except CliInvalidArgError as e:
+        raise emit_cli_error(cli, e)
+    if dtend <= dtstart:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--end ({dtend.isoformat()}) must be > --start ({dtstart.isoformat()})",
+        ))
+    try:
+        attendees = _parse_attendees(attendee or [])
+    except CliInvalidArgError as e:
+        raise emit_cli_error(cli, e)
+
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    from src.calendar_sync.caldav_writer import CalDAVWriter
+    from src.config import config as global_cfg
+
+    writer = CalDAVWriter(global_cfg)
+    try:
+        result = writer.create_event(
+            summary=summary,
+            dtstart_utc=dtstart,
+            dtend_utc=dtend,
+            location=location,
+            description=description,
+            attendees=attendees,
+            calendar_name=calendar_name,
+            status=status,
+        )
+    except (ValueError,) as e:
+        raise emit_cli_error(cli, CliInvalidArgError(str(e)))
+    except Exception as e:
+        raise emit_cli_error(cli, CliError(
+            f"calendar create failed: {e}",
+            hint="检查 DavMail CalDAV (1080) 可达 + cipher key + calendar 名是否存在",
+        ))
+
+    if cli.output.lower() == "text":
+        print(
+            f"created event uid={result['ical_uid']} "
+            f"summary={summary!r} "
+            f"calendar={result['calendar_name']!r} "
+            f"start={result['dtstart_iso']}"
+        )
+    else:
+        emit(cli, result)
+
+
+@app.command("update")
+def calendar_update(
+    ctx: typer.Context,
+    ical_uid: str = typer.Argument(..., help="vEvent UID (RFC 5545)"),
+    summary: Optional[str] = typer.Option(None, "--summary"),
+    start: Optional[str] = typer.Option(None, "--start"),
+    end: Optional[str] = typer.Option(None, "--end"),
+    location: Optional[str] = typer.Option(None, "--location"),
+    description: Optional[str] = typer.Option(None, "--description"),
+    attendee: list[str] = typer.Option(
+        None, "--attendee",
+        help="完整 attendee 列表 (会替换原列表; 不传 → 不写 ATTENDEE 行)",
+    ),
+    status: Optional[str] = typer.Option(None, "--status"),
+    calendar_name: Optional[str] = typer.Option(None, "--calendar"),
+    no_sequence_bump: bool = typer.Option(
+        False, "--no-sequence-bump",
+        help="不 +1 SEQUENCE (默认 +1, RFC 5545 标准: 任何 update 都要 bump)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """通过 CalDAV PUT update 现有事件 (Phase 2.3). 不传的字段保留原值."""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if status and status not in _VALID_EVENT_STATUS:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--status={status!r} not in {_VALID_EVENT_STATUS}",
+        ))
+
+    dtstart_utc: Optional[datetime] = None
+    dtend_utc: Optional[datetime] = None
+    try:
+        if start:
+            dtstart_utc = _parse_iso_datetime_strict(start, "start")
+        if end:
+            dtend_utc = _parse_iso_datetime_strict(end, "end")
+    except CliInvalidArgError as e:
+        raise emit_cli_error(cli, e)
+    if dtstart_utc and dtend_utc and dtend_utc <= dtstart_utc:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--end ({dtend_utc.isoformat()}) must be > "
+            f"--start ({dtstart_utc.isoformat()})",
+        ))
+    try:
+        attendees = _parse_attendees(attendee or []) if attendee else None
+    except CliInvalidArgError as e:
+        raise emit_cli_error(cli, e)
+
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    from src.calendar_sync.caldav_writer import CalDAVWriter
+    from src.config import config as global_cfg
+
+    writer = CalDAVWriter(global_cfg)
+    try:
+        result = writer.update_event(
+            ical_uid=ical_uid,
+            summary=summary,
+            dtstart_utc=dtstart_utc,
+            dtend_utc=dtend_utc,
+            location=location,
+            description=description,
+            attendees=attendees,
+            status=status,
+            calendar_name=calendar_name,
+            sequence_bump=not no_sequence_bump,
+        )
+    except ValueError as e:
+        raise emit_cli_error(cli, CliNotFoundError(str(e)))
+    except Exception as e:
+        raise emit_cli_error(cli, CliError(
+            f"calendar update failed: {e}",
+            hint="检查 ical_uid 存在 + DavMail CalDAV 可达",
+        ))
+
+    if cli.output.lower() == "text":
+        print(
+            f"updated event uid={result['ical_uid']} "
+            f"sequence={result['sequence']} calendar={result['calendar_name']!r}"
+        )
+    else:
+        emit(cli, result)
+
+
+@app.command("delete")
+def calendar_delete(
+    ctx: typer.Context,
+    ical_uid: str = typer.Argument(..., help="vEvent UID (RFC 5545)"),
+    calendar_name: Optional[str] = typer.Option(None, "--calendar"),
+    yes: bool = typer.Option(
+        False, "--yes",
+        help="确认删除 (必填, 防误删); 留空 = 拒绝执行",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """通过 CalDAV DELETE 删除事件 (Phase 2.3). 不可撤销, 必须 --yes."""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if not yes:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "calendar delete is destructive; pass --yes to confirm",
+        ))
+
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    from src.calendar_sync.caldav_writer import CalDAVWriter
+    from src.config import config as global_cfg
+
+    writer = CalDAVWriter(global_cfg)
+    try:
+        result = writer.delete_event(
+            ical_uid=ical_uid, calendar_name=calendar_name,
+        )
+    except ValueError as e:
+        raise emit_cli_error(cli, CliNotFoundError(str(e)))
+    except Exception as e:
+        raise emit_cli_error(cli, CliError(
+            f"calendar delete failed: {e}",
+            hint="检查 ical_uid 存在 + DavMail CalDAV 可达",
+        ))
+
+    if cli.output.lower() == "text":
+        print(
+            f"deleted event uid={result['ical_uid']} "
+            f"calendar={result['calendar_name']!r}"
+        )
+    else:
+        emit(cli, result)
