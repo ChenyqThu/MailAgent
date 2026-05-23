@@ -28,19 +28,25 @@
 //   sqlite3 data/sync_store.db "SELECT DISTINCT json_each.key FROM
 //   llm_processing, json_each(labels_json)"
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  AlertTriangle,
   BadgeCheck,
+  Briefcase,
   ChevronDown,
   ClipboardCheck,
   Clock,
   Copy,
   Cpu,
   FilePenLine,
+  Flag,
   MessageSquare,
   Pencil,
-  Sparkles
+  Sparkles,
+  Tag,
+  User,
+  Wand2
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -85,23 +91,16 @@ function pickString(raw: Record<string, unknown> | null, key: string): string | 
   return typeof v === 'string' && v.trim().length > 0 ? v : null
 }
 
+type LucideIcon = React.ComponentType<{
+  size?: number
+  strokeWidth?: number
+  className?: string
+}>
+
 interface CellSpec {
   label: string
   value: React.ReactNode
-}
-
-function GridCell({ label, value }: CellSpec): React.ReactElement {
-  return (
-    <div className="aif-cell px-4 py-2 bg-ink-3">
-      <div
-        className="text-micro font-mono uppercase tracking-wider text-ink-fg-2"
-        style={{ letterSpacing: '0.08em' }}
-      >
-        {label}
-      </div>
-      <div className="mt-1 text-aux text-ink-fg-1 leading-snug">{value}</div>
-    </div>
-  )
+  Icon?: LucideIcon
 }
 
 // Reply Suggestion content is markdown the LLM wrote (see
@@ -346,6 +345,7 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
   if (fields.ai_priority) {
     cells.push({
       label: 'Priority',
+      Icon: Flag,
       value: (
         <span
           className={cn(
@@ -360,11 +360,16 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
     })
   }
   if (actionLabel) {
-    cells.push({ label: 'Action', value: <span className="text-ink-fg">{actionLabel}</span> })
+    cells.push({
+      label: 'Action',
+      Icon: Wand2,
+      value: <span className="text-ink-fg">{actionLabel}</span>
+    })
   }
   if (senderPriority) {
     cells.push({
       label: 'Sender Priority',
+      Icon: User,
       value: (
         <span className="inline-flex items-center gap-1.5 text-impt">
           <span className="w-1.5 h-1.5 rounded-full bg-impt" />
@@ -373,18 +378,18 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
       )
     })
   }
-  if (category) cells.push({ label: 'Category', value: category })
-  if (project) cells.push({ label: 'Project', value: project })
+  if (category) cells.push({ label: 'Category', Icon: Tag, value: category })
+  if (project) cells.push({ label: 'Project', Icon: Briefcase, value: project })
   if (urgencyReason) {
     cells.push({
       label: 'Urgency Reason',
+      Icon: AlertTriangle,
       value: <span className="text-urg">{urgencyReason}</span>
     })
   }
 
   // Total non-empty count surfaced in the header pill.
   const nonNullCount = cells.length + (summary ? 1 : 0) + (replyMarkdown ? 1 : 0)
-  const padCount = cells.length % 3 === 0 ? 0 : 3 - (cells.length % 3)
 
   return (
     <section
@@ -448,16 +453,33 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
           edit / craft (open Mail.app draft) / copy actions. */}
       {replyMarkdown && <ReplyDraftHero markdown={replyMarkdown} internalId={internalId} />}
 
-      {/* 3-col secondary grid — bg-ink-border gutter + bg-ink-3 cells. */}
+      {/* Secondary cells — inline 紧凑布局, label·value · pipe · label·value…
+          空间不够 flex-wrap 换行. 之前 3-col grid 把每个 cell 撑成 padded box
+          视觉太"窒息"; 新版只用一行 px-4 py-2 容器, gap-x-3 分隔 pair, items
+          内 label-value 用 gap-1.5 紧靠. whitespace-nowrap 保证 pair 不被拆散. */}
       {cells.length > 0 && (
-        <div className="grid grid-cols-3 gap-px bg-ink-border">
+        <div className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-aux text-ink-fg-1 bg-ink-3">
           {cells.map((cell, idx) => (
-            <GridCell key={`${cell.label}-${idx}`} {...cell} />
+            <Fragment key={`${cell.label}-${idx}`}>
+              {idx > 0 && (
+                <span className="text-ink-fg-3 select-none" aria-hidden>
+                  |
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                {cell.Icon && (
+                  <cell.Icon size={12} strokeWidth={2} className="text-ink-fg-3 shrink-0" />
+                )}
+                <span
+                  className="text-micro font-mono uppercase tracking-wider text-ink-fg-2"
+                  style={{ letterSpacing: '0.08em' }}
+                >
+                  {cell.label}
+                </span>
+                {cell.value}
+              </span>
+            </Fragment>
           ))}
-          {padCount > 0 &&
-            Array.from({ length: padCount }).map((_, i) => (
-              <div key={`pad-${i}`} className="bg-ink-3" aria-hidden />
-            ))}
         </div>
       )}
     </section>
