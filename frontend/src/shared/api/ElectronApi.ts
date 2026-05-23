@@ -23,6 +23,7 @@ import type {
   CalendarExpandOpts,
   CalendarSyncStateItem,
   EventGetOpts,
+  EventReplayOpts,
   EventsListOpts,
   SyncNowOpts,
   ChatApi,
@@ -300,6 +301,12 @@ class ElectronCalendarApi implements CalendarApi {
   }
   async syncTrigger(opts: SyncNowOpts = {}): Promise<unknown> {
     const env = (await invoker()('calendar:syncTrigger', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+
+  // Phase 2.4 — replay calendar_event 行到 Notion (any source)
+  async eventReplay(opts: EventReplayOpts): Promise<unknown> {
+    const env = (await invoker()('calendar:eventReplay', opts)) as WriteEnvelope<unknown>
     return unwrap(env)
   }
 }

@@ -42,14 +42,16 @@ function fmtIso(iso: string | null): string {
 
 interface RowProps {
   item: RecurringInviteItem
-  onReplay: (id: number) => void
+  onReplay: (icalUid: string) => void
   pending: boolean
 }
 
 function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
   const { t } = useTranslation()
-  // Phase 1.5 caveat: caldav-only events internal_id=0 — Replay 无效, 灰
-  const canReplay = item.internal_id > 0
+  // Phase 2.4: Replay 现在基于 calendar_event 行重导出 Notion, 任何 source 都可
+  // (caldav-only events 也能用). 没有 ical_uid 的旧 row (理论上 series_uid 总有)
+  // 才禁用.
+  const canReplay = !!item.ical_uid
   return (
     <tr>
       <td>
@@ -67,21 +69,20 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
       <td className="mono-num">{fmtIso(item.last_occurrence)}</td>
       <td className="mono-num">{item.occurrence_count ?? '—'}</td>
       <td className="text-right">
-        {/* mockup §recurring 操作列是静态弱化 span. 我们后端能 replay 时
-            保留 click handler, 但视觉走 mockup 简洁 link 风格 (无 button
-            border / 无 padding). caldav-only events (internal_id=0) 一律
-            灰色 placeholder. */}
+        {/* mockup §recurring 操作列是静态弱化 span. Phase 2.4 后任何 source 都能
+            Replay (calendar:eventReplay 走 SQLite calendar_event 重导出 Notion),
+            视觉上保持 mockup 简洁 link 风格. */}
         {canReplay ? (
           <button
             type="button"
             disabled={pending}
-            onClick={() => onReplay(item.internal_id)}
+            onClick={() => onReplay(item.ical_uid)}
             className={cn(
               'inline-flex items-center gap-1 text-[12px] cursor-pointer',
               'text-coral hover:underline',
               'disabled:opacity-60 disabled:cursor-wait disabled:no-underline'
             )}
-            title={t('calendar.replay')}
+            title={`${t('calendar.replay')} — 重导出到 Notion (基于 SQLite calendar_event)`}
           >
             {pending && <RefreshCw size={11} strokeWidth={2} className="animate-spin" />}
             {t('calendar.replay')}
@@ -89,7 +90,7 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
         ) : (
           <span
             className="text-ink-fg-3 text-[12px]"
-            title="Phase 1.5 后 caldav-only events 无邮件源, Replay 待 Phase 2 重做"
+            title="缺少 ical_uid — 无法 replay (数据异常?)"
           >
             Replay
           </span>
@@ -104,7 +105,9 @@ export function CalendarPage(): React.ReactElement {
   const mailApi = useMailApi()
   const qc = useQueryClient()
   const [days, setDays] = useState(90)
-  const [pending, setPending] = useState<Set<number>>(new Set())
+  // Phase 2.4: pending key 从 internal_id (number) 改为 ical_uid (string),
+  // 跟 eventReplay 新 API 对齐.
+  const [pending, setPending] = useState<Set<string>>(new Set())
 
   const since = offsetIsoDate(days)
   // Phase 1.5 (706788d) 之后 discover_recurring 改读 SQLite calendar_event ~0.5s,
@@ -117,21 +120,24 @@ export function CalendarPage(): React.ReactElement {
     refetchOnMount: 'always'      // 切到 recurring tab 主动刷
   })
 
+  // Phase 2.4: 走 eventReplay (基于 SQLite calendar_event 行) 替代老 recurringReplay
+  // (基于 email .ics 重派生 — 只对 source='email_ics' 有效, caldav-only events 无解).
+  // i18n 模板 {id} 之前传 number, 现在传 ical_uid string — toast 显示截断到 32 字符.
   const replayMut = useMutation({
-    mutationFn: (id: number) => mailApi.calendar.recurringReplay({ internalId: id }),
-    onMutate: (id) => setPending((s) => new Set(s).add(id)),
-    onSuccess: (_d, id) => {
-      toastSuccess(t('calendar.replayOk', { id }))
+    mutationFn: (icalUid: string) => mailApi.calendar.eventReplay({ icalUid }),
+    onMutate: (icalUid) => setPending((s) => new Set(s).add(icalUid)),
+    onSuccess: (_d, icalUid) => {
+      toastSuccess(t('calendar.replayOk', { id: icalUid.slice(0, 32) }))
       void qc.invalidateQueries({ queryKey: ['calendar', 'recurring'] })
     },
-    onError: (err: unknown, id) => {
+    onError: (err: unknown, icalUid) => {
       const e = err as Error & { code?: string }
-      toastError(t('calendar.replayFail', { id }), e.message)
+      toastError(t('calendar.replayFail', { id: icalUid.slice(0, 32) }), e.message)
     },
-    onSettled: (_d, _e, id) => {
+    onSettled: (_d, _e, icalUid) => {
       setPending((prev) => {
         const next = new Set(prev)
-        next.delete(id)
+        next.delete(icalUid)
         return next
       })
     }
@@ -199,10 +205,10 @@ export function CalendarPage(): React.ReactElement {
             <tbody>
               {listQ.data.map((item) => (
                 <Row
-                  key={item.internal_id || `${item.organizer}-${item.rrule}`}
+                  key={item.ical_uid || `${item.organizer}-${item.rrule}`}
                   item={item}
-                  onReplay={(id) => replayMut.mutate(id)}
-                  pending={pending.has(item.internal_id)}
+                  onReplay={(uid) => replayMut.mutate(uid)}
+                  pending={pending.has(item.ical_uid)}
                 />
               ))}
             </tbody>

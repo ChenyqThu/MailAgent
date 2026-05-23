@@ -16,6 +16,7 @@ import { CliError } from '../../src/electron/main/cli_runner'
 import {
   __testing,
   runCalendarExpand,
+  runEventReplay,
   runRecurringDiscover,
   runRecurringReplay
 } from '../../src/electron/main/handlers/calendar'
@@ -65,6 +66,8 @@ describe('calendar — runRecurringDiscover', () => {
     const out = await runRecurringDiscover()
     expect(out).toEqual([
       {
+        // Phase 2.4 — ical_uid = series_uid (= vEvent UID) for new eventReplay path
+        ical_uid: 'uid-weekly',
         internal_id: 53120,
         subject: 'Weekly sync',
         organizer: 'boss@example.com',
@@ -98,6 +101,9 @@ describe('calendar — runRecurringDiscover', () => {
     expect(out).toHaveLength(1)
     expect(out[0]?.internal_id).toBe(0)
     expect(out[0]?.subject).toBe('SaaS 项目双周对齐会议')
+    // Phase 2.4: caldav-only events 也有 ical_uid (= series_uid),
+    // Replay 走 eventReplay 不再因 internal_id=0 被禁
+    expect(out[0]?.ical_uid).toBe('uid-caldav-only')
   })
 
   test('legacy {items} shape still works (back-compat)', async () => {
@@ -151,6 +157,57 @@ describe('calendar — runRecurringReplay', () => {
     expect(mockCallCli).toHaveBeenCalledWith(
       ['calendar', 'recurring', 'replay', '--internal-id', '42', '--dry-run'],
       { write: false, needsAuth: false, timeoutMs: 120_000 }
+    )
+  })
+})
+
+// Phase 2.4 — calendar:eventReplay (基于 calendar_event 行重导出 Notion)
+describe('calendar — runEventReplay', () => {
+  test('icalUid only: positional + write+auth + 120s', async () => {
+    mockCallCli.mockResolvedValue({ action: 'created', page_id: 'p1' })
+    await runEventReplay({ icalUid: 'uid-abc' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'replay', 'uid-abc'],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('with recurrenceId + source', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventReplay({
+      icalUid: 'uid-x',
+      recurrenceId: '2026-05-30T10:00:00Z',
+      source: 'caldav'
+    })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      [
+        'calendar',
+        'replay',
+        'uid-x',
+        '--recurrence-id',
+        '2026-05-30T10:00:00Z',
+        '--source',
+        'caldav'
+      ],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('dry-run skips write+auth + adds --dry-run', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventReplay({ icalUid: 'uid-x', dryRun: true })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'replay', 'uid-x', '--dry-run'],
+      { write: false, needsAuth: false, timeoutMs: 120_000 }
+    )
+  })
+
+  test('source=email_ics is passed through', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventReplay({ icalUid: 'u', source: 'email_ics' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'replay', 'u', '--source', 'email_ics'],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
     )
   })
 })

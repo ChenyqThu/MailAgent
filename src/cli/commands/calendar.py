@@ -957,3 +957,130 @@ def calendar_sync_now(
                 )
     else:
         emit(cli, data)
+
+
+# ============================================================
+# Phase 2.4 — replay 单 calendar_event 行到 Notion mirror
+# 跟老 `recurring replay <internal_id>` 区别:
+#   老命令: 基于邮件 .ics 重派生 CalendarEvent — 只对 source='email_ics' 有效
+#   新命令: 基于 SQLite calendar_event 行 — 任何 source 都可 (caldav-only 也能)
+# ============================================================
+
+@app.command("replay")
+def calendar_replay(
+    ctx: typer.Context,
+    ical_uid: str = typer.Argument(..., help="vEvent UID (RFC 5545)"),
+    recurrence_id: Optional[str] = typer.Option(
+        None, "--recurrence-id",
+        help="非空 = replay 单次跳脱 occurrence; 留空 = 主事件",
+    ),
+    source: Optional[str] = typer.Option(
+        None, "--source",
+        help=f"限定 source ∈ {_VALID_EVENT_SOURCES}; "
+             "留空 = 按 caldav→email_ics→legacy 顺序自动查",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="仅查 row + 列 plan, 不写 Notion (无需 auth)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """重导出 SQLite calendar_event 行到 Notion (Phase 2.4).
+
+    跟 ``recurring replay <internal_id>`` 区别: 老命令基于邮件 .ics 重派生
+    (只对 ``source='email_ics'`` 有效); 新命令基于 SQLite ``calendar_event`` 行
+    (任何 source 都可, 包括 ``caldav`` 单独走 CalDAV 拉的事件).
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if source and source not in _VALID_EVENT_SOURCES:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--source={source!r} not in {_VALID_EVENT_SOURCES}",
+        ))
+
+    if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    from src.calendar_sync import CalendarEventRepository
+    repo = CalendarEventRepository(cli.cli_config.sync_store_db_path)
+
+    if dry_run:
+        # dry-run: 只查 row 不写 Notion. 跟 replay_calendar_event 内部 try-order
+        # 一致 (caldav → email_ics → legacy_calendar_app); 找不到报 NotFound.
+        from src.calendar_notion.replay import SOURCES_TRY_ORDER
+        candidates = [source] if source else list(SOURCES_TRY_ORDER)
+        row = None
+        found_source = None
+        for s in candidates:
+            if not s:
+                continue
+            candidate = repo.get_by_ical_uid(
+                ical_uid, source=s, recurrence_id=recurrence_id,
+            )
+            if candidate is not None:
+                row = candidate
+                found_source = s
+                break
+        if row is None:
+            raise emit_cli_error(cli, CliNotFoundError(
+                f"calendar_event not found: ical_uid={ical_uid!r} "
+                f"recurrence_id={recurrence_id!r}",
+                hint=f"tried sources: {candidates}; "
+                     "check `mailagent calendar event-get` or run sync-now first",
+            ))
+        data = {
+            "action": "would_replay",
+            "dry_run": True,
+            "ical_uid": ical_uid,
+            "recurrence_id": recurrence_id,
+            "source": found_source,
+            "row_id": row.id,
+            "summary": row.summary,
+            "current_notion_page_id": row.notion_page_id,
+        }
+        if cli.output.lower() == "text":
+            print(
+                f"[dry-run] would replay: id={row.id} source={found_source} "
+                f"summary={(row.summary or '')[:60]!r} "
+                f"current_page_id={row.notion_page_id!r}"
+            )
+        else:
+            emit(cli, data)
+        return
+
+    from src.calendar_notion.replay import replay_calendar_event
+    from src.calendar_notion.sync import CalendarNotionSync
+
+    notion_sync = CalendarNotionSync()
+    try:
+        result = asyncio.run(replay_calendar_event(
+            repo, notion_sync,
+            ical_uid=ical_uid, recurrence_id=recurrence_id, source=source,
+        ))
+    except ValueError as e:
+        raise emit_cli_error(cli, CliNotFoundError(str(e)))
+    except Exception as e:
+        raise emit_cli_error(cli, CliError(
+            f"replay failed: {e}",
+            hint="检查 Notion token / 网络 / calendar_event row 完整性",
+        ))
+
+    data = {
+        "action": result["action"],
+        "page_id": result["page_id"],
+        "ical_uid": result["ical_uid"],
+        "recurrence_id": result["recurrence_id"],
+        "source": result["source"],
+        "dry_run": False,
+    }
+    if cli.output.lower() == "text":
+        print(
+            f"replay {result['action']}: ical_uid={result['ical_uid']!r} "
+            f"source={result['source']} page_id={result['page_id']}"
+        )
+    else:
+        emit(cli, data)

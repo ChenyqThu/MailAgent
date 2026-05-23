@@ -116,7 +116,9 @@ export class HttpApi implements MailApi {
     eventGet: () => notImplemented('calendar.eventGet'),
     syncStatus: () => notImplemented('calendar.syncStatus'),
     calendarNames: () => notImplemented('calendar.calendarNames'),
-    syncTrigger: () => notImplemented('calendar.syncTrigger')
+    syncTrigger: () => notImplemented('calendar.syncTrigger'),
+    // Phase 2.4 — replay calendar_event 行到 Notion (Electron 模式可用)
+    eventReplay: () => notImplemented('calendar.eventReplay')
   }
 
   // Web SPA has no OS credential store — V2 will surface a "configure on

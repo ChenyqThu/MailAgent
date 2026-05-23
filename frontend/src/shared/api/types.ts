@@ -427,6 +427,10 @@ export interface AdminApi {
 // ---- Sprint 6 §2.2 — calendar (recurring meeting) surface -----------------
 
 export interface RecurringInviteItem {
+  /** Phase 2.4 — vEvent UID (RFC 5545). Replay 按钮调 eventReplay 用这个,
+   *  跟 source 无关 (任何 source 都可 replay). 等于 series_uid. */
+  ical_uid: string
+  /** Source email (the meeting invite carrier). Phase 1.5 caldav-only events = 0. */
   internal_id: number
   subject: string | null
   organizer: string | null
@@ -557,6 +561,18 @@ export interface SyncNowOpts {
   calendarName?: string
 }
 
+// Phase 2.4 — replay 单 calendar_event 行到 Notion mirror (任何 source).
+export interface EventReplayOpts {
+  /** vEvent UID (RFC 5545); 必填. */
+  icalUid: string
+  /** 非空 = replay 单次跳脱 occurrence; 留空 = 主事件. */
+  recurrenceId?: string | null
+  /** 限定 source; 留空 = 按 caldav → email_ics → legacy 顺序自动查. */
+  source?: CalendarEventSource
+  /** 仅查 row 列 plan, 不写 Notion (无需 auth). */
+  dryRun?: boolean
+}
+
 export interface CalendarApi {
   recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]>
   recurringReplay(opts: RecurringReplayOpts): Promise<unknown>
@@ -568,6 +584,9 @@ export interface CalendarApi {
   syncStatus(): Promise<CalendarSyncStateItem[]>
   calendarNames(): Promise<string[]>
   syncTrigger(opts?: SyncNowOpts): Promise<unknown>
+
+  // Phase 2.4 — 重导出 calendar_event 行到 Notion (any source)
+  eventReplay(opts: EventReplayOpts): Promise<unknown>
 }
 
 // ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------

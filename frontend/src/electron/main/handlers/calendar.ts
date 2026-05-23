@@ -23,7 +23,10 @@ const READ_TIMEOUT_MS = 30_000
 const WRITE_TIMEOUT_MS = 120_000
 
 export interface RecurringInviteItem {
-  /** Source email (the meeting invite carrier). */
+  /** vEvent UID (RFC 5545) — Phase 2.4 Replay 用此调 calendar:eventReplay,
+   *  跟 source 无关 (任何 source 都可 replay). */
+  ical_uid: string
+  /** Source email (the meeting invite carrier). Phase 1.5 caldav-only events = 0. */
   internal_id: number
   subject: string | null
   organizer: string | null
@@ -70,8 +73,10 @@ export async function runRecurringDiscover(
   }
 
   return series.map((s) => ({
-    // Phase 1.5 caveat: caldav-only events 的 internal_ids=[0] (没邮件源),
-    // replay 按钮对其无效. Mockup 阶段会 deprecate replay 改 calendar_event 重导出.
+    // Phase 2.4: ical_uid 是 series_uid (= vEvent UID), Replay 按钮用这个调
+    // calendar:eventReplay (任何 source 都可). 老 internal_id 字段保留作 legacy
+    // (caldav-only events 永远是 0, email_ics events 是真邮件 id).
+    ical_uid: s.series_uid,
     internal_id: s.internal_ids?.[0] ?? 0,
     subject: s.summary,
     organizer: s.organizer ?? s.sender,
@@ -96,6 +101,39 @@ export async function runRecurringReplay(opts: RecurringReplayOpts): Promise<unk
     args.push('--internal-id', String(opts.internalId))
   } else if (opts.ids && opts.ids.length > 0) {
     args.push('--ids', opts.ids.join(','))
+  }
+  if (opts.dryRun) args.push('--dry-run')
+  return callCli(args, {
+    write: !opts.dryRun,
+    needsAuth: !opts.dryRun,
+    timeoutMs: WRITE_TIMEOUT_MS
+  })
+}
+
+// ============================================================
+// Phase 2.4 — calendar:eventReplay (基于 calendar_event 行重导出 Notion)
+// 跟老 recurringReplay (email_ics only) 区别: 任何 source 都可 replay,
+// caldav-only events 也能写 Notion mirror.
+// ============================================================
+
+export interface EventReplayOpts {
+  /** vEvent UID (RFC 5545); 必填. */
+  icalUid: string
+  /** 非空 = replay 单次跳脱 occurrence; 留空 = 主事件 (含 RRULE 整系列). */
+  recurrenceId?: string | null
+  /** 限定 source; 留空 = 按 caldav → email_ics → legacy 顺序自动查. */
+  source?: 'caldav' | 'email_ics' | 'legacy_calendar_app'
+  /** 仅查 row 列 plan, 不写 Notion (无需 auth). */
+  dryRun?: boolean
+}
+
+export async function runEventReplay(opts: EventReplayOpts): Promise<unknown> {
+  const args = ['calendar', 'replay', opts.icalUid]
+  if (opts.recurrenceId) {
+    args.push('--recurrence-id', opts.recurrenceId)
+  }
+  if (opts.source) {
+    args.push('--source', opts.source)
   }
   if (opts.dryRun) args.push('--dry-run')
   return callCli(args, {
@@ -599,6 +637,20 @@ export function registerCalendarHandlers(): void {
       return envelopeFromCli(runSyncNow(opts ?? {}))
     }
   )
+  // Phase 2.4 — calendar:eventReplay (基于 calendar_event 重导出 Notion)
+  ipcMain.handle(
+    'calendar:eventReplay',
+    async (_evt, opts: EventReplayOpts): Promise<WriteEnvelope<unknown>> => {
+      if (!opts || !opts.icalUid) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'calendar:eventReplay requires icalUid'
+        }
+      }
+      return envelopeFromCli(runEventReplay(opts))
+    }
+  )
 }
 
 export const __testing = {
@@ -610,6 +662,7 @@ export const __testing = {
   runSyncStatus,
   runCalendarNames,
   runSyncNow,
+  runEventReplay,
   expandInWindow,
   envelopeFromCli
 }
