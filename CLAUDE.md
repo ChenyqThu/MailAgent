@@ -941,6 +941,7 @@ python3 scripts/dev/test_mail_reader.py
 **M2 进度**：
 - ✅ PR-2a (2026-05-23) — FTS5 中文 smart wrapper ship。后端 `smart_query_transform` + `search_email_bodies_smart` + 前端 `smartQueryTransform` 双份算法对齐。CLI / webhook handler / chat tool 全部默认 smart 模式。20 个后端单测 + 18 个前端单测全过。详见 Phase 3 段 / `src/repository/email_repository.py:smart_query_transform`。
 - ✅ PR-2b (2026-05-23) — 附件文本化 + attachment FTS5 ship。新模块 `src/converter/attachment_text.py` 统一 PDF/docx/pptx/xlsx 抽取入口；DB v16 加 `email_attachment_text` + `email_attachment_fts` 表 + 3 triggers；EmailRepository 加 `enqueue/commit/get/list_pending/mark_failure/search_attachment_texts(_smart)` 方法；CLI `mailagent attachment search` / `mailagent attachment extract --pending --include-missing`；webhook handler `search_email_attachments`；前端 chat tool `email_search_attachments`。21 + 17 + 6 个新单测全过。详见 Phase 3 段 / `src/converter/attachment_text.py`。
+- ✅ PR-2c (2026-05-23) — KOS MCP client (TS + Py 双份) ship。OAuth 2.1 client_credentials → 1h access_token (无 refresh, 401 重换) → POST /mcp 带 Bearer 调 JSON-RPC tools/call → SSE response 提取 `data: ` 行 JSON.parse → tool result `content[0].text` 二次 JSON.parse → caller-friendly value。`src/kos/client.py` (Python, ~300 LOC) + `frontend/src/electron/main/kos/client.ts` (TS, ~330 LOC) 算法 1:1 对齐。便捷方法 `health/call_tool/query/list_pages/put_page` + 11 个 stable error code (E_KOS_NOT_CONFIGURED / E_KOS_UNAUTHORIZED / E_KOS_RATE_LIMIT 等). 39 + 36 个新单测全过；实测真实 `https://kos.chenge.ink` health + query 跑通。详见 [`docs/kos-integration-design.md`](./docs/kos-integration-design.md) §3。
 
 ---
 

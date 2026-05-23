@@ -18,10 +18,10 @@
 
 ## 2. 已确认决策
 
-1. ✅ **Endpoint**：公网 `https://kos.chenge.ink` 主 + 本机 `http://127.0.0.1:7225` 兜底
-2. ✅ **Ingest payload**：全文 markdown + frontmatter，让 KOS 自动抽实体
-3. ✅ **Namespace**：page path 前缀 `mail/{internal_id}` + `scope: mail-agent` frontmatter；实体节点仍合并到全局（这是好事，跨域 entity 合一）
-4. ⏳ **Auth env var**：用户已配 API key，下次 session 开始时告诉 client 读哪个 env var
+1. ✅ **Endpoint**：公网 `https://kos.chenge.ink`（cutover §6.28 后老 KOS-v1 退役，本机 7225 也不再暴露 ingest/digest）
+2. ✅ **Ingest payload**：slug 形如 `sources/mailagent-{message_id_normalized}` + 含 YAML frontmatter 的整篇 markdown（wire spec §7.1 模板），让 KOS dream-cycle (03:11 cron) 24h 内回填 auto_links / auto_timeline
+3. ✅ **Namespace**：page path 前缀 `sources/mailagent-…` + frontmatter `tags: [mailagent-ingest, email]`；实体节点仍合并到全局（这是好事，跨域 entity 合一）
+4. ✅ **Auth wire**：**OAuth 2.1 client_credentials + MCP JSON-RPC over HTTP with SSE**（2026-05-17 §6.28 cutover 后老 `KOS_API_KEY` plaintext bearer 退役）。3 个 env：`KOS_MCP_BASE` + `KOS_OAUTH_CLIENT_ID` + `KOS_OAUTH_CLIENT_SECRET`。client 已 register 在 KOS 端 `~/.gbrain/oauth-clients/mailagent.json`（scopes `read write`，丢了 ping Lucien revoke + 重 register）。完整 wire spec: mac mini `docs/EXTERNAL-CLIENTS-MCP-WIRE-HANDOFF.md`
 
 ---
 
@@ -31,11 +31,11 @@
 |---|---|---|---|
 | PR-2a | ✅ ship 2026-05-23 | FTS5 中文 smart wrapper（CJK auto prefix + char-AND fallback + token-AND 融合）— 本地 fallback | +675 / -31 (含 fixture v14 fix + 38 新单测) |
 | PR-2b | ✅ ship 2026-05-23 | 附件文本化 (pypdf/python-docx/python-pptx/xlsx) + DB v16 + `email_attachment_fts` + CLI extract + chat tool `email_search_attachments` — 本地 fallback | ~1500 (含 attachment_text.py extractor + repo methods + CLI + handler + chat tool + 44 个新单测) |
-| PR-2c | ⏳ blocked (KOS auth info) | **KOS client (TS + Py)** + .env config + health check + retry + circuit breaker | ~500 |
-| PR-2d | ⏳ blocked (PR-2c) | **Producer**：mail-sync `_sync_single_email_v3` 完成后异步 `KOSClient.ingest`；priority floor; KOS 不可达不阻塞 | ~400 |
-| PR-2e | ⏳ blocked (PR-2c) | **Consumer tools**：`kos_query` + `kos_digest` 加 `defaultToolRegistry`（silent tier, category=meta） | ~400 |
-| PR-2f | ⏳ blocked (PR-2e) | L1 hot block 注入：chat 启动时按 sender 异步 `kos_digest(people/{slug})` → system block | ~300 |
-| PR-2g | ⏳ blocked (PR-2f) | dogfood + eval：20 scenario + 5 KOS 专属新加；CLAUDE.md / arch doc 更新；翻 `MAILAGENT_KOS_ENABLED=1` 默认 | — |
+| PR-2c | ✅ ship 2026-05-23 | **KOS MCP client (TS + Py)** — OAuth 2.1 client_credentials + JSON-RPC tools/call with SSE response. `src/kos/client.py` ~300 LOC + `frontend/src/electron/main/kos/client.ts` ~330 LOC, 算法 1:1 对齐. 11 个 stable error code, token cache + safety buffer + 401 retry. 实测真 KOS endpoint health + query 跑通. | ~1500 (含 Python 39 测 + TS 36 测 + .env.example + design doc 重写) |
+| PR-2d | ⏳ pending (unblocked by PR-2c) | **Producer**：mail-sync `_sync_single_email_v3` 完成后异步 `KOSClient.put_page`；priority floor; KOS 不可达不阻塞 | ~400 |
+| PR-2e | ⏳ pending (unblocked by PR-2c) | **Consumer tools**：`kos_query` + `kos_digest` 加 `defaultToolRegistry`（silent tier, category=meta） | ~400 |
+| PR-2f | ⏳ pending (depends PR-2e) | L1 hot block 注入：chat 启动时按 sender 异步 `kos_digest(people/{slug})` → system block | ~300 |
+| PR-2g | ⏳ pending (depends PR-2d/2e/2f) | dogfood + eval：20 scenario + 5 KOS 专属新加；CLAUDE.md / arch doc 更新；翻 `MAILAGENT_KOS_*_ENABLED=1` 默认 | — |
 
 **PR-2a ship 摘要**（commit 待确认）:
 - 后端 `src/repository/email_repository.py`：`smart_query_transform` 模块级 fn + `EmailRepository.search_email_bodies_smart` method。算法 = 单字 CJK 加 `*`、多字 CJK 走 `(整 prefix OR 字符 AND fallback)`、多 token 间 AND、含 punct/operator 直接 raw passthrough。

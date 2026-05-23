@@ -142,80 +142,121 @@ chat harness 暴露 2 个 tool（替换原 plan 的 6 个本地 wiki_* tool）�
 
 ---
 
-## 3. Client 设计
+## 3. Client 设计（PR-2c 已实施 2026-05-23）
+
+> **协议反转**: 2026-05-17 §6.28 KOS cutover 后，原 KOS-v1 REST + `KOS_API_KEY` plaintext bearer 退役 (`kos-compat-api.ts` 进 `_archived/`)。现在走 **OAuth 2.1 client_credentials + MCP JSON-RPC over HTTP with SSE response**。完整 wire spec: mac mini `~/Projects/jarvis-knowledge-os-v2/docs/EXTERNAL-CLIENTS-MCP-WIRE-HANDOFF.md`。
 
 ### 3.1 配置（.env）
 
 ```bash
-# 公网主路径（推荐, MailAgent 跨机器也能用）
-KOS_BASE_URL=https://kos.chenge.ink
-# 本机兜底（mac mini 上跑时延更低；client 自动降级）
-KOS_FALLBACK_URL=http://127.0.0.1:7225
-# Auth (用户已配, 下一轮告诉 client 读 env var 名)
-KOS_API_KEY=<待用户填>
-# 总开关：M2 ship 前默认 0；不可达时降级为 false 自动关
-MAILAGENT_KOS_ENABLED=0
-# Producer 触发阈值（high signal 优先；低优先级邮件不推 避免图谱噪音）
-KOS_INGEST_PRIORITY_FLOOR=normal     # 推: critical/urgent/important/normal; 不推: low
-KOS_INGEST_TIMEOUT_MS=8000
-KOS_QUERY_TIMEOUT_MS=6000
+# 公网 MCP endpoint (跨机器都可达; 本机如需 LAN 备份可加 KOS_MCP_FALLBACK)
+KOS_MCP_BASE=https://kos.chenge.ink
+
+# OAuth client_credentials 凭据 (跟 Lucien 申请, 凭据本地源
+# ~/.gbrain/oauth-clients/mailagent.json mode 600; gitignored)
+KOS_OAUTH_CLIENT_ID=gbrain_cl_xxxxxxxxxxxx
+KOS_OAUTH_CLIENT_SECRET=gbrain_cs_xxxxxxxxxxxx
+
+# 总开关 - producer / consumer 各自独立 (M2 ship 前默认 false)
+MAILAGENT_KOS_INGEST_ENABLED=false        # PR-2d producer (邮件推 KOS)
+MAILAGENT_KOS_CONSUMER_ENABLED=false      # PR-2e/2f consumer (chat agent 查 KOS)
+
+# Producer 触发阈值 (high signal 优先; 低优先级邮件不推避免图谱噪声)
+KOS_INGEST_PRIORITY_FLOOR=normal          # 推: critical/urgent/important/normal; 不推: low
+
+# Producer dry-run - 跑完整 payload builder + 不真发 (灰度用)
+KOS_INGEST_DRY_RUN=false
+
+# Per-call timeout (秒)
+KOS_TIMEOUT_SECONDS=10
 ```
 
-### 3.2 Client API（TypeScript + Python 各一份）
+### 3.2 Auth flow + protocol
 
-**前端**（`frontend/src/electron/main/kos/client.ts`，新）：
+```
+1. 启动 (lazy) 第一次调 tool 时:
+   POST $KOS_MCP_BASE/token
+     Content-Type: application/x-www-form-urlencoded
+     grant_type=client_credentials & client_id=... & client_secret=... & scope=read+write
+   →  {access_token, token_type:'bearer', expires_in:3600, scope:'read write'}
 
-```typescript
-export interface KOSClient {
-  health(): Promise<{ ok: boolean; engine?: string; version?: string }>
-  query(input: KOSQueryInput): Promise<KOSQueryResult>
-  digest(input: KOSDigestInput): Promise<KOSDigestResult>
-}
+2. tools/call 调用:
+   POST $KOS_MCP_BASE/mcp
+     Authorization: Bearer <access_token>
+     Content-Type: application/json
+     Accept: application/json, text/event-stream
+     Body: {jsonrpc:'2.0', id, method:'tools/call', params:{name, arguments}}
+   →  Content-Type: text/event-stream
+       Body: "event: message\ndata: <jsonrpc envelope>\n\n"
+   → 提取 'data: ' 行 JSON.parse → result.content[0].text → JSON.parse 再得 caller-friendly value
 
-export interface KOSQueryInput {
-  query: string                   // 自然语言 / FTS / page path
-  limit?: number                  // 默认 10
-  mode?: 'conservative' | 'balanced' | 'tokenmax'  // gbrain 预设
-  scope?: string                  // 'mail-agent' / 'people' / 全局
-}
+3. 401 → 自动 refetch token + retry 一次 (无限循环防死循环). 无 refresh_token.
 
-export interface KOSQueryResult {
-  hits: Array<{
-    path: string
-    title: string
-    snippet: string
-    score: number
-    entity_refs?: string[]
-  }>
-  // gbrain 自带 token usage breakdown
-  usage?: { input_tokens: number; output_tokens: number; cost_usd: number }
-}
+4. Token cache: in-memory + expires_at, 60s 安全缓冲. 单进程足够 (mail-sync /
+   chat agent 都是单 process). 重启进程重换 token (3600s × 50 req limit 充裕).
 ```
 
-**后端**（`src/kos/client.py`，新，给 mail-sync producer 用）：
+### 3.3 Client API（TypeScript + Python 双份, 算法 1:1 对齐）
+
+**Python**（`src/kos/client.py`, ship 2026-05-23）：
 
 ```python
 class KOSClient:
-    def __init__(self, base_url, fallback_url, api_key, timeout_ms): ...
-    def health(self) -> KOSHealth: ...
-    def ingest(self, page: KOSPage) -> KOSIngestResult: ...
-    # 不暴露 query/digest 给后端 — 这两个走前端 chat tool
+    def __init__(
+        self,
+        base_url: Optional[str] = None,      # env KOS_MCP_BASE
+        client_id: Optional[str] = None,     # env KOS_OAUTH_CLIENT_ID
+        client_secret: Optional[str] = None, # env KOS_OAUTH_CLIENT_SECRET
+        *, timeout_seconds: float = 10.0, scope: str = "read write",
+        http_client: Optional[httpx.Client] = None,  # 测试注入 MockTransport
+    ): ...
+
+    @property
+    def configured(self) -> bool: ...
+
+    # 免 auth, GET /health
+    def health(self) -> dict: ...
+
+    # 原始 tools/call, 401 自动 retry, 返 caller-friendly unwrapped value
+    def call_tool(self, name: str, arguments: dict) -> Any: ...
+
+    # 便捷方法
+    def query(self, query: str, *, limit: int = 10, expand: bool = False) -> list[dict]: ...
+    def list_pages(self, *, limit: int = 50, type=None, tag=None, ...) -> Any: ...
+    def put_page(self, slug: str, content: str) -> dict: ...
 ```
 
-### 3.3 Retry / circuit breaker / fallback
+**TypeScript**（`frontend/src/electron/main/kos/client.ts`, ship 2026-05-23）：算法 1:1 镜像 Python 版本；构造接受 `fetchImpl?: typeof fetch` 注入参数用作单测 mock。
 
-- **Health check on boot**：启动时 `GET /health`，失败 → `KOSClient` 自动切 `KOS_FALLBACK_URL`；都失败 → `enabled = false`（本 session 内不再 retry，避免每次 chat / sync 都炸 8s 等超时）
-- **Per-call timeout**：query 6s / ingest 8s
-- **Producer 失败**：mail-sync log warning，邮件不重试（KOS 不可达时数据丢失可接受 — 主路径 Mail.app + Notion 还在）
-- **Consumer 失败**：tool_result 返 `{ok:false, code:'E_KOS_UNREACHABLE'}` → LLM 自然 fallback `email_search_fulltext` 等本地工具
+### 3.4 KOSError code 矩阵
 
-### 3.4 不可达时的降级矩阵
-
-| 场景 | KOS reachable | KOS unreachable |
+| code | 含义 | caller 该怎么办 |
 |---|---|---|
-| chat agent 检索 | `kos_query` 返跨域结果 | LLM 看到 E_KOS_UNREACHABLE → 转 `email_search_fulltext` 本地 FTS5 |
-| mail-sync ingest | 异步 push，~50-100ms 完成 | warning log，邮件继续走 Notion sync 主路径 |
-| chat L1 hot block 注入 | 包含当前 sender 的 KOS digest | 仅本地邮件 metadata，无 cross-context |
+| `E_KOS_NOT_CONFIGURED` | 3 env 至少一个缺 | producer 跳过 (sync 不阻塞); chat tool 返 fallback |
+| `E_KOS_HEALTH` | `/health` 失败 | boot 期 → enabled=false; 中途 → log warning |
+| `E_KOS_NETWORK` | fetch / connect / timeout | producer 跳过; chat tool 退到本地 FTS5 |
+| `E_KOS_TOKEN_HTTP` | `/token` 非 200 (cred 错 / Lucien revoke) | 致命 — 飞书告警, enabled=false 等用户修 |
+| `E_KOS_TOKEN_INVALID` | `/token` 200 但 access_token 缺 | 同上, 上游协议变了 |
+| `E_KOS_UNAUTHORIZED` | `/mcp` 401 | client 自动 refresh + retry 一次. 第二次还 401 → 上抛 |
+| `E_KOS_RATE_LIMIT` | `/mcp` 429 (50/15min) | producer 排队 / chat tool 等待 backoff |
+| `E_KOS_HTTP` | `/mcp` 其他 4xx/5xx | log + 单次跳过 (不重试) |
+| `E_KOS_PARSE` | SSE 提取或 JSON.parse 失败 | log + 跳过 |
+| `E_KOS_RPC` | JSON-RPC envelope `error` 非空 | 业务错 (slug 冲突 / 参数非法 等), caller 视情况处理 |
+
+### 3.5 不可达时的降级矩阵
+
+| 场景 | KOS reachable | KOS unreachable / E_KOS_* |
+|---|---|---|
+| chat agent 检索 | `kos_query` 返跨域结果 | LLM 看到 ok:false → 转 `email_search_fulltext` 本地 FTS5 (PR-2a) |
+| mail-sync ingest | `put_page` 异步 push, ~50-100ms 完成 | warning log; 邮件继续走 Notion sync 主路径; 不重试 |
+| chat L1 hot block 注入 | 含当前 sender 的 KOS digest | 仅本地邮件 metadata, 无 cross-context |
+
+### 3.6 测试
+
+- Python: `tests/kos/test_client.py` — 39 个单测 (httpx.MockTransport 注入)
+- TypeScript: `frontend/tests/main/kos/client.test.ts` — 36 个单测 (fetchImpl 注入)
+- 共同覆盖: configured / health / OAuth /token flow / token cache + safety buffer / SSE + JSON 双 response 形式 parse / 401 retry / 429 / 5xx / JSON-RPC error envelope / SSE 异常 case
+- 实测 (smoke against 真 KOS): `python -c "from src.kos import KOSClient; c = KOSClient(); print(c.health()); print(c.query('redis', limit=3))"` 已验证 protocol 跑通
 
 ---
 
