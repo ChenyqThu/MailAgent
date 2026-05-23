@@ -344,3 +344,117 @@ class FeishuAlertNotifier:
             source=component.lower(),
             alert_key=f"recovery:{component}",
         )
+
+    # ── DavMail backend 健康告警 (roadmap §4.5.1 + §4.5.2 + §4.5.3) ─────
+
+    async def alert_davmail_token_expiring(self, age_days: float):
+        """DavMail OAuth refresh_token 接近过期 (≥80 天没 refresh)"""
+        days_left = max(0.0, 90.0 - age_days)
+        await self.send_alert(
+            level="warning",
+            title="DavMail OAuth token 即将过期",
+            content=(
+                f"davmail-poc/token/token.dat 已 **{age_days:.1f} 天**没刷新。"
+                f"refresh_token 90 天有效期，预计剩余 **~{days_left:.0f} 天**。\n"
+                "**建议**: 检查 davmail-poc 是否正常 refresh；接近 90 天需手动"
+                "重走 O365Manual OAuth flow。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "Token age": f"{age_days:.1f} 天",
+                "估剩余": f"{days_left:.0f} 天",
+                "排查命令": "`pm2 logs davmail-poc --lines 50`",
+            },
+            alert_key="davmail_token_expiring",
+        )
+
+    async def alert_davmail_token_critical(self, age_days: float):
+        """DavMail OAuth refresh_token 极接近过期 (≥87 天)"""
+        days_left = max(0.0, 90.0 - age_days)
+        await self.send_alert(
+            level="critical",
+            title="DavMail OAuth token 即将失效（紧急）",
+            content=(
+                f"token.dat 已 **{age_days:.1f} 天**没刷新，预计剩余 "
+                f"**~{days_left:.0f} 天**就要失效。\n"
+                "**立即操作**: 重走 O365Manual OAuth flow，否则 IMAP/SMTP "
+                "将停止工作，必须回切 applescript backend。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "Token age": f"{age_days:.1f} 天",
+                "估剩余": f"{days_left:.0f} 天",
+                "回切命令": '`echo "MAILAGENT_BACKEND=applescript" >> .env && pm2 restart mail-sync`',
+            },
+            alert_key="davmail_token_critical",
+        )
+
+    async def alert_davmail_oauth_failure(self, log_excerpt: str):
+        """davmail.log 出现 BadPaddingException / refresh_token expired 类错误"""
+        await self.send_alert(
+            level="critical",
+            title="DavMail OAuth 续期失败",
+            content=(
+                "davmail-poc 日志检测到 OAuth 错误，refresh_token 可能已失效。\n"
+                f"**日志行**: `{log_excerpt[:200]}`\n"
+                "**立即操作**: 重走 O365Manual OAuth flow 或回切 applescript backend。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "Token 路径": "davmail-poc/token/token.dat",
+                "排查命令": "`tail -50 davmail-poc/logs/davmail.log`",
+            },
+            alert_key="davmail_oauth_failure",
+        )
+
+    async def alert_davmail_process_down(
+        self, consecutive_fails: int, port: int, proto: str = "IMAP"
+    ):
+        """davmail-poc 进程死亡 — TCP probe 连续失败 ≥3 次"""
+        await self.send_alert(
+            level="critical",
+            title=f"DavMail {proto} 端口不可达",
+            content=(
+                f"davmail-poc {proto} 端口 **{port}** 已连续 **{consecutive_fails}** "
+                "次 TCP probe 失败（≥3min）。进程可能已死亡。\n"
+                "**立即操作**: `pm2 status davmail-poc` + `pm2 restart davmail-poc`。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "端口": str(port),
+                "协议": proto,
+                "连续失败": str(consecutive_fails),
+                "重启命令": "`pm2 restart davmail-poc`",
+            },
+            alert_key=f"davmail_process_down:{proto}",
+        )
+
+    async def alert_davmail_process_recovered(self, proto: str = "IMAP"):
+        """davmail-poc 进程恢复"""
+        await self.send_alert(
+            level="info",
+            title=f"DavMail {proto} 已恢复",
+            content=f"davmail-poc {proto} 端口已恢复响应。",
+            source="davmail_watchdog",
+            alert_key=f"davmail_process_recovered:{proto}",
+        )
+
+    async def alert_davmail_ews_throttling(self, count: int):
+        """EWS throttling burst — 5min 内 ≥3 次 EWSThrottlingException"""
+        await self.send_alert(
+            level="warning",
+            title="DavMail EWS throttling 触发",
+            content=(
+                f"davmail.log 5min 内 EWS throttle 事件 **{count}** 次。"
+                "已自动暂停 uid-mapper backfill（写 "
+                "`sync_state['davmail_uid_backfill_paused']=true`）。\n"
+                "**自动恢复**: 5-30min 后 throttle 解除，watchdog 自动 resume。"
+            ),
+            source="davmail_watchdog",
+            details={
+                "事件数 (5min)": str(count),
+                "暂停标记": "`davmail_uid_backfill_paused=true`",
+                "解除方法": "等 throttle 自然解除 / 手动 `set_state('davmail_uid_backfill_paused','false')`",
+            },
+            alert_key="davmail_ews_throttling",
+        )

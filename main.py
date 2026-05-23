@@ -238,6 +238,31 @@ class EmailNotionSyncApp:
             if self.alerter:
                 self.stats_reporter.add_collector("alerts", lambda: self.alerter.get_stats())
 
+        # roadmap §4.5.1 + §4.5.2 + §4.5.3 — DavMail backend 健康 watchdog
+        # 仅 davmail mode 启动。failure / token expiry / EWS throttling 三类
+        # 信号统一在这个 60s 循环里检测，状态落 sync_state['davmail.*']
+        # 让 frontend / dashboard 直读，跃迁时调 alerter 发飞书。
+        self.davmail_watchdog = None
+        if self.backend.backend_origin == "davmail":
+            from pathlib import Path as _Path
+            from src.mail.davmail_watchdog import DavMailWatchdog
+            self.davmail_watchdog = DavMailWatchdog(
+                sync_store=self.watcher.sync_store,
+                alerter=self.alerter,
+                davmail_root=_Path(__file__).resolve().parent / "davmail-poc",
+                imap_host=config.davmail_host,
+                imap_port=config.davmail_imap_port,
+                smtp_port=config.davmail_smtp_port,
+            )
+            if self.stats_reporter:
+                self.stats_reporter.add_collector(
+                    "davmail", self.davmail_watchdog.get_snapshot
+                )
+            logger.info(
+                f"[davmail-watchdog] configured (imap={config.davmail_host}:"
+                f"{config.davmail_imap_port} smtp=:{config.davmail_smtp_port})"
+            )
+
         # ping-island 灵动岛集成（Island-Sprint 2，默认关）
         self.island_enabled = bool(config.ping_island_enabled)
         if self.island_enabled:
@@ -363,10 +388,59 @@ class EmailNotionSyncApp:
                     schedule_backfill_task(config, self.watcher.sync_store, delay_sec=10)
                 )
 
+            # roadmap §4.5.1-3 — davmail health watchdog (仅 davmail mode)
+            davmail_watchdog_task = None
+            if self.davmail_watchdog:
+                davmail_watchdog_task = asyncio.create_task(
+                    self.davmail_watchdog.run()
+                )
+
             # Sprint 15: 启动 outbox FanoutWorker（如果配置开启）
             fanout_task = None
             if self.fanout_worker:
                 fanout_task = asyncio.create_task(self.fanout_worker.run())
+
+            # Phase 1 Calendar SSoT: 启动 CalendarSyncWorker (DavMail CalDAV → SQLite
+            # calendar_event 表的增量 sync). 默认关闭, 灰度期手动启用. 详见 plan §1.4 +
+            # frontend-view-silly-knuth.md.
+            calendar_sync_task = None
+            if config.calendar_caldav_sync_enabled:
+                try:
+                    from src.calendar_notion.caldav_reader import CalDAVReader
+                    from src.calendar_sync import (
+                        CalendarEventRepository,
+                        CalendarSyncWorker,
+                    )
+
+                    self.calendar_sync_worker = CalendarSyncWorker(
+                        cfg=config,
+                        reader=CalDAVReader(config),
+                        repo=CalendarEventRepository(config.sync_store_db_path),
+                        poll_interval=float(
+                            config.calendar_caldav_sync_poll_interval_sec
+                        ),
+                        full_sync_past_days=config.calendar_caldav_sync_window_past_days,
+                        full_sync_window_days=config.calendar_caldav_sync_window_future_days,
+                    )
+                    calendar_sync_task = asyncio.create_task(
+                        self.calendar_sync_worker.run()
+                    )
+                    logger.info(
+                        f"[calendar-sync] worker started "
+                        f"(poll={config.calendar_caldav_sync_poll_interval_sec}s, "
+                        f"window=[-{config.calendar_caldav_sync_window_past_days}d, "
+                        f"+{config.calendar_caldav_sync_window_future_days}d])"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[calendar-sync] failed to start (main loop continues): {e}"
+                    )
+                    self.calendar_sync_worker = None
+            else:
+                self.calendar_sync_worker = None
+                logger.info(
+                    "[calendar-sync] disabled (CALENDAR_CALDAV_SYNC_ENABLED=false)"
+                )
 
             # Sprint 16: 启动本地 SSE server (mail-sync 进程内)
             # 前端 Electron main 直连 127.0.0.1:9200, 0 RTT;
@@ -431,6 +505,13 @@ class EmailNotionSyncApp:
                 tasks.append(island_snooze_task)
             if fanout_task:
                 tasks.append(fanout_task)
+            if davmail_watchdog_task:
+                tasks.append(davmail_watchdog_task)
+            if calendar_sync_task:
+                # Phase 1 Calendar SSoT — graceful stop 让 worker 跑完当前 tick 再退
+                if self.calendar_sync_worker:
+                    self.calendar_sync_worker.stop()
+                tasks.append(calendar_sync_task)
             for task in tasks:
                 task.cancel()
                 try:
