@@ -936,7 +936,7 @@ python3 scripts/dev/test_mail_reader.py
 - Dogfood handoff：[`frontend/SPRINT19-M1-HANDOFF.md`](./frontend/SPRINT19-M1-HANDOFF.md)
 - 决策记录：`~/.claude/plans/subagent-plan-lexical-moler.md`
 
-**M2 起点**（dogfood 通过后）：FTS5 中文 smart wrapper + 附件文本化（PDF/docx/xlsx/pptx）+ LLM Wiki（SQLite 表 + shadow git export + 借鉴 gbrain `[[link]]` / `## Facts`，不内嵌 gbrain 本体）。
+**M2 起点 — 决策反转**（2026-05-23）：原"自研 SQLite wiki"撤销，改为接入用户已有的 **Jarvis KOS v2**（gbrain fork on mac mini @ `kos.chenge.ink` + `127.0.0.1:7225`）。MailAgent 作为 KOS 的第 4 个消费者（Notion Knowledge Agent / OpenClaw / Feishu signal detector 已在用）。Producer：mail-sync 邮件 sync 完异步推 `/ingest`（path `mail/{internal_id}` + `scope:mail-agent` frontmatter）让 KOS 自动抽实体并入主图。Consumer：chat agent `kos_query` / `kos_digest` tool 调跨域知识。本地 FTS5 中文 wrapper + 附件文本化（PR-2a/2b）保留作 KOS 不可达时的 fallback。完整设计：[`docs/kos-integration-design.md`](./docs/kos-integration-design.md) + M2 路线 [`frontend/SPRINT19-M2-PLAN.md`](./frontend/SPRINT19-M2-PLAN.md)。
 
 ---
 

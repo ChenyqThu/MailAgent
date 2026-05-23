@@ -26,9 +26,9 @@
 ```
 用户："帮我查下 Bob 上次提的集成方案细节，然后起草一个简短回复说本周内确认"
   ↓
-LLM iter 1: email_search(sender_contains='bob', subject_contains='集成')
-            → ctx 收到候选列表
-LLM iter 2: email_body(top_hit.internal_id)
+LLM iter 1: kos_query(query='Bob Acme 集成方案', scope='global')
+            → KOS 返跨邮件/Notion手记/会议笔记的 page list + Bob 档案
+LLM iter 2: email_body(top_hit.internal_id) (fallback: kos_query 不可用走本地)
             → ctx 收到正文
 LLM iter 3: email_draft_reply(internal_id, body_markdown)
             → preview tier=edit ConfirmToolDialog 弹出
@@ -39,7 +39,7 @@ LLM iter 4 (optional): "草稿已写好，等你审"
             → stop_reason='end_turn' → assistant complete
 ```
 
-参考 Claude Code 风格（tool registry + harness loop + 用户协作），**不走** Devin "agent 黑盒长跑"路线。LLM Wiki 借鉴 Karpathy 2026-04 gist + gbrain 思路，但**架构上不内嵌 gbrain**（gbrain 是 server-side multi-user 假设 Postgres + 后台 cron 的方案，Electron 单进程嵌入会拖 Bun + PGLite 30-50MB bundle 且 mtime 语义跟 prompt cache 单 mtime 策略错配；M2 只 port 它的两个低成本闪光点：`[[wiki/path]]` 自动 link 提取 + `## Facts` 围栏，详见 [`docs/agent-harness-design.md`](./agent-harness-design.md) M2 段）
+参考 Claude Code 风格（tool registry + harness loop + 用户协作），**不走** Devin "agent 黑盒长跑"路线。**LLM Wiki 不自研、不内嵌**：M2 直接接入用户已有的 Jarvis KOS v2（gbrain fork on mac mini，公网 `kos.chenge.ink`），MailAgent 作为 KOS 的第 4 个消费者（已有 Notion Knowledge Agent / OpenClaw / Feishu signal detector）。producer 走 mail-sync 后端推 `/ingest`，consumer 走 chat agent `kos_query` / `kos_digest` tool。详见 [`kos-integration-design.md`](./kos-integration-design.md)。
 
 ---
 
@@ -299,6 +299,7 @@ Anthropic 协议要求下一轮 `tool_result.tool_use_id` 完全匹配上一轮 
 | **EmailRepository FTS5 (`email_body_fts`)** | `email_search_fulltext` tool 调 `searchEmails(opts)` → 间接走 backend `EmailRepository.search_email_bodies`；M2 加中文 smart wrapper + `email_attachment_fts` |
 | **DavMail / AppleScript dual backend** | 无关。harness 在 chat 层；邮件本身从哪个 backend sync 来不影响 chat agent 看正文（统一从 SQLite SSoT 读） |
 | **v4 SQLite SSoT** | harness 读邮件正文 = `getEmailBody → email_body.body_markdown`（v4 SSoT），不再走 Notion API / AppleScript 重抽 |
+| **Jarvis KOS v2 (gbrain fork) @ mac mini** | M2 引入：MailAgent 作为 KOS 的第 4 消费者（Notion/OpenClaw/Feishu 已在）。producer：mail-sync 邮件 sync 完异步 POST `/ingest`（path `mail/{internal_id}`）；consumer：chat agent `kos_query` / `kos_digest` tool。Endpoint：`kos.chenge.ink` 主 + `127.0.0.1:7225` 兜底。设计：[`kos-integration-design.md`](./kos-integration-design.md) |
 
 ---
 
@@ -306,20 +307,29 @@ Anthropic 协议要求下一轮 `tool_result.tool_use_id` 完全匹配上一轮 
 
 详见 [`docs/agent-harness-design.md`](./agent-harness-design.md) §M2-M4 + `~/.claude/plans/subagent-plan-lexical-moler.md` §5-Phase 路线图。
 
-### M2 — Wiki minimal + retrieval 升级（~1 周）
+### M2 — KOS Integration + retrieval 升级（~3-4 周）
+
+**决策反转（2026-05-23）**：原 plan "M2 自研 SQLite wiki" 已撤销，改为接入用户已有的 **Jarvis KOS v2**（gbrain fork on mac mini @ `kos.chenge.ink` + `127.0.0.1:7225`）。MailAgent 作为 KOS 的第 4 个消费者（Notion Knowledge Agent / OpenClaw / Feishu signal detector 之后）。完整设计见 [`kos-integration-design.md`](./kos-integration-design.md)。
 
 | 子 PR | 范围 |
 |---|---|
-| PR-2a | FTS5 中文 smart wrapper（CJK auto `*` 通配 + OR 融合），`email_search_fulltext` 接入 |
-| PR-2b | 附件文本化（`pypdf` / `python-docx` / `python-pptx` / xlsx CSV）+ `email_attachment_text` + `email_attachment_fts` + worker queue + `email_search_attachments` tool |
-| PR-2c | `wiki_pages` 数据访问层 + 4 读 wiki tool（read/list_index/search/link_query）+ shadow git export |
-| PR-2d | `wiki_write` / `wiki_delete` (preview confirmation) + L1 hot wiki block 注入 + 单 breakpoint cache_control 集成 |
+| PR-2a | FTS5 中文 smart wrapper（CJK auto `*` 通配） — **本地 fallback**，KOS 不可达时 chat 仍能用 |
+| PR-2b | 附件文本化（`pypdf` / `python-docx` / `python-pptx` / xlsx CSV）+ `email_attachment_fts` + worker queue + `email_search_attachments` tool — **本地 fallback** |
+| PR-2c | **KOS client** (TS + Py) + .env config (`KOS_BASE_URL` / `KOS_FALLBACK_URL` / `KOS_API_KEY` / `MAILAGENT_KOS_ENABLED`) + health check + retry + circuit breaker + boot-time fallback URL 切换 |
+| PR-2d | **Producer pipeline**：mail-sync `_sync_single_email_v3` 完 Notion sync 后异步 `KOSClient.ingest`；payload = 全文 markdown + frontmatter (`path: mail/{internal_id}` + `scope: mail-agent`)；priority floor 过滤 (`KOS_INGEST_PRIORITY_FLOOR=normal`)；KOS 不可达不阻塞主同步 |
+| PR-2e | **Consumer tools**：`kos_query` + `kos_digest` 加 `defaultToolRegistry`（silent tier, category=meta）；替换原 plan 的 6 个本地 wiki_* tool |
+| PR-2f | **L1 hot block 注入**：chat 启动时若 emailContext.senderAddr 存在 → 异步 `kos_digest(people/{sender_slug})` 注入 system block；保留 cache_control 双 breakpoint |
+| PR-2g | dogfood + eval 跑 + CLAUDE.md / architecture doc 更新 |
 
-**Wiki 实现路线**：方案三（plan 已锁）—— SQLite 表存储 + shadow git export 框架不变，**port gbrain 两个低成本闪光点**：
-- `[[wiki/path]]` link 语法：wiki_write 时正则提取 → 更新 `refs_json` 双向引用
-- `## Facts` markdown 围栏：YAML/key=value 块自动抽进 `agent_memory_kv`
+**保留**（PR-1a 已建好留位）：chat_db v3 的 `wiki_pages` / `wiki_fts` / `agent_memory_kv` 表保留但**不主动写**；M3 可评估是否做"KOS 不可达时的离线缓存层"。
 
-**不 port**（架构错配）：pgvector / 后台 cron 修复 / typed edges / ZeroEntropy 重排 / Bun + PGLite 内嵌。
+**KOS 自带能力直接复用**（不重写）：
+- 自动 typed-link 提取（`emailed_with` / `works_at` / `attended` 等，零 LLM）
+- 知识图谱多跳遍历 + backlink-boosted ranking
+- 混合检索：vector (HNSW) + BM25 + RRF + ZeroEntropy rerank
+- `## Facts` 围栏 → typed metric columns + temporal trajectory
+- 夜间 consolidate / 矛盾检测 / 引用修复（KOS cron 系统自跑）
+- entity 跨域合并（邮件里 `bob@acme.com` 跟 Notion 手记里 `[[people/bob-acme]]` 合一）
 
 ### M3 — Memory expansion + Embedding eval（~5-7 天）
 

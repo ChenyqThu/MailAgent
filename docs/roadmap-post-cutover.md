@@ -349,10 +349,20 @@ mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=
 - 记 pass rate → `docs/eval/p1-baseline.md`
 - 期望 ≥ 70% (≥ 14/20) 才翻默认 flag
 
-**M2 起点**（dogfood 通过后）：
-- PR-2a FTS5 中文 smart wrapper（CJK auto `*` 通配）
-- PR-2b 附件文本化（pypdf/python-docx/python-pptx）+ `email_attachment_fts` + worker queue
-- PR-2c-2d Wiki 数据访问 + 4 wiki tool + L1 hot block + cache_control 集成 — **决策已锁**：自研 SQLite 表 + shadow git export，**不内嵌 gbrain 本体**（架构错配 Bun + PGLite + 50K page 过剩），只 port 两个低成本闪光点 (`[[wiki/path]]` 自动 link + `## Facts` 围栏)
+**M2 起点 — 决策反转 (2026-05-23)**：原"自研 SQLite wiki"撤销，**改为接入用户已有的 Jarvis KOS v2** (gbrain fork on mac mini @ `kos.chenge.ink` + `127.0.0.1:7225`)。MailAgent 作为 KOS 的第 4 个消费者（Notion Knowledge Agent / OpenClaw / Feishu signal detector 已在用）。完整设计：[`kos-integration-design.md`](./kos-integration-design.md)。
+
+PR 拆分（7 PR，~3-4 周）：
+- PR-2a FTS5 中文 smart wrapper — **本地 fallback**
+- PR-2b 附件文本化 (pypdf/python-docx/python-pptx) + `email_attachment_fts` — **本地 fallback**
+- PR-2c **KOS client** (TS + Py) + config + health check + retry + circuit breaker
+- PR-2d **Producer**：mail-sync 邮件 sync 完异步 `/ingest`（path `mail/{internal_id}` + `scope:mail-agent` frontmatter）
+- PR-2e **Consumer tools**：`kos_query` + `kos_digest` 加 `defaultToolRegistry`
+- PR-2f **L1 hot block 注入**：chat 启动时按 sender 异步拉 `kos_digest(people/{slug})`
+- PR-2g dogfood + eval (5 KOS 专属 scenario)
+
+**保留**：chat_db v3 `wiki_pages` / `wiki_fts` / `agent_memory_kv` 表（PR-1a 已建）保留**不主动写**，M3 评估是否做"KOS 不可达时的离线缓存层"。
+
+**为何转**：KOS 已有 entity extraction (24k people / 5k companies) / 知识图谱多跳 / 混合检索 (vector + BM25 + RRF + ZeroEntropy rerank) / Facts trajectory / 夜间 consolidate；用户其他 agent (Notion / OpenClaw / Feishu) 已在用同一个 KOS — MailAgent 自维护 wiki 等于建邮件孤岛，丢跨域 entity 合并的最大价值。
 
 **关联文档**：
 - 架构（ship 状态）：[`architecture_agent_harness.md`](./architecture_agent_harness.md)

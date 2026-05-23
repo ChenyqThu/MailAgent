@@ -4,7 +4,17 @@
 >
 > 本文档配合 `/Users/chenyuanquan/.claude/plans/subagent-plan-lexical-moler.md`（路线图 + 决策依据）与 `frontend/SPRINT19-AGENT-HARNESS-HANDOFF.md`（接手要点）阅读。Plan 文档 = 决策 + 时间线；本文档 = 工程级实施指南，照着写代码用。
 >
-> **Owner**：Sprint 19 lead。**Status**：P0 设计阶段。
+> **Owner**：Sprint 19 lead。**Status**：M1 已 ship，M2 起 Wiki 部分反转方向。
+>
+> ## ⚠️ 2026-05-23 M2 路径反转（plan D1 撤销 → D9 新决策）
+>
+> 本文档 §6 (M2 builtin tool catalog 含 wiki_* 6 个 tool) / §7 (Wiki context 4 层注入) / §10 (M3 Memory expansion) 的 **wiki 自研路径已撤销**。
+>
+> M2 改为接入用户已有的 **Jarvis KOS v2**（gbrain fork on mac mini @ `kos.chenge.ink` + `127.0.0.1:7225`）。原 6 个本地 wiki_* tool 改为 2 个 KOS tool（`kos_query` / `kos_digest`），ingest 路径由 mail-sync 后端独占，chat agent 只读不写。
+>
+> **新设计权威文档**：[`docs/kos-integration-design.md`](./kos-integration-design.md) + [`frontend/SPRINT19-M2-PLAN.md`](../frontend/SPRINT19-M2-PLAN.md)。
+>
+> 本文档 §1-§5 (M1 范围：harness loop / ToolRegistry / Anthropic tool_use SSE / chat_db v3 schema / Confirmation tier) 仍是 **M1 实施的权威 ref**，不变。§6 (M1 10 个 builtin tool catalog) 不变；§6 中 "M2 +6 个 wiki tool" 部分以下读为历史。
 
 ---
 
