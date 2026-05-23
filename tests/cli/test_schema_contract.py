@@ -419,11 +419,15 @@ class TestSchemaContract:
         async def fake_discover(*args, **kwargs):
             return []
         import src.calendar_notion.recurring_invite as rr_mod
-        from src.mail import applescript_arm
         monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
+        # Phase 0.1 fix: CLI 走 cli.backend.arm (factory), 不再硬编码 AppleScriptArm.
+        # 测试环境 patch CliContext.backend property 返回 mock backend.
+        class _FakeBackend:
+            arm = object()
+        from src.cli import context as _ctx_mod
         monkeypatch.setattr(
-            applescript_arm.AppleScriptArm, "__init__",
-            lambda self, *a, **kw: None,
+            _ctx_mod.CliContext, "backend",
+            property(lambda self: _FakeBackend()),
         )
         result = _invoke(cli_runner, "calendar", "recurring", "discover",
                          "-o", "json", db_path=seeded_db)
@@ -558,3 +562,138 @@ class TestSchemaContract:
 
 
 from tests.cli.conftest import extract_last_json_object as _last_json  # noqa: E402
+
+
+# ============================================================
+# Phase 2 §2.2 — calendar events / today / week / event-get / sync-status / sync-now
+# ============================================================
+
+class TestCalendarPhase2SchemaContract:
+    """Phase 2 新 CLI 输出 schema 契约 verification."""
+
+    @staticmethod
+    def _seed_event(db_path, **kwargs):
+        from datetime import datetime, timedelta, timezone
+        from src.calendar_notion.caldav_reader import CalendarEvent
+        from src.calendar_sync import CalendarEventRepository
+
+        start = kwargs.pop("start", datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc))
+        ev = CalendarEvent(
+            summary=kwargs.pop("summary", "Test"),
+            start=start, end=start + timedelta(hours=1),
+            ical_uid=kwargs.pop("ical_uid", "uid-1"),
+            calendar_name=kwargs.pop("calendar_name", "Personal"),
+            rrule=kwargs.pop("rrule", ""),
+        )
+        repo = CalendarEventRepository(str(db_path))
+        return repo.upsert_from_caldav_event(
+            ev, source=kwargs.pop("source", "caldav"),
+        )
+
+    def test_calendar_events_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+        self._seed_event(seeded_db)
+        result = _invoke(cli_runner, "calendar", "events",
+                         "--from", "2026-05-01", "--to", "2026-07-01",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-events-list.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_today_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+        result = _invoke(cli_runner, "calendar", "today",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-events-list.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_week_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+        result = _invoke(cli_runner, "calendar", "week",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-events-list.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_event_get_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+        self._seed_event(seeded_db, ical_uid="get-me")
+        result = _invoke(cli_runner, "calendar", "event-get", "get-me",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-event-get.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_event_get_not_found_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        """error wrapper 也应 schema-conformant."""
+        from jsonschema import validate
+        result = _invoke(cli_runner, "calendar", "event-get", "nope-uid",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code != 0
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-event-get.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_sync_status_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader,
+    ):
+        from jsonschema import validate
+        from src.calendar_sync import CalendarEventRepository
+        # Seed 一行 sync_state
+        repo = CalendarEventRepository(str(seeded_db))
+        repo.upsert_sync_state("Personal", ctag="ctag-1", full_sync=True)
+
+        result = _invoke(cli_runner, "calendar", "sync-status",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-sync-status.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)
+
+    def test_calendar_sync_now_matches_schema(
+        self, cli_runner, cli_env, seeded_db, schema_loader, monkeypatch,
+    ):
+        from datetime import datetime, timedelta, timezone
+        from jsonschema import validate
+        from src.calendar_notion.caldav_reader import CalendarEvent, CalDAVReader
+
+        stub_ev = CalendarEvent(
+            summary="Stub", start=datetime(2026, 6, 1, 9, tzinfo=timezone.utc),
+            end=datetime(2026, 6, 1, 10, tzinfo=timezone.utc),
+            ical_uid="stub-1", calendar_name="StubCal",
+        )
+        monkeypatch.setattr(
+            CalDAVReader, "list_calendar_names_for_sync",
+            lambda self: ["StubCal"],
+        )
+        monkeypatch.setattr(
+            CalDAVReader, "list_events_with_full_detail",
+            lambda self, ws, we, *, calendar_name=None: [stub_ev],
+        )
+        monkeypatch.setattr(
+            CalDAVReader, "get_collection_ctag",
+            lambda self, cal: "fake-ctag",
+        )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+
+        result = _invoke(cli_runner, "calendar", "sync-now",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+        schema, registry = schema_loader("calendar-sync-now.schema.json")
+        validate(instance=payload, schema=schema, registry=registry)

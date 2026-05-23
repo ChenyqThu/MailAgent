@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/calendar-sync-status.schema.json",
+  "title": "mailagent calendar sync-status",
+  "description": "Phase 2 §2.1 — 列 calendar_sync_state 表 (每个 calendar 一行 CalDAV sync 状态).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["calendars", "total", "worker_enabled"],
+          "properties": {
+            "calendars": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "calendar_name", "ctag", "sync_token",
+                  "last_full_sync_at_iso", "last_incremental_sync_at_iso",
+                  "last_error"
+                ],
+                "properties": {
+                  "calendar_name": {"type": "string"},
+                  "ctag": {"type": ["string", "null"]},
+                  "sync_token": {"type": ["string", "null"]},
+                  "last_full_sync_at_iso": {"type": ["string", "null"]},
+                  "last_incremental_sync_at_iso": {"type": ["string", "null"]},
+                  "last_error": {"type": ["string", "null"]}
+                }
+              }
+            },
+            "total": {"type": "integer", "minimum": 0},
+            "worker_enabled": {"type": "boolean"}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

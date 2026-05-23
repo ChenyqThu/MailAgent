@@ -67,17 +67,38 @@ def _coerce_aware(dt: Any) -> Optional[datetime]:
 
 @dataclass
 class CalendarEvent:
-    """从 CalDAV 拿到的单个 event (LLM-friendly 简化形式)."""
+    """从 CalDAV 拿到的单个 event.
 
+    Phase 1 扩展 (plan §1.2): 在原 LLM-friendly 简化形式基础上加 ical_uid /
+    sequence / rrule / exdates / rdates / status / response_status / recurrence_id /
+    attendees_detail 字段, 让 worker / repository 能完整落库到 calendar_event 表.
+    保留 to_llm_brief() 向后兼容 LLM agent 的 build_llm_caldav_context 入口.
+    """
+
+    # 原 LLM-brief 必须字段
     summary: str  # 标题
     start: datetime  # 起始时间 (含 tz)
     end: datetime
     location: str = ""
-    organizer: str = ""
-    attendees: list[str] = field(default_factory=list)
+    organizer: str = ""  # mailto: 已剥
+    attendees: list[str] = field(default_factory=list)  # 仅 email list (兼容老代码)
     url: str = ""  # Teams/Zoom link 等 (从 description / x-property 提取)
     is_all_day: bool = False
     description: str = ""  # 原始描述, 可能含会议链接
+
+    # Phase 1 SSoT 扩展字段 (默认值保持向后兼容)
+    ical_uid: str = ""  # VEVENT UID (RFC 5545); 空表示 vobject 解析失败 fallback
+    sequence: int = 0  # iTIP SEQUENCE; 高 sequence 覆盖低 sequence (反向 sync 决策)
+    recurrence_id: Optional[str] = None  # 非空 = 单次跳脱 occurrence (RECURRENCE-ID)
+    rrule: str = ""  # RFC 5545 RRULE 原始字符串 (主事件才有, occurrence 为空)
+    exdates: list[str] = field(default_factory=list)  # JSON-serializable ISO strings
+    rdates: list[str] = field(default_factory=list)
+    status: str = ""  # CONFIRMED / TENTATIVE / CANCELLED
+    response_status: str = ""  # 当前用户 PARTSTAT (ACCEPTED / DECLINED / TENTATIVE / NEEDS-ACTION)
+    attendees_detail: list[dict] = field(default_factory=list)
+    # ↑ 完整 attendee 信息 [{email, name, response, role}], attendees 字段是简化版
+    calendar_name: str = ""  # CalDAV calendar 名 (多日历支持)
+    ics_raw: str = ""  # 原始 VEVENT 文本 (debug + 反向写 fallback)
 
     def to_llm_brief(self) -> str:
         """给 LLM 用的紧凑表示 (单行)."""
@@ -160,8 +181,11 @@ class CalDAVReader:
             except Exception as e:
                 logger.warning(f"[caldav-reader] cal {cal.name!r} search failed: {e}")
                 continue
+            cal_name = str(cal.name) if cal.name else ""
             for evt in raw_events:
-                parsed = self._parse_event(evt)
+                parsed = self._parse_event(
+                    evt, calendar_name=cal_name, user_email=self.user
+                )
                 if parsed:
                     all_events.append(parsed)
 
@@ -192,14 +216,192 @@ class CalDAVReader:
         """未来 7 天的 events (含今天)."""
         return self.list_events()
 
-    def _parse_event(self, raw_event) -> Optional[CalendarEvent]:
+    # ============================================================
+    # Phase 1 SSoT 扩展: ctag / sync-token / list with calendar filter
+    # ============================================================
+
+    def list_events_with_full_detail(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        *,
+        calendar_name: Optional[str] = None,
+    ) -> list[CalendarEvent]:
+        """list_events 的 SSoT 版本: 可过滤单个 calendar.
+
+        语义跟 ``list_events`` 一样, 但允许 ``calendar_name`` 只查指定日历
+        (worker 按 calendar 逐个 sync 用). 留空 = 全部 calendar.
+
+        Phase 1 注: 字段抽取等同于 list_events (新 _parse_event 已经默认填全字段);
+        这个方法的存在意义是给 worker 一个明确的"按 calendar 单独跑"的入口.
+        """
+        if start is None:
+            start = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        if end is None:
+            end = start + timedelta(days=7)
+
+        principal = self._connect()
+        all_events: list[CalendarEvent] = []
+        for cal in principal.calendars():
+            cal_name = str(cal.name) if cal.name else ""
+            if calendar_name is not None and cal_name != calendar_name:
+                continue
+            try:
+                raw_events = cal.search(start=start, end=end, event=True, expand=True)
+            except Exception as e:
+                logger.warning(f"[caldav-reader] cal {cal_name!r} search failed: {e}")
+                continue
+            for evt in raw_events:
+                parsed = self._parse_event(
+                    evt, calendar_name=cal_name, user_email=self.user
+                )
+                if parsed:
+                    all_events.append(parsed)
+
+        def _in_window(e: CalendarEvent) -> bool:
+            es = e.start
+            if es.tzinfo is None:
+                es = es.replace(tzinfo=timezone.utc)
+            else:
+                es = es.astimezone(timezone.utc)
+            return start <= es < end
+
+        all_events = [e for e in all_events if _in_window(e)]
+        all_events.sort(key=lambda e: e.start.astimezone(timezone.utc))
+        return all_events
+
+    def get_collection_ctag(self, calendar_name: str) -> Optional[str]:
+        """拉指定 calendar 的 RFC 4791 CTag (整库变更检测).
+
+        Worker 主循环每 60s 调一次, 跟存的 ctag 比对 — 没变跳过全量 search,
+        变了才走 sync_collection / 全窗口 re-read. 失败返回 None (worker 降级
+        到 polling).
+
+        实现: caldav lib 在 `Calendar` 对象上暴露 `get_ctag()` 方法 (内部走
+        PROPFIND `{urn:ietf:params:xml:ns:caldav}getctag`). 不同 lib 版本签名
+        可能微变, 用 hasattr probe.
+        """
+        principal = self._connect()
+        for cal in principal.calendars():
+            cal_name = str(cal.name) if cal.name else ""
+            if cal_name != calendar_name:
+                continue
+            # caldav lib >=1.3 cal.get_ctag() 直返字符串, 但实测某些 ARM mac /
+            # 老 DavMail 组合下抛 'tuple' object has no attribute 'xmlelement'
+            # (lib 内部 _query() 返回 tuple, get_ctag 假设是单值). 先 try, 失败
+            # fall through 到 PROPFIND.
+            if hasattr(cal, "get_ctag"):
+                try:
+                    return cal.get_ctag()
+                except Exception as e:
+                    logger.debug(
+                        f"[caldav-reader] cal.get_ctag({cal_name!r}) raised "
+                        f"({e}); fallback to PROPFIND"
+                    )
+            # Fallback: PROPFIND on the calendar collection
+            try:
+                props = cal.get_properties(
+                    [("DAV:", "getctag"), ("urn:ietf:params:xml:ns:caldav", "getctag")]
+                )
+                for v in props.values():
+                    if v:
+                        return str(v)
+                return None
+            except Exception as e:
+                logger.warning(
+                    f"[caldav-reader] PROPFIND getctag({cal_name!r}) failed: {e}"
+                )
+                return None
+        logger.warning(f"[caldav-reader] calendar not found: {calendar_name!r}")
+        return None
+
+    def sync_collection(
+        self, calendar_name: str, sync_token: Optional[str] = None
+    ) -> tuple[list[CalendarEvent], list[str], Optional[str]]:
+        """RFC 6578 sync-collection REPORT — 拿增量变更.
+
+        Args:
+            calendar_name: 要 sync 的 calendar 名.
+            sync_token: 上一轮的 token; 留空 = 全量初始化.
+
+        Returns:
+            (changed_events, deleted_uids, new_sync_token).
+            - changed_events: 新增 / 修改的 events.
+            - deleted_uids: 服务端删除的 ical_uid list (worker 用来 soft-delete).
+            - new_sync_token: 这一轮的 token, worker 存起来下一轮用. None = lib 不支持.
+
+        DavMail / Outlook 支持度: DavMail 6.7 对 sync-collection 支持有限,
+        实测可能返回 HTTP 501 / 空 token. 调用方应该判 new_sync_token is None
+        → 降级到 ctag 全窗口 re-read.
+        """
+        principal = self._connect()
+        for cal in principal.calendars():
+            cal_name = str(cal.name) if cal.name else ""
+            if cal_name != calendar_name:
+                continue
+            # caldav 1.3+ 暴露 cal.objects_by_sync_token(token); 不支持时 raise.
+            if not hasattr(cal, "objects_by_sync_token"):
+                logger.debug(
+                    "[caldav-reader] caldav lib lacks objects_by_sync_token; "
+                    "降级到 ctag re-read"
+                )
+                return [], [], None
+            try:
+                result = cal.objects_by_sync_token(sync_token=sync_token)
+                changed_objs = getattr(result, "objects", None) or []
+                deleted_objs = getattr(result, "deleted_objects", None) or []
+                new_token = getattr(result, "sync_token", None)
+            except Exception as e:
+                logger.warning(
+                    f"[caldav-reader] sync_collection({cal_name!r}) failed: {e} "
+                    f"— 降级到 ctag re-read"
+                )
+                return [], [], None
+
+            changed_events: list[CalendarEvent] = []
+            for obj in changed_objs:
+                parsed = self._parse_event(
+                    obj, calendar_name=cal_name, user_email=self.user
+                )
+                if parsed:
+                    changed_events.append(parsed)
+
+            deleted_uids: list[str] = []
+            for obj in deleted_objs:
+                # deleted_objects 可能只给 URL/href, 试图从 vobject 拿 UID
+                try:
+                    if hasattr(obj, "vobject_instance") and obj.vobject_instance:
+                        uid = _safe_value(obj.vobject_instance.vevent, "uid", "")
+                        if uid:
+                            deleted_uids.append(uid)
+                except Exception:
+                    continue
+
+            return changed_events, deleted_uids, new_token
+        logger.warning(f"[caldav-reader] calendar not found: {calendar_name!r}")
+        return [], [], None
+
+    def list_calendar_names_for_sync(self) -> list[str]:
+        """枚举所有 calendar 名称, 给 worker 用 (跟 list_calendars 同义但语义清晰)."""
+        return self.list_calendars()
+
+    def _parse_event(
+        self, raw_event, *, calendar_name: str = "", user_email: str = ""
+    ) -> Optional[CalendarEvent]:
         """caldav.Event → CalendarEvent dataclass.
 
-        修复 (review HIGH #6 + MEDIUM):
-        - summary/location/organizer/url/description 全部用 ``_safe_value`` 防御,
-          避免空 SUMMARY / 多 SUMMARY / list value 触发 AttributeError 被外层 try 吞掉.
-        - dtstart/dtend 混合 date/datetime 统一通过 ``_coerce_aware`` 归一 tz-aware datetime,
-          避免 ``e.end - e.start`` TypeError.
+        Phase 1 扩展 (plan §1.2): 抽 ical_uid / sequence / rrule / exdates / rdates /
+        status / response_status / recurrence_id / attendees_detail, 让 worker 能
+        完整落 calendar_event 表. 抽不到的字段都 default 空值 (向后兼容老调用方).
+
+        user_email: 当前用户邮箱, 用来从 ATTENDEE list 里挑出"自己"的 PARTSTAT 当
+        response_status. 留空则 response_status 永远是 "" (LLM 用例不需要).
+
+        修复 (review HIGH #6 + MEDIUM, 保留):
+        - summary/location/organizer/url/description 全部用 ``_safe_value`` 防御.
+        - dtstart/dtend 混合 date/datetime 统一通过 ``_coerce_aware`` 归一.
         - all_day 判定看原始 dtstart 类型 (date 而非 datetime).
         """
         try:
@@ -236,23 +438,105 @@ class CalDAVReader:
             organizer_raw = _safe_value(vevent, "organizer", "")
             organizer = organizer_raw.replace("mailto:", "") if organizer_raw else ""
 
-            attendees: list[str] = []
+            # Phase 1: SSoT 字段抽取 — ical_uid / sequence / rrule / status / recurrence_id
+            ical_uid = _safe_value(vevent, "uid", "")
+            sequence_str = _safe_value(vevent, "sequence", "0")
             try:
-                if hasattr(vevent, "attendee_list"):
-                    for att in vevent.attendee_list:
+                sequence = int(sequence_str) if sequence_str else 0
+            except (ValueError, TypeError):
+                sequence = 0
+            rrule = _safe_value(vevent, "rrule", "")
+            status = _safe_value(vevent, "status", "").upper()
+
+            # RECURRENCE-ID: 子事件 occurrence 跳脱标识 (主事件为空)
+            recurrence_id: Optional[str] = None
+            if hasattr(vevent, "recurrence_id"):
+                try:
+                    rid_raw = vevent.recurrence_id.value
+                    rid_dt = _coerce_aware(rid_raw)
+                    if rid_dt is not None:
+                        recurrence_id = rid_dt.isoformat()
+                except Exception:
+                    pass
+
+            # EXDATE / RDATE — 多值 property, 可能是单个 datetime 或 list
+            exdates: list[str] = []
+            rdates: list[str] = []
+            try:
+                if hasattr(vevent, "exdate_list"):
+                    for ex in vevent.exdate_list:
                         try:
-                            val = str(att.value).replace("mailto:", "").strip()
+                            v = ex.value
+                            if isinstance(v, list):
+                                for item in v:
+                                    dt = _coerce_aware(item)
+                                    if dt is not None:
+                                        exdates.append(dt.isoformat())
+                            else:
+                                dt = _coerce_aware(v)
+                                if dt is not None:
+                                    exdates.append(dt.isoformat())
                         except Exception:
                             continue
-                        if val and val.lower() not in (a.lower() for a in attendees):
-                            attendees.append(val)
+                if hasattr(vevent, "rdate_list"):
+                    for rd in vevent.rdate_list:
+                        try:
+                            v = rd.value
+                            if isinstance(v, list):
+                                for item in v:
+                                    dt = _coerce_aware(item)
+                                    if dt is not None:
+                                        rdates.append(dt.isoformat())
+                            else:
+                                dt = _coerce_aware(v)
+                                if dt is not None:
+                                    rdates.append(dt.isoformat())
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+            # ATTENDEE: 简化 email list + 完整 detail list (含 PARTSTAT / CN / ROLE).
+            # response_status: 从 attendees 里匹配 user_email 的 PARTSTAT.
+            attendees: list[str] = []
+            attendees_detail: list[dict] = []
+            response_status = ""
+            try:
+                att_list = []
+                if hasattr(vevent, "attendee_list"):
+                    att_list = list(vevent.attendee_list)
                 elif hasattr(vevent, "attendee"):
+                    att_list = [vevent.attendee]
+                for att in att_list:
                     try:
-                        val = str(vevent.attendee.value).replace("mailto:", "").strip()
-                        if val:
-                            attendees.append(val)
+                        email = str(att.value).replace("mailto:", "").strip()
                     except Exception:
-                        pass
+                        continue
+                    if not email:
+                        continue
+                    # 简化 list 去重
+                    if email.lower() not in (a.lower() for a in attendees):
+                        attendees.append(email)
+                    # 完整 detail (params CN / PARTSTAT / ROLE)
+                    params = getattr(att, "params", {}) or {}
+                    def _pget(key: str) -> str:
+                        v = params.get(key)
+                        if isinstance(v, list):
+                            v = v[0] if v else ""
+                        return str(v) if v else ""
+                    detail = {
+                        "email": email,
+                        "name": _pget("CN"),
+                        "response": _pget("PARTSTAT").upper(),
+                        "role": _pget("ROLE").upper(),
+                    }
+                    attendees_detail.append(detail)
+                    if (
+                        user_email
+                        and email.lower() == user_email.lower()
+                        and detail["response"]
+                    ):
+                        response_status = detail["response"]
             except Exception:
                 pass
 
@@ -263,10 +547,22 @@ class CalDAVReader:
                 if m:
                     url = m.group(0)
 
+            # ics_raw: 序列化 vEvent 回 ICS 文本 (debug + 反向写 fallback)
+            ics_raw = ""
+            try:
+                ics_raw = vobj.serialize()
+            except Exception:
+                pass
+
             return CalendarEvent(
                 summary=summary, start=dtstart, end=dtend,
                 location=location, organizer=organizer, attendees=attendees,
                 url=url, is_all_day=is_all_day, description=description,
+                ical_uid=ical_uid, sequence=sequence, recurrence_id=recurrence_id,
+                rrule=rrule, exdates=exdates, rdates=rdates,
+                status=status, response_status=response_status,
+                attendees_detail=attendees_detail,
+                calendar_name=calendar_name, ics_raw=ics_raw,
             )
         except Exception as e:
             logger.warning(f"[caldav-reader] parse event failed: {e}")

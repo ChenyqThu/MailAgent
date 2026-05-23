@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/calendar-event-get.schema.json",
+  "title": "mailagent calendar event-get",
+  "description": "Phase 2 §2.1 — 按 (ical_uid, recurrence_id, source) 拿单 event 完整 row.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event"],
+          "properties": {
+            "event": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id", "ical_uid", "recurrence_id", "sequence",
+                "summary", "description", "location", "organizer", "attendees",
+                "dtstart_iso", "dtend_iso", "is_all_day",
+                "rrule", "exdates", "rdates",
+                "status", "response_status", "url",
+                "calendar_name", "source", "notion_page_id",
+                "related_email_internal_id", "ics_raw",
+                "last_synced_at_iso", "created_at_iso", "updated_at_iso"
+              ],
+              "properties": {
+                "id": {"type": "integer", "minimum": 1},
+                "ical_uid": {"type": "string"},
+                "recurrence_id": {"type": ["string", "null"]},
+                "sequence": {"type": "integer", "minimum": 0},
+                "summary": {"type": "string"},
+                "description": {"type": "string"},
+                "location": {"type": "string"},
+                "organizer": {"type": "string"},
+                "attendees": {"type": "array"},
+                "dtstart_iso": {"type": ["string", "null"]},
+                "dtend_iso": {"type": ["string", "null"]},
+                "is_all_day": {"type": "boolean"},
+                "rrule": {"type": "string"},
+                "exdates": {"type": "array", "items": {"type": "string"}},
+                "rdates": {"type": "array", "items": {"type": "string"}},
+                "status": {"type": "string"},
+                "response_status": {"type": "string"},
+                "url": {"type": "string"},
+                "calendar_name": {"type": "string"},
+                "source": {
+                  "type": "string",
+                  "enum": ["caldav", "email_ics", "legacy_calendar_app"]
+                },
+                "notion_page_id": {"type": ["string", "null"]},
+                "related_email_internal_id": {"type": ["integer", "null"]},
+                "ics_raw": {"type": "string"},
+                "last_synced_at_iso": {"type": ["string", "null"]},
+                "created_at_iso": {"type": ["string", "null"]},
+                "updated_at_iso": {"type": ["string", "null"]}
+              }
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

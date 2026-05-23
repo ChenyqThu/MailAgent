@@ -207,7 +207,13 @@ class SyncStore:
     #                自增 (起点 1_000_000_000, 永不与 ROWID 冲突). 通过 allocate_davmail_internal_id()
     #                atomic 分配. 详见 plan §"主键 / 邮件标识策略" 方案 D +
     #                docs/dual-backend-architecture-handoff.md.
-    DB_VERSION = 14
+    # v15 (Calendar SSoT, 2026-05): 新增 calendar_event + calendar_sync_state 两表, 把日历事件
+    #                落地为 SQLite SSoT (前端日历视图 / CLI / Notion mirror 单一数据源).
+    #                calendar_event: PK=id AUTOINCREMENT + UNIQUE(ical_uid, recurrence_id, source);
+    #                source 三态 (caldav / email_ics / legacy_calendar_app) 灰度共存. 时间一律存
+    #                UTC epoch (REAL), 前端按 toLocaleString 转本地 TZ. 详见 plan
+    #                §"Phase 1.1 DB 升级" + frontend-view-silly-knuth.md.
+    DB_VERSION = 15
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -807,6 +813,97 @@ class SyncStore:
             INSERT OR IGNORE INTO sync_state (key, value, updated_at)
             VALUES ('davmail_next_internal_id', '1000000000', ?)
         """, (time.time(),))
+
+        # ==================== v15: Calendar SSoT (CalDAV → SQLite) ====================
+        # 日历事件落地表 — 前端日历视图 + CLI calendar events 子命令 + Notion mirror
+        # 单一数据源. PK=id (AUTOINCREMENT), 业务唯一性靠 UNIQUE(ical_uid, recurrence_id, source).
+        # 同一 ical_uid 可能跨 source 各有一行 (灰度期 caldav / legacy_calendar_app 共存):
+        #   - 'caldav': CalendarSyncWorker 从 DavMail CalDAV 拉的 (Phase 1 主路径)
+        #   - 'email_ics': meeting_sync.py 解析邮件邀请的 .ics 派生 (related_email_internal_id 关联)
+        #   - 'legacy_calendar_app': calendar_main.py / src/calendar/ 老 EventKit / AppleScript
+        #     路径写入 (Phase 1 灰度期保留, 2-4 周对账后下线)
+        # 时间字段全部 UTC epoch (REAL), 跨时区 / DST 统一; 前端 toLocaleString 转本地展示.
+        # recurrence_id 为 NULL 表示主事件 (含 RRULE); 子事件 occurrence 跳脱时存非空.
+        # rrule 字符串原样保留 (RFC 5545), 前端用 npm rrule lib 展开窗口内 occurrences.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS calendar_event (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ical_uid TEXT NOT NULL,
+                recurrence_id TEXT,
+                sequence INTEGER NOT NULL DEFAULT 0,
+                calendar_name TEXT,
+                summary TEXT,
+                description TEXT,
+                location TEXT,
+                organizer TEXT,
+                attendees_json TEXT,
+                dtstart_utc REAL NOT NULL,
+                dtend_utc REAL,
+                is_all_day INTEGER NOT NULL DEFAULT 0,
+                rrule TEXT,
+                exdates_json TEXT,
+                rdates_json TEXT,
+                status TEXT,
+                response_status TEXT,
+                url TEXT,
+                ics_raw TEXT,
+                source TEXT NOT NULL DEFAULT 'caldav',
+                notion_page_id TEXT,
+                related_email_internal_id INTEGER,
+                last_synced_at REAL NOT NULL,
+                deleted_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                CHECK (source IN ('caldav', 'email_ics', 'legacy_calendar_app'))
+            )
+        """)
+        # 唯一约束 (ical_uid, recurrence_id, source) — SQLite UNIQUE 把 NULL 视为
+        # 互不相等, 主事件 (recurrence_id IS NULL) 会绕过去重. 改用 COALESCE 空串
+        # 让 NULL 也参与去重. Repository upsert 走 ON CONFLICT(ical_uid, COALESCE(...))
+        # 命中此 index.
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_event_unique
+            ON calendar_event(ical_uid, COALESCE(recurrence_id, ''), source)
+        """)
+        # 时间窗口查询 (前端日/周/月 view) — partial index 跳过软删除行
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_calendar_event_dtstart
+            ON calendar_event(dtstart_utc) WHERE deleted_at IS NULL
+        """)
+        # ical_uid 反查 (受邀链路 cross-source dedup)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_calendar_event_uid
+            ON calendar_event(ical_uid)
+        """)
+        # Notion mirror 反查 (page_id → event)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_calendar_event_notion
+            ON calendar_event(notion_page_id) WHERE notion_page_id IS NOT NULL
+        """)
+        # 邮件邀请反查 (email_ics source 关联到 internal_id)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_calendar_event_email
+            ON calendar_event(related_email_internal_id)
+            WHERE related_email_internal_id IS NOT NULL
+        """)
+
+        # CalDAV 增量 sync 状态 — 每个 calendar 一行, RFC 6578 sync-token + ctag
+        # last_full_sync_at: 全量初始化时间戳 (worker 启动一次)
+        # last_incremental_sync_at: 增量 tick 时间戳 (每轮 60s)
+        # sync_token: RFC 6578 sync-collection token, 失败降级到 ctag 重读窗口
+        # ctag: RFC 4791 calendar collection tag, 整库变更检测 (省 sync-token call)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS calendar_sync_state (
+                calendar_name TEXT PRIMARY KEY,
+                ctag TEXT,
+                sync_token TEXT,
+                last_full_sync_at REAL,
+                last_incremental_sync_at REAL,
+                last_error TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
 
         # 更新数据库版本
         cursor.execute("""

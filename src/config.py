@@ -461,5 +461,40 @@ class Config(BaseSettings):
         ),
     )
 
+    # ============================================================
+    # Calendar SSoT (Phase 1, plan §1.4)
+    # ============================================================
+    # CalendarSyncWorker (CalDAV → SQLite calendar_event 表的增量 sync) 开关 +
+    # 前端日历视图 V2 灰度开关. 详见 plan §"Phase 4 灰度策略 + Legacy 共存".
+    calendar_caldav_sync_enabled: bool = Field(
+        default=False, env="CALENDAR_CALDAV_SYNC_ENABLED",
+        description=(
+            "启用 CalendarSyncWorker (asyncio loop, mail-sync 进程内 60s 轮询 "
+            "DavMail CalDAV ctag, 增量 sync 到 SQLite calendar_event 表). "
+            "默认关闭灰度期开. 跟 legacy 'calendar-sync' PM2 进程并存, 用 "
+            "source='caldav' 区分. 依赖: pip install caldav + DavMail 1080 端口 online."
+        ),
+    )
+    calendar_caldav_sync_poll_interval_sec: int = Field(
+        default=60, env="CALENDAR_CALDAV_SYNC_POLL_INTERVAL_SEC",
+        description="CalendarSyncWorker ctag 轮询间隔 (秒). 默认 60s.",
+    )
+    calendar_caldav_sync_window_past_days: int = Field(
+        default=30, env="CALENDAR_CALDAV_SYNC_WINDOW_PAST_DAYS",
+        description="CalendarSyncWorker 全量 sync 窗口左边界 (今天 - N 天). 默认 30.",
+    )
+    calendar_caldav_sync_window_future_days: int = Field(
+        default=180, env="CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS",
+        description="CalendarSyncWorker 全量 sync 窗口右边界 (今天 + N 天). 默认 180.",
+    )
+    frontend_calendar_v2_enabled: bool = Field(
+        default=False, env="FRONTEND_CALENDAR_V2_ENABLED",
+        description=(
+            "前端日历模块 V2 灰度开关. False = /calendar 路由还是显示老的 recurring "
+            "invite 表 (CalendarPage.tsx); True = 切到新月/周/日/agenda 视图. "
+            "灰度切换期间随时可回切. 详见 plan §Phase 4."
+        ),
+    )
+
 # 全局配置实例
 config = Config()

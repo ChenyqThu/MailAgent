@@ -250,7 +250,7 @@ class EmailNotionSyncApp:
                 sync_store=self.watcher.sync_store,
                 alerter=self.alerter,
                 davmail_root=_Path(__file__).resolve().parent / "davmail-poc",
-                imap_host=config.davmail_host,
+                imap_host=config.davmail_imap_host,
                 imap_port=config.davmail_imap_port,
                 smtp_port=config.davmail_smtp_port,
             )
@@ -259,7 +259,7 @@ class EmailNotionSyncApp:
                     "davmail", self.davmail_watchdog.get_snapshot
                 )
             logger.info(
-                f"[davmail-watchdog] configured (imap={config.davmail_host}:"
+                f"[davmail-watchdog] configured (imap={config.davmail_imap_host}:"
                 f"{config.davmail_imap_port} smtp=:{config.davmail_smtp_port})"
             )
 

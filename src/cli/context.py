@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from src.config import Config
+    from src.mail.backend.base import IMailBackend
     from src.mail.sync_store import SyncStore
     from src.notion.sync import NotionSync
     from src.repository import EmailRepository
@@ -33,6 +34,7 @@ class CliContext:
     _sync_store: Optional["SyncStore"] = None
     _notion_sync: Optional["NotionSync"] = None
     _cli_config: Optional["Config"] = None
+    _backend: Optional["IMailBackend"] = None
     _started_at: float = field(default_factory=time.monotonic)
 
     @classmethod
@@ -109,6 +111,23 @@ class CliContext:
             cfg = self.cli_config
             self._sync_store = SyncStore(cfg.sync_store_db_path)
         return self._sync_store
+
+    @property
+    def backend(self) -> "IMailBackend":
+        """Mail backend (davmail / applescript), lazy-init via factory.
+
+        关键: 走 factory 保证尊重 `MAILAGENT_BACKEND=davmail` env, 而不是硬编码
+        AppleScriptArm — 避免 CLI 命令意外唤起 Mail.app GUI.
+
+        ``backend.arm`` 在 DavMailBackend 下是 self (IMAP fetch path); 在
+        AppleScriptBackend 下是真 AppleScriptArm 实例. 两者都暴露
+        ``fetch_email_content_by_id(internal_id, mailbox)``, 调用方零改动.
+        """
+        if self._backend is None:
+            from src.mail.backend.factory import create_backend
+
+            self._backend = create_backend(self.cli_config, self.sync_store)
+        return self._backend
 
     @property
     def notion_sync(self) -> "NotionSync":

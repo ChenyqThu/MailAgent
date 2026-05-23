@@ -71,7 +71,7 @@ def test_fresh_init_at_v6(tmp_path):
         "island_dispatch",  # v7
         "email_outbox",     # v10
     }.issubset(tables)
-    assert _db_version(str(db)) == 13  # bumped to v13 (dual-backend)
+    assert _db_version(str(db)) == 15  # bumped to v15 (calendar SSoT)
 
 
 def test_v6_indices_exist(tmp_path):
@@ -87,7 +87,7 @@ def test_idempotent_double_init(tmp_path):
     db = tmp_path / "sync.db"
     SyncStore(str(db))
     SyncStore(str(db))  # 应该幂等
-    assert _db_version(str(db)) == 13  # bumped to v13 (dual-backend)
+    assert _db_version(str(db)) == 15  # bumped to v15 (calendar SSoT)
 
 
 def test_v5_to_v6_preserves_existing_rows(tmp_path):
@@ -118,7 +118,7 @@ def test_v5_to_v6_preserves_existing_rows(tmp_path):
 
     # 重新 init → 升级到当前最新（v10）
     SyncStore(str(db))
-    assert _db_version(str(db)) == 13  # bumped to v13 (dual-backend)
+    assert _db_version(str(db)) == 15  # bumped to v15 (calendar SSoT)
 
     # 原 email_metadata 行还在
     conn = sqlite3.connect(str(db))

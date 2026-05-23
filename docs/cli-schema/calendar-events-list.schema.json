@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/calendar-events-list.schema.json",
+  "title": "mailagent calendar events / today / week",
+  "description": "Phase 2 §2.1 — 时间窗口内的 calendar_event occurrences (RRULE 已展开). 三个命令共用一份 schema.",
+  "$defs": {
+    "occurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "ical_uid", "recurrence_id", "sequence",
+        "summary", "occurrence_start_iso", "occurrence_end_iso",
+        "is_recurrence_instance", "is_all_day",
+        "calendar_name", "organizer", "attendees",
+        "location", "url", "status", "response_status",
+        "source", "notion_page_id", "related_email_internal_id"
+      ],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "ical_uid": {"type": "string"},
+        "recurrence_id": {"type": ["string", "null"]},
+        "sequence": {"type": "integer", "minimum": 0},
+        "summary": {"type": "string"},
+        "occurrence_start_iso": {"type": "string"},
+        "occurrence_end_iso": {"type": "string"},
+        "is_recurrence_instance": {"type": "boolean"},
+        "is_all_day": {"type": "boolean"},
+        "calendar_name": {"type": "string"},
+        "organizer": {"type": "string"},
+        "attendees": {"type": "array"},
+        "location": {"type": "string"},
+        "url": {"type": "string"},
+        "status": {"type": "string"},
+        "response_status": {"type": "string"},
+        "source": {
+          "type": "string",
+          "enum": ["caldav", "email_ics", "legacy_calendar_app"]
+        },
+        "notion_page_id": {"type": ["string", "null"]},
+        "related_email_internal_id": {"type": ["integer", "null"]}
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["events", "total", "window", "filters"],
+          "properties": {
+            "events": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/occurrence"}
+            },
+            "total": {"type": "integer", "minimum": 0},
+            "window": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from_iso", "to_iso"],
+              "properties": {
+                "from_iso": {"type": "string"},
+                "to_iso": {"type": "string"}
+              }
+            },
+            "filters": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["calendar_name", "source", "expand_recurrences"],
+              "properties": {
+                "calendar_name": {"type": ["string", "null"]},
+                "source": {"type": ["string", "null"]},
+                "expand_recurrences": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}

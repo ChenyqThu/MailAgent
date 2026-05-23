@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailagent.local/cli-schema/calendar-sync-now.schema.json",
+  "title": "mailagent calendar sync-now",
+  "description": "Phase 2 §2.1 — 手动跑一次 CalDAV → SQLite sync (admin/debug).",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "data", "meta"],
+      "properties": {
+        "status": {"const": "success"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["results", "total_calendars", "window", "mode"],
+          "properties": {
+            "results": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["calendar_name", "mode"],
+                "properties": {
+                  "calendar_name": {"type": "string"},
+                  "mode": {"type": "string", "enum": ["full", "incremental"]},
+                  "upserted": {"type": "integer", "minimum": 0},
+                  "soft_deleted": {"type": "integer", "minimum": 0},
+                  "errors": {"type": "integer", "minimum": 0},
+                  "ctag": {"type": ["string", "null"]},
+                  "sync_token": {"type": ["string", "null"]},
+                  "status": {"type": "string"},
+                  "hint": {"type": "string"},
+                  "error": {"type": "string"}
+                }
+              }
+            },
+            "total_calendars": {"type": "integer", "minimum": 0},
+            "window": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from_iso", "to_iso"],
+              "properties": {
+                "from_iso": {"type": "string"},
+                "to_iso": {"type": "string"}
+              }
+            },
+            "mode": {"type": "string", "enum": ["full", "incremental"]}
+          }
+        },
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "error", "meta"],
+      "properties": {
+        "status": {"const": "error"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "error": {"$ref": "_common.schema.json#/$defs/error"},
+        "meta": {"$ref": "_common.schema.json#/$defs/meta"}
+      }
+    }
+  ]
+}
