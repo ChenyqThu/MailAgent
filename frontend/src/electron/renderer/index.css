@@ -2575,11 +2575,9 @@ body:not([data-batch-mode='true']) #batch-bar {
   padding: 16px 0 8px;
   position: sticky;
   top: 0;
-  /* mockup 用 rgb(--ink-2)/0 全透, 但 sticky 时下面事件 scroll 过会透显.
-     用 ink-2/30 + 轻 blur 保 sticky 可读 + 视觉接近 mockup 的"假" sticky. */
-  background: rgb(var(--ink-2) / 0.3);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  /* mockup 原本 rgb(--ink-2)/0 全透 — 设计意图是纯 typography hierarchy,
+     接受 sticky 时跟事件 scroll 过的轻度重叠. 严格按 mockup 复刻. */
+  background: rgb(var(--ink-2) / 0);
   z-index: 1;
 }
 .ag-head .ah-day {
@@ -2971,6 +2969,51 @@ body:not([data-batch-mode='true']) #batch-bar {
 .sk-row:last-child { border-bottom: 0; }
 .sk-label { font-size: 13.5px; color: rgb(var(--ink-fg-1)); }
 .sk-keys { display: flex; gap: 4px; }
+
+/* ── Shared toolbar / chip utility (mockup §toolbar) ──────────────
+   Recurring view 头部 chip + 扫描按钮共用. toolbar 自己暂用 Tailwind
+   inline (历史代码), 后续可统一切到这套 class. */
+.view-chip {
+  font-size: 13px;
+  line-height: 1;
+  padding: 6px 11px;
+  border-radius: 6px;
+  color: rgb(var(--ink-fg-1));
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.view-chip:hover {
+  background: rgb(var(--ink-3) / 0.7);
+  color: rgb(var(--ink-fg));
+}
+.view-chip.is-active {
+  background: rgb(var(--c-accent) / 0.15);
+  border-color: rgb(var(--c-accent) / 0.3);
+  color: rgb(var(--c-accent));
+  font-weight: 600;
+}
+.view-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.today-btn {
+  font-size: 13px;
+  padding: 0 12px;
+  height: 28px;
+  border-radius: 6px;
+  color: rgb(var(--ink-fg-1));
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-2) / 0.5);
+  cursor: pointer;
+  transition: all 0.12s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.today-btn:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+.today-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Calendar inner status bar (cal-card footer) ─────────────────── */
 .cal-statusbar {

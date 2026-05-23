@@ -51,7 +51,7 @@ function headerLabels(key: string): HeaderLabels {
   const ahDate = `${m}/${d} ${wd}`
   if (key === tKey) return { ahDay: '今天', ahDate, isToday: true }
   if (key === tomKey) return { ahDay: '明天', ahDate, isToday: false }
-  return { ahDay: `${d} 日`, ahDate, isToday: false }
+  return { ahDay: `${d}日`, ahDate, isToday: false }
 }
 
 function hasMeetingLink(occ: CalendarEventOccurrence): boolean {

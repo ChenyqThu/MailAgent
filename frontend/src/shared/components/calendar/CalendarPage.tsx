@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Calendar as CalendarIcon, Play, RefreshCw } from 'lucide-react'
+import { Calendar as CalendarIcon, RefreshCw } from 'lucide-react'
 
 import type { RecurringInviteItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -68,23 +68,23 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
       <td className="mono-num">{fmtIso(item.last_occurrence)}</td>
       <td className="mono-num">{item.occurrence_count ?? '—'}</td>
       <td className="text-right">
+        {/* mockup §recurring 操作列是静态弱化 span. 我们后端能 replay 时
+            保留 click handler, 但视觉走 mockup 简洁 link 风格 (无 button
+            border / 无 padding). caldav-only events (internal_id=0) 一律
+            灰色 placeholder. */}
         {canReplay ? (
           <button
             type="button"
             disabled={pending}
             onClick={() => onReplay(item.internal_id)}
             className={cn(
-              'inline-flex items-center gap-1 px-2 py-1 rounded text-aux',
-              'text-coral border border-coral/30 hover:bg-coral/10',
-              'transition-colors duration-fast',
-              'disabled:opacity-60 disabled:cursor-not-allowed'
+              'inline-flex items-center gap-1 text-[12px] cursor-pointer',
+              'text-coral hover:underline',
+              'disabled:opacity-60 disabled:cursor-wait disabled:no-underline'
             )}
+            title={t('calendar.replay')}
           >
-            {pending ? (
-              <RefreshCw size={12} strokeWidth={2} className="animate-spin" />
-            ) : (
-              <Play size={12} strokeWidth={2} />
-            )}
+            {pending && <RefreshCw size={11} strokeWidth={2} className="animate-spin" />}
             {t('calendar.replay')}
           </button>
         ) : (
@@ -140,7 +140,9 @@ export function CalendarPage(): React.ReactElement {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* range chip + 扫描按钮 — 跟 mockup §recurring 顶部 row 一致 */}
+      {/* mockup §recurring 顶部 row: range chips (.view-chip 复用 toolbar
+          视觉规范) + ml-auto 扫描按钮 (.today-btn 灰底 + svg). 删去之前的
+          'since {date}' 标签 (mockup 没有, 跟扫描动作信息冗余). */}
       <div className="flex items-center gap-2 px-4 pt-3 pb-2 shrink-0">
         <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50">
           {RANGES.map((r) => (
@@ -148,32 +150,21 @@ export function CalendarPage(): React.ReactElement {
               key={r.offsetDays}
               type="button"
               onClick={() => setDays(r.offsetDays)}
-              className={cn(
-                'px-3 py-1 text-aux rounded-md transition-colors duration-fast',
-                r.offsetDays === days
-                  ? 'bg-coral/15 text-coral border border-coral/30 font-medium'
-                  : 'border border-transparent text-ink-fg-1 hover:bg-ink-3/70 hover:text-ink-fg'
-              )}
+              className={cn('view-chip', r.offsetDays === days && 'is-active')}
+              title={`扫描最近 ${r.label}`}
             >
               {r.label}
             </button>
           ))}
         </div>
-        <span className="text-meta text-ink-fg-2 font-mono tabular-nums ml-1">
-          since {since}
-        </span>
         <button
           type="button"
           onClick={() => void listQ.refetch()}
           disabled={listQ.isFetching}
-          className={cn(
-            'h-7 inline-flex items-center gap-1.5 px-3 text-aux rounded-md ml-auto',
-            'border border-coral/40 text-coral hover:bg-coral/10',
-            'disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-fast'
-          )}
+          className="today-btn ml-auto"
           title="扫描邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)"
         >
-          <RefreshCw size={12} strokeWidth={2} className={cn(listQ.isFetching && 'animate-spin')} />
+          <RefreshCw size={13} strokeWidth={2} className={cn(listQ.isFetching && 'animate-spin')} />
           {listQ.isFetching ? '扫描中…' : '扫描'}
         </button>
       </div>
