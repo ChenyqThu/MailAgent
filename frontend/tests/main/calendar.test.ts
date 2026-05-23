@@ -46,10 +46,78 @@ describe('calendar — runRecurringDiscover', () => {
     )
   })
 
-  test('normalizes {items} shape into array', async () => {
-    mockCallCli.mockResolvedValue({ items: [{ internal_id: 1 }] })
+  test('maps CLI series shape → RecurringInviteItem (Phase 1.5)', async () => {
+    mockCallCli.mockResolvedValue({
+      series: [
+        {
+          series_uid: 'uid-weekly',
+          master_dtstart: '2026-05-22T09:00:00+00:00',
+          summary: 'Weekly sync',
+          sender: 'boss@example.com',
+          organizer: 'boss@example.com',
+          rrule: 'FREQ=WEEKLY;COUNT=10',
+          method: 'REQUEST',
+          internal_ids: [53120, 53121]
+        }
+      ],
+      total_series: 1
+    })
     const out = await runRecurringDiscover()
-    expect(out).toEqual([{ internal_id: 1 }])
+    expect(out).toEqual([
+      {
+        internal_id: 53120,
+        subject: 'Weekly sync',
+        organizer: 'boss@example.com',
+        rrule: 'FREQ=WEEKLY;COUNT=10',
+        notion_page_id: null,
+        first_occurrence: '2026-05-22T09:00:00+00:00',
+        last_occurrence: null,
+        occurrence_count: 2,
+        date_received: null
+      }
+    ])
+  })
+
+  test('caldav-only event (internal_ids=[0]) maps to internal_id=0', async () => {
+    mockCallCli.mockResolvedValue({
+      series: [
+        {
+          series_uid: 'uid-caldav-only',
+          master_dtstart: '2026-04-24T00:30:00+00:00',
+          summary: 'SaaS 项目双周对齐会议',
+          sender: '',
+          organizer: '',
+          rrule: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=FR',
+          method: 'REQUEST',
+          internal_ids: [0]
+        }
+      ],
+      total_series: 1
+    })
+    const out = await runRecurringDiscover()
+    expect(out).toHaveLength(1)
+    expect(out[0]?.internal_id).toBe(0)
+    expect(out[0]?.subject).toBe('SaaS 项目双周对齐会议')
+  })
+
+  test('legacy {items} shape still works (back-compat)', async () => {
+    mockCallCli.mockResolvedValue({
+      items: [
+        {
+          series_uid: 'uid-1',
+          master_dtstart: null,
+          summary: 'legacy',
+          sender: null,
+          organizer: null,
+          rrule: null,
+          method: null,
+          internal_ids: [42]
+        }
+      ]
+    })
+    const out = await runRecurringDiscover()
+    expect(out).toHaveLength(1)
+    expect(out[0]?.internal_id).toBe(42)
   })
 
   test('returns [] for malformed object', async () => {

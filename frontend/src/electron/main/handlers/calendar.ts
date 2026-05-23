@@ -40,17 +40,48 @@ export interface RecurringDiscoverOpts {
   since?: string
 }
 
+interface CliSeries {
+  series_uid: string
+  master_dtstart: string | null
+  summary: string | null
+  sender: string | null
+  organizer: string | null
+  rrule: string | null
+  method: string | null
+  internal_ids: number[]
+}
+
 export async function runRecurringDiscover(
   opts: RecurringDiscoverOpts = {}
 ): Promise<RecurringInviteItem[]> {
   const args = ['calendar', 'recurring', 'discover']
   if (opts.since) args.push('--since', opts.since)
   const out = await callCli(args, { timeoutMs: READ_TIMEOUT_MS })
-  if (Array.isArray(out)) return out as RecurringInviteItem[]
-  if (out && typeof out === 'object' && Array.isArray((out as { items?: unknown }).items)) {
-    return (out as { items: RecurringInviteItem[] }).items
+
+  // Phase 1.5: CLI 返 {series: [...], total_series, ...}; 老 handler 找 .items
+  // 拿不到 → 永远空. 这里把 CLI series 映射到 frontend RecurringInviteItem shape.
+  let series: CliSeries[] = []
+  if (Array.isArray(out)) {
+    series = out as CliSeries[]
+  } else if (out && typeof out === 'object') {
+    const obj = out as { series?: unknown; items?: unknown }
+    if (Array.isArray(obj.series)) series = obj.series as CliSeries[]
+    else if (Array.isArray(obj.items)) series = obj.items as CliSeries[]
   }
-  return []
+
+  return series.map((s) => ({
+    // Phase 1.5 caveat: caldav-only events 的 internal_ids=[0] (没邮件源),
+    // replay 按钮对其无效. Mockup 阶段会 deprecate replay 改 calendar_event 重导出.
+    internal_id: s.internal_ids?.[0] ?? 0,
+    subject: s.summary,
+    organizer: s.organizer ?? s.sender,
+    rrule: s.rrule,
+    notion_page_id: null,
+    first_occurrence: s.master_dtstart,
+    last_occurrence: null, // CLI 不算 last; Phase 2 可在 expander 里加
+    occurrence_count: s.internal_ids?.length ?? null,
+    date_received: null
+  }))
 }
 
 export interface RecurringReplayOpts {
