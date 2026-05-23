@@ -118,10 +118,17 @@ export function CalendarPage(): React.ReactElement {
   const [pending, setPending] = useState<Set<number>>(new Set())
 
   const since = offsetIsoDate(days)
+  // Phase 0.3 + 后续 davmail 实测: discover_recurring 在 davmail 模式下逐封 IMAP
+  // fetch (~5s/封 × 2000 = 167min), 远超 CLI 30s timeout — 自动触发就是 footgun.
+  // 改为完全 lazy: 默认 enabled=false, 用户必须点"扫描"按钮主动触发 (后续 Phase 1.5
+  // 会让这条路径走 calendar_event 表, 不再扫邮件).
   const listQ = useQuery({
     queryKey: ['calendar', 'recurring', since],
     queryFn: () => mailApi.calendar.recurringDiscover({ since }),
-    staleTime: 30_000
+    enabled: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false
   })
 
   const replayMut = useMutation({
@@ -151,35 +158,61 @@ export function CalendarPage(): React.ReactElement {
           <CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-1" />
           {t('calendar.title')}
         </h1>
-        <div className="inline-flex rounded-md border border-ink-border bg-ink-2 p-0.5">
-          {RANGES.map((r) => (
-            <button
-              key={r.offsetDays}
-              type="button"
-              onClick={() => setDays(r.offsetDays)}
-              className={cn(
-                'px-2 py-1 text-aux rounded transition-colors duration-fast',
-                r.offsetDays === days
-                  ? 'bg-coral/15 text-coral font-medium'
-                  : 'text-ink-fg-1 hover:text-ink-fg'
-              )}
-            >
-              {r.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-md border border-ink-border bg-ink-2 p-0.5">
+            {RANGES.map((r) => (
+              <button
+                key={r.offsetDays}
+                type="button"
+                onClick={() => setDays(r.offsetDays)}
+                className={cn(
+                  'px-2 py-1 text-aux rounded transition-colors duration-fast',
+                  r.offsetDays === days
+                    ? 'bg-coral/15 text-coral font-medium'
+                    : 'text-ink-fg-1 hover:text-ink-fg'
+                )}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => void listQ.refetch()}
+            disabled={listQ.isFetching}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-1 text-aux rounded',
+              'border border-coral/40 text-coral hover:bg-coral/10',
+              'disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-fast'
+            )}
+            title="扫描邮件中带 RRULE 的会议邀请 (davmail 模式下可能需要数分钟)"
+          >
+            {listQ.isFetching ? (
+              <RefreshCw size={12} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <RefreshCw size={12} strokeWidth={2} />
+            )}
+            {listQ.isFetching ? '扫描中…' : '扫描'}
+          </button>
         </div>
       </header>
 
       <p className="text-aux text-ink-fg-2">{t('calendar.subtitle', { since })}</p>
 
       <section className="rounded-md border border-ink-border bg-ink-2 overflow-hidden">
-        {listQ.isLoading ? (
+        {listQ.isFetching ? (
           <div>
             <SkeletonRow />
             <SkeletonRow />
             <SkeletonRow />
           </div>
-        ) : (listQ.data?.length ?? 0) === 0 ? (
+        ) : listQ.data === undefined ? (
+          <EmptyState
+            icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
+            title="未扫描"
+            hint="点击右上角 [扫描] 拉取邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)"
+          />
+        ) : listQ.data.length === 0 ? (
           <EmptyState
             icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
             title={t('calendar.empty')}

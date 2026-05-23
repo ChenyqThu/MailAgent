@@ -448,10 +448,120 @@ export interface CalendarExpandOpts {
   dryRun?: boolean
 }
 
+// Phase 3 §3.1 (frontend-view-silly-knuth.md) — Calendar SSoT 类型 (前端直读 SQLite
+// calendar_event 表 + npm rrule 展开 occurrences). source 三态对应灰度共存:
+// 'caldav' (CalendarSyncWorker 拉的) / 'email_ics' (meeting_sync 派生) /
+// 'legacy_calendar_app' (老 calendar_main.py 路径).
+
+export type CalendarEventSource = 'caldav' | 'email_ics' | 'legacy_calendar_app'
+
+export interface CalendarEventAttendee {
+  email: string
+  name?: string
+  /** PARTSTAT — ACCEPTED / TENTATIVE / DECLINED / NEEDS-ACTION */
+  response?: string
+  /** ROLE — CHAIR / REQ-PARTICIPANT / OPT-PARTICIPANT */
+  role?: string
+}
+
+/** RRULE 展开后的单 occurrence (前端日历 timeline 渲染拿到的). */
+export interface CalendarEventOccurrence {
+  id: number
+  ical_uid: string
+  recurrence_id: string | null
+  sequence: number
+  summary: string
+  /** ISO UTC datetime — 前端 toLocaleString 转本地 TZ 展示. */
+  occurrence_start_iso: string
+  occurrence_end_iso: string
+  /** True = 来自 RRULE 展开; False = 单次 event. */
+  is_recurrence_instance: boolean
+  is_all_day: boolean
+  calendar_name: string
+  organizer: string
+  attendees: CalendarEventAttendee[]
+  location: string
+  url: string
+  /** CONFIRMED / TENTATIVE / CANCELLED */
+  status: string
+  response_status: string
+  source: CalendarEventSource
+  notion_page_id: string | null
+  related_email_internal_id: number | null
+}
+
+/** calendar_event 表完整 row (event-get 输出, 含 dtstart_iso / ics_raw 等). */
+export interface CalendarEventDetail {
+  id: number
+  ical_uid: string
+  recurrence_id: string | null
+  sequence: number
+  summary: string
+  description: string
+  location: string
+  organizer: string
+  attendees: CalendarEventAttendee[]
+  dtstart_iso: string | null
+  dtend_iso: string | null
+  is_all_day: boolean
+  rrule: string
+  exdates: string[]
+  rdates: string[]
+  status: string
+  response_status: string
+  url: string
+  calendar_name: string
+  source: string
+  notion_page_id: string | null
+  related_email_internal_id: number | null
+  ics_raw: string
+}
+
+export interface CalendarSyncStateItem {
+  calendar_name: string
+  ctag: string | null
+  sync_token: string | null
+  last_full_sync_at_iso: string | null
+  last_incremental_sync_at_iso: string | null
+  last_error: string | null
+}
+
+export interface EventsListOpts {
+  /** Window start (ISO datetime, UTC). Default = today 00:00 UTC. */
+  fromIso?: string
+  /** Window end. Default = fromIso + 7 days. */
+  toIso?: string
+  calendarName?: string
+  source?: CalendarEventSource
+  /** Default true. False = only return master events (skip RRULE expansion). */
+  expandRecurrences?: boolean
+  /** Cap on returned occurrences. Default 1000. */
+  limit?: number
+}
+
+export interface EventGetOpts {
+  icalUid: string
+  recurrenceId?: string | null
+  source?: CalendarEventSource
+}
+
+export interface SyncNowOpts {
+  /** Default true. False = try sync-collection (DavMail 支持有限). */
+  full?: boolean
+  calendarName?: string
+}
+
 export interface CalendarApi {
   recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]>
   recurringReplay(opts: RecurringReplayOpts): Promise<unknown>
   expand(opts?: CalendarExpandOpts): Promise<unknown>
+
+  // Phase 3 §3.1 — Calendar SSoT 直读
+  eventsList(opts?: EventsListOpts): Promise<CalendarEventOccurrence[]>
+  eventGet(opts: EventGetOpts): Promise<CalendarEventDetail | null>
+  syncStatus(): Promise<CalendarSyncStateItem[]>
+  calendarNames(): Promise<string[]>
+  syncTrigger(opts?: SyncNowOpts): Promise<unknown>
 }
 
 // ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------

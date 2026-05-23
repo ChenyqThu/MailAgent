@@ -465,7 +465,7 @@ export function Sidebar(): React.ReactElement {
             icon={<CalendarDays size={15} strokeWidth={1.75} />}
             label={t('nav.calendar')}
             selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
-            onClick={() => navigate({ to: '/admin/calendar' })}
+            onClick={() => navigate({ to: '/admin/calendar', search: { view: 'week' } })}
           />
         </nav>
       </div>

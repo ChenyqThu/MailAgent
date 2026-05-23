@@ -93,7 +93,13 @@ export class HttpApi implements MailApi {
   calendar = {
     recurringDiscover: () => notImplemented('calendar.recurringDiscover'),
     recurringReplay: () => notImplemented('calendar.recurringReplay'),
-    expand: () => notImplemented('calendar.expand')
+    expand: () => notImplemented('calendar.expand'),
+    // Phase 3 §3.1 — Calendar SSoT 直读 (Web SPA 暂不支持 — Phase 5 接 FastAPI proxy)
+    eventsList: () => notImplemented('calendar.eventsList'),
+    eventGet: () => notImplemented('calendar.eventGet'),
+    syncStatus: () => notImplemented('calendar.syncStatus'),
+    calendarNames: () => notImplemented('calendar.calendarNames'),
+    syncTrigger: () => notImplemented('calendar.syncTrigger')
   }
 
   // Web SPA has no OS credential store — V2 will surface a "configure on

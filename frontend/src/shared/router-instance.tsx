@@ -111,10 +111,22 @@ const adminKanbanRoute = createRoute({
   component: AdminLayout
 })
 
+// Phase 3 §3.3 — /admin/calendar?view=today|week|month|agenda|recurring.
+// 默认 view=week. validateSearch clamp 非法值 → 'week' 避免 hand-typed URL 崩页.
+export const CALENDAR_VIEWS = ['today', 'week', 'month', 'agenda', 'recurring'] as const
+export type CalendarView = (typeof CALENDAR_VIEWS)[number]
+
 const adminCalendarRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: 'calendar',
-  component: CalendarLayout
+  component: CalendarLayout,
+  validateSearch: (search: Record<string, unknown>): { view: CalendarView } => {
+    const v = search.view
+    if (typeof v === 'string' && (CALENDAR_VIEWS as readonly string[]).includes(v)) {
+      return { view: v as CalendarView }
+    }
+    return { view: 'week' }
+  }
 })
 
 // Sprint 18 §PR C — `?tab=` deep-link. Validated enum so a malformed link

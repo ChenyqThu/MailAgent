@@ -18,7 +18,13 @@ import type {
   AttachmentMeta,
   BodyOpts,
   CalendarApi,
+  CalendarEventDetail,
+  CalendarEventOccurrence,
   CalendarExpandOpts,
+  CalendarSyncStateItem,
+  EventGetOpts,
+  EventsListOpts,
+  SyncNowOpts,
   ChatApi,
   ChatEditOpts,
   ChatMessage,
@@ -270,6 +276,30 @@ class ElectronCalendarApi implements CalendarApi {
   }
   async expand(opts?: CalendarExpandOpts): Promise<unknown> {
     const env = (await invoker()('calendar:expand', opts ?? {})) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+
+  // Phase 3 §3.1 — Calendar SSoT
+  async eventsList(opts: EventsListOpts = {}): Promise<CalendarEventOccurrence[]> {
+    return (await invoker()(
+      'calendar:eventsList',
+      opts
+    )) as CalendarEventOccurrence[]
+  }
+  async eventGet(opts: EventGetOpts): Promise<CalendarEventDetail | null> {
+    return (await invoker()(
+      'calendar:eventGet',
+      opts
+    )) as CalendarEventDetail | null
+  }
+  async syncStatus(): Promise<CalendarSyncStateItem[]> {
+    return (await invoker()('calendar:syncStatus')) as CalendarSyncStateItem[]
+  }
+  async calendarNames(): Promise<string[]> {
+    return (await invoker()('calendar:calendarNames')) as string[]
+  }
+  async syncTrigger(opts: SyncNowOpts = {}): Promise<unknown> {
+    const env = (await invoker()('calendar:syncTrigger', opts)) as WriteEnvelope<unknown>
     return unwrap(env)
   }
 }
