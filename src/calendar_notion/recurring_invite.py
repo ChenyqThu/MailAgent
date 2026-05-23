@@ -3,6 +3,12 @@
 
 DEPRECATED entry-point. Use 'mailagent calendar recurring {discover,replay}' instead.
 
+Phase 1.5 重构 (frontend-view-silly-knuth.md): discover_recurring 退役"扫邮件 +
+IMAP fetch 解析 .ics"老路径, 改读 calendar_event 表 (CalendarSyncWorker 已落库的
+SSoT). 查询 ~5ms 替代原来 davmail 模式下每封邮件 5s × 2000 = 167min 的灾难性
+IMAP scan. replay_one 仍走老路径 (email refetch + meeting_sync), 因为它需要邮件
+.ics 内容才能重新 process; 计划下个 sprint 改成基于 calendar_event 重导出.
+
 CLI 调用的导出: discover_recurring / replay_one / _has_calendar_part 函数
 """
 from __future__ import annotations
@@ -31,71 +37,91 @@ def _has_calendar_part(source: str) -> bool:
 
 async def discover_recurring(
     sync_store: SyncStore,
-    arm: AppleScriptArm,
-    since: Optional[str],
-    limit: int,
+    since: Optional[str] = None,
+    limit: int = 2000,
 ) -> List[dict]:
-    """扫已 synced 的邮件，找带 RRULE 的会议邀请。"""
-    parser = ICalendarParser()
+    """读 calendar_event 表里所有 RRULE != '' 的事件 (Phase 1.5).
 
-    # 用 SQLite 读所有 synced 邮件（按 date desc 排）
-    where_clauses = ["sync_status = 'synced'"]
-    params: list = []
+    替代原"扫 email_metadata + IMAP fetch 解析 .ics"路径. davmail 模式下原路径
+    167min/2000 封; 新路径 ~5ms SQLite 查询.
+
+    Args:
+        sync_store: SyncStore 实例 (跟 calendar_event 同 db_path).
+        since: ISO 日期 YYYY-MM-DD; 留空 = 全部. 过滤 event.dtstart >= since.
+        limit: 最多返回 N 行 (按 dtstart DESC 排, 取最近的 N 个).
+
+    Returns:
+        List of dicts (跟老 shape 对齐, CLI grouping 逻辑零改动):
+            internal_id: related_email_internal_id 或 0 (caldav-only event 没邮件源)
+            subject: event.summary
+            sender: event.organizer (mailto 已剥)
+            date: dtstart ISO
+            uid: event.ical_uid
+            rrule: event.rrule
+            method: 'REQUEST' (calendar_event 表不存 iTIP method, 硬编码)
+            dtstart: dtstart ISO
+    """
+    # since 解析为 epoch (UTC midnight); 失败忽略 (CLI 已校验入参)
+    since_epoch: Optional[float] = None
     if since:
-        where_clauses.append("date_received >= ?")
-        params.append(since)
-    where_sql = " AND ".join(where_clauses)
+        try:
+            from datetime import datetime, timezone
+            d = datetime.fromisoformat(since)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            since_epoch = d.astimezone(timezone.utc).timestamp()
+        except (ValueError, TypeError):
+            logger.warning(f"discover_recurring: invalid --since={since!r}, ignored")
+
+    clauses = [
+        "rrule != ''",
+        "deleted_at IS NULL",
+        # Phase 1.5 主流 source: caldav (worker 拉的) + email_ics (邮件邀请派生)
+        "source IN ('caldav', 'email_ics')",
+    ]
+    params: list = []
+    if since_epoch is not None:
+        clauses.append("dtstart_utc >= ?")
+        params.append(since_epoch)
 
     with sync_store._connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             f"""
-            SELECT internal_id, subject, sender, date_received, mailbox
-            FROM email_metadata
-            WHERE {where_sql}
-            ORDER BY date_received DESC
+            SELECT id, ical_uid, summary, organizer, dtstart_utc,
+                   rrule, related_email_internal_id
+            FROM calendar_event
+            WHERE {' AND '.join(clauses)}
+            ORDER BY dtstart_utc DESC
             LIMIT ?
             """,
             (*params, limit),
         )
         rows = cursor.fetchall()
 
-    logger.info(f"Scanning {len(rows)} emails for RRULE...")
+    logger.info(f"discover_recurring: {len(rows)} calendar_event rows with RRULE")
+
+    from datetime import datetime, timezone
 
     matches: List[dict] = []
-    for i, row in enumerate(rows, 1):
-        internal_id = row["internal_id"]
-        mailbox = row["mailbox"] or "收件箱"
-        try:
-            full = arm.fetch_email_content_by_id(internal_id, mailbox)
-        except Exception as e:
-            logger.debug(f"  [{i}/{len(rows)}] fetch failed id={internal_id}: {e}")
-            continue
-        if not full:
-            continue
-        source = full.get("source", "")
-        if not _has_calendar_part(source):
-            continue
-
-        invite = parser.extract_from_email_source(source)
-        if invite is None or not invite.recurrence_rule:
-            continue
-
+    for row in rows:
+        dtstart_iso = (
+            datetime.fromtimestamp(row["dtstart_utc"], tz=timezone.utc).isoformat()
+            if row["dtstart_utc"] is not None
+            else None
+        )
+        organizer = (row["organizer"] or "").replace("mailto:", "")
         matches.append(
             {
-                "internal_id": internal_id,
-                "subject": row["subject"],
-                "sender": row["sender"],
-                "date": row["date_received"],
-                "uid": invite.uid,
-                "rrule": invite.recurrence_rule,
-                "method": invite.method,
-                "dtstart": invite.start_time.isoformat(),
+                "internal_id": int(row["related_email_internal_id"] or 0),
+                "subject": row["summary"],
+                "sender": organizer,
+                "date": dtstart_iso,
+                "uid": row["ical_uid"],
+                "rrule": row["rrule"],
+                "method": "REQUEST",
+                "dtstart": dtstart_iso,
             }
-        )
-        logger.info(
-            f"  [{i}/{len(rows)}] ✓ id={internal_id} subj={row['subject'][:50]!r} "
-            f"rrule={invite.recurrence_rule[:50]} method={invite.method}"
         )
 
     return matches
@@ -107,7 +133,18 @@ async def replay_one(
     arm: AppleScriptArm,
     meeting_sync: MeetingInviteSync,
 ) -> Optional[str]:
-    """回放单个 internal_id 的会议邀请。返回代表性 page_id 或 None。"""
+    """回放单个 internal_id 的会议邀请。返回代表性 page_id 或 None。
+
+    NOTE (Phase 1.5): 仍走老的 email refetch + meeting_sync 路径. 仅对
+    related_email_internal_id 非空的 event 有效 (即邮件邀请派生的). caldav-only
+    event 没邮件源, replay 会失败. 计划下个 sprint 改成基于 calendar_event 重导出.
+    """
+    if internal_id <= 0:
+        logger.warning(
+            f"replay_one: internal_id={internal_id} invalid; "
+            f"caldav-only events 无邮件源, 无法 replay"
+        )
+        return None
     # 找 mailbox
     meta = sync_store.get(internal_id)
     if not meta:
@@ -142,4 +179,3 @@ async def replay_one(
         f"relabel_applied={stats['relabel_applied']}"
     )
     return page_id
-

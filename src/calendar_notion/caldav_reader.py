@@ -177,7 +177,15 @@ class CalDAVReader:
         all_events: list[CalendarEvent] = []
         for cal in principal.calendars():
             try:
-                raw_events = cal.search(start=start, end=end, event=True, expand=True)
+                # Phase 1.5: expand=False — 让 server 返 master event + RRULE 字段,
+                # 不要在 server side 展开. 客户端 (Repository.list_event_occurrences /
+                # 前端 expander.ts) 拿 RRULE 用 dateutil/rrule npm 自己展开. 这样:
+                # 1) /calendar/recurring 能查到 (WHERE rrule != '' 命中 master rows)
+                # 2) calendar_event 行数大幅减少 (1 master vs N occurrences)
+                # 3) 跨窗口查询时不必每次都 server-side expand, SQL JOIN/index 更快
+                # CalDAV time-range filter 仍然 match "RRULE 有任何 instance 落窗口"
+                # 的 master, 不会漏数据.
+                raw_events = cal.search(start=start, end=end, event=True, expand=False)
             except Exception as e:
                 logger.warning(f"[caldav-reader] cal {cal.name!r} search failed: {e}")
                 continue
@@ -189,9 +197,11 @@ class CalDAVReader:
                 if parsed:
                     all_events.append(parsed)
 
-        # Filter window — caldav.search(expand=True) 可能展开 recurring rule 到远期,
-        # 不严格 respect end 参数. 这里硬过滤一次保证 LLM context 只看到指定窗口内.
+        # Filter window — 单次 event 的 dtstart 必须在 [start, end). master event
+        # (含 RRULE) 即使 dtstart 早于 start 也可能在窗口里有 occurrence, 保留之.
         def _in_window(e: CalendarEvent) -> bool:
+            if e.rrule:
+                return True  # master event 留给客户端 expander 决定
             es = e.start
             if es.tzinfo is None:
                 es = es.replace(tzinfo=timezone.utc)
@@ -200,7 +210,6 @@ class CalDAVReader:
             return start <= es < end
 
         all_events = [e for e in all_events if _in_window(e)]
-        # _parse_event 保证 e.start tz-aware, 不再做 fallback (MEDIUM: 删 dead branch).
         all_events.sort(key=lambda e: e.start.astimezone(timezone.utc))
         return all_events
 
@@ -249,7 +258,8 @@ class CalDAVReader:
             if calendar_name is not None and cal_name != calendar_name:
                 continue
             try:
-                raw_events = cal.search(start=start, end=end, event=True, expand=True)
+                # Phase 1.5: expand=False (跟 list_events 同, 见该函数注释).
+                raw_events = cal.search(start=start, end=end, event=True, expand=False)
             except Exception as e:
                 logger.warning(f"[caldav-reader] cal {cal_name!r} search failed: {e}")
                 continue
@@ -260,7 +270,11 @@ class CalDAVReader:
                 if parsed:
                     all_events.append(parsed)
 
+        # master event (含 RRULE) 即使 dtstart 早于 start 也保留 — 客户端
+        # expander 会把窗口内 occurrences 展开出来. 单次 event 才用窗口硬过滤.
         def _in_window(e: CalendarEvent) -> bool:
+            if e.rrule:
+                return True
             es = e.start
             if es.tzinfo is None:
                 es = es.replace(tzinfo=timezone.utc)

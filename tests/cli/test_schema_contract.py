@@ -420,15 +420,7 @@ class TestSchemaContract:
             return []
         import src.calendar_notion.recurring_invite as rr_mod
         monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
-        # Phase 0.1 fix: CLI 走 cli.backend.arm (factory), 不再硬编码 AppleScriptArm.
-        # 测试环境 patch CliContext.backend property 返回 mock backend.
-        class _FakeBackend:
-            arm = object()
-        from src.cli import context as _ctx_mod
-        monkeypatch.setattr(
-            _ctx_mod.CliContext, "backend",
-            property(lambda self: _FakeBackend()),
-        )
+        # Phase 1.5: discover 不再走 backend factory, 不需要 stub CliContext.backend
         result = _invoke(cli_runner, "calendar", "recurring", "discover",
                          "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output

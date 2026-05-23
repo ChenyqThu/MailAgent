@@ -106,12 +106,13 @@ class TestCalendarExpand:
 
 class TestCalendarRecurringDiscover:
     def test_discover_with_stub(self, cli_runner, cli_env, seeded_db, monkeypatch):
-        async def fake_discover(sync_store, arm, *, since=None, limit=2000):
+        # Phase 1.5: discover_recurring 签名变 (drop arm 参数, 改读 calendar_event 表).
+        async def fake_discover(sync_store, *, since=None, limit=2000):
             return [{
                 "internal_id": 53120,
                 "subject": "Weekly Sync",
                 "sender": "boss@example.com",
-                "date": "2026-04-01 09:00:00",
+                "date": "2026-04-01T09:00:00+00:00",
                 "uid": "uid-1",
                 "rrule": "FREQ=WEEKLY;COUNT=10",
                 "method": "REQUEST",
@@ -119,9 +120,6 @@ class TestCalendarRecurringDiscover:
             }]
         import src.calendar_notion.recurring_invite as rr_mod
         monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
-        # Stub CliContext.backend (Phase 0.1 fix): CLI 走 backend factory 而非
-        # 硬编码 AppleScriptArm, 测试需 patch factory 返回 mock backend with .arm.
-        _patch_cli_backend(monkeypatch)
         result = _invoke(cli_runner, "calendar", "recurring", "discover",
                          "--since", "2026-04-01", "--discover-limit", "100",
                          "-o", "json", db_path=seeded_db)
@@ -136,17 +134,16 @@ class TestCalendarRecurringDiscover:
         assert s["summary"] == "Weekly Sync"
         assert payload["data"]["since"] == "2026-04-01"
         assert payload["data"]["limit"] == 100
-        # PR-3 round-7 fix (codex MAJOR 2): scanned 是实际 SQL 扫描的 synced
-        # 邮件数, 不是 discover_limit 近似. seeded fixture 只有 1 个
-        # sync_status='synced' 且 date>=2026-04-01 的邮件 (12345, date=2026-05-15)
-        assert payload["data"]["scanned"] == 1
+        # Phase 1.5: scanned 现在 = calendar_event rows with rrule!='' 数量.
+        # seeded_db 没 seed calendar_event 行, 所以 = 0.
+        assert payload["data"]["scanned"] == 0
 
     def test_discover_empty(self, cli_runner, cli_env, seeded_db, monkeypatch):
         async def fake_discover(*args, **kwargs):
             return []
         import src.calendar_notion.recurring_invite as rr_mod
         monkeypatch.setattr(rr_mod, "discover_recurring", fake_discover)
-        _patch_cli_backend(monkeypatch)
+        # Phase 1.5: discover 不再触发 backend factory, 不需要 _patch_cli_backend
         result = _invoke(cli_runner, "calendar", "recurring", "discover",
                          "-o", "json", db_path=seeded_db)
         assert result.exit_code == 0, result.output
@@ -159,6 +156,62 @@ class TestCalendarRecurringDiscover:
         assert result.exit_code == 2, result.output
         payload = _last_json(result.output)
         assert payload["error"]["code"] == "E_INVALID_ARG"
+
+    def test_discover_reads_calendar_event_table(
+        self, cli_runner, cli_env, seeded_db,
+    ):
+        """Phase 1.5 integration: 真 calendar_event seed, 不 mock discover_recurring."""
+        from datetime import datetime, timezone, timedelta
+        from src.calendar_notion.caldav_reader import CalendarEvent
+        from src.calendar_sync import CalendarEventRepository
+
+        repo = CalendarEventRepository(str(seeded_db))
+        # 2 个 recurring (uid-1 master + uid-1 occurrence), 1 个单次 (uid-2)
+        start = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
+        master = CalendarEvent(
+            summary="Weekly sync",
+            start=start, end=start + timedelta(hours=1),
+            ical_uid="uid-weekly",
+            rrule="FREQ=WEEKLY;COUNT=10",
+            organizer="boss@example.com",
+            calendar_name="Personal",
+        )
+        occ = CalendarEvent(
+            summary="Weekly sync (rescheduled)",
+            start=start + timedelta(weeks=1, hours=1),
+            end=start + timedelta(weeks=1, hours=2),
+            ical_uid="uid-weekly",
+            recurrence_id=(start + timedelta(weeks=1)).isoformat(),
+            rrule="FREQ=WEEKLY;COUNT=10",  # occurrence 也带 rrule 字段拷贝
+            organizer="boss@example.com",
+            calendar_name="Personal",
+        )
+        single = CalendarEvent(
+            summary="One-off",
+            start=start + timedelta(days=3), end=start + timedelta(days=3, hours=1),
+            ical_uid="uid-single",
+            rrule="",  # 无 RRULE — 不该出现在 discover 结果
+            organizer="someone@example.com",
+            calendar_name="Personal",
+        )
+        repo.upsert_from_caldav_event(master, source="caldav")
+        repo.upsert_from_caldav_event(occ, source="caldav")
+        repo.upsert_from_caldav_event(single, source="caldav")
+
+        result = _invoke(cli_runner, "calendar", "recurring", "discover",
+                         "-o", "json", db_path=seeded_db)
+        assert result.exit_code == 0, result.output
+        payload = _last_json(result.output)
+
+        # uid-weekly grouped → 1 series; uid-single 不带 rrule → 不入结果
+        assert payload["data"]["total_series"] == 1, payload["data"]
+        assert payload["data"]["matches_total"] == 2  # master + occurrence 两行
+        s = payload["data"]["series"][0]
+        assert s["series_uid"] == "uid-weekly"
+        assert s["summary"] == "Weekly sync"
+        assert "FREQ=WEEKLY" in (s["rrule"] or "")
+        # scanned 也应该跟 matches_total 一致 (2 rows with rrule!='')
+        assert payload["data"]["scanned"] == 2
 
 
 # ============================================================

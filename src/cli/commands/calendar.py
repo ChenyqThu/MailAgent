@@ -171,11 +171,14 @@ def _build_meeting_sync(sync_store):
 def calendar_recurring_discover(
     ctx: typer.Context,
     since: Optional[str] = typer.Option(
-        None, "--since", help="起始日期 YYYY-MM-DD (default SYNC_START_DATE)",
+        None, "--since",
+        help="dtstart 起始日期 YYYY-MM-DD; 留空 = 全部 RRULE master 事件 "
+             "(Phase 1.5: 默认不再 fallback SYNC_START_DATE, 因为 master 的 "
+             "dtstart 可能远早于今天但 RRULE 仍 valid)",
     ),
     discover_limit: int = typer.Option(
         2000, "--discover-limit",
-        help="最多扫 N 个 synced 邮件 (default 2000)",
+        help="最多返回 N 行 calendar_event (按 dtstart DESC 排, default 2000)",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
@@ -188,46 +191,47 @@ def calendar_recurring_discover(
             f"--discover-limit must be > 0, got {discover_limit}",
         ))
 
-    since_eff = since or cli.cli_config.sync_start_date or None
+    # Phase 1.5: 不再 fallback sync_start_date — discover 现在查 calendar_event 表的
+    # RRULE master, dtstart 可能远早于 today 但 RRULE 仍 valid. 用户想筛窗口显式传 --since.
+    since_eff = since
 
-    # 走 backend factory — 关键修复 (plan Phase 0.1): 之前硬编码 AppleScriptArm 导致
-    # davmail 模式下前端 /calendar 路由仍唤起 Mail.app GUI. backend.arm 在 davmail
-    # 模式下是 IMAP fetch path (~236ms/封, 不唤起 GUI); applescript 模式下走老路径.
+    # Phase 1.5 重构: discover_recurring 改读 calendar_event 表 (CalendarSyncWorker
+    # 已落库 SSoT), 不再 IMAP fetch 邮件 .ics. 不需要 cli.backend.arm, 也不再触发
+    # davmail probe — 命令变成纯 SQLite 查询.
     from src.calendar_notion.recurring_invite import discover_recurring
 
     sync_store = cli.sync_store
     try:
-        arm = cli.backend.arm
-    except Exception as e:
-        raise emit_cli_error(cli, CliError(
-            f"backend probe failed: {e}",
-            hint="检查 MAILAGENT_BACKEND env 和后端可达性 (davmail: 127.0.0.1:1143 IMAP)",
-        ))
-    try:
         matches = asyncio.run(discover_recurring(
-            sync_store, arm, since=since_eff, limit=discover_limit,
+            sync_store, since=since_eff, limit=discover_limit,
         ))
     except Exception as e:
         raise emit_cli_error(cli, CliError(
             f"discover_recurring failed: {e}",
-            hint="检查 backend 健康状态 (davmail JVM / Mail.app FDA 权限)",
+            hint="检查 SyncStore schema (calendar_event 表需 v15+); "
+                 "若 worker 未启用 CALENDAR_CALDAV_SYNC_ENABLED, 该表会是空的",
         ))
 
-    # PR-3 round-7 fix (codex MAJOR 2): 用 SQL 算实际 scanned count
-    # discover_recurring 内部 LIMIT discover_limit + sync_status='synced' [+ since].
-    # 复现同条件在 CLI 层算 actual scanned, 而不是用 discover_limit 作近似。
+    # Phase 1.5: scanned = 总 calendar_event rows with rrule != '' (跟新 discover_recurring
+    # 的 source 集 + filter 对齐). 用 SQL 直查, 不依赖 discover_limit 近似.
     import sqlite3 as _sql
+    from datetime import datetime, timezone
 
     _scanned_sql = (
-        "SELECT COUNT(*) FROM (SELECT 1 FROM email_metadata "
-        "WHERE sync_status = 'synced'"
+        "SELECT COUNT(*) FROM calendar_event "
+        "WHERE rrule != '' AND deleted_at IS NULL "
+        "AND source IN ('caldav', 'email_ics')"
     )
     _params: list = []
     if since_eff:
-        _scanned_sql += " AND date_received >= ?"
-        _params.append(since_eff)
-    _scanned_sql += " ORDER BY date_received DESC LIMIT ?)"
-    _params.append(discover_limit)
+        try:
+            _d = datetime.fromisoformat(since_eff)
+            if _d.tzinfo is None:
+                _d = _d.replace(tzinfo=timezone.utc)
+            _params.append(_d.astimezone(timezone.utc).timestamp())
+            _scanned_sql += " AND dtstart_utc >= ?"
+        except (ValueError, TypeError):
+            pass
     _conn = _sql.connect(cli.cli_config.sync_store_db_path)
     try:
         actual_scanned = int(_conn.execute(_scanned_sql, _params).fetchone()[0])
