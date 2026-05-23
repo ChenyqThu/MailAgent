@@ -27,6 +27,17 @@ export type BackendKind = 'notion-agent' | 'custom-api'
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
 
+// Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
+// in `chat_tool_call`. See docs/agent-harness-design.md §4.5.
+export type ToolCallStatus =
+  | 'pending'      // awaiting confirmation (tier=preview/edit)
+  | 'confirmed'    // user approved, not yet running
+  | 'running'      // handler in flight
+  | 'ok'           // handler returned success
+  | 'error'        // handler returned ToolResult.ok=false OR threw
+  | 'canceled'     // user clicked Cancel in ConfirmToolDialog
+export type ConfirmationTier = 'silent' | 'preview' | 'edit'
+
 export interface ChatSession {
   id: number
   email_id: number
@@ -89,9 +100,56 @@ export interface UpdateMessagePatch {
   metadata?: string | null
 }
 
+// Sprint 19 — chat_tool_call row + CRUD inputs.
+
+export interface ChatToolCall {
+  id: number
+  message_id: number
+  /** Anthropic toolu_xxx. MUST match across `tool_use` → `tool_result`
+   *  round-trip in the LLM message stream. UNIQUE per (message_id). */
+  tool_use_id: string
+  tool_name: string
+  /** Original LLM-proposed input, serialized JSON. */
+  input_json: string
+  /** Set only when tier was 'edit' and the user changed the input via the
+   *  ConfirmToolDialog. The tool handler receives this as effective input;
+   *  the result envelope returned to the LLM includes
+   *  `{ user_edited: true, original_input, final_input }` so the model
+   *  knows what was actually executed. */
+  user_edited_input_json: string | null
+  /** Tool handler's `ToolResult` serialized as JSON. Null until completion. */
+  output_json: string | null
+  status: ToolCallStatus
+  duration_ms: number | null
+  confirmation_tier: ConfirmationTier
+  /** Epoch ms when the user clicked Confirm. Null for silent / canceled. */
+  confirmed_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+export interface AppendToolCallInput {
+  messageId: number
+  toolUseId: string
+  toolName: string
+  inputJson: string
+  confirmationTier: ConfirmationTier
+  /** Initial status — usually 'pending' for preview/edit tiers, 'running'
+   *  for silent. */
+  status: ToolCallStatus
+}
+
+export interface UpdateToolCallPatch {
+  status?: ToolCallStatus
+  outputJson?: string | null
+  durationMs?: number | null
+  userEditedInputJson?: string | null
+  confirmedAt?: number | null
+}
+
 // ── path resolution ─────────────────────────────────────────────────────
 
-const CHAT_DB_VERSION = 2
+const CHAT_DB_VERSION = 3
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -172,6 +230,101 @@ function migrate(db: Database.Database): void {
       // backend prefers metadata when present, falls back to the prefix
       // hack for v1-written rows.
       db.exec('ALTER TABLE ai_chat_messages ADD COLUMN metadata TEXT')
+    }
+    if (current < 3) {
+      // Sprint 19 — agent harness foundation. Four new tables:
+      //  1. chat_tool_call: per-tool-use audit (input/output/status/duration/
+      //     confirmation_tier). One row per Anthropic `tool_use` block the
+      //     LLM proposes. `tool_use_id` is the Anthropic toolu_xxx id and
+      //     MUST be stable across history serialization (we round-trip it
+      //     in the next-turn `tool_result.tool_use_id`).
+      //  2. wiki_pages: LLM Wiki SSoT (one markdown page per concept).
+      //     Schema landed at v3 even though only M2 tools start writing —
+      //     keeps the migration ladder short, no second-bump pain.
+      //  3. wiki_fts: FTS5 virtual + 3 triggers to mirror wiki_pages.body_markdown.
+      //  4. agent_memory_kv: gbrain-style structured key/value Facts pulled
+      //     out of wiki page metadata. Keyed by (scope, key).
+      //
+      // M1 ships only chat_tool_call writes. wiki_* tables sit idle until
+      // M2 PR-2c wires the wiki_read / wiki_write tools.
+      db.exec(`
+        CREATE TABLE chat_tool_call (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+          tool_use_id TEXT NOT NULL,
+          tool_name TEXT NOT NULL,
+          input_json TEXT NOT NULL,
+          user_edited_input_json TEXT,
+          output_json TEXT,
+          status TEXT NOT NULL
+            CHECK (status IN ('pending', 'confirmed', 'running', 'ok', 'error', 'canceled')),
+          duration_ms INTEGER,
+          confirmation_tier TEXT NOT NULL
+            CHECK (confirmation_tier IN ('silent', 'preview', 'edit')),
+          confirmed_at INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE (message_id, tool_use_id)
+        );
+
+        CREATE INDEX idx_tool_call_message ON chat_tool_call(message_id);
+        CREATE INDEX idx_tool_call_status_inflight
+          ON chat_tool_call(status)
+          WHERE status IN ('pending', 'confirmed', 'running');
+
+        CREATE TABLE wiki_pages (
+          path TEXT PRIMARY KEY,
+          scope TEXT NOT NULL,
+          slug TEXT,
+          body_markdown TEXT NOT NULL,
+          refs_json TEXT,
+          source_messages_json TEXT,
+          updated_by TEXT NOT NULL DEFAULT 'agent',
+          mtime_ns INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX idx_wiki_scope_slug ON wiki_pages(scope, slug);
+
+        -- FTS5 contentful mode: column names MUST match the underlying
+        -- content table's columns so SQLite can auto-join on SELECT (see
+        -- src/mail/sync_store.py:471 email_body_fts for the same pattern).
+        -- If you rename FTS columns out-of-sync with wiki_pages, queries
+        -- like SELECT body_markdown FROM wiki_fts will fail with
+        -- "no such column" — FTS5 looks them up on the content table.
+        CREATE VIRTUAL TABLE wiki_fts USING fts5(
+          path UNINDEXED,
+          body_markdown,
+          content='wiki_pages',
+          content_rowid='rowid',
+          tokenize='porter unicode61 remove_diacritics 2'
+        );
+
+        CREATE TRIGGER wiki_pages_ai AFTER INSERT ON wiki_pages BEGIN
+          INSERT INTO wiki_fts(rowid, path, body_markdown)
+          VALUES (new.rowid, new.path, new.body_markdown);
+        END;
+        CREATE TRIGGER wiki_pages_ad AFTER DELETE ON wiki_pages BEGIN
+          INSERT INTO wiki_fts(wiki_fts, rowid, path, body_markdown)
+          VALUES ('delete', old.rowid, old.path, old.body_markdown);
+        END;
+        CREATE TRIGGER wiki_pages_au AFTER UPDATE ON wiki_pages BEGIN
+          INSERT INTO wiki_fts(wiki_fts, rowid, path, body_markdown)
+          VALUES ('delete', old.rowid, old.path, old.body_markdown);
+          INSERT INTO wiki_fts(rowid, path, body_markdown)
+          VALUES (new.rowid, new.path, new.body_markdown);
+        END;
+
+        CREATE TABLE agent_memory_kv (
+          scope TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value_json TEXT NOT NULL,
+          source_wiki_path TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (scope, key)
+        );
+      `)
     }
     db.prepare("INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', ?)").run(
       String(CHAT_DB_VERSION)
@@ -433,4 +586,90 @@ export function abortStreamingMessages(sessionId: number): number {
     )
     .run(now, sessionId)
   return result.changes
+}
+
+// ── chat_tool_call (Sprint 19) ──────────────────────────────────────────
+
+export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
+  const db = getChatDb()
+  const now = Date.now()
+  const result = db
+    .prepare(
+      `INSERT INTO chat_tool_call
+        (message_id, tool_use_id, tool_name, input_json,
+         user_edited_input_json, output_json,
+         status, duration_ms, confirmation_tier, confirmed_at,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?)`
+    )
+    .run(
+      input.messageId,
+      input.toolUseId,
+      input.toolName,
+      input.inputJson,
+      input.status,
+      input.confirmationTier,
+      now,
+      now
+    )
+  return {
+    id: Number(result.lastInsertRowid),
+    message_id: input.messageId,
+    tool_use_id: input.toolUseId,
+    tool_name: input.toolName,
+    input_json: input.inputJson,
+    user_edited_input_json: null,
+    output_json: null,
+    status: input.status,
+    duration_ms: null,
+    confirmation_tier: input.confirmationTier,
+    confirmed_at: null,
+    created_at: now,
+    updated_at: now
+  }
+}
+
+export function updateToolCall(toolCallId: number, patch: UpdateToolCallPatch): void {
+  const db = getChatDb()
+  const now = Date.now()
+  const fields: string[] = []
+  const params: unknown[] = []
+  if (patch.status !== undefined) {
+    fields.push('status = ?')
+    params.push(patch.status)
+  }
+  if (patch.outputJson !== undefined) {
+    fields.push('output_json = ?')
+    params.push(patch.outputJson)
+  }
+  if (patch.durationMs !== undefined) {
+    fields.push('duration_ms = ?')
+    params.push(patch.durationMs)
+  }
+  if (patch.userEditedInputJson !== undefined) {
+    fields.push('user_edited_input_json = ?')
+    params.push(patch.userEditedInputJson)
+  }
+  if (patch.confirmedAt !== undefined) {
+    fields.push('confirmed_at = ?')
+    params.push(patch.confirmedAt)
+  }
+  if (fields.length === 0) return
+  fields.push('updated_at = ?')
+  params.push(now)
+  params.push(toolCallId)
+  db.prepare(`UPDATE chat_tool_call SET ${fields.join(', ')} WHERE id = ?`).run(...params)
+}
+
+export function listToolCallsForMessage(messageId: number): ChatToolCall[] {
+  return getChatDb()
+    .prepare('SELECT * FROM chat_tool_call WHERE message_id = ? ORDER BY created_at ASC, id ASC')
+    .all(messageId) as ChatToolCall[]
+}
+
+export function getToolCallByUseId(messageId: number, toolUseId: string): ChatToolCall | null {
+  const row = getChatDb()
+    .prepare('SELECT * FROM chat_tool_call WHERE message_id = ? AND tool_use_id = ?')
+    .get(messageId, toolUseId) as ChatToolCall | undefined
+  return row ?? null
 }

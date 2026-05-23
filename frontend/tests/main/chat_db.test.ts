@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import {
   abortStreamingMessages,
   appendMessage,
+  appendToolCall,
   closeChatDb,
   deleteMessagesFromId,
   deleteSession,
@@ -31,10 +32,13 @@ import {
   getMessage,
   getOrCreateSession,
   getSession,
+  getToolCallByUseId,
   listMessages,
   listSessionsForEmail,
+  listToolCallsForMessage,
   resolveChatDbPath,
-  updateMessage
+  updateMessage,
+  updateToolCall
 } from '../../src/electron/main/chat_db'
 
 let tmpDir: string
@@ -67,11 +71,15 @@ describe('chat_db — path + schema bootstrap', () => {
     expect(names).toContain('ai_chat_sessions')
     expect(names).toContain('ai_chat_messages')
     expect(names).toContain('chat_db_meta')
+    // Sprint 19 — agent harness foundation (PR-1a).
+    expect(names).toContain('chat_tool_call')
+    expect(names).toContain('wiki_pages')
+    expect(names).toContain('agent_memory_kv')
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    // Sprint 5 Day 1 (opus L carry-forward): bumped to 2 — metadata column.
-    expect(ver.value).toBe('2')
+    // Sprint 19 (PR-1a): bumped to 3 — chat_tool_call + wiki_pages + wiki_fts + agent_memory_kv.
+    expect(ver.value).toBe('3')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -88,7 +96,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('2')
+    expect(ver.value).toBe('3')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -139,7 +147,8 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('2')
+    // Sprint 19 (PR-1a): v1 DB now jumps straight to v3.
+    expect(ver.value).toBe('3')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // Old data preserved verbatim — the v1-stored thread_id encoding stays
@@ -150,6 +159,15 @@ describe('chat_db — path + schema bootstrap', () => {
       .get() as { model: string; metadata: string | null }
     expect(row.model).toBe('notion-agent:thr-old')
     expect(row.metadata).toBeNull()
+    // Sprint 19 — v3 tables exist post-migration.
+    const tableNames = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+        name: string
+      }>
+    ).map((t) => t.name)
+    expect(tableNames).toContain('chat_tool_call')
+    expect(tableNames).toContain('wiki_pages')
+    expect(tableNames).toContain('agent_memory_kv')
   })
 
   test('opening a future-version DB refuses to load', () => {
@@ -489,5 +507,222 @@ describe('chat_db — abort + cascade', () => {
 
     expect(listMessages(a.id).find((r) => r.status === 'streaming')).toBeUndefined()
     expect(listMessages(b.id).find((r) => r.status === 'streaming')).toBeTruthy()
+  })
+})
+
+// Sprint 19 PR-1a — chat_tool_call CRUD round-trip + v3 schema integrity.
+describe('chat_db — chat_tool_call (Sprint 19)', () => {
+  function seedAssistantMessage(): { sessionId: number; messageId: number } {
+    const session = getOrCreateSession({ emailId: 101, backendKind: 'custom-api' })
+    const msg = appendMessage({
+      sessionId: session.id,
+      role: 'assistant',
+      content: '',
+      status: 'streaming'
+    })
+    return { sessionId: session.id, messageId: msg.id }
+  }
+
+  test('appendToolCall persists the LLM-proposed input + status', () => {
+    const { messageId } = seedAssistantMessage()
+    const row = appendToolCall({
+      messageId,
+      toolUseId: 'toolu_test_001',
+      toolName: 'email_search',
+      inputJson: JSON.stringify({ subject_contains: 'q3 okr', limit: 10 }),
+      confirmationTier: 'silent',
+      status: 'running'
+    })
+    expect(row.id).toBeGreaterThan(0)
+    expect(row.message_id).toBe(messageId)
+    expect(row.tool_use_id).toBe('toolu_test_001')
+    expect(row.tool_name).toBe('email_search')
+    expect(JSON.parse(row.input_json)).toEqual({ subject_contains: 'q3 okr', limit: 10 })
+    expect(row.status).toBe('running')
+    expect(row.confirmation_tier).toBe('silent')
+    expect(row.output_json).toBeNull()
+    expect(row.user_edited_input_json).toBeNull()
+  })
+
+  test('updateToolCall fills output + duration on completion', () => {
+    const { messageId } = seedAssistantMessage()
+    const row = appendToolCall({
+      messageId,
+      toolUseId: 'toolu_test_002',
+      toolName: 'email_get',
+      inputJson: JSON.stringify({ internal_id: 53675 }),
+      confirmationTier: 'silent',
+      status: 'running'
+    })
+    updateToolCall(row.id, {
+      status: 'ok',
+      outputJson: JSON.stringify({ subject: 'hello', sender: 'bob@acme.com' }),
+      durationMs: 42
+    })
+    const fresh = getToolCallByUseId(messageId, 'toolu_test_002')!
+    expect(fresh.status).toBe('ok')
+    expect(JSON.parse(fresh.output_json!)).toEqual({ subject: 'hello', sender: 'bob@acme.com' })
+    expect(fresh.duration_ms).toBe(42)
+  })
+
+  test('updateToolCall persists user_edited_input_json + confirmed_at for tier=edit', () => {
+    const { messageId } = seedAssistantMessage()
+    const row = appendToolCall({
+      messageId,
+      toolUseId: 'toolu_draft_001',
+      toolName: 'email_draft_reply',
+      inputJson: JSON.stringify({ internal_id: 1, body_markdown: 'See you Tuesday.' }),
+      confirmationTier: 'edit',
+      status: 'pending'
+    })
+    const confirmedAt = Date.now()
+    updateToolCall(row.id, {
+      status: 'confirmed',
+      userEditedInputJson: JSON.stringify({
+        internal_id: 1,
+        body_markdown: 'See you Wednesday — Tuesday no longer works.'
+      }),
+      confirmedAt
+    })
+    const fresh = getToolCallByUseId(messageId, 'toolu_draft_001')!
+    expect(fresh.status).toBe('confirmed')
+    expect(fresh.confirmed_at).toBe(confirmedAt)
+    expect(JSON.parse(fresh.user_edited_input_json!).body_markdown).toContain('Wednesday')
+  })
+
+  test('listToolCallsForMessage returns rows in insertion order', () => {
+    const { messageId } = seedAssistantMessage()
+    appendToolCall({
+      messageId,
+      toolUseId: 'toolu_001',
+      toolName: 'email_search',
+      inputJson: '{}',
+      confirmationTier: 'silent',
+      status: 'running'
+    })
+    appendToolCall({
+      messageId,
+      toolUseId: 'toolu_002',
+      toolName: 'email_body',
+      inputJson: '{"internal_id":42}',
+      confirmationTier: 'silent',
+      status: 'running'
+    })
+    const rows = listToolCallsForMessage(messageId)
+    expect(rows.map((r) => r.tool_use_id)).toEqual(['toolu_001', 'toolu_002'])
+  })
+
+  test('UNIQUE (message_id, tool_use_id) — duplicate toolUseId on same message throws', () => {
+    const { messageId } = seedAssistantMessage()
+    appendToolCall({
+      messageId,
+      toolUseId: 'toolu_dup',
+      toolName: 'email_search',
+      inputJson: '{}',
+      confirmationTier: 'silent',
+      status: 'running'
+    })
+    expect(() =>
+      appendToolCall({
+        messageId,
+        toolUseId: 'toolu_dup',
+        toolName: 'email_search',
+        inputJson: '{}',
+        confirmationTier: 'silent',
+        status: 'running'
+      })
+    ).toThrow()
+  })
+
+  test('CASCADE — deleting the assistant message removes its tool calls', () => {
+    const { sessionId, messageId } = seedAssistantMessage()
+    appendToolCall({
+      messageId,
+      toolUseId: 'toolu_cascade',
+      toolName: 'email_get',
+      inputJson: '{}',
+      confirmationTier: 'silent',
+      status: 'ok'
+    })
+    expect(listToolCallsForMessage(messageId)).toHaveLength(1)
+    deleteSession(sessionId)
+    expect(listToolCallsForMessage(messageId)).toHaveLength(0)
+  })
+
+  test('getToolCallByUseId returns null for unknown id', () => {
+    const { messageId } = seedAssistantMessage()
+    expect(getToolCallByUseId(messageId, 'toolu_does_not_exist')).toBeNull()
+  })
+})
+
+// Sprint 19 PR-1a — v3 schema additions integrity (wiki_pages + wiki_fts triggers,
+// agent_memory_kv composite PK). M2 tools will use these; smoke-check here that
+// the migration left them in a workable shape.
+describe('chat_db — v3 schema (wiki + memory_kv)', () => {
+  test('wiki_pages PRIMARY KEY (path) + wiki_fts trigger keeps body in sync on INSERT/UPDATE/DELETE', () => {
+    const db = getChatDb()
+    const now = Date.now()
+    db.prepare(
+      `INSERT INTO wiki_pages
+        (path, scope, slug, body_markdown, refs_json, source_messages_json,
+         updated_by, mtime_ns, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, 'user', ?, ?, ?)`
+    ).run('user/preferences.md', 'user', null, 'I prefer concise replies.', now, now, now)
+
+    const ftsRow = db
+      .prepare(`SELECT body_markdown FROM wiki_fts WHERE path = 'user/preferences.md'`)
+      .get() as { body_markdown: string } | undefined
+    expect(ftsRow?.body_markdown).toBe('I prefer concise replies.')
+
+    // FTS5 MATCH path verifies tokenizer reaches into the body. `concise` lives
+    // in the seeded body, so it must surface.
+    const hits = db
+      .prepare(`SELECT path FROM wiki_fts WHERE wiki_fts MATCH 'concise'`)
+      .all() as Array<{ path: string }>
+    expect(hits.map((h) => h.path)).toContain('user/preferences.md')
+
+    // UPDATE → FTS row must reflect new body.
+    db.prepare(`UPDATE wiki_pages SET body_markdown = ?, updated_at = ? WHERE path = ?`).run(
+      'I prefer brief replies with code samples.',
+      now + 1,
+      'user/preferences.md'
+    )
+    const updated = db
+      .prepare(`SELECT body_markdown FROM wiki_fts WHERE path = 'user/preferences.md'`)
+      .get() as { body_markdown: string }
+    expect(updated.body_markdown).toBe('I prefer brief replies with code samples.')
+
+    // DELETE → FTS row must be gone.
+    db.prepare(`DELETE FROM wiki_pages WHERE path = ?`).run('user/preferences.md')
+    const gone = db
+      .prepare(`SELECT body_markdown FROM wiki_fts WHERE path = 'user/preferences.md'`)
+      .get() as { body_markdown: string } | undefined
+    expect(gone).toBeUndefined()
+  })
+
+  test('wiki_pages PRIMARY KEY rejects duplicate path', () => {
+    const db = getChatDb()
+    const now = Date.now()
+    const stmt = db.prepare(
+      `INSERT INTO wiki_pages
+        (path, scope, body_markdown, updated_by, mtime_ns, created_at, updated_at)
+       VALUES (?, 'user', ?, 'user', ?, ?, ?)`
+    )
+    stmt.run('user/preferences.md', 'first', now, now, now)
+    expect(() => stmt.run('user/preferences.md', 'second', now, now, now)).toThrow()
+  })
+
+  test('agent_memory_kv composite PRIMARY KEY (scope, key)', () => {
+    const db = getChatDb()
+    const now = Date.now()
+    const stmt = db.prepare(
+      `INSERT INTO agent_memory_kv (scope, key, value_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    stmt.run('sender.bob@acme.com', 'tone', '"casual"', now, now)
+    // Different scope, same key → OK
+    expect(() => stmt.run('sender.alice@acme.com', 'tone', '"formal"', now, now)).not.toThrow()
+    // Same scope + key → duplicate PK
+    expect(() => stmt.run('sender.bob@acme.com', 'tone', '"changed"', now, now)).toThrow()
   })
 })

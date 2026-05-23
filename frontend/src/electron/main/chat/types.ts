@@ -57,6 +57,11 @@ export interface DoneEvent {
   type: 'done'
   finalContent: string
   model: string | null
+  /** Sprint 19 — Anthropic-style stop_reason. `tool_use` tells the
+   *  harness loop "the model wants to call tools, do another iter";
+   *  `end_turn` means stop. Optional for backends that don't expose
+   *  it (notion-agent CLI always returns end_turn semantics). */
+  stopReason?: 'end_turn' | 'tool_use' | 'max_tokens'
   /** See UsageEvent.metadata — orchestrator merges this with any prior
    *  metadata observed on usage events (last-write-wins). */
   metadata?: Record<string, unknown> | null
@@ -69,7 +74,57 @@ export interface ErrorEvent {
   message: string
 }
 
-export type ChatStreamEvent = ChunkEvent | ToolCallEvent | UsageEvent | DoneEvent | ErrorEvent
+/** Sprint 19 — LLM proposes a tool invocation (Anthropic `tool_use` content
+ *  block / OpenAI `tool_calls`). The harness loop accumulates these in the
+ *  current iter, dispatches them between iterations, then injects the
+ *  resulting tool_result blocks back into history for the next stream call.
+ *
+ *  `toolUseId` MUST be stable across history serialization — Anthropic
+ *  requires the next-turn `tool_result.tool_use_id` to match this exactly.
+ *  Persisted in `chat_tool_call.tool_use_id`. */
+export interface ToolUseEvent {
+  type: 'tool_use'
+  toolUseId: string
+  name: string
+  input: unknown
+}
+
+/** Sprint 19 — Result of a tool execution. Emitted by the harness, not by
+ *  the LLM backend. The renderer renders these as the second half of a
+ *  ToolCallRow (status + duration + collapsed output). */
+export interface ToolResultEvent {
+  type: 'tool_result'
+  toolUseId: string
+  status: 'ok' | 'error' | 'canceled'
+  output?: unknown
+  errorMessage?: string
+  durationMs: number
+}
+
+/** Sprint 19 — Harness detected a tool whose `confirmationTier` is
+ *  `'preview'` or `'edit'`. The renderer pops a `ConfirmToolDialog`; the
+ *  user either approves (optionally editing input) or cancels via the
+ *  `chat:confirmTool` IPC channel. Until the user responds, the harness
+ *  blocks on a per-`toolUseId` promise. */
+export interface PendingConfirmationEvent {
+  type: 'pending_confirmation'
+  toolUseId: string
+  toolName: string
+  input: unknown
+  /** One-line human-readable summary the dialog shows above the JSON. */
+  preview?: string
+  tier: 'preview' | 'edit'
+}
+
+export type ChatStreamEvent =
+  | ChunkEvent
+  | ToolCallEvent
+  | ToolUseEvent
+  | ToolResultEvent
+  | PendingConfirmationEvent
+  | UsageEvent
+  | DoneEvent
+  | ErrorEvent
 
 // ── orchestrator → backend inputs ────────────────────────────────────────
 
@@ -90,6 +145,15 @@ export interface EmailContext {
   notionPageId: string | null
 }
 
+/** Sprint 19 — Anthropic-shape tool descriptor a backend can pass to the
+ *  upstream LLM. The harness emits these via `ToolRegistry.toAnthropicSchema()`.
+ *  Backends that don't support tool calling (notion-agent CLI) ignore this. */
+export interface BackendToolDescriptor {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+}
+
 export interface ChatStreamRequest {
   /** Sequential chat history including the just-inserted user message
    *  the orchestrator wants the backend to respond to. The backend
@@ -107,6 +171,11 @@ export interface ChatStreamRequest {
   /** Cancellation signal — orchestrator aborts this when the user switches
    *  emails / closes the AI panel / hits the explicit cancel button. */
   signal: AbortSignal
+  /** Sprint 19 — tools the LLM may call. Omitted (or empty) → backend
+   *  must not pass `tools` to the upstream API. The harness loop sets this
+   *  to `registry.toAnthropicSchema()`; the legacy single-turn path leaves
+   *  it undefined. */
+  tools?: BackendToolDescriptor[]
 }
 
 export interface ChatBackend {
