@@ -940,6 +940,7 @@ python3 scripts/dev/test_mail_reader.py
 
 **M2 进度**：
 - ✅ PR-2a (2026-05-23) — FTS5 中文 smart wrapper ship。后端 `smart_query_transform` + `search_email_bodies_smart` + 前端 `smartQueryTransform` 双份算法对齐。CLI / webhook handler / chat tool 全部默认 smart 模式。20 个后端单测 + 18 个前端单测全过。详见 Phase 3 段 / `src/repository/email_repository.py:smart_query_transform`。
+- ✅ PR-2b (2026-05-23) — 附件文本化 + attachment FTS5 ship。新模块 `src/converter/attachment_text.py` 统一 PDF/docx/pptx/xlsx 抽取入口；DB v16 加 `email_attachment_text` + `email_attachment_fts` 表 + 3 triggers；EmailRepository 加 `enqueue/commit/get/list_pending/mark_failure/search_attachment_texts(_smart)` 方法；CLI `mailagent attachment search` / `mailagent attachment extract --pending --include-missing`；webhook handler `search_email_attachments`；前端 chat tool `email_search_attachments`。21 + 17 + 6 个新单测全过。详见 Phase 3 段 / `src/converter/attachment_text.py`。
 
 ---
 
@@ -1576,6 +1577,43 @@ for h in hits:
 ```
 
 **前端 chat agent tool**（`email_search_fulltext`）也默认 smart — LLM 可以直接传 `"产品评审"`、`"redis 超时"` 这种自然语言关键词，wrapper 自动 CJK-aware 改写。
+
+### 附件 FTS5 全文搜索（PR-2b, Sprint 19 M2）
+
+平行于 `email_body_fts` 的 attachment 文本索引。`email_attachment_text` (DB v16) 跟 `email_attachment_fts` 配套 — PDF / docx / pptx / xlsx 抽出的文本进 FTS5。索引内容 = `text_content`（一列）。
+
+两个入口（跟 email body search 一致）：
+
+- `EmailRepository.search_attachment_texts(query, ...)` — raw FTS5
+- `EmailRepository.search_attachment_texts_smart(query, ...)` — CJK-aware smart wrapper（复用 PR-2a `smart_query_transform`）
+
+**前端入口**：
+- CLI `mailagent attachment search '<query>' [--mailbox X --since Y --until Z --limit N] [--raw]` （默认 smart）
+- CLI `mailagent attachment extract --pending --include-missing [--limit N --dry-run]` —— 触发抽取 pending 附件 + 一次性补 enqueue 历史
+- Webhook event `search_email_attachments`（自动从 Redis 消费）
+- Chat agent tool `email_search_attachments`（silent tier, category=read）
+
+**抽取流程**：
+1. 邮件 sync 写 `email_attachment` 时，`commit_email_with_body` 自动 enqueue 非 inline 附件成 `email_attachment_text(status='pending')`
+2. 没有后台 worker —— 用户 / cron 跑 `mailagent attachment extract --pending --limit 50` 一次推进 queue（PR-2b.2 加 worker）
+3. extractor 派发：`.pdf` → pypdf / `.docx` → python-docx / `.pptx` → python-pptx / `.xlsx` → python-calamine / `.txt/.md/.csv` → 直接 read_text
+4. 成功 → `status='extracted'` + text 入 FTS5（trigger 自动同步）
+5. 失败 → `status='failed'` + 指数退避（1m / 5m / 15m / 1h / 2h）；超 5 次 → `next_retry_at=NULL` dead
+6. unsupported (zip / .doc / .ppt) → `status='unsupported'` 不索引也不重试
+
+**Cap**: 单 attachment 文本 ≤ 256 KB（utf-8 字节）。超出 `truncated=True` 标记，FTS5 索引大小可控。
+
+**响应示例**（webhook `search_email_attachments`）：
+```jsonc
+{"status": "success", "query": "合同条款", "mode": "smart",
+ "transformed_query": "(合同条款* OR (合* AND 同* AND 条* AND 款*))",
+ "total_hits": 3, "latency_ms": 12,
+ "hits": [{"attachment_id": 7821, "internal_id": 53675,
+           "filename": "supplier_contract.pdf",
+           "email_subject": "供应商合同 v3", "email_sender": "alice@acme.com",
+           "snippet": "...条款 6.2 <mark>付款</mark>方式...", "rank": -2.34,
+           "notion_url": "..."}]}
+```
 
 详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md)。
 

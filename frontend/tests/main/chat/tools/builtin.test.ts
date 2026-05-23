@@ -23,9 +23,10 @@ describe('builtin tool catalog — M1', () => {
     }
   })
 
-  test('attachment tools: exactly 1 (M1 ships only attachment_list)', () => {
-    expect(allAttachmentTools).toHaveLength(1)
-    expect(allAttachmentTools[0]?.name).toBe('attachment_list')
+  test('attachment tools: 2 (PR-2b adds email_search_attachments on top of M1 attachment_list)', () => {
+    expect(allAttachmentTools).toHaveLength(2)
+    const names = allAttachmentTools.map((t) => t.name).sort()
+    expect(names).toEqual(['attachment_list', 'email_search_attachments'])
   })
 
   test('write tools: exactly 3 (email_flag / email_archive / email_draft_reply)', () => {
@@ -63,6 +64,7 @@ describe('builtin tool catalog — M1', () => {
         'email_get_ai_fields',
         'email_list_thread',
         'email_search',
+        'email_search_attachments', // PR-2b
         'email_search_fulltext'
       ].sort()
     )
@@ -93,6 +95,7 @@ describe('builtin tool catalog — M1', () => {
       email_body: ['internal_id'],
       email_list_thread: ['thread_id'],
       email_search_fulltext: ['query'],
+      email_search_attachments: ['query'],  // PR-2b
       email_get_ai_fields: ['internal_id'],
       attachment_list: ['internal_id'],
       // write tools require internal_id + (for draft) body_markdown.
@@ -109,7 +112,7 @@ describe('builtin tool catalog — M1', () => {
 })
 
 describe('registerBuiltinTools — boot wiring', () => {
-  test('registers all 10 M1 tools into a fresh registry (7 read + 3 write)', () => {
+  test('registers all 11 tools (M1 10 + PR-2b email_search_attachments) into a fresh registry (8 read + 3 write)', () => {
     const r = createToolRegistry()
     registerBuiltinTools(r)
     expect(r.names().sort()).toEqual(
@@ -123,6 +126,7 @@ describe('registerBuiltinTools — boot wiring', () => {
         'email_get_ai_fields',
         'email_list_thread',
         'email_search',
+        'email_search_attachments', // PR-2b
         'email_search_fulltext'
       ].sort()
     )
@@ -132,7 +136,7 @@ describe('registerBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     registerBuiltinTools(r)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(10)
+    expect(schema).toHaveLength(11)  // PR-2b: 10 → 11
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
@@ -144,7 +148,7 @@ describe('registerBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     registerBuiltinTools(r)
     const readOnly = r.toAnthropicSchema({ categories: ['read'] })
-    expect(readOnly).toHaveLength(7)
+    expect(readOnly).toHaveLength(8)  // PR-2b: 7 → 8
     for (const t of readOnly) {
       expect(t.name).not.toMatch(/_flag|_archive|_draft_reply/)
     }

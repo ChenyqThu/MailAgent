@@ -10,6 +10,8 @@ from src.repository.attachment_store import AttachmentStore
 from src.repository.email_repository import (
     AttachmentPayload,
     AttachmentRecord,
+    AttachmentSearchHit,
+    AttachmentTextRecord,
     BodyPayload,
     EmailBodyRecord,
     EmailFull,
@@ -25,7 +27,9 @@ from src.repository.translation import TranslationRepository
 __all__ = [
     "AttachmentPayload",
     "AttachmentRecord",
+    "AttachmentSearchHit",
     "AttachmentStore",
+    "AttachmentTextRecord",
     "BodyPayload",
     "EmailBodyRecord",
     "EmailFull",

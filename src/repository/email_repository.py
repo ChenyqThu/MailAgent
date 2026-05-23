@@ -156,6 +156,48 @@ class EmailSearchHit:
 
 
 # ============================================================
+# PR-2b: 附件文本抽取 + FTS5 搜索 dataclass
+# ============================================================
+
+@dataclass
+class AttachmentTextRecord:
+    """email_attachment_text 行投影."""
+    attachment_id: int
+    text_content: Optional[str]
+    text_size_bytes: int
+    extractor: str
+    status: str                          # 'pending' / 'extracted' / 'failed' / 'unsupported'
+    error_message: Optional[str]
+    retry_count: int
+    next_retry_at: Optional[float]
+    extracted_at: Optional[float]
+    truncated: bool
+    created_at: float
+    updated_at: float
+
+
+@dataclass
+class AttachmentSearchHit:
+    """search_attachment_texts 单条命中.
+
+    FTS5 hit 后 JOIN email_attachment + email_metadata 拼邮件上下文,
+    让 chat agent 直接 render '在哪封邮件的哪个附件里' 不用再多调 IPC.
+    """
+    attachment_id: int
+    internal_id: int
+    filename: str
+    content_type: Optional[str]
+    snippet: str
+    rank: float
+    email_subject: str
+    email_sender: str
+    email_date: Optional[str]
+    email_mailbox: Optional[str]
+    notion_page_id: Optional[str] = None
+    notion_url: Optional[str] = None
+
+
+# ============================================================
 # FTS5 query smart transform — CJK-aware 自然语言 → FTS5 syntax (PR-2a)
 # ============================================================
 #
@@ -784,6 +826,285 @@ class EmailRepository:
         )
 
     # ============================================================
+    # SEARCH (PR-2b: 附件文本 FTS5)
+    # ============================================================
+
+    def enqueue_attachment_text_extraction(self, attachment_id: int) -> None:
+        """commit_email_with_body 后调 — 把附件登记为 pending 等 worker 抽.
+
+        幂等: 已有行就不动 (INSERT OR IGNORE). worker 处理失败时另外维护
+        retry_count + next_retry_at, 不在这里 reset.
+        """
+        conn = self._connect()
+        now = time.time()
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO email_attachment_text
+                   (attachment_id, text_content, text_size_bytes, extractor,
+                    status, retry_count, created_at, updated_at)
+                   VALUES (?, NULL, 0, 'pending', 'pending', 0, ?, ?)""",
+                (attachment_id, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def commit_attachment_text(
+        self,
+        attachment_id: int,
+        text: str,
+        extractor: str,
+        *,
+        status: str = 'extracted',
+        error_message: Optional[str] = None,
+        truncated: bool = False,
+    ) -> None:
+        """worker / extractor 完成后调 — upsert email_attachment_text 行.
+
+        FTS5 索引通过 trigger 自动维护: status='extracted' + text 非空时
+        进 email_attachment_fts; 其他 status 不索引.
+        """
+        if status not in ('pending', 'extracted', 'failed', 'unsupported'):
+            raise ValueError(f"invalid status: {status!r}")
+
+        conn = self._connect()
+        now = time.time()
+        text_bytes = len(text.encode('utf-8')) if text else 0
+        text_payload = text if (text and status == 'extracted') else None
+        extracted_at = now if status == 'extracted' else None
+        try:
+            # 保留原 created_at (如果存在) 让审计 / 重试统计准
+            row = conn.execute(
+                "SELECT created_at FROM email_attachment_text WHERE attachment_id = ?",
+                (attachment_id,),
+            ).fetchone()
+            created_at = row['created_at'] if row else now
+
+            conn.execute(
+                """INSERT OR REPLACE INTO email_attachment_text
+                   (attachment_id, text_content, text_size_bytes, extractor,
+                    status, error_message, retry_count, next_retry_at,
+                    extracted_at, truncated, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)""",
+                (
+                    attachment_id, text_payload, text_bytes, extractor,
+                    status, error_message, extracted_at,
+                    1 if truncated else 0,
+                    created_at, now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_attachment_text(self, attachment_id: int) -> Optional[AttachmentTextRecord]:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """SELECT attachment_id, text_content, text_size_bytes, extractor,
+                          status, error_message, retry_count, next_retry_at,
+                          extracted_at, truncated, created_at, updated_at
+                     FROM email_attachment_text WHERE attachment_id = ?""",
+                (attachment_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return AttachmentTextRecord(
+                attachment_id=row['attachment_id'],
+                text_content=row['text_content'],
+                text_size_bytes=row['text_size_bytes'] or 0,
+                extractor=row['extractor'],
+                status=row['status'],
+                error_message=row['error_message'],
+                retry_count=row['retry_count'] or 0,
+                next_retry_at=row['next_retry_at'],
+                extracted_at=row['extracted_at'],
+                truncated=bool(row['truncated']),
+                created_at=row['created_at'],
+                updated_at=row['updated_at'],
+            )
+        finally:
+            conn.close()
+
+    def list_pending_attachment_extractions(self, *, limit: int = 20) -> list[int]:
+        """worker poll 用: 取 pending + retry-ready 的 attachment_id list."""
+        if limit <= 0:
+            return []
+        conn = self._connect()
+        now = time.time()
+        try:
+            rows = conn.execute(
+                """SELECT attachment_id FROM email_attachment_text
+                   WHERE status = 'pending'
+                      OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+                   ORDER BY created_at ASC
+                   LIMIT ?""",
+                (now, limit),
+            ).fetchall()
+            return [r['attachment_id'] for r in rows]
+        finally:
+            conn.close()
+
+    # 重试退避表: 1min, 5min, 15min, 1h, 2h (跟 sync_store.email_metadata 一致)
+    _ATTACHMENT_TEXT_RETRY_BACKOFFS = (60.0, 300.0, 900.0, 3600.0, 7200.0)
+
+    def mark_attachment_text_failure(
+        self,
+        attachment_id: int,
+        error_message: str,
+        *,
+        max_retries: int = 5,
+    ) -> None:
+        """worker 失败时调 — 递增 retry_count, 算 next_retry_at; 超 max 标 failed (无 retry)."""
+        conn = self._connect()
+        now = time.time()
+        try:
+            row = conn.execute(
+                "SELECT retry_count FROM email_attachment_text WHERE attachment_id = ?",
+                (attachment_id,),
+            ).fetchone()
+            if not row:
+                # 首次失败前应该已经 enqueue, 这里没行就补一行
+                conn.execute(
+                    """INSERT INTO email_attachment_text
+                       (attachment_id, text_content, text_size_bytes, extractor,
+                        status, error_message, retry_count, next_retry_at,
+                        truncated, created_at, updated_at)
+                       VALUES (?, NULL, 0, 'none', 'failed', ?, 1, ?, 0, ?, ?)""",
+                    (
+                        attachment_id, error_message,
+                        now + self._ATTACHMENT_TEXT_RETRY_BACKOFFS[0],
+                        now, now,
+                    ),
+                )
+            else:
+                new_count = (row['retry_count'] or 0) + 1
+                if new_count >= max_retries:
+                    next_retry = None  # dead - 不再重试
+                else:
+                    backoff_idx = min(new_count - 1, len(self._ATTACHMENT_TEXT_RETRY_BACKOFFS) - 1)
+                    next_retry = now + self._ATTACHMENT_TEXT_RETRY_BACKOFFS[backoff_idx]
+                conn.execute(
+                    """UPDATE email_attachment_text
+                       SET status = 'failed', error_message = ?,
+                           retry_count = ?, next_retry_at = ?, updated_at = ?
+                       WHERE attachment_id = ?""",
+                    (error_message, new_count, next_retry, now, attachment_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def search_attachment_texts(
+        self,
+        query: str,
+        *,
+        limit: int = 30,
+        mailbox: Optional[str] = None,
+        since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
+    ) -> list[AttachmentSearchHit]:
+        """FTS5 搜附件文本 + JOIN 拼邮件上下文 (PR-2b).
+
+        跟 search_email_bodies 平行设计: bm25 升序 (最相关在前),
+        snippet 高亮 <mark>...</mark>, JOIN email_attachment + email_metadata
+        让 chat agent 直接 render '哪封邮件的哪个附件'.
+        """
+        if not query or not query.strip():
+            return []
+        if limit <= 0:
+            return []
+
+        sql = """
+            SELECT a.id           AS attachment_id,
+                   a.internal_id  AS internal_id,
+                   COALESCE(a.filename, '')      AS filename,
+                   a.content_type AS content_type,
+                   COALESCE(m.subject, '')       AS email_subject,
+                   COALESCE(m.sender, '')        AS email_sender,
+                   m.date_received               AS email_date,
+                   m.mailbox                     AS email_mailbox,
+                   m.notion_page_id              AS notion_page_id,
+                   snippet(email_attachment_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
+                   bm25(email_attachment_fts)    AS rank
+              FROM email_attachment_fts
+              JOIN email_attachment a ON a.id = email_attachment_fts.rowid
+              JOIN email_metadata m ON m.internal_id = a.internal_id
+             WHERE email_attachment_fts MATCH ?
+        """
+        params: list = [query]
+        if mailbox:
+            sql += " AND m.mailbox = ?"
+            params.append(mailbox)
+        if since_date:
+            sql += " AND m.date_received >= ?"
+            params.append(since_date)
+        if until_date:
+            sql += " AND m.date_received <= ?"
+            params.append(until_date)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+
+        conn = self._connect()
+        try:
+            try:
+                rows = conn.execute(sql, params).fetchall()
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    f"search_attachment_texts: invalid FTS5 query {query!r}: {e}"
+                )
+                return []
+
+            hits: list[AttachmentSearchHit] = []
+            for r in rows:
+                page_id = r['notion_page_id']
+                notion_url = (
+                    f"https://www.notion.so/{page_id.replace('-', '')}"
+                    if page_id else None
+                )
+                hits.append(AttachmentSearchHit(
+                    attachment_id=r['attachment_id'],
+                    internal_id=r['internal_id'],
+                    filename=r['filename'],
+                    content_type=r['content_type'],
+                    snippet=r['snippet'] or '',
+                    rank=float(r['rank']),
+                    email_subject=r['email_subject'],
+                    email_sender=r['email_sender'],
+                    email_date=r['email_date'],
+                    email_mailbox=r['email_mailbox'],
+                    notion_page_id=page_id,
+                    notion_url=notion_url,
+                ))
+            return hits
+        finally:
+            conn.close()
+
+    def search_attachment_texts_smart(
+        self,
+        query: str,
+        *,
+        limit: int = 30,
+        mailbox: Optional[str] = None,
+        since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
+    ) -> list[AttachmentSearchHit]:
+        """Smart wrapper of search_attachment_texts (复用 PR-2a smart_query_transform)."""
+        transformed = smart_query_transform(query)
+        if transformed != query:
+            logger.debug(
+                f"search_attachment_texts_smart: query={query!r} → "
+                f"transformed={transformed!r}"
+            )
+        return self.search_attachment_texts(
+            transformed,
+            limit=limit,
+            mailbox=mailbox,
+            since_date=since_date,
+            until_date=until_date,
+        )
+
+    # ============================================================
     # WRITE
     # ============================================================
 
@@ -935,6 +1256,32 @@ class EmailRepository:
                     ).fetchone()
                     if row:
                         id_map[att.filename] = row["id"]
+
+            # PR-2b: 把非 inline 附件登记为 'pending' 让 attachment_text worker
+            # 抽 PDF / docx / pptx / xlsx 文本入 FTS5 索引. inline 图 (cid:) 跳过.
+            # enqueue 失败 (lock 等) 仅 warning 不 raise — 主 commit 不阻塞;
+            # CLI `mailagent attachment extract --include-missing` 可兜底补.
+            for att in attachments:
+                if att.is_inline:
+                    continue
+                att_id = id_map.get(att.filename)
+                if att_id is None:
+                    continue
+                try:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO email_attachment_text
+                           (attachment_id, text_content, text_size_bytes, extractor,
+                            status, retry_count, created_at, updated_at)
+                           VALUES (?, NULL, 0, 'pending', 'pending', 0, ?, ?)""",
+                        (att_id, now, now),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"enqueue attachment_text extraction failed for "
+                        f"att_id={att_id}: {e}"
+                    )
+            conn.commit()
+
             return id_map
         except Exception:
             conn.rollback()

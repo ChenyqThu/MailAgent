@@ -213,7 +213,7 @@ class SyncStore:
     #                source 三态 (caldav / email_ics / legacy_calendar_app) 灰度共存. 时间一律存
     #                UTC epoch (REAL), 前端按 toLocaleString 转本地 TZ. 详见 plan
     #                §"Phase 1.1 DB 升级" + frontend-view-silly-knuth.md.
-    DB_VERSION = 15
+    DB_VERSION = 16
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -903,6 +903,87 @@ class SyncStore:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
+        """)
+
+        # ==================== v16: 附件文本索引 (PR-2b, Sprint 19 M2) ====================
+        # 把 PDF / docx / pptx / xlsx 附件文本抽出 → FTS5 索引, 让 chat agent /
+        # LLM tool 跨附件检索 ('合同条款里 redis timeout 提到过吗').
+        # 跟 email_body_fts (Phase 3, v5 schema) 平行: contentful FTS5 +
+        # 3 trigger 自动 sync, 但走单独表 email_attachment_text + email_attachment_fts.
+        # extraction 由 attachment_text worker queue 异步处理 (new_watcher
+        # _process_attachment_text_queue), 不阻塞主 sync.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_attachment_text (
+                attachment_id INTEGER PRIMARY KEY,
+                text_content TEXT,
+                text_size_bytes INTEGER NOT NULL DEFAULT 0,
+                extractor TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN
+                    ('pending', 'extracted', 'failed', 'unsupported')),
+                error_message TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                next_retry_at REAL,
+                extracted_at REAL,
+                truncated INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (attachment_id) REFERENCES email_attachment(id) ON DELETE CASCADE
+            )
+        """)
+        # 状态分布查询 (worker 取 pending) + 失败重试调度
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_att_text_status
+            ON email_attachment_text(status)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_att_text_retry
+            ON email_attachment_text(next_retry_at)
+            WHERE status IN ('pending', 'failed')
+        """)
+
+        # FTS5 standalone 虚表 — bm25 + snippet/highlight, rowid = attachment_id
+        # 反查 email_attachment 拼上下文 (filename / email subject / sender / date).
+        # 风格跟 email_body_fts (v5) 一致: standalone 模式 (无 content=) — trigger
+        # 用 SQL DELETE/INSERT 而非 contentful 的 special 'delete' command. 索引
+        # 大小翻倍但简单 + 跟现有 trigger 模式 1:1.
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS email_attachment_fts USING fts5(
+                text_content,
+                tokenize='porter unicode61 remove_diacritics 2'
+            )
+        """)
+
+        # 3 个 trigger 自动 sync email_attachment_text ↔ email_attachment_fts.
+        # INSERT trigger: 只在 status='extracted' 且 text_content 非空时入 FTS
+        # (pending/failed/unsupported 行不索引).
+        # UPDATE trigger: 先删 + 重插, 防 status 翻转 (failed → extracted) 漏入索引.
+        # DELETE trigger: CASCADE 链路 (email_metadata DELETE → email_attachment
+        # CASCADE → email_attachment_text CASCADE → 这里触发清理 FTS).
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_attachment_fts_insert
+            AFTER INSERT ON email_attachment_text
+            WHEN NEW.status = 'extracted' AND NEW.text_content IS NOT NULL
+            BEGIN
+                INSERT INTO email_attachment_fts(rowid, text_content)
+                VALUES (NEW.attachment_id, NEW.text_content);
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_attachment_fts_update
+            AFTER UPDATE ON email_attachment_text
+            BEGIN
+                DELETE FROM email_attachment_fts WHERE rowid = OLD.attachment_id;
+                INSERT INTO email_attachment_fts(rowid, text_content)
+                SELECT NEW.attachment_id, NEW.text_content
+                WHERE NEW.status = 'extracted' AND NEW.text_content IS NOT NULL;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS email_attachment_fts_delete
+            AFTER DELETE ON email_attachment_text
+            BEGIN
+                DELETE FROM email_attachment_fts WHERE rowid = OLD.attachment_id;
+            END
         """)
 
         # 更新数据库版本

@@ -30,7 +30,7 @@
 | PR | 状态 | 范围 | LOC |
 |---|---|---|---|
 | PR-2a | ✅ ship 2026-05-23 | FTS5 中文 smart wrapper（CJK auto prefix + char-AND fallback + token-AND 融合）— 本地 fallback | +675 / -31 (含 fixture v14 fix + 38 新单测) |
-| PR-2b | ⏳ pending | 附件文本化 (pypdf/python-docx/python-pptx/xlsx) + `email_attachment_fts` — 本地 fallback | ~700 |
+| PR-2b | ✅ ship 2026-05-23 | 附件文本化 (pypdf/python-docx/python-pptx/xlsx) + DB v16 + `email_attachment_fts` + CLI extract + chat tool `email_search_attachments` — 本地 fallback | ~1500 (含 attachment_text.py extractor + repo methods + CLI + handler + chat tool + 44 个新单测) |
 | PR-2c | ⏳ blocked (KOS auth info) | **KOS client (TS + Py)** + .env config + health check + retry + circuit breaker | ~500 |
 | PR-2d | ⏳ blocked (PR-2c) | **Producer**：mail-sync `_sync_single_email_v3` 完成后异步 `KOSClient.ingest`；priority floor; KOS 不可达不阻塞 | ~400 |
 | PR-2e | ⏳ blocked (PR-2c) | **Consumer tools**：`kos_query` + `kos_digest` 加 `defaultToolRegistry`（silent tier, category=meta） | ~400 |

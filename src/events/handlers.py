@@ -75,6 +75,11 @@ class EventHandlers:
             "search_email_bodies_hits": 0,
             "search_email_bodies_empty": 0,
             "search_email_bodies_error": 0,
+            # PR-2b: 附件 FTS 搜索 stats
+            "search_email_attachments": 0,
+            "search_email_attachments_hits": 0,
+            "search_email_attachments_empty": 0,
+            "search_email_attachments_error": 0,
             "feishu_notified": 0,
         }
         # v4 P2-04: rolling latency buffers (last 1000 samples per path) for P99
@@ -1263,6 +1268,135 @@ class EventHandlers:
         await self._publish(event_id, payload)
         logger.info(
             f"search_email_bodies: query={query!r} returned {len(hits)} hits "
+            f"latency={latency_ms}ms mode={mode}"
+        )
+
+    async def handle_search_email_attachments(self, event: Dict):
+        """FTS5 全文搜附件文本 (PR-2b, Sprint 19 M2).
+
+        跟 handle_search_email_bodies 平行设计 — 但搜的是 attachment_text
+        (PDF / docx / pptx / xlsx 抽出来的文本), JOIN email_attachment +
+        email_metadata 拼上下文.
+
+        请求参数 (event.properties):
+            query: str (必填) — 自然语言关键词或 FTS5 query 语法
+            mode: str (可选, 默认 'smart') — 'smart' (CJK-aware 改写) / 'raw'
+            limit: int (默认 30, 最大 100)
+            mailbox: str (可选) — 仅返回该邮箱
+            since_date / until_date: str (可选) — YYYY-MM-DD
+
+        响应:
+            {status:'success', query, mode, [transformed_query],
+             hits:[{attachment_id, internal_id, filename, content_type,
+                    email_subject, email_sender, email_date, email_mailbox,
+                    snippet, rank, notion_page_id, notion_url}],
+             total_hits, latency_ms}
+
+        Notes:
+            - 只覆盖已经 attachment_text status='extracted' 的 attachment
+              (worker 跑过 / CLI mailagent attachment extract --pending 完成的);
+              未抽取的 attachment 不在结果里
+            - 历史邮件需要先跑 ``mailagent attachment extract --include-missing``
+              一次性补 enqueue 然后 extract
+        """
+        self._stats["search_email_attachments"] += 1
+        t0 = time.monotonic()
+        props = event.get("properties", {})
+        event_id = event.get("id", "")
+
+        query = (props.get("query") or "").strip()
+        if not query:
+            self._stats["search_email_attachments_error"] += 1
+            await self._publish(event_id, {
+                "status": "error",
+                "error": "Missing required: query (FTS5 search query string)",
+            })
+            return
+
+        if self.email_repo is None:
+            self._stats["search_email_attachments_error"] += 1
+            await self._publish(event_id, {
+                "status": "error",
+                "error": "Search unavailable: EmailRepository not initialized",
+            })
+            return
+
+        # cap limit to 100 (attachment FTS hit 比 body 大, snippet 也长)
+        try:
+            limit = max(1, min(int(props.get("limit", 30)), 100))
+        except (TypeError, ValueError):
+            limit = 30
+
+        mailbox = props.get("mailbox") or None
+        since_date = props.get("since_date") or None
+        until_date = props.get("until_date") or None
+
+        mode = (props.get("mode") or "smart").strip().lower()
+        if mode not in ("smart", "raw"):
+            mode = "smart"
+
+        if mode == "smart":
+            from src.repository.email_repository import smart_query_transform
+            transformed_query = smart_query_transform(query)
+        else:
+            transformed_query = query
+
+        logger.info(
+            f"search_email_attachments: query={query!r} mode={mode} "
+            f"transformed={transformed_query!r} limit={limit} "
+            f"mailbox={mailbox} since={since_date} until={until_date}"
+        )
+
+        try:
+            hits = self.email_repo.search_attachment_texts(
+                transformed_query,
+                limit=limit,
+                mailbox=mailbox,
+                since_date=since_date,
+                until_date=until_date,
+            )
+        except Exception as e:
+            self._stats["search_email_attachments_error"] += 1
+            logger.error(f"search_email_attachments: failed for query={query!r}: {e}")
+            await self._publish(event_id, {"status": "error", "error": str(e)})
+            return
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        if hits:
+            self._stats["search_email_attachments_hits"] += len(hits)
+        else:
+            self._stats["search_email_attachments_empty"] += 1
+
+        payload = {
+            "status": "success",
+            "query": query,
+            "mode": mode,
+            "total_hits": len(hits),
+            "hits": [
+                {
+                    "attachment_id": h.attachment_id,
+                    "internal_id": h.internal_id,
+                    "filename": h.filename,
+                    "content_type": h.content_type,
+                    "email_subject": h.email_subject,
+                    "email_sender": h.email_sender,
+                    "email_date": h.email_date,
+                    "email_mailbox": h.email_mailbox,
+                    "snippet": h.snippet,
+                    "rank": h.rank,
+                    "notion_page_id": h.notion_page_id,
+                    "notion_url": h.notion_url,
+                }
+                for h in hits
+            ],
+            "latency_ms": latency_ms,
+        }
+        if mode == "smart" and transformed_query != query:
+            payload["transformed_query"] = transformed_query
+        await self._publish(event_id, payload)
+        logger.info(
+            f"search_email_attachments: query={query!r} returned {len(hits)} hits "
             f"latency={latency_ms}ms mode={mode}"
         )
 

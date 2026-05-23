@@ -63,6 +63,143 @@ export function listAttachments(internalId: number): AttachmentList_AttachmentIt
   return rows.map(shape)
 }
 
+// ── PR-2b: 附件文本 FTS5 搜索 ──────────────────────────────────────
+//
+// 跟 handlers/email.ts:searchEmails 平行设计 — 搜的是 email_attachment_fts
+// (PDF / docx / pptx / xlsx 文本抽取结果), JOIN email_attachment + 邮件
+// metadata 拼上下文.
+// smart mode (default) 复用 PR-2a 的 smartQueryTransform 让 CJK 自然语言
+// 自动改写; raw mode 跳过.
+import { smartQueryTransform } from './email'
+
+export interface AttachmentSearchOpts {
+  query: string
+  mailbox?: string
+  since?: string
+  until?: string
+  limit?: number
+  mode?: 'smart' | 'raw'
+}
+
+export interface AttachmentSearchHit {
+  attachment_id: number
+  internal_id: number
+  filename: string
+  content_type: string | null
+  email_subject: string
+  email_sender: string
+  email_date: string | null
+  email_mailbox: string | null
+  snippet: string
+  rank: number
+  notion_page_id: string | null
+  notion_url: string | null
+}
+
+export interface AttachmentSearchResult {
+  items: AttachmentSearchHit[]
+  total_indexed: number
+  mode?: 'smart' | 'raw'
+  transformed_query?: string
+}
+
+interface AttachmentSearchRow {
+  attachment_id: number
+  internal_id: number
+  filename: string | null
+  content_type: string | null
+  email_subject: string | null
+  email_sender: string | null
+  email_date: string | null
+  email_mailbox: string | null
+  notion_page_id: string | null
+  snippet: string | null
+  rank: number
+}
+
+function getAttachmentFtsCount(): number {
+  const db = getDb()
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM email_attachment_fts`).get() as
+    | { n: number }
+    | undefined
+  return row?.n ?? 0
+}
+
+export function searchAttachments(opts: AttachmentSearchOpts): AttachmentSearchResult {
+  const total_indexed = getAttachmentFtsCount()
+  if (!opts.query || opts.query.trim().length === 0) {
+    return { items: [], total_indexed }
+  }
+  const mode: 'smart' | 'raw' = opts.mode ?? 'smart'
+  const effectiveQuery = mode === 'smart' ? smartQueryTransform(opts.query) : opts.query
+  const db = getDb()
+  const limit = Math.min(Math.max(opts.limit ?? 30, 1), 100)
+  const filterClauses: string[] = []
+  const filterParams: unknown[] = []
+  if (opts.mailbox) {
+    filterClauses.push('m.mailbox = ?')
+    filterParams.push(opts.mailbox)
+  }
+  if (opts.since) {
+    filterClauses.push('m.date_received >= ?')
+    filterParams.push(opts.since)
+  }
+  if (opts.until) {
+    filterClauses.push('m.date_received <= ?')
+    filterParams.push(opts.until)
+  }
+  const filterSql = filterClauses.length === 0 ? '' : 'AND ' + filterClauses.join(' AND ')
+  const sql = `
+    SELECT a.id             AS attachment_id,
+           a.internal_id    AS internal_id,
+           COALESCE(a.filename, '')      AS filename,
+           a.content_type   AS content_type,
+           COALESCE(m.subject, '')       AS email_subject,
+           COALESCE(m.sender, '')        AS email_sender,
+           m.date_received               AS email_date,
+           m.mailbox                     AS email_mailbox,
+           m.notion_page_id              AS notion_page_id,
+           snippet(email_attachment_fts, 0, '<mark>', '</mark>', '…', 16) AS snippet,
+           bm25(email_attachment_fts)    AS rank
+      FROM email_attachment_fts
+      JOIN email_attachment a ON a.id = email_attachment_fts.rowid
+      JOIN email_metadata m ON m.internal_id = a.internal_id
+     WHERE email_attachment_fts MATCH ?
+     ${filterSql}
+     ORDER BY rank ASC
+     LIMIT ?`
+  let rows: AttachmentSearchRow[]
+  try {
+    rows = db.prepare(sql).all(effectiveQuery, ...filterParams, limit) as AttachmentSearchRow[]
+  } catch {
+    // FTS5 syntax error → empty (caller 已经传了 wrapper, raw 时用户自负责)
+    const fallback: AttachmentSearchResult = { items: [], total_indexed, mode }
+    if (effectiveQuery !== opts.query) fallback.transformed_query = effectiveQuery
+    return fallback
+  }
+  const items: AttachmentSearchHit[] = rows.map((row) => ({
+    attachment_id: row.attachment_id,
+    internal_id: row.internal_id,
+    filename: row.filename ?? '',
+    content_type: row.content_type,
+    email_subject: row.email_subject ?? '',
+    email_sender: row.email_sender ?? '',
+    email_date: row.email_date,
+    email_mailbox: row.email_mailbox,
+    snippet: row.snippet ?? '',
+    rank: row.rank,
+    notion_page_id: row.notion_page_id,
+    notion_url: row.notion_page_id
+      ? `https://www.notion.so/${row.notion_page_id.replace(/-/g, '')}`
+      : null
+  }))
+  const result: AttachmentSearchResult = { items, total_indexed, mode }
+  if (effectiveQuery !== opts.query) {
+    result.transformed_query = effectiveQuery
+  }
+  return result
+}
+
 export function getAttachmentLocalPath(attachmentId: number): string | null {
   const db = getDb()
   const row = db

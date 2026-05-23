@@ -1016,3 +1016,299 @@ class TestGetThreadMembers:
                                   date_received="2026-05-02T08:00:00+08:00")
         members = repo.get_thread_members("<T-ORD>")
         assert [m.internal_id for m in members] == [731, 732, 730]
+
+
+# ============================================================
+# PR-2b: 附件文本抽取 + FTS5 搜索
+# ============================================================
+
+
+class TestAttachmentText:
+    """测 EmailRepository 的 attachment_text CRUD + retry queue."""
+
+    def _seed_email_with_attachment(
+        self,
+        repo: EmailRepository,
+        fresh_db: Path,
+        internal_id: int = 800,
+        *,
+        subject: str = "test email",
+        sender: str = "a@x",
+    ) -> int:
+        """种 email + 一个非 inline 附件, 返附件 attachment_id."""
+        _insert_metadata_full(
+            fresh_db, internal_id, subject=subject, sender=sender, mailbox="收件箱"
+        )
+        id_map = repo.commit_email_with_body(
+            internal_id,
+            BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(
+                filename="doc.pdf",
+                content=b"%PDF-1.4 fake",
+                content_type="application/pdf",
+                is_inline=False,
+            )],
+        )
+        return id_map["doc.pdf"]
+
+    def test_commit_with_attachment_auto_enqueues_pending(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        att_id = self._seed_email_with_attachment(repo, fresh_db)
+        record = repo.get_attachment_text(att_id)
+        assert record is not None
+        assert record.attachment_id == att_id
+        assert record.status == "pending"
+        assert record.extractor == "pending"
+        assert record.text_content is None
+
+    def test_inline_attachment_skipped_from_enqueue(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        """is_inline=True 附件不入 attachment_text queue (cid: 图无需抽文本)."""
+        _insert_metadata_full(fresh_db, 801, mailbox="收件箱")
+        id_map = repo.commit_email_with_body(
+            801,
+            BodyPayload(html="", markdown="body", body_format="html"),
+            [
+                AttachmentPayload(
+                    filename="image.png", content=b"binary",
+                    content_type="image/png", is_inline=True,
+                ),
+            ],
+        )
+        att_id = id_map["image.png"]
+        assert repo.get_attachment_text(att_id) is None
+
+    def test_commit_attachment_text_extracted_status(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        att_id = self._seed_email_with_attachment(repo, fresh_db)
+        repo.commit_attachment_text(
+            att_id,
+            text="redis cluster scaling notes",
+            extractor="pypdf",
+            status="extracted",
+        )
+        record = repo.get_attachment_text(att_id)
+        assert record is not None
+        assert record.status == "extracted"
+        assert record.extractor == "pypdf"
+        assert "redis cluster" in record.text_content
+        assert record.extracted_at is not None
+        assert record.text_size_bytes > 0
+
+    def test_commit_attachment_text_failed_status_strips_text(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        """status='failed' 时 text_content 即使传入也不存 (避免 FTS5 索引 garbage)."""
+        att_id = self._seed_email_with_attachment(repo, fresh_db)
+        repo.commit_attachment_text(
+            att_id,
+            text="ignored garbage",
+            extractor="pypdf",
+            status="failed",
+            error_message="OCR not available",
+        )
+        record = repo.get_attachment_text(att_id)
+        assert record is not None
+        assert record.status == "failed"
+        assert record.text_content is None
+        assert record.error_message == "OCR not available"
+
+    def test_commit_attachment_text_unsupported(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        att_id = self._seed_email_with_attachment(repo, fresh_db)
+        repo.commit_attachment_text(
+            att_id, text="", extractor="none", status="unsupported",
+            error_message="unsupported extension: .zip",
+        )
+        record = repo.get_attachment_text(att_id)
+        assert record.status == "unsupported"
+
+    def test_commit_invalid_status_rejected(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        att_id = self._seed_email_with_attachment(repo, fresh_db)
+        with pytest.raises(ValueError):
+            repo.commit_attachment_text(
+                att_id, text="x", extractor="pypdf", status="bogus"
+            )
+
+    def test_list_pending_attachment_extractions(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        a1 = self._seed_email_with_attachment(repo, fresh_db, internal_id=810)
+        a2 = self._seed_email_with_attachment(repo, fresh_db, internal_id=811)
+        pending = repo.list_pending_attachment_extractions(limit=10)
+        assert set(pending) >= {a1, a2}
+        # 标了 extracted 的不再 pending
+        repo.commit_attachment_text(a1, text="t", extractor="pypdf")
+        pending2 = repo.list_pending_attachment_extractions(limit=10)
+        assert a1 not in pending2
+        assert a2 in pending2
+
+    def test_mark_attachment_text_failure_schedules_retry(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        att_id = self._seed_email_with_attachment(repo, fresh_db)
+        repo.mark_attachment_text_failure(att_id, "transient", max_retries=5)
+        record = repo.get_attachment_text(att_id)
+        assert record.status == "failed"
+        assert record.retry_count == 1
+        assert record.next_retry_at is not None
+        # 5 次后 dead, next_retry_at = None
+        for _ in range(4):
+            repo.mark_attachment_text_failure(att_id, "again", max_retries=5)
+        record = repo.get_attachment_text(att_id)
+        assert record.retry_count == 5
+        assert record.next_retry_at is None  # dead-letter
+
+    def test_cascade_delete_email_drops_attachment_text(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        att_id = self._seed_email_with_attachment(repo, fresh_db, internal_id=830)
+        repo.commit_attachment_text(att_id, text="x", extractor="pypdf")
+        assert repo.get_attachment_text(att_id) is not None
+        repo.delete_email_full(830)
+        assert repo.get_attachment_text(att_id) is None
+
+
+class TestSearchAttachmentTexts:
+    """测 FTS5 + smart wrapper attachment search."""
+
+    def _seed(self, repo: EmailRepository, fresh_db: Path):
+        """种 3 封邮件 + 各带 1 attachment + extracted text."""
+        # 800: PDF, redis cluster scaling
+        _insert_metadata_full(
+            fresh_db, 850, subject="技术调研", sender="alice@x",
+            mailbox="收件箱", date_received="2026-05-10T10:00:00+08:00",
+            notion_page_id="page-850",
+        )
+        id_map = repo.commit_email_with_body(
+            850,
+            BodyPayload(html="", markdown="see attached", body_format="html"),
+            [AttachmentPayload(
+                filename="redis_notes.pdf", content=b"%PDF",
+                content_type="application/pdf",
+            )],
+        )
+        repo.commit_attachment_text(
+            id_map["redis_notes.pdf"],
+            text="redis cluster scaling beyond 16 nodes is tricky",
+            extractor="pypdf",
+        )
+        # 851: docx, 产品评审
+        _insert_metadata_full(
+            fresh_db, 851, subject="周会", sender="bob@x",
+            mailbox="收件箱", date_received="2026-05-12T10:00:00+08:00",
+        )
+        id_map2 = repo.commit_email_with_body(
+            851,
+            BodyPayload(html="", markdown="see attached", body_format="html"),
+            [AttachmentPayload(
+                filename="plan.docx", content=b"PK",  # zip header
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )],
+        )
+        repo.commit_attachment_text(
+            id_map2["plan.docx"],
+            text="本周 产品 评审 周三 下午",
+            extractor="docx",
+        )
+        # 852: unrelated
+        _insert_metadata_full(
+            fresh_db, 852, subject="无关", sender="carol@x",
+            mailbox="发件箱", date_received="2026-05-15T10:00:00+08:00",
+        )
+        id_map3 = repo.commit_email_with_body(
+            852,
+            BodyPayload(html="", markdown="see attached", body_format="html"),
+            [AttachmentPayload(
+                filename="other.pdf", content=b"%PDF",
+                content_type="application/pdf",
+            )],
+        )
+        repo.commit_attachment_text(
+            id_map3["other.pdf"],
+            text="meeting agenda is unrelated",
+            extractor="pypdf",
+        )
+        return id_map["redis_notes.pdf"], id_map2["plan.docx"], id_map3["other.pdf"]
+
+    def test_basic_english_search(self, repo: EmailRepository, fresh_db: Path):
+        a_redis, a_plan, a_other = self._seed(repo, fresh_db)
+        hits = repo.search_attachment_texts("redis", limit=10)
+        ids = [h.attachment_id for h in hits]
+        assert a_redis in ids
+        assert a_plan not in ids
+        # snippet 带高亮
+        hit = next(h for h in hits if h.attachment_id == a_redis)
+        assert "<mark>" in hit.snippet
+        assert hit.email_subject == "技术调研"
+        assert hit.filename == "redis_notes.pdf"
+
+    def test_smart_cjk_search_finds_chunked_token(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        """raw '产品' chunk-token 命不中, smart prefix 改写后能命中."""
+        a_redis, a_plan, a_other = self._seed(repo, fresh_db)
+        # raw 命不中 (假设 plan.docx text 整 chunk 不以 '产品' 开头 token; 实际
+        # 我们 fixture 用空格分隔 → token = '产品' 完全 exact, raw 也能命中)
+        smart_hits = repo.search_attachment_texts_smart("产品", limit=10)
+        smart_ids = [h.attachment_id for h in smart_hits]
+        assert a_plan in smart_ids
+
+    def test_mailbox_filter(self, repo: EmailRepository, fresh_db: Path):
+        a_redis, a_plan, a_other = self._seed(repo, fresh_db)
+        hits = repo.search_attachment_texts(
+            "meeting", limit=10, mailbox="发件箱"
+        )
+        # other.pdf 在发件箱
+        ids = [h.attachment_id for h in hits]
+        assert a_other in ids
+
+    def test_since_date_filter(self, repo: EmailRepository, fresh_db: Path):
+        a_redis, a_plan, a_other = self._seed(repo, fresh_db)
+        hits = repo.search_attachment_texts(
+            "redis", limit=10, since_date="2026-05-11"
+        )
+        # 850 是 5/10, 应被排除
+        ids = [h.attachment_id for h in hits]
+        assert a_redis not in ids
+
+    def test_empty_query_returns_empty(self, repo: EmailRepository, fresh_db: Path):
+        self._seed(repo, fresh_db)
+        assert repo.search_attachment_texts("") == []
+        assert repo.search_attachment_texts("   ") == []
+
+    def test_invalid_fts_query_returns_empty(self, repo: EmailRepository, fresh_db: Path):
+        self._seed(repo, fresh_db)
+        assert repo.search_attachment_texts('"unbalanced') == []
+
+    def test_notion_url_populated(self, repo: EmailRepository, fresh_db: Path):
+        a_redis, _, _ = self._seed(repo, fresh_db)
+        hits = repo.search_attachment_texts("redis", limit=10)
+        hit = next(h for h in hits if h.attachment_id == a_redis)
+        assert hit.notion_page_id == "page-850"
+        assert hit.notion_url == "https://www.notion.so/page850"
+
+    def test_failed_extraction_not_indexed(self, repo: EmailRepository, fresh_db: Path):
+        """status='failed' 不进 FTS index, 搜不到."""
+        _insert_metadata_full(fresh_db, 860, mailbox="收件箱")
+        id_map = repo.commit_email_with_body(
+            860,
+            BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(
+                filename="encrypted.pdf", content=b"%PDF", content_type="application/pdf",
+            )],
+        )
+        repo.commit_attachment_text(
+            id_map["encrypted.pdf"],
+            text="secret token redis hidden", extractor="pypdf",
+            status="failed", error_message="password protected",
+        )
+        # 即使 text='secret token redis hidden', 因 status=failed 不入 FTS
+        hits = repo.search_attachment_texts("secret", limit=10)
+        assert id_map["encrypted.pdf"] not in [h.attachment_id for h in hits]
