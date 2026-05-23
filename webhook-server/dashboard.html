@@ -795,6 +795,45 @@
     </div>
   </div>
 
+  <!-- 2.5 DavMail Backend health (hidden 当 mail-sync 非 davmail mode) -->
+  <div class="anim-in hidden" id="davmail-section" style="animation-delay:0.16s; margin-top:14px">
+    <div class="card-title" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span>DavMail Backend</span>
+      <span id="davmail-level-pill"
+        style="font-size:11px;padding:2px 10px;border-radius:10px;border:1px solid var(--ink-border);
+               background:var(--card);color:var(--ink-fg-3)">--</span>
+      <span id="davmail-last-probe" style="font-size:11px;color:var(--ink-fg-3);margin-left:auto">--</span>
+    </div>
+    <div class="metrics-row">
+      <div class="metric-card blue">
+        <div class="metric-label">IMAP :1143</div>
+        <div class="metric-value" id="davmail-imap">--</div>
+        <div class="metric-sub" id="davmail-imap-sub">--</div>
+      </div>
+      <div class="metric-card blue">
+        <div class="metric-label">SMTP :1025</div>
+        <div class="metric-value" id="davmail-smtp">--</div>
+        <div class="metric-sub" id="davmail-smtp-sub">--</div>
+      </div>
+      <div class="metric-card green">
+        <div class="metric-label">OAuth Token Age</div>
+        <div class="metric-value" id="davmail-token">--</div>
+        <div class="metric-sub" id="davmail-token-sub">--</div>
+      </div>
+      <div class="metric-card yellow">
+        <div class="metric-label">EWS Throttle / 5m</div>
+        <div class="metric-value" id="davmail-throttle">0</div>
+        <div class="metric-sub" id="davmail-throttle-sub">--</div>
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <div class="dead-letter-banner hidden" id="davmail-oauth-banner">
+        <span class="banner-icon">&#x1F511;</span>
+        <span id="davmail-oauth-text">--</span>
+      </div>
+    </div>
+  </div>
+
   <!-- 3. Charts -->
   <div class="charts-row anim-in" style="animation-delay:0.19s">
     <div class="card">
@@ -1016,6 +1055,90 @@
     }
   }
 
+  // roadmap §4.5 — DavMail health card. Hidden entirely when mail-sync
+  // 不在 davmail mode (watchdog 从没 tick, davmail section 为空 / probe_cycles=0).
+  function renderDavmail(d) {
+    const sec = $('davmail-section');
+    if (!d || Object.keys(d).length === 0 || (d.probe_cycles ?? 0) === 0) {
+      sec.classList.add('hidden');
+      return;
+    }
+    sec.classList.remove('hidden');
+
+    // Level pill
+    const lvl = d.level || 'unknown';
+    const pill = $('davmail-level-pill');
+    const colorMap = {
+      ok: { bg: 'var(--green-glow)', fg: 'var(--green)', border: 'var(--green)' },
+      warning: { bg: 'var(--yellow-glow)', fg: 'var(--yellow)', border: 'var(--yellow)' },
+      critical: { bg: 'var(--red-glow)', fg: 'var(--red)', border: 'var(--red)' },
+      unknown: { bg: 'var(--card)', fg: 'var(--ink-fg-3)', border: 'var(--ink-border)' }
+    };
+    const c = colorMap[lvl] || colorMap.unknown;
+    pill.textContent = lvl;
+    pill.style.background = c.bg;
+    pill.style.color = c.fg;
+    pill.style.borderColor = c.border;
+
+    // Last probe relative
+    const lp = d.last_probe_at;
+    if (lp) {
+      const ageS = Math.max(0, Math.floor((Date.now() - Date.parse(lp)) / 1000));
+      const fmt = ageS < 60 ? `${ageS}s ago`
+        : ageS < 3600 ? `${Math.floor(ageS / 60)}m ago`
+        : `${Math.floor(ageS / 3600)}h ago`;
+      $('davmail-last-probe').textContent = `probed ${fmt}`;
+    } else {
+      $('davmail-last-probe').textContent = '--';
+    }
+
+    // IMAP
+    const imapOk = d.imap_reachable;
+    $('davmail-imap').textContent = imapOk ? '✓ reachable' : '✗ down';
+    $('davmail-imap').style.color = imapOk ? 'var(--green)' : 'var(--red)';
+    const ifail = d.consecutive_imap_failures || 0;
+    $('davmail-imap-sub').textContent = ifail > 0 ? `连续 ${ifail} 次失败` : 'OK';
+
+    // SMTP
+    const smtpOk = d.smtp_reachable;
+    $('davmail-smtp').textContent = smtpOk ? '✓ reachable' : '✗ down';
+    $('davmail-smtp').style.color = smtpOk ? 'var(--green)' : 'var(--red)';
+    const sfail = d.consecutive_smtp_failures || 0;
+    $('davmail-smtp-sub').textContent = sfail > 0 ? `连续 ${sfail} 次失败` : 'OK';
+
+    // Token age
+    const age = d.token_age_days;
+    if (age === null || age === undefined || age < 0) {
+      $('davmail-token').textContent = '--';
+      $('davmail-token').style.color = 'var(--ink-fg-3)';
+      $('davmail-token-sub').textContent = 'token.dat 缺失';
+    } else {
+      $('davmail-token').textContent = `${(+age).toFixed(1)}d`;
+      $('davmail-token').style.color =
+        age >= 87 ? 'var(--red)' : age >= 80 ? 'var(--yellow)' : 'var(--green)';
+      const left = Math.max(0, 90 - age);
+      $('davmail-token-sub').textContent = `估剩余 ${left.toFixed(0)}d / 90d`;
+    }
+
+    // Throttle
+    const thr = d.throttle_events_5min ?? 0;
+    $('davmail-throttle').textContent = thr;
+    $('davmail-throttle').style.color = thr >= 3 ? 'var(--yellow)' : 'var(--green)';
+    $('davmail-throttle-sub').textContent = d.uid_backfill_paused
+      ? '⏸ uid-mapper paused' : 'uid-mapper running';
+
+    // OAuth error banner
+    const banner = $('davmail-oauth-banner');
+    if (d.last_oauth_error) {
+      banner.classList.remove('hidden');
+      const msg = String(d.last_oauth_error);
+      $('davmail-oauth-text').textContent =
+        `OAuth: ${msg.length > 180 ? msg.slice(0, 180) + '…' : msg}`;
+    } else {
+      banner.classList.add('hidden');
+    }
+  }
+
   function renderMailboxBars(byMailbox) {
     const container = $('mailbox-bars');
     if (!byMailbox || Object.keys(byMailbox).length === 0) {
@@ -1148,6 +1271,7 @@
 
       renderServiceRow(d, online, lastHeartbeat);
       renderMetrics(d.watcher);
+      renderDavmail(d.davmail);
       renderMailboxBars(d.watcher?.by_mailbox);
       renderStatusBar(d.watcher?.by_status);
       renderReverse(d.reverse);

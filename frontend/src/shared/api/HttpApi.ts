@@ -85,7 +85,9 @@ export class HttpApi implements MailApi {
     stats: () => notImplemented('admin.stats'),
     deadLetterList: () => notImplemented('admin.deadLetterList'),
     deadLetterRetry: () => notImplemented('admin.deadLetterRetry'),
-    cleanupDeadLetter: () => notImplemented('admin.cleanupDeadLetter')
+    cleanupDeadLetter: () => notImplemented('admin.cleanupDeadLetter'),
+    davmailHealth: () => notImplemented('admin.davmailHealth'),
+    systemAlerts: () => notImplemented('admin.systemAlerts')
   }
 
   calendar = {

@@ -361,6 +361,46 @@ export interface CleanupDeadLetterOpts {
   dryRun?: boolean
 }
 
+// ── DavMail health snapshot (roadmap §4.5.1-3) — frontend reads sync_state
+// davmail.* keys via direct better-sqlite3 (no CLI fork) every 5s for the
+// red-dot badge + AdminPage card. Source-of-truth: DavMailWatchdog writes
+// these keys every 60s.
+export interface DavMailHealthData {
+  /** False when mail-sync isn't in davmail mode (no watchdog ticks yet). */
+  enabled: boolean
+  level: 'ok' | 'warning' | 'critical' | 'unknown'
+  last_probe_at: string | null
+  imap_reachable: boolean
+  smtp_reachable: boolean
+  consecutive_imap_failures: number
+  consecutive_smtp_failures: number
+  /** Days since token.dat mtime. Null when token.dat missing. */
+  token_age_days: number | null
+  token_mtime_iso: string | null
+  /** Count of EWSThrottlingException headers in last 5 min log tail. */
+  throttle_events_5min: number
+  last_oauth_error: string | null
+  last_oauth_error_at: string | null
+  /** Watchdog auto-pauses uid-mapper when throttling >= 3 in 5min. */
+  uid_backfill_paused: boolean
+}
+
+export interface SystemAlertItem {
+  level: 'critical' | 'warning' | 'info'
+  source: string
+  title: string
+  message: string
+  ts: string | null
+}
+
+export interface SystemAlertsData {
+  alerts: SystemAlertItem[]
+  critical_count: number
+  warning_count: number
+  /** Server-side ISO timestamp; renderer uses it for tooltip "as of". */
+  generated_at: string
+}
+
 export interface AdminApi {
   health(): Promise<AdminHealthData>
   stats(): Promise<AdminStatsData>
@@ -370,6 +410,12 @@ export interface AdminApi {
   deadLetterRetry(internalId: number): Promise<unknown>
   /** Run the cleanup-deadletter command (write+auth unless dryRun). */
   cleanupDeadLetter(opts?: CleanupDeadLetterOpts): Promise<unknown>
+  /** roadmap §4.5 — current davmail backend health snapshot (direct SQLite
+   *  read, ~1ms). Returns enabled=false when watchdog hasn't ticked. */
+  davmailHealth(): Promise<DavMailHealthData>
+  /** Current active system alerts derived from davmail health + (future)
+   *  other sources. Polled by SystemAlertBadge every 5s. */
+  systemAlerts(): Promise<SystemAlertsData>
 }
 
 // ---- Sprint 6 §2.2 — calendar (recurring meeting) surface -----------------

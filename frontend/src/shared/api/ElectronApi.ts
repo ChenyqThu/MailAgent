@@ -29,6 +29,7 @@ import type {
   CleanupDeadLetterOpts,
   CreateDraftOpts,
   CreateDraftResult,
+  DavMailHealthData,
   DeadLetterItem,
   DeadLetterListOpts,
   EmailApi,
@@ -47,6 +48,7 @@ import type {
   ServiceTarget,
   ServicesApi,
   SseEvent,
+  SystemAlertsData,
   IslandAIDraftReadyPayload,
   IslandAIDraftStartPayload,
   IslandAIDraftStreamPayload,
@@ -249,6 +251,12 @@ class ElectronAdminApi implements AdminApi {
   async cleanupDeadLetter(opts?: CleanupDeadLetterOpts): Promise<unknown> {
     const env = (await invoker()('admin:cleanupDeadLetter', opts ?? {})) as WriteEnvelope<unknown>
     return unwrap(env)
+  }
+  async davmailHealth(): Promise<DavMailHealthData> {
+    return (await invoker()('admin:davmailHealth')) as DavMailHealthData
+  }
+  async systemAlerts(): Promise<SystemAlertsData> {
+    return (await invoker()('admin:systemAlerts')) as SystemAlertsData
   }
 }
 

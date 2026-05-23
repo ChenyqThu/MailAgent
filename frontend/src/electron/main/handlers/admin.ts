@@ -16,6 +16,7 @@
 import { ipcMain } from 'electron'
 
 import { callCli } from '../cli_runner'
+import { getDb } from '../db'
 import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
 const READ_TIMEOUT_MS = 15_000
@@ -123,9 +124,229 @@ export async function runCleanupDeadLetter(opts: CleanupDeadLetterOpts = {}): Pr
   })
 }
 
+// ── DavMail health + system alerts (roadmap §4.5) ─────────────────────────
+//
+// 直读 SQLite `sync_state` 表的 davmail.* keys (mail-sync 进程内的
+// DavMailWatchdog 每 60s 写一份快照). 不走 callCli/fork mailagent,
+// admin handler 模式 ~1ms vs CLI ~500ms — 顶部红点 badge 5s 轮询不能 fork.
+// 系统告警从同一份快照派生 (current-state 模型而非 event stream),
+// 跟 watchdog 自己的 "announced once until cleared" 去重语义一致.
+
+export interface DavMailHealthData {
+  enabled: boolean
+  level: 'ok' | 'warning' | 'critical' | 'unknown'
+  last_probe_at: string | null
+  imap_reachable: boolean
+  smtp_reachable: boolean
+  consecutive_imap_failures: number
+  consecutive_smtp_failures: number
+  token_age_days: number | null
+  token_mtime_iso: string | null
+  throttle_events_5min: number
+  last_oauth_error: string | null
+  last_oauth_error_at: string | null
+  uid_backfill_paused: boolean
+}
+
+export interface SystemAlertItem {
+  level: 'critical' | 'warning' | 'info'
+  source: string
+  title: string
+  message: string
+  ts: string | null
+}
+
+export interface SystemAlertsData {
+  alerts: SystemAlertItem[]
+  critical_count: number
+  warning_count: number
+  generated_at: string
+}
+
+function readDavmailStateRows(): Record<string, string> {
+  const db = getDb()
+  const stmt = db.prepare(
+    "SELECT key, value FROM sync_state WHERE key LIKE 'davmail%' OR key = 'davmail_uid_backfill_paused'"
+  )
+  const rows = stmt.all() as Array<{ key: string; value: string }>
+  const out: Record<string, string> = {}
+  for (const r of rows) out[r.key] = r.value ?? ''
+  return out
+}
+
+export function runDavmailHealth(): DavMailHealthData {
+  let state: Record<string, string>
+  try {
+    state = readDavmailStateRows()
+  } catch {
+    // SQLite 不可达 (路径错 / 文件锁) — 视为 unknown, 不抛
+    return {
+      enabled: false,
+      level: 'unknown',
+      last_probe_at: null,
+      imap_reachable: false,
+      smtp_reachable: false,
+      consecutive_imap_failures: 0,
+      consecutive_smtp_failures: 0,
+      token_age_days: null,
+      token_mtime_iso: null,
+      throttle_events_5min: 0,
+      last_oauth_error: null,
+      last_oauth_error_at: null,
+      uid_backfill_paused: false
+    }
+  }
+  const lastProbe = state['davmail.last_probe_at'] || null
+  // 没 last_probe_at 说明 mail-sync 没在 davmail mode 跑 watchdog
+  if (!lastProbe) {
+    return {
+      enabled: false,
+      level: 'unknown',
+      last_probe_at: null,
+      imap_reachable: false,
+      smtp_reachable: false,
+      consecutive_imap_failures: 0,
+      consecutive_smtp_failures: 0,
+      token_age_days: null,
+      token_mtime_iso: null,
+      throttle_events_5min: 0,
+      last_oauth_error: null,
+      last_oauth_error_at: null,
+      uid_backfill_paused: state['davmail_uid_backfill_paused'] === 'true'
+    }
+  }
+  const tokenAgeRaw = state['davmail.token_age_days']
+  const tokenAge = tokenAgeRaw ? parseFloat(tokenAgeRaw) : -1
+  const imapOk = state['davmail.imap_reachable'] === '1'
+  const smtpOk = state['davmail.smtp_reachable'] === '1'
+  const imapFails = parseInt(state['davmail.consecutive_imap_failures'] || '0', 10)
+  const smtpFails = parseInt(state['davmail.consecutive_smtp_failures'] || '0', 10)
+  const throttleCount = parseInt(state['davmail.throttle_events_5min'] || '0', 10)
+  const lastOAuthErr = state['davmail.last_oauth_error'] || null
+  const lastOAuthAt = state['davmail.last_oauth_error_at'] || null
+  const oauthRecent =
+    !!lastOAuthAt && Date.now() - Date.parse(lastOAuthAt) < 3600 * 1000
+
+  let level: DavMailHealthData['level'] = 'ok'
+  if (oauthRecent) level = 'critical'
+  else if (!imapOk && imapFails >= 3) level = 'critical'
+  else if (!smtpOk && smtpFails >= 3) level = 'critical'
+  else if (tokenAge >= 87) level = 'critical'
+  else if (tokenAge >= 80) level = 'warning'
+  else if (throttleCount >= 3) level = 'warning'
+  else if (!imapOk || !smtpOk) level = 'warning'
+
+  return {
+    enabled: true,
+    level,
+    last_probe_at: lastProbe,
+    imap_reachable: imapOk,
+    smtp_reachable: smtpOk,
+    consecutive_imap_failures: imapFails,
+    consecutive_smtp_failures: smtpFails,
+    token_age_days: tokenAge >= 0 ? tokenAge : null,
+    token_mtime_iso: state['davmail.token_mtime_iso'] || null,
+    throttle_events_5min: throttleCount,
+    last_oauth_error: lastOAuthErr,
+    last_oauth_error_at: lastOAuthAt,
+    uid_backfill_paused: state['davmail_uid_backfill_paused'] === 'true'
+  }
+}
+
+export function runSystemAlerts(): SystemAlertsData {
+  const h = runDavmailHealth()
+  const alerts: SystemAlertItem[] = []
+  if (h.enabled && h.last_oauth_error && h.last_oauth_error_at) {
+    const ageMs = Date.now() - Date.parse(h.last_oauth_error_at)
+    if (ageMs < 3600 * 1000) {
+      alerts.push({
+        level: 'critical',
+        source: 'davmail',
+        title: 'DavMail OAuth 续期失败',
+        message: h.last_oauth_error,
+        ts: h.last_oauth_error_at
+      })
+    }
+  }
+  if (h.enabled && h.token_age_days !== null) {
+    if (h.token_age_days >= 87) {
+      alerts.push({
+        level: 'critical',
+        source: 'davmail',
+        title: 'DavMail OAuth token 紧急过期',
+        message: `token.dat ${h.token_age_days.toFixed(1)} 天未刷新, 估剩余 ${Math.max(0, 90 - h.token_age_days).toFixed(0)} 天`,
+        ts: h.last_probe_at
+      })
+    } else if (h.token_age_days >= 80) {
+      alerts.push({
+        level: 'warning',
+        source: 'davmail',
+        title: 'DavMail OAuth token 即将过期',
+        message: `token.dat ${h.token_age_days.toFixed(1)} 天未刷新, 估剩余 ${Math.max(0, 90 - h.token_age_days).toFixed(0)} 天`,
+        ts: h.last_probe_at
+      })
+    }
+  }
+  if (h.enabled && !h.imap_reachable) {
+    if (h.consecutive_imap_failures >= 3) {
+      alerts.push({
+        level: 'critical',
+        source: 'davmail',
+        title: 'DavMail IMAP 端口不可达',
+        message: `连续 ${h.consecutive_imap_failures} 次 TCP probe 失败`,
+        ts: h.last_probe_at
+      })
+    } else {
+      alerts.push({
+        level: 'warning',
+        source: 'davmail',
+        title: 'DavMail IMAP 探测失败',
+        message: `连续 ${h.consecutive_imap_failures} 次失败 (<3, 还没到 critical)`,
+        ts: h.last_probe_at
+      })
+    }
+  }
+  if (h.enabled && !h.smtp_reachable) {
+    if (h.consecutive_smtp_failures >= 3) {
+      alerts.push({
+        level: 'critical',
+        source: 'davmail',
+        title: 'DavMail SMTP 端口不可达',
+        message: `连续 ${h.consecutive_smtp_failures} 次 TCP probe 失败`,
+        ts: h.last_probe_at
+      })
+    } else {
+      alerts.push({
+        level: 'warning',
+        source: 'davmail',
+        title: 'DavMail SMTP 探测失败',
+        message: `连续 ${h.consecutive_smtp_failures} 次失败 (<3, 还没到 critical)`,
+        ts: h.last_probe_at
+      })
+    }
+  }
+  if (h.enabled && h.throttle_events_5min >= 3) {
+    alerts.push({
+      level: 'warning',
+      source: 'davmail',
+      title: 'DavMail EWS throttling',
+      message: `5min 内 ${h.throttle_events_5min} 次 throttle, uid-mapper 已暂停`,
+      ts: h.last_probe_at
+    })
+  }
+  return {
+    alerts,
+    critical_count: alerts.filter((a) => a.level === 'critical').length,
+    warning_count: alerts.filter((a) => a.level === 'warning').length,
+    generated_at: new Date().toISOString()
+  }
+}
+
 export function registerAdminHandlers(): void {
   ipcMain.handle('admin:health', async (): Promise<AdminHealthData> => runAdminHealth())
   ipcMain.handle('admin:stats', async (): Promise<AdminStatsData> => runAdminStats())
+  ipcMain.handle('admin:davmailHealth', async (): Promise<DavMailHealthData> => runDavmailHealth())
+  ipcMain.handle('admin:systemAlerts', async (): Promise<SystemAlertsData> => runSystemAlerts())
   ipcMain.handle(
     'admin:deadLetterList',
     async (_evt, opts: DeadLetterListOpts = {}): Promise<DeadLetterItem[]> => {

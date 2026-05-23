@@ -17,6 +17,7 @@ import { Activity, AlertCircle, CheckCircle2, Database, RefreshCw } from 'lucide
 import type { DeadLetterItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { DavMailHealthCard } from '@shared/components/admin/DavMailHealthCard'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -264,6 +265,9 @@ export function AdminPage(): React.ReactElement {
         </h1>
         {healthQ.data && <HealthPill healthy={healthQ.data.healthy} />}
       </header>
+
+      {/* roadmap §4.5 — DavMail backend health (hidden when watchdog hasn't ticked) */}
+      <DavMailHealthCard />
 
       {/* Health detail strip */}
       {healthQ.data && (

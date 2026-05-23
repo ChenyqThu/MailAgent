@@ -865,7 +865,9 @@ async def stats_report(request: Request):
     key_prefix = f"{STATS_KEY_PREFIX}{database_id}"
 
     # Store each section as a Redis hash
-    for section in ("service", "watcher", "reverse", "redis_consumer", "handlers"):
+    # roadmap §4.5 — "davmail" 来自 mail-sync DavMailWatchdog.get_snapshot
+    # (仅在 MAILAGENT_BACKEND=davmail 时由 StatsReporter add_collector 注入).
+    for section in ("service", "watcher", "reverse", "redis_consumer", "handlers", "davmail"):
         data = body.get(section)
         if data and isinstance(data, dict):
             hash_key = f"{key_prefix}:{section}"
@@ -975,10 +977,19 @@ async def dashboard_api_stats(request: Request):
     pipe.hgetall(f"{key_prefix}:reverse")
     pipe.hgetall(f"{key_prefix}:redis_consumer")
     pipe.hgetall(f"{key_prefix}:handlers")
+    pipe.hgetall(f"{key_prefix}:davmail")
     pipe.lrange(f"{key_prefix}:alerts", 0, 49)
     results = await pipe.execute()
 
-    service_raw, watcher_raw, reverse_raw, redis_raw, handlers_raw, alerts_raw = results
+    (
+        service_raw,
+        watcher_raw,
+        reverse_raw,
+        redis_raw,
+        handlers_raw,
+        davmail_raw,
+        alerts_raw,
+    ) = results
 
     def _parse_hash(raw: dict) -> dict:
         """Parse Redis hash values, trying JSON decode for complex values."""
@@ -995,6 +1006,7 @@ async def dashboard_api_stats(request: Request):
     reverse_data = _parse_hash(reverse_raw)
     redis_consumer = _parse_hash(redis_raw)
     handlers = _parse_hash(handlers_raw)
+    davmail = _parse_hash(davmail_raw)
     alerts = [json.loads(a) for a in alerts_raw] if alerts_raw else []
 
     # Determine online status
@@ -1018,6 +1030,7 @@ async def dashboard_api_stats(request: Request):
         "reverse": reverse_data,
         "redis_consumer": redis_consumer,
         "handlers": handlers,
+        "davmail": davmail,
         "queues": queues,
         "alerts": alerts,
     }
