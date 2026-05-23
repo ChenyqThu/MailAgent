@@ -35,10 +35,21 @@ export function registerBuiltinTools(registry: ToolRegistry): void {
   for (const tool of allWriteTools) {
     registry.register(tool)
   }
-  if (isKosConsumerEnabled()) {
+  const kosOn = isKosConsumerEnabled()
+  if (kosOn) {
     for (const tool of allKosTools) {
       registry.register(tool)
     }
+  }
+  // Boot log — dogfood-checklist L3.1 用这个验证 flag + tool catalog 正确.
+  // 跑 vitest 时 isVerboseTest 走 silent path 避免 noise; 实际 Electron
+  // main-process 启动时会打印一行到 terminal.
+  if (process.env.NODE_ENV !== 'test') {
+    const names = registry.names().sort()
+    // eslint-disable-next-line no-console
+    console.log(
+      `[Sprint 19] registered ${names.length} builtin tools (KOS consumer=${kosOn ? 'on' : 'off'}): ${names.join(', ')}`
+    )
   }
 }
 

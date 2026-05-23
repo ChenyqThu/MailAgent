@@ -28,7 +28,7 @@
 
 | 待做 | 在哪一节 | 大概要做什么 |
 |---|---|---|
-| 启用 chat agent flag + 启 Electron | §3.1 + §3.2 | sed 改 3 个 flag (`MAILAGENT_AGENT_HARNESS` / `_CONSUMER_ENABLED` / `_L1_HOT_BLOCK_ENABLED`) → `pnpm electron:dev` → console 看到 13 个 tool 注册 |
+| 启用 chat agent flag + 启 Electron | §3.1 + §3.2 | sed 改 3 个 flag (`MAILAGENT_AGENT_HARNESS` / `_CONSUMER_ENABLED` / `_L1_HOT_BLOCK_ENABLED`) → `pnpm dev` → console 看到 13 个 tool 注册 |
 | 跑 M1 harness 20 scenario | §3.3 | 打开任一邮件 → AI Chat → 复制 `docs/eval/email_scenarios.md` S01-S20 prompt 测试。**P1 gate ≥ 70% (≥ 14/20)** |
 | 跑 KOS S21-S25 scenario | §3.4 | 同上, 复制 `docs/eval/email_scenarios.md` 末尾 5 个 KOS 专属 prompt 测试。**P2-KOS gate ≥ 60% (≥ 3/5)** |
 | 查 KOS chat 调用 audit | §3.5 | sqlite3 查 `chat_tool_call` 表的 `kos_query / kos_digest` rows, 看 status='ok' + duration_ms 合理 |
@@ -158,18 +158,25 @@ sed -i.bak \
 
 ```bash
 cd /Users/chenyuanquan/Documents/MailAgent/frontend
-pnpm electron:dev
+pnpm dev
 ```
 
-期望主进程 console 看到:
+期望主进程 console 看到 (boot log 由 `registerBuiltinTools` 打):
+
 ```
-[Sprint 19] registered 13 builtin tools: email_search, email_get, email_body,
-  email_list_thread, email_search_fulltext, email_get_ai_fields,
-  attachment_list, email_search_attachments, email_flag, email_archive,
-  email_draft_reply, kos_query, kos_digest
+[Sprint 19] registered 13 builtin tools (KOS consumer=on): attachment_list,
+email_archive, email_body, email_draft_reply, email_flag, email_get,
+email_get_ai_fields, email_list_thread, email_search, email_search_attachments,
+email_search_fulltext, kos_digest, kos_query
 ```
 
-> 注: `kos_query` + `kos_digest` 在 list 里 = `MAILAGENT_KOS_CONSUMER_ENABLED=true` 生效.
+> Boot log 在 Electron main process 启动时立即打 (`index.ts:226
+> registerBuiltinTools(defaultToolRegistry)`). 跑 `pnpm dev` 后 terminal
+> 应该 ~3 秒内出这一行. 没看到 → 拉到 `pnpm dev` 输出顶部找 (early
+> output 容易被滚走); grep `'\[Sprint 19\] registered'` 也行.
+>
+> `KOS consumer=off` 表示 `MAILAGENT_KOS_CONSUMER_ENABLED` 没生效 (env
+> 写错 / 没重启). 检查 .env 改 + 重启 `pnpm dev`.
 
 ### 3.3 跑 M1 harness eval (20 scenario)
 
