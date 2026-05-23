@@ -35,6 +35,13 @@ import { registerIslandHandlers } from './handlers/island'
 // (PR E) that calls services:restart('mail-sync').
 import { registerEnvHandlers } from './handlers/env'
 import { registerServicesHandlers } from './handlers/services'
+// Sprint 19 — Load 项目根 .env into process.env BEFORE any module (chat/config,
+// llm flags 等) reads it. electron-vite 不 auto-load 项目根 .env, env-handler
+// 是给 Settings UI read/write 的另一条路径, 跟启动 env 注入是两件事. 详见
+// lib/dotenv-bootstrap.ts header. 已 export 的 process.env 优先, 不被覆盖.
+import { bootstrapDotenv } from './lib/dotenv-bootstrap'
+
+bootstrapDotenv()
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist

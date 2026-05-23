@@ -91,6 +91,16 @@ export const MANAGED_ENV_KEYS = [
   'MAILAGENT_OUTBOX_MAX_ATTEMPTS',
   'MAILAGENT_OUTBOX_CONCURRENCY',
 
+  // — Agent Harness + KOS (Sprint 19 — chat agent multi-turn loop + Jarvis
+  // KOS v2 producer/consumer integration). 全是 boolean toggle, 默认 false.
+  // OAuth credentials (KOS_OAUTH_CLIENT_ID / SECRET) + endpoint (KOS_MCP_BASE)
+  // 暂不在白名单 — 走 .env 手动管理, 未来若做 Settings 'AI Agent' tab 第二段
+  // 再加 SECRET_ENV_KEYS 项.
+  'MAILAGENT_AGENT_HARNESS',
+  'MAILAGENT_KOS_CONSUMER_ENABLED',
+  'MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED',
+  'MAILAGENT_KOS_INGEST_ENABLED',
+
   // — Island (PR D IslandUpdatesTab)
   'PING_ISLAND_ENABLED',
   'ISLAND_SOCKET_PATH',
