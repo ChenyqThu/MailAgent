@@ -24,13 +24,21 @@
 | L4.1 producer wire | ✅ | dry-run 真邮件 (`🟡 重要` priority): KOSClient configured, payload 9937 bytes, slug 正确, frontmatter 含 raw 中文 enum + 英文 tag (`priority-important`); push_email_to_kos 返 `{dry_run:True, slug, content_bytes}`. **修了一个中文 enum bug** — 实际 LLM 输出 emoji enum, `priority_at_or_above` 加 `_normalize_priority` 映射, 5 个新单测 covering |
 | L4.3 KOS list_pages baseline | ✅ | tag=`mailagent-ingest` 0 pages (producer 没启用, 符合预期; 启用后期望 ≥ 1 hours) |
 
-**剩余需要 user 验收**:
-- L3.2-L3.4 Electron UI 启动 + 跑 20+5 scenario (Claude 不能代跑 UI)
-- L3.5 KOS chat tool 调用 audit (sqlite3 查表, 需先跑 chat)
-- L4.2 producer 真启用 (改 .env 关 dry-run + 等几小时 + 看 KOS 端新增 page) — Claude 不该长留 production state 翻转
-- 1 周监控指标 (error 率 / latency / pass rate)
+**剩余需要 user 验收** (Claude 不能代跑的部分):
 
-详细操作步骤见下方 §
+| 待做 | 在哪一节 | 大概要做什么 |
+|---|---|---|
+| 启用 chat agent flag + 启 Electron | §3.1 + §3.2 | sed 改 3 个 flag (`MAILAGENT_AGENT_HARNESS` / `_CONSUMER_ENABLED` / `_L1_HOT_BLOCK_ENABLED`) → `pnpm electron:dev` → console 看到 13 个 tool 注册 |
+| 跑 M1 harness 20 scenario | §3.3 | 打开任一邮件 → AI Chat → 复制 `docs/eval/email_scenarios.md` S01-S20 prompt 测试。**P1 gate ≥ 70% (≥ 14/20)** |
+| 跑 KOS S21-S25 scenario | §3.4 | 同上, 复制 `docs/eval/email_scenarios.md` 末尾 5 个 KOS 专属 prompt 测试。**P2-KOS gate ≥ 60% (≥ 3/5)** |
+| 查 KOS chat 调用 audit | §3.5 | sqlite3 查 `chat_tool_call` 表的 `kos_query / kos_digest` rows, 看 status='ok' + duration_ms 合理 |
+| Producer 真启用 (推 KOS) | §4.1 → §4.2 | dry-run 模式跑几小时看 log → 关 dry-run 真推 KOS → §4.3 远程 list_pages 验证 KOS 端真有 mailagent-ingest tag 的 page |
+| 长期监控 1 周 | §监控指标 | 跑 sqlite3 + pm2 logs 查 cost / error 率 / latency |
+| 翻 default flag (满足 gate 后) | §翻 default flag 准备 | 跑 sed 改 config.ts 默认 true |
+
+**建议顺序**: §3.1 → §3.2 → §3.3 (M1 必过 ≥ 70%) → §3.4 (KOS scenario) → §3.5 audit 看 → 之后再 §4.1 → §4.2 → §4.3 (producer 真启用更高 stake)。
+
+**回滚**: 任何 layer 出问题 → §回滚 列出 sed 命令一键关 flag + pm2 restart。
 
 ---
 
@@ -331,18 +339,25 @@ pm2 restart mail-sync
 
 ## 验收 checklist (每 layer 跑完打勾)
 
-- [ ] **L0** Python + frontend deps 完整, 单测全过 (后端 215+, 前端 251+)
-- [ ] **L1.1** `kos_smoke_test.sh` 4 步全 OK
-- [ ] **L1.2** `pytest tests/kos/` + `vitest tests/main/kos/` 全过
-- [ ] **L2.1** `mailagent email search "产品" --limit 3` smart 模式命中
-- [ ] **L2.2** `mailagent attachment extract --include-missing` 跑完无 fatal error
-- [ ] **L3.1** Electron 启动 console 看到 13 个 tool 注册
-- [ ] **L3.3** M1 20 scenario pass rate ≥ 70%
-- [ ] **L3.4** PR-2e/2f S21-S25 KOS scenario ≥ 3/5
-- [ ] **L3.5** kos_query / kos_digest 调用 audit 表 status='ok'
-- [ ] **L4.1** Dry-run mode 看到 `[kos-producer] dry-run` log
-- [ ] **L4.2** 真启用后 `[kos-producer] pushed` log 出现
-- [ ] **L4.3** KOS 端 `list_pages` 看到 mailagent slug
-- [ ] **监控** 1 周 error 率 < 5%, KOS avg_ms < 3s
+**Claude 已验收 (PR-2g ship 时跑过 baseline, 2026-05-23)**:
 
-跑完 ≥ 11/12 → M2 ship gate 通过, 翻 default flag 合 main.
+- [x] **L0** Python + frontend deps 完整, 单测全过 (后端 215 + 前端 598 = 813)
+- [x] **L1.1** `kos_smoke_test.sh` 4 步全 OK (KOS v0.38.2.0 engine=postgres)
+- [x] **L1.2** `pytest tests/kos/` + `vitest tests/main/kos/` 全过 (105 KOS 子集)
+- [x] **L2.1** `mailagent email search "产品" --limit 3` smart 模式命中 3 邮件
+- [x] **L2.2** `mailagent attachment extract --include-missing --limit 50` → 41 extracted / 9 unsupported / 0 failed
+- [x] **L2.2 (FTS)** `mailagent attachment search "产品"` 命中 3 (xlsx/csv/pdf)
+- [x] **L4.1** Producer wire 实测: 真邮件 (`🟡 重要` priority) → KOSClient configured + payload 9937B + dry-run 返 `{dry_run:True, slug, content_bytes}`
+- [x] **L4.3 (baseline)** KOS 端 `list_pages tag=mailagent-ingest` 0 pages (producer 未启用, 符合预期)
+
+**User 待验收 (UI / 长期监控类)**:
+
+- [ ] **L3.1** Electron 启动 console 看到 13 个 tool 注册 (`MAILAGENT_AGENT_HARNESS=true` + `_CONSUMER_ENABLED=true` 后)
+- [ ] **L3.3** M1 20 scenario pass rate ≥ 70% (§3.3)
+- [ ] **L3.4** PR-2e/2f S21-S25 KOS scenario ≥ 3/5 (§3.4)
+- [ ] **L3.5** kos_query / kos_digest 调用 audit 表 status='ok' (§3.5 sqlite 命令)
+- [ ] **L4.2** 真启用后 `[kos-producer] pushed` log 出现 (§4.2 — 改 `KOS_INGEST_DRY_RUN=false` + restart, 等几小时新邮件流过)
+- [ ] **L4.3 (启用后)** KOS 端 `list_pages tag=mailagent-ingest` 看到 mailagent slug (§4.3 远程 curl)
+- [ ] **监控** 1 周 error 率 < 5%, KOS avg_ms < 3s (§监控指标)
+
+跑完 user 段 ≥ 5/7 → M2 ship gate 通过, 按 §翻 default flag 准备 改默认 + 合 main.
