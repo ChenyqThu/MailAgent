@@ -31,7 +31,42 @@ from src.models import Email
 
 # Priority hierarchy (low → high). Index 越大优先级越高.
 # unknown / 缺失 → 视为 'normal' (中性, 不主动 push 也不主动跳).
+#
+# 'urgent' 是 5 档英文 enum 中的一档, 但 LLM schema (src/llm_agent/schema.py)
+# 实际 enum 只有 4 档中文 emoji ('🔴 紧急' / '🟡 重要' / '🟢 一般' / '⚪ 低').
+# 中文 → 英文 mapping 见 _CN_PRIORITY_MAP. 英文 5 档 keep 让外部 caller 可以
+# 传 'urgent' (例如未来 schema 变更或其他 priority 源).
 _PRIORITY_ORDER: list[str] = ["low", "normal", "important", "urgent", "critical"]
+
+# LLM agent 输出的中文 priority enum → 英文 normalize.
+# 跟 src/llm_agent/schema.py:PRIORITY_ENUM 对齐. 缺 'urgent' 一档 (LLM
+# schema 设计仅 4 档).
+_CN_PRIORITY_MAP: dict[str, str] = {
+    "🔴 紧急": "critical",
+    "🟡 重要": "important",
+    "🟢 一般": "normal",
+    "⚪ 低": "low",
+}
+
+
+def _normalize_priority(raw: Optional[str]) -> str:
+    """中文 emoji enum / 英文 enum / unknown → 英文 5 档之一.
+
+    例:
+        '🟡 重要' → 'important'
+        '🟢 一般' → 'normal'
+        'critical' → 'critical'  (英文已 normalize, lowercase 后命中)
+        None / '' / 'foo' → 'normal' (unknown 中性)
+    """
+    if not raw:
+        return "normal"
+    s = raw.strip()
+    if s in _CN_PRIORITY_MAP:
+        return _CN_PRIORITY_MAP[s]
+    lower = s.lower()
+    if lower in _PRIORITY_ORDER:
+        return lower
+    return "normal"
 
 
 def normalize_message_id_for_slug(message_id: str) -> str:
@@ -52,17 +87,16 @@ def normalize_message_id_for_slug(message_id: str) -> str:
 
 
 def priority_at_or_above(actual: Optional[str], floor: str) -> bool:
-    """检查 actual priority 是否 ≥ floor."""
-    a = (actual or "").strip().lower()
-    f = (floor or "normal").strip().lower()
-    try:
-        a_idx = _PRIORITY_ORDER.index(a)
-    except ValueError:
-        a_idx = _PRIORITY_ORDER.index("normal")  # 未知 → normal
-    try:
-        f_idx = _PRIORITY_ORDER.index(f)
-    except ValueError:
-        f_idx = _PRIORITY_ORDER.index("normal")
+    """检查 actual priority 是否 ≥ floor.
+
+    actual 可以是英文 enum ('critical' / 'urgent' / 'important' / 'normal' /
+    'low') 或 LLM 中文 emoji ('🔴 紧急' / '🟡 重要' / '🟢 一般' / '⚪ 低'),
+    会先 _normalize_priority 转英文再比较.
+    """
+    a = _normalize_priority(actual)
+    f = _normalize_priority(floor) if floor else "normal"
+    a_idx = _PRIORITY_ORDER.index(a)
+    f_idx = _PRIORITY_ORDER.index(f)
     return a_idx >= f_idx
 
 
@@ -112,10 +146,14 @@ def build_kos_page_payload(
             f"  - 'https://www.notion.so/{notion_page_id.replace('-', '')}'"
         )
 
-    # tags: 固定 mailagent-ingest + email + 按 priority/mailbox 动态加
+    # tags: 固定 mailagent-ingest + email + 按 priority/mailbox 动态加.
+    # priority 转英文 normalize (LLM 中文 enum '🟡 重要' → 'important') 让
+    # KOS 端 tag 过滤跟 priority floor 语义一致.
     tags = ["mailagent-ingest", "email"]
-    if ai_priority and ai_priority.lower() in _PRIORITY_ORDER:
-        tags.append(f"priority-{ai_priority.lower()}")
+    if ai_priority:
+        normalized = _normalize_priority(ai_priority)
+        if normalized != "normal" or ai_priority.strip() in ("🟢 一般", "normal"):
+            tags.append(f"priority-{normalized}")
     if email_obj.mailbox:
         # mailbox 中文 → 简单 ASCII-ize 用于 tag
         mailbox_tag = "inbox" if email_obj.mailbox == "收件箱" else (

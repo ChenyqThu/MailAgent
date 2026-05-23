@@ -128,6 +128,21 @@ class TestPriorityFloor:
         assert priority_at_or_above("CRITICAL", "normal") is True
         assert priority_at_or_above("Important", "Normal") is True
 
+    def test_cn_emoji_enum_maps_to_english(self):
+        """LLM agent 中文 emoji enum '🟡 重要' 等 → 英文 normalize 后比较."""
+        # 紧急 = critical, 高于 normal
+        assert priority_at_or_above("🔴 紧急", "normal") is True
+        # 重要 = important, 等于 important
+        assert priority_at_or_above("🟡 重要", "important") is True
+        # 一般 = normal, 等于 normal 通过, 低于 important 不通过
+        assert priority_at_or_above("🟢 一般", "normal") is True
+        assert priority_at_or_above("🟢 一般", "important") is False
+        # 低 = low, 低于 normal 不通过
+        assert priority_at_or_above("⚪ 低", "normal") is False
+        # 中文 vs 中文 floor 也能比
+        assert priority_at_or_above("🟡 重要", "🟢 一般") is True
+        assert priority_at_or_above("⚪ 低", "🟡 重要") is False
+
 
 # ============================================================
 # build_kos_page_payload
@@ -193,6 +208,31 @@ class TestBuildKosPagePayload:
             email, internal_id=100, ai_priority="bogus"
         )
         assert "priority-bogus" not in content
+
+    def test_cn_emoji_priority_normalized_to_english_tag(self):
+        """LLM 中文 enum '🟡 重要' → frontmatter tag 'priority-important'.
+
+        tag 用英文 normalize 让 KOS 端跨 namespace tag 过滤一致;
+        ai_priority: 字段仍保留中文 raw enum 给图谱 entity 看原始 label.
+        """
+        email = _make_email()
+        _, content = build_kos_page_payload(
+            email, internal_id=100, ai_priority="🟡 重要"
+        )
+        assert "priority-important" in content    # tag 是英文 normalize
+        assert "ai_priority: '🟡 重要'" in content  # raw enum 保留在字段里
+
+        _, content2 = build_kos_page_payload(
+            email, internal_id=101, ai_priority="🔴 紧急"
+        )
+        assert "priority-critical" in content2
+        assert "ai_priority: '🔴 紧急'" in content2
+
+        _, content3 = build_kos_page_payload(
+            email, internal_id=102, ai_priority="⚪ 低"
+        )
+        assert "priority-low" in content3
+        assert "ai_priority: '⚪ 低'" in content3
 
     def test_mailbox_sent_tag(self):
         email = _make_email(mailbox="发件箱")

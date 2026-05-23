@@ -8,6 +8,30 @@
 > mail-sync` 即可. KOS 不可达 / 错误码 / token 失效都不阻塞主同步 (主路径
 > Mail.app + Notion 仍 SSoT).
 
+## Claude 已验收 baseline (2026-05-23, PR-2g ship)
+
+非 UI 类自动化 layer 已跑通, 你只剩 L3 chat UI 类 + 长期监控. 已验收:
+
+| Layer | 状态 | Verified baseline |
+|---|---|---|
+| L0.1 Python deps | ✅ | `pypdf / docx / pptx / python_calamine / httpx` all OK |
+| L0.3 .env config | ✅ | 7 个 KOS env 已写入 (全 false), 跟 `.gitignore` 兼容 |
+| L1.1 smoke 4 步 | ✅ | health/token/MCP query/Python KOSClient e2e 全 OK; KOS v0.38.2.0 engine=postgres |
+| L1.2 单测 | ✅ | 后端 215 + 前端 598 = 813 全过; KOS 子集 (client 39 + producer 45 + 前端 chat tools 21) = 105 |
+| L2.1 中文 smart search | ✅ | `mailagent email search "产品"` smart → `(产品* OR (产* AND 品*))` 命中 3 邮件 |
+| L2.2 attachment extract | ✅ | 50 个历史 attachment → 41 extracted / 9 unsupported (.doc/.xls 老格式) / 0 failed |
+| L2.2 attachment FTS | ✅ | `mailagent attachment search "产品"` 命中 3 (xlsx "品类" / csv "品类" / pdf "产品需求") |
+| L4.1 producer wire | ✅ | dry-run 真邮件 (`🟡 重要` priority): KOSClient configured, payload 9937 bytes, slug 正确, frontmatter 含 raw 中文 enum + 英文 tag (`priority-important`); push_email_to_kos 返 `{dry_run:True, slug, content_bytes}`. **修了一个中文 enum bug** — 实际 LLM 输出 emoji enum, `priority_at_or_above` 加 `_normalize_priority` 映射, 5 个新单测 covering |
+| L4.3 KOS list_pages baseline | ✅ | tag=`mailagent-ingest` 0 pages (producer 没启用, 符合预期; 启用后期望 ≥ 1 hours) |
+
+**剩余需要 user 验收**:
+- L3.2-L3.4 Electron UI 启动 + 跑 20+5 scenario (Claude 不能代跑 UI)
+- L3.5 KOS chat tool 调用 audit (sqlite3 查表, 需先跑 chat)
+- L4.2 producer 真启用 (改 .env 关 dry-run + 等几小时 + 看 KOS 端新增 page) — Claude 不该长留 production state 翻转
+- 1 周监控指标 (error 率 / latency / pass rate)
+
+详细操作步骤见下方 §
+
 ---
 
 ## 0. 前置
@@ -18,7 +42,7 @@
 cd /Users/chenyuanquan/Documents/MailAgent
 source venv/bin/activate
 pip install -r requirements.txt 2>&1 | tail -3
-python3 -c "import pypdf, docx, pptx, calamine, httpx; print('all deps OK')"
+python3 -c "import pypdf, docx, pptx, python_calamine, httpx; print('all deps OK')"
 ```
 
 期望: `all deps OK`
