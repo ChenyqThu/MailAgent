@@ -30,6 +30,7 @@ import {
   startChat,
   type StartChatResult
 } from '../chat/dispatcher'
+import { resolveConfirmation } from '../chat/tools/confirmation'
 
 export interface ChatStartOpts {
   emailId: number
@@ -104,6 +105,40 @@ export function registerChatHandlers(): void {
       abortChatSession(sessionId)
     }
   })
+
+  // Sprint 19 PR-1d.1 — Confirmation reply from ConfirmToolDialog. The
+  // renderer fires this when the user clicks Confirm or Cancel; the
+  // harness has a promise registered in tools/confirmation.ts waiting
+  // for the answer. `editedInput` is only present for tier=edit dialogs
+  // where the user modified the LLM's proposal before approving.
+  // Returns ok:false on late arrival (session already aborted, dialog
+  // dismissed externally, etc.) so the renderer can show a "no longer
+  // pending" toast rather than silently dropping the click.
+  ipcMain.handle(
+    'chat:confirmTool',
+    async (
+      _evt,
+      payload: { toolUseId?: unknown; approved?: unknown; editedInput?: unknown }
+    ): Promise<{ ok: true } | { ok: false; code: string; message: string }> => {
+      const toolUseId = typeof payload?.toolUseId === 'string' ? payload.toolUseId : ''
+      const approved = payload?.approved === true
+      if (toolUseId.length === 0) {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'toolUseId required' }
+      }
+      const accepted = resolveConfirmation(toolUseId, {
+        approved,
+        editedInput: approved ? payload?.editedInput : undefined
+      })
+      if (!accepted) {
+        return {
+          ok: false,
+          code: 'E_NOT_PENDING',
+          message: `no confirmation pending for toolUseId="${toolUseId}"`
+        }
+      }
+      return { ok: true }
+    }
+  )
 
   ipcMain.handle('chat:listMessages', async (_evt, sessionId: number): Promise<ChatMessage[]> => {
     if (!Number.isInteger(sessionId) || sessionId < 0) return []

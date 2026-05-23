@@ -154,6 +154,26 @@ export interface BackendToolDescriptor {
   input_schema: Record<string, unknown>
 }
 
+/** Sprint 19 PR-1d — Anthropic content block discriminator. The harness
+ *  reuses these to build multi-turn `iterHistory` entries: an assistant
+ *  turn that ends in tool_use has `content: [text, tool_use…]`; the next
+ *  user turn carries the `tool_result` blocks. */
+export type AnthropicContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+
+/** Sprint 19 PR-1d — Anthropic-shape history message for the multi-turn
+ *  loop. When `ChatStreamRequest.iterHistory` is set, the backend uses
+ *  this as messages[] verbatim (bypassing the ChatMessage[] →
+ *  buildAnthropicMessages translation) so tool_use/tool_result blocks stay
+ *  in their native multi-block shape — ChatMessage.content is a single
+ *  string and can't represent the tool_use protocol. */
+export interface AnthropicHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string | AnthropicContentBlock[]
+}
+
 export interface ChatStreamRequest {
   /** Sequential chat history including the just-inserted user message
    *  the orchestrator wants the backend to respond to. The backend
@@ -176,6 +196,12 @@ export interface ChatStreamRequest {
    *  to `registry.toAnthropicSchema()`; the legacy single-turn path leaves
    *  it undefined. */
   tools?: BackendToolDescriptor[]
+  /** Sprint 19 PR-1d — when set, the backend MUST use this as Anthropic
+   *  messages[] verbatim, ignoring `history`. The harness uses this so
+   *  multi-turn tool_use / tool_result content blocks survive between
+   *  iterations within one user turn. Undefined → fall back to translating
+   *  `history: ChatMessage[]` via the backend's own builder (legacy path). */
+  iterHistory?: AnthropicHistoryMessage[]
 }
 
 export interface ChatBackend {

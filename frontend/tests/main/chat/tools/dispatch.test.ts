@@ -182,8 +182,8 @@ describe('dispatchTools — silent tier', () => {
   })
 })
 
-describe('dispatchTools — preview / edit tiers (PR-1b stub)', () => {
-  test('preview-tier tool short-circuits with confirmation-not-wired error', async () => {
+describe('dispatchTools — preview / edit tiers (no confirm callback)', () => {
+  test('preview-tier without confirm callback short-circuits with helpful error', async () => {
     const r = createToolRegistry()
     r.register(makeTool('email_flag', { confirmationTier: 'preview', category: 'write' }))
     const out = await dispatchTools(
@@ -193,10 +193,10 @@ describe('dispatchTools — preview / edit tiers (PR-1b stub)', () => {
     )
     expect(out[0]?.status).toBe('error')
     expect(out[0]?.errorMessage).toMatch(/requires user confirmation/)
-    expect(out[0]?.errorMessage).toMatch(/PR-1d/)
+    expect(out[0]?.errorMessage).toMatch(/no confirm\(\) handler/)
   })
 
-  test('edit-tier tool also short-circuits in PR-1b', async () => {
+  test('edit-tier also short-circuits without confirm callback', async () => {
     const r = createToolRegistry()
     r.register(
       makeTool('email_draft_reply', { confirmationTier: 'edit', category: 'write' })
@@ -229,5 +229,151 @@ describe('dispatchTools — preview / edit tiers (PR-1b stub)', () => {
     expect(out.find((r) => r.toolUseId === 't2')?.errorMessage).toMatch(/confirmation/)
     expect(out.find((r) => r.toolUseId === 't3')?.status).toBe('error')
     expect(out.find((r) => r.toolUseId === 't3')?.errorMessage).toMatch(/Unknown tool/)
+  })
+})
+
+describe('dispatchTools — preview / edit tiers (with confirm callback)', () => {
+  test('preview-tier approved → handler runs + result has no userEdited flag', async () => {
+    const r = createToolRegistry()
+    let received: unknown = null
+    r.register(
+      makeTool('email_flag', {
+        confirmationTier: 'preview',
+        category: 'write',
+        handler: async (input, ctx) => {
+          received = { input, edited: ctx.userEditedInput }
+          return { ok: true, output: { applied: true }, durationMs: 0 }
+        }
+      })
+    )
+    const ctx = {
+      ...makeCtx(),
+      confirm: async () => ({ approved: true })
+    }
+    const out = await dispatchTools(
+      [{ toolUseId: 't1', name: 'email_flag', input: { internal_id: 7 } }],
+      ctx,
+      r
+    )
+    expect(out[0]?.status).toBe('ok')
+    expect(out[0]?.userEdited).toBeUndefined()
+    expect(received).toEqual({ input: { internal_id: 7 }, edited: undefined })
+  })
+
+  test('edit-tier approved with editedInput → handler sees both raw input and userEditedInput', async () => {
+    const r = createToolRegistry()
+    const recorded: Array<{ input: unknown; edited: unknown }> = []
+    r.register(
+      makeTool('email_draft_reply', {
+        confirmationTier: 'edit',
+        category: 'write',
+        handler: async (input, ctx) => {
+          recorded.push({ input, edited: ctx.userEditedInput })
+          return { ok: true, output: { draft_id: 'd1' }, durationMs: 0 }
+        }
+      })
+    )
+    const ctx = {
+      ...makeCtx(),
+      confirm: async () => ({
+        approved: true,
+        editedInput: { internal_id: 1, body_markdown: 'edited by user' }
+      })
+    }
+    const out = await dispatchTools(
+      [
+        {
+          toolUseId: 't1',
+          name: 'email_draft_reply',
+          input: { internal_id: 1, body_markdown: 'LLM proposal' }
+        }
+      ],
+      ctx,
+      r
+    )
+    expect(out[0]?.status).toBe('ok')
+    expect(out[0]?.userEdited).toBe(true)
+    expect(recorded[0]?.input).toEqual({ internal_id: 1, body_markdown: 'LLM proposal' })
+    expect(recorded[0]?.edited).toEqual({
+      internal_id: 1,
+      body_markdown: 'edited by user'
+    })
+  })
+
+  test('user clicks Cancel → status=canceled, handler not invoked', async () => {
+    const r = createToolRegistry()
+    let invoked = false
+    r.register(
+      makeTool('email_flag', {
+        confirmationTier: 'preview',
+        category: 'write',
+        handler: async () => {
+          invoked = true
+          return { ok: true, output: {}, durationMs: 0 }
+        }
+      })
+    )
+    const ctx = {
+      ...makeCtx(),
+      confirm: async () => ({ approved: false })
+    }
+    const out = await dispatchTools(
+      [{ toolUseId: 't1', name: 'email_flag', input: {} }],
+      ctx,
+      r
+    )
+    expect(out[0]?.status).toBe('canceled')
+    expect(out[0]?.errorMessage).toMatch(/user declined/)
+    expect(invoked).toBe(false)
+  })
+
+  test('confirm rejects (abort during wait) → status=canceled', async () => {
+    const r = createToolRegistry()
+    r.register(makeTool('email_flag', { confirmationTier: 'preview', category: 'write' }))
+    const ctx = {
+      ...makeCtx(),
+      confirm: async () => {
+        throw new Error('E_ABORTED')
+      }
+    }
+    const out = await dispatchTools(
+      [{ toolUseId: 't1', name: 'email_flag', input: {} }],
+      ctx,
+      r
+    )
+    expect(out[0]?.status).toBe('canceled')
+    expect(out[0]?.errorMessage).toMatch(/aborted by user/)
+  })
+
+  test('multiple preview-tier tools run SERIALLY (write isolation guarantee)', async () => {
+    const r = createToolRegistry()
+    const order: number[] = []
+    const make = (n: number) =>
+      makeTool(`w${n}`, {
+        confirmationTier: 'preview',
+        category: 'write',
+        handler: async () => {
+          order.push(n)
+          await new Promise((res) => setTimeout(res, 20))
+          order.push(n * 10)
+          return { ok: true, output: { n }, durationMs: 20 }
+        }
+      })
+    r.register(make(1))
+    r.register(make(2))
+    const ctx = {
+      ...makeCtx(),
+      confirm: async () => ({ approved: true })
+    }
+    await dispatchTools(
+      [
+        { toolUseId: 'a', name: 'w1', input: {} },
+        { toolUseId: 'b', name: 'w2', input: {} }
+      ],
+      ctx,
+      r
+    )
+    // Serial order: 1 → 10 (w1 start → w1 end), then 2 → 20.
+    expect(order).toEqual([1, 10, 2, 20])
   })
 })

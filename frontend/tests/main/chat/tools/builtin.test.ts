@@ -9,6 +9,7 @@ import { createToolRegistry } from '../../../../src/electron/main/chat/tools/reg
 import {
   allEmailTools,
   allAttachmentTools,
+  allWriteTools,
   registerBuiltinTools
 } from '../../../../src/electron/main/chat/tools/builtin'
 
@@ -27,38 +28,65 @@ describe('builtin tool catalog — M1', () => {
     expect(allAttachmentTools[0]?.name).toBe('attachment_list')
   })
 
+  test('write tools: exactly 3 (email_flag / email_archive / email_draft_reply)', () => {
+    expect(allWriteTools).toHaveLength(3)
+    const writeNames = allWriteTools.map((t) => t.name).sort()
+    expect(writeNames).toEqual(['email_archive', 'email_draft_reply', 'email_flag'])
+    for (const t of allWriteTools) {
+      expect(t.category).toBe('write')
+      expect(t.surface).toBe('ipc')
+      // tier is preview / edit (never silent for writes)
+      expect(['preview', 'edit']).toContain(t.confirmationTier)
+    }
+  })
+
+  test('email_draft_reply specifically uses tier=edit (user MAY change body before draft creation)', () => {
+    const draft = allWriteTools.find((t) => t.name === 'email_draft_reply')
+    expect(draft?.confirmationTier).toBe('edit')
+  })
+
+  test('email_flag / email_archive use tier=preview (reversible, no edit needed)', () => {
+    expect(allWriteTools.find((t) => t.name === 'email_flag')?.confirmationTier).toBe('preview')
+    expect(allWriteTools.find((t) => t.name === 'email_archive')?.confirmationTier).toBe('preview')
+  })
+
   test('all builtin names are stable + snake_case', () => {
-    const names = [...allEmailTools, ...allAttachmentTools].map((t) => t.name)
-    expect(names).toEqual([
-      'email_search',
-      'email_get',
-      'email_body',
-      'email_list_thread',
-      'email_search_fulltext',
-      'email_get_ai_fields',
-      'attachment_list'
-    ])
+    const names = [...allEmailTools, ...allAttachmentTools, ...allWriteTools].map((t) => t.name)
+    expect(names.sort()).toEqual(
+      [
+        'attachment_list',
+        'email_archive',
+        'email_body',
+        'email_draft_reply',
+        'email_flag',
+        'email_get',
+        'email_get_ai_fields',
+        'email_list_thread',
+        'email_search',
+        'email_search_fulltext'
+      ].sort()
+    )
     for (const n of names) {
       expect(n).toMatch(/^[a-z][a-z0-9_]*$/)
     }
   })
 
   test('every tool has actionable LLM-facing description (≥ 30 chars)', () => {
-    for (const t of [...allEmailTools, ...allAttachmentTools]) {
+    for (const t of [...allEmailTools, ...allAttachmentTools, ...allWriteTools]) {
       expect(t.description.length).toBeGreaterThanOrEqual(30)
     }
   })
 
   test('every tool has type=object inputSchema with explicit required array', () => {
-    for (const t of [...allEmailTools, ...allAttachmentTools]) {
+    for (const t of [...allEmailTools, ...allAttachmentTools, ...allWriteTools]) {
       const s = t.inputSchema as { type?: string; required?: unknown }
       expect(s.type).toBe('object')
       expect(Array.isArray(s.required)).toBe(true)
     }
   })
 
-  test('email_get / email_body / email_list_thread / email_get_ai_fields / attachment_list all require their primary id', () => {
-    const tools = [...allEmailTools, ...allAttachmentTools]
+  test('each tool requires its primary id (internal_id / thread_id / query)', () => {
+    const tools = [...allEmailTools, ...allAttachmentTools, ...allWriteTools]
     const requirements: Record<string, string[]> = {
       email_search: [], // optional filters
       email_get: ['internal_id'],
@@ -66,7 +94,11 @@ describe('builtin tool catalog — M1', () => {
       email_list_thread: ['thread_id'],
       email_search_fulltext: ['query'],
       email_get_ai_fields: ['internal_id'],
-      attachment_list: ['internal_id']
+      attachment_list: ['internal_id'],
+      // write tools require internal_id + (for draft) body_markdown.
+      email_flag: ['internal_id'],
+      email_archive: ['internal_id'],
+      email_draft_reply: ['internal_id', 'body_markdown']
     }
     for (const t of tools) {
       const expected = requirements[t.name]
@@ -77,13 +109,16 @@ describe('builtin tool catalog — M1', () => {
 })
 
 describe('registerBuiltinTools — boot wiring', () => {
-  test('registers all 7 M1 tools into a fresh registry', () => {
+  test('registers all 10 M1 tools into a fresh registry (7 read + 3 write)', () => {
     const r = createToolRegistry()
     registerBuiltinTools(r)
     expect(r.names().sort()).toEqual(
       [
         'attachment_list',
+        'email_archive',
         'email_body',
+        'email_draft_reply',
+        'email_flag',
         'email_get',
         'email_get_ai_fields',
         'email_list_thread',
@@ -97,11 +132,21 @@ describe('registerBuiltinTools — boot wiring', () => {
     const r = createToolRegistry()
     registerBuiltinTools(r)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(7)
+    expect(schema).toHaveLength(10)
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
       expect(t.input_schema).toBeTruthy()
+    }
+  })
+
+  test('category filter — toAnthropicSchema({categories:["read"]}) excludes write tools', () => {
+    const r = createToolRegistry()
+    registerBuiltinTools(r)
+    const readOnly = r.toAnthropicSchema({ categories: ['read'] })
+    expect(readOnly).toHaveLength(7)
+    for (const t of readOnly) {
+      expect(t.name).not.toMatch(/_flag|_archive|_draft_reply/)
     }
   })
 

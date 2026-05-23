@@ -10,6 +10,9 @@ import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
 import { registerChatBackend } from './chat/registry'
 import { CustomApiBackend } from './chat/backends/custom_api'
 import { NotionAgentBackend } from './chat/backends/notion_agent'
+// Sprint 19 PR-1d.1 — populate agent harness tool catalog at boot.
+import { defaultToolRegistry } from './chat/tools/registry'
+import { registerBuiltinTools } from './chat/tools/builtin'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'
 import { registerDraftHandlers } from './handlers/draft'
@@ -215,6 +218,12 @@ app.whenReady().then(() => {
   // `notion-agent chat --json` subprocess).
   registerChatBackend(new CustomApiBackend())
   registerChatBackend(new NotionAgentBackend())
+  // Sprint 19 PR-1d.1 — populate the agent harness tool registry once at
+  // boot. The harness only consults `defaultToolRegistry` when the
+  // MAILAGENT_AGENT_HARNESS env flag is set, so registering tools here is
+  // safe even when the harness is off — no behavioural change until the
+  // flag flips.
+  registerBuiltinTools(defaultToolRegistry)
   registerChatHandlers()
   // Sprint 5 §2.2 — Mail.app write commands (createDraft via AppleScript,
   // resync / llm:run / notion:updateFlag via `mailagent` CLI fork).

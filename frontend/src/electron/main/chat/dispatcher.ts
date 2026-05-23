@@ -27,7 +27,10 @@ import {
   type ChatMessage
 } from '../chat_db'
 import { getDb } from '../db'
+import { backendSupportsTools, isHarnessEnabled } from './config'
+import { runHarness } from './harness'
 import { getChatBackend } from './registry'
+import { cancelConfirmationsForSession } from './tools/confirmation'
 import type { ChatStreamEnvelope, ChatStreamEvent, EmailContext } from './types'
 
 // Sprint 4 review (Opus H-1): cap the email body we ship to the model so
@@ -201,6 +204,25 @@ interface RunStreamArgs {
 }
 
 async function runStream(args: RunStreamArgs): Promise<void> {
+  // Sprint 19 PR-1d.1 — harness gate. When the env flag is on AND the
+  // backend speaks Anthropic tool_use, the multi-turn harness owns the
+  // run; legacy single-pass continues for notion-agent + the (default)
+  // flag-off path. Backend kind is the only stable signal — we don't
+  // probe per-instance capability because every backend either fully
+  // supports tools or doesn't at all.
+  if (isHarnessEnabled() && backendSupportsTools(args.backend.kind)) {
+    return runHarness({
+      sessionId: args.sessionId,
+      assistantMessageId: args.assistantMessageId,
+      backend: args.backend,
+      initialHistory: args.history,
+      model: args.model,
+      agentPageId: args.agentPageId,
+      emailContext: args.emailContext,
+      ac: args.ac,
+      sink: args.sink
+    })
+  }
   const {
     sessionId,
     assistantMessageId,
@@ -436,13 +458,18 @@ export async function editChatMessage(
 
 /** Renderer-initiated cancel. Idempotent; safe to call when nothing is
  *  in flight. Returns the number of streaming/pending rows it flipped
- *  (0 when the session was already done or never started). */
+ *  (0 when the session was already done or never started).
+ *
+ *  Sprint 19 PR-1d.1: also cancels any harness-pending confirmation
+ *  dialogs — without this they'd hang forever waiting for a chat:confirmTool
+ *  IPC that the renderer will never send (panel closed). */
 export function abortChatSession(sessionId: number): number {
   const ac = _inflight.get(sessionId)
   if (ac) {
     ac.abort()
     if (_inflight.get(sessionId) === ac) _inflight.delete(sessionId)
   }
+  cancelConfirmationsForSession(sessionId)
   return abortStreamingMessages(sessionId)
 }
 

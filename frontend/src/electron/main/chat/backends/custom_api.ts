@@ -36,16 +36,31 @@ import type {
 const MAX_OUTPUT_TOKENS = 4096
 const REQUEST_DEADLINE_MS = 60_000
 
+// Sprint 19 — Anthropic message content can be a plain string (legacy
+// single-block) or an array of content blocks (multi-block: text +
+// tool_use + tool_result). Both shapes are valid in /v1/messages.
+type AnthropicMessageContent = string | Array<Record<string, unknown>>
+
 interface AnthropicMessage {
   role: 'user' | 'assistant'
-  content: string
+  content: AnthropicMessageContent
 }
 
 // Translate ChatMessage[] history into the Anthropic conversation form.
 // `tool` rows are folded into the assistant content as `[tool: name]`
 // breadcrumbs so the model has context for a follow-up turn without us
 // having to teach Anthropic about MailAgent's tool transcript format.
+//
+// Sprint 19 PR-1d.1: if the caller supplied `iterHistory` (harness loop),
+// short-circuit to that verbatim — it already carries multi-block
+// tool_use / tool_result content that ChatMessage[] can't represent.
 function buildAnthropicMessages(req: ChatStreamRequest): AnthropicMessage[] {
+  if (req.iterHistory && req.iterHistory.length > 0) {
+    return req.iterHistory.map((m) => ({
+      role: m.role,
+      content: m.content as AnthropicMessageContent
+    }))
+  }
   const out: AnthropicMessage[] = []
   let pendingAssistant: string[] = []
   function flushAssistant(): void {
