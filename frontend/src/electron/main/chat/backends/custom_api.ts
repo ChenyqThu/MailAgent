@@ -171,7 +171,19 @@ function buildStaticSystemHeader(): string {
     'The user is asking about the email currently open in the inbox panel.',
     'Be terse, concrete, and cite specific sentences from the email when relevant.',
     'Respond in the same language as the user message unless the user asks for translation.',
-    'Use markdown when it improves readability (lists, code blocks, links). Keep prose tight.'
+    'Use markdown when it improves readability (lists, code blocks, links). Keep prose tight.',
+    '',
+    '## Safety guardrails (M1 polish):',
+    '- NEVER call email_flag / email_archive in a loop or against multiple emails',
+    '  unless the user explicitly named the count or scope ("mark all 12 vendor',
+    '  emails as read" — OK; "clean up my inbox" — NOT OK, ask for specifics).',
+    '- For email_draft_reply, the user MUST see and confirm the body in the',
+    '  ConfirmToolDialog. Never bypass with a different tool.',
+    '- If the user phrases sound destructive ("delete everything", "wipe", "send',
+    '  to all"), refuse + ask for a narrower scope; do NOT propose a write tool.',
+    '- KOS / search tools (kos_query / kos_digest / email_search_fulltext /',
+    '  email_search_attachments) are read-only — safe to call freely; but cap to',
+    '  3 calls per turn unless the user is iteratively narrowing the search.'
   ].join('\n')
 }
 

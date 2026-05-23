@@ -183,6 +183,20 @@ async function runSingleTool(
 ): Promise<ToolDispatchResult> {
   const start = Date.now()
 
+  // M1 polish #2 — per-tool throttle (sliding window 60s, default 30/min).
+  // Defense against LLM accidentally looping the same tool. Throttled call
+  // surfaces as a tool_result error → LLM sees E_THROTTLED and self-corrects
+  // (back off, switch tool, ask user) rather than the harness hard-aborting.
+  const throttleErr = checkThrottle(ctx.sessionId, def)
+  if (throttleErr !== null) {
+    return {
+      toolUseId: use.toolUseId,
+      status: 'error',
+      errorMessage: throttleErr,
+      durationMs: Date.now() - start
+    }
+  }
+
   // Compose timeout-able signal. AbortSignal.any is Node 20.3+ but Electron's
   // bundled Node may lag — implement it by hand to avoid version coupling.
   const timeoutMs = def.timeoutMs ?? 10000
@@ -256,4 +270,49 @@ function combineSignals(signals: AbortSignal[]): AbortSignal {
     sig.addEventListener('abort', () => ctrl.abort(sig.reason), { once: true })
   }
   return ctrl.signal
+}
+
+// ── M1 polish #2: per-tool rate limiter ──────────────────────────────────
+// Sliding 60s window, key = `sessionId:toolName`. Honor ToolDef.throttlePer-
+// Minute (default 30/min). Mutates module-level Map — test seam below resets.
+const _throttleWindow = new Map<string, number[]>()
+const THROTTLE_WINDOW_MS = 60_000
+const DEFAULT_THROTTLE_PER_MINUTE = 30
+
+/** Returns null if the call is allowed; otherwise an error-message string
+ *  the caller surfaces as a tool_result error (LLM sees E_THROTTLED + can
+ *  back off). Also records the timestamp on success so the next call's
+ *  window math includes it. */
+function checkThrottle(sessionId: number, def: ToolDef): string | null {
+  const limit = def.throttlePerMinute ?? DEFAULT_THROTTLE_PER_MINUTE
+  if (limit <= 0) return null // explicit opt-out
+  const key = `${sessionId}:${def.name}`
+  const now = Date.now()
+  const history = _throttleWindow.get(key) ?? []
+  // Drop timestamps older than the window
+  const fresh = history.filter((t) => now - t < THROTTLE_WINDOW_MS)
+  if (fresh.length >= limit) {
+    const oldest = fresh[0]!
+    const retryInSec = Math.max(1, Math.ceil((THROTTLE_WINDOW_MS - (now - oldest)) / 1000))
+    return (
+      `E_THROTTLED: tool "${def.name}" exceeded ${limit} calls in the last ` +
+      `60s (per-tool throttle); retry in ~${retryInSec}s or switch tools`
+    )
+  }
+  fresh.push(now)
+  _throttleWindow.set(key, fresh)
+  return null
+}
+
+/** Test seam: clear the in-memory throttle history. Tests can also pass
+ *  a specific sessionId to clear only that session's window. */
+export function __resetThrottleForTests(sessionId?: number): void {
+  if (sessionId === undefined) {
+    _throttleWindow.clear()
+    return
+  }
+  const prefix = `${sessionId}:`
+  for (const key of [..._throttleWindow.keys()]) {
+    if (key.startsWith(prefix)) _throttleWindow.delete(key)
+  }
 }
