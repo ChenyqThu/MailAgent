@@ -67,6 +67,23 @@ export interface ChatError {
   message: string
 }
 
+/** Sprint 19 PR-1d.2 — one pending ConfirmToolDialog. The harness in
+ *  the main process is blocked on a per-toolUseId promise waiting for the
+ *  renderer to call confirmTool(); each entry here is one such block.
+ *  Cleared when confirmTool() resolves ok or when the session aborts. */
+export interface PendingConfirmation {
+  sessionId: number
+  messageId: number
+  toolUseId: string
+  toolName: string
+  input: unknown
+  /** Optional 1-line human summary the dialog renders above the JSON. */
+  preview?: string
+  /** preview = read-only OK/Cancel; edit = the user MAY edit `input` before
+   *  approving (used for email_draft_reply). */
+  tier: 'preview' | 'edit'
+}
+
 export interface UseEmailChatReturn {
   /** Messages of the active session, oldest-first. Empty when no session yet. */
   messages: ChatMessage[]
@@ -120,6 +137,20 @@ export interface UseEmailChatReturn {
    *  if it was the active session resets to "no session" (matching
    *  newSession()'s renderer state shape). */
   deleteSession: (sessionId: number) => void
+  /** Sprint 19 PR-1d.2 — list of tools the agent harness is currently
+   *  blocked on, awaiting user confirmation. Empty unless the harness
+   *  surfaced a preview/edit-tier tool. Renderer renders one
+   *  ConfirmToolDialog per entry. */
+  pendingConfirmations: PendingConfirmation[]
+  /** Sprint 19 PR-1d.2 — reply to a ConfirmToolDialog. Returns the IPC
+   *  envelope so the caller can show a toast on `E_NOT_PENDING` (late
+   *  click after session abort). On `ok:true` the entry is removed from
+   *  `pendingConfirmations` synchronously. */
+  confirmTool: (
+    toolUseId: string,
+    approved: boolean,
+    editedInput?: unknown
+  ) => Promise<{ ok: true } | { ok: false; code: string; message: string }>
 }
 
 // Sprint 5 §2.3 state-machine #4: quota cooldown duration. The Anthropic
@@ -179,6 +210,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const [quotaCooldownUntil, setQuotaCooldownUntil] = useState<number | null>(() =>
     readPersistedQuotaCooldown()
   )
+  // Sprint 19 PR-1d.2 — pending ConfirmToolDialog queue. The harness can
+  // surface multiple confirmations within a single iter (rare but possible
+  // when the LLM emits N tool_use blocks of preview/edit tier in one turn),
+  // so this stays an array — UI renders them in arrival order.
+  const [pendingConfirmations, setPendingConfirmations] = useState<PendingConfirmation[]>(
+    []
+  )
 
   // Mirror the latest committed emailId into a ref so `send()` can detect
   // a switch that happened while `chat.start()` was in flight. The closure
@@ -219,6 +257,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     // doesn't briefly show the previous email's history while effect #1
     // re-fetches.
     setSessions([])
+    // Sprint 19 PR-1d.2 — confirmations are tied to a session that's
+    // about to be left behind; the main process's
+    // cancelConfirmationsForSession() will reject the suspended promise
+    // when chat.abort fires, but the renderer state should drop the
+    // dialog now or it'd briefly render for the previous email.
+    setPendingConfirmations([])
     // NOTE: do NOT clear quotaCooldownUntil on email switch — the
     // upstream quota is global to the CRS account; switching emails
     // doesn't lift the cap. The cooldown timer below clears it on its
@@ -313,6 +357,44 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       // shape. The full message list stays the source of truth.
       if (event.type === 'tool_call') {
         void refresh(envelope.sessionId)
+        return
+      }
+
+      // Sprint 19 PR-1d.2 — agent harness events. The chat_tool_call
+      // audit rows are sidecar to ai_chat_messages (not joined into
+      // listMessages), so we DON'T refresh on every tool_use — the
+      // renderer reads them via a separate listToolCalls query keyed
+      // by messageId when the assistant bubble mounts the ToolCallRow.
+      // The hook only forwards the live state transitions here.
+      if (event.type === 'tool_use' || event.type === 'tool_result') {
+        // Currently a no-op at the hook level — MessageList renders the
+        // call/result UI off its own listToolCalls fetch keyed by the
+        // assistant message. Future enhancement could maintain a
+        // hook-local Map<messageId, ToolCall[]> so the UI updates without
+        // a round-trip. For PR-1d.2 we stay simple and let the next
+        // `done` event trigger the SSoT refresh.
+        return
+      }
+      if (event.type === 'pending_confirmation') {
+        // Push the dialog request into renderer state. The matching
+        // main-process promise stays suspended until confirmTool() fires.
+        setPendingConfirmations((prev) => {
+          // Duplicate guard: if a stray duplicate envelope arrives (the
+          // forward path is best-effort), don't double-show the dialog.
+          if (prev.some((p) => p.toolUseId === event.toolUseId)) return prev
+          return [
+            ...prev,
+            {
+              sessionId: envelope.sessionId,
+              messageId: envelope.messageId,
+              toolUseId: event.toolUseId,
+              toolName: event.toolName,
+              input: event.input,
+              preview: event.preview,
+              tier: event.tier
+            }
+          ]
+        })
         return
       }
 
@@ -609,7 +691,32 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setStreamingMessageId(null)
     setError(null)
     setLastFailedInput(null)
+    // Sprint 19 PR-1d.2 — leftover dialogs from the previous session must
+    // not survive the abort (main-process side already cancels the
+    // suspended promise; the renderer state must mirror that to avoid a
+    // dead dialog blocking the user).
+    setPendingConfirmations([])
   }, [mailApi])
+
+  // Sprint 19 PR-1d.2 — Confirmation dialog reply. Synchronously removes
+  // the entry from `pendingConfirmations` on `ok:true` so the dialog
+  // unmounts without waiting for a render tick. Returns the envelope so
+  // the caller (the dialog component itself) can show an "already
+  // closed" toast on `E_NOT_PENDING`.
+  const confirmTool = useCallback(
+    async (
+      toolUseId: string,
+      approved: boolean,
+      editedInput?: unknown
+    ): Promise<{ ok: true } | { ok: false; code: string; message: string }> => {
+      const result = await mailApi.chat.confirmTool(toolUseId, approved, editedInput)
+      if (result.ok) {
+        setPendingConfirmations((prev) => prev.filter((p) => p.toolUseId !== toolUseId))
+      }
+      return result
+    },
+    [mailApi]
+  )
 
   // Sprint 14 PR B — edit a user message and re-stream. The hook owns
   // the activeSession + streamingMessageId state machine, so editMessage
@@ -736,7 +843,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     sessions,
     selectSession,
     editMessage,
-    deleteSession
+    deleteSession,
+    pendingConfirmations,
+    confirmTool
   }
 }
 

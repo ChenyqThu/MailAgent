@@ -61,6 +61,23 @@ export class HttpApi implements MailApi {
     },
     listMessages: () => notImplemented('chat.listMessages'),
     listSessions: () => notImplemented('chat.listSessions'),
+    editMessage: () => notImplemented('chat.editMessage'),
+    openPopout: () => {
+      /* no-op stub — no second-window in V2 web SPA */
+    },
+    deleteSession: () => {
+      /* no-op stub */
+    },
+    // Sprint 19 PR-1d.2 — confirmation IPC for the agent harness. V2 web
+    // SPA will route through a `/api/chat/confirm-tool` POST once the
+    // harness ships in a server context. The stub returns ok:false so
+    // any accidental dispatch surfaces as a structured error, not a
+    // silent drop.
+    confirmTool: async () => ({
+      ok: false as const,
+      code: 'E_NOT_IMPLEMENTED',
+      message: 'chat.confirmTool not implemented in HttpApi stub'
+    }),
     onStream: (): (() => void) => () => undefined
   }
 

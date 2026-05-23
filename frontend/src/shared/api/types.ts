@@ -758,6 +758,34 @@ export interface ChatToolCallEvent {
   durationMs?: number
   detail?: string
 }
+/** Sprint 19 — LLM proposes a tool call inside the agent harness loop.
+ *  Mirror of main-process ToolUseEvent (chat/types.ts). */
+export interface ChatToolUseEvent {
+  type: 'tool_use'
+  toolUseId: string
+  name: string
+  input: unknown
+}
+/** Sprint 19 — Tool execution finished (or was canceled by the user).
+ *  Mirror of main-process ToolResultEvent. */
+export interface ChatToolResultEvent {
+  type: 'tool_result'
+  toolUseId: string
+  status: 'ok' | 'error' | 'canceled'
+  output?: unknown
+  errorMessage?: string
+  durationMs: number
+}
+/** Sprint 19 — Harness needs user confirmation before running a write tool.
+ *  Renderer pops ConfirmToolDialog; user click → chat:confirmTool IPC. */
+export interface ChatPendingConfirmationEvent {
+  type: 'pending_confirmation'
+  toolUseId: string
+  toolName: string
+  input: unknown
+  preview?: string
+  tier: 'preview' | 'edit'
+}
 export interface ChatUsageEvent {
   type: 'usage'
   inputTokens: number
@@ -770,6 +798,9 @@ export interface ChatDoneEvent {
   type: 'done'
   finalContent: string
   model: string | null
+  /** Sprint 19 — Anthropic stop_reason carried to the renderer. Optional
+   *  for backends that don't emit it (notion-agent CLI). */
+  stopReason?: 'end_turn' | 'tool_use' | 'max_tokens'
   metadata?: Record<string, unknown> | null
 }
 export interface ChatErrorEvent {
@@ -781,6 +812,9 @@ export interface ChatErrorEvent {
 export type ChatStreamEvent =
   | ChatChunkEvent
   | ChatToolCallEvent
+  | ChatToolUseEvent
+  | ChatToolResultEvent
+  | ChatPendingConfirmationEvent
   | ChatUsageEvent
   | ChatDoneEvent
   | ChatErrorEvent
@@ -855,6 +889,20 @@ export interface ChatApi {
    * renderer state synchronously after dispatching.
    */
   deleteSession(sessionId: number): void
+  /**
+   * Sprint 19 PR-1d.2 — reply to a ConfirmToolDialog. The harness is
+   * blocked on a per-toolUseId promise (main-process tools/confirmation.ts)
+   * waiting for this. `approved=false` → tool result is 'canceled' (LLM
+   * sees a structured "user declined"). `editedInput` is only used when
+   * the dialog tier is 'edit' and the user changed the LLM proposal.
+   * Returns `{ ok: false, code: 'E_NOT_PENDING' }` for late clicks after
+   * the session aborted.
+   */
+  confirmTool(
+    toolUseId: string,
+    approved: boolean,
+    editedInput?: unknown
+  ): Promise<{ ok: true } | { ok: false; code: string; message: string }>
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }

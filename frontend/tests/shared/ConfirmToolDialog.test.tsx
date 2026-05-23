@@ -1,0 +1,168 @@
+// @vitest-environment happy-dom
+//
+// Sprint 19 PR-1d.2 — ConfirmToolDialog renderer tests.
+
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { ConfirmToolDialog } from '../../src/shared/components/chat/ConfirmToolDialog'
+import type { PendingConfirmation } from '../../src/shared/hooks/useEmailChat'
+
+// React-i18next reads its config from a runtime provider. The dialog uses
+// useTranslation only for fallback-string lookup (every t() call provides
+// a defaultValue), so an identity mock is the simplest setup that mirrors
+// the production rendering.
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (_key: string, opts?: { defaultValue?: string }) => opts?.defaultValue ?? _key
+  })
+}))
+
+afterEach(() => {
+  cleanup()
+})
+
+function makePending(overrides: Partial<PendingConfirmation> = {}): PendingConfirmation {
+  return {
+    sessionId: 1,
+    messageId: 10,
+    toolUseId: 'toolu_test',
+    toolName: 'email_flag',
+    input: { internal_id: 42, is_read: true },
+    preview: 'Mark email 42 as read',
+    tier: 'preview',
+    ...overrides
+  }
+}
+
+describe('ConfirmToolDialog — preview tier', () => {
+  test('renders tool name + preview banner + JSON dump', () => {
+    render(
+      <ConfirmToolDialog
+        pending={makePending()}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/email_flag/i)).toBeTruthy()
+    expect(screen.getByText('Mark email 42 as read')).toBeTruthy()
+    // JSON pre-block shows the input.
+    expect(screen.getByText(/internal_id/)).toBeTruthy()
+    expect(screen.getByText(/is_read/)).toBeTruthy()
+  })
+
+  test('Confirm click fires onConfirm with undefined (no edits in preview tier)', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ConfirmToolDialog
+        pending={makePending()}
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
+    expect(onConfirm).toHaveBeenCalledWith(undefined)
+  })
+
+  test('Cancel click fires onCancel', async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ConfirmToolDialog
+        pending={makePending()}
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    await vi.waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+  })
+
+  test('Escape key triggers onCancel', async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ConfirmToolDialog
+        pending={makePending()}
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await vi.waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+  })
+
+  test('Cmd+Enter triggers onConfirm', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ConfirmToolDialog
+        pending={makePending()}
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.keyDown(window, { key: 'Enter', metaKey: true })
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('ConfirmToolDialog — edit tier (email_draft_reply)', () => {
+  function draftPending(): PendingConfirmation {
+    return makePending({
+      toolName: 'email_draft_reply',
+      tier: 'edit',
+      input: { internal_id: 7, body_markdown: 'See you Tuesday.' },
+      preview: 'Reply to email 7'
+    })
+  }
+
+  test('renders editable textarea seeded with body_markdown', () => {
+    render(
+      <ConfirmToolDialog pending={draftPending()} onConfirm={vi.fn()} onCancel={vi.fn()} />
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(ta.value).toBe('See you Tuesday.')
+  })
+
+  test('Confirm without edits passes undefined (no userEdited flag)', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ConfirmToolDialog pending={draftPending()} onConfirm={onConfirm} onCancel={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
+    expect(onConfirm).toHaveBeenCalledWith(undefined)
+  })
+
+  test('Confirm with edits passes merged input + edited body_markdown', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ConfirmToolDialog pending={draftPending()} onConfirm={onConfirm} onCancel={vi.fn()} />
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'See you Wednesday — Tuesday no good.' } })
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
+    expect(onConfirm).toHaveBeenCalledWith({
+      internal_id: 7,
+      body_markdown: 'See you Wednesday — Tuesday no good.'
+    })
+  })
+})
+
+describe('ConfirmToolDialog — busy state', () => {
+  test('disables buttons while onConfirm is pending', async () => {
+    let resolveConfirm: () => void = () => undefined
+    const onConfirm = vi.fn(
+      () => new Promise<void>((resolve) => { resolveConfirm = resolve })
+    )
+    render(
+      <ConfirmToolDialog pending={makePending()} onConfirm={onConfirm} onCancel={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
+    // While pending, the buttons should disable.
+    await vi.waitFor(() => {
+      const btn = screen.getByRole('button', { name: /confirming/i })
+      expect((btn as HTMLButtonElement).disabled).toBe(true)
+    })
+    resolveConfirm()
+  })
+})

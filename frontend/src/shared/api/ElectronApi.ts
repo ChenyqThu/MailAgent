@@ -447,6 +447,24 @@ class ElectronChatApi implements ChatApi {
     if (!Number.isInteger(sessionId) || sessionId < 0) return
     sender()?.('chat:deleteSession', sessionId)
   }
+  async confirmTool(
+    toolUseId: string,
+    approved: boolean,
+    editedInput?: unknown
+  ): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+    // Sprint 19 PR-1d.2 — replies a pending ConfirmToolDialog. Bad input
+    // is rejected upstream by validateConfirmToolPayload in handlers/chat.ts,
+    // and the renderer always passes a string toolUseId so the validation
+    // is defensive only.
+    if (typeof toolUseId !== 'string' || toolUseId.length === 0) {
+      return { ok: false, code: 'E_INVALID_ARG', message: 'toolUseId required' }
+    }
+    return (await invoker()('chat:confirmTool', {
+      toolUseId,
+      approved: !!approved,
+      editedInput
+    })) as { ok: true } | { ok: false; code: string; message: string }
+  }
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
     return subscribe('chat:stream', (...args: unknown[]) => {
       const env = args[0] as ChatStreamEnvelope | undefined

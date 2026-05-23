@@ -37,6 +37,7 @@ import {
 import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { ChatSidebar } from './ChatSidebar'
 import { Composer } from './Composer'
+import { ConfirmToolDialog } from './ConfirmToolDialog'
 import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
@@ -699,6 +700,31 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           )}
         </div>
       </div>
+
+      {/* Sprint 19 PR-1d.2 — Agent harness confirmation dialog. Renders one
+          ConfirmToolDialog per pending entry (head of queue first). The
+          dialog blocks the panel chrome via a fixed-position overlay; only
+          one is visible at a time. confirmTool() resolves remove the head
+          from the queue; cancel does the same via main-process E_USER_CANCELED. */}
+      {chat.pendingConfirmations.length > 0 && (
+        <ConfirmToolDialog
+          key={chat.pendingConfirmations[0].toolUseId}
+          pending={chat.pendingConfirmations[0]}
+          onConfirm={async (editedInput) => {
+            const result = await chat.confirmTool(
+              chat.pendingConfirmations[0].toolUseId,
+              true,
+              editedInput
+            )
+            if (!result.ok && result.code !== 'E_NOT_PENDING') {
+              toastError(t('chat.confirmTool.failed', { defaultValue: 'Confirm failed' }))
+            }
+          }}
+          onCancel={async () => {
+            await chat.confirmTool(chat.pendingConfirmations[0].toolUseId, false)
+          }}
+        />
+      )}
     </aside>
   )
 }
