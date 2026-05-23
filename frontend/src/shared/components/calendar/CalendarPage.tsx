@@ -52,7 +52,6 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
   const canReplay = item.internal_id > 0
   return (
     <tr>
-      <td className="mono-num">#{item.internal_id || '—'}</td>
       <td>
         <span className="rec-title" title={item.subject ?? ''}>
           {item.subject ?? '—'}
@@ -193,7 +192,6 @@ export function CalendarPage(): React.ReactElement {
           <table className="rec-table">
             <thead>
               <tr>
-                <th>ID</th>
                 <th>{t('calendar.col.subject')}</th>
                 <th>{t('calendar.col.organizer')}</th>
                 <th>{t('calendar.col.rrule')}</th>

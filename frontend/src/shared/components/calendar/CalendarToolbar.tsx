@@ -1,10 +1,12 @@
 // 视觉复刻 mockup-calendar.html §toolbar (2026-05-23) —
-// title + range-label + 日期 nav + view chips + sync btn + sync-pill (hover tip).
+// title + range-label + 日期 nav + view chips + sync btn + sync-pill (CSS hover tip).
 //
 // 接口不变 (view / onViewChange / currentDate / onDateChange), 只重做视觉。
 // CalendarView 类型从 router-instance 复用 (单一来源, 避免 enum 漂移).
+//
+// 切到 mockup class (.nav-btn / .today-btn / .view-chip / .sync-pill),
+// 不再用 Tailwind inline. sync tip CSS-only hover 触发, 移除 useState.
 
-import { useState } from 'react'
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 
 import {
@@ -73,7 +75,6 @@ export function CalendarToolbar({
 }: Props): React.ReactElement {
   const { trigger, isPending } = useCalendarSyncTrigger()
   const { data: syncStatus } = useCalendarSyncStatus()
-  const [tipOpen, setTipOpen] = useState(false)
 
   const showDateNav = view === 'today' || view === 'week' || view === 'month'
   const head = syncStatus?.[0]
@@ -98,8 +99,8 @@ export function CalendarToolbar({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
+            className="nav-btn"
             onClick={() => onDateChange(step(view, -1, currentDate))}
-            className="w-7 h-7 inline-flex items-center justify-center rounded-md border border-ink-border bg-ink-2/50 text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast"
             aria-label="上一段"
             title="上一段 (←)"
           >
@@ -107,16 +108,16 @@ export function CalendarToolbar({
           </button>
           <button
             type="button"
+            className="today-btn"
             onClick={() => onDateChange(new Date())}
-            className="h-7 px-3 text-aux text-ink-fg-1 hover:text-ink-fg border border-ink-border bg-ink-2/50 hover:bg-ink-3 rounded-md transition-colors duration-fast"
             title="今天 (T)"
           >
             今天
           </button>
           <button
             type="button"
+            className="nav-btn"
             onClick={() => onDateChange(step(view, 1, currentDate))}
-            className="w-7 h-7 inline-flex items-center justify-center rounded-md border border-ink-border bg-ink-2/50 text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast"
             aria-label="下一段"
             title="下一段 (→)"
           >
@@ -127,7 +128,7 @@ export function CalendarToolbar({
 
       {/* view chips — push to right */}
       <div
-        className="flex items-center gap-0.5 ml-auto p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50"
+        className="flex items-center gap-1 ml-auto p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50"
         role="tablist"
         aria-label="视图切换"
       >
@@ -138,78 +139,62 @@ export function CalendarToolbar({
             role="tab"
             aria-selected={v === view}
             onClick={() => onViewChange(v)}
-            className={cn(
-              'px-3 py-1 text-aux rounded-md whitespace-nowrap transition-colors duration-fast',
-              v === view
-                ? 'bg-coral/15 text-coral border border-coral/30 font-medium'
-                : 'border border-transparent text-ink-fg-1 hover:bg-ink-3/70 hover:text-ink-fg'
-            )}
+            className={cn('view-chip', v === view && 'is-active')}
           >
             {VIEW_LABELS[v]}
           </button>
         ))}
       </div>
 
-      {/* sync — button + status pill (hover tip) */}
+      {/* sync — nav-btn 拉宽 (mockup inline style) + sync-pill CSS-only hover tip */}
       <div className="flex items-center gap-2">
         <button
           type="button"
+          className="nav-btn"
+          style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
           onClick={() => trigger({ full: true })}
           disabled={isPending}
-          className="h-7 inline-flex items-center gap-1.5 px-3 text-aux text-ink-fg-1 hover:text-ink-fg border border-ink-border bg-ink-2/50 hover:bg-ink-3 rounded-md transition-colors duration-fast disabled:opacity-50 disabled:cursor-not-allowed"
           title="同步 (⌘R)"
         >
           <RefreshCw size={13} strokeWidth={2} className={cn(isPending && 'animate-spin')} />
-          同步
+          <span>同步</span>
         </button>
-        <div
-          className="relative inline-flex items-center gap-1.5 font-mono text-[11.5px] text-ink-fg-2 px-2 py-1 rounded-md hover:bg-ink-3/60 cursor-default"
-          onMouseEnter={() => setTipOpen(true)}
-          onMouseLeave={() => setTipOpen(false)}
-        >
-          <span
-            className={cn(
-              'w-[7px] h-[7px] rounded-full shrink-0',
-              hasErr ? 'bg-fail animate-pulse-crit' : 'bg-ok'
-            )}
-            aria-hidden
-          />
-          <span className={cn(hasErr && 'text-fail')}>
+        <div className="sync-pill" data-sync={hasErr ? 'err' : 'ok'}>
+          <span className="sync-dot" aria-hidden />
+          <span className="sync-label">
             {hasErr
               ? '同步失败 · [ERR]'
               : lastDate
                 ? `上次同步 ${relativeTime(lastDate)}`
                 : '尚未同步'}
           </span>
-          {tipOpen && (
-            <div className="absolute top-[calc(100%+8px)] right-0 w-[290px] z-50 glass-pop rounded-md px-3 py-2 text-left pointer-events-none">
-              <div className="text-aux text-ink-fg font-medium mb-1">
-                {hasErr ? 'DavMail · 同步失败' : 'DavMail · 已同步'}
-              </div>
-              <div className="text-meta text-ink-fg-2 font-mono leading-relaxed break-all">
-                {hasErr && (lastError ?? '未知错误')}
-                {!hasErr && head && (
-                  <>
-                    {head.last_full_sync_at_iso && (
-                      <>
-                        last_full_sync{' '}
-                        {head.last_full_sync_at_iso.replace('T', ' ').slice(0, 19)}
-                        <br />
-                      </>
-                    )}
-                    {head.ctag && (
-                      <>
-                        ctag {head.ctag.slice(0, 8)}
-                        <br />
-                      </>
-                    )}
-                    {head.calendar_name && <>calendar {head.calendar_name}</>}
-                  </>
-                )}
-                {!head && '尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s'}
-              </div>
+          <div className="sync-tip glass-pop">
+            <div className="text-aux text-ink-fg font-medium mb-1">
+              {hasErr ? 'DavMail · 同步失败' : 'DavMail · 已同步'}
             </div>
-          )}
+            <div className="text-meta text-ink-fg-2 font-mono leading-relaxed break-all">
+              {hasErr && (lastError ?? '未知错误')}
+              {!hasErr && head && (
+                <>
+                  {head.last_full_sync_at_iso && (
+                    <>
+                      last_full_sync{' '}
+                      {head.last_full_sync_at_iso.replace('T', ' ').slice(0, 19)}
+                      <br />
+                    </>
+                  )}
+                  {head.ctag && (
+                    <>
+                      ctag {head.ctag.slice(0, 8)}
+                      <br />
+                    </>
+                  )}
+                  {head.calendar_name && <>calendar {head.calendar_name}</>}
+                </>
+              )}
+              {!head && '尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s'}
+            </div>
+          </div>
         </div>
       </div>
     </div>
