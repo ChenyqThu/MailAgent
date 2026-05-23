@@ -14,15 +14,28 @@ import { useState } from 'react'
 
 import { cn } from '@shared/lib/cn'
 
+type HoverTipSide = 'top' | 'bottom' | 'left' | 'right'
+
 interface HoverTipProps {
   text: string
-  /** Defaults to `top`. Footer segments are at the bottom of the viewport
-   *  so `top` is the only viable side; the prop reserves room for future
-   *  reuse in headers/toolbars where `bottom` makes sense. */
-  side?: 'top' | 'bottom'
+  /** Defaults to `top`. `top/bottom` for footers/headers; `left/right` for
+   *  list-row icon buttons where stacking above would overlap the row's
+   *  primary content (e.g. ChatSidebar's delete-confirm pair). */
+  side?: HoverTipSide
   /** Tailwind classes applied to the wrapper. */
   className?: string
   children: React.ReactNode
+}
+
+// 4-way positioning lookup. Centering axis swaps per side:
+//   top/bottom: horizontally centered (left-1/2 -translate-x-1/2)
+//   left/right: vertically centered (top-1/2 -translate-y-1/2)
+// Margin offset stays at 1.5 (6px) for visual consistency.
+const SIDE_POSITION: Record<HoverTipSide, string> = {
+  top: 'left-1/2 -translate-x-1/2 bottom-full mb-1.5',
+  bottom: 'left-1/2 -translate-x-1/2 top-full mt-1.5',
+  left: 'top-1/2 -translate-y-1/2 right-full mr-1.5',
+  right: 'top-1/2 -translate-y-1/2 left-full ml-1.5'
 }
 
 export function HoverTip({
@@ -45,7 +58,8 @@ export function HoverTip({
         <span
           role="tooltip"
           className={cn(
-            'absolute z-50 left-1/2 -translate-x-1/2',
+            'absolute z-50',
+            SIDE_POSITION[side],
             // Sprint 13 user-feedback — width caps at 150px and wraps to
             // multiple lines for long verbs (e.g. zh-CN "归档 · 等待 Sprint
             // 14 接 CLI" → 2 lines). `whitespace-pre-line` already honours
@@ -62,8 +76,7 @@ export function HoverTip({
             // glanceable, not body copy.
             'text-[9px] leading-none text-ink-fg-2 px-1.5 py-1 rounded',
             'glass-pop pointer-events-none select-none',
-            'shadow-[0_4px_12px_rgba(0,0,0,0.35)]',
-            side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+            'shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
           )}
         >
           {text}
