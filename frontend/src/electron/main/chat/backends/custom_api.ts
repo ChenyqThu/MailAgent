@@ -22,7 +22,13 @@
 //   (usage), and `message_stop`. Anything else passes through silently.
 
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../../llm_settings'
-import type { ChatBackend, ChatStreamEvent, ChatStreamRequest, EmailContext } from '../types'
+import type {
+  BackendToolDescriptor,
+  ChatBackend,
+  ChatStreamEvent,
+  ChatStreamRequest,
+  EmailContext
+} from '../types'
 
 // Anthropic `max_tokens` caps the model's RESPONSE length (not input).
 // Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
@@ -76,6 +82,52 @@ function buildAnthropicMessages(req: ChatStreamRequest): AnthropicMessage[] {
   return out
 }
 
+/** Sprint 19 — Anthropic content block shape for `system` / `tools` arrays
+ *  with optional prompt-cache breakpoint. `cache_control: ephemeral` tells
+ *  the server "everything up to and including this block is a stable prefix;
+ *  serve subsequent matching requests from cache for ~5min". We place ONE
+ *  breakpoint at the tail of system + ONE at the tail of tools[] — Anthropic
+ *  hashes those two prefixes independently. See processor.py:46-66, 141-199
+ *  in the backend LLM agent for the same single-breakpoint pattern that
+ *  scored ~95% hit-rate on the email-classification path. */
+interface AnthropicSystemBlock {
+  type: 'text'
+  text: string
+  cache_control?: { type: 'ephemeral' }
+}
+
+/** Sprint 19 — Anthropic tool descriptor with optional cache_control. */
+interface AnthropicToolBlock extends BackendToolDescriptor {
+  cache_control?: { type: 'ephemeral' }
+}
+
+/** Sprint 19 — Wrap the static system prompt into the array-of-blocks
+ *  shape Anthropic expects when you want a cache_control breakpoint.
+ *  M1 ships a single block (no Wiki yet, no L1 hot block); M2 adds a
+ *  second `text` entry for Hot Wiki BEFORE the cache_control breakpoint
+ *  so wiki updates only invalidate one breakpoint, not both. */
+function buildSystemBlocks(ctx: EmailContext | null): AnthropicSystemBlock[] {
+  const text = buildSystemPrompt(ctx)
+  return [{ type: 'text', text, cache_control: { type: 'ephemeral' } }]
+}
+
+/** Sprint 19 — Tag the LAST tool in the array with cache_control so the
+ *  entire tools[] block can be served from cache on the next turn (within
+ *  the 5-min TTL). Mutates a copy of the input — caller's array stays
+ *  untouched. Returns `undefined` when `tools` is empty / missing because
+ *  Anthropic rejects `tools: []` (must omit the field). */
+function decorateToolsWithCacheControl(
+  tools: BackendToolDescriptor[] | undefined
+): AnthropicToolBlock[] | undefined {
+  if (!tools || tools.length === 0) return undefined
+  const copy = tools.map((t) => ({ ...t })) as AnthropicToolBlock[]
+  copy[copy.length - 1] = {
+    ...copy[copy.length - 1],
+    cache_control: { type: 'ephemeral' }
+  }
+  return copy
+}
+
 function buildSystemPrompt(ctx: EmailContext | null): string {
   const lines = [
     'You are the AI assistant inside MailAgent, a macOS email client.',
@@ -114,6 +166,164 @@ function buildSystemPrompt(ctx: EmailContext | null): string {
     lines.push('--- End email ---')
   }
   return lines.join('\n')
+}
+
+/** Sprint 19 — per-stream state machine for Anthropic SSE events.
+ *
+ *  Why a state struct (vs locals inside the loop): the tool_use protocol
+ *  requires accumulating `input_json_delta` chunks across MULTIPLE SSE
+ *  events before we can emit a single ToolUseEvent. The map indexes by
+ *  Anthropic's `index` (the position of the content block within the
+ *  assistant message), so concurrent tool_use blocks in one assistant
+ *  turn stay correctly partitioned.
+ *
+ *  `messageStopReason` is set by `message_delta.delta.stop_reason` and
+ *  read by the surrounding generator when emitting the final DoneEvent —
+ *  the harness loop branches on this ('tool_use' → run another iter,
+ *  'end_turn' → stop). */
+interface AnthropicStreamState {
+  pendingToolBlocks: Map<number, { id: string; name: string; jsonStr: string }>
+  messageStopReason: 'end_turn' | 'tool_use' | 'max_tokens' | null
+  inputTokens: number
+  outputTokens: number
+  accumulated: string
+  modelSeen: string | null
+  sawError: boolean
+}
+
+function createStreamState(initialModel: string | null): AnthropicStreamState {
+  return {
+    pendingToolBlocks: new Map(),
+    messageStopReason: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    accumulated: '',
+    modelSeen: initialModel,
+    sawError: false
+  }
+}
+
+/** Sprint 19 — Translate one parsed Anthropic SSE event into 0+ semantic
+ *  ChatStreamEvent items + mutate state. Pure-ish (mutates only the passed
+ *  state; no I/O) so unit tests can drive the state machine without
+ *  spinning up fetch + a real stream.
+ *
+ *  Anthropic stream block sequence (one assistant turn):
+ *    message_start
+ *    [content_block_start (text or tool_use)
+ *     content_block_delta+ (text_delta or input_json_delta)
+ *     content_block_stop]*           ← repeat per content block
+ *    message_delta                   ← stop_reason + final usage
+ *    message_stop
+ *  Plus out-of-band `error` events that override the normal flow.
+ */
+function processAnthropicEvent(
+  parsed: unknown,
+  state: AnthropicStreamState
+): ChatStreamEvent[] {
+  const e = parsed as Record<string, unknown> & { type?: string; __done?: boolean }
+  if (e.__done === true) {
+    // Some gateways still emit [DONE] sentinel; Anthropic itself uses
+    // message_stop — tolerate both.
+    return []
+  }
+  switch (e.type) {
+    case 'message_start': {
+      const msg = (e as { message?: { usage?: { input_tokens?: number }; model?: string } })
+        .message
+      if (msg) {
+        if (typeof msg.usage?.input_tokens === 'number') state.inputTokens = msg.usage.input_tokens
+        if (typeof msg.model === 'string') state.modelSeen = msg.model
+      }
+      return []
+    }
+    case 'content_block_start': {
+      const block = (e as { index?: number; content_block?: { type?: string; id?: string; name?: string } })
+      const idx = block.index
+      const cb = block.content_block
+      if (typeof idx === 'number' && cb?.type === 'tool_use' && cb.id && cb.name) {
+        state.pendingToolBlocks.set(idx, { id: cb.id, name: cb.name, jsonStr: '' })
+      }
+      return []
+    }
+    case 'content_block_delta': {
+      const wrap = e as { index?: number; delta?: { type?: string; text?: string; partial_json?: string } }
+      const delta = wrap.delta
+      if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+        state.accumulated += delta.text
+        return [{ type: 'chunk', delta: delta.text }]
+      }
+      if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+        if (typeof wrap.index === 'number') {
+          const rec = state.pendingToolBlocks.get(wrap.index)
+          if (rec) rec.jsonStr += delta.partial_json
+        }
+        // Don't yield per-fragment — the LLM is still typing the JSON.
+        // ToolUseEvent emits at content_block_stop with the complete object.
+      }
+      return []
+    }
+    case 'content_block_stop': {
+      const wrap = e as { index?: number }
+      if (typeof wrap.index !== 'number') return []
+      const rec = state.pendingToolBlocks.get(wrap.index)
+      if (!rec) return [] // text block stop — nothing to flush
+      let input: unknown = {}
+      if (rec.jsonStr.trim().length > 0) {
+        try {
+          input = JSON.parse(rec.jsonStr)
+        } catch (err) {
+          // Streaming JSON occasionally tears (rare). Surface the raw
+          // string + parse error to the LLM via the next-turn tool_result —
+          // it can usually self-correct by re-issuing the tool call.
+          input = {
+            __parse_error: err instanceof Error ? err.message : String(err),
+            __raw: rec.jsonStr
+          }
+        }
+      }
+      state.pendingToolBlocks.delete(wrap.index)
+      return [
+        {
+          type: 'tool_use',
+          toolUseId: rec.id,
+          name: rec.name,
+          input
+        }
+      ]
+    }
+    case 'message_delta': {
+      const wrap = e as { delta?: { stop_reason?: string }; usage?: { output_tokens?: number } }
+      if (wrap.usage && typeof wrap.usage.output_tokens === 'number') {
+        state.outputTokens = wrap.usage.output_tokens
+      }
+      const sr = wrap.delta?.stop_reason
+      if (sr === 'end_turn' || sr === 'tool_use' || sr === 'max_tokens') {
+        state.messageStopReason = sr
+      }
+      return []
+    }
+    case 'message_stop':
+      // The synthetic DoneEvent emits once at end of generator (after the
+      // stream closes), so it sees the final state including stop_reason.
+      return []
+    case 'error': {
+      const errObj = (e as { error?: { type?: string; message?: string } }).error
+      state.sawError = true
+      return [
+        {
+          type: 'error',
+          code: errObj?.type ?? 'E_UPSTREAM',
+          message: errObj?.message ?? 'LLM error'
+        }
+      ]
+    }
+    default:
+      // Unknown event type — likely a future Anthropic addition. Forward
+      // nothing (silent ignore is safer than crashing the stream on
+      // protocol evolution). Sprint 19 test fixtures cover the known set.
+      return []
+  }
 }
 
 interface SseParseState {
@@ -162,7 +372,10 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   const baseUrl = getLlmBaseUrl()
   const model = req.model ?? getLlmModel()
   const messages = buildAnthropicMessages(req)
-  const systemPrompt = buildSystemPrompt(req.emailContext)
+  // Sprint 19 — system 改 blocks 数组以承载 cache_control 断点;
+  // tools 数组同样在最后一个加 cache_control (双 prefix 缓存).
+  const systemBlocks = buildSystemBlocks(req.emailContext)
+  const tools = decorateToolsWithCacheControl(req.tools)
 
   const timeoutAc = new AbortController()
   const timer = setTimeout(() => timeoutAc.abort(), REQUEST_DEADLINE_MS)
@@ -176,6 +389,16 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   }
   req.signal.addEventListener('abort', onParentAbort, { once: true })
 
+  // Sprint 19 — `tools` is omitted when empty (Anthropic rejects `tools: []`).
+  const requestBody: Record<string, unknown> = {
+    model,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    system: systemBlocks,
+    messages,
+    stream: true
+  }
+  if (tools) requestBody.tools = tools
+
   let response: Response
   try {
     response = await fetch(`${baseUrl}/v1/messages`, {
@@ -185,13 +408,7 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify({
-        model,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system: systemPrompt,
-        messages,
-        stream: true
-      }),
+      body: JSON.stringify(requestBody),
       signal: timeoutAc.signal
     })
   } catch (err) {
@@ -231,16 +448,8 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
-  const state: SseParseState = { buffer: '' }
-  let inputTokens = 0
-  let outputTokens = 0
-  let modelSeen: string | null = model
-  let accumulated = ''
-  // Sprint 4 review (codex M-2): once the upstream emits an Anthropic
-  // `error` event, the model has stopped producing usable output —
-  // suppress the trailing `usage`/`done` so the assistant row doesn't
-  // flip back to `complete` over the error.
-  let sawError = false
+  const sseState: SseParseState = { buffer: '' }
+  const state = createStreamState(model)
 
   try {
     while (true) {
@@ -248,52 +457,13 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
       const { done, value } = await reader.read()
       if (done) break
       const text = decoder.decode(value, { stream: true })
-      const events = parseSseChunk(state, text)
-      for (const ev of events) {
-        const e = ev as Record<string, unknown> & { type?: string; __done?: boolean }
-        if (e.__done === true) {
-          // Anthropic itself uses message_stop rather than [DONE]; tolerate.
-          continue
-        }
-        switch (e.type) {
-          case 'message_start': {
-            const msg = (e as { message?: { usage?: { input_tokens?: number }; model?: string } })
-              .message
-            if (msg) {
-              if (typeof msg.usage?.input_tokens === 'number') inputTokens = msg.usage.input_tokens
-              if (typeof msg.model === 'string') modelSeen = msg.model
-            }
-            break
-          }
-          case 'content_block_delta': {
-            const delta = (e as { delta?: { type?: string; text?: string } }).delta
-            if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-              accumulated += delta.text
-              yield { type: 'chunk', delta: delta.text }
-            }
-            break
-          }
-          case 'message_delta': {
-            const usage = (e as { usage?: { output_tokens?: number } }).usage
-            if (typeof usage?.output_tokens === 'number') outputTokens = usage.output_tokens
-            break
-          }
-          case 'message_stop':
-            // The done event is emitted once at the end (see below) so
-            // we have a single consumer-facing hand-off point regardless
-            // of whether the upstream uses [DONE] or message_stop.
-            break
-          case 'error': {
-            const errObj = (e as { error?: { type?: string; message?: string } }).error
-            sawError = true
-            yield {
-              type: 'error',
-              code: errObj?.type ?? 'E_UPSTREAM',
-              message: errObj?.message ?? 'LLM error'
-            }
-            break
-          }
-        }
+      const parsedEvents = parseSseChunk(sseState, text)
+      for (const parsed of parsedEvents) {
+        // processAnthropicEvent mutates state + returns 0..N semantic events
+        // (chunk / tool_use / error). Yield them in order; never await an
+        // unrelated callback between iterations so abort latency stays low.
+        const out = processAnthropicEvent(parsed, state)
+        for (const ev of out) yield ev
       }
     }
   } finally {
@@ -310,19 +480,27 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   // Sprint 4 review (codex M-2): once an Anthropic `error` event landed
   // mid-stream, don't paper over it with a trailing usage/done — the
   // assistant row would flip back to `complete` and lose the error.
-  if (sawError) return
+  if (state.sawError) return
 
   yield {
     type: 'usage',
-    inputTokens,
-    outputTokens,
+    inputTokens: state.inputTokens,
+    outputTokens: state.outputTokens,
     costUsd: null,
-    model: modelSeen
+    model: state.modelSeen
   }
   yield {
     type: 'done',
-    finalContent: accumulated,
-    model: modelSeen
+    finalContent: state.accumulated,
+    model: state.modelSeen,
+    // Sprint 19 — harness loop branches on stopReason:
+    //   'tool_use' → next iter (LLM wants to call tools)
+    //   'end_turn' → terminate (assistant said its piece)
+    //   'max_tokens' → forward as 'end_turn' for legacy callers but log
+    // Fallback to 'end_turn' when upstream omitted message_delta (older
+    // gateways occasionally do this); a missing stop_reason can never mean
+    // "more to come" — message_stop already fired.
+    stopReason: state.messageStopReason ?? 'end_turn'
   }
 }
 
@@ -351,10 +529,15 @@ function isAnthropicModel(model: string): boolean {
   return model.startsWith('claude-') || model.startsWith('claude:')
 }
 
-// Test-only — exposed so unit tests can exercise the SSE parser without
-// reaching for a private symbol.
+// Test-only — exposed so unit tests can exercise the SSE parser + state
+// machine without reaching for a private symbol or standing up fetch.
 export const __testing = {
   parseSseChunk,
   buildAnthropicMessages,
+  buildSystemBlocks,
+  buildSystemPrompt,
+  decorateToolsWithCacheControl,
+  createStreamState,
+  processAnthropicEvent,
   isAnthropicModel
 }
