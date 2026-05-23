@@ -107,14 +107,14 @@ export function CalendarPage(): React.ReactElement {
   const [pending, setPending] = useState<Set<number>>(new Set())
 
   const since = offsetIsoDate(days)
-  // davmail 模式 discover_recurring 慢 → lazy: 不自动跑, 用户点扫描.
+  // Phase 1.5 (706788d) 之后 discover_recurring 改读 SQLite calendar_event ~0.5s,
+  // 不再 davmail 慢路径; 改主动 fetch. [扫描] 按钮保留作强制 refresh / 急刷.
   const listQ = useQuery({
     queryKey: ['calendar', 'recurring', since],
     queryFn: () => mailApi.calendar.recurringDiscover({ since }),
-    enabled: false,
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false
+    staleTime: 5 * 60_000,        // 5min cache, recurring 列表变化慢
+    refetchOnWindowFocus: false,  // 不靠 focus 刷
+    refetchOnMount: 'always'      // 切到 recurring tab 主动刷
   })
 
   const replayMut = useMutation({
@@ -170,19 +170,14 @@ export function CalendarPage(): React.ReactElement {
 
       {/* table — sticky header via .rec-table th CSS */}
       <div className="flex-1 min-h-0 overflow-auto scrollbar-thin">
-        {listQ.isFetching ? (
+        {listQ.isFetching && !listQ.data ? (
+          // 首次挂载 fetch 中 — skeleton 占位; 已有 data 的后台 refetch 不闪屏
           <div className="p-3">
             <SkeletonRow />
             <SkeletonRow />
             <SkeletonRow />
           </div>
-        ) : listQ.data === undefined ? (
-          <EmptyState
-            icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-            title="未扫描"
-            hint="点击右上角 [扫描] 拉取邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)"
-          />
-        ) : listQ.data.length === 0 ? (
+        ) : !listQ.data || listQ.data.length === 0 ? (
           <EmptyState
             icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
             title={t('calendar.empty')}

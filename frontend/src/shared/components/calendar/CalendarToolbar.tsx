@@ -13,7 +13,9 @@ import {
   useCalendarSyncTrigger,
   useCalendarSyncStatus,
   startOfWeek,
-  addDays
+  addDays,
+  relativeTime,
+  useNowTick
 } from './hooks/useCalendarEvents'
 import { cn } from '@shared/lib/cn'
 import { type CalendarView } from '@shared/router-instance'
@@ -51,15 +53,6 @@ function step(view: CalendarView, dir: 1 | -1, base: Date): Date {
   return d
 }
 
-function relativeTime(d: Date): string {
-  const secs = Math.floor((Date.now() - d.getTime()) / 1000)
-  if (secs < 5) return '刚刚'
-  if (secs < 60) return `${secs} 秒前`
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟前`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时前`
-  return `${Math.floor(secs / 86400)} 天前`
-}
-
 interface Props {
   view: CalendarView
   onViewChange: (v: CalendarView) => void
@@ -75,6 +68,9 @@ export function CalendarToolbar({
 }: Props): React.ReactElement {
   const { trigger, isPending } = useCalendarSyncTrigger()
   const { data: syncStatus } = useCalendarSyncStatus()
+  // 30s tick — 让 sync-pill 的 "上次同步 N 秒前" 字串自然走时, 不靠 syncStatus
+  // 数据引用变化也能刷.
+  useNowTick()
 
   const showDateNav = view === 'today' || view === 'week' || view === 'month'
   const head = syncStatus?.[0]
@@ -154,7 +150,7 @@ export function CalendarToolbar({
           style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
           onClick={() => trigger({ full: true })}
           disabled={isPending}
-          title="同步 (⌘R)"
+          title="急刷 (⌘R) · 后台 worker 每 60s 自动同步, 此按钮触发立即全量拉取"
         >
           <RefreshCw size={13} strokeWidth={2} className={cn(isPending && 'animate-spin')} />
           <span>同步</span>

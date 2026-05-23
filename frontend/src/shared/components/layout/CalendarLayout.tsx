@@ -6,15 +6,17 @@
 // 加键盘快捷键 hook + ? help modal + cal-card 内部底部副 status bar.
 
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 import { CalendarPage } from '../calendar/CalendarPage'
 import { CalendarShortcutModal } from '../calendar/CalendarShortcutModal'
 import { CalendarToolbar, type CalendarView } from '../calendar/CalendarToolbar'
 import { useCalendarShortcuts } from '../calendar/hooks/useCalendarShortcuts'
 import {
+  relativeTime,
   useCalendarSyncStatus,
-  useCalendarSyncTrigger
+  useCalendarSyncTrigger,
+  useNowTick
 } from '../calendar/hooks/useCalendarEvents'
 import { AgendaView } from '../calendar/views/AgendaView'
 import { DayView } from '../calendar/views/DayView'
@@ -39,25 +41,51 @@ export function CalendarLayout(): React.ReactElement {
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date())
   const [shortcutOpen, setShortcutOpen] = useState(false)
 
-  const setView = (v: CalendarView): void => {
-    void navigate({ search: { view: v } })
-  }
+  const setView = useCallback(
+    (v: CalendarView): void => {
+      void navigate({ search: { view: v } })
+    },
+    [navigate]
+  )
 
   const { trigger: triggerSync } = useCalendarSyncTrigger()
   const { data: syncStatus } = useCalendarSyncStatus()
+  // 30s tick — 让副 status bar 的 "自动同步 N 秒前" 自然走时, 不等下次
+  // useCalendarSyncStatus refetch (60s) 才有变化
+  useNowTick()
 
   // 副 status bar 数据 — 主要 calendar 状态从 sync_state 拿
+  const head = syncStatus?.[0]
   const calendarCount = syncStatus?.length ?? 0
-  const ctag = syncStatus?.[0]?.ctag ?? null
+  const ctag = head?.ctag ?? null
+  const lastIso =
+    head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
+  const lastDate = lastIso ? new Date(lastIso) : null
+  const lastSyncLabel = lastDate ? relativeTime(lastDate) : '尚未同步'
+
+  // useCallback 包 callback — 让 useCalendarShortcuts 的 keydown listener 不会
+  // 每次 CalendarLayout re-render 都 unbind+re-bind (闭包问题 §4.5)
+  const handleToday = useCallback(() => setCurrentDate(new Date()), [])
+  const handlePrev = useCallback(
+    () => setCurrentDate((d) => step(view, -1, d)),
+    [view]
+  )
+  const handleNext = useCallback(
+    () => setCurrentDate((d) => step(view, 1, d)),
+    [view]
+  )
+  const handleSync = useCallback(() => triggerSync({ full: true }), [triggerSync])
+  const handleHelp = useCallback(() => setShortcutOpen((v) => !v), [])
+  const handleEsc = useCallback(() => setShortcutOpen(false), [])
 
   useCalendarShortcuts({
     onView: setView,
-    onToday: () => setCurrentDate(new Date()),
-    onPrev: () => setCurrentDate((d) => step(view, -1, d)),
-    onNext: () => setCurrentDate((d) => step(view, 1, d)),
-    onSync: () => triggerSync({ full: true }),
-    onHelp: () => setShortcutOpen((v) => !v),
-    onEsc: () => setShortcutOpen(false)
+    onToday: handleToday,
+    onPrev: handlePrev,
+    onNext: handleNext,
+    onSync: handleSync,
+    onHelp: handleHelp,
+    onEsc: handleEsc
   })
 
   return (
@@ -87,6 +115,10 @@ export function CalendarLayout(): React.ReactElement {
               StatusBar 抢位置 */}
           <div className="cal-statusbar">
             <span>{calendarCount} 日历</span>
+            <span className="sep">·</span>
+            <span title="后端 CalendarSyncWorker 60s ctag 轮询 (ctag 不可用时 1h time-fallback)">
+              自动同步 {lastSyncLabel}
+            </span>
             <span className="sep">·</span>
             <span>窗口 −30d / +180d</span>
             {ctag && (

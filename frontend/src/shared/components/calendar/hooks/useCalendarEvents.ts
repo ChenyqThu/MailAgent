@@ -6,6 +6,7 @@
 // useCalendarSyncStatus: 拉 sync_state 表 (footer "上次同步 N 秒前" 提示).
 // useCalendarNames: 拉 distinct calendar_name list (顶部 calendar 切换 chip).
 
+import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -36,7 +37,9 @@ export function useCalendarEventsInWindow(opts: EventsListOpts): {
     queryKey: [...CALENDAR_EVENTS_KEY, opts.fromIso, opts.toIso, opts.calendarName, opts.source, opts.expandRecurrences],
     queryFn: () => mailApi.calendar.eventsList(opts),
     staleTime: 60_000,
-    refetchOnWindowFocus: false
+    refetchInterval: 60_000,            // 跟后端 worker 60s ctag 轮询同频, 数据 1min 内必到前端
+    refetchIntervalInBackground: false, // tab 后台不刷, 省功
+    refetchOnWindowFocus: true          // 回到 tab 立即 refresh
   })
   return {
     data: q.data,
@@ -114,7 +117,10 @@ export function useCalendarSyncTrigger(): {
       )
     }
   })
-  return { trigger: (opts?: SyncNowOpts) => mut.mutate(opts), isPending: mut.isPending }
+  // mut.mutate 在 react-query v5 是 referentially stable, useCallback 包后 trigger
+  // 引用也稳定, 让 CalendarLayout 等消费者能放心当 useCallback / useEffect 的 dep.
+  const trigger = useCallback((opts?: SyncNowOpts) => mut.mutate(opts), [mut.mutate])
+  return { trigger, isPending: mut.isPending }
 }
 
 // ============================================================
@@ -160,6 +166,29 @@ export function addDays(date: Date, n: number): Date {
 /** 把本地 Date 转 ISO 字符串 (with TZ offset, rrule lib 友好). */
 export function toIsoWithOffset(d: Date): string {
   return d.toISOString()
+}
+
+/** 把过去某时间格式化成 "刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前" 中文字符串.
+ *  toolbar sync-pill 与 cal-card 副 status bar 共用, 保证语义一致. */
+export function relativeTime(d: Date): string {
+  const secs = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (secs < 5) return '刚刚'
+  if (secs < 60) return `${secs} 秒前`
+  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟前`
+  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时前`
+  return `${Math.floor(secs / 86400)} 天前`
+}
+
+/** 每 tickMs 强制 re-render — 让依赖 relativeTime() 的"X 秒前"字符串自然走时,
+ *  即便 useCalendarSyncStatus 数据没变, UI 上的时间差也会更新.
+ *  默认 30s 一次, 跟"30 秒/60 秒"档位对齐. */
+export function useNowTick(tickMs = 30_000): number {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), tickMs)
+    return () => clearInterval(id)
+  }, [tickMs])
+  return now
 }
 
 /** 工具: 按本地日期 group occurrences (key=YYYY-MM-DD). */
