@@ -10,11 +10,14 @@
 
 ```
 当前 backend           : davmail (PoC mode, 本机 IT 未审批)
-mail-sync uptime       : 稳定运行 30min+ 起步, 1.5h 内 4 封 davmail-origin 邮件全 synced
-uid-mapper 进度        : ~50% (4593/8877 backfilled), 0 failed, ~85min 内跑完
-AppleScript 路径       : 仍保留, .env 切回即激活 (emergency fallback)
+mail-sync uptime       : 稳定运行 (cutover 后稳定性危机 8h 内修完, 见 §3.4)
+DB_VERSION             : 14 (Sprint 16 收尾完整 SSoT 反转)
+ps 镜像率              : 100% (6257 全量 backfill + handler 5+2 处 wire 完整)
+ai_priority 镜像率    : ~99% (4 NULL = LLM 流转中)
+frontend flag 延迟    : ~5ms (IPC 直写 SQLite, 之前 ~500-1000ms CLI fork)
+AppleScript 路径       : 保留, .env 切回即激活 (emergency fallback)
 关键死线              : EWS 2026-10-01 关停, DavMail 6.7 仍依赖 EWS 桥, Graph 路线图未 merge
-最高优先级            : 观察 1-2 天稳定性 → uid backfill 完成 → 评估 AppleScript 下架时间表
+最高优先级            : 观察 1-2 周稳定性 → DavMail OAuth 监控 → EWS 关停应对启动
 ```
 
 ---
@@ -122,6 +125,44 @@ sqlite3 data/sync_store.db "SELECT value FROM sync_state WHERE key='davmail_back
 - [ ] webhook-server dashboard 加 `backend_origin` 维度统计 (davmail vs applescript)
 - [ ] `mailagent admin backend-stats` 新 CLI: 每天每 backend 邮件量 + 失败率 + 平均 latency
 
+### 3.4 cutover 后 8h 稳定性危机 + SSoT 反转完整化 ✅ 本 session ship
+
+**stability crisis 5 个真 bug + Sprint 15 D 块 SSoT wiring gap 一次性修完**:
+
+| commit | 内容 |
+|---|---|
+| `c1a6e25` | `handle_ai_reviewed` + `handle_completed` 补 `processing_status` 镜像 (5 处) |
+| `33e057d` | codex 审 P0/P1 — `reverse_sync:230/340` 补 `processing_status` + `handle_completed` early return 收紧 |
+| `d0a8086` | v14 schema: AI 字段提升主表列 `ai_priority/ai_action` + 2 索引 + `LLMProcessingStore.upsert_external_labels` + 961 行 backfill |
+| `f3ba543` | frontend IPC 直写 SQLite — flag/read/processing_status `~500ms → ~5ms` (Sprint 15 D 块最后一步) |
+
+**cutover-day 紧急 bug (8h 内修完)**:
+- mail-sync crash-loop 221 次 = probe `SELECT INBOX` 触发 EWS searchMessages → Microsoft throttling 死锁 (改成 `NOOP` probe 8.5s→150ms, 58× 减负)
+- crash-loop 接着 218 次 = `except` 块 `import asyncio` 触发 `UnboundLocalError` (P0 bug, 我自己埋的雷拆除)
+- 1000000002 body 空 = Outlook 端 UID 重排 (147766→147767), 原代码 stale UID 无 fallback → 加 `message_id` 反查 + sync_store 回写新 UID
+- uid-mapper 后台并发打爆 davmail = batch 50 无 sleep → 限流 (batch 50→20 + sleep 3s + `DAVMAIL_UID_BACKFILL_ENABLED` 可关 + `DAVMAIL_FETCH_TIMEOUT_SEC` 60s→120s)
+- 错误信息硬编码 "AppleScript fetch failed" 在 davmail 模式下完全误导 → 改 `backend={name}` 真实标识
+
+**数据回填 (无 commit, 纯运维)**:
+- 4 封 davmail 邮件 ps 即时补 (cutover 当下 4 封 davmail-origin)
+- 166 封最近 3 天 ps backfill (cutover 期前后流转半途)
+- **6257 封全量历史邮件 ps 3 轮 backfill** (cutover 前从 v3 时代直到 Sprint 15 D 的累积 — SQLite 列从 v13 起一直 NULL, 因为 Sprint 15 D 漏 wire)
+- 961 封 ai_priority/ai_action 主表列 backfill
+
+**修复后 SQLite SSoT 状态**:
+```
+total emails          : 8908
+ps 镜像率             : 100% (除 skipped/deleted 2361 封, 这些正确为空)
+ai_priority 镜像率   : ~99% (4 NULL = LLM 流转中)
+真 drift             : 0
+未来新 drift 风险    : 0 (handler 5 处 + reverse_sync 2 处 + handle_completed early return 全 wire)
+frontend flag 延迟  : ~5ms (IPC 直写 SQLite, 之前 ~500-1000ms CLI fork)
+```
+
+**新加的告警 hook**:
+- `_check_alerts` 加 第 6 项 davmail mode 最近 10min `fetch_failed≥3` → 飞书 critical 告警
+- `main.py` `BackendStartupError` 启动失败时一次性飞书告警 (probe 失败立即告)
+
 ---
 
 ## 4. P2 — 巩固 (1 月内)
@@ -173,6 +214,67 @@ sqlite3 data/sync_store.db "SELECT value FROM sync_state WHERE key='davmail_back
 `_normalize_date_received_iso` + `_local_tz()` 用 `/etc/localtime` 解析 IANA zone, 应自动处理 11/01 PDT→PST 切换. 但实测一次:
 - 11/01 PST 生效后, 跑 `scripts/dev/fix_date_received_tz.py --dry-run`, 确认没有需要二次 backfill 的 row
 - 否则一次性 backfill 跨 DST 边界邮件
+
+### 4.5 DavMail 后端切换跟进 (cutover 后 1 个月内必做)
+
+cutover 当天暴露的稳定性问题已 §3.4 修完, 但 davmail 模式作为新主路径还有几个跟进项, 优先级 P1 (影响生产可用性):
+
+#### 4.5.1 DavMail OAuth refresh token 监控告警 (高优)
+
+**风险**: refresh_token 90 天有效, 期间每次成功续期会被 Microsoft rotate; 但如果 davmail-poc 长时间 idle 或 OAuth 续期失败连续 N 次, refresh_token 可能过期 → 必须重走 OAuth manual flow.
+
+**实施**:
+- `src/notify/alert.py` 加 `alert_davmail_token_expiring(days_left)` — token.dat mtime > 80 天接近过期时 warning
+- `src/notify/alert.py` 加 `alert_davmail_oauth_failure(error)` — davmail-poc logs 出 BadPaddingException / refresh_token expired 时 critical
+- watchdog: `mailagent admin health` 加 `davmail.token.mtime` + `davmail.token.age_days` 指标
+
+#### 4.5.2 davmail-poc 进程死亡 watchdog (高优)
+
+**风险**: mail-sync probe 失败时已有告警, 但 davmail-poc 自己挂掉而 mail-sync 不在 poll 期 (cycle 5s 间隙) 不会立即触发. PM2 down event 无 alert hook.
+
+**实施**:
+- `main.py` 主循环加每 60s `probe_tcp(127.0.0.1, 1143)` 探测, 失败 ≥3 次 → 飞书 critical
+- 或 PM2 ecosystem 加 `post_stop_script` 直接 curl 飞书 webhook (更轻量)
+
+#### 4.5.3 EWS throttling burst 监控 (中优)
+
+cutover 时发现的死锁场景: davmail logs 出 `EWSThrottlingException: The server cannot service this request right now`, 跟我们的 `davmail_fetch_burst` 告警 (最近 10min `fetch_failed≥3`) 间接相关, 但**没直接抓 EWS throttling stack trace**.
+
+**实施**:
+- mail-sync 起一个 sidecar 进程 / log tail 监控 `davmail-poc` PM2 stderr
+- 匹配 `EWSThrottlingException` → 累计 5min 内 ≥3 次 → 飞书 warning + 自动暂停 uid-mapper backfill (写 `sync_state['davmail_uid_backfill_paused']=true`)
+- throttling 自然解除 (10-30min) 后恢复
+
+#### 4.5.4 uid-mapper 跑完后效果验证 + 落地报告 (低优, 可观测)
+
+cutover 后 uid-mapper 限流模式 (batch 20 + sleep 3s) 预计 ~22min 跑完剩余 ~2664 封. 跑完后应该:
+- `imap_uid > 0` 邮件数从 5473 → ~8800+ (99% 覆盖)
+- 反向 flag / fetch 路径全部走 imap_uid 快路径 (~200ms vs message_id 反查 ~1s)
+- 跑 `scripts/dev/audit_davmail_vs_sqlite.py --hours 168` 跑一周对账, 期望 MISS ≤ 5
+
+#### 4.5.5 cross-backend marker 分独立 key (低优, 仅在需要双向切时做)
+
+`sync_state['last_max_row_id']` 当前用作 applescript Mail.app ROWID 跟 davmail UIDNEXT 共用 key, cutover 时手动 reset 跳过历史. 如果未来要支持来回切, 应该 split 成:
+- `sync_state['applescript_last_rowid']`
+- `sync_state['davmail_last_uidnext']`
+
+工作量 ~2h. 跟 §4.3 重复, 这里 inline 是为了 DavMail 跟进章节完整.
+
+#### 4.5.6 handle_create_draft '草稿已创建' 没镜像 SQLite (codex P2)
+
+codex 审报告 [`docs/roadmap-post-cutover.md`](#) §3 提到的剩余 SSoT gap: `handle_create_draft` 在 [`src/events/handlers.py:618`](../src/events/handlers.py) / [`:758`](../src/events/handlers.py) 直接调 `update_page_mail_sync_status(..., processing_status='草稿已创建')` 写 Notion, 但没回写 SQLite `email_metadata.processing_status`. 跟 §3.4 一致的 SSoT 反转思路, 补一行 `update_local_flags(..., processing_status='草稿已创建')`.
+
+**实施**: ~10min, 同 §3.4 同源.
+
+#### 4.5.7 `mailagent admin backfill-processing-status` CLI (低优, 运维工具化)
+
+本 session 跑了 3 轮 inline Python script backfill 6257 封, 每次都得现写. 加 CLI 命令把这固化下来:
+
+```
+mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=收件箱] [--concurrency=3] [--dry-run]
+```
+
+未来加新 schema 列 (例 `is_starred`, `notion_archived`) 需要 backfill 时复用. ~1h.
 
 ---
 
@@ -262,9 +364,11 @@ if ctx:
 | H-3 | mail.app 时代 message_id 空 row (~10 封) | 低 | uid-mapper missing | 接受现状, 不修 |
 | H-4 | cross-backend merge guard 浪费 sequence | 极低 | cutover 时 | 无害 (10^9 起点几百万年用不完) |
 | H-5 | davmail-poc JVM 内存涨 | 低 | 长时间运行 | P2 §4.2 监控告警, 内存 > 250MB 重启 |
-| H-6 | DavMail OAuth token 90 天过期 | 高 | 自动触发 | 80 天接近时手动 refresh; 或写 watchdog 自动 |
+| H-6 | DavMail OAuth refresh_token 过期 | 高 | 90 天 idle / 公司 IT 政策变 | §4.5.1 80 天告警 + watchdog (待做 P1) |
 | H-7 | IT 政策变化 / 风控触发 | 中 | 不可预测 | AppleScript fallback 兜底 |
 | H-8 | DavMail IMAP UID 越过 INT64 (极少) | 极低 | UID 超 2^63 | 不会发生 (Microsoft 通常 ≤ 10^7) |
+| H-9 | EWS searchMessages throttling 死锁 | **中** | uid-mapper 后台并发 + mail-sync 反复 probe | cutover 当天踩中, §3.4 改 probe NOOP + uid-mapper 限流修. §4.5.3 加 burst 监控 |
+| H-10 | frontend IPC 直写 vs mail-sync writer 并发 | 低 | 用户点 flag 跟 reverse_sync poll 同时改同行 | WAL 单 writer 锁 + busy_timeout=500ms 兜底. 极端 race 用户看到 retry latency ~10ms |
 
 ---
 
@@ -272,13 +376,18 @@ if ctx:
 
 ```
 [●●●●●●●●●●] dual-backend Phase A-C 实施 + cutover 执行 (Sprint 16)        ✅ 2026-05-22
-[●●●●●●●●●○] uid-mapper backfill (51.7%)                                   🟡 进行中
-[●●●○○○○○○○] davmail mode 稳定性观察 (P0, 1-2 天)                          🟡 第一天
-[○○○○○○○○○○] 监控告警建设 (P2 §4.2)                                       ⚪ 待启
-[○○○○○○○○○○] AppleScript 下架评估 (P2 §4.1)                              ⚪ 等观察期满
-[○○○○○○○○○○] EWS 2026-10 关停应对 (P3 §5.1)                              ⚪ 跟踪中
-[○○○○○○○○○○] SQLite SSoT Inversion (P3 §5.2)                            ⚪ Sprint 18 后
+[●●●●●●●●●●] cutover-day stability crisis 5 bug 修完 + 文档同步 (§3.4)     ✅ 2026-05-22
+[●●●●●●●●●●] SQLite SSoT 反转完整化 (handler 5+2+1 处 wire + v14)          ✅ 2026-05-22
+[●●●●●●●●●●] frontend IPC 直写 SQLite (flag ~5ms, Sprint 15 D 最后一步)    ✅ 2026-05-22
+[●●●●●●●●●●] 全量历史邮件 ps backfill 3 轮 (6257 封, 真 drift=0)            ✅ 2026-05-22
+[●●●●●●●●●○] uid-mapper backfill (限流后跑中, ETA ~22min)                 🟡 进行中
+[●●●○○○○○○○] davmail mode 稳定性观察 (P0, 1-2 周)                          🟡 第一天
+[○○○○○○○○○○] DavMail 后端切换跟进 (P2 §4.5, 7 项)                          ⚪ 待启动
+[○○○○○○○○○○] 监控告警建设 (P2 §4.2 + §4.5.1-3)                            ⚪ 待启 (已加 2 个 hook)
+[○○○○○○○○○○] AppleScript 下架评估 (P2 §4.1)                              ⚪ 等观察期满 3 月
+[○○○○○○○○○○] EWS 2026-10 关停应对 (P3 §5.1)                              ⚪ 跟踪中, 2026-06 跟 IT 沟通
 [○○○○○○○○○○] Frontend Sprint 18 Settings 重做 (P3 §5.3)                  ⚪ 等 handoff
+[○○○○○○○○○○] 用户自定义 AI 字段 (P3, Settings UI + 动态 schema)          ⚪ 不急
 ```
 
 ---
@@ -287,10 +396,21 @@ if ctx:
 
 按优先级:
 
-1. **检查 uid-mapper 是否跑完** — `sqlite3 ... "SELECT value FROM sync_state WHERE key='davmail_backfill_progress'"`. 期望 `completed:processed=8877 ...`.
-2. **跑端到端测试** — 自己发一封测试邮件, 走完 P0 §2.2 全链路.
-3. **监控告警 P2 §4.2 起手** — 接 `notify/alert.py` 加 davmail 进程死亡 + restart_count 突增告警 (~半天).
-4. **跟 IT 沟通 Graph app 注册** — P3 §5.1 Path B 启动条件, 越早越好.
+### P0 — 本周
+1. **uid-mapper 跑完后效果验证** (§4.5.4) — `sqlite3 ... "SELECT value FROM sync_state WHERE key='davmail_backfill_progress'"`. 期望 `completed:processed=8877 ...`. 跑完 audit_davmail_vs_sqlite.py 一周对账.
+2. **端到端测试** — 自己发一封测试邮件, 走完 §2.2 全链路, 验证 SSoT 镜像新代码生效 (新邮件 ps 自动写入 SQLite).
+
+### P1 — 本月
+3. **DavMail OAuth token 监控** (§4.5.1) — `alert_davmail_token_expiring(days_left)` + watchdog. **token.dat 过期最致命**, 优先做.
+4. **davmail-poc 进程死亡 watchdog** (§4.5.2) — `main.py` 加 60s `probe_tcp` 探测, 失败 ≥3 飞书 critical.
+5. **EWS throttling burst 监控** (§4.5.3) — sidecar log tail + 自动暂停 uid-mapper backfill.
+6. **handle_create_draft '草稿已创建' 镜像 SQLite** (§4.5.6) — codex P2 剩余 SSoT gap, ~10min.
+7. **`mailagent admin backfill-processing-status` CLI** (§4.5.7) — 把本 session 3 轮 inline script 固化, ~1h.
+
+### P2 — 季度
+8. **AppleScript 路径下架评估** (§4.1) — 观察期满 3 个月零事故后启动.
+9. **跟 IT 沟通 Graph app 注册** (§5.1 Path B) — EWS 关停最关键依赖, 越早启动越好.
+10. **frontend Sprint 18 Settings 页面重做** (§5.3) — handoff 已写, 等 frontend 工作流推进.
 
 ---
 
