@@ -214,9 +214,14 @@ function buildStableSystemPrompt(ctx: EmailContext | null): string {
 }
 
 /** Sprint 19 PR-2f — Build the session-specific email-context section
- *  (subject / sender / date / Notion URL / body markdown). Lives in a
- *  separate Anthropic system block WITHOUT cache_control so the stable
- *  prefix stays hot across email switches. */
+ *  (subject / sender / date / Notion URL / AI labels / body markdown).
+ *  Lives in a separate Anthropic system block WITHOUT cache_control so
+ *  the stable prefix stays hot across email switches.
+ *
+ *  PR-2g dogfood fix: 加 AI 字段 (ai_priority / ai_action / processing_status)
+ *  让 chat agent 立即看到 LLM 已经给出的标签, 避免它先问"AI 怎么标的?"
+ *  再回答, 节省一轮.
+ */
 function buildEmailContextSection(ctx: EmailContext): string {
   const lines: string[] = ['--- Email currently open ---']
   lines.push(`internal_id: ${ctx.internalId}`)
@@ -230,6 +235,14 @@ function buildEmailContextSection(ctx: EmailContext): string {
   if (ctx.notionPageId) {
     const pageNoDash = ctx.notionPageId.replace(/-/g, '')
     lines.push(`Notion URL: https://www.notion.so/${pageNoDash}`)
+  }
+  // AI labels (LLM agent 已分类的; chat agent 据此判断优先级 + 建议动作)
+  const aiBits: string[] = []
+  if (ctx.aiPriority) aiBits.push(`priority=${ctx.aiPriority}`)
+  if (ctx.aiAction) aiBits.push(`action=${ctx.aiAction}`)
+  if (ctx.processingStatus) aiBits.push(`processing=${ctx.processingStatus}`)
+  if (aiBits.length > 0) {
+    lines.push(`AI labels: ${aiBits.join(' / ')}`)
   }
   lines.push('')
   if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {

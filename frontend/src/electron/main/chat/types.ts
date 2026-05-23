@@ -143,6 +143,17 @@ export interface EmailContext {
   /** 邮件在 Notion 镜像页 ID, 用来让 Notion Agent 直接定位/更新/挂关联.
    *  无 Notion 同步过的邮件为 null. */
   notionPageId: string | null
+  /** AI 分类结果 (LLM agent 已跑过; null = 未分类 / dead-letter).
+   *  - aiPriority: '🔴 紧急' / '🟡 重要' / '🟢 一般' / '⚪ 低' (LLM enum)
+   *  - aiAction:   '需要回复' / '需要决策' / '需要 Review' / '需要会议' /
+   *                '需要跟进' / '等待响应' / '仅供参考' / '已完结'
+   *  - processingStatus: '未处理' / 'AI Reviewed' / '已同步' / '已完成' /
+   *                      '草稿已创建'
+   *  让 chat agent 看到 'AI 已标 🟡 重要 + 需要决策' 立刻有判断依据,
+   *  不必去 query AI 字段再问一轮. */
+  aiPriority: string | null
+  aiAction: string | null
+  processingStatus: string | null
 }
 
 /** Sprint 19 — Anthropic-shape tool descriptor a backend can pass to the

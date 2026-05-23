@@ -45,10 +45,14 @@ const MAX_BODY_CHARS = 12_000
 function loadEmailContext(emailId: number): EmailContext | null {
   try {
     const db = getDb()
+    // PR-2g dogfood fix: 加 ai_priority / ai_action / processing_status 进
+    // ctx, 让 chat agent system prompt 看到 'AI 已标 🟡 重要 + 需要决策'
+    // 直接判断, 不必先 query 一轮. 字段从 email_metadata v14 主表读
+    // (LLM agent processor.py write 进主表 + labels_json sidecar).
     const row = db
       .prepare(
         `SELECT m.internal_id, m.subject, m.sender_name, m.sender, m.date_received,
-                m.notion_page_id,
+                m.notion_page_id, m.ai_priority, m.ai_action, m.processing_status,
                 b.body_markdown
            FROM email_metadata m
            LEFT JOIN email_body b ON b.internal_id = m.internal_id
@@ -62,6 +66,9 @@ function loadEmailContext(emailId: number): EmailContext | null {
           sender: string | null
           date_received: string | null
           notion_page_id: string | null
+          ai_priority: string | null
+          ai_action: string | null
+          processing_status: string | null
           body_markdown: string | null
         }
       | undefined
@@ -75,7 +82,10 @@ function loadEmailContext(emailId: number): EmailContext | null {
       senderAddr: row.sender,
       dateIso: row.date_received,
       bodyMarkdown: body && body.length > 0 ? body : null,
-      notionPageId: row.notion_page_id
+      notionPageId: row.notion_page_id,
+      aiPriority: row.ai_priority,
+      aiAction: row.ai_action,
+      processingStatus: row.processing_status
     }
   } catch {
     return null
