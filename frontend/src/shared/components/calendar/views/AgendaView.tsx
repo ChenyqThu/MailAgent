@@ -113,7 +113,6 @@ export function AgendaView({ rangeDays = 14, calendarName }: Props): React.React
             <div className={cn('ag-head', lbl.isToday && 'is-today')}>
               <span className="ah-day">{lbl.ahDay}</span>
               <span className="ah-date">{lbl.ahDate}</span>
-              <span className="ah-count">{items.length} 项</span>
             </div>
             {items.map((occ) => {
               const allDay = occ.is_all_day

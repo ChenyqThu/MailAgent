@@ -2575,9 +2575,11 @@ body:not([data-batch-mode='true']) #batch-bar {
   padding: 16px 0 8px;
   position: sticky;
   top: 0;
-  background: rgb(var(--ink-2) / 0.85);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  /* mockup 用 rgb(--ink-2)/0 全透, 但 sticky 时下面事件 scroll 过会透显.
+     用 ink-2/30 + 轻 blur 保 sticky 可读 + 视觉接近 mockup 的"假" sticky. */
+  background: rgb(var(--ink-2) / 0.3);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   z-index: 1;
 }
 .ag-head .ah-day {
@@ -2589,12 +2591,6 @@ body:not([data-batch-mode='true']) #batch-bar {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 11.5px;
   color: rgb(var(--ink-fg-2));
-}
-.ag-head .ah-count {
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11.5px;
-  color: rgb(var(--ink-fg-3));
-  margin-left: auto;
 }
 .ag-head.is-today .ah-day { color: rgb(var(--c-accent)); }
 .ag-row {
@@ -2732,13 +2728,18 @@ body:not([data-batch-mode='true']) #batch-bar {
   -webkit-backdrop-filter: var(--glass-lg);
   backdrop-filter: var(--glass-lg);
   border-left: 1px solid var(--glass-stroke);
-  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.4);
+  /* 减弱 mockup 原 -24px 0 60px 0.4 阴影 — 视觉太重, 用 border-left 强调
+     分隔代替深阴影. light 主题更轻. */
+  box-shadow: -6px 0 18px rgba(0, 0, 0, 0.18);
   transform: translateX(100%);
   transition: transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
   display: flex;
   flex-direction: column;
 }
 .drawer.open { transform: translateX(0); }
+:root[data-theme='light'] .drawer {
+  box-shadow: -4px 0 14px rgba(20, 24, 40, 0.08);
+}
 @media (prefers-reduced-motion: reduce) { .drawer { transition: none; } }
 
 .dw-head {
@@ -2931,4 +2932,61 @@ body:not([data-batch-mode='true']) #batch-bar {
 }
 .skel + .skel { margin-top: 7px; }
 .skel.av { width: 22px; height: 22px; border-radius: 50%; }
+
+/* ── Shortcut help modal (?) ─────────────────────────────────────── */
+.sk-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+:root[data-theme='light'] .sk-backdrop { background: rgba(20, 24, 40, 0.18); }
+.sk-modal {
+  width: 420px;
+  max-width: 92vw;
+  border-radius: 14px;
+  padding: 20px 22px;
+}
+.sk-modal h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+  margin: 0 0 4px;
+}
+.sk-sub {
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+  margin-bottom: 14px;
+}
+.sk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.6);
+}
+.sk-row:last-child { border-bottom: 0; }
+.sk-label { font-size: 13.5px; color: rgb(var(--ink-fg-1)); }
+.sk-keys { display: flex; gap: 4px; }
+
+/* ── Calendar inner status bar (cal-card footer) ─────────────────── */
+.cal-statusbar {
+  height: 26px;
+  flex-shrink: 0;
+  border-top: 1px solid rgb(var(--ink-border) / 0.6);
+  background: rgb(var(--ink-2) / 0.4);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 10px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  line-height: 1;
+}
+.cal-statusbar .sep { color: rgb(var(--ink-fg-3)); }
+.cal-statusbar .right { margin-left: auto; color: rgb(var(--ink-fg-3)); }
 
