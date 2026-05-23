@@ -1,7 +1,8 @@
-// Phase 3 §3.2 — Month view: 6×7 grid (每周一行, 周一首列).
-// 每格显示日期 + 最多 3 个 event chip, "+N 更多" 展开 popover.
+// 视觉复刻 mockup-calendar.html §month (2026-05-23) —
+// 6×7 grid (周一首列), 每格显示日期 + 最多 3 个 EventChip, 超出弹 .more-pop
+// fixed popover. is-other 灰底, today coral 圆角 .nday + "今天" tag.
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
 
 import { EventChip } from '../EventChip'
@@ -17,30 +18,40 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { cn } from '@shared/lib/cn'
 
 interface Props {
-  date?: Date  // default 当前月
+  date?: Date
   calendarName?: string
 }
 
-const DAY_HEADERS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-const MAX_VISIBLE_PER_CELL = 3
+const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
+const MAX_VISIBLE = 3
 
 function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-
-function isToday(d: Date): boolean {
+function isTodayLocal(d: Date): boolean {
   const t = new Date()
   return d.getDate() === t.getDate() && d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear()
 }
 
+interface PopState {
+  top: number
+  left: number
+  items: CalendarEventOccurrence[]
+  dayLabel: string
+}
+
 export function MonthView({ date, calendarName }: Props): React.ReactElement {
   const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
-  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  const [pop, setPop] = useState<PopState | null>(null)
 
-  const monthStart = startOfMonth(date ?? new Date())
-  // 月历需要从该月首日所在周的周一开始, 到 6 周后 (42 天 grid)
-  const gridStart = startOfWeek(monthStart)
-  const gridEnd = addDays(gridStart, 42)
+  const monthStart = useMemo(() => startOfMonth(date ?? new Date()), [date])
+  const gridStart = useMemo(() => startOfWeek(monthStart), [monthStart])
+  const gridEnd = useMemo(() => addDays(gridStart, 42), [gridStart])
+  const days = useMemo(
+    () => Array.from({ length: 42 }, (_, i) => addDays(gridStart, i)),
+    [gridStart]
+  )
+  const currentMonth = monthStart.getMonth()
 
   const { data, isLoading } = useCalendarEventsInWindow({
     fromIso: gridStart.toISOString(),
@@ -48,92 +59,122 @@ export function MonthView({ date, calendarName }: Props): React.ReactElement {
     calendarName
   })
 
-  if (isLoading) return <div className="text-aux text-ink-fg-2">加载中…</div>
+  // popover: click outside / Esc to close
+  useEffect(() => {
+    if (!pop) return
+    const close = (): void => setPop(null)
+    const esc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') close()
+    }
+    document.addEventListener('click', close)
+    window.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('click', close)
+      window.removeEventListener('keydown', esc)
+    }
+  }, [pop])
+
+  if (isLoading) {
+    return (
+      <div className="cal-month">
+        <div className="text-aux text-ink-fg-2 p-6">加载中…</div>
+      </div>
+    )
+  }
 
   const events = data ?? []
   if (events.length === 0) {
     return (
-      <EmptyState
-        icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-        title="本月无日程"
-      />
+      <div className="cal-month">
+        <EmptyState
+          icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
+          title="本月无日程"
+          hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
+        />
+      </div>
     )
   }
 
-  // Group by day
+  // group occurrences by local day; all-day events include跨天逻辑.
   const byDay = new Map<string, CalendarEventOccurrence[]>()
   for (const occ of events) {
-    const d = new Date(occ.occurrence_start_iso)
-    const key = ymd(d)
-    const arr = byDay.get(key) ?? []
-    arr.push(occ)
-    byDay.set(key, arr)
+    const s = new Date(occ.occurrence_start_iso)
+    const e = new Date(occ.occurrence_end_iso)
+    if (occ.is_all_day) {
+      // 把跨天 all-day 事件展开到每一天
+      const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate())
+      const endDay = new Date(e.getFullYear(), e.getMonth(), e.getDate())
+      let cur = startDay
+      while (cur.getTime() <= endDay.getTime()) {
+        const k = ymd(cur)
+        const arr = byDay.get(k) ?? []
+        arr.push(occ)
+        byDay.set(k, arr)
+        cur = addDays(cur, 1)
+        if (cur.getTime() - startDay.getTime() > 14 * 86_400_000) break // safety
+      }
+    } else {
+      const k = ymd(s)
+      const arr = byDay.get(k) ?? []
+      arr.push(occ)
+      byDay.set(k, arr)
+    }
   }
 
-  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
-  const currentMonth = monthStart.getMonth()
-
   return (
-    <>
-      <div className="grid grid-cols-7 border-b border-ink-border-soft">
-        {DAY_HEADERS.map((label) => (
-          <div
-            key={label}
-            className="py-2 text-center text-meta text-ink-fg-2 font-medium"
-          >
-            {label}
-          </div>
+    <div className="cal-month">
+      <div className="m-dow">
+        {DOW_EN.map((label) => (
+          <div key={label}>{label}</div>
         ))}
       </div>
-
-      <div className="grid grid-cols-7 grid-rows-6">
+      <div className="m-grid">
         {days.map((d, i) => {
-          const key = ymd(d)
-          const dayEvents = byDay.get(key) ?? []
-          const isOtherMonth = d.getMonth() !== currentMonth
-          const isExpanded = expandedKey === key
-          const visible = isExpanded ? dayEvents : dayEvents.slice(0, MAX_VISIBLE_PER_CELL)
-          const hiddenCount = dayEvents.length - visible.length
-          const today = isToday(d)
-
+          const isOther = d.getMonth() !== currentMonth
+          const today = isTodayLocal(d)
+          const dayEvents = byDay.get(ymd(d)) ?? []
+          // sort: all-day first, then by start time
+          const sorted = [...dayEvents].sort((a, b) => {
+            if (a.is_all_day !== b.is_all_day) return a.is_all_day ? -1 : 1
+            return (
+              Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
+            )
+          })
+          const visible = sorted.slice(0, MAX_VISIBLE)
+          const moreCount = sorted.length - visible.length
+          const monthN = d.getMonth() + 1
           return (
             <div
               key={i}
-              className={cn(
-                'border-r border-b border-ink-border-soft min-h-[110px] p-1.5',
-                'flex flex-col gap-0.5 overflow-hidden',
-                isOtherMonth && 'bg-ink-2/60',
-                today && 'bg-coral/5'
-              )}
+              className={cn('m-cell', isOther && 'is-other', today && 'is-today')}
             >
-              <div className="flex items-center justify-between mb-0.5">
-                <span
-                  className={cn(
-                    'text-meta font-mono tabular-nums',
-                    today ? 'text-coral font-medium' : isOtherMonth ? 'text-ink-fg-3' : 'text-ink-fg-1'
-                  )}
-                >
-                  {d.getDate()}
-                </span>
-                {today && (
-                  <span className="text-meta text-coral font-medium">今天</span>
-                )}
+              <div className="m-num">
+                <span className="nday">{d.getDate()}</span>
+                {today && <span className="m-today-tag">今天</span>}
               </div>
               {visible.map((occ) => (
                 <EventChip
                   key={`${occ.id}-${occ.occurrence_start_iso}`}
                   event={occ}
                   onClick={() => setActive(occ)}
-                  compact
                 />
               ))}
-              {hiddenCount > 0 && (
+              {moreCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => setExpandedKey(isExpanded ? null : key)}
-                  className="text-meta text-ink-fg-2 hover:text-coral mt-0.5 self-start"
+                  className="more-btn"
+                  onClick={(ev) => {
+                    ev.stopPropagation()
+                    const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+                    setPop({
+                      top: rect.bottom + 6,
+                      left: Math.min(rect.left, window.innerWidth - 240),
+                      items: sorted,
+                      dayLabel: `${monthN} 月 ${d.getDate()} 日`
+                    })
+                  }}
                 >
-                  +{hiddenCount} 更多
+                  +{moreCount} 更多
                 </button>
               )}
             </div>
@@ -141,7 +182,32 @@ export function MonthView({ date, calendarName }: Props): React.ReactElement {
         })}
       </div>
 
+      {pop && (
+        <div
+          className="more-pop glass-pop"
+          style={{ top: pop.top, left: pop.left }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="mp-head">
+            <span>{pop.dayLabel}</span>
+            <span className="mp-date">{pop.items.length} 个事件</span>
+          </div>
+          <div className="space-y-1">
+            {pop.items.map((occ, idx) => (
+              <EventChip
+                key={`${occ.id}-${occ.occurrence_start_iso}-${idx}`}
+                event={occ}
+                onClick={() => {
+                  setActive(occ)
+                  setPop(null)
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       <EventDetailDrawer occurrence={active} onClose={() => setActive(null)} />
-    </>
+    </div>
   )
 }

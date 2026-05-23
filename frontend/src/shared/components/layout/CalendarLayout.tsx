@@ -1,13 +1,14 @@
-// Sprint 6 — /admin/calendar route shell.
-// Phase 3 §3.3 (frontend-view-silly-knuth.md) — V2 toolbar + 多视图调度.
+// 视觉复刻 mockup-calendar.html (2026-05-23) —
+// 结构: toolbar (外置) + cal-card (glass-2, 撑满剩余高度, 内部自己 scroll).
+// PageFrame 已经提供 TitleBar + Sidebar + StatusBar 三段; main override
+// 成 flex-col overflow-hidden, 让 cal-card 自己 own scroll, 避免 main 出双滚动条.
+//
 // 路由 search 参数 ?view= 控制活跃视图:
-//   - today    → DayView (单日 24h timeline)
+//   - today    → DayView (mini-month rail + 单日 timeline)
 //   - week     → WeekView (7 列 × 24h, default)
 //   - month    → MonthView (6×7 grid)
 //   - agenda   → AgendaView (列表 grouped by day)
-//   - recurring → 老 RecurringInvitesPage (Sprint 6 表格运维工具)
-//
-// 默认 view=week. ?view=recurring 是 V1 老视图入口 (灰度共存, 不下线).
+//   - recurring → 老 CalendarPage (Sprint 6 表格运维工具)
 
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
@@ -22,13 +23,11 @@ import { WeekView } from '../calendar/views/WeekView'
 import { PageFrame } from './PageFrame'
 
 export function CalendarLayout(): React.ReactElement {
-  // search params 从 router 拿 (validateSearch 已确保 view 是 CalendarView)
   const search = useSearch({ from: '/admin/calendar' }) as { view?: CalendarView }
   const navigate = useNavigate({ from: '/admin/calendar' })
   const view: CalendarView = search.view ?? 'week'
 
-  // 当前日期 — day/week/month 视图导航锚点. 默认本地今天. 不进 URL, 避免 ?date=
-  // 在视图切换时杂乱; 用户切回 today 总是回当天.
+  // 日期不进 URL — 视图切换时杂乱。切回 today 默认回当天。
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date())
 
   const setView = (v: CalendarView): void => {
@@ -36,21 +35,23 @@ export function CalendarLayout(): React.ReactElement {
   }
 
   return (
-    <PageFrame ariaLabel="calendar">
-      <div className="px-6 py-5 min-h-full">
-        <CalendarToolbar
-          view={view}
-          onViewChange={setView}
-          currentDate={currentDate}
-          onDateChange={setCurrentDate}
-        />
-        <section className="rounded-md border border-ink-border bg-ink-2 overflow-hidden p-4">
-          {view === 'today' && <DayView date={currentDate} />}
-          {view === 'week' && <WeekView date={currentDate} />}
-          {view === 'month' && <MonthView date={currentDate} />}
-          {view === 'agenda' && <AgendaView />}
-          {view === 'recurring' && <CalendarPage />}
-        </section>
+    <PageFrame ariaLabel="calendar" mainClassName="flex-1 min-w-0 flex flex-col overflow-hidden">
+      <CalendarToolbar
+        view={view}
+        onViewChange={setView}
+        currentDate={currentDate}
+        onDateChange={setCurrentDate}
+      />
+      <div className="flex-1 min-h-0 px-5 pb-4">
+        <div className="h-full glass-2 border border-ink-border/60 rounded-[10px] overflow-hidden flex flex-col">
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {view === 'today' && <DayView date={currentDate} onDateChange={setCurrentDate} />}
+            {view === 'week' && <WeekView date={currentDate} />}
+            {view === 'month' && <MonthView date={currentDate} />}
+            {view === 'agenda' && <AgendaView />}
+            {view === 'recurring' && <CalendarPage />}
+          </div>
+        </div>
       </div>
     </PageFrame>
   )

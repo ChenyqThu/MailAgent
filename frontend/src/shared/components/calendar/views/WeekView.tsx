@@ -1,43 +1,61 @@
-// Phase 3 §3.2 — Week view: 7 列 (Mon-Sun) × 24h timeline.
+// 视觉复刻 mockup-calendar.html §week (2026-05-23) —
+// 3 段 flex column: wk-headrow + wk-alldayrow + wk-body (内 scroll, 默认到 8AM).
+// HOUR_PX=48, 7 列 (Mon-Sun) × 24h. now-line + now-bubble 跟今天列漂浮.
 
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
 
 import { EventBlock } from '../EventBlock'
-import { EventChip } from '../EventChip'
 import { EventDetailDrawer } from '../EventDetailDrawer'
 import {
   useCalendarEventsInWindow,
   addDays,
-  startOfWeek
+  startOfWeek,
+  layoutDay
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { cn } from '@shared/lib/cn'
 
 interface Props {
-  date?: Date  // default 本地今天所在周
+  date?: Date
   calendarName?: string
 }
 
-const HOUR_PX = 40  // 周视图缩到 40px/h, 总高 960px
-const DAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+const HOUR_PX = 48
+const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
+const GRID_COLS = '56px repeat(7, 1fr)'
 
 function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-
-function isToday(d: Date): boolean {
-  const t = new Date()
-  return d.getDate() === t.getDate() && d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear()
+function pad(n: number): string {
+  return String(n).padStart(2, '0')
+}
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getDate() === b.getDate() && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()
+}
+function isTodayLocal(d: Date): boolean {
+  return isSameDay(d, new Date())
 }
 
 export function WeekView({ date, calendarName }: Props): React.ReactElement {
   const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [now, setNow] = useState(() => new Date())
 
-  const weekStart = startOfWeek(date ?? new Date())
-  const weekEnd = addDays(weekStart, 7)
-  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+  // refresh now-line each minute
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const weekStart = useMemo(() => startOfWeek(date ?? new Date()), [date])
+  const weekEnd = useMemo(() => addDays(weekStart, 7), [weekStart])
+  const days = useMemo(
+    () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
+    [weekStart]
+  )
 
   const { data, isLoading } = useCalendarEventsInWindow({
     fromIso: weekStart.toISOString(),
@@ -45,63 +63,93 @@ export function WeekView({ date, calendarName }: Props): React.ReactElement {
     calendarName
   })
 
-  if (isLoading) return <div className="text-aux text-ink-fg-2">加载中…</div>
+  // 默认 scroll 到 8AM (events 渲染完 / 切日期重新加载完都 reset).
+  useEffect(() => {
+    if (!isLoading && scrollRef.current) {
+      scrollRef.current.scrollTop = 8 * HOUR_PX - 16
+    }
+  }, [isLoading, weekStart.getTime()])
+
+  if (isLoading) {
+    return (
+      <div className="cal-week">
+        <div className="text-aux text-ink-fg-2 p-6">加载中…</div>
+      </div>
+    )
+  }
 
   const events = data ?? []
   if (events.length === 0) {
     return (
-      <EmptyState
-        icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-        title="本周无日程"
-      />
+      <div className="cal-week">
+        <EmptyState
+          icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
+          title="本周无日程"
+          hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
+        />
+      </div>
     )
   }
 
-  // Group by day
+  // group timed events by day
   const byDay = new Map<string, CalendarEventOccurrence[]>()
   for (const occ of events) {
+    if (occ.is_all_day) continue
     const d = new Date(occ.occurrence_start_iso)
     const key = ymd(d)
     const arr = byDay.get(key) ?? []
     arr.push(occ)
     byDay.set(key, arr)
   }
+  const allDayEvents = events.filter((e) => e.is_all_day)
+  const hasAllDay = allDayEvents.length > 0
+
+  // now-line position
+  const todayIdx = days.findIndex(isTodayLocal)
+  const showNow = todayIdx >= 0
+  const nowTopPx = ((now.getHours() * 60 + now.getMinutes()) / 60) * HOUR_PX
 
   return (
-    <>
-      {/* 表头: 7 列 */}
-      <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-ink-border-soft sticky top-0 bg-ink-2 z-10">
-        <div></div>
+    <div className="cal-week">
+      {/* head row */}
+      <div className="wk-headrow" style={{ gridTemplateColumns: GRID_COLS }}>
+        <div className="wk-corner" />
         {days.map((d, i) => (
-          <div
-            key={i}
-            className={cn(
-              'text-center py-2 text-aux',
-              isToday(d) ? 'text-coral font-medium' : 'text-ink-fg-1'
-            )}
-          >
-            <div className="text-meta text-ink-fg-2">{DAY_NAMES[i]}</div>
-            <div className="tabular-nums">{d.getMonth() + 1}/{d.getDate()}</div>
+          <div key={i} className={cn('wk-dayhead', isTodayLocal(d) && 'is-today')}>
+            <div className="wk-dow">{DOW_EN[i]}</div>
+            <div className="wk-dn">{d.getDate()}</div>
           </div>
         ))}
       </div>
 
-      {/* 全天事件 strip — 跨7天 */}
-      {events.some((e) => e.is_all_day) && (
-        <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-ink-border-soft py-1">
-          <div className="text-meta text-ink-fg-2 px-1">全天</div>
+      {/* all-day strip — 仅当本周有 all-day 事件时显示 */}
+      {hasAllDay && (
+        <div className="wk-alldayrow" style={{ gridTemplateColumns: GRID_COLS }}>
+          <div className="allday-gutter">
+            <span>全天</span>
+          </div>
           {days.map((d, i) => {
-            const dayKey = ymd(d)
-            const allDay = (byDay.get(dayKey) ?? []).filter((e) => e.is_all_day)
+            const dayMs = d.getTime()
+            const nextMs = dayMs + 86_400_000
+            const evs = allDayEvents.filter((e) => {
+              const s = Date.parse(e.occurrence_start_iso)
+              const en = Date.parse(e.occurrence_end_iso)
+              return s < nextMs && en > dayMs
+            })
             return (
-              <div key={i} className="px-0.5 space-y-0.5">
-                {allDay.map((occ) => (
-                  <EventChip
+              <div key={i} className={cn('allday-cell', isTodayLocal(d) && 'is-today')}>
+                {evs.map((occ) => (
+                  <button
                     key={`${occ.id}-${occ.occurrence_start_iso}`}
-                    event={occ}
+                    type="button"
+                    className="allday-evt"
+                    data-resp={(occ.response_status || '').toUpperCase()}
+                    data-status={(occ.status || '').toUpperCase()}
                     onClick={() => setActive(occ)}
-                    compact
-                  />
+                    title={occ.summary || '(无标题)'}
+                  >
+                    {occ.summary || '(无标题)'}
+                  </button>
                 ))}
               </div>
             )
@@ -109,67 +157,69 @@ export function WeekView({ date, calendarName }: Props): React.ReactElement {
         </div>
       )}
 
-      {/* Timeline grid */}
-      <div
-        className="relative grid grid-cols-[60px_repeat(7,1fr)]"
-        style={{ height: `${HOUR_PX * 24}px` }}
-      >
-        {/* 小时 label 列 */}
-        <div className="relative">
-          {Array.from({ length: 24 }, (_, i) => (
-            <div
-              key={i}
-              className="absolute left-0 right-0 text-meta text-ink-fg-3 font-mono pl-1 border-t border-ink-border-soft"
-              style={{ top: `${i * HOUR_PX}px` }}
-            >
-              {String(i).padStart(2, '0')}:00
-            </div>
-          ))}
-        </div>
+      {/* scrolling timeline body */}
+      <div ref={scrollRef} className="wk-body scrollbar-thin">
+        <div className="wk-grid" style={{ gridTemplateColumns: GRID_COLS }}>
+          {/* hour gutter */}
+          <div className="hour-gutter">
+            {Array.from({ length: 24 }, (_, h) => (
+              <div key={h} className="hour-label">
+                <span>{h === 0 ? '' : `${pad(h)}:00`}</span>
+              </div>
+            ))}
+          </div>
 
-        {/* 7 day columns */}
-        {days.map((d, i) => {
-          const dayKey = ymd(d)
-          const timed = (byDay.get(dayKey) ?? []).filter((e) => !e.is_all_day)
-          const dayMs = d.getTime()
-          return (
-            <div
-              key={i}
-              className={cn(
-                'relative border-l border-ink-border-soft',
-                isToday(d) && 'bg-coral/5'
-              )}
-            >
-              {/* 小时网格线 */}
-              {Array.from({ length: 24 }, (_, h) => (
-                <div
-                  key={h}
-                  className="absolute left-0 right-0 border-t border-ink-border-soft/40"
-                  style={{ top: `${h * HOUR_PX}px` }}
-                />
-              ))}
-              {/* events */}
-              {timed.map((occ) => {
-                const startMs = Date.parse(occ.occurrence_start_iso)
-                const endMs = Date.parse(occ.occurrence_end_iso)
-                const topPx = Math.max(0, ((startMs - dayMs) / (1000 * 60 * 60)) * HOUR_PX)
-                const heightPx = ((endMs - startMs) / (1000 * 60 * 60)) * HOUR_PX
-                return (
-                  <EventBlock
-                    key={`${occ.id}-${occ.occurrence_start_iso}`}
-                    event={occ}
-                    topPx={topPx}
-                    heightPx={heightPx}
-                    onClick={() => setActive(occ)}
-                  />
-                )
-              })}
-            </div>
-          )
-        })}
+          {/* 7 day columns */}
+          {days.map((d, di) => {
+            const dKey = ymd(d)
+            const dayMs = d.getTime()
+            const timed = byDay.get(dKey) ?? []
+            const laid = layoutDay(timed)
+            return (
+              <div key={di} className={cn('day-col', isTodayLocal(d) && 'is-today')}>
+                {/* 24 hour cells for visual grid */}
+                {Array.from({ length: 24 }, (_, h) => (
+                  <div key={h} className="hour-cell" />
+                ))}
+                {/* events */}
+                {laid.map(({ occ, col, totalCols }) => {
+                  const startMs = Date.parse(occ.occurrence_start_iso)
+                  const endMs = Date.parse(occ.occurrence_end_iso)
+                  const topPx = ((startMs - dayMs) / 3_600_000) * HOUR_PX
+                  const heightPx = ((endMs - startMs) / 3_600_000) * HOUR_PX
+                  const selected =
+                    active?.id === occ.id &&
+                    active?.occurrence_start_iso === occ.occurrence_start_iso
+                  return (
+                    <EventBlock
+                      key={`${occ.id}-${occ.occurrence_start_iso}`}
+                      event={occ}
+                      topPx={topPx}
+                      heightPx={heightPx}
+                      col={col}
+                      totalCols={totalCols}
+                      selected={selected}
+                      onClick={() => setActive(occ)}
+                    />
+                  )
+                })}
+              </div>
+            )
+          })}
+
+          {/* now line + bubble — 当本周包含今天才画 */}
+          {showNow && (
+            <>
+              <div className="now-bubble" style={{ top: `${nowTopPx}px` }}>
+                {pad(now.getHours())}:{pad(now.getMinutes())}
+              </div>
+              <div className="now-line" style={{ top: `${nowTopPx}px` }} aria-hidden />
+            </>
+          )}
+        </div>
       </div>
 
       <EventDetailDrawer occurrence={active} onClose={() => setActive(null)} />
-    </>
+    </div>
   )
 }

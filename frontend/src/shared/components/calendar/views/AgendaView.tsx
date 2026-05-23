@@ -1,9 +1,10 @@
-// Phase 3 §3.2 — Agenda view: 按日期 group 的纯列表 (最简单 + 高密度).
+// 视觉复刻 mockup-calendar.html §agenda (2026-05-23) —
+// 按日期 group, 每 group sticky ah-head, 行 grid 110px/1fr (time / main).
+// Toolbar 已接管 "N 个日程 + 刷新", 这里专注内容呈现.
 
 import { useState } from 'react'
-import { Calendar as CalendarIcon, RefreshCw } from 'lucide-react'
+import { Calendar as CalendarIcon, Video } from 'lucide-react'
 
-import { EventChip } from '../EventChip'
 import { EventDetailDrawer } from '../EventDetailDrawer'
 import {
   useCalendarEventsInWindow,
@@ -21,18 +22,42 @@ interface Props {
   calendarName?: string
 }
 
-function dayLabel(key: string): string {
-  // key = YYYY-MM-DD (本地)
+function pad(n: number): string {
+  return String(n).padStart(2, '0')
+}
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+function shortTime(iso: string): string {
+  const d = new Date(iso)
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+interface HeaderLabels {
+  ahDay: string
+  ahDate: string
+  isToday: boolean
+}
+
+function headerLabels(key: string): HeaderLabels {
   const [y, m, d] = key.split('-').map(Number)
-  const date = new Date(y, m - 1, d)
+  const target = new Date(y, m - 1, d)
   const today = todayStartLocal()
   const tomorrow = addDays(today, 1)
-  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const tomorrowKey = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`
-  if (key === todayKey) return `今天 (${m}/${d})`
-  if (key === tomorrowKey) return `明天 (${m}/${d})`
+  const tKey = ymd(today)
+  const tomKey = ymd(tomorrow)
   const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  return `${m}/${d} ${weekDays[date.getDay()]}`
+  const wd = weekDays[target.getDay()]
+  const ahDate = `${m}/${d} ${wd}`
+  if (key === tKey) return { ahDay: '今天', ahDate, isToday: true }
+  if (key === tomKey) return { ahDay: '明天', ahDate, isToday: false }
+  return { ahDay: `${d} 日`, ahDate, isToday: false }
+}
+
+function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
+  if (occ.url && occ.url.length > 0) return true
+  if (occ.location && occ.location.toLowerCase().includes('teams.microsoft.com')) return true
+  return false
 }
 
 export function AgendaView({ rangeDays = 14, calendarName }: Props): React.ReactElement {
@@ -40,7 +65,7 @@ export function AgendaView({ rangeDays = 14, calendarName }: Props): React.React
 
   const start = todayStartLocal()
   const end = addDays(start, rangeDays)
-  const { data, isLoading, refetch } = useCalendarEventsInWindow({
+  const { data, isLoading } = useCalendarEventsInWindow({
     fromIso: start.toISOString(),
     toIso: end.toISOString(),
     calendarName
@@ -48,21 +73,25 @@ export function AgendaView({ rangeDays = 14, calendarName }: Props): React.React
 
   if (isLoading) {
     return (
-      <div className="space-y-2">
-        <SkeletonRow />
-        <SkeletonRow />
-        <SkeletonRow />
+      <div className="cal-agenda">
+        <div className="ag-group">
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
+        </div>
       </div>
     )
   }
 
   if (!data || data.length === 0) {
     return (
-      <EmptyState
-        icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-        title="未来 2 周无日程"
-        hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
-      />
+      <div className="cal-agenda">
+        <EmptyState
+          icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
+          title={`未来 ${rangeDays} 天无日程`}
+          hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
+        />
+      </div>
     )
   }
 
@@ -70,50 +99,54 @@ export function AgendaView({ rangeDays = 14, calendarName }: Props): React.React
   const sortedKeys = Array.from(grouped.keys()).sort()
 
   return (
-    <>
-      <div className="flex justify-between items-center mb-3">
-        <p className="text-aux text-ink-fg-2">
-          {data.length} 个日程, 未来 {rangeDays} 天
-        </p>
-        <button
-          type="button"
-          onClick={refetch}
-          className="inline-flex items-center gap-1 px-2 py-1 text-meta text-ink-fg-2 hover:text-ink-fg"
-          aria-label="刷新"
-        >
-          <RefreshCw size={12} strokeWidth={2} />
-          刷新
-        </button>
-      </div>
-
-      <div className="space-y-4">
-        {sortedKeys.map((key) => (
-          <section key={key}>
-            <h3
-              className={cn(
-                'text-aux text-ink-fg-1 font-medium mb-1.5 pb-1',
-                'border-b border-ink-border-soft'
-              )}
-            >
-              {dayLabel(key)}
-              <span className="ml-2 text-meta text-ink-fg-2 tabular-nums">
-                {(grouped.get(key) ?? []).length} 项
-              </span>
-            </h3>
-            <div className="space-y-1">
-              {(grouped.get(key) ?? []).map((occ) => (
-                <EventChip
-                  key={`${occ.id}-${occ.occurrence_start_iso}`}
-                  event={occ}
-                  onClick={() => setActive(occ)}
-                />
-              ))}
+    <div className="cal-agenda scrollbar-thin">
+      {sortedKeys.map((key) => {
+        const lbl = headerLabels(key)
+        const items = (grouped.get(key) ?? []).slice().sort((a, b) => {
+          if (a.is_all_day !== b.is_all_day) return a.is_all_day ? -1 : 1
+          return (
+            Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
+          )
+        })
+        return (
+          <section key={key} className="ag-group">
+            <div className={cn('ag-head', lbl.isToday && 'is-today')}>
+              <span className="ah-day">{lbl.ahDay}</span>
+              <span className="ah-date">{lbl.ahDate}</span>
+              <span className="ah-count">{items.length} 项</span>
             </div>
+            {items.map((occ) => {
+              const allDay = occ.is_all_day
+              const timeTxt = allDay
+                ? '全天'
+                : `${shortTime(occ.occurrence_start_iso)} – ${shortTime(occ.occurrence_end_iso)}`
+              const meeting = hasMeetingLink(occ)
+              const showLoc = occ.location && !occ.location.toLowerCase().includes('teams.microsoft.com')
+              return (
+                <button
+                  key={`${occ.id}-${occ.occurrence_start_iso}`}
+                  type="button"
+                  className="ag-row"
+                  data-resp={(occ.response_status || '').toUpperCase()}
+                  data-status={(occ.status || '').toUpperCase()}
+                  onClick={() => setActive(occ)}
+                  title={occ.summary || '(无标题)'}
+                >
+                  <div className="ag-time">{timeTxt}</div>
+                  <div className="ag-main">
+                    <span className="ag-bar" aria-hidden />
+                    <span className="ag-title">{occ.summary || '(无标题)'}</span>
+                    {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
+                    {showLoc && <span className="ag-loc">{occ.location}</span>}
+                  </div>
+                </button>
+              )
+            })}
           </section>
-        ))}
-      </div>
+        )
+      })}
 
       <EventDetailDrawer occurrence={active} onClose={() => setActive(null)} />
-    </>
+    </div>
   )
 }

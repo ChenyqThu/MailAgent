@@ -177,4 +177,68 @@ export function groupOccurrencesByLocalDay(
   return m
 }
 
+// ============================================================
+// 单日并发布局 — mockup §layoutDay 翻译.
+// 把重叠事件分 cluster, 每 cluster 内贪心分列, 返回每个 occ 的 col / totalCols.
+// Week / Day timeline 共用.
+// ============================================================
+export interface LaidOutEvent {
+  occ: CalendarEventOccurrence
+  col: number
+  totalCols: number
+}
+
+export function layoutDay(events: CalendarEventOccurrence[]): LaidOutEvent[] {
+  const sorted = [...events].sort((a, b) => {
+    const aS = Date.parse(a.occurrence_start_iso)
+    const bS = Date.parse(b.occurrence_start_iso)
+    if (aS !== bS) return aS - bS
+    return Date.parse(a.occurrence_end_iso) - Date.parse(b.occurrence_end_iso)
+  })
+
+  // 聚类: 任何与当前 cluster 还有重叠的 evt 都进同 cluster.
+  const clusters: CalendarEventOccurrence[][] = []
+  let cur: CalendarEventOccurrence[] = []
+  let curEnd = -Infinity
+  for (const e of sorted) {
+    const start = Date.parse(e.occurrence_start_iso)
+    if (cur.length && start >= curEnd) {
+      clusters.push(cur)
+      cur = []
+      curEnd = -Infinity
+    }
+    cur.push(e)
+    curEnd = Math.max(curEnd, Date.parse(e.occurrence_end_iso))
+  }
+  if (cur.length) clusters.push(cur)
+
+  const result: LaidOutEvent[] = []
+  for (const cl of clusters) {
+    const colsEnd: number[] = [] // 每列当前 endMs
+    const colsAssigned: number[] = []
+    for (const e of cl) {
+      const start = Date.parse(e.occurrence_start_iso)
+      const end = Date.parse(e.occurrence_end_iso)
+      let placed = -1
+      for (let i = 0; i < colsEnd.length; i++) {
+        if (colsEnd[i] <= start) {
+          colsEnd[i] = end
+          placed = i
+          break
+        }
+      }
+      if (placed === -1) {
+        colsEnd.push(end)
+        placed = colsEnd.length - 1
+      }
+      colsAssigned.push(placed)
+    }
+    const totalCols = colsEnd.length
+    cl.forEach((e, idx) => {
+      result.push({ occ: e, col: colsAssigned[idx], totalCols })
+    })
+  }
+  return result
+}
+
 export type { CalendarEventOccurrence, CalendarEventDetail, CalendarEventSource }

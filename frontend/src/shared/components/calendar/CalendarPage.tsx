@@ -1,9 +1,6 @@
-// Sprint 6 §2.2 — /calendar (recurring meetings) page.
-//
-// Lists recurring invites discovered by `mailagent calendar recurring discover`.
-// Each row exposes "Replay" (write+auth) which re-runs the expansion for the
-// invite's RRULE so the Notion calendar pages stay in sync after a manual
-// reschedule on the host side.
+// 视觉复刻 mockup-calendar.html §recurring (2026-05-23) —
+// Sprint 6 老的"运维型表格"视图, 改用 .rec-table / .rec-title / .rrule-code /
+// .mono-num class. Toolbar 已接管标题, 这里只留范围 chip + 扫描按钮 + 表.
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -24,12 +21,6 @@ const RANGES: Array<{ label: string; offsetDays: number }> = [
   { label: '1y', offsetDays: 365 }
 ]
 
-// Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — switch to
-// local-date arithmetic. The CLI's `--since` window is parsed against the
-// service's local clock (CST), so a UTC-anchored offset would skew by ~8h
-// at midnight (e.g. user clicking "90d" at 23:50 CST would query 91 days
-// back). Local Date math + manual YYYY-MM-DD format keeps the renderer's
-// notion of "today" aligned with the CLI.
 function offsetIsoDate(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() - days)
@@ -41,7 +32,6 @@ function offsetIsoDate(days: number): string {
 
 function fmtIso(iso: string | null): string {
   if (!iso) return '—'
-  // Show date + HH:MM in local TZ for organizer columns; RRULE column shows raw.
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   const y = d.getFullYear()
@@ -58,53 +48,53 @@ interface RowProps {
 
 function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
   const { t } = useTranslation()
+  // Phase 1.5 caveat: caldav-only events internal_id=0 — Replay 无效, 灰
+  const canReplay = item.internal_id > 0
   return (
-    <tr className="border-b border-ink-border-soft hover:bg-ink-2/60">
-      <td className="px-3 py-2 text-aux font-mono text-ink-fg-2 tabular-nums">
-        {item.internal_id}
+    <tr>
+      <td className="mono-num">#{item.internal_id || '—'}</td>
+      <td>
+        <span className="rec-title" title={item.subject ?? ''}>
+          {item.subject ?? '—'}
+        </span>
       </td>
-      <td
-        className="px-3 py-2 text-aux text-ink-fg max-w-[320px] truncate"
-        title={item.subject ?? ''}
-      >
-        {item.subject ?? '—'}
-      </td>
-      <td
-        className="px-3 py-2 text-aux text-ink-fg-1 max-w-[180px] truncate"
-        title={item.organizer ?? ''}
-      >
+      <td className="font-mono text-[12px] text-ink-fg-2" title={item.organizer ?? ''}>
         {item.organizer ?? '—'}
       </td>
-      <td
-        className="px-3 py-2 text-meta font-mono text-ink-fg-2 max-w-[260px] truncate"
-        title={item.rrule ?? ''}
-      >
-        {item.rrule ?? '—'}
+      <td>
+        {item.rrule ? <span className="rrule-code">{item.rrule}</span> : <span className="empty-field">—</span>}
       </td>
-      <td className="px-3 py-2 text-aux text-ink-fg-1">{fmtIso(item.first_occurrence)}</td>
-      <td className="px-3 py-2 text-aux text-ink-fg-1">{fmtIso(item.last_occurrence)}</td>
-      <td className="px-3 py-2 text-aux font-mono text-ink-fg-2 tabular-nums">
-        {item.occurrence_count ?? '—'}
-      </td>
-      <td className="px-3 py-2 text-right">
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => onReplay(item.internal_id)}
-          className={cn(
-            'inline-flex items-center gap-1 px-2 py-1 rounded text-aux',
-            'text-coral border border-coral/30 hover:bg-coral/10',
-            'transition-colors duration-fast',
-            'disabled:opacity-60 disabled:cursor-not-allowed'
-          )}
-        >
-          {pending ? (
-            <RefreshCw size={12} strokeWidth={2} className="animate-spin" />
-          ) : (
-            <Play size={12} strokeWidth={2} />
-          )}
-          {t('calendar.replay')}
-        </button>
+      <td className="mono-num">{fmtIso(item.first_occurrence)}</td>
+      <td className="mono-num">{fmtIso(item.last_occurrence)}</td>
+      <td className="mono-num">{item.occurrence_count ?? '—'}</td>
+      <td className="text-right">
+        {canReplay ? (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => onReplay(item.internal_id)}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-1 rounded text-aux',
+              'text-coral border border-coral/30 hover:bg-coral/10',
+              'transition-colors duration-fast',
+              'disabled:opacity-60 disabled:cursor-not-allowed'
+            )}
+          >
+            {pending ? (
+              <RefreshCw size={12} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <Play size={12} strokeWidth={2} />
+            )}
+            {t('calendar.replay')}
+          </button>
+        ) : (
+          <span
+            className="text-ink-fg-3 text-[12px]"
+            title="Phase 1.5 后 caldav-only events 无邮件源, Replay 待 Phase 2 重做"
+          >
+            Replay
+          </span>
+        )}
       </td>
     </tr>
   )
@@ -118,10 +108,7 @@ export function CalendarPage(): React.ReactElement {
   const [pending, setPending] = useState<Set<number>>(new Set())
 
   const since = offsetIsoDate(days)
-  // Phase 0.3 + 后续 davmail 实测: discover_recurring 在 davmail 模式下逐封 IMAP
-  // fetch (~5s/封 × 2000 = 167min), 远超 CLI 30s timeout — 自动触发就是 footgun.
-  // 改为完全 lazy: 默认 enabled=false, 用户必须点"扫描"按钮主动触发 (后续 Phase 1.5
-  // 会让这条路径走 calendar_event 表, 不再扫邮件).
+  // davmail 模式 discover_recurring 慢 → lazy: 不自动跑, 用户点扫描.
   const listQ = useQuery({
     queryKey: ['calendar', 'recurring', since],
     queryFn: () => mailApi.calendar.recurringDiscover({ since }),
@@ -152,56 +139,49 @@ export function CalendarPage(): React.ReactElement {
   })
 
   return (
-    <div className="px-6 py-5 space-y-6 min-h-full">
-      <header className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-display text-ink-fg font-semibold flex items-center gap-2">
-          <CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-1" />
-          {t('calendar.title')}
-        </h1>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-md border border-ink-border bg-ink-2 p-0.5">
-            {RANGES.map((r) => (
-              <button
-                key={r.offsetDays}
-                type="button"
-                onClick={() => setDays(r.offsetDays)}
-                className={cn(
-                  'px-2 py-1 text-aux rounded transition-colors duration-fast',
-                  r.offsetDays === days
-                    ? 'bg-coral/15 text-coral font-medium'
-                    : 'text-ink-fg-1 hover:text-ink-fg'
-                )}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => void listQ.refetch()}
-            disabled={listQ.isFetching}
-            className={cn(
-              'inline-flex items-center gap-1 px-2 py-1 text-aux rounded',
-              'border border-coral/40 text-coral hover:bg-coral/10',
-              'disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-fast'
-            )}
-            title="扫描邮件中带 RRULE 的会议邀请 (davmail 模式下可能需要数分钟)"
-          >
-            {listQ.isFetching ? (
-              <RefreshCw size={12} strokeWidth={2} className="animate-spin" />
-            ) : (
-              <RefreshCw size={12} strokeWidth={2} />
-            )}
-            {listQ.isFetching ? '扫描中…' : '扫描'}
-          </button>
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* range chip + 扫描按钮 — 跟 mockup §recurring 顶部 row 一致 */}
+      <div className="flex items-center gap-2 px-4 pt-3 pb-2 shrink-0">
+        <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50">
+          {RANGES.map((r) => (
+            <button
+              key={r.offsetDays}
+              type="button"
+              onClick={() => setDays(r.offsetDays)}
+              className={cn(
+                'px-3 py-1 text-aux rounded-md transition-colors duration-fast',
+                r.offsetDays === days
+                  ? 'bg-coral/15 text-coral border border-coral/30 font-medium'
+                  : 'border border-transparent text-ink-fg-1 hover:bg-ink-3/70 hover:text-ink-fg'
+              )}
+            >
+              {r.label}
+            </button>
+          ))}
         </div>
-      </header>
+        <span className="text-meta text-ink-fg-2 font-mono tabular-nums ml-1">
+          since {since}
+        </span>
+        <button
+          type="button"
+          onClick={() => void listQ.refetch()}
+          disabled={listQ.isFetching}
+          className={cn(
+            'h-7 inline-flex items-center gap-1.5 px-3 text-aux rounded-md ml-auto',
+            'border border-coral/40 text-coral hover:bg-coral/10',
+            'disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-fast'
+          )}
+          title="扫描邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)"
+        >
+          <RefreshCw size={12} strokeWidth={2} className={cn(listQ.isFetching && 'animate-spin')} />
+          {listQ.isFetching ? '扫描中…' : '扫描'}
+        </button>
+      </div>
 
-      <p className="text-aux text-ink-fg-2">{t('calendar.subtitle', { since })}</p>
-
-      <section className="rounded-md border border-ink-border bg-ink-2 overflow-hidden">
+      {/* table — sticky header via .rec-table th CSS */}
+      <div className="flex-1 min-h-0 overflow-auto scrollbar-thin">
         {listQ.isFetching ? (
-          <div>
+          <div className="p-3">
             <SkeletonRow />
             <SkeletonRow />
             <SkeletonRow />
@@ -219,23 +199,23 @@ export function CalendarPage(): React.ReactElement {
             hint={t('calendar.emptyHint')}
           />
         ) : (
-          <table className="w-full text-aux">
-            <thead className="bg-ink-3">
-              <tr className="text-micro font-mono uppercase text-ink-fg-2 text-left">
-                <th className="px-3 py-2">ID</th>
-                <th className="px-3 py-2">{t('calendar.col.subject')}</th>
-                <th className="px-3 py-2">{t('calendar.col.organizer')}</th>
-                <th className="px-3 py-2">{t('calendar.col.rrule')}</th>
-                <th className="px-3 py-2">{t('calendar.col.firstOccur')}</th>
-                <th className="px-3 py-2">{t('calendar.col.lastOccur')}</th>
-                <th className="px-3 py-2">{t('calendar.col.count')}</th>
-                <th className="px-3 py-2 text-right">{t('calendar.col.action')}</th>
+          <table className="rec-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>{t('calendar.col.subject')}</th>
+                <th>{t('calendar.col.organizer')}</th>
+                <th>{t('calendar.col.rrule')}</th>
+                <th>{t('calendar.col.firstOccur')}</th>
+                <th>{t('calendar.col.lastOccur')}</th>
+                <th>{t('calendar.col.count')}</th>
+                <th className="text-right">{t('calendar.col.action')}</th>
               </tr>
             </thead>
             <tbody>
-              {listQ.data?.map((item) => (
+              {listQ.data.map((item) => (
                 <Row
-                  key={item.internal_id}
+                  key={item.internal_id || `${item.organizer}-${item.rrule}`}
                   item={item}
                   onReplay={(id) => replayMut.mutate(id)}
                   pending={pending.has(item.internal_id)}
@@ -244,7 +224,7 @@ export function CalendarPage(): React.ReactElement {
             </tbody>
           </table>
         )}
-      </section>
+      </div>
     </div>
   )
 }

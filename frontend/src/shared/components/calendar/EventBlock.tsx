@@ -1,4 +1,10 @@
-// Phase 3 §3.2 — 周/日视图 timeline 的 event 块 (按时间长度 stretch 高度).
+// 视觉复刻 mockup-calendar.html §.evt (2026-05-23) —
+// 周/日 timeline 的事件块. 用 .evt + data-resp / data-status 利用 CSS
+// 自动呈现 5 种 response 状态 + cancelled / past / selected.
+//
+// API change vs 旧版: 新增 col/totalCols (并发分列) 替代 leftPx/widthPct,
+// 调用方传 col 索引 + 同时段总列数, 这里算 left/width %, 避免老代码 leftPx*6
+// 的硬 px bug.
 
 import { Video } from 'lucide-react'
 
@@ -9,12 +15,13 @@ interface EventBlockProps {
   event: CalendarEventOccurrence
   /** 块顶部 px 偏移 (相对 timeline 起点). */
   topPx: number
-  /** 块高度 px. */
+  /** 块高度 px (raw, 内部 min 24, 减 2 留 hour-cell 边). */
   heightPx: number
-  /** 左边偏移 (并发事件 column 索引 × col_width). */
-  leftPx?: number
-  /** 块宽度 (并发分列时缩窄). 默认 100%. */
-  widthPct?: number
+  /** 并发列索引 (0-based). 默认 0. */
+  col?: number
+  /** 同时段并发总列数 (≥1). 默认 1. */
+  totalCols?: number
+  selected?: boolean
   onClick?: () => void
 }
 
@@ -23,8 +30,8 @@ function shortTime(iso: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function meetingLink(occ: CalendarEventOccurrence): boolean {
-  if (occ.url) return true
+function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
+  if (occ.url && occ.url.length > 0) return true
   if (occ.location && occ.location.toLowerCase().includes('teams.microsoft.com')) return true
   return false
 }
@@ -33,41 +40,44 @@ export function EventBlock({
   event,
   topPx,
   heightPx,
-  leftPx = 0,
-  widthPct = 100,
+  col = 0,
+  totalCols = 1,
+  selected = false,
   onClick
 }: EventBlockProps): React.ReactElement {
-  const isCancelled = event.status.toUpperCase() === 'CANCELLED'
-  const isDeclined = event.response_status.toUpperCase() === 'DECLINED'
+  const h = Math.max(heightPx - 2, 22)
+  const widthPct = 100 / Math.max(totalCols, 1)
+  const leftPct = col * widthPct
+  const short = h <= 30
   const isPast = new Date(event.occurrence_end_iso) < new Date()
+  const meeting = hasMeetingLink(event)
+  const startTxt = shortTime(event.occurrence_start_iso)
+  const endTxt = shortTime(event.occurrence_end_iso)
+  const titleAttr = `${event.summary || '(无标题)'}\n${startTxt} – ${endTxt}${event.location ? '\n' + event.location : ''}`
 
   return (
     <button
       type="button"
-      onClick={onClick}
+      className={cn('evt', selected && 'is-selected', isPast && 'is-past')}
+      data-resp={(event.response_status || '').toUpperCase()}
+      data-status={(event.status || '').toUpperCase()}
       style={{
         top: `${topPx}px`,
-        height: `${Math.max(heightPx, 24)}px`,  // 最小 24px 防文字溢出
-        left: `${leftPx}px`,
-        width: `calc(${widthPct}% - ${leftPx + 4}px)`
+        height: `${h}px`,
+        left: `calc(${leftPct}% + 2px)`,
+        width: `calc(${widthPct}% - 4px)`
       }}
-      className={cn(
-        'absolute rounded px-2 py-1 text-left overflow-hidden',
-        'border border-coral/40 bg-coral/15 hover:bg-coral/30',
-        'transition-colors duration-fast',
-        (isCancelled || isDeclined) && 'opacity-40 line-through',
-        isPast && !isCancelled && !isDeclined && 'opacity-60'
-      )}
-      title={`${event.summary || '(无标题)'}\n${shortTime(event.occurrence_start_iso)} - ${shortTime(event.occurrence_end_iso)}`}
+      onClick={onClick}
+      title={titleAttr}
     >
-      <div className="flex items-center gap-1 text-meta font-mono text-ink-fg-2 tabular-nums">
-        <span>{shortTime(event.occurrence_start_iso)}</span>
-        {meetingLink(event) && <Video size={10} strokeWidth={2} className="text-coral" />}
+      <div className="e-time">
+        <span>{startTxt}</span>
+        {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
       </div>
-      <div className="text-aux text-ink-fg truncate">{event.summary || '(无标题)'}</div>
-      {event.location && heightPx > 50 && (
-        <div className="text-meta text-ink-fg-2 truncate mt-0.5">{event.location}</div>
-      )}
+      <div className="e-title" style={short ? { fontSize: '11px' } : undefined}>
+        {event.summary || '(无标题)'}
+      </div>
+      {!short && h > 52 && event.location && <div className="e-loc">{event.location}</div>}
     </button>
   )
 }
