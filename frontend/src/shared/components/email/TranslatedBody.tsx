@@ -103,8 +103,32 @@ const ALLOWED_TAGS = [
   'span'
 ]
 
+/** Auto-balance trailing unclosed markdown markers (** / `).
+ *
+ *  Streaming chat: LLM 输出 chunk-by-chunk, 中间状态可能含未闭合的 **bold
+ *  或 `code` marker. renderInline 用 regex 要求闭合 — 不匹配 → 留 raw
+ *  `**xxx` 在屏幕上, 直到下一 chunk 收到结尾才突然变 bold. 视觉跳动.
+ *
+ *  补救: 渲染前 preprocess 把奇数个 `**` 末尾 append `**` 自动闭合,
+ *  奇数个 `` ` `` 也补一个. 流式期间一直显示为 bold/code; stream done 后
+ *  count 自然变偶数, no-op, 跟原文一致.
+ *
+ *  不处理 single `*` (italic): 容易跟 `**` 的截断态冲突 (中流到 `*`
+ *  其实是 bold 的前半), 误闭合反而引入 phantom italic. Bold 是 chat
+ *  最常用 marker, 修这个就消大部分视觉跳动.
+ */
+function autoBalanceTrailingMarkers(s: string): string {
+  let result = s
+  const boldCount = (result.match(/\*\*/g) || []).length
+  if (boldCount % 2 === 1) result += '**'
+  const codeCount = (result.match(/`/g) || []).length
+  if (codeCount % 2 === 1) result += '`'
+  return result
+}
+
 function markdownToSafeHtml(md: string): string {
-  const blocks = md.split(/\n\s*\n/)
+  const balanced = autoBalanceTrailingMarkers(md)
+  const blocks = balanced.split(/\n\s*\n/)
   const rendered = blocks.map(renderBlock).join('\n')
   return DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS,
@@ -116,4 +140,11 @@ function markdownToSafeHtml(md: string): string {
 export function TranslatedBody({ text }: Props): React.ReactElement {
   const html = useMemo(() => markdownToSafeHtml(text), [text])
   return <div className="mail-body break-words" dangerouslySetInnerHTML={{ __html: html }} />
+}
+
+// Test-only — exposed so tests can exercise auto-balance + sanitize without
+// React SSR / DOM mounting.
+export const __testing = {
+  autoBalanceTrailingMarkers,
+  markdownToSafeHtml
 }

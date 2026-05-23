@@ -327,7 +327,10 @@ export function Composer({
             placeholder={t('chat.composer.placeholder')}
             aria-label={t('chat.composer.placeholder')}
             className={cn(
-              'w-full resize-none bg-transparent text-body text-ink-fg leading-snug',
+              // text-[14px] 跟 message bubble 视觉对齐 — Tailwind v4 没
+              // text-body 默认 utility, 之前 textarea fall back 到 browser
+              // form default (~11-13px) 比 <div> bubble (16px) 小一号.
+              'w-full resize-none bg-transparent text-[14px] text-ink-fg leading-snug',
               'placeholder:text-ink-fg-3',
               'focus:outline-none',
               'max-h-40 overflow-y-auto scrollbar-thin'
