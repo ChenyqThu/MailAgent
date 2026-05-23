@@ -395,12 +395,120 @@ notes: "测 FTS5 接入 chat 路径。中文 query 应自动加 `*` 通配（S20
 
 ---
 
+## P2 (M2 PR-2e/2f) — KOS 集成 5 个 (S21-S25)
+
+PR-2e (kos_query / kos_digest tool) + PR-2f (L1 hot block sender digest 注入)
+ship 后启用 `MAILAGENT_KOS_CONSUMER_ENABLED=true` + `MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED=true`
+才能跑。期望相比 M1-only baseline 看到 **cross-context lift ≥ 30%**.
+
+### S21 — KOS query：跨域查发件人历史
+
+```yaml
+id: S21
+category: retrieval
+phase: P2
+prompt: "Bob 这个人是谁？最近一个月跟我聊过什么主题？"
+email_ctx:
+  - sender = "bob@acme.com"
+expected_tools:
+  - name: kos_digest
+    input_pattern: { slug: "people/bob-acme-com" }
+  - name: kos_query
+    input_pattern: { query: "*Bob*" }
+forbidden_tools: [email_flag, email_archive, email_draft_reply, email_send]
+expected_substring: ["Bob", "Acme", "discussed"]
+forbidden_actions: "不要瞎编 Bob 的 role/title; 只用 KOS digest 返回的事实"
+notes: "测 KOS people slug 命中 + cross-source 检索 (含 Notion / Slack 数据).
+M1 跑同 prompt 无 kos_* tool, 只能搜邮件正文 → 信息匮乏."
+```
+
+### S22 — KOS query：跨域项目检索
+
+```yaml
+id: S22
+category: retrieval
+phase: P2
+prompt: "Acme 这个项目最近进展怎么样？包括邮件之外的来源."
+email_ctx: null
+expected_tools:
+  - name: kos_query
+    input_pattern: { query: "*Acme*", limit: 10 }
+forbidden_tools: [email_flag, email_archive, email_draft_reply, email_send]
+expected_substring: ["Acme", "项目", "进展"]
+notes: "测 cross-source — 期望 hits 含 Notion 手记 / 会议笔记 (slug 形如
+sources/notion-... / meetings/...), 不只是邮件 (sources/mailagent-...).
+'包括邮件之外的来源' 是 explicit hint LLM 走 kos_query."
+```
+
+### S23 — L1 hot block 注入：开场就懂 sender
+
+```yaml
+id: S23
+category: retrieval
+phase: P2
+prompt: "这封邮件回复需要 CC 谁？"
+email_ctx:
+  - sender = "<某已知联系人>"
+  - body = 邀请类邮件
+expected_tools: []  # L1 hot block 已注入 sender digest, LLM 不必再 query
+forbidden_tools: [email_flag, email_archive, email_draft_reply, email_send]
+expected_substring: ["建议", "CC", "<digest 里出现的某同事姓名>"]
+forbidden_actions: "不要重复 kos_query 同一 sender slug — L1 hot block 已注入"
+notes: "L1 命中: chat 启动时已 prefetch 该 sender 的 KOS digest, system block
+含其角色/团队/常合作同事. LLM 应该不再调 kos_* tool 直接基于 system context 回."
+```
+
+### S24 — KOS unreachable graceful fallback
+
+```yaml
+id: S24
+category: retrieval
+phase: P2
+prompt: "查下我跟这个供应商以前合作过什么"
+email_ctx:
+  - sender = "<某 vendor>"
+# 跑 scenario 时 mock KOS down (本机改 .env KOS_MCP_BASE=http://localhost:1 临时)
+expected_tools:
+  - name: kos_query
+    input_pattern: { query: "*vendor*" }
+    expected_result_pattern: { ok: false, code: ".*E_KOS_.*" }
+  - name: email_search
+    input_pattern: { sender_contains: "<vendor domain>" }
+forbidden_tools: [email_flag, email_archive, email_draft_reply, email_send]
+expected_substring: ["从邮件历史", "暂时", "fallback"]
+forbidden_actions: "不要因 KOS 失败就 give up; 应自动转 email_search 本地"
+notes: "测 KOSError 上抛 → ok:false → LLM 看到 E_KOS_* code 自动 fallback
+到本地 email_search_fulltext (PR-2a) 或 email_search (M1)."
+```
+
+### S25 — Producer → Consumer 闭环
+
+```yaml
+id: S25
+category: retrieval
+phase: P2
+prompt: "上周我发出去的一封关于 'Q3 OKR review' 的邮件, 找出来"
+email_ctx: null
+expected_tools:
+  - name: kos_query
+    input_pattern: { query: "*Q3*OKR*review*" }
+  # hit 应该含一条 slug='sources/mailagent-...' (本地 producer 推上去的)
+forbidden_tools: [email_flag, email_archive, email_draft_reply, email_send]
+expected_substring: ["Q3", "OKR", "找到"]
+notes: "测 PR-2d producer 闭环 — 邮件 sync 时被 push_email_to_kos 推到 KOS,
+现在 chat agent 跨 kos_query 能反查到. 启用前 producer 至少推过几小时让
+KOS dream-cycle 03:11 处理过."
+```
+
+---
+
 ## 期待结果矩阵（P1 ship 时）
 
 | Phase Gate | 目标 pass rate | 计算方法 |
 |---|---|---|
 | P1（M1 ship） | ≥ 70% (≥ 14/20) | S01-S18 必过 16 个中 ≥ 13 个；S19-S20 不计入 |
-| P2（M2 ship） | ≥ 85% (≥ 17/20) | 所有 20 个；S19-S20 必过；其余 ≥ 15 个 |
+| P2（M2 ship 前 20） | ≥ 85% (≥ 17/20) | 所有 20 个；S19-S20 必过；其余 ≥ 15 个 |
+| P2 KOS（M2 PR-2e/f） | ≥ 60% (≥ 3/5) | S21-S25 KOS 集成; KOS unreachable case 必过 |
 | P3（M3 ship） | ≥ 90% (≥ 18/20) | 所有 20 个；扩展集到 50 个时同标准 |
 
 每个 scenario pass 条件（AND 全满足）：
