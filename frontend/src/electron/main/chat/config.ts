@@ -54,6 +54,16 @@ export function isKosConsumerEnabled(): boolean {
   return readEnvBool('MAILAGENT_KOS_CONSUMER_ENABLED', false)
 }
 
+/** M2 PR-2f — L1 hot block KOS sender digest injection into system prompt.
+ *  OFF (default) → system blocks 单 STATIC + emailContext, 无 KOS context.
+ *  ON → chat start 时按 emailContext.senderAddr 异步预 fetch
+ *  `people/<slug>` digest, buildSystemBlocks 同步读 cache 注入 L1 hot
+ *  block (放在 STATIC 后, emailContext 前, 仍保 cache_control 在 stable
+ *  prefix 末). 需 PR-2c env + KOS 可达; cache miss 时优雅退化无注入. */
+export function isKosL1HotBlockEnabled(): boolean {
+  return readEnvBool('MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED', false)
+}
+
 /** Per-turn iteration cap. Hard ceiling on how many backend.stream() calls
  *  the harness will make for a single user message; exceeding emits
  *  E_MAX_ITER so the LLM doesn't infinite-loop on a flaky tool. */

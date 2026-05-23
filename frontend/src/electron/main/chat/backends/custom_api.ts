@@ -22,6 +22,8 @@
 //   (usage), and `message_stop`. Anything else passes through silently.
 
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../../llm_settings'
+import { isKosL1HotBlockEnabled } from '../config'
+import { getCachedSenderDigest } from '../../kos/sender_digest_cache'
 import type {
   BackendToolDescriptor,
   ChatBackend,
@@ -116,14 +118,34 @@ interface AnthropicToolBlock extends BackendToolDescriptor {
   cache_control?: { type: 'ephemeral' }
 }
 
-/** Sprint 19 — Wrap the static system prompt into the array-of-blocks
- *  shape Anthropic expects when you want a cache_control breakpoint.
- *  M1 ships a single block (no Wiki yet, no L1 hot block); M2 adds a
- *  second `text` entry for Hot Wiki BEFORE the cache_control breakpoint
- *  so wiki updates only invalidate one breakpoint, not both. */
+/** Sprint 19 — Build Anthropic `system` block array with cache_control on
+ *  the stable prefix.
+ *
+ *  Layout (PR-2f Sprint 19 M2):
+ *    block 1 (stable): STATIC_PROMPT + optional L1 hot block (KOS sender
+ *                      digest if MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED=true and
+ *                      cache hit) — cache_control: ephemeral
+ *    block 2 (session-specific): emailContext text — NO cache_control
+ *
+ *  Why split: M1 拼 STATIC + ctx 在一个 block, 整 block 是邮件-specific
+ *  内容, cross-email cache miss. PR-2f 把 stable prefix (STATIC + L1) 拆
+ *  出来后, 跨邮件 chat session 都能命中 stable block cache, ctx 单独 fresh
+ *  compute.
+ *
+ *  cache_control 始终在 block 1 (stable) 末 — Anthropic prompt cache 是
+ *  prefix match, breakpoint 之后的 block (block 2) 自然不参与 cache.
+ */
 function buildSystemBlocks(ctx: EmailContext | null): AnthropicSystemBlock[] {
-  const text = buildSystemPrompt(ctx)
-  return [{ type: 'text', text, cache_control: { type: 'ephemeral' } }]
+  const stableText = buildStableSystemPrompt(ctx)
+  const stableBlock: AnthropicSystemBlock = {
+    type: 'text',
+    text: stableText,
+    cache_control: { type: 'ephemeral' }
+  }
+  if (!ctx) return [stableBlock]
+  const ctxText = buildEmailContextSection(ctx)
+  if (!ctxText) return [stableBlock]
+  return [stableBlock, { type: 'text', text: ctxText }]
 }
 
 /** Sprint 19 — Tag the LAST tool in the array with cache_control so the
@@ -143,44 +165,78 @@ function decorateToolsWithCacheControl(
   return copy
 }
 
-function buildSystemPrompt(ctx: EmailContext | null): string {
-  const lines = [
+function buildStaticSystemHeader(): string {
+  return [
     'You are the AI assistant inside MailAgent, a macOS email client.',
     'The user is asking about the email currently open in the inbox panel.',
     'Be terse, concrete, and cite specific sentences from the email when relevant.',
     'Respond in the same language as the user message unless the user asks for translation.',
     'Use markdown when it improves readability (lists, code blocks, links). Keep prose tight.'
-  ]
-  // Sprint 4 review (Opus H-1): inline the email content into the system
-  // prompt so the model actually sees the email the user is asking about.
-  // Without this block, queries like "summarize this email" arrive at
-  // the upstream with zero email content and the system prompt's "the
-  // email currently open" claim becomes a lie.
-  if (ctx) {
-    lines.push('', '--- Email currently open ---')
-    lines.push(`internal_id: ${ctx.internalId}`)
-    if (ctx.subject) lines.push(`Subject: ${ctx.subject}`)
-    if (ctx.senderName || ctx.senderAddr) {
-      const name = ctx.senderName ?? ''
-      const addr = ctx.senderAddr ?? ''
-      lines.push(`From: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
+  ].join('\n')
+}
+
+/** Sprint 19 PR-2f — Build the stable system-prompt prefix (STATIC + optional
+ *  L1 hot block KOS sender digest). Stays cacheable across email switches
+ *  for the same sender; cache_control is applied by buildSystemBlocks.
+ *
+ *  L1 KOS digest only injects when:
+ *    - MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED=true (default false)
+ *    - emailContext present with non-empty senderAddr
+ *    - sender_digest_cache has a cached non-null entry (prefetch done +
+ *      KOS returned a hit)
+ *  Cache miss / null / flag off → no injection (graceful degrade).
+ */
+function buildStableSystemPrompt(ctx: EmailContext | null): string {
+  let text = buildStaticSystemHeader()
+  if (isKosL1HotBlockEnabled() && ctx?.senderAddr) {
+    const digest = getCachedSenderDigest(ctx.senderAddr)
+    if (typeof digest === 'string' && digest.length > 0) {
+      const trimmed = digest.length > 4000 ? digest.slice(0, 4000) + '\n... (truncated)' : digest
+      text += '\n\n--- KOS sender digest ---\n'
+      text += `sender: ${ctx.senderAddr}\n`
+      text += trimmed
+      text += '\n--- End KOS digest ---'
     }
-    if (ctx.dateIso) lines.push(`Date: ${ctx.dateIso}`)
-    // Notion 镜像 URL — Custom AI 不能直接 mutate Notion, 但可以引用链接给用户.
-    if (ctx.notionPageId) {
-      const pageNoDash = ctx.notionPageId.replace(/-/g, '')
-      lines.push(`Notion URL: https://www.notion.so/${pageNoDash}`)
-    }
-    lines.push('')
-    if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {
-      lines.push('Body (markdown):')
-      lines.push(ctx.bodyMarkdown)
-    } else {
-      lines.push('Body: (not available)')
-    }
-    lines.push('--- End email ---')
   }
+  return text
+}
+
+/** Sprint 19 PR-2f — Build the session-specific email-context section
+ *  (subject / sender / date / Notion URL / body markdown). Lives in a
+ *  separate Anthropic system block WITHOUT cache_control so the stable
+ *  prefix stays hot across email switches. */
+function buildEmailContextSection(ctx: EmailContext): string {
+  const lines: string[] = ['--- Email currently open ---']
+  lines.push(`internal_id: ${ctx.internalId}`)
+  if (ctx.subject) lines.push(`Subject: ${ctx.subject}`)
+  if (ctx.senderName || ctx.senderAddr) {
+    const name = ctx.senderName ?? ''
+    const addr = ctx.senderAddr ?? ''
+    lines.push(`From: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
+  }
+  if (ctx.dateIso) lines.push(`Date: ${ctx.dateIso}`)
+  if (ctx.notionPageId) {
+    const pageNoDash = ctx.notionPageId.replace(/-/g, '')
+    lines.push(`Notion URL: https://www.notion.so/${pageNoDash}`)
+  }
+  lines.push('')
+  if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {
+    lines.push('Body (markdown):')
+    lines.push(ctx.bodyMarkdown)
+  } else {
+    lines.push('Body: (not available)')
+  }
+  lines.push('--- End email ---')
   return lines.join('\n')
+}
+
+/** Legacy combined form kept for tests / external readers that still call
+ *  buildSystemPrompt directly. New code should use buildSystemBlocks. */
+function buildSystemPrompt(ctx: EmailContext | null): string {
+  const stable = buildStableSystemPrompt(ctx)
+  if (!ctx) return stable
+  const section = buildEmailContextSection(ctx)
+  return section ? `${stable}\n\n${section}` : stable
 }
 
 /** Sprint 19 — per-stream state machine for Anthropic SSE events.
@@ -551,6 +607,8 @@ export const __testing = {
   buildAnthropicMessages,
   buildSystemBlocks,
   buildSystemPrompt,
+  buildStableSystemPrompt,
+  buildEmailContextSection,
   decorateToolsWithCacheControl,
   createStreamState,
   processAnthropicEvent,

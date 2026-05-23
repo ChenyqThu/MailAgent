@@ -33,7 +33,8 @@ import {
   type ChatMessage,
   type ConfirmationTier
 } from '../chat_db'
-import { getMaxCostUsd, getMaxIter } from './config'
+import { getMaxCostUsd, getMaxIter, isKosL1HotBlockEnabled } from './config'
+import { prefetchSenderDigest } from '../kos/sender_digest_cache'
 import { defaultToolRegistry, type ToolRegistry } from './tools/registry'
 import {
   dispatchTools,
@@ -174,6 +175,15 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
   const tools = registry.toAnthropicSchema()
   const MAX_ITER = getMaxIter()
   const MAX_COST_USD_PER_TURN = getMaxCostUsd()
+
+  // Sprint 19 PR-2f — Fire-and-forget prefetch KOS sender digest. First
+  // iteration's buildSystemBlocks sync-reads getCachedSenderDigest to decide
+  // whether to inject the L1 hot block. We intentionally do NOT await:
+  // prefetch should not delay backend.stream start, and typically completes
+  // before the first content_block arrives.
+  if (isKosL1HotBlockEnabled() && args.emailContext?.senderAddr) {
+    void prefetchSenderDigest(args.emailContext.senderAddr)
+  }
 
   const baseHistory = chatHistoryToAnthropic(args.initialHistory)
   const priorTurns: AnthropicHistoryMessage[] = []

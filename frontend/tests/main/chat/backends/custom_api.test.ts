@@ -11,6 +11,12 @@
 import { describe, expect, test } from 'vitest'
 import { __testing } from '../../../../src/electron/main/chat/backends/custom_api'
 import type { ChatStreamEvent } from '../../../../src/electron/main/chat/types'
+import {
+  __resetCacheForTests as resetSenderDigestCache,
+  __setCacheClientForTests as setSenderDigestClient,
+  prefetchSenderDigest
+} from '../../../../src/electron/main/kos/sender_digest_cache'
+import type { KOSClient } from '../../../../src/electron/main/kos/client'
 
 const {
   buildSystemBlocks,
@@ -21,7 +27,7 @@ const {
 } = __testing
 
 describe('buildSystemBlocks — cache_control breakpoint', () => {
-  test('returns a single text block with cache_control:ephemeral', () => {
+  test('null ctx → single stable block with cache_control:ephemeral', () => {
     const blocks = buildSystemBlocks(null)
     expect(blocks).toHaveLength(1)
     expect(blocks[0]?.type).toBe('text')
@@ -29,7 +35,7 @@ describe('buildSystemBlocks — cache_control breakpoint', () => {
     expect(blocks[0]?.text.length).toBeGreaterThan(0)
   })
 
-  test('inlines email context into the block text', () => {
+  test('PR-2f: splits into [stable, ctx] blocks; cache_control only on stable', () => {
     const blocks = buildSystemBlocks({
       internalId: 42,
       subject: 'Q3 OKR review',
@@ -39,16 +45,129 @@ describe('buildSystemBlocks — cache_control breakpoint', () => {
       bodyMarkdown: 'Hello world',
       notionPageId: null
     })
-    const text = blocks[0]?.text ?? ''
-    expect(text).toContain('Q3 OKR review')
-    expect(text).toContain('Bob')
-    expect(text).toContain('bob@acme.com')
-    expect(text).toContain('Hello world')
+    expect(blocks).toHaveLength(2)
+    // Block 1: stable prefix (STATIC header) with cache_control
+    expect(blocks[0]?.cache_control).toEqual({ type: 'ephemeral' })
+    expect(blocks[0]?.text).toContain('You are the AI assistant inside MailAgent')
+    expect(blocks[0]?.text).not.toContain('Q3 OKR review') // ctx not in stable
+    // Block 2: session-specific email context; NO cache_control
+    expect(blocks[1]?.cache_control).toBeUndefined()
+    expect(blocks[1]?.text).toContain('Q3 OKR review')
+    expect(blocks[1]?.text).toContain('Bob')
+    expect(blocks[1]?.text).toContain('bob@acme.com')
+    expect(blocks[1]?.text).toContain('Hello world')
   })
 
-  test('buildSystemPrompt stays available for non-blocks consumers', () => {
-    // Existing logic still callable; cache_control wrap is additive only.
+  test('buildSystemPrompt stays available for non-blocks consumers (legacy combined form)', () => {
     expect(typeof buildSystemPrompt(null)).toBe('string')
+    // 含 ctx 时 legacy form 把 stable + ctx 拼一起
+    const combined = buildSystemPrompt({
+      internalId: 1,
+      subject: 'merged',
+      senderName: null,
+      senderAddr: null,
+      dateIso: null,
+      bodyMarkdown: 'body',
+      notionPageId: null
+    })
+    expect(combined).toContain('You are the AI assistant')
+    expect(combined).toContain('merged')
+    expect(combined).toContain('body')
+  })
+})
+
+// ============================================================
+// PR-2f — L1 hot block KOS digest injection
+// ============================================================
+describe('buildSystemBlocks — PR-2f L1 hot block', () => {
+  const ctx = {
+    internalId: 7,
+    subject: 'hello',
+    senderName: 'Bob',
+    senderAddr: 'bob@acme.com',
+    dateIso: '2026-05-22T10:00:00Z',
+    bodyMarkdown: 'body',
+    notionPageId: null
+  }
+
+  function fakeClient(
+    query: (q: string, opts?: { limit?: number; expand?: boolean }) => Promise<unknown[]>,
+    configured: boolean = true
+  ): KOSClient {
+    return { query, configured } as unknown as KOSClient
+  }
+
+  test('flag OFF → no L1 even if cache has digest', async () => {
+    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
+    resetSenderDigestCache()
+    setSenderDigestClient(
+      fakeClient(async () => [
+        { slug: 'people/bob-acme-com', chunk_text: 'CTO at Acme', score: 0.9 }
+      ])
+    )
+    await prefetchSenderDigest('bob@acme.com')
+
+    const blocks = buildSystemBlocks(ctx)
+    expect(blocks[0]?.text).not.toContain('KOS sender digest')
+    expect(blocks[0]?.text).not.toContain('CTO at Acme')
+    setSenderDigestClient(null)
+  })
+
+  test('flag ON + cache hit → injects L1 hot block into stable prefix', async () => {
+    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
+    resetSenderDigestCache()
+    setSenderDigestClient(
+      fakeClient(async () => [
+        { slug: 'people/bob-acme-com', chunk_text: 'CTO at Acme since 2024', score: 0.95 }
+      ])
+    )
+    await prefetchSenderDigest('bob@acme.com')
+
+    const blocks = buildSystemBlocks(ctx)
+    expect(blocks[0]?.text).toContain('--- KOS sender digest ---')
+    expect(blocks[0]?.text).toContain('sender: bob@acme.com')
+    expect(blocks[0]?.text).toContain('CTO at Acme since 2024')
+    expect(blocks[0]?.cache_control).toEqual({ type: 'ephemeral' })
+    expect(blocks[1]?.text).toContain('hello')
+    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
+    setSenderDigestClient(null)
+  })
+
+  test('flag ON + cache miss → no L1 (graceful no-injection)', () => {
+    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
+    resetSenderDigestCache()
+
+    const blocks = buildSystemBlocks(ctx)
+    expect(blocks[0]?.text).not.toContain('KOS sender digest')
+    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
+  })
+
+  test('flag ON + cache null entry (KOS returned no hits) → no L1', async () => {
+    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
+    resetSenderDigestCache()
+    setSenderDigestClient(fakeClient(async () => []))
+    await prefetchSenderDigest('bob@acme.com')
+
+    const blocks = buildSystemBlocks(ctx)
+    expect(blocks[0]?.text).not.toContain('KOS sender digest')
+    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
+    setSenderDigestClient(null)
+  })
+
+  test('flag ON + huge digest truncated to ≤ 4000 chars + (truncated) marker', async () => {
+    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
+    resetSenderDigestCache()
+    const big = 'x'.repeat(8000)
+    setSenderDigestClient(
+      fakeClient(async () => [{ slug: 'people/x', chunk_text: big, score: 0.9 }])
+    )
+    await prefetchSenderDigest('bob@acme.com')
+
+    const blocks = buildSystemBlocks(ctx)
+    expect(blocks[0]?.text).toContain('--- KOS sender digest ---')
+    expect(blocks[0]?.text).toContain('... (truncated)')
+    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
+    setSenderDigestClient(null)
   })
 })
 
