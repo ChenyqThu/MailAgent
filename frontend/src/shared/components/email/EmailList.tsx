@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query'
 import { List, type RowComponentProps } from 'react-window'
 import { Filter, ListChecks, Mail } from 'lucide-react'
 
@@ -169,8 +169,7 @@ function VirtualRow({
   )
 }
 
-function rowHeight(index: number, { rows, newIds }: RowProps): number {
-  const r = rows[index]
+function computeRowHeight(r: ListRow | undefined, newIds: ReadonlySet<number>): number {
   if (!r) return 28
   if (r.type === 'header') return 28
   if (r.type === 'loader') return 44
@@ -461,6 +460,10 @@ function listOptsForView(view: EmailView, limit: number): ListOpts {
 
 const PAGE_SIZE = 100
 const MAX_PAGES = 30 // safety cap — 3000 rows is enough for visual scrolling
+// 首屏 100 行渲染落一帧后, 静默拉到 5 页 (500 行). 旧 100 行借 keepPreviousData
+// 保留, 新 500 行到达后无缝替换, 用户感知不到这次升级.
+const INITIAL_PREFETCH_PAGES = 5
+const INITIAL_PREFETCH_DELAY_MS = 300
 
 export function EmailList(): React.ReactElement {
   const { t } = useTranslation()
@@ -513,6 +516,17 @@ export function EmailList(): React.ReactElement {
     setLastView(view)
     setPageCount(1)
   }
+  // 首屏 100 行落幕后静默升到 500: useQuery 已经拿着 limit=100 的结果在渲染,
+  // 这里把 pageCount 升到 5, queryKey 变 → React Query 后台拉 limit=500;
+  // keepPreviousData 让旧 100 行原地保留直到新 500 行就位, 无 spinner / 无抖动.
+  // mailbox / view 切换重置 pageCount=1 之后, 这条 effect 会再次跑一次.
+  useEffect(() => {
+    if (pageCount >= INITIAL_PREFETCH_PAGES) return
+    const t = window.setTimeout(() => {
+      setPageCount((c) => Math.max(c, INITIAL_PREFETCH_PAGES))
+    }, INITIAL_PREFETCH_DELAY_MS)
+    return () => window.clearTimeout(t)
+  }, [view, activeMailbox, pageCount])
   // Sprint 12.6 user-feedback — outside-click previously checked the whole
   // header container, which meant clicking on the inbox tabs / batch button
   // inside the header kept the popover open. We now scope the "inside"
@@ -550,11 +564,16 @@ export function EmailList(): React.ReactElement {
   // Sprint 16 — 主推送从 SSE 来 (useEventBridge invalidate ['emails']);
   // pollingInterval 仅作为 SSE 断线 fallback. SSE connected 时 fallback=false.
   const pollingInterval = usePollingFallback()
+  // `placeholderData: keepPreviousData` — limit 升级 / view 切换时保留上一次
+  // 结果, `<List>` 不会因为 data=undefined 暂态卸载, 滚动位置稳定. 配合下方
+  // 70% 阈值预加载, 用户感知不到分页边界. (react-best-practices · Client
+  // Data Fetching)
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['emails', view, activeMailbox, fetchLimit],
     queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit)),
     refetchInterval: pollingInterval,
-    refetchIntervalInBackground: false
+    refetchIntervalInBackground: false,
+    placeholderData: keepPreviousData
   })
 
   // Sprint 14 round 22 — cross-mailbox enrichment source.  Thread
@@ -574,17 +593,52 @@ export function EmailList(): React.ReactElement {
     enabled: crossMailbox !== null,
     // Sprint 16 — 同 EmailList 主查询, SSE 驱动 invalidate; polling 作 fallback
     refetchInterval: pollingInterval,
-    refetchIntervalInBackground: false
+    refetchIntervalInBackground: false,
+    placeholderData: keepPreviousData
   })
 
   const all = useMemo(() => data ?? [], [data])
   const crossAll = useMemo(() => crossQ.data ?? [], [crossQ.data])
+
+  // Pinned supplement — 用户固定的邮件不管多久前一定要出现在 pinned 桶里.
+  // listEnriched({mailbox, limit}) 只 cover 最新 fetchLimit 封, 老 pinned 会被
+  // 截掉. 这里按 internal_id 直接拉 pinned 邮件的 enriched 数据 (跨 mailbox),
+  // 后面 union 进 filtered 时 bypass 所有 view/tab/filter — pinned 语义就是
+  // 无视过滤强制显示.
+  const pinnedSupplementQ = useQuery({
+    queryKey: ['emails', 'pinned-supplement', pinnedList],
+    queryFn: () =>
+      mailApi.email.listEnriched({
+        internalIds: [...pinnedList],
+        limit: pinnedList.length
+      }),
+    enabled: pinnedList.length > 0,
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false,
+    placeholderData: keepPreviousData
+  })
+  const pinnedSupp = useMemo(
+    () => pinnedSupplementQ.data ?? [],
+    [pinnedSupplementQ.data]
+  )
+
   const tabFiltered = useMemo(() => applyTab(tab, all), [tab, all])
   const chipFiltered = useMemo(() => applyChipFilter(filter, tabFiltered), [filter, tabFiltered])
-  const filtered = useMemo(
+  const filteredBase = useMemo(
     () => applyMultiFilter(chipFiltered, selectedPriorities, selectedCategories),
     [chipFiltered, selectedPriorities, selectedCategories]
   )
+  // Union pinned 邮件进 filtered. dedupe by internal_id, pinned 永远进结果集
+  // 但仍走 partitionByDate → pinned 桶路由, 所以 UI 体验不变, 只是不会被丢掉.
+  const filtered = useMemo(() => {
+    if (pinnedSupp.length === 0) return filteredBase
+    const ids = new Set(filteredBase.map((e) => e.internal_id))
+    const out = filteredBase.slice()
+    for (const p of pinnedSupp) {
+      if (!ids.has(p.internal_id)) out.push(p)
+    }
+    return out
+  }, [filteredBase, pinnedSupp])
 
   // Limit useNewlyAddedIds to the first page so paginated reads don't make
   // the entire newly-loaded slab flash "NEW".
@@ -598,17 +652,21 @@ export function EmailList(): React.ReactElement {
   // every time the user clicked a thread head whose freshest message
   // was an outbox reply ("有的是我最新回的邮件...这种现在好像点击不了").
 
+  // counts 跟当前 tab (Focused/Other) 联动. 之前用 `all` 全集导致 meta line
+   // 显示 "5 封未读" 但点 unread filter 过滤出空——5 封 unread 都是 ai_priority
+   // ='low' 落在 Other tab, 在 Focused tab 被 applyTab 提前过滤掉了. 现在数字
+   // 严格跟 filter 看到的视图一致.
   const counts = useMemo(() => {
     let unread = 0
     let flagged = 0
     let failed = 0
-    for (const r of all) {
+    for (const r of tabFiltered) {
       if (!r.is_read) unread++
       if (r.is_flagged) flagged++
       if (r.sync_status === 'failed' || r.sync_status === 'dead_letter') failed++
     }
-    return { all: all.length, unread, flagged, failed }
-  }, [all])
+    return { all: tabFiltered.length, unread, flagged, failed }
+  }, [tabFiltered])
 
   // Per-category live count (for the filter popover hint).
   const categoryCounts = useMemo(() => {
@@ -621,12 +679,12 @@ export function EmailList(): React.ReactElement {
       '🔔 系统通知': 0,
       '🌐 外部沟通': 0
     }
-    for (const e of all) {
+    for (const e of tabFiltered) {
       const c = categoryOf(e)
       if (c !== null) out[c] += 1
     }
     return out
-  }, [all])
+  }, [tabFiltered])
   const priorityCounts = useMemo(() => {
     const out: Record<AIPriority, number> = {
       critical: 0,
@@ -635,9 +693,9 @@ export function EmailList(): React.ReactElement {
       normal: 0,
       low: 0
     }
-    for (const e of all) if (e.ai_priority) out[e.ai_priority] += 1
+    for (const e of tabFiltered) if (e.ai_priority) out[e.ai_priority] += 1
     return out
-  }, [all])
+  }, [tabFiltered])
 
   const groupLabels: Record<GroupKey, string> = useMemo(
     () => ({
@@ -671,8 +729,11 @@ export function EmailList(): React.ReactElement {
   const uniqueThreadIds = useMemo(() => {
     const set = new Set<string>()
     for (const e of all) if (e.thread_id) set.add(e.thread_id)
+    // pinned 邮件的线程也要列入, 否则 listByThread 拿不到整个 thread, pinned 桶
+    // 里只能看到孤立一封, 兄弟邮件全 miss.
+    for (const e of pinnedSupp) if (e.thread_id) set.add(e.thread_id)
     return Array.from(set)
-  }, [all])
+  }, [all, pinnedSupp])
 
   const threadQueries = useQueries({
     queries: uniqueThreadIds.map((tid) => ({
@@ -699,9 +760,12 @@ export function EmailList(): React.ReactElement {
     // collision (theoretically impossible since SQLite mailbox is a
     // column, but the merge order makes intent explicit).
     for (const e of crossAll) m.set(e.internal_id, e)
+    // pinned supplement 次之, all 仍优先 (它是当前 view 的最新结果, refetch
+    // 频率最高). pinned 同时也在 all 里时, all 的版本胜出.
+    for (const e of pinnedSupp) m.set(e.internal_id, e)
     for (const e of all) m.set(e.internal_id, e)
     return m
-  }, [all, crossAll])
+  }, [all, crossAll, pinnedSupp])
   const threadSupplement = useMemo(() => {
     const m = new Map<string, EnrichedEmailMeta[]>()
     uniqueThreadIds.forEach((tid, i) => {
@@ -755,6 +819,22 @@ export function EmailList(): React.ReactElement {
     () => flattenGroups(buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader),
     [buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader]
   )
+  // react-window v2 在 rows 引用变化时 (切 filter / tab / view / 收到新邮件)
+  // 会对所有 row 调一遍 rowHeight 算 total height. 之前 rowHeight 函数内联
+  // cleanSnippet (11 段正则) + AI strip check, 500 行级别累积 ≥ 200ms 触发
+  // macOS wait cursor. 这里一把 useMemo 算好高度数组, rowHeight 改成 O(1)
+  // 查表; deps 含 newIds 因为 "NEW" chip 会影响 ai-strip 显示.
+  const rowHeights = useMemo(() => {
+    const arr = new Array<number>(rows.length)
+    for (let i = 0; i < rows.length; i++) {
+      arr[i] = computeRowHeight(rows[i], newIds)
+    }
+    return arr
+  }, [rows, newIds])
+  const getRowHeight = useCallback(
+    (index: number): number => rowHeights[index] ?? 28,
+    [rowHeights]
+  )
 
   const priActive = !allPrioritiesSelected()
   const catActive = !allCategoriesSelected()
@@ -762,8 +842,12 @@ export function EmailList(): React.ReactElement {
 
   const handleRowsRendered = useCallback(
     (range: { stopIndex: number }) => {
-      // Load next page when we're within 8 rows of the rendered bottom.
-      if (range.stopIndex >= rows.length - 8 && showLoader) {
+      // 滚到 ~70% 或距底 8 行 (取更早) 就预取下一页. 配合上面 keepPreviousData,
+      // limit 升级期间旧 rows 保留挂载, 新结果到达后 React Query 原地替换, 用户
+      // 不会看到 spinner / 列表抖动 / 回顶部.
+      if (!showLoader) return
+      const triggerAt = Math.min(Math.floor(rows.length * 0.7), rows.length - 8)
+      if (range.stopIndex >= triggerAt) {
         setPageCount((c) => Math.min(c + 1, MAX_PAGES))
       }
     },
@@ -960,7 +1044,7 @@ export function EmailList(): React.ReactElement {
           <List<RowProps>
             rowComponent={VirtualRow}
             rowCount={rows.length}
-            rowHeight={rowHeight}
+            rowHeight={getRowHeight}
             rowProps={{
               rows,
               activeId,

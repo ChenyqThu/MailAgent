@@ -137,6 +137,9 @@ export interface ListOpts {
   isRead?: boolean
   isFlagged?: boolean
   hasNotion?: boolean
+  /** Restrict to a specific set of internal_id values. 配合其他 filter
+   *  叠加 (AND), 主要给 pinned-supplement / 已知 id 批量取 enriched 用. */
+  internalIds?: number[]
   limit?: number
   offset?: number
 }
