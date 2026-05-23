@@ -45,6 +45,7 @@ function loadEmailContext(emailId: number): EmailContext | null {
     const row = db
       .prepare(
         `SELECT m.internal_id, m.subject, m.sender_name, m.sender, m.date_received,
+                m.notion_page_id,
                 b.body_markdown
            FROM email_metadata m
            LEFT JOIN email_body b ON b.internal_id = m.internal_id
@@ -57,6 +58,7 @@ function loadEmailContext(emailId: number): EmailContext | null {
           sender_name: string | null
           sender: string | null
           date_received: string | null
+          notion_page_id: string | null
           body_markdown: string | null
         }
       | undefined
@@ -69,7 +71,8 @@ function loadEmailContext(emailId: number): EmailContext | null {
       senderName: row.sender_name,
       senderAddr: row.sender,
       dateIso: row.date_received,
-      bodyMarkdown: body && body.length > 0 ? body : null
+      bodyMarkdown: body && body.length > 0 ? body : null,
+      notionPageId: row.notion_page_id
     }
   } catch {
     return null

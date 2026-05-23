@@ -117,7 +117,7 @@ export function AiTab(): React.ReactElement {
           control="tag-list"
           label={t('settings.ai.fallbacks.label')}
           helper={t('settings.ai.fallbacks.helper')}
-          placeholder="gpt-5.4,claude-opus-4-7"
+          placeholder="gpt-5.5,claude-opus-4-7"
         />
         <EnvField
           envKey="LLM_CONTEXT_PAGE_ID"

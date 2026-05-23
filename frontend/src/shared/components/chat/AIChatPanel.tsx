@@ -30,7 +30,8 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import {
   STORAGE_AGENT_ID,
   STORAGE_AGENT_NAME,
-  STORAGE_CHANGE_EVENT
+  STORAGE_CHANGE_EVENT,
+  dispatchAgentStorageEvent
 } from '@shared/state/notion-agent-storage'
 
 import { BackendSelector, type BackendChoice } from './BackendSelector'
@@ -196,11 +197,11 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     select: (rows: EmailMeta[]) => rows.length
   })
 
-  // Sprint 18 follow-up — drive the onboarding placeholder. `notion-agent`
-  // is configured iff the `agentPageId` localStorage seam holds a value;
-  // `custom-api` needs the keychain slot `customApiKey` to be set.
-  // staleTime keeps the secret-status probe cheap when the user flips
-  // backend kinds repeatedly without leaving the panel.
+  // `notion-agent` 需要 localStorage 的 agentPageId seam; `custom-api` 实际
+  // 走 `getLlmApiKey()` (custom_api.ts:147) — 也就是 keychain `llmApiKey` slot
+  // 或 LLM_API_KEY env, 而不是同名的 `customApiKey` slot. 之前这里校验
+  // customApiKey 是历史误绑, 导致用户在 Settings → AI 配了 LLM_API_KEY
+  // (backend 能跑) 但 onboarding 仍报"未配置".
   const secretsQ = useQuery({
     queryKey: ['settings', 'secrets-status'],
     queryFn: () => mailApi.settings.secretsStatus(),
@@ -208,8 +209,8 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   })
   const backendConfigured = useMemo(() => {
     if (backend.kind === 'notion-agent') return (agentPageId ?? null) !== null
-    return secretsQ.data?.customApiKey === true
-  }, [backend.kind, agentPageId, secretsQ.data?.customApiKey])
+    return secretsQ.data?.llmApiKey === true
+  }, [backend.kind, agentPageId, secretsQ.data?.llmApiKey])
 
   const aiFields: AIFields | null = aiQ.data ?? null
   const aiFieldsCount = aiFields ? countNonNullAiFields(aiFields) : 0
@@ -479,13 +480,27 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     >
       {/* ── Header bar (40px) — title + New / History / Popout / Close ──
           Sprint 18 follow-up: dropped the Thread / Sync placeholder tabs.
-          They were never wired and the noise distracted from the AI flow. */}
-      <div className="h-10 border-b border-ink-border flex items-center px-3 shrink-0">
+          They were never wired and the noise distracted from the AI flow.
+          fullScreen (popout): pl-[78px] 给 macOS hiddenInset traffic light
+          让位; 整条 -webkit-app-region:drag 支持拖动窗口, 按钮容器单独标
+          no-drag 防止点击穿透到 drag handle. */}
+      <div
+        className={cn(
+          'h-10 border-b border-ink-border flex items-center shrink-0',
+          fullScreen ? 'pl-[78px] pr-3' : 'px-3'
+        )}
+        style={fullScreen ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
+      >
         <div className="flex items-center gap-1.5 text-aux font-medium text-ink-fg">
           <Sparkles size={13} strokeWidth={0} className="fill-coral text-coral" />
           {t('chat.title')}
         </div>
-        <div className="ml-auto flex items-center gap-1">
+        <div
+          className="ml-auto flex items-center gap-1"
+          style={
+            fullScreen ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined
+          }
+        >
           {/* + New chat — real wiring: chat.newSession() (Sprint 13). Resets
               activeSessionId so next send creates a fresh session. */}
           <HoverTip text={`${t('chat.newChat')}\n${t('chat.newChatHint')}`} side="bottom">
@@ -672,7 +687,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                 currentModel={backend.kind === 'custom-api' ? backend.model : null}
                 availableModels={
                   backend.kind === 'custom-api'
-                    ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4']
+                    ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5']
                     : []
                 }
                 onModelChange={(model) =>
@@ -706,6 +721,28 @@ function BackendOnboarding({
   const { t } = useTranslation()
   const backendLabel =
     kind === 'notion-agent' ? t('chat.backend.notionAgent') : t('chat.backend.customApi')
+
+  // Notion Agent 没有 Settings UI (Sprint 6 计划但没做), agent_page_id 走
+  // localStorage seam. 之前要从 dev console 手填, 现在 inline 一个表单, 用户
+  // 直接粘 page id 进去保存 → dispatch event → useSyncExternalStore 自动重读.
+  const isNotionAgent = kind === 'notion-agent'
+  const [pageIdDraft, setPageIdDraft] = useState('')
+  const [nameDraft, setNameDraft] = useState('')
+  const saveAgentBinding = (): void => {
+    const pageId = pageIdDraft.trim()
+    if (!pageId) return
+    try {
+      localStorage.setItem(STORAGE_AGENT_ID, pageId)
+      const name = nameDraft.trim()
+      if (name) localStorage.setItem(STORAGE_AGENT_NAME, name)
+      else localStorage.removeItem(STORAGE_AGENT_NAME)
+      dispatchAgentStorageEvent()
+    } catch {
+      // localStorage 在 sandbox / privacy 模式下可能拒写; 静默忽略, 用户会看到
+      // onboarding 没消失自然知道失败.
+    }
+  }
+
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-6 text-center gap-3">
       <div className="w-10 h-10 rounded-lg grid place-items-center bg-coral/15 border border-coral/30">
@@ -717,18 +754,60 @@ function BackendOnboarding({
       <div className="text-meta text-ink-fg-2 max-w-[260px]">
         {t('chat.onboarding.hint', { backend: backendLabel })}
       </div>
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        className={cn(
-          'mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
-          'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
-          'transition-colors duration-fast'
-        )}
-      >
-        <Settings size={12} strokeWidth={2} />
-        {t('chat.onboarding.openSettings')}
-      </button>
+
+      {isNotionAgent ? (
+        <div className="mt-1 w-full max-w-[300px] flex flex-col gap-1.5">
+          <input
+            type="text"
+            value={pageIdDraft}
+            onChange={(e) => setPageIdDraft(e.target.value)}
+            placeholder="agent page id (32-char hex)"
+            className={cn(
+              'w-full px-2.5 py-1.5 rounded-md text-meta font-mono',
+              'bg-ink-2 border border-ink-border focus:border-coral/60 focus:outline-none',
+              'text-ink-fg placeholder:text-ink-fg-3'
+            )}
+            spellCheck={false}
+          />
+          <input
+            type="text"
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            placeholder="agent name (可选, 用于显示)"
+            className={cn(
+              'w-full px-2.5 py-1.5 rounded-md text-meta',
+              'bg-ink-2 border border-ink-border focus:border-coral/60 focus:outline-none',
+              'text-ink-fg placeholder:text-ink-fg-3'
+            )}
+          />
+          <button
+            type="button"
+            onClick={saveAgentBinding}
+            disabled={pageIdDraft.trim().length === 0}
+            className={cn(
+              'mt-0.5 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md',
+              'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
+              'disabled:opacity-50 disabled:hover:bg-coral/100',
+              'transition-colors duration-fast'
+            )}
+          >
+            保存绑定
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className={cn(
+            'mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
+            'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
+            'transition-colors duration-fast'
+          )}
+        >
+          <Settings size={12} strokeWidth={2} />
+          {t('chat.onboarding.openSettings')}
+        </button>
+      )}
     </div>
   )
 }

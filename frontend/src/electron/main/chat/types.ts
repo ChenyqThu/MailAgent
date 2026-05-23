@@ -85,6 +85,9 @@ export interface EmailContext {
   dateIso: string | null
   /** Markdown form. Already capped at the dispatcher to MAX_BODY_CHARS. */
   bodyMarkdown: string | null
+  /** 邮件在 Notion 镜像页 ID, 用来让 Notion Agent 直接定位/更新/挂关联.
+   *  无 Notion 同步过的邮件为 null. */
+  notionPageId: string | null
 }
 
 export interface ChatStreamRequest {

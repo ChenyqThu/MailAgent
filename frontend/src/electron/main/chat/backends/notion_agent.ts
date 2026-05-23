@@ -77,6 +77,7 @@ interface NotionAgentResponse {
 function formatEmailContextHeader(ctx: EmailContext | null): string {
   if (!ctx) return ''
   const lines: string[] = ['[Email currently open]']
+  lines.push(`internal_id: ${ctx.internalId}`)
   if (ctx.subject) lines.push(`Subject: ${ctx.subject}`)
   if (ctx.senderName || ctx.senderAddr) {
     const name = ctx.senderName ?? ''
@@ -84,6 +85,13 @@ function formatEmailContextHeader(ctx: EmailContext | null): string {
     lines.push(`From: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
   }
   if (ctx.dateIso) lines.push(`Date: ${ctx.dateIso}`)
+  // Notion 镜像页 ID / URL: 让 Notion Agent 直接定位本邮件页, 方便更新内容
+  // 或 create relation 挂别的文档. 没同步过 Notion 时无该字段, 跳过.
+  if (ctx.notionPageId) {
+    const pageNoDash = ctx.notionPageId.replace(/-/g, '')
+    lines.push(`Notion page_id: ${ctx.notionPageId}`)
+    lines.push(`Notion URL: https://www.notion.so/${pageNoDash}`)
+  }
   lines.push('')
   if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {
     lines.push('Body:')

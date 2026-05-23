@@ -375,7 +375,7 @@
     },
     "backend": {
       "notionAgent": "Notion Agent",
-      "customApi": "Custom API",
+      "customApi": "Custom AI",
       "selectorLabel": "Backend",
       "agentSuffix": "· Jarvis",
       "modelsLabel": "Models",

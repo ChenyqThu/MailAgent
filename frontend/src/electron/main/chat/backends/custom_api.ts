@@ -91,6 +91,7 @@ function buildSystemPrompt(ctx: EmailContext | null): string {
   // email currently open" claim becomes a lie.
   if (ctx) {
     lines.push('', '--- Email currently open ---')
+    lines.push(`internal_id: ${ctx.internalId}`)
     if (ctx.subject) lines.push(`Subject: ${ctx.subject}`)
     if (ctx.senderName || ctx.senderAddr) {
       const name = ctx.senderName ?? ''
@@ -98,6 +99,11 @@ function buildSystemPrompt(ctx: EmailContext | null): string {
       lines.push(`From: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
     }
     if (ctx.dateIso) lines.push(`Date: ${ctx.dateIso}`)
+    // Notion 镜像 URL — Custom AI 不能直接 mutate Notion, 但可以引用链接给用户.
+    if (ctx.notionPageId) {
+      const pageNoDash = ctx.notionPageId.replace(/-/g, '')
+      lines.push(`Notion URL: https://www.notion.so/${pageNoDash}`)
+    }
     lines.push('')
     if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {
       lines.push('Body (markdown):')
