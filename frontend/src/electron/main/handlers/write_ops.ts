@@ -34,6 +34,7 @@
 import { ipcMain } from 'electron'
 
 import { callCli } from '../cli_runner'
+import { getWriteDb } from '../db'
 import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
 // ---- request shapes -------------------------------------------------------
@@ -215,6 +216,141 @@ export async function runUpdateFlag(
   })
 }
 
+/** Sprint 16 收尾 — IPC 直写 SQLite. flag/read/processing_status 操作不再 fork
+ *  Python CLI (~500-1000ms), 直接 better-sqlite3 transaction 写 email_metadata
+ *  + email_outbox dual target. mail-sync FanoutWorker 5s 内拾取派发 Mail.app
+ *  + Notion. 跟 CLI 路径行为等价, 仅延迟从 ~500ms 降到 ~5ms.
+ *
+ *  Echo prevention 跟 Python OutboxRepository.enqueue 一致: source 永不传
+ *  'notion_webhook' (那是 webhook handler 专用), 所以 target='notion' 一律
+ *  允许写入.
+ */
+export function writeFlagDirect(
+  internalId: number,
+  opts: UpdateFlagOpts
+): { ok: true; data: { outbox_ids: number[]; merged_ids: number[] } } | { ok: false; code: string; message: string } {
+  // 至少一个字段非空 (handler 层已经 guard, 这里 defensive)
+  if (
+    opts.isRead === undefined &&
+    opts.isFlagged === undefined &&
+    (typeof opts.processingStatus !== 'string' || opts.processingStatus.length === 0)
+  ) {
+    return {
+      ok: false,
+      code: 'E_INVALID_ARG',
+      message: 'writeFlagDirect requires at least one of isRead / isFlagged / processingStatus'
+    }
+  }
+
+  try {
+    const db = getWriteDb()
+    const now = Date.now() / 1000
+
+    // 1. UPDATE email_metadata: 部分字段 SET (跟 sync_store.update_local_flags 对齐)
+    const setParts: string[] = []
+    const setArgs: unknown[] = []
+    if (opts.isRead !== undefined) {
+      setParts.push('is_read = ?')
+      setArgs.push(opts.isRead ? 1 : 0)
+    }
+    if (opts.isFlagged !== undefined) {
+      setParts.push('is_flagged = ?')
+      setArgs.push(opts.isFlagged ? 1 : 0)
+    }
+    if (typeof opts.processingStatus === 'string' && opts.processingStatus.length > 0) {
+      setParts.push('processing_status = ?')
+      setArgs.push(opts.processingStatus)
+    }
+    setParts.push('updated_at = ?')
+    setArgs.push(now)
+    setArgs.push(internalId)
+
+    // 2. payload — outbox 派发到 Mail.app / Notion 用. Mail.app 只关心 read/flagged,
+    //    processing_status 是 Notion-only 字段 (Mail.app side 没对应概念).
+    const mailappPayload: Record<string, unknown> = {}
+    const notionPayload: Record<string, unknown> = {}
+    if (opts.isRead !== undefined) {
+      mailappPayload['is_read'] = opts.isRead
+      notionPayload['is_read'] = opts.isRead
+    }
+    if (opts.isFlagged !== undefined) {
+      mailappPayload['is_flagged'] = opts.isFlagged
+      notionPayload['is_flagged'] = opts.isFlagged
+    }
+    if (typeof opts.processingStatus === 'string' && opts.processingStatus.length > 0) {
+      notionPayload['processing_status'] = opts.processingStatus
+    }
+
+    // 3. transaction: UPDATE 主表 + 双 enqueue (mailapp + notion)
+    const tx = db.transaction(() => {
+      // metadata 主表
+      const result = db
+        .prepare(`UPDATE email_metadata SET ${setParts.join(', ')} WHERE internal_id = ?`)
+        .run(...setArgs)
+      if (result.changes === 0) {
+        // 邮件不存在 — 阻止后续 outbox 写入避免脏数据
+        throw new Error(`email_metadata.internal_id=${internalId} not found`)
+      }
+
+      const outboxIds: number[] = []
+      const mergedIds: number[] = []
+
+      // 复刻 Python OutboxRepository.enqueue 的 merge 语义:
+      // 同 (internal_id, op_type='flag_sync', target, status='pending') 已存在 → UPDATE payload
+      // 否则 INSERT 新行.
+      const enqueueOne = (target: 'mailapp' | 'notion', payload: Record<string, unknown>) => {
+        if (Object.keys(payload).length === 0) return // 空 payload 跳过
+        const payloadJson = JSON.stringify(payload, Object.keys(payload).sort())
+        const existing = db
+          .prepare(
+            `SELECT outbox_id, payload_json FROM email_outbox
+             WHERE internal_id = ? AND op_type = 'flag_sync' AND target = ? AND status = 'pending'
+             ORDER BY outbox_id DESC LIMIT 1`
+          )
+          .get(internalId, target) as { outbox_id: number; payload_json: string | null } | undefined
+        if (existing) {
+          let base: Record<string, unknown> = {}
+          try {
+            base = JSON.parse(existing.payload_json || '{}') as Record<string, unknown>
+          } catch {
+            /* malformed: 当 empty 处理 */
+          }
+          const merged = { ...base, ...payload }
+          const mergedJson = JSON.stringify(merged, Object.keys(merged).sort())
+          db.prepare(
+            `UPDATE email_outbox SET payload_json = ?, source = COALESCE(?, source), updated_at = ?
+             WHERE outbox_id = ?`
+          ).run(mergedJson, 'frontend_direct', now, existing.outbox_id)
+          mergedIds.push(existing.outbox_id)
+        } else {
+          const ins = db
+            .prepare(
+              `INSERT INTO email_outbox
+                 (internal_id, op_type, target, payload_json, source,
+                  status, attempts, last_error, next_retry_at,
+                  created_at, updated_at)
+               VALUES (?, 'flag_sync', ?, ?, 'frontend_direct',
+                       'pending', 0, NULL, NULL, ?, ?)`
+            )
+            .run(internalId, target, payloadJson, now, now)
+          outboxIds.push(Number(ins.lastInsertRowid))
+        }
+      }
+
+      enqueueOne('mailapp', mailappPayload)
+      enqueueOne('notion', notionPayload)
+
+      return { outbox_ids: outboxIds, merged_ids: mergedIds }
+    })
+
+    const out = tx()
+    return { ok: true, data: out }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    return { ok: false, code: 'E_WRITE_DIRECT', message }
+  }
+}
+
 /** Sprint 15 — `mailagent email flag` execution wrapper. Treated as a write
  *  (always needs auth + a queue write slot) since it inserts outbox rows even
  *  in batch mode. No dry-run knob plumbed yet (the CLI supports `--dry-run`
@@ -296,6 +432,11 @@ export function registerWriteOpsHandlers(): void {
             'notion:updateFlag requires at least one of isRead / isFlagged / processingStatus'
         }
       }
+      // Sprint 16 收尾 — 非 dry-run 走 IPC 直写 SQLite (~5ms), 不再 fork CLI.
+      // dry-run 仍走 CLI (它会跑完整校验 + 输出 schema-validated 结果, 给 preview UI 用).
+      if (!o.dryRun) {
+        return writeFlagDirect(idOrErr, o)
+      }
       return envelopeFromCli(runUpdateFlag(idOrErr, o))
     }
   )
@@ -344,7 +485,15 @@ export function registerWriteOpsHandlers(): void {
       // Single-row path — same validation as the other write handlers.
       const idOrErr = ensureInternalId(internalId, 'email:flag')
       if (typeof idOrErr !== 'number') return idOrErr
-      return envelopeFromCli(runEmailFlag(idOrErr, o))
+      // Sprint 16 收尾 — 单行非 batch 走 IPC 直写 SQLite (~5ms). batch mode 仍
+      // 走 CLI (CLI 已有完整 batch 报告 + checkpoint resume, 不重新造轮子).
+      // EmailFlagOpts 跟 UpdateFlagOpts 字段子集 (allowConcurrent 是 CLI-only,
+      // direct write 不需要 — 没有 pm2 conflict 概念).
+      return writeFlagDirect(idOrErr, {
+        isRead: o.isRead,
+        isFlagged: o.isFlagged,
+        processingStatus: o.processingStatus,
+      })
     }
   )
 }
