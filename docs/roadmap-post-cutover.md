@@ -327,7 +327,43 @@ mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=
 **估工作量**: 1-2 周 (有 outbox 模型作底).
 **触发条件**: davmail mode 稳定 + frontend Sprint 18 Settings 完成后启动.
 
-### 5.3 Frontend Sprint 18 — Settings 页面重做
+### 5.3 Frontend Sprint 19 — AI Agent Harness ✅ M1 ship (待 dogfood)
+
+**状态**：✅ M1 已 ship 6 commits 到 `feat/agent-harness` 分支（2026-05-22/23，~6261 LOC，146 tests 全过）；⚠️ **尚未 dogfood**，默认 `MAILAGENT_AGENT_HARNESS=0` 关，满足 eval gate (≥70%) 后翻默认 flag 合 main
+
+**M1 已 ship**（PR-1a → PR-1d.2）：
+- chat_db v3 schema：`chat_tool_call` audit + `wiki_pages` / `wiki_fts` / `agent_memory_kv` (M2 才填)
+- ToolRegistry + 10 builtin tool（7 read silent / 3 write preview/edit）
+- Anthropic tool_use SSE 解析 + cache_control 双 breakpoint
+- harness 外循环 (MAX_ITER=8 / MAX_COST_USD=0.5 / abort / cost cap)
+- ConfirmToolDialog renderer 接通 (preview/edit dialog + IPC chat:confirmTool)
+
+**测试覆盖**：
+- 9 test files / 146 tests pass (chat_db v3 migration + dispatcher legacy 不破坏 + Anthropic SSE state machine + dispatch confirm flow + harness 端到端 + ConfirmToolDialog UI + builtin tool catalog)
+- typecheck:node + typecheck:web exit 0
+- 不破坏 Sprint 4-18 任何 chat 现有测试 (legacy single-turn path 保留)
+
+**Dogfood TODO（待用户跑）**：
+- `MAILAGENT_AGENT_HARNESS=1 pnpm electron:dev` + 切 Custom AI 后端
+- 跑 [`docs/eval/email_scenarios.md`](./eval/email_scenarios.md) 20 scenario
+- 记 pass rate → `docs/eval/p1-baseline.md`
+- 期望 ≥ 70% (≥ 14/20) 才翻默认 flag
+
+**M2 起点**（dogfood 通过后）：
+- PR-2a FTS5 中文 smart wrapper（CJK auto `*` 通配）
+- PR-2b 附件文本化（pypdf/python-docx/python-pptx）+ `email_attachment_fts` + worker queue
+- PR-2c-2d Wiki 数据访问 + 4 wiki tool + L1 hot block + cache_control 集成 — **决策已锁**：自研 SQLite 表 + shadow git export，**不内嵌 gbrain 本体**（架构错配 Bun + PGLite + 50K page 过剩），只 port 两个低成本闪光点 (`[[wiki/path]]` 自动 link + `## Facts` 围栏)
+
+**关联文档**：
+- 架构（ship 状态）：[`architecture_agent_harness.md`](./architecture_agent_harness.md)
+- 设计 ref：[`agent-harness-design.md`](./agent-harness-design.md)
+- Eval gate：[`eval/email_scenarios.md`](./eval/email_scenarios.md)
+- Dogfood handoff：[`../frontend/SPRINT19-M1-HANDOFF.md`](../frontend/SPRINT19-M1-HANDOFF.md)
+- 决策记录：`~/.claude/plans/subagent-plan-lexical-moler.md`
+
+---
+
+### 5.4 Frontend Sprint 18 — Settings 页面重做
 
 [`frontend/SPRINT18-SETTINGS-HANDOFF.md`](../frontend/SPRINT18-SETTINGS-HANDOFF.md) 已有 handoff. 当前 SettingsPage.tsx 1174 行存在但需要 audit / refactor. 跟 dual-backend cutover 后的关联:
 - 加 backend 切换 UI (MAILAGENT_BACKEND 配置项)
@@ -336,7 +372,7 @@ mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=
 
 **触发条件**: davmail mode 观察期满 + UID backfill 完成.
 
-### 5.4 CalDAV 集成 (机会主义, 不阻塞)
+### 5.5 CalDAV 集成 (机会主义, 不阻塞)
 
 `src/calendar_notion/caldav_reader.py` + `build_llm_caldav_context` 已经写好 (Phase C). 但没在 LLM processor 里 inject. 加 3 行代码:
 

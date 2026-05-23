@@ -910,6 +910,36 @@ python3 scripts/dev/test_mail_reader.py
 - **优化文档**: `docs/applescript_id_optimization.md`
 - **Webhook Server**: `webhook-server/`（远程部署，一键更新：`./scripts/deploy-webhook.sh`）
 
+## AI Agent Harness（前端 Custom AI 多轮 agent，Sprint 19 起）
+
+跟下面 "LLM Agent（本地 LLM 接管 Notion Custom Agent）" **不是同一个东西** — 这是**前端 Custom AI chat panel** 的 multi-turn harness（用户在邮件 panel 里跟 LLM 对话时调工具），不是邮件分类那条单轮 LLM 路径。
+
+**状态**：✅ M1 已 ship 6 commits 到 `feat/agent-harness` 分支（2026-05-22/23, ~6261 LOC, 146 tests）；⚠️ **尚未 dogfood**，默认 `MAILAGENT_AGENT_HARNESS=0` 关着；满足 eval gate 后翻默认 flag 合 main。
+
+**核心能力**（开 flag + Custom AI 后端）：
+1. **Tool calling**：LLM 自驱调 10 个工具（7 read：email_search / get / body / list_thread / search_fulltext / get_ai_fields / attachment_list；3 write：email_flag / email_archive / email_draft_reply）
+2. **Multi-turn loop**：harness 自循环 ≤ 8 iter / ≤ $0.5 per turn，end_turn 终止
+3. **ConfirmToolDialog**：write tier 弹 dialog（preview = 只读 JSON / edit = 可编辑 textarea）→ 用户编辑值生效给 LLM 下轮看到
+4. **跨邮件检索**：`email_search_fulltext` 接通后端 FTS5 `email_body_fts`
+5. **Audit**：每个 tool_use 写 `chat_tool_call` 表（status / duration / user_edited_input）
+
+**关键约束**：
+- 仅 Custom AI 后端启用（Notion Agent CLI 不支持 tool_use 协议，gate 自动 fallback legacy single-turn）
+- prompt cache 双 breakpoint（system 末 + tools 末）保护 95% 命中率
+- 写操作必须 ConfirmToolDialog 确认（无 silent send）
+- abort signal 触发时 cancelConfirmationsForSession 清队列（防 deadlock）
+
+**关联文档**：
+- 架构（ship 状态）：[`docs/architecture_agent_harness.md`](./docs/architecture_agent_harness.md)
+- 设计 ref（12 段工程级）：[`docs/agent-harness-design.md`](./docs/agent-harness-design.md)
+- 评测 gate（20 scenario）：[`docs/eval/email_scenarios.md`](./docs/eval/email_scenarios.md)
+- Dogfood handoff：[`frontend/SPRINT19-M1-HANDOFF.md`](./frontend/SPRINT19-M1-HANDOFF.md)
+- 决策记录：`~/.claude/plans/subagent-plan-lexical-moler.md`
+
+**M2 起点**（dogfood 通过后）：FTS5 中文 smart wrapper + 附件文本化（PDF/docx/xlsx/pptx）+ LLM Wiki（SQLite 表 + shadow git export + 借鉴 gbrain `[[link]]` / `## Facts`，不内嵌 gbrain 本体）。
+
+---
+
 ## LLM Agent（本地 LLM 接管 Notion Custom Agent）
 
 邮件同步到 Notion 后，由本地 LLM（Anthropic Messages 兼容网关）填 11 个 AI 分类/分析字段 + Daily Digests relation，取代原来 Notion Custom Agent（Email Agent）。**默认关闭**。
