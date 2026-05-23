@@ -2043,8 +2043,11 @@ body:not([data-batch-mode='true']) #batch-bar {
 
 /* ── Week / Day view: timeline ──────────────────────────────────── */
 .cal-week { display: flex; flex-direction: column; height: 100%; }
+/* padding-right: 10px 补偿 wk-body 的 .scrollbar-thin (line 328 width:10px) —
+ * 配合下方 .wk-body { scrollbar-gutter: stable } 后, wk-body 内的 wk-grid
+ * 与 wk-headrow/wk-alldayrow 的内部 grid 宽度严格相等, 7 列不再累积漂移. */
 .wk-headrow,
-.wk-alldayrow { display: grid; flex-shrink: 0; }
+.wk-alldayrow { display: grid; flex-shrink: 0; padding-right: 10px; box-sizing: border-box; }
 
 .wk-corner {
   border-bottom: 1px solid rgb(var(--ink-border));
@@ -2131,7 +2134,10 @@ body:not([data-batch-mode='true']) #batch-bar {
 .allday-evt[data-status='CANCELLED'] { opacity: 0.4; text-decoration: line-through; }
 
 /* timeline body */
-.wk-body { flex: 1; min-height: 0; position: relative; overflow-y: auto; }
+/* scrollbar-gutter: stable — 即使无 events / 数据未撑满 viewport, 也预留 10px
+ * scrollbar gutter, 保证 wk-grid 内部宽度永远 = container - 10, 跟
+ * wk-headrow/wk-alldayrow (padding-right: 10px) 严格对齐, 7 列对齐不漂移. */
+.wk-body { flex: 1; min-height: 0; position: relative; overflow-y: auto; scrollbar-gutter: stable; }
 .wk-grid { display: grid; position: relative; }
 .hour-gutter { border-right: 1px solid rgb(var(--ink-border-soft)); }
 .hour-label { height: 48px; position: relative; }
