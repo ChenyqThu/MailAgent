@@ -156,6 +156,149 @@ class EmailSearchHit:
 
 
 # ============================================================
+# FTS5 query smart transform — CJK-aware 自然语言 → FTS5 syntax (PR-2a)
+# ============================================================
+#
+# Motivation: SQLite FTS5 用 unicode61 tokenizer, 连续 CJK 串当成单一 token
+# ('本周产品评审' 是 1 个 token), 所以 raw query '产品' 仅命中含独立 '产品'
+# token 的 doc, 漏掉 '产品评审' 这种合并 token. LLM/自然语言用户不会自己加
+# `*`, 这个 wrapper 自动按字符级 AND fallback 提升中文召回.
+#
+# 不做的事:
+# - 不引 jieba (C 扩展打包麻烦)
+# - 不切 prefix 之外的 FTS5 特殊语法 (NEAR / column filter)
+# - 含 punctuation / quote / wildcard 的 query 视为用户 explicit FTS5 syntax,
+#   原样下放
+
+
+def _is_cjk_char(c: str) -> bool:
+    """检测单字符是否 CJK / 日韩 (覆盖 BMP + 扩展 A/B-F + 假名 + 谚文)."""
+    if not c:
+        return False
+    cp = ord(c)
+    if 0x4E00 <= cp <= 0x9FFF:        # CJK Unified Ideographs
+        return True
+    if 0x3400 <= cp <= 0x4DBF:        # CJK Extension A
+        return True
+    if 0x20000 <= cp <= 0x2FA1F:      # CJK Extension B-F
+        return True
+    if 0x3040 <= cp <= 0x30FF:        # Hiragana / Katakana
+        return True
+    if 0xAC00 <= cp <= 0xD7AF:        # Hangul Syllables
+        return True
+    return False
+
+
+_FTS5_OPERATORS: frozenset = frozenset({'AND', 'OR', 'NOT'})
+
+
+def _is_simple_natural_query(q: str) -> bool:
+    """query 是否仅含字母/数字/空格/CJK (自然语言关键词).
+
+    含其他 punctuation (`"`, `*`, `(`, `:`, `+`, `-`, `@`, `.` 等) → False,
+    smart_query_transform 退回原 query 让 FTS5 自己 parse.
+    """
+    for c in q:
+        if c.isalnum() or c.isspace() or _is_cjk_char(c):
+            continue
+        return False
+    return True
+
+
+def _wrap_token_cjk_aware(tok: str) -> str:
+    """单 token 转 FTS5 片段.
+
+    规则:
+        纯拉丁:  原样 (FTS5 默认整词 match)
+        单字 CJK: 'X*' (prefix 通配)
+        多字 CJK: '(token* OR (c1* AND c2* AND ...))'
+                  整 token prefix 优先, 字符级 AND fallback (unicode61
+                  chunk-level token 命不中时兜底)
+        混合 token (CJK + Latin): 按字符类切 segment, 各自处理, AND 连
+    """
+    if not tok:
+        return ''
+
+    segments: list = []  # list[tuple[bool, str]]
+    current_cjk: Optional[bool] = None
+    current: str = ''
+    for c in tok:
+        c_cjk = _is_cjk_char(c)
+        if current_cjk is None:
+            current_cjk = c_cjk
+            current = c
+        elif c_cjk == current_cjk:
+            current += c
+        else:
+            segments.append((current_cjk, current))
+            current = c
+            current_cjk = c_cjk
+    if current and current_cjk is not None:
+        segments.append((current_cjk, current))
+
+    if len(segments) == 1:
+        is_cjk, seg = segments[0]
+        if not is_cjk:
+            return seg
+        if len(seg) == 1:
+            return f'{seg}*'
+        chars_and = ' AND '.join(f'{c}*' for c in seg)
+        return f'({seg}* OR ({chars_and}))'
+
+    parts: list = []
+    for is_cjk, seg in segments:
+        if not is_cjk:
+            parts.append(seg)
+        elif len(seg) == 1:
+            parts.append(f'{seg}*')
+        else:
+            chars_and = ' AND '.join(f'{c}*' for c in seg)
+            parts.append(f'({seg}* OR ({chars_and}))')
+    return '(' + ' AND '.join(parts) + ')'
+
+
+def smart_query_transform(query: str) -> str:
+    """把简单自然语言关键词 query 转成 FTS5-friendly query (CJK 感知).
+
+    转换规则:
+        - 空 / 仅空白 → 原样
+        - 含 FTS5 特殊字符 (引号/通配/括号/punct 等) → 原样
+        - 含 AND/OR/NOT 全大写 operator token → 原样
+        - 否则按空白 split token, 逐 token 用 _wrap_token_cjk_aware 包装,
+          多 token 用 AND 连接
+
+    Examples:
+        '产' → '产*'
+        '产品' → '(产品* OR (产* AND 品*))'
+        '本周产品评审' → '(本周产品评审* OR (本* AND 周* AND 产* AND 品* AND 评* AND 审*))'
+        'redis 超时' → 'redis AND (超时* OR (超* AND 时*))'
+        'redis timeout' → 'redis AND timeout'
+        'Redis超时' → '(Redis AND (超时* OR (超* AND 时*)))'
+        '"redis timeout"' → '"redis timeout"'   (raw, 含 quote)
+        'redis AND timeout' → 'redis AND timeout'  (raw, 含 operator)
+        '产品*' → '产品*'  (raw, 含 wildcard)
+    """
+    if not query or not query.strip():
+        return query
+    q = query.strip()
+
+    if not _is_simple_natural_query(q):
+        return q
+
+    tokens = q.split()
+    if any(t in _FTS5_OPERATORS for t in tokens):
+        return q
+
+    wrapped = [_wrap_token_cjk_aware(t) for t in tokens]
+    wrapped = [w for w in wrapped if w]
+    if not wrapped:
+        return q
+    if len(wrapped) == 1:
+        return wrapped[0]
+    return ' AND '.join(wrapped)
+
+
+# ============================================================
 # Repository
 # ============================================================
 
@@ -610,6 +753,35 @@ class EmailRepository:
             return hits
         finally:
             conn.close()
+
+    def search_email_bodies_smart(
+        self,
+        query: str,
+        *,
+        limit: int = 50,
+        mailbox: Optional[str] = None,
+        since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
+    ) -> list[EmailSearchHit]:
+        """Smart wrapper of search_email_bodies — CJK-aware 自动改写 query (PR-2a).
+
+        转换由 ``smart_query_transform`` 实现 — 自然语言 '产品' → FTS5
+        '(产品* OR (产* AND 品*))' 等. 主要给 LLM tool / 自然语言用户用.
+        CLI / 高级用户继续走 ``search_email_bodies`` 传完整 FTS5 syntax 即可.
+        """
+        transformed = smart_query_transform(query)
+        if transformed != query:
+            logger.debug(
+                f"search_email_bodies_smart: query={query!r} → "
+                f"transformed={transformed!r}"
+            )
+        return self.search_email_bodies(
+            transformed,
+            limit=limit,
+            mailbox=mailbox,
+            since_date=since_date,
+            until_date=until_date,
+        )
 
     # ============================================================
     # WRITE

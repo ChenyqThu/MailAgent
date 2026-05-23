@@ -27,15 +27,23 @@
 
 ## 3. PR 拆分（7 PR，~3-4 周日历）
 
-| PR | 范围 | LOC est |
-|---|---|---|
-| PR-2a | FTS5 中文 smart wrapper（CJK auto `*` 通配） — 本地 fallback | ~300 |
-| PR-2b | 附件文本化 (pypdf/python-docx/python-pptx/xlsx) + `email_attachment_fts` — 本地 fallback | ~700 |
-| PR-2c | **KOS client (TS + Py)** + .env config + health check + retry + circuit breaker | ~500 |
-| PR-2d | **Producer**：mail-sync `_sync_single_email_v3` 完成后异步 `KOSClient.ingest`；priority floor; KOS 不可达不阻塞 | ~400 |
-| PR-2e | **Consumer tools**：`kos_query` + `kos_digest` 加 `defaultToolRegistry`（silent tier, category=meta） | ~400 |
-| PR-2f | L1 hot block 注入：chat 启动时按 sender 异步 `kos_digest(people/{slug})` → system block | ~300 |
-| PR-2g | dogfood + eval：20 scenario + 5 KOS 专属新加；CLAUDE.md / arch doc 更新；翻 `MAILAGENT_KOS_ENABLED=1` 默认 | — |
+| PR | 状态 | 范围 | LOC |
+|---|---|---|---|
+| PR-2a | ✅ ship 2026-05-23 | FTS5 中文 smart wrapper（CJK auto prefix + char-AND fallback + token-AND 融合）— 本地 fallback | +675 / -31 (含 fixture v14 fix + 38 新单测) |
+| PR-2b | ⏳ pending | 附件文本化 (pypdf/python-docx/python-pptx/xlsx) + `email_attachment_fts` — 本地 fallback | ~700 |
+| PR-2c | ⏳ blocked (KOS auth info) | **KOS client (TS + Py)** + .env config + health check + retry + circuit breaker | ~500 |
+| PR-2d | ⏳ blocked (PR-2c) | **Producer**：mail-sync `_sync_single_email_v3` 完成后异步 `KOSClient.ingest`；priority floor; KOS 不可达不阻塞 | ~400 |
+| PR-2e | ⏳ blocked (PR-2c) | **Consumer tools**：`kos_query` + `kos_digest` 加 `defaultToolRegistry`（silent tier, category=meta） | ~400 |
+| PR-2f | ⏳ blocked (PR-2e) | L1 hot block 注入：chat 启动时按 sender 异步 `kos_digest(people/{slug})` → system block | ~300 |
+| PR-2g | ⏳ blocked (PR-2f) | dogfood + eval：20 scenario + 5 KOS 专属新加；CLAUDE.md / arch doc 更新；翻 `MAILAGENT_KOS_ENABLED=1` 默认 | — |
+
+**PR-2a ship 摘要**（commit 待确认）:
+- 后端 `src/repository/email_repository.py`：`smart_query_transform` 模块级 fn + `EmailRepository.search_email_bodies_smart` method。算法 = 单字 CJK 加 `*`、多字 CJK 走 `(整 prefix OR 字符 AND fallback)`、多 token 间 AND、含 punct/operator 直接 raw passthrough。
+- 前端 `frontend/src/electron/main/handlers/email.ts`：`smartQueryTransform` helper 跟 Python 端 1:1 算法对齐，`searchEmails` 加 `mode?: 'smart' | 'raw'` 参数（default smart）。
+- 默认 smart 全面铺开：CLI `mailagent email search` (加 `--raw` 关掉)、webhook handler `handle_search_email_bodies` (加 `mode` 字段)、chat tool `email_search_fulltext`（LLM 自然语言直接传）。
+- CLAUDE.md Phase 3 段更新算法说明 + 实测 CLI `产品` smart → `(产品* OR (产* AND 品*))` 命中 337 → 1640 (~5×) 召回提升、`产品评审` smart → 命中 2 封含 `产品评审会` token 邮件。
+- 单测：后端 20 个 (`TestSmartQueryTransform` 14 个 pure fn + `TestSearchEmailBodiesSmart` 6 个集成测) + 前端 18 个 (`smartQueryTransform` 14 个 + `searchEmails smart mode` 4 个) 全过；464 个后端总测 + 74 个前端涉及面测试全绿。
+- 顺手修了一个 M1 ship 时遗漏的 `frontend/tests/fixtures/sync-store-fixture.ts` v14 schema 缺 `ai_priority` / `ai_action` 列的 pre-existing 10 个测试 fail。
 
 **保留**（M1 PR-1a 已建）：chat_db v3 `wiki_pages` / `wiki_fts` / `agent_memory_kv` 表保留**不主动写**，可能 M3 用作 KOS 不可达时的离线 cache。
 

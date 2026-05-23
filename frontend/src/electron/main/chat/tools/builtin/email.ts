@@ -231,19 +231,21 @@ export const emailListThread: ToolDef = {
 export const emailSearchFulltext: ToolDef = {
   name: 'email_search_fulltext',
   description:
-    'Full-text search across all synced email bodies using SQLite FTS5. ' +
-    'Supports phrases ("team meeting"), boolean (redis AND timeout), and prefix ' +
-    'wildcards (meet*). For Chinese queries unicode61 tokenizer is single-char — ' +
-    'use prefix wildcard like "产品*" or split the phrase into individual chars with OR. ' +
-    'Returns ranked hits with snippet + sender + date.',
+    'Full-text search across all synced email bodies (subject + sender + body) ' +
+    'using SQLite FTS5. Pass natural-language keywords like "产品评审" or ' +
+    '"redis timeout" — they are automatically CJK-aware expanded (smart mode, ' +
+    'PR-2a) so Chinese chunked tokens are handled. Also accepts explicit FTS5 ' +
+    'syntax: phrases ("team meeting"), boolean (redis AND timeout), prefix ' +
+    '(meet*). Returns ranked hits with snippet + sender + date (bm25 rank, ' +
+    'smaller = more relevant).',
   inputSchema: {
     type: 'object',
     properties: {
       query: {
         type: 'string',
         description:
-          'FTS5 query string. Examples: "redis timeout" (phrase) | "redis AND timeout" | ' +
-          '"meet* OR conference" | "产品*" (Chinese prefix).'
+          'Natural-language keywords or FTS5 syntax. Examples: "产品评审" | ' +
+          '"redis timeout" | "redis AND timeout" | "meet*" | "\\"team meeting\\"".'
       },
       mailbox: { type: 'string', description: 'Limit to mailbox. Omit for all.' },
       since: { type: 'string', description: 'ISO date YYYY-MM-DD.' },
@@ -262,6 +264,7 @@ export const emailSearchFulltext: ToolDef = {
     const q = asStr(i.query)
     if (!q) return err('E_INVALID_ARG', 'query is required (non-empty string)', start)
     try {
+      // PR-2a: searchEmails 内部默认 smart mode, CJK/自然语言 query 自动改写
       const result = ipcSearchEmails({
         query: q,
         mailbox: asStr(i.mailbox),

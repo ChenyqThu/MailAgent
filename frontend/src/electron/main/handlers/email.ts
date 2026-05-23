@@ -57,6 +57,93 @@ export interface SearchOpts {
   since?: string
   until?: string
   limit?: number
+  /**
+   * PR-2a — CJK-aware FTS5 query 改写策略.
+   *   'smart' (default): 自然语言关键词 → smartQueryTransform 改写
+   *     ('产品' → '(产品* OR (产* AND 品*))' 等), 解决 unicode61 chunk-level
+   *     token 中文搜索命不中的洞.
+   *   'raw': 不改写, 用户已 explicit FTS5 syntax (双引号/通配/AND/OR/NOT 等).
+   * 含 FTS5 特殊字符的 query 即使 mode='smart' 也会自动判定 raw passthrough.
+   */
+  mode?: 'smart' | 'raw'
+}
+
+// ── PR-2a: FTS5 query smart transform — CJK-aware natural-language → FTS5 ──
+//
+// 跟 src/repository/email_repository.py:smart_query_transform 算法保持一致,
+// 测试也对齐 (Python TestSmartQueryTransform / TS smartQueryTransform suite).
+// 改其中一边时记得同步另一边, 否则 chat tool 跟 CLI / webhook 行为分叉.
+
+const FTS5_OPERATORS = new Set(['AND', 'OR', 'NOT'])
+
+function isCjkChar(c: string): boolean {
+  if (!c) return false
+  const cp = c.codePointAt(0)
+  if (cp === undefined) return false
+  // CJK Unified Ideographs + Extension A + Extension B-F + 假名 + 谚文
+  if (cp >= 0x4e00 && cp <= 0x9fff) return true
+  if (cp >= 0x3400 && cp <= 0x4dbf) return true
+  if (cp >= 0x20000 && cp <= 0x2fa1f) return true
+  if (cp >= 0x3040 && cp <= 0x30ff) return true
+  if (cp >= 0xac00 && cp <= 0xd7af) return true
+  return false
+}
+
+function isSimpleNaturalQuery(q: string): boolean {
+  // 仅含 alphanum / space / CJK → smart 改写; 含 punct / FTS5 syntax → raw
+  for (const c of q) {
+    if (/[\p{L}\p{N}]/u.test(c)) continue
+    if (/\s/.test(c)) continue
+    if (isCjkChar(c)) continue
+    return false
+  }
+  return true
+}
+
+function wrapTokenCjkAware(tok: string): string {
+  if (!tok) return ''
+  // 按字符类切 segment
+  const segments: Array<{ isCjk: boolean; seg: string }> = []
+  let currentCjk: boolean | null = null
+  let current = ''
+  for (const c of tok) {
+    const cCjk = isCjkChar(c)
+    if (currentCjk === null) {
+      currentCjk = cCjk
+      current = c
+    } else if (cCjk === currentCjk) {
+      current += c
+    } else {
+      segments.push({ isCjk: currentCjk, seg: current })
+      current = c
+      currentCjk = cCjk
+    }
+  }
+  if (current && currentCjk !== null) {
+    segments.push({ isCjk: currentCjk, seg: current })
+  }
+
+  const wrapSeg = ({ isCjk, seg }: { isCjk: boolean; seg: string }): string => {
+    if (!isCjk) return seg
+    if ([...seg].length === 1) return `${seg}*`
+    const chars = [...seg].map((c) => `${c}*`)
+    return `(${seg}* OR (${chars.join(' AND ')}))`
+  }
+
+  if (segments.length === 1) return wrapSeg(segments[0]!)
+  return '(' + segments.map(wrapSeg).join(' AND ') + ')'
+}
+
+export function smartQueryTransform(query: string): string {
+  if (!query || !query.trim()) return query
+  const q = query.trim()
+  if (!isSimpleNaturalQuery(q)) return q
+  const tokens = q.split(/\s+/).filter((t) => t.length > 0)
+  if (tokens.some((t) => FTS5_OPERATORS.has(t))) return q
+  const wrapped = tokens.map(wrapTokenCjkAware).filter((w) => w.length > 0)
+  if (wrapped.length === 0) return q
+  if (wrapped.length === 1) return wrapped[0]!
+  return wrapped.join(' AND ')
 }
 
 // Frontend-only enriched view shapes (NOT in cli.gen.ts) live in
@@ -436,6 +523,9 @@ export function searchEmails(opts: SearchOpts): SearchResult {
   if (!opts.query || opts.query.trim().length === 0) {
     return { items: [], total_indexed }
   }
+  const mode: 'smart' | 'raw' = opts.mode ?? 'smart'
+  // PR-2a: smart 模式按 CJK-aware 规则改写; 'raw' / 含 FTS5 special char 时 passthrough
+  const effectiveQuery = mode === 'smart' ? smartQueryTransform(opts.query) : opts.query
   const db = getDb()
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const filterClauses: string[] = []
@@ -483,7 +573,7 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     ${filterSql}
     ORDER BY rank ASC
     LIMIT ?`
-  const rows = prep(db, sql).all(opts.query, ...filterParams, limit) as SearchRow[]
+  const rows = prep(db, sql).all(effectiveQuery, ...filterParams, limit) as SearchRow[]
   const items: EmailSearch_SearchHit[] = rows.map((row) => ({
     internal_id: row.internal_id,
     subject: row.subject ?? '',
@@ -497,7 +587,11 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     ai_priority: mapPriority(row.priority_raw),
     lang: mapLanguage(row.lang_raw)
   }))
-  return { items, total_indexed }
+  const result: SearchResult = { items, total_indexed, mode }
+  if (effectiveQuery !== opts.query) {
+    result.transformed_query = effectiveQuery
+  }
+  return result
 }
 
 // ---- Enriched list + mailbox + AI fields (renderer-only views) -------------

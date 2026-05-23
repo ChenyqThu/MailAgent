@@ -938,6 +938,9 @@ python3 scripts/dev/test_mail_reader.py
 
 **M2 起点 — 决策反转**（2026-05-23）：原"自研 SQLite wiki"撤销，改为接入用户已有的 **Jarvis KOS v2**（gbrain fork on mac mini @ `kos.chenge.ink` + `127.0.0.1:7225`）。MailAgent 作为 KOS 的第 4 个消费者（Notion Knowledge Agent / OpenClaw / Feishu signal detector 已在用）。Producer：mail-sync 邮件 sync 完异步推 `/ingest`（path `mail/{internal_id}` + `scope:mail-agent` frontmatter）让 KOS 自动抽实体并入主图。Consumer：chat agent `kos_query` / `kos_digest` tool 调跨域知识。本地 FTS5 中文 wrapper + 附件文本化（PR-2a/2b）保留作 KOS 不可达时的 fallback。完整设计：[`docs/kos-integration-design.md`](./docs/kos-integration-design.md) + M2 路线 [`frontend/SPRINT19-M2-PLAN.md`](./frontend/SPRINT19-M2-PLAN.md)。
 
+**M2 进度**：
+- ✅ PR-2a (2026-05-23) — FTS5 中文 smart wrapper ship。后端 `smart_query_transform` + `search_email_bodies_smart` + 前端 `smartQueryTransform` 双份算法对齐。CLI / webhook handler / chat tool 全部默认 smart 模式。20 个后端单测 + 18 个前端单测全过。详见 Phase 3 段 / `src/repository/email_repository.py:smart_query_transform`。
+
 ---
 
 ## LLM Agent（本地 LLM 接管 Notion Custom Agent）
@@ -1542,20 +1545,37 @@ for h in hits:
 
 ### Phase 3 FTS5 全文搜索
 
-`search_email_bodies(query, *, limit=50, mailbox=None, since_date=None, until_date=None)` 支持 FTS5 完整语法：
+两个入口（PR-2a 起 Sprint 19 M2）：
+
+- `search_email_bodies(query, ...)` — **raw FTS5**，query 原样下放给 SQLite (`MATCH`)。
+- `search_email_bodies_smart(query, ...)` — **CJK-aware smart wrapper**（PR-2a, 推荐给自然语言 / LLM tool 用）。
+
+两者都支持 FTS5 完整语法：
 - 短语：`"team meeting"`
 - 布尔：`redis AND timeout`、`meeting NOT canceled`、`team OR group`
 - 前缀通配：`meet*`、`产品*`
 - 邻近：`redis NEAR(timeout, 5)`
 
-**中文搜索注意**：SQLite 自带的 `unicode61` tokenizer 把**连续 CJK 字符当一个 token**（不分词），精确搜 "产品" 命不中 token "本周产品评审"。变通：用 `产品*` 前缀通配匹配。邮件正文里如果 "产品" 周围有 markdown 标记（`*` / `[` / 空格）会自动切出独立 token，所以生产邮件大多能直接搜中文 —— 但**单测和纯中文文本必须用 `*`**。未来可接 jieba 或 signal-fts5-tokenizer 提升质量。
+**Smart wrapper 算法**（`src.repository.email_repository.smart_query_transform`，跟前端 `frontend/src/electron/main/handlers/email.ts:smartQueryTransform` 1:1 对齐）：
+
+- 单字 CJK → `X*`（prefix 通配）
+- 多字 CJK token (≥2) → `(token* OR (c1* AND c2* AND ...))`：整 token prefix 优先，字符级 AND 兜底。例：`产品` → `(产品* OR (产* AND 品*))`，`本周产品评审` → `(本周产品评审* OR (本* AND 周* AND 产* AND 品* AND 评* AND 审*))`
+- 多 token 间 → AND 连接：`redis 超时` → `redis AND (超时* OR (超* AND 时*))`
+- 单 token 含 CJK + 拉丁混合（如 `Redis超时`）→ 按字符类切 segment，segment 间 AND
+- 含 punctuation / 通配 / quote / FTS5 operator（AND/OR/NOT）→ 视为用户 explicit FTS5 syntax，**原样下放不动**
+
+**中文搜索注意**：SQLite 自带的 `unicode61` tokenizer 把**连续 CJK 字符当一个 token**（不分词），精确搜 `产品` 命不中 token `本周产品评审`。Smart wrapper 自动处理这个洞 —— 自然语言 query `产品` 自动改写成 `(产品* OR (产* AND 品*))`，实测召回 4 倍提升。CLI 默认走 smart（`mailagent email search "产品"`），传 `--raw` 关掉 wrapper 走原 FTS5。Webhook payload 加 `mode='raw'` 同理。未来可接 jieba 或 signal-fts5-tokenizer 进一步提升质量。
 
 **Webhook 端**: `search_email_bodies` event（自动从 Redis 消费），响应：
 ```jsonc
-{"status": "success", "query": "...", "total_hits": 2, "latency_ms": 7,
+{"status": "success", "query": "产品", "mode": "smart",
+ "transformed_query": "(产品* OR (产* AND 品*))",  // 仅 smart + 真改写时有
+ "total_hits": 4, "latency_ms": 7,
  "hits": [{"internal_id": ..., "subject": ..., "sender": ..., "snippet": "...<mark>...</mark>...",
            "rank": -1.76, "notion_url": "..."}]}
 ```
+
+**前端 chat agent tool**（`email_search_fulltext`）也默认 smart — LLM 可以直接传 `"产品评审"`、`"redis 超时"` 这种自然语言关键词，wrapper 自动 CJK-aware 改写。
 
 详见 [`docs/phase3-complete.md`](./docs/phase3-complete.md)。
 

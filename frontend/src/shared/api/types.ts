@@ -48,10 +48,16 @@ export type ResyncResult = MailagentEmailResync['data']
  *
  * Both fields are required; an empty query still returns `items: []` plus
  * the cached `total_indexed`.
+ *
+ * PR-2a: 当 smart mode 改写了 query (CJK-aware FTS5 transform) 时,
+ * transformed_query 含实际打给 FTS5 的 query, UI 可显示 "your query
+ * '产品' was expanded to ..." 提示. 跟原 query 一样时省略.
  */
 export interface SearchResult {
   items: SearchHit[]
   total_indexed: number
+  transformed_query?: string
+  mode?: 'smart' | 'raw'
 }
 
 // ---- Sprint 2 frontend-only enriched views ---------------------------------

@@ -41,7 +41,12 @@ export function buildFixtureDb(): Database.Database {
       -- better-sqlite3 native binding ABI is rebuilt.
       is_pinned INTEGER DEFAULT 0,
       pinned_at REAL,
-      is_important INTEGER DEFAULT 0
+      is_important INTEGER DEFAULT 0,
+      -- v14 (Sprint 16 cutover-day): 镜像 LLM AI 字段到主表, 让 EmailRow
+      -- 渲染 + searchEmails palette 不再绕 llm_processing.labels_json
+      -- (see d0a8086). fixture 之前漏 sync → searchEmails 测试全 fail.
+      ai_priority TEXT,
+      ai_action TEXT
     );
     CREATE INDEX idx_email_date ON email_metadata(date_received DESC);
     CREATE INDEX idx_email_sync_status ON email_metadata(sync_status);

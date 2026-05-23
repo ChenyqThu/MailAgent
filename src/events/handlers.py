@@ -1141,22 +1141,29 @@ class EventHandlers:
         return result_data
 
     async def handle_search_email_bodies(self, event: Dict):
-        """FTS5 全文搜索邮件正文 + subject + sender（v4 Phase 3）.
+        """FTS5 全文搜索邮件正文 + subject + sender（v4 Phase 3, PR-2a smart 默认）.
 
         请求参数 (event.properties):
-            query: str (必填) — FTS5 query；支持短语 / AND/OR/NOT / 前缀 `term*`
+            query: str (必填) — 自然语言关键词或 FTS5 query 语法都行
+            mode: str (可选, 默认 'smart') — 'smart' = CJK-aware 自动改写 query
+                (单字加 *, 多字 CJK 用整 prefix OR 字符 AND 兜底); 'raw' = 不动,
+                直接交给 FTS5 (给 explicit FTS5 语法用户用)
             limit: int (默认 50，最大 200)
             mailbox: str (可选) — 仅返回该邮箱（'收件箱' / '发件箱'）
             since_date / until_date: str (可选) — 'YYYY-MM-DD'，按 date_received 过滤
 
         响应:
-            {status:'success', hits:[{internal_id, subject, sender, date_received,
-             mailbox, snippet, rank, notion_page_id, notion_url}], total_hits, latency_ms}
+            {status:'success', query, transformed_query (smart 时), mode,
+             hits:[{internal_id, subject, sender, date_received, mailbox,
+                    snippet, rank, notion_page_id, notion_url}],
+             total_hits, latency_ms}
 
         Notes:
             - rank 是 bm25 分数，越小越相关；按 rank 升序返回
             - snippet 是 FTS5 高亮片段（默认 <mark>...</mark>）
             - 仅覆盖已 dual-written 的邮件；历史未 backfill 的邮件不会出现在结果里
+            - PR-2a: smart 模式自动处理 unicode61 chunk-level token 命不中的洞,
+              中文 query '产品' 自动转 '(产品* OR (产* AND 品*))' 等
         """
         self._stats["search_email_bodies"] += 1
         t0 = time.monotonic()
@@ -1190,14 +1197,27 @@ class EventHandlers:
         since_date = props.get("since_date") or None
         until_date = props.get("until_date") or None
 
+        # PR-2a: mode 'smart' (default, CJK-aware) | 'raw' (FTS5 explicit)
+        mode = (props.get("mode") or "smart").strip().lower()
+        if mode not in ("smart", "raw"):
+            mode = "smart"
+
+        # 计算实际 FTS5 query (smart 模式可能改写)
+        if mode == "smart":
+            from src.repository.email_repository import smart_query_transform
+            transformed_query = smart_query_transform(query)
+        else:
+            transformed_query = query
+
         logger.info(
-            f"search_email_bodies: query={query!r} limit={limit} "
+            f"search_email_bodies: query={query!r} mode={mode} "
+            f"transformed={transformed_query!r} limit={limit} "
             f"mailbox={mailbox} since={since_date} until={until_date}"
         )
 
         try:
             hits = self.email_repo.search_email_bodies(
-                query,
+                transformed_query,
                 limit=limit,
                 mailbox=mailbox,
                 since_date=since_date,
@@ -1217,9 +1237,10 @@ class EventHandlers:
         else:
             self._stats["search_email_bodies_empty"] += 1
 
-        await self._publish(event_id, {
+        payload = {
             "status": "success",
             "query": query,
+            "mode": mode,
             "total_hits": len(hits),
             "hits": [
                 {
@@ -1236,10 +1257,13 @@ class EventHandlers:
                 for h in hits
             ],
             "latency_ms": latency_ms,
-        })
+        }
+        if mode == "smart" and transformed_query != query:
+            payload["transformed_query"] = transformed_query
+        await self._publish(event_id, payload)
         logger.info(
             f"search_email_bodies: query={query!r} returned {len(hits)} hits "
-            f"latency={latency_ms}ms"
+            f"latency={latency_ms}ms mode={mode}"
         )
 
     async def handle_page_updated(self, event: Dict):

@@ -31,6 +31,7 @@ from src.repository import (
     EmailSearchHit,
     ThreadMember,
     build_storage_payloads,
+    smart_query_transform,
 )
 
 
@@ -643,6 +644,187 @@ class TestSearchEmailBodies:
 
         repo.delete_email_full(600)
         assert not any(h.internal_id == 600 for h in repo.search_email_bodies("uniqueterm6", limit=10))
+
+
+# ============================================================
+# PR-2a: smart_query_transform + search_email_bodies_smart
+# ============================================================
+
+
+class TestSmartQueryTransform:
+    """纯函数测试 — 验证 CJK-aware FTS5 query 改写规则."""
+
+    def test_empty_query_returns_as_is(self):
+        assert smart_query_transform("") == ""
+        assert smart_query_transform("   ") == "   "
+
+    def test_single_cjk_char_gets_prefix_wildcard(self):
+        """单字 CJK → 'X*' prefix."""
+        assert smart_query_transform("产") == "产*"
+        assert smart_query_transform("会") == "会*"
+
+    def test_multi_char_cjk_gets_prefix_or_char_and_fallback(self):
+        """多字 CJK → '(token* OR (c1* AND c2*))' (整 prefix + 字符 AND 兜底)."""
+        assert smart_query_transform("产品") == "(产品* OR (产* AND 品*))"
+        assert smart_query_transform("本周产品评审") == (
+            "(本周产品评审* OR (本* AND 周* AND 产* AND 品* AND 评* AND 审*))"
+        )
+
+    def test_pure_latin_token_unchanged(self):
+        """纯拉丁 token 原样 (FTS5 按整词 match)."""
+        assert smart_query_transform("redis") == "redis"
+        assert smart_query_transform("timeout") == "timeout"
+
+    def test_multi_latin_tokens_use_and(self):
+        """多 latin token 之间 AND 连接 (符合英文搜索期望)."""
+        assert smart_query_transform("redis timeout") == "redis AND timeout"
+        assert smart_query_transform("project plan review") == (
+            "project AND plan AND review"
+        )
+
+    def test_mixed_latin_and_cjk_tokens(self):
+        """混合多 token: token 间 AND, CJK token 内部 prefix-OR fallback."""
+        assert smart_query_transform("redis 超时") == (
+            "redis AND (超时* OR (超* AND 时*))"
+        )
+
+    def test_mixed_char_within_one_token(self):
+        """单 token 内 CJK + Latin 混合: 切 segment 各处理."""
+        assert smart_query_transform("Redis超时") == (
+            "(Redis AND (超时* OR (超* AND 时*)))"
+        )
+
+    def test_phrase_with_quotes_unchanged(self):
+        """含双引号 → 用户已用 FTS5 phrase 语法 → 原样."""
+        assert smart_query_transform('"redis timeout"') == '"redis timeout"'
+
+    def test_wildcard_unchanged(self):
+        """含 * → 用户已 prefix → 原样."""
+        assert smart_query_transform("redis*") == "redis*"
+        assert smart_query_transform("产品*") == "产品*"
+
+    def test_explicit_operators_unchanged(self):
+        """含 FTS5 操作符 AND/OR/NOT 全大写 → 原样."""
+        assert smart_query_transform("redis AND timeout") == "redis AND timeout"
+        assert smart_query_transform("redis OR cache") == "redis OR cache"
+        assert smart_query_transform("redis NOT timeout") == "redis NOT timeout"
+
+    def test_punctuation_returns_raw(self):
+        """含 punct (例 -, @, .) → 原样, 让 FTS5 自己处理."""
+        assert smart_query_transform("redis-timeout") == "redis-timeout"
+        assert smart_query_transform("user@example.com") == "user@example.com"
+        # 含括号 / 冒号 (FTS5 column filter / group)
+        assert smart_query_transform("(redis)") == "(redis)"
+        assert smart_query_transform("body:redis") == "body:redis"
+
+    def test_hiragana_treated_as_cjk(self):
+        """日文假名也走 CJK prefix 通配 (跟中文同 token-chunk 困境)."""
+        # ひらがな 是 4 字假名 token
+        result = smart_query_transform("ひらがな")
+        assert result.startswith("(ひらがな*")
+        assert "ひ*" in result and "ら*" in result
+
+    def test_hangul_treated_as_cjk(self):
+        """韩文谚文也走 CJK prefix 通配."""
+        result = smart_query_transform("안녕")
+        assert result == "(안녕* OR (안* AND 녕*))"
+
+    def test_whitespace_normalized(self):
+        """多空白 split 视作单 separator."""
+        assert smart_query_transform("  redis    timeout  ") == "redis AND timeout"
+
+
+class TestSearchEmailBodiesSmart:
+    """集成测试 — repo.search_email_bodies_smart 实际命中行为."""
+
+    def _seed_cjk(self, repo: EmailRepository, fresh_db: Path):
+        """种几封含 CJK chunk token 的邮件验证 wrapper 改善召回.
+
+        Token boundary 提示: unicode61 把连续 CJK 当一 token, 用中文逗号
+        '，' 切出 'token1，token2' → tokens 'token1' + 'token2'.
+        700 subject token = '产品评审会' (产品* prefix 命中 subject)
+        700 body tokens = '本周产品评审定' + '周三下午请提前同步进度'
+                         (周三* prefix 命中 body 第二段)
+        """
+        _insert_metadata_full(
+            fresh_db, 700,
+            subject="产品评审会",
+            sender="alice@example.com",
+            mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            700,
+            BodyPayload(
+                html="",
+                markdown="本周产品评审定，周三下午请提前同步进度。",
+                body_format="html",
+            ),
+            [],
+        )
+        _insert_metadata_full(
+            fresh_db, 701,
+            subject="无关邮件",
+            sender="bob@example.com",
+            mailbox="收件箱",
+        )
+        repo.commit_email_with_body(
+            701,
+            BodyPayload(
+                html="",
+                markdown="meeting agenda is unrelated.",
+                body_format="html",
+            ),
+            [],
+        )
+
+    def test_smart_finds_cjk_in_chunked_token(self, repo: EmailRepository, fresh_db: Path):
+        """raw '产品' 命不中 (token 是 '本周产品评审定在周三下午'),
+        smart 改写后能命中."""
+        self._seed_cjk(repo, fresh_db)
+        # raw 模式
+        assert repo.search_email_bodies("产品", limit=10) == []
+        # smart 模式
+        hits = repo.search_email_bodies_smart("产品", limit=10)
+        ids = [h.internal_id for h in hits]
+        assert 700 in ids
+        assert 701 not in ids
+
+    def test_smart_passthrough_for_explicit_fts_syntax(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        """含 FTS5 语法 → smart 不动 query, 跟 raw 等价."""
+        self._seed_cjk(repo, fresh_db)
+        raw_hits = repo.search_email_bodies("产品*", limit=10)
+        smart_hits = repo.search_email_bodies_smart("产品*", limit=10)
+        assert [h.internal_id for h in smart_hits] == [h.internal_id for h in raw_hits]
+
+    def test_smart_multi_cjk_token_and(self, repo: EmailRepository, fresh_db: Path):
+        """smart '产品 周三' (双 token CJK) → 两 token 都命中才 hit."""
+        self._seed_cjk(repo, fresh_db)
+        hits = repo.search_email_bodies_smart("产品 周三", limit=10)
+        ids = [h.internal_id for h in hits]
+        assert 700 in ids  # 含 "产品" + "周三"
+
+    def test_smart_latin_unchanged(self, repo: EmailRepository, fresh_db: Path):
+        """smart 模式拉丁 query 跟 raw 完全等价."""
+        self._seed_cjk(repo, fresh_db)
+        smart_hits = repo.search_email_bodies_smart("meeting", limit=10)
+        raw_hits = repo.search_email_bodies("meeting", limit=10)
+        assert [h.internal_id for h in smart_hits] == [h.internal_id for h in raw_hits]
+
+    def test_smart_empty_query_returns_empty(self, repo: EmailRepository, fresh_db: Path):
+        self._seed_cjk(repo, fresh_db)
+        assert repo.search_email_bodies_smart("", limit=10) == []
+        assert repo.search_email_bodies_smart("   ", limit=10) == []
+
+    def test_smart_filters_pass_through(self, repo: EmailRepository, fresh_db: Path):
+        """mailbox / date 过滤跟 raw 行为一致 — wrapper 仅改写 query."""
+        self._seed_cjk(repo, fresh_db)
+        hits = repo.search_email_bodies_smart("产品", limit=10, mailbox="收件箱")
+        assert all(h.mailbox == "收件箱" for h in hits)
+        # 发件箱过滤应空
+        hits_sent = repo.search_email_bodies_smart("产品", limit=10, mailbox="发件箱")
+        assert hits_sent == []
 
 
 class TestGetMetadata:

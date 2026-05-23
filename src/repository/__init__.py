@@ -17,6 +17,7 @@ from src.repository.email_repository import (
     EmailRepository,
     EmailSearchHit,
     ThreadMember,
+    smart_query_transform,
 )
 from src.repository.storage_payload_builder import build_storage_payloads
 from src.repository.translation import TranslationRepository
@@ -34,4 +35,5 @@ __all__ = [
     "ThreadMember",
     "TranslationRepository",
     "build_storage_payloads",
+    "smart_query_transform",
 ]

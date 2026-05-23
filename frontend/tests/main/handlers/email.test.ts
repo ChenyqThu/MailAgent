@@ -264,6 +264,120 @@ describe('attachment shape', () => {
   })
 })
 
+// ============================================================
+// PR-2a: smartQueryTransform + searchEmails smart mode
+// ============================================================
+describe('smartQueryTransform (PR-2a)', () => {
+  // 跟 src/repository/email_repository.py:smart_query_transform 算法对齐;
+  // 改其中一边请同步另一边, 否则 chat tool 跟 CLI / webhook 行为分叉.
+  const t = handlers.smartQueryTransform
+
+  test('empty / whitespace returns as-is', () => {
+    expect(t('')).toBe('')
+    expect(t('   ')).toBe('   ')
+  })
+
+  test('single CJK char gets * prefix', () => {
+    expect(t('产')).toBe('产*')
+    expect(t('会')).toBe('会*')
+  })
+
+  test('multi-char CJK gets prefix-or-char-and fallback', () => {
+    expect(t('产品')).toBe('(产品* OR (产* AND 品*))')
+    expect(t('本周产品评审')).toBe(
+      '(本周产品评审* OR (本* AND 周* AND 产* AND 品* AND 评* AND 审*))'
+    )
+  })
+
+  test('pure latin token unchanged', () => {
+    expect(t('redis')).toBe('redis')
+  })
+
+  test('multi latin tokens use AND', () => {
+    expect(t('redis timeout')).toBe('redis AND timeout')
+    expect(t('project plan review')).toBe('project AND plan AND review')
+  })
+
+  test('mixed latin and CJK tokens', () => {
+    expect(t('redis 超时')).toBe('redis AND (超时* OR (超* AND 时*))')
+  })
+
+  test('mixed char within one token', () => {
+    expect(t('Redis超时')).toBe('(Redis AND (超时* OR (超* AND 时*)))')
+  })
+
+  test('phrase with quotes returns raw', () => {
+    expect(t('"redis timeout"')).toBe('"redis timeout"')
+  })
+
+  test('wildcard returns raw', () => {
+    expect(t('redis*')).toBe('redis*')
+    expect(t('产品*')).toBe('产品*')
+  })
+
+  test('explicit operators return raw', () => {
+    expect(t('redis AND timeout')).toBe('redis AND timeout')
+    expect(t('redis OR cache')).toBe('redis OR cache')
+    expect(t('redis NOT timeout')).toBe('redis NOT timeout')
+  })
+
+  test('punctuation returns raw', () => {
+    expect(t('redis-timeout')).toBe('redis-timeout')
+    expect(t('user@example.com')).toBe('user@example.com')
+    expect(t('(redis)')).toBe('(redis)')
+    expect(t('body:redis')).toBe('body:redis')
+  })
+
+  test('hiragana treated as CJK', () => {
+    const result = t('ひらがな')
+    expect(result.startsWith('(ひらがな*')).toBe(true)
+    expect(result).toContain('ひ*')
+    expect(result).toContain('ら*')
+  })
+
+  test('hangul treated as CJK', () => {
+    expect(t('안녕')).toBe('(안녕* OR (안* AND 녕*))')
+  })
+
+  test('whitespace normalized', () => {
+    expect(t('  redis    timeout  ')).toBe('redis AND timeout')
+  })
+})
+
+describe('searchEmails smart mode (PR-2a)', () => {
+  test('smart mode default: natural CJK keyword goes through transform', () => {
+    // 102 的 subject = '产品 OKR' (从 fixture seed) → '产品*' prefix match
+    // smart '产品' → '(产品* OR (产* AND 品*))' → 主表 hit
+    const r = handlers.searchEmails({ query: '产品' })
+    expect(r.items.length).toBeGreaterThanOrEqual(1)
+    expect(r.mode).toBe('smart')
+    expect(r.transformed_query).toBe('(产品* OR (产* AND 品*))')
+  })
+
+  test('raw mode bypasses transform', () => {
+    const r = handlers.searchEmails({ query: '产品', mode: 'raw' })
+    expect(r.mode).toBe('raw')
+    expect(r.transformed_query).toBeUndefined()
+  })
+
+  test('explicit FTS5 syntax passes through unchanged in smart mode', () => {
+    const r = handlers.searchEmails({ query: '产品*' })
+    expect(r.mode).toBe('smart')
+    // 含 wildcard → smartQueryTransform 判 raw passthrough, transformed_query 不应设置
+    expect(r.transformed_query).toBeUndefined()
+  })
+
+  test('smart mode equivalence with raw for plain latin', () => {
+    const smart = handlers.searchEmails({ query: 'redis' })
+    const raw = handlers.searchEmails({ query: 'redis', mode: 'raw' })
+    expect(smart.items.map((i) => i.internal_id)).toEqual(
+      raw.items.map((i) => i.internal_id)
+    )
+    // 单 token latin → transform 不变化, 没 transformed_query
+    expect(smart.transformed_query).toBeUndefined()
+  })
+})
+
 // ---- Sprint 2 D0: enriched view IPCs -----------------------------------------
 
 describe('listEmailsEnriched', () => {
