@@ -602,7 +602,11 @@ class NewWatcher:
                 # 9. 本地 LLM Agent 钩子（非阻塞、异常不影响主流程）
                 self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)
 
-                # 10. ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
+                # 10. KOS producer 钩子 (PR-2d, Sprint 19 M2)
+                # — 非阻塞推 Jarvis KOS v2 让图谱跨域 entity 合并丰富
+                self._maybe_trigger_kos_hook(email_obj, internal_id, page_id)
+
+                # 11. ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
                 self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
             else:
                 self.sync_store.mark_failed_v3(internal_id, "Notion sync returned None")
@@ -751,6 +755,79 @@ class NewWatcher:
             asyncio.create_task(_bg())
         except Exception as e:
             logger.warning(f"[llm-hook] dispatch failed: {e}")
+
+    def _maybe_trigger_kos_hook(
+        self, email_obj: Email, internal_id: int, notion_page_id: str
+    ) -> None:
+        """KOS Producer (PR-2d, Sprint 19 M2) — 异步推邮件入 Jarvis KOS v2.
+
+        从 SQLite 读 LLM 已 classify 的 ai_priority 做 priority floor 过滤;
+        body markdown 从 EmailRepository.get_body_markdown (v4 SSoT) 取;
+        调 src.kos.producer.push_email_to_kos fire-and-forget.
+
+        任何失败 (KOS 不可达 / KOSError / unexpected) 仅 warning 不阻塞主流程
+        (KOS 是图谱丰富, 不丢功能性数据 — Mail.app + Notion 仍 SSoT).
+        默认 MAILAGENT_KOS_INGEST_ENABLED=false 整段 noop.
+        """
+        if not getattr(settings, "mailagent_kos_ingest_enabled", False):
+            return
+        try:
+            from src.kos.producer import push_email_to_kos
+
+            # 从 SQLite SSoT 读 ai_priority + ai_action + body markdown
+            priority_floor = getattr(settings, "kos_ingest_priority_floor", "normal")
+            dry_run = getattr(settings, "kos_ingest_dry_run", False)
+            ai_priority: Optional[str] = None
+            ai_action: Optional[str] = None
+            body_markdown: Optional[str] = None
+            try:
+                meta = self.email_repo.get_metadata(internal_id)
+                if meta is not None:
+                    # email_metadata v14 提升出来的列 (LLM 已写)
+                    ai_priority = meta.ai_priority if hasattr(meta, "ai_priority") else None
+                    ai_action = meta.ai_action if hasattr(meta, "ai_action") else None
+                body_markdown = self.email_repo.get_body_markdown(
+                    internal_id, max_chars=200_000
+                )
+            except Exception as e:
+                logger.debug(
+                    f"[kos-hook] meta/body fetch failed internal_id={internal_id}: {e}"
+                )
+
+            subject_preview = (getattr(email_obj, "subject", "") or "")[:60]
+            logger.debug(
+                f"[kos-hook] dispatching internal_id={internal_id} "
+                f"priority={ai_priority!r} floor={priority_floor!r} "
+                f"subject={subject_preview!r}"
+            )
+
+            async def _bg():
+                try:
+                    result = await push_email_to_kos(
+                        email_obj,
+                        internal_id,
+                        body_markdown=body_markdown,
+                        notion_page_id=notion_page_id,
+                        ai_priority=ai_priority,
+                        ai_action=ai_action,
+                        priority_floor=priority_floor,
+                        dry_run=dry_run,
+                    )
+                    if result is None:
+                        logger.debug(
+                            f"[kos-hook] skipped internal_id={internal_id} "
+                            "(priority floor / not configured)"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[kos-hook] background task failed internal_id={internal_id}: {e}"
+                    )
+
+            asyncio.create_task(_bg())
+        except Exception as e:
+            logger.warning(
+                f"[kos-hook] dispatch failed internal_id={internal_id}: {e}"
+            )
 
     def _maybe_dispatch_island_received(
         self, email_obj: Email, internal_id: int, notion_page_id: str

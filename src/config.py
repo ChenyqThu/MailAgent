@@ -265,6 +265,36 @@ class Config(BaseSettings):
         ),
     )
 
+    # =========================================================================
+    # KOS Producer (Sprint 19 M2 PR-2d) — 邮件 sync 完异步推 Jarvis KOS v2
+    # 详见 docs/kos-integration-design.md §3 + frontend/SPRINT19-M2-PLAN.md §3
+    # KOSClient 默认从 env 直接读 3 个 OAuth 凭据 (KOS_MCP_BASE /
+    # KOS_OAUTH_CLIENT_ID / KOS_OAUTH_CLIENT_SECRET), 这里仅暴露 producer 行为
+    # 开关; client 配置不重复.
+    # =========================================================================
+    mailagent_kos_ingest_enabled: bool = Field(
+        default=False, env="MAILAGENT_KOS_INGEST_ENABLED",
+        description=(
+            "是否在邮件 sync 完成后异步推 KOS /ingest (PR-2d producer)。"
+            "默认 false — 启用前需配 3 个 KOS_OAUTH_* env 凭据。"
+        ),
+    )
+    kos_ingest_priority_floor: str = Field(
+        default="normal", env="KOS_INGEST_PRIORITY_FLOOR",
+        description=(
+            "priority floor — 仅推 ai_priority ≥ floor 的邮件入 KOS, 防低优"
+            "邮件 (广告/通讯录/系统通知) 污染图谱。取值: critical / urgent / "
+            "important / normal / low. 默认 'normal'。"
+        ),
+    )
+    kos_ingest_dry_run: bool = Field(
+        default=False, env="KOS_INGEST_DRY_RUN",
+        description=(
+            "Producer dry-run mode — build payload + log 但不真发 /ingest, "
+            "给上线灰度用。"
+        ),
+    )
+
     # CLI: API key 用于写命令鉴权 (RFC v2 §5.3 / PR-2)
     mailagent_cli_api_key: str = Field(
         default="", env="MAILAGENT_CLI_API_KEY",

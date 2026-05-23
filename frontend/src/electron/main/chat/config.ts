@@ -46,6 +46,14 @@ export function isAttachmentFtsEnabled(): boolean {
   return readEnvBool('AGENT_ATTACHMENT_FTS', false)
 }
 
+/** M2 PR-2e — KOS consumer chat tools (kos_query / kos_digest) registered.
+ *  OFF (default) → tools 不暴露给 LLM, chat agent 只用本地 FTS5 路径
+ *  (PR-2a/b). ON → LLM 可调 KOS 跨域检索. 需 PR-2c 的 KOS_MCP_BASE +
+ *  KOS_OAUTH_CLIENT_ID + KOS_OAUTH_CLIENT_SECRET 配齐才有意义. */
+export function isKosConsumerEnabled(): boolean {
+  return readEnvBool('MAILAGENT_KOS_CONSUMER_ENABLED', false)
+}
+
 /** Per-turn iteration cap. Hard ceiling on how many backend.stream() calls
  *  the harness will make for a single user message; exceeding emits
  *  E_MAX_ITER so the LLM doesn't infinite-loop on a flaky tool. */
