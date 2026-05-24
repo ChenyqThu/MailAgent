@@ -2,7 +2,7 @@
 // 6×7 grid (周一首列), 每格显示日期 + 最多 3 个 EventChip, 超出弹 .more-pop
 // fixed popover. is-other 灰底, today coral 圆角 .nday + "今天" tag.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
 
 import { EventChip } from '../EventChip'
@@ -43,6 +43,9 @@ interface PopState {
 
 export function MonthView({ date, calendarName, onSelect }: Props): React.ReactElement {
   const [pop, setPop] = useState<PopState | null>(null)
+  // F11 — popover click-outside 用 ref + capture phase mousedown 判断, 不靠
+  // 内部元素 stopPropagation (脆弱: 漏一处就闪一下消失).
+  const popRef = useRef<HTMLDivElement | null>(null)
 
   const monthStart = useMemo(() => startOfMonth(date ?? new Date()), [date])
   const gridStart = useMemo(() => startOfWeek(monthStart), [monthStart])
@@ -59,18 +62,24 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
     calendarName
   })
 
-  // popover: click outside / Esc to close
+  // F11 — popover click-outside / Esc to close. 用 capture phase mousedown
+  // + popRef.contains 判断点击在 popover 内, 比老 'click' bubble + 内部
+  // stopPropagation 更稳 (后者漏一处就闪).
   useEffect(() => {
     if (!pop) return
-    const close = (): void => setPop(null)
     const esc = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') close()
+      if (e.key === 'Escape') setPop(null)
     }
-    document.addEventListener('click', close)
+    const handleMouseDown = (e: MouseEvent): void => {
+      const target = e.target as Node | null
+      if (target && popRef.current && popRef.current.contains(target)) return
+      setPop(null)
+    }
     window.addEventListener('keydown', esc)
+    document.addEventListener('mousedown', handleMouseDown, true)
     return () => {
-      document.removeEventListener('click', close)
       window.removeEventListener('keydown', esc)
+      document.removeEventListener('mousedown', handleMouseDown, true)
     }
   }, [pop])
 
@@ -184,9 +193,9 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
 
       {pop && (
         <div
+          ref={popRef}
           className="more-pop glass-pop"
           style={{ top: pop.top, left: pop.left }}
-          onClick={(e) => e.stopPropagation()}
         >
           <div className="mp-head">
             <span>{pop.dayLabel}</span>

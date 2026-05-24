@@ -145,14 +145,17 @@ export function DayView({
   const selectedDate = useMemo(() => date ?? todayStartLocal(), [date])
   const [miniMonth, setMiniMonth] = useState<Date>(() => startOfMonth(selectedDate))
 
-  // sync mini-month displayed month when selectedDate jumps to another month
+  // F12 — sync mini-month displayed month when selectedDate jumps to another
+  // month. 老代码 deps=[selectedDate.getTime()] 但 body 读 miniMonth.getTime,
+  // stale-closure: 用户翻 miniMonth 到 6 月又把 selectedDate 设回 5 月某天
+  // (相同 ms), effect 不跑, mini-month 卡在错的月. 改 deps=[selectedDate,
+  // miniMonth] 让 exhaustive-deps 满意.
   useEffect(() => {
     const ms = startOfMonth(selectedDate)
     if (ms.getTime() !== miniMonth.getTime()) {
       setMiniMonth(ms)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate.getTime()])
+  }, [selectedDate, miniMonth])
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000)
