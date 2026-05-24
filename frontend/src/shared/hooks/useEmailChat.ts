@@ -274,6 +274,14 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // (effect cleanups run BEFORE the next ref-update effect fires, so
   // the ref still holds the previous-commit value at cleanup time).
   const activeSessionRef = useRef<number | null>(null)
+  // Sprint 19 — set by newSession() to flag the next send() to first
+  // INSERT a fresh ai_chat_sessions row (bypassing the email-keyed
+  // reuse lookup), then run the turn against the new sessionId. Self-
+  // resets on consumption — a follow-up send() without another
+  // newSession() click goes back to the "continue active session" UX.
+  // ref (not state) so newSession() stays synchronous and the same-tick
+  // send() observes the flag without an extra render.
+  const forceNewSessionRef = useRef(false)
   // Sprint 9 §2.3 — throttle the AIDraftStream envelope to once / 500ms.
   // streamedCharsRef tracks the cumulative chunked length; lastStreamFireRef
   // remembers the wall-clock timestamp of the last island.aiDraftStream
@@ -586,12 +594,37 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       // know to abort the stranded session instead of touching state for
       // the wrong email (codex High carry-forward).
       const myEmail = emailId
+      // Sprint 19 — if the user just clicked "+ 新建会话" (newSession() set
+      // forceNewSessionRef), INSERT a fresh ai_chat_sessions row first so
+      // this turn lands in a brand-new session. Backend info comes from
+      // SendChatInput (BackendSelector state lives in AIChatPanel; not
+      // available at newSession() time, so the INSERT is deferred to here).
+      // Reset the flag BEFORE the await so a throw doesn't spin retries.
+      // Errors propagate to the send() caller and surface in the chat
+      // error banner — better than silently writing to the resurrected
+      // session, which is exactly the bug we're fixing.
+      if (forceNewSessionRef.current) {
+        forceNewSessionRef.current = false
+        const newSess = await mailApi.chat.newSession({
+          emailId,
+          backendKind: input.backendKind,
+          backendModel: input.backendModel ?? null,
+          backendAgentPageId: input.backendAgentPageId ?? null
+        })
+        activeSessionRef.current = newSess.id
+        setActiveSessionIdState(newSess.id)
+      }
       const result = await mailApi.chat.start({
         emailId,
         message: input.message,
         backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
-        backendAgentPageId: input.backendAgentPageId ?? null
+        backendAgentPageId: input.backendAgentPageId ?? null,
+        // Sprint 19 — thread the active session id so dispatcher lands in
+        // the freshly-created session row (set above when forceNewSessionRef
+        // was true, or by a previous send()'s setActiveSessionIdState).
+        // Ref read (not state) to avoid stale closure across rapid sends.
+        sessionId: activeSessionRef.current
       })
       if (!mountedRef.current || emailIdRef.current !== myEmail) {
         // Email moved on (or hook unmounted) before the dispatcher returned.
@@ -696,6 +729,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     // suspended promise; the renderer state must mirror that to avoid a
     // dead dialog blocking the user).
     setPendingConfirmations([])
+    // Sprint 19 — flag the next send() to INSERT a fresh ai_chat_sessions
+    // row first. Without this the next send falls through to
+    // getOrCreateSession in the dispatcher and resurrects the previous
+    // session, defeating the "+ 新建会话" click. backend info isn't known
+    // here (BackendSelector lives in AIChatPanel; send() receives it
+    // through SendChatInput) so we defer the actual INSERT to send().
+    forceNewSessionRef.current = true
   }, [mailApi])
 
   // Sprint 19 PR-1d.2 — Confirmation dialog reply. Synchronously removes

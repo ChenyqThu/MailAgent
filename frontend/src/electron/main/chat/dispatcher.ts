@@ -98,6 +98,12 @@ export interface StartChatInput {
   backendKind: BackendKind
   backendModel: string | null
   backendAgentPageId: string | null
+  /** Sprint 19 — explicit target session id. null/undefined = legacy
+   *  getOrCreateSession path (find latest by email+backend); number =
+   *  use this exact session row (must exist + belong to emailId, else
+   *  E_DISPATCH). Threaded from renderer's activeSessionIdRef after
+   *  chat.newSession() creates a fresh row. */
+  sessionId?: number | null
 }
 
 export interface StartChatResult {
@@ -149,12 +155,31 @@ export async function startChat(input: StartChatInput, sink: StreamSink): Promis
     throw new Error('startChat: userMessage must be a non-empty string')
   }
 
-  const session = getOrCreateSession({
-    emailId: input.emailId,
-    backendKind: input.backendKind,
-    backendModel: input.backendModel,
-    backendAgentPageId: input.backendAgentPageId
-  })
+  // Sprint 19 — when renderer threaded an explicit sessionId (post-
+  // newSession() send), use that row directly. Else fall back to the
+  // legacy email-keyed find-or-create-latest path (first-time email open).
+  let session: ChatSession
+  if (input.sessionId !== undefined && input.sessionId !== null) {
+    const existing = getSession(input.sessionId)
+    if (!existing) {
+      throw new Error(
+        `startChat: sessionId=${input.sessionId} not found (caller passed stale id)`
+      )
+    }
+    if (existing.email_id !== input.emailId) {
+      throw new Error(
+        `startChat: sessionId=${input.sessionId} belongs to email ${existing.email_id}, not ${input.emailId}`
+      )
+    }
+    session = existing
+  } else {
+    session = getOrCreateSession({
+      emailId: input.emailId,
+      backendKind: input.backendKind,
+      backendModel: input.backendModel,
+      backendAgentPageId: input.backendAgentPageId
+    })
+  }
 
   const userMsg = appendMessage({
     sessionId: session.id,

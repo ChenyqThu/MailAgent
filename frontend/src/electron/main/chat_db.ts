@@ -149,7 +149,7 @@ export interface UpdateToolCallPatch {
 
 // ── path resolution ─────────────────────────────────────────────────────
 
-const CHAT_DB_VERSION = 3
+const CHAT_DB_VERSION = 4
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -326,13 +326,79 @@ function migrate(db: Database.Database): void {
         );
       `)
     }
-    db.prepare("INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', ?)").run(
-      String(CHAT_DB_VERSION)
-    )
+    // v1/v2/v3 are additive schema changes — safe in a single transaction.
+    // v4 has to run OUTSIDE this transaction because it needs PRAGMA
+    // foreign_keys=OFF (see block below for why). Bump to v3 here so the
+    // v4 block sees the correct starting version even on fresh installs.
+    db.prepare(
+      "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '3')"
+    ).run()
     db.exec('COMMIT')
   } catch (err) {
     db.exec('ROLLBACK')
     throw err
+  }
+
+  // v3 → v4 — drop UNIQUE on ai_chat_sessions(email_id, backend_kind,
+  // backend_agent_page_id) so chat.newSession() can INSERT a fresh row
+  // instead of UNIQUE blocking + getOrCreateSession resurrecting the
+  // latest one. Sprint 14 PR A's "多 session per email" sidebar was
+  // missing this drop; bug surfaced 2026-05-23 dogfood.
+  //
+  // SQLite has no ALTER TABLE DROP CONSTRAINT — 12-step ALTER pattern:
+  //   CREATE NEW (without UNIQUE) → INSERT SELECT old → DROP old → RENAME.
+  //
+  // Critical: PRAGMA foreign_keys=OFF before the transaction. DROP TABLE
+  // ai_chat_sessions with foreign_keys=ON is documented as "implicit
+  // DELETE for each row" — that DELETE then cascades through
+  // ai_chat_messages's `ON DELETE CASCADE` FK and wipes all message rows.
+  // PRAGMA defer_foreign_keys only defers VIOLATION checks; it does NOT
+  // disable CASCADE actions, so it doesn't help here. And PRAGMA
+  // foreign_keys can't change inside a transaction (SQLite silently
+  // ignores it). So this block runs out-of-transaction, then opens its
+  // own transaction for atomicity of the schema swap, then re-enables FK
+  // checking + sanity-checks integrity via PRAGMA foreign_key_check.
+  if (current < 4) {
+    db.pragma('foreign_keys = OFF')
+    try {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        db.exec(`
+          CREATE TABLE ai_chat_sessions_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id INTEGER NOT NULL,
+            backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api')),
+            backend_model TEXT,
+            backend_agent_page_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          );
+          INSERT INTO ai_chat_sessions_new
+            (id, email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+            SELECT id, email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at
+            FROM ai_chat_sessions;
+          DROP TABLE ai_chat_sessions;
+          ALTER TABLE ai_chat_sessions_new RENAME TO ai_chat_sessions;
+          DROP INDEX IF EXISTS idx_sessions_email;
+          CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+        `)
+        db.prepare(
+          "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '4')"
+        ).run()
+        db.exec('COMMIT')
+      } catch (err) {
+        db.exec('ROLLBACK')
+        throw err
+      }
+      const violations = db.prepare('PRAGMA foreign_key_check').all() as unknown[]
+      if (violations.length > 0) {
+        throw new Error(
+          `chat_db v3→v4 migration left FK violations: ${JSON.stringify(violations)}`
+        )
+      }
+    } finally {
+      db.pragma('foreign_keys = ON')
+    }
   }
 }
 
@@ -411,6 +477,46 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
     )
     .run(input.emailId, input.backendKind, backendModel, backendAgentPageId, now, now)
 
+  return {
+    id: Number(result.lastInsertRowid),
+    email_id: input.emailId,
+    backend_kind: input.backendKind,
+    backend_model: backendModel,
+    backend_agent_page_id: backendAgentPageId,
+    created_at: now,
+    updated_at: now
+  }
+}
+
+/**
+ * Sprint 19 — unconditionally INSERT a new ai_chat_sessions row, bypassing
+ * the (email_id, backend_kind, backend_agent_page_id) reuse lookup. Used by
+ * the `chat:newSession` IPC so the user clicking "+ 新建会话" actually gets
+ * a fresh session row instead of reviving the latest one for the email
+ * (the v3 UNIQUE was dropped in v4 migration so multi-session per email is
+ * now legitimate).
+ *
+ * Call sites:
+ *   - handlers/chat.ts chat:newSession IPC — explicit user intent
+ *   - Tests — they can pre-create multiple sessions for an email to verify
+ *     listSessionsForEmail ordering + deleteSession isolation
+ *
+ * NOT called by startChat — that path keeps `getOrCreateSession` so the
+ * first user message on an email lands in the latest session by default
+ * (preserves "open email → continue last conversation" UX).
+ */
+export function createNewSession(input: OpenSessionInput): ChatSession {
+  const db = getChatDb()
+  const now = Date.now()
+  const backendAgentPageId = input.backendAgentPageId ?? null
+  const backendModel = input.backendModel ?? null
+  const result = db
+    .prepare(
+      `INSERT INTO ai_chat_sessions
+        (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(input.emailId, input.backendKind, backendModel, backendAgentPageId, now, now)
   return {
     id: Number(result.lastInsertRowid),
     email_id: input.emailId,

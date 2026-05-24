@@ -480,6 +480,25 @@ class ElectronChatApi implements ChatApi {
     if (!Number.isInteger(sessionId) || sessionId < 0) return
     sender()?.('chat:deleteSession', sessionId)
   }
+  async newSession(input: {
+    emailId: number
+    backendKind: ChatBackendKind
+    backendModel?: string | null
+    backendAgentPageId?: string | null
+  }): Promise<ChatSession> {
+    // Sprint 19 — INSERT a fresh ai_chat_sessions row. v4 schema dropped
+    // the UNIQUE so this always creates a brand-new row instead of
+    // reusing the latest. Same envelope shape as `start` for code/message
+    // error surfacing through the IPC boundary.
+    type Env =
+      | { ok: true; data: ChatSession }
+      | { ok: false; code: string; message: string }
+    const env = (await invoker()('chat:newSession', input)) as Env
+    if (env.ok) return env.data
+    const err = new Error(env.message) as Error & { code?: string }
+    err.code = env.code
+    throw err
+  }
   async confirmTool(
     toolUseId: string,
     approved: boolean,

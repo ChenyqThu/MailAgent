@@ -15,6 +15,7 @@
 import { BrowserWindow, ipcMain } from 'electron'
 
 import {
+  createNewSession,
   deleteSession,
   listMessages,
   listSessionsForEmail,
@@ -38,6 +39,8 @@ export interface ChatStartOpts {
   backendKind: BackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
+  /** Sprint 19 — explicit target session row. See types.ts ChatStartOpts. */
+  sessionId?: number | null
 }
 
 // Sprint 14 PR B — payload for inline message edit. Same backend choice
@@ -86,7 +89,8 @@ export function registerChatHandlers(): void {
           userMessage: valid.message,
           backendKind: valid.backendKind,
           backendModel: valid.backendModel ?? null,
-          backendAgentPageId: valid.backendAgentPageId ?? null
+          backendAgentPageId: valid.backendAgentPageId ?? null,
+          sessionId: valid.sessionId ?? null
         },
         sink
       )
@@ -160,6 +164,58 @@ export function registerChatHandlers(): void {
     if (!Number.isInteger(sessionId) || sessionId < 0) return
     deleteSession(sessionId)
   })
+
+  // Sprint 19 — explicit "+ 新建会话" intent from renderer. INSERT a
+  // fresh ai_chat_sessions row (v4 schema dropped UNIQUE on email +
+  // backend + agent_page_id so reuse-bypass is just an unconditional
+  // INSERT). Returns the new row; useEmailChat threads sessionId into
+  // the next chat:start so the user's message lands here, not on a
+  // resurrected legacy session via getOrCreateSession.
+  ipcMain.handle(
+    'chat:newSession',
+    async (
+      _evt,
+      input: {
+        emailId?: unknown
+        backendKind?: unknown
+        backendModel?: unknown
+        backendAgentPageId?: unknown
+      }
+    ): Promise<
+      { ok: true; data: ChatSession } | { ok: false; code: string; message: string }
+    > => {
+      if (!input || typeof input !== 'object') {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'newSession input required' }
+      }
+      if (!Number.isInteger(input.emailId) || (input.emailId as number) < 0) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'emailId must be a non-negative integer'
+        }
+      }
+      if (input.backendKind !== 'notion-agent' && input.backendKind !== 'custom-api') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: `backendKind must be 'notion-agent' or 'custom-api', got ${String(input.backendKind)}`
+        }
+      }
+      try {
+        const data = createNewSession({
+          emailId: input.emailId as number,
+          backendKind: input.backendKind as BackendKind,
+          backendModel: typeof input.backendModel === 'string' ? input.backendModel : null,
+          backendAgentPageId:
+            typeof input.backendAgentPageId === 'string' ? input.backendAgentPageId : null
+        })
+        return { ok: true, data }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return { ok: false, code: 'E_DISPATCH', message }
+      }
+    }
+  )
 
   // Sprint 14 PR B — chat:editMessage. Same envelope shape as chat:start
   // (renderer awaits ok=true|false), since both ultimately wrap a

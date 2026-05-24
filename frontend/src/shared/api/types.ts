@@ -921,6 +921,14 @@ export interface ChatStartOpts {
   backendKind: ChatBackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
+  /** Sprint 19 — explicit target session row. When provided, dispatcher
+   *  uses `getSession(sessionId)` (must exist + match emailId) instead of
+   *  running `getOrCreateSession(email + backend + agent_page_id)`. The
+   *  renderer threads `activeSessionIdRef.current` here after
+   *  `chat.newSession()` so the next message lands in the freshly-created
+   *  row, not the latest pre-existing one. `null` / undefined keeps the
+   *  legacy "find or create the latest session for this email" behaviour. */
+  sessionId?: number | null
 }
 
 // Sprint 14 PR B — inline message edit. The renderer sends the session +
@@ -979,6 +987,26 @@ export interface ChatApi {
    * renderer state synchronously after dispatching.
    */
   deleteSession(sessionId: number): void
+  /**
+   * Sprint 19 — INSERT a fresh ai_chat_sessions row, bypassing the
+   * (email_id, backend_kind, backend_agent_page_id) reuse lookup. Used by
+   * useEmailChat.send() when the user clicked "+ 新建会话" before this
+   * turn — without this the next dispatcher.startChat() would resurrect
+   * the latest pre-existing session row via getOrCreateSession.
+   *
+   * Schema v4 dropped the UNIQUE on (email_id, backend_kind,
+   * backend_agent_page_id) so this INSERT always creates a brand-new row.
+   *
+   * Throws `Error & { code }` on dispatch failure (E_INVALID_ARG /
+   * E_DISPATCH). Caller can fall through to a regular send() on failure;
+   * the legacy resurrection path still works as a fallback.
+   */
+  newSession(input: {
+    emailId: number
+    backendKind: ChatBackendKind
+    backendModel?: string | null
+    backendAgentPageId?: string | null
+  }): Promise<ChatSession>
   /**
    * Sprint 19 PR-1d.2 — reply to a ConfirmToolDialog. The harness is
    * blocked on a per-toolUseId promise (main-process tools/confirmation.ts)

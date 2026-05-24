@@ -26,6 +26,7 @@ import {
   appendMessage,
   appendToolCall,
   closeChatDb,
+  createNewSession,
   deleteMessagesFromId,
   deleteSession,
   getChatDb,
@@ -79,7 +80,9 @@ describe('chat_db — path + schema bootstrap', () => {
       value: string
     }
     // Sprint 19 (PR-1a): bumped to 3 — chat_tool_call + wiki_pages + wiki_fts + agent_memory_kv.
-    expect(ver.value).toBe('3')
+    // Sprint 19 (bug-fix): bumped to 4 — drop UNIQUE on ai_chat_sessions so
+    // newSession() can INSERT a fresh row instead of resurrecting old.
+    expect(ver.value).toBe('4')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -96,7 +99,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('3')
+    expect(ver.value).toBe('4')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -147,8 +150,8 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    // Sprint 19 (PR-1a): v1 DB now jumps straight to v3.
-    expect(ver.value).toBe('3')
+    // Sprint 19 (PR-1a → bug-fix): v1 DB now jumps straight to v4.
+    expect(ver.value).toBe('4')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // Old data preserved verbatim — the v1-stored thread_id encoding stays
@@ -724,5 +727,204 @@ describe('chat_db — v3 schema (wiki + memory_kv)', () => {
     expect(() => stmt.run('sender.alice@acme.com', 'tone', '"formal"', now, now)).not.toThrow()
     // Same scope + key → duplicate PK
     expect(() => stmt.run('sender.bob@acme.com', 'tone', '"changed"', now, now)).toThrow()
+  })
+})
+
+// Sprint 19 bug-fix — v3 → v4 migration drops UNIQUE on ai_chat_sessions
+// (email_id, backend_kind, backend_agent_page_id). Sprint 14 PR A sidebar
+// design intended multi-session per email but v1 schema's UNIQUE was
+// never dropped → newSession() couldn't INSERT a fresh row and
+// getOrCreateSession kept resurrecting the latest one (user-visible bug).
+
+describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', () => {
+  test('v3-version DB upgrades to v4 + new schema has no UNIQUE constraint', () => {
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    // Hand-build v3 schema: ai_chat_sessions WITH UNIQUE (the pre-fix bug).
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_id INTEGER NOT NULL,
+        backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api')),
+        backend_model TEXT,
+        backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (email_id, backend_kind, backend_agent_page_id)
+      );
+      CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tokens_input INTEGER,
+        tokens_output INTEGER,
+        cost_usd REAL,
+        model TEXT,
+        status TEXT NOT NULL,
+        error_message TEXT,
+        metadata TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '3');
+      INSERT INTO ai_chat_sessions
+        (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+        VALUES (500, 'custom-api', 'sonnet', NULL, 1000, 1000);
+      INSERT INTO ai_chat_messages
+        (session_id, role, content, status, created_at, updated_at)
+        VALUES (1, 'user', 'pre-migration chat', 'complete', 1000, 1000);
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    // Schema upgraded to v4.
+    const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
+      value: string
+    }
+    expect(ver.value).toBe('4')
+    // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
+    // (email_id, backend_kind, backend_agent_page_id).
+    const tableSql = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
+        .get() as { sql: string }
+    ).sql
+    expect(tableSql).not.toMatch(/UNIQUE\s*\(\s*email_id\s*,\s*backend_kind/i)
+    // Session data preserved (id, model).
+    const rows = db.prepare('SELECT id, backend_model FROM ai_chat_sessions').all() as Array<{
+      id: number
+      backend_model: string
+    }>
+    expect(rows).toHaveLength(1)
+    expect(rows[0].id).toBe(1)
+    expect(rows[0].backend_model).toBe('sonnet')
+    // CRITICAL — ai_chat_messages rows survived (the bug we just fixed
+    // would CASCADE-delete this via DROP TABLE with foreign_keys=ON).
+    const msgs = db
+      .prepare('SELECT content FROM ai_chat_messages WHERE session_id = 1')
+      .all() as Array<{ content: string }>
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].content).toBe('pre-migration chat')
+    // After UNIQUE drop, second INSERT with same (email, backend, NULL)
+    // is now allowed — this is what enables newSession() multi-session.
+    db.prepare(
+      `INSERT INTO ai_chat_sessions
+         (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+       VALUES (500, 'custom-api', 'sonnet', NULL, 2000, 2000)`
+    ).run()
+    const after = (
+      db.prepare('SELECT COUNT(*) as c FROM ai_chat_sessions WHERE email_id = 500').get() as {
+        c: number
+      }
+    ).c
+    expect(after).toBe(2)
+    // FK integrity still holds (foreign_keys=ON re-enabled in finally).
+    const fkViolations = db.prepare('PRAGMA foreign_key_check').all()
+    expect(fkViolations).toHaveLength(0)
+  })
+
+  test('v3 → v4 migration preserves idx_sessions_email index', () => {
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_id INTEGER NOT NULL,
+        backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api')),
+        backend_model TEXT, backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE (email_id, backend_kind, backend_agent_page_id)
+      );
+      CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id),
+        role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
+        metadata TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '3');
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ai_chat_sessions'")
+      .all() as Array<{ name: string }>
+    expect(indexes.map((i) => i.name)).toContain('idx_sessions_email')
+  })
+})
+
+// Sprint 19 bug-fix — createNewSession() is the explicit "INSERT a fresh
+// ai_chat_sessions row" path used by the chat:newSession IPC. Unlike
+// getOrCreateSession (find-or-create-latest), it always inserts.
+
+describe('chat_db — createNewSession (multi-session per email)', () => {
+  test('returns a fresh row each call, distinct ids', () => {
+    const s1 = createNewSession({
+      emailId: 999,
+      backendKind: 'custom-api',
+      backendModel: 'sonnet'
+    })
+    const s2 = createNewSession({
+      emailId: 999,
+      backendKind: 'custom-api',
+      backendModel: 'sonnet'
+    })
+    const s3 = createNewSession({
+      emailId: 999,
+      backendKind: 'custom-api',
+      backendModel: 'opus'
+    })
+    expect(s1.id).not.toBe(s2.id)
+    expect(s2.id).not.toBe(s3.id)
+    expect(s1.email_id).toBe(999)
+    expect(s3.backend_model).toBe('opus')
+  })
+
+  test('listSessionsForEmail sees all rows created', () => {
+    createNewSession({ emailId: 1234, backendKind: 'custom-api' })
+    createNewSession({ emailId: 1234, backendKind: 'custom-api' })
+    createNewSession({ emailId: 1234, backendKind: 'custom-api' })
+    const sessions = listSessionsForEmail(1234)
+    expect(sessions).toHaveLength(3)
+  })
+
+  test('does NOT collide with getOrCreateSession on same key', () => {
+    // After createNewSession populates rows, getOrCreateSession still
+    // returns a row (any matching row) for the legacy "open-email
+    // continue-latest" path — both functions coexist, neither throws on
+    // the multi-row state v4 schema now allows.
+    createNewSession({
+      emailId: 5555,
+      backendKind: 'notion-agent',
+      backendAgentPageId: 'agent-x'
+    })
+    const found = getOrCreateSession({
+      emailId: 5555,
+      backendKind: 'notion-agent',
+      backendAgentPageId: 'agent-x'
+    })
+    expect(found.email_id).toBe(5555)
+    expect(found.backend_kind).toBe('notion-agent')
+    expect(found.backend_agent_page_id).toBe('agent-x')
+  })
+
+  test('null backend_agent_page_id (custom-api default) does not block multi-session', () => {
+    // Custom AI backend leaves backend_agent_page_id NULL. Pre-fix the
+    // UNIQUE on (email, backend, NULL) was the exact path that bit
+    // dogfood. Verify multi-INSERT with NULL key now works.
+    const a = createNewSession({ emailId: 7777, backendKind: 'custom-api' })
+    const b = createNewSession({ emailId: 7777, backendKind: 'custom-api' })
+    expect(a.id).not.toBe(b.id)
+    expect(a.backend_agent_page_id).toBeNull()
+    expect(b.backend_agent_page_id).toBeNull()
   })
 })
