@@ -1,214 +1,213 @@
 # Sprint 19 Next-Session Handoff
 
-> **当前进度**: M2 全 7 个 PR ship (PR-2a 到 PR-2g) + M1 polish #1+#2 ship.
-> **本 session ctx 91% 收尾**. 下次 session 三个 todo + dogfood 续验.
-> **基线 commit**: `9d498ea` (chat-ui 字号 + markdown auto-balance fix).
+> **当前进度**: P1 chat-history 全闭环 ship (sliding window / time decay / KOS save).
+> 8 commit 本 session, ~1200 LOC, 109 vitest passed, typecheck:node + :web exit 0.
+> **基线 commit**: `4bdc232` (P1-C UI [✨ 保存到 KOS]).
 
-## 已 ship (本 session 全量)
+## 本 session ship 8 commits (上 session handoff 之后)
 
 ```
-9d498ea fix(chat-ui): Composer textarea 字号修正 + streaming markdown auto-balance
-dcec46a fix(agent-harness): EmailContext 加 AI 字段 (ai_priority/ai_action/processing_status)
-363752a fix(agent-harness): registerBuiltinTools 加 boot log + dogfood-checklist 命令名修正
-f8e9213 docs(agent-harness): dogfood-checklist 加明确 user 待办指引
-f9b17af fix(agent-harness): PR-2d producer 加 LLM 中文 priority enum 映射
-55b1b44 feat(agent-harness): M1 polish #1 + #2 — reject-list + per-tool throttle
-5bc40a8 feat(agent-harness): PR-2g — M2 dogfood 包 ship
-0cdb9a2 feat(agent-harness): PR-2f — L1 hot block KOS sender digest 注入
-3cea550 feat(agent-harness): PR-2d + PR-2e — KOS producer + consumer chat tools
-9c8e302 feat(agent-harness): PR-2c — KOS MCP client (TS + Py 双份)
-05cf071 feat(agent-harness): PR-2b — 附件文本化 + FTS5
-4e68381 feat(agent-harness): PR-2a — FTS5 中文 smart wrapper
+4bdc232 feat(chat-history): P1-C UI — AssistantMessageFooter 加 [✨ 保存到 KOS]
+04c5f86 feat(chat-history): P1-C backend — chat:saveToKos IPC + KOS putPage service
+a8dcaed feat(chat-history): P1-B — KOS query 加 client-side 时间衰减 rerank
+b7734a8 feat(chat-history): P1-A — sliding window N=20 cap per-turn LLM history
+e7414c9 docs(chat-history): Todo 1 设计调研 — sliding window + KOS ingest + 时间衰减
+a79e988 fix(chat-session): 新建会话真创建 row + schema v4 drop UNIQUE
+c46dd8d fix(frontend-ui): HoverTip 扩 side='left'/'right' 修 ChatSidebar 3 typecheck
+0d6d287 fix(frontend-env): main 启动 load 项目根 .env + 加 4 KOS/harness flag whitelist
 ```
 
-**测试**: 后端 215 + 前端 251 = 466 全过. (后端含 KOS 客户端 39 + producer 45 = 84 子集; 前端含 KOS 客户端 36 + chat tools 21 + L1 hot block 28 + throttle 8 + markdown 13 = 106 子集.)
+**关键事件**:
+1. **Latent bug 发现**(commit `0d6d287`): Sprint 18 PR B 加 env-handler 给
+   SettingsPage 读写项目根 .env, 但 main process 启动时**从不 load 这个
+   .env**. 意味着 Sprint 18 至今 `MAILAGENT_AGENT_HARNESS=true` /
+   `MAILAGENT_KOS_*` 等 flag **从未在 frontend 生效**. dotenv-bootstrap
+   修了, boot log 从 `11 builtin tools (KOS consumer=off)` →
+   `13 builtin tools (KOS consumer=on)`. 顺手加 4 个 KOS/harness flag
+   到 MANAGED_ENV_KEYS whitelist 为将来 Settings UI tab.
+
+2. **chat newSession bug 修复**(commit `a79e988`): Sprint 14 PR A 加
+   sidebar 多 session 设计, 但 v1 schema 的 UNIQUE 漏 drop, 导致用户点
+   [+ 新建会话] 后再发消息复活老 session. v4 migration drop UNIQUE,
+   `chat:newSession` IPC 走 createNewSession 真 INSERT, useEmailChat 加
+   forceNewSessionRef + send() 时调 chat.newSession. SQLite migration 关键
+   细节: 必须 PRAGMA foreign_keys=OFF 出 transaction (DROP TABLE 在 FK
+   ON 时是 implicit DELETE + CASCADE 会 wipe ai_chat_messages).
+
+3. **Todo 1 chat-history 设计** + P1 全闭环 ship:
+   - P1-A sliding window N=20 (dispatcher 用 `listLastNMessages` 替代
+     full `listMessages`, 100-turn 单 turn cost 从 $0.6 降到约 $0.05)
+   - P1-B client-side time-decay rerank (kos_query hits 乘 0.5^(Δt/14d)
+     factor 重排序, default ON, 可 .env flag 关)
+   - P1-C [✨ 保存到 KOS] backend + UI (AssistantMessageFooter 第 4 个
+     按钮, click 调 chat:saveToKos IPC, 把 user→assistant 一对 message
+     成 markdown page push KOS at `conversations/<email>-<sess>-<msg>`)
 
 ---
 
-## Todo 1 — 历史对话持久化 + 入库 + 检索 (重要, 设计 + 调研)
-
-**User question**: "现在的历史会话真的会缓存么？这个很重要，因为有时候历史对话中也有重要信息，这些也应该能入库被检索和使用，按照对话时间距离的远近加上不同权重。"
-
-### 当前状态盘点 (下次 session 第一件事)
-
-跑这几个命令搞清当前 chat 历史持久化机制:
+## P1 验证清单 (下次 session 第一件事 / user 自跑)
 
 ```bash
-# 1. chat history 存哪里
-ls -la ~/.mailagent/frontend/ai_chat.db
-sqlite3 ~/.mailagent/frontend/ai_chat.db ".schema ai_chat_sessions"
-sqlite3 ~/.mailagent/frontend/ai_chat.db ".schema ai_chat_messages"
-sqlite3 ~/.mailagent/frontend/ai_chat.db "SELECT COUNT(*) FROM ai_chat_messages"
-
-# 2. harness 怎么 load history (是不是真的喂给 LLM)
-grep -n "chatHistoryToAnthropic\|priorTurns\|initialHistory" \
-  frontend/src/electron/main/chat/harness.ts \
-  frontend/src/electron/main/chat/dispatcher.ts
-
-# 3. KOS producer 推不推 chat 历史
-grep -rn "push.*chat\|chat.*ingest\|chat_message" src/kos/ src/mail/new_watcher.py
+# 重启 Electron 让 v4 migration + 新 UI 加载
+pkill -f "MailAgent/frontend" 2>/dev/null
+sleep 2
+cd /Users/chenyuanquan/Documents/MailAgent/frontend && pnpm dev
 ```
 
-### 调研 + 设计要做的
+**Boot log 期望** (terminal 3-5 秒内打):
+```
+[dotenv-bootstrap] path=…/MailAgent/.env exists=true loaded=94/94 skipped=0
+[Sprint 19] registered 13 builtin tools (KOS consumer=on): …
+```
 
-1. **现状确认** — chat history 已存 SQLite (`~/.mailagent/frontend/ai_chat.db`, table `ai_chat_messages`). 但 LLM **每次 turn 看到多少历史**? 全部还是 last N? 还是 token-budget cap?
-   - 推测: dispatcher 用 `listMessages(sessionId)` 拉全部 + harness `chatHistoryToAnthropic` 转 Anthropic message[] 喂回 LLM → 长 session token 暴涨.
-   - 待定方案: 实施 sliding window + summary (cliff-summary 长 session 头部, recent 全留).
+### P1-A sliding window 验证 (~5 min)
 
-2. **入 KOS 让跨 session 检索** — 当前 chat 历史**没**推 KOS. PR-2d producer 只推 email source. 若想让 chat 也跨 session 可查:
-   - 新 producer entry: chat session done 时把 user+assistant message 拼成 markdown → push 到 `chat-history/<session-id>` slug.
-   - 但要 careful: chat 可能含 sensitive context (用户对邮件的评论), 是否进图谱要 user 显式开关.
-   - 调研 KOS gbrain 是否有 dedicated `conversations/` namespace 已设计 (mac mini 那边问 Lucien).
+打开任一邮件 → chat 聊 25+ 轮 → sqlite 查 tokens_input 趋势应稳定不暴涨:
 
-3. **时间衰减权重 retrieval** — KOS query 排序默认按 bm25 + entity boost. 时间因子要么:
-   - (a) client 端 retrieve 后 rerank — 给最近 7d hits 权重 ×2, 30d 内 ×1, >30d 衰减.
-   - (b) KOS 端 server-side time decay — 调研 gbrain 是否已支持 (`updated_after` filter + score modifier).
-   - 推荐 (b) 跟 KOS 自带能力 align. 若没 ping Lucien 看是否能加.
-
-### 输出物 (下次 session 应该 ship)
-
-- `docs/chat-history-design.md` — 当前 SQLite 持久化机制 + 是否喂 LLM 现状 + sliding window / summary 改造方案 + KOS ingest 闭环设计
-- 实现 + tests (~500-800 LOC, 跟 PR-2d producer 同等 size)
-
-**Blocker**: 若 KOS 端时间衰减 API 没现成, 跟 Lucien 同步先 (跟当时 wire spec 一样路径).
-
----
-
-## Todo 2 — Markdown 流式渲染业界最佳方案调研
-
-**User question**: "markdown 流式渲染的方案有点复杂，claude / openclaw 之类的，业界都是这么做的么？最好调研下，按照业界最佳方案来做。"
-
-### 我现在用的方案 (本 session ship `9d498ea`)
-
-`TranslatedBody.tsx` 自写 regex-based markdown → HTML + DOMPurify, 加 `autoBalanceTrailingMarkers` preprocess 流式时给 unclosed `**` / `` ` `` append closing marker. 工作但 hacky:
-- 不支持 nested list / table / footnote 等复杂 markdown
-- italic single `*` 没处理 (易跟 `**` 截断冲突)
-- code block triple ``` 没处理 (现在没 case 受影响, 但未来 LLM 输出代码就会)
-
-### 业界方案调研 task
-
-调研下面几个 reference, 看 chat agent UI 流式 markdown 怎么做 (调研 priority 高到低):
-
-1. **claude.ai web** — Anthropic 自家. F12 看 Network + DOM, 流式 chunk 怎么转 markdown. 推测用 `react-markdown` + custom plugin handle partial.
-2. **ChatGPT web** — OpenAI. 同上 inspect.
-3. **Cursor / Continue / Aider** — 编辑器集成. 它们 GitHub 开源, 直接 read code.
-4. **shadcn/ai chat template** — 业界 React + Tailwind chat template 典范.
-5. **vercel/ai SDK** — `@ai-sdk/react` `useChat` hook 自带 streaming markdown 处理. **强候选**.
-6. **streaming-react-markdown** lib — 专门为流式设计 (`https://github.com/streaming-react-markdown` 或类似).
-7. **Karpathy nanochat / llm.c demo** — Karpathy 风格的 minimal chat UI, 看他怎么处理.
-
-### 评判维度
-
-调研后比较 (输出 `docs/chat-markdown-streaming-research.md`):
-
-| 方案 | 加 deps? | LOC | 支持完整 GFM (table/code block/footnote)? | partial chunk 视觉跳动? | XSS sanitize? | maintenance? |
-|---|---|---|---|---|---|---|
-
-### 推荐执行
-
-如果业界主流是 `react-markdown` + 流式 plugin → 替换 `TranslatedBody.tsx` 自写 regex parser. 工作量 ~300-500 LOC (含 fallback to DOMPurify sanitize layer).
-
-如果业界主流就是 auto-balance preprocess (跟我现在一样) → 不动, 但可能加 single `*` italic + triple ``` code block 处理.
-
-### 输出物
-
-- `docs/chat-markdown-streaming-research.md` — 调研结论
-- (若需) 替换 TranslatedBody 实现 + 测试
-
----
-
-## Todo 3 — User 下一步 dogfood 测什么
-
-工具已加载 (你刚看到 LLM 列出 7 个 tool), AI 字段已注入 system prompt (commit `dcec46a` ship). 接下来 verify:
-
-### 立即可测 (5 min)
-
-**T1 — 重启 Electron + 看 boot log** (commit `363752a` 加的):
 ```bash
-pkill -f electron-vite 2>/dev/null; pkill -f Electron 2>/dev/null
-cd /Users/chenyuanquan/Documents/MailAgent/frontend && pnpm dev 2>&1 | grep "Sprint 19"
+sqlite3 ~/.mailagent/frontend/ai_chat.db "
+  SELECT role, tokens_input, model
+  FROM ai_chat_messages
+  WHERE session_id = (
+    SELECT id FROM ai_chat_sessions ORDER BY id DESC LIMIT 1
+  )
+  ORDER BY id ASC LIMIT 30"
 ```
-期望: `[Sprint 19] registered 13 builtin tools (KOS consumer=on): attachment_list, ...`
 
-**T2 — 打开邮件 012, 看 chat 第一轮回答有没 AI label** (commit `dcec46a` ship 的):
+若超 20 turn 后 `tokens_input` 仍线性增长 → sliding window 没生效, 检查
+dispatcher.ts:215 / 480 `listLastNMessages(session.id, HISTORY_WINDOW_SIZE)`
+是否真用了 (vs `listMessages(session.id)`).
 
-之前 LLM 回答只总结邮件内容; 现在 system prompt 加了 `AI labels: priority=🟡 重要 / action=...`, 期望 LLM 开场就说 "AI 已分类为 🟡 重要 / 需要决策, 建议先 ..." 这类含 AI 标签判断的话.
+### P1-B KOS time-decay 验证 (~3 min)
 
-如果还没看到 AI 标签判断 → 看 main process console 看 system prompt 注入是否含 `AI labels:` 一行 (临时 console.log 进 buildEmailContextSection 看).
+```bash
+# 触发 kos_query
+# chat panel 问 "Bob 是谁?" 或 "Acme 项目最近怎么样" → LLM 调 kos_query
+# main process console 看 KOSClient 调 + rerank 后 hits 顺序
 
-**T3 — chat 输入框字号 + bubble 字号** (commit `9d498ea` ship 的):
+# 关闭 rerank 对比 (优先级 1.5 倍 ≈ 14d 老 hit 跟新 hit 同分):
+echo 'MAILAGENT_KOS_TIME_DECAY_ENABLED=false' >> /Users/chenyuanquan/Documents/MailAgent/.env
+# 重启 Electron 再问同 prompt 对比 hits 顺序
+# 测完恢复:
+sed -i.bak '/^MAILAGENT_KOS_TIME_DECAY_ENABLED=/d' /Users/chenyuanquan/Documents/MailAgent/.env
+```
 
-输入框现在 14px, 跟 message bubble 视觉对齐. 主观看一眼即可.
+### P1-C [✨ 保存到 KOS] 验证 (~3 min)
 
-**T4 — 长一点的 chat 主动调 kos_query / email_search_fulltext**:
+打开邮件 → chat 发 1 message + 等回复 → 看 assistant 底部第 4 个按钮
+[✨ 保存到 KOS] → click → toast 显示 "已保存到 KOS / conversations/...".
 
-随便打开一个常用 sender 邮件, 问 "这个发件人之前还跟我聊过什么? 主题搜一下"
-期望: LLM 主动调 `kos_query` 或 `email_search_fulltext` tool, ToolCallRow 在 message bubble 上方 (虽然 polish #3 audit row 没 ship, 但 main process console 应该有 dispatch log).
+KOS 端验证:
+```bash
+ssh chenyuanquan@100.98.144.119 \
+  'curl -s -X POST "https://kos.chenge.ink/mcp" \
+    -H "Authorization: Bearer $(cat ~/.gbrain/oauth-clients/mailagent-tok)" \
+    -H "Content-Type: application/json" \
+    -H "Accept: text/event-stream" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/call\",\"params\":{\"name\":\"list_pages\",\"arguments\":{\"limit\":10,\"tag\":\"mailagent-chat\"}}}" \
+    | grep ^data: | sed s/^data:.// | jq'
+```
 
-### M1 harness 20 scenario (~30 min)
-
-跑 `docs/eval/email_scenarios.md` S01-S20, 每个 prompt 复制到 chat panel 测. 记 pass rate **≥ 70% (≥ 14/20)** = P1 gate 过.
-
-### KOS 5 scenario (~15 min)
-
-跑同文档 S21-S25 (PR-2g 新加, KOS 专属). 记 pass rate **≥ 60% (≥ 3/5)**.
-
-### Producer 真启用 (long-running)
-
-按 dogfood-checklist §4.1 → §4.2 → §4.3 步骤, 关掉 `KOS_INGEST_DRY_RUN`, 跑 mail-sync 几小时, 看 KOS 端 `list_pages tag=mailagent-ingest` 出现新 page.
-
-### 长期监控 (1 周)
-
-dogfood-checklist `§监控指标` 给的 sqlite3 + pm2 log grep 命令, 1 周收 cost / error 率 / latency baseline. 满足后翻 default flag.
-
----
-
-## M1 polish 剩余
-
-本 session ship #1 + #2 (reject-list + throttle); 剩 2 项:
-
-### #3 — MessageList ToolCallRow audit 渲染 (~300 LOC)
-
-当前 harness 路径 (PR-1d 之后) tool_use / tool_result event 没渲染 audit 卡片. user 在 chat panel 只看到 ConfirmToolDialog + 最终 assistant 文字, 看不到 LLM 调了什么 tool / input / output / 用了几秒.
-
-实施步骤:
-1. `handlers/chat.ts` 加 `ipcMain.handle('chat:listToolCalls', (_, mid) => listToolCallsForMessage(mid))`
-2. `shared/api/types.ts` ChatApi interface 加 `listToolCalls(messageId): Promise<ChatToolCall[]>`
-3. `ElectronApi.ts` + `HttpApi.ts` 加实现
-4. `MessageList.tsx` AssistantBubble 加 `useToolCalls(messageId)` hook + 渲染折叠卡片 (折叠状态 show "(3 tools used) [▶]", 展开 show input/output JSON)
-5. `useEmailChat.ts` line 369 tool_use/tool_result event handler 触发 refetch
-6. 测试 (UI + IPC)
-
-### #4 — OpenAI Chat Completions tool_calls 增量协议 (~400 LOC)
-
-当前 fallback model 链 `claude-sonnet-4-6 → gpt-5.4 → claude-opus-4-7`, gpt-* 命中时 `custom_api.ts` disable harness (isAnthropicModel gate). 加 OpenAI 协议 tool_calls 增量 SSE 解析:
-- request body 改 `tools: [...].map(toOpenAIFunctionDescriptor)`
-- SSE response 解析 `delta.tool_calls[i].function.{name, arguments}` 累积
-- adapter to harness ToolUseEvent shape
-
-让 gpt-5.4 在 Anthropic 上游挂时也能跑 multi-turn harness.
+期望见 `conversations/<email>-<sess>-<msg>` slug 出现.
 
 ---
 
-## 启动 (下次 session 第一步)
+## 待办 (下次 session 接手)
+
+### A — Todo 2 markdown 流式渲染业界方案调研 (~半 day 调研 + 半~1 day 实施)
+
+User concern: 当前 `TranslatedBody.tsx` 自写 regex + DOMPurify + auto-balance
+preprocess hacky, 不支持 nested list / table / code block triple ``` /
+italic single `*`.
+
+调研 priority 高到低:
+1. claude.ai web (F12 看 DOM 怎么处理流式 chunk)
+2. vercel/ai SDK `@ai-sdk/react` useChat hook
+3. streaming-react-markdown lib
+4. Cursor / Continue / Aider 编辑器集成 (GitHub 开源 read code)
+5. ChatGPT web
+6. shadcn/ai chat template
+7. Karpathy nanochat / llm.c demo
+
+输出 `docs/chat-markdown-streaming-research.md` 比较 (deps / LOC / GFM 覆盖 /
+partial chunk 视觉跳动 / XSS / maintenance), 决定是否替换 TranslatedBody.
+
+### B — 25 scenario eval (~1 hour)
+
+跑 `docs/eval/email_scenarios.md` S01-S25 拿 pass rate:
+- M1 P1 gate: ≥ 70% (≥ 14/20) on S01-S20
+- KOS gate: ≥ 60% (≥ 3/5) on S21-S25
+
+打开邮件 → chat panel Custom AI backend → 复制 prompt 一条条测 → 记
+`docs/eval/p1-baseline.md`. 满足 gate 后翻 default flag (MAILAGENT_AGENT_HARNESS) +
+合 main.
+
+### C — P2 chat-history 改进 (1-2 day)
+
+Phase 1 ship 后, design doc §4 列了 P2 项, 优先级取决于 P1 dogfood 数据:
+
+| 子任务 | LOC | Blocker |
+|---|---|---|
+| **Cliff-summary** (代替 simple sliding) | ~250 | sliding window 跑稳 1 周, user feedback 老 turn 信息丢的问题 |
+| **Auto-push session end** (KOS auto ingest) | ~400 | user 决策默认开/关 (privacy) |
+| **KOS server-side time decay** | ~50 | Lucien availability sync gbrain time_decay param |
+
+### D — M1 polish #3 + #4 (旧 handoff 待办, 仍 valid)
+
+**#3 — MessageList ToolCallRow audit 渲染** (~300 LOC):
+当前 harness 路径 tool_use / tool_result event 没渲染 audit 卡片.
+user 看不到 LLM 调了什么 tool / input / output / 用了几秒. 实施 step:
+1. `handlers/chat.ts` 加 `ipcMain.handle('chat:listToolCalls', ...)`
+2. `shared/api/types.ts` ChatApi 加 `listToolCalls(messageId)`
+3. ElectronApi/HttpApi 加实现
+4. `MessageList.tsx` AssistantBubble 加 `useToolCalls(messageId)` hook +
+   渲染折叠卡片 (折叠 show "(3 tools used) [▶]", 展开 show I/O JSON)
+5. `useEmailChat.ts` tool_use/tool_result event handler 触发 refetch
+
+**#4 — OpenAI Chat Completions tool_calls 增量协议** (~400 LOC):
+fallback 链 `claude-sonnet-4-6 → gpt-5.4 → claude-opus-4-7` 命中 gpt-* 时
+`custom_api.ts` disable harness (isAnthropicModel gate). 加 OpenAI 协议
+tool_calls 增量 SSE 解析让 gpt 也能跑 multi-turn.
+
+### E — D3 KOS slug namespace 跟 Lucien sync
+
+P1-C `kos_save.ts` 用 default `conversations/<email>-<session>-<message>`,
+但 KOS gbrain 可能已 dedicated namespace (notes/ / chat-history/ / 别的).
+ping Lucien 一下:
+
+```
+你好, MailAgent chat agent P1 加了用户一键 [✨ 保存到 KOS] 把 assistant
+回答 + 前 user 提问保存到 KOS. 现在用 default slug
+conversations/<email-id>-<session-id>-<message-id>, frontmatter type:
+conversation, tags: [conversation, mailagent-chat]. 看 gbrain 是否
+有规范的 namespace 让我们 align? 比如 notes/<id> 还是
+chat-history/<source>/<id>?
+```
+
+Lucien 决定后改 `frontend/src/electron/main/chat/kos_save.ts` SLUG_PREFIX
+常量一处即可.
+
+---
+
+## 启动 (下次 session)
 
 ```bash
 cd /Users/chenyuanquan/Documents/MailAgent
-git log --oneline -3  # 确认 HEAD = 9d498ea
-git status -s         # 看 working tree (calendar UI 改动可能还在 unstaged)
+git log --oneline -10  # 确认 HEAD = 4bdc232 (或 user 之后 push 别的)
+git status -s          # working tree 应该干净 (user calendar / island 改动已 commit)
 
-# 看本 handoff
-cat frontend/SPRINT19-NEXT-SESSION-HANDOFF.md
+cat frontend/SPRINT19-NEXT-SESSION-HANDOFF.md  # 看本 handoff
 ```
 
 ### 推荐顺序
 
-1. **Todo 3 T1+T2+T3** (5 min) — 把本 session 已 ship 的 fix verify 一下
-2. **Todo 1** (1-2 day) — chat 历史持久化设计 + 实施 (最重要 user concern)
-3. **Todo 2** (半 day 调研 + 半 day-1 day 实施) — markdown 业界方案
-4. **M1 polish #3** (半 day) — ToolCallRow audit
-5. **M1 polish #4** (1 day) — OpenAI tool_calls
-6. **Todo 3 长链 dogfood** — 20+5 scenario + producer 真启用 + 监控
+1. **P1 verify** (15 min) — 跑上面 §"P1 验证清单" 3 个 P1-A/B/C 测试,
+   有 bug 立即修, 无 bug mark P1 dogfood pass
+2. **B 25 scenario eval** (1 hour) — 拿 pass rate 数据决定是否翻 default flag
+3. **A Todo 2 markdown 调研** (半 day) — 大块独立任务
+4. **C P2 chat-history** (depends on P1 dogfood data) — sliding window 跑稳后
+5. **D M1 polish #3 / #4** (1-1.5 day) — 完整 ship M1
+6. **E ping Lucien** — async, 等回应再改 slug
 
 ---
 
@@ -219,14 +218,35 @@ cat frontend/SPRINT19-NEXT-SESSION-HANDOFF.md
 - KOS 集成设计: `docs/kos-integration-design.md`
 - Dogfood checklist: `docs/eval/m2-dogfood-checklist.md`
 - Eval scenarios: `docs/eval/email_scenarios.md` (S01-S25)
+- Todo 1 设计 doc: `docs/chat-history-design.md` (本 session ship, 含 D1-D6 6 决策点)
 - Smoke script: `scripts/dev/kos_smoke_test.sh` (4/4 OK baseline)
+- chat_db v4 migration: `frontend/src/electron/main/chat_db.ts:235` (PRAGMA
+  foreign_keys=OFF out-of-transaction pattern, 关键细节注释里)
 
 ## 注意事项
 
-1. **calendar UI working tree 改动** — 几次 git status 看到 user 自己的 calendar 视觉 work 一直在 unstaged 状态. 跟 agent-harness 无关, 别动. 下次 session 别意外 `git add .`.
+1. **calendar / island working tree 改动** — 本 session 期间 user 在
+   parallel 推 calendar Phase 2 + island Phase 1 commits. 我所有 fix 都
+   精确 git add 自己改的文件, 不沾 calendar / island. 下次 session 同样
+   原则.
 
-2. **better-sqlite3 ABI mismatch** — Node 跟 Electron 版本不同会 NODE_MODULE_VERSION 错. 跑 vitest 前先 `pnpm rebuild better-sqlite3`; 跑 Electron 前 `pnpm dev` 内部已 rebuild 走 Electron target.
+2. **better-sqlite3 ABI mismatch 复发风险** — `pnpm dev` rebuild Electron
+   ABI, vitest rebuild Node ABI. 每次切换跑测试前 `pnpm rebuild
+   better-sqlite3` 一次. CI 应该自动这步 (no manual).
 
-3. **KOS 凭据安全** — `KOS_OAUTH_CLIENT_ID` + `_SECRET` 在 `.env` (gitignored). 别 commit 进 repo. Lucien 在 mac mini `~/.gbrain/oauth-clients/mailagent.json` 存 source.
+3. **dotenv-bootstrap 副作用** — 现在 frontend main process 启动会 load
+   项目根 .env 注入 process.env. 之前所有 frontend 读 `process.env.X` 的
+   flag (LLM_AGENT_ENABLED / KEEP_ALIVE_ENABLED 等 30+) 都开始**第一次
+   真生效**. 若 user 报告某 flag 行为变了, 大概率是这个原因.
 
-4. **M2 默认全 OFF** — 4 个 KOS flag 默认 false. 上次 session 我跑 producer dry-run 时改过, 跑完手动恢复 false 了. 确认 `.env` 看一眼.
+4. **chat_db v4 migration 已自动跑** — 用户 chat panel open 一次后
+   schema_version 升到 4. 旧 v3 user data preserved (PRAGMA foreign_key_check
+   过). 不需 手动操作.
+
+5. **KOS [✨ 保存到 KOS] 默认 ON** — `isKosTimeDecayEnabled` default true.
+   user 若想关掉 client-side rerank (debug / A/B 对比), `.env` 加
+   `MAILAGENT_KOS_TIME_DECAY_ENABLED=false`. UI 按钮不受此 flag 影响 (按钮
+   永远显示, 按下走 backend service 不论 rerank).
+
+6. **HISTORY_WINDOW_SIZE = 20 hardcoded** — `dispatcher.ts` 文件顶部常量.
+   想调整改一处. 后续 P2 加 env-based 可调即可.
