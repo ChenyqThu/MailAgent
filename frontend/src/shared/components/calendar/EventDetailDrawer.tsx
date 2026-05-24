@@ -1,14 +1,33 @@
-// 视觉复刻 mockup-calendar.html §EventDetailDrawer (2026-05-23) —
-// 右侧 slide-in 抽屉 (.drawer + .drawer-backdrop). 接口不变 (occurrence /
-// onClose). instant fields 从 occurrence 直读, lazy fields (description /
-// rrule) 等 useCalendarEvent fetch — 加载时占位 .skel shimmer.
+// 视觉复刻 mockup-calendar.html §EventDetailDrawer +
+// Phase 2.5 §11.6 (mockup-calendar-ops.html) — RSVP vs owner ops 视觉分流.
 //
-// dw-foot 的 [接受/暂定/拒绝] 按钮在 Phase 2 写能力上线前一律 disabled
-// (cursor:not-allowed), 视觉上提示 "stub".
+// dw-head 加 .dw-role badge (owner/attendee); dw-foot 按 isOwner 二分:
+//   - owner (organizer === user.email): 单行 [编辑.btn-op.edit] [删除.btn-op.delete]
+//   - attendee: .rsvp-label + 3 .btn-rsvp + 第二行 disabled [编辑][删除] + .ops-note 🔒
+//
+// userEmail 走 mailApi.settings.get().userEmail (跟 Sidebar 同款 query
+// key='settings').  normalize = lowercase + strip "mailto:" 跟 organizer 比.
+//
+// Phase 2.5 §11.2 — 删除流程改 undo toast: 关 drawer + push 到 calendar-undo
+// store, 5s 内点 [撤销] 取消, 否则真发 CalDAV DELETE. 不再 window.confirm.
 
-import { Check, ExternalLink, Loader2, Mail, MapPin, Pencil, Trash2, User, Users, Video, X } from 'lucide-react'
+import {
+  Check,
+  Crown,
+  ExternalLink,
+  Loader2,
+  Lock,
+  Mail,
+  MapPin,
+  Pencil,
+  Trash2,
+  User,
+  Users,
+  Video,
+  X
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { EventFormModal } from './EventFormModal'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
@@ -20,6 +39,7 @@ import type {
   RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { useUndoToastStore } from '@shared/state/calendar-undo'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 // 与会者头像 — mockup 同色, 6 色循环按 index.
@@ -46,6 +66,12 @@ function formatRange(startIso: string, endIso: string, isAllDay: boolean): strin
   const t1 = `${pad(s.getHours())}:${pad(s.getMinutes())}`
   const t2 = `${pad(e.getHours())}:${pad(e.getMinutes())}`
   return `${dateStr}  ${t1} → ${t2}`
+}
+
+/** Normalize organizer/userEmail for case-insensitive compare; strips
+ *  "mailto:" prefix CalDAV ICS 出 organizer 时常带. */
+function normalizeEmail(s: string | null | undefined): string {
+  return (s || '').trim().toLowerCase().replace(/^mailto:/, '')
 }
 
 const RESP_MAP: Record<string, { cls: string; label: string }> = {
@@ -143,12 +169,25 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
     : null
   const { data: detail, isLoading } = useCalendarEvent(opts)
 
-  // Phase 2.1 — RSVP mutation. 走 mailApi.calendar.eventRsvp → DavMail SMTP
-  // submission → Outlook Calendar Assistant 异步更新 organizer 端 PARTSTAT.
-  // 成功后 invalidate eventsList + event detail query, 让本地 response_status
-  // (后端 repo.update_response_status 已写) 即刻反映到 UI.
   const mailApi = useMailApi()
   const qc = useQueryClient()
+
+  // Phase 2.5 §11.6 — userEmail 用于判 isOwner. 跟 Sidebar 同 query key,
+  // react-query 缓存 share, settings 不会因 drawer 反复重拉.
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => mailApi.settings.get(),
+    staleTime: 5 * 60_000
+  })
+  const userEmail = settings?.userEmail ?? null
+  const isOwner = !!(
+    occurrence &&
+    userEmail &&
+    normalizeEmail(occurrence.organizer) === normalizeEmail(userEmail)
+  )
+
+  // Phase 2.1 — RSVP mutation. 走 mailApi.calendar.eventRsvp → DavMail SMTP
+  // submission → Outlook Calendar Assistant 异步更新 organizer 端 PARTSTAT.
   const rsvpMut = useMutation({
     mutationFn: (response: RsvpResponse) => {
       if (!occurrence) throw new Error('no occurrence selected')
@@ -182,10 +221,10 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
       tentative: '暂定',
       decline: '拒绝'
     }
-    const organizer = (occurrence.organizer || '').replace(/^mailto:/i, '')
+    const organizer = normalizeEmail(occurrence.organizer)
     const ok = window.confirm(
       `确认 [${labels[response]}] 并把回应发回组织者?\n\n` +
-        `事件: ${occurrence.summary || '(无标题)'}\n` +
+        `事件: ${occurrence.summary || '未命名事件'}\n` +
         `组织者: ${organizer || '(未知)'}\n\n` +
         `此操作会通过 DavMail SMTP 立即发邮件给组织者, 不可撤销.`
     )
@@ -193,22 +232,16 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
     rsvpMut.mutate(response)
   }
 
-  // Phase 2.3 — edit / delete owner ops (CalDAV PUT / DELETE).
-  // Edit 跟 RSVP 区别: owner 改自己日历, attendees 收到通知; RSVP 是 attendee
-  // 给 organizer 回应 PARTSTAT. 两条独立路径.
+  // Phase 2.5 §11.2 — 删除流程: 关 drawer + push 到 calendar-undo store,
+  // 5s 后真发 CalDAV DELETE. 不再 window.confirm.
+  const pushUndo = useUndoToastStore((s) => s.push)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const deleteMut = useMutation({
-    mutationFn: () => {
-      if (!occurrence) throw new Error('no occurrence selected')
-      return mailApi.calendar.eventDelete({
-        icalUid: occurrence.ical_uid
-      })
-    },
+    mutationFn: (icalUid: string) => mailApi.calendar.eventDelete({ icalUid }),
     onSuccess: () => {
-      toastSuccess('事件已删除, ~60s 内同步到本地视图')
+      // toast 已经在 undo stack 走过 commit 流程, 这里只 invalidate
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
       void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
-      onClose()
     },
     onError: (err: unknown) => {
       const e = err as Error
@@ -218,13 +251,17 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
 
   const handleDelete = (): void => {
     if (!occurrence) return
-    const ok = window.confirm(
-      `确认删除事件 [${occurrence.summary || '(无标题)'}]?\n\n` +
-        `此操作直接通过 CalDAV DELETE 删除 Exchange 端日历事件, 不可撤销.\n` +
-        `与会者会收到取消通知.`
-    )
-    if (!ok) return
-    deleteMut.mutate()
+    // capture 当前 occurrence 到 closure, 避免后续 drawer 重选别的事件错改 UID
+    const target = occurrence
+    const summaryShort = (target.summary || '未命名事件').slice(0, 30)
+    onClose()
+    pushUndo({
+      title: `已删除「${summaryShort}」`,
+      subtitle: '5 秒后同步到 CalDAV',
+      durationMs: 5000,
+      onCommit: () => deleteMut.mutate(target.ical_uid),
+      onUndo: () => toastSuccess('已恢复 (未提交删除)')
+    })
   }
 
   // ESC closes
@@ -241,6 +278,10 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
     occurrence?.url ||
     occurrence?.location?.toLowerCase().includes('teams.microsoft.com')
   )
+
+  // 当前 response_status (用于 RSVP button .sel 高亮 + label "待回复" 提示)
+  const myResp = (occurrence?.response_status || '').toUpperCase()
+  const isNeedsAction = myResp === 'NEEDS-ACTION'
 
   return (
     <>
@@ -260,7 +301,27 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
           <>
             <div className="dw-head">
               <span className="dw-accent" aria-hidden />
-              <h2 className="dw-title">{occurrence.summary || '(无标题)'}</h2>
+              <div className="flex-1 min-w-0">
+                {/* §11.6 — 角色 badge: 组织者 / 与会者 */}
+                <span className={cn('dw-role', isOwner ? 'owner' : 'attendee')}>
+                  {isOwner ? (
+                    <>
+                      <Crown size={10} strokeWidth={2.2} />
+                      组织者
+                    </>
+                  ) : (
+                    <>
+                      <User size={10} strokeWidth={2.2} />
+                      与会者
+                    </>
+                  )}
+                </span>
+                <h2 className="dw-title">
+                  {occurrence.summary || (
+                    <span className="empty-field">未命名事件</span>
+                  )}
+                </h2>
+              </div>
               <button
                 type="button"
                 className="dw-close"
@@ -299,7 +360,14 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
 
               {occurrence.organizer && (
                 <MetaRow icon={<User size={13} strokeWidth={2} />} label="组织者">
-                  <span className="meta-v mono">{occurrence.organizer}</span>
+                  <span className="meta-v mono">
+                    {occurrence.organizer}
+                    {isOwner && (
+                      <span className="empty-field" style={{ fontStyle: 'normal', marginLeft: 6 }}>
+                        (我)
+                      </span>
+                    )}
+                  </span>
                 </MetaRow>
               )}
 
@@ -319,7 +387,7 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
                 </MetaRow>
               )}
 
-              {occurrence.response_status && (
+              {occurrence.response_status && !isOwner && (
                 <MetaRow label="我的回复">
                   <RespBadge status={occurrence.response_status} />
                 </MetaRow>
@@ -365,8 +433,6 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
                 )}
               </MetaRow>
 
-              {/* lazy: RRULE — instant if occurrence is RRULE instance, but raw
-                * rule 在 detail 里. 加载时 skel placeholder. */}
               {isLoading ? (
                 <MetaRow label="重复规则">
                   <span className="skel" style={{ width: '70%' }} />
@@ -377,7 +443,6 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
                 </MetaRow>
               ) : null}
 
-              {/* lazy: 描述 */}
               {isLoading ? (
                 <MetaRow label="描述">
                   <span className="skel" style={{ width: '88%' }} />
@@ -390,93 +455,103 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
               ) : null}
             </div>
 
+            {/* ═══ Phase 2.5 §11.6 — dw-foot RSVP vs owner 分流 ═══ */}
             <div className="dw-foot">
-              {/* Phase 2.1 — 3 个真 RSVP button. data-current 高亮当前
-                  response_status; rsvpMut.isPending 全部 disabled cursor:wait. */}
-              <div className="dw-actions">
-                <button
-                  type="button"
-                  className="dw-act"
-                  data-current={
-                    (occurrence.response_status || '').toUpperCase() === 'ACCEPTED'
-                  }
-                  disabled={rsvpMut.isPending}
-                  onClick={() => handleRsvp('accept')}
-                  title="接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者"
-                >
-                  {rsvpMut.isPending && rsvpMut.variables === 'accept' ? (
-                    <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-                  ) : (
-                    <Check size={13} strokeWidth={2} />
-                  )}
-                  接受
-                </button>
-                <button
-                  type="button"
-                  className="dw-act"
-                  data-current={
-                    (occurrence.response_status || '').toUpperCase() === 'TENTATIVE'
-                  }
-                  disabled={rsvpMut.isPending}
-                  onClick={() => handleRsvp('tentative')}
-                  title="暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者"
-                >
-                  {rsvpMut.isPending && rsvpMut.variables === 'tentative' && (
-                    <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-                  )}
-                  暂定
-                </button>
-                <button
-                  type="button"
-                  className="dw-act"
-                  data-current={
-                    (occurrence.response_status || '').toUpperCase() === 'DECLINED'
-                  }
-                  disabled={rsvpMut.isPending}
-                  onClick={() => handleRsvp('decline')}
-                  title="拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者"
-                >
-                  {rsvpMut.isPending && rsvpMut.variables === 'decline' && (
-                    <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-                  )}
-                  拒绝
-                </button>
-              </div>
-
-              {/* Phase 2.3 — owner ops: [编辑] [删除]
-                  跟 RSVP (attendee 视角) 分两行视觉区分. caldav-only events
-                  始终启用; email_ics events 在 CalDAV 端也是同一资源, 可改.
-                  删除是 danger action, 红色描边强调. */}
-              <div className="dw-actions mt-1.5">
-                <button
-                  type="button"
-                  className="dw-act"
-                  disabled={deleteMut.isPending}
-                  onClick={() => setEditModalOpen(true)}
-                  title="编辑事件 — 通过 CalDAV PUT 改 Exchange 端"
-                >
-                  <Pencil size={12} strokeWidth={2} />
-                  编辑
-                </button>
-                <button
-                  type="button"
-                  className="dw-act"
-                  disabled={deleteMut.isPending}
-                  onClick={handleDelete}
-                  style={{
-                    color: 'rgb(227, 98, 98)',
-                    borderColor: 'rgba(227, 98, 98, 0.4)'
-                  }}
-                  title="删除事件 — 通过 CalDAV DELETE, 与会者会收取消通知"
-                >
-                  {deleteMut.isPending ? (
-                    <Loader2 size={12} strokeWidth={2} className="animate-spin" />
-                  ) : (
-                    <Trash2 size={12} strokeWidth={2} />
-                  )}
-                  删除
-                </button>
-              </div>
+              {isOwner ? (
+                /* owner: 单行 [编辑.btn-op.edit] [删除.btn-op.delete] */
+                <div className="owner-ops-row">
+                  <button
+                    type="button"
+                    className="btn-op edit"
+                    onClick={() => setEditModalOpen(true)}
+                    title="编辑事件 — 通过 CalDAV PUT 改 Exchange 端"
+                  >
+                    <Pencil size={13} strokeWidth={2} />
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-op delete"
+                    onClick={handleDelete}
+                    title="删除事件 — 5 秒撤销窗口后通过 CalDAV DELETE"
+                  >
+                    <Trash2 size={13} strokeWidth={2} />
+                    删除
+                  </button>
+                </div>
+              ) : (
+                /* attendee: RSVP 高亮 + 第二行 disabled owner ops + 🔒 note */
+                <>
+                  <div className="rsvp-label">
+                    <Check size={11} strokeWidth={2} />
+                    我的回复{isNeedsAction ? ' · 待回复' : ''}
+                  </div>
+                  <div className="rsvp-row">
+                    <button
+                      type="button"
+                      className={cn('btn-rsvp', myResp === 'ACCEPTED' && 'sel')}
+                      disabled={rsvpMut.isPending}
+                      onClick={() => handleRsvp('accept')}
+                      title="接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者"
+                    >
+                      {rsvpMut.isPending && rsvpMut.variables === 'accept' ? (
+                        <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                      ) : (
+                        <Check size={13} strokeWidth={2} />
+                      )}
+                      接受
+                    </button>
+                    <button
+                      type="button"
+                      className={cn('btn-rsvp', myResp === 'TENTATIVE' && 'sel')}
+                      disabled={rsvpMut.isPending}
+                      onClick={() => handleRsvp('tentative')}
+                      title="暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者"
+                    >
+                      {rsvpMut.isPending && rsvpMut.variables === 'tentative' && (
+                        <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                      )}
+                      暂定
+                    </button>
+                    <button
+                      type="button"
+                      className={cn('btn-rsvp', myResp === 'DECLINED' && 'sel')}
+                      disabled={rsvpMut.isPending}
+                      onClick={() => handleRsvp('decline')}
+                      title="拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者"
+                    >
+                      {rsvpMut.isPending && rsvpMut.variables === 'decline' && (
+                        <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+                      )}
+                      拒绝
+                    </button>
+                  </div>
+                  <div className="owner-ops-row secondary">
+                    <button
+                      type="button"
+                      className="btn-op"
+                      disabled
+                      title="只能由组织者修改"
+                    >
+                      <Pencil size={13} strokeWidth={2} />
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-op"
+                      disabled
+                      title="只能由组织者修改"
+                    >
+                      <Trash2 size={13} strokeWidth={2} />
+                      删除
+                    </button>
+                  </div>
+                  <div className="ops-note">
+                    <Lock size={11} strokeWidth={2} />
+                    只能由组织者修改
+                  </div>
+                </>
+              )}
 
               <div className="fm">
                 UID: {occurrence.ical_uid}
