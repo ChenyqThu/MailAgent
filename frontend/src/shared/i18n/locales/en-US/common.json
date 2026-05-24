@@ -733,6 +733,13 @@
       "hint": "Switch view or click Retry to reload. See DevTools console for details.",
       "retry": "Retry"
     },
+    "relTime": {
+      "justNow": "just now",
+      "secondsAgo": "{n}s ago",
+      "minutesAgo": "{n}m ago",
+      "hoursAgo": "{n}h ago",
+      "daysAgo": "{n}d ago"
+    },
     "undo": {
       "aria": "Pending undo actions",
       "undo": "Undo",

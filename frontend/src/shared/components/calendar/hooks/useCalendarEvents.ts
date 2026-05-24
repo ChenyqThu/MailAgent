@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import i18n from 'i18next'
 import { useTranslation } from 'react-i18next'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -187,15 +188,28 @@ export function toIsoWithOffset(d: Date): string {
   return d.toISOString()
 }
 
-/** 把过去某时间格式化成 "刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前" 中文字符串.
- *  toolbar sync-pill 与 cal-card 副 status bar 共用, 保证语义一致. */
+/** 把过去某时间格式化成 "刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前".
+ *  toolbar sync-pill 与 cal-card 副 status bar 共用, 保证语义一致.
+ *
+ *  i18n: 纯 function 不能用 useTranslation hook, 走 i18next module-level
+ *  singleton ``i18n.t(...)``. 第二参 fallback 防 key 漏不破.
+ */
 export function relativeTime(d: Date): string {
   const secs = Math.floor((Date.now() - d.getTime()) / 1000)
-  if (secs < 5) return '刚刚'
-  if (secs < 60) return `${secs} 秒前`
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟前`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时前`
-  return `${Math.floor(secs / 86400)} 天前`
+  if (secs < 5) return i18n.t('calendar.relTime.justNow', '刚刚')
+  if (secs < 60)
+    return i18n.t('calendar.relTime.secondsAgo', '{n} 秒前', { n: secs })
+  if (secs < 3600)
+    return i18n.t('calendar.relTime.minutesAgo', '{n} 分钟前', {
+      n: Math.floor(secs / 60)
+    })
+  if (secs < 86400)
+    return i18n.t('calendar.relTime.hoursAgo', '{n} 小时前', {
+      n: Math.floor(secs / 3600)
+    })
+  return i18n.t('calendar.relTime.daysAgo', '{n} 天前', {
+    n: Math.floor(secs / 86400)
+  })
 }
 
 /** 每 tickMs 强制 re-render — 让依赖 relativeTime() 的"X 秒前"字符串自然走时,
