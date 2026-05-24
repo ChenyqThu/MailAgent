@@ -95,17 +95,23 @@ class CalendarReconciler:
         for r in local_rows:
             if r.ical_uid in seen_uids:
                 continue
-            # F10 — soft_delete 候选:
-            # (a) 单次 event dtstart 在窗口内 → 老逻辑
-            # (b) RRULE master event (即使 dtstart 远早于窗口) → 老逻辑漏判,
-            #     CalDAV 端真删后本地 stuck, 前端 expander 持续展开"幽灵会议"
-            # CalDAV reader 用 expand=False 列窗口 events 时会返回所有 master,
-            # 不在 seen_uids 即真被删. 漏掉 RRULE master → 数据 corruption.
+            # F10 + F23 — soft_delete 候选:
+            # (a) 单次 event dtstart 在窗口内
+            # (b) RRULE master event (F10): 即使 dtstart 远早于窗口, CalDAV
+            #     reader 用 expand=False 列窗口 events 时会返回所有 master,
+            #     不在 seen_uids 即真被删 → 漏掉 master → 前端 expander 持续
+            #     展开"幽灵会议"
+            # (c) occurrence override (recurrence_id 非空, F23): 用户单删
+            #     一个 occurrence, Exchange 端会自动加 EXDATE 到 master, 但
+            #     本地 occurrence override row 仍 stuck (dtstart 可能在窗口
+            #     外没被原 in_window 判定 cover). 加 recurrence_id 非空也
+            #     进入 candidate, 跟 master 平行处理.
             is_in_window = r.dtstart_utc < we and (
                 r.dtend_utc is None or r.dtend_utc >= ws
             )
             is_rrule_master = bool(r.rrule)
-            if not (is_in_window or is_rrule_master):
+            is_occurrence_override = r.recurrence_id is not None
+            if not (is_in_window or is_rrule_master or is_occurrence_override):
                 continue
             try:
                 affected = self.repo.soft_delete(
