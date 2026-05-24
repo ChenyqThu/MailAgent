@@ -1,9 +1,12 @@
 # Calendar Module — PRD
 
-**Status**: Phase 1 数据层落地 (commits c8d241d / 478baac / 706788d / d178c9b), UI 待 mockup
+**Status**: Phase 1+2 全套 ship — 数据层 (c8d241d/478baac/706788d/d178c9b) +
+Phase 2 写能力 (RSVP 98b017f / 事件 CRUD 719cf93 / Replay 重做 a9489ce) +
+行为层 (82943fe) + 周视图列宽 fix (e47b9b7). 重心移到 UI polish + 多 calendar +
+RRULE/全天事件 等高级写能力, **mockup 设计 brief 见 §12**
 **Owner**: 内部产品 / MailAgent
-**为谁写**: claude design / 后续 frontend 实现
-**Date**: 2026-05-23
+**为谁写**: claude design (出 mockup) → 后续 frontend 实现 (1:1 复刻)
+**Date**: 2026-05-23 (Phase 2 ship 时点)
 
 ---
 
@@ -263,26 +266,55 @@ URL 形态: `/admin/calendar?view=<view>` (TanStack Router)
 
 ---
 
-## 7. Phase 2+ 待办 (路线图, 视频面试参考)
+## 7. Phase 2+ 路线图 (Phase 2 ✅ ship, 新 Phase 2.5/3/4/5 在路上)
 
-### Phase 2: 写能力 (后续 1-2 sprint)
-- **RSVP**: 抽屉里加 [接受/暂定/拒绝] 按钮, 走 SMTP iTIP REPLY 路径
-- **创建事件**: toolbar 加 [+ 新建], 表单弹窗 → CalDAV PUT
-- **修改/删除**: 抽屉里加 [编辑]/[删除], CalDAV PUT/DELETE
-- **重新设计 Replay 语义**: 当前基于"邮件重 fetch"对 caldav-only 失效, 改成"从 calendar_event 重导出 Notion"
+### Phase 2: 写能力 ✅ **2026-05-23 全套 ship** (6 commits)
 
-### Phase 3: legacy 下线 (前端 V2 稳定后)
-- 删除 `calendar_main.py` + `src/calendar/` 目录 + PM2 `calendar-sync` 进程
-- DB 软迁移: 老 `source='legacy_calendar_app'` 行加 `deleted_at`
+- [x] **2.1 RSVP** (commit `98b017f`): drawer 3 button 真发 RFC 5546 iTIP REPLY 给
+      organizer (DavMail SMTP 1025); response_status 高亮当前状态; native confirm 防误点;
+      CLI `mailagent calendar rsvp <ical_uid> {accept|tentative|decline}`; 49 pytest
+- [x] **2.2 创建事件** (commit `719cf93`): toolbar [+ 新建] → EventFormModal 表单
+      (标题/起止/地点/描述/与会者) → CalDAV PUT (1080); CLI `calendar create`
+- [x] **2.3 编辑/删除** (commit `719cf93`): drawer [编辑] 复用同 modal (预填) →
+      CalDAV PUT + SEQUENCE+1; [删除] confirm → CalDAV DELETE; CLI `calendar update/delete`;
+      29 pytest (test_caldav_writer)
+- [x] **2.4 Replay 重做** (commit `a9489ce`): 基于 SQLite calendar_event 行重导出 Notion,
+      任何 source 都可 (caldav-only events 也能 replay); CLI `calendar replay <ical_uid>`;
+      22 pytest
 
-### Phase 4: 数据质量增强
-- **CTag fallback 优化**: 当前 DavMail PROPFIND CTag 返 XML 解析失败, worker 走 1h time-fallback. 可换 sync-token (RFC 6578) 或 IMAP IDLE 信号
-- **多 calendar 支持**: 当前只看 `calendar_name="日历"` (默认 Outlook 日历), 添加共享 / 子 calendar 切换 chip
-- **FTS5 搜索**: `calendar_event_fts` 表 + 顶栏 ⌘K 搜会议
+### Phase 2.5: UI polish (mockup 引领, §11/§12 详)
 
-### Phase 5: 跨设备
-- Web SPA: `HttpApi.calendar.*` 走 FastAPI proxy (当前 stub `notImplemented`)
-- iOS / Android: 移动专属视图设计
+- [ ] **EventFormModal 视觉 polish** (§11.1) — 当前 inline Tailwind 简洁但糙; 抽
+      .modal-* class + attendees chip 输入 + 改 datetime picker
+- [ ] **删除 undo toast** (§11.2) — 5s 撤销窗口 (替代 native confirm)
+- [ ] **light 主题验证** (§11.3) — Phase 2 全程 dark first 设计, light 主题没实测
+- [ ] **EventChip empty title 兜底** (§11.4) — `(无标题)` 改 italic 灰 `未命名事件`
+- [ ] **副 status bar 视觉重做** (§11.5) — 用户向 vs 运维向元数据分离
+- [ ] **RSVP vs owner ops 视觉分流** (§11.6) — `organizer === user.email` 时隐藏 RSVP
+
+### Phase 3: legacy 下线 (Phase 2 跑稳 2-4 周后)
+
+- [ ] 删 `calendar_main.py` + `src/calendar/` 整目录 + PM2 `calendar-sync` 进程
+- [ ] `source='legacy_calendar_app'` 老 events: archive 表 / soft delete / 留着不动
+- [ ] CLI `admin cleanup-syncstore --legacy-calendar` 清残留
+
+### Phase 4: 数据质量 + 高级写能力 (中期)
+
+- [ ] **CTag fallback 优化**: 换 sync-token (RFC 6578) 或 IMAP IDLE 信号 (当前 1h
+      time-fallback, 用户改日历最多 1h 才同步)
+- [ ] **多 calendar 支持** (★ 高优先级, §11.7) — toolbar 加 calendar chip 切换器;
+      useCalendarNames 已 ship; EventFormModal create 加 calendar 选择
+- [ ] **全天事件 + 跨时区** (§11.8) — EventFormModal 加 [全天] toggle + tz select;
+      CalDAV 全天用 DATE 而非 DATE-TIME
+- [ ] **周期事件创建/编辑 (RRULE)** (§11.9) — EventFormModal 加 "重复" 段;
+      编辑 RRULE 事件分 "改这一次 / 改未来 / 改整个系列" (Outlook/Google 标准 3 模式)
+- [ ] **FTS5 搜索**: `calendar_event_fts` 表 + 顶栏 ⌘K 搜会议
+- [ ] **右键菜单** (§11.10) — EventBlock/Chip 右键弹 [打开/复制链接/跳邮件/复制 UID/删除]
+
+### Phase 5: 跨设备 (V2)
+
+- [ ] Web SPA: `HttpApi.calendar.*` 走 FastAPI proxy (当前 stub `notImplemented`)
+- [ ] iOS / Android: 移动专属视图设计
 
 ---
 
@@ -319,33 +351,309 @@ URL 形态: `/admin/calendar?view=<view>` (TanStack Router)
 
 ---
 
-## 10. 验收 checklist (给后续实现 + QA 用)
+## 10. 验收 checklist (功能交付状态)
 
-### 数据 (已通过)
+### 数据层 (Phase 1 ✅)
 - [x] DB v15 calendar_event + calendar_sync_state 表
 - [x] CalendarSyncWorker 启动后 60s 内拉到 events
 - [x] 55 events 落 SQLite, 13 个 RRULE 保留完整 RRULE 字符串
 - [x] `mailagent calendar today/week/recurring discover` 都返正确数据
 
-### 视图 (Phase 1 已实现, 待 mockup 优化)
+### 视图 (Phase 1 ✅, 等 mockup 优化)
 - [x] 5 个视图都能渲染 (today/week/month/agenda/recurring)
 - [x] EventBlock 按时长 stretch + 并发分列
 - [x] EventChip 响应状态视觉编码
 - [x] EventDetailDrawer 显示完整字段 + 关联邮件跳转
-- [ ] 视觉密度 / 配色 / 间距 ← **claude design 优化**
+- [x] **周视图列宽对齐** (commit `e47b9b7` scrollbar-gutter fix)
+- [ ] 视觉密度 / 配色 / 间距 ← **claude design 优化 (§11)**
 - [ ] DayView 当前时间线
 - [ ] MonthView "+N 更多" popover (现 in-place 展开不太好)
 - [ ] Recurring 视图整体布局优化 (现 Sprint 6 老表格)
 
-### 边缘状态 (待补强)
+### 边缘状态
 - [x] 空状态 (3 个视图都有 EmptyState)
 - [x] 加载 skeleton
+- [x] **副 status bar "自动同步 N 秒前" 显示** (commit `82943fe`)
 - [ ] 同步失败的 toolbar 红点
 - [ ] 抽屉里 "数据加载中..." vs 字段为空的区分
 
-### 交互 (待 mockup)
+### 交互 (Phase 1+ ✅)
 - [x] 视图切换 (URL ?view=)
 - [x] 日期导航 (上一/今天/下一)
-- [x] 手动同步按钮
-- [ ] keyboard shortcuts (G+T 今日 / G+W 周 / etc.)
-- [ ] 右键菜单 (复制链接 / 跳邮件 / etc.)
+- [x] 手动同步按钮 / 急刷
+- [x] **events 60s 自动 refetch + window focus refetch** (commit `82943fe`)
+- [x] **recurring 主动 fetch** (commit `82943fe`, 不再 lazy)
+- [x] **keyboard shortcuts** G+D/W/M/A · T · ← → · ⌘R · ? · Esc
+- [ ] 右键菜单 (§11.10)
+
+### Phase 2 写能力 ✅ **全套 ship 2026-05-23**
+- [x] **2.1 RSVP**: drawer 3 button 真发 iTIP REPLY (commit `98b017f`)
+- [x] **2.2 创建事件**: toolbar [+ 新建] modal → CalDAV PUT (commit `719cf93`)
+- [x] **2.3 编辑事件**: drawer [编辑] modal → CalDAV PUT + SEQUENCE+1 (commit `719cf93`)
+- [x] **2.3 删除事件**: drawer [删除] confirm → CalDAV DELETE (commit `719cf93`)
+- [x] **2.4 Replay**: 任何 source 重导出 Notion (commit `a9489ce`)
+- [x] **测试**: 后端 pytest 78 全过 (22 replay + 49 RSVP/iTIP + 29 caldav_writer);
+      前端 vitest 28 全过
+
+### Phase 2.5 UI polish (待 mockup 引领, §11/§12 详)
+- [ ] EventFormModal 视觉 polish (§11.1)
+- [ ] 删除 undo toast (§11.2)
+- [ ] light 主题验证 (§11.3)
+- [ ] EventChip empty title fallback (§11.4)
+- [ ] 副 status bar 视觉重做 (§11.5)
+- [ ] RSVP vs owner ops 视觉分流 (§11.6)
+
+### Phase 4 (待 mockup + impl)
+- [ ] 多 calendar chip 切换器 (§11.7)
+- [ ] 全天事件 + 跨时区 (§11.8)
+- [ ] 周期事件 RRULE 创建/编辑 (§11.9)
+
+---
+
+## 11. 待实现功能 — 详细 spec (给 claude design + impl 用)
+
+每项包含 **需求 / 交互流程 / 后台设计 / UI 设计要求** 4 段, mockup 阶段必读.
+
+### 11.1 ★ EventFormModal 视觉 polish
+
+**需求**: 当前 inline Tailwind 实现简洁但糙. 用户每天会用 (新建/编辑事件), 视觉重要.
+
+**交互流程**:
+1. toolbar [+ 新建] 或 drawer [编辑] 触发
+2. modal 居中淡入 (backdrop blur), 标题 "新建事件" / "编辑事件"
+3. 字段: 标题 (必填) / 起止时间 / 地点 / 描述 / 与会者
+4. 用户填表 → 点 [创建] / [保存]
+5. modal 关闭, toast "事件已创建" / "已更新"
+
+**后台设计**: 已实现 (`mailApi.calendar.eventCreate/eventUpdate`)
+
+**UI 设计要求 (给 claude design)**:
+- modal-card glass-2 style, 宽 480-520px, 圆角 12px, shadow xl
+- 字段 vertical stack, label uppercase + 11.5px + tracking-wide
+- 起止时间 grid 2 col 并排
+- **与会者: chip 输入** (输入 email + Enter 加 chip, 点 × 删) — 当前用 textarea, 必改
+- 主要 button [创建] / [保存] 用 coral; secondary [取消] 透明 + hover
+- Esc 关闭 + Tab focus trap (a11y)
+- 失败时 inline 错误显示 (标题为空 / 结束 ≤ 开始 等), 不弹 toast 干扰
+- light + dark 两套截图
+
+### 11.2 删除 undo toast (5s 撤销窗口)
+
+**需求**: 当前 [删除] 是 native confirm + 立即 DELETE, 误点不可撤销. 用户怕.
+
+**交互流程**:
+1. drawer [删除] → 立即关 drawer, 弹 toast "事件已删除 [撤销]" 5s
+2. 5s 内未撤销 → 真发 CalDAV DELETE
+3. 5s 内点撤销 → cancel, drawer 重开
+
+**后台设计**: 纯前端 setTimeout(5000) + flag, 不改后端
+
+**UI 设计要求**:
+- toast 屏幕底中, glass-2 + 5s 计时进度条 (圈圈或线条)
+- [撤销] coral 描边突出
+- 多 toast 时叠 (类似 macOS notification)
+
+### 11.3 light 主题验证
+
+**需求**: Phase 2 全程 dark first 设计, light 主题没实测.
+
+**交互流程**: 用户切 settings → Light → calendar 视图功能不破坏.
+
+**UI 设计要求 (给 claude design)**:
+- 所有新加 component (EventFormModal / 编辑删除 button / 副 status bar) 在 light 下:
+  - 对比度足够 (WCAG AA, 4.5:1)
+  - coral 描边在 light 背景下足够鲜
+  - glass-2 透明度调整
+- **dark + light 两套 mockup 截图对照**
+
+### 11.4 EventChip empty title fallback
+
+**需求**: 偶有 summary 为空的事件; 当前显示 `(无标题)` 视觉嘈杂.
+
+**UI 设计要求**:
+- 月视图 EventChip / 周/日视图 EventBlock / Agenda 列表 / drawer 标题 全部统一
+- 文本: italic + color: `ink-fg-3` (灰)
+- 内容: **"未命名事件"** (不要 quoted, 不要括号)
+
+### 11.5 副 status bar 视觉重做
+
+**需求**: 当前 cal-card 底部 inline 一行, 内容混杂用户向 + 运维向.
+
+**当前内容**: `47 日历 · 自动同步 30 秒前 · 窗口 -30d/+180d · ctag a3f8c2d · DavMail bridge · calendar_event v15`
+
+**改进方向**:
+- 用户向: `47 events · 13 recurring · 自动同步 30 秒前`
+- 运维向: hover ℹ️ icon 弹 popover (DavMail bridge / db version / ctag)
+
+**后台设计**: useCalendarSyncStatus 已有数据, 加 `events_total` (新 IPC 或 client-side count)
+
+**UI 设计要求**:
+- 视觉重做: cal-card 内底部浮动条 (类 mockup status pill) 还是保留 inline?
+- font-size 11.5px → 12px + letter-spacing 0.02em
+- 用户向 metric mono font (47 / 13 / 30s) 强调数字
+
+### 11.6 RSVP vs owner ops 视觉分流
+
+**需求**: drawer 同时显示 [接受/暂定/拒绝] (RSVP) + [编辑]/[删除] (owner ops).
+实际:
+- 自己组织 (organizer === user.email): RSVP 没意义, 服务端会拒
+- 别人邀请: [编辑] [删除] 服务端会拒 (CalDAV 403)
+
+**交互流程**:
+1. drawer 加载时判断 `occurrence.organizer === user.email`
+2. me === organizer: 隐藏 RSVP, 突出 [编辑] [删除]
+3. me ≠ organizer: 突出 RSVP, [编辑] [删除] 标灰 + title "只能由组织者修改"
+
+**后台设计**:
+- 前端 user.email: 已有 settings.get() 但调用多, 加 user context 全局
+- 后端不变
+
+**UI 设计要求**:
+- 两种模式视觉编码:
+  - **owner 模式**: dw-actions 单行 [编辑] [删除] coral; 无 RSVP 段
+  - **attendee 模式**: dw-actions 第一行 RSVP 3 button highlight; 第二行 [编辑] [删除] disabled
+- 隐藏不显示 toggle 切换 (aria-hidden)
+- (可选) drawer 顶部 badge "[组织者]" / "[与会者]" 标角色
+
+### 11.7 多 calendar chip 选择器 (★ Phase 4 优先)
+
+**需求**: 当前只默认 "日历". 用户可能有共享日历 / 个人多日历 / 订阅日历.
+
+**交互流程**:
+1. toolbar 加 chip 切换器 (类似 view chips 风格)
+2. chip: [全部] [日历] [Work] [Shared] [Personal] (从 useCalendarNames)
+3. 点 chip → URL `?calendar=Work` → events list 过滤
+4. EventFormModal create 表单加 "添加到日历" 选项
+
+**后台设计**:
+- useCalendarNames 已 ship (Phase 1)
+- CLI `mailagent calendar events --calendar X` 已支持
+- eventsList opts 已有 calendarName 参数
+- EventFormModal create 已支持 calendarName 参数
+
+**UI 设计要求**:
+- 跟 view chips 同视觉规范, 放在 view chips **左侧** (calendar 切 > view 切层次)
+- [全部] chip 默认激活
+- chip 数 > 5 时滚动 scroll-x
+
+### 11.8 全天事件 + 跨时区 (Phase 4)
+
+**需求**: 当前 EventFormModal 只支持 datetime, 全天事件不能新建; 只本地 tz 输入.
+
+**交互流程**:
+1. modal 顶部加 [全天] toggle
+2. 勾选 → 隐藏 time inputs, dtstart/end 只 date
+3. tz select 默认本地, 可选 UTC / 其他 IANA tz
+4. 编辑现有全天事件: toggle 自动勾选 (从 occurrence.is_all_day)
+
+**后台设计**:
+- caldav_writer.build_vevent 需支持 `DTSTART;VALUE=DATE:20260530` (vs `DTSTART:20260530T140000Z`)
+- CLI `mailagent calendar create --all-day --start 2026-05-30 --end 2026-05-31`
+- tz: 前端 datetime-local + tz select → ISO with offset
+
+**UI 设计要求**:
+- [全天] toggle 用 switch (视觉重) 不是 checkbox
+- toggle ON 时 time inputs 灰隐
+- tz select 默认折叠, "高级" 按钮展开
+
+### 11.9 周期事件 (RRULE) 创建/编辑 (Phase 4)
+
+**需求**: 当前 EventFormModal 只能创建单次, RRULE 不支持. 编辑 RRULE 事件 save 会清掉.
+
+**交互流程 (create)**:
+1. modal 加 "重复" 段, 默认 "不重复"
+2. 选 "重复" → 频率 select (每天 / 每周 / 每月 / 自定义)
+3. 频率展开:
+   - 每周: BYDAY 多选 (M T W T F S S)
+   - 每月: 第 N 个 X 或 第 N 天
+   - 自定义: RRULE 字符串 input (高级用户)
+4. UNTIL: 永远 / 直到 X 日 / N 次后停
+
+**交互流程 (edit RRULE 事件)**:
+1. drawer [编辑] → 弹 dialog "改这一次 / 改未来 / 改整个系列"?
+2. 改这一次: 创建 occurrence override (RECURRENCE-ID + 不带 RRULE)
+3. 改未来: 老事件加 UNTIL = 改动前一秒, 新事件接着 RRULE
+4. 改整个系列: 直接改 master event (SEQUENCE +1)
+
+**后台设计**:
+- caldav_writer.build_vevent 加 rrule 字段
+- 改这一次: 新事件 UID 跟系列同 + RECURRENCE-ID
+- CLI `mailagent calendar create --rrule "FREQ=WEEKLY;BYDAY=MO"`
+- CLI `mailagent calendar update <uid> --rrule X --recurrence-id Y --mode single|future|all`
+
+**UI 设计要求**:
+- "重复" 段视觉收纳 (默认折叠 "不重复"), 类 Outlook/Google
+- BYDAY 7 个小 chip toggle
+- "改这一次/改未来/改整个系列" dialog radio + apply button
+- 编辑 RRULE event 时 dialog 必弹 (不可绕过)
+
+### 11.10 右键菜单 (Phase 4, 可选)
+
+**需求**: EventBlock / EventChip 右键弹菜单, 快速 [打开] / [复制链接] / [跳关联邮件] / [复制 UID] / [删除].
+
+**UI 设计要求**: native context menu style, glass-2 背景, 项之间 1px 分割.
+
+---
+
+## 12. Mockup 设计 brief (给 claude design)
+
+下个 session 需 claude design 出 mockup 的 view / component (按优先级):
+
+### 必出 mockup (Phase 2.5)
+
+| # | 设计内容 | 参考 § | 输出文件 |
+|---|---|---|---|
+| 1 | EventFormModal 完整设计 (dark+light 两版) | §11.1 | `frontend/ref/mockup-event-form.html` |
+| 2 | 副 status bar 重做 (用户向 metric + hover popover) | §11.5 | `mockup-calendar.html` §cal-statusbar 更新 |
+| 3 | 删除 undo toast (5s 计时进度条) | §11.2 | `mockup-calendar.html` 加段 或 `mockup-toast.html` |
+| 4 | RSVP vs owner ops 视觉分流 (drawer 两种模式) | §11.6 | `mockup-calendar.html` §EventDetailDrawer dw-foot 更新 |
+
+### Phase 4 mockup
+
+| # | 设计内容 | 参考 § | 输出文件 |
+|---|---|---|---|
+| 5 | 多 calendar chip 切换器 (toolbar 左侧) | §11.7 | `mockup-calendar.html` §toolbar 更新 |
+| 6 | 全天事件 + 跨时区 UI (EventFormModal toggle) | §11.8 | `mockup-event-form.html` 变种 |
+| 7 | 周期事件 (RRULE) UI ("重复" 段 + dialog) | §11.9 | `mockup-event-form.html` 变种 |
+
+### 低优先 / 不必专门 mockup
+
+| # | 设计内容 | 参考 § | 说明 |
+|---|---|---|---|
+| 8 | 右键菜单 | §11.10 | 标准 native context menu, impl 直接用 |
+| 9 | EventChip empty title fallback | §11.4 | 文本统一 + italic + 灰色, impl 一行改 |
+
+### 设计约束 (跟 §6.4 一致)
+
+- 设计 token: 已在 `frontend/src/electron/renderer/index.css` (`--c-accent` / `--ink-*` 等)
+- 视觉密度: 跟 inbox 模块对齐 (`mockup-inbox.html` 是参考)
+- **dark 模式 first, light 主题必有**
+- 不引新依赖 (现有 lucide-react / Tailwind / 自定义 class)
+- a11y: focus visible / aria-label / keyboard nav
+
+### 反馈 + iterate 流程
+
+1. claude design 出 mockup HTML (按上表优先级 + 文件输出)
+2. user 浏览器打开 review (`open frontend/ref/mockup-X.html`)
+3. user / impl 反馈 — "这段太宽 / color 不够鲜 / 缺 hover state / 用 inbox 已有的 X pattern 复用"
+4. claude design iterate 直到 user 满意
+5. impl (本 agent) 按 mockup 1:1 复刻 (跟 calendar Phase 1 视觉实现路径一致, 见 commit `90072b9` 等)
+
+### Impl 工作量预估 (mockup 完成后)
+
+| Phase 2.5 工作量 | 估时 (Claude session) |
+|---|---|
+| EventFormModal polish (§11.1) | 2-3h |
+| 删除 undo toast (§11.2) | 1h |
+| light 主题验证 + 调 (§11.3) | 1-2h |
+| EventChip empty title (§11.4) | 30min |
+| 副 status bar 重做 (§11.5) | 1h |
+| RSVP vs owner ops 分流 (§11.6) | 1.5h |
+| **Phase 2.5 总** | **7-9h, 一个 session 内可完成** |
+
+| Phase 4 工作量 | 估时 |
+|---|---|
+| 多 calendar chip (§11.7) | 2-3h |
+| 全天事件 + 跨时区 (§11.8) | 3-4h (后端 + 前端 + 测试) |
+| RRULE 创建/编辑 (§11.9) | 6-8h (后端 RRULE 拼装 + edit 3 模式 + 前端复杂表单) |
+| **Phase 4 总** | **11-15h, 2-3 个 session** |
