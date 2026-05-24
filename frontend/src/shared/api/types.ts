@@ -1060,7 +1060,7 @@ export interface ChatApi {
    * Renderer wires a [✨ 保存到 KOS] button per assistant bubble; click
    * invokes this. Service builds a markdown page from (preceding user
    * message + this assistant message) + frontmatter, pushes to KOS at
-   * slug `conversations/<email>-<session>-<message>` (D3 default,
+   * slug `chat-history/mailagent/<email>/<session>/<message>` (D3 default per Lucien 2026-05-23 spec,
    * pending Lucien sync on gbrain namespace).
    *
    * Resolves with the final slug + KOS status + content bytes pushed.

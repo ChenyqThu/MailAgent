@@ -11,9 +11,19 @@
 //   → getMessage 取 assistant + 前 user → buildConversationPageContent
 //   → buildConversationSlug → kosClient.putPage(slug, content)
 //
-// D3 (KOS slug namespace) 暂用 `conversations/<email-id>-<session-id>-
-// <message-id>`. 待 Lucien 确认 gbrain 是否已 dedicated namespace
-// (notes/ / chat-history/ / 别的). 改一个 SLUG_PREFIX const 即可.
+// D3 (KOS slug namespace) — Lucien (gbrain KOS 维护者) 2026-05-23 回复
+// 确认: gbrain 没有 dedicated chat-conversation namespace, 但建议改用
+// `chat-history/<source>/...` 上位 namespace + source segment 模式,
+// 给未来 OpenClaw chat-save (Sprint 21 路线图 [LATER P3]) / Feishu 对话
+// 等同类需求预留空间避免冲突. MailAgent 占第一个坑 source=mailagent.
+//
+// slug format: `chat-history/mailagent/<email_id>/<session_id>/<message_id>`
+// (路径分层用 / 而非 -, 方便 bulk operation 如清理 90 天前对话).
+//
+// frontmatter 也换成 Lucien 推荐的嵌套形式: `mailagent: { email_id,
+// session_id, message_id }`(原 flat `mailagent_email_id` 等被替换),
+// `tags: [chat-history, mailagent, conversation]` 让 source-narrow query
+// 用 source: mailagent-chat 快速 narrow + chat-history/ prefix 做 bulk.
 
 import {
   getMessage,
@@ -24,7 +34,7 @@ import {
 } from '../chat_db'
 import { KOSClient, KOSError } from '../kos/client'
 
-const SLUG_PREFIX = 'conversations'
+const SLUG_PREFIX = 'chat-history/mailagent'
 
 // ── Lazy singleton — 复用 token cache 不每次重 fetch ───────────────
 
@@ -48,7 +58,7 @@ export interface SaveConversationInput {
   /** assistant message 的 id. service 自己向前找最近的 user message
    *  作为 context (因为 conversation 都是 user/assistant 交替). */
   messageId: number
-  /** Optional override — 不传走 default `conversations/<email>-<sess>-<msg>`. */
+  /** Optional override — 不传走 default `chat-history/mailagent/<email>/<sess>/<msg>`. */
   slug?: string
   /** Optional override title — 不传从 user message 首句生成 (<= 50 字符). */
   title?: string
@@ -70,8 +80,10 @@ export interface SaveConversationError {
 
 // ── 纯函数 helpers (好测) ─────────────────────────────────────────
 
-/** Default slug from (email_id, session_id, message_id). KOS slug must be
- *  lowercase + `-` + `/`. internal_id / id 都是 integer 直接 join. */
+/** Default slug from (email_id, session_id, message_id). Path-segmented
+ *  with `/` (Lucien KOS namespace convention: chat-history/<source>/<email>/
+ *  <session>/<message>). All segments are non-negative integers, so no
+ *  escape/lowercase normalization needed. */
 export function buildConversationSlug(opts: {
   emailId: number
   sessionId: number
@@ -79,7 +91,7 @@ export function buildConversationSlug(opts: {
   prefix?: string
 }): string {
   const prefix = opts.prefix ?? SLUG_PREFIX
-  return `${prefix}/${opts.emailId}-${opts.sessionId}-${opts.messageId}`
+  return `${prefix}/${opts.emailId}/${opts.sessionId}/${opts.messageId}`
 }
 
 /** Generate auto title from first user message: first sentence / line,
@@ -104,16 +116,21 @@ export function buildConversationPageContent(opts: {
   savedAtIso: string
   backendModel: string | null
 }): string {
-  // YAML frontmatter — keys keep alphabetical order for diff stability.
+  // YAML frontmatter — top-level keys alphabetical for diff stability.
+  // mailagent.* nested per Lucien 2026-05-23 spec (gbrain namespace
+  // convention groups source-specific fields under a single key, leaving
+  // top-level for cross-source filters like `source` / `tags`). Nested
+  // sub-keys also alphabetical (email_id / message_id / session_id).
   const fm = [
     '---',
-    `mailagent_email_id: ${opts.emailId}`,
-    `mailagent_message_id: ${opts.messageId}`,
-    `mailagent_session_id: ${opts.sessionId}`,
+    'mailagent:',
+    `  email_id: ${opts.emailId}`,
+    `  message_id: ${opts.messageId}`,
+    `  session_id: ${opts.sessionId}`,
     `model: ${opts.backendModel ?? 'unknown'}`,
     `saved_at: ${opts.savedAtIso}`,
     `source: mailagent-chat`,
-    `tags: [conversation, mailagent-chat]`,
+    `tags: [chat-history, mailagent, conversation]`,
     `title: ${JSON.stringify(opts.title)}`,
     `type: conversation`,
     '---'

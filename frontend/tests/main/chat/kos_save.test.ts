@@ -56,16 +56,16 @@ function mockClient(impl: {
 // ── pure helpers ──────────────────────────────────────────────────
 
 describe('buildConversationSlug', () => {
-  test('default prefix conversations/<email>-<session>-<message>', () => {
+  test('default prefix chat-history/mailagent/<email>/<session>/<message>', () => {
     expect(buildConversationSlug({ emailId: 100, sessionId: 5, messageId: 42 })).toBe(
-      'conversations/100-5-42'
+      'chat-history/mailagent/100/5/42'
     )
   })
 
   test('custom prefix override', () => {
     expect(
       buildConversationSlug({ emailId: 1, sessionId: 1, messageId: 1, prefix: 'notes' })
-    ).toBe('notes/1-1-1')
+    ).toBe('notes/1/1/1')
   })
 })
 
@@ -107,13 +107,13 @@ describe('buildConversationPageContent', () => {
   test('frontmatter contains all required fields', () => {
     const content = buildConversationPageContent(baseOpts)
     expect(content).toMatch(/^---\n/)
-    expect(content).toContain('mailagent_email_id: 100')
-    expect(content).toContain('mailagent_session_id: 5')
-    expect(content).toContain('mailagent_message_id: 42')
+    // Lucien 2026-05-23 spec — mailagent.* nested under one key, IDs as
+    // sub-keys (alphabetical: email_id / message_id / session_id).
+    expect(content).toContain('mailagent:\n  email_id: 100\n  message_id: 42\n  session_id: 5')
     expect(content).toContain('model: claude-sonnet-4-6')
     expect(content).toContain('saved_at: 2026-05-23T10:00:00Z')
     expect(content).toContain('source: mailagent-chat')
-    expect(content).toContain('tags: [conversation, mailagent-chat]')
+    expect(content).toContain('tags: [chat-history, mailagent, conversation]')
     expect(content).toContain('title: "Bob Acme deal"')
     expect(content).toContain('type: conversation')
   })
@@ -177,14 +177,14 @@ describe('saveConversationToKos', () => {
     )
 
     const result = await saveConversationToKos({ messageId: asstMsg.id })
-    expect(result.slug).toBe(`conversations/100-${sess.id}-${asstMsg.id}`)
+    expect(result.slug).toBe(`chat-history/mailagent/100/${sess.id}/${asstMsg.id}`)
     expect(result.status).toBe('created')
     expect(result.contentBytes).toBeGreaterThan(0)
     expect(pushed).toHaveLength(1)
-    expect(pushed[0].slug).toBe(`conversations/100-${sess.id}-${asstMsg.id}`)
+    expect(pushed[0].slug).toBe(`chat-history/mailagent/100/${sess.id}/${asstMsg.id}`)
     expect(pushed[0].content).toContain('Bob proposed integration plan A.')
     expect(pushed[0].content).toContain('What did Bob say?')
-    expect(pushed[0].content).toContain(`mailagent_email_id: 100`)
+    expect(pushed[0].content).toContain('mailagent:\n  email_id: 100')
     // userMsg used only as setup, verify it's the captured one.
     expect(userMsg.role).toBe('user')
   })
