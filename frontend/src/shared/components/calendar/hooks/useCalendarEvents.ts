@@ -26,6 +26,16 @@ export const CALENDAR_EVENTS_KEY = ['calendar', 'events'] as const
 export const CALENDAR_SYNC_STATUS_KEY = ['calendar', 'syncStatus'] as const
 export const CALENDAR_NAMES_KEY = ['calendar', 'names'] as const
 
+/** F6 — random jitter ±jitterMs around baseMs, 每 hook 实例 mount 时算一次
+ *  (useState init lambda 让 jitter 在生命周期内固定). 多个 caller (Layout
+ *  windowEvents + 当前 view eventsInWindow) 各拿到不同的 effective interval,
+ *  60s tick 不再对齐边沿, 关掉 thundering herd (3-4 IPC + rrule 展开同时跑).
+ */
+function useJitteredInterval(baseMs: number, jitterMs: number): number {
+  const [v] = useState(() => baseMs + Math.floor(Math.random() * 2 * jitterMs) - jitterMs)
+  return v
+}
+
 export function useCalendarEventsInWindow(opts: EventsListOpts): {
   data: CalendarEventOccurrence[] | undefined
   isLoading: boolean
@@ -33,11 +43,13 @@ export function useCalendarEventsInWindow(opts: EventsListOpts): {
   refetch: () => void
 } {
   const mailApi = useMailApi()
+  // F6 — 60s ± 15s jitter (effective 45-75s) 避免 thundering herd
+  const refetchIntervalMs = useJitteredInterval(60_000, 15_000)
   const q = useQuery({
     queryKey: [...CALENDAR_EVENTS_KEY, opts.fromIso, opts.toIso, opts.calendarName, opts.source, opts.expandRecurrences],
     queryFn: () => mailApi.calendar.eventsList(opts),
     staleTime: 60_000,
-    refetchInterval: 60_000,            // 跟后端 worker 60s ctag 轮询同频, 数据 1min 内必到前端
+    refetchInterval: refetchIntervalMs,
     refetchIntervalInBackground: false, // tab 后台不刷, 省功
     refetchOnWindowFocus: true          // 回到 tab 立即 refresh
   })
@@ -69,11 +81,13 @@ export function useCalendarSyncStatus(): {
   refetch: () => void
 } {
   const mailApi = useMailApi()
+  // F6 — 60s ± 10s jitter (effective 50-70s) 跟 windowEvents 错峰
+  const refetchIntervalMs = useJitteredInterval(60_000, 10_000)
   const q = useQuery({
     queryKey: CALENDAR_SYNC_STATUS_KEY,
     queryFn: () => mailApi.calendar.syncStatus(),
     staleTime: 30_000,
-    refetchInterval: 60_000  // 持续刷 "上次同步 N 秒前" 显示
+    refetchInterval: refetchIntervalMs
   })
   return {
     data: q.data,
@@ -117,9 +131,14 @@ export function useCalendarSyncTrigger(): {
       )
     }
   })
-  // mut.mutate 在 react-query v5 是 referentially stable, useCallback 包后 trigger
-  // 引用也稳定, 让 CalendarLayout 等消费者能放心当 useCallback / useEffect 的 dep.
-  const trigger = useCallback((opts?: SyncNowOpts) => mut.mutate(opts), [mut.mutate])
+  // F6 (review #H1) — mut.mutate 在 react-query v5 是 referentially stable,
+  // deps=[mut.mutate] 实际等价 deps=[]; useCallback 仍 wrap 为给 caller 提供
+  // 稳定函数引用 (useEffect / useCallback dep 友好). 改空 deps + 注释明确语义.
+  const stableMutate = mut.mutate
+  const trigger = useCallback(
+    (opts?: SyncNowOpts) => stableMutate(opts),
+    [stableMutate]
+  )
   return { trigger, isPending: mut.isPending }
 }
 
