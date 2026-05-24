@@ -95,20 +95,30 @@ class CalendarReconciler:
         for r in local_rows:
             if r.ical_uid in seen_uids:
                 continue
-            # 只 soft-delete 落在窗口内的, 窗外的可能是历史/未来 RRULE master 不该清
-            if r.dtstart_utc < we and (r.dtend_utc is None or r.dtend_utc >= ws):
-                try:
-                    affected = self.repo.soft_delete(
-                        ical_uid=r.ical_uid,
-                        source="caldav",
-                        recurrence_id=r.recurrence_id,
-                    )
-                    stats.soft_deleted += affected
-                except Exception as e:
-                    logger.warning(
-                        f"[reconciler] soft_delete failed for uid={r.ical_uid!r}: {e}"
-                    )
-                    stats.errors += 1
+            # F10 — soft_delete 候选:
+            # (a) 单次 event dtstart 在窗口内 → 老逻辑
+            # (b) RRULE master event (即使 dtstart 远早于窗口) → 老逻辑漏判,
+            #     CalDAV 端真删后本地 stuck, 前端 expander 持续展开"幽灵会议"
+            # CalDAV reader 用 expand=False 列窗口 events 时会返回所有 master,
+            # 不在 seen_uids 即真被删. 漏掉 RRULE master → 数据 corruption.
+            is_in_window = r.dtstart_utc < we and (
+                r.dtend_utc is None or r.dtend_utc >= ws
+            )
+            is_rrule_master = bool(r.rrule)
+            if not (is_in_window or is_rrule_master):
+                continue
+            try:
+                affected = self.repo.soft_delete(
+                    ical_uid=r.ical_uid,
+                    source="caldav",
+                    recurrence_id=r.recurrence_id,
+                )
+                stats.soft_deleted += affected
+            except Exception as e:
+                logger.warning(
+                    f"[reconciler] soft_delete failed for uid={r.ical_uid!r}: {e}"
+                )
+                stats.errors += 1
 
         logger.info(
             f"[reconciler] full-window {calendar_name!r}: "
