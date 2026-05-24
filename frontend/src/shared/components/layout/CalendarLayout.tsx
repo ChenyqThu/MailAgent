@@ -13,6 +13,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 
+import { CalendarErrorBoundary } from '../calendar/CalendarErrorBoundary'
 import { CalendarPage } from '../calendar/CalendarPage'
 import { CalendarShortcutModal } from '../calendar/CalendarShortcutModal'
 import { CalendarToolbar, type CalendarView } from '../calendar/CalendarToolbar'
@@ -155,26 +156,43 @@ export function CalendarLayout(): React.ReactElement {
       <div className="flex-1 min-h-0 px-5 pb-4">
         <div className="h-full glass-2 border border-ink-border/60 rounded-[10px] overflow-hidden flex flex-col">
           <div className="flex-1 min-h-0 overflow-hidden">
+            {/* F7 — 每个 view 套 CalendarErrorBoundary, 任一 view crash
+                (rrule 解析 / Date.parse NaN / IPC reject) 不冒到 PageFrame
+                黑屏整页. 切 view 时 view + Boundary 都 unmount 自动 reset. */}
             {view === 'today' && (
-              <DayView
-                date={currentDate}
-                onDateChange={setCurrentDate}
-                onSelect={setActive}
-                selectedKey={selectedKey}
-              />
+              <CalendarErrorBoundary viewName="日视图">
+                <DayView
+                  date={currentDate}
+                  onDateChange={setCurrentDate}
+                  onSelect={setActive}
+                  selectedKey={selectedKey}
+                />
+              </CalendarErrorBoundary>
             )}
             {view === 'week' && (
-              <WeekView
-                date={currentDate}
-                onSelect={setActive}
-                selectedKey={selectedKey}
-              />
+              <CalendarErrorBoundary viewName="周视图">
+                <WeekView
+                  date={currentDate}
+                  onSelect={setActive}
+                  selectedKey={selectedKey}
+                />
+              </CalendarErrorBoundary>
             )}
             {view === 'month' && (
-              <MonthView date={currentDate} onSelect={setActive} />
+              <CalendarErrorBoundary viewName="月视图">
+                <MonthView date={currentDate} onSelect={setActive} />
+              </CalendarErrorBoundary>
             )}
-            {view === 'agenda' && <AgendaView onSelect={setActive} />}
-            {view === 'recurring' && <CalendarPage />}
+            {view === 'agenda' && (
+              <CalendarErrorBoundary viewName="Agenda">
+                <AgendaView onSelect={setActive} />
+              </CalendarErrorBoundary>
+            )}
+            {view === 'recurring' && (
+              <CalendarErrorBoundary viewName="定期邀请">
+                <CalendarPage />
+              </CalendarErrorBoundary>
+            )}
           </div>
 
           {/* §11.5 — 副 status bar: 用户向 metric + ml-auto ℹ️ hover popover */}
