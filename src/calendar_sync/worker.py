@@ -81,6 +81,10 @@ class CalendarSyncWorker:
         self._stop = asyncio.Event()
         self._calendars: list[str] = []
         self._tick_count = 0
+        # F15 — asyncio.Lock 保护 _refresh_calendars 跟自身互斥
+        # (理论上 inline call 不会并发, 但加防 future 调用扩展 / 测试场景).
+        # _tick 不用 lock, snapshot pattern 已经保证 tick 内 calendars 一致.
+        self._refresh_lock = asyncio.Lock()
 
     def stop(self) -> None:
         """通知 worker 优雅停止. 当前 tick 跑完后退出."""
@@ -197,6 +201,14 @@ class CalendarSyncWorker:
         F8 — 每 ``refresh_calendars_every_n_ticks`` 个 tick (默认 60 ≈ 1h)
         重 list calendars + diff: 新增 cal 走 single-cal 全量 sync, 移除 cal
         仅 log (不 soft delete 防误删共享 cal 临时不可访问).
+
+        F15 (C1) — snapshot self._calendars 在 tick 开头 freeze 成 tuple.
+        ``await asyncio.to_thread(...)`` 内的 sync IO 期间 event loop 可调
+        度其他 task, 这期间 _refresh_calendars 替换 self._calendars 引用
+        不会影响当前 tick 的迭代. 移除的 cal 在当前 tick 仍跑一次
+        (CalDAV 404 → reconciler stat error log + tick 继续), 新增的 cal
+        下次 tick 才被 sync. 这是 acceptable behavior — 用户感知就是 ~60s
+        延迟, 比纯 race 状态混乱好.
         """
         self._tick_count += 1
         if (
@@ -205,7 +217,9 @@ class CalendarSyncWorker:
         ):
             await self._refresh_calendars()
 
-        for cal_name in self._calendars:
+        # F15 — snapshot calendars list 一次, 整个 tick 用同一个 tuple.
+        snapshot = tuple(self._calendars)
+        for cal_name in snapshot:
             try:
                 await self._tick_one_calendar(cal_name)
             except Exception as e:
@@ -221,7 +235,15 @@ class CalendarSyncWorker:
         移除 cal → log warning + 保留本地 row (rationale: 共享 calendar 可能
             临时不可访问, 不应立刻 soft delete 数据; 用户真要清理走 admin CLI).
         list 失败不动 self._calendars (保留上次成功的列表), tick 继续跑.
+
+        F15 (C1) — async with self._refresh_lock 防自身并发 (虽然当前 inline
+        call 不会, 但加防扩展 / 测试场景). 跟 _tick 不互斥 — _tick 用 snapshot
+        pattern 已保证 tick 内一致.
         """
+        async with self._refresh_lock:
+            await self._do_refresh_calendars()
+
+    async def _do_refresh_calendars(self) -> None:
         try:
             fresh = await asyncio.to_thread(
                 self.reader.list_calendar_names_for_sync

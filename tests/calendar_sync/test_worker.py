@@ -142,3 +142,102 @@ async def test_worker_graceful_cancel(fresh_db):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# ============================================================
+# F8: _refresh_calendars
+# ============================================================
+
+class TestRefreshCalendars:
+    """直接调 worker._refresh_calendars() 验证 F8 逻辑."""
+
+    def _make_worker(self, fresh_db, reader):
+        repo = CalendarEventRepository(fresh_db)
+        worker = CalendarSyncWorker(
+            cfg=_cfg(enabled=True), reader=reader, repo=repo, poll_interval=60.0,
+        )
+        return worker, repo
+
+    @pytest.mark.asyncio
+    async def test_refresh_calendars_picks_up_added(self, fresh_db):
+        """reader 返回 ['cal1', 'cal2'] 而 worker._calendars 只有 ['cal1']
+        → _calendars 更新为 ['cal1', 'cal2'], 新增 cal2 触发 reconcile_full_window."""
+        from unittest.mock import patch
+
+        reader = MagicMock()
+        # refresh 调用时 list 返回新增 cal2
+        reader.list_calendar_names_for_sync.return_value = ["cal1", "cal2"]
+        reader.list_events_with_full_detail.return_value = []
+        reader.get_collection_ctag.return_value = "ctag-x"
+
+        worker, repo = self._make_worker(fresh_db, reader)
+        # 模拟 initial 已跑过: _calendars=['cal1']
+        worker._calendars = ["cal1"]
+
+        with patch.object(worker.reconciler, "reconcile_full_window") as mock_rec:
+            await worker._refresh_calendars()
+
+        # _calendars 含 cal1 + cal2
+        assert set(worker._calendars) == {"cal1", "cal2"}
+
+        # reconcile_full_window 对 cal2 调了一次
+        called_cal_names = [
+            call.kwargs.get("calendar_name") or call.args[1]
+            for call in mock_rec.call_args_list
+        ]
+        assert "cal2" in called_cal_names
+        # cal1 没被重新 reconcile (只有新增的才需要)
+        assert "cal1" not in called_cal_names
+
+    @pytest.mark.asyncio
+    async def test_refresh_calendars_logs_removed_keeps_data(self, fresh_db, caplog):
+        """reader 移除 cal2 → _calendars 缩为 ['cal1'],
+        reconciler 不对 cal2 做 soft_delete (保留本地数据)."""
+        import logging
+        from unittest.mock import patch
+
+        reader = MagicMock()
+        reader.list_calendar_names_for_sync.return_value = ["cal1"]
+        reader.list_events_with_full_detail.return_value = []
+        reader.get_collection_ctag.return_value = "ctag-x"
+
+        worker, repo = self._make_worker(fresh_db, reader)
+        # 初始 _calendars 含 cal1 + cal2
+        worker._calendars = ["cal1", "cal2"]
+
+        with patch.object(worker.reconciler, "reconcile_full_window") as mock_rec, \
+             patch.object(worker.reconciler, "reconcile_incremental") as mock_inc, \
+             caplog.at_level(logging.INFO):
+            await worker._refresh_calendars()
+
+        # _calendars 只剩 cal1
+        assert worker._calendars == ["cal1"]
+
+        # reconciler 没对 cal2 做任何调用 (不删数据)
+        for call in mock_rec.call_args_list + mock_inc.call_args_list:
+            cal = call.kwargs.get("calendar_name") or (call.args[1] if len(call.args) > 1 else None)
+            assert cal != "cal2", "Should not reconcile removed calendar cal2"
+
+    @pytest.mark.asyncio
+    async def test_refresh_calendars_list_fails_keeps_existing(self, fresh_db):
+        """reader.list_calendar_names_for_sync 抛异常 → _calendars 不变,
+        loguru warning 被调用含 refresh_calendars 或错误信息."""
+        from unittest.mock import patch
+
+        reader = MagicMock()
+        reader.list_calendar_names_for_sync.side_effect = Exception("CalDAV unreachable")
+
+        worker, repo = self._make_worker(fresh_db, reader)
+        worker._calendars = ["cal1", "cal2"]
+
+        warning_calls: list[str] = []
+        with patch("src.calendar_sync.worker.logger") as mock_logger:
+            mock_logger.warning.side_effect = lambda msg, *a, **kw: warning_calls.append(str(msg))
+            await worker._refresh_calendars()
+
+        # _calendars 保持原值
+        assert worker._calendars == ["cal1", "cal2"]
+
+        # warning 日志出现
+        combined = " ".join(warning_calls)
+        assert "refresh_calendars" in combined or "CalDAV unreachable" in combined

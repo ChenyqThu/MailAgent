@@ -352,3 +352,59 @@ class TestListCalendarNames:
         repo.upsert_from_caldav_event(make_event(uid="a", calendar_name=""), source="caldav")
         repo.upsert_from_caldav_event(make_event(uid="b", calendar_name="Real"), source="caldav")
         assert repo.list_calendar_names() == ["Real"]
+
+
+# ============================================================
+# Concurrent upsert
+# ============================================================
+
+class TestUpsertConcurrent:
+    """真并发压测 — 验证 ON CONFLICT atomic upsert 在多 connection 下不产生重复行."""
+
+    def test_upsert_concurrent_same_uid_returns_consistent_id(self, fresh_db, make_event):
+        """8 个线程并发 upsert 同 (ical_uid, recurrence_id=None, source='caldav')
+        → 全部返回 same id, DB 里只有 1 行."""
+        import concurrent.futures
+        from src.calendar_sync import CalendarEventRepository
+
+        ev = make_event(uid="shared-uid")
+        results: list[int] = []
+
+        def do_upsert() -> int:
+            r = CalendarEventRepository(fresh_db)
+            return r.upsert_from_caldav_event(ev, source="caldav")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(do_upsert) for _ in range(8)]
+            results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+        # 全部返回同一个 id
+        assert len(set(results)) == 1, f"Expected 1 unique id, got {sorted(set(results))}"
+
+        # DB 里只有 1 行
+        from src.calendar_sync import CalendarEventRepository
+        final_repo = CalendarEventRepository(fresh_db)
+        rows = final_repo.list_event_rows(source="caldav")
+        assert len(rows) == 1
+
+    def test_upsert_concurrent_different_uids_no_corruption(self, fresh_db, make_event):
+        """8 个线程各自不同 uid 并发 upsert → 8 行 id distinct, 没有冲突."""
+        import concurrent.futures
+        from src.calendar_sync import CalendarEventRepository
+
+        def do_upsert(i: int) -> int:
+            r = CalendarEventRepository(fresh_db)
+            ev = make_event(uid=f"shared-uid-{i}")
+            return r.upsert_from_caldav_event(ev, source="caldav")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(do_upsert, i) for i in range(8)]
+            results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+        # 8 个 distinct id
+        assert len(set(results)) == 8, f"Expected 8 unique ids, got {sorted(set(results))}"
+
+        # DB 里确实 8 行
+        final_repo = CalendarEventRepository(fresh_db)
+        rows = final_repo.list_event_rows(source="caldav")
+        assert len(rows) == 8
