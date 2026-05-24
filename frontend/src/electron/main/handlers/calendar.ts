@@ -706,16 +706,53 @@ export async function runSyncNow(opts: SyncNowOpts = {}): Promise<unknown> {
   })
 }
 
-export function registerCalendarHandlers(): void {
-  ipcMain.handle(
-    'calendar:recurringDiscover',
-    async (_evt, opts: RecurringDiscoverOpts = {}): Promise<RecurringInviteItem[]> => {
-      return runRecurringDiscover(opts ?? {})
-    }
+// F4 — assertSafeSender: defense-in-depth IPC sender frame URL 校验.
+// Electron 默认 BrowserWindow + nodeIntegration:false + contextIsolation:true
+// 已禁止外部 sender, 但 dev tools / BrowserView / 未来 webview 嵌入可能穿透.
+// 只放行 file:// (打包后) + http://localhost (vite dev) + http://127.0.0.1.
+// 拒绝时 throw, ipcMain.handle 自动 reject promise (renderer 收 error).
+function assertSafeSender(
+  event: Electron.IpcMainInvokeEvent,
+  channel: string
+): void {
+  const url = (event.senderFrame?.url || '').toLowerCase()
+  if (!url) return  // 测试环境 / 早期 Electron lifecycle 无 senderFrame, 放行
+  if (
+    url.startsWith('file://') ||
+    url.startsWith('http://localhost') ||
+    url.startsWith('http://127.0.0.1')
+  ) {
+    return
+  }
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[calendar-handler] rejected unexpected IPC sender url=${JSON.stringify(url)} channel=${channel}`
   )
-  ipcMain.handle(
+  throw new Error(`Rejected unexpected IPC sender: ${url}`)
+}
+
+// F4 — wrapper 让所有 calendar handler 自动经过 sender 校验, 不必每个 callback
+// 第一行手抖加 assertSafeSender.
+function safeIpcHandle(
+  channel: string,
+  handler: (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>
+): void {
+  ipcMain.handle(channel, async (event, ...args) => {
+    assertSafeSender(event, channel)
+    return handler(event, ...args)
+  })
+}
+
+export function registerCalendarHandlers(): void {
+  safeIpcHandle(
+    'calendar:recurringDiscover',
+    async (_evt, ...args) =>
+      runRecurringDiscover((args[0] as RecurringDiscoverOpts) ?? {})
+  )
+  safeIpcHandle(
     'calendar:recurringReplay',
-    async (_evt, opts: RecurringReplayOpts): Promise<WriteEnvelope<unknown>> => {
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+      const opts = args[0] as RecurringReplayOpts | undefined
       // Require at least one of internalId / ids — empty replay would just
       // burn a subprocess so we fail early.
       if (opts == null || (opts.internalId === undefined && (!opts.ids || opts.ids.length === 0))) {
@@ -728,45 +765,38 @@ export function registerCalendarHandlers(): void {
       return envelopeFromCli(runRecurringReplay(opts))
     }
   )
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:expand',
-    async (_evt, opts: CalendarExpandOpts = {}): Promise<WriteEnvelope<unknown>> => {
-      return envelopeFromCli(runCalendarExpand(opts ?? {}))
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+      return envelopeFromCli(runCalendarExpand((args[0] as CalendarExpandOpts) ?? {}))
     }
   )
 
   // Phase 3 §3.1 — SSoT 直读 handlers (better-sqlite3 + npm rrule)
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:eventsList',
-    async (_evt, opts: EventsListOpts = {}): Promise<CalendarEventOccurrence[]> => {
-      return runEventsList(opts ?? {})
-    }
+    async (_evt, ...args) => runEventsList((args[0] as EventsListOpts) ?? {})
   )
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:eventGet',
-    async (_evt, opts: EventGetOpts): Promise<CalendarEventRow | null> => {
+    async (_evt, ...args): Promise<CalendarEventRow | null> => {
+      const opts = args[0] as EventGetOpts | undefined
       if (!opts || !opts.icalUid) return null
       return runEventGet(opts)
     }
   )
-  ipcMain.handle(
-    'calendar:syncStatus',
-    async (): Promise<CalendarSyncStateItem[]> => runSyncStatus()
-  )
-  ipcMain.handle(
-    'calendar:calendarNames',
-    async (): Promise<string[]> => runCalendarNames()
-  )
-  ipcMain.handle(
+  safeIpcHandle('calendar:syncStatus', async () => runSyncStatus())
+  safeIpcHandle('calendar:calendarNames', async () => runCalendarNames())
+  safeIpcHandle(
     'calendar:syncTrigger',
-    async (_evt, opts: SyncNowOpts = {}): Promise<WriteEnvelope<unknown>> => {
-      return envelopeFromCli(runSyncNow(opts ?? {}))
-    }
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> =>
+      envelopeFromCli(runSyncNow((args[0] as SyncNowOpts) ?? {}))
   )
   // Phase 2.4 — calendar:eventReplay (基于 calendar_event 重导出 Notion)
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:eventReplay',
-    async (_evt, opts: EventReplayOpts): Promise<WriteEnvelope<unknown>> => {
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+      const opts = args[0] as EventReplayOpts | undefined
       if (!opts || !opts.icalUid) {
         return {
           ok: false,
@@ -778,9 +808,10 @@ export function registerCalendarHandlers(): void {
     }
   )
   // Phase 2.1 — calendar:eventRsvp (发 iTIP REPLY 给 organizer)
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:eventRsvp',
-    async (_evt, opts: EventRsvpOpts): Promise<WriteEnvelope<unknown>> => {
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+      const opts = args[0] as EventRsvpOpts | undefined
       if (!opts || !opts.icalUid) {
         return {
           ok: false,
@@ -799,9 +830,10 @@ export function registerCalendarHandlers(): void {
     }
   )
   // Phase 2.2 — calendar:eventCreate (CalDAV PUT 新建事件)
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:eventCreate',
-    async (_evt, opts: EventCreateOpts): Promise<WriteEnvelope<unknown>> => {
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+      const opts = args[0] as EventCreateOpts | undefined
       if (!opts || !opts.summary || !opts.startIso || !opts.endIso) {
         return {
           ok: false,
@@ -813,9 +845,10 @@ export function registerCalendarHandlers(): void {
     }
   )
   // Phase 2.3 — calendar:eventUpdate (CalDAV PUT 更新事件)
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:eventUpdate',
-    async (_evt, opts: EventUpdateOpts): Promise<WriteEnvelope<unknown>> => {
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+      const opts = args[0] as EventUpdateOpts | undefined
       if (!opts || !opts.icalUid) {
         return {
           ok: false,
@@ -827,9 +860,10 @@ export function registerCalendarHandlers(): void {
     }
   )
   // Phase 2.3 — calendar:eventDelete (CalDAV DELETE 删除事件)
-  ipcMain.handle(
+  safeIpcHandle(
     'calendar:eventDelete',
-    async (_evt, opts: EventDeleteOpts): Promise<WriteEnvelope<unknown>> => {
+    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+      const opts = args[0] as EventDeleteOpts | undefined
       if (!opts || !opts.icalUid) {
         return {
           ok: false,
@@ -841,6 +875,9 @@ export function registerCalendarHandlers(): void {
     }
   )
 }
+
+// F4 export for unit testing the sender check
+export const __safeSenderTesting = { assertSafeSender }
 
 export const __testing = {
   runRecurringDiscover,
