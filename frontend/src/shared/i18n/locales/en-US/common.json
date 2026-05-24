@@ -728,6 +728,11 @@
     },
     "syncTriggered": "Calendar sync triggered",
     "syncTriggerFail": "Calendar sync failed",
+    "errorBoundary": {
+      "title": "{view} failed to load",
+      "hint": "Switch view or click Retry to reload. See DevTools console for details.",
+      "retry": "Retry"
+    },
     "undo": {
       "aria": "Pending undo actions",
       "undo": "Undo",

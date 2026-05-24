@@ -8,7 +8,12 @@
 // 在同 view 内重 mount.
 
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import i18n from 'i18next'
 import { AlertCircle, RefreshCw } from 'lucide-react'
+
+// F22 — ErrorBoundary 是 class component, hooks (useTranslation) 不可用.
+// 走 i18next module-level singleton ``i18n.t(...)`` 拿翻译, 第二参 fallback
+// 保护 key 漏不破.
 
 interface Props {
   /** Identifier — 用于 log 跟 fallback 标题区分哪个 view crash. */
@@ -53,7 +58,9 @@ export class CalendarErrorBoundary extends Component<Props, State> {
             <AlertCircle size={22} strokeWidth={2} className="text-coral" />
           </div>
           <div className="text-aux text-ink-fg font-medium">
-            {this.props.viewName} 加载失败
+            {i18n.t('calendar.errorBoundary.title', '{view} 加载失败', {
+              view: this.props.viewName
+            })}
           </div>
           {msg && (
             <div className="text-meta font-mono text-ink-fg-2 max-w-md break-words">
@@ -62,7 +69,10 @@ export class CalendarErrorBoundary extends Component<Props, State> {
             </div>
           )}
           <div className="text-meta text-ink-fg-3">
-            切换视图或点 [重试] 重新加载. 详情见 DevTools console.
+            {i18n.t(
+              'calendar.errorBoundary.hint',
+              '切换视图或点 [重试] 重新加载. 详情见 DevTools console.'
+            )}
           </div>
           <button
             type="button"
@@ -70,7 +80,7 @@ export class CalendarErrorBoundary extends Component<Props, State> {
             onClick={this.handleReset}
           >
             <RefreshCw size={13} strokeWidth={2} />
-            重试
+            {i18n.t('calendar.errorBoundary.retry', '重试')}
           </button>
         </div>
       )

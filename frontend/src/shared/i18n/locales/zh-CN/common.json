@@ -720,6 +720,11 @@
     },
     "syncTriggered": "已触发日历同步",
     "syncTriggerFail": "日历同步失败",
+    "errorBoundary": {
+      "title": "{view} 加载失败",
+      "hint": "切换视图或点 [重试] 重新加载. 详情见 DevTools console.",
+      "retry": "重试"
+    },
     "undo": {
       "aria": "待撤销操作",
       "undo": "撤销",
