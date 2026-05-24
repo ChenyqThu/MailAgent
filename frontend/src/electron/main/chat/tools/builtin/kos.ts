@@ -14,7 +14,8 @@
 // KOS_MCP_BASE + KOS_OAUTH_CLIENT_ID + KOS_OAUTH_CLIENT_SECRET 都已配齐.
 
 import type { ToolDef, ToolResult } from '../registry'
-import { KOSClient, KOSError } from '../../../kos/client'
+import { KOSClient, KOSError, rerankByRecency } from '../../../kos/client'
+import { isKosTimeDecayEnabled } from '../../config'
 
 // ── Lazy singleton + 测试注入点 ───────────────────────────────────
 
@@ -111,10 +112,14 @@ export const kosQuery: ToolDef = {
       }
     }
     try {
-      const hits = await getClient().query(q, {
+      const rawHits = await getClient().query(q, {
         limit: asInt(i.limit, 10, 1, 30),
         expand: typeof i.expand === 'boolean' ? i.expand : false
       })
+      // Sprint 19 P1-B — client-side time-decay rerank (D5 14d half-life).
+      // KOS bm25 无时间维度, 老 hit 跟新 hit 同 score; rerank 让 chat agent
+      // 拿到的 hits 偏向 recent. flag-gated 让 user .env 关回纯 bm25.
+      const hits = isKosTimeDecayEnabled() ? rerankByRecency(rawHits) : rawHits
       return {
         ok: true,
         output: { count: hits.length, hits },

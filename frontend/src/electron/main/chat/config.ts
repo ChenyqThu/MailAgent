@@ -64,6 +64,16 @@ export function isKosL1HotBlockEnabled(): boolean {
   return readEnvBool('MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED', false)
 }
 
+/** Sprint 19 P1-B — client-side time-decay rerank for KOS query hits.
+ *  Default ON (Todo 1 design doc D4 user-approved): wrap kos_query hits
+ *  with exponential 14d-half-life decay so newer KOS pages outrank older
+ *  ones for the chat agent. .env override to false reverts to pure bm25
+ *  server-side order (useful for A/B comparison or debugging recency
+ *  misranking — e.g. older but high-bm25 hit being demoted past 30d). */
+export function isKosTimeDecayEnabled(): boolean {
+  return readEnvBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true)
+}
+
 /** Per-turn iteration cap. Hard ceiling on how many backend.stream() calls
  *  the harness will make for a single user message; exceeding emits
  *  E_MAX_ITER so the LLM doesn't infinite-loop on a flaky tool. */
