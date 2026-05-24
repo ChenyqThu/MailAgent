@@ -408,6 +408,8 @@
     "messageActions": {
       "regenerate": "重生成",
       "copy": "复制",
+      "copyOk": "已复制到剪贴板",
+      "copyFail": "复制失败",
       "toNotion": "转 Notion",
       "saveToKos": "保存到 KOS",
       "saveToKosOk": "已保存到 KOS",

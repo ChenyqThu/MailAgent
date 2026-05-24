@@ -556,15 +556,30 @@ function UserBubble({ messageId, content, handlers }: UserBubbleProps): React.Re
   )
 }
 
-function AssistantMessageFooter({ messageId }: { messageId: number }): React.ReactElement {
+function AssistantMessageFooter({
+  messageId,
+  content
+}: {
+  messageId: number
+  content: string
+}): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
-  // Sprint 19 P1-C — wired to real chat:saveToKos IPC. Other buttons
-  // (regenerate / copy / toNotion) are still V1 placeholders that
-  // toast "即将上线" until their IPC wiring lands.
+  // Sprint 19 P1-C — wired to real chat:saveToKos IPC. Copy 接通
+  // navigator.clipboard.writeText(content). Regenerate / toNotion 仍是
+  // V1 placeholders 走 toast "即将上线" 直到 IPC 接通.
   const [saveBusy, setSaveBusy] = useState(false)
   const soon = (): void => {
     toastSuccess(t('shortcutHelp.soon'))
+  }
+  const onCopy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(content)
+      toastSuccess(t('chat.messageActions.copyOk'))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(t('chat.messageActions.copyFail'), msg)
+    }
   }
   const onSaveToKos = async (): Promise<void> => {
     if (saveBusy) return
@@ -595,8 +610,9 @@ function AssistantMessageFooter({ messageId }: { messageId: number }): React.Rea
       <span className="text-ink-fg-3">·</span>
       <button
         type="button"
-        onClick={soon}
+        onClick={onCopy}
         className="inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast"
+        aria-label={t('chat.messageActions.copy')}
       >
         <Copy size={11} strokeWidth={2} />
         {t('chat.messageActions.copy')}
@@ -717,7 +733,9 @@ function AssistantBubble({
           handlers={draftHandlers}
           isStreaming={isStreaming}
         />
-        {!isStreaming && <AssistantMessageFooter messageId={message.id} />}
+        {!isStreaming && (
+          <AssistantMessageFooter messageId={message.id} content={message.content} />
+        )}
       </div>
     )
   }
@@ -733,7 +751,9 @@ function AssistantBubble({
         <TranslatedBody text={message.content || ' '} />
         {isStreaming && <span className="cursor-blink" aria-hidden />}
       </div>
-      {!isStreaming && <AssistantMessageFooter messageId={message.id} />}
+      {!isStreaming && (
+        <AssistantMessageFooter messageId={message.id} content={message.content} />
+      )}
     </div>
   )
 }

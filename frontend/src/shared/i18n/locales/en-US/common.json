@@ -408,6 +408,8 @@
     "messageActions": {
       "regenerate": "Regenerate",
       "copy": "Copy",
+      "copyOk": "Copied to clipboard",
+      "copyFail": "Copy failed",
       "toNotion": "To Notion",
       "saveToKos": "Save to KOS",
       "saveToKosOk": "Saved to KOS",

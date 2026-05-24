@@ -12,7 +12,13 @@ export default {
     './src/electron/renderer/index.html',
     './src/electron/renderer/**/*.{ts,tsx}',
     './src/shared/**/*.{ts,tsx}',
-    './src/web/**/*.{ts,tsx}'
+    './src/web/**/*.{ts,tsx}',
+    // Sprint 19 — Streamdown 用 shadcn-style utility class (bg-muted /
+    // border-border / text-card-foreground 等), Tailwind v3 不会自动扫
+    // node_modules. 加这条让 Tailwind 看到 streamdown dist 用了哪些
+    // class, 才会生成对应 CSS rule. shadcn token 映射见 index.css
+    // :root --background / --muted / --card / --border / --primary.
+    './node_modules/streamdown/dist/**/*.js'
   ],
   theme: {
     extend: {
@@ -40,6 +46,28 @@ export default {
         coral: 'rgb(var(--c-accent) / <alpha-value>)',
         'coral-hover': 'rgb(var(--c-accent-hi) / <alpha-value>)',
         'coral-dim': 'rgb(var(--c-accent-dim) / <alpha-value>)',
+        // Sprint 19 — shadcn token 别名, 映射到现有 ink/coral 系统. Streamdown
+        // 内部用这些 class 名, 我们走 channels-only CSS var 套 rgb(var()/<alpha>)
+        // 跟 ink-* 保持一致风格 + 支持 /15 /50 alpha modifier.
+        background: 'rgb(var(--ink-3) / <alpha-value>)',
+        foreground: 'rgb(var(--ink-fg) / <alpha-value>)',
+        muted: 'rgb(var(--ink-4) / <alpha-value>)',
+        'muted-foreground': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+        border: 'rgb(var(--ink-border) / <alpha-value>)',
+        input: 'rgb(var(--ink-border) / <alpha-value>)',
+        card: 'rgb(var(--ink-2) / <alpha-value>)',
+        'card-foreground': 'rgb(var(--ink-fg) / <alpha-value>)',
+        primary: 'rgb(var(--c-accent) / <alpha-value>)',
+        'primary-foreground': 'rgb(var(--c-accent-fg) / <alpha-value>)',
+        secondary: 'rgb(var(--ink-4) / <alpha-value>)',
+        'secondary-foreground': 'rgb(var(--ink-fg) / <alpha-value>)',
+        accent: 'rgb(var(--ink-4) / <alpha-value>)',
+        'accent-foreground': 'rgb(var(--ink-fg) / <alpha-value>)',
+        destructive: 'rgb(var(--c-fail) / <alpha-value>)',
+        'destructive-foreground': 'rgb(var(--c-accent-fg) / <alpha-value>)',
+        popover: 'rgb(var(--ink-2) / <alpha-value>)',
+        'popover-foreground': 'rgb(var(--ink-fg) / <alpha-value>)',
+        ring: 'rgb(var(--c-accent) / <alpha-value>)',
         // Sprint 4 a11y carry-forward (REVIEW-LOG H-01): on-accent CTA
         // foreground. Replaces hardcoded `text-white` on `bg-coral/100`
         // which failed WCAG AA on every accent swatch.

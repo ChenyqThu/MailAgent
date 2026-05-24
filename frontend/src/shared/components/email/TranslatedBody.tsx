@@ -5,8 +5,7 @@
 // unterminated block 视觉跳动. 调研结论 (docs/chat-markdown-streaming-
 // research.md): Streamdown v2.5 — Vercel 2026 业界 de facto, drop-in
 // 替代 react-markdown, 内置 GFM + unterminated block styling + rehype-
-// harden + Tailwind typography. 删 ~120 LOC, 留 ~30 LOC props 转发,
-// 顺带 fix handoff 列的所有 markdown 痛点.
+// harden + Tailwind typography + 代码块自带复制按钮.
 //
 // 调用方零改动: 两处用 site (MessageList.tsx:260 邮件草稿 read-only
 // preview + MessageList.tsx:733 chat AssistantBubble) props 接口
@@ -16,19 +15,60 @@
 // 收益不大; 等下次清理 chat 渲染层时再统一.
 //
 // 不加 plugin (code / math / mermaid / cjk): 邮件 + chat 场景一期都
-// 不需要, 想加 shiki syntax highlight 后续加 `import code from
+// 不需要 — Streamdown 核心已自带 shiki 代码高亮 + mermaid lazy chunk
+// (chunk 内置见 node_modules/streamdown/dist/), plugin 包是给定制
+// theme / 离线 lang pack 用的增强项. 想加后续 `import code from
 // '@streamdown/code'` 再传 plugins 即可.
 
-import { Streamdown } from 'streamdown'
+import { Streamdown, type StreamdownTranslations } from 'streamdown'
 
 interface Props {
   text: string
 }
 
+// Streamdown defaultTranslations 是英文; UI 是中文环境就 override 复制
+// / 下载 / 全屏 等 UI 字符串. 这里 hardcode 中文不接 i18next 是因为这套
+// 19 个 string 跟应用其他文案语义独立 (是 markdown 控件 chrome, 不是
+// 业务文案), 接 i18next 反而引入 zh-CN / en-US 两边各加 19 个 key 的
+// 维护开销而无用户可见收益 (Streamdown 控件中文已能正确表达).
+const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
+  copyCode: '复制',
+  copied: '已复制',
+  copyLink: '复制链接',
+  copyTable: '复制表格',
+  copyTableAsCsv: '复制为 CSV',
+  copyTableAsMarkdown: '复制为 Markdown',
+  copyTableAsTsv: '复制为 TSV',
+  downloadDiagram: '下载图表',
+  downloadDiagramAsMmd: '下载 .mmd',
+  downloadDiagramAsPng: '下载 PNG',
+  downloadDiagramAsSvg: '下载 SVG',
+  downloadFile: '下载',
+  downloadImage: '下载图片',
+  downloadTable: '下载表格',
+  downloadTableAsCsv: '下载为 CSV',
+  downloadTableAsMarkdown: '下载为 Markdown',
+  viewFullscreen: '全屏查看',
+  exitFullscreen: '退出全屏',
+  externalLinkWarning: '即将打开外部链接',
+  openExternalLink: '打开外部链接',
+  openLink: '打开链接',
+  imageNotAvailable: '图片不可用',
+  close: '关闭',
+  mermaidFormatMmd: 'Mermaid 源码',
+  mermaidFormatPng: 'PNG',
+  mermaidFormatSvg: 'SVG',
+  tableFormatCsv: 'CSV',
+  tableFormatMarkdown: 'Markdown',
+  tableFormatTsv: 'TSV'
+}
+
 export function TranslatedBody({ text }: Props): React.ReactElement {
   return (
     <div className="mail-body break-words">
-      <Streamdown parseIncompleteMarkdown>{text}</Streamdown>
+      <Streamdown parseIncompleteMarkdown translations={STREAMDOWN_ZH_TRANSLATIONS}>
+        {text}
+      </Streamdown>
     </div>
   )
 }

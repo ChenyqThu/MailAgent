@@ -146,6 +146,34 @@
    *   --slider-track-h / --slider-thumb-size  4 / 16     Slider
    *   --swatch-size-inline / --swatch-size-pop  44 / 36  Accent swatch
    *   --save-bar-bottom  32                               浮动保存 pill (PR E reserved) */
+  /* Sprint 19 — Streamdown 用 shadcn-style design tokens (--background /
+   * --muted / --card / --border / --radius). 我们 Tailwind config 把
+   * `bg-background` / `bg-muted` 之类 utility 都映射到 `rgb(var(--ink-X)
+   * / <alpha-value>)`. 这里再写一份 plain-color 形式 (不带 /<alpha>) 给
+   * 非 Tailwind 路径 (Streamdown 内联 style / 直接读 var()) 用. ink token
+   * 切换主题时 channels-only triplet 自动 follow, 这里 var(--ink-X) 也跟着
+   * resolve, 所以暗 / 亮模式 + accent 切换都无需重复声明. */
+  --radius: 0.5rem;
+  --background: rgb(var(--ink-3));
+  --foreground: rgb(var(--ink-fg));
+  --muted: rgb(var(--ink-4));
+  --muted-foreground: rgb(var(--ink-fg-2));
+  --border: rgb(var(--ink-border));
+  --input: rgb(var(--ink-border));
+  --card: rgb(var(--ink-2));
+  --card-foreground: rgb(var(--ink-fg));
+  --primary: rgb(var(--c-accent));
+  --primary-foreground: rgb(var(--c-accent-fg));
+  --secondary: rgb(var(--ink-4));
+  --secondary-foreground: rgb(var(--ink-fg));
+  --accent: rgb(var(--ink-4));
+  --accent-foreground: rgb(var(--ink-fg));
+  --destructive: rgb(var(--c-fail));
+  --destructive-foreground: rgb(var(--c-accent-fg));
+  --popover: rgb(var(--ink-2));
+  --popover-foreground: rgb(var(--ink-fg));
+  --ring: rgb(var(--c-accent));
+
   --settings-rail-w: 200px;
   --settings-content-max-w: 760px;
   --settings-content-px: 2.5rem;
