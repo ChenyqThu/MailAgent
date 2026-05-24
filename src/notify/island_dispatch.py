@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.notify import island_i18n, island_reconnect, ping_island
 from src.notify.island_envelope import (
@@ -45,6 +47,72 @@ URGENT_PRIORITY_LABELS = {"🔴 紧急", "🟡 重要"}
 ACTION_NEEDS_FLAG = {
     "需要回复", "需要决策", "需要Review", "需要会议", "需要跟进", "等待响应",
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 (PRD §5.1) — Mascot domain 规则表
+# Mascot id ∈ {work, personal, dev, default} → fork Swift 端按 id 加载
+# Mail{Logo,MascotWork,MascotPersonal,MascotDev} imageset。
+# 用户自己邮箱同域 → work；env `MAILAGENT_MASCOT_DOMAIN_RULES` JSON 可覆盖默认。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DEFAULT_MASCOT_RULES: Dict[str, List[str]] = {
+    "personal": [
+        "gmail.com", "icloud.com", "me.com", "hotmail.com", "outlook.com",
+        "yahoo.com", "163.com", "qq.com", "126.com", "foxmail.com", "live.com",
+    ],
+    "dev": [
+        "github.com", "vercel.com", "sentry.io", "stripe.com",
+        "openai.com", "anthropic.com", "circleci.com", "netlify.com",
+        "supabase.io", "pypi.org", "npmjs.com", "linear.app", "notion.so",
+        "cloudflare.com", "datadog.com", "snyk.io",
+    ],
+}
+
+
+def _load_mascot_rules() -> Dict[str, List[str]]:
+    """读 ``MAILAGENT_MASCOT_DOMAIN_RULES`` env 覆盖 default rules.
+
+    格式：``{"work":["acme.com"],"personal":["gmail.com"]}``。invalid JSON 走默认。
+    """
+    raw = os.environ.get("MAILAGENT_MASCOT_DOMAIN_RULES")
+    if not raw:
+        return _DEFAULT_MASCOT_RULES
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return {str(k): [str(d) for d in (v or [])] for k, v in data.items()}
+    except Exception as e:  # noqa: BLE001
+        log.warning("[island] invalid MAILAGENT_MASCOT_DOMAIN_RULES JSON: %s", e)
+    return _DEFAULT_MASCOT_RULES
+
+
+def _resolve_mascot(sender_email: str) -> str:
+    """Domain → mascot id 映射，fallback ``"default"``.
+
+    顺序：
+      1. env / default 规则表（``personal`` / ``dev`` / ``work`` / …）按精确或子域后缀匹配
+      2. 用户 ``USER_EMAIL`` 同域 → ``"work"``
+      3. 否则 → ``"default"``
+    """
+    if not sender_email or "@" not in sender_email:
+        return "default"
+    domain = sender_email.rsplit("@", 1)[-1].strip().lower()
+    if not domain:
+        return "default"
+    for mascot_id, domains in _load_mascot_rules().items():
+        for d in (domains or []):
+            d_norm = (d or "").lower().lstrip(".")
+            if not d_norm:
+                continue
+            if domain == d_norm or domain.endswith("." + d_norm):
+                return str(mascot_id)
+    user_email = (os.environ.get("USER_EMAIL") or "").strip()
+    if "@" in user_email:
+        user_domain = user_email.rsplit("@", 1)[-1].strip().lower()
+        if user_domain and (domain == user_domain or domain.endswith("." + user_domain)):
+            return "work"
+    return "default"
 
 
 @dataclass
@@ -97,11 +165,13 @@ def dispatch_mail_received(
     mailbox: str,
     is_flagged: bool = False,
     attach_count: int = 0,
+    sender_digest: str = "",
 ) -> None:
     """新邮件 Notion sync 成功 → emit ``MailReceived``.
 
     Phase 1 不在此判定 priority；urgent / intervention 由后续 ``LLMReviewed`` 决定。
     ``is_flagged`` 仅作为 metadata 透传，让 ping-island 在 dashboard 可视化。
+    ``sender_digest`` 为 Phase 2 KOS L1 hot block 预留接口（暂可空）。
     """
     if not _state.enabled:
         return
@@ -118,6 +188,9 @@ def dispatch_mail_received(
             internal_id=internal_id, page_id=page_id, subject=subject,
             sender=sender_email, sender_name=sender_name, mailbox=mailbox,
             is_flagged=is_flagged, attach_count=attach_count,
+            scenario="MailReceived",
+            mascot=_resolve_mascot(sender_email),
+            sender_digest=sender_digest,
         ),
         expects_response=False,
     )
@@ -134,11 +207,14 @@ def dispatch_llm_reviewed(
     mailbox: str,
     priority: str = "",
     action: str = "",
+    ai_summary: str = "",
+    sender_digest: str = "",
 ) -> None:
     """LLM 处理完 → emit ``LLMReviewed`` 或 ``LLMReviewedUrgent`` (带 5 option).
 
     Urgent 条件：``priority`` 命中 ``URGENT_PRIORITY_LABELS`` AND ``action`` 命中
     ``ACTION_NEEDS_FLAG``，与 ``handlers.handle_ai_reviewed`` 的飞书通知规则同。
+    ``ai_summary`` 透传 LLM ``AILabels.ai_summary``（2-4 句中文摘要，≤ 2000）。
     """
     if not _state.enabled:
         return
@@ -179,6 +255,10 @@ def dispatch_llm_reviewed(
             internal_id=internal_id, page_id=page_id, subject=subject,
             sender=sender_email, sender_name=sender_name, mailbox=mailbox,
             ai_action=action, ai_priority=priority,
+            ai_summary=ai_summary,
+            scenario=event_type,
+            mascot=_resolve_mascot(sender_email),
+            sender_digest=sender_digest,
         ),
         intervention=intervention,
         expects_response=expects_response,
@@ -205,6 +285,7 @@ def dispatch_mail_completed(
         metadata=_base_metadata(
             internal_id=internal_id, page_id=page_id, subject=subject,
             mailbox=mailbox,
+            scenario="MailCompleted",
         ),
         expects_response=False,
     )
@@ -216,8 +297,12 @@ def dispatch_sync_failed(
     internal_id: int,
     subject: str,
     error: str,
+    sender_email: str = "",
 ) -> None:
-    """单封邮件 sync 失败 → emit ``SyncFailed``（Phase 1 Arrive，无 intervention）."""
+    """单封邮件 sync 失败 → emit ``SyncFailed``（Phase 1 Arrive，无 intervention）.
+
+    ``sender_email`` 可选；非空时 mascot 按 domain 推断，否则用 default。
+    """
     if not _state.enabled:
         return
     env = BridgeEnvelope(
@@ -229,7 +314,10 @@ def dispatch_sync_failed(
         status_detail=error[:200],
         metadata=_base_metadata(
             internal_id=internal_id, page_id="", subject=subject,
+            sender=sender_email,
             error=error[:200],
+            scenario="SyncFailed",
+            mascot=_resolve_mascot(sender_email) if sender_email else "default",
         ),
         expects_response=False,
     )
@@ -253,6 +341,8 @@ def dispatch_dead_letter_accum(*, count: int, threshold: int = 0) -> None:
             "mailagent.lang": island_i18n.resolve_lang(),
             "mailagent.theme": _state.theme,
             "mailagent.accent": _state.accent,
+            "mailagent.scenario": "DeadLetterAccum",
+            "mailagent.mascot": "default",
         },
         expects_response=False,
     )
@@ -290,8 +380,20 @@ def _base_metadata(
     attach_count: int = 0,
     ai_action: str = "",
     ai_priority: str = "",
+    ai_summary: str = "",
+    scenario: str = "",
+    mascot: str = "",
+    sender_digest: str = "",
     error: str = "",
 ) -> Dict[str, str]:
+    """构造 ``metadata.mailagent.*`` 命名空间。
+
+    Phase 1 (PRD §5.1) 新增字段（向后兼容，老 fork 端忽略未知 key）：
+    - ``mailagent.aiSummary``    — LLM 给的 2-4 句中文摘要（schema.ai_summary, ≤ 2000）
+    - ``mailagent.scenario``     — 路由 hint（fork 端用 scenario 选 4 scene 变体）
+    - ``mailagent.mascot``       — mascot id ∈ {work, personal, dev, default}
+    - ``mailagent.senderDigest`` — KOS L1 hot block（Phase 2 KOS consumer wire 上后非空）
+    """
     meta: Dict[str, str] = {
         **_state.extra_metadata,
         "mailagent.internalId": str(internal_id),
@@ -313,6 +415,14 @@ def _base_metadata(
         meta["mailagent.aiAction"] = ai_action
     if ai_priority:
         meta["mailagent.aiPriority"] = ai_priority
+    if ai_summary:
+        meta["mailagent.aiSummary"] = ai_summary
+    if scenario:
+        meta["mailagent.scenario"] = scenario
+    if mascot:
+        meta["mailagent.mascot"] = mascot
+    if sender_digest:
+        meta["mailagent.senderDigest"] = sender_digest
     if error:
         meta["mailagent.error"] = error
     return meta

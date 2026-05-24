@@ -858,13 +858,18 @@ class NewWatcher:
         self, email_obj: Email, internal_id: int,
         notion_page_id: str, labels: Dict[str, Any],
     ) -> None:
-        """ping-island ``LLMReviewed`` / ``LLMReviewedUrgent`` 派发（默认关，fail-open）."""
+        """ping-island ``LLMReviewed`` / ``LLMReviewedUrgent`` 派发（默认关，fail-open）.
+
+        Phase 1 (PRD §5.1): 透传 ``ai_summary`` 给 envelope metadata，让 fork 端
+        ``MailAgentSessionView`` 渲染 1 行 LLM 摘要。
+        """
         try:
             from src.notify import island_dispatch
             if not island_dispatch.is_enabled():
                 return
             priority = str(labels.get("priority") or "")
             action = str(labels.get("action_type") or labels.get("action") or "")
+            ai_summary = str(labels.get("ai_summary") or "")
             island_dispatch.dispatch_llm_reviewed(
                 internal_id=internal_id,
                 page_id=notion_page_id or "",
@@ -874,6 +879,7 @@ class NewWatcher:
                 mailbox=getattr(email_obj, "mailbox", "") or "",
                 priority=priority,
                 action=action,
+                ai_summary=ai_summary,
             )
         except Exception as e:
             logger.debug(f"[island-hook] llm_reviewed dispatch failed: {e}")
