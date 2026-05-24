@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { CALENDAR_EVENTS_KEY } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -73,6 +74,7 @@ function initials(email: string): string {
 }
 
 export function EventFormModal({ open, onClose, occurrence }: Props): React.ReactElement | null {
+  const { t } = useTranslation()
   const isEdit = occurrence !== null
   const mailApi = useMailApi()
   const qc = useQueryClient()
@@ -162,14 +164,14 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       }
     },
     onSuccess: () => {
-      toastSuccess(isEdit ? '事件已更新' : '事件已创建, ~60s 内同步到本地视图')
+      toastSuccess(isEdit ? t('calendar.form.toastUpdated', '事件已更新') : t('calendar.form.toastCreated', '事件已创建, ~60s 内同步到本地视图'))
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
       void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
       onClose()
     },
     onError: (err: unknown) => {
       const e = err as Error
-      toastError(isEdit ? '更新事件失败' : '创建事件失败', e.message || '未知错误')
+      toastError(isEdit ? t('calendar.form.toastErrUpdate', '更新事件失败') : t('calendar.form.toastErrCreate', '创建事件失败'), e.message || t('calendar.toolbar.syncTipUnknownErr', '未知错误'))
     }
   })
 
@@ -301,14 +303,14 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
         <div className="efm-head">
           <span className="efm-accent" aria-hidden />
           <h2 id="efm-title" className="efm-title">
-            {isEdit ? '编辑事件' : '新建事件'}
+            {isEdit ? t('calendar.form.titleEdit', '编辑事件') : t('calendar.form.titleCreate', '新建事件')}
           </h2>
           <button
             type="button"
             className="efm-close"
             onClick={onClose}
-            aria-label="关闭 (Esc)"
-            title="关闭 (Esc)"
+            aria-label={t('calendar.shared.close', '关闭 (Esc)')}
+            title={t('calendar.shared.close', '关闭 (Esc)')}
           >
             <X size={16} strokeWidth={2} />
           </button>
@@ -318,7 +320,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           {/* 标题 */}
           <div className="ef-field">
             <label className="ef-label" htmlFor="ef-title">
-              标题
+              {t('calendar.form.labelTitle', '标题')}
               <span className="req" aria-hidden>
                 *
               </span>
@@ -330,7 +332,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
               className={cn('ef-input', errTitle && 'invalid')}
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
-              placeholder="事件标题"
+              placeholder={t('calendar.form.placeholderTitle', '事件标题')}
               autoComplete="off"
               aria-required
               aria-invalid={errTitle || undefined}
@@ -338,13 +340,13 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             />
             <div className={cn('ef-err', errTitle && 'show')} role="alert">
               <AlertCircle size={13} strokeWidth={2} />
-              <span>请输入事件标题</span>
+              <span>{t('calendar.form.errTitle', '请输入事件标题')}</span>
             </div>
           </div>
 
           {/* 起止时间 */}
           <div className="ef-field">
-            <label className="ef-label">起止时间</label>
+            <label className="ef-label">{t('calendar.form.labelTime', '起止时间')}</label>
             <div className="ef-grid2">
               <input
                 ref={startRef}
@@ -352,26 +354,26 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
                 type="datetime-local"
                 value={startLocal}
                 onChange={(e) => setStartLocal(e.target.value)}
-                aria-label="开始时间"
+                aria-label={t('calendar.form.ariaStart', '开始时间')}
               />
               <input
                 className={cn('ef-input mono', errTime && 'invalid')}
                 type="datetime-local"
                 value={endLocal}
                 onChange={(e) => setEndLocal(e.target.value)}
-                aria-label="结束时间"
+                aria-label={t('calendar.form.ariaEnd', '结束时间')}
               />
             </div>
             <div className={cn('ef-err', errTime && 'show')} role="alert">
               <AlertCircle size={13} strokeWidth={2} />
-              <span>结束时间需晚于开始时间</span>
+              <span>{t('calendar.form.errTime', '结束时间需晚于开始时间')}</span>
             </div>
           </div>
 
           {/* 地点 */}
           <div className="ef-field">
             <label className="ef-label" htmlFor="ef-loc">
-              地点
+              {t('calendar.form.labelLocation', '地点')}
             </label>
             <input
               id="ef-loc"
@@ -379,7 +381,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
               className="ef-input"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              placeholder="会议室 / Teams 链接 / 地址"
+              placeholder={t('calendar.form.placeholderLocation', '会议室 / Teams 链接 / 地址')}
               autoComplete="off"
               maxLength={500}
             />
@@ -388,7 +390,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           {/* 与会者 chip 输入 */}
           <div className="ef-field">
             <label className="ef-label" htmlFor="ef-att-input">
-              与会者
+              {t('calendar.form.attendees.label', '与会者')}
             </label>
             <div
               className={cn(
@@ -411,8 +413,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
                       e.stopPropagation()
                       setChips((cs) => cs.filter((x) => x.email !== c.email))
                     }}
-                    aria-label={`移除 ${c.email}`}
-                    title="移除"
+                    aria-label={t('calendar.form.attendees.removeChip', '移除 {email}', { email: c.email })}
+                    title={t('calendar.shared.closeAria', '关闭')}
                   >
                     <svg
                       width="11"
@@ -439,27 +441,27 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
                 onKeyDown={onChipInputKey}
                 onFocus={() => setChipFocused(true)}
                 onBlur={onChipInputBlur}
-                placeholder={chips.length === 0 ? '输入 email 后回车添加' : ''}
+                placeholder={chips.length === 0 ? t('calendar.form.attendees.placeholder', '输入 email 后回车添加') : ''}
                 autoComplete="off"
-                aria-label="添加与会者 email"
+                aria-label={t('calendar.form.attendees.label', '与会者')}
               />
             </div>
             <div className="chip-hint">
-              <kbd>Enter</kbd> 添加 · <kbd>⌫</kbd> 删除上一个 · 点 × 移除
+              {t('calendar.form.attendees.hint', 'Enter 添加 · ⌫ 删除上一个 · 点 × 移除')}
             </div>
           </div>
 
           {/* 描述 */}
           <div className="ef-field">
             <label className="ef-label" htmlFor="ef-desc">
-              描述
+              {t('calendar.form.labelDescription', '描述')}
             </label>
             <textarea
               id="ef-desc"
               className="ef-textarea"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="议程、备注、相关链接…"
+              placeholder={t('calendar.form.placeholderDescription', '议程、备注、相关链接…')}
               maxLength={2000}
             />
           </div>
@@ -472,7 +474,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             onClick={onClose}
             disabled={mut.isPending}
           >
-            取消
+            {t('calendar.form.actions.cancel', '取消')}
           </button>
           <button
             type="button"
@@ -482,11 +484,11 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           >
             {mut.isPending
               ? isEdit
-                ? '保存中…'
-                : '创建中…'
+                ? t('calendar.form.actions.saving', '保存中…')
+                : t('calendar.form.actions.creating', '创建中…')
               : isEdit
-                ? '保存'
-                : '创建'}
+                ? t('calendar.form.actions.save', '保存')
+                : t('calendar.form.actions.create', '创建')}
           </button>
         </div>
 

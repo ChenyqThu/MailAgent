@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { EventChip } from '../EventChip'
 import {
@@ -42,6 +43,7 @@ interface PopState {
 }
 
 export function MonthView({ date, calendarName, onSelect }: Props): React.ReactElement {
+  const { t } = useTranslation()
   const [pop, setPop] = useState<PopState | null>(null)
   // F11 — popover click-outside 用 ref + capture phase mousedown 判断, 不靠
   // 内部元素 stopPropagation (脆弱: 漏一处就闪一下消失).
@@ -86,7 +88,7 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
   if (isLoading) {
     return (
       <div className="cal-month">
-        <div className="text-aux text-ink-fg-2 p-6">加载中…</div>
+        <div className="text-aux text-ink-fg-2 p-6">{t('calendar.shared.loading', '加载中…')}</div>
       </div>
     )
   }
@@ -97,7 +99,7 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
       <div className="cal-month">
         <EmptyState
           icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-          title="本月无日程"
+          title={t('calendar.empty.month', '本月无日程')}
           hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
         />
       </div>
@@ -159,7 +161,7 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
             >
               <div className="m-num">
                 <span className="nday">{d.getDate()}</span>
-                {today && <span className="m-today-tag">今天</span>}
+                {today && <span className="m-today-tag">{t('calendar.view.month.today', '今天')}</span>}
               </div>
               {visible.map((occ) => (
                 <EventChip
@@ -183,7 +185,7 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
                     })
                   }}
                 >
-                  +{moreCount} 更多
+                  {t('calendar.view.month.moreBtn', '+{n} 更多', { n: moreCount })}
                 </button>
               )}
             </div>
@@ -199,7 +201,7 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
         >
           <div className="mp-head">
             <span>{pop.dayLabel}</span>
-            <span className="mp-date">{pop.items.length} 个事件</span>
+            <span className="mp-date">{t('calendar.view.month.popEventCount', '{n} 个事件', { n: pop.items.length })}</span>
           </div>
           <div className="space-y-1">
             {pop.items.map((occ, idx) => (

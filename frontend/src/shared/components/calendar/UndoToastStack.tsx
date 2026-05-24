@@ -9,15 +9,17 @@
 
 import { useEffect, useRef } from 'react'
 import { Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { useUndoToastStore, type UndoEntry } from '@shared/state/calendar-undo'
 
 export function UndoToastStack(): React.ReactElement | null {
+  const { t } = useTranslation()
   const items = useUndoToastStore((s) => s.items)
   const undo = useUndoToastStore((s) => s.undo)
   if (items.length === 0) return null
   return (
-    <div className="undo-stack" aria-live="polite" aria-label="待撤销操作">
+    <div className="undo-stack" aria-live="polite" aria-label={t('calendar.undo.aria', '待撤销操作')}>
       {items.map((item) => (
         <UndoToast key={item.id} item={item} onUndo={() => undo(item.id)} />
       ))}
@@ -32,6 +34,7 @@ function UndoToast({
   item: UndoEntry
   onUndo: () => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const progRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = progRef.current
@@ -56,7 +59,7 @@ function UndoToast({
         {item.subtitle && <div className="undo-t2">{item.subtitle}</div>}
       </div>
       <button type="button" className="undo-btn" onClick={onUndo}>
-        撤销
+        {t('calendar.undo.undo', '撤销')}
       </button>
       <div ref={progRef} className="undo-prog" aria-hidden />
     </div>

@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { EventBlock } from '../EventBlock'
 import {
@@ -72,12 +73,15 @@ function MiniMonth({
   onPrev,
   onNext
 }: MiniMonthProps): React.ReactElement {
+  const { t } = useTranslation()
   const monthStart = startOfMonth(displayMonth)
   const gridStart = startOfWeek(monthStart)
   const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
   const currentMonth = monthStart.getMonth()
   const todayKey = ymd(todayStartLocal())
   const selKey = ymd(selDate)
+  const prevMonthLabel = t('calendar.view.day.prevMonthAria', '上月')
+  const nextMonthLabel = t('calendar.view.day.nextMonthAria', '下月')
 
   return (
     <>
@@ -86,10 +90,10 @@ function MiniMonth({
           {monthStart.getFullYear()} 年 {monthStart.getMonth() + 1} 月
         </span>
         <div className="mm-nav">
-          <button type="button" onClick={onPrev} title="上月" aria-label="上月">
+          <button type="button" onClick={onPrev} title={prevMonthLabel} aria-label={prevMonthLabel}>
             <ChevronLeft size={12} strokeWidth={2.2} />
           </button>
-          <button type="button" onClick={onNext} title="下月" aria-label="下月">
+          <button type="button" onClick={onNext} title={nextMonthLabel} aria-label={nextMonthLabel}>
             <ChevronRight size={12} strokeWidth={2.2} />
           </button>
         </div>
@@ -139,6 +143,7 @@ export function DayView({
   onSelect,
   selectedKey = null
 }: Props): React.ReactElement {
+  const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
 
@@ -237,7 +242,11 @@ export function DayView({
         />
         <div className="dr-summary">{dayLabel}</div>
         <div className="dr-count">
-          {isLoading ? '加载中…' : total > 0 ? `${total} 个日程` : '本日无日程'}
+          {isLoading
+            ? t('calendar.shared.loading', '加载中…')
+            : total > 0
+              ? t('calendar.view.day.count', '{n} 个日程', { n: total })
+              : t('calendar.empty.day', '本日无日程')}
         </div>
         <div>
           {allDay.map((occ) => (
@@ -247,13 +256,13 @@ export function DayView({
               className="dr-row"
               data-resp={(occ.response_status || '').toUpperCase()}
               onClick={() => onSelect(occ)}
-              title={occ.summary || '未命名事件'}
+              title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
             >
               <span className="dr-bar" />
               <div className="min-w-0 flex-1">
-                <div className="dr-time">全天</div>
+                <div className="dr-time">{t('calendar.shared.allDay', '全天')}</div>
                 <div className={cn('dr-title truncate', !occ.summary && 'empty-field')}>
-                  {occ.summary || '未命名事件'}
+                  {occ.summary || t('calendar.shared.untitled', '未命名事件')}
                 </div>
               </div>
             </button>
@@ -265,7 +274,7 @@ export function DayView({
               className="dr-row"
               data-resp={(occ.response_status || '').toUpperCase()}
               onClick={() => onSelect(occ)}
-              title={occ.summary || '未命名事件'}
+              title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
             >
               <span className="dr-bar" />
               <div className="min-w-0 flex-1">
@@ -274,7 +283,7 @@ export function DayView({
                   {shortTime(occ.occurrence_end_iso)}
                 </div>
                 <div className={cn('dr-title truncate', !occ.summary && 'empty-field')}>
-                  {occ.summary || '未命名事件'}
+                  {occ.summary || t('calendar.shared.untitled', '未命名事件')}
                 </div>
               </div>
             </button>
@@ -284,11 +293,11 @@ export function DayView({
 
       <div className="day-main">
         {isLoading ? (
-          <div className="text-aux text-ink-fg-2 p-6">加载中…</div>
+          <div className="text-aux text-ink-fg-2 p-6">{t('calendar.shared.loading', '加载中…')}</div>
         ) : total === 0 ? (
           <EmptyState
             icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-            title="本日无日程"
+            title={t('calendar.empty.day', '本日无日程')}
           />
         ) : (
           <div className="cal-week">
@@ -302,7 +311,7 @@ export function DayView({
             {allDay.length > 0 && (
               <div className="wk-alldayrow" style={{ gridTemplateColumns: GRID_COLS_ONE }}>
                 <div className="allday-gutter">
-                  <span>全天</span>
+                  <span>{t('calendar.shared.allDay', '全天')}</span>
                 </div>
                 <div className={cn('allday-cell', isToday && 'is-today')}>
                   {allDay.map((occ) => (
@@ -313,12 +322,12 @@ export function DayView({
                       data-resp={(occ.response_status || '').toUpperCase()}
                       data-status={(occ.status || '').toUpperCase()}
                       onClick={() => onSelect(occ)}
-                      title={occ.summary || '未命名事件'}
+                      title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
                     >
                       {occ.summary ? (
                         occ.summary
                       ) : (
-                        <span className="empty-field">未命名事件</span>
+                        <span className="empty-field">{t('calendar.shared.untitled', '未命名事件')}</span>
                       )}
                     </button>
                   ))}

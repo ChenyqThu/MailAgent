@@ -736,6 +736,19 @@
         "today": "Today",
         "popEventCount": "{n} events"
       }
+    },
+    "shortcut": {
+      "title": "Keyboard shortcuts",
+      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)",
+      "dayView": "Day view",
+      "weekView": "Week view",
+      "monthView": "Month view",
+      "agendaView": "Agenda view",
+      "prevNext": "Previous / Next",
+      "today": "Go to today",
+      "sync": "Sync",
+      "close": "Close drawer / modal",
+      "help": "Open / close this help"
     }
   },
   "settings": {

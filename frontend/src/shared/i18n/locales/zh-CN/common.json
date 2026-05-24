@@ -736,6 +736,19 @@
         "today": "今天",
         "popEventCount": "{n} 个事件"
       }
+    },
+    "shortcut": {
+      "title": "键盘快捷键",
+      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)",
+      "dayView": "日视图",
+      "weekView": "周视图",
+      "monthView": "月视图",
+      "agendaView": "Agenda 视图",
+      "prevNext": "上一段 / 下一段",
+      "today": "跳到今天",
+      "sync": "同步",
+      "close": "关闭抽屉 / 弹层",
+      "help": "打开 / 关闭本帮助"
     }
   },
   "settings": {

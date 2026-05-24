@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { EventBlock } from '../EventBlock'
 import {
@@ -45,6 +46,7 @@ function isTodayLocal(d: Date): boolean {
 }
 
 export function WeekView({ date, calendarName, onSelect, selectedKey = null }: Props): React.ReactElement {
+  const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
 
@@ -77,7 +79,7 @@ export function WeekView({ date, calendarName, onSelect, selectedKey = null }: P
   if (isLoading) {
     return (
       <div className="cal-week">
-        <div className="text-aux text-ink-fg-2 p-6">加载中…</div>
+        <div className="text-aux text-ink-fg-2 p-6">{t('calendar.shared.loading', '加载中…')}</div>
       </div>
     )
   }
@@ -88,7 +90,7 @@ export function WeekView({ date, calendarName, onSelect, selectedKey = null }: P
       <div className="cal-week">
         <EmptyState
           icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-          title="本周无日程"
+          title={t('calendar.empty.week', '本周无日程')}
           hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
         />
       </div>
@@ -130,7 +132,7 @@ export function WeekView({ date, calendarName, onSelect, selectedKey = null }: P
       {hasAllDay && (
         <div className="wk-alldayrow" style={{ gridTemplateColumns: GRID_COLS }}>
           <div className="allday-gutter">
-            <span>全天</span>
+            <span>{t('calendar.shared.allDay', '全天')}</span>
           </div>
           {days.map((d, i) => {
             const dayMs = d.getTime()
@@ -150,12 +152,12 @@ export function WeekView({ date, calendarName, onSelect, selectedKey = null }: P
                     data-resp={(occ.response_status || '').toUpperCase()}
                     data-status={(occ.status || '').toUpperCase()}
                     onClick={() => onSelect(occ)}
-                    title={occ.summary || '未命名事件'}
+                    title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
                   >
                     {occ.summary ? (
                       occ.summary
                     ) : (
-                      <span className="empty-field">未命名事件</span>
+                      <span className="empty-field">{t('calendar.shared.untitled', '未命名事件')}</span>
                     )}
                   </button>
                 ))}

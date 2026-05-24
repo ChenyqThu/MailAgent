@@ -2,6 +2,8 @@
 // 月视图单格 + agenda all-day strip 的紧凑 event chip.
 // 用 .chip + data-resp / data-status 走 CSS 渲染 4 种 response + cancelled.
 
+import { useTranslation } from 'react-i18next'
+
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 
@@ -18,7 +20,10 @@ function localTimeShort(iso: string): string {
 }
 
 export function EventChip({ event, compact = false, onClick }: EventChipProps): React.ReactElement {
-  const startTxt = event.is_all_day ? '全天' : localTimeShort(event.occurrence_start_iso)
+  const { t } = useTranslation()
+  const allDayLabel = t('calendar.shared.allDay', '全天')
+  const untitled = t('calendar.shared.untitled', '未命名事件')
+  const startTxt = event.is_all_day ? allDayLabel : localTimeShort(event.occurrence_start_iso)
   return (
     <button
       type="button"
@@ -26,13 +31,13 @@ export function EventChip({ event, compact = false, onClick }: EventChipProps): 
       data-resp={(event.response_status || '').toUpperCase()}
       data-status={(event.status || '').toUpperCase()}
       onClick={onClick}
-      title={event.summary || '未命名事件'}
+      title={event.summary || untitled}
     >
       <span className="c-dot" aria-hidden />
       {!compact && !event.is_all_day && <span className="c-time">{startTxt}</span>}
-      {compact && event.is_all_day && <span className="c-time">全天</span>}
+      {compact && event.is_all_day && <span className="c-time">{allDayLabel}</span>}
       <span className={cn('c-title', !event.summary && 'empty-field')}>
-        {event.summary || '未命名事件'}
+        {event.summary || untitled}
       </span>
     </button>
   )

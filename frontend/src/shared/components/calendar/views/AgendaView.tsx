@@ -3,6 +3,7 @@
 // Toolbar 已接管 "N 个日程 + 刷新", 这里专注内容呈现.
 
 import { Calendar as CalendarIcon, Video } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import {
   useCalendarEventsInWindow,
@@ -61,7 +62,7 @@ function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
 }
 
 export function AgendaView({ rangeDays = 14, calendarName, onSelect }: Props): React.ReactElement {
-
+  const { t } = useTranslation()
   const start = todayStartLocal()
   const end = addDays(start, rangeDays)
   const { data, isLoading } = useCalendarEventsInWindow({
@@ -87,7 +88,7 @@ export function AgendaView({ rangeDays = 14, calendarName, onSelect }: Props): R
       <div className="cal-agenda">
         <EmptyState
           icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-          title={`未来 ${rangeDays} 天无日程`}
+          title={t('calendar.empty.agenda', '未来 {n} 天无日程', { n: rangeDays })}
           hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
         />
       </div>
@@ -116,10 +117,11 @@ export function AgendaView({ rangeDays = 14, calendarName, onSelect }: Props): R
             {items.map((occ) => {
               const allDay = occ.is_all_day
               const timeTxt = allDay
-                ? '全天'
+                ? t('calendar.shared.allDay', '全天')
                 : `${shortTime(occ.occurrence_start_iso)} – ${shortTime(occ.occurrence_end_iso)}`
               const meeting = hasMeetingLink(occ)
               const showLoc = occ.location && !occ.location.toLowerCase().includes('teams.microsoft.com')
+              const untitled = t('calendar.shared.untitled', '未命名事件')
               return (
                 <button
                   key={`${occ.id}-${occ.occurrence_start_iso}`}
@@ -128,13 +130,13 @@ export function AgendaView({ rangeDays = 14, calendarName, onSelect }: Props): R
                   data-resp={(occ.response_status || '').toUpperCase()}
                   data-status={(occ.status || '').toUpperCase()}
                   onClick={() => onSelect(occ)}
-                  title={occ.summary || '未命名事件'}
+                  title={occ.summary || untitled}
                 >
                   <div className="ag-time">{timeTxt}</div>
                   <div className="ag-main">
                     <span className="ag-bar" aria-hidden />
                     <span className={cn('ag-title', !occ.summary && 'empty-field')}>
-                      {occ.summary || '未命名事件'}
+                      {occ.summary || untitled}
                     </span>
                     {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
                     {showLoc && <span className="ag-loc">{occ.location}</span>}

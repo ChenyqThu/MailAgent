@@ -12,6 +12,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { CalendarErrorBoundary } from '../calendar/CalendarErrorBoundary'
 import { CalendarPage } from '../calendar/CalendarPage'
@@ -62,6 +63,7 @@ function isoDateOnly(daysFromToday: number): string {
 }
 
 export function CalendarLayout(): React.ReactElement {
+  const { t } = useTranslation()
   const search = useSearch({ from: '/admin/calendar' }) as { view?: CalendarView }
   const navigate = useNavigate({ from: '/admin/calendar' })
   const view: CalendarView = search.view ?? 'week'
@@ -112,7 +114,7 @@ export function CalendarLayout(): React.ReactElement {
   const lastIso =
     head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
   const lastDate = lastIso ? new Date(lastIso) : null
-  const lastSyncLabel = lastDate ? relativeTime(lastDate) : '尚未同步'
+  const lastSyncLabel = lastDate ? relativeTime(lastDate) : t('calendar.statusbar.noSync', '尚未同步')
   const lastError = head?.last_error ?? null
   const hasErr = !!lastError
   const calendarsLabel = head?.calendar_name ?? '日历'
@@ -160,7 +162,7 @@ export function CalendarLayout(): React.ReactElement {
                 (rrule 解析 / Date.parse NaN / IPC reject) 不冒到 PageFrame
                 黑屏整页. 切 view 时 view + Boundary 都 unmount 自动 reset. */}
             {view === 'today' && (
-              <CalendarErrorBoundary viewName="日视图">
+              <CalendarErrorBoundary viewName={t('calendar.toolbar.viewDay', '日')}>
                 <DayView
                   date={currentDate}
                   onDateChange={setCurrentDate}
@@ -170,7 +172,7 @@ export function CalendarLayout(): React.ReactElement {
               </CalendarErrorBoundary>
             )}
             {view === 'week' && (
-              <CalendarErrorBoundary viewName="周视图">
+              <CalendarErrorBoundary viewName={t('calendar.toolbar.viewWeek', '周')}>
                 <WeekView
                   date={currentDate}
                   onSelect={setActive}
@@ -179,17 +181,17 @@ export function CalendarLayout(): React.ReactElement {
               </CalendarErrorBoundary>
             )}
             {view === 'month' && (
-              <CalendarErrorBoundary viewName="月视图">
+              <CalendarErrorBoundary viewName={t('calendar.toolbar.viewMonth', '月')}>
                 <MonthView date={currentDate} onSelect={setActive} />
               </CalendarErrorBoundary>
             )}
             {view === 'agenda' && (
-              <CalendarErrorBoundary viewName="Agenda">
+              <CalendarErrorBoundary viewName={t('calendar.toolbar.viewAgenda', 'Agenda')}>
                 <AgendaView onSelect={setActive} />
               </CalendarErrorBoundary>
             )}
             {view === 'recurring' && (
-              <CalendarErrorBoundary viewName="定期邀请">
+              <CalendarErrorBoundary viewName={t('calendar.toolbar.viewRecurring', '定期邀请')}>
                 <CalendarPage />
               </CalendarErrorBoundary>
             )}
@@ -208,20 +210,20 @@ export function CalendarLayout(): React.ReactElement {
               </span>
               <span className="sb-sep">·</span>
               <span>
-                自动同步 <span className="sb-num">{lastSyncLabel}</span>
+                {t('calendar.statusbar.autoSync', '自动同步')} <span className="sb-num">{lastSyncLabel}</span>
               </span>
             </div>
             <button
               type="button"
               className="sb-info ml-auto"
               tabIndex={0}
-              aria-label="同步与后台详情"
+              aria-label={t('calendar.statusbar.popoverAria', '同步与后台详情')}
             >
               <Info size={14} strokeWidth={2} />
               <div className="sb-pop glass-pop">
                 <div className="sb-pop-h">
                   <Info size={12} strokeWidth={2} />
-                  同步与后台
+                  {t('calendar.statusbar.popoverTitle', '同步与后台')}
                 </div>
                 <div className="sb-pop-row">
                   <span className="k">bridge</span>
