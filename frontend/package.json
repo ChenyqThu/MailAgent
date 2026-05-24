@@ -58,6 +58,7 @@
     "react-i18next": "^17.0.8",
     "react-window": "^2.2.7",
     "rrule": "^2.8.1",
+    "streamdown": "^2.5.0",
     "tailwindcss-animate": "^1.0.7",
     "which": "^7.0.0",
     "workbox-precaching": "^7.4.1",
