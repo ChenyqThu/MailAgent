@@ -3,6 +3,7 @@
 // 用 .chip + data-resp / data-status 走 CSS 渲染 4 种 response + cancelled.
 
 import type { CalendarEventOccurrence } from '@shared/api/types'
+import { cn } from '@shared/lib/cn'
 
 interface EventChipProps {
   event: CalendarEventOccurrence
@@ -25,12 +26,14 @@ export function EventChip({ event, compact = false, onClick }: EventChipProps): 
       data-resp={(event.response_status || '').toUpperCase()}
       data-status={(event.status || '').toUpperCase()}
       onClick={onClick}
-      title={event.summary || '(无标题)'}
+      title={event.summary || '未命名事件'}
     >
       <span className="c-dot" aria-hidden />
       {!compact && !event.is_all_day && <span className="c-time">{startTxt}</span>}
       {compact && event.is_all_day && <span className="c-time">全天</span>}
-      <span className="c-title">{event.summary || '(无标题)'}</span>
+      <span className={cn('c-title', !event.summary && 'empty-field')}>
+        {event.summary || '未命名事件'}
+      </span>
     </button>
   )
 }

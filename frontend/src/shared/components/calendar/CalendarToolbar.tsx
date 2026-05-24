@@ -147,15 +147,14 @@ export function CalendarToolbar({
         ))}
       </div>
 
-      {/* Phase 2.2 — [+ 新建] (CalDAV PUT 新事件), 放在 sync 左边强调 primary action */}
+      {/* Phase 2.5 §11.1 — [+ 新建] coral primary (跟 mockup-event-form §toolbar 一致) */}
       <button
         type="button"
-        className="nav-btn"
-        style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
+        className="btn-coral"
         onClick={() => setCreateModalOpen(true)}
         title="新建事件 — 直接写到 Exchange (CalDAV PUT)"
       >
-        <Plus size={13} strokeWidth={2.2} />
+        <Plus size={14} strokeWidth={2.4} />
         <span>新建</span>
       </button>
 

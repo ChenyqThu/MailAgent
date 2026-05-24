@@ -129,12 +129,14 @@ export function AgendaView({ rangeDays = 14, calendarName }: Props): React.React
                   data-resp={(occ.response_status || '').toUpperCase()}
                   data-status={(occ.status || '').toUpperCase()}
                   onClick={() => setActive(occ)}
-                  title={occ.summary || '(无标题)'}
+                  title={occ.summary || '未命名事件'}
                 >
                   <div className="ag-time">{timeTxt}</div>
                   <div className="ag-main">
                     <span className="ag-bar" aria-hidden />
-                    <span className="ag-title">{occ.summary || '(无标题)'}</span>
+                    <span className={cn('ag-title', !occ.summary && 'empty-field')}>
+                      {occ.summary || '未命名事件'}
+                    </span>
                     {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
                     {showLoc && <span className="ag-loc">{occ.location}</span>}
                   </div>

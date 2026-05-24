@@ -53,7 +53,7 @@ export function EventBlock({
   const meeting = hasMeetingLink(event)
   const startTxt = shortTime(event.occurrence_start_iso)
   const endTxt = shortTime(event.occurrence_end_iso)
-  const titleAttr = `${event.summary || '(无标题)'}\n${startTxt} – ${endTxt}${event.location ? '\n' + event.location : ''}`
+  const titleAttr = `${event.summary || '未命名事件'}\n${startTxt} – ${endTxt}${event.location ? '\n' + event.location : ''}`
 
   return (
     <button
@@ -74,8 +74,11 @@ export function EventBlock({
         <span>{startTxt}</span>
         {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
       </div>
-      <div className="e-title" style={short ? { fontSize: '11px' } : undefined}>
-        {event.summary || '(无标题)'}
+      <div
+        className={cn('e-title', !event.summary && 'empty-field')}
+        style={short ? { fontSize: '11px' } : undefined}
+      >
+        {event.summary || '未命名事件'}
       </div>
       {!short && h > 52 && event.location && <div className="e-loc">{event.location}</div>}
     </button>

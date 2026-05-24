@@ -146,9 +146,13 @@ export function WeekView({ date, calendarName }: Props): React.ReactElement {
                     data-resp={(occ.response_status || '').toUpperCase()}
                     data-status={(occ.status || '').toUpperCase()}
                     onClick={() => setActive(occ)}
-                    title={occ.summary || '(无标题)'}
+                    title={occ.summary || '未命名事件'}
                   >
-                    {occ.summary || '(无标题)'}
+                    {occ.summary ? (
+                      occ.summary
+                    ) : (
+                      <span className="empty-field">未命名事件</span>
+                    )}
                   </button>
                 ))}
               </div>

@@ -234,12 +234,14 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
               className="dr-row"
               data-resp={(occ.response_status || '').toUpperCase()}
               onClick={() => setActive(occ)}
-              title={occ.summary || '(无标题)'}
+              title={occ.summary || '未命名事件'}
             >
               <span className="dr-bar" />
               <div className="min-w-0 flex-1">
                 <div className="dr-time">全天</div>
-                <div className="dr-title truncate">{occ.summary || '(无标题)'}</div>
+                <div className={cn('dr-title truncate', !occ.summary && 'empty-field')}>
+                  {occ.summary || '未命名事件'}
+                </div>
               </div>
             </button>
           ))}
@@ -250,7 +252,7 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
               className="dr-row"
               data-resp={(occ.response_status || '').toUpperCase()}
               onClick={() => setActive(occ)}
-              title={occ.summary || '(无标题)'}
+              title={occ.summary || '未命名事件'}
             >
               <span className="dr-bar" />
               <div className="min-w-0 flex-1">
@@ -258,7 +260,9 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
                   {shortTime(occ.occurrence_start_iso)} –{' '}
                   {shortTime(occ.occurrence_end_iso)}
                 </div>
-                <div className="dr-title truncate">{occ.summary || '(无标题)'}</div>
+                <div className={cn('dr-title truncate', !occ.summary && 'empty-field')}>
+                  {occ.summary || '未命名事件'}
+                </div>
               </div>
             </button>
           ))}
@@ -296,9 +300,13 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
                       data-resp={(occ.response_status || '').toUpperCase()}
                       data-status={(occ.status || '').toUpperCase()}
                       onClick={() => setActive(occ)}
-                      title={occ.summary || '(无标题)'}
+                      title={occ.summary || '未命名事件'}
                     >
-                      {occ.summary || '(无标题)'}
+                      {occ.summary ? (
+                        occ.summary
+                      ) : (
+                        <span className="empty-field">未命名事件</span>
+                      )}
                     </button>
                   ))}
                 </div>
