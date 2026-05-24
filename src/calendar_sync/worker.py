@@ -315,14 +315,24 @@ class CalendarSyncWorker:
         # CTag 不可用兜底 (DavMail 6.7 PROPFIND getctag 实测返 None):
         # 没 ctag 信号, 改用时间间隔. 默认 1h 内不重做 full sync — 用户改了日历
         # 最多 1h 延迟看到. 真要更快用户可手动 `mailagent calendar sync-now`.
-        if new_ctag is None and state and state.last_full_sync_at:
-            stale_sec = (
-                datetime.now(timezone.utc) - state.last_full_sync_at
-            ).total_seconds()
-            if stale_sec < 3600:
-                # ctag 不可用 + 上次 full sync < 1h 前 → 跳过
-                self.repo.upsert_sync_state(cal_name, last_error=None)
-                return
+        #
+        # F20 (Opus Medium): 老代码只看 last_full_sync_at, 但增量 path 仅更新
+        # last_incremental_sync_at → 没 ctag 的 calendar 第一次 full sync 后, 每
+        # tick 都会因 "last_full_sync_at < 1h 前不成立" 全量 reload (实测非常慢).
+        # 修: 取 max(incremental, full) 任一近期 sync 都 skip full reload.
+        if new_ctag is None and state:
+            last_any = None
+            for ts in (state.last_incremental_sync_at, state.last_full_sync_at):
+                if ts is not None and (last_any is None or ts > last_any):
+                    last_any = ts
+            if last_any is not None:
+                stale_sec = (
+                    datetime.now(timezone.utc) - last_any
+                ).total_seconds()
+                if stale_sec < 3600:
+                    # ctag 不可用 + 上次任意 sync < 1h 前 → 跳过
+                    self.repo.upsert_sync_state(cal_name, last_error=None)
+                    return
 
         logger.info(
             f"[calendar-sync-worker] {cal_name!r} ctag changed "
