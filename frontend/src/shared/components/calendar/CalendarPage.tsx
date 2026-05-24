@@ -186,8 +186,8 @@ export function CalendarPage(): React.ReactElement {
         ) : !listQ.data || listQ.data.length === 0 ? (
           <EmptyState
             icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
-            title={t('calendar.empty')}
-            hint={t('calendar.emptyHint')}
+            title={t('calendar.empty.recurring', '未发现周期会议')}
+            hint={t('calendar.emptyHint', '调整时间范围或确认 .ics 邀请已被同步')}
           />
         ) : (
           <table className="rec-table">

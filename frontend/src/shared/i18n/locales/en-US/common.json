@@ -570,8 +570,16 @@
     "title": "Recurring meetings",
     "subtitle": "Invitations received since {since}; replay each one to the Notion calendar.",
     "loading": "Loading…",
-    "empty": "No recurring meetings found",
+    "empty": {
+      "day": "No events today",
+      "week": "No events this week",
+      "month": "No events this month",
+      "agenda": "No events in the next {n} days",
+      "recurring": "No recurring meetings found"
+    },
     "emptyHint": "Widen the time range, or confirm .ics invites synced.",
+    "syncTriggered": "Calendar sync triggered",
+    "syncTriggerFail": "Calendar sync failed",
     "replay": "Replay",
     "replayOk": "Email #{id} replayed",
     "replayFail": "Email #{id} replay failed",
@@ -715,8 +723,11 @@
       "day": "No events today",
       "week": "No events this week",
       "month": "No events this month",
-      "agenda": "No events in the next {n} days"
+      "agenda": "No events in the next {n} days",
+      "recurring": "No recurring meetings found"
     },
+    "syncTriggered": "Calendar sync triggered",
+    "syncTriggerFail": "Calendar sync failed",
     "undo": {
       "aria": "Pending undo actions",
       "undo": "Undo",

@@ -715,8 +715,11 @@
       "day": "本日无日程",
       "week": "本周无日程",
       "month": "本月无日程",
-      "agenda": "未来 {n} 天无日程"
+      "agenda": "未来 {n} 天无日程",
+      "recurring": "未发现周期会议"
     },
+    "syncTriggered": "已触发日历同步",
+    "syncTriggerFail": "日历同步失败",
     "undo": {
       "aria": "待撤销操作",
       "undo": "撤销",
