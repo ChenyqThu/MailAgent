@@ -23,6 +23,7 @@ import {
   type ChatMessage,
   type ChatSession
 } from '../chat_db'
+import { saveConversationToKos } from '../chat/kos_save'
 import {
   abortAllChatSessions,
   abortChatSession,
@@ -258,6 +259,49 @@ export function registerChatHandlers(): void {
         const code =
           codeAttr ??
           (message.includes('No chat backend registered') ? 'E_BACKEND_UNAVAILABLE' : 'E_DISPATCH')
+        return { ok: false, code, message }
+      }
+    }
+  )
+
+  // Sprint 19 P1-C — chat:saveToKos. Renderer's [✨ 保存到 KOS] button
+  // invokes this with { messageId, slug?, title? }. Service in
+  // chat/kos_save.ts loads the assistant message + preceding user
+  // message, builds markdown page with frontmatter, KOSClient.putPage.
+  // Same { ok, data | code+message } envelope shape as chat:start.
+  ipcMain.handle(
+    'chat:saveToKos',
+    async (
+      _evt,
+      input: { messageId?: unknown; slug?: unknown; title?: unknown }
+    ): Promise<
+      | { ok: true; data: { slug: string; status: string; contentBytes: number } }
+      | { ok: false; code: string; message: string }
+    > => {
+      if (!input || typeof input !== 'object') {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'saveToKos input required' }
+      }
+      if (!Number.isInteger(input.messageId) || (input.messageId as number) < 0) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'messageId must be a non-negative integer'
+        }
+      }
+      try {
+        const data = await saveConversationToKos({
+          messageId: input.messageId as number,
+          slug: typeof input.slug === 'string' && input.slug.length > 0 ? input.slug : undefined,
+          title:
+            typeof input.title === 'string' && input.title.length > 0 ? input.title : undefined
+        })
+        return { ok: true, data }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const code =
+          err instanceof Error && typeof (err as Error & { code?: unknown }).code === 'string'
+            ? (err as Error & { code: string }).code
+            : 'E_DISPATCH'
         return { ok: false, code, message }
       }
     }

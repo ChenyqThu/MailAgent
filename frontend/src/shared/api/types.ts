@@ -1021,6 +1021,25 @@ export interface ChatApi {
     approved: boolean,
     editedInput?: unknown
   ): Promise<{ ok: true } | { ok: false; code: string; message: string }>
+  /**
+   * Sprint 19 P1-C — explicit "save this assistant turn to KOS" action.
+   * Renderer wires a [✨ 保存到 KOS] button per assistant bubble; click
+   * invokes this. Service builds a markdown page from (preceding user
+   * message + this assistant message) + frontmatter, pushes to KOS at
+   * slug `conversations/<email>-<session>-<message>` (D3 default,
+   * pending Lucien sync on gbrain namespace).
+   *
+   * Resolves with the final slug + KOS status + content bytes pushed.
+   * Throws `Error & { code }` on E_NOT_FOUND (bad messageId) /
+   * E_INVALID_ARG (non-assistant message) / E_KOS_* (KOS unreachable).
+   * Renderer surfaces failures in a toast rather than auto-retrying;
+   * KOS down is non-fatal — user can retry once it's back.
+   */
+  saveToKos(input: {
+    messageId: number
+    slug?: string
+    title?: string
+  }): Promise<{ slug: string; status: string; contentBytes: number }>
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }

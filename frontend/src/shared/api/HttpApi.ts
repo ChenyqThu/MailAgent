@@ -71,6 +71,9 @@ export class HttpApi implements MailApi {
     // Sprint 19 — chat.newSession 真创建一个 session row. V2 web SPA 还
     // 没接, 跟其他 chat IPC 一样走 notImplemented stub.
     newSession: () => notImplemented('chat.newSession'),
+    // Sprint 19 P1-C — chat.saveToKos 把 assistant turn 推 KOS. V2 web 同
+    // 走 notImplemented stub, KOS save 用户操作仅 Electron 环境.
+    saveToKos: () => notImplemented('chat.saveToKos'),
     // Sprint 19 PR-1d.2 — confirmation IPC for the agent harness. V2 web
     // SPA will route through a `/api/chat/confirm-tool` POST once the
     // harness ships in a server context. The stub returns ok:false so

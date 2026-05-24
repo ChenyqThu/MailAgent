@@ -518,6 +518,24 @@ class ElectronChatApi implements ChatApi {
       editedInput
     })) as { ok: true } | { ok: false; code: string; message: string }
   }
+  async saveToKos(input: {
+    messageId: number
+    slug?: string
+    title?: string
+  }): Promise<{ slug: string; status: string; contentBytes: number }> {
+    // Sprint 19 P1-C — user clicked [✨ 保存到 KOS]. Same envelope shape
+    // as `start` so the main process can surface E_NOT_FOUND / E_INVALID_ARG
+    // / E_KOS_* with a structured code instead of dropping the Error
+    // property across IPC.
+    type Env =
+      | { ok: true; data: { slug: string; status: string; contentBytes: number } }
+      | { ok: false; code: string; message: string }
+    const env = (await invoker()('chat:saveToKos', input)) as Env
+    if (env.ok) return env.data
+    const err = new Error(env.message) as Error & { code?: string }
+    err.code = env.code
+    throw err
+  }
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
     return subscribe('chat:stream', (...args: unknown[]) => {
       const env = args[0] as ChatStreamEnvelope | undefined
