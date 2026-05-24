@@ -120,15 +120,27 @@ def build_vevent(
     if description and description.strip():
         lines.append(f"DESCRIPTION:{_escape_text(description)}")
     for a in attendees or []:
-        email = (a.get("email") or "").strip() if isinstance(a, dict) else ""
+        if not isinstance(a, dict):
+            continue
+        email = (a.get("email") or "").strip()
         if not email:
             continue
-        name = a.get("name") if isinstance(a, dict) else None
-        cn = ""
-        if name and name.strip():
-            cn = f';CN="{name.replace(chr(34), "").strip()}"'
+        # F19 (Opus Medium) — 透传 PARTSTAT / ROLE / RSVP / CN, 不再 hardcode
+        # NEEDS-ACTION. F3 修了"清空 attendees" 但 hardcode NEEDS-ACTION 把
+        # 已 ACCEPTED 的 attendee 状态打回 → Exchange 重发邀请 → 用户感知
+        # 双重邀请邮件. 这里 caller (update_event) 从原 vevent 透传 partstat,
+        # 新增 attendee 没指定 partstat 走 default NEEDS-ACTION.
+        partstat = (a.get("partstat") or "NEEDS-ACTION").strip().upper()
+        rsvp = (a.get("rsvp") or "TRUE").strip().upper()
+        role = (a.get("role") or "").strip().upper()
+        name = a.get("name")
+        params = [f"PARTSTAT={partstat}", f"RSVP={rsvp}"]
+        if role:
+            params.insert(0, f"ROLE={role}")
+        if name and isinstance(name, str) and name.strip():
+            params.append(f'CN="{name.replace(chr(34), "").strip()}"')
         lines.append(
-            f"ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE{cn}:mailto:{email}"
+            f"ATTENDEE;{';'.join(params)}:mailto:{email}"
         )
 
     # F3: RRULE / EXDATE / RDATE / RECURRENCE-ID — update_event 透传时必须
@@ -148,10 +160,11 @@ def build_vevent(
 
 
 def _extract_attendees_from_vevent(v: Any) -> List[Dict[str, Any]]:
-    """从 vobject vevent 提取 attendees → ``[{email, name?}]``.
+    """从 vobject vevent 提取 attendees → ``[{email, name?, partstat?, role?, rsvp?}]``.
 
-    vobject 把多 ATTENDEE 行表示成 ``attendee_list``. 每个 attendee `.value`
-    是 ``mailto:email``, `.params['CN']` 是显示名 (可能 None).
+    F19 (Opus Medium): 含 PARTSTAT / ROLE / RSVP / CN 全 params. update_event
+    透传时保留原 attendee 状态 (已 ACCEPTED 不被打回 NEEDS-ACTION → 防 Exchange
+    重发邀请).
     """
     out: List[Dict[str, Any]] = []
     raw_list = getattr(v, "attendee_list", None) or []
@@ -161,9 +174,26 @@ def _extract_attendees_from_vevent(v: Any) -> List[Dict[str, Any]]:
         if not email or "@" not in email:
             continue
         params = getattr(att, "params", {}) or {}
-        cn_list = params.get("CN") or params.get("cn") or []
-        name = cn_list[0] if isinstance(cn_list, list) and cn_list else None
-        out.append({"email": email, "name": name})
+
+        def _first(key: str) -> Optional[str]:
+            val = params.get(key) or params.get(key.lower())
+            if isinstance(val, list) and val:
+                return val[0]
+            if isinstance(val, str):
+                return val
+            return None
+
+        item: Dict[str, Any] = {"email": email, "name": _first("CN")}
+        partstat = _first("PARTSTAT")
+        role = _first("ROLE")
+        rsvp = _first("RSVP")
+        if partstat:
+            item["partstat"] = partstat.upper()
+        if role:
+            item["role"] = role.upper()
+        if rsvp:
+            item["rsvp"] = rsvp.upper()
+        out.append(item)
     return out
 
 

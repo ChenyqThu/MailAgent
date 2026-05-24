@@ -623,4 +623,110 @@ def test_extract_attendees_from_vevent_skips_non_email():
     )
     result = _extract_attendees_from_vevent(v)
     assert len(result) == 1
-    assert result[0] == {"email": "alice@x.com", "name": "Alice"}
+    assert result[0]["email"] == "alice@x.com"
+    assert result[0]["name"] == "Alice"
+
+
+# ---------------------------------------------------------------------------
+# F19 (Opus Medium) — PARTSTAT / ROLE / RSVP 透传, 修 F3 副作用
+# ---------------------------------------------------------------------------
+
+def test_extract_attendees_includes_partstat_role_rsvp():
+    """F19 — _extract_attendees_from_vevent 提取 PARTSTAT/ROLE/RSVP 全 params."""
+    from src.calendar_sync.caldav_writer import _extract_attendees_from_vevent
+
+    v = SimpleNamespace(
+        attendee_list=[
+            SimpleNamespace(
+                value="mailto:alice@x.com",
+                params={
+                    "CN": ["Alice"],
+                    "PARTSTAT": ["ACCEPTED"],
+                    "ROLE": ["REQ-PARTICIPANT"],
+                    "RSVP": ["TRUE"],
+                },
+            ),
+            SimpleNamespace(
+                value="mailto:bob@x.com",
+                params={"CN": ["Bob"], "PARTSTAT": ["DECLINED"]},
+            ),
+        ],
+    )
+    result = _extract_attendees_from_vevent(v)
+    assert result[0] == {
+        "email": "alice@x.com",
+        "name": "Alice",
+        "partstat": "ACCEPTED",
+        "role": "REQ-PARTICIPANT",
+        "rsvp": "TRUE",
+    }
+    assert result[1] == {
+        "email": "bob@x.com",
+        "name": "Bob",
+        "partstat": "DECLINED",
+    }
+
+
+def test_build_vevent_attendee_with_explicit_partstat():
+    """F19 — build_vevent 接 attendee.partstat 覆盖默认 NEEDS-ACTION."""
+    from src.calendar_sync.caldav_writer import build_vevent
+
+    body = build_vevent(
+        ical_uid="x",
+        summary="x",
+        dtstart_utc=datetime(2026, 5, 30, 14, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 5, 30, 15, tzinfo=timezone.utc),
+        organizer_email="me@x.com",
+        attendees=[
+            {"email": "alice@x.com", "name": "Alice", "partstat": "ACCEPTED",
+             "role": "REQ-PARTICIPANT", "rsvp": "FALSE"},
+        ],
+    )
+    line = next(L for L in body.splitlines() if L.startswith("ATTENDEE"))
+    assert "PARTSTAT=ACCEPTED" in line
+    assert "ROLE=REQ-PARTICIPANT" in line
+    assert "RSVP=FALSE" in line
+    assert 'CN="Alice"' in line
+
+
+def test_build_vevent_attendee_no_partstat_defaults_needs_action():
+    """F19 — 没传 partstat 走 default NEEDS-ACTION (新建 attendee 场景)."""
+    from src.calendar_sync.caldav_writer import build_vevent
+
+    body = build_vevent(
+        ical_uid="x",
+        summary="x",
+        dtstart_utc=datetime(2026, 5, 30, 14, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 5, 30, 15, tzinfo=timezone.utc),
+        organizer_email="me@x.com",
+        attendees=[{"email": "alice@x.com"}],
+    )
+    line = next(L for L in body.splitlines() if L.startswith("ATTENDEE"))
+    assert "PARTSTAT=NEEDS-ACTION" in line
+    assert "RSVP=TRUE" in line
+
+
+def test_writer_update_event_preserves_attendee_partstat():
+    """**F19 关键场景** — 已 ACCEPTED 的 attendee, update summary 后 PARTSTAT
+    仍 ACCEPTED (不被 hardcode NEEDS-ACTION 打回 → 防 Exchange 重发邀请)."""
+    evt = _mock_event_with_vevent(
+        attendees=[{"email": "alice@x.com", "name": "Alice"}],
+    )
+    # mock attendee 加 ACCEPTED PARTSTAT
+    evt.vobject_instance.vevent.attendee_list[0].params = {
+        "CN": ["Alice"],
+        "PARTSTAT": ["ACCEPTED"],
+        "RSVP": ["FALSE"],
+    }
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(ical_uid="uid-x", summary="x updated")
+
+    line = next(L for L in evt.data.splitlines() if L.startswith("ATTENDEE"))
+    assert "PARTSTAT=ACCEPTED" in line, f"PARTSTAT lost! got: {line}"
+    assert "PARTSTAT=NEEDS-ACTION" not in line
