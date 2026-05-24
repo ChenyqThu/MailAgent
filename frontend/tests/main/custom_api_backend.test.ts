@@ -203,12 +203,27 @@ describe('CustomApiBackend — model gating', () => {
     expect(__testing.isAnthropicModel('gemini-1.5')).toBe(false)
   })
 
-  test('stream emits E_MODEL_UNSUPPORTED for non-Anthropic models', async () => {
+  test('isOpenAiCompatibleModel accepts gpt/gemini/codex prefixes (Sprint 19 §D #4)', () => {
+    expect(__testing.isOpenAiCompatibleModel('gpt-5.4')).toBe(true)
+    expect(__testing.isOpenAiCompatibleModel('gpt-4o')).toBe(true)
+    expect(__testing.isOpenAiCompatibleModel('gemini-1.5-pro')).toBe(true)
+    expect(__testing.isOpenAiCompatibleModel('codex-1')).toBe(true)
+  })
+
+  test('isOpenAiCompatibleModel rejects claude / unknown families', () => {
+    expect(__testing.isOpenAiCompatibleModel('claude-sonnet-4-6')).toBe(false)
+    expect(__testing.isOpenAiCompatibleModel('llama-3-70b')).toBe(false)
+    expect(__testing.isOpenAiCompatibleModel('mistral-large')).toBe(false)
+  })
+
+  test('stream emits E_MODEL_UNSUPPORTED only for unknown model families', async () => {
+    // Sprint 19 §D #4 — gpt-* now routes to openaiStream (not unsupported).
+    // The unsupported envelope kicks in for genuinely unknown families.
     const backend = new CustomApiBackend()
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
-        model: 'gpt-5.4',
+        model: 'llama-3-70b',
         agentPageId: null,
         signal: new AbortController().signal
       })

@@ -5,21 +5,23 @@
 // C-04 hard rule: API key reads happen here in the main process; the
 // renderer never sees the key bytes.
 //
-// Why Anthropic-only for Sprint 4:
-//   - The default model alias `claude-sonnet-4-6` matches the Sprint 3
-//     translate path, so existing CRS users get chat for free.
-//   - The OpenAI / Gemini code path lives behind the same `getLlmModel()`
-//     env override but uses a different stream parser; we ship Anthropic
-//     first so the headline AI panel works, and the BackendSelector's
-//     gpt-5.4 / gemini chips degrade to an error-event toast (renderer
-//     stays robust) until the OpenAI parser lands as a follow-up.
+// 双协议支持 (Sprint 19 §D #4):
+//   - Anthropic Messages 协议 (primary, default `claude-sonnet-4-6`).
+//     `claude-*` / `claude:*` prefix 走 anthropicStream — 支持 prompt cache
+//     (system + tools 双 cache_control 断点, 实测 ~95% 命中率).
+//   - OpenAI Chat Completions 协议 (`gpt-*` / `gemini-*` / `codex-*` prefix)
+//     走 openaiStream — CRS 把这些模型 routed 到 /v1/chat/completions, 协议
+//     用 index-based tool_calls 增量 merge. 无 prompt cache (协议限制).
+//     主要给 fallback 链 `claude-sonnet-4-6 → gpt-5.4 → claude-opus-4-7`
+//     命中 gpt 时用, 不阻塞 multi-turn harness.
 //
-// Stream protocol:
-//   POST /v1/messages with `stream: true` returns text/event-stream.
-//   Each event is `data: <json>\n\n` with the JSON shape documented at
-//   https://docs.anthropic.com/en/api/messages-streaming. We care about
-//   `message_start`, `content_block_delta` (text_delta), `message_delta`
-//   (usage), and `message_stop`. Anything else passes through silently.
+// Stream protocols:
+//   - Anthropic: POST /v1/messages stream=true; `data: <json>\n\n` events
+//     `message_start` / `content_block_*` / `message_delta` / `message_stop`
+//     (https://docs.anthropic.com/en/api/messages-streaming)
+//   - OpenAI:    POST /v1/chat/completions stream=true; `data: <json>\n\n`
+//     events 含 `choices[0].delta` (content / tool_calls index-based merge)
+//     + `usage` (last chunk) + `[DONE]` sentinel
 
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../../llm_settings'
 import { isKosL1HotBlockEnabled } from '../config'
@@ -455,6 +457,429 @@ function parseSseChunk(state: SseParseState, chunk: string): unknown[] {
   return out
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// OpenAI Chat Completions code path (Sprint 19 §D #4)
+// ────────────────────────────────────────────────────────────────────────
+//
+// CRS gateway routes `gpt-*` / `gemini-*` / `codex-*` to /v1/chat/completions.
+// Different request shape (tools wrapped in `function`, tool_use as
+// `tool_calls` array on assistant message, tool_result as separate `tool`
+// role message) and different stream protocol (index-based tool_calls delta
+// merge, finish_reason instead of stop_reason).
+
+interface OpenAiMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content?: string | null
+  tool_calls?: Array<{
+    id: string
+    type: 'function'
+    function: { name: string; arguments: string }
+  }>
+  tool_call_id?: string
+}
+
+interface OpenAiToolFunctionDecl {
+  type: 'function'
+  function: { name: string; description?: string; parameters: unknown }
+}
+
+/** Flatten Anthropic-style system blocks to a single text string for OpenAI
+ *  `{role:'system'}`. cache_control breakpoints are dropped (OpenAI 无 prompt
+ *  cache 协议). 拼接用 \n\n 分块, 跟 buildSystemPrompt legacy form 等价. */
+function flattenSystemBlocksToText(blocks: AnthropicSystemBlock[]): string {
+  return blocks
+    .map((b) => b.text)
+    .filter((t) => t && t.length > 0)
+    .join('\n\n')
+}
+
+/** Translate ChatStreamRequest history + iterHistory into OpenAI-format
+ *  messages. Anthropic content blocks (`tool_use` / `tool_result`) get
+ *  mapped to OpenAI's flatter form: tool_use → assistant.tool_calls[],
+ *  tool_result → separate role:'tool' message keyed by tool_call_id. */
+function buildOpenAiMessages(req: ChatStreamRequest): OpenAiMessage[] {
+  // Harness loop iterHistory takes precedence — it already has the
+  // multi-block tool_use / tool_result transcript.
+  if (req.iterHistory && req.iterHistory.length > 0) {
+    const out: OpenAiMessage[] = []
+    for (const m of req.iterHistory) {
+      if (typeof m.content === 'string') {
+        out.push({ role: m.role, content: m.content })
+        continue
+      }
+      // Multi-block array form — split into OpenAI shape.
+      if (m.role === 'assistant') {
+        const textParts: string[] = []
+        const toolCalls: NonNullable<OpenAiMessage['tool_calls']> = []
+        for (const block of m.content) {
+          const b = block as { type?: string; text?: string; id?: string; name?: string; input?: unknown }
+          if (b.type === 'text' && typeof b.text === 'string') {
+            textParts.push(b.text)
+          } else if (b.type === 'tool_use' && b.id && b.name) {
+            toolCalls.push({
+              id: b.id,
+              type: 'function',
+              function: {
+                name: b.name,
+                arguments: JSON.stringify(b.input ?? {})
+              }
+            })
+          }
+        }
+        const msg: OpenAiMessage = { role: 'assistant' }
+        if (textParts.length > 0) msg.content = textParts.join('\n')
+        else msg.content = null
+        if (toolCalls.length > 0) msg.tool_calls = toolCalls
+        out.push(msg)
+      } else if (m.role === 'user') {
+        // user content array may carry tool_result blocks (sent back after
+        // tool execution). Each tool_result becomes its own role:'tool' msg.
+        let userText = ''
+        const toolResults: Array<{ tool_use_id: string; content: string }> = []
+        for (const block of m.content) {
+          const b = block as { type?: string; text?: string; tool_use_id?: string; content?: unknown }
+          if (b.type === 'text' && typeof b.text === 'string') {
+            userText += (userText ? '\n' : '') + b.text
+          } else if (b.type === 'tool_result' && b.tool_use_id) {
+            const content =
+              typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? {})
+            toolResults.push({ tool_use_id: b.tool_use_id, content })
+          }
+        }
+        // Order matters: tool results must appear AFTER the assistant
+        // turn that emitted the tool_calls. Push tool messages first
+        // (they belong to the previous assistant turn), then the user's
+        // own text (next user turn).
+        for (const tr of toolResults) {
+          out.push({ role: 'tool', tool_call_id: tr.tool_use_id, content: tr.content })
+        }
+        if (userText.length > 0) out.push({ role: 'user', content: userText })
+      }
+    }
+    return out.length > 0 ? out : [{ role: 'user', content: '(empty)' }]
+  }
+  // Legacy single-pass path — same shape as buildAnthropicMessages but
+  // OpenAI-flavored. Tool breadcrumbs already inlined as `[tool: …]` text.
+  const out: OpenAiMessage[] = []
+  let pendingAssistant: string[] = []
+  function flushAssistant(): void {
+    if (pendingAssistant.length === 0) return
+    out.push({ role: 'assistant', content: pendingAssistant.join('\n').trim() })
+    pendingAssistant = []
+  }
+  for (const m of req.history) {
+    if (m.role === 'user') {
+      flushAssistant()
+      out.push({ role: 'user', content: m.content })
+    } else if (m.role === 'assistant') {
+      if (m.status === 'aborted' || m.status === 'error') continue
+      if (m.content.length > 0) pendingAssistant.push(m.content)
+    } else if (m.role === 'tool') {
+      try {
+        const data = JSON.parse(m.content) as { name?: string; detail?: string }
+        pendingAssistant.push(
+          `[tool: ${data.name ?? 'unknown'}${data.detail ? ' — ' + data.detail : ''}]`
+        )
+      } catch {
+        /* skip */
+      }
+    }
+  }
+  flushAssistant()
+  if (out.length === 0) out.push({ role: 'user', content: '(empty)' })
+  return out
+}
+
+/** Translate BackendToolDescriptor[] into OpenAI function-call declarations. */
+function buildOpenAiTools(
+  tools: BackendToolDescriptor[] | undefined
+): OpenAiToolFunctionDecl[] | undefined {
+  if (!tools || tools.length === 0) return undefined
+  return tools.map((t) => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema
+    }
+  }))
+}
+
+/** Sprint 19 §D #4 — per-stream state for OpenAI tool_calls delta merge.
+ *  OpenAI tool_calls come as `delta.tool_calls[]` chunks with an `index`
+ *  and incremental `function.arguments` string. Index-keyed map merges
+ *  the fragments; finalize on `finish_reason='tool_calls'` (or stream end). */
+interface OpenAiStreamState {
+  pendingToolCalls: Map<number, { id: string; name: string; argsStr: string }>
+  finishReason: 'stop' | 'tool_calls' | 'length' | null
+  inputTokens: number
+  outputTokens: number
+  accumulated: string
+  modelSeen: string | null
+  sawError: boolean
+  /** Once finalize flushed tool_use events we don't re-flush on stream end. */
+  toolsFlushed: boolean
+}
+
+function createOpenAiStreamState(initialModel: string | null): OpenAiStreamState {
+  return {
+    pendingToolCalls: new Map(),
+    finishReason: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    accumulated: '',
+    modelSeen: initialModel,
+    sawError: false,
+    toolsFlushed: false
+  }
+}
+
+/** Flush all pendingToolCalls into ToolUseEvent[] (called on finish_reason
+ *  ='tool_calls' or as a safety on stream end if still pending). */
+function flushOpenAiToolCalls(state: OpenAiStreamState): ChatStreamEvent[] {
+  if (state.toolsFlushed || state.pendingToolCalls.size === 0) return []
+  const events: ChatStreamEvent[] = []
+  // Iterate sorted by index so multi-tool turns dispatch in deterministic order.
+  const entries = Array.from(state.pendingToolCalls.entries()).sort((a, b) => a[0] - b[0])
+  for (const [, rec] of entries) {
+    let input: unknown = {}
+    if (rec.argsStr.trim().length > 0) {
+      try {
+        input = JSON.parse(rec.argsStr)
+      } catch (err) {
+        input = {
+          __parse_error: err instanceof Error ? err.message : String(err),
+          __raw: rec.argsStr
+        }
+      }
+    }
+    events.push({
+      type: 'tool_use',
+      toolUseId: rec.id,
+      name: rec.name,
+      input
+    })
+  }
+  state.pendingToolCalls.clear()
+  state.toolsFlushed = true
+  return events
+}
+
+function processOpenAiEvent(
+  parsed: unknown,
+  state: OpenAiStreamState
+): ChatStreamEvent[] {
+  const e = parsed as Record<string, unknown> & { __done?: boolean }
+  if (e.__done === true) {
+    // Stream sentinel — flush any unfinalized tool_calls (defensive).
+    return flushOpenAiToolCalls(state)
+  }
+  // Top-level error envelope (some gateways send these inline).
+  const topErr = (e as { error?: { type?: string; message?: string } }).error
+  if (topErr) {
+    state.sawError = true
+    return [
+      {
+        type: 'error',
+        code: topErr.type ?? 'E_UPSTREAM',
+        message: topErr.message ?? 'LLM error'
+      }
+    ]
+  }
+  const choices = (e.choices as Array<Record<string, unknown>> | undefined) ?? []
+  const usage = e.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined
+  if (usage) {
+    if (typeof usage.prompt_tokens === 'number') state.inputTokens = usage.prompt_tokens
+    if (typeof usage.completion_tokens === 'number') state.outputTokens = usage.completion_tokens
+  }
+  if (typeof (e as { model?: unknown }).model === 'string') {
+    state.modelSeen = (e as { model: string }).model
+  }
+  if (choices.length === 0) return []
+  const choice = choices[0]
+  const delta = (choice?.delta as Record<string, unknown> | undefined) ?? {}
+  const out: ChatStreamEvent[] = []
+  // Text content delta.
+  if (typeof delta.content === 'string' && delta.content.length > 0) {
+    state.accumulated += delta.content
+    out.push({ type: 'chunk', delta: delta.content })
+  }
+  // Tool calls delta (index-based merge).
+  const toolCallsDelta = delta.tool_calls as
+    | Array<{
+        index?: number
+        id?: string
+        function?: { name?: string; arguments?: string }
+      }>
+    | undefined
+  if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
+    for (const tc of toolCallsDelta) {
+      const idx = typeof tc.index === 'number' ? tc.index : 0
+      let rec = state.pendingToolCalls.get(idx)
+      if (!rec) {
+        rec = { id: tc.id ?? '', name: '', argsStr: '' }
+        state.pendingToolCalls.set(idx, rec)
+      }
+      if (tc.id && !rec.id) rec.id = tc.id
+      if (tc.function?.name && !rec.name) rec.name = tc.function.name
+      if (typeof tc.function?.arguments === 'string') {
+        rec.argsStr += tc.function.arguments
+      }
+    }
+  }
+  // finish_reason: 'stop' | 'tool_calls' | 'length' | null
+  const finishReason = choice?.finish_reason as string | null | undefined
+  if (finishReason === 'stop' || finishReason === 'tool_calls' || finishReason === 'length') {
+    state.finishReason = finishReason
+    if (finishReason === 'tool_calls') {
+      out.push(...flushOpenAiToolCalls(state))
+    }
+  }
+  return out
+}
+
+async function* openaiStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
+  const apiKey = await getLlmApiKey()
+  if (!apiKey) {
+    yield {
+      type: 'error',
+      code: 'E_NO_LLM_KEY',
+      message: 'LLM API key not configured — set it in Settings or LLM_API_KEY env'
+    }
+    return
+  }
+  const baseUrl = getLlmBaseUrl()
+  const model = req.model ?? getLlmModel()
+  const systemText = flattenSystemBlocksToText(buildSystemBlocks(req.emailContext))
+  const userMessages = buildOpenAiMessages(req)
+  const messages: OpenAiMessage[] =
+    systemText.length > 0
+      ? [{ role: 'system', content: systemText }, ...userMessages]
+      : userMessages
+  const tools = buildOpenAiTools(req.tools)
+
+  const timeoutAc = new AbortController()
+  const timer = setTimeout(() => timeoutAc.abort(), REQUEST_DEADLINE_MS)
+  const onParentAbort = (): void => timeoutAc.abort()
+  if (req.signal.aborted) {
+    clearTimeout(timer)
+    yield { type: 'error', code: 'E_ABORTED', message: 'request aborted before send' }
+    return
+  }
+  req.signal.addEventListener('abort', onParentAbort, { once: true })
+
+  const requestBody: Record<string, unknown> = {
+    model,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    messages,
+    stream: true,
+    // Backend client.py uses stream_options.include_usage too; CRS honors it
+    // by emitting a final chunk with usage even when tool_calls are present.
+    stream_options: { include_usage: true }
+  }
+  if (tools) requestBody.tools = tools
+
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        // CRS gateway accepts either `x-api-key` or `Authorization: Bearer`
+        // for OpenAI-protocol models; send Bearer (standard for /v1/chat).
+        authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestBody),
+      signal: timeoutAc.signal
+    })
+  } catch (err) {
+    clearTimeout(timer)
+    req.signal.removeEventListener('abort', onParentAbort)
+    if (req.signal.aborted) return
+    yield {
+      type: 'error',
+      code: 'E_UPSTREAM',
+      message: `LLM fetch failed: ${err instanceof Error ? err.message : String(err)}`
+    }
+    return
+  }
+
+  if (!response.ok) {
+    clearTimeout(timer)
+    req.signal.removeEventListener('abort', onParentAbort)
+    yield {
+      type: 'error',
+      code: response.status === 429 ? 'E_QUOTA' : 'E_UPSTREAM',
+      message: `LLM API ${response.status}`
+    }
+    return
+  }
+  if (!response.body) {
+    clearTimeout(timer)
+    req.signal.removeEventListener('abort', onParentAbort)
+    yield { type: 'error', code: 'E_UPSTREAM', message: 'LLM response had no body' }
+    return
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const sseState: SseParseState = { buffer: '' }
+  const state = createOpenAiStreamState(model)
+
+  try {
+    while (true) {
+      if (req.signal.aborted) break
+      const { done, value } = await reader.read()
+      if (done) break
+      const text = decoder.decode(value, { stream: true })
+      const parsedEvents = parseSseChunk(sseState, text)
+      for (const parsed of parsedEvents) {
+        const out = processOpenAiEvent(parsed, state)
+        for (const ev of out) yield ev
+      }
+    }
+  } finally {
+    clearTimeout(timer)
+    req.signal.removeEventListener('abort', onParentAbort)
+    try {
+      reader.releaseLock()
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (req.signal.aborted) return
+  if (state.sawError) return
+
+  // Safety flush: if stream ended without an explicit `tool_calls` finish
+  // reason but tools are pending (some upstreams omit finish_reason on the
+  // last chunk when usage arrives separately), emit them now.
+  for (const ev of flushOpenAiToolCalls(state)) yield ev
+
+  yield {
+    type: 'usage',
+    inputTokens: state.inputTokens,
+    outputTokens: state.outputTokens,
+    costUsd: null,
+    model: state.modelSeen
+  }
+  // Map OpenAI finish_reason → DoneEvent.stopReason (same enum the harness
+  // branches on). 'tool_calls' → 'tool_use' (LLM wants tools); 'length' →
+  // 'max_tokens'; null / 'stop' → 'end_turn'.
+  const stopReason: 'end_turn' | 'tool_use' | 'max_tokens' =
+    state.finishReason === 'tool_calls'
+      ? 'tool_use'
+      : state.finishReason === 'length'
+        ? 'max_tokens'
+        : 'end_turn'
+  yield {
+    type: 'done',
+    finalContent: state.accumulated,
+    model: state.modelSeen,
+    stopReason
+  }
+}
+
 async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
   const apiKey = await getLlmApiKey()
   if (!apiKey) {
@@ -604,25 +1029,42 @@ export class CustomApiBackend implements ChatBackend {
   readonly kind = 'custom-api' as const
 
   async *stream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
-    // Sprint 4 ships Anthropic-only. The hook routes by alias (the
-    // `claude-*` family covers the default plus the explicit alternates
-    // in the BackendSelector). Anything else returns a clear error
-    // event so the UI can show "model not supported in this build".
+    // Sprint 19 §D #4 — route by model-family prefix:
+    //   claude-* / claude:*  → Anthropic Messages (prompt cache 双断点)
+    //   gpt-* / gemini-* / codex-*  → OpenAI Chat Completions (index-merge tool_calls)
+    //   其他 → E_MODEL_UNSUPPORTED
+    // Backend kind is the only stable signal; the harness gate uses the same
+    // routing (dispatcher.ts) so multi-turn works on both paths.
     const model = req.model ?? getLlmModel()
-    if (!isAnthropicModel(model)) {
-      yield {
-        type: 'error',
-        code: 'E_MODEL_UNSUPPORTED',
-        message: `Model "${model}" not supported by Sprint 4 Custom API backend (Anthropic only).`
-      }
+    if (isAnthropicModel(model)) {
+      yield* anthropicStream(req)
       return
     }
-    yield* anthropicStream(req)
+    if (isOpenAiCompatibleModel(model)) {
+      yield* openaiStream(req)
+      return
+    }
+    yield {
+      type: 'error',
+      code: 'E_MODEL_UNSUPPORTED',
+      message: `Model "${model}" not supported (expected claude-* / gpt-* / gemini-* / codex-*).`
+    }
   }
 }
 
 function isAnthropicModel(model: string): boolean {
   return model.startsWith('claude-') || model.startsWith('claude:')
+}
+
+// Sprint 19 §D #4 — CRS gateway routes non-Anthropic providers through
+// /v1/chat/completions. Mirror backend `_OPENAI_PROTO_PREFIXES` in
+// src/llm_agent/client.py:43; new model families that speak OpenAI proto
+// (e.g. claude code 之外的) should land here.
+const OPENAI_PROTO_PREFIXES = ['gpt-', 'gemini-', 'codex-']
+
+function isOpenAiCompatibleModel(model: string): boolean {
+  const lower = model.toLowerCase()
+  return OPENAI_PROTO_PREFIXES.some((p) => lower.startsWith(p))
 }
 
 // Test-only — exposed so unit tests can exercise the SSE parser + state
@@ -637,5 +1079,13 @@ export const __testing = {
   decorateToolsWithCacheControl,
   createStreamState,
   processAnthropicEvent,
-  isAnthropicModel
+  isAnthropicModel,
+  // Sprint 19 §D #4 — OpenAI path test surface.
+  flattenSystemBlocksToText,
+  buildOpenAiMessages,
+  buildOpenAiTools,
+  createOpenAiStreamState,
+  processOpenAiEvent,
+  flushOpenAiToolCalls,
+  isOpenAiCompatibleModel
 }
