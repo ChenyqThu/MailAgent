@@ -396,8 +396,17 @@ class CalendarEventRepository:
         calendar_name: Optional[str] = None,
         include_deleted: bool = False,
         limit: int = 10000,
+        window_start: Optional[datetime] = None,
+        window_end: Optional[datetime] = None,
     ) -> list[CalendarEventRow]:
-        """读 raw rows (不展开 RRULE). worker / CLI / 调试用."""
+        """读 raw rows (不展开 RRULE). worker / CLI / 调试用.
+
+        F9 — ``window_start`` / ``window_end`` 提供时加 SQL filter:
+        ``dtstart < end AND (rrule != '' OR dtend >= start)``
+        含 RRULE master event 全保留 (它们可能 dtstart 远早于窗口但有
+        occurrence 落进窗口, expander 后续过滤). 走 idx_calendar_event_dtstart
+        索引, 数据量 ↑ 后避免全表扫.
+        """
         clauses = []
         params: list = []
         if source:
@@ -408,6 +417,18 @@ class CalendarEventRepository:
             params.append(calendar_name)
         if not include_deleted:
             clauses.append("deleted_at IS NULL")
+        if window_end is not None:
+            # dtstart 早于窗口 end (含 RRULE master 也可能跨进窗口)
+            clauses.append("dtstart_utc < ?")
+            params.append(_to_epoch(window_end))
+        if window_start is not None:
+            # 单次 event 要求 dtend 跨过窗口 start;
+            # RRULE master (rrule != '') 直接保留, occurrence 在窗口内由
+            # expander 决定
+            clauses.append(
+                "(rrule != '' OR dtend_utc IS NULL OR dtend_utc >= ?)"
+            )
+            params.append(_to_epoch(window_start))
         where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = (
             f"SELECT * FROM calendar_event{where_sql} "
@@ -442,12 +463,16 @@ class CalendarEventRepository:
             list of CalendarEventOccurrence, 按 occurrence_start_utc 升序.
             非 recurring 也用 CalendarEventOccurrence 包一层 (前端零特例).
         """
-        # 先拉所有可能 overlap 的 raw rows: 含 RRULE 的 row 即使 dtstart 远早于
-        # 窗口也可能有 occurrence 落进来; 这里偷懒拉所有未删 rows, 让 expander 过滤.
-        # 真要 scale 优化 (>10k rows) 可加: dtstart_utc < end_utc AND
-        # (rrule != '' OR dtend_utc >= start_utc).
+        # F9 — SQL 层先用 window filter 剪掉绝对落窗口外的非 RRULE rows
+        # (走 idx_calendar_event_dtstart 索引), 仅剩 in-window single events +
+        # 所有 RRULE master events 进 Python 端 expander 过滤. 数据量 ↑ 后
+        # 避免全表扫.
         rows = self.list_event_rows(
-            source=source, calendar_name=calendar_name, include_deleted=False
+            source=source,
+            calendar_name=calendar_name,
+            include_deleted=False,
+            window_start=start_utc,
+            window_end=end_utc,
         )
 
         occurrences: list[CalendarEventOccurrence] = []
