@@ -74,6 +74,9 @@ export class HttpApi implements MailApi {
     // Sprint 19 P1-C — chat.saveToKos 把 assistant turn 推 KOS. V2 web 同
     // 走 notImplemented stub, KOS save 用户操作仅 Electron 环境.
     saveToKos: () => notImplemented('chat.saveToKos'),
+    // Sprint 19 §D #3 — chat.listToolCalls 拉 chat_tool_call audit row. V2
+    // web SPA 还没接 chat_db, 一律返 [] 让 ToolCallRow 静默不显示而非报错.
+    listToolCalls: async () => [],
     // Sprint 19 PR-1d.2 — confirmation IPC for the agent harness. V2 web
     // SPA will route through a `/api/chat/confirm-tool` POST once the
     // harness ships in a server context. The stub returns ok:false so

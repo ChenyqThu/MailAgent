@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next'
 import {
   Bookmark,
   Check,
+  ChevronRight,
   Copy,
   ExternalLink,
   Loader2,
@@ -30,7 +31,7 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import type { ChatMessage } from '@shared/api/types'
+import type { ChatMessage, ChatToolCall } from '@shared/api/types'
 
 /** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
  *  handlers; if a panel doesn't (e.g. read-only conversation viewer), the
@@ -644,6 +645,141 @@ function AssistantMessageFooter({
   )
 }
 
+// Sprint 19 §D #3 — chat_tool_call audit row 折叠卡片. AssistantBubble
+// mount 时 (stream 结束后) 拉一次 listToolCalls, 渲染折叠 chip "(N 个
+// 工具调用) [▶]", 用户点击展开看每个 tool 的 (name / status / duration),
+// 单 tool 再点击展开看 input/output JSON. Streaming 期间 skip 避免抖动 —
+// `tool_call` event 触发的 listMessages refresh 会让本组件 unmount→remount.
+function ToolCallAuditRow({
+  messageId,
+  isStreaming
+}: {
+  messageId: number
+  isStreaming: boolean
+}): React.ReactElement | null {
+  const { t } = useTranslation()
+  const mailApi = useMailApi()
+  const [calls, setCalls] = useState<ChatToolCall[]>([])
+  const [collapsedAll, setCollapsedAll] = useState(true)
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+
+  useEffect(() => {
+    if (isStreaming) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const rows = await mailApi.chat.listToolCalls(messageId)
+        if (!cancelled) setCalls(rows)
+      } catch {
+        // 静默 — audit 拉不到只是 dogfood 体验降级, 不阻塞 chat
+      }
+    })()
+    return (): void => {
+      cancelled = true
+    }
+  }, [messageId, isStreaming, mailApi])
+
+  if (calls.length === 0) return null
+
+  const statusBadge = (s: ChatToolCall['status']): React.ReactElement => {
+    if (s === 'ok') return <Check size={11} className="text-ok shrink-0" />
+    if (s === 'error' || s === 'canceled')
+      return <X size={11} className="text-fail shrink-0" />
+    if (s === 'running' || s === 'pending' || s === 'confirmed')
+      return <Loader2 size={11} className="text-ink-fg-3 shrink-0 animate-spin" />
+    return <Check size={11} className="text-ink-fg-3 shrink-0" />
+  }
+
+  const toggleOne = (id: number): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  return (
+    <div className="rounded-md border border-ink-border-soft bg-ink-2/40 text-meta font-mono">
+      <button
+        type="button"
+        onClick={() => setCollapsedAll(!collapsedAll)}
+        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
+        aria-expanded={!collapsedAll}
+      >
+        <ChevronRight
+          size={11}
+          className={cn(
+            'shrink-0 transition-transform duration-fast',
+            !collapsedAll && 'rotate-90'
+          )}
+        />
+        <span>{t('chat.toolCalls.summary', { count: calls.length })}</span>
+      </button>
+      {!collapsedAll && (
+        <ul className="border-t border-ink-border-soft divide-y divide-ink-border-soft">
+          {calls.map((c) => {
+            const isOpen = expanded.has(c.id)
+            const inputEffective = c.user_edited_input_json ?? c.input_json
+            return (
+              <li key={c.id} className="px-3 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => toggleOne(c.id)}
+                  className="flex items-center gap-2 w-full text-left hover:text-ink-fg transition-colors duration-fast"
+                  aria-expanded={isOpen}
+                >
+                  <ChevronRight
+                    size={10}
+                    className={cn(
+                      'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+                      isOpen && 'rotate-90'
+                    )}
+                  />
+                  {statusBadge(c.status)}
+                  <span className="text-ink-fg">{c.tool_name}</span>
+                  {c.duration_ms !== null && (
+                    <span className="text-ink-fg-3 tabular-nums ml-auto">
+                      {formatMs(c.duration_ms)}
+                    </span>
+                  )}
+                </button>
+                {isOpen && (
+                  <div className="mt-1.5 pl-5 space-y-1">
+                    <div>
+                      <div className="text-ink-fg-3 text-micro mb-0.5">
+                        {t('chat.toolCalls.input')}
+                        {c.user_edited_input_json !== null && (
+                          <span className="ml-1 text-coral">
+                            ({t('chat.toolCalls.userEdited')})
+                          </span>
+                        )}
+                      </div>
+                      <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto whitespace-pre-wrap break-words">
+                        {inputEffective}
+                      </pre>
+                    </div>
+                    {c.output_json !== null && (
+                      <div>
+                        <div className="text-ink-fg-3 text-micro mb-0.5">
+                          {t('chat.toolCalls.output')}
+                        </div>
+                        <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto overflow-y-auto max-h-48 whitespace-pre-wrap break-words">
+                          {c.output_json}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function AssistantBubble({
   message,
   isStreaming,
@@ -733,6 +869,7 @@ function AssistantBubble({
           handlers={draftHandlers}
           isStreaming={isStreaming}
         />
+        <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
         {!isStreaming && (
           <AssistantMessageFooter messageId={message.id} content={message.content} />
         )}
@@ -751,6 +888,7 @@ function AssistantBubble({
         <TranslatedBody text={message.content || ' '} />
         {isStreaming && <span className="cursor-blink" aria-hidden />}
       </div>
+      <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
       {!isStreaming && (
         <AssistantMessageFooter messageId={message.id} content={message.content} />
       )}

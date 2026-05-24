@@ -836,6 +836,40 @@ export interface ChatSession {
   updated_at: number
 }
 
+// Sprint 19 §D #3 — chat_tool_call audit row, mirrored from main-side
+// `src/electron/main/chat_db.ts` so the renderer can type the ChatApi
+// listToolCalls() result without crossing the main-process import line.
+// Keep the two definitions in sync; payload is plain JSON (better-sqlite3
+// → IPC structured-clone).
+export type ChatToolCallStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'running'
+  | 'ok'
+  | 'error'
+  | 'canceled'
+export type ChatConfirmationTier = 'silent' | 'preview' | 'edit'
+
+export interface ChatToolCall {
+  id: number
+  message_id: number
+  tool_use_id: string
+  tool_name: string
+  /** Original LLM-proposed input JSON. */
+  input_json: string
+  /** Set only when the user edited the input via ConfirmToolDialog
+   *  (confirmation_tier='edit'); null otherwise. */
+  user_edited_input_json: string | null
+  /** Tool handler's ToolResult serialized; null until the tool completes. */
+  output_json: string | null
+  status: ChatToolCallStatus
+  duration_ms: number | null
+  confirmation_tier: ChatConfirmationTier
+  confirmed_at: number | null
+  created_at: number
+  updated_at: number
+}
+
 export interface ChatChunkEvent {
   type: 'chunk'
   delta: string
@@ -1040,6 +1074,15 @@ export interface ChatApi {
     slug?: string
     title?: string
   }): Promise<{ slug: string; status: string; contentBytes: number }>
+  /**
+   * Sprint 19 §D #3 — list chat_tool_call audit rows for one assistant
+   * message. Renderer ToolCallRow mounts when a message bubble renders;
+   * each tool_use the LLM emitted shows up as one row (tool_name, status,
+   * input/output JSON, duration). Returns chronological. Empty array when
+   * the message had no tool_use blocks (legacy single-pass or no
+   * harness involvement). Backed by `listToolCallsForMessage` in chat_db.ts.
+   */
+  listToolCalls(messageId: number): Promise<ChatToolCall[]>
   /** Subscribe to backend stream events. Returns an unsubscribe function. */
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void
 }

@@ -415,6 +415,12 @@
       "saveToKosOk": "Saved to KOS",
       "saveToKosFail": "Save failed"
     },
+    "toolCalls": {
+      "summary": "{count, plural, =1 {Used 1 tool} other {Used # tools}}",
+      "input": "Input",
+      "output": "Output",
+      "userEdited": "user-edited"
+    },
     "attachment": {
       "remove": "Remove attachment"
     },
@@ -577,6 +583,159 @@
       "lastOccur": "Last",
       "count": "Count",
       "action": "Action"
+    },
+    "shared": {
+      "untitled": "Untitled event",
+      "allDay": "All day",
+      "loading": "Loading…",
+      "cancel": "Cancel",
+      "close": "Close (Esc)",
+      "closeAria": "Close"
+    },
+    "toolbar": {
+      "title": "Calendar",
+      "prevAria": "Previous",
+      "prevTitle": "Previous (←)",
+      "nextAria": "Next",
+      "nextTitle": "Next (→)",
+      "today": "Today",
+      "todayTitle": "Today (T)",
+      "viewAria": "Switch view",
+      "viewDay": "Day",
+      "viewWeek": "Week",
+      "viewMonth": "Month",
+      "viewAgenda": "Agenda",
+      "viewRecurring": "Recurring",
+      "newBtn": "New",
+      "newTitle": "New event — write directly to Exchange (CalDAV PUT)",
+      "syncBtn": "Sync",
+      "syncTitle": "Force sync (⌘R) · Background worker auto-syncs every 60s; this triggers an immediate full fetch",
+      "syncPillOk": "Last sync {time}",
+      "syncPillErr": "Sync failed · [ERR]",
+      "syncPillNone": "Never synced",
+      "syncTipOk": "DavMail · Synced",
+      "syncTipErr": "DavMail · Sync failed",
+      "syncTipNoRecord": "No sync_state records yet — enable CALENDAR_CALDAV_SYNC_ENABLED and wait 60s",
+      "syncTipUnknownErr": "Unknown error"
+    },
+    "statusbar": {
+      "autoSync": "Auto sync",
+      "popoverAria": "Sync & backend details",
+      "popoverTitle": "Sync & backend",
+      "noSync": "Never synced"
+    },
+    "drawer": {
+      "closeTitle": "Close (Esc)",
+      "noRelatedEmail": "No related email",
+      "teamsMeeting": "Teams meeting",
+      "me": "(me)",
+      "attendeeCount": "{n} attendees",
+      "moreAttendees": "… {n} more",
+      "rruleInstance": "RRULE instance",
+      "ariaFallback": "Event details",
+      "role": {
+        "owner": "Organizer",
+        "attendee": "Attendee"
+      },
+      "meta": {
+        "time": "Time",
+        "calendar": "Calendar",
+        "location": "Location",
+        "organizer": "Organizer",
+        "attendees": "Attendees",
+        "myResponse": "My response",
+        "meetingLink": "Meeting link",
+        "relatedEmail": "Related email",
+        "rrule": "Recurrence",
+        "description": "Description"
+      },
+      "resp": {
+        "accepted": "Accepted",
+        "tentative": "Tentative",
+        "declined": "Declined",
+        "needsAction": "Needs action"
+      },
+      "ops": {
+        "edit": "Edit",
+        "delete": "Delete",
+        "editTitle": "Edit event — updates Exchange via CalDAV PUT",
+        "deleteTitle": "Delete event — 5-second undo window before CalDAV DELETE",
+        "ownerOnly": "Only the organizer can modify"
+      },
+      "rsvp": {
+        "label": "My response",
+        "labelPending": "· Needs action",
+        "accept": "Accept",
+        "tentative": "Tentative",
+        "decline": "Decline",
+        "acceptTitle": "Accept — sends iTIP REPLY (PARTSTAT=ACCEPTED) to organizer",
+        "tentativeTitle": "Tentative — sends iTIP REPLY (PARTSTAT=TENTATIVE) to organizer",
+        "declineTitle": "Decline — sends iTIP REPLY (PARTSTAT=DECLINED) to organizer",
+        "toastAccepted": "RSVP Accepted sent to organizer",
+        "toastTentative": "RSVP Tentative sent to organizer",
+        "toastDeclined": "RSVP Declined sent to organizer",
+        "toastErr": "Failed to send RSVP ({response})",
+        "confirmTitle": "Confirm [{action}] and send response to organizer?",
+        "confirmBody": "This will immediately email the organizer via DavMail SMTP and cannot be undone.\n\nEvent: {summary}\nOrganizer: {organizer}"
+      }
+    },
+    "form": {
+      "titleCreate": "New event",
+      "titleEdit": "Edit event",
+      "labelTitle": "Title",
+      "placeholderTitle": "Event title",
+      "errTitle": "Please enter a title",
+      "labelTime": "Time",
+      "ariaStart": "Start time",
+      "ariaEnd": "End time",
+      "errTime": "End time must be after start time",
+      "labelLocation": "Location",
+      "placeholderLocation": "Room / Teams link / Address",
+      "labelDescription": "Description",
+      "placeholderDescription": "Agenda, notes, links…",
+      "attendees": {
+        "label": "Attendees",
+        "placeholder": "Type email and press Enter",
+        "hint": "Enter to add · ⌫ remove last · click × to remove",
+        "removeChip": "Remove {email}"
+      },
+      "actions": {
+        "cancel": "Cancel",
+        "create": "Create",
+        "save": "Save",
+        "creating": "Creating…",
+        "saving": "Saving…"
+      },
+      "toastCreated": "Event created — syncs to local view within ~60s",
+      "toastUpdated": "Event updated",
+      "toastErrCreate": "Failed to create event",
+      "toastErrUpdate": "Failed to update event"
+    },
+    "empty": {
+      "day": "No events today",
+      "week": "No events this week",
+      "month": "No events this month",
+      "agenda": "No events in the next {n} days"
+    },
+    "undo": {
+      "aria": "Pending undo actions",
+      "undo": "Undo",
+      "deleted": "Deleted \"{title}\"",
+      "deletedSubtitle": "Syncing to CalDAV in 5 seconds",
+      "restored": "Restored (deletion cancelled)",
+      "deleteFailed": "Failed to delete event"
+    },
+    "view": {
+      "day": {
+        "count": "{n} events",
+        "prevMonthAria": "Previous month",
+        "nextMonthAria": "Next month"
+      },
+      "month": {
+        "moreBtn": "+{n} more",
+        "today": "Today",
+        "popEventCount": "{n} events"
+      }
     }
   },
   "settings": {

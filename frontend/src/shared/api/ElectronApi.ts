@@ -38,6 +38,7 @@ import type {
   ChatStartOpts,
   ChatStartResult,
   ChatStreamEnvelope,
+  ChatToolCall,
   CleanupDeadLetterOpts,
   CreateDraftOpts,
   CreateDraftResult,
@@ -535,6 +536,11 @@ class ElectronChatApi implements ChatApi {
     const err = new Error(env.message) as Error & { code?: string }
     err.code = env.code
     throw err
+  }
+  async listToolCalls(messageId: number): Promise<ChatToolCall[]> {
+    // Sprint 19 §D #3 — ToolCallRow audit fetch. Plain pass-through; the
+    // main handler returns [] for invalid inputs (no envelope wrap needed).
+    return (await invoker()('chat:listToolCalls', messageId)) as ChatToolCall[]
   }
   onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
     return subscribe('chat:stream', (...args: unknown[]) => {

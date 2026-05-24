@@ -19,9 +19,11 @@ import {
   deleteSession,
   listMessages,
   listSessionsForEmail,
+  listToolCallsForMessage,
   type BackendKind,
   type ChatMessage,
-  type ChatSession
+  type ChatSession,
+  type ChatToolCall
 } from '../chat_db'
 import { saveConversationToKos } from '../chat/kos_save'
 import {
@@ -304,6 +306,19 @@ export function registerChatHandlers(): void {
             : 'E_DISPATCH'
         return { ok: false, code, message }
       }
+    }
+  )
+
+  // Sprint 19 §D #3 — chat:listToolCalls. Renderer ToolCallRow fetches
+  // audit rows per assistant message to render the tool I/O folding card.
+  // Backed by `listToolCallsForMessage` in chat_db.ts; messageId of an
+  // assistant turn that had no tool_use returns []. Bad input rejected
+  // defensively (renderer always passes integer from message.id).
+  ipcMain.handle(
+    'chat:listToolCalls',
+    async (_evt, messageId: number): Promise<ChatToolCall[]> => {
+      if (!Number.isInteger(messageId) || messageId < 0) return []
+      return listToolCallsForMessage(messageId)
     }
   )
 }
