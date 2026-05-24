@@ -355,6 +355,55 @@ class TestListCalendarNames:
 
 
 # ============================================================
+# F21 — _to_epoch date / DST 一致性
+# ============================================================
+
+class TestToEpochF21:
+    """F21 — _to_epoch 支持 date 对象 + DST 边界稳定."""
+
+    def test_to_epoch_aware_datetime(self):
+        from src.calendar_sync.repository import _to_epoch
+        d = datetime(2026, 5, 30, 14, tzinfo=timezone.utc)
+        assert _to_epoch(d) == d.timestamp()
+
+    def test_to_epoch_naive_datetime_treated_as_utc(self):
+        from src.calendar_sync.repository import _to_epoch
+        d = datetime(2026, 5, 30, 14)  # naive
+        expected = datetime(2026, 5, 30, 14, tzinfo=timezone.utc).timestamp()
+        assert _to_epoch(d) == expected
+
+    def test_to_epoch_date_promoted_to_midnight_utc(self):
+        """all-day event 从 CalDAV 来时 event.start = date(2026, 5, 30).
+        老代码 ``dt.tzinfo`` 直接 AttributeError. F21 显式 isinstance(date) 分支."""
+        from datetime import date
+        from src.calendar_sync.repository import _to_epoch
+        d = date(2026, 5, 30)
+        expected = datetime(2026, 5, 30, tzinfo=timezone.utc).timestamp()
+        assert _to_epoch(d) == expected
+
+    def test_to_epoch_date_dst_boundary_stable(self):
+        """DST switch 日期 (US 2026-03-08 spring forward / 2026-11-01 fall back)
+        都应该返回固定 00:00 UTC, 不受 local tz 影响 (跟 caldav_writer._to_utc 一致)."""
+        from datetime import date
+        from src.calendar_sync.repository import _to_epoch
+        assert _to_epoch(date(2026, 3, 8)) == datetime(
+            2026, 3, 8, tzinfo=timezone.utc
+        ).timestamp()
+        assert _to_epoch(date(2026, 11, 1)) == datetime(
+            2026, 11, 1, tzinfo=timezone.utc
+        ).timestamp()
+
+    def test_to_epoch_none_returns_none(self):
+        from src.calendar_sync.repository import _to_epoch
+        assert _to_epoch(None) is None
+
+    def test_to_epoch_unsupported_type_raises(self):
+        from src.calendar_sync.repository import _to_epoch
+        with pytest.raises(TypeError, match="expected datetime/date"):
+            _to_epoch("2026-05-30")  # str 不接受
+
+
+# ============================================================
 # Concurrent upsert
 # ============================================================
 

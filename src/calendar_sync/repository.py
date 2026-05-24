@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import Any, TYPE_CHECKING, Iterator, Optional
 
 from src.calendar_sync.expander import expand_in_window
 
@@ -109,12 +109,31 @@ class CalendarSyncStateRow:
 # Helpers — datetime ↔ epoch & JSON encode/decode
 # ============================================================
 
-def _to_epoch(dt: Optional[datetime]) -> Optional[float]:
+def _to_epoch(dt: Any) -> Optional[float]:
+    """datetime / date → UTC epoch float.
+
+    F21 (Opus Medium): 支持 ``date`` 对象 (all-day event 从 CalDAV 来时
+    event.start 是 date 不是 datetime). 老代码 ``dt.tzinfo is None`` 在 date
+    上 AttributeError, 即使过了也用 ``replace(tzinfo=UTC)`` 假设本地 tz, DST
+    边界漂 ±1h. 改成显式:
+    - ``datetime`` aware → 直接 timestamp
+    - ``datetime`` naive → 当 UTC 处理, replace(tzinfo=UTC).timestamp()
+    - ``date`` → datetime at 00:00 UTC (跟 caldav_writer._to_utc 行为一致)
+    """
     if dt is None:
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.timestamp()
+    from datetime import date as _date
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    if isinstance(dt, _date):
+        return datetime(
+            dt.year, dt.month, dt.day, tzinfo=timezone.utc
+        ).timestamp()
+    raise TypeError(
+        f"_to_epoch: expected datetime/date, got {type(dt).__name__}: {dt!r}"
+    )
 
 
 def _from_epoch(ts: Optional[float]) -> Optional[datetime]:
