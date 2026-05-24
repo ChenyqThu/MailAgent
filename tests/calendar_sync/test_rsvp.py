@@ -22,7 +22,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.calendar_sync.rsvp import _extract_organizer_email, send_rsvp
+from src.calendar_sync.rsvp import (
+    _extract_organizer_email,
+    _parse_recurrence_id,
+    send_rsvp,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -286,3 +290,79 @@ def test_send_rsvp_smtp_failure_propagates():
             send_rsvp(repo, cfg, ical_uid="x", response_status="ACCEPTED")
     # SMTP fail 后不应回写 response_status
     repo.update_response_status.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _parse_recurrence_id — Critical fix: 多种 RFC 5545 格式 + 解析失败 fallback
+# ---------------------------------------------------------------------------
+
+def test_parse_recurrence_id_iso_with_tz():
+    """``caldav_reader.py`` 写入的标准 ISO + tz 格式 → datetime."""
+    d = _parse_recurrence_id("2026-05-30T14:00:00+00:00")
+    assert d == datetime(2026, 5, 30, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_recurrence_id_iso_with_z_suffix():
+    """``Z`` 后缀 (Python 3.11+ fromisoformat 支持, 更老 fall back compat)."""
+    d = _parse_recurrence_id("2026-05-30T14:00:00Z")
+    assert d == datetime(2026, 5, 30, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_recurrence_id_iso_no_tz_defaults_utc():
+    """无 tz ISO → 视作 UTC (避免歧义)."""
+    d = _parse_recurrence_id("2026-05-30T14:00:00")
+    assert d == datetime(2026, 5, 30, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_recurrence_id_iso_date_only():
+    """ISO DATE-only (``2026-05-30``) → UTC 00:00."""
+    d = _parse_recurrence_id("2026-05-30")
+    assert d == datetime(2026, 5, 30, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_recurrence_id_compact_datetime_utc():
+    """RFC 5545 compact ``20260530T140000Z`` → datetime."""
+    d = _parse_recurrence_id("20260530T140000Z")
+    assert d == datetime(2026, 5, 30, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_recurrence_id_compact_datetime_naive():
+    """Compact naive ``20260530T140000`` → 视作 UTC."""
+    d = _parse_recurrence_id("20260530T140000")
+    assert d == datetime(2026, 5, 30, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_recurrence_id_compact_date_only():
+    """Compact DATE ``20260530`` → UTC 00:00 — 这是 Critical fix 修复的关键
+    格式, 老代码 ``datetime.fromisoformat`` 直接抛 ValueError 崩溃 RSVP."""
+    d = _parse_recurrence_id("20260530")
+    assert d == datetime(2026, 5, 30, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_recurrence_id_empty_returns_none():
+    assert _parse_recurrence_id("") is None
+    assert _parse_recurrence_id(None) is None
+    assert _parse_recurrence_id("   ") is None
+
+
+def test_parse_recurrence_id_invalid_returns_none_no_raise():
+    """非法格式 → None + warning log, 不抛异常 (RSVP 应 fallback 整系列)."""
+    assert _parse_recurrence_id("not-a-date") is None
+    assert _parse_recurrence_id("2026/05/30") is None  # 错的分隔符
+    assert _parse_recurrence_id("xxxxxxxx") is None
+
+
+def test_send_rsvp_with_unparseable_recurrence_id_does_not_raise():
+    """关键修复: row.recurrence_id 是垃圾 (e.g. TZID 前缀奇怪格式) 时,
+    RSVP 应 fallback 整系列 REPLY (recurrence_id_utc=None), 不能崩溃."""
+    row = _make_row(recurrence_id="TZID=Asia/Shanghai:20260530T140000")  # 奇怪格式
+    repo = MagicMock()
+    repo.get_by_ical_uid.return_value = row
+    cfg = _mock_cfg()
+    with patch("src.calendar_sync.rsvp.send_itip_reply_smtp") as smtp_mock, \
+         patch("src.calendar_sync.rsvp.build_itip_reply", return_value="BEGIN:VCALENDAR\nEND:VCALENDAR") as build_mock:
+        result = send_rsvp(repo, cfg, ical_uid="x", response_status="ACCEPTED")
+    assert result["action"] == "sent"
+    # 关键断言: build_itip_reply 收到 recurrence_id_utc=None (fallback 整系列)
+    assert build_mock.call_args.kwargs["recurrence_id_utc"] is None
+    smtp_mock.assert_called_once()

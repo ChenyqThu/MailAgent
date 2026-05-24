@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from loguru import logger
@@ -36,6 +37,50 @@ def _extract_organizer_email(organizer_field: str) -> Optional[str]:
     if s.lower().startswith("mailto:"):
         s = s[7:].strip()
     return s if "@" in s else None
+
+
+def _parse_recurrence_id(raw: Optional[str]) -> Optional[datetime]:
+    """容错解析 RFC 5545 RECURRENCE-ID 字符串 → UTC datetime.
+
+    `caldav_reader.py` 写入时通常用 ``datetime.isoformat()`` (含 tz), 但实际
+    CalDAV 端 wild data 还可能是 DATE-only / compact / TZID-prefixed 等格式.
+    任一格式解析失败都返 None — 调用方 fallback 整系列 RSVP, 避免单条邀请
+    崩溃但 SMTP 已发的 diverge.
+
+    支持:
+    - ISO datetime 含 tz:    ``2026-05-30T14:00:00+00:00``
+    - ISO datetime 无 tz:    ``2026-05-30T14:00:00`` → 视作 UTC
+    - ISO date-only:         ``2026-05-30`` → UTC 00:00
+    - Compact DATETIME UTC:  ``20260530T140000Z``
+    - Compact DATETIME naive:``20260530T140000`` → 视作 UTC
+    - Compact DATE:          ``20260530`` → UTC 00:00
+    """
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    # ISO 8601 (datetime / date), datetime.fromisoformat 支持 ``YYYY-MM-DD``
+    # 也支持带 tz 的 ``...+00:00`` (Python 3.11+ 也认 ``Z`` 结尾).
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00") if s.endswith("Z") else s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d
+    except ValueError:
+        pass
+    # Compact RFC 5545 格式
+    for fmt in ("%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d"):
+        try:
+            d = datetime.strptime(s, fmt)
+            return d.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    logger.warning(
+        f"无法解析 recurrence_id={raw!r} → fallback 整系列 RSVP "
+        "(单次 occurrence 状态可能跟服务端 diverge)"
+    )
+    return None
 
 
 _SUBJECT_PREFIX = {
@@ -112,8 +157,9 @@ def send_rsvp(
             f"(RSVP 必须有有效的 organizer 邮件才能 reply)"
         )
 
-    # 3. 拼 iTIP REPLY body
-    from datetime import datetime as _dt
+    # 3. 拼 iTIP REPLY body. recurrence_id 解析失败时 _parse_recurrence_id
+    #    内部已经 warning + 返 None, 自动 fallback 整系列 RSVP (本地 row.id
+    #    仍是 occurrence row, 但 wire 上是 series-wide REPLY).
     body = build_itip_reply(
         ical_uid=row.ical_uid,
         sequence=row.sequence,
@@ -124,11 +170,7 @@ def send_rsvp(
         attendee_email=cfg.user_email,
         attendee_name=None,
         response_status=response_status,
-        recurrence_id_utc=(
-            _dt.fromisoformat(row.recurrence_id)
-            if row.recurrence_id
-            else None
-        ),
+        recurrence_id_utc=_parse_recurrence_id(row.recurrence_id),
     )
 
     if dry_run:
@@ -145,7 +187,7 @@ def send_rsvp(
 
     # 4. 发 SMTP
     subject_prefix = _SUBJECT_PREFIX[response_status]
-    subject = f"{subject_prefix}: {row.summary or '(无标题)'}"
+    subject = f"{subject_prefix}: {row.summary or '未命名事件'}"
     send_itip_reply_smtp(
         cfg, ical_body=body, to_email=to_email, subject=subject,
     )
