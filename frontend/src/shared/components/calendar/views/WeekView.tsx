@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
 
 import { EventBlock } from '../EventBlock'
-import { EventDetailDrawer } from '../EventDetailDrawer'
 import {
   useCalendarEventsInWindow,
   addDays,
@@ -20,6 +19,12 @@ import { cn } from '@shared/lib/cn'
 interface Props {
   date?: Date
   calendarName?: string
+  /** F5 — view 不再 own selected event state; CalendarLayout 持单一 active
+   *  + mount 单一 Drawer, view 通过 callback 上提选中事件. */
+  onSelect: (occ: CalendarEventOccurrence) => void
+  /** F5 — selected event key (= ``${id}-${occurrence_start_iso}``) 由 Layout
+   *  传, view 比对来高亮 selected event block. */
+  selectedKey?: string | null
 }
 
 const HOUR_PX = 48
@@ -39,8 +44,7 @@ function isTodayLocal(d: Date): boolean {
   return isSameDay(d, new Date())
 }
 
-export function WeekView({ date, calendarName }: Props): React.ReactElement {
-  const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
+export function WeekView({ date, calendarName, onSelect, selectedKey = null }: Props): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
 
@@ -145,7 +149,7 @@ export function WeekView({ date, calendarName }: Props): React.ReactElement {
                     className="allday-evt"
                     data-resp={(occ.response_status || '').toUpperCase()}
                     data-status={(occ.status || '').toUpperCase()}
-                    onClick={() => setActive(occ)}
+                    onClick={() => onSelect(occ)}
                     title={occ.summary || '未命名事件'}
                   >
                     {occ.summary ? (
@@ -191,9 +195,7 @@ export function WeekView({ date, calendarName }: Props): React.ReactElement {
                   const endMs = Date.parse(occ.occurrence_end_iso)
                   const topPx = ((startMs - dayMs) / 3_600_000) * HOUR_PX
                   const heightPx = ((endMs - startMs) / 3_600_000) * HOUR_PX
-                  const selected =
-                    active?.id === occ.id &&
-                    active?.occurrence_start_iso === occ.occurrence_start_iso
+                  const selected = selectedKey === `${occ.id}-${occ.occurrence_start_iso}`
                   return (
                     <EventBlock
                       key={`${occ.id}-${occ.occurrence_start_iso}`}
@@ -203,7 +205,7 @@ export function WeekView({ date, calendarName }: Props): React.ReactElement {
                       col={col}
                       totalCols={totalCols}
                       selected={selected}
-                      onClick={() => setActive(occ)}
+                      onClick={() => onSelect(occ)}
                     />
                   )
                 })}
@@ -222,8 +224,6 @@ export function WeekView({ date, calendarName }: Props): React.ReactElement {
           )}
         </div>
       </div>
-
-      <EventDetailDrawer occurrence={active} onClose={() => setActive(null)} />
     </div>
   )
 }

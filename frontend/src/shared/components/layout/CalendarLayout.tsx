@@ -16,6 +16,7 @@ import { Info } from 'lucide-react'
 import { CalendarPage } from '../calendar/CalendarPage'
 import { CalendarShortcutModal } from '../calendar/CalendarShortcutModal'
 import { CalendarToolbar, type CalendarView } from '../calendar/CalendarToolbar'
+import { EventDetailDrawer } from '../calendar/EventDetailDrawer'
 import { UndoToastStack } from '../calendar/UndoToastStack'
 import { useCalendarShortcuts } from '../calendar/hooks/useCalendarShortcuts'
 import {
@@ -29,6 +30,7 @@ import { AgendaView } from '../calendar/views/AgendaView'
 import { DayView } from '../calendar/views/DayView'
 import { MonthView } from '../calendar/views/MonthView'
 import { WeekView } from '../calendar/views/WeekView'
+import type { CalendarEventOccurrence } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 
 import { PageFrame } from './PageFrame'
@@ -65,6 +67,11 @@ export function CalendarLayout(): React.ReactElement {
 
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date())
   const [shortcutOpen, setShortcutOpen] = useState(false)
+  // F5 — 单一 active selected event, 4 view 通过 onSelect callback 上提.
+  // Drawer 跟着挂在 Layout 层 (单 mount), 切 view 不丢, deleteMut hook 不
+  // unmount → 修 Critical #4 deleteMut stale closure + 撤销可 reopen drawer.
+  const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
+  const selectedKey = active ? `${active.id}-${active.occurrence_start_iso}` : null
 
   const setView = useCallback(
     (v: CalendarView): void => {
@@ -149,11 +156,24 @@ export function CalendarLayout(): React.ReactElement {
         <div className="h-full glass-2 border border-ink-border/60 rounded-[10px] overflow-hidden flex flex-col">
           <div className="flex-1 min-h-0 overflow-hidden">
             {view === 'today' && (
-              <DayView date={currentDate} onDateChange={setCurrentDate} />
+              <DayView
+                date={currentDate}
+                onDateChange={setCurrentDate}
+                onSelect={setActive}
+                selectedKey={selectedKey}
+              />
             )}
-            {view === 'week' && <WeekView date={currentDate} />}
-            {view === 'month' && <MonthView date={currentDate} />}
-            {view === 'agenda' && <AgendaView />}
+            {view === 'week' && (
+              <WeekView
+                date={currentDate}
+                onSelect={setActive}
+                selectedKey={selectedKey}
+              />
+            )}
+            {view === 'month' && (
+              <MonthView date={currentDate} onSelect={setActive} />
+            )}
+            {view === 'agenda' && <AgendaView onSelect={setActive} />}
             {view === 'recurring' && <CalendarPage />}
           </div>
 
@@ -230,6 +250,14 @@ export function CalendarLayout(): React.ReactElement {
       <CalendarShortcutModal
         open={shortcutOpen}
         onClose={() => setShortcutOpen(false)}
+      />
+
+      {/* F5 — Drawer 单挂在 Layout 层, view 切换不卸载, deleteMut/rsvpMut
+          hook 持久; undo 撤销可通过 onReopen 复活选中事件 */}
+      <EventDetailDrawer
+        occurrence={active}
+        onClose={() => setActive(null)}
+        onReopen={(occ) => setActive(occ)}
       />
 
       {/* §11.2 — undo toast stack: fixed 定位脱离 layout flow, 出现在底部居中 */}

@@ -2,10 +2,8 @@
 // 按日期 group, 每 group sticky ah-head, 行 grid 110px/1fr (time / main).
 // Toolbar 已接管 "N 个日程 + 刷新", 这里专注内容呈现.
 
-import { useState } from 'react'
 import { Calendar as CalendarIcon, Video } from 'lucide-react'
 
-import { EventDetailDrawer } from '../EventDetailDrawer'
 import {
   useCalendarEventsInWindow,
   groupOccurrencesByLocalDay,
@@ -20,6 +18,8 @@ import { cn } from '@shared/lib/cn'
 interface Props {
   rangeDays?: number  // default 14 天
   calendarName?: string
+  /** F5 — view 上提选中事件给 CalendarLayout. */
+  onSelect: (occ: CalendarEventOccurrence) => void
 }
 
 function pad(n: number): string {
@@ -60,8 +60,7 @@ function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
   return false
 }
 
-export function AgendaView({ rangeDays = 14, calendarName }: Props): React.ReactElement {
-  const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
+export function AgendaView({ rangeDays = 14, calendarName, onSelect }: Props): React.ReactElement {
 
   const start = todayStartLocal()
   const end = addDays(start, rangeDays)
@@ -128,7 +127,7 @@ export function AgendaView({ rangeDays = 14, calendarName }: Props): React.React
                   className="ag-row"
                   data-resp={(occ.response_status || '').toUpperCase()}
                   data-status={(occ.status || '').toUpperCase()}
-                  onClick={() => setActive(occ)}
+                  onClick={() => onSelect(occ)}
                   title={occ.summary || '未命名事件'}
                 >
                   <div className="ag-time">{timeTxt}</div>
@@ -147,7 +146,6 @@ export function AgendaView({ rangeDays = 14, calendarName }: Props): React.React
         )
       })}
 
-      <EventDetailDrawer occurrence={active} onClose={() => setActive(null)} />
     </div>
   )
 }

@@ -49,6 +49,9 @@ interface Props {
   /** Null = 关闭抽屉. 抽屉永远 mount 走 CSS transition, occurrence 控制 .open. */
   occurrence: CalendarEventOccurrence | null
   onClose: () => void
+  /** F5 — 5s undo 撤销时 reopen drawer (传 setActive(target) 复活选中事件).
+   *  可选, 不传则撤销只显示 toast 不 reopen. */
+  onReopen?: (occ: CalendarEventOccurrence) => void
 }
 
 function pad(n: number): string {
@@ -158,7 +161,7 @@ function MetaRow({ icon, label, children }: MetaRowProps): React.ReactElement {
   )
 }
 
-export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactElement {
+export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): React.ReactElement {
   const open = occurrence !== null
   const opts = occurrence
     ? {
@@ -260,7 +263,13 @@ export function EventDetailDrawer({ occurrence, onClose }: Props): React.ReactEl
       subtitle: '5 秒后同步到 CalDAV',
       durationMs: 5000,
       onCommit: () => deleteMut.mutate(target.ical_uid),
-      onUndo: () => toastSuccess('已恢复 (未提交删除)')
+      onUndo: () => {
+        // F5 — drawer 已挂在 Layout 层 (单 mount), reopen 走 onReopen
+        // callback 让 Layout setActive(target) 复活选中. 未传 onReopen
+        // (CLI / 测试) 时降级仅 toast.
+        if (onReopen) onReopen(target)
+        toastSuccess('已恢复 (未提交删除)')
+      }
     })
   }
 

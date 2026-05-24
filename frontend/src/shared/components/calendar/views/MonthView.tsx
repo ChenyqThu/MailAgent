@@ -6,7 +6,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
 
 import { EventChip } from '../EventChip'
-import { EventDetailDrawer } from '../EventDetailDrawer'
 import {
   useCalendarEventsInWindow,
   startOfMonth,
@@ -20,6 +19,8 @@ import { cn } from '@shared/lib/cn'
 interface Props {
   date?: Date
   calendarName?: string
+  /** F5 — view 上提选中事件给 CalendarLayout. */
+  onSelect: (occ: CalendarEventOccurrence) => void
 }
 
 const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
@@ -40,8 +41,7 @@ interface PopState {
   dayLabel: string
 }
 
-export function MonthView({ date, calendarName }: Props): React.ReactElement {
-  const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
+export function MonthView({ date, calendarName, onSelect }: Props): React.ReactElement {
   const [pop, setPop] = useState<PopState | null>(null)
 
   const monthStart = useMemo(() => startOfMonth(date ?? new Date()), [date])
@@ -156,7 +156,7 @@ export function MonthView({ date, calendarName }: Props): React.ReactElement {
                 <EventChip
                   key={`${occ.id}-${occ.occurrence_start_iso}`}
                   event={occ}
-                  onClick={() => setActive(occ)}
+                  onClick={() => onSelect(occ)}
                 />
               ))}
               {moreCount > 0 && (
@@ -198,7 +198,7 @@ export function MonthView({ date, calendarName }: Props): React.ReactElement {
                 key={`${occ.id}-${occ.occurrence_start_iso}-${idx}`}
                 event={occ}
                 onClick={() => {
-                  setActive(occ)
+                  onSelect(occ)
                   setPop(null)
                 }}
               />
@@ -207,7 +207,6 @@ export function MonthView({ date, calendarName }: Props): React.ReactElement {
         </div>
       )}
 
-      <EventDetailDrawer occurrence={active} onClose={() => setActive(null)} />
     </div>
   )
 }

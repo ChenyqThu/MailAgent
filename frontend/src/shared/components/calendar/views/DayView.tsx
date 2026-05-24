@@ -9,7 +9,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { EventBlock } from '../EventBlock'
-import { EventDetailDrawer } from '../EventDetailDrawer'
 import {
   addDays,
   layoutDay,
@@ -26,6 +25,11 @@ interface Props {
   date?: Date
   onDateChange?: (d: Date) => void
   calendarName?: string
+  /** F5 — Layout 持单一 active + Drawer, view 上提选中事件. */
+  onSelect: (occ: CalendarEventOccurrence) => void
+  /** F5 — selected event key (= ``${id}-${occurrence_start_iso}``) 用于
+   *  EventBlock selected 高亮. */
+  selectedKey?: string | null
 }
 
 const HOUR_PX = 48
@@ -54,7 +58,8 @@ interface MiniMonthProps {
   displayMonth: Date
   selDate: Date
   eventDays: Set<string>
-  onSelect: (d: Date) => void
+  /** Day picked — rename 避开外层 DayView 新加的 onSelect (event occ callback). */
+  onPick: (d: Date) => void
   onPrev: () => void
   onNext: () => void
 }
@@ -63,7 +68,7 @@ function MiniMonth({
   displayMonth,
   selDate,
   eventDays,
-  onSelect,
+  onPick,
   onPrev,
   onNext
 }: MiniMonthProps): React.ReactElement {
@@ -113,7 +118,7 @@ function MiniMonth({
                 isToday && 'today',
                 isSel && 'sel'
               )}
-              onClick={interactive ? () => onSelect(c) : undefined}
+              onClick={interactive ? () => onPick(c) : undefined}
               disabled={isOther}
               aria-label={key}
             >
@@ -127,8 +132,13 @@ function MiniMonth({
   )
 }
 
-export function DayView({ date, onDateChange, calendarName }: Props): React.ReactElement {
-  const [active, setActive] = useState<CalendarEventOccurrence | null>(null)
+export function DayView({
+  date,
+  onDateChange,
+  calendarName,
+  onSelect,
+  selectedKey = null
+}: Props): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
 
@@ -218,7 +228,7 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
           displayMonth={miniMonth}
           selDate={selectedDate}
           eventDays={eventDays}
-          onSelect={pickDay}
+          onPick={pickDay}
           onPrev={() => navMonth(-1)}
           onNext={() => navMonth(1)}
         />
@@ -233,7 +243,7 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
               type="button"
               className="dr-row"
               data-resp={(occ.response_status || '').toUpperCase()}
-              onClick={() => setActive(occ)}
+              onClick={() => onSelect(occ)}
               title={occ.summary || '未命名事件'}
             >
               <span className="dr-bar" />
@@ -251,7 +261,7 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
               type="button"
               className="dr-row"
               data-resp={(occ.response_status || '').toUpperCase()}
-              onClick={() => setActive(occ)}
+              onClick={() => onSelect(occ)}
               title={occ.summary || '未命名事件'}
             >
               <span className="dr-bar" />
@@ -299,7 +309,7 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
                       className="allday-evt"
                       data-resp={(occ.response_status || '').toUpperCase()}
                       data-status={(occ.status || '').toUpperCase()}
-                      onClick={() => setActive(occ)}
+                      onClick={() => onSelect(occ)}
                       title={occ.summary || '未命名事件'}
                     >
                       {occ.summary ? (
@@ -331,8 +341,7 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
                     const topPx = ((startMs - dayMs) / 3_600_000) * HOUR_PX
                     const heightPx = ((endMs - startMs) / 3_600_000) * HOUR_PX
                     const sel =
-                      active?.id === occ.id &&
-                      active?.occurrence_start_iso === occ.occurrence_start_iso
+                      selectedKey === `${occ.id}-${occ.occurrence_start_iso}`
                     return (
                       <EventBlock
                         key={`b-${occ.id}-${occ.occurrence_start_iso}`}
@@ -342,7 +351,7 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
                         col={col}
                         totalCols={totalCols}
                         selected={sel}
-                        onClick={() => setActive(occ)}
+                        onClick={() => onSelect(occ)}
                       />
                     )
                   })}
@@ -360,8 +369,6 @@ export function DayView({ date, onDateChange, calendarName }: Props): React.Reac
           </div>
         )}
       </div>
-
-      <EventDetailDrawer occurrence={active} onClose={() => setActive(null)} />
     </div>
   )
 }
