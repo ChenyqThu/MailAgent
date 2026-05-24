@@ -25,10 +25,11 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import { toastSuccess } from '@shared/state/toast'
+import { toastError, toastSuccess } from '@shared/state/toast'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ChatMessage } from '@shared/api/types'
 
 /** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
@@ -555,11 +556,31 @@ function UserBubble({ messageId, content, handlers }: UserBubbleProps): React.Re
   )
 }
 
-function AssistantMessageFooter(): React.ReactElement {
+function AssistantMessageFooter({ messageId }: { messageId: number }): React.ReactElement {
   const { t } = useTranslation()
-  // V1 placeholders — IPC wiring lands in V1.5. Each button toasts "即将上线".
+  const mailApi = useMailApi()
+  // Sprint 19 P1-C — wired to real chat:saveToKos IPC. Other buttons
+  // (regenerate / copy / toNotion) are still V1 placeholders that
+  // toast "即将上线" until their IPC wiring lands.
+  const [saveBusy, setSaveBusy] = useState(false)
   const soon = (): void => {
     toastSuccess(t('shortcutHelp.soon'))
+  }
+  const onSaveToKos = async (): Promise<void> => {
+    if (saveBusy) return
+    setSaveBusy(true)
+    try {
+      const r = await mailApi.chat.saveToKos({ messageId })
+      // Detail = slug so user sees where it landed (debuggable);
+      // backend may return server-canonicalized slug different from
+      // the default we computed if name normalization happened.
+      toastSuccess(t('chat.messageActions.saveToKosOk'), r.slug)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(t('chat.messageActions.saveToKosFail'), msg)
+    } finally {
+      setSaveBusy(false)
+    }
   }
   return (
     <div className="flex items-center gap-2 pt-1 text-meta font-mono text-ink-fg-2">
@@ -588,6 +609,20 @@ function AssistantMessageFooter(): React.ReactElement {
       >
         <Bookmark size={11} strokeWidth={2} />
         {t('chat.messageActions.toNotion')}
+      </button>
+      <span className="text-ink-fg-3">·</span>
+      <button
+        type="button"
+        onClick={onSaveToKos}
+        disabled={saveBusy}
+        className={cn(
+          'inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast',
+          saveBusy && 'opacity-50 cursor-wait'
+        )}
+        aria-label={t('chat.messageActions.saveToKos')}
+      >
+        <Sparkles size={11} strokeWidth={2} />
+        {t('chat.messageActions.saveToKos')}
       </button>
     </div>
   )
@@ -682,7 +717,7 @@ function AssistantBubble({
           handlers={draftHandlers}
           isStreaming={isStreaming}
         />
-        {!isStreaming && <AssistantMessageFooter />}
+        {!isStreaming && <AssistantMessageFooter messageId={message.id} />}
       </div>
     )
   }
@@ -698,7 +733,7 @@ function AssistantBubble({
         <TranslatedBody text={message.content || ' '} />
         {isStreaming && <span className="cursor-blink" aria-hidden />}
       </div>
-      {!isStreaming && <AssistantMessageFooter />}
+      {!isStreaming && <AssistantMessageFooter messageId={message.id} />}
     </div>
   )
 }

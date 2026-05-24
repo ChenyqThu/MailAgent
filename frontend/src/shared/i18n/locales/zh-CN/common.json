@@ -408,7 +408,10 @@
     "messageActions": {
       "regenerate": "重生成",
       "copy": "复制",
-      "toNotion": "转 Notion"
+      "toNotion": "转 Notion",
+      "saveToKos": "保存到 KOS",
+      "saveToKosOk": "已保存到 KOS",
+      "saveToKosFail": "保存失败"
     },
     "attachment": {
       "remove": "移除附件"

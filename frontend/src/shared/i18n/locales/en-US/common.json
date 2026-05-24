@@ -408,7 +408,10 @@
     "messageActions": {
       "regenerate": "Regenerate",
       "copy": "Copy",
-      "toNotion": "To Notion"
+      "toNotion": "To Notion",
+      "saveToKos": "Save to KOS",
+      "saveToKosOk": "Saved to KOS",
+      "saveToKosFail": "Save failed"
     },
     "attachment": {
       "remove": "Remove attachment"
