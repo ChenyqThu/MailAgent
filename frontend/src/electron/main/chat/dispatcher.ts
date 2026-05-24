@@ -21,10 +21,11 @@ import {
   getMessage,
   getOrCreateSession,
   getSession,
-  listMessages,
+  listLastNMessages,
   updateMessage,
   type BackendKind,
-  type ChatMessage
+  type ChatMessage,
+  type ChatSession
 } from '../chat_db'
 import { getDb } from '../db'
 import { backendSupportsTools, isHarnessEnabled } from './config'
@@ -116,6 +117,14 @@ export interface StartChatResult {
 // session pre-empts the previous in-flight stream (rapid-click guard, same
 // pattern as Sprint 3 translate). Renderer-initiated abort goes through
 // `abortChatSession()`.
+// Sprint 19 P1 — sliding window cap on per-turn history sent to the LLM.
+// Without this, full session history goes into every turn → cost scales
+// linearly with conversation length (100 turns ≈ $0.6/turn vs $0.015 for
+// a 1-turn fresh session, design doc §1.2). 20 is the dogfood default:
+// most sessions fit, old turns past 20 are still in chat_db for sidebar
+// switch / inline edit. Tune via env if needed (see config.ts).
+const HISTORY_WINDOW_SIZE = 20
+
 const _inflight = new Map<number, AbortController>()
 
 export interface StreamSink {
@@ -211,7 +220,7 @@ export async function startChat(input: StartChatInput, sink: StreamSink): Promis
     sessionId: session.id,
     assistantMessageId: assistantMsg.id,
     backend,
-    history: listMessages(session.id),
+    history: listLastNMessages(session.id, HISTORY_WINDOW_SIZE),
     model: input.backendModel,
     agentPageId: input.backendAgentPageId,
     emailContext,
@@ -476,7 +485,7 @@ export async function editChatMessage(
     sessionId: input.sessionId,
     assistantMessageId: assistantMsg.id,
     backend,
-    history: listMessages(input.sessionId),
+    history: listLastNMessages(input.sessionId, HISTORY_WINDOW_SIZE),
     model: input.backendModel,
     agentPageId: input.backendAgentPageId,
     emailContext,

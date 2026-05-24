@@ -34,6 +34,7 @@ import {
   getOrCreateSession,
   getSession,
   getToolCallByUseId,
+  listLastNMessages,
   listMessages,
   listSessionsForEmail,
   listToolCallsForMessage,
@@ -926,5 +927,68 @@ describe('chat_db — createNewSession (multi-session per email)', () => {
     expect(a.id).not.toBe(b.id)
     expect(a.backend_agent_page_id).toBeNull()
     expect(b.backend_agent_page_id).toBeNull()
+  })
+})
+
+// Sprint 19 P1 — sliding window history loader. Caps per-turn input
+// tokens so 100-turn session doesn't bill $0.6/turn (design doc §3.1 A).
+
+describe('chat_db — listLastNMessages (sliding window)', () => {
+  test('returns last N rows in chronological order (oldest → newest)', () => {
+    const sess = createNewSession({ emailId: 8888, backendKind: 'custom-api' })
+    // Append 7 messages with strictly increasing created_at via sleep.
+    // (better-sqlite3 is sync so Date.now() at each call differs by ms.)
+    for (let i = 1; i <= 7; i++) {
+      appendMessage({
+        sessionId: sess.id,
+        role: i % 2 === 1 ? 'user' : 'assistant',
+        content: `msg ${i}`,
+        status: 'complete'
+      })
+      // Tiny busy-wait to ensure distinct created_at (1ms granularity is
+      // already enough but tests run fast — explicit nano-spin to be safe).
+      const t = Date.now()
+      while (Date.now() === t) {
+        /* spin until next ms tick */
+      }
+    }
+    const last3 = listLastNMessages(sess.id, 3)
+    expect(last3).toHaveLength(3)
+    expect(last3.map((m) => m.content)).toEqual(['msg 5', 'msg 6', 'msg 7'])
+    // chronological — created_at must be strictly increasing.
+    expect(last3[0].created_at).toBeLessThan(last3[1].created_at)
+    expect(last3[1].created_at).toBeLessThan(last3[2].created_at)
+  })
+
+  test('limit larger than row count returns everything', () => {
+    const sess = createNewSession({ emailId: 8889, backendKind: 'custom-api' })
+    appendMessage({ sessionId: sess.id, role: 'user', content: 'only', status: 'complete' })
+    const all = listLastNMessages(sess.id, 100)
+    expect(all).toHaveLength(1)
+    expect(all[0].content).toBe('only')
+  })
+
+  test('limit <= 0 returns everything (escape hatch for debugging)', () => {
+    const sess = createNewSession({ emailId: 8890, backendKind: 'custom-api' })
+    appendMessage({ sessionId: sess.id, role: 'user', content: 'a', status: 'complete' })
+    appendMessage({ sessionId: sess.id, role: 'assistant', content: 'b', status: 'complete' })
+    expect(listLastNMessages(sess.id, 0)).toHaveLength(2)
+    expect(listLastNMessages(sess.id, -1)).toHaveLength(2)
+  })
+
+  test('empty session returns []', () => {
+    const sess = createNewSession({ emailId: 8891, backendKind: 'custom-api' })
+    expect(listLastNMessages(sess.id, 20)).toEqual([])
+  })
+
+  test('scoped to session — sibling sessions untouched', () => {
+    const a = createNewSession({ emailId: 9001, backendKind: 'custom-api' })
+    const b = createNewSession({ emailId: 9001, backendKind: 'custom-api' })
+    appendMessage({ sessionId: a.id, role: 'user', content: 'a-only', status: 'complete' })
+    appendMessage({ sessionId: b.id, role: 'user', content: 'b-only', status: 'complete' })
+    const fromA = listLastNMessages(a.id, 20)
+    const fromB = listLastNMessages(b.id, 20)
+    expect(fromA.map((m) => m.content)).toEqual(['a-only'])
+    expect(fromB.map((m) => m.content)).toEqual(['b-only'])
   })
 })

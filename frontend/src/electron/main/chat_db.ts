@@ -643,6 +643,32 @@ export function listMessages(sessionId: number): ChatMessage[] {
     .all(sessionId) as ChatMessage[]
 }
 
+/**
+ * Sprint 19 P1 — sliding window history loader. Returns the last N messages
+ * in chronological order (oldest → newest), used by the harness to cap
+ * per-turn input tokens. Without this the harness sees full history and
+ * a 100-turn session bills ~$0.6/turn (vs $0.015 for a 1-turn fresh session).
+ *
+ * Algorithm: SELECT … ORDER BY created_at DESC LIMIT N (newest first) →
+ * .reverse() into chronological order for the LLM. id is the secondary
+ * sort key to break created_at ties deterministically.
+ *
+ * Caller passes the window size (dispatcher uses HISTORY_WINDOW_SIZE
+ * const so tuning is one place). limit <= 0 returns all messages (same
+ * as listMessages — escape hatch for debugging / tests that want full
+ * history without changing the call site).
+ */
+export function listLastNMessages(sessionId: number, limit: number): ChatMessage[] {
+  if (limit <= 0) return listMessages(sessionId)
+  const rows = getChatDb()
+    .prepare(
+      'SELECT * FROM ai_chat_messages WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?'
+    )
+    .all(sessionId, limit) as ChatMessage[]
+  // Reverse in-place so LLM sees chronological order (oldest → newest).
+  return rows.reverse()
+}
+
 export function getMessage(messageId: number): ChatMessage | null {
   const row = getChatDb().prepare('SELECT * FROM ai_chat_messages WHERE id = ?').get(messageId) as
     | ChatMessage

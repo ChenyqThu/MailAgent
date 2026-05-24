@@ -31,6 +31,7 @@ import type {
   EventsListOpts,
   SyncNowOpts,
   ChatApi,
+  ChatBackendKind,
   ChatEditOpts,
   ChatMessage,
   ChatSession,
