@@ -53,6 +53,7 @@ class CalendarSyncWorker:
         poll_interval: float = 60.0,
         full_sync_window_days: int = 180,
         full_sync_past_days: int = 30,
+        refresh_calendars_every_n_ticks: int = 60,
     ):
         """
         Args:
@@ -63,6 +64,11 @@ class CalendarSyncWorker:
             full_sync_window_days: 启动全量 sync 窗口右边界 (今天 + N 天).
                                    默认 180 = 半年未来日历.
             full_sync_past_days: 启动全量 sync 窗口左边界 (今天 - N 天). 默认 30.
+            refresh_calendars_every_n_ticks: F8 — 每 N ticks (60 ≈ 1h at 60s
+                                             poll) 重 list calendars + diff
+                                             新增/移除. 用户在 Outlook 新建/
+                                             订阅日历后, worker 自动 pick up
+                                             不必重启 mail-sync.
         """
         self.cfg = cfg
         self.reader = reader
@@ -71,8 +77,10 @@ class CalendarSyncWorker:
         self.poll_interval = poll_interval
         self.full_sync_window_days = full_sync_window_days
         self.full_sync_past_days = full_sync_past_days
+        self.refresh_calendars_every_n_ticks = refresh_calendars_every_n_ticks
         self._stop = asyncio.Event()
         self._calendars: list[str] = []
+        self._tick_count = 0
 
     def stop(self) -> None:
         """通知 worker 优雅停止. 当前 tick 跑完后退出."""
@@ -184,7 +192,19 @@ class CalendarSyncWorker:
                 self.repo.upsert_sync_state(cal_name, last_error=str(e)[:500])
 
     async def _tick(self) -> None:
-        """单次增量 tick — 对每个 calendar 查 ctag, 变了就增量 / 重读."""
+        """单次增量 tick — 对每个 calendar 查 ctag, 变了就增量 / 重读.
+
+        F8 — 每 ``refresh_calendars_every_n_ticks`` 个 tick (默认 60 ≈ 1h)
+        重 list calendars + diff: 新增 cal 走 single-cal 全量 sync, 移除 cal
+        仅 log (不 soft delete 防误删共享 cal 临时不可访问).
+        """
+        self._tick_count += 1
+        if (
+            self.refresh_calendars_every_n_ticks > 0
+            and self._tick_count % self.refresh_calendars_every_n_ticks == 0
+        ):
+            await self._refresh_calendars()
+
         for cal_name in self._calendars:
             try:
                 await self._tick_one_calendar(cal_name)
@@ -193,6 +213,71 @@ class CalendarSyncWorker:
                     f"[calendar-sync-worker] tick_one {cal_name!r} failed: {e}"
                 )
                 self.repo.upsert_sync_state(cal_name, last_error=str(e)[:500])
+
+    async def _refresh_calendars(self) -> None:
+        """F8 — 重 list CalDAV calendars + diff vs self._calendars.
+
+        新增 cal → _initial_full_sync 单 cal 路径让前端立即看到数据.
+        移除 cal → log warning + 保留本地 row (rationale: 共享 calendar 可能
+            临时不可访问, 不应立刻 soft delete 数据; 用户真要清理走 admin CLI).
+        list 失败不动 self._calendars (保留上次成功的列表), tick 继续跑.
+        """
+        try:
+            fresh = await asyncio.to_thread(
+                self.reader.list_calendar_names_for_sync
+            )
+        except Exception as e:
+            logger.warning(
+                f"[calendar-sync-worker] refresh_calendars list failed: {e} "
+                f"— 保留上次 calendars={self._calendars}"
+            )
+            return
+
+        old = set(self._calendars)
+        new = set(fresh)
+        added = new - old
+        removed = old - new
+        if not added and not removed:
+            return
+
+        logger.info(
+            f"[calendar-sync-worker] calendars changed: "
+            f"added={sorted(added)} removed={sorted(removed)} "
+            f"new_total={len(fresh)}"
+        )
+        self._calendars = list(fresh)
+
+        # 新增 cal 立即全量 sync (单 cal 路径), 让前端 ~60s 内就看到数据
+        for cal_name in added:
+            try:
+                window_start, window_end = self._sync_window()
+                events = await asyncio.to_thread(
+                    self.reader.list_events_with_full_detail,
+                    window_start,
+                    window_end,
+                    calendar_name=cal_name,
+                )
+                stats = self.reconciler.reconcile_full_window(
+                    events,
+                    calendar_name=cal_name,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                ctag = await asyncio.to_thread(
+                    self.reader.get_collection_ctag, cal_name
+                )
+                self.repo.upsert_sync_state(
+                    cal_name, ctag=ctag, full_sync=True, last_error=None
+                )
+                logger.info(
+                    f"[calendar-sync-worker] new calendar {cal_name!r} initial "
+                    f"sync: upserted={stats.upserted}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[calendar-sync-worker] initial sync for new calendar "
+                    f"{cal_name!r} failed: {e} — 留待下次 tick"
+                )
 
     async def _tick_one_calendar(self, cal_name: str) -> None:
         # 1. 拉新 ctag, 跟存的比
