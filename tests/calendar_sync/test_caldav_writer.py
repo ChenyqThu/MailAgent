@@ -309,13 +309,33 @@ def _mock_event_with_vevent(
     description=None,
     sequence=0,
     status="CONFIRMED",
+    attendees=None,
+    rrule=None,
+    exdates=None,
+    rdates=None,
+    recurrence_id=None,
 ):
-    """构造 mock event with .vobject_instance.vevent.X.value attributes."""
+    """构造 mock event with .vobject_instance.vevent.X.value attributes.
+
+    F3 扩展: attendees / rrule / exdates / rdates / recurrence_id mocking
+    覆盖透传场景.
+    """
     if dtstart is None:
         dtstart = datetime(2026, 5, 30, 14, tzinfo=timezone.utc)
     if dtend is None:
         dtend = datetime(2026, 5, 30, 15, tzinfo=timezone.utc)
-    vevent = SimpleNamespace(
+    # vobject ATTENDEE — value="mailto:email", params={"CN": [name]}
+    attendee_nodes = []
+    for a in attendees or []:
+        params = {}
+        if a.get("name"):
+            params["CN"] = [a["name"]]
+        attendee_nodes.append(
+            SimpleNamespace(value=f"mailto:{a['email']}", params=params)
+        )
+    exdate_nodes = [SimpleNamespace(value=d) for d in (exdates or [])]
+    rdate_nodes = [SimpleNamespace(value=d) for d in (rdates or [])]
+    vevent_kwargs = dict(
         summary=SimpleNamespace(value=summary),
         dtstart=SimpleNamespace(value=dtstart),
         dtend=SimpleNamespace(value=dtend),
@@ -323,7 +343,13 @@ def _mock_event_with_vevent(
         description=SimpleNamespace(value=description) if description else None,
         sequence=SimpleNamespace(value=sequence),
         status=SimpleNamespace(value=status),
+        attendee_list=attendee_nodes,
+        rrule=SimpleNamespace(value=rrule) if rrule else None,
+        exdate_list=exdate_nodes,
+        rdate_list=rdate_nodes,
+        recurrence_id=SimpleNamespace(value=recurrence_id) if recurrence_id else None,
     )
+    vevent = SimpleNamespace(**vevent_kwargs)
     evt = MagicMock()
     evt.vobject_instance.vevent = vevent
     evt.save = MagicMock()
@@ -416,3 +442,185 @@ def test_writer_delete_event_uid_not_found_raises():
     with pytest.raises(ValueError, match="event not found"):
         w.delete_event(ical_uid="ghost")
     cal.event_by_uid.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# F3 Critical fix — update_event 保留原 attendees + RRULE/EXDATE/RDATE
+# ---------------------------------------------------------------------------
+
+def test_writer_update_event_attendees_omitted_preserved():
+    """**Critical 修复**: update_event 不传 attendees → 原 attendees 保留.
+
+    老代码默认 attendees=None → build_vevent 不输出 ATTENDEE 行 →
+    PUT 全替换语义把 Exchange 端**原 attendees 全部清空** = 静默数据损坏.
+    F3 用 _UNSET sentinel + _extract_attendees_from_vevent 透传原值.
+    """
+    evt = _mock_event_with_vevent(
+        summary="Team Sync",
+        attendees=[
+            {"email": "alice@x.com", "name": "Alice"},
+            {"email": "bob@x.com", "name": "Bob"},
+        ],
+    )
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    # 只改 summary, attendees 完全不传
+    w.update_event(ical_uid="uid-x", summary="Team Sync v2")
+
+    # 原 attendees 必须出现在 new body, 不能丢
+    body = evt.data
+    assert "mailto:alice@x.com" in body
+    assert "mailto:bob@x.com" in body
+    assert 'CN="Alice"' in body
+    assert 'CN="Bob"' in body
+
+
+def test_writer_update_event_attendees_empty_list_clears():
+    """显式 attendees=[] → caller 明确要清空, 不保留."""
+    evt = _mock_event_with_vevent(
+        attendees=[{"email": "alice@x.com", "name": "Alice"}],
+    )
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(ical_uid="uid-x", summary="x", attendees=[])
+    assert "ATTENDEE" not in evt.data
+    assert "mailto:alice@x.com" not in evt.data
+
+
+def test_writer_update_event_attendees_replaces_with_new_list():
+    """显式 attendees=[新人] → 替换为新列表."""
+    evt = _mock_event_with_vevent(
+        attendees=[{"email": "alice@x.com", "name": "Alice"}],
+    )
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(
+        ical_uid="uid-x",
+        summary="x",
+        attendees=[{"email": "carol@x.com", "name": "Carol"}],
+    )
+    body = evt.data
+    assert "mailto:carol@x.com" in body
+    assert "mailto:alice@x.com" not in body
+
+
+def test_writer_update_event_rrule_preserved_for_recurring_event():
+    """**Critical 修复**: recurring event update → RRULE 必须透传, 否则
+    Exchange 把 series 降级单次, 未来 occurrences 全删."""
+    evt = _mock_event_with_vevent(
+        summary="Weekly Sync",
+        rrule="FREQ=WEEKLY;BYDAY=MO",
+    )
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(ical_uid="uid-x", summary="Weekly Sync (updated)")
+
+    body = evt.data
+    assert "RRULE:FREQ=WEEKLY;BYDAY=MO" in body
+
+
+def test_writer_update_event_exdates_rdates_preserved():
+    """recurring event update → EXDATE/RDATE 也必须透传."""
+    evt = _mock_event_with_vevent(
+        rrule="FREQ=WEEKLY",
+        exdates=[
+            datetime(2026, 6, 1, 14, tzinfo=timezone.utc),
+            datetime(2026, 6, 8, 14, tzinfo=timezone.utc),
+        ],
+        rdates=[datetime(2026, 6, 15, 14, tzinfo=timezone.utc)],
+    )
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(ical_uid="uid-x", summary="x")
+
+    body = evt.data
+    assert "EXDATE:20260601T140000Z" in body
+    assert "EXDATE:20260608T140000Z" in body
+    assert "RDATE:20260615T140000Z" in body
+
+
+def test_writer_update_event_recurrence_id_preserved_for_override():
+    """occurrence override event (含 RECURRENCE-ID) update → ID 透传."""
+    evt = _mock_event_with_vevent(
+        recurrence_id=datetime(2026, 6, 1, 14, tzinfo=timezone.utc),
+    )
+    cal = MagicMock()
+    cal.name = "日历"
+    cal.event_by_uid.return_value = evt
+    principal = MagicMock()
+    principal.calendars.return_value = [cal]
+    w = _writer_with_mock_principal(principal)
+
+    w.update_event(ical_uid="uid-x", summary="changed only this occurrence")
+
+    assert "RECURRENCE-ID:20260601T140000Z" in evt.data
+
+
+def test_build_vevent_rrule_exdate_rdate_emitted():
+    """build_vevent 接 rrule/exdates/rdates/recurrence_id 时输出对应行."""
+    from src.calendar_sync.caldav_writer import build_vevent
+
+    body = build_vevent(
+        ical_uid="x",
+        summary="Recur",
+        dtstart_utc=datetime(2026, 5, 30, 14, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 5, 30, 15, tzinfo=timezone.utc),
+        organizer_email="me@x.com",
+        rrule="FREQ=DAILY;COUNT=10",
+        exdates=[datetime(2026, 6, 1, 14, tzinfo=timezone.utc)],
+        rdates=[datetime(2026, 6, 15, 14, tzinfo=timezone.utc)],
+        recurrence_id=datetime(2026, 6, 1, 14, tzinfo=timezone.utc),
+    )
+    assert "RRULE:FREQ=DAILY;COUNT=10" in body
+    assert "EXDATE:20260601T140000Z" in body
+    assert "RDATE:20260615T140000Z" in body
+    assert "RECURRENCE-ID:20260601T140000Z" in body
+
+
+def test_extract_attendees_from_vevent_handles_no_attendee_list():
+    """vevent 无 attendee → 返回空 list, 不抛."""
+    from src.calendar_sync.caldav_writer import _extract_attendees_from_vevent
+
+    v = SimpleNamespace()  # 无 attendee_list 属性
+    assert _extract_attendees_from_vevent(v) == []
+
+
+def test_extract_attendees_from_vevent_skips_non_email():
+    """attendee value 不像 email (e.g. room name) → 跳过."""
+    from src.calendar_sync.caldav_writer import _extract_attendees_from_vevent
+
+    v = SimpleNamespace(
+        attendee_list=[
+            SimpleNamespace(value="mailto:alice@x.com", params={"CN": ["Alice"]}),
+            SimpleNamespace(value="Conference Room A", params={}),  # not email
+            SimpleNamespace(value="mailto:", params={}),  # empty
+        ],
+    )
+    result = _extract_attendees_from_vevent(v)
+    assert len(result) == 1
+    assert result[0] == {"email": "alice@x.com", "name": "Alice"}

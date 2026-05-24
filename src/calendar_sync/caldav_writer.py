@@ -36,6 +36,11 @@ if TYPE_CHECKING:
     from src.config import Config
 
 
+# Sentinel for "调用方没传, 保留原值" vs 显式 None / []. 用 object identity
+# 比较 (`is _UNSET`). Python 标准 "省略 vs 显式 None" 区分模式.
+_UNSET: Any = object()
+
+
 def generate_uid() -> str:
     """生成 unique vEvent UID (RFC 5545 §3.8.4.7)."""
     return f"mailagent-{uuid.uuid4().hex}@mailagent.local"
@@ -54,6 +59,12 @@ def build_vevent(
     sequence: int = 0,
     status: str = "CONFIRMED",
     now_utc: Optional[datetime] = None,
+    # F3 新增 (Critical #3 + High #5): RRULE / EXDATE / RDATE / RECURRENCE-ID
+    # 透传, 避免 update_event 对 recurring event 时把 series 降级单次.
+    rrule: Optional[str] = None,
+    exdates: Optional[List[datetime]] = None,
+    rdates: Optional[List[datetime]] = None,
+    recurrence_id: Optional[datetime] = None,
 ) -> str:
     """拼 VCALENDAR with single VEVENT for CalDAV PUT.
 
@@ -120,8 +131,66 @@ def build_vevent(
             f"ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE{cn}:mailto:{email}"
         )
 
+    # F3: RRULE / EXDATE / RDATE / RECURRENCE-ID — update_event 透传时必须
+    # 一并 PUT, 否则 Exchange 把 recurring series 降级单次 (未来 occurrences
+    # 全删).
+    if rrule and rrule.strip():
+        lines.append(f"RRULE:{rrule.strip()}")
+    for exd in exdates or []:
+        lines.append(f"EXDATE:{_fmt_utc(exd)}")
+    for rd in rdates or []:
+        lines.append(f"RDATE:{_fmt_utc(rd)}")
+    if recurrence_id is not None:
+        lines.append(f"RECURRENCE-ID:{_fmt_utc(recurrence_id)}")
+
     lines.extend(["END:VEVENT", "END:VCALENDAR"])
     return "\r\n".join(lines) + "\r\n"
+
+
+def _extract_attendees_from_vevent(v: Any) -> List[Dict[str, Any]]:
+    """从 vobject vevent 提取 attendees → ``[{email, name?}]``.
+
+    vobject 把多 ATTENDEE 行表示成 ``attendee_list``. 每个 attendee `.value`
+    是 ``mailto:email``, `.params['CN']` 是显示名 (可能 None).
+    """
+    out: List[Dict[str, Any]] = []
+    raw_list = getattr(v, "attendee_list", None) or []
+    for att in raw_list:
+        raw = (getattr(att, "value", "") or "").strip()
+        email = raw[7:].strip() if raw.lower().startswith("mailto:") else raw
+        if not email or "@" not in email:
+            continue
+        params = getattr(att, "params", {}) or {}
+        cn_list = params.get("CN") or params.get("cn") or []
+        name = cn_list[0] if isinstance(cn_list, list) and cn_list else None
+        out.append({"email": email, "name": name})
+    return out
+
+
+def _extract_datetimes_from_vevent_field(v: Any, field: str) -> List[datetime]:
+    """从 vobject vevent 提取 EXDATE / RDATE 列表 → UTC datetimes.
+
+    每个 ``exdate``/``rdate`` 节点的 ``.value`` 可能是单 datetime, 也可能是
+    list (RFC 5545 允许同行多 value comma 分隔). 都归一成 flat list of UTC.
+    """
+    out: List[datetime] = []
+    raw_list = getattr(v, f"{field}_list", None) or []
+    for node in raw_list:
+        val = getattr(node, "value", None)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            for d in val:
+                try:
+                    out.append(_to_utc(d))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            try:
+                out.append(_to_utc(val))
+            except (TypeError, ValueError):
+                continue
+    return out
 
 
 class CalDAVWriter:
@@ -252,14 +321,24 @@ class CalDAVWriter:
         dtend_utc: Optional[datetime] = None,
         location: Optional[str] = None,
         description: Optional[str] = None,
-        attendees: Optional[List[Dict[str, Any]]] = None,
+        attendees: Any = _UNSET,
         status: Optional[str] = None,
         calendar_name: Optional[str] = None,
         sequence_bump: bool = True,
     ) -> Dict[str, Any]:
         """CalDAV PUT update 现有 event. 不传的字段保留原值.
 
-        策略: 把原 VEVENT 字段读出, 修改后整体 PUT (CalDAV PUT 全替换语义).
+        策略: 把原 VEVENT 字段 (含 attendees + RRULE + EXDATE + RDATE +
+        RECURRENCE-ID) 读出, 修改后整体 PUT (CalDAV PUT 全替换语义).
+
+        attendees 语义 (F3 修复):
+        - **省略** (默认 ``_UNSET``) → **保留**原 attendees (新行为, 数据安全)
+        - 显式 ``[]`` → 清空 attendees (caller 明确意图)
+        - 显式 ``[{...}]`` → 替换
+
+        老代码 ``attendees=None`` 默认值, 不传时 build_vevent 不输出 ATTENDEE
+        行, PUT 全替换语义把 Exchange 端**原 attendees 全部清空** → 静默数据
+        损坏. F3 用 sentinel 关闭这个洞.
 
         Returns:
             ``{action, ical_uid, calendar_name, dtstart_iso, dtend_iso, sequence}``
@@ -291,8 +370,22 @@ class CalDAVWriter:
         orig_status = (
             v.status.value if hasattr(v, "status") and v.status else "CONFIRMED"
         )
+        # F3 — attendees + recurrence 相关字段透传
+        orig_attendees = _extract_attendees_from_vevent(v)
+        orig_rrule = (
+            v.rrule.value if hasattr(v, "rrule") and v.rrule else None
+        )
+        orig_exdates = _extract_datetimes_from_vevent_field(v, "exdate")
+        orig_rdates = _extract_datetimes_from_vevent_field(v, "rdate")
+        orig_recurrence_id_raw = (
+            v.recurrence_id.value
+            if hasattr(v, "recurrence_id") and v.recurrence_id else None
+        )
+        orig_recurrence_id = (
+            _to_utc(orig_recurrence_id_raw) if orig_recurrence_id_raw is not None else None
+        )
 
-        # 合并 — 显式 None = 保留, 显式值 = 覆盖
+        # 合并 — 显式 None = 保留 (绝大多数 Optional 字段), 显式值 = 覆盖
         new_summary = summary if summary is not None else orig_summary
         new_dtstart = dtstart_utc if dtstart_utc is not None else _to_utc(orig_dtstart)
         new_dtend = dtend_utc if dtend_utc is not None else _to_utc(orig_dtend)
@@ -300,9 +393,9 @@ class CalDAVWriter:
         new_description = description if description is not None else orig_description
         new_status = status if status is not None else orig_status
         new_sequence = orig_sequence + 1 if sequence_bump else orig_sequence
+        # attendees 用 sentinel 区分 "省略保留" vs "显式 [] 清空"
+        new_attendees = orig_attendees if attendees is _UNSET else (attendees or [])
 
-        # attendees 显式传则替换, None 留空 (原 attendees 保留 — 重读 ical_raw 复杂,
-        # MVP 暂不支持复制原 attendees; 调用方需显式传完整列表)
         body = build_vevent(
             ical_uid=ical_uid,
             summary=new_summary,
@@ -311,9 +404,14 @@ class CalDAVWriter:
             organizer_email=self.user,
             location=new_location,
             description=new_description,
-            attendees=attendees,  # None → 不写 ATTENDEE 行 (服务端覆盖)
+            attendees=new_attendees,
             sequence=new_sequence,
             status=new_status,
+            # F3 — recurring event 透传 RRULE/EXDATE/RDATE/RECURRENCE-ID
+            rrule=orig_rrule,
+            exdates=orig_exdates,
+            rdates=orig_rdates,
+            recurrence_id=orig_recurrence_id,
         )
         evt.data = body
         try:
