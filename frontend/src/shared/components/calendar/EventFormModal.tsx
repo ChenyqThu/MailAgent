@@ -1,15 +1,17 @@
-// Phase 2.2/2.3 — EventFormModal: 一个 modal 复用 create + edit 两种语义.
-// occurrence !== null → edit 预填; null → create.
+// Phase 2.5 §11.1 — EventFormModal 1:1 mockup-event-form.html 复刻.
 //
-// 实现取舍:
-// - 不引入 radix/headless UI primitive, 用 inline fixed pos + glass-2 拼最简版
-// - datetime input 用 native datetime-local (跟系统时区一致, 用户友好)
-// - 转 ISO 时用本地 tz offset (跟 CLI parser 要求一致)
-// - attendees 输入暂用单 textarea 多行 (每行 'email[,name]'), polish 后可优化
+// 变化 vs Phase 2.2/2.3 初版:
+// - 视觉切到 mockup class (.efm-* / .ef-* / .chip-*), 抽到 index.css
+// - attendees 改 chip 输入 (Enter / `,` / `;` 加, Backspace 空输入框删上一个,
+//   点 × 移除); 非法 email .chip-field 短暂 .invalid pulse
+// - 验证改 inline .ef-err.show, 不再 toastError 干扰用户
+// - Esc 关闭 + Tab focus-trap (a11y), 关闭时 restore focus
+//
+// 接口不变 (open / onClose / occurrence — null=create 非空=edit).
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { X } from 'lucide-react'
+import { AlertCircle, X } from 'lucide-react'
 
 import { CALENDAR_EVENTS_KEY } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -43,40 +45,31 @@ function toDatetimeLocal(d: Date): string {
 /** 'YYYY-MM-DDTHH:MM' (本地) → ISO with local tz offset.
  *  CLI _parse_iso_datetime_strict 要求 tz, 这里附本地 offset 保留语义. */
 function localToIsoWithOffset(localStr: string): string {
-  // localStr e.g. '2026-05-30T14:00'
   const [datePart, timePart] = localStr.split('T')
   const [y, mo, d] = datePart.split('-').map(Number)
   const [h, mi] = timePart.split(':').map(Number)
   const dt = new Date(y, mo - 1, d, h, mi)
-  const tzOff = -dt.getTimezoneOffset() // minutes
+  const tzOff = -dt.getTimezoneOffset()
   const sign = tzOff >= 0 ? '+' : '-'
   const tzH = pad(Math.floor(Math.abs(tzOff) / 60))
   const tzM = pad(Math.abs(tzOff) % 60)
   return `${datePart}T${timePart}:00${sign}${tzH}:${tzM}`
 }
 
-/** ISO UTC 字符串 → datetime-local 本地字符串 (展示用). */
+/** ISO 字符串 → datetime-local 本地字符串. */
 function isoToDatetimeLocal(iso: string): string {
-  const d = new Date(iso)
-  return toDatetimeLocal(d)
+  return toDatetimeLocal(new Date(iso))
 }
 
-/** textarea 输入 '邮箱[,显示名]' 多行 → EventAttendeeInput[]. */
-function parseAttendees(text: string): EventAttendeeInput[] {
-  const out: EventAttendeeInput[] = []
-  for (const line of text.split('\n')) {
-    const s = line.trim()
-    if (!s) continue
-    const parts = s.split(',', 2)
-    const email = parts[0].trim()
-    if (!email || !email.includes('@')) continue
-    out.push({ email, name: parts[1]?.trim() || undefined })
-  }
-  return out
+function emailRe(s: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)
 }
 
-function attendeesToText(atts: ReadonlyArray<{ email: string; name?: string }>): string {
-  return atts.map((a) => (a.name ? `${a.email},${a.name}` : a.email)).join('\n')
+/** chip avatar initials — mockup §chip-av. */
+function initials(email: string): string {
+  const n = email.split('@')[0].replace(/[._-]/g, ' ').trim()
+  const p = n.split(' ')
+  return ((p[0] || '')[0] || email[0] || '?').toUpperCase()
 }
 
 export function EventFormModal({ open, onClose, occurrence }: Props): React.ReactElement | null {
@@ -89,22 +82,40 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   const [endLocal, setEndLocal] = useState('')
   const [location, setLocation] = useState('')
   const [description, setDescription] = useState('')
-  const [attendeesText, setAttendeesText] = useState('')
+  // chip 输入: chips = 已确认 attendees, chipInputValue = 当前输入框中字符
+  const [chips, setChips] = useState<EventAttendeeInput[]>([])
+  const [chipInputValue, setChipInputValue] = useState('')
+  const [chipFocused, setChipFocused] = useState(false)
+  const [chipInvalid, setChipInvalid] = useState(false)
+  // inline 验证 (替代之前的 toastError, mockup §11.1)
+  const [errTitle, setErrTitle] = useState(false)
+  const [errTime, setErrTime] = useState(false)
 
+  const titleRef = useRef<HTMLInputElement>(null)
+  const startRef = useRef<HTMLInputElement>(null)
+  const chipInputRef = useRef<HTMLInputElement>(null)
+  const modalRef = useRef<HTMLDivElement>(null)
+  const lastFocusRef = useRef<HTMLElement | null>(null)
+
+  // 打开时预填 / 重置
   useEffect(() => {
     if (!open) return
+    lastFocusRef.current = (document.activeElement as HTMLElement | null) ?? null
     if (occurrence) {
-      // edit 预填
       setSummary(occurrence.summary || '')
       setStartLocal(isoToDatetimeLocal(occurrence.occurrence_start_iso))
       setEndLocal(isoToDatetimeLocal(occurrence.occurrence_end_iso))
       setLocation(occurrence.location || '')
       setDescription('')
-      setAttendeesText(attendeesToText(occurrence.attendees || []))
+      setChips(
+        (occurrence.attendees || []).map((a) => ({
+          email: a.email,
+          name: a.name || undefined
+        }))
+      )
     } else {
-      // create defaults: 1h 后开始 + 1h 长
+      // create defaults: 下一个 30 分钟整点 + 1h 长
       const start = new Date(Date.now() + 60 * 60 * 1000)
-      // round to nearest 30 min for usability
       start.setMinutes(Math.floor(start.getMinutes() / 30) * 30, 0, 0)
       const end = new Date(start.getTime() + 60 * 60 * 1000)
       setSummary('')
@@ -112,15 +123,21 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       setEndLocal(toDatetimeLocal(end))
       setLocation('')
       setDescription('')
-      setAttendeesText('')
+      setChips([])
     }
+    setChipInputValue('')
+    setErrTitle(false)
+    setErrTime(false)
+    // focus 标题 (mockup setTimeout 60 让 transition 先跑)
+    const id = window.setTimeout(() => titleRef.current?.focus(), 60)
+    return () => window.clearTimeout(id)
   }, [open, occurrence])
 
   const mut = useMutation({
     mutationFn: async () => {
       const startIso = localToIsoWithOffset(startLocal)
       const endIso = localToIsoWithOffset(endLocal)
-      const attendees = parseAttendees(attendeesText)
+      const attendees = chips.length > 0 ? chips : undefined
       if (isEdit && occurrence) {
         const opts: EventUpdateOpts = {
           icalUid: occurrence.ical_uid,
@@ -129,7 +146,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           endIso,
           location: location || undefined,
           description: description || undefined,
-          attendees: attendees.length > 0 ? attendees : undefined
+          attendees
         }
         return mailApi.calendar.eventUpdate(opts)
       } else {
@@ -139,7 +156,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           endIso,
           location: location || undefined,
           description: description || undefined,
-          attendees: attendees.length > 0 ? attendees : undefined
+          attendees
         }
         return mailApi.calendar.eventCreate(opts)
       }
@@ -156,203 +173,333 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     }
   })
 
-  if (!open) return null
-
-  const handleSubmit = (e: React.FormEvent): void => {
-    e.preventDefault()
+  // inline validate — 失败时 setErrTitle/setErrTime 让 .ef-err.show + .invalid 描边
+  const validate = useCallback((): boolean => {
+    let ok = true
     if (!summary.trim()) {
-      toastError('请填写标题', '标题不能为空')
-      return
+      setErrTitle(true)
+      ok = false
+    } else {
+      setErrTitle(false)
     }
-    if (!startLocal || !endLocal) {
-      toastError('请填写时间', '开始/结束时间必填')
-      return
+    if (startLocal && endLocal && new Date(endLocal) <= new Date(startLocal)) {
+      setErrTime(true)
+      ok = false
+    } else {
+      setErrTime(false)
     }
-    if (endLocal <= startLocal) {
-      toastError('时间无效', '结束时间必须晚于开始时间')
+    return ok
+  }, [summary, startLocal, endLocal])
+
+  // 用户边改边清错 (mockup behaviour)
+  useEffect(() => {
+    if (errTitle && summary.trim()) setErrTitle(false)
+  }, [summary, errTitle])
+  useEffect(() => {
+    if (errTime && startLocal && endLocal && new Date(endLocal) > new Date(startLocal)) {
+      setErrTime(false)
+    }
+  }, [startLocal, endLocal, errTime])
+
+  const handleSubmit = (): void => {
+    if (!validate()) {
+      if (!summary.trim()) titleRef.current?.focus()
+      else startRef.current?.focus()
       return
     }
     mut.mutate()
   }
 
+  // ── chip ops ──
+  const addChip = useCallback(
+    (raw: string): void => {
+      const v = raw.trim().replace(/[,;]$/, '')
+      if (!v) return
+      if (!emailRe(v)) {
+        setChipInvalid(true)
+        window.setTimeout(() => setChipInvalid(false), 700)
+        return
+      }
+      if (chips.some((c) => c.email.toLowerCase() === v.toLowerCase())) {
+        setChipInputValue('')
+        return
+      }
+      setChips((cs) => [...cs, { email: v }])
+      setChipInputValue('')
+    },
+    [chips]
+  )
+
+  const onChipInputKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
+      e.preventDefault()
+      addChip(chipInputValue)
+    } else if (e.key === 'Backspace' && chipInputValue === '' && chips.length) {
+      setChips((cs) => cs.slice(0, -1))
+    }
+  }
+
+  const onChipInputBlur = (): void => {
+    if (chipInputValue.trim()) addChip(chipInputValue)
+    setChipFocused(false)
+  }
+
+  // Esc 关闭 + Tab focus-trap (mockup §a11y)
+  useEffect(() => {
+    if (!open) return
+    const prevFocus = lastFocusRef.current
+    const handle = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+        return
+      }
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+          'button,input,textarea,[tabindex]:not([tabindex="-1"])'
+        )
+        const list = Array.from(focusables).filter(
+          (el) => !el.hasAttribute('disabled') && el.offsetParent !== null
+        )
+        if (!list.length) return
+        const first = list[0]
+        const last = list[list.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    window.addEventListener('keydown', handle)
+    return () => {
+      window.removeEventListener('keydown', handle)
+      prevFocus?.focus?.()
+    }
+  }, [open, onClose])
+
+  if (!open) return null
+
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 backdrop-blur-[2px]"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={isEdit ? '编辑事件' : '新建事件'}
+      className={cn('efm-backdrop', open && 'open')}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      role="presentation"
     >
       <div
-        className={cn(
-          'glass-2 rounded-[10px] border border-ink-border/60 shadow-2xl',
-          'w-full max-w-md max-h-[85vh] overflow-auto scrollbar-thin',
-          'flex flex-col'
-        )}
+        ref={modalRef}
+        className="efm-modal glass-pop"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="efm-title"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* head */}
-        <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-ink-border-soft">
-          <h2 className="text-base font-semibold text-ink-fg">
+        <div className="efm-head">
+          <span className="efm-accent" aria-hidden />
+          <h2 id="efm-title" className="efm-title">
             {isEdit ? '编辑事件' : '新建事件'}
           </h2>
           <button
             type="button"
+            className="efm-close"
             onClick={onClose}
-            className="text-ink-fg-3 hover:text-ink-fg transition-colors"
-            aria-label="关闭"
+            aria-label="关闭 (Esc)"
             title="关闭 (Esc)"
           >
             <X size={16} strokeWidth={2} />
           </button>
         </div>
 
-        {/* form */}
-        <form onSubmit={handleSubmit} className="p-5 flex flex-col gap-3.5">
-          <Field label="标题" required>
+        <div className="efm-body scrollbar-thin">
+          {/* 标题 */}
+          <div className="ef-field">
+            <label className="ef-label" htmlFor="ef-title">
+              标题
+              <span className="req" aria-hidden>
+                *
+              </span>
+            </label>
             <input
+              ref={titleRef}
+              id="ef-title"
               type="text"
+              className={cn('ef-input', errTitle && 'invalid')}
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
-              required
-              autoFocus
+              placeholder="事件标题"
+              autoComplete="off"
+              aria-required
+              aria-invalid={errTitle || undefined}
               maxLength={200}
-              className={inputCls}
             />
-          </Field>
+            <div className={cn('ef-err', errTitle && 'show')} role="alert">
+              <AlertCircle size={13} strokeWidth={2} />
+              <span>请输入事件标题</span>
+            </div>
+          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="开始" required>
+          {/* 起止时间 */}
+          <div className="ef-field">
+            <label className="ef-label">起止时间</label>
+            <div className="ef-grid2">
               <input
+                ref={startRef}
+                className={cn('ef-input mono', errTime && 'invalid')}
                 type="datetime-local"
                 value={startLocal}
                 onChange={(e) => setStartLocal(e.target.value)}
-                required
-                className={inputCls}
+                aria-label="开始时间"
               />
-            </Field>
-            <Field label="结束" required>
               <input
+                className={cn('ef-input mono', errTime && 'invalid')}
                 type="datetime-local"
                 value={endLocal}
                 onChange={(e) => setEndLocal(e.target.value)}
-                required
-                className={inputCls}
+                aria-label="结束时间"
               />
-            </Field>
+            </div>
+            <div className={cn('ef-err', errTime && 'show')} role="alert">
+              <AlertCircle size={13} strokeWidth={2} />
+              <span>结束时间需晚于开始时间</span>
+            </div>
           </div>
 
-          <Field label="地点">
+          {/* 地点 */}
+          <div className="ef-field">
+            <label className="ef-label" htmlFor="ef-loc">
+              地点
+            </label>
             <input
+              id="ef-loc"
               type="text"
+              className="ef-input"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
+              placeholder="会议室 / Teams 链接 / 地址"
+              autoComplete="off"
               maxLength={500}
-              placeholder="可选 — 实体地点 / Teams 会议 / Zoom 链接"
-              className={inputCls}
             />
-          </Field>
-
-          <Field label="描述">
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              maxLength={2000}
-              placeholder="可选 — 会议议程 / 备注"
-              className={cn(inputCls, 'resize-none')}
-            />
-          </Field>
-
-          <Field
-            label="与会者"
-            hint="每行一个: 'email' 或 'email,显示名'"
-          >
-            <textarea
-              value={attendeesText}
-              onChange={(e) => setAttendeesText(e.target.value)}
-              rows={3}
-              placeholder={'alice@example.com\nbob@example.com,Bob'}
-              className={cn(inputCls, 'resize-none font-mono text-[12px]')}
-            />
-          </Field>
-
-          {/* actions */}
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-ink-border-soft mt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={mut.isPending}
-              className={cn(
-                'px-4 h-9 rounded-md text-[13px] cursor-pointer',
-                'text-ink-fg-2 hover:bg-ink-3/50 transition-colors',
-                'disabled:opacity-50 disabled:cursor-wait'
-              )}
-            >
-              取消
-            </button>
-            <button
-              type="submit"
-              disabled={mut.isPending}
-              className={cn(
-                'px-4 h-9 rounded-md text-[13px] font-medium cursor-pointer',
-                'bg-coral text-white hover:bg-coral/90 transition-colors',
-                'disabled:opacity-60 disabled:cursor-wait'
-              )}
-            >
-              {mut.isPending
-                ? isEdit ? '保存中…' : '创建中…'
-                : isEdit ? '保存' : '创建'}
-            </button>
           </div>
 
-          {isEdit && occurrence && (
-            <div className="text-[11px] text-ink-fg-3 font-mono pt-2 border-t border-ink-border-soft/40">
-              UID: {occurrence.ical_uid.slice(0, 48)}
-              {occurrence.ical_uid.length > 48 ? '…' : ''}
+          {/* 与会者 chip 输入 */}
+          <div className="ef-field">
+            <label className="ef-label" htmlFor="ef-att-input">
+              与会者
+            </label>
+            <div
+              className={cn(
+                'chip-field',
+                chipFocused && 'focus',
+                chipInvalid && 'invalid'
+              )}
+              onClick={() => chipInputRef.current?.focus()}
+            >
+              {chips.map((c) => (
+                <span key={c.email} className="chip">
+                  <span className="chip-av" aria-hidden>
+                    {initials(c.email)}
+                  </span>
+                  <span>{c.email}</span>
+                  <button
+                    type="button"
+                    className="chip-x"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setChips((cs) => cs.filter((x) => x.email !== c.email))
+                    }}
+                    aria-label={`移除 ${c.email}`}
+                    title="移除"
+                  >
+                    <svg
+                      width="11"
+                      height="11"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.4"
+                      strokeLinecap="round"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </span>
+              ))}
+              <input
+                ref={chipInputRef}
+                id="ef-att-input"
+                type="text"
+                className="chip-input"
+                value={chipInputValue}
+                onChange={(e) => setChipInputValue(e.target.value)}
+                onKeyDown={onChipInputKey}
+                onFocus={() => setChipFocused(true)}
+                onBlur={onChipInputBlur}
+                placeholder={chips.length === 0 ? '输入 email 后回车添加' : ''}
+                autoComplete="off"
+                aria-label="添加与会者 email"
+              />
             </div>
-          )}
-        </form>
+            <div className="chip-hint">
+              <kbd>Enter</kbd> 添加 · <kbd>⌫</kbd> 删除上一个 · 点 × 移除
+            </div>
+          </div>
+
+          {/* 描述 */}
+          <div className="ef-field">
+            <label className="ef-label" htmlFor="ef-desc">
+              描述
+            </label>
+            <textarea
+              id="ef-desc"
+              className="ef-textarea"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="议程、备注、相关链接…"
+              maxLength={2000}
+            />
+          </div>
+        </div>
+
+        <div className="efm-foot">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onClose}
+            disabled={mut.isPending}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleSubmit}
+            disabled={mut.isPending}
+          >
+            {mut.isPending
+              ? isEdit
+                ? '保存中…'
+                : '创建中…'
+              : isEdit
+                ? '保存'
+                : '创建'}
+          </button>
+        </div>
+
+        {isEdit && occurrence && (
+          <div
+            className="px-5 pb-3 text-[11px] text-ink-fg-3 font-mono break-all"
+            aria-label="事件 UID"
+          >
+            UID: {occurrence.ical_uid.slice(0, 64)}
+            {occurrence.ical_uid.length > 64 ? '…' : ''}
+          </div>
+        )}
       </div>
     </div>
-  )
-}
-
-// ============================================================
-// helpers / styled
-// ============================================================
-
-const inputCls = cn(
-  'w-full px-3 py-2 rounded-md text-[13px]',
-  'bg-ink-3/40 border border-ink-border/60 text-ink-fg',
-  'placeholder:text-ink-fg-3',
-  'focus:outline-none focus:border-coral/60 focus:bg-ink-3/60',
-  'transition-colors'
-)
-
-function Field({
-  label,
-  hint,
-  required,
-  children
-}: {
-  label: string
-  hint?: string
-  required?: boolean
-  children: React.ReactNode
-}): React.ReactElement {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[11.5px] text-ink-fg-2 font-medium uppercase tracking-wider">
-        {label}
-        {required && <span className="text-coral ml-0.5">*</span>}
-        {hint && (
-          <span className="ml-2 text-ink-fg-3 normal-case tracking-normal font-normal">
-            ({hint})
-          </span>
-        )}
-      </span>
-      {children}
-    </label>
   )
 }
