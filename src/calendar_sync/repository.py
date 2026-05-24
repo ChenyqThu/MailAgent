@@ -202,6 +202,13 @@ class CalendarEventRepository:
             raise ValueError("CalendarEvent.ical_uid is empty — refusing to upsert")
 
         now = time.time()
+        # F2 原子化: 老代码 INSERT + 单独 SELECT 拿 id 是两条 SQL, ON CONFLICT
+        # 路径 lastrowid=0 必须 SELECT 复查. 两 statement 之间存在并发 race
+        # window — CLI ``sync-now`` + worker ``_tick_one_calendar`` 同时跑同
+        # calendar 时, 第二个 connection 在 INSERT 跟 SELECT 之间可能拿到错
+        # row id, 后续 ``update_notion_link`` 写错页. 改 INSERT ... RETURNING
+        # 一条 atomic statement (SQLite ≥ 3.35), 同时复用 sqlite3 deferred
+        # transaction + WAL writer serialization, 关掉 race window.
         with self._conn_ctx() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -248,6 +255,7 @@ class CalendarEventRepository:
                     last_synced_at = excluded.last_synced_at,
                     deleted_at     = NULL,
                     updated_at     = excluded.updated_at
+                RETURNING id
                 """,
                 (
                     event.ical_uid,
@@ -277,16 +285,6 @@ class CalendarEventRepository:
                     now,  # created_at — ON CONFLICT path 不会改 (DEFAULT 语义只在 INSERT)
                     now,  # updated_at
                 ),
-            )
-            # ON CONFLICT 时 lastrowid 是 0; 必须按 unique key 查
-            cur.execute(
-                """
-                SELECT id FROM calendar_event
-                WHERE ical_uid = ?
-                  AND COALESCE(recurrence_id, '') = COALESCE(?, '')
-                  AND source = ?
-                """,
-                (event.ical_uid, event.recurrence_id, source),
             )
             row = cur.fetchone()
             conn.commit()
