@@ -343,6 +343,12 @@ def dispatch_dead_letter_accum(*, count: int, threshold: int = 0) -> None:
             "mailagent.accent": _state.accent,
             "mailagent.scenario": "DeadLetterAccum",
             "mailagent.mascot": "default",
+            # fork makeClientInfo brand 推导 — 见 _base_metadata 同段注释
+            "client_kind": "mailagent",
+            "client_name": "MailAgent",
+            "client_origin": "plugin",
+            "client_originator": "MailAgent",
+            "thread_source": "mailagent-hooks",
         },
         expects_response=False,
     )
@@ -408,6 +414,18 @@ def _base_metadata(
         "mailagent.lang": island_i18n.resolve_lang(),
         "mailagent.theme": _state.theme,
         "mailagent.accent": _state.accent,
+        # fork HookSocketServer.makeClientInfo 用这些 key 推 SessionClientInfo.profileID
+        # → matchRuntimeProfile 匹配到 id="mailagent" runtime profile (brand=.mail,
+        #   ping-island fork commit 171f907 ship)
+        # → SessionClientInfo.brand == .mail
+        # → SessionAttentionNotificationView / SessionHoverDashboardView 内 brand 分支生效
+        # → 渲染 MailAgentSessionView 而非 generic HoverSessionCard.
+        # 不加这些 key 时 fork 端 brand fallback .neutral, 渲染 generic (zZz mascot + 乱码).
+        "client_kind": "mailagent",
+        "client_name": "MailAgent",
+        "client_origin": "plugin",
+        "client_originator": "MailAgent",
+        "thread_source": "mailagent-hooks",
     }
     if page_id:
         meta["mailagent.notionPageId"] = page_id
