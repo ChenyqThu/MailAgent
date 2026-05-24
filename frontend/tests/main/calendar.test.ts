@@ -14,6 +14,7 @@ vi.mock('../../src/electron/main/cli_runner', async () => {
 
 import { CliError } from '../../src/electron/main/cli_runner'
 import {
+  __safeSenderTesting,
   __testing,
   runCalendarExpand,
   runEventCreate,
@@ -428,5 +429,61 @@ describe('calendar — envelope', () => {
   test('rolls success into ok:true', async () => {
     const env = await __testing.envelopeFromCli(Promise.resolve({ replayed: 1 }))
     expect(env).toEqual({ ok: true, data: { replayed: 1 } })
+  })
+})
+
+// ============================================================
+// F4 + F17 — assertSafeSender IPC sender frame URL allowlist
+// ============================================================
+describe('calendar — assertSafeSender (F4 + F17)', () => {
+  const { assertSafeSender } = __safeSenderTesting
+
+  function fakeEvent(url: string | undefined): Electron.IpcMainInvokeEvent {
+    // 仅塞 senderFrame.url, 其它字段 cast 任意 (assertSafeSender 不读).
+    return {
+      senderFrame: url === undefined ? null : { url }
+    } as unknown as Electron.IpcMainInvokeEvent
+  }
+
+  test('allow file:// (production packaged Electron)', () => {
+    expect(() =>
+      assertSafeSender(fakeEvent('file:///Applications/MailAgent.app/index.html'), 'calendar:test')
+    ).not.toThrow()
+  })
+
+  test('allow http://localhost (vite dev server)', () => {
+    expect(() =>
+      assertSafeSender(fakeEvent('http://localhost:5173/'), 'calendar:test')
+    ).not.toThrow()
+  })
+
+  test('allow http://127.0.0.1', () => {
+    expect(() =>
+      assertSafeSender(fakeEvent('http://127.0.0.1:5173/'), 'calendar:test')
+    ).not.toThrow()
+  })
+
+  test('reject http://evil.com (non-allowlist origin)', () => {
+    expect(() =>
+      assertSafeSender(fakeEvent('http://evil.com/'), 'calendar:test')
+    ).toThrow(/Rejected unexpected IPC sender/)
+  })
+
+  test('reject empty URL (F17 — Electron lifecycle 早期 / about:blank 中转防护)', () => {
+    expect(() =>
+      assertSafeSender(fakeEvent(''), 'calendar:test')
+    ).toThrow(/Rejected unexpected IPC sender/)
+  })
+
+  test('reject null senderFrame (F17 — same defense)', () => {
+    expect(() =>
+      assertSafeSender(fakeEvent(undefined), 'calendar:test')
+    ).toThrow(/Rejected unexpected IPC sender/)
+  })
+
+  test('reject https:// off allowlist (e.g. malicious link in webview)', () => {
+    expect(() =>
+      assertSafeSender(fakeEvent('https://attacker.example.com/'), 'calendar:test')
+    ).toThrow()
   })
 })
