@@ -33,10 +33,8 @@ interface Props {
 }
 
 // datetime-local 接受 'YYYY-MM-DDTHH:MM' (本地时区). 转换 helpers:
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
+// F32 — pad 抽到 ./lib/format
+import { pad } from './lib/format'
 
 /** Date → 'YYYY-MM-DDTHH:MM' (本地时区, datetime-local 友好). */
 function toDatetimeLocal(d: Date): string {

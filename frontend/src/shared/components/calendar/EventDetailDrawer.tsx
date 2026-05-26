@@ -40,6 +40,7 @@ import type {
   RsvpResponse
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { pad } from './lib/format'
 import { useUndoToastStore } from '@shared/state/calendar-undo'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -55,9 +56,7 @@ interface Props {
   onReopen?: (occ: CalendarEventOccurrence) => void
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
+// F32 — pad 抽到 ./lib/format
 
 function formatRange(startIso: string, endIso: string, isAllDay: boolean, allDayLabel: string): string {
   const s = new Date(startIso)

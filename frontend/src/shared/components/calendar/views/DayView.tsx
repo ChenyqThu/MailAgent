@@ -10,6 +10,7 @@ import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-reac
 import { useTranslation } from 'react-i18next'
 
 import { EventBlock } from '../EventBlock'
+import { isTodayLocal, pad, shortTime, ymd } from '../lib/format'
 import {
   addDays,
   layoutDay,
@@ -38,22 +39,7 @@ const GRID_COLS_ONE = '56px 1fr'
 const DOW_EN_FULL = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 const MM_DOW = ['一', '二', '三', '四', '五', '六', '日']
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-function ymd(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-function shortTime(iso: string): string {
-  const d = new Date(iso)
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-function isSameDay(a: Date, b: Date): boolean {
-  return a.getDate() === b.getDate() && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()
-}
-function isTodayLocal(d: Date): boolean {
-  return isSameDay(d, new Date())
-}
+// F32 — pad/ymd/shortTime/isSameDay/isTodayLocal 抽到 ../lib/format
 
 interface MiniMonthProps {
   displayMonth: Date

@@ -7,6 +7,7 @@ import { Calendar as CalendarIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { EventBlock } from '../EventBlock'
+import { isTodayLocal, pad, ymd } from '../lib/format'
 import {
   useCalendarEventsInWindow,
   addDays,
@@ -32,18 +33,7 @@ const HOUR_PX = 48
 const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 const GRID_COLS = '56px repeat(7, 1fr)'
 
-function ymd(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-function isSameDay(a: Date, b: Date): boolean {
-  return a.getDate() === b.getDate() && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear()
-}
-function isTodayLocal(d: Date): boolean {
-  return isSameDay(d, new Date())
-}
+// F32 — ymd/pad/isSameDay/isTodayLocal 抽到 ../lib/format
 
 export function WeekView({ date, calendarName, onSelect, selectedKey = null }: Props): React.ReactElement {
   const { t } = useTranslation()

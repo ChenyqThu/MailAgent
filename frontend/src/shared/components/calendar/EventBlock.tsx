@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next'
 
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { shortTime } from './lib/format'
 
 interface EventBlockProps {
   event: CalendarEventOccurrence
@@ -26,10 +27,7 @@ interface EventBlockProps {
   onClick?: () => void
 }
 
-function shortTime(iso: string): string {
-  const d = new Date(iso)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+// F32 — shortTime 抽到 ./lib/format
 
 function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
   if (occ.url && occ.url.length > 0) return true

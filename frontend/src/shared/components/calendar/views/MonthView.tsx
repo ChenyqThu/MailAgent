@@ -7,6 +7,7 @@ import { Calendar as CalendarIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { EventChip } from '../EventChip'
+import { isTodayLocal, ymd } from '../lib/format'
 import {
   useCalendarEventsInWindow,
   startOfMonth,
@@ -27,13 +28,7 @@ interface Props {
 const DOW_EN = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 const MAX_VISIBLE = 3
 
-function ymd(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-function isTodayLocal(d: Date): boolean {
-  const t = new Date()
-  return d.getDate() === t.getDate() && d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear()
-}
+// F32 — ymd/isTodayLocal 抽到 ../lib/format
 
 interface PopState {
   top: number

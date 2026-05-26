@@ -12,6 +12,7 @@ import {
   addDays
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
+import { shortTime, ymd } from '../lib/format'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { cn } from '@shared/lib/cn'
@@ -23,16 +24,7 @@ interface Props {
   onSelect: (occ: CalendarEventOccurrence) => void
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-function ymd(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-function shortTime(iso: string): string {
-  const d = new Date(iso)
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
+// F32 — pad/ymd/shortTime 抽到 ../lib/format
 
 interface HeaderLabels {
   ahDay: string
