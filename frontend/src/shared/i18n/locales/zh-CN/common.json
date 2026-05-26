@@ -616,7 +616,13 @@
       "syncTipOk": "DavMail · 已同步",
       "syncTipErr": "DavMail · 同步失败",
       "syncTipNoRecord": "尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s",
-      "syncTipUnknownErr": "未知错误"
+      "syncTipUnknownErr": "未知错误",
+      "calendarFilter": {
+        "title": "按日历筛选",
+        "all": "全部日历",
+        "selected": "{n} 个日历",
+        "ariaLabel": "日历筛选"
+      }
     },
     "statusbar": {
       "autoSync": "自动同步",
@@ -689,6 +695,9 @@
       "ariaStart": "开始时间",
       "ariaEnd": "结束时间",
       "errTime": "结束时间需晚于开始时间",
+      "labelCalendar": "日历",
+      "calendarDefault": "默认日历",
+      "calendarEditLocked": "暂不支持跨日历移动事件",
       "labelLocation": "地点",
       "placeholderLocation": "会议室 / Teams 链接 / 地址",
       "labelDescription": "描述",

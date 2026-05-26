@@ -624,7 +624,13 @@
       "syncTipOk": "DavMail · Synced",
       "syncTipErr": "DavMail · Sync failed",
       "syncTipNoRecord": "No sync_state records yet — enable CALENDAR_CALDAV_SYNC_ENABLED and wait 60s",
-      "syncTipUnknownErr": "Unknown error"
+      "syncTipUnknownErr": "Unknown error",
+      "calendarFilter": {
+        "title": "Filter by calendar",
+        "all": "All calendars",
+        "selected": "{n} calendars",
+        "ariaLabel": "Calendar filter"
+      }
     },
     "statusbar": {
       "autoSync": "Auto sync",
@@ -697,6 +703,9 @@
       "ariaStart": "Start time",
       "ariaEnd": "End time",
       "errTime": "End time must be after start time",
+      "labelCalendar": "Calendar",
+      "calendarDefault": "Default calendar",
+      "calendarEditLocked": "Moving events across calendars isn't supported yet",
       "labelLocation": "Location",
       "placeholderLocation": "Room / Teams link / Address",
       "labelDescription": "Description",

@@ -27,6 +27,8 @@ interface Props {
   date?: Date
   onDateChange?: (d: Date) => void
   calendarName?: string
+  /** Phase 4·#1 — 多 calendar 多选 (client-side filter). 空 = 全部. */
+  selectedCalendars?: string[]
   /** F5 — Layout 持单一 active + Drawer, view 上提选中事件. */
   onSelect: (occ: CalendarEventOccurrence) => void
   /** F5 — selected event key (= ``${id}-${occurrence_start_iso}``) 用于
@@ -126,6 +128,7 @@ export function DayView({
   date,
   onDateChange,
   calendarName,
+  selectedCalendars,
   onSelect,
   selectedKey = null
 }: Props): React.ReactElement {
@@ -164,7 +167,7 @@ export function DayView({
     fromIso: dayStart.toISOString(),
     toIso: dayEnd.toISOString(),
     calendarName
-  })
+  }, selectedCalendars)
 
   // mini-month 6 周窗口的 events (标记每天是否有事件)
   const miniGridStart = useMemo(() => startOfWeek(startOfMonth(miniMonth)), [miniMonth])
@@ -173,7 +176,7 @@ export function DayView({
     fromIso: miniGridStart.toISOString(),
     toIso: miniGridEnd.toISOString(),
     calendarName
-  })
+  }, selectedCalendars)
   const eventDays = useMemo(() => {
     const s = new Set<string>()
     for (const occ of monthEvents ?? []) {

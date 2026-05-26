@@ -21,6 +21,8 @@ import { cn } from '@shared/lib/cn'
 interface Props {
   date?: Date
   calendarName?: string
+  /** Phase 4·#1 — 多 calendar 多选 (client-side filter). 空 = 全部. */
+  selectedCalendars?: string[]
   /** F5 — view 不再 own selected event state; CalendarLayout 持单一 active
    *  + mount 单一 Drawer, view 通过 callback 上提选中事件. */
   onSelect: (occ: CalendarEventOccurrence) => void
@@ -35,7 +37,7 @@ const GRID_COLS = '56px repeat(7, 1fr)'
 
 // F32 — ymd/pad/isSameDay/isTodayLocal 抽到 ../lib/format
 
-export function WeekView({ date, calendarName, onSelect, selectedKey = null }: Props): React.ReactElement {
+export function WeekView({ date, calendarName, selectedCalendars, onSelect, selectedKey = null }: Props): React.ReactElement {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
@@ -57,7 +59,7 @@ export function WeekView({ date, calendarName, onSelect, selectedKey = null }: P
     fromIso: weekStart.toISOString(),
     toIso: weekEnd.toISOString(),
     calendarName
-  })
+  }, selectedCalendars)
 
   // 默认 scroll 到 8AM (events 渲染完 / 切日期重新加载完都 reset).
   useEffect(() => {

@@ -22,6 +22,7 @@ import type {
   SyncNowOpts
 } from '@shared/api/types'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { filterOccurrencesByCalendars } from '../lib/calendar-filter'
 
 export const CALENDAR_EVENTS_KEY = ['calendar', 'events'] as const
 export const CALENDAR_SYNC_STATUS_KEY = ['calendar', 'syncStatus'] as const
@@ -37,7 +38,10 @@ function useJitteredInterval(baseMs: number, jitterMs: number): number {
   return v
 }
 
-export function useCalendarEventsInWindow(opts: EventsListOpts): {
+export function useCalendarEventsInWindow(
+  opts: EventsListOpts,
+  selectedCalendars?: string[]
+): {
   data: CalendarEventOccurrence[] | undefined
   isLoading: boolean
   isError: boolean
@@ -50,6 +54,11 @@ export function useCalendarEventsInWindow(opts: EventsListOpts): {
     queryKey: [...CALENDAR_EVENTS_KEY, opts.fromIso, opts.toIso, opts.calendarName, opts.source, opts.expandRecurrences],
     queryFn: () => mailApi.calendar.eventsList(opts),
     staleTime: 60_000,
+    // Phase 4·#1 — calendar 多选走 client-side select: queryKey 不含
+    // selectedCalendars, 切筛选不重 fetch, 共享同一窗口缓存, react-query 只
+    // 重跑 select 过滤. 个人日历数据量小, 一次拉全 + 前端过滤最简.
+    select: (data: CalendarEventOccurrence[]) =>
+      filterOccurrencesByCalendars(data, selectedCalendars),
     refetchInterval: refetchIntervalMs,
     refetchIntervalInBackground: false, // tab 后台不刷, 省功
     refetchOnWindowFocus: true          // 回到 tab 立即 refresh

@@ -20,6 +20,8 @@ import { cn } from '@shared/lib/cn'
 interface Props {
   rangeDays?: number  // default 14 天
   calendarName?: string
+  /** Phase 4·#1 — 多 calendar 多选 (client-side filter). 空 = 全部. */
+  selectedCalendars?: string[]
   /** F5 — view 上提选中事件给 CalendarLayout. */
   onSelect: (occ: CalendarEventOccurrence) => void
 }
@@ -53,7 +55,7 @@ function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
   return false
 }
 
-export function AgendaView({ rangeDays = 14, calendarName, onSelect }: Props): React.ReactElement {
+export function AgendaView({ rangeDays = 14, calendarName, selectedCalendars, onSelect }: Props): React.ReactElement {
   const { t } = useTranslation()
   const start = todayStartLocal()
   const end = addDays(start, rangeDays)
@@ -61,7 +63,7 @@ export function AgendaView({ rangeDays = 14, calendarName, onSelect }: Props): R
     fromIso: start.toISOString(),
     toIso: end.toISOString(),
     calendarName
-  })
+  }, selectedCalendars)
 
   if (isLoading) {
     return (

@@ -24,6 +24,7 @@ import { useCalendarShortcuts } from '../calendar/hooks/useCalendarShortcuts'
 import {
   relativeTime,
   useCalendarEventsInWindow,
+  useCalendarNames,
   useCalendarSyncStatus,
   useCalendarSyncTrigger,
   useNowTick
@@ -70,6 +71,11 @@ export function CalendarLayout(): React.ReactElement {
 
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date())
   const [shortcutOpen, setShortcutOpen] = useState(false)
+  // Phase 4·#1 — calendar 多选筛选 (空 = 全部). client-side filter 不重 fetch,
+  // 传给 Toolbar (dropdown) + 各 view (useCalendarEventsInWindow select).
+  const [selectedCalendars, setSelectedCalendars] = useState<string[]>([])
+  const { data: calendarNames } = useCalendarNames()
+  const calendars = calendarNames ?? []
   // F5 — 单一 active selected event, 4 view 通过 onSelect callback 上提.
   // Drawer 跟着挂在 Layout 层 (单 mount), 切 view 不丢, deleteMut hook 不
   // unmount → 修 Critical #4 deleteMut stale closure + 撤销可 reopen drawer.
@@ -99,7 +105,7 @@ export function CalendarLayout(): React.ReactElement {
     fromIso: windowFromIso,
     toIso: windowToIso,
     expandRecurrences: false
-  })
+  }, selectedCalendars)
   const eventsCount = windowEvents?.length ?? null
 
   // recurring count: 90d 内 RRULE-bearing series (5min cache, mount auto fetch)
@@ -157,6 +163,9 @@ export function CalendarLayout(): React.ReactElement {
         onViewChange={setView}
         currentDate={currentDate}
         onDateChange={setCurrentDate}
+        calendars={calendars}
+        selectedCalendars={selectedCalendars}
+        onSelectedCalendarsChange={setSelectedCalendars}
       />
       <div className="flex-1 min-h-0 px-5 pb-4">
         <div className="h-full glass-2 border border-ink-border/60 rounded-[10px] overflow-hidden flex flex-col">
@@ -169,6 +178,7 @@ export function CalendarLayout(): React.ReactElement {
                 <DayView
                   date={currentDate}
                   onDateChange={setCurrentDate}
+                  selectedCalendars={selectedCalendars}
                   onSelect={setActive}
                   selectedKey={selectedKey}
                 />
@@ -178,6 +188,7 @@ export function CalendarLayout(): React.ReactElement {
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewWeek', '周')}>
                 <WeekView
                   date={currentDate}
+                  selectedCalendars={selectedCalendars}
                   onSelect={setActive}
                   selectedKey={selectedKey}
                 />
@@ -185,12 +196,12 @@ export function CalendarLayout(): React.ReactElement {
             )}
             {view === 'month' && (
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewMonth', '月')}>
-                <MonthView date={currentDate} onSelect={setActive} />
+                <MonthView date={currentDate} selectedCalendars={selectedCalendars} onSelect={setActive} />
               </CalendarErrorBoundary>
             )}
             {view === 'agenda' && (
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewAgenda', 'Agenda')}>
-                <AgendaView onSelect={setActive} />
+                <AgendaView selectedCalendars={selectedCalendars} onSelect={setActive} />
               </CalendarErrorBoundary>
             )}
             {view === 'recurring' && (

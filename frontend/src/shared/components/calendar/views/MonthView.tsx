@@ -21,6 +21,8 @@ import { cn } from '@shared/lib/cn'
 interface Props {
   date?: Date
   calendarName?: string
+  /** Phase 4·#1 — 多 calendar 多选 (client-side filter). 空 = 全部. */
+  selectedCalendars?: string[]
   /** F5 — view 上提选中事件给 CalendarLayout. */
   onSelect: (occ: CalendarEventOccurrence) => void
 }
@@ -37,7 +39,7 @@ interface PopState {
   dayLabel: string
 }
 
-export function MonthView({ date, calendarName, onSelect }: Props): React.ReactElement {
+export function MonthView({ date, calendarName, selectedCalendars, onSelect }: Props): React.ReactElement {
   const { t } = useTranslation()
   const [pop, setPop] = useState<PopState | null>(null)
   // F11 — popover click-outside 用 ref + capture phase mousedown 判断, 不靠
@@ -57,7 +59,7 @@ export function MonthView({ date, calendarName, onSelect }: Props): React.ReactE
     fromIso: gridStart.toISOString(),
     toIso: gridEnd.toISOString(),
     calendarName
-  })
+  }, selectedCalendars)
 
   // F11 — popover click-outside / Esc to close. 用 capture phase mousedown
   // + popRef.contains 判断点击在 popover 内, 比老 'click' bubble + 内部

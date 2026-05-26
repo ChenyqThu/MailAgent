@@ -7,8 +7,8 @@
 // 切到 mockup class (.nav-btn / .today-btn / .view-chip / .sync-pill),
 // 不再用 Tailwind inline. sync tip CSS-only hover 触发, 移除 useState.
 
-import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronLeft, ChevronRight, ListFilter, Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { EventFormModal } from './EventFormModal'
@@ -53,13 +53,22 @@ interface Props {
   onViewChange: (v: CalendarView) => void
   currentDate: Date
   onDateChange: (d: Date) => void
+  /** Phase 4·#1 — 全部 calendar 名 (来自 useCalendarNames). */
+  calendars: string[]
+  /** Phase 4·#1 — 当前选中的 calendar (空 = 全部). */
+  selectedCalendars: string[]
+  /** Phase 4·#1 — 选择变化回调. */
+  onSelectedCalendarsChange: (next: string[]) => void
 }
 
 export function CalendarToolbar({
   view,
   onViewChange,
   currentDate,
-  onDateChange
+  onDateChange,
+  calendars,
+  selectedCalendars,
+  onSelectedCalendarsChange
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const { trigger, isPending } = useCalendarSyncTrigger()
@@ -70,6 +79,34 @@ export function CalendarToolbar({
 
   // Phase 2.2 — [+ 新建] 按钮 → 弹 EventFormModal (occurrence=null = create 语义)
   const [createModalOpen, setCreateModalOpen] = useState(false)
+
+  // Phase 4·#1 — calendar 多选筛选 dropdown (仅 >1 calendar 时显示).
+  const [calFilterOpen, setCalFilterOpen] = useState(false)
+  const calFilterRef = useRef<HTMLDivElement | null>(null)
+  const toggleCalendar = (name: string): void => {
+    const set = new Set(selectedCalendars)
+    if (set.has(name)) set.delete(name)
+    else set.add(name)
+    onSelectedCalendarsChange(Array.from(set))
+  }
+  // click-outside + Esc 关闭 (参考 MonthView §F11 capture-phase mousedown).
+  useEffect(() => {
+    if (!calFilterOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (calFilterRef.current && !calFilterRef.current.contains(e.target as Node)) {
+        setCalFilterOpen(false)
+      }
+    }
+    const onEsc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setCalFilterOpen(false)
+    }
+    document.addEventListener('mousedown', onDown, true)
+    window.addEventListener('keydown', onEsc)
+    return () => {
+      document.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('keydown', onEsc)
+    }
+  }, [calFilterOpen])
 
   const VIEW_LABELS: Record<CalendarView, string> = {
     today: t('calendar.toolbar.viewDay', '日'),
@@ -148,6 +185,66 @@ export function CalendarToolbar({
           </button>
         ))}
       </div>
+
+      {/* Phase 4·#1 — calendar 多选筛选 (仅多 calendar 用户显示) */}
+      {calendars.length > 1 && (
+        <div className="relative" ref={calFilterRef}>
+          <button
+            type="button"
+            className="nav-btn"
+            style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
+            onClick={() => setCalFilterOpen((v) => !v)}
+            aria-haspopup="true"
+            aria-expanded={calFilterOpen}
+            title={t('calendar.toolbar.calendarFilter.title', '按日历筛选')}
+          >
+            <ListFilter size={13} strokeWidth={2} />
+            <span>
+              {selectedCalendars.length === 0
+                ? t('calendar.toolbar.calendarFilter.all', '全部日历')
+                : t('calendar.toolbar.calendarFilter.selected', '{n} 个日历', { n: selectedCalendars.length })}
+            </span>
+          </button>
+          {calFilterOpen && (
+            <div
+              className="glass-pop absolute right-0 mt-1.5 z-30 min-w-[180px] max-w-[280px] p-1 rounded-lg"
+              role="menu"
+              aria-label={t('calendar.toolbar.calendarFilter.ariaLabel', '日历筛选')}
+            >
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={selectedCalendars.length === 0}
+                onClick={() => onSelectedCalendarsChange([])}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-ink-fg hover:bg-ink-2/60 text-left"
+              >
+                <span className="w-3.5 inline-flex justify-center shrink-0 text-coral">
+                  {selectedCalendars.length === 0 && <Check size={13} strokeWidth={2.4} />}
+                </span>
+                <span>{t('calendar.toolbar.calendarFilter.all', '全部日历')}</span>
+              </button>
+              {calendars.map((name) => {
+                const checked = selectedCalendars.includes(name)
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={checked}
+                    onClick={() => toggleCalendar(name)}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-ink-fg hover:bg-ink-2/60 text-left"
+                  >
+                    <span className="w-3.5 inline-flex justify-center shrink-0 text-coral">
+                      {checked && <Check size={13} strokeWidth={2.4} />}
+                    </span>
+                    <span className="truncate">{name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Phase 2.5 §11.1 — [+ 新建] coral primary (跟 mockup-event-form §toolbar 一致) */}
       <button

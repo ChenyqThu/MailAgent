@@ -14,7 +14,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { CALENDAR_EVENTS_KEY } from './hooks/useCalendarEvents'
+import { CALENDAR_EVENTS_KEY, useCalendarNames } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -82,6 +82,11 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   const [endLocal, setEndLocal] = useState('')
   const [location, setLocation] = useState('')
   const [description, setDescription] = useState('')
+  // Phase 4·#1 — calendar 归属 (create 可选下拉; edit 只读展示, 跨 calendar
+  // move 不在 scope). 仅 calendars.length > 1 时显示该字段.
+  const [calendarName, setCalendarName] = useState('')
+  const { data: calendarNames } = useCalendarNames()
+  const calendars = calendarNames ?? []
   // chip 输入: chips = 已确认 attendees, chipInputValue = 当前输入框中字符
   const [chips, setChips] = useState<EventAttendeeInput[]>([])
   const [chipInputValue, setChipInputValue] = useState('')
@@ -106,6 +111,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       setStartLocal(isoToDatetimeLocal(occurrence.occurrence_start_iso))
       setEndLocal(isoToDatetimeLocal(occurrence.occurrence_end_iso))
       setLocation(occurrence.location || '')
+      setCalendarName(occurrence.calendar_name || '')
       setDescription('')
       setChips(
         (occurrence.attendees || []).map((a) => ({
@@ -122,6 +128,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       setStartLocal(toDatetimeLocal(start))
       setEndLocal(toDatetimeLocal(end))
       setLocation('')
+      setCalendarName('')
       setDescription('')
       setChips([])
     }
@@ -156,7 +163,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           endIso,
           location: location || undefined,
           description: description || undefined,
-          attendees
+          attendees,
+          calendarName: calendarName || undefined
         }
         return mailApi.calendar.eventCreate(opts)
       }
@@ -367,6 +375,39 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
               <span>{t('calendar.form.errTime', '结束时间需晚于开始时间')}</span>
             </div>
           </div>
+
+          {/* Phase 4·#1 — 日历归属 (仅多 calendar 显示; edit 只读) */}
+          {calendars.length > 1 && (
+            <div className="ef-field">
+              <label className="ef-label" htmlFor="ef-cal">
+                {t('calendar.form.labelCalendar', '日历')}
+              </label>
+              {isEdit ? (
+                <input
+                  id="ef-cal"
+                  type="text"
+                  className="ef-input"
+                  value={calendarName || t('calendar.form.calendarDefault', '默认日历')}
+                  disabled
+                  title={t('calendar.form.calendarEditLocked', '暂不支持跨日历移动事件')}
+                />
+              ) : (
+                <select
+                  id="ef-cal"
+                  className="ef-input"
+                  value={calendarName}
+                  onChange={(e) => setCalendarName(e.target.value)}
+                >
+                  <option value="">{t('calendar.form.calendarDefault', '默认日历')}</option>
+                  {calendars.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
 
           {/* 地点 */}
           <div className="ef-field">
