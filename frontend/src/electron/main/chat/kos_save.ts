@@ -135,11 +135,10 @@ export function buildConversationPageContent(opts: {
     `type: conversation`,
     '---'
   ].join('\n')
-  const sections = [
-    '',
-    `# ${opts.title}`,
-    ''
-  ]
+  // 2026-05-25 polish — drop `# {title}` H1 per Lucien spec strict;
+  // frontmatter `title:` already carries the title, body H1 was a
+  // duplicate that KOS renderer treats as a phantom heading.
+  const sections: string[] = ['']
   if (opts.userContent.trim().length > 0) {
     sections.push('## User', '', opts.userContent.trim(), '')
   }
