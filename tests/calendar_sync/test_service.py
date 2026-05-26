@@ -391,6 +391,48 @@ def test_update_event_forwards_is_all_day(mock_writer_cls, fresh_db: str):
     assert kwargs["is_all_day"] is True
 
 
+# ---------------------------------------------------------------------------
+# Phase 4·#4 — attendees sentinel (数据安全: 防 update 静默清空 Exchange 与会者)
+# ---------------------------------------------------------------------------
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_omits_attendees_when_not_passed(mock_writer_cls, fresh_db: str):
+    """不传 attendees → service 不 forward attendees kwarg (writer 默认 _UNSET 保留).
+
+    数据安全核心: 老代码无条件 attendees=None 透传 → writer None or [] → 清空;
+    修复后省略时 writer 收不到 attendees → _UNSET → 保留原与会者.
+    """
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(ical_uid="u", summary="X")
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert "attendees" not in kwargs
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_forwards_attendees_replace(mock_writer_cls, fresh_db: str):
+    """显式非空 attendees → forward 给 writer 替换原列表."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(
+        ical_uid="u",
+        attendees=[{"email": "alice@example.com", "name": "Alice"}],
+    )
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert kwargs["attendees"] == [{"email": "alice@example.com", "name": "Alice"}]
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_forwards_empty_attendees_to_clear(mock_writer_cls, fresh_db: str):
+    """显式 attendees=[] → forward 空 list (writer 清空与会者; caller 明确意图)."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(ical_uid="u", attendees=[])
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert kwargs["attendees"] == []
+
+
 def test_update_occurrence_validates_status(fresh_db: str):
     svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
     with pytest.raises(ValueError, match="status="):

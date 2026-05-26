@@ -446,6 +446,74 @@ def test_update_event_preserves_all_day_when_not_passed():
 
 
 # ---------------------------------------------------------------------------
+# Phase 4·#4 — attendees sentinel (数据安全: 防 update 静默清空 Exchange 与会者)
+# ---------------------------------------------------------------------------
+
+
+def _writer_with_attendee_event(attendees_in):
+    """造 CalDAVWriter (绕 __init__), _find_event_by_uid 返回带 attendees 的
+    真 vobject vevent. update_event PUT body 赋给 evt.data 供测试读验证 sentinel."""
+    orig_body = build_vevent(
+        ical_uid="att@mailagent.local",
+        summary="Team Sync",
+        dtstart_utc=datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 1, 5, 9, 30, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+        attendees=attendees_in,
+    )
+    real_vevent = vobject.readOne(orig_body).vevent
+    mock_evt = MagicMock()
+    mock_evt.vobject_instance.vevent = real_vevent
+    writer = CalDAVWriter.__new__(CalDAVWriter)
+    writer.user = "me@example.com"
+    writer._find_event_by_uid = MagicMock(return_value=(MagicMock(), mock_evt))
+    return writer, mock_evt
+
+
+def test_update_event_attendees_unset_preserves():
+    """不传 attendees (默认 _UNSET) → 保留原与会者 + partstat (数据安全).
+
+    关键: 已 ACCEPTED 的 partstat 不被打回 NEEDS-ACTION (否则 Exchange 重发邀请).
+    这是前端 partstat 退化问题在 writer 层的根本保护 — 只要走 _UNSET 路径就保留.
+    """
+    writer, mock_evt = _writer_with_attendee_event(
+        [{"email": "alice@example.com", "partstat": "ACCEPTED"}]
+    )
+    writer.update_event(ical_uid="att@mailagent.local", summary="新标题")
+    new = vobject.readOne(mock_evt.data)
+    extracted = _extract_attendees_from_vevent(new.vevent)
+    assert len(extracted) == 1
+    assert extracted[0]["email"] == "alice@example.com"
+    assert extracted[0]["partstat"] == "ACCEPTED"
+    assert new.vevent.summary.value == "新标题"
+
+
+def test_update_event_attendees_empty_clears():
+    """显式 attendees=[] → 清空 ATTENDEE 行 (caller 明确意图)."""
+    writer, mock_evt = _writer_with_attendee_event(
+        [{"email": "alice@example.com"}]
+    )
+    writer.update_event(ical_uid="att@mailagent.local", attendees=[])
+    new = vobject.readOne(mock_evt.data)
+    assert _extract_attendees_from_vevent(new.vevent) == []
+
+
+def test_update_event_attendees_replace():
+    """显式非空 attendees → 替换原列表."""
+    writer, mock_evt = _writer_with_attendee_event(
+        [{"email": "alice@example.com"}]
+    )
+    writer.update_event(
+        ical_uid="att@mailagent.local",
+        attendees=[{"email": "bob@example.com", "name": "Bob"}],
+    )
+    new = vobject.readOne(mock_evt.data)
+    extracted = _extract_attendees_from_vevent(new.vevent)
+    assert len(extracted) == 1
+    assert extracted[0]["email"] == "bob@example.com"
+
+
+# ---------------------------------------------------------------------------
 # Phase 4·#3c — update_occurrence (detached occurrence, RECURRENCE-ID override)
 # ---------------------------------------------------------------------------
 

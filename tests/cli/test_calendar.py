@@ -626,3 +626,91 @@ class TestCalendarSyncNow:
         payload = _last_json(result.output)
         assert "error" in payload
         assert "CalDAV" in payload["error"]["message"]
+
+
+# ============================================================
+# Phase 4·#4 — update --clear-attendees (数据安全: 清空 vs 保留 vs 替换)
+# ============================================================
+
+
+def _fake_update_event_capture(captured):
+    """返回一个 fake CalendarService.update_event, 捕获 CLI 传来的 kwargs."""
+    def _fake(self, **kwargs):
+        captured.update(kwargs)
+        return {
+            "action": "updated", "ical_uid": kwargs.get("ical_uid"),
+            "calendar_name": None, "sequence": 1,
+            "dtstart_iso": "2026-01-01T00:00:00+00:00",
+            "dtend_iso": "2026-01-01T01:00:00+00:00",
+        }
+    return _fake
+
+
+class TestCalendarUpdateAttendees:
+    def test_clear_and_attendee_mutually_exclusive(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """--clear-attendees 与 --attendee 同传 → E_INVALID_ARG (互斥)."""
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "calendar", "update", "uid-x",
+            "--clear-attendees", "--attendee", "a@example.com",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code != 0, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"
+
+    def test_clear_attendees_forwards_empty_list(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """--clear-attendees → service.update_event 收到 attendees=[] (清空)."""
+        from src.calendar_sync.service import CalendarService
+        captured: dict = {}
+        monkeypatch.setattr(
+            CalendarService, "update_event",
+            _fake_update_event_capture(captured),
+        )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "calendar", "update", "uid-x",
+            "--clear-attendees", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        assert captured["attendees"] == []
+
+    def test_no_attendee_flag_preserves(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """不传 --attendee / --clear-attendees → service 收到 attendees=None (保留)."""
+        from src.calendar_sync.service import CalendarService
+        captured: dict = {}
+        monkeypatch.setattr(
+            CalendarService, "update_event",
+            _fake_update_event_capture(captured),
+        )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "calendar", "update", "uid-x",
+            "--summary", "新标题", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        assert captured["attendees"] is None
+
+    def test_attendee_forwards_parsed_list(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """--attendee → service 收到解析后的 list (替换)."""
+        from src.calendar_sync.service import CalendarService
+        captured: dict = {}
+        monkeypatch.setattr(
+            CalendarService, "update_event",
+            _fake_update_event_capture(captured),
+        )
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "calendar", "update", "uid-x",
+            "--attendee", "bob@example.com,Bob", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        assert captured["attendees"] == [{"email": "bob@example.com", "name": "Bob"}]

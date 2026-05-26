@@ -864,7 +864,13 @@ def calendar_update(
     description: Optional[str] = typer.Option(None, "--description"),
     attendee: list[str] = typer.Option(
         None, "--attendee",
-        help="完整 attendee 列表 (会替换原列表; 不传 → 不写 ATTENDEE 行)",
+        help="完整 attendee 列表 (替换原列表, 格式 'email[,name]', 可多次); "
+             "不传 = 保留原与会者; 清空用 --clear-attendees",
+    ),
+    clear_attendees: bool = typer.Option(
+        False, "--clear-attendees",
+        help="清空所有与会者 (Phase 4·#4): 与 --attendee 互斥. 仅整系列 update "
+             "生效 (--recurrence-id occurrence override 不改与会者)",
     ),
     status: Optional[str] = typer.Option(None, "--status"),
     calendar_name: Optional[str] = typer.Option(None, "--calendar"),
@@ -908,11 +914,19 @@ def calendar_update(
     attendees: Optional[list[dict]] = None
     rid_utc: Optional[datetime] = None
     try:
+        if clear_attendees and attendee:
+            raise CliInvalidArgError(
+                "--clear-attendees 与 --attendee 互斥: 要么清空, 要么用 --attendee 替换"
+            )
         if start:
             dtstart_utc = _parse_iso_datetime_strict(start, "start")
         if end:
             dtend_utc = _parse_iso_datetime_strict(end, "end")
-        if attendee:
+        # Phase 4·#4 — attendees 三态: --clear-attendees → [] 清空; --attendee →
+        # 替换; 都不传 → None 保留原与会者 (service 条件传, 不 forward → writer _UNSET).
+        if clear_attendees:
+            attendees = []
+        elif attendee:
             attendees = _parse_attendees(attendee)
         if recurrence_id:
             rid_utc = _parse_iso_datetime_strict(recurrence_id, "recurrence-id")

@@ -662,6 +662,9 @@ class CalendarService:
         """CalDAV PUT update 现有事件.
 
         Args:
+            attendees: None = 未传, **保留**原与会者 (Phase 4·#4 数据安全修复, 防
+                writer PUT 全替换语义静默清空 Exchange 端); 显式 ``[]`` 清空 (caller
+                明确意图: CLI ``--clear-attendees`` / 前端删光 chips); 显式 ``[...]`` 替换.
             rrule: None = 未传, 保留原 RRULE (F3 透传); 显式 str 覆盖 (改整系列);
                 显式 '' 删除 RRULE (周期 → 单次) (Phase 4·#3).
 
@@ -692,11 +695,17 @@ class CalendarService:
             dtend_utc=dtend_utc,
             location=location,
             description=description,
-            attendees=attendees,
             status=status,
             calendar_name=calendar_name,
             sequence_bump=sequence_bump,
         )
+        # Phase 4·#4 — attendees sentinel 修复 (数据安全): None = 未传, 不 forward
+        # → writer 默认 _UNSET 保留原与会者 (防 PUT 全替换语义静默清空 Exchange 端).
+        # 显式 [] 清空 / 显式 [...] 替换. 老代码无条件 attendees=attendees 把 None
+        # 透传给 writer (None is _UNSET == False → None or [] → 清空), 短路了 writer
+        # 的 _UNSET 保护. 改条件传, 跟下方 rrule / is_all_day 一致.
+        if attendees is not None:
+            update_kwargs["attendees"] = attendees
         # Phase 4·#3 — rrule None = 未传 (writer 默认 _UNSET 保留原 RRULE);
         # 显式 str (含 '' 删除 → 周期变单次) 才透传给 writer 覆盖.
         if rrule is not None:
