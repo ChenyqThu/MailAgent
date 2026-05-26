@@ -1408,7 +1408,7 @@ CREATE UNIQUE INDEX idx_calendar_event_unique
 `source` 三态共存:
 - `caldav` — CalendarSyncWorker 从 DavMail CalDAV 拉的 (主路径)
 - `email_ics` — meeting_sync.py 从邮件 .ics 派生 (`related_email_internal_id` 关联)
-- `legacy_calendar_app` — 老 `calendar_main.py` (Phase 3 灰度共存, 后续下线)
+- `legacy_calendar_app` — Phase 3 已下线 (2026-05-25); 枚举值保留作 backward compat, 不再写新行
 
 ### 模块结构
 
@@ -1500,11 +1500,15 @@ FROM calendar_event WHERE deleted_at IS NULL GROUP BY source"
 cd frontend && pnpm dev   # /admin/calendar?view=week 默认
 ```
 
-### 关于 `calendar_main.py` (legacy, 待 Phase 3 下线)
+### legacy `calendar_main.py` — Phase 3 已下线 (2026-05-25)
 
-老的独立日历同步服务, 直接从 Calendar.app 读取事件 → Notion. 现已被 CalendarSyncWorker 取代. **保留作灰度共存**, 跑 `source='legacy_calendar_app'`. 跑稳 2-4 周后下线 (`calendar_main.py` + `src/calendar/` 整目录 + PM2 `calendar-sync` 进程).
+老的独立日历同步服务 (root `calendar_main.py` + `src/calendar/` 整目录 + PM2
+`calendar-sync` 进程) 已删除. CalendarSyncWorker 在 `mail-sync` 进程内
+asyncio loop 完整接管 CalDAV → SQLite SSoT.
 
-**一般不需要手动运行** — 走新路径即可。仅历史数据迁移时偶尔 `python3 calendar_main.py --once`.
+DB schema CHECK 约束保留 `'legacy_calendar_app'` 枚举值作 backward compat;
+SOURCES_TRY_ORDER / _VALID_SOURCES 等常量同样保留. 实际无任何 row 跑过该
+source (cutover 前已确认 zero rows 含 soft-deleted).
 
 ## v4 架构 SQLite-SSoT（2026-05 立项，**Phase 1 + 2 + 3 已上线 2026-05-15；Phase 4 ship 2026-05-16 灰度期**）
 

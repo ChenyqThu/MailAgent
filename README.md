@@ -29,17 +29,9 @@
 
 ### 关于日历同步
 
-`calendar_main.py` 是独立的日历同步服务，直接从 Calendar.app 读取事件。
-
-**建议**：一般情况下**不需要运行** `calendar_main.py`，原因如下：
-- 邮件同步 (`main.py`) 已包含会议邀请识别，能自动将邮件中的会议同步到日程
-- Calendar.app 中的会议可能不完整（部分会议不会同步到本地日历）
-- 邮件中的会议邀请信息更全面（包含完整描述、Teams 链接等）
-
-**何时使用**：仅在需要一次性同步 Calendar.app 中的历史日程时使用：
-```bash
-python3 calendar_main.py --once
-```
+日历同步现统一走 `CalendarSyncWorker`（在 `mail-sync` 进程内的 asyncio loop），
+拉取 DavMail CalDAV → SQLite `calendar_event` SSoT。详见 CLAUDE.md "Calendar
+Module" 段。
 
 ---
 
@@ -219,8 +211,7 @@ pm2 logs
 
 ```
 MailAgent/
-├── main.py                 # 邮件同步入口（主服务）
-├── calendar_main.py        # 日历同步入口（可选，一般不需要）
+├── main.py                 # 邮件同步入口（主服务，含 CalendarSyncWorker asyncio loop）
 ├── src/
 │   ├── mail/               # 邮件模块
 │   │   ├── new_watcher.py      # 监听器（v3 架构主循环）
