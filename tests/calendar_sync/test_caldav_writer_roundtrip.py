@@ -520,3 +520,68 @@ def _to_utc_test(dt):
     if isinstance(dt, _d):
         return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
     raise TypeError(type(dt))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4·#3d — split_series (改未来 / this and following)
+# ---------------------------------------------------------------------------
+
+def test_split_series_truncates_old_and_creates_new():
+    """老 master RRULE 加 UNTIL 截断 + 新建 series (新 UID, 去 UNTIL/COUNT 继承 FREQ)."""
+    writer, mock_evt = _writer_with_recurring_master("FREQ=WEEKLY;BYDAY=MO")
+    mock_cal = MagicMock()
+    writer._find_event_by_uid = MagicMock(return_value=(mock_cal, mock_evt))
+    result = writer.split_series(
+        ical_uid="series@mailagent.local",
+        split_recurrence_id_utc=datetime(2026, 2, 2, 9, 0, tzinfo=timezone.utc),
+        summary="新系列",
+    )
+    assert result["action"] == "series_split"
+    assert result["new_ical_uid"] != "series@mailagent.local"
+    # 老 master 截断 (RRULE 加 UNTIL)
+    old = vobject.readOne(mock_evt.data)
+    assert "UNTIL=" in old.vevent.rrule.value
+    assert "FREQ=WEEKLY" in old.vevent.rrule.value
+    # 新 series (cal.save_event 收到新 body)
+    new_body = mock_cal.save_event.call_args[0][0]
+    new = vobject.readOne(new_body)
+    assert new.vevent.summary.value == "新系列"
+    assert "FREQ=WEEKLY" in new.vevent.rrule.value
+    assert "UNTIL=" not in new.vevent.rrule.value  # 新 series 去 UNTIL
+    assert new.vevent.uid.value != "series@mailagent.local"
+
+
+def test_split_series_count_dropped_in_new_series():
+    """COUNT-based series: 老截断保留 (转 UNTIL), 新 series 去 COUNT (近似无限)."""
+    writer, mock_evt = _writer_with_recurring_master("FREQ=DAILY;COUNT=20")
+    mock_cal = MagicMock()
+    writer._find_event_by_uid = MagicMock(return_value=(mock_cal, mock_evt))
+    writer.split_series(
+        ical_uid="series@mailagent.local",
+        split_recurrence_id_utc=datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc),
+    )
+    new = vobject.readOne(mock_cal.save_event.call_args[0][0])
+    assert "COUNT=" not in new.vevent.rrule.value  # 新 series 不继承 COUNT (近似)
+    assert "FREQ=DAILY" in new.vevent.rrule.value
+
+
+def test_split_series_rejects_non_recurring():
+    """非周期 event (master 无 RRULE) → ValueError."""
+    master_body = build_vevent(
+        ical_uid="single@mailagent.local",
+        summary="One-off",
+        dtstart_utc=datetime(2026, 1, 5, 9, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 1, 5, 10, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+    )
+    vcal = vobject.readOne(master_body)
+    mock_evt = MagicMock()
+    mock_evt.vobject_instance = vcal
+    writer = CalDAVWriter.__new__(CalDAVWriter)
+    writer.user = "me@example.com"
+    writer._find_event_by_uid = MagicMock(return_value=(MagicMock(), mock_evt))
+    with pytest.raises(ValueError, match="not a recurring series"):
+        writer.split_series(
+            ical_uid="single@mailagent.local",
+            split_recurrence_id_utc=datetime(2026, 1, 5, 9, tzinfo=timezone.utc),
+        )

@@ -737,6 +737,7 @@
         "title": "周期事件",
         "body": "此修改应用到：",
         "thisOnly": "仅此事件",
+        "thisAndFuture": "此事件及以后",
         "allSeries": "整个系列"
       },
       "attendees": {

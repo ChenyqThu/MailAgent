@@ -22,7 +22,7 @@ API:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
@@ -45,6 +45,25 @@ _UNSET: Any = object()
 def generate_uid() -> str:
     """生成 unique vEvent UID (RFC 5545 §3.8.4.7)."""
     return f"mailagent-{uuid.uuid4().hex}@mailagent.local"
+
+
+def _rrule_set_until(rrule: str, until_utc: datetime) -> str:
+    """Phase 4·#3d — RRULE 去原 UNTIL/COUNT + 加新 UNTIL (split 截断老 series)."""
+    parts = [
+        p for p in (rrule or "").split(";")
+        if p and not p.strip().upper().startswith(("UNTIL=", "COUNT="))
+    ]
+    parts.append(f"UNTIL={_fmt_utc(until_utc)}")
+    return ";".join(parts)
+
+
+def _rrule_strip_until_count(rrule: str) -> str:
+    """Phase 4·#3d — RRULE 去 UNTIL/COUNT (新 series 从 split 起; 留 FREQ/INTERVAL/BYDAY)."""
+    parts = [
+        p for p in (rrule or "").split(";")
+        if p and not p.strip().upper().startswith(("UNTIL=", "COUNT="))
+    ]
+    return ";".join(parts)
 
 
 def build_vevent(
@@ -614,6 +633,128 @@ class CalDAVWriter:
             "calendar_name": str(cal.name) if cal.name else None,
             "dtstart_iso": new_dtstart.isoformat(),
             "dtend_iso": new_dtend.isoformat(),
+        }
+
+    def split_series(
+        self,
+        *,
+        ical_uid: str,
+        split_recurrence_id_utc: datetime,
+        summary: Optional[str] = None,
+        dtstart_utc: Optional[datetime] = None,
+        dtend_utc: Optional[datetime] = None,
+        location: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        calendar_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Phase 4·#3d — 改未来 (this and following): split recurring series.
+
+        老 master RRULE 加 UNTIL = split 前一刻 (in-place 截断, 保留 detached
+        overrides); 新建 event (新 UID) 从 split occurrence 起带新字段 + 继承
+        FREQ/INTERVAL/BYDAY. = Outlook "此事件及以后".
+
+        注 (近似 / caveat):
+        - COUNT-based series 新 series 不继承 COUNT (变无限); UNTIL-based 老 UNTIL
+          也不继承到新 series. 用户可后续给新 series 设结束.
+        - 老 master 的 detached overrides 保留; split 点后的 override 成孤儿 (老
+          series UNTIL 截断后不展开), 罕见.
+
+        Raises:
+            ValueError: UID not found / 非周期 series (master 无 RRULE)
+        """
+        cal, evt = self._find_event_by_uid(ical_uid, calendar_name)
+        if evt is None:
+            raise ValueError(f"event not found by UID: {ical_uid!r}")
+
+        vcal = evt.vobject_instance
+        master = None
+        for ve in list(getattr(vcal, "vevent_list", []) or []):
+            if not (hasattr(ve, "recurrence_id") and ve.recurrence_id):
+                master = ve
+                break
+        if master is None or not (hasattr(master, "rrule") and master.rrule):
+            raise ValueError(
+                f"not a recurring series (master 无 RRULE): {ical_uid!r}"
+            )
+
+        orig_rrule = master.rrule.value
+        m_dtstart = (
+            _to_utc(master.dtstart.value)
+            if hasattr(master, "dtstart") else split_recurrence_id_utc
+        )
+        m_dtend = (
+            _to_utc(master.dtend.value)
+            if hasattr(master, "dtend") and master.dtend else m_dtstart
+        )
+        m_duration = m_dtend - m_dtstart
+        m_summary = (
+            master.summary.value if hasattr(master, "summary") and master.summary else ""
+        )
+        m_location = (
+            master.location.value if hasattr(master, "location") and master.location else None
+        )
+        m_description = (
+            master.description.value
+            if hasattr(master, "description") and master.description else None
+        )
+        m_status = (
+            master.status.value if hasattr(master, "status") and master.status else "CONFIRMED"
+        )
+        m_attendees = _extract_attendees_from_vevent(master)
+
+        # 1. 截断老 master: in-place 改 RRULE 加 UNTIL (保留 detached overrides)
+        until = split_recurrence_id_utc - timedelta(seconds=1)
+        master.rrule.value = _rrule_set_until(orig_rrule, until)
+        if hasattr(master, "sequence") and master.sequence:
+            try:
+                master.sequence.value = str(int(master.sequence.value) + 1)
+            except (TypeError, ValueError):
+                pass
+        evt.data = vcal.serialize()
+        try:
+            evt.save()
+        except Exception as e:
+            raise RuntimeError(
+                f"CalDAV PUT failed truncating old series {ical_uid!r}: {e}"
+            ) from e
+
+        # 2. 新 series: 新 UID 从 split 起, 继承 FREQ/INTERVAL/BYDAY (去 UNTIL/COUNT)
+        new_uid = generate_uid()
+        new_rrule = _rrule_strip_until_count(orig_rrule)
+        new_dtstart = dtstart_utc if dtstart_utc is not None else split_recurrence_id_utc
+        new_dtend = dtend_utc if dtend_utc is not None else (new_dtstart + m_duration)
+        new_body = build_vevent(
+            ical_uid=new_uid,
+            summary=summary if summary is not None else m_summary,
+            dtstart_utc=new_dtstart,
+            dtend_utc=new_dtend,
+            organizer_email=self.user,
+            location=location if location is not None else m_location,
+            description=description if description is not None else m_description,
+            attendees=m_attendees,
+            sequence=0,
+            status=status if status is not None else m_status,
+            rrule=new_rrule,
+        )
+        try:
+            cal.save_event(new_body)
+        except Exception as e:
+            raise RuntimeError(
+                f"CalDAV PUT failed creating new series after split: {e}"
+            ) from e
+
+        logger.info(
+            f"[caldav-writer] split series old_uid={ical_uid} new_uid={new_uid} "
+            f"at={split_recurrence_id_utc.isoformat()} calendar={cal.name!r}"
+        )
+        return {
+            "action": "series_split",
+            "ical_uid": ical_uid,
+            "new_ical_uid": new_uid,
+            "until_iso": until.isoformat(),
+            "calendar_name": str(cal.name) if cal.name else None,
+            "new_dtstart_iso": new_dtstart.isoformat(),
         }
 
     def delete_event(

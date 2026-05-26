@@ -442,6 +442,18 @@ describe('calendar — runEventUpdate', () => {
     expect(i).toBeGreaterThan(-1)
     expect(args[i + 1]).toBe('2026-01-12T09:00:00Z')
   })
+
+  test('Phase 4·#3d — splitFuture 拼 --split-future (改未来)', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({
+      icalUid: 'uid-x',
+      recurrenceId: '2026-02-02T09:00:00Z',
+      splitFuture: true
+    })
+    const args = mockCallCli.mock.calls[0][0]
+    expect(args).toContain('--recurrence-id')
+    expect(args).toContain('--split-future')
+  })
 })
 
 // Phase 2.3 — calendar:eventDelete

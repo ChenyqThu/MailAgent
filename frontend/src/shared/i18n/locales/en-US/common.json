@@ -745,6 +745,7 @@
         "title": "Recurring event",
         "body": "Apply this change to:",
         "thisOnly": "This event only",
+        "thisAndFuture": "This and following",
         "allSeries": "Entire series"
       },
       "attendees": {

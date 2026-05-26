@@ -208,7 +208,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   }, [open, occurrence, detail, rruleDirty])
 
   const mut = useMutation({
-    mutationFn: async (scope?: 'this' | 'all') => {
+    mutationFn: async (scope?: 'this' | 'all' | 'future') => {
       // Phase 4·#2 — 全天: UTC midnight Z + end exclusive (inclusive endDate +1);
       // 非全天: 本地 datetime + tz offset (现有).
       const startIso = isAllDay
@@ -230,11 +230,12 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           attendees,
           isAllDay
         }
-        if (scope === 'this') {
-          // Phase 4·#3c — 改这一次 (detached occurrence): recurrenceId = 该次
-          // 原始 dtstart (instance recurrence_id 或展开 start). occurrence
-          // override 不改 RRULE (不传 rrule).
+        if (scope === 'this' || scope === 'future') {
+          // Phase 4·#3c/#3d — 改这一次 / 改未来 (split). recurrenceId = 该次原始
+          // dtstart (instance recurrence_id 或展开 start). occurrence override /
+          // split 都不走 builder rrule.
           opts.recurrenceId = occurrence.recurrence_id || occurrence.occurrence_start_iso
+          if (scope === 'future') opts.splitFuture = true
         } else if (rruleDirty) {
           // 改整系列: 仅用户动了重复段才传 rrule (含 '' 删除); 没动保留原值
           // (防 builder 有损解析破坏复杂规则).
@@ -709,6 +710,17 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
                 }}
               >
                 {t('calendar.form.recurrenceScope.thisOnly', '仅此事件')}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={mut.isPending}
+                onClick={() => {
+                  setScopeDialogOpen(false)
+                  mut.mutate('future')
+                }}
+              >
+                {t('calendar.form.recurrenceScope.thisAndFuture', '此事件及以后')}
               </button>
               <button
                 type="button"

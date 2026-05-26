@@ -632,6 +632,8 @@ export interface EventUpdateOpts {
   /** Phase 4·#3c — 改这一次 occurrence (ISO datetime = 该次原始 dtstart);
    *  留空 = 改整系列. 传了走 detached occurrence (RECURRENCE-ID override). */
   recurrenceId?: string
+  /** Phase 4·#3d — 改未来: 配合 recurrenceId, 从该次起 split 成新 series. */
+  splitFuture?: boolean
   /** 默认 SEQUENCE +1 (RFC 5545 标准). */
   noSequenceBump?: boolean
 }

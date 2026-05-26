@@ -755,6 +755,53 @@ class CalendarService:
             calendar_name=calendar_name,
         )
 
+    def split_series(
+        self,
+        *,
+        ical_uid: str,
+        split_recurrence_id_utc: datetime,
+        summary: Optional[str] = None,
+        dtstart_utc: Optional[datetime] = None,
+        dtend_utc: Optional[datetime] = None,
+        location: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        calendar_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Phase 4·#3d — 改未来 (this and following / split series).
+
+        老 series 截断 + 新建 series 从 split 起. 详见 caldav_writer.split_series.
+
+        Raises:
+            ValueError: status 非法 / dtend ≤ dtstart / writer raise (not found / 非周期)
+        """
+        if status is not None and status not in VALID_EVENT_STATUS:
+            raise ValueError(f"status={status!r} not in {VALID_EVENT_STATUS}")
+        if (
+            dtstart_utc is not None
+            and dtend_utc is not None
+            and dtend_utc <= dtstart_utc
+        ):
+            raise ValueError(
+                f"dtend_utc ({dtend_utc.isoformat()}) must be > "
+                f"dtstart_utc ({dtstart_utc.isoformat()})"
+            )
+
+        from src.calendar_sync.caldav_writer import CalDAVWriter
+
+        writer = CalDAVWriter(self.cfg)
+        return writer.split_series(
+            ical_uid=ical_uid,
+            split_recurrence_id_utc=split_recurrence_id_utc,
+            summary=summary,
+            dtstart_utc=dtstart_utc,
+            dtend_utc=dtend_utc,
+            location=location,
+            description=description,
+            status=status,
+            calendar_name=calendar_name,
+        )
+
     def delete_event(
         self,
         *,

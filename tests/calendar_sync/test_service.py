@@ -415,6 +415,28 @@ def test_update_occurrence_forwards_to_writer(mock_writer_cls, fresh_db: str):
     assert kwargs["summary"] == "改这次"
 
 
+def test_split_series_validates_status(fresh_db: str):
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    with pytest.raises(ValueError, match="status="):
+        svc.split_series(
+            ical_uid="x",
+            split_recurrence_id_utc=datetime(2026, 2, 2, 9, tzinfo=timezone.utc),
+            status="BOGUS",
+        )
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_split_series_forwards_to_writer(mock_writer_cls, fresh_db: str):
+    """Phase 4·#3d — service.split_series 透传给 writer.split_series."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.split_series.return_value = {"action": "series_split"}
+    rid = datetime(2026, 2, 2, 9, 0, tzinfo=timezone.utc)
+    svc.split_series(ical_uid="u", split_recurrence_id_utc=rid, summary="新系列")
+    _, kwargs = mock_writer_cls.return_value.split_series.call_args
+    assert kwargs["split_recurrence_id_utc"] == rid
+    assert kwargs["summary"] == "新系列"
+
+
 def test_sync_now_validates_days(fresh_db: str):
     svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
     with pytest.raises(ValueError, match="future_days"):
