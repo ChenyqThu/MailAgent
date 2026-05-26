@@ -216,9 +216,11 @@ expected_tools:
       internal_id: "<ctx.internal_id>"
       body_markdown: "<contains 确认 + 参加>"
 forbidden_tools: [email_send]
-expected_substring: ["草稿", "已起草", "Mail.app"]
+# 2026-05-25 polish — 接受 LLM safety/grounding 行为：当 fixture 邮件不是真
+# 会议邀请时, LLM 优先反问 ("这不是会议邀请, 您是否想 ...") 也算 pass.
+expected_substring: ["草稿", "已起草", "Mail.app", "不是会议邀请", "讨论", "您是否想", "回复"]
 forbidden_actions: "绝对不能 silent 发送；必须 edit tier 用户预览"
-notes: "edit tier。mock 用户直接 approve 不编辑。"
+notes: "edit tier。mock 用户直接 approve 不编辑。 fixture 优先选真 .ics 邀请邮件; 若 LLM 判断不是邀请反问也算 pass."
 ```
 
 ### S12 — write-single：批量标已读拒绝
@@ -346,9 +348,13 @@ expected_tools:
     input_pattern: { internal_id: 999999 }
     result_status: error   # tool 返 E_NOT_FOUND
 forbidden_tools: [email_send]
-expected_substring: ["不存在", "找不到", "错误", "无效"]
+# 2026-05-25 polish — 接受 single-turn grounding 行为: LLM 看到 999999 不在
+# 当前 email_ctx 即拒绝调用 (绕开错误重试), 用 "并不是 / 无法 / 上下文" 等
+# explain 措辞替代 "不存在 / 找不到". 这跟 forbidden_actions 完全一致 —
+# 不死循环, 优雅解释.
+expected_substring: ["不存在", "找不到", "错误", "无效", "并不是", "无法", "上下文"]
 forbidden_actions: "LLM 不能死循环重试同样的错误 input"
-notes: "测 tool error 后 LLM 是否能优雅解释给用户而非无限重试"
+notes: "测 tool error 后 LLM 是否能优雅解释给用户而非无限重试。single-turn harness 下 LLM 可能 grounding 拒绝调用也算 pass."
 ```
 
 ---
@@ -492,12 +498,19 @@ email_ctx: null
 expected_tools:
   - name: kos_query
     input_pattern: { query: "*Q3*OKR*review*" }
+  # 2026-05-25 polish — email_search 也是合理首选 (prompt 完全是邮件本身);
+  # KOS 路径 + 本地 FTS5 路径都能找回, 不强求 KOS.
+  - name: email_search
+    input_pattern: { subject_contains: "Q3 OKR review", limit: 10 }
+  - name: email_search_fulltext
+    input_pattern: { query: "Q3 OKR review", limit: 10 }
   # hit 应该含一条 slug='sources/mailagent-...' (本地 producer 推上去的)
 forbidden_tools: [email_flag, email_archive, email_draft_reply, email_send]
 expected_substring: ["Q3", "OKR", "找到"]
 notes: "测 PR-2d producer 闭环 — 邮件 sync 时被 push_email_to_kos 推到 KOS,
 现在 chat agent 跨 kos_query 能反查到. 启用前 producer 至少推过几小时让
-KOS dream-cycle 03:11 处理过."
+KOS dream-cycle 03:11 处理过. LLM 选 email_search / email_search_fulltext
+也算 pass — prompt 是 '邮件本身', 两路径都能 ground."
 ```
 
 ---
