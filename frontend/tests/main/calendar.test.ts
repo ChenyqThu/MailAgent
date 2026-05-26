@@ -328,6 +328,20 @@ describe('calendar — runEventCreate', () => {
     const args = mockCallCli.mock.calls[0][0]
     expect(args.filter((a) => a === '--attendee')).toHaveLength(1)
   })
+
+  test('Phase 4·#3 — rrule 拼进 --rrule arg (创建周期事件)', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventCreate({
+      summary: 'Standup',
+      startIso: '2026-05-30T14:00:00Z',
+      endIso: '2026-05-30T15:00:00Z',
+      rrule: 'FREQ=WEEKLY;BYDAY=MO'
+    })
+    const args = mockCallCli.mock.calls[0][0]
+    const i = args.indexOf('--rrule')
+    expect(i).toBeGreaterThan(-1)
+    expect(args[i + 1]).toBe('FREQ=WEEKLY;BYDAY=MO')
+  })
 })
 
 // Phase 2.3 — calendar:eventUpdate
@@ -371,6 +385,24 @@ describe('calendar — runEventUpdate', () => {
     await runEventUpdate({ icalUid: 'uid-x', location: '' })
     expect(mockCallCli).toHaveBeenCalledWith(
       ['calendar', 'update', 'uid-x', '--location', ''],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('Phase 4·#3 — rrule 覆盖拼进 --rrule arg (改整系列)', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({ icalUid: 'uid-x', rrule: 'FREQ=DAILY' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'update', 'uid-x', '--rrule', 'FREQ=DAILY'],
+      { write: true, needsAuth: true, timeoutMs: 120_000 }
+    )
+  })
+
+  test('Phase 4·#3 — rrule="" 显式空串透传 (删除 RRULE 周期变单次)', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({ icalUid: 'uid-x', rrule: '' })
+    expect(mockCallCli).toHaveBeenCalledWith(
+      ['calendar', 'update', 'uid-x', '--rrule', ''],
       { write: true, needsAuth: true, timeoutMs: 120_000 }
     )
   })

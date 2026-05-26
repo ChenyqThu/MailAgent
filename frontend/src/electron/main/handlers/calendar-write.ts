@@ -119,6 +119,8 @@ export interface EventCreateOpts {
   calendarName?: string
   /** 默认 CONFIRMED. */
   status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
+  /** Phase 4·#3 — RFC 5545 RRULE; 留空 = 单次. */
+  rrule?: string
 }
 
 export async function runEventCreate(opts: EventCreateOpts): Promise<unknown> {
@@ -136,6 +138,7 @@ export async function runEventCreate(opts: EventCreateOpts): Promise<unknown> {
   if (opts.description) args.push('--description', opts.description)
   if (opts.calendarName) args.push('--calendar', opts.calendarName)
   if (opts.status) args.push('--status', opts.status)
+  if (opts.rrule) args.push('--rrule', opts.rrule)
   for (const a of opts.attendees || []) {
     if (!a.email) continue
     args.push('--attendee', a.name ? `${a.email},${a.name}` : a.email)
@@ -154,6 +157,8 @@ export interface EventUpdateOpts {
   attendees?: EventAttendeeInput[]
   status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
   calendarName?: string
+  /** Phase 4·#3 — 改整系列 RRULE: 不传=保留; 'FREQ=...' 覆盖; '' 删除. */
+  rrule?: string
   /** 默认 SEQUENCE +1 (RFC 5545 标准). */
   noSequenceBump?: boolean
 }
@@ -167,6 +172,7 @@ export async function runEventUpdate(opts: EventUpdateOpts): Promise<unknown> {
   if (opts.description !== undefined) args.push('--description', opts.description)
   if (opts.status !== undefined) args.push('--status', opts.status)
   if (opts.calendarName) args.push('--calendar', opts.calendarName)
+  if (opts.rrule !== undefined) args.push('--rrule', opts.rrule)
   if (opts.noSequenceBump) args.push('--no-sequence-bump')
   for (const a of opts.attendees || []) {
     if (!a.email) continue

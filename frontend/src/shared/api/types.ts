@@ -608,6 +608,8 @@ export interface EventCreateOpts {
   /** 目标 calendar 名; 留空 = 默认 (Outlook 主日历). */
   calendarName?: string
   status?: EventStatusCode
+  /** Phase 4·#3 — RFC 5545 RRULE (不含 'RRULE:' 前缀); 留空 = 单次事件. */
+  rrule?: string
 }
 
 export interface EventUpdateOpts {
@@ -621,6 +623,8 @@ export interface EventUpdateOpts {
   attendees?: EventAttendeeInput[]
   status?: EventStatusCode
   calendarName?: string
+  /** Phase 4·#3 — 改整系列 RRULE: 不传=保留原值; 'FREQ=...' 覆盖; '' 删除(周期→单次). */
+  rrule?: string
   /** 默认 SEQUENCE +1 (RFC 5545 标准). */
   noSequenceBump?: boolean
 }

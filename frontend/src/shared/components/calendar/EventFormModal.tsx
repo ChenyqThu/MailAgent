@@ -14,7 +14,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { CALENDAR_EVENTS_KEY, useCalendarNames } from './hooks/useCalendarEvents'
+import { CALENDAR_EVENTS_KEY, useCalendarEvent, useCalendarNames } from './hooks/useCalendarEvents'
+import { RRuleEditor } from './RRuleEditor'
+import { buildRRule, parseRRule, defaultRRuleState, type RRuleState } from './lib/rrule'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -87,6 +89,19 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   const [calendarName, setCalendarName] = useState('')
   const { data: calendarNames } = useCalendarNames()
   const calendars = calendarNames ?? []
+  // Phase 4·#3 — 重复规则 (RRuleEditor 受控). edit 时拉 detail 拿 rrule
+  // (occurrence 无 rrule 字段); rruleDirty 防有损解析覆盖原复杂 RRULE.
+  const [rruleState, setRruleState] = useState<RRuleState>(defaultRRuleState())
+  const [rruleDirty, setRruleDirty] = useState(false)
+  const { data: detail } = useCalendarEvent(
+    occurrence
+      ? {
+          icalUid: occurrence.ical_uid,
+          recurrenceId: occurrence.recurrence_id,
+          source: occurrence.source
+        }
+      : null
+  )
   // chip 输入: chips = 已确认 attendees, chipInputValue = 当前输入框中字符
   const [chips, setChips] = useState<EventAttendeeInput[]>([])
   const [chipInputValue, setChipInputValue] = useState('')
@@ -135,16 +150,29 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     setChipInputValue('')
     setErrTitle(false)
     setErrTime(false)
+    // Phase 4·#3 — 重置重复规则 (edit 的真实 rrule 由下方 detail effect 异步预填)
+    setRruleState(defaultRRuleState())
+    setRruleDirty(false)
     // focus 标题 (mockup setTimeout 60 让 transition 先跑)
     const id = window.setTimeout(() => titleRef.current?.focus(), 60)
     return () => window.clearTimeout(id)
   }, [open, occurrence])
+
+  // Phase 4·#3 — detail.rrule 到了预填 RRuleEditor (仅 edit + 未 dirty, 防覆盖
+  // 用户已编辑). 复杂 RRULE parseRRule 回退 freq=NONE, 但 rruleDirty 仍 false →
+  // 提交时不传 rrule → 后端保留原值, 不破坏.
+  useEffect(() => {
+    if (open && occurrence && detail && !rruleDirty) {
+      setRruleState(parseRRule(detail.rrule))
+    }
+  }, [open, occurrence, detail, rruleDirty])
 
   const mut = useMutation({
     mutationFn: async () => {
       const startIso = localToIsoWithOffset(startLocal)
       const endIso = localToIsoWithOffset(endLocal)
       const attendees = chips.length > 0 ? chips : undefined
+      const builtRrule = buildRRule(rruleState)
       if (isEdit && occurrence) {
         const opts: EventUpdateOpts = {
           icalUid: occurrence.ical_uid,
@@ -155,6 +183,9 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           description: description || undefined,
           attendees
         }
+        // Phase 4·#3 — 仅用户动了重复段才传 rrule (改整系列, 含 '' 删除);
+        // 没动则不传 → 后端保留原 RRULE (防 builder 有损解析破坏复杂规则).
+        if (rruleDirty) opts.rrule = builtRrule
         return mailApi.calendar.eventUpdate(opts)
       } else {
         const opts: EventCreateOpts = {
@@ -164,7 +195,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           location: location || undefined,
           description: description || undefined,
           attendees,
-          calendarName: calendarName || undefined
+          calendarName: calendarName || undefined,
+          rrule: builtRrule || undefined
         }
         return mailApi.calendar.eventCreate(opts)
       }
@@ -408,6 +440,16 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
               )}
             </div>
           )}
+
+          {/* Phase 4·#3 — 重复规则 (RRULE builder) */}
+          <RRuleEditor
+            value={rruleState}
+            onChange={(next) => {
+              setRruleState(next)
+              setRruleDirty(true)
+            }}
+            seriesHint={isEdit && !!detail?.rrule}
+          />
 
           {/* 地点 */}
           <div className="ef-field">
