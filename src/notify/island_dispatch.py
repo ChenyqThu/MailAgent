@@ -34,13 +34,23 @@ if TYPE_CHECKING:  # pragma: no cover
 log = logging.getLogger(__name__)
 
 
-# 默认 5 个 intervention options（顺序按 REVIEW-LOG M-11 优先级排）
+# 默认 5 个 intervention options（顺序按 mailagent 当前架构定 — Sprint 16 davmail cutover 后)
+# fork MailAgentSessionView 用 `prefix(3)` 渲染前 3 个 button (mockup §2 Scene 3 简洁风格);
+# 后 2 个 (snooze + open_mail) 保留作 expanded view 显示 / Phase 2 AI 动态 fallback.
+#
+# 顺序说明:
+# 1. open_notion  — Notion 邮件页是当前邮件 SSoT (Sprint 16 davmail cutover 后 Mail.app
+#                   只是 IMAP/SMTP fallback backend, 无邮件数据). 主入口.
+# 2. create_draft — AI 草稿 / 手动起草回复 (Phase 1 ship 现有)
+# 3. mark_done    — Notion 标完成
+# 4. snooze_1h    — 1h 后 re-emit (Phase 4 会升级到智能 snooze)
+# 5. open_mail    — Mail.app deeplink (fallback for power user, 默认 prefix(3) 不渲染)
 DEFAULT_OPTION_IDS = (
-    "create_draft",
-    "open_mail",
     "open_notion",
+    "create_draft",
     "mark_done",
     "snooze_1h",
+    "open_mail",
 )
 
 URGENT_PRIORITY_LABELS = {"🔴 紧急", "🟡 重要"}

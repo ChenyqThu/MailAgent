@@ -130,9 +130,19 @@ class BridgeEnvelope:
         # metadata 双写: 原内部 mail event 名进 metadata.mailagent.eventType
         # （deepcopy 不必要，外层 to_wire_dict 拿到的 metadata 已经是 dict 字面
         # 拷贝、且全部 stringify 在 body 序列化时进行）。
+        # Phase 1·T7 follow-up (button real action wire): 把 envelope_id 作 tool_use_id
+        # 写进 metadata, 让 fork HookSocketServer.makeClientInfo 读 `metadata["tool_use_id"]`
+        # 设 `event.toolUseId` → `pendingPermissions[toolUseId]` lookup key 跟 fork fallback
+        # `"bridge-\(envelope.id.uuidString)"` 一致. fork 端 SwiftUI button click 时通过
+        # `session.hookMetadata["tool_use_id"]` 拿到同样 key, 调
+        # `HookSocketServer.shared.respondToIntervention(toolUseId:, decision:"answer",
+        # updatedInput:["choice": opt.id])` → sendHookResponse 找到 pending socket
+        # → write BridgeResponse JSON 回 plugin → plugin `_extract_choice` 拿 option id
+        # → `island_response.handle_response` 触发对应 action handler (open_mail / mark_done / etc).
         meta_with_event: Dict[str, str] = {
             **{k: str(v) for k, v in self.metadata.items()},
             "mailagent.eventType": self.event_type,
+            "tool_use_id": f"bridge-{self.envelope_id}",
         }
         status: Dict[str, Any] = {"kind": self.status_kind, "detail": self.status_detail}
         body: Dict[str, Any] = {
