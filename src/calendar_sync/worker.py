@@ -85,6 +85,11 @@ class CalendarSyncWorker:
         # (理论上 inline call 不会并发, 但加防 future 调用扩展 / 测试场景).
         # _tick 不用 lock, snapshot pattern 已经保证 tick 内 calendars 一致.
         self._refresh_lock = asyncio.Lock()
+        # F25 — list_calendar_names_for_sync 永久失败时指数退避. failure
+        # 计数 ↑ → skip_until_tick 推后, 避免每 60 ticks 一次刷屏 warning.
+        # 成功后 reset. max 24h (1440 ticks) cap.
+        self._refresh_failure_count = 0
+        self._refresh_skip_until_tick = 0
 
     def stop(self) -> None:
         """通知 worker 优雅停止. 当前 tick 跑完后退出."""
@@ -214,6 +219,7 @@ class CalendarSyncWorker:
         if (
             self.refresh_calendars_every_n_ticks > 0
             and self._tick_count % self.refresh_calendars_every_n_ticks == 0
+            and self._tick_count >= self._refresh_skip_until_tick
         ):
             await self._refresh_calendars()
 
@@ -249,11 +255,28 @@ class CalendarSyncWorker:
                 self.reader.list_calendar_names_for_sync
             )
         except Exception as e:
+            # F25 — 指数退避: 每次失败 skip_until_tick 推后 (2^N * 基础间隔),
+            # max cap 1440 ticks (~24h at 60s poll). 成功一次 reset count.
+            # 防 permanent failure (DavMail 永久挂) 时 60 ticks 一次刷屏.
+            self._refresh_failure_count += 1
+            base = self.refresh_calendars_every_n_ticks or 60
+            backoff_mult = min(2 ** self._refresh_failure_count, 24)  # max 24x
+            self._refresh_skip_until_tick = self._tick_count + base * backoff_mult
             logger.warning(
-                f"[calendar-sync-worker] refresh_calendars list failed: {e} "
+                f"[calendar-sync-worker] refresh_calendars list failed "
+                f"(failure_count={self._refresh_failure_count}, "
+                f"next retry +{base * backoff_mult} ticks): {e} "
                 f"— 保留上次 calendars={self._calendars}"
             )
             return
+        # list 成功 — reset failure count
+        if self._refresh_failure_count > 0:
+            logger.info(
+                f"[calendar-sync-worker] refresh_calendars recovered "
+                f"after {self._refresh_failure_count} failures"
+            )
+            self._refresh_failure_count = 0
+            self._refresh_skip_until_tick = 0
 
         old = set(self._calendars)
         new = set(fresh)

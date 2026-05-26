@@ -78,6 +78,9 @@ export function CalendarLayout(): React.ReactElement {
 
   const setView = useCallback(
     (v: CalendarView): void => {
+      // F26 — 切 view 时 reset active. 月选中事件切到周时 drawer 可能显示
+      // 跨当前窗口外事件 (UX 怪), 切 view 时强制关闭让用户重新选.
+      setActive(null)
       void navigate({ search: { view: v } })
     },
     [navigate]

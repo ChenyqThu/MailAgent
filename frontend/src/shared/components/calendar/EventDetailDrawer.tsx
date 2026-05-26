@@ -78,6 +78,23 @@ function normalizeEmail(s: string | null | undefined): string {
   return (s || '').trim().toLowerCase().replace(/^mailto:/, '')
 }
 
+/** F27 — runtime narrow ``occurrence.source`` (string) → CalendarEventSource.
+ *  DB legacy v14 row 可能含未知 source 值, ``as CalendarEventSource`` 强转
+ *  silent mismatch. 走 helper 白名单校验, 未知值 → undefined + 一次 warn.
+ *  调用方传 undefined 给 CLI 让 ``SOURCES_TRY_ORDER`` 自动 fallback. */
+const _VALID_SOURCES: ReadonlySet<string> = new Set([
+  'caldav',
+  'email_ics',
+  'legacy_calendar_app'
+])
+function narrowSource(s: string | null | undefined): CalendarEventSource | undefined {
+  if (!s) return undefined
+  if (_VALID_SOURCES.has(s)) return s as CalendarEventSource
+  // eslint-disable-next-line no-console
+  console.warn(`[calendar] unknown event source=${JSON.stringify(s)}, falling back`)
+  return undefined
+}
+
 function RespBadge({ status }: { status: string }): React.ReactElement {
   const { t } = useTranslation()
   const RESP_MAP: Record<string, { cls: string; label: string }> = {
@@ -170,7 +187,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     ? {
         icalUid: occurrence.ical_uid,
         recurrenceId: occurrence.recurrence_id,
-        source: occurrence.source as CalendarEventSource
+        source: narrowSource(occurrence.source)
       }
     : null
   const { data: detail, isLoading } = useCalendarEvent(opts)
@@ -201,7 +218,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
         icalUid: occurrence.ical_uid,
         response,
         recurrenceId: occurrence.recurrence_id,
-        source: occurrence.source as CalendarEventSource
+        source: narrowSource(occurrence.source)
       })
     },
     onSuccess: (_d, response) => {
