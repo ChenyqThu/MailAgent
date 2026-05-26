@@ -50,14 +50,14 @@ log = logging.getLogger(__name__)
 
 # Phase 2 alias group: 这些 action id 业务上都是 "标完成 + 移除 Mail.app 旗标 + 不再
 # 提醒" 一类, 调 mailagent notion update-flag --processing-status 已完成. 各自附加
-# log 区分意图 (archive_and_unsubscribe → user 想退订, 业务 follow-up Phase 3 可加
-# unsubscribe URL 抽取; escalate_to_oncall → user 升级了 oncall, 业务 Phase 3 可加
-# PagerDuty / 飞书通知派发).
+# log 区分意图 (archive_only → FYI 已读完不再提醒).
 _MARK_DONE_ALIASES = frozenset({
     "mark_done",                # Phase 1 静态
     "archive_only",             # Phase 2: FYI / 已读完不再提醒
-    "archive_and_unsubscribe",  # Phase 2: newsletter 归档并退订
     "mark_done_no_response",    # Phase 2 发件箱: 已等够久 + 不再追
+    # archive_and_unsubscribe F2 起走独立 _archive_and_unsubscribe 分支 (mailagent
+    # email unsubscribe 解析 List-Unsubscribe header 真退订 + CLI 内部 mark 完成),
+    # 不再是 mark_done alias.
     # convert_to_notion_task F3 起走独立 _convert_to_notion_task 分支 (LLM 决策 + 真建
     # 日程库 task, create-task CLI 内部 mark 邮件完成), 不再是 mark_done alias.
     # escalate_to_oncall 已下线 (2026-05-26, 见 schema.py) — 跟 whitelist 一致移除;
@@ -123,6 +123,9 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
         elif choice == "convert_to_notion_task":
             # F3: LLM 决策 + 代码写日程库 task (create-task CLI 内部已 mark 邮件完成)
             await _convert_to_notion_task(internal_id)
+        elif choice == "archive_and_unsubscribe":
+            # F2: 解析 List-Unsubscribe header 真退订 (unsubscribe CLI 内部 mark 完成)
+            await _archive_and_unsubscribe(internal_id)
         # --- 路径 1: 标完成 (Phase 1 mark_done + Phase 2 alias) ---
         elif choice in _MARK_DONE_ALIASES:
             await _mark_done(internal_id)
@@ -248,6 +251,16 @@ async def _convert_to_notion_task(internal_id: int) -> None:
     )
 
 
+async def _archive_and_unsubscribe(internal_id: int) -> None:
+    # F2: mailagent email unsubscribe — 解析 List-Unsubscribe header 智能退订
+    # (RFC 8058 one-click POST / open URL / open mailto), unsubscribe CLI 内部
+    # 默认 mark 邮件完成. backend 重抽 raw MIME + 可能 httpx POST, timeout 给 30s.
+    await _run(
+        _mailagent_args("email", "unsubscribe", str(internal_id)),
+        timeout=30,
+    )
+
+
 async def _add_to_calendar(internal_id: int) -> None:
     # F5: LLM 抽邮件提到的会议时间 + 建日程库 page (--as-meeting). 复用 create-task
     # CLI 会议模式 (schedule_type=工作·会议 + Time 抽自邮件). meeting_sync 已自动处理
@@ -301,15 +314,13 @@ def _seconds_until_next_monday_9am(*, now: Optional[datetime] = None) -> int:
 
 
 def _log_alias_intent(choice: str, internal_id: int) -> None:
-    """Phase 2 alias 区分意图: 标完成路径共用 _mark_done 但用户的意图不同,
-    log 一行让 ops 后期 grep / 做指标 / 业务迭代时知道哪条 follow-up 真做了."""
-    if choice == "archive_and_unsubscribe":
-        # TODO Phase 3: 抽 unsubscribe URL 自动 open (需先在 LLM context 加邮件正文头扫)
-        log.info(
-            "[island-response] archive_and_unsubscribe internal_id=%d "
-            "(TODO Phase 3: auto-open unsubscribe URL from List-Unsubscribe header)",
-            internal_id,
-        )
+    """Phase 2 mark_done alias 区分意图: 标完成路径共用 _mark_done 但用户的意图不同,
+    log 一行让 ops 后期 grep / 做指标 / 业务迭代时知道哪条 follow-up 真做了.
+
+    当前 mark_done alias (mark_done / archive_only / mark_done_no_response) 都是纯
+    "标完成" 语义, 无额外 follow-up; archive_and_unsubscribe (F2) / convert_to_notion_task
+    (F3) 已升级为独立分支真执行, 不再走这里. 保留 hook 给未来 alias 扩展。"""
+    return
 
 
 async def _run(args, *, timeout: float = 10) -> None:

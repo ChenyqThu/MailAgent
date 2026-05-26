@@ -1509,3 +1509,270 @@ def email_draft(
         )
     else:
         emit(cli, data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# email unsubscribe — RFC 2369 / RFC 8058 一键退订 (灵动岛 archive_and_unsubscribe
+# action handler 调本命令). 智能执行:
+#   - 有 List-Unsubscribe-Post (One-Click) + https URI → httpx POST 自动退订
+#   - 否则 https URI → open 浏览器让用户手动确认
+#   - 否则 mailto URI → open 邮件客户端
+#   - 无 List-Unsubscribe header → method=none (仅 archive, 不报错)
+# raw MIME 经 backend.arm.fetch_email_content_by_id 重抽 (email_body 不存原文).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# scheme 白名单 — 其他 scheme (javascript:/data:/ftp: 等) 一律丢弃 (安全硬约束)
+_UNSUB_ALLOWED_SCHEMES = ("https", "mailto")
+
+
+def _parse_list_unsubscribe(value: str) -> list[str]:
+    """解析 ``List-Unsubscribe`` header → 尖括号 URI 列表 (RFC 2369).
+
+    形如 ``<https://example.com/unsub?token=x>, <mailto:unsub@example.com>``。
+    逗号分隔 + 尖括号包裹; 只保留 scheme 在白名单 (https/mailto) 内的 URI,
+    其他 (http/javascript/data/...) 丢弃 (安全硬约束: 不退化 http, 不开放未知 scheme)。
+    """
+    if not value:
+        return []
+    import re
+
+    out: list[str] = []
+    for m in re.finditer(r"<([^>]+)>", value):
+        uri = m.group(1).strip()
+        if not uri:
+            continue
+        scheme = uri.split(":", 1)[0].lower() if ":" in uri else ""
+        if scheme in _UNSUB_ALLOWED_SCHEMES:
+            out.append(uri)
+    return out
+
+
+def _is_one_click(list_unsubscribe_post: Optional[str]) -> bool:
+    """``List-Unsubscribe-Post`` 值是否声明 RFC 8058 One-Click (大小写不敏感)。"""
+    if not list_unsubscribe_post:
+        return False
+    return "list-unsubscribe=one-click" in list_unsubscribe_post.lower()
+
+
+def _pick_unsubscribe_method(
+    uris: list[str], one_click: bool,
+) -> tuple[str, Optional[str]]:
+    """从 URI 列表 + one-click 标志决策 (method, target_uri)。
+
+    返回 method ∈ {one_click_post, open_url, open_mailto, none}:
+      - one_click_post: one_click=True 且有 https URI → POST 到该 https URI
+      - open_url:       有 https URI (无 one-click) → open 浏览器
+      - open_mailto:    只有 mailto URI → open 邮件客户端
+      - none:           无可用 URI
+    """
+    https_uri = next((u for u in uris if u.lower().startswith("https:")), None)
+    mailto_uri = next((u for u in uris if u.lower().startswith("mailto:")), None)
+    if one_click and https_uri:
+        return "one_click_post", https_uri
+    if https_uri:
+        return "open_url", https_uri
+    if mailto_uri:
+        return "open_mailto", mailto_uri
+    return "none", None
+
+
+def _post_one_click(url: str) -> tuple[Optional[int], Optional[str]]:
+    """RFC 8058 One-Click POST — body=``List-Unsubscribe=One-Click``。
+
+    返回 ``(http_status, error)``: 成功 (2xx) → (status, None); 非 2xx →
+    (status, "..."); 超时 / 网络异常 → (None, "...")。**不抛** —— 退订失败仍可 mark_done。
+    安全: 仅 https (调用方已保证); ``follow_redirects=False`` 防钓鱼跳转。
+    """
+    import httpx
+
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=False) as client:
+            resp = client.post(
+                url,
+                content="List-Unsubscribe=One-Click",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        status = resp.status_code
+        if 200 <= status < 300:
+            return status, None
+        return status, f"unsubscribe endpoint returned HTTP {status}"
+    except Exception as e:  # noqa: BLE001 — 超时 / 连接错 / 协议错都降级
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _run_open(target: str) -> bool:
+    """macOS ``open <target>`` 拉起浏览器 / 邮件客户端。失败仅返回 False, 不抛。"""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["open", target],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _mark_done_via_outbox(cli: "CliContext", internal_id: int) -> bool:
+    """复用 email flag 路径标完成 (写 SQLite + outbox notion 'Processing Status=已完成')。
+
+    跟 ``email flag --processing-status 已完成`` 同口径 (Sprint 15 SSoT inversion)。
+    metadata 不存在 → 返回 False (调用方已先校验存在, 这里防御)。
+    """
+    from src.sync.outbox import OutboxRepository
+
+    repo = cli.email_repo
+    meta = repo.get_metadata(internal_id)
+    if meta is None:
+        return False
+
+    sync_store = cli.sync_store  # 保证 v10 schema
+    sync_store.update_local_flags(
+        internal_id,
+        bool(meta.is_read),
+        bool(meta.is_flagged),
+        processing_status="已完成",
+    )
+    outbox_repo = OutboxRepository(cli.cli_config.sync_store_db_path)
+    outbox_repo.enqueue(
+        internal_id=internal_id,
+        op_type="flag_sync",
+        target="notion",
+        payload={"processing_status": "已完成"},
+        source="cli",
+    )
+    return True
+
+
+@app.command("unsubscribe")
+def email_unsubscribe(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="邮件 internal_id"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="只解析 + 打 plan (method/url), 不 POST 不 open 不 mark_done",
+    ),
+    no_mark_done: bool = typer.Option(
+        False, "--no-mark-done",
+        help="退订后不标记邮件完成 (默认退订 + mark_done)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """归档并退订 — 解析 List-Unsubscribe header 智能执行 (RFC 2369 / RFC 8058).
+
+    流程: internal_id → SQLite 查 mailbox → backend 重抽 raw MIME →
+    解析 ``List-Unsubscribe`` (+ ``List-Unsubscribe-Post``) →
+    智能执行:
+      - One-Click POST (有 https URI + List-Unsubscribe-Post=One-Click) → httpx POST
+      - open URL (有 https URI) → 浏览器手动确认
+      - open mailto (只有 mailto URI) → 邮件客户端
+      - none (无 List-Unsubscribe) → 仅归档不报错
+    默认退订后标记邮件完成 (--no-mark-done 跳过)。
+
+    灵动岛 (ping-island) ``archive_and_unsubscribe`` action handler 调本命令。
+
+    安全: POST 仅 https + ``follow_redirects=False``; URI scheme 白名单 https/mailto;
+    POST 失败 (超时 / 非 2xx / 异常) 不崩, data.error 标降级提示, 仍可 mark_done。
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    # 1. metadata → mailbox (raw MIME 重抽需要 mailbox 定位)
+    meta = cli.email_repo.get_metadata(internal_id)
+    if meta is None:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email metadata not found for internal_id={internal_id}",
+        ))
+    mailbox = meta.mailbox or "收件箱"
+
+    # 2. backend 重抽 raw MIME (email_body 表只存 sha256, 不存原文)
+    try:
+        full = cli.backend.arm.fetch_email_content_by_id(internal_id, mailbox)
+    except Exception as e:  # noqa: BLE001
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Backend fetch failed for internal_id={internal_id}: {e}",
+            hint="Mail.app / davmail 不可达 / mailbox 不存在 / FDA 权限缺",
+        ))
+    source = (full or {}).get("source", "") or ""
+    if not source:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"No MIME source returned for internal_id={internal_id}",
+            hint="邮件可能已删除 / backend 不可达",
+        ))
+
+    # 3. 解析 List-Unsubscribe (+ List-Unsubscribe-Post) header
+    import email as _email
+    from email import policy as _policy
+
+    msg = _email.message_from_string(source, policy=_policy.default)
+    list_unsub = msg.get("List-Unsubscribe", "") or ""
+    list_unsub_post = msg.get("List-Unsubscribe-Post", "") or ""
+    uris = _parse_list_unsubscribe(list_unsub)
+    one_click = _is_one_click(list_unsub_post)
+    method, target_uri = _pick_unsubscribe_method(uris, one_click)
+
+    # 4. dry-run: 只打 plan, 不执行
+    if dry_run:
+        plan = {
+            "internal_id": internal_id,
+            "method": method,
+            "unsubscribe_url": target_uri,
+            "marked_done": False,
+            "dry_run": True,
+        }
+        if cli.output.lower() == "text":
+            print("=== email unsubscribe plan (dry-run) ===")
+            for key, value in plan.items():
+                print(f"{key:18} {value}")
+        else:
+            emit(cli, plan)
+        return
+
+    # 5. 写命令 auth (退订 + mark_done 都是写操作)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    # 6. 执行退订
+    http_status: Optional[int] = None
+    error: Optional[str] = None
+    if method == "one_click_post":
+        http_status, error = _post_one_click(target_uri)  # type: ignore[arg-type]
+    elif method in ("open_url", "open_mailto"):
+        if not _run_open(target_uri):  # type: ignore[arg-type]
+            error = "open command failed"
+    # method == "none": 仅归档, 无退订动作
+
+    # 7. mark_done (默认; --no-mark-done 跳过). 退订失败仍 mark_done (用户意图是归档).
+    marked_done = False
+    if not no_mark_done:
+        marked_done = _mark_done_via_outbox(cli, internal_id)
+
+    data = {
+        "internal_id": internal_id,
+        "method": method,
+        "unsubscribe_url": target_uri,
+        "http_status": http_status,
+        "marked_done": marked_done,
+        "dry_run": False,
+    }
+    if error:
+        # 降级提示: 自动退订失败时引导用户手动操作
+        data["error"] = error
+        if target_uri and target_uri.lower().startswith("https:"):
+            data["fallback_hint"] = f"自动退订失败, 可手动打开: {target_uri}"
+
+    if cli.output.lower() == "text":
+        print(
+            f"unsubscribe method={method} url={target_uri or '-'} "
+            f"http_status={http_status} marked_done={marked_done}"
+        )
+        if error:
+            print(f"  error: {error}")
+    else:
+        emit(cli, data)

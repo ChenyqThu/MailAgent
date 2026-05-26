@@ -190,7 +190,6 @@ def test_snooze_1h_enqueues_island_snooze(patch_snooze, patch_run):
 
 @pytest.mark.parametrize("choice", [
     "archive_only",
-    "archive_and_unsubscribe",
     "mark_done_no_response",
 ])
 def test_mark_done_alias_invokes_update_flag(choice, patch_run):
@@ -203,13 +202,28 @@ def test_mark_done_alias_invokes_update_flag(choice, patch_run):
     assert args[5] == "已完成"
 
 
-def test_archive_and_unsubscribe_logs_todo(patch_run, caplog):
-    with caplog.at_level(logging.INFO, logger="src.notify.island_response"):
-        asyncio.run(island_response.handle_response(
-            _resp("archive_and_unsubscribe"), _meta(123),
-        ))
-    msgs = [r.message for r in caplog.records]
-    assert any("archive_and_unsubscribe" in m and "TODO" in m for m in msgs)
+def test_archive_and_unsubscribe_invokes_unsubscribe_cli(patch_run):
+    """F2: archive_and_unsubscribe 走独立分支调 mailagent email unsubscribe CLI
+    (不再是 mark_done alias — CLI 内部解析 List-Unsubscribe header 真退订 + mark 完成)."""
+    asyncio.run(island_response.handle_response(
+        _resp("archive_and_unsubscribe"), _meta(123),
+    ))
+    assert len(patch_run) == 1
+    args = patch_run[0]["args"]
+    # 无 api-key 时 ["mailagent", "email", "unsubscribe", "123"]
+    assert args == ["mailagent", "email", "unsubscribe", "123"]
+
+
+def test_archive_and_unsubscribe_api_key_leading(patch_run, monkeypatch):
+    """unsubscribe 也走 _mailagent_args → --api-key 前置 subcommand."""
+    monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "k_unsub")
+    asyncio.run(island_response.handle_response(
+        _resp("archive_and_unsubscribe"), _meta(123),
+    ))
+    args = patch_run[0]["args"]
+    assert args == [
+        "mailagent", "--api-key", "k_unsub", "email", "unsubscribe", "123",
+    ]
 
 
 def test_escalate_to_oncall_now_whitelist_miss(patch_run, caplog):
