@@ -43,6 +43,8 @@ _WIRE_EVENT_MAP: Dict[str, str] = {
     "MailCompleted": "Notification",       # status.kind=completed 触发 dock icon 清理
     "SyncFailed": "Notification",
     "DeadLetterAccum": "Notification",
+    "DailyDigest": "Notification",         # Phase 3 每日巡检; status.kind + intervention 走 fork 通知 phase
+
     "AIDraftStart": "Notification",
     "AIDraftStream": "Notification",
     "AIDraftReady": "Notification",        # status.kind=completed

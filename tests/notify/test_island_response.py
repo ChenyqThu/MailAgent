@@ -349,6 +349,106 @@ def test_answer_as_str_is_accepted(patch_run):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 3 DailyDigest bulk handler (_parse_digest_ids + _run_bulk)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _digest_meta(choice: str, ids_csv: str) -> Dict[str, str]:
+    """digest envelope metadata: 无 mailagent.internalId, ids 走 digestBulk 命名空间。"""
+    return {
+        "mailagent.scenario": "DailyDigest",
+        "mailagent.digestDate": "20260526",
+        f"mailagent.digestBulk.{choice}.ids": ids_csv,
+    }
+
+
+def test_parse_digest_ids_basic():
+    meta = _digest_meta("bulk_mark_read", "101,102,103")
+    assert island_response._parse_digest_ids(meta, "bulk_mark_read") == [101, 102, 103]
+
+
+def test_parse_digest_ids_skips_invalid_and_dedups():
+    meta = _digest_meta("bulk_mark_read", "101, foo, 102, 101, , 103")
+    assert island_response._parse_digest_ids(meta, "bulk_mark_read") == [101, 102, 103]
+
+
+def test_parse_digest_ids_missing_key_empty():
+    assert island_response._parse_digest_ids({}, "bulk_mark_read") == []
+
+
+def test_parse_digest_ids_caps_at_30():
+    ids = ",".join(str(i) for i in range(1, 50))  # 49
+    meta = _digest_meta("bulk_archive_newsletter", ids)
+    out = island_response._parse_digest_ids(meta, "bulk_archive_newsletter")
+    assert len(out) == 30
+    assert out == list(range(1, 31))
+
+
+def test_bulk_mark_read_loops_update_flag_is_read(patch_run):
+    """bulk_mark_read → 每封 notion update-flag --is-read true (循环单封 CLI)。"""
+    meta = _digest_meta("bulk_mark_read", "10,11,12")
+    asyncio.run(island_response.handle_response(_resp("bulk_mark_read"), meta))
+    assert len(patch_run) == 3
+    for i, iid in enumerate(["10", "11", "12"]):
+        args = patch_run[i]["args"]
+        assert args == ["mailagent", "notion", "update-flag", iid, "--is-read", "true"]
+
+
+@pytest.mark.parametrize("choice", ["bulk_archive_newsletter", "bulk_mark_done"])
+def test_bulk_mark_done_aliases_loop_update_flag_completed(choice, patch_run):
+    """bulk_archive_newsletter / bulk_mark_done → 每封 update-flag --processing-status 已完成。"""
+    meta = _digest_meta(choice, "20,21")
+    asyncio.run(island_response.handle_response(_resp(choice), meta))
+    assert len(patch_run) == 2
+    for i, iid in enumerate(["20", "21"]):
+        args = patch_run[i]["args"]
+        assert args == [
+            "mailagent", "notion", "update-flag", iid, "--processing-status", "已完成",
+        ]
+
+
+def test_bulk_api_key_leading(patch_run, monkeypatch):
+    """bulk 也走 _mailagent_args → --api-key 前置 subcommand。"""
+    monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "k_bulk")
+    meta = _digest_meta("bulk_mark_read", "5")
+    asyncio.run(island_response.handle_response(_resp("bulk_mark_read"), meta))
+    assert patch_run[0]["args"] == [
+        "mailagent", "--api-key", "k_bulk", "notion", "update-flag", "5",
+        "--is-read", "true",
+    ]
+
+
+def test_bulk_empty_ids_is_noop(patch_run):
+    """空 ids → 不调任何 subprocess。"""
+    meta = _digest_meta("bulk_mark_read", "")
+    asyncio.run(island_response.handle_response(_resp("bulk_mark_read"), meta))
+    assert patch_run == []
+
+
+def test_bulk_does_not_require_internal_id(patch_run):
+    """digest envelope 无 mailagent.internalId 也能跑 (bulk 分支在 internalId gate 之前)。"""
+    meta = _digest_meta("bulk_mark_read", "9")
+    assert "mailagent.internalId" not in meta
+    asyncio.run(island_response.handle_response(_resp("bulk_mark_read"), meta))
+    assert len(patch_run) == 1
+
+
+def test_bulk_invalid_ids_skipped_others_run(patch_run):
+    """非法 id 跳过, 合法 id 仍各跑一次 CLI。"""
+    meta = _digest_meta("bulk_mark_read", "30, bad, 31")
+    asyncio.run(island_response.handle_response(_resp("bulk_mark_read"), meta))
+    assert len(patch_run) == 2
+    assert patch_run[0]["args"][3] == "30"
+    assert patch_run[1]["args"][3] == "31"
+
+
+def test_run_bulk_rejects_non_bulk_choice(patch_run):
+    """_run_bulk 二次校验: 非 bulk choice 直接 return 不跑。"""
+    asyncio.run(island_response._run_bulk("mark_done", [1, 2, 3]))
+    assert patch_run == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # _seconds_until_next_monday_9am 单元
 # ─────────────────────────────────────────────────────────────────────────────
 

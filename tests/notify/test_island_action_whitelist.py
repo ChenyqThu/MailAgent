@@ -13,10 +13,13 @@ from src.llm_agent.schema import (
     RECOMMENDED_ACTION_ID_INBOX,
     RECOMMENDED_ACTION_ID_SENT,
 )
+from src.llm_agent.digest_summarizer import BULK_ACTION_IDS as _SUMMARIZER_BULK
 from src.notify.island_action_whitelist import (
+    BULK_ACTION_IDS,
     KNOWN_ACTION_IDS,
     RECOMMENDED_ACTION_IDS,
     STATIC_FALLBACK_ACTION_IDS,
+    is_bulk_action_id,
     is_known_action_id,
     is_recommended_action_id,
 )
@@ -38,18 +41,53 @@ def test_recommended_action_ids_matches_schema_enum():
 
 
 def test_known_action_ids_is_union():
-    """整体 handler 端可识别 id = static 5 ∪ recommended 10 = 15.
-    (escalate_to_oncall + ack_in_pagerduty 2026-05-26 下线后 recommended 12→10)."""
+    """整体 handler 端可识别 id = static 5 ∪ recommended 10 ∪ bulk 3 = 18.
+    (escalate_to_oncall + ack_in_pagerduty 2026-05-26 下线后 recommended 12→10;
+    Phase 3 DailyDigest 加 3 bulk)."""
     assert KNOWN_ACTION_IDS == (
-        STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS
+        STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS
     )
-    assert len(KNOWN_ACTION_IDS) == 15
+    assert len(KNOWN_ACTION_IDS) == 18
 
 
 def test_static_and_recommended_are_disjoint():
     """静态 5 跟 LLM dynamic recommended 不重叠 (test_recommended_action_disjoint_from_static_5
     在 schema 层断言过 enum 不冲突; whitelist 也保证)."""
     assert STATIC_FALLBACK_ACTION_IDS.isdisjoint(RECOMMENDED_ACTION_IDS)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3 DailyDigest bulk action ids
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_bulk_action_ids_single_source_from_summarizer():
+    """BULK_ACTION_IDS 单一来源 = digest_summarizer.BULK_ACTION_IDS (防两份定义漂移)."""
+    assert BULK_ACTION_IDS == frozenset(_SUMMARIZER_BULK)
+    assert BULK_ACTION_IDS == frozenset({
+        "bulk_archive_newsletter", "bulk_mark_done", "bulk_mark_read",
+    })
+
+
+def test_bulk_disjoint_from_static_and_recommended():
+    """bulk 跟静态 5 + recommended 不重叠 (各 tier 独立 dispatch 分支)."""
+    assert BULK_ACTION_IDS.isdisjoint(STATIC_FALLBACK_ACTION_IDS)
+    assert BULK_ACTION_IDS.isdisjoint(RECOMMENDED_ACTION_IDS)
+
+
+def test_is_bulk_action_id():
+    assert is_bulk_action_id("bulk_mark_read") is True
+    assert is_bulk_action_id("bulk_archive_newsletter") is True
+    # 非 bulk
+    assert is_bulk_action_id("mark_done") is False
+    assert is_bulk_action_id("") is False
+    assert is_bulk_action_id(None) is False  # type: ignore[arg-type]
+
+
+def test_bulk_ids_are_known():
+    """bulk id 也在 KNOWN (handle_response 入口 whitelist 放行)."""
+    for bid in BULK_ACTION_IDS:
+        assert is_known_action_id(bid) is True
 
 
 def test_is_known_action_id_static():

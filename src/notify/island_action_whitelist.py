@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Final, FrozenSet
 
+from src.llm_agent.digest_summarizer import BULK_ACTION_IDS as _DIGEST_BULK_ACTION_IDS
 from src.llm_agent.schema import (
     RECOMMENDED_ACTION_ID_INBOX,
     RECOMMENDED_ACTION_ID_SENT,
@@ -43,16 +44,27 @@ RECOMMENDED_ACTION_IDS: Final[FrozenSet[str]] = frozenset({
 })
 
 
-# 整体 handler 端可识别 id (17 = 5 static + 12 recommended). dispatch filter +
+# Phase 3 DailyDigest bulk action ids (3). 单一来源 = digest_summarizer.BULK_ACTION_IDS
+# (LLM schema enum 同源)，frozenset 化避免两份定义漂移。新增 bulk id 只改
+# digest_summarizer.BULK_ACTION_IDS，这里 + schema enum 自动跟随。
+BULK_ACTION_IDS: Final[FrozenSet[str]] = frozenset(_DIGEST_BULK_ACTION_IDS)
+
+
+# 整体 handler 端可识别 id (20 = 5 static + 12 recommended + 3 bulk). dispatch filter +
 # response handler 都按这个 set 做 defense-in-depth.
 KNOWN_ACTION_IDS: Final[FrozenSet[str]] = (
-    STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS
+    STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS
 )
 
 
 def is_known_action_id(action_id: str) -> bool:
-    """True if ``action_id`` is in any handler tier (static fallback or dynamic)."""
+    """True if ``action_id`` is in any handler tier (static fallback / dynamic / bulk)."""
     return isinstance(action_id, str) and action_id in KNOWN_ACTION_IDS
+
+
+def is_bulk_action_id(action_id: str) -> bool:
+    """True if ``action_id`` is a DailyDigest bulk action (Phase 3)."""
+    return isinstance(action_id, str) and action_id in BULK_ACTION_IDS
 
 
 def is_recommended_action_id(action_id: str) -> bool:

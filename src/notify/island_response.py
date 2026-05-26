@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from src.notify import island_snooze
-from src.notify.island_action_whitelist import is_known_action_id
+from src.notify.island_action_whitelist import is_bulk_action_id, is_known_action_id
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +92,18 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
 
     if not is_known_action_id(choice):
         log.warning("[island-response] unknown choice (whitelist miss): %s", choice)
+        return
+
+    # --- Phase 3 DailyDigest bulk action (无单一 internalId, 走 metadata ids list) ---
+    # 必须在下方 internalId gate 之前处理: digest envelope 没有 mailagent.internalId,
+    # 否则会被 gate 当作 invalid 提前 return。
+    if is_bulk_action_id(choice):
+        ids = _parse_digest_ids(envelope_meta, choice)
+        log.info("[island-response] bulk choice=%s ids=%d", choice, len(ids))
+        try:
+            await _run_bulk(choice, ids)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[island-response] bulk dispatch failed for %s: %s", choice, e)
         return
 
     internal_id_str = envelope_meta.get("mailagent.internalId", "")
@@ -268,6 +280,81 @@ async def _add_to_calendar(internal_id: int) -> None:
     await _run(
         _mailagent_args("notion", "create-task", str(internal_id), "--as-meeting"),
         timeout=90,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3 DailyDigest bulk handler — 循环单封 CLI (plan §3 decision 2c)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 单次 click 最多批量处理的封数 (与 dispatch 端 / config max_bulk_ids 同口径; 这里做
+# 兜底硬 cap 防 metadata 被篡改塞超大列表)。
+_BULK_IDS_CAP = 30
+
+
+def _parse_digest_ids(meta: Dict[str, str], choice: str) -> list:
+    """读 ``meta["mailagent.digestBulk.<choice>.ids"]`` 逗号分隔 → ``[int, ...]``.
+
+    非法 token 跳过; 去重保序; cap ``_BULK_IDS_CAP``。
+    """
+    raw = meta.get(f"mailagent.digestBulk.{choice}.ids", "") or ""
+    out: list = []
+    seen: set = set()
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            iid = int(tok)
+        except (TypeError, ValueError):
+            continue
+        if iid in seen:
+            continue
+        seen.add(iid)
+        out.append(iid)
+        if len(out) >= _BULK_IDS_CAP:
+            break
+    return out
+
+
+async def _run_bulk(choice: str, ids: list) -> None:
+    """循环单封 CLI 执行 bulk action (串行 + 每封独立 try, 一封失败不阻断后续).
+
+    - ``bulk_archive_newsletter`` / ``bulk_mark_done`` →
+      ``notion update-flag <id> --processing-status 已完成``
+    - ``bulk_mark_read`` → ``notion update-flag <id> --is-read true``
+
+    plan §3 decision 2c: 复用现有单封 ``update-flag`` (零新写路径 / 零新鉴权面 /
+    与 Notion 反向同步行为一致)。前置 ``is_bulk_action_id`` 二次校验。
+    """
+    if not is_bulk_action_id(choice):
+        log.warning("[island-response] _run_bulk got non-bulk choice: %s", choice)
+        return
+    if not ids:
+        log.info("[island-response] bulk %s: empty ids, nothing to do", choice)
+        return
+
+    if choice == "bulk_mark_read":
+        extra = ["--is-read", "true"]
+    else:
+        # bulk_archive_newsletter / bulk_mark_done → 标完成
+        extra = ["--processing-status", "已完成"]
+
+    ok = 0
+    failed = 0
+    for iid in ids:
+        try:
+            await _run(
+                _mailagent_args("notion", "update-flag", str(iid), *extra),
+                timeout=30,
+            )
+            ok += 1
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            log.warning("[island-response] bulk %s id=%s failed: %s", choice, iid, e)
+    log.info(
+        "[island-response] bulk %s done: %d/%d dispatched (failed=%d)",
+        choice, ok, len(ids), failed,
     )
 
 

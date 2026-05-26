@@ -469,6 +469,7 @@ class EmailNotionSyncApp:
             # 启动 ping-island 重连 / snooze 后台任务（开启时才跑）
             island_reconnect_task = None
             island_snooze_task = None
+            daily_digest_task = None
             if self.island_enabled:
                 from src.notify import island_reconnect, island_snooze
                 island_reconnect_task = asyncio.create_task(
@@ -477,6 +478,21 @@ class EmailNotionSyncApp:
                 island_snooze_task = asyncio.create_task(
                     island_snooze.tick_loop(shutdown_event=self._shutdown_event)
                 )
+                # Phase 3 DailyDigest 每日巡检（island 开 + digest 开 才跑）
+                if config.mailagent_daily_digest_enabled:
+                    from src.notify import daily_digest
+                    daily_digest_task = asyncio.create_task(
+                        daily_digest.tick_loop(
+                            sync_store=self.watcher.sync_store,
+                            run_once=self._run_daily_digest_once,
+                            shutdown_event=self._shutdown_event,
+                        )
+                    )
+                    logger.info(
+                        f"[daily-digest] enabled "
+                        f"(hours={config.mailagent_daily_digest_hours} "
+                        f"window={config.mailagent_daily_digest_window_hours}h)"
+                    )
 
             # 等待关闭信号
             await self._shutdown_event.wait()
@@ -510,6 +526,8 @@ class EmailNotionSyncApp:
                 tasks.append(island_reconnect_task)
             if island_snooze_task:
                 tasks.append(island_snooze_task)
+            if daily_digest_task:
+                tasks.append(daily_digest_task)
             if fanout_task:
                 tasks.append(fanout_task)
             if davmail_watchdog_task:
@@ -635,6 +653,23 @@ class EmailNotionSyncApp:
         from src.calendar_notion.expansion import reconstruct_invite_from_series_row
 
         return reconstruct_invite_from_series_row(row)
+
+    async def _run_daily_digest_once(self, slot: str):
+        """Phase 3 DailyDigest 单次巡检（tick_loop 命中 fire window 时调）.
+
+        注入 repo / sync_store / config cap → daily_digest.run_digest_once 编排
+        取数 + LLM summary + dispatch。
+        """
+        from src.notify import daily_digest
+
+        return await daily_digest.run_digest_once(
+            sync_store=self.watcher.sync_store,
+            repo=self.watcher.email_repo,
+            slot=slot,
+            max_emails=config.mailagent_daily_digest_max_emails,
+            window_hours=config.mailagent_daily_digest_window_hours,
+            max_bulk_ids=config.mailagent_daily_digest_max_bulk_ids,
+        )
 
     async def _alert_check_loop(self):
         """告警检查循环：定期检测异常并发送告警"""

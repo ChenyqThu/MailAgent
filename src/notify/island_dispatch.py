@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 
@@ -348,6 +349,105 @@ def dispatch_sync_failed(
         expects_response=False,
     )
     _fire(env, internal_id=internal_id)
+
+
+@dataclass
+class DigestBulkAction:
+    """Phase 3 DailyDigest 的一个 bulk action: id + 文案 + 代码确定性给的 internal_ids.
+
+    与 ``digest_summarizer.DigestBulkAction`` (仅 id/title/detail) 区别: 这里多带
+    ``internal_ids`` (LLM 只挑 id + 写文案; ids 来自 ``digest_query`` 代码候选)。
+    """
+
+    id: str
+    title: str
+    detail: str = ""
+    internal_ids: List[int] = field(default_factory=list)
+
+
+# title 里的"数量"数字 (如"归档5封newsletter"的 5)。dispatch 端强制 = len(ids)。
+_TITLE_COUNT_RE = re.compile(r"\d+")
+
+
+def _enforce_title_count(title: str, count: int) -> str:
+    """把 title 里第一个数字替换成真实 ``count`` (防 LLM 写错数量误导用户)。
+
+    risk 表第 1 条: id 列表由代码控制, 真实归档数 = len(ids); title 仅展示文案。
+    title 没有数字 → 原样返回 (没有数量需要校准)。
+    """
+    if not title or count < 0:
+        return title or ""
+    return _TITLE_COUNT_RE.sub(str(count), title, count=1)
+
+
+def dispatch_daily_digest(
+    *,
+    digest_date: str,
+    headline: str,
+    summary_md: str,
+    unread: int,
+    urgent: int,
+    confirmed_actions: List[DigestBulkAction],
+    max_bulk_ids: int = 30,
+) -> None:
+    """每日巡检 → emit ``DailyDigest`` (≤ 3 bulk action option).
+
+    决策点 6: session_key 按天 (``mailagent:daily_digest:YYYYMMDD``), 18:00 覆盖 9:00
+    同一卡片。decision 2(b): bulk action 的 internal_id 列表走 metadata 命名空间
+    ``mailagent.digestBulk.<id>.ids`` (option struct 无 payload 字段, 只能 metadata 携带)。
+    risk 表第 1 条: title 里数字强制 = len(internal_ids) 防 LLM 写错数量。
+    """
+    if not _state.enabled:
+        return
+
+    options: List[InterventionOption] = []
+    meta: Dict[str, str] = {
+        **_state.extra_metadata,
+        "mailagent.lang": island_i18n.resolve_lang(),
+        "mailagent.theme": _state.theme,
+        "mailagent.accent": _state.accent,
+        "mailagent.scenario": "DailyDigest",
+        "mailagent.mascot": "default",
+        "mailagent.digestDate": digest_date,
+        "mailagent.digestHeadline": headline,
+        "mailagent.aiSummary": summary_md,
+        "mailagent.digestUnread": str(unread),
+        "mailagent.digestUrgent": str(urgent),
+        # fork makeClientInfo brand 推导 — 见 _base_metadata 同段注释
+        "client_kind": "mailagent",
+        "client_name": "MailAgent",
+        "client_origin": "plugin",
+        "client_originator": "MailAgent",
+        "thread_source": "mailagent-hooks",
+    }
+    for a in confirmed_actions:
+        ids = [int(i) for i in (a.internal_ids or [])][:max_bulk_ids]
+        # risk 1: title 数字强制 = 真实 ids 数
+        title = _enforce_title_count(a.title, len(ids))
+        options.append(
+            InterventionOption(id=a.id, title=title, detail=a.detail or None)
+        )
+        meta[f"mailagent.digestBulk.{a.id}.ids"] = ",".join(str(i) for i in ids)
+
+    intervention: Optional[Intervention] = None
+    if options:
+        intervention = Intervention(
+            title=island_i18n.t("mail.digest.title"),
+            message=summary_md,
+            options=options,
+        )
+
+    env = BridgeEnvelope(
+        event_type="DailyDigest",
+        session_key=f"mailagent:daily_digest:{digest_date}",
+        title=island_i18n.t("mail.digest.title"),
+        preview=_one_line(headline),
+        status_kind="waitingForInput" if options else "notification",
+        metadata=meta,
+        intervention=intervention,
+        expects_response=bool(options),
+    )
+    _fire(env, internal_id=None)
 
 
 def dispatch_dead_letter_accum(*, count: int, threshold: int = 0) -> None:
