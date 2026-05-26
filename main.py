@@ -4,9 +4,16 @@ import signal
 import sys
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
 from loguru import logger
 from src.config import config
 from src.utils.logger import setup_logger
+
+# dogfood 2026-05-26: island_response 等 handler 直接 os.environ.get
+# (MAILAGENT_FRONTEND_DEEPLINK_ENABLED / MAILAGENT_CLI_API_KEY), 但 .env 仅经 pydantic
+# env_file 填 Settings 字段、不注入 os.environ。显式 load_dotenv 让这些 env-only 变量在
+# handler 及其拉起的子进程里可达 (override=False 不覆盖 shell 已 export 的实值)。
+load_dotenv()
 
 # 设置日志
 setup_logger(config.log_level, config.log_file)
