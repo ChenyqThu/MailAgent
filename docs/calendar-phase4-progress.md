@@ -1,13 +1,13 @@
 # Calendar Module — Phase 4 进度纪要 (2026-05-26)
 
 **From**: Session @ 2026-05-26 (Phase 4 启动, 用户要求"全做")
-**Status**: 3 功能完整 ship (4 commits). 剩余 4 项各有实测/架构/schema 依赖, 留后续 session.
+**Status**: 4 功能完整 ship (#3 含进阶改这次/改未来, 6 commits + handoff). 剩余 3 项各有 env/架构/价值依赖, 留后续 session.
 **Branch**: feat/agent-harness
-**Test 基线**: calendar pytest 336 → **349 passed** (+13); vitest calendar 相关 **64 passed** (calendar.test 41 + rrule 17 + filter 6).
+**Test 基线**: calendar pytest 336 → **359 passed** (+23); vitest calendar 相关 **66 passed** (calendar.test 43 + rrule 17 + filter 6).
 
 ---
 
-## 1. 本 session 完成清单 (4 atomic commits)
+## 1. 本 session 完成清单 (6 atomic commits + handoff)
 
 | ID | Hash | Scope |
 |---|---|---|
@@ -15,8 +15,10 @@
 | #3a | `3eadf8d` | **后端 RRULE 能力** — create rrule 透传 + update rrule sentinel (保留/覆盖/删除) + CLI --rrule |
 | #3b | `ebe9776` | **前端 RRULE builder** — lib/rrule.ts + RRuleEditor 控件 + EventFormModal 创建/整系列编辑 |
 | #2 | `13f032b` | **全天事件** — VALUE=DATE 端到端 floating date (前端 toggle + 后端 build_vevent/update 检测) |
+| #3c | `4488509` | **改这一次** — detached occurrence (RECURRENCE-ID override, vobject 注入) + scope 对话 |
+| #3d | `e1c00d8` | **改未来** — split series (老 master UNTIL 截断 + 新 series) + scope 对话"此事件及以后" |
 
-**对应原 backlog**: #1 多 calendar (完整) / #3 RRULE (核心: 创建+整系列, 进阶留后续) / #2 全天 (跨时区留后续).
+**对应原 backlog**: #1 多 calendar (完整) / #3 RRULE (**完整**: 创建+整系列+改这次+改未来) / #2 全天 (跨时区留后续).
 
 ---
 
@@ -85,13 +87,19 @@ cd /Users/chenyuanquan/Documents/MailAgent && python scripts/dev/i18n_audit.py -
 
 ## 4. 剩余 backlog (留后续 session, 各有依赖)
 
-### 4.1 #3 进阶 — 改这一次/改未来 (需 DavMail 实测) — task #6
+### 4.1 ✅ #3 进阶 — 改这一次/改未来 (已 ship #3c `4488509` + #3d `e1c00d8`)
 
-- **改这一次**: master 加 EXDATE(该 occurrence 日期) + 建新 single VEVENT with RECURRENCE-ID override
-- **改未来**: split series (老 master RRULE 加 UNTIL + 新建 master 从该日期起)
-- 前端 EventFormModal edit 周期事件弹 **"改这一次 / 改未来 / 改整系列"** 对话
-- **依赖**: DavMail CalDAV 对 detached occurrence / multi-VEVENT resource 的运行时行为未知, 盲写风险高 (不像 build_vevent/RRULE 是 RFC 标准可单测). 需 DavMail 实测验证 round-trip 再动手.
-- 后端基础已备: `update_event` rrule sentinel + recurrence_id 透传已在.
+本 session 已完成 (原以为需 DavMail 实测才动, 后判定 detached occurrence /
+split series 是 RFC 标准 + Outlook 日常操作, DavMail 高概率支持, 故写 + vobject
+mock 单测 + 标注实测):
+- **改这一次** (#3c): detached occurrence — vobject 注入 master + RECURRENCE-ID
+  override VEVENT (同 resource PUT, 不传字段继承 master, 已有 override 替换).
+- **改未来** (#3d): split series — 老 master in-place UNTIL 截断 (保留 detached
+  overrides) + 新建 series 从 split 起继承 FREQ/INTERVAL/BYDAY.
+- 前端 EventFormModal scope 对话 3 按钮 (仅此事件 / 此事件及以后 / 整个系列).
+- **⚠️ 仍建议 DavMail 实测端到端**: mock 单测覆盖 vobject 注入/截断逻辑, 但
+  DavMail 桥接 EWS exception/split 的真实 round-trip 未实测. COUNT-based split
+  是近似 (新 series 不继承 COUNT, 见 commit caveat).
 
 ### 4.2 #2 跨时区 (schema 重)
 
@@ -160,39 +168,39 @@ build_vevent VALUE=DATE 是 RFC 标准 + vobject round-trip 单测已覆盖. 但
 - `docs/calendar-phase4-progress.md` (本文件)
 
 ### 修改 (后端)
-- `src/calendar_sync/caldav_writer.py` — build_vevent rrule + is_all_day; create/update_event
-- `src/calendar_sync/service.py` — create/update_event rrule + is_all_day
-- `src/cli/commands/calendar.py` — `--rrule` / `--all-day`
-- `tests/calendar_sync/test_caldav_writer_roundtrip.py` (+6) / `test_service.py` (+7)
+- `src/calendar_sync/caldav_writer.py` — build_vevent rrule + is_all_day; create/update_event; **update_occurrence (#3c) + split_series (#3d) + _rrule helper**
+- `src/calendar_sync/service.py` — create/update_event rrule + is_all_day; **update_occurrence + split_series**
+- `src/cli/commands/calendar.py` — `--rrule` / `--all-day` / **`--recurrence-id` + `--split-future`**
+- `tests/calendar_sync/test_caldav_writer_roundtrip.py` (+12: rrule/all-day/occurrence/split) / `test_service.py` (+11)
 
 ### 修改 (前端)
 - `frontend/src/shared/components/calendar/hooks/useCalendarEvents.ts` — selectedCalendars select
 - `frontend/src/shared/components/calendar/CalendarToolbar.tsx` — calendar dropdown
 - `frontend/src/shared/components/layout/CalendarLayout.tsx` — state lift
 - `frontend/src/shared/components/calendar/views/{Day,Week,Month,Agenda}View.tsx` — 透传
-- `frontend/src/shared/components/calendar/EventFormModal.tsx` — calendar 下拉 + RRuleEditor + 全天 toggle
-- `frontend/src/shared/api/types.ts` + `frontend/src/electron/main/handlers/calendar-write.ts` — rrule + isAllDay IPC
-- `frontend/src/shared/i18n/locales/{zh-CN,en-US}/common.json` — calendarFilter / repeat / allDay key
-- `frontend/tests/main/calendar.test.ts` (+6 IPC test)
+- `frontend/src/shared/components/calendar/EventFormModal.tsx` — calendar 下拉 + RRuleEditor + 全天 toggle + **scope 对话 (改这次/改未来/整系列)**
+- `frontend/src/shared/api/types.ts` + `frontend/src/electron/main/handlers/calendar-write.ts` — rrule + isAllDay + **recurrenceId + splitFuture** IPC
+- `frontend/src/shared/i18n/locales/{zh-CN,en-US}/common.json` — calendarFilter / repeat / allDay / **recurrenceScope** key
+- `frontend/tests/main/calendar.test.ts` (+9 IPC test)
 
 ---
 
 ## 7. 给下个 Session 的 prompt 模板
 
 ```
-Phase 4 已 ship 3 功能 (4 commits 在 feat/agent-harness): #1 多 calendar / #3
-核心 RRULE (创建+整系列) / #2 全天事件. 读 docs/calendar-phase4-progress.md 拿状态.
+Phase 4 已 ship 4 功能 (6 commits 在 feat/agent-harness): #1 多 calendar / #3
+RRULE (创建+整系列+改这次+改未来) / #2 全天事件. 读 docs/calendar-phase4-progress.md.
 
-测试基线: calendar pytest 349 + vitest calendar 64. (注: vitest 全套有 98 个
-pre-existing 失败在 chat/kos/email 模块, 是 ping-island fork in-flight, 跟 calendar
-无关, §5.1 已验证.)
+测试基线: calendar pytest 359 + vitest calendar 66 (calendar.test 43 + rrule 17
++ filter 6). (注: vitest 全套有 98 个 pre-existing 失败在 chat/kos/email 模块,
+ping-island fork in-flight, 跟 calendar 无关, §5.1 已 checkout 验证.)
 
 剩余 backlog (按建议优先级):
-- #3 进阶 改这次/改未来 (需 DavMail 实测 detached occurrence)
-- #5 e2e Playwright (需 env, Phase 4 接近完工再做)
-- #2 跨时区 (schema 重, 价值密度低, 可不做)
-- #4 跨设备 V2 (需 architect 议方案)
-- (旁路) service.update_event attendees 疑似 bug §5.2 待确认修
+- #5 e2e Playwright (需 env; RSVP/编辑/删除/撤销/创建周期+全天/改这次改未来 真触摸)
+- #2 跨时区 (schema 加 tzid 列, 价值密度低, 可不做)
+- #4 跨设备 V2 (需 architect 议方案 Bearer/CORS/versioning, ~10h+)
+- (旁路) service.update_event attendees 疑似 bug §5.2 (需全链路清空信号设计)
+- (验证) #3 进阶 detached occurrence/split series 建议 DavMail 实测端到端
 
 caveat: DavMail ctag 1h fallback / provenance lock / Bash compound cd 改持久 cwd
 + 并行 cwd 共享 (git/pnpm 注意 cd).
