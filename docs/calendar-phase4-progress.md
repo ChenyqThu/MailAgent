@@ -3,7 +3,7 @@
 **From**: Session @ 2026-05-26 (Phase 4 启动, 用户要求"全做")
 **Status**: 4 功能完整 ship (#3 含进阶改这次/改未来, 6 commits). **续 session (2026-05-26): attendees 数据安全 bug 全链路修复 (3 commits, §8) + e2e 用组件交互测试形态 ship (非 Playwright, §8.3).** 剩余: 跨时区 (价值低) / 跨设备 V2 (需 architect) / Playwright Electron e2e (需 DavMail/build 不可 CI, 已用组件测试覆盖触摸链).
 **Branch**: feat/agent-harness
-**Test 基线**: calendar pytest 336 → 359 → **369 passed** (+10 attendees); vitest calendar 相关 66 → **78 passed** (calendar.test 45 + rrule 17 + filter 6 + attendees 5 + EventFormModal 5).
+**Test 基线**: calendar pytest 336 → 359 → **370 passed** (+11 attendees, 含 review MEDIUM 互斥校验); vitest calendar 相关 66 → **78 passed** (calendar.test 45 + rrule 17 + filter 6 + attendees 5 + EventFormModal 5).
 
 ---
 
@@ -215,7 +215,7 @@ build_vevent VALUE=DATE 是 RFC 标准 + vobject round-trip 单测已覆盖. 但
 Phase 4 已 ship 4 功能 (6 commits) + 续 session attendees 数据安全修复 + e2e 组件
 测试 (3 commits, §8). 全在 feat/agent-harness. 读 docs/calendar-phase4-progress.md.
 
-测试基线: calendar pytest 369 (含 attendees +10) + vitest calendar 78 (calendar.test
+测试基线: calendar pytest 370 (含 attendees +11) + vitest calendar 78 (calendar.test
 45 + rrule 17 + filter 6 + attendees 5 + EventFormModal 5). (注: vitest 全套有 ~98 个
 pre-existing 失败在 chat/kos/email 模块, ping-island fork in-flight, 跟 calendar 无关, §5.1.)
 
@@ -274,7 +274,7 @@ NEEDS-ACTION 断言) + service 3 + CLI 4; 前端 attendees.test 5 (含"未 dirty
 
 ```bash
 source venv/bin/activate
-pytest tests/calendar_sync/ tests/calendar_notion/ tests/cli/test_calendar.py tests/cli/test_calendar_expand.py -q   # 369 passed
+pytest tests/calendar_sync/ tests/calendar_notion/ tests/cli/test_calendar.py tests/cli/test_calendar_expand.py -q   # 370 passed
 cd frontend && pnpm typecheck                                                                                          # node + web clean
 # 注意: 单次跑, 别重复触发 (并发死锁); 组件测试冷启动 ~8s
 pnpm vitest run tests/main/calendar.test.ts tests/shared/rrule.test.ts tests/shared/calendar-filter.test.ts tests/shared/attendees.test.ts tests/components/EventFormModal.test.tsx   # 78 passed
@@ -289,3 +289,15 @@ Playwright 在本项目零先例 (`test:e2e` 指向不存在的 config) + Electr
 toggle + edit 与会者 dirty 三态. mock 非周期 detail (rrule='') 让提交不弹 scope dialog,
 聚焦改整系列分支. **未覆盖**: Playwright Electron 启动 smoke + RSVP/删除/撤销 真后端
 round-trip (需 build + DavMail). 写测试踩的 vitest 坑见 §5.4.
+
+### 8.4 独立 code review (opus) — APPROVE
+
+本 session 改动经 code-reviewer (opus) 独立审查: **0 Critical / 0 High / 1 Medium /
+3 Low, verdict APPROVE**. 验证了三态全链路一致 (CLI→service→writer / 前端→IPC→CLI)、
+无遗漏清空路径 (occurrence override / split / create 都正确)、互斥校验位置 (auth 前)、
+前端 dirty 触发点完整、测试覆盖真实不变量 (含 partstat roundtrip), 并 re-ran 测试确认 green.
+
+落实唯一 MEDIUM (commit `ece716c`): CLI `--clear-attendees` 与 `--recurrence-id` 互斥校验
+(occurrence override 继承 master 与会者, 显式报错防静默忽略, fails-safe 行为不变).
+3 个 LOW (前端 prefill effect identity 重置 / IPC 层互斥未强制 (CLI 是真正 enforcement
+point) / LSP 工具不可用) 均 fails-safe 或 informational, 不修.
