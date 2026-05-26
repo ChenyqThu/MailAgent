@@ -131,3 +131,79 @@ Please review the attached spec and reply with comments.
   {"src": "Please review the attached spec and reply with comments.", "tgt": "请评审附件中的规格说明并回复意见。"}
 ]
 ```
+
+## Recommended Actions（灵动岛 Phase 2 动态建议按钮，可选填，0-3 个）
+
+`recommended_actions` 字段：根据邮件具体内容，从下面 whitelist 选 1-3 个最针对性的处理建议，供灵动岛 Ping Island 按钮渲染。
+
+**这是 Phase 2 新字段**：替代灵动岛之前的静态 5 按钮（open_notion / create_draft / mark_done / snooze_1h / open_mail）。LLM 不确定时（没有针对性候选 / 全部候选 confidence < 0.5）**留空数组 `[]`**，plugin 端会退回静态 5 按钮 fallback。
+
+### 收件箱 action whitelist（id 严格枚举，超集 silent drop）
+
+| id | 适用场景 | title 范例 | detail 范例 |
+|---|---|---|---|
+| `archive_and_unsubscribe` | newsletter / 营销邮件，且邮件含 unsubscribe link | 归档并退订 | 已订阅 6 个月，每周一封 |
+| `archive_only` | FYI / 系统通知 / 已读完不再提醒，无需回复 | 归档 | 标完成不再提醒 |
+| `add_to_calendar` | 含 .ics 邀请 / 明确时间地点的会议邀请 | 加入日历 | 周五 10:00 产品评审 |
+| `decline_with_reason` | 明确无法参加会议但需要礼貌回复 | 婉拒并说明 | 起草 "时间冲突" 草稿 |
+| `defer_to_monday_9am` | 周末收到 / 非紧急但需要工作日处理 | 周一上午再看 | 1h 后弹回 → 周一 9:00 |
+| `convert_to_notion_task` | 项目周报 / 跨项目跟进事项 / 需要进 backlog | 转 Notion 任务 | 加进项目 backlog |
+| `ack_in_pagerduty` | PagerDuty / 监控告警邮件含 incident link | 在 PagerDuty 确认 | 跳转到 incident 页面 |
+| `escalate_to_oncall` | 紧急告警但我无法处理需要 on-call | 升级到 oncall | 标记并通知 on-call |
+| `quick_reply_yes` | 简单 Y/N 询问邮件，能直接答应 | 快速回复 是 | 起草 "可以 / OK" 草稿 |
+| `quick_reply_no_with_reason` | 简单 Y/N 询问邮件但需要解释 | 快速回复 否 | 起草 "暂时不行 + 理由" |
+
+### 输出契约
+
+- `id`: 必须从上面 whitelist 选（schema enum 强制），不在 whitelist 的 id 会被 JSON schema 校验拒
+- `title`: ≤ 30 字符简体中文，作为 button 第一行（如「归档并退订」）
+- `detail`: ≤ 80 字符简体中文副标题，解释推荐理由（如「已订阅 6 个月，每周一封」），可选
+- `confidence`: 0.0-1.0。常见邮件类型应能给 0.7-0.95；不确定时不要硬填、整体留空数组 `[]`
+- 数组长度 0-3。优先按 confidence 降序排前 3 个
+
+### 不许做
+
+- ❌ 不要推荐高危 action（delete / send_email_immediately / mass-archive 等），whitelist 里也没有
+- ❌ 普通邮件没有明显针对性时**不要硬凑**，留空数组 `[]` 让灵动岛走默认 5 按钮（永远比"硬塞个错误建议"好）
+- ❌ id 不在 whitelist 直接 drop，不要瞎编新 id
+- ❌ 不要把 Phase 1 静态 5 按钮 id（open_notion / create_draft / mark_done / snooze_1h / open_mail）放进 recommended_actions —— 静态 5 是 fallback，不归 LLM 推荐
+
+### 决策示例
+
+**Stripe Weekly Update**（newsletter）：
+```json
+"recommended_actions": [
+  {"id": "archive_and_unsubscribe", "title": "归档并退订", "detail": "已订阅 6 个月，每周一封", "confidence": 0.92},
+  {"id": "archive_only", "title": "归档", "detail": "标完成不再提醒", "confidence": 0.75}
+]
+```
+
+**Friday 10:00 产品评审邀请**（含 .ics）：
+```json
+"recommended_actions": [
+  {"id": "add_to_calendar", "title": "加入日历", "detail": "周五 10:00 产品评审", "confidence": 0.95},
+  {"id": "decline_with_reason", "title": "婉拒并说明", "detail": "起草 时间冲突 草稿", "confidence": 0.6}
+]
+```
+
+**PagerDuty CRITICAL: api-gateway down**（紧急告警）：
+```json
+"recommended_actions": [
+  {"id": "ack_in_pagerduty", "title": "在 PagerDuty 确认", "detail": "跳转到 incident", "confidence": 0.93},
+  {"id": "escalate_to_oncall", "title": "升级 on-call", "detail": "通知值班同事", "confidence": 0.7}
+]
+```
+
+**Gary："周五会议你能来吗？"**（简单 Y/N）：
+```json
+"recommended_actions": [
+  {"id": "quick_reply_yes", "title": "快速回复 是", "detail": "起草 可以 草稿", "confidence": 0.85},
+  {"id": "quick_reply_no_with_reason", "title": "快速回复 否", "detail": "起草 时间冲突 + 理由", "confidence": 0.7}
+]
+```
+
+**普通对话邮件 / 上下文复杂 / 无明显针对性**：
+```json
+"recommended_actions": []
+```
+→ 灵动岛走默认 5 按钮 fallback。

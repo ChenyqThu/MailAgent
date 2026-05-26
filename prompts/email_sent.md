@@ -85,3 +85,54 @@
 - 顺序与邮件正文一致；跳过纯标点 / 短于 4 字符 / 已是中文的段落。
 
 发件箱的 LLM 调用频率比收件箱低（每天通常只有几封发件），写入 `translation_segments` 对 token 成本影响很小。
+
+## Recommended Actions（灵动岛 Phase 2 动态建议按钮，可选填，0-2 个）
+
+`recommended_actions` 字段：根据发件箱场景给灵动岛 Ping Island 1-2 个针对性按钮替代静态 5 fallback。
+
+**发件箱专属语义**：跟收件箱不同，发件箱通常只关心两件事——"等够久还没回，标完成不追"或"该催了，起个 reminder 草稿"。所以数量通常 0-2 即可。
+
+### 发件箱 action whitelist（id 严格枚举）
+
+| id | 适用场景 | title 范例 | detail 范例 |
+|---|---|---|---|
+| `mark_done_no_response` | 已发 > 7 天对方未回，但事项不再重要 / 已自然过期 | 标完成不再追 | 已等 12 天，事项已过期 |
+| `nudge_recipient` | 超过预期等待期（重要事 > 1 天 / 紧急事 > 6h），需要 reminder | 起草催办 | reminder 草稿，礼貌追问 |
+
+### 输出契约
+
+跟收件箱一致：
+- `id`: 必须从上面 whitelist 选（schema enum 强制），收件箱专属 id 不能用
+- `title`: ≤ 30 字符简体中文
+- `detail`: ≤ 80 字符简体中文，可选
+- `confidence`: 0.0-1.0，< 0.5 的会被丢弃
+- 数组长度 0-2
+
+### 不许做
+
+- ❌ 不要推荐 "重发" / "delete email" / "撤回" 等高危操作
+- ❌ 当 `action_type='已完结'` 时通常不需要任何建议，留空数组 `[]`
+- ❌ 当 `action_type='等待响应'` 且未超期时也通常留空数组（耐心等就行）
+- ❌ 不要把 Phase 1 静态 5 按钮 id 放进 recommended_actions
+
+### 决策示例
+
+**已发 12 天，无回复，事项已自然过期（如周报征集）**：
+```json
+"recommended_actions": [
+  {"id": "mark_done_no_response", "title": "标完成不再追", "detail": "已等 12 天，事项已过期", "confidence": 0.85}
+]
+```
+
+**已发 2 天，Gary 未回，请求审批**（重要事超过 1 天）：
+```json
+"recommended_actions": [
+  {"id": "nudge_recipient", "title": "起草催办", "detail": "Gary 未回 2 天，礼貌提醒", "confidence": 0.8}
+]
+```
+
+**`action_type='等待响应'` 且未超期 / `action_type='已完结'` / 普通发件**：
+```json
+"recommended_actions": []
+```
+→ 灵动岛走默认 5 按钮 fallback。

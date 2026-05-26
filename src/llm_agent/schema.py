@@ -61,6 +61,40 @@ PROCESSING_STATUS_AI_REVIEWED = "AI Reviewed"
 PROCESSING_STATUS_COMPLETED = "已完成"
 
 
+# Phase 2 — Ping-island AI 动态建议按钮（PRD §5.2）。
+# LLM 可推荐的 action id 白名单（子集，不含 Phase 1 静态 5 fallback）。
+# 配套 island_action_whitelist.KNOWN_ACTION_IDS（含静态 5）— 一处的真子集，handler 仍按 KNOWN_ACTION_IDS 校验。
+# 改这里 → schema enum 同步收紧 → LLM 输出超集 id 直接被 client.py JSON schema 校验拒。
+RECOMMENDED_ACTION_ID_INBOX: List[str] = [
+    # Newsletter / 营销 / FYI
+    "archive_and_unsubscribe",
+    "archive_only",
+    # 会议邀请 (.ics / 明确时间地点)
+    "add_to_calendar",
+    "decline_with_reason",
+    # 项目周报 / 报告 / 非紧急但需工作日处理
+    "defer_to_monday_9am",
+    "convert_to_notion_task",
+    # 紧急告警 / PagerDuty
+    "ack_in_pagerduty",
+    "escalate_to_oncall",
+    # 简单 Y/N 询问
+    "quick_reply_yes",
+    "quick_reply_no_with_reason",
+]
+
+RECOMMENDED_ACTION_ID_SENT: List[str] = [
+    # 发件箱 follow-up: 超过等待期标完成 / 起一个催办草稿
+    "mark_done_no_response",
+    "nudge_recipient",
+]
+
+RECOMMENDED_ACTION_ID_ENUM: List[str] = sorted({
+    *RECOMMENDED_ACTION_ID_INBOX,
+    *RECOMMENDED_ACTION_ID_SENT,
+})
+
+
 EMAIL_TOOL_SCHEMA = {
     "name": "classify_email",
     "description": (
@@ -203,6 +237,55 @@ EMAIL_TOOL_SCHEMA = {
                     },
                 },
             },
+            "recommended_actions": {
+                "type": "array",
+                "maxItems": 3,
+                "description": (
+                    "灵动岛 Ping Island 动态建议按钮（Phase 2）— 根据邮件内容给 1-3 个最针对性的处理"
+                    "建议替代默认 5 按钮 fallback。LLM 不确定时（每个候选 confidence < 0.5 或没有合"
+                    "适候选）留空数组 []，plugin 端会退回默认 5 按钮（open_notion / create_draft "
+                    "/ mark_done / snooze_1h / open_mail）。\n\n"
+                    "id 必须从 mailbox-specific whitelist 选择（schema enum 强制；不在 enum 的会被 "
+                    "JSON schema 校验拒），见 mailbox prompt 内『Recommended Actions』段说明。"
+                ),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["id", "title", "confidence"],
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "enum": RECOMMENDED_ACTION_ID_ENUM,
+                            "description": (
+                                "action id, 必须从 mailbox-specific whitelist 选；不在 whitelist "
+                                "的 silent drop。收件箱可选 INBOX 列表, 发件箱可选 SENT 列表（详见 "
+                                "mailbox prompt）。"
+                            ),
+                        },
+                        "title": {
+                            "type": "string",
+                            "maxLength": 30,
+                            "description": "button 第一行显示文本，简体中文，≤ 30 字符。",
+                        },
+                        "detail": {
+                            "type": "string",
+                            "maxLength": 80,
+                            "description": (
+                                "button 第二行副标题，解释推荐理由，简体中文，≤ 80 字符。可选。"
+                            ),
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                            "description": (
+                                "置信度 0-1。plugin 端会丢弃 < 0.5 的候选；全部候选都 < 0.5 时退回"
+                                "静态 5 按钮 fallback。"
+                            ),
+                        },
+                    },
+                },
+            },
         },
     },
 }
@@ -213,3 +296,14 @@ def is_valid_action_type(action_type: str, mailbox: str) -> bool:
     if mailbox == "发件箱":
         return action_type in ACTION_TYPE_SENT
     return action_type in ACTION_TYPE_INBOX
+
+
+def is_valid_recommended_action_id(action_id: str, mailbox: str) -> bool:
+    """Check recommended_actions[*].id matches the given mailbox.
+
+    Schema enum covers union (INBOX ∪ SENT)；用 post-validation 收紧到 mailbox-specific
+    子集。空 mailbox → 按收件箱处理（与 ``is_valid_action_type`` 一致）。
+    """
+    if mailbox == "发件箱":
+        return action_id in RECOMMENDED_ACTION_ID_SENT
+    return action_id in RECOMMENDED_ACTION_ID_INBOX
