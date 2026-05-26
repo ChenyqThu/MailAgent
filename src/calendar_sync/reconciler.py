@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Optional
 from loguru import logger
 
 if TYPE_CHECKING:
-    from src.calendar_notion.caldav_reader import CalendarEvent
+    from src.calendar_sync.caldav_reader import CalendarEvent
     from src.calendar_sync.repository import CalendarEventRepository
 
 

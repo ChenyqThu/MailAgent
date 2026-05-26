@@ -847,7 +847,7 @@ def calendar_sync_now(
             f"past={past_days} future={future_days}"
         ))
 
-    from src.calendar_notion.caldav_reader import CalDAVReader
+    from src.calendar_sync.caldav_reader import CalDAVReader
     from src.calendar_sync import CalendarEventRepository, CalendarReconciler
     from src.config import config as global_cfg
 

@@ -27,7 +27,7 @@ from loguru import logger
 from src.calendar_sync.reconciler import CalendarReconciler
 
 if TYPE_CHECKING:
-    from src.calendar_notion.caldav_reader import CalDAVReader
+    from src.calendar_sync.caldav_reader import CalDAVReader
     from src.calendar_sync.repository import CalendarEventRepository
     from src.config import Config
 

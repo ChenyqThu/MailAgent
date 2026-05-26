@@ -7,7 +7,7 @@ from typing import Optional
 
 import pytest
 
-from src.calendar_notion.caldav_reader import CalendarEvent
+from src.calendar_sync.caldav_reader import CalendarEvent
 from src.calendar_sync import CalendarEventRepository
 from src.mail.sync_store import SyncStore
 

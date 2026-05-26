@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.calendar_notion.caldav_reader import (
+from src.calendar_sync.caldav_reader import (
     CalDAVReader,
     CalendarEvent,
     _coerce_aware,

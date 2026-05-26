@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.calendar_notion.caldav_reader import CalendarEvent
+from src.calendar_sync.caldav_reader import CalendarEvent
 from src.calendar_sync import CalendarEventRepository, CalendarSyncWorker
 
 

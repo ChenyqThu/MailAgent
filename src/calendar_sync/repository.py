@@ -31,7 +31,7 @@ from typing import Any, TYPE_CHECKING, Iterator, Optional
 from src.calendar_sync.expander import expand_in_window
 
 if TYPE_CHECKING:
-    from src.calendar_notion.caldav_reader import CalendarEvent
+    from src.calendar_sync.caldav_reader import CalendarEvent
 
 
 _VALID_SOURCES = frozenset({"caldav", "email_ics", "legacy_calendar_app"})

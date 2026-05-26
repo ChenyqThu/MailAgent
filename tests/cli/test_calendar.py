@@ -162,7 +162,7 @@ class TestCalendarRecurringDiscover:
     ):
         """Phase 1.5 integration: 真 calendar_event seed, 不 mock discover_recurring."""
         from datetime import datetime, timezone, timedelta
-        from src.calendar_notion.caldav_reader import CalendarEvent
+        from src.calendar_sync.caldav_reader import CalendarEvent
         from src.calendar_sync import CalendarEventRepository
 
         repo = CalendarEventRepository(str(seeded_db))
@@ -311,7 +311,7 @@ def _seed_calendar_event(
     organizer: str = "",
 ) -> int:
     """Seed 一个 calendar_event row, 返回 id."""
-    from src.calendar_notion.caldav_reader import CalendarEvent
+    from src.calendar_sync.caldav_reader import CalendarEvent
     from src.calendar_sync import CalendarEventRepository
 
     if start is None:
@@ -565,7 +565,7 @@ class TestCalendarSyncNow:
         self, cli_runner, cli_env, seeded_db, monkeypatch,
     ):
         """stub CalDAVReader → 模拟一次 full sync 跑通."""
-        from src.calendar_notion.caldav_reader import CalendarEvent, CalDAVReader
+        from src.calendar_sync.caldav_reader import CalendarEvent, CalDAVReader
         from src.cli.commands import calendar as cal_cmd
 
         # 1. 让 list_calendar_names_for_sync 返单 calendar
@@ -607,7 +607,7 @@ class TestCalendarSyncNow:
     def test_caldav_failure_records_error(
         self, cli_runner, cli_env, seeded_db, monkeypatch,
     ):
-        from src.calendar_notion.caldav_reader import CalDAVReader
+        from src.calendar_sync.caldav_reader import CalDAVReader
 
         def _boom(self):
             raise RuntimeError("CalDAV unreachable")

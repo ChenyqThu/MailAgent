@@ -566,7 +566,7 @@ class TestCalendarPhase2SchemaContract:
     @staticmethod
     def _seed_event(db_path, **kwargs):
         from datetime import datetime, timedelta, timezone
-        from src.calendar_notion.caldav_reader import CalendarEvent
+        from src.calendar_sync.caldav_reader import CalendarEvent
         from src.calendar_sync import CalendarEventRepository
 
         start = kwargs.pop("start", datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc))
@@ -662,7 +662,7 @@ class TestCalendarPhase2SchemaContract:
     ):
         from datetime import datetime, timedelta, timezone
         from jsonschema import validate
-        from src.calendar_notion.caldav_reader import CalendarEvent, CalDAVReader
+        from src.calendar_sync.caldav_reader import CalendarEvent, CalDAVReader
 
         stub_ev = CalendarEvent(
             summary="Stub", start=datetime(2026, 6, 1, 9, tzinfo=timezone.utc),
