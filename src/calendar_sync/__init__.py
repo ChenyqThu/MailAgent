@@ -27,6 +27,14 @@ from src.calendar_sync.repository import (
     CalendarEventRow,
     CalendarSyncStateRow,
 )
+from src.calendar_sync.service import (
+    CalendarService,
+    RSVP_RESPONSE_ALIAS,
+    VALID_EVENT_SOURCES,
+    VALID_EVENT_STATUS,
+    occurrence_to_dict,
+    row_to_dict,
+)
 from src.calendar_sync.worker import CalendarSyncWorker
 
 __all__ = [
@@ -35,6 +43,12 @@ __all__ = [
     "CalendarEventOccurrence",
     "CalendarSyncStateRow",
     "CalendarReconciler",
+    "CalendarService",
     "CalendarSyncWorker",
+    "RSVP_RESPONSE_ALIAS",
+    "VALID_EVENT_SOURCES",
+    "VALID_EVENT_STATUS",
     "expand_in_window",
+    "occurrence_to_dict",
+    "row_to_dict",
 ]
