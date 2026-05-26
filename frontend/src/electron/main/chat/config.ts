@@ -19,10 +19,12 @@ function readEnvNumber(name: string, defaultValue: number): number {
   return Number.isFinite(n) ? n : defaultValue
 }
 
-/** P1 — multi-turn harness loop master switch. OFF → dispatcher.runStream
- *  walks the legacy single-pass path identical to Sprint 18 behaviour. */
+/** P1 — multi-turn harness loop master switch. **Default ON** since
+ *  2026-05-25 (§B Python eval gate HIT: P1 16/18 + KOS 5/7). OFF →
+ *  dispatcher.runStream walks the legacy single-pass path identical to
+ *  Sprint 18 behaviour (emergency fallback only). */
 export function isHarnessEnabled(): boolean {
-  return readEnvBool('MAILAGENT_AGENT_HARNESS', false)
+  return readEnvBool('MAILAGENT_AGENT_HARNESS', true)
 }
 
 /** P2 — Wiki context block injection + wiki_* tools exposed. */

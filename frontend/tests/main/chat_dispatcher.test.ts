@@ -114,20 +114,33 @@ describe('dispatcher — happy path', () => {
     expect(result.userMessageId).toBeGreaterThan(0)
     expect(result.assistantMessageId).toBeGreaterThan(result.userMessageId)
 
-    await tickAsync()
-
+    // 2026-05-26 — MAILAGENT_AGENT_HARNESS default ON (Sprint 19 §B HIT
+    // cutover). harness path wraps the legacy single-pass in a multi-iter
+    // loop that flips status='complete' AFTER the stream finishes + tool
+    // dispatch decides nothing's left to do. tickAsync(6) microtask burst
+    // ran out before the trailing updateMessage settled, so happy-path
+    // status used to land on 'streaming'. Poll listMessages directly until
+    // the row flips (≤ 2 s) — keeps the assertion semantic ("after the
+    // stream completes, the row reads complete") rather than coupled to a
+    // specific microtask-chain depth.
+    let assistant = listMessages(result.sessionId).find((r) => r.role === 'assistant')
+    const waitDeadline = Date.now() + 2000
+    while ((!assistant || assistant.status !== 'complete') && Date.now() < waitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      assistant = listMessages(result.sessionId).find((r) => r.role === 'assistant')
+    }
     const rows = listMessages(result.sessionId)
     expect(rows.length).toBe(2)
     const user = rows.find((r) => r.role === 'user')!
-    const assistant = rows.find((r) => r.role === 'assistant')!
     expect(user.content).toBe('hi')
     expect(user.status).toBe('complete')
-    expect(assistant.status).toBe('complete')
-    expect(assistant.content).toBe('Hello world')
-    expect(assistant.tokens_input).toBe(8)
-    expect(assistant.tokens_output).toBe(2)
-    expect(assistant.cost_usd).toBeCloseTo(0.0001, 6)
-    expect(assistant.model).toBe('claude')
+    expect(assistant).toBeDefined()
+    expect(assistant!.status).toBe('complete')
+    expect(assistant!.content).toBe('Hello world')
+    expect(assistant!.tokens_input).toBe(8)
+    expect(assistant!.tokens_output).toBe(2)
+    expect(assistant!.cost_usd).toBeCloseTo(0.0001, 6)
+    expect(assistant!.model).toBe('claude')
 
     // Sink forwarded every event in order.
     const evTypes = sink.events.map((e) => e.event.type)
