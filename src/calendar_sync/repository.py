@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -176,23 +177,75 @@ class CalendarEventRepository:
             print(occ.row.summary, occ.occurrence_start_utc)
     """
 
-    def __init__(self, db_path: str = "data/sync_store.db"):
+    def __init__(self, db_path: str = "data/sync_store.db", *, pool: bool = True):
+        """初始化 repository.
+
+        Args:
+            db_path: SQLite DB 路径.
+            pool: True (default) = 每线程长连接 (threading.local + WAL 兼容);
+                  减 100x 短 connection 的 open/close overhead. CalendarSyncWorker
+                  60s × N calendars × 多个 read+write 一轮上百次 sqlite open,
+                  pool 模式后降到 ~per-thread once. False = 老的 open-then-close
+                  路径 (用作测试 / 跨进程 / 调试).
+        """
         self.db_path = Path(db_path)
+        self._pool_enabled = pool
+        # 每线程长连接 (WAL-compatible). 同一 repo 实例跨线程时各拿自己的 conn,
+        # SQLite C API 默认禁止 conn 跨线程, 这里精确匹配.
+        self._local = threading.local()
 
     def _connect(self) -> sqlite3.Connection:
+        """新开一条 sqlite3 connection (PRAGMA WAL + foreign_keys=ON)."""
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
+    def _get_pooled_conn(self) -> sqlite3.Connection:
+        """拿当前线程的长连接, miss 时 lazy 构造.
+
+        WAL 模式下长连接是推荐用法 — 多 reader + 1 writer 互不阻塞,
+        长连接自己看自己的 commit 立即生效, 不依赖 SQLite checkpoint.
+        """
+        conn: Optional[sqlite3.Connection] = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._connect()
+            self._local.conn = conn
+        return conn
+
     @contextmanager
     def _conn_ctx(self) -> Iterator[sqlite3.Connection]:
+        """提供 sqlite3 connection (pool / ephemeral).
+
+        Pool 模式: yield 长连接, 不 close — 调用方做完 commit() 即可, 连接
+        留给同线程下一次 op 复用.
+
+        Non-pool 模式: open-then-close 兼容 (cli subprocess / test 隔离用).
+        """
+        if self._pool_enabled:
+            yield self._get_pooled_conn()
+            # No close: connection survives for next call on same thread
+            return
         conn = self._connect()
         try:
             yield conn
         finally:
             conn.close()
+
+    def close(self) -> None:
+        """显式关闭当前线程的 pool connection.
+
+        worker 关停时调用, 或 test teardown 释放 sqlite file lock 用. 调多次
+        无副作用. 关后下次 _conn_ctx 自动新开.
+        """
+        conn: Optional[sqlite3.Connection] = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
 
     # --------------------------------------------------------
     # Write — upsert / soft-delete / mirror linking
