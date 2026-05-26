@@ -1,4 +1,9 @@
-# Calendar Module — Phase 3 Handoff (2026-05-25)
+# Calendar Module — Phase 3 Handoff (2026-05-25) [STALE — 已 ship]
+
+> ⚠ **本文件已 stale (2026-05-26)** — Phase 3 完整 ship.
+> 请读 [`docs/calendar-phase3-complete.md`](./calendar-phase3-complete.md) 作
+> 主参考 (含 10 commit 列表 + 336 pytest 基线 + Phase 4 prompt 模板).
+> 本文件保留作历史记录, 不再更新.
 
 **From**: Session @ 2026-05-24/25 (review-driven fix loop, F1-F32 全 ship)
 **To**: 下个 session — Phase 3 legacy 下线 + 架构大重构 + tooling/测试
