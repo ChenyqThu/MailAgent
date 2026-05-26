@@ -1,751 +1,107 @@
-// Sprint 6 §2.2 — calendar (recurring meeting) IPC handlers.
-// Phase 3 §3.1 (frontend-view-silly-knuth.md) — 扩展 5 个 calendar SSoT handler:
-//   - calendar:eventsList      — 直读 SQLite calendar_event, RRULE 展开窗口内 occurrences
-//   - calendar:eventGet        — 单 event 详情 (by ical_uid + recurrence_id + source)
-//   - calendar:syncStatus      — 读 calendar_sync_state 表
-//   - calendar:syncTrigger     — 手动跑一次 `mailagent calendar sync-now` (write+auth)
-//   - calendar:calendarNames   — distinct calendar_name 列表
+// Phase 3 §P1-c — calendar handler 入口 + 注册 + re-export.
 //
-// 老 Sprint 6 handler (recurringDiscover / recurringReplay / expand) 保留作 /calendar/recurring
-// 运维页用. 新 handler 走 better-sqlite3 直读 (Sprint 16 模式), ~5ms 路径; 写命令仍 fork CLI.
+// 实现拆到 3 个子文件:
+// - calendar-read.ts     — eventsList / eventGet / syncStatus / calendarNames /
+//                          recurringDiscover (better-sqlite3 直读, ~5ms)
+// - calendar-write.ts    — eventReplay / eventRsvp / eventCreate / Update /
+//                          Delete / recurringReplay (fork CLI write+auth+120s)
+// - calendar-sync.ts     — syncTrigger / expand (fork CLI write+auth+120s)
+// - calendar-shared.ts   — safeIpcHandle / assertSafeSender / 时区/JSON helpers
+//
+// 本文件:
+// 1. registerCalendarHandlers() — ipcMain 通道注册 (主进程入口调)
+// 2. re-export 子文件的 run* 函数 + 类型给测试 / 其它模块用
+// 3. __testing / __safeSenderTesting — vitest 用的内部 hook
+//
+// 老 Sprint 6 IPC channel (recurringDiscover / recurringReplay / expand) 保留作
+// /calendar/recurring 运维页用. 新 Phase 3 SSoT 通道走 better-sqlite3 直读.
 
-import { ipcMain } from 'electron'
-// rrule 是 CJS 包, ESM 下没 named export — 必须 default import 再解构.
-import rrulePkg from 'rrule'
+import {
+  assertSafeSender,
+  safeIpcHandle
+} from './calendar-shared'
 
-import { callCli } from '../cli_runner'
-import { getDb } from '../db'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
-const { rrulestr } = rrulePkg
+// Read handlers + types
+import {
+  expandInWindow,
+  runCalendarNames,
+  runEventGet,
+  runEventsList,
+  runRecurringDiscover,
+  runSyncStatus,
+  type CalendarEventOccurrence,
+  type CalendarEventRow,
+  type CalendarSyncStateItem,
+  type EventGetOpts,
+  type EventsListOpts,
+  type RecurringDiscoverOpts,
+  type RecurringInviteItem
+} from './calendar-read'
 
-const READ_TIMEOUT_MS = 30_000
-const WRITE_TIMEOUT_MS = 120_000
+// Write handlers + types
+import {
+  runEventCreate,
+  runEventDelete,
+  runEventReplay,
+  runEventRsvp,
+  runEventUpdate,
+  runRecurringReplay,
+  type EventAttendeeInput,
+  type EventCreateOpts,
+  type EventDeleteOpts,
+  type EventReplayOpts,
+  type EventRsvpOpts,
+  type EventUpdateOpts,
+  type RecurringReplayOpts,
+  type RsvpResponse
+} from './calendar-write'
 
-export interface RecurringInviteItem {
-  /** vEvent UID (RFC 5545) — Phase 2.4 Replay 用此调 calendar:eventReplay,
-   *  跟 source 无关 (任何 source 都可 replay). */
-  ical_uid: string
-  /** Source email (the meeting invite carrier). Phase 1.5 caldav-only events = 0. */
-  internal_id: number
-  subject: string | null
-  organizer: string | null
-  rrule: string | null
-  /** Notion calendar page (if synced). */
-  notion_page_id: string | null
-  first_occurrence: string | null
-  last_occurrence: string | null
-  occurrence_count: number | null
-  date_received: string | null
+// Sync handlers + types
+import {
+  runCalendarExpand,
+  runSyncNow,
+  type CalendarExpandOpts,
+  type SyncNowOpts
+} from './calendar-sync'
+
+// Re-export everything that callers (other handlers / tests / IPC bridge) need.
+export {
+  expandInWindow,
+  runCalendarExpand,
+  runCalendarNames,
+  runEventCreate,
+  runEventDelete,
+  runEventGet,
+  runEventReplay,
+  runEventRsvp,
+  runEventsList,
+  runEventUpdate,
+  runRecurringDiscover,
+  runRecurringReplay,
+  runSyncNow,
+  runSyncStatus
 }
 
-export interface RecurringDiscoverOpts {
-  since?: string
-}
-
-interface CliSeries {
-  series_uid: string
-  master_dtstart: string | null
-  summary: string | null
-  sender: string | null
-  organizer: string | null
-  rrule: string | null
-  method: string | null
-  internal_ids: number[]
-}
-
-export async function runRecurringDiscover(
-  opts: RecurringDiscoverOpts = {}
-): Promise<RecurringInviteItem[]> {
-  const args = ['calendar', 'recurring', 'discover']
-  if (opts.since) args.push('--since', opts.since)
-  const out = await callCli(args, { timeoutMs: READ_TIMEOUT_MS })
-
-  // Phase 1.5: CLI 返 {series: [...], total_series, ...}; 老 handler 找 .items
-  // 拿不到 → 永远空. 这里把 CLI series 映射到 frontend RecurringInviteItem shape.
-  let series: CliSeries[] = []
-  if (Array.isArray(out)) {
-    series = out as CliSeries[]
-  } else if (out && typeof out === 'object') {
-    const obj = out as { series?: unknown; items?: unknown }
-    if (Array.isArray(obj.series)) series = obj.series as CliSeries[]
-    else if (Array.isArray(obj.items)) series = obj.items as CliSeries[]
-  }
-
-  return series.map((s) => ({
-    // Phase 2.4: ical_uid 是 series_uid (= vEvent UID), Replay 按钮用这个调
-    // calendar:eventReplay (任何 source 都可). 老 internal_id 字段保留作 legacy
-    // (caldav-only events 永远是 0, email_ics events 是真邮件 id).
-    ical_uid: s.series_uid,
-    internal_id: s.internal_ids?.[0] ?? 0,
-    subject: s.summary,
-    organizer: s.organizer ?? s.sender,
-    rrule: s.rrule,
-    notion_page_id: null,
-    first_occurrence: s.master_dtstart,
-    last_occurrence: null, // CLI 不算 last; Phase 2 可在 expander 里加
-    occurrence_count: s.internal_ids?.length ?? null,
-    date_received: null
-  }))
-}
-
-export interface RecurringReplayOpts {
-  internalId?: number
-  ids?: number[]
-  dryRun?: boolean
-}
-
-export async function runRecurringReplay(opts: RecurringReplayOpts): Promise<unknown> {
-  const args = ['calendar', 'recurring', 'replay']
-  if (opts.internalId !== undefined) {
-    args.push('--internal-id', String(opts.internalId))
-  } else if (opts.ids && opts.ids.length > 0) {
-    args.push('--ids', opts.ids.join(','))
-  }
-  if (opts.dryRun) args.push('--dry-run')
-  return callCli(args, {
-    write: !opts.dryRun,
-    needsAuth: !opts.dryRun,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-// ============================================================
-// Phase 2.4 — calendar:eventReplay (基于 calendar_event 行重导出 Notion)
-// 跟老 recurringReplay (email_ics only) 区别: 任何 source 都可 replay,
-// caldav-only events 也能写 Notion mirror.
-// ============================================================
-
-export interface EventReplayOpts {
-  /** vEvent UID (RFC 5545); 必填. */
-  icalUid: string
-  /** 非空 = replay 单次跳脱 occurrence; 留空 = 主事件 (含 RRULE 整系列). */
-  recurrenceId?: string | null
-  /** 限定 source; 留空 = 按 caldav → email_ics → legacy 顺序自动查. */
-  source?: 'caldav' | 'email_ics' | 'legacy_calendar_app'
-  /** 仅查 row 列 plan, 不写 Notion (无需 auth). */
-  dryRun?: boolean
-}
-
-export async function runEventReplay(opts: EventReplayOpts): Promise<unknown> {
-  const args = ['calendar', 'replay', opts.icalUid]
-  if (opts.recurrenceId) {
-    args.push('--recurrence-id', opts.recurrenceId)
-  }
-  if (opts.source) {
-    args.push('--source', opts.source)
-  }
-  if (opts.dryRun) args.push('--dry-run')
-  return callCli(args, {
-    write: !opts.dryRun,
-    needsAuth: !opts.dryRun,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-// ============================================================
-// Phase 2.1 — calendar:eventRsvp (发 iTIP REPLY 给 organizer)
-// 通过 DavMail SMTP submission 把 text/calendar; method=REPLY 邮件发到组织者,
-// Outlook/Exchange Calendar Assistant 解析后更新 organizer 端 attendee 的 PARTSTAT.
-// ============================================================
-
-export type RsvpResponse = 'accept' | 'tentative' | 'decline'
-
-export interface EventRsvpOpts {
-  /** vEvent UID (RFC 5545); 必填. */
-  icalUid: string
-  /** accept / tentative / decline (CLI 端 case-insensitive + 同义词). */
-  response: RsvpResponse
-  /** 非空 = RSVP 单次跳脱 occurrence; 留空 = 整系列. */
-  recurrenceId?: string | null
-  /** 限定 source; 留空 = caldav → email_ics → legacy 自动查. */
-  source?: 'caldav' | 'email_ics' | 'legacy_calendar_app'
-  /** True = 仅查 row + 拼 plan, 不发 SMTP (无需 auth). */
-  dryRun?: boolean
-}
-
-export async function runEventRsvp(opts: EventRsvpOpts): Promise<unknown> {
-  const args = ['calendar', 'rsvp', opts.icalUid, opts.response]
-  if (opts.recurrenceId) {
-    args.push('--recurrence-id', opts.recurrenceId)
-  }
-  if (opts.source) {
-    args.push('--source', opts.source)
-  }
-  if (opts.dryRun) args.push('--dry-run')
-  return callCli(args, {
-    write: !opts.dryRun,
-    needsAuth: !opts.dryRun,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-// ============================================================
-// Phase 2.2/2.3 — calendar event CRUD (CalDAV PUT/DELETE)
-// 直接改 Exchange 端日历资源 (跟 RSVP 是不同语义: owner ops vs attendee reply).
-// ============================================================
-
-export interface EventAttendeeInput {
-  email: string
-  name?: string
-}
-
-export interface EventCreateOpts {
-  summary: string
-  /** ISO datetime with tz (必填); e.g. '2026-05-30T14:00:00+08:00' or 'Z' 结尾. */
-  startIso: string
-  endIso: string
-  location?: string
-  description?: string
-  attendees?: EventAttendeeInput[]
-  /** 目标 calendar 名; 留空 = 默认 (Outlook 主日历). */
-  calendarName?: string
-  /** 默认 CONFIRMED. */
-  status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
-}
-
-export async function runEventCreate(opts: EventCreateOpts): Promise<unknown> {
-  const args = [
-    'calendar',
-    'create',
-    '--summary',
-    opts.summary,
-    '--start',
-    opts.startIso,
-    '--end',
-    opts.endIso
-  ]
-  if (opts.location) args.push('--location', opts.location)
-  if (opts.description) args.push('--description', opts.description)
-  if (opts.calendarName) args.push('--calendar', opts.calendarName)
-  if (opts.status) args.push('--status', opts.status)
-  for (const a of opts.attendees || []) {
-    if (!a.email) continue
-    args.push('--attendee', a.name ? `${a.email},${a.name}` : a.email)
-  }
-  return callCli(args, { write: true, needsAuth: true, timeoutMs: WRITE_TIMEOUT_MS })
-}
-
-export interface EventUpdateOpts {
-  icalUid: string
-  /** All optional — 不传 = 保留原值. */
-  summary?: string
-  startIso?: string
-  endIso?: string
-  location?: string
-  description?: string
-  attendees?: EventAttendeeInput[]
-  status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
-  calendarName?: string
-  /** 默认 SEQUENCE +1 (RFC 5545 标准). */
-  noSequenceBump?: boolean
-}
-
-export async function runEventUpdate(opts: EventUpdateOpts): Promise<unknown> {
-  const args = ['calendar', 'update', opts.icalUid]
-  if (opts.summary !== undefined) args.push('--summary', opts.summary)
-  if (opts.startIso !== undefined) args.push('--start', opts.startIso)
-  if (opts.endIso !== undefined) args.push('--end', opts.endIso)
-  if (opts.location !== undefined) args.push('--location', opts.location)
-  if (opts.description !== undefined) args.push('--description', opts.description)
-  if (opts.status !== undefined) args.push('--status', opts.status)
-  if (opts.calendarName) args.push('--calendar', opts.calendarName)
-  if (opts.noSequenceBump) args.push('--no-sequence-bump')
-  for (const a of opts.attendees || []) {
-    if (!a.email) continue
-    args.push('--attendee', a.name ? `${a.email},${a.name}` : a.email)
-  }
-  return callCli(args, { write: true, needsAuth: true, timeoutMs: WRITE_TIMEOUT_MS })
-}
-
-export interface EventDeleteOpts {
-  icalUid: string
-  calendarName?: string
-}
-
-export async function runEventDelete(opts: EventDeleteOpts): Promise<unknown> {
-  const args = ['calendar', 'delete', opts.icalUid, '--yes']
-  if (opts.calendarName) args.push('--calendar', opts.calendarName)
-  return callCli(args, { write: true, needsAuth: true, timeoutMs: WRITE_TIMEOUT_MS })
-}
-
-export interface CalendarExpandOpts {
-  horizonWeeks?: number
-  dryRun?: boolean
-}
-
-export async function runCalendarExpand(opts: CalendarExpandOpts = {}): Promise<unknown> {
-  const args = ['calendar', 'expand']
-  if (opts.horizonWeeks !== undefined) {
-    args.push('--horizon-weeks', String(opts.horizonWeeks))
-  }
-  if (opts.dryRun) args.push('--dry-run')
-  return callCli(args, {
-    write: !opts.dryRun,
-    needsAuth: !opts.dryRun,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-// ============================================================
-// Phase 3 §3.1 — Calendar SSoT IPC handlers (better-sqlite3 直读)
-// ============================================================
-
-/** RRULE 展开后的单 occurrence (前端日历 timeline 渲染拿到的). */
-export interface CalendarEventOccurrence {
-  id: number
-  ical_uid: string
-  recurrence_id: string | null
-  sequence: number
-  summary: string
-  /** ISO UTC datetime — 前端 toLocaleString 转本地 TZ. */
-  occurrence_start_iso: string
-  occurrence_end_iso: string
-  is_recurrence_instance: boolean
-  is_all_day: boolean
-  calendar_name: string
-  organizer: string
-  attendees: Array<{ email: string; name?: string; response?: string; role?: string }>
-  location: string
-  url: string
-  status: string
-  response_status: string
-  source: 'caldav' | 'email_ics' | 'legacy_calendar_app'
-  notion_page_id: string | null
-  related_email_internal_id: number | null
-}
-
-/** calendar_event 表完整 row (event-get 输出, 含 dtstart_iso 等 raw 字段). */
-export interface CalendarEventRow {
-  id: number
-  ical_uid: string
-  recurrence_id: string | null
-  sequence: number
-  summary: string
-  description: string
-  location: string
-  organizer: string
-  attendees: Array<{ email: string; name?: string; response?: string; role?: string }>
-  dtstart_iso: string | null
-  dtend_iso: string | null
-  is_all_day: boolean
-  rrule: string
-  exdates: string[]
-  rdates: string[]
-  status: string
-  response_status: string
-  url: string
-  calendar_name: string
-  source: string
-  notion_page_id: string | null
-  related_email_internal_id: number | null
-  ics_raw: string
-}
-
-export interface CalendarSyncStateItem {
-  calendar_name: string
-  ctag: string | null
-  sync_token: string | null
-  last_full_sync_at_iso: string | null
-  last_incremental_sync_at_iso: string | null
-  last_error: string | null
-}
-
-interface DbCalendarRow {
-  id: number
-  ical_uid: string
-  recurrence_id: string | null
-  sequence: number
-  summary: string | null
-  description: string | null
-  location: string | null
-  organizer: string | null
-  attendees_json: string | null
-  dtstart_utc: number
-  dtend_utc: number | null
-  is_all_day: number
-  rrule: string | null
-  exdates_json: string | null
-  rdates_json: string | null
-  status: string | null
-  response_status: string | null
-  url: string | null
-  ics_raw: string | null
-  source: string
-  notion_page_id: string | null
-  related_email_internal_id: number | null
-  calendar_name: string | null
-}
-
-function epochToIso(epoch: number | null): string | null {
-  if (epoch == null || Number.isNaN(epoch)) return null
-  return new Date(epoch * 1000).toISOString()
-}
-
-function parseJsonArray<T>(s: string | null): T[] {
-  if (!s) return []
-  try {
-    const v = JSON.parse(s)
-    return Array.isArray(v) ? (v as T[]) : []
-  } catch {
-    return []
-  }
-}
-
-function rowToCalendarEventRow(r: DbCalendarRow): CalendarEventRow {
-  return {
-    id: r.id,
-    ical_uid: r.ical_uid,
-    recurrence_id: r.recurrence_id,
-    sequence: r.sequence,
-    summary: r.summary ?? '',
-    description: r.description ?? '',
-    location: r.location ?? '',
-    organizer: r.organizer ?? '',
-    attendees: parseJsonArray(r.attendees_json),
-    dtstart_iso: epochToIso(r.dtstart_utc),
-    dtend_iso: epochToIso(r.dtend_utc),
-    is_all_day: !!r.is_all_day,
-    rrule: r.rrule ?? '',
-    exdates: parseJsonArray<string>(r.exdates_json),
-    rdates: parseJsonArray<string>(r.rdates_json),
-    status: r.status ?? '',
-    response_status: r.response_status ?? '',
-    url: r.url ?? '',
-    calendar_name: r.calendar_name ?? '',
-    source: r.source,
-    notion_page_id: r.notion_page_id,
-    related_email_internal_id: r.related_email_internal_id,
-    ics_raw: r.ics_raw ?? ''
-  }
-}
-
-/**
- * 展开单 row 的 RRULE 到窗口内 occurrences.
- *
- * 跟 src/calendar_sync/expander.py 的 expand_in_window 等价行为:
- * - 无 RRULE → 单次 event, overlap 窗口才返
- * - 有 RRULE → rrule lib 展开, 套用 EXDATE 跳过, RDATE 额外加, MAX_COUNT 保护
- *
- * 注意: rrule lib 接受 Date 对象 (本机 TZ 解释), 但服务端 dtstart 是 UTC epoch.
- * 我们在 Date 构造时直接用 epoch ms (UTC 准的), 展开结果也是 UTC Date.
- */
-const MAX_OCCURRENCES_PER_RRULE = 500
-
-function expandInWindow(
-  row: DbCalendarRow,
-  windowStartMs: number,
-  windowEndMs: number,
-  expandRecurrences: boolean
-): Array<{ start: Date; end: Date; isRecurrence: boolean }> {
-  const dtstartMs = row.dtstart_utc * 1000
-  const dtendMs = row.dtend_utc != null ? row.dtend_utc * 1000 : dtstartMs + 60 * 60 * 1000
-  const durationMs = Math.max(dtendMs - dtstartMs, 60 * 60 * 1000)
-
-  if (!row.rrule || !expandRecurrences) {
-    // 单次 — overlap 判断
-    if (dtstartMs < windowEndMs && dtendMs > windowStartMs) {
-      return [{ start: new Date(dtstartMs), end: new Date(dtendMs), isRecurrence: false }]
-    }
-    return []
-  }
-
-  // RRULE 展开
-  let rruleStr = row.rrule.trim()
-  if (rruleStr.toUpperCase().startsWith('RRULE:')) {
-    rruleStr = rruleStr.slice(6)
-  }
-  let rule: ReturnType<typeof rrulestr>
-  try {
-    rule = rrulestr(`RRULE:${rruleStr}`, { dtstart: new Date(dtstartMs) })
-  } catch {
-    // 解析失败 — fallback 单次
-    if (dtstartMs < windowEndMs && dtendMs > windowStartMs) {
-      return [{ start: new Date(dtstartMs), end: new Date(dtendMs), isRecurrence: false }]
-    }
-    return []
-  }
-
-  // 拉窗口内 candidates (rrule.between 不含 dtstart 默认; 用 after - duration 防漏)
-  const expandAfter = new Date(windowStartMs - durationMs)
-  const expandBefore = new Date(windowEndMs)
-  let candidates: Date[] = []
-  try {
-    candidates = rule.between(expandAfter, expandBefore, true)
-  } catch {
-    candidates = []
-  }
-
-  if (candidates.length > MAX_OCCURRENCES_PER_RRULE) {
-    candidates = candidates.slice(0, MAX_OCCURRENCES_PER_RRULE)
-  }
-
-  // EXDATE 跳过 (秒级精度匹配)
-  const exdateSet = new Set<number>()
-  for (const ex of parseJsonArray<string>(row.exdates_json)) {
-    const t = Date.parse(ex)
-    if (!Number.isNaN(t)) exdateSet.add(Math.floor(t / 1000))
-  }
-  // RDATE 额外加
-  for (const rd of parseJsonArray<string>(row.rdates_json)) {
-    const t = Date.parse(rd)
-    if (!Number.isNaN(t) && t >= windowStartMs && t < windowEndMs) {
-      candidates.push(new Date(t))
-    }
-  }
-
-  // 去重 + 排序 + 过滤
-  const seen = new Set<number>()
-  const result: Array<{ start: Date; end: Date; isRecurrence: boolean }> = []
-  candidates.sort((a, b) => a.getTime() - b.getTime())
-  for (const occStart of candidates) {
-    const occStartMs = occStart.getTime()
-    const occStartSec = Math.floor(occStartMs / 1000)
-    if (exdateSet.has(occStartSec)) continue
-    if (seen.has(occStartSec)) continue
-    seen.add(occStartSec)
-    const occEndMs = occStartMs + durationMs
-    if (occStartMs < windowEndMs && occEndMs > windowStartMs) {
-      result.push({
-        start: new Date(occStartMs),
-        end: new Date(occEndMs),
-        isRecurrence: true
-      })
-    }
-  }
-  return result
-}
-
-export interface EventsListOpts {
-  fromIso?: string
-  toIso?: string
-  calendarName?: string
-  source?: 'caldav' | 'email_ics' | 'legacy_calendar_app'
-  expandRecurrences?: boolean
-  limit?: number
-}
-
-export function runEventsList(opts: EventsListOpts = {}): CalendarEventOccurrence[] {
-  const expand = opts.expandRecurrences !== false
-  const limit = opts.limit ?? 1000
-
-  const now = new Date()
-  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  const windowStartMs = opts.fromIso ? Date.parse(opts.fromIso) : todayUtc
-  const windowEndMs = opts.toIso
-    ? Date.parse(opts.toIso)
-    : windowStartMs + 7 * 24 * 60 * 60 * 1000
-  if (
-    Number.isNaN(windowStartMs) ||
-    Number.isNaN(windowEndMs) ||
-    windowEndMs <= windowStartMs
-  ) {
-    return []
-  }
-
-  // Pull all non-deleted rows in same date range OR with RRULE — for simplicity,
-  // pull every active row (typical user <2000 calendar events) + let expander filter.
-  // Optimization: WHERE dtstart_utc < we OR rrule != '' — Phase 4 if needed.
-  const db = getDb()
-  const clauses = ['deleted_at IS NULL']
-  const params: Array<string | number> = []
-  if (opts.source) {
-    clauses.push('source = ?')
-    params.push(opts.source)
-  }
-  if (opts.calendarName) {
-    clauses.push('calendar_name = ?')
-    params.push(opts.calendarName)
-  }
-  const sql = `
-    SELECT id, ical_uid, recurrence_id, sequence, summary, description, location,
-           organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
-           rrule, exdates_json, rdates_json, status, response_status, url,
-           ics_raw, source, notion_page_id, related_email_internal_id, calendar_name
-    FROM calendar_event WHERE ${clauses.join(' AND ')}
-    ORDER BY dtstart_utc ASC
-  `
-  let rows: DbCalendarRow[] = []
-  try {
-    rows = db.prepare(sql).all(...params) as DbCalendarRow[]
-  } catch (e) {
-    // schema 未升级或表不存在 (用户尚未启用 calendar_sync_enabled), 返回空
-    console.warn('[calendar:eventsList] query failed (calendar_event table missing?):', e)
-    return []
-  }
-
-  const occurrences: CalendarEventOccurrence[] = []
-  for (const r of rows) {
-    const expanded = expandInWindow(r, windowStartMs, windowEndMs, expand)
-    for (const occ of expanded) {
-      occurrences.push({
-        id: r.id,
-        ical_uid: r.ical_uid,
-        recurrence_id: r.recurrence_id,
-        sequence: r.sequence,
-        summary: r.summary ?? '',
-        occurrence_start_iso: occ.start.toISOString(),
-        occurrence_end_iso: occ.end.toISOString(),
-        is_recurrence_instance: occ.isRecurrence,
-        is_all_day: !!r.is_all_day,
-        calendar_name: r.calendar_name ?? '',
-        organizer: r.organizer ?? '',
-        attendees: parseJsonArray(r.attendees_json),
-        location: r.location ?? '',
-        url: r.url ?? '',
-        status: r.status ?? '',
-        response_status: r.response_status ?? '',
-        source: r.source as CalendarEventOccurrence['source'],
-        notion_page_id: r.notion_page_id,
-        related_email_internal_id: r.related_email_internal_id
-      })
-      if (occurrences.length >= limit) break
-    }
-    if (occurrences.length >= limit) break
-  }
-
-  occurrences.sort(
-    (a, b) =>
-      Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
-  )
-  return occurrences
-}
-
-export interface EventGetOpts {
-  icalUid: string
-  recurrenceId?: string | null
-  source?: 'caldav' | 'email_ics' | 'legacy_calendar_app'
-}
-
-export function runEventGet(opts: EventGetOpts): CalendarEventRow | null {
-  const db = getDb()
-  const source = opts.source ?? 'caldav'
-  let row: DbCalendarRow | undefined
-  try {
-    row = db
-      .prepare(
-        `SELECT id, ical_uid, recurrence_id, sequence, summary, description, location,
-                organizer, attendees_json, dtstart_utc, dtend_utc, is_all_day,
-                rrule, exdates_json, rdates_json, status, response_status, url,
-                ics_raw, source, notion_page_id, related_email_internal_id, calendar_name
-         FROM calendar_event
-         WHERE ical_uid = ? AND source = ?
-           AND COALESCE(recurrence_id, '') = COALESCE(?, '')
-           AND deleted_at IS NULL
-         LIMIT 1`
-      )
-      .get(opts.icalUid, source, opts.recurrenceId ?? null) as DbCalendarRow | undefined
-  } catch (e) {
-    console.warn('[calendar:eventGet] query failed:', e)
-    return null
-  }
-  return row ? rowToCalendarEventRow(row) : null
-}
-
-export function runSyncStatus(): CalendarSyncStateItem[] {
-  const db = getDb()
-  try {
-    const rows = db
-      .prepare(
-        `SELECT calendar_name, ctag, sync_token,
-                last_full_sync_at, last_incremental_sync_at, last_error
-         FROM calendar_sync_state ORDER BY calendar_name`
-      )
-      .all() as Array<{
-      calendar_name: string
-      ctag: string | null
-      sync_token: string | null
-      last_full_sync_at: number | null
-      last_incremental_sync_at: number | null
-      last_error: string | null
-    }>
-    return rows.map((r) => ({
-      calendar_name: r.calendar_name,
-      ctag: r.ctag,
-      sync_token: r.sync_token,
-      last_full_sync_at_iso: epochToIso(r.last_full_sync_at),
-      last_incremental_sync_at_iso: epochToIso(r.last_incremental_sync_at),
-      last_error: r.last_error
-    }))
-  } catch (e) {
-    console.warn('[calendar:syncStatus] query failed:', e)
-    return []
-  }
-}
-
-export function runCalendarNames(): string[] {
-  const db = getDb()
-  try {
-    const rows = db
-      .prepare(
-        `SELECT DISTINCT calendar_name FROM calendar_event
-         WHERE calendar_name != '' AND deleted_at IS NULL
-         ORDER BY calendar_name`
-      )
-      .all() as Array<{ calendar_name: string }>
-    return rows.map((r) => r.calendar_name)
-  } catch (e) {
-    console.warn('[calendar:calendarNames] query failed:', e)
-    return []
-  }
-}
-
-export interface SyncNowOpts {
-  full?: boolean
-  calendarName?: string
-}
-
-export async function runSyncNow(opts: SyncNowOpts = {}): Promise<unknown> {
-  const args = ['calendar', 'sync-now']
-  if (opts.full === false) args.push('--incremental')
-  if (opts.calendarName) args.push('--calendar', opts.calendarName)
-  return callCli(args, {
-    write: true,
-    needsAuth: true,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-// F4 + F17 — assertSafeSender: defense-in-depth IPC sender frame URL 校验.
-// Electron 默认 BrowserWindow + nodeIntegration:false + contextIsolation:true
-// 已禁止外部 sender, 但 dev tools / BrowserView / 未来 webview 嵌入可能穿透.
-// 只放行 file:// (打包后) + http://localhost (vite dev) + http://127.0.0.1.
-// 拒绝时 throw, ipcMain.handle 自动 reject promise (renderer 收 error).
-//
-// F17 (Opus #H2): 严格化 — 老代码 ``if (!url) return`` 给"空 URL"放行作
-// 测试环境兜底, 但 Electron lifecycle 早期 / BrowserView 刚 attach /
-// about:blank 中转都可能拿到空 URL, 等于把 D in D 漏成 D in 0. 改成空
-// URL 也 throw, vitest 直调 __testing.runXxx 不走 wrapper 不受影响.
-function assertSafeSender(
-  event: Electron.IpcMainInvokeEvent,
-  channel: string
-): void {
-  const url = (event.senderFrame?.url || '').toLowerCase()
-  if (
-    url.startsWith('file://') ||
-    url.startsWith('http://localhost') ||
-    url.startsWith('http://127.0.0.1')
-  ) {
-    return
-  }
-  // 空 URL 或非白名单 — 拒绝
-  // eslint-disable-next-line no-console
-  console.warn(
-    `[calendar-handler] rejected unexpected IPC sender url=${JSON.stringify(url)} channel=${channel}`
-  )
-  throw new Error(`Rejected unexpected IPC sender: ${url || '(empty)'}`)
-}
-
-// F4 — wrapper 让所有 calendar handler 自动经过 sender 校验, 不必每个 callback
-// 第一行手抖加 assertSafeSender.
-function safeIpcHandle(
-  channel: string,
-  handler: (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>
-): void {
-  ipcMain.handle(channel, async (event, ...args) => {
-    assertSafeSender(event, channel)
-    return handler(event, ...args)
-  })
+export type {
+  CalendarEventOccurrence,
+  CalendarEventRow,
+  CalendarExpandOpts,
+  CalendarSyncStateItem,
+  EventAttendeeInput,
+  EventCreateOpts,
+  EventDeleteOpts,
+  EventGetOpts,
+  EventReplayOpts,
+  EventRsvpOpts,
+  EventUpdateOpts,
+  EventsListOpts,
+  RecurringDiscoverOpts,
+  RecurringInviteItem,
+  RecurringReplayOpts,
+  RsvpResponse,
+  SyncNowOpts
 }
 
 export function registerCalendarHandlers(): void {
