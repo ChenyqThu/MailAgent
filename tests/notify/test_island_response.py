@@ -244,7 +244,7 @@ def test_create_draft_alias_invokes_email_draft(choice, patch_run):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 2: 独立路径 (add_to_calendar / defer / ack_in_pagerduty)
+# Phase 2: 独立路径 (add_to_calendar / defer_to_monday_9am)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -268,31 +268,6 @@ def test_defer_to_monday_9am_enqueues_snooze(patch_snooze, patch_run):
     assert patch_snooze[0]["internal_id"] == 77
     # 实际 duration 取决于当前时间; 仅断言 > 60 (至少 1min) 且 < 7d + 9h (绝对上限)
     assert 60 <= patch_snooze[0]["duration_sec"] <= 7 * 24 * 3600 + 9 * 3600
-
-
-def test_ack_in_pagerduty_opens_url_when_present(patch_run):
-    meta = _meta()
-    meta["mailagent.pagerdutyIncidentUrl"] = "https://acme.pagerduty.com/incidents/P123"
-    asyncio.run(island_response.handle_response(_resp("ack_in_pagerduty"), meta))
-    assert len(patch_run) == 1
-    assert patch_run[0]["args"] == ["open", "https://acme.pagerduty.com/incidents/P123"]
-
-
-def test_ack_in_pagerduty_falls_back_to_open_mail_when_no_url(patch_run):
-    """无 incident URL → 退化为 open_mail 路径 (osascript)."""
-    asyncio.run(island_response.handle_response(_resp("ack_in_pagerduty"), _meta()))
-    assert len(patch_run) == 1
-    assert patch_run[0]["args"][0] == "osascript"
-
-
-def test_ack_in_pagerduty_rejects_non_http_url(patch_run):
-    """envelope.metadata 的 URL 不是 http/https → 不直接 open, 退化 open_mail
-    (防 javascript: / file:// 等 scheme attack)."""
-    meta = _meta()
-    meta["mailagent.pagerdutyIncidentUrl"] = "javascript:alert('xss')"
-    asyncio.run(island_response.handle_response(_resp("ack_in_pagerduty"), meta))
-    # 应退到 open_mail
-    assert patch_run[0]["args"][0] == "osascript"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

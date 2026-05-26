@@ -120,8 +120,6 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
             )
         elif choice == "add_to_calendar":
             await _add_to_calendar()
-        elif choice == "ack_in_pagerduty":
-            await _ack_in_pagerduty(internal_id, envelope_meta)
         elif choice == "convert_to_notion_task":
             # F3: LLM 决策 + 代码写日程库 task (create-task CLI 内部已 mark 邮件完成)
             await _convert_to_notion_task(internal_id)
@@ -237,23 +235,6 @@ async def _add_to_calendar() -> None:
         log.warning("[island-response] add_to_calendar: Calendar.app missing; aborting")
         return
     await _run(["open", "-a", "Calendar"], timeout=5)
-
-
-async def _ack_in_pagerduty(internal_id: int, meta: Dict[str, str]) -> None:
-    """envelope.metadata.pagerdutyIncidentUrl 存在 → ``open`` 跳转; 否则降级 _open_mail.
-
-    业务跟进 (Phase 3): mail-sync 端在 LLM classify 时把 PagerDuty alert 邮件的 incident
-    URL 抽出来塞 envelope.metadata.mailagent.pagerdutyIncidentUrl, 这里直接 open.
-    """
-    url = meta.get("mailagent.pagerdutyIncidentUrl", "").strip()
-    if url and url.startswith(("http://", "https://")):
-        await _run(["open", url], timeout=5)
-        return
-    log.info(
-        "[island-response] ack_in_pagerduty: no incident URL in envelope; opening mail %d",
-        internal_id,
-    )
-    await _open_mail(internal_id, meta)
 
 
 def _enqueue_snooze(internal_id: int, duration_sec: int, meta: Dict[str, str]) -> None:

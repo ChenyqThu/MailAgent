@@ -75,10 +75,8 @@ RECOMMENDED_ACTION_ID_INBOX: List[str] = [
     # 项目周报 / 报告 / 非紧急但需工作日处理
     "defer_to_monday_9am",
     "convert_to_notion_task",
-    # 紧急告警 / PagerDuty
-    "ack_in_pagerduty",
-    # escalate_to_oncall 已下线 (2026-05-26): 需飞书/PagerDuty oncall 集成才能真做,
-    # Phase 2 仅 mark_done alias 名称误导. Phase 3 接 oncall page API 时整体加回.
+    # ack_in_pagerduty / escalate_to_oncall 已下线 (2026-05-26): PagerDuty/oncall 是
+    # 运维告警场景, 产品经理用户不用. Phase 3 若有运维邮件需求接 incident 集成时加回.
     # 简单 Y/N 询问
     "quick_reply_yes",
     "quick_reply_no_with_reason",

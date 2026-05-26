@@ -555,13 +555,13 @@ def test_dispatch_urgent_with_three_recommended_actions_all_kept(patch_send, fak
     island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
     env = _run_dispatch(patch_send, **_urgent_kwargs(
         recommended_actions=[
-            {"id": "ack_in_pagerduty", "title": "在 PagerDuty 确认", "confidence": 0.93},
+            {"id": "archive_only", "title": "归档", "confidence": 0.93},
             {"id": "decline_with_reason", "title": "婉拒并说明", "confidence": 0.8},
             {"id": "quick_reply_yes", "title": "快速回复 是", "confidence": 0.55},
         ],
     ))
     ids = [o.id for o in env.intervention.options]
-    assert ids == ["ack_in_pagerduty", "decline_with_reason", "quick_reply_yes"]
+    assert ids == ["archive_only", "decline_with_reason", "quick_reply_yes"]
 
 
 def test_dispatch_urgent_caps_recommended_actions_to_3(patch_send, fake_store):

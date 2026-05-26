@@ -120,21 +120,21 @@ def test_recommended_action_enum_is_union_of_inbox_and_sent():
 
 
 def test_recommended_action_inbox_whitelist_content():
-    # escalate_to_oncall 已下线 2026-05-26 (需 oncall 集成才能真做; Phase 3 加回)
+    # escalate_to_oncall + ack_in_pagerduty 已下线 2026-05-26 (运维场景, 产品经理不用)
     expected = {
         "archive_and_unsubscribe", "archive_only",
         "add_to_calendar", "decline_with_reason",
         "defer_to_monday_9am", "convert_to_notion_task",
-        "ack_in_pagerduty",
         "quick_reply_yes", "quick_reply_no_with_reason",
     }
     assert set(RECOMMENDED_ACTION_ID_INBOX) == expected
 
 
-def test_escalate_to_oncall_removed_from_whitelist():
-    """escalate_to_oncall 2026-05-26 下线 — 不在任何 whitelist (防误加回)."""
-    assert "escalate_to_oncall" not in RECOMMENDED_ACTION_ID_INBOX
-    assert "escalate_to_oncall" not in RECOMMENDED_ACTION_ID_ENUM
+def test_ops_actions_removed_from_whitelist():
+    """escalate_to_oncall + ack_in_pagerduty 2026-05-26 下线 — 运维场景不在 whitelist."""
+    for action in ("escalate_to_oncall", "ack_in_pagerduty"):
+        assert action not in RECOMMENDED_ACTION_ID_INBOX
+        assert action not in RECOMMENDED_ACTION_ID_ENUM
 
 
 def test_recommended_action_sent_whitelist_content():
@@ -177,7 +177,9 @@ def test_recommended_actions_not_required():
 def test_is_valid_recommended_action_id_inbox():
     assert is_valid_recommended_action_id("archive_and_unsubscribe", "收件箱") is True
     assert is_valid_recommended_action_id("add_to_calendar", "收件箱") is True
-    assert is_valid_recommended_action_id("ack_in_pagerduty", "收件箱") is True
+    assert is_valid_recommended_action_id("convert_to_notion_task", "收件箱") is True
+    # ack_in_pagerduty 已下线 → 收件箱也无效
+    assert is_valid_recommended_action_id("ack_in_pagerduty", "收件箱") is False
     # 发件箱专属 id 在收件箱无效
     assert is_valid_recommended_action_id("mark_done_no_response", "收件箱") is False
     assert is_valid_recommended_action_id("nudge_recipient", "收件箱") is False

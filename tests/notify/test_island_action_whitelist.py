@@ -38,12 +38,12 @@ def test_recommended_action_ids_matches_schema_enum():
 
 
 def test_known_action_ids_is_union():
-    """整体 handler 端可识别 id = static 5 ∪ recommended 11 = 16.
-    (escalate_to_oncall 2026-05-26 下线后 recommended 12→11)."""
+    """整体 handler 端可识别 id = static 5 ∪ recommended 10 = 15.
+    (escalate_to_oncall + ack_in_pagerduty 2026-05-26 下线后 recommended 12→10)."""
     assert KNOWN_ACTION_IDS == (
         STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS
     )
-    assert len(KNOWN_ACTION_IDS) == 16
+    assert len(KNOWN_ACTION_IDS) == 15
 
 
 def test_static_and_recommended_are_disjoint():
@@ -86,12 +86,13 @@ def test_is_recommended_action_id_only_dynamic():
     for rid in (
         "archive_and_unsubscribe", "archive_only", "add_to_calendar",
         "decline_with_reason", "defer_to_monday_9am", "convert_to_notion_task",
-        "ack_in_pagerduty", "quick_reply_yes",
+        "quick_reply_yes",
         "quick_reply_no_with_reason", "mark_done_no_response", "nudge_recipient",
     ):
         assert is_recommended_action_id(rid) is True, rid
-    # escalate_to_oncall 已下线 → 不再是 recommended
+    # escalate_to_oncall + ack_in_pagerduty 已下线 → 不再是 recommended
     assert is_recommended_action_id("escalate_to_oncall") is False
+    assert is_recommended_action_id("ack_in_pagerduty") is False
 
 
 def test_is_recommended_action_id_non_str_dropped():
