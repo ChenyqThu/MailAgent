@@ -206,3 +206,43 @@ def test_extract_task_fields_uses_injected_client():
     assert "Q3 budget" in user
     assert "Gary 问预算" in user
     assert "🟠 高" in user  # priority hint 映射 (🟡 重要 → 🟠 高)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# as_meeting 模式 (add_to_calendar) — system prompt 切换
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_build_system_default_is_task_mode():
+    from src.llm_agent.task_extractor import _build_system
+    blocks = _build_system(_NOW, as_meeting=False)
+    text = blocks[0]["text"]
+    assert "task" in text.lower()
+    assert "时间块" in text  # GTD 时间块 + 任务 (task 模式特征, 区别于会议模式)
+    assert "实际开始时间" not in text  # 不是会议模式
+
+
+def test_build_system_as_meeting_抽会议时间():
+    from src.llm_agent.task_extractor import _build_system
+    blocks = _build_system(_NOW, as_meeting=True)
+    text = blocks[0]["text"]
+    assert "会议" in text
+    assert "实际开始时间" in text  # 强调抽会议实际时间 (非建议处理时间)
+    assert "工作·会议" in text  # schedule_type 引导
+
+
+def test_extract_task_fields_as_meeting_passes_through():
+    import asyncio
+
+    fake = _FakeClient(_result(
+        task_title="产品评审会", schedule_type="💼 工作·会议",
+        priority="🟡 中", suggested_time_iso="2026-05-29T10:00:00+08:00",
+    ))
+    asyncio.run(extract_task_fields(
+        subject="周五产品评审", body_markdown="周五上午 10 点开会",
+        as_meeting=True, now=_NOW, client=fake,
+    ))
+    # as_meeting 走会议 system prompt
+    system_text = fake.calls[0]["system_blocks"][0]["text"]
+    assert "会议" in system_text
+    assert "实际开始时间" in system_text

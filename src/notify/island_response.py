@@ -119,7 +119,7 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
                 envelope_meta,
             )
         elif choice == "add_to_calendar":
-            await _add_to_calendar()
+            await _add_to_calendar(internal_id)
         elif choice == "convert_to_notion_task":
             # F3: LLM 决策 + 代码写日程库 task (create-task CLI 内部已 mark 邮件完成)
             await _convert_to_notion_task(internal_id)
@@ -224,17 +224,14 @@ async def _convert_to_notion_task(internal_id: int) -> None:
     )
 
 
-async def _add_to_calendar() -> None:
-    """Phase 2: 拉起 Calendar.app 让用户手动加 (envelope 未含完整 .ics).
-
-    业务跟进 (Phase 3): 真做 .ics 抽取 + ``mailagent calendar create`` CLI 直接建事件,
-    无需用户额外操作.
-    """
-    use_app = Path("/Applications/Calendar.app").exists() and bool(shutil.which("open"))
-    if not use_app:
-        log.warning("[island-response] add_to_calendar: Calendar.app missing; aborting")
-        return
-    await _run(["open", "-a", "Calendar"], timeout=5)
+async def _add_to_calendar(internal_id: int) -> None:
+    # F5: LLM 抽邮件提到的会议时间 + 建日程库 page (--as-meeting). 复用 create-task
+    # CLI 会议模式 (schedule_type=工作·会议 + Time 抽自邮件). meeting_sync 已自动处理
+    # 标准 .ics 邀请, 这个 cover 非标准时间提及 (邮件正文说"周五 10:00"等).
+    await _run(
+        _mailagent_args("notion", "create-task", str(internal_id), "--as-meeting"),
+        timeout=90,
+    )
 
 
 def _enqueue_snooze(internal_id: int, duration_sec: int, meta: Dict[str, str]) -> None:

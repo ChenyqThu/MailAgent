@@ -838,10 +838,12 @@ async def _write_task_page(cli, fields, email_page_id: str, subject: str, sender
 async def _create_task_flow(
     cli, *, subject: str, body_md: str, ai_summary: str, ai_priority: str,
     sender: str, email_page_id: str, dry_run: bool, no_mark_done: bool,
+    as_meeting: bool = False,
 ) -> dict:
     """单 asyncio.run 内: LLM extract → (非 dry-run) 写 task page → 标原邮件已完成.
 
     单 loop 包全部 async — 避免多次 asyncio.run 复用 AsyncClient 踩 loop 绑定坑.
+    ``as_meeting=True`` (add_to_calendar): LLM 抽会议实际时间 + schedule_type 会议.
     """
     from loguru import logger
     from src.llm_agent.task_extractor import extract_task_fields
@@ -849,6 +851,7 @@ async def _create_task_flow(
     fields = await extract_task_fields(
         subject=subject, body_markdown=body_md,
         ai_summary=ai_summary, ai_priority=ai_priority, sender=sender,
+        as_meeting=as_meeting,
     )
     if dry_run:
         return {"fields": fields, "task_page_id": "", "marked_done": False}
@@ -876,14 +879,22 @@ def notion_create_task(
     no_mark_done: bool = typer.Option(
         False, "--no-mark-done", help="不把原邮件标 Processing Status=已完成",
     ),
+    as_meeting: bool = typer.Option(
+        False, "--as-meeting",
+        help="会议模式 (灵动岛 add_to_calendar): LLM 抽邮件提到的会议实际时间 + "
+             "schedule_type=工作·会议, 而非建议处理时间",
+    ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """邮件转日程库 (GTD 时间块) 的 task — LLM 决策填字段 + 代码确定性写.
+    """邮件转日程库 (GTD 时间块) 的 task / 会议 — LLM 决策填字段 + 代码确定性写.
 
-    灵动岛 (ping-island) convert_to_notion_task action handler 调本命令. 流程:
-      internal_id → SQLite metadata + body → LLM extract_task (精炼 title / 智能
-      time 建议 / 日程类型 / 优先级 / description) → 写日程库 page (含 Email Inbox
-      relation 关联原邮件) → 标原邮件已完成.
+    灵动岛 (ping-island) convert_to_notion_task / add_to_calendar action handler 调.
+    流程: internal_id → SQLite metadata + body → LLM extract_task (精炼 title /
+    时间 / 日程类型 / 优先级 / description) → 写日程库 page (含 Email Inbox relation
+    关联原邮件) → 标原邮件已完成.
+
+    ``--as-meeting`` (add_to_calendar): LLM 抽邮件提到的会议实际时间 + 类型=会议;
+    默认 (convert_to_notion_task): LLM 建议何时处理这个任务.
 
     日程库 = CALENDAR_DATABASE_ID. LLM 介入决策不介入执行 (单次 tool_use, ~$0.005).
     """
@@ -923,7 +934,7 @@ def notion_create_task(
         res = asyncio.run(_create_task_flow(
             cli, subject=subject, body_md=body_md, ai_summary=ai_summary,
             ai_priority=ai_priority, sender=sender, email_page_id=email_page_id,
-            dry_run=dry_run, no_mark_done=no_mark_done,
+            dry_run=dry_run, no_mark_done=no_mark_done, as_meeting=as_meeting,
         ))
     except LLMCallError as e:
         raise emit_cli_error(cli, CliError(f"LLM extract_task 失败: {e}"))

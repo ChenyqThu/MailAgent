@@ -248,18 +248,23 @@ def test_create_draft_alias_invokes_email_draft(choice, patch_run):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_add_to_calendar_opens_calendar_app(patch_run, monkeypatch):
-    monkeypatch.setattr(island_response.Path, "exists", lambda self: True)
-    monkeypatch.setattr(island_response.shutil, "which", lambda _: "/usr/bin/open")
-    asyncio.run(island_response.handle_response(_resp("add_to_calendar"), _meta()))
+def test_add_to_calendar_invokes_create_task_as_meeting(patch_run):
+    """F5: add_to_calendar 改调 create-task --as-meeting (LLM 抽会议时间真建日程),
+    不再 open Calendar.app."""
+    asyncio.run(island_response.handle_response(_resp("add_to_calendar"), _meta(77)))
     assert len(patch_run) == 1
-    assert patch_run[0]["args"] == ["open", "-a", "Calendar"]
+    args = patch_run[0]["args"]
+    assert args == ["mailagent", "notion", "create-task", "77", "--as-meeting"]
 
 
-def test_add_to_calendar_skips_when_app_missing(patch_run, monkeypatch):
-    monkeypatch.setattr(island_response.Path, "exists", lambda self: False)
-    asyncio.run(island_response.handle_response(_resp("add_to_calendar"), _meta()))
-    assert patch_run == []
+def test_add_to_calendar_api_key_leading(patch_run, monkeypatch):
+    monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "k_cal")
+    asyncio.run(island_response.handle_response(_resp("add_to_calendar"), _meta(77)))
+    args = patch_run[0]["args"]
+    assert args == [
+        "mailagent", "--api-key", "k_cal",
+        "notion", "create-task", "77", "--as-meeting",
+    ]
 
 
 def test_defer_to_monday_9am_enqueues_snooze(patch_snooze, patch_run):

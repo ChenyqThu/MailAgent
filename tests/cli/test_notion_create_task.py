@@ -154,6 +154,33 @@ def test_create_task_no_mark_done_flag(cli_runner, seeded_db, monkeypatch):
     #  这里只断言 marked_done=False — flow 没进 mark 分支)
 
 
+def test_create_task_as_meeting_flag(cli_runner, seeded_db, monkeypatch):
+    """--as-meeting (add_to_calendar): extract_task_fields 收到 as_meeting=True."""
+    import src.llm_agent.task_extractor as te
+    captured = {}
+
+    async def fake_extract(**kwargs):
+        captured.update(kwargs)
+        return TaskFields(
+            task_title="产品评审会", schedule_type="💼 工作·会议",
+            priority="🟡 中", suggested_time_iso="2026-05-29T10:00:00+08:00",
+        )
+
+    monkeypatch.setattr(te, "extract_task_fields", fake_extract)
+    _bypass_auth(monkeypatch)
+    fake_pages = _FakePages()
+    _patch_notion(monkeypatch, fake_pages)
+
+    r = _invoke(cli_runner, "notion", "create-task", "12345", "--as-meeting",
+                "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    assert captured.get("as_meeting") is True
+    # 会议日程类型写进 page
+    props = fake_pages.created[0]["properties"]
+    assert props["日程类型"]["select"]["name"] == "💼 工作·会议"
+
+
 def test_create_task_time_omitted_when_empty(cli_runner, seeded_db, monkeypatch):
     _bypass_auth(monkeypatch)
     # suggested_time 空 → properties 不含 Time

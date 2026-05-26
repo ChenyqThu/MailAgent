@@ -124,21 +124,32 @@ class TaskFields:
     model: str = ""
 
 
-def _build_system(now: datetime) -> List[Dict[str, Any]]:
+def _build_system(now: datetime, as_meeting: bool = False) -> List[Dict[str, Any]]:
     now_str = now.isoformat()
     weekday_cn = "一二三四五六日"[now.weekday()]
-    return [
-        {
-            "type": "text",
-            "text": (
-                "你帮 Lucien 把一封需跟进的邮件转成他日程库 (GTD 时间块 + 任务) 里的"
-                "一个 task。调用 extract_task 工具 EXACTLY ONCE，绝不输出纯文本。\n\n"
-                f"当前时间：{now_str}（周{weekday_cn}，时区 +08:00 北京）。\n"
-                "排 suggested_time 时以此为基准，避免排到已过去的时间 / 周末 / 深夜 "
-                "(22:00-08:00)。"
-            ),
-        }
-    ]
+    if as_meeting:
+        # add_to_calendar 场景: 抽邮件提到的会议实际时间 (非建议处理时间)
+        body = (
+            "你帮 Lucien 把一封含会议信息的邮件加到他的日程库 (日历)。调用 extract_task "
+            "工具 EXACTLY ONCE，绝不输出纯文本。\n\n"
+            f"当前时间：{now_str}（周{weekday_cn}，时区 +08:00 北京）。\n"
+            "这是会议邀请场景，注意：\n"
+            "- schedule_type 选『💼 工作·会议』。\n"
+            "- suggested_time_iso 填**邮件正文里提到的会议实际开始时间**（不是建议处理时间！）。"
+            "邮件说『周五 10:00』『明天下午 2 点』等就以当前时间推算成具体 ISO；"
+            "抽不到明确会议时间就留空字符串。\n"
+            "- description 填会议要点（议程 / 参会人 / 地点 / 会议链接）。"
+        )
+    else:
+        # convert_to_notion_task 场景: 建议何时处理这个任务
+        body = (
+            "你帮 Lucien 把一封需跟进的邮件转成他日程库 (GTD 时间块 + 任务) 里的"
+            "一个 task。调用 extract_task 工具 EXACTLY ONCE，绝不输出纯文本。\n\n"
+            f"当前时间：{now_str}（周{weekday_cn}，时区 +08:00 北京）。\n"
+            "排 suggested_time 时以此为基准，避免排到已过去的时间 / 周末 / 深夜 "
+            "(22:00-08:00)。"
+        )
+    return [{"type": "text", "text": body}]
 
 
 def _build_user(
@@ -178,16 +189,21 @@ async def extract_task_fields(
     ai_summary: str = "",
     ai_priority: str = "",
     sender: str = "",
+    as_meeting: bool = False,
     now: Optional[datetime] = None,
     client: Optional[LLMClient] = None,
 ) -> TaskFields:
-    """LLM 单次 tool_use: 邮件 → TaskFields。raises LLMCallError on failure."""
+    """LLM 单次 tool_use: 邮件 → TaskFields。raises LLMCallError on failure.
+
+    ``as_meeting=True`` (add_to_calendar): 抽邮件提到的会议实际时间 + schedule_type
+    会议。``False`` (convert_to_notion_task): LLM 建议何时处理 task。
+    """
     now = now or datetime.now(_BEIJING)
     own_client = client is None
     client = client or LLMClient()
     try:
         result = await client.classify(
-            system_blocks=_build_system(now),
+            system_blocks=_build_system(now, as_meeting=as_meeting),
             user_content=_build_user(
                 subject=subject, body_markdown=body_markdown,
                 ai_summary=ai_summary, ai_priority=ai_priority, sender=sender,
