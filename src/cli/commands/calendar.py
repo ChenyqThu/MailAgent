@@ -749,6 +749,9 @@ def calendar_rsvp(
     }
     if result.get("body_preview"):
         data["body_preview"] = result["body_preview"]
+    # Phase 3 §P1-e: surface organizer freshness warning (email_ics 源邮件可能 stale)
+    if result.get("organizer_freshness_warning"):
+        data["organizer_freshness_warning"] = result["organizer_freshness_warning"]
 
     if cli.output.lower() == "text":
         if dry_run:
@@ -762,6 +765,8 @@ def calendar_rsvp(
                 f"rsvp sent: status={result['response_status']} "
                 f"to={result['to_email']} ical_uid={result['ical_uid']!r}"
             )
+        if result.get("organizer_freshness_warning"):
+            print(f"  ⚠ {result['organizer_freshness_warning']}")
     else:
         emit(cli, data)
 

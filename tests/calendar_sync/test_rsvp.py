@@ -275,6 +275,147 @@ def test_send_rsvp_update_response_status_failure_does_not_raise():
     assert result["response_status"] == "DECLINED"
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 §P1-e — organizer freshness check (source='email_ics' only)
+# ---------------------------------------------------------------------------
+
+class TestOrganizerFreshness:
+    """Phase 3 §P1-e: source='email_ics' 时检查 organizer 信息是否 stale.
+
+    caldav row 实时从 Outlook 拉, 永远 fresh; email_ics row 来自原邮件解析快照,
+    原邮件被删 / dead_letter 时 row.organizer 可能 stale.
+    """
+
+    def test_caldav_source_returns_no_warning(self):
+        """source='caldav' 跳过检查, 不返 warning."""
+        row = _make_row(source="caldav", organizer="alice@example.com")
+        repo = MagicMock()
+        repo.get_by_ical_uid.return_value = row
+        cfg = _mock_cfg()
+        with patch("src.calendar_sync.rsvp.send_itip_reply_smtp"):
+            result = send_rsvp(repo, cfg, ical_uid="x", response_status="ACCEPTED")
+        assert "organizer_freshness_warning" not in result
+
+    def test_email_ics_no_related_internal_id_no_warning(self):
+        """source='email_ics' 但 related_email_internal_id=None → 无法 check, 不警告."""
+        row = _make_row(
+            source="email_ics", organizer="alice@example.com",
+        )
+        # related_email_internal_id defaults None in _make_row
+        repo = MagicMock()
+        repo.get_by_ical_uid.return_value = row
+        cfg = _mock_cfg()
+        with patch("src.calendar_sync.rsvp.send_itip_reply_smtp"):
+            result = send_rsvp(repo, cfg, ical_uid="x", response_status="ACCEPTED")
+        assert "organizer_freshness_warning" not in result
+
+    def test_email_ics_source_email_missing_warns(self, repo, make_event):
+        """email_ics row 的 related_email_internal_id 在 email_metadata 没找到 → warning."""
+        from src.calendar_sync.rsvp import send_rsvp as real_send_rsvp
+
+        ev = make_event(uid="freshness-test", summary="Stale invite")
+        # 强制写 organizer + related_internal_id (没真邮件 row 在 email_metadata)
+        eid = repo.upsert_from_caldav_event(
+            ev, source="email_ics", related_email_internal_id=999999,
+        )
+        # 更新 organizer 字段
+        with repo._conn_ctx() as conn:
+            conn.execute(
+                "UPDATE calendar_event SET organizer = ? WHERE id = ?",
+                ("missing@example.com", eid),
+            )
+            conn.commit()
+
+        cfg = _mock_cfg()
+        with patch("src.calendar_sync.rsvp.send_itip_reply_smtp"):
+            result = real_send_rsvp(
+                repo, cfg,
+                ical_uid="freshness-test",
+                response_status="ACCEPTED",
+                source="email_ics",
+            )
+        assert "organizer_freshness_warning" in result
+        warning = result["organizer_freshness_warning"]
+        assert "999999" in warning
+        assert "stale" in warning.lower() or "stale" in warning
+
+    def test_email_ics_source_email_present_no_warning(
+        self, repo, make_event, fresh_db,
+    ):
+        """related_email_internal_id 存在 email_metadata + sync_status正常 → 无警告."""
+        from src.calendar_sync.rsvp import send_rsvp as real_send_rsvp
+        import sqlite3 as _sql
+
+        ev = make_event(uid="fresh-invite", summary="Fresh invite")
+        eid = repo.upsert_from_caldav_event(
+            ev, source="email_ics", related_email_internal_id=12345,
+        )
+        with repo._conn_ctx() as conn:
+            conn.execute(
+                "UPDATE calendar_event SET organizer = ? WHERE id = ?",
+                ("alice@example.com", eid),
+            )
+            conn.commit()
+
+        # 插一行 email_metadata (绕过 ORM, 直 SQL)
+        conn = _sql.connect(fresh_db)
+        try:
+            conn.execute(
+                "INSERT INTO email_metadata (internal_id, sync_status, mailbox) "
+                "VALUES (?, 'synced', 'INBOX')",
+                (12345,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        cfg = _mock_cfg()
+        with patch("src.calendar_sync.rsvp.send_itip_reply_smtp"):
+            result = real_send_rsvp(
+                repo, cfg, ical_uid="fresh-invite",
+                response_status="DECLINED", source="email_ics",
+            )
+        assert "organizer_freshness_warning" not in result
+
+    def test_email_ics_source_email_dead_letter_warns(
+        self, repo, make_event, fresh_db,
+    ):
+        """related_email_internal_id 在 email_metadata 但 sync_status='dead_letter' → warning."""
+        from src.calendar_sync.rsvp import send_rsvp as real_send_rsvp
+        import sqlite3 as _sql
+
+        ev = make_event(uid="dead-invite", summary="Dead invite")
+        eid = repo.upsert_from_caldav_event(
+            ev, source="email_ics", related_email_internal_id=54321,
+        )
+        with repo._conn_ctx() as conn:
+            conn.execute(
+                "UPDATE calendar_event SET organizer = ? WHERE id = ?",
+                ("bob@example.com", eid),
+            )
+            conn.commit()
+
+        conn = _sql.connect(fresh_db)
+        try:
+            conn.execute(
+                "INSERT INTO email_metadata (internal_id, sync_status, mailbox) "
+                "VALUES (?, 'dead_letter', 'INBOX')",
+                (54321,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        cfg = _mock_cfg()
+        with patch("src.calendar_sync.rsvp.send_itip_reply_smtp"):
+            result = real_send_rsvp(
+                repo, cfg, ical_uid="dead-invite",
+                response_status="TENTATIVE", source="email_ics",
+            )
+        assert "organizer_freshness_warning" in result
+        assert "dead_letter" in result["organizer_freshness_warning"]
+
+
 def test_send_rsvp_smtp_failure_propagates():
     """SMTP 抛 → caller 接 (不 catch in send_rsvp)."""
     import smtplib

@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -25,7 +26,10 @@ from src.calendar_sync.itip_reply import (
 )
 
 if TYPE_CHECKING:
-    from src.calendar_sync.repository import CalendarEventRepository
+    from src.calendar_sync.repository import (
+        CalendarEventRepository,
+        CalendarEventRow,
+    )
     from src.config import Config
 
 
@@ -90,6 +94,74 @@ _SUBJECT_PREFIX = {
 }
 
 
+def _check_organizer_freshness(
+    repo: "CalendarEventRepository",
+    row: "CalendarEventRow",
+) -> Optional[str]:
+    """Phase 3 §P1-e — source='email_ics' 时检查 organizer 信息是否 stale.
+
+    背景: ``source='email_ics'`` 的 row.organizer 来自原邮件解析时的快照.
+    原邮件被删除 / dead_letter / 用户清理后, row.organizer 仍是当时的值. RSVP
+    会发到此地址 — 如果该 organizer 邮箱已停用 / 域名不可达, SMTP 会失败但 user
+    不知道是因为 stale, 误以为是网络问题.
+
+    本检查不阻塞发送 (邮箱真实可达性是远程 SMTP 服务端的事), 仅在源邮件已不在
+    ``email_metadata`` 表时附加 warning, 让 CLI / IPC 用户做信息决策.
+
+    ``source='caldav'`` row 从 Outlook CalDAV 实时拉, organizer 一定 fresh,
+    返 None.
+
+    Args:
+        repo: CalendarEventRepository (复用 db_path)
+        row: 待 RSVP 的 calendar_event row
+
+    Returns:
+        None — fresh / 无法判断 (不阻塞行为)
+        str  — warning 文本 (e.g. "源邮件 internal_id=53120 已不在 email_metadata,
+               organizer 信息可能 stale")
+    """
+    if row.source != "email_ics":
+        return None
+    iid = row.related_email_internal_id
+    if iid is None or iid == 0:
+        # email_ics 但无 related link (Phase 1.5 之前的派生 row): 无法 verify
+        return None
+
+    # 直接打 sqlite3 (跨表查 email_metadata) — repo 没暴露 email_metadata
+    # 接口, 这里走 raw SQL 比污染 repo 干净.
+    try:
+        conn = sqlite3.connect(str(repo.db_path), timeout=5.0)
+        try:
+            cur = conn.execute(
+                "SELECT internal_id, sync_status FROM email_metadata "
+                "WHERE internal_id = ?",
+                (iid,),
+            )
+            meta = cur.fetchone()
+        finally:
+            conn.close()
+    except Exception as e:
+        # SQL 错误不应阻塞 RSVP — 仅 log + 当 fresh 处理
+        logger.warning(
+            f"organizer freshness check 查 email_metadata 失败 "
+            f"[internal_id={iid}]: {e} — 跳过 stale 检测"
+        )
+        return None
+
+    if meta is None:
+        return (
+            f"源邮件 internal_id={iid} 已不在 email_metadata, "
+            f"organizer={row.organizer!r} 信息可能 stale (RSVP 仍会发出, "
+            "但 SMTP 失败时考虑该原因)"
+        )
+    if meta[1] == "dead_letter":
+        return (
+            f"源邮件 internal_id={iid} 是 dead_letter 状态, "
+            f"organizer={row.organizer!r} 可能不可靠"
+        )
+    return None
+
+
 def send_rsvp(
     repo: "CalendarEventRepository",
     cfg: "Config",
@@ -112,10 +184,13 @@ def send_rsvp(
         dry_run: True = 不实际发 SMTP, 返回 plan + body preview
 
     Returns:
-        ``{action, ical_uid, recurrence_id, source, to_email, response_status, [body_preview], dry_run}``
+        ``{action, ical_uid, recurrence_id, source, to_email, response_status, [body_preview], [organizer_freshness_warning], dry_run}``
         - ``action``: ``'sent'`` / ``'would_send'`` (dry_run)
         - ``to_email``: organizer 邮箱
         - ``body_preview``: 仅 dry_run 时返回 (前 300 字符)
+        - ``organizer_freshness_warning``: Phase 3 §P1-e — source='email_ics'
+           源邮件被删 / dead_letter 时给的提示文本; 其他情况 key 不出现.
+           **不阻塞发送** — 只是给 CLI / IPC 决策信息.
 
     Raises:
         ValueError: response_status 非法 / row 不存在 / organizer 字段非 email
@@ -157,6 +232,14 @@ def send_rsvp(
             f"(RSVP 必须有有效的 organizer 邮件才能 reply)"
         )
 
+    # 2.5 Phase 3 §P1-e — email_ics source 检查 organizer 信息是否 stale
+    freshness_warning = _check_organizer_freshness(repo, row)
+    if freshness_warning is not None:
+        logger.warning(
+            f"organizer freshness warning for ical_uid={ical_uid!r}: "
+            f"{freshness_warning}"
+        )
+
     # 3. 拼 iTIP REPLY body. recurrence_id 解析失败时 _parse_recurrence_id
     #    内部已经 warning + 返 None, 自动 fallback 整系列 RSVP (本地 row.id
     #    仍是 occurrence row, 但 wire 上是 series-wide REPLY).
@@ -174,7 +257,7 @@ def send_rsvp(
     )
 
     if dry_run:
-        return {
+        out: Dict[str, Any] = {
             "action": "would_send",
             "dry_run": True,
             "ical_uid": ical_uid,
@@ -184,6 +267,9 @@ def send_rsvp(
             "response_status": response_status,
             "body_preview": body[:300],
         }
+        if freshness_warning is not None:
+            out["organizer_freshness_warning"] = freshness_warning
+        return out
 
     # 4. 发 SMTP
     subject_prefix = _SUBJECT_PREFIX[response_status]
@@ -202,7 +288,7 @@ def send_rsvp(
             "下次 caldav sync 会从服务端拉到正确状态"
         )
 
-    return {
+    out: Dict[str, Any] = {
         "action": "sent",
         "dry_run": False,
         "ical_uid": ical_uid,
@@ -211,3 +297,6 @@ def send_rsvp(
         "to_email": to_email,
         "response_status": response_status,
     }
+    if freshness_warning is not None:
+        out["organizer_freshness_warning"] = freshness_warning
+    return out
