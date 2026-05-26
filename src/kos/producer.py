@@ -1,46 +1,45 @@
-"""KOS producer pipeline - mail-sync 邮件 sync 完后异步推 KOS (PR-2d).
+"""KOS producer — 邮件 → Jarvis KOS v2 page payload + 推送 (Scenario B)。
 
-Payload schema 按 wire spec §7.1 mailagent 模板:
-    slug = 'sources/mailagent-{message_id_normalized}'
-    content = YAML frontmatter (type/kind/title/source_of_truth/source_refs/
-              tags/date_received/sender/mailbox/...) + body markdown
+对齐 docs/MAILAGENT-INGEST-HANDOFF.md §4 (Lucien 2026-05-26 更新):
+    slug    = 'sources/email/{internal_id}'
+    content = YAML frontmatter (type:email, status:stable, date_received,
+              sender/recipient/cc/mailbox/thread_id, source_refs,
+              mailagent: 嵌套含回写的 AI labels) + markdown body
+              (subject H1 + metadata blockquote + 正文 + AI 分析 + 附件清单)
 
-Priority floor 过滤 — 仅推 AI 已 classify 的 ai_priority ≥ floor:
-    critical > urgent > important > normal > low
+**Source 路由靠 OAuth client 身份, 不是 put_page 参数** (Lucien 2026-05-26):
+bulk client (MAILAGENT_BULK_CLIENT_*) 绑 mailagent-emails isolated source。
+用 ``make_bulk_kos_client()`` 拿的 client put_page **不传 source**, page 自动
+归 mailagent-emails。frontmatter 里仍带 ``source: mailagent-emails`` 作 logical
+tag (doc §4)。原 KOS_OAUTH_CLIENT_* 绑 default (chat-save + consumer query)。
 
-Fire-and-forget: caller (new_watcher) 用 asyncio.create_task 派发. KOS 不
-可达 / KOSError 仅 warning 不 raise, 不阻塞主同步流程. 重启进程时未 push
-邮件不重试 (KOS 主路径只是图谱丰富, 不丢功能性数据 — Mail.app + Notion
-仍是 SSoT).
-
-Dry-run: KOS_INGEST_DRY_RUN=true 时 build payload + log 但不真发 /ingest,
-给上线灰度用.
+两条消费路径共享 ``build_kos_page_payload``:
+- 增量 (new_watcher hook): ``push_email_to_kos(email_obj, ...)`` — 带 priority
+  floor 过滤, fire-and-forget。
+- bulk 历史回填 (mailagent kos ingest / src/kos/bulk_ingest.py): 直接调
+  ``build_kos_page_payload`` + bulk client put_page, 不过滤 (全量入)。
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
 from src.kos.client import KOSClient, KOSError
 from src.models import Email
 
+# 整页 content 字节上限 (doc §7: KOS 50KB content-sanity warn; 留 1KB buffer)。
+# 按字节而非字符 — 中文 UTF-8 每字 3 字节, 字符截断会让中文邮件远超 50KB。
+_PAGE_CAP_BYTES = 49000
 
-# Priority hierarchy (low → high). Index 越大优先级越高.
-# unknown / 缺失 → 视为 'normal' (中性, 不主动 push 也不主动跳).
-#
-# 'urgent' 是 5 档英文 enum 中的一档, 但 LLM schema (src/llm_agent/schema.py)
-# 实际 enum 只有 4 档中文 emoji ('🔴 紧急' / '🟡 重要' / '🟢 一般' / '⚪ 低').
-# 中文 → 英文 mapping 见 _CN_PRIORITY_MAP. 英文 5 档 keep 让外部 caller 可以
-# 传 'urgent' (例如未来 schema 变更或其他 priority 源).
+# Priority hierarchy (low → high). Index 越大优先级越高。
 _PRIORITY_ORDER: list[str] = ["low", "normal", "important", "urgent", "critical"]
 
-# LLM agent 输出的中文 priority enum → 英文 normalize.
-# 跟 src/llm_agent/schema.py:PRIORITY_ENUM 对齐. 缺 'urgent' 一档 (LLM
-# schema 设计仅 4 档).
+# LLM agent 输出的中文 priority enum → 英文 normalize。
 _CN_PRIORITY_MAP: dict[str, str] = {
     "🔴 紧急": "critical",
     "🟡 重要": "important",
@@ -50,14 +49,7 @@ _CN_PRIORITY_MAP: dict[str, str] = {
 
 
 def _normalize_priority(raw: Optional[str]) -> str:
-    """中文 emoji enum / 英文 enum / unknown → 英文 5 档之一.
-
-    例:
-        '🟡 重要' → 'important'
-        '🟢 一般' → 'normal'
-        'critical' → 'critical'  (英文已 normalize, lowercase 后命中)
-        None / '' / 'foo' → 'normal' (unknown 中性)
-    """
+    """中文 emoji enum / 英文 enum / unknown → 英文 5 档之一 (缺省 normal)。"""
     if not raw:
         return "normal"
     s = raw.strip()
@@ -70,13 +62,10 @@ def _normalize_priority(raw: Optional[str]) -> str:
 
 
 def normalize_message_id_for_slug(message_id: str) -> str:
-    """RFC 2822 Message-ID → safe slug part.
+    """RFC 2822 Message-ID → safe slug part。
 
-    '<abc.123@host.com>' → 'abc-123-host-com'
-    '<m+1234%5Bbar%5D@example>' → 'm-1234-5bbar-5d-example'
-
-    保留 lowercase alphanumeric, 其他字符 (含 @ . / + < > = % space) → dash,
-    折叠多 dash, 修剪边缘 dash. 全空返 'unknown'.
+    '<abc.123@host.com>' → 'abc-123-host-com'。保留作 backward-compat helper;
+    Scenario B slug 现在用 internal_id (见 build_kos_page_payload)。
     """
     if not message_id:
         return "unknown"
@@ -87,116 +76,192 @@ def normalize_message_id_for_slug(message_id: str) -> str:
 
 
 def priority_at_or_above(actual: Optional[str], floor: str) -> bool:
-    """检查 actual priority 是否 ≥ floor.
-
-    actual 可以是英文 enum ('critical' / 'urgent' / 'important' / 'normal' /
-    'low') 或 LLM 中文 emoji ('🔴 紧急' / '🟡 重要' / '🟢 一般' / '⚪ 低'),
-    会先 _normalize_priority 转英文再比较.
-    """
+    """检查 actual priority 是否 ≥ floor (增量 hook 过滤用)。"""
     a = _normalize_priority(actual)
     f = _normalize_priority(floor) if floor else "normal"
-    a_idx = _PRIORITY_ORDER.index(a)
-    f_idx = _PRIORITY_ORDER.index(f)
-    return a_idx >= f_idx
+    return _PRIORITY_ORDER.index(a) >= _PRIORITY_ORDER.index(f)
 
 
 def _yaml_quote(s: Optional[str]) -> str:
-    """简单 YAML 单引号 quote (单引号自身 → 重复两次 escape)."""
+    """YAML 单引号 quote (单引号自身 → 重复两次 escape)。"""
     if s is None:
         return "''"
     return "'" + str(s).replace("'", "''") + "'"
 
 
+def _split_addrs(raw: Optional[str]) -> list[str]:
+    """'a@x.com, b@y.com; c@z.com' → ['a@x.com', 'b@y.com', 'c@z.com']。"""
+    if not raw:
+        return []
+    return [a.strip() for a in raw.replace(";", ",").split(",") if a.strip()]
+
+
+def make_bulk_kos_client() -> KOSClient:
+    """Scenario B bulk client — 绑 mailagent-emails isolated source。
+
+    源路由靠 OAuth client 身份 (Lucien 2026-05-26): 这个 client 拿的 token
+    put_page (不传 source) 自动归 mailagent-emails source。凭据从
+    MAILAGENT_BULK_CLIENT_ID / MAILAGENT_BULK_CLIENT_SECRET env 读。
+    """
+    return KOSClient(
+        client_id=os.getenv("MAILAGENT_BULK_CLIENT_ID"),
+        client_secret=os.getenv("MAILAGENT_BULK_CLIENT_SECRET"),
+    )
+
+
 def build_kos_page_payload(
-    email_obj: Email,
-    internal_id: int,
     *,
+    internal_id: int,
+    subject: str,
+    sender: str,
+    date_iso: str,
+    mailbox: str,
+    message_id: Optional[str] = None,
+    sender_name: Optional[str] = None,
+    to_addr: str = "",
+    cc_addr: str = "",
+    thread_id: Optional[str] = None,
     body_markdown: Optional[str] = None,
+    labels: Optional[dict[str, Any]] = None,
+    attachments: Optional[list[dict[str, Any]]] = None,
     notion_page_id: Optional[str] = None,
-    ai_priority: Optional[str] = None,
-    ai_action: Optional[str] = None,
 ) -> tuple[str, str]:
-    """构造 (slug, content) 给 KOS put_page.
+    """构造 (slug, content) 给 KOS bulk put_page (doc §4 Scenario B 形状)。
 
     Args:
-        email_obj: Email dataclass (subject/sender/date/mailbox 等 metadata)
-        internal_id: SQLite ROWID / fallback slug
-        body_markdown: 邮件正文 markdown — caller 从 EmailRepository.get_body_markdown
-            取 (一般 PR-2b 抽出来的 markdown). 空时 frontmatter-only no body
-        notion_page_id: Notion mirror page id (用于 source_refs)
-        ai_priority: LLM 已 classify 的 priority — 也进 frontmatter + tags
-        ai_action: LLM 已 classify 的 action_type — 也进 frontmatter
+        internal_id: SQLite ROWID — slug 主键 + source_ref。
+        subject/sender/date_iso/mailbox: 必备 metadata。
+        message_id/sender_name/to_addr/cc_addr/thread_id: 可选 metadata。
+        body_markdown: 邮件正文 markdown (EmailRepository.get_body_markdown);
+            超 _MAX_BODY_CHARS 截断 + marker。
+        labels: 完整 AI labels dict (llm_processing.labels_json — priority/
+            action_type/category/ai_summary/key_points/sender_priority/language
+            等)。进 frontmatter mailagent: 嵌套 + body "## AI 分析" 区块。
+        attachments: [{filename, size, content_type}] — 进 "## Attachments"。
+        notion_page_id: Notion mirror — 进 source_refs。
 
     Returns:
-        (slug, content) 元组. slug 格式 'sources/mailagent-{normalized}',
-        content 含 YAML frontmatter + markdown body.
+        (slug, content)。slug='sources/email/{internal_id}'。
     """
-    msg_id_part = normalize_message_id_for_slug(
-        email_obj.message_id or str(internal_id)
-    )
-    slug = f"sources/mailagent-{msg_id_part}"
+    labels = labels or {}
+    slug = f"sources/email/{internal_id}"
+    subject = (subject or "(no subject)").strip() or "(no subject)"
+    date_only = (date_iso or "")[:10]
+    cc_list = _split_addrs(cc_addr)
 
-    date_iso = email_obj.date.isoformat() if email_obj.date else ""
-    subject = email_obj.subject or "(no subject)"
+    ai_priority = labels.get("priority")
+    ai_action = labels.get("action_type")
+    ai_category = labels.get("category")
+    ai_sender_priority = labels.get("sender_priority")
+    ai_language = labels.get("language")
 
-    # source_refs: mailagent + notion (if synced)
-    refs_lines = [f"  - 'mailagent:{email_obj.message_id or internal_id}'"]
-    if notion_page_id:
-        refs_lines.append(
-            f"  - 'https://www.notion.so/{notion_page_id.replace('-', '')}'"
-        )
-
-    # tags: 固定 mailagent-ingest + email + 按 priority/mailbox 动态加.
-    # priority 转英文 normalize (LLM 中文 enum '🟡 重要' → 'important') 让
-    # KOS 端 tag 过滤跟 priority floor 语义一致.
-    tags = ["mailagent-ingest", "email"]
-    if ai_priority:
-        normalized = _normalize_priority(ai_priority)
-        if normalized != "normal" or ai_priority.strip() in ("🟢 一般", "normal"):
-            tags.append(f"priority-{normalized}")
-    if email_obj.mailbox:
-        # mailbox 中文 → 简单 ASCII-ize 用于 tag
-        mailbox_tag = "inbox" if email_obj.mailbox == "收件箱" else (
-            "sent" if email_obj.mailbox == "发件箱" else "other"
-        )
-        tags.append(f"mailbox-{mailbox_tag}")
-    tags_inline = "[" + ", ".join(f"'{t}'" for t in tags) + "]"
-
-    frontmatter_lines = [
+    # ---- frontmatter (doc §4) ----
+    fm: list[str] = [
         "---",
-        "type: source",
+        "type: email",
         "kind: source",
-        f"title: {_yaml_quote(subject)}",
-        "status: draft",
-        f"created: {_yaml_quote(date_iso)}",
-        f"updated: {_yaml_quote(date_iso)}",
-        "source_of_truth: mailagent-sqlite",
-        "source_refs:",
-        *refs_lines,
-        f"tags: {tags_inline}",
+        f"title: {_yaml_quote(subject[:200])}",
+        "status: stable",
+        f"created: {_yaml_quote(date_only)}",
+        f"updated: {_yaml_quote(date_only)}",
         f"date_received: {_yaml_quote(date_iso)}",
-        f"sender: {_yaml_quote(email_obj.sender)}",
-        f"sender_name: {_yaml_quote(email_obj.sender_name)}",
-        f"mailbox: {_yaml_quote(email_obj.mailbox)}",
-        f"mailagent_internal_id: {internal_id}",
+        f"sender: {_yaml_quote(sender)}",
     ]
+    if sender_name:
+        fm.append(f"sender_name: {_yaml_quote(sender_name)}")
+    if to_addr:
+        fm.append(f"recipient: {_yaml_quote(to_addr)}")
+    if cc_list:
+        fm.append("cc: [" + ", ".join(_yaml_quote(c) for c in cc_list) + "]")
+    fm.append(f"mailbox: {_yaml_quote(mailbox)}")
+    if thread_id:
+        fm.append(f"thread_id: {_yaml_quote(thread_id)}")
+    fm.append("tags: [email, mailagent-ingest, bulk]")
+    fm.append("source: mailagent-emails")
+    fm.append("source_of_truth: mailagent-sqlite")
+    fm.append("source_refs:")
+    fm.append(f"  - 'mailagent:{internal_id}'")
+    if notion_page_id:
+        fm.append(f"  - 'https://www.notion.so/{notion_page_id.replace('-', '')}'")
+    # mailagent: 嵌套 — traceback IDs + 回写的 AI labels
+    fm.append("mailagent:")
+    fm.append(f"  email_id: {internal_id}")
+    if message_id:
+        fm.append(f"  message_id: {_yaml_quote(message_id)}")
+    if thread_id:
+        fm.append(f"  thread_id: {_yaml_quote(thread_id)}")
     if ai_priority:
-        frontmatter_lines.append(f"ai_priority: {_yaml_quote(ai_priority)}")
+        fm.append(f"  ai_priority: {_yaml_quote(ai_priority)}")
     if ai_action:
-        frontmatter_lines.append(f"ai_action: {_yaml_quote(ai_action)}")
-    frontmatter_lines.append("---")
+        fm.append(f"  ai_action: {_yaml_quote(ai_action)}")
+    if ai_category:
+        fm.append(f"  ai_category: {_yaml_quote(ai_category)}")
+    if ai_sender_priority:
+        fm.append(f"  ai_sender_priority: {_yaml_quote(ai_sender_priority)}")
+    if ai_language:
+        fm.append(f"  ai_language: {_yaml_quote(ai_language)}")
+    fm.append("---")
+    frontmatter = "\n".join(fm)
 
-    frontmatter = "\n".join(frontmatter_lines)
-
-    body = body_markdown.strip() if body_markdown else ""
-    body_section = f"\n\n{body}\n" if body else "\n\n_(body not yet extracted)_\n"
-
-    content = (
-        f"{frontmatter}\n\n"
-        f"# {subject}\n\n"
-        f"> Ingested via mailagent kos push on {date_iso}.\n"
-        f"{body_section}"
+    # ---- body ----
+    recipient_line = f" → To: {to_addr}" if to_addr else ""
+    cc_line = f"\n> CC: {', '.join(cc_list)}" if cc_list else ""
+    meta_block = (
+        f"> Ingested via mailagent kos push on {date_only}.\n"
+        f"> From: {sender}{recipient_line}{cc_line}\n"
+        f"> Date: {date_iso}\n"
+        f"> Mailbox: {mailbox}"
     )
+    parts: list[str] = [f"# {subject}", "", meta_block, ""]
+    body_idx = len(parts)
+    parts.append("")  # body 占位, 最后按字节预算截入
+
+    # AI 分析区块 — 给 KOS embedding / entity 抽取提供语义浓缩
+    ai_summary = (labels.get("ai_summary") or "").strip()
+    key_points = (labels.get("key_points") or "").strip()
+    if ai_summary or key_points or ai_priority or ai_category:
+        parts.extend(["", "## AI 分析", ""])
+        if ai_summary:
+            parts.extend([f"**摘要**: {ai_summary}", ""])
+        if key_points:
+            parts.extend(["**要点**:", "", key_points, ""])
+        meta_bits = []
+        if ai_category:
+            meta_bits.append(f"分类: {ai_category}")
+        if ai_priority:
+            meta_bits.append(f"优先级: {ai_priority}")
+        if ai_action:
+            meta_bits.append(f"动作: {ai_action}")
+        if ai_sender_priority:
+            meta_bits.append(f"发件人: {ai_sender_priority}")
+        if meta_bits:
+            parts.append(" | ".join(meta_bits))
+
+    # 附件清单 (仅文件名/大小/类型, 不含二进制; 附件正文另走 attachment FTS)
+    if attachments:
+        parts.extend(["", "## Attachments", ""])
+        for a in attachments:
+            name = a.get("filename", "?")
+            size_mb = (a.get("size") or 0) / 1024 / 1024
+            ct = a.get("content_type", "")
+            parts.append(f"- {name} ({size_mb:.2f} MB, {ct})")
+
+    # body 按字节截断, 保证整页 content < _PAGE_CAP_BYTES。body_budget = 整页上限
+    # 减去 frontmatter + header + AI + 附件 的开销 (body 占位为空时的骨架字节)。
+    body = (body_markdown or "").strip() or "_(body not extracted)_"
+    marker = (
+        f"\n\n> _(truncated to 50KB by mailagent client; "
+        f"full body at mailagent:{internal_id})_"
+    )
+    skeleton_bytes = len((frontmatter + "\n\n" + "\n".join(parts)).encode("utf-8"))
+    # -8 buffer: 结尾 "\n" (1) + decode(errors=ignore) 多字节边界余量
+    body_budget = _PAGE_CAP_BYTES - skeleton_bytes - len(marker.encode("utf-8")) - 8
+    body_bytes = body.encode("utf-8")
+    if len(body_bytes) > body_budget > 0:
+        body = body_bytes[:body_budget].decode("utf-8", errors="ignore") + marker
+    parts[body_idx] = body
+
+    content = frontmatter + "\n\n" + "\n".join(parts) + "\n"
     return slug, content
 
 
@@ -208,48 +273,58 @@ async def push_email_to_kos(
     notion_page_id: Optional[str] = None,
     ai_priority: Optional[str] = None,
     ai_action: Optional[str] = None,
+    labels: Optional[dict[str, Any]] = None,
+    attachments: Optional[list[dict[str, Any]]] = None,
     client: Optional[KOSClient] = None,
     priority_floor: str = "normal",
     dry_run: bool = False,
 ) -> Optional[dict]:
-    """推单封邮件到 KOS. Skip 返 None; success 返 server response dict.
+    """增量推单封邮件到 KOS mailagent-emails source。Skip 返 None; success 返 dict。
 
     Skip cases (返 None, 不视为错):
-        - ai_priority < priority_floor
-        - client 未 configured (3 个 env 缺)
-
-    Failure handling (返 None + warning):
-        - KOSError (任何 E_KOS_*) — fire-and-forget caller 不该 raise
-        - 其他 exception — fallback E_INTERNAL warning
-
-    Dry-run (返 dict 含 dry_run=True): build payload + log size, 不调网络.
+        - ai_priority < priority_floor (增量过滤; bulk 路径不走这里)
+        - bulk client 未 configured (MAILAGENT_BULK_CLIENT_* env 缺)
+    Failure (返 None + warning): KOSError / 其他 exception (fire-and-forget)。
     """
-    # Step 1: priority floor 过滤
-    if not priority_at_or_above(ai_priority, priority_floor):
+    # labels 合并: caller 传完整 labels 优先; 否则用散的 ai_priority/ai_action
+    merged: dict[str, Any] = dict(labels or {})
+    if ai_priority and not merged.get("priority"):
+        merged["priority"] = ai_priority
+    if ai_action and not merged.get("action_type"):
+        merged["action_type"] = ai_action
+
+    effective_priority = merged.get("priority") or ai_priority
+    if not priority_at_or_above(effective_priority, priority_floor):
         logger.debug(
             f"[kos-producer] skip internal_id={internal_id} "
-            f"priority={ai_priority!r} < floor={priority_floor!r}"
+            f"priority={effective_priority!r} < floor={priority_floor!r}"
         )
         return None
 
-    # Step 2: client config 检查
     if client is None:
-        client = KOSClient()
+        client = make_bulk_kos_client()
     if not client.configured:
         logger.debug(
             f"[kos-producer] skip internal_id={internal_id} "
-            "KOSClient not configured (3 env missing)"
+            "bulk KOSClient not configured (MAILAGENT_BULK_CLIENT_* missing)"
         )
         return None
 
-    # Step 3: build payload
     slug, content = build_kos_page_payload(
-        email_obj,
-        internal_id,
+        internal_id=internal_id,
+        subject=email_obj.subject,
+        sender=email_obj.sender,
+        date_iso=email_obj.date.isoformat() if email_obj.date else "",
+        mailbox=email_obj.mailbox,
+        message_id=email_obj.message_id,
+        sender_name=email_obj.sender_name,
+        to_addr=email_obj.to,
+        cc_addr=email_obj.cc,
+        thread_id=email_obj.thread_id,
         body_markdown=body_markdown,
+        labels=merged,
+        attachments=attachments,
         notion_page_id=notion_page_id,
-        ai_priority=ai_priority,
-        ai_action=ai_action,
     )
 
     if dry_run:
@@ -263,13 +338,11 @@ async def push_email_to_kos(
             "content_bytes": len(content.encode("utf-8")),
         }
 
-    # Step 4: KOS put_page (sync method 包 to_thread)
     try:
         result = await asyncio.to_thread(client.put_page, slug, content)
         status = result.get("status") if isinstance(result, dict) else "?"
         logger.info(
-            f"[kos-producer] pushed internal_id={internal_id} "
-            f"slug={slug} status={status}"
+            f"[kos-producer] pushed internal_id={internal_id} slug={slug} status={status}"
         )
         return result
     except KOSError as e:
@@ -280,7 +353,6 @@ async def push_email_to_kos(
         return None
     except Exception as e:
         logger.warning(
-            f"[kos-producer] unexpected error internal_id={internal_id} "
-            f"slug={slug}: {e}"
+            f"[kos-producer] unexpected error internal_id={internal_id} slug={slug}: {e}"
         )
         return None
