@@ -487,3 +487,270 @@ def test_sender_digest_optional_field(patch_send, fake_store, monkeypatch):
     asyncio.run(_scenario2())
     env2 = captured[0]
     assert "mailagent.senderDigest" not in env2.metadata
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Phase 2 (PRD §5.2) — recommended_actions 动态注入 intervention.options
+# 处理 5 类输入: 0/1/2/3/4 actions (后者 cap 3) / unknown id / 低 confidence /
+# 缺字段 / 静态 5 id 灰名单 / None → 全部 sanitize + fallback static 5 验证.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _urgent_kwargs(**overrides):
+    """LLMReviewedUrgent dispatch 参数 builder (priority/action urgent 命中)."""
+    base = {
+        "internal_id": 100, "page_id": "pid", "subject": "S",
+        "sender_email": "a@example.com", "sender_name": "A", "mailbox": "收件箱",
+        "priority": "🔴 紧急", "action": "需要回复",
+    }
+    base.update(overrides)
+    return base
+
+
+def _run_dispatch(patch_send, **kwargs):
+    """同步包装异步 dispatch_llm_reviewed 等 fire-and-forget task drained."""
+    async def _scenario():
+        island_dispatch.dispatch_llm_reviewed(**kwargs)
+        await asyncio.sleep(0.05)
+    asyncio.run(_scenario())
+    return patch_send[0][-1]
+
+
+def test_dispatch_urgent_with_single_recommended_action(patch_send, fake_store):
+    """LLM 推 1 个有效 action → intervention 仅 1 option, 不 fallback static."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "archive_and_unsubscribe", "title": "归档并退订",
+             "detail": "Stripe weekly, 已订 6 个月", "confidence": 0.92},
+        ],
+    ))
+    assert env.event_type == "LLMReviewedUrgent"
+    assert env.intervention is not None
+    options = env.intervention.options
+    assert len(options) == 1
+    assert options[0].id == "archive_and_unsubscribe"
+    assert options[0].title == "归档并退订"
+    assert options[0].detail == "Stripe weekly, 已订 6 个月"
+
+
+def test_dispatch_urgent_with_two_recommended_actions(patch_send, fake_store):
+    """LLM 推 2 个有效 action → intervention 2 option 全保留, 顺序保持."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "add_to_calendar", "title": "加入日历", "confidence": 0.95},
+            {"id": "decline_with_reason", "title": "婉拒并说明", "confidence": 0.6},
+        ],
+    ))
+    ids = [o.id for o in env.intervention.options]
+    assert ids == ["add_to_calendar", "decline_with_reason"]
+
+
+def test_dispatch_urgent_with_three_recommended_actions_all_kept(patch_send, fake_store):
+    """LLM 推满 3 个有效 action → 全保留."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "ack_in_pagerduty", "title": "在 PagerDuty 确认", "confidence": 0.93},
+            {"id": "escalate_to_oncall", "title": "升级 on-call", "confidence": 0.8},
+            {"id": "quick_reply_yes", "title": "快速回复 是", "confidence": 0.55},
+        ],
+    ))
+    ids = [o.id for o in env.intervention.options]
+    assert ids == ["ack_in_pagerduty", "escalate_to_oncall", "quick_reply_yes"]
+
+
+def test_dispatch_urgent_caps_recommended_actions_to_3(patch_send, fake_store):
+    """LLM 推 4 个 (schema maxItems 已 cap 3, 但 dispatch 二次防御性 cap)."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "archive_and_unsubscribe", "title": "归档并退订", "confidence": 0.9},
+            {"id": "archive_only", "title": "归档", "confidence": 0.85},
+            {"id": "add_to_calendar", "title": "加入日历", "confidence": 0.8},
+            {"id": "decline_with_reason", "title": "婉拒并说明", "confidence": 0.75},
+        ],
+    ))
+    options = env.intervention.options
+    assert len(options) == 3
+    # 前 3 个保留
+    assert [o.id for o in options] == [
+        "archive_and_unsubscribe", "archive_only", "add_to_calendar",
+    ]
+
+
+def test_dispatch_urgent_unknown_id_silently_dropped(patch_send, fake_store):
+    """LLM 出 whitelist 外 id → 单条 silent drop, 其他保留."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "delete_email_forever", "title": "永久删除", "confidence": 0.99},
+            {"id": "archive_only", "title": "归档", "confidence": 0.8},
+        ],
+    ))
+    ids = [o.id for o in env.intervention.options]
+    assert ids == ["archive_only"]
+
+
+def test_dispatch_urgent_static_5_id_dropped_from_llm_recs(patch_send, fake_store):
+    """LLM 把 Phase 1 静态 5 id (open_mail 等) 当 recommended 推 → silent drop.
+    静态 5 仅作为 fallback path, 不在 LLM recommendation 空间."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "open_mail", "title": "Open Mail", "confidence": 0.9},
+            {"id": "create_draft", "title": "Draft", "confidence": 0.9},
+        ],
+    ))
+    # 全 filter 掉 → fallback static 5
+    options = env.intervention.options
+    assert len(options) == 5
+    assert {o.id for o in options} == {
+        "create_draft", "open_mail", "open_notion", "mark_done", "snooze_1h",
+    }
+
+
+def test_dispatch_urgent_low_confidence_falls_back_to_static_5(patch_send, fake_store):
+    """全部候选 confidence < 0.5 → fallback static 5."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "archive_only", "title": "归档", "confidence": 0.3},
+            {"id": "add_to_calendar", "title": "加入日历", "confidence": 0.49},
+        ],
+    ))
+    assert len(env.intervention.options) == 5
+
+
+def test_dispatch_urgent_mixed_confidence_keeps_only_high(patch_send, fake_store):
+    """混合 confidence → 只保留 >= 0.5 的, 其他 silent drop."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "archive_only", "title": "归档", "confidence": 0.3},     # drop
+            {"id": "add_to_calendar", "title": "加入日历", "confidence": 0.8},  # keep
+            {"id": "decline_with_reason", "title": "婉拒", "confidence": 0.5},  # keep (边界)
+        ],
+    ))
+    ids = [o.id for o in env.intervention.options]
+    assert ids == ["add_to_calendar", "decline_with_reason"]
+
+
+def test_dispatch_urgent_missing_title_drops_entry(patch_send, fake_store):
+    """缺 title / title 空字符串 → 单条 drop."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "archive_only", "confidence": 0.9},  # 缺 title
+            {"id": "add_to_calendar", "title": "   ", "confidence": 0.9},  # 空 title
+            {"id": "decline_with_reason", "title": "婉拒", "confidence": 0.9},
+        ],
+    ))
+    ids = [o.id for o in env.intervention.options]
+    assert ids == ["decline_with_reason"]
+
+
+def test_dispatch_urgent_recommended_actions_none_falls_back(patch_send, fake_store):
+    """recommended_actions=None → fallback static 5 (Phase 1 兼容路径)."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(recommended_actions=None))
+    assert len(env.intervention.options) == 5
+    assert {o.id for o in env.intervention.options} == {
+        "create_draft", "open_mail", "open_notion", "mark_done", "snooze_1h",
+    }
+
+
+def test_dispatch_urgent_recommended_actions_empty_list_falls_back(patch_send, fake_store):
+    """recommended_actions=[] → fallback static 5."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(recommended_actions=[]))
+    assert len(env.intervention.options) == 5
+
+
+def test_dispatch_non_urgent_ignores_recommended_actions(patch_send, fake_store):
+    """非 urgent 邮件不应有 intervention, 即使 recommended_actions 有内容."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send,
+        internal_id=200, page_id="pid", subject="S",
+        sender_email="a@example.com", sender_name="A", mailbox="收件箱",
+        priority="🟢 一般", action="仅供参考",
+        recommended_actions=[
+            {"id": "archive_only", "title": "归档", "confidence": 0.95},
+        ],
+    )
+    # 非 urgent → 不应有 intervention
+    assert env.event_type == "LLMReviewed"
+    assert env.intervention is None
+
+
+def test_dispatch_urgent_detail_optional(patch_send, fake_store):
+    """LLM 未给 detail → InterventionOption.detail = None (不影响 button 渲染)."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            {"id": "archive_only", "title": "归档", "confidence": 0.9},  # 无 detail
+        ],
+    ))
+    opt = env.intervention.options[0]
+    assert opt.detail is None
+
+
+def test_dispatch_urgent_non_dict_entries_dropped(patch_send, fake_store):
+    """recommended_actions 含非 dict 项 (str / list / None) → silent drop."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+    env = _run_dispatch(patch_send, **_urgent_kwargs(
+        recommended_actions=[
+            "open_notion",  # str
+            None,           # None
+            {"id": "archive_only", "title": "归档", "confidence": 0.9},
+        ],
+    ))
+    ids = [o.id for o in env.intervention.options]
+    assert ids == ["archive_only"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Phase 2 — _build_dynamic_options 单元 (不走 envelope, 直接函数测)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_build_dynamic_options_invalid_confidence_dropped():
+    """confidence 不是 number / NaN → silent drop."""
+    opts = island_dispatch._build_dynamic_options([
+        {"id": "archive_only", "title": "归档", "confidence": "high"},   # str
+        {"id": "add_to_calendar", "title": "加入日历", "confidence": float("nan")},  # NaN
+        {"id": "decline_with_reason", "title": "婉拒", "confidence": 0.8},  # OK
+    ])
+    assert [o.id for o in opts] == ["decline_with_reason"]
+
+
+def test_build_dynamic_options_non_list_returns_empty():
+    """输入非 list (dict / None / str) → 返 [] (调用方 fallback static)."""
+    assert island_dispatch._build_dynamic_options(None) == []  # type: ignore[arg-type]
+    assert island_dispatch._build_dynamic_options({"id": "archive_only"}) == []  # type: ignore[arg-type]
+    assert island_dispatch._build_dynamic_options("archive_only") == []  # type: ignore[arg-type]
+
+
+def test_build_dynamic_options_passes_through_long_title_and_detail():
+    """processor 端已 sanitize 截 30/80; 这层不再截 (输入信任)."""
+    opts = island_dispatch._build_dynamic_options([
+        {"id": "archive_only", "title": "归档", "detail": "已订阅 6 个月", "confidence": 0.9},
+    ])
+    assert len(opts) == 1
+    assert opts[0].title == "归档"
+    assert opts[0].detail == "已订阅 6 个月"

@@ -219,12 +219,18 @@ def dispatch_llm_reviewed(
     action: str = "",
     ai_summary: str = "",
     sender_digest: str = "",
+    recommended_actions: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
-    """LLM 处理完 → emit ``LLMReviewed`` 或 ``LLMReviewedUrgent`` (带 5 option).
+    """LLM 处理完 → emit ``LLMReviewed`` 或 ``LLMReviewedUrgent`` (带 1-5 option).
 
     Urgent 条件：``priority`` 命中 ``URGENT_PRIORITY_LABELS`` AND ``action`` 命中
     ``ACTION_NEEDS_FLAG``，与 ``handlers.handle_ai_reviewed`` 的飞书通知规则同。
     ``ai_summary`` 透传 LLM ``AILabels.ai_summary``（2-4 句中文摘要，≤ 2000）。
+
+    Phase 2 (PRD §5.2): ``recommended_actions`` 是 processor 已 sanitize 的 dict list
+    (每项含 id/title/detail/confidence). urgent 分支用 ``_build_dynamic_options`` 再做
+    一次 confidence >= 0.5 + handler whitelist 防御性 filter, 输出 1-3 个 InterventionOption
+    替代 DEFAULT_OPTION_IDS. filter 后空 list → 退回静态 5 fallback.
     """
     if not _state.enabled:
         return
@@ -241,10 +247,20 @@ def dispatch_llm_reviewed(
             priority=priority or "—",
             subject=subject,
         )
+        dynamic_options = _build_dynamic_options(recommended_actions or [])
+        if dynamic_options:
+            options = dynamic_options
+            log.info(
+                "[island] dispatch_llm_reviewed internal_id=%d urgent dynamic_options=%d "
+                "ids=%s",
+                internal_id, len(options), [o.id for o in options],
+            )
+        else:
+            options = [_default_option(oid) for oid in DEFAULT_OPTION_IDS]
         intervention: Optional[Intervention] = Intervention(
             title=title,
             message=message,
-            options=[_default_option(oid) for oid in DEFAULT_OPTION_IDS],
+            options=options,
         )
         status_kind = "waitingForInput"
         expects_response = True
@@ -454,6 +470,57 @@ def _base_metadata(
     if error:
         meta["mailagent.error"] = error
     return meta
+
+
+# Phase 2 (PRD §5.2): dynamic intervention.options 构造.
+# processor 端 sanitize 已做 (mailbox-specific whitelist + 字段 shape + length + cap 3);
+# 这里再做一次防御性 filter (confidence threshold + handler whitelist), cap 3.
+_DYNAMIC_CONFIDENCE_FLOOR = 0.5
+
+
+def _build_dynamic_options(recs: List[Dict[str, Any]]) -> List[InterventionOption]:
+    """从 LLM ``recommended_actions`` 构造 ``InterventionOption`` list.
+
+    输入是 processor._parse sanitize 过的 list; 这里做防御性二次过滤:
+    1. id 必须在 handler whitelist (``RECOMMENDED_ACTION_IDS``, 排除 Phase 1 静态 5)
+    2. confidence >= 0.5 (低置信度 LLM 自己说不准, 退回静态 5 比硬塞错建议好)
+    3. title 非空字符串
+    4. cap 3 (schema 已 maxItems=3, double-safe)
+
+    全部 filter 失败 → 返 [], 上游决定是否走静态 5 fallback.
+    """
+    # Lazy import 避 circular (whitelist 依赖 schema, schema 不依赖此模块).
+    from src.notify.island_action_whitelist import is_recommended_action_id
+
+    out: List[InterventionOption] = []
+    if not isinstance(recs, list):
+        return out
+    for rec in recs:
+        if not isinstance(rec, dict):
+            continue
+        rid = rec.get("id")
+        if not isinstance(rid, str) or not is_recommended_action_id(rid):
+            continue
+        try:
+            conf = float(rec.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if conf != conf or conf < _DYNAMIC_CONFIDENCE_FLOOR:  # NaN guard + threshold
+            continue
+        title_raw = rec.get("title")
+        if not isinstance(title_raw, str):
+            continue
+        title = title_raw.strip()
+        if not title:
+            continue
+        detail_raw = rec.get("detail")
+        detail: Optional[str] = None
+        if isinstance(detail_raw, str) and detail_raw.strip():
+            detail = detail_raw.strip()
+        out.append(InterventionOption(id=rid, title=title, detail=detail))
+        if len(out) >= 3:
+            break
+    return out
 
 
 def _default_option(opt_id: str) -> InterventionOption:

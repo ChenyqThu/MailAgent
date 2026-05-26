@@ -869,7 +869,18 @@ class NewWatcher:
                 return
             priority = str(labels.get("priority") or "")
             action = str(labels.get("action_type") or labels.get("action") or "")
-            ai_summary = str(labels.get("ai_summary") or "")
+            # 走 ai_summary_full (完整 2-4 句中文); ai_summary 字段是 summary_for_log 内
+            # 截 80 后的 log line 用副本, 不适合 envelope.metadata.
+            ai_summary = str(
+                labels.get("ai_summary_full") or labels.get("ai_summary") or ""
+            )
+            # Phase 2 (PRD §5.2): LLM sanitized recommended_actions 透传给 dispatch
+            # → urgent 分支动态构 intervention.options 替代 DEFAULT_OPTION_IDS.
+            # processor._parse 已按 mailbox-specific whitelist filter, dispatch 再做
+            # confidence >= 0.5 + handler whitelist 二次防御性 filter.
+            recommended_actions = labels.get("recommended_actions") or []
+            if not isinstance(recommended_actions, list):
+                recommended_actions = []
             island_dispatch.dispatch_llm_reviewed(
                 internal_id=internal_id,
                 page_id=notion_page_id or "",
@@ -880,6 +891,7 @@ class NewWatcher:
                 priority=priority,
                 action=action,
                 ai_summary=ai_summary,
+                recommended_actions=recommended_actions,
             )
         except Exception as e:
             logger.debug(f"[island-hook] llm_reviewed dispatch failed: {e}")

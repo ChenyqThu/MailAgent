@@ -32,6 +32,7 @@ from .schema import (
     PRIORITY_ENUM,
     SENDER_PRIORITY_ENUM,
     is_valid_action_type,
+    is_valid_recommended_action_id,
 )
 
 
@@ -86,6 +87,11 @@ class AILabels:
     # 沉浸式翻译: LLM 返回的段落对 [{src, tgt}, ...]; 仅 language != '中文' 时非空。
     # LLMRunner mark_success 后写入 email_translation 表 (DB v12).
     translation_segments: List[Dict[str, str]] = field(default_factory=list)
+    # Phase 2 (PRD §5.2): 灵动岛动态建议按钮 — LLM 返回 0-3 个 sanitized {id, title,
+    # detail, confidence}. _parse 已按 mailbox-specific whitelist + 字段类型 filter,
+    # 下游 island_dispatch 可直接消费 (再做一次 confidence>=0.5 + handler whitelist 过滤).
+    # 不进 Notion sync, 只走 ping-island envelope; LLM 不确定时为空 list, dispatch 退回静态 5.
+    recommended_actions: List[Dict[str, Any]] = field(default_factory=list)
     # meta
     mailbox: str = ""
     input_tokens: int = 0
@@ -96,6 +102,11 @@ class AILabels:
     latency_ms: int = 0
 
     def summary_for_log(self) -> Dict[str, Any]:
+        # 用作 runner.process 返回 result["labels"], new_watcher
+        # _maybe_dispatch_island_reviewed 消费它. ai_summary 这里截 80 避免日志爆炸
+        # (test_summary_for_log_does_not_leak_full_reply 强制断言); 完整 ai_summary
+        # 走 new_watcher labels.get("ai_summary_full") 直接来自 AILabels.
+        # Phase 2: recommended_actions 透传给 dispatch dynamic intervention.options.
         return {
             "category": self.category,
             "priority": self.priority,
@@ -104,6 +115,8 @@ class AILabels:
             "sender_priority": self.sender_priority,
             "daily_digest_date": self.daily_digest_date,
             "ai_summary": (self.ai_summary or "")[:80],
+            "ai_summary_full": self.ai_summary or "",
+            "recommended_actions": list(self.recommended_actions),
             "tokens": f"{self.input_tokens}/{self.output_tokens}",
             "cache": f"c={self.cache_creation_input_tokens} r={self.cache_read_input_tokens}",
         }
@@ -354,6 +367,50 @@ class LLMProcessor:
                 f"[llm] translation_segments not a list: {type(raw_segments).__name__}; dropping"
             )
 
+        # Phase 2 (PRD §5.2): recommended_actions sanitize.
+        # mailbox-specific whitelist (schema enum 是 union, 这里收紧) + 字段 shape
+        # 校验 + length 截断 + confidence 0-1 clamp + cap 3. 形状坏的单条 silent
+        # drop, 列表全坏 → 空 list (dispatch 退回静态 5 按钮).
+        raw_recs = ti.get("recommended_actions")
+        recommended_actions: List[Dict[str, Any]] = []
+        if isinstance(raw_recs, list):
+            for rec in raw_recs[:3]:  # cap 3
+                if not isinstance(rec, dict):
+                    continue
+                rid = rec.get("id")
+                if not isinstance(rid, str) or not is_valid_recommended_action_id(rid, mailbox):
+                    logger.warning(
+                        f"[llm] recommended_action id {rid!r} invalid for mailbox={mailbox}; dropping"
+                    )
+                    continue
+                title_raw = rec.get("title")
+                if not isinstance(title_raw, str):
+                    continue
+                title = title_raw.strip()[:30]
+                if not title:
+                    continue
+                try:
+                    conf = float(rec.get("confidence", 0.0))
+                except (TypeError, ValueError):
+                    conf = 0.0
+                if conf != conf:  # NaN guard
+                    conf = 0.0
+                conf = max(0.0, min(1.0, conf))
+                detail_raw = rec.get("detail")
+                detail = ""
+                if isinstance(detail_raw, str):
+                    detail = detail_raw.strip()[:80]
+                recommended_actions.append({
+                    "id": rid,
+                    "title": title,
+                    "detail": detail,
+                    "confidence": conf,
+                })
+        elif raw_recs is not None:
+            logger.warning(
+                f"[llm] recommended_actions not a list: {type(raw_recs).__name__}; dropping"
+            )
+
         return AILabels(
             ai_summary=(ti.get("ai_summary") or "")[:2000],
             key_points=(ti.get("key_points") or "").strip(),
@@ -369,6 +426,7 @@ class LLMProcessor:
             daily_digest_date=daily_digest_date,
             related_project=(ti.get("related_project") or "").strip(),
             translation_segments=translation_segments,
+            recommended_actions=recommended_actions,
             mailbox=mailbox,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
