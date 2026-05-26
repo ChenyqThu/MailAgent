@@ -158,6 +158,8 @@ export interface EventUpdateOpts {
   location?: string
   description?: string
   attendees?: EventAttendeeInput[]
+  /** Phase 4·#4 — 显式清空所有与会者 (前端删光 chips); 与 attendees 互斥. */
+  clearAttendees?: boolean
   status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
   calendarName?: string
   /** Phase 4·#3 — 改整系列 RRULE: 不传=保留; 'FREQ=...' 覆盖; '' 删除. */
@@ -188,6 +190,8 @@ export async function runEventUpdate(opts: EventUpdateOpts): Promise<unknown> {
   if (opts.recurrenceId) args.push('--recurrence-id', opts.recurrenceId)
   if (opts.splitFuture) args.push('--split-future')
   if (opts.noSequenceBump) args.push('--no-sequence-bump')
+  // Phase 4·#4 — 清空与会者 (前端删光 chips); 与 --attendee 互斥 (前端逻辑保证).
+  if (opts.clearAttendees) args.push('--clear-attendees')
   for (const a of opts.attendees || []) {
     if (!a.email) continue
     args.push('--attendee', a.name ? `${a.email},${a.name}` : a.email)

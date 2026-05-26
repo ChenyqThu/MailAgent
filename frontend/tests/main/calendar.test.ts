@@ -454,6 +454,25 @@ describe('calendar — runEventUpdate', () => {
     expect(args).toContain('--recurrence-id')
     expect(args).toContain('--split-future')
   })
+
+  test('Phase 4·#4 — clearAttendees 拼 --clear-attendees (清空与会者)', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({ icalUid: 'uid-x', clearAttendees: true })
+    const args = mockCallCli.mock.calls[0][0]
+    expect(args).toContain('--clear-attendees')
+    expect(args).not.toContain('--attendee')
+  })
+
+  test('Phase 4·#4 — attendees 替换拼 --attendee, 不带 --clear-attendees', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({
+      icalUid: 'uid-x',
+      attendees: [{ email: 'bob@x.com', name: 'Bob' }]
+    })
+    const args = mockCallCli.mock.calls[0][0]
+    expect(args).toContain('--attendee')
+    expect(args).not.toContain('--clear-attendees')
+  })
 })
 
 // Phase 2.3 — calendar:eventDelete

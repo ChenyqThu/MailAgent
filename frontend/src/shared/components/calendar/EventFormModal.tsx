@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent, useCalendarNames } from './hooks/useCalendarEvents'
 import { RRuleEditor } from './RRuleEditor'
 import { buildRRule, parseRRule, defaultRRuleState, type RRuleState } from './lib/rrule'
+import { resolveAttendeesUpdate } from './lib/attendees'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -134,6 +135,9 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   const [chipInputValue, setChipInputValue] = useState('')
   const [chipFocused, setChipFocused] = useState(false)
   const [chipInvalid, setChipInvalid] = useState(false)
+  // Phase 4·#4 — 用户主动改与会者 (加/删 chip) 才置 true. 未 dirty 提交不传
+  // attendees → 后端保留原与会者 + partstat (防退化); dirty + 删光 → clearAttendees.
+  const [attendeesDirty, setAttendeesDirty] = useState(false)
   // inline 验证 (替代之前的 toastError, mockup §11.1)
   const [errTitle, setErrTitle] = useState(false)
   const [errTime, setErrTime] = useState(false)
@@ -193,6 +197,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     // Phase 4·#3 — 重置重复规则 (edit 的真实 rrule 由下方 detail effect 异步预填)
     setRruleState(defaultRRuleState())
     setRruleDirty(false)
+    setAttendeesDirty(false)
     // focus 标题 (mockup setTimeout 60 让 transition 先跑)
     const id = window.setTimeout(() => titleRef.current?.focus(), 60)
     return () => window.clearTimeout(id)
@@ -217,7 +222,6 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       const endIso = isAllDay
         ? `${addDaysToDateStr(endDate, 1)}T00:00:00Z`
         : localToIsoWithOffset(endLocal)
-      const attendees = chips.length > 0 ? chips : undefined
       const builtRrule = buildRRule(rruleState)
       if (isEdit && occurrence) {
         const opts: EventUpdateOpts = {
@@ -227,19 +231,22 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           endIso,
           location: location || undefined,
           description: description || undefined,
-          attendees,
           isAllDay
         }
         if (scope === 'this' || scope === 'future') {
           // Phase 4·#3c/#3d — 改这一次 / 改未来 (split). recurrenceId = 该次原始
           // dtstart (instance recurrence_id 或展开 start). occurrence override /
-          // split 都不走 builder rrule.
+          // split 不走 builder rrule, 也不改与会者 (继承 master, 跟 CLI/writer 一致).
           opts.recurrenceId = occurrence.recurrence_id || occurrence.occurrence_start_iso
           if (scope === 'future') opts.splitFuture = true
-        } else if (rruleDirty) {
-          // 改整系列: 仅用户动了重复段才传 rrule (含 '' 删除); 没动保留原值
+        } else {
+          // 改整系列. rrule 仅用户动了重复段才传 (含 '' 删除); 没动保留原值
           // (防 builder 有损解析破坏复杂规则).
-          opts.rrule = builtRrule
+          if (rruleDirty) opts.rrule = builtRrule
+          // Phase 4·#4 — attendees 三态决策抽到 lib/attendees (可单测): 未 dirty 不传
+          // (后端保留原与会者 + partstat, 防退化触发 Exchange 重发邀请) / dirty 非空替换
+          // / dirty 删光 → clearAttendees 显式清空 (因不传语义现在=保留).
+          Object.assign(opts, resolveAttendeesUpdate(attendeesDirty, chips))
         }
         return mailApi.calendar.eventUpdate(opts)
       } else {
@@ -249,7 +256,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           endIso,
           location: location || undefined,
           description: description || undefined,
-          attendees,
+          attendees: chips.length > 0 ? chips : undefined,
           calendarName: calendarName || undefined,
           rrule: builtRrule || undefined,
           isAllDay: isAllDay || undefined
@@ -332,6 +339,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       }
       setChips((cs) => [...cs, { email: v }])
       setChipInputValue('')
+      setAttendeesDirty(true)
     },
     [chips]
   )
@@ -342,6 +350,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       addChip(chipInputValue)
     } else if (e.key === 'Backspace' && chipInputValue === '' && chips.length) {
       setChips((cs) => cs.slice(0, -1))
+      setAttendeesDirty(true)
     }
   }
 
@@ -591,6 +600,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
                     onClick={(e) => {
                       e.stopPropagation()
                       setChips((cs) => cs.filter((x) => x.email !== c.email))
+                      setAttendeesDirty(true)
                     }}
                     aria-label={t('calendar.form.attendees.removeChip', '移除 {email}', { email: c.email })}
                     title={t('calendar.shared.closeAria', '关闭')}

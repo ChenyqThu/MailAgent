@@ -622,7 +622,10 @@ export interface EventUpdateOpts {
   endIso?: string
   location?: string
   description?: string
+  /** Phase 4·#4 — 替换与会者; 不传 = 保留原与会者 (含 partstat, 防退化). 清空用 clearAttendees. */
   attendees?: EventAttendeeInput[]
+  /** Phase 4·#4 — 显式清空所有与会者 (前端删光 chips); 与 attendees 互斥. */
+  clearAttendees?: boolean
   status?: EventStatusCode
   calendarName?: string
   /** Phase 4·#3 — 改整系列 RRULE: 不传=保留原值; 'FREQ=...' 覆盖; '' 删除(周期→单次). */
