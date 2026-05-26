@@ -1,10 +1,11 @@
 """CLI ``mailagent email draft`` 测试.
 
 灵动岛 (ping-island) create_draft / quick_reply_* / decline_with_reason /
-nudge_recipient action handler 调本命令. 覆盖:
+nudge_recipient action handler 调本命令. reply_suggestion 从 SQLite
+llm_processing.labels_json (SSoT) 读, 不读 Notion. 覆盖:
 - 纯函数: _split_addrs (quoted name) + _compose_reply_draft (收件人计算 / threading)
-- integration (CliRunner + seeded_db): not-found / no-page-id / no-reply-suggestion
-  / dry-run / 真创建 (stub Notion retrieve + fake backend.append_draft)
+- integration (CliRunner + seeded_db + seed llm_processing): not-found /
+  no-reply-suggestion / dry-run / 真创建 (fake backend.append_draft)
 """
 
 from __future__ import annotations
@@ -25,12 +26,10 @@ def test_split_addrs_simple():
 
 
 def test_split_addrs_semicolon_outlook():
-    # Outlook 习惯 semicolon-separated
     assert _split_addrs("a@b.com; c@d.com") == ["a@b.com", "c@d.com"]
 
 
 def test_split_addrs_quoted_display_name_with_comma():
-    # "LastName, FirstName" <a@b> 含逗号的 quoted name 不能错切
     out = _split_addrs('"Zhang, San" <san@acme.com>, lisi@acme.com')
     assert out == ["san@acme.com", "lisi@acme.com"]
 
@@ -61,7 +60,6 @@ def _record(**overrides):
 
 @pytest.fixture(autouse=True)
 def _set_user_email(monkeypatch):
-    # _compose_reply_draft 用 config.user_email 把自己从 reply-all 收件人去掉
     from src.config import config as cfg
     monkeypatch.setattr(cfg, "user_email", "me@mycorp.com")
 
@@ -71,11 +69,9 @@ def test_compose_reply_all_excludes_self_and_includes_sender():
         _record(), internal_id=1, mode="reply-all",
         reply_text="ok", reply_html="<p>ok</p>", extra_to=None, extra_cc=None,
     )
-    # to = 原 sender + 原 to (去掉自己 me@mycorp.com)
     assert "alice@example.com" in draft.to
     assert "bob@example.com" in draft.to
     assert "me@mycorp.com" not in draft.to
-    # cc = 原 cc (去掉自己)
     assert draft.cc == ["carol@example.com"]
 
 
@@ -92,10 +88,9 @@ def test_compose_reply_all_dedup_and_extra():
     draft = _compose_reply_draft(
         _record(), internal_id=1, mode="reply-all",
         reply_text="ok", reply_html=None,
-        extra_to="alice@example.com, dave@example.com",  # alice 重复应 dedup
+        extra_to="alice@example.com, dave@example.com",
         extra_cc="erin@example.com",
     )
-    # alice 只出现一次 (dedup 保序)
     assert draft.to.count("alice@example.com") == 1
     assert "dave@example.com" in draft.to
     assert "erin@example.com" in draft.cc
@@ -114,7 +109,7 @@ def test_compose_subject_keeps_existing_re():
         _record(subject="Re: Hello"), internal_id=1, mode="reply",
         reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
     )
-    assert draft.subject == "Re: Hello"  # 不重复加 Re:
+    assert draft.subject == "Re: Hello"
 
 
 def test_compose_in_reply_to_and_references():
@@ -123,7 +118,6 @@ def test_compose_in_reply_to_and_references():
         reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
     )
     assert draft.in_reply_to == "<msg-1@example.com>"
-    # references = thread head + in_reply_to (Outlook fold)
     assert draft.references == "<thread-head@example.com> <msg-1@example.com>"
 
 
@@ -137,7 +131,6 @@ def test_compose_no_message_id_no_threading():
 
 
 def test_compose_thread_id_equals_message_id_no_dup_in_references():
-    # thread_id == message_id 时 references 不重复
     draft = _compose_reply_draft(
         _record(thread_id="<msg-1@example.com>"), internal_id=1, mode="reply",
         reply_text="ok", reply_html=None, extra_to=None, extra_cc=None,
@@ -157,13 +150,40 @@ def test_compose_carries_reply_text_and_html():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# integration (CliRunner + seeded_db)
+# integration (CliRunner + seeded_db + seed llm_processing.labels_json)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _invoke(cli_runner, *args, db_path):
     from src.cli.main import app
     return cli_runner.invoke(app, ["--db-path", str(db_path), *args])
+
+
+def _seed_reply_suggestion(db_path, internal_id, reply_md, priority="🟡 重要"):
+    """在 SQLite llm_processing 表 seed 一行含 labels_json.reply_suggestion_md.
+
+    llm_processing 表由 LLMProcessingStore 建 (seeded_db 的 SyncStore 不建), 所以
+    先构造 store 确保表存在, 再裸 SQL upsert labels_json.
+    """
+    import json
+    import sqlite3
+    import time
+
+    from src.llm_agent.store import LLMProcessingStore
+
+    LLMProcessingStore(str(db_path))  # _init 建 llm_processing 表
+    conn = sqlite3.connect(str(db_path))
+    labels = {"reply_suggestion_md": reply_md, "priority": priority}
+    now = time.time()
+    conn.execute(
+        "INSERT INTO llm_processing (internal_id, status, labels_json, created_at, updated_at) "
+        "VALUES (?, 'success', ?, ?, ?) "
+        "ON CONFLICT(internal_id) DO UPDATE SET labels_json=excluded.labels_json, "
+        "updated_at=excluded.updated_at",
+        (internal_id, json.dumps(labels, ensure_ascii=False), now, now),
+    )
+    conn.commit()
+    conn.close()
 
 
 class _FakeBackend:
@@ -181,32 +201,6 @@ class _FakeBackend:
         )
 
 
-def _patch_notion_retrieve(monkeypatch, *, rich_text):
-    """Stub NotionClient 让 .client.pages.retrieve 返回含 Reply Suggestion 的 page."""
-    from src.notion import client as client_mod
-
-    async def fake_retrieve(*, page_id):
-        return {
-            "object": "page",
-            "id": page_id,
-            "properties": {
-                "Reply Suggestion": {"rich_text": rich_text},
-            },
-        }
-
-    class _StubNotionClient:
-        def __init__(self, *args, **kwargs):
-            self.email_db_id = kwargs.get("email_db_id") or "stub"
-            self.client = type("NS", (), {})()
-            self.client.pages = type("Pages", (), {})()
-            self.client.pages.retrieve = fake_retrieve
-
-    monkeypatch.setattr(client_mod, "NotionClient", _StubNotionClient)
-    # NotionSync.__init__ 内 from .client import NotionClient — patch sync 模块引用
-    from src.notion import sync as sync_mod
-    monkeypatch.setattr(sync_mod, "NotionClient", _StubNotionClient)
-
-
 def _patch_backend(monkeypatch, fake_backend):
     from src.mail.backend import factory as factory_mod
     monkeypatch.setattr(
@@ -215,10 +209,11 @@ def _patch_backend(monkeypatch, fake_backend):
     )
 
 
-_REPLY_RICH = [
-    {"type": "text", "text": {"content": "Hi Alice,\n\nSounds good.\n\n----\nBest,\nLucien"},
-     "annotations": {}},
-]
+def _bypass_auth(monkeypatch):
+    monkeypatch.setattr("src.cli.context.CliContext.require_auth", lambda self: None)
+
+
+_REPLY_MD = "Hi Alice,\n\nSounds good, I'll review by Friday.\n\n----\nBest,\nLucien"
 
 
 def test_draft_not_found(cli_runner, seeded_db):
@@ -229,19 +224,8 @@ def test_draft_not_found(cli_runner, seeded_db):
     assert data["error"]["code"] == "E_NOT_FOUND"
 
 
-def test_draft_no_notion_page_id(cli_runner, seeded_db):
-    # internal_id 12346 (failed sync, notion_page_id=NULL)
-    r = _invoke(cli_runner, "email", "draft", "12346", "--dry-run",
-                "-o", "json", db_path=seeded_db)
-    data = _last_json(r.output)
-    assert data["status"] == "error"
-    assert data["error"]["code"] == "E_NOT_FOUND"
-    assert "notion" in data["error"]["message"].lower() or "未同步" in data["error"]["message"]
-
-
-def test_draft_no_reply_suggestion(cli_runner, seeded_db, monkeypatch):
-    # Notion retrieve 返回空 Reply Suggestion → 提示先跑 llm
-    _patch_notion_retrieve(monkeypatch, rich_text=[])
+def test_draft_no_reply_suggestion(cli_runner, seeded_db):
+    # 12345 无 llm_processing 行 (没 seed) → labels_json 空 → E_NOT_FOUND
     r = _invoke(cli_runner, "email", "draft", "12345", "--dry-run",
                 "-o", "json", db_path=seeded_db)
     data = _last_json(r.output)
@@ -250,12 +234,12 @@ def test_draft_no_reply_suggestion(cli_runner, seeded_db, monkeypatch):
     assert "llm" in data["error"].get("hint", "").lower()
 
 
-def test_draft_dry_run_emits_plan(cli_runner, seeded_db, monkeypatch):
-    _patch_notion_retrieve(monkeypatch, rich_text=_REPLY_RICH)
+def test_draft_dry_run_emits_plan(cli_runner, seeded_db):
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
     r = _invoke(cli_runner, "email", "draft", "12345", "--dry-run",
                 "-o", "json", db_path=seeded_db)
     data = _last_json(r.output)
-    assert data["status"] == "success"
+    assert data["status"] == "success", r.output
     plan = data["data"]
     assert plan["dry_run"] is True
     assert plan["internal_id"] == 12345
@@ -263,13 +247,12 @@ def test_draft_dry_run_emits_plan(cli_runner, seeded_db, monkeypatch):
     # seeded_db sender=alice@example.com → reply-all to 含 alice
     assert "alice@example.com" in plan["to"]
     assert plan["subject"] == "Re: Hello Test"
+    assert plan["reply_source"] == "sqlite:llm_processing.labels_json"
 
 
 def test_draft_real_create_invokes_append_draft(cli_runner, seeded_db, monkeypatch):
-    # auth 旁路 — draft 逻辑测试不重测 auth (auth 有 tests/cli/test_auth.py 覆盖);
-    # .env 配了服务端 MAILAGENT_CLI_API_KEY 时 ALLOW_UNAUTH_WRITES 不放行, 直接 no-op require_auth.
-    monkeypatch.setattr("src.cli.context.CliContext.require_auth", lambda self: None)
-    _patch_notion_retrieve(monkeypatch, rich_text=_REPLY_RICH)
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
     fake_backend = _FakeBackend()
     _patch_backend(monkeypatch, fake_backend)
 
@@ -280,18 +263,17 @@ def test_draft_real_create_invokes_append_draft(cli_runner, seeded_db, monkeypat
     assert data["data"]["success"] is True
     assert data["data"]["drafts_folder"] == "Drafts"
     assert data["data"]["appended_uid"] == 42
-    # backend.append_draft 真被调 + DraftRequest 收件人正确
+    # backend.append_draft 真被调 + DraftRequest 收件人 + reply_html (md→html) 正确
     assert len(fake_backend.appended) == 1
     draft = fake_backend.appended[0]
     assert "alice@example.com" in draft.to
+    assert draft.reply_text == _REPLY_MD  # plain = markdown 原文
     assert draft.reply_html and "Sounds good" in draft.reply_html
 
 
 def test_draft_reply_mode_only_sender(cli_runner, seeded_db, monkeypatch):
-    # auth 旁路 — draft 逻辑测试不重测 auth (auth 有 tests/cli/test_auth.py 覆盖);
-    # .env 配了服务端 MAILAGENT_CLI_API_KEY 时 ALLOW_UNAUTH_WRITES 不放行, 直接 no-op require_auth.
-    monkeypatch.setattr("src.cli.context.CliContext.require_auth", lambda self: None)
-    _patch_notion_retrieve(monkeypatch, rich_text=_REPLY_RICH)
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
     fake_backend = _FakeBackend()
     _patch_backend(monkeypatch, fake_backend)
 

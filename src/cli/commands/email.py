@@ -1287,16 +1287,46 @@ def _split_addrs(addrs: str) -> list[str]:
     return out
 
 
-async def _fetch_reply_suggestion_rich(cli: "CliContext", page_id: str) -> list:
-    """读 Notion page 的 ``Reply Suggestion`` rich_text property → rich_text array.
+def _fetch_reply_suggestion_md(cli: "CliContext", internal_id: int) -> str:
+    """从 SQLite ``llm_processing.labels_json`` 读 ``reply_suggestion_md`` (SSoT).
 
-    返回 notion-client SDK 的 rich_text 数组 (每项 {type, text:{content, link},
-    annotations}), 可直接喂 rich_text_to_html. 无内容返 []."""
-    client = cli.notion_sync.client.client  # NotionClient.client = AsyncClient
-    page = await client.pages.retrieve(page_id=page_id)
-    props = (page or {}).get("properties", {}) or {}
-    reply_prop = props.get("Reply Suggestion", {}) or {}
-    return reply_prop.get("rich_text", []) or []
+    **SQLite 是 reply_suggestion 的 SSoT** — LLM 生成后写 labels_json
+    (mark_success); 用户在前端 / Notion 改 reply 后通过 upsert_external_labels
+    回灌 labels_json. 所以这里读到的永远是最新版本 (含用户微调 / AI 对话改动),
+    不读 Notion (Notion 退化为镜像).
+    """
+    import json as _json
+    from src.llm_agent.store import LLMProcessingStore
+
+    store = LLMProcessingStore(cli.cli_config.sync_store_db_path)
+    row = store.get(internal_id)
+    if not row:
+        return ""
+    raw = row.get("labels_json") or ""
+    if not raw:
+        return ""
+    try:
+        labels = _json.loads(raw)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(labels, dict):
+        return ""
+    return (labels.get("reply_suggestion_md") or "").strip()
+
+
+def _reply_md_to_html(reply_md: str) -> str:
+    """markdown reply_suggestion → HTML (复用 scripts/html_clipboard.md_to_html,
+    跟 handlers._create_draft_via_imap markdown 路径同款)."""
+    import os
+    import sys
+    scripts = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+        "scripts",
+    )
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from html_clipboard import md_to_html
+    return md_to_html(reply_md)
 
 
 def _compose_reply_draft(
@@ -1399,39 +1429,25 @@ def email_draft(
             f"--mode 必须是 reply-all / reply, got {mode!r}",
         ))
 
-    # 1. 原邮件 metadata (含 sender/to_addr/cc_addr/message_id/thread_id/notion_page_id)
+    # 1. 原邮件 metadata (含 sender/to_addr/cc_addr/message_id/thread_id) — 收件人 + threading
     record = cli.sync_store.get(internal_id)
     if not record:
         raise emit_cli_error(cli, CliNotFoundError(
             f"Email metadata not found for internal_id={internal_id}",
         ))
-    page_id = (record.get("notion_page_id") or "").strip()
-    if not page_id:
+
+    # 2. 从 SQLite SSoT 读 reply_suggestion_md (含用户前端/Notion 改过的最新版, 不读 Notion)
+    reply_md = _fetch_reply_suggestion_md(cli, internal_id)
+    if not reply_md:
         raise emit_cli_error(cli, CliNotFoundError(
-            f"Email {internal_id} 未同步到 Notion (无 notion_page_id), 无法读 Reply Suggestion",
-            hint="先 mailagent email resync <id> 同步到 Notion",
+            f"Email {internal_id} 无 reply_suggestion (SQLite labels_json 空)",
+            hint="先 mailagent llm run <id> 让 LLM 生成回复建议 "
+                 "(仅 action_required=true 的邮件有), 或在前端编辑回复后重试",
         ))
 
-    # 2. 读 Notion Reply Suggestion (async)
-    try:
-        rich_items = asyncio.run(_fetch_reply_suggestion_rich(cli, page_id))
-    except Exception as e:  # noqa: BLE001
-        raise emit_cli_error(cli, CliError(
-            f"读 Notion Reply Suggestion 失败: {e}",
-        ))
-    if not rich_items:
-        raise emit_cli_error(cli, CliNotFoundError(
-            f"Email {internal_id} 的 Notion 页无 Reply Suggestion 内容",
-            hint="先 mailagent llm run <id> 让 LLM 生成回复建议 (仅 action_required=true 的邮件有)",
-        ))
-
-    # 3. rich_text → plain text + HTML
-    reply_text = "".join(
-        it.get("text", {}).get("content", "") for it in rich_items
-        if isinstance(it, dict)
-    ).strip()
-    from src.converter.notion_rich_text import rich_text_to_html
-    reply_html = rich_text_to_html(rich_items)
+    # 3. markdown → plain text (原文) + HTML
+    reply_text = reply_md
+    reply_html = _reply_md_to_html(reply_md)
 
     # 4. 构造 DraftRequest
     draft = _compose_reply_draft(
@@ -1444,11 +1460,11 @@ def email_draft(
     if dry_run:
         plan = {
             "internal_id": internal_id,
-            "page_id": page_id,
             "mode": mode,
             "to": draft.to,
             "cc": draft.cc,
             "subject": draft.subject,
+            "reply_source": "sqlite:llm_processing.labels_json",
             "reply_text_preview": reply_text[:120],
             "reply_html_len": len(reply_html or ""),
             "in_reply_to": draft.in_reply_to,
