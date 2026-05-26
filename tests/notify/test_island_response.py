@@ -20,7 +20,12 @@ from src.notify import island_response, island_snooze
 
 @pytest.fixture
 def patch_run(monkeypatch):
-    """抓 island_response._run 的入参; 不真跑 subprocess."""
+    """抓 island_response._run 的入参; 不真跑 subprocess.
+
+    默认 delenv MAILAGENT_CLI_API_KEY — 防 .env / shell 真值污染 argv 断言.
+    需要测带 key 的用例 (api-key 前置) 自己 setenv 覆盖.
+    """
+    monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
     captured: List[Dict[str, Any]] = []
 
     async def fake_run(args, *, timeout: float = 10) -> None:
@@ -111,16 +116,40 @@ def test_mark_done_invokes_cli_with_processing_status_completed(patch_run, monke
     monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "k_abc")
     asyncio.run(island_response.handle_response(_resp("mark_done"), _meta(123)))
     assert len(patch_run) == 1
-    args = patch_run[0]["args"]
-    assert args[:5] == ["mailagent", "notion", "update-flag", "123", "--processing-status"]
-    assert args[5] == "已完成"
-    assert "--api-key" in args and "k_abc" in args
+    # --api-key 前置 (global flag 在 subcommand "notion" 之前) — 防回归 Phase 1 后置 bug
+    assert patch_run[0]["args"] == [
+        "mailagent", "--api-key", "k_abc",
+        "notion", "update-flag", "123", "--processing-status", "已完成",
+    ]
 
 
 def test_create_draft_invokes_cli(patch_run, monkeypatch):
     monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "k_xyz")
     asyncio.run(island_response.handle_response(_resp("create_draft"), _meta(7)))
-    assert patch_run[0]["args"][:4] == ["mailagent", "email", "draft", "7"]
+    # --api-key 前置 subcommand "email"
+    assert patch_run[0]["args"] == [
+        "mailagent", "--api-key", "k_xyz", "email", "draft", "7",
+    ]
+
+
+def test_mailagent_args_api_key_is_leading(monkeypatch):
+    """global --api-key 必须前置 subcommand (typer root callback flag).
+
+    防回归 Phase 1 bug: 后置 --api-key 被 typer 拒 "No such option" → 用户设了
+    CLI key 时所有 mark_done / create_draft handler silent fail.
+    """
+    monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "secret")
+    args = island_response._mailagent_args("email", "draft", "7")
+    assert args == ["mailagent", "--api-key", "secret", "email", "draft", "7"]
+    # --api-key 必须在第一个 subcommand token 之前
+    assert args.index("--api-key") < args.index("email")
+
+
+def test_mailagent_args_no_key_omits_flag(monkeypatch):
+    monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+    args = island_response._mailagent_args("notion", "update-flag", "1")
+    assert args == ["mailagent", "notion", "update-flag", "1"]
+    assert "--api-key" not in args
 
 
 def test_snooze_1h_enqueues_island_snooze(patch_snooze, patch_run):

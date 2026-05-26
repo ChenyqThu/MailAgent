@@ -1257,3 +1257,239 @@ def email_flag(
         cli, data,
         meta_extra={"count": len(updated), "not_found_count": len(not_found)},
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# email draft — 基于 Notion Reply Suggestion 创建回复草稿 (灵动岛 create_draft /
+# quick_reply_* / decline_with_reason / nudge_recipient action handler 调本命令).
+# 逻辑对齐 src/events/handlers.py::_create_draft_via_imap (davmail 路径), 但走
+# CLI CliContext.backend.append_draft 统一接口 (davmail IMAP APPEND / applescript
+# 内部 sh), 不区分 backend. 未抽共享函数是为隔离 handlers 生产路径 (无回归测试覆盖).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _split_addrs(addrs: str) -> list[str]:
+    """split RFC 822 to/cc 字段提纯 email. 对齐 handlers._split_addrs (getaddresses
+    正确处理 quoted display name + Outlook semicolon)."""
+    if not addrs:
+        return []
+    from email.utils import getaddresses
+    normalized = addrs.replace(";", ",")
+    out: list[str] = []
+    try:
+        for _name, email in getaddresses([normalized]):
+            email = (email or "").strip()
+            if email:
+                out.append(email)
+    except Exception:
+        # getaddresses 理论上不抛, 兜底逗号切
+        out = [a.strip() for a in normalized.split(",") if a.strip()]
+    return out
+
+
+async def _fetch_reply_suggestion_rich(cli: "CliContext", page_id: str) -> list:
+    """读 Notion page 的 ``Reply Suggestion`` rich_text property → rich_text array.
+
+    返回 notion-client SDK 的 rich_text 数组 (每项 {type, text:{content, link},
+    annotations}), 可直接喂 rich_text_to_html. 无内容返 []."""
+    client = cli.notion_sync.client.client  # NotionClient.client = AsyncClient
+    page = await client.pages.retrieve(page_id=page_id)
+    props = (page or {}).get("properties", {}) or {}
+    reply_prop = props.get("Reply Suggestion", {}) or {}
+    return reply_prop.get("rich_text", []) or []
+
+
+def _compose_reply_draft(
+    record: dict,
+    *,
+    internal_id: int,
+    mode: str,
+    reply_text: str,
+    reply_html: Optional[str],
+    extra_to: Optional[str],
+    extra_cc: Optional[str],
+):
+    """从原邮件 metadata + reply 内容构造 DraftRequest.
+
+    收件人 + In-Reply-To/References 算法对齐 handlers._create_draft_via_imap.
+    """
+    from src.config import config as _cfg
+    from src.mail.backend import DraftRequest
+
+    self_email = (_cfg.user_email or "").lower().strip()
+    extra_to_list = _split_addrs(extra_to or "")
+    extra_cc_list = _split_addrs(extra_cc or "")
+
+    to_list: list[str] = []
+    cc_list: list[str] = []
+    orig_from = (record.get("sender") or "").strip()
+    orig_to = _split_addrs(record.get("to_addr") or "")
+    orig_cc = _split_addrs(record.get("cc_addr") or "")
+    if mode == "reply":
+        to_list = [orig_from] if orig_from else []
+    else:  # reply-all
+        candidates = ([orig_from] if orig_from else []) + orig_to
+        to_list = [a for a in candidates if a.lower() != self_email]
+        cc_list = [a for a in orig_cc if a.lower() != self_email]
+    to_list = list(dict.fromkeys(to_list + extra_to_list))  # dedup 保序
+    cc_list = list(dict.fromkeys(cc_list + extra_cc_list))
+
+    orig_subj = record.get("subject", "") or ""
+    subject = orig_subj if orig_subj.lower().startswith("re:") else f"Re: {orig_subj}"
+
+    # In-Reply-To + References (Outlook 线程 fold)
+    message_id = (record.get("message_id") or "").strip().strip("<>")
+    in_reply_to: Optional[str] = None
+    references: Optional[str] = None
+    if message_id:
+        in_reply_to = f"<{message_id}>"
+        tid = (record.get("thread_id") or "").strip().strip("<>")
+        chunks: list[str] = []
+        if tid and tid != message_id:
+            chunks.append(f"<{tid}>")
+        chunks.append(in_reply_to)
+        references = " ".join(chunks)
+
+    return DraftRequest(
+        mode=mode,
+        internal_id_for_threading=internal_id,
+        to=to_list, cc=cc_list,
+        subject=subject or "(no subject)",
+        reply_text=reply_text or "(rich text body)",
+        reply_html=reply_html,
+        in_reply_to=in_reply_to,
+        references=references,
+    )
+
+
+@app.command("draft")
+def email_draft(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="原邮件 internal_id"),
+    mode: str = typer.Option(
+        "reply-all", "--mode",
+        help="reply-all (默认) / reply (仅回发件人)",
+    ),
+    extra_to: Optional[str] = typer.Option(
+        None, "--extra-to", help="额外收件人 (逗号分隔)",
+    ),
+    extra_cc: Optional[str] = typer.Option(
+        None, "--extra-cc", help="额外抄送 (逗号分隔)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="只打 plan (收件人 + 正文预览), 不创建草稿",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """基于 Notion Reply Suggestion 创建邮件回复草稿.
+
+    流程: internal_id → SQLite 查 metadata → Notion 读 ``Reply Suggestion``
+    property → 构造 DraftRequest → ``backend.append_draft`` (davmail IMAP APPEND /
+    applescript sh). 没 reply_suggestion → 提示先跑 ``mailagent llm run <id>``.
+
+    灵动岛 (ping-island) ``create_draft`` / ``quick_reply_yes`` /
+    ``quick_reply_no_with_reason`` / ``decline_with_reason`` / ``nudge_recipient``
+    action handler 调本命令.
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if mode not in ("reply-all", "reply"):
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"--mode 必须是 reply-all / reply, got {mode!r}",
+        ))
+
+    # 1. 原邮件 metadata (含 sender/to_addr/cc_addr/message_id/thread_id/notion_page_id)
+    record = cli.sync_store.get(internal_id)
+    if not record:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email metadata not found for internal_id={internal_id}",
+        ))
+    page_id = (record.get("notion_page_id") or "").strip()
+    if not page_id:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email {internal_id} 未同步到 Notion (无 notion_page_id), 无法读 Reply Suggestion",
+            hint="先 mailagent email resync <id> 同步到 Notion",
+        ))
+
+    # 2. 读 Notion Reply Suggestion (async)
+    try:
+        rich_items = asyncio.run(_fetch_reply_suggestion_rich(cli, page_id))
+    except Exception as e:  # noqa: BLE001
+        raise emit_cli_error(cli, CliError(
+            f"读 Notion Reply Suggestion 失败: {e}",
+        ))
+    if not rich_items:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email {internal_id} 的 Notion 页无 Reply Suggestion 内容",
+            hint="先 mailagent llm run <id> 让 LLM 生成回复建议 (仅 action_required=true 的邮件有)",
+        ))
+
+    # 3. rich_text → plain text + HTML
+    reply_text = "".join(
+        it.get("text", {}).get("content", "") for it in rich_items
+        if isinstance(it, dict)
+    ).strip()
+    from src.converter.notion_rich_text import rich_text_to_html
+    reply_html = rich_text_to_html(rich_items)
+
+    # 4. 构造 DraftRequest
+    draft = _compose_reply_draft(
+        record, internal_id=internal_id, mode=mode,
+        reply_text=reply_text, reply_html=reply_html,
+        extra_to=extra_to, extra_cc=extra_cc,
+    )
+
+    # 5. dry-run: 打 plan 不创建
+    if dry_run:
+        plan = {
+            "internal_id": internal_id,
+            "page_id": page_id,
+            "mode": mode,
+            "to": draft.to,
+            "cc": draft.cc,
+            "subject": draft.subject,
+            "reply_text_preview": reply_text[:120],
+            "reply_html_len": len(reply_html or ""),
+            "in_reply_to": draft.in_reply_to,
+            "dry_run": True,
+        }
+        if cli.output.lower() == "text":
+            print("=== email draft plan (dry-run) ===")
+            for key, value in plan.items():
+                print(f"{key:20} {value}")
+        else:
+            emit(cli, plan)
+        return
+
+    # 6. 写命令 auth
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    # 7. backend.append_draft (统一接口: davmail IMAP APPEND / applescript sh)
+    result = cli.backend.append_draft(draft)
+    if not result.success:
+        raise emit_cli_error(cli, CliError(
+            f"草稿创建失败: {result.error}",
+        ))
+
+    data = {
+        "internal_id": internal_id,
+        "success": True,
+        "drafts_folder": result.drafts_folder,
+        "appended_uid": result.appended_uid,
+        "method": result.method,
+        "mode": mode,
+        "to_count": len(draft.to),
+        "cc_count": len(draft.cc),
+        "dry_run": False,
+    }
+    if cli.output.lower() == "text":
+        print(
+            f"draft created: folder={result.drafts_folder} "
+            f"uid={result.appended_uid} to={len(draft.to)} cc={len(draft.cc)}"
+        )
+    else:
+        emit(cli, data)

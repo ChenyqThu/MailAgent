@@ -180,23 +180,36 @@ async def _open_notion(meta: Dict[str, str]) -> None:
     await _run(["open", url], timeout=5)
 
 
-async def _create_draft(internal_id: int) -> None:
+def _mailagent_args(*subcommand: str) -> list:
+    """构造 mailagent CLI argv, global ``--api-key`` 前置 (subcommand 之前).
+
+    关键 (实测 2026-05-26): ``--api-key`` 是 root callback global flag, **必须**放
+    subcommand 之前 (``mailagent --api-key K email draft 123``); 放后面
+    (``mailagent email draft 123 --api-key K``) typer 报 "No such option: --api-key".
+    Phase 1 _create_draft / _mark_done 误把它后置 — 仅在用户没设 MAILAGENT_CLI_API_KEY
+    (dev unauth-writes 放行) 时不触发, 一旦设了 key 全部 silent fail. 见 CLAUDE.md
+    "全局 flags 写在 subcommand 之前".
+    """
+    args = ["mailagent"]
     api_key = os.environ.get("MAILAGENT_CLI_API_KEY", "")
-    args = ["mailagent", "email", "draft", str(internal_id)]
     if api_key:
         args.extend(["--api-key", api_key])
-    await _run(args, timeout=30)
+    args.extend(subcommand)
+    return args
+
+
+async def _create_draft(internal_id: int) -> None:
+    # davmail IMAP APPEND / applescript sh; Notion retrieve 可能慢, timeout 给 60s
+    await _run(_mailagent_args("email", "draft", str(internal_id)), timeout=60)
 
 
 async def _mark_done(internal_id: int) -> None:
-    api_key = os.environ.get("MAILAGENT_CLI_API_KEY", "")
-    args = [
-        "mailagent", "notion", "update-flag", str(internal_id),
-        "--processing-status", "已完成",
-    ]
-    if api_key:
-        args.extend(["--api-key", api_key])
-    await _run(args, timeout=30)
+    await _run(
+        _mailagent_args(
+            "notion", "update-flag", str(internal_id), "--processing-status", "已完成",
+        ),
+        timeout=30,
+    )
 
 
 async def _add_to_calendar() -> None:
