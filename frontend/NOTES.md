@@ -6,7 +6,13 @@
 
 ## TODO
 
-- 2026-05-20 — **Sprint 14 · Outlook-style 同线程邮件折叠 — ✅ ship round 8**
+- 2026-05-26 — **[bug][calendar] EventFormModal prefill effect 重置未保存编辑** (review LOW, pre-existing)
+  `EventFormModal.tsx` 的 `[open, occurrence]` dep effect (~line 152-208) 在 occurrence prop
+  identity 变化时 (父组件 re-render 传新对象, 即使数据相同) 重新预填 chips +
+  `setAttendeesDirty(false)` / `setRruleDirty(false)`, 丢弃用户进行中的与会者/重复规则编辑.
+  与 rruleDirty 共享同一 dep array 模式 (Phase 4·#4 attendees 修复时一并暴露, code-review
+  opus LOW). fails-safe (不数据损坏), 低优先级. 修法: dep 改用 `occurrence.ical_uid +
+  recurrence_id` 稳定 key, 或父组件用 useMemo 稳定化 occurrence identity.
   ThreadBundle.tsx 落地 (`src/shared/components/email/ThreadBundle.tsx`).
   在 EmailDetail.tsx AttachmentList 之后挂载 (thread_id 非 null 时).
   listByThread IPC 拉同 thread 邮件 → 过滤 currentInternalId → 按
