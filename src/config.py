@@ -352,11 +352,11 @@ class Config(BaseSettings):
 
     # =========================================================================
     # ping-island 灵动岛集成 (Island-Sprint 2)
-    # 详见 frontend/ISLAND-PLUGIN.md。默认全部关，用户启用前需先装 ping-island.app
+    # 详见 frontend/ISLAND-PLUGIN.md。ping_island_enabled 默认开（Phase 1+2+F1-F6 已 ship）；仍需装 ping-island.app，未装则 socket fail-open
     # =========================================================================
     ping_island_enabled: bool = Field(
-        default=False, env="PING_ISLAND_ENABLED",
-        description="是否启用 ping-island 派发（默认关）。开关切到 true 后失败 fail-open，不影响主同步。",
+        default=True, env="PING_ISLAND_ENABLED",
+        description="是否启用 ping-island 派发（默认开，Phase 1+2+F1-F6 已 ship）。失败 fail-open，不影响主同步。",
     )
     island_socket_path: str = Field(
         default="/tmp/island.sock", env="ISLAND_SOCKET_PATH",
