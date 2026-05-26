@@ -147,14 +147,30 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# F6 — open 类 action 优先打开 MailAgent 前端 (Electron) 而非系统 app.
+# gate on (MAILAGENT_FRONTEND_DEEPLINK_ENABLED=true) + 前端注册了 mailagent:// scheme
+# 时, open mailagent://email/<id> 唤起前端聚焦该邮件; gate off / 前端没装走系统 app
+# fallback (现状). 前端是统一邮件入口, open_mail 和 open_notion gate on 都进前端邮件视图.
+_FRONTEND_DEEPLINK_ENV = "MAILAGENT_FRONTEND_DEEPLINK_ENABLED"
+
+
+def _frontend_deeplink_enabled() -> bool:
+    return os.environ.get(_FRONTEND_DEEPLINK_ENV, "").strip().lower() == "true"
+
+
 async def _open_mail(internal_id: int, meta: Dict[str, str]) -> None:
+    # F6: gate on → 打开 MailAgent 前端邮件视图
+    if _frontend_deeplink_enabled():
+        await _run(["open", f"mailagent://email/{int(internal_id)}"], timeout=5)
+        return
+
+    # fallback: 系统 Mail.app (osascript). H-12: 必须用
+    # `first message of mailbox of account whose id is <int>` 语法
     account_name = meta.get("mailagent.accountName", "")
     mailbox_name = meta.get("mailagent.mailboxName") or meta.get("mailagent.mailbox") or "收件箱"
     if not account_name:
         log.warning("[island-response] open_mail missing accountName; aborting")
         return
-
-    # H-12: 必须用 `first message of mailbox of account whose id is <int>` 语法
     script = (
         'tell application "Mail"\n'
         '  activate\n'
@@ -168,12 +184,20 @@ async def _open_mail(internal_id: int, meta: Dict[str, str]) -> None:
 
 
 async def _open_notion(meta: Dict[str, str]) -> None:
+    # F6: gate on → 打开 MailAgent 前端邮件视图 (前端是统一邮件入口, 不跳 Notion)
+    if _frontend_deeplink_enabled():
+        internal_id_str = meta.get("mailagent.internalId", "").strip()
+        if internal_id_str.isdigit():
+            await _run(["open", f"mailagent://email/{int(internal_id_str)}"], timeout=5)
+            return
+        # 无 internalId → 落回 Notion fallback (下方)
+
+    # fallback: Notion 页 (notion:// 桌面版 / https 兜底). M-13: 桌面版 fallback Web URL
     page_id_dashed = meta.get("mailagent.notionPageId", "").strip()
     if not page_id_dashed:
         log.debug("[island-response] open_notion no page_id; skipping")
         return
     page_id_flat = page_id_dashed.replace("-", "")
-    # M-13: 桌面版 fallback Web URL
     use_app = Path("/Applications/Notion.app").exists() and bool(shutil.which("open"))
     url = (
         f"notion://www.notion.so/{page_id_flat}"

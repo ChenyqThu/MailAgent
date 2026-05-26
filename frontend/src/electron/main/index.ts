@@ -40,8 +40,52 @@ import { registerServicesHandlers } from './handlers/services'
 // 是给 Settings UI read/write 的另一条路径, 跟启动 env 注入是两件事. 详见
 // lib/dotenv-bootstrap.ts header. 已 export 的 process.env 优先, 不被覆盖.
 import { bootstrapDotenv } from './lib/dotenv-bootstrap'
+// Sprint 19 island F6 — mailagent:// deeplink (灵动岛 open_mail/open_notion →
+// 打开前端对应邮件/视图). 解析 + cold-start buffer 在 ./deeplink.
+import {
+  dispatchDeeplink,
+  extractDeeplinkFromArgv,
+  setDeeplinkSink
+} from './deeplink'
 
 bootstrapDotenv()
+
+// F6 — 注册 mailagent:// custom protocol scheme. dev 模式 (electron-vite 跑
+// electron 二进制) 需带 execPath + script path, 否则系统注册的是 Electron.app 而非
+// 项目脚本. 生产模式 electron-builder.yml `protocols:` 已声明, 系统装 .app 时注册,
+// 这里 setAsDefaultProtocolClient 是 runtime 兜底/dev 用.
+if (is.dev && process.platform === 'win32' && process.argv.length >= 2) {
+  app.setAsDefaultProtocolClient('mailagent', process.execPath, [process.argv[1]])
+} else {
+  app.setAsDefaultProtocolClient('mailagent')
+}
+
+// macOS 唤起 deeplink 走 open-url (不经 argv). 冷启动时 app 未 ready 也会触发 —
+// dispatchDeeplink 内部 buffer 到 sink (whenReady 后注册) 再 flush.
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  dispatchDeeplink(url)
+})
+
+// Win/Linux deeplink 走二次启动 argv. single-instance lock 防多开 + 把 argv 里的
+// url 转给已有实例. macOS 不依赖这条 (用 open-url), 但加上无害 + 防 macOS 多开.
+// dev 模式跳过 (electron-vite restart 会触发多实例, lock 会误杀热重载).
+if (!is.dev) {
+  const gotLock = app.requestSingleInstanceLock()
+  if (!gotLock) {
+    app.quit()
+  } else {
+    app.on('second-instance', (_event, argv) => {
+      const url = extractDeeplinkFromArgv(argv)
+      if (url) dispatchDeeplink(url)
+      const win = BrowserWindow.getAllWindows()[0]
+      if (win) {
+        if (win.isMinimized()) win.restore()
+        win.focus()
+      }
+    })
+  }
+}
 
 // macOS menu bar + Dock label needs to be set BEFORE app.whenReady() —
 // otherwise the menu reads from the Electron binary's Info.plist
@@ -287,6 +331,21 @@ app.whenReady().then(() => {
   })
 
   createWindow()
+
+  // F6 — deeplink sink: 聚焦主窗口 + 把 target 转给 renderer (useDeeplinkRouter
+  // 监听 'mailagent:deeplink' → router.navigate + setActive). createWindow 后注册,
+  // 有 cold-start buffer 立即 flush. 主窗口取第一个非 popout window (popout 也是
+  // BrowserWindow 但 title 不同 — 简化取 getAllWindows()[0], createWindow 先建主窗).
+  setDeeplinkSink((target) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+    if (win.isMinimized()) win.restore()
+    win.focus()
+    win.webContents.send('mailagent:deeplink', target)
+  })
+  // Win/Linux 冷启动 argv 里的 deeplink (macOS 走 open-url, 已在 module 级注册).
+  const coldUrl = extractDeeplinkFromArgv(process.argv)
+  if (coldUrl) dispatchDeeplink(coldUrl)
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

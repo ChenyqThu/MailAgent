@@ -26,6 +26,8 @@ def patch_run(monkeypatch):
     需要测带 key 的用例 (api-key 前置) 自己 setenv 覆盖.
     """
     monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+    # F6 — 默认 gate off, open_* 走系统 app fallback; gate-on 测试自己 setenv
+    monkeypatch.delenv("MAILAGENT_FRONTEND_DEEPLINK_ENABLED", raising=False)
     captured: List[Dict[str, Any]] = []
 
     async def fake_run(args, *, timeout: float = 10) -> None:
@@ -110,6 +112,25 @@ def test_open_notion_no_page_id_is_noop(patch_run):
     meta["mailagent.notionPageId"] = ""
     asyncio.run(island_response.handle_response(_resp("open_notion"), meta))
     assert patch_run == []
+
+
+# F6 — gate on (MAILAGENT_FRONTEND_DEEPLINK_ENABLED=true): open 类打开前端 deeplink
+
+
+def test_open_mail_deeplink_when_frontend_enabled(patch_run, monkeypatch):
+    """gate on → open_mail 打开前端 mailagent://email/<id> 而非系统 Mail.app."""
+    monkeypatch.setenv("MAILAGENT_FRONTEND_DEEPLINK_ENABLED", "true")
+    asyncio.run(island_response.handle_response(_resp("open_mail"), _meta(53675)))
+    assert len(patch_run) == 1
+    assert patch_run[0]["args"] == ["open", "mailagent://email/53675"]
+
+
+def test_open_notion_deeplink_when_frontend_enabled(patch_run, monkeypatch):
+    """gate on → open_notion 也进前端邮件视图 (前端是统一邮件入口, 不跳 Notion)."""
+    monkeypatch.setenv("MAILAGENT_FRONTEND_DEEPLINK_ENABLED", "true")
+    asyncio.run(island_response.handle_response(_resp("open_notion"), _meta(42)))
+    assert len(patch_run) == 1
+    assert patch_run[0]["args"] == ["open", "mailagent://email/42"]
 
 
 def test_mark_done_invokes_cli_with_processing_status_completed(patch_run, monkeypatch):

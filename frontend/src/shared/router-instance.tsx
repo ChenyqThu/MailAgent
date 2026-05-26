@@ -20,6 +20,7 @@
 // `/admin` itself routes to `/admin/kanban` by default so a direct visit
 // lands somewhere useful instead of an empty parent.
 
+import { useEffect } from 'react'
 import {
   createMemoryHistory,
   createRootRoute,
@@ -33,6 +34,7 @@ import { CalendarLayout } from './components/layout/CalendarLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
 import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
 import { SettingsLayout } from './components/layout/SettingsLayout'
+import { useActiveEmail } from './state/active-email'
 // Sprint 7 D2 — `?` / ⌘K / ⌘, bindings + the modals they open.
 // MUST mount inside `RouterProvider` (i.e. inside this rootRoute layout),
 // otherwise the `useNavigate()` call in GlobalShortcuts / CommandPalette
@@ -44,7 +46,76 @@ import { CommandPalette } from './components/command/CommandPalette'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 
+// F6 — mailagent:// deeplink target (main/deeplink.ts shape; renderer 不能 import
+// main 模块, 这里 inline 同 shape).
+interface DeeplinkTarget {
+  kind: 'email' | 'calendar' | 'kanban' | 'llm' | 'settings'
+  id?: number
+  view?: string
+}
+
+/**
+ * 监听 main 转发的 'mailagent:deeplink' → router.navigate 切视图 + (email) setActive.
+ * 灵动岛 open_mail/open_notion → plugin open mailagent://email/<id> → main → 这里.
+ */
+function useDeeplinkRouter(): void {
+  useEffect(() => {
+    // window.electron 由 preload (@electron-toolkit) 注入; renderer tsconfig 不含其
+    // global d.ts, 跟 ElectronApi.ts 一样 cast 最小 shape.
+    const ipc = (
+      window as unknown as {
+        electron?: {
+          ipcRenderer?: {
+            on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
+            removeListener?(ch: string, fn: (...args: unknown[]) => void): void
+          }
+        }
+      }
+    ).electron?.ipcRenderer
+    if (!ipc) return
+    // ipcRenderer.on listener 是 (event, ...args); main send 的 target 在 args[1].
+    const handler = (...args: unknown[]): void => {
+      const target = args[1] as DeeplinkTarget
+      if (!target || typeof target !== 'object') return
+      switch (target.kind) {
+        case 'email':
+          if (typeof target.id === 'number') {
+            useActiveEmail.getState().setActive(target.id)
+            void router.navigate({ to: '/' })
+          }
+          break
+        case 'calendar': {
+          const v = (CALENDAR_VIEWS as readonly string[]).includes(target.view ?? '')
+            ? (target.view as CalendarView)
+            : 'week'
+          void router.navigate({ to: '/admin/calendar', search: { view: v } })
+          break
+        }
+        case 'kanban':
+          void router.navigate({ to: '/admin/kanban' })
+          break
+        case 'llm':
+          void router.navigate({ to: '/admin/llm' })
+          break
+        case 'settings': {
+          const t = (SETTINGS_TABS as readonly string[]).includes(target.view ?? '')
+            ? (target.view as SettingsTab)
+            : 'general'
+          void router.navigate({ to: '/settings', search: { tab: t } })
+          break
+        }
+      }
+    }
+    // @electron-toolkit ipcRenderer.on 返回 cleanup fn (removeListener wrapper).
+    const off = ipc.on('mailagent:deeplink', handler)
+    return typeof off === 'function'
+      ? off
+      : () => ipc.removeListener?.('mailagent:deeplink', handler)
+  }, [])
+}
+
 function RootLayout(): React.ReactElement {
+  useDeeplinkRouter()
   return (
     <>
       <Outlet />

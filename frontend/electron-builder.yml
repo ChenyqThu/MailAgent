@@ -1,5 +1,13 @@
 appId: ink.chenge.mailagent
 productName: MailAgent
+# Sprint 19 island F6 — mailagent:// custom protocol. electron-builder 顶层
+# protocols 对 macOS 自动注入 Info.plist CFBundleURLTypes (无需 extendInfo 重复),
+# 对 Win 写注册表. 系统装 .app 后 scheme 注册到本 app: 灵动岛 open_mail/open_notion
+# → plugin `open mailagent://email/<id>` → 系统唤起本 app → main open-url handler.
+protocols:
+  - name: MailAgent Deeplink
+    schemes:
+      - mailagent
 directories:
   buildResources: build
 files:
