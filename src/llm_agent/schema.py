@@ -77,7 +77,8 @@ RECOMMENDED_ACTION_ID_INBOX: List[str] = [
     "convert_to_notion_task",
     # 紧急告警 / PagerDuty
     "ack_in_pagerduty",
-    "escalate_to_oncall",
+    # escalate_to_oncall 已下线 (2026-05-26): 需飞书/PagerDuty oncall 集成才能真做,
+    # Phase 2 仅 mark_done alias 名称误导. Phase 3 接 oncall page API 时整体加回.
     # 简单 Y/N 询问
     "quick_reply_yes",
     "quick_reply_no_with_reason",

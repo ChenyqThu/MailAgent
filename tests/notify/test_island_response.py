@@ -172,7 +172,6 @@ def test_snooze_1h_enqueues_island_snooze(patch_snooze, patch_run):
     "archive_and_unsubscribe",
     "mark_done_no_response",
     "convert_to_notion_task",
-    "escalate_to_oncall",
 ])
 def test_mark_done_alias_invokes_update_flag(choice, patch_run):
     asyncio.run(island_response.handle_response(_resp(choice), _meta(53675)))
@@ -193,13 +192,16 @@ def test_archive_and_unsubscribe_logs_todo(patch_run, caplog):
     assert any("archive_and_unsubscribe" in m and "TODO" in m for m in msgs)
 
 
-def test_escalate_to_oncall_logs_todo(patch_run, caplog):
-    with caplog.at_level(logging.INFO, logger="src.notify.island_response"):
+def test_escalate_to_oncall_now_whitelist_miss(patch_run, caplog):
+    """escalate_to_oncall 2026-05-26 下线 → handle_response 入口 whitelist miss,
+    不触发任何 subprocess (旧 envelope 含它时安全拒绝)."""
+    with caplog.at_level(logging.WARNING, logger="src.notify.island_response"):
         asyncio.run(island_response.handle_response(
             _resp("escalate_to_oncall"), _meta(99),
         ))
-    msgs = [r.message for r in caplog.records]
-    assert any("escalate_to_oncall" in m and "TODO" in m for m in msgs)
+    assert patch_run == []
+    msgs = [r.message.lower() for r in caplog.records]
+    assert any("unknown choice" in m for m in msgs)
 
 
 def test_convert_to_notion_task_logs_todo(patch_run, caplog):

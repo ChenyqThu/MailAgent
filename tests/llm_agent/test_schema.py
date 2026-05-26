@@ -120,14 +120,21 @@ def test_recommended_action_enum_is_union_of_inbox_and_sent():
 
 
 def test_recommended_action_inbox_whitelist_content():
+    # escalate_to_oncall 已下线 2026-05-26 (需 oncall 集成才能真做; Phase 3 加回)
     expected = {
         "archive_and_unsubscribe", "archive_only",
         "add_to_calendar", "decline_with_reason",
         "defer_to_monday_9am", "convert_to_notion_task",
-        "ack_in_pagerduty", "escalate_to_oncall",
+        "ack_in_pagerduty",
         "quick_reply_yes", "quick_reply_no_with_reason",
     }
     assert set(RECOMMENDED_ACTION_ID_INBOX) == expected
+
+
+def test_escalate_to_oncall_removed_from_whitelist():
+    """escalate_to_oncall 2026-05-26 下线 — 不在任何 whitelist (防误加回)."""
+    assert "escalate_to_oncall" not in RECOMMENDED_ACTION_ID_INBOX
+    assert "escalate_to_oncall" not in RECOMMENDED_ACTION_ID_ENUM
 
 
 def test_recommended_action_sent_whitelist_content():

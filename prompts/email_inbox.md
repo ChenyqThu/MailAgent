@@ -149,7 +149,6 @@ Please review the attached spec and reply with comments.
 | `defer_to_monday_9am` | 周末收到 / 非紧急但需要工作日处理 | 周一上午再看 | 1h 后弹回 → 周一 9:00 |
 | `convert_to_notion_task` | 项目周报 / 跨项目跟进事项 / 需要进 backlog | 转 Notion 任务 | 加进项目 backlog |
 | `ack_in_pagerduty` | PagerDuty / 监控告警邮件含 incident link | 在 PagerDuty 确认 | 跳转到 incident 页面 |
-| `escalate_to_oncall` | 紧急告警但我无法处理需要 on-call | 升级到 oncall | 标记并通知 on-call |
 | `quick_reply_yes` | 简单 Y/N 询问邮件，能直接答应 | 快速回复 是 | 起草 "可以 / OK" 草稿 |
 | `quick_reply_no_with_reason` | 简单 Y/N 询问邮件但需要解释 | 快速回复 否 | 起草 "暂时不行 + 理由" |
 
@@ -190,7 +189,7 @@ Please review the attached spec and reply with comments.
 ```json
 "recommended_actions": [
   {"id": "ack_in_pagerduty", "title": "在 PagerDuty 确认", "detail": "跳转到 incident", "confidence": 0.93},
-  {"id": "escalate_to_oncall", "title": "升级 on-call", "detail": "通知值班同事", "confidence": 0.7}
+  {"id": "quick_reply_yes", "title": "快速回复 收到", "detail": "起草 已在处理 草稿", "confidence": 0.6}
 ]
 ```
 

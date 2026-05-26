@@ -59,7 +59,8 @@ _MARK_DONE_ALIASES = frozenset({
     "archive_and_unsubscribe",  # Phase 2: newsletter 归档并退订
     "mark_done_no_response",    # Phase 2 发件箱: 已等够久 + 不再追
     "convert_to_notion_task",   # Phase 2: TODO Phase 3 接 Notion task API
-    "escalate_to_oncall",       # Phase 2: TODO Phase 3 接 oncall page
+    # escalate_to_oncall 已下线 (2026-05-26, 见 schema.py) — 跟 whitelist 一致移除;
+    # 旧 envelope 含它时 handle_response 入口 is_known_action_id 直接 whitelist miss.
 })
 
 # Phase 2 alias group: 这些 action id 都是 "起一封回复草稿" 一类, 调 mailagent email
@@ -299,13 +300,6 @@ def _log_alias_intent(choice: str, internal_id: int) -> None:
         log.info(
             "[island-response] convert_to_notion_task internal_id=%d "
             "(TODO Phase 3: create Notion task in backlog DB)",
-            internal_id,
-        )
-    elif choice == "escalate_to_oncall":
-        # TODO Phase 3: 发飞书消息 / PagerDuty trigger 到 oncall channel
-        log.info(
-            "[island-response] escalate_to_oncall internal_id=%d "
-            "(TODO Phase 3: page oncall via Feishu/PagerDuty)",
             internal_id,
         )
 
