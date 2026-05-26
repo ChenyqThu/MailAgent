@@ -766,3 +766,209 @@ def _repair_file_links(
         emit(cli, data)
     if failed:
         raise typer.Exit(code=6)
+
+
+# ============================================================
+# create-task — 邮件转日程库 task (灵动岛 convert_to_notion_task, Phase 2 F3)
+# LLM 决策 (task_extractor 单次 tool_use 填 title/time/类型/优先级) + 代码确定性写.
+# 日程库 = CALENDAR_DATABASE_ID. 复用 calendar_notion/sync 的 data_source + pages.create 模式.
+# ============================================================
+
+
+def _task_content_blocks(email_page_id: str, subject: str, sender: str, description: str) -> list:
+    """task page 正文: 来源邮件 callout + link_to_page + 行动要点段落."""
+    blocks: list = []
+    src = f"来自邮件: {subject or '(无主题)'}"
+    if sender:
+        src += f" · {sender}"
+    blocks.append({
+        "object": "block", "type": "callout",
+        "callout": {
+            "rich_text": [{"type": "text", "text": {"content": src[:1800]}}],
+            "icon": {"emoji": "📧"},
+        },
+    })
+    if email_page_id:
+        blocks.append({
+            "object": "block", "type": "link_to_page",
+            "link_to_page": {"type": "page_id", "page_id": email_page_id},
+        })
+    if description:
+        blocks.append({
+            "object": "block", "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": description[:1800]}}],
+            },
+        })
+    return blocks
+
+
+async def _write_task_page(cli, fields, email_page_id: str, subject: str, sender: str) -> dict:
+    """写日程库 page: Title/日程类型/优先级/Time/Description + Email Inbox relation."""
+    client = cli.notion_sync.client.client  # AsyncClient
+    db_id = cli.cli_config.calendar_database_id
+    db = await client.databases.retrieve(database_id=db_id)
+    ds_list = db.get("data_sources") or []
+    if not ds_list:
+        raise RuntimeError(f"日程库 {db_id} 无 data_source")
+    ds_id = ds_list[0]["id"]
+
+    props: dict = {
+        "Title": {"title": [{"text": {"content": fields.task_title}}]},
+        "日程类型": {"select": {"name": fields.schedule_type}},
+        "优先级": {"select": {"name": fields.priority}},
+    }
+    if fields.description:
+        props["Description"] = {"rich_text": [{"text": {"content": fields.description}}]}
+    if fields.suggested_time_iso:
+        props["Time"] = {"date": {"start": fields.suggested_time_iso}}
+    if fields.is_all_day:
+        props["Is All Day"] = {"checkbox": True}
+    if email_page_id:
+        # Email Inbox relation 关联回原邮件 page (日程库 ↔ 邮件库 dual relation)
+        props["Email Inbox"] = {"relation": [{"id": email_page_id}]}
+
+    create_params: dict = {"parent": {"data_source_id": ds_id}, "properties": props}
+    children = _task_content_blocks(email_page_id, subject, sender, fields.description)
+    if children:
+        create_params["children"] = children
+    return await client.pages.create(**create_params)
+
+
+async def _create_task_flow(
+    cli, *, subject: str, body_md: str, ai_summary: str, ai_priority: str,
+    sender: str, email_page_id: str, dry_run: bool, no_mark_done: bool,
+) -> dict:
+    """单 asyncio.run 内: LLM extract → (非 dry-run) 写 task page → 标原邮件已完成.
+
+    单 loop 包全部 async — 避免多次 asyncio.run 复用 AsyncClient 踩 loop 绑定坑.
+    """
+    from loguru import logger
+    from src.llm_agent.task_extractor import extract_task_fields
+
+    fields = await extract_task_fields(
+        subject=subject, body_markdown=body_md,
+        ai_summary=ai_summary, ai_priority=ai_priority, sender=sender,
+    )
+    if dry_run:
+        return {"fields": fields, "task_page_id": "", "marked_done": False}
+
+    task_page = await _write_task_page(cli, fields, email_page_id, subject, sender)
+    marked = False
+    if not no_mark_done and email_page_id:
+        try:
+            await cli.notion_sync.update_page_mail_sync_status(
+                email_page_id, synced=True, processing_status="已完成",
+            )
+            marked = True
+        except Exception as e:  # noqa: BLE001 — task 已建, 标完成失败不致命
+            logger.warning(f"[create-task] mark email done failed page={email_page_id[:12]}: {e}")
+    return {"fields": fields, "task_page_id": task_page.get("id", ""), "marked_done": marked}
+
+
+@app.command("create-task")
+def notion_create_task(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="原邮件 internal_id"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="LLM 决策 + 打 plan, 不写 Notion (仍调一次 LLM)",
+    ),
+    no_mark_done: bool = typer.Option(
+        False, "--no-mark-done", help="不把原邮件标 Processing Status=已完成",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """邮件转日程库 (GTD 时间块) 的 task — LLM 决策填字段 + 代码确定性写.
+
+    灵动岛 (ping-island) convert_to_notion_task action handler 调本命令. 流程:
+      internal_id → SQLite metadata + body → LLM extract_task (精炼 title / 智能
+      time 建议 / 日程类型 / 优先级 / description) → 写日程库 page (含 Email Inbox
+      relation 关联原邮件) → 标原邮件已完成.
+
+    日程库 = CALENDAR_DATABASE_ID. LLM 介入决策不介入执行 (单次 tool_use, ~$0.005).
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    if not cli.cli_config.calendar_database_id:
+        raise emit_cli_error(cli, CliError(
+            "CALENDAR_DATABASE_ID 未配置, 无法 create-task",
+        ))
+
+    record = cli.sync_store.get(internal_id)
+    if not record:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email metadata not found for internal_id={internal_id}",
+        ))
+
+    subject = record.get("subject") or ""
+    sender = record.get("sender") or ""
+    email_page_id = (record.get("notion_page_id") or "").strip()
+    ai_summary = record.get("ai_summary") or ""
+    ai_priority = record.get("ai_priority") or ""
+    body_md = ""
+    try:
+        body_md = cli.email_repo.get_body_markdown(internal_id, max_chars=8000) or ""
+    except Exception:  # noqa: BLE001 — body miss 不致命, LLM 用 subject + summary
+        pass
+
+    if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
+    from src.llm_agent.client import LLMCallError
+    try:
+        res = asyncio.run(_create_task_flow(
+            cli, subject=subject, body_md=body_md, ai_summary=ai_summary,
+            ai_priority=ai_priority, sender=sender, email_page_id=email_page_id,
+            dry_run=dry_run, no_mark_done=no_mark_done,
+        ))
+    except LLMCallError as e:
+        raise emit_cli_error(cli, CliError(f"LLM extract_task 失败: {e}"))
+    except Exception as e:  # noqa: BLE001
+        raise emit_cli_error(cli, CliError(f"create-task 失败: {e}"))
+
+    fields = res["fields"]
+
+    if dry_run:
+        plan = {
+            "internal_id": internal_id,
+            "email_page_id": email_page_id,
+            "task_title": fields.task_title,
+            "schedule_type": fields.schedule_type,
+            "priority": fields.priority,
+            "suggested_time": fields.suggested_time_iso,
+            "is_all_day": fields.is_all_day,
+            "description": fields.description,
+            "would_mark_done": not no_mark_done,
+            "dry_run": True,
+        }
+        if cli.output.lower() == "text":
+            print("=== create-task plan (dry-run) ===")
+            for key, value in plan.items():
+                print(f"{key:18} {value}")
+        else:
+            emit(cli, plan)
+        return
+
+    task_page_id = res["task_page_id"]
+    data = {
+        "internal_id": internal_id,
+        "task_page_id": task_page_id,
+        "task_url": f"https://www.notion.so/{task_page_id.replace('-', '')}" if task_page_id else "",
+        "task_title": fields.task_title,
+        "schedule_type": fields.schedule_type,
+        "priority": fields.priority,
+        "suggested_time": fields.suggested_time_iso,
+        "marked_done": res["marked_done"],
+        "dry_run": False,
+    }
+    if cli.output.lower() == "text":
+        print(
+            f"task created: {fields.task_title} | {fields.schedule_type} | "
+            f"{fields.priority} | {data['task_url']}"
+        )
+    else:
+        emit(cli, data)

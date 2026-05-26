@@ -171,7 +171,6 @@ def test_snooze_1h_enqueues_island_snooze(patch_snooze, patch_run):
     "archive_only",
     "archive_and_unsubscribe",
     "mark_done_no_response",
-    "convert_to_notion_task",
 ])
 def test_mark_done_alias_invokes_update_flag(choice, patch_run):
     asyncio.run(island_response.handle_response(_resp(choice), _meta(53675)))
@@ -204,13 +203,26 @@ def test_escalate_to_oncall_now_whitelist_miss(patch_run, caplog):
     assert any("unknown choice" in m for m in msgs)
 
 
-def test_convert_to_notion_task_logs_todo(patch_run, caplog):
-    with caplog.at_level(logging.INFO, logger="src.notify.island_response"):
-        asyncio.run(island_response.handle_response(
-            _resp("convert_to_notion_task"), _meta(55),
-        ))
-    msgs = [r.message for r in caplog.records]
-    assert any("convert_to_notion_task" in m and "TODO" in m for m in msgs)
+def test_convert_to_notion_task_invokes_create_task_cli(patch_run):
+    """F3: convert_to_notion_task 走独立分支调 mailagent notion create-task CLI
+    (不再是 mark_done alias)."""
+    asyncio.run(island_response.handle_response(
+        _resp("convert_to_notion_task"), _meta(55),
+    ))
+    assert len(patch_run) == 1
+    args = patch_run[0]["args"]
+    # 无 api-key 时 ["mailagent", "notion", "create-task", "55"]
+    assert args == ["mailagent", "notion", "create-task", "55"]
+
+
+def test_convert_to_notion_task_api_key_leading(patch_run, monkeypatch):
+    """create-task 也走 _mailagent_args → --api-key 前置."""
+    monkeypatch.setenv("MAILAGENT_CLI_API_KEY", "k_conv")
+    asyncio.run(island_response.handle_response(
+        _resp("convert_to_notion_task"), _meta(55),
+    ))
+    args = patch_run[0]["args"]
+    assert args == ["mailagent", "--api-key", "k_conv", "notion", "create-task", "55"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

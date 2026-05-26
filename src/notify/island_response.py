@@ -58,7 +58,8 @@ _MARK_DONE_ALIASES = frozenset({
     "archive_only",             # Phase 2: FYI / 已读完不再提醒
     "archive_and_unsubscribe",  # Phase 2: newsletter 归档并退订
     "mark_done_no_response",    # Phase 2 发件箱: 已等够久 + 不再追
-    "convert_to_notion_task",   # Phase 2: TODO Phase 3 接 Notion task API
+    # convert_to_notion_task F3 起走独立 _convert_to_notion_task 分支 (LLM 决策 + 真建
+    # 日程库 task, create-task CLI 内部 mark 邮件完成), 不再是 mark_done alias.
     # escalate_to_oncall 已下线 (2026-05-26, 见 schema.py) — 跟 whitelist 一致移除;
     # 旧 envelope 含它时 handle_response 入口 is_known_action_id 直接 whitelist miss.
 })
@@ -121,7 +122,10 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
             await _add_to_calendar()
         elif choice == "ack_in_pagerduty":
             await _ack_in_pagerduty(internal_id, envelope_meta)
-        # --- 路径 1: 标完成 (Phase 1 mark_done + Phase 2 5 个 alias) ---
+        elif choice == "convert_to_notion_task":
+            # F3: LLM 决策 + 代码写日程库 task (create-task CLI 内部已 mark 邮件完成)
+            await _convert_to_notion_task(internal_id)
+        # --- 路径 1: 标完成 (Phase 1 mark_done + Phase 2 alias) ---
         elif choice in _MARK_DONE_ALIASES:
             await _mark_done(internal_id)
             _log_alias_intent(choice, internal_id)
@@ -213,6 +217,15 @@ async def _mark_done(internal_id: int) -> None:
     )
 
 
+async def _convert_to_notion_task(internal_id: int) -> None:
+    # F3: mailagent notion create-task — LLM extract_task (1 call) + 写日程库 page +
+    # Email Inbox relation + 标邮件完成. LLM + Notion 写 + retrieve, timeout 给 90s.
+    await _run(
+        _mailagent_args("notion", "create-task", str(internal_id)),
+        timeout=90,
+    )
+
+
 async def _add_to_calendar() -> None:
     """Phase 2: 拉起 Calendar.app 让用户手动加 (envelope 未含完整 .ics).
 
@@ -293,13 +306,6 @@ def _log_alias_intent(choice: str, internal_id: int) -> None:
         log.info(
             "[island-response] archive_and_unsubscribe internal_id=%d "
             "(TODO Phase 3: auto-open unsubscribe URL from List-Unsubscribe header)",
-            internal_id,
-        )
-    elif choice == "convert_to_notion_task":
-        # TODO Phase 3: 调 Notion API 在用户的项目 backlog 库建 task page
-        log.info(
-            "[island-response] convert_to_notion_task internal_id=%d "
-            "(TODO Phase 3: create Notion task in backlog DB)",
             internal_id,
         )
 
