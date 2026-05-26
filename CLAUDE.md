@@ -249,8 +249,10 @@ mailagent --help                 # 列 10 个 group (email/admin/attachment/llm/
 | `init {fetch-cache,analyze,fix-properties,fix-critical,update-parents,sync-new,all} [...]` | 初始化同步 7 个 sub-action (PR-5 inline 直调 InitialSync) |
 | `llm run <internal_id> [--dry-run/--force/--no-overwrite]` | 单封 LLM 分类 + Notion 写 AI 字段 |
 | `llm retry-failed [--limit N --dry-run]` | 跑 LLM retry queue |
+| `email draft <internal_id> [--mode reply-all\|reply/--extra-to/--extra-cc/--dry-run]` | 灵动岛 F1: 读 SQLite `llm_processing.labels_json.reply_suggestion_md` (SSoT, 含用户改过的) → 构造 DraftRequest → `backend.append_draft` (davmail IMAP APPEND / applescript sh) 创建回复草稿 |
 | `notion resync <internal_id>` | alias of `email resync` |
 | `notion update-flag <internal_id> [--is-read/--is-flagged/--processing-status]` | 手改 Notion 邮件页 flags |
+| `notion create-task <internal_id> [--as-meeting/--no-mark-done/--dry-run]` | 灵动岛 F3/F5: LLM (`task_extractor`) 决策填字段 (精炼 title / 智能 time / 日程类型 / 优先级) → 写日程库 (CALENDAR_DATABASE_ID) page + Email Inbox relation → 标原邮件已完成. `--as-meeting` 抽邮件提到的会议实际时间 (add_to_calendar), 默认建议处理时间 (convert_to_notion_task) |
 | `notion archive <page_id> --yes` | archive Notion page (move to Trash) |
 | `calendar recurring replay [--internal-id N \| --ids LIST --dry-run]` | 重跑指定 internal_id 的邀请 |
 | `admin dead-letter list [--limit/--mailbox]` | 列 dead_letter 邮件 (PR-4 读命令, 无 auth) |
@@ -1010,6 +1012,7 @@ src/llm_agent/
   processor.py       核心入口：拼 system+user → LLM tool_use → AILabels
   store.py           llm_processing SQLite 表（retry 队列 + cost/latency 记录）
   runner.py          端到端封装（sync_store → arm fetch → parse → LLM → Notion write）
+  task_extractor.py  灵动岛 F3/F5: 邮件 → 日程库 task fields（LLM 单次 tool_use 决策 title/time/日程类型/优先级；as_meeting 模式抽会议时间）。`mailagent notion create-task` CLI 调
 src/cli/commands/llm.py       CLI（`mailagent llm {selftest,run,retry-failed,stats,compare-paths}`；PR-6 起取代旧 scripts/run_llm_on_email.py）
 prompts/
   email_inbox.md     收件箱判定规则（mailbox-specific）
