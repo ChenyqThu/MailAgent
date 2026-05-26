@@ -387,6 +387,28 @@ class Config(BaseSettings):
         description="灵动岛 light/dark mode（envelope metadata 透传，Swift 端按此切 token）",
     )
 
+    # ---- 灵动岛 Phase 3 DailyDigest（每日巡检，默认关闭，gate by ping_island_enabled）----
+    mailagent_daily_digest_enabled: bool = Field(
+        default=False, env="MAILAGENT_DAILY_DIGEST_ENABLED",
+        description="是否启用灵动岛每日巡检（DailyDigest）；island 开 + 此开关开才跑。默认关。",
+    )
+    mailagent_daily_digest_hours: str = Field(
+        default="9,18", env="MAILAGENT_DAILY_DIGEST_HOURS",
+        description="每日巡检触发钟点（北京时区，逗号分隔小时），默认 9,18。",
+    )
+    mailagent_daily_digest_window_hours: int = Field(
+        default=24, env="MAILAGENT_DAILY_DIGEST_WINDOW_HOURS",
+        description="巡检回看窗口小时数，默认 24（取最近 24h 邮件做汇总）。",
+    )
+    mailagent_daily_digest_max_emails: int = Field(
+        default=50, env="MAILAGENT_DAILY_DIGEST_MAX_EMAILS",
+        description="单次 digest 喂给 LLM 的邮件 brief 封数上限（按 priority/date 排序取前 N），默认 50。",
+    )
+    mailagent_daily_digest_max_bulk_ids: int = Field(
+        default=30, env="MAILAGENT_DAILY_DIGEST_MAX_BULK_IDS",
+        description="每个 bulk action 携带的 internal_id 列表上限（单次一键批量处理封数），默认 30。",
+    )
+
     # =========================================================================
     # Sprint 16 dual-backend (2026-05): 邮件后端 single-driver 显式切换
     # AppleScript + Mail.app (FALLBACK, 默认) ⇄ DavMail IMAP/SMTP (PRIMARY)
