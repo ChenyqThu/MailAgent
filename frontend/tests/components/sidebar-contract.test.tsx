@@ -125,14 +125,14 @@ describe('Sidebar §2.11 contract', () => {
     expect(allRows).toHaveLength(12)
   })
 
-  test('AI 会话历史 row renders disabled (aria-disabled + non-button)', async () => {
+  test('AI 会话历史 row renders enabled (Sprint 18 review — 不再灰禁)', async () => {
+    // DESIGN.md §9.4 原设计该 row disabled; Sprint 18 用户反馈改成视觉可用态
+    // (onClick noop, 等会话历史 ship 再接跳转), 见 Sidebar.tsx AI 会话历史 NavRow
+    // 注释. 实现是当前真实意图 → sidebar 不再有任何 data-disabled row.
     const container = await renderSidebar()
     const disabledRows = container.querySelectorAll('[data-disabled="true"]')
-    expect(disabledRows.length).toBeGreaterThanOrEqual(1)
-    disabledRows.forEach((row) => {
-      expect(row.tagName).not.toBe('BUTTON')
-      expect(row.getAttribute('aria-disabled')).toBe('true')
-    })
+    expect(disabledRows.length).toBe(0)
+    // AI 会话历史 row 仍渲染 (enabled NavRow), 12 row 总数契约在上面 test 守.
   })
 })
 

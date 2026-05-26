@@ -248,7 +248,10 @@ describe('useEmailChat — send + stream', () => {
       message: 'hi',
       backendKind: 'custom-api',
       backendModel: 'claude-sonnet-4-6',
-      backendAgentPageId: null
+      backendAgentPageId: null,
+      // Sprint 19 — useEmailChat 透传 activeSessionId (首次 send + 空 sessions
+      // list → null) 让 dispatcher 落到正确 session row.
+      sessionId: null
     })
     expect(result.current.activeSessionId).toBe(1)
     expect(result.current.streamingMessageId).toBe(101)
