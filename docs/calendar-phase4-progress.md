@@ -1,9 +1,9 @@
 # Calendar Module — Phase 4 进度纪要 (2026-05-26)
 
 **From**: Session @ 2026-05-26 (Phase 4 启动, 用户要求"全做")
-**Status**: 4 功能完整 ship (#3 含进阶改这次/改未来, 6 commits + handoff). 剩余 3 项各有 env/架构/价值依赖, 留后续 session.
+**Status**: 4 功能完整 ship (#3 含进阶改这次/改未来, 6 commits). **续 session (2026-05-26): attendees 数据安全 bug 全链路修复 (3 commits, §8) + e2e 用组件交互测试形态 ship (非 Playwright, §8.3).** 剩余: 跨时区 (价值低) / 跨设备 V2 (需 architect) / Playwright Electron e2e (需 DavMail/build 不可 CI, 已用组件测试覆盖触摸链).
 **Branch**: feat/agent-harness
-**Test 基线**: calendar pytest 336 → **359 passed** (+23); vitest calendar 相关 **66 passed** (calendar.test 43 + rrule 17 + filter 6).
+**Test 基线**: calendar pytest 336 → 359 → **369 passed** (+10 attendees); vitest calendar 相关 66 → **78 passed** (calendar.test 45 + rrule 17 + filter 6 + attendees 5 + EventFormModal 5).
 
 ---
 
@@ -106,10 +106,16 @@ mock 单测 + 标注实测):
 - `calendar_event.dtstart_utc` 全链路归一 UTC. explicit tzid 显示需加 `tzid` 列 (schema bump), dtstart 存 wall-clock + tzid, expander/前端显示按 tzid 转.
 - **价值密度低**: 多数场景本地时区已足够 (前端 `toLocaleString` 已按本地展示). handoff 列为"克制". 建议除非有明确跨时区需求否则不做.
 
-### 4.3 #5 e2e Playwright (需 env)
+### 4.3 ✅ #5 e2e — 用组件交互测试替代 Playwright (续 session ship, 见 §8.3)
 
-- RSVP / 编辑 / 删除 / 撤销 / **创建周期 + 全天事件** 真触摸链 (pnpm dev + Playwright).
-- 需 Playwright env (本 session 无). 适合 Phase 4 接近完工 (跨时区/#3进阶 定后) 再做.
+- **形态决策**: Playwright 在本项目零先例 (`test:e2e` script 指向不存在的 config) +
+  这是 Electron app, 真 e2e 需 `_electron` launch + better-sqlite3 native + build +
+  DavMail/真 Exchange → 不可 CI、依赖环境. 用户拍板用**组件交互测试** (testing-library
+  + happy-dom, 项目既有成熟模式 tests/components/) 覆盖同样的触摸链, 可 CI.
+- **已 ship**: `tests/components/EventFormModal.test.tsx` (5 test) — create 基本/全天 +
+  edit 与会者 dirty 三态 (保留/清空/替换). 详见 §8.3.
+- **未做**: Playwright Electron 启动 smoke (验证 app 真能起) + RSVP/删除/撤销 的真后端
+  round-trip — 需 build + DavMail, 留后续 session.
 
 ### 4.4 #4 跨设备 V2 (需 architect) — task #5
 
@@ -131,16 +137,16 @@ mock 单测 + 标注实测):
 本 session calendar 工作 (calendar.test/rrule/filter **64 全过** + typecheck 全过)
 跟这些失败**无关**. 后续 session 跑全套 vitest 时不要把这些算到 calendar 头上.
 
-### 5.2 ⚠️ service.update_event attendees 默认值疑似 bug (pre-existing, 待确认)
+### 5.2 ✅ service.update_event attendees 数据安全 bug (续 session 已全链路修复, 见 §8)
 
-`service.update_event(attendees=None default)` 直接透传 `writer.update_event(attendees=None)`.
-writer `new_attendees = orig if attendees is _UNSET else (attendees or [])` —
-`None is _UNSET` False → `None or []` = `[]` → **清空 attendees**. 跟 F3
-"省略保留" 注释 (writer 层用 `_UNSET` sentinel) 矛盾: service 没用 sentinel,
-传 None 而非 _UNSET. 前端 EventFormModal 总传 attendees (chips) 所以没暴露;
-**CLI `calendar update` 不带 `--attendee` 会清空 Exchange 端 attendees**.
-不在 #2/#3 scope, 未改 (rrule/is_all_day 我用条件传规避了同样陷阱). 建议单独
-修: service.update_event attendees 也用 sentinel (跟 writer 对齐).
+~~`service.update_event(attendees=None)` 透传 `writer.update_event(attendees=None)` →
+`None or []` → 清空 attendees~~. **续 session (2026-05-26) 已修** (`a319e64` 后端 +
+`4e70542` 前端 + `39613f4` 组件测试). 实修发现比原描述更广: 不只 CLI 不传清空, 前端
+编辑事件还有 **partstat 退化** (预填只取 {email,name} 丢 partstat → 即使没碰也走替换
+→ 已 ACCEPTED 被打回 NEEDS-ACTION → Exchange 重发邀请). 修复 = service 条件传
+(None=保留/[]=清空/[...]=替换, **没用原 handoff 建议的 sentinel — 条件传更简洁且跟
+rrule/is_all_day 一致, 已 push back**) + CLI `--clear-attendees` (互斥校验) + 前端
+attendeesDirty flag (未 dirty 不传 → 保留 partstat / 删光 → clearAttendees) + IPC 透传.
 
 ### 5.3 全天 VALUE=DATE 的 DavMail/EWS round-trip 建议实测
 
@@ -154,6 +160,15 @@ build_vevent VALUE=DATE 是 RFC 标准 + vobject round-trip 单测已覆盖. 但
 - macOS Sequoia provenance lock → `sudo xattr -dr` 清
 - **本 session 踩坑**: Bash compound `cd` 改 shell 持久 cwd (cwd 漂到 `frontend/ref`
   + 并行 Bash calls **cwd 共享**), git/pnpm 命令务必明确 `cd` 到正确目录.
+- **续 session (2026-05-26) vitest 组件测试踩坑** (写 EventFormModal.test 时, 耗了很多
+  往返, 记下避免重蹈): ① harness 默认把 vitest 命令放后台, 重复触发 → **两个 vitest 跑
+  同文件 cache/IPC 死锁 hang** (单一 run / CI 不会); ② mock react-query hook
+  (`useCalendarEvent`) 必须返回**稳定引用**的 data — 否则 EventFormModal 的 `detail`
+  effect (deps 含 detail) 每 render 触发 setState → **无限循环 hang** (用 `vi.hoisted`
+  常量持有); ③ `waitFor` 从 `@testing-library/react` import, 非 `vitest`; ④ 单组件
+  测试冷启动 ~8s (happy-dom env setup 3.97s + import 3.27s, 见 EmailRow 基线), 别误判
+  hang. 教训: 跑单文件 `pnpm vitest run tests/components/X.test.tsx` 一次, 耐心等 ~10s,
+  **不要重复触发**.
 
 ---
 
@@ -183,25 +198,94 @@ build_vevent VALUE=DATE 是 RFC 标准 + vobject round-trip 单测已覆盖. 但
 - `frontend/src/shared/i18n/locales/{zh-CN,en-US}/common.json` — calendarFilter / repeat / allDay / **recurrenceScope** key
 - `frontend/tests/main/calendar.test.ts` (+9 IPC test)
 
+### 续 session (2026-05-26) — attendees 修复 + e2e 组件测试
+- `src/calendar_sync/service.py` — update_event attendees 条件传 (L1)
+- `src/cli/commands/calendar.py` — `--clear-attendees` flag + 互斥校验 (L2)
+- `frontend/src/shared/components/calendar/EventFormModal.tsx` — attendeesDirty (L3)
+- `frontend/src/shared/components/calendar/lib/attendees.ts` (**新**, L3) — `resolveAttendeesUpdate`
+- `frontend/src/shared/api/types.ts` + `.../handlers/calendar-write.ts` — clearAttendees IPC (L4)
+- 后端测试: `test_service.py` (+3) / `test_caldav_writer_roundtrip.py` (+3) / `tests/cli/test_calendar.py` (+4)
+- 前端测试: `tests/shared/attendees.test.ts` (**新**, 5) / `tests/main/calendar.test.ts` (+2) / `tests/components/EventFormModal.test.tsx` (**新**, 5)
+
 ---
 
 ## 7. 给下个 Session 的 prompt 模板
 
 ```
-Phase 4 已 ship 4 功能 (6 commits 在 feat/agent-harness): #1 多 calendar / #3
-RRULE (创建+整系列+改这次+改未来) / #2 全天事件. 读 docs/calendar-phase4-progress.md.
+Phase 4 已 ship 4 功能 (6 commits) + 续 session attendees 数据安全修复 + e2e 组件
+测试 (3 commits, §8). 全在 feat/agent-harness. 读 docs/calendar-phase4-progress.md.
 
-测试基线: calendar pytest 359 + vitest calendar 66 (calendar.test 43 + rrule 17
-+ filter 6). (注: vitest 全套有 98 个 pre-existing 失败在 chat/kos/email 模块,
-ping-island fork in-flight, 跟 calendar 无关, §5.1 已 checkout 验证.)
+测试基线: calendar pytest 369 (含 attendees +10) + vitest calendar 78 (calendar.test
+45 + rrule 17 + filter 6 + attendees 5 + EventFormModal 5). (注: vitest 全套有 ~98 个
+pre-existing 失败在 chat/kos/email 模块, ping-island fork in-flight, 跟 calendar 无关, §5.1.)
 
 剩余 backlog (按建议优先级):
-- #5 e2e Playwright (需 env; RSVP/编辑/删除/撤销/创建周期+全天/改这次改未来 真触摸)
-- #2 跨时区 (schema 加 tzid 列, 价值密度低, 可不做)
-- #4 跨设备 V2 (需 architect 议方案 Bearer/CORS/versioning, ~10h+)
-- (旁路) service.update_event attendees 疑似 bug §5.2 (需全链路清空信号设计)
-- (验证) #3 进阶 detached occurrence/split series 建议 DavMail 实测端到端
+- #2 跨时区 (schema 加 tzid 列, 价值密度低, 除非有明确跨时区需求否则不做)
+- #4 跨设备 V2 (需 architect 议方案 Bearer/CORS/versioning, ~10h+ 大工程)
+- Playwright Electron 启动 smoke + RSVP/删除/撤销 真后端 round-trip (需 build +
+  DavMail/真 Exchange, 不可 CI; 组件测试已覆盖 EventFormModal 触摸链, §8.3)
+- (验证) #3 进阶 occurrence/split + 全天 VALUE=DATE 建议 DavMail 实测 EWS round-trip
+  (mock 单测已覆盖逻辑, 真桥接未测, §5.1/§5.3)
 
-caveat: DavMail ctag 1h fallback / provenance lock / Bash compound cd 改持久 cwd
-+ 并行 cwd 共享 (git/pnpm 注意 cd).
+caveat: DavMail ctag 1h fallback / provenance lock / Bash compound cd 改持久 cwd +
+并行 cwd 共享 / **vitest 组件测试**: 别重复触发 (并发死锁 hang) + mock react-query hook
+返稳定引用 (防 effect 循环 hang) + waitFor from @testing-library (§5.4).
 ```
+
+---
+
+## 8. 续 session (2026-05-26) — attendees 数据安全修复 + e2e 组件测试
+
+3 atomic commits (feat/agent-harness, 接上面 6 个之后):
+
+| Hash | Scope | 测试 |
+|---|---|---|
+| `a319e64` | **attendees bug 后端** — service.update_event 条件传 + CLI `--clear-attendees` (互斥) | pytest 359→369 |
+| `4e70542` | **attendees bug 前端** — attendeesDirty (修 partstat 退化 + 删光) + lib/attendees + IPC clearAttendees | vitest 66→73 |
+| `39613f4` | **e2e 组件测试** — EventFormModal.test.tsx (5 test) | vitest 73→78 |
+
+### 8.1 attendees 数据安全 bug 全链路修复 (原 §5.2)
+
+根因: `service.update_event` 无条件 `attendees=attendees` (默认 None) 透传 writer →
+`None is _UNSET` False → `None or []` → 清空 Exchange 端与会者. 任何不带 attendees 的
+update 都静默清空. **实修发现比 §5.2 描述更广**: 前端编辑事件还有 partstat 退化 (预填
+只取 {email,name} 丢 partstat → 即使没碰也走替换 → writer hardcode NEEDS-ACTION 打回
+已 ACCEPTED → Exchange 重发邀请).
+
+4 层修复:
+- **L1 service**: attendees 改条件传 `if attendees is not None` (None=保留/[]=清空/
+  [...]=替换), 跟 rrule/is_all_day 一致. **没引入第二个 sentinel** (push back 原 handoff
+  建议) — service 其它 Optional 字段 None 本就是"保留", 条件传更简洁且风格一致.
+- **L2 CLI**: `--clear-attendees` flag 让"清空"可达 (修复后不传=保留, 否则无清空入口)
+  + 与 `--attendee` 互斥校验.
+- **L3 前端** (`EventFormModal.tsx` + 新 `lib/attendees.ts`): attendeesDirty flag (跟
+  rruleDirty 同模式, 加/删 chip 才置位); 提交决策抽纯函数 `resolveAttendeesUpdate`: 未
+  dirty 不传 (保留 + partstat 不退化) / dirty 非空替换 / dirty 删光 clearAttendees.
+  occurrence override (改这次/改未来) 不碰与会者 (继承 master).
+- **L4 IPC** (`types.ts` + `calendar-write.ts`): EventUpdateOpts 加 clearAttendees +
+  runEventUpdate 透传 `--clear-attendees`.
+
+writer 层 (`update_event` _UNSET sentinel 三态) 本就安全, bug 全在 service 显式透传 None
+短路了它; writer/occurrence/split 未改. 测试 +17: 后端 writer 3 (含 partstat 不打回
+NEEDS-ACTION 断言) + service 3 + CLI 4; 前端 attendees.test 5 (含"未 dirty 有 chips 仍
+不回传"partstat 保护 + "绝不误清空") + calendar.test IPC 2 + EventFormModal.test 5.
+
+### 8.2 验收命令
+
+```bash
+source venv/bin/activate
+pytest tests/calendar_sync/ tests/calendar_notion/ tests/cli/test_calendar.py tests/cli/test_calendar_expand.py -q   # 369 passed
+cd frontend && pnpm typecheck                                                                                          # node + web clean
+# 注意: 单次跑, 别重复触发 (并发死锁); 组件测试冷启动 ~8s
+pnpm vitest run tests/main/calendar.test.ts tests/shared/rrule.test.ts tests/shared/calendar-filter.test.ts tests/shared/attendees.test.ts tests/components/EventFormModal.test.tsx   # 78 passed
+```
+
+### 8.3 e2e 形态: 组件交互测试 (非 Playwright)
+
+Playwright 在本项目零先例 (`test:e2e` 指向不存在的 config) + Electron 真 e2e 需
+`_electron` launch + better-sqlite3 native + build + DavMail/真 Exchange → 不可 CI.
+用户拍板用**组件交互测试** (testing-library + happy-dom, 项目既有成熟模式 tests/components/
+10+ 个 .test.tsx) 覆盖触摸链. `EventFormModal.test.tsx` 5 test: create 填标题/全天
+toggle + edit 与会者 dirty 三态. mock 非周期 detail (rrule='') 让提交不弹 scope dialog,
+聚焦改整系列分支. **未覆盖**: Playwright Electron 启动 smoke + RSVP/删除/撤销 真后端
+round-trip (需 build + DavMail). 写测试踩的 vitest 坑见 §5.4.
