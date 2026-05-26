@@ -307,6 +307,7 @@ class CalDAVWriter:
         attendees: Optional[List[Dict[str, Any]]] = None,
         calendar_name: Optional[str] = None,
         status: str = "CONFIRMED",
+        rrule: Optional[str] = None,
     ) -> Dict[str, Any]:
         """CalDAV PUT 创建新事件.
 
@@ -325,6 +326,7 @@ class CalDAVWriter:
             attendees=attendees,
             sequence=0,
             status=status,
+            rrule=rrule,
         )
         cal = self._pick_calendar(calendar_name)
         try:
@@ -356,6 +358,7 @@ class CalDAVWriter:
         status: Optional[str] = None,
         calendar_name: Optional[str] = None,
         sequence_bump: bool = True,
+        rrule: Any = _UNSET,
     ) -> Dict[str, Any]:
         """CalDAV PUT update 现有 event. 不传的字段保留原值.
 
@@ -426,6 +429,9 @@ class CalDAVWriter:
         new_sequence = orig_sequence + 1 if sequence_bump else orig_sequence
         # attendees 用 sentinel 区分 "省略保留" vs "显式 [] 清空"
         new_attendees = orig_attendees if attendees is _UNSET else (attendees or [])
+        # Phase 4·#3 — rrule sentinel: _UNSET 保留原 RRULE (F3 透传语义);
+        # 显式 str 覆盖 (改整系列规则); 显式 '' → None 删除 RRULE (series → single).
+        new_rrule = orig_rrule if rrule is _UNSET else (rrule or None)
 
         body = build_vevent(
             ical_uid=ical_uid,
@@ -438,8 +444,9 @@ class CalDAVWriter:
             attendees=new_attendees,
             sequence=new_sequence,
             status=new_status,
-            # F3 — recurring event 透传 RRULE/EXDATE/RDATE/RECURRENCE-ID
-            rrule=orig_rrule,
+            # F3 — recurring event 透传 EXDATE/RDATE/RECURRENCE-ID;
+            # Phase 4·#3 — rrule 改走 new_rrule (sentinel 保留/覆盖/删除).
+            rrule=new_rrule,
             exdates=orig_exdates,
             rdates=orig_rdates,
             recurrence_id=orig_recurrence_id,

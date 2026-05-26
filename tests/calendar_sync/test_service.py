@@ -311,6 +311,51 @@ def test_update_event_validates_status(fresh_db: str):
         svc.update_event(ical_uid="x", status="BOGUS")
 
 
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_create_event_passes_rrule_to_writer(mock_writer_cls, fresh_db: str):
+    """Phase 4·#3 — service.create_event 透传 rrule 给 writer (创建周期事件)."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.create_event.return_value = {"action": "created"}
+    svc.create_event(
+        summary="Standup",
+        dtstart_utc=datetime(2026, 1, 1, 9, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 1, 1, 9, 30, tzinfo=timezone.utc),
+        rrule="FREQ=WEEKLY;BYDAY=MO",
+    )
+    _, kwargs = mock_writer_cls.return_value.create_event.call_args
+    assert kwargs["rrule"] == "FREQ=WEEKLY;BYDAY=MO"
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_omits_rrule_when_not_passed(mock_writer_cls, fresh_db: str):
+    """不传 rrule → service 不 forward rrule kwarg (writer 默认 _UNSET 保留)."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(ical_uid="u", summary="X")
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert "rrule" not in kwargs
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_forwards_rrule_override(mock_writer_cls, fresh_db: str):
+    """显式 rrule str → forward 给 writer 覆盖整系列规则."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(ical_uid="u", rrule="FREQ=DAILY")
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert kwargs["rrule"] == "FREQ=DAILY"
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_forwards_empty_rrule_to_clear(mock_writer_cls, fresh_db: str):
+    """显式 rrule='' → forward 空串 (writer 删除 RRULE, 周期变单次)."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(ical_uid="u", rrule="")
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert kwargs["rrule"] == ""
+
+
 def test_sync_now_validates_days(fresh_db: str):
     svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
     with pytest.raises(ValueError, match="future_days"):

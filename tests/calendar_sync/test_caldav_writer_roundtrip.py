@@ -21,11 +21,13 @@ Coverage:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 import vobject
 
 from src.calendar_sync.caldav_writer import (
+    CalDAVWriter,
     _extract_attendees_from_vevent,
     _extract_datetimes_from_vevent_field,
     build_vevent,
@@ -343,3 +345,55 @@ def test_uid_organizer_round_trip():
     ))
     assert vev.uid.value == "my-unique-uid@example.com"
     assert vev.organizer.value == "mailto:boss@example.com"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4·#3 — update_event rrule sentinel (保留 / 覆盖 / 删除)
+# ---------------------------------------------------------------------------
+
+def _writer_with_recurring_event(orig_rrule: str = "FREQ=WEEKLY;BYDAY=MO"):
+    """造 CalDAVWriter (绕 __init__ 不连 CalDAV), _find_event_by_uid 返回带真
+    vobject vevent (含 RRULE) 的 mock event. update_event 把新 PUT body 赋给
+    evt.data — 测试读它验证 sentinel 行为."""
+    orig_body = build_vevent(
+        ical_uid="evt-rrule@mailagent.local",
+        summary="Standup",
+        dtstart_utc=datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 1, 5, 9, 30, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+        rrule=orig_rrule,
+    )
+    real_vevent = vobject.readOne(orig_body).vevent
+    mock_evt = MagicMock()
+    mock_evt.vobject_instance.vevent = real_vevent
+    writer = CalDAVWriter.__new__(CalDAVWriter)
+    writer.user = "me@example.com"
+    writer._find_event_by_uid = MagicMock(return_value=(MagicMock(), mock_evt))
+    return writer, mock_evt
+
+
+def test_update_event_rrule_unset_preserves_series():
+    """不传 rrule (默认 _UNSET) → 保留原 RRULE (F3 透传, 防 series 降级单次)."""
+    writer, mock_evt = _writer_with_recurring_event("FREQ=WEEKLY;BYDAY=MO")
+    writer.update_event(ical_uid="evt-rrule@mailagent.local", summary="新标题")
+    new = vobject.readOne(mock_evt.data)
+    assert new.vevent.rrule.value == "FREQ=WEEKLY;BYDAY=MO"
+    assert new.vevent.summary.value == "新标题"
+
+
+def test_update_event_rrule_override_changes_series():
+    """显式 rrule str → 覆盖整系列规则 (改整系列)."""
+    writer, mock_evt = _writer_with_recurring_event("FREQ=WEEKLY")
+    writer.update_event(
+        ical_uid="evt-rrule@mailagent.local", rrule="FREQ=DAILY;COUNT=5",
+    )
+    new = vobject.readOne(mock_evt.data)
+    assert new.vevent.rrule.value == "FREQ=DAILY;COUNT=5"
+
+
+def test_update_event_rrule_empty_clears_to_single():
+    """显式 rrule='' → 删除 RRULE, 周期事件降级单次."""
+    writer, mock_evt = _writer_with_recurring_event("FREQ=WEEKLY")
+    writer.update_event(ical_uid="evt-rrule@mailagent.local", rrule="")
+    new = vobject.readOne(mock_evt.data)
+    assert not hasattr(new.vevent, "rrule")

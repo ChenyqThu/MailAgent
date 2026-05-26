@@ -605,8 +605,13 @@ class CalendarService:
         attendees: Optional[List[Dict[str, Any]]] = None,
         calendar_name: Optional[str] = None,
         status: str = "CONFIRMED",
+        rrule: Optional[str] = None,
     ) -> Dict[str, Any]:
         """CalDAV PUT 创建事件.
+
+        Args:
+            rrule: RFC 5545 RRULE 字符串 (不含 ``RRULE:`` 前缀, 如
+                ``FREQ=WEEKLY;BYDAY=MO``); 留空 = 单次事件 (Phase 4·#3).
 
         Raises:
             ValueError: status 非法 / dtend ≤ dtstart / DavMail / writer raise
@@ -633,6 +638,7 @@ class CalendarService:
             attendees=attendees or [],
             calendar_name=calendar_name,
             status=status,
+            rrule=rrule,
         )
 
     def update_event(
@@ -648,8 +654,13 @@ class CalendarService:
         status: Optional[str] = None,
         calendar_name: Optional[str] = None,
         sequence_bump: bool = True,
+        rrule: Optional[str] = None,
     ) -> Dict[str, Any]:
         """CalDAV PUT update 现有事件.
+
+        Args:
+            rrule: None = 未传, 保留原 RRULE (F3 透传); 显式 str 覆盖 (改整系列);
+                显式 '' 删除 RRULE (周期 → 单次) (Phase 4·#3).
 
         Raises:
             ValueError: status 非法 / dtend ≤ dtstart / writer raise (not found)
@@ -671,7 +682,7 @@ class CalendarService:
         from src.calendar_sync.caldav_writer import CalDAVWriter
 
         writer = CalDAVWriter(self.cfg)
-        return writer.update_event(
+        update_kwargs: Dict[str, Any] = dict(
             ical_uid=ical_uid,
             summary=summary,
             dtstart_utc=dtstart_utc,
@@ -683,6 +694,11 @@ class CalendarService:
             calendar_name=calendar_name,
             sequence_bump=sequence_bump,
         )
+        # Phase 4·#3 — rrule None = 未传 (writer 默认 _UNSET 保留原 RRULE);
+        # 显式 str (含 '' 删除 → 周期变单次) 才透传给 writer 覆盖.
+        if rrule is not None:
+            update_kwargs["rrule"] = rrule
+        return writer.update_event(**update_kwargs)
 
     def delete_event(
         self,

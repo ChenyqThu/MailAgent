@@ -796,6 +796,11 @@ def calendar_create(
     status: str = typer.Option(
         "CONFIRMED", "--status", help=f"事件状态 ∈ {VALID_EVENT_STATUS}",
     ),
+    rrule: Optional[str] = typer.Option(
+        None, "--rrule",
+        help="RFC 5545 RRULE (不含 'RRULE:' 前缀, 如 'FREQ=WEEKLY;BYDAY=MO'); "
+             "留空 = 单次事件 (Phase 4·#3)",
+    ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """通过 CalDAV PUT 在 Exchange 创建新事件 (Phase 2.2)."""
@@ -821,7 +826,7 @@ def calendar_create(
             dtstart_utc=dtstart, dtend_utc=dtend,
             location=location, description=description,
             attendees=attendees, calendar_name=calendar_name,
-            status=status,
+            status=status, rrule=rrule,
         )
     except ValueError as e:
         raise emit_cli_error(cli, CliInvalidArgError(str(e)))
@@ -861,6 +866,11 @@ def calendar_update(
         False, "--no-sequence-bump",
         help="不 +1 SEQUENCE (默认 +1, RFC 5545 标准: 任何 update 都要 bump)",
     ),
+    rrule: Optional[str] = typer.Option(
+        None, "--rrule",
+        help="改整系列 RRULE (Phase 4·#3): 不传 = 保留原值; 'FREQ=...' 覆盖; "
+             "'' (空串) 删除 RRULE 把周期变单次",
+    ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """通过 CalDAV PUT update 现有事件 (Phase 2.3). 不传的字段保留原值."""
@@ -895,6 +905,7 @@ def calendar_update(
             attendees=attendees, status=status,
             calendar_name=calendar_name,
             sequence_bump=not no_sequence_bump,
+            rrule=rrule,
         )
     except ValueError as e:
         msg = str(e)
