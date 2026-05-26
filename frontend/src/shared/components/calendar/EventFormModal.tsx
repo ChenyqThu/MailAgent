@@ -62,6 +62,24 @@ function isoToDatetimeLocal(iso: string): string {
   return toDatetimeLocal(new Date(iso))
 }
 
+// Phase 4·#2 — 全天事件用 floating date (UTC midnight Z). occurrence_*_iso 是
+// UTC ISO; 全天事件存 date 00:00 UTC + dtend exclusive (caldav_reader 确认).
+/** ISO (UTC) → UTC date 部分 'YYYY-MM-DD'. */
+function isoToUtcDate(iso: string): string {
+  return iso.slice(0, 10)
+}
+/** date str ± n 天 (UTC 运算, 避免本地时区偏移导致跨日). */
+function addDaysToDateStr(ds: string, n: number): string {
+  const [y, mo, d] = ds.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, mo - 1, d + n))
+  return dt.toISOString().slice(0, 10)
+}
+/** 本地今天 'YYYY-MM-DD' (create 全天默认). */
+function todayDateStr(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 function emailRe(s: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)
 }
@@ -82,6 +100,11 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   const [summary, setSummary] = useState('')
   const [startLocal, setStartLocal] = useState('')
   const [endLocal, setEndLocal] = useState('')
+  // Phase 4·#2 — 全天事件: isAllDay toggle 切 date input (startDate/endDate
+  // inclusive); 提交转 UTC midnight Z + end exclusive (inclusive +1).
+  const [isAllDay, setIsAllDay] = useState(false)
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
   const [location, setLocation] = useState('')
   const [description, setDescription] = useState('')
   // Phase 4·#1 — calendar 归属 (create 可选下拉; edit 只读展示, 跨 calendar
@@ -125,6 +148,15 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       setSummary(occurrence.summary || '')
       setStartLocal(isoToDatetimeLocal(occurrence.occurrence_start_iso))
       setEndLocal(isoToDatetimeLocal(occurrence.occurrence_end_iso))
+      // Phase 4·#2 — 全天预填: startDate=start UTC date; endDate=end UTC date -1
+      // (occurrence_end 是 exclusive, 转 inclusive 显示).
+      setIsAllDay(!!occurrence.is_all_day)
+      setStartDate(isoToUtcDate(occurrence.occurrence_start_iso))
+      setEndDate(
+        occurrence.is_all_day
+          ? addDaysToDateStr(isoToUtcDate(occurrence.occurrence_end_iso), -1)
+          : isoToUtcDate(occurrence.occurrence_end_iso)
+      )
       setLocation(occurrence.location || '')
       setCalendarName(occurrence.calendar_name || '')
       setDescription('')
@@ -142,6 +174,10 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       setSummary('')
       setStartLocal(toDatetimeLocal(start))
       setEndLocal(toDatetimeLocal(end))
+      // Phase 4·#2 — create 默认非全天; 全天 date 默认今天单日 (toggle on 时用)
+      setIsAllDay(false)
+      setStartDate(todayDateStr())
+      setEndDate(todayDateStr())
       setLocation('')
       setCalendarName('')
       setDescription('')
@@ -169,8 +205,14 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
 
   const mut = useMutation({
     mutationFn: async () => {
-      const startIso = localToIsoWithOffset(startLocal)
-      const endIso = localToIsoWithOffset(endLocal)
+      // Phase 4·#2 — 全天: UTC midnight Z + end exclusive (inclusive endDate +1);
+      // 非全天: 本地 datetime + tz offset (现有).
+      const startIso = isAllDay
+        ? `${startDate}T00:00:00Z`
+        : localToIsoWithOffset(startLocal)
+      const endIso = isAllDay
+        ? `${addDaysToDateStr(endDate, 1)}T00:00:00Z`
+        : localToIsoWithOffset(endLocal)
       const attendees = chips.length > 0 ? chips : undefined
       const builtRrule = buildRRule(rruleState)
       if (isEdit && occurrence) {
@@ -181,7 +223,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           endIso,
           location: location || undefined,
           description: description || undefined,
-          attendees
+          attendees,
+          isAllDay
         }
         // Phase 4·#3 — 仅用户动了重复段才传 rrule (改整系列, 含 '' 删除);
         // 没动则不传 → 后端保留原 RRULE (防 builder 有损解析破坏复杂规则).
@@ -196,7 +239,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           description: description || undefined,
           attendees,
           calendarName: calendarName || undefined,
-          rrule: builtRrule || undefined
+          rrule: builtRrule || undefined,
+          isAllDay: isAllDay || undefined
         }
         return mailApi.calendar.eventCreate(opts)
       }
@@ -222,24 +266,29 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     } else {
       setErrTitle(false)
     }
-    if (startLocal && endLocal && new Date(endLocal) <= new Date(startLocal)) {
+    // Phase 4·#2 — 全天用 date 比较 (单日 endDate==startDate 合法); 非全天用 datetime.
+    const timeInvalid = isAllDay
+      ? !!(startDate && endDate && endDate < startDate)
+      : !!(startLocal && endLocal && new Date(endLocal) <= new Date(startLocal))
+    if (timeInvalid) {
       setErrTime(true)
       ok = false
     } else {
       setErrTime(false)
     }
     return ok
-  }, [summary, startLocal, endLocal])
+  }, [summary, startLocal, endLocal, isAllDay, startDate, endDate])
 
   // 用户边改边清错 (mockup behaviour)
   useEffect(() => {
     if (errTitle && summary.trim()) setErrTitle(false)
   }, [summary, errTitle])
   useEffect(() => {
-    if (errTime && startLocal && endLocal && new Date(endLocal) > new Date(startLocal)) {
-      setErrTime(false)
-    }
-  }, [startLocal, endLocal, errTime])
+    const valid = isAllDay
+      ? !!(startDate && endDate && endDate >= startDate)
+      : !!(startLocal && endLocal && new Date(endLocal) > new Date(startLocal))
+    if (errTime && valid) setErrTime(false)
+  }, [startLocal, endLocal, startDate, endDate, isAllDay, errTime])
 
   const handleSubmit = (): void => {
     if (!validate()) {
@@ -382,25 +431,57 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             </div>
           </div>
 
-          {/* 起止时间 */}
+          {/* 起止时间 (Phase 4·#2 — 全天 toggle 切 date input) */}
           <div className="ef-field">
-            <label className="ef-label">{t('calendar.form.labelTime', '起止时间')}</label>
+            <div className="flex items-center justify-between">
+              <label className="ef-label">{t('calendar.form.labelTime', '起止时间')}</label>
+              <label className="flex items-center gap-1.5 text-aux text-ink-fg-1 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isAllDay}
+                  onChange={(e) => setIsAllDay(e.target.checked)}
+                />
+                <span>{t('calendar.form.allDayToggle', '全天')}</span>
+              </label>
+            </div>
             <div className="ef-grid2">
-              <input
-                ref={startRef}
-                className={cn('ef-input mono', errTime && 'invalid')}
-                type="datetime-local"
-                value={startLocal}
-                onChange={(e) => setStartLocal(e.target.value)}
-                aria-label={t('calendar.form.ariaStart', '开始时间')}
-              />
-              <input
-                className={cn('ef-input mono', errTime && 'invalid')}
-                type="datetime-local"
-                value={endLocal}
-                onChange={(e) => setEndLocal(e.target.value)}
-                aria-label={t('calendar.form.ariaEnd', '结束时间')}
-              />
+              {isAllDay ? (
+                <>
+                  <input
+                    ref={startRef}
+                    className={cn('ef-input mono', errTime && 'invalid')}
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    aria-label={t('calendar.form.ariaStart', '开始时间')}
+                  />
+                  <input
+                    className={cn('ef-input mono', errTime && 'invalid')}
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    aria-label={t('calendar.form.ariaEnd', '结束时间')}
+                  />
+                </>
+              ) : (
+                <>
+                  <input
+                    ref={startRef}
+                    className={cn('ef-input mono', errTime && 'invalid')}
+                    type="datetime-local"
+                    value={startLocal}
+                    onChange={(e) => setStartLocal(e.target.value)}
+                    aria-label={t('calendar.form.ariaStart', '开始时间')}
+                  />
+                  <input
+                    className={cn('ef-input mono', errTime && 'invalid')}
+                    type="datetime-local"
+                    value={endLocal}
+                    onChange={(e) => setEndLocal(e.target.value)}
+                    aria-label={t('calendar.form.ariaEnd', '结束时间')}
+                  />
+                </>
+              )}
             </div>
             <div className={cn('ef-err', errTime && 'show')} role="alert">
               <AlertCircle size={13} strokeWidth={2} />

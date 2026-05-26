@@ -121,6 +121,8 @@ export interface EventCreateOpts {
   status?: 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED'
   /** Phase 4·#3 — RFC 5545 RRULE; 留空 = 单次. */
   rrule?: string
+  /** Phase 4·#2 — 全天事件 (start/end 用 UTC midnight Z + end exclusive). */
+  isAllDay?: boolean
 }
 
 export async function runEventCreate(opts: EventCreateOpts): Promise<unknown> {
@@ -139,6 +141,7 @@ export async function runEventCreate(opts: EventCreateOpts): Promise<unknown> {
   if (opts.calendarName) args.push('--calendar', opts.calendarName)
   if (opts.status) args.push('--status', opts.status)
   if (opts.rrule) args.push('--rrule', opts.rrule)
+  if (opts.isAllDay) args.push('--all-day')
   for (const a of opts.attendees || []) {
     if (!a.email) continue
     args.push('--attendee', a.name ? `${a.email},${a.name}` : a.email)
@@ -159,6 +162,8 @@ export interface EventUpdateOpts {
   calendarName?: string
   /** Phase 4·#3 — 改整系列 RRULE: 不传=保留; 'FREQ=...' 覆盖; '' 删除. */
   rrule?: string
+  /** Phase 4·#2 — 全天状态: 不传=保持; true=全天; false=定时. */
+  isAllDay?: boolean
   /** 默认 SEQUENCE +1 (RFC 5545 标准). */
   noSequenceBump?: boolean
 }
@@ -173,6 +178,9 @@ export async function runEventUpdate(opts: EventUpdateOpts): Promise<unknown> {
   if (opts.status !== undefined) args.push('--status', opts.status)
   if (opts.calendarName) args.push('--calendar', opts.calendarName)
   if (opts.rrule !== undefined) args.push('--rrule', opts.rrule)
+  if (opts.isAllDay !== undefined) {
+    args.push(opts.isAllDay ? '--all-day' : '--no-all-day')
+  }
   if (opts.noSequenceBump) args.push('--no-sequence-bump')
   for (const a of opts.attendees || []) {
     if (!a.email) continue

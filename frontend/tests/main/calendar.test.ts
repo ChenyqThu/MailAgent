@@ -342,6 +342,17 @@ describe('calendar — runEventCreate', () => {
     expect(i).toBeGreaterThan(-1)
     expect(args[i + 1]).toBe('FREQ=WEEKLY;BYDAY=MO')
   })
+
+  test('Phase 4·#2 — isAllDay 拼 --all-day flag', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventCreate({
+      summary: '假期',
+      startIso: '2026-06-01T00:00:00Z',
+      endIso: '2026-06-02T00:00:00Z',
+      isAllDay: true
+    })
+    expect(mockCallCli.mock.calls[0][0]).toContain('--all-day')
+  })
 })
 
 // Phase 2.3 — calendar:eventUpdate
@@ -405,6 +416,18 @@ describe('calendar — runEventUpdate', () => {
       ['calendar', 'update', 'uid-x', '--rrule', ''],
       { write: true, needsAuth: true, timeoutMs: 120_000 }
     )
+  })
+
+  test('Phase 4·#2 — isAllDay=true 拼 --all-day', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({ icalUid: 'uid-x', isAllDay: true })
+    expect(mockCallCli.mock.calls[0][0]).toContain('--all-day')
+  })
+
+  test('Phase 4·#2 — isAllDay=false 拼 --no-all-day', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({ icalUid: 'uid-x', isAllDay: false })
+    expect(mockCallCli.mock.calls[0][0]).toContain('--no-all-day')
   })
 })
 

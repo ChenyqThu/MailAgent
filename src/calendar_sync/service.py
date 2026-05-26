@@ -606,6 +606,7 @@ class CalendarService:
         calendar_name: Optional[str] = None,
         status: str = "CONFIRMED",
         rrule: Optional[str] = None,
+        is_all_day: bool = False,
     ) -> Dict[str, Any]:
         """CalDAV PUT 创建事件.
 
@@ -639,6 +640,7 @@ class CalendarService:
             calendar_name=calendar_name,
             status=status,
             rrule=rrule,
+            is_all_day=is_all_day,
         )
 
     def update_event(
@@ -655,6 +657,7 @@ class CalendarService:
         calendar_name: Optional[str] = None,
         sequence_bump: bool = True,
         rrule: Optional[str] = None,
+        is_all_day: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """CalDAV PUT update 现有事件.
 
@@ -698,6 +701,10 @@ class CalendarService:
         # 显式 str (含 '' 删除 → 周期变单次) 才透传给 writer 覆盖.
         if rrule is not None:
             update_kwargs["rrule"] = rrule
+        # Phase 4·#2 — is_all_day None = 未传 (writer 检测保持原全天状态);
+        # 显式 bool 才透传 (edit 改全天/定时状态).
+        if is_all_day is not None:
+            update_kwargs["is_all_day"] = is_all_day
         return writer.update_event(**update_kwargs)
 
     def delete_event(

@@ -703,6 +703,7 @@
       "ariaStart": "Start time",
       "ariaEnd": "End time",
       "errTime": "End time must be after start time",
+      "allDayToggle": "All day",
       "labelCalendar": "Calendar",
       "calendarDefault": "Default calendar",
       "calendarEditLocked": "Moving events across calendars isn't supported yet",

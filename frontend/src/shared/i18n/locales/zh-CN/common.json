@@ -695,6 +695,7 @@
       "ariaStart": "开始时间",
       "ariaEnd": "结束时间",
       "errTime": "结束时间需晚于开始时间",
+      "allDayToggle": "全天",
       "labelCalendar": "日历",
       "calendarDefault": "默认日历",
       "calendarEditLocked": "暂不支持跨日历移动事件",

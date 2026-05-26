@@ -20,7 +20,7 @@ Coverage:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -397,3 +397,49 @@ def test_update_event_rrule_empty_clears_to_single():
     writer.update_event(ical_uid="evt-rrule@mailagent.local", rrule="")
     new = vobject.readOne(mock_evt.data)
     assert not hasattr(new.vevent, "rrule")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4·#2 — all-day (VALUE=DATE, RFC 5545 §3.6.1)
+# ---------------------------------------------------------------------------
+
+def test_all_day_value_date_round_trip():
+    """is_all_day → DTSTART/DTEND 用 VALUE=DATE; dtend 取原值 (exclusive)."""
+    vev, text = _build_and_parse(**_common_kwargs(
+        is_all_day=True,
+        dtstart_utc=datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 6, 2, 0, 0, tzinfo=timezone.utc),
+    ))
+    assert "VALUE=DATE" in text
+    assert vev.dtstart.value == date(2026, 6, 1)
+    assert vev.dtend.value == date(2026, 6, 2)
+
+
+def test_non_all_day_keeps_datetime():
+    """is_all_day=False (默认) → DTSTART 仍是 datetime (含时间, 无 VALUE=DATE)."""
+    vev, text = _build_and_parse(**_common_kwargs())
+    assert "VALUE=DATE" not in text
+    assert isinstance(vev.dtstart.value, datetime)
+
+
+def test_update_event_preserves_all_day_when_not_passed():
+    """update 全天事件不传 is_all_day → 检测 orig date 保持全天 (防破坏成定时)."""
+    orig_body = build_vevent(
+        ical_uid="ad@mailagent.local",
+        summary="假期",
+        dtstart_utc=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+        is_all_day=True,
+    )
+    real_vevent = vobject.readOne(orig_body).vevent
+    mock_evt = MagicMock()
+    mock_evt.vobject_instance.vevent = real_vevent
+    writer = CalDAVWriter.__new__(CalDAVWriter)
+    writer.user = "me@example.com"
+    writer._find_event_by_uid = MagicMock(return_value=(MagicMock(), mock_evt))
+    writer.update_event(ical_uid="ad@mailagent.local", summary="改名")
+    new = vobject.readOne(mock_evt.data)
+    assert "VALUE=DATE" in mock_evt.data
+    assert new.vevent.dtstart.value == date(2026, 6, 1)
+    assert new.vevent.summary.value == "改名"

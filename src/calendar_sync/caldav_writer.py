@@ -22,7 +22,7 @@ API:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
@@ -59,6 +59,7 @@ def build_vevent(
     attendees: Optional[List[Dict[str, Any]]] = None,
     sequence: int = 0,
     status: str = "CONFIRMED",
+    is_all_day: bool = False,
     now_utc: Optional[datetime] = None,
     # F3 新增 (Critical #3 + High #5): RRULE / EXDATE / RDATE / RECURRENCE-ID
     # 透传, 避免 update_event 对 recurring event 时把 series 降级单次.
@@ -79,6 +80,8 @@ def build_vevent(
         attendees: List of {email, name?, role?} dict
         sequence: SEQUENCE (RFC 5545 §3.8.7.4); update 时 +1
         status: ``CONFIRMED`` / ``TENTATIVE`` / ``CANCELLED``
+        is_all_day: True → DTSTART/DTEND 用 VALUE=DATE (RFC 5545 §3.6.1, Phase
+            4·#2); dtend_utc 是 exclusive end date (调用方负责 inclusive → exclusive)
         now_utc: 测试 fixture (固定 DTSTAMP)
 
     Returns:
@@ -99,8 +102,20 @@ def build_vevent(
         )
 
     dtstamp = _fmt_utc(now_utc or datetime.now(timezone.utc))
-    dtstart = _fmt_utc(dtstart_utc)
-    dtend = _fmt_utc(dtend_utc)
+
+    # Phase 4·#2 — all-day: VALUE=DATE (RFC 5545 §3.6.1). 取 date 部分; DTEND 已是
+    # exclusive (后端全程 exclusive, inclusive → exclusive 转换在前端一处做). 全天
+    # 用 UTC midnight Z 传 floating date, .strftime('%Y%m%d') 提取无时区漂移.
+    if is_all_day:
+        dt_lines = [
+            f"DTSTART;VALUE=DATE:{dtstart_utc.strftime('%Y%m%d')}",
+            f"DTEND;VALUE=DATE:{dtend_utc.strftime('%Y%m%d')}",
+        ]
+    else:
+        dt_lines = [
+            f"DTSTART:{_fmt_utc(dtstart_utc)}",
+            f"DTEND:{_fmt_utc(dtend_utc)}",
+        ]
 
     lines = [
         "BEGIN:VCALENDAR",
@@ -109,8 +124,7 @@ def build_vevent(
         "BEGIN:VEVENT",
         f"UID:{ical_uid}",
         f"DTSTAMP:{dtstamp}",
-        f"DTSTART:{dtstart}",
-        f"DTEND:{dtend}",
+        *dt_lines,
         f"SEQUENCE:{sequence}",
         f"SUMMARY:{_escape_text(summary)}",
         f"ORGANIZER:mailto:{organizer_email}",
@@ -308,6 +322,7 @@ class CalDAVWriter:
         calendar_name: Optional[str] = None,
         status: str = "CONFIRMED",
         rrule: Optional[str] = None,
+        is_all_day: bool = False,
     ) -> Dict[str, Any]:
         """CalDAV PUT 创建新事件.
 
@@ -327,6 +342,7 @@ class CalDAVWriter:
             sequence=0,
             status=status,
             rrule=rrule,
+            is_all_day=is_all_day,
         )
         cal = self._pick_calendar(calendar_name)
         try:
@@ -359,6 +375,7 @@ class CalDAVWriter:
         calendar_name: Optional[str] = None,
         sequence_bump: bool = True,
         rrule: Any = _UNSET,
+        is_all_day: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """CalDAV PUT update 现有 event. 不传的字段保留原值.
 
@@ -432,6 +449,13 @@ class CalDAVWriter:
         # Phase 4·#3 — rrule sentinel: _UNSET 保留原 RRULE (F3 透传语义);
         # 显式 str 覆盖 (改整系列规则); 显式 '' → None 删除 RRULE (series → single).
         new_rrule = orig_rrule if rrule is _UNSET else (rrule or None)
+        # Phase 4·#2 — all-day: orig_dtstart 是 date (非 datetime) → 原全天事件.
+        # is_all_day=None 保持原状态 (防 update 把全天破坏成定时事件, 类似 F3
+        # RRULE 降级); 显式 bool 才改全天状态.
+        orig_is_all_day = (
+            isinstance(orig_dtstart, date) and not isinstance(orig_dtstart, datetime)
+        )
+        new_is_all_day = orig_is_all_day if is_all_day is None else is_all_day
 
         body = build_vevent(
             ical_uid=ical_uid,
@@ -450,6 +474,7 @@ class CalDAVWriter:
             exdates=orig_exdates,
             rdates=orig_rdates,
             recurrence_id=orig_recurrence_id,
+            is_all_day=new_is_all_day,
         )
         evt.data = body
         try:

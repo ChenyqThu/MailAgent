@@ -356,6 +356,41 @@ def test_update_event_forwards_empty_rrule_to_clear(mock_writer_cls, fresh_db: s
     assert kwargs["rrule"] == ""
 
 
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_create_event_passes_is_all_day(mock_writer_cls, fresh_db: str):
+    """Phase 4·#2 — service.create_event 透传 is_all_day 给 writer."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.create_event.return_value = {"action": "created"}
+    svc.create_event(
+        summary="假期",
+        dtstart_utc=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        is_all_day=True,
+    )
+    _, kwargs = mock_writer_cls.return_value.create_event.call_args
+    assert kwargs["is_all_day"] is True
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_omits_is_all_day_when_not_passed(mock_writer_cls, fresh_db: str):
+    """不传 is_all_day → service 不 forward (writer 检测保持原全天状态)."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(ical_uid="u", summary="X")
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert "is_all_day" not in kwargs
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_event_forwards_is_all_day(mock_writer_cls, fresh_db: str):
+    """显式 is_all_day=True → forward 给 writer (edit 改全天状态)."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_event.return_value = {"action": "updated"}
+    svc.update_event(ical_uid="u", is_all_day=True)
+    _, kwargs = mock_writer_cls.return_value.update_event.call_args
+    assert kwargs["is_all_day"] is True
+
+
 def test_sync_now_validates_days(fresh_db: str):
     svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
     with pytest.raises(ValueError, match="future_days"):

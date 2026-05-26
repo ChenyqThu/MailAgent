@@ -801,6 +801,12 @@ def calendar_create(
         help="RFC 5545 RRULE (不含 'RRULE:' 前缀, 如 'FREQ=WEEKLY;BYDAY=MO'); "
              "留空 = 单次事件 (Phase 4·#3)",
     ),
+    all_day: bool = typer.Option(
+        False, "--all-day",
+        help="全天事件 (Phase 4·#2): DTSTART/DTEND 用 VALUE=DATE (取 start/end "
+             "ISO 的 date 部分); end 为 exclusive (单日传次日, 如 5/30 全天 → "
+             "--start ...05-30T00:00:00Z --end ...05-31T00:00:00Z)",
+    ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """通过 CalDAV PUT 在 Exchange 创建新事件 (Phase 2.2)."""
@@ -826,7 +832,7 @@ def calendar_create(
             dtstart_utc=dtstart, dtend_utc=dtend,
             location=location, description=description,
             attendees=attendees, calendar_name=calendar_name,
-            status=status, rrule=rrule,
+            status=status, rrule=rrule, is_all_day=all_day,
         )
     except ValueError as e:
         raise emit_cli_error(cli, CliInvalidArgError(str(e)))
@@ -871,6 +877,11 @@ def calendar_update(
         help="改整系列 RRULE (Phase 4·#3): 不传 = 保留原值; 'FREQ=...' 覆盖; "
              "'' (空串) 删除 RRULE 把周期变单次",
     ),
+    all_day: Optional[bool] = typer.Option(
+        None, "--all-day/--no-all-day",
+        help="全天状态 (Phase 4·#2): 不传 = 保持原状态; --all-day 改全天; "
+             "--no-all-day 改定时事件",
+    ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """通过 CalDAV PUT update 现有事件 (Phase 2.3). 不传的字段保留原值."""
@@ -905,7 +916,7 @@ def calendar_update(
             attendees=attendees, status=status,
             calendar_name=calendar_name,
             sequence_bump=not no_sequence_bump,
-            rrule=rrule,
+            rrule=rrule, is_all_day=all_day,
         )
     except ValueError as e:
         msg = str(e)

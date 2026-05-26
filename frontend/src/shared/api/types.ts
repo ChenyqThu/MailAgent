@@ -610,6 +610,8 @@ export interface EventCreateOpts {
   status?: EventStatusCode
   /** Phase 4·#3 — RFC 5545 RRULE (不含 'RRULE:' 前缀); 留空 = 单次事件. */
   rrule?: string
+  /** Phase 4·#2 — 全天事件; start/end 端到端用 UTC midnight Z + end exclusive. */
+  isAllDay?: boolean
 }
 
 export interface EventUpdateOpts {
@@ -625,6 +627,8 @@ export interface EventUpdateOpts {
   calendarName?: string
   /** Phase 4·#3 — 改整系列 RRULE: 不传=保留原值; 'FREQ=...' 覆盖; '' 删除(周期→单次). */
   rrule?: string
+  /** Phase 4·#2 — 全天状态: 不传=保持原状态; true=改全天; false=改定时. */
+  isAllDay?: boolean
   /** 默认 SEQUENCE +1 (RFC 5545 标准). */
   noSequenceBump?: boolean
 }
