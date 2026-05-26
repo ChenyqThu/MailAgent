@@ -49,25 +49,11 @@ if TYPE_CHECKING:
 # RFC 5545 §3.2 — 唯一有效的三个 PARTSTAT for REPLY
 VALID_RESPONSE_STATUS = ("ACCEPTED", "TENTATIVE", "DECLINED")
 
-
-def _escape_text(s: str) -> str:
-    """RFC 5545 §3.3.11 TEXT escape — backslash / semicolon / comma / newline."""
-    return (
-        s.replace("\\", "\\\\")
-        .replace(";", "\\;")
-        .replace(",", "\\,")
-        .replace("\n", "\\n")
-        .replace("\r", "")
-    )
-
-
-def _fmt_utc(dt: datetime) -> str:
-    """UTC datetime → RFC 5545 form ``YYYYMMDDTHHMMSSZ``."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.strftime("%Y%m%dT%H%M%SZ")
+# F31 — escape_text / fmt_utc_compact 提升到 _common.py 作公共 helper. 这里
+# 保留 _escape_text / _fmt_utc 老名作 module-local alias, 让本文件内 build_itip_reply
+# 调用免改, 同时 caldav_writer.py 改用公共名 (停止反向 import 私有 _).
+from src.calendar_sync._common import escape_text as _escape_text  # noqa: E402
+from src.calendar_sync._common import fmt_utc_compact as _fmt_utc  # noqa: E402
 
 
 def build_itip_reply(

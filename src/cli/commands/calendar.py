@@ -1011,7 +1011,7 @@ def calendar_replay(
     if dry_run:
         # dry-run: 只查 row 不写 Notion. 跟 replay_calendar_event 内部 try-order
         # 一致 (caldav → email_ics → legacy_calendar_app); 找不到报 NotFound.
-        from src.calendar_notion.replay import SOURCES_TRY_ORDER
+        from src.calendar_sync._common import SOURCES_TRY_ORDER  # F30
         candidates = [source] if source else list(SOURCES_TRY_ORDER)
         row = None
         found_source = None

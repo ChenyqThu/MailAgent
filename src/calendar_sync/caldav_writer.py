@@ -27,9 +27,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
-# 复用 itip_reply 的 RFC 5545 helpers — 跨 module import 私有是有意为之, 避免
-# 重复实现 escape / time format 两次. Phase 3 cleanup 可以 promote 成 public.
-from src.calendar_sync.itip_reply import _escape_text, _fmt_utc
+# F31 (Phase 3 cleanup) — RFC 5545 helpers 提升到 _common.py 公共名, 不再跨
+# module 反向 import 私有 _.
+from src.calendar_sync._common import escape_text as _escape_text
+from src.calendar_sync._common import fmt_utc_compact as _fmt_utc
 from src.mail.backend.imap_client import get_cipher_key
 
 if TYPE_CHECKING:

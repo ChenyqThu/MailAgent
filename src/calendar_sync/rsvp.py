@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from loguru import logger
 
-from src.calendar_notion.replay import SOURCES_TRY_ORDER  # 复用 source fallback 顺序
+from src.calendar_sync._common import SOURCES_TRY_ORDER  # F30 — promote from replay.py
 from src.calendar_sync.itip_reply import (
     VALID_RESPONSE_STATUS,
     build_itip_reply,
