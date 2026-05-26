@@ -714,3 +714,21 @@ class TestCalendarUpdateAttendees:
         )
         assert result.exit_code == 0, result.output
         assert captured["attendees"] == [{"email": "bob@example.com", "name": "Bob"}]
+
+    def test_clear_and_recurrence_id_mutually_exclusive(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """--clear-attendees 与 --recurrence-id 互斥 (occurrence override 不改与会者).
+
+        防用户静默踩坑: 改这一次 (occurrence) 继承 master 与会者, --clear-attendees
+        在该路径无效, 显式报错而非静默忽略.
+        """
+        monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+        result = _invoke(
+            cli_runner, "calendar", "update", "uid-x",
+            "--clear-attendees", "--recurrence-id", "2026-01-12T09:00:00Z",
+            "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code != 0, result.output
+        payload = _last_json(result.output)
+        assert payload["error"]["code"] == "E_INVALID_ARG"

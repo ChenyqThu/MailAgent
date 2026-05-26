@@ -918,6 +918,11 @@ def calendar_update(
             raise CliInvalidArgError(
                 "--clear-attendees 与 --attendee 互斥: 要么清空, 要么用 --attendee 替换"
             )
+        if clear_attendees and recurrence_id:
+            raise CliInvalidArgError(
+                "--clear-attendees 不支持 --recurrence-id: occurrence override (改这一次) "
+                "继承 master 与会者, 不改单次. 清空整系列与会者请去掉 --recurrence-id"
+            )
         if start:
             dtstart_utc = _parse_iso_datetime_strict(start, "start")
         if end:
