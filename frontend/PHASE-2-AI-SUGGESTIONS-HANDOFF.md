@@ -1,6 +1,15 @@
 # Phase 2 · AI 动态建议按钮 Handoff
 
-> **状态**：Phase 1 ship 完工（10 commits 跨 MailAgent 主仓 + ping-island fork），T7 dogfood ≥ 1 周进行中。本 handoff 是 Phase 2 实施的接力文档 —— 下一个 session 直接读本文上手，**不要**重新探索 Phase 1 现状。
+> **状态**：✅ **Phase 2 实施完工 2026-05-26**（4 commits, 3 主仓 + 1 fork）。`MAILAGENT_AI_DYNAMIC_ACTIONS=true` flag 未引入 — 代码路径已 wire (LLM 留空数组时自动 fallback 静态 5), 无需新 flag. T2.6 dogfood ≥ 2d 留给 user 真邮件触发验证, 同时一起验证 T7 Scene 1/2/4. 本 handoff 仍保留作 Phase 3 接力前的整体 Phase 2 设计 + 决策记忆.
+>
+> **Ship commit (按时序)**:
+> - `02f0e5f` — T2.1 LLM schema + prompts (recommended_actions field, 10 inbox + 2 sent whitelist enum)
+> - `5877fd8` — T2.2 sanitize + envelope dynamic options (whitelist module + processor sanitize + dispatch _build_dynamic_options)
+> - `7f9e066` — T2.3 island_response 17 handler 全覆盖 (mark_done 5 alias + create_draft 4 alias + add_to_calendar + defer_to_monday_9am + ack_in_pagerduty + Phase 1 静态 5 路径不变)
+> - fork `c10973c` — T2.5 fork detail 二行渲染 + 高度 30→44 + T2.4 docstring 收尾
+> - **T2.4 主体早在 fork `bbcf85a` (2026-05-25) 已 ship** (button click 真触发 plugin handler), Phase 2 起 dispatch 端能拿到 dynamic options 真用上.
+>
+> **测试**: 221 pass tests/llm_agent + tests/notify (Phase 1 现有 + Phase 2 新 +49: schema 9 + whitelist 11 + dispatch dynamic 16 + processor sanitize 13). 0 regression.
 >
 > **关联**：
 > - PRD: `~/.claude/plans/ultrathink-session-curious-cloud.md` §5.2 Phase 2
@@ -368,64 +377,77 @@ ACTION_DEFAULTS: dict[str, dict[str, str]] = {
 
 ---
 
-## 6. Phase 2 完成情况（实施完更新）
+## 6. Phase 2 完成情况
 
-留空。session 完成时填：
-
-| Task | Status | Commit |
-|---|---|---|
-| T2.1 LLM schema + prompts | ⏸ | — |
-| T2.2 action whitelist + envelope 注入 | ⏸ | — |
-| T2.3 action handler 扩展 | ⏸ | — |
-| T2.4 button real action wire | ⏸ | — |
-| T2.5 fork detail 字段渲染 | ⏸ | — |
-| T2.6 测试 + dogfood ≥ 2d | ⏸ | — |
+| Task | Status | Commit | 关键改动 |
+|---|---|---|---|
+| T2.1 LLM schema + prompts | ✅ | main `02f0e5f` | `EMAIL_TOOL_SCHEMA.recommended_actions` (maxItems=3, items=`{id,title,detail,confidence}`) + `RECOMMENDED_ACTION_ID_INBOX/SENT` 12 id whitelist + `is_valid_recommended_action_id` helper. prompts/email_inbox.md + email_sent.md 末尾加 "Recommended Actions" 段含 whitelist table + 决策示例 4 类典型邮件 |
+| T2.2 action whitelist + envelope 动态注入 | ✅ | main `5877fd8` | 新 `src/notify/island_action_whitelist.py` (STATIC_FALLBACK 5 + RECOMMENDED 12 + KNOWN 17 frozenset + helpers). `processor._parse` sanitize (mailbox-specific whitelist + shape + length 30/80 + confidence clamp [0,1] + NaN guard + cap 3). `AILabels.recommended_actions` + `summary_for_log.ai_summary_full`. `dispatch_llm_reviewed(recommended_actions=...)` + `_build_dynamic_options` (confidence >= 0.5 + handler whitelist + cap 3 二层防御). new_watcher 透传 `labels.get("recommended_actions")` |
+| T2.3 action handler 扩展 | ✅ | main `7f9e066` | `island_response.handle_response` 加 12 个新 choice 分支. mark_done aliases 5 (archive_only / archive_and_unsubscribe / mark_done_no_response / convert_to_notion_task / escalate_to_oncall) + create_draft aliases 4 (decline_with_reason / quick_reply_yes / quick_reply_no_with_reason / nudge_recipient) + 独立 3 (add_to_calendar 拉起 Calendar.app, defer_to_monday_9am 算到下一个工作日 9 点 snooze, ack_in_pagerduty open URL 含 http/https 白名单防 xss). +38 test (含 _seconds_until_next_monday_9am 6 个边界单元) |
+| T2.4 button real action wire | ✅ | fork `bbcf85a` (Phase 1·T7 follow-up 早 ship) + fork `c10973c` docstring 收尾 | `MailAgentSessionView.interventionButton` onTap 调 `HookSocketServer.shared.respondToIntervention(toolUseId:, decision:"answer", updatedInput:["choice": opt.id])` 写 BridgeResponse JSON 回 plugin. toolUseId 来自 `session.hookMetadata["tool_use_id"]` (plugin envelope.py `to_wire_dict` 自动注入 `bridge-<envelope_id>`), fallback sessionId 兜底. Plugin 端 `_extract_choice` → `island_response.handle_response` → 触发 17 handler. T2.5 收尾时清掉过时 docstring |
+| T2.5 fork detail 字段渲染 | ✅ | fork `c10973c` | `interventionButton` label 从 `HStack { Text(title) }` 改 `VStack(alignment: .leading, spacing: 2) { Text(title) + if hasDetail Text(detail) }`. frame 高度 30 → minHeight 44 (Apple Notification action style). title font 12pt semibold lineLimit 1, detail font 10pt regular 55% opacity lineLimit 1. detail 空时 row 仍 44 单行垂直居中保 row 一致. xcodebuild -scheme PingIsland 通过 |
+| T2.6 测试 + dogfood ≥ 2d + handoff 收尾 | 🔄 | main `<本次>` 部分 — code + doc ship; dogfood 留 user | 全套 221 tests pass tests/llm_agent + tests/notify (0 regression). handoff §0 + §6 update. dogfood 步骤: PM2 restart mail-sync → 真邮件 sync → 看 LLM 出 recommended_actions (`mailagent llm run <id> --dry-run -o json | jq .recommended_actions`) → 真灵动岛 click button 验证 17 个 handler 之一真触发 |
 
 ---
 
-## 7. 新 session 启动 prompt
+## Phase 2 主要收获 (写给 Phase 3 实施 session)
 
-把下面的内容**完整粘贴**到新 session（推荐 Opus 4.7 1M context 或同档）：
+1. **Schema 加新字段不破 prefix cache 假设过乐观** — handoff §5 风险表说 "加在 properties 末尾不影响 prefix hash 稳定性" 是误解. Anthropic prompt cache 用 prefix bytes hash, tools 块在 system 之前; 改 schema 必然一次性 cache miss. 但只 miss 一次后新 prefix 稳定下来, 后续命中正常. ship 前看 `mailagent llm stats --days 1` cache_hit_rate 短期下降是预期.
+
+2. **AILabels.summary_for_log 同时承担 log line 和 dispatch carrier 两职责** — Phase 1 一直 silent 截 80 给 envelope, 此次 T2.2 暴露 `ai_summary_full` 字段才修. Phase 3 加新字段时直接添加到 AILabels + summary_for_log + dispatch 链路, **不再走截短副本**.
+
+3. **Phase 1 T2.4 button wire 早在 `bbcf85a` ship, handoff 落后于代码** — 我们以为 button click 还是 no-op, 实际看 fork `git log` 才知道已 ship. **下次开 Phase 3 前先跑 `cd ~/Documents/ping-island && git log --oneline -20` 看 fork 端有没有意外进展**.
+
+4. **17 个 handler 中 6 个是 "TODO Phase 3 业务跟进" alias** (archive_and_unsubscribe 抽 List-Unsubscribe header / convert_to_notion_task 调 Notion API / escalate_to_oncall 发飞书 / add_to_calendar 真 .ics parse / defer_to_monday_9am 升级 / ack_in_pagerduty 完整 URL 抽取). Phase 3 可优先做高 ROI 的 (archive_and_unsubscribe 实际邮件占比最大).
+
+5. **fork minimal 原则保持** — Phase 2 fork 端只改 1 文件 33 行 (MailAgentSessionView.swift), upstream rebase 友好.
+
+6. **测试 ROI**: pytest 221 个全 pass 给的信心 vs fork SwiftUI xcodebuild **BUILD SUCCEEDED** 一次给的信心相当. Phase 3 写新 view 时 fork 端先 swiftc -parse 单文件再 xcodebuild full build 两步走
+
+---
+
+## 7. 下一次 session: Phase 3 (Daily Digest) 启动 prompt
+
+把下面的内容**完整粘贴**到新 session：
 
 ```
-ultrathink 继续 MailAgent 灵动岛 Phase 2 实施。
+ultrathink 继续 MailAgent 灵动岛 Phase 3 实施。
 
-Phase 1 已 ship 完工 (10 commits 跨 MailAgent 主仓 + ping-island fork), T7 dogfood ≥ 1 周进行中。
-现进 Phase 2: AI 动态建议按钮 — 替代静态 5 按钮, 让 LLM 根据邮件内容动态出 1-3 个针对性建议.
+Phase 1 + Phase 2 已 ship 完工 (跨 MailAgent 主仓 + ping-island fork). Phase 2
+LLM 已能根据邮件内容动态出 1-3 个按钮 (recommended_actions), 替代静态 5 fallback;
+fork 端 button click 真触发 17 个 handler 中之一 (mark_done aliases 5 / create_draft
+aliases 4 / 独立 3 + 静态 5).
 
-任务开始前先读这 3 个文件 (按顺序):
-1. /Users/chenyuanquan/Documents/MailAgent/frontend/PHASE-2-AI-SUGGESTIONS-HANDOFF.md (完整 handoff, 含任务拆分 + action whitelist + 风险表)
-2. /Users/chenyuanquan/.claude/plans/ultrathink-session-curious-cloud.md §5.2 (PRD Phase 2 完整 scope, 含验收)
-3. memory: project_mailagent_ping_island_prd.md (Phase 1 整体决策记忆, 跨 session 持久化)
+现进 Phase 3: 每日 9:00/18:00 跨邮件巡检 push (新 eventType DailyDigest).
+LLM 跑一次 cross-email summary (输入: 每封邮件的 11 AI 字段 + subject), 输出
+1 段话 + 3-5 个 bulk action ("全归档 5 封 newsletter" / "批量标已完成").
 
-读完后:
-- TaskCreate 列出 T2.1 ~ T2.6 任务 (按 handoff §3 顺序)
-- 不要绕过 PRD 非目标 (不做 AI 多轮对话, 不做 tool_use 跨域查询)
-- 每 task 完一个 atomic commit
-- 涉及 fork 仓改动时, ping-island 在 ~/Documents/ping-island/ branch=feat/mail-brand
-- 涉及 mascot/PNG 资源时, 参考 frontend/MASCOT-SPEC.md
-- T7 dogfood 期间若 user 反馈了 Scene 1/2/4 真邮件触发问题, 先修再进 Phase 2
+任务开始前先读这 4 个文件:
+1. /Users/chenyuanquan/Documents/MailAgent/frontend/PHASE-2-AI-SUGGESTIONS-HANDOFF.md (Phase 2 ship 总结 + 主要收获)
+2. /Users/chenyuanquan/.claude/plans/ultrathink-session-curious-cloud.md §5.3 (PRD Phase 3 完整 scope)
+3. memory: project_mailagent_ping_island_prd.md (整体决策记忆)
+4. fork ~/Documents/ping-island/ branch=feat/mail-brand `git log --oneline -10` (fork 现状)
 
-工作量预估 ~2-3d (一个长 session 内可完成主体).
+Phase 3 任务大致 (PRD §5.3 6 步):
+- 新 src/notify/island_digest.py — 跨邮件 LLM summary + bulk action 生成
+- main.py / cron asyncio scheduled task (9:00 / 18:00)
+- 新 envelope eventType=DailyDigest + intervention.options 含 bulk action
+- fork 新 scene "digest view" — 标题 "今日总结" + counts + 3-5 bulk action button
+- bulk handler 跟 Phase 2 共享 (archive_batch / mark_done_batch)
+- DND 检测 (用户开了 DND 跳过, 否则等首次活跃推送)
 
-开始前先跟我确认 T7 dogfood 是否有反馈需要先处理.
+工作量预估 ~2d.
 ```
 
 ---
 
-**Phase 1 主要收获 (写给 Phase 2 实施 session 的 Claude)**：
+## 8. Phase 2 主要收获
 
-1. **fork 仓 SwiftUI 改动必须 sanity check 5 项后再 commit** (HookEvent.metadata 字段是否真存在 / envelope.metadata 真透传 / SessionStore 现有用法不冲突 / build pass / mail brand 真走 attention path)
-2. **plugin envelope 端任何字段加都要 fork 端有对应 reader** — 不然字段 silent 丢
-3. **fork `brand` computed property 查 runtimeProfiles 不是 managedHookProfiles** — Sprint 1 ship 的 ClientProfile 注册了错位
-4. **envelope.id 必须是 UUID** — fork `let id: UUID`, 任何字符串都 silent drop envelope
-5. **nc 不适合手测 expectsResponse=true envelope** — 用 Python socket + 2s timeout
-6. **ping-island stdout 进 launchd 不可见** — debug 用 `~/island_debug.log` + NSLog 双输出
-7. **mascot pixel-art 资源必须 nearest-neighbor 降采样** — 不要 LANCZOS / BICUBIC (反 pixel-art)
-8. **fork 改动尽量小** — fork minimal 原则 < 800 行 diff, 月度 rebase 友好
+见 §6 末尾 "Phase 2 主要收获" 段（写给 Phase 3 接力 session 的 Claude）。
 
 ---
 
 **作者**：Claude Opus 4.7 (1M context), 代表 chenyqthu
-**日期**：Phase 1 ship 完工后
-**PRD 立项 commit**: `09c7b66` (feat/agent-harness, MailAgent 主仓)
+**Phase 1 立项**: `09c7b66` (feat/agent-harness, MailAgent 主仓)
+**Phase 2 ship**: 2026-05-26 (main `02f0e5f` → `5877fd8` → `7f9e066` + fork `bbcf85a` → `c10973c`)
+**Phase 3 立项**: 等下个 session 起头
