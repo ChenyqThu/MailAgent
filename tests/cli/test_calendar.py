@@ -80,10 +80,12 @@ class TestCalendarExpand:
             return {"series_scanned": 0, "occurrences_synced": 0, "errors": []}
 
         import src.calendar_notion.expansion as expansion_mod
-        import src.cli.commands.calendar as calendar_cmd
+        import src.mail.meeting_sync as meeting_sync_mod
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         monkeypatch.setattr(expansion_mod, "run_expansion_tick", fake_run)
-        monkeypatch.setattr(calendar_cmd, "_build_meeting_sync", lambda sync_store: object())
+        # Phase 3 §P1-b: _build_meeting_sync 移到 CalendarService.expand_recurring 内部
+        # (deferred import). patch MeetingInviteSync 构造为哑 object 跟之前同义.
+        monkeypatch.setattr(meeting_sync_mod, "MeetingInviteSync", lambda **kwargs: object())
 
         result = _invoke(cli_runner, "calendar", "expand", "--no-dry-run",
                          "-o", "json", db_path=seeded_db)
