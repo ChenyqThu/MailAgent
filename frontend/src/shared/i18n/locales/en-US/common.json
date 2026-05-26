@@ -741,6 +741,12 @@
         "countAria": "Repeat count",
         "untilAria": "End date"
       },
+      "recurrenceScope": {
+        "title": "Recurring event",
+        "body": "Apply this change to:",
+        "thisOnly": "This event only",
+        "allSeries": "Entire series"
+      },
       "attendees": {
         "label": "Attendees",
         "placeholder": "Type email and press Enter",

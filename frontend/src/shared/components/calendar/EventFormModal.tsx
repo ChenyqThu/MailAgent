@@ -116,6 +116,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   // (occurrence 无 rrule 字段); rruleDirty 防有损解析覆盖原复杂 RRULE.
   const [rruleState, setRruleState] = useState<RRuleState>(defaultRRuleState())
   const [rruleDirty, setRruleDirty] = useState(false)
+  // Phase 4·#3c — 周期事件 edit 保存时弹 scope 对话 (改这一次/整系列)
+  const [scopeDialogOpen, setScopeDialogOpen] = useState(false)
   const { data: detail } = useCalendarEvent(
     occurrence
       ? {
@@ -125,6 +127,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
         }
       : null
   )
+  // Phase 4·#3c — 周期事件 (有 RRULE) edit 时保存弹 scope 对话
+  const isRecurring = isEdit && !!detail?.rrule
   // chip 输入: chips = 已确认 attendees, chipInputValue = 当前输入框中字符
   const [chips, setChips] = useState<EventAttendeeInput[]>([])
   const [chipInputValue, setChipInputValue] = useState('')
@@ -204,7 +208,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   }, [open, occurrence, detail, rruleDirty])
 
   const mut = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (scope?: 'this' | 'all') => {
       // Phase 4·#2 — 全天: UTC midnight Z + end exclusive (inclusive endDate +1);
       // 非全天: 本地 datetime + tz offset (现有).
       const startIso = isAllDay
@@ -226,9 +230,16 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           attendees,
           isAllDay
         }
-        // Phase 4·#3 — 仅用户动了重复段才传 rrule (改整系列, 含 '' 删除);
-        // 没动则不传 → 后端保留原 RRULE (防 builder 有损解析破坏复杂规则).
-        if (rruleDirty) opts.rrule = builtRrule
+        if (scope === 'this') {
+          // Phase 4·#3c — 改这一次 (detached occurrence): recurrenceId = 该次
+          // 原始 dtstart (instance recurrence_id 或展开 start). occurrence
+          // override 不改 RRULE (不传 rrule).
+          opts.recurrenceId = occurrence.recurrence_id || occurrence.occurrence_start_iso
+        } else if (rruleDirty) {
+          // 改整系列: 仅用户动了重复段才传 rrule (含 '' 删除); 没动保留原值
+          // (防 builder 有损解析破坏复杂规则).
+          opts.rrule = builtRrule
+        }
         return mailApi.calendar.eventUpdate(opts)
       } else {
         const opts: EventCreateOpts = {
@@ -296,7 +307,12 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       else startRef.current?.focus()
       return
     }
-    mut.mutate()
+    // Phase 4·#3c — 周期事件 edit: 先弹 scope 对话 (改这一次/整系列)
+    if (isEdit && isRecurring) {
+      setScopeDialogOpen(true)
+      return
+    }
+    mut.mutate(isEdit ? 'all' : undefined)
   }
 
   // ── chip ops ──
@@ -664,6 +680,58 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
           </div>
         )}
       </div>
+
+      {/* Phase 4·#3c — 周期事件 scope 对话 (改这一次 / 整个系列) */}
+      {scopeDialogOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40"
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setScopeDialogOpen(false)
+          }}
+        >
+          <div className="glass-pop p-5 rounded-xl max-w-[340px] mx-4">
+            <div className="text-lead text-ink-fg font-medium mb-1">
+              {t('calendar.form.recurrenceScope.title', '周期事件')}
+            </div>
+            <div className="text-aux text-ink-fg-2 mb-4">
+              {t('calendar.form.recurrenceScope.body', '此修改应用到：')}
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={mut.isPending}
+                onClick={() => {
+                  setScopeDialogOpen(false)
+                  mut.mutate('this')
+                }}
+              >
+                {t('calendar.form.recurrenceScope.thisOnly', '仅此事件')}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={mut.isPending}
+                onClick={() => {
+                  setScopeDialogOpen(false)
+                  mut.mutate('all')
+                }}
+              >
+                {t('calendar.form.recurrenceScope.allSeries', '整个系列')}
+              </button>
+              <button
+                type="button"
+                className="text-meta text-ink-fg-3 mt-1"
+                onClick={() => setScopeDialogOpen(false)}
+              >
+                {t('calendar.form.actions.cancel', '取消')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

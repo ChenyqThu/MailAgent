@@ -164,6 +164,8 @@ export interface EventUpdateOpts {
   rrule?: string
   /** Phase 4·#2 — 全天状态: 不传=保持; true=全天; false=定时. */
   isAllDay?: boolean
+  /** Phase 4·#3c — 改这一次 occurrence (ISO datetime); 留空 = 改整系列. */
+  recurrenceId?: string
   /** 默认 SEQUENCE +1 (RFC 5545 标准). */
   noSequenceBump?: boolean
 }
@@ -181,6 +183,7 @@ export async function runEventUpdate(opts: EventUpdateOpts): Promise<unknown> {
   if (opts.isAllDay !== undefined) {
     args.push(opts.isAllDay ? '--all-day' : '--no-all-day')
   }
+  if (opts.recurrenceId) args.push('--recurrence-id', opts.recurrenceId)
   if (opts.noSequenceBump) args.push('--no-sequence-bump')
   for (const a of opts.attendees || []) {
     if (!a.email) continue

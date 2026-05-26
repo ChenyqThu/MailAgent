@@ -443,3 +443,80 @@ def test_update_event_preserves_all_day_when_not_passed():
     assert "VALUE=DATE" in mock_evt.data
     assert new.vevent.dtstart.value == date(2026, 6, 1)
     assert new.vevent.summary.value == "改名"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4·#3c — update_occurrence (detached occurrence, RECURRENCE-ID override)
+# ---------------------------------------------------------------------------
+
+def _writer_with_recurring_master(rrule: str = "FREQ=WEEKLY;BYDAY=MO"):
+    """造 CalDAVWriter + mock evt, vobject_instance = 仅含 master VEVENT 的 vcal."""
+    master_body = build_vevent(
+        ical_uid="series@mailagent.local",
+        summary="Standup",
+        dtstart_utc=datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc),
+        dtend_utc=datetime(2026, 1, 5, 9, 30, tzinfo=timezone.utc),
+        organizer_email="me@example.com",
+        rrule=rrule,
+    )
+    vcal = vobject.readOne(master_body)
+    mock_evt = MagicMock()
+    mock_evt.vobject_instance = vcal
+    writer = CalDAVWriter.__new__(CalDAVWriter)
+    writer.user = "me@example.com"
+    writer._find_event_by_uid = MagicMock(return_value=(MagicMock(), mock_evt))
+    return writer, mock_evt
+
+
+def test_update_occurrence_adds_recurrence_id_override():
+    """改这一次: master 保留 RRULE + 加 override VEVENT (RECURRENCE-ID)."""
+    writer, mock_evt = _writer_with_recurring_master("FREQ=WEEKLY;BYDAY=MO")
+    result = writer.update_occurrence(
+        ical_uid="series@mailagent.local",
+        recurrence_id_utc=datetime(2026, 1, 12, 9, 0, tzinfo=timezone.utc),
+        summary="改这一次",
+    )
+    assert result["action"] == "occurrence_updated"
+    out = vobject.readOne(mock_evt.data)
+    vevents = out.vevent_list
+    overrides = [v for v in vevents if hasattr(v, "recurrence_id") and v.recurrence_id]
+    masters = [v for v in vevents if not (hasattr(v, "recurrence_id") and v.recurrence_id)]
+    assert len(masters) == 1
+    assert len(overrides) == 1
+    assert overrides[0].summary.value == "改这一次"
+    assert masters[0].rrule.value == "FREQ=WEEKLY;BYDAY=MO"  # master RRULE 保留
+
+
+def test_update_occurrence_inherits_master_fields_when_omitted():
+    """不传字段从 master 继承; dtstart 未传 = 该 occurrence 原时间 (recurrence_id)."""
+    writer, mock_evt = _writer_with_recurring_master()
+    rid = datetime(2026, 1, 12, 9, 0, tzinfo=timezone.utc)
+    writer.update_occurrence(ical_uid="series@mailagent.local", recurrence_id_utc=rid)
+    out = vobject.readOne(mock_evt.data)
+    override = [v for v in out.vevent_list if hasattr(v, "recurrence_id") and v.recurrence_id][0]
+    assert override.summary.value == "Standup"  # 继承 master
+    # dtstart 未传 → recurrence_id; duration 继承 master (30min)
+    assert _to_utc_test(override.dtstart.value) == rid
+
+
+def test_update_occurrence_replaces_existing_override():
+    """已有同 recurrence_id override → 替换非追加 (防重复)."""
+    writer, mock_evt = _writer_with_recurring_master("FREQ=WEEKLY")
+    rid = datetime(2026, 1, 12, 9, 0, tzinfo=timezone.utc)
+    writer.update_occurrence(ical_uid="series@mailagent.local", recurrence_id_utc=rid, summary="v1")
+    # mock_evt.vobject_instance 仍是同 vcal (已含 v1 override), 第二次同 rid → 替换
+    writer.update_occurrence(ical_uid="series@mailagent.local", recurrence_id_utc=rid, summary="v2")
+    out = vobject.readOne(mock_evt.data)
+    overrides = [v for v in out.vevent_list if hasattr(v, "recurrence_id") and v.recurrence_id]
+    assert len(overrides) == 1  # 替换非追加
+    assert overrides[0].summary.value == "v2"
+
+
+def _to_utc_test(dt):
+    """测试 helper: vobject dtstart.value (datetime/date) → UTC datetime."""
+    from datetime import date as _d
+    if isinstance(dt, datetime):
+        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    if isinstance(dt, _d):
+        return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
+    raise TypeError(type(dt))

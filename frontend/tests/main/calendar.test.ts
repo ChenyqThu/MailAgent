@@ -429,6 +429,19 @@ describe('calendar — runEventUpdate', () => {
     await runEventUpdate({ icalUid: 'uid-x', isAllDay: false })
     expect(mockCallCli.mock.calls[0][0]).toContain('--no-all-day')
   })
+
+  test('Phase 4·#3c — recurrenceId 拼 --recurrence-id (改这一次)', async () => {
+    mockCallCli.mockResolvedValue({})
+    await runEventUpdate({
+      icalUid: 'uid-x',
+      summary: '改这次',
+      recurrenceId: '2026-01-12T09:00:00Z'
+    })
+    const args = mockCallCli.mock.calls[0][0]
+    const i = args.indexOf('--recurrence-id')
+    expect(i).toBeGreaterThan(-1)
+    expect(args[i + 1]).toBe('2026-01-12T09:00:00Z')
+  })
 })
 
 // Phase 2.3 — calendar:eventDelete

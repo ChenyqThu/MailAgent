@@ -629,6 +629,9 @@ export interface EventUpdateOpts {
   rrule?: string
   /** Phase 4·#2 — 全天状态: 不传=保持原状态; true=改全天; false=改定时. */
   isAllDay?: boolean
+  /** Phase 4·#3c — 改这一次 occurrence (ISO datetime = 该次原始 dtstart);
+   *  留空 = 改整系列. 传了走 detached occurrence (RECURRENCE-ID override). */
+  recurrenceId?: string
   /** 默认 SEQUENCE +1 (RFC 5545 标准). */
   noSequenceBump?: boolean
 }

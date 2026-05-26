@@ -882,15 +882,26 @@ def calendar_update(
         help="全天状态 (Phase 4·#2): 不传 = 保持原状态; --all-day 改全天; "
              "--no-all-day 改定时事件",
     ),
+    recurrence_id: Optional[str] = typer.Option(
+        None, "--recurrence-id",
+        help="改这一次 occurrence (Phase 4·#3c): ISO datetime = 该次原始 dtstart; "
+             "留空 = 改整系列. 传了走 detached occurrence (override), 忽略 "
+             "--rrule/--all-day/--attendee/--no-sequence-bump",
+    ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """通过 CalDAV PUT update 现有事件 (Phase 2.3). 不传的字段保留原值."""
+    """通过 CalDAV PUT update 现有事件 (Phase 2.3). 不传的字段保留原值.
+
+    --recurrence-id 传了 → 改这一次 (detached occurrence, Phase 4·#3c);
+    否则改整系列 (含 RRULE / 全天状态).
+    """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 
     dtstart_utc: Optional[datetime] = None
     dtend_utc: Optional[datetime] = None
     attendees: Optional[list[dict]] = None
+    rid_utc: Optional[datetime] = None
     try:
         if start:
             dtstart_utc = _parse_iso_datetime_strict(start, "start")
@@ -898,6 +909,8 @@ def calendar_update(
             dtend_utc = _parse_iso_datetime_strict(end, "end")
         if attendee:
             attendees = _parse_attendees(attendee)
+        if recurrence_id:
+            rid_utc = _parse_iso_datetime_strict(recurrence_id, "recurrence-id")
     except CliInvalidArgError as e:
         raise emit_cli_error(cli, e)
 
@@ -908,16 +921,28 @@ def calendar_update(
 
     svc = _build_service(cli)
     try:
-        result = svc.update_event(
-            ical_uid=ical_uid,
-            summary=summary,
-            dtstart_utc=dtstart_utc, dtend_utc=dtend_utc,
-            location=location, description=description,
-            attendees=attendees, status=status,
-            calendar_name=calendar_name,
-            sequence_bump=not no_sequence_bump,
-            rrule=rrule, is_all_day=all_day,
-        )
+        if rid_utc is not None:
+            # Phase 4·#3c — 改这一次 (detached occurrence). 忽略 rrule/all_day/
+            # attendee/sequence_bump (occurrence override 不改 RRULE/全天/与会者).
+            result = svc.update_occurrence(
+                ical_uid=ical_uid,
+                recurrence_id_utc=rid_utc,
+                summary=summary,
+                dtstart_utc=dtstart_utc, dtend_utc=dtend_utc,
+                location=location, description=description,
+                status=status, calendar_name=calendar_name,
+            )
+        else:
+            result = svc.update_event(
+                ical_uid=ical_uid,
+                summary=summary,
+                dtstart_utc=dtstart_utc, dtend_utc=dtend_utc,
+                location=location, description=description,
+                attendees=attendees, status=status,
+                calendar_name=calendar_name,
+                sequence_bump=not no_sequence_bump,
+                rrule=rrule, is_all_day=all_day,
+            )
     except ValueError as e:
         msg = str(e)
         if "not found" in msg:

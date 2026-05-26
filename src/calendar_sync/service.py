@@ -707,6 +707,54 @@ class CalendarService:
             update_kwargs["is_all_day"] = is_all_day
         return writer.update_event(**update_kwargs)
 
+    def update_occurrence(
+        self,
+        *,
+        ical_uid: str,
+        recurrence_id_utc: datetime,
+        summary: Optional[str] = None,
+        dtstart_utc: Optional[datetime] = None,
+        dtend_utc: Optional[datetime] = None,
+        location: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        calendar_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Phase 4·#3c — 改周期事件单次 occurrence (detached occurrence / 改这一次).
+
+        RFC 5545 RECURRENCE-ID override: 保留 master RRULE, 加/替换 override
+        VEVENT. 不传字段从 master 继承.
+
+        Raises:
+            ValueError: status 非法 / dtend ≤ dtstart / writer raise (not found)
+        """
+        if status is not None and status not in VALID_EVENT_STATUS:
+            raise ValueError(f"status={status!r} not in {VALID_EVENT_STATUS}")
+        if (
+            dtstart_utc is not None
+            and dtend_utc is not None
+            and dtend_utc <= dtstart_utc
+        ):
+            raise ValueError(
+                f"dtend_utc ({dtend_utc.isoformat()}) must be > "
+                f"dtstart_utc ({dtstart_utc.isoformat()})"
+            )
+
+        from src.calendar_sync.caldav_writer import CalDAVWriter
+
+        writer = CalDAVWriter(self.cfg)
+        return writer.update_occurrence(
+            ical_uid=ical_uid,
+            recurrence_id_utc=recurrence_id_utc,
+            summary=summary,
+            dtstart_utc=dtstart_utc,
+            dtend_utc=dtend_utc,
+            location=location,
+            description=description,
+            status=status,
+            calendar_name=calendar_name,
+        )
+
     def delete_event(
         self,
         *,

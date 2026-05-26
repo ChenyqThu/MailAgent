@@ -391,6 +391,30 @@ def test_update_event_forwards_is_all_day(mock_writer_cls, fresh_db: str):
     assert kwargs["is_all_day"] is True
 
 
+def test_update_occurrence_validates_status(fresh_db: str):
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    with pytest.raises(ValueError, match="status="):
+        svc.update_occurrence(
+            ical_uid="x",
+            recurrence_id_utc=datetime(2026, 1, 12, 9, tzinfo=timezone.utc),
+            status="BOGUS",
+        )
+
+
+@patch("src.calendar_sync.caldav_writer.CalDAVWriter")
+def test_update_occurrence_forwards_to_writer(mock_writer_cls, fresh_db: str):
+    """Phase 4·#3c — service.update_occurrence 透传给 writer.update_occurrence."""
+    svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
+    mock_writer_cls.return_value.update_occurrence.return_value = {
+        "action": "occurrence_updated"
+    }
+    rid = datetime(2026, 1, 12, 9, 0, tzinfo=timezone.utc)
+    svc.update_occurrence(ical_uid="u", recurrence_id_utc=rid, summary="改这次")
+    _, kwargs = mock_writer_cls.return_value.update_occurrence.call_args
+    assert kwargs["recurrence_id_utc"] == rid
+    assert kwargs["summary"] == "改这次"
+
+
 def test_sync_now_validates_days(fresh_db: str):
     svc = CalendarService(db_path=fresh_db, cfg=MagicMock())
     with pytest.raises(ValueError, match="future_days"):

@@ -733,6 +733,12 @@
         "countAria": "重复次数",
         "untilAria": "结束日期"
       },
+      "recurrenceScope": {
+        "title": "周期事件",
+        "body": "此修改应用到：",
+        "thisOnly": "仅此事件",
+        "allSeries": "整个系列"
+      },
       "attendees": {
         "label": "与会者",
         "placeholder": "输入 email 后回车添加",

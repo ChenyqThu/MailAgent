@@ -494,6 +494,128 @@ class CalDAVWriter:
             "sequence": new_sequence,
         }
 
+    def update_occurrence(
+        self,
+        *,
+        ical_uid: str,
+        recurrence_id_utc: datetime,
+        summary: Optional[str] = None,
+        dtstart_utc: Optional[datetime] = None,
+        dtend_utc: Optional[datetime] = None,
+        location: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        calendar_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Phase 4·#3c — 改周期事件的单次 occurrence (detached occurrence).
+
+        RFC 5545 RECURRENCE-ID override: 在同一 calendar resource 内保留 master
+        VEVENT (RRULE 不变), 加/替换一个 override VEVENT (RECURRENCE-ID = 该
+        occurrence 原始 dtstart, 带新字段). 不传的字段从 master 继承.
+
+        语义 = Outlook "仅修改此事件". 标准 CalDAV multi-VEVENT resource PUT,
+        DavMail 桥接 EWS exception (Outlook 用户日常操作).
+
+        注: occurrence 级 attendees override 不在本切片 scope (override 不带
+        ATTENDEE, Exchange 端继承 master 与会者). 聚焦改时间/标题/地点这一次.
+
+        Raises:
+            ValueError: UID not found / resource 无 master VEVENT
+        """
+        import vobject
+
+        cal, evt = self._find_event_by_uid(ical_uid, calendar_name)
+        if evt is None:
+            raise ValueError(f"event not found by UID: {ical_uid!r}")
+
+        vcal = evt.vobject_instance
+        vevents = list(getattr(vcal, "vevent_list", []) or [])
+        if not vevents:
+            raise ValueError(f"no VEVENT in resource for UID: {ical_uid!r}")
+
+        # master = 无 RECURRENCE-ID 的 VEVENT
+        master = None
+        for ve in vevents:
+            if not (hasattr(ve, "recurrence_id") and ve.recurrence_id):
+                master = ve
+                break
+        if master is None:
+            raise ValueError(
+                f"no master VEVENT (all have RECURRENCE-ID) for {ical_uid!r}"
+            )
+
+        # 删已有同 recurrence_id 的 override (替换语义, 防重复)
+        for ve in list(vevents):
+            if hasattr(ve, "recurrence_id") and ve.recurrence_id:
+                try:
+                    if _to_utc(ve.recurrence_id.value) == recurrence_id_utc:
+                        vcal.remove(ve)
+                except (TypeError, ValueError):
+                    continue
+
+        # master 字段作 fallback (不传的字段从 master 继承)
+        m_summary = (
+            master.summary.value if hasattr(master, "summary") and master.summary else ""
+        )
+        m_dtstart = (
+            _to_utc(master.dtstart.value) if hasattr(master, "dtstart") else recurrence_id_utc
+        )
+        m_dtend = (
+            _to_utc(master.dtend.value)
+            if hasattr(master, "dtend") and master.dtend else m_dtstart
+        )
+        m_duration = m_dtend - m_dtstart
+        m_location = (
+            master.location.value if hasattr(master, "location") and master.location else None
+        )
+        m_description = (
+            master.description.value
+            if hasattr(master, "description") and master.description else None
+        )
+        m_status = (
+            master.status.value if hasattr(master, "status") and master.status else "CONFIRMED"
+        )
+
+        # dtstart 未传 = 该 occurrence 原时间 (recurrence_id_utc);
+        # dtend 未传 = start + master duration.
+        new_dtstart = dtstart_utc if dtstart_utc is not None else recurrence_id_utc
+        new_dtend = dtend_utc if dtend_utc is not None else (new_dtstart + m_duration)
+
+        override_text = build_vevent(
+            ical_uid=ical_uid,
+            summary=summary if summary is not None else m_summary,
+            dtstart_utc=new_dtstart,
+            dtend_utc=new_dtend,
+            organizer_email=self.user,
+            location=location if location is not None else m_location,
+            description=description if description is not None else m_description,
+            status=status if status is not None else m_status,
+            recurrence_id=recurrence_id_utc,
+        )
+        override_vevent = vobject.readOne(override_text).vevent
+        vcal.add(override_vevent)
+
+        evt.data = vcal.serialize()
+        try:
+            evt.save()
+        except Exception as e:
+            raise RuntimeError(
+                f"CalDAV PUT failed for occurrence override "
+                f"{ical_uid!r}@{recurrence_id_utc.isoformat()}: {e}"
+            ) from e
+        logger.info(
+            f"[caldav-writer] updated occurrence uid={ical_uid} "
+            f"recurrence_id={recurrence_id_utc.isoformat()} calendar={cal.name!r}"
+        )
+        return {
+            "action": "occurrence_updated",
+            "ical_uid": ical_uid,
+            "recurrence_id": recurrence_id_utc.isoformat(),
+            "calendar_name": str(cal.name) if cal.name else None,
+            "dtstart_iso": new_dtstart.isoformat(),
+            "dtend_iso": new_dtend.isoformat(),
+        }
+
     def delete_event(
         self,
         *,
