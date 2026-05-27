@@ -42,6 +42,7 @@ from src.cli.commands import calendar as _calendar_module  # noqa: E402
 from src.cli.commands import debug as _debug_module  # noqa: E402
 from src.cli.commands import notion as _notion_module  # noqa: E402
 from src.cli.commands import project_progress as _project_progress_module  # noqa: E402
+from src.cli.commands import folder as _folder_module  # noqa: E402
 
 app.add_typer(_email_module.app, name="email", help="邮件 CRUD / 搜索 / 重传")
 app.add_typer(_admin_module.app, name="admin", help="统计 / 健康 / db-version")
@@ -76,6 +77,10 @@ app.add_typer(
 app.add_typer(
     _init_module.app, name="init",
     help="初始化同步 (PR-4)",
+)
+app.add_typer(
+    _folder_module.app, name="folder",
+    help="存档/草稿文件夹 list / get / search / sync / delete / move / send-draft / edit/create-draft (davmail-only)",
 )
 
 

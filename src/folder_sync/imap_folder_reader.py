@@ -1,0 +1,416 @@
+"""FolderImapReader — Archive / Drafts IMAP 文件夹的读写操作.
+
+对标 src/calendar_sync/caldav_reader.py: 封装一类资源的 IMAP/SMTP 操作, 供
+FolderSyncWorker (同步) + CLI (按需操作) 调用. 复用 DavMailBackend 已有的
+imap_session / _build_reply_mime / 模块级 helper, 不重复造轮子.
+
+davmail-only: 构造时接收一个 DavMailBackend 实例 (持 cfg + drafts_folder +
+_build_reply_mime). AppleScript 模式下不实例化本类.
+
+MIME → dict 解析逻辑抽成模块级纯函数 `parse_message_to_folder_dict`, 单测可直接
+喂 raw MIME bytes, 不需要 mock IMAP.
+"""
+from __future__ import annotations
+
+import hashlib
+import imaplib
+from datetime import datetime, timezone
+from email.message import Message
+from email.parser import BytesParser
+from email.utils import getaddresses
+from typing import TYPE_CHECKING, Optional
+
+from loguru import logger
+
+from src.converter.html_to_markdown import html_to_markdown
+from src.mail.backend.davmail_backend import (
+    DavMailBackend,
+    _decode_mime_header,
+    _extract_display_name,
+    _extract_first_email,
+    _normalize_date_iso,
+    _read_uidvalidity_from_select,
+    _select_is_writable,
+)
+from src.mail.backend.imap_client import (
+    discover_archive_folder,
+    imap_session,
+    smtp_session,
+)
+from src.mail.backend.types import DraftRequest
+
+if TYPE_CHECKING:
+    from src.config import Config
+
+# 单封 body / snippet 上限, 控制 SQLite 体积 (snippet 用于列表预览).
+_SNIPPET_CHARS = 200
+_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+# =============================================================================
+# 纯函数: MIME → folder_email dict (无 IMAP 依赖, 可单测)
+# =============================================================================
+
+def _extract_bodies(msg: Message) -> tuple[str, str]:
+    """从 MIME 提取 (body_html, body_text). 优先 text/html, 兜底 text/plain.
+
+    遍历所有 part, 跳过 attachment (content-disposition=attachment). multipart/
+    alternative 时 html 和 plain 都可能存在, 各取最后一个非空.
+    """
+    body_html = ""
+    body_text = ""
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        disp = (part.get_content_disposition() or "").lower()
+        if disp == "attachment":
+            continue
+        ctype = part.get_content_type()
+        if ctype not in ("text/html", "text/plain"):
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            text = payload.decode(charset, errors="replace")
+        except Exception:
+            continue
+        if ctype == "text/html":
+            body_html = text
+        else:
+            body_text = text
+    return body_html, body_text
+
+
+def _extract_attachments(msg: Message) -> list[dict]:
+    """提取附件元数据 [{filename, size, content_type}]. inline image 不计入."""
+    out: list[dict] = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        disp = (part.get_content_disposition() or "").lower()
+        filename = part.get_filename()
+        if disp != "attachment" and not filename:
+            continue
+        if disp == "inline" and not filename:
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+            size = len(payload) if payload else 0
+        except Exception:
+            size = 0
+        out.append({
+            "filename": _decode_mime_header(filename) if filename else "(unnamed)",
+            "size": size,
+            "content_type": part.get_content_type(),
+        })
+    return out
+
+
+def parse_message_to_folder_dict(
+    raw_bytes: bytes,
+    *,
+    folder: str,
+    imap_uid: int,
+    imap_uidvalidity: Optional[int],
+    is_flagged: bool = False,
+) -> dict:
+    """把 raw MIME bytes 解析成 folder_email row dict (不含本地 id / 时间戳).
+
+    drafts: date_received 取邮件 Date 头 (草稿创建/修改时间); 调用方可覆盖.
+    """
+    import json
+
+    msg = BytesParser().parsebytes(raw_bytes)
+
+    message_id = (msg.get("Message-ID") or "").strip().strip("<>") or None
+    references = msg.get("References") or ""
+    in_reply_to = msg.get("In-Reply-To") or ""
+    thread_id = None
+    if references:
+        refs = references.strip().split()
+        if refs:
+            thread_id = refs[0].strip("<>")
+    elif in_reply_to:
+        thread_id = in_reply_to.strip().strip("<>")
+
+    from_decoded = _decode_mime_header(msg.get("From"))
+    sender_email = _extract_first_email(from_decoded) or from_decoded
+    sender_name = _extract_display_name(from_decoded)
+
+    to_pairs = getaddresses([_decode_mime_header(h) for h in msg.get_all("To", [])])
+    cc_pairs = getaddresses([_decode_mime_header(h) for h in msg.get_all("Cc", [])])
+    to_addr = ", ".join(a for _, a in to_pairs if a) or None
+    cc_addr = ", ".join(a for _, a in cc_pairs if a) or None
+
+    body_html, body_text = _extract_bodies(msg)
+    body_markdown = html_to_markdown(body_html) if body_html else (body_text or "")
+    snippet = " ".join(body_markdown.split())[:_SNIPPET_CHARS] or None
+
+    attachments = _extract_attachments(msg)
+
+    return {
+        "folder": folder,
+        "imap_uid": imap_uid,
+        "imap_uidvalidity": imap_uidvalidity,
+        "message_id": message_id,
+        "thread_id": thread_id,
+        "subject": _decode_mime_header(msg.get("Subject")),
+        "sender": sender_email,
+        "sender_name": sender_name,
+        "to_addr": to_addr,
+        "cc_addr": cc_addr,
+        "date_received": _normalize_date_iso(msg.get("Date") or ""),
+        "is_flagged": 1 if is_flagged else 0,
+        "has_attachments": 1 if attachments else 0,
+        "body_html": body_html or None,
+        "body_markdown": body_markdown or None,
+        "snippet": snippet,
+        "attachments_json": json.dumps(attachments, ensure_ascii=False) if attachments else None,
+        "raw_mime_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+    }
+
+
+# =============================================================================
+# FolderImapReader — IMAP/SMTP 操作
+# =============================================================================
+
+class FolderImapReader:
+    """Archive / Drafts 文件夹的 IMAP/SMTP 操作封装 (davmail-only)."""
+
+    def __init__(self, backend: "DavMailBackend"):
+        self.backend = backend
+        self.cfg: "Config" = backend.cfg
+        # lazy discover, 探测后缓存. drafts 用 backend 已探测的结果.
+        self._archive_folder: Optional[str] = None
+
+    # --- folder name 解析 ---
+
+    def resolve_imap_folder(self, folder: str) -> Optional[str]:
+        """'archive' / 'drafts' → 实际 IMAP folder 名 (探测/缓存). None=找不到."""
+        if folder == "drafts":
+            return self.backend.drafts_folder or "Drafts"
+        if folder == "archive":
+            if self._archive_folder is None:
+                try:
+                    with imap_session(self.cfg, timeout=30) as imap:
+                        self._archive_folder = discover_archive_folder(imap)
+                except Exception as e:
+                    logger.warning(f"[folder-reader] discover archive failed: {e}")
+                    self._archive_folder = None
+            return self._archive_folder
+        raise ValueError(f"unknown folder {folder!r} (expect 'archive'|'drafts')")
+
+    @staticmethod
+    def _since_search_arg(since: datetime) -> str:
+        """datetime → IMAP SEARCH SINCE 参数 'DD-Mon-YYYY'."""
+        return f"{since.day:02d}-{_MONTHS[since.month - 1]}-{since.year}"
+
+    # --- 读 ---
+
+    def list_folder(
+        self,
+        folder: str,
+        *,
+        since: Optional[datetime] = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """列文件夹邮件 (含 body + 附件元数据). since=窗口左界 (archive 用), limit=末尾 N 封.
+
+        返回 folder_email row dict list (不含本地 id / created_at / updated_at).
+        """
+        imap_box = self.resolve_imap_folder(folder)
+        if not imap_box:
+            logger.info(f"[folder-reader] folder {folder!r} not found on server, skip")
+            return []
+        out: list[dict] = []
+        try:
+            with imap_session(self.cfg, timeout=120) as imap:
+                typ, _ = imap.select(imap_box, readonly=True)
+                if typ != "OK":
+                    logger.warning(f"[folder-reader] SELECT {imap_box!r} failed")
+                    return []
+                uv = _read_uidvalidity_from_select(imap)
+                # SEARCH: 有 since 用 SINCE, 否则 ALL
+                if since is not None:
+                    typ, data = imap.uid("search", None, "SINCE", self._since_search_arg(since))
+                else:
+                    typ, data = imap.uid("search", None, "ALL")
+                if typ != "OK" or not data or not data[0]:
+                    return []
+                uids = data[0].split()
+                if limit and len(uids) > limit:
+                    uids = uids[-limit:]
+                if not uids:
+                    return []
+                # 逐封 FETCH BODY.PEEK[] (.PEEK 不置 \Seen). batch 一次取.
+                uid_seq = b",".join(uids).decode()
+                typ, fetched = imap.uid("fetch", uid_seq, "(UID FLAGS BODY.PEEK[])")
+                if typ != "OK" or not fetched:
+                    return []
+                for item in fetched:
+                    parsed = self._parse_fetch_item(item, folder, uv)
+                    if parsed:
+                        out.append(parsed)
+        except Exception as e:
+            logger.error(f"[folder-reader] list_folder({folder}) failed: {e}")
+            return []
+        return out
+
+    @staticmethod
+    def _parse_fetch_item(item, folder: str, uidvalidity: Optional[int]) -> Optional[dict]:
+        """单个 FETCH 响应 tuple → folder_email dict."""
+        if not (isinstance(item, tuple) and len(item) >= 2):
+            return None
+        meta = item[0] if isinstance(item[0], (bytes, bytearray)) else b""
+        meta_str = bytes(meta).decode("utf-8", errors="replace")
+        # UID + FLAGS 从 meta 提取
+        import re
+        m = re.search(r"UID\s+(\d+)", meta_str)
+        if not m:
+            return None
+        uid = int(m.group(1))
+        is_flagged = "\\Flagged" in meta_str
+        raw = bytes(item[1]) if isinstance(item[1], (bytes, bytearray)) else b""
+        if not raw:
+            return None
+        try:
+            d = parse_message_to_folder_dict(
+                raw, folder=folder, imap_uid=uid,
+                imap_uidvalidity=uidvalidity, is_flagged=is_flagged,
+            )
+            return d
+        except Exception as e:
+            logger.warning(f"[folder-reader] parse uid={uid} failed: {e}")
+            return None
+
+    def fetch_raw_by_uid(self, folder: str, uid: int) -> Optional[bytes]:
+        """取单封 raw MIME bytes (send_draft / 附件下载用)."""
+        imap_box = self.resolve_imap_folder(folder)
+        if not imap_box:
+            return None
+        try:
+            with imap_session(self.cfg, timeout=120) as imap:
+                typ, _ = imap.select(imap_box, readonly=True)
+                if typ != "OK":
+                    return None
+                typ, data = imap.uid("fetch", str(uid), "(BODY.PEEK[])")
+                if typ != "OK" or not data:
+                    return None
+                for item in data:
+                    if isinstance(item, tuple) and len(item) >= 2:
+                        return bytes(item[1]) if isinstance(item[1], (bytes, bytearray)) else None
+        except Exception as e:
+            logger.error(f"[folder-reader] fetch_raw_by_uid({folder},{uid}) failed: {e}")
+        return None
+
+    # --- 写 ---
+
+    def delete_message(self, folder: str, uid: int) -> bool:
+        """UID STORE +FLAGS (\\Deleted) + EXPUNGE. 带 read-only 降级检查."""
+        imap_box = self.resolve_imap_folder(folder)
+        if not imap_box:
+            return False
+        try:
+            with imap_session(self.cfg, timeout=60) as imap:
+                typ, _ = imap.select(imap_box, readonly=False)
+                if typ != "OK" or not _select_is_writable(imap):
+                    logger.error(f"[folder-reader] SELECT {imap_box!r} not writable, delete aborted")
+                    return False
+                typ, _ = imap.uid("store", str(uid), "+FLAGS", "(\\Deleted)")
+                if typ != "OK":
+                    return False
+                imap.expunge()
+                return True
+        except Exception as e:
+            logger.error(f"[folder-reader] delete_message({folder},{uid}) failed: {e}")
+            return False
+
+    def move_message(self, src_folder: str, uid: int, dst_imap: str) -> bool:
+        """UID COPY → dst + STORE \\Deleted + EXPUNGE (存档移回 INBOX 等).
+
+        dst_imap 是 IMAP folder 名 (如 'INBOX'), 调用方用 _mailbox_to_imap 转好.
+        """
+        imap_box = self.resolve_imap_folder(src_folder)
+        if not imap_box:
+            return False
+        try:
+            with imap_session(self.cfg, timeout=60) as imap:
+                typ, _ = imap.select(imap_box, readonly=False)
+                if typ != "OK" or not _select_is_writable(imap):
+                    logger.error(f"[folder-reader] SELECT {imap_box!r} not writable, move aborted")
+                    return False
+                typ, _ = imap.uid("copy", str(uid), dst_imap)
+                if typ != "OK":
+                    logger.warning(f"[folder-reader] UID COPY {uid}→{dst_imap!r} failed")
+                    return False
+                imap.uid("store", str(uid), "+FLAGS", "(\\Deleted)")
+                imap.expunge()
+                return True
+        except Exception as e:
+            logger.error(f"[folder-reader] move_message({src_folder},{uid}→{dst_imap}) failed: {e}")
+            return False
+
+    def create_draft(self, draft: DraftRequest) -> Optional[int]:
+        """构建 MIME (复用 backend._build_reply_mime, 支持 mode=new) → IMAP APPEND Drafts.
+
+        Returns: 新草稿的 IMAP UID (APPENDUID), 或 None.
+        """
+        folder = self.backend.drafts_folder or "Drafts"
+        try:
+            mime_bytes = self.backend._build_reply_mime(draft)
+        except Exception as e:
+            logger.error(f"[folder-reader] build draft MIME failed: {e}")
+            return None
+        try:
+            with imap_session(self.cfg, timeout=60) as imap:
+                typ, data = imap.append(folder, "(\\Draft \\Seen)", None, mime_bytes)
+                if typ != "OK":
+                    logger.warning(f"[folder-reader] APPEND draft failed: {data}")
+                    return None
+                return DavMailBackend._parse_appenduid(data)
+        except Exception as e:
+            logger.error(f"[folder-reader] create_draft failed: {e}")
+            return None
+
+    def update_draft(self, old_uid: int, draft: DraftRequest) -> Optional[int]:
+        """编辑草稿 = 先 APPEND 新草稿, 成功后再删旧 (顺序保证失败不丢草稿).
+
+        Returns: 新草稿 UID, 或 None (失败时旧草稿保留).
+        """
+        new_uid = self.create_draft(draft)
+        if new_uid is None:
+            logger.warning("[folder-reader] update_draft: append new failed, old draft kept")
+            return None
+        # 新草稿就位, 删旧的. 删失败只 warning (用户会看到两封, 不致命).
+        if not self.delete_message("drafts", old_uid):
+            logger.warning(
+                f"[folder-reader] update_draft: new uid={new_uid} created but "
+                f"delete old uid={old_uid} failed — duplicate draft may appear"
+            )
+        return new_uid
+
+    def send_draft(self, uid: int) -> bool:
+        """取草稿 raw MIME → SMTP 发送 → 删除草稿.
+
+        发送为对外不可逆动作; 调用方 (CLI) 已做 --yes 二次确认.
+        """
+        raw = self.fetch_raw_by_uid("drafts", uid)
+        if not raw:
+            logger.error(f"[folder-reader] send_draft: draft uid={uid} not found")
+            return False
+        msg = BytesParser().parsebytes(raw)
+        try:
+            with smtp_session(self.cfg) as smtp:
+                smtp.send_message(msg)
+        except Exception as e:
+            logger.error(f"[folder-reader] send_draft SMTP failed (uid={uid}): {e}")
+            return False
+        # 发送成功 → 删草稿. 删失败只 warning (邮件已发出, 草稿残留不致命).
+        if not self.delete_message("drafts", uid):
+            logger.warning(f"[folder-reader] send_draft: sent but delete draft uid={uid} failed")
+        return True

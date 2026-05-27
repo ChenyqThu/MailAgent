@@ -213,7 +213,14 @@ class SyncStore:
     #                source 三态 (caldav / email_ics / legacy_calendar_app) 灰度共存. 时间一律存
     #                UTC epoch (REAL), 前端按 toLocaleString 转本地 TZ. 详见 plan
     #                §"Phase 1.1 DB 升级" + frontend-view-silly-knuth.md.
-    DB_VERSION = 16
+    # v17 (Folder Archive/Drafts, 2026-05): 新增 folder_email + folder_email_fts +
+    #                folder_sync_state 三表, 把 Archive / Drafts 两个 IMAP 文件夹落地为
+    #                SQLite 独立表 (不污染 email_metadata 主表 / 不碰 internal_id 主键体系).
+    #                folder_email: PK=id AUTOINCREMENT + UNIQUE(folder, imap_uidvalidity,
+    #                imap_uid); folder 两态 (archive / drafts). 草稿编辑 = 删旧 APPEND 新 →
+    #                imap_uid 变但本地 id 不变. FolderSyncWorker (davmail-only) 增量同步,
+    #                前端 /archive /drafts 直读. 详见 plan mailagent-davmail-zesty-eclipse.md.
+    DB_VERSION = 17
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -984,6 +991,96 @@ class SyncStore:
             BEGIN
                 DELETE FROM email_attachment_fts WHERE rowid = OLD.attachment_id;
             END
+        """)
+
+        # === v17: folder_email + folder_email_fts + folder_sync_state ===
+        # Archive / Drafts 两个 IMAP 文件夹的本地镜像 (独立表, 不碰 email_metadata 主表).
+        # id = 稳定本地主键 (草稿编辑后 imap_uid 变, 但本地 id 不变); folder ∈ {archive, drafts}.
+        # FolderSyncWorker (davmail-only) 增量同步, 前端 /archive /drafts 直读 (~5ms).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS folder_email (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder TEXT NOT NULL,
+                imap_uidvalidity INTEGER,
+                imap_uid INTEGER,
+                message_id TEXT,
+                thread_id TEXT,
+                subject TEXT,
+                sender TEXT,
+                sender_name TEXT,
+                to_addr TEXT,
+                cc_addr TEXT,
+                date_received TEXT,
+                is_flagged INTEGER DEFAULT 0,
+                has_attachments INTEGER DEFAULT 0,
+                body_html TEXT,
+                body_markdown TEXT,
+                snippet TEXT,
+                attachments_json TEXT,
+                raw_mime_sha256 TEXT,
+                synced_at REAL,
+                created_at REAL,
+                updated_at REAL,
+                deleted_at REAL,
+                CHECK (folder IN ('archive', 'drafts'))
+            )
+        """)
+        # UNIQUE(folder, uidvalidity, uid) — reconcile 用 (folder, uid) 定位 IMAP 端邮件.
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_email_unique
+            ON folder_email(folder, imap_uidvalidity, imap_uid)
+        """)
+        # 列表查询主路径: WHERE folder=? AND deleted_at IS NULL ORDER BY date_received DESC.
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_folder_email_list
+            ON folder_email(folder, deleted_at, date_received DESC)
+        """)
+
+        # folder_email_fts — 对标 email_body_fts (v5) contentful FTS5. folder_email 单表
+        # 自带 subject/sender/body_markdown, 故 trigger 直接取 NEW.* (无需 join email_metadata).
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS folder_email_fts USING fts5(
+                subject,
+                sender,
+                body_markdown,
+                tokenize='porter unicode61 remove_diacritics 2'
+            )
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS folder_email_fts_insert
+            AFTER INSERT ON folder_email BEGIN
+                INSERT INTO folder_email_fts(rowid, subject, sender, body_markdown)
+                VALUES (NEW.id, COALESCE(NEW.subject, ''), COALESCE(NEW.sender, ''),
+                        COALESCE(NEW.body_markdown, ''));
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS folder_email_fts_delete
+            AFTER DELETE ON folder_email BEGIN
+                DELETE FROM folder_email_fts WHERE rowid = OLD.id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS folder_email_fts_update
+            AFTER UPDATE ON folder_email BEGIN
+                DELETE FROM folder_email_fts WHERE rowid = OLD.id;
+                INSERT INTO folder_email_fts(rowid, subject, sender, body_markdown)
+                VALUES (NEW.id, COALESCE(NEW.subject, ''), COALESCE(NEW.sender, ''),
+                        COALESCE(NEW.body_markdown, ''));
+            END
+        """)
+
+        # folder_sync_state — 对标 calendar_sync_state, 每 folder 一行记 UID 游标 + 时间戳.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS folder_sync_state (
+                folder TEXT PRIMARY KEY,
+                imap_uidvalidity INTEGER,
+                last_uidnext INTEGER,
+                last_full_sync_at REAL,
+                last_incremental_sync_at REAL,
+                last_error TEXT,
+                CHECK (folder IN ('archive', 'drafts'))
+            )
         """)
 
         # 更新数据库版本

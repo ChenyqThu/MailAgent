@@ -31,6 +31,11 @@ class DavMailConnectionError(RuntimeError):
 # IMAP LIST 响应里 \\Drafts SPECIAL-USE 标志的正则 (RFC 6154)
 _DRAFTS_FLAG_PATTERN = re.compile(rb"\\Drafts", re.IGNORECASE)
 
+# IMAP LIST 响应里 \\Archive SPECIAL-USE 标志的正则 (RFC 6154).
+# 只匹配 \\Archive (不含 \\All), Outlook/Exchange 主场景用 \\Archive 或 "Archive" fallback;
+# Gmail 的 "[Gmail]/All Mail" 走 fallback 名字列表.
+_ARCHIVE_FLAG_PATTERN = re.compile(rb"\\Archive\b", re.IGNORECASE)
+
 
 _POC_DEFAULT_CIPHER_KEY = "mailagent-poc-shared-key"
 
@@ -205,4 +210,43 @@ def discover_drafts_folder(imap: imaplib.IMAP4) -> Optional[str]:
             continue
 
     logger.warning("[imap-client] could not discover Drafts folder")
+    return None
+
+
+def discover_archive_folder(imap: imaplib.IMAP4) -> Optional[str]:
+    """通过 IMAP LIST SPECIAL-USE 标志找 Archive 文件夹 (RFC 6154 \\Archive).
+
+    Outlook/Exchange 通常叫 "Archive"; 中文环境可能 "存档" / "归档"; Gmail 是
+    "[Gmail]/All Mail". 用 SPECIAL-USE 最稳, fallback 试常见名字.
+
+    Returns:
+        文件夹名 (IMAP path), 或 None 表示找不到 (调用方应跳过 archive 同步).
+    """
+    try:
+        typ, data = imap.list()
+        if typ == "OK" and data:
+            for entry in data:
+                if entry and _ARCHIVE_FLAG_PATTERN.search(entry):
+                    # entry 形如: b'(\\HasNoChildren \\Archive) "/" "Archive"'
+                    parts = entry.decode("utf-8", errors="replace").rsplit(" ", 1)
+                    if len(parts) >= 2:
+                        folder = parts[-1].strip().strip('"')
+                        logger.debug(
+                            f"[imap-client] found Archive via SPECIAL-USE: {folder!r}"
+                        )
+                        return folder
+    except Exception as e:
+        logger.warning(f"[imap-client] LIST SPECIAL-USE (archive) failed: {e}")
+
+    # Fallback: 试常见名字 (同 discover_drafts_folder 风格, 不在循环里 close).
+    for candidate in ("Archive", "INBOX/Archive", "存档", "已归档", "归档", "[Gmail]/All Mail"):
+        try:
+            typ, _ = imap.select(candidate, readonly=True)
+            if typ == "OK":
+                logger.debug(f"[imap-client] found Archive via fallback: {candidate!r}")
+                return candidate
+        except Exception:
+            continue
+
+    logger.warning("[imap-client] could not discover Archive folder")
     return None
