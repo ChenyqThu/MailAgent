@@ -104,6 +104,10 @@ function pinArgs(internalId: number, pinned: boolean, opts: PinOpts): string[] {
   return args
 }
 
+function archiveArgs(internalId: number): string[] {
+  return ['email', 'archive', String(internalId), '-o', 'json']
+}
+
 function llmRunArgs(internalId: number, opts: LlmRunOpts): string[] {
   const args = ['llm', 'run', String(internalId)]
   if (opts.dryRun) args.push('--dry-run')
@@ -177,6 +181,10 @@ const EMAIL_FLAG_TIMEOUT_MS = 30_000
 /** pin / unpin is a single-row UPDATE; bounded very short. */
 const PIN_TIMEOUT_MS = 10_000
 
+/** archive forks IMAP MOVE (INBOX→Archive) + a Notion property update; allow
+ *  for a slow DavMail round-trip without pre-empting an otherwise-healthy move. */
+const ARCHIVE_TIMEOUT_MS = 60_000
+
 export async function runResync(internalId: number, opts: ResyncOpts = {}): Promise<unknown> {
   return callCli(resyncArgs(internalId, opts), {
     write: !opts.dryRun,
@@ -194,6 +202,14 @@ export async function runPin(
     write: !opts.dryRun,
     needsAuth: !opts.dryRun,
     timeoutMs: PIN_TIMEOUT_MS
+  })
+}
+
+export async function runArchive(internalId: number): Promise<unknown> {
+  return callCli(archiveArgs(internalId), {
+    write: true,
+    needsAuth: true,
+    timeoutMs: ARCHIVE_TIMEOUT_MS
   })
 }
 
@@ -228,7 +244,9 @@ export async function runUpdateFlag(
 export function writeFlagDirect(
   internalId: number,
   opts: UpdateFlagOpts
-): { ok: true; data: { outbox_ids: number[]; merged_ids: number[] } } | { ok: false; code: string; message: string } {
+):
+  | { ok: true; data: { outbox_ids: number[]; merged_ids: number[] } }
+  | { ok: false; code: string; message: string } {
   // 至少一个字段非空 (handler 层已经 guard, 这里 defensive)
   if (
     opts.isRead === undefined &&
@@ -400,6 +418,15 @@ export function registerWriteOpsHandlers(): void {
   )
 
   ipcMain.handle(
+    'email:archive',
+    async (_evt, internalId: unknown): Promise<WriteEnvelope<unknown>> => {
+      const idOrErr = ensureInternalId(internalId, 'email:archive')
+      if (typeof idOrErr !== 'number') return idOrErr
+      return envelopeFromCli(runArchive(idOrErr))
+    }
+  )
+
+  ipcMain.handle(
     'llm:run',
     async (_evt, internalId: unknown, opts: LlmRunOpts = {}): Promise<WriteEnvelope<unknown>> => {
       const idOrErr = ensureInternalId(internalId, 'llm:run')
@@ -492,7 +519,7 @@ export function registerWriteOpsHandlers(): void {
       return writeFlagDirect(idOrErr, {
         isRead: o.isRead,
         isFlagged: o.isFlagged,
-        processingStatus: o.processingStatus,
+        processingStatus: o.processingStatus
       })
     }
   )
@@ -505,6 +532,7 @@ export const __testing = {
   llmRunArgs,
   updateFlagArgs,
   emailFlagArgs,
+  archiveArgs,
   envelopeFromCli,
   ensureInternalId
 }

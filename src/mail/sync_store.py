@@ -41,7 +41,7 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
@@ -1479,6 +1479,38 @@ class SyncStore:
                 return True
             except sqlite3.Error as e:
                 logger.error(f"Failed to set pin for {internal_id}: {e}")
+                conn.rollback()
+                return False
+
+    def update_mailbox(self, internal_id: int, mailbox: str) -> bool:
+        """改邮件所属 mailbox (收件箱归档场景: 收件箱 → 存档)。
+
+        归档把邮件 IMAP MOVE 到 Archive 文件夹后, 调本方法把 email_metadata.mailbox
+        改成目标值; 列表查询按 mailbox 过滤 (见 query_emails), 改后该邮件即不再出现在
+        收件箱视图。不删行 (保 v4 body/附件 SSoT + Notion 镜像引用); Archive 副本由
+        FolderSyncWorker 另入 folder_email 表。
+
+        Returns: True=更新成功且值有变; False=邮件不存在 / 值未变 / SQL 错误。
+        """
+        with self._connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT mailbox FROM email_metadata WHERE internal_id = ?",
+                    (internal_id,),
+                ).fetchone()
+                if row is None:
+                    return False
+                if (row['mailbox'] or "") == mailbox:
+                    return False
+                conn.execute(
+                    "UPDATE email_metadata SET mailbox = ?, updated_at = ? WHERE internal_id = ?",
+                    (mailbox, time.time(), internal_id),
+                )
+                conn.commit()
+                logger.info(f"update_mailbox: internal_id={internal_id} → {mailbox!r}")
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update mailbox for {internal_id}: {e}")
                 conn.rollback()
                 return False
 

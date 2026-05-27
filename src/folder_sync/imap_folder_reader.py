@@ -13,8 +13,7 @@ MIME → dict 解析逻辑抽成模块级纯函数 `parse_message_to_folder_dict
 from __future__ import annotations
 
 import hashlib
-import imaplib
-from datetime import datetime, timezone
+from datetime import datetime
 from email.message import Message
 from email.parser import BytesParser
 from email.utils import getaddresses
@@ -382,6 +381,48 @@ class FolderImapReader:
                 return True
         except Exception as e:
             logger.error(f"[folder-reader] move_message({src_folder},{uid}→{dst_imap}) failed: {e}")
+            return False
+
+    def archive_inbox_message(
+        self, message_id: Optional[str], fallback_uid: Optional[int] = None
+    ) -> bool:
+        """把 INBOX 里的邮件 MOVE 到 Archive 文件夹 (收件箱归档).
+
+        与 move_message 对称, 但 src 固定 INBOX (move_message 只接 archive/drafts).
+        SELECT INBOX (writable) → 按 Message-ID 反查**当前** UID (避免用 SQLite 存的可能
+        过期的 imap_uid) → UID COPY → Archive → STORE \\Deleted → EXPUNGE. message_id
+        查不到时回退 fallback_uid (调用方传 email_metadata.imap_uid).
+        """
+        dst = self.resolve_imap_folder("archive")
+        if not dst:
+            logger.error("[folder-reader] archive: Archive 文件夹未发现, 无法归档")
+            return False
+        try:
+            from src.mail.backend.davmail_backend import DavMailBackend
+
+            with imap_session(self.cfg, timeout=60) as imap:
+                typ, _ = imap.select("INBOX", readonly=False)
+                if typ != "OK" or not _select_is_writable(imap):
+                    logger.error("[folder-reader] archive: INBOX SELECT 不可写, 中止")
+                    return False
+                uid = DavMailBackend._lookup_uid_by_message_id(imap, message_id or "")
+                if uid is None:
+                    uid = fallback_uid
+                if uid is None:
+                    logger.warning(
+                        f"[folder-reader] archive: 找不到 INBOX UID (mid={message_id!r})"
+                    )
+                    return False
+                typ, _ = imap.uid("copy", str(uid), dst)
+                if typ != "OK":
+                    logger.warning(f"[folder-reader] archive: UID COPY {uid}→{dst!r} 失败")
+                    return False
+                imap.uid("store", str(uid), "+FLAGS", "(\\Deleted)")
+                imap.expunge()
+                logger.info(f"[folder-reader] archived INBOX uid={uid} → {dst!r}")
+                return True
+        except Exception as e:
+            logger.error(f"[folder-reader] archive_inbox_message failed: {e}")
             return False
 
     def create_draft(self, draft: DraftRequest) -> Optional[int]:

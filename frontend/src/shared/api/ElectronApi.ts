@@ -258,6 +258,12 @@ class ElectronEmailApi implements EmailApi {
     const env = (await invoker()('email:flag', internalId, opts ?? {})) as WriteEnvelope<unknown>
     return unwrap(env)
   }
+  async archive(internalId: number): Promise<unknown> {
+    // Write IPC → envelope. CLI does IMAP MOVE INBOX→Archive + SQLite/Notion
+    // Mailbox→存档 and returns {success, from_mailbox, to_mailbox, notion_updated}.
+    const env = (await invoker()('email:archive', internalId)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
 }
 
 class ElectronFolderApi implements FolderApi {

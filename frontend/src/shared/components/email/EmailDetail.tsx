@@ -148,13 +148,15 @@ type PendingMap = {
   llmRun: boolean
   read: boolean
   flag: boolean
+  archive: boolean
 }
 
 const NO_PENDING: PendingMap = {
   resync: false,
   llmRun: false,
   read: false,
-  flag: false
+  flag: false,
+  archive: false
 }
 
 interface WriteErrorShape {
@@ -391,6 +393,29 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     return () => clearTimeout(timer)
   }, [internalId, queryClient, mailApi])
 
+  // Archive — IMAP MOVE INBOX→Archive + Mailbox→存档 via `mailagent email archive`
+  // (davmail-only; CLI rejects applescript backend with E_INVALID_ARG). On success
+  // the email leaves the inbox list, so we jump to the next (or prev) email and
+  // invalidate the list + this email's queries.
+  const handleArchive = useCallback(async (): Promise<void> => {
+    if (internalId === null) return
+    const archivingId = internalId
+    setPending((p) => ({ ...p, archive: true }))
+    try {
+      await mailApi.email.archive(archivingId)
+      toastSuccess(t('toolbarToast.archiveOk'))
+      if (nextId !== null && nextId !== archivingId) setActive(nextId)
+      else if (prevId !== null && prevId !== archivingId) setActive(prevId)
+      await queryClient.invalidateQueries({ queryKey: ['emails'] })
+      await queryClient.invalidateQueries({ queryKey: ['email', archivingId] })
+    } catch (err) {
+      const e = asWriteError(err)
+      toastError(t('toolbarToast.archiveFail'), e.code ? `${e.code} · ${e.message}` : e.message)
+    } finally {
+      setPending((p) => ({ ...p, archive: false }))
+    }
+  }, [internalId, mailApi, queryClient, t, nextId, prevId, setActive])
+
   const handleResync = useCallback(
     async ({ dryRun }: { dryRun: boolean }): Promise<void> => {
       if (internalId === null) return
@@ -615,6 +640,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         flagState={{ pending: pending.flag }}
         isImportant={email.is_important === true}
         notionUrl={email.notion_url}
+        onArchive={handleArchive}
+        archiveState={{ pending: pending.archive }}
         onPrev={onPrev}
         onNext={onNext}
       />

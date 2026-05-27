@@ -1071,6 +1071,140 @@ def email_list_pinned(
 
 
 # ============================================================
+# email archive — 收件箱邮件归档 (IMAP MOVE INBOX→Archive + Mailbox→存档). davmail-only.
+# ============================================================
+
+_ARCHIVE_MAILBOX = "存档"
+
+
+def _folder_imap_reader(cli: "CliContext"):
+    """构造 FolderImapReader (归档走 IMAP); 要求 davmail backend, 否则 raise CliError.
+
+    与 folder.py _reader 同 gate (folder 级 IMAP 操作 applescript 模式不支持)。
+    """
+    from src.folder_sync.imap_folder_reader import FolderImapReader
+    from src.mail.backend.davmail_backend import DavMailBackend
+
+    backend = cli.backend
+    if not isinstance(backend, DavMailBackend):
+        raise CliInvalidArgError(
+            "归档需要 MAILAGENT_BACKEND=davmail (IMAP MOVE); "
+            f"当前 backend={getattr(backend, 'backend_origin', '?')!r} 不支持.",
+            hint="在 .env 设 MAILAGENT_BACKEND=davmail 并确认 DavMail JVM 在跑.",
+        )
+    return FolderImapReader(backend)
+
+
+async def _update_notion_mailbox(cli: "CliContext", page_id: str, mailbox: str) -> None:
+    """把 Notion 邮件页的 Mailbox (Select) 属性改成目标值 (归档 = 存档)。"""
+    client = cli.notion_sync.client.client  # AsyncClient
+    await client.pages.update(
+        page_id=page_id,
+        properties={"Mailbox": {"select": {"name": mailbox}}},
+    )
+
+
+@app.command("archive")
+def email_archive(
+    ctx: typer.Context,
+    internal_id: int = typer.Argument(..., help="收件箱邮件 internal_id"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="只打 plan (将归档的邮件 + 目标), 不实际 MOVE",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """归档收件箱邮件: IMAP MOVE INBOX→Archive + SQLite/Notion Mailbox→存档 (davmail-only).
+
+    像 Mail.app / Outlook 归档一样把邮件移出收件箱进 Archive 文件夹。不删本地 body /
+    附件 / Notion 页 (仅改 Mailbox 标签, 可逆); Archive 副本由 FolderSyncWorker 入
+    folder_email 表, 前端 /archive 视图可见。
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+
+    meta = cli.sync_store.get(internal_id)
+    if not meta:
+        raise emit_cli_error(cli, CliNotFoundError(
+            f"Email metadata not found for internal_id={internal_id}",
+        ))
+    current_mailbox = meta.get("mailbox") or ""
+    message_id = meta.get("message_id")
+    imap_uid = meta.get("imap_uid")
+    notion_page_id = meta.get("notion_page_id")
+
+    if dry_run:
+        plan = {
+            "internal_id": internal_id,
+            "action": "archive",
+            "from_mailbox": current_mailbox,
+            "to_mailbox": _ARCHIVE_MAILBOX,
+            "message_id": message_id,
+            "has_imap_uid": imap_uid is not None,
+            "notion_page_id": notion_page_id,
+            "dry_run": True,
+        }
+        if cli.output.lower() == "text":
+            print("=== email archive plan (dry-run) ===")
+            for key, value in plan.items():
+                print(f"{key:16} {value}")
+        else:
+            emit(cli, plan)
+        return
+
+    if current_mailbox == _ARCHIVE_MAILBOX:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            f"Email {internal_id} 已在存档 (mailbox={current_mailbox!r})",
+        ))
+
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+
+    # 1. IMAP MOVE INBOX → Archive (davmail-only)
+    try:
+        reader = _folder_imap_reader(cli)
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    moved = reader.archive_inbox_message(message_id, fallback_uid=imap_uid)
+    if not moved:
+        raise emit_cli_error(cli, CliError(
+            f"IMAP 归档失败 (INBOX→Archive) internal_id={internal_id}; "
+            "邮件可能已不在 INBOX 或 Archive 文件夹未发现",
+        ))
+
+    # 2. SQLite: mailbox → 存档 (移出收件箱视图; body/附件保留)
+    cli.sync_store.update_mailbox(internal_id, _ARCHIVE_MAILBOX)
+
+    # 3. Notion 镜像: Mailbox 属性 → 存档 (可逆, 不删页)。失败仅 warn — IMAP 已成功,
+    #    不该因 Notion 抖动让整体算失败 (下次 resync 可纠正)。
+    notion_updated = False
+    notion_error = None
+    if notion_page_id:
+        try:
+            asyncio.run(_update_notion_mailbox(cli, notion_page_id, _ARCHIVE_MAILBOX))
+            notion_updated = True
+        except Exception as e:  # noqa: BLE001 — Notion SDK 抛各种, 不阻断归档
+            notion_error = str(e)
+
+    result = {
+        "internal_id": internal_id,
+        "action": "archive",
+        "success": True,
+        "from_mailbox": current_mailbox,
+        "to_mailbox": _ARCHIVE_MAILBOX,
+        "notion_updated": notion_updated,
+        "notion_error": notion_error,
+        "dry_run": False,
+    }
+    if cli.output.lower() == "text":
+        print(f"archived internal_id={internal_id}: {current_mailbox} → {_ARCHIVE_MAILBOX} "
+              f"(notion_updated={notion_updated})")
+    else:
+        emit(cli, result)
+
+
+# ============================================================
 # Sprint 15: email flag — 写 SQLite intent + outbox 双 target
 # ============================================================
 

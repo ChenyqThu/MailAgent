@@ -340,6 +340,11 @@ export interface EmailApi {
    * Sprint 15 grayscale (frontend/SPRINT15-D handoff §6).
    */
   flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown>
+  /** 归档收件箱邮件: CLI `email archive` 做 IMAP MOVE INBOX→Archive + SQLite/Notion
+   *  Mailbox→存档 (davmail-only)。成功后 renderer 失效 emails/email 查询, 邮件移出收件箱
+   *  视图; Archive 副本由 FolderSyncWorker 进 folder_email, /archive 视图可见。
+   *  返回 CLI data 块 {success, from_mailbox, to_mailbox, notion_updated} 或抛 Error&{code}。 */
+  archive(internalId: number): Promise<unknown>
 }
 
 // ---- Phase C — 存档 / 草稿箱 folder surface --------------------------------

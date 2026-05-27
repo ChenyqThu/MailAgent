@@ -38,7 +38,10 @@ export class HttpApi implements MailApi {
     // FastAPI which then forks the `mailagent email flag` CLI on the Mac
     // host (same write path as Electron build), so all mutating semantics
     // stay on the host process. Wired in V2-Sprint 3.
-    flag: () => notImplemented('email.flag')
+    flag: () => notImplemented('email.flag'),
+    // 归档 — V2 web build 同样 proxy 本地 FastAPI fork `mailagent email archive`
+    // (IMAP MOVE + Mailbox→存档 都在 Mac host)。Wired in V2-Sprint.
+    archive: () => notImplemented('email.archive')
   }
 
   // Phase C — 存档 / 草稿箱. V2 web build 后续 proxy through 本地 FastAPI

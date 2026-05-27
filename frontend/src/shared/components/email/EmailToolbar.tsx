@@ -89,6 +89,11 @@ interface ToolbarProps {
   isFlagged?: boolean
   flagState?: WriteActionState
 
+  /** 归档收件箱邮件 (IMAP MOVE INBOX→Archive + Mailbox→存档). davmail-only —
+   *  EmailDetail 在非 davmail 后端可不传, 按钮则保持禁用占位。 */
+  onArchive?: () => void
+  archiveState?: WriteActionState
+
   /** Sprint 13 — passive read-out from `email_metadata.is_important`
    *  (RFC header bit, see reader._parse_importance). No write path. */
   isImportant?: boolean
@@ -623,6 +628,8 @@ export function EmailToolbar({
   onToggleFlag,
   isFlagged,
   flagState,
+  onArchive,
+  archiveState,
   isImportant,
   notionUrl,
   onPrev,
@@ -738,15 +745,16 @@ export function EmailToolbar({
         </HoverTip>
       )}
 
-      {/* Archive — no CLI yet. Stays in mockup layout but data-disabled
-          + opacity-50; HoverTip surfaces the gap so users don't think the
-          button is broken. */}
+      {/* Archive — IMAP MOVE INBOX→Archive via `mailagent email archive`
+          (davmail-only). onArchive 未接 (非 davmail 后端) 时 GhostBtn 因 !onClick
+          自动禁用, hoverHint 解释 davmail 限制, 用户不会以为按钮坏了。 */}
       <GhostBtn
         icon={<Archive size={13} strokeWidth={2} />}
         label={t('toolbar.archive')}
         showLabel={wantsLabels}
-        hoverHint={t('toolbar.archiveBlocked')}
-        disabled
+        hoverHint={onArchive ? t('toolbar.archive') : t('toolbar.archiveBlocked')}
+        pending={archiveState?.pending}
+        onClick={onArchive}
       />
 
       <Divider />

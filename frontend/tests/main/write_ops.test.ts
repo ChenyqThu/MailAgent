@@ -53,6 +53,10 @@ describe('write_ops — argv builders', () => {
     ).toEqual(['email', 'resync', '53675', '--dry-run', '--replace-existing', '--no-parent'])
   })
 
+  test('archive args = ["email", "archive", "<id>", "-o", "json"]', () => {
+    expect(__testing.archiveArgs(53675)).toEqual(['email', 'archive', '53675', '-o', 'json'])
+  })
+
   test('llm:run flags compose: --dry-run + --force + --no-overwrite', () => {
     expect(__testing.llmRunArgs(53675, { dryRun: true, force: true, noOverwrite: true })).toEqual([
       'llm',
@@ -178,9 +182,12 @@ describe('write_ops — argv builders', () => {
   })
 
   test('emailFlag allowConcurrent=false drops the bypass flag', () => {
-    expect(
-      __testing.emailFlagArgs(53675, { isFlagged: true, allowConcurrent: false })
-    ).toEqual(['email', 'flag', '53675', '--is-flagged'])
+    expect(__testing.emailFlagArgs(53675, { isFlagged: true, allowConcurrent: false })).toEqual([
+      'email',
+      'flag',
+      '53675',
+      '--is-flagged'
+    ])
   })
 
   test('emailFlag empty ids array falls back to positional id', () => {
@@ -275,9 +282,7 @@ describe('write_ops — runResync / runLlmRun / runUpdateFlag → callCli plumbi
     mockCallCli.mockRejectedValueOnce(
       new CliError('E_PM2_RUNNING', 9, 'pass --allow-concurrent to bypass')
     )
-    const env = await __testing.envelopeFromCli<unknown>(
-      runEmailFlag(53675, { isFlagged: true })
-    )
+    const env = await __testing.envelopeFromCli<unknown>(runEmailFlag(53675, { isFlagged: true }))
     expect(env.ok).toBe(false)
     if (!env.ok) {
       expect(env.code).toBe('E_PM2_RUNNING')
