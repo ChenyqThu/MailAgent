@@ -36,6 +36,21 @@ export class HttpApi implements MailApi {
     flag: () => notImplemented('email.flag')
   }
 
+  // Phase C — 存档 / 草稿箱. V2 web build 后续 proxy through 本地 FastAPI
+  // (folder_email 直读 + `mailagent folder` CLI fork on the Mac host).
+  folder = {
+    list: () => notImplemented('folder.list'),
+    get: () => notImplemented('folder.get'),
+    search: () => notImplemented('folder.search'),
+    syncStatus: () => notImplemented('folder.syncStatus'),
+    syncNow: () => notImplemented('folder.syncNow'),
+    deleteMsg: () => notImplemented('folder.deleteMsg'),
+    move: () => notImplemented('folder.move'),
+    sendDraft: () => notImplemented('folder.sendDraft'),
+    createDraft: () => notImplemented('folder.createDraft'),
+    editDraft: () => notImplemented('folder.editDraft')
+  }
+
   attachment = {
     list: () => notImplemented('attachment.list'),
     localPath: () => notImplemented('attachment.localPath'),

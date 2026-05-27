@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { bootNativeTheme, registerAppearanceIpc } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
 import { registerEmailHandlers } from './handlers/email'
+import { registerFolderHandlers } from './handlers/folder'
 import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
 import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
@@ -262,6 +263,8 @@ app.whenReady().then(() => {
   // Sprint 1.2: IPC handlers (read-only — SQLite direct, ~4ms).
   // Write handlers (resync / update-flag) land in Sprint 5 atop cli_runner.
   registerEmailHandlers()
+  // Phase C — 存档 / 草稿箱 folder_email 读写 (better-sqlite3 直读 + CLI fork).
+  registerFolderHandlers()
   registerAttachmentHandlers()
   registerTranslateHandlers()
   // Sprint 4 §2.1 — AI chat IPC stream bridge + the two production

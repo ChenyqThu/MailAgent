@@ -3733,3 +3733,62 @@ body:not([data-batch-mode='true']) #batch-bar {
 .btn-coral:active { transform: scale(0.98); }
 .btn-coral:disabled { opacity: 0.6; cursor: wait; }
 
+/* ── Phase C — 草稿 TipTap 编辑器 (DraftEditor) ──────────────────────────
+ * StarterKit v3 渲染到 .ProseMirror; 这里给它 prose tone + 去掉默认 outline,
+ * min-height 让空编辑器有可点击区域。颜色全走 ink token 跟整体一致 (与
+ * EmailBodyFrame 的正文样式同源, 只是这里是可编辑 contenteditable)。 */
+.folder-draft-editor .ProseMirror {
+  outline: none;
+  min-height: 240px;
+  color: rgb(var(--ink-fg-1));
+  font-size: 14px;
+  line-height: 1.7;
+}
+.folder-draft-editor .ProseMirror p { margin: 0 0 12px; }
+.folder-draft-editor .ProseMirror strong { color: rgb(var(--ink-fg)); font-weight: 600; }
+.folder-draft-editor .ProseMirror em { font-style: italic; }
+.folder-draft-editor .ProseMirror s { text-decoration: line-through; }
+.folder-draft-editor .ProseMirror u { text-decoration: underline; }
+.folder-draft-editor .ProseMirror a {
+  color: rgb(var(--c-accent));
+  text-decoration: underline;
+  text-decoration-color: rgb(var(--c-accent) / 0.4);
+  text-underline-offset: 3px;
+}
+.folder-draft-editor .ProseMirror code {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12.5px;
+  background: rgb(var(--ink-fg) / 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: rgb(var(--ink-fg));
+}
+.folder-draft-editor .ProseMirror pre {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12.5px;
+  background: rgb(var(--ink-fg) / 0.06);
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  color: rgb(var(--ink-fg-1));
+  margin: 12px 0;
+}
+.folder-draft-editor .ProseMirror pre code { background: transparent; padding: 0; }
+.folder-draft-editor .ProseMirror ul,
+.folder-draft-editor .ProseMirror ol { padding-left: 22px; margin: 0 0 12px; }
+.folder-draft-editor .ProseMirror li { margin-bottom: 4px; }
+.folder-draft-editor .ProseMirror blockquote {
+  border-left: 2px solid rgb(var(--ink-border));
+  padding-left: 14px;
+  color: rgb(var(--ink-fg-2));
+  margin: 14px 0;
+}
+.folder-draft-editor .ProseMirror h1,
+.folder-draft-editor .ProseMirror h2,
+.folder-draft-editor .ProseMirror h3 {
+  color: rgb(var(--ink-fg));
+  font-weight: 600;
+  margin: 18px 0 8px;
+}
+

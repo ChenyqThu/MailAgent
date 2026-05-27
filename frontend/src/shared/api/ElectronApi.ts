@@ -51,6 +51,16 @@ import type {
   EmailFlagOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  FolderApi,
+  FolderCreateDraftOpts,
+  FolderEditDraftOpts,
+  FolderEmailDetail,
+  FolderEmailMeta,
+  FolderListOpts,
+  FolderName,
+  FolderSearchOpts,
+  FolderSearchResult,
+  FolderSyncStatusResult,
   EnvApi,
   EnvSetResult,
   EnvSnapshot,
@@ -230,6 +240,47 @@ class ElectronEmailApi implements EmailApi {
     // success; on failure the envelope carries E_PM2_RUNNING / E_AUTH /
     // E_INVALID_ARG etc. for the renderer to branch on.
     const env = (await invoker()('email:flag', internalId, opts ?? {})) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+}
+
+class ElectronFolderApi implements FolderApi {
+  // Reads — better-sqlite3 直读, no envelope (mirrors ElectronEmailApi reads)
+  async list(opts: FolderListOpts): Promise<FolderEmailMeta[]> {
+    return (await invoker()('folder:list', opts)) as FolderEmailMeta[]
+  }
+  async get(id: number): Promise<FolderEmailDetail | null> {
+    return (await invoker()('folder:get', id)) as FolderEmailDetail | null
+  }
+  async search(opts: FolderSearchOpts): Promise<FolderSearchResult> {
+    return (await invoker()('folder:search', opts)) as FolderSearchResult
+  }
+  async syncStatus(): Promise<FolderSyncStatusResult> {
+    return (await invoker()('folder:syncStatus')) as FolderSyncStatusResult
+  }
+  // Writes — envelope → unwrap (mirrors ElectronCalendarApi write methods)
+  async syncNow(folder: FolderName, full?: boolean): Promise<unknown> {
+    const env = (await invoker()('folder:syncNow', folder, full)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async deleteMsg(id: number): Promise<unknown> {
+    const env = (await invoker()('folder:delete', id)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async move(id: number, to?: string): Promise<unknown> {
+    const env = (await invoker()('folder:move', id, to)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async sendDraft(id: number): Promise<unknown> {
+    const env = (await invoker()('folder:sendDraft', id)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async createDraft(opts: FolderCreateDraftOpts): Promise<unknown> {
+    const env = (await invoker()('folder:createDraft', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async editDraft(opts: FolderEditDraftOpts): Promise<unknown> {
+    const env = (await invoker()('folder:editDraft', opts)) as WriteEnvelope<unknown>
     return unwrap(env)
   }
 }
@@ -658,6 +709,7 @@ class ElectronPromptsApi implements PromptsApi {
 
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
+  folder: FolderApi = new ElectronFolderApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()
   chat: ChatApi = new ElectronChatApi()

@@ -31,6 +31,7 @@ import {
 
 import { AdminLayout } from './components/layout/AdminLayout'
 import { CalendarLayout } from './components/layout/CalendarLayout'
+import { FolderLayout } from './components/layout/FolderLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
 import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
 import { SettingsLayout } from './components/layout/SettingsLayout'
@@ -159,6 +160,22 @@ const inboxRoute = createRoute({
   }
 })
 
+// Phase C — 存档 / 草稿箱. Two top-level mailbox routes, each mounting the
+// shared FolderLayout shell with a fixed `folder` prop (no `view` search
+// param — these are distinct routes, not inbox filters). Mirrors the
+// inboxRoute style (createRoute + addChildren below).
+const archiveRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/archive',
+  component: () => <FolderLayout folder="archive" />
+})
+
+const draftsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/drafts',
+  component: () => <FolderLayout folder="drafts" />
+})
+
 // `/admin` is a parent route that only renders <Outlet/> — visit a child
 // directly (/admin/llm, /admin/kanban, /admin/calendar). The Sidebar +
 // CommandPalette always navigate to a specific child, never to `/admin`
@@ -246,6 +263,8 @@ const isPackagedFileProtocol =
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     inboxRoute,
+    archiveRoute,
+    draftsRoute,
     adminRoute.addChildren([adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),

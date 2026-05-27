@@ -20,11 +20,13 @@ import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   Activity,
+  Archive,
   BarChart3,
   CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  FileText,
   HelpCircle,
   History,
   Inbox,
@@ -383,6 +385,20 @@ export function Sidebar(): React.ReactElement {
             label={t('nav.outbox')}
             selected={selectedView === 'outbox'}
             onClick={() => handleViewClick('outbox')}
+          />
+          {/* Phase C — 存档 / 草稿箱. pathname-driven selection (separate
+              routes, not inbox `view` filters); 仿 VIEW section 的 LLM/看板/日历. */}
+          <NavRow
+            icon={<Archive size={15} strokeWidth={1.75} />}
+            label={t('nav.archive')}
+            selected={pathname === '/archive'}
+            onClick={() => navigate({ to: '/archive' })}
+          />
+          <NavRow
+            icon={<FileText size={15} strokeWidth={1.75} />}
+            label={t('nav.drafts')}
+            selected={pathname === '/drafts'}
+            onClick={() => navigate({ to: '/drafts' })}
           />
           <NavRow
             icon={MAILBOX_ICON.flagged}

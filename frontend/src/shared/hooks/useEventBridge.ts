@@ -85,6 +85,15 @@ export function useEventBridge(): void {
         )
         return
       }
+      // Phase C — folder 同步完成 (worker safe_publish('folder.synced', ...))
+      // → 刷新 archive / drafts 列表 + sync-status. FolderList useQuery key 是
+      // ['folder', folder], 这里宽 invalidate ['folder'] 命中两个 folder + status.
+      if (t === 'folder.synced') {
+        debounceInvalidate('["folder"]', () =>
+          queryClient.invalidateQueries({ queryKey: ['folder'] })
+        )
+        return
+      }
       // LLM 完成 → 单封 ai 字段 + 列表 (ai_priority / ai_action 显示)
       if (t === 'llm.success') {
         if (id != null) {

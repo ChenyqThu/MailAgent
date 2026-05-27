@@ -273,6 +273,115 @@ export interface EmailApi {
   flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown>
 }
 
+// ---- Phase C — 存档 / 草稿箱 folder surface --------------------------------
+//
+// 独立于 email_metadata 的 `folder_email` 表 (DB v17). 读 (list/get/search/
+// syncStatus) 走 Electron main handler 的 better-sqlite3 直读 (~5ms); 写
+// (sync-now / delete / move / send-draft / create-draft / edit-draft) fork
+// `mailagent folder <cmd>` CLI (davmail-only). 写方法跟 calendar 写方法一致,
+// 返回 unwrap 后的 CLI `data` (失败时 ElectronApi 抛带 code 的 Error)。
+
+export type FolderName = 'archive' | 'drafts'
+
+export interface FolderAttachmentMeta {
+  filename: string
+  size: number
+  content_type: string
+}
+
+/** 列表项 — 不含正文 (body_html/body_markdown). */
+export interface FolderEmailMeta {
+  id: number
+  folder: FolderName
+  imap_uid: number
+  imap_uidvalidity: number
+  message_id: string | null
+  thread_id: string | null
+  subject: string
+  sender: string
+  sender_name: string | null
+  to_addr: string
+  cc_addr: string
+  date_received: string | null
+  is_flagged: boolean
+  has_attachments: boolean
+  snippet: string | null
+  attachments: FolderAttachmentMeta[]
+}
+
+/** 详情 — 列表项 + 正文. */
+export interface FolderEmailDetail extends FolderEmailMeta {
+  body_html: string | null
+  body_markdown: string | null
+}
+
+/** folder_sync_state 表行 (sync-status 输出). */
+export interface FolderSyncStateItem {
+  folder: string
+  imap_uidvalidity: number | null
+  last_uidnext: number | null
+  last_full_sync_at: number | null
+  last_incremental_sync_at: number | null
+  last_error: string | null
+}
+
+export interface FolderListOpts {
+  folder: FolderName
+  limit?: number
+  offset?: number
+}
+
+export interface FolderSearchOpts {
+  query: string
+  folder?: FolderName
+  /** Default false → CJK-aware smart 改写; true → 原样 FTS5 passthrough. */
+  raw?: boolean
+  limit?: number
+}
+
+export interface FolderSearchResult {
+  query: string
+  transformed_query: string | null
+  total_hits: number
+  hits: FolderEmailMeta[]
+}
+
+export interface FolderSyncStatusResult {
+  states: FolderSyncStateItem[]
+  counts: Record<string, number>
+}
+
+export interface FolderCreateDraftOpts {
+  to: string
+  cc?: string
+  subject?: string
+  html: string
+}
+
+export interface FolderEditDraftOpts {
+  id: number
+  html: string
+  to?: string
+  cc?: string
+  subject?: string
+}
+
+export interface FolderApi {
+  // 读 (无 auth, better-sqlite3 直读)
+  list(opts: FolderListOpts): Promise<FolderEmailMeta[]>
+  get(id: number): Promise<FolderEmailDetail | null>
+  search(opts: FolderSearchOpts): Promise<FolderSearchResult>
+  syncStatus(): Promise<FolderSyncStatusResult>
+  // 写 (needsAuth + davmail-only, fork CLI). 返回 unwrap 后的 CLI data,
+  // 失败抛带 `code` 的 Error (同 calendar 写方法约定)。
+  syncNow(folder: FolderName, full?: boolean): Promise<unknown>
+  deleteMsg(id: number): Promise<unknown>
+  move(id: number, to?: string): Promise<unknown>
+  sendDraft(id: number): Promise<unknown>
+  createDraft(opts: FolderCreateDraftOpts): Promise<unknown>
+  editDraft(opts: FolderEditDraftOpts): Promise<unknown>
+}
+
 // ---- Sprint 6 §2.2 — LLM dashboard surface --------------------------------
 
 export interface LlmStatsData {
@@ -1237,6 +1346,7 @@ export type SseEventType =
   | 'llm.success'
   | 'llm.failed'
   | 'llm.gave_up'
+  | 'folder.synced'
 
 export interface SseEvent {
   event_type: SseEventType | string
@@ -1244,6 +1354,8 @@ export interface SseEvent {
   internal_id: number | null
   data: Record<string, unknown>
   source: string
+  /** Phase C — `folder.synced` 事件携带的 folder 名 (archive | drafts). */
+  folder?: string
 }
 
 export type EventsConnectionState =
@@ -1371,6 +1483,8 @@ export interface PromptsApi {
 
 export interface MailApi {
   email: EmailApi
+  /** Phase C — 存档 / 草稿箱 folder_email 表 (DB v17). */
+  folder: FolderApi
   attachment: AttachmentApi
   ai: AiApi
   chat: ChatApi
