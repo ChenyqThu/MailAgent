@@ -15,12 +15,10 @@ from typing import Optional, List
 
 from loguru import logger
 
-# xlsx → csv 转换所需
-try:
-    import pandas as pd
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
+# xlsx → csv 转换所需 pandas — 延迟到实际转换时 import (见 convert_xlsx_to_csv)。
+# pandas 冷 import ~0.4s, 而 office_converter 被 notion.pages → notion.sync 链式拉进
+# CLI 启动路径, 大量只读命令 (email draft --dry-run 等) 根本不转 xlsx, 不该为它付这笔
+# 启动开销。lazy 化后整条 import 链不再加载 pandas, CLI 冷启动快 ~0.4-0.5s。
 
 # 支持转换的扩展名映射
 OFFICE_TO_PDF_EXTENSIONS = {'.docx', '.pptx'}
@@ -145,7 +143,9 @@ def convert_to_csv(input_path: str, output_dir: str) -> List[str]:
     if inp.suffix.lower() not in EXCEL_TO_CSV_EXTENSIONS:
         return []
 
-    if not HAS_PANDAS:
+    try:
+        import pandas as pd
+    except ImportError:
         logger.warning("pandas not installed, skipping xlsx → csv conversion")
         return []
 

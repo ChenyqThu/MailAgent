@@ -35,7 +35,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-import pandas as pd
+# pandas 延迟到实际解析 xlsx 时 import (见 _parse_date_or_note /
+# _read_sheet_with_dual_header / parse_xlsx_v2)。本模块被 CLI project-progress 命令组
+# import (为拿 SheetKind 等), 但绝大多数 CLI 调用不解析 xlsx — pandas 冷 import ~0.3s
+# 不该计入 CLI 启动。type 注解里的 pd.DataFrame 因 `from __future__ import annotations`
+# 已是惰性字符串, 不在 import 期 eval。
 
 from .priority import normalize_priority
 from .progress_parser import (
@@ -237,6 +241,8 @@ def _parse_date_or_note(raw: Any) -> Tuple[Optional[date], str]:
     支持 datetime / Timestamp / 'YYYY-MM-DD HH:MM:SS' / 'YYYY-MM-DD' / 'MM/DD/YYYY' 等.
     'TBD' / 'Finished' / '待定' / '/' / '' 等非日期文本 → (None, '原文 or "")
     """
+    import pandas as pd
+
     if raw is None:
         return None, ""
     if isinstance(raw, (datetime, pd.Timestamp)):
@@ -314,6 +320,8 @@ def _read_sheet_with_dual_header(
         否则当作双行 (跳过下一行中文标签).
       - 没找到 → 返回 None
     """
+    import pandas as pd
+
     try:
         df_raw = pd.read_excel(
             io.BytesIO(content), sheet_name=sheet_name, header=None, engine=engine
@@ -487,6 +495,8 @@ def parse_xlsx_v2(
         sheets: 限制解析哪些 sheet (默认全 3 个 ONGOING/SHIPPED/SUSPENDED).
                 Filling-in Guide 永远跳过.
     """
+    import pandas as pd
+
     if isinstance(data, (str, Path)):
         content = Path(data).read_bytes()
     else:
