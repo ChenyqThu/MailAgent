@@ -76,5 +76,20 @@ def sync_folder_once(
     except Exception as e:  # sync_state 写失败不影响主数据
         logger.warning(f"[folder-sync] upsert_sync_state({folder}) failed: {e}")
 
+    # SSE: 有变更时 publish folder.synced → 前端 useEventBridge invalidate ['folder', folder].
+    # silent on failure (主同步不被 SSE 烧穿).
+    if stats.get("inserted") or stats.get("updated") or stats.get("soft_deleted"):
+        try:
+            from src.events.publisher import safe_publish
+
+            safe_publish("folder.synced", {
+                "folder": folder,
+                "inserted": stats.get("inserted", 0),
+                "updated": stats.get("updated", 0),
+                "soft_deleted": stats.get("soft_deleted", 0),
+            })
+        except Exception:
+            pass
+
     logger.info(f"[folder-sync] sync_folder_once({folder}, full={full}): {stats}")
     return stats

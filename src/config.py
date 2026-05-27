@@ -539,6 +539,33 @@ class Config(BaseSettings):
         default=180, env="CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS",
         description="CalendarSyncWorker 全量 sync 窗口右边界 (今天 + N 天). 默认 180.",
     )
+    # ============================================================
+    # FolderSyncWorker (Archive/Drafts IMAP → SQLite folder_email 表) 开关 + 窗口.
+    # davmail-only; AppleScript 模式下 worker 不启动. 详见 plan mailagent-davmail-zesty-eclipse.md.
+    mailbox_folder_sync_enabled: bool = Field(
+        default=False, env="MAILBOX_FOLDER_SYNC_ENABLED",
+        description=(
+            "启用 FolderSyncWorker (asyncio loop, mail-sync 进程内轮询 DavMail IMAP "
+            "Archive/Drafts 文件夹, 增量 sync 到 SQLite folder_email 表). 默认关闭. "
+            "davmail-only — MAILAGENT_BACKEND=applescript 时不启动."
+        ),
+    )
+    folder_sync_poll_interval_sec: int = Field(
+        default=60, env="FOLDER_SYNC_POLL_INTERVAL_SEC",
+        description="FolderSyncWorker IMAP STATUS 轮询间隔 (秒). 默认 60s.",
+    )
+    archive_sync_past_days: int = Field(
+        default=365, env="ARCHIVE_SYNC_PAST_DAYS",
+        description="Archive 同步窗口 (最近 N 天). 越大首次同步越久 + 占空间. 默认 365.",
+    )
+    archive_sync_max_messages: int = Field(
+        default=5000, env="ARCHIVE_SYNC_MAX_MESSAGES",
+        description="Archive 同步上限封数 (防极端大邮箱). 超出按 date 降序截断. 默认 5000.",
+    )
+    frontend_mailbox_folders_enabled: bool = Field(
+        default=False, env="FRONTEND_MAILBOX_FOLDERS_ENABLED",
+        description="前端存档/草稿箱入口灰度开关 (Sidebar 显隐). 默认关闭.",
+    )
     frontend_calendar_v2_enabled: bool = Field(
         default=False, env="FRONTEND_CALENDAR_V2_ENABLED",
         description=(

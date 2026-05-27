@@ -308,6 +308,35 @@ class FolderImapReader:
             logger.error(f"[folder-reader] fetch_raw_by_uid({folder},{uid}) failed: {e}")
         return None
 
+    def folder_status(self, folder: str) -> Optional[tuple[Optional[int], Optional[int]]]:
+        """IMAP STATUS folder (UIDVALIDITY UIDNEXT) → (uidvalidity, uidnext).
+
+        worker tick 用它判断 folder 有没有变 (uidnext 增 = 新邮件; uidvalidity 变 =
+        服务端重建索引). None = folder 不存在 (如没 Archive 文件夹).
+        """
+        import re
+
+        imap_box = self.resolve_imap_folder(folder)
+        if not imap_box:
+            return None
+        try:
+            with imap_session(self.cfg, timeout=30) as imap:
+                typ, data = imap.status(imap_box, "(UIDNEXT UIDVALIDITY)")
+                if typ != "OK" or not data:
+                    return None
+                line = data[0]
+                if isinstance(line, (bytes, bytearray)):
+                    line = bytes(line).decode("utf-8", errors="replace")
+                uv_m = re.search(r"UIDVALIDITY\s+(\d+)", line)
+                un_m = re.search(r"UIDNEXT\s+(\d+)", line)
+                return (
+                    int(uv_m.group(1)) if uv_m else None,
+                    int(un_m.group(1)) if un_m else None,
+                )
+        except Exception as e:
+            logger.warning(f"[folder-reader] folder_status({folder}) failed: {e}")
+            return None
+
     # --- 写 ---
 
     def delete_message(self, folder: str, uid: int) -> bool:
