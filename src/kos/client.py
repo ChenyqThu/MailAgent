@@ -367,6 +367,19 @@ class KOSClient:
         result = (
             envelope.get("result", envelope) if isinstance(envelope, dict) else envelope
         )
+        # Tool-level error: MCP result {content:[...], isError: true} — 例如 KOS
+        # embedding 失败 (Gemini key leaked / spending cap) 或 content-sanity reject。
+        # JSON-RPC envelope 此时无 error (传输层 OK), 上面的 envelope.error 检测漏掉它。
+        # 必须在这里 raise, 否则 caller (bulk_ingest / push_email_to_kos) 会把 error
+        # JSON 当成功 (status=None) 误记 pushed, 实际 page 没入 (page_not_found)。
+        if isinstance(result, dict) and result.get("isError"):
+            unwrapped = self._unwrap_tool_result(result)
+            msg = (
+                (unwrapped.get("message") or unwrapped.get("error") or str(unwrapped))
+                if isinstance(unwrapped, dict)
+                else str(unwrapped)
+            )
+            raise KOSError(f"MCP tool error: {msg}", code="E_KOS_TOOL_ERROR")
         return self._unwrap_tool_result(result)
 
     @staticmethod
