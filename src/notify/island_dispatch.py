@@ -334,21 +334,35 @@ def dispatch_mail_completed(
     page_id: str,
     subject: str,
     mailbox: str = "",
+    sender_email: str = "",
+    sender_name: str = "",
+    extra_metadata: Optional[Dict[str, str]] = None,
 ) -> None:
-    """Notion → Mail 已完成 → emit ``MailCompleted`` 清掉 Phase 2 dock icon."""
+    """Notion → Mail 已完成 → emit ``MailCompleted`` 清掉 Phase 2 dock icon.
+
+    P0-1: ``extra_metadata`` 允许 caller 追加额外 ``mailagent.*`` key (例如 snooze 追发时
+    带 ``mailagent.snoozeReason``), fork 端可读 metadata 区分真完成 vs snooze 完成。
+    向后兼容: 不传 extra_metadata 时行为与之前完全一致。
+    """
     if not _state.enabled:
         return
+    metadata = _base_metadata(
+        internal_id=internal_id, page_id=page_id, subject=subject,
+        mailbox=mailbox,
+        sender=sender_email, sender_name=sender_name,
+        scenario="MailCompleted",
+    )
+    if extra_metadata:
+        for k, v in extra_metadata.items():
+            if isinstance(k, str) and k and isinstance(v, (str, int, bool)):
+                metadata[k] = str(v)
     env = BridgeEnvelope(
         event_type="MailCompleted",
         session_key=f"mailagent:email:{internal_id}",
         title=island_i18n.t("mail.completed.title", subject=_one_line(subject)),
         preview="",
         status_kind="completed",
-        metadata=_base_metadata(
-            internal_id=internal_id, page_id=page_id, subject=subject,
-            mailbox=mailbox,
-            scenario="MailCompleted",
-        ),
+        metadata=metadata,
         expects_response=False,
     )
     _fire(env, internal_id=internal_id)

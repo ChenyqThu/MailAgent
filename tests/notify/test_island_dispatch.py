@@ -404,6 +404,50 @@ def test_mail_completed_envelope_has_scenario(patch_send, fake_store):
     assert env.metadata["mailagent.scenario"] == "MailCompleted"
 
 
+def test_mail_completed_accepts_extra_metadata(patch_send, fake_store):
+    """P0-1: extra_metadata 让 caller (snooze) 追加 mailagent.snoozeReason 等字段。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def _scenario():
+        island_dispatch.dispatch_mail_completed(
+            internal_id=42, page_id="p", subject="S", mailbox="收件箱",
+            sender_email="a@b.com", sender_name="A",
+            extra_metadata={"mailagent.snoozeReason": "user_snooze_1h"},
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert env.event_type == "MailCompleted"
+    assert env.metadata["mailagent.snoozeReason"] == "user_snooze_1h"
+    # sender 同时透传 → mascot 可推断
+    assert env.metadata["mailagent.sender"] == "a@b.com"
+
+
+def test_mail_completed_extra_metadata_rejects_invalid_values(patch_send, fake_store):
+    """P0-1: extra_metadata 防御性 filter — 非 str/int/bool 的 value 不写入。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def _scenario():
+        island_dispatch.dispatch_mail_completed(
+            internal_id=43, page_id="p", subject="S", mailbox="x",
+            extra_metadata={
+                "mailagent.snoozeReason": "ok",
+                "mailagent.badList": [1, 2, 3],  # 应被丢弃
+                "": "empty-key-should-skip",     # empty key 丢
+            },
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert env.metadata["mailagent.snoozeReason"] == "ok"
+    assert "mailagent.badList" not in env.metadata
+    assert "" not in env.metadata
+
+
 def test_sync_failed_envelope_with_sender_has_mascot(patch_send, fake_store, monkeypatch):
     """SyncFailed 传 sender_email → mascot 按 domain 推断."""
     monkeypatch.delenv("MAILAGENT_MASCOT_DOMAIN_RULES", raising=False)

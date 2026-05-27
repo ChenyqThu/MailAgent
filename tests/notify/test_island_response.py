@@ -543,3 +543,68 @@ def test_enqueue_snooze_zero_duration_clamped_to_60(patch_snooze):
 def test_enqueue_snooze_normal_duration_passes_through(patch_snooze):
     island_response._enqueue_snooze(1, 3600, _meta())
     assert patch_snooze[0]["duration_sec"] == 3600
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-1: snooze 后追发 MailCompleted 清 fork dock
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def patch_dispatch_completed(monkeypatch):
+    """抓 island_dispatch.dispatch_mail_completed 入参 (P0-1 snooze post-completed)."""
+    captured: List[Dict[str, Any]] = []
+
+    def fake_dispatch_completed(**kwargs):
+        captured.append(kwargs)
+
+    from src.notify import island_dispatch as _id
+    monkeypatch.setattr(_id, "dispatch_mail_completed", fake_dispatch_completed)
+    return captured
+
+
+def test_snooze_1h_dispatches_mail_completed_with_snooze_reason(
+    patch_snooze, patch_run, patch_dispatch_completed,
+):
+    """P0-1: snooze_1h 入队后必须追发 dispatch_mail_completed + snoozeReason metadata。"""
+    asyncio.run(island_response.handle_response(_resp("snooze_1h"), _meta(42)))
+    # snooze 仍正常入队
+    assert len(patch_snooze) == 1
+    assert patch_snooze[0]["internal_id"] == 42
+    # P0-1: 追发了 MailCompleted
+    assert len(patch_dispatch_completed) == 1
+    call = patch_dispatch_completed[0]
+    assert call["internal_id"] == 42
+    assert call["subject"] == "Test"
+    assert call["sender_email"] == "alice@example.com"
+    assert call["extra_metadata"]["mailagent.snoozeReason"] == "user_snooze_1h"
+
+
+def test_defer_to_monday_dispatches_mail_completed_with_snooze_reason(
+    patch_snooze, patch_run, patch_dispatch_completed,
+):
+    """P0-1: defer_to_monday_9am 也走 _enqueue_snooze → 也应追发 MailCompleted。"""
+    asyncio.run(island_response.handle_response(_resp("defer_to_monday_9am"), _meta(77)))
+    assert len(patch_dispatch_completed) == 1
+    call = patch_dispatch_completed[0]
+    assert call["internal_id"] == 77
+    # reason 是 user_snooze_<duration>s 因为不是精确 3600
+    reason = call["extra_metadata"]["mailagent.snoozeReason"]
+    assert reason.startswith("user_snooze_") and reason.endswith("s")
+
+
+def test_snooze_post_completed_dispatch_failure_does_not_block(
+    patch_snooze, patch_run, monkeypatch,
+):
+    """P0-1: 即使追发 MailCompleted 抛异常, snooze 入队仍生效, handle_response 不向上抛。"""
+    def boom(**kwargs):
+        raise RuntimeError("dispatch broken")
+
+    from src.notify import island_dispatch as _id
+    monkeypatch.setattr(_id, "dispatch_mail_completed", boom)
+
+    # 不抛
+    asyncio.run(island_response.handle_response(_resp("snooze_1h"), _meta(99)))
+    # snooze 仍正常入队
+    assert len(patch_snooze) == 1
+    assert patch_snooze[0]["internal_id"] == 99

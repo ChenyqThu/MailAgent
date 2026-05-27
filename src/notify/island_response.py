@@ -373,6 +373,10 @@ def _enqueue_snooze(internal_id: int, duration_sec: int, meta: Dict[str, str]) -
     """统一 snooze 入队 (snooze_1h 1h vs defer_to_monday_9am 算到下周一 9AM 的 seconds).
 
     duration_sec ≤ 0 时按 60s 兜底 (避免 island_snooze 入队负值乱序).
+
+    P0-1: 入队后追发 ``MailCompleted`` 让 fork 端 mail session 立即清除 (否则卡在
+    waitingForInput, dock/mascot 不消失)。通过 ``mailagent.snoozeReason`` metadata
+    让 fork 区分真完成 vs snooze (fork 可读此字段调 UI 文案，当前忽略也无害)。
     """
     if duration_sec <= 0:
         duration_sec = 60
@@ -387,6 +391,24 @@ def _enqueue_snooze(internal_id: int, duration_sec: int, meta: Dict[str, str]) -
         ai_action=meta.get("mailagent.aiAction", ""),
         ai_priority=meta.get("mailagent.aiPriority", ""),
     )
+
+    # P0-1: 追发 MailCompleted 清 fork dock。reason 让 fork UI 后续可区分文案。
+    # snooze_1h → "user_snooze_1h"; defer_to_monday_9am → 按 duration 推断走默认。
+    reason = "user_snooze_1h" if duration_sec == 3600 else f"user_snooze_{duration_sec}s"
+    try:
+        # Lazy import 避 circular (dispatch -> response -> dispatch).
+        from src.notify import island_dispatch
+        island_dispatch.dispatch_mail_completed(
+            internal_id=internal_id,
+            page_id=meta.get("mailagent.notionPageId", ""),
+            subject=meta.get("mailagent.subject", ""),
+            mailbox=meta.get("mailagent.mailbox", ""),
+            sender_email=meta.get("mailagent.sender", ""),
+            sender_name=meta.get("mailagent.senderName", ""),
+            extra_metadata={"mailagent.snoozeReason": reason},
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("[island-response] snooze post-completed dispatch failed: %s", e)
 
 
 def _seconds_until_next_monday_9am(*, now: Optional[datetime] = None) -> int:
