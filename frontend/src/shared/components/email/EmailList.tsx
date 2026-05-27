@@ -618,12 +618,14 @@ export function EmailList(): React.ReactElement {
     refetchIntervalInBackground: false,
     placeholderData: keepPreviousData
   })
-  const pinnedSupp = useMemo(
-    () => pinnedSupplementQ.data ?? [],
-    [pinnedSupplementQ.data]
-  )
+  const pinnedSupp = useMemo(() => pinnedSupplementQ.data ?? [], [pinnedSupplementQ.data])
 
-  const tabFiltered = useMemo(() => applyTab(tab, all), [tab, all])
+  // Focused/Other tab 是收件箱分流概念 (按 AI 优先级把进站邮件拆 重点/其他)。
+  // 对「已标旗 / 发件箱 / 全部」这些跨邮箱视图无意义 — 标旗视图本应显示我标的
+  // 全部邮件, 套 focused tab 会把 ai_priority='low' 的标旗邮件藏进 Other, 导致
+  // 列表 < sidebar badge (badge 是纯 SQL is_flagged=1 计数)。故仅收件箱视图应用
+  // tab 过滤; 其余视图直接用 all (tab bar 在下方 header 也只对收件箱渲染)。
+  const tabFiltered = useMemo(() => (view === 'inbox' ? applyTab(tab, all) : all), [view, tab, all])
   const chipFiltered = useMemo(() => applyChipFilter(filter, tabFiltered), [filter, tabFiltered])
   const filteredBase = useMemo(
     () => applyMultiFilter(chipFiltered, selectedPriorities, selectedCategories),
@@ -654,9 +656,9 @@ export function EmailList(): React.ReactElement {
   // was an outbox reply ("有的是我最新回的邮件...这种现在好像点击不了").
 
   // counts 跟当前 tab (Focused/Other) 联动. 之前用 `all` 全集导致 meta line
-   // 显示 "5 封未读" 但点 unread filter 过滤出空——5 封 unread 都是 ai_priority
-   // ='low' 落在 Other tab, 在 Focused tab 被 applyTab 提前过滤掉了. 现在数字
-   // 严格跟 filter 看到的视图一致.
+  // 显示 "5 封未读" 但点 unread filter 过滤出空——5 封 unread 都是 ai_priority
+  // ='low' 落在 Other tab, 在 Focused tab 被 applyTab 提前过滤掉了. 现在数字
+  // 严格跟 filter 看到的视图一致.
   const counts = useMemo(() => {
     let unread = 0
     let flagged = 0
@@ -838,10 +840,7 @@ export function EmailList(): React.ReactElement {
     }
     return arr
   }, [rows, newIds])
-  const getRowHeight = useCallback(
-    (index: number): number => rowHeights[index] ?? 28,
-    [rowHeights]
-  )
+  const getRowHeight = useCallback((index: number): number => rowHeights[index] ?? 28, [rowHeights])
 
   const priActive = !allPrioritiesSelected()
   const catActive = !allCategoriesSelected()
@@ -871,26 +870,38 @@ export function EmailList(): React.ReactElement {
       {/* Header — Focused/Other tabs · batch + filter cluster · meta line */}
       <div className="relative px-3 pt-3 pb-2.5 border-b border-ink-border-soft">
         <div className="flex items-center justify-between gap-2">
-          <div className="inbox-tabs" role="tablist" aria-label={t('list.tab.aria')}>
-            <button
-              type="button"
-              className={tab === 'focused' ? 'inbox-tab is-active' : 'inbox-tab'}
-              role="tab"
-              aria-selected={tab === 'focused'}
-              onClick={() => setTab('focused')}
-            >
-              {t('list.tab.focused')}
-            </button>
-            <button
-              type="button"
-              className={tab === 'other' ? 'inbox-tab is-active' : 'inbox-tab'}
-              role="tab"
-              aria-selected={tab === 'other'}
-              onClick={() => setTab('other')}
-            >
-              {t('list.tab.other')}
-            </button>
-          </div>
+          {view === 'inbox' ? (
+            <div className="inbox-tabs" role="tablist" aria-label={t('list.tab.aria')}>
+              <button
+                type="button"
+                className={tab === 'focused' ? 'inbox-tab is-active' : 'inbox-tab'}
+                role="tab"
+                aria-selected={tab === 'focused'}
+                onClick={() => setTab('focused')}
+              >
+                {t('list.tab.focused')}
+              </button>
+              <button
+                type="button"
+                className={tab === 'other' ? 'inbox-tab is-active' : 'inbox-tab'}
+                role="tab"
+                aria-selected={tab === 'other'}
+                onClick={() => setTab('other')}
+              >
+                {t('list.tab.other')}
+              </button>
+            </div>
+          ) : (
+            // 非收件箱视图无 focused/other 分流, 用视图标题占左侧 (保 justify-between
+            // 布局: 右侧 batch/filter 簇仍靠右), 同时告诉用户当前在哪个视图。
+            <div className="text-aux font-semibold text-ink-fg truncate">
+              {view === 'outbox'
+                ? t('nav.outbox')
+                : view === 'flagged'
+                  ? t('nav.flagged')
+                  : t('nav.allMail')}
+            </div>
+          )}
           <div className="flex items-center gap-1">
             <button
               type="button"
