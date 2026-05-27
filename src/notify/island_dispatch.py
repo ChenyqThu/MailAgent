@@ -500,6 +500,130 @@ def dispatch_daily_digest(
     _fire(env, internal_id=None)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-2: AIDraft 三函数 (start / stream / ready) — DESIGN.md §7 AI ready 通道
+# _WIRE_EVENT_MAP 已留位 AIDraftStart / AIDraftStream / AIDraftReady, 这里补全
+# dispatch 入口给上游 LLM agent (Phase 3+) 调用; fork MailAgentSessionView
+# AIDraftReady scenario 已 ship。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def dispatch_ai_draft_start(
+    *,
+    internal_id: int,
+    sender_email: str = "",
+    sender_name: str = "",
+    subject: str = "",
+    mailbox: str = "",
+    page_id: str = "",
+) -> None:
+    """AI 起草开始 — 状态条提示用户 AI 正在工作 (notification, 无 intervention)。"""
+    if not _state.enabled:
+        return
+    env = BridgeEnvelope(
+        event_type="AIDraftStart",
+        session_key=f"mailagent:email:{internal_id}",
+        title=island_i18n.t("mail.ai.draft.start.title"),
+        preview=_one_line(subject or ""),
+        status_kind="notification",
+        metadata=_base_metadata(
+            internal_id=internal_id, page_id=page_id, subject=subject,
+            sender=sender_email, sender_name=sender_name, mailbox=mailbox,
+            scenario="AIDraftStart",
+            mascot=_resolve_mascot(sender_email) if sender_email else "default",
+        ),
+        intervention=None,
+        expects_response=False,
+    )
+    _fire(env, internal_id=internal_id)
+
+
+def dispatch_ai_draft_stream(
+    *,
+    internal_id: int,
+    chunk_text: str,
+    chunk_index: int = 0,
+    sender_email: str = "",
+    sender_name: str = "",
+    subject: str = "",
+    mailbox: str = "",
+) -> None:
+    """AI 起草流式更新 (高频, 仅在用户开了 expand 态时才视觉有意义)。
+
+    metadata 携带 chunk index + 截断后的 chunk text (≤500 chars 防 envelope > 64KiB)。
+    """
+    if not _state.enabled:
+        return
+    metadata = _base_metadata(
+        internal_id=internal_id, page_id="", subject=subject,
+        sender=sender_email, sender_name=sender_name, mailbox=mailbox,
+        scenario="AIDraftStream",
+        mascot=_resolve_mascot(sender_email) if sender_email else "default",
+    )
+    metadata["mailagent.draftChunkIndex"] = str(chunk_index)
+    metadata["mailagent.draftChunkText"] = (chunk_text or "")[:500]
+    env = BridgeEnvelope(
+        event_type="AIDraftStream",
+        session_key=f"mailagent:email:{internal_id}",
+        title=island_i18n.t("mail.ai.draft.stream.title"),
+        preview=_one_line(chunk_text or "")[:80],
+        status_kind="notification",
+        metadata=metadata,
+        intervention=None,
+        expects_response=False,
+    )
+    _fire(env, internal_id=internal_id)
+
+
+def dispatch_ai_draft_ready(
+    *,
+    internal_id: int,
+    draft_text: str,
+    sender_email: str = "",
+    sender_name: str = "",
+    subject: str = "",
+    mailbox: str = "",
+    page_id: str = "",
+) -> None:
+    """AI 草稿完成 — waitingForInput + send/edit/discard 三 option intervention。
+
+    fork ``MailAgentSessionView`` AIDraftReady scenario 已 ship, 读 metadata
+    ``mailagent.aiSummary`` 渲染草稿正文 (复用现有字段名)。
+    """
+    if not _state.enabled:
+        return
+    metadata = _base_metadata(
+        internal_id=internal_id, page_id=page_id, subject=subject,
+        sender=sender_email, sender_name=sender_name, mailbox=mailbox,
+        scenario="AIDraftReady",
+        mascot=_resolve_mascot(sender_email) if sender_email else "default",
+        ai_summary=(draft_text or "")[:2000],
+    )
+    intervention = Intervention(
+        title=island_i18n.t("mail.ai.draft.ready.title"),
+        message=island_i18n.t("mail.ai.draft.ready.message"),
+        options=[
+            InterventionOption(id="send_draft",
+                               title=island_i18n.t("mail.ai.draft.send")),
+            InterventionOption(id="edit_draft",
+                               title=island_i18n.t("mail.ai.draft.edit")),
+            InterventionOption(id="discard_draft",
+                               title=island_i18n.t("mail.ai.draft.discard")),
+        ],
+    )
+    env = BridgeEnvelope(
+        event_type="AIDraftReady",
+        session_key=f"mailagent:email:{internal_id}",
+        title=island_i18n.t("mail.ai.draft.ready.title"),
+        preview=_one_line(draft_text or "")[:80],
+        status_kind="waitingForInput",
+        metadata=metadata,
+        intervention=intervention,
+        expects_response=True,
+    )
+    _fire(env, internal_id=internal_id)
+
+
 def dispatch_dead_letter_accum(*, count: int, threshold: int = 0) -> None:
     """死信累积告警 → emit ``DeadLetterAccum``."""
     if not _state.enabled:

@@ -37,6 +37,16 @@ STATIC_FALLBACK_ACTION_IDS: Final[FrozenSet[str]] = frozenset({
 })
 
 
+# P0-2: AIDraftReady intervention 三 option (send/edit/discard). LLM 不可推荐
+# (这是 fork 用户响应 AI 草稿就绪通知的固定选项); response handler 仅 log stub,
+# 真实发送/编辑/丢弃 由上游 LLM agent 接管 (Phase 3+ 待 ship)。
+AI_DRAFT_ACTION_IDS: Final[FrozenSet[str]] = frozenset({
+    "send_draft",
+    "edit_draft",
+    "discard_draft",
+})
+
+
 # Phase 2 LLM-recommended dynamic ids (12 = 10 inbox + 2 sent).
 RECOMMENDED_ACTION_IDS: Final[FrozenSet[str]] = frozenset({
     *RECOMMENDED_ACTION_ID_INBOX,
@@ -56,11 +66,24 @@ BULK_ACTION_IDS: Final[FrozenSet[str]] = frozenset(_DIGEST_BULK_ACTION_IDS)
 SKIP_ACTION_ID: Final[str] = "skip"
 
 
-# 整体 handler 端可识别 id (19 = 5 static + 10 recommended + 3 bulk + 1 skip). dispatch
-# filter + response handler 都按这个 set 做 defense-in-depth.
+# 整体 handler 端可识别 id (22 = 5 static + 12 recommended + 3 bulk + 3 ai_draft + 1 skip).
+# 但实际数量见 ``is_known_action_id`` 调用方 — schema 漏过来的 / fork 测试 envelope
+# 手写的未知 id 都在这里 silent drop, 永远不到达 subprocess.
 KNOWN_ACTION_IDS: Final[FrozenSet[str]] = (
-    STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS | {SKIP_ACTION_ID}
+    STATIC_FALLBACK_ACTION_IDS
+    | RECOMMENDED_ACTION_IDS
+    | BULK_ACTION_IDS
+    | AI_DRAFT_ACTION_IDS
+    | {SKIP_ACTION_ID}
 )
+
+
+def is_ai_draft_action_id(action_id: str) -> bool:
+    """True if ``action_id`` is a AIDraftReady intervention option (send/edit/discard).
+
+    P0-2: response handler stubs 用此判定; 真实业务由上游 LLM agent 后续接管。
+    """
+    return isinstance(action_id, str) and action_id in AI_DRAFT_ACTION_IDS
 
 
 def is_known_action_id(action_id: str) -> bool:

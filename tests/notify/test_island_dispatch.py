@@ -425,6 +425,124 @@ def test_mail_completed_accepts_extra_metadata(patch_send, fake_store):
     assert env.metadata["mailagent.sender"] == "a@b.com"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-2: AIDraft 三函数 (start / stream / ready)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_ai_draft_start_emits_notification(patch_send, fake_store):
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
+
+    async def _scenario():
+        island_dispatch.dispatch_ai_draft_start(
+            internal_id=101, sender_email="alice@example.com",
+            sender_name="Alice", subject="Hello", mailbox="收件箱",
+            page_id="pid-101",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    assert len(captured) == 1
+    env = captured[0]
+    assert env.event_type == "AIDraftStart"
+    assert env.session_key == "mailagent:email:101"
+    assert env.status_kind == "notification"
+    assert env.intervention is None
+    assert env.expects_response is False
+    assert env.metadata["mailagent.scenario"] == "AIDraftStart"
+    assert env.metadata["mailagent.sender"] == "alice@example.com"
+
+
+def test_ai_draft_stream_carries_chunk_text(patch_send, fake_store):
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def _scenario():
+        island_dispatch.dispatch_ai_draft_stream(
+            internal_id=102, chunk_text="Hi Bob, thanks for", chunk_index=3,
+            sender_email="alice@example.com", subject="Re: Q3",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert env.event_type == "AIDraftStream"
+    assert env.metadata["mailagent.draftChunkIndex"] == "3"
+    assert env.metadata["mailagent.draftChunkText"] == "Hi Bob, thanks for"
+    assert env.intervention is None
+
+
+def test_ai_draft_stream_truncates_long_chunk(patch_send, fake_store):
+    """P0-2: chunk_text 截 500 字符 防 envelope > 64KiB."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    big = "X" * 1000
+
+    async def _scenario():
+        island_dispatch.dispatch_ai_draft_stream(
+            internal_id=103, chunk_text=big, chunk_index=0,
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert len(env.metadata["mailagent.draftChunkText"]) == 500
+
+
+def test_ai_draft_ready_has_three_options_and_waits(patch_send, fake_store):
+    """P0-2: AIDraftReady → waitingForInput + 3 option (send/edit/discard)."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def _scenario():
+        island_dispatch.dispatch_ai_draft_ready(
+            internal_id=104, draft_text="Hi Bob,\nThanks for your email.",
+            sender_email="alice@example.com", sender_name="Alice",
+            subject="Re: Q3", mailbox="收件箱", page_id="pid-104",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert env.event_type == "AIDraftReady"
+    assert env.status_kind == "waitingForInput"
+    assert env.expects_response is True
+    assert env.intervention is not None
+    option_ids = [o.id for o in env.intervention.options]
+    assert option_ids == ["send_draft", "edit_draft", "discard_draft"]
+    # 草稿正文复用 aiSummary 字段渲染
+    assert env.metadata["mailagent.aiSummary"].startswith("Hi Bob,")
+    assert env.metadata["mailagent.scenario"] == "AIDraftReady"
+
+
+def test_ai_draft_ready_truncates_long_draft_to_2000(patch_send, fake_store):
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+    big = "Y" * 5000
+
+    async def _scenario():
+        island_dispatch.dispatch_ai_draft_ready(
+            internal_id=105, draft_text=big,
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert len(env.metadata["mailagent.aiSummary"]) == 2000
+
+
+def test_ai_draft_disabled_dispatcher_is_noop(patch_send, fake_store):
+    """disabled 时三函数均无副作用 (与其他 dispatch_* 同口径)."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=False, sync_store=fake_store)
+    island_dispatch.dispatch_ai_draft_start(internal_id=1)
+    island_dispatch.dispatch_ai_draft_stream(internal_id=1, chunk_text="x")
+    island_dispatch.dispatch_ai_draft_ready(internal_id=1, draft_text="x")
+    assert captured == []
+
+
 def test_mail_completed_extra_metadata_rejects_invalid_values(patch_send, fake_store):
     """P0-1: extra_metadata 防御性 filter — 非 str/int/bool 的 value 不写入。"""
     captured, _ = patch_send

@@ -593,6 +593,22 @@ def test_defer_to_monday_dispatches_mail_completed_with_snooze_reason(
     assert reason.startswith("user_snooze_") and reason.endswith("s")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-2: AIDraftReady intervention click → stub (无 CLI 副作用)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("choice", ["send_draft", "edit_draft", "discard_draft"])
+def test_ai_draft_click_is_stub_no_subprocess(choice, patch_run, patch_snooze, caplog):
+    """P0-2: AIDraft 三选项 click 仅 log, 不调任何 CLI 子进程 (真实业务由上游 LLM agent 接管)."""
+    with caplog.at_level(logging.INFO, logger="src.notify.island_response"):
+        asyncio.run(island_response.handle_response(_resp(choice), _meta(53675)))
+    assert patch_run == []  # 不调 subprocess
+    assert patch_snooze == []  # 不入 snooze 队列
+    msgs = [r.message for r in caplog.records]
+    assert any("ai_draft" in m and choice in m for m in msgs)
+
+
 def test_snooze_post_completed_dispatch_failure_does_not_block(
     patch_snooze, patch_run, monkeypatch,
 ):

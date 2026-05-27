@@ -15,11 +15,13 @@ from src.llm_agent.schema import (
 )
 from src.llm_agent.digest_summarizer import BULK_ACTION_IDS as _SUMMARIZER_BULK
 from src.notify.island_action_whitelist import (
+    AI_DRAFT_ACTION_IDS,
     BULK_ACTION_IDS,
     KNOWN_ACTION_IDS,
     RECOMMENDED_ACTION_IDS,
     SKIP_ACTION_ID,
     STATIC_FALLBACK_ACTION_IDS,
+    is_ai_draft_action_id,
     is_bulk_action_id,
     is_known_action_id,
     is_recommended_action_id,
@@ -42,13 +44,18 @@ def test_recommended_action_ids_matches_schema_enum():
 
 
 def test_known_action_ids_is_union():
-    """整体 handler 端可识别 id = static 5 ∪ recommended 10 ∪ bulk 3 ∪ skip 1 = 19.
+    """整体 handler 端可识别 id = static 5 ∪ recommended 10 ∪ bulk 3 ∪ ai_draft 3 ∪ skip 1 = 22.
     (escalate_to_oncall + ack_in_pagerduty 2026-05-26 下线后 recommended 12→10;
-    Phase 3 DailyDigest 加 3 bulk; 问题 B "跳过"次级 action 加 1 skip)."""
+    Phase 3 DailyDigest 加 3 bulk; 问题 B "跳过"次级 action 加 1 skip;
+    P0-2 AIDraftReady intervention 加 3 ai_draft: send/edit/discard)."""
     assert KNOWN_ACTION_IDS == (
-        STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS | {SKIP_ACTION_ID}
+        STATIC_FALLBACK_ACTION_IDS
+        | RECOMMENDED_ACTION_IDS
+        | BULK_ACTION_IDS
+        | AI_DRAFT_ACTION_IDS
+        | {SKIP_ACTION_ID}
     )
-    assert len(KNOWN_ACTION_IDS) == 19
+    assert len(KNOWN_ACTION_IDS) == 22
 
 
 def test_skip_action_id_is_known_but_not_recommended_or_bulk():
@@ -77,6 +84,39 @@ def test_bulk_action_ids_single_source_from_summarizer():
     assert BULK_ACTION_IDS == frozenset({
         "bulk_archive_newsletter", "bulk_mark_done", "bulk_mark_read",
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-2: AIDraftReady intervention 三 option (send/edit/discard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_ai_draft_action_ids_is_three():
+    """AIDraftReady intervention 固定 send/edit/discard 三选项."""
+    assert AI_DRAFT_ACTION_IDS == frozenset({"send_draft", "edit_draft", "discard_draft"})
+
+
+def test_ai_draft_disjoint_from_other_tiers():
+    """ai_draft 跟 static / recommended / bulk / skip 不重叠."""
+    assert AI_DRAFT_ACTION_IDS.isdisjoint(STATIC_FALLBACK_ACTION_IDS)
+    assert AI_DRAFT_ACTION_IDS.isdisjoint(RECOMMENDED_ACTION_IDS)
+    assert AI_DRAFT_ACTION_IDS.isdisjoint(BULK_ACTION_IDS)
+    assert SKIP_ACTION_ID not in AI_DRAFT_ACTION_IDS
+
+
+def test_is_ai_draft_action_id_helper():
+    assert is_ai_draft_action_id("send_draft")
+    assert is_ai_draft_action_id("edit_draft")
+    assert is_ai_draft_action_id("discard_draft")
+    assert not is_ai_draft_action_id("mark_done")
+    assert not is_ai_draft_action_id("skip")
+    assert not is_ai_draft_action_id("")
+    assert not is_ai_draft_action_id(None)  # type: ignore[arg-type]
+
+
+def test_ai_draft_ids_are_known():
+    for aid in ["send_draft", "edit_draft", "discard_draft"]:
+        assert is_known_action_id(aid)
 
 
 def test_bulk_disjoint_from_static_and_recommended():

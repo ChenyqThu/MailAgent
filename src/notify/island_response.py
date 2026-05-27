@@ -45,6 +45,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from src.notify import island_snooze
 from src.notify.island_action_whitelist import (
     SKIP_ACTION_ID,
+    is_ai_draft_action_id,
     is_bulk_action_id,
     is_known_action_id,
 )
@@ -156,6 +157,11 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
         # --- 路径 2: 起草 (Phase 1 create_draft + Phase 2 4 个 alias) ---
         elif choice in _CREATE_DRAFT_ALIASES:
             await _create_draft(internal_id)
+        # --- P0-2: AIDraftReady 三 option (send/edit/discard) stub ---
+        # 真实业务 (发送草稿 / 打开编辑器 / 丢弃) 由上游 LLM agent Phase 3+ 接管;
+        # 当前 stub 仅记录用户决策让 ops 能 grep 看流量。
+        elif is_ai_draft_action_id(choice):
+            _handle_ai_draft_stub(choice, internal_id, envelope_meta)
         else:
             # is_known_action_id 已 filter, 走到这里说明 KNOWN_ACTION_IDS 加了
             # action 但 dispatch table 没补. 别 silent 吞 — log 帮人修.
@@ -441,6 +447,21 @@ def _log_alias_intent(choice: str, internal_id: int) -> None:
     "标完成" 语义, 无额外 follow-up; archive_and_unsubscribe (F2) / convert_to_notion_task
     (F3) 已升级为独立分支真执行, 不再走这里. 保留 hook 给未来 alias 扩展。"""
     return
+
+
+def _handle_ai_draft_stub(choice: str, internal_id: int, meta: Dict[str, str]) -> None:
+    """P0-2: AIDraftReady intervention click stub.
+
+    AIDraftReady envelope 让 fork UI 展示 AI 草稿 + send/edit/discard 三 option;
+    用户点击后这里仅 log 用户决策 (含 envelope_id / scenario), 真实业务 (实际发送
+    SMTP / 打开编辑器 / 丢弃 draft state) 由上游 LLM agent 后续接管 — 这里不调任何
+    CLI 子进程, 避免与 Phase 3+ 的 draft state machine 抢路径。
+    """
+    log.info(
+        "[island-response] ai_draft choice=%s internal_id=%d page_id=%s "
+        "(stub: real send/edit/discard handled by upstream LLM agent)",
+        choice, internal_id, meta.get("mailagent.notionPageId", ""),
+    )
 
 
 async def _run(args, *, timeout: float = 10) -> None:
