@@ -23,10 +23,33 @@ import json
 import time
 from typing import Any, Dict, Optional
 
+import aiohttp.web_protocol as _aiohttp_web_protocol
 from aiohttp import web
 from loguru import logger
 
 from src.config import config
+
+
+# aiohttp 3.9.1 tcp_keepalive 兼容 patch (macOS):
+# RequestHandler.connection_made 无条件调 tcp_keepalive(transport) → setsockopt(
+# SOL_SOCKET, SO_KEEPALIVE); macOS 上对某些 SSE 连接的 socket 状态报 OSError [Errno 22]
+# Invalid argument, 每个连接刷一条 error log (被 asyncio callback 吞, 不影响 SSE 功能)。
+# aiohttp 3.9.1 的 web.Server 无 tcp_keepalive 开关, 故 monkeypatch 成失败静默版。
+# 本地 SSE (127.0.0.1) 不依赖 TCP keepalive; 只影响 server 端 (alert/feishu 的
+# ClientSession 是 client, 不走 connection_made, 不受影响)。
+# 必须 patch web_protocol 命名空间: connection_made 经 `from .tcp_helpers import
+# tcp_keepalive` 绑定了同一对象, patch tcp_helpers 不改 web_protocol 已绑定的引用。
+if not getattr(_aiohttp_web_protocol.tcp_keepalive, "_mailagent_safe", False):
+    _orig_tcp_keepalive = _aiohttp_web_protocol.tcp_keepalive
+
+    def _safe_tcp_keepalive(transport) -> None:
+        try:
+            _orig_tcp_keepalive(transport)
+        except OSError:
+            pass  # macOS setsockopt(SO_KEEPALIVE) Errno 22 — 无害忽略
+
+    _safe_tcp_keepalive._mailagent_safe = True  # type: ignore[attr-defined]
+    _aiohttp_web_protocol.tcp_keepalive = _safe_tcp_keepalive
 
 
 SSE_CHANNEL = "mailagent:events:v1"
