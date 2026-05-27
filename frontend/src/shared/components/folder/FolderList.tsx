@@ -97,7 +97,11 @@ export function FolderList({
           </button>
         )}
 
-        <div className="mt-2 text-meta font-mono text-ink-fg-2 tabular-nums">{rows.length}</div>
+        {rows.length > 0 && (
+          <div className="mt-2 text-meta font-mono text-ink-fg-2 tabular-nums">
+            {rows.length}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
