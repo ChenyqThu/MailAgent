@@ -1469,6 +1469,35 @@ def _build_forward_intro(
     return intro_text, intro_html
 
 
+def _build_reply_quote(
+    record: dict, body_text: str, body_html: Optional[str]
+) -> tuple[str, str]:
+    """构造回复引用块 (plain + html): 像 Mail.app / Outlook 一样在回复正文下方附原邮件.
+
+    与 forward 的 "Forwarded message" 头不同, reply 用 "在 <date>, <sender> 写道:" 头 +
+    blockquote 包原文 (Outlook / Apple Mail 通用回复引用形态). 原邮件正文本身已含整条线程
+    (Exchange 每次回复嵌套前文), 故引这一层即带上全部历史.
+    """
+    import html as _html
+
+    sender = (record.get("sender") or "").strip()
+    date = (record.get("date_received") or "").strip()
+
+    intro_text = f"在 {date}，{sender} 写道：\n\n{body_text or ''}"
+    header_html = (
+        '<div style="color:#555;font-size:13px;margin-top:16px">'
+        f"在 {_html.escape(date)}，{_html.escape(sender)} 写道：</div>"
+    )
+    quoted = body_html or f"<pre>{_html.escape(body_text or '')}</pre>"
+    intro_html = (
+        f"{header_html}"
+        '<blockquote style="margin:8px 0 0;padding-left:12px;'
+        'border-left:2px solid #ccc;color:#555">'
+        f"{quoted}</blockquote>"
+    )
+    return intro_text, intro_html
+
+
 def _collect_forward_attachments(
     cli: "CliContext", internal_id: int
 ) -> tuple[list, list[str]]:
@@ -1564,21 +1593,30 @@ def _prepare_draft(
         reply_text = reply_md or ""
         reply_html = _reply_md_to_html(reply_md) if reply_md else None
 
-    # forward: 引用块 + 原邮件附件
+    # 引用原邮件 (Mail.app / Outlook 行为: reply/reply-all/forward 都在正文下方附原文)。
+    # 仅"无显式正文"时构造 — 显式正文 (前端 compose 发送, body_html_file) 已含预填引用,
+    # 跳过避免二次拼接重复。forward 走 forward_intro_* 字段 (MIME build 时 append);
+    # reply/reply-all 直接拼进 reply_text/reply_html, 这样 dry-run plan 的 reply_html 即
+    # "suggestion + 引用", 前端预填零改动, 发送回传时 explicit_body 跳过重建。
     forward_intro_text = forward_intro_html = None
     attachments: list = []
     warnings: list[str] = []
     if mode == "forward":
         # 附件总是 server-side 重新收集 — 前端无法传字节, 必须按 internal_id 重读。
         attachments, warnings = _collect_forward_attachments(cli, internal_id)
-        # 引用块仅在"无显式正文"时构造 (dry-run 预填 / 纯 CLI 转发)。前端 compose
-        # 发送时 body_html_file 已含预填引用块, 跳过避免重复。
         if not explicit_body:
             body_md = cli.email_repo.get_body_markdown(internal_id) or ""
             body_html = cli.email_repo.get_body_html(internal_id)
             forward_intro_text, forward_intro_html = _build_forward_intro(
                 record, body_md, body_html
             )
+    elif not explicit_body:  # reply / reply-all
+        orig_md = cli.email_repo.get_body_markdown(internal_id) or ""
+        orig_html = cli.email_repo.get_body_html(internal_id)
+        if orig_md or orig_html:
+            q_text, q_html = _build_reply_quote(record, orig_md, orig_html)
+            reply_text = f"{reply_text}\n\n{q_text}" if reply_text.strip() else q_text
+            reply_html = f"{reply_html}{q_html}" if reply_html else q_html
 
     draft = _compose_reply_draft(
         record, internal_id=internal_id, mode=mode,

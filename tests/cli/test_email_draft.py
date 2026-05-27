@@ -308,9 +308,9 @@ def test_draft_dry_run_no_reply_suggestion_prefills_recipients(cli_runner, seede
     assert plan["dry_run"] is True
     # reply-all (默认 mode) → to 含原发件人; 收件人推导与有无建议无关
     assert "alice@example.com" in plan["to"]
-    # 无建议 → 正文 HTML 为空 (前端 editor 留空)
-    assert not plan["reply_html"]
-    assert plan["reply_html_len"] == 0
+    # 无建议但有原邮件 → reply_html = 原邮件引用块 (无 suggestion 时正文头为空, 仅引用)
+    assert plan["reply_html"]
+    assert "写道" in plan["reply_html"]  # 回复引用头
 
 
 def test_draft_real_no_reply_suggestion_errors(cli_runner, seeded_db):
@@ -357,8 +357,11 @@ def test_draft_real_create_invokes_append_draft(cli_runner, seeded_db, monkeypat
     assert len(fake_backend.appended) == 1
     draft = fake_backend.appended[0]
     assert "alice@example.com" in draft.to
-    assert draft.reply_text == _REPLY_MD  # plain = markdown 原文
+    # reply_text = suggestion + 原邮件引用 (Mail.app/Outlook 行为)
+    assert draft.reply_text.startswith(_REPLY_MD)
+    assert "写道" in draft.reply_text  # 引用头
     assert draft.reply_html and "Sounds good" in draft.reply_html
+    assert "写道" in draft.reply_html  # reply_html 也含引用
 
 
 def test_draft_reply_mode_only_sender(cli_runner, seeded_db, monkeypatch):
@@ -477,5 +480,48 @@ def test_draft_forward_body_html_no_duplicate_intro(cli_runner, seeded_db, monke
         assert draft.forward_intro_text is None
         # 用户正文里只有一份引用块
         assert (draft.reply_html or "").count("Forwarded message") == 1
+    finally:
+        os.unlink(path)
+
+
+def test_draft_reply_includes_original_quote(cli_runner, seeded_db):
+    # reply/reply-all dry-run: reply_html = LLM suggestion + 原邮件引用 (Mail.app/Outlook
+    # 都会在回复正文下方附原文; 原邮件本身含整条线程, 故引一层即带全部历史)。
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    r = _invoke(cli_runner, "email", "draft", "12345", "--mode", "reply",
+                "--dry-run", "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    plan = data["data"]
+    # suggestion 在前, 原邮件引用在后 (回复引用头 "写道")
+    assert "Sounds good" in plan["reply_html"]
+    assert "写道" in plan["reply_html"]
+    assert plan["reply_text"].startswith(_REPLY_MD)
+    assert "写道" in plan["reply_text"]
+
+
+def test_draft_reply_body_html_no_duplicate_quote(cli_runner, seeded_db, monkeypatch):
+    # 前端回复发送: editor HTML (经 --body-html-file) 已含预填的 suggestion+引用,
+    # _prepare_draft 不该再追加引用 (explicit_body 跳过) → reply_text 即用户正文原样。
+    import os
+    import tempfile
+
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+    fd, path = tempfile.mkstemp(suffix=".html")
+    os.write(fd, "<p>我的回复</p><div>在 X 写道：</div><blockquote>原文</blockquote>".encode("utf-8"))
+    os.close(fd)
+    try:
+        r = _invoke(cli_runner, "email", "draft", "12345", "--mode", "reply-all",
+                    "--to", "x@y.com", "--body-html-file", path,
+                    "-o", "json", db_path=seeded_db)
+        data = _last_json(r.output)
+        assert data["status"] == "success", r.output
+        draft = fake_backend.appended[0]
+        # 引用只有用户正文里的一份 (seeded body "body text" 不应被再次追加)
+        assert "body text" not in (draft.reply_html or "")
+        assert (draft.reply_html or "").count("写道") == 1
     finally:
         os.unlink(path)
