@@ -69,6 +69,20 @@ class LLMProcessingStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def get_labels(self, internal_id: int) -> Optional[Dict[str, Any]]:
+        """读 labels_json → dict (KOS 增量 hook 用完整 AI 字段; 无/非法则 None)。"""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT labels_json FROM llm_processing WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+        if row and row["labels_json"]:
+            try:
+                return json.loads(row["labels_json"])
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return None
+
     def reset_stale_pending(self, *, threshold_sec: int = 300) -> int:
         """启动时调用 — pending 状态超 threshold_sec 的 row 转 failed +
         next_retry_at=now, 让 retry 队列接管.
