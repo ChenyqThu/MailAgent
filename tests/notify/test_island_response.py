@@ -30,8 +30,11 @@ def patch_run(monkeypatch):
     monkeypatch.delenv("MAILAGENT_FRONTEND_DEEPLINK_ENABLED", raising=False)
     captured: List[Dict[str, Any]] = []
 
-    async def fake_run(args, *, timeout: float = 10) -> None:
+    async def fake_run(args, *, timeout: float = 10):
         captured.append({"args": list(args), "timeout": timeout})
+        # P0-4: _run 现在返 (ok, err_msg) 给 handle_response 做 ack 决策。
+        # 默认成功; 个别测试需要失败时自己 monkeypatch 覆盖。
+        return True, ""
 
     monkeypatch.setattr(island_response, "_run", fake_run)
     return captured
@@ -624,3 +627,120 @@ def test_snooze_post_completed_dispatch_failure_does_not_block(
     # snooze 仍正常入队
     assert len(patch_snooze) == 1
     assert patch_snooze[0]["internal_id"] == 99
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-4: ActionAcked envelope — subprocess 结果回流 fork UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def patch_dispatch_acked(monkeypatch):
+    """抓 island_dispatch.dispatch_action_acked 入参 (P0-4 subprocess 完成回流)。"""
+    captured: List[Dict[str, Any]] = []
+
+    def fake_dispatch_acked(**kwargs):
+        captured.append(kwargs)
+
+    from src.notify import island_dispatch as _id
+    monkeypatch.setattr(_id, "dispatch_action_acked", fake_dispatch_acked)
+    return captured
+
+
+def test_mark_done_success_acks_completed(patch_run, patch_dispatch_acked):
+    """P0-4: subprocess 成功 → ack ok=True。"""
+    meta = _meta(53675, **{"tool_use_id": "bridge-uuid-abc"})
+    asyncio.run(island_response.handle_response(_resp("mark_done"), meta))
+    assert len(patch_dispatch_acked) == 1
+    call = patch_dispatch_acked[0]
+    assert call["choice"] == "mark_done"
+    assert call["internal_id"] == 53675
+    assert call["ok"] is True
+    assert call["error"] == ""
+    # envelope_id 剥 "bridge-" 前缀
+    assert call["envelope_id"] == "uuid-abc"
+
+
+def test_mark_done_failure_acks_error_with_stderr(patch_dispatch_acked, monkeypatch):
+    """P0-4: subprocess 失败 → ack ok=False + error=stderr (≤200 chars)。"""
+    monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+
+    async def fake_run_fail(args, *, timeout: float = 10):
+        return False, "rc=1 notion auth fail"
+
+    monkeypatch.setattr(island_response, "_run", fake_run_fail)
+    asyncio.run(island_response.handle_response(_resp("mark_done"), _meta(42)))
+    assert len(patch_dispatch_acked) == 1
+    call = patch_dispatch_acked[0]
+    assert call["ok"] is False
+    assert call["error"] == "rc=1 notion auth fail"
+    assert call["choice"] == "mark_done"
+
+
+def test_snooze_does_not_ack(patch_run, patch_snooze, patch_dispatch_acked, monkeypatch):
+    """P0-4: snooze 路径不发 ack (P0-1 已发 MailCompleted)。"""
+    # snooze 路径会先调 dispatch_mail_completed (P0-1) — 这里只验证 dispatch_action_acked 不被调
+    from src.notify import island_dispatch as _id
+    monkeypatch.setattr(_id, "dispatch_mail_completed", lambda **kw: None)
+
+    asyncio.run(island_response.handle_response(_resp("snooze_1h"), _meta(7)))
+    assert patch_dispatch_acked == []
+
+
+@pytest.mark.parametrize("choice", ["send_draft", "edit_draft", "discard_draft"])
+def test_ai_draft_stub_does_not_ack(choice, patch_run, patch_dispatch_acked):
+    """P0-4: AI draft stub 路径不发 ack (无 subprocess)。"""
+    asyncio.run(island_response.handle_response(_resp(choice), _meta(8)))
+    assert patch_dispatch_acked == []
+
+
+def test_create_draft_failure_acks_error(patch_dispatch_acked, monkeypatch):
+    """P0-4: create_draft (Phase 2 alias too) 失败 → ack ok=False。"""
+    monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
+
+    async def fake_run_fail(args, *, timeout: float = 10):
+        return False, "imap append failed"
+
+    monkeypatch.setattr(island_response, "_run", fake_run_fail)
+    asyncio.run(island_response.handle_response(_resp("create_draft"), _meta(15)))
+    assert len(patch_dispatch_acked) == 1
+    assert patch_dispatch_acked[0]["ok"] is False
+    assert patch_dispatch_acked[0]["choice"] == "create_draft"
+
+
+def test_open_mail_missing_account_acks_failure(patch_dispatch_acked, patch_run):
+    """P0-4: open_mail 缺 accountName → ack ok=False (短路, 不调 osascript)。"""
+    meta = _meta(99)
+    meta["mailagent.accountName"] = ""  # 缺
+    asyncio.run(island_response.handle_response(_resp("open_mail"), meta))
+    assert patch_run == []  # 不调 osascript
+    assert len(patch_dispatch_acked) == 1
+    assert patch_dispatch_acked[0]["ok"] is False
+    assert "missing accountName" in patch_dispatch_acked[0]["error"]
+
+
+def test_ack_dispatch_failure_does_not_break_handle_response(
+    patch_run, monkeypatch,
+):
+    """P0-4: dispatch_action_acked 抛异常 → handle_response 仅 log, 不向上抛。"""
+    def boom(**kwargs):
+        raise RuntimeError("ack envelope broken")
+
+    from src.notify import island_dispatch as _id
+    monkeypatch.setattr(_id, "dispatch_action_acked", boom)
+
+    # 不抛
+    asyncio.run(island_response.handle_response(_resp("mark_done"), _meta(1)))
+    # subprocess 仍正常调 (1 次)
+    assert len(patch_run) == 1
+
+
+def test_extract_envelope_id_strips_bridge_prefix():
+    """P0-4 helper: tool_use_id "bridge-<uuid>" → uuid; 其他原样; 缺 → ""。"""
+    assert island_response._extract_envelope_id(
+        {"tool_use_id": "bridge-abc-def-123"}
+    ) == "abc-def-123"
+    assert island_response._extract_envelope_id(
+        {"tool_use_id": "plain-id"}
+    ) == "plain-id"
+    assert island_response._extract_envelope_id({}) == ""

@@ -543,6 +543,84 @@ def test_ai_draft_disabled_dispatcher_is_noop(patch_send, fake_store):
     assert captured == []
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-4: ActionAcked envelope (subprocess 结果回流 fork UI)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_action_acked_ok_status_completed(patch_send, fake_store):
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def _scenario():
+        island_dispatch.dispatch_action_acked(
+            internal_id=200, envelope_id="abc-123", choice="mark_done", ok=True,
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert env.event_type == "ActionAcked"
+    assert env.session_key == "mailagent:email:200"
+    assert env.status_kind == "completed"
+    assert env.status_detail is None
+    assert env.metadata["mailagent.actionAckedChoice"] == "mark_done"
+    assert env.metadata["mailagent.actionAckedEnvelopeId"] == "abc-123"
+    assert env.metadata["mailagent.actionAckedOk"] == "true"
+    assert env.metadata["mailagent.scenario"] == "ActionAcked"
+    assert env.intervention is None
+    assert env.expects_response is False
+
+
+def test_action_acked_fail_status_error_with_detail(patch_send, fake_store):
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def _scenario():
+        island_dispatch.dispatch_action_acked(
+            internal_id=201, envelope_id="def-456", choice="create_draft",
+            ok=False, error="IMAP timeout after 60s",
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert env.status_kind == "error"
+    assert env.status_detail == "IMAP timeout after 60s"
+    assert env.metadata["mailagent.actionAckedOk"] == "false"
+    assert env.metadata["mailagent.error"] == "IMAP timeout after 60s"
+    # 失败时 preview 是 error 的截短 (≤80 chars)
+    assert "IMAP timeout" in env.preview
+
+
+def test_action_acked_truncates_long_error(patch_send, fake_store):
+    """P0-4: error 截 200 (status_detail) + 80 (preview), 防 envelope > 64KiB."""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+    long_err = "E" * 500
+
+    async def _scenario():
+        island_dispatch.dispatch_action_acked(
+            internal_id=202, envelope_id="z", choice="mark_done",
+            ok=False, error=long_err,
+        )
+        await asyncio.sleep(0.05)
+
+    asyncio.run(_scenario())
+    env = captured[0]
+    assert len(env.status_detail) == 200
+    assert len(env.preview) == 80
+
+
+def test_action_acked_disabled_dispatcher_is_noop(patch_send, fake_store):
+    captured, _ = patch_send
+    island_dispatch.init(enabled=False, sync_store=fake_store)
+    island_dispatch.dispatch_action_acked(
+        internal_id=1, envelope_id="x", choice="mark_done", ok=True,
+    )
+    assert captured == []
+
+
 def test_mail_completed_extra_metadata_rejects_invalid_values(patch_send, fake_store):
     """P0-1: extra_metadata 防御性 filter — 非 str/int/bool 的 value 不写入。"""
     captured, _ = patch_send

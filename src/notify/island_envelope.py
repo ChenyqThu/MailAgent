@@ -48,6 +48,9 @@ _WIRE_EVENT_MAP: Dict[str, str] = {
     "AIDraftStart": "Notification",
     "AIDraftStream": "Notification",
     "AIDraftReady": "Notification",        # status.kind=completed
+
+    # P0-4: subprocess 完成回流 — fork 端读 metadata.mailagent.actionAcked* 决定 UI
+    "ActionAcked": "Notification",
 }
 
 

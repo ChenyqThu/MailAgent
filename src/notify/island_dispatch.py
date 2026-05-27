@@ -624,6 +624,62 @@ def dispatch_ai_draft_ready(
     _fire(env, internal_id=internal_id)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-4: ActionAcked envelope — subprocess 结果回流 fork UI
+# 用户点 fork 按钮 → mailagent 跑子进程 (mailagent notion update-flag / email
+# unsubscribe 等); 当前 silent log → fork UI 不知道真实结果。新增 dispatch_action_acked
+# 让 plugin 在 subprocess 完成后追发一条 envelope, fork 端读 metadata 即可。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def dispatch_action_acked(
+    *,
+    internal_id: int,
+    envelope_id: str,
+    choice: str,
+    ok: bool,
+    error: str = "",
+) -> None:
+    """通知 fork: 用户 click 触发的 action 子进程已完成 (成功 or 失败)。
+
+    成功 → ``status_kind=completed`` + preview=choice; 失败 → ``status_kind=error``
+    + status_detail/preview=error。fork 端读以下 metadata 即可 (无需改 ClientProfile
+    / brand 等 wire schema):
+
+    - ``mailagent.actionAckedChoice``: 当时用户点的 option id (如 "mark_done")
+    - ``mailagent.actionAckedEnvelopeId``: 触发的原 envelope id (correlation)
+    - ``mailagent.actionAckedOk``: "true" / "false"
+    - ``mailagent.error`` (失败时): 截 200 chars
+
+    向后兼容: 老 fork 端不读这些 key, envelope 仍能正常解码 (生成的 wire 事件名是
+    "Notification", fork dispatcher 接得住, 仅 metadata 多带几个字段)。
+    """
+    if not _state.enabled:
+        return
+    metadata = _base_metadata(
+        internal_id=internal_id, page_id="",
+        scenario="ActionAcked",
+        error=(error or "")[:200] if not ok else "",
+    )
+    metadata["mailagent.actionAckedChoice"] = choice or ""
+    metadata["mailagent.actionAckedEnvelopeId"] = envelope_id or ""
+    metadata["mailagent.actionAckedOk"] = "true" if ok else "false"
+    title_key = "mail.action.acked.ok" if ok else "mail.action.acked.fail"
+    preview = choice if ok else (error or "")[:80]
+    env = BridgeEnvelope(
+        event_type="ActionAcked",
+        session_key=f"mailagent:email:{internal_id}",
+        title=island_i18n.t(title_key),
+        preview=_one_line(preview),
+        status_kind="completed" if ok else "error",
+        status_detail=None if ok else (error or "")[:200],
+        metadata=metadata,
+        intervention=None,
+        expects_response=False,
+    )
+    _fire(env, internal_id=internal_id)
+
+
 def dispatch_dead_letter_accum(*, count: int, threshold: int = 0) -> None:
     """死信累积告警 → emit ``DeadLetterAccum``."""
     if not _state.enabled:

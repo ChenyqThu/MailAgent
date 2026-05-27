@@ -40,7 +40,7 @@ import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from src.notify import island_snooze
 from src.notify.island_action_whitelist import (
@@ -127,14 +127,21 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
 
     log.info("[island-response] choice=%s internal_id=%d", choice, internal_id)
 
+    # P0-4: subprocess 跑完后回流 ActionAcked envelope 让 fork UI 反映真实结果。
+    # ack_ok=None 表示该分支无 subprocess (snooze / AI draft stub), 不发 ack;
+    # ack_ok=True/False 表示 subprocess 跑过, 发 ack。ack_err 是失败时的 stderr 截短。
+    ack_ok: Optional[bool] = None
+    ack_err: str = ""
+
     try:
         # --- Phase 1 静态 5 (open / snooze 类独立路径) ---
         if choice == "open_mail":
-            await _open_mail(internal_id, envelope_meta)
+            ack_ok, ack_err = await _open_mail(internal_id, envelope_meta)
         elif choice == "open_notion":
-            await _open_notion(envelope_meta)
+            ack_ok, ack_err = await _open_notion(envelope_meta)
         elif choice == "snooze_1h":
             _enqueue_snooze(internal_id, 3600, envelope_meta)
+            # snooze 路径不走 ack (P0-1 已追发 MailCompleted 清 fork dock)
         # --- Phase 2 独立路径 (snooze / open URL / Calendar) ---
         elif choice == "defer_to_monday_9am":
             _enqueue_snooze(
@@ -143,20 +150,20 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
                 envelope_meta,
             )
         elif choice == "add_to_calendar":
-            await _add_to_calendar(internal_id)
+            ack_ok, ack_err = await _add_to_calendar(internal_id)
         elif choice == "convert_to_notion_task":
             # F3: LLM 决策 + 代码写日程库 task (create-task CLI 内部已 mark 邮件完成)
-            await _convert_to_notion_task(internal_id)
+            ack_ok, ack_err = await _convert_to_notion_task(internal_id)
         elif choice == "archive_and_unsubscribe":
             # F2: 解析 List-Unsubscribe header 真退订 (unsubscribe CLI 内部 mark 完成)
-            await _archive_and_unsubscribe(internal_id)
+            ack_ok, ack_err = await _archive_and_unsubscribe(internal_id)
         # --- 路径 1: 标完成 (Phase 1 mark_done + Phase 2 alias) ---
         elif choice in _MARK_DONE_ALIASES:
-            await _mark_done(internal_id)
+            ack_ok, ack_err = await _mark_done(internal_id)
             _log_alias_intent(choice, internal_id)
         # --- 路径 2: 起草 (Phase 1 create_draft + Phase 2 4 个 alias) ---
         elif choice in _CREATE_DRAFT_ALIASES:
-            await _create_draft(internal_id)
+            ack_ok, ack_err = await _create_draft(internal_id)
         # --- P0-2: AIDraftReady 三 option (send/edit/discard) stub ---
         # 真实业务 (发送草稿 / 打开编辑器 / 丢弃) 由上游 LLM agent Phase 3+ 接管;
         # 当前 stub 仅记录用户决策让 ops 能 grep 看流量。
@@ -170,8 +177,41 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
                 "update _MARK_DONE_ALIASES / _CREATE_DRAFT_ALIASES / explicit branch",
                 choice,
             )
+            ack_ok = False
+            ack_err = f"no dispatch branch for {choice!r}"
     except Exception as e:  # noqa: BLE001
         log.warning("[island-response] dispatch failed for %s: %s", choice, e)
+        ack_ok = False
+        ack_err = str(e)[:200]
+
+    # P0-4: 仅 subprocess-running 分支发 ack (snooze / AI draft stub 跳过)。
+    # 任何 ack 异常仅 log 不破坏主路径。
+    if ack_ok is not None:
+        try:
+            envelope_id = _extract_envelope_id(envelope_meta)
+            from src.notify import island_dispatch
+            island_dispatch.dispatch_action_acked(
+                internal_id=internal_id,
+                envelope_id=envelope_id,
+                choice=choice,
+                ok=ack_ok,
+                error=ack_err,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("[island-response] dispatch_action_acked failed: %s", e)
+
+
+def _extract_envelope_id(meta: Dict[str, str]) -> str:
+    """从 envelope_meta 取触发 button click 的原 envelope id。
+
+    fork 端 wire 时 metadata["tool_use_id"] 形如 ``"bridge-<uuid>"`` (见
+    ``island_envelope.py:to_wire_dict`` 注释); 这里剥前缀返 uuid。无 tool_use_id 时
+    返 ""。
+    """
+    tool_use_id = meta.get("tool_use_id", "") or ""
+    if tool_use_id.startswith("bridge-"):
+        return tool_use_id[len("bridge-"):]
+    return tool_use_id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -190,11 +230,10 @@ def _frontend_deeplink_enabled() -> bool:
     return os.environ.get(_FRONTEND_DEEPLINK_ENV, "").strip().lower() == "true"
 
 
-async def _open_mail(internal_id: int, meta: Dict[str, str]) -> None:
+async def _open_mail(internal_id: int, meta: Dict[str, str]) -> Tuple[bool, str]:
     # F6: gate on → 打开 MailAgent 前端邮件视图
     if _frontend_deeplink_enabled():
-        await _run(["open", f"mailagent://email/{int(internal_id)}"], timeout=5)
-        return
+        return await _run(["open", f"mailagent://email/{int(internal_id)}"], timeout=5)
 
     # fallback: 系统 Mail.app (osascript). H-12: 必须用
     # `first message of mailbox of account whose id is <int>` 语法
@@ -202,7 +241,7 @@ async def _open_mail(internal_id: int, meta: Dict[str, str]) -> None:
     mailbox_name = meta.get("mailagent.mailboxName") or meta.get("mailagent.mailbox") or "收件箱"
     if not account_name:
         log.warning("[island-response] open_mail missing accountName; aborting")
-        return
+        return False, "missing accountName"
     script = (
         'tell application "Mail"\n'
         '  activate\n'
@@ -212,23 +251,24 @@ async def _open_mail(internal_id: int, meta: Dict[str, str]) -> None:
         '  open m\n'
         'end tell\n'
     )
-    await _run(["osascript", "-e", script], timeout=8)
+    return await _run(["osascript", "-e", script], timeout=8)
 
 
-async def _open_notion(meta: Dict[str, str]) -> None:
+async def _open_notion(meta: Dict[str, str]) -> Tuple[bool, str]:
     # F6: gate on → 打开 MailAgent 前端邮件视图 (前端是统一邮件入口, 不跳 Notion)
     if _frontend_deeplink_enabled():
         internal_id_str = meta.get("mailagent.internalId", "").strip()
         if internal_id_str.isdigit():
-            await _run(["open", f"mailagent://email/{int(internal_id_str)}"], timeout=5)
-            return
+            return await _run(
+                ["open", f"mailagent://email/{int(internal_id_str)}"], timeout=5,
+            )
         # 无 internalId → 落回 Notion fallback (下方)
 
     # fallback: Notion 页 (notion:// 桌面版 / https 兜底). M-13: 桌面版 fallback Web URL
     page_id_dashed = meta.get("mailagent.notionPageId", "").strip()
     if not page_id_dashed:
         log.debug("[island-response] open_notion no page_id; skipping")
-        return
+        return False, "no page_id"
     page_id_flat = page_id_dashed.replace("-", "")
     use_app = Path("/Applications/Notion.app").exists() and bool(shutil.which("open"))
     url = (
@@ -236,7 +276,7 @@ async def _open_notion(meta: Dict[str, str]) -> None:
         if use_app
         else f"https://www.notion.so/{page_id_flat}"
     )
-    await _run(["open", url], timeout=5)
+    return await _run(["open", url], timeout=5)
 
 
 def _mailagent_args(*subcommand: str) -> list:
@@ -257,13 +297,13 @@ def _mailagent_args(*subcommand: str) -> list:
     return args
 
 
-async def _create_draft(internal_id: int) -> None:
+async def _create_draft(internal_id: int) -> Tuple[bool, str]:
     # davmail IMAP APPEND / applescript sh; Notion retrieve 可能慢, timeout 给 60s
-    await _run(_mailagent_args("email", "draft", str(internal_id)), timeout=60)
+    return await _run(_mailagent_args("email", "draft", str(internal_id)), timeout=60)
 
 
-async def _mark_done(internal_id: int) -> None:
-    await _run(
+async def _mark_done(internal_id: int) -> Tuple[bool, str]:
+    return await _run(
         _mailagent_args(
             "notion", "update-flag", str(internal_id), "--processing-status", "已完成",
         ),
@@ -271,30 +311,30 @@ async def _mark_done(internal_id: int) -> None:
     )
 
 
-async def _convert_to_notion_task(internal_id: int) -> None:
+async def _convert_to_notion_task(internal_id: int) -> Tuple[bool, str]:
     # F3: mailagent notion create-task — LLM extract_task (1 call) + 写日程库 page +
     # Email Inbox relation + 标邮件完成. LLM + Notion 写 + retrieve, timeout 给 90s.
-    await _run(
+    return await _run(
         _mailagent_args("notion", "create-task", str(internal_id)),
         timeout=90,
     )
 
 
-async def _archive_and_unsubscribe(internal_id: int) -> None:
+async def _archive_and_unsubscribe(internal_id: int) -> Tuple[bool, str]:
     # F2: mailagent email unsubscribe — 解析 List-Unsubscribe header 智能退订
     # (RFC 8058 one-click POST / open URL / open mailto), unsubscribe CLI 内部
     # 默认 mark 邮件完成. backend 重抽 raw MIME + 可能 httpx POST, timeout 给 30s.
-    await _run(
+    return await _run(
         _mailagent_args("email", "unsubscribe", str(internal_id)),
         timeout=30,
     )
 
 
-async def _add_to_calendar(internal_id: int) -> None:
+async def _add_to_calendar(internal_id: int) -> Tuple[bool, str]:
     # F5: LLM 抽邮件提到的会议时间 + 建日程库 page (--as-meeting). 复用 create-task
     # CLI 会议模式 (schedule_type=工作·会议 + Time 抽自邮件). meeting_sync 已自动处理
     # 标准 .ics 邀请, 这个 cover 非标准时间提及 (邮件正文说"周五 10:00"等).
-    await _run(
+    return await _run(
         _mailagent_args("notion", "create-task", str(internal_id), "--as-meeting"),
         timeout=90,
     )
@@ -464,8 +504,14 @@ def _handle_ai_draft_stub(choice: str, internal_id: int, meta: Dict[str, str]) -
     )
 
 
-async def _run(args, *, timeout: float = 10) -> None:
-    """fire-and-forget subprocess；不抛 (调用方需要灵动岛 click ack 即时返回)."""
+async def _run(args, *, timeout: float = 10) -> Tuple[bool, str]:
+    """fire-and-forget subprocess；不抛 (调用方需要灵动岛 click ack 即时返回)。
+
+    返回 ``(ok, error_msg)``: ``ok=True`` 表示 rc=0; ``ok=False`` 时 error_msg 是
+    截短 (≤200 chars) 的 stderr / 异常字符串, 供上游 dispatch_action_acked 回流 fork UI。
+
+    向后兼容: 老调用方忽略返回值仍工作 (Python 隐式 ignore tuple)。
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -477,14 +523,18 @@ async def _run(args, *, timeout: float = 10) -> None:
         except asyncio.TimeoutError:
             proc.kill()
             log.warning("[island-response] cmd timeout: %s", args[0])
-            return
+            return False, f"timeout after {timeout}s: {args[0]}"
         if proc.returncode != 0:
             err = (stderr or b"").decode(errors="replace")[:200]
             log.warning("[island-response] %s rc=%s err=%s", args[0], proc.returncode, err)
+            return False, err or f"rc={proc.returncode}"
+        return True, ""
     except FileNotFoundError:
         log.warning("[island-response] command not found: %s", args[0])
+        return False, f"command not found: {args[0]}"
     except Exception as e:  # noqa: BLE001
         log.warning("[island-response] subprocess error %s: %s", args[0], e)
+        return False, str(e)[:200]
 
 
 def _escape(text: str) -> str:
