@@ -355,6 +355,30 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     [internalId, openCompose]
   )
 
+  // Warm the reply compose plans after the detail settles, so the reply /
+  // reply-all CTAs open instantly instead of waiting ~2s for the mailagent CLI
+  // subprocess (the draftPlan dry-run forks a Python process; cost is the
+  // interpreter + import chain, not the SQL). Same query key as ComposePanel
+  // (['compose','plan',id,mode], staleTime Infinity) → the panel's useQuery
+  // hits warm cache. Debounced 600ms so rapid J/K arrow-through doesn't fork
+  // processes per email; forward stays on-demand (rarer + collects attachment
+  // bytes, heavier to warm speculatively).
+  useEffect(() => {
+    if (internalId === null || internalId < 0) return
+    const id = internalId
+    const timer = setTimeout(() => {
+      for (const mode of ['reply', 'reply-all'] as const) {
+        void queryClient.prefetchQuery({
+          queryKey: ['compose', 'plan', id, mode],
+          queryFn: () => mailApi.email.draftPlan({ internalId: id, mode }),
+          staleTime: Infinity,
+          retry: false
+        })
+      }
+    }, 600)
+    return () => clearTimeout(timer)
+  }, [internalId, queryClient, mailApi])
+
   const handleResync = useCallback(
     async ({ dryRun }: { dryRun: boolean }): Promise<void> => {
       if (internalId === null) return
