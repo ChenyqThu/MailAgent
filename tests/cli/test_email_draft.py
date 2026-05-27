@@ -296,9 +296,27 @@ def test_draft_not_found(cli_runner, seeded_db):
     assert data["error"]["code"] == "E_NOT_FOUND"
 
 
-def test_draft_no_reply_suggestion(cli_runner, seeded_db):
-    # 12345 无 llm_processing 行 (没 seed) → labels_json 空 → E_NOT_FOUND
+def test_draft_dry_run_no_reply_suggestion_prefills_recipients(cli_runner, seeded_db):
+    # dry-run = 前端 compose 预填: 收件人推导不依赖 LLM 建议, 12345 无 reply_suggestion
+    # 也要返回推导出的收件人 (正文留空让用户自己写), 不能整个 plan 失败 — 否则前端
+    # 打开回复面板时连收件人都拿不到 (Bug B 修复).
     r = _invoke(cli_runner, "email", "draft", "12345", "--dry-run",
+                "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    plan = data["data"]
+    assert plan["dry_run"] is True
+    # reply-all (默认 mode) → to 含原发件人; 收件人推导与有无建议无关
+    assert "alice@example.com" in plan["to"]
+    # 无建议 → 正文 HTML 为空 (前端 editor 留空)
+    assert not plan["reply_html"]
+    assert plan["reply_html_len"] == 0
+
+
+def test_draft_real_no_reply_suggestion_errors(cli_runner, seeded_db):
+    # 真实 draft (非 dry-run) 无正文来源仍报错, 避免误发空回复 — allow_missing_reply
+    # 只对 dry-run 预填放宽, 写命令契约不变.
+    r = _invoke(cli_runner, "email", "draft", "12345",
                 "-o", "json", db_path=seeded_db)
     data = _last_json(r.output)
     assert data["status"] == "error"
@@ -417,5 +435,47 @@ def test_draft_body_file_overrides_suggestion(cli_runner, seeded_db, monkeypatch
         draft = fake_backend.appended[0]
         assert draft.reply_text == "用户编辑后的正文"
         assert _REPLY_MD not in (draft.reply_text or "")
+    finally:
+        os.unlink(path)
+
+
+def test_draft_forward_dry_run_prefills_intro(cli_runner, seeded_db):
+    # 前端打开转发面板: dry-run + 无 body + 无收件人 — plan 必须返回 forward_intro_html
+    # 供 editor 预填。引用块 header 来自 record metadata, 与有无正文/收件人无关。
+    r = _invoke(cli_runner, "email", "draft", "12345", "--mode", "forward",
+                "--dry-run", "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "success", r.output
+    plan = data["data"]
+    assert plan["mode"] == "forward"
+    assert plan["subject"].startswith("Fwd:")
+    assert plan["forward_intro_html"] is not None
+    assert "Forwarded message" in plan["forward_intro_html"]
+
+
+def test_draft_forward_body_html_no_duplicate_intro(cli_runner, seeded_db, monkeypatch):
+    # 前端转发发送/存草稿: editor HTML (经 --body-html-file) 已含预填引用块, _prepare_draft
+    # 不该再单独构造 forward_intro — 否则 build_outgoing_mime 二次 append → 引用块重复。
+    # 断言 DraftRequest.forward_intro_html/text 为空, reply_html = 用户正文 (含一份引用块)。
+    import os
+    import tempfile
+
+    _bypass_auth(monkeypatch)
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+    fd, path = tempfile.mkstemp(suffix=".html")
+    os.write(fd, b"<p>FYI</p><div>---------- Forwarded message ----------</div><p>orig</p>")
+    os.close(fd)
+    try:
+        r = _invoke(cli_runner, "email", "draft", "12345", "--mode", "forward",
+                    "--to", "x@y.com", "--body-html-file", path,
+                    "-o", "json", db_path=seeded_db)
+        data = _last_json(r.output)
+        assert data["status"] == "success", r.output
+        draft = fake_backend.appended[0]
+        assert draft.forward_intro_html is None
+        assert draft.forward_intro_text is None
+        # 用户正文里只有一份引用块
+        assert (draft.reply_html or "").count("Forwarded message") == 1
     finally:
         os.unlink(path)

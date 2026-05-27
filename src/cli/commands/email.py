@@ -1510,6 +1510,7 @@ def _prepare_draft(
     cc_override: Optional[str] = None,
     bcc: Optional[str] = None,
     subject_override: Optional[str] = None,
+    allow_missing_reply: bool = False,
 ) -> tuple[Any, list[str]]:
     """构造 DraftRequest (draft + send 共用, 保证 '草稿预览 = 实际发送内容').
 
@@ -1526,6 +1527,11 @@ def _prepare_draft(
 
     # 正文优先级: --body-html-file (前端 compose TipTap HTML, 零转换直用) >
     # --body-file (markdown) > SQLite reply_suggestion_md. forward 允许空 (纯转发).
+    # explicit_body: 调用方传了完整正文 (前端 compose 发送 / 用户 --body-file)。
+    # forward 时若已有显式正文, 引用块已在正文里 (dry-run 预填阶段拼进 editor 后随
+    # --body-html-file 传回), 不能再单独构造 forward_intro — 否则 build_outgoing_mime
+    # 会二次 append 导致引用块重复 (Bug: 前端转发发送/存草稿引用块出现两次)。
+    explicit_body = bool(body_html_file or body_file)
     if body_html_file:
         from pathlib import Path
 
@@ -1546,7 +1552,11 @@ def _prepare_draft(
         reply_html = _reply_md_to_html(reply_text) if reply_text.strip() else None
     else:
         reply_md = _fetch_reply_suggestion_md(cli, internal_id)
-        if not reply_md and mode != "forward":
+        # allow_missing_reply: dry-run 预填时放宽 — 收件人推导不依赖 LLM 建议,
+        # 没建议也要能预填 reply/reply-all 的收件人 (正文留空让用户自己写)。否则
+        # 整个 dry-run plan 失败, 前端连收件人都拿不到。真实 draft/send 仍要求有
+        # 正文来源 (建议 / --body-file / --body-html-file), 避免误发空回复。
+        if not reply_md and mode != "forward" and not allow_missing_reply:
             raise CliNotFoundError(
                 f"Email {internal_id} 无 reply_suggestion (SQLite labels_json 空)",
                 hint="先 mailagent llm run <id> 生成回复建议, 或用 --body-file 传正文",
@@ -1559,10 +1569,16 @@ def _prepare_draft(
     attachments: list = []
     warnings: list[str] = []
     if mode == "forward":
-        body_md = cli.email_repo.get_body_markdown(internal_id) or ""
-        body_html = cli.email_repo.get_body_html(internal_id)
-        forward_intro_text, forward_intro_html = _build_forward_intro(record, body_md, body_html)
+        # 附件总是 server-side 重新收集 — 前端无法传字节, 必须按 internal_id 重读。
         attachments, warnings = _collect_forward_attachments(cli, internal_id)
+        # 引用块仅在"无显式正文"时构造 (dry-run 预填 / 纯 CLI 转发)。前端 compose
+        # 发送时 body_html_file 已含预填引用块, 跳过避免重复。
+        if not explicit_body:
+            body_md = cli.email_repo.get_body_markdown(internal_id) or ""
+            body_html = cli.email_repo.get_body_html(internal_id)
+            forward_intro_text, forward_intro_html = _build_forward_intro(
+                record, body_md, body_html
+            )
 
     draft = _compose_reply_draft(
         record, internal_id=internal_id, mode=mode,
@@ -1643,6 +1659,8 @@ def email_draft(
             extra_to=extra_to, extra_cc=extra_cc, body_file=body_file,
             body_html_file=body_html_file,
             to_override=to, cc_override=cc, bcc=bcc, subject_override=subject,
+            # dry-run = 前端 compose 预填, 无 reply_suggestion 也要返回收件人。
+            allow_missing_reply=dry_run,
         )
     except CliError as e:
         raise emit_cli_error(cli, e)

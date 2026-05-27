@@ -550,9 +550,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     <main aria-label="inbox-main" className="relative flex-1 min-w-0 glass-3 flex flex-col min-h-0">
       {/* Compose overlay — reply / reply-all / forward composer covers the
           detail column when open for this email (store-gated). Rendered above
-          the body so the user composes against the same surface. */}
+          the body so the user composes against the same surface.
+          bg-ink-3 实心底: ComposePanel 自身是 glass-3 (ink-3/0.55) 半透明, 作为
+          接管整个详情列的工作面会透出底下邮件正文导致看不清内容; overlay 语义就是
+          "遮盖详情列", 加实心 ink-3 底 (= 详情列标称色) 既挡住正文又保留面板玻璃层次. */}
       {composeOpen && (
-        <div className="absolute inset-0 z-20 flex flex-col">
+        <div className="absolute inset-0 z-20 flex flex-col bg-ink-3">
           <ComposePanel />
         </div>
       )}
@@ -737,8 +740,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               })
             }
             // `-ml-px` 抵 SF Mono 字符 left side bearing — 它比系统 sans 多
-             // 1-2px, 不加的话 mono value 起点会比 sans value (Mailbox /
-             // Notion URL) 视觉偏右一截.
+            // 1-2px, 不加的话 mono value 起点会比 sans value (Mailbox /
+            // Notion URL) 视觉偏右一截.
             morePropsRows.push({
               label: 'internal_id',
               value: <span className="font-mono text-aux -ml-px">{email.internal_id}</span>
@@ -746,7 +749,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             if (email.message_id) {
               morePropsRows.push({
                 label: 'message_id',
-                value: <span className="font-mono text-aux break-all -ml-px">{email.message_id}</span>
+                value: (
+                  <span className="font-mono text-aux break-all -ml-px">{email.message_id}</span>
+                )
               })
             }
             if (email.notion_url) {

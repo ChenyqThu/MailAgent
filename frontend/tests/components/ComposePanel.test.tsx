@@ -39,15 +39,18 @@ function renderWithClient(node: React.ReactNode): ReturnType<typeof render> {
   return render(<QueryClientProvider client={qc}>{node}</QueryClientProvider>)
 }
 
+// draftPlan 返回值 = DraftPlanResult, 字段是 snake_case (对齐 CLI JSON 输出)。
+// 早期 mock 误用 camelCase (replyHtml/forwardIntroHtml) 掩盖了 Bug A: 真实后端
+// 返回 snake_case, 但 ComposePanel 读 camelCase → 正文永远填不上。
 const PLAN = {
-  internalId: 42,
+  internal_id: 42,
   mode: 'reply' as const,
   to: ['alice@acme.com'],
   cc: [],
   bcc: [],
   subject: 'Re: 合同审阅',
-  replyHtml: '<p>你好</p>',
-  forwardIntroHtml: '',
+  reply_html: '<p>你好</p>',
+  forward_intro_html: '',
   attachments: 0,
   warnings: []
 }
@@ -75,10 +78,12 @@ describe('ComposePanel — pre-fill + send flow', () => {
   test('open → draftPlan fetched + recipients/subject pre-filled', async () => {
     act(() => useComposeStore.getState().openCompose(42, 'reply'))
     renderWithClient(<ComposePanel />)
-    await waitFor(() => expect(mockDraftPlan).toHaveBeenCalledWith({ internalId: 42, mode: 'reply' }))
+    await waitFor(() =>
+      expect(mockDraftPlan).toHaveBeenCalledWith({ internalId: 42, mode: 'reply' })
+    )
     // pre-filled subject lands in the Subject input
     await waitFor(() => {
-      const subj = screen.getByLabelText('Subject') as HTMLInputElement
+      const subj = screen.getByLabelText('主题') as HTMLInputElement
       expect(subj.value).toBe('Re: 合同审阅')
     })
     // pre-filled To chip rendered
@@ -106,6 +111,8 @@ describe('ComposePanel — pre-fill + send flow', () => {
     expect(arg).toMatchObject({ internalId: 42, mode: 'reply' })
     expect(arg.to).toEqual(['alice@acme.com'])
     expect(typeof arg.bodyHtml).toBe('string')
+    // plan.reply_html 必须真正预填进 editor → 出现在发送正文里 (Bug A 回归守护)。
+    expect(arg.bodyHtml).toContain('你好')
   })
 
   test('保存草稿 dispatches email.draft', async () => {
@@ -122,7 +129,7 @@ describe('ComposePanel — pre-fill + send flow', () => {
     act(() => useComposeStore.getState().openCompose(42, 'forward'))
     renderWithClient(<ComposePanel />)
     await waitFor(() =>
-      expect((screen.getByLabelText('Subject') as HTMLInputElement).value).toBe('Fwd: 合同审阅')
+      expect((screen.getByLabelText('主题') as HTMLInputElement).value).toBe('Fwd: 合同审阅')
     )
     fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
     expect(mockSend).not.toHaveBeenCalled()

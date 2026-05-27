@@ -42,7 +42,11 @@ function asWriteError(err: unknown): WriteErrorShape {
 }
 
 function modeLabelKey(mode: ComposeMode): string {
-  return mode === 'reply' ? 'compose.modeReply' : mode === 'reply-all' ? 'compose.modeReplyAll' : 'compose.modeForward'
+  return mode === 'reply'
+    ? 'compose.modeReply'
+    : mode === 'reply-all'
+      ? 'compose.modeReplyAll'
+      : 'compose.modeForward'
 }
 
 interface Props {
@@ -111,8 +115,7 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     if ((plan.cc ?? []).length > 0) setCcVisible(true)
     if ((plan.bcc ?? []).length > 0) setBccVisible(true)
     setPlanAttachments(plan.attachments ?? 0)
-    const html =
-      mode === 'forward' ? plan.forwardIntroHtml || '' : plan.replyHtml || ''
+    const html = mode === 'forward' ? plan.forward_intro_html || '' : plan.reply_html || ''
     if (html) editor.commands.setContent(html)
     setPlanApplied(true)
   }, [planApplied, planQ.data, editor, mode])

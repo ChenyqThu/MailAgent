@@ -31,11 +31,11 @@ describe('EmailToolbar — compose split button', () => {
   test('chevron menu exposes reply-all + forward', () => {
     const onOpenCompose = vi.fn()
     render(<EmailToolbar onOpenCompose={onOpenCompose} />)
-    fireEvent.click(screen.getByRole('button', { name: '撰写方式' }))
+    fireEvent.click(screen.getByRole('button', { name: '撰写选项' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /回复所有/ }))
     expect(onOpenCompose).toHaveBeenCalledWith('reply-all')
 
-    fireEvent.click(screen.getByRole('button', { name: '撰写方式' }))
+    fireEvent.click(screen.getByRole('button', { name: '撰写选项' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /转发/ }))
     expect(onOpenCompose).toHaveBeenCalledWith('forward')
   })

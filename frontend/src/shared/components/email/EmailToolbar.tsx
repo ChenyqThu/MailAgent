@@ -348,7 +348,10 @@ function ComposeSplitButton({
           role="menu"
           className={cn(
             'absolute left-0 top-full mt-1 z-50 min-w-[160px]',
-            'rounded-md glass-pop border border-ink-border-soft py-1',
+            // 实心 bg-ink-2 (对齐 ResyncConfirmDialog 弹层底色): glass-pop 的
+            // ink-2/0.82 半透明会透出底下标题/正文, 下拉菜单观感发脏 — 菜单是
+            // 功能性弹层不是装饰玻璃, 用实心底保证可读.
+            'rounded-md bg-ink-2 border border-ink-border-soft py-1',
             'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
           )}
         >
@@ -661,7 +664,13 @@ export function EmailToolbar({
       // 之前这里用 bg-ink-3 纯色, 把毛玻璃盖死了; 现在改 .glass-2 (ink-2/0.45,
       // 比 glass-3 略深一点形成层次), 既保留 toolbar 与正文的视觉分层, 又让
       // 后面的 wallpaper 仍能透过来.
-      className="h-11 border-b border-ink-border-soft glass-2 flex items-center px-3 gap-1 shrink-0"
+      //
+      // relative z-[15]: glass-2 的 backdrop-filter 让本 header 成为
+      // z-index:auto 的 stacking context, 而正文滚动区里冻结的 sticky 标题是
+      // z-10 的 stacking context — 按绘制顺序正 z-index 会画在 auto 之上, 导致
+      // reply 下拉 (top-full z-50) 和按钮 HoverTip (side=bottom) 向下溢出时被
+      // 标题遮挡. 显式提到 15 (> sticky 标题 10, < compose overlay 20) 即可.
+      className="relative z-[15] h-11 border-b border-ink-border-soft glass-2 flex items-center px-3 gap-1 shrink-0"
     >
       <IconOnlyBtn
         icon={<ArrowLeft size={14} strokeWidth={2} />}

@@ -234,20 +234,24 @@ export interface DraftPlanOpts {
   mode: ComposeMode
 }
 
-/** `email draft --dry-run` 的 plan data — compose 预填单一数据源。 */
+/** `email draft --dry-run` 的 plan data — compose 预填单一数据源。
+ *
+ *  字段名是 **snake_case**, 直接对齐 CLI JSON 输出 (email.py dry-run plan) +
+ *  项目其它 codegen 类型惯例 (unwrap 只解 envelope, 不做 case 转换)。早期手写成
+ *  camelCase 导致 plan.replyHtml/forwardIntroHtml 永远 undefined, 正文引用填不上。 */
 export interface DraftPlanResult {
-  internalId: number
+  internal_id: number
   mode: ComposeMode
   to: string[]
   cc: string[]
   bcc: string[]
   subject: string
   /** 'reply_suggestion' (LLM) / 'fallback' 等 — 来源标识, 调试用。 */
-  replySource?: string | null
+  reply_source?: string | null
   /** reply/reply-all: LLM reply_suggestion 转的 HTML → TipTap 初始内容。 */
-  replyHtml: string
+  reply_html: string
   /** forward: 原文引用块 HTML → TipTap 初始内容。 */
-  forwardIntroHtml: string
+  forward_intro_html: string
   /** 原邮件附件数量 (compose 本期不重新上传, 仅提示)。 */
   attachments: number
   warnings: string[]
@@ -1031,13 +1035,7 @@ export interface ChatSession {
 // listToolCalls() result without crossing the main-process import line.
 // Keep the two definitions in sync; payload is plain JSON (better-sqlite3
 // → IPC structured-clone).
-export type ChatToolCallStatus =
-  | 'pending'
-  | 'confirmed'
-  | 'running'
-  | 'ok'
-  | 'error'
-  | 'canceled'
+export type ChatToolCallStatus = 'pending' | 'confirmed' | 'running' | 'ok' | 'error' | 'canceled'
 export type ChatConfirmationTier = 'silent' | 'preview' | 'edit'
 
 export interface ChatToolCall {
