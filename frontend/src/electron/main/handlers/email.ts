@@ -692,6 +692,18 @@ function shapeEnrichedItem(row: EnrichedRow): EnrichedEmailMeta {
 export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
   const db = getDb()
   const where = buildEnrichedWhere(opts)
+  // 渲染层视图永不显示 skipped 邮件 — 两类: ① 发件箱里 AppleScript 时代
+  // sent-box-unreachable 降级的遗留行 (davmail cutover 后发件箱不再同步,
+  // 这些是陈旧死数据); ② 收件箱 pre-SYNC_START_DATE 日期过滤行。listMailboxes
+  // 计数 SQL 同样 `sync_status != 'skipped'` (见该函数 + line 注释), 这里对齐
+  // 避免「sidebar badge 358 但列表显示 1288」的口径错位 (用户反馈发件箱过滤不对)。
+  // 仅当调用方没显式查某个 status 时附加, 保留显式 status 查询 (含查 skipped) 原义。
+  const skippedGuard =
+    opts.status === undefined
+      ? where.sql.length === 0
+        ? "WHERE m.sync_status != 'skipped'"
+        : `${where.sql} AND m.sync_status != 'skipped'`
+      : where.sql
   // 前端 EmailList.MAX_PAGES * PAGE_SIZE = 3000, backend cap 必须 ≥ 它,
   // 否则 fetchLimit > 500 后 backend 截到 500 → all.length < fetchLimit
   // → reachedEnd 误判 true → 滚到底不再触发分页. SQLite 拿 3000 行 ~50ms,
@@ -707,7 +719,7 @@ export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
                  FROM email_attachment WHERE is_inline = 0
                  GROUP BY internal_id
                ) a ON a.internal_id = m.internal_id
-               ${where.sql}
+               ${skippedGuard}
                ORDER BY m.date_received DESC NULLS LAST, m.internal_id DESC
                LIMIT ? OFFSET ?`
   const rows = prep(db, sql).all(...where.params, limit, offset) as EnrichedRow[]
