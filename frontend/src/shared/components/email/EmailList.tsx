@@ -471,6 +471,7 @@ export function EmailList(): React.ReactElement {
   const activeMailbox = useMailbox((s) => s.active)
   const activeId = useActiveEmail((s) => s.activeInternalId)
   const setActive = useActiveEmail((s) => s.setActive)
+  const publishOrderedIds = useActiveEmail((s) => s.setOrderedIds)
   const filter = useEmailFilter((s) => s.filter)
   const setFilter = useEmailFilter((s) => s.setFilter)
   const view = useEmailFilter((s) => s.view)
@@ -805,6 +806,12 @@ export function EmailList(): React.ReactElement {
   ) {
     queueMicrotask(() => setActive(firstId))
   }
+
+  // Publish the live order so EmailDetail can wire the toolbar prev/next
+  // buttons to the same pickNext/pickPrev navigation as J/K (single source).
+  useEffect(() => {
+    publishOrderedIds(orderedIds)
+  }, [orderedIds, publishOrderedIds])
 
   useEmailKeyboardNav(orderedIds)
   const buckets = useMemo(() => partitionByDate(threadGroups, pinnedSet), [threadGroups, pinnedSet])

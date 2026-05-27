@@ -17,7 +17,13 @@ const STORAGE_KEY = 'mailagent.activeEmail'
 
 interface ActiveEmailStore {
   activeInternalId: number | null
+  // Currently-displayed list order (date-desc, post-filter). Published by
+  // EmailList so cross-pane consumers (EmailToolbar prev/next via EmailDetail)
+  // can navigate with the same pickNext/pickPrev semantics as J/K, without
+  // re-deriving the list. Not persisted — rebuilt on every list render.
+  orderedIds: ReadonlyArray<number>
   setActive(id: number | null): void
+  setOrderedIds(ids: ReadonlyArray<number>): void
 }
 
 function read(): number | null {
@@ -42,6 +48,10 @@ function write(id: number | null): void {
 
 export const useActiveEmail = create<ActiveEmailStore>((set) => ({
   activeInternalId: read(),
+  orderedIds: [],
+  setOrderedIds(ids) {
+    set({ orderedIds: ids })
+  },
   setActive(id) {
     write(id)
     set({ activeInternalId: id })

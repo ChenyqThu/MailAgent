@@ -22,6 +22,7 @@ import { parseSender } from '@shared/lib/mail_parse'
 import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { useActiveEmail, pickNext, pickPrev } from '@shared/state/active-email'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
@@ -345,6 +346,17 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // Compose — open the reply / reply-all / forward composer (overlays the
   // detail body). Replaces the half-finished AppleScript handleCreateDraft;
   // the real draft + send now run through `mailApi.email.draft|send`.
+  // Toolbar prev/next — wire the ∧/∨ buttons to the same list navigation as
+  // J/K (pickPrev/pickNext over the order EmailList publishes to the store).
+  // undefined at the head/tail boundary (pick returns the same id → no move)
+  // so IconOnlyBtn disables the button there, matching the no-wrap J/K rule.
+  const orderedIds = useActiveEmail((s) => s.orderedIds)
+  const setActive = useActiveEmail((s) => s.setActive)
+  const prevId = pickPrev(orderedIds, internalId)
+  const nextId = pickNext(orderedIds, internalId)
+  const onPrev = prevId !== null && prevId !== internalId ? () => setActive(prevId) : undefined
+  const onNext = nextId !== null && nextId !== internalId ? () => setActive(nextId) : undefined
+
   const openCompose = useComposeStore((s) => s.openCompose)
   const composeOpen = useComposeStore((s) => s.open)
   const handleOpenCompose = useCallback(
@@ -603,6 +615,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         flagState={{ pending: pending.flag }}
         isImportant={email.is_important === true}
         notionUrl={email.notion_url}
+        onPrev={onPrev}
+        onNext={onNext}
       />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">

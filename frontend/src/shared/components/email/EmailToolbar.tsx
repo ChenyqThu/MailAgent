@@ -27,14 +27,12 @@ import { useTranslation } from 'react-i18next'
 import {
   AlertCircle,
   Archive,
-  ArrowLeft,
   CheckCheck,
   ChevronDown,
   ChevronUp,
   ExternalLink,
   Languages,
   Loader2,
-  MoreHorizontal,
   RefreshCcw,
   Sparkles,
   Star,
@@ -672,12 +670,6 @@ export function EmailToolbar({
       // 标题遮挡. 显式提到 15 (> sticky 标题 10, < compose overlay 20) 即可.
       className="relative z-[15] h-11 border-b border-ink-border-soft glass-2 flex items-center px-3 gap-1 shrink-0"
     >
-      <IconOnlyBtn
-        icon={<ArrowLeft size={14} strokeWidth={2} />}
-        label={`${t('toolbar.back')} · Esc`}
-      />
-      <Divider />
-
       {/* Primary CTA — DESIGN.md §2.2 "one CTA per surface". Sprint 13:
           the label flips on at medium density so the headline action stays
           self-explanatory even when secondary buttons collapse to icons.
@@ -774,12 +766,13 @@ export function EmailToolbar({
         onClick={onLlmRun}
       />
 
-      {/* mockup L2076-2095 right cluster order:
-            Open Notion · Divider · Prev · Next · More · Divider · AIPanelToggle
+      {/* Right cluster: Open Notion · Divider · Prev · Next · Divider · AIPanelToggle.
           AIPanelToggle sits at the **very right** because it's the "open
           right panel" affordance — visually anchored to the panel it
           controls. Sprint 13 user feedback: previous order (Toggle first)
-          read like a primary action rather than the panel handle. */}
+          read like a primary action rather than the panel handle.
+          (旧 mockup 的 ← 返回 / ⋯ 更多 占位按钮已移除: 3 栏常驻布局里"返回"无语义,
+          "更多"无菜单内容 — 等有真实次要操作时再以溢出菜单引入。) */}
       <div className="ml-auto flex items-center gap-1">
         <IconOnlyBtn
           icon={<ExternalLink size={13} strokeWidth={2} />}
@@ -796,10 +789,6 @@ export function EmailToolbar({
           icon={<ChevronDown size={14} strokeWidth={2} />}
           label={`${t('toolbar.next')} · J`}
           onClick={onNext}
-        />
-        <IconOnlyBtn
-          icon={<MoreHorizontal size={14} strokeWidth={2} />}
-          label={t('toolbar.more')}
         />
         <Divider />
         <AIPanelToggleButton />
