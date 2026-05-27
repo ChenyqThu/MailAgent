@@ -855,8 +855,13 @@ def _fire(envelope: BridgeEnvelope, *, internal_id: Optional[int]) -> None:
             decision = _extract_choice(result.response)
         elif not result.ok:
             # H-17 重连队列：把 encode 后的 bytes 入队
+            # P0-3: 带 status_kind 让 reconnect queue 做优先级保留 (completed /
+            # error / waitingForInput 不被 queue 满淘汰除非 notification 已空)。
             try:
-                island_reconnect.enqueue(envelope.encode())
+                island_reconnect.enqueue(
+                    envelope.encode(),
+                    status_kind=envelope.status_kind,
+                )
             except Exception as e:  # noqa: BLE001
                 log.debug("[island] enqueue backlog failed: %s", e)
 
