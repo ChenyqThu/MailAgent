@@ -98,7 +98,59 @@
     "openNotion": "在 Notion 打开",
     "prev": "上一封",
     "next": "下一封",
-    "more": "更多"
+    "more": "更多",
+    "reply": "回复",
+    "replyAll": "回复所有",
+    "forward": "转发",
+    "composeMenu": "撰写选项"
+  },
+  "compose": {
+    "from": "发件人",
+    "fromUnknown": "（未知账户）",
+    "to": "收件人",
+    "cc": "抄送",
+    "bcc": "密送",
+    "toPlaceholder": "添加收件人 · 输入邮箱后回车",
+    "ccPlaceholder": "抄送",
+    "bccPlaceholder": "密送",
+    "subject": "主题",
+    "subjectPlaceholder": "（无主题）",
+    "send": "发送",
+    "saveDraft": "保存草稿",
+    "discard": "丢弃",
+    "cancel": "取消",
+    "close": "关闭",
+    "untitled": "（无主题）",
+    "chars": "{n} 字",
+    "attachmentsNote": "{n} 个附件随转发一并带上",
+    "loadingPlan": "加载中…",
+    "editor": {
+      "bodyPlaceholder": "撰写正文…",
+      "bold": "加粗",
+      "italic": "斜体",
+      "underline": "下划线",
+      "strike": "删除线",
+      "bulletList": "无序列表",
+      "orderedList": "有序列表",
+      "link": "链接",
+      "code": "行内代码"
+    },
+    "sendConfirm": {
+      "title": "确认发送给 {n} 位收件人？",
+      "body": "这封邮件将通过 SMTP 真实发出，发送后无法撤回。",
+      "confirm": "确认发送",
+      "attachments": "含 {n} 个附件"
+    },
+    "discardConfirm": {
+      "title": "丢弃这封邮件？",
+      "body": "未保存的更改将丢失且无法恢复。",
+      "confirm": "丢弃"
+    },
+    "toast": {
+      "draftOk": "草稿已保存到草稿箱",
+      "sendOk": "邮件已发送",
+      "toRequired": "请至少填写一个收件人"
+    }
   },
   "toolbarToast": {
     "draftOk": "已打开 Mail.app 回复草稿",
@@ -413,10 +465,13 @@
       "ccPlaceholder": "多个抄送用逗号分隔",
       "subjectPlaceholder": "（无主题）",
       "bodyPlaceholder": "撰写正文…",
-      "save": "保存",
+      "save": "保存草稿",
       "saving": "保存中…",
+      "send": "发送",
+      "sending": "发送中…",
       "cancel": "取消",
       "toRequired": "请至少填写一个收件人",
+      "sendLocateFail": "已保存草稿，但无法定位到新草稿条目，请稍后在草稿箱中手动发送",
       "bold": "加粗",
       "italic": "斜体",
       "underline": "下划线",

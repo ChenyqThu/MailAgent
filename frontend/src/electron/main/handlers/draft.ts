@@ -25,11 +25,19 @@
 
 import { ipcMain } from 'electron'
 import { execa } from 'execa'
-import { existsSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { getDb } from '../db'
-import { getProjectRoot } from '../cli_runner'
+import { callCli, getProjectRoot } from '../cli_runner'
+import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
+import type {
+  ComposeDraftOpts,
+  ComposeMode,
+  DraftPlanOpts,
+  SendEmailOpts
+} from '@shared/api/types'
 
 // ---- request / response shapes ---------------------------------------------
 
@@ -281,6 +289,94 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
   throw Object.assign(new Error(message), { code })
 }
 
+// ---- Compose: `mailagent email draft|send` ---------------------------------
+//
+// Three channels fork the `mailagent` CLI (mirrors write_ops.ts / folder.ts):
+//   email:draft     → email draft <id> --mode … [recipients/subject/body]
+//   email:send      → email send  <id> --mode … --yes [same]
+//   email:draftPlan → email draft <id> --mode … --dry-run  (read-only, no auth)
+//
+// bodyHtml is TipTap's getHTML() output (zero conversion). The CLI takes it
+// via `--body-html-file PATH`, so we drop it into a per-call temp file and
+// clean up in `finally`. to/cc/bcc arrays → comma-joined; empty arrays are
+// not passed (the CLI then keeps its derived recipients for reply/reply-all).
+
+const COMPOSE_TIMEOUT_MS = 120_000
+const VALID_MODES: ReadonlySet<string> = new Set<ComposeMode>(['reply', 'reply-all', 'forward'])
+
+/** Build the shared `email draft|send` argv (minus the `--body-html-file`
+ *  flag, which is appended by the runner once the temp file exists). Exported
+ *  for unit tests so argv shape can be asserted without forking the CLI. */
+export function composeArgs(
+  verb: 'draft' | 'send',
+  opts: ComposeDraftOpts,
+  o: { dryRun?: boolean; withYes?: boolean } = {}
+): string[] {
+  const args = ['email', verb, String(opts.internalId), '--mode', opts.mode]
+  if (Array.isArray(opts.to) && opts.to.length > 0) args.push('--to', opts.to.join(','))
+  if (Array.isArray(opts.cc) && opts.cc.length > 0) args.push('--cc', opts.cc.join(','))
+  if (Array.isArray(opts.bcc) && opts.bcc.length > 0) args.push('--bcc', opts.bcc.join(','))
+  if (typeof opts.subject === 'string') args.push('--subject', opts.subject)
+  if (o.dryRun) args.push('--dry-run')
+  if (o.withYes) args.push('--yes')
+  return args
+}
+
+/** Run `email draft|send`, materialising bodyHtml into a temp file first.
+ *  Returns the CLI `data` block; throws CliError on failure. */
+async function runCompose(
+  verb: 'draft' | 'send',
+  opts: ComposeDraftOpts,
+  o: { dryRun?: boolean; withYes?: boolean }
+): Promise<unknown> {
+  const args = composeArgs(verb, opts, o)
+  let tmpDir: string | null = null
+  if (typeof opts.bodyHtml === 'string' && opts.bodyHtml.length > 0) {
+    tmpDir = mkdtempSync(join(tmpdir(), 'mailagent-compose-'))
+    const htmlPath = join(tmpDir, 'body.html')
+    writeFileSync(htmlPath, opts.bodyHtml, 'utf8')
+    args.push('--body-html-file', htmlPath)
+  }
+  try {
+    // dry-run is read-only (no auth / no write slot); draft + send are writes.
+    const isWrite = !o.dryRun
+    return await callCli([...args, '-o', 'json'], {
+      write: isWrite,
+      needsAuth: isWrite,
+      timeoutMs: COMPOSE_TIMEOUT_MS
+    })
+  } finally {
+    if (tmpDir) {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true })
+      } catch (e) {
+        console.warn('[email:compose] temp cleanup failed:', e)
+      }
+    }
+  }
+}
+
+function validateComposeOpts(
+  opts: ComposeDraftOpts | undefined,
+  channel: string
+): WriteEnvelope<never> | ComposeDraftOpts {
+  if (!opts || !Number.isInteger(opts.internalId) || opts.internalId < 0) {
+    return {
+      ok: false,
+      code: 'E_INVALID_ARG',
+      message: `${channel}: expected non-negative integer internalId`
+    }
+  }
+  if (!VALID_MODES.has(opts.mode)) {
+    return {
+      ok: false,
+      code: 'E_INVALID_ARG',
+      message: `${channel}: mode must be reply|reply-all|forward, got ${String(opts.mode)}`
+    }
+  }
+  return opts
+}
+
 // ---- IPC wiring ------------------------------------------------------------
 
 export function registerDraftHandlers(): void {
@@ -300,11 +396,47 @@ export function registerDraftHandlers(): void {
       }
     }
   )
+
+  // Compose — write draft into Drafts (IMAP APPEND).
+  ipcMain.handle(
+    'email:draft',
+    async (_evt, opts: ComposeDraftOpts): Promise<WriteEnvelope<unknown>> => {
+      const valid = validateComposeOpts(opts, 'email:draft')
+      if (!('mode' in valid)) return valid
+      return envelopeFromCli(runCompose('draft', valid, {}))
+    }
+  )
+
+  // Compose — SMTP real send (irreversible). Handler always passes --yes;
+  // the renderer must confirm via SendConfirmDialog before invoking.
+  ipcMain.handle(
+    'email:send',
+    async (_evt, opts: SendEmailOpts): Promise<WriteEnvelope<unknown>> => {
+      const valid = validateComposeOpts(opts, 'email:send')
+      if (!('mode' in valid)) return valid
+      return envelopeFromCli(runCompose('send', valid, { withYes: true }))
+    }
+  )
+
+  // Compose — dry-run plan for pre-filling the composer. Read-only, no auth.
+  ipcMain.handle(
+    'email:draftPlan',
+    async (_evt, opts: DraftPlanOpts): Promise<WriteEnvelope<unknown>> => {
+      const valid = validateComposeOpts(
+        opts ? { internalId: opts.internalId, mode: opts.mode } : undefined,
+        'email:draftPlan'
+      )
+      if (!('mode' in valid)) return valid
+      return envelopeFromCli(runCompose('draft', valid, { dryRun: true }))
+    }
+  )
 }
 
 export const __testing = {
   buildDraftCommand,
   classifyScriptError,
   lookupMailbox,
-  parseScriptOutput
+  parseScriptOutput,
+  composeArgs,
+  validateComposeOpts
 }

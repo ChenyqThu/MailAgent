@@ -27,6 +27,11 @@ export class HttpApi implements MailApi {
     // createDraft must round-trip through the local FastAPI which then runs
     // osascript on the LAN host. Wired in V2-Sprint 3.
     createDraft: () => notImplemented('email.createDraft'),
+    // Compose — V2 web build proxies through the local FastAPI which forks
+    // the `mailagent email draft|send` CLI on the Mac host. Wired in V2-Sprint.
+    draft: () => notImplemented('email.draft'),
+    send: () => notImplemented('email.send'),
+    draftPlan: () => notImplemented('email.draftPlan'),
     pin: () => notImplemented('email.pin'),
     listPinnedIds: () => notImplemented('email.listPinnedIds'),
     // Sprint 15 §3.3 — SSoT inversion. V2 will proxy through the local

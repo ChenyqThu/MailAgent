@@ -201,6 +201,58 @@ export interface UpdateFlagOpts {
   dryRun?: boolean
 }
 
+// ---- Compose (回复 / 回复所有 / 转发) — `mailagent email draft|send` --------
+//
+// `email.draft`     → 把 compose 内容写进 Drafts folder (IMAP APPEND), 可重入。
+// `email.send`      → SMTP 真实发送 (不可逆); 前端先弹 SendConfirmDialog 再调,
+//                     IPC handler 始终带 `--yes`。
+// `email.draftPlan` → `email draft --dry-run`; compose 打开时调一次预填收件人 /
+//                     主题 / 正文 HTML (reply 用 LLM reply_suggestion 转的 HTML,
+//                     forward 用原文引用块 HTML)。无 auth (dry-run)。
+//
+// to/cc/bcc 是 compose 用户编辑后的**权威**收件人列表 (覆盖后端推导);
+// subject 覆盖 Re:/Fwd: 自动前缀; bodyHtml 是 TipTap getHTML() 输出 (零转换,
+// IPC handler 落临时文件 → --body-html-file)。
+
+export type ComposeMode = 'reply' | 'reply-all' | 'forward'
+
+export interface ComposeDraftOpts {
+  internalId: number
+  mode: ComposeMode
+  to?: string[]
+  cc?: string[]
+  bcc?: string[]
+  subject?: string
+  bodyHtml?: string
+}
+
+/** Send 与 draft 同形 (内部 IPC handler 给 send 追加 --yes)。 */
+export type SendEmailOpts = ComposeDraftOpts
+
+export interface DraftPlanOpts {
+  internalId: number
+  mode: ComposeMode
+}
+
+/** `email draft --dry-run` 的 plan data — compose 预填单一数据源。 */
+export interface DraftPlanResult {
+  internalId: number
+  mode: ComposeMode
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  subject: string
+  /** 'reply_suggestion' (LLM) / 'fallback' 等 — 来源标识, 调试用。 */
+  replySource?: string | null
+  /** reply/reply-all: LLM reply_suggestion 转的 HTML → TipTap 初始内容。 */
+  replyHtml: string
+  /** forward: 原文引用块 HTML → TipTap 初始内容。 */
+  forwardIntroHtml: string
+  /** 原邮件附件数量 (compose 本期不重新上传, 仅提示)。 */
+  attachments: number
+  warnings: string[]
+}
+
 /**
  * Sprint 15 — `mailagent email flag` opts. Mirrors `EmailFlagOpts` declared
  * in `src/electron/main/handlers/write_ops.ts` (same shape, kept duplicated
@@ -248,6 +300,19 @@ export interface EmailApi {
   /** Sprint 5 — open Mail.app reply window (AppleScript). User edits +
    *  sends in Mail.app; we don't relay the send. */
   createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult>
+  /** Compose — write a reply/reply-all/forward draft into Drafts (IMAP
+   *  APPEND via `mailagent email draft`). Returns the CLI `data` block
+   *  (drafts_folder / appended_uid / method / …). Throws Error & { code }
+   *  on failure (E_AUTH / E_INVALID_ARG / E_DISPATCH …). */
+  draft(opts: ComposeDraftOpts): Promise<unknown>
+  /** Compose — SMTP real send (irreversible) via `mailagent email send`.
+   *  The IPC handler always passes `--yes`; the renderer must show its own
+   *  SendConfirmDialog before calling. Throws Error & { code } on failure. */
+  send(opts: SendEmailOpts): Promise<unknown>
+  /** Compose — `email draft --dry-run` plan used to pre-fill the composer
+   *  (recipients / subject / body HTML). Read-only, no auth. Throws
+   *  Error & { code } on failure. */
+  draftPlan(opts: DraftPlanOpts): Promise<DraftPlanResult>
   /** v8 — set pinned (true) / unpinned (false) via the `mailagent email
    *  pin/unpin` CLI. Returns the new state, or null on E_NOT_FOUND. The
    *  renderer's optimistic store reconciles against the next

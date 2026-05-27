@@ -40,8 +40,12 @@ import type {
   ChatStreamEnvelope,
   ChatToolCall,
   CleanupDeadLetterOpts,
+  ComposeDraftOpts,
   CreateDraftOpts,
   CreateDraftResult,
+  DraftPlanOpts,
+  DraftPlanResult,
+  SendEmailOpts,
   DavMailHealthData,
   DeadLetterItem,
   DeadLetterListOpts,
@@ -217,6 +221,18 @@ class ElectronEmailApi implements EmailApi {
   }
   async createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
     const env = (await invoker()('email:createDraft', opts)) as WriteEnvelope<CreateDraftResult>
+    return unwrap(env)
+  }
+  async draft(opts: ComposeDraftOpts): Promise<unknown> {
+    const env = (await invoker()('email:draft', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async send(opts: SendEmailOpts): Promise<unknown> {
+    const env = (await invoker()('email:send', opts)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async draftPlan(opts: DraftPlanOpts): Promise<DraftPlanResult> {
+    const env = (await invoker()('email:draftPlan', opts)) as WriteEnvelope<DraftPlanResult>
     return unwrap(env)
   }
   async pin(internalId: number, pinned: boolean): Promise<boolean | null> {

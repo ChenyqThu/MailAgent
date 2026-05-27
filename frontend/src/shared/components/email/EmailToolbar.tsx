@@ -45,6 +45,7 @@ import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { toggleAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
+import type { ComposeMode } from '@shared/api/types'
 
 export type TranslateStatus = 'idle' | 'loading' | 'translated' | 'error'
 
@@ -69,6 +70,12 @@ interface ToolbarProps {
   // Sprint 5 §2.2 — write action callbacks.
   onCreateDraft?: () => void
   draftState?: WriteActionState
+
+  /** Compose — open the reply / reply-all / forward composer. When supplied,
+   *  the primary CTA becomes a split button (label opens reply; the chevron
+   *  opens a menu with all three modes). Falls back to `onCreateDraft` (the
+   *  legacy AppleScript reply-all path) when this is not provided. */
+  onOpenCompose?: (mode: ComposeMode) => void
 
   onResync?: (opts: { dryRun: boolean }) => void
   resyncState?: WriteActionState
@@ -245,6 +252,124 @@ function PrimaryBtn({
     <HoverTip text={hoverHint ?? label} side="bottom">
       {btn}
     </HoverTip>
+  )
+}
+
+// ─── Compose split button — primary CTA + reply/reply-all/forward menu ──────
+
+interface ComposeSplitProps {
+  onOpenCompose: (mode: ComposeMode) => void
+  showLabel: boolean
+  pending?: boolean
+}
+
+function ComposeSplitButton({
+  onOpenCompose,
+  showLabel,
+  pending
+}: ComposeSplitProps): React.ReactElement {
+  const { t } = useTranslation()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  // Close on outside click / Escape (mirrors the appearance popover pattern).
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
+
+  const pick = (mode: ComposeMode): void => {
+    setMenuOpen(false)
+    onOpenCompose(mode)
+  }
+
+  const label = t('toolbar.reply')
+  const items: { mode: ComposeMode; label: string; hint: string }[] = [
+    { mode: 'reply', label: t('toolbar.reply'), hint: 'R' },
+    { mode: 'reply-all', label: t('toolbar.replyAll'), hint: '⇧R' },
+    { mode: 'forward', label: t('toolbar.forward'), hint: 'F' }
+  ]
+
+  return (
+    <div ref={wrapRef} className="relative flex items-center">
+      <div className="flex items-stretch btn-cta rounded-md overflow-hidden">
+        {/* Primary action — reply. */}
+        <button
+          type="button"
+          onClick={() => pick('reply')}
+          disabled={pending}
+          aria-label={label}
+          className={cn(
+            'flex items-center justify-center text-aux font-medium',
+            'transition-colors duration-fast disabled:opacity-70 disabled:cursor-not-allowed',
+            showLabel ? 'gap-1.5 pl-3 pr-2 py-1.5' : 'w-8 h-8'
+          )}
+        >
+          <span className="shrink-0 grid place-items-center w-[14px] h-[14px]">
+            {pending ? (
+              <Loader2 size={14} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <Sparkles size={14} strokeWidth={2} className="fill-current" />
+            )}
+          </span>
+          {showLabel && <span className="whitespace-nowrap">{label}</span>}
+        </button>
+        {/* Split chevron — opens the mode menu. */}
+        <button
+          type="button"
+          onClick={() => setMenuOpen((v) => !v)}
+          disabled={pending}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-label={t('toolbar.composeMenu')}
+          className={cn(
+            'flex items-center justify-center px-1.5',
+            'border-l border-white/20 transition-colors duration-fast',
+            'disabled:opacity-70 disabled:cursor-not-allowed'
+          )}
+        >
+          <ChevronDown size={13} strokeWidth={2} />
+        </button>
+      </div>
+
+      {menuOpen && (
+        <div
+          role="menu"
+          className={cn(
+            'absolute left-0 top-full mt-1 z-50 min-w-[160px]',
+            'rounded-md glass-pop border border-ink-border-soft py-1',
+            'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
+          )}
+        >
+          {items.map((it) => (
+            <button
+              key={it.mode}
+              type="button"
+              role="menuitem"
+              onClick={() => pick(it.mode)}
+              className={cn(
+                'w-full flex items-center justify-between gap-3 px-3 py-1.5 text-aux',
+                'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast'
+              )}
+            >
+              <span className="whitespace-nowrap">{it.label}</span>
+              <kbd className="text-[10px]">{it.hint}</kbd>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -485,6 +610,7 @@ function AIPanelToggleButton(): React.ReactElement {
 export function EmailToolbar({
   translate,
   onCreateDraft,
+  onOpenCompose,
   draftState,
   onResync,
   resyncState,
@@ -545,15 +671,26 @@ export function EmailToolbar({
 
       {/* Primary CTA — DESIGN.md §2.2 "one CTA per surface". Sprint 13:
           the label flips on at medium density so the headline action stays
-          self-explanatory even when secondary buttons collapse to icons. */}
-      <PrimaryBtn
-        icon={<Sparkles size={14} strokeWidth={2} className="fill-current" />}
-        label={draftLabel}
-        showLabel={wantsPrimaryLabel}
-        hoverHint={`${draftLabel} · R`}
-        pending={draftState?.pending}
-        onClick={onCreateDraft}
-      />
+          self-explanatory even when secondary buttons collapse to icons.
+          Compose: when onOpenCompose is wired the CTA becomes a split button
+          (reply / reply-all / forward); otherwise it stays the legacy
+          AppleScript reply-all draft button (onCreateDraft). */}
+      {onOpenCompose ? (
+        <ComposeSplitButton
+          onOpenCompose={onOpenCompose}
+          showLabel={wantsPrimaryLabel}
+          pending={draftState?.pending}
+        />
+      ) : (
+        <PrimaryBtn
+          icon={<Sparkles size={14} strokeWidth={2} className="fill-current" />}
+          label={draftLabel}
+          showLabel={wantsPrimaryLabel}
+          hoverHint={`${draftLabel} · R`}
+          pending={draftState?.pending}
+          onClick={onCreateDraft}
+        />
+      )}
 
       {translate && <TranslateButton {...translate} showLabel={wantsLabels} />}
 

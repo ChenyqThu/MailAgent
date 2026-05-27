@@ -27,6 +27,9 @@ import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
 import { AttachmentList } from './AttachmentList'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
+import { ComposePanel } from './compose/ComposePanel'
+import { closeCompose, useComposeStore } from '@shared/state/compose'
+import type { ComposeMode } from '@shared/api/types'
 
 interface Props {
   internalId: number | null
@@ -140,7 +143,6 @@ function EmptyShell({ children }: { children: React.ReactNode }): React.ReactEle
 // global "any write in flight" flag (user can re-run AI while a Notion
 // resync is still streaming back).
 type PendingMap = {
-  draft: boolean
   resync: boolean
   llmRun: boolean
   read: boolean
@@ -148,7 +150,6 @@ type PendingMap = {
 }
 
 const NO_PENDING: PendingMap = {
-  draft: false,
   resync: false,
   llmRun: false,
   read: false,
@@ -183,6 +184,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     setShowTranslation(false)
     setPending(NO_PENDING)
     setPropsExpanded(false)
+    // Switching emails closes any open composer so it can't write to the
+    // wrong source message (the store is single-composer per window).
+    closeCompose()
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays
@@ -338,27 +342,18 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // We don't toggle the pending bit back on a stale internalId — the
   // setPending(NO_PENDING) reset on prop change covers that.
 
-  const handleCreateDraft = useCallback(async (): Promise<void> => {
-    if (internalId === null) return
-    setPending((p) => ({ ...p, draft: true }))
-    try {
-      await mailApi.email.createDraft({ internalId })
-      toastSuccess(t('toolbarToast.draftOk'))
-    } catch (err) {
-      const e = asWriteError(err)
-      const key =
-        e.code === 'E_AUTOMATION_DENIED'
-          ? 'toolbarToast.draftFailAuto'
-          : e.code === 'E_MAIL_NOT_RUNNING'
-            ? 'toolbarToast.draftFailMail'
-            : e.code === 'E_NO_MAILBOX' || e.code === 'E_NOT_FOUND'
-              ? 'toolbarToast.draftFailNoBin'
-              : 'toolbarToast.draftFailGeneric'
-      toastError(t(key), e.code ? `${e.code} · ${e.message}` : e.message)
-    } finally {
-      setPending((p) => ({ ...p, draft: false }))
-    }
-  }, [internalId, mailApi, t])
+  // Compose — open the reply / reply-all / forward composer (overlays the
+  // detail body). Replaces the half-finished AppleScript handleCreateDraft;
+  // the real draft + send now run through `mailApi.email.draft|send`.
+  const openCompose = useComposeStore((s) => s.openCompose)
+  const composeOpen = useComposeStore((s) => s.open)
+  const handleOpenCompose = useCallback(
+    (mode: ComposeMode): void => {
+      if (internalId === null) return
+      openCompose(internalId, mode)
+    },
+    [internalId, openCompose]
+  )
 
   const handleResync = useCallback(
     async ({ dryRun }: { dryRun: boolean }): Promise<void> => {
@@ -552,7 +547,15 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     // what the user flagged as "正文背景没统一 mockup 毛玻璃风格". `.glass-3`
     // (authored in index.css) layers a translucent ink-3 on top of the
     // wallpaper + backdrop-filter blur(40px).
-    <main aria-label="inbox-main" className="flex-1 min-w-0 glass-3 flex flex-col min-h-0">
+    <main aria-label="inbox-main" className="relative flex-1 min-w-0 glass-3 flex flex-col min-h-0">
+      {/* Compose overlay — reply / reply-all / forward composer covers the
+          detail column when open for this email (store-gated). Rendered above
+          the body so the user composes against the same surface. */}
+      {composeOpen && (
+        <div className="absolute inset-0 z-20 flex flex-col">
+          <ComposePanel />
+        </div>
+      )}
       <EmailToolbar
         translate={{
           langIsEn,
@@ -560,8 +563,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           // 没 cache 时点击启动 batch 翻译; 有 cache 时纯 toggle 显示/隐藏。
           onToggle: hasCache ? toggleTranslation : startTranslate
         }}
-        onCreateDraft={handleCreateDraft}
-        draftState={{ pending: pending.draft }}
+        onOpenCompose={handleOpenCompose}
         onResync={handleResync}
         resyncState={{ pending: pending.resync }}
         onLlmRun={handleLlmRun}

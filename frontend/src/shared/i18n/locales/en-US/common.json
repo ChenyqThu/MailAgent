@@ -98,7 +98,59 @@
     "openNotion": "Open in Notion",
     "prev": "Previous",
     "next": "Next",
-    "more": "More"
+    "more": "More",
+    "reply": "Reply",
+    "replyAll": "Reply All",
+    "forward": "Forward",
+    "composeMenu": "Compose options"
+  },
+  "compose": {
+    "from": "From",
+    "fromUnknown": "(unknown account)",
+    "to": "To",
+    "cc": "Cc",
+    "bcc": "Bcc",
+    "toPlaceholder": "Add recipient · type an email and press Enter",
+    "ccPlaceholder": "Cc",
+    "bccPlaceholder": "Bcc",
+    "subject": "Subject",
+    "subjectPlaceholder": "(no subject)",
+    "send": "Send",
+    "saveDraft": "Save draft",
+    "discard": "Discard",
+    "cancel": "Cancel",
+    "close": "Close",
+    "untitled": "(no subject)",
+    "chars": "{n} chars",
+    "attachmentsNote": "{n} attachment(s) forwarded along",
+    "loadingPlan": "Loading…",
+    "editor": {
+      "bodyPlaceholder": "Write your message…",
+      "bold": "Bold",
+      "italic": "Italic",
+      "underline": "Underline",
+      "strike": "Strikethrough",
+      "bulletList": "Bullet list",
+      "orderedList": "Numbered list",
+      "link": "Link",
+      "code": "Inline code"
+    },
+    "sendConfirm": {
+      "title": "Send to {n} recipient(s)?",
+      "body": "This email will be sent for real via SMTP and cannot be recalled.",
+      "confirm": "Confirm send",
+      "attachments": "Includes {n} attachment(s)"
+    },
+    "discardConfirm": {
+      "title": "Discard this email?",
+      "body": "Unsaved changes will be lost and cannot be recovered.",
+      "confirm": "Discard"
+    },
+    "toast": {
+      "draftOk": "Draft saved to Drafts",
+      "sendOk": "Email sent",
+      "toRequired": "Add at least one recipient"
+    }
   },
   "toolbarToast": {
     "draftOk": "Mail.app reply draft opened",
