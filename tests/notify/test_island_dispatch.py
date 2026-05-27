@@ -768,9 +768,12 @@ def test_build_dynamic_options_passes_through_long_title_and_detail():
 
 @pytest.fixture
 def fake_clock(monkeypatch):
-    """可控的 time.monotonic; 返 setter 让 test 推进虚拟时间。"""
+    """可控的 _monotonic; 返 setter 让 test 推进虚拟时间。
+
+    patch island_dispatch._monotonic 而非 time.monotonic，避免破坏 asyncio 内部时钟。
+    """
     clock = {"t": 1000.0}
-    monkeypatch.setattr(island_dispatch.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(island_dispatch, "_monotonic", lambda: clock["t"])
 
     def advance(seconds: float) -> None:
         clock["t"] += seconds

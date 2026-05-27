@@ -151,6 +151,9 @@ DEDUP_WINDOW_SEC = 300
 _DEDUP_MAX_KEYS = 1000
 # key = (session_key, event_type) → 上次 dispatch 的 time.monotonic()
 _dedup_seen: Dict[Tuple[str, str], float] = {}
+# 测试可 monkeypatch island_dispatch._monotonic 而不动 time 模块本身
+# (直接 patch time.monotonic 会破坏 asyncio 内部时钟导致事件循环挂起)。
+_monotonic = time.monotonic
 
 
 def _dedup_should_skip(session_key: str, event_type: str) -> bool:
@@ -159,7 +162,7 @@ def _dedup_should_skip(session_key: str, event_type: str) -> bool:
     同 key 距上次 dispatch < ``DEDUP_WINDOW_SEC`` → skip; 否则记录本次时间并放行。
     超 ``_DEDUP_MAX_KEYS`` 时清空整张表 (重建即可, 进程级容忍)。
     """
-    now = time.monotonic()
+    now = _monotonic()
     key = (session_key, event_type)
     last = _dedup_seen.get(key)
     if last is not None and (now - last) < DEDUP_WINDOW_SEC:
