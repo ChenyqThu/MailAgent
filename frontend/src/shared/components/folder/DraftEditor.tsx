@@ -19,6 +19,8 @@ import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import {
   Bold,
+  ChevronDown,
+  ChevronUp,
   Code,
   Italic,
   Link2,
@@ -56,6 +58,13 @@ function joinAddrs(list: string[]): string {
 function chipInitials(addr: string): string {
   const at = addr.split('@')[0] ?? addr
   return (at.slice(0, 2) || '?').toUpperCase()
+}
+
+// 折叠态摘要: 前 2 个地址 + "+N"。
+function summarizeAddrs(list: string[]): string {
+  if (list.length === 0) return ''
+  if (list.length <= 2) return list.join(', ')
+  return `${list.slice(0, 2).join(', ')} +${list.length - 2}`
 }
 
 // ── format toolbar button (mockup .folder-editor-btn) ────────────────────
@@ -233,6 +242,8 @@ export function DraftEditor({ draft, onClose }: Props): React.ReactElement {
   const [toList, setToList] = useState<string[]>(() => splitAddrs(draft?.to_addr ?? ''))
   const [ccList, setCcList] = useState<string[]>(() => splitAddrs(draft?.cc_addr ?? ''))
   const [subject, setSubject] = useState(draft?.subject ?? '')
+  // 收件人/抄送默认折叠 (编辑态只占一行, 把空间留给正文); 新建态展开方便填写。
+  const [recipExpanded, setRecipExpanded] = useState(draft === null)
 
   const editor = useEditor({
     extensions: [
@@ -313,20 +324,56 @@ export function DraftEditor({ draft, onClose }: Props): React.ReactElement {
         </span>
       </header>
 
-      {/* recipients block */}
+      {/* recipients block — 折叠态只占一行 (编辑默认折叠, 把空间留给正文) */}
       <div className="border-b border-ink-border/60 shrink-0">
-        <ChipField
-          label={t('folder.editor.to')}
-          values={toList}
-          placeholder={t('folder.editor.toPlaceholder')}
-          onChange={setToList}
-        />
-        <ChipField
-          label={t('folder.editor.cc')}
-          values={ccList}
-          placeholder={t('folder.editor.ccPlaceholder')}
-          onChange={setCcList}
-        />
+        {recipExpanded ? (
+          <div className="relative">
+            <ChipField
+              label={t('folder.editor.to')}
+              values={toList}
+              placeholder={t('folder.editor.toPlaceholder')}
+              onChange={setToList}
+            />
+            <ChipField
+              label={t('folder.editor.cc')}
+              values={ccList}
+              placeholder={t('folder.editor.ccPlaceholder')}
+              onChange={setCcList}
+            />
+            <button
+              type="button"
+              onClick={() => setRecipExpanded(false)}
+              title={t('folder.editor.collapseRecipients')}
+              aria-label={t('folder.editor.collapseRecipients')}
+              className="absolute right-3 top-1.5 w-6 h-6 rounded grid place-items-center text-ink-fg-3 hover:text-ink-fg hover:bg-ink-3 transition-colors"
+            >
+              <ChevronUp size={14} strokeWidth={2} />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setRecipExpanded(true)}
+            aria-label={t('folder.editor.expandRecipients')}
+            className="folder-field-row w-full text-left hover:bg-ink-3/30 transition-colors"
+          >
+            <span className="field-label">{t('folder.editor.to')}</span>
+            <span className="flex-1 min-w-0 truncate text-aux">
+              {toList.length > 0 ? (
+                <span className="text-ink-fg-1">{summarizeAddrs(toList)}</span>
+              ) : (
+                <span className="text-ink-fg-3">{t('folder.editor.toPlaceholder')}</span>
+              )}
+              {ccList.length > 0 && (
+                <span className="text-ink-fg-2">
+                  {'  ·  '}
+                  {t('folder.editor.cc')} {summarizeAddrs(ccList)}
+                </span>
+              )}
+            </span>
+            <ChevronDown size={14} strokeWidth={2} className="text-ink-fg-3 shrink-0" />
+          </button>
+        )}
         <div className="folder-field-row">
           <span className="field-label">{t('folder.editor.subject')}</span>
           <input

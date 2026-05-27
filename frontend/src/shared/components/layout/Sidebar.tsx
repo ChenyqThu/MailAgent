@@ -210,6 +210,18 @@ export function Sidebar(): React.ReactElement {
   })
   const mailboxes = data ?? []
 
+  // 存档/草稿计数 — folder_email 是独立表, 不在 listMailboxes 里. folder.synced
+  // SSE event invalidate ['folder'] 前缀匹配, 自动刷新此 query; polling 兜底.
+  const { data: folderSync } = useQuery({
+    queryKey: ['folder', 'sync'],
+    queryFn: () => mailApi.folder.syncStatus(),
+    staleTime: 30_000,
+    refetchInterval: pollingInterval,
+    refetchIntervalInBackground: false
+  })
+  const archiveCount = folderSync?.counts?.archive ?? 0
+  const draftCount = folderSync?.counts?.drafts ?? 0
+
   // Settings — drives the account header (notionAgentName) + Notion Agent
   // online dot (presence of notionAgentPageId).
   const { data: settings } = useQuery({
@@ -393,12 +405,22 @@ export function Sidebar(): React.ReactElement {
             label={t('nav.archive')}
             selected={pathname === '/archive'}
             onClick={() => navigate({ to: '/archive' })}
+            right={
+              archiveCount > 0 ? (
+                <CountRight count={archiveCount} selected={pathname === '/archive'} />
+              ) : undefined
+            }
           />
           <NavRow
             icon={<FileText size={15} strokeWidth={1.75} />}
             label={t('nav.drafts')}
             selected={pathname === '/drafts'}
             onClick={() => navigate({ to: '/drafts' })}
+            right={
+              draftCount > 0 ? (
+                <CountRight count={draftCount} selected={pathname === '/drafts'} />
+              ) : undefined
+            }
           />
           <NavRow
             icon={MAILBOX_ICON.flagged}
