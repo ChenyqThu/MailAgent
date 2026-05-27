@@ -44,6 +44,8 @@ def patch_send(monkeypatch):
 
     monkeypatch.setattr(ping_island, "send_async", fake_send_async)
     monkeypatch.setattr(island_dispatch.ping_island, "send_async", fake_send_async)
+    # 问题 A 去重模块级 dict — 跨 test 复用 digest_date session_key 会互挡, 清空保隔离。
+    island_dispatch._dedup_seen.clear()
     return captured
 
 
@@ -131,9 +133,10 @@ def test_options_count_and_status_kind(patch_send, fake_store):
     assert env.status_kind == "waitingForInput"
     assert env.expects_response is True
     assert env.intervention is not None
-    assert len(env.intervention.options) == 2
-    ids = {o.id for o in env.intervention.options}
-    assert ids == {"bulk_archive_newsletter", "bulk_mark_read"}
+    # 问题 B: 2 业务 bulk + skip (≤3, fork prefix(3))
+    assert len(env.intervention.options) == 3
+    ids = [o.id for o in env.intervention.options]
+    assert ids == ["bulk_archive_newsletter", "bulk_mark_read", "skip"]
 
 
 def test_title_number_forced_to_len_ids(patch_send, fake_store):

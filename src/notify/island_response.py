@@ -43,7 +43,11 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from src.notify import island_snooze
-from src.notify.island_action_whitelist import is_bulk_action_id, is_known_action_id
+from src.notify.island_action_whitelist import (
+    SKIP_ACTION_ID,
+    is_bulk_action_id,
+    is_known_action_id,
+)
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +96,13 @@ async def handle_response(response: Dict[str, Any], envelope_meta: Dict[str, str
 
     if not is_known_action_id(choice):
         log.warning("[island-response] unknown choice (whitelist miss): %s", choice)
+        return
+
+    # --- "跳过" 次级 action (问题 B): 纯 dismiss, no-op ---
+    # 必须在下方 internalId gate 之前: skip envelope (尤其 digest) 可能没有
+    # mailagent.internalId, 不该被 gate 当 invalid 提前 return; 且 skip 不调任何业务 CLI。
+    if choice == SKIP_ACTION_ID:
+        log.info("[island-response] skip (dismiss, no-op)")
         return
 
     # --- Phase 3 DailyDigest bulk action (无单一 internalId, 走 metadata ids list) ---

@@ -50,10 +50,16 @@ RECOMMENDED_ACTION_IDS: Final[FrozenSet[str]] = frozenset({
 BULK_ACTION_IDS: Final[FrozenSet[str]] = frozenset(_DIGEST_BULK_ACTION_IDS)
 
 
-# 整体 handler 端可识别 id (20 = 5 static + 12 recommended + 3 bulk). dispatch filter +
-# response handler 都按这个 set 做 defense-in-depth.
+# "跳过"次级 action: 任何带业务 option 的 intervention 末尾追加, 让用户不选业务操作直接
+# dismiss (no-op, 不调任何 CLI)。LLM 不可推荐 (不入 RECOMMENDED_ACTION_IDS), 仅 dispatch
+# 端硬追加; response 端走独立 no-op 分支。
+SKIP_ACTION_ID: Final[str] = "skip"
+
+
+# 整体 handler 端可识别 id (19 = 5 static + 10 recommended + 3 bulk + 1 skip). dispatch
+# filter + response handler 都按这个 set 做 defense-in-depth.
 KNOWN_ACTION_IDS: Final[FrozenSet[str]] = (
-    STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS
+    STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS | {SKIP_ACTION_ID}
 )
 
 

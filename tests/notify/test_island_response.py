@@ -449,6 +449,31 @@ def test_run_bulk_rejects_non_bulk_choice(patch_run):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 问题 B — "跳过" 次级 action (纯 dismiss, no-op)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_skip_choice_is_noop(patch_run):
+    """choice=skip → 不调任何 CLI / osascript (纯 dismiss)。"""
+    asyncio.run(island_response.handle_response(_resp("skip"), _meta()))
+    assert patch_run == []
+
+
+def test_skip_choice_noop_without_internal_id(patch_run):
+    """skip envelope (如 digest) 没有 mailagent.internalId 也 no-op, 不报 invalid。"""
+    meta = {"mailagent.accountName": "Exchange"}  # 无 internalId
+    asyncio.run(island_response.handle_response(_resp("skip"), meta))
+    assert patch_run == []
+
+
+def test_skip_choice_does_not_enqueue_snooze(patch_run, patch_snooze):
+    """skip 不入 snooze 队列 (区别于 snooze_1h)。"""
+    asyncio.run(island_response.handle_response(_resp("skip"), _meta()))
+    assert patch_run == []
+    assert patch_snooze == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # _seconds_until_next_monday_9am 单元
 # ─────────────────────────────────────────────────────────────────────────────
 

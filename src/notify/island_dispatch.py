@@ -19,8 +19,9 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
 from src.notify import island_i18n, island_reconnect, ping_island
 from src.notify.island_envelope import (
@@ -137,6 +138,36 @@ class _DispatcherState:
 
 
 _state = _DispatcherState()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 问题 A 去重: 同一 (session_key, event_type) 在 DEDUP_WINDOW_SEC 内重复 → skip。
+# 治理 island_dispatch 层的重复通知 (上游 LLM hook 对已 success 邮件重入 _bg 时仍调
+# dispatch_*; new_watcher 修复 1 是第一道闸, 这里是 dispatch 层兜底)。
+# ─────────────────────────────────────────────────────────────────────────────
+# 进程级 (重启清空 OK)。snooze re-emit 间隔 ≥1h ≫ 300s, 正常放行不被挡。
+DEDUP_WINDOW_SEC = 300
+# dict size cap 防内存泄漏 (每封邮件 / 每天 digest 一个 key, 长跑进程会累积)。
+_DEDUP_MAX_KEYS = 1000
+# key = (session_key, event_type) → 上次 dispatch 的 time.monotonic()
+_dedup_seen: Dict[Tuple[str, str], float] = {}
+
+
+def _dedup_should_skip(session_key: str, event_type: str) -> bool:
+    """True 表示该 envelope 在去重窗口内重复, 应 skip。
+
+    同 key 距上次 dispatch < ``DEDUP_WINDOW_SEC`` → skip; 否则记录本次时间并放行。
+    超 ``_DEDUP_MAX_KEYS`` 时清空整张表 (重建即可, 进程级容忍)。
+    """
+    now = time.monotonic()
+    key = (session_key, event_type)
+    last = _dedup_seen.get(key)
+    if last is not None and (now - last) < DEDUP_WINDOW_SEC:
+        return True
+    if len(_dedup_seen) >= _DEDUP_MAX_KEYS:
+        _dedup_seen.clear()
+    _dedup_seen[key] = now
+    return False
 
 
 def init(
@@ -258,10 +289,11 @@ def dispatch_llm_reviewed(
             )
         else:
             options = [_default_option(oid) for oid in DEFAULT_OPTION_IDS]
+        # 问题 B: 业务 option 截到 2 + 追加 skip (≤3, fork prefix(3) 上限保证 skip 显示)。
         intervention: Optional[Intervention] = Intervention(
             title=title,
             message=message,
-            options=options,
+            options=_with_skip_option(options),
         )
         status_kind = "waitingForInput"
         expects_response = True
@@ -431,10 +463,11 @@ def dispatch_daily_digest(
 
     intervention: Optional[Intervention] = None
     if options:
+        # 问题 B: 业务 bulk option 截到 2 + 追加 skip (≤3, fork prefix(3) 上限保证 skip 显示)。
         intervention = Intervention(
             title=island_i18n.t("mail.digest.title"),
             message=summary_md,
-            options=options,
+            options=_with_skip_option(options),
         )
 
     env = BridgeEnvelope(
@@ -623,6 +656,21 @@ def _build_dynamic_options(recs: List[Dict[str, Any]]) -> List[InterventionOptio
     return out
 
 
+def _skip_option() -> InterventionOption:
+    """问题 B: "跳过"次级 option, 让用户不选业务操作直接 dismiss (response 端 no-op)。"""
+    from src.notify.island_action_whitelist import SKIP_ACTION_ID
+    return InterventionOption(id=SKIP_ACTION_ID, title=island_i18n.t("mail.action.skip"))
+
+
+def _with_skip_option(options: List[InterventionOption]) -> List[InterventionOption]:
+    """业务 options 截到 2 个 + 末尾追加 skip, 保证总数 ≤3。
+
+    fork interventionButtonRow 用 ``prefix(3)`` 渲染前 3 个 button; skip 必须显示, 所以
+    业务 option 最多留 2 个 (``options[:2]``) 再加 skip。
+    """
+    return list(options[:2]) + [_skip_option()]
+
+
 def _default_option(opt_id: str) -> InterventionOption:
     if opt_id == "create_draft":
         return InterventionOption(
@@ -643,6 +691,13 @@ def _default_option(opt_id: str) -> InterventionOption:
 
 def _fire(envelope: BridgeEnvelope, *, internal_id: Optional[int]) -> None:
     """把 send_async 包成 background task；记录 dispatch 结果."""
+    # 问题 A 去重: 同 (session_key, event_type) 在 DEDUP_WINDOW_SEC 内重复 → 静默 skip。
+    if _dedup_should_skip(envelope.session_key, envelope.event_type):
+        log.debug(
+            "[island] dedup skip %s session_key=%s (within %ds window)",
+            envelope.event_type, envelope.session_key, DEDUP_WINDOW_SEC,
+        )
+        return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

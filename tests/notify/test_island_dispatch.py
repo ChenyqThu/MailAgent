@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
-import tempfile
-from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
@@ -42,6 +39,9 @@ def patch_send(monkeypatch):
 
     monkeypatch.setattr(ping_island, "send_async", fake_send_async)
     monkeypatch.setattr(island_dispatch.ping_island, "send_async", fake_send_async)
+    # 问题 A 去重是模块级 dict; 跨 test 复用 session_key (如 mailagent:email:100)
+    # 会被上一个 test 留下的记录挡住 → 每个 test 前清空保证隔离。
+    island_dispatch._dedup_seen.clear()
     return captured, response_to_return
 
 
@@ -89,7 +89,8 @@ def test_mail_received_emits_mail_received(patch_send, fake_store):
     assert fake_store.rows[0]["dispatched_ok"] is True
 
 
-def test_llm_reviewed_urgent_attaches_5_options(patch_send, fake_store):
+def test_llm_reviewed_urgent_attaches_options_with_skip(patch_send, fake_store):
+    """问题 B: urgent 无 recommended → 静态 fallback 业务 option 截到 2 + 追加 skip = 3。"""
     captured, _ = patch_send
     island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
 
@@ -107,10 +108,10 @@ def test_llm_reviewed_urgent_attaches_5_options(patch_send, fake_store):
     env = captured[0]
     assert env.event_type == "LLMReviewedUrgent"
     assert env.intervention is not None
-    assert len(env.intervention.options) == 5
-    option_ids = {opt.id for opt in env.intervention.options}
-    assert option_ids == {"create_draft", "open_mail", "open_notion",
-                          "mark_done", "snooze_1h"}
+    # 业务 option 截到 2 (DEFAULT_OPTION_IDS 前 2 = open_notion / create_draft) + skip
+    option_ids = [opt.id for opt in env.intervention.options]
+    assert option_ids == ["open_notion", "create_draft", "skip"]
+    assert len(env.intervention.options) == 3  # ≤3 (fork prefix(3) 上限)
     assert env.expects_response is True
     assert env.status_kind == "waitingForInput"
 
@@ -529,8 +530,8 @@ def test_dispatch_urgent_with_single_recommended_action(patch_send, fake_store):
     assert env.event_type == "LLMReviewedUrgent"
     assert env.intervention is not None
     options = env.intervention.options
-    assert len(options) == 1
-    assert options[0].id == "archive_and_unsubscribe"
+    # 1 业务 survivor + skip (问题 B)
+    assert [o.id for o in options] == ["archive_and_unsubscribe", "skip"]
     assert options[0].title == "归档并退订"
     assert options[0].detail == "Stripe weekly, 已订 6 个月"
 
@@ -545,12 +546,14 @@ def test_dispatch_urgent_with_two_recommended_actions(patch_send, fake_store):
             {"id": "decline_with_reason", "title": "婉拒并说明", "confidence": 0.6},
         ],
     ))
+    # 2 业务 survivor + skip (问题 B), 顺序保持
     ids = [o.id for o in env.intervention.options]
-    assert ids == ["add_to_calendar", "decline_with_reason"]
+    assert ids == ["add_to_calendar", "decline_with_reason", "skip"]
 
 
-def test_dispatch_urgent_with_three_recommended_actions_all_kept(patch_send, fake_store):
-    """LLM 推满 3 个有效 action → 全保留."""
+def test_dispatch_urgent_three_recommended_capped_to_two_plus_skip(patch_send, fake_store):
+    """问题 B: LLM 推满 3 个有效 action → 业务截到前 2 + skip (总 ≤3, fork prefix(3))。
+    第 3 个业务 (quick_reply_yes) 让位给 skip。"""
     captured, _ = patch_send
     island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
     env = _run_dispatch(patch_send, **_urgent_kwargs(
@@ -561,11 +564,12 @@ def test_dispatch_urgent_with_three_recommended_actions_all_kept(patch_send, fak
         ],
     ))
     ids = [o.id for o in env.intervention.options]
-    assert ids == ["archive_only", "decline_with_reason", "quick_reply_yes"]
+    assert ids == ["archive_only", "decline_with_reason", "skip"]
 
 
-def test_dispatch_urgent_caps_recommended_actions_to_3(patch_send, fake_store):
-    """LLM 推 4 个 (schema maxItems 已 cap 3, 但 dispatch 二次防御性 cap)."""
+def test_dispatch_urgent_caps_recommended_actions_to_two_plus_skip(patch_send, fake_store):
+    """问题 B: LLM 推 4 个有效 → 业务截到前 2 + skip (总 ≤3)。
+    (_build_dynamic_options 内部仍 cap 3, _with_skip_option 再截到 2 + skip)。"""
     captured, _ = patch_send
     island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
     env = _run_dispatch(patch_send, **_urgent_kwargs(
@@ -578,9 +582,9 @@ def test_dispatch_urgent_caps_recommended_actions_to_3(patch_send, fake_store):
     ))
     options = env.intervention.options
     assert len(options) == 3
-    # 前 3 个保留
+    # 前 2 个业务保留 + skip
     assert [o.id for o in options] == [
-        "archive_and_unsubscribe", "archive_only", "add_to_calendar",
+        "archive_and_unsubscribe", "archive_only", "skip",
     ]
 
 
@@ -594,8 +598,9 @@ def test_dispatch_urgent_unknown_id_silently_dropped(patch_send, fake_store):
             {"id": "archive_only", "title": "归档", "confidence": 0.8},
         ],
     ))
+    # unknown id drop → 1 业务 survivor + skip
     ids = [o.id for o in env.intervention.options]
-    assert ids == ["archive_only"]
+    assert ids == ["archive_only", "skip"]
 
 
 def test_dispatch_urgent_static_5_id_dropped_from_llm_recs(patch_send, fake_store):
@@ -609,12 +614,9 @@ def test_dispatch_urgent_static_5_id_dropped_from_llm_recs(patch_send, fake_stor
             {"id": "create_draft", "title": "Draft", "confidence": 0.9},
         ],
     ))
-    # 全 filter 掉 → fallback static 5
+    # 全 filter 掉 → fallback static; 业务截到前 2 (open_notion/create_draft) + skip
     options = env.intervention.options
-    assert len(options) == 5
-    assert {o.id for o in options} == {
-        "create_draft", "open_mail", "open_notion", "mark_done", "snooze_1h",
-    }
+    assert [o.id for o in options] == ["open_notion", "create_draft", "skip"]
 
 
 def test_dispatch_urgent_low_confidence_falls_back_to_static_5(patch_send, fake_store):
@@ -627,7 +629,8 @@ def test_dispatch_urgent_low_confidence_falls_back_to_static_5(patch_send, fake_
             {"id": "add_to_calendar", "title": "加入日历", "confidence": 0.49},
         ],
     ))
-    assert len(env.intervention.options) == 5
+    # 全低 confidence → fallback static; 业务截到 2 + skip
+    assert [o.id for o in env.intervention.options] == ["open_notion", "create_draft", "skip"]
 
 
 def test_dispatch_urgent_mixed_confidence_keeps_only_high(patch_send, fake_store):
@@ -641,8 +644,9 @@ def test_dispatch_urgent_mixed_confidence_keeps_only_high(patch_send, fake_store
             {"id": "decline_with_reason", "title": "婉拒", "confidence": 0.5},  # keep (边界)
         ],
     ))
+    # 2 业务 survivor + skip (问题 B)
     ids = [o.id for o in env.intervention.options]
-    assert ids == ["add_to_calendar", "decline_with_reason"]
+    assert ids == ["add_to_calendar", "decline_with_reason", "skip"]
 
 
 def test_dispatch_urgent_missing_title_drops_entry(patch_send, fake_store):
@@ -656,8 +660,9 @@ def test_dispatch_urgent_missing_title_drops_entry(patch_send, fake_store):
             {"id": "decline_with_reason", "title": "婉拒", "confidence": 0.9},
         ],
     ))
+    # 2 条缺/空 title drop → 1 业务 survivor + skip
     ids = [o.id for o in env.intervention.options]
-    assert ids == ["decline_with_reason"]
+    assert ids == ["decline_with_reason", "skip"]
 
 
 def test_dispatch_urgent_recommended_actions_none_falls_back(patch_send, fake_store):
@@ -665,10 +670,8 @@ def test_dispatch_urgent_recommended_actions_none_falls_back(patch_send, fake_st
     captured, _ = patch_send
     island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
     env = _run_dispatch(patch_send, **_urgent_kwargs(recommended_actions=None))
-    assert len(env.intervention.options) == 5
-    assert {o.id for o in env.intervention.options} == {
-        "create_draft", "open_mail", "open_notion", "mark_done", "snooze_1h",
-    }
+    # fallback static; 业务截到前 2 + skip
+    assert [o.id for o in env.intervention.options] == ["open_notion", "create_draft", "skip"]
 
 
 def test_dispatch_urgent_recommended_actions_empty_list_falls_back(patch_send, fake_store):
@@ -676,7 +679,8 @@ def test_dispatch_urgent_recommended_actions_empty_list_falls_back(patch_send, f
     captured, _ = patch_send
     island_dispatch.init(enabled=True, sync_store=fake_store, account_name="Ex")
     env = _run_dispatch(patch_send, **_urgent_kwargs(recommended_actions=[]))
-    assert len(env.intervention.options) == 5
+    # fallback static; 业务截到前 2 + skip
+    assert [o.id for o in env.intervention.options] == ["open_notion", "create_draft", "skip"]
 
 
 def test_dispatch_non_urgent_ignores_recommended_actions(patch_send, fake_store):
@@ -720,8 +724,9 @@ def test_dispatch_urgent_non_dict_entries_dropped(patch_send, fake_store):
             {"id": "archive_only", "title": "归档", "confidence": 0.9},
         ],
     ))
+    # 非 dict drop → 1 业务 survivor + skip
     ids = [o.id for o in env.intervention.options]
-    assert ids == ["archive_only"]
+    assert ids == ["archive_only", "skip"]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -754,3 +759,110 @@ def test_build_dynamic_options_passes_through_long_title_and_detail():
     assert len(opts) == 1
     assert opts[0].title == "归档"
     assert opts[0].detail == "已订阅 6 个月"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 问题 A — _fire 时间窗口去重 (同 session_key + event_type 在 DEDUP_WINDOW_SEC 内 skip)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    """可控的 time.monotonic; 返 setter 让 test 推进虚拟时间。"""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(island_dispatch.time, "monotonic", lambda: clock["t"])
+
+    def advance(seconds: float) -> None:
+        clock["t"] += seconds
+
+    return advance
+
+
+def _fire_received(internal_id: int = 500) -> None:
+    """同步包装一次 dispatch_mail_received (固定 session_key=mailagent:email:<id>)。"""
+    async def _scenario():
+        island_dispatch.dispatch_mail_received(
+            internal_id=internal_id, page_id="p", subject="s",
+            sender_email="a@b.com", sender_name="A", mailbox="收件箱",
+        )
+        await asyncio.sleep(0.01)
+
+    asyncio.run(_scenario())
+
+
+def test_dedup_skips_same_key_within_window(patch_send, fake_store, fake_clock):
+    """同 (session_key, event_type) 在窗口内重复 → 第 2 次 skip, send 只 1 次。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+    _fire_received(internal_id=500)
+    fake_clock(100)  # 100s < 300s 窗口
+    _fire_received(internal_id=500)
+    assert len(captured) == 1
+
+
+def test_dedup_releases_after_window(patch_send, fake_store, fake_clock):
+    """301s (> DEDUP_WINDOW_SEC=300) 后同 key 放行 → send 2 次。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+    _fire_received(internal_id=500)
+    fake_clock(301)  # 301s > 300s 窗口
+    _fire_received(internal_id=500)
+    assert len(captured) == 2
+
+
+def test_dedup_does_not_block_different_event_type(patch_send, fake_store, fake_clock):
+    """同 session_key 不同 event_type (MailReceived vs LLMReviewed) 互不挡。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    async def _scenario():
+        # MailReceived (session_key=mailagent:email:500)
+        island_dispatch.dispatch_mail_received(
+            internal_id=500, page_id="p", subject="s",
+            sender_email="a@b.com", sender_name="A", mailbox="收件箱",
+        )
+        # 同 internal_id 但 LLMReviewed event_type → key 不同, 放行
+        island_dispatch.dispatch_llm_reviewed(
+            internal_id=500, page_id="p", subject="s", sender_email="a@b.com",
+            sender_name="A", mailbox="收件箱",
+            priority="🟢 普通", action="仅供参考",
+        )
+        await asyncio.sleep(0.02)
+
+    asyncio.run(_scenario())
+    assert len(captured) == 2
+    assert {e.event_type for e in captured} == {"MailReceived", "LLMReviewed"}
+
+
+def test_dedup_allows_snooze_reemit(patch_send, fake_store, fake_clock):
+    """snooze re-emit 间隔 ≥1h ≫ 300s → 同 LLMReviewedUrgent key 放行 (不被去重挡)。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+
+    def _fire_urgent():
+        async def _scenario():
+            island_dispatch.dispatch_llm_reviewed(
+                internal_id=501, page_id="p", subject="s", sender_email="a@b.com",
+                sender_name="A", mailbox="收件箱",
+                priority="🔴 紧急", action="需要回复",
+            )
+            await asyncio.sleep(0.01)
+        asyncio.run(_scenario())
+
+    _fire_urgent()
+    fake_clock(3601)  # 1h+ 后 snooze re-emit
+    _fire_urgent()
+    assert len(captured) == 2
+
+
+def test_dedup_dict_size_cap_clears(patch_send, fake_store, fake_clock):
+    """去重 dict 超 _DEDUP_MAX_KEYS 时 clear, 防内存泄漏 (新 key 仍记得下)。"""
+    captured, _ = patch_send
+    island_dispatch.init(enabled=True, sync_store=fake_store)
+    # 预填到 cap (用不同 internal_id 制造不同 key)
+    for i in range(island_dispatch._DEDUP_MAX_KEYS):
+        _fire_received(internal_id=10000 + i)
+    assert len(island_dispatch._dedup_seen) == island_dispatch._DEDUP_MAX_KEYS
+    # 再来一个新 key → 触发 clear 后只剩这一条
+    _fire_received(internal_id=99999)
+    assert len(island_dispatch._dedup_seen) == 1

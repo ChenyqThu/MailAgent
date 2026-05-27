@@ -18,6 +18,7 @@ from src.notify.island_action_whitelist import (
     BULK_ACTION_IDS,
     KNOWN_ACTION_IDS,
     RECOMMENDED_ACTION_IDS,
+    SKIP_ACTION_ID,
     STATIC_FALLBACK_ACTION_IDS,
     is_bulk_action_id,
     is_known_action_id,
@@ -41,13 +42,22 @@ def test_recommended_action_ids_matches_schema_enum():
 
 
 def test_known_action_ids_is_union():
-    """整体 handler 端可识别 id = static 5 ∪ recommended 10 ∪ bulk 3 = 18.
+    """整体 handler 端可识别 id = static 5 ∪ recommended 10 ∪ bulk 3 ∪ skip 1 = 19.
     (escalate_to_oncall + ack_in_pagerduty 2026-05-26 下线后 recommended 12→10;
-    Phase 3 DailyDigest 加 3 bulk)."""
+    Phase 3 DailyDigest 加 3 bulk; 问题 B "跳过"次级 action 加 1 skip)."""
     assert KNOWN_ACTION_IDS == (
-        STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS
+        STATIC_FALLBACK_ACTION_IDS | RECOMMENDED_ACTION_IDS | BULK_ACTION_IDS | {SKIP_ACTION_ID}
     )
-    assert len(KNOWN_ACTION_IDS) == 18
+    assert len(KNOWN_ACTION_IDS) == 19
+
+
+def test_skip_action_id_is_known_but_not_recommended_or_bulk():
+    """问题 B: skip 在 handler whitelist 内 (可 dispatch), 但不在 LLM recommended /
+    bulk 空间 (LLM 不可推荐 skip; skip 仅 dispatch 端硬追加 + response 端 no-op)。"""
+    assert SKIP_ACTION_ID == "skip"
+    assert is_known_action_id(SKIP_ACTION_ID)
+    assert not is_recommended_action_id(SKIP_ACTION_ID)
+    assert not is_bulk_action_id(SKIP_ACTION_ID)
 
 
 def test_static_and_recommended_are_disjoint():
