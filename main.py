@@ -413,7 +413,7 @@ class EmailNotionSyncApp:
             calendar_sync_task = None
             if config.calendar_caldav_sync_enabled:
                 try:
-                    from src.calendar_notion.caldav_reader import CalDAVReader
+                    from src.calendar_sync.caldav_reader import CalDAVReader
                     from src.calendar_sync import (
                         CalendarEventRepository,
                         CalendarSyncWorker,
