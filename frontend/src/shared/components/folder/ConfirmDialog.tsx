@@ -1,23 +1,45 @@
-// Phase C — folder 写操作二次确认 dialog. 删除 / 移回 / 发送都不可逆 (或
-// 对外不可逆), 强制弹确认。视觉 + focus-trap + Esc 行为复刻 EmailToolbar 的
-// ResyncConfirmDialog (createPortal + useFocusTrap)。
+// Phase C — folder 写操作二次确认 dialog. Sprint 18 视觉重写 →
+// ref/mockup-archive.html + mockup-drafts.html 的 .modal: glass-pop + backdrop
+// blur + scale/translate 入场动画 + icon 徽 (danger/accent) + 带 bg tint 的
+// 底部按钮栏。focus-trap + Esc 行为复刻 EmailToolbar 的 ResyncConfirmDialog
+// (createPortal + useFocusTrap)。prefers-reduced-motion 时 CSS 关动画。
+//
+// kind 决定图标徽与确认按钮基色:
+//   move        → accent 徽, primary 确认
+//   send        → accent 徽, primary 确认 (措辞强调真实发出)
+//   delete/deleteDraft → fail 徽, solid danger 确认
+// extra 槽放收件人 chips (send) / 不可恢复 callout (delete) 等富内容。
 
 import { useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { ArrowLeft, Send, Trash2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 
+export type ConfirmKind = 'move' | 'delete' | 'send' | 'deleteDraft'
+
 interface Props {
   open: boolean
   title: string
-  body: string
+  body: React.ReactNode
   confirmLabel: string
   cancelLabel: string
-  /** danger=true → confirm 按钮用 coral 危险样式 (删除/发送); 否则中性。 */
+  /** 决定图标徽 + 确认按钮基色。未传则按 danger 推断 fall back。 */
+  kind?: ConfirmKind
+  /** danger=true → 确认按钮用 fail 危险样式 (删除/发送); 否则中性 primary。 */
   danger?: boolean
+  /** 标题/正文下方的富内容槽 (收件人 chips / 警告 callout)。 */
+  extra?: React.ReactNode
+  pending?: boolean
   onConfirm: () => void
   onCancel: () => void
+}
+
+function KindIcon({ kind, size = 20 }: { kind: ConfirmKind; size?: number }): React.ReactElement {
+  if (kind === 'move') return <ArrowLeft size={size} strokeWidth={1.9} />
+  if (kind === 'send') return <Send size={size} strokeWidth={1.9} />
+  return <Trash2 size={size} strokeWidth={1.9} />
 }
 
 export function ConfirmDialog({
@@ -26,7 +48,10 @@ export function ConfirmDialog({
   body,
   confirmLabel,
   cancelLabel,
+  kind,
   danger,
+  extra,
+  pending,
   onConfirm,
   onCancel
 }: Props): React.ReactElement | null {
@@ -46,48 +71,45 @@ export function ConfirmDialog({
   )
 
   if (!open) return null
+
+  const resolvedKind: ConfirmKind = kind ?? (danger ? 'delete' : 'move')
+  const isDestructive = resolvedKind === 'delete' || resolvedKind === 'deleteDraft'
+  const icoTone = isDestructive ? 'is-danger' : 'is-accent'
+  const confirmTone = isDestructive ? 'gbtn-danger-solid' : 'gbtn-primary'
+
   return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="folder-modal-backdrop"
       onClick={onCancel}
       onKeyDown={handleKeyDown}
     >
-      <div
-        ref={dialogRef}
-        onClick={(e) => e.stopPropagation()}
-        className={cn(
-          'w-[440px] rounded-lg bg-ink-2 border border-ink-border p-5',
-          'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
-        )}
-      >
-        <h2 className="text-lead text-ink-fg font-semibold mb-2">{title}</h2>
-        <p className="text-aux text-ink-fg-1 mb-5 leading-relaxed">{body}</p>
-        <div className="flex items-center gap-2 justify-end">
-          <button
-            type="button"
-            onClick={onCancel}
-            className={cn(
-              'px-3 py-1.5 rounded-md text-aux text-ink-fg-1',
-              'hover:bg-ink-4 transition-colors duration-fast',
-              'focus:outline-none focus:ring-2 focus:ring-coral/60'
-            )}
-          >
+      <div ref={dialogRef} onClick={(e) => e.stopPropagation()} className="folder-modal glass-pop">
+        <div className="p-5 flex items-start gap-4">
+          <div className={cn('folder-modal-ico', icoTone)}>
+            <KindIcon kind={resolvedKind} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-lead font-semibold text-ink-fg mb-1.5">{title}</h2>
+            <div className="text-aux text-ink-fg-1 leading-relaxed">{body}</div>
+            {extra && <div className="mt-3">{extra}</div>}
+          </div>
+        </div>
+        <div className="px-5 py-3.5 border-t border-ink-border-soft flex items-center justify-end gap-2 bg-ink-1/30">
+          <button type="button" className="gbtn gbtn-bare" onClick={onCancel} disabled={pending}>
             {cancelLabel}
           </button>
           <button
             type="button"
+            className={cn('gbtn', confirmTone)}
             onClick={onConfirm}
-            className={cn(
-              'px-3 py-1.5 rounded-md text-aux font-medium transition-colors duration-fast',
-              danger
-                ? 'bg-coral/100 text-accent-fg hover:bg-coral-hover focus:ring-2 focus:ring-accent-fg/40'
-                : 'text-ink-fg border border-ink-border hover:bg-ink-4 focus:ring-2 focus:ring-coral/60',
-              'focus:outline-none'
-            )}
+            disabled={pending}
           >
+            <span className="shrink-0 grid place-items-center w-[13px] h-[13px]">
+              <KindIcon kind={resolvedKind} size={13} />
+            </span>
             {confirmLabel}
           </button>
         </div>

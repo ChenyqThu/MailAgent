@@ -1,0 +1,879 @@
+<!doctype html>
+<!--
+  MailAgent · Archive (存档) — V1 visual mockup.
+
+  Surface stack (left → right):
+    Sidebar 240  |  List 340  |  Detail flex-1
+  NO right AI panel, NO batch bar, NO AI info strip on rows, NO thread folding.
+  That absence IS the design: archive is a calm, read-mostly history view, so
+  the freed width goes to the detail column and the rows get more air than the
+  inbox's dense AI-enriched rows.
+
+  Reuses mockup-inbox.html / mockup-detail-window.html tokens verbatim:
+    · ink ramp (--ink-0..5, fg/border), coral accent (--c-accent*), glass layers
+    · fontSize micro/meta/aux/body/lead/subj, sans/display/mono stacks
+    · .glass-2 list column, .glass-3 detail column, .glass-pop dialogs
+
+  Mockup-only affordance: a floating "演示态" dock (bottom-center, clearly
+  detached from the app chrome) toggles the list states for review — it is a
+  review aid, not product UI. Move-to-inbox / permanent-delete confirm dialogs
+  are opened by the real toolbar buttons.
+
+  Field boundary (PRD §4): subject · sender/sender_name · to/cc · date ·
+  snippet · is_flagged · has_attachments · attachments[] · body_html. No AI
+  priority / category / summary fields exist here.
+-->
+<html lang="zh-CN" data-locale="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MailAgent · 存档</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: {
+              0: 'rgb(var(--ink-0) / <alpha-value>)',
+              1: 'rgb(var(--ink-1) / <alpha-value>)',
+              2: 'rgb(var(--ink-2) / <alpha-value>)',
+              3: 'rgb(var(--ink-3) / <alpha-value>)',
+              4: 'rgb(var(--ink-4) / <alpha-value>)',
+              5: 'rgb(var(--ink-5) / <alpha-value>)',
+              border:        'rgb(var(--ink-border)      / <alpha-value>)',
+              'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+              fg:     'rgb(var(--ink-fg)   / <alpha-value>)',
+              'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+              'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)',
+              'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)',
+            },
+            coral:         'rgb(var(--c-accent)      / <alpha-value>)',
+            'coral-hover': 'rgb(var(--c-accent-hi)   / <alpha-value>)',
+            'coral-dim':   'rgb(var(--c-accent-dim)  / <alpha-value>)',
+            ok:   '#5DBA8C', warn: '#E5B452', fail: '#E36262',
+            dead: '#6B707A', info: '#6FA8DC', ai:   '#B58CDB',
+          },
+          fontFamily: {
+            sans: ['-apple-system','BlinkMacSystemFont','"SF Pro Text"','"PingFang SC"','"Helvetica Neue"','system-ui','sans-serif'],
+            display: ['-apple-system','BlinkMacSystemFont','"SF Pro Display"','"PingFang SC"','system-ui','sans-serif'],
+            mono: ['ui-monospace','"SF Mono"','"JetBrains Mono"','Menlo','monospace'],
+          },
+          fontSize: {
+            micro: ['11px','14px'], meta: ['12px','16px'],
+            aux: ['14px','20px'], body: ['14px','20px'],
+            lead: ['15px','22px'], subj: ['22px','30px'],
+          },
+          spacing: { titlebar: '36px', statusbar: '24px' },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* ─── Tokens — copied verbatim from mockup-inbox.html ─────────────── */
+    :root {
+      --c-accent: 229 101 75; --c-accent-hi: 216 88 65; --c-accent-dim: 126 61 50;
+      --ink-0: 14 16 19; --ink-1: 21 24 29; --ink-2: 26 30 36; --ink-3: 31 36 43;
+      --ink-4: 38 44 53; --ink-5: 46 52 62;
+      --ink-border: 44 50 59; --ink-border-soft: 31 36 43;
+      --ink-fg: 232 234 238; --ink-fg-1: 164 169 179;
+      --ink-fg-2: 107 112 122; --ink-fg-3: 69 74 83;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 8%, rgba(74,120,229,0.22), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18), transparent 70%),
+        linear-gradient(180deg, #06080B 0%, #0A0C10 100%);
+      --glass: saturate(180%) blur(28px);
+      --glass-lg: saturate(180%) blur(40px);
+      --glass-stroke: rgb(255 255 255 / 0.08);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.07),
+        0 24px 60px rgba(0,0,0,0.55),
+        0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"] { --c-accent: 74 120 229; --c-accent-hi: 60 102 207; --c-accent-dim: 48 82 163; }
+    :root[data-accent="teal"]   { --c-accent: 45 181 166; --c-accent-hi: 33 156 142; --c-accent-dim: 24 110 100; }
+    :root[data-accent="rose"]   { --c-accent: 219 91 124; --c-accent-hi: 198 71 105; --c-accent-dim: 140 50 74; }
+    :root[data-accent="slate"]  { --c-accent: 126 134 148; --c-accent-hi: 105 113 127; --c-accent-dim: 74 80 92; }
+    :root[data-accent="olive"]  { --c-accent: 156 165 82; --c-accent-hi: 134 143 70; --c-accent-dim: 94 100 48; }
+
+    :root[data-theme="light"] {
+      --ink-0: 250 250 250; --ink-1: 242 242 244; --ink-2: 248 249 251; --ink-3: 255 255 255;
+      --ink-4: 225 227 230; --ink-5: 213 216 222;
+      --ink-border: 214 218 224; --ink-border-soft: 230 232 237;
+      --ink-fg: 26 29 34; --ink-fg-1: 91 97 107;
+      --ink-fg-2: 122 128 138; --ink-fg-3: 178 184 192;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 6%, rgba(110,160,255,0.32), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22), transparent 70%),
+        linear-gradient(180deg, #F6F7FB 0%, #ECEEF4 100%);
+      --glass-stroke: rgb(255 255 255 / 0.70);
+      --pop-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.85),
+        0 18px 50px rgba(18,24,46,0.16),
+        0 4px 14px rgba(18,24,46,0.10);
+    }
+
+    html, body { background: transparent; overscroll-behavior: none; color-scheme: dark; }
+    :root[data-theme="light"] { color-scheme: light; }
+    body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-feature-settings: 'ss01','cv11'; }
+    body::before {
+      content: ''; position: fixed; inset: 0; z-index: -1;
+      background: var(--wallpaper); background-attachment: fixed;
+      pointer-events: none; transition: background 320ms cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .glass    { background-color: rgb(var(--ink-1) / 0.55); backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg); }
+    .glass-2  { background-color: rgb(var(--ink-2) / 0.45); backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg); }
+    .glass-3  { background-color: rgb(var(--ink-3) / 0.55); backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg); }
+    .glass-pop {
+      background-color: rgb(var(--ink-2) / 0.92);
+      backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke); box-shadow: var(--pop-shadow);
+    }
+    .tile       { background-color: rgb(var(--ink-2) / 0.62); }
+    .tile:hover { background-color: rgb(var(--ink-4) / 0.78); }
+    @media (prefers-reduced-transparency: reduce) {
+      .glass,.glass-2,.glass-3,.glass-pop { backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .glass { background-color: rgb(var(--ink-1)); }
+      .glass-2 { background-color: rgb(var(--ink-2)); }
+      .glass-3 { background-color: rgb(var(--ink-3)); }
+      .glass-pop { background-color: rgb(var(--ink-2)); }
+    }
+
+    .tl { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .tl-close { background: #FF5F57; } .tl-min { background: #FEBC2E; } .tl-max { background: #28C840; }
+
+    .scrollbar-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: rgb(var(--ink-fg) / 0.14); border: 2px solid transparent; background-clip: padding-box; border-radius: 8px; }
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb { background: rgb(var(--ink-fg) / 0.28); background-clip: padding-box; }
+
+    kbd {
+      font-family: ui-monospace,'SF Mono',monospace; font-size: 11px; line-height: 1;
+      padding: 2px 5px; border-radius: 4px; background: rgb(var(--ink-fg) / 0.06);
+      color: rgb(var(--ink-fg-1)); border: 1px solid rgb(var(--ink-border)); border-bottom-width: 2px;
+    }
+
+    /* Mail body — identical recipe to detail window */
+    .mail-body { color: rgb(var(--ink-fg) / 0.86); font-size: 14px; line-height: 1.7; }
+    .mail-body h2 { color: rgb(var(--ink-fg)); font-size: 16px; font-weight: 600; margin: 18px 0 8px; letter-spacing: -0.01em; }
+    .mail-body p  { margin: 0 0 12px; }
+    .mail-body strong { color: rgb(var(--ink-fg)); font-weight: 600; }
+    .mail-body code {
+      font-family: ui-monospace,'SF Mono',monospace; font-size: 12.5px;
+      background: rgba(232,155,74,0.12); padding: 1px 6px; border-radius: 4px; color: #E89B4A;
+    }
+    .mail-body a { color: rgb(var(--c-accent)); text-decoration: underline; text-decoration-color: rgb(var(--c-accent) / 0.4); text-underline-offset: 3px; }
+    .mail-body a:hover { text-decoration-color: rgb(var(--c-accent)); }
+    .mail-body ul { padding-left: 22px; margin: 0 0 12px; }
+    .mail-body li { margin-bottom: 4px; }
+    .mail-body blockquote { border-left: 2px solid rgb(var(--ink-border)); padding-left: 14px; color: rgb(var(--ink-fg-2)); margin: 14px 0; }
+
+    /* Avatar — same disc system as inbox */
+    .avatar {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+      color: rgba(255,255,255,0.96); text-transform: uppercase; flex-shrink: 0;
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08), 0 1px 2px rgba(0,0,0,0.25);
+      user-select: none;
+    }
+    .avatar-1 { background: linear-gradient(135deg, #6FA8DC, #4A78E5); }
+    .avatar-2 { background: linear-gradient(135deg, #B58CDB, #8060C0); }
+    .avatar-3 { background: linear-gradient(135deg, #E89B4A, #C77B3A); }
+    .avatar-4 { background: linear-gradient(135deg, #5DBA8C, #3D8A6C); }
+    .avatar-5 { background: linear-gradient(135deg, #E5634F, #C04E3A); }
+    .avatar-6 { background: linear-gradient(135deg, #DB5B7C, #B0405E); }
+    .avatar-ext { background: linear-gradient(135deg, #8C95A3, #5A6172); }
+
+    /* ─── Folder row — the differentiator ─────────────────────────────────
+       Cleaner & airier than .email-row. No AI strip, no priority dot, no
+       category/action chips. Three calm lines: identity, subject, snippet.
+       Padding 13/16 (vs inbox 9/14/10) and 34px avatar give it breathing
+       room. Indicators (attach · flag) are quiet, right-aligned, only when
+       the field is true. Delete floats in on hover, like the inbox. */
+    .folder-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 3px 12px;
+      padding: 13px 16px 14px;
+      border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
+      cursor: pointer;
+      transition: background 120ms ease;
+    }
+    .folder-row:hover { background: rgb(var(--ink-3) / 0.5); }
+    .folder-row.is-selected { background: rgb(var(--ink-4) / 0.7); }
+    .folder-row.is-selected::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: rgb(var(--c-accent));
+    }
+    .folder-row > .avatar { grid-column: 1; grid-row: 1 / span 3; align-self: start; margin-top: 1px; }
+    .folder-row > .fr-body { grid-column: 2; min-width: 0; }
+
+    .fr-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+    .fr-sender {
+      flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 14px; line-height: 1.35; font-weight: 600; color: rgb(var(--ink-fg));
+    }
+    .fr-time {
+      font-family: ui-monospace,'SF Mono',monospace; font-size: 11px;
+      color: rgb(var(--ink-fg-2)); flex-shrink: 0; font-variant-numeric: tabular-nums;
+    }
+    .fr-subject {
+      margin-top: 3px; font-size: 13.5px; line-height: 1.4; color: rgb(var(--ink-fg-1));
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .fr-snippet {
+      margin-top: 3px; display: flex; align-items: center; gap: 8px;
+    }
+    .fr-snippet .fr-text {
+      flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.5; color: rgb(var(--ink-fg-2));
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .fr-marks { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; color: rgb(var(--ink-fg-3)); }
+    .fr-marks .mk-flag { color: #E5634F; }
+
+    .fr-delete {
+      position: absolute; right: 12px; bottom: 10px;
+      width: 26px; height: 26px; border-radius: 6px;
+      color: rgb(var(--ink-fg-1)); background: rgb(var(--ink-2) / 0.92);
+      border: 1px solid rgb(var(--ink-border)); box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      display: inline-flex; align-items: center; justify-content: center;
+      opacity: 0; transform: translateY(2px);
+      transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s, background 0.12s; z-index: 2;
+    }
+    .folder-row:hover .fr-delete { opacity: 1; transform: translateY(0); }
+    .fr-delete:hover { color: #E5634F; background: rgba(229,99,79,0.14); border-color: rgba(229,99,79,0.40); }
+
+    /* Toolbar ghost buttons (48px toolbar vocabulary, same as detail window) */
+    .gbtn {
+      display: inline-flex; align-items: center; gap: 6px;
+      height: 30px; padding: 0 11px; border-radius: 8px;
+      font-size: 14px; line-height: 1; color: rgb(var(--ink-fg-1));
+      background: rgb(var(--ink-3)); border: 1px solid rgb(var(--ink-border));
+      transition: all 0.12s; cursor: pointer; white-space: nowrap;
+    }
+    .gbtn:hover { background: rgb(var(--ink-4)); color: rgb(var(--ink-fg)); }
+    .gbtn-primary { background: rgb(var(--c-accent)); border-color: transparent; color: #fff; font-weight: 500; }
+    .gbtn-primary:hover { background: rgb(var(--c-accent-hi)); color: #fff; }
+    .gbtn-danger:hover { color: #E5634F; background: rgba(229,99,79,0.12); border-color: rgba(229,99,79,0.40); }
+    .gbtn-bare { background: transparent; border-color: transparent; }
+    .gbtn-bare:hover { background: rgb(var(--ink-3)); }
+
+    /* Dialog */
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
+      background: rgba(6,8,11,0.55); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      padding: 24px; opacity: 0; pointer-events: none; transition: opacity 160ms ease;
+    }
+    .modal-backdrop.open { opacity: 1; pointer-events: auto; }
+    .modal {
+      width: 408px; max-width: 100%; border-radius: 16px; overflow: hidden;
+      transform: translateY(8px) scale(0.985); transition: transform 200ms cubic-bezier(0.32,0.72,0,1);
+    }
+    .modal-backdrop.open .modal { transform: none; }
+    .modal-ico {
+      width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center; flex-shrink: 0;
+    }
+    .ico-warn { color: #E5B452; background: rgba(229,180,82,0.12); border: 1px solid rgba(229,180,82,0.28); }
+    .ico-danger { color: #E5634F; background: rgba(229,99,79,0.12); border: 1px solid rgba(229,99,79,0.30); }
+    .ico-accent { color: rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.12); border: 1px solid rgb(var(--c-accent) / 0.30); }
+    @media (prefers-reduced-motion: reduce) { .modal, .modal-backdrop { transition: none; } .modal { transform: none; } }
+
+    /* Skeleton shimmer */
+    .sk { background: linear-gradient(90deg, rgb(var(--ink-4)/0.55) 25%, rgb(var(--ink-5)/0.85) 37%, rgb(var(--ink-4)/0.55) 63%); background-size: 400% 100%; animation: sk 1.4s ease infinite; border-radius: 6px; }
+    @keyframes sk { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+    @media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+
+    /* spin */
+    .spin { animation: spin 0.9s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* App nav (sidebar) — same collapse contract as inbox, trimmed */
+    .app-nav { width: 240px; flex-shrink: 0; }
+
+    /* Theme popover + swatch — verbatim from inbox for accent continuity */
+    .theme-popover {
+      position: fixed; top: 44px; right: 12px; width: 264px;
+      background-color: rgb(var(--ink-2) / 0.82);
+      backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke); border-radius: 12px; box-shadow: var(--pop-shadow); z-index: 60; overflow: hidden;
+    }
+    .swatch { width: 36px; height: 36px; border-radius: 999px; border: 0; cursor: pointer; position: relative; box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.2); transition: transform 0.15s cubic-bezier(0.4,0,0.2,1); }
+    .swatch:hover { transform: scale(1.06); }
+    .swatch[aria-checked="true"] { box-shadow: 0 0 0 2px rgb(var(--ink-2)), 0 0 0 4px rgb(var(--c-accent)); }
+    .swatch[aria-checked="true"]::after { content: ''; position: absolute; inset: 0; background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 14px 14px no-repeat; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.4)); }
+
+    /* Mockup-only state dock — clearly detached review aid, not app UI */
+    .demo-dock {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(24px + 12px); z-index: 70;
+      display: flex; align-items: center; gap: 4px; padding: 5px 6px 5px 10px; border-radius: 12px;
+      background-color: rgb(var(--ink-2) / 0.82); backdrop-filter: var(--glass-lg); -webkit-backdrop-filter: var(--glass-lg);
+      border: 1px solid var(--glass-stroke); box-shadow: var(--pop-shadow);
+    }
+    .demo-dock .seg { font-family: ui-monospace,'SF Mono',monospace; font-size: 11px; color: rgb(var(--ink-fg-2)); padding: 4px 9px; border-radius: 7px; cursor: pointer; transition: all 0.12s; }
+    .demo-dock .seg:hover { color: rgb(var(--ink-fg)); background: rgb(var(--ink-3)); }
+    .demo-dock .seg.on { color: #fff; background: rgb(var(--c-accent)); }
+
+    .transitionable, .glass, .glass-2, .glass-3, .glass-pop, .tile, kbd, [class*="bg-ink-"], [class*="border-ink-"] {
+      transition: background-color 280ms cubic-bezier(0.4,0,0.2,1), border-color 280ms cubic-bezier(0.4,0,0.2,1);
+    }
+  </style>
+</head>
+
+<body class="h-screen w-screen overflow-hidden text-ink-fg font-sans antialiased flex flex-col">
+
+<!-- ─── Title bar ───────────────────────────────────────────────────────── -->
+<header class="glass h-titlebar border-b border-ink-border/60 flex items-center px-3 select-none shrink-0">
+  <div class="flex items-center gap-2 mr-3">
+    <span class="tl tl-close"></span><span class="tl tl-min"></span><span class="tl tl-max"></span>
+  </div>
+  <div class="flex items-center gap-2 min-w-0">
+    <span class="text-aux text-ink-fg-1 font-medium tracking-tight">存档</span>
+    <span class="text-meta font-mono text-ink-fg-2 truncate" id="tb-count">· 1,284 封</span>
+  </div>
+  <div class="flex-1 flex justify-center">
+    <button class="group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span>搜索 / 跳转</span><kbd class="group-hover:bg-ink-4">⌘K</kbd>
+    </button>
+  </div>
+  <div class="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+    <button id="theme-toggle" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="切换 浅色 / 深色 (⌥L)" aria-label="Toggle theme">
+      <svg id="theme-icon-dark"  width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <span class="group-hover:text-ink-fg" id="theme-label">Dark</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button id="appearance-btn" aria-haspopup="true" aria-expanded="false" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="强调色">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-coral shadow-[0_0_0_1px_rgba(0,0,0,0.25)]"></span>
+      <span class="group-hover:text-ink-fg" id="appearance-label">Coral</span>
+    </button>
+  </div>
+</header>
+
+<!-- Appearance popover -->
+<div id="theme-popover" class="theme-popover hidden">
+  <div class="px-3.5 py-2.5 border-b border-ink-border-soft flex items-center justify-between">
+    <div class="text-aux text-ink-fg font-medium">Accent Color</div>
+    <span class="text-micro font-mono text-ink-fg-2">View → Appearance</span>
+  </div>
+  <div class="p-4">
+    <div class="grid grid-cols-3 gap-y-4 gap-x-2 place-items-center">
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="coral"  aria-checked="true"  style="background:#E5654B;"></button><span class="text-meta font-mono text-ink-fg-1">Coral</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="cobalt" aria-checked="false" style="background:#4A78E5;"></button><span class="text-meta font-mono text-ink-fg-2">Cobalt</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="teal"   aria-checked="false" style="background:#2DB5A6;"></button><span class="text-meta font-mono text-ink-fg-2">Teal</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="rose"   aria-checked="false" style="background:#DB5B7C;"></button><span class="text-meta font-mono text-ink-fg-2">Rose</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="slate"  aria-checked="false" style="background:#7E8694;"></button><span class="text-meta font-mono text-ink-fg-2">Slate</span></div>
+      <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="olive"  aria-checked="false" style="background:#9CA552;"></button><span class="text-meta font-mono text-ink-fg-2">Olive</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Main: Sidebar 240 | List 340 | Detail flex ═══════════════════════ -->
+<main class="flex flex-1 min-h-0">
+
+  <!-- ── Sidebar ───────────────────────────────────────────────────────── -->
+  <aside class="app-nav glass border-r border-ink-border/60 flex flex-col relative">
+    <div class="flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft/60 shrink-0">
+      <button class="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-ink-3/70 transition group" title="lucien.chen@tp-link.com">
+        <span class="text-micro font-mono text-ink-fg bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0 leading-snug">tp-link</span>
+        <span class="text-body text-ink-fg font-medium truncate flex-1 text-left">lucien.chen</span>
+        <svg class="text-ink-fg-2 group-hover:text-ink-fg shrink-0 transition" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <button class="w-7 h-7 rounded-md hover:bg-ink-3 hover:text-ink-fg text-ink-fg-2 flex items-center justify-center transition shrink-0" title="折叠导航">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto scrollbar-thin py-2.5">
+      <!-- MAILBOXES -->
+      <div class="px-3 pb-1"><h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">Mailboxes</h2></div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-inbox.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="text-body flex-1">收件箱</span>
+          <span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">32</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          <span class="text-body flex-1">发件箱</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          <span class="text-body flex-1">已标旗</span>
+          <span class="text-meta font-mono text-ink-fg-2">7</span>
+        </a>
+        <!-- NEW · 存档 — selected -->
+        <a href="mockup-archive.html" class="relative flex items-center gap-2.5 px-2 py-1.5 rounded-md bg-ink-4 text-ink-fg">
+          <span class="absolute left-0 top-1 bottom-1 w-[3px] rounded-full bg-coral"></span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
+          <span class="text-body flex-1 font-medium">存档</span>
+          <span class="text-meta font-mono text-ink-fg-2">1.2k</span>
+        </a>
+        <!-- NEW · 草稿箱 -->
+        <a href="mockup-drafts.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M10.5 13.5 13 16l-2.5 2.5"/><path d="m13 13-3 3"/></svg>
+          <span class="text-body flex-1">草稿箱</span>
+          <span class="text-meta font-mono text-ink-fg-2">5</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+          <span class="text-body flex-1">所有邮件</span>
+          <span class="text-meta font-mono text-ink-fg-2">6,184</span>
+        </a>
+      </nav>
+
+      <div class="my-3 mx-4 border-t border-ink-border-soft"></div>
+
+      <!-- AI AGENTS -->
+      <div class="px-3 pb-1"><h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">AI Agents</h2></div>
+      <nav class="px-2 space-y-px">
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2v4"/><path d="M12 18v4"/><path d="m4.93 4.93 2.83 2.83"/><path d="m16.24 16.24 2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="m4.93 19.07 2.83-2.83"/><path d="m16.24 7.76 2.83-2.83"/></svg>
+          <span class="text-body flex-1">Notion Agent</span>
+          <span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span class="text-body flex-1">AI 会话历史</span>
+          <span class="text-meta font-mono text-ink-fg-2">128</span>
+        </a>
+      </nav>
+    </div>
+
+    <div class="border-t border-ink-border-soft p-2 space-y-px">
+      <a href="mockup-settings.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span class="text-body flex-1">设置</span><kbd>⌘,</kbd>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ── List column (340) ─────────────────────────────────────────────── -->
+  <section class="glass-2 w-[340px] shrink-0 border-r border-ink-border/60 flex flex-col">
+    <!-- List header -->
+    <div class="px-4 pt-3.5 pb-3 border-b border-ink-border-soft shrink-0">
+      <div class="flex items-center justify-between gap-2 mb-2.5">
+        <div class="flex items-baseline gap-2 min-w-0">
+          <h1 class="text-lead font-semibold text-ink-fg">存档</h1>
+          <span class="text-meta font-mono text-ink-fg-2" id="list-count">1,284 封</span>
+        </div>
+        <button id="sync-btn" class="w-7 h-7 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition flex items-center justify-center" title="同步存档">
+          <svg id="sync-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+      </div>
+      <!-- Slim search (PRD §3.1 P1 — FTS5 ready) -->
+      <label class="flex items-center gap-2 h-8 px-2.5 rounded-md bg-ink-3/60 border border-ink-border-soft focus-within:border-ink-border transition">
+        <svg class="text-ink-fg-3 shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input class="bg-transparent border-0 outline-none text-aux text-ink-fg w-full placeholder:text-ink-fg-3" placeholder="搜索存档全文…" />
+      </label>
+    </div>
+
+    <!-- List body — state layers -->
+    <div class="flex-1 min-h-0 overflow-y-auto scrollbar-thin relative">
+
+      <!-- STATE: data -->
+      <div id="list-data" data-state-layer="data"></div>
+
+      <!-- STATE: loading -->
+      <div id="list-loading" data-state-layer="loading" class="hidden p-4 space-y-5">
+        <div class="flex items-center gap-2 text-meta font-mono text-ink-fg-2 pb-1">
+          <svg class="spin text-coral" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+          正在拉取存档…
+        </div>
+        <!-- skeleton rows -->
+        <div class="space-y-5">
+          <div class="grid grid-cols-[34px_1fr] gap-3"><div class="sk w-[34px] h-[34px] rounded-full"></div><div class="space-y-2 pt-0.5"><div class="sk h-3 w-3/4"></div><div class="sk h-3 w-1/2"></div><div class="sk h-2.5 w-full"></div></div></div>
+          <div class="grid grid-cols-[34px_1fr] gap-3"><div class="sk w-[34px] h-[34px] rounded-full"></div><div class="space-y-2 pt-0.5"><div class="sk h-3 w-2/3"></div><div class="sk h-3 w-3/5"></div><div class="sk h-2.5 w-5/6"></div></div></div>
+          <div class="grid grid-cols-[34px_1fr] gap-3"><div class="sk w-[34px] h-[34px] rounded-full"></div><div class="space-y-2 pt-0.5"><div class="sk h-3 w-4/5"></div><div class="sk h-3 w-2/5"></div><div class="sk h-2.5 w-full"></div></div></div>
+          <div class="grid grid-cols-[34px_1fr] gap-3"><div class="sk w-[34px] h-[34px] rounded-full"></div><div class="space-y-2 pt-0.5"><div class="sk h-3 w-3/5"></div><div class="sk h-3 w-1/2"></div><div class="sk h-2.5 w-4/5"></div></div></div>
+        </div>
+      </div>
+
+      <!-- STATE: empty -->
+      <div id="list-empty" data-state-layer="empty" class="hidden h-full flex flex-col items-center justify-center text-center px-8 py-12">
+        <div class="w-16 h-16 rounded-2xl grid place-items-center mb-4 bg-ink-3/60 border border-ink-border-soft">
+          <svg class="text-ink-fg-3" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
+        </div>
+        <div class="text-aux text-ink-fg font-medium mb-1.5">存档是空的</div>
+        <p class="text-meta text-ink-fg-2 leading-relaxed max-w-[220px]">在收件箱里归档的邮件会出现在这里。归档不会删除邮件，随时可以移回。</p>
+      </div>
+
+      <!-- STATE: error -->
+      <div id="list-error" data-state-layer="error" class="hidden h-full flex flex-col items-center justify-center text-center px-8 py-12">
+        <div class="w-16 h-16 rounded-2xl grid place-items-center mb-4" style="background:rgba(227,98,98,0.1);border:1px solid rgba(227,98,98,0.25);">
+          <svg class="text-fail" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <div class="text-aux text-ink-fg font-medium mb-1.5">读取存档失败</div>
+        <p class="text-meta text-ink-fg-2 leading-relaxed max-w-[230px] mb-4">无法连接到本地存档库（IMAP 同步可能中断）。请检查网络后重试。</p>
+        <button class="gbtn gbtn-primary" onclick="setState('data')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          重试
+        </button>
+      </div>
+
+    </div>
+
+    <!-- List footer hint -->
+    <div class="px-4 py-2 border-t border-ink-border-soft shrink-0 text-micro font-mono text-ink-fg-3 flex items-center justify-between">
+      <span id="list-foot">按时间倒序 · 只读</span>
+      <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span>已同步 16:48</span>
+    </div>
+  </section>
+
+  <!-- ── Detail column (flex) ──────────────────────────────────────────── -->
+  <section class="flex-1 min-w-0 glass-3 flex flex-col">
+
+    <!-- 48px toolbar -->
+    <div id="detail-toolbar" class="h-12 shrink-0 border-b border-ink-border/60 flex items-center gap-2 px-4">
+      <button class="gbtn" onclick="openModal('move')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+        移回收件箱
+      </button>
+      <button class="gbtn gbtn-danger" onclick="openModal('delete')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        永久删除
+      </button>
+      <span class="w-px h-5 bg-ink-border-soft mx-1"></span>
+      <button class="gbtn gbtn-bare" title="转发"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg></button>
+      <button class="gbtn gbtn-bare" title="在新窗口打开"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>
+      <div class="ml-auto flex items-center gap-2 text-meta font-mono text-ink-fg-2">
+        <span id="detail-pos">1 / 1,284</span>
+        <button class="w-7 h-7 rounded bg-ink-3 hover:bg-ink-4 text-ink-fg-1 transition flex items-center justify-center" title="上一封 ⌘["><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <button class="w-7 h-7 rounded bg-ink-3 hover:bg-ink-4 text-ink-fg-1 transition flex items-center justify-center" title="下一封 ⌘]"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
+      </div>
+    </div>
+
+    <!-- Detail body -->
+    <div class="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
+
+      <!-- detail: data -->
+      <div id="detail-data" class="max-w-[820px] mx-auto px-10 pt-8 pb-16">
+        <header class="mb-6 pb-5 border-b border-ink-border-soft">
+          <h1 id="d-subject" class="text-subj font-semibold tracking-tight leading-snug mb-4">合同审阅 v3 · 已定稿签字</h1>
+          <div class="flex items-start gap-3">
+            <div id="d-avatar" class="avatar avatar-3">YL</div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-baseline gap-2 flex-wrap">
+                <span id="d-sender" class="text-aux font-medium text-ink-fg">叶律师</span>
+                <span id="d-sender-email" class="text-meta font-mono text-ink-fg-2">&lt;ye@yang.law&gt;</span>
+              </div>
+              <!-- Metadata grid — calm label/value, no AI fields -->
+              <div class="mt-2.5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-meta">
+                <span class="font-mono uppercase tracking-wider text-ink-fg-3">收件人</span><span id="d-to" class="text-ink-fg-1">chen@anthropic.com</span>
+                <span class="font-mono uppercase tracking-wider text-ink-fg-3">抄送</span><span id="d-cc" class="text-ink-fg-1">finance@mailagent.dev</span>
+                <span class="font-mono uppercase tracking-wider text-ink-fg-3">归档于</span><span id="d-date" class="text-ink-fg-1 font-mono">2026-05-18 16:42</span>
+              </div>
+            </div>
+            <div id="d-flag" class="text-meta font-mono text-ink-fg-2 flex items-center gap-1.5 shrink-0">
+              <svg class="text-coral" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+              已标旗
+            </div>
+          </div>
+        </header>
+
+        <div id="d-body" class="mail-body">
+          <p>陈先生，你好：</p>
+          <p>感谢上周的多轮沟通。<strong>v3 草稿</strong>的三处批注我已逐条处理，<strong>v4 定稿</strong>随附，已加盖电子签并完成签字流程：</p>
+          <ul>
+            <li><strong>§4.2 退出条款</strong>：改为「书面通知 + 30 日冷静期」，措辞已收紧。</li>
+            <li><strong>§7 知识产权</strong>：归属期扩展至「项目结束后 12 个月」的衍生作品。</li>
+            <li><strong>附件 A 报价表</strong>：第 3 项 <code>MailAgent · Island 集成</code> 已补 <code>monthly</code> 计费标记。</li>
+          </ul>
+          <p>本邮件及定稿已归档至本地库备查。如需任何更正，回信即可，我会出 v5 修订单。</p>
+          <blockquote>本函为最终签署版本，电子签编号 <code>SIG-2026-0518-YL</code>。</blockquote>
+          <p>—<br>叶律师 · 杨叶律师事务所</p>
+        </div>
+
+        <!-- Attachments — read-only metadata (PRD: 点击不下载) -->
+        <div id="d-attachments" class="mt-8">
+          <div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-2.5">附件 · 2 <span class="text-ink-fg-3 normal-case tracking-normal">（只读 · 当前不支持下载）</span></div>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="tile rounded-md p-3 flex items-center gap-3 border border-ink-border-soft cursor-default">
+              <div class="w-9 h-9 rounded bg-ink-4 grid place-items-center shrink-0"><svg class="text-fail" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+              <div class="min-w-0 flex-1"><div class="text-aux truncate text-ink-fg">contract-v4-final.pdf</div><div class="text-meta font-mono text-ink-fg-2">PDF · 1.2 MB</div></div>
+            </div>
+            <div class="tile rounded-md p-3 flex items-center gap-3 border border-ink-border-soft cursor-default">
+              <div class="w-9 h-9 rounded bg-ink-4 grid place-items-center shrink-0"><svg class="text-warn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+              <div class="min-w-0 flex-1"><div class="text-aux truncate text-ink-fg">signature-page.png</div><div class="text-meta font-mono text-ink-fg-2">PNG · 320 KB</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- detail: placeholder (shown for empty/loading/error/no-selection) -->
+      <div id="detail-placeholder" class="hidden h-full flex flex-col items-center justify-center text-center px-8">
+        <div class="w-14 h-14 rounded-2xl grid place-items-center mb-4 bg-ink-2/50 border border-ink-border-soft">
+          <svg class="text-ink-fg-3" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="m2 9 10 6 10-6"/></svg>
+        </div>
+        <div class="text-aux text-ink-fg-1 font-medium mb-1">未选择邮件</div>
+        <p class="text-meta text-ink-fg-3 max-w-[200px]">从左侧选择一封存档邮件查看详情。</p>
+      </div>
+
+    </div>
+  </section>
+</main>
+
+<!-- ─── Status bar ──────────────────────────────────────────────────────── -->
+<footer class="glass h-statusbar border-t border-ink-border/60 text-meta font-mono text-ink-fg-2 flex items-center px-3 gap-3 shrink-0 select-none">
+  <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span>archive</span>
+  <span class="text-ink-fg-3">|</span>
+  <span id="sb-state">1,284 archived · read-only</span>
+  <span class="ml-auto flex items-center gap-3"><span>local SQLite · FTS5</span><span class="text-ink-fg-3">|</span><span>0.1.0-dev</span></span>
+</footer>
+
+<!-- ═══ Confirm dialogs ══════════════════════════════════════════════════ -->
+<!-- Move to inbox -->
+<div id="modal-move" class="modal-backdrop">
+  <div class="modal glass-pop">
+    <div class="p-5 flex items-start gap-4">
+      <div class="modal-ico ico-accent"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></div>
+      <div class="min-w-0">
+        <h3 class="text-lead font-semibold text-ink-fg mb-1.5">移回收件箱？</h3>
+        <p class="text-aux text-ink-fg-1 leading-relaxed">「<span class="text-ink-fg font-medium" data-modal-subj>合同审阅 v3 · 已定稿签字</span>」将移出存档、重新出现在收件箱顶部。此操作可随时再次归档撤销。</p>
+      </div>
+    </div>
+    <div class="px-5 py-3.5 border-t border-ink-border-soft flex items-center justify-end gap-2 bg-ink-1/30">
+      <button class="gbtn gbtn-bare" onclick="closeModal()">取消</button>
+      <button class="gbtn gbtn-primary" onclick="confirmAction('move')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+        移回收件箱
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Permanent delete (danger) -->
+<div id="modal-delete" class="modal-backdrop">
+  <div class="modal glass-pop">
+    <div class="p-5 flex items-start gap-4">
+      <div class="modal-ico ico-danger"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
+      <div class="min-w-0">
+        <h3 class="text-lead font-semibold text-ink-fg mb-1.5">永久删除这封邮件？</h3>
+        <p class="text-aux text-ink-fg-1 leading-relaxed">「<span class="text-ink-fg font-medium" data-modal-subj>合同审阅 v3 · 已定稿签字</span>」将<strong class="text-fail">从邮件服务器永久删除</strong>，包括 2 个附件。</p>
+        <div class="mt-3 flex items-start gap-2 px-3 py-2 rounded-md" style="background:rgba(227,98,98,0.08);border:1px solid rgba(227,98,98,0.22);">
+          <svg class="text-fail shrink-0 mt-0.5" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span class="text-meta text-ink-fg-1 leading-snug">此操作<strong class="text-fail">不可恢复</strong>，且无法从其他设备找回。</span>
+        </div>
+      </div>
+    </div>
+    <div class="px-5 py-3.5 border-t border-ink-border-soft flex items-center justify-end gap-2 bg-ink-1/30">
+      <button class="gbtn gbtn-bare" onclick="closeModal()">取消</button>
+      <button id="del-confirm" class="gbtn" style="background:#E5634F;border-color:transparent;color:#fff;font-weight:500;" onclick="confirmAction('delete')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        永久删除
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Success toast -->
+<div id="toast" class="fixed left-1/2 -translate-x-1/2 bottom-20 hidden" style="z-index:90;">
+  <div class="glass-pop rounded-xl px-4 py-2.5 flex items-center gap-2.5">
+    <span class="w-5 h-5 rounded-full grid place-items-center" style="background:rgba(93,186,140,0.16);"><svg class="text-ok" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>
+    <span class="text-aux text-ink-fg" id="toast-msg">已移回收件箱</span>
+  </div>
+</div>
+
+<!-- Mockup-only state dock -->
+<div class="demo-dock" title="演示用 — 切换列表状态（非产品 UI）">
+  <span class="text-micro font-mono uppercase tracking-wider text-ink-fg-3 mr-1">演示态</span>
+  <span class="seg on" data-seg="data" onclick="setState('data')">有数据</span>
+  <span class="seg" data-seg="empty" onclick="setState('empty')">空</span>
+  <span class="seg" data-seg="loading" onclick="setState('loading')">加载</span>
+  <span class="seg" data-seg="error" onclick="setState('error')">错误</span>
+</div>
+
+<script>
+  /* ─── Archive list data (PRD §4 fields only) ─────────────────────────── */
+  const ARCHIVE = [
+    { id:'a1', av:'avatar-3', mono:'YL', sender:'叶律师', email:'ye@yang.law',
+      subject:'合同审阅 v3 · 已定稿签字', time:'05-18', date:'2026-05-18 16:42',
+      to:'chen@anthropic.com', cc:'finance@mailagent.dev', flag:true, attach:2,
+      snippet:'v4 定稿已加盖电子签并完成签字流程，三处批注逐条处理，附最终版 PDF 与签字页…',
+      body:`<p>陈先生，你好：</p><p>感谢上周的多轮沟通。<strong>v3 草稿</strong>的三处批注我已逐条处理，<strong>v4 定稿</strong>随附，已加盖电子签并完成签字流程：</p><ul><li><strong>§4.2 退出条款</strong>：改为「书面通知 + 30 日冷静期」。</li><li><strong>§7 知识产权</strong>：归属期扩展至「项目结束后 12 个月」。</li><li><strong>附件 A 报价表</strong>：第 3 项 <code>MailAgent · Island 集成</code> 已补 <code>monthly</code> 标记。</li></ul><p>本邮件及定稿已归档至本地库备查。</p><blockquote>电子签编号 <code>SIG-2026-0518-YL</code>。</blockquote><p>—<br>叶律师 · 杨叶律师事务所</p>`,
+      atts:[['contract-v4-final.pdf','PDF · 1.2 MB','pdf'],['signature-page.png','PNG · 320 KB','img']] },
+    { id:'a2', av:'avatar-ext', mono:'SE', sender:'Sentry Alerts', email:'alerts@sentry.io',
+      subject:'事故复盘 · prod 5xx 已恢复', time:'05-18', date:'2026-05-18 15:10',
+      to:'ops@mailagent.dev', cc:'oncall@mailagent.dev', flag:false, attach:1,
+      snippet:'RCA 已归档：classify 队列在 14:01–14:32 出现积压，已通过区域 failover 缓解，附事件时间线…',
+      body:`<p><strong>事故已关闭。</strong>prod 5xx 比率已回落至基线以下，本次 RCA 归档备查。</p><p>根因：<code>/v1/jobs/classify</code> 端点在 14:01–14:32 因 upstream LLM 超时导致队列积压，触发 502/504。</p><ul><li>14:32 完成 us-east-1 → us-west-2 区域 failover。</li><li>14:41 队列回落至 0，5xx 比率恢复正常。</li><li>已补充 LLM 超时重试与队列深度告警。</li></ul><p>详见附件时间线。</p>`,
+      atts:[['incident-timeline.csv','CSV · 38 KB','pdf']] },
+    { id:'a3', av:'avatar-4', mono:'CW', sender:'财务组', email:'finance@mailagent.dev',
+      subject:'Q1 报销已入账', time:'05-12', date:'2026-05-12 09:25',
+      to:'lucien.chen@tp-link.com', cc:'—', flag:false, attach:1,
+      snippet:'您 3 月提交的差旅报销（¥4,280）已于今日打款至工资卡，明细见附件回单…',
+      body:`<p>陈源全 你好：</p><p>您于 3 月提交的差旅报销已审核通过并完成打款。</p><ul><li>报销单号：<code>EXP-2026-0312</code></li><li>金额：<strong>¥4,280.00</strong></li><li>到账：工资卡尾号 6612，预计 1 个工作日内到账。</li></ul><p>电子回单见附件，如有疑问请回复本邮件。</p><p>—<br>财务组</p>`,
+      atts:[['报销回单-2026Q1.pdf','PDF · 96 KB','pdf']] },
+    { id:'a4', av:'avatar-1', mono:'GH', sender:'GitHub', email:'notifications@github.com',
+      subject:'[mailagent] PR #2729 已合并', time:'05-10', date:'2026-05-10 22:03',
+      to:'lucien.chen@tp-link.com', cc:'—', flag:false, attach:0,
+      snippet:'Add Trae CLI as an ACP coding-agent adapter — merged into main by lucien-chen…',
+      body:`<p><strong>lucien-chen</strong> merged pull request <code>#2729</code> into <code>main</code>.</p><p><strong>Add Trae CLI as an ACP coding-agent adapter</strong></p><p>12 commits · 38 files changed · <span style="color:#5DBA8C">+1,204</span> <span style="color:#E36262">−218</span></p><p>查看：<a href="#">github.com/mailagent/mailagent/pull/2729</a></p>`,
+      atts:[] },
+    { id:'a5', av:'avatar-2', mono:'ZW', sender:'张玮', email:'zhangwei@mailagent.dev',
+      subject:'产品周会纪要 · 5/8', time:'05-08', date:'2026-05-08 18:30',
+      to:'team@mailagent.dev', cc:'lucien.chen@tp-link.com', flag:true, attach:0,
+      snippet:'本周决议：日历模块以 WeekView 为先；邮件列表页重构排入下个迭代；灵动岛预览待评审…',
+      body:`<p>各位，本周产品周会纪要如下：</p><ul><li><strong>日历模块</strong>：第一阶段以 WeekView 为锚点，EventDetailDrawer 随后。</li><li><strong>邮件列表页</strong>：重构排入下个迭代，重点是信息层次与密度。</li><li><strong>灵动岛</strong>：参考 open-vibe-island，做重要邮件预览 + 通知 + 快捷跳转，方案待评审。</li></ul><p>详细行动项见 Notion。</p><p>—<br>张玮</p>`,
+      atts:[] },
+    { id:'a6', av:'avatar-6', mono:'LH', sender:'李航', email:'lihang@mailagent.dev',
+      subject:'灵动岛集成方案 v2', time:'05-05', date:'2026-05-05 11:12',
+      to:'lucien.chen@tp-link.com', cc:'zhangwei@mailagent.dev', flag:false, attach:1,
+      snippet:'结合 open-vibe-island 的通知通道，重要邮件可在灵动岛展开预览，并支持快捷跳转回 app…',
+      body:`<p>源全，方案 v2 见附件，主要变化：</p><ul><li>复用 open-vibe-island 的通知通道，避免重复造轮子。</li><li>重要邮件支持灵动岛展开预览（发件人 + 主题 + 摘要）。</li><li>点击预览快捷跳转回 app 对应邮件。</li></ul><p>等你确认方向后我再细化交互。</p>`,
+      atts:[['island-integration-v2.pdf','PDF · 540 KB','pdf']] },
+  ];
+
+  const $ = (s, r=document) => r.querySelector(s);
+  const attIcon = (t) => t==='img'
+    ? '<svg class="text-warn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'
+    : '<svg class="text-fail" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+
+  /* Render list rows */
+  function renderList() {
+    const wrap = $('#list-data');
+    wrap.innerHTML = ARCHIVE.map((m, i) => `
+      <div class="folder-row${i===0?' is-selected':''}" data-id="${m.id}" onclick="selectRow('${m.id}', this)">
+        <span class="avatar ${m.av}">${m.mono}</span>
+        <div class="fr-body">
+          <div class="fr-top">
+            <span class="fr-sender">${m.sender}</span>
+            <span class="fr-time">${m.time}</span>
+          </div>
+          <div class="fr-subject">${m.subject}</div>
+          <div class="fr-snippet">
+            <span class="fr-text">${m.snippet}</span>
+            <span class="fr-marks">
+              ${m.attach ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>' : ''}
+              ${m.flag ? '<svg class="mk-flag" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>' : ''}
+            </span>
+          </div>
+        </div>
+        <button class="fr-delete" title="永久删除" onclick="event.stopPropagation(); selectRow('${m.id}'); openModal('delete');">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>`).join('');
+  }
+
+  let currentId = 'a1';
+  function selectRow(id, el) {
+    currentId = id;
+    document.querySelectorAll('.folder-row').forEach(r => r.classList.toggle('is-selected', r.dataset.id === id));
+    const m = ARCHIVE.find(x => x.id === id);
+    if (!m) return;
+    $('#d-subject').textContent = m.subject;
+    $('#d-avatar').className = 'avatar ' + m.av; $('#d-avatar').textContent = m.mono;
+    $('#d-sender').textContent = m.sender;
+    $('#d-sender-email').textContent = '<' + m.email + '>';
+    $('#d-to').textContent = m.to;
+    $('#d-cc').textContent = m.cc;
+    $('#d-date').textContent = m.date;
+    $('#d-flag').style.display = m.flag ? 'flex' : 'none';
+    $('#d-body').innerHTML = m.body;
+    // attachments
+    const ad = $('#d-attachments');
+    if (m.atts && m.atts.length) {
+      ad.style.display = '';
+      ad.innerHTML = `<div class="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-2.5">附件 · ${m.atts.length} <span class="text-ink-fg-3 normal-case tracking-normal">（只读 · 当前不支持下载）</span></div>
+        <div class="grid grid-cols-2 gap-2">${m.atts.map(a=>`
+          <div class="tile rounded-md p-3 flex items-center gap-3 border border-ink-border-soft cursor-default">
+            <div class="w-9 h-9 rounded bg-ink-4 grid place-items-center shrink-0">${attIcon(a[2])}</div>
+            <div class="min-w-0 flex-1"><div class="text-aux truncate text-ink-fg">${a[0]}</div><div class="text-meta font-mono text-ink-fg-2">${a[1]}</div></div>
+          </div>`).join('')}</div>`;
+    } else { ad.style.display = 'none'; }
+    document.querySelectorAll('[data-modal-subj]').forEach(s => s.textContent = m.subject);
+  }
+
+  /* ─── State machine ──────────────────────────────────────────────────── */
+  function setState(state) {
+    ['data','empty','loading','error'].forEach(s => {
+      const el = document.querySelector(`[data-state-layer="${s}"]`);
+      if (el) el.classList.toggle('hidden', s !== state);
+    });
+    // detail mirrors list state
+    const hasData = state === 'data';
+    $('#detail-data').classList.toggle('hidden', !hasData);
+    $('#detail-placeholder').classList.toggle('hidden', hasData);
+    $('#detail-toolbar').style.opacity = hasData ? '1' : '0.4';
+    $('#detail-toolbar').style.pointerEvents = hasData ? 'auto' : 'none';
+    // header count + footer
+    $('#list-count').textContent = state === 'empty' ? '暂无存档' : '1,284 封';
+    $('#tb-count').textContent = state === 'empty' ? '· 暂无存档' : '· 1,284 封';
+    $('#sb-state').textContent = ({data:'1,284 archived · read-only', empty:'0 archived', loading:'syncing…', error:'sync error'})[state];
+    // dock
+    document.querySelectorAll('.demo-dock .seg').forEach(s => s.classList.toggle('on', s.dataset.seg === state));
+  }
+
+  /* sync button spin demo */
+  $('#sync-btn').addEventListener('click', () => {
+    const ico = $('#sync-ico'); ico.classList.add('spin');
+    setState('loading');
+    setTimeout(() => { ico.classList.remove('spin'); setState('data'); }, 1400);
+  });
+
+  /* ─── Dialogs ────────────────────────────────────────────────────────── */
+  let pendingModal = null;
+  function openModal(kind) { pendingModal = kind; $('#modal-' + kind).classList.add('open'); }
+  function closeModal() { document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('open')); }
+  function confirmAction(kind) {
+    closeModal();
+    if (kind === 'move') showToast('已移回收件箱');
+    if (kind === 'delete') showToast('已永久删除');
+    // remove the row from the demo list
+    const idx = ARCHIVE.findIndex(x => x.id === currentId);
+    if (idx > -1) {
+      ARCHIVE.splice(idx, 1);
+      if (ARCHIVE.length === 0) { renderList(); setState('empty'); return; }
+      renderList();
+      selectRow(ARCHIVE[Math.min(idx, ARCHIVE.length-1)].id);
+    }
+  }
+  let toastT;
+  function showToast(msg) {
+    $('#toast-msg').textContent = msg;
+    const t = $('#toast'); t.classList.remove('hidden');
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), 2200);
+  }
+  document.querySelectorAll('.modal-backdrop').forEach(m =>
+    m.addEventListener('click', e => { if (e.target === m) closeModal(); }));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  /* ─── Theme + accent (verbatim from inbox) ───────────────────────────── */
+  (function () {
+    const KEY='mailagent.theme', root=document.documentElement, btn=$('#theme-toggle'),
+      label=$('#theme-label'), iD=$('#theme-icon-dark'), iL=$('#theme-icon-light');
+    function apply(t){const l=t==='light';if(l){root.dataset.theme='light';root.classList.remove('dark');}else{delete root.dataset.theme;root.classList.add('dark');}
+      iD.classList.toggle('hidden',l);iL.classList.toggle('hidden',!l);label.textContent=l?'Light':'Dark';try{localStorage.setItem(KEY,l?'light':'dark');}catch(e){}}
+    const s=(()=>{try{return localStorage.getItem(KEY);}catch(e){return null;}})();
+    apply(s||'dark');
+    btn.addEventListener('click',()=>apply(root.dataset.theme==='light'?'dark':'light'));
+    document.addEventListener('keydown',e=>{if(e.altKey&&(e.key==='l'||e.key==='L')){e.preventDefault();apply(root.dataset.theme==='light'?'dark':'light');}});
+  })();
+  (function () {
+    const ACC={coral:{h:'#E5654B',l:'Coral'},cobalt:{h:'#4A78E5',l:'Cobalt'},teal:{h:'#2DB5A6',l:'Teal'},rose:{h:'#DB5B7C',l:'Rose'},slate:{h:'#7E8694',l:'Slate'},olive:{h:'#9CA552',l:'Olive'}};
+    const KEY='mailagent.accent',btn=$('#appearance-btn'),pop=$('#theme-popover'),lab=$('#appearance-label'),sw=pop.querySelectorAll('[data-accent]');
+    function apply(n){if(!ACC[n])n='coral';if(n==='coral')document.documentElement.removeAttribute('data-accent');else document.documentElement.dataset.accent=n;
+      lab.textContent=ACC[n].l;btn.querySelector('span.inline-block').style.background=ACC[n].h;
+      sw.forEach(s=>s.setAttribute('aria-checked',s.dataset.accent===n?'true':'false'));try{localStorage.setItem(KEY,n);}catch(e){}}
+    apply((()=>{try{return localStorage.getItem(KEY);}catch(e){return 'coral';}})()||'coral');
+    btn.addEventListener('click',e=>{e.stopPropagation();const o=!pop.classList.contains('hidden');pop.classList.toggle('hidden',o);btn.setAttribute('aria-expanded',String(!o));});
+    sw.forEach(s=>s.addEventListener('click',()=>apply(s.dataset.accent)));
+    document.addEventListener('click',e=>{if(pop.classList.contains('hidden'))return;if(pop.contains(e.target)||btn.contains(e.target))return;pop.classList.add('hidden');});
+  })();
+
+  /* init */
+  renderList();
+  selectRow('a1');
+  setState('data');
+</script>
+</body>
+</html>

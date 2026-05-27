@@ -13,7 +13,15 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { FileText, Image as ImageIcon, Mail, Paperclip } from 'lucide-react'
+import {
+  AlertCircle,
+  FileText,
+  Flag,
+  Image as ImageIcon,
+  Mail,
+  Paperclip,
+  Paperclip as PaperclipMini
+} from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -23,9 +31,38 @@ import { parseSender } from '@shared/lib/mail_parse'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type { FolderAttachmentMeta, FolderName } from '@shared/api/types'
 
-import { ConfirmDialog } from './ConfirmDialog'
+import { ConfirmDialog, type ConfirmKind } from './ConfirmDialog'
 import { FolderBodyFrame } from './FolderBodyFrame'
 import { FolderToolbar, type FolderToolbarPending } from './FolderToolbar'
+
+// avatar hue slot (1..6) — 与 FolderRow 同 djb2 hash, 详情头像与列表一致。
+function avatarSlot(seed: string): 1 | 2 | 3 | 4 | 5 | 6 {
+  let hash = 5381
+  for (let i = 0; i < seed.length; i++) hash = (hash * 33) ^ seed.charCodeAt(i)
+  return (((hash >>> 0) % 6) + 1) as 1 | 2 | 3 | 4 | 5 | 6
+}
+function avatarInitials(name: string): string {
+  const s = name.trim()
+  if (!s) return '?'
+  if (/[一-鿿]/.test(s)) return s.slice(0, 2)
+  const parts = s.split(/\s+/).filter(Boolean)
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase()
+  return (parts[0]![0]! + (parts[1]?.[0] ?? '')).toUpperCase()
+}
+
+// 把 "a@x, b@y" 拆成收件人列表 → 确认发送时渲染 recipient-chip。
+function splitRecipients(raw: string): { initials: string; label: string }[] {
+  return raw
+    .split(/[,;]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((addr) => {
+      const p = parseSender(addr)
+      const label = p.name ? `${p.name} <${p.email || addr}>` : p.email || addr
+      const base = (p.email || addr).split('@')[0] || addr
+      return { initials: base.slice(0, 2).toUpperCase(), label }
+    })
+}
 
 interface Props {
   folder: FolderName
@@ -37,7 +74,7 @@ interface Props {
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }): React.ReactElement {
   return (
     <>
-      <span className="text-ink-fg-2 font-mono text-aux">{label}</span>
+      <span className="font-mono uppercase tracking-wider text-ink-fg-3">{label}</span>
       <span className="text-ink-fg-1 break-words">{value}</span>
     </>
   )
@@ -54,38 +91,21 @@ function EmptyShell({ children }: { children: React.ReactNode }): React.ReactEle
   )
 }
 
-// 只读附件列表 (Phase D 再接二进制下载). 复用 AttachmentList 的视觉但不可点。
+// 只读附件 tile (Phase D 再接二进制下载). 复用 mockup .tile 视觉但不可点:
+// image → warn 调, pdf/office → fail 调, 其余中性 ink。
 function AttachmentTile({ att }: { att: FolderAttachmentMeta }): React.ReactElement {
   const ct = (att.content_type ?? '').toLowerCase()
   const name = (att.filename ?? '').toLowerCase()
   const isImage = ct.startsWith('image/') || /\.(png|jpe?g|gif|webp|heic|svg)$/.test(name)
-  const isPdf = ct === 'application/pdf' || name.endsWith('.pdf')
-  const Icon = isImage
-    ? ImageIcon
-    : isPdf || /\.(docx?|xlsx?|pptx?|csv)$/.test(name)
-      ? FileText
-      : Paperclip
-  const tone = isImage
-    ? { bg: 'bg-info/10', border: 'border-info/25', text: 'text-info' }
-    : isPdf
-      ? { bg: 'bg-fail/10', border: 'border-fail/25', text: 'text-fail' }
-      : { bg: 'bg-ink-4', border: 'border-ink-border', text: 'text-ink-fg-2' }
+  const isDoc = ct === 'application/pdf' || /\.(pdf|docx?|xlsx?|pptx?|csv)$/.test(name)
+  const Icon = isImage ? ImageIcon : isDoc ? FileText : Paperclip
+  const iconTone = isImage ? 'text-warn' : isDoc ? 'text-fail' : 'text-ink-fg-2'
   return (
-    <div
-      className={cn(
-        'flex items-start gap-3 px-3 py-2.5 rounded-md border border-ink-border bg-ink-2'
-      )}
-    >
-      <div
-        className={cn(
-          'w-9 h-9 rounded-md grid place-items-center shrink-0 border',
-          tone.bg,
-          tone.border
-        )}
-      >
-        <Icon size={16} strokeWidth={2} className={tone.text} />
+    <div className="tile rounded-md p-3 flex items-center gap-3 border border-ink-border-soft cursor-default">
+      <div className="w-9 h-9 rounded bg-ink-4 grid place-items-center shrink-0">
+        <Icon size={16} strokeWidth={2} className={iconTone} />
       </div>
-      <div className="min-w-0 flex-1 self-center">
+      <div className="min-w-0 flex-1">
         <div className="text-aux text-ink-fg font-medium truncate">
           {att.filename || '(unnamed)'}
         </div>
@@ -170,12 +190,19 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
     else if (kind === 'send') sendMut.mutate()
   }, [dialog, moveMut, deleteMut, sendMut])
 
+  const PlaceholderIcon = isDrafts ? FileText : Mail
+
   if (id === null) {
     return (
       <EmptyShell>
-        <div className="text-aux text-ink-fg-2">
-          <Mail size={28} strokeWidth={1.5} className="inline-block opacity-30 mb-2" />
-          <div>{t('folder.selectHint')}</div>
+        <div className="flex flex-col items-center text-center px-8">
+          <div className="w-14 h-14 rounded-2xl grid place-items-center mb-4 bg-ink-2/50 border border-ink-border-soft">
+            <PlaceholderIcon size={24} strokeWidth={1.5} className="text-ink-fg-3" />
+          </div>
+          <div className="text-aux text-ink-fg-1 font-medium mb-1">
+            {isDrafts ? t('folder.detail.noDraftSelected') : t('folder.detail.noMailSelected')}
+          </div>
+          <p className="text-meta text-ink-fg-3 max-w-[200px]">{t('folder.selectHint')}</p>
         </div>
       </EmptyShell>
     )
@@ -190,8 +217,16 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
   if (detailQ.isError || !detailQ.data) {
     return (
       <EmptyShell>
-        <div className="text-aux text-fail">
-          {detailQ.error instanceof Error ? detailQ.error.message : t('folder.empty')}
+        <div className="flex flex-col items-center text-center px-8">
+          <div className="w-14 h-14 rounded-2xl grid place-items-center mb-4 bg-fail/10 border border-fail/25">
+            <AlertCircle size={24} strokeWidth={1.6} className="text-fail" />
+          </div>
+          <div className="text-aux text-ink-fg-1 font-medium mb-1">
+            {t('folder.detail.loadFailed')}
+          </div>
+          <p className="text-meta text-ink-fg-3 max-w-[220px] break-words">
+            {detailQ.error instanceof Error ? detailQ.error.message : t('folder.empty')}
+          </p>
         </div>
       </EmptyShell>
     )
@@ -202,36 +237,111 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
   const fromName = email.sender_name || fromParsed.name
   const fromAddr = fromParsed.email || email.sender
   const attachments = email.attachments ?? []
+  const subjectText = email.subject?.trim() ? email.subject : t('folder.detail.noSubject')
 
-  // dialog 文案选择
-  const dialogProps =
+  // 详情头像 (archive sender-led; drafts 也用发件人=自己的徽). 与列表一致。
+  const avatarName = fromName || fromAddr.split('@')[0] || '?'
+  const detailSlot = avatarSlot(email.sender || String(email.id))
+  const detailInitials = avatarInitials(avatarName)
+
+  // 早返回之后才算 — 不能用 useMemo (会成条件 hook); splitRecipients 很轻。
+  const recipients = splitRecipients(email.to_addr ?? '')
+
+  // dialog 文案 + 图标徽 + 富内容槽
+  const dialogProps: {
+    title: string
+    body: React.ReactNode
+    confirmLabel: string
+    kind: ConfirmKind
+    danger: boolean
+    extra?: React.ReactNode
+  } | null =
     dialog === 'move'
       ? {
           title: t('folder.confirm.moveTitle'),
-          body: t('folder.confirm.moveBody'),
+          body: (
+            <span>
+              「<span className="text-ink-fg font-medium">{subjectText}</span>」
+              {t('folder.confirm.moveBodyTail')}
+            </span>
+          ),
           confirmLabel: t('folder.confirm.confirmMove'),
+          kind: 'move',
           danger: false
         }
       : dialog === 'send'
         ? {
-            title: t('folder.confirm.sendTitle'),
-            body: t('folder.confirm.sendBody'),
+            title: t('folder.confirm.sendTitle', { count: recipients.length }),
+            body: (
+              <span>
+                {t('folder.confirm.sendBodyLead')}{' '}
+                <strong className="text-ink-fg">{t('folder.confirm.sendBodyStress')}</strong>
+                {t('folder.confirm.sendBodyTail')}
+              </span>
+            ),
             confirmLabel: t('folder.confirm.confirmSend'),
-            danger: true
+            kind: 'send',
+            danger: true,
+            extra: (
+              <>
+                {recipients.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {recipients.map((r, i) => (
+                      <span key={`${r.label}-${i}`} className="recipient-chip">
+                        <span className="rc-av">{r.initials}</span>
+                        {r.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {attachments.length > 0 && (
+                  <div className="mt-3 flex items-center gap-2 text-meta text-ink-fg-2 font-mono">
+                    <PaperclipMini size={12} strokeWidth={2} />
+                    {t('folder.confirm.sendAttachNote', { count: attachments.length })}
+                  </div>
+                )}
+              </>
+            )
           }
         : dialog === 'delete'
           ? isDrafts
             ? {
                 title: t('folder.confirm.deleteDraftTitle'),
-                body: t('folder.confirm.deleteDraftBody'),
+                body: (
+                  <span>
+                    「<span className="text-ink-fg font-medium">{subjectText}</span>」
+                    {t('folder.confirm.deleteDraftBodyTail')}
+                    <strong className="text-fail">{t('folder.confirm.deleteIrreversible')}</strong>
+                    。
+                  </span>
+                ),
                 confirmLabel: t('folder.confirm.confirmDeleteDraft'),
+                kind: 'deleteDraft',
                 danger: true
               }
             : {
                 title: t('folder.confirm.deleteTitle'),
-                body: t('folder.confirm.deleteBody'),
+                body: (
+                  <span>
+                    「<span className="text-ink-fg font-medium">{subjectText}</span>」
+                    {t('folder.confirm.deleteBodyTail')}
+                  </span>
+                ),
                 confirmLabel: t('folder.confirm.confirmDelete'),
-                danger: true
+                kind: 'delete',
+                danger: true,
+                extra: (
+                  <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-fail/[0.08] border border-fail/20">
+                    <AlertCircle size={13} strokeWidth={2} className="text-fail shrink-0 mt-0.5" />
+                    <span className="text-meta text-ink-fg-1 leading-snug">
+                      {t('folder.confirm.deleteWarnLead')}
+                      <strong className="text-fail">
+                        {t('folder.confirm.deleteIrreversible')}
+                      </strong>
+                      {t('folder.confirm.deleteWarnTail')}
+                    </span>
+                  </div>
+                )
               }
           : null
 
@@ -247,72 +357,118 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
       />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="px-8 pt-6 pb-3 border-b border-ink-border-soft">
-          <h1 className="text-subj font-semibold text-ink-fg leading-snug tracking-tight break-words">
-            {email.subject || '(no subject)'}
-          </h1>
-        </div>
+        <div className="max-w-[820px] mx-auto px-10 pt-8 pb-16">
+          <header className="mb-6 pb-5 border-b border-ink-border-soft">
+            {/* drafts: 「草稿」徽 + 最后保存; archive: 留空 (sender 块承载身份) */}
+            {isDrafts && (
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-micro font-mono uppercase tracking-wider text-coral px-2 py-0.5 rounded bg-coral/[0.12] border border-coral/30">
+                  {t('folder.detail.draftBadge')}
+                </span>
+              </div>
+            )}
 
-        <div className="px-8 pt-4 pb-6">
-          <dl className="mt-1 grid grid-cols-[96px_1fr] gap-y-1.5 gap-x-3 text-aux">
-            {/* 草稿: From 是自己, To 才是重点 — 都展示。 */}
-            <MetaRow
-              label="From"
-              value={
-                <>
-                  {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
-                  {fromName && fromAddr && <span className="text-ink-fg-2"> · </span>}
-                  <span className="text-ink-fg-2">{fromAddr || '—'}</span>
-                </>
-              }
-            />
-            <MetaRow
-              label="To"
-              value={
-                email.to_addr && email.to_addr.length > 0 ? (
-                  <span className="text-ink-fg-1 break-words">{email.to_addr}</span>
-                ) : (
-                  <span className="text-ink-fg-3">—</span>
-                )
-              }
-            />
-            {email.cc_addr && email.cc_addr.length > 0 && (
-              <MetaRow
-                label="Cc"
-                value={<span className="text-ink-fg-1 break-words">{email.cc_addr}</span>}
-              />
+            <h1 className="text-subj font-semibold tracking-tight leading-snug mb-4 text-ink-fg break-words">
+              {subjectText}
+            </h1>
+
+            {isDrafts ? (
+              // 草稿 — recipient 优先的 label/value 网格 (无身份头像块)
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-meta">
+                <MetaRow
+                  label={t('folder.detail.from')}
+                  value={
+                    <>
+                      {fromAddr || '—'}{' '}
+                      <span className="text-ink-fg-3">{t('folder.detail.selfTag')}</span>
+                    </>
+                  }
+                />
+                <MetaRow
+                  label={t('folder.detail.to')}
+                  value={
+                    email.to_addr && email.to_addr.length > 0 ? (
+                      email.to_addr
+                    ) : (
+                      <span className="text-ink-fg-3 italic">{t('folder.detail.noRecipient')}</span>
+                    )
+                  }
+                />
+                {email.cc_addr && email.cc_addr.length > 0 && (
+                  <MetaRow label={t('folder.detail.cc')} value={email.cc_addr} />
+                )}
+                {email.date_received && (
+                  <MetaRow
+                    label={t('folder.detail.lastModified')}
+                    value={<span className="font-mono">{formatDate(email.date_received)}</span>}
+                  />
+                )}
+              </dl>
+            ) : (
+              // 存档 — sender 头像块 + label/value 网格 + 旗标指示
+              <div className="flex items-start gap-3">
+                <div className={cn('folder-avatar', `avatar-${detailSlot}`)} aria-hidden>
+                  {detailInitials}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    {fromName && (
+                      <span className="text-aux font-medium text-ink-fg">{fromName}</span>
+                    )}
+                    {fromAddr && (
+                      <span className="text-meta font-mono text-ink-fg-2">&lt;{fromAddr}&gt;</span>
+                    )}
+                  </div>
+                  <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-meta">
+                    <MetaRow
+                      label={t('folder.detail.to')}
+                      value={
+                        email.to_addr && email.to_addr.length > 0 ? (
+                          email.to_addr
+                        ) : (
+                          <span className="text-ink-fg-3">—</span>
+                        )
+                      }
+                    />
+                    {email.cc_addr && email.cc_addr.length > 0 && (
+                      <MetaRow label={t('folder.detail.cc')} value={email.cc_addr} />
+                    )}
+                    {email.date_received && (
+                      <MetaRow
+                        label={t('folder.detail.date')}
+                        value={
+                          <span className="font-mono">
+                            {formatDate(email.date_received)}
+                            <span className="text-ink-fg-2">
+                              {' '}
+                              · {formatRelativeTime(email.date_received)}
+                            </span>
+                          </span>
+                        }
+                      />
+                    )}
+                  </dl>
+                </div>
+                {email.is_flagged && (
+                  <div className="text-meta font-mono text-ink-fg-2 flex items-center gap-1.5 shrink-0">
+                    <Flag size={13} strokeWidth={1.5} className="text-coral fill-coral" />
+                    {t('folder.detail.flagged')}
+                  </div>
+                )}
+              </div>
             )}
-            {email.date_received && (
-              <MetaRow
-                label="Date"
-                value={
-                  <span className="font-mono text-aux">
-                    {formatDate(email.date_received)}
-                    <span className="text-ink-fg-2">
-                      {' '}
-                      · {formatRelativeTime(email.date_received)}
-                    </span>
-                  </span>
-                }
-              />
-            )}
-          </dl>
+          </header>
 
           {/* Body */}
-          <div className="mt-7">
-            <FolderBodyFrame html={email.body_html} />
-          </div>
+          <FolderBodyFrame html={email.body_html} />
 
           {/* Attachments — 只读元数据 (Phase D 接二进制下载) */}
           {attachments.length > 0 && (
             <section aria-label="attachments" className="mt-8">
-              <div className="flex items-center gap-2 mb-3">
-                <Paperclip size={13} strokeWidth={2} className="text-ink-fg-2" />
-                <span
-                  className="text-meta font-mono uppercase text-ink-fg-1"
-                  style={{ letterSpacing: '0.06em' }}
-                >
-                  {t('folder.attachments')} · {attachments.length}
+              <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2 mb-2.5">
+                {t('folder.attachments')} · {attachments.length}{' '}
+                <span className="text-ink-fg-3 normal-case tracking-normal">
+                  {t('folder.detail.attachmentsReadonly')}
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -332,7 +488,10 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
           body={dialogProps.body}
           confirmLabel={dialogProps.confirmLabel}
           cancelLabel={t('folder.confirm.cancel')}
+          kind={dialogProps.kind}
           danger={dialogProps.danger}
+          extra={dialogProps.extra}
+          pending={pending.move || pending.delete || pending.send}
           onConfirm={confirmAction}
           onCancel={() => setDialog(null)}
         />

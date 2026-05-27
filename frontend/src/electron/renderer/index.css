@@ -3792,3 +3792,435 @@ body:not([data-batch-mode='true']) #batch-bar {
   margin: 18px 0 8px;
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * Sprint 18 — 存档 / 草稿箱 视觉系统 (ref/mockup-archive.html +
+ * mockup-drafts.html + mockup-draft-composer.html). 比 inbox 的 .email-row
+ * 更安静: 独立 .folder-row grid (avatar + 三行: 身份 / 主题 / 摘要), 无 AI
+ * strip / 无 thread / 无 batch. 全部走 ink/coral/语义 token, 危险态用 --c-fail,
+ * 自动适配 data-theme='light' 亮色。命名空间 folder-* 避开 settings .sk-* 冲突。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Row — recipient-led (drafts) / sender-led (archive) ─────────────────── */
+.folder-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 3px 12px;
+  padding: 13px 16px 14px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.folder-row:hover {
+  background-color: rgb(var(--ink-3) / 0.5);
+}
+.folder-row.is-selected {
+  background-color: rgb(var(--ink-4) / 0.7);
+}
+.folder-row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: rgb(var(--c-accent));
+}
+.folder-row > .folder-avatar {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  align-self: start;
+  margin-top: 1px;
+}
+.folder-row > .fr-body {
+  grid-column: 2;
+  min-width: 0;
+}
+.fr-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.fr-sender {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+}
+.fr-sender .to-prefix {
+  color: rgb(var(--ink-fg-2));
+  font-weight: 400;
+}
+.fr-sender .to-none {
+  color: rgb(var(--ink-fg-3));
+  font-weight: 400;
+  font-style: italic;
+}
+.fr-time {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.fr-subject {
+  margin-top: 3px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: rgb(var(--ink-fg-1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fr-subject.is-empty {
+  color: rgb(var(--ink-fg-3));
+  font-style: italic;
+}
+.fr-snippet {
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fr-snippet .fr-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: rgb(var(--ink-fg-2));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fr-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: rgb(var(--ink-fg-3));
+}
+.fr-marks .mk-flag {
+  color: rgb(var(--c-accent));
+}
+/* Floating delete — fades + lifts in on row hover (mockup .fr-delete). */
+.fr-delete {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-2) / 0.92);
+  border: 1px solid rgb(var(--ink-border));
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: translateY(2px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease,
+    color 0.12s,
+    background-color 0.12s,
+    border-color 0.12s;
+  z-index: 2;
+}
+.folder-row:hover .fr-delete,
+.fr-delete:focus-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.fr-delete:hover,
+.fr-delete:focus-visible {
+  color: rgb(var(--c-fail));
+  background: rgb(var(--c-fail) / 0.14);
+  border-color: rgb(var(--c-fail) / 0.4);
+}
+
+/* ── Avatar — 34px disc; same hue ramp as inbox + blank (no-recipient). ──── */
+.folder-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.96);
+  text-transform: uppercase;
+  flex-shrink: 0;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.25);
+  user-select: none;
+}
+/* Empty-draft placeholder — dashed ink ring + pencil glyph, no hue. */
+.folder-avatar-blank {
+  background: rgb(var(--ink-4));
+  color: rgb(var(--ink-fg-2));
+  box-shadow: inset 0 0 0 1.5px rgb(var(--ink-fg-3));
+}
+
+/* ── gbtn family — list/detail/composer button system (mockup .gbtn*). ───── */
+.gbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1;
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-3));
+  border: 1px solid rgb(var(--ink-border));
+  transition: all 0.12s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.gbtn:hover:not(:disabled) {
+  background: rgb(var(--ink-4));
+  color: rgb(var(--ink-fg));
+}
+.gbtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.gbtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.6);
+}
+/* Primary — reuse the AA-tuned CTA tokens (deep accent + white fg). */
+.gbtn-primary {
+  background: rgb(var(--c-cta-bg));
+  border-color: transparent;
+  color: rgb(var(--c-cta-fg));
+  font-weight: 500;
+}
+.gbtn-primary:hover:not(:disabled) {
+  background: rgb(var(--c-cta-bg-hover));
+  color: rgb(var(--c-cta-fg));
+}
+/* Danger — neutral until hover, then fail-tinted (delete / discard). */
+.gbtn-danger:hover:not(:disabled) {
+  color: rgb(var(--c-fail));
+  background: rgb(var(--c-fail) / 0.12);
+  border-color: rgb(var(--c-fail) / 0.4);
+}
+/* Solid danger — confirm button inside delete dialogs. */
+.gbtn-danger-solid {
+  background: rgb(var(--c-fail));
+  border-color: transparent;
+  color: rgb(var(--c-cta-fg));
+  font-weight: 500;
+}
+.gbtn-danger-solid:hover:not(:disabled) {
+  background: rgb(var(--c-fail) / 0.86);
+  color: rgb(var(--c-cta-fg));
+}
+.gbtn-bare {
+  background: transparent;
+  border-color: transparent;
+}
+.gbtn-bare:hover:not(:disabled) {
+  background: rgb(var(--ink-3));
+}
+
+/* ── Skeleton shimmer — folder-namespaced (settings owns .sk-*). ─────────── */
+.folder-skel {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--ink-4) / 0.55) 25%,
+    rgb(var(--ink-5) / 0.85) 37%,
+    rgb(var(--ink-4) / 0.55) 63%
+  );
+  background-size: 400% 100%;
+  animation: folder-skel 1.4s ease infinite;
+  border-radius: 6px;
+}
+@keyframes folder-skel {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .folder-skel {
+    animation: none;
+  }
+}
+
+/* ── Confirm modal — backdrop blur + scale-in, fail/accent icon badge. ───── */
+.folder-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 8, 11, 0.55);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  padding: 24px;
+  animation: folder-modal-fade 160ms ease;
+}
+:root[data-theme='light'] .folder-modal-backdrop {
+  background: rgba(18, 24, 46, 0.32);
+}
+.folder-modal {
+  width: 440px;
+  max-width: 100%;
+  border-radius: 16px;
+  overflow: hidden;
+  animation: folder-modal-rise 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes folder-modal-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes folder-modal-rise {
+  from {
+    transform: translateY(8px) scale(0.985);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .folder-modal-backdrop,
+  .folder-modal {
+    animation: none;
+  }
+}
+.folder-modal-ico {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.folder-modal-ico.is-danger {
+  color: rgb(var(--c-fail));
+  background: rgb(var(--c-fail) / 0.12);
+  border: 1px solid rgb(var(--c-fail) / 0.3);
+}
+.folder-modal-ico.is-accent {
+  color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent) / 0.12);
+  border: 1px solid rgb(var(--c-accent) / 0.3);
+}
+
+/* ── Recipient chip — confirm-send recipient pills + composer To/Cc chips. ─ */
+.recipient-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 4px;
+  border-radius: 999px;
+  background: rgb(var(--ink-4));
+  border: 1px solid rgb(var(--ink-border));
+  font-size: 13px;
+  line-height: 1;
+  color: rgb(var(--ink-fg));
+}
+.recipient-chip .rc-av {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgb(var(--ink-5));
+  display: grid;
+  place-items: center;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 9.5px;
+  color: rgb(var(--ink-fg-1));
+  text-transform: uppercase;
+}
+.recipient-chip .rc-close {
+  margin-left: 2px;
+  padding: 0 2px;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+}
+.recipient-chip .rc-close:hover {
+  color: rgb(var(--ink-fg));
+}
+
+/* ── Composer field rows — From/To/Cc/Subject (mockup .field-row). ───────── */
+.folder-field-row {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 14px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+  background: rgb(var(--ink-2) / 0.4);
+  transition: background-color 0.12s;
+}
+.folder-field-row:hover {
+  background: rgb(var(--ink-3) / 0.55);
+}
+.folder-field-row:focus-within {
+  background: rgb(var(--ink-3) / 0.78);
+}
+.folder-field-row .field-label {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  line-height: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgb(var(--ink-fg-2));
+  font-weight: 500;
+}
+.folder-field-row input {
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: rgb(var(--ink-fg));
+  font-size: 14px;
+  line-height: 22px;
+  width: 100%;
+  font-family: inherit;
+  min-width: 80px;
+}
+.folder-field-row input::placeholder {
+  color: rgb(var(--ink-fg-3));
+}
+
+/* ── Composer format toolbar buttons (mockup .editor-btn). ───────────────── */
+.folder-editor-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-1));
+  background: transparent;
+  transition: all 0.12s;
+  cursor: pointer;
+}
+.folder-editor-btn:hover {
+  background: rgb(var(--ink-fg) / 0.06);
+  color: rgb(var(--ink-fg));
+}
+.folder-editor-btn.is-on {
+  background: rgb(var(--c-accent) / 0.14);
+  color: rgb(var(--c-accent));
+}
+

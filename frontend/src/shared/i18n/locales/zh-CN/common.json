@@ -367,7 +367,7 @@
       "deleteBody": "此操作不可逆，邮件将从服务器永久删除。确定继续？",
       "moveTitle": "移回收件箱",
       "moveBody": "将此邮件移回收件箱，移回后会重新出现在邮件列表中。",
-      "sendTitle": "发送草稿",
+      "sendTitle": "确认发送给 {{count}} 位收件人？",
       "sendBody": "发送后邮件将发往收件人，此操作不可逆。确定发送？",
       "deleteDraftTitle": "删除草稿",
       "deleteDraftBody": "此草稿将被永久删除，确定继续？",
@@ -375,7 +375,19 @@
       "confirmDelete": "永久删除",
       "confirmMove": "移回",
       "confirmSend": "发送",
-      "confirmDeleteDraft": "删除"
+      "confirmDeleteDraft": "删除",
+      "moveBodyTail": "将移出存档、重新出现在收件箱顶部。此操作可随时再次归档撤销。",
+      "sendBodyLead": "这封草稿将通过 SMTP",
+      "sendBodyStress": "真实发出",
+      "sendBodyTail": "，发送后无法撤回。",
+      "sendAttachNote": "含 {{count}} 个附件 · 经 DavMail 发送",
+      "deleteDraftBodyTail": "将被删除，",
+      "deleteBodyTail": "将从邮件服务器永久删除，包括其附件。",
+      "deleteIrreversible": "无法恢复",
+      "deleteWarnLead": "此操作",
+      "deleteWarnTail": "，且无法从其他设备找回。",
+      "deleteRow": "这封存档邮件将从邮件服务器永久删除，此操作无法恢复。",
+      "deleteDraftRow": "这封草稿将被永久删除，此操作无法恢复。"
     },
     "toast": {
       "moveOk": "已移回收件箱",
@@ -412,9 +424,50 @@
       "bulletList": "无序列表",
       "orderedList": "有序列表",
       "link": "链接",
-      "code": "代码"
+      "code": "代码",
+      "editHint": "载入已有草稿",
+      "newHint": "从空白开始 · 保存后进入草稿箱"
     },
-    "attachments": "附件"
+    "attachments": "附件",
+    "count": "{{count}} 封",
+    "retry": "重试",
+    "skeletonDrafts": "正在同步草稿…",
+    "skeletonArchive": "正在拉取存档…",
+    "errorTitleDrafts": "读取草稿失败",
+    "errorTitleArchive": "读取存档失败",
+    "errorBodyDrafts": "无法从本地草稿库读取内容。你正在撰写的内容已安全保留，请重试。",
+    "errorBodyArchive": "无法连接到本地存档库（IMAP 同步可能中断）。请检查网络后重试。",
+    "emptyDraftsTitle": "还没有草稿",
+    "emptyArchiveTitle": "存档是空的",
+    "emptyDraftsBody": "写到一半的邮件会自动保存在这里，随时可以回来继续。",
+    "emptyArchiveBody": "在收件箱里归档的邮件会出现在这里。归档不会删除邮件，随时可以移回。",
+    "emptyDraftsCta": "写一封新邮件",
+    "footerDrafts": "按最后修改倒序",
+    "footerArchive": "按时间倒序 · 只读",
+    "footerSavedDrafts": "已保存",
+    "footerSyncedArchive": "已同步",
+    "row": {
+      "toPrefix": "致",
+      "noRecipient": "（尚无收件人）",
+      "noSubject": "（无主题）",
+      "unknownSender": "（未知发件人）"
+    },
+    "detail": {
+      "draftBadge": "草稿",
+      "from": "发件人",
+      "to": "收件人",
+      "cc": "抄送",
+      "date": "日期",
+      "lastModified": "最后修改",
+      "selfTag": "（自己）",
+      "noRecipient": "（尚无收件人）",
+      "noSubject": "（无主题）",
+      "flagged": "已标旗",
+      "attachmentsReadonly": "（只读 · 当前不支持下载）",
+      "noDraftSelected": "未选择草稿",
+      "noMailSelected": "未选择邮件",
+      "loadFailed": "读取失败"
+    }
   },
   "chat": {
     "title": "AI 助手",
@@ -644,7 +697,13 @@
     "title": "周期会议",
     "subtitle": "扫描 {since} 起的邀请,可单独重放到 Notion 日历",
     "loading": "加载中…",
-    "empty": "未发现周期会议",
+    "empty": {
+      "day": "本日无日程",
+      "week": "本周无日程",
+      "month": "本月无日程",
+      "agenda": "未来 {n} 天无日程",
+      "recurring": "未发现周期会议"
+    },
     "emptyHint": "调整时间范围或确认 .ics 邀请已被同步",
     "replay": "重放",
     "replayOk": "邮件 #{id} 重放完成",
@@ -831,13 +890,6 @@
       "toastUpdated": "事件已更新",
       "toastErrCreate": "创建事件失败",
       "toastErrUpdate": "更新事件失败"
-    },
-    "empty": {
-      "day": "本日无日程",
-      "week": "本周无日程",
-      "month": "本月无日程",
-      "agenda": "未来 {n} 天无日程",
-      "recurring": "未发现周期会议"
     },
     "syncTriggered": "已触发日历同步",
     "syncTriggerFail": "日历同步失败",

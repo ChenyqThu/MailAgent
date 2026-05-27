@@ -367,7 +367,7 @@
       "deleteBody": "This cannot be undone — the message will be permanently removed from the server. Continue?",
       "moveTitle": "Move to Inbox",
       "moveBody": "Move this message back to the Inbox. It will reappear in the mail list after moving.",
-      "sendTitle": "Send draft",
+      "sendTitle": "Send to {{count}} recipient(s)?",
       "sendBody": "Once sent, the message goes to the recipients — this cannot be undone. Send now?",
       "deleteDraftTitle": "Delete draft",
       "deleteDraftBody": "This draft will be permanently deleted. Continue?",
@@ -375,7 +375,19 @@
       "confirmDelete": "Delete permanently",
       "confirmMove": "Move",
       "confirmSend": "Send",
-      "confirmDeleteDraft": "Delete"
+      "confirmDeleteDraft": "Delete",
+      "moveBodyTail": "will leave the archive and reappear at the top of your inbox. You can re-archive it anytime.",
+      "sendBodyLead": "This draft will be",
+      "sendBodyStress": "sent for real",
+      "sendBodyTail": " over SMTP and cannot be recalled.",
+      "sendAttachNote": "Includes {{count}} attachment(s) · sent via DavMail",
+      "deleteDraftBodyTail": "will be deleted and ",
+      "deleteBodyTail": "will be permanently deleted from the mail server, including its attachments.",
+      "deleteIrreversible": "cannot be recovered",
+      "deleteWarnLead": "This action ",
+      "deleteWarnTail": ", and cannot be retrieved from other devices.",
+      "deleteRow": "This archived message will be permanently deleted from the mail server. This cannot be undone.",
+      "deleteDraftRow": "This draft will be permanently deleted. This cannot be undone."
     },
     "toast": {
       "moveOk": "Moved to Inbox",
@@ -412,9 +424,50 @@
       "bulletList": "Bullet list",
       "orderedList": "Numbered list",
       "link": "Link",
-      "code": "Code"
+      "code": "Code",
+      "editHint": "Editing an existing draft",
+      "newHint": "Start from scratch · saved to Drafts"
     },
-    "attachments": "Attachments"
+    "attachments": "Attachments",
+    "count": "{{count}}",
+    "retry": "Retry",
+    "skeletonDrafts": "Syncing drafts…",
+    "skeletonArchive": "Fetching archive…",
+    "errorTitleDrafts": "Failed to load drafts",
+    "errorTitleArchive": "Failed to load archive",
+    "errorBodyDrafts": "Could not read from the local drafts store. Anything you are composing is safe — please retry.",
+    "errorBodyArchive": "Could not reach the local archive store (IMAP sync may be interrupted). Check your connection and retry.",
+    "emptyDraftsTitle": "No drafts yet",
+    "emptyArchiveTitle": "Archive is empty",
+    "emptyDraftsBody": "Half-written messages are auto-saved here so you can pick them up anytime.",
+    "emptyArchiveBody": "Messages you archive from the inbox show up here. Archiving never deletes — you can move them back anytime.",
+    "emptyDraftsCta": "Write a new message",
+    "footerDrafts": "Newest edit first",
+    "footerArchive": "Newest first · read-only",
+    "footerSavedDrafts": "Saved",
+    "footerSyncedArchive": "Synced",
+    "row": {
+      "toPrefix": "To",
+      "noRecipient": "(no recipient)",
+      "noSubject": "(no subject)",
+      "unknownSender": "(unknown sender)"
+    },
+    "detail": {
+      "draftBadge": "Draft",
+      "from": "From",
+      "to": "To",
+      "cc": "Cc",
+      "date": "Date",
+      "lastModified": "Last modified",
+      "selfTag": "(you)",
+      "noRecipient": "(no recipient)",
+      "noSubject": "(no subject)",
+      "flagged": "Flagged",
+      "attachmentsReadonly": "(read-only · download not yet supported)",
+      "noDraftSelected": "No draft selected",
+      "noMailSelected": "No message selected",
+      "loadFailed": "Failed to load"
+    }
   },
   "chat": {
     "title": "AI Assistant",
@@ -840,15 +893,6 @@
       "toastErrCreate": "Failed to create event",
       "toastErrUpdate": "Failed to update event"
     },
-    "empty": {
-      "day": "No events today",
-      "week": "No events this week",
-      "month": "No events this month",
-      "agenda": "No events in the next {n} days",
-      "recurring": "No recurring meetings found"
-    },
-    "syncTriggered": "Calendar sync triggered",
-    "syncTriggerFail": "Calendar sync failed",
     "errorBoundary": {
       "title": "{view} failed to load",
       "hint": "Switch view or click Retry to reload. See DevTools console for details.",
