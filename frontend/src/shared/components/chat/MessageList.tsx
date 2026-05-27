@@ -557,6 +557,38 @@ function UserBubble({ messageId, content, handlers }: UserBubbleProps): React.Re
   )
 }
 
+// Sprint 19 P1-C — module-level cache for chat.kosAvailable. The button
+// gate is the same answer for every assistant bubble in the app session
+// (driven by main-process env), so we resolve the IPC once and share the
+// promise across all AssistantMessageFooter mounts instead of one call per
+// message. null = not yet fetched.
+let _kosAvailablePromise: Promise<boolean> | null = null
+
+function fetchKosAvailable(api: ReturnType<typeof useMailApi>): Promise<boolean> {
+  if (_kosAvailablePromise === null) {
+    _kosAvailablePromise = api.chat.kosAvailable().catch(() => false)
+  }
+  return _kosAvailablePromise
+}
+
+/** Resolve "is the [✨ 保存到 KOS] action available" once on mount. Returns
+ *  false until resolved so the button never flashes before we know KOS is
+ *  configured. */
+function useKosAvailable(): boolean {
+  const mailApi = useMailApi()
+  const [available, setAvailable] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void fetchKosAvailable(mailApi).then((v) => {
+      if (!cancelled) setAvailable(v)
+    })
+    return (): void => {
+      cancelled = true
+    }
+  }, [mailApi])
+  return available
+}
+
 function AssistantMessageFooter({
   messageId,
   content
@@ -570,6 +602,10 @@ function AssistantMessageFooter({
   // navigator.clipboard.writeText(content). Regenerate / toNotion 仍是
   // V1 placeholders 走 toast "即将上线" 直到 IPC 接通.
   const [saveBusy, setSaveBusy] = useState(false)
+  // Sprint 19 P1-C — only show [✨ 保存到 KOS] when KOS is configured
+  // (KOS_MCP_BASE + OAuth creds). Renderer can't read env, so this rides
+  // a cached chat.kosAvailable IPC.
+  const kosAvailable = useKosAvailable()
   const soon = (): void => {
     toastSuccess(t('shortcutHelp.soon'))
   }
@@ -627,20 +663,24 @@ function AssistantMessageFooter({
         <Bookmark size={11} strokeWidth={2} />
         {t('chat.messageActions.toNotion')}
       </button>
-      <span className="text-ink-fg-3">·</span>
-      <button
-        type="button"
-        onClick={onSaveToKos}
-        disabled={saveBusy}
-        className={cn(
-          'inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast',
-          saveBusy && 'opacity-50 cursor-wait'
-        )}
-        aria-label={t('chat.messageActions.saveToKos')}
-      >
-        <Sparkles size={11} strokeWidth={2} />
-        {t('chat.messageActions.saveToKos')}
-      </button>
+      {kosAvailable && (
+        <>
+          <span className="text-ink-fg-3">·</span>
+          <button
+            type="button"
+            onClick={onSaveToKos}
+            disabled={saveBusy}
+            className={cn(
+              'inline-flex items-center gap-1 hover:text-ink-fg transition-colors duration-fast',
+              saveBusy && 'opacity-50 cursor-wait'
+            )}
+            aria-label={t('chat.messageActions.saveToKos')}
+          >
+            <Sparkles size={11} strokeWidth={2} />
+            {t('chat.messageActions.saveToKos')}
+          </button>
+        </>
+      )}
     </div>
   )
 }
@@ -683,8 +723,7 @@ function ToolCallAuditRow({
 
   const statusBadge = (s: ChatToolCall['status']): React.ReactElement => {
     if (s === 'ok') return <Check size={11} className="text-ok shrink-0" />
-    if (s === 'error' || s === 'canceled')
-      return <X size={11} className="text-fail shrink-0" />
+    if (s === 'error' || s === 'canceled') return <X size={11} className="text-fail shrink-0" />
     if (s === 'running' || s === 'pending' || s === 'confirmed')
       return <Loader2 size={11} className="text-ink-fg-3 shrink-0 animate-spin" />
     return <Check size={11} className="text-ink-fg-3 shrink-0" />
@@ -889,9 +928,7 @@ function AssistantBubble({
         {isStreaming && <span className="cursor-blink" aria-hidden />}
       </div>
       <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
-      {!isStreaming && (
-        <AssistantMessageFooter messageId={message.id} content={message.content} />
-      )}
+      {!isStreaming && <AssistantMessageFooter messageId={message.id} content={message.content} />}
     </div>
   )
 }

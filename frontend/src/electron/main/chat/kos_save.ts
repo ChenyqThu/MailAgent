@@ -32,9 +32,18 @@ import {
   type ChatMessage,
   type ChatSession
 } from '../chat_db'
+import { getDb } from '../db'
+import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../llm_settings'
 import { KOSClient, KOSError } from '../kos/client'
 
 const SLUG_PREFIX = 'chat-history/mailagent'
+
+// One-shot summarize call deadline. Generous vs the chat stream's 60s
+// because this runs synchronously inside the save IPC (user waits on the
+// toast); too short risks a needless fallback to raw transcript. Failure
+// here is non-fatal — fallback body keeps the save working.
+const SUMMARIZE_DEADLINE_MS = 45_000
+const SUMMARIZE_MAX_TOKENS = 1024
 
 // ── Lazy singleton — 复用 token cache 不每次重 fetch ───────────────
 
@@ -50,6 +59,204 @@ export function getKosClientForSave(): KOSClient {
 /** Tests: inject mock; pass null to reset to default lazy ctor. */
 export function __setKosClientForSaveTests(c: KOSClient | null): void {
   _client = c
+}
+
+// ── LLM summarize (③) ─────────────────────────────────────────────
+//
+// Replaces the raw User/Assistant transcript with an LLM-distilled
+// structured Chinese summary. Per Lucien's brain-mechanics review: raw
+// chat is half "好的/明白了" filler with poor embedding / entity-extraction
+// quality, and KOS's extract-conversation-facts skips one-off chat-saves —
+// so a structured summary is a first-class input. Email body is NOT
+// restated (it already lives in KOS at `sources/email/<id>`); the summary
+// references it and focuses on the conversation's own takeaways.
+
+/** Signature of the one-shot summarizer so tests can inject a mock LLM and
+ *  exercise both the success (structured body) and failure (raw transcript
+ *  fallback) paths without burning tokens or hitting the network. */
+export type ConversationSummarizer = (opts: {
+  userContent: string
+  assistantContent: string
+  emailSubject: string | null
+  emailId: number
+}) => Promise<string>
+
+let _summarizer: ConversationSummarizer | null = null
+
+/** Tests: inject a mock summarizer; pass null to reset to the real LLM call. */
+export function __setSummarizerForTests(fn: ConversationSummarizer | null): void {
+  _summarizer = fn
+}
+
+function getSummarizer(): ConversationSummarizer {
+  return _summarizer ?? summarizeConversation
+}
+
+/** Read the email subject from the SQLite SSoT for the summarize prompt, so
+ *  the LLM knows which email the conversation is about without us restating
+ *  the body. Returns null on miss / unreachable DB (summary still works,
+ *  just without the subject anchor). */
+function getEmailSubject(emailId: number): string | null {
+  try {
+    const row = getDb()
+      .prepare('SELECT subject FROM email_metadata WHERE internal_id = ?')
+      .get(emailId) as { subject: string | null } | undefined
+    return row?.subject ?? null
+  } catch {
+    return null
+  }
+}
+
+const SUMMARIZE_SYSTEM_PROMPT = [
+  '你是 MailAgent 的对话归档助手。用户刚和 AI 助手就一封邮件进行了一轮问答,',
+  '现在要把这轮对话提炼成结构化的中文总结, 存入知识库 (KOS) 供日后跨会话检索。',
+  '',
+  '硬性要求:',
+  '- 输出简体中文。',
+  '- 禁止复述邮件正文 —— 邮件原文已单独存在知识库里, 只需引用, 不要重复内容。',
+  '- 聚焦【这轮对话本身】的提炼: 用户真正想解决什么、得到了什么结论、牵涉哪些实体与待办。',
+  '- 跳过寒暄与 "好的/明白了" 这类无信息量的内容。',
+  '- 只输出 markdown 正文, 不要输出 YAML frontmatter, 不要用代码块包裹整段输出。',
+  '',
+  '严格按以下结构输出 (三段, 标题用中文原文):',
+  '# {一句话主题作为标题}',
+  '## 关键结论 / 决策',
+  '- (逐条列出对话得出的结论或决策; 没有就写 "- (本轮无明确结论)")',
+  '## 涉及实体 / 待办',
+  '- (逐条显式列出涉及的人名 / 项目 / 产品 / 公司 / 具体动作, 供知识库实体识别使用;',
+  '  没有就写 "- (无)")'
+].join('\n')
+
+function buildSummarizeUserPrompt(opts: {
+  userContent: string
+  assistantContent: string
+  emailSubject: string | null
+}): string {
+  const parts: string[] = []
+  parts.push(
+    opts.emailSubject
+      ? `这轮对话讨论的邮件主题是:《${opts.emailSubject}》`
+      : '这轮对话讨论的是用户当前打开的一封邮件 (主题未知)。'
+  )
+  parts.push('')
+  parts.push('用户提问:')
+  parts.push(opts.userContent.trim().length > 0 ? opts.userContent.trim() : '(无)')
+  parts.push('')
+  parts.push('AI 助手回答:')
+  parts.push(opts.assistantContent.trim())
+  return parts.join('\n')
+}
+
+/** Extract assistant text from a non-streaming response of either protocol.
+ *  Anthropic `/v1/messages` → `content: [{type:'text', text}]`; OpenAI
+ *  `/v1/chat/completions` → `choices: [{message: {content}}]`. Returns ''
+ *  when neither shape yields text (caller treats empty as failure). */
+function extractSummaryText(parsed: unknown): string {
+  const obj = parsed as Record<string, unknown>
+  // Anthropic shape.
+  const content = obj?.content
+  if (Array.isArray(content)) {
+    const text = content
+      .map((b) => {
+        const block = b as { type?: string; text?: string }
+        return block?.type === 'text' && typeof block.text === 'string' ? block.text : ''
+      })
+      .join('')
+    if (text.trim().length > 0) return text.trim()
+  }
+  // OpenAI shape.
+  const choices = obj?.choices
+  if (Array.isArray(choices) && choices.length > 0) {
+    const msg = (choices[0] as { message?: { content?: unknown } })?.message
+    if (msg && typeof msg.content === 'string' && msg.content.trim().length > 0) {
+      return msg.content.trim()
+    }
+  }
+  return ''
+}
+
+/** Real one-shot summarize call. Reuses custom_api's credential / baseUrl /
+ *  model resolution (getLlmApiKey + getLlmBaseUrl + getLlmModel). Issues a
+ *  NON-streaming request — this is an independent one-shot call, not part of
+ *  the multi-turn streaming harness. Anthropic models hit `/v1/messages`;
+ *  other (OpenAI-protocol) models hit `/v1/chat/completions`. Throws on any
+ *  failure (no key / HTTP error / empty output) so the caller falls back to
+ *  the raw transcript body. */
+async function summarizeConversation(opts: {
+  userContent: string
+  assistantContent: string
+  emailSubject: string | null
+  emailId: number
+}): Promise<string> {
+  const apiKey = await getLlmApiKey()
+  if (!apiKey) {
+    const err = new Error('LLM API key not configured') as Error & { code: string }
+    err.code = 'E_NO_LLM_KEY'
+    throw err
+  }
+  const baseUrl = getLlmBaseUrl()
+  const model = getLlmModel()
+  const userPrompt = buildSummarizeUserPrompt(opts)
+  const isAnthropic = model.startsWith('claude-') || model.startsWith('claude:')
+
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), SUMMARIZE_DEADLINE_MS)
+  try {
+    let url: string
+    let headers: Record<string, string>
+    let body: Record<string, unknown>
+    if (isAnthropic) {
+      url = `${baseUrl}/v1/messages`
+      headers = {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      }
+      body = {
+        model,
+        max_tokens: SUMMARIZE_MAX_TOKENS,
+        system: SUMMARIZE_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userPrompt }],
+        stream: false
+      }
+    } else {
+      url = `${baseUrl}/v1/chat/completions`
+      headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`
+      }
+      body = {
+        model,
+        max_tokens: SUMMARIZE_MAX_TOKENS,
+        messages: [
+          { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt }
+        ],
+        stream: false
+      }
+    }
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: ac.signal
+    })
+    if (!resp.ok) {
+      const err = new Error(`summarize LLM HTTP ${resp.status}`) as Error & { code: string }
+      err.code = resp.status === 429 ? 'E_QUOTA' : 'E_UPSTREAM'
+      throw err
+    }
+    const parsed = (await resp.json()) as unknown
+    const text = extractSummaryText(parsed)
+    if (text.length === 0) {
+      const err = new Error('summarize LLM returned empty content') as Error & { code: string }
+      err.code = 'E_UPSTREAM'
+      throw err
+    }
+    return text
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // ── 输入 + 输出契约 ────────────────────────────────────────────────
@@ -115,12 +322,25 @@ export function buildConversationPageContent(opts: {
   title: string
   savedAtIso: string
   backendModel: string | null
+  /** ③ LLM-distilled structured summary markdown (body only, no
+   *  frontmatter). When present + non-empty, replaces the raw
+   *  User/Assistant transcript as the page body. Null → fall back to the
+   *  raw transcript (LLM unavailable / failed). */
+  summaryBody?: string | null
+  /** Email subject for the summary's reference line. Null → omit subject
+   *  from the reference. Only used when `summaryBody` is present. */
+  emailSubject?: string | null
 }): string {
   // YAML frontmatter — top-level keys alphabetical for diff stability.
   // mailagent.* nested per Lucien 2026-05-23 spec (gbrain namespace
   // convention groups source-specific fields under a single key, leaving
   // top-level for cross-source filters like `source` / `tags`). Nested
   // sub-keys also alphabetical (email_id / message_id / session_id).
+  //
+  // source_refs (②): block-list pointing at the bulk-ingested email page.
+  // The slug MUST byte-match the bulk ingest's `sources/email/<internal_id>`
+  // (email_id == internal_id) so KOS's dream-cycle backlinks phase resolves
+  // the target and builds the chat→email graph edge (Lucien hard constraint).
   const fm = [
     '---',
     'mailagent:',
@@ -130,14 +350,39 @@ export function buildConversationPageContent(opts: {
     `model: ${opts.backendModel ?? 'unknown'}`,
     `saved_at: ${opts.savedAtIso}`,
     `source: mailagent-chat`,
+    'source_refs:',
+    `  - 'sources/email/${opts.emailId}'`,
     `tags: [chat-history, mailagent, conversation]`,
     `title: ${JSON.stringify(opts.title)}`,
     `type: conversation`,
     '---'
   ].join('\n')
-  // 2026-05-25 polish — drop `# {title}` H1 per Lucien spec strict;
-  // frontmatter `title:` already carries the title, body H1 was a
-  // duplicate that KOS renderer treats as a phantom heading.
+
+  const summary = opts.summaryBody?.trim() ?? ''
+  if (summary.length > 0) {
+    // ③ Structured-summary body. The LLM already produced the H1 +
+    // sectioned markdown per SUMMARIZE_SYSTEM_PROMPT; we prepend a
+    // reference line pointing at the email page (no body restated). No
+    // <details>, no raw transcript — the original turns stay in chat_db
+    // SQLite; the brain only needs the distilled form (Lucien).
+    const refSubject = opts.emailSubject?.trim()
+    const refLine = refSubject
+      ? `> 关于邮件《${refSubject}》的讨论 · 关联 sources/email/${opts.emailId}`
+      : `> 关于邮件的讨论 · 关联 sources/email/${opts.emailId}`
+    // Inject the reference line right after the LLM's H1 so it reads as a
+    // subtitle. If the summary doesn't start with an H1 (defensive), just
+    // prepend the reference line.
+    const lines = summary.split('\n')
+    if (lines[0]?.startsWith('# ')) {
+      const rest = lines.slice(1).join('\n').replace(/^\n+/, '')
+      return `${fm}\n\n${lines[0]}\n${refLine}\n\n${rest}`
+    }
+    return `${fm}\n\n${refLine}\n\n${summary}`
+  }
+
+  // Fallback body — raw User/Assistant transcript (LLM unavailable). Same
+  // shape as before ③: 2026-05-25 polish dropped `# {title}` H1 (frontmatter
+  // title already carries it).
   const sections: string[] = ['']
   if (opts.userContent.trim().length > 0) {
     sections.push('## User', '', opts.userContent.trim(), '')
@@ -235,6 +480,29 @@ export async function saveConversationToKos(
       messageId: assistantMsg.id
     })
   const title = input.title ?? buildAutoTitle(userContent)
+
+  // ③ Summarize the turn into a structured markdown body. LLM failure
+  // (no key / network / timeout / empty) is non-fatal: we log a warning and
+  // fall back to the raw transcript so KOS save never hard-depends on the
+  // LLM (Lucien ④). emailSubject anchors the summary's reference line.
+  const emailSubject = getEmailSubject(session.email_id)
+  let summaryBody: string | null = null
+  try {
+    summaryBody = await getSummarizer()({
+      userContent,
+      assistantContent: assistantMsg.content,
+      emailSubject,
+      emailId: session.email_id
+    })
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e)
+    console.warn(
+      `[kos_save] summarize failed for message ${assistantMsg.id} (${reason}); ` +
+        'falling back to raw transcript body'
+    )
+    summaryBody = null
+  }
+
   const content = buildConversationPageContent({
     userContent,
     assistantContent: assistantMsg.content,
@@ -243,7 +511,9 @@ export async function saveConversationToKos(
     messageId: assistantMsg.id,
     title,
     savedAtIso: new Date().toISOString(),
-    backendModel: assistantMsg.model ?? session.backend_model
+    backendModel: assistantMsg.model ?? session.backend_model,
+    summaryBody,
+    emailSubject
   })
   const contentBytes = Buffer.byteLength(content, 'utf8')
 

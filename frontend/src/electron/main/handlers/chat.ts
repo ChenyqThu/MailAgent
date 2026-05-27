@@ -26,6 +26,7 @@ import {
   type ChatToolCall
 } from '../chat_db'
 import { saveConversationToKos } from '../chat/kos_save'
+import { isKosSaveAvailable } from '../chat/config'
 import {
   abortAllChatSessions,
   abortChatSession,
@@ -308,6 +309,15 @@ export function registerChatHandlers(): void {
       }
     }
   )
+
+  // Sprint 19 P1-C — chat:kosAvailable. Renderer's AssistantMessageFooter
+  // queries this once on mount to decide whether to render the [✨ 保存到 KOS]
+  // button. True only when KOS OAuth credentials are configured (mirrors
+  // KOSClient.configured); the renderer can't read process.env so this is
+  // the env→renderer bridge. Cheap pure env check — no IPC envelope needed.
+  ipcMain.handle('chat:kosAvailable', async (): Promise<boolean> => {
+    return isKosSaveAvailable()
+  })
 
   // Sprint 19 §D #3 — chat:listToolCalls. Renderer ToolCallRow fetches
   // audit rows per assistant message to render the tool I/O folding card.

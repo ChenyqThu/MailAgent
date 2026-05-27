@@ -588,6 +588,11 @@ class ElectronChatApi implements ChatApi {
     err.code = env.code
     throw err
   }
+  async kosAvailable(): Promise<boolean> {
+    // Sprint 19 P1-C — env→renderer bridge gating the [✨ 保存到 KOS] button.
+    // Plain pass-through; the main handler returns a bare boolean.
+    return (await invoker()('chat:kosAvailable')) as boolean
+  }
   async listToolCalls(messageId: number): Promise<ChatToolCall[]> {
     // Sprint 19 §D #3 — ToolCallRow audit fetch. Plain pass-through; the
     // main handler returns [] for invalid inputs (no envelope wrap needed).

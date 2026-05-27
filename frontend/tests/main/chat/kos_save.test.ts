@@ -10,13 +10,10 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import {
-  appendMessage,
-  closeChatDb,
-  createNewSession
-} from '../../../src/electron/main/chat_db'
+import { appendMessage, closeChatDb, createNewSession } from '../../../src/electron/main/chat_db'
 import {
   __setKosClientForSaveTests,
+  __setSummarizerForTests,
   buildAutoTitle,
   buildConversationPageContent,
   buildConversationSlug,
@@ -38,6 +35,7 @@ beforeEach(() => {
 afterEach(() => {
   closeChatDb()
   __setKosClientForSaveTests(null)
+  __setSummarizerForTests(null)
   delete process.env.AI_CHAT_DB_PATH
   rmSync(tmpDir, { recursive: true, force: true })
 })
@@ -48,8 +46,7 @@ function mockClient(impl: {
 }): KOSClient {
   return {
     putPage:
-      impl.putPage ??
-      (async (slug: string) => ({ slug, status: 'created' as const, chunks: 1 }))
+      impl.putPage ?? (async (slug: string) => ({ slug, status: 'created' as const, chunks: 1 }))
   } as unknown as KOSClient
 }
 
@@ -63,9 +60,9 @@ describe('buildConversationSlug', () => {
   })
 
   test('custom prefix override', () => {
-    expect(
-      buildConversationSlug({ emailId: 1, sessionId: 1, messageId: 1, prefix: 'notes' })
-    ).toBe('notes/1/1/1')
+    expect(buildConversationSlug({ emailId: 1, sessionId: 1, messageId: 1, prefix: 'notes' })).toBe(
+      'notes/1/1/1'
+    )
   })
 })
 
@@ -118,7 +115,14 @@ describe('buildConversationPageContent', () => {
     expect(content).toContain('type: conversation')
   })
 
-  test('body has User + Assistant sections when userContent present', () => {
+  test('② frontmatter contains source_refs pointing at the bulk-ingest email slug', () => {
+    const content = buildConversationPageContent(baseOpts)
+    // Block-list form, single-quoted value, slug byte-matches the bulk
+    // ingest's sources/email/<internal_id> (email_id == internal_id).
+    expect(content).toContain("source_refs:\n  - 'sources/email/100'")
+  })
+
+  test('body has User + Assistant sections when no summaryBody (fallback path)', () => {
     const content = buildConversationPageContent(baseOpts)
     expect(content).toContain('## User')
     expect(content).toContain('Hi Bob, what about the Acme deal?')
@@ -126,7 +130,7 @@ describe('buildConversationPageContent', () => {
     expect(content).toContain('Based on prior thread, Acme expects a quote by Friday.')
   })
 
-  test('body skips User section when userContent empty', () => {
+  test('fallback body skips User section when userContent empty', () => {
     const content = buildConversationPageContent({ ...baseOpts, userContent: '' })
     expect(content).not.toContain('## User')
     expect(content).toContain('## Assistant')
@@ -142,12 +146,77 @@ describe('buildConversationPageContent', () => {
     const content = buildConversationPageContent({ ...baseOpts, title: 'Re: "important"' })
     expect(content).toContain('title: "Re: \\"important\\""')
   })
+
+  // ── ③ structured-summary body path ──────────────────────────────
+
+  test('③ summaryBody replaces raw transcript + injects reference line under H1', () => {
+    const summaryBody = [
+      '# Acme 报价讨论',
+      '## 关键结论 / 决策',
+      '- 周五前给 Acme 出报价',
+      '## 涉及实体 / 待办',
+      '- Bob (待办: 出报价)'
+    ].join('\n')
+    const content = buildConversationPageContent({
+      ...baseOpts,
+      summaryBody,
+      emailSubject: 'Acme 合作'
+    })
+    // No raw transcript leaks into the body.
+    expect(content).not.toContain('## User')
+    expect(content).not.toContain('## Assistant')
+    expect(content).not.toContain('Hi Bob, what about the Acme deal?')
+    // LLM H1 preserved, reference line injected right after it as subtitle.
+    expect(content).toContain('# Acme 报价讨论')
+    expect(content).toContain('> 关于邮件《Acme 合作》的讨论 · 关联 sources/email/100')
+    // Structured sections from the LLM survive.
+    expect(content).toContain('## 关键结论 / 决策')
+    expect(content).toContain('- 周五前给 Acme 出报价')
+    expect(content).toContain('## 涉及实体 / 待办')
+  })
+
+  test('③ summaryBody without leading H1 → reference line prepended', () => {
+    const content = buildConversationPageContent({
+      ...baseOpts,
+      summaryBody: '## 关键结论 / 决策\n- 无明确结论',
+      emailSubject: 'Acme 合作'
+    })
+    expect(content).toContain('> 关于邮件《Acme 合作》的讨论 · 关联 sources/email/100')
+    expect(content).toContain('## 关键结论 / 决策')
+  })
+
+  test('③ summaryBody with null emailSubject → reference line omits subject', () => {
+    const content = buildConversationPageContent({
+      ...baseOpts,
+      summaryBody: '# 主题\n## 关键结论 / 决策\n- x',
+      emailSubject: null
+    })
+    expect(content).toContain('> 关于邮件的讨论 · 关联 sources/email/100')
+    expect(content).not.toContain('《')
+  })
+
+  test('③ empty/whitespace summaryBody falls back to raw transcript', () => {
+    const content = buildConversationPageContent({ ...baseOpts, summaryBody: '   \n  ' })
+    expect(content).toContain('## User')
+    expect(content).toContain('## Assistant')
+  })
 })
 
 // ── saveConversationToKos integration ─────────────────────────────
 
 describe('saveConversationToKos', () => {
-  test('end-to-end: pairs user→assistant + pushes to KOS', async () => {
+  // Default: a summarizer that throws so the raw-transcript fallback (④)
+  // runs. This keeps the existing transcript-shape assertions valid AND
+  // guarantees no real network call leaks out of the suite. Individual
+  // tests override with a success/failure mock as needed. Reset to the
+  // real summarizer in the top-level afterEach.
+  beforeEach(() => {
+    __setSummarizerForTests(async () => {
+      throw Object.assign(new Error('no key in test'), { code: 'E_NO_LLM_KEY' })
+    })
+  })
+
+  test('end-to-end: pairs user→assistant + pushes to KOS (summarizer fails → raw body)', async () => {
     const sess = createNewSession({
       emailId: 100,
       backendKind: 'custom-api',
@@ -185,8 +254,104 @@ describe('saveConversationToKos', () => {
     expect(pushed[0].content).toContain('Bob proposed integration plan A.')
     expect(pushed[0].content).toContain('What did Bob say?')
     expect(pushed[0].content).toContain('mailagent:\n  email_id: 100')
+    // ② source_refs always present, slug byte-matches bulk-ingest email page.
+    expect(pushed[0].content).toContain("source_refs:\n  - 'sources/email/100'")
     // userMsg used only as setup, verify it's the captured one.
     expect(userMsg.role).toBe('user')
+  })
+
+  test('③ summarizer success → structured body, no raw transcript, source_refs present', async () => {
+    const sess = createNewSession({ emailId: 555, backendKind: 'custom-api' })
+    appendMessage({
+      sessionId: sess.id,
+      role: 'user',
+      content: '好的, 那 Acme 的报价什么时候给?',
+      status: 'complete'
+    })
+    const asstMsg = appendMessage({
+      sessionId: sess.id,
+      role: 'assistant',
+      content: '根据上文, Acme 期望周五前拿到报价。',
+      status: 'complete'
+    })
+
+    const seenPromptArgs: Array<{ emailId: number; emailSubject: string | null }> = []
+    __setSummarizerForTests(async (opts) => {
+      seenPromptArgs.push({ emailId: opts.emailId, emailSubject: opts.emailSubject })
+      return [
+        '# Acme 报价时间确认',
+        '## 关键结论 / 决策',
+        '- Acme 期望周五前拿到报价',
+        '## 涉及实体 / 待办',
+        '- Acme (待办: 周五前出报价)'
+      ].join('\n')
+    })
+
+    let captured = ''
+    __setKosClientForSaveTests(
+      mockClient({
+        putPage: async (slug, content) => {
+          captured = content
+          return { slug, status: 'created' }
+        }
+      })
+    )
+
+    const result = await saveConversationToKos({ messageId: asstMsg.id })
+    expect(result.status).toBe('created')
+    // Structured summary in the body; raw transcript NOT restated.
+    expect(captured).toContain('# Acme 报价时间确认')
+    expect(captured).toContain('## 关键结论 / 决策')
+    expect(captured).toContain('- Acme 期望周五前拿到报价')
+    expect(captured).not.toContain('## User')
+    expect(captured).not.toContain('## Assistant')
+    expect(captured).not.toContain('好的, 那 Acme 的报价什么时候给?')
+    // Reference line links the bulk-ingest email page.
+    expect(captured).toContain('· 关联 sources/email/555')
+    expect(captured).toContain("source_refs:\n  - 'sources/email/555'")
+    // Summarizer received emailId (no email body restated). Subject is null
+    // here because no email_metadata row exists in the :memory: chat DB.
+    expect(seenPromptArgs).toHaveLength(1)
+    expect(seenPromptArgs[0].emailId).toBe(555)
+  })
+
+  test('④ summarizer failure → raw transcript fallback, save still succeeds', async () => {
+    const sess = createNewSession({ emailId: 777, backendKind: 'custom-api' })
+    appendMessage({
+      sessionId: sess.id,
+      role: 'user',
+      content: 'Bob 说了什么?',
+      status: 'complete'
+    })
+    const asstMsg = appendMessage({
+      sessionId: sess.id,
+      role: 'assistant',
+      content: 'Bob 提议方案 A。',
+      status: 'complete'
+    })
+
+    __setSummarizerForTests(async () => {
+      throw Object.assign(new Error('upstream 500'), { code: 'E_UPSTREAM' })
+    })
+    let captured = ''
+    __setKosClientForSaveTests(
+      mockClient({
+        putPage: async (slug, content) => {
+          captured = content
+          return { slug, status: 'created' }
+        }
+      })
+    )
+
+    const result = await saveConversationToKos({ messageId: asstMsg.id })
+    // Save succeeds despite LLM failure (non-fatal fallback).
+    expect(result.status).toBe('created')
+    expect(captured).toContain('## User')
+    expect(captured).toContain('Bob 说了什么?')
+    expect(captured).toContain('## Assistant')
+    expect(captured).toContain('Bob 提议方案 A。')
+    // source_refs present on the fallback body too.
+    expect(captured).toContain("source_refs:\n  - 'sources/email/777'")
   })
 
   test('custom slug override', async () => {

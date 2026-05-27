@@ -1200,6 +1200,15 @@ export interface ChatApi {
     title?: string
   }): Promise<{ slug: string; status: string; contentBytes: number }>
   /**
+   * Sprint 19 P1-C — whether the [✨ 保存到 KOS] action is available, i.e.
+   * KOS OAuth credentials (KOS_MCP_BASE + KOS_OAUTH_CLIENT_ID +
+   * KOS_OAUTH_CLIENT_SECRET) are configured in the main process. The
+   * renderer can't read process.env, so the AssistantMessageFooter queries
+   * this once on mount and only renders the save button when true. V2 web
+   * (HttpApi) returns false — chat-save is Electron-only. Never throws.
+   */
+  kosAvailable(): Promise<boolean>
+  /**
    * Sprint 19 §D #3 — list chat_tool_call audit rows for one assistant
    * message. Renderer ToolCallRow mounts when a message bubble renders;
    * each tool_use the LLM emitted shows up as one row (tool_name, status,

@@ -89,6 +89,9 @@ export class HttpApi implements MailApi {
     // Sprint 19 P1-C — chat.saveToKos 把 assistant turn 推 KOS. V2 web 同
     // 走 notImplemented stub, KOS save 用户操作仅 Electron 环境.
     saveToKos: () => notImplemented('chat.saveToKos'),
+    // Sprint 19 P1-C — chat.kosAvailable 门控保存按钮. V2 web SPA 没有 KOS
+    // save 路径 (仅 Electron), 直接返 false 让按钮不渲染而非报错.
+    kosAvailable: async () => false,
     // Sprint 19 §D #3 — chat.listToolCalls 拉 chat_tool_call audit row. V2
     // web SPA 还没接 chat_db, 一律返 [] 让 ToolCallRow 静默不显示而非报错.
     listToolCalls: async () => [],

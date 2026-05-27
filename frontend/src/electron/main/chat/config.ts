@@ -56,6 +56,30 @@ export function isKosConsumerEnabled(): boolean {
   return readEnvBool('MAILAGENT_KOS_CONSUMER_ENABLED', false)
 }
 
+/** Sprint 19 P1-C — chat-save (Scenario A) availability gate. The
+ *  [✨ 保存到 KOS] button only renders when KOS is actually reachable —
+ *  i.e. the three OAuth credentials KOSClient needs (KOS_MCP_BASE +
+ *  KOS_OAUTH_CLIENT_ID + KOS_OAUTH_CLIENT_SECRET) are all configured.
+ *
+ *  Mirrors `KOSClient.configured` (kos/client.ts) so the renderer's button
+ *  gate and the actual putPage call agree on "KOS available". Independent
+ *  of MAILAGENT_KOS_CONSUMER_ENABLED — that flag gates the *chat agent's*
+ *  read tools (kos_query / kos_digest), whereas chat-save is a manual
+ *  user-explicit write that works whenever credentials exist. */
+export function isKosSaveAvailable(): boolean {
+  const base = process.env['KOS_MCP_BASE']
+  const clientId = process.env['KOS_OAUTH_CLIENT_ID']
+  const clientSecret = process.env['KOS_OAUTH_CLIENT_SECRET']
+  return Boolean(
+    base &&
+    base.length > 0 &&
+    clientId &&
+    clientId.length > 0 &&
+    clientSecret &&
+    clientSecret.length > 0
+  )
+}
+
 /** M2 PR-2f — L1 hot block KOS sender digest injection into system prompt.
  *  OFF (default) → system blocks 单 STATIC + emailContext, 无 KOS context.
  *  ON → chat start 时按 emailContext.senderAddr 异步预 fetch
