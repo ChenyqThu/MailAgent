@@ -18,9 +18,8 @@ import re
 import time
 from datetime import timezone
 from email.header import decode_header, make_header
-from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import formatdate, getaddresses, make_msgid, parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from loguru import logger
@@ -41,6 +40,7 @@ from src.mail.backend.types import (
     EmailContent,
     EmailMeta,
     RadarTick,
+    SendResult,
 )
 
 if TYPE_CHECKING:
@@ -723,7 +723,7 @@ class DavMailBackend(IMailBackend):
         folder = draft.drafts_folder or self.drafts_folder or "Drafts"
 
         try:
-            mime_bytes = self._build_reply_mime(draft)
+            mime_bytes = self._build_mime(draft)
         except Exception as e:
             return DraftAppendResult(
                 success=False, drafts_folder=folder, error=f"MIME build failed: {e}",
@@ -757,6 +757,24 @@ class DavMailBackend(IMailBackend):
             return DraftAppendResult(
                 success=False, drafts_folder=folder, error=f"append exception: {e}",
             )
+
+    # =========================================================================
+    # 真实发送 — SMTP (email send 命令 / 前端发送按钮调)
+    # =========================================================================
+
+    def send_email(self, draft: DraftRequest) -> SendResult:
+        """SMTP 真实发送 (复用 _build_mime + sender.smtp_send). 失败返回 success=False 不抛."""
+        try:
+            mime_bytes = self._build_mime(draft)
+        except Exception as e:
+            logger.error(f"[davmail-backend] send_email MIME build failed: {e}")
+            return SendResult(success=False, error=f"MIME build failed: {e}")
+        from src.mail.backend.sender import smtp_send
+
+        return smtp_send(
+            self.cfg, mime_bytes, method="smtp_davmail",
+            archive_sent=getattr(self.cfg, "davmail_archive_sent", False),
+        )
 
     # =========================================================================
     # 内部 helpers
@@ -908,48 +926,19 @@ class DavMailBackend(IMailBackend):
             imap_uidvalidity=self.inbox_uidvalidity,
         )
 
-    def _build_reply_mime(self, draft: DraftRequest) -> bytes:
-        """Build multipart/alternative MIME for IMAP APPEND.
+    def _build_mime(self, draft: DraftRequest) -> bytes:
+        """Build MIME for IMAP APPEND / SMTP send (reply / reply-all / forward / new).
 
-        修复 (review HIGH/MEDIUM):
-        - HIGH #4: In-Reply-To 强制 ``<msg-id>`` 包裹 (RFC 5322 §3.6.4 要求 msg-id 必须
-          带角括号); References 由调用方传完整 chain (``<old_refs> <old_msgid>``).
-        - MEDIUM: From 加 display name (跟 user_email 配合, 否则 enterprise SMTP 会被
-          DKIM/SPF 拒); 加 ``User-Agent`` 标识便于过滤; 透传 ``Reply-To`` 字段.
+        委托 ``sender.build_outgoing_mime`` 单一来源 — forward 引用块 + 附件 multipart/mixed
+        + threading 头逻辑都在那. 保留 ``_build_reply_mime`` 别名供 append_draft /
+        folder_sync.imap_folder_reader 等现有调用点 (zero 改动).
         """
-        msg = EmailMessage()
-        from_display = getattr(self.cfg, "user_name", "") or ""
-        from_email = self.cfg.user_email
-        msg["From"] = f"{from_display} <{from_email}>" if from_display else from_email
-        if draft.to:
-            msg["To"] = ", ".join(draft.to)
-        if draft.cc:
-            msg["Cc"] = ", ".join(draft.cc)
-        msg["Subject"] = draft.subject or "(no subject)"
-        msg["Date"] = formatdate(localtime=True)
-        msg["Message-ID"] = make_msgid(domain="mailagent.local")
-        if draft.in_reply_to:
-            irt = draft.in_reply_to.strip()
-            if not irt.startswith("<"):
-                irt = f"<{irt}>"
-            msg["In-Reply-To"] = irt
-        if draft.references:
-            # 调用方应传完整 chain (``<old_refs> <old_msgid>``); 这里只做空白归一
-            refs_clean = " ".join(draft.references.split())
-            if refs_clean:
-                msg["References"] = refs_clean
-        elif draft.in_reply_to:
-            irt = draft.in_reply_to.strip()
-            if not irt.startswith("<"):
-                irt = f"<{irt}>"
-            msg["References"] = irt
+        from src.mail.backend.sender import build_outgoing_mime
 
-        msg["User-Agent"] = "MailAgent/dual-backend/davmail"
+        return build_outgoing_mime(self.cfg, draft)
 
-        msg.set_content(draft.reply_text or "(empty body)")
-        if draft.reply_html:
-            msg.add_alternative(draft.reply_html, subtype="html")
-        return msg.as_bytes()
+    # 向后兼容别名: append_draft / folder_sync.imap_folder_reader 仍调 _build_reply_mime.
+    _build_reply_mime = _build_mime
 
     # =========================================================================
     # Arm/Radar 兼容层 (Phase B): 让 NewWatcher / fanout / handler 的 self.arm.*

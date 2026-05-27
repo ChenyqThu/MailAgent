@@ -111,7 +111,7 @@ class BackendHealth:
     error: Optional[str] = None
 
 
-DraftMode = Literal["reply-all", "reply", "new"]
+DraftMode = Literal["reply-all", "reply", "new", "forward"]
 
 
 @dataclass
@@ -134,6 +134,7 @@ class DraftRequest:
     # new 模式必填: 完整收件人; reply* 模式可选 (AppleScript 自动算 reply-all)
     to: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
+    bcc: list[str] = field(default_factory=list)  # davmail 路径支持; applescript sh 暂不传
 
     # 主题: reply* 模式可 None 让 AppleScript 自动加 "Re:" 前缀
     subject: Optional[str] = None
@@ -149,8 +150,14 @@ class DraftRequest:
     # Drafts 文件夹 (留 None 走 backend 默认: AppleScript Mail.app 默认 Drafts, DavMail probe 探测结果)
     drafts_folder: Optional[str] = None
 
-    # Phase B 后续: 附件 (current Phase A 不支持)
-    # attachments: list[tuple[str, bytes, str]] = field(default_factory=list)  # (filename, content, mime_type)
+    # forward 模式: 转发引用块 (原文 From/Date/Subject/To 摘要 + 正文), 由 builder 拼在
+    # 用户正文之后. CLI/handler 层预格式化 plain + html 两版; reply* 模式留 None.
+    forward_intro_text: Optional[str] = None
+    forward_intro_html: Optional[str] = None
+
+    # 附件 (filename, content_bytes, mime_type). forward 模式带原邮件常规附件;
+    # reply* 一般为空. davmail builder 用 multipart/mixed 嵌套 alternative + 各 attachment.
+    attachments: list[tuple[str, bytes, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -161,4 +168,19 @@ class DraftAppendResult:
     drafts_folder: str  # 实际写入的文件夹名 (probe 探测结果)
     appended_uid: Optional[int] = None  # DavMail IMAP APPEND 返回的 UID (AppleScript 路径为 None)
     method: Optional[str] = None  # AppleScript sh 返回的 method 字段 (internal_id / message_id / fallback / etc)
+    error: Optional[str] = None
+
+
+@dataclass
+class SendResult:
+    """send_email 返回值 — 真实投递结果 (语义区别于 DraftAppendResult).
+
+    send 关心"是否投递成功 / Message-ID / 是否归档 Sent", 而非"草稿落哪个文件夹".
+    """
+
+    success: bool
+    message_id: Optional[str] = None  # 生成的 Message-ID (便于前端关联 / 去重)
+    sent_folder_uid: Optional[int] = None  # 手动 APPEND 到 Sent 时返回的 UID, 否则 None
+    archived_to_sent: bool = False  # 是否做了手动 Sent 归档 (davmail_archive_sent 兜底命中)
+    method: Optional[str] = None  # "smtp_davmail" / "smtp_applescript" / etc
     error: Optional[str] = None

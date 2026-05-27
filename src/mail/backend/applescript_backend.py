@@ -25,6 +25,7 @@ from src.mail.backend.types import (
     EmailContent,
     EmailMeta,
     RadarTick,
+    SendResult,
 )
 from src.mail.sqlite_radar import SQLiteRadar
 
@@ -184,7 +185,17 @@ class AppleScriptBackend(IMailBackend):
 
         富文本 reply_html 当前忽略 (sh 走纯文本路径). 实际富文本注入由 handle_create_draft
         在 sh 调用之前预设 NSPasteboard (现有 path A 工作流). 见 MEMORY.md "Path A".
+
+        forward 模式 sh 不支持 (create_reply_draft.sh 只有 reply-all/reply/new) — 直接报错,
+        emergency fallback 只覆盖 reply*; 转发请用 davmail backend.
         """
+        if draft.mode == "forward":
+            return DraftAppendResult(
+                success=False,
+                drafts_folder="Drafts",
+                error="forward draft 仅 davmail backend 支持 (create_reply_draft.sh 无 forward 模式)",
+            )
+
         if not _DRAFT_SH.exists():
             return DraftAppendResult(
                 success=False,
@@ -238,6 +249,28 @@ class AppleScriptBackend(IMailBackend):
             drafts_folder="Drafts",  # Mail.app 默认 Drafts 文件夹
             method=payload.get("method"),
             error=payload.get("error"),
+        )
+
+    # =========================================================================
+    # 真实发送 — SMTP (fallback 也走 DavMail SMTP, cfg 端口指向 DavMail JVM)
+    # =========================================================================
+
+    def send_email(self, draft: DraftRequest) -> SendResult:
+        """fallback 发送: 走 DavMail SMTP (复用 sender). 失败返回 success=False 不抛.
+
+        即使 MAILAGENT_BACKEND=applescript, cfg 的 SMTP 端口仍指向 DavMail JVM —
+        sh GUI send 脆弱且 create_reply_draft.sh 无 send 能力, 故 send 统一走 SMTP.
+        """
+        from src.mail.backend.sender import build_outgoing_mime, smtp_send
+
+        try:
+            mime_bytes = build_outgoing_mime(self.cfg, draft)
+        except Exception as e:
+            logger.error(f"[applescript-backend] send_email MIME build failed: {e}")
+            return SendResult(success=False, error=f"MIME build failed: {e}")
+        return smtp_send(
+            self.cfg, mime_bytes, method="smtp_applescript",
+            archive_sent=getattr(self.cfg, "davmail_archive_sent", False),
         )
 
     # =========================================================================

@@ -492,6 +492,21 @@ class Config(BaseSettings):
             "Outlook 中文环境通常是 'Drafts' 或 'INBOX/Drafts'."
         ),
     )
+    davmail_archive_sent: bool = Field(
+        default=False, env="DAVMAIL_ARCHIVE_SENT",
+        description=(
+            "SMTP 发送后是否手动 APPEND 一份到 Sent 文件夹. 默认 False — EWS/DavMail "
+            "通常服务端自动归档已发送邮件; 仅当 dogfood 发现「已发送」缺失再开 "
+            "(开了要防与服务端自动归档重复成双份)."
+        ),
+    )
+    davmail_sent_folder: str = Field(
+        default="", env="DAVMAIL_SENT_FOLDER",
+        description=(
+            "Sent 文件夹名 (例 'Sent Items', '已发送邮件'). 留空走 IMAP SPECIAL-USE "
+            "\\Sent 探测 + fallback 常见名. 仅 davmail_archive_sent=True 时用."
+        ),
+    )
     davmail_poll_interval_sec: int = Field(
         default=30, env="DAVMAIL_POLL_INTERVAL_SEC",
         description=(

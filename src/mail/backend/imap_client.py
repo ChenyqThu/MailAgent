@@ -36,6 +36,9 @@ _DRAFTS_FLAG_PATTERN = re.compile(rb"\\Drafts", re.IGNORECASE)
 # Gmail 的 "[Gmail]/All Mail" 走 fallback 名字列表.
 _ARCHIVE_FLAG_PATTERN = re.compile(rb"\\Archive\b", re.IGNORECASE)
 
+# IMAP LIST 响应里 \\Sent SPECIAL-USE 标志的正则 (RFC 6154).
+_SENT_FLAG_PATTERN = re.compile(rb"\\Sent\b", re.IGNORECASE)
+
 
 _POC_DEFAULT_CIPHER_KEY = "mailagent-poc-shared-key"
 
@@ -249,4 +252,43 @@ def discover_archive_folder(imap: imaplib.IMAP4) -> Optional[str]:
             continue
 
     logger.warning("[imap-client] could not discover Archive folder")
+    return None
+
+
+def discover_sent_folder(imap: imaplib.IMAP4) -> Optional[str]:
+    """通过 IMAP LIST SPECIAL-USE 标志找 Sent 文件夹 (RFC 6154 \\Sent).
+
+    Outlook/Exchange 通常叫 "Sent Items"; 中文环境 "已发送邮件" / "已发送"; Gmail 是
+    "[Gmail]/Sent Mail". 用 SPECIAL-USE 最稳, fallback 试常见名字.
+
+    Returns:
+        文件夹名 (IMAP path), 或 None 表示找不到 (调用方应跳过 Sent 归档).
+    """
+    try:
+        typ, data = imap.list()
+        if typ == "OK" and data:
+            for entry in data:
+                if entry and _SENT_FLAG_PATTERN.search(entry):
+                    parts = entry.decode("utf-8", errors="replace").rsplit(" ", 1)
+                    if len(parts) >= 2:
+                        folder = parts[-1].strip().strip('"')
+                        logger.debug(
+                            f"[imap-client] found Sent via SPECIAL-USE: {folder!r}"
+                        )
+                        return folder
+    except Exception as e:
+        logger.warning(f"[imap-client] LIST SPECIAL-USE (sent) failed: {e}")
+
+    for candidate in (
+        "Sent Items", "Sent", "已发送邮件", "已发送", "INBOX/Sent", "[Gmail]/Sent Mail",
+    ):
+        try:
+            typ, _ = imap.select(candidate, readonly=True)
+            if typ == "OK":
+                logger.debug(f"[imap-client] found Sent via fallback: {candidate!r}")
+                return candidate
+        except Exception:
+            continue
+
+    logger.warning("[imap-client] could not discover Sent folder")
     return None

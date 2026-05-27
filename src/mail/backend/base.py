@@ -23,6 +23,7 @@ from src.mail.backend.types import (
     EmailContent,
     EmailMeta,
     RadarTick,
+    SendResult,
 )
 
 
@@ -42,7 +43,7 @@ class BackendStartupError(RuntimeError):
 
 @runtime_checkable
 class IMailBackend(Protocol):
-    """邮件后端协议. 8 个方法对齐 plan §"切换边界 — 命令级抽象".
+    """邮件后端协议. 9 个方法对齐 plan §"切换边界 — 命令级抽象".
 
     所有方法都是同步签名 — IMAP/AppleScript 都是阻塞 IO, 调用方 (FanoutWorker /
     new_watcher) 用 asyncio.to_thread 包. 不在 Protocol 强制 async, 让单元测试简单.
@@ -154,5 +155,20 @@ class IMailBackend(Protocol):
             映射到 sh 的 --internal-id / --reply-text / --mode / --to / --cc 等.
         DavMail: 内部用 draft_builder.build_reply_mime(draft) 拼完整 MIME → IMAP APPEND
             到 draft.drafts_folder or self.davmail_drafts_folder (probe 探测结果).
+        """
+        ...
+
+    # =========================================================================
+    # 真实发送 (email send 命令 / 前端发送按钮调)
+    # =========================================================================
+
+    def send_email(self, draft: DraftRequest) -> SendResult:
+        """真实发送邮件 (对外不可逆). 调用方负责二次确认 (CLI --yes / 前端弹窗).
+
+        DavMail: smtp_session(cfg) + 拼 MIME (复用 _build_mime) + smtp.send_message;
+            可选手动 APPEND 一份到 Sent (cfg.davmail_archive_sent 兜底, 默认关).
+        AppleScript: fallback 也走 SMTP (复用 sender.py), 因 cfg 端口都指向 DavMail JVM.
+
+        失败返回 SendResult(success=False, error=...), 不抛异常.
         """
         ...

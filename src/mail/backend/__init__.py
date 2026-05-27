@@ -24,6 +24,7 @@ from src.mail.backend.types import (
     EmailContent,
     EmailMeta,
     RadarTick,
+    SendResult,
 )
 
 __all__ = [
@@ -37,5 +38,6 @@ __all__ = [
     "EmailMeta",
     "IMailBackend",
     "RadarTick",
+    "SendResult",
     "create_backend",
 ]

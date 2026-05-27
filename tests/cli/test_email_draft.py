@@ -150,6 +150,78 @@ def test_compose_carries_reply_text_and_html():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 纯函数: _compose_reply_draft forward 模式
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_compose_forward_recipients_pure_extra_to():
+    # forward 收件人纯来自 extra_to (不从原邮件 sender/to 推导)
+    draft = _compose_reply_draft(
+        _record(), internal_id=5, mode="forward",
+        reply_text="fyi", reply_html=None,
+        extra_to="x@y.com, z@y.com", extra_cc="cc@y.com",
+        forward_intro_text="---- Forwarded ----", forward_intro_html="<hr>",
+        attachments=[("a.pdf", b"data", "application/pdf")],
+    )
+    assert draft.to == ["x@y.com", "z@y.com"]
+    assert draft.cc == ["cc@y.com"]
+    assert "alice@example.com" not in draft.to  # 原 sender 不入 to
+
+
+def test_compose_forward_subject_fwd_prefix():
+    draft = _compose_reply_draft(
+        _record(subject="Hello"), internal_id=5, mode="forward",
+        reply_text="", reply_html=None, extra_to="x@y.com", extra_cc=None,
+    )
+    assert draft.subject == "Fwd: Hello"
+
+
+def test_compose_forward_keeps_existing_fwd():
+    draft = _compose_reply_draft(
+        _record(subject="Fwd: Hello"), internal_id=5, mode="forward",
+        reply_text="", reply_html=None, extra_to="x@y.com", extra_cc=None,
+    )
+    assert draft.subject == "Fwd: Hello"
+
+
+def test_compose_forward_no_threading_headers():
+    # forward 是独立邮件 — 不带 In-Reply-To / References
+    draft = _compose_reply_draft(
+        _record(), internal_id=5, mode="forward",
+        reply_text="fyi", reply_html=None, extra_to="x@y.com", extra_cc=None,
+    )
+    assert draft.in_reply_to is None
+    assert draft.references is None
+
+
+def test_compose_forward_carries_intro_and_attachments():
+    draft = _compose_reply_draft(
+        _record(), internal_id=5, mode="forward",
+        reply_text="fyi", reply_html=None, extra_to="x@y.com", extra_cc=None,
+        forward_intro_text="---- Forwarded ----", forward_intro_html="<hr>orig",
+        attachments=[("a.pdf", b"data", "application/pdf")],
+    )
+    assert draft.forward_intro_text == "---- Forwarded ----"
+    assert draft.forward_intro_html == "<hr>orig"
+    assert len(draft.attachments) == 1
+    assert draft.attachments[0][0] == "a.pdf"
+
+
+def test_compose_to_override_bypasses_derivation():
+    # 前端 compose 传 to_override/cc_override → 权威完整列表, 不推导不叠加
+    draft = _compose_reply_draft(
+        _record(), internal_id=1, mode="reply-all",
+        reply_text="x", reply_html=None, extra_to="ignored@x.com", extra_cc=None,
+        to_override="only@y.com, two@y.com", cc_override="cc@y.com", bcc="secret@y.com",
+    )
+    assert draft.to == ["only@y.com", "two@y.com"]
+    assert draft.cc == ["cc@y.com"]
+    assert draft.bcc == ["secret@y.com"]
+    assert "alice@example.com" not in draft.to  # 原 sender 推导被覆盖
+    assert "ignored@x.com" not in draft.to  # extra_to 不叠加
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # integration (CliRunner + seeded_db + seed llm_processing.labels_json)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -285,9 +357,65 @@ def test_draft_reply_mode_only_sender(cli_runner, seeded_db, monkeypatch):
     assert draft.to == ["alice@example.com"]
 
 
-def test_draft_invalid_mode_rejected(cli_runner, seeded_db):
+def test_draft_forward_requires_extra_to(cli_runner, seeded_db):
+    # forward 模式必须显式收件人 (不从原邮件推导) → 无 --extra-to 报 E_INVALID_ARG
     r = _invoke(cli_runner, "email", "draft", "12345", "--mode", "forward",
                 "-o", "json", db_path=seeded_db)
     data = _last_json(r.output)
     assert data["status"] == "error"
     assert data["error"]["code"] in ("E_INVALID_ARG", "E_INVALID_ARGUMENT")
+
+
+def test_draft_truly_invalid_mode_rejected(cli_runner, seeded_db):
+    r = _invoke(cli_runner, "email", "draft", "12345", "--mode", "bogus",
+                "-o", "json", db_path=seeded_db)
+    data = _last_json(r.output)
+    assert data["status"] == "error"
+    assert data["error"]["code"] in ("E_INVALID_ARG", "E_INVALID_ARGUMENT")
+
+
+def test_draft_forward_dry_run_plan(cli_runner, seeded_db):
+    # forward + extra-to + body-file: plan 含 Fwd: 主题 + to=extra-to + reply_source=body-file
+    import os
+    import tempfile
+
+    fd, path = tempfile.mkstemp(suffix=".md")
+    os.write(fd, b"please see forwarded message below")
+    os.close(fd)
+    try:
+        r = _invoke(cli_runner, "email", "draft", "12345", "--mode", "forward",
+                    "--extra-to", "x@y.com", "--body-file", path, "--dry-run",
+                    "-o", "json", db_path=seeded_db)
+        data = _last_json(r.output)
+        assert data["status"] == "success", r.output
+        plan = data["data"]
+        assert plan["mode"] == "forward"
+        assert plan["to"] == ["x@y.com"]
+        assert plan["subject"].startswith("Fwd:")
+        assert plan["reply_source"] == "body-file"
+    finally:
+        os.unlink(path)
+
+
+def test_draft_body_file_overrides_suggestion(cli_runner, seeded_db, monkeypatch):
+    # --body-file 优先于 SQLite reply_suggestion_md
+    import os
+    import tempfile
+
+    _bypass_auth(monkeypatch)
+    _seed_reply_suggestion(seeded_db, 12345, _REPLY_MD)
+    fake_backend = _FakeBackend()
+    _patch_backend(monkeypatch, fake_backend)
+    fd, path = tempfile.mkstemp(suffix=".md")
+    os.write(fd, "用户编辑后的正文".encode("utf-8"))
+    os.close(fd)
+    try:
+        r = _invoke(cli_runner, "email", "draft", "12345", "--body-file", path,
+                    "-o", "json", db_path=seeded_db)
+        data = _last_json(r.output)
+        assert data["status"] == "success", r.output
+        draft = fake_backend.appended[0]
+        assert draft.reply_text == "用户编辑后的正文"
+        assert _REPLY_MD not in (draft.reply_text or "")
+    finally:
+        os.unlink(path)
