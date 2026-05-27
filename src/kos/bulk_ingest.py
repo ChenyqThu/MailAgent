@@ -132,17 +132,23 @@ class KOSBulkIngester:
             notion_page_id=meta.notion_page_id,
         )
 
-    def _put_with_retry(self, slug: str, content: str, max_retries: int = 3) -> dict:
-        """put_page + 429 退避重试。"""
+    # 瞬时错误 → 退避重试: 429 限流 + 网络/DNS 抖动 (公司内网 DNS 偶发解析失败,
+    # 实测 2026-05-26 抖了 ~3min)。其余 (404 / 协议错 / 鉴权) 不重试直接 raise。
+    _RETRY_CODES = {"E_KOS_RATE_LIMIT", "E_KOS_NETWORK", "E_KOS_TOKEN_NETWORK"}
+
+    def _put_with_retry(self, slug: str, content: str, max_retries: int = 4) -> dict:
+        """put_page + 瞬时错误退避重试 (429 / 网络 / DNS)。退避 2/4/8/16s。"""
         attempt = 0
         while True:
             try:
                 return self.client.put_page(slug, content)
             except KOSError as e:
-                if e.code == "E_KOS_RATE_LIMIT" and attempt < max_retries:
+                if e.code in self._RETRY_CODES and attempt < max_retries:
                     attempt += 1
                     wait = 2 ** attempt
-                    logger.warning(f"[bulk] 429 on {slug}, backoff {wait}s (attempt {attempt})")
+                    logger.warning(
+                        f"[bulk] {e.code} on {slug}, backoff {wait}s (attempt {attempt})"
+                    )
                     time.sleep(wait)
                     continue
                 raise
