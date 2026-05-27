@@ -5,8 +5,13 @@
 // editing/creating 时用它替换 FolderDetail)。
 //
 // 数据契约不变: to/cc 内部仍以逗号拼接字符串存 (chip 是视图层), saveMut 照旧
-// 发 to.trim()/cc.trim() 给 editDraft/createDraft。草稿不走 sendDraft (那是
-// FolderDetail toolbar 的活), 所以 dock 只有「保存草稿」+「丢弃」, 无发送。
+// 发 to.trim()/cc.trim() 给 editDraft/createDraft。
+//
+// 发送 (Sprint 18 dogfood #1): dock 增「发送」按钮 (primary, 左侧, 对应 mockup
+// 第 348 行)。点发送 → 收件人校验 → ConfirmDialog (复用 folder.confirm.send*
+// 键 + Send kind)。确认后 sendMut 做 save → refetch drafts → match imap_uid
+// 定位新行 id → sendDraft。这避免改 createDraft/editDraft IPC 返回契约
+// (CLI 已经返回 IMAP UID 作为响应 data 字段 — appended_uid/new_uid)。
 //
 // TipTap v3 注意: StarterKit 已内置 Bold/Italic/Strike/Underline/Link/Code/
 // CodeBlock/BulletList/OrderedList/ListItem 等, 这里只挂 StarterKit。Link 默认
@@ -27,7 +32,9 @@ import {
   List,
   ListOrdered,
   Loader2,
+  Paperclip as PaperclipMini,
   Save,
+  Send,
   Strikethrough,
   Underline as UnderlineIcon,
   X
@@ -35,8 +42,11 @@ import {
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { parseSender } from '@shared/lib/mail_parse'
 import { toastError, toastSuccess } from '@shared/state/toast'
-import type { FolderEmailDetail } from '@shared/api/types'
+import type { FolderEmailDetail, FolderEmailMeta } from '@shared/api/types'
+
+import { ConfirmDialog } from './ConfirmDialog'
 
 interface Props {
   /** 编辑态: 传入要编辑的草稿 (含 body_html + 收件人); 新建态传 null. */
@@ -244,6 +254,7 @@ export function DraftEditor({ draft, onClose }: Props): React.ReactElement {
   const [subject, setSubject] = useState(draft?.subject ?? '')
   // 收件人/抄送默认折叠 (编辑态只占一行, 把空间留给正文); 新建态展开方便填写。
   const [recipExpanded, setRecipExpanded] = useState(draft === null)
+  const [sendDialogOpen, setSendDialogOpen] = useState(false)
 
   const editor = useEditor({
     extensions: [
@@ -310,7 +321,87 @@ export function DraftEditor({ draft, onClose }: Props): React.ReactElement {
     saveMut.mutate()
   }, [isEdit, toList, saveMut, t])
 
+  // send 流程: save → refetch drafts → match imap_uid 定位新行 id → sendDraft.
+  // CLI 返回 {appended_uid} (create) / {new_uid} (edit). 这条路径完全在前端拼,
+  // 不动 IPC 契约 (FolderApi.createDraft/editDraft 仍 returns unknown)。
+  const sendMut = useMutation({
+    mutationFn: async () => {
+      const html = editor?.getHTML() ?? ''
+      const to = joinAddrs(toList)
+      const cc = joinAddrs(ccList)
+      // 1) 保存 (新建 or 编辑) — CLI 返回 IMAP UID 作为 anchor
+      let savedUid: number | null = null
+      if (isEdit && draft) {
+        const r = (await mailApi.folder.editDraft({
+          id: draft.id,
+          html,
+          to,
+          cc,
+          subject
+        })) as { new_uid?: number } | null
+        savedUid = typeof r?.new_uid === 'number' ? r.new_uid : null
+      } else {
+        const r = (await mailApi.folder.createDraft({
+          to,
+          cc: cc || undefined,
+          subject: subject || undefined,
+          html
+        })) as { appended_uid?: number } | null
+        savedUid = typeof r?.appended_uid === 'number' ? r.appended_uid : null
+      }
+      // 2) 让 drafts 列表缓存刷掉, 再独立 list 一次找新行 id (不走 cached query
+      //    避免 race; FolderList 那边的 query 会被 invalidate 异步刷)
+      await queryClient.invalidateQueries({ queryKey: ['folder', 'drafts'] })
+      if (savedUid === null) {
+        // CLI 没给 uid (不该走到), 抛 locate fail
+        throw new Error(t('folder.editor.sendLocateFail'))
+      }
+      const list = await mailApi.folder.list({ folder: 'drafts', limit: 200 })
+      const target = list.find((m: FolderEmailMeta) => m.imap_uid === savedUid)
+      if (!target) {
+        // refresh_drafts 应该已经把新 row 落表了, 找不到是异常
+        throw new Error(t('folder.editor.sendLocateFail'))
+      }
+      // 3) 真发送
+      return mailApi.folder.sendDraft(target.id)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['folder', 'drafts'] })
+      toastSuccess(t('folder.toast.sendOk'))
+      onClose()
+    },
+    onError: (err: unknown) => {
+      const e = err instanceof Error ? err : new Error(String(err))
+      const code = (e as Error & { code?: string }).code
+      toastError(t('folder.toast.sendFail'), code ? `${code} · ${e.message}` : e.message)
+    }
+  })
+
+  const handleSendClick = useCallback(() => {
+    if (toList.length === 0) {
+      toastError(t('folder.editor.toRequired'))
+      return
+    }
+    setSendDialogOpen(true)
+  }, [toList, t])
+
+  const confirmSend = useCallback(() => {
+    setSendDialogOpen(false)
+    sendMut.mutate()
+  }, [sendMut])
+
   const saving = saveMut.isPending
+  const sending = sendMut.isPending
+  const busy = saving || sending
+
+  // 给 ConfirmDialog 渲染收件人 chip — 复用 parseSender 把 "Name <a@x>"
+  // 拆出可读 label, 跟 FolderDetail 的 send 对话框视觉一致。
+  const recipientsForDialog = toList.map((addr) => {
+    const p = parseSender(addr)
+    const label = p.name ? `${p.name} <${p.email || addr}>` : p.email || addr
+    const base = (p.email || addr).split('@')[0] || addr
+    return { initials: base.slice(0, 2).toUpperCase(), label }
+  })
 
   return (
     <main aria-label="draft-editor" className="flex-1 min-w-0 glass-3 flex flex-col min-h-0">
@@ -408,13 +499,29 @@ export function DraftEditor({ draft, onClose }: Props): React.ReactElement {
       {/* format toolbar */}
       {editor && <FmtToolbar editor={editor} />}
 
-      {/* send dock — 草稿不发送, 只「保存草稿」+「丢弃」 */}
+      {/* send dock — 对应 mockup-draft-composer 第 348 行: 发送 (primary, 主操作)
+          + 保存草稿 (中性, 二级) + 丢弃 (bare)。点「发送」会先保存再真发出。 */}
       <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2.5 flex items-center gap-2 shrink-0">
         <button
           type="button"
-          onClick={handleSave}
-          disabled={saving}
+          onClick={handleSendClick}
+          disabled={busy}
           className="gbtn gbtn-primary"
+          style={{ height: '34px' }}
+        >
+          {sending ? (
+            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+          ) : (
+            <Send size={13} strokeWidth={2} />
+          )}
+          {sending ? t('folder.editor.sending') : t('folder.editor.send')}
+        </button>
+        <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={busy}
+          className="gbtn"
           style={{ height: '34px' }}
         >
           {saving ? (
@@ -427,7 +534,7 @@ export function DraftEditor({ draft, onClose }: Props): React.ReactElement {
         <button
           type="button"
           onClick={onClose}
-          disabled={saving}
+          disabled={busy}
           className="gbtn gbtn-bare"
           style={{ height: '34px' }}
         >
@@ -435,6 +542,45 @@ export function DraftEditor({ draft, onClose }: Props): React.ReactElement {
           {t('folder.editor.cancel')}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={sendDialogOpen}
+        kind="send"
+        danger
+        title={t('folder.confirm.sendTitle', { count: recipientsForDialog.length })}
+        body={
+          <span>
+            {t('folder.confirm.sendBodyLead')}{' '}
+            <strong className="text-ink-fg">{t('folder.confirm.sendBodyStress')}</strong>
+            {t('folder.confirm.sendBodyTail')}
+          </span>
+        }
+        extra={
+          <>
+            {recipientsForDialog.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {recipientsForDialog.map((r, i) => (
+                  <span key={`${r.label}-${i}`} className="recipient-chip">
+                    <span className="rc-av">{r.initials}</span>
+                    {r.label}
+                  </span>
+                ))}
+              </div>
+            )}
+            {isEdit && draft && draft.attachments && draft.attachments.length > 0 && (
+              <div className="mt-3 flex items-center gap-2 text-meta text-ink-fg-2 font-mono">
+                <PaperclipMini size={12} strokeWidth={2} />
+                {t('folder.confirm.sendAttachNote', { count: draft.attachments.length })}
+              </div>
+            )}
+          </>
+        }
+        confirmLabel={t('folder.confirm.confirmSend')}
+        cancelLabel={t('folder.confirm.cancel')}
+        pending={sending}
+        onConfirm={confirmSend}
+        onCancel={() => setSendDialogOpen(false)}
+      />
     </main>
   )
 }
