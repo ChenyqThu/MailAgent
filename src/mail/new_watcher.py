@@ -732,7 +732,9 @@ class NewWatcher:
                         force=False,
                         overwrite=True,
                     )
-                    if result.get("ok"):
+                    # skipped='already_success' 说明此邮件 LLM 早已处理 + 已通知,
+                    # labels 为空 → 不重发灵动岛通知 (问题 A 去重根因 2)。
+                    if result.get("ok") and not result.get("skipped"):
                         labels = result.get("labels") or {}
                         logger.info(
                             f"[llm-hook] ok internal_id={internal_id} "
@@ -774,30 +776,36 @@ class NewWatcher:
         try:
             from src.kos.producer import push_email_to_kos
 
-            # 从 SQLite SSoT 读 ai_priority + ai_action + body markdown
+            # 完整 AI labels (llm_processing.labels_json) + body + 附件 — 增量入图
+            # 跟 bulk historical ingest 形态一致 (category/ai_summary/key_points 都带)
             priority_floor = getattr(settings, "kos_ingest_priority_floor", "normal")
             dry_run = getattr(settings, "kos_ingest_dry_run", False)
-            ai_priority: Optional[str] = None
-            ai_action: Optional[str] = None
+            labels: Optional[dict] = None
             body_markdown: Optional[str] = None
+            attachments: Optional[list] = None
             try:
-                meta = self.email_repo.get_metadata(internal_id)
-                if meta is not None:
-                    # email_metadata v14 提升出来的列 (LLM 已写)
-                    ai_priority = meta.ai_priority if hasattr(meta, "ai_priority") else None
-                    ai_action = meta.ai_action if hasattr(meta, "ai_action") else None
+                from src.llm_agent.store import LLMProcessingStore
+
+                labels = LLMProcessingStore().get_labels(internal_id)
                 body_markdown = self.email_repo.get_body_markdown(
                     internal_id, max_chars=200_000
                 )
+                attachments = [
+                    {"filename": a.filename, "size": a.size_bytes,
+                     "content_type": a.content_type}
+                    for a in self.email_repo.get_attachments(internal_id)
+                    if not a.is_inline
+                ]
             except Exception as e:
                 logger.debug(
-                    f"[kos-hook] meta/body fetch failed internal_id={internal_id}: {e}"
+                    f"[kos-hook] labels/body/attachments fetch failed "
+                    f"internal_id={internal_id}: {e}"
                 )
 
             subject_preview = (getattr(email_obj, "subject", "") or "")[:60]
             logger.debug(
                 f"[kos-hook] dispatching internal_id={internal_id} "
-                f"priority={ai_priority!r} floor={priority_floor!r} "
+                f"priority={(labels or {}).get('priority')!r} floor={priority_floor!r} "
                 f"subject={subject_preview!r}"
             )
 
@@ -808,8 +816,8 @@ class NewWatcher:
                         internal_id,
                         body_markdown=body_markdown,
                         notion_page_id=notion_page_id,
-                        ai_priority=ai_priority,
-                        ai_action=ai_action,
+                        labels=labels,
+                        attachments=attachments,
                         priority_floor=priority_floor,
                         dry_run=dry_run,
                     )
