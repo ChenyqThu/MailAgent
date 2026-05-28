@@ -665,17 +665,16 @@ export function EmailToolbar({
   return (
     <header
       ref={containerRef}
-      // EmailDetail 的 <main> 是 .glass-3 (ink-3/0.55 + backdrop blur).
-      // 之前这里用 bg-ink-3 纯色, 把毛玻璃盖死了; 现在改 .glass-2 (ink-2/0.45,
-      // 比 glass-3 略深一点形成层次), 既保留 toolbar 与正文的视觉分层, 又让
-      // 后面的 wallpaper 仍能透过来.
+      // mockup col3: detail header 不带自己的背景, 直接坐在 <main> 的 .glass-3
+      // (ink-3/0.55 + blur) 玻璃面上, 只用 border-b 分隔 → toolbar 与正文是同一块
+      // 连续玻璃. 之前套 .glass-2 (ink-2/0.45) 自带一层更深的玻璃, 比正文 (ink-3)
+      // 低一个 ink 档, toolbar 就成了一条灰色块, 跟上方 TitleBar / 下方正文衔接不上.
+      // 现在透明化, 由 <main> 的 glass-3 透上来.
       //
-      // relative z-[15]: glass-2 的 backdrop-filter 让本 header 成为
-      // z-index:auto 的 stacking context, 而正文滚动区里冻结的 sticky 标题是
-      // z-10 的 stacking context — 按绘制顺序正 z-index 会画在 auto 之上, 导致
-      // reply 下拉 (top-full z-50) 和按钮 HoverTip (side=bottom) 向下溢出时被
-      // 标题遮挡. 显式提到 15 (> sticky 标题 10, < compose overlay 20) 即可.
-      className="relative z-[15] h-11 border-b border-ink-border-soft glass-2 flex items-center px-3 gap-1 shrink-0"
+      // relative z-[15]: position:relative + 正 z-index 自成 stacking context
+      // (无需 backdrop-filter), 让 reply 下拉 (top-full z-50) 和 HoverTip 向下溢出
+      // 时画在 sticky 标题 (z-10) 之上、compose overlay (z-20) 之下.
+      className="relative z-[15] h-11 border-b border-ink-border-soft flex items-center px-3 gap-1 shrink-0"
     >
       {/* Primary CTA — DESIGN.md §2.2 "one CTA per surface". Sprint 13:
           the label flips on at medium density so the headline action stays
