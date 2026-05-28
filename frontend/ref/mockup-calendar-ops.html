@@ -1,0 +1,607 @@
+<!doctype html>
+<!--
+  MailAgent · 日历 Phase-2.5 ops polish  (PRD §11.2 / §11.5 / §11.6 · §12 必出 #2/#3/#4)
+  ────────────────────────────────────────────────────────────────────────────
+  Three reviewable, interactive pieces layered over a real WeekView shell —
+  same design system as mockup-calendar.html (coral-only, ink-* token swap,
+  Liquid Glass, mono tabular-nums, no decorative emoji).
+
+  #2 副 status bar 重做  — 用户向 metric + hover ℹ️ ops popover  (§11.5)
+  #3 删除 undo toast      — 5s 计时进度条 + 撤销, 可叠   (§11.2)
+  #4 RSVP vs owner ops    — drawer 两种模式: 组织者 / 与会者 (§11.6)
+
+  How to drive (review notes):
+    · 点「团队周会 / 1:1」(你组织) → drawer = 组织者模式 (单行 [编辑] [删除])
+    · 点「B2B SIOP 评审」(受邀)   → drawer = 与会者模式 (RSVP 高亮 + 编辑/删除 灰)
+    · 组织者模式点 [删除]          → undo toast (5s) 底部弹出, 点撤销恢复
+    · 底部状态栏 hover ℹ️           → 运维详情 popover
+-->
+<html lang="zh-CN" data-locale="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MailAgent · 日历 · ops</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {
+        colors: {
+          ink: {
+            0:'rgb(var(--ink-0)/<alpha-value>)',1:'rgb(var(--ink-1)/<alpha-value>)',2:'rgb(var(--ink-2)/<alpha-value>)',
+            3:'rgb(var(--ink-3)/<alpha-value>)',4:'rgb(var(--ink-4)/<alpha-value>)',5:'rgb(var(--ink-5)/<alpha-value>)',
+            border:'rgb(var(--ink-border)/<alpha-value>)','border-soft':'rgb(var(--ink-border-soft)/<alpha-value>)',
+            fg:'rgb(var(--ink-fg)/<alpha-value>)','fg-1':'rgb(var(--ink-fg-1)/<alpha-value>)','fg-2':'rgb(var(--ink-fg-2)/<alpha-value>)','fg-3':'rgb(var(--ink-fg-3)/<alpha-value>)',
+          },
+          coral:'rgb(var(--c-accent)/<alpha-value>)','coral-hover':'rgb(var(--c-accent-hi)/<alpha-value>)','coral-dim':'rgb(var(--c-accent-dim)/<alpha-value>)',
+          ok:'#5DBA8C',warn:'#E5B452',fail:'#E36262',dead:'#6B707A',info:'#6FA8DC',
+        },
+        fontFamily:{
+          sans:['-apple-system','BlinkMacSystemFont','"SF Pro Text"','"PingFang SC"','"Helvetica Neue"','system-ui','sans-serif'],
+          display:['-apple-system','BlinkMacSystemFont','"SF Pro Display"','"PingFang SC"','system-ui','sans-serif'],
+          mono:['ui-monospace','"SF Mono"','"JetBrains Mono"','Menlo','monospace'],
+        },
+        fontSize:{micro:['11px','14px'],meta:['12px','16px'],aux:['14px','20px'],body:['14px','20px'],lead:['15px','22px'],subj:['22px','30px']},
+        spacing:{titlebar:'36px',statusbar:'24px'},
+      }},
+    };
+  </script>
+
+  <style>
+    :root {
+      --c-accent:229 101 75;--c-accent-hi:216 88 65;--c-accent-dim:126 61 50;
+      --ink-0:14 16 19;--ink-1:21 24 29;--ink-2:26 30 36;--ink-3:31 36 43;--ink-4:38 44 53;--ink-5:46 52 62;
+      --ink-border:44 50 59;--ink-border-soft:31 36 43;
+      --ink-fg:232 234 238;--ink-fg-1:164 169 179;--ink-fg-2:107 112 122;--ink-fg-3:69 74 83;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent)/0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 8%, rgba(74,120,229,0.22), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18), transparent 70%),
+        linear-gradient(180deg,#06080B 0%,#0A0C10 100%);
+      --glass-lg:saturate(180%) blur(40px);
+      --glass-stroke:rgb(255 255 255 / 0.08);
+      --pop-shadow:inset 0 1px 0 rgb(255 255 255 / 0.07),0 24px 60px rgba(0,0,0,0.55),0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"]{--c-accent:74 120 229;--c-accent-hi:60 102 207;--c-accent-dim:48 82 163}
+    :root[data-accent="teal"]{--c-accent:45 181 166;--c-accent-hi:33 156 142;--c-accent-dim:24 110 100}
+    :root[data-accent="rose"]{--c-accent:219 91 124;--c-accent-hi:198 71 105;--c-accent-dim:140 50 74}
+    :root[data-accent="slate"]{--c-accent:126 134 148;--c-accent-hi:105 113 127;--c-accent-dim:74 80 92}
+    :root[data-accent="olive"]{--c-accent:156 165 82;--c-accent-hi:134 143 70;--c-accent-dim:94 100 48}
+    :root[data-theme="light"]{
+      --ink-0:250 250 250;--ink-1:242 242 244;--ink-2:248 249 251;--ink-3:255 255 255;--ink-4:225 227 230;--ink-5:213 216 222;
+      --ink-border:214 218 224;--ink-border-soft:230 232 237;
+      --ink-fg:26 29 34;--ink-fg-1:91 97 107;--ink-fg-2:122 128 138;--ink-fg-3:178 184 192;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent)/0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 6%, rgba(110,160,255,0.32), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22), transparent 70%),
+        linear-gradient(180deg,#F6F7FB 0%,#ECEEF4 100%);
+      --glass-stroke:rgb(255 255 255 / 0.70);
+      --pop-shadow:inset 0 1px 0 rgb(255 255 255 / 0.85),0 18px 50px rgba(18,24,46,0.16),0 4px 14px rgba(18,24,46,0.10);
+    }
+    html,body{background:transparent;overscroll-behavior:none;color-scheme:dark;height:100%}
+    :root[data-theme="light"]{color-scheme:light}
+    body{margin:0;height:100vh;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;font-feature-settings:'ss01','cv11';font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC',system-ui,sans-serif}
+    body::before{content:'';position:fixed;inset:0;z-index:-1;background:var(--wallpaper);background-attachment:fixed;pointer-events:none;transition:background 320ms cubic-bezier(0.4,0,0.2,1)}
+
+    .glass{background-color:rgb(var(--ink-1)/0.55);-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg)}
+    .glass-2{background-color:rgb(var(--ink-2)/0.45);-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg)}
+    .glass-pop{background-color:rgb(var(--ink-2)/0.92);-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg);border:1px solid var(--glass-stroke);box-shadow:var(--pop-shadow)}
+    @media (prefers-reduced-transparency: reduce){.glass{background-color:rgb(var(--ink-1));backdrop-filter:none;-webkit-backdrop-filter:none}.glass-2{background-color:rgb(var(--ink-2));backdrop-filter:none;-webkit-backdrop-filter:none}.glass-pop{background-color:rgb(var(--ink-2));backdrop-filter:none;-webkit-backdrop-filter:none}}
+    .tl{width:12px;height:12px;border-radius:50%;display:inline-block}
+    .tl-close{background:#FF5F57}.tl-min{background:#FEBC2E}.tl-max{background:#28C840}
+    .row{position:relative}.row-selected::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:rgb(var(--c-accent))}
+    .scrollbar-thin::-webkit-scrollbar{width:10px;height:10px}.scrollbar-thin::-webkit-scrollbar-track{background:transparent}
+    .scrollbar-thin::-webkit-scrollbar-thumb{background:rgb(var(--ink-fg)/0.14);border:2px solid transparent;background-clip:padding-box;border-radius:8px}
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb{background:rgb(var(--ink-fg)/0.28);background-clip:padding-box}
+    kbd{font-family:ui-monospace,'SF Mono',monospace;font-size:11px;line-height:1;padding:2px 5px;border-radius:4px;background:rgb(var(--ink-fg)/0.06);color:rgb(var(--ink-fg-1));border:1px solid rgb(var(--ink-border));border-bottom-width:2px}
+    .app-nav{width:240px;flex-shrink:0}
+
+    .theme-popover{position:fixed;top:44px;right:12px;width:264px;background-color:rgb(var(--ink-2)/0.92);-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg);border:1px solid var(--glass-stroke);border-radius:12px;box-shadow:var(--pop-shadow);z-index:60;overflow:hidden}
+    .swatch{width:36px;height:36px;border-radius:999px;border:0;cursor:pointer;position:relative;box-shadow:0 0 0 1px rgba(0,0,0,0.25),0 1px 2px rgba(0,0,0,0.2);transition:transform .15s}
+    .swatch:hover{transform:scale(1.06)}
+    .swatch[aria-checked="true"]{box-shadow:0 0 0 2px rgb(var(--ink-2)),0 0 0 4px rgb(var(--c-accent))}
+    .swatch[aria-checked="true"]::after{content:'';position:absolute;inset:0;display:grid;place-items:center;background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 14px 14px no-repeat;filter:drop-shadow(0 1px 1px rgba(0,0,0,0.4))}
+
+    .view-chip{font-size:13px;line-height:1;padding:6px 11px;border-radius:6px;color:rgb(var(--ink-fg-1));background:transparent;border:1px solid transparent;cursor:pointer;transition:all .12s;white-space:nowrap}
+    .view-chip:hover{background:rgb(var(--ink-3)/0.7);color:rgb(var(--ink-fg))}
+    .view-chip.is-active{background:rgb(var(--c-accent)/0.15);border-color:rgb(var(--c-accent)/0.30);color:rgb(var(--c-accent));font-weight:600}
+    .nav-btn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;color:rgb(var(--ink-fg-1));border:1px solid rgb(var(--ink-border));background:rgb(var(--ink-2)/0.5);cursor:pointer;transition:all .12s}
+    .nav-btn:hover{background:rgb(var(--ink-3));color:rgb(var(--ink-fg))}
+    .today-btn{font-size:13px;padding:0 12px;height:28px;border-radius:6px;color:rgb(var(--ink-fg-1));border:1px solid rgb(var(--ink-border));background:rgb(var(--ink-2)/0.5);cursor:pointer;transition:all .12s}
+    .today-btn:hover{background:rgb(var(--ink-3));color:rgb(var(--ink-fg))}
+    .btn-coral{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 13px;border-radius:7px;font-size:13px;font-weight:600;color:#fff;background:rgb(var(--c-accent));border:1px solid rgb(var(--c-accent-hi));cursor:pointer;transition:background .12s}
+    .btn-coral:hover{background:rgb(var(--c-accent-hi))}
+
+    /* sync pill (toolbar) */
+    .sync-pill{position:relative;display:inline-flex;align-items:center;gap:7px;font-family:ui-monospace,'SF Mono',monospace;font-size:11.5px;color:rgb(var(--ink-fg-2));padding:4px 8px;border-radius:6px;cursor:default}
+    .sync-pill:hover{background:rgb(var(--ink-3)/0.6)}
+    .sync-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:#5DBA8C}
+
+    .cal-card{background-color:rgb(var(--ink-2)/0.6);border:1px solid rgb(var(--ink-border)/0.6);border-radius:10px;-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg);overflow:hidden}
+
+    /* ─── Week view (static backdrop) ─── */
+    .week{display:flex;flex-direction:column;height:100%}
+    .wk-headrow,.wk-alldayrow{display:grid;flex-shrink:0}
+    .wk-corner{border-bottom:1px solid rgb(var(--ink-border));border-right:1px solid rgb(var(--ink-border-soft))}
+    .wk-dayhead{border-bottom:1px solid rgb(var(--ink-border));border-right:1px solid rgb(var(--ink-border-soft));padding:7px 10px 6px;text-align:left}
+    .wk-dayhead:last-child{border-right:0}
+    .dow{font-family:ui-monospace,'SF Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:rgb(var(--ink-fg-2))}
+    .dn{font-size:19px;font-weight:600;line-height:1.1;margin-top:2px;letter-spacing:-0.01em;color:rgb(var(--ink-fg));display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:28px}
+    .wk-dayhead.is-today .dn{background:rgb(var(--c-accent));color:#fff;border-radius:8px}
+    .allday-gutter{border-right:1px solid rgb(var(--ink-border-soft));border-bottom:1px solid rgb(var(--ink-border));display:flex;align-items:center;justify-content:flex-end;padding-right:8px}
+    .allday-gutter span{font-family:ui-monospace,'SF Mono',monospace;font-size:10px;color:rgb(var(--ink-fg-3));text-transform:uppercase;letter-spacing:0.04em}
+    .allday-cell{border-right:1px solid rgb(var(--ink-border-soft));border-bottom:1px solid rgb(var(--ink-border));padding:4px;min-height:30px;position:relative}
+    .allday-cell:last-child{border-right:0}
+    .allday-cell.is-today{background:rgb(var(--c-accent)/0.05)}
+    .allday-evt{font-size:12px;padding:3px 8px;border-radius:5px;background:rgb(var(--c-accent)/0.16);color:rgb(var(--c-accent));border:1px solid rgb(var(--c-accent)/0.25);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+    .wk-body{flex:1;min-height:0;position:relative;overflow-y:auto}
+    .wk-grid{display:grid;position:relative}
+    .hour-gutter{border-right:1px solid rgb(var(--ink-border-soft))}
+    .hour-label{height:48px;position:relative}
+    .hour-label span{position:absolute;top:-7px;right:8px;font-family:ui-monospace,'SF Mono',monospace;font-size:10.5px;color:rgb(var(--ink-fg-3));font-variant-numeric:tabular-nums}
+    .day-col{border-right:1px solid rgb(var(--ink-border-soft));position:relative}
+    .day-col:last-child{border-right:0}
+    .day-col.is-today{background:rgb(var(--c-accent)/0.045)}
+    .hour-cell{height:48px;border-bottom:1px solid rgb(var(--ink-border-soft)/0.6)}
+    .evt{position:absolute;border-radius:6px;padding:4px 7px;overflow:hidden;cursor:pointer;background:rgb(var(--c-accent)/0.14);border:1px solid rgb(var(--c-accent)/0.28);border-left:3px solid rgb(var(--c-accent));transition:background .12s,box-shadow .12s,transform .08s;z-index:2}
+    .evt:hover{background:rgb(var(--c-accent)/0.22);z-index:5}
+    .evt:active{transform:scale(0.99)}
+    .evt .e-time{font-family:ui-monospace,'SF Mono',monospace;font-size:10.5px;color:rgb(var(--c-accent));font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:4px;font-weight:600}
+    .evt .e-title{font-size:12.5px;color:rgb(var(--ink-fg));font-weight:500;line-height:1.25;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .evt .e-loc{font-size:11px;color:rgb(var(--ink-fg-2));margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .evt.is-selected{background:rgb(var(--c-accent)/0.26);box-shadow:0 0 0 2px rgb(var(--c-accent)/0.5);z-index:6}
+    .evt[data-resp="TENTATIVE"]{opacity:0.75;border-style:dashed}
+    .evt[data-resp="DECLINED"]{opacity:0.5}.evt[data-resp="DECLINED"] .e-title{text-decoration:line-through}
+    .evt[data-resp="NEEDS-ACTION"]{border:1.5px solid rgb(var(--c-accent));border-left-width:3px;background:rgb(var(--c-accent)/0.10)}
+    .evt.is-owner{border-left-style:double;border-left-width:4px}
+    .teams-i{color:rgb(var(--ink-fg-2));flex-shrink:0}
+    .now-line{position:absolute;left:56px;right:0;height:0;border-top:1.5px solid rgb(var(--c-accent));z-index:8;pointer-events:none}
+    .now-line::after{content:'';position:absolute;left:0;top:-4px;width:8px;height:8px;border-radius:50%;background:rgb(var(--c-accent))}
+    .now-bubble{position:absolute;left:4px;transform:translateY(-50%);z-index:9;pointer-events:none;font-family:ui-monospace,'SF Mono',monospace;font-size:10px;font-weight:700;color:#fff;background:rgb(var(--c-accent));padding:2px 5px;border-radius:4px;font-variant-numeric:tabular-nums}
+
+    /* ─── EventDetailDrawer ─── */
+    .drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.32);z-index:90;opacity:0;pointer-events:none;transition:opacity .2s}
+    .drawer-backdrop.open{opacity:1;pointer-events:auto}
+    :root[data-theme="light"] .drawer-backdrop{background:rgba(20,24,40,0.18)}
+    .drawer{position:fixed;top:0;right:0;bottom:0;width:420px;max-width:92vw;z-index:95;background-color:rgb(var(--ink-2)/0.94);-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg);border-left:1px solid var(--glass-stroke);box-shadow:-24px 0 60px rgba(0,0,0,0.4);transform:translateX(100%);transition:transform .26s cubic-bezier(0.32,0.72,0,1);display:flex;flex-direction:column}
+    .drawer.open{transform:translateX(0)}
+    @media (prefers-reduced-motion: reduce){.drawer{transition:none}}
+    .dw-head{padding:18px 18px 14px;border-bottom:1px solid rgb(var(--ink-border-soft));display:flex;align-items:flex-start;gap:12px}
+    .dw-accent{width:3px;align-self:stretch;border-radius:2px;background:rgb(var(--c-accent));flex-shrink:0}
+    .dw-titlewrap{flex:1;min-width:0}
+    .dw-role{display:inline-flex;align-items:center;gap:4px;font-family:ui-monospace,'SF Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:0.05em;padding:2px 7px;border-radius:999px;margin-bottom:6px}
+    .dw-role.owner{color:rgb(var(--c-accent));background:rgb(var(--c-accent)/0.13);border:1px solid rgb(var(--c-accent)/0.3)}
+    .dw-role.attendee{color:rgb(var(--ink-fg-1));background:rgb(var(--ink-fg)/0.06);border:1px solid rgb(var(--ink-border))}
+    .dw-title{font-size:18px;font-weight:600;color:rgb(var(--ink-fg));line-height:1.3;letter-spacing:-0.01em}
+    .dw-close{width:28px;height:28px;flex-shrink:0;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:rgb(var(--ink-fg-2));cursor:pointer;border:0;background:transparent}
+    .dw-close:hover{background:rgb(var(--ink-3));color:rgb(var(--ink-fg))}
+    .dw-body{flex:1;overflow-y:auto;padding:6px 18px 18px}
+    .meta-row{display:grid;grid-template-columns:80px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid rgb(var(--ink-border-soft)/0.6);align-items:start}
+    .meta-row:last-child{border-bottom:0}
+    .meta-k{display:flex;align-items:center;gap:6px;font-size:13px;color:rgb(var(--ink-fg-2));padding-top:1px}
+    .meta-v{font-size:14px;color:rgb(var(--ink-fg));line-height:1.5;min-width:0}
+    .meta-v.mono{font-family:ui-monospace,'SF Mono',monospace;font-size:12.5px;font-variant-numeric:tabular-nums}
+    .resp-badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:2px 8px;border-radius:999px}
+    .resp-accepted{background:rgb(var(--c-accent)/0.15);color:rgb(var(--c-accent))}
+    .resp-tentative{background:rgb(var(--ink-fg)/0.07);color:rgb(var(--ink-fg-1))}
+    .resp-needs{border:1px solid rgb(var(--c-accent));color:rgb(var(--c-accent))}
+    .att-row{display:flex;align-items:center;gap:8px;padding:5px 0}
+    .att-name{font-size:13.5px;color:rgb(var(--ink-fg))}
+    .att-email{font-size:11.5px;color:rgb(var(--ink-fg-2));font-family:ui-monospace,'SF Mono',monospace}
+    .att-resp{font-size:11px;margin-left:auto}
+    .att-resp.a{color:rgb(var(--c-accent))}.att-resp.t{color:rgb(var(--ink-fg-2))}.att-resp.n{color:rgb(var(--c-accent))}
+    .att-avatar{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;flex-shrink:0}
+    .link-row{display:inline-flex;align-items:center;gap:6px;color:rgb(var(--c-accent));font-size:13px;cursor:pointer}
+    .link-row:hover{text-decoration:underline}
+    .empty-field{color:rgb(var(--ink-fg-3));font-style:italic}
+    .desc-box{font-size:13px;color:rgb(var(--ink-fg-1));line-height:1.6;max-height:120px;overflow-y:auto;white-space:pre-wrap;background:rgb(var(--ink-fg)/0.04);border-radius:6px;padding:10px 12px}
+
+    /* dw-foot — RSVP vs owner ops 视觉分流 (§11.6) */
+    .dw-foot{padding:13px 18px;border-top:1px solid rgb(var(--ink-border-soft))}
+    .dw-foot .fm{font-family:ui-monospace,'SF Mono',monospace;font-size:10.5px;color:rgb(var(--ink-fg-3));line-height:1.6;word-break:break-all;margin-top:10px}
+    .rsvp-label{font-family:ui-monospace,'SF Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:0.05em;color:rgb(var(--ink-fg-2));margin-bottom:7px;display:flex;align-items:center;gap:6px}
+    .rsvp-row{display:flex;gap:8px}
+    .btn-rsvp{flex:1;height:34px;border-radius:8px;font-size:13px;font-weight:500;display:inline-flex;align-items:center;justify-content:center;gap:5px;cursor:pointer;transition:all .12s;border:1px solid rgb(var(--ink-border));background:rgb(var(--ink-3)/0.5);color:rgb(var(--ink-fg-1))}
+    .btn-rsvp:hover{background:rgb(var(--ink-3));color:rgb(var(--ink-fg));border-color:rgb(var(--c-accent)/0.5)}
+    .btn-rsvp.sel{background:rgb(var(--c-accent));border-color:rgb(var(--c-accent-hi));color:#fff;font-weight:600}
+    .btn-rsvp.sel:hover{background:rgb(var(--c-accent-hi))}
+    .owner-ops-row{display:flex;gap:8px}
+    .owner-ops-row.secondary{margin-top:8px}
+    .btn-op{flex:1;height:34px;border-radius:8px;font-size:13px;font-weight:500;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;transition:all .12s;border:1px solid rgb(var(--ink-border));background:rgb(var(--ink-3)/0.5);color:rgb(var(--ink-fg-1))}
+    .btn-op.edit{background:rgb(var(--c-accent));border-color:rgb(var(--c-accent-hi));color:#fff;font-weight:600}
+    .btn-op.edit:hover{background:rgb(var(--c-accent-hi))}
+    .btn-op.delete{background:transparent;border-color:rgb(var(--c-accent)/0.5);color:rgb(var(--c-accent))}
+    .btn-op.delete:hover{background:rgb(var(--c-accent)/0.12);border-color:rgb(var(--c-accent))}
+    .btn-op[disabled]{opacity:0.42;cursor:not-allowed;background:rgb(var(--ink-3)/0.4);color:rgb(var(--ink-fg-3));border-color:rgb(var(--ink-border-soft))}
+    .btn-op[disabled]:hover{background:rgb(var(--ink-3)/0.4);color:rgb(var(--ink-fg-3));border-color:rgb(var(--ink-border-soft))}
+    .ops-note{font-size:11.5px;color:rgb(var(--ink-fg-3));margin-top:7px;display:flex;align-items:center;gap:5px}
+
+    /* ─── undo toast (§11.2) — stackable, 5s timer bar ─── */
+    .undo-stack{position:fixed;bottom:38px;left:50%;transform:translateX(-50%);z-index:120;display:flex;flex-direction:column-reverse;gap:9px;align-items:center}
+    .undo-toast{position:relative;min-width:300px;max-width:380px;border-radius:11px;padding:12px 14px 13px;display:flex;align-items:center;gap:11px;overflow:hidden;animation:toastin .26s cubic-bezier(0.32,0.72,0,1)}
+    .undo-toast.out{animation:toastout .2s ease forwards}
+    @keyframes toastin{from{opacity:0;transform:translateY(14px) scale(0.98)}to{opacity:1;transform:none}}
+    @keyframes toastout{to{opacity:0;transform:translateY(8px) scale(0.98)}}
+    @media (prefers-reduced-motion: reduce){.undo-toast,.undo-toast.out{animation:none}}
+    .undo-ic{width:30px;height:30px;border-radius:8px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;background:rgb(var(--ink-fg)/0.07);color:rgb(var(--ink-fg-1))}
+    .undo-txt{flex:1;min-width:0}
+    .undo-t1{font-size:13.5px;color:rgb(var(--ink-fg));font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .undo-t2{font-size:11.5px;color:rgb(var(--ink-fg-2));font-family:ui-monospace,'SF Mono',monospace;margin-top:1px}
+    .undo-btn{flex-shrink:0;height:30px;padding:0 14px;border-radius:7px;font-size:13px;font-weight:600;color:rgb(var(--c-accent));background:transparent;border:1px solid rgb(var(--c-accent)/0.55);cursor:pointer;transition:all .12s}
+    .undo-btn:hover{background:rgb(var(--c-accent)/0.12);border-color:rgb(var(--c-accent))}
+    .undo-prog{position:absolute;left:0;bottom:0;height:2.5px;width:100%;background:rgb(var(--c-accent));transform-origin:left;transition:transform linear}
+
+    /* ─── 副 status bar 重做 (§11.5) ─── */
+    .statusbar{height:26px;flex-shrink:0}
+    .sb-metric{font-family:ui-monospace,'SF Mono',monospace;font-size:12px;letter-spacing:0.02em;color:rgb(var(--ink-fg-2));display:flex;align-items:center;gap:7px}
+    .sb-num{color:rgb(var(--ink-fg-1));font-variant-numeric:tabular-nums;font-weight:600}
+    .sb-sep{color:rgb(var(--ink-fg-3))}
+    .sb-sync-dot{width:6px;height:6px;border-radius:50%;background:#5DBA8C;flex-shrink:0}
+    .sb-info{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;color:rgb(var(--ink-fg-3));cursor:default;transition:all .12s}
+    .sb-info:hover{background:rgb(var(--ink-3)/0.7);color:rgb(var(--ink-fg-1))}
+    .sb-pop{position:absolute;bottom:calc(100% + 9px);right:-6px;width:288px;border-radius:10px;padding:11px 13px;z-index:80;opacity:0;pointer-events:none;transform:translateY(4px);transition:opacity .14s,transform .14s;text-align:left}
+    .sb-info:hover .sb-pop{opacity:1;transform:translateY(0)}
+    .sb-pop-h{font-size:12px;color:rgb(var(--ink-fg));font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+    .sb-pop-row{display:flex;justify-content:space-between;gap:14px;font-family:ui-monospace,'SF Mono',monospace;font-size:11px;padding:3px 0;color:rgb(var(--ink-fg-2))}
+    .sb-pop-row .k{color:rgb(var(--ink-fg-3))}
+    .sb-pop-row .v{color:rgb(var(--ink-fg-1));font-variant-numeric:tabular-nums;text-align:right}
+  </style>
+</head>
+<body>
+
+<!-- ═══ Title bar ═══ -->
+<header class="glass h-titlebar border-b border-ink-border/60 flex items-center px-3 select-none shrink-0">
+  <div class="flex items-center gap-2 mr-4"><span class="tl tl-close"></span><span class="tl tl-min"></span><span class="tl tl-max"></span></div>
+  <div class="text-aux text-ink-fg-1 font-medium tracking-tight">MailAgent</div>
+  <div class="flex-1 flex justify-center">
+    <button class="group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition" aria-label="搜索 / 跳转">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span>搜索 / 跳转</span><kbd class="group-hover:bg-ink-4">⌘K</kbd>
+    </button>
+  </div>
+  <div class="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+    <button id="theme-toggle" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="Toggle light / dark (⌥L)">
+      <svg id="theme-icon-dark" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <span class="group-hover:text-ink-fg" id="theme-label">Dark</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button id="appearance-btn" aria-haspopup="true" aria-expanded="false" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="Accent color">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-coral shadow-[0_0_0_1px_rgba(0,0,0,0.25)]"></span>
+      <span class="group-hover:text-ink-fg" id="appearance-label">Coral</span>
+    </button>
+  </div>
+</header>
+
+<div id="theme-popover" class="theme-popover hidden">
+  <div class="px-3.5 py-2.5 border-b border-ink-border-soft flex items-center justify-between"><div class="text-aux text-ink-fg font-medium">Accent Color</div><span class="text-micro font-mono text-ink-fg-2">View → Appearance</span></div>
+  <div class="p-4"><div class="grid grid-cols-3 gap-y-4 gap-x-2 place-items-center">
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="coral" aria-checked="true" style="background:#E5654B"></button><span class="text-meta font-mono text-ink-fg-1">Coral</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="cobalt" aria-checked="false" style="background:#4A78E5"></button><span class="text-meta font-mono text-ink-fg-2">Cobalt</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="teal" aria-checked="false" style="background:#2DB5A6"></button><span class="text-meta font-mono text-ink-fg-2">Teal</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="rose" aria-checked="false" style="background:#DB5B7C"></button><span class="text-meta font-mono text-ink-fg-2">Rose</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="slate" aria-checked="false" style="background:#7E8694"></button><span class="text-meta font-mono text-ink-fg-2">Slate</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="olive" aria-checked="false" style="background:#9CA552"></button><span class="text-meta font-mono text-ink-fg-2">Olive</span></div>
+  </div></div>
+</div>
+
+<main class="flex flex-1 min-h-0">
+  <!-- nav -->
+  <aside class="app-nav glass border-r border-ink-border/60 flex flex-col relative">
+    <div class="flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft/60 shrink-0">
+      <button class="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-ink-3/70 transition group" title="lucien.chen@tp-link.com">
+        <span class="text-micro font-mono text-ink-fg bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0 leading-snug">tp-link</span>
+        <span class="text-body text-ink-fg font-medium truncate flex-1 text-left">lucien.chen</span>
+        <svg class="text-ink-fg-2 shrink-0" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin py-2.5">
+      <div class="px-3 pb-1"><h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">Mailboxes</h2></div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-inbox.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="text-body flex-1">收件箱</span><span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">32</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          <span class="text-body flex-1">已标旗</span><span class="text-meta font-mono text-ink-fg-2">7</span>
+        </a>
+      </nav>
+      <div class="my-3 mx-4 border-t border-ink-border-soft"></div>
+      <div class="px-3 pb-1"><h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">View</h2></div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-calendar.html" class="row row-selected flex items-center gap-2.5 px-2 py-1.5 rounded-md bg-ink-4 text-ink-fg">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="text-body flex-1 font-medium">日历</span><span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">5</span>
+        </a>
+        <a href="mockup-admin.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          <span class="text-body flex-1">LLM Dashboard</span><span class="w-1.5 h-1.5 rounded-full bg-warn"></span>
+        </a>
+      </nav>
+    </div>
+    <div class="border-t border-ink-border-soft p-2 space-y-px">
+      <a href="mockup-settings.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span class="text-body flex-1">设置</span><kbd>⌘,</kbd>
+      </a>
+    </div>
+  </aside>
+
+  <!-- calendar content -->
+  <section class="flex-1 min-w-0 flex flex-col">
+    <!-- toolbar -->
+    <div class="shrink-0 px-5 pt-4 pb-3 flex items-center gap-4 flex-wrap">
+      <div class="flex items-baseline gap-3 min-w-0">
+        <h1 class="text-subj font-semibold text-ink-fg tracking-tight">日历</h1>
+        <span class="text-lead text-ink-fg-1 font-mono tabular-nums whitespace-nowrap">5/18 – 5/24</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <button class="nav-btn" title="上一段 (←)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <button class="today-btn">今天</button>
+        <button class="nav-btn" title="下一段 (→)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+      </div>
+      <div class="flex items-center gap-1 ml-auto p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50" role="tablist">
+        <button class="view-chip">日</button>
+        <button class="view-chip is-active">周</button>
+        <button class="view-chip">月</button>
+        <button class="view-chip">Agenda</button>
+        <button class="view-chip">定期邀请</button>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="nav-btn" style="width:auto;padding:0 11px;gap:6px;font-size:13px" title="同步 (⌘R)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9 9 0 0 0-6.7 3L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9 9 0 0 0 6.7-3L21 16"/><path d="M21 21v-5h-5"/></svg>
+          <span>同步</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- card -->
+    <div class="flex-1 min-h-0 px-5 pb-4">
+      <div class="cal-card h-full flex flex-col">
+        <div class="week" id="week"></div>
+      </div>
+    </div>
+
+    <!-- ═══ #2 副 status bar 重做 (§11.5) ═══ -->
+    <div class="statusbar glass border-t border-ink-border/60 flex items-center px-4 shrink-0">
+      <div class="sb-metric">
+        <span class="sb-sync-dot"></span>
+        <span><span class="sb-num">47</span> events</span>
+        <span class="sb-sep">·</span>
+        <span><span class="sb-num">13</span> recurring</span>
+        <span class="sb-sep">·</span>
+        <span>自动同步 <span class="sb-num">30</span> 秒前</span>
+      </div>
+      <div class="ml-auto sb-info" tabindex="0" aria-label="同步与后台详情">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <div class="sb-pop glass-pop">
+          <div class="sb-pop-h"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>同步与后台</div>
+          <div class="sb-pop-row"><span class="k">bridge</span><span class="v">DavMail · :1080</span></div>
+          <div class="sb-pop-row"><span class="k">last_full_sync</span><span class="v">14:27:11</span></div>
+          <div class="sb-pop-row"><span class="k">ctag</span><span class="v">a3f8c2d</span></div>
+          <div class="sb-pop-row"><span class="k">window</span><span class="v">−30d / +180d</span></div>
+          <div class="sb-pop-row"><span class="k">schema</span><span class="v">calendar_event v15</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ═══ EventDetailDrawer (§11.6 RSVP vs owner) ═══ -->
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true">
+  <div class="dw-head">
+    <span class="dw-accent"></span>
+    <div class="dw-titlewrap">
+      <span class="dw-role" id="dw-role"></span>
+      <h2 class="dw-title" id="dw-title">—</h2>
+    </div>
+    <button class="dw-close" id="dw-close" title="关闭 (Esc)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  </div>
+  <div class="dw-body scrollbar-thin" id="dw-body"></div>
+  <div class="dw-foot" id="dw-foot"></div>
+</aside>
+
+<!-- undo toast stack -->
+<div class="undo-stack" id="undo-stack"></div>
+
+<script>
+const ME='lucien.chen@tp-link.com';
+
+/* two demo occurrences — one I organize (owner), one I'm invited to (attendee) */
+const EVENTS={
+  team:{ id:'team', title:'团队周会 / 1:1', day:4, start:'10:00', end:'11:00', top:96, height:48,
+    organizer:ME, resp:'ACCEPTED', loc:'Teams 会议', teams:true, related:53180,
+    rrule:'FREQ=WEEKLY;BYDAY=FR', uid:'…8200E00074C5B7-TEAM', source:'caldav · RRULE 实例',
+    desc:'本周进展同步 + 下周排期。\n· 各人 3 分钟进展\n· 阻塞项\n· 1:1 轮值：Grace',
+    attendees:[{n:'Lucien Chen',e:ME,r:'ACCEPTED',me:true},{n:'Grace Liu',e:'grace.liu@tp-link.com',r:'ACCEPTED'},{n:'Wei Zhang',e:'wei.z@tp-link.com',r:'TENTATIVE'}] },
+  siop:{ id:'siop', title:'B2B SIOP 评审', day:4, start:'14:00', end:'15:30', top:288, height:72,
+    organizer:'b2b-ops@tp-link.com', resp:'NEEDS-ACTION', loc:'4F 大会议室', teams:false, related:0,
+    rrule:'FREQ=MONTHLY;BYDAY=3MO', uid:'…8200E00074C5B7-SIOP', source:'caldav · RRULE 实例',
+    desc:'月度供需平衡评审。请提前提交各产线预测。',
+    attendees:[{n:'Lucien Chen',e:ME,r:'NEEDS-ACTION',me:true},{n:'B2B Ops',e:'b2b-ops@tp-link.com',r:'ACCEPTED'},{n:'Sales Lead',e:'sales@tp-link.com',r:'ACCEPTED'},{n:'Finance',e:'fin@tp-link.com',r:'TENTATIVE'}] },
+};
+
+/* ── static week backdrop ── */
+const DAYS=['一','二','三','四','五','六','日'],DNUM=[18,19,20,21,22,23,24],TODAY=4; // Fri = idx4
+const H0=8,H1=20; // business hours window
+(function(){
+  const wk=document.getElementById('week');
+  const colTmpl='56px repeat(7,1fr)';
+  let head=`<div class="wk-headrow" style="grid-template-columns:${colTmpl}"><div class="wk-corner"></div>`;
+  DAYS.forEach((d,i)=>{head+=`<div class="wk-dayhead ${i===TODAY?'is-today':''}"><div class="dow">${d}</div><div class="dn">${DNUM[i]}</div></div>`;});
+  head+='</div>';
+  let allday=`<div class="wk-alldayrow" style="grid-template-columns:${colTmpl}"><div class="allday-gutter"><span>全天</span></div>`;
+  for(let i=0;i<7;i++){allday+=`<div class="allday-cell ${i===TODAY?'is-today':''}">`+(i===3?`<div class="allday-evt">出差·上海</div>`:(i===4?`<div class="allday-evt">出差·上海</div>`:''))+`</div>`;}
+  allday+='</div>';
+
+  const hours=H1-H0;
+  let body=`<div class="wk-body scrollbar-thin" id="wk-body"><div class="wk-grid" style="grid-template-columns:${colTmpl}">`;
+  body+='<div class="hour-gutter">';
+  for(let h=H0;h<H1;h++)body+=`<div class="hour-label"><span>${String(h).padStart(2,'0')}:00</span></div>`;
+  body+='</div>';
+  // ghost blocks per day (context); the two demo events are interactive
+  const ghosts={0:[['09:30',40,'ENBU 日总结','ACCEPTED']],1:[['11:00',46,'Omada 双周','TENTATIVE']],2:[['09:30',40,'ENBU 日总结','ACCEPTED'],['15:00',44,'网安周会','ACCEPTED']],3:[['09:30',40,'ENBU 日总结','ACCEPTED']],5:[],6:[]};
+  for(let i=0;i<7;i++){
+    body+=`<div class="day-col ${i===TODAY?'is-today':''}" data-col="${i}">`;
+    for(let h=H0;h<H1;h++)body+='<div class="hour-cell"></div>';
+    body+='</div>';
+  }
+  body+='</div></div>';
+  wk.innerHTML=head+allday+body;
+
+  const cols=wk.querySelectorAll('.day-col');
+  const toTop=hhmm=>{const[h,m]=hhmm.split(':').map(Number);return (h-H0)*48+m*48/60;};
+  // ghosts
+  Object.entries(ghosts).forEach(([c,list])=>list.forEach(([t,ht,title,resp])=>{
+    const e=document.createElement('div');e.className='evt';e.setAttribute('data-resp',resp);
+    e.style.top=toTop(t)+'px';e.style.height=ht+'px';e.style.left='3px';e.style.right='3px';
+    e.innerHTML=`<div class="e-time">${t}</div><div class="e-title">${title}</div>`;
+    cols[c].appendChild(e);
+  }));
+  // interactive demo events
+  [EVENTS.team,EVENTS.siop].forEach(ev=>{
+    const e=document.createElement('div');e.className='evt'+(ev.organizer===ME?' is-owner':'');
+    if(ev.resp)e.setAttribute('data-resp',ev.resp);
+    e.style.top=ev.top+'px';e.style.height=ev.height+'px';e.style.left='3px';e.style.right='3px';
+    e.dataset.ev=ev.id;
+    const teams=ev.teams?`<svg class="teams-i" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 10l4.55-2.28A1 1 0 0 1 21 8.62v6.76a1 1 0 0 1-1.45.9L15 14"/><rect x="3" y="6" width="12" height="12" rx="2"/></svg>`:'';
+    e.innerHTML=`<div class="e-time">${ev.start}${teams}</div><div class="e-title">${ev.title}</div><div class="e-loc">${ev.loc}</div>`;
+    e.onclick=()=>openDrawer(ev.id);
+    cols[ev.day].appendChild(e);
+  });
+  // now line 14:32 on today col
+  const grid=wk.querySelector('.wk-grid');
+  const nl=document.createElement('div');nl.className='now-line';nl.style.top=toTop('14:32')+'px';grid.appendChild(nl);
+  const nb=document.createElement('div');nb.className='now-bubble';nb.style.top=toTop('14:32')+'px';nb.textContent='14:32';grid.appendChild(nb);
+  // scroll to ~08:30
+  const wb=document.getElementById('wk-body');wb.scrollTop=20;
+})();
+
+/* ── drawer ── */
+const drawer=document.getElementById('drawer'),dwBackdrop=document.getElementById('drawer-backdrop');
+const dwRole=document.getElementById('dw-role'),dwTitle=document.getElementById('dw-title'),dwBody=document.getElementById('dw-body'),dwFoot=document.getElementById('dw-foot');
+let currentEv=null;
+
+function av(name){const c=['#E5654B','#4A78E5','#2DB5A6','#DB5B7C','#9CA552'];let s=0;for(const ch of name)s+=ch.charCodeAt(0);return c[s%c.length];}
+function ini(name){return name.trim()[0]||'?';}
+const respText={ACCEPTED:'已接受',TENTATIVE:'暂定',DECLINED:'已拒绝','NEEDS-ACTION':'待回复'};
+const respCls={ACCEPTED:'a',TENTATIVE:'t',DECLINED:'d','NEEDS-ACTION':'n'};
+
+function openDrawer(id){
+  const ev=EVENTS[id];if(!ev)return;currentEv=ev;
+  const isOwner=ev.organizer===ME;
+  // header role badge
+  dwRole.className='dw-role '+(isOwner?'owner':'attendee');
+  dwRole.innerHTML=isOwner
+    ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7.4-6.3-4.6L5.7 21.4 8 14 2 9.4h7.6z"/></svg>组织者`
+    : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>与会者`;
+  dwTitle.textContent=ev.title;
+
+  // body
+  const myResp=ev.attendees.find(a=>a.me)?.r||'NEEDS-ACTION';
+  const relRow=ev.related>0
+    ? `<span class="link-row"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z" opacity="0"/><path d="M22 6l-10 7L2 6"/><rect x="2" y="4" width="20" height="16" rx="2"/></svg>查看关联邮件 #${ev.related}</span>`
+    : `<span class="empty-field">无关联邮件</span>`;
+  const teamsRow=ev.teams?`<div class="meta-row"><div class="meta-k">🎦 Teams</div><div class="meta-v"><span class="link-row">加入 Teams 会议</span></div></div>`:'';
+  dwBody.innerHTML=`
+    <div class="meta-row"><div class="meta-k">时间</div><div class="meta-v mono">5月${22} (周五) · ${ev.start}–${ev.end}</div></div>
+    <div class="meta-row"><div class="meta-k">日历</div><div class="meta-v">日历</div></div>
+    <div class="meta-row"><div class="meta-k">地点</div><div class="meta-v">${ev.loc||'<span class=\'empty-field\'>—</span>'}</div></div>
+    <div class="meta-row"><div class="meta-k">组织者</div><div class="meta-v mono">${ev.organizer}${ev.organizer===ME?' <span class="empty-field" style="font-style:normal">(我)</span>':''}</div></div>
+    <div class="meta-row"><div class="meta-k">我的回复</div><div class="meta-v"><span class="resp-badge resp-${myResp==='NEEDS-ACTION'?'needs':(myResp==='ACCEPTED'?'accepted':'tentative')}">${respText[myResp]}</span></div></div>
+    ${teamsRow}
+    <div class="meta-row"><div class="meta-k">与会者 (${ev.attendees.length})</div><div class="meta-v">${ev.attendees.map(a=>`<div class="att-row"><span class="att-avatar" style="background:${av(a.n)}">${ini(a.n)}</span><span class="att-name">${a.n}${a.me?' ·我':''}</span><span class="att-resp ${respCls[a.r]}">${respText[a.r]}</span></div>`).join('')}</div></div>
+    <div class="meta-row"><div class="meta-k">重复</div><div class="meta-v mono" style="font-size:11.5px">${ev.rrule||'<span class=\'empty-field\'>不重复</span>'}</div></div>
+    <div class="meta-row"><div class="meta-k">关联邮件</div><div class="meta-v">${relRow}</div></div>
+    <div class="meta-row" style="grid-template-columns:1fr"><div class="meta-k">描述</div><div class="meta-v"><div class="desc-box">${ev.desc}</div></div></div>
+  `;
+
+  // foot — the §11.6 split
+  if(isOwner){
+    dwFoot.innerHTML=`
+      <div class="owner-ops-row">
+        <button class="btn-op edit" id="op-edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>编辑</button>
+        <button class="btn-op delete" id="op-delete"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>删除</button>
+      </div>
+      <div class="fm">UID: ${ev.uid}<br>源: ${ev.source}</div>`;
+    dwFoot.querySelector('#op-delete').onclick=()=>{const e=currentEv;closeDrawer();showUndoToast(e);};
+    dwFoot.querySelector('#op-edit').onclick=()=>{/* opens EventFormModal — see mockup-event-form.html */};
+  }else{
+    dwFoot.innerHTML=`
+      <div class="rsvp-label"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>我的回复${myResp==='NEEDS-ACTION'?' · 待回复':''}</div>
+      <div class="rsvp-row">
+        <button class="btn-rsvp ${myResp==='ACCEPTED'?'sel':''}" data-r="ACCEPTED"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>接受</button>
+        <button class="btn-rsvp ${myResp==='TENTATIVE'?'sel':''}" data-r="TENTATIVE">暂定</button>
+        <button class="btn-rsvp ${myResp==='DECLINED'?'sel':''}" data-r="DECLINED">拒绝</button>
+      </div>
+      <div class="owner-ops-row secondary">
+        <button class="btn-op" disabled title="只能由组织者修改"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>编辑</button>
+        <button class="btn-op" disabled title="只能由组织者修改"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>删除</button>
+      </div>
+      <div class="ops-note"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>只能由组织者修改</div>
+      <div class="fm">UID: ${ev.uid}<br>源: ${ev.source}</div>`;
+    dwFoot.querySelectorAll('.btn-rsvp').forEach(b=>b.onclick=()=>{
+      dwFoot.querySelectorAll('.btn-rsvp').forEach(x=>x.classList.remove('sel'));
+      b.classList.add('sel');
+      const r=b.dataset.r;currentEv.attendees.find(a=>a.me).r=r;currentEv.resp=r;
+      dwFoot.querySelector('.rsvp-label').lastChild.textContent='我的回复';
+    });
+  }
+
+  dwBackdrop.classList.add('open');drawer.classList.add('open');
+  document.querySelectorAll('.evt').forEach(x=>x.classList.toggle('is-selected',x.dataset.ev===id));
+}
+function closeDrawer(){drawer.classList.remove('open');dwBackdrop.classList.remove('open');document.querySelectorAll('.evt').forEach(x=>x.classList.remove('is-selected'));}
+document.getElementById('dw-close').onclick=closeDrawer;
+dwBackdrop.onclick=closeDrawer;
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&drawer.classList.contains('open'))closeDrawer();});
+
+/* ── #3 undo toast (stackable, 5s) ── */
+const stack=document.getElementById('undo-stack');
+function showUndoToast(ev){
+  const t=document.createElement('div');t.className='undo-toast glass-pop';
+  t.innerHTML=`
+    <span class="undo-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>
+    <div class="undo-txt"><div class="undo-t1">已删除「${ev.title}」</div><div class="undo-t2">5 秒后同步到 CalDAV</div></div>
+    <button class="undo-btn">撤销</button>
+    <div class="undo-prog"></div>`;
+  stack.appendChild(t);
+  const prog=t.querySelector('.undo-prog');
+  requestAnimationFrame(()=>{prog.style.transition='transform 5s linear';prog.style.transform='scaleX(0)';});
+  let done=false;
+  const timer=setTimeout(()=>{done=true;dismiss(t);},5000);
+  t.querySelector('.undo-btn').onclick=()=>{
+    if(done)return;clearTimeout(timer);dismiss(t);openDrawer(ev.id);
+  };
+  function dismiss(el){el.classList.add('out');setTimeout(()=>el.remove(),200);}
+}
+
+/* ── theme + accent ── */
+const root=document.documentElement;
+document.getElementById('theme-toggle').onclick=()=>{
+  const light=root.getAttribute('data-theme')==='light';
+  if(light){root.removeAttribute('data-theme');root.classList.add('dark');}
+  else{root.setAttribute('data-theme','light');root.classList.remove('dark');}
+  const nowLight=!light;
+  document.getElementById('theme-icon-dark').classList.toggle('hidden',nowLight);
+  document.getElementById('theme-icon-light').classList.toggle('hidden',!nowLight);
+  document.getElementById('theme-label').textContent=nowLight?'Light':'Dark';
+};
+const apBtn=document.getElementById('appearance-btn'),apPop=document.getElementById('theme-popover');
+apBtn.onclick=e=>{e.stopPropagation();apPop.classList.toggle('hidden');};
+document.addEventListener('click',e=>{if(!apPop.contains(e.target)&&e.target!==apBtn)apPop.classList.add('hidden');});
+document.querySelectorAll('.swatch').forEach(sw=>sw.onclick=()=>{
+  const a=sw.dataset.accent;if(a==='coral')root.removeAttribute('data-accent');else root.setAttribute('data-accent',a);
+  document.querySelectorAll('.swatch').forEach(s=>s.setAttribute('aria-checked',s===sw?'true':'false'));
+  document.getElementById('appearance-label').textContent=sw.parentElement.querySelector('span').textContent;
+});
+
+/* open the owner drawer on load so the §11.6 split reads immediately */
+openDrawer('team');
+</script>
+</body>
+</html>

@@ -1,0 +1,517 @@
+<!doctype html>
+<!--
+  MailAgent · EventFormModal mockup  (PRD §11.1 / §12 必出 #1)
+  ────────────────────────────────────────────────────────────────
+  Visual + interaction reference for impl 1:1 copy. Same design system
+  as mockup-calendar.html: coral-only accent (CSS-var, re-tintable),
+  ink-* surfaces with pure dark/light token swap, Liquid Glass chrome,
+  mono tabular-nums, no decorative emoji.
+
+  Covers: 新建 + 编辑 modes · 标题/起止时间/地点/与会者(chip)/描述 ·
+  inline validation (no toast) · coral primary + ghost secondary ·
+  Esc close + Tab focus-trap · success toast · dark + light.
+-->
+<html lang="zh-CN" data-locale="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MailAgent · 新建事件</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: {
+              0: 'rgb(var(--ink-0) / <alpha-value>)', 1: 'rgb(var(--ink-1) / <alpha-value>)',
+              2: 'rgb(var(--ink-2) / <alpha-value>)', 3: 'rgb(var(--ink-3) / <alpha-value>)',
+              4: 'rgb(var(--ink-4) / <alpha-value>)', 5: 'rgb(var(--ink-5) / <alpha-value>)',
+              border: 'rgb(var(--ink-border) / <alpha-value>)', 'border-soft': 'rgb(var(--ink-border-soft) / <alpha-value>)',
+              fg: 'rgb(var(--ink-fg) / <alpha-value>)', 'fg-1': 'rgb(var(--ink-fg-1) / <alpha-value>)',
+              'fg-2': 'rgb(var(--ink-fg-2) / <alpha-value>)', 'fg-3': 'rgb(var(--ink-fg-3) / <alpha-value>)',
+            },
+            coral: 'rgb(var(--c-accent) / <alpha-value>)', 'coral-hover': 'rgb(var(--c-accent-hi) / <alpha-value>)',
+            'coral-dim': 'rgb(var(--c-accent-dim) / <alpha-value>)',
+            ok: '#5DBA8C', warn: '#E5B452', fail: '#E36262', dead: '#6B707A', info: '#6FA8DC',
+          },
+          fontFamily: {
+            sans: ['-apple-system','BlinkMacSystemFont','"SF Pro Text"','"PingFang SC"','"Helvetica Neue"','system-ui','sans-serif'],
+            display: ['-apple-system','BlinkMacSystemFont','"SF Pro Display"','"PingFang SC"','system-ui','sans-serif'],
+            mono: ['ui-monospace','"SF Mono"','"JetBrains Mono"','Menlo','monospace'],
+          },
+          fontSize: { micro:['11px','14px'], meta:['12px','16px'], aux:['14px','20px'], body:['14px','20px'], lead:['15px','22px'], subj:['22px','30px'] },
+          spacing: { titlebar: '36px', statusbar: '24px' },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* ─── Theme tokens — accent (preset) + ink (light/dark) ─── */
+    :root {
+      --c-accent: 229 101 75; --c-accent-hi: 216 88 65; --c-accent-dim: 126 61 50;
+      --ink-0:14 16 19; --ink-1:21 24 29; --ink-2:26 30 36; --ink-3:31 36 43; --ink-4:38 44 53; --ink-5:46 52 62;
+      --ink-border:44 50 59; --ink-border-soft:31 36 43;
+      --ink-fg:232 234 238; --ink-fg-1:164 169 179; --ink-fg-2:107 112 122; --ink-fg-3:69 74 83;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 8%, rgba(74,120,229,0.22), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(181,140,219,0.18), transparent 70%),
+        linear-gradient(180deg, #06080B 0%, #0A0C10 100%);
+      --glass-lg: saturate(180%) blur(40px);
+      --glass-stroke: rgb(255 255 255 / 0.08);
+      --pop-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07), 0 24px 60px rgba(0,0,0,0.55), 0 6px 16px rgba(0,0,0,0.40);
+    }
+    :root[data-accent="cobalt"] { --c-accent:74 120 229; --c-accent-hi:60 102 207; --c-accent-dim:48 82 163; }
+    :root[data-accent="teal"]   { --c-accent:45 181 166; --c-accent-hi:33 156 142; --c-accent-dim:24 110 100; }
+    :root[data-accent="rose"]   { --c-accent:219 91 124; --c-accent-hi:198 71 105; --c-accent-dim:140 50 74; }
+    :root[data-accent="slate"]  { --c-accent:126 134 148; --c-accent-hi:105 113 127; --c-accent-dim:74 80 92; }
+    :root[data-accent="olive"]  { --c-accent:156 165 82; --c-accent-hi:134 143 70; --c-accent-dim:94 100 48; }
+
+    :root[data-theme="light"] {
+      --ink-0:250 250 250; --ink-1:242 242 244; --ink-2:248 249 251; --ink-3:255 255 255; --ink-4:225 227 230; --ink-5:213 216 222;
+      --ink-border:214 218 224; --ink-border-soft:230 232 237;
+      --ink-fg:26 29 34; --ink-fg-1:91 97 107; --ink-fg-2:122 128 138; --ink-fg-3:178 184 192;
+      --wallpaper:
+        radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
+        radial-gradient(55vw 60vh at 95% 6%, rgba(110,160,255,0.32), transparent 65%),
+        radial-gradient(60vw 55vh at 50% 110%, rgba(180,140,235,0.22), transparent 70%),
+        linear-gradient(180deg, #F6F7FB 0%, #ECEEF4 100%);
+      --glass-stroke: rgb(255 255 255 / 0.70);
+      --pop-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85), 0 18px 50px rgba(18,24,46,0.16), 0 4px 14px rgba(18,24,46,0.10);
+    }
+
+    html, body { background: transparent; overscroll-behavior: none; color-scheme: dark; height: 100%; }
+    :root[data-theme="light"] { color-scheme: light; }
+    body {
+      margin: 0; height: 100vh; display: flex; flex-direction: column;
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-feature-settings: 'ss01','cv11';
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+    }
+    body::before { content:''; position:fixed; inset:0; z-index:-1; background:var(--wallpaper); background-attachment:fixed; pointer-events:none; transition:background 320ms cubic-bezier(0.4,0,0.2,1); }
+
+    .glass   { background-color: rgb(var(--ink-1) / 0.55); -webkit-backdrop-filter: var(--glass-lg); backdrop-filter: var(--glass-lg); }
+    .glass-2 { background-color: rgb(var(--ink-2) / 0.45); -webkit-backdrop-filter: var(--glass-lg); backdrop-filter: var(--glass-lg); }
+    .glass-pop { background-color: rgb(var(--ink-2) / 0.92); -webkit-backdrop-filter: var(--glass-lg); backdrop-filter: var(--glass-lg); border: 1px solid var(--glass-stroke); box-shadow: var(--pop-shadow); }
+    @media (prefers-reduced-transparency: reduce) {
+      .glass{background-color:rgb(var(--ink-1));backdrop-filter:none;-webkit-backdrop-filter:none}
+      .glass-2{background-color:rgb(var(--ink-2));backdrop-filter:none;-webkit-backdrop-filter:none}
+      .glass-pop{background-color:rgb(var(--ink-2));backdrop-filter:none;-webkit-backdrop-filter:none}
+    }
+    .tl{width:12px;height:12px;border-radius:50%;display:inline-block}
+    .tl-close{background:#FF5F57}.tl-min{background:#FEBC2E}.tl-max{background:#28C840}
+    .row{position:relative}
+    .row-selected::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:rgb(var(--c-accent))}
+    .scrollbar-thin::-webkit-scrollbar{width:10px;height:10px}
+    .scrollbar-thin::-webkit-scrollbar-track{background:transparent}
+    .scrollbar-thin::-webkit-scrollbar-thumb{background:rgb(var(--ink-fg)/0.14);border:2px solid transparent;background-clip:padding-box;border-radius:8px}
+    .scrollbar-thin:hover::-webkit-scrollbar-thumb{background:rgb(var(--ink-fg)/0.28);background-clip:padding-box}
+    kbd{font-family:ui-monospace,'SF Mono',monospace;font-size:11px;line-height:1;padding:2px 5px;border-radius:4px;background:rgb(var(--ink-fg)/0.06);color:rgb(var(--ink-fg-1));border:1px solid rgb(var(--ink-border));border-bottom-width:2px}
+
+    /* app nav collapse (mirrors inbox) */
+    .app-nav{width:240px;flex-shrink:0}
+
+    /* appearance popover */
+    .theme-popover{position:fixed;top:44px;right:12px;width:264px;background-color:rgb(var(--ink-2)/0.92);-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg);border:1px solid var(--glass-stroke);border-radius:12px;box-shadow:var(--pop-shadow);z-index:60;overflow:hidden}
+    .swatch{width:36px;height:36px;border-radius:999px;border:0;cursor:pointer;position:relative;box-shadow:0 0 0 1px rgba(0,0,0,0.25),0 1px 2px rgba(0,0,0,0.2);transition:transform .15s}
+    .swatch:hover{transform:scale(1.06)}
+    .swatch[aria-checked="true"]{box-shadow:0 0 0 2px rgb(var(--ink-2)),0 0 0 4px rgb(var(--c-accent))}
+    .swatch[aria-checked="true"]::after{content:'';position:absolute;inset:0;display:grid;place-items:center;background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>") center / 14px 14px no-repeat;filter:drop-shadow(0 1px 1px rgba(0,0,0,0.4))}
+
+    .nav-btn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;color:rgb(var(--ink-fg-1));border:1px solid rgb(var(--ink-border));background:rgb(var(--ink-2)/0.5);cursor:pointer;transition:all .12s}
+    .nav-btn:hover{background:rgb(var(--ink-3));color:rgb(var(--ink-fg))}
+    .view-chip{font-size:13px;line-height:1;padding:6px 11px;border-radius:6px;color:rgb(var(--ink-fg-1));background:transparent;border:1px solid transparent;cursor:pointer;transition:all .12s;white-space:nowrap}
+    .view-chip:hover{background:rgb(var(--ink-3)/0.7);color:rgb(var(--ink-fg))}
+    .view-chip.is-active{background:rgb(var(--c-accent)/0.15);border-color:rgb(var(--c-accent)/0.30);color:rgb(var(--c-accent));font-weight:600}
+
+    /* toolbar primary "+新建" */
+    .btn-coral{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 13px;border-radius:7px;font-size:13px;font-weight:600;color:#fff;background:rgb(var(--c-accent));border:1px solid rgb(var(--c-accent-hi));cursor:pointer;transition:background .12s,transform .08s}
+    .btn-coral:hover{background:rgb(var(--c-accent-hi))}
+    .btn-coral:active{transform:scale(0.98)}
+
+    /* faint static week backdrop (context only) */
+    .bg-week{display:grid;grid-template-columns:48px repeat(7,1fr);height:100%;opacity:0.5}
+    .bgw-cell{border-right:1px solid rgb(var(--ink-border-soft)/0.5);border-bottom:1px solid rgb(var(--ink-border-soft)/0.4)}
+    .bgw-gut{border-right:1px solid rgb(var(--ink-border-soft)/0.5)}
+    .bgw-evt{position:absolute;left:4px;right:4px;border-radius:5px;background:rgb(var(--c-accent)/0.12);border:1px solid rgb(var(--c-accent)/0.22);border-left:3px solid rgb(var(--c-accent))}
+
+    /* ═══════════════ EventFormModal (§11.1) ═══════════════ */
+    .efm-backdrop{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.42);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);opacity:0;pointer-events:none;transition:opacity .18s}
+    :root[data-theme="light"] .efm-backdrop{background:rgba(20,24,40,0.22)}
+    .efm-backdrop.open{opacity:1;pointer-events:auto}
+    .efm-modal{width:500px;max-width:94vw;max-height:90vh;border-radius:12px;display:flex;flex-direction:column;transform:translateY(8px) scale(0.985);transition:transform .2s cubic-bezier(0.32,0.72,0,1)}
+    .efm-backdrop.open .efm-modal{transform:none}
+    @media (prefers-reduced-motion: reduce){.efm-backdrop,.efm-modal{transition:none}}
+
+    .efm-head{display:flex;align-items:center;gap:12px;padding:17px 20px 14px;border-bottom:1px solid rgb(var(--ink-border-soft))}
+    .efm-accent{width:3px;height:18px;border-radius:2px;background:rgb(var(--c-accent));flex-shrink:0}
+    .efm-title{font-size:16px;font-weight:600;color:rgb(var(--ink-fg));letter-spacing:-0.01em;flex:1}
+    .efm-close{width:28px;height:28px;flex-shrink:0;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:rgb(var(--ink-fg-2));cursor:pointer;border:0;background:transparent}
+    .efm-close:hover{background:rgb(var(--ink-3));color:rgb(var(--ink-fg))}
+
+    .efm-body{padding:18px 20px 6px;overflow-y:auto}
+    .ef-field{margin-bottom:15px}
+    .ef-label{display:block;font-family:ui-monospace,'SF Mono',monospace;font-size:11.5px;text-transform:uppercase;letter-spacing:0.06em;color:rgb(var(--ink-fg-2));margin-bottom:6px}
+    .ef-label .req{color:rgb(var(--c-accent));margin-left:3px}
+    .ef-input,.ef-textarea{width:100%;box-sizing:border-box;background:rgb(var(--ink-3)/0.6);border:1px solid rgb(var(--ink-border));border-radius:8px;color:rgb(var(--ink-fg));font-size:14px;font-family:inherit;padding:9px 11px;transition:border-color .12s,box-shadow .12s;outline:none}
+    .ef-input::placeholder,.ef-textarea::placeholder{color:rgb(var(--ink-fg-3))}
+    .ef-input:focus,.ef-textarea:focus{border-color:rgb(var(--c-accent));box-shadow:0 0 0 3px rgb(var(--c-accent)/0.18)}
+    .ef-textarea{resize:vertical;min-height:76px;line-height:1.55}
+    .ef-input.mono{font-family:ui-monospace,'SF Mono',monospace;font-variant-numeric:tabular-nums;font-size:13px}
+    .ef-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .ef-arrow{display:flex;align-items:center;justify-content:center;color:rgb(var(--ink-fg-3))}
+    /* error */
+    .ef-input.invalid,.chip-field.invalid{border-color:rgb(var(--c-accent));box-shadow:0 0 0 3px rgb(var(--c-accent)/0.16)}
+    .ef-err{display:none;align-items:center;gap:5px;margin-top:6px;font-size:12px;color:rgb(var(--c-accent))}
+    .ef-err.show{display:flex}
+    .ef-err svg{flex-shrink:0}
+
+    /* attendee chip input (§11.1 — replaces textarea) */
+    .chip-field{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:rgb(var(--ink-3)/0.6);border:1px solid rgb(var(--ink-border));border-radius:8px;padding:7px 8px;transition:border-color .12s,box-shadow .12s}
+    .chip-field.focus{border-color:rgb(var(--c-accent));box-shadow:0 0 0 3px rgb(var(--c-accent)/0.18)}
+    .chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 4px 0 8px;border-radius:6px;background:rgb(var(--c-accent)/0.14);border:1px solid rgb(var(--c-accent)/0.28);font-size:12.5px;color:rgb(var(--ink-fg))}
+    .chip .chip-av{width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:700;color:#fff;background:rgb(var(--c-accent));flex-shrink:0}
+    .chip .chip-x{width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;color:rgb(var(--ink-fg-2));cursor:pointer}
+    .chip .chip-x:hover{background:rgb(var(--ink-fg)/0.12);color:rgb(var(--ink-fg))}
+    .chip-input{flex:1;min-width:120px;border:0;outline:0;background:transparent;color:rgb(var(--ink-fg));font-size:13.5px;font-family:inherit;padding:3px 2px}
+    .chip-input::placeholder{color:rgb(var(--ink-fg-3))}
+    .chip-hint{margin-top:6px;font-size:11.5px;color:rgb(var(--ink-fg-3))}
+    .chip-hint kbd{font-size:10px;padding:1px 4px;border-bottom-width:1px}
+
+    .efm-foot{display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:13px 20px 16px;border-top:1px solid rgb(var(--ink-border-soft));margin-top:4px}
+    .btn-ghost{height:34px;padding:0 16px;border-radius:8px;font-size:13.5px;color:rgb(var(--ink-fg-1));background:transparent;border:1px solid rgb(var(--ink-border));cursor:pointer;transition:all .12s}
+    .btn-ghost:hover{background:rgb(var(--ink-3));color:rgb(var(--ink-fg))}
+    .btn-primary{height:34px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;color:#fff;background:rgb(var(--c-accent));border:1px solid rgb(var(--c-accent-hi));cursor:pointer;transition:background .12s,transform .08s}
+    .btn-primary:hover{background:rgb(var(--c-accent-hi))}
+    .btn-primary:active{transform:scale(0.985)}
+
+    /* success toast */
+    .ok-toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(12px);z-index:120;display:flex;align-items:center;gap:9px;padding:10px 16px;border-radius:10px;font-size:13.5px;color:rgb(var(--ink-fg));opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+    .ok-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+    .ok-toast .ok-dot{width:18px;height:18px;border-radius:50%;background:rgb(var(--c-accent));display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+  </style>
+</head>
+<body>
+
+<!-- ═══ Title bar ═══ -->
+<header class="glass h-titlebar border-b border-ink-border/60 flex items-center px-3 select-none shrink-0">
+  <div class="flex items-center gap-2 mr-4"><span class="tl tl-close"></span><span class="tl tl-min"></span><span class="tl tl-max"></span></div>
+  <div class="text-aux text-ink-fg-1 font-medium tracking-tight">MailAgent</div>
+  <div class="flex-1 flex justify-center">
+    <button class="group flex items-center gap-2 px-3 py-1 rounded-md text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 transition" aria-label="搜索 / 跳转">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span>搜索 / 跳转</span><kbd class="group-hover:bg-ink-4">⌘K</kbd>
+    </button>
+  </div>
+  <div class="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+    <button id="theme-toggle" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="Toggle light / dark (⌥L)">
+      <svg id="theme-icon-dark" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg id="theme-icon-light" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <span class="group-hover:text-ink-fg" id="theme-label">Dark</span>
+    </button>
+    <span class="text-ink-fg-3">·</span>
+    <button id="appearance-btn" aria-haspopup="true" aria-expanded="false" class="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-ink-3/60 transition group" title="Accent color">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-coral shadow-[0_0_0_1px_rgba(0,0,0,0.25)]"></span>
+      <span class="group-hover:text-ink-fg" id="appearance-label">Coral</span>
+    </button>
+  </div>
+</header>
+
+<!-- Appearance popover -->
+<div id="theme-popover" class="theme-popover hidden">
+  <div class="px-3.5 py-2.5 border-b border-ink-border-soft flex items-center justify-between">
+    <div class="text-aux text-ink-fg font-medium">Accent Color</div><span class="text-micro font-mono text-ink-fg-2">View → Appearance</span>
+  </div>
+  <div class="p-4"><div class="grid grid-cols-3 gap-y-4 gap-x-2 place-items-center">
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="coral" aria-checked="true" style="background:#E5654B"></button><span class="text-meta font-mono text-ink-fg-1">Coral</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="cobalt" aria-checked="false" style="background:#4A78E5"></button><span class="text-meta font-mono text-ink-fg-2">Cobalt</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="teal" aria-checked="false" style="background:#2DB5A6"></button><span class="text-meta font-mono text-ink-fg-2">Teal</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="rose" aria-checked="false" style="background:#DB5B7C"></button><span class="text-meta font-mono text-ink-fg-2">Rose</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="slate" aria-checked="false" style="background:#7E8694"></button><span class="text-meta font-mono text-ink-fg-2">Slate</span></div>
+    <div class="flex flex-col items-center gap-1.5"><button class="swatch" data-accent="olive" aria-checked="false" style="background:#9CA552"></button><span class="text-meta font-mono text-ink-fg-2">Olive</span></div>
+  </div></div>
+</div>
+
+<!-- ═══ Main: nav + calendar (modal trigger context) ═══ -->
+<main class="flex flex-1 min-h-0">
+
+  <!-- nav shell (日历 selected) -->
+  <aside class="app-nav glass border-r border-ink-border/60 flex flex-col relative">
+    <div class="flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft/60 shrink-0">
+      <button class="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-ink-3/70 transition group" title="lucien.chen@tp-link.com">
+        <span class="text-micro font-mono text-ink-fg bg-ink-3 border border-ink-border-soft px-1.5 py-px rounded shrink-0 leading-snug">tp-link</span>
+        <span class="text-body text-ink-fg font-medium truncate flex-1 text-left">lucien.chen</span>
+        <svg class="text-ink-fg-2 shrink-0" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto scrollbar-thin py-2.5">
+      <div class="px-3 pb-1"><h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">Mailboxes</h2></div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-inbox.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="text-body flex-1">收件箱</span><span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">32</span>
+        </a>
+        <a href="#" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          <span class="text-body flex-1">已标旗</span><span class="text-meta font-mono text-ink-fg-2">7</span>
+        </a>
+      </nav>
+      <div class="my-3 mx-4 border-t border-ink-border-soft"></div>
+      <div class="px-3 pb-1"><h2 class="text-micro text-ink-fg-2 font-mono uppercase tracking-[0.08em] px-2 py-1.5">View</h2></div>
+      <nav class="px-2 space-y-px">
+        <a href="mockup-calendar.html" class="row row-selected flex items-center gap-2.5 px-2 py-1.5 rounded-md bg-ink-4 text-ink-fg">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="text-body flex-1 font-medium">日历</span>
+          <span class="text-micro font-mono text-ink-fg bg-coral/15 border border-coral/30 px-1.5 py-0.5 rounded">5</span>
+        </a>
+        <a href="mockup-admin.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          <span class="text-body flex-1">LLM Dashboard</span><span class="w-1.5 h-1.5 rounded-full bg-warn"></span>
+        </a>
+      </nav>
+    </div>
+    <div class="border-t border-ink-border-soft p-2 space-y-px">
+      <a href="mockup-settings.html" class="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span class="text-body flex-1">设置</span><kbd>⌘,</kbd>
+      </a>
+    </div>
+  </aside>
+
+  <!-- calendar content (faint, modal is the focus) -->
+  <section class="flex-1 min-w-0 flex flex-col">
+    <div class="shrink-0 px-5 pt-4 pb-3 flex items-center gap-4 flex-wrap">
+      <div class="flex items-baseline gap-3 min-w-0">
+        <h1 class="text-subj font-semibold text-ink-fg tracking-tight">日历</h1>
+        <span class="text-lead text-ink-fg-1 font-mono tabular-nums whitespace-nowrap">5/18 – 5/24</span>
+      </div>
+      <button class="btn-coral" id="new-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新建
+      </button>
+      <div class="flex items-center gap-1 ml-auto p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50">
+        <button class="view-chip" id="edit-btn">编辑示例</button>
+        <button class="view-chip is-active">周</button>
+        <button class="view-chip">月</button>
+        <button class="view-chip">Agenda</button>
+      </div>
+    </div>
+    <div class="flex-1 min-h-0 px-5 pb-5">
+      <div class="h-full rounded-[10px] border border-ink-border/60 bg-ink-2/60 overflow-hidden relative" style="-webkit-backdrop-filter:var(--glass-lg);backdrop-filter:var(--glass-lg)">
+        <div class="bg-week" id="bg-week"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ═══════════ EventFormModal ═══════════ -->
+<div class="efm-backdrop" id="efm-backdrop">
+  <div class="efm-modal glass-pop" role="dialog" aria-modal="true" aria-labelledby="efm-title" id="efm-modal">
+    <div class="efm-head">
+      <span class="efm-accent"></span>
+      <h2 class="efm-title" id="efm-title">新建事件</h2>
+      <button class="efm-close" id="efm-close" aria-label="关闭 (Esc)" title="关闭 (Esc)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div class="efm-body scrollbar-thin">
+      <!-- 标题 -->
+      <div class="ef-field">
+        <label class="ef-label" for="ef-title">标题<span class="req" aria-hidden="true">*</span></label>
+        <input class="ef-input" id="ef-title" type="text" placeholder="事件标题" autocomplete="off" aria-required="true" />
+        <div class="ef-err" id="err-title"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>请输入事件标题</span></div>
+      </div>
+
+      <!-- 起止时间 -->
+      <div class="ef-field">
+        <label class="ef-label">起止时间</label>
+        <div class="ef-grid2">
+          <input class="ef-input mono" id="ef-start" type="datetime-local" />
+          <input class="ef-input mono" id="ef-end" type="datetime-local" />
+        </div>
+        <div class="ef-err" id="err-time"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>结束时间需晚于开始时间</span></div>
+      </div>
+
+      <!-- 地点 -->
+      <div class="ef-field">
+        <label class="ef-label" for="ef-loc">地点</label>
+        <input class="ef-input" id="ef-loc" type="text" placeholder="会议室 / Teams 链接 / 地址" autocomplete="off" />
+      </div>
+
+      <!-- 与会者 chip 输入 -->
+      <div class="ef-field">
+        <label class="ef-label" for="ef-att-input">与会者</label>
+        <div class="chip-field" id="chip-field">
+          <!-- chips injected -->
+          <input class="chip-input" id="ef-att-input" type="text" placeholder="输入 email 后回车添加" autocomplete="off" aria-label="添加与会者 email" />
+        </div>
+        <div class="chip-hint"><kbd>Enter</kbd> 添加 · <kbd>⌫</kbd> 删除上一个 · 点 × 移除</div>
+      </div>
+
+      <!-- 描述 -->
+      <div class="ef-field">
+        <label class="ef-label" for="ef-desc">描述</label>
+        <textarea class="ef-textarea" id="ef-desc" placeholder="议程、备注、相关链接…"></textarea>
+      </div>
+    </div>
+
+    <div class="efm-foot">
+      <button class="btn-ghost" id="efm-cancel">取消</button>
+      <button class="btn-primary" id="efm-submit">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- success toast -->
+<div class="ok-toast glass-pop" id="ok-toast">
+  <span class="ok-dot"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+  <span id="ok-toast-msg">事件已创建</span>
+</div>
+
+<script>
+/* ── theme + accent (shared chrome) ── */
+const root=document.documentElement;
+document.getElementById('theme-toggle').onclick=()=>{
+  const light=root.getAttribute('data-theme')==='light';
+  if(light){root.removeAttribute('data-theme');root.classList.add('dark');}
+  else{root.setAttribute('data-theme','light');root.classList.remove('dark');}
+  const nowLight=!light;
+  document.getElementById('theme-icon-dark').classList.toggle('hidden',nowLight);
+  document.getElementById('theme-icon-light').classList.toggle('hidden',!nowLight);
+  document.getElementById('theme-label').textContent=nowLight?'Light':'Dark';
+};
+const apBtn=document.getElementById('appearance-btn'),apPop=document.getElementById('theme-popover');
+apBtn.onclick=e=>{e.stopPropagation();apPop.classList.toggle('hidden');};
+document.addEventListener('click',e=>{if(!apPop.contains(e.target)&&e.target!==apBtn)apPop.classList.add('hidden');});
+document.querySelectorAll('.swatch').forEach(sw=>sw.onclick=()=>{
+  const a=sw.dataset.accent;
+  if(a==='coral')root.removeAttribute('data-accent');else root.setAttribute('data-accent',a);
+  document.querySelectorAll('.swatch').forEach(s=>s.setAttribute('aria-checked',s===sw?'true':'false'));
+  document.getElementById('appearance-label').textContent=sw.parentElement.querySelector('span').textContent;
+});
+
+/* ── faint week backdrop (context) ── */
+(function(){
+  const wrap=document.getElementById('bg-week');let h='<div class="bgw-gut"></div>';
+  for(let d=0;d<7;d++)h+='<div class="bgw-cell" style="position:relative"></div>';
+  // a few ghost blocks
+  const blocks=[[1,12,46],[2,70,34],[2,150,40],[4,40,52],[5,96,60],[6,30,44]];
+  wrap.innerHTML=h;
+  const cells=wrap.querySelectorAll('.bgw-cell');
+  blocks.forEach(([c,t,ht])=>{const e=document.createElement('div');e.className='bgw-evt';e.style.top=t+'px';e.style.height=ht+'px';cells[c]&&cells[c].appendChild(e);});
+})();
+
+/* ── EventFormModal ── */
+const backdrop=document.getElementById('efm-backdrop'),modal=document.getElementById('efm-modal');
+const fTitle=document.getElementById('ef-title'),fStart=document.getElementById('ef-start'),fEnd=document.getElementById('ef-end'),
+      fLoc=document.getElementById('ef-loc'),fDesc=document.getElementById('ef-desc');
+const errTitle=document.getElementById('err-title'),errTime=document.getElementById('err-time');
+const submitBtn=document.getElementById('efm-submit'),modalTitle=document.getElementById('efm-title');
+
+let lastFocus=null;
+
+const SAMPLE={ // edit-mode prefill
+  title:'SaaS 项目双周同步', start:'2026-05-22T14:00', end:'2026-05-22T15:00',
+  loc:'Teams 会议', desc:'议程：\n1. 上双周交付回顾\n2. 阻塞项与风险\n3. 下双周排期对齐',
+  atts:['pm-saas@tp-link.com','wei.z@tp-link.com'],
+};
+
+function clearErrors(){
+  errTitle.classList.remove('show');errTime.classList.remove('show');
+  fTitle.classList.remove('invalid');fStart.classList.remove('invalid');fEnd.classList.remove('invalid');
+  fTitle.removeAttribute('aria-invalid');
+}
+function resetForm(){
+  fTitle.value='';fStart.value='2026-05-23T10:00';fEnd.value='2026-05-23T11:00';fLoc.value='';fDesc.value='';
+  setChips([]);clearErrors();
+}
+function fillSample(){
+  fTitle.value=SAMPLE.title;fStart.value=SAMPLE.start;fEnd.value=SAMPLE.end;fLoc.value=SAMPLE.loc;fDesc.value=SAMPLE.desc;
+  setChips(SAMPLE.atts.slice());clearErrors();
+}
+function openModal(mode){
+  lastFocus=document.activeElement;
+  if(mode==='edit'){modalTitle.textContent='编辑事件';submitBtn.textContent='保存';fillSample();}
+  else{modalTitle.textContent='新建事件';submitBtn.textContent='创建';resetForm();}
+  backdrop.classList.add('open');
+  setTimeout(()=>fTitle.focus(),60);
+}
+function closeModal(){
+  backdrop.classList.remove('open');
+  if(lastFocus&&lastFocus.focus)lastFocus.focus();
+}
+document.getElementById('new-btn').onclick=()=>openModal('new');
+document.getElementById('edit-btn').onclick=()=>openModal('edit');
+document.getElementById('efm-close').onclick=closeModal;
+document.getElementById('efm-cancel').onclick=closeModal;
+backdrop.addEventListener('click',e=>{if(e.target===backdrop)closeModal();});
+
+/* validation (inline, no toast — §11.1) */
+function validate(){
+  clearErrors();let ok=true;
+  if(!fTitle.value.trim()){errTitle.classList.add('show');fTitle.classList.add('invalid');fTitle.setAttribute('aria-invalid','true');ok=false;}
+  if(fStart.value&&fEnd.value&&new Date(fEnd.value)<=new Date(fStart.value)){errTime.classList.add('show');fStart.classList.add('invalid');fEnd.classList.add('invalid');ok=false;}
+  return ok;
+}
+fTitle.addEventListener('input',()=>{if(fTitle.value.trim()){errTitle.classList.remove('show');fTitle.classList.remove('invalid');}});
+[fStart,fEnd].forEach(el=>el.addEventListener('input',()=>{if(!(fStart.value&&fEnd.value&&new Date(fEnd.value)<=new Date(fStart.value))){errTime.classList.remove('show');fStart.classList.remove('invalid');fEnd.classList.remove('invalid');}}));
+
+submitBtn.onclick=()=>{
+  if(!validate()){ (errTitle.classList.contains('show')?fTitle:fStart).focus(); return; }
+  const msg=submitBtn.textContent==='保存'?'事件已更新':'事件已创建';
+  closeModal();showOk(msg);
+};
+
+/* success toast */
+const okToast=document.getElementById('ok-toast'),okMsg=document.getElementById('ok-toast-msg');let okTimer;
+function showOk(m){okMsg.textContent=m;okToast.classList.add('show');clearTimeout(okTimer);okTimer=setTimeout(()=>okToast.classList.remove('show'),2600);}
+
+/* ── attendee chips ── */
+const chipField=document.getElementById('chip-field'),chipInput=document.getElementById('ef-att-input');
+let chips=[];
+function initials(email){const n=email.split('@')[0].replace(/[._-]/g,' ').trim();const p=n.split(' ');return((p[0]||'')[0]||email[0]||'?').toUpperCase();}
+function setChips(list){chips=list;renderChips();}
+function renderChips(){
+  chipField.querySelectorAll('.chip').forEach(c=>c.remove());
+  chips.forEach((email,i)=>{
+    const c=document.createElement('span');c.className='chip';
+    c.innerHTML=`<span class="chip-av">${initials(email)}</span><span>${email}</span>`;
+    const x=document.createElement('span');x.className='chip-x';x.setAttribute('role','button');x.setAttribute('aria-label','移除 '+email);x.title='移除';
+    x.innerHTML=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    x.onclick=()=>{chips.splice(i,1);renderChips();};
+    c.appendChild(x);chipField.insertBefore(c,chipInput);
+  });
+}
+function looksEmail(s){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);}
+function addChip(raw){
+  const v=raw.trim().replace(/[,;]$/,'');if(!v)return;
+  if(!looksEmail(v)){chipField.classList.add('invalid');setTimeout(()=>chipField.classList.remove('invalid'),700);return;}
+  if(!chips.includes(v))chips.push(v);chipInput.value='';renderChips();
+}
+chipInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'||e.key===','||e.key===';'){e.preventDefault();addChip(chipInput.value);}
+  else if(e.key==='Backspace'&&chipInput.value===''&&chips.length){chips.pop();renderChips();}
+});
+chipInput.addEventListener('blur',()=>{if(chipInput.value.trim())addChip(chipInput.value);chipField.classList.remove('focus');});
+chipInput.addEventListener('focus',()=>chipField.classList.add('focus'));
+chipField.addEventListener('click',()=>chipInput.focus());
+
+/* ── keyboard: Esc close + Tab focus-trap (a11y) ── */
+document.addEventListener('keydown',e=>{
+  if(!backdrop.classList.contains('open'))return;
+  if(e.key==='Escape'){e.preventDefault();closeModal();return;}
+  if(e.key==='Tab'){
+    const f=modal.querySelectorAll('button,input,textarea,[tabindex]:not([tabindex="-1"])');
+    const list=Array.prototype.filter.call(f,el=>!el.disabled&&el.offsetParent!==null);
+    if(!list.length)return;const first=list[0],last=list[list.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  }
+});
+
+/* open in create mode on load so the mockup shows the modal immediately */
+openModal('new');
+</script>
+</body>
+</html>
