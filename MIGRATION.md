@@ -49,7 +49,7 @@ grep -c MAILAGENT_BACKEND .env 2>/dev/null                          # 旧版 = 0
 |---|---|---|---|---|
 | **DavMail 双后端** | 邮件后端从「Mail.app + AppleScript」抽象成可切换的 `IMailBackend`，新增 DavMail IMAP/SMTP/CalDAV 主路径 | 代码默认 `applescript`（保持旧行为） | ✅ 是否切 davmail | **合规**：当前 davmail 用伪装 client_id，不可上生产；EWS 2026-10 退役 |
 | **数据库 v3 → v17** | 14 次 schema 升级：新增正文/附件 SSoT、outbox、翻译、日历、归档/草稿、AI 字段等 10+ 张表/列 | 启动自动迁移 | ❌（自动） | **单向**，不可降级；附件落盘吃磁盘 |
-| **v4 SQLite SSoT** | 邮件正文 + 附件二进制以 SQLite/本地盘为 SSoT，Notion 退化为镜像，FTS5 全文搜索 | 双写 `BODY_DUAL_WRITE_ENABLED=true` 默认开 | ❌（默认开，按需调） | 附件磁盘体积；读路径灰度开关 `NOTION_READ_FROM_SQLITE` |
+| **v4 SQLite SSoT** | 邮件正文 + 附件二进制以 SQLite/本地盘为 SSoT，Notion 退化为镜像，FTS5 全文搜索 | 双写 `BODY_DUAL_WRITE_ENABLED=true` 默认开 | ⚠️ **历史邮件要回填** | **历史 SSoT 是空的**，需跑 backfill（[§5.3](#53-回填历史邮件到-ssot)）；附件磁盘体积 |
 | **MailAgent Web（前端）** | 全新 Electron 桌面 App（收件箱/详情/AI chat/撰写/翻译/灵动岛/设置） | 不随后端启动，需单独装 | ✅ 是否装前端 | 需 venv 里的 `mailagent` CLI + better-sqlite3 原生编译 |
 | **KOS（gbrain）知识库** | mail-sync 把邮件推 KOS `/ingest`；前端 chat 用 `kos_query`/`kos_digest` 调跨域知识 | 全 4 个 flag 默认 `false` | ✅ 是否接 KOS | 需向 KOS 管理员（Lucien）申请 OAuth 凭据 |
 | **灵动岛 / Sprint15 outbox / 日历 SSoT / 归档草稿** | 一系列子系统，详见 [§5](#5-分模块迁移步骤) | 多数默认关（灵动岛 flag 默认开但需装 app） | 视需要 | 见各小节 |
@@ -204,6 +204,12 @@ mailagent --version                        # 期望 3.0.0
 启动并让数据库自动迁移（见 [§3 验证](#3-数据库迁移v3--v17--自动幂等单向)）。
 **到这一步，不启用任何新功能，用户就已经"无缝升级"了**，行为跟旧版一致（只是底层多了 SSoT 双写和一堆空表）。
 
+> **推荐的总执行顺序**（旧用户）：
+> 1. 拉代码 + 装 CLI（本节）→ 2. 启动一次让 DB 迁到 v17（[§3](#3-数据库迁移v3--v17--自动幂等单向)）→
+> 3. **回填历史邮件到 SSoT**（[§5.3](#53-回填历史邮件到-ssot)，正文/AI 字段/元数据）→
+> 4. 再决定是否启用读 SSoT 的功能（前端 / `NOTION_READ_FROM_SQLITE` / KOS）→ 5. 切后端 / 其它子系统（按需）。
+> **顺序很重要**：SSoT 没回填满就先开前端或切读路径，会看到空白正文 / 把 Notion 字段覆盖空。
+
 ### 5.2 后端选择（AppleScript ↔ DavMail）
 
 **保持 applescript（默认，无需操作）**：什么都不用改，`.env` 里没有 `MAILAGENT_BACKEND` 等价于 applescript。
@@ -229,14 +235,62 @@ pm2 restart mail-sync
 ```
 DavMail 完整配置项见 [`.env.example`](.env.example) §Dual-Backend，背景见 [`docs/claude/architecture-internals.md`](docs/claude/architecture-internals.md) §Sprint 16。
 
-### 5.3 v4 SQLite SSoT（正文 + 附件）
+### 5.3 回填历史邮件到 SSoT
 
-- **默认行为**：`BODY_DUAL_WRITE_ENABLED=true` —— 新邮件 sync 时自动把正文/附件元数据写 SQLite，
-  附件二进制落 `data/attachments/{internal_id}/`。失败仅 warning，不阻断 Notion sync。**无需操作**。
-- **磁盘提醒**：附件落盘会吃空间。`ATTACHMENT_STORAGE_DIR` 可改路径。存量邮件不会自动回填正文/附件，
-  需要时用 backfill 脚本（见 [`docs/architecture_v4_sqlite_ssot.md`](docs/architecture_v4_sqlite_ssot.md)）。
-- **读路径灰度**：`NOTION_READ_FROM_SQLITE=false`（默认）。切 `true` 后 sync/resync 优先走 SQLite SSoT，
-  miss 自动 fallback。切前请按 v4 文档至少实测 3 封。**建议先保持 false。**
+> ⚠️ **旧用户关键步骤。**
+
+**这是旧用户最容易遗漏、也最重要的一步。** v4 把本地 SQLite 当作邮件正文/附件/AI 字段的 SSoT，
+但**只有"升级后新同步的邮件"才会自动写满 SSoT**。你两周前同步的几千上万封历史邮件，在新表里是**空的**：
+
+| SSoT 数据 | 历史邮件现状 | 为什么空 |
+|---|---|---|
+| `email_body`（正文 HTML/Markdown）+ 附件二进制 | **空** | v4 双写只对升级后新 sync 的邮件生效；历史邮件当年没写 |
+| `email_metadata.ai_priority` / `ai_action`（AI 字段） | **大量空** | 早期由 Notion Email Agent 分类，AI 字段只写在 Notion property，没回写 SQLite |
+| `to` / `cc` / `sender_name` 等元数据 | 可能部分缺 | 早期 schema 没存全 |
+
+所以正确顺序是：**先跑下面的回填把 SSoT 补满，再启用任何"读 SSoT"的功能**
+（前端 / `NOTION_READ_FROM_SQLITE=true` / KOS ingest）。否则前端会显示空白正文，
+或 v4 读路径从空 SQLite 读出空值再写回 Notion（把 Notion 的 To/CC 也覆盖空）。
+
+> **默认双写**：`BODY_DUAL_WRITE_ENABLED=true`，新邮件自动写 SSoT，无需操作。下面只针对**历史邮件**。
+> 所有 backfill 命令都有长任务契约（断点续跑 / 熔断 / PM2 检测），中断了重跑会自动 resume。
+> 几千封是小时级任务，**建议挂后台 / 夜里跑**。先 `--dry-run` 看清楚再实跑。
+
+**① 回填正文 + 附件**（走 AppleScript 从 Mail.app 取——⚠️ 即使主后端是 davmail，这个命令目前也走 Mail.app，需 Mail.app 在位 + 自动化权限）：
+```bash
+mailagent backfill body --all --dry-run            # 先看会处理多少封
+mailagent backfill body --all                      # 实跑（或 --since-date 2026-01-01 限范围）
+# 跑的过程中建议先停主服务避免抢 AppleScript：pm2 stop mail-sync
+mailagent backfill body --show-dead                # 看失败的；--retry-dead 重试
+```
+
+**② 从 Notion 反向全量回填 AI 字段**（独立脚本，幂等、自动续跑，**未挂到 mailagent CLI**）：
+```bash
+python3 -m src.llm_agent.notion_backfill --dry-run            # 先验证映射
+python3 -m src.llm_agent.notion_backfill                      # 实跑（Notion REST ~3qps，6300 封约 15–25min）
+python3 -m src.llm_agent.notion_backfill --limit 50           # 只跑前 50 封验证
+```
+> 只处理"有 notion_page_id 但 ai_priority 为空"的行，写成功即非空，重跑自动跳过。
+> Notion 端 Priority + Action Type 都空的视为"没 AI 处理"，skip。
+
+**③（可选）回填元数据 to/cc/sender_name**：
+```bash
+mailagent backfill metadata --source notion --all   # 快(~15-25min)，跟 mail-sync 并发安全；主要补 sender_name
+# 或更完整但更慢(~1.5-2h，需停 mail-sync)：
+mailagent backfill metadata --source applescript --all
+```
+
+**④（可选，要全文搜附件才需要）附件文本化入 FTS5**：
+```bash
+mailagent attachment extract --pending --include-missing --limit 50   # 分批推进抽取队列
+```
+
+**回填完成后再做**：
+- **读路径灰度**：`NOTION_READ_FROM_SQLITE=false`（默认）。SSoT 补满后可切 `true`，sync/resync 优先走 SQLite，
+  miss 自动 fallback。切前按 [`docs/architecture_v4_sqlite_ssot.md`](docs/architecture_v4_sqlite_ssot.md) 至少实测 3 封。**没回填完别切。**
+- **磁盘**：附件落盘吃空间，大邮箱回填后可能 GB 级。`ATTACHMENT_STORAGE_DIR` 可改路径。
+
+完整回填配方与运维 SQL 见 [`docs/claude/v4-ssot-ops.md`](docs/claude/v4-ssot-ops.md)。
 
 ### 5.4 Sprint 15 outbox（反向同步 SSoT inversion）
 
@@ -304,14 +358,15 @@ bash scripts/dev/kos_smoke_test.sh        # health / token / MCP query / Python 
 1. **DavMail 合规红线**：当前 davmail 用伪装 client_id（PoC），**严禁上公司生产**。切之前跟用户确认这是个人 dogfood 还是生产。EWS 2026-10-01 关停，DavMail 6.7 仍走 EWS —— 长期方案是 Graph API（见 [`docs/roadmap-post-cutover.md`](docs/roadmap-post-cutover.md) §5.1）。
 2. **数据库迁移单向**：没有降级脚本。**一定先备份** `data/sync_store.db`（[§2](#2-升级前必做不可跳过)）。
 3. **backend 回切要 reset marker**：davmail → applescript 回切时若不重置 `last_max_row_id`，applescript 会因为看着 davmail 的 UIDNEXT 而永远 `has_new=False`，**新邮件静默不同步**。脚本见 [§5.2](#52-后端选择applescript--davmail)。
-4. **AI 双跑撞车**：启用本地 LLM 分类前，**必须**先在 Notion 端停掉 Email Agent Automation，否则两条路径同时填 AI 字段。
-5. **Notion schema 新字段**：若启用本地 LLM 或新前端，确认 Notion 邮件库有 `AI Action`/`AI Priority`/`AI Review Status` 这些 Select 字段及其选项（`AI Priority`: Critical/Urgent/Important/Normal/Low）。改 schema 要同步 `src/llm_agent/schema.py`（有 `schema-consistency-reviewer` subagent 校验）。
-6. **env-only flag 需要 load_dotenv**：部分 flag（灵动岛 deeplink、CLI 写命令鉴权等）直读 `os.environ`，靠 `main.py` 的 `load_dotenv()` 注入。**用 PM2 跑时确认 `.env` 真的被加载**，否则这些功能静默失效。
-7. **folder 写未走 outbox SSoT**：归档/草稿的写操作目前**直连 IMAP**，没走 Sprint15 的 outbox 反转（已知待优化项，非 bug，但和主邮件路径的一致性模型不同）。
-8. **附件磁盘体积**：v4 双写 + 大邮箱回填可能 GB 级。磁盘紧张先确认 `ATTACHMENT_STORAGE_DIR` 落点。
-9. **前端依赖 mailagent CLI on PATH**：前端不是独立的，它靠 venv 里的 CLI 跟后端通信；CLI 不在 PATH → 前端空白/报错。
-10. **macOS 权限**：完全磁盘访问（读 Mail.app SQLite）+ 自动化（操作 Mail.app）。PM2 进程继承启动终端的权限，换终端要重新授权。
-11. **KOS 凭据是机密**：`gbrain_cs_*` 绝不能进 git，放 `.env.local`。
+4. **历史 SSoT 是空的，且回填有顺序**：旧用户的历史邮件在 `email_body` / `ai_priority` 等 SSoT 字段里是空的。**必须先回填**（[§5.3](#53-回填历史邮件到-ssot)：`mailagent backfill body --all` + `python3 -m src.llm_agent.notion_backfill`）**再启用前端 / `NOTION_READ_FROM_SQLITE=true` / KOS ingest**。顺序反了：前端显示空白正文，或 v4 读路径从空 SQLite 读出空值**覆盖写空 Notion 的 To/CC**。另：正文 backfill 走 AppleScript，davmail-only 用户也需 Mail.app 在位。
+5. **AI 双跑撞车**：启用本地 LLM 分类前，**必须**先在 Notion 端停掉 Email Agent Automation，否则两条路径同时填 AI 字段。
+6. **Notion schema 新字段**：若启用本地 LLM 或新前端，确认 Notion 邮件库有 `AI Action`/`AI Priority`/`AI Review Status` 这些 Select 字段及其选项（`AI Priority`: Critical/Urgent/Important/Normal/Low）。改 schema 要同步 `src/llm_agent/schema.py`（有 `schema-consistency-reviewer` subagent 校验）。
+7. **env-only flag 需要 load_dotenv**：部分 flag（灵动岛 deeplink、CLI 写命令鉴权等）直读 `os.environ`，靠 `main.py` 的 `load_dotenv()` 注入。**用 PM2 跑时确认 `.env` 真的被加载**，否则这些功能静默失效。
+8. **folder 写未走 outbox SSoT**：归档/草稿的写操作目前**直连 IMAP**，没走 Sprint15 的 outbox 反转（已知待优化项，非 bug，但和主邮件路径的一致性模型不同）。
+9. **附件磁盘体积**：v4 双写 + 大邮箱回填可能 GB 级。磁盘紧张先确认 `ATTACHMENT_STORAGE_DIR` 落点。
+10. **前端依赖 mailagent CLI on PATH**：前端不是独立的，它靠 venv 里的 CLI 跟后端通信；CLI 不在 PATH → 前端空白/报错。
+11. **macOS 权限**：完全磁盘访问（读 Mail.app SQLite）+ 自动化（操作 Mail.app）。PM2 进程继承启动终端的权限，换终端要重新授权。
+12. **KOS 凭据是机密**：`gbrain_cs_*` 绝不能进 git，放 `.env.local`。
 
 ---
 
