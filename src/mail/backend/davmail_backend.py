@@ -15,8 +15,9 @@ internal_id = AUTOINCREMENT 起点 1_000_000_000 (永不跟 Mail.app ROWID 冲�
 from __future__ import annotations
 
 import re
+import sqlite3
 import time
-from datetime import timezone
+from datetime import datetime, timezone
 from email.header import decode_header, make_header
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
@@ -28,6 +29,7 @@ from src.mail.backend.base import IMailBackend
 from src.mail.backend.imap_client import (
     DavMailConnectionError,
     discover_drafts_folder,
+    discover_sent_folder,
     imap_connect,
     imap_session,
     probe_tcp,
@@ -235,6 +237,13 @@ class DavMailBackend(IMailBackend):
         self.drafts_folder: Optional[str] = (
             getattr(cfg, "davmail_drafts_folder", "") or None
         )
+        # 发件箱 (Sent) 同步 — 跟 drafts 一样: 配置优先, 留空时 probe 探测。
+        # 仅当 sync_mailboxes 含"发件箱"/"已发送"时才启用 (默认 config 已含发件箱)。
+        self.sent_folder: Optional[str] = (
+            getattr(cfg, "davmail_sent_folder", "") or None
+        )
+        _mbs = [m.strip() for m in (getattr(cfg, "sync_mailboxes", "") or "").split(",")]
+        self._sync_sent: bool = any(m in ("发件箱", "已发送", "已发送邮件") for m in _mbs)
         self.inbox_uidvalidity: Optional[int] = None
         self.last_op_latency_ms: Optional[int] = None
 
@@ -281,6 +290,9 @@ class DavMailBackend(IMailBackend):
             # 探测 Drafts (仅当未配置时, 一次性)
             if not self.drafts_folder:
                 self.drafts_folder = discover_drafts_folder(imap) or "Drafts"
+            # 探测 Sent (仅当启用发件箱同步且未配置时, 一次性)
+            if self._sync_sent and not self.sent_folder:
+                self.sent_folder = discover_sent_folder(imap)
         finally:
             try:
                 imap.logout()
@@ -288,7 +300,8 @@ class DavMailBackend(IMailBackend):
                 pass
 
         return True, (
-            f"DavMail OK (drafts={self.drafts_folder!r}, probe=NOOP)"
+            f"DavMail OK (drafts={self.drafts_folder!r}, "
+            f"sent={self.sent_folder!r} sync_sent={self._sync_sent}, probe=NOOP)"
         )
 
     def health_status(self) -> BackendHealth:
@@ -383,7 +396,7 @@ class DavMailBackend(IMailBackend):
             logger.warning(f"[davmail-backend] internal_id={internal_id} not in sync_store")
             return None
 
-        imap_box = _mailbox_to_imap(mailbox or record.get("mailbox"))
+        imap_box = self._resolve_imap_box(mailbox or record.get("mailbox"))
         imap_uid_raw = record.get("imap_uid")
         imap_uid: Optional[int] = (
             int(imap_uid_raw) if isinstance(imap_uid_raw, int) and imap_uid_raw > 0 else None
@@ -528,7 +541,7 @@ class DavMailBackend(IMailBackend):
         ``EmailMeta.internal_id`` 在此处仍用 IMAP UID 作占位 (fetch_recent 是只读 helper,
         不写 SQLite, 不会触发主键冲突).
         """
-        imap_box = _mailbox_to_imap(mailbox)
+        imap_box = self._resolve_imap_box(mailbox)
         try:
             with imap_session(self.cfg, timeout=60) as imap:
                 typ, _ = imap.select(imap_box, readonly=True)
@@ -644,7 +657,7 @@ class DavMailBackend(IMailBackend):
             )
             return False
         internal_id = record.get("internal_id") if isinstance(record, dict) else None
-        imap_box = _mailbox_to_imap(mailbox or record.get("mailbox"))
+        imap_box = self._resolve_imap_box(mailbox or record.get("mailbox"))
         try:
             with imap_session(self.cfg, timeout=30) as imap:
                 typ, _ = imap.select(imap_box, readonly=False)
@@ -960,7 +973,7 @@ class DavMailBackend(IMailBackend):
         """通过 message_id IMAP SEARCH HEADER 反查 + FETCH. legacy dict 返回."""
         if not message_id:
             return None
-        imap_box = _mailbox_to_imap(mailbox)
+        imap_box = self._resolve_imap_box(mailbox)
         try:
             with imap_session(self.cfg, timeout=60) as imap:
                 typ, _ = imap.select(imap_box, readonly=True)
@@ -1056,21 +1069,63 @@ class DavMailBackend(IMailBackend):
             logger.warning(f"[davmail-backend] get_current_max_row_id failed: {e}")
         return 0
 
+    def _resolve_imap_box(self, mailbox: Optional[str]) -> str:
+        """中文 mailbox → IMAP folder, 优先用 probe 探测到的实际名。
+
+        _mailbox_to_imap 是静态映射 (发件箱→"Sent Items", 草稿→"Drafts"), 但不同
+        服务器 Sent/Drafts 实际名可能不同 (如 "已发送邮件")。probe 探测到 self.sent_folder
+        / self.drafts_folder 后, 这里优先用探测值, 保证 fetch/flag/read 操作 SELECT 对
+        folder (否则发件箱邮件取不到全文)。
+        """
+        if mailbox in ("发件箱", "已发送", "已发送邮件") and self.sent_folder:
+            return self.sent_folder
+        if mailbox in ("草稿箱", "草稿", "Drafts") and self.drafts_folder:
+            return self.drafts_folder
+        return _mailbox_to_imap(mailbox)
+
+    def _folder_uidnext(self, imap_folder: str) -> int:
+        """STATUS <folder> (UIDNEXT) — 给发件箱变化检测用 (INBOX 走 get_current_max_row_id)."""
+        try:
+            with imap_session(self.cfg, timeout=30) as imap:
+                typ, data = imap.status(imap_folder, "(UIDNEXT)")
+                if typ == "OK" and data:
+                    uidnext = self._extract_status_value(data[0], "UIDNEXT")
+                    if uidnext:
+                        return int(uidnext)
+        except Exception as e:
+            logger.warning(
+                f"[davmail-backend] _folder_uidnext({imap_folder!r}) failed: {e}"
+            )
+        return 0
+
     def check_for_changes(
         self, last_max_row_id: int
     ) -> tuple[bool, int, int]:
         """SQLiteRadar.check_for_changes 兼容 — STATUS UIDNEXT 比对.
 
-        Returns: (has_new, current_uidnext, estimated_new_count)
+        返回的 marker 始终是 INBOX uidnext (持久化为 last_max_row_id, get_new_emails
+        的 INBOX 增量用它)。发件箱用独立 UID 空间, 其游标在 get_new_emails 内部从
+        SQLite 派生, 这里只额外探测发件箱 UIDNEXT 是否前进以触发 has_new。
+
+        Returns: (has_new, inbox_uidnext, estimated_new_count)
         """
         current = self.get_current_max_row_id()
         if current == 0:
             return (False, last_max_row_id, 0)
-        delta = current - int(last_max_row_id or 0)
-        return (delta > 0, current, max(0, delta))
+        inbox_new = max(0, current - int(last_max_row_id or 0))
+        sent_new = 0
+        if self._sync_sent and self.sent_folder:
+            sent_uidnext = self._folder_uidnext(self.sent_folder)
+            if sent_uidnext > 0:
+                # sent_uidnext = 下一个将分配的 UID; marker = 已导入最大 UID。
+                # uidnext > marker+1 说明 Sent 有未导入的新发件。首次 marker=0 →
+                # 必触发 (走日期下限回填)。
+                sent_marker = self._max_sent_imap_uid()
+                sent_new = max(0, sent_uidnext - (sent_marker + 1))
+        return (inbox_new > 0 or sent_new > 0, current, inbox_new + sent_new)
 
     def get_new_emails(self, since_row_id: int) -> list[dict]:
-        """SQLiteRadar.get_new_emails 兼容 — IMAP UID SEARCH UID > since + BATCH FETCH.
+        """SQLiteRadar.get_new_emails 兼容 — 多 folder UID SEARCH + BATCH FETCH.
 
         davmail mode 关键: 每条邮件通过 ``sync_store.allocate_davmail_internal_id()``
         分配独立 internal_id (>= 1_000_000_000), **不再**复用 IMAP UID 作 internal_id —
@@ -1078,58 +1133,141 @@ class DavMailBackend(IMailBackend):
         ``imap_uid`` / ``imap_uidvalidity`` / ``backend_origin='davmail'`` / ``mailbox``
         字段, 让上层 ``new_watcher._poll_cycle`` 直接透传到 ``sync_store.save_email`` 即可
         (review CRITICAL #2 修复).
+
+        ## 多 folder (收件箱 + 发件箱)
+
+        INBOX 用 ``since_row_id`` (= 持久化的 INBOX uidnext marker) 做 ``UID >`` 增量。
+        Sent (发件箱) 的 IMAP UID 空间和 INBOX **独立**, 不能复用 since_row_id, 故 marker
+        从 SQLite 派生 (``MAX(imap_uid) WHERE mailbox='发件箱'``); 首次 (无 davmail-origin
+        发件箱行) 退化为 ``SENTSINCE <SYNC_START_DATE>`` 日期下限回填。重复拉到的存量
+        AppleScript 发件邮件由 ``_save_email_v3`` 的 cross-backend merge protection 兜底
+        (按 message_id merge, 不建重复行/重复 Notion 页), 故首次回填安全。
         """
+        out: list[dict] = []
         try:
             with imap_session(self.cfg, timeout=60) as imap:
-                typ, select_data = imap.select("INBOX", readonly=True)
-                if typ != "OK":
-                    return []
-                # 从 SELECT 响应读 UIDVALIDITY (untagged response), 避免协议违反
-                # (RFC 3501 §6.3.10: STATUS 不能跟在 SELECT 同 mailbox 之后).
-                uv = _read_uidvalidity_from_select(imap)
-                if uv:
-                    self.inbox_uidvalidity = uv
-                # IMAP UID SEARCH: UID since_row_id+1:*
-                search_arg = f"{int(since_row_id) + 1}:*"
-                typ, data = imap.uid("search", None, "UID", search_arg)
-                if typ != "OK" or not data or not data[0]:
-                    return []
-                uids = data[0].split()
-                if not uids:
-                    return []
-                uid_seq = b",".join(uids).decode()
-                typ, data = imap.uid(
-                    "fetch", uid_seq,
-                    "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS "
-                    "(MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
+                # --- INBOX (主路径, since_row_id = INBOX uidnext marker) ---
+                out.extend(
+                    self._fetch_new_in_folder(
+                        imap, "INBOX", "收件箱",
+                        ("UID", f"{int(since_row_id) + 1}:*"),
+                        track_inbox_uidvalidity=True,
+                    )
                 )
-                if typ != "OK" or not data:
-                    return []
-                parsed = self._parse_batch_headers(data)
-                # davmail 分配独立 internal_id + 填上 backend_origin/mailbox label
-                mailbox_label = _imap_to_mailbox_label("INBOX")
-                out: list[dict] = []
-                for item in parsed:
+                # --- 发件箱 (Sent) — 独立 UID 空间, marker 从 SQLite 派生 ---
+                # 单独 try: Sent 失败绝不能影响 INBOX 同步 (主路径)。
+                if self._sync_sent and self.sent_folder:
                     try:
-                        item["internal_id"] = self.sync_store.allocate_davmail_internal_id()
+                        out.extend(
+                            self._fetch_new_in_folder(
+                                imap, self.sent_folder, "发件箱",
+                                self._sent_search_criteria(),
+                                track_inbox_uidvalidity=False,
+                            )
+                        )
                     except Exception as e:
                         logger.error(
-                            f"[davmail-backend] allocate_davmail_internal_id failed for "
-                            f"imap_uid={item.get('imap_uid')}: {e}"
+                            f"[davmail-backend] sent folder sync failed "
+                            f"(inbox unaffected): {e}"
                         )
-                        continue
-                    item["backend_origin"] = "davmail"
-                    item["mailbox"] = mailbox_label
-                    out.append(item)
-                if len(out) != len(uids):
-                    logger.warning(
-                        f"[davmail-backend] get_new_emails: parsed {len(out)} from "
-                        f"{len(uids)} UIDs (missing {len(uids) - len(out)})"
-                    )
-                return out
+            return out
         except Exception as e:
             logger.error(f"[davmail-backend] get_new_emails failed: {e}")
+            return out
+
+    def _fetch_new_in_folder(
+        self,
+        imap,
+        imap_folder: str,
+        mailbox_label: str,
+        search_criteria: tuple[str, str],
+        *,
+        track_inbox_uidvalidity: bool,
+    ) -> list[dict]:
+        """SELECT 一个 IMAP folder → UID SEARCH (criteria) → BATCH FETCH headers →
+        分配 internal_id + 打 mailbox/backend_origin 标签。get_new_emails 的单 folder 原语。
+
+        search_criteria = (key, arg), e.g. ("UID", "5001:*") 或 ("SENTSINCE", "01-May-2026")。
+        """
+        typ, _ = imap.select(imap_folder, readonly=True)
+        if typ != "OK":
+            logger.warning(f"[davmail-backend] SELECT {imap_folder!r} failed: {typ}")
             return []
+        # 从 SELECT 响应读 UIDVALIDITY (untagged response), 避免协议违反
+        # (RFC 3501 §6.3.10: STATUS 不能跟在 SELECT 同 mailbox 之后).
+        uv = _read_uidvalidity_from_select(imap)
+        if uv and track_inbox_uidvalidity:
+            self.inbox_uidvalidity = uv
+        key, arg = search_criteria
+        typ, data = imap.uid("search", None, key, arg)
+        if typ != "OK" or not data or not data[0]:
+            return []
+        uids = data[0].split()
+        if not uids:
+            return []
+        uid_seq = b",".join(uids).decode()
+        typ, data = imap.uid(
+            "fetch", uid_seq,
+            "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS "
+            "(MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
+        )
+        if typ != "OK" or not data:
+            return []
+        parsed = self._parse_batch_headers(data)
+        out: list[dict] = []
+        for item in parsed:
+            try:
+                item["internal_id"] = self.sync_store.allocate_davmail_internal_id()
+            except Exception as e:
+                logger.error(
+                    f"[davmail-backend] allocate_davmail_internal_id failed for "
+                    f"imap_uid={item.get('imap_uid')} folder={imap_folder!r}: {e}"
+                )
+                continue
+            item["backend_origin"] = "davmail"
+            item["mailbox"] = mailbox_label
+            out.append(item)
+        if len(out) != len(uids):
+            logger.warning(
+                f"[davmail-backend] _fetch_new_in_folder({mailbox_label}): parsed "
+                f"{len(out)} from {len(uids)} UIDs (missing {len(uids) - len(out)})"
+            )
+        return out
+
+    def _max_sent_imap_uid(self) -> int:
+        """SQLite 里 mailbox='发件箱' 已导入的最大 IMAP UID (任意 backend_origin)。
+
+        首次同步 (存量全是 AppleScript 行, imap_uid 为 NULL) 返回 0 → 调用方退化日期下限。
+        merge protection 把存量行补上 imap_uid 后, 此 marker 即转为真实增量游标。
+        """
+        try:
+            conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
+            try:
+                row = conn.execute(
+                    "SELECT MAX(imap_uid) FROM email_metadata "
+                    "WHERE mailbox = '发件箱' AND imap_uid IS NOT NULL"
+                ).fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[davmail-backend] _max_sent_imap_uid failed: {e}")
+            return 0
+
+    def _imap_date_floor(self) -> str:
+        """SYNC_START_DATE ("2026-01-01") → IMAP SEARCH 日期格式 ("01-Jan-2026")."""
+        raw = (getattr(self.cfg, "sync_start_date", "") or "2026-01-01")[:10]
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").strftime("%d-%b-%Y")
+        except Exception:
+            return "01-Jan-2026"
+
+    def _sent_search_criteria(self) -> tuple[str, str]:
+        """发件箱增量 search criteria: 有 marker 走 UID 增量, 否则日期下限回填。"""
+        marker = self._max_sent_imap_uid()
+        if marker > 0:
+            return ("UID", f"{marker + 1}:*")
+        return ("SENTSINCE", self._imap_date_floor())
 
     def set_last_max_row_id(self, row_id: int) -> None:
         """SQLiteRadar.set_last_max_row_id 兼容 — 内存缓存 (持久化走 sync_store)."""

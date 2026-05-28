@@ -13,10 +13,8 @@
 """
 from __future__ import annotations
 
-import sqlite3
 from unittest.mock import MagicMock
 
-import pytest
 
 from src.mail.backend.davmail_backend import (
     DavMailBackend,
@@ -436,6 +434,171 @@ def test_get_new_emails_allocates_davmail_internal_id(monkeypatch):
     assert out[1]["imap_uid"] == 200
 
 
+# --------- 发件箱 (Sent) 多 folder 同步 ---------
+
+def test_resolve_imap_box_prefers_discovered_sent_folder():
+    """_resolve_imap_box 优先用 probe 探测到的 sent_folder, 而非静态 'Sent Items'."""
+    backend = _make_backend()
+    backend.sent_folder = "已发送邮件"  # 服务器实际名 (≠ 静态映射的 "Sent Items")
+    assert backend._resolve_imap_box("发件箱") == "已发送邮件"
+    assert backend._resolve_imap_box("已发送") == "已发送邮件"
+    # 未探测时退回静态映射
+    backend.sent_folder = None
+    assert backend._resolve_imap_box("发件箱") == "Sent Items"
+    # 收件箱不受影响
+    assert backend._resolve_imap_box("收件箱") == "INBOX"
+
+
+def test_sent_search_criteria_date_floor_then_uid(monkeypatch):
+    """首次 (无 davmail 发件箱行) 走 SENTSINCE 日期下限; 有 marker 后走 UID 增量."""
+    backend = _make_backend()
+    backend.cfg.sync_start_date = "2026-03-15"
+    # 首次: marker=0 → SENTSINCE 日期下限
+    backend._max_sent_imap_uid = MagicMock(return_value=0)
+    key, arg = backend._sent_search_criteria()
+    assert key == "SENTSINCE"
+    assert arg == "15-Mar-2026"
+    # 有存量 marker → UID 增量
+    backend._max_sent_imap_uid = MagicMock(return_value=4200)
+    key, arg = backend._sent_search_criteria()
+    assert key == "UID"
+    assert arg == "4201:*"
+
+
+def test_get_new_emails_scans_sent_folder_when_enabled(monkeypatch):
+    """启用发件箱同步时, get_new_emails 同时扫 INBOX + Sent, 各打对应 mailbox 标签."""
+    backend = _make_backend()
+    backend._sync_sent = True
+    backend.sent_folder = "Sent Items"
+    backend._max_sent_imap_uid = MagicMock(return_value=4200)  # 走 UID 增量
+    backend.sync_store.allocate_davmail_internal_id = MagicMock(
+        side_effect=[1_000_000_001, 1_000_000_002]
+    )
+
+    fake_imap = MagicMock()
+    fake_imap.select.return_value = ("OK", [b"OK"])
+    fake_imap.untagged_responses = {"UIDVALIDITY": [b"12345"]}
+    # 两个 folder 各 1 封: INBOX uid 100, Sent uid 4300
+    fake_imap.uid.side_effect = [
+        ("OK", [b"100"]),  # INBOX SEARCH
+        ("OK", [(  # INBOX FETCH
+            b"1 (UID 100 FLAGS () BODY[HEADER.FIELDS] {30}",
+            b"Message-ID: <in1@x>\r\nDate: 1 Jan 2026 +0000\r\n\r\n",
+        ), b")"]),
+        ("OK", [b"4300"]),  # Sent SEARCH
+        ("OK", [(  # Sent FETCH
+            b"1 (UID 4300 FLAGS (\\Seen) BODY[HEADER.FIELDS] {30}",
+            b"Message-ID: <out1@x>\r\nDate: 5 May 2026 +0000\r\n\r\n",
+        ), b")"]),
+    ]
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session(*args, **kwargs):
+        yield fake_imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+
+    out = backend.get_new_emails(since_row_id=99)
+    assert len(out) == 2
+    by_mailbox = {item["mailbox"]: item for item in out}
+    assert set(by_mailbox) == {"收件箱", "发件箱"}
+    assert by_mailbox["收件箱"]["imap_uid"] == 100
+    assert by_mailbox["发件箱"]["imap_uid"] == 4300
+    # 两个 folder 都被 SELECT
+    selected = [c.args[0] for c in fake_imap.select.call_args_list]
+    assert "INBOX" in selected and "Sent Items" in selected
+
+
+def test_get_new_emails_sent_disabled_skips_sent(monkeypatch):
+    """未启用发件箱同步 (_sync_sent=False) 时, 只扫 INBOX, 不 SELECT Sent."""
+    backend = _make_backend()
+    backend._sync_sent = False  # 关
+    backend.sync_store.allocate_davmail_internal_id = MagicMock(return_value=1_000_000_001)
+
+    fake_imap = MagicMock()
+    fake_imap.select.return_value = ("OK", [b"OK"])
+    fake_imap.untagged_responses = {"UIDVALIDITY": [b"12345"]}
+    fake_imap.uid.side_effect = [
+        ("OK", [b"100"]),
+        ("OK", [(
+            b"1 (UID 100 FLAGS () BODY[HEADER.FIELDS] {30}",
+            b"Message-ID: <in1@x>\r\nDate: 1 Jan 2026 +0000\r\n\r\n",
+        ), b")"]),
+    ]
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session(*args, **kwargs):
+        yield fake_imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+
+    out = backend.get_new_emails(since_row_id=99)
+    assert len(out) == 1
+    assert out[0]["mailbox"] == "收件箱"
+    selected = [c.args[0] for c in fake_imap.select.call_args_list]
+    assert selected == ["INBOX"]  # 只 SELECT 了 INBOX
+
+
+def test_get_new_emails_sent_failure_does_not_break_inbox(monkeypatch):
+    """发件箱同步抛错时, INBOX 结果不丢 (Sent 在独立 try 块)."""
+    backend = _make_backend()
+    backend._sync_sent = True
+    backend.sent_folder = "Sent Items"
+    # _sent_search_criteria 抛错模拟 Sent 路径故障
+    backend._sent_search_criteria = MagicMock(side_effect=RuntimeError("sent boom"))
+    backend.sync_store.allocate_davmail_internal_id = MagicMock(return_value=1_000_000_001)
+
+    fake_imap = MagicMock()
+    fake_imap.select.return_value = ("OK", [b"OK"])
+    fake_imap.untagged_responses = {"UIDVALIDITY": [b"12345"]}
+    fake_imap.uid.side_effect = [
+        ("OK", [b"100"]),  # INBOX SEARCH
+        ("OK", [(  # INBOX FETCH
+            b"1 (UID 100 FLAGS () BODY[HEADER.FIELDS] {30}",
+            b"Message-ID: <in1@x>\r\nDate: 1 Jan 2026 +0000\r\n\r\n",
+        ), b")"]),
+    ]
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session(*args, **kwargs):
+        yield fake_imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+
+    out = backend.get_new_emails(since_row_id=99)
+    assert len(out) == 1  # INBOX 不受 Sent 故障影响
+    assert out[0]["mailbox"] == "收件箱"
+
+
+def test_check_for_changes_detects_sent_advance(monkeypatch):
+    """INBOX 无变化但 Sent UIDNEXT 前进时, check_for_changes 仍返回 has_new=True."""
+    backend = _make_backend()
+    backend._sync_sent = True
+    backend.sent_folder = "Sent Items"
+    # INBOX 无变化 (uidnext == last_max_row_id)
+    backend.get_current_max_row_id = MagicMock(return_value=500)
+    # Sent uidnext=4310, 已导入 marker=4300 → +9 新发件
+    backend._folder_uidnext = MagicMock(return_value=4310)
+    backend._max_sent_imap_uid = MagicMock(return_value=4300)
+
+    has_new, marker, count = backend.check_for_changes(last_max_row_id=500)
+    assert has_new is True
+    assert marker == 500  # 返回的 marker 始终是 INBOX uidnext (持久化语义不变)
+    assert count == 9  # 4310 - (4300+1)
+
+
 # --------- helpers ---------
 
 def _make_backend(uidvalidity=12345):
@@ -455,6 +618,9 @@ def _make_backend(uidvalidity=12345):
     backend.imap_port = cfg.davmail_imap_port
     backend.smtp_port = cfg.davmail_smtp_port
     backend.drafts_folder = "Drafts"
+    # 发件箱同步: 默认关 (单 folder 测试不受影响); 需要时测试自行打开。
+    backend.sent_folder = None
+    backend._sync_sent = False
     backend.inbox_uidvalidity = uidvalidity
     backend.last_op_latency_ms = None
     backend.arm = backend

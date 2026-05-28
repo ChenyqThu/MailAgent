@@ -1,6 +1,5 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field, ConfigDict
-from typing import List
 
 class Config(BaseSettings):
     """配置类"""
@@ -72,9 +71,9 @@ class Config(BaseSettings):
 
     # 多邮箱同步配置
     sync_mailboxes: str = Field(
-        default="收件箱",
+        default="收件箱,发件箱",
         env="SYNC_MAILBOXES",
-        description="要同步的邮箱列表，逗号分隔。例如: 收件箱,已发送"
+        description="要同步的邮箱列表，逗号分隔。含'发件箱'时 davmail 会同步 Sent folder 进 email_metadata (mailbox='发件箱')"
     )
     mail_sent_name: str = Field(default="已发送", env="MAIL_SENT_NAME", description="发件箱名称（AppleScript用）")
 
