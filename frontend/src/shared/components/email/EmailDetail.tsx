@@ -15,6 +15,9 @@ import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
 
+import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
@@ -369,6 +372,30 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     [internalId, openCompose]
   )
 
+  // B1 — compose overlay 进/退场. backdrop:false (root 即铺满详情区的覆盖层,
+  // 非居中卡片, 无独立 backdrop). 进场 y:20→0 autoAlpha 0→1 (DUR.base), 退场
+  // DUR.fast. closeCompose() 把 store open=false → 触发退场后延迟卸载.
+  const { shouldRender: composeShouldRender, scopeRef: composeScopeRef } =
+    useExitAnimation<HTMLDivElement>(composeOpen, {
+      backdrop: false,
+      from: { autoAlpha: 0, y: 20 }
+    })
+
+  // B2 — 切邮件时正文内容区交叉淡入. internalId 变化时 from autoAlpha:0 (120ms),
+  // overwrite:'auto' 让快速 J/K 连切打断上一个 tween. 仅淡入正文滚动容器 (不含
+  // toolbar, 避免 toolbar 闪). keepPreviousData 防内容闪。reduced-motion 短路.
+  const bodyScopeRef = useRef<HTMLDivElement>(null)
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      if (reduceMotion) return
+      const el = bodyScopeRef.current
+      if (!el) return
+      gsap.from(el, { autoAlpha: 0, duration: DUR.fast, overwrite: 'auto' })
+    },
+    { dependencies: [internalId, reduceMotion], scope: bodyScopeRef }
+  )
+
   // Warm the reply compose plans after the detail settles, so the reply /
   // reply-all CTAs open instantly instead of waiting ~2s for the mailagent CLI
   // subprocess (the draftPlan dry-run forks a Python process; cost is the
@@ -615,8 +642,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           bg-ink-3 实心底: ComposePanel 自身是 glass-3 (ink-3/0.55) 半透明, 作为
           接管整个详情列的工作面会透出底下邮件正文导致看不清内容; overlay 语义就是
           "遮盖详情列", 加实心 ink-3 底 (= 详情列标称色) 既挡住正文又保留面板玻璃层次. */}
-      {composeOpen && (
-        <div className="absolute inset-0 z-20 flex flex-col bg-ink-3">
+      {composeShouldRender && (
+        <div ref={composeScopeRef} className="absolute inset-0 z-20 flex flex-col bg-ink-3">
           <ComposePanel />
         </div>
       )}
@@ -646,7 +673,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onNext={onNext}
       />
 
-      <div className="flex-1 overflow-y-auto scrollbar-thin">
+      <div ref={bodyScopeRef} className="flex-1 overflow-y-auto scrollbar-thin">
         {/* Sprint 14 round 14 user feedback: "邮件标题、元数据、AI Field、
             正文内容(含历史线程内容)应该在一个页面, 用一个滚动条. 先实现
             这个, 再考虑向上滚动冻结标题栏试试".

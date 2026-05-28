@@ -39,6 +39,7 @@ import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { cleanSnippet } from '@shared/lib/mail_parse'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
+import { gsap, DUR } from '@shared/lib/gsap'
 import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 
 import { EmailRow } from './EmailRow'
@@ -810,6 +811,10 @@ export function EmailList(): React.ReactElement {
   // 滚动锚定用 (handler / effect 闭包 rows+rowHeights, 故定义在它们算好之后, 见下方)。
   const listRef = useRef<ListImperativeAPI | null>(null)
   const scrollAnchorRef = useRef<{ id: number; viewportOffset: number } | null>(null)
+  // B3 — 手风琴滚动锚定平滑化期间临时屏蔽分页. gsap scrollTo tween 会逐帧派发
+  // scroll 事件联动 handleRowsRendered 的分页判断, 若不屏蔽, 平滑滚动经过靠底部
+  // 的行会误触发预取. tween 开始置 true, onComplete 置 false。
+  const isAnchoringRef = useRef(false)
 
   // Sprint 14 round 11 — cross-mailbox thread completion.  listEnriched
   // is mailbox-scoped, so a thread that spans inbox + outbox shows up
@@ -972,9 +977,30 @@ export function EmailList(): React.ReactElement {
     const newTop = rowTopOfId(rows, rowHeights, anchor.id)
     if (newTop === null) return
     const target = Math.max(0, newTop - anchor.viewportOffset)
-    // react-window 滚动容器的命令式回滚 (imperative scroll); 规则误判 listRef 不可变。
-    // eslint-disable-next-line react-hooks/immutability
-    if (Math.abs(target - el.scrollTop) > 0.5) el.scrollTop = target
+    if (Math.abs(target - el.scrollTop) <= 0.5) return
+    // reduced-motion: 退回硬跳 (与原行为一致). 命令式 effect 内读 matchMedia,
+    // 不用 useReducedMotion hook (这里不在组件顶层语义里, 且 effect 一次性触发)。
+    const reduce =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    if (reduce) {
+      // react-window 滚动容器的命令式回滚 (imperative scroll); 规则误判 listRef 不可变。
+      // eslint-disable-next-line react-hooks/immutability
+      el.scrollTop = target
+      return
+    }
+    // 平滑锚定: ScrollToPlugin (已在 @shared/lib/gsap 注册) + standard 曲线 + DUR.base。
+    // tween 期间屏蔽分页 (见 handleRowsRendered)。
+    isAnchoringRef.current = true
+    gsap.to(el, {
+      scrollTo: { y: target },
+      duration: DUR.base,
+      ease: 'standard',
+      overwrite: 'auto',
+      onComplete: () => {
+        isAnchoringRef.current = false
+      }
+    })
   }, [rows, rowHeights])
 
   const priActive = !allPrioritiesSelected()
@@ -987,6 +1013,8 @@ export function EmailList(): React.ReactElement {
       // limit 升级期间旧 rows 保留挂载, 新结果到达后 React Query 原地替换, 用户
       // 不会看到 spinner / 列表抖动 / 回顶部.
       if (!showLoader) return
+      // B3 — 平滑滚动锚定 tween 期间逐帧派发 scroll 事件, 不让经过靠底行误触发分页。
+      if (isAnchoringRef.current) return
       const triggerAt = Math.min(Math.floor(rows.length * 0.7), rows.length - 8)
       if (range.stopIndex >= triggerAt) {
         setPageCount((c) => Math.min(c + 1, MAX_PAGES))
