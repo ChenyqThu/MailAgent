@@ -676,8 +676,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             'border-b border-ink-border-soft'
           )}
         >
-          <div className="px-8 pt-6 pb-3">
-            {/* Subject block — EN lang pip + tracking-tight headline */}
+          <div className="px-8 pt-3 pb-3">
+            {/* Subject block — EN lang pip + tracking-tight headline.
+                pt 与 pb 取齐 (pt-3=pb-3): 之前 pt-6 上留白比下大一截, 视觉不平衡。 */}
             <div className="flex items-start gap-3">
               {langIsEn && (
                 <span

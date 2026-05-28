@@ -674,7 +674,9 @@ export function EmailToolbar({
       // relative z-[15]: position:relative + 正 z-index 自成 stacking context
       // (无需 backdrop-filter), 让 reply 下拉 (top-full z-50) 和 HoverTip 向下溢出
       // 时画在 sticky 标题 (z-10) 之上、compose overlay (z-20) 之下.
-      className="relative z-[15] h-11 border-b border-ink-border-soft flex items-center px-3 gap-1 shrink-0"
+      // pl-8 (= 正文 px-8 的 32px) 让首个按钮 (回复 CTA) 左边缘与下方标题/正文左起点
+      // 对齐; 右侧 pr-3 不变 (右端 nav/AI 按钮维持原边距)。
+      className="relative z-[15] h-11 border-b border-ink-border-soft flex items-center pl-8 pr-3 gap-1 shrink-0"
     >
       {/* Primary CTA — DESIGN.md §2.2 "one CTA per surface". Sprint 13:
           the label flips on at medium density so the headline action stays
