@@ -24,6 +24,8 @@ import { useShortcut } from '@shared/hooks/useShortcut'
 import { useQuery } from '@tanstack/react-query'
 
 import { cn } from '@shared/lib/cn'
+import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -465,6 +467,38 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
 
   const backendName = backendShortLabel(backend, agentName)
 
+  // Lane C2 — ChatSidebar (140px) 展开/折叠挤压。同 C1 手法：始终 mount（首次
+  // 打开后不卸载）+ overflow:hidden wrapper width 0↔140 tween，sidebarOpen 切换
+  // 触发。reduced-motion 直接切。首帧 sidebarOpen=false 时初始 width:0 防闪现。
+  const SIDEBAR_WIDTH = 140
+  const reduceMotion = useReducedMotion()
+  const sidebarWrapRef = useRef<HTMLDivElement>(null)
+  const sidebarMountedOnceRef = useRef(false)
+  if (sidebarOpen) sidebarMountedOnceRef.current = true
+  const mountSidebar = sidebarMountedOnceRef.current
+  useGSAP(
+    () => {
+      const wrap = sidebarWrapRef.current
+      if (!wrap) return
+      const target = sidebarOpen ? SIDEBAR_WIDTH : 0
+      if (reduceMotion) {
+        gsap.set(wrap, { width: target })
+        return
+      }
+      gsap.to(wrap, {
+        width: target,
+        duration: sidebarOpen ? DUR.base : DUR.fast,
+        onStart: () => {
+          wrap.style.willChange = 'width'
+        },
+        onComplete: () => {
+          wrap.style.willChange = ''
+        }
+      })
+    },
+    { dependencies: [sidebarOpen, reduceMotion] }
+  )
+
   return (
     <aside
       aria-label="ai-chat-panel"
@@ -587,17 +621,22 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           overflow-auto regions correctly scrollable inside the parent
           flex-col aside. */}
       <div className="flex-1 flex min-h-0">
-        {sidebarOpen && (
-          <ChatSidebar
-            sessions={chat.sessions}
-            activeSessionId={chat.activeSessionId}
-            previews={sessionPreviews}
-            onSelectSession={(sid) => void chat.selectSession(sid)}
-            onNewSession={() => chat.newSession()}
-            onClose={() => setSidebarOpen(false)}
-            onDeleteSession={handleDeleteSession}
-          />
-        )}
+        {/* Lane C2 — 挤压 wrapper。overflow-hidden 裁掉折叠时溢出的 140px 侧栏；
+            初始 inline width:0 防首帧闪现（GSAP 接管后覆写）。ChatSidebar 自身仍
+            是 w-[140px] shrink-0，wrapper 收到 0 时把它裁没。 */}
+        <div ref={sidebarWrapRef} className="overflow-hidden shrink-0" style={{ width: 0 }}>
+          {mountSidebar && (
+            <ChatSidebar
+              sessions={chat.sessions}
+              activeSessionId={chat.activeSessionId}
+              previews={sessionPreviews}
+              onSelectSession={(sid) => void chat.selectSession(sid)}
+              onNewSession={() => chat.newSession()}
+              onClose={() => setSidebarOpen(false)}
+              onDeleteSession={handleDeleteSession}
+            />
+          )}
+        </div>
         <div className="flex-1 flex flex-col min-h-0">
           <BackendSelector value={backend} onChange={selectBackend} agentName={agentName} />
           <ContextChips
