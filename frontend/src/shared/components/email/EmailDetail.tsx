@@ -667,11 +667,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         <div
           className={cn(
             'sticky top-0 z-10',
-            // sticky 标题区: 要能遮住从其下滚过的正文 (sticky 在滚动容器内). 用
-            // ink-3/0.70 (设计系统遮罩档上限, 见 mockup aif-head) + 强 blur +
-            // saturate: 比正文 glass-3 (0.55) 稍厚以遮罩, 又贴近正文档位, 不像原来
-            // 0.78 那样发灰/白突兀, 与 toolbar / 正文连成一块连续玻璃面.
-            'bg-ink-3/[0.7] backdrop-blur-2xl backdrop-saturate-150',
+            // sticky 标题: 不再叠一层不透明 ink-3。之前 bg-ink-3/0.78 是叠在 <main>
+            // 的 glass-3 (ink-3/0.55) 之上, 合成约 0.86 白 → 浅色下成了突兀纯白块,
+            // 与 toolbar / 正文衔接不上。改为透明, 与它们共用 <main> 同一块 glass-3
+            // 面; 只保留 backdrop-blur + saturate: 滚动时把从其下穿过的正文磨成毛玻璃
+            // (frost) 遮罩, 而非靠不透明度遮罩。
+            'backdrop-blur-2xl backdrop-saturate-150',
             'border-b border-ink-border-soft'
           )}
         >
