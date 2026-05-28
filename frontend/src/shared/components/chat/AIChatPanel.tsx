@@ -9,7 +9,7 @@
 // Sprint 18 follow-up: dropped the Thread / Sync placeholder tabs — they
 // never carried real surfaces and the noise distracted from the AI flow.
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
@@ -27,13 +27,6 @@ import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { toastError, toastSuccess } from '@shared/state/toast'
-import {
-  STORAGE_AGENT_ID,
-  STORAGE_AGENT_NAME,
-  STORAGE_CHANGE_EVENT,
-  dispatchAgentStorageEvent
-} from '@shared/state/notion-agent-storage'
-
 import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { ChatSidebar } from './ChatSidebar'
 import { Composer } from './Composer'
@@ -42,29 +35,27 @@ import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
 
-function readStored(key: string): string | null {
+// Chat backend kind is a lightweight UI preference (which backend the
+// composer talks to), persisted to localStorage so a remount / app restart
+// keeps the user's last choice. Defaults to notion-agent — the bound Custom
+// Agent in account.json is the primary surface and is usually already
+// authed; custom-api needs an extra API key. The actual agent binding +
+// auth live in the CLI's account.json (read via notionAgent.getConfig).
+const BACKEND_KIND_PREF = 'mailagent.chat.backendKind'
+function readBackendKindPref(): ChatBackendKind {
   try {
-    return localStorage.getItem(key)
+    return localStorage.getItem(BACKEND_KIND_PREF) === 'custom-api' ? 'custom-api' : 'notion-agent'
   } catch {
-    return null
+    return 'notion-agent'
   }
 }
-
-function subscribeToAgentStorage(callback: () => void): () => void {
-  if (typeof window === 'undefined') return () => {}
-  window.addEventListener('storage', callback)
-  window.addEventListener(STORAGE_CHANGE_EVENT, callback)
-  return () => {
-    window.removeEventListener('storage', callback)
-    window.removeEventListener(STORAGE_CHANGE_EVENT, callback)
+function writeBackendKindPref(kind: ChatBackendKind): void {
+  try {
+    localStorage.setItem(BACKEND_KIND_PREF, kind)
+  } catch {
+    /* localStorage 在 sandbox / privacy 模式可能拒写; 偏好丢失无伤大雅 */
   }
 }
-
-// Module-level snapshot getters — passing a fresh closure each render
-// would defeat useSyncExternalStore's identity-based bail-out.
-const getAgentIdSnapshot = (): string | null => readStored(STORAGE_AGENT_ID)
-const getAgentNameSnapshot = (): string | null => readStored(STORAGE_AGENT_NAME)
-const getServerSnapshot = (): null => null
 
 /** Short, ASCII-safe label for the active backend — used by the Composer
  *  footer chip. For Custom API we trim the longest model id (`claude-sonnet-4-6`
@@ -91,20 +82,17 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const mailApi = useMailApi()
   const activeInternalId = useActiveEmail((s) => s.activeInternalId)
 
-  // Sprint 6 SettingsPage will write these via a proper form; Sprint 4 ships
-  // a localStorage seam so power users can paste their `agent_page_id`
-  // straight from `notion-agent agents list --json` to enable the
-  // Notion Agent backend without an in-app UI yet.
-  const agentPageId = useSyncExternalStore(
-    subscribeToAgentStorage,
-    getAgentIdSnapshot,
-    getServerSnapshot
-  )
-  const agentName = useSyncExternalStore(
-    subscribeToAgentStorage,
-    getAgentNameSnapshot,
-    getServerSnapshot
-  )
+  // Notion Agent binding + auth live in the CLI's account.json; read it so
+  // the panel can show the bound agent name + gate "configured". Settings
+  // writes it (notionAgent.setAgent) and invalidates this query, so a binding
+  // change reflects here without a remount.
+  const notionConfigQ = useQuery({
+    queryKey: ['notionAgent', 'config'],
+    queryFn: () => mailApi.notionAgent.getConfig(),
+    staleTime: 30_000
+  })
+  const agentName = notionConfigQ.data?.agentName ?? null
+  const notionConfigured = notionConfigQ.data?.configured === true
 
   // Sprint 14 PR A — session history sidebar. Open/close state lives in
   // the panel store so a remount (email switch) doesn't drop the user's
@@ -112,11 +100,19 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const sidebarOpen = useAIChatPanel((s) => s.sidebarOpen)
   const toggleSidebar = useAIChatPanel((s) => s.toggleSidebar)
   const setSidebarOpen = useAIChatPanel((s) => s.setSidebarOpen)
-  const [backend, setBackend] = useState<BackendChoice>({
-    kind: agentPageId ? 'notion-agent' : 'custom-api',
-    model: agentPageId ? null : 'claude-sonnet-4-6',
-    agentPageId: agentPageId ?? null
+  const [backend, setBackend] = useState<BackendChoice>(() => {
+    const kind = readBackendKindPref()
+    return kind === 'custom-api'
+      ? { kind: 'custom-api', model: 'claude-sonnet-4-6', agentPageId: null }
+      : { kind: 'notion-agent', model: null, agentPageId: null }
   })
+  // Persist + apply a backend switch (composer toggle / ⌥⇧B / model pick).
+  // agentPageId is always null now — the CLI reads the bound agent from its
+  // own account.json, so the renderer never passes one.
+  const selectBackend = useCallback((next: BackendChoice): void => {
+    writeBackendKindPref(next.kind)
+    setBackend(next)
+  }, [])
   const [draft, setDraft] = useState('')
   // Sprint 14 PR D — @-mention chip stack. Each chip carries a SearchHit
   // so we can pull its subject + sender + bm25 snippet inline when
@@ -198,20 +194,20 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     select: (rows: EmailMeta[]) => rows.length
   })
 
-  // `notion-agent` 需要 localStorage 的 agentPageId seam; `custom-api` 实际
-  // 走 `getLlmApiKey()` (custom_api.ts:147) — 也就是 keychain `llmApiKey` slot
-  // 或 LLM_API_KEY env, 而不是同名的 `customApiKey` slot. 之前这里校验
-  // customApiKey 是历史误绑, 导致用户在 Settings → AI 配了 LLM_API_KEY
-  // (backend 能跑) 但 onboarding 仍报"未配置".
+  // custom-api 实际走 `getLlmApiKey()` (custom_api.ts) — keychain `llmApiKey`
+  // slot 或 LLM_API_KEY env (不是同名的 `customApiKey` slot, 那是历史误绑).
+  // notion-agent 的就绪 = account.json 可读 + token_v2 在位
+  // (notionConfig.configured); agent 绑定由 CLI 自己从 account.json 读, 前端
+  // 不再需要传 page id.
   const secretsQ = useQuery({
     queryKey: ['settings', 'secrets-status'],
     queryFn: () => mailApi.settings.secretsStatus(),
     staleTime: 30_000
   })
   const backendConfigured = useMemo(() => {
-    if (backend.kind === 'notion-agent') return (agentPageId ?? null) !== null
+    if (backend.kind === 'notion-agent') return notionConfigured
     return secretsQ.data?.llmApiKey === true
-  }, [backend.kind, agentPageId, secretsQ.data?.llmApiKey])
+  }, [backend.kind, notionConfigured, secretsQ.data?.llmApiKey])
 
   const aiFields: AIFields | null = aiQ.data ?? null
   const aiFieldsCount = aiFields ? countNonNullAiFields(aiFields) : 0
@@ -439,10 +435,10 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // the global nav-shell collapse claimed that keystroke per DESIGN.md
   // §2.11. Backend cycling is rare enough that the extra modifier is fine.
   useShortcut('alt+shift+b', () =>
-    setBackend((cur) =>
-      cur.kind === 'notion-agent'
-        ? { kind: 'custom-api', model: cur.model ?? 'claude-sonnet-4-6', agentPageId: null }
-        : { kind: 'notion-agent', model: null, agentPageId: agentPageId ?? cur.agentPageId }
+    selectBackend(
+      backend.kind === 'notion-agent'
+        ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
+        : { kind: 'notion-agent', model: null, agentPageId: null }
     )
   )
 
@@ -498,9 +494,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         </div>
         <div
           className="ml-auto flex items-center gap-1"
-          style={
-            fullScreen ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined
-          }
+          style={fullScreen ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined}
         >
           {/* + New chat — real wiring: chat.newSession() (Sprint 13). Resets
               activeSessionId so next send creates a fresh session. */}
@@ -605,7 +599,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           />
         )}
         <div className="flex-1 flex flex-col min-h-0">
-          <BackendSelector value={backend} onChange={setBackend} agentName={agentName} />
+          <BackendSelector value={backend} onChange={selectBackend} agentName={agentName} />
           <ContextChips
             hasEmailBody={activeInternalId !== null}
             aiFieldsCount={aiFieldsCount}
@@ -692,7 +686,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                     : []
                 }
                 onModelChange={(model) =>
-                  setBackend({ kind: 'custom-api', model, agentPageId: null })
+                  selectBackend({ kind: 'custom-api', model, agentPageId: null })
                 }
                 modelPickerDisabled={backend.kind === 'notion-agent'}
               />
@@ -731,11 +725,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
 
 // ─── Onboarding placeholder ──────────────────────────────────────────────
 //
-// Sprint 18 follow-up — when the user picks a backend kind whose
-// credentials haven't been set up (Notion Agent: agent page_id missing,
-// Custom API: keychain slot empty), surface a short "not configured"
-// card with a one-click jump into Settings → AI. Avoids the wall-of-
-// text Composer interaction with a backend that can't speak yet.
+// When the user picks a backend kind whose credentials aren't set up
+// (Notion Agent: account.json missing / token_v2 absent — fix via
+// `notion-agent init` + Settings → AI; Custom API: keychain slot empty),
+// surface a short "not configured" card with a one-click jump into
+// Settings → AI. Avoids the wall-of-text Composer interaction with a
+// backend that can't speak yet.
 
 function BackendOnboarding({
   kind,
@@ -748,27 +743,11 @@ function BackendOnboarding({
   const backendLabel =
     kind === 'notion-agent' ? t('chat.backend.notionAgent') : t('chat.backend.customApi')
 
-  // Notion Agent 没有 Settings UI (Sprint 6 计划但没做), agent_page_id 走
-  // localStorage seam. 之前要从 dev console 手填, 现在 inline 一个表单, 用户
-  // 直接粘 page id 进去保存 → dispatch event → useSyncExternalStore 自动重读.
-  const isNotionAgent = kind === 'notion-agent'
-  const [pageIdDraft, setPageIdDraft] = useState('')
-  const [nameDraft, setNameDraft] = useState('')
-  const saveAgentBinding = (): void => {
-    const pageId = pageIdDraft.trim()
-    if (!pageId) return
-    try {
-      localStorage.setItem(STORAGE_AGENT_ID, pageId)
-      const name = nameDraft.trim()
-      if (name) localStorage.setItem(STORAGE_AGENT_NAME, name)
-      else localStorage.removeItem(STORAGE_AGENT_NAME)
-      dispatchAgentStorageEvent()
-    } catch {
-      // localStorage 在 sandbox / privacy 模式下可能拒写; 静默忽略, 用户会看到
-      // onboarding 没消失自然知道失败.
-    }
-  }
-
+  // Both backends now route to Settings → AI. notion-agent binding + auth
+  // live in the CLI account.json (Settings shows it + has a doctor check;
+  // token auth is `notion-agent init` in a terminal). custom-api needs its
+  // keychain key. No more in-panel agent_page_id paste — the CLI reads the
+  // bound agent itself.
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-6 text-center gap-3">
       <div className="w-10 h-10 rounded-lg grid place-items-center bg-coral/15 border border-coral/30">
@@ -780,60 +759,18 @@ function BackendOnboarding({
       <div className="text-meta text-ink-fg-2 max-w-[260px]">
         {t('chat.onboarding.hint', { backend: backendLabel })}
       </div>
-
-      {isNotionAgent ? (
-        <div className="mt-1 w-full max-w-[300px] flex flex-col gap-1.5">
-          <input
-            type="text"
-            value={pageIdDraft}
-            onChange={(e) => setPageIdDraft(e.target.value)}
-            placeholder="agent page id (32-char hex)"
-            className={cn(
-              'w-full px-2.5 py-1.5 rounded-md text-meta font-mono',
-              'bg-ink-2 border border-ink-border focus:border-coral/60 focus:outline-none',
-              'text-ink-fg placeholder:text-ink-fg-3'
-            )}
-            spellCheck={false}
-          />
-          <input
-            type="text"
-            value={nameDraft}
-            onChange={(e) => setNameDraft(e.target.value)}
-            placeholder="agent name (可选, 用于显示)"
-            className={cn(
-              'w-full px-2.5 py-1.5 rounded-md text-meta',
-              'bg-ink-2 border border-ink-border focus:border-coral/60 focus:outline-none',
-              'text-ink-fg placeholder:text-ink-fg-3'
-            )}
-          />
-          <button
-            type="button"
-            onClick={saveAgentBinding}
-            disabled={pageIdDraft.trim().length === 0}
-            className={cn(
-              'mt-0.5 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md',
-              'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
-              'disabled:opacity-50 disabled:hover:bg-coral/100',
-              'transition-colors duration-fast'
-            )}
-          >
-            保存绑定
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className={cn(
-            'mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
-            'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
-            'transition-colors duration-fast'
-          )}
-        >
-          <Settings size={12} strokeWidth={2} />
-          {t('chat.onboarding.openSettings')}
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        className={cn(
+          'mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
+          'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
+          'transition-colors duration-fast'
+        )}
+      >
+        <Settings size={12} strokeWidth={2} />
+        {t('chat.onboarding.openSettings')}
+      </button>
     </div>
   )
 }

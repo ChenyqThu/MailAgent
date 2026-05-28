@@ -26,6 +26,7 @@ import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
 import { PromptEditorDialog } from '../parts/PromptEditorDialog'
+import { NotionAgentSection } from './NotionAgentSection'
 
 export function AiTab(): React.ReactElement {
   const { t } = useTranslation()
@@ -142,10 +143,9 @@ export function AiTab(): React.ReactElement {
         </Row>
       </Section>
 
-      <Section
-        title={t('settings.ai.prompts.title')}
-        helper={t('settings.ai.prompts.helper')}
-      >
+      <NotionAgentSection />
+
+      <Section title={t('settings.ai.prompts.title')} helper={t('settings.ai.prompts.helper')}>
         <EnvField
           envKey="LLM_INBOX_PROMPT_PATH"
           control="text"
@@ -206,10 +206,7 @@ export function AiTab(): React.ReactElement {
         </Row>
       </Section>
 
-      <Section
-        title={t('settings.ai.translate.title')}
-        helper={t('settings.ai.translate.helper')}
-      >
+      <Section title={t('settings.ai.translate.title')} helper={t('settings.ai.translate.helper')}>
         <EnvField
           envKey="LLM_TRANSLATE_BASE_URL"
           control="text"

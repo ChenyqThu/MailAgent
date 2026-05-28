@@ -1244,6 +1244,35 @@
         "running": "测试中…",
         "ok": "LLM 网关健康",
         "fail": "LLM 网关不可达"
+      },
+      "notionAgent": {
+        "title": "Notion Agent (notion-agent-cli)",
+        "helper": "读取本机 notion-agent-cli 的账号配置。Notion Agent 后端以下方绑定的 Custom Agent 人格回复;认证(token_v2)由 CLI 管理。",
+        "cliMissing": "未找到 notion-agent 命令行工具",
+        "needsAuth": "notion-agent 尚未认证(缺少 token_v2)",
+        "account": "账号",
+        "workspace": "工作区 {{space}}",
+        "agent": "绑定 Agent",
+        "agentHelper": "主 Agent（个人 persona）+ 工作区 Custom Agent，切换即写入 account.json",
+        "agentPlaceholder": "选择 Agent",
+        "primaryTag": "主 Agent",
+        "instructionPage": "Instruction Page",
+        "instructionPageHelper": "当前绑定 agent 的指令页 ID（切换后自动更新）",
+        "model": "默认模型",
+        "modelHelper": "chat 未指定模型时使用",
+        "modelPlaceholder": "选择模型",
+        "doctor": {
+          "label": "连接检查",
+          "helper": "运行 notion-agent doctor 验证账号与 token",
+          "button": "检查",
+          "running": "检查中",
+          "fail": "doctor 检查失败"
+        },
+        "toast": {
+          "agentSet": "已切换绑定 Agent",
+          "modelSet": "已设默认模型",
+          "fail": "操作失败"
+        }
       }
     },
     "notifications": {

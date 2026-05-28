@@ -22,6 +22,7 @@ import { registerAdminHandlers } from './handlers/admin'
 import { registerLlmStatsHandlers } from './handlers/llm_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
 import { registerSettingsHandlers } from './handlers/settings'
+import { registerNotionAgentHandlers } from './handlers/notion_agent'
 import { registerPromptHandlers } from './handlers/prompts'
 // Sprint 8 §2.2 — electron-updater bridge (auto-updater state + IPC).
 import { registerUpdaterHandlers } from './handlers/updater'
@@ -43,11 +44,7 @@ import { registerServicesHandlers } from './handlers/services'
 import { bootstrapDotenv } from './lib/dotenv-bootstrap'
 // Sprint 19 island F6 — mailagent:// deeplink (灵动岛 open_mail/open_notion →
 // 打开前端对应邮件/视图). 解析 + cold-start buffer 在 ./deeplink.
-import {
-  dispatchDeeplink,
-  extractDeeplinkFromArgv,
-  setDeeplinkSink
-} from './deeplink'
+import { dispatchDeeplink, extractDeeplinkFromArgv, setDeeplinkSink } from './deeplink'
 
 bootstrapDotenv()
 
@@ -269,7 +266,7 @@ app.whenReady().then(() => {
   registerTranslateHandlers()
   // Sprint 4 §2.1 — AI chat IPC stream bridge + the two production
   // backends (Custom API via Anthropic Messages SSE; Notion Agent via
-  // `notion-agent chat --json` subprocess).
+  // `notion-agent chat --stream` subprocess, agent bound in account.json).
   registerChatBackend(new CustomApiBackend())
   registerChatBackend(new NotionAgentBackend())
   // Sprint 19 PR-1d.1 — populate the agent harness tool registry once at
@@ -295,6 +292,9 @@ app.whenReady().then(() => {
   registerLlmStatsHandlers()
   registerCalendarHandlers()
   registerSettingsHandlers()
+  // Notion Agent CLI config bridge — Settings page reads/edits the bound
+  // Custom Agent + default model in ~/.notionagents/notion_account.json.
+  registerNotionAgentHandlers()
   registerPromptHandlers()
   // Sprint 8 §2.2 — electron-updater bridge.
   //

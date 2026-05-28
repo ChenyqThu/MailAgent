@@ -39,6 +39,10 @@ import type {
   ChatStartResult,
   ChatStreamEnvelope,
   ChatToolCall,
+  NotionAgentApi,
+  NotionAgentConfig,
+  NotionAgentDoctorCheck,
+  NotionAgentListItem,
   CleanupDeadLetterOpts,
   ComposeDraftOpts,
   CreateDraftOpts,
@@ -361,16 +365,10 @@ class ElectronCalendarApi implements CalendarApi {
 
   // Phase 3 §3.1 — Calendar SSoT
   async eventsList(opts: EventsListOpts = {}): Promise<CalendarEventOccurrence[]> {
-    return (await invoker()(
-      'calendar:eventsList',
-      opts
-    )) as CalendarEventOccurrence[]
+    return (await invoker()('calendar:eventsList', opts)) as CalendarEventOccurrence[]
   }
   async eventGet(opts: EventGetOpts): Promise<CalendarEventDetail | null> {
-    return (await invoker()(
-      'calendar:eventGet',
-      opts
-    )) as CalendarEventDetail | null
+    return (await invoker()('calendar:eventGet', opts)) as CalendarEventDetail | null
   }
   async syncStatus(): Promise<CalendarSyncStateItem[]> {
     return (await invoker()('calendar:syncStatus')) as CalendarSyncStateItem[]
@@ -474,10 +472,7 @@ type TranslateEnvelope =
   | { ok: false; code: string; message: string }
 
 class ElectronAiApi implements AiApi {
-  async translateBatch(
-    internalId: number,
-    targetLang?: TargetLang
-  ): Promise<TranslateBatchResult> {
+  async translateBatch(internalId: number, targetLang?: TargetLang): Promise<TranslateBatchResult> {
     const env = (await invoker()('translate:batch', {
       internalId,
       targetLang
@@ -487,15 +482,8 @@ class ElectronAiApi implements AiApi {
     err.code = env.code
     throw err
   }
-  async getCached(
-    internalId: number,
-    targetLang?: TargetLang
-  ): Promise<TranslationCache | null> {
-    return (await invoker()(
-      'translation:get',
-      internalId,
-      targetLang
-    )) as TranslationCache | null
+  async getCached(internalId: number, targetLang?: TargetLang): Promise<TranslationCache | null> {
+    return (await invoker()('translation:get', internalId, targetLang)) as TranslationCache | null
   }
   async deleteCached(internalId: number, targetLang?: TargetLang): Promise<boolean> {
     return (await invoker()('translation:delete', internalId, targetLang)) as boolean
@@ -565,9 +553,7 @@ class ElectronChatApi implements ChatApi {
     // the UNIQUE so this always creates a brand-new row instead of
     // reusing the latest. Same envelope shape as `start` for code/message
     // error surfacing through the IPC boundary.
-    type Env =
-      | { ok: true; data: ChatSession }
-      | { ok: false; code: string; message: string }
+    type Env = { ok: true; data: ChatSession } | { ok: false; code: string; message: string }
     const env = (await invoker()('chat:newSession', input)) as Env
     if (env.ok) return env.data
     const err = new Error(env.message) as Error & { code?: string }
@@ -734,6 +720,41 @@ class ElectronPromptsApi implements PromptsApi {
   }
 }
 
+class ElectronNotionAgentApi implements NotionAgentApi {
+  async getConfig(): Promise<NotionAgentConfig> {
+    return (await invoker()('notionAgent:getConfig')) as NotionAgentConfig
+  }
+  async listModels(): Promise<string[]> {
+    return (await invoker()('notionAgent:listModels')) as string[]
+  }
+  async doctor(): Promise<NotionAgentDoctorCheck[]> {
+    const env = (await invoker()('notionAgent:doctor')) as WriteEnvelope<NotionAgentDoctorCheck[]>
+    return unwrap(env)
+  }
+  async listAgents(): Promise<NotionAgentListItem[]> {
+    const env = (await invoker()('notionAgent:listAgents')) as WriteEnvelope<NotionAgentListItem[]>
+    return unwrap(env)
+  }
+  async setAgent(
+    pageId: string,
+    name: string,
+    accessory?: string | null
+  ): Promise<NotionAgentConfig> {
+    const env = (await invoker()('notionAgent:setAgent', {
+      pageId,
+      name,
+      accessory
+    })) as WriteEnvelope<NotionAgentConfig>
+    return unwrap(env)
+  }
+  async setModel(alias: string): Promise<NotionAgentConfig> {
+    const env = (await invoker()('notionAgent:setModel', {
+      alias
+    })) as WriteEnvelope<NotionAgentConfig>
+    return unwrap(env)
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   folder: FolderApi = new ElectronFolderApi()
@@ -751,4 +772,5 @@ export class ElectronApi implements MailApi {
   env: EnvApi = new ElectronEnvApi()
   services: ServicesApi = new ElectronServicesApi()
   prompts: PromptsApi = new ElectronPromptsApi()
+  notionAgent: NotionAgentApi = new ElectronNotionAgentApi()
 }

@@ -224,6 +224,18 @@ export class HttpApi implements MailApi {
     write: () => notImplemented('prompts.write')
   }
 
+  // Notion Agent CLI lives on the Mac host (~/.notionagents + the local
+  // `notion-agent` binary). A remote browser can't read or spawn it, so the
+  // whole namespace is unsupported in the web build.
+  notionAgent = {
+    getConfig: () => notImplemented('notionAgent.getConfig'),
+    listModels: () => notImplemented('notionAgent.listModels'),
+    doctor: () => notImplemented('notionAgent.doctor'),
+    listAgents: () => notImplemented('notionAgent.listAgents'),
+    setAgent: () => notImplemented('notionAgent.setAgent'),
+    setModel: () => notImplemented('notionAgent.setModel')
+  }
+
   // Sprint 9 §2.3 — ping-island bridge lives on the Mac host. From a remote
   // browser the V2 FastAPI could surface a read-only "island connected?"
   // status, but emitting envelopes from the web tab would race the local

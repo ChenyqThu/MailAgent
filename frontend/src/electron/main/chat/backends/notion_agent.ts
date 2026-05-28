@@ -1,33 +1,48 @@
-// Sprint 4 Task #12 — Notion Agent chat backend.
+// Notion Agent chat backend.
 //
-// Shells out to `notion-agent chat <prompt> --json --agent-page-id <id>`
-// (https://github.com/chenyqthu/notion-agent-cli). Token-by-token streaming
-// would use `--ndjson` instead, but the ndjson event schema isn't yet
-// frozen by the CLI — Sprint 4 ships the synchronous JSON form (one full
-// reply at end) and surfaces it as a single chunk event so the UI still
-// gets to render the panel + DraftPreviewCard. Sprint 5 polish will
-// switch to `--ndjson` once the CLI lands its 0.2 release.
+// Shells out to `notion-agent chat --stream` (https://github.com/chenyqthu/
+// notion-agent-cli, 0.1.9). The bound Custom Agent (Jarvis etc.) is read by
+// the CLI from its own account file (~/.notionagents/notion_account.json,
+// written once via `notion-agent init --agent-page-id`) — we do NOT pass an
+// agent id per call. (An earlier build passed `--json --agent-page-id <id>`,
+// but `--agent-page-id` is an `init` flag, not a `chat` flag; argparse
+// rejected it with exit 2 on every call, so the backend never worked.)
 //
-// Subprocess plumbing follows the same pattern as Sprint 3's
-// cli_runner.ts: resolve the binary once (avoiding `which` on every
-// call), wire the orchestrator's AbortSignal into execa so user-cancel
-// kills the child, time-bound the whole call so a wedged Notion API
-// doesn't hold the slot forever.
+// Streaming: `--stream` prints the assistant text delta-by-delta to stdout
+// (CLI flushes each chunk), so we read child.stdout incrementally and yield
+// one `chunk` event per delta — same UX as the custom-api backend. A
+// StringDecoder bridges multi-byte UTF-8 sequences that straddle chunk
+// boundaries (otherwise streamed CJK text corrupts). The prompt rides in on
+// stdin rather than argv so a long email body can't blow ARG_MAX / need
+// shell escaping.
 //
-// `notion-agent` exit codes are mapped to E_* event codes so the
-// renderer can branch on `E_NOTION_AGENT_AUTH` (token_v2 expired) vs
-// `E_NOTION_AGENT_NETWORK` (Cloudflare blocked the call) vs the generic
-// `E_NOTION_AGENT_FAIL`.
+// thread_id: `--stream` doesn't print structured fields (only `--json`
+// does), but the CLI still persists thread state to
+// ~/.notionagents/threads/<thread_id>.json. We snapshot that dir before the
+// call and diff after to recover the freshly-written thread_id, then stash
+// it in the assistant message's `metadata` so the next turn round-trips it
+// via `--thread-id` (server-side continuity + token savings). Follow-up
+// turns already know the thread_id, so they skip the probe.
+//
+// `notion-agent` exit codes map to E_* event codes so the renderer can
+// branch on E_NOTION_AGENT_AUTH (token_v2 expired) vs E_NOTION_AGENT_NETWORK
+// (Cloudflare blocked) vs the generic E_NOTION_AGENT_FAIL.
 
 import { execa } from 'execa'
-import { existsSync } from 'fs'
+import { existsSync, readdirSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { StringDecoder } from 'node:string_decoder'
 
 import { whichSync } from '../../bin_resolver'
 import type { ChatBackend, ChatStreamEvent, ChatStreamRequest, EmailContext } from '../types'
 
 const REQUEST_DEADLINE_MS = 90_000 // generous: Notion AI itself can be slow
+
+/** Where the CLI persists per-thread state files (one `<thread_id>.json`
+ *  per chat thread). Mirrors the CLI default account dir; we don't pass
+ *  `--account`, so the default applies. */
+const THREADS_DIR = join(homedir(), '.notionagents', 'threads')
 
 let _binCache: string | null = null
 
@@ -37,7 +52,7 @@ let _binCache: string | null = null
  *    2. `which notion-agent` (PATH lookup; pipx default if user ran
  *       `pipx ensurepath`)
  *    3. ~/.local/bin/notion-agent (pipx install location without
- *       PATH integration — verified in Sprint 4 Task #2 pre-flight) */
+ *       PATH integration) */
 export function resolveNotionAgentBin(): string {
   if (_binCache) return _binCache
   const fromEnv = process.env['NOTION_AGENT_BIN']
@@ -64,68 +79,93 @@ export function __resetNotionAgentBinCache(): void {
   _binCache = null
 }
 
-interface NotionAgentResponse {
-  text?: string
-  thread_id?: string
-  model?: string
-  usage?: {
-    input_tokens?: number
-    output_tokens?: number
+/** Snapshot the set of `<thread_id>.json` filenames before a first-turn
+ *  call so we can diff afterwards. Missing dir → empty set (first chat
+ *  ever, or a custom account dir we don't track). */
+function snapshotThreadFiles(): Set<string> {
+  try {
+    return new Set(readdirSync(THREADS_DIR).filter((f) => f.endsWith('.json')))
+  } catch {
+    return new Set()
   }
+}
+
+/** After a first-turn call, find the thread state file the CLI just wrote
+ *  (present in `after` but not `before`). When several appear (concurrent
+ *  first-turn calls across sessions — rare), the most recently modified
+ *  wins. Returns the bare thread_id (filename minus `.json`) or null when
+ *  nothing new landed. */
+function detectNewThreadId(before: Set<string>): string | null {
+  let fresh: { name: string; mtime: number }[]
+  try {
+    fresh = readdirSync(THREADS_DIR)
+      .filter((f) => f.endsWith('.json') && !before.has(f))
+      .map((f) => {
+        try {
+          return { name: f, mtime: statSync(join(THREADS_DIR, f)).mtimeMs }
+        } catch {
+          return { name: f, mtime: 0 }
+        }
+      })
+  } catch {
+    return null
+  }
+  if (fresh.length === 0) return null
+  fresh.sort((a, b) => b.mtime - a.mtime)
+  return fresh[0].name.replace(/\.json$/, '')
 }
 
 function formatEmailContextHeader(ctx: EmailContext | null): string {
   if (!ctx) return ''
-  const lines: string[] = ['[Email currently open]']
+  // 邮件已全量从 SSoT 同步到 Notion, 所以首轮只递交 Notion 页 URL 作引用 ——
+  // Notion Agent 能自己 loadPage 去索引正文/附件/线程并检索关联信息, 不必把
+  // 元数据 + 正文塞进 prompt (省 token, 也让 agent 走它擅长的工作区检索路径).
+  // notion-agent CLI 只收纯文本 prompt, 没有结构化 page-mention 协议, 所以用
+  // 明文 URL —— 实测 agent 会自动对工作区内 URL 调 connections.notion.loadPage.
+  if (ctx.notionPageId) {
+    const pageNoDash = ctx.notionPageId.replace(/-/g, '')
+    return [
+      '[参考邮件] 我正在看下面这封邮件(已同步到 Notion)。回答前请读取该页面，',
+      '获取它的主题 / 正文 / 附件 / 线程等完整内容，并据此检索关联信息：',
+      `https://www.notion.so/${pageNoDash}`,
+      '',
+      ''
+    ].join('\n')
+  }
+  // 兜底: 未同步到 Notion 的邮件(罕见) —— 给最小元数据(不含正文), 让 agent
+  // 至少知道在问哪封.
+  const lines: string[] = ['[参考邮件] 当前邮件未同步到 Notion, 仅提供元数据:']
   lines.push(`internal_id: ${ctx.internalId}`)
-  if (ctx.subject) lines.push(`Subject: ${ctx.subject}`)
+  if (ctx.subject) lines.push(`主题: ${ctx.subject}`)
   if (ctx.senderName || ctx.senderAddr) {
     const name = ctx.senderName ?? ''
     const addr = ctx.senderAddr ?? ''
-    lines.push(`From: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
+    lines.push(`发件人: ${name}${name && addr ? ' ' : ''}${addr ? `<${addr}>` : ''}`.trim())
   }
-  if (ctx.dateIso) lines.push(`Date: ${ctx.dateIso}`)
-  // Notion 镜像页 ID / URL: 让 Notion Agent 直接定位本邮件页, 方便更新内容
-  // 或 create relation 挂别的文档. 没同步过 Notion 时无该字段, 跳过.
-  if (ctx.notionPageId) {
-    const pageNoDash = ctx.notionPageId.replace(/-/g, '')
-    lines.push(`Notion page_id: ${ctx.notionPageId}`)
-    lines.push(`Notion URL: https://www.notion.so/${pageNoDash}`)
-  }
-  lines.push('')
-  if (ctx.bodyMarkdown && ctx.bodyMarkdown.length > 0) {
-    lines.push('Body:')
-    lines.push(ctx.bodyMarkdown)
-  } else {
-    lines.push('Body: (not available)')
-  }
-  lines.push('')
+  if (ctx.dateIso) lines.push(`日期: ${ctx.dateIso}`)
+  lines.push('', '')
   return lines.join('\n')
 }
 
-/** Extract the user message + any prior assistant turns to feed back to
- *  notion-agent. The CLI supports `--thread-id` for multi-turn follow-up,
- *  so once we have one we keep using it. */
+/** Extract the user message + any prior thread_id to feed back to
+ *  notion-agent. The CLI continues a thread via `--thread-id`, so once we
+ *  have one (stashed in a prior assistant row's metadata) we keep using it. */
 function extractTurn(req: ChatStreamRequest): {
   prompt: string
   threadId: string | null
 } {
-  // The user message we just inserted lives at the tail. Everything
-  // before it is prior history (which notion-agent already knows from
-  // `--thread-id`). If there's no user message, we have nothing to
-  // ask — return empty so the caller surfaces an error.
+  // The user message we just inserted lives at the tail. Everything before
+  // it is prior history (which notion-agent already knows server-side from
+  // `--thread-id`). No user message → nothing to ask.
   const lastUser = [...req.history].reverse().find((m) => m.role === 'user')
   const prompt = lastUser?.content ?? ''
 
-  // Find a thread_id from a prior assistant row. Sprint 4 review (opus L)
-  // moved thread_id out of the `model` column hack into the structured
-  // `metadata` JSON column (ai_chat.db schema v2). For backward read of
-  // v1-written rows, fall back to the `notion-agent:<id>` model prefix.
+  // Find a thread_id from a prior assistant row's structured metadata. v1
+  // rows wrote it as a `notion-agent:<id>` model prefix — read both.
   let threadId: string | null = null
   for (let i = req.history.length - 1; i >= 0; i--) {
     const m = req.history[i]
     if (m.role !== 'assistant') continue
-    // v2+: parsed metadata JSON.
     if (m.metadata) {
       try {
         const meta = JSON.parse(m.metadata) as Record<string, unknown>
@@ -138,7 +178,6 @@ function extractTurn(req: ChatStreamRequest): {
         // malformed metadata — ignore and try older formats below.
       }
     }
-    // v1 backcompat: `model = 'notion-agent:<thread_id>'`.
     if (m.model && m.model.startsWith('notion-agent:')) {
       threadId = m.model.slice('notion-agent:'.length)
       break
@@ -157,51 +196,70 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
     }
     return
   }
-  if (req.agentPageId === null) {
-    yield {
-      type: 'error',
-      code: 'E_INVALID_ARG',
-      message: 'notion-agent backend requires backendAgentPageId — bind a Custom Agent in Settings'
-    }
-    return
-  }
 
-  // Sprint 4 review (Opus H-1): prepend the email context so notion-agent's
-  // upstream chat sees the actual email body, not just the user's question.
-  // Multi-turn follow-ups skip the header (thread_id carries it forward
-  // server-side; redundant inclusion eats tokens for no gain).
+  // First turn: prepend the email context so the agent sees the actual body,
+  // not just the user's question. Follow-ups skip it — thread_id carries the
+  // context forward server-side; re-sending eats tokens for no gain.
   const ctxHeader = threadId ? '' : formatEmailContextHeader(req.emailContext)
-  const enrichedPrompt = ctxHeader.length > 0 ? `${ctxHeader}[User question]\n${prompt}` : prompt
+  const enrichedPrompt = ctxHeader.length > 0 ? `${ctxHeader}我的问题：\n${prompt}` : prompt
 
   const bin = resolveNotionAgentBin()
-  const args = ['chat', enrichedPrompt, '--json', '--agent-page-id', req.agentPageId]
+  const args = ['chat', '--stream']
   if (threadId) args.push('--thread-id', threadId)
   if (req.model) args.push('--model', req.model)
+  // prompt rides in on stdin (no positional arg) — keeps a long email body
+  // out of argv (ARG_MAX) and sidesteps shell-escaping entirely.
 
-  // Surface a tool_call breadcrumb so the panel can render the
-  // "calling notion-agent" log line while the subprocess runs. The
-  // event status flips to 'ok' or 'error' below.
-  const toolEvent = {
-    type: 'tool_call' as const,
+  // First turn only: snapshot threads dir so we can recover the new
+  // thread_id afterwards. Follow-ups already know it (passed via --thread-id).
+  const before = threadId ? null : snapshotThreadFiles()
+
+  const toolArgs = { threadId, model: req.model }
+  yield {
+    type: 'tool_call',
     name: 'notion-agent chat',
-    args: { agentPageId: req.agentPageId, threadId, model: req.model },
-    status: 'running' as const
+    args: toolArgs,
+    status: 'running'
   }
-  yield toolEvent
 
   const startTime = Date.now()
+  const decoder = new StringDecoder('utf8')
+  let accumulated = ''
   try {
     const child = execa(bin, args, {
-      signal: req.signal,
+      input: enrichedPrompt,
+      // execa@9 renamed `signal` → `cancelSignal`; using the old name throws
+      // synchronously ("signal option has been renamed").
+      cancelSignal: req.signal,
       timeout: REQUEST_DEADLINE_MS,
-      buffer: true,
-      reject: false
+      reject: false,
+      // stdout unbuffered → we read it as a stream for real-time deltas;
+      // stderr buffered → classifyExit reads the whole thing at the end.
+      buffer: { stdout: false, stderr: true }
     })
+
+    if (child.stdout) {
+      for await (const chunk of child.stdout) {
+        if (req.signal.aborted) break
+        // chunk is a Buffer; StringDecoder holds back any trailing partial
+        // multi-byte sequence until the next chunk completes it.
+        const delta = decoder.write(chunk as Buffer)
+        if (delta.length > 0) {
+          accumulated += delta
+          yield { type: 'chunk', delta }
+        }
+      }
+      const tail = decoder.end()
+      if (tail.length > 0 && !req.signal.aborted) {
+        accumulated += tail
+        yield { type: 'chunk', delta: tail }
+      }
+    }
+
     const result = await child
-    const { stdout, stderr, exitCode, timedOut } = result
-    // execa@9 surfaces signal-based termination as `isCanceled`; older
-    // builds used `killed`. Accept both shapes so the type-check stays
-    // happy across the lockfile range.
+    const { stderr, exitCode, timedOut } = result
+    // execa@9 surfaces signal termination as `isCanceled`; older builds used
+    // `killed`. Accept both so the type-check stays happy across the lockfile.
     const killed =
       (result as unknown as { killed?: boolean; isCanceled?: boolean }).killed === true ||
       (result as unknown as { killed?: boolean; isCanceled?: boolean }).isCanceled === true
@@ -212,7 +270,7 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
       yield {
         type: 'tool_call',
         name: 'notion-agent chat',
-        args: toolEvent.args,
+        args: toolArgs,
         status: 'error',
         durationMs: Date.now() - startTime,
         detail: 'subprocess exceeded 90s'
@@ -225,78 +283,46 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
       return
     }
     if (exitCode !== 0) {
-      // Sprint 4 review (codex Critical): notion-agent occasionally prints
-      // the token_v2 cookie value into stderr on auth failures
-      // (`token_v2=v03%3A...` shows up in pipx-installed builds with verbose
-      // logging). Classifying the exit on the main side first, then
-      // returning a fixed safe message, prevents the cookie bytes from
-      // crossing the IPC boundary into the renderer envelope. The full
-      // stderr is still available via `pnpm dev` console for triage.
-      const code = classifyExit(exitCode, stderr)
+      // notion-agent occasionally prints the token_v2 cookie into stderr on
+      // auth failures. Classify on the main side, then return a fixed safe
+      // message so the cookie bytes never cross the IPC boundary into the
+      // renderer. Full stderr stays in the `pnpm dev` console for triage.
+      const stderrText = typeof stderr === 'string' ? stderr : ''
+      const code = classifyExit(exitCode, stderrText)
       const safeMessage = safeErrorMessage(code, exitCode)
       yield {
         type: 'tool_call',
         name: 'notion-agent chat',
-        args: toolEvent.args,
+        args: toolArgs,
         status: 'error',
         durationMs: Date.now() - startTime,
         detail: safeMessage
       }
-      yield {
-        type: 'error',
-        code,
-        message: safeMessage
-      }
+      yield { type: 'error', code, message: safeMessage }
       return
     }
 
-    let parsed: NotionAgentResponse
-    try {
-      parsed = JSON.parse(stdout) as NotionAgentResponse
-    } catch (err) {
-      yield {
-        type: 'tool_call',
-        name: 'notion-agent chat',
-        args: toolEvent.args,
-        status: 'error',
-        durationMs: Date.now() - startTime,
-        detail: 'stdout not valid JSON'
-      }
-      yield {
-        type: 'error',
-        code: 'E_NOTION_AGENT_PARSE',
-        message: `notion-agent stdout not valid JSON: ${err instanceof Error ? err.message : String(err)}`
-      }
-      return
-    }
-
-    const text = parsed.text ?? ''
-    // Sprint 4 review (opus L carry-forward): emit the upstream model
-    // verbatim and put the thread_id in `metadata` (orchestrator persists
-    // it into ai_chat_messages.metadata for the next turn's
-    // `--thread-id`). v1-written rows that still carry
-    // `model = 'notion-agent:<id>'` keep working via the backcompat read
-    // in extractTurn().
-    const modelSeen = parsed.model ?? null
-    const metadata: Record<string, unknown> | null = parsed.thread_id
-      ? { thread_id: parsed.thread_id }
-      : null
+    // exit 0 — finalize. Trim trailing newline(s): `--stream` ends with a
+    // bare `print()` line terminator after the deltas.
+    const text = accumulated.replace(/\n+$/, '')
+    const newThreadId = threadId ?? detectNewThreadId(before ?? new Set())
+    const metadata: Record<string, unknown> | null = newThreadId ? { thread_id: newThreadId } : null
+    const modelSeen = req.model ?? null
 
     yield {
       type: 'tool_call',
       name: 'notion-agent chat',
-      args: toolEvent.args,
+      args: toolArgs,
       status: 'ok',
       durationMs: Date.now() - startTime,
-      detail: parsed.thread_id ? `thread=${parsed.thread_id.slice(0, 8)}` : undefined
+      detail: newThreadId ? `thread=${newThreadId.slice(0, 8)}` : undefined
     }
-    if (text.length > 0) {
-      yield { type: 'chunk', delta: text }
-    }
+    // `--stream` doesn't emit token counts; surface zeros so the cost
+    // accounting layer has a uniform shape. metadata carries the thread_id.
     yield {
       type: 'usage',
-      inputTokens: parsed.usage?.input_tokens ?? 0,
-      outputTokens: parsed.usage?.output_tokens ?? 0,
+      inputTokens: 0,
+      outputTokens: 0,
       costUsd: null,
       model: modelSeen,
       metadata
@@ -313,7 +339,7 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
     yield {
       type: 'tool_call',
       name: 'notion-agent chat',
-      args: toolEvent.args,
+      args: toolArgs,
       status: 'error',
       durationMs: Date.now() - startTime,
       detail: message
@@ -334,10 +360,10 @@ function classifyExit(exitCode: number | null | undefined, stderr: string): stri
   return 'E_NOTION_AGENT_FAIL'
 }
 
-/** Map a classified error code to a renderer-safe message. The raw
- *  stderr stays in the main-process log; the renderer only sees the
- *  generic phrasing so a token_v2 cookie that printed to stderr never
- *  crosses the IPC boundary. */
+/** Map a classified error code to a renderer-safe message. The raw stderr
+ *  stays in the main-process log; the renderer only sees the generic
+ *  phrasing so a token_v2 cookie that printed to stderr never crosses the
+ *  IPC boundary. */
 function safeErrorMessage(code: string, exitCode: number | null | undefined): string {
   switch (code) {
     case 'E_NOTION_AGENT_AUTH':
@@ -363,5 +389,7 @@ export const __testing = {
   classifyExit,
   extractTurn,
   formatEmailContextHeader,
-  safeErrorMessage
+  safeErrorMessage,
+  detectNewThreadId,
+  snapshotThreadFiles
 }

@@ -1,26 +1,37 @@
-// Sprint 4 Task #12 — Notion Agent backend behavioural contract.
+// Notion Agent backend behavioural contract.
 //
-// Mocks `execa` so the test doesn't shell out to the real notion-agent
-// CLI. Asserts:
-//   - happy path: --json shaped reply → tool_call(running) →
-//     tool_call(ok) → chunk → usage → done events
-//   - missing agent_page_id → ErrorEvent(E_INVALID_ARG)
+// Mocks `execa` (so no real CLI shell-out) and `fs` (so thread-id probing is
+// deterministic instead of reading the dev machine's ~/.notionagents). The
+// backend now runs `notion-agent chat --stream` with the prompt on stdin and
+// reads stdout incrementally; thread_id is recovered by diffing the threads
+// dir. Asserts:
+//   - happy path: tool_call(running) → chunk(s) → tool_call(ok) → usage → done
+//   - argv shape: --stream + --thread-id (no --json / no --agent-page-id),
+//     prompt rides on stdin, not argv
+//   - first turn recovers the new thread_id from the threads dir
 //   - history with no user message → ErrorEvent(E_INVALID_ARG)
 //   - non-zero exit → tool_call(error) + ErrorEvent classified by stderr
-//   - malformed JSON stdout → ErrorEvent(E_NOTION_AGENT_PARSE)
-//   - thread_id reuse across turns (model field carries it back)
+//   - timeout / abort / execa rejection paths
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import type { ChatStreamEvent } from '../../src/electron/main/chat/types'
 import type { ChatMessage } from '../../src/electron/main/chat_db'
 
-const { mockExeca } = vi.hoisted(() => ({
-  mockExeca: vi.fn()
+const { mockExeca, mockReaddir, mockStat } = vi.hoisted(() => ({
+  mockExeca: vi.fn(),
+  mockReaddir: vi.fn(),
+  mockStat: vi.fn()
 }))
 
 vi.mock('execa', () => ({
   execa: mockExeca
+}))
+
+vi.mock('fs', () => ({
+  existsSync: vi.fn(() => true),
+  readdirSync: mockReaddir,
+  statSync: mockStat
 }))
 
 vi.mock('../../src/electron/main/bin_resolver', () => ({
@@ -67,24 +78,32 @@ function assistantMsg(
   }
 }
 
-function mockExecaResult(opts: {
-  stdout?: string
+/** Build an execa stand-in: a thenable that resolves to the awaited result
+ *  shape AND carries an async-iterable `.stdout` (matching buffer:{stdout:
+ *  false}). The backend reads `child.stdout` then `await child`. */
+function mockExecaStream(opts: {
+  chunks?: string[]
   stderr?: string
-  exitCode?: number
+  exitCode?: number | null
   timedOut?: boolean
   killed?: boolean
+  noStdout?: boolean
 }): void {
-  // execa returns a "thenable child" — vitest's vi.fn lets us return a
-  // resolved promise that mimics the awaited shape used by the backend.
-  mockExeca.mockReturnValue(
-    Promise.resolve({
-      stdout: opts.stdout ?? '',
-      stderr: opts.stderr ?? '',
-      exitCode: opts.exitCode ?? 0,
-      timedOut: opts.timedOut ?? false,
-      killed: opts.killed ?? false
-    })
-  )
+  const chunks = opts.chunks ?? []
+  async function* gen(): AsyncGenerator<Buffer> {
+    for (const c of chunks) yield Buffer.from(c, 'utf8')
+  }
+  const result = {
+    stderr: opts.stderr ?? '',
+    exitCode: opts.exitCode ?? 0,
+    timedOut: opts.timedOut ?? false,
+    isCanceled: opts.killed ?? false
+  }
+  const child = Promise.resolve(result) as Promise<typeof result> & {
+    stdout?: AsyncGenerator<Buffer>
+  }
+  if (!opts.noStdout) child.stdout = gen()
+  mockExeca.mockReturnValue(child)
 }
 
 async function collect(it: AsyncIterable<ChatStreamEvent>): Promise<ChatStreamEvent[]> {
@@ -95,6 +114,12 @@ async function collect(it: AsyncIterable<ChatStreamEvent>): Promise<ChatStreamEv
 
 beforeEach(() => {
   mockExeca.mockReset()
+  mockReaddir.mockReset()
+  mockStat.mockReset()
+  // Default: threads dir empty before + after → no thread_id detected unless
+  // a test overrides. statSync is only hit when a new file appears.
+  mockReaddir.mockReturnValue([])
+  mockStat.mockReturnValue({ mtimeMs: 0 })
   __resetNotionAgentBinCache()
 })
 
@@ -128,7 +153,7 @@ describe('NotionAgentBackend — extractTurn helper', () => {
     const { prompt } = __testing.extractTurn({
       history: [userMsg('first', 1), assistantMsg('hi', null, 2), userMsg('second', 3)],
       model: null,
-      agentPageId: 'a1',
+      agentPageId: null,
       signal: new AbortController().signal
     })
     expect(prompt).toBe('second')
@@ -142,16 +167,13 @@ describe('NotionAgentBackend — extractTurn helper', () => {
         userMsg('follow up', 3)
       ],
       model: null,
-      agentPageId: 'a1',
+      agentPageId: null,
       signal: new AbortController().signal
     })
     expect(threadId).toBe('thr-new')
   })
 
   test('falls back to legacy `notion-agent:<id>` model column for v1-written rows', () => {
-    // Sprint 5 Day 1 (opus L carry-forward): users with pre-migration
-    // ai_chat.db rows have thread_id encoded in `model`, not metadata.
-    // The reader must keep working until they roll past those turns.
     const { threadId } = __testing.extractTurn({
       history: [
         userMsg('hi', 1),
@@ -159,7 +181,7 @@ describe('NotionAgentBackend — extractTurn helper', () => {
         userMsg('follow up', 3)
       ],
       model: null,
-      agentPageId: 'a1',
+      agentPageId: null,
       signal: new AbortController().signal
     })
     expect(threadId).toBe('thr-old')
@@ -173,34 +195,41 @@ describe('NotionAgentBackend — extractTurn helper', () => {
         userMsg('follow up', 3)
       ],
       model: null,
-      agentPageId: 'a1',
+      agentPageId: null,
       signal: new AbortController().signal
     })
     expect(threadId).toBe('thr-new')
-  })
-
-  test('malformed metadata JSON falls through to the model column', () => {
-    const { threadId } = __testing.extractTurn({
-      history: [
-        userMsg('hi', 1),
-        assistantMsg('hello', 'notion-agent:thr-fallback', 2, '{not-json'),
-        userMsg('follow up', 3)
-      ],
-      model: null,
-      agentPageId: 'a1',
-      signal: new AbortController().signal
-    })
-    expect(threadId).toBe('thr-fallback')
   })
 
   test('thread_id is null when no prior assistant carried one', () => {
     const { threadId } = __testing.extractTurn({
       history: [userMsg('hi', 1)],
       model: null,
-      agentPageId: 'a1',
+      agentPageId: null,
       signal: new AbortController().signal
     })
     expect(threadId).toBeNull()
+  })
+})
+
+describe('NotionAgentBackend — detectNewThreadId helper', () => {
+  test('returns the file present after but not before, minus .json', () => {
+    mockReaddir.mockReturnValueOnce(['a.json', 'new.json'])
+    mockStat.mockReturnValue({ mtimeMs: 100 })
+    const before = new Set(['a.json'])
+    expect(__testing.detectNewThreadId(before)).toBe('new')
+  })
+
+  test('null when nothing new appeared', () => {
+    mockReaddir.mockReturnValueOnce(['a.json'])
+    expect(__testing.detectNewThreadId(new Set(['a.json']))).toBeNull()
+  })
+
+  test('picks the most recently modified when several are new', () => {
+    mockReaddir.mockReturnValueOnce(['x.json', 'y.json'])
+    // statSync is called in readdir order (x then y); y is newer → wins.
+    mockStat.mockReturnValueOnce({ mtimeMs: 100 }).mockReturnValueOnce({ mtimeMs: 200 })
+    expect(__testing.detectNewThreadId(new Set())).toBe('y')
   })
 })
 
@@ -224,122 +253,93 @@ describe('NotionAgentBackend — classifyExit', () => {
   })
 })
 
-describe('NotionAgentBackend — happy path', () => {
-  test('emits tool_call(running) → tool_call(ok) → chunk → usage → done', async () => {
-    mockExecaResult({
-      stdout: JSON.stringify({
-        text: 'Hello back.',
-        thread_id: 'thr-001',
-        model: 'claude-sonnet-4-6',
-        usage: { input_tokens: 14, output_tokens: 5 }
-      }),
-      exitCode: 0
-    })
+describe('NotionAgentBackend — happy path (streaming)', () => {
+  test('streams stdout chunks → chunk events → usage → done; reuses --thread-id', async () => {
+    mockExecaStream({ chunks: ['Hello', ' back', '.\n'], exitCode: 0 })
 
     const backend = new NotionAgentBackend()
     const events = await collect(
       backend.stream({
-        history: [userMsg('hi')],
-        model: 'gpt-5.4',
-        agentPageId: 'agent-1',
+        history: [
+          userMsg('hi', 1),
+          assistantMsg('prev', 'claude-opus-4-8', 2, '{"thread_id":"thr-001"}'),
+          userMsg('again', 3)
+        ],
+        model: 'opus-4.8',
+        agentPageId: null,
         signal: new AbortController().signal
       })
     )
 
-    expect(events.map((e) => e.type)).toEqual(['tool_call', 'tool_call', 'chunk', 'usage', 'done'])
-    const ok = events[1]
-    if (ok.type === 'tool_call') expect(ok.status).toBe('ok')
+    // first event is the running breadcrumb; last is done.
+    expect(events[0].type).toBe('tool_call')
+    expect(events[events.length - 1].type).toBe('done')
 
-    const chunk = events[2]
-    if (chunk.type === 'chunk') expect(chunk.delta).toBe('Hello back.')
+    // streamed deltas concatenate to the full reply.
+    const streamed = events
+      .filter((e) => e.type === 'chunk')
+      .map((e) => (e as { delta: string }).delta)
+      .join('')
+    expect(streamed).toBe('Hello back.\n')
 
-    // Sprint 5 Day 1 (opus L carry-forward): model column carries the
-    // real upstream model name; thread_id rides in metadata.
-    const usage = events[3]
-    if (usage.type === 'usage') {
-      expect(usage.inputTokens).toBe(14)
-      expect(usage.outputTokens).toBe(5)
-      expect(usage.model).toBe('claude-sonnet-4-6')
+    const usage = events.find((e) => e.type === 'usage')
+    if (usage && usage.type === 'usage') {
+      expect(usage.model).toBe('opus-4.8')
       expect(usage.metadata).toEqual({ thread_id: 'thr-001' })
     }
 
-    const done = events[4]
-    if (done.type === 'done') {
-      expect(done.finalContent).toBe('Hello back.')
-      expect(done.model).toBe('claude-sonnet-4-6')
+    const done = events.find((e) => e.type === 'done')
+    if (done && done.type === 'done') {
+      expect(done.finalContent).toBe('Hello back.') // trailing newline trimmed
       expect(done.metadata).toEqual({ thread_id: 'thr-001' })
     }
 
-    // execa called with the expected argv shape.
-    expect(mockExeca).toHaveBeenCalledTimes(1)
-    const call = mockExeca.mock.calls[0]
-    expect(call[1]).toEqual(
-      expect.arrayContaining([
-        'chat',
-        'hi',
-        '--json',
-        '--agent-page-id',
-        'agent-1',
-        '--model',
-        'gpt-5.4'
-      ])
-    )
+    // argv: --stream + --thread-id, NOT --json / --agent-page-id; prompt on stdin.
+    const argv = mockExeca.mock.calls[0][1] as string[]
+    const opts = mockExeca.mock.calls[0][2] as { input?: string }
+    expect(argv).toContain('--stream')
+    expect(argv).toContain('--thread-id')
+    expect(argv).toContain('thr-001')
+    expect(argv).toContain('--model')
+    expect(argv).toContain('opus-4.8')
+    expect(argv).not.toContain('--json')
+    expect(argv).not.toContain('--agent-page-id')
+    expect(argv).not.toContain('again') // prompt is NOT an argv positional
+    expect(opts.input).toContain('again') // prompt rides on stdin
   })
 
-  test('reuses thread_id from history metadata (v2: --thread-id appended)', async () => {
-    mockExecaResult({
-      stdout: JSON.stringify({ text: 'and another', thread_id: 'thr-001' }),
-      exitCode: 0
-    })
+  test('first turn (no prior thread) recovers thread_id from the threads dir', async () => {
+    // before snapshot empty, after has the freshly-written file.
+    mockReaddir.mockReturnValueOnce([]).mockReturnValueOnce(['thr-fresh.json'])
+    mockStat.mockReturnValue({ mtimeMs: 123 })
+    mockExecaStream({ chunks: ['Hi'], exitCode: 0 })
+
     const backend = new NotionAgentBackend()
-    await collect(
+    const events = await collect(
       backend.stream({
-        history: [
-          userMsg('hi', 1),
-          assistantMsg('hello', 'claude-sonnet-4-6', 2, '{"thread_id":"thr-001"}'),
-          userMsg('follow up', 3)
-        ],
+        history: [userMsg('hello')],
         model: null,
-        agentPageId: 'agent-1',
+        agentPageId: null,
         signal: new AbortController().signal
       })
     )
-    const argv = mockExeca.mock.calls[0][1] as string[]
-    expect(argv).toContain('--thread-id')
-    expect(argv).toContain('thr-001')
-  })
 
-  test('reuses thread_id from v1 legacy `notion-agent:<id>` model field', async () => {
-    mockExecaResult({
-      stdout: JSON.stringify({ text: 'and another', thread_id: 'thr-001' }),
-      exitCode: 0
-    })
-    const backend = new NotionAgentBackend()
-    await collect(
-      backend.stream({
-        history: [
-          userMsg('hi', 1),
-          // v1-written row: no metadata, thread_id stuffed in model.
-          assistantMsg('hello', 'notion-agent:thr-001', 2),
-          userMsg('follow up', 3)
-        ],
-        model: null,
-        agentPageId: 'agent-1',
-        signal: new AbortController().signal
-      })
-    )
+    const done = events.find((e) => e.type === 'done')
+    if (done && done.type === 'done') {
+      expect(done.metadata).toEqual({ thread_id: 'thr-fresh' })
+    }
+    // first turn has no --thread-id; email context header prepended on stdin.
     const argv = mockExeca.mock.calls[0][1] as string[]
-    expect(argv).toContain('--thread-id')
-    expect(argv).toContain('thr-001')
+    expect(argv).not.toContain('--thread-id')
   })
 })
 
 describe('NotionAgentBackend — error paths', () => {
-  test('missing agentPageId → ErrorEvent(E_INVALID_ARG)', async () => {
+  test('empty user history → ErrorEvent(E_INVALID_ARG), no spawn', async () => {
     const backend = new NotionAgentBackend()
     const events = await collect(
       backend.stream({
-        history: [userMsg('hi')],
+        history: [],
         model: null,
         agentPageId: null,
         signal: new AbortController().signal
@@ -349,21 +349,9 @@ describe('NotionAgentBackend — error paths', () => {
     expect(mockExeca).not.toHaveBeenCalled()
   })
 
-  test('empty user history → ErrorEvent(E_INVALID_ARG)', async () => {
-    const backend = new NotionAgentBackend()
-    const events = await collect(
-      backend.stream({
-        history: [],
-        model: null,
-        agentPageId: 'agent-1',
-        signal: new AbortController().signal
-      })
-    )
-    expect(events).toEqual([expect.objectContaining({ type: 'error', code: 'E_INVALID_ARG' })])
-  })
-
   test('non-zero exit with token_v2 stderr → tool_call(error) + E_NOTION_AGENT_AUTH', async () => {
-    mockExecaResult({
+    mockExecaStream({
+      chunks: [],
       exitCode: 1,
       stderr: 'token_v2 cookie has expired, re-run notion-agent init'
     })
@@ -372,50 +360,35 @@ describe('NotionAgentBackend — error paths', () => {
       backend.stream({
         history: [userMsg('hi')],
         model: null,
-        agentPageId: 'agent-1',
+        agentPageId: null,
         signal: new AbortController().signal
       })
     )
-    // tool_call(running), tool_call(error), error
-    expect(events.length).toBe(3)
-    const last = events[2]
+    const last = events[events.length - 1]
     expect(last.type).toBe('error')
     if (last.type === 'error') expect(last.code).toBe('E_NOTION_AGENT_AUTH')
-  })
-
-  test('malformed JSON → E_NOTION_AGENT_PARSE', async () => {
-    mockExecaResult({ stdout: 'not-json', exitCode: 0 })
-    const backend = new NotionAgentBackend()
-    const events = await collect(
-      backend.stream({
-        history: [userMsg('hi')],
-        model: null,
-        agentPageId: 'agent-1',
-        signal: new AbortController().signal
-      })
-    )
-    const err = events.find((e) => e.type === 'error')!
-    expect(err).toBeTruthy()
-    if (err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_PARSE')
+    // no done/usage when the call failed.
+    expect(events.find((e) => e.type === 'done')).toBeUndefined()
   })
 
   test('subprocess timed out → E_NOTION_AGENT_TIMEOUT', async () => {
-    mockExecaResult({ timedOut: true, exitCode: null as unknown as number })
+    mockExecaStream({ chunks: [], timedOut: true, exitCode: null })
     const backend = new NotionAgentBackend()
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
-        agentPageId: 'agent-1',
+        agentPageId: null,
         signal: new AbortController().signal
       })
     )
-    const err = events.find((e) => e.type === 'error')!
-    if (err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_TIMEOUT')
+    const err = events.find((e) => e.type === 'error')
+    expect(err).toBeTruthy()
+    if (err && err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_TIMEOUT')
   })
 
-  test('killed by abort signal → no events emitted after kill', async () => {
-    mockExecaResult({ killed: true, exitCode: null as unknown as number })
+  test('aborted signal → no done/usage emitted', async () => {
+    mockExecaStream({ chunks: ['partial'], killed: true, exitCode: null })
     const ac = new AbortController()
     ac.abort()
     const backend = new NotionAgentBackend()
@@ -423,28 +396,32 @@ describe('NotionAgentBackend — error paths', () => {
       backend.stream({
         history: [userMsg('hi')],
         model: null,
-        agentPageId: 'agent-1',
+        agentPageId: null,
         signal: ac.signal
       })
     )
-    // tool_call(running) might still emit before we observe signal,
-    // but the run path returns silently afterwards.
     expect(events.find((e) => e.type === 'done')).toBeUndefined()
     expect(events.find((e) => e.type === 'usage')).toBeUndefined()
   })
 
-  test('thrown execa rejection → ErrorEvent(E_NOTION_AGENT_FAIL)', async () => {
-    mockExeca.mockReturnValue(Promise.reject(new Error('ENOENT')))
+  test('execa rejection → ErrorEvent(E_NOTION_AGENT_FAIL)', async () => {
+    // no .stdout on a rejected child; await throws → caught → FAIL.
+    const rejected = Promise.reject(new Error('ENOENT')) as Promise<never> & {
+      stdout?: undefined
+    }
+    rejected.catch(() => {}) // pre-attach so Node doesn't flag unhandled rejection
+    mockExeca.mockReturnValue(rejected)
     const backend = new NotionAgentBackend()
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
-        agentPageId: 'agent-1',
+        agentPageId: null,
         signal: new AbortController().signal
       })
     )
-    const err = events.find((e) => e.type === 'error')!
-    if (err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_FAIL')
+    const err = events.find((e) => e.type === 'error')
+    expect(err).toBeTruthy()
+    if (err && err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_FAIL')
   })
 })

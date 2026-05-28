@@ -1241,6 +1241,35 @@
         "running": "Testing…",
         "ok": "LLM gateway healthy",
         "fail": "LLM gateway unreachable"
+      },
+      "notionAgent": {
+        "title": "Notion Agent (notion-agent-cli)",
+        "helper": "Reads the local notion-agent-cli account config. The Notion Agent backend replies as the Custom Agent bound below; auth (token_v2) is managed by the CLI.",
+        "cliMissing": "notion-agent CLI not found",
+        "needsAuth": "notion-agent is not authenticated (missing token_v2)",
+        "account": "Account",
+        "workspace": "Workspace {{space}}",
+        "agent": "Bound Agent",
+        "agentHelper": "Main agent (personal persona) + workspace Custom Agents; switching writes account.json",
+        "agentPlaceholder": "Select agent",
+        "primaryTag": "Main",
+        "instructionPage": "Instruction Page",
+        "instructionPageHelper": "Instruction-page ID of the bound agent (auto-updates on switch)",
+        "model": "Default model",
+        "modelHelper": "Used when chat doesn't specify a model",
+        "modelPlaceholder": "Select model",
+        "doctor": {
+          "label": "Connection check",
+          "helper": "Run notion-agent doctor to verify account + token",
+          "button": "Check",
+          "running": "Checking",
+          "fail": "doctor check failed"
+        },
+        "toast": {
+          "agentSet": "Bound agent switched",
+          "modelSet": "Default model set",
+          "fail": "Operation failed"
+        }
       }
     },
     "notifications": {

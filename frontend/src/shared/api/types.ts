@@ -1561,6 +1561,72 @@ export interface PromptsApi {
   write(slot: PromptSlot, content: string): Promise<PromptWriteResult>
 }
 
+// ── Notion Agent CLI config (notion-agent-cli) ───────────────────────────
+//
+// The Notion Agent chat backend shells out to the local `notion-agent` CLI,
+// which keeps its own account file (~/.notionagents/notion_account.json)
+// holding the token_v2 cookie + the bound Custom Agent. This surface lets
+// Settings show that binding and switch the bound agent / default model;
+// token auth stays with the CLI (`notion-agent init`).
+
+export interface NotionAgentConfig {
+  /** The account file path we read/write (the symlink, not its target). */
+  accountPath: string
+  /** Resolved `notion-agent` binary path. */
+  cliPath: string
+  /** Whether that binary exists on disk. */
+  cliFound: boolean
+  /** account.json readable AND token_v2 present → backend can run. */
+  configured: boolean
+  /** token_v2 is set (value never leaves the main process). */
+  tokenPresent: boolean
+  userName: string | null
+  userEmail: string | null
+  spaceName: string | null
+  spaceId: string | null
+  /** Bound Custom Agent display name. */
+  agentName: string | null
+  /** Bound Custom Agent page id (account.agent_context_page_id). */
+  agentPageId: string | null
+  agentAccessory: string | null
+  defaultModel: string | null
+  timezone: string | null
+}
+
+/** One row of `notion-agent doctor --json`. */
+export interface NotionAgentDoctorCheck {
+  status: string
+  check: string
+  detail: string
+}
+
+/** One Custom Agent from `notion-agent agents list --json`. */
+export interface NotionAgentListItem {
+  agent_id: string
+  name: string
+  agent_page_id: string
+  description: string | null
+  icon: string | null
+  most_recent_thread_title?: string | null
+}
+
+export interface NotionAgentApi {
+  /** Read account.json binding + token presence. Never throws — a
+   *  missing/garbled file yields configured:false. */
+  getConfig(): Promise<NotionAgentConfig>
+  /** Friendly model alias keys from models.json (empty when absent). */
+  listModels(): Promise<string[]>
+  /** Live `doctor --json` connectivity/auth readout. Throws (err.code) on
+   *  CLI failure (not-installed / produced no output). */
+  doctor(): Promise<NotionAgentDoctorCheck[]>
+  /** Custom Agents in the bound workspace. Throws (err.code) on failure. */
+  listAgents(): Promise<NotionAgentListItem[]>
+  /** Bind a Custom Agent (writes account.json). Returns refreshed config. */
+  setAgent(pageId: string, name: string, accessory?: string | null): Promise<NotionAgentConfig>
+  /** Set the default model alias (writes account.json). Returns refreshed config. */
+  setModel(alias: string): Promise<NotionAgentConfig>
+}
+
 export interface MailApi {
   email: EmailApi
   /** Phase C — 存档 / 草稿箱 folder_email 表 (DB v17). */
@@ -1591,4 +1657,7 @@ export interface MailApi {
   services: ServicesApi
   /** LLM prompt file CRUD (inbox / sent markdown). */
   prompts: PromptsApi
+  /** Notion Agent CLI config — read/edit the bound Custom Agent + default
+   *  model in ~/.notionagents/notion_account.json. */
+  notionAgent: NotionAgentApi
 }
