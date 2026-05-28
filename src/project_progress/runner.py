@@ -3,8 +3,9 @@
 流程 (sync_from_email):
   1. 从 SyncStore 取 email_metadata
   2. detector 再检查一遍 (防呆)
-  3. AppleScriptArm.fetch_email_content_by_id 拉 RFC 822 源码
-  4. email.message_from_bytes → 找第一个 .xlsx 附件 → 计算 md5 + bytes
+  3. 取第一个 .xlsx 附件字节: 优先 v4 SQLite SSoT (email_attachment.local_path),
+     davmail 合成 ID 无法走 AppleScript; 仅未双写的 applescript-origin 邮件才回退 AppleScript
+  4. (回退路径) email.message_from_bytes → 找第一个 .xlsx 附件 → 计算 md5 + bytes
   5. ProjectProgressSyncStore: 按 internal_id 查是否 completed; force=True 才重跑
   6. xlsx_parser.parse_xlsx_v2 → ParseResult (3 sheet 合并 + sheet_stats)
   7. ensure_schema (5min 缓存) → 缺失 7 个 property 自动补齐
@@ -18,12 +19,9 @@ import asyncio
 import email
 import email.header
 import email.policy
-import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -563,7 +561,7 @@ class ProjectProgressRunner:
         async with ProjectProgressNotionClient(
             database_id=self.project_database_id
         ) as client:
-            logger.info(f"[pp] fetching Notion ext_id map...")
+            logger.info("[pp] fetching Notion ext_id map...")
             ext_to_page = await client.list_all_by_external_id(bu=parsed.filter_bu)
             logger.info(f"[pp] found {len(ext_to_page)} pages in Notion")
 
@@ -713,7 +711,58 @@ class ProjectProgressRunner:
     def _fetch_xlsx(
         self, internal_id: int, mailbox: str
     ) -> Tuple[Optional[str], Optional[bytes]]:
-        """从 AppleScript 拉源码 → 提取第一个 .xlsx 附件。"""
+        """取邮件的第一个 .xlsx 附件字节.
+
+        优先从 v4 SQLite SSoT (email_attachment.local_path) 读盘 —— davmail 邮件的
+        internal_id 是合成 ID (>=10^9), AppleScript 无法按 `whose id` 回 Mail.app 抓源码.
+        仅当 SSoT 无该附件 (老 applescript-origin 邮件未双写) 时, 才回退 AppleScript 现抠.
+        """
+        fn, payload = self._fetch_xlsx_from_sqlite(internal_id)
+        if payload is not None:
+            return fn, payload
+        return self._fetch_xlsx_from_applescript(internal_id, mailbox)
+
+    def _fetch_xlsx_from_sqlite(
+        self, internal_id: int
+    ) -> Tuple[Optional[str], Optional[bytes]]:
+        """从 v4 email_attachment 表读第一个原始 (非 derived) .xlsx 的落盘字节."""
+        try:
+            with sqlite3.connect(self.sync_store_db_path, timeout=30) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT filename, local_path FROM email_attachment "
+                    "WHERE internal_id = ? AND derived_from IS NULL "
+                    "AND lower(filename) LIKE '%.xlsx' "
+                    "ORDER BY id LIMIT 1",
+                    (internal_id,),
+                ).fetchone()
+        except sqlite3.Error as e:
+            logger.warning(f"[pp] sqlite attachment lookup failed for {internal_id}: {e}")
+            return None, None
+        if not row or not row["local_path"]:
+            return None, None
+        from src.repository.attachment_store import AttachmentStore
+
+        try:
+            payload = AttachmentStore().read(row["local_path"])
+        except OSError as e:
+            logger.warning(
+                f"[pp] read xlsx from SSoT failed for {internal_id} "
+                f"(local_path={row['local_path']}): {e}"
+            )
+            return None, None
+        if not payload:
+            return None, None
+        logger.info(
+            f"[pp] xlsx loaded from SQLite SSoT internal_id={internal_id} "
+            f"({row['filename']}, {len(payload)} bytes)"
+        )
+        return row["filename"], payload
+
+    def _fetch_xlsx_from_applescript(
+        self, internal_id: int, mailbox: str
+    ) -> Tuple[Optional[str], Optional[bytes]]:
+        """从 AppleScript 拉源码 → 提取第一个 .xlsx 附件 (applescript-origin 回退路径)。"""
         try:
             result = self.arm.fetch_email_content_by_id(internal_id, mailbox)
         except Exception as e:
