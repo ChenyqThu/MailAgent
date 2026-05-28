@@ -63,6 +63,7 @@ import {
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
@@ -244,6 +245,14 @@ export function CommandPalette(): React.ReactElement | null {
   const inputRef = useRef<HTMLInputElement>(null)
   const veilRef = useRef<HTMLDivElement>(null)
   const { dialogRef, handleTab } = useFocusTrap({ open })
+  // 退场延迟卸载：veil 淡入 + pane 位移缩放。pane 用 translateX(-50%) 居中，
+  // 故 from 带 xPercent:-50 让 GSAP transform 复刻居中（否则会被 GSAP 覆盖跳位），
+  // 进场结束 clearProps 回落到 CSS 居中。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '.palette-pane',
+    backdrop: '.palette-veil',
+    from: { autoAlpha: 0, xPercent: -50, y: 8, scale: 0.97 }
+  })
 
   // Focus input on open transition + persist query on every change.
   useEffect(() => {
@@ -591,7 +600,7 @@ export function CommandPalette(): React.ReactElement | null {
     opt?.scrollIntoView({ block: 'nearest' })
   }, [open, highlight, dialogRef])
 
-  if (!open) return null
+  if (!shouldRender) return null
 
   const hasHits = hits.length > 0
   const hasQuery = normalised.length > 0
@@ -610,7 +619,9 @@ export function CommandPalette(): React.ReactElement | null {
   const actionStartIdx = cursor
 
   return createPortal(
-    <>
+    // display:contents 包裹层只为 GSAP 提供一个 scope 根（不生成盒子，veil/pane
+    // 仍按各自 fixed 定位），useExitAnimation 经选择器分别动 veil/pane。
+    <div ref={scopeRef} style={{ display: 'contents' }}>
       {/* ─ Veil — soft dim + blur of the app behind. Click dismisses. ─ */}
       <div
         ref={veilRef}
@@ -884,7 +895,7 @@ export function CommandPalette(): React.ReactElement | null {
           </span>
         </footer>
       </section>
-    </>,
+    </div>,
     document.body
   )
 }

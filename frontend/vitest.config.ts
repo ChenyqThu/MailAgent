@@ -9,7 +9,10 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.{ts,tsx,cjs}'],
     environment: 'node',
-    pool: 'forks' // better-sqlite3 + native bindings prefer process isolation
+    pool: 'forks', // better-sqlite3 + native bindings prefer process isolation
+    // 全局 setup：在 happy-dom 组件测试里强制 reduced-motion，让 GSAP 动画
+    // no-op（详见 tests/setup.ts）。node 环境测试自动跳过。
+    setupFiles: ['./tests/setup.ts']
   },
   // React 19 automatic JSX runtime so .tsx test files don't need an explicit
   // `import React from 'react'`. Matches the tsconfig.web.json `jsx:react-jsx`

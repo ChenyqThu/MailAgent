@@ -15,6 +15,8 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useAppearance, type AccentId } from '@shared/state/appearance'
 
 const ACCENT_LABEL: Record<AccentId, string> = {
@@ -33,13 +35,18 @@ export function AccentPickerPopover(): React.ReactElement {
   const setAccent = useAppearance((s) => s.setAccent)
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
+  // popover 出入场：无 backdrop，从右上微展开；scopeRef 兼作 outside-click 容器。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
+    enterDuration: DUR.fast
+  })
 
   useEffect(() => {
     if (!open) return
     const onPointer = (e: MouseEvent): void => {
       const target = e.target as Node
-      if (popoverRef.current?.contains(target)) return
+      if (scopeRef.current?.contains(target)) return
       if (triggerRef.current?.contains(target)) return
       setOpen(false)
     }
@@ -85,10 +92,10 @@ export function AccentPickerPopover(): React.ReactElement {
           form their own stacking contexts and end up painting over the
           popover even though our z-index is 60.  Portal moves the
           popover to the document root, restoring z-index ordering. */}
-      {open &&
+      {shouldRender &&
         createPortal(
           <div
-            ref={popoverRef}
+            ref={scopeRef}
             role="dialog"
             aria-label={t('titleBar.accent.aria')}
             className="theme-popover"

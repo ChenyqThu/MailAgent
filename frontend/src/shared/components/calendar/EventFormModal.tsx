@@ -19,6 +19,7 @@ import { RRuleEditor } from './RRuleEditor'
 import { buildRRule, parseRRule, defaultRRuleState, type RRuleState } from './lib/rrule'
 import { resolveAttendeesUpdate } from './lib/attendees'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { cn } from '@shared/lib/cn'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type {
@@ -147,6 +148,11 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   const chipInputRef = useRef<HTMLInputElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
   const lastFocusRef = useRef<HTMLElement | null>(null)
+  // 退场延迟卸载：backdrop 淡入 + .efm-modal 位移缩放。GSAP 接管进/退两端，
+  // index.css 已移除 .efm-backdrop .open 过渡（含旧第二曲线）。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '.efm-modal'
+  })
 
   // 打开时预填 / 重置
   useEffect(() => {
@@ -216,9 +222,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     mutationFn: async (scope?: 'this' | 'all' | 'future') => {
       // Phase 4·#2 — 全天: UTC midnight Z + end exclusive (inclusive endDate +1);
       // 非全天: 本地 datetime + tz offset (现有).
-      const startIso = isAllDay
-        ? `${startDate}T00:00:00Z`
-        : localToIsoWithOffset(startLocal)
+      const startIso = isAllDay ? `${startDate}T00:00:00Z` : localToIsoWithOffset(startLocal)
       const endIso = isAllDay
         ? `${addDaysToDateStr(endDate, 1)}T00:00:00Z`
         : localToIsoWithOffset(endLocal)
@@ -265,14 +269,23 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       }
     },
     onSuccess: () => {
-      toastSuccess(isEdit ? t('calendar.form.toastUpdated', '事件已更新') : t('calendar.form.toastCreated', '事件已创建, ~60s 内同步到本地视图'))
+      toastSuccess(
+        isEdit
+          ? t('calendar.form.toastUpdated', '事件已更新')
+          : t('calendar.form.toastCreated', '事件已创建, ~60s 内同步到本地视图')
+      )
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
       void qc.invalidateQueries({ queryKey: ['calendar', 'event'] })
       onClose()
     },
     onError: (err: unknown) => {
       const e = err as Error
-      toastError(isEdit ? t('calendar.form.toastErrUpdate', '更新事件失败') : t('calendar.form.toastErrCreate', '创建事件失败'), e.message || t('calendar.toolbar.syncTipUnknownErr', '未知错误'))
+      toastError(
+        isEdit
+          ? t('calendar.form.toastErrUpdate', '更新事件失败')
+          : t('calendar.form.toastErrCreate', '创建事件失败'),
+        e.message || t('calendar.toolbar.syncTipUnknownErr', '未知错误')
+      )
     }
   })
 
@@ -395,11 +408,12 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     }
   }, [open, onClose])
 
-  if (!open) return null
+  if (!shouldRender) return null
 
   return (
     <div
-      className={cn('efm-backdrop', open && 'open')}
+      ref={scopeRef}
+      className="efm-backdrop"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -416,7 +430,9 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
         <div className="efm-head">
           <span className="efm-accent" aria-hidden />
           <h2 id="efm-title" className="efm-title">
-            {isEdit ? t('calendar.form.titleEdit', '编辑事件') : t('calendar.form.titleCreate', '新建事件')}
+            {isEdit
+              ? t('calendar.form.titleEdit', '编辑事件')
+              : t('calendar.form.titleCreate', '新建事件')}
           </h2>
           <button
             type="button"
@@ -581,11 +597,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
               {t('calendar.form.attendees.label', '与会者')}
             </label>
             <div
-              className={cn(
-                'chip-field',
-                chipFocused && 'focus',
-                chipInvalid && 'invalid'
-              )}
+              className={cn('chip-field', chipFocused && 'focus', chipInvalid && 'invalid')}
               onClick={() => chipInputRef.current?.focus()}
             >
               {chips.map((c) => (
@@ -602,7 +614,9 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
                       setChips((cs) => cs.filter((x) => x.email !== c.email))
                       setAttendeesDirty(true)
                     }}
-                    aria-label={t('calendar.form.attendees.removeChip', '移除 {email}', { email: c.email })}
+                    aria-label={t('calendar.form.attendees.removeChip', '移除 {email}', {
+                      email: c.email
+                    })}
                     title={t('calendar.shared.closeAria', '关闭')}
                   >
                     <svg
@@ -630,7 +644,11 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
                 onKeyDown={onChipInputKey}
                 onFocus={() => setChipFocused(true)}
                 onBlur={onChipInputBlur}
-                placeholder={chips.length === 0 ? t('calendar.form.attendees.placeholder', '输入 email 后回车添加') : ''}
+                placeholder={
+                  chips.length === 0
+                    ? t('calendar.form.attendees.placeholder', '输入 email 后回车添加')
+                    : ''
+                }
                 autoComplete="off"
                 aria-label={t('calendar.form.attendees.label', '与会者')}
               />
@@ -657,12 +675,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
         </div>
 
         <div className="efm-foot">
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={onClose}
-            disabled={mut.isPending}
-          >
+          <button type="button" className="btn-ghost" onClick={onClose} disabled={mut.isPending}>
             {t('calendar.form.actions.cancel', '取消')}
           </button>
           <button

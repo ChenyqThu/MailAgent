@@ -3170,12 +3170,10 @@ body:not([data-batch-mode='true']) #batch-bar {
   background: rgba(0, 0, 0, 0.42);
   -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.18s;
+  /* 出入场交给 GSAP（useExitAnimation，EventFormModal）。原 .open 的
+     opacity/transform 过渡 + 第二曲线已移除，避免与 GSAP 双重动画。 */
 }
 :root[data-theme='light'] .efm-backdrop { background: rgba(20, 24, 40, 0.22); }
-.efm-backdrop.open { opacity: 1; pointer-events: auto; }
 .efm-modal {
   width: 500px;
   max-width: 94vw;
@@ -3183,12 +3181,6 @@ body:not([data-batch-mode='true']) #batch-bar {
   border-radius: 12px;
   display: flex;
   flex-direction: column;
-  transform: translateY(8px) scale(0.985);
-  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
-}
-.efm-backdrop.open .efm-modal { transform: none; }
-@media (prefers-reduced-motion: reduce) {
-  .efm-backdrop, .efm-modal { transition: none; }
 }
 .efm-head {
   display: flex;
@@ -4075,7 +4067,8 @@ body:not([data-batch-mode='true']) #batch-bar {
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   padding: 24px;
-  animation: folder-modal-fade 160ms ease;
+  /* 进/退场动画交给 GSAP（useExitAnimation，folder/ConfirmDialog）。原
+     folder-modal-fade/-rise keyframes 已移除，顺带消除旧第二曲线。 */
 }
 :root[data-theme='light'] .folder-modal-backdrop {
   background: rgba(18, 24, 46, 0.32);
@@ -4085,23 +4078,6 @@ body:not([data-batch-mode='true']) #batch-bar {
   max-width: 100%;
   border-radius: 16px;
   overflow: hidden;
-  animation: folder-modal-rise 200ms cubic-bezier(0.32, 0.72, 0, 1);
-}
-@keyframes folder-modal-fade {
-  from {
-    opacity: 0;
-  }
-}
-@keyframes folder-modal-rise {
-  from {
-    transform: translateY(8px) scale(0.985);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .folder-modal-backdrop,
-  .folder-modal {
-    animation: none;
-  }
 }
 .folder-modal-ico {
   width: 42px;

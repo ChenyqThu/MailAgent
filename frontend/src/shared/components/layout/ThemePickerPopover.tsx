@@ -12,6 +12,8 @@ import { useTranslation } from 'react-i18next'
 import { Monitor, Moon, Sun } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useAppearance, type ThemeMode } from '@shared/state/appearance'
 
 interface ThemeOption {
@@ -38,13 +40,19 @@ export function ThemePickerPopover(): React.ReactElement {
   const setThemeMode = useAppearance((s) => s.setThemeMode)
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
+  // popover 出入场：无 backdrop，从右上微展开（autoAlpha + y:-6 + scale），
+  // 退场反向。scopeRef 兼作 outside-click 命中判定的容器 ref。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
+    enterDuration: DUR.fast
+  })
 
   useEffect(() => {
     if (!open) return
     const onPointer = (e: MouseEvent): void => {
       const target = e.target as Node
-      if (popoverRef.current?.contains(target)) return
+      if (scopeRef.current?.contains(target)) return
       if (triggerRef.current?.contains(target)) return
       setOpen(false)
     }
@@ -83,10 +91,10 @@ export function ThemePickerPopover(): React.ReactElement {
       {/* Sprint 14 round 19 — Portal to body so popover paints above any
           later-DOM stacking context (e.g. EmailDetail's sticky strip).
           See AccentPickerPopover for the same fix. */}
-      {open &&
+      {shouldRender &&
         createPortal(
           <div
-            ref={popoverRef}
+            ref={scopeRef}
             role="dialog"
             aria-label={t('titleBar.themeCycle')}
             className="theme-popover glass-pop"

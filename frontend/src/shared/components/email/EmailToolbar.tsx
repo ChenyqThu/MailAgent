@@ -42,6 +42,7 @@ import {
 import { cn } from '@shared/lib/cn'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { toggleAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import type { ComposeMode } from '@shared/api/types'
 
@@ -501,6 +502,9 @@ function ResyncConfirmDialog({
 }: ResyncConfirmProps): React.ReactElement | null {
   const { t } = useTranslation()
   const { dialogRef, handleTab } = useFocusTrap({ open })
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '[data-anim-card]'
+  })
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -515,9 +519,10 @@ function ResyncConfirmDialog({
     [onCancel, handleTab]
   )
 
-  if (!open) return null
+  if (!shouldRender) return null
   return createPortal(
     <div
+      ref={scopeRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="resync-confirm-title"
@@ -527,6 +532,7 @@ function ResyncConfirmDialog({
     >
       <div
         ref={dialogRef}
+        data-anim-card
         onClick={(e) => e.stopPropagation()}
         className={cn(
           'w-[440px] rounded-lg bg-ink-2 border border-ink-border p-5',

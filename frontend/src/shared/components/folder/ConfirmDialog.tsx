@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom'
 import { ArrowLeft, Send, Trash2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 
 export type ConfirmKind = 'move' | 'delete' | 'send' | 'deleteDraft'
@@ -56,6 +57,11 @@ export function ConfirmDialog({
   onCancel
 }: Props): React.ReactElement | null {
   const { dialogRef, handleTab } = useFocusTrap({ open })
+  // 退场延迟卸载：backdrop(root) 淡入 + .folder-modal 位移缩放。GSAP 接管进/退
+  // 两端，故 index.css 移除了 .folder-modal-rise/-fade（同时消除旧第二曲线）。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '.folder-modal'
+  })
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -70,7 +76,7 @@ export function ConfirmDialog({
     [onCancel, handleTab]
   )
 
-  if (!open) return null
+  if (!shouldRender) return null
 
   const resolvedKind: ConfirmKind = kind ?? (danger ? 'delete' : 'move')
   const isDestructive = resolvedKind === 'delete' || resolvedKind === 'deleteDraft'
@@ -79,6 +85,7 @@ export function ConfirmDialog({
 
   return createPortal(
     <div
+      ref={scopeRef}
       role="dialog"
       aria-modal="true"
       aria-label={title}

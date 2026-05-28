@@ -16,6 +16,8 @@ import { useTranslation } from 'react-i18next'
 import { Droplet, Sparkles, Square } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useAppearance, type SurfaceStyle } from '@shared/state/appearance'
 
 interface SurfaceOption {
@@ -41,13 +43,18 @@ export function SurfacePickerPopover(): React.ReactElement {
   const setSurface = useAppearance((s) => s.setSurface)
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
+  // popover 出入场：无 backdrop，从右上微展开；scopeRef 兼作 outside-click 容器。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
+    enterDuration: DUR.fast
+  })
 
   useEffect(() => {
     if (!open) return
     const onPointer = (e: MouseEvent): void => {
       const target = e.target as Node
-      if (popoverRef.current?.contains(target)) return
+      if (scopeRef.current?.contains(target)) return
       if (triggerRef.current?.contains(target)) return
       setOpen(false)
     }
@@ -84,10 +91,10 @@ export function SurfacePickerPopover(): React.ReactElement {
 
       {/* Portal-to-body 同 AccentPicker / ThemePicker, 避免 TitleBar 的
           backdrop-filter stacking context 把 popover 盖住. */}
-      {open &&
+      {shouldRender &&
         createPortal(
           <div
-            ref={popoverRef}
+            ref={scopeRef}
             role="dialog"
             aria-label={t('titleBar.surface.aria')}
             className="theme-popover glass-pop"

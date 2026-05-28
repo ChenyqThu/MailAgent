@@ -24,6 +24,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@shared/lib/cn'
+import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import type { PendingConfirmation } from '@shared/hooks/useEmailChat'
 
 export interface ConfirmToolDialogProps {
@@ -37,7 +39,10 @@ export interface ConfirmToolDialogProps {
  *  Returning null falls back to the JSON read-only render so future
  *  edit-tier tools without a single-field surface still produce something
  *  usable. */
-function pickEditableField(toolName: string, input: unknown): {
+function pickEditableField(
+  toolName: string,
+  input: unknown
+): {
   key: string
   value: string
 } | null {
@@ -65,7 +70,8 @@ export function ConfirmToolDialog({
   onCancel
 }: ConfirmToolDialogProps): React.ReactElement {
   const { t } = useTranslation()
-  const editable = pending.tier === 'edit' ? pickEditableField(pending.toolName, pending.input) : null
+  const editable =
+    pending.tier === 'edit' ? pickEditableField(pending.toolName, pending.input) : null
   const [editedBody, setEditedBody] = useState(editable?.value ?? '')
   const [busy, setBusy] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -77,6 +83,31 @@ export function ConfirmToolDialog({
     if (editable) textareaRef.current?.focus()
     else confirmBtnRef.current?.focus()
   }, [editable])
+
+  // 进场动画：backdrop 淡入 + 卡片位移缩放，消除原硬出现的 "AI slop" 感。
+  // 退场不做（父 AIChatPanel 按 pending 队列硬卸载，且由用户点 Confirm/Cancel
+  // 主动触发，瞬时消失符合预期）——故此处用 useGSAP 进场而非 useExitAnimation。
+  const rootRef = useRef<HTMLDivElement>(null)
+  const reduce = useReducedMotion()
+  useGSAP(
+    () => {
+      if (reduce) return
+      const root = rootRef.current
+      if (!root) return
+      const card = root.querySelector<HTMLElement>('[data-anim-card]')
+      const tl = gsap.timeline()
+      tl.fromTo(root, { autoAlpha: 0 }, { autoAlpha: 1, duration: DUR.fast }, 0)
+      if (card) {
+        tl.fromTo(
+          card,
+          { autoAlpha: 0, y: 8, scale: 0.97 },
+          { autoAlpha: 1, y: 0, scale: 1, clearProps: 'transform' },
+          0
+        )
+      }
+    },
+    { scope: rootRef, dependencies: [reduce] }
+  )
 
   const handleConfirm = useCallback(async () => {
     if (busy) return
@@ -126,12 +157,14 @@ export function ConfirmToolDialog({
 
   return (
     <div
+      ref={rootRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby={`confirm-tool-${pending.toolUseId}`}
     >
       <div
+        data-anim-card
         className={cn(
           'w-[480px] max-w-[92vw] rounded-lg border border-ink-border-soft',
           'bg-ink-2 shadow-xl overflow-hidden'
@@ -151,9 +184,7 @@ export function ConfirmToolDialog({
           <span
             className={cn(
               'text-meta font-mono px-1.5 py-0.5 rounded',
-              pending.tier === 'edit'
-                ? 'bg-coral/15 text-coral'
-                : 'bg-ink-fg-3/15 text-ink-fg-2'
+              pending.tier === 'edit' ? 'bg-coral/15 text-coral' : 'bg-ink-fg-3/15 text-ink-fg-2'
             )}
           >
             {pending.tier}
@@ -171,9 +202,7 @@ export function ConfirmToolDialog({
         <div className="px-4 py-3">
           {editable ? (
             <div className="space-y-1.5">
-              <label className="text-meta font-mono text-ink-fg-2">
-                {editable.key}
-              </label>
+              <label className="text-meta font-mono text-ink-fg-2">{editable.key}</label>
               <textarea
                 ref={textareaRef}
                 value={editedBody}

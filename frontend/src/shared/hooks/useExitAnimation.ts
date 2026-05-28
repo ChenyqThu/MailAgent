@@ -24,8 +24,13 @@ import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 export interface ExitAnimationOpts {
   /** 卡片子元素选择器（用 transform 动画）。省略时 scope 根即卡片。 */
   card?: string
-  /** scope 根是否作为独立淡入的 backdrop。默认 true；popover/单元素设 false。 */
-  backdrop?: boolean
+  /**
+   * backdrop（独立淡入，DUR.fast）的来源：
+   *   true（默认）  scope 根即 backdrop（root 包裹卡片的模态）
+   *   string        backdrop 是 scope 内的子元素（如 CommandPalette 的 veil/pane 兄弟结构）
+   *   false         无 backdrop（popover/单元素）
+   */
+  backdrop?: boolean | string
   /** 卡片进场起始 vars（也是退场目标）。默认 { autoAlpha:0, y:8, scale:0.97 }。 */
   from?: gsap.TweenVars
   /** 进场时长。默认 DUR.base。 */
@@ -63,18 +68,24 @@ export function useExitAnimation<T extends HTMLElement = HTMLDivElement>(
       if (!root || !shouldRender) return
       const cardEl = card ? root.querySelector<HTMLElement>(card) : root
       if (!cardEl) return
-      const hasBackdrop = backdrop && cardEl !== root
+      const backdropEl =
+        backdrop === true
+          ? root
+          : typeof backdrop === 'string'
+            ? root.querySelector<HTMLElement>(backdrop)
+            : null
+      const hasBackdrop = backdropEl !== null && backdropEl !== cardEl
 
       if (isOpen) {
         // 进场。reduced-motion 时清掉内联样式直接显示。
         if (reduce) {
-          if (hasBackdrop) gsap.set(root, { clearProps: 'opacity,visibility' })
+          if (hasBackdrop) gsap.set(backdropEl, { clearProps: 'opacity,visibility' })
           gsap.set(cardEl, { clearProps: 'all' })
           return
         }
         const tl = gsap.timeline()
         if (hasBackdrop) {
-          tl.fromTo(root, { autoAlpha: 0 }, { autoAlpha: 1, duration: DUR.fast }, 0)
+          tl.fromTo(backdropEl, { autoAlpha: 0 }, { autoAlpha: 1, duration: DUR.fast }, 0)
         }
         tl.fromTo(
           cardEl,
@@ -91,7 +102,7 @@ export function useExitAnimation<T extends HTMLElement = HTMLDivElement>(
         const tl = gsap.timeline({ onComplete: () => setShouldRender(false) })
         tl.to(cardEl, { ...cardFrom, duration: exitDuration }, 0)
         if (hasBackdrop) {
-          tl.to(root, { autoAlpha: 0, duration: exitDuration }, 0)
+          tl.to(backdropEl, { autoAlpha: 0, duration: exitDuration }, 0)
         }
       }
     },
