@@ -9,7 +9,7 @@
 // 成 flex-col overflow-hidden 让 cal-card own scroll, 避免双滚动条.
 
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -35,8 +35,17 @@ import { MonthView } from '../calendar/views/MonthView'
 import { WeekView } from '../calendar/views/WeekView'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
+import { CALENDAR_VIEWS } from '@shared/router-instance'
 
 import { PageFrame } from './PageFrame'
+
+// Lane D — 视图切换 cue: fade + x:±16 方向位移 (subtle, 非 parallax).
+// 方向按 CALENDAR_VIEWS 索引差符号推导: 前进 (索引增大) dir=+1 (新视图从右
+// x:+16 进), 后退 dir=-1 (从左). 切 view 时内部 view 分支整段 remount, 外层
+// 包裹 div (持 ref) key 不变 → 对包裹做新内容入场 fromTo (旧 DOM 已被 React
+// 同步替换, 无法退场动画; 入场淡入替换符合 §4.5 内容区瞬切语义).
 
 function step(view: CalendarView, dir: 1 | -1, base: Date): Date {
   const d = new Date(base)
@@ -92,6 +101,28 @@ export function CalendarLayout(): React.ReactElement {
     [navigate]
   )
 
+  // Lane D — 视图切换入场动画. 包裹 view 区的稳定容器 (key 不变, 内部 view
+  // remount), prevView 记上一视图算方向. reduced-motion 整段短路 (无 set/无 tween).
+  const viewScopeRef = useRef<HTMLDivElement>(null)
+  const prevViewRef = useRef<CalendarView>(view)
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      const el = viewScopeRef.current
+      if (!el) return
+      const prev = prevViewRef.current
+      prevViewRef.current = view
+      if (reduceMotion || prev === view) return
+      const dir = Math.sign(CALENDAR_VIEWS.indexOf(view) - CALENDAR_VIEWS.indexOf(prev)) || 1
+      gsap.fromTo(
+        el,
+        { autoAlpha: 0, x: dir * 16 },
+        { autoAlpha: 1, x: 0, duration: DUR.base, overwrite: 'auto' }
+      )
+    },
+    { dependencies: [view, reduceMotion], scope: viewScopeRef }
+  )
+
   const { trigger: triggerSync } = useCalendarSyncTrigger()
   const { data: syncStatus } = useCalendarSyncStatus()
   useNowTick()
@@ -101,11 +132,14 @@ export function CalendarLayout(): React.ReactElement {
   // worker sync 窗口对齐, 一次 SQLite 查询 ~5ms, 60s staleTime.
   const windowFromIso = useMemo(() => isoOffsetDays(-30), [])
   const windowToIso = useMemo(() => isoOffsetDays(180), [])
-  const { data: windowEvents } = useCalendarEventsInWindow({
-    fromIso: windowFromIso,
-    toIso: windowToIso,
-    expandRecurrences: false
-  }, selectedCalendars)
+  const { data: windowEvents } = useCalendarEventsInWindow(
+    {
+      fromIso: windowFromIso,
+      toIso: windowToIso,
+      expandRecurrences: false
+    },
+    selectedCalendars
+  )
   const eventsCount = windowEvents?.length ?? null
 
   // recurring count: 90d 内 RRULE-bearing series (5min cache, mount auto fetch)
@@ -120,10 +154,11 @@ export function CalendarLayout(): React.ReactElement {
 
   const head = syncStatus?.[0]
   const ctag = head?.ctag ?? null
-  const lastIso =
-    head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
+  const lastIso = head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
   const lastDate = lastIso ? new Date(lastIso) : null
-  const lastSyncLabel = lastDate ? relativeTime(lastDate) : t('calendar.statusbar.noSync', '尚未同步')
+  const lastSyncLabel = lastDate
+    ? relativeTime(lastDate)
+    : t('calendar.statusbar.noSync', '尚未同步')
   const lastError = head?.last_error ?? null
   const hasErr = !!lastError
   const calendarsLabel = head?.calendar_name ?? '日历'
@@ -131,14 +166,8 @@ export function CalendarLayout(): React.ReactElement {
   // useCallback 包 callback — 让 useCalendarShortcuts 的 keydown listener 不会
   // 每次 CalendarLayout re-render 都 unbind+re-bind (闭包问题 §4.5)
   const handleToday = useCallback(() => setCurrentDate(new Date()), [])
-  const handlePrev = useCallback(
-    () => setCurrentDate((d) => step(view, -1, d)),
-    [view]
-  )
-  const handleNext = useCallback(
-    () => setCurrentDate((d) => step(view, 1, d)),
-    [view]
-  )
+  const handlePrev = useCallback(() => setCurrentDate((d) => step(view, -1, d)), [view])
+  const handleNext = useCallback(() => setCurrentDate((d) => step(view, 1, d)), [view])
   const handleSync = useCallback(() => triggerSync({ full: true }), [triggerSync])
   const handleHelp = useCallback(() => setShortcutOpen((v) => !v), [])
   const handleEsc = useCallback(() => setShortcutOpen(false), [])
@@ -154,10 +183,7 @@ export function CalendarLayout(): React.ReactElement {
   })
 
   return (
-    <PageFrame
-      ariaLabel="calendar"
-      mainClassName="flex-1 min-w-0 flex flex-col overflow-hidden"
-    >
+    <PageFrame ariaLabel="calendar" mainClassName="flex-1 min-w-0 flex flex-col overflow-hidden">
       <CalendarToolbar
         view={view}
         onViewChange={setView}
@@ -169,7 +195,7 @@ export function CalendarLayout(): React.ReactElement {
       />
       <div className="flex-1 min-h-0 px-5 pb-4">
         <div className="h-full glass-2 border border-ink-border/60 rounded-[10px] overflow-hidden flex flex-col">
-          <div className="flex-1 min-h-0 overflow-hidden">
+          <div ref={viewScopeRef} className="flex-1 min-h-0 overflow-hidden">
             {/* F7 — 每个 view 套 CalendarErrorBoundary, 任一 view crash
                 (rrule 解析 / Date.parse NaN / IPC reject) 不冒到 PageFrame
                 黑屏整页. 切 view 时 view + Boundary 都 unmount 自动 reset. */}
@@ -196,7 +222,11 @@ export function CalendarLayout(): React.ReactElement {
             )}
             {view === 'month' && (
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewMonth', '月')}>
-                <MonthView date={currentDate} selectedCalendars={selectedCalendars} onSelect={setActive} />
+                <MonthView
+                  date={currentDate}
+                  selectedCalendars={selectedCalendars}
+                  onSelect={setActive}
+                />
               </CalendarErrorBoundary>
             )}
             {view === 'agenda' && (
@@ -224,7 +254,8 @@ export function CalendarLayout(): React.ReactElement {
               </span>
               <span className="sb-sep">·</span>
               <span>
-                {t('calendar.statusbar.autoSync', '自动同步')} <span className="sb-num">{lastSyncLabel}</span>
+                {t('calendar.statusbar.autoSync', '自动同步')}{' '}
+                <span className="sb-num">{lastSyncLabel}</span>
               </span>
             </div>
             <button
@@ -281,10 +312,7 @@ export function CalendarLayout(): React.ReactElement {
         </div>
       </div>
 
-      <CalendarShortcutModal
-        open={shortcutOpen}
-        onClose={() => setShortcutOpen(false)}
-      />
+      <CalendarShortcutModal open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
 
       {/* F5 — Drawer 单挂在 Layout 层, view 切换不卸载, deleteMut/rsvpMut
           hook 持久; undo 撤销可通过 onReopen 复活选中事件 */}
