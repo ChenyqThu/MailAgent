@@ -12,10 +12,10 @@
 // CSS classes (.inbox-tabs / .filter-pop / .group-header / .filter-option)
 // live in index.css Sprint 12 block.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query'
-import { List, type RowComponentProps } from 'react-window'
+import { List, type ListImperativeAPI, type RowComponentProps } from 'react-window'
 import { Filter, ListChecks, Mail } from 'lucide-react'
 
 import { useActiveEmail } from '@shared/state/active-email'
@@ -80,7 +80,7 @@ interface RowProps {
   onSelect(id: number): void
   onToggleGroup(key: GroupKey): void
   onToggleThread(threadId: string): void
-  onExpandThread(threadId: string): void
+  onExpandThread(threadId: string, headInternalId: number): void
 }
 
 function VirtualRow({
@@ -149,13 +149,16 @@ function VirtualRow({
         isChild,
         // 仅 head 行有 expanded 字段; child 不渲染 chevron 所以 false 即可
         expanded: t.isHead ? t.expanded : false,
-        // chevron = 切换 (手风琴): 折叠态点击 → 展开本线程 + 选中母邮件加载详情;
-        // 展开态点击 → 仅折叠, 不改选中 (手动收起的唯一入口).
+        // chevron = 切换 (手风琴): 展开态点击 → 仅折叠 (头不动, 无需滚动锚定);
+        // 折叠态点击 → 展开本线程 + 选中母邮件 (onExpandThread 内部做滚动锚定).
         onToggle: isHead
           ? () => {
-              const willExpand = !t.expanded
-              onToggleThread(t.threadId)
-              if (willExpand) onSelect(item.email.internal_id)
+              if (t.expanded) {
+                onToggleThread(t.threadId)
+              } else {
+                onExpandThread(t.threadId, item.email.internal_id)
+                onSelect(item.email.internal_id)
+              }
             }
           : undefined
       }
@@ -166,7 +169,7 @@ function VirtualRow({
     isHead && t
       ? () => {
           onSelect(item.email.internal_id)
-          onExpandThread(t.threadId)
+          onExpandThread(t.threadId, item.email.internal_id)
         }
       : () => onSelect(item.email.internal_id)
   return (
@@ -210,6 +213,22 @@ function computeRowHeight(r: ListRow | undefined, newIds: ReadonlySet<number>): 
   if (hasSnippet) return 84
   if (hasAiStrip) return 78
   return 60
+}
+
+// 累加 rows 高度求某封邮件 (按 internal_id) 行的顶部像素偏移; 找不到返回 null。
+// 用于手风琴折叠重排后的滚动锚定 (几何法, 不依赖 DOM —— 行可能已被虚拟化移出)。
+function rowTopOfId(
+  rowsArr: ReadonlyArray<ListRow>,
+  heights: ReadonlyArray<number>,
+  internalId: number
+): number | null {
+  let top = 0
+  for (let i = 0; i < rowsArr.length; i++) {
+    const r = rowsArr[i]!
+    if (r.type === 'email' && r.email.internal_id === internalId) return top
+    top += heights[i] ?? 0
+  }
+  return null
 }
 
 function applyChipFilter(
@@ -788,14 +807,9 @@ export function EmailList(): React.ReactElement {
     (threadId: string): boolean => expandedKey === keyFor(threadId),
     [expandedKey, keyFor]
   )
-  const handleToggleThread = useCallback(
-    (threadId: string): void => toggleThread(keyFor(threadId)),
-    [keyFor, toggleThread]
-  )
-  const handleExpandThread = useCallback(
-    (threadId: string): void => expandThread(keyFor(threadId)),
-    [keyFor, expandThread]
-  )
+  // 滚动锚定用 (handler / effect 闭包 rows+rowHeights, 故定义在它们算好之后, 见下方)。
+  const listRef = useRef<ListImperativeAPI | null>(null)
+  const scrollAnchorRef = useRef<{ id: number; viewportOffset: number } | null>(null)
 
   // Sprint 14 round 11 — cross-mailbox thread completion.  listEnriched
   // is mailbox-scoped, so a thread that spans inbox + outbox shows up
@@ -919,6 +933,49 @@ export function EmailList(): React.ReactElement {
     return arr
   }, [rows, newIds])
   const getRowHeight = useCallback((index: number): number => rowHeights[index] ?? 28, [rowHeights])
+
+  // 滚动锚定: 展开 B 时手风琴折叠上方长线程 A → B 及下方行整体上移, 但 react-window
+  // 的 scrollTop 不变 → B 被挤出视口, 需手动往上滚才能看到. captureScrollAnchor 在
+  // 展开前记下 B 母邮件行在视口的相对偏移, 下面 layout effect 在重排后用几何法
+  // (rowHeights 前缀和, 不读 DOM —— 行可能已被虚拟化移出) 把 scrollTop 调回, 让 B
+  // 视觉上不动. 闭包 rows/rowHeights 故定义在此处。
+  const captureScrollAnchor = useCallback(
+    (internalId: number): void => {
+      const el = listRef.current?.element
+      if (!el) return
+      const top = rowTopOfId(rows, rowHeights, internalId)
+      if (top === null) return
+      scrollAnchorRef.current = { id: internalId, viewportOffset: top - el.scrollTop }
+    },
+    [rows, rowHeights]
+  )
+  const handleToggleThread = useCallback(
+    (threadId: string): void => toggleThread(keyFor(threadId)),
+    [keyFor, toggleThread]
+  )
+  const handleExpandThread = useCallback(
+    (threadId: string, headInternalId: number): void => {
+      const key = keyFor(threadId)
+      // 已展开 → 布局不变, 不锚定 (避免残留 stale anchor 在下次 poll 误滚)。
+      if (expandedKey === key) return
+      captureScrollAnchor(headInternalId)
+      expandThread(key)
+    },
+    [keyFor, expandedKey, captureScrollAnchor, expandThread]
+  )
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current
+    if (!anchor) return
+    scrollAnchorRef.current = null
+    const el = listRef.current?.element
+    if (!el) return
+    const newTop = rowTopOfId(rows, rowHeights, anchor.id)
+    if (newTop === null) return
+    const target = Math.max(0, newTop - anchor.viewportOffset)
+    // react-window 滚动容器的命令式回滚 (imperative scroll); 规则误判 listRef 不可变。
+    // eslint-disable-next-line react-hooks/immutability
+    if (Math.abs(target - el.scrollTop) > 0.5) el.scrollTop = target
+  }, [rows, rowHeights])
 
   const priActive = !allPrioritiesSelected()
   const catActive = !allCategoriesSelected()
@@ -1138,6 +1195,7 @@ export function EmailList(): React.ReactElement {
         )}
         {!isLoading && !isError && rows.length > 0 && (
           <List<RowProps>
+            listRef={listRef}
             rowComponent={VirtualRow}
             rowCount={rows.length}
             rowHeight={getRowHeight}
