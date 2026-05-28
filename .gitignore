@@ -40,6 +40,7 @@ logs/
 # Claude Code
 .omc/
 .claude/worktrees/
+.claude/scheduled_tasks.lock
 .agents/
 .codex/
 AGENTS.md
@@ -52,6 +53,13 @@ davmail-poc/
 
 # Python build artifacts
 *.egg-info/
+
+# Node / 前端构建产物
+node_modules/
+*.tsbuildinfo
+
+# Coverage / profiling 产物
+*.profraw
 
 # Project specific
 email-notion-sync/
