@@ -143,3 +143,21 @@ pm2 restart mail-sync
 ## CLAUDE.md 是否要更新？
 
 CLAUDE.md 暂未加 folder_sync 模块段。如果用户希望项目文档完整，可以在 CLAUDE.md 加一段「Folder Sync 模块 (Archive/Drafts)」简介，对标 Calendar 模块段的格式。这不是阻塞项，留作后续。
+
+## 架构差异记录 + 待优化项 (2026-05-27)
+
+davmail 模式下有**两条独立的 davmail→SQLite 同步路径**，是「一等 vs 二等邮箱」的**有意分流**：
+
+| | 收件箱/发件箱 | 存档/草稿箱 |
+|---|---|---|
+| SQLite 表 | `email_metadata`(主表) | `folder_email`(DB v17 独立表) |
+| 同步器 | NewWatcher 主循环 → `davmail.get_new_emails()` | FolderSyncWorker(独立 asyncio loop) |
+| 门控 | `SYNC_MAILBOXES`(名字列表) | `MAILBOX_FOLDER_SYNC_ENABLED`(bool)+写死 `_FOLDERS=("drafts","archive")` |
+| pipeline | 全量(LLM/Notion/线程/灵动岛/AI字段) | 无(纯展示) |
+| 前端读 | 直读 `email_metadata` | 直读 `folder_email` |
+| 前端写 | → outbox → FanoutWorker → davmail+Notion (Sprint15 SSoT 反转) | → `callCli` → **直连 davmail IMAP (不走 outbox)** |
+
+- **两者读都从 SQLite SSoT** —— 一致。pipeline 分流是有意的，**不改**（存档/草稿不需要 AI/Notion/线程）。
+- **发件箱归 email_metadata 主循环是对的**：历史上发件箱就是一等邮箱(358 封存量 100% 有 notion_page_id)，需要收件箱式视图。davmail 发件箱同步见 `src/mail/backend/davmail_backend.py` get_new_emails 多 folder 实现。
+
+**⚠️ 待优化项 (用户确认只记录不做)**：存档/草稿箱的写操作(删/移/发草稿)走 `callCli` **直连 davmail IMAP**，没遵循 Sprint 15 的 outbox SSoT 反转。可优化为让 folder 写也走 outbox→FanoutWorker，与收件箱/发件箱写路径统一。属专门重构，非阻塞。
