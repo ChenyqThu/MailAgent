@@ -8,11 +8,12 @@
 // the backdrop closes. Tab cycles within the modal via the same
 // querySelectorAll focus-trap pattern as ResyncConfirmDialog.
 
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Keyboard, X } from 'lucide-react'
 
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
 import { SCOPE_ORDER, type ShortcutDef, type ShortcutScope, groupByScope } from '@shared/keymap'
@@ -82,14 +83,15 @@ function ScopeSection({
 export function KeyboardHelpModal(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useKeyboardHelp((s) => s.open)
-  // Sprint 8 §2.2 (Sprint 7 ship-review MEDIUM #2) — focus fallback target
-  // so the React onKeyDown handler on the outer dialog stays alive even
-  // when the modal has zero focusable descendants. `tabIndex={-1}` makes
-  // the backdrop programmatically focusable without listing it in Tab order.
-  const backdropRef = useRef<HTMLDivElement>(null)
+  // GSAP scope = 外层 backdrop。它同时充当 focus fallback target（Sprint 8
+  // §2.2）：当 modal 无 focusable 后代时，焦点落在这里以保活 onKeyDown。
+  // useExitAnimation 推迟卸载到退场动画播完（backdrop 淡入 + 卡片位移缩放）。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '[data-anim-card]'
+  })
   // Sprint 9 D4.1 — focus-trap hook centralises the querySelectorAll
   // boundary handling. dialogRef goes on the inner panel.
-  const { dialogRef, handleTab } = useFocusTrap({ open, fallbackRef: backdropRef })
+  const { dialogRef, handleTab } = useFocusTrap({ open, fallbackRef: scopeRef })
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -104,13 +106,13 @@ export function KeyboardHelpModal(): React.ReactElement | null {
     [handleTab]
   )
 
-  if (!open) return null
+  if (!shouldRender) return null
 
   const grouped = groupByScope()
 
   return createPortal(
     <div
-      ref={backdropRef}
+      ref={scopeRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="kbd-help-title"
@@ -121,6 +123,7 @@ export function KeyboardHelpModal(): React.ReactElement | null {
     >
       <div
         ref={dialogRef}
+        data-anim-card
         onClick={(e) => e.stopPropagation()}
         className={cn(
           'w-[520px] max-h-[80vh] rounded-lg bg-ink-2 border border-ink-border',
