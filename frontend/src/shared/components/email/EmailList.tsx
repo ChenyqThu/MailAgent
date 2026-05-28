@@ -431,7 +431,8 @@ function flattenGroups(
   buckets: Record<GroupKey, ThreadGroup[]>,
   labels: Record<GroupKey, string>,
   collapsedOf: (key: GroupKey) => boolean,
-  threadCollapsed: ReadonlySet<string>,
+  // 线程是否展开 — 视图感知 (收件箱默认展开, 发件箱默认折叠), 由调用方决定默认。
+  isThreadExpanded: (threadId: string) => boolean,
   activeId: number | null,
   appendLoader: boolean
 ): ListRow[] {
@@ -454,7 +455,7 @@ function flattenGroups(
     if (collapsed) continue
     for (const g of groupArr) {
       const isThreadHead = g.threadId !== null && g.children.length > 0
-      const expanded = isThreadHead ? !threadCollapsed.has(g.threadId!) : false
+      const expanded = isThreadHead ? isThreadExpanded(g.threadId!) : false
       // bundleSelected — does activeId belong anywhere in this thread?
       // For solitary rows we still set it from the head id so the same
       // wrapper chrome (wash + accent bar) covers solitary selections.
@@ -769,6 +770,22 @@ export function EmailList(): React.ReactElement {
   const threadCollapsed = useThreadCollapse((s) => s.collapsed)
   const toggleThread = useThreadCollapse((s) => s.toggle)
 
+  // 发件箱线程默认折叠 (用户: "折叠也默认不展开"), 收件箱等仍默认展开。
+  // 复用同一 threadCollapsed store, 但发件箱用 `outbox:` 前缀 key 命名空间 +
+  // 反转语义 (前缀 key 在 set 里 = 展开; 默认不在 = 折叠), 这样发件箱与收件箱
+  // 对同一 thread_id 的折叠状态互不污染, 且各自默认正确。
+  const isThreadExpanded = useCallback(
+    (threadId: string): boolean =>
+      view === 'outbox'
+        ? threadCollapsed.has(`outbox:${threadId}`)
+        : !threadCollapsed.has(threadId),
+    [view, threadCollapsed]
+  )
+  const handleToggleThread = useCallback(
+    (threadId: string): void => toggleThread(view === 'outbox' ? `outbox:${threadId}` : threadId),
+    [view, toggleThread]
+  )
+
   // Sprint 14 round 11 — cross-mailbox thread completion.  listEnriched
   // is mailbox-scoped, so a thread that spans inbox + outbox shows up
   // truncated in the list.  For each visible thread_id we hit
@@ -875,8 +892,8 @@ export function EmailList(): React.ReactElement {
   const showLoader = !reachedEnd && pageCount < MAX_PAGES
 
   const rows = useMemo(
-    () => flattenGroups(buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader),
-    [buckets, groupLabels, isCollapsed, threadCollapsed, activeId, showLoader]
+    () => flattenGroups(buckets, groupLabels, isCollapsed, isThreadExpanded, activeId, showLoader),
+    [buckets, groupLabels, isCollapsed, isThreadExpanded, activeId, showLoader]
   )
   // react-window v2 在 rows 引用变化时 (切 filter / tab / view / 收到新邮件)
   // 会对所有 row 调一遍 rowHeight 算 total height. 之前 rowHeight 函数内联
@@ -1119,7 +1136,7 @@ export function EmailList(): React.ReactElement {
               newIds,
               onSelect: setActive,
               onToggleGroup: toggleGroup,
-              onToggleThread: toggleThread
+              onToggleThread: handleToggleThread
             }}
             onRowsRendered={handleRowsRendered}
             className="scrollbar-thin"
