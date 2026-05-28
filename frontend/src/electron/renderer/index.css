@@ -101,7 +101,7 @@
    * accent. body::before pulls this in via `background: var(--wallpaper)`. */
   --wallpaper:
     radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
-    radial-gradient(55vw 60vh at 95% 6%, rgba(80, 140, 255, 0.22), transparent 65%),
+    radial-gradient(55vw 60vh at 95% 6%, rgb(var(--c-accent) / 0.22), transparent 65%),
     radial-gradient(60vw 55vh at 50% 110%, rgba(160, 110, 255, 0.18), transparent 70%),
     linear-gradient(180deg, #0e1013 0%, #15181d 100%);
 
@@ -251,7 +251,7 @@
   /* Lighter aurora on warm paper for light mode. */
   --wallpaper:
     radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
-    radial-gradient(55vw 60vh at 95% 6%, rgba(110, 160, 255, 0.32), transparent 65%),
+    radial-gradient(55vw 60vh at 95% 6%, rgb(var(--c-accent) / 0.30), transparent 65%),
     radial-gradient(60vw 55vh at 50% 110%, rgba(180, 140, 235, 0.22), transparent 70%),
     linear-gradient(180deg, #f6f7fb 0%, #eceef4 100%);
 }
