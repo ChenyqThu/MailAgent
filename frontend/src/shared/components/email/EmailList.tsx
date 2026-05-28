@@ -29,7 +29,7 @@ import {
   type EmailView
 } from '@shared/state/email-filter'
 import { useGroupCollapse, type GroupKey } from '@shared/state/group-collapse'
-import { useThreadCollapse } from '@shared/state/thread-collapse'
+import { useThreadExpand } from '@shared/state/thread-expand'
 import { useBatch } from '@shared/state/batch'
 import { usePinned } from '@shared/state/pinned'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -80,6 +80,7 @@ interface RowProps {
   onSelect(id: number): void
   onToggleGroup(key: GroupKey): void
   onToggleThread(threadId: string): void
+  onExpandThread(threadId: string): void
 }
 
 function VirtualRow({
@@ -92,7 +93,8 @@ function VirtualRow({
   newIds,
   onSelect,
   onToggleGroup,
-  onToggleThread
+  onToggleThread,
+  onExpandThread
 }: RowComponentProps<RowProps>): React.ReactElement {
   const item = rows[index]
   if (!item) return <div style={style} />
@@ -147,14 +149,26 @@ function VirtualRow({
         isChild,
         // 仅 head 行有 expanded 字段; child 不渲染 chevron 所以 false 即可
         expanded: t.isHead ? t.expanded : false,
+        // chevron = 切换 (手风琴): 折叠态点击 → 展开本线程 + 选中母邮件加载详情;
+        // 展开态点击 → 仅折叠, 不改选中 (手动收起的唯一入口).
         onToggle: isHead
           ? () => {
+              const willExpand = !t.expanded
               onToggleThread(t.threadId)
-              onSelect(item.email.internal_id)
+              if (willExpand) onSelect(item.email.internal_id)
             }
           : undefined
       }
     : undefined
+  // 点击母邮件行体 = 加载详情 + 强制展开本线程 (手风琴: 折叠其它已展开线程).
+  // 行体点击只会展开, 不会折叠已展开的本线程 (收起须点 chevron). 子邮件 / 单封仅选中.
+  const handleSelect =
+    isHead && t
+      ? () => {
+          onSelect(item.email.internal_id)
+          onExpandThread(t.threadId)
+        }
+      : () => onSelect(item.email.internal_id)
   return (
     <div style={style}>
       <EmailRow
@@ -163,7 +177,7 @@ function VirtualRow({
         isNew={newIds.has(item.email.internal_id)}
         noAvatar={isChild}
         threadChevron={threadChevron}
-        onSelect={() => onSelect(item.email.internal_id)}
+        onSelect={handleSelect}
       />
     </div>
   )
@@ -758,32 +772,29 @@ export function EmailList(): React.ReactElement {
     [t]
   )
 
-  // Sprint 14 round 9 — thread bundling. Same thread_id rows roll up
-  // under their newest message; the user toggles each bundle with the
-  // prepended chevron. Default = expanded (Outlook behaviour); explicit
-  // user clicks add an entry to `threadCollapsed`.
-  //
-  // Sprint 17 — 从 useState 迁到 zustand + localStorage 持久化 (用户反馈
-  // "邮件展开折叠状态似乎没有记忆, 老是忽然自己展开了"). React state 在
-  // route 切换 / SSE invalidate / pnpm dev HMR 时会重置, store 保活到
-  // localStorage 跨会话恒久.
-  const threadCollapsed = useThreadCollapse((s) => s.collapsed)
-  const toggleThread = useThreadCollapse((s) => s.toggle)
-
-  // 发件箱线程默认折叠 (用户: "折叠也默认不展开"), 收件箱等仍默认展开。
-  // 复用同一 threadCollapsed store, 但发件箱用 `outbox:` 前缀 key 命名空间 +
-  // 反转语义 (前缀 key 在 set 里 = 展开; 默认不在 = 折叠), 这样发件箱与收件箱
-  // 对同一 thread_id 的折叠状态互不污染, 且各自默认正确。
+  // Sprint 18 — 线程「手风琴」展开. 同一时刻至多 1 条线程展开 (单个 expandedKey,
+  // 默认 null = 全折叠): 点击母邮件行体 / chevron 展开某条, 其它自动折叠. 收件箱 /
+  // 发件箱用 `outbox:` 前缀分命名空间, 对同一 thread_id 互不污染. store 用
+  // module-level zustand 跨 re-render / route 切换 / SSE invalidate 保活
+  // (旧版 useState 会被这些重渲重置, "老是忽然自己展开了"). 详见 thread-expand.ts.
+  const expandedKey = useThreadExpand((s) => s.expandedKey)
+  const expandThread = useThreadExpand((s) => s.expand)
+  const toggleThread = useThreadExpand((s) => s.toggle)
+  const keyFor = useCallback(
+    (threadId: string): string => (view === 'outbox' ? `outbox:${threadId}` : threadId),
+    [view]
+  )
   const isThreadExpanded = useCallback(
-    (threadId: string): boolean =>
-      view === 'outbox'
-        ? threadCollapsed.has(`outbox:${threadId}`)
-        : !threadCollapsed.has(threadId),
-    [view, threadCollapsed]
+    (threadId: string): boolean => expandedKey === keyFor(threadId),
+    [expandedKey, keyFor]
   )
   const handleToggleThread = useCallback(
-    (threadId: string): void => toggleThread(view === 'outbox' ? `outbox:${threadId}` : threadId),
-    [view, toggleThread]
+    (threadId: string): void => toggleThread(keyFor(threadId)),
+    [keyFor, toggleThread]
+  )
+  const handleExpandThread = useCallback(
+    (threadId: string): void => expandThread(keyFor(threadId)),
+    [keyFor, expandThread]
   )
 
   // Sprint 14 round 11 — cross-mailbox thread completion.  listEnriched
@@ -1136,7 +1147,8 @@ export function EmailList(): React.ReactElement {
               newIds,
               onSelect: setActive,
               onToggleGroup: toggleGroup,
-              onToggleThread: handleToggleThread
+              onToggleThread: handleToggleThread,
+              onExpandThread: handleExpandThread
             }}
             onRowsRendered={handleRowsRendered}
             className="scrollbar-thin"
