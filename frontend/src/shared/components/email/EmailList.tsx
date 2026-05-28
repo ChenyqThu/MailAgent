@@ -330,6 +330,48 @@ function groupByThread(
   return groups
 }
 
+// 发件箱专用分组 (区别于 groupByThread 的"线程最新邮件作 head")。
+// 用户语义: 发件箱关心"我发了什么 + 当时的上下文", 不是"线程到哪了"。
+//   - 每封我发出的邮件 = 母邮件 (head)
+//   - 同线程中【早于】该发件的邮件 = 子邮件 (children, 折叠), 即我回复前的上下文
+//   - 无线程 / 无更早邮件 = 独立发件 (无 chevron)
+//   - 排序 + 日期分桶都按 head(发件)时间 (partitionByDate 用 head.date)
+// 多次回复同一线程时, 每封发件各自成行; 其它发件锚点不会被当作子邮件
+// (anchorIds 排除), 避免同一封发件既当母又当子重复出现。
+function groupBySentAnchor(
+  sentEmails: ReadonlyArray<EnrichedEmailMeta>,
+  threadSupplement: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMeta>>
+): ThreadGroup[] {
+  const anchorIds = new Set(sentEmails.map((e) => e.internal_id))
+  const groups: ThreadGroup[] = []
+  const seen = new Set<number>()
+  for (const sent of sentEmails) {
+    if (seen.has(sent.internal_id)) continue
+    seen.add(sent.internal_id)
+    const full = sent.thread_id ? threadSupplement.get(sent.thread_id) : undefined
+    if (!full || full.length <= 1) {
+      groups.push({ threadId: null, head: sent, children: [] })
+      continue
+    }
+    const sentDate = sent.date_received ?? ''
+    const children = full
+      .filter(
+        (e) =>
+          e.internal_id !== sent.internal_id &&
+          !anchorIds.has(e.internal_id) &&
+          (e.date_received ?? '') < sentDate
+      )
+      .sort((a, b) => (b.date_received ?? '').localeCompare(a.date_received ?? ''))
+    groups.push(
+      children.length === 0
+        ? { threadId: null, head: sent, children: [] }
+        : { threadId: sent.thread_id ?? null, head: sent, children }
+    )
+  }
+  groups.sort((a, b) => (b.head.date_received ?? '').localeCompare(a.head.date_received ?? ''))
+  return groups
+}
+
 function partitionByDate(
   groups: ReadonlyArray<ThreadGroup>,
   pinnedSet: ReadonlySet<number>
@@ -633,15 +675,18 @@ export function EmailList(): React.ReactElement {
   )
   // Union pinned 邮件进 filtered. dedupe by internal_id, pinned 永远进结果集
   // 但仍走 partitionByDate → pinned 桶路由, 所以 UI 体验不变, 只是不会被丢掉.
+  // 发件箱例外: pinnedSupp 是跨邮箱置顶 (主要是收件箱置顶), 不该拉进发件箱视图。
+  // 发件箱只锚在我发出的邮件上, 置顶的发件邮件本就在 all 里 (会被 partitionByDate
+  // 路由到 pinned 桶), 故 outbox 直接用 filteredBase, 不 union 收件箱置顶。
   const filtered = useMemo(() => {
-    if (pinnedSupp.length === 0) return filteredBase
+    if (view === 'outbox' || pinnedSupp.length === 0) return filteredBase
     const ids = new Set(filteredBase.map((e) => e.internal_id))
     const out = filteredBase.slice()
     for (const p of pinnedSupp) {
       if (!ids.has(p.internal_id)) out.push(p)
     }
     return out
-  }, [filteredBase, pinnedSupp])
+  }, [view, filteredBase, pinnedSupp])
 
   // Limit useNewlyAddedIds to the first page so paginated reads don't make
   // the entire newly-loaded slab flash "NEW".
@@ -782,9 +827,14 @@ export function EmailList(): React.ReactElement {
     return m
   }, [uniqueThreadIds, threadQueries, enrichedById])
 
+  // 发件箱用 groupBySentAnchor (发件作母邮件 + 之前线程作子邮件); 其余视图
+  // 用 groupByThread (线程最新邮件作 head)。
   const threadGroups = useMemo(
-    () => groupByThread(filtered, threadSupplement),
-    [filtered, threadSupplement]
+    () =>
+      view === 'outbox'
+        ? groupBySentAnchor(filtered, threadSupplement)
+        : groupByThread(filtered, threadSupplement),
+    [view, filtered, threadSupplement]
   )
 
   // Selectable ids = every email rendered in the list (heads + visible
