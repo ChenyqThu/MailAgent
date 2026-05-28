@@ -620,6 +620,7 @@ interface AIFieldsRow extends EmailMetadataRow {
   processing_status: string | null
   labels_json: string | null
   llm_status: string | null
+  llm_model: string | null
 }
 
 // Selecting the same metadata columns as LIST_COLS but qualified to the
@@ -765,10 +766,11 @@ export function getAIFields(internalId: number): AIFields | null {
     `SELECT ${LIST_COLS},
             processing_status,
             (SELECT labels_json FROM llm_processing WHERE internal_id = ?) AS labels_json,
-            (SELECT status     FROM llm_processing WHERE internal_id = ?) AS llm_status
+            (SELECT status     FROM llm_processing WHERE internal_id = ?) AS llm_status,
+            (SELECT model      FROM llm_processing WHERE internal_id = ?) AS llm_model
        FROM email_metadata
       WHERE internal_id = ?`
-  ).get(internalId, internalId, internalId) as AIFieldsRow | undefined
+  ).get(internalId, internalId, internalId, internalId) as AIFieldsRow | undefined
   if (!row) return null
   const labels = parseLabels(row.labels_json)
   // labels_json fields we promote — see ai_mapping.ts module doc for the
@@ -786,6 +788,9 @@ export function getAIFields(internalId: number): AIFields | null {
     ai_action: actionRaw,
     ai_review_status: mapReviewStatus(row.llm_status),
     sentiment: mapSentiment(sentimentRaw),
+    // AI 模型/来源标识来自 llm_processing.model 列 (如 'claude-sonnet-4-6' /
+    // 'external:notion'), 不在 labels_json — 头部右侧用它显示来源。
+    ai_model: row.llm_model ?? null,
     labels_raw: labels
   }
 }

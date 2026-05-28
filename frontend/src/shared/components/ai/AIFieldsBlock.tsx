@@ -304,14 +304,14 @@ function ReplyDraftHero({
             rows={Math.min(Math.max(editedBody.split('\n').length, 5), 16)}
             className={cn(
               'w-full mt-1 px-2 py-1.5 rounded border border-ink-border-soft',
-              'bg-ink-2 text-aux text-ink-fg leading-snug font-sans',
+              'bg-ink-2 text-meta text-ink-fg leading-snug font-sans',
               'focus:outline-none focus:border-coral resize-y'
             )}
           />
         ) : (
           <pre
             className={cn(
-              'text-aux text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
+              'text-meta text-ink-fg leading-snug font-sans whitespace-pre-wrap break-words m-0'
               // Sprint 14 round 14 — no max-height / inner scrollbar; the
               // outer email-pane container is the single scroll surface,
               // long replies push the rest of the page down.
@@ -336,7 +336,9 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
   const project = pickString(raw, 'related_project') ?? pickString(raw, 'project')
   const senderPriority = pickString(raw, 'sender_priority')
   const urgencyReason = pickString(raw, 'urgency_reason')
-  const model = pickString(raw, 'model')
+  // AI 模型/来源: 优先 fields.ai_model (llm_processing.model 列, 新路径), fallback
+  // labels_json.model (老数据兼容; agent 现只写列不写 labels_json → 之前头部空了)。
+  const model = fields.ai_model ?? pickString(raw, 'model')
   const actionLabel = actionLabelChinese(fields.ai_action)
 
   // Secondary classifiers — keep the grid mockup-faithful but trimmed

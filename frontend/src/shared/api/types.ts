@@ -129,6 +129,9 @@ export interface AIFields {
   ai_review_status: 'pending' | 'reviewed' | null
   /** Passthrough from `labels_json.sentiment` — agent does not emit yet (REVIEW-LOG H-14 follow-up). */
   sentiment: string | null
+  /** AI 模型/来源标识 — `llm_processing.model` 列 (如 'claude-sonnet-4-6' /
+   *  'external:notion')。不在 labels_json, 头部右侧显示。Null = 无 LLM run。 */
+  ai_model: string | null
   /** Raw labels blob for Sprint 4 AI Chat context / V1.5 debug. Null if no LLM run. */
   labels_raw: Record<string, unknown> | null
 }
