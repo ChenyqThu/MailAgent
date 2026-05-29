@@ -1029,20 +1029,15 @@ export function MessageList({
   const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Phase 2 §6.2 — 入场判定. seenIds 记录已动画过 (或首渲染就在场) 的 messageId.
-  // firstRender 时把全部已有 id seed 进去 (animate=false, 历史不逐条动); 之后
-  // 任何不在集合里的 id 即新增 → 该 row animate=true. 同一 id (streaming chunk)
-  // 已在集合里 → 永不重播. 渲染期间只读, 写入推到 effect (strict-mode 安全).
-  const seenIdsRef = useRef<Set<number>>(new Set())
-  const firstRenderRef = useRef(true)
-  const isNew = (id: number): boolean => {
-    if (firstRenderRef.current) return false
-    return !seenIdsRef.current.has(id)
-  }
-  useEffect(() => {
-    for (const m of messages) seenIdsRef.current.add(m.id)
-    firstRenderRef.current = false
-  }, [messages])
+  // Phase 2 §6.2 — 入场判定. initialIds 在首渲染 seed 当时全部已有的 messageId
+  // (lazy useState initializer, 只算一次, 后续永不变); 凡不在其中的 id 即首渲染
+  // 之后才出现的新气泡 → 该 row animate=true. 历史会话首批旧消息全在 seed 里 →
+  // animate=false, 不逐条动. 同一 id 的 row 按 key 只挂载一次, 而 MessageRow 的
+  // useGSAP 默认 deps=[] 只在挂载那一刻读 animate → 流式 chunk 追加 token 不会重播.
+  // 用 state 读取保持纯渲染 (render-safe), 不在 render 期触碰 ref.current
+  // (React 19 react-hooks/refs: 渲染期读 ref 是反模式, 可能读到 stale 值).
+  const [initialIds] = useState<Set<number>>(() => new Set(messages.map((m) => m.id)))
+  const isNew = (id: number): boolean => !initialIds.has(id)
 
   // Scroll to bottom on new content — but only if the user is already
   // near the bottom. Otherwise an auto-scroll during streaming would
