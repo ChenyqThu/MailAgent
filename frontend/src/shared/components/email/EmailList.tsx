@@ -38,7 +38,6 @@ import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
-import { cleanSnippet } from '@shared/lib/mail_parse'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
@@ -80,6 +79,9 @@ interface RowProps {
   rows: ReadonlyArray<ListRow>
   activeId: number | null
   newIds: ReadonlySet<number>
+  /** Sprint 19 — 懒取的正文 snippet (internal_id → 前 100 字)。listEnriched 不再
+   *  读 body blob, 这里按可见行填充; VirtualRow 合并进 email.snippet 渲染预览。 */
+  snippets: Record<number, string>
   onSelect(id: number): void
   onToggleGroup(key: GroupKey): void
   onToggleThread(threadId: string): void
@@ -94,6 +96,7 @@ function VirtualRow({
   // row component itself only needs the rest.  The prop stays in
   // RowProps so the List parent re-renders rows when active changes.
   newIds,
+  snippets,
   onSelect,
   onToggleGroup,
   onToggleThread,
@@ -175,10 +178,15 @@ function VirtualRow({
           onExpandThread(t.threadId, item.email.internal_id)
         }
       : () => onSelect(item.email.internal_id)
+  // Sprint 19 — 合并懒取的 snippet。仅当原 email 无 snippet 且 map 有值时新建对象,
+  // 否则复用原引用 (EmailRow memo 按字段比较, snippet 变化才重渲该行)。
+  const liveSnippet = snippets[item.email.internal_id]
+  const emailForRow =
+    liveSnippet && !item.email.snippet ? { ...item.email, snippet: liveSnippet } : item.email
   return (
     <div style={style}>
       <EmailRow
-        email={item.email}
+        email={emailForRow}
         selected={item.bundleSelected}
         isNew={newIds.has(item.email.internal_id)}
         noAvatar={isChild}
@@ -200,8 +208,10 @@ function computeRowHeight(r: ListRow | undefined, newIds: ReadonlySet<number>): 
   // supplement-only children (listByThread, no snippet / AI) fall
   // through to the 60px no-snippet branch naturally.
   const e = r.email
-  const snippetReal = cleanSnippet(e.snippet)
-  const hasSnippet = Boolean(snippetReal)
+  // Sprint 19 — 行高用 has_body (listEnriched 立即返回) 而非 snippet 文本。
+  // snippet 改为可见行懒取 (email:listSnippets); 若按文本算高, snippet 异步到达
+  // 会让行高跳变。has_body 立即预留预览行空间, 文本填入不改高度。
+  const hasSnippet = e.has_body
   // `isNew` flips ai-strip on (renders "NEW" chip in EmailRow). Must mirror
   // EmailRow.tsx aiStripVisible exactly — otherwise the slot under-counts and
   // the chip clips into the next row's separator.
@@ -624,6 +634,12 @@ export function EmailList(): React.ReactElement {
 
   const [filterOpen, setFilterOpen] = useState(false)
   const [pageCount, setPageCount] = useState(1)
+  // Sprint 19 — 懒取的正文 snippet (internal_id → 前 100 字)。listEnriched 不再
+  // 读 body blob (~1.5s @800 行 阻塞主进程), 改对可见行调 email:listSnippets。
+  // snippet 按 internal_id 不可变, map 跨 view/mailbox 累积无需重置; snippetReqRef
+  // 去重已请求过的 id (含失败/空), 避免重复 IPC。
+  const [snippetMap, setSnippetMap] = useState<Record<number, string>>({})
+  const snippetReqRef = useRef<Set<number>>(new Set())
   // React 19 "Adjusting state on prop change" pattern — paging resets on
   // view transition without scheduling an effect (see EmailDetail.tsx for
   // the same pattern).
@@ -1075,8 +1091,45 @@ export function EmailList(): React.ReactElement {
   const catActive = !allCategoriesSelected()
   const filterActive = filter !== 'all' || priActive || catActive
 
+  // Sprint 19 — 对【已滚动到的】has_body 行按需取 snippet (email:listSnippets)。
+  // stopIndex 随滚动增长 → 分批懒取经过的行; 首屏 ~15 行 12ms, 永不一次拉 800 行
+  // 的 body blob。snippetReqRef 去重, 无 body 的行跳过 (子邮件 / 纯元数据)。
+  const fetchSnippetsUpTo = useCallback(
+    (stopIndex: number): void => {
+      const limit = Math.min(stopIndex + 12, rows.length)
+      const need: number[] = []
+      for (let i = 0; i < limit; i++) {
+        const r = rows[i]
+        if (r?.type !== 'email' || !r.email.has_body) continue
+        const id = r.email.internal_id
+        if (snippetReqRef.current.has(id)) continue
+        snippetReqRef.current.add(id)
+        need.push(id)
+      }
+      if (need.length === 0) return
+      void mailApi.email
+        .listSnippets(need)
+        .then((m) => {
+          if (m && Object.keys(m).length > 0) setSnippetMap((prev) => ({ ...prev, ...m }))
+        })
+        .catch(() => {
+          // 取 snippet 失败不致命 (列表已渲染, 仅缺预览行文本); 解除请求标记以便重试。
+          for (const id of need) snippetReqRef.current.delete(id)
+        })
+    },
+    [rows, mailApi]
+  )
+
+  // 首屏 snippet — onRowsRendered 在挂载时也会触发, 但加一道兜底确保第一屏总有
+  // 预览 (rows 变化即尝试, snippetReqRef 去重故重复调用廉价)。
+  useEffect(() => {
+    if (rows.length > 0) fetchSnippetsUpTo(20)
+  }, [rows, fetchSnippetsUpTo])
+
   const handleRowsRendered = useCallback(
     (range: { stopIndex: number }) => {
+      // 懒取经过的行的 snippet (与分页无关, !showLoader 时也要取)。
+      fetchSnippetsUpTo(range.stopIndex)
       // 滚到 ~70% 或距底 8 行 (取更早) 就预取下一页. 配合上面 keepPreviousData,
       // limit 升级期间旧 rows 保留挂载, 新结果到达后 React Query 原地替换, 用户
       // 不会看到 spinner / 列表抖动 / 回顶部.
@@ -1088,7 +1141,7 @@ export function EmailList(): React.ReactElement {
         setPageCount((c) => Math.min(c + 1, MAX_PAGES))
       }
     },
-    [rows.length, showLoader]
+    [rows.length, showLoader, fetchSnippetsUpTo]
   )
 
   const visibleIds = useMemo(() => orderedIds, [orderedIds])
@@ -1310,6 +1363,7 @@ export function EmailList(): React.ReactElement {
               rows,
               activeId,
               newIds,
+              snippets: snippetMap,
               onSelect: setActive,
               onToggleGroup: toggleGroup,
               onToggleThread: handleToggleThread,
@@ -1349,6 +1403,9 @@ function enrichDefaults(m: EmailMeta): EnrichedEmailMeta {
   return {
     ...m,
     snippet: null,
+    // listByThread 补全的子邮件不带 body 信息 → has_body=false (保持原 60-78px
+    // 紧凑行高, 不为它们懒取 snippet, 与改造前行为一致)。
+    has_body: false,
     lang: 'unknown',
     ai_priority: null,
     ai_action: null,
