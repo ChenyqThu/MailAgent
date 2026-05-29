@@ -586,6 +586,46 @@ describe('useEmailChat — abort + lifecycle', () => {
     }
   })
 
+  test('E_NOTION_AGENT_RATE_LIMIT (trust-rule) engages the cooldown, not a Retry', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    mockChatStart.mockResolvedValue({
+      sessionId: 1,
+      userMessageId: 100,
+      assistantMessageId: 101
+    })
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+    expect(result.current.quotaCooldownUntil).toBeNull()
+
+    await act(async () => {
+      await result.current.send({ message: 'hi', backendKind: 'notion-agent' })
+    })
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: {
+          type: 'error',
+          code: 'E_NOTION_AGENT_RATE_LIMIT',
+          message: 'rate-limited by trust-rule'
+        }
+      })
+    })
+
+    // Same cooldown substrate as E_QUOTA: send gets disabled via a ~5-min
+    // window, NOT a Retry button (an immediate retry deepens Notion's ban).
+    expect(result.current.error?.code).toBe('E_NOTION_AGENT_RATE_LIMIT')
+    expect(result.current.quotaCooldownUntil).not.toBeNull()
+    if (result.current.quotaCooldownUntil !== null) {
+      expect(result.current.quotaCooldownUntil - Date.now()).toBeGreaterThan(4 * 60 * 1000)
+    }
+    expect(result.current.retryLast).toBeNull()
+  })
+
   test('retryLast is null when no error / no failed input (state machine #3)', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     const { result } = renderHook(() => useEmailChat(101))
@@ -803,9 +843,7 @@ describe('useEmailChat — abort + lifecycle', () => {
         event: { type: 'error', code: 'E_QUOTA', message: 'quota exhausted' }
       })
     })
-    await waitFor(() =>
-      expect(memory['mailagent.chat.quotaCooldownUntil']).toBeDefined()
-    )
+    await waitFor(() => expect(memory['mailagent.chat.quotaCooldownUntil']).toBeDefined())
     expect(parseInt(memory['mailagent.chat.quotaCooldownUntil']!, 10)).toBe(
       result.current.quotaCooldownUntil!
     )
@@ -1051,9 +1089,7 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
 
   test('clears prior error before dispatching the edit (matches send() contract)', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
-    mockChatListMessages.mockResolvedValue([
-      fakeMessage({ id: 100, session_id: 7, role: 'user' })
-    ])
+    mockChatListMessages.mockResolvedValue([fakeMessage({ id: 100, session_id: 7, role: 'user' })])
     const { result } = renderHook(() => useEmailChat(101))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
 
@@ -1092,9 +1128,7 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
 
   test('propagates dispatch failures so the caller (UserBubble) keeps editor open', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
-    mockChatListMessages.mockResolvedValue([
-      fakeMessage({ id: 100, session_id: 7, role: 'user' })
-    ])
+    mockChatListMessages.mockResolvedValue([fakeMessage({ id: 100, session_id: 7, role: 'user' })])
     const { result } = renderHook(() => useEmailChat(101))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
 

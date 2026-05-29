@@ -214,9 +214,7 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // surface multiple confirmations within a single iter (rare but possible
   // when the LLM emits N tool_use blocks of preview/edit tier in one turn),
   // so this stays an array — UI renders them in arrival order.
-  const [pendingConfirmations, setPendingConfirmations] = useState<PendingConfirmation[]>(
-    []
-  )
+  const [pendingConfirmations, setPendingConfirmations] = useState<PendingConfirmation[]>([])
 
   // Mirror the latest committed emailId into a ref so `send()` can detect
   // a switch that happened while `chat.start()` was in flight. The closure
@@ -500,7 +498,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         setStreamingMessageId(null)
         setError({ code: event.code, message: event.message })
         // Sprint 5 state machine #4 — engage cooldown on quota cap.
-        if (event.code === 'E_QUOTA') {
+        // notion-agent trust-rule rate limit (CLI exit 75) reuses the same
+        // cooldown substrate: Notion's anti-automation guard reports
+        // isRetryable:false with retry_after≈300s, so the only safe response
+        // is a forced backoff (disable send + countdown). An immediate retry
+        // deepens the ban — hence E_NOTION_AGENT_RATE_LIMIT is deliberately
+        // absent from RETRIABLE_ERROR_CODES (no Retry button).
+        if (event.code === 'E_QUOTA' || event.code === 'E_NOTION_AGENT_RATE_LIMIT') {
           setQuotaCooldownUntil(Date.now() + QUOTA_COOLDOWN_MS)
         }
         // L2 cleanup — session won't produce more events; drop the meta entry
@@ -903,6 +907,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
 //     verbatim when the upstream sends an SSE `error` chunk instead of a
 //     graceful end. "Claude is overloaded" is the headline case — retry
 //     typically clears within 30s.
+//
+// NOT here on purpose: E_NOTION_AGENT_RATE_LIMIT (CLI exit 75 / trust-rule).
+// Notion reports isRetryable:false — an immediate re-fire deepens the
+// anti-automation ban. It routes through the quota cooldown instead (see the
+// error-event handler above), which disables send + shows a countdown rather
+// than a Retry button.
 const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   'E_NETWORK',
   'E_UPSTREAM',

@@ -877,6 +877,8 @@ function mapErrorKey(code: string): string {
       return 'chat.error.abort'
     case 'E_NOTION_AGENT_AUTH':
       return 'chat.error.agentAuth'
+    case 'E_NOTION_AGENT_RATE_LIMIT':
+      return 'chat.error.agentRateLimit'
     case 'E_NOTION_AGENT_NETWORK':
     case 'E_NETWORK':
       return 'chat.error.network'

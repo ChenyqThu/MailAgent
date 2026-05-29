@@ -248,6 +248,24 @@ describe('NotionAgentBackend — classifyExit', () => {
     expect(__testing.classifyExit(127, '')).toBe('E_NOTION_AGENT_NOT_INSTALLED')
   })
 
+  // CLI ≥0.1.11 structured exit codes are authoritative regardless of stderr.
+  test('exit 75 → E_NOTION_AGENT_RATE_LIMIT (trust-rule), ignoring stderr', () => {
+    expect(__testing.classifyExit(75, '')).toBe('E_NOTION_AGENT_RATE_LIMIT')
+    // Even if stderr looks auth-y, the structured code wins.
+    expect(__testing.classifyExit(75, 'token_v2 something')).toBe('E_NOTION_AGENT_RATE_LIMIT')
+  })
+
+  test('exit 77 → E_NOTION_AGENT_AUTH', () => {
+    expect(__testing.classifyExit(77, '')).toBe('E_NOTION_AGENT_AUTH')
+  })
+
+  // <0.1.11 fallback: trust-rule denial only surfaced as a stderr substring.
+  test('stderr trust-rule-denied → E_NOTION_AGENT_RATE_LIMIT (legacy fallback)', () => {
+    expect(__testing.classifyExit(1, 'request failed: trust-rule-denied')).toBe(
+      'E_NOTION_AGENT_RATE_LIMIT'
+    )
+  })
+
   test('default → E_NOTION_AGENT_FAIL', () => {
     expect(__testing.classifyExit(1, 'unknown')).toBe('E_NOTION_AGENT_FAIL')
   })
@@ -368,6 +386,24 @@ describe('NotionAgentBackend — error paths', () => {
     expect(last.type).toBe('error')
     if (last.type === 'error') expect(last.code).toBe('E_NOTION_AGENT_AUTH')
     // no done/usage when the call failed.
+    expect(events.find((e) => e.type === 'done')).toBeUndefined()
+  })
+
+  test('exit 75 (trust-rule) → tool_call(error) + E_NOTION_AGENT_RATE_LIMIT', async () => {
+    mockExecaStream({ chunks: [], exitCode: 75, stderr: 'error: trust-rule-denied' })
+    const backend = new NotionAgentBackend()
+    const events = await collect(
+      backend.stream({
+        history: [userMsg('hi')],
+        model: null,
+        agentPageId: null,
+        signal: new AbortController().signal
+      })
+    )
+    const last = events[events.length - 1]
+    expect(last.type).toBe('error')
+    if (last.type === 'error') expect(last.code).toBe('E_NOTION_AGENT_RATE_LIMIT')
+    // failed call → no done/usage; the renderer routes this to the cooldown.
     expect(events.find((e) => e.type === 'done')).toBeUndefined()
   })
 

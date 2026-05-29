@@ -678,11 +678,12 @@
       "upstream": "上游 LLM 错误 · 请重试",
       "abort": "已取消",
       "agentAuth": "Notion 登录已过期 — 请重新 init notion-agent",
+      "agentRateLimit": "⚠️ Notion 触发了反自动化保护（请求过于频繁，非系统出错）。已自动暂停，约 5 分钟后可再次发送。此时手动重试反而会延长等待。",
       "agentNotInstalled": "notion-agent CLI 未安装 — 请运行 pipx install notion-agent-cli",
       "agentTimeout": "Notion Agent 超时 — 请重试",
       "modelUnsupported": "当前 backend 不支持该模型",
       "retry": "重试",
-      "quotaCooldown": "额度冷却中 · {seconds} 秒后可再次发送"
+      "quotaCooldown": "冷却中 · {seconds} 秒后可再次发送"
     },
     "toolCall": {
       "running": "执行中",

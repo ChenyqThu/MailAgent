@@ -26,7 +26,19 @@
 //
 // `notion-agent` exit codes map to E_* event codes so the renderer can
 // branch on E_NOTION_AGENT_AUTH (token_v2 expired) vs E_NOTION_AGENT_NETWORK
-// (Cloudflare blocked) vs the generic E_NOTION_AGENT_FAIL.
+// (Cloudflare blocked) vs E_NOTION_AGENT_RATE_LIMIT (Notion's anti-automation
+// "trust-rule" guard tripped) vs the generic E_NOTION_AGENT_FAIL.
+//
+// trust-rule (CLI ≥0.1.11 exit 75): Notion has no public ✦ AI API; the CLI
+// drives the internal `runInferenceTranscript` endpoint, which a server-side
+// trust rule protects. A burst of automated calls pushes the session into
+// strict mode and subsequent calls are denied (HTTP 200 with an embedded
+// `{"subType":"trust-rule-denied","isRetryable":false}`). The CLI surfaces
+// this as exit 75. It is NOT auth/network — an immediate retry only deepens
+// the ban; the renderer treats E_NOTION_AGENT_RATE_LIMIT like E_QUOTA (force
+// a ~5-min backoff cooldown, no Retry button). The exit code is authoritative
+// regardless of --stream vs --json, so we read it directly without parsing
+// stdout (handoff §2).
 
 import { execa } from 'execa'
 import { existsSync, readdirSync, statSync } from 'fs'
@@ -349,14 +361,28 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
 }
 
 function classifyExit(exitCode: number | null | undefined, stderr: string): string {
+  // CLI ≥0.1.11 emits structured exit codes that classify the failure without
+  // parsing stdout/stderr (handoff §2). These are authoritative — check first.
+  //   75 → trust-rule rate limit (anti-automation guard; retry_after≈300s,
+  //        isRetryable:false → must back off, never retry immediately)
+  //   77 → auth/credential invalid (re-run `notion-agent init`)
+  //  127 → binary not found on PATH
+  if (exitCode === 75) return 'E_NOTION_AGENT_RATE_LIMIT'
+  if (exitCode === 77) return 'E_NOTION_AGENT_AUTH'
+  if (exitCode === 127) return 'E_NOTION_AGENT_NOT_INSTALLED'
+
+  // <0.1.11 fallback + defence-in-depth: the only signal was the human-readable
+  // stderr line. trust-rule denial leaks a `trust-rule-denied` subtype string.
   const haystack = stderr.toLowerCase()
+  if (haystack.includes('trust-rule-denied') || haystack.includes('trust_rule')) {
+    return 'E_NOTION_AGENT_RATE_LIMIT'
+  }
   if (haystack.includes('token_v2') || haystack.includes('unauthorized')) {
     return 'E_NOTION_AGENT_AUTH'
   }
   if (haystack.includes('cloudflare') || haystack.includes('network')) {
     return 'E_NOTION_AGENT_NETWORK'
   }
-  if (exitCode === 127) return 'E_NOTION_AGENT_NOT_INSTALLED'
   return 'E_NOTION_AGENT_FAIL'
 }
 
@@ -368,6 +394,8 @@ function safeErrorMessage(code: string, exitCode: number | null | undefined): st
   switch (code) {
     case 'E_NOTION_AGENT_AUTH':
       return 'notion-agent authentication failed — re-run `notion-agent init`'
+    case 'E_NOTION_AGENT_RATE_LIMIT':
+      return 'notion-agent rate-limited by Notion anti-automation (trust-rule) — backing off ~5min'
     case 'E_NOTION_AGENT_NETWORK':
       return 'notion-agent network error — check connection / Cloudflare'
     case 'E_NOTION_AGENT_NOT_INSTALLED':
