@@ -119,10 +119,10 @@ describe('Sidebar §2.11 contract', () => {
     expect(bottomDeadAnchors).toHaveLength(0)
   })
 
-  test('exactly 12 nav rows (4 + 3 + 3 + 2)', async () => {
+  test('exactly 14 nav rows (6 + 3 + 3 + 2)', async () => {
     const container = await renderSidebar()
     const allRows = container.querySelectorAll('[data-app-nav] .row')
-    expect(allRows).toHaveLength(12)
+    expect(allRows).toHaveLength(14)
   })
 
   test('AI 会话历史 row renders enabled (Sprint 18 review — 不再灰禁)', async () => {
