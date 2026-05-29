@@ -60,13 +60,13 @@ function buildSyncView(
       }
     case 'connecting':
       return {
-        dot: 'bg-coral/100 animate-pulse',
+        dot: 'bg-coral/100 animate-pulse motion-reduce:animate-none',
         label: t('statusbar.sync.connecting'),
         tooltip: t('statusbar.sync.tooltipConnected')
       }
     case 'reconnecting':
       return {
-        dot: 'bg-coral/100 animate-pulse',
+        dot: 'bg-coral/100 animate-pulse motion-reduce:animate-none',
         label: t('statusbar.sync.reconnecting'),
         tooltip:
           fallbackSec !== null

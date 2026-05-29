@@ -46,7 +46,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
 import {
@@ -54,6 +54,7 @@ import {
   Check,
   Folder,
   History,
+  Loader2,
   Mail,
   RotateCcw,
   Search as SearchIcon,
@@ -297,7 +298,10 @@ export function CommandPalette(): React.ReactElement | null {
       return r
     },
     staleTime: 30_000,
-    placeholderData: undefined,
+    // Keep the previous query's hits visible while a new query is in flight so
+    // editing the search box does not flash the list to empty between debounced
+    // re-runs. Matches EmailList / EmailDetail usage.
+    placeholderData: keepPreviousData,
     enabled: open
   })
 
@@ -734,16 +738,31 @@ export function CommandPalette(): React.ReactElement | null {
                 title="Email"
                 countLabel={countLabel}
                 aside={
-                  <>
-                    <span className="w-1 h-1 rounded-full bg-ok" aria-hidden />
-                    <span>{t('palette.footer.fts5Healthy')}</span>
-                    {lastLatencyMs !== null && (
-                      <>
-                        <FooterDot />
-                        <span className="tabular-nums">{lastLatencyMs}ms</span>
-                      </>
-                    )}
-                  </>
+                  isSearching ? (
+                    // In-flight (debounce settled + query running). keepPreviousData
+                    // keeps stale hits below, so we surface the live state here as a
+                    // restrained spinner + label instead of flashing the list empty.
+                    <>
+                      <Loader2
+                        size={12}
+                        strokeWidth={2}
+                        className="animate-spin motion-reduce:animate-none text-ink-fg-2"
+                        aria-hidden
+                      />
+                      <span>{t('palette.searching')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-1 h-1 rounded-full bg-ok" aria-hidden />
+                      <span>{t('palette.footer.fts5Healthy')}</span>
+                      {lastLatencyMs !== null && (
+                        <>
+                          <FooterDot />
+                          <span className="tabular-nums">{lastLatencyMs}ms</span>
+                        </>
+                      )}
+                    </>
+                  )
                 }
               />
               {hasHits ? (
@@ -774,12 +793,21 @@ export function CommandPalette(): React.ReactElement | null {
               ) : (
                 <div className="px-5">
                   <div className="empty-tile">
-                    <SearchIcon
-                      size={18}
-                      strokeWidth={1.75}
-                      className="text-ink-fg-3"
-                      aria-hidden
-                    />
+                    {isSearching ? (
+                      <Loader2
+                        size={18}
+                        strokeWidth={1.75}
+                        className="animate-spin motion-reduce:animate-none text-ink-fg-3"
+                        aria-hidden
+                      />
+                    ) : (
+                      <SearchIcon
+                        size={18}
+                        strokeWidth={1.75}
+                        className="text-ink-fg-3"
+                        aria-hidden
+                      />
+                    )}
                     <div className="text-aux text-ink-fg-1">
                       {isSearching ? t('palette.searching') : t('palette.email.emptyTitle')}
                     </div>
@@ -842,7 +870,7 @@ export function CommandPalette(): React.ReactElement | null {
                             </span>
                           )}
                           {isRunning && (
-                            <span className="text-meta font-mono text-ink-fg-3 animate-pulse">
+                            <span className="text-meta font-mono text-ink-fg-3 animate-pulse motion-reduce:animate-none">
                               {t('palette.actions.running')}
                             </span>
                           )}

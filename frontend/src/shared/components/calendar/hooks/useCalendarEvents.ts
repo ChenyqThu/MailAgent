@@ -7,7 +7,7 @@
 // useCalendarNames: 拉 distinct calendar_name list (顶部 calendar 切换 chip).
 
 import { useCallback, useEffect, useState } from 'react'
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useMutation, keepPreviousData } from '@tanstack/react-query'
 import i18n from 'i18next'
 import { useTranslation } from 'react-i18next'
 
@@ -51,7 +51,14 @@ export function useCalendarEventsInWindow(
   // F6 — 60s ± 15s jitter (effective 45-75s) 避免 thundering herd
   const refetchIntervalMs = useJitteredInterval(60_000, 15_000)
   const q = useQuery({
-    queryKey: [...CALENDAR_EVENTS_KEY, opts.fromIso, opts.toIso, opts.calendarName, opts.source, opts.expandRecurrences],
+    queryKey: [
+      ...CALENDAR_EVENTS_KEY,
+      opts.fromIso,
+      opts.toIso,
+      opts.calendarName,
+      opts.source,
+      opts.expandRecurrences
+    ],
     queryFn: () => mailApi.calendar.eventsList(opts),
     staleTime: 60_000,
     // Phase 4·#1 — calendar 多选走 client-side select: queryKey 不含
@@ -59,9 +66,13 @@ export function useCalendarEventsInWindow(
     // 重跑 select 过滤. 个人日历数据量小, 一次拉全 + 前端过滤最简.
     select: (data: CalendarEventOccurrence[]) =>
       filterOccurrencesByCalendars(data, selectedCalendars),
+    // 渐进式加载 — 切日/周/月 (queryKey 含 fromIso/toIso) 时旧 occurrences 原地
+    // 留屏直到新窗口数据 ready, 消除"清空旧数据→空白→新数据"的闪白. isLoading
+    // 仅首次 (无缓存可借) 为 true, 切窗口走 isFetching, view 据此只在首次显骨架.
+    placeholderData: keepPreviousData,
     refetchInterval: refetchIntervalMs,
     refetchIntervalInBackground: false, // tab 后台不刷, 省功
-    refetchOnWindowFocus: true          // 回到 tab 立即 refresh
+    refetchOnWindowFocus: true // 回到 tab 立即 refresh
   })
   return {
     data: q.data,
@@ -80,7 +91,10 @@ export function useCalendarEvent(opts: EventGetOpts | null): {
     queryKey: ['calendar', 'event', opts?.icalUid, opts?.recurrenceId, opts?.source],
     queryFn: () => mailApi.calendar.eventGet(opts!),
     enabled: !!opts && !!opts.icalUid,
-    staleTime: 60_000
+    staleTime: 60_000,
+    // 切换选中事件 (queryKey 含 icalUid/recurrenceId) 时旧详情留屏直到新详情
+    // ready, 配合 drawer 骨架: isLoading 仅首次为 true, 后续切换走 isFetching.
+    placeholderData: keepPreviousData
   })
   return { data: q.data, isLoading: q.isLoading }
 }
@@ -135,20 +149,14 @@ export function useCalendarSyncTrigger(): {
     },
     onError: (err: unknown) => {
       const e = err as Error
-      toastError(
-        t('calendar.syncTriggerFail', '日历同步失败'),
-        e.message
-      )
+      toastError(t('calendar.syncTriggerFail', '日历同步失败'), e.message)
     }
   })
   // F6 (review #H1) — mut.mutate 在 react-query v5 是 referentially stable,
   // deps=[mut.mutate] 实际等价 deps=[]; useCallback 仍 wrap 为给 caller 提供
   // 稳定函数引用 (useEffect / useCallback dep 友好). 改空 deps + 注释明确语义.
   const stableMutate = mut.mutate
-  const trigger = useCallback(
-    (opts?: SyncNowOpts) => stableMutate(opts),
-    [stableMutate]
-  )
+  const trigger = useCallback((opts?: SyncNowOpts) => stableMutate(opts), [stableMutate])
   return { trigger, isPending: mut.isPending }
 }
 
@@ -206,8 +214,7 @@ export function toIsoWithOffset(d: Date): string {
 export function relativeTime(d: Date): string {
   const secs = Math.floor((Date.now() - d.getTime()) / 1000)
   if (secs < 5) return i18n.t('calendar.relTime.justNow', '刚刚')
-  if (secs < 60)
-    return i18n.t('calendar.relTime.secondsAgo', '{n} 秒前', { n: secs })
+  if (secs < 60) return i18n.t('calendar.relTime.secondsAgo', '{n} 秒前', { n: secs })
   if (secs < 3600)
     return i18n.t('calendar.relTime.minutesAgo', '{n} 分钟前', {
       n: Math.floor(secs / 60)

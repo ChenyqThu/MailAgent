@@ -40,12 +40,12 @@ function StatusChip({
     },
     connecting: {
       chipClass: 'bg-coral/15 text-coral',
-      dotClass: 'bg-coral/100 animate-pulse',
+      dotClass: 'bg-coral/100 animate-pulse motion-reduce:animate-none',
       labelKey: 'settings.realtime.connecting'
     },
     reconnecting: {
       chipClass: 'bg-coral/15 text-coral',
-      dotClass: 'bg-coral/100 animate-pulse',
+      dotClass: 'bg-coral/100 animate-pulse motion-reduce:animate-none',
       labelKey: 'settings.realtime.reconnecting'
     },
     disconnected: {

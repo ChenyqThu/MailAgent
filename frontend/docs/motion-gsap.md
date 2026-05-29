@@ -108,11 +108,24 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 - Chat：新消息气泡入场（排除历史/streaming）/ DraftPreviewCard 序列。
 - Toast 类：UndoToast 进度条 GSAP 倒计时 + 进场。
 - 微交互：BatchActionBar 出入场 / SettingsShell tab 淡入 / FolderRow 入场 fade / AgendaView stagger / flag·pin 颜色过渡（CSS）/ 选中 accent bar fade（CSS）。
-- §8 曲线收口：移除全部旧第二曲线 `cubic-bezier(0.32,0.72,0,1)`（folder-modal / efm-modal / batch-bar / undo-toast），统一 standard。
+- Toast 通用退场：AnimatePresence-lite（ToastContainer diff store items + 延迟卸载），TTL/手动/demote 三路径统一 slide-out。
+- 滑动 indicator：view-chip + Inbox tab 激活态用绝对定位 indicator + GSAP x/width 滑动（getBoundingClientRect 测量）。
+- 展开：AdvancedDisclosure（受控 + CSS grid-rows，保 a11y）/ ToolCallAuditRow（CSS grid-rows）。
+- §8 曲线收口：移除全部旧第二曲线 `cubic-bezier(0.32,0.72,0,1)`（folder-modal / efm-modal / batch-bar / undo-toast / view-chip / inbox-tab），统一 standard。
 
 **有意延后**（透明记录，非遗漏）：
-- **Toast 通用退场**：store TTL/demote 路径硬移除，干净退场需 store 重构（AnimatePresence 式）或 store 模型改字段，对 P1 不成比例；现有进场已 §8 合规。
-- **view-chip / Inbox tab / ui/tabs 滑动 indicator**：sliding indicator 需测量定位 + DOM 重构，对齐效果**需真机 GUI 目检**（border/padding 偏移易错），不在无头环境盲发；现有过渡曲线已对齐 standard。
-- **AdvancedDisclosure 展开**：原生 `<details>` 加高度动画须改受控组件，丢失 disclosure a11y 语义，面板「95% 用户从不打开」，成本不值。
-- **ToolCallAuditRow 展开**：内容高度展开，clipPath/受控 height 中等风险、低价值，暂缓。
+- **ui/tabs underline 滑动 indicator**：全仓仅 SettingsRail 消费 Tabs 且全 `orientation=vertical`，横向 coral underline 零渲染实例 → 做了等于 dead code，跳过。
 - **FolderRow 归档 collapse 退场**：FolderList 从 react-query data 派生行，归档→invalidate→refetch→行从 data 移除→父卸载，行内无法延迟卸载；真正的 collapse 退场需把删除队列上提到 FolderList 做数据 diff（父数据流改写，超范围）。当前只做入场 fade。
+
+## 9. Loading 与渐进式加载（§8 loading 词汇）
+
+**canvas / 数学曲线 loader = 不采用**（用户拍板 2026-05-29）。理由：站点上的曲线本质是
+spring/elastic/fourier，违 §8 禁 spring/bounce/elastic + "This is a tool." 克制哲学；
+独立审计也确认现有 `animate-spin`（图标）+ skeleton `animate-pulse` 已 100% 合规且足够。
+loading 不该成为视觉焦点。**loading 只用这两个 §8 词汇**，别引入装饰性 canvas/rAF 逐帧动画。
+
+**骨架屏 + 渐进式加载**（工具型 app「高级感」的正解）：
+- 骨架原语：`feedback/LoadingSkeleton.tsx`（`Skeleton`/`SkeletonRow`/`SkeletonCard`，自带 `animate-pulse motion-reduce:animate-none`）+ `EmptyState`。
+- 渐进式：数据切换/翻页/refetch 用 TanStack Query v5 `placeholderData: keepPreviousData`，旧数据留屏到新数据 ready，消除闪白/回顶。配合 `isLoading`（v5 下仅「首次无缓存」为 true）做骨架兜底——切换时 `isLoading=false` 走 isFetching，自然只在首次显骨架。
+- 已覆盖：EmailList / EmailDetail / FolderList（既有）+ Calendar 4 view + EventDetailDrawer + CommandPalette 搜索（本轮）。手写 `animate-pulse` 必带 `motion-reduce:animate-none`。
+- 延后（更大初衷）：邮件正文 HTML 流式 / 内联图懒加载 + allSettled 协调 / 附件缩略图。

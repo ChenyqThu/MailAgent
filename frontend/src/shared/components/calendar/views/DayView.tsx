@@ -21,6 +21,7 @@ import {
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { cn } from '@shared/lib/cn'
 
 interface Props {
@@ -163,20 +164,26 @@ export function DayView({
   }, [selectedDate])
   const dayEnd = useMemo(() => addDays(dayStart, 1), [dayStart])
 
-  const { data: dayEventsRaw, isLoading } = useCalendarEventsInWindow({
-    fromIso: dayStart.toISOString(),
-    toIso: dayEnd.toISOString(),
-    calendarName
-  }, selectedCalendars)
+  const { data: dayEventsRaw, isLoading } = useCalendarEventsInWindow(
+    {
+      fromIso: dayStart.toISOString(),
+      toIso: dayEnd.toISOString(),
+      calendarName
+    },
+    selectedCalendars
+  )
 
   // mini-month 6 周窗口的 events (标记每天是否有事件)
   const miniGridStart = useMemo(() => startOfWeek(startOfMonth(miniMonth)), [miniMonth])
   const miniGridEnd = useMemo(() => addDays(miniGridStart, 42), [miniGridStart])
-  const { data: monthEvents } = useCalendarEventsInWindow({
-    fromIso: miniGridStart.toISOString(),
-    toIso: miniGridEnd.toISOString(),
-    calendarName
-  }, selectedCalendars)
+  const { data: monthEvents } = useCalendarEventsInWindow(
+    {
+      fromIso: miniGridStart.toISOString(),
+      toIso: miniGridEnd.toISOString(),
+      calendarName
+    },
+    selectedCalendars
+  )
   const eventDays = useMemo(() => {
     const s = new Set<string>()
     for (const occ of monthEvents ?? []) {
@@ -214,8 +221,7 @@ export function DayView({
   }
 
   const sortedTimed = [...timed].sort(
-    (a, b) =>
-      Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
+    (a, b) => Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
   )
 
   return (
@@ -268,8 +274,7 @@ export function DayView({
               <span className="dr-bar" />
               <div className="min-w-0 flex-1">
                 <div className="dr-time">
-                  {shortTime(occ.occurrence_start_iso)} –{' '}
-                  {shortTime(occ.occurrence_end_iso)}
+                  {shortTime(occ.occurrence_start_iso)} – {shortTime(occ.occurrence_end_iso)}
                 </div>
                 <div className={cn('dr-title truncate', !occ.summary && 'empty-field')}>
                   {occ.summary || t('calendar.shared.untitled', '未命名事件')}
@@ -281,8 +286,10 @@ export function DayView({
       </aside>
 
       <div className="day-main">
+        {/* 首次加载 (无 keepPreviousData 旧数据) 才显骨架; 切日时旧日 timeline
+            经 keepPreviousData 留屏直到新日 ready, isLoading=false 不显骨架. */}
         {isLoading ? (
-          <div className="text-aux text-ink-fg-2 p-6">{t('calendar.shared.loading', '加载中…')}</div>
+          <Skeleton rows={8} className="p-6" />
         ) : total === 0 ? (
           <EmptyState
             icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
@@ -316,7 +323,9 @@ export function DayView({
                       {occ.summary ? (
                         occ.summary
                       ) : (
-                        <span className="empty-field">{t('calendar.shared.untitled', '未命名事件')}</span>
+                        <span className="empty-field">
+                          {t('calendar.shared.untitled', '未命名事件')}
+                        </span>
                       )}
                     </button>
                   ))}
@@ -341,8 +350,7 @@ export function DayView({
                     const endMs = Date.parse(occ.occurrence_end_iso)
                     const topPx = ((startMs - dayMs) / 3_600_000) * HOUR_PX
                     const heightPx = ((endMs - startMs) / 3_600_000) * HOUR_PX
-                    const sel =
-                      selectedKey === `${occ.id}-${occ.occurrence_start_iso}`
+                    const sel = selectedKey === `${occ.id}-${occ.occurrence_start_iso}`
                     return (
                       <EventBlock
                         key={`b-${occ.id}-${occ.occurrence_start_iso}`}

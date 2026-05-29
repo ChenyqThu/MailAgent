@@ -39,7 +39,12 @@ interface PopState {
   dayLabel: string
 }
 
-export function MonthView({ date, calendarName, selectedCalendars, onSelect }: Props): React.ReactElement {
+export function MonthView({
+  date,
+  calendarName,
+  selectedCalendars,
+  onSelect
+}: Props): React.ReactElement {
   const { t } = useTranslation()
   const [pop, setPop] = useState<PopState | null>(null)
   // F11 — popover click-outside 用 ref + capture phase mousedown 判断, 不靠
@@ -55,11 +60,14 @@ export function MonthView({ date, calendarName, selectedCalendars, onSelect }: P
   )
   const currentMonth = monthStart.getMonth()
 
-  const { data, isLoading } = useCalendarEventsInWindow({
-    fromIso: gridStart.toISOString(),
-    toIso: gridEnd.toISOString(),
-    calendarName
-  }, selectedCalendars)
+  const { data, isLoading } = useCalendarEventsInWindow(
+    {
+      fromIso: gridStart.toISOString(),
+      toIso: gridEnd.toISOString(),
+      calendarName
+    },
+    selectedCalendars
+  )
 
   // F11 — popover click-outside / Esc to close. 用 capture phase mousedown
   // + popRef.contains 判断点击在 popover 内, 比老 'click' bubble + 内部
@@ -90,10 +98,24 @@ export function MonthView({ date, calendarName, selectedCalendars, onSelect }: P
     }
   }, [pop])
 
+  // 首次加载 (无 keepPreviousData 旧数据) 才显网格骨架; 切月时旧月格留屏不闪.
   if (isLoading) {
     return (
-      <div className="cal-month">
-        <div className="text-aux text-ink-fg-2 p-6">{t('calendar.shared.loading', '加载中…')}</div>
+      <div className="cal-month" aria-busy="true">
+        <div className="m-dow">
+          {DOW_EN.map((label) => (
+            <div key={label}>{label}</div>
+          ))}
+        </div>
+        <div className="m-grid">
+          {Array.from({ length: 42 }, (_, i) => (
+            <div key={`skel-cell-${i}`} className="m-cell">
+              <div className="m-num">
+                <span className="nday h-3.5 w-5 rounded bg-ink-3 animate-pulse motion-reduce:animate-none" />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -152,21 +174,18 @@ export function MonthView({ date, calendarName, selectedCalendars, onSelect }: P
           // sort: all-day first, then by start time
           const sorted = [...dayEvents].sort((a, b) => {
             if (a.is_all_day !== b.is_all_day) return a.is_all_day ? -1 : 1
-            return (
-              Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
-            )
+            return Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
           })
           const visible = sorted.slice(0, MAX_VISIBLE)
           const moreCount = sorted.length - visible.length
           const monthN = d.getMonth() + 1
           return (
-            <div
-              key={i}
-              className={cn('m-cell', isOther && 'is-other', today && 'is-today')}
-            >
+            <div key={i} className={cn('m-cell', isOther && 'is-other', today && 'is-today')}>
               <div className="m-num">
                 <span className="nday">{d.getDate()}</span>
-                {today && <span className="m-today-tag">{t('calendar.view.month.today', '今天')}</span>}
+                {today && (
+                  <span className="m-today-tag">{t('calendar.view.month.today', '今天')}</span>
+                )}
               </div>
               {visible.map((occ) => (
                 <EventChip
@@ -199,14 +218,12 @@ export function MonthView({ date, calendarName, selectedCalendars, onSelect }: P
       </div>
 
       {pop && (
-        <div
-          ref={popRef}
-          className="more-pop glass-pop"
-          style={{ top: pop.top, left: pop.left }}
-        >
+        <div ref={popRef} className="more-pop glass-pop" style={{ top: pop.top, left: pop.left }}>
           <div className="mp-head">
             <span>{pop.dayLabel}</span>
-            <span className="mp-date">{t('calendar.view.month.popEventCount', '{n} 个事件', { n: pop.items.length })}</span>
+            <span className="mp-date">
+              {t('calendar.view.month.popEventCount', '{n} 个事件', { n: pop.items.length })}
+            </span>
           </div>
           <div className="space-y-1">
             {pop.items.map((occ, idx) => (
@@ -222,7 +239,6 @@ export function MonthView({ date, calendarName, selectedCalendars, onSelect }: P
           </div>
         </div>
       )}
-
     </div>
   )
 }

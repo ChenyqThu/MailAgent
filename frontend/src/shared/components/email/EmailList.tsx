@@ -1258,7 +1258,11 @@ export function EmailList(): React.ReactElement {
           visual "just-arrived" cue. */}
 
       <div className="flex-1 min-h-0">
-        {isLoading && <div className="p-6 text-aux text-ink-fg-2 animate-pulse">Loading…</div>}
+        {isLoading && (
+          <div className="p-6 text-aux text-ink-fg-2 animate-pulse motion-reduce:animate-none">
+            Loading…
+          </div>
+        )}
         {isError && (
           <div className="p-6 text-aux text-fail">
             {error instanceof Error ? error.message : String(error)}

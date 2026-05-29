@@ -16,6 +16,7 @@ import {
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { cn } from '@shared/lib/cn'
 
 interface Props {
@@ -37,7 +38,13 @@ const GRID_COLS = '56px repeat(7, 1fr)'
 
 // F32 — ymd/pad/isSameDay/isTodayLocal 抽到 ../lib/format
 
-export function WeekView({ date, calendarName, selectedCalendars, onSelect, selectedKey = null }: Props): React.ReactElement {
+export function WeekView({
+  date,
+  calendarName,
+  selectedCalendars,
+  onSelect,
+  selectedKey = null
+}: Props): React.ReactElement {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
@@ -55,11 +62,14 @@ export function WeekView({ date, calendarName, selectedCalendars, onSelect, sele
     [weekStart]
   )
 
-  const { data, isLoading } = useCalendarEventsInWindow({
-    fromIso: weekStart.toISOString(),
-    toIso: weekEnd.toISOString(),
-    calendarName
-  }, selectedCalendars)
+  const { data, isLoading } = useCalendarEventsInWindow(
+    {
+      fromIso: weekStart.toISOString(),
+      toIso: weekEnd.toISOString(),
+      calendarName
+    },
+    selectedCalendars
+  )
 
   // 默认 scroll 到 8AM (events 渲染完 / 切日期重新加载完都 reset).
   useEffect(() => {
@@ -68,10 +78,12 @@ export function WeekView({ date, calendarName, selectedCalendars, onSelect, sele
     }
   }, [isLoading, weekStart.getTime()])
 
+  // 首次加载 (无 placeholderData 旧数据可借) 才显骨架; 切周时 isLoading=false,
+  // 旧周事件经 keepPreviousData 留屏直到新周 ready, 不显骨架不闪白.
   if (isLoading) {
     return (
-      <div className="cal-week">
-        <div className="text-aux text-ink-fg-2 p-6">{t('calendar.shared.loading', '加载中…')}</div>
+      <div className="cal-week" aria-busy="true">
+        <Skeleton rows={8} className="p-6" />
       </div>
     )
   }
@@ -149,7 +161,9 @@ export function WeekView({ date, calendarName, selectedCalendars, onSelect, sele
                     {occ.summary ? (
                       occ.summary
                     ) : (
-                      <span className="empty-field">{t('calendar.shared.untitled', '未命名事件')}</span>
+                      <span className="empty-field">
+                        {t('calendar.shared.untitled', '未命名事件')}
+                      </span>
                     )}
                   </button>
                 ))}
