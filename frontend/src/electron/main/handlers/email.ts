@@ -443,6 +443,45 @@ export function listEmailsByThread(threadId: string | null | undefined): EmailLi
   return rows.map(shapeListItem)
 }
 
+/**
+ * Batch sibling fetch — ONE SQL for many thread_ids, replacing the
+ * per-thread fan-out the renderer used to fire (EmailList kicked one IPC +
+ * one query per visible thread; 800 rows → hundreds of round-trips
+ * serialised on the main process, the dominant source of list-scroll jank).
+ * Returns a map keyed by thread_id with the SAME ascending date order /
+ * shape as listEmailsByThread, so the renderer's supplement-merge logic is
+ * unchanged. Unknown / empty ids are dropped; threads with no rows are
+ * simply absent from the map.
+ */
+export function listEmailsByThreads(
+  threadIds: ReadonlyArray<string> | null | undefined
+): Record<string, EmailList_EmailListItem[]> {
+  if (!Array.isArray(threadIds)) return {}
+  // De-dupe + drop empties — don't trust the caller to pre-clean; keeps the
+  // IN(...) placeholder count tight and the statement-cache slots bounded.
+  const ids = Array.from(
+    new Set(threadIds.filter((t): t is string => typeof t === 'string' && t.length > 0))
+  )
+  if (ids.length === 0) return {}
+  const db = getDb()
+  const placeholders = ids.map(() => '?').join(',')
+  const rows = prep(
+    db,
+    `SELECT ${LIST_COLS}
+       FROM email_metadata
+      WHERE thread_id IN (${placeholders})
+      ORDER BY thread_id ASC, date_received ASC NULLS LAST, internal_id ASC`
+  ).all(...ids) as EmailMetadataRow[]
+  const out: Record<string, EmailList_EmailListItem[]> = {}
+  for (const row of rows) {
+    const item = shapeListItem(row)
+    const tid = item.thread_id
+    if (tid === null || tid === undefined || tid === '') continue
+    ;(out[tid] ??= []).push(item)
+  }
+  return out
+}
+
 export function listEmails(opts: ListOpts): EmailList_EmailListItem[] {
   const db = getDb()
   const where = buildListWhere(opts)
@@ -852,6 +891,9 @@ export function registerEmailHandlers(): void {
   })
   ipcMain.handle('email:listByThread', (_evt, threadId: string | null) =>
     listEmailsByThread(threadId)
+  )
+  ipcMain.handle('email:listByThreads', (_evt, threadIds: string[] | null) =>
+    listEmailsByThreads(threadIds)
   )
   // v8 — listPinnedIds is a readonly SQLite SELECT, wired here. The
   // write path (email:pin / email:unpin) lives in write_ops.ts and forks

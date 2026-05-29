@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { List, type ListImperativeAPI, type RowComponentProps } from 'react-window'
 import { Filter, ListChecks, Mail } from 'lucide-react'
 
@@ -882,13 +882,21 @@ export function EmailList(): React.ReactElement {
     return Array.from(set)
   }, [all, pinnedSupp])
 
-  const threadQueries = useQueries({
-    queries: uniqueThreadIds.map((tid) => ({
-      queryKey: ['email', 'thread', tid],
-      queryFn: () => mailApi.email.listByThread(tid),
-      staleTime: 60_000
-    }))
+  // Sprint 19 — 跨邮箱线程补全批量化. 之前每条可见线程各发一次 listByThread
+  // (useQueries 扇出: 800 行 → 几百次 IPC + SQLite 查询串在主进程上执行, 列表
+  // 滚动/搜索跳转卡顿的主因). 现在合并成单次 listByThreads 批量查询 (1 IPC +
+  // 1 SQL `WHERE thread_id IN (...)`)。queryKey 用排序后的 id 串, 集合相同即
+  // 命中缓存 (顺序无关); keepPreviousData 让 id 集合变化 (加载更多 / 新邮件到达)
+  // 期间旧补全 map 原地保留, 不闪空 (否则跨邮箱线程会瞬间塌成孤立一封)。
+  const threadKey = useMemo(() => [...uniqueThreadIds].sort(), [uniqueThreadIds])
+  const threadBatchQ = useQuery({
+    queryKey: ['emails', 'thread-batch', threadKey],
+    queryFn: () => mailApi.email.listByThreads(threadKey),
+    enabled: threadKey.length > 0,
+    staleTime: 60_000,
+    placeholderData: keepPreviousData
   })
+  const threadBatch = threadBatchQ.data
 
   // Sprint 14 round 21 — supplement merge respects enriched data.
   // listByThread returns the bare EmailMeta shape (no snippet / AI
@@ -915,16 +923,17 @@ export function EmailList(): React.ReactElement {
   }, [all, crossAll, pinnedSupp])
   const threadSupplement = useMemo(() => {
     const m = new Map<string, EnrichedEmailMeta[]>()
-    uniqueThreadIds.forEach((tid, i) => {
-      const data = threadQueries[i]?.data
-      if (!data) return
+    if (!threadBatch) return m
+    for (const tid of uniqueThreadIds) {
+      const data = threadBatch[tid]
+      if (!data) continue
       m.set(
         tid,
         data.map((meta) => enrichedById.get(meta.internal_id) ?? enrichDefaults(meta))
       )
-    })
+    }
     return m
-  }, [uniqueThreadIds, threadQueries, enrichedById])
+  }, [uniqueThreadIds, threadBatch, enrichedById])
 
   // 发件箱用 groupBySentAnchor (发件作母邮件 + 之前线程作子邮件); 其余视图
   // 用 groupByThread (线程最新邮件作 head)。

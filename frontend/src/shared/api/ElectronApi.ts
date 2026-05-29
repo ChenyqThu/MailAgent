@@ -207,6 +207,9 @@ class ElectronEmailApi implements EmailApi {
   async listByThread(threadId: string | null): Promise<EmailMeta[]> {
     return (await invoker()('email:listByThread', threadId)) as EmailMeta[]
   }
+  async listByThreads(threadIds: string[]): Promise<Record<string, EmailMeta[]>> {
+    return (await invoker()('email:listByThreads', threadIds)) as Record<string, EmailMeta[]>
+  }
   async get(internalId: number): Promise<EmailDetail | null> {
     return (await invoker()('email:get', internalId)) as EmailDetail | null
   }

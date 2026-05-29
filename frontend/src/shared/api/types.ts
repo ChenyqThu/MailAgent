@@ -291,6 +291,12 @@ export interface EmailApi {
   /** Sprint 3 — sibling emails of a thread, ascending by date. Empty list
    *  for unknown/empty threadId so the Thread sidebar can blanket-handle. */
   listByThread(threadId: string | null): Promise<EmailMeta[]>
+  /** Sprint 19 — batch sibling fetch for the list pane. One IPC + one SQL
+   *  for many thread_ids (replaces the per-thread useQueries fan-out that
+   *  fired hundreds of round-trips on an 800-row list). Returns a map keyed
+   *  by thread_id; each value is the same ascending-date EmailMeta[] shape
+   *  listByThread returns. Threads with no rows are absent from the map. */
+  listByThreads(threadIds: string[]): Promise<Record<string, EmailMeta[]>>
   get(internalId: number): Promise<EmailDetail | null>
   body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null>
   /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */
