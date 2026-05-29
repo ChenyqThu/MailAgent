@@ -959,6 +959,12 @@ scroll-jacking. This is a tool.
 - `animate-spin` on the sync/loading icon.
 - Streaming text cursor `▎` blink (1s steps(2)).
 
+> **GSAP 落地规范** → [`docs/motion-gsap.md`](docs/motion-gsap.md)。退场/出入场统一、
+> 虚拟列表铁律、Radix 共存、reduced-motion JS 策略、`useExitAnimation` API 全在那里。
+> **曲线已收口为单 standard 曲线**：旧的第二曲线 `cubic-bezier(0.32,0.72,0,1)`
+> （曾散落于 drawer / efm-modal / batch-bar / undo-toast 等）已在 GSAP 引入时全部
+> 对齐到上面的 standard 曲线，不再使用第二曲线。
+
 ---
 
 ## 9. Interaction patterns
