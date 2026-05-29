@@ -26,6 +26,8 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
@@ -171,6 +173,28 @@ function DraftPreviewCard({
     if (editing) editTextareaRef.current?.focus()
   }, [editing])
 
+  // Phase 2 §4.5 — DraftPreviewCard 是 AI 的重点输出, 入场给一个克制的强调序列:
+  // card 整体 autoAlpha+y, 然后 header→footer 极轻微 stagger. 绝对时间锚点让
+  // header/footer 与 card 入场重叠 (而非串行追加), 总时长收在 card 的 DUR.base
+  // 内: card 0→0.22, header 0.04→0.16, footer 0.08→0.20 (≤ DUR.slow 380ms).
+  // 不给内部字段逐条动画. reduced-motion 短路.
+  const cardScopeRef = useRef<HTMLDivElement>(null)
+  const headerRef = useRef<HTMLDivElement>(null)
+  const footerRef = useRef<HTMLDivElement>(null)
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      if (reduceMotion) return
+      const card = cardScopeRef.current
+      if (!card) return
+      const tl = gsap.timeline()
+      tl.from(card, { autoAlpha: 0, y: 8, duration: DUR.base }, 0)
+      if (headerRef.current) tl.from(headerRef.current, { autoAlpha: 0, duration: DUR.fast }, 0.04)
+      if (footerRef.current) tl.from(footerRef.current, { autoAlpha: 0, duration: DUR.fast }, 0.08)
+    },
+    { scope: cardScopeRef }
+  )
+
   // What we'll actually send. When editing, the live `editedBody` wins —
   // pressing Send while in edit mode commits the changes implicitly.
   const finalBody = editing ? editedBody : body
@@ -210,9 +234,10 @@ function DraftPreviewCard({
   // Sprint 12 — .draft-card recipe (coral ring + faint glow + glass bg)
   // lives in index.css so the chrome reads as the AI's headline output.
   return (
-    <div className="draft-card my-2">
+    <div ref={cardScopeRef} className="draft-card my-2">
       {/* Header — mono "DRAFT REPLY" caption + recipient */}
       <div
+        ref={headerRef}
         className={cn(
           'px-3 py-2 border-b border-ink-border-soft bg-ink-2/40',
           'flex items-center justify-between'
@@ -266,6 +291,7 @@ function DraftPreviewCard({
           is HoverTip-wrapped so the disabled-reason or shortcut is always
           one cursor-rest away. */}
       <div
+        ref={footerRef}
         className={cn(
           'px-3 py-2 border-t border-ink-border-soft bg-ink-2/40',
           'flex items-center gap-2'
@@ -933,6 +959,38 @@ function AssistantBubble({
   )
 }
 
+// Phase 2 §6.2 — 新消息气泡入场. 只对*真正新增*的消息播一次入场, 排除:
+// ① 历史会话加载 (首次渲染时一批旧消息已在 messages 里, 不应逐条动);
+// ② streaming chunk 更新 (流式追加 token 不是新气泡, 同一 id 只播一次).
+// 父组件用 seen-set 判定: 首渲染把全部已有 id seed 进集合 (animate=false),
+// 之后任何不在集合里的 id 即新增 (animate=true). reduced-motion 短路.
+function MessageRow({
+  animate,
+  className,
+  children
+}: {
+  animate: boolean
+  className: string
+  children: React.ReactNode
+}): React.ReactElement {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      if (!animate || reduceMotion) return
+      const el = rowRef.current
+      if (!el) return
+      gsap.from(el, { autoAlpha: 0, y: 8, duration: DUR.base, overwrite: 'auto' })
+    },
+    { scope: rowRef }
+  )
+  return (
+    <div ref={rowRef} className={className}>
+      {children}
+    </div>
+  )
+}
+
 // Long-thread truncation cap. The dispatcher feeds the full message
 // history to the backend (so multi-turn context is preserved), but the
 // renderer only paints the last N — anything older becomes a system
@@ -959,6 +1017,21 @@ export function MessageList({
   const dividerKlass = useCjkMonoSwap('text-micro font-mono uppercase tracking-wider')
   const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  // Phase 2 §6.2 — 入场判定. seenIds 记录已动画过 (或首渲染就在场) 的 messageId.
+  // firstRender 时把全部已有 id seed 进去 (animate=false, 历史不逐条动); 之后
+  // 任何不在集合里的 id 即新增 → 该 row animate=true. 同一 id (streaming chunk)
+  // 已在集合里 → 永不重播. 渲染期间只读, 写入推到 effect (strict-mode 安全).
+  const seenIdsRef = useRef<Set<number>>(new Set())
+  const firstRenderRef = useRef(true)
+  const isNew = (id: number): boolean => {
+    if (firstRenderRef.current) return false
+    return !seenIdsRef.current.has(id)
+  }
+  useEffect(() => {
+    for (const m of messages) seenIdsRef.current.add(m.id)
+    firstRenderRef.current = false
+  }, [messages])
 
   // Scroll to bottom on new content — but only if the user is already
   // near the bottom. Otherwise an auto-scroll during streaming would
@@ -991,19 +1064,19 @@ export function MessageList({
   for (const m of visible) {
     if (m.role === 'user') {
       rendered.push(
-        <div key={m.id} className="px-3">
+        <MessageRow key={m.id} animate={isNew(m.id)} className="px-3">
           <UserBubble messageId={m.id} content={m.content} handlers={userHandlers} />
-        </div>
+        </MessageRow>
       )
     } else if (m.role === 'assistant') {
       rendered.push(
-        <div key={m.id} className="px-3">
+        <MessageRow key={m.id} animate={isNew(m.id)} className="px-3">
           <AssistantBubble
             message={m}
             isStreaming={m.id === streamingMessageId}
             draftHandlers={draftHandlers}
           />
-        </div>
+        </MessageRow>
       )
     } else if (m.role === 'tool') {
       const payload = parseToolContent(m.content)

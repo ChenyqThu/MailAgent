@@ -34,6 +34,7 @@ import { useBatch } from '@shared/state/batch'
 import { usePinned } from '@shared/state/pinned'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
@@ -611,7 +612,15 @@ export function EmailList(): React.ReactElement {
   // check to just the popover + its trigger button, so clicking anywhere
   // else (header whitespace, list rows, status bar, …) closes it.
   const filterTriggerRef = useRef<HTMLButtonElement>(null)
-  const filterPopoverRef = useRef<HTMLDivElement>(null)
+  // Filter popover 出入场：无 backdrop，从右上微展开（CSS `.filter-pop` 锚定
+  // top:100%+4px / right:8px，即从触发按钮下方右上角展开），退场反向后延迟卸载。
+  // scopeRef 挂在 `.filter-pop` 上，兼作 outside-click 命中判定的容器 ref。
+  const { shouldRender: filterShouldRender, scopeRef: filterPopoverRef } =
+    useExitAnimation<HTMLDivElement>(filterOpen, {
+      backdrop: false,
+      from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
+      enterDuration: DUR.fast
+    })
 
   // Outside-click + Esc → close filter popover
   useEffect(() => {
@@ -1122,7 +1131,7 @@ export function EmailList(): React.ReactElement {
           )}
         </div>
 
-        {filterOpen && (
+        {filterShouldRender && (
           <div
             ref={filterPopoverRef}
             id="filter-pop"

@@ -1205,9 +1205,9 @@ body[data-batch-mode='true'] .email-row > .avatar {
 body:not([data-batch-mode='true']) .cb {
   display: none !important;
 }
-body:not([data-batch-mode='true']) #batch-bar {
-  display: none !important;
-}
+/* #batch-bar 的显隐由组件 useExitAnimation 接管（shouldRender 控制挂载 +
+   进/退场 GSAP）。原 display:none!important 会在退场窗口瞬间隐藏 bar 杀掉退场
+   动画，故移除。 */
 
 /* Floating batch action bar — fixed at the bottom edge of the inbox column,
  * right of the sidebar. The `--app-nav-w` custom property is set by the
@@ -1229,10 +1229,10 @@ body:not([data-batch-mode='true']) #batch-bar {
     0 12px 28px rgba(0, 0, 0, 0.32),
     0 2px 6px rgba(0, 0, 0, 0.2);
   z-index: 40;
-  transition:
-    left 260ms cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 160ms ease,
-    transform 200ms cubic-bezier(0.32, 0.72, 0, 1);
+  /* 仅保留 left 过渡（侧栏宽度变化时 bar 水平 reflow），对齐 §8 standard
+     曲线 + 220ms。opacity/transform 进/退场已交给 GSAP，从 CSS transition 移除
+     以免双重动画。 */
+  transition: left 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 /* 0 selected — dim the bulk-op buttons (but keep the count badge, the
  * "select all N", "clear" links, kbd Esc, and × close bright). */
@@ -3035,7 +3035,9 @@ body:not([data-batch-mode='true']) #batch-bar {
   background: transparent;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: all 0.12s;
+  /* §8 对齐: fast(120ms) + standard 曲线。原 `all 0.12s` 缺显式曲线(默认 ease)。
+     滑动 indicator(Flip/transform)留待目检后做，当前保留 chip 自身态过渡。 */
+  transition: all 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   white-space: nowrap;
 }
 .view-chip:hover {
@@ -3537,19 +3539,9 @@ body:not([data-batch-mode='true']) #batch-bar {
   align-items: center;
   gap: 11px;
   overflow: hidden;
-  animation: cal-toastin 0.26s cubic-bezier(0.32, 0.72, 0, 1);
   pointer-events: auto;
-}
-.undo-toast.out { animation: cal-toastout 0.2s ease forwards; }
-@keyframes cal-toastin {
-  from { opacity: 0; transform: translateY(14px) scale(0.98); }
-  to   { opacity: 1; transform: none; }
-}
-@keyframes cal-toastout {
-  to { opacity: 0; transform: translateY(8px) scale(0.98); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .undo-toast, .undo-toast.out { animation: none; }
+  /* 进场交给 GSAP（UndoToastStack useGSAP），消除旧 cal-toastin 的第二曲线
+     0.32,0.72,0,1 + 260ms。dead 的 .out / cal-toastout 一并移除（exit 从未接线）。 */
 }
 .undo-ic {
   width: 30px;
@@ -3603,7 +3595,8 @@ body:not([data-batch-mode='true']) #batch-bar {
   width: 100%;
   background: rgb(var(--c-accent));
   transform-origin: left;
-  transition: transform linear;
+  /* scaleX 倒计时由 GSAP 驱动（gsap.to scaleX:0, ease:'none'），可被撤销 .kill()。
+     原手写 el.style.transition + 强制 reflow 已移除。 */
 }
 
 /* ── §11.5 副 status bar 重做 (用户向 metric + hover ℹ️ popover) ── */

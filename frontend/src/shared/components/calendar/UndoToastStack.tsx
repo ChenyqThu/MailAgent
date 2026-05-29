@@ -7,10 +7,12 @@
 // store. CalendarLayout 内 mount 一次. fixed 定位脱离 layout flow, 无需嵌
 // PageFrame 的 scroll container.
 
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 import { Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useUndoToastStore, type UndoEntry } from '@shared/state/calendar-undo'
 
 export function UndoToastStack(): React.ReactElement | null {
@@ -19,7 +21,11 @@ export function UndoToastStack(): React.ReactElement | null {
   const undo = useUndoToastStore((s) => s.undo)
   if (items.length === 0) return null
   return (
-    <div className="undo-stack" aria-live="polite" aria-label={t('calendar.undo.aria', '待撤销操作')}>
+    <div
+      className="undo-stack"
+      aria-live="polite"
+      aria-label={t('calendar.undo.aria', '待撤销操作')}
+    >
       {items.map((item) => (
         <UndoToast key={item.id} item={item} onUndo={() => undo(item.id)} />
       ))}
@@ -27,30 +33,33 @@ export function UndoToastStack(): React.ReactElement | null {
   )
 }
 
-function UndoToast({
-  item,
-  onUndo
-}: {
-  item: UndoEntry
-  onUndo: () => void
-}): React.ReactElement {
+function UndoToast({ item, onUndo }: { item: UndoEntry; onUndo: () => void }): React.ReactElement {
   const { t } = useTranslation()
+  const rootRef = useRef<HTMLDivElement>(null)
   const progRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const el = progRef.current
-    if (!el) return
-    // 立即设回 scaleX(1), 强制 reflow, 再 set scaleX(0) 让 transition 生效.
-    // (mockup §undo requestAnimationFrame 思路).
-    el.style.transition = 'none'
-    el.style.transform = 'scaleX(1)'
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    el.offsetWidth // force reflow
-    el.style.transition = `transform ${item.durationMs}ms linear`
-    el.style.transform = 'scaleX(0)'
-  }, [item.durationMs])
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      // 进场: y:14→0 + scale:0.98→1 + autoAlpha(DUR.base)。reduced-motion 跳过。
+      if (!reduceMotion && rootRef.current) {
+        gsap.from(rootRef.current, { autoAlpha: 0, y: 14, scale: 0.98, duration: DUR.base })
+      }
+      // 进度条倒计时: scaleX 1→0 over durationMs，linear。点撤销/超时 → 组件
+      // unmount，useGSAP scope 自动 revert kill 此 tween（替代旧 .kill()）。是功能性
+      // 计时指示而非 UI 装饰，故 reduced-motion 下仍保留（与原行为一致）。
+      if (progRef.current) {
+        gsap.fromTo(
+          progRef.current,
+          { scaleX: 1 },
+          { scaleX: 0, duration: item.durationMs / 1000, ease: 'none' }
+        )
+      }
+    },
+    { scope: rootRef, dependencies: [item.id, item.durationMs, reduceMotion] }
+  )
 
   return (
-    <div className="undo-toast glass-pop" role="status">
+    <div ref={rootRef} className="undo-toast glass-pop" role="status">
       <span className="undo-ic" aria-hidden>
         <Trash2 size={15} strokeWidth={2} />
       </span>

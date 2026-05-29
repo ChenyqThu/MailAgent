@@ -14,6 +14,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Archive, CheckCircle2, Flag, Mail, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useBatch } from '@shared/state/batch'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -34,6 +35,13 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
   const selectAll = useBatch((s) => s.selectAll)
   const selectedIds = useBatch((s) => s.selectedIds)
 
+  // 进出场：底部浮动条，进 y:16→0 + autoAlpha(DUR.base)，退反向(DUR.fast)。
+  // 退场延迟卸载，index.css 已移除会瞬间隐藏的 display:none!important。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(mode !== 'off', {
+    backdrop: false,
+    from: { autoAlpha: 0, y: 16 }
+  })
+
   // Esc exits batch mode entirely (mockup contract).
   useEffect(() => {
     if (mode === 'off') return
@@ -47,7 +55,7 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
     return () => document.removeEventListener('keydown', onKey)
   }, [mode, exit])
 
-  if (mode === 'off' || typeof document === 'undefined') return null
+  if (!shouldRender || typeof document === 'undefined') return null
 
   const selected = selectedIds.length
   const empty = selected === 0
@@ -89,6 +97,7 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
 
   return createPortal(
     <div
+      ref={scopeRef}
       id="batch-bar"
       className={cn('floating flex items-center gap-2 whitespace-nowrap', empty && 'batch-empty')}
       role="toolbar"

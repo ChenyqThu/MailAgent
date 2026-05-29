@@ -210,7 +210,9 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
   if (detailQ.isLoading) {
     return (
       <EmptyShell>
-        <div className="text-aux text-ink-fg-2 animate-pulse">{t('folder.loading')}</div>
+        <div className="text-aux text-ink-fg-2 animate-pulse motion-reduce:animate-none">
+          {t('folder.loading')}
+        </div>
       </EmptyShell>
     )
   }

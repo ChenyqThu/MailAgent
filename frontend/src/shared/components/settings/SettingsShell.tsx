@@ -18,6 +18,8 @@
 import * as React from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
+import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { Tabs, TabsContent } from '@shared/components/ui/tabs'
 import { useEnvStore } from '@shared/state/env'
 import { SETTINGS_TABS, type SettingsTab } from '@shared/router-instance'
@@ -46,6 +48,20 @@ export function SettingsShell(): React.ReactElement {
     typeof search.tab === 'string' && (SETTINGS_TABS as readonly string[]).includes(search.tab)
       ? (search.tab as SettingsTab)
       : 'general'
+
+  // 切 tab 时当前激活 panel 淡入. Radix TabsContent 仅 mount/unmount 无过渡 (硬替换),
+  // 这里给 panel 容器做 autoAlpha 0→1 + y:4→0 (DUR.base). reduced-motion 短路.
+  const panelScopeRef = React.useRef<HTMLDivElement>(null)
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      if (reduceMotion) return
+      const el = panelScopeRef.current
+      if (!el) return
+      gsap.from(el, { autoAlpha: 0, y: 4, duration: DUR.base, overwrite: 'auto' })
+    },
+    { dependencies: [tab, reduceMotion], scope: panelScopeRef }
+  )
 
   function handleTabChange(value: string): void {
     if (!(SETTINGS_TABS as readonly string[]).includes(value)) return
@@ -77,6 +93,7 @@ export function SettingsShell(): React.ReactElement {
       >
         <RestartBanner />
         <div
+          ref={panelScopeRef}
           className="mx-auto"
           style={{
             maxWidth: 'var(--settings-content-max-w, 760px)',
