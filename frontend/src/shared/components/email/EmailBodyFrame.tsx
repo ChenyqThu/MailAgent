@@ -535,10 +535,41 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
     }
 
     let ro: ResizeObserver | null = null
+    let clickDoc: Document | null = null
+    // 正文链接点击 → 系统默认浏览器。必须在渲染层拦截 (而非依赖主进程
+    // will-frame-navigate): iframe 的 <a> 被 DOMPurify 剥掉 target, 点击会在
+    // iframe 内原地导航, 而页面 CSP (frame-src 'self') 把外部导航拦成空白页 —
+    // 用户看到正文消失。这里捕获阶段拦截, 导航发生前 preventDefault, 再用
+    // shell:openExternal 调系统浏览器/邮件客户端。父 renderer 持有 window.electron
+    // (iframe sandbox 无 allow-scripts, 但父层经 allow-same-origin 可挂监听)。
+    const onDocClick = (e: MouseEvent): void => {
+      const target = e.target as Element | null
+      const anchor = target?.closest?.('a[href]') as HTMLAnchorElement | null
+      if (!anchor) return
+      const rawHref = anchor.getAttribute('href') ?? ''
+      // 页内锚点 (#...) 留给 iframe 自己滚动; 空 href 忽略 (不拦, 走默认)。
+      if (rawHref === '' || rawHref.startsWith('#')) return
+      // anchor.href 已被浏览器解析为绝对 URL (about:srcdoc 基准下的 https/mailto 等)。
+      const url = anchor.href || rawHref
+      if (!/^(?:https?|mailto|tel|callto|sms):/i.test(url)) return
+      e.preventDefault()
+      e.stopPropagation()
+      const invoke = (
+        window as unknown as {
+          electron?: { ipcRenderer?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } }
+        }
+      ).electron?.ipcRenderer?.invoke
+      void invoke?.('shell:openExternal', url)
+    }
     function setupObservers(): void {
       const doc = iframe!.contentDocument
       const body = doc?.body
       if (!body) return
+      // 链接拦截 — 捕获阶段确保先于默认导航; removeEventListener 先清防重复绑定
+      // (setupObservers 可能被 load + readyState 两路各调一次)。
+      doc.removeEventListener('click', onDocClick, true)
+      doc.addEventListener('click', onDocClick, true)
+      clickDoc = doc
       // ResizeObserver 保留 — 用于图片 / 字体异步加载完成后的高度刷新。
       // 不处理 translation inject/clear (那是显式 React 事件, 直接在
       // useEffect 里同步 setHeight 就够了, 不需要 observer 间接触发)。
@@ -580,6 +611,7 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
     return (): void => {
       iframe.removeEventListener('load', onLoad)
       ro?.disconnect()
+      clickDoc?.removeEventListener('click', onDocClick, true)
       setDocReady(false)
     }
   }, [srcDoc])

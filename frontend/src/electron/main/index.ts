@@ -283,6 +283,15 @@ app.whenReady().then(() => {
   // Sprint 1.2: IPC handlers (read-only — SQLite direct, ~4ms).
   // Write handlers (resync / update-flag) land in Sprint 5 atop cli_runner.
   registerEmailHandlers()
+  // 邮件正文 iframe 内链接 → 系统默认浏览器。EmailBodyFrame 在 iframe 内拦截
+  // <a> 点击 (导航前 preventDefault) 后调本 IPC —— 这是主路径, 因为 iframe 的
+  // 页面 CSP (frame-src 'self') 会在渲染层把外部导航抢先拦成空白页, 主进程的
+  // will-frame-navigate 兜底可能根本不触发。scheme 白名单防 file:// / javascript:。
+  ipcMain.handle('shell:openExternal', (_evt, url: unknown) => {
+    if (typeof url === 'string' && isExternalNavUrl(url)) {
+      void shell.openExternal(url)
+    }
+  })
   // Phase C — 存档 / 草稿箱 folder_email 读写 (better-sqlite3 直读 + CLI fork).
   registerFolderHandlers()
   registerAttachmentHandlers()
