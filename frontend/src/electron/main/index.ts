@@ -65,6 +65,26 @@ app.on('open-url', (event, url) => {
   dispatchDeeplink(url)
 })
 
+// 邮件正文渲染在 <iframe srcdoc sandbox="allow-same-origin">。DOMPurify 已剥掉
+// <a target>，所以正文里的链接点击是在 **iframe 子框架内原地导航** —— 既不触发
+// setWindowOpenHandler (那只管 window.open / target=_blank)，又会被页面 CSP
+// (default-src 'self') 挡成空白页 (用户报告: 点链接后正文变空白)。will-frame-
+// navigate 覆盖所有框架(含 iframe): 子框架要导航到外部 scheme 时拦下, 改用系统
+// 默认浏览器 / 邮件客户端打开。主框架(isMainFrame)导航不碰 —— dev HMR reload /
+// 应用自身路由都走主框架, 误拦会破坏热重载。
+function isExternalNavUrl(url: string): boolean {
+  return /^(?:https?|mailto|tel|callto|sms):/i.test(url)
+}
+
+function attachExternalLinkGuard(contents: Electron.WebContents): void {
+  contents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame && isExternalNavUrl(event.url)) {
+      event.preventDefault()
+      void shell.openExternal(event.url)
+    }
+  })
+}
+
 // Win/Linux deeplink 走二次启动 argv. single-instance lock 防多开 + 把 argv 里的
 // url 转给已有实例. macOS 不依赖这条 (用 open-url), 但加上无害 + 防 macOS 多开.
 // dev 模式跳过 (electron-vite restart 会触发多实例, lock 会误杀热重载).
@@ -140,6 +160,8 @@ function createWindow(): void {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
+  // 正文 iframe 内链接点击 → 默认浏览器 (见 attachExternalLinkGuard 注释)。
+  attachExternalLinkGuard(mainWindow.webContents)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -184,6 +206,7 @@ function createPopoutWindow(emailId: number): void {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
+  attachExternalLinkGuard(popout.webContents)
 
   const search = `popout=1&email=${emailId}`
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
