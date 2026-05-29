@@ -84,6 +84,27 @@ app.add_typer(
 )
 
 
+@app.command()
+def serve() -> None:
+    """启动 MailAgent 长驻同步服务 (等价于 `python3 main.py`).
+
+    P1-4a packaging: 服务核心 (EmailNotionSyncApp) 已迁入 src/service.py, 这里包装
+    成 CLI 子命令, 让打包 venv 内可经 `mailagent serve` 拉起 (取代仓库根 main.py,
+    因为 main.py 不在 site-packages)。dev / PM2 仍可直接 `python3 main.py`, 二者走同
+    一个 run_service(), 行为一致。
+
+    注意: serve 是长驻进程, 不是一次性命令, 不产出 `-o json` 结构化输出 —— 全局
+    -o/--output 对它无意义 (callback 仍会建 CliContext, 但 serve 不读它), 日志走
+    setup_logger 配置 (默认到 stderr / 日志文件)。
+    """
+    # 延迟 import: 避免 --help / 其他子命令解析时载入整个后端链 (与文件其它子命令一致)。
+    import asyncio
+
+    from src.service import run_service
+
+    asyncio.run(run_service())
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
