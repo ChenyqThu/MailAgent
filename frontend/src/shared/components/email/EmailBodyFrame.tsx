@@ -574,7 +574,12 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
       // 不处理 translation inject/clear (那是显式 React 事件, 直接在
       // useEffect 里同步 setHeight 就够了, 不需要 observer 间接触发)。
       ro?.disconnect()
-      ro = new ResizeObserver(() => measure())
+      // rAF 包裹: measure() 会 setHeight → iframe 重排 → body resize → RO 再触发,
+      // 同步回调会形成 "ResizeObserver loop completed with undelivered notifications"
+      // 警告 (良性但刷屏)。延到下一帧测量打断同步环, 高度仍在一帧内收敛。
+      ro = new ResizeObserver(() => {
+        requestAnimationFrame(() => measure())
+      })
       ro.observe(body)
       // Sprint 18 — every <img> gets:
       //   1. load/error listener → re-measure height when async decode lands
