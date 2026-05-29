@@ -44,6 +44,7 @@ import {
   __testing,
   resolveNotionAgentBin
 } from '../../src/electron/main/chat/backends/notion_agent'
+import { notionAgentGate } from '../../src/electron/main/chat/backends/notion_agent_gate'
 
 function userMsg(content: string, id = 1): ChatMessage {
   return {
@@ -121,10 +122,17 @@ beforeEach(() => {
   mockReaddir.mockReturnValue([])
   mockStat.mockReturnValue({ mtimeMs: 0 })
   __resetNotionAgentBinCache()
+  // The serial gate is a module-level singleton shared across these cases.
+  // Disable the min-interval (0) and reset its mutex/clock so one test's
+  // call can't wedge the gate (or impose the 30s default spacing) on the next.
+  process.env['NOTION_AGENT_MIN_INTERVAL_MS'] = '0'
+  notionAgentGate.__reset()
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  notionAgentGate.__reset()
+  delete process.env['NOTION_AGENT_MIN_INTERVAL_MS']
 })
 
 describe('NotionAgentBackend — binary resolution', () => {
@@ -407,20 +415,97 @@ describe('NotionAgentBackend — error paths', () => {
     expect(events.find((e) => e.type === 'done')).toBeUndefined()
   })
 
-  test('subprocess timed out → E_NOTION_AGENT_TIMEOUT', async () => {
-    mockExecaStream({ chunks: [], timedOut: true, exitCode: null })
-    const backend = new NotionAgentBackend()
-    const events = await collect(
-      backend.stream({
-        history: [userMsg('hi')],
-        model: null,
-        agentPageId: null,
-        signal: new AbortController().signal
-      })
-    )
-    const err = events.find((e) => e.type === 'error')
-    expect(err).toBeTruthy()
-    if (err && err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_TIMEOUT')
+  test('idle (no-output) timeout → kills the child + E_NOTION_AGENT_TIMEOUT', async () => {
+    // Timeout is now an IDLE watchdog, not execa's total `timeout` cap: a
+    // healthy long stream re-arms it on every chunk and never trips it. Model a
+    // HUNG cli — stdout that never yields, child that only settles once kill()
+    // is called. With a tiny idle window the watchdog must fire, kill the
+    // child, and surface a timeout (not a generic FAIL).
+    process.env['NOTION_AGENT_IDLE_TIMEOUT_MS'] = '40'
+    const kill = vi.fn()
+    let resolveChild!: (v: unknown) => void
+    const childPromise = new Promise((res) => {
+      resolveChild = res
+    })
+    let endHang!: () => void
+    const hang = new Promise<void>((res) => {
+      endHang = res
+    })
+    kill.mockImplementation(() => {
+      // kill → stdout ends (gen returns) AND the child settles as killed.
+      endHang()
+      resolveChild({ stderr: '', exitCode: null, isCanceled: false, killed: true })
+      return true
+    })
+    async function* gen(): AsyncGenerator<Buffer> {
+      await hang // never yields a chunk; ends only when killed
+    }
+    const child = childPromise as Promise<unknown> & {
+      stdout?: AsyncGenerator<Buffer>
+      kill?: typeof kill
+    }
+    child.stdout = gen()
+    child.kill = kill
+    mockExeca.mockReturnValue(child)
+
+    try {
+      const backend = new NotionAgentBackend()
+      const events = await collect(
+        backend.stream({
+          history: [userMsg('hi')],
+          model: null,
+          agentPageId: null,
+          signal: new AbortController().signal
+        })
+      )
+      expect(kill).toHaveBeenCalled()
+      const err = events.find((e) => e.type === 'error')
+      expect(err).toBeTruthy()
+      if (err && err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_TIMEOUT')
+      // failed call → no done/usage.
+      expect(events.find((e) => e.type === 'done')).toBeUndefined()
+    } finally {
+      delete process.env['NOTION_AGENT_IDLE_TIMEOUT_MS']
+    }
+  })
+
+  test('streaming keeps the idle watchdog alive past the window (no false timeout)', async () => {
+    // A chunk arrives every ~20ms with a 50ms idle window: the deadline is
+    // re-armed on each chunk, so the total run far exceeds 50ms yet never trips.
+    process.env['NOTION_AGENT_IDLE_TIMEOUT_MS'] = '50'
+    async function* gen(): AsyncGenerator<Buffer> {
+      for (const c of ['a', 'b', 'c', 'd', 'e']) {
+        await new Promise((r) => setTimeout(r, 20))
+        yield Buffer.from(c, 'utf8')
+      }
+    }
+    const child = Promise.resolve({
+      stderr: '',
+      exitCode: 0,
+      isCanceled: false,
+      killed: false
+    }) as Promise<unknown> & { stdout?: AsyncGenerator<Buffer> }
+    child.stdout = gen()
+    mockExeca.mockReturnValue(child)
+
+    try {
+      const backend = new NotionAgentBackend()
+      const events = await collect(
+        backend.stream({
+          history: [userMsg('hi')],
+          model: null,
+          agentPageId: null,
+          signal: new AbortController().signal
+        })
+      )
+      // No timeout despite ~100ms total > 50ms window — re-arm on every chunk.
+      expect(events.find((e) => e.type === 'error')).toBeUndefined()
+      const done = events.find((e) => e.type === 'done')
+      expect(done).toBeTruthy()
+      if (done && done.type === 'done') expect(done.finalContent).toBe('abcde')
+    } finally {
+      delete process.env['NOTION_AGENT_IDLE_TIMEOUT_MS']
+    }
   })
 
   test('aborted signal → no done/usage emitted', async () => {
@@ -459,5 +544,104 @@ describe('NotionAgentBackend — error paths', () => {
     const err = events.find((e) => e.type === 'error')
     expect(err).toBeTruthy()
     if (err && err.type === 'error') expect(err.code).toBe('E_NOTION_AGENT_FAIL')
+  })
+})
+
+describe('NotionAgentBackend — serial gate wiring', () => {
+  test('two concurrent calls run one at a time: 2nd subprocess waits for the 1st to release', async () => {
+    // First call's stdout stays open (awaiting `hold`) so it keeps holding the
+    // gate; the second call must NOT spawn until the first finishes + releases.
+    let releaseHold!: () => void
+    const hold = new Promise<void>((r) => {
+      releaseHold = r
+    })
+    let callIdx = 0
+    mockExeca.mockImplementation(() => {
+      const idx = callIdx++
+      async function* gen(): AsyncGenerator<Buffer> {
+        yield Buffer.from('hi', 'utf8')
+        if (idx === 0) await hold // call #0 parks here, holding the gate
+      }
+      const result = { stderr: '', exitCode: 0, timedOut: false, isCanceled: false }
+      const child = Promise.resolve(result) as Promise<typeof result> & {
+        stdout?: AsyncGenerator<Buffer>
+      }
+      child.stdout = gen()
+      return child as unknown as ReturnType<typeof mockExeca>
+    })
+
+    const backend = new NotionAgentBackend()
+    const mkReq = (c: string) => ({
+      history: [userMsg(c)],
+      model: null,
+      agentPageId: null,
+      signal: new AbortController().signal
+    })
+    const p1 = collect(backend.stream(mkReq('first')))
+    const p2 = collect(backend.stream(mkReq('second')))
+
+    // Let A acquire + spawn and B queue behind the mutex.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(mockExeca).toHaveBeenCalledTimes(1) // B has NOT spawned yet
+
+    releaseHold() // A's stream ends → A releases the gate → B can spawn
+    await Promise.all([p1, p2])
+    expect(mockExeca).toHaveBeenCalledTimes(2)
+  })
+
+  test('abort while queued: the queued call never spawns a subprocess', async () => {
+    // Call #0 holds the gate open; call #1 is aborted while queued and must
+    // bail without ever spawning execa.
+    let releaseHold!: () => void
+    const hold = new Promise<void>((r) => {
+      releaseHold = r
+    })
+    let callIdx = 0
+    mockExeca.mockImplementation(() => {
+      const idx = callIdx++
+      async function* gen(): AsyncGenerator<Buffer> {
+        yield Buffer.from('hi', 'utf8')
+        if (idx === 0) await hold
+      }
+      const result = { stderr: '', exitCode: 0, timedOut: false, isCanceled: false }
+      const child = Promise.resolve(result) as Promise<typeof result> & {
+        stdout?: AsyncGenerator<Buffer>
+      }
+      child.stdout = gen()
+      return child as unknown as ReturnType<typeof mockExeca>
+    })
+
+    const backend = new NotionAgentBackend()
+    const holderAc = new AbortController()
+    const queuedAc = new AbortController()
+    const pHolder = collect(
+      backend.stream({
+        history: [userMsg('a')],
+        model: null,
+        agentPageId: null,
+        signal: holderAc.signal
+      })
+    )
+    const pQueued = collect(
+      backend.stream({
+        history: [userMsg('b')],
+        model: null,
+        agentPageId: null,
+        signal: queuedAc.signal
+      })
+    )
+
+    await new Promise((r) => setTimeout(r, 0))
+    expect(mockExeca).toHaveBeenCalledTimes(1)
+
+    queuedAc.abort() // cancel the queued send before it ever gets the gate
+    const queuedEvents = await pQueued
+    // It emitted the running breadcrumb then bailed at acquire — never spawned.
+    expect(queuedEvents.find((e) => e.type === 'done')).toBeUndefined()
+    expect(mockExeca).toHaveBeenCalledTimes(1)
+
+    releaseHold()
+    await pHolder
+    expect(mockExeca).toHaveBeenCalledTimes(1) // still only the holder ever spawned
   })
 })

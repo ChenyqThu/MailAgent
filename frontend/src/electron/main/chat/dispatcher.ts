@@ -28,6 +28,7 @@ import {
   type ChatSession
 } from '../chat_db'
 import { getDb } from '../db'
+import { drainNotionAgentGate } from './backends/notion_agent_gate'
 import { backendSupportsTools, isHarnessEnabled } from './config'
 import { runHarness } from './harness'
 import { getChatBackend } from './registry'
@@ -171,9 +172,7 @@ export async function startChat(input: StartChatInput, sink: StreamSink): Promis
   if (input.sessionId !== undefined && input.sessionId !== null) {
     const existing = getSession(input.sessionId)
     if (!existing) {
-      throw new Error(
-        `startChat: sessionId=${input.sessionId} not found (caller passed stale id)`
-      )
+      throw new Error(`startChat: sessionId=${input.sessionId} not found (caller passed stale id)`)
     }
     if (existing.email_id !== input.emailId) {
       throw new Error(
@@ -518,10 +517,14 @@ export function abortChatSession(sessionId: number): number {
 }
 
 /** App-quit hook. Aborts every in-flight stream and clears the map so
- *  backend fetch loops don't keep running into the void. */
+ *  backend fetch loops don't keep running into the void. Also drains the
+ *  notion-agent serial gate: aborting the ACs already fires each queued
+ *  waiter's abort listener, but `drain()` additionally cancels the pending
+ *  min-interval timer (not tied to any signal) so nothing lingers past quit. */
 export function abortAllChatSessions(): void {
   for (const ac of _inflight.values()) ac.abort()
   _inflight.clear()
+  drainNotionAgentGate()
 }
 
 /** Test-only — clear in-flight map without firing abort. Use sparingly. */

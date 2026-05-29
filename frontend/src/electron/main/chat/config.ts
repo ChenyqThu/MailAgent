@@ -120,3 +120,14 @@ export function getMaxCostUsd(): number {
 export function backendSupportsTools(kind: 'notion-agent' | 'custom-api'): boolean {
   return kind === 'custom-api'
 }
+
+/** Minimum ms the notion-agent serial gate spaces consecutive subprocess
+ *  *starts* apart (see backends/notion_agent_gate.ts). The handoff recommends
+ *  ≥30–60s between trust-rule-protected calls; measured from the previous
+ *  start, so for the usual slow (10–90s) call it rarely adds wait — it mainly
+ *  throttles back-to-back bursts (popout + main window firing together, rapid
+ *  resend). Set to 0 to disable spacing (the mutex still prevents concurrency).
+ *  Tune via NOTION_AGENT_MIN_INTERVAL_MS if interactive latency suffers. */
+export function getNotionAgentMinIntervalMs(): number {
+  return Math.max(0, readEnvNumber('NOTION_AGENT_MIN_INTERVAL_MS', 30_000))
+}

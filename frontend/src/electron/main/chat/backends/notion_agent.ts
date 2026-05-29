@@ -38,7 +38,10 @@
 // the ban; the renderer treats E_NOTION_AGENT_RATE_LIMIT like E_QUOTA (force
 // a ~5-min backoff cooldown, no Retry button). The exit code is authoritative
 // regardless of --stream vs --json, so we read it directly without parsing
-// stdout (handoff §2).
+// stdout (handoff §2). That is the *reactive* side; the *preventive* side is
+// the global serial gate (notion_agent_gate.ts) every spawn passes through —
+// it stops concurrent calls (cross-session / popout windows) from tripping
+// strict mode in the first place.
 
 import { execa } from 'execa'
 import { existsSync, readdirSync, statSync } from 'fs'
@@ -48,8 +51,20 @@ import { StringDecoder } from 'node:string_decoder'
 
 import { whichSync } from '../../bin_resolver'
 import type { ChatBackend, ChatStreamEvent, ChatStreamRequest, EmailContext } from '../types'
+import { notionAgentGate, type GateRelease } from './notion_agent_gate'
 
-const REQUEST_DEADLINE_MS = 90_000 // generous: Notion AI itself can be slow
+/** Idle (no-output) timeout for a `notion-agent chat` stream. This is NOT a
+ *  total wall-clock cap — the watchdog in runNotionAgent re-arms it on every
+ *  stdout chunk, so a healthy long stream never trips it; only a stalled/hung
+ *  process (no output for the whole window) does. The old code used execa's
+ *  `timeout` (a TOTAL cap) at 90s, which killed long-but-healthy answers
+ *  mid-stream. Default 600s; override via NOTION_AGENT_IDLE_TIMEOUT_MS (ms). */
+const DEFAULT_IDLE_TIMEOUT_MS = 600_000
+function idleTimeoutMs(): number {
+  const raw = process.env['NOTION_AGENT_IDLE_TIMEOUT_MS']
+  const parsed = raw !== undefined ? Number.parseInt(raw, 10) : Number.NaN
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_IDLE_TIMEOUT_MS
+}
 
 /** Where the CLI persists per-thread state files (one `<thread_id>.json`
  *  per chat thread). Mirrors the CLI default account dir; we don't pass
@@ -222,11 +237,8 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
   // prompt rides in on stdin (no positional arg) — keeps a long email body
   // out of argv (ARG_MAX) and sidesteps shell-escaping entirely.
 
-  // First turn only: snapshot threads dir so we can recover the new
-  // thread_id afterwards. Follow-ups already know it (passed via --thread-id).
-  const before = threadId ? null : snapshotThreadFiles()
-
   const toolArgs = { threadId, model: req.model }
+  const startTime = Date.now()
   yield {
     type: 'tool_call',
     name: 'notion-agent chat',
@@ -234,25 +246,76 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
     status: 'running'
   }
 
-  const startTime = Date.now()
+  // Global serial gate (prevention layer): block until no other notion-agent
+  // subprocess is running AND the min-interval since the last start elapsed —
+  // a burst of concurrent calls is what trips Notion's trust-rule strict mode
+  // (exit 75). acquire() rejects if this request is aborted while queued; bail
+  // quietly then (the orchestrator flips the assistant row to 'aborted'). The
+  // `finally` below releases on every exit path (done / error / timeout /
+  // abort / consumer break). See notion_agent_gate.ts.
+  // No-op default so the `finally` release() is always callable even on the
+  // (impossible) path where we somehow reach it without having acquired.
+  let release: GateRelease = () => {}
+  try {
+    release = await notionAgentGate.acquire(req.signal)
+  } catch {
+    return
+  }
+
+  // First turn only: snapshot threads dir AFTER acquiring (only one
+  // notion-agent runs at a time now, so the post-call diff is unambiguous) so
+  // we can recover the new thread_id afterwards. Follow-ups already know it
+  // (passed via --thread-id).
+  const before = threadId ? null : snapshotThreadFiles()
+
   const decoder = new StringDecoder('utf8')
   let accumulated = ''
+
+  // Idle (no-output) watchdog — see DEFAULT_IDLE_TIMEOUT_MS. We re-arm on every
+  // stdout chunk so a streaming answer never trips it; the deadline fires only
+  // when the process emits nothing for the whole window (slow first token or a
+  // genuinely hung CLI). `idleTimedOut` distinguishes a watchdog kill (→
+  // E_NOTION_AGENT_TIMEOUT) from a user abort (→ silent), since both surface as
+  // `killed`. disarmIdle() runs in the finally on every exit path.
+  const idleMs = idleTimeoutMs()
+  let idleTimedOut = false
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  let childRef: { kill: (signal?: string) => boolean } | null = null
+  const armIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true
+      childRef?.kill('SIGTERM')
+    }, idleMs)
+  }
+  const disarmIdle = (): void => {
+    if (idleTimer) {
+      clearTimeout(idleTimer)
+      idleTimer = null
+    }
+  }
+
   try {
     const child = execa(bin, args, {
       input: enrichedPrompt,
       // execa@9 renamed `signal` → `cancelSignal`; using the old name throws
       // synchronously ("signal option has been renamed").
       cancelSignal: req.signal,
-      timeout: REQUEST_DEADLINE_MS,
+      // No execa `timeout`: that's a TOTAL wall-clock cap that kills healthy
+      // long streams mid-flight. The idle watchdog below enforces a no-output
+      // deadline instead (reset on every chunk).
       reject: false,
       // stdout unbuffered → we read it as a stream for real-time deltas;
       // stderr buffered → classifyExit reads the whole thing at the end.
       buffer: { stdout: false, stderr: true }
     })
+    childRef = child as unknown as { kill: (signal?: string) => boolean }
+    armIdle() // cover slow first-token latency before any chunk arrives
 
     if (child.stdout) {
       for await (const chunk of child.stdout) {
         if (req.signal.aborted) break
+        armIdle() // received output → push the idle deadline forward
         // chunk is a Buffer; StringDecoder holds back any trailing partial
         // multi-byte sequence until the next chunk completes it.
         const delta = decoder.write(chunk as Buffer)
@@ -269,7 +332,8 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
     }
 
     const result = await child
-    const { stderr, exitCode, timedOut } = result
+    disarmIdle()
+    const { stderr, exitCode } = result
     // execa@9 surfaces signal termination as `isCanceled`; older builds used
     // `killed`. Accept both so the type-check stays happy across the lockfile.
     const killed =
@@ -278,16 +342,24 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
 
     if (req.signal.aborted) return
 
-    if (timedOut) {
+    // Idle watchdog tripped (no output for the whole window) → report timeout.
+    // Checked before `killed` because the watchdog kills the child, so `killed`
+    // is also true here; idleTimedOut is the disambiguator.
+    if (idleTimedOut) {
+      const idleSec = Math.round(idleMs / 1000)
       yield {
         type: 'tool_call',
         name: 'notion-agent chat',
         args: toolArgs,
         status: 'error',
         durationMs: Date.now() - startTime,
-        detail: 'subprocess exceeded 90s'
+        detail: `no output for ${idleSec}s`
       }
-      yield { type: 'error', code: 'E_NOTION_AGENT_TIMEOUT', message: 'notion-agent timed out' }
+      yield {
+        type: 'error',
+        code: 'E_NOTION_AGENT_TIMEOUT',
+        message: 'notion-agent idle timeout (no output)'
+      }
       return
     }
     if (killed) {
@@ -357,6 +429,16 @@ async function* runNotionAgent(req: ChatStreamRequest): AsyncIterable<ChatStream
       detail: message
     }
     yield { type: 'error', code: 'E_NOTION_AGENT_FAIL', message }
+  } finally {
+    // Cancel the idle watchdog so a settled call can't fire a stray kill on a
+    // reused/exited pid (no-op if already disarmed on the happy path).
+    disarmIdle()
+    // Release the serial gate on EVERY exit: normal done, error/timeout
+    // returns, abort, an exception, or the consumer breaking the for-await
+    // (which calls the generator's .return() and runs this finally). Without
+    // this a crashed/aborted call would wedge the gate shut for every later
+    // notion-agent send. Idempotent, so the belt-and-suspenders paths are safe.
+    release()
   }
 }
 
