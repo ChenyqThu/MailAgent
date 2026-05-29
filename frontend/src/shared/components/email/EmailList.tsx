@@ -539,9 +539,11 @@ function listOptsForView(view: EmailView, limit: number): ListOpts {
 
 const PAGE_SIZE = 100
 const MAX_PAGES = 30 // safety cap — 3000 rows is enough for visual scrolling
-// 首屏 100 行渲染落一帧后, 静默拉到 5 页 (500 行). 旧 100 行借 keepPreviousData
-// 保留, 新 500 行到达后无缝替换, 用户感知不到这次升级.
-const INITIAL_PREFETCH_PAGES = 5
+// 首屏 100 行渲染落一帧后, 静默拉到 8 页 (800 行). 旧 100 行借 keepPreviousData
+// 保留, 新 800 行到达后无缝替换, 用户感知不到这次升级. react-window 已虚拟化
+// DOM, 800 行数据驻留内存仅 ~0.6MB(单行 ~500-800B, 不含正文), 上限 3000≈2MB,
+// 内存非瓶颈; 偏大默认让"感觉加载够"。需要再调就改这个常量。
+const INITIAL_PREFETCH_PAGES = 8
 const INITIAL_PREFETCH_DELAY_MS = 300
 
 export function EmailList(): React.ReactElement {
@@ -550,6 +552,8 @@ export function EmailList(): React.ReactElement {
   const activeMailbox = useMailbox((s) => s.active)
   const activeId = useActiveEmail((s) => s.activeInternalId)
   const setActive = useActiveEmail((s) => s.setActive)
+  const navTargetId = useActiveEmail((s) => s.navTargetId)
+  const clearNavTarget = useActiveEmail((s) => s.clearNavTarget)
   const publishOrderedIds = useActiveEmail((s) => s.setOrderedIds)
   const filter = useEmailFilter((s) => s.filter)
   const setFilter = useEmailFilter((s) => s.setFilter)
@@ -693,6 +697,12 @@ export function EmailList(): React.ReactElement {
     queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit)),
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
+    // 切到 设置/日历 再切回邮箱不重拉: 路由是独立顶级 route, EmailList 切走即
+    // 卸载, 默认全局 staleTime=30s 会让切回(>30s)重新拉取+闪 loading。邮件写
+    // 操作已由 SSE(useEventBridge) invalidate ['emails'] 实时失效, 故这里可放心
+    // 拉长缓存: 5min 内切回直接命中缓存(无网络/无 loading), gcTime 15min 防过早回收。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
     placeholderData: keepPreviousData
   })
 
@@ -939,9 +949,16 @@ export function EmailList(): React.ReactElement {
     return ids
   }, [threadGroups])
 
+  // 搜索跳转目标一旦真正出现在列表里, 就解除豁免(此后手动切邮箱恢复正常 reset)。
+  if (navTargetId !== null && orderedIds.includes(navTargetId)) {
+    queueMicrotask(() => clearNavTarget())
+  }
   const firstId = orderedIds[0]
   if (
     firstId !== undefined &&
+    // 豁免显式搜索跳转目标: 它可能不在当前(陈旧/未分页到的)列表里, 但 EmailDetail
+    // 能按 id 独立加载, 别把 active 抢回成列表第一封。
+    activeId !== navTargetId &&
     (activeId === null || !orderedIds.includes(activeId)) &&
     activeId !== firstId
   ) {

@@ -22,7 +22,14 @@ interface ActiveEmailStore {
   // can navigate with the same pickNext/pickPrev semantics as J/K, without
   // re-deriving the list. Not persisted — rebuilt on every list render.
   orderedIds: ReadonlyArray<number>
-  setActive(id: number | null): void
+  // 显式"导航目标"id —— 搜索跳转(CommandPalette)打开一封当前列表里没有的邮件时
+  // 设它。EmailList 的 active-reset 会豁免这个 id(否则它发现 activeId 不在当前
+  // (可能陈旧/未分页到的)列表里, 立刻把 active 重置成列表第一封, 抢掉跳转目标)。
+  // 目标真正出现在列表里后清空, 之后手动切邮箱恢复正常 reset。普通选择(行点击/
+  // J-K/reset)调 setActive(id) 不带 navTarget → 清空它(普通选择优先于旧跳转目标)。
+  navTargetId: number | null
+  setActive(id: number | null, opts?: { navTarget?: boolean }): void
+  clearNavTarget(): void
   setOrderedIds(ids: ReadonlyArray<number>): void
 }
 
@@ -49,12 +56,16 @@ function write(id: number | null): void {
 export const useActiveEmail = create<ActiveEmailStore>((set) => ({
   activeInternalId: read(),
   orderedIds: [],
+  navTargetId: null,
   setOrderedIds(ids) {
     set({ orderedIds: ids })
   },
-  setActive(id) {
+  setActive(id, opts) {
     write(id)
-    set({ activeInternalId: id })
+    set({ activeInternalId: id, navTargetId: opts?.navTarget ? id : null })
+  },
+  clearNavTarget() {
+    set({ navTargetId: null })
   }
 }))
 

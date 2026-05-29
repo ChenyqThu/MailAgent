@@ -514,7 +514,9 @@ export function CommandPalette(): React.ReactElement | null {
           closeCommandPalette()
           setView(targetView)
           if (h.mailbox) setActiveMailbox(h.mailbox)
-          setActiveEmail(h.internal_id)
+          // navTarget: 跳转目标可能不在 EmailList 当前(分页/邮箱)列表里;
+          // 标记后 EmailList 的 active-reset 会豁免它, 否则会被重置成列表第一封。
+          setActiveEmail(h.internal_id, { navTarget: true })
           void navigate({ to: '/', search: { view: targetView } })
         }
       })
@@ -783,7 +785,9 @@ export function CommandPalette(): React.ReactElement | null {
                           closeCommandPalette()
                           setView(targetView)
                           if (h.mailbox) setActiveMailbox(h.mailbox)
-                          setActiveEmail(h.internal_id)
+                          // navTarget: 跳转目标可能不在 EmailList 当前(分页/邮箱)列表里;
+                          // 标记后 EmailList 的 active-reset 会豁免它, 否则会被重置成列表第一封。
+                          setActiveEmail(h.internal_id, { navTarget: true })
                           void navigate({ to: '/', search: { view: targetView } })
                         }}
                       />

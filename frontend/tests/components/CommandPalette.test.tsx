@@ -25,16 +25,23 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { useCommandPalette } from '@shared/state/command-palette'
 
-const { mockSearch, mockListMailboxes, mockFlag, mockLlmRun, mockSetActive, mockSetMailbox, mockNavigate } =
-  vi.hoisted(() => ({
-    mockSearch: vi.fn(),
-    mockListMailboxes: vi.fn(),
-    mockFlag: vi.fn(),
-    mockLlmRun: vi.fn(),
-    mockSetActive: vi.fn(),
-    mockSetMailbox: vi.fn(),
-    mockNavigate: vi.fn()
-  }))
+const {
+  mockSearch,
+  mockListMailboxes,
+  mockFlag,
+  mockLlmRun,
+  mockSetActive,
+  mockSetMailbox,
+  mockNavigate
+} = vi.hoisted(() => ({
+  mockSearch: vi.fn(),
+  mockListMailboxes: vi.fn(),
+  mockFlag: vi.fn(),
+  mockLlmRun: vi.fn(),
+  mockSetActive: vi.fn(),
+  mockSetMailbox: vi.fn(),
+  mockNavigate: vi.fn()
+}))
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
@@ -213,9 +220,7 @@ describe('CommandPalette — query normalisation', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'redis AND 产品' } })
     await vi.advanceTimersByTimeAsync(300)
     await waitFor(() =>
-      expect(mockSearch).toHaveBeenCalledWith(
-        expect.objectContaining({ query: 'redis AND 产品' })
-      )
+      expect(mockSearch).toHaveBeenCalledWith(expect.objectContaining({ query: 'redis AND 产品' }))
     )
   })
 })
@@ -295,7 +300,9 @@ describe('CommandPalette — interactions', () => {
     ) as HTMLElement | undefined
     expect(emailRow).toBeTruthy()
     fireEvent.click(emailRow!)
-    expect(mockSetActive).toHaveBeenCalledWith(101)
+    // navTarget:true — 搜索跳转标记导航目标, EmailList active-reset 据此豁免,
+    // 让目标即使不在当前列表也能打开(Bug#2 修复)。
+    expect(mockSetActive).toHaveBeenCalledWith(101, { navTarget: true })
     // navigate now carries the inferred view so EmailList lands on the
     // mailbox that contains the hit (mockup row 101 is in '收件箱' → 'inbox').
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/', search: { view: 'inbox' } })
