@@ -18,6 +18,7 @@ import DOMPurify from 'dompurify'
 import { Minus, Plus, RotateCw, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { useAppearance } from '@shared/state/appearance'
 import type { EmailDetail, TranslationSegment } from '@shared/api/types'
 
@@ -365,7 +366,15 @@ export function EmailBodyFrame({
     )
   }
   if (bodyQ.isLoading) {
-    return <div className="text-aux text-ink-fg-2 animate-pulse">Loading body…</div>
+    // 正文加载骨架: 模拟段落 + 留白的占位, 比单行 "Loading…" 更接近最终布局,
+    // 减少加载→正文的跳变感。Skeleton 自带 animate-pulse motion-reduce:animate-none。
+    return (
+      <div className="py-1 space-y-4" aria-label="loading email body" aria-busy="true">
+        <Skeleton rows={3} />
+        <Skeleton rows={4} width="full" />
+        <Skeleton rows={2} />
+      </div>
+    )
   }
   if (srcDoc === null) {
     return <div className="text-aux text-ink-fg-2">(empty body)</div>
