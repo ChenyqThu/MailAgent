@@ -1064,7 +1064,9 @@ body::before {
 .email-row.is-selected {
   background-color: rgb(var(--ink-4) / 0.7);
 }
-.email-row.is-selected::before {
+/* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
+   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。 */
+.email-row::before {
   content: '';
   position: absolute;
   left: 0;
@@ -1072,6 +1074,16 @@ body::before {
   bottom: 0;
   width: 3px;
   background: rgb(var(--c-accent));
+  opacity: 0;
+  transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.email-row.is-selected::before {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .email-row::before {
+    transition: none;
+  }
 }
 
 /* Sprint 17 — thread chevron 直接在 .email-row 第一格 grid cell 内, 不再
@@ -1408,10 +1420,13 @@ body:not([data-batch-mode='true']) .cb {
   padding: 0;
   cursor: pointer;
   border-radius: 5px;
+  /* §8 对齐: flag/pin 三态 color/opacity 过渡补 standard 曲线（原缺显式曲线
+     用默认 ease）。CSS 过渡比 GSAP 更省，且免去虚拟列表内 tween 随 unmount
+     kill 的复杂度（§4.1/§4.3.1）。 */
   transition:
-    color 0.12s,
-    background 0.12s,
-    opacity 0.12s;
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .row-actions .ricon:hover {
   background: rgb(var(--ink-4) / 0.7);

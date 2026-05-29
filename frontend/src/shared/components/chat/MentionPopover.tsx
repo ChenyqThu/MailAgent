@@ -17,6 +17,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Loader2, Search } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { normalizeFtsQuery } from '@shared/lib/search_query'
 import type { SearchHit, SearchResult } from '@shared/api/types'
@@ -57,7 +59,14 @@ export function MentionPopover({
     }
   }
   const inputRef = useRef<HTMLInputElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
+  // 出入场：popover 锚在 Composer 上方 (bottom-full 向上展开)，故 transformOrigin
+  // bottom left。无 backdrop，退场反向延迟卸载。scopeRef 兼作原 containerRef
+  // (outside-click 命中判定的容器)。
+  const { shouldRender, scopeRef: containerRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom left' },
+    enterDuration: DUR.fast
+  })
 
   // Debounce — set a timer on every `query` change and clear on the
   // next change (cleanup). The trailing value lands in `debounced`
@@ -128,7 +137,7 @@ export function MentionPopover({
     }
   }
 
-  if (!open) return null
+  if (!shouldRender) return null
   return (
     <div
       ref={containerRef}

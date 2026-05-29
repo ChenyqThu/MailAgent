@@ -11,11 +11,13 @@
 // (FolderLayout 统一弹 ConfirmDialog + 复用 mailApi.folder.deleteMsg)。
 // 数据契约只用 FolderEmailMeta (无 AI / 无 thread / 无已读态)。
 
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Paperclip, Pencil, Trash2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { parseSender, cleanSnippet } from '@shared/lib/mail_parse'
 import { formatRelativeTime } from '@shared/format'
 import type { FolderEmailMeta } from '@shared/api/types'
@@ -65,6 +67,20 @@ function FolderRowInner({ email, selected, onSelect, onRequestDelete }: Props): 
   const { t } = useTranslation()
   const isDrafts = email.folder === 'drafts'
 
+  // 挂载淡入 — folder 列表非虚拟, 但归档/删除走 react-query invalidate→refetch,
+  // 行从 data 移除即被父级 unmount, 无法在行内延迟卸载做 collapse 退场 (需把移除
+  // 队列上提到 FolderList 并 diff query data, 属重构父级数据流, 超出微交互范畴)。
+  // 故保守只做挂载 autoAlpha 淡入, 不碰父级移除链路。reduced-motion no-op。
+  const rowRef = useRef<HTMLElement>(null)
+  const reduce = useReducedMotion()
+  useGSAP(
+    () => {
+      if (reduce || !rowRef.current) return
+      gsap.from(rowRef.current, { autoAlpha: 0, duration: DUR.base })
+    },
+    { dependencies: [reduce], scope: rowRef }
+  )
+
   // 草稿: sender 是自己, To 才是关键 — 身份行展示收件人。存档: 展示发件人。
   const recipientParsed = parseSender(email.to_addr)
   const senderParsed = parseSender(email.sender)
@@ -103,6 +119,7 @@ function FolderRowInner({ email, selected, onSelect, onRequestDelete }: Props): 
 
   return (
     <article
+      ref={rowRef}
       role="button"
       tabIndex={0}
       onClick={onSelect}

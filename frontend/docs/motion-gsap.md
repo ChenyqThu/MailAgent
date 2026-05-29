@@ -107,7 +107,7 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 - 挤压：AIChatPanel / ChatSidebar width tween。
 - Chat：新消息气泡入场（排除历史/streaming）/ DraftPreviewCard 序列。
 - Toast 类：UndoToast 进度条 GSAP 倒计时 + 进场。
-- 微交互：BatchActionBar 出入场 / SettingsShell tab 淡入 / FolderRow 归档 collapse / AgendaView stagger / flag·pin 颜色过渡（CSS）/ 选中 accent bar fade（CSS）。
+- 微交互：BatchActionBar 出入场 / SettingsShell tab 淡入 / FolderRow 入场 fade / AgendaView stagger / flag·pin 颜色过渡（CSS）/ 选中 accent bar fade（CSS）。
 - §8 曲线收口：移除全部旧第二曲线 `cubic-bezier(0.32,0.72,0,1)`（folder-modal / efm-modal / batch-bar / undo-toast），统一 standard。
 
 **有意延后**（透明记录，非遗漏）：
@@ -115,3 +115,4 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 - **view-chip / Inbox tab / ui/tabs 滑动 indicator**：sliding indicator 需测量定位 + DOM 重构，对齐效果**需真机 GUI 目检**（border/padding 偏移易错），不在无头环境盲发；现有过渡曲线已对齐 standard。
 - **AdvancedDisclosure 展开**：原生 `<details>` 加高度动画须改受控组件，丢失 disclosure a11y 语义，面板「95% 用户从不打开」，成本不值。
 - **ToolCallAuditRow 展开**：内容高度展开，clipPath/受控 height 中等风险、低价值，暂缓。
+- **FolderRow 归档 collapse 退场**：FolderList 从 react-query data 派生行，归档→invalidate→refetch→行从 data 移除→父卸载，行内无法延迟卸载；真正的 collapse 退场需把删除队列上提到 FolderList 做数据 diff（父数据流改写，超范围）。当前只做入场 fade。

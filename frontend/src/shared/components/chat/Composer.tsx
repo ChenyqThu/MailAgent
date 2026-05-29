@@ -14,6 +14,8 @@ import { useTranslation } from 'react-i18next'
 import { AtSign, ArrowUp, Cpu, Paperclip, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import {
@@ -145,6 +147,18 @@ export function Composer({
       document.removeEventListener('keydown', escHandler)
     }
   }, [modelPickerOpen])
+
+  // model-picker 出入场：菜单锚在 Cpu 按钮上方 (bottom-full 向上展开)，故
+  // transformOrigin bottom left。无 backdrop，退场反向。scopeRef 是 popover
+  // 本身；outside-click 仍判定外层 modelPickerRef (含按钮+popover)。
+  const modelPickerVisible =
+    modelPickerOpen && !modelPickerDisabled && !!availableModels && availableModels.length > 0
+  const { shouldRender: modelPickerShouldRender, scopeRef: modelPickerScopeRef } =
+    useExitAnimation<HTMLDivElement>(modelPickerVisible, {
+      backdrop: false,
+      from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom left' },
+      enterDuration: DUR.fast
+    })
 
   const submit = useCallback(() => {
     const trimmed = value.trim()
@@ -462,55 +476,53 @@ export function Composer({
               </button>
             </HoverTip>
 
-            {modelPickerOpen &&
-              !modelPickerDisabled &&
-              availableModels &&
-              availableModels.length > 0 && (
-                // mockup-faithful glass popover anchored above the Cpu button.
-                // Width auto-fits the widest model id (claude-opus-4-7 ≈ 110px);
-                // padding matches Sprint 11 .glass-pop recipe.
-                <div
-                  role="menu"
-                  aria-label={t('chat.composer.model')}
-                  className={cn(
-                    'absolute z-50 bottom-full mb-1.5 left-0',
-                    'min-w-[160px] rounded-md py-1',
-                    'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
-                  )}
-                >
-                  {availableModels.map((m) => {
-                    const active = m === currentModel
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={active}
-                        onClick={() => {
-                          onModelChange?.(m)
-                          setModelPickerOpen(false)
-                        }}
+            {modelPickerShouldRender && availableModels && (
+              // mockup-faithful glass popover anchored above the Cpu button.
+              // Width auto-fits the widest model id (claude-opus-4-7 ≈ 110px);
+              // padding matches Sprint 11 .glass-pop recipe.
+              <div
+                ref={modelPickerScopeRef}
+                role="menu"
+                aria-label={t('chat.composer.model')}
+                className={cn(
+                  'absolute z-50 bottom-full mb-1.5 left-0',
+                  'min-w-[160px] rounded-md py-1',
+                  'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
+                )}
+              >
+                {availableModels.map((m) => {
+                  const active = m === currentModel
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={active}
+                      onClick={() => {
+                        onModelChange?.(m)
+                        setModelPickerOpen(false)
+                      }}
+                      className={cn(
+                        'w-full text-left px-3 py-1.5 text-meta font-mono',
+                        'flex items-center gap-2 whitespace-nowrap',
+                        active
+                          ? 'text-coral bg-coral/10'
+                          : 'text-ink-fg-1 hover:bg-ink-4 hover:text-ink-fg',
+                        'transition-colors duration-fast'
+                      )}
+                    >
+                      <span
                         className={cn(
-                          'w-full text-left px-3 py-1.5 text-meta font-mono',
-                          'flex items-center gap-2 whitespace-nowrap',
-                          active
-                            ? 'text-coral bg-coral/10'
-                            : 'text-ink-fg-1 hover:bg-ink-4 hover:text-ink-fg',
-                          'transition-colors duration-fast'
+                          'w-1.5 h-1.5 rounded-full shrink-0',
+                          active ? 'bg-coral/100' : 'bg-ink-fg-3'
                         )}
-                      >
-                        <span
-                          className={cn(
-                            'w-1.5 h-1.5 rounded-full shrink-0',
-                            active ? 'bg-coral/100' : 'bg-ink-fg-3'
-                          )}
-                        />
-                        {m}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
+                      />
+                      {m}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
 
           {/* Backend label + ⌘↩ kbd — `ml-auto` shoves the affordance
