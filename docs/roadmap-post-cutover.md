@@ -399,6 +399,31 @@ if ctx:
 
 ---
 
+### 5.6 前后端一体化打包 + Onboarding (Epic, **下一步落地**)
+
+把「独立 Electron 前端 + Python 后端 + DavMail JVM + PM2」收敛为单个可分发 `.app`，新用户装完即用、老用户继承+幂等迁移、插件按需独立开关。完整方案三件套 (2026-05-29 产出, 经批判复审修订):
+
+- [`docs/packaging/01-architecture-analysis.md`](./packaging/01-architecture-analysis.md) — 架构分析 + 打包三方案对比 (推荐**嵌入式 CPython venv via extraResources**) + 插件控制面 + §11 评审修订 (C-1~C-11)
+- [`docs/packaging/02-landing-plan.md`](./packaging/02-landing-plan.md) — P0–P6 路线图 (~37–55 人天 MVP) + 文件级落点 + 风险册 + M1–M5 里程碑
+- [`docs/packaging/03-onboarding-prd.md`](./packaging/03-onboarding-prd.md) — 四类用户检测矩阵 + 新/老/半装流程 + 插件子流程 + 状态机图
+
+**核心约束**: ① 后端长驻服务须新增 `mailagent serve` 子命令 (`EmailNotionSyncApp` 迁入 `src/service.py`, P1-4a 前置), `BackendLifecycleManager` 取代 PM2; ② 全量 userData 化 (`DATA_ROOT=~/Library/Application Support/MailAgent`) + `config.py` 路径绝对化; ③ 首发默认 AppleScript backend (零依赖零合规, 不捆绑 JRE/DavMail); ④ 对外发布前必须申请 Apple Developer + 公证 (P6-1 升为与 P0 并行的零号任务)。**MVP = 内部 ad-hoc, 对外可用 = MVP + 公证。**
+**落地方式**: 独立 `feat/packaging-onboarding` worktree, 每 Phase 子分支 PR, 里程碑合 main。
+
+### 5.7 前后端技术栈统一 — Python → TypeScript 增量绞杀 (**远期, ROI 拐点决定终点**)
+
+> **状态: roadmap 草案, 不进入当前 Sprint。** 仅在 §5.6 方式 2 稳定交付后才启动。详见 [`docs/packaging/04-tech-stack-unification.md`](./packaging/04-tech-stack-unification.md) (经批判复审修订 D-1~D-10)。
+
+完整方案: 后端 57k 行 Python 按「叶子纯函数 → 读侧/HTTP → 写侧经 outbox 缝 → 皇冠明珠 sync_store/主循环」**四波增量绞杀**到 TS, 借三条已存在的语言中立缝 (SQLite 表 / `email_outbox` / CLI JSON) 让 TS 与剩余 Python 共存灰度。
+
+**铁律 (必须记住)**: **只要还剩一个 Python 模块在跑, 就仍须打包整个 venv (~281MB)** —— 打包瘦身是「全有或全无」的阶跃终局, 增量迁移过程中的正当理由**只能是 DX / 降耦**, 不是体积。
+
+**规划工作量**: 约 **180–260 人天 (≈ 9–13 人月)**, 跨多个 minor 版本 (v2.0→v3.x)。
+**默认终点不是「全迁完摘 venv」, 而是「迁到 ROI 拐点为止」** —— 很可能停在 Wave 3 后 (读写侧 TS、皇冠明珠 + caldav/pptx/pdf 永久 Python) 的健康混合态。「摘 venv」是需 §6.2 七条判据全绿才解锁的**可选**终局。
+**落地方式**: 每一波独立 worktree/分支、独立可发布、独立可回滚, 不与 §5.6 打包落地共线。
+
+---
+
 ## 6. 已知隐患 trace (持续观察)
 
 (详见 [`next-session-handoff.md`](./next-session-handoff.md) §3)
