@@ -42,7 +42,9 @@ frontend/
 ├── README.md                       ← 本文，导览
 ├── REVIEW-LOG.md                   ← 2026-05-16 深度 review 决议（opus 4.7 + 5 codex agents）
 ├── DESIGN.md                       ← 设计系统 SSoT (1440+ 行, 17 sections)
-├── ARCHITECTURE.md                 ← 完整前端架构（三线协同）
+├── ARCHITECTURE.md                 ← 完整前端架构（三线协同）+ §7.1 列表性能铁律
+├── MOTION-PERF-HANDOFF.md          ← feat/gsap-motion: GSAP 动效系统 + 列表性能 + bug 修复全记录
+├── docs/motion-gsap.md             ← GSAP 落地规范（DUR/standard/autoAlpha/useExitAnimation/虚拟列表铁律）
 ├── PROJECT-PLAN.md                 ← 项目计划 + Sprint + 并行指引
 ├── BACKEND-INTERFACES.md           ← 后端 4 接口面参考
 ├── ISLAND-PLUGIN.md                ← ping-island Hybrid 接入

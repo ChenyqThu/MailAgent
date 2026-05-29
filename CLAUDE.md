@@ -28,6 +28,7 @@
 | 存档/草稿箱双入口（folder_sync） | 动 folder 同步前 | [`docs/folder-ui-prd.md`](./docs/folder-ui-prd.md) + [`docs/folder-next-session-handoff.md`](./docs/folder-next-session-handoff.md) |
 | Compose 回复/转发 + SMTP 发送 | 动 compose / 发送前 | [`docs/compose-reply-forward-handoff.md`](./docs/compose-reply-forward-handoff.md) |
 | 灵动岛 Ping Island 集成 | 动通知/ack 中心前 | `~/.claude/plans/ultrathink-session-curious-cloud.md` |
+| 前端动效 + 列表性能铁律（Electron renderer：GSAP §8 动效 / snippet 懒取 / 线程批量 / 查询缓存 / 正文 iframe 链接） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/MOTION-PERF-HANDOFF.md`](./frontend/MOTION-PERF-HANDOFF.md) + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
 
 技能（按需触发，正文不常驻）：`/deploy`（部署验证）、`/debug`（系统化排查）、`/health`（健康巡检）、`/db-migration`（schema 升级）、`/sprint-handoff`（交接文档）。
 

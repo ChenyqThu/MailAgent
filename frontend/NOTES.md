@@ -6,6 +6,15 @@
 
 ## TODO
 
+- 2026-05-29 — **[minor][perf] "ResizeObserver loop completed with undelivered notifications" 残留警告** (良性)
+  EmailBodyFrame 自己的 ResizeObserver 已 rAF 包裹打断同步环 (commit 66ef614), 但 dev console 仍偶现该警告.
+  残留来源大概率是 react-window v2 `<List>` 内部的 ResizeObserver (第三方, 无法从单组件修). 该警告是浏览器
+  规范层的良性 false-positive (布局同帧内收敛, 无功能影响). 若要彻底静音可在 renderer 入口加**仅吞这一条精确
+  消息**的 window error handler (webpack-dev-server 即如此), 属噪音抑制非 bug 修复, 暂不引入. 生产构建同样无害.
+- 2026-05-29 — **[note] 正文 iframe "Blocked script execution in 'about:srcdoc'" 是预期行为, 勿"修"**
+  正文 iframe `sandbox="allow-same-origin"` 故意不给 `allow-scripts` (EmailBodyFrame 三层防护之一). 某些邮件
+  HTML 自带 `<script>` 被沙箱拦下 → console 报这条. 这是安全机制正常工作; 给 allow-scripts 会让邮件脚本在
+  same-origin 下执行, 是重大安全倒退.
 - 2026-05-26 — **[bug][calendar] EventFormModal prefill effect 重置未保存编辑** (review LOW, pre-existing)
   `EventFormModal.tsx` 的 `[open, occurrence]` dep effect (~line 152-208) 在 occurrence prop
   identity 变化时 (父组件 re-render 传新对象, 即使数据相同) 重新预填 chips +

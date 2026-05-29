@@ -359,6 +359,30 @@ Electron main 收到响应 → 跳 Mail.app + 把 MailAgent 窗口 focus 到该�
 
 监控：Electron main 进程暴露 `/diag/timings` 给 settings 页面查看。
 
+### 7.1 列表性能铁律（feat/gsap-motion 落地，详见 `MOTION-PERF-HANDOFF.md`）
+
+**better-sqlite3 在 Electron 主进程是同步执行的** —— 任何一条慢查询会堵住所有 IPC（实测启动时
+多条 `listEnriched` 叠加可冻结主进程 5-7s）。1.1GB 库 + 6700 封邮件下的硬约束：
+
+- **列表查询绝不读 body blob。** `email_body.body_markdown`(531MB) 的 `substr` 会把整块 blob 读进
+  内存（800 行冷读 ~1.5s）。`listEnriched` 只返回 metadata + `has_body`(PK join 不触 blob, ~130ms)；
+  正文 snippet 由 `email:listSnippets(ids)` **按可见行懒取**（react-window 只渲染 ~15-40 行，~12ms）。
+  行高基于 `has_body`（立即可知）而非 snippet 文本，避免懒取到达后行高跳变。
+- **批量优于扇出。** 跨邮箱线程补全用单条 `email:listByThreads(ids[])`（`WHERE thread_id IN(...)`），
+  不要每条线程一次 `listByThread`（几百次 IPC 串在主进程上）。
+- **列表查询缓存拉长 + SSE 兜新鲜。** 邮件/folder 列表 query `staleTime 5min + gcTime 15min`：路由切走
+  组件卸载后缓存存活，切回零延迟、不闪 loading。新鲜度靠 `useEventBridge` 的 SSE invalidate（邮件
+  `['emails']`、folder `folder.synced→['folder']`）被动驱动，不依赖"切回时重拉"。
+- **全局事件订阅在 App 根单次。** updater/island 等 `ipcRenderer` 事件订阅放 `App.tsx`（makeMailApi 是
+  模块级单例），不要放每路由都挂的 StatusBar（remount 累积 listener → MaxListenersExceededWarning）。
+
+### 7.2 邮件正文 iframe（EmailBodyFrame）
+
+正文渲染在 `<iframe sandbox="allow-same-origin">`（无 `allow-scripts`）+ DOMPurify + CSP 三层防护。两个
+必知点：① 邮件内 `<a>` 点击会被 DOMPurify 剥 target → 在 iframe 内原地导航 → 被页面 CSP `frame-src 'self'`
+拦成**空白页**；故必须在 iframe 内**渲染层拦截点击**（捕获阶段 preventDefault）→ `shell:openExternal`，
+不能只靠主进程 `will-frame-navigate`。② ResizeObserver 回调要 rAF 包裹打断"测高→改高→再触发"同步环。
+
 ---
 
 ## 8. 测试策略
