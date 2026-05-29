@@ -6,7 +6,6 @@
 // the OS-level tooltip still surfaces multi-line detail after a long
 // hover, just without our own floating chip.
 
-import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Activity, Cpu, Database, Layers } from 'lucide-react'
 
@@ -14,11 +13,10 @@ import type { EventsConnectionState, IslandConnectionState } from '@shared/api/t
 import { cn } from '@shared/lib/cn'
 import { useAppearance } from '@shared/state/appearance'
 import { useMailbox } from '@shared/state/mailbox'
-import { useUpdaterStore, setUpdaterStatus } from '@shared/state/updater'
+import { useUpdaterStore } from '@shared/state/updater'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
-import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
-import { islandStateI18nKey, setIslandStatus, useIslandStore } from '@shared/state/island'
+import { islandStateI18nKey, useIslandStore } from '@shared/state/island'
 
 function islandDotClass(state: IslandConnectionState): string {
   switch (state) {
@@ -127,7 +125,6 @@ export function StatusBar(): React.ReactElement {
   const resolved = useAppearance((s) => s.resolvedTheme)
   const accent = useAppearance((s) => s.accent)
   const active = useMailbox((s) => s.active)
-  const mailApi = useMailApi()
   const islandStatus = useIslandStore((s) => s.status)
   const status = useUpdaterStore((s) => s.status)
   // Sprint 16 — sync segment 真实状态: SSE 连接状态 + fallback polling 周期
@@ -135,42 +132,10 @@ export function StatusBar(): React.ReactElement {
   const fallbackMs = usePollingFallback()
   const sync = buildSyncView(t, sseState, fallbackMs)
 
-  // Sprint 8 §2.2 — version hydrate + live event subscribe.
-  useEffect(() => {
-    let cancelled = false
-    void mailApi.updater
-      .status()
-      .then((s) => {
-        if (!cancelled) setUpdaterStatus(s)
-      })
-      .catch(() => {
-        /* preload missing in tests; keep initial seed. */
-      })
-    const unsubscribe = mailApi.updater.onEvent((next) => setUpdaterStatus(next))
-    return () => {
-      cancelled = true
-      unsubscribe()
-    }
-  }, [mailApi])
-
-  // Sprint 11 V1.4 — Island hydration moved here from TitleBar.
-  useEffect(() => {
-    let cancelled = false
-    void mailApi.island
-      .status()
-      .then((s) => {
-        if (!cancelled) setIslandStatus(s)
-      })
-      .catch(() => {
-        /* HttpApi V2 stub — keep initial idle state */
-      })
-    const unsubscribe = mailApi.island.onEvent((next) => setIslandStatus(next))
-    return () => {
-      cancelled = true
-      unsubscribe()
-    }
-  }, [mailApi])
-
+  // Sprint 19 — updater / island 的 hydrate + 事件订阅已上移到 App 根 (单次订阅,
+  // 见 App.tsx)。StatusBar 在每个路由都挂一份, 之前各自订阅导致 ipcRenderer 监听
+  // 随路由切换累积 (MaxListenersExceededWarning)。这里只通过 store selector 读取
+  // (islandStatus / status 见上)。
   const islandStateLabel = t(`titleBar.island.${islandStateI18nKey(islandStatus.state)}`, {
     defaultValue: islandStatus.state
   })

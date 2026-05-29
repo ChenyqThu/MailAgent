@@ -11,6 +11,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import '@shared/i18n'
 import { bootAppearance } from '@shared/state/appearance'
+import { makeMailApi } from '@shared/api/factory'
+import { setUpdaterStatus } from '@shared/state/updater'
+import { setIslandStatus } from '@shared/state/island'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
@@ -47,6 +50,33 @@ export default function App(): React.ReactElement {
 
   useEffect(() => {
     bootAppearance()
+  }, [])
+
+  // 应用级单次订阅 updater / island 事件 → 写入对应 zustand store。
+  // 之前每个路由的 StatusBar 各自订阅一份, 路由切换 remount 导致 ipcRenderer
+  // 监听累积 (dev Fast Refresh 下报 MaxListenersExceededWarning)。收敛到 App
+  // 一次订阅, StatusBar / 设置页仅通过 store selector 读取。makeMailApi 是模块
+  // 级单例, 引用稳定; 空依赖 → 整个 app 生命周期只订阅一次, 卸载时清理。
+  useEffect(() => {
+    const api = makeMailApi()
+    void api.updater
+      .status()
+      .then(setUpdaterStatus)
+      .catch(() => {
+        /* preload missing in tests / web stub — keep initial seed */
+      })
+    void api.island
+      .status()
+      .then(setIslandStatus)
+      .catch(() => {
+        /* web stub — keep initial idle state */
+      })
+    const unsubUpdater = api.updater.onEvent((next) => setUpdaterStatus(next))
+    const unsubIsland = api.island.onEvent((next) => setIslandStatus(next))
+    return () => {
+      unsubUpdater()
+      unsubIsland()
+    }
   }, [])
 
   // Sprint 14 PR E — popout window mounts a dedicated chrome instead of
