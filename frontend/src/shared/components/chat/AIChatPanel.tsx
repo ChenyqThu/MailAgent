@@ -624,7 +624,11 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         {/* Lane C2 — 挤压 wrapper。overflow-hidden 裁掉折叠时溢出的 140px 侧栏；
             初始 inline width:0 防首帧闪现（GSAP 接管后覆写）。ChatSidebar 自身仍
             是 w-[140px] shrink-0，wrapper 收到 0 时把它裁没。 */}
-        <div ref={sidebarWrapRef} className="overflow-hidden shrink-0" style={{ width: 0 }}>
+        <div
+          ref={sidebarWrapRef}
+          className="overflow-hidden shrink-0 flex min-h-0"
+          style={{ width: 0 }}
+        >
           {mountSidebar && (
             <ChatSidebar
               sessions={chat.sessions}

@@ -100,7 +100,11 @@ export function InboxLayout(): React.ReactElement {
         {/* Lane C — 挤压 wrapper。overflow-hidden 裁掉宽度收缩时溢出的面板内容；
             初始 inline width:0 防首帧闪现（GSAP 接管后由 tween/set 覆写）。
             AIChatPanel 自身仍是 w-[360px] shrink-0，wrapper 收到 0 时把它裁没。 */}
-        <div ref={wrapperRef} className="overflow-hidden shrink-0" style={{ width: 0 }}>
+        <div
+          ref={wrapperRef}
+          className="overflow-hidden shrink-0 flex min-h-0"
+          style={{ width: 0 }}
+        >
           {mountPanel && <AIChatPanel />}
         </div>
       </div>
