@@ -68,6 +68,13 @@ export function FolderList({
     queryFn: () => mailApi.folder.list({ folder, limit: LIST_LIMIT }),
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
+    // 切到 收件箱/设置/日历 再切回 存档/草稿箱不重拉 + 不闪 loading: folder_email
+    // 已是本地 SSoT (FolderSyncWorker 增量同步 + body 落库), 后端同步完成会发
+    // folder.synced 事件经 SSE invalidate ['folder'] (useEventBridge), 所以缓存
+    // 可放心拉长——5min 内无变化切回直接命中, gcTime 15min 防卸载后过早回收。
+    // 与收件箱 EmailList 的缓存策略对齐 (Bug#3 同款修复)。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
     placeholderData: keepPreviousData
   })
 

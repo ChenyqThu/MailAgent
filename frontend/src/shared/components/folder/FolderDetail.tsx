@@ -136,7 +136,11 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
     queryKey: ['folder-email', id],
     queryFn: () => mailApi.folder.get(id as number),
     enabled: id !== null,
-    staleTime: 30_000,
+    // 详情含 body_html (folder_email 落库的不可变正文), 重开同一封无需重拉。
+    // staleTime 5min 避免切回/重选时 refetch, gcTime 15min 让缓存在列表卸载
+    // (切去其它视图) 后存活, 切回点同一封即时打开。与列表缓存策略对齐。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
     placeholderData: keepPreviousData
   })
 
