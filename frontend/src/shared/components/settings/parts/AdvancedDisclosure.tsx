@@ -35,26 +35,31 @@ export function AdvancedDisclosure({
   defaultOpen = false,
   className
 }: AdvancedDisclosureProps): React.ReactElement {
+  // 受控 disclosure（替代原生 <details>），用 CSS grid-template-rows 0fr→1fr 做
+  // 纯 CSS 高度展开（§4.1 优先级：能 grid-rows 解决不上 GSAP）。reduced-motion 时
+  // motion-reduce:transition-none 去掉过渡 —— 纯 CSS 走 @media 即可, 无需 JS hook。
+  const [open, setOpen] = React.useState(defaultOpen)
+  const bodyId = React.useId()
+
   return (
-    <details
-      open={defaultOpen}
-      className={cn('group rounded-lg border border-ink-border-soft', className)}
-    >
-      <summary
+    <div className={cn('group rounded-lg border border-ink-border-soft', className)}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={bodyId}
         className={cn(
-          'flex items-center gap-2 cursor-pointer select-none list-none',
+          'flex items-center gap-2 w-full text-left cursor-pointer select-none',
           'px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]',
           'rounded-lg transition-colors duration-fast ease-standard',
-          'hover:bg-ink-3/40',
-          // Hide the default disclosure marker — we render our own chevron.
-          '[&::-webkit-details-marker]:hidden'
+          'hover:bg-ink-3/40'
         )}
       >
         <ChevronDown
           className={cn(
             'size-4 shrink-0 text-ink-fg-2',
-            'transition-transform duration-fast ease-standard',
-            '-rotate-90 group-open:rotate-0'
+            'transition-transform duration-fast ease-standard motion-reduce:transition-none',
+            open ? 'rotate-0' : '-rotate-90'
           )}
           aria-hidden="true"
         />
@@ -62,10 +67,23 @@ export function AdvancedDisclosure({
           <div className="text-aux font-medium text-ink-fg">{label}</div>
           {helper ? <div className="text-meta text-ink-fg-2 mt-0.5">{helper}</div> : null}
         </div>
-      </summary>
-      <div className="divide-y divide-ink-border-soft border-t border-ink-border-soft">
-        {children}
+      </button>
+      <div
+        id={bodyId}
+        role="region"
+        aria-hidden={!open}
+        className={cn(
+          'grid transition-[grid-template-rows] duration-base ease-standard',
+          'motion-reduce:transition-none'
+        )}
+        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <div className="divide-y divide-ink-border-soft border-t border-ink-border-soft">
+            {children}
+          </div>
+        </div>
       </div>
-    </details>
+    </div>
   )
 }

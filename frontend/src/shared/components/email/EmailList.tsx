@@ -40,7 +40,8 @@ import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { cleanSnippet } from '@shared/lib/mail_parse'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
-import { gsap, DUR } from '@shared/lib/gsap'
+import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 
 import { EmailRow } from './EmailRow'
@@ -555,6 +556,38 @@ export function EmailList(): React.ReactElement {
   const view = useEmailFilter((s) => s.view)
   const tab = useEmailFilter((s) => s.tab)
   const setTab = useEmailFilter((s) => s.setTab)
+
+  // §8 滑动 indicator — Focused/Other 激活态的胶囊背景移到一个绝对定位元素,
+  // 随 tab 变化 tween x/width (DUR.fast)。首次挂载 (含切回 inbox) gsap.set 直接
+  // 定位无动画, 之后才滑。reduced-motion 短路。useGSAP({scope}) 自动 cleanup。
+  const tabListRef = useRef<HTMLDivElement | null>(null)
+  const tabIndicatorRef = useRef<HTMLSpanElement | null>(null)
+  const tabMountedRef = useRef(false)
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      const list = tabListRef.current
+      const indicator = tabIndicatorRef.current
+      // 非 inbox 视图 tablist 卸载 → 下次切回需重新 gsap.set 无动画定位。
+      if (!list || !indicator) {
+        tabMountedRef.current = false
+        return
+      }
+      const activeEl = list.querySelector<HTMLElement>('.inbox-tab.is-active')
+      if (!activeEl) return
+      const listRect = list.getBoundingClientRect()
+      const activeRect = activeEl.getBoundingClientRect()
+      const left = activeRect.left - listRect.left
+      const width = activeRect.width
+      if (!tabMountedRef.current || reduceMotion) {
+        gsap.set(indicator, { x: left, width, autoAlpha: 1 })
+        tabMountedRef.current = true
+        return
+      }
+      gsap.to(indicator, { x: left, width, duration: DUR.fast, overwrite: 'auto' })
+    },
+    { dependencies: [tab, view, reduceMotion], scope: tabListRef }
+  )
   const selectedPriorities = useEmailFilter((s) => s.selectedPriorities)
   const selectedCategories = useEmailFilter((s) => s.selectedCategories)
   const togglePriority = useEmailFilter((s) => s.togglePriority)
@@ -1043,7 +1076,14 @@ export function EmailList(): React.ReactElement {
       <div className="relative px-3 pt-3 pb-2.5 border-b border-ink-border-soft">
         <div className="flex items-center justify-between gap-2">
           {view === 'inbox' ? (
-            <div className="inbox-tabs" role="tablist" aria-label={t('list.tab.aria')}>
+            <div
+              ref={tabListRef}
+              className="inbox-tabs"
+              role="tablist"
+              aria-label={t('list.tab.aria')}
+            >
+              {/* §8 滑动 indicator — 胶囊背景跟随激活 tab 滑动 (JS 测量 + GSAP x/width)。 */}
+              <span ref={tabIndicatorRef} className="inbox-tab-indicator" aria-hidden="true" />
               <button
                 type="button"
                 className={tab === 'focused' ? 'inbox-tab is-active' : 'inbox-tab'}

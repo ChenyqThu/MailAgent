@@ -11,18 +11,33 @@
 // zustand-driven `progress` field (a non-time-based fraction for long
 // tasks).
 //
-// Motion: enter = slide-in from right + opacity, 220ms. Leave on dismiss
-// is instant (CSS unmount) — the 3s TTL already cushions the user; a
-// second fade-out delays clean-up without UX value.
+// Motion (DESIGN.md §8): enter = slide-in from right + autoAlpha, DUR.base.
+// Leave = slide-out to the right + autoAlpha, DUR.fast. Both via GSAP through
+// `@shared/lib/gsap` (one-curve standard, three-tier durations).
+//
+// AnimatePresence-lite: the store remove (TTL setTimeout / manual X / demote
+// over-cap) is treated as a *signal*, not the unmount. `ToastContainer` keeps
+// its own render list that is a superset of the store `items` — it retains a
+// toast whose id has just left `items`, marks it `exiting`, and only drops it
+// from the render list once the slide-out tween completes. This routes all
+// three removal paths through the same exit animation without touching the
+// store model (the store stays a plain serializable queue).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Info as InfoIcon, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useToastStore, type Toast as ToastModel } from '@shared/state/toast'
 
 interface CardProps {
   toast: ToastModel
+  /** True once this toast has left the store queue — play slide-out. */
+  exiting: boolean
+  /** Called after the exit tween completes (or immediately in reduced-motion)
+   *  so the container can drop this id from its render list. */
+  onExited(): void
   onDismiss(): void
 }
 
@@ -37,19 +52,38 @@ function VariantIcon({ variant }: { variant: ToastModel['variant'] }): React.Rea
   }
 }
 
-function ToastCard({ toast, onDismiss }: CardProps): React.ReactElement {
-  // Slide-in animation: start translated, then commit to 0 after first
-  // paint. Using a CSS class hand-off rather than a library because the
-  // motion is the same shape DESIGN.md §8 calls out (220ms standard).
-  const [entered, setEntered] = useState(false)
+function ToastCard({ toast, exiting, onExited, onDismiss }: CardProps): React.ReactElement {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const reduce = useReducedMotion()
   // Time-based progress for non-long-task toasts (TTL bar). For toasts
   // with a caller-supplied `progress` field, we render that fraction
   // instead.
   const [autoProgress, setAutoProgress] = useState(1)
 
-  useEffect(() => {
-    requestAnimationFrame(() => setEntered(true))
-  }, [])
+  // Enter = slide-in from right + autoAlpha (DUR.base). Exit = slide-out to
+  // the right + autoAlpha (DUR.fast), then call onExited so the container
+  // unmounts. reduced-motion short-circuits both (no tween). Scope binds the
+  // tween to this card; useGSAP auto-reverts on unmount.
+  useGSAP(
+    () => {
+      const el = rootRef.current
+      if (!el) return
+      if (exiting) {
+        if (reduce) {
+          onExited()
+          return
+        }
+        gsap.to(el, { autoAlpha: 0, x: 16, duration: DUR.fast, onComplete: onExited })
+      } else {
+        if (reduce) {
+          gsap.set(el, { clearProps: 'opacity,visibility,transform' })
+          return
+        }
+        gsap.from(el, { autoAlpha: 0, x: 16, duration: DUR.base, clearProps: 'transform' })
+      }
+    },
+    { dependencies: [exiting, reduce], scope: rootRef }
+  )
 
   useEffect(() => {
     if (toast.progress !== undefined) return // caller-driven; no time bar.
@@ -76,13 +110,12 @@ function ToastCard({ toast, onDismiss }: CardProps): React.ReactElement {
 
   return (
     <div
+      ref={rootRef}
       role="status"
       aria-live={toast.variant === 'error' ? 'assertive' : 'polite'}
       className={cn(
         'relative w-[320px] rounded-md border border-ink-border bg-ink-2 overflow-hidden',
-        'shadow-[0_8px_24px_rgba(0,0,0,0.35)]',
-        'transition-all duration-base ease-standard',
-        entered ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4'
+        'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
       )}
     >
       <div className="flex items-start gap-2.5 px-3 py-2.5">
@@ -126,10 +159,57 @@ function ToastCard({ toast, onDismiss }: CardProps): React.ReactElement {
   )
 }
 
+/** One entry in the container's render list — a cached snapshot of the toast
+ *  plus whether it's currently playing its slide-out. `exiting` toasts have
+ *  already left the store queue; we keep rendering them off the cached
+ *  `toast` until the exit tween completes. */
+interface RenderEntry {
+  toast: ToastModel
+  exiting: boolean
+}
+
 export function ToastContainer(): React.ReactElement | null {
   const items = useToastStore((s) => s.items)
   const dismiss = useToastStore((s) => s.dismiss)
-  if (items.length === 0) return null
+
+  // Render list = superset of store items. Live toasts mirror the store;
+  // toasts whose id has left the store are retained with `exiting: true`
+  // until their slide-out finishes (then dropped via `onExited`). All three
+  // removal paths (TTL / manual X / demote) funnel through items.filter, so
+  // diffing prev-frame items against the store catches every departure.
+  const [rendered, setRendered] = useState<RenderEntry[]>(() =>
+    items.map((t) => ({ toast: t, exiting: false }))
+  )
+
+  useEffect(() => {
+    setRendered((prev) => {
+      // Refresh live entries (progress / detail updates) and detect those
+      // that left the store this frame → mark exiting (keep cached toast so
+      // the card content stays stable through the slide-out).
+      const next: RenderEntry[] = prev.map((e) => {
+        const live = items.find((t) => t.id === e.toast.id)
+        if (live) return { toast: live, exiting: false }
+        return { ...e, exiting: true }
+      })
+      // Append toasts new this frame (not already in the render list).
+      const knownIds = new Set(prev.map((e) => e.toast.id))
+      for (const t of items) {
+        if (!knownIds.has(t.id)) next.push({ toast: t, exiting: false })
+      }
+      // No structural change → skip the state churn (also avoids re-marking).
+      const sameLength = next.length === prev.length
+      const sameShape =
+        sameLength &&
+        next.every((e, i) => e.toast === prev[i].toast && e.exiting === prev[i].exiting)
+      if (sameShape) return prev
+      return next
+    })
+  }, [items])
+
+  const dropEntry = (id: number): void =>
+    setRendered((prev) => prev.filter((e) => e.toast.id !== id))
+
+  if (rendered.length === 0) return null
   return (
     <div
       aria-live="polite"
@@ -139,9 +219,14 @@ export function ToastContainer(): React.ReactElement | null {
         'pt-2'
       )}
     >
-      {items.map((t) => (
-        <div key={t.id} className="pointer-events-auto">
-          <ToastCard toast={t} onDismiss={() => dismiss(t.id)} />
+      {rendered.map((e) => (
+        <div key={e.toast.id} className="pointer-events-auto">
+          <ToastCard
+            toast={e.toast}
+            exiting={e.exiting}
+            onExited={() => dropEntry(e.toast.id)}
+            onDismiss={() => dismiss(e.toast.id)}
+          />
         </div>
       ))}
     </div>

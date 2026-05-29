@@ -809,33 +809,44 @@ function ToolCallAuditRow({
                     </span>
                   )}
                 </button>
-                {isOpen && (
-                  <div className="mt-1.5 pl-5 space-y-1">
-                    <div>
-                      <div className="text-ink-fg-3 text-micro mb-0.5">
-                        {t('chat.toolCalls.input')}
-                        {c.user_edited_input_json !== null && (
-                          <span className="ml-1 text-coral">
-                            ({t('chat.toolCalls.userEdited')})
-                          </span>
-                        )}
-                      </div>
-                      <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto whitespace-pre-wrap break-words">
-                        {inputEffective}
-                      </pre>
-                    </div>
-                    {c.output_json !== null && (
+                {/* 高度展开走纯 CSS grid-template-rows 0fr→1fr（§4.1 优先级：能 grid-rows
+                    解决不上 GSAP；也避开 MessageList 内既有 bubble/DraftCard GSAP 冲突）。
+                    内容常驻挂载, grid-rows 折叠/展开双向过渡；reduced-motion 走 motion-reduce
+                    去过渡（纯 CSS @media, 无需 JS hook）。inner overflow-hidden 在过渡期裁剪,
+                    pre 自带的 max-h-48 滚动不受影响（只动 row track, 不动子元素 max-height）。 */}
+                <div
+                  aria-hidden={!isOpen}
+                  className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
+                  style={{ gridTemplateRows: isOpen ? '1fr' : '0fr' }}
+                >
+                  <div className="overflow-hidden">
+                    <div className="mt-1.5 pl-5 space-y-1">
                       <div>
                         <div className="text-ink-fg-3 text-micro mb-0.5">
-                          {t('chat.toolCalls.output')}
+                          {t('chat.toolCalls.input')}
+                          {c.user_edited_input_json !== null && (
+                            <span className="ml-1 text-coral">
+                              ({t('chat.toolCalls.userEdited')})
+                            </span>
+                          )}
                         </div>
-                        <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto overflow-y-auto max-h-48 whitespace-pre-wrap break-words">
-                          {c.output_json}
+                        <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto whitespace-pre-wrap break-words">
+                          {inputEffective}
                         </pre>
                       </div>
-                    )}
+                      {c.output_json !== null && (
+                        <div>
+                          <div className="text-ink-fg-3 text-micro mb-0.5">
+                            {t('chat.toolCalls.output')}
+                          </div>
+                          <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto overflow-y-auto max-h-48 whitespace-pre-wrap break-words">
+                            {c.output_json}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
+                </div>
               </li>
             )
           })}

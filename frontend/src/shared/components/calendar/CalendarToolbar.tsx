@@ -11,6 +11,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, ListFilter, Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+
 import { EventFormModal } from './EventFormModal'
 import {
   useCalendarSyncTrigger,
@@ -80,6 +83,35 @@ export function CalendarToolbar({
   // Phase 2.2 — [+ 新建] 按钮 → 弹 EventFormModal (occurrence=null = create 语义)
   const [createModalOpen, setCreateModalOpen] = useState(false)
 
+  // §8 滑动 indicator — 激活 view-chip 的 bg/border 移到一个绝对定位元素, 随 view
+  // 变化 tween x/width (DUR.fast)。首次挂载 gsap.set 直接定位无动画, 之后才滑。
+  // reduced-motion 短路成无动画定位。useGSAP({scope}) 自动 cleanup。
+  const chipListRef = useRef<HTMLDivElement | null>(null)
+  const chipIndicatorRef = useRef<HTMLSpanElement | null>(null)
+  const chipMountedRef = useRef(false)
+  const reduceMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      const list = chipListRef.current
+      const indicator = chipIndicatorRef.current
+      if (!list || !indicator) return
+      const activeEl = list.querySelector<HTMLElement>('.view-chip.is-active')
+      if (!activeEl) return
+      // border/padding 偏移用 getBoundingClientRect 差值规避 (容器有 border)。
+      const listRect = list.getBoundingClientRect()
+      const activeRect = activeEl.getBoundingClientRect()
+      const left = activeRect.left - listRect.left
+      const width = activeRect.width
+      if (!chipMountedRef.current || reduceMotion) {
+        gsap.set(indicator, { x: left, width, autoAlpha: 1 })
+        chipMountedRef.current = true
+        return
+      }
+      gsap.to(indicator, { x: left, width, duration: DUR.fast, overwrite: 'auto' })
+    },
+    { dependencies: [view, reduceMotion], scope: chipListRef }
+  )
+
   // Phase 4·#1 — calendar 多选筛选 dropdown (仅 >1 calendar 时显示).
   const [calFilterOpen, setCalFilterOpen] = useState(false)
   const calFilterRef = useRef<HTMLDivElement | null>(null)
@@ -128,7 +160,9 @@ export function CalendarToolbar({
     <div className="shrink-0 px-5 pt-4 pb-3 flex items-center gap-4 flex-wrap">
       {/* title + range */}
       <div className="flex items-baseline gap-3 min-w-0">
-        <h1 className="text-subj font-semibold text-ink-fg tracking-tight">{t('calendar.toolbar.title', '日历')}</h1>
+        <h1 className="text-subj font-semibold text-ink-fg tracking-tight">
+          {t('calendar.toolbar.title', '日历')}
+        </h1>
         <span className="text-lead text-ink-fg-1 font-mono tabular-nums whitespace-nowrap">
           {rangeLabel}
         </span>
@@ -168,10 +202,13 @@ export function CalendarToolbar({
 
       {/* view chips — push to right */}
       <div
-        className="flex items-center gap-1 ml-auto p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50"
+        ref={chipListRef}
+        className="relative flex items-center gap-1 ml-auto p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50"
         role="tablist"
         aria-label={t('calendar.toolbar.viewAria', '视图切换')}
       >
+        {/* §8 滑动 indicator — bg+border 跟随激活 chip 滑动 (JS 测量 + GSAP x/width)。 */}
+        <span ref={chipIndicatorRef} className="view-chip-indicator" aria-hidden="true" />
         {(['today', 'week', 'month', 'agenda', 'recurring'] as CalendarView[]).map((v) => (
           <button
             key={v}
@@ -202,7 +239,9 @@ export function CalendarToolbar({
             <span>
               {selectedCalendars.length === 0
                 ? t('calendar.toolbar.calendarFilter.all', '全部日历')
-                : t('calendar.toolbar.calendarFilter.selected', '{n} 个日历', { n: selectedCalendars.length })}
+                : t('calendar.toolbar.calendarFilter.selected', '{n} 个日历', {
+                    n: selectedCalendars.length
+                  })}
             </span>
           </button>
           {calFilterOpen && (
@@ -265,7 +304,10 @@ export function CalendarToolbar({
           style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
           onClick={() => trigger({ full: true })}
           disabled={isPending}
-          title={t('calendar.toolbar.syncTitle', '急刷 (⌘R) · 后台 worker 每 60s 自动同步, 此按钮触发立即全量拉取')}
+          title={t(
+            'calendar.toolbar.syncTitle',
+            '急刷 (⌘R) · 后台 worker 每 60s 自动同步, 此按钮触发立即全量拉取'
+          )}
         >
           <RefreshCw size={13} strokeWidth={2} className={cn(isPending && 'animate-spin')} />
           <span>{t('calendar.toolbar.syncBtn', '同步')}</span>
@@ -276,12 +318,16 @@ export function CalendarToolbar({
             {hasErr
               ? t('calendar.toolbar.syncPillErr', '同步失败 · [ERR]')
               : lastDate
-                ? t('calendar.toolbar.syncPillOk', '上次同步 {time}', { time: relativeTime(lastDate) })
+                ? t('calendar.toolbar.syncPillOk', '上次同步 {time}', {
+                    time: relativeTime(lastDate)
+                  })
                 : t('calendar.toolbar.syncPillNone', '尚未同步')}
           </span>
           <div className="sync-tip glass-pop">
             <div className="text-aux text-ink-fg font-medium mb-1">
-              {hasErr ? t('calendar.toolbar.syncTipErr', 'DavMail · 同步失败') : t('calendar.toolbar.syncTipOk', 'DavMail · 已同步')}
+              {hasErr
+                ? t('calendar.toolbar.syncTipErr', 'DavMail · 同步失败')
+                : t('calendar.toolbar.syncTipOk', 'DavMail · 已同步')}
             </div>
             <div className="text-meta text-ink-fg-2 font-mono leading-relaxed break-all">
               {hasErr && (lastError ?? t('calendar.toolbar.syncTipUnknownErr', '未知错误'))}
@@ -289,8 +335,7 @@ export function CalendarToolbar({
                 <>
                   {head.last_full_sync_at_iso && (
                     <>
-                      last_full_sync{' '}
-                      {head.last_full_sync_at_iso.replace('T', ' ').slice(0, 19)}
+                      last_full_sync {head.last_full_sync_at_iso.replace('T', ' ').slice(0, 19)}
                       <br />
                     </>
                   )}
@@ -303,7 +348,11 @@ export function CalendarToolbar({
                   {head.calendar_name && <>calendar {head.calendar_name}</>}
                 </>
               )}
-              {!head && t('calendar.toolbar.syncTipNoRecord', '尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s')}
+              {!head &&
+                t(
+                  'calendar.toolbar.syncTipNoRecord',
+                  '尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s'
+                )}
             </div>
           </div>
         </div>
