@@ -34,6 +34,7 @@ import {
   getOrCreateSession,
   getSession,
   getToolCallByUseId,
+  listAllSessions,
   listLastNMessages,
   listMessages,
   listSessionsForEmail,
@@ -990,5 +991,61 @@ describe('chat_db — listLastNMessages (sliding window)', () => {
     const fromB = listLastNMessages(b.id, 20)
     expect(fromA.map((m) => m.content)).toEqual(['a-only'])
     expect(fromB.map((m) => m.content)).toEqual(['b-only'])
+  })
+})
+
+describe('listAllSessions — global cross-email history', () => {
+  test('returns sessions across emails, newest-first', async () => {
+    const a = createNewSession({ emailId: 201, backendKind: 'custom-api' })
+    appendMessage({ sessionId: a.id, role: 'user', content: 'on email 201', status: 'complete' })
+    await new Promise((r) => setTimeout(r, 5))
+    const b = createNewSession({ emailId: 202, backendKind: 'notion-agent' })
+    appendMessage({ sessionId: b.id, role: 'user', content: 'on email 202', status: 'complete' })
+
+    const rows = listAllSessions()
+    // newest-touched (b) first; both emails present in one list.
+    expect(rows.map((r) => r.id)).toEqual([b.id, a.id])
+    expect(rows.map((r) => r.email_id)).toEqual([202, 201])
+  })
+
+  test('excludes empty sessions (no messages)', () => {
+    const withMsg = createNewSession({ emailId: 301, backendKind: 'custom-api' })
+    appendMessage({ sessionId: withMsg.id, role: 'user', content: 'hi', status: 'complete' })
+    createNewSession({ emailId: 302, backendKind: 'custom-api' }) // empty → excluded
+
+    const rows = listAllSessions()
+    expect(rows.map((r) => r.id)).toEqual([withMsg.id])
+  })
+
+  test('first_user_message preview + message_count are aggregated', () => {
+    const s = createNewSession({ emailId: 401, backendKind: 'custom-api' })
+    appendMessage({ sessionId: s.id, role: 'user', content: 'first question', status: 'complete' })
+    appendMessage({ sessionId: s.id, role: 'assistant', content: 'an answer', status: 'complete' })
+    appendMessage({ sessionId: s.id, role: 'user', content: 'follow-up', status: 'complete' })
+
+    const [row] = listAllSessions()
+    expect(row.first_user_message).toBe('first question')
+    expect(row.message_count).toBe(3)
+  })
+
+  test('preview falls back to null when only non-user messages exist', () => {
+    const s = createNewSession({ emailId: 501, backendKind: 'notion-agent' })
+    appendMessage({ sessionId: s.id, role: 'assistant', content: 'seeded', status: 'complete' })
+
+    const [row] = listAllSessions()
+    expect(row.first_user_message).toBeNull()
+    expect(row.message_count).toBe(1)
+  })
+
+  test('respects the limit (newest-first)', async () => {
+    for (let i = 0; i < 4; i++) {
+      const s = createNewSession({ emailId: 600 + i, backendKind: 'custom-api' })
+      appendMessage({ sessionId: s.id, role: 'user', content: `msg ${i}`, status: 'complete' })
+      await new Promise((r) => setTimeout(r, 2))
+    }
+    const rows = listAllSessions(2)
+    expect(rows).toHaveLength(2)
+    // newest two emails (603, 602)
+    expect(rows.map((r) => r.email_id)).toEqual([603, 602])
   })
 })

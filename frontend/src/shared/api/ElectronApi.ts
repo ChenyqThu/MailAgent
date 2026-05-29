@@ -35,6 +35,7 @@ import type {
   ChatEditOpts,
   ChatMessage,
   ChatSession,
+  ChatSessionListItem,
   ChatStartOpts,
   ChatStartResult,
   ChatStreamEnvelope,
@@ -526,6 +527,9 @@ class ElectronChatApi implements ChatApi {
   }
   async listSessions(emailId: number): Promise<ChatSession[]> {
     return (await invoker()('chat:listSessions', emailId)) as ChatSession[]
+  }
+  async listAllSessions(): Promise<ChatSessionListItem[]> {
+    return (await invoker()('chat:listAllSessions')) as ChatSessionListItem[]
   }
   async editMessage(opts: ChatEditOpts): Promise<ChatStartResult> {
     // Same envelope shape as `start` — Electron IPC strips custom Error

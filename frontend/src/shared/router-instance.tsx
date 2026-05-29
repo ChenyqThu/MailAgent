@@ -34,6 +34,7 @@ import { CalendarLayout } from './components/layout/CalendarLayout'
 import { FolderLayout } from './components/layout/FolderLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
 import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
+import { SessionsLayout } from './components/layout/SessionsLayout'
 import { SettingsLayout } from './components/layout/SettingsLayout'
 import { useActiveEmail } from './state/active-email'
 // Sprint 7 D2 — `?` / ⌘K / ⌘, bindings + the modals they open.
@@ -176,6 +177,15 @@ const draftsRoute = createRoute({
   component: () => <FolderLayout folder="drafts" />
 })
 
+// Global "AI 会话历史" page — cross-email conversation history. Top-level
+// route (not under /admin) so the sidebar AI-Agents "会话历史" entry lands
+// directly here. No search params — the page owns its own search/filter state.
+const sessionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/sessions',
+  component: SessionsLayout
+})
+
 // `/admin` is a parent route that only renders <Outlet/> — visit a child
 // directly (/admin/llm, /admin/kanban, /admin/calendar). The Sidebar +
 // CommandPalette always navigate to a specific child, never to `/admin`
@@ -265,6 +275,7 @@ export const router = createRouter({
     inboxRoute,
     archiveRoute,
     draftsRoute,
+    sessionsRoute,
     adminRoute.addChildren([adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),

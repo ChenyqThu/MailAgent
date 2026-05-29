@@ -1055,6 +1055,19 @@ export interface ChatSession {
   updated_at: number
 }
 
+// Row of the global "AI 会话历史" page (chat.listAllSessions). A ChatSession
+// enriched with an aggregated first-user-message preview + message count
+// (from ai_chat.db) and the owning email's subject/sender (joined from
+// sync_store.db by handlers/chat.ts). Mirror of ChatSessionListItem in
+// `src/electron/main/handlers/chat.ts`; kept in sync by hand across the IPC
+// seam like ChatSession / ChatMessage above.
+export interface ChatSessionListItem extends ChatSession {
+  first_user_message: string | null
+  message_count: number
+  email_subject: string | null
+  email_sender: string | null
+}
+
 // Sprint 19 §D #3 — chat_tool_call audit row, mirrored from main-side
 // `src/electron/main/chat_db.ts` so the renderer can type the ChatApi
 // listToolCalls() result without crossing the main-process import line.
@@ -1212,6 +1225,13 @@ export interface ChatApi {
   abort(sessionId: number): void
   listMessages(sessionId: number): Promise<ChatMessage[]>
   listSessions(emailId: number): Promise<ChatSession[]>
+  /**
+   * Global cross-email session history for the "AI 会话历史" page. Returns
+   * newest-first rows enriched with a first-user-message preview, message
+   * count, and the owning email's subject/sender (best-effort — null when
+   * sync_store.db is unavailable). Read-only; never throws (degrades to []).
+   */
+  listAllSessions(): Promise<ChatSessionListItem[]>
   /**
    * Sprint 14 PR B — truncate session messages from `editingMessageId`
    * onward, append a new user message with `newContent`, and re-stream

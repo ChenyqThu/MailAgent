@@ -385,7 +385,6 @@
     "flagged": "已标旗",
     "allMail": "所有邮件",
     "aiSessions": "AI 会话历史",
-    "aiSessionsSoon": "即将上线 — 会话历史尚未接入后端",
     "adminKanban": "看板 Admin",
     "calendar": "日历",
     "settings": "设置",
@@ -397,6 +396,19 @@
       "add": "添加账户...",
       "tooltip": "{email} — 切换账户"
     }
+  },
+  "sessions": {
+    "title": "AI 会话历史",
+    "count": "{n} 个会话",
+    "searchPlaceholder": "搜索会话…",
+    "filterLabel": "按后端筛选",
+    "filterAll": "全部",
+    "untitled": "未命名会话",
+    "emptyTitle": "暂无 AI 会话",
+    "emptyHint": "在邮件详情里打开 AI 助手，开始你的第一段对话",
+    "noMatchTitle": "没有匹配的会话",
+    "noMatchHint": "换个关键词，或切换后端筛选",
+    "deleted": "已删除会话"
   },
   "folder": {
     "archiveTitle": "存档",

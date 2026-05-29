@@ -385,7 +385,6 @@
     "flagged": "Flagged",
     "allMail": "All mail",
     "aiSessions": "AI sessions",
-    "aiSessionsSoon": "Coming soon — chat history not yet wired",
     "adminKanban": "Admin",
     "calendar": "Calendar",
     "settings": "Settings",
@@ -397,6 +396,19 @@
       "add": "Add account…",
       "tooltip": "{email} — switch account"
     }
+  },
+  "sessions": {
+    "title": "AI Sessions",
+    "count": "{n, plural, =1 {# session} other {# sessions}}",
+    "searchPlaceholder": "Search conversations…",
+    "filterLabel": "Filter by backend",
+    "filterAll": "All",
+    "untitled": "Untitled session",
+    "emptyTitle": "No AI conversations yet",
+    "emptyHint": "Open the AI assistant from an email to start your first conversation",
+    "noMatchTitle": "No matching sessions",
+    "noMatchHint": "Try a different keyword or switch the backend filter",
+    "deleted": "Session deleted"
   },
   "folder": {
     "archiveTitle": "Archive",

@@ -17,14 +17,17 @@ import { BrowserWindow, ipcMain } from 'electron'
 import {
   createNewSession,
   deleteSession,
+  listAllSessions,
   listMessages,
   listSessionsForEmail,
   listToolCallsForMessage,
   type BackendKind,
   type ChatMessage,
   type ChatSession,
+  type ChatSessionSummary,
   type ChatToolCall
 } from '../chat_db'
+import { getDb } from '../db'
 import { saveConversationToKos } from '../chat/kos_save'
 import { isKosSaveAvailable } from '../chat/config'
 import {
@@ -63,6 +66,15 @@ export interface ChatEditOpts {
 export type ChatStartEnvelope =
   | { ok: true; data: StartChatResult }
   | { ok: false; code: string; message: string }
+
+// Global "AI 会话历史" row — a ChatSessionSummary (from ai_chat.db) enriched
+// with the owning email's subject/sender from sync_store.db. Mirror of
+// ChatSessionListItem in shared/api/types.ts; kept in sync by hand like the
+// other chat IPC shapes (ChatSession / ChatMessage).
+export interface ChatSessionListItem extends ChatSessionSummary {
+  email_subject: string | null
+  email_sender: string | null
+}
 
 function validateStartOpts(opts: ChatStartOpts | undefined): ChatStartOpts | string {
   if (!opts) return 'opts missing'
@@ -158,6 +170,44 @@ export function registerChatHandlers(): void {
     return listSessionsForEmail(emailId)
   })
 
+  // Global session history (cross-email) for the "AI 会话历史" page. Two
+  // databases are involved: ai_chat.db owns the sessions + message preview,
+  // sync_store.db owns the email subject/sender. We batch-join the email meta
+  // in one IN-query keyed by the distinct email_ids, falling back to nulls if
+  // sync_store.db is unavailable (fresh install, FDA not granted) so the page
+  // still renders the conversations with their message previews.
+  ipcMain.handle('chat:listAllSessions', async (): Promise<ChatSessionListItem[]> => {
+    const summaries = listAllSessions()
+    const meta = new Map<number, { subject: string | null; sender: string | null }>()
+    try {
+      const ids = [...new Set(summaries.map((s) => s.email_id))]
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',')
+        const rows = getDb()
+          .prepare(
+            `SELECT internal_id, subject, sender_name, sender
+               FROM email_metadata WHERE internal_id IN (${placeholders})`
+          )
+          .all(...ids) as Array<{
+          internal_id: number
+          subject: string | null
+          sender_name: string | null
+          sender: string | null
+        }>
+        for (const r of rows) {
+          meta.set(r.internal_id, { subject: r.subject, sender: r.sender_name ?? r.sender })
+        }
+      }
+    } catch {
+      // sync_store.db missing/locked → degrade to preview-only rows.
+    }
+    return summaries.map((s) => ({
+      ...s,
+      email_subject: meta.get(s.email_id)?.subject ?? null,
+      email_sender: meta.get(s.email_id)?.sender ?? null
+    }))
+  })
+
   // Sprint 14 PR J — sidebar trash icon → user-confirmed delete.
   // CASCADE FK on ai_chat_messages drops the message rows automatically;
   // any in-flight stream on that session was already aborted by the
@@ -185,9 +235,7 @@ export function registerChatHandlers(): void {
         backendModel?: unknown
         backendAgentPageId?: unknown
       }
-    ): Promise<
-      { ok: true; data: ChatSession } | { ok: false; code: string; message: string }
-    > => {
+    ): Promise<{ ok: true; data: ChatSession } | { ok: false; code: string; message: string }> => {
       if (!input || typeof input !== 'object') {
         return { ok: false, code: 'E_INVALID_ARG', message: 'newSession input required' }
       }
@@ -295,8 +343,7 @@ export function registerChatHandlers(): void {
         const data = await saveConversationToKos({
           messageId: input.messageId as number,
           slug: typeof input.slug === 'string' && input.slug.length > 0 ? input.slug : undefined,
-          title:
-            typeof input.title === 'string' && input.title.length > 0 ? input.title : undefined
+          title: typeof input.title === 'string' && input.title.length > 0 ? input.title : undefined
         })
         return { ok: true, data }
       } catch (err) {
@@ -324,13 +371,10 @@ export function registerChatHandlers(): void {
   // Backed by `listToolCallsForMessage` in chat_db.ts; messageId of an
   // assistant turn that had no tool_use returns []. Bad input rejected
   // defensively (renderer always passes integer from message.id).
-  ipcMain.handle(
-    'chat:listToolCalls',
-    async (_evt, messageId: number): Promise<ChatToolCall[]> => {
-      if (!Number.isInteger(messageId) || messageId < 0) return []
-      return listToolCallsForMessage(messageId)
-    }
-  )
+  ipcMain.handle('chat:listToolCalls', async (_evt, messageId: number): Promise<ChatToolCall[]> => {
+    if (!Number.isInteger(messageId) || messageId < 0) return []
+    return listToolCallsForMessage(messageId)
+  })
 }
 
 function validateEditOpts(opts: ChatEditOpts | undefined): ChatEditOpts | string {

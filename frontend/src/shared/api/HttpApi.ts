@@ -86,6 +86,9 @@ export class HttpApi implements MailApi {
     },
     listMessages: () => notImplemented('chat.listMessages'),
     listSessions: () => notImplemented('chat.listSessions'),
+    // Global session history — Electron-only (cross-DB join). V2 web SPA
+    // would need a dedicated /api/chat/sessions endpoint; stub for now.
+    listAllSessions: () => notImplemented('chat.listAllSessions'),
     editMessage: () => notImplemented('chat.editMessage'),
     openPopout: () => {
       /* no-op stub — no second-window in V2 web SPA */

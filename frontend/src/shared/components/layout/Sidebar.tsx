@@ -44,7 +44,7 @@ import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
-import { toggleAIChatPanel } from '@shared/state/ai-chat-panel'
+import { openAIChatPanelWithBackend } from '@shared/state/ai-chat-panel'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { deriveAccount } from '@shared/lib/account'
 
@@ -454,24 +454,30 @@ export function Sidebar(): React.ReactElement {
           </h2>
         </div>
         <nav className="px-2 space-y-px">
+          {/* Notion Agent / Custom AI — open the panel ON the chosen backend
+              (not a blind toggle): the old code wired both to toggleAIChatPanel
+              so clicking "Notion Agent" could surface a panel still parked on
+              Custom AI. openAIChatPanelWithBackend parks the requested kind in
+              the panel store; AIChatPanel switches to it on the next render. */}
           <NavRow
             icon={<Sparkles size={15} strokeWidth={1.75} />}
-            label="Notion Agent"
-            onClick={toggleAIChatPanel}
+            label={t('chat.backend.notionAgent')}
+            onClick={() => openAIChatPanelWithBackend('notion-agent')}
             right={<OnlineDot online={notionAgentOnline} />}
           />
           <NavRow
             icon={<Sliders size={15} strokeWidth={1.75} />}
-            label="Custom API"
-            onClick={toggleAIChatPanel}
+            label={t('chat.backend.customApi')}
+            onClick={() => openAIChatPanelWithBackend('custom-api')}
           />
-          {/* AI 会话历史 — Sprint 18 review: chat history table 还没做, 但
-              用户希望视觉上恢复可用态 (不灰禁). 留 onClick noop, 点击没反应
-              是预期行为, 等会话历史功能 ship 后再接上跳转. */}
+          {/* AI 会话历史 — global cross-email history page (/sessions). Now
+              fully wired (ai_chat.db + chat:listAllSessions); the Sprint 18
+              "coming soon" noop is gone. */}
           <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
             label={t('nav.aiSessions')}
-            title={t('nav.aiSessionsSoon')}
+            selected={pathname === '/sessions'}
+            onClick={() => navigate({ to: '/sessions' })}
           />
         </nav>
 

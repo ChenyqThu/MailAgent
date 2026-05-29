@@ -102,15 +102,22 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const sidebarOpen = useAIChatPanel((s) => s.sidebarOpen)
   const toggleSidebar = useAIChatPanel((s) => s.toggleSidebar)
   const setSidebarOpen = useAIChatPanel((s) => s.setSidebarOpen)
+  // Sidebar AI-Agents tabs + global session-history page park their intent in
+  // the panel store; AIChatPanel applies them on the next render (see effects
+  // below). One-shot signals — consume* clears them after they land.
+  const requestedBackendKind = useAIChatPanel((s) => s.requestedBackendKind)
+  const consumeRequestedBackend = useAIChatPanel((s) => s.consumeRequestedBackend)
+  const pendingOpen = useAIChatPanel((s) => s.pendingOpen)
+  const consumePendingOpen = useAIChatPanel((s) => s.consumePendingOpen)
   const [backend, setBackend] = useState<BackendChoice>(() => {
     const kind = readBackendKindPref()
     return kind === 'custom-api'
       ? { kind: 'custom-api', model: 'claude-sonnet-4-6', agentPageId: null }
       : { kind: 'notion-agent', model: null, agentPageId: null }
   })
-  // Persist + apply a backend switch (composer toggle / ⌥⇧B / model pick).
-  // agentPageId is always null now — the CLI reads the bound agent from its
-  // own account.json, so the renderer never passes one.
+  // Persist + apply a backend switch (composer toggle / ⌥⇧B / model pick /
+  // sidebar tab). agentPageId is always null now — the CLI reads the bound
+  // agent from its own account.json, so the renderer never passes one.
   const selectBackend = useCallback((next: BackendChoice): void => {
     writeBackendKindPref(next.kind)
     setBackend(next)
@@ -171,6 +178,37 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
       cancelled = true
     }
   }, [sidebarOpen, chat.sessions, sessionPreviews, mailApi])
+
+  // Sidebar "Notion Agent" / "Custom AI" click → switch the open panel onto
+  // that backend. We consume the one-shot signal even when the kind already
+  // matches, so a later same-kind click isn't swallowed by a stale flag.
+  useEffect(() => {
+    if (requestedBackendKind === null) return
+    if (requestedBackendKind !== backend.kind) {
+      selectBackend(
+        requestedBackendKind === 'custom-api'
+          ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
+          : { kind: 'notion-agent', model: null, agentPageId: null }
+      )
+    }
+    consumeRequestedBackend()
+  }, [requestedBackendKind, backend.kind, backend.model, selectBackend, consumeRequestedBackend])
+
+  // Global session-history row click → after the active email re-keyed the
+  // panel and THIS email's sessions loaded, select the exact target session
+  // (vs the "latest" the email-switch effect defaults to). We wait until the
+  // loaded sessions belong to the target email (email_id match) so we don't
+  // act on the previous email's stale list mid-switch, and we drop a target
+  // that no longer exists once the list is in hand rather than looping.
+  useEffect(() => {
+    if (pendingOpen === null) return
+    if (activeInternalId !== pendingOpen.emailId) return
+    const loadedForThisEmail = chat.sessions.some((s) => s.email_id === pendingOpen.emailId)
+    if (!loadedForThisEmail) return
+    const target = chat.sessions.find((s) => s.id === pendingOpen.sessionId)
+    if (target) void chat.selectSession(pendingOpen.sessionId)
+    consumePendingOpen()
+  }, [pendingOpen, activeInternalId, chat.sessions, chat.selectSession, consumePendingOpen])
 
   // Pull AI fields + email detail (for thread_id) + thread sibling count
   // for the ContextChips header.

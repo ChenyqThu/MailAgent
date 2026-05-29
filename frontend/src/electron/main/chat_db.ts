@@ -30,12 +30,12 @@ export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'ab
 // Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
 // in `chat_tool_call`. See docs/agent-harness-design.md §4.5.
 export type ToolCallStatus =
-  | 'pending'      // awaiting confirmation (tier=preview/edit)
-  | 'confirmed'    // user approved, not yet running
-  | 'running'      // handler in flight
-  | 'ok'           // handler returned success
-  | 'error'        // handler returned ToolResult.ok=false OR threw
-  | 'canceled'     // user clicked Cancel in ConfirmToolDialog
+  | 'pending' // awaiting confirmation (tier=preview/edit)
+  | 'confirmed' // user approved, not yet running
+  | 'running' // handler in flight
+  | 'ok' // handler returned success
+  | 'error' // handler returned ToolResult.ok=false OR threw
+  | 'canceled' // user clicked Cancel in ConfirmToolDialog
 export type ConfirmationTier = 'silent' | 'preview' | 'edit'
 
 export interface ChatSession {
@@ -46,6 +46,19 @@ export interface ChatSession {
   backend_agent_page_id: string | null
   created_at: number
   updated_at: number
+}
+
+// Global session-history row. Unlike `ChatSession` (per-email, used by the
+// in-panel sidebar), this carries enough to render a cross-email history list
+// without an N+1 listMessages round-trip per row: the first user-message
+// preview and the message count are aggregated in the same SELECT. The
+// owning email's subject/sender are NOT here — they live in sync_store.db, so
+// handlers/chat.ts joins them in best-effort after the fact.
+export interface ChatSessionSummary extends ChatSession {
+  /** First user-authored message, truncated server-side. Null for sessions
+   *  seeded by automation that never got a user turn. */
+  first_user_message: string | null
+  message_count: number
 }
 
 export interface ChatMessage {
@@ -392,9 +405,7 @@ function migrate(db: Database.Database): void {
       }
       const violations = db.prepare('PRAGMA foreign_key_check').all() as unknown[]
       if (violations.length > 0) {
-        throw new Error(
-          `chat_db v3→v4 migration left FK violations: ${JSON.stringify(violations)}`
-        )
+        throw new Error(`chat_db v3→v4 migration left FK violations: ${JSON.stringify(violations)}`)
       }
     } finally {
       db.pragma('foreign_keys = ON')
@@ -532,6 +543,31 @@ export function listSessionsForEmail(emailId: number): ChatSession[] {
   return getChatDb()
     .prepare('SELECT * FROM ai_chat_sessions WHERE email_id = ? ORDER BY updated_at DESC')
     .all(emailId) as ChatSession[]
+}
+
+// Cross-email session history for the global "AI 会话历史" page. Sessions with
+// no messages at all (a "+ 新建会话" click the user never sent into) are
+// excluded — they'd be noise in a history list. The first-user-message
+// preview is substr'd to 500 chars so an enormous prompt doesn't bloat the
+// IPC payload; the renderer truncates further for display. `limit` caps the
+// list so an account with thousands of conversations doesn't ship them all at
+// once (newest-first, so the cap drops the least-recently-touched).
+export function listAllSessions(limit = 300): ChatSessionSummary[] {
+  return getChatDb()
+    .prepare(
+      `SELECT
+         s.id, s.email_id, s.backend_kind, s.backend_model, s.backend_agent_page_id,
+         s.created_at, s.updated_at,
+         (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
+            WHERE m.session_id = s.id AND m.role = 'user'
+            ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
+         (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
+       FROM ai_chat_sessions s
+       WHERE EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
+       ORDER BY s.updated_at DESC
+       LIMIT ?`
+    )
+    .all(limit) as ChatSessionSummary[]
 }
 
 export function getSession(sessionId: number): ChatSession | null {
