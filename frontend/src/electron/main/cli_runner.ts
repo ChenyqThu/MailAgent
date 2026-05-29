@@ -24,10 +24,13 @@ import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
-// Packaging P1-3 — 打包模式下嵌入式 venv 的 `mailagent` 在 .app bundle 的
-// Resources/python/venv/bin 下 (electron-builder extraResources 注入)。
+// Packaging P1-3 — 打包模式下嵌入式 python 的 `mailagent` 在 .app bundle 的
+// Resources/python/bin 下 (electron-builder extraResources 注入)。
 // 与 02-landing-plan.md §3.3 的布局对齐。dev 模式不走这条, 见 getMailagentBin。
-const PACKAGED_BIN_REL = ['python', 'venv', 'bin', 'mailagent']
+// 打包布局: extraResources 把 build-python-venv.sh 产出的 standalone CPython 注入到
+// <Resources>/python/。bin/mailagent 是自定位 sh wrapper (python3.11 -P -c …), 直接
+// execa(bin, args) 即可, 无需前端拼解释器路径 (wrapper 内部处理 shebang + cwd 遮蔽)。
+const PACKAGED_BIN_REL = ['python', 'bin', 'mailagent']
 
 import { Semaphore } from './sem'
 import { getCliApiKey } from './keychain'
@@ -51,7 +54,7 @@ function projectVenvBin(): string {
 }
 
 /** Packaging P1-3 — 打包模式 (`app.isPackaged`) 下 CLI 的默认路径:
- *  `<Resources>/python/venv/bin/mailagent` (嵌入式 venv, electron-builder
+ *  `<Resources>/python/bin/mailagent` (嵌入式 python, electron-builder
  *  extraResources 注入)。仅在打包模式调用; dev 模式始终走 projectVenvBin()
  *  以保证现有开发行为零变更。 */
 function packagedResourcesBin(): string {
@@ -71,7 +74,7 @@ export function getMailagentBin(): string {
   if (_binCache !== null) return _binCache
   // 三级回退顺序不变: ① $MAILAGENT_BIN → ② 默认 venv → ③ PATH。
   // Packaging P1-3 只改第②级的「默认 venv 在哪」: 打包模式指向 bundle 内嵌
-  // 式 venv (process.resourcesPath/python/venv/bin), dev 模式保持原有
+  // 式 venv (process.resourcesPath/python/bin), dev 模式保持原有
   // projectVenvBin() (~/Documents/MailAgent/venv/bin) —— dev 行为零变更。
   const fromEnv = process.env['MAILAGENT_BIN']
   if (fromEnv && fromEnv.length > 0) {

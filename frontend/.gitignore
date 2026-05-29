@@ -2,6 +2,10 @@ node_modules
 dist
 out
 .eslintcache
+
+# 打包: 嵌入式 CPython 运行时 (build-python-venv.sh 产出, ~215M) + 下载缓存
+resources/python/
+.cache/
 *.log*
 *.gen.ts
 .env

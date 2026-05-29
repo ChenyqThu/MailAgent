@@ -49,7 +49,7 @@ vi.mock('child_process', () => ({
 // ---- cli_runner / db mocks (bin + 路径解析) --------------------------------
 
 vi.mock('../../src/electron/main/cli_runner', () => ({
-  getMailagentBin: () => '/fake/Resources/python/venv/bin/mailagent'
+  getMailagentBin: () => '/fake/Resources/python/bin/mailagent'
 }))
 
 vi.mock('../../src/electron/main/db', () => ({
@@ -107,7 +107,7 @@ describe('BackendLifecycleManager.start — env 注入 + dev 不接管', () => {
 
     expect(spawnCalls).toHaveLength(1)
     const call = spawnCalls[0]
-    expect(call.bin).toBe('/fake/Resources/python/venv/bin/mailagent')
+    expect(call.bin).toBe('/fake/Resources/python/bin/mailagent')
     expect(call.args).toEqual(['serve'])
     expect(call.opts.cwd).toBe('/fake/DATA_ROOT')
 
