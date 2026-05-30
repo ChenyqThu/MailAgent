@@ -283,7 +283,7 @@ function DraftPreviewCard({
             )}
           />
         ) : (
-          <TranslatedBody text={body} streaming={isStreaming} />
+          <TranslatedBody text={body} />
         )}
       </div>
 
@@ -961,7 +961,7 @@ function AssistantBubble({
         </div>
       )}
       <div className="text-body text-ink-fg leading-relaxed">
-        <TranslatedBody text={message.content || ' '} streaming={isStreaming} />
+        <TranslatedBody text={message.content || ' '} />
         {isStreaming && <span className="cursor-blink" aria-hidden />}
       </div>
       <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />

@@ -20,14 +20,10 @@
 // theme / 离线 lang pack 用的增强项. 想加后续 `import code from
 // '@streamdown/code'` 再传 plugins 即可.
 
-import { useDeferredValue } from 'react'
 import { Streamdown, type StreamdownTranslations } from 'streamdown'
 
 interface Props {
   text: string
-  /** True 表示消息仍在流式输出。流式期间走降级渲染 (见函数内注释) 以消除
-   *  重复 / 错漏; 省略或 false 时按完整内容一次性渲染 (历史消息 / 草稿预览)。 */
-  streaming?: boolean
 }
 
 // Streamdown defaultTranslations 是英文; UI 是中文环境就 override 复制
@@ -67,24 +63,18 @@ const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
   tableFormatTsv: 'TSV'
 }
 
-export function TranslatedBody({ text, streaming = false }: Props): React.ReactElement {
-  // 流式重复 / 错漏修复:
-  // ① parseIncompleteMarkdown 在流式中途会把未闭合标记 (**/```/#) 逐帧在
-  //    "字面量" 与 "补全渲染" 间反复横跳, 叠加 Streamdown 的 block memo,
-  //    令新旧两帧 DOM 并存 —— 即截图里 "带** / 不带** 两版本交错重复" 的
-  //    直接成因。流式期间关掉它 (未闭合标记稳定显示为字面量), 内容定终态
-  //    (done → streaming=false) 后再开: 此时已无未闭合标记, 补全无副作用,
-  //    且该 prop 由 false→true 触发 Streamdown 整体重渲染, 把流式中途残留的
-  //    stale block 一次性替换 —— 同时根治 "done 后仍有错漏"。
-  // ② 中文逐字流每秒触发数十次整段重 parse; useDeferredValue 把这些高频更新
-  //    降为可中断 / 可合并的低优先级渲染, 既降本 (Streamdown 重渲染昂贵) 又
-  //    减少 "渲染追不上 token" 的中间态撕裂。非流式 (text 稳定) 时立即追平。
-  const deferred = useDeferredValue(text)
-  const shown = streaming ? deferred : text
+export function TranslatedBody({ text }: Props): React.ReactElement {
+  // Streamdown 的默认 streaming 模式 + parseIncompleteMarkdown 即正确流式渲染:
+  // 未闭合标记(**/```/#)流式中途自动补全, 闭合即定稿, 无字面量闪烁。
+  //
+  // 注: 此前观察到的"流式整段重复/交错"并非渲染层问题 —— 根因是 ElectronApi
+  // subscribe() 的 unsubscribe 失效导致 `chat:stream` listener 泄漏, 每个 chunk
+  // 被投递两次, 渲染层 `content += delta` 追加两次 (详见 ElectronApi.ts 注释 +
+  // useEmailChat 数据探针证据)。修掉订阅泄漏后内容即单份, 本组件无需特殊处理。
   return (
     <div className="mail-body break-words">
-      <Streamdown parseIncompleteMarkdown={!streaming} translations={STREAMDOWN_ZH_TRANSLATIONS}>
-        {shown}
+      <Streamdown parseIncompleteMarkdown translations={STREAMDOWN_ZH_TRANSLATIONS}>
+        {text}
       </Streamdown>
     </div>
   )

@@ -169,8 +169,19 @@ function subscribe(channel: string, listener: IpcListener): () => void {
   // IpcRendererEvent before handing args to the renderer-side handler so
   // call sites only depend on the data shape, not on Electron internals.
   const wrapped = (_event: unknown, ...args: unknown[]): void => listener(...args)
-  onFn.call(bridge, channel, wrapped)
 
+  // CRITICAL — 必须用 `on()` 返回的 disposer 来反订阅, 不能自己 `removeListener
+  // (channel, wrapped)`. 跨 contextBridge 第二次传 `wrapped` 会生成一个*新的*
+  // proxy, 与注册时的 proxy 不是同一引用, removeListener 匹配不到 → listener
+  // 泄漏。electron-toolkit 的 `on` 返回的 disposer 闭包捕获的是注册时那个
+  // proxy, 移除可靠。泄漏的后果是实打实的: StrictMode(dev) 把订阅 effect
+  // mount→cleanup→remount, cleanup 没真正摘除旧 listener → `chat:stream` 上
+  // 挂了 2 个 listener → 每个流式 chunk 被投递两次 → 渲染层 `content += delta`
+  // 追加两次 → 整段回复重复 / 交错 (本 bug 根因, 数据探针实测 distinctSubs=2)。
+  const dispose = onFn.call(bridge, channel, wrapped) as unknown as (() => void) | undefined
+  if (typeof dispose === 'function') return dispose
+
+  // Fallback: 桥接实现的 `on` 未返回 disposer 时, 退回 removeListener(尽力而为)。
   return () => {
     const removeFn = bridge?.removeListener ?? bridge?.off
     if (typeof removeFn === 'function') {
