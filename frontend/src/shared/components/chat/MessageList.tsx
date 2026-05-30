@@ -283,7 +283,7 @@ function DraftPreviewCard({
             )}
           />
         ) : (
-          <TranslatedBody text={body} />
+          <TranslatedBody text={body} streaming={isStreaming} />
         )}
       </div>
 
@@ -961,8 +961,9 @@ function AssistantBubble({
         </div>
       )}
       <div className="text-body text-ink-fg leading-relaxed">
-        <TranslatedBody text={message.content || ' '} />
-        {isStreaming && <span className="cursor-blink" aria-hidden />}
+        {/* Streamdown 的 caret="block" 在文末 inline 渲染打字光标 (依赖 isAnimating
+            =streaming); 不再叠加外部 cursor-blink span, 避免双光标。 */}
+        <TranslatedBody text={message.content || ' '} streaming={isStreaming} />
       </div>
       <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
       {!isStreaming && <AssistantMessageFooter messageId={message.id} content={message.content} />}

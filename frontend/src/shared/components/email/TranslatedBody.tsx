@@ -21,9 +21,16 @@
 // '@streamdown/code'` 再传 plugins 即可.
 
 import { Streamdown, type StreamdownTranslations } from 'streamdown'
+// Streamdown 的逐 token fade-in 动效 + caret 需要它的 keyframes/样式 (sd-fadeIn
+// 等)。一次性全局引入 (Vite 去重), 否则 animated 不生效。
+import 'streamdown/styles.css'
 
 interface Props {
   text: string
+  /** True = 消息仍在流式输出。驱动 Streamdown 的 caret + 逐 token 入场动效
+   *  (isAnimating/animated 都依赖它); 流式期走 streaming 模式, 定稿后切 static
+   *  让历史消息走稳定的整段渲染。省略 / false = 静态完整渲染。 */
+  streaming?: boolean
 }
 
 // Streamdown defaultTranslations 是英文; UI 是中文环境就 override 复制
@@ -63,17 +70,37 @@ const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
   tableFormatTsv: 'TSV'
 }
 
-export function TranslatedBody({ text }: Props): React.ReactElement {
-  // Streamdown 的默认 streaming 模式 + parseIncompleteMarkdown 即正确流式渲染:
-  // 未闭合标记(**/```/#)流式中途自动补全, 闭合即定稿, 无字面量闪烁。
+// 模块常量 —— 稳定引用, 否则内联对象每次 render 都是新引用, 击穿 Streamdown 的
+// `animated===` memo 比较, 令定稿(static)消息在父级重渲时白白整段重 parse。
+// sep:'word' 而非 'char': 中文逐字会生成大量 span + 动画, DOM/性能开销大。
+const STREAMDOWN_ANIMATED = {
+  animation: 'fadeIn',
+  duration: 90,
+  easing: 'ease-out',
+  sep: 'word',
+  stagger: 6
+} as const
+
+export function TranslatedBody({ text, streaming = false }: Props): React.ReactElement {
+  // 流式体验: parseIncompleteMarkdown 让未闭合标记 (**/```/#) 中途自动补全 (闭合
+  // 即定稿, 无字面量闪烁); streaming 期开 caret + 逐 token fade-in, 定稿后切
+  // static 让历史消息走稳定整段渲染。
   //
-  // 注: 此前观察到的"流式整段重复/交错"并非渲染层问题 —— 根因是 ElectronApi
-  // subscribe() 的 unsubscribe 失效导致 `chat:stream` listener 泄漏, 每个 chunk
-  // 被投递两次, 渲染层 `content += delta` 追加两次 (详见 ElectronApi.ts 注释 +
-  // useEmailChat 数据探针证据)。修掉订阅泄漏后内容即单份, 本组件无需特殊处理。
+  // 注: 此前"流式整段重复/交错"并非渲染层问题 —— 根因是 ElectronApi.subscribe()
+  // 反订阅失效致 `chat:stream` listener 泄漏 → 每 chunk 投递两次 → 渲染层
+  // `content += delta` 追加两次 (详见 ElectronApi.ts 注释)。订阅修好后内容单份,
+  // 这里的动效是纯视觉增强, 不影响正确性; 若觉得高频 chunk 下卡顿, 把 animated
+  // 调成 false 或 sep 维持 'word' 即可 (不要用 'char', 中文逐字 DOM 开销大)。
   return (
     <div className="mail-body break-words">
-      <Streamdown parseIncompleteMarkdown translations={STREAMDOWN_ZH_TRANSLATIONS}>
+      <Streamdown
+        mode={streaming ? 'streaming' : 'static'}
+        parseIncompleteMarkdown
+        isAnimating={streaming}
+        caret="block"
+        animated={STREAMDOWN_ANIMATED}
+        translations={STREAMDOWN_ZH_TRANSLATIONS}
+      >
         {text}
       </Streamdown>
     </div>
