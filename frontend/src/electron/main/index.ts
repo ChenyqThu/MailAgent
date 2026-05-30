@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { bootNativeTheme, registerAppearanceIpc } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
+import { registerBackendLifecycle } from './backend_lifecycle'
 import { registerEmailHandlers } from './handlers/email'
 import { registerFolderHandlers } from './handlers/folder'
 import { registerAttachmentHandlers } from './handlers/attachment'
@@ -220,7 +221,7 @@ function createPopoutWindow(emailId: number): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ink.chenge.mailagent')
 
   // Sprint 11 user-feedback — dev-mode dock icon. Packaged builds inherit
@@ -364,6 +365,25 @@ app.whenReady().then(() => {
     if (!Number.isInteger(emailId) || emailId < 0) return
     createPopoutWindow(emailId)
   })
+
+  // 打包 P1-4/P1-6 — 后端进程托管 + DB 就绪门控。仅打包模式 (app.isPackaged) 接管:
+  //   spawn `mailagent serve` (注入三 env, cwd=DATA_ROOT) + 注册 before-quit SIGTERM,
+  //   然后等 DB 就绪 (db_version==EXPECTED 且关键表齐全) 再开窗, 避免首帧 IPC 撞
+  //   "sync_store.db not found"。dev / 服务器部署: registerBackendLifecycle 内部 start()
+  //   为 no-op (后端走 pm2), 不阻塞、行为零变更。
+  // 降级: 后端起不来 (缺 .env / bad config → serve 崩 → waitReady 快速失败) 或大库迁移
+  //   超 120s, 仍开窗 (renderer 各 IPC 自带 not-found 兜底, 用户见空态而非黑屏)。
+  //   TODO P2/P3: 此处接 onboarding 门控 —— 新用户无配置时走配置向导而非降级空态。
+  const backendMgr = registerBackendLifecycle()
+  if (app.isPackaged) {
+    const ready = await backendMgr.waitReady()
+    if (!ready) {
+      console.error(
+        `[startup] 后端未在超时内就绪 (state=${backendMgr.getState()}); 降级开窗。` +
+          '可能原因: 缺 .env/配置 (待 onboarding) 或大库迁移超时。'
+      )
+    }
+  }
 
   createWindow()
 

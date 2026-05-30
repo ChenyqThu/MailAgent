@@ -216,6 +216,11 @@ export class BackendLifecycleManager {
         if (this.safeIsPackaged()) this.state = 'ready'
         return true
       }
+      // 后端进程已崩溃 (bad config / spawn error → on('exit'/'error') 置 failed) →
+      // 快速失败, 不傻等满 readyTimeoutMs (120s 是给大库迁移留的, 崩溃不该等)。
+      if (this.safeIsPackaged() && this.state === 'failed') {
+        return false
+      }
       if (Date.now() >= deadline) {
         return false
       }
