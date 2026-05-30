@@ -299,16 +299,32 @@ export function getBackendLifecycle(): BackendLifecycleManager {
  * 沿用 registerCliLifecycle 的 before-quit 模式; 与之并存 (CLI 子进程 vs 长驻
  * 后端是两类进程, 各自清理)。返回 manager 供调用方在 createWindow 前 waitReady。
  */
-export function registerBackendLifecycle(): BackendLifecycleManager {
+let _quitHookRegistered = false
+
+/**
+ * 只注册 before-quit SIGTERM 钩子 (幂等), 不 start。供 onboarding 场景: 新用户开窗时
+ * 还没配置、不能 start 后端, 但要先挂好退出清理钩子; 待 onboarding:complete 写完 .env
+ * 再调 mgr.start()。dev 模式 stop() 内部 no-op, 钩子无害。
+ */
+export function registerBackendQuitHook(): BackendLifecycleManager {
   const mgr = getBackendLifecycle()
-  app.on('before-quit', () => {
-    // fire-and-forget: before-quit 不等 async; SIGTERM 已发出, OS 会回收。
-    void mgr.stop()
-  })
+  if (!_quitHookRegistered) {
+    _quitHookRegistered = true
+    app.on('before-quit', () => {
+      // fire-and-forget: before-quit 不等 async; SIGTERM 已发出, OS 会回收。
+      void mgr.stop()
+    })
+  }
+  return mgr
+}
+
+export function registerBackendLifecycle(): BackendLifecycleManager {
+  const mgr = registerBackendQuitHook()
   mgr.start()
   return mgr
 }
 
 export function _resetBackendLifecycleForTests(): void {
   _manager = null
+  _quitHookRegistered = false
 }
