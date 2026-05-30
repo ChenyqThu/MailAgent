@@ -1,22 +1,161 @@
-// Onboarding IPC (打包 P2/P3 MVP):
-//   - onboarding:status  → 当前用户状态 (renderer 也可经 ?onboarding=1 query 直接进向导)
-//   - onboarding:complete→ 写 DATA_ROOT/.env (必填项) + 起后端 + 等就绪 + reload 主界面
+// Onboarding IPC (打包 P2/P3 — 完整向导 + 老数据迁移)。
 //
-// MVP 范围: 单页配置 (Notion token + DB id + 邮箱/账户名), 默认 AppleScript backend
-// (零依赖)。完整多步向导 (FDA 引导 / backend 选择 / 插件勾选 / init 进度) 见
-// docs/packaging/03-onboarding-prd.md, 后续迭代。
+// 渲染层经 window.electron.ipcRenderer.invoke(channel, arg?) 调用; renderer 也可经
+// ?onboarding=1 query 直接进向导。所有 handler 必须 defensive —— 绝不向 IPC 边界
+// 抛异常, 失败一律返回 error 对象或契约约定的 zero/empty 形状。
+//
+// 频道一览:
+//   onboarding:status        → 当前用户状态 (new | config-incomplete | configured)
+//   onboarding:checkEnv      → 环境体检 (os / pythonRuntime / dataWritable / fda / automation)
+//   onboarding:openPrivacyPane → 打开系统设置隐私面板 (AllFiles / Automation)
+//   onboarding:listMailAccounts → 列 Mail.app 账户 + mailbox (走 CLI debug mail-structure)
+//   onboarding:syncProgress  → 同步进度 (readonly 直读 sync_store.db)
+//   onboarding:complete      → 写 .env (必填 + backend + 邮箱 + 插件 flag) + 起后端 + reload
+//
+//   --- LEGACY 全量迁移 (SAFE COPY 模型: 老数据原件永不修改) ---
+//   onboarding:detectLegacy  → 探测 ~/Documents/MailAgent 老数据
+//   onboarding:legacyInherit → 复制老 data/ → 新 DATA_ROOT/data (含 double-writer 守卫 + 备份)
+//   onboarding:legacyMigrate → 起后端让其自动迁移 schema 到 v17
+//   onboarding:legacyVerify  → 校验迁移后 db_version / 表 / 行数
+//   onboarding:legacyRollback→ 停后端 + 删 COPY + 清 .env (回到 'new'); 老原件不动
+//   onboarding:bootBackend   → 仅起后端 + 等就绪 (不写 .env)
+//
+// 完整向导 PRD 见 docs/packaging/03-onboarding-prd.md。
 
-import { BrowserWindow, app, ipcMain } from 'electron'
-import { mkdirSync } from 'fs'
-import { join } from 'path'
+import { BrowserWindow, app, ipcMain, shell } from 'electron'
+import {
+  accessSync,
+  constants as fsConstants,
+  cpSync,
+  type Dirent,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'fs'
+import { homedir, release as osRelease } from 'os'
+import { join, resolve as resolvePath, sep } from 'path'
 
-import { getBackendLifecycle, registerBackendQuitHook } from '../backend_lifecycle'
-import { resolveDataRoot } from '../db'
+import Database from 'better-sqlite3'
+
+import {
+  EXPECTED_DB_VERSION,
+  REQUIRED_TABLES,
+  getBackendLifecycle,
+  probeDbReady,
+  registerBackendQuitHook
+} from '../backend_lifecycle'
+import { callCli, getMailagentBin } from '../cli_runner'
+import { getDb, resolveDataRoot, resolveDbPath } from '../db'
+import { MANAGED_ENV_KEY_SET } from '../lib/env-keys'
+import { resolveEnvPath } from '../lib/env-path'
 import { detectUserState, ONBOARDING_REQUIRED_KEYS } from '../onboarding/detect'
 import { writePatch } from './env'
 
-// 向导可写入 .env 的 key (都在 MANAGED_ENV_KEYS 白名单内; writePatch 会再校验一次)。
-const ONBOARDING_WRITABLE_KEYS = [
+// ---------------------------------------------------------------------------
+// 共享类型 (renderer lane 据此对齐 IPC 形状)
+// ---------------------------------------------------------------------------
+
+/** 三态健康灯。pass=绿, warn=黄 (不可靠/不阻断), fail=红。 */
+export type Status = 'pass' | 'fail' | 'warn'
+
+export interface CheckEnvResult {
+  os: Status
+  pythonRuntime: Status
+  dataWritable: Status
+  fda: Status
+  automation: Status
+}
+
+export interface ListMailAccountsResult {
+  accounts: string[]
+  mailboxes: string[]
+  error?: string
+}
+
+export interface SyncProgressResult {
+  exists: boolean
+  total: number
+  byStatus: Record<string, number>
+  synced: number
+  dbVersion: number | null
+  ready: boolean
+}
+
+export interface OnboardingResult {
+  ok: boolean
+  ready?: boolean
+  error?: { code: string; message: string }
+}
+
+export interface PrivacyPaneResult {
+  ok: boolean
+}
+
+export interface DetectLegacyResult {
+  found: boolean
+  oldDataPath?: string
+  dbVersion?: number | null
+  emailCount?: number
+  sizeBytes?: number
+  hasConfig?: boolean
+}
+
+export interface LegacyInheritResult {
+  ok: boolean
+  backupPath?: string
+  error?: { code: string; message: string }
+}
+
+export interface LegacyMigrateResult {
+  ok: boolean
+  dbVersionBefore?: number | null
+  dbVersionAfter?: number | null
+  ready?: boolean
+  error?: { code: string; message: string }
+}
+
+export interface LegacyVerifyCheck {
+  key: string
+  label: string
+  pass: boolean
+}
+
+export interface LegacyVerifyResult {
+  verified: boolean
+  checks: LegacyVerifyCheck[]
+  emailCount?: number
+}
+
+export interface LegacyRollbackResult {
+  ok: boolean
+  error?: { code: string; message: string }
+}
+
+/** onboarding:complete 配置对象 (renderer → main)。 */
+export interface OnboardingCompleteCfg {
+  NOTION_TOKEN?: string
+  EMAIL_DATABASE_ID?: string
+  USER_EMAIL?: string
+  CALENDAR_DATABASE_ID?: string
+  MAIL_ACCOUNT_NAME?: string
+  MAILAGENT_BACKEND?: 'applescript' | 'davmail'
+  SYNC_MAILBOXES?: string
+  plugins?: Partial<Record<PluginKey, boolean>>
+}
+
+// ---------------------------------------------------------------------------
+// 纯逻辑 helper (导出供 vitest 单测)
+// ---------------------------------------------------------------------------
+
+/** 向导可写入 .env 的核心 key (必填 + 可选账户字段)。都在 MANAGED_ENV_KEYS
+ *  白名单内; writePatch 会再校验一次。backend / SYNC_MAILBOXES / plugin flag
+ *  另行通过 buildCompletePatch 合入。 */
+export const ONBOARDING_WRITABLE_KEYS = [
   'NOTION_TOKEN',
   'EMAIL_DATABASE_ID',
   'CALENDAR_DATABASE_ID',
@@ -24,66 +163,809 @@ const ONBOARDING_WRITABLE_KEYS = [
   'MAIL_ACCOUNT_NAME'
 ] as const
 
-interface OnboardingResult {
-  ok: boolean
-  ready?: boolean
-  error?: { code: string; message: string }
+export type PluginKey = 'agent' | 'island' | 'llm' | 'digest' | 'calendar'
+
+/** 插件勾选 → config.py env flag。值写 'true'/'false' 字符串 (pydantic bool 解析)。 */
+export const PLUGIN_FLAG_MAP: Record<PluginKey, string> = {
+  agent: 'MAILAGENT_AGENT_HARNESS',
+  island: 'PING_ISLAND_ENABLED',
+  llm: 'LLM_AGENT_ENABLED',
+  digest: 'MAILAGENT_DAILY_DIGEST_ENABLED',
+  calendar: 'CALENDAR_CALDAV_SYNC_ENABLED'
 }
+
+/**
+ * 把向导 cfg 编译成 writePatch 的 patch (managed key 子集)。纯函数 —— 不碰文件,
+ * 便于单测覆盖 backend / SYNC_MAILBOXES / plugin→flag 的映射。
+ *
+ * 返回 { patch, missing }: missing 是缺失的必填 key 列表 (调用方据此短路)。
+ */
+export function buildCompletePatch(cfg: OnboardingCompleteCfg): {
+  patch: Record<string, string>
+  missing: string[]
+} {
+  const patch: Record<string, string> = {}
+
+  // 1) 核心账户字段 (trim, 空串丢弃)。
+  for (const key of ONBOARDING_WRITABLE_KEYS) {
+    const v = (cfg as Record<string, unknown>)[key]
+    if (typeof v === 'string' && v.trim() !== '') patch[key] = v.trim()
+  }
+
+  // 2) backend (默认 applescript; 只接受白名单两值, 否则回落默认避免写脏值)。
+  const backend = cfg.MAILAGENT_BACKEND
+  patch['MAILAGENT_BACKEND'] = backend === 'davmail' ? 'davmail' : 'applescript'
+
+  // 3) SYNC_MAILBOXES (逗号拼接的字符串, 直接透传 trim)。
+  if (typeof cfg.SYNC_MAILBOXES === 'string' && cfg.SYNC_MAILBOXES.trim() !== '') {
+    patch['SYNC_MAILBOXES'] = cfg.SYNC_MAILBOXES.trim()
+  }
+
+  // 4) 插件 flag (显式写 true/false, 让向导能关掉之前开过的项)。
+  const plugins = cfg.plugins ?? {}
+  for (const pk of Object.keys(PLUGIN_FLAG_MAP) as PluginKey[]) {
+    const flagKey = PLUGIN_FLAG_MAP[pk]
+    patch[flagKey] = plugins[pk] === true ? 'true' : 'false'
+  }
+
+  const missing = ONBOARDING_REQUIRED_KEYS.filter((k) => !patch[k])
+  return { patch, missing }
+}
+
+/**
+ * Double-writer 守卫判据 (纯函数, 便于单测)。老 data 目录的 sync_store.db-wal
+ * 若存在且 mtime 在最近 windowMs 内 → 判定老后端可能仍在运行, 拒绝继承。
+ *
+ * @param walMtimeMs WAL 文件 mtimeMs; null 表示 WAL 不存在 (放行)。
+ * @param nowMs      当前 wall-clock (可注入便于单测)。
+ * @param windowMs   时间窗 (默认 120s)。
+ */
+export function isLikelyDoubleWriter(
+  walMtimeMs: number | null,
+  nowMs: number = Date.now(),
+  windowMs = 120_000
+): boolean {
+  if (walMtimeMs == null) return false
+  return nowMs - walMtimeMs < windowMs
+}
+
+/** 老数据根目录 = ~/Documents/MailAgent (打包前的项目根布局)。 */
+export function legacyOldDataPath(): string {
+  return join(homedir(), 'Documents', 'MailAgent')
+}
+
+/** 老 sync_store.db 绝对路径。 */
+function legacyOldDbPath(): string {
+  return join(legacyOldDataPath(), 'data', 'sync_store.db')
+}
+
+/** 老 .env 绝对路径。 */
+function legacyOldEnvPath(): string {
+  return join(legacyOldDataPath(), '.env')
+}
+
+/** 新数据目的地 data/ 目录 = DATA_ROOT/data。 */
+function destDataDir(): string {
+  return join(resolveDataRoot(), 'data')
+}
+
+// ---------------------------------------------------------------------------
+// LEGACY 安全守卫 (纯路径逻辑导出供单测) —— 任何破坏性操作都不得落到老原件上
+// ---------------------------------------------------------------------------
+
+/** child 是否等于 parent 或在 parent 子树内 (绝对路径规范化比较)。 */
+export function isPathInside(child: string, parent: string): boolean {
+  const c = resolvePath(child)
+  const p = resolvePath(parent)
+  if (c === p) return true
+  return c.startsWith(p.endsWith(sep) ? p : p + sep)
+}
+
+/** 两路径是否重合 (相等或互相包含) —— COPY 目标绝不可与老原件重合。 */
+export function pathsCollide(a: string, b: string): boolean {
+  return isPathInside(a, b) || isPathInside(b, a)
+}
+
+/**
+ * LEGACY 破坏性操作 (inherit/migrate/rollback) 前置守卫。返回 error 对象=拒绝,
+ * null=放行。两道闸:
+ *   1) 仅打包模式 —— dev 下 resolveDataRoot()=~/Documents/MailAgent 与老原件
+ *      重合, 破坏性操作会直接删/盖用户真库, 一律禁用。
+ *   2) COPY 目标 (DATA_ROOT/data) 不得与老原件 data/ 路径重合 (防 MAILAGENT_DATA_ROOT
+ *      覆盖把两者指到一起)。
+ */
+function legacyMutationBlock(): { code: string; message: string } | null {
+  let packaged = false
+  try {
+    packaged = app.isPackaged === true
+  } catch {
+    packaged = false
+  }
+  if (!packaged) {
+    return {
+      code: 'E_NOT_PACKAGED',
+      message:
+        '老数据迁移仅在打包应用中可用。开发模式下数据根与老数据路径重合, 已禁用破坏性操作以保护原始数据。'
+    }
+  }
+  if (pathsCollide(destDataDir(), join(legacyOldDataPath(), 'data'))) {
+    return {
+      code: 'E_SAME_PATH',
+      message: '复制目标与老数据原件路径重合, 拒绝任何破坏性操作 (保护原始数据不被覆盖/删除)。'
+    }
+  }
+  return null
+}
+
+/**
+ * resolveEnvPath() 是否落在老数据路径之外 (= 独立的可安全写/清的 .env)。
+ * 打包态 resolveEnvPath() 仍解析到 ~/Documents/MailAgent/.env (老原件) —— 此时
+ * 返回 false, 让 rollback 绝不剥离用户原始配置 (legacyInherit 写 .env 是 additive,
+ * 与 complete() 一致, 不算破坏; 真正危险的是 rollback 的清键)。
+ */
+function envPathSafeToManage(): boolean {
+  try {
+    return !isPathInside(resolveEnvPath(), legacyOldDataPath())
+  } catch {
+    return false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SQLite readonly 小工具 (绝不抛: 失败回 fallback)
+// ---------------------------------------------------------------------------
+
+/** 打开一个一次性 readonly 连接执行 fn, finally 必关。db 不存在或出错时返回
+ *  fallback。不复用 db.ts 的 getDb() 单例 (legacy 老库是不同文件)。 */
+function withReadonlyDb<T>(dbPath: string, fn: (db: Database.Database) => T, fallback: T): T {
+  if (!existsSync(dbPath)) return fallback
+  let conn: Database.Database | null = null
+  try {
+    conn = new Database(dbPath, { readonly: true, fileMustExist: true })
+    conn.pragma('busy_timeout = 200')
+    return fn(conn)
+  } catch {
+    return fallback
+  } finally {
+    if (conn) {
+      try {
+        conn.close()
+      } catch {
+        /* readonly 短连接 close 失败无所谓, GC 回收。 */
+      }
+    }
+  }
+}
+
+/** 读 sync_state.db_version → number | null (绝不抛)。 */
+function readDbVersion(db: Database.Database): number | null {
+  try {
+    const row = db.prepare("SELECT value FROM sync_state WHERE key = 'db_version'").get() as
+      | { value?: string }
+      | undefined
+    return row?.value != null ? Number.parseInt(String(row.value), 10) : null
+  } catch {
+    return null
+  }
+}
+
+/** 读 email_metadata 行数 (表缺失/出错 → 0)。 */
+function readEmailCount(db: Database.Database): number {
+  try {
+    const row = db.prepare('SELECT COUNT(*) AS n FROM email_metadata').get() as
+      | { n?: number }
+      | undefined
+    return row?.n ?? 0
+  } catch {
+    return 0
+  }
+}
+
+/** 递归累加目录大小 (best-effort, 任意子项出错跳过, 不抛)。 */
+function dirSizeBytes(dir: string): number {
+  let total = 0
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const ent of entries) {
+    const p = join(dir, String(ent.name))
+    try {
+      if (ent.isDirectory()) {
+        total += dirSizeBytes(p)
+      } else if (ent.isFile()) {
+        total += statSync(p).size
+      }
+    } catch {
+      /* 单项 stat 失败 (符号链接/权限) 跳过, 继续累加。 */
+    }
+  }
+  return total
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:checkEnv
+// ---------------------------------------------------------------------------
+
+/** Darwin major 版本号 → number | null (uname release, e.g. '21.6.0' → 21)。
+ *  Darwin 21 = macOS 12 (Monterey)。 */
+function darwinMajor(): number | null {
+  try {
+    if (process.platform !== 'darwin') return null
+    const major = Number.parseInt(osRelease().split('.')[0] ?? '', 10)
+    return Number.isFinite(major) ? major : null
+  } catch {
+    return null
+  }
+}
+
+function checkEnv(): CheckEnvResult {
+  // os: darwin && Darwin major >= 21 (macOS 12) → pass。
+  let os: Status = 'fail'
+  const major = darwinMajor()
+  if (process.platform === 'darwin' && major != null && major >= 21) os = 'pass'
+
+  // pythonRuntime: getMailagentBin() 解析成功 + 文件存在 → pass。
+  let pythonRuntime: Status = 'fail'
+  try {
+    const bin = getMailagentBin()
+    if (bin && existsSync(bin)) pythonRuntime = 'pass'
+  } catch {
+    pythonRuntime = 'fail'
+  }
+
+  // dataWritable: 能在 DATA_ROOT 下 mkdir + 写临时文件 → pass。
+  let dataWritable: Status = 'fail'
+  try {
+    const root = resolveDataRoot()
+    mkdirSync(root, { recursive: true })
+    const probeDir = mkdtempSync(join(root, '.onboard-write-'))
+    const probeFile = join(probeDir, 'probe.tmp')
+    writeFileSync(probeFile, 'ok')
+    rmSync(probeDir, { recursive: true, force: true })
+    dataWritable = 'pass'
+  } catch {
+    dataWritable = 'fail'
+  }
+
+  // fda: 能 R_OK ~/Library/Mail → pass; EACCES/EPERM → fail; ENOENT → warn。
+  let fda: Status = 'fail'
+  try {
+    accessSync(join(homedir(), 'Library', 'Mail'), fsConstants.R_OK)
+    fda = 'pass'
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') fda = 'warn'
+    else fda = 'fail' // EACCES / EPERM / 其它
+  }
+
+  // automation: AppleScript 自动化授权无可靠探测手段 → 恒 warn。
+  const automation: Status = 'warn'
+
+  return { os, pythonRuntime, dataWritable, fda, automation }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:openPrivacyPane
+// ---------------------------------------------------------------------------
+
+const PRIVACY_PANE_URL: Record<'AllFiles' | 'Automation', string> = {
+  AllFiles: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+  Automation: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation'
+}
+
+async function openPrivacyPane(raw: unknown): Promise<PrivacyPaneResult> {
+  try {
+    const pane = (raw as { pane?: unknown } | null)?.pane
+    if (pane !== 'AllFiles' && pane !== 'Automation') return { ok: false }
+    await shell.openExternal(PRIVACY_PANE_URL[pane])
+    return { ok: true }
+  } catch {
+    return { ok: false }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:listMailAccounts
+// ---------------------------------------------------------------------------
+
+async function listMailAccounts(): Promise<ListMailAccountsResult> {
+  try {
+    // callCli 自动前置 ['-o','json'] 并解包 wrapper.data, 所以这里只传子命令。
+    // data 形状: { accounts:[{name}], mailboxes:[{name,...}], total_accounts, total_mailboxes }
+    const data = (await callCli(['debug', 'mail-structure'], { timeoutMs: 30_000 })) as {
+      accounts?: Array<{ name?: string }>
+      mailboxes?: Array<{ name?: string }>
+    } | null
+    const accounts = Array.isArray(data?.accounts)
+      ? data!.accounts.map((a) => a?.name).filter((n): n is string => typeof n === 'string')
+      : []
+    const mailboxes = Array.isArray(data?.mailboxes)
+      ? data!.mailboxes.map((m) => m?.name).filter((n): n is string => typeof n === 'string')
+      : []
+    return { accounts, mailboxes }
+  } catch (err) {
+    return { accounts: [], mailboxes: [], error: (err as Error).message }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:syncProgress
+// ---------------------------------------------------------------------------
+
+function syncProgress(): SyncProgressResult {
+  const empty: SyncProgressResult = {
+    exists: false,
+    total: 0,
+    byStatus: {},
+    synced: 0,
+    dbVersion: null,
+    ready: false
+  }
+  try {
+    const dbPath = resolveDbPath()
+    if (!existsSync(dbPath)) return empty
+
+    // db_version + ready 走 probeDbReady (同一份就绪判据)。
+    const probe = probeDbReady(dbPath)
+
+    // total + byStatus 走 readonly 直读。
+    return withReadonlyDb<SyncProgressResult>(
+      dbPath,
+      (db) => {
+        const totalRow = db.prepare('SELECT COUNT(*) AS n FROM email_metadata').get() as
+          | { n?: number }
+          | undefined
+        const total = totalRow?.n ?? 0
+        const rows = db
+          .prepare(
+            'SELECT sync_status AS s, COUNT(*) AS n FROM email_metadata GROUP BY sync_status'
+          )
+          .all() as Array<{ s?: string; n?: number }>
+        const byStatus: Record<string, number> = {}
+        for (const r of rows) {
+          if (typeof r.s === 'string') byStatus[r.s] = r.n ?? 0
+        }
+        return {
+          exists: true,
+          total,
+          byStatus,
+          synced: byStatus['synced'] ?? 0,
+          dbVersion: probe.dbVersion,
+          ready: probe.ready
+        }
+      },
+      // readonly 打开失败 (锁/损坏): 至少回 probe 的 dbVersion/ready, 计数清零。
+      { ...empty, exists: true, dbVersion: probe.dbVersion, ready: probe.ready }
+    )
+  } catch {
+    return empty
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:complete
+// ---------------------------------------------------------------------------
 
 async function handleComplete(
   evt: Electron.IpcMainInvokeEvent,
   raw: unknown
 ): Promise<OnboardingResult> {
-  if (typeof raw !== 'object' || raw === null) {
-    return { ok: false, error: { code: 'E_INVALID', message: 'onboarding:complete 需要配置对象' } }
-  }
-  const cfg = raw as Record<string, unknown>
-
-  // 收集 + trim 向导可写键。
-  const patch: Record<string, string> = {}
-  for (const key of ONBOARDING_WRITABLE_KEYS) {
-    const v = cfg[key]
-    if (typeof v === 'string' && v.trim() !== '') patch[key] = v.trim()
-  }
-
-  const missing = ONBOARDING_REQUIRED_KEYS.filter((k) => !patch[k])
-  if (missing.length > 0) {
-    return { ok: false, error: { code: 'E_MISSING', message: `缺必填项: ${missing.join(', ')}` } }
-  }
-
-  // 确保 DATA_ROOT + data/ 存在 (writePatch 不建父目录; 大库附件也落 data/)。
-  const dataRoot = resolveDataRoot()
   try {
-    mkdirSync(join(dataRoot, 'data'), { recursive: true })
-  } catch (err) {
-    return {
-      ok: false,
-      error: { code: 'E_MKDIR', message: `无法创建数据目录 ${dataRoot}: ${(err as Error).message}` }
+    if (typeof raw !== 'object' || raw === null) {
+      return {
+        ok: false,
+        error: { code: 'E_INVALID', message: 'onboarding:complete 需要配置对象' }
+      }
     }
+    const cfg = raw as OnboardingCompleteCfg
+
+    const { patch, missing } = buildCompletePatch(cfg)
+    if (missing.length > 0) {
+      return { ok: false, error: { code: 'E_MISSING', message: `缺必填项: ${missing.join(', ')}` } }
+    }
+
+    // 确保 DATA_ROOT + data/ 存在 (writePatch 不建父目录; 大库附件也落 data/)。
+    const dataRoot = resolveDataRoot()
+    try {
+      mkdirSync(join(dataRoot, 'data'), { recursive: true })
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          code: 'E_MKDIR',
+          message: `无法创建数据目录 ${dataRoot}: ${(err as Error).message}`
+        }
+      }
+    }
+
+    // 写 .env (writePatch: 缺文件→创建 + mode 0600 + MANAGED_ENV_KEYS 校验)。
+    const res = writePatch(patch)
+    if (!res.ok) {
+      return { ok: false, error: res.error ?? { code: 'E_WRITE', message: '.env 写入失败' } }
+    }
+
+    // 起后端 + 等就绪 (打包模式; dev 走 pm2 不接管, 视为就绪)。
+    registerBackendQuitHook()
+    const mgr = getBackendLifecycle()
+    mgr.start()
+    const ready = app.isPackaged ? await mgr.waitReady() : true
+
+    // 切回主界面: reload 窗口去掉 ?onboarding=1 (loadFile 无 search)。
+    reloadToMain(evt)
+
+    return { ok: true, ready }
+  } catch (err) {
+    return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
   }
-
-  // 写 .env (writePatch 处理缺文件→创建 + mode 0600 + MANAGED_ENV_KEYS 校验)。
-  const res = writePatch(patch)
-  if (!res.ok) {
-    return { ok: false, error: res.error ?? { code: 'E_WRITE', message: '.env 写入失败' } }
-  }
-
-  // 起后端 + 等就绪 (打包模式; dev 走 pm2 不接管, 视为就绪)。
-  registerBackendQuitHook()
-  const mgr = getBackendLifecycle()
-  mgr.start()
-  const ready = app.isPackaged ? await mgr.waitReady() : true
-
-  // 切回主界面: reload 窗口去掉 ?onboarding=1 (loadFile 无 search)。
-  const win = BrowserWindow.fromWebContents(evt.sender)
-  if (win) {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
-
-  return { ok: true, ready }
 }
+
+/** reload 当前窗口到主界面 (去掉 ?onboarding=1 query)。 */
+function reloadToMain(evt: Electron.IpcMainInvokeEvent): void {
+  try {
+    const win = BrowserWindow.fromWebContents(evt.sender)
+    if (win) void win.loadFile(join(__dirname, '../renderer/index.html'))
+  } catch {
+    /* 窗口已销毁等边界情况, 不阻断 complete 成功返回。 */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:detectLegacy
+// ---------------------------------------------------------------------------
+
+function detectLegacy(): DetectLegacyResult {
+  try {
+    const oldDataPath = legacyOldDataPath()
+    const oldDbPath = legacyOldDbPath()
+    const found = existsSync(oldDbPath)
+    if (!found) return { found: false }
+
+    const { dbVersion, emailCount } = withReadonlyDb(
+      oldDbPath,
+      (db) => ({ dbVersion: readDbVersion(db), emailCount: readEmailCount(db) }),
+      { dbVersion: null as number | null, emailCount: 0 }
+    )
+
+    // sizeBytes: 老 data/ 目录大小 (best-effort)。
+    const sizeBytes = dirSizeBytes(join(oldDataPath, 'data'))
+
+    // hasConfig: 老 .env 含三必填项且非空。
+    const hasConfig = legacyEnvHasConfig()
+
+    return { found: true, oldDataPath, dbVersion, emailCount, sizeBytes, hasConfig }
+  } catch {
+    return { found: false }
+  }
+}
+
+/** 老 .env 是否含 NOTION_TOKEN + EMAIL_DATABASE_ID + USER_EMAIL 非空值。 */
+function legacyEnvHasConfig(): boolean {
+  try {
+    const p = legacyOldEnvPath()
+    if (!existsSync(p)) return false
+    const present = parseActiveEnvKeys(readFileSync(p, 'utf8'))
+    return ONBOARDING_REQUIRED_KEYS.every((k) => present.has(k))
+  } catch {
+    return false
+  }
+}
+
+/** 解析 .env 文本里"有非空值"的 key 集合 (与 detect.ts activeEnvKeys 同口径)。 */
+export function parseActiveEnvKeys(text: string): Set<string> {
+  const keys = new Set<string>()
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const eq = line.indexOf('=')
+    if (eq <= 0) continue
+    const key = line.slice(0, eq).trim()
+    const val = line.slice(eq + 1).trim()
+    if (key && val !== '' && val !== '""' && val !== "''") keys.add(key)
+  }
+  return keys
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:legacyInherit (SAFE COPY: 老原件永不修改)
+// ---------------------------------------------------------------------------
+
+async function legacyInherit(raw: unknown): Promise<LegacyInheritResult> {
+  try {
+    // 破坏性操作前置守卫 (仅打包 + COPY 目标 ≠ 老原件路径)。
+    const blocked = legacyMutationBlock()
+    if (blocked) return { ok: false, error: blocked }
+
+    const oldDataPath = legacyOldDataPath()
+    const oldDbPath = legacyOldDbPath()
+    if (!existsSync(oldDbPath)) {
+      return { ok: false, error: { code: 'E_NO_LEGACY', message: '未找到老数据 sync_store.db' } }
+    }
+
+    // HARD GUARD: 老 WAL 在最近 120s 内有写动作 → 老后端可能仍在跑, 拒绝。
+    const walPath = oldDbPath + '-wal'
+    let walMtimeMs: number | null = null
+    try {
+      walMtimeMs = statSync(walPath).mtimeMs
+    } catch {
+      walMtimeMs = null // WAL 不存在 → 放行
+    }
+    if (isLikelyDoubleWriter(walMtimeMs)) {
+      return {
+        ok: false,
+        error: {
+          code: 'E_DOUBLE_WRITER',
+          message:
+            '检测到老 mail-sync 可能仍在运行 (sync_store.db-wal 刚被写入)。请先退出老版 mail-sync 再继承数据。'
+        }
+      }
+    }
+
+    // 不再往老目录写 .bak 副本: 老原件全程只读、从不修改, 它本身就是回滚备份
+    // (rollback 只删 COPY)。往老目录写文件既多余, 又违反"原件零写入"不变式。
+    const backupPath = oldDbPath // 安全网 = 未改动的老原件本体
+
+    // 复制整个老 data/ → DATA_ROOT/data (recursive)。SOURCE 只读不改。
+    const src = join(oldDataPath, 'data')
+    const dest = destDataDir()
+    try {
+      mkdirSync(resolveDataRoot(), { recursive: true })
+      cpSync(src, dest, { recursive: true })
+    } catch (err) {
+      return {
+        ok: false,
+        error: { code: 'E_COPY', message: `复制老数据目录失败: ${(err as Error).message}` }
+      }
+    }
+
+    // 配置: 老 .env 有完整配置 → 复制其值 (managed key only); 否则用 cfg。
+    let cfgPatch: Record<string, string> = {}
+    if (legacyEnvHasConfig()) {
+      cfgPatch = legacyEnvManagedPatch()
+    } else if (typeof raw === 'object' && raw !== null) {
+      cfgPatch = buildCompletePatch(raw as OnboardingCompleteCfg).patch
+    }
+    if (Object.keys(cfgPatch).length > 0) {
+      const wr = writePatch(cfgPatch)
+      if (!wr.ok) {
+        return { ok: false, error: wr.error ?? { code: 'E_WRITE', message: '.env 写入失败' } }
+      }
+    }
+
+    // 不起后端 (留给 legacyMigrate)。
+    return { ok: true, backupPath }
+  } catch (err) {
+    return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
+  }
+}
+
+/** 把老 .env 里的 managed 值提取成 writePatch 可用的 patch (非 managed key 丢弃)。 */
+function legacyEnvManagedPatch(): Record<string, string> {
+  const out: Record<string, string> = {}
+  try {
+    const text = readFileSync(legacyOldEnvPath(), 'utf8')
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) continue
+      const eq = line.indexOf('=')
+      if (eq <= 0) continue
+      const key = line.slice(0, eq).trim()
+      let val = line.slice(eq + 1).trim()
+      // 去掉成对引号 (老 .env 可能引用带空格的值)。
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1)
+      }
+      if (key && val !== '') out[key] = val
+    }
+  } catch {
+    /* 读不了就回空 patch — 调用方已确认 hasConfig, 极端 race 时降级为不写。 */
+  }
+  // writePatch 自带 MANAGED_ENV_KEYS 白名单校验, 但它遇到非 managed key 会
+  // 整体 E_INVALID_KEY 拒绝 → 这里先过滤掉非 managed key, 只留可写部分。
+  return filterManagedOnly(out)
+}
+
+/** 过滤出 MANAGED_ENV_KEYS 白名单内的键 (writePatch 遇非 managed key 会整体
+ *  E_INVALID_KEY 拒绝, 所以继承老 .env 前先剔除其多余键)。 */
+function filterManagedOnly(patch: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const k of Object.keys(patch)) {
+    if (MANAGED_ENV_KEY_SET.has(k)) out[k] = patch[k]
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:legacyMigrate
+// ---------------------------------------------------------------------------
+
+async function legacyMigrate(): Promise<LegacyMigrateResult> {
+  try {
+    // 破坏性操作前置守卫 (起后端会在 COPY 上写迁移; 守卫确保 COPY ≠ 老原件)。
+    const blocked = legacyMutationBlock()
+    if (blocked) return { ok: false, error: blocked }
+
+    // 读 COPY 的 db_version (before)。
+    const copiedDb = resolveDbPath()
+    const dbVersionBefore = withReadonlyDb(copiedDb, readDbVersion, null as number | null)
+
+    // 起后端让其 _init_database() 自动迁移到 v17。
+    registerBackendQuitHook()
+    const mgr = getBackendLifecycle()
+    mgr.start()
+    const ready = app.isPackaged ? await mgr.waitReady() : true
+
+    // 读迁移后 db_version (after, 走 probeDbReady)。
+    const dbVersionAfter = probeDbReady(copiedDb).dbVersion
+
+    return { ok: true, dbVersionBefore, dbVersionAfter, ready }
+  } catch (err) {
+    return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:legacyVerify
+// ---------------------------------------------------------------------------
+
+function legacyVerify(): LegacyVerifyResult {
+  const checks: LegacyVerifyCheck[] = []
+  let emailCount: number | undefined
+
+  try {
+    const dbPath = resolveDbPath()
+
+    // getDb readonly 能打开 (复用单例; 失败 throw → 捕获置 false)。
+    let getDbOk = false
+    try {
+      getDb()
+      getDbOk = true
+    } catch {
+      getDbOk = false
+    }
+
+    const probe = probeDbReady(dbPath)
+    emailCount = withReadonlyDb(dbPath, readEmailCount, 0)
+
+    checks.push({
+      key: 'db_version',
+      label: `db_version == ${EXPECTED_DB_VERSION}`,
+      pass: probe.dbVersion === EXPECTED_DB_VERSION
+    })
+    checks.push({
+      key: 'required_tables',
+      label: `关键表齐全 (${REQUIRED_TABLES.join(', ')})`,
+      pass: probe.dbAccessible && probe.missingTables.length === 0
+    })
+    checks.push({
+      key: 'email_rows',
+      label: 'email_metadata 行数 >= 1',
+      pass: emailCount >= 1
+    })
+    checks.push({
+      key: 'getdb_open',
+      label: 'getDb() readonly 可打开',
+      pass: getDbOk
+    })
+
+    const verified = checks.every((c) => c.pass)
+    return { verified, checks, emailCount }
+  } catch (err) {
+    // 任意未预期错误: 返回未验证 + 错误 check, 不抛。
+    checks.push({ key: 'error', label: `校验异常: ${(err as Error).message}`, pass: false })
+    return { verified: false, checks, emailCount }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:legacyRollback (只删 COPY, 老原件永不动)
+// ---------------------------------------------------------------------------
+
+async function legacyRollback(): Promise<LegacyRollbackResult> {
+  try {
+    // 破坏性操作前置守卫: 仅打包 + dest ≠ 老原件。这是防止 rmSync 删到用户真库的
+    // 核心闸 —— dev 或 MAILAGENT_DATA_ROOT=老路径 时 dest 会塌缩成老原件目录。
+    const blocked = legacyMutationBlock()
+    if (blocked) return { ok: false, error: blocked }
+
+    // 停后端 (释放对 COPY db 的句柄)。
+    const mgr = getBackendLifecycle()
+    await mgr.stop()
+
+    // 删 COPY (DATA_ROOT/data) —— 守卫已确保它 ≠ 老原件; 老原件 ~/Documents/MailAgent 不动。
+    const dest = destDataDir()
+    try {
+      rmSync(dest, { recursive: true, force: true })
+    } catch (err) {
+      return {
+        ok: false,
+        error: { code: 'E_RM', message: `删除 COPY 失败: ${(err as Error).message}` }
+      }
+    }
+
+    // 清 managed .env 键 (回 'new') —— 仅当 .env 是独立副本时才清。若 resolveEnvPath()
+    // 解析到老原件 ~/Documents/MailAgent/.env (打包态当前正是如此), 绝不剥离用户原始
+    // 配置, 直接跳过 (老原件零写入不变式)。
+    if (envPathSafeToManage()) {
+      const nulls = buildClearPatch()
+      const wr = writePatch(nulls)
+      if (!wr.ok) {
+        return { ok: false, error: wr.error ?? { code: 'E_WRITE', message: '清 .env 失败' } }
+      }
+    }
+
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
+  }
+}
+
+/** 构造 rollback 清键 patch (null→删): 对称于 buildCompletePatch 的写入集 ——
+ *  必填三项 + 可选账户字段 + MAILAGENT_BACKEND + SYNC_MAILBOXES + 全部插件 flag,
+ *  让 rollback 把 .env 干净复位到 'new' 态 (不残留 backend/插件半截配置)。 */
+export function buildClearPatch(): Record<string, null> {
+  const out: Record<string, null> = {}
+  // 必填三项 + 可选账户字段 (= ONBOARDING_WRITABLE_KEYS 全集) → 删。
+  for (const k of ONBOARDING_WRITABLE_KEYS) out[k] = null
+  out['MAILAGENT_BACKEND'] = null
+  out['SYNC_MAILBOXES'] = null
+  for (const pk of Object.keys(PLUGIN_FLAG_MAP) as PluginKey[]) out[PLUGIN_FLAG_MAP[pk]] = null
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:bootBackend (HALF: 不写 .env, 只起后端 + 等就绪)
+// ---------------------------------------------------------------------------
+
+async function bootBackend(): Promise<OnboardingResult> {
+  try {
+    registerBackendQuitHook()
+    const mgr = getBackendLifecycle()
+    mgr.start()
+    const ready = app.isPackaged ? await mgr.waitReady() : true
+    return { ok: true, ready }
+  } catch (err) {
+    return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 注册
+// ---------------------------------------------------------------------------
 
 export function registerOnboardingHandlers(): void {
   ipcMain.handle('onboarding:status', () => ({ state: detectUserState() }))
+  ipcMain.handle('onboarding:checkEnv', () => checkEnv())
+  ipcMain.handle('onboarding:openPrivacyPane', (_evt, arg: unknown) => openPrivacyPane(arg))
+  ipcMain.handle('onboarding:listMailAccounts', () => listMailAccounts())
+  ipcMain.handle('onboarding:syncProgress', () => syncProgress())
   ipcMain.handle('onboarding:complete', handleComplete)
+
+  // LEGACY 全量迁移。
+  ipcMain.handle('onboarding:detectLegacy', () => detectLegacy())
+  ipcMain.handle('onboarding:legacyInherit', (_evt, arg: unknown) => legacyInherit(arg))
+  ipcMain.handle('onboarding:legacyMigrate', () => legacyMigrate())
+  ipcMain.handle('onboarding:legacyVerify', () => legacyVerify())
+  ipcMain.handle('onboarding:legacyRollback', () => legacyRollback())
+  ipcMain.handle('onboarding:bootBackend', () => bootBackend())
+}
+
+// 暴露给 vitest 的纯逻辑 (不含 IPC 副作用)。
+export const __test__ = {
+  checkEnv,
+  syncProgress,
+  detectLegacy,
+  legacyVerify,
+  buildCompletePatch,
+  isLikelyDoubleWriter,
+  parseActiveEnvKeys,
+  buildClearPatch,
+  isPathInside,
+  pathsCollide,
+  PLUGIN_FLAG_MAP
 }

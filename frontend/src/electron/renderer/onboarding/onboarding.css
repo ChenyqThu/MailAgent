@@ -1,0 +1,681 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Onboarding wizard styles — ported from docs/packaging/onboarding/Onboarding Demo.html
+   SCOPED under ".ob" so nothing leaks into the main app. Keyframes are global.
+   Color/spacing tokens (var(--ink-*), var(--c-*)) live in index.css — DO NOT
+   redefine them here; the project's a11y-tuned values must win.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Motion tokens: index.css does NOT define these as CSS vars (Tailwind has them
+   but not as :root custom properties), so we declare them here. */
+:root {
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-slow: 380ms;
+}
+
+/* ─── Real-window shell (replaces demo .mac-window / #desktop chrome) ─── */
+.ob {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: rgb(var(--ink-0));
+  color: rgb(var(--ink-fg));
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+}
+.ob-titlebar {
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: rgb(var(--ink-1));
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+  -webkit-app-region: drag;
+  user-select: none;
+  padding-left: 78px; /* clears hiddenInset traffic lights */
+}
+.ob-titlebar .ob-title {
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ob-body {
+  flex: 1;
+  min-height: 0;
+  display: flex; /* rail + content row, or single content */
+}
+.ob button,
+.ob a,
+.ob input,
+.ob select,
+.ob .opt-card,
+.ob .chip-sel {
+  -webkit-app-region: no-drag;
+}
+
+/* ─── Step rail (left) ─── */
+.ob .step-rail {
+  width: 212px;
+  flex-shrink: 0;
+  background: rgb(var(--ink-1));
+  border-right: 1px solid rgb(var(--ink-border-soft));
+  display: flex;
+  flex-direction: column;
+  padding: 18px 12px;
+}
+.ob .step-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: default;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+  position: relative;
+}
+.ob .step-item .dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1.5px solid rgb(var(--ink-border));
+  color: rgb(var(--ink-fg-2));
+  background: rgb(var(--ink-2));
+  transition: all var(--dur-base) var(--ease-standard);
+}
+.ob .step-item .lbl {
+  font-size: 13.5px;
+  color: rgb(var(--ink-fg-2));
+  line-height: 1.2;
+  transition: color var(--dur-fast);
+}
+.ob .step-item.done .dot {
+  border-color: rgb(var(--c-accent) / 0.5);
+  background: rgb(var(--c-accent) / 0.14);
+  color: rgb(var(--c-accent));
+}
+.ob .step-item.active .dot {
+  border-color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  box-shadow: 0 0 0 4px rgb(var(--c-accent) / 0.14);
+}
+.ob .step-item.active .lbl {
+  color: rgb(var(--ink-fg));
+  font-weight: 600;
+}
+.ob .step-item.done .lbl {
+  color: rgb(var(--ink-fg-1));
+}
+.ob .step-connector {
+  width: 1.5px;
+  height: 12px;
+  margin-left: 21px;
+  background: rgb(var(--ink-border));
+  transition: background var(--dur-base);
+}
+.ob .step-connector.filled {
+  background: rgb(var(--c-accent) / 0.45);
+}
+
+/* ─── Top stepper (alt layout) ─── */
+.ob .top-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 16px 26px 6px;
+}
+.ob .ts-node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ob .ts-bead {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgb(var(--ink-4));
+  flex-shrink: 0;
+  transition: all var(--dur-base) var(--ease-standard);
+}
+.ob .ts-bead.done {
+  background: rgb(var(--c-accent) / 0.55);
+}
+.ob .ts-bead.active {
+  background: rgb(var(--c-accent));
+  box-shadow: 0 0 0 4px rgb(var(--c-accent) / 0.16);
+}
+.ob .ts-bar {
+  flex: 1;
+  height: 1.5px;
+  background: rgb(var(--ink-border));
+  margin: 0 7px;
+  min-width: 8px;
+  transition: background var(--dur-base);
+}
+.ob .ts-bar.filled {
+  background: rgb(var(--c-accent) / 0.45);
+}
+
+/* ─── Content area ─── */
+.ob .wiz-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ob .wiz-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 30px 34px 12px;
+}
+.ob .wiz-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 26px;
+  border-top: 1px solid rgb(var(--ink-border-soft));
+  background: rgb(var(--ink-1) / 0.5);
+}
+
+.ob .eyebrow {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: rgb(var(--c-accent));
+}
+.ob .wiz-h1 {
+  font-size: 23px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: rgb(var(--ink-fg));
+  margin: 7px 0 0;
+}
+.ob .wiz-lede {
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgb(var(--ink-fg-1));
+  margin-top: 9px;
+  max-width: 460px;
+}
+
+/* ─── Surface card (ds.css parity — index.css doesn't define .ds-card globally) ─── */
+.ob .ds-card {
+  background: rgb(var(--ink-2));
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ob .ds-card-pad {
+  padding: 22px;
+}
+
+/* standalone mono helper (the .fld.mono variant covers inputs; this covers
+   inline spans / counters that the JSX marks `mono`) */
+.ob .mono {
+  font-family: ui-monospace, 'SF Mono', monospace;
+}
+
+/* ─── Form controls ─── */
+.ob .fld-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: rgb(var(--ink-fg-1));
+  margin-bottom: 6px;
+}
+.ob .req-star {
+  color: rgb(var(--c-accent));
+  font-size: 12px;
+}
+.ob .fld {
+  width: 100%;
+  background: rgb(var(--ink-3));
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 6px;
+  padding: 8px 11px;
+  font-size: 14px;
+  color: rgb(var(--ink-fg));
+  font-family: inherit;
+  outline: none;
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+.ob .fld::placeholder {
+  color: rgb(var(--ink-fg-3));
+}
+.ob .fld:focus {
+  border-color: rgb(var(--c-accent) / 0.6);
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.12);
+}
+.ob .fld.mono {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 13px;
+}
+.ob .fld.err {
+  border-color: rgb(var(--c-fail) / 0.7);
+}
+.ob .fld.err:focus {
+  box-shadow: 0 0 0 3px rgb(var(--c-fail) / 0.14);
+}
+.ob .fld-err {
+  font-size: 12px;
+  color: rgb(var(--c-fail));
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ob .fld-warn {
+  font-size: 12px;
+  color: rgb(var(--c-warn));
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ob .fld-hint {
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+  margin-top: 5px;
+  line-height: 1.5;
+}
+.ob .help-link {
+  color: rgb(var(--c-accent));
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgb(var(--c-accent) / 0.4);
+  text-underline-offset: 2px;
+}
+
+/* select wrapper */
+.ob .selwrap {
+  position: relative;
+}
+.ob .selwrap::after {
+  content: '';
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -5px;
+  border-right: 1.5px solid rgb(var(--ink-fg-2));
+  border-bottom: 1.5px solid rgb(var(--ink-fg-2));
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.ob select.fld {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  cursor: pointer;
+}
+
+/* chips (multi-select) */
+.ob .chip-sel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--dur-fast);
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg-1));
+  user-select: none;
+}
+.ob .chip-sel:hover {
+  border-color: rgb(var(--ink-fg-3));
+  color: rgb(var(--ink-fg));
+}
+.ob .chip-sel.on {
+  background: rgb(var(--c-accent) / 0.14);
+  border-color: rgb(var(--c-accent) / 0.45);
+  color: rgb(var(--c-accent));
+}
+.ob .chip-sel .ck {
+  width: 13px;
+  height: 13px;
+}
+
+/* selectable big card (backend / option) */
+.ob .opt-card {
+  text-align: left;
+  width: 100%;
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-2));
+  border-radius: 9px;
+  padding: 15px 16px;
+  cursor: pointer;
+  transition: all var(--dur-base) var(--ease-standard);
+  position: relative;
+}
+.ob .opt-card:hover {
+  border-color: rgb(var(--ink-fg-3));
+}
+.ob .opt-card.on {
+  border-color: rgb(var(--c-accent) / 0.7);
+  background: rgb(var(--c-accent) / 0.07);
+  box-shadow: 0 0 0 1px rgb(var(--c-accent) / 0.4);
+}
+.ob .opt-radio {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1.5px solid rgb(var(--ink-fg-3));
+  flex-shrink: 0;
+  position: relative;
+  transition: all var(--dur-fast);
+}
+.ob .opt-card.on .opt-radio {
+  border-color: rgb(var(--c-accent));
+}
+.ob .opt-card.on .opt-radio::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+}
+
+/* checklist rows (FDA) */
+.ob .chk-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgb(var(--ink-2));
+  border: 1px solid rgb(var(--ink-border-soft));
+  transition: all var(--dur-base);
+}
+.ob .chk-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+}
+.ob .chk-pending {
+  background: rgb(var(--ink-4));
+}
+.ob .chk-pass {
+  background: rgb(var(--c-ok) / 0.16);
+}
+.ob .chk-fail {
+  background: rgb(var(--c-fail) / 0.16);
+}
+.ob .chk-warn {
+  background: rgb(var(--c-warn) / 0.16);
+}
+
+/* toggle switch */
+.ob .sw {
+  width: 36px;
+  height: 21px;
+  border-radius: 999px;
+  background: rgb(var(--ink-4));
+  position: relative;
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-standard);
+  flex-shrink: 0;
+  border: none;
+  padding: 0;
+}
+.ob .sw::after {
+  content: '';
+  position: absolute;
+  top: 2.5px;
+  left: 2.5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--dur-base) var(--ease-standard);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.ob .sw.on {
+  background: rgb(var(--c-accent));
+}
+.ob .sw.on::after {
+  transform: translateX(15px);
+}
+.ob .sw:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* pills */
+.ob .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+.ob .pill-warn {
+  color: rgb(var(--c-warn));
+  background: rgb(var(--c-warn) / 0.12);
+  border: 1px solid rgb(var(--c-warn) / 0.3);
+}
+.ob .pill-ok {
+  color: rgb(var(--c-ok));
+  background: rgb(var(--c-ok) / 0.12);
+  border: 1px solid rgb(var(--c-ok) / 0.3);
+}
+.ob .pill-fail {
+  color: rgb(var(--c-fail));
+  background: rgb(var(--c-fail) / 0.1);
+  border: 1px solid rgb(var(--c-fail) / 0.25);
+}
+.ob .pill-info {
+  color: rgb(var(--c-info));
+  background: rgb(var(--c-info) / 0.12);
+  border: 1px solid rgb(var(--c-info) / 0.3);
+}
+.ob .pill-muted {
+  color: rgb(var(--ink-fg-2));
+  background: rgb(var(--ink-3));
+  border: 1px solid rgb(var(--ink-border));
+}
+
+/* banner */
+.ob .banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ob .banner-warn {
+  background: rgb(var(--c-warn) / 0.1);
+  border: 1px solid rgb(var(--c-warn) / 0.3);
+  color: rgb(var(--ink-fg));
+}
+.ob .banner-fail {
+  background: rgb(var(--c-fail) / 0.1);
+  border: 1px solid rgb(var(--c-fail) / 0.3);
+  color: rgb(var(--ink-fg));
+}
+.ob .banner-info {
+  background: rgb(var(--c-info) / 0.1);
+  border: 1px solid rgb(var(--c-info) / 0.3);
+  color: rgb(var(--ink-fg));
+}
+.ob .banner-accent {
+  background: rgb(var(--c-accent) / 0.08);
+  border: 1px solid rgb(var(--c-accent) / 0.3);
+  color: rgb(var(--ink-fg));
+}
+
+/* progress bar */
+.ob .pbar {
+  height: 7px;
+  border-radius: 999px;
+  background: rgb(var(--ink-3));
+  overflow: hidden;
+}
+.ob .pbar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: rgb(var(--c-accent));
+  transition: width 0.4s var(--ease-standard);
+}
+.ob .pbar-fill.indeterminate {
+  width: 35% !important;
+  animation: indet 1.3s ease-in-out infinite;
+}
+@keyframes indet {
+  0% {
+    margin-left: -35%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+/* primary/secondary buttons sized for footer */
+.ob .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  /* height:auto 显式复位 —— index.css 有全局 `.btn-primary{height:34px}`,
+     `.ob .btn-primary` 不设 height 会让它级联进来强制 34px (入站泄漏)。 */
+  height: auto;
+  padding: 8px 18px;
+  border-radius: 7px;
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  font-size: 14px;
+  font-weight: 600;
+  border: 0;
+  cursor: pointer;
+  transition: all var(--dur-fast);
+}
+.ob .btn-primary:hover {
+  background: rgb(var(--c-accent-hi));
+}
+.ob .btn-primary:active {
+  transform: scale(0.98);
+}
+.ob .btn-primary:disabled {
+  background: rgb(var(--c-accent-dim));
+  color: rgb(var(--c-accent-fg) / 0.7);
+  cursor: not-allowed;
+}
+.ob .btn-sec {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 7px;
+  background: transparent;
+  color: rgb(var(--ink-fg-1));
+  font-size: 14px;
+  border: 1px solid rgb(var(--ink-border));
+  cursor: pointer;
+  transition: all var(--dur-fast);
+}
+.ob .btn-sec:hover {
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg));
+  border-color: rgb(var(--ink-fg-3));
+}
+.ob .btn-link {
+  background: none;
+  border: 0;
+  color: rgb(var(--ink-fg-2));
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 4px;
+  transition: color var(--dur-fast);
+}
+.ob .btn-link:hover {
+  color: rgb(var(--ink-fg));
+}
+
+/* step transition — opacity floored at .6 so content is never trapped
+   invisible if the renderer pauses animations while offscreen */
+.ob .step-enter {
+  animation: stepIn var(--dur-base) var(--ease-standard) both;
+}
+@keyframes stepIn {
+  from {
+    opacity: 0.6;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* spinner */
+.ob .spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* thin scrollbar */
+.ob .scrollbar-thin::-webkit-scrollbar {
+  width: 9px;
+  /* height 复位 —— index.css 全局 `.scrollbar-thin::-webkit-scrollbar{height:10px}`
+     会从横轴级联进来; 显式对齐到 9px (入站泄漏堵口)。 */
+  height: 9px;
+}
+.ob .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgb(var(--ink-fg) / 0.08);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+.ob .scrollbar-thin:hover::-webkit-scrollbar-thumb {
+  background: rgb(var(--ink-fg) / 0.16);
+  background-clip: padding-box;
+}
+
+/* reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .ob .step-enter,
+  .ob .spin,
+  .ob .pbar-fill.indeterminate {
+    animation: none !important;
+  }
+  .ob * {
+    transition-duration: 0.01ms !important;
+  }
+}

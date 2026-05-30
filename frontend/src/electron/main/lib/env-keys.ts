@@ -40,6 +40,16 @@ export const MANAGED_ENV_KEYS = [
   'CALENDAR_SYNC_MODE',
   'CALENDAR_PAST_DAYS',
   'CALENDAR_FUTURE_DAYS',
+  'CALENDAR_CALDAV_SYNC_ENABLED',
+
+  // — Backend selection (Onboarding 向导 backend 选择)。config.py 的 Field,
+  // 值域 'applescript' | 'davmail' (Sprint 16 dual-backend cutover)。向导写入,
+  // 默认 applescript (零依赖)。
+  'MAILAGENT_BACKEND',
+
+  // — Daily digest (Ping Island Phase 3 每日巡检)。config.py Field, boolean toggle,
+  // 默认 false。向导插件勾选项之一 (plugins.digest → 这里)。
+  'MAILAGENT_DAILY_DIGEST_ENABLED',
 
   // — AI Agent (PR D AiTab)
   'LLM_AGENT_ENABLED',

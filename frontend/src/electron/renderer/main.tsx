@@ -12,7 +12,7 @@ import { createRoot } from 'react-dom/client'
 import { bootPopoutModeFromQuery } from '@shared/state/popout-mode'
 
 import App from './App'
-import OnboardingPage from './OnboardingPage'
+import OnboardingRoot from './onboarding/OnboardingRoot'
 
 bootPopoutModeFromQuery()
 
@@ -21,5 +21,5 @@ bootPopoutModeFromQuery()
 const isOnboarding = new URLSearchParams(window.location.search).has('onboarding')
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>{isOnboarding ? <OnboardingPage /> : <App />}</StrictMode>
+  <StrictMode>{isOnboarding ? <OnboardingRoot /> : <App />}</StrictMode>
 )

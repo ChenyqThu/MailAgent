@@ -119,11 +119,15 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
   // onboarding 模式: 用 ?onboarding=1 query 让 renderer main.tsx 渲染配置向导而非主 App
   // (复用 popout 的 ?popout=1 query 同款机制)。完成后 onboarding:complete 会 reload 去掉它。
   const search = opts.onboarding ? 'onboarding=1' : ''
+  // onboarding 向导用固定小窗 (768×640, 不可缩放, 居中); 主 App 用 1280×800。
+  // titleBarStyle 两者都保持 hiddenInset (OS 画红绿灯)。
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 940,
-    minHeight: 600,
+    width: opts.onboarding ? 768 : 1280,
+    height: opts.onboarding ? 640 : 800,
+    minWidth: opts.onboarding ? 768 : 940,
+    minHeight: opts.onboarding ? 640 : 600,
+    resizable: !opts.onboarding,
+    center: opts.onboarding ? true : undefined,
     show: false,
     title: 'MailAgent',
     titleBarStyle: 'hiddenInset',
@@ -170,7 +174,11 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
   attachExternalLinkGuard(mainWindow.webContents)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(search ? `${process.env['ELECTRON_RENDERER_URL']}?${search}` : process.env['ELECTRON_RENDERER_URL'])
+    mainWindow.loadURL(
+      search
+        ? `${process.env['ELECTRON_RENDERER_URL']}?${search}`
+        : process.env['ELECTRON_RENDERER_URL']
+    )
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'), search ? { search } : undefined)
   }
