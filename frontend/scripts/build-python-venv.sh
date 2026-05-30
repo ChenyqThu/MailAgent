@@ -79,6 +79,10 @@ find "$OUT" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || 
 find "$OUT" -type f -name "*.pyc" -delete 2>/dev/null || true
 rm -rf "$OUT/lib/python3.11/test" "$OUT/lib/python3.11/idlelib" \
        "$OUT/lib/python3.11/tkinter" "$OUT/lib/python3.11/turtledemo" 2>/dev/null || true
+# pip 运行时永不需要 (app 不在运行时装包) — 安全删省 ~7M。setuptools/pkg_resources 保留
+# (个别包运行时 import pkg_resources); pygments 保留 (rich traceback 用)。
+SP="$OUT/lib/python3.11/site-packages"
+rm -rf "$SP/pip" "$SP"/pip-*.dist-info 2>/dev/null || true
 
 # 5. 自检: 经 wrapper (sh → python3.11 → CLI) 跑通, 验证可重定位调用链。
 #    注: src.config 有模块级 config=Config() 单例, import 即需必填字段; 构建环境无
