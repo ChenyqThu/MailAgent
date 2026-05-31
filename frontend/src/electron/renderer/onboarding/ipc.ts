@@ -65,6 +65,25 @@ export interface ListMailAccountsResult {
   error?: string
 }
 
+/** onboarding:detectDavmail — TCP 探 davmail 桥 (IMAP/SMTP) + best-effort 从老 .env
+ *  读预填值。cipher 绝不明文回传, 只回 detected.hasCipher boolean。 */
+export interface DetectDavmailResult {
+  bridgeUp: boolean
+  imapReachable: boolean
+  smtpReachable: boolean
+  host: string
+  imapPort: number
+  smtpPort: number
+  detected: {
+    host?: string
+    imapPort?: number
+    smtpPort?: number
+    pocMode?: boolean
+    hasCipher?: boolean
+    userEmail?: string
+  }
+}
+
 export interface SyncProgressResult {
   exists: boolean
   total: number
@@ -102,6 +121,12 @@ export interface CompleteConfig {
   /** comma-joined mailbox list, e.g. "收件箱,已发送" */
   SYNC_MAILBOXES?: string
   plugins?: PluginFlags
+  // — DavMail 连接配置 (仅 davmail 后端时携带; handler 在 applescript 模式忽略)。
+  DAVMAIL_HOST?: string
+  DAVMAIL_IMAP_PORT?: string
+  DAVMAIL_SMTP_PORT?: string
+  DAVMAIL_POC_MODE?: 'true' | 'false'
+  DAVMAIL_POC_CIPHER_KEY?: string
 }
 
 export interface CompleteResult {
@@ -185,6 +210,16 @@ export function openPrivacyPane(pane: PrivacyPane): Promise<OpenPrivacyPaneResul
 
 export function listMailAccounts(): Promise<ListMailAccountsResult> {
   return getInvoke()('onboarding:listMailAccounts') as Promise<ListMailAccountsResult>
+}
+
+/** 探 davmail 桥 (IMAP/SMTP TCP 可达) + 从老 .env best-effort 预填。davmail 分支
+ *  StepConfig 进入时调一次。arg 省略 → 默认 127.0.0.1/1143/1025。 */
+export function detectDavmail(arg?: {
+  host?: string
+  imapPort?: number
+  smtpPort?: number
+}): Promise<DetectDavmailResult> {
+  return getInvoke()('onboarding:detectDavmail', arg) as Promise<DetectDavmailResult>
 }
 
 export function syncProgress(): Promise<SyncProgressResult> {

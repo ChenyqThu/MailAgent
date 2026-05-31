@@ -27,6 +27,29 @@ export const MANAGED_ENV_KEYS = [
   'MAIL_ACCOUNT_NAME',
   'MAIL_INBOX_NAME',
   'MAIL_SENT_NAME',
+  'MAIL_ACCOUNT_URL_PREFIX',
+
+  // — DavMail backend (Onboarding 向导 davmail 分支 + legacy 迁移)。config.py 的
+  // davmail Field 全集。向导写连接配置 (host/port/poc 模式/cipher), legacy 继承时
+  // managed-filter 也要带过来 —— 之前缺这些 key 导致 davmail 老用户迁移丢配置 →
+  // 后端起不来。DAVMAIL_POC_CIPHER_KEY / DAVMAIL_CIPHER_KEY 都是 secret。
+  // 注: 后端 config.py 当前读 env=DAVMAIL_POC_CIPHER_KEY; 旧文档/报错曾用 DAVMAIL_CIPHER_KEY,
+  // 两个都纳入白名单避免继承时丢 (后端是否 alias 二者见 roadmap follow-up)。
+  'DAVMAIL_HOST',
+  'DAVMAIL_IMAP_PORT',
+  'DAVMAIL_SMTP_PORT',
+  'DAVMAIL_POC_CIPHER_KEY',
+  'DAVMAIL_CIPHER_KEY',
+  'DAVMAIL_POC_MODE',
+  'DAVMAIL_FETCH_TIMEOUT_SEC',
+  'DAVMAIL_UID_BACKFILL_ENABLED',
+  'DAVMAIL_UID_BACKFILL_BATCH_SIZE',
+  'DAVMAIL_UID_BACKFILL_SLEEP_SEC',
+  'DAVMAIL_DRAFTS_FOLDER',
+  'DAVMAIL_SENT_FOLDER',
+  'DAVMAIL_ARCHIVE_SENT',
+  'DAVMAIL_POLL_INTERVAL_SEC',
+  'DAVMAIL_CALDAV_PORT',
 
   // — Sync (PR D SyncTab)
   'SYNC_DATE_MODE',
@@ -144,7 +167,9 @@ export const SECRET_ENV_KEYS: Set<string> = new Set<string>([
   'LLM_TRANSLATE_API_KEY',
   'STATS_REPORT_TOKEN',
   'DASHBOARD_PASSWORD',
-  'MAILAGENT_CLI_API_KEY'
+  'MAILAGENT_CLI_API_KEY',
+  'DAVMAIL_POC_CIPHER_KEY',
+  'DAVMAIL_CIPHER_KEY'
 ])
 
 /** Keys the UI surfaces as readonly display only. env:set on these is

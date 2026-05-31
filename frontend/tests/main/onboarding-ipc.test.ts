@@ -109,6 +109,96 @@ describe('buildCompletePatch', () => {
   })
 })
 
+describe('buildCompletePatch — davmail branch', () => {
+  const core: OnboardingCompleteCfg = {
+    NOTION_TOKEN: 'ntn_x',
+    EMAIL_DATABASE_ID: 'db123',
+    USER_EMAIL: 'a@b.com'
+  }
+
+  it('writes davmail connection fields only in davmail mode (poc mode on)', () => {
+    const { patch, missing } = buildCompletePatch({
+      ...core,
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_HOST: '127.0.0.1',
+      DAVMAIL_IMAP_PORT: '1143',
+      DAVMAIL_SMTP_PORT: '1025',
+      DAVMAIL_POC_MODE: 'true'
+    })
+    expect(missing).toEqual([])
+    expect(patch['MAILAGENT_BACKEND']).toBe('davmail')
+    expect(patch['DAVMAIL_HOST']).toBe('127.0.0.1')
+    expect(patch['DAVMAIL_IMAP_PORT']).toBe('1143')
+    expect(patch['DAVMAIL_SMTP_PORT']).toBe('1025')
+    expect(patch['DAVMAIL_POC_MODE']).toBe('true')
+    // cipher omitted in poc mode → not written.
+    expect(patch['DAVMAIL_POC_CIPHER_KEY']).toBeUndefined()
+  })
+
+  it('does NOT write davmail fields in applescript mode', () => {
+    const { patch } = buildCompletePatch({
+      ...core,
+      MAILAGENT_BACKEND: 'applescript',
+      // even if a stray davmail field rides along, applescript must drop it.
+      DAVMAIL_HOST: '127.0.0.1',
+      DAVMAIL_POC_MODE: 'true'
+    })
+    expect(patch['DAVMAIL_HOST']).toBeUndefined()
+    expect(patch['DAVMAIL_POC_MODE']).toBeUndefined()
+    expect(patch['DAVMAIL_IMAP_PORT']).toBeUndefined()
+  })
+
+  it('always writes DAVMAIL_POC_MODE as explicit true/false in davmail mode', () => {
+    const off = buildCompletePatch({
+      ...core,
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_POC_MODE: 'false',
+      DAVMAIL_POC_CIPHER_KEY: 'cipher-xyz'
+    })
+    expect(off.patch['DAVMAIL_POC_MODE']).toBe('false')
+    expect(off.patch['DAVMAIL_POC_CIPHER_KEY']).toBe('cipher-xyz')
+    // unset POC_MODE → defaults to 'false' (not undefined).
+    const unset = buildCompletePatch({
+      ...core,
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_POC_CIPHER_KEY: 'cipher-xyz'
+    })
+    expect(unset.patch['DAVMAIL_POC_MODE']).toBe('false')
+  })
+
+  it('requires an auth method (poc mode OR non-empty cipher) in davmail mode', () => {
+    // no poc mode + no cipher → DAVMAIL_AUTH missing.
+    const noAuth = buildCompletePatch({ ...core, MAILAGENT_BACKEND: 'davmail' })
+    expect(noAuth.missing).toContain('DAVMAIL_AUTH')
+    // poc mode satisfies auth.
+    const pocAuth = buildCompletePatch({
+      ...core,
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_POC_MODE: 'true'
+    })
+    expect(pocAuth.missing).not.toContain('DAVMAIL_AUTH')
+    // non-empty cipher satisfies auth (even with poc mode off).
+    const cipherAuth = buildCompletePatch({
+      ...core,
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_POC_MODE: 'false',
+      DAVMAIL_POC_CIPHER_KEY: 'cipher-xyz'
+    })
+    expect(cipherAuth.missing).not.toContain('DAVMAIL_AUTH')
+  })
+
+  it('still reports missing core keys in davmail mode (does not require MAIL_ACCOUNT_NAME)', () => {
+    const { missing } = buildCompletePatch({
+      USER_EMAIL: 'a@b.com',
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_POC_MODE: 'true'
+    })
+    expect(missing.sort()).toEqual(['EMAIL_DATABASE_ID', 'NOTION_TOKEN'].sort())
+    // MAIL_ACCOUNT_NAME is never required.
+    expect(missing).not.toContain('MAIL_ACCOUNT_NAME')
+  })
+})
+
 describe('isLikelyDoubleWriter', () => {
   const now = 1_000_000_000_000
 
@@ -179,6 +269,11 @@ describe('buildClearPatch', () => {
       MAIL_ACCOUNT_NAME: 'Exchange',
       MAILAGENT_BACKEND: 'davmail',
       SYNC_MAILBOXES: '收件箱',
+      DAVMAIL_HOST: '127.0.0.1',
+      DAVMAIL_IMAP_PORT: '1143',
+      DAVMAIL_SMTP_PORT: '1025',
+      DAVMAIL_POC_MODE: 'false',
+      DAVMAIL_POC_CIPHER_KEY: 'cipher-xyz',
       plugins: { agent: true, island: true, llm: true, digest: true, calendar: true }
     })
     const cleared = buildClearPatch()

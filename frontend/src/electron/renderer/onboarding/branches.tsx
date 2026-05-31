@@ -84,6 +84,9 @@ export function LegacyFlow({
   // 停在 migrate phase, 解除 busy, 给一个「重新检查」按钮 (走 legacyVerify);
   // verify 通过 (db_version==17) → 正常 startVerify 流程, 否则继续等。
   const [migrating, setMigrating] = useState(false)
+  // E_BACKEND_FAILED (davmail 桥没开 / 配置错) vs E_NOT_READY (仅慢): failed 时按钮给
+  // 「重试迁移」(重跑 startMigrate) 而非「重新检查」(verify 对死后端无意义)。
+  const [migrateFailed, setMigrateFailed] = useState(false)
   // Generation token: every bail-to-detect AND every fresh startCopy bumps this.
   // Each async start* captures the gen at kickoff; its .then/.catch/.finally
   // bail out BEFORE any setState / phase advance / onRollback if the gen has
@@ -178,6 +181,7 @@ export function LegacyFlow({
     const gen = genRef.current
     setError(null)
     setMigrating(false)
+    setMigrateFailed(false)
     setBusy(true)
     setPhase('migrate')
     // 大库 CREATE INDEX 会锁表数秒；给一个宽松窗口再 surface 逃生口。
@@ -188,20 +192,23 @@ export function LegacyFlow({
         if (gen !== genRef.current) return // stale: bail / newer attempt superseded us
         clearStuck()
         if (!res?.ok) {
-          // E_NOT_READY: 大库慢迁移 waitReady 超时, 但迁移仍在进行 —— 绝不 rollback
-          // (会误删一个只是慢的成功迁移)。停在 migrate, 解除 busy, 显示「仍在升级」
-          // + 「重新检查」按钮 (recheck → legacyVerify)。
-          if (res?.error?.code === 'E_NOT_READY') {
+          // 两类"非数据错误"都绝不 rollback (COPY 完好, 误删才是灾难):
+          //  - E_NOT_READY: 大库慢迁移 waitReady 超时但仍在进行 → 停 migrate, 「重新检查」(recheck→verify)。
+          //  - E_BACKEND_FAILED: 后端崩 (davmail 桥没开 / 配置错 / spawn 失败) → 停 migrate,
+          //    显示错误 + 「重试迁移」(用户修配置后重跑 startMigrate, 不重新复制)。
+          const code = res?.error?.code
+          if (code === 'E_NOT_READY' || code === 'E_BACKEND_FAILED') {
             setVerBefore(res.dbVersionBefore ?? null)
             setVerAfter(res.dbVersionAfter ?? null)
-            setError(res.error.message)
+            setError(res.error?.message ?? '后端尚未就绪。')
             setMigrating(true)
+            setMigrateFailed(code === 'E_BACKEND_FAILED')
             setBusy(false)
             return
           }
           setError(res?.error?.message ?? '迁移失败。')
           setBusy(false)
-          // 其它真实错误 → rollback path
+          // 其它真实 (数据/异常) 错误 → rollback path
           onRollback()
           return
         }
@@ -552,7 +559,21 @@ export function LegacyFlow({
               </button>
             )}
             <div className="ml-auto">
-              {migrating ? (
+              {migrating && migrateFailed ? (
+                // E_BACKEND_FAILED: 后端崩 (davmail 桥没开 / 配置错)。recheck(verify) 无意义,
+                // 给「重试迁移」重跑 startMigrate (用户修配置后重启后端, 不重新复制)。绝不 rollback。
+                <button className="btn-primary" onClick={startMigrate} disabled={busy}>
+                  {busy ? (
+                    <>
+                      <Icon name="refresh" size={14} cls="spin" /> 重试中…
+                    </>
+                  ) : (
+                    <>
+                      <Icon name="refresh" size={14} /> 重试迁移
+                    </>
+                  )}
+                </button>
+              ) : migrating ? (
                 // E_NOT_READY: 后端仍在升级。给一个可点的「重新检查」走 recheck
                 // (legacyVerify); 通过即进 verify 流程, 否则继续等。绝不自动 rollback。
                 <button className="btn-primary" onClick={recheck} disabled={busy}>

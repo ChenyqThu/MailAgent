@@ -9,6 +9,7 @@
 //   onboarding:checkEnv      → 环境体检 (os / pythonRuntime / dataWritable / fda / automation)
 //   onboarding:openPrivacyPane → 打开系统设置隐私面板 (AllFiles / Automation)
 //   onboarding:listMailAccounts → 列 Mail.app 账户 + mailbox (走 CLI debug mail-structure)
+//   onboarding:detectDavmail → TCP 探 davmail 桥 (IMAP/SMTP) + best-effort 从老 .env 预填
 //   onboarding:syncProgress  → 同步进度 (readonly 直读 sync_store.db)
 //   onboarding:complete      → 写 .env (必填 + backend + 邮箱 + 插件 flag) + 起后端 + reload
 //
@@ -37,6 +38,7 @@ import {
   statSync,
   writeFileSync
 } from 'fs'
+import { createConnection } from 'net'
 import { homedir, release as osRelease } from 'os'
 import { join, resolve as resolvePath, sep } from 'path'
 
@@ -146,6 +148,32 @@ export interface OnboardingCompleteCfg {
   MAILAGENT_BACKEND?: 'applescript' | 'davmail'
   SYNC_MAILBOXES?: string
   plugins?: Partial<Record<PluginKey, boolean>>
+  // — DavMail 连接配置 (仅 MAILAGENT_BACKEND==='davmail' 时落 patch)。host/port 非空
+  //   才写; POC_MODE 总写 'true'/'false'; cipher 仅非空写。
+  DAVMAIL_HOST?: string
+  DAVMAIL_IMAP_PORT?: string
+  DAVMAIL_SMTP_PORT?: string
+  DAVMAIL_POC_MODE?: 'true' | 'false'
+  DAVMAIL_POC_CIPHER_KEY?: string
+}
+
+/** onboarding:detectDavmail 结果 (renderer ↔ main)。bridgeUp = IMAP 端口可达。
+ *  detected = best-effort 从老 .env 读出的预填值; cipher 绝不明文回传, 只回 hasCipher。 */
+export interface DetectDavmailResult {
+  bridgeUp: boolean
+  imapReachable: boolean
+  smtpReachable: boolean
+  host: string
+  imapPort: number
+  smtpPort: number
+  detected: {
+    host?: string
+    imapPort?: number
+    smtpPort?: number
+    pocMode?: boolean
+    hasCipher?: boolean
+    userEmail?: string
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,21 +222,43 @@ export function buildCompletePatch(cfg: OnboardingCompleteCfg): {
 
   // 2) backend (默认 applescript; 只接受白名单两值, 否则回落默认避免写脏值)。
   const backend = cfg.MAILAGENT_BACKEND
-  patch['MAILAGENT_BACKEND'] = backend === 'davmail' ? 'davmail' : 'applescript'
+  const isDavmail = backend === 'davmail'
+  patch['MAILAGENT_BACKEND'] = isDavmail ? 'davmail' : 'applescript'
 
   // 3) SYNC_MAILBOXES (逗号拼接的字符串, 直接透传 trim)。
   if (typeof cfg.SYNC_MAILBOXES === 'string' && cfg.SYNC_MAILBOXES.trim() !== '') {
     patch['SYNC_MAILBOXES'] = cfg.SYNC_MAILBOXES.trim()
   }
 
-  // 4) 插件 flag (显式写 true/false, 让向导能关掉之前开过的项)。
+  // 4) DavMail 连接配置 (仅 davmail 模式写; applescript 模式完全不碰这些 key)。
+  //    host/port 非空才写; POC_MODE 总写 'true'/'false' (pydantic bool); cipher 仅非空写。
+  if (isDavmail) {
+    for (const key of ['DAVMAIL_HOST', 'DAVMAIL_IMAP_PORT', 'DAVMAIL_SMTP_PORT'] as const) {
+      const v = cfg[key]
+      if (typeof v === 'string' && v.trim() !== '') patch[key] = v.trim()
+    }
+    patch['DAVMAIL_POC_MODE'] = cfg.DAVMAIL_POC_MODE === 'true' ? 'true' : 'false'
+    const cipher = cfg.DAVMAIL_POC_CIPHER_KEY
+    if (typeof cipher === 'string' && cipher.trim() !== '') {
+      patch['DAVMAIL_POC_CIPHER_KEY'] = cipher.trim()
+    }
+  }
+
+  // 5) 插件 flag (显式写 true/false, 让向导能关掉之前开过的项)。
   const plugins = cfg.plugins ?? {}
   for (const pk of Object.keys(PLUGIN_FLAG_MAP) as PluginKey[]) {
     const flagKey = PLUGIN_FLAG_MAP[pk]
     patch[flagKey] = plugins[pk] === true ? 'true' : 'false'
   }
 
-  const missing = ONBOARDING_REQUIRED_KEYS.filter((k) => !patch[k])
+  // 6) 必填校验。两后端都要核心三项 (NOTION_TOKEN/EMAIL_DATABASE_ID/USER_EMAIL)。
+  //    davmail 额外要求一种认证方式 (POC 默认密钥 或 非空 cipher), 否则
+  //    DavMailConnectionError —— 加一项可读 missing 提示。
+  const missing: string[] = ONBOARDING_REQUIRED_KEYS.filter((k) => !patch[k])
+  if (isDavmail) {
+    const hasAuth = patch['DAVMAIL_POC_MODE'] === 'true' || !!patch['DAVMAIL_POC_CIPHER_KEY']
+    if (!hasAuth) missing.push('DAVMAIL_AUTH')
+  }
   return { patch, missing }
 }
 
@@ -541,6 +591,122 @@ async function listMailAccounts(): Promise<ListMailAccountsResult> {
 }
 
 // ---------------------------------------------------------------------------
+// onboarding:detectDavmail
+// ---------------------------------------------------------------------------
+
+/** TCP 探活: 2s 内能 connect 到 host:port → true; error/timeout → false。绝不抛,
+ *  务必 destroy socket 释放句柄。davmail 桥探测用 (IMAP 1143 / SMTP 1025)。 */
+function tcpReachable(host: string, port: number, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      try {
+        socket.destroy()
+      } catch {
+        /* destroy 失败无所谓, GC 回收。 */
+      }
+      resolve(ok)
+    }
+    let socket: ReturnType<typeof createConnection>
+    try {
+      socket = createConnection({ host, port })
+    } catch {
+      resolve(false)
+      return
+    }
+    socket.setTimeout(timeoutMs)
+    socket.once('connect', () => done(true))
+    socket.once('timeout', () => done(false))
+    socket.once('error', () => done(false))
+  })
+}
+
+/** best-effort 从老 ~/Documents/MailAgent/.env 读 davmail 预填值。读不到回空对象。
+ *  cipher 绝不明文回传 —— 只回 hasCipher boolean。 */
+function readLegacyDavmailHints(): DetectDavmailResult['detected'] {
+  const out: DetectDavmailResult['detected'] = {}
+  try {
+    const p = legacyOldEnvPath()
+    if (!existsSync(p)) return out
+    const vals = parseEnvValues(readFileSync(p, 'utf8'))
+    const host = vals['DAVMAIL_HOST']
+    if (host) out.host = host
+    const imapPort = Number.parseInt(vals['DAVMAIL_IMAP_PORT'] ?? '', 10)
+    if (Number.isFinite(imapPort)) out.imapPort = imapPort
+    const smtpPort = Number.parseInt(vals['DAVMAIL_SMTP_PORT'] ?? '', 10)
+    if (Number.isFinite(smtpPort)) out.smtpPort = smtpPort
+    const pocMode = vals['DAVMAIL_POC_MODE']
+    if (pocMode != null) out.pocMode = /^(true|1|yes)$/i.test(pocMode.trim())
+    // 新名或旧名任一非空都算"已配 cipher"(预填时提示用户已有密钥, 不必重填)。
+    out.hasCipher =
+      (vals['DAVMAIL_POC_CIPHER_KEY'] ?? '').trim() !== '' ||
+      (vals['DAVMAIL_CIPHER_KEY'] ?? '').trim() !== ''
+    const userEmail = vals['USER_EMAIL']
+    if (userEmail) out.userEmail = userEmail
+  } catch {
+    /* 读不了就回已收集的部分 (可能为空), 不抛。 */
+  }
+  return out
+}
+
+/** 解析 .env 文本为 key→value (去成对引号; 含空值)。与 legacyEnvManagedPatch 同口径,
+ *  但不过滤空串/managed 白名单 (detected 预填需要原始值含 hasCipher 判定)。 */
+function parseEnvValues(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const eq = line.indexOf('=')
+    if (eq <= 0) continue
+    const key = line.slice(0, eq).trim()
+    let val = line.slice(eq + 1).trim()
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1)
+    }
+    if (key) out[key] = val
+  }
+  return out
+}
+
+async function detectDavmail(raw: unknown): Promise<DetectDavmailResult> {
+  // arg 或默认 127.0.0.1/1143/1025。
+  const arg =
+    typeof raw === 'object' && raw !== null
+      ? (raw as { host?: unknown; imapPort?: unknown; smtpPort?: unknown })
+      : {}
+  const host =
+    typeof arg.host === 'string' && arg.host.trim() !== '' ? arg.host.trim() : '127.0.0.1'
+  const imapPort = typeof arg.imapPort === 'number' && arg.imapPort > 0 ? arg.imapPort : 1143
+  const smtpPort = typeof arg.smtpPort === 'number' && arg.smtpPort > 0 ? arg.smtpPort : 1025
+
+  let imapReachable = false
+  let smtpReachable = false
+  try {
+    ;[imapReachable, smtpReachable] = await Promise.all([
+      tcpReachable(host, imapPort),
+      tcpReachable(host, smtpPort)
+    ])
+  } catch {
+    imapReachable = false
+    smtpReachable = false
+  }
+
+  const detected = readLegacyDavmailHints()
+
+  return {
+    bridgeUp: imapReachable,
+    imapReachable,
+    smtpReachable,
+    host,
+    imapPort,
+    smtpPort,
+    detected
+  }
+}
+
+// ---------------------------------------------------------------------------
 // onboarding:syncProgress
 // ---------------------------------------------------------------------------
 
@@ -709,6 +875,20 @@ async function commitConfig(raw: unknown): Promise<OnboardingResult> {
     // rollback 的世代比对会发现数据已易主, 放弃删除 (防删新用户刚建的库)。
     bumpDataEpoch()
     const ready = app.isPackaged ? await mgr.waitReady() : true
+
+    // 后端启动失败 (davmail 桥未跑 / 端口不通 / cipher 错 → probe 失败 → 进程 exit →
+    // state='failed') 不能当"慢启动"放行 —— 否则用户被带进 StepSync 假象 (后端其实死了)。
+    // 区分 failed (真崩, 配置错, 需用户修) vs 仅超时 (慢, ready=false 但仍 starting)。
+    if (app.isPackaged && !ready && mgr.getState() === 'failed') {
+      return {
+        ok: false,
+        error: {
+          code: 'E_BACKEND_FAILED',
+          message:
+            '后端启动失败。davmail 模式请确认 davmail-poc 桥在运行 (IMAP/SMTP 端口可达) + 认证 (PoC 密钥或 cipher) 正确; 检查配置后重试。'
+        }
+      }
+    }
 
     // 不 reload —— 向导继续走 Sync/Plugins/Done。
     return { ok: true, ready }
@@ -942,7 +1122,16 @@ function legacyEnvManagedPatch(): Record<string, string> {
   }
   // writePatch 自带 MANAGED_ENV_KEYS 白名单校验, 但它遇到非 managed key 会
   // 整体 E_INVALID_KEY 拒绝 → 这里先过滤掉非 managed key, 只留可写部分。
-  return filterManagedOnly(out)
+  const managed = filterManagedOnly(out)
+  // 旧文档名兼容 (codex #davmail BLOCKER): 后端 config.py 只读 env=DAVMAIL_POC_CIPHER_KEY;
+  // 旧文档/报错曾让用户配 DAVMAIL_CIPHER_KEY。若老 .env 用旧名且无新名, 映射到新名让后端
+  // 读得到 (否则按旧文档配过 cipher 的非 PoC davmail 老用户迁移后后端起不来 → 死路),
+  // 并去掉旧名, 只留一个 canonical key。
+  if (managed['DAVMAIL_CIPHER_KEY'] && !managed['DAVMAIL_POC_CIPHER_KEY']) {
+    managed['DAVMAIL_POC_CIPHER_KEY'] = managed['DAVMAIL_CIPHER_KEY']
+  }
+  delete managed['DAVMAIL_CIPHER_KEY']
+  return managed
 }
 
 /** 过滤出 MANAGED_ENV_KEYS 白名单内的键 (writePatch 遇非 managed key 会整体
@@ -983,12 +1172,22 @@ async function legacyMigrate(): Promise<LegacyMigrateResult> {
     // 返回 E_NOT_READY 让 renderer 停在 migrate 等待 / 重新检查, 而非 rollback。
     // dbVersion 仍带回, 供 renderer 显示进度。
     if (ready === false) {
+      // 区分: state='failed' = 后端崩 (davmail 桥没开 / 配置错 / spawn 失败) —— 不是"慢",
+      // 重试 copy / 自动 rollback 都不对, 让用户修配置后重试迁移 (E_BACKEND_FAILED);
+      // 仅超时 = 大库慢迁移 → E_NOT_READY (继续等待 / 重新检查)。两者都不自动 rollback (COPY 完好)。
+      const failed = mgr.getState() === 'failed'
       return {
         ok: false,
-        error: {
-          code: 'E_NOT_READY',
-          message: '数据库升级耗时较长, 后端尚未就绪 (大库可能需数分钟)。可继续等待后重新检查。'
-        },
+        error: failed
+          ? {
+              code: 'E_BACKEND_FAILED',
+              message:
+                '迁移后端启动失败 (davmail 桥未运行 / 配置错误？)。原始旧数据未受影响, 请检查后重试迁移。'
+            }
+          : {
+              code: 'E_NOT_READY',
+              message: '数据库升级耗时较长, 后端尚未就绪 (大库可能需数分钟)。可继续等待后重新检查。'
+            },
         dbVersionBefore,
         dbVersionAfter,
         ready
@@ -1109,15 +1308,29 @@ async function legacyRollback(): Promise<LegacyRollbackResult> {
   }
 }
 
+/** davmail 连接键 (buildCompletePatch 在 davmail 模式可写的集合; buildClearPatch
+ *  据此对称清除, 避免 rollback 残留半截 davmail 配置)。 */
+const DAVMAIL_WRITABLE_KEYS = [
+  'DAVMAIL_HOST',
+  'DAVMAIL_IMAP_PORT',
+  'DAVMAIL_SMTP_PORT',
+  'DAVMAIL_POC_MODE',
+  'DAVMAIL_POC_CIPHER_KEY',
+  // 旧名也清, rollback 不残留 (即便极端情况下被写过)。
+  'DAVMAIL_CIPHER_KEY'
+] as const
+
 /** 构造 rollback 清键 patch (null→删): 对称于 buildCompletePatch 的写入集 ——
- *  必填三项 + 可选账户字段 + MAILAGENT_BACKEND + SYNC_MAILBOXES + 全部插件 flag,
- *  让 rollback 把 .env 干净复位到 'new' 态 (不残留 backend/插件半截配置)。 */
+ *  必填三项 + 可选账户字段 + MAILAGENT_BACKEND + SYNC_MAILBOXES + davmail 连接键 +
+ *  全部插件 flag, 让 rollback 把 .env 干净复位到 'new' 态 (不残留 backend/davmail/
+ *  插件半截配置)。 */
 export function buildClearPatch(): Record<string, null> {
   const out: Record<string, null> = {}
   // 必填三项 + 可选账户字段 (= ONBOARDING_WRITABLE_KEYS 全集) → 删。
   for (const k of ONBOARDING_WRITABLE_KEYS) out[k] = null
   out['MAILAGENT_BACKEND'] = null
   out['SYNC_MAILBOXES'] = null
+  for (const k of DAVMAIL_WRITABLE_KEYS) out[k] = null
   for (const pk of Object.keys(PLUGIN_FLAG_MAP) as PluginKey[]) out[PLUGIN_FLAG_MAP[pk]] = null
   return out
 }
@@ -1163,6 +1376,7 @@ export function registerOnboardingHandlers(): void {
   ipcMain.handle('onboarding:checkEnv', () => checkEnv())
   ipcMain.handle('onboarding:openPrivacyPane', (_evt, arg: unknown) => openPrivacyPane(arg))
   ipcMain.handle('onboarding:listMailAccounts', () => listMailAccounts())
+  ipcMain.handle('onboarding:detectDavmail', (_evt, arg: unknown) => detectDavmail(arg))
   ipcMain.handle('onboarding:syncProgress', () => syncProgress())
   ipcMain.handle('onboarding:complete', handleComplete)
   // NEW flow 提交时机前移: commitConfig 写核心 .env + 起后端 (不 reload), finalize

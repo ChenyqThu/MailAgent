@@ -23,7 +23,14 @@ import {
   type IconName
 } from './components'
 import * as ipc from './ipc'
-import type { BackendKind, CheckEnvResult, CompleteConfig, PluginFlags, Status } from './ipc'
+import type {
+  BackendKind,
+  CheckEnvResult,
+  CompleteConfig,
+  DetectDavmailResult,
+  PluginFlags,
+  Status
+} from './ipc'
 
 /* ════════════════════════════════════════════════════════════════════════
    Shared step state (lifted to OnboardingRoot)
@@ -36,7 +43,19 @@ export interface ConfigForm {
   CALENDAR_DATABASE_ID?: string
   MAIL_ACCOUNT_NAME?: string
   SYNC_MAILBOXES?: string[]
+  // — DavMail 连接配置 (仅 backend==='davmail' 时填; applescript 分支不展示/不收集)。
+  DAVMAIL_HOST?: string
+  DAVMAIL_IMAP_PORT?: string
+  DAVMAIL_SMTP_PORT?: string
+  /** PoC 默认密钥开关。true → DAVMAIL_POC_MODE=true (用默认 shared key);
+   *  false → 需填 DAVMAIL_POC_CIPHER_KEY。默认 true。 */
+  DAVMAIL_POC_MODE?: boolean
+  DAVMAIL_POC_CIPHER_KEY?: string
 }
+
+const DAVMAIL_DEFAULT_HOST = '127.0.0.1'
+const DAVMAIL_DEFAULT_IMAP_PORT = '1143'
+const DAVMAIL_DEFAULT_SMTP_PORT = '1025'
 
 export interface SubmitError {
   title: string
@@ -496,6 +515,151 @@ const HEX32 = /^[0-9a-f]{32}$/i
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const DEFAULT_MAILBOXES = ['收件箱', '发件箱', '已发送', '归档', '重要']
 
+/* ─── DavMail-specific config fields (账户/认证/桥状态/高级 host·port) ──────────
+   davmail 分支不枚举 Mail.app 账户 (USER_EMAIL 即登录名), 改为: 桥状态 banner +
+   USER_EMAIL (relabeled) + PoC 默认密钥 toggle / cipher 输入 + 高级折叠 host/port。 */
+interface DavmailFieldsProps {
+  form: ConfigForm
+  set: <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]) => void
+  blur: (k: string) => void
+  showErr: (k: string) => string | undefined
+  pocMode: boolean
+  davDetect: DetectDavmailResult | null
+}
+
+function DavmailFields({
+  form,
+  set,
+  blur,
+  showErr,
+  pocMode,
+  davDetect
+}: DavmailFieldsProps): React.JSX.Element {
+  const [advOpen, setAdvOpen] = useState(false)
+  const host = davDetect?.host ?? DAVMAIL_DEFAULT_HOST
+  const imapPort = davDetect?.imapPort ?? Number(DAVMAIL_DEFAULT_IMAP_PORT)
+  const smtpPort = davDetect?.smtpPort ?? Number(DAVMAIL_DEFAULT_SMTP_PORT)
+  return (
+    <>
+      {/* davmail 桥探测状态 (非阻断, 仅提示)。 */}
+      {davDetect === null ? (
+        <div className="fld flex items-center gap-2 text-ink-fg-2">
+          <Icon name="refresh" size={14} cls="spin" /> 正在检测 davmail 桥…
+        </div>
+      ) : davDetect.imapReachable && davDetect.smtpReachable ? (
+        // 后端 probe 要求 IMAP + SMTP 都通 (davmail_backend.probe_readiness), 故两个都可达才算成功。
+        <Banner kind="info" icon="check">
+          已检测到 davmail 桥 (IMAP {host}:{imapPort} · SMTP :{smtpPort})。
+        </Banner>
+      ) : (
+        <Banner kind="warn" icon="alert">
+          <div className="font-semibold text-[13px] mb-0.5">
+            {davDetect.imapReachable || davDetect.smtpReachable
+              ? 'davmail 桥端口未全部就绪'
+              : '未检测到 davmail 桥'}
+          </div>
+          <div className="text-[12.5px] text-ink-fg-1">
+            IMAP {host}:{imapPort} {davDetect.imapReachable ? '✓ 可达' : '✗ 不通'} · SMTP :
+            {smtpPort} {davDetect.smtpReachable ? '✓ 可达' : '✗ 不通'}。请先启动 davmail-poc（
+            <span className="font-mono">pm2 start davmail-poc</span>）确保 IMAP 与 SMTP 都可达再继续
+            —— 后端启动会同时探这两个端口, 缺一个就起不来。
+          </div>
+        </Banner>
+      )}
+
+      <Field
+        label="邮箱账户 (EWS/IMAP 登录名)"
+        icon="mail"
+        required
+        error={showErr('USER_EMAIL')}
+        hint="DavMail 用它作 IMAP/SMTP 登录名 (= USER_EMAIL)"
+      >
+        <input
+          className={`fld ${showErr('USER_EMAIL') ? 'err' : ''}`}
+          placeholder="you@company.com"
+          value={form.USER_EMAIL ?? ''}
+          onChange={(e) => set('USER_EMAIL', e.target.value)}
+          onBlur={() => blur('USER_EMAIL')}
+        />
+      </Field>
+
+      <Field label="认证方式" icon="key">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[14px] text-ink-fg">使用 PoC 默认密钥</div>
+            <div className="text-[12px] text-ink-fg-2 mt-0.5">
+              开启则用内置共享密钥 (DAVMAIL_POC_MODE=true)；关闭需手填 cipher key。
+            </div>
+          </div>
+          <Toggle on={pocMode} onChange={(v) => set('DAVMAIL_POC_MODE', v)} />
+        </div>
+      </Field>
+
+      {!pocMode && (
+        <Field
+          label="Cipher Key (DAVMAIL_POC_CIPHER_KEY)"
+          icon="lock"
+          required
+          error={showErr('DAVMAIL_POC_CIPHER_KEY')}
+          hint="DavMail OAuth cipher 密钥 (写入 .env，镜像到钥匙串)"
+        >
+          <input
+            className={`fld mono ${showErr('DAVMAIL_POC_CIPHER_KEY') ? 'err' : ''}`}
+            placeholder="cipher key…"
+            value={form.DAVMAIL_POC_CIPHER_KEY ?? ''}
+            onChange={(e) => set('DAVMAIL_POC_CIPHER_KEY', e.target.value)}
+            onBlur={() => blur('DAVMAIL_POC_CIPHER_KEY')}
+            type="password"
+            autoComplete="off"
+          />
+        </Field>
+      )}
+
+      {/* 高级: host / port (默认 127.0.0.1 / 1143 / 1025, 可被 detect 预填覆盖)。 */}
+      <div>
+        <button
+          type="button"
+          className="flex items-center gap-1.5 text-[13px] text-ink-fg-2 hover:text-ink-fg transition"
+          onClick={() => setAdvOpen(!advOpen)}
+        >
+          <Icon name={advOpen ? 'x' : 'settings'} size={13} />{' '}
+          {advOpen ? '收起高级连接设置' : '高级连接设置 (host / port)'}
+        </button>
+        {advOpen && (
+          <div className="flex flex-col gap-3 mt-3 step-enter">
+            <Field label="DavMail Host" icon="server">
+              <input
+                className="fld mono"
+                placeholder={DAVMAIL_DEFAULT_HOST}
+                value={form.DAVMAIL_HOST ?? ''}
+                onChange={(e) => set('DAVMAIL_HOST', e.target.value)}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="IMAP Port" icon="server">
+                <input
+                  className="fld mono"
+                  placeholder={DAVMAIL_DEFAULT_IMAP_PORT}
+                  value={form.DAVMAIL_IMAP_PORT ?? ''}
+                  onChange={(e) => set('DAVMAIL_IMAP_PORT', e.target.value)}
+                />
+              </Field>
+              <Field label="SMTP Port" icon="server">
+                <input
+                  className="fld mono"
+                  placeholder={DAVMAIL_DEFAULT_SMTP_PORT}
+                  value={form.DAVMAIL_SMTP_PORT ?? ''}
+                  onChange={(e) => set('DAVMAIL_SMTP_PORT', e.target.value)}
+                />
+              </Field>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
 export interface StepConfigProps {
   form: ConfigForm
   setForm: React.Dispatch<React.SetStateAction<ConfigForm>>
@@ -518,10 +682,13 @@ export function StepConfig({
   submitError,
   setCommitError
 }: StepConfigProps): React.JSX.Element {
+  const isDavmail = backend === 'davmail'
   const [accounts, setAccounts] = useState<string[] | null>(null) // null = loading
   const [mailboxes, setMailboxes] = useState<string[]>(DEFAULT_MAILBOXES)
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
+  // davmail 桥探测状态: null = 检测中 (含 hang 兜底降级), 否则结果对象。
+  const [davDetect, setDavDetect] = useState<DetectDavmailResult | null>(null)
   // commitConfig 提交超时逃生 (BLOCKER 2 模式): arm 在调用前 + attemptId 标记本次
   // 提交, 迟到结果按 attemptId 丢弃, 超时 setBusy(false) + 错误提示恢复按钮可点。
   const [slow, setSlow] = useState(false)
@@ -529,17 +696,27 @@ export function StepConfig({
   const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const alive = useRef(true)
   const detectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // davmail 分支只在进入时预填一次 (detect 结果回填 host/port/pocMode/userEmail);
+  // 用户随后手改不被覆盖。
+  const davPrefilled = useRef(false)
 
   useEffect(() => {
     alive.current = true
+    // davmail 后端不枚举 Mail.app 账户 (debug mail-structure 是 AppleScript-only,
+    // davmail 无账户枚举, USER_EMAIL 即登录名)。不调 listMailAccounts —— davmail 分支
+    // 的账户 UI (accounts 消费方) 全在 !isDavmail 后渲染, 这里直接跳过即可。
+    if (isDavmail) {
+      return () => {
+        alive.current = false
+      }
+    }
     // ~8s hang bound (twin of StepFDA's scanTimer): listMailAccounts() walks
-    // AppleScript / davmail to enumerate accounts and can HANG (no resolve AND
-    // no reject) on enterprise networks or a stuck main-process handler. The
-    // .catch below only covers reject — without this timeout, accounts stays
-    // null forever → '检测中…' spinner with no input → MAIL_ACCOUNT_NAME never
-    // fillable → valid never true → 主按钮永久 disabled. On timeout we degrade
-    // to empty accounts (free-text input branch) so the user can type the
-    // account name and proceed.
+    // AppleScript to enumerate accounts and can HANG (no resolve AND no reject)
+    // on a stuck main-process handler. The .catch below only covers reject —
+    // without this timeout, accounts stays null forever → '检测中…' spinner with
+    // no input → MAIL_ACCOUNT_NAME never fillable → valid never true → 主按钮
+    // 永久 disabled. On timeout we degrade to empty accounts (free-text input
+    // branch) so the user can type the account name and proceed.
     if (detectTimer.current) clearTimeout(detectTimer.current)
     detectTimer.current = setTimeout(() => {
       if (!alive.current) return
@@ -570,7 +747,82 @@ export function StepConfig({
       alive.current = false
       clearDetectTimer()
     }
-  }, [])
+  }, [isDavmail])
+
+  // davmail 桥探测 (davmail 分支专属)。~6s hang 兜底: detect 永不返回时降级为
+  // bridgeUp=false 的占位结果, 让 banner 显示"未检测到桥"而不是永久转圈。
+  const davTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!isDavmail) return
+    alive.current = true
+    if (davTimer.current) clearTimeout(davTimer.current)
+    davTimer.current = setTimeout(() => {
+      if (!alive.current) return
+      setDavDetect((prev) =>
+        prev === null
+          ? {
+              bridgeUp: false,
+              imapReachable: false,
+              smtpReachable: false,
+              host: DAVMAIL_DEFAULT_HOST,
+              imapPort: Number(DAVMAIL_DEFAULT_IMAP_PORT),
+              smtpPort: Number(DAVMAIL_DEFAULT_SMTP_PORT),
+              detected: {}
+            }
+          : prev
+      )
+    }, 6000)
+    const clearDavTimer = (): void => {
+      if (davTimer.current) {
+        clearTimeout(davTimer.current)
+        davTimer.current = null
+      }
+    }
+    void ipc
+      .detectDavmail()
+      .then((r) => {
+        if (!alive.current || !r) return
+        setDavDetect(r)
+        // 从 detect 预填 host/port/pocMode/userEmail (仅首次, 不覆盖用户手改)。
+        if (!davPrefilled.current) {
+          davPrefilled.current = true
+          const d = r.detected ?? {}
+          setForm((f) => {
+            const next = { ...f }
+            if (next.DAVMAIL_HOST == null) next.DAVMAIL_HOST = d.host ?? DAVMAIL_DEFAULT_HOST
+            if (next.DAVMAIL_IMAP_PORT == null)
+              next.DAVMAIL_IMAP_PORT =
+                d.imapPort != null ? String(d.imapPort) : DAVMAIL_DEFAULT_IMAP_PORT
+            if (next.DAVMAIL_SMTP_PORT == null)
+              next.DAVMAIL_SMTP_PORT =
+                d.smtpPort != null ? String(d.smtpPort) : DAVMAIL_DEFAULT_SMTP_PORT
+            if (next.DAVMAIL_POC_MODE == null) next.DAVMAIL_POC_MODE = d.pocMode ?? true
+            if ((next.USER_EMAIL ?? '') === '' && d.userEmail) next.USER_EMAIL = d.userEmail
+            return next
+          })
+        }
+      })
+      .catch(() => {
+        if (!alive.current) return
+        // 探测失败不阻断: 给 bridgeUp=false 占位 + 默认值, 用户仍可手填后继续。
+        setDavDetect(
+          (prev) =>
+            prev ?? {
+              bridgeUp: false,
+              imapReachable: false,
+              smtpReachable: false,
+              host: DAVMAIL_DEFAULT_HOST,
+              imapPort: Number(DAVMAIL_DEFAULT_IMAP_PORT),
+              smtpPort: Number(DAVMAIL_DEFAULT_SMTP_PORT),
+              detected: {}
+            }
+        )
+      })
+      .finally(clearDavTimer)
+    return () => {
+      clearDavTimer()
+    }
+  }, [isDavmail, setForm])
 
   // Clear submit-timeout on unmount (detectTimer 已在上面 effect 的 cleanup 清)。
   useEffect(() => {
@@ -636,12 +888,22 @@ export function StepConfig({
       })
   }
 
+  // davmail PoC 模式默认开 (form 字段 undefined 视为 true)。
+  const pocMode = form.DAVMAIL_POC_MODE !== false
   const errs: Record<string, string> = {}
   if (!form.USER_EMAIL) errs.USER_EMAIL = '必填项'
   else if (!EMAIL_RE.test(form.USER_EMAIL)) errs.USER_EMAIL = '邮箱格式不正确'
   if (!form.NOTION_TOKEN) errs.NOTION_TOKEN = '必填项'
   if (!form.EMAIL_DATABASE_ID) errs.EMAIL_DATABASE_ID = '必填项'
-  if (!form.MAIL_ACCOUNT_NAME) errs.MAIL_ACCOUNT_NAME = '请选择账户'
+  if (isDavmail) {
+    // davmail 不要求 MAIL_ACCOUNT_NAME (USER_EMAIL 即登录名); 但要求一种认证方式:
+    // PoC 默认密钥 或 非空 cipher。
+    if (!pocMode && !(form.DAVMAIL_POC_CIPHER_KEY ?? '').trim()) {
+      errs.DAVMAIL_POC_CIPHER_KEY = '请填写密钥或改用 PoC 默认密钥'
+    }
+  } else if (!form.MAIL_ACCOUNT_NAME) {
+    errs.MAIL_ACCOUNT_NAME = '请选择账户'
+  }
 
   const warns: Record<string, string> = {}
   if (form.NOTION_TOKEN && !/^(secret_|ntn_)/.test(form.NOTION_TOKEN))
@@ -684,70 +946,88 @@ export function StepConfig({
         )}
 
         <div className="flex flex-col gap-4 mt-5">
-          <Field
-            label="Mail.app 账户名"
-            icon="mail"
-            required
-            error={showErr('MAIL_ACCOUNT_NAME')}
-            hint={
-              accounts === null
-                ? '正在检测 Mail.app 账户…'
-                : accountsEmpty
-                  ? '未检测到账户，请手动填写 Mail.app 里的账户名'
-                  : '来自 mailagent debug mail-structure'
-            }
-          >
-            {accounts === null ? (
-              <div className="fld flex items-center gap-2 text-ink-fg-2">
-                <Icon name="refresh" size={14} cls="spin" /> 检测中…
-              </div>
-            ) : accountsEmpty ? (
-              <input
-                className={`fld ${showErr('MAIL_ACCOUNT_NAME') ? 'err' : ''}`}
-                placeholder="例如 Exchange / iCloud"
-                value={form.MAIL_ACCOUNT_NAME ?? ''}
-                onChange={(e) => set('MAIL_ACCOUNT_NAME', e.target.value)}
-                onBlur={() => blur('MAIL_ACCOUNT_NAME')}
-              />
-            ) : (
-              <div className="selwrap">
-                <select
-                  className={`fld ${showErr('MAIL_ACCOUNT_NAME') ? 'err' : ''}`}
-                  value={form.MAIL_ACCOUNT_NAME ?? ''}
-                  onChange={(e) => {
-                    set('MAIL_ACCOUNT_NAME', e.target.value)
-                    blur('MAIL_ACCOUNT_NAME')
-                  }}
-                  onBlur={() => blur('MAIL_ACCOUNT_NAME')}
-                >
-                  <option value="" disabled>
-                    请选择要同步的账户
-                  </option>
-                  {accounts.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </Field>
+          {isDavmail ? (
+            <DavmailFields
+              form={form}
+              set={set}
+              blur={blur}
+              showErr={showErr}
+              pocMode={pocMode}
+              davDetect={davDetect}
+            />
+          ) : (
+            <>
+              <Field
+                label="Mail.app 账户名"
+                icon="mail"
+                required
+                error={showErr('MAIL_ACCOUNT_NAME')}
+                hint={
+                  accounts === null
+                    ? '正在检测 Mail.app 账户…'
+                    : accountsEmpty
+                      ? '未检测到账户，请手动填写 Mail.app 里的账户名'
+                      : '来自 mailagent debug mail-structure'
+                }
+              >
+                {accounts === null ? (
+                  <div className="fld flex items-center gap-2 text-ink-fg-2">
+                    <Icon name="refresh" size={14} cls="spin" /> 检测中…
+                  </div>
+                ) : accountsEmpty ? (
+                  <input
+                    className={`fld ${showErr('MAIL_ACCOUNT_NAME') ? 'err' : ''}`}
+                    placeholder="例如 Exchange / iCloud"
+                    value={form.MAIL_ACCOUNT_NAME ?? ''}
+                    onChange={(e) => set('MAIL_ACCOUNT_NAME', e.target.value)}
+                    onBlur={() => blur('MAIL_ACCOUNT_NAME')}
+                  />
+                ) : (
+                  <div className="selwrap">
+                    <select
+                      className={`fld ${showErr('MAIL_ACCOUNT_NAME') ? 'err' : ''}`}
+                      value={form.MAIL_ACCOUNT_NAME ?? ''}
+                      onChange={(e) => {
+                        set('MAIL_ACCOUNT_NAME', e.target.value)
+                        blur('MAIL_ACCOUNT_NAME')
+                      }}
+                      onBlur={() => blur('MAIL_ACCOUNT_NAME')}
+                    >
+                      <option value="" disabled>
+                        请选择要同步的账户
+                      </option>
+                      {accounts.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </Field>
+
+              <Field
+                label="用户邮箱 (USER_EMAIL)"
+                icon="mail"
+                required
+                error={showErr('USER_EMAIL')}
+              >
+                <input
+                  className={`fld ${showErr('USER_EMAIL') ? 'err' : ''}`}
+                  placeholder="you@company.com"
+                  value={form.USER_EMAIL ?? ''}
+                  onChange={(e) => set('USER_EMAIL', e.target.value)}
+                  onBlur={() => blur('USER_EMAIL')}
+                />
+              </Field>
+            </>
+          )}
 
           <Field label="同步邮箱" icon="archive" hint="默认收件箱，可多选">
             <ChipSelect
               options={mailboxes}
               value={form.SYNC_MAILBOXES ?? ['收件箱']}
               onChange={(v) => set('SYNC_MAILBOXES', v.length ? v : ['收件箱'])}
-            />
-          </Field>
-
-          <Field label="用户邮箱 (USER_EMAIL)" icon="mail" required error={showErr('USER_EMAIL')}>
-            <input
-              className={`fld ${showErr('USER_EMAIL') ? 'err' : ''}`}
-              placeholder="you@company.com"
-              value={form.USER_EMAIL ?? ''}
-              onChange={(e) => set('USER_EMAIL', e.target.value)}
-              onBlur={() => blur('USER_EMAIL')}
             />
           </Field>
 
@@ -814,7 +1094,9 @@ export function StepConfig({
             USER_EMAIL: true,
             NOTION_TOKEN: true,
             EMAIL_DATABASE_ID: true,
-            MAIL_ACCOUNT_NAME: true
+            // davmail 不要求账户名, 但要求 cipher (非 PoC 模式时); applescript 反之。
+            MAIL_ACCOUNT_NAME: !isDavmail,
+            DAVMAIL_POC_CIPHER_KEY: isDavmail
           })
           // "开始同步" 现在提交核心配置 + 起后端 (commitConfig), 成功才进 StepSync。
           // 这样 StepSync 才能轮询到真实后端进度 (旧实现把提交放最后 StepDone,
@@ -1236,6 +1518,19 @@ export function buildCompleteConfig(
   if (acct) cfg.MAIL_ACCOUNT_NAME = acct
   const mailboxes = form.SYNC_MAILBOXES ?? []
   if (mailboxes.length > 0) cfg.SYNC_MAILBOXES = mailboxes.join(',')
+  // davmail 连接配置 (仅 davmail 后端收集; handler 在 applescript 模式忽略这些 key)。
+  if (backend === 'davmail') {
+    const host = (form.DAVMAIL_HOST ?? '').trim()
+    if (host) cfg.DAVMAIL_HOST = host
+    const imapPort = (form.DAVMAIL_IMAP_PORT ?? '').trim()
+    if (imapPort) cfg.DAVMAIL_IMAP_PORT = imapPort
+    const smtpPort = (form.DAVMAIL_SMTP_PORT ?? '').trim()
+    if (smtpPort) cfg.DAVMAIL_SMTP_PORT = smtpPort
+    // POC_MODE 默认 true (form 字段 undefined 视为 true)。
+    cfg.DAVMAIL_POC_MODE = form.DAVMAIL_POC_MODE === false ? 'false' : 'true'
+    const cipher = (form.DAVMAIL_POC_CIPHER_KEY ?? '').trim()
+    if (cipher) cfg.DAVMAIL_POC_CIPHER_KEY = cipher
+  }
   return cfg
 }
 
