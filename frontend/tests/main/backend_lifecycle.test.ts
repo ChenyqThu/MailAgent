@@ -31,7 +31,11 @@ let lastChild: FakeChild | null = null
 
 function makeFakeChild(): FakeChild {
   const ee = new EventEmitter() as FakeChild
+  // 仿真实 Node: kill() 成功发出信号后把 killed 置 true (表示"信号已发送", 不是
+  // "进程已退出")。stop() 必须靠 'exit' 事件而非 child.killed 判断进程是否真退出 —
+  // 这个 fake 行为能抓住误用 child.killed 做 SIGKILL 升级条件的回归 (codex #4)。
   ee.kill = vi.fn((_sig?: string) => {
+    ee.killed = true
     return true
   })
   ee.killed = false
@@ -189,10 +193,14 @@ describe('BackendLifecycleManager.stop — SIGTERM', () => {
     const child = lastChild!
     const stopP = mgr.stop()
     expect(child.kill).toHaveBeenCalledWith('SIGTERM')
-    // 不 emit exit, 让 grace 超时
+    // 不 emit exit, 让 grace 超时 → 升级 SIGKILL
     await vi.advanceTimersByTimeAsync(150)
-    await stopP
     expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+    // SIGKILL 后进程退出: stop() 现在会等真正 exit 再返回 (防 cpSync 与濒死后端 race),
+    // 模拟内核回收进程 → 触发 exit, stopP 随即 resolve (不必走 SIGKILL_WAIT_MS 上限)。
+    child.emit('exit', null, 'SIGKILL')
+    await stopP
+    expect(mgr.getState()).toBe('stopped')
     vi.useRealTimers()
   })
 

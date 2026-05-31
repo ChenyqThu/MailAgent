@@ -64,7 +64,69 @@ export function LegacyFlow({
   const [verBefore, setVerBefore] = useState<number | null>(null)
   const [verAfter, setVerAfter] = useState<number | null>(null)
   const [checks, setChecks] = useState<VerifyCheck[]>([])
+  // Authoritative verify result straight from the backend's `verified` flag —
+  // NOT re-derived from `checks`. The推进 button keys off this so a backend that
+  // returns verified:true with an empty/odd checks array can never trap the user.
+  const [verifiedOk, setVerifiedOk] = useState(false)
   const [backfill, setBackfill] = useState<Record<string, boolean>>({})
+  // Idle-timeout escape: when an async phase (copy/migrate/verify) runs longer
+  // than expected (or its IPC promise hangs and never resolves), surface a
+  // 返回/重试 control so the user is never钉死 on a disabled spinner button.
+  const [stuck, setStuck] = useState(false)
+  const stuckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // finish()'s bootBackend can hang (never settle): spawn wedged / FDA TCC prompt
+  // blocking the spawn / IPC reply lost. A separate idle-timer un-pins the footer
+  // so the user can still 完成 (boot here is best-effort — backend may already be
+  // running from migrate, and the main window can start it manually).
+  const finishTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [bootHung, setBootHung] = useState(false)
+  // "升级仍在进行" (E_NOT_READY): migrate handler waitReady 超时但迁移仍在跑。
+  // 停在 migrate phase, 解除 busy, 给一个「重新检查」按钮 (走 legacyVerify);
+  // verify 通过 (db_version==17) → 正常 startVerify 流程, 否则继续等。
+  const [migrating, setMigrating] = useState(false)
+  // Generation token: every bail-to-detect AND every fresh startCopy bumps this.
+  // Each async start* captures the gen at kickoff; its .then/.catch/.finally
+  // bail out BEFORE any setState / phase advance / onRollback if the gen has
+  // moved on. This isolates in-flight promises from a NEW attempt or a bail so a
+  // stale legacyInherit/Migrate/Verify can never drag the user back into an old
+  // phase — or, worst case, fire onRollback() and delete the current COPY.
+  const genRef = useRef(0)
+
+  // Clear any pending timers on unmount.
+  useEffect(() => {
+    return () => {
+      if (stuckTimer.current) clearTimeout(stuckTimer.current)
+      if (finishTimer.current) clearTimeout(finishTimer.current)
+    }
+  }, [])
+
+  // Arm the idle-timeout for a long-running phase. Cleared on resolve/reject
+  // (clearStuck) or when re-armed for the next phase.
+  const armStuck = (ms: number): void => {
+    if (stuckTimer.current) clearTimeout(stuckTimer.current)
+    setStuck(false)
+    stuckTimer.current = setTimeout(() => setStuck(true), ms)
+  }
+  const clearStuck = (): void => {
+    if (stuckTimer.current) {
+      clearTimeout(stuckTimer.current)
+      stuckTimer.current = null
+    }
+    setStuck(false)
+  }
+
+  // Bail out of a stuck async phase back to detect (safe: copy/migrate are
+  // idempotent re-runnable, and the original old data is never mutated). Bumping
+  // genRef neutralizes any still-in-flight start* promise so its late callback
+  // can't startMigrate/startVerify/onRollback after we've left the phase.
+  const bailToDetect = (): void => {
+    genRef.current++
+    clearStuck()
+    setBusy(false)
+    setError(null)
+    setMigrating(false)
+    setPhase('detect')
+  }
 
   const titleFor: Record<LegacyPhase, string> = {
     detect: '检测到旧版本数据',
@@ -75,18 +137,26 @@ export function LegacyFlow({
   }
 
   const startCopy = (): void => {
+    // New attempt → bump generation so any prior in-flight start* promise is
+    // neutralized before this one kicks off.
+    const gen = ++genRef.current
     setError(null)
     setDoubleWriter(false)
+    setMigrating(false)
     setBusy(true)
     setPhase('copy')
+    armStuck(20000)
     void ipc
       .legacyInherit(cfg)
       .then((res) => {
+        if (gen !== genRef.current) return // stale: a bail / newer attempt superseded us
+        clearStuck()
         if (!res?.ok) {
           if (res?.error?.code === 'E_DOUBLE_WRITER') {
             setDoubleWriter(true)
             setError(res.error.message)
           } else {
+            // E_MISSING_CONFIG 及其它真实错误都落这里, 显示 message + 停在 detect 可返回。
             setError(res?.error?.message ?? '复制失败，请重试。')
           }
           setBusy(false)
@@ -96,6 +166,8 @@ export function LegacyFlow({
         startMigrate()
       })
       .catch((err: unknown) => {
+        if (gen !== genRef.current) return
+        clearStuck()
         setError(`复制出错：${err instanceof Error ? err.message : String(err)}`)
         setBusy(false)
         setPhase('detect')
@@ -103,16 +175,33 @@ export function LegacyFlow({
   }
 
   const startMigrate = (): void => {
+    const gen = genRef.current
     setError(null)
+    setMigrating(false)
     setBusy(true)
     setPhase('migrate')
+    // 大库 CREATE INDEX 会锁表数秒；给一个宽松窗口再 surface 逃生口。
+    armStuck(30000)
     void ipc
       .legacyMigrate()
       .then((res) => {
+        if (gen !== genRef.current) return // stale: bail / newer attempt superseded us
+        clearStuck()
         if (!res?.ok) {
+          // E_NOT_READY: 大库慢迁移 waitReady 超时, 但迁移仍在进行 —— 绝不 rollback
+          // (会误删一个只是慢的成功迁移)。停在 migrate, 解除 busy, 显示「仍在升级」
+          // + 「重新检查」按钮 (recheck → legacyVerify)。
+          if (res?.error?.code === 'E_NOT_READY') {
+            setVerBefore(res.dbVersionBefore ?? null)
+            setVerAfter(res.dbVersionAfter ?? null)
+            setError(res.error.message)
+            setMigrating(true)
+            setBusy(false)
+            return
+          }
           setError(res?.error?.message ?? '迁移失败。')
           setBusy(false)
-          // migration failure → rollback path
+          // 其它真实错误 → rollback path
           onRollback()
           return
         }
@@ -121,20 +210,59 @@ export function LegacyFlow({
         startVerify()
       })
       .catch((err: unknown) => {
+        if (gen !== genRef.current) return
+        clearStuck()
         setError(`迁移出错：${err instanceof Error ? err.message : String(err)}`)
         setBusy(false)
         onRollback()
       })
   }
 
-  const startVerify = (): void => {
+  // E_NOT_READY 的「重新检查」: 后端可能已迁移完, 但 migrate handler 当时 waitReady
+  // 超时。轻量 legacyVerify 探一下: verified (db_version==17 + 表齐 + 行数) → 进入
+  // 正常 verify 流程; 否则仍在升级, 停在 migrate 继续等 (不 rollback)。
+  const recheck = (): void => {
+    const gen = genRef.current
     setError(null)
     setBusy(true)
-    setPhase('verify')
     void ipc
       .legacyVerify()
       .then((res) => {
+        if (gen !== genRef.current) return
+        if (res?.verified) {
+          // 迁移确已就绪 → 走正常 verify 流程渲染 checks + 推进按钮。
+          setMigrating(false)
+          startVerify()
+          return
+        }
+        // 仍未就绪: 继续等待, 保持 migrating 提示。
+        setBusy(false)
+        setMigrating(true)
+      })
+      .catch((err: unknown) => {
+        if (gen !== genRef.current) return
+        setError(`检查出错：${err instanceof Error ? err.message : String(err)}`)
+        setBusy(false)
+        setMigrating(true)
+      })
+  }
+
+  const startVerify = (): void => {
+    const gen = genRef.current
+    setError(null)
+    setMigrating(false)
+    setBusy(true)
+    setPhase('verify')
+    armStuck(15000)
+    void ipc
+      .legacyVerify()
+      .then((res) => {
+        if (gen !== genRef.current) return // stale: bail / newer attempt superseded us
+        clearStuck()
         setChecks(Array.isArray(res?.checks) ? res.checks : [])
+        // Trust the backend's authoritative verified flag — do NOT re-derive
+        // from checks (a true flag with an empty checks array must still pass).
+        setVerifiedOk(!!res?.verified)
         setBusy(false)
         if (!res?.verified) {
           // verification failed → rollback (RollbackScreen calls legacyRollback)
@@ -142,6 +270,8 @@ export function LegacyFlow({
         }
       })
       .catch((err: unknown) => {
+        if (gen !== genRef.current) return
+        clearStuck()
         setError(`校验出错：${err instanceof Error ? err.message : String(err)}`)
         setBusy(false)
         onRollback()
@@ -149,17 +279,42 @@ export function LegacyFlow({
   }
 
   // backfill → finish: boot backend if needed, then reload to app.
+  // bootBackend is best-effort here; a hung IPC must never pin both footer
+  // buttons on the busy flag forever, so a ~12s idle-timer releases busy and
+  // surfaces a "可直接完成" banner while still letting 完成 call onComplete().
   const finish = (): void => {
     setBusy(true)
+    setBootHung(false)
+    if (finishTimer.current) clearTimeout(finishTimer.current)
+    finishTimer.current = setTimeout(() => {
+      finishTimer.current = null
+      setBusy(false)
+      setBootHung(true)
+    }, 12000)
     void ipc
       .bootBackend()
       .catch(() => undefined) // backend may already be running from migrate; ignore
       .finally(() => {
+        if (finishTimer.current) {
+          clearTimeout(finishTimer.current)
+          finishTimer.current = null
+        }
         onComplete()
       })
   }
 
-  const verified = checks.length > 0 && checks.every((c) => c.pass)
+  // bootHung 逃生口 (codex #2 / BLOCKER 1 残留): bootBackend hang 时, 原"直接完成"
+  // 调的是 no-op onComplete → 进不去 app。改走主进程 enterApp (纯 reload, 不 waitReady,
+  // 必定生效)。
+  const goEnterApp = (): void => {
+    setBusy(true)
+    void ipc.enterApp().catch(() => undefined)
+  }
+
+  // Display-only: all individual check rows passed (used purely for the "校验
+  // 全部通过" banner). The推进 button uses `verifiedOk` (backend authoritative)
+  // instead, so a backend-verified result with empty/partial checks is never a trap.
+  const allChecksPass = checks.length > 0 && checks.every((c) => c.pass)
 
   return (
     <div className="wiz-content">
@@ -245,6 +400,24 @@ export function LegacyFlow({
                 </Banner>
               </div>
             )}
+            {stuck && !migrating && (
+              <div className="mt-4">
+                <Banner kind="warn" icon="clock">
+                  {phase === 'copy' ? '复制' : '迁移'}
+                  耗时偏长，可能仍在进行（大库 CREATE INDEX
+                  会锁表数秒）。可继续等待，或点下方「返回」回到上一步重试 ——
+                  原始旧数据全程只读，不会被修改。
+                </Banner>
+              </div>
+            )}
+            {migrating && (
+              <div className="mt-4">
+                <Banner kind="warn" icon="clock">
+                  {error ??
+                    '数据库升级耗时较长，后端尚未就绪（大库可能需数分钟）。升级仍在后台进行，原始旧数据未受影响。可继续等待后点「重新检查」。'}
+                </Banner>
+              </div>
+            )}
           </>
         )}
 
@@ -282,10 +455,17 @@ export function LegacyFlow({
                 </div>
               ))}
             </div>
-            {verified && (
+            {(verifiedOk || allChecksPass) && (
               <div className="mt-4">
                 <Banner kind="info" icon="check">
                   校验全部通过，0 数据丢失。
+                </Banner>
+              </div>
+            )}
+            {stuck && busy && (
+              <div className="mt-4">
+                <Banner kind="warn" icon="clock">
+                  校验耗时偏长。可继续等待，或点下方「返回」重新开始迁移（原始旧数据未受影响）。
                 </Banner>
               </div>
             )}
@@ -304,18 +484,15 @@ export function LegacyFlow({
             </p>
             <div className="flex flex-col gap-2.5 mt-6">
               {BACKFILL_CARDS.map((b) => (
-                <label
+                <button
                   key={b.key}
-                  className="ds-card flex items-center gap-3 cursor-pointer"
+                  type="button"
+                  className="ds-card flex w-full items-center gap-3 cursor-pointer text-left"
                   style={{ padding: '12px 14px' }}
+                  onClick={() => setBackfill((s) => ({ ...s, [b.key]: !s[b.key] }))}
+                  aria-pressed={backfill[b.key] ?? false}
                 >
-                  <span
-                    className={`cb ${backfill[b.key] ? 'cb-on' : ''}`}
-                    onClick={(e) => {
-                      e.preventDefault()
-                      setBackfill((s) => ({ ...s, [b.key]: !s[b.key] }))
-                    }}
-                  />
+                  <span className={`cb ${backfill[b.key] ? 'cb-on' : ''}`} />
                   <div className="min-w-0 flex-1">
                     <div className="text-[14px] text-ink-fg">{b.name}</div>
                     <div className="text-[12px] text-ink-fg-2 mt-0.5 font-mono">
@@ -323,7 +500,7 @@ export function LegacyFlow({
                       {b.warn && <span className="text-warn"> · {b.warn}</span>}
                     </div>
                   </div>
-                </label>
+                </button>
               ))}
             </div>
             <div className="mt-4">
@@ -333,6 +510,14 @@ export function LegacyFlow({
                 SSoT，再启用 NOTION_READ_FROM_SQLITE，否则会用空值覆写 Notion。
               </Banner>
             </div>
+            {bootHung && (
+              <div className="mt-4">
+                <Banner kind="warn" icon="clock">
+                  后端启动耗时偏长，可能仍在后台进行。可直接点「完成」进入主窗口 ——
+                  若后端尚未就绪，可在主窗口手动启动同步。
+                </Banner>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -356,37 +541,79 @@ export function LegacyFlow({
           </>
         )}
         {(phase === 'copy' || phase === 'migrate') && (
-          <div className="ml-auto">
-            <button className="btn-primary" disabled>
-              {phase === 'copy' ? '复制中…' : '迁移中…'}
-            </button>
-          </div>
+          <>
+            {/* Idle-timeout escape: a hung copy/migrate IPC (handler deadlock /
+                stuck CREATE INDEX) can no longer钉死 the screen — after the
+                window elapses (or on E_NOT_READY), a 返回 link routes back to
+                detect for a retry. */}
+            {(stuck || migrating) && (
+              <button className="btn-link" onClick={bailToDetect}>
+                <Icon name="arrowLeft" size={13} /> 返回（重试）
+              </button>
+            )}
+            <div className="ml-auto">
+              {migrating ? (
+                // E_NOT_READY: 后端仍在升级。给一个可点的「重新检查」走 recheck
+                // (legacyVerify); 通过即进 verify 流程, 否则继续等。绝不自动 rollback。
+                <button className="btn-primary" onClick={recheck} disabled={busy}>
+                  {busy ? (
+                    <>
+                      <Icon name="refresh" size={14} cls="spin" /> 检查中…
+                    </>
+                  ) : (
+                    <>
+                      <Icon name="refresh" size={14} /> 重新检查
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button className="btn-primary" disabled>
+                  {phase === 'copy' ? '复制中…' : '迁移中…'}
+                </button>
+              )}
+            </div>
+          </>
         )}
         {phase === 'verify' && (
-          <div className="ml-auto">
-            <button
-              className="btn-primary"
-              disabled={!verified}
-              onClick={() => setPhase('backfill')}
-            >
-              查看补全建议 <Icon name="arrowRight" size={14} />
+          <>
+            {/* Escape hatch so the verify screen is never a one-disabled-button
+                trap: works for both a backend/UI verified disagreement (button
+                keyed off backend-authoritative verifiedOk now) and a hung verify. */}
+            <button className="btn-link" onClick={bailToDetect}>
+              <Icon name="arrowLeft" size={13} /> 返回（重试迁移）
             </button>
-          </div>
+            <div className="ml-auto">
+              <button
+                className="btn-primary"
+                disabled={busy || !verifiedOk}
+                onClick={() => setPhase('backfill')}
+              >
+                查看补全建议 <Icon name="arrowRight" size={14} />
+              </button>
+            </div>
+          </>
         )}
         {phase === 'backfill' && (
           <>
-            <button className="btn-sec" onClick={finish} disabled={busy}>
+            {/* After a hung boot (bootHung), 完成 routes straight to onComplete
+                instead of re-arming bootBackend — boot is best-effort here, so a
+                wedged spawn can never re-trap the user in another busy cycle. */}
+            <button className="btn-sec" onClick={bootHung ? goEnterApp : finish} disabled={busy}>
               跳过
             </button>
             <div className="ml-auto">
-              <button className="btn-primary" onClick={finish} disabled={busy}>
+              <button
+                className="btn-primary"
+                onClick={bootHung ? goEnterApp : finish}
+                disabled={busy}
+              >
                 {busy ? (
                   <>
                     <Icon name="refresh" size={14} cls="spin" /> 启动中…
                   </>
                 ) : (
                   <>
-                    完成（后台运行）
+                    {bootHung ? '直接完成' : '完成（后台运行）'}
                     <Icon name="check" size={14} sw={3} />
                   </>
                 )}
@@ -407,13 +634,44 @@ export interface HalfFlowProps {
 export function HalfFlow({ onComplete }: HalfFlowProps): React.JSX.Element {
   const [state, setState] = useState<'idle' | 'booting' | 'done' | 'error'>('idle')
   const [error, setError] = useState<string | null>(null)
+  const alive = useRef(true)
+  // bootBackend can hang (never resolve AND never reject): spawn wedged / FDA TCC
+  // prompt blocking the spawn / IPC reply lost. .catch only covers reject, so a
+  // pure hang would pin the single disabled button on '启动中…' forever. A timeout
+  // (backend boot is slower than checkEnv → ~14s) degrades to 'error' so the
+  // 重试/逃生口 become reachable. Mirrors StepFDA's degradeToWarn timer.
+  const bootTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (bootTimer.current) clearTimeout(bootTimer.current)
+    }
+  }, [])
+
+  const clearBootTimer = (): void => {
+    if (bootTimer.current) {
+      clearTimeout(bootTimer.current)
+      bootTimer.current = null
+    }
+  }
 
   const boot = (): void => {
     setError(null)
     setState('booting')
+    clearBootTimer()
+    bootTimer.current = setTimeout(() => {
+      if (!alive.current) return
+      bootTimer.current = null
+      setError('后端启动超时，可重试，或返回主窗口手动启动同步。')
+      setState('error')
+    }, 14000)
     void ipc
       .bootBackend()
       .then((res) => {
+        if (!alive.current) return
+        clearBootTimer()
         if (!res?.ok) {
           setError(res?.error?.message ?? '后端启动失败，请重试。')
           setState('error')
@@ -422,6 +680,8 @@ export function HalfFlow({ onComplete }: HalfFlowProps): React.JSX.Element {
         setState('done')
       })
       .catch((err: unknown) => {
+        if (!alive.current) return
+        clearBootTimer()
         setError(`启动出错：${err instanceof Error ? err.message : String(err)}`)
         setState('error')
       })
@@ -492,6 +752,15 @@ export function HalfFlow({ onComplete }: HalfFlowProps): React.JSX.Element {
             </>
           )}
         </button>
+        {/* Always-available escape so this single-button screen is never a
+            one-disabled-button trap — even mid-boot the user can fall back to
+            the main window (which can start the backend manually). Hidden once
+            done since the primary button already enters the inbox. */}
+        {state !== 'done' && (
+          <button className="btn-link mt-3" onClick={onComplete}>
+            稍后再启动（进入主窗口）
+          </button>
+        )}
       </div>
     </div>
   )
@@ -528,24 +797,38 @@ export function DBCorruptScreen({ onRetry }: DBCorruptScreenProps): React.JSX.El
         <p className="wiz-lede">
           getDb() 抛 SQLITE_CORRUPT，无法打开 sync_store.db。请选择恢复方式 —— 优先从最近备份恢复。
         </p>
+        {/* These recovery actions are not wired to IPC in 0.1.0 (no
+            restore-from-backup / reinit / export-corrupt handlers exist yet)
+            AND this screen is currently unreachable (OnboardingRoot never sets
+            mode='dbcorrupt'). Rather than ship three live-looking no-op buttons,
+            they are rendered DISABLED with a "暂未支持" title so they don't read
+            as clickable. The only working control is 返回 below. When the
+            handlers land, drop `disabled` and wire each onClick. */}
         <div className="flex flex-col gap-2.5 mt-6">
           {options.map((o) => (
             <button
               key={o.t}
+              type="button"
+              disabled
+              title="0.1.0 暂未支持自动恢复，请手动从备份目录恢复或联系支持"
               className="ds-card flex items-center gap-3 text-left"
               style={{
                 padding: '13px 15px',
-                borderColor: o.primary ? 'rgb(var(--c-accent)/0.4)' : undefined
+                borderColor: o.primary ? 'rgb(var(--c-accent)/0.4)' : undefined,
+                opacity: 0.5,
+                cursor: 'not-allowed'
               }}
             >
               <span style={{ color: o.primary ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))' }}>
                 <Icon name={o.ic} size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="text-[14px] text-ink-fg">{o.t}</div>
+                <div className="text-[14px] text-ink-fg flex items-center gap-2">
+                  {o.t}
+                  <span className="pill pill-muted">0.1.0 暂未支持</span>
+                </div>
                 <div className="text-[12px] text-ink-fg-2 mt-0.5">{o.d}</div>
               </div>
-              <Icon name="arrowRight" size={15} style={{ color: 'rgb(var(--ink-fg-3))' }} />
             </button>
           ))}
         </div>
@@ -570,11 +853,34 @@ export function RollbackScreen({ onRetry, onBack }: RollbackScreenProps): React.
   const [rolling, setRolling] = useState(true)
   const [rolledBack, setRolledBack] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Idle-timeout escape: a hung legacyRollback (stop backend wedged / IPC reply
+  // lost) would pin `rolling=true` forever → "返回" stays disabled forever (we
+  // disable it while rolling to prevent the data-loss race below). After ~12s
+  // un-pin: release rolling + surface a "状态未知" banner so 返回 becomes reachable.
+  const [stuck, setStuck] = useState(false)
   const alive = useRef(true)
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Roll back the COPY on mount (original old data is never touched → always safe).
+  // While rolling, "返回" is disabled: a late-arriving rollback handler that does
+  // `rm DATA_ROOT/data` + clears .env must NOT race a user who已返回 'new' and
+  // re-configured (it would delete the freshly re-configured data). Normal
+  // rollback is fast, so the user can't reach 返回 before it settles; only the
+  // idle-timeout (hang) path re-opens 返回, after the rm is provably not running.
   useEffect(() => {
     alive.current = true
+    idleTimer.current = setTimeout(() => {
+      if (!alive.current) return
+      idleTimer.current = null
+      setStuck(true)
+      setRolling(false)
+    }, 12000)
+    const clearIdle = (): void => {
+      if (idleTimer.current) {
+        clearTimeout(idleTimer.current)
+        idleTimer.current = null
+      }
+    }
     void ipc
       .legacyRollback()
       .then((res) => {
@@ -587,10 +893,15 @@ export function RollbackScreen({ onRetry, onBack }: RollbackScreenProps): React.
         setError(`回滚出错：${err instanceof Error ? err.message : String(err)}`)
       })
       .finally(() => {
-        if (alive.current) setRolling(false)
+        clearIdle()
+        if (alive.current) {
+          setStuck(false)
+          setRolling(false)
+        }
       })
     return () => {
       alive.current = false
+      clearIdle()
     }
   }, [])
 
@@ -632,6 +943,13 @@ export function RollbackScreen({ onRetry, onBack }: RollbackScreenProps): React.
             <Banner kind="fail">{error}</Banner>
           </div>
         )}
+        {stuck && (
+          <div className="mt-4">
+            <Banner kind="warn" icon="clock">
+              回滚状态未知（耗时偏长，可能仍在后台进行）。原始旧数据未受影响，可安全「返回」重新配置。
+            </Banner>
+          </div>
+        )}
         <div className="mt-4">
           <Banner kind="fail">
             单向不可降级：复制出的新库已清理，原始旧数据保持迁移前状态，可用旧版本应用继续打开。
@@ -639,7 +957,12 @@ export function RollbackScreen({ onRetry, onBack }: RollbackScreenProps): React.
         </div>
       </div>
       <div className="wiz-footer">
-        <button className="btn-link" onClick={onBack}>
+        {/* 返回 disabled while rolling: prevents a late-arriving rollback (rm
+            DATA_ROOT/data + clear .env) from racing a user who已返回 'new' and
+            re-configured — that would delete the just-re-configured data. Only
+            the idle-timeout (stuck) path re-opens 返回, after the rm is provably
+            not in flight. */}
+        <button className="btn-link" onClick={onBack} disabled={rolling}>
           <Icon name="arrowLeft" size={13} /> 返回
         </button>
         <div className="ml-auto flex items-center gap-2.5">

@@ -144,7 +144,9 @@ export default function OnboardingRoot(): React.JSX.Element {
           <StepConfig
             form={form}
             setForm={setForm}
+            backend={backend}
             submitError={submitError}
+            setCommitError={setSubmitError}
             onNext={next}
             onBack={back}
           />
@@ -164,8 +166,6 @@ export default function OnboardingRoot(): React.JSX.Element {
       case 'done':
         return (
           <StepDone
-            form={form}
-            backend={backend}
             plugins={plugins}
             fdaSkipped={fdaSkipped}
             background={background}

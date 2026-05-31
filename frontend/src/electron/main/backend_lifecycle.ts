@@ -259,9 +259,17 @@ export class BackendLifecycleManager {
       exited.then(() => false),
       delay(this.stopGraceMs).then(() => true)
     ])
-    if (timedOut && !child.killed) {
+    if (timedOut) {
       // 优雅退出超时 → 强杀, 防僵尸进程。
+      // 注意: 不能用 `!child.killed` 做条件 —— Node 里 child.killed 表示"信号已成功
+      // 发送"(SIGTERM 后即 true), 不是"进程已退出"。用它会让 SIGKILL 永不触发
+      // (codex #4 BLOCKER)。timedOut=true 已严格表示 grace 内未收到 exit, 直接升级。
       child.kill('SIGKILL')
+      // SIGKILL 后必须等到进程真正 exit 再返回 (codex #3 BLOCKER): 否则 caller
+      // (legacyInherit) 的 `await stop()` 返回时, 后端可能还没死透、仍持有 DB 写锁/
+      // 正在写, 随后的 cpSync/rm 会与濒死后端 race → 损坏。SIGKILL 后内核通常毫秒级
+      // 回收, 加一个短 hard cap 防极端僵死 (uninterruptible syscall) 永久 hang。
+      await Promise.race([exited, delay(SIGKILL_WAIT_MS)])
     }
     this.child = null
   }
@@ -275,6 +283,10 @@ export class BackendLifecycleManager {
     }
   }
 }
+
+/** SIGKILL 后等待进程真正 exit 的硬上限 (codex #3): 防极端僵死 (uninterruptible
+ *  syscall) 让 stop() 永久 hang。正常 SIGKILL 内核毫秒级回收, 远不到此上限。 */
+const SIGKILL_WAIT_MS = 2000
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

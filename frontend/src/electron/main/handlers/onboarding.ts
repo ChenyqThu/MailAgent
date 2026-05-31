@@ -213,6 +213,45 @@ export function buildCompletePatch(cfg: OnboardingCompleteCfg): {
 }
 
 /**
+ * 把向导 cfg 编译成"仅核心键"的 patch —— 不含 plugin flag (插件由 finalize 阶段
+ * 单独写)。给 commitConfig (NEW flow 提交时机前移: StepConfig 起后端就只落核心
+ * 配置, 让 StepSync 能轮询真实进度; 插件勾选留到 StepDone 的 finalize 再写)。
+ *
+ * 复用 buildCompletePatch 的核心键逻辑 (账户字段 / backend / SYNC_MAILBOXES),
+ * 仅剔除 PLUGIN_FLAG_MAP 派生的 flag, 避免重复实现。buildCompletePatch 本体保留
+ * (handleComplete + legacyInherit + 单测仍用)。
+ *
+ * 返回 { patch, missing }: missing 是缺失的必填 key 列表 (调用方据此短路)。
+ */
+export function buildCoreConfigPatch(cfg: OnboardingCompleteCfg): {
+  patch: Record<string, string>
+  missing: string[]
+} {
+  const { patch, missing } = buildCompletePatch(cfg)
+  const corePatch: Record<string, string> = {}
+  const pluginFlagSet = new Set(Object.values(PLUGIN_FLAG_MAP))
+  for (const k of Object.keys(patch)) {
+    if (!pluginFlagSet.has(k)) corePatch[k] = patch[k]
+  }
+  return { patch: corePatch, missing }
+}
+
+/**
+ * 把插件勾选编译成 plugin flag patch (finalize 阶段写)。显式 true/false, 让
+ * 用户在 StepPlugins 关掉某项时也能落地。
+ */
+export function buildPluginPatch(
+  plugins: Partial<Record<PluginKey, boolean>> | undefined
+): Record<string, string> {
+  const patch: Record<string, string> = {}
+  const p = plugins ?? {}
+  for (const pk of Object.keys(PLUGIN_FLAG_MAP) as PluginKey[]) {
+    patch[PLUGIN_FLAG_MAP[pk]] = p[pk] === true ? 'true' : 'false'
+  }
+  return patch
+}
+
+/**
  * Double-writer 守卫判据 (纯函数, 便于单测)。老 data 目录的 sync_store.db-wal
  * 若存在且 mtime 在最近 windowMs 内 → 判定老后端可能仍在运行, 拒绝继承。
  *
@@ -247,6 +286,16 @@ function legacyOldEnvPath(): string {
 /** 新数据目的地 data/ 目录 = DATA_ROOT/data。 */
 function destDataDir(): string {
   return join(resolveDataRoot(), 'data')
+}
+
+// 主进程层 DATA_ROOT/data 操作世代号 (codex review #2 — 进程级竞态防护)。
+// 任何"填充 DATA_ROOT/data"的操作 (commitConfig 起后端 / legacyInherit 复制) 完成后 bump 它。
+// 慢操作 (legacyRollback) 在真正 rm 前比对世代: 若 DATA_ROOT/data 已被更新的操作重新填充
+// (epoch 变了), 放弃 rm —— 防止迟到的回滚删掉用户刚重新配置/继承的数据。
+// UI 层的 genRef 只挡渲染层迟到回调, 挡不住主进程进程级竞态, 故在此再加一道。
+let _dataEpoch = 0
+function bumpDataEpoch(): void {
+  _dataEpoch += 1
 }
 
 // ---------------------------------------------------------------------------
@@ -591,12 +640,112 @@ async function handleComplete(
     registerBackendQuitHook()
     const mgr = getBackendLifecycle()
     mgr.start()
+    // 后端开始写 DATA_ROOT/data, 标记新世代 (与 commitConfig 一致; 当前 UI 已不调
+    // 本 channel, 仅为契约一致性 —— 防未来复用时迟到 rollback 误删)。
+    bumpDataEpoch()
     const ready = app.isPackaged ? await mgr.waitReady() : true
 
     // 切回主界面: reload 窗口去掉 ?onboarding=1 (loadFile 无 search)。
     reloadToMain(evt)
 
     return { ok: true, ready }
+  } catch (err) {
+    return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:commitConfig (NEW flow 提交时机前移: 只写核心 .env + 起后端, 不 reload)
+// ---------------------------------------------------------------------------
+
+/**
+ * 写核心 .env (必填 + backend + 邮箱 + SYNC_MAILBOXES, 不含 plugin flag) + 建
+ * DATA_ROOT/data + 起后端 + 等就绪。**不 reload** —— 向导还要留在 Sync/Plugins/
+ * Done 步骤。这样 StepSync 才能轮询到真实后端进度 (旧实现把提交放在最后 StepDone,
+ * Sync 步骤时后端根本没起, 进度永远 exists=false)。
+ *
+ * plugin flag 留给 finalize 阶段 (StepDone "进入收件箱") 再写。
+ */
+async function commitConfig(raw: unknown): Promise<OnboardingResult> {
+  try {
+    if (typeof raw !== 'object' || raw === null) {
+      return {
+        ok: false,
+        error: { code: 'E_INVALID', message: 'onboarding:commitConfig 需要配置对象' }
+      }
+    }
+    const cfg = raw as OnboardingCompleteCfg
+
+    const { patch, missing } = buildCoreConfigPatch(cfg)
+    if (missing.length > 0) {
+      return { ok: false, error: { code: 'E_MISSING', message: `缺必填项: ${missing.join(', ')}` } }
+    }
+
+    // 确保 DATA_ROOT + data/ 存在 (writePatch 不建父目录; 大库附件也落 data/)。
+    const dataRoot = resolveDataRoot()
+    try {
+      mkdirSync(join(dataRoot, 'data'), { recursive: true })
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          code: 'E_MKDIR',
+          message: `无法创建数据目录 ${dataRoot}: ${(err as Error).message}`
+        }
+      }
+    }
+
+    // 写核心 .env (writePatch: 缺文件→创建 + mode 0600 + MANAGED_ENV_KEYS 校验)。
+    const res = writePatch(patch)
+    if (!res.ok) {
+      return { ok: false, error: res.error ?? { code: 'E_WRITE', message: '.env 写入失败' } }
+    }
+
+    // 起后端 + 等就绪 (打包模式; dev 走 pm2 不接管, 视为就绪)。
+    registerBackendQuitHook()
+    const mgr = getBackendLifecycle()
+    mgr.start()
+    // 后端开始写 DATA_ROOT/data, 标记新世代 —— 若用户随后返回又进 legacy 触发 rollback,
+    // rollback 的世代比对会发现数据已易主, 放弃删除 (防删新用户刚建的库)。
+    bumpDataEpoch()
+    const ready = app.isPackaged ? await mgr.waitReady() : true
+
+    // 不 reload —— 向导继续走 Sync/Plugins/Done。
+    return { ok: true, ready }
+  } catch (err) {
+    return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:finalize (NEW flow 收尾: 写 plugin flag + reload 进 app)
+// ---------------------------------------------------------------------------
+
+/**
+ * 写 plugin flag (PLUGIN_FLAG_MAP 映射) + reload 窗口进主界面。核心配置已由
+ * commitConfig 写过 + 后端已起, 这里只补插件开关并切界面。
+ *
+ * raw 形状: { plugins?: Partial<Record<PluginKey, boolean>> }
+ */
+async function finalize(evt: Electron.IpcMainInvokeEvent, raw: unknown): Promise<OnboardingResult> {
+  try {
+    const plugins =
+      typeof raw === 'object' && raw !== null
+        ? (raw as { plugins?: Partial<Record<PluginKey, boolean>> }).plugins
+        : undefined
+
+    // 写 plugin flag (best-effort: 写失败不阻断进 app, 用户可在设置里再调)。
+    const pluginPatch = buildPluginPatch(plugins)
+    if (Object.keys(pluginPatch).length > 0) {
+      const wr = writePatch(pluginPatch)
+      if (!wr.ok) {
+        return { ok: false, error: wr.error ?? { code: 'E_WRITE', message: '插件配置写入失败' } }
+      }
+    }
+
+    // 切回主界面: reload 窗口去掉 ?onboarding=1 (loadFile 无 search)。
+    reloadToMain(evt)
+    return { ok: true }
   } catch (err) {
     return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
   }
@@ -703,9 +852,33 @@ async function legacyInherit(raw: unknown): Promise<LegacyInheritResult> {
       }
     }
 
+    // CONFIG 守卫: 老 .env 无完整配置 且 NEW 表单也没填全必填 → 拒绝复制/起后端。
+    // 否则后续 migrate 会用缺配置起后端 → 崩 → rollback (误删 COPY)。让用户先用
+    // 新用户向导填配置再迁移。这道闸必须在破坏性 copy 之前。
+    const cfgMissing =
+      typeof raw === 'object' && raw !== null
+        ? buildCompletePatch(raw as OnboardingCompleteCfg).missing
+        : ONBOARDING_REQUIRED_KEYS.slice()
+    if (!legacyEnvHasConfig() && cfgMissing.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: 'E_MISSING_CONFIG',
+          message:
+            '未在旧目录找到完整配置 (Notion Token / 邮件库 ID / 邮箱)。请先用新用户向导填写配置, 再迁移。'
+        }
+      }
+    }
+
     // 不再往老目录写 .bak 副本: 老原件全程只读、从不修改, 它本身就是回滚备份
     // (rollback 只删 COPY)。往老目录写文件既多余, 又违反"原件零写入"不变式。
     const backupPath = oldDbPath // 安全网 = 未改动的老原件本体
+
+    // 进程级竞态防护 (codex #2): 复制前必须停掉任何正在写 DATA_ROOT/data 的后端 ——
+    // 可能是 NEW flow 的 commitConfig 起的后端 (用户从 StepSync 一路返回又进 legacy),
+    // 或上一次 legacyMigrate 的迁移后端 (用户 bail 后重试)。不停就 cpSync 同一路径 =
+    // 覆盖正在写的 SQLite 库 → 损坏。stop() 对无后端时是安全 no-op。
+    await getBackendLifecycle().stop()
 
     // 复制整个老 data/ → DATA_ROOT/data (recursive)。SOURCE 只读不改。
     const src = join(oldDataPath, 'data')
@@ -719,6 +892,8 @@ async function legacyInherit(raw: unknown): Promise<LegacyInheritResult> {
         error: { code: 'E_COPY', message: `复制老数据目录失败: ${(err as Error).message}` }
       }
     }
+    // COPY 已落地, 标记新世代 (rollback 据此判断 DATA_ROOT/data 是否已易主)。
+    bumpDataEpoch()
 
     // 配置: 老 .env 有完整配置 → 复制其值 (managed key only); 否则用 cfg。
     let cfgPatch: Record<string, string> = {}
@@ -803,6 +978,23 @@ async function legacyMigrate(): Promise<LegacyMigrateResult> {
     // 读迁移后 db_version (after, 走 probeDbReady)。
     const dbVersionAfter = probeDbReady(copiedDb).dbVersion
 
+    // 后端未就绪 (大库慢迁移 >120s waitReady 超时): 不报 ok:true —— 否则 renderer
+    // 直接 startVerify, verify 因后端没就绪而失败 → 误回滚一个只是慢的成功迁移。
+    // 返回 E_NOT_READY 让 renderer 停在 migrate 等待 / 重新检查, 而非 rollback。
+    // dbVersion 仍带回, 供 renderer 显示进度。
+    if (ready === false) {
+      return {
+        ok: false,
+        error: {
+          code: 'E_NOT_READY',
+          message: '数据库升级耗时较长, 后端尚未就绪 (大库可能需数分钟)。可继续等待后重新检查。'
+        },
+        dbVersionBefore,
+        dbVersionAfter,
+        ready
+      }
+    }
+
     return { ok: true, dbVersionBefore, dbVersionAfter, ready }
   } catch (err) {
     return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
@@ -873,9 +1065,19 @@ async function legacyRollback(): Promise<LegacyRollbackResult> {
     const blocked = legacyMutationBlock()
     if (blocked) return { ok: false, error: blocked }
 
+    // 捕获进场世代 (codex #2): 若 stop/rm 期间有更新的操作 (commitConfig 起后端 /
+    // legacyInherit 复制) 重新填充了 DATA_ROOT/data, 世代会变, 届时放弃 rm —— 防止
+    // 迟到的回滚 (例如 idle-timeout 放行返回后用户已重新配置) 删掉新数据。
+    const myEpoch = _dataEpoch
+
     // 停后端 (释放对 COPY db 的句柄)。
     const mgr = getBackendLifecycle()
     await mgr.stop()
+
+    // 世代比对: 期间 DATA_ROOT/data 已易主 → 不删 (这份已不是当初要回滚的 COPY)。
+    if (_dataEpoch !== myEpoch) {
+      return { ok: true }
+    }
 
     // 删 COPY (DATA_ROOT/data) —— 守卫已确保它 ≠ 老原件; 老原件 ~/Documents/MailAgent 不动。
     const dest = destDataDir()
@@ -887,6 +1089,8 @@ async function legacyRollback(): Promise<LegacyRollbackResult> {
         error: { code: 'E_RM', message: `删除 COPY 失败: ${(err as Error).message}` }
       }
     }
+    // COPY 已删, 标记新世代。
+    bumpDataEpoch()
 
     // 清 managed .env 键 (回 'new') —— 仅当 .env 是独立副本时才清。若 resolveEnvPath()
     // 解析到老原件 ~/Documents/MailAgent/.env (打包态当前正是如此), 绝不剥离用户原始
@@ -922,16 +1126,32 @@ export function buildClearPatch(): Record<string, null> {
 // onboarding:bootBackend (HALF: 不写 .env, 只起后端 + 等就绪)
 // ---------------------------------------------------------------------------
 
-async function bootBackend(): Promise<OnboardingResult> {
+async function bootBackend(evt: Electron.IpcMainInvokeEvent): Promise<OnboardingResult> {
   try {
     registerBackendQuitHook()
     const mgr = getBackendLifecycle()
     mgr.start()
     const ready = app.isPackaged ? await mgr.waitReady() : true
+    // bootBackend = "启动并进入 app" 的触发 (LegacyFlow.finish / HalfFlow 用它收尾)。
+    // 成功后 reload 窗口进主界面, 与 complete 一致 —— 否则迁移成功也进不去主界面
+    // (renderer 的 onComplete 是 no-op, 真正导航由主进程 reload 驱动)。
+    reloadToMain(evt)
     return { ok: true, ready }
   } catch (err) {
     return { ok: false, error: { code: 'E_GENERIC', message: (err as Error).message } }
   }
+}
+
+// ---------------------------------------------------------------------------
+// onboarding:enterApp (纯切界面: reload 窗口去掉 ?onboarding=1, 不碰后端/数据)
+// ---------------------------------------------------------------------------
+
+/** 所有"进入主界面"的逃生口统一走这里。修 codex #2 (BLOCKER 1 残留): bootBackend
+ *  若 hang (waitReady 永不返回) 就永不 reload, 而 renderer 的 bootHung 逃生口"直接完成"
+ *  原来只调 no-op onComplete → 进不去 app。现在改调本 IPC, 由主进程直接 reload。 */
+function enterApp(evt: Electron.IpcMainInvokeEvent): { ok: boolean } {
+  reloadToMain(evt)
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -945,6 +1165,10 @@ export function registerOnboardingHandlers(): void {
   ipcMain.handle('onboarding:listMailAccounts', () => listMailAccounts())
   ipcMain.handle('onboarding:syncProgress', () => syncProgress())
   ipcMain.handle('onboarding:complete', handleComplete)
+  // NEW flow 提交时机前移: commitConfig 写核心 .env + 起后端 (不 reload), finalize
+  // 写 plugin flag + reload 进 app。让 StepSync 能轮询真实后端进度。
+  ipcMain.handle('onboarding:commitConfig', (_evt, arg: unknown) => commitConfig(arg))
+  ipcMain.handle('onboarding:finalize', (evt, arg: unknown) => finalize(evt, arg))
 
   // LEGACY 全量迁移。
   ipcMain.handle('onboarding:detectLegacy', () => detectLegacy())
@@ -952,7 +1176,9 @@ export function registerOnboardingHandlers(): void {
   ipcMain.handle('onboarding:legacyMigrate', () => legacyMigrate())
   ipcMain.handle('onboarding:legacyVerify', () => legacyVerify())
   ipcMain.handle('onboarding:legacyRollback', () => legacyRollback())
-  ipcMain.handle('onboarding:bootBackend', () => bootBackend())
+  // bootBackend 成功后 reloadToMain(evt) 进 app (LegacyFlow/HalfFlow 收尾触发)。
+  ipcMain.handle('onboarding:bootBackend', (evt) => bootBackend(evt))
+  ipcMain.handle('onboarding:enterApp', (evt) => enterApp(evt))
 }
 
 // 暴露给 vitest 的纯逻辑 (不含 IPC 副作用)。
@@ -962,6 +1188,8 @@ export const __test__ = {
   detectLegacy,
   legacyVerify,
   buildCompletePatch,
+  buildCoreConfigPatch,
+  buildPluginPatch,
   isLikelyDoubleWriter,
   parseActiveEnvKeys,
   buildClearPatch,

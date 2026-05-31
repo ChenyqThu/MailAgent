@@ -109,7 +109,10 @@ export function StepWelcome({
         nextLabel="开始设置"
         left={
           legacyFound ? (
-            <button className="btn-link ml-2" onClick={onLegacy}>
+            <button
+              className="btn-link ml-2 inline-flex items-center gap-1.5 whitespace-nowrap"
+              onClick={onLegacy}
+            >
               <Icon name="folder" size={13} /> 我已有旧版数据，从旧目录导入
             </button>
           ) : null
@@ -157,10 +160,23 @@ export function StepFDA({ onNext, onBack, onSkip }: StepFdaProps): React.JSX.Ele
   const [results, setResults] = useState<Record<string, CheckState>>({})
   const [scanning, setScanning] = useState(true)
   const alive = useRef(true)
+  const scanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const runScan = (): void => {
     setScanning(true)
     setResults(Object.fromEntries(FDA_CHECKS.map((c) => [c.key, 'pending'])))
+    // Degrade to a non-blocking warn state (skippable). Used by both the
+    // catch (reject) path AND the timeout (hang) path so a checkEnv handler
+    // that never resolves can't pin the user on an eternal "检测中" spinner.
+    const degradeToWarn = (): void => {
+      if (!alive.current) return
+      setResults(Object.fromEntries(FDA_CHECKS.map((c) => [c.key, 'warn'])))
+      setScanning(false)
+    }
+    if (scanTimer.current) clearTimeout(scanTimer.current)
+    // ~8s timeout bound: if checkEnv hangs (no resolve/reject), fall to warn so
+    // the escape hatch ("稍后设置") becomes reachable.
+    scanTimer.current = setTimeout(degradeToWarn, 8000)
     void ipc
       .checkEnv()
       .then((r) => {
@@ -172,14 +188,17 @@ export function StepFDA({ onNext, onBack, onSkip }: StepFdaProps): React.JSX.Ele
           next[c.key] = v === 'pass' || v === 'fail' || v === 'warn' ? v : 'warn'
         }
         setResults(next)
+        setScanning(false)
       })
       .catch(() => {
-        if (!alive.current) return
         // checkEnv unavailable → don't block: system checks warn, FDA warn (skippable).
-        setResults(Object.fromEntries(FDA_CHECKS.map((c) => [c.key, 'warn'])))
+        degradeToWarn()
       })
       .finally(() => {
-        if (alive.current) setScanning(false)
+        if (scanTimer.current) {
+          clearTimeout(scanTimer.current)
+          scanTimer.current = null
+        }
       })
   }
 
@@ -192,6 +211,10 @@ export function StepFDA({ onNext, onBack, onSkip }: StepFdaProps): React.JSX.Ele
     runScan()
     return () => {
       alive.current = false
+      if (scanTimer.current) {
+        clearTimeout(scanTimer.current)
+        scanTimer.current = null
+      }
     }
   }, [])
 
@@ -261,7 +284,18 @@ export function StepFDA({ onNext, onBack, onSkip }: StepFdaProps): React.JSX.Ele
           })}
         </div>
 
-        {!fdaOk && allDone && (
+        {systemBlocked && allDone && (
+          <div className="mt-5">
+            <Banner kind="fail" icon="alert">
+              <div className="font-semibold text-[13px] mb-1">系统环境检查未通过</div>
+              <span>
+                嵌入式 Python 运行时 / 数据目录 / 系统版本存在问题，后续同步可能无法启动。
+                你可以「重新检测」，或先「跳过并继续」到后续步骤，回头在设置里修复后再启动后端。
+              </span>
+            </Banner>
+          </div>
+        )}
+        {!systemBlocked && !fdaOk && allDone && (
           <div className="mt-5">
             <Banner kind="warn">
               <div className="font-semibold text-[13px] mb-1">完全磁盘访问未授权</div>
@@ -272,7 +306,7 @@ export function StepFDA({ onNext, onBack, onSkip }: StepFdaProps): React.JSX.Ele
             </Banner>
           </div>
         )}
-        {fdaOk && allDone && (
+        {!systemBlocked && fdaOk && allDone && (
           <div className="mt-5">
             <Banner kind="info" icon="check">
               环境检查全部通过，可以继续。
@@ -283,7 +317,12 @@ export function StepFDA({ onNext, onBack, onSkip }: StepFdaProps): React.JSX.Ele
       <WizFooter
         onBack={onBack}
         secondary={
-          !fdaOk && allDone ? (
+          // Escape hatch is decoupled from systemBlocked: it shows whenever the
+          // scan finished but is not fully clean (FDA not granted OR a system
+          // check failed). systemBlocked alone used to leave the user with the
+          // primary button永久 disabled and NO secondary (the old `!fdaOk` gate
+          // hid it when fda happened to pass) — that was the headline dead-end.
+          allDone && (!fdaOk || systemBlocked) ? (
             <button
               className="btn-link"
               onClick={() => {
@@ -291,7 +330,7 @@ export function StepFDA({ onNext, onBack, onSkip }: StepFdaProps): React.JSX.Ele
                 onNext()
               }}
             >
-              稍后设置
+              {systemBlocked ? '跳过并继续' : '稍后设置'}
             </button>
           ) : null
         }
@@ -428,18 +467,19 @@ export function StepBackend({
                       高级配置》文档。
                     </li>
                   </ul>
-                  <label className="flex items-center gap-2.5 mt-3 cursor-pointer select-none">
-                    <span
-                      className={`cb ${davAck ? 'cb-on' : ''}`}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        setDavAck(!davAck)
-                      }}
-                    />
+                  {/* 整行单 button: 点方块或文字都能勾 (原 label+span 只有 14px 方块
+                      可点、文字无反应 → 勾不上 → canNext 永 false 卡死)。 */}
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2.5 mt-3 cursor-pointer select-none text-left"
+                    onClick={() => setDavAck(!davAck)}
+                    aria-pressed={davAck}
+                  >
+                    <span className={`cb ${davAck ? 'cb-on' : ''}`} />
                     <span className="text-[13px] text-ink-fg">
                       我已了解上述风险，仍要继续配置 DavMail（仅限个人评估用途）
                     </span>
-                  </label>
+                  </button>
                 </Banner>
               </div>
             )}
@@ -459,25 +499,58 @@ const DEFAULT_MAILBOXES = ['收件箱', '发件箱', '已发送', '归档', '重
 export interface StepConfigProps {
   form: ConfigForm
   setForm: React.Dispatch<React.SetStateAction<ConfigForm>>
+  /** backend selection — needed to build the cfg commitConfig writes here. */
+  backend: BackendKind
+  /** advance to StepSync after a successful commitConfig (backend now started). */
   onNext: () => void
   onBack: () => void
   submitError: SubmitError | null
+  /** lifted so OnboardingRoot/StepSync知道后端已起 (commitConfig 成功)。 */
+  setCommitError: (e: SubmitError | null) => void
 }
 
 export function StepConfig({
   form,
   setForm,
+  backend,
   onNext,
   onBack,
-  submitError
+  submitError,
+  setCommitError
 }: StepConfigProps): React.JSX.Element {
   const [accounts, setAccounts] = useState<string[] | null>(null) // null = loading
   const [mailboxes, setMailboxes] = useState<string[]>(DEFAULT_MAILBOXES)
   const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState(false)
+  // commitConfig 提交超时逃生 (BLOCKER 2 模式): arm 在调用前 + attemptId 标记本次
+  // 提交, 迟到结果按 attemptId 丢弃, 超时 setBusy(false) + 错误提示恢复按钮可点。
+  const [slow, setSlow] = useState(false)
+  const attemptId = useRef(0)
+  const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const alive = useRef(true)
+  const detectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     alive.current = true
+    // ~8s hang bound (twin of StepFDA's scanTimer): listMailAccounts() walks
+    // AppleScript / davmail to enumerate accounts and can HANG (no resolve AND
+    // no reject) on enterprise networks or a stuck main-process handler. The
+    // .catch below only covers reject — without this timeout, accounts stays
+    // null forever → '检测中…' spinner with no input → MAIL_ACCOUNT_NAME never
+    // fillable → valid never true → 主按钮永久 disabled. On timeout we degrade
+    // to empty accounts (free-text input branch) so the user can type the
+    // account name and proceed.
+    if (detectTimer.current) clearTimeout(detectTimer.current)
+    detectTimer.current = setTimeout(() => {
+      if (!alive.current) return
+      setAccounts((prev) => (prev === null ? [] : prev))
+    }, 8000)
+    const clearDetectTimer = (): void => {
+      if (detectTimer.current) {
+        clearTimeout(detectTimer.current)
+        detectTimer.current = null
+      }
+    }
     void ipc
       .listMailAccounts()
       .then((r) => {
@@ -492,14 +565,76 @@ export function StepConfig({
         // default '收件箱' mailbox; the user free-texts the account name.
         setAccounts([])
       })
+      .finally(clearDetectTimer)
     return () => {
       alive.current = false
+      clearDetectTimer()
+    }
+  }, [])
+
+  // Clear submit-timeout on unmount (detectTimer 已在上面 effect 的 cleanup 清)。
+  useEffect(() => {
+    return () => {
+      if (submitTimer.current) clearTimeout(submitTimer.current)
     }
   }, [])
 
   const set = <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]): void =>
     setForm((f) => ({ ...f, [k]: v }))
   const blur = (k: string): void => setTouched((t) => ({ ...t, [k]: true }))
+
+  // 提交核心配置 + 起后端 (commitConfig), 成功后 onNext() 进 StepSync 轮询真实进度。
+  // BLOCKER 2 模式: submit-timeout arm 在 ipc 调用前; attemptId 标记本次提交,
+  // settle 时 attemptId 不匹配 (超时已 fire / 组件重提) 则忽略迟到结果。
+  const commit = (): void => {
+    const id = ++attemptId.current
+    setCommitError(null)
+    setSlow(false)
+    setBusy(true)
+    if (submitTimer.current) clearTimeout(submitTimer.current)
+    submitTimer.current = setTimeout(() => {
+      if (!alive.current || id !== attemptId.current) return
+      submitTimer.current = null
+      // invalidate 本次提交 (codex #2): 迟到的 commitConfig resolve 会因 id !==
+      // attemptId.current 而被丢弃, 不再用旧表单 onNext() 把用户拽进 StepSync。
+      attemptId.current++
+      setSlow(true)
+      setBusy(false)
+    }, 10000)
+    const cfg = buildCompleteConfig(form, backend, {})
+    void ipc
+      .commitConfig(cfg)
+      .then((res) => {
+        if (!alive.current || id !== attemptId.current) return
+        if (submitTimer.current) {
+          clearTimeout(submitTimer.current)
+          submitTimer.current = null
+        }
+        if (!res?.ok) {
+          setCommitError({
+            title: '启动失败',
+            message: res?.error?.message ?? '配置写入或后端启动失败，请重试。'
+          })
+          setBusy(false)
+          return
+        }
+        // 后端已起 (ready 可能 false = 大库慢启动, StepSync 会继续轮询)。进 Sync。
+        setBusy(false)
+        onNext()
+      })
+      .catch((err: unknown) => {
+        if (!alive.current || id !== attemptId.current) return
+        if (submitTimer.current) {
+          clearTimeout(submitTimer.current)
+          submitTimer.current = null
+        }
+        setCommitError({
+          title: '提交出错',
+          message: err instanceof Error ? err.message : String(err)
+        })
+        setBusy(false)
+      })
+  }
 
   const errs: Record<string, string> = {}
   if (!form.USER_EMAIL) errs.USER_EMAIL = '必填项'
@@ -534,6 +669,16 @@ export function StepConfig({
             <Banner kind="fail">
               <div className="font-semibold text-[13px] mb-0.5">{submitError.title}</div>
               <div className="text-[12.5px] text-ink-fg-1">{submitError.message}</div>
+            </Banner>
+          </div>
+        )}
+        {slow && !submitError && (
+          <div className="mt-4">
+            <Banner kind="warn" icon="clock">
+              <div className="font-semibold text-[13px] mb-0.5">启动较慢</div>
+              <div className="text-[12.5px] text-ink-fg-1">
+                配置可能已写入，后端正在后台启动（大库会更久）。可点「开始同步」重试，或稍候再试。
+              </div>
             </Banner>
           </div>
         )}
@@ -663,7 +808,7 @@ export function StepConfig({
         </div>
       </div>
       <WizFooter
-        onBack={onBack}
+        onBack={busy ? null : onBack}
         onNext={() => {
           setTouched({
             USER_EMAIL: true,
@@ -671,11 +816,15 @@ export function StepConfig({
             EMAIL_DATABASE_ID: true,
             MAIL_ACCOUNT_NAME: true
           })
-          if (valid) onNext()
+          // "开始同步" 现在提交核心配置 + 起后端 (commitConfig), 成功才进 StepSync。
+          // 这样 StepSync 才能轮询到真实后端进度 (旧实现把提交放最后 StepDone,
+          // Sync 时后端没起 → 进度永远 exists=false → 首次同步永不完成)。
+          if (valid && !busy) commit()
         }}
         nextDisabled={!valid}
-        nextLabel="开始同步"
+        nextLabel={busy ? '正在启动…' : slow || submitError ? '重试' : '开始同步'}
         nextIcon="arrowRight"
+        busy={busy}
       />
     </>
   )
@@ -709,10 +858,15 @@ export function StepSync({ onNext, onBack, setBackground }: StepSyncProps): Reac
   const [bg, setBg] = useState(false)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const alive = useRef(true)
+  // In-flight guard: skip a tick if the previous syncProgress() hasn't settled,
+  // so a slow/wedged handler can't accumulate pending IPC every 1.5s.
+  const inFlight = useRef(false)
 
   useEffect(() => {
     alive.current = true
     const poll = (): void => {
+      if (inFlight.current) return
+      inFlight.current = true
       void ipc
         .syncProgress()
         .then((r) => {
@@ -734,6 +888,9 @@ export function StepSync({ onNext, onBack, setBackground }: StepSyncProps): Reac
           }
         })
         .catch(() => undefined) // never throw — keep polling, keep wizard alive
+        .finally(() => {
+          inFlight.current = false
+        })
     }
     poll()
     timer.current = setInterval(poll, 1500)
@@ -950,8 +1107,18 @@ export function StepPlugins({
   onBack
 }: StepPluginsProps): React.JSX.Element {
   const toggle = (k: string): void => setPlugins((p) => ({ ...p, [k]: !p[k] }))
+  // 依赖是否满足: core plugin (如 'notion') 恒视为已开启 —— 它从不出现在
+  // plugins[] 勾选 map 里 (用户从不勾它, 它是核心)。旧实现把 needs:'notion' 当
+  // 普通 plugins.notion 判断 → 永远 false → 依赖 notion 的 'agent' 永久置灰。
+  const depSatisfied = (key: string): boolean => {
+    const dep = PLUGINS.find((x) => x.key === key)
+    if (dep?.core) return true
+    return Boolean(plugins[key])
+  }
   const isGrayed = (pl: PluginDef): boolean =>
-    Boolean((pl.needs && !plugins[pl.needs]) || (pl.needsBackend && backend !== pl.needsBackend))
+    Boolean(
+      (pl.needs && !depSatisfied(pl.needs)) || (pl.needsBackend && backend !== pl.needsBackend)
+    )
   const grayReason = (pl: PluginDef): string =>
     pl.needsBackend && backend !== pl.needsBackend
       ? `需 ${pl.needsBackend} 后端`
@@ -1032,10 +1199,9 @@ export function StepPlugins({
   )
 }
 
-/* ─── Step 6 · Done (commits everything via complete()) ────────────────────── */
+/* ─── Step 6 · Done (writes plugin flags + reloads via finalize()) ─────────── */
 export interface StepDoneProps {
-  form: ConfigForm
-  backend: BackendKind
+  /** 仅插件勾选 (核心配置 + 后端已在 StepConfig 的 commitConfig 提交/起过)。 */
   plugins: Record<string, boolean>
   fdaSkipped: boolean
   background: boolean
@@ -1074,8 +1240,6 @@ export function buildCompleteConfig(
 }
 
 export function StepDone({
-  form,
-  backend,
   plugins,
   fdaSkipped,
   background,
@@ -1083,26 +1247,60 @@ export function StepDone({
 }: StepDoneProps): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // If complete() succeeds but the main-process window reload never arrives
+  // (handler bug / non-Electron harness / reload not triggered), the button
+  // would stay disabled "正在启动…" forever — this surfaces a retry escape.
+  const [slow, setSlow] = useState(false)
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // attemptId: 标记本次 finalize 提交, settle 时不匹配 (超时已 fire / 重提) 则忽略
+  // 迟到结果 (BLOCKER 2)。
+  const attemptId = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      if (reloadTimer.current) clearTimeout(reloadTimer.current)
+    }
+  }, [])
 
   const launch = (): void => {
+    const id = ++attemptId.current
     setError(null)
+    setSlow(false)
     setBusy(true)
-    const cfg = buildCompleteConfig(form, backend, plugins)
+    // 核心配置 + 后端已在 StepConfig 的 commitConfig 写过/起过; 这里只写 plugin
+    // flag + reload 进 app (finalize)。BLOCKER 2: reload-timeout arm 在调用前;
+    // attemptId 丢弃迟到结果。
+    if (reloadTimer.current) clearTimeout(reloadTimer.current)
+    reloadTimer.current = setTimeout(() => {
+      if (id !== attemptId.current) return
+      reloadTimer.current = null
+      setSlow(true)
+      setBusy(false)
+    }, 9000)
     void ipc
-      .complete(cfg)
+      .finalize(plugins)
       .then((res) => {
+        if (id !== attemptId.current) return // 迟到结果 (超时已 fire / 重提): 忽略
         if (!res?.ok) {
+          if (reloadTimer.current) {
+            clearTimeout(reloadTimer.current)
+            reloadTimer.current = null
+          }
           setError(res?.error?.message ?? '配置失败，请重试。')
           setBusy(false)
           return
         }
-        // On ok the main process reloads the window into the main app —
-        // keep the busy "正在启动…" state until that happens. ready===false
-        // means the backend is slow (big-library migration); main still
-        // reloads, so we keep busy and let the window swap take over.
+        // On ok the main process reloads the window into the main app — keep the
+        // busy "正在启动…" state until that happens (reloadTimer above is the
+        // safety net if the reload never arrives).
         onLaunched()
       })
       .catch((err: unknown) => {
+        if (id !== attemptId.current) return
+        if (reloadTimer.current) {
+          clearTimeout(reloadTimer.current)
+          reloadTimer.current = null
+        }
         setError(`提交出错：${err instanceof Error ? err.message : String(err)}`)
         setBusy(false)
       })
@@ -1140,6 +1338,14 @@ export function StepDone({
             <div className="text-[12.5px] text-ink-fg-1">{error}</div>
           </Banner>
         )}
+        {slow && !error && (
+          <Banner kind="warn" icon="clock">
+            <div className="font-semibold text-[13px] mb-0.5">启动较慢</div>
+            <div className="text-[12.5px] text-ink-fg-1">
+              配置已写入，后端可能正在后台启动（大库迁移会更久）。可点下方按钮重试，或稍候主窗口会自动打开。
+            </div>
+          </Banner>
+        )}
         <div className="ds-card" style={{ padding: '12px 14px' }}>
           <div className="flex items-center justify-between text-[13px]">
             <span className="text-ink-fg-1">onboarding_done</span>
@@ -1161,7 +1367,7 @@ export function StepDone({
           </>
         ) : (
           <>
-            {error ? '重试' : '进入收件箱'} <Icon name="arrowRight" size={15} />
+            {error || slow ? '重试' : '进入收件箱'} <Icon name="arrowRight" size={15} />
           </>
         )}
       </button>

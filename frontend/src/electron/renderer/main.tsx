@@ -12,6 +12,7 @@ import { createRoot } from 'react-dom/client'
 import { bootPopoutModeFromQuery } from '@shared/state/popout-mode'
 
 import App from './App'
+import { OnboardingErrorBoundary } from './onboarding/ErrorBoundary'
 import OnboardingRoot from './onboarding/OnboardingRoot'
 
 bootPopoutModeFromQuery()
@@ -21,5 +22,16 @@ bootPopoutModeFromQuery()
 const isOnboarding = new URLSearchParams(window.location.search).has('onboarding')
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>{isOnboarding ? <OnboardingRoot /> : <App />}</StrictMode>
+  <StrictMode>
+    {isOnboarding ? (
+      // ErrorBoundary so a render-phase throw (e.g. an unexpected exception that
+      // escapes the .catch degradation paths) surfaces a reload affordance
+      // instead of white-screening the onboarding window with zero escape hatch.
+      <OnboardingErrorBoundary>
+        <OnboardingRoot />
+      </OnboardingErrorBoundary>
+    ) : (
+      <App />
+    )}
+  </StrictMode>
 )
