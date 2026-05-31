@@ -157,20 +157,10 @@ export function bindAutoUpdater(updater: AutoUpdaterLike): void {
   updater.logger = null
 
   updater.on('checking-for-update', () => {
-    // feat/auto-update review (codex, HIGH) — a periodic re-check (gap C) fires
-    // 'checking-for-update' BEFORE re-emitting 'update-available'. If we let it
-    // flip a staged update to 'checking', the same-version idempotency guard in
-    // the 'update-available' listener is defeated (state is no longer
-    // 'downloaded'/'downloading' by the time it arrives) → the proactive banner +
-    // Settings install CTA vanish and a redundant downloadUpdate() re-fires. Keep
-    // a staged build's state intact across re-checks; a genuinely newer version
-    // still supersedes via the 'update-available' branch below.
-    if (
-      (_status.state === 'downloaded' || _status.state === 'downloading') &&
-      _status.latestVersion !== null
-    ) {
-      return
-    }
+    // feat/auto-update — a periodic re-check (gap C) fires 'checking-for-update'
+    // BEFORE re-emitting 'update-available'; don't let it flip a staged build to
+    // 'checking' (that defeated the same-version guard below — codex HIGH).
+    if (hasStagedBuild()) return
     setStatus({ state: 'checking', message: null })
   })
   updater.on('update-available', (info: UpdateInfo) => {
@@ -202,6 +192,10 @@ export function bindAutoUpdater(updater: AutoUpdaterLike): void {
     }
   })
   updater.on('update-not-available', (info: UpdateInfo) => {
+    // feat/auto-update re-review (MEDIUM) — a re-check that finds the running
+    // version is latest (e.g. the staged release was retracted) must not
+    // downgrade a staged build out of 'downloaded'; keep the install CTA.
+    if (hasStagedBuild()) return
     setStatus({
       state: 'not-available',
       latestVersion: info.version,
@@ -224,6 +218,11 @@ export function bindAutoUpdater(updater: AutoUpdaterLike): void {
     })
   })
   updater.on('error', (err: Error) => {
+    // feat/auto-update re-review (codex + UX, MEDIUM) — a transient error from a
+    // background re-check must not clobber a staged build's state (which would
+    // vanish the banner + install CTA with no path back until restart). A real
+    // download failure still surfaces via maybeAutoDownload()/download()'s catch.
+    if (hasStagedBuild()) return
     setStatus({ state: 'error', message: err.message })
   })
 }
@@ -240,6 +239,21 @@ export function setBoundUpdater(updater: AutoUpdaterLike | null): void {
 
 export function getStatus(): UpdaterStatus {
   return _status
+}
+
+/**
+ * feat/auto-update re-review (codex + UX lens) — true when a build is already
+ * staged (mid-download or fully downloaded). Background 6h re-check events
+ * (checking-for-update / update-not-available / error) and a failed check()
+ * MUST NOT clobber this — the staged build + its banner + install CTA stay put.
+ * A genuinely newer version still supersedes via 'update-available'; a real
+ * download failure still surfaces via maybeAutoDownload()/download()'s catch.
+ */
+function hasStagedBuild(): boolean {
+  return (
+    (_status.state === 'downloaded' || _status.state === 'downloading') &&
+    _status.latestVersion !== null
+  )
 }
 
 /**
@@ -262,6 +276,12 @@ function readAutoDownloadSetting(): boolean {
  */
 function maybeAutoDownload(): void {
   if (!_bound) return
+  // feat/auto-update re-review (codex, MEDIUM) — flip to 'downloading' BEFORE the
+  // async downloadUpdate() so the 'available'→first-progress window can't double-
+  // fire: a second overlapping check's same-version 'update-available' then sees
+  // an in-flight download via the guard, and a manual download() is refused.
+  if (_status.state === 'downloading' || _status.state === 'downloaded') return
+  setStatus({ state: 'downloading', downloadPercent: 0, message: null })
   void _bound.downloadUpdate().catch((err) => {
     setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
   })
@@ -276,7 +296,12 @@ async function check(): Promise<UpdaterStatus> {
   try {
     await _bound.checkForUpdates()
   } catch (err) {
-    setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+    // feat/auto-update re-review — a failed background re-check must not clobber
+    // an already-staged build (see hasStagedBuild). A real download failure
+    // surfaces via maybeAutoDownload()/download()'s own catch, not here.
+    if (!hasStagedBuild()) {
+      setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
   }
   return _status
 }

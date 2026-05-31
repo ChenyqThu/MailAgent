@@ -254,7 +254,17 @@ function UpdaterSubsection(): React.ReactElement {
       await api.updater.quitAndInstall()
     })
 
-  const stateLabelKey = `settings.update.${status.state === 'not-available' ? 'upToDate' : status.state}`
+  // feat/auto-update re-review (codex, LOW) — map the two states whose i18n key
+  // differs from the state string: not-available→upToDate, downloaded→readyToInstall
+  // (there is no settings.update.downloaded key, and 'downloaded' is a common state
+  // once auto-download is on, so it must show a localized label not the raw enum).
+  const stateLabelKey = `settings.update.${
+    status.state === 'not-available'
+      ? 'upToDate'
+      : status.state === 'downloaded'
+        ? 'readyToInstall'
+        : status.state
+  }`
   const stateLabel = t(stateLabelKey, { defaultValue: status.state })
 
   return (
@@ -329,7 +339,11 @@ function UpdaterSubsection(): React.ReactElement {
       >
         <Switch
           checked={autoDownload ?? false}
-          disabled={autoDownload === null || autoDownloadBusy}
+          // feat/auto-update re-review (renderer lens, LOW) — also disabled when
+          // !status.enabled: the setting only takes effect once auto-update is
+          // enabled (flag on + signed build), so on the default/unsigned build it
+          // reads as inert, consistent with the unsignedNotice rendered below.
+          disabled={autoDownload === null || autoDownloadBusy || !status.enabled}
           onCheckedChange={(checked) => void handleAutoDownloadChange(checked)}
           aria-label={t('settings.update.autoDownload', { defaultValue: '自动下载更新' })}
         />

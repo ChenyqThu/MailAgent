@@ -374,7 +374,10 @@ describe('updater: auto-download on update-available (gap A)', () => {
     // for the staged version but does not block the newer transition).
     fire('checking-for-update')
     fire('update-available', { version: '1.4.0' })
-    expect(getStatus().state).toBe('available')
+    // After superseding, auto-download kicks off again → maybeAutoDownload flips
+    // state to 'downloading' immediately (re-review FIX 2: close the double-fire
+    // window), so the post-supersede state is 'downloading', not 'available'.
+    expect(getStatus().state).toBe('downloading')
     expect(getStatus().latestVersion).toBe('1.4.0')
     expect(downloadSpy).toHaveBeenCalledTimes(2)
   })
@@ -419,5 +422,56 @@ describe('updater: periodic re-check interval (gap C)', () => {
     clearIntervalSpy.mockClear()
     __resetForTesting('1.2.3')
     expect(clearIntervalSpy).toHaveBeenCalled()
+  })
+})
+
+// feat/auto-update re-review (codex + UX lens, MEDIUM) — a periodic 6h re-check
+// must not yank a staged build's state via the failure/idle event paths the first
+// round of guards missed. checking-for-update + update-available were already
+// guarded; these pin error / update-not-available / check()-rejection too.
+describe('updater: staged build survives background re-check noise', () => {
+  test('error during a re-check does NOT clobber a downloaded build', () => {
+    const { stub, fire } = makeStubUpdater()
+    bindAutoUpdater(stub)
+    fire('update-downloaded', { version: '1.3.0' })
+    expect(getStatus().state).toBe('downloaded')
+    // 6h re-check: checking-for-update (guarded) then a transient network error.
+    fire('checking-for-update')
+    fire('error', new Error('GitHub 503'))
+    expect(getStatus().state).toBe('downloaded')
+  })
+
+  test('update-not-available during a re-check does NOT clobber a downloaded build', () => {
+    const { stub, fire } = makeStubUpdater()
+    bindAutoUpdater(stub)
+    fire('update-downloaded', { version: '1.3.0' })
+    expect(getStatus().state).toBe('downloaded')
+    // Staged release retracted → server reports the running version is latest.
+    fire('update-not-available', { version: '1.2.3' })
+    expect(getStatus().state).toBe('downloaded')
+    expect(getStatus().latestVersion).toBe('1.3.0') // staged version preserved
+  })
+
+  test('check() rejection does NOT clobber a downloaded build', async () => {
+    const { stub, fire } = makeStubUpdater()
+    bindAutoUpdater(stub)
+    setBoundUpdater(stub)
+    fire('update-downloaded', { version: '1.3.0' })
+    ;(stub as unknown as { checkForUpdates: () => Promise<never> }).checkForUpdates =
+      async (): Promise<never> => {
+        throw new Error('no connection')
+      }
+    const s = await __testing.check()
+    expect(s.state).toBe('downloaded')
+  })
+
+  test('error still surfaces when NOT staged (no over-guarding)', () => {
+    const { stub, fire } = makeStubUpdater()
+    bindAutoUpdater(stub)
+    // state 'available' (no master flag in this bind-only path → no auto-download).
+    fire('update-available', { version: '1.3.0' })
+    expect(getStatus().state).toBe('available')
+    fire('error', new Error('boom'))
+    expect(getStatus().state).toBe('error')
   })
 })

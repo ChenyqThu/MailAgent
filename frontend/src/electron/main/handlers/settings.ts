@@ -166,13 +166,18 @@ function sanitize(raw: Partial<PersistentSettings>): Partial<PersistentSettings>
 }
 
 function writeSettings(s: PersistentSettings): void {
+  // feat/auto-update re-review (codex, MEDIUM) — propagate write failures instead
+  // of swallowing them. settings:set is the sole caller; rethrowing makes the IPC
+  // reject so renderer callers (PathPicker, the auto-download toggle) revert their
+  // optimistic value instead of showing a persisted state that never hit disk —
+  // critical now that updater.ts reads autoDownloadUpdates LIVE from the file, so
+  // a silent write loss would let auto-download fire against the user's just-made
+  // choice. Both callers already wrap settings.set in try/catch.
   try {
     writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2), 'utf8')
   } catch (err) {
-    // Surface the failure in the main process log; renderer doesn't get the
-    // FS error directly — caller's `setSettings()` resolves anyway since the
-    // in-memory return shape is the canonical (just-merged) value.
     console.error('[settings] write failed:', err)
+    throw err instanceof Error ? err : new Error(String(err))
   }
 }
 

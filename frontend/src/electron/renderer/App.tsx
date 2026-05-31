@@ -104,6 +104,12 @@ export default function App(): React.ReactElement {
                 call useNavigate(), which must resolve inside
                 RouterProvider, not as its sibling here. */}
             <AppRouter />
+            {/* Auto-update §6 (gap B) — proactive "新版本已就绪" floating card.
+                Inbox-shell ONLY (inside the non-popout branch): the popout is a
+                distraction-free single-email chat, so a global app-restart card
+                must not surface inside it (re-review MEDIUM). Self-gates on
+                status.enabled + state==='downloaded' (renders null otherwise). */}
+            <UpdateReadyBanner />
           </>
         )}
         {/* Sprint 5 §2.2 — toast stack mounts once at root so any
@@ -111,11 +117,6 @@ export default function App(): React.ReactElement {
             fire success/error/long-task toasts via the zustand store.
             Toast is router-agnostic, so it stays outside the router. */}
         <ToastContainer />
-        {/* Auto-update §6 (gap B) — proactive "新版本已就绪" floating card.
-            Also router-agnostic + reads the same updater store the StatusBar
-            does, so it lives here next to the toast stack. Self-gates on
-            status.enabled + state==='downloaded' (renders null otherwise). */}
-        <UpdateReadyBanner />
       </QueryClientProvider>
     </ErrorBoundary>
   )
