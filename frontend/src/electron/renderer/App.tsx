@@ -17,6 +17,7 @@ import { setIslandStatus } from '@shared/state/island'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
+import { UpdateReadyBanner } from '@shared/components/UpdateReadyBanner'
 import { PopoutShell } from '@shared/components/chat/PopoutShell'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
 import { usePopoutMode } from '@shared/state/popout-mode'
@@ -110,6 +111,11 @@ export default function App(): React.ReactElement {
             fire success/error/long-task toasts via the zustand store.
             Toast is router-agnostic, so it stays outside the router. */}
         <ToastContainer />
+        {/* Auto-update §6 (gap B) — proactive "新版本已就绪" floating card.
+            Also router-agnostic + reads the same updater store the StatusBar
+            does, so it lives here next to the toast stack. Self-gates on
+            status.enabled + state==='downloaded' (renders null otherwise). */}
+        <UpdateReadyBanner />
       </QueryClientProvider>
     </ErrorBoundary>
   )

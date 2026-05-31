@@ -20,6 +20,7 @@ import { useUpdaterStore } from '@shared/state/updater'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
 import { Button } from '@shared/components/ui/button'
+import { Switch } from '@shared/components/ui/switch'
 
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
@@ -187,6 +188,46 @@ function UpdaterSubsection(): React.ReactElement {
 
   const [busy, setBusy] = React.useState<'check' | 'download' | 'install' | null>(null)
 
+  // Auto-update §7 (gap A UI) — settings.json autoDownloadUpdates 的 toggle.
+  // 走 PathPicker 同款 precedent: 挂载时 api.settings.get() 读初值, onChange
+  // 经 api.settings.set() 写回 + 用返回值刷新本地 state。null = 尚未加载完
+  // (toggle 暂禁用)。
+  const [autoDownload, setAutoDownload] = React.useState<boolean | null>(null)
+  const [autoDownloadBusy, setAutoDownloadBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    let cancelled = false
+    void api.settings
+      .get()
+      .then((s) => {
+        if (!cancelled) setAutoDownload(s.autoDownloadUpdates)
+      })
+      .catch(() => {
+        /* web stub — leave null, toggle stays disabled */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  async function handleAutoDownloadChange(next: boolean): Promise<void> {
+    setAutoDownloadBusy(true)
+    // Optimistic flip so the Switch tracks immediately; revert on failure.
+    setAutoDownload(next)
+    try {
+      const updated = await api.settings.set({ autoDownloadUpdates: next })
+      setAutoDownload(updated.autoDownloadUpdates)
+    } catch (err) {
+      setAutoDownload(!next)
+      toastError(
+        t('settings.update.autoDownload', { defaultValue: '自动下载更新' }),
+        (err as Error).message
+      )
+    } finally {
+      setAutoDownloadBusy(false)
+    }
+  }
+
   async function withBusy(kind: NonNullable<typeof busy>, fn: () => Promise<void>): Promise<void> {
     setBusy(kind)
     try {
@@ -276,6 +317,32 @@ function UpdaterSubsection(): React.ReactElement {
             />
           </div>
         </Row>
+      ) : null}
+      {/* Auto-update §7 — auto-download toggle (Q2: default ON, user can opt
+          out). disabled until the first settings:get resolves (null) or while
+          a write is in flight. */}
+      <Row
+        label={t('settings.update.autoDownload', { defaultValue: '自动下载更新' })}
+        helper={t('settings.update.autoDownloadHint', {
+          defaultValue: '检测到新版本后自动在后台下载,就绪后提示重启安装。'
+        })}
+      >
+        <Switch
+          checked={autoDownload ?? false}
+          disabled={autoDownload === null || autoDownloadBusy}
+          onCheckedChange={(checked) => void handleAutoDownloadChange(checked)}
+          aria-label={t('settings.update.autoDownload', { defaultValue: '自动下载更新' })}
+        />
+      </Row>
+      {/* Auto-update §7 — unsigned/dev builds can check but not install. Surface
+          a subtle note so users aren't silently misled (acceptance criterion).
+          status.enabled === false covers dev-disabled, flag-off, and unbound. */}
+      {!status.enabled ? (
+        <div className="px-4 py-3 text-meta text-ink-fg-2 leading-relaxed">
+          {t('settings.update.unsignedNotice', {
+            defaultValue: '开发/未签名版本仅支持检查更新;应用更新需正式签名版本。'
+          })}
+        </div>
       ) : null}
     </Section>
   )

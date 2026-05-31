@@ -106,6 +106,11 @@ export const MANAGED_ENV_KEYS = [
   'PING_ISLAND_ENABLED',
   'ISLAND_SOCKET_PATH',
 
+  // — Auto-update (feat/auto-update — master flag for proactive updater
+  // behaviors: auto-download-on-available + periodic re-check). Default OFF;
+  // flipping ON is a one-line .env change once builds are notarized (P6).
+  'AUTO_UPDATE_ENABLED',
+
   // — Advanced / readonly display (PR F RealtimeStorageTab disclosure).
   // These two land here so `env:get` returns them for read-only rendering,
   // but EnvField control="readonly" never calls env:set on them, so the
