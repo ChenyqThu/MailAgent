@@ -25,7 +25,7 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
-import { existsSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'fs'
 import { join } from 'path'
 
 import Database from 'better-sqlite3'
@@ -137,6 +137,8 @@ export type BackendState = 'idle' | 'starting' | 'ready' | 'stopped' | 'failed'
 export class BackendLifecycleManager {
   private child: ChildProcess | null = null
   private state: BackendState = 'idle'
+  /** 抽干后端 stdout/stderr 的落盘流 (防 pipe 背压死锁, 见 attachLogDrain)。 */
+  private logStream: WriteStream | null = null
   private readonly pollIntervalMs: number
   private readonly readyTimeoutMs: number
   private readonly stopGraceMs: number
@@ -174,8 +176,14 @@ export class BackendLifecycleManager {
     const bin = getMailagentBin()
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      // cwd 已是 DATA_ROOT, 但显式注入三 env 让 Python 侧路径解析无歧义。
+      // cwd 已是 DATA_ROOT, 但显式注入路径 env 让 Python 侧解析无歧义。
+      // 🔴 MAILAGENT_DATA_ROOT 才是 config.py `_resolve_data_root()` 真正读的 key ——
+      // 缺它则后端 DATA_ROOT fallback 到 dirname(dirname(__file__)) = 打包 bundle 内的
+      // site-packages, 令 log_file / attachment_storage_dir 等所有 _under_data_root
+      // 默认路径错锚进只读的 .app (日志曾因此写进 bundle)。PROJECT_ROOT 后端并不读
+      // (仅前端 cli_runner 用), 此前注入它属无效 env, 保留仅为兼容。
       MAILAGENT_PROJECT_ROOT: dataRoot,
+      MAILAGENT_DATA_ROOT: dataRoot,
       MAILAGENT_ENV_FILE: join(dataRoot, '.env'),
       SYNC_STORE_DB_PATH: resolveDbPath()
     }
@@ -185,6 +193,9 @@ export class BackendLifecycleManager {
       env,
       stdio: ['ignore', 'pipe', 'pipe']
     })
+    // 🔴 spawn 后立刻抽干 stdout/stderr —— 不消费 pipe 会背压死锁把后端整个拖死
+    // (详见 attachLogDrain)。必须在任何 await 之前接上。
+    this.attachLogDrain(dataRoot)
     this.child.on('exit', (code, signal) => {
       // 非主动 stop() 触发的退出 → 标记 failed (供 onboarding / banner 兜底)。
       if (this.state !== 'stopped') {
@@ -248,6 +259,7 @@ export class BackendLifecycleManager {
     const child = this.child
     if (!child || child.killed) {
       this.state = 'stopped'
+      this.closeLogStream()
       return
     }
     this.state = 'stopped'
@@ -272,6 +284,48 @@ export class BackendLifecycleManager {
       await Promise.race([exited, delay(SIGKILL_WAIT_MS)])
     }
     this.child = null
+    this.closeLogStream()
+  }
+
+  /**
+   * 持续抽干后端 stdout/stderr → DATA_ROOT/logs/backend-process.log。
+   *
+   * 🔴 防 pipe 背压死锁 (本类最关键的不变量): stdio=pipe 的内核缓冲区只有几十 KB,
+   * 后端 loguru 默认往 stdout 加了全量 sink (utils/logger.py), 不读则写满后, 后端
+   * 下一次 write() 会永久阻塞在 asyncio event loop 主线程 → 邮件同步 + SSE 全部卡死
+   * 且永不自愈 (现象: 邮件不更新 + 前端左下角一直"重连中")。
+   *
+   * 截断模式 (flags:'w') 每次 spawn 覆盖, 只留本次进程输出防无限增长 (跨重启的历史
+   * 看 loguru 自轮转的 sync.log)。drain 一旦接不上 (建目录/开流失败), 退化为 resume()
+   * 丢弃 —— 宁可丢诊断日志, 也不能让 pipe 写满把后端拖死。
+   */
+  private attachLogDrain(dataRoot: string): void {
+    const child = this.child
+    if (!child) return
+    try {
+      const logDir = join(dataRoot, 'logs')
+      mkdirSync(logDir, { recursive: true })
+      const stream = createWriteStream(join(logDir, 'backend-process.log'), { flags: 'w' })
+      this.logStream = stream
+      child.stdout?.on('data', (chunk: Buffer) => stream.write(chunk))
+      child.stderr?.on('data', (chunk: Buffer) => stream.write(chunk))
+    } catch (err) {
+      console.error('[backend_lifecycle] log drain 接入失败, 退化为丢弃 (防 pipe 死锁)', err)
+      this.logStream = null
+      child.stdout?.resume()
+      child.stderr?.resume()
+    }
+  }
+
+  private closeLogStream(): void {
+    if (this.logStream) {
+      try {
+        this.logStream.end()
+      } catch {
+        /* 关流失败无所谓 — GC 会回收 fd。 */
+      }
+      this.logStream = null
+    }
   }
 
   private safeIsPackaged(): boolean {
