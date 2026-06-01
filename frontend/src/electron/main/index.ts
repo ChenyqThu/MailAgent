@@ -385,10 +385,13 @@ app.whenReady().then(async () => {
   })
 
   // 打包 P1-4/P1-6 — 后端进程托管 + DB 就绪门控。仅打包模式 (app.isPackaged) 接管:
-  //   spawn `mailagent serve` (注入三 env, cwd=DATA_ROOT) + 注册 before-quit SIGTERM,
-  //   然后等 DB 就绪 (db_version==EXPECTED 且关键表齐全) 再开窗, 避免首帧 IPC 撞
-  //   "sync_store.db not found"。dev / 服务器部署: registerBackendLifecycle 内部 start()
-  //   为 no-op (后端走 pm2), 不阻塞、行为零变更。
+  //   spawn `mailagent serve` + `mailagent serve-api` (V2 远程访问 FastAPI, 默认开,
+  //   MAILAGENT_REMOTE_ACCESS_ENABLED=false 可关; 注入三 env, cwd=DATA_ROOT) + 注册
+  //   before-quit SIGTERM (覆盖两个进程), 然后等 **serve** 的 DB 就绪 (db_version==
+  //   EXPECTED 且关键表齐全) 再开窗, 避免首帧 IPC 撞 "sync_store.db not found"。
+  //   serve-api 是软门控 (内部 fire-and-forget 轮询 /api/health, 起不来只 warn 不阻塞
+  //   开窗 —— 远程访问是增量能力, 本地 Electron 不依赖它)。dev / 服务器部署:
+  //   registerBackendLifecycle 内部 start() 为 no-op (后端走 pm2), 不阻塞、行为零变更。
   // 降级: 后端起不来 (缺 .env / bad config → serve 崩 → waitReady 快速失败) 或大库迁移
   //   超 120s, 仍开窗 (renderer 各 IPC 自带 not-found 兜底, 用户见空态而非黑屏)。
   //   TODO P2/P3: 此处接 onboarding 门控 —— 新用户无配置时走配置向导而非降级空态。

@@ -22,10 +22,22 @@
 // (Python 侧已落地), **不是** spawn `main.py`。bin 解析复用 cli_runner.getMailagentBin()。
 //
 // 真机 spawn / waitReady / SIGTERM 验证留给后续真机 dogfood; 本文件是可单测骨架。
+//
+// V2 远程访问 — 多 service 化 (向后兼容硬约束): manager 从单 `serve` child 扩成
+// 内部 ManagedService[] registry, 托管两个 mailagent CLI 进程:
+//   - serve     : 主同步长驻进程 (行为/probe 完全不变, 门控 waitReady 的 SQLite 就绪);
+//   - serve-api : FastAPI 远程访问后端 (bind 127.0.0.1:8200, REMOTE-ACCESS §3),
+//                 env-gated (默认开, MAILAGENT_REMOTE_ACCESS_ENABLED=false 可关),
+//                 ready probe = GET /api/health, **软门控** — 起不来只 warn 不阻塞开窗。
+// public API (start/stop/restart/waitReady/getState/isManaged) 签名与语义全保留:
+// waitReady() 仍只等 serve 的 SQLite 门控 (serve-api 软门控 fire-and-forget), 故不开
+// serve-api (gate off) 时行为与改造前逐字节一致。cloudflared **不**纳入 lifecycle (依赖
+// 用户环境态 + 该独立于 Electron 常驻, 由 runbook 教用户 pm2 托管)。
 
 import { spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
 import { existsSync } from 'fs'
+import { get as httpGet } from 'http'
 import { join } from 'path'
 
 import Database from 'better-sqlite3'
@@ -120,35 +132,179 @@ export function probeDbReady(dbPath: string = resolveDbPath()): ReadinessResult 
 }
 
 // ---------------------------------------------------------------------------
+// serve-api 就绪探针 (GET http://127.0.0.1:<port>/api/health)
+// ---------------------------------------------------------------------------
+
+/** serve-api 默认端口 (与 src/cli/main.py serve_api / cloudflared ingress 一致)。
+ *  可经 env MAILAGENT_API_PORT 覆盖; host 恒 127.0.0.1 (loopback, 公网不可达)。 */
+export const DEFAULT_API_PORT = 8200
+
+/** serve-api 单次 probe 的 HTTP 超时 (ms)。uvicorn 起来后 /api/health 是常数时间, 短超时即可。 */
+const API_PROBE_TIMEOUT_MS = 2500
+
+/**
+ * 探测 serve-api liveness: GET http://127.0.0.1:<port>/api/health。
+ *
+ * 判据: HTTP 200 + body JSON `status === 'ok'` (app.py:402 无鉴权 liveness,
+ * 返回 `{"status":"ok","schema_version":N}`)。用 Node 内置 http.get, **不引第三方**
+ * (better-sqlite3 是唯一 native dep, HTTP 探针不该加依赖)。
+ *
+ * 连接被拒 (ECONNREFUSED, uvicorn 还没 bind) / 超时 / 非 200 / body 不合法 → false
+ * (退避重试, 类比 probeDbReady 的 db 文件不存在过渡态, 不区分"尚未就绪" vs "坏了")。
+ *
+ * @param port 默认 DEFAULT_API_PORT; 可注入便于单测。
+ */
+export function probeApiHealth(port: number = DEFAULT_API_PORT): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const done = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      resolve(ok)
+    }
+    const req = httpGet(
+      { host: '127.0.0.1', port, path: '/api/health', timeout: API_PROBE_TIMEOUT_MS },
+      (res) => {
+        if (res.statusCode !== 200) {
+          res.resume() // drain 防 socket 挂起
+          done(false)
+          return
+        }
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => {
+          body += chunk
+          // liveness body 很小; 防异常大 body 占内存, 超 64KB 直接判失败。
+          if (body.length > 65_536) {
+            res.destroy()
+            done(false)
+          }
+        })
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body) as { status?: unknown }
+            done(parsed?.status === 'ok')
+          } catch {
+            done(false)
+          }
+        })
+        res.on('error', () => done(false))
+      }
+    )
+    req.on('timeout', () => {
+      req.destroy() // timeout 不会自动 abort, 必须显式 destroy 触发 'error'
+    })
+    req.on('error', () => done(false))
+  })
+}
+
+// ---------------------------------------------------------------------------
 // BackendLifecycleManager
 // ---------------------------------------------------------------------------
 
 export interface LifecycleOptions {
-  /** waitReady 轮询间隔 (ms)。默认 500ms。 */
+  /** waitReady 轮询间隔 (ms)。默认 500ms。serve-api 软门控轮询亦复用此间隔。 */
   pollIntervalMs?: number
   /** waitReady 总超时 (ms)。默认 120s — 大库首次建表 + 迁移可能较慢。 */
   readyTimeoutMs?: number
   /** stop() 等待子进程优雅退出的超时 (ms), 超时后 SIGKILL。默认 5s。 */
   stopGraceMs?: number
+  /** serve-api 软门控总超时 (ms)。默认 min(readyTimeoutMs, 30s) — uvicorn import 远快于大库迁移。 */
+  apiReadyTimeoutMs?: number
+  /** serve-api 就绪探针 (可注入便于单测; 默认 probeApiHealth → 真实 HTTP GET /api/health)。 */
+  apiProbe?: (port: number) => Promise<boolean>
 }
 
 export type BackendState = 'idle' | 'starting' | 'ready' | 'stopped' | 'failed'
 
+/** 托管的 mailagent CLI 子进程类型。'serve'=主同步 (门控 waitReady); 'serve-api'=FastAPI 远程后端 (软门控)。 */
+export type ServiceName = 'serve' | 'serve-api'
+
+/**
+ * 内部托管单元 (方案 A: 单 child → ManagedService[] registry, public API 语义保持"整体")。
+ * 每 service 独立持有 child / state / 就绪探针 / 启用判据, start/stop/restart 遍历 registry。
+ */
+interface ManagedService {
+  readonly name: ServiceName
+  /** spawn 参数: ['serve'] | ['serve-api']。 */
+  readonly args: string[]
+  child: ChildProcess | null
+  /** 每 service 独立状态 (getState() 聚合成单个 BackendState 不破坏调用方)。 */
+  state: BackendState
+  /** 该 service 是否 spawn (serve 恒 true; serve-api 由 env gate)。 */
+  readonly enabled: () => boolean
+}
+
+/** serve-api 是否启用 (env gate)。默认**开** (打包即远程能力就位, bind loopback 零攻击面);
+ *  `MAILAGENT_REMOTE_ACCESS_ENABLED=false` 显式关闭。spec lifecycle_design 倾向(a)。 */
+function serveApiEnabled(): boolean {
+  return process.env.MAILAGENT_REMOTE_ACCESS_ENABLED !== 'false'
+}
+
+/** serve-api uvicorn 端口 (env MAILAGENT_API_PORT, 默认 DEFAULT_API_PORT)。 */
+function resolveApiPort(): number {
+  const raw = process.env.MAILAGENT_API_PORT
+  const n = raw != null ? Number.parseInt(raw, 10) : NaN
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_API_PORT
+}
+
 export class BackendLifecycleManager {
-  private child: ChildProcess | null = null
-  private state: BackendState = 'idle'
+  /** service registry (替代旧的单 this.child)。serve 恒在; serve-api 由 enabled() 决定是否 spawn。 */
+  private readonly services: ManagedService[] = [
+    { name: 'serve', args: ['serve'], child: null, state: 'idle', enabled: () => true },
+    {
+      name: 'serve-api',
+      args: ['serve-api'],
+      child: null,
+      state: 'idle',
+      enabled: serveApiEnabled
+    }
+  ]
   private readonly pollIntervalMs: number
   private readonly readyTimeoutMs: number
   private readonly stopGraceMs: number
+  private readonly apiReadyTimeoutMs: number
+  private readonly apiProbe: (port: number) => Promise<boolean>
 
   constructor(opts: LifecycleOptions = {}) {
     this.pollIntervalMs = opts.pollIntervalMs ?? 500
     this.readyTimeoutMs = opts.readyTimeoutMs ?? 120_000
     this.stopGraceMs = opts.stopGraceMs ?? 5_000
+    // serve-api 软门控: uvicorn import 远快于大库迁移, 默认 min(readyTimeout, 30s) 上限。
+    this.apiReadyTimeoutMs = opts.apiReadyTimeoutMs ?? Math.min(this.readyTimeoutMs, 30_000)
+    this.apiProbe = opts.apiProbe ?? probeApiHealth
   }
 
+  /**
+   * 聚合各 enabled service 状态成单个 BackendState (不破坏 index.ts / onboarding 单状态调用方)。
+   *
+   * 🔴 向后兼容硬约束: **serve 的 'starting' 优先于 serve-api 的 'failed'**。理由 —
+   * onboarding.ts:883/1189 在 `waitReady()` (serve-only 门控) 返回 not-ready 后, 用
+   * `getState() === 'failed'` 区分「后端真崩 (配置错)」vs「大库慢迁移 (仍 starting)」。
+   * 若让 serve-api 软失败 (端口占用等) 把聚合状态拉成 'failed', 会在 serve 仍慢迁移时
+   * 误报 E_BACKEND_FAILED → 回归。故 serve 还在 starting 时, 聚合恒返回 'starting',
+   * 不被 serve-api 的软状态抢占 (spec: serve-api 崩溃不应阻断 serve 的就绪门控)。
+   *
+   * serve 一旦定型 (ready/failed/stopped) 才回到常规聚合: 任一 failed→failed (此时
+   * serve-api 失败会正确显示 'failed', 供 banner 提示远程访问降级); 全 ready→ready。
+   */
   getState(): BackendState {
-    return this.state
+    const active = this.services.filter((s) => s.enabled())
+    if (active.length === 0) return 'idle'
+    const serve = this.services.find((s) => s.name === 'serve')
+    // serve 门控未定型 (慢迁移中) → serve-api 软状态不得抢占, 保持 'starting'。
+    if (serve && serve.state === 'starting') return 'starting'
+    if (active.some((s) => s.state === 'failed')) return 'failed'
+    if (active.every((s) => s.state === 'ready')) return 'ready'
+    if (active.some((s) => s.state === 'starting')) return 'starting'
+    if (active.some((s) => s.state === 'stopped')) return 'stopped'
+    return 'idle'
+  }
+
+  /** 精细化: 单个 service 的状态 (可选, 供诊断/banner; index.ts 不强制用)。 */
+  getServiceState(name: ServiceName): BackendState {
+    const svc = this.services.find((s) => s.name === name)
+    return svc ? svc.state : 'idle'
   }
 
   /** 当前是否由本 manager 托管后端 (仅打包模式)。dev 模式恒 false。 */
@@ -157,68 +313,114 @@ export class BackendLifecycleManager {
   }
 
   /**
-   * spawn `mailagent serve`。仅在打包模式接管; dev 模式 no-op (走 pm2)。
-   * 注入三 env: MAILAGENT_PROJECT_ROOT / MAILAGENT_ENV_FILE / SYNC_STORE_DB_PATH,
-   * cwd = DATA_ROOT (pydantic import-time 读 .env 必须在此目录)。
+   * spawn 所有 enabled service (serve + serve-api if gated on)。仅打包模式接管;
+   * dev 模式 no-op (走 pm2)。各 service 注入三 env: MAILAGENT_PROJECT_ROOT /
+   * MAILAGENT_ENV_FILE / SYNC_STORE_DB_PATH, cwd = DATA_ROOT。serve-api 额外注入
+   * MAILAGENT_API_PORT (透传或默认 8200)。幂等 (child && !killed → skip 该 service)。
+   *
+   * serve-api 就绪是**软门控**: start() 内 fire-and-forget 后台轮询 probeApiHealth,
+   * 失败仅 console.warn + 标该 service failed, 不阻塞开窗 (waitReady 只 gate serve)。
    */
   start(): void {
     if (!this.safeIsPackaged()) {
       // dev / 服务器部署: 后端由 pm2 托管, 不接管。
       return
     }
-    if (this.child && !this.child.killed) {
-      // 已在运行, 幂等返回 (restart 走 restart())。
-      return
-    }
     const dataRoot = resolveDataRoot()
     const bin = getMailagentBin()
-    const env: NodeJS.ProcessEnv = {
+    const baseEnv: NodeJS.ProcessEnv = {
       ...process.env,
       // cwd 已是 DATA_ROOT, 但显式注入三 env 让 Python 侧路径解析无歧义。
       MAILAGENT_PROJECT_ROOT: dataRoot,
       MAILAGENT_ENV_FILE: join(dataRoot, '.env'),
       SYNC_STORE_DB_PATH: resolveDbPath()
     }
-    this.state = 'starting'
-    this.child = spawn(bin, ['serve'], {
-      cwd: dataRoot,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-    this.child.on('exit', (code, signal) => {
-      // 非主动 stop() 触发的退出 → 标记 failed (供 onboarding / banner 兜底)。
-      if (this.state !== 'stopped') {
-        this.state = 'failed'
-        console.error(`[backend_lifecycle] serve exited code=${code} signal=${signal}`)
+    for (const svc of this.services) {
+      if (!svc.enabled()) continue
+      if (svc.child && !svc.child.killed) continue // 幂等: 该 service 已在跑
+      const env: NodeJS.ProcessEnv =
+        svc.name === 'serve-api'
+          ? { ...baseEnv, MAILAGENT_API_PORT: String(resolveApiPort()) }
+          : baseEnv
+      svc.state = 'starting'
+      const child = spawn(bin, svc.args, { cwd: dataRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
+      svc.child = child
+      child.on('exit', (code, signal) => {
+        // 非主动 stop() 触发的退出 → 标记该 service failed (带 name 维度)。
+        if (svc.state !== 'stopped') {
+          svc.state = 'failed'
+          console.error(`[backend_lifecycle] ${svc.name} exited code=${code} signal=${signal}`)
+        }
+        svc.child = null
+      })
+      child.on('error', (err) => {
+        svc.state = 'failed'
+        console.error(`[backend_lifecycle] ${svc.name} spawn error`, err)
+      })
+      // serve-api 软门控: 后台轮询其 /api/health, 起来标 ready, 超时只 warn — 不阻塞开窗。
+      if (svc.name === 'serve-api') {
+        void this.waitApiReady(svc)
       }
-      this.child = null
-    })
-    this.child.on('error', (err) => {
-      this.state = 'failed'
-      console.error('[backend_lifecycle] spawn error', err)
-    })
+    }
   }
 
   /**
-   * 轮询直读 SQLite 直到就绪 (db_version==EXPECTED 且关键表齐全)。
+   * 软门控后台轮询 serve-api 的 /api/health (fire-and-forget, 不入 waitReady 返回值)。
+   * 起来 → 标该 service 'ready'; 超时/崩溃 → 只 console.warn (远程访问是增量能力,
+   * serve-api 起不来不该让本地 Electron 黑屏)。serve-api 启动只是 uvicorn import,
+   * 远快于大库迁移, 给独立的 apiReadyTimeoutMs (默认复用 readyTimeoutMs 但更短上限)。
+   */
+  private async waitApiReady(svc: ManagedService): Promise<void> {
+    const port = resolveApiPort()
+    const deadline = Date.now() + this.apiReadyTimeoutMs
+    for (;;) {
+      // 进程已崩溃 (on('exit'/'error') 置 failed) → 停止轮询, exit handler 已 warn。
+      if (svc.state === 'failed') return
+      // 被 stop() 主动停掉 → 不再轮询。
+      if (svc.state === 'stopped') return
+      const ok = await this.apiProbe(port)
+      if (ok) {
+        // 仅当未被 stop()/崩溃抢先改状态时才标 ready (避免 clobber stopped/failed)。
+        if (svc.state === 'starting') svc.state = 'ready'
+        return
+      }
+      if (Date.now() >= deadline) {
+        if (svc.state === 'starting') {
+          svc.state = 'failed'
+          console.warn(
+            `[backend_lifecycle] serve-api 未在 ${this.apiReadyTimeoutMs}ms 内就绪 (GET 127.0.0.1:${port}/api/health); ` +
+              '远程访问 (cloudflared tunnel) 暂不可用, 本地 Electron 不受影响。'
+          )
+        }
+        return
+      }
+      await delay(this.pollIntervalMs)
+    }
+  }
+
+  /**
+   * 轮询直读 SQLite 直到 **serve** 就绪 (db_version==EXPECTED 且关键表齐全)。
+   * **只 gate serve** (开主窗门控): Electron 本地 IPC 走 serve 的 SQLite, 与 serve-api
+   * 无关 — serve-api 是远程 Web 用的, 主窗不依赖它, 故其就绪不入此返回值 (软门控)。
+   * 这是向后兼容关键点: 不开 serve-api 时 waitReady 行为与改造前逐字节一致。
    * - 锁表 (SQLITE_BUSY): 退避重试, 不判失败。
    * - 超过 readyTimeoutMs: resolve(false), 由调用方决定降级 (导回 onboarding /
    *   仍开窗但 IPC 自带 not-found 兜底)。
    *
-   * dev 模式直接返回当前探测结果 (不轮询托管, 因为后端由 pm2 起, 可能已就绪)。
    * @param probe 可注入的探测函数, 便于单测。默认 probeDbReady。
    */
   async waitReady(probe: () => ReadinessResult = probeDbReady): Promise<boolean> {
+    const serve = this.services.find((s) => s.name === 'serve')!
     const deadline = Date.now() + this.readyTimeoutMs
     for (;;) {
       const r = probe()
       if (r.ready) {
-        if (this.safeIsPackaged()) this.state = 'ready'
+        if (this.safeIsPackaged()) serve.state = 'ready'
         return true
       }
-      // 后端进程已崩溃 (bad config / spawn error → on('exit'/'error') 置 failed) →
+      // serve 进程已崩溃 (bad config / spawn error → on('exit'/'error') 置 failed) →
       // 快速失败, 不傻等满 readyTimeoutMs (120s 是给大库迁移留的, 崩溃不该等)。
-      if (this.safeIsPackaged() && this.state === 'failed') {
+      if (this.safeIsPackaged() && serve.state === 'failed') {
         return false
       }
       if (Date.now() >= deadline) {
@@ -231,8 +433,9 @@ export class BackendLifecycleManager {
   }
 
   /**
-   * kill + re-spawn (取代 pm2 restart), 供 env:set 后 banner 调用。
-   * dev 模式 no-op。重启后需调用方自行 waitReady。
+   * kill + re-spawn 所有 enabled service (取代 pm2 restart), 供 env:set 后 banner 调用。
+   * dev 模式 no-op。两个进程都 reload 新 .env (正确: env 变更影响 serve + serve-api)。
+   * 重启后需调用方自行 waitReady (serve 门控; serve-api 软门控在 start() 内自恢复)。
    */
   async restart(): Promise<void> {
     if (!this.safeIsPackaged()) return
@@ -241,16 +444,21 @@ export class BackendLifecycleManager {
   }
 
   /**
-   * before-quit: SIGTERM + 等待优雅退出, 超过 stopGraceMs 升级 SIGKILL。
-   * dev 模式 no-op。
+   * before-quit: 对所有在跑 service 发 SIGTERM + 等待优雅退出, 各自超过 stopGraceMs
+   * 升级 SIGKILL。dev 模式 no-op。逐 service 复用旧的 SIGTERM→grace→SIGKILL→等 exit 语义。
    */
   async stop(): Promise<void> {
-    const child = this.child
+    await Promise.all(this.services.map((svc) => this.stopService(svc)))
+  }
+
+  /** 停单个 service (SIGTERM → grace → SIGKILL → 等真正 exit)。逐 service 复用 codex #3/#4 教训。 */
+  private async stopService(svc: ManagedService): Promise<void> {
+    const child = svc.child
     if (!child || child.killed) {
-      this.state = 'stopped'
+      svc.state = 'stopped'
       return
     }
-    this.state = 'stopped'
+    svc.state = 'stopped'
     const exited = new Promise<void>((resolve) => {
       child.once('exit', () => resolve())
     })
@@ -271,7 +479,7 @@ export class BackendLifecycleManager {
       // 回收, 加一个短 hard cap 防极端僵死 (uninterruptible syscall) 永久 hang。
       await Promise.race([exited, delay(SIGKILL_WAIT_MS)])
     }
-    this.child = null
+    svc.child = null
   }
 
   private safeIsPackaged(): boolean {
