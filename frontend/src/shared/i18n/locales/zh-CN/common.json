@@ -1531,7 +1531,10 @@
       "restartCta": "重启并安装",
       "error": "更新检查失败:{message}",
       "devDisabled": "Dev 模式下 auto-updater 已禁用,仅打包版本可用",
-      "channel": "GitHub Releases · ad-hoc 签名"
+      "channel": "GitHub Releases · ad-hoc 签名",
+      "autoDownload": "自动下载更新",
+      "autoDownloadHint": "检测到新版本后自动在后台下载,就绪后提示重启安装。",
+      "unsignedNotice": "开发/未签名版本仅支持检查更新;应用更新需正式签名版本。"
     },
     "island": {
       "heading": "灵动岛集成",
@@ -1557,6 +1560,13 @@
         "devDisabled": "Dev 模式 · 已禁用",
         "disabled": "已关闭"
       }
+    }
+  },
+  "updater": {
+    "banner": {
+      "title": "新版本 v{version} 已就绪",
+      "restartCta": "重启并更新",
+      "dismiss": "稍后"
     }
   },
   "statusbar": {

@@ -60,6 +60,11 @@ export interface PersistentSettings {
   notionAgentName: string | null
   /** Custom-API base URL — the key lives in keytar (custom-api-key). */
   customApiEndpoint: string | null
+  /** feat/auto-update — when the master AUTO_UPDATE_ENABLED flag is on,
+   *  auto-download an available update without a manual click. Default TRUE
+   *  (Q2 locked); the IslandUpdatesTab exposes a toggle to turn it off.
+   *  Read LIVE by handlers/updater.ts at update-available time (never cached). */
+  autoDownloadUpdates: boolean
   /** Sprint 11 V1.4 — owner's email address, surfaced in the nav-shell
    *  account header. Sourced from the repo-root `.env` USER_EMAIL key at
    *  every settings:get read (NOT user-writable). The Sidebar's
@@ -74,6 +79,7 @@ const DEFAULTS: PersistentSettings = {
   notionAgentPageId: null,
   notionAgentName: null,
   customApiEndpoint: null,
+  autoDownloadUpdates: true,
   userEmail: null
 }
 
@@ -99,7 +105,10 @@ function loadUserEmailFromEnv(): string | null {
   return null
 }
 
-function readSettings(): PersistentSettings {
+// feat/auto-update — exported so handlers/updater.ts can read
+// `autoDownloadUpdates` LIVE at update-available time (and tests can vi.mock
+// it deterministically). No behavioural change for existing callers.
+export function readSettings(): PersistentSettings {
   let persisted: Partial<PersistentSettings> = {}
   try {
     if (existsSync(SETTINGS_FILE)) {
@@ -147,17 +156,28 @@ function sanitize(raw: Partial<PersistentSettings>): Partial<PersistentSettings>
   if (typeof raw.customApiEndpoint === 'string' || raw.customApiEndpoint === null) {
     out.customApiEndpoint = raw.customApiEndpoint
   }
+  // feat/auto-update — boolean-only; any other type falls through to the
+  // DEFAULTS (true) on merge, so a corrupt write can never flip it to a
+  // non-boolean truthy/falsy value.
+  if (typeof raw.autoDownloadUpdates === 'boolean') {
+    out.autoDownloadUpdates = raw.autoDownloadUpdates
+  }
   return out
 }
 
 function writeSettings(s: PersistentSettings): void {
+  // feat/auto-update re-review (codex, MEDIUM) — propagate write failures instead
+  // of swallowing them. settings:set is the sole caller; rethrowing makes the IPC
+  // reject so renderer callers (PathPicker, the auto-download toggle) revert their
+  // optimistic value instead of showing a persisted state that never hit disk —
+  // critical now that updater.ts reads autoDownloadUpdates LIVE from the file, so
+  // a silent write loss would let auto-download fire against the user's just-made
+  // choice. Both callers already wrap settings.set in try/catch.
   try {
     writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2), 'utf8')
   } catch (err) {
-    // Surface the failure in the main process log; renderer doesn't get the
-    // FS error directly — caller's `setSettings()` resolves anyway since the
-    // in-memory return shape is the canonical (just-merged) value.
     console.error('[settings] write failed:', err)
+    throw err instanceof Error ? err : new Error(String(err))
   }
 }
 

@@ -106,6 +106,12 @@ export const MANAGED_ENV_KEYS = [
   'PING_ISLAND_ENABLED',
   'ISLAND_SOCKET_PATH',
 
+  // feat/auto-update re-review (codex, trust boundary) — AUTO_UPDATE_ENABLED is
+  // intentionally NOT a managed key: it's the master safety gate for proactive
+  // updater behavior, read directly via process.env in handlers/updater.ts.
+  // Keeping it out of this list means env:set can never flip it from the renderer
+  // before P6 notarization (enabling auto-update on an ad-hoc build → can't install).
+
   // — Advanced / readonly display (PR F RealtimeStorageTab disclosure).
   // These two land here so `env:get` returns them for read-only rendering,
   // but EnvField control="readonly" never calls env:set on them, so the

@@ -17,6 +17,7 @@ import { setIslandStatus } from '@shared/state/island'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
+import { UpdateReadyBanner } from '@shared/components/UpdateReadyBanner'
 import { PopoutShell } from '@shared/components/chat/PopoutShell'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
 import { usePopoutMode } from '@shared/state/popout-mode'
@@ -103,6 +104,12 @@ export default function App(): React.ReactElement {
                 call useNavigate(), which must resolve inside
                 RouterProvider, not as its sibling here. */}
             <AppRouter />
+            {/* Auto-update §6 (gap B) — proactive "新版本已就绪" floating card.
+                Inbox-shell ONLY (inside the non-popout branch): the popout is a
+                distraction-free single-email chat, so a global app-restart card
+                must not surface inside it (re-review MEDIUM). Self-gates on
+                status.enabled + state==='downloaded' (renders null otherwise). */}
+            <UpdateReadyBanner />
           </>
         )}
         {/* Sprint 5 §2.2 — toast stack mounts once at root so any
