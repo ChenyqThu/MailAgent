@@ -403,3 +403,27 @@ app.include_router(email_views.router)
 async def _liveness() -> dict[str, Any]:
     """无鉴权 liveness 探针 (cloudflared / pm2 healthcheck 用，非业务 admin.health)。"""
     return {"status": "ok", "schema_version": SCHEMA_VERSION}
+
+
+# V2 上线: serve-api 同时服务前端 SPA (frontend/out/web, vite base=/app/) —— 单 origin
+# (mail.chenge.ink/app → SPA, /api/* → 本 API), 单用户省去单独配 Cloudflare Pages。
+# SPA dir 用 __file__ 相对定位 (在 worktree 内, 不受 MAILAGENT_DATA_ROOT 影响)。
+# mount 放在所有 API route 之后声明 (StaticFiles 是 catch-all, 避免遮蔽 /api/*)。
+import os as _os_spa  # noqa: E402
+
+from fastapi.responses import RedirectResponse as _RedirectResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles as _StaticFiles  # noqa: E402
+
+_SPA_DIR = _os_spa.path.join(
+    _os_spa.path.dirname(_os_spa.path.dirname(_os_spa.path.dirname(_os_spa.path.abspath(__file__)))),
+    "frontend",
+    "out",
+    "web",
+)
+if _os_spa.path.isdir(_SPA_DIR):
+
+    @app.get("/")
+    async def _root_to_app() -> _RedirectResponse:
+        return _RedirectResponse(url="/app/")
+
+    app.mount("/app", _StaticFiles(directory=_SPA_DIR, html=True), name="spa")

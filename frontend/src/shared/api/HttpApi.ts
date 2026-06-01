@@ -522,7 +522,17 @@ export class HttpApi implements MailApi {
 
   // No in-app updater in the browser; no endpoint. onEvent → noop unsub.
   updater = {
-    status: () => notImplemented('updater.status'),
+    // web 无 in-app updater: 返回 dev-disabled 态 (enabled:false → UpdateReadyBanner
+    // 不渲染), graceful 而非 throw —— 启动期 updater state hydration 会调它。
+    status: async () => ({
+      state: 'dev-disabled' as const,
+      currentVersion: '',
+      latestVersion: null,
+      downloadPercent: null,
+      message: null,
+      updatedAt: 0,
+      enabled: false
+    }),
     check: () => notImplemented('updater.check'),
     download: () => notImplemented('updater.download'),
     quitAndInstall: () => notImplemented('updater.quitAndInstall'),
@@ -532,8 +542,9 @@ export class HttpApi implements MailApi {
   // SSE bridge deferred; remote falls back to react-query polling.
   // status/reconnect stay notImplemented; onEvent/onStatus → noop unsub.
   events = {
-    status: () => notImplemented('events.status'),
-    reconnect: () => notImplemented('events.reconnect'),
+    // web 走 react-query polling 而非 SSE: 返回 disabled 态, graceful 不 throw。
+    status: async () => ({ state: 'disabled' as const, lastError: null, lastEventTs: null, url: '' }),
+    reconnect: async () => ({ state: 'disabled' as const, lastError: null, lastEventTs: null, url: '' }),
     onEvent: (): (() => void) => () => undefined,
     onStatus: (): (() => void) => () => undefined
   }
@@ -546,7 +557,8 @@ export class HttpApi implements MailApi {
 
   services = {
     restart: () => notImplemented('services.restart'),
-    status: () => notImplemented('services.status')
+    // web 无 pm2 服务管理: 返回空数组, graceful 不 throw。
+    status: async () => []
   }
 
   // No host fs access to the Mac's prompt files; no endpoint.
@@ -568,7 +580,9 @@ export class HttpApi implements MailApi {
 
   // Ping-island lives on the Mac host; web stubs are no-ops, onEvent → noop.
   island = {
-    status: () => notImplemented('island.status'),
+    // web 无 ping-island: 返回 disabled 态, graceful 不 throw —— TitleBar/Settings
+    // mount 时 island state hydration 会调它。
+    status: async () => ({ state: 'disabled' as const, socketPath: '', lastProbeAt: null, lastError: null }),
     testConnection: () => notImplemented('island.testConnection'),
     setEnabled: () => notImplemented('island.setEnabled'),
     appearance: (): void => {

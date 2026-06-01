@@ -270,6 +270,14 @@ const settingsRoute = createRoute({
 const isPackagedFileProtocol =
   typeof window !== 'undefined' && window.location?.protocol === 'file:'
 
+// web build (vite base=/app/) 跑在 mail.chenge.ink/app 下 → router basepath 必须 = /app,
+// 否则 /app/ 不匹配任何 route → NotFound。electron (file: memory history / dev base=/) 不设。
+const _baseUrl = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL) ?? '/'
+const _routerBasepath =
+  !isPackagedFileProtocol && _baseUrl.startsWith('/') && _baseUrl !== '/'
+    ? _baseUrl.replace(/\/+$/, '')
+    : undefined
+
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     inboxRoute,
@@ -279,6 +287,7 @@ export const router = createRouter({
     adminRoute.addChildren([adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),
+  basepath: _routerBasepath,
   history: isPackagedFileProtocol ? createMemoryHistory({ initialEntries: ['/'] }) : undefined,
   defaultPreload: false
 })
