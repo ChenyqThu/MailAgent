@@ -891,6 +891,9 @@ export interface PersistentSettings {
   notionAgentPageId: string | null
   notionAgentName: string | null
   customApiEndpoint: string | null
+  /** feat/auto-update — auto-download an available update when the master
+   *  AUTO_UPDATE_ENABLED flag is on. Default true; IslandUpdatesTab toggles it. */
+  autoDownloadUpdates: boolean
   /** Owner's email — sourced from repo-root `.env` USER_EMAIL on every
    *  settings:get read. Read-only; the renderer doesn't write this. */
   userEmail: string | null
@@ -1429,6 +1432,11 @@ export interface UpdaterStatus {
   message: string | null
   /** Epoch ms of the last state transition. */
   updatedAt: number
+  /** feat/auto-update — true ONLY when (master AUTO_UPDATE_ENABLED on) AND
+   *  (state !== 'dev-disabled') AND (an updater is bound). The renderer uses
+   *  this to gate the proactive UpdateReadyBanner + the unsigned-build notice;
+   *  false on unsigned/dev builds where updates can't actually install. */
+  enabled: boolean
 }
 
 export interface UpdaterApi {

@@ -1528,7 +1528,10 @@
       "restartCta": "Restart & install",
       "error": "Update check failed: {message}",
       "devDisabled": "Auto-updater disabled in dev (packaged builds only)",
-      "channel": "GitHub Releases · ad-hoc signed"
+      "channel": "GitHub Releases · ad-hoc signed",
+      "autoDownload": "Auto-download updates",
+      "autoDownloadHint": "Download new versions in the background automatically, then prompt to restart and install.",
+      "unsignedNotice": "Development/unsigned builds can only check for updates; installing updates requires a signed release build."
     },
     "island": {
       "heading": "Dynamic Island integration",
@@ -1554,6 +1557,13 @@
         "devDisabled": "Dev · disabled",
         "disabled": "Off"
       }
+    }
+  },
+  "updater": {
+    "banner": {
+      "title": "Version v{version} is ready",
+      "restartCta": "Restart & update",
+      "dismiss": "Later"
     }
   },
   "statusbar": {

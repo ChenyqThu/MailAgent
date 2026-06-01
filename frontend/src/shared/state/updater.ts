@@ -16,6 +16,10 @@ interface UpdaterStore {
 
 const INITIAL: UpdaterStatus = {
   state: 'idle',
+  // Auto-update §2 — proactive behaviors gate on `enabled` (master flag on +
+  // not dev-disabled + updater bound). Seeds false so the banner / unsigned
+  // notice stay correct before the first updater:status hydrate.
+  enabled: false,
   currentVersion: '0.0.0',
   latestVersion: null,
   downloadPercent: null,

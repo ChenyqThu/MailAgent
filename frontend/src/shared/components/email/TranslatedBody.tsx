@@ -20,13 +20,16 @@
 // theme / 离线 lang pack 用的增强项. 想加后续 `import code from
 // '@streamdown/code'` 再传 plugins 即可.
 
-import { useDeferredValue } from 'react'
 import { Streamdown, type StreamdownTranslations } from 'streamdown'
+// Streamdown 的逐 token fade-in 动效 + caret 需要它的 keyframes/样式 (sd-fadeIn
+// 等)。一次性全局引入 (Vite 去重), 否则 animated 不生效。
+import 'streamdown/styles.css'
 
 interface Props {
   text: string
-  /** True 表示消息仍在流式输出。流式期间走降级渲染 (见函数内注释) 以消除
-   *  重复 / 错漏; 省略或 false 时按完整内容一次性渲染 (历史消息 / 草稿预览)。 */
+  /** True = 消息仍在流式输出。驱动 Streamdown 的 caret + 逐 token 入场动效
+   *  (isAnimating/animated 都依赖它); 流式期走 streaming 模式, 定稿后切 static
+   *  让历史消息走稳定的整段渲染。省略 / false = 静态完整渲染。 */
   streaming?: boolean
 }
 
@@ -67,24 +70,38 @@ const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
   tableFormatTsv: 'TSV'
 }
 
+// 模块常量 —— 稳定引用, 否则内联对象每次 render 都是新引用, 击穿 Streamdown 的
+// `animated===` memo 比较, 令定稿(static)消息在父级重渲时白白整段重 parse。
+// sep:'word' 而非 'char': 中文逐字会生成大量 span + 动画, DOM/性能开销大。
+const STREAMDOWN_ANIMATED = {
+  animation: 'fadeIn',
+  duration: 90,
+  easing: 'ease-out',
+  sep: 'word',
+  stagger: 6
+} as const
+
 export function TranslatedBody({ text, streaming = false }: Props): React.ReactElement {
-  // 流式重复 / 错漏修复:
-  // ① parseIncompleteMarkdown 在流式中途会把未闭合标记 (**/```/#) 逐帧在
-  //    "字面量" 与 "补全渲染" 间反复横跳, 叠加 Streamdown 的 block memo,
-  //    令新旧两帧 DOM 并存 —— 即截图里 "带** / 不带** 两版本交错重复" 的
-  //    直接成因。流式期间关掉它 (未闭合标记稳定显示为字面量), 内容定终态
-  //    (done → streaming=false) 后再开: 此时已无未闭合标记, 补全无副作用,
-  //    且该 prop 由 false→true 触发 Streamdown 整体重渲染, 把流式中途残留的
-  //    stale block 一次性替换 —— 同时根治 "done 后仍有错漏"。
-  // ② 中文逐字流每秒触发数十次整段重 parse; useDeferredValue 把这些高频更新
-  //    降为可中断 / 可合并的低优先级渲染, 既降本 (Streamdown 重渲染昂贵) 又
-  //    减少 "渲染追不上 token" 的中间态撕裂。非流式 (text 稳定) 时立即追平。
-  const deferred = useDeferredValue(text)
-  const shown = streaming ? deferred : text
+  // 流式体验: parseIncompleteMarkdown 让未闭合标记 (**/```/#) 中途自动补全 (闭合
+  // 即定稿, 无字面量闪烁); streaming 期开 caret + 逐 token fade-in, 定稿后切
+  // static 让历史消息走稳定整段渲染。
+  //
+  // 注: 此前"流式整段重复/交错"并非渲染层问题 —— 根因是 ElectronApi.subscribe()
+  // 反订阅失效致 `chat:stream` listener 泄漏 → 每 chunk 投递两次 → 渲染层
+  // `content += delta` 追加两次 (详见 ElectronApi.ts 注释)。订阅修好后内容单份,
+  // 这里的动效是纯视觉增强, 不影响正确性; 若觉得高频 chunk 下卡顿, 把 animated
+  // 调成 false 或 sep 维持 'word' 即可 (不要用 'char', 中文逐字 DOM 开销大)。
   return (
     <div className="mail-body break-words">
-      <Streamdown parseIncompleteMarkdown={!streaming} translations={STREAMDOWN_ZH_TRANSLATIONS}>
-        {shown}
+      <Streamdown
+        mode={streaming ? 'streaming' : 'static'}
+        parseIncompleteMarkdown
+        isAnimating={streaming}
+        caret="block"
+        animated={STREAMDOWN_ANIMATED}
+        translations={STREAMDOWN_ZH_TRANSLATIONS}
+      >
+        {text}
       </Streamdown>
     </div>
   )

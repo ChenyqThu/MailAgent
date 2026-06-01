@@ -1954,22 +1954,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
   overflow: hidden;
 }
 
-/* Streaming text cursor — blinks at end of an in-flight assistant message. */
-.cursor-blink {
-  display: inline-block;
-  width: 7px;
-  height: 14px;
-  background: rgb(var(--c-accent));
-  margin-left: 1px;
-  vertical-align: -2px;
-  animation: blink 1s steps(2) infinite;
-}
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
-}
-
 /* ─── Search palette (⌘K) — 1:1 mockup-search.html §palette-* ───────────
  *
  * Surface stack drawn over the live app:
