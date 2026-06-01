@@ -1,0 +1,108 @@
+# MailAgent macOS 打包 CI/CD (打包 P6 scaffold)
+#
+# 模型: 打包基建合入 main 后, 在 main 上构建。tag `v*` → 构建 + 发布到 GitHub Release
+# (electron-updater 自动更新读它); workflow_dispatch → 手动构建 (产物走 artifact, 不发布)。
+#
+# 当前状态 (与本地实测一致):
+#   - arm64 (macos-14) = 已验证主 lane: 嵌入式可重定位 CPython + ad-hoc 签名 (afterPack)。
+#   - x64 (macos-13)   = 未验证, 默认注释掉; build-python-venv.sh 支持 x64, 理论上在 Intel
+#                        runner 可跑, 启用前需先 dogfood 一次。
+#   - 签名/公证         = 当前 identity:null → afterPack 做 ad-hoc (用户端 Gatekeeper 会
+#                        "已损坏", 需右键打开)。正式分发须接 Developer ID + notarytool
+#                        (P6, 需 Apple 账号), 见下方 TODO env。
+#
+# 前置 (合入 main 后在仓库设置):
+#   - 无需额外 secret 即可跑 ad-hoc 构建 (GITHUB_TOKEN 自动注入, 用于 tag 发布)。
+#   - 公证 (P6) 时再加 secrets: CSC_LINK / CSC_KEY_PASSWORD / APPLE_ID /
+#     APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID。
+
+name: Build macOS app
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # tag 触发时发布到 GitHub Release
+
+concurrency:
+  group: build-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+          # TODO(P6): x64 lane 未验证。Intel runner; build-python-venv.sh x64 下载 x86_64
+          # standalone python, install-app-deps 按 runner arch 重建 native。启用前先 dogfood。
+          # - arch: x64
+          #   runner: macos-13
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10 # 对齐 pnpm-lock (pnpm 10.x)
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22 # 对齐 @types/node 22 (本地 dev 实际 26, CI 用 LTS 更稳)
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Cache python-build-standalone tarball
+        uses: actions/cache@v4
+        with:
+          path: frontend/.cache/pbs
+          # key 跟随 build-python-venv.sh 里的 PBS_TAG; 该脚本改版本号时同步改这里
+          key: pbs-20260510-${{ matrix.arch }}
+
+      - name: Install deps (postinstall 重建 better-sqlite3/keytar 到 runner arch)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build embedded CPython runtime
+        # 产出 frontend/resources/python/ (可重定位 standalone CPython + 后端 + 自定位 wrapper)
+        run: bash scripts/build-python-venv.sh ${{ matrix.arch }}
+
+      - name: Typecheck + build renderer/main
+        run: pnpm run build
+
+      - name: Package .app (+ 发布, 仅 tag)
+        # electron-builder --<arch> 把 yml 的双 arch target 收敛到当前 runner arch。
+        # afterPack 做 ad-hoc 签名 (identity:null)。tag → 发布到 Release; 否则只产物。
+        run: |
+          PUBLISH=never
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then PUBLISH=always; fi
+          echo "publish mode: ${PUBLISH}"
+          pnpm exec electron-builder --mac --${{ matrix.arch }} --publish "${PUBLISH}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TODO(P6) 公证 — 取消注释并在仓库 secrets 配置 Developer ID + Apple 账号,
+          # 同时把 electron-builder.yml 的 identity 改成证书 hash、notarize 改 true:
+          # CSC_LINK: ${{ secrets.CSC_LINK }}                     # Developer ID .p12 (base64)
+          # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload artifacts (非 tag 手动构建)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: MailAgent-${{ matrix.arch }}
+          path: |
+            frontend/dist/*.dmg
+            frontend/dist/*.zip
+          if-no-files-found: error

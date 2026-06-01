@@ -42,6 +42,42 @@ export function settingsDbPathOverride(): string | null {
   }
 }
 
+/**
+ * Packaging P1-3/§3.4 — 统一可写数据根目录 `DATA_ROOT`。打包模式下所有可写
+ * 数据 (sync_store.db / attachments / logs / .env) 归集到一个根, 与 bundle
+ * 内只读资源分离。解析优先级:
+ *   1. env `MAILAGENT_DATA_ROOT` (显式覆盖, dev/packaged 通用)
+ *   2. packaged 模式 = `<userData>` (~/Library/Application Support/MailAgent)
+ *   3. dev 模式 = `~/Documents/MailAgent` (现有项目根布局, 零变更)
+ *
+ * 注意: 与 `resolveDbPath()` 的 db/attachments `DATA_ROOT/data/` 同级硬约束
+ * 配套 (见 attachment.ts `dirname(dirname(resolveDbPath()))` 倒推)。db 默认值
+ * = `DATA_ROOT/data/sync_store.db`, 保持层级不变, 前端推算逻辑零改动。
+ */
+export function resolveDataRoot(): string {
+  const fromEnv = process.env['MAILAGENT_DATA_ROOT']
+  if (fromEnv && fromEnv.length > 0) return fromEnv
+  if (isPackaged()) {
+    try {
+      return app.getPath('userData')
+    } catch {
+      /* app.getPath() 在 whenReady 前会抛 — fall through 到 dev 默认。
+         打包运行时必然已 ready, 这条只在极端早期/测试导入命中。 */
+    }
+  }
+  return join(homedir(), 'Documents', 'MailAgent')
+}
+
+/** `app.isPackaged` 的安全读取 — 单测里 mock 的 `app` 可能不带该字段,
+ *  缺失时按 dev (false) 处理, 保证 dev 行为零变更。 */
+function isPackaged(): boolean {
+  try {
+    return app.isPackaged === true
+  } catch {
+    return false
+  }
+}
+
 export function resolveDbPath(): string {
   const fromEnv = process.env['SYNC_STORE_DB_PATH']
   if (fromEnv && existsSync(fromEnv)) return fromEnv
@@ -55,7 +91,11 @@ export function resolveDbPath(): string {
   } catch {
     /* app.getPath() can throw before app.whenReady() — fall through to default. */
   }
-  return join(homedir(), 'Documents', 'MailAgent', 'data', 'sync_store.db')
+  // Packaging P1-3 — 默认值改为 `DATA_ROOT/data/sync_store.db`。dev 模式
+  // resolveDataRoot() 返回 ~/Documents/MailAgent → 默认值与历史完全一致
+  // (零变更); packaged 模式返回 <userData>/data/sync_store.db。env +
+  // settings.json 两级覆盖仍优先于此, 优先级链不变。
+  return join(resolveDataRoot(), 'data', 'sync_store.db')
 }
 
 export function getDb(): Database.Database {

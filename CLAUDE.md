@@ -29,6 +29,7 @@
 | Compose 回复/转发 + SMTP 发送 | 动 compose / 发送前 | [`docs/compose-reply-forward-handoff.md`](./docs/compose-reply-forward-handoff.md) |
 | 灵动岛 Ping Island 集成 | 动通知/ack 中心前 | `~/.claude/plans/ultrathink-session-curious-cloud.md` |
 | 前端动效 + 列表性能铁律（Electron renderer：GSAP §8 动效 / snippet 懒取 / 线程批量 / 查询缓存 / 正文 iframe 链接） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/MOTION-PERF-HANDOFF.md`](./frontend/MOTION-PERF-HANDOFF.md) + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
+| 桌面 App 打包 / 发布（一体化 .app + 版本号机制 + 签名闸 + 故障排查） | 出新版 / 发布 App 前 | [`docs/claude/packaging-release.md`](./docs/claude/packaging-release.md) |
 
 技能（按需触发，正文不常驻）：`/deploy`（部署验证）、`/debug`（系统化排查）、`/health`（健康巡检）、`/db-migration`（schema 升级）、`/sprint-handoff`（交接文档）。
 
@@ -98,6 +99,19 @@ tail -f logs/sync.log
 ```
 
 **部署环境**：本地 macOS（3.11+，main.py 主服务）· 远程 VPS `170.106.181.89`（3.9+，webhook-server FastAPI，PM2 `mailagent-webhook`，路径 `/opt/MailAgent/webhook-server`，SSH 公钥 `~/.ssh/id_ed25519`）。
+
+## 打包 / 发布（桌面 App）
+
+一体化 Electron 前端 + 内嵌 CPython 后端 → 单个 macOS `.app`。**全部在 `main` 上做**（前端是 `frontend/` 子目录，非独立 repo/submodule；打包/onboarding/auto-update 已全合入 main，feature 分支已删）。完整 runbook → [`docs/claude/packaging-release.md`](./docs/claude/packaging-release.md)。
+
+- **版本 SSoT** = `frontend/package.json` 的 `version`（electron-builder 据此写 `Info.plist` + 产物名 + auto-update feed `latest-mac.yml`）。流程：bump version → build → 装机验证 → `git tag -a vX.Y.Z`。semver：`0.1.0`=首个 beta，bug 修复走 patch。已发 `v0.1.0/0.1.1/0.1.2`（本地未推送）。**🔴 勿改 package.json `name`（`mailagent-frontend`）**—— 它决定 userData 目录 `~/Library/Application Support/mailagent-frontend/`，改了已装用户数据/`.env` 易主。
+- **前置**（`frontend/` 下，均 gitignored 本地产物）：`node_modules`（`pnpm install`）+ `resources/python`（`bash scripts/build-python-venv.sh`，~200M 可重定位嵌入式 CPython；本机已 provision，换机/新 clone 必先跑）。
+- **构建**：本地装用 `pnpm run build && npx electron-builder --dir --arm64`（只出 `.app`，避开 flaky 的 dmg）；完整 feed 产物（dmg+zip+blockmap+latest-mac.yml）用 `pnpm build:mac`。
+- **🔴 头号坑**：`resources/python` 缺失 → afterPack（`scripts/afterPack.cjs`）**跳过整个签名** → `.app` 无后端 + `codesign` FAIL。build 前必确认它在。
+- **验证**（每次 build 后）：`codesign --verify --deep --strict <app>` 必 OK + `Info.plist` 版本号对 + `Resources/python/bin/python3.11` 在。
+- **装机/升级**：退出旧 app → `ditto dist/mac-arm64/MailAgent.app /Applications/` → open。userData 跨重装保留 → 升级**跳过 onboarding**（detect `'configured'`）+ 后端启动自动 DB 迁移。用 `.app` 时 pm2 `mail-sync` 必须停（防双写）；davmail 用户 `davmail-poc` 留 pm2（EWS 桥，不打进 app）。
+- **改 Python 后端**后：必先 `bash frontend/scripts/build-python-venv.sh` 重 provision 才进包；只改前端 TS/CSS 不用。
+- **自动更新**仍卡 Developer ID 签名（ad-hoc `quitAndInstall` 装不上更新，`AUTO_UPDATE_ENABLED` 默认关）→ 现走手动替换；P6 见 [`docs/packaging/05-auto-update-handoff.md`](./docs/packaging/05-auto-update-handoff.md)。
 
 ## 调试 & 部署
 

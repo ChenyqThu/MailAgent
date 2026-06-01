@@ -13,6 +13,9 @@ directories:
 files:
   - '!**/.vscode/*'
   - '!src/*'
+  # 嵌入式 python 只经 extraResources 进 Contents/Resources/python; 必须从 asar 排除,
+  # 否则 asarUnpack: resources/** 会把它再解一份到 app.asar.unpacked (实测重复 ~206M)。
+  - '!resources/**'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md,INSTALL.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
@@ -27,6 +30,34 @@ files:
   - '!playwright.config.*'
 asarUnpack:
   - resources/**
+# 打包 P1-2 — 后端运行时 + 胶水脚本 + prompt 模板注入 .app/Contents/Resources/。
+# 嵌入式 CPython (build-python-venv.sh 产出) → Resources/python/; cli_runner.ts 的
+# packagedResourcesBin() 解析 process.resourcesPath/python/bin/mailagent (自定位 wrapper)。
+# scripts/prompts 用 ../  (electron-builder extraResources from 相对 projectDir=frontend/)。
+extraResources:
+  - from: resources/python
+    to: python
+  - from: ../scripts
+    to: scripts
+    filter:
+      - create_reply_draft.sh
+      - html_clipboard.py
+  - from: ../prompts
+    to: prompts
+    filter:
+      - email_inbox.md
+      - email_sent.md
+  # V2 远程访问 — serve-api 单 origin 服务前端 SPA (vite base=/app/, app.py mount /app)。
+  # from 相对 projectDir=frontend/ ⇒ out/web 即 frontend/out/web (build:web 产物)。
+  # 落到 Resources/web; serve-api spawn 时注入 MAILAGENT_SPA_DIR=<resources>/web
+  # (与 packagedResourcesBin 同锚点 process.resourcesPath)。打包前必须先跑 build:web
+  # (见 build:mac → build:web 链), 否则此处找不到 out/web 报错。
+  - from: out/web
+    to: web
+# afterPack — 封签前对嵌入式 python 的 .so/.dylib 预签 (afterSign 事后补签会破坏外层
+# seal)。hardenedRuntime 下漏签即 SIGKILL。ad-hoc (identity:null) 先够本地/内部分发;
+# 正式 Developer ID 公证待 P6 (Apple 账号)。
+afterPack: scripts/afterPack.cjs
 mac:
   category: public.app-category.productivity
   # Sprint 8 §2.2 — ad-hoc 签名先够（identity: null 走 ad-hoc，no Apple

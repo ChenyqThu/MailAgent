@@ -33,6 +33,7 @@ import { IntegrationsTab } from './tabs/IntegrationsTab'
 import { IslandUpdatesTab } from './tabs/IslandUpdatesTab'
 import { NotificationsTab } from './tabs/NotificationsTab'
 import { RealtimeStorageTab } from './tabs/RealtimeStorageTab'
+import { RemoteAccessTab } from './tabs/RemoteAccessTab'
 import { SyncTab } from './tabs/SyncTab'
 
 export function SettingsShell(): React.ReactElement {
@@ -123,6 +124,9 @@ export function SettingsShell(): React.ReactElement {
           </TabsContent>
           <TabsContent value="realtime">
             <RealtimeStorageTab />
+          </TabsContent>
+          <TabsContent value="remote">
+            <RemoteAccessTab />
           </TabsContent>
           <TabsContent value="island">
             <IslandUpdatesTab />

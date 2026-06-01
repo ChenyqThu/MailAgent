@@ -265,7 +265,15 @@ function UpdaterSubsection(): React.ReactElement {
         ? 'readyToInstall'
         : status.state
   }`
-  const stateLabel = t(stateLabelKey, { defaultValue: status.state })
+  // 这些状态串含 ICU 占位符: error={message} / available+readyToInstall={version}
+  // / downloading={percent}。必须把对应值传进 t(), 否则 ICU 原样渲染 "{message}" 字面量
+  // (此前 bug: 检查失败时显示 "更新检查失败:{message}" 而非真实错误)。多传无害。
+  const stateLabel = t(stateLabelKey, {
+    defaultValue: status.state,
+    message: status.message ?? '',
+    version: status.latestVersion ?? '',
+    percent: status.downloadPercent ?? 0
+  })
 
   return (
     <Section title={t('settings.update.heading')}>

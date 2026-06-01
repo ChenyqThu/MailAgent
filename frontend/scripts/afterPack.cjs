@@ -1,0 +1,91 @@
+// electron-builder afterPack hook (打包 P1-8) — 在 electron-builder 给 .app 封签 *之前*,
+// 先对嵌入式 CPython 的所有原生二进制 (.so/.dylib + python3.11) 做 ad-hoc 签名。
+//
+// 为什么 afterPack 要自己做完整签名 (实测结论):
+//   electron-builder v26 对 `identity: null` 是 *完全跳过* macOS 签名 (日志:
+//   "skipped macOS code signing reason=identity explicitly is set to null" +
+//   "arm64 requires signing, but identity is set to null and signing is being skipped")。
+//   但 arm64 macOS 要求每个可执行文件至少有 ad-hoc 签名才能运行 → 不签 = .app 跑不起来
+//   (codesign --verify 报 "code has no resources")。所以这里 afterPack 自己用
+//   `codesign --sign -` 做完整 ad-hoc 签名 (electron-builder 既然跳过, 不存在外层 seal
+//   冲突)。先逐个签松散的 python .so (--deep 对 Resources 里的散装 .so 覆盖不全),
+//   再对整个 .app 做一次 --deep ad-hoc 签 (覆盖 Frameworks/Helpers/主二进制)。
+//   ad-hoc 先够本地/内部分发; 正式 Developer ID + 公证留 P6 (Apple 账号)。
+const { execFileSync } = require('node:child_process')
+const path = require('node:path')
+const fs = require('node:fs')
+
+/** 递归收集需签名的 Mach-O (真实文件, 跳过符号链接)。 */
+function collectMachO(dir, acc) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isSymbolicLink()) continue
+    if (entry.isDirectory()) {
+      collectMachO(full, acc)
+    } else if (entry.isFile()) {
+      if (full.endsWith('.so') || full.endsWith('.dylib') || /\/bin\/python3(\.\d+)?$/.test(full)) {
+        acc.push(full)
+      }
+    }
+  }
+  return acc
+}
+
+exports.default = async function afterPack(context) {
+  if (context.electronPlatformName !== 'darwin') return
+
+  const appName = context.packager.appInfo.productFilename
+  const appPath = path.join(context.appOutDir, `${appName}.app`)
+  const pyRoot = path.join(appPath, 'Contents', 'Resources', 'python')
+  if (!fs.existsSync(pyRoot)) {
+    console.log('[afterPack] 未发现嵌入式 python, 跳过 (', pyRoot, ')')
+    return
+  }
+
+  const entitlements = path.join(context.packager.info.projectDir, 'build', 'entitlements.mac.plist')
+  const targets = collectMachO(pyRoot, [])
+  console.log(`[afterPack] 对 ${targets.length} 个嵌入式 python Mach-O 做 ad-hoc 预签名 …`)
+
+  let signed = 0
+  for (const file of targets) {
+    try {
+      execFileSync('codesign', [
+        '--force', '--sign', '-',
+        '--options', 'runtime',
+        '--entitlements', entitlements,
+        '--timestamp=none',
+        file,
+      ], { stdio: 'pipe' })
+      signed++
+    } catch (err) {
+      console.error(`[afterPack] 散装 .so 签名失败: ${file}\n`, err.stderr?.toString() || err.message)
+      throw err // 漏签即 SIGKILL, 必须让构建失败而非静默放行
+    }
+  }
+  console.log(`[afterPack] 已签 ${signed} 个嵌入式 python Mach-O; 对整个 .app 做 --deep ad-hoc 签 …`)
+
+  // electron-builder 跳过了签名 → 自己对整个 bundle 做完整 deep ad-hoc 签
+  // (Frameworks/Helpers/主二进制 + 再覆盖一遍 .so)。inside-out, 一次完成。
+  try {
+    execFileSync('codesign', [
+      '--deep', '--force', '--sign', '-',
+      '--options', 'runtime',
+      '--entitlements', entitlements,
+      '--timestamp=none',
+      appPath,
+    ], { stdio: 'pipe' })
+  } catch (err) {
+    console.error('[afterPack] 整 app deep 签名失败:\n', err.stderr?.toString() || err.message)
+    throw err
+  }
+
+  // verify gate: ad-hoc 下用 --verify (不加 --deep --strict, 后者对 ad-hoc 误报)。
+  // arm64 上能通过基础 verify 即表示可加载运行; 失败则构建中止。
+  try {
+    execFileSync('codesign', ['--verify', '--verbose=2', appPath], { stdio: 'pipe' })
+    console.log('[afterPack] OK — 整 app ad-hoc 签名 + verify 通过 (arm64 可运行)')
+  } catch (err) {
+    console.error('[afterPack] codesign --verify 失败:\n', err.stderr?.toString() || err.message)
+    throw err
+  }
+}

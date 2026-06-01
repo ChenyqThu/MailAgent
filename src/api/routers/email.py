@@ -1,0 +1,1082 @@
+"""email 路由 — /api/email/*。
+
+读端点经 EmailRepository (Depends(get_repository))，写端点经 cli_runner subprocess。
+契约: BACKEND-INTERFACES §2.4 + email-*.schema.json (list/get/body/search/resync/
+update-flag)。
+
+本 router 端点:
+  GET  /api/email/list                  — repo.list_metadata        (EmailMeta[])
+  GET  /api/email/pinned-ids            — repo.list_pinned_ids       (PinnedIds)
+  GET  /api/email/{internal_id}         — repo.get_email_full/get_metadata (EmailFull)
+  GET  /api/email/{internal_id}/body    — repo.get_body             (EmailBody)
+  GET  /api/email/search                — repo.search_email_bodies  (SearchResult)
+  POST /api/email/draft                 — CLI `email draft`          (DraftResult)
+  POST /api/email/send                  — CLI `email send --yes`     (SendResult)
+  POST /api/email/{internal_id}/resync  — CLI `email resync`         (ResyncResult|plan)
+  POST /api/email/{internal_id}/update-flag — CLI `notion update-flag` (legacy notion.updateFlag)
+  POST /api/email/{internal_id}/flag    — CLI `email flag`           (Sprint 15 outbox SSoT)
+  POST /api/email/{internal_id}/archive — CLI `email archive`        (davmail-only)
+  POST /api/email/{internal_id}/draft-plan — CLI `email draft --dry-run` (DraftPlanResult)
+  POST /api/email/{internal_id}/pin     — CLI `email pin|unpin`      (pin toggle)
+
+设计纪律 (实现规格 + sibling 已写的 envelope/schemas):
+  - 读端点 ``data`` 形状 = CLI 同名命令 emit 的 ``data`` (复用
+    docs/cli-schema/email-*.schema.json), 直接镜像 CLI commands/email.py 的
+    ``_meta_to_dict`` / ``_body_summary`` / ``_attachment_to_dict`` /
+    ``_meta_record_to_list_item`` helper, 让 cli.gen.ts 校验不变。
+  - 统一响应走 app.success_envelope / app.APIError (全局 handler 转 envelope error +
+    正确 HTTP)。meta.source='sqlite' (repo 直查) / 'cli' (subprocess)。
+  - 写端点经 cli_runner.run_cli; resync 必带 ``--allow-concurrent`` (mail-sync 生产在线
+    → 否则 exit 9 E_PM2_RUNNING → 409)。notion update-flag **不做** pm2 检测, 不带该 flag。
+  - notion update-flag 用 **tri-bool 字符串形** ``--is-read true/false`` (与 email flag 的
+    ``--is-read/--no-is-read`` slash 形不同 — 实现规格 gotcha #7)。
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from typing import TYPE_CHECKING, Any, Optional
+
+from fastapi import APIRouter, Depends, Query, Request
+
+from src.api.app import APIError, partial_envelope, success_envelope
+from src.api.auth import verify_cf_access
+from src.api.cli_runner import CliRunnerError, get_cli_api_key, run_cli
+from src.api.deps import get_repository
+
+if TYPE_CHECKING:
+    from src.repository import (
+        AttachmentRecord,
+        EmailBodyRecord,
+        EmailMetadataRecord,
+        EmailRepository,
+    )
+
+router = APIRouter(prefix="/api/email", tags=["email"])
+
+
+# ---------------------------------------------------------------------------
+# wire-shape helpers — 1:1 镜像 CLI src/cli/commands/email.py, 保证 data 形状
+# 与 docs/cli-schema/email-*.schema.json + cli.gen.ts 一致 (不可漂移)。
+# ---------------------------------------------------------------------------
+
+
+def _meta_to_dict(meta: "EmailMetadataRecord") -> dict[str, Any]:
+    """EmailMetadataRecord → `email get` wire dict (不含 body / attachments)。
+
+    镜像 email.py::_meta_to_dict (email-get.schema.json email_record)。
+    """
+    return {
+        "internal_id": meta.internal_id,
+        "message_id": meta.message_id,
+        "thread_id": meta.thread_id,
+        "subject": meta.subject,
+        "sender": meta.sender,
+        "sender_name": meta.sender_name,
+        "to_addr": meta.to_addr,
+        "cc_addr": meta.cc_addr,
+        "date_received": meta.date_received,
+        "mailbox": meta.mailbox,
+        "is_read": meta.is_read,
+        "is_flagged": meta.is_flagged,
+        "sync_status": meta.sync_status,
+        "notion_page_id": meta.notion_page_id,
+        "notion_thread_id": meta.notion_thread_id,
+        "notion_url": meta.notion_url,
+        "sync_error": meta.sync_error,
+        "retry_count": meta.retry_count,
+        # 前端 EmailDetail 扩展 (types.ts) — handlers/email.ts 暴露此 SQLite 列。
+        "is_important": meta.is_important,
+    }
+
+
+def _body_summary(body: Optional["EmailBodyRecord"]) -> Optional[dict[str, Any]]:
+    """EmailBodyRecord → body SUMMARY (非内容)。镜像 email.py::_body_summary。"""
+    if body is None:
+        return None
+    return {
+        "format": body.body_format,
+        "size_bytes": body.body_size_bytes,
+        "has_inline_images": body.has_inline_images,
+        "fetched_at": body.fetched_at,
+        "fetched_source": body.fetched_source,
+        "raw_mime_sha256": body.raw_mime_sha256,
+    }
+
+
+def _attachment_to_dict(att: "AttachmentRecord") -> dict[str, Any]:
+    """AttachmentRecord → `email get` 内嵌附件 dict。
+
+    镜像 email.py::_attachment_to_dict — **不含** local_path / internal_id
+    (实现规格 gotcha #1: 绝不回显 host 路径)。
+    """
+    return {
+        "id": att.id,
+        "filename": att.filename,
+        "size_bytes": att.size_bytes,
+        "content_type": att.content_type,
+        "is_inline": att.is_inline,
+        "content_id": att.content_id,
+        "sha256": att.sha256,
+        "derived_from": att.derived_from,
+        "derived_format": att.derived_format,
+        "notion_file_id": att.notion_file_id,
+        "notion_block_id": att.notion_block_id,
+    }
+
+
+def _meta_record_to_list_item(meta: "EmailMetadataRecord") -> dict[str, Any]:
+    """EmailMetadataRecord → `email list` item。镜像 email.py::_meta_record_to_list_item。
+
+    比 _meta_to_dict 窄 (无 to/cc/sync_error/retry_count), 但含 notion_url。
+    """
+    page_id = meta.notion_page_id
+    notion_url = (
+        f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else None
+    )
+    return {
+        "internal_id": meta.internal_id,
+        "message_id": meta.message_id,
+        "thread_id": meta.thread_id,
+        "subject": meta.subject,
+        "sender": meta.sender,
+        "sender_name": meta.sender_name,
+        "date_received": meta.date_received,
+        "mailbox": meta.mailbox,
+        "is_read": meta.is_read,
+        "is_flagged": meta.is_flagged,
+        "sync_status": meta.sync_status,
+        "notion_page_id": page_id,
+        "notion_url": notion_url,
+    }
+
+
+# ---------------------------------------------------------------------------
+# validation constants — 与 CLI email.py 对齐 (相同上限/枚举, 错误才一致)
+# ---------------------------------------------------------------------------
+
+VALID_INCLUDE = {"body", "attachments", "all"}
+VALID_BODY_FORMATS = {"markdown", "html", "raw"}
+VALID_STATUSES = {
+    "pending", "fetch_failed", "synced", "failed", "skipped", "dead_letter",
+}
+LIST_LIMIT_MAX = 500
+SEARCH_LIMIT_MAX = 200
+
+
+def _parse_include(include: str) -> set[str]:
+    """逗号分隔 → set; 'all' 展开为 {body, attachments}。镜像 email.py::_parse_include。"""
+    if not include:
+        return set()
+    parts = {p.strip().lower() for p in include.split(",") if p.strip()}
+    unknown = parts - VALID_INCLUDE
+    if unknown:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"Unknown include value(s): {sorted(unknown)}; "
+            f"valid: {sorted(VALID_INCLUDE)}",
+            source="sqlite",
+        )
+    if "all" in parts:
+        return {"body", "attachments"}
+    return parts
+
+
+def _count_fts_indexed(repo: "EmailRepository") -> int:
+    """`SELECT count(*) FROM email_body_fts` — SearchResult.total_indexed 用。
+
+    repo 无现成 helper (实现规格 gotcha #3), 用 repo._connect() 起一个短命连接
+    (与 repo 内部所有读一致: per-call open/close, WAL 下与 mail-sync writer 并发安全)。
+    FTS5 表缺失 / 异常时回 0, 不让搜索因 count 失败而 500。
+    """
+    import sqlite3
+
+    conn = repo._connect()
+    try:
+        row = conn.execute("SELECT count(*) AS c FROM email_body_fts").fetchone()
+        return int(row["c"]) if row else 0
+    except sqlite3.OperationalError:
+        return 0
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# CLI 错误 → APIError 桥接 (写端点共用)
+# ---------------------------------------------------------------------------
+
+
+def _raise_from_cli_error(exc: CliRunnerError) -> None:
+    """把 CliRunnerError 转成 APIError (全局 handler 据 code 映 HTTP)。
+
+    code 优先用 CLI 自报的 ``error.code`` (run_cli 已解析), http_status 由
+    app.ERROR_CODE_TO_HTTP[code] 推导。raw stdout/stderr 不回显 (仅 message/hint)。
+    """
+    raise APIError(
+        exc.code,
+        exc.message,
+        hint=exc.hint,
+        source="cli",
+    ) from exc
+
+
+# ===========================================================================
+# GET /api/email/list — repo.list_metadata → EmailMeta[]
+# ===========================================================================
+
+
+@router.get("/list", dependencies=[Depends(verify_cf_access)])
+async def list_emails(
+    request: Request,
+    repo: "EmailRepository" = Depends(get_repository),
+    mailbox: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    since: Optional[str] = Query(None, alias="sinceDate", description="YYYY-MM-DD (date_from)"),
+    until: Optional[str] = Query(None, alias="untilDate", description="YYYY-MM-DD (date_to)"),
+    from_addr: Optional[str] = Query(None, alias="fromAddr", description="sender 子串"),
+    subject: Optional[str] = Query(None, description="subject 子串"),
+    is_read: Optional[bool] = Query(None, alias="isRead"),
+    is_flagged: Optional[bool] = Query(None, alias="isFlagged"),
+    has_notion: Optional[bool] = Query(None, alias="hasNotion"),
+    limit: int = Query(50, ge=1, le=LIST_LIMIT_MAX),
+    offset: int = Query(0, ge=0),
+):
+    """列出邮件 metadata (分页 + 过滤)。
+
+    F2 (实现规格): query 键全用前端 types.ts ``ListOpts`` 的 camelCase 契约
+    (sinceDate / untilDate / fromAddr / isRead / isFlagged / hasNotion)。旧实现只
+    给 ``from`` 起 alias, 其余用 snake_case → 前端发的 camelCase 键被 FastAPI 静默
+    丢弃 → 过滤被无声忽略。mailbox / status / subject / limit / offset 在两侧同名,
+    无需 alias。
+    data = EmailMeta[] (email-list.schema.json email_list_item),
+    meta += {total, limit, offset, count} (email-list.schema.json meta)。
+    """
+    if status is not None and status not in VALID_STATUSES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"status must be one of {sorted(VALID_STATUSES)}, got {status!r}",
+            source="sqlite",
+        )
+
+    result = repo.list_metadata(
+        mailbox=mailbox,
+        status=status,
+        date_from=since,
+        date_to=until,
+        sender_substr=from_addr,
+        subject_substr=subject,
+        is_read=is_read,
+        is_flagged=is_flagged,
+        has_notion=has_notion,
+        limit=limit,
+        offset=offset,
+    )
+    rows = result.get("emails", [])
+    data = [_meta_record_to_list_item(r) for r in rows]
+    return success_envelope(
+        data,
+        request=request,
+        source="sqlite",
+        meta_extra={
+            "total": result.get("total", len(rows)),
+            "limit": result.get("limit", limit),
+            "offset": result.get("offset", offset),
+            "count": len(data),
+        },
+    )
+
+
+# ===========================================================================
+# GET /api/email/{internal_id} — get_email_full / get_metadata → EmailFull
+# ===========================================================================
+
+
+@router.get("/{internal_id:int}", dependencies=[Depends(verify_cf_access)])
+async def get_email(
+    request: Request,
+    internal_id: int,
+    repo: "EmailRepository" = Depends(get_repository),
+    include: str = Query(
+        "", description="逗号分隔: body / attachments / all (默认仅 metadata)"
+    ),
+):
+    """获取单封邮件 metadata + 可选 body 摘要 / attachments。
+
+    ?include=body,attachments → 一次聚合 (repo.get_email_full)。data 形状镜像
+    `email get` (email-get.schema.json email_record): 始终含 ``body`` (摘要 | null)
+    + ``attachments`` (list | [])。404 (E_NOT_FOUND) 当 metadata 缺失。
+    body 是 SUMMARY (format/size_bytes/...), 非内容 — 内容走 /body 端点。
+    """
+    parts = _parse_include(include)
+
+    if parts:
+        full = repo.get_email_full(internal_id)
+        if full is None:
+            raise APIError(
+                "E_NOT_FOUND",
+                f"Email with internal_id={internal_id} not found",
+                hint="Use GET /api/email/list to find available IDs",
+                source="sqlite",
+            )
+        data = _meta_to_dict(full.metadata)
+        data["body"] = _body_summary(full.body) if "body" in parts else None
+        data["attachments"] = (
+            [_attachment_to_dict(a) for a in full.attachments]
+            if "attachments" in parts
+            else []
+        )
+    else:
+        meta = repo.get_metadata(internal_id)
+        if meta is None:
+            raise APIError(
+                "E_NOT_FOUND",
+                f"Email with internal_id={internal_id} not found",
+                hint="Use GET /api/email/list to find available IDs",
+                source="sqlite",
+            )
+        data = _meta_to_dict(meta)
+        data["body"] = None
+        data["attachments"] = []
+
+    return success_envelope(data, request=request, source="sqlite")
+
+
+# ===========================================================================
+# GET /api/email/{internal_id}/body — get_body, 按 format 取字段
+# ===========================================================================
+
+
+@router.get("/{internal_id:int}/body", dependencies=[Depends(verify_cf_access)])
+async def get_email_body(
+    request: Request,
+    internal_id: int,
+    repo: "EmailRepository" = Depends(get_repository),
+    format: str = Query("markdown", description="markdown (default) / html / raw"),
+):
+    """返回邮件正文 — markdown / html / raw (raw → content=raw_mime_sha256, 仅哈希)。
+
+    data = EmailBody (email-body.schema.json): {internal_id, format, content,
+    size_bytes, fetched_at, fetched_source}。镜像 CLI `email body`:
+    单次 get_body 后挑字段 (一次往返拿到 size_bytes/fetched_at)。
+    404 (E_NOT_FOUND) 当无 body 行 或 该 format 字段为 None。
+    """
+    fmt = format.lower()
+    if fmt not in VALID_BODY_FORMATS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"format must be one of {sorted(VALID_BODY_FORMATS)}, got {format!r}",
+            source="sqlite",
+        )
+
+    body_record = repo.get_body(internal_id)
+    if body_record is None:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"No body in SQLite for internal_id={internal_id}",
+            hint="可能未经 v4 双写; 后台跑 backfill body 回填",
+            source="sqlite",
+        )
+
+    if fmt == "markdown":
+        content = body_record.markdown
+    elif fmt == "html":
+        content = body_record.html
+    else:  # raw — 只返回 raw MIME 哈希 (不含正文)
+        content = body_record.raw_mime_sha256
+
+    if content is None:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"Body format {fmt!r} unavailable for internal_id={internal_id}",
+            hint="可能仅 dual-write 了另一种 format; 试 ?format=html / markdown",
+            source="sqlite",
+        )
+
+    data = {
+        "internal_id": internal_id,
+        "format": fmt,
+        "content": content,
+        "size_bytes": (
+            body_record.body_size_bytes if fmt != "raw" else len(content)
+        ),
+        "fetched_at": body_record.fetched_at,
+        "fetched_source": body_record.fetched_source,
+    }
+    return success_envelope(data, request=request, source="sqlite")
+
+
+# ===========================================================================
+# GET /api/email/search — FTS5 bm25 + snippet
+# ===========================================================================
+
+
+@router.get("/search", dependencies=[Depends(verify_cf_access)])
+async def search_emails(
+    request: Request,
+    repo: "EmailRepository" = Depends(get_repository),
+    q: str = Query(..., description="自然语言关键词 或 FTS5 query 语法"),
+    mailbox: Optional[str] = Query(None),
+    since: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    until: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    limit: int = Query(50, ge=1, le=SEARCH_LIMIT_MAX),
+    raw: bool = Query(False, description="true=直传 FTS5; false(默认)=CJK smart 改写"),
+):
+    """FTS5 全文搜索邮件正文 + subject + sender。
+
+    默认 smart 模式 (CJK-aware query 改写); raw=true 走原 FTS5 syntax。
+    data = SearchResult (前端 types.ts): {items, total_indexed, transformed_query?,
+    mode?}。meta += {query, mode, total_hits, limit, count, transformed_query?}
+    (镜像 CLI `email search` meta)。FTS 语法错误 → 空命中 (repo 内部吞掉)。
+
+    A5 (故意偏离 cli-schema): 本端点 ``data`` 是 SearchResult **对象** (含 total_indexed
+    等), **非** CLI `email search` emit 的命中数组 —— 因前端 types.ts EmailApi.search
+    返回 SearchResult。未来的 schema-conformance 测试勿据 cli-schema 数组形误报本端点。
+    """
+    if raw:
+        hits = repo.search_email_bodies(
+            q, limit=limit, mailbox=mailbox, since_date=since, until_date=until
+        )
+        transformed_query = q
+    else:
+        from src.repository.email_repository import smart_query_transform
+
+        transformed_query = smart_query_transform(q)
+        hits = repo.search_email_bodies(
+            transformed_query,
+            limit=limit,
+            mailbox=mailbox,
+            since_date=since,
+            until_date=until,
+        )
+
+    items = [
+        {
+            "internal_id": hit.internal_id,
+            "subject": hit.subject,
+            "sender": hit.sender,
+            "date_received": hit.date_received,
+            "mailbox": hit.mailbox,
+            "rank": hit.rank,
+            "snippet": hit.snippet,
+            "notion_page_id": hit.notion_page_id,
+            "notion_url": hit.notion_url,
+        }
+        for hit in hits
+    ]
+
+    mode = "raw" if raw else "smart"
+    total_indexed = _count_fts_indexed(repo)
+    # data = 前端 SearchResult 形状 (items + total_indexed + transformed_query? + mode)。
+    data: dict[str, Any] = {
+        "items": items,
+        "total_indexed": total_indexed,
+        "mode": mode,
+    }
+    transformed_changed = (not raw) and transformed_query != q
+    if transformed_changed:
+        data["transformed_query"] = transformed_query
+
+    meta_extra: dict[str, Any] = {
+        "query": q,
+        "mode": mode,
+        "total_hits": len(items),
+        "limit": limit,
+        "count": len(items),
+        "total_indexed": total_indexed,
+    }
+    if transformed_changed:
+        meta_extra["transformed_query"] = transformed_query
+
+    return success_envelope(
+        data, request=request, source="sqlite", meta_extra=meta_extra
+    )
+
+
+# ===========================================================================
+# POST /api/email/{internal_id}/resync — CLI `email resync`
+# ===========================================================================
+
+
+@router.post("/{internal_id:int}/resync", dependencies=[Depends(verify_cf_access)])
+async def resync_email(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """重传单封邮件到 Notion (CLI `email resync`)。
+
+    body (ResyncOpts, 全可选): {replaceExisting, skipParentLookup, dryRun}。
+    data = oneOf plan | result (email-resync.schema.json)。
+    **始终带 --allow-concurrent** (mail-sync 生产在线 → 否则 exit 9 → 409)；
+    dry-run 跳过 auth (run_cli api_key=None 时 CLI 自行处理写鉴权)。
+    """
+    opts = body or {}
+    dry_run = bool(opts.get("dryRun"))
+
+    args: list[str] = ["email", "resync", str(internal_id), "--allow-concurrent"]
+    if opts.get("replaceExisting"):
+        args.append("--replace-existing")
+    if opts.get("skipParentLookup"):
+        args.append("--no-parent")
+    if dry_run:
+        args.append("--dry-run")
+
+    api_key = None if dry_run else get_cli_api_key()
+    try:
+        result = await run_cli(args, api_key=api_key)
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )
+
+
+# ===========================================================================
+# POST /api/email/{internal_id}/update-flag — CLI `notion update-flag`
+# (legacy notion.updateFlag — 直写 Notion 页, 无 outbox; Sprint15 灰度期并存)
+# ===========================================================================
+
+
+def _tri_bool_str(value: Any) -> Optional[str]:
+    """把任意可空 bool/字符串归一成 CLI tri-bool 字符串 'true'/'false' (或 None)。
+
+    notion update-flag 用字符串形 ``--is-read true`` (与 email flag 的 slash 形不同)。
+    None / 缺省 → None (该字段不传 → CLI 不改)。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    v = str(value).strip().lower()
+    if v in ("true", "1", "yes"):
+        return "true"
+    if v in ("false", "0", "no"):
+        return "false"
+    raise APIError(
+        "E_INVALID_ARG",
+        f"expected boolean for flag, got {value!r}",
+        source="cli",
+    )
+
+
+@router.post("/{internal_id:int}/update-flag", dependencies=[Depends(verify_cf_access)])
+async def update_flag(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """直写 Notion 邮件页 Is Read / Is Flagged / Processing Status (CLI `notion update-flag`)。
+
+    legacy notion.updateFlag 契约 (UpdateFlagOpts): {isRead, isFlagged,
+    processingStatus, dryRun}。tri-bool 用字符串形 ``--is-read true/false``。
+    data = notion-update-flag.schema.json {internal_id, page_id,
+    updated_properties, dry_run}。404 当无 notion_page_id。
+    此命令**不做** pm2 检测 → 不带 --allow-concurrent。
+    """
+    opts = body or {}
+    dry_run = bool(opts.get("dryRun"))
+
+    is_read = _tri_bool_str(opts.get("isRead"))
+    is_flagged = _tri_bool_str(opts.get("isFlagged"))
+    processing_status = opts.get("processingStatus")
+
+    if is_read is None and is_flagged is None and processing_status is None:
+        raise APIError(
+            "E_INVALID_ARG",
+            "at least one of isRead / isFlagged / processingStatus required",
+            source="cli",
+        )
+
+    args: list[str] = ["notion", "update-flag", str(internal_id)]
+    if is_read is not None:
+        args += ["--is-read", is_read]
+    if is_flagged is not None:
+        args += ["--is-flagged", is_flagged]
+    if processing_status is not None:
+        args += ["--processing-status", str(processing_status)]
+    if dry_run:
+        args.append("--dry-run")
+
+    api_key = None if dry_run else get_cli_api_key()
+    try:
+        result = await run_cli(args, api_key=api_key)
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )
+
+
+# ===========================================================================
+# GET /api/email/pinned-ids — repo.list_pinned_ids → PinnedIds
+# ===========================================================================
+# NOTE: 该动态段 ``/{internal_id:int}`` 用 ``:int`` 转换器, "pinned-ids" 本就不匹配,
+# 顺序无所谓 (此处定义只为可读)。
+
+
+@router.get("/pinned-ids", dependencies=[Depends(verify_cf_access)])
+async def list_pinned_ids(
+    request: Request,
+    repo: "EmailRepository" = Depends(get_repository),
+):
+    """列出所有置顶邮件的 internal_id (repo.list_pinned_ids, pinned_at DESC)。
+
+    data = PinnedIds {pinned_ids: int[], count}。前端 InboxView 用它在分页列表外
+    补齐置顶项 (置顶可能落在当前页之外)。纯 SQLite 读, 无 auth。
+    """
+    pinned_ids = repo.list_pinned_ids()
+    data = {"pinned_ids": pinned_ids, "count": len(pinned_ids)}
+    return success_envelope(data, request=request, source="sqlite")
+
+
+# ===========================================================================
+# POST /api/email/{internal_id}/flag  +  POST /api/email/flag (batch)
+#   — CLI `email flag` (Sprint 15 outbox SSoT)
+# ===========================================================================
+# email flag 的 flag 约定与 notion update-flag 不同 (实现规格 gotcha #7):
+#   - email flag:        slash 形 ``--is-read`` / ``--no-is-read`` (typer --flag/--no-flag)
+#   - notion update-flag: tri-bool 字符串 ``--is-read true/false``
+# 永远带 ``--allow-concurrent`` (#9): mail-sync 生产在线, 否则 exit 9 E_PM2_RUNNING → 409。
+#
+# 两个入口共享同一 flag-mutation argv 构建 + 执行 (_build_flag_mutation_args /
+# _run_flag_cli), 只在 **target** 段不同:
+#   - 单封: path ``/{id}/flag`` → positional id (body 也可带 ids[] 走批量, 互斥时 path 被忽略)。
+#   - 批量: ``/flag`` (无 path id) → 必带 body ``ids[]``, 空/缺 ids → 400 (C8 契约,
+#     对齐 types.ts flag(null,{ids}))。
+# A1: CLI exit 6 + wrapper status=='partial_failure' (批量逐项失败) → partial_envelope
+#   → HTTP 207 Multi-Status (data = {succeeded, failed, summary}); 单封不会触发。
+# A6: EmailFlagOpts.allowConcurrent 是 client field, 服务端**恒忽略** —— 永远拼
+#   ``--allow-concurrent`` (gotcha #9 的安全选择, mail-sync 生产恒在线)。勿未来误接它。
+
+
+def _build_flag_mutation_args(opts: dict[str, Any]) -> list[str]:
+    """据 EmailFlagOpts 构建 ``email flag`` 的 **mutation** 段 (不含 target / dry-run)。
+
+    返回 slash 形 (#7) 的 ``--is-read``/``--no-is-read`` 等。至少一个
+    isRead / isFlagged / processingStatus, 否则 raise E_INVALID_ARG (→ 400)。
+    target (--ids vs positional id) 与 --dry-run / --allow-concurrent 由 caller 拼。
+    """
+    is_read = opts.get("isRead")
+    is_flagged = opts.get("isFlagged")
+    processing_status = opts.get("processingStatus")
+    has_processing = isinstance(processing_status, str) and len(processing_status) > 0
+
+    if is_read is None and is_flagged is None and not has_processing:
+        raise APIError(
+            "E_INVALID_ARG",
+            "at least one of isRead / isFlagged / processingStatus required",
+            source="cli",
+        )
+
+    mutation: list[str] = []
+    # slash 形 (gotcha #7): --is-read/--no-is-read, --is-flagged/--no-is-flagged。
+    if is_read is True:
+        mutation.append("--is-read")
+    elif is_read is False:
+        mutation.append("--no-is-read")
+    if is_flagged is True:
+        mutation.append("--is-flagged")
+    elif is_flagged is False:
+        mutation.append("--no-is-flagged")
+    if has_processing:
+        mutation += ["--processing-status", str(processing_status)]
+    return mutation
+
+
+async def _run_flag_cli(
+    request: Request, target: list[str], mutation: list[str], *, dry_run: bool
+):
+    """拼 ``email flag <target> <mutation> [--dry-run] --allow-concurrent`` 并执行。
+
+    永远 ``--allow-concurrent`` (gotcha #9: mail-sync 在线 → 否则 exit 9 → 409)。
+    dry-run 跳过 auth (api_key=None)。A1: 批量 partial_failure (CLI exit 6) →
+    partial_envelope (HTTP 207); 其余成功 → success_envelope。
+    """
+    args: list[str] = ["email", "flag", *target, *mutation]
+    if dry_run:
+        args.append("--dry-run")
+    args.append("--allow-concurrent")
+
+    api_key = None if dry_run else get_cli_api_key()
+    try:
+        result = await run_cli(args, api_key=api_key)
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+
+    if result.is_partial_failure:
+        # 批量逐项失败 (CLI exit 6) → 207；逐项 error 落在 data.failed[].error。
+        return partial_envelope(
+            result.data,
+            request=request,
+            source="cli",
+            meta_extra=result.meta or None,
+        )
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )
+
+
+def _coerce_flag_ids(ids: Any) -> list[int]:
+    """校验 batch ``ids`` 为非空 non-negative int 列表; 否则 raise E_INVALID_ARG。
+
+    bool 是 int 子类, 显式排除 (True/False 不是合法 id)。空列表 / 非列表 → 400
+    (C8: 批量端点拒绝空 ids, 不静默 fallback)。
+    """
+    if not isinstance(ids, list) or len(ids) == 0:
+        raise APIError(
+            "E_INVALID_ARG",
+            "ids must be a non-empty list of non-negative integers",
+            source="cli",
+        )
+    for i in ids:
+        if not isinstance(i, int) or isinstance(i, bool) or i < 0:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"ids must be non-negative integers, got {i!r}",
+                source="cli",
+            )
+    return ids
+
+
+@router.post("/{internal_id:int}/flag", dependencies=[Depends(verify_cf_access)])
+async def flag_email(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """写 flag / processing_status intent 到 SQLite + outbox 双 target (CLI `email flag`)。
+
+    Sprint 15 SSoT inversion 主写路径 (区别 legacy notion.updateFlag 直写 Notion)。
+    body (EmailFlagOpts): {isRead?, isFlagged?, processingStatus?, ids?, dryRun?}。
+    - 单封: path ``internal_id`` (body 不传 ids)。
+    - 批量: body ``ids: [1,2,3]`` → 走 CLI ``--ids`` (与 path id 互斥, 此时忽略 path)。
+      (无 path id 的纯批量入口见 ``POST /api/email/flag``。)
+    至少给一个 isRead / isFlagged / processingStatus, 否则 400。
+    slash 形 flag (#7) + 永远 ``--allow-concurrent`` (#9)。dry-run 跳过 auth。
+    data = email-flag.schema.json (executed flag_result | dry-run plan); 批量逐项
+    失败 → 207 partial_failure (gotcha A1)。
+    """
+    opts = body or {}
+    dry_run = bool(opts.get("dryRun"))
+    mutation = _build_flag_mutation_args(opts)
+
+    # target: --ids 批量 与 单封 path id 互斥 (镜像 emailFlagArgs in write_ops.ts)。
+    ids = opts.get("ids")
+    if isinstance(ids, list) and len(ids) > 0:
+        validated = _coerce_flag_ids(ids)
+        target = ["--ids", ",".join(str(i) for i in validated)]
+    else:
+        target = [str(internal_id)]
+
+    return await _run_flag_cli(request, target, mutation, dry_run=dry_run)
+
+
+@router.post("/flag", dependencies=[Depends(verify_cf_access)])
+async def flag_emails_batch(
+    request: Request,
+    body: Optional[dict[str, Any]] = None,
+):
+    """批量写 flag / processing_status intent (CLI `email flag --ids`) — 无 path id。
+
+    C8 契约: 对齐 types.ts ``flag(null, {ids: [...], isRead: ...})``。body
+    (EmailFlagOpts): {ids: [1,2,3], isRead?, isFlagged?, processingStatus?, dryRun?}。
+    ``ids`` **必填且非空** (空/缺 → 400, 不像单封端点那样静默 fallback 到 path id)。
+    至少给一个 isRead / isFlagged / processingStatus, 否则 400。
+    slash 形 flag (#7) + 永远 ``--allow-concurrent`` (#9)。dry-run 跳过 auth。
+    data = email-flag.schema.json; 逐项失败 → 207 partial_failure (gotcha A1,
+    data = {succeeded, failed, summary})。
+
+    NOTE: 与单封 ``/{id}/flag`` 不冲突 —— 后者用 ``:int`` 转换器, 字面量 "flag" 不匹配整数段。
+    """
+    opts = body or {}
+    dry_run = bool(opts.get("dryRun"))
+    mutation = _build_flag_mutation_args(opts)
+    validated = _coerce_flag_ids(opts.get("ids"))
+    target = ["--ids", ",".join(str(i) for i in validated)]
+
+    return await _run_flag_cli(request, target, mutation, dry_run=dry_run)
+
+
+# ===========================================================================
+# POST /api/email/{internal_id}/archive — CLI `email archive` (davmail-only)
+# ===========================================================================
+
+
+@router.post("/{internal_id:int}/archive", dependencies=[Depends(verify_cf_access)])
+async def archive_email(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """归档收件箱邮件: IMAP MOVE INBOX→Archive + Mailbox→存档 (CLI `email archive`)。
+
+    body (可选): {dryRun?}。davmail-only — 非 davmail backend 时 CLI 自报
+    E_INVALID_ARG → 400 (gotcha #6, 由 _raise_from_cli_error 透传, 不在 router 重复
+    探测 backend: CLI 子进程继承 server env, 它的判断才权威)。archive **不做** pm2
+    检测 → **不带** --allow-concurrent (gotcha #9)。
+    data = email-archive 结果 (ArchiveResult: success/from_mailbox/to_mailbox/...)。
+    """
+    opts = body or {}
+    dry_run = bool(opts.get("dryRun"))
+
+    args: list[str] = ["email", "archive", str(internal_id)]
+    if dry_run:
+        args.append("--dry-run")
+
+    api_key = None if dry_run else get_cli_api_key()
+    try:
+        result = await run_cli(args, api_key=api_key)
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )
+
+
+# ===========================================================================
+# Compose (draft / send / draft-plan) — shared argv builder + body-html-file
+# ===========================================================================
+# bodyHtml 走 **临时文件** ``--body-html-file`` (gotcha #8): TipTap getHTML() 输出
+# 落 NamedTemporaryFile(.html) 传路径, 调用后清理。DraftPlanResult 保持 snake_case
+# (reply_html / forward_intro_html / reply_source), **勿 camelCase** (历史 bug)。
+
+VALID_COMPOSE_MODES = {"reply", "reply-all", "forward"}
+
+
+def _cleanup_tmp(path: Optional[str]) -> None:
+    """best-effort 删除 compose 临时 html 文件 (gotcha #8 的清理段)。"""
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _validate_compose_mode(mode: Any) -> str:
+    """校验 compose mode ∈ {reply, reply-all, forward}; 缺省 reply-all。"""
+    if mode is None:
+        return "reply-all"
+    m = str(mode)
+    if m not in VALID_COMPOSE_MODES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"mode must be one of {sorted(VALID_COMPOSE_MODES)}, got {mode!r}",
+            source="cli",
+        )
+    return m
+
+
+def _build_compose_args(
+    internal_id: int,
+    opts: dict[str, Any],
+    *,
+    verb: str,
+    dry_run: bool = False,
+    with_yes: bool = False,
+) -> tuple[list[str], Optional[str]]:
+    """构造 ``email draft|send <id> --mode … [recipients/subject] [--dry-run|--yes]``。
+
+    镜像 frontend/src/electron/main/handlers/draft.ts::buildComposeArgs。返回
+    (argv_without_api_key, html_tmp_path | None) —— html_tmp_path 由调用方在 finally
+    清理 (gotcha #8)。to/cc/bcc 是 compose 用户编辑后的权威列表 (覆盖后端推导)。
+    """
+    mode = _validate_compose_mode(opts.get("mode"))
+    args: list[str] = ["email", verb, str(internal_id), "--mode", mode]
+
+    to = opts.get("to")
+    cc = opts.get("cc")
+    bcc = opts.get("bcc")
+    if isinstance(to, list) and len(to) > 0:
+        args += ["--to", ",".join(str(x) for x in to)]
+    if isinstance(cc, list) and len(cc) > 0:
+        args += ["--cc", ",".join(str(x) for x in cc)]
+    if isinstance(bcc, list) and len(bcc) > 0:
+        args += ["--bcc", ",".join(str(x) for x in bcc)]
+
+    subject = opts.get("subject")
+    if isinstance(subject, str):
+        args += ["--subject", subject]
+
+    if dry_run:
+        args.append("--dry-run")
+    if with_yes:
+        args.append("--yes")
+
+    # bodyHtml → 临时 .html 文件 → --body-html-file (gotcha #8)。
+    html_tmp_path: Optional[str] = None
+    body_html = opts.get("bodyHtml")
+    if isinstance(body_html, str) and len(body_html) > 0:
+        fd, html_tmp_path = tempfile.mkstemp(suffix=".html", prefix="mailagent-compose-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body_html)
+        args += ["--body-html-file", html_tmp_path]
+
+    return args, html_tmp_path
+
+
+@router.post("/draft", dependencies=[Depends(verify_cf_access)])
+async def compose_draft(
+    request: Request,
+    body: Optional[dict[str, Any]] = None,
+):
+    """把 compose 内容写进 Drafts folder (IMAP APPEND, CLI `email draft`)。
+
+    body (ComposeDraftOpts): {internalId, mode, to?, cc?, bcc?, subject?, bodyHtml?}。
+    bodyHtml (TipTap getHTML()) 落临时 .html → --body-html-file (gotcha #8)。
+    davmail-only (append_draft 走 IMAP); 非 davmail → CLI 自报错透传。
+    data = DraftResult (drafts_folder/appended_uid/method/...)。
+    """
+    opts = body or {}
+    internal_id = opts.get("internalId")
+    if not isinstance(internal_id, int) or isinstance(internal_id, bool) or internal_id < 0:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"internalId (non-negative int) required, got {internal_id!r}",
+            source="cli",
+        )
+
+    args, html_tmp_path = _build_compose_args(internal_id, opts, verb="draft")
+    try:
+        result = await run_cli(args, api_key=get_cli_api_key())
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+    finally:
+        _cleanup_tmp(html_tmp_path)
+
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )
+
+
+@router.post("/send", dependencies=[Depends(verify_cf_access)])
+async def compose_send(
+    request: Request,
+    body: Optional[dict[str, Any]] = None,
+):
+    """SMTP 真实发送 (不可逆, CLI `email send --yes`)。
+
+    body (SendEmailOpts = ComposeDraftOpts): {internalId, mode, to?, cc?, bcc?,
+    subject?, bodyHtml?}。始终带 ``--yes`` (前端已弹 SendConfirmDialog) 否则 json
+    模式 CLI 拒发。bodyHtml 走临时文件 (#8)。data = SendResult
+    (sent/message_id/archived_to_sent/method)。
+    """
+    opts = body or {}
+    internal_id = opts.get("internalId")
+    if not isinstance(internal_id, int) or isinstance(internal_id, bool) or internal_id < 0:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"internalId (non-negative int) required, got {internal_id!r}",
+            source="cli",
+        )
+
+    args, html_tmp_path = _build_compose_args(
+        internal_id, opts, verb="send", with_yes=True
+    )
+    try:
+        result = await run_cli(args, api_key=get_cli_api_key())
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+    finally:
+        _cleanup_tmp(html_tmp_path)
+
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )
+
+
+@router.post("/{internal_id:int}/draft-plan", dependencies=[Depends(verify_cf_access)])
+async def draft_plan(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """compose 预填单一数据源 (CLI `email draft --dry-run`)。
+
+    body (DraftPlanOpts 子集): {mode}。返回收件人 / 主题 / 正文 HTML
+    (reply 用 LLM reply_suggestion 转的 HTML, forward 用原文引用块 HTML)。
+    dry-run → 无 auth。data = DraftPlanResult **snake_case 原样透传**
+    (reply_html / forward_intro_html / reply_source) —— 勿 camelCase (gotcha #8)。
+    """
+    opts = body or {}
+    # draft-plan 无 body/recipient override, 仅 mode (compose 打开时调一次)。
+    args, _ = _build_compose_args(
+        internal_id, {"mode": opts.get("mode")}, verb="draft", dry_run=True
+    )
+    try:
+        result = await run_cli(args, api_key=None)  # dry-run 跳过 auth
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )
+
+
+# ===========================================================================
+# POST /api/email/{internal_id}/pin — CLI `email pin|unpin`
+# ===========================================================================
+
+
+@router.post("/{internal_id:int}/pin", dependencies=[Depends(verify_cf_access)])
+async def pin_email(
+    request: Request,
+    internal_id: int,
+    body: Optional[dict[str, Any]] = None,
+):
+    """置顶 / 取消置顶邮件 (CLI `email pin` / `email unpin`)。
+
+    body (PinOpts): {pinned: bool, dryRun?}。``pinned=true`` → pin, ``false`` → unpin
+    (镜像 write_ops.ts pinArgs: ``email pin|unpin <id>``)。写 SQLite is_pinned;
+    mail-sync 不读不写该字段。data = {internal_id, is_pinned, changed, dry_run}。
+    """
+    opts = body or {}
+    pinned = opts.get("pinned")
+    if not isinstance(pinned, bool):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"pinned (bool) required, got {pinned!r}",
+            source="cli",
+        )
+    dry_run = bool(opts.get("dryRun"))
+
+    args: list[str] = ["email", "pin" if pinned else "unpin", str(internal_id)]
+    if dry_run:
+        args.append("--dry-run")
+
+    api_key = None if dry_run else get_cli_api_key()
+    try:
+        result = await run_cli(args, api_key=api_key)
+    except CliRunnerError as exc:
+        _raise_from_cli_error(exc)
+
+    return success_envelope(
+        result.data,
+        request=request,
+        source="cli",
+        meta_extra=result.meta or None,
+    )

@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from src.config import Config
+from src.config import Config, _resolve_env_file
 
 
 def load_cli_config(
@@ -30,7 +30,9 @@ def load_cli_config(
     Returns:
         Config 实例（pydantic Settings）。
     """
-    env_file = config_path or os.environ.get("MAILAGENT_CONFIG") or ".env"
+    # P0 packaging: 末位兜底从相对 cwd 的 '.env' 改为 DATA_ROOT/.env (或
+    # MAILAGENT_ENV_FILE)，不再依赖 cwd。--config flag / MAILAGENT_CONFIG 优先级不变。
+    env_file = config_path or os.environ.get("MAILAGENT_CONFIG") or _resolve_env_file()
     base = Config(_env_file=env_file)  # type: ignore[call-arg]
     for key, value in (env_overrides or {}).items():
         if value is not None:

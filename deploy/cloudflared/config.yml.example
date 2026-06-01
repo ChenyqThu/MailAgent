@@ -1,0 +1,36 @@
+# MailAgent V2 远程访问 — cloudflared tunnel 配置模板
+# ---------------------------------------------------------------------------
+# 用途: 把公网域名 mail.chenge.ink 的流量经 Cloudflare Tunnel 转到本机
+#       127.0.0.1:8200 的 FastAPI (mailagent serve-api)。
+#
+# 落位: 复制到 ~/.cloudflared/config.yml 并填好占位符。cloudflared CLI 默认
+#       从 ~/.cloudflared/config.yml 读取，pm2 启动时也会用这个路径。
+#
+# 占位符替换 (来自 `cloudflared tunnel create mailagent-local` 的输出):
+#   <TUNNEL_UUID>  → tunnel create 打印的 UUID，同时也是 credentials json 文件名。
+#                    例: 6ff42ae5-1234-... → ~/.cloudflared/6ff42ae5-1234-....json
+#
+# 同步约束:
+#   - ingress 里 service 的端口 (8200) 必须与 .env 的 MAILAGENT_API_PORT 一致。
+#     改端口要两处同步，否则 tunnel 把流量转到一个没人监听的端口 → 502。
+#   - host 永远是 127.0.0.1 (loopback)。serve-api 子命令硬绑 loopback，公网仅
+#     经 tunnel 可达，本机端口零攻击面。
+#
+# 详见 frontend/REMOTE-ACCESS.md §6.1 与 docs/v2-cloudflare-access-setup.md。
+# ---------------------------------------------------------------------------
+
+# Tunnel 的 UUID (来自 `cloudflared tunnel create mailagent-local`)。
+tunnel: <TUNNEL_UUID>
+
+# Tunnel 凭据文件 (create 时自动生成在 ~/.cloudflared/<UUID>.json)。
+# 注意: 这是连接 tunnel 的私钥，勿提交进 git、勿外泄。
+credentials-file: /Users/chenyuanquan/.cloudflared/<TUNNEL_UUID>.json
+
+# 入站路由规则: 按 hostname 匹配，最后一条 catch-all 返回 404。
+ingress:
+  # 公网域名 → 本机 FastAPI serve-api (loopback 8200)。
+  - hostname: mail.chenge.ink
+    service: http://127.0.0.1:8200
+
+  # Catch-all: 未匹配的 hostname 一律 404 (cloudflared 要求最后一条无 hostname)。
+  - service: http_status:404

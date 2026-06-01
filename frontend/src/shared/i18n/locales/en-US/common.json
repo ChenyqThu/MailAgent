@@ -1069,6 +1069,7 @@
       "notifications": "Notifications",
       "integrations": "Integrations",
       "realtime": "Realtime & Storage",
+      "remote": "Remote Access",
       "island": "Island & Updates"
     },
     "accounts": {
@@ -1430,6 +1431,90 @@
           "label": "Enable dual write",
           "helper": "Off → Notion-only; LLM / resync go ~100× slower"
         }
+      }
+    },
+    "remote": {
+      "page": {
+        "eyebrow": "REMOTE ACCESS",
+        "title": "Remote Access",
+        "intro": "Securely reach the mail web UI from outside your network via Cloudflare Access. serve-api binds to 127.0.0.1 only; the Cloudflare tunnel forwards traffic and enforces Zero Trust auth."
+      },
+      "gate": {
+        "title": "Remote access",
+        "helper": "When on, serve-api starts with the app and listens on a loopback port; off exposes no remote capability at all."
+      },
+      "enabled": {
+        "label": "Enable remote access (serve-api)",
+        "helper": "On by default · binds 127.0.0.1 only — unreachable externally without a Cloudflare tunnel"
+      },
+      "cf": {
+        "title": "Cloudflare Access",
+        "helper": "serve-api validates the Cloudflare Access JWT on every request; with an empty Audience the process refuses to start."
+      },
+      "audience": {
+        "label": "Application Audience Tag",
+        "helper": "The Audience (AUD) tag from Cloudflare Zero Trust → Access → your app → Overview"
+      },
+      "teamDomain": {
+        "label": "Team domain",
+        "helper": "xxx.cloudflareaccess.com — used to fetch the JWKS keys for verification"
+      },
+      "api": {
+        "title": "Local API",
+        "helper": "Port and allowed email. Point your cloudflared tunnel at this loopback port."
+      },
+      "port": {
+        "label": "Local API port",
+        "helper": "Default 8200, binds 127.0.0.1. A port already in use will make serve-api fail to start."
+      },
+      "allowedEmail": {
+        "label": "Allowed email",
+        "helper": "Only this email passing Cloudflare Access is permitted; empty falls back to USER_EMAIL."
+      },
+      "statusSection": {
+        "title": "Status & access",
+        "helper": "After changing any setting above, serve-api must be restarted to take effect."
+      },
+      "warnAudience": {
+        "label": "Missing Audience",
+        "hint": "Remote access is on but the Application Audience Tag is empty — serve-api will refuse to start. Fill in the Audience under Cloudflare Access above.",
+        "tag": "required"
+      },
+      "status": {
+        "label": "Backend process",
+        "hint": "serve-api is managed alongside the backend process; below is the backend's online status.",
+        "refresh": "Refresh status",
+        "idle": "Disabled",
+        "loading": "Probing…",
+        "online": "Running",
+        "stopped": "Stopped",
+        "errored": "Errored",
+        "unknown": "Unknown"
+      },
+      "restart": {
+        "label": "Apply configuration",
+        "hint": "Restarting briefly interrupts the current sync batch, then brings serve-api back up with the new config.",
+        "cta": "Restart serve-api",
+        "busy": "Restarting…",
+        "requested": "Restart triggered",
+        "failed": "Restart failed",
+        "pm2NotFound": "pm2 not found"
+      },
+      "url": {
+        "localLabel": "Local URL",
+        "localHint": "Open directly in the browser on this machine (bypasses Cloudflare)",
+        "teamLabel": "Cloudflare team domain",
+        "teamHint": "Open the Zero Trust app list to confirm the Access policy",
+        "emailLabel": "Current allowed email",
+        "emailHint": "The email allowed through Cloudflare Access",
+        "emailFallback": "(defaults to USER_EMAIL)",
+        "open": "Open in browser",
+        "copy": "Copy"
+      },
+      "runbook": {
+        "label": "Public access (tunnel)",
+        "hint": "The public URL looks like https://your-domain/app, served by your self-managed cloudflared tunnel pointing the hostname at the local port above. cloudflared must be supervised by you (pm2 / launchd); it is not part of this app's lifecycle.",
+        "tag": "self-managed"
       }
     },
     "advanced": {

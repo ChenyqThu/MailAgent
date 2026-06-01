@@ -76,19 +76,19 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     wired: true
   },
   // ── Inbox ─────────────────────────────────────────────────────────────
-  // Sprint 7 review (opus Nit) — `wired` flags here track "registered via
-  // useShortcut and producing the documented behavior today", NOT design
-  // intent. J / K / R / U / S / X are spec'd in DESIGN §9.5 but never made
-  // it to a `useShortcut(...)` call (the inbox handler set landed pre-Sprint
-  // 4's keyboard refactor). Help modal shows them with a "soon" pill until
-  // Sprint 8 wires the EmailList row navigation contract.
+  // `wired` flags track "has a real handler producing the documented behavior
+  // today", NOT design intent. Wired: J / K row nav (useEmailKeyboardNav) +
+  // S / U / E flag/read/archive on the active email (useInboxActionShortcuts,
+  // mirrors EmailRow's click handlers). Still unwired (keep "soon" pill): R / F
+  // reply/forward (need the compose panel), ⌘⌫ delete (one-key delete is a
+  // mis-delete risk), X batch-select — spec'd in DESIGN §9.5, no handler yet.
   {
     id: 'nextEmail',
     spec: 'j',
     display: 'J',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.nextEmail',
-    wired: false
+    wired: true
   },
   {
     id: 'prevEmail',
@@ -96,7 +96,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'K',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.prevEmail',
-    wired: false
+    wired: true
   },
   {
     id: 'reply',
@@ -120,7 +120,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'U',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.toggleRead',
-    wired: false
+    wired: true
   },
   {
     id: 'toggleFlag',
@@ -128,7 +128,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'S',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.toggleFlag',
-    wired: false
+    wired: true
   },
   {
     id: 'archive',
@@ -136,7 +136,7 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     display: 'E',
     scope: 'inbox',
     labelKey: 'shortcutHelp.binding.archive',
-    wired: false
+    wired: true
   },
   {
     id: 'delete',
@@ -165,12 +165,14 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
   },
   // ── Chat ──────────────────────────────────────────────────────────────
   {
+    // 实际绑定是 ⌘L (GlobalShortcuts useShortcut('cmd+l', toggleAIPanel)); 早期
+    // 设计的 ⌥A 从未接 handler。catalog 对齐到真实键, 去掉错误的 "soon" 标。
     id: 'openAiPanel',
-    spec: 'alt+a',
-    display: '⌥A',
+    spec: 'cmd+l',
+    display: '⌘L',
     scope: 'chat',
     labelKey: 'shortcutHelp.binding.openAiPanel',
-    wired: false
+    wired: true
   },
   {
     // Sprint 11 V1.4 — moved from `alt+b` to `alt+shift+b`. The bare

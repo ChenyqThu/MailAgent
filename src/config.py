@@ -1,11 +1,71 @@
+import os
+
 from pydantic_settings import BaseSettings
 from pydantic import Field, ConfigDict
+
+# =============================================================================
+# DATA_ROOT 路径解析（P0 packaging：Python 侧路径解耦 / 绝对化）
+# 详见 docs/packaging/01-architecture-analysis.md §3.4 + 02-landing-plan.md P0
+#
+# 目的：让所有数据/文件路径不再依赖进程 cwd —— 打包后（或任何 cwd ≠ 项目根的
+# 场景）`Config()` 都能正确解析，不在必填字段阶段因相对路径 ValidationError。
+#
+# 最高优先级向后兼容约束：MAILAGENT_DATA_ROOT 未设时，DATA_ROOT 默认 = 仓库根
+# (= dirname(dirname(__file__)))。生产 mail-sync (PM2 cwd=项目根) 下:
+#   - 旧行为: 相对路径 'data/sync_store.db' 解析为 <cwd>/data/sync_store.db
+#             == <项目根>/data/sync_store.db
+#   - 新行为: DATA_ROOT(=项目根)/data/sync_store.db
+# 两者逐字节一致 —— 正在跑的生产实例零改变。
+#
+# 注意：env / CLI flag 显式提供的路径（无论相对还是绝对）一律原样透传，不被
+# DATA_ROOT 前缀 —— 因为这些 helper 只用于计算 Field 的 default 值；pydantic
+# 在有 env/flag 值时不会用 default。（见 tests/cli/test_config_factory.py）
+# =============================================================================
+
+
+def _resolve_data_root() -> str:
+    """统一 DATA_ROOT 解析入口。
+
+    优先 MAILAGENT_DATA_ROOT 环境变量；未设时默认 = 仓库根，等价于旧的
+    「相对项目根 cwd」行为（向后兼容硬约束）。返回绝对路径。
+    """
+    env_root = os.environ.get("MAILAGENT_DATA_ROOT")
+    if env_root:
+        return os.path.abspath(os.path.expanduser(env_root))
+    # 仓库根 = src/ 的父目录 = dirname(dirname(此文件))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _under_data_root(rel: str) -> str:
+    """把一个相对项目根的旧默认路径锚定到 DATA_ROOT 下的绝对路径。
+
+    旧默认值（如 'data/sync_store.db'）原样传入，返回 DATA_ROOT/<rel> 的绝对
+    路径。DATA_ROOT 默认 = 仓库根时与旧的相对解析逐字节一致。
+    """
+    return os.path.join(_resolve_data_root(), rel)
+
+
+def _resolve_env_file() -> str:
+    """env_file 路径解析：优先 MAILAGENT_ENV_FILE，默认 DATA_ROOT/.env。
+
+    不再依赖进程 cwd（旧 env_file='.env' 是相对 cwd）。DATA_ROOT 默认 = 仓库根
+    时 == <项目根>/.env，与旧行为一致。
+    """
+    env_file = os.environ.get("MAILAGENT_ENV_FILE")
+    if env_file:
+        return os.path.abspath(os.path.expanduser(env_file))
+    return os.path.join(_resolve_data_root(), ".env")
+
+
+# 模块导入期固定一次（与旧 env_file='.env' 在 class 定义期固定的时机一致）。
+DATA_ROOT = _resolve_data_root()
+
 
 class Config(BaseSettings):
     """配置类"""
 
     model_config = ConfigDict(
-        env_file=".env",
+        env_file=_resolve_env_file(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -22,7 +82,7 @@ class Config(BaseSettings):
 
     # 日志配置
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
-    log_file: str = Field(default="logs/sync.log", env="LOG_FILE")
+    log_file: str = Field(default_factory=lambda: _under_data_root("logs/sync.log"), env="LOG_FILE")
 
     # 附件配置
     max_attachment_size: int = Field(default=20971520, env="MAX_ATTACHMENT_SIZE")  # 20MB (Notion limit)
@@ -33,8 +93,8 @@ class Config(BaseSettings):
         description="是否在 Notion sync 前把邮件正文 + 附件双写到 SQLite（v4 架构）。失败仅 warning，不阻断主流程"
     )
     attachment_storage_dir: str = Field(
-        default="data/attachments", env="ATTACHMENT_STORAGE_DIR",
-        description="附件本地落盘目录（按 internal_id 分子目录），与 sync_store.db 同 data/ 便于统一备份"
+        default_factory=lambda: _under_data_root("data/attachments"), env="ATTACHMENT_STORAGE_DIR",
+        description="附件本地落盘目录（按 internal_id 分子目录），与 sync_store.db 同 DATA_ROOT/data/ 同级便于统一备份 + 前端 attachment.ts dirname(dirname(dbPath)) 倒推"
     )
 
     # 日历同步配置
@@ -57,7 +117,7 @@ class Config(BaseSettings):
     sync_start_date: str = Field(default="2026-01-01", env="SYNC_START_DATE", description="fixed模式: 只同步此日期之后的邮件")
     sync_lookback_days: int = Field(default=14, env="SYNC_LOOKBACK_DAYS", description="relative模式: 只同步最近N天的邮件")
     health_check_interval: int = Field(default=3600, env="HEALTH_CHECK_INTERVAL", description="健康检查间隔(秒)")
-    sync_store_db_path: str = Field(default="data/sync_store.db", env="SYNC_STORE_DB_PATH", description="同步状态存储SQLite数据库路径")
+    sync_store_db_path: str = Field(default_factory=lambda: _under_data_root("data/sync_store.db"), env="SYNC_STORE_DB_PATH", description="同步状态存储SQLite数据库路径（DATA_ROOT/data/ 下，与 attachments 同级）")
 
     # 周期会议滚动展开配置
     meeting_expansion_interval_seconds: int = Field(
@@ -208,12 +268,12 @@ class Config(BaseSettings):
         default=60, env="LLM_TIMEOUT_SEC", description="LLM 请求超时（秒）",
     )
     llm_inbox_prompt_path: str = Field(
-        default="prompts/email_inbox.md", env="LLM_INBOX_PROMPT_PATH",
-        description="收件箱 prompt md 路径（相对工作目录或绝对路径）",
+        default_factory=lambda: _under_data_root("prompts/email_inbox.md"), env="LLM_INBOX_PROMPT_PATH",
+        description="收件箱 prompt md 路径（默认 DATA_ROOT/prompts/ 下；env 显式值原样透传，相对或绝对皆可）",
     )
     llm_sent_prompt_path: str = Field(
-        default="prompts/email_sent.md", env="LLM_SENT_PROMPT_PATH",
-        description="发件箱 prompt md 路径",
+        default_factory=lambda: _under_data_root("prompts/email_sent.md"), env="LLM_SENT_PROMPT_PATH",
+        description="发件箱 prompt md 路径（默认 DATA_ROOT/prompts/ 下）",
     )
     llm_context_page_id: str = Field(
         default="", env="LLM_CONTEXT_PAGE_ID",

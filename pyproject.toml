@@ -21,6 +21,14 @@ cli = [
     "rich>=13,<15",
     "pyyaml>=6,<7",
 ]
+# V2 远程访问本地 FastAPI 后端 (mailagent-api, `mailagent serve-api`).
+# 详见 frontend/REMOTE-ACCESS.md §3。安装: pip install -e ".[cli,api]"
+api = [
+    "fastapi>=0.110,<0.116",
+    "uvicorn[standard]>=0.27,<0.35",
+    "pyjwt[crypto]>=2.8,<3",  # PyJWKClient + RS256 verify (CF Access JWT, §6.3); crypto extra 拉 cryptography
+    "httpx>=0.27",            # cli_runner / TestClient (email unsubscribe 已传递引入)
+]
 
 [build-system]
 requires = ["setuptools>=61"]

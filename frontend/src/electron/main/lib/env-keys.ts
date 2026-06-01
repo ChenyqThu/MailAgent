@@ -27,6 +27,29 @@ export const MANAGED_ENV_KEYS = [
   'MAIL_ACCOUNT_NAME',
   'MAIL_INBOX_NAME',
   'MAIL_SENT_NAME',
+  'MAIL_ACCOUNT_URL_PREFIX',
+
+  // — DavMail backend (Onboarding 向导 davmail 分支 + legacy 迁移)。config.py 的
+  // davmail Field 全集。向导写连接配置 (host/port/poc 模式/cipher), legacy 继承时
+  // managed-filter 也要带过来 —— 之前缺这些 key 导致 davmail 老用户迁移丢配置 →
+  // 后端起不来。DAVMAIL_POC_CIPHER_KEY / DAVMAIL_CIPHER_KEY 都是 secret。
+  // 注: 后端 config.py 当前读 env=DAVMAIL_POC_CIPHER_KEY; 旧文档/报错曾用 DAVMAIL_CIPHER_KEY,
+  // 两个都纳入白名单避免继承时丢 (后端是否 alias 二者见 roadmap follow-up)。
+  'DAVMAIL_HOST',
+  'DAVMAIL_IMAP_PORT',
+  'DAVMAIL_SMTP_PORT',
+  'DAVMAIL_POC_CIPHER_KEY',
+  'DAVMAIL_CIPHER_KEY',
+  'DAVMAIL_POC_MODE',
+  'DAVMAIL_FETCH_TIMEOUT_SEC',
+  'DAVMAIL_UID_BACKFILL_ENABLED',
+  'DAVMAIL_UID_BACKFILL_BATCH_SIZE',
+  'DAVMAIL_UID_BACKFILL_SLEEP_SEC',
+  'DAVMAIL_DRAFTS_FOLDER',
+  'DAVMAIL_SENT_FOLDER',
+  'DAVMAIL_ARCHIVE_SENT',
+  'DAVMAIL_POLL_INTERVAL_SEC',
+  'DAVMAIL_CALDAV_PORT',
 
   // — Sync (PR D SyncTab)
   'SYNC_DATE_MODE',
@@ -40,6 +63,16 @@ export const MANAGED_ENV_KEYS = [
   'CALENDAR_SYNC_MODE',
   'CALENDAR_PAST_DAYS',
   'CALENDAR_FUTURE_DAYS',
+  'CALENDAR_CALDAV_SYNC_ENABLED',
+
+  // — Backend selection (Onboarding 向导 backend 选择)。config.py 的 Field,
+  // 值域 'applescript' | 'davmail' (Sprint 16 dual-backend cutover)。向导写入,
+  // 默认 applescript (零依赖)。
+  'MAILAGENT_BACKEND',
+
+  // — Daily digest (Ping Island Phase 3 每日巡检)。config.py Field, boolean toggle,
+  // 默认 false。向导插件勾选项之一 (plugins.digest → 这里)。
+  'MAILAGENT_DAILY_DIGEST_ENABLED',
 
   // — AI Agent (PR D AiTab)
   'LLM_AGENT_ENABLED',
@@ -106,6 +139,25 @@ export const MANAGED_ENV_KEYS = [
   'PING_ISLAND_ENABLED',
   'ISLAND_SOCKET_PATH',
 
+  // — Remote Access (serve-api / RemoteAccessTab). V2 远程访问从 dogfood (手动
+  // nohup serve-api) 收尾成生产态: serve-api 进程纳入打包 app 的
+  // BackendLifecycleManager。这 5 个字段是 RemoteAccessTab 经 env:set 写 app .env
+  // 的全集, 全部非 secret:
+  //   - MAILAGENT_REMOTE_ACCESS_ENABLED: gate flag, !=='false' 即开 (默认开,
+  //     bind loopback 零攻击面)。serveApiEnabled() 读它决定是否 spawn serve-api。
+  //   - CF_AUDIENCE: Cloudflare Access Application "Audience" tag (公开应用标识非密钥)。
+  //     auth.py 模块 import 期读它做 JWT aud 校验; 空则 serve-api 拒起 (软门控前提)。
+  //   - CF_TEAM_DOMAIN: xxx.cloudflareaccess.com 团队域名 (JWKS issuer)。
+  //   - MAILAGENT_API_PORT: 本地 API 端口 (默认 8200, bind 127.0.0.1)。
+  //   - MAILAGENT_API_ALLOWED_EMAIL: 允许访问的邮箱 (留空=USER_EMAIL)。
+  // CF_AUDIENCE 是 application tag 非密钥, 不入 SECRET_ENV_KEYS。改这些字段后需
+  // 重启 serve-api 生效 (RestartBanner / Tab 内重启按钮触发)。
+  'MAILAGENT_REMOTE_ACCESS_ENABLED',
+  'CF_AUDIENCE',
+  'CF_TEAM_DOMAIN',
+  'MAILAGENT_API_PORT',
+  'MAILAGENT_API_ALLOWED_EMAIL',
+
   // feat/auto-update re-review (codex, trust boundary) — AUTO_UPDATE_ENABLED is
   // intentionally NOT a managed key: it's the master safety gate for proactive
   // updater behavior, read directly via process.env in handlers/updater.ts.
@@ -140,7 +192,9 @@ export const SECRET_ENV_KEYS: Set<string> = new Set<string>([
   'LLM_TRANSLATE_API_KEY',
   'STATS_REPORT_TOKEN',
   'DASHBOARD_PASSWORD',
-  'MAILAGENT_CLI_API_KEY'
+  'MAILAGENT_CLI_API_KEY',
+  'DAVMAIL_POC_CIPHER_KEY',
+  'DAVMAIL_CIPHER_KEY'
 ])
 
 /** Keys the UI surfaces as readonly display only. env:set on these is
