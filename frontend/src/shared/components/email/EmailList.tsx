@@ -34,6 +34,7 @@ import { useBatch } from '@shared/state/batch'
 import { usePinned } from '@shared/state/pinned'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEmailKeyboardNav } from '@shared/hooks/useEmailKeyboardNav'
+import { useInboxActionShortcuts } from '@shared/hooks/useInboxActionShortcuts'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
@@ -997,6 +998,7 @@ export function EmailList(): React.ReactElement {
   }, [orderedIds, publishOrderedIds])
 
   useEmailKeyboardNav(orderedIds)
+  useInboxActionShortcuts()
   const buckets = useMemo(() => partitionByDate(threadGroups, pinnedSet), [threadGroups, pinnedSet])
 
   // Show the loader sentinel when we still have headroom (no end-of-data

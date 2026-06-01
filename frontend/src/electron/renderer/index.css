@@ -370,6 +370,22 @@ body {
   background-clip: padding-box;
 }
 
+/* ─── Native date input — 日历图标随主题变色 + 贴右 ──────────────────── */
+/* :root 默认暗色主题; 原生 <input type=date> 的 calendar-picker-indicator 跟随
+ * color-scheme 渲染, 缺省 light → 深色 glyph 在暗色背景上看不见。设 color-scheme
+ * 让 UA 暗色下渲白色图标 (浅色主题覆盖回 light)。margin-inline-start:auto 把图标
+ * 推到输入框最右 (吸收日期字段右侧空白, 修不贴右)。SyncTab 起始日期 + 日历事件表单共用。 */
+input[type='date'] {
+  color-scheme: dark;
+}
+:root[data-theme='light'] input[type='date'] {
+  color-scheme: light;
+}
+input[type='date']::-webkit-calendar-picker-indicator {
+  margin-inline-start: auto;
+  cursor: pointer;
+}
+
 /* ─── kbd shortcut hint chip ─────────────────────────────────────────── */
 kbd,
 .kbd {
