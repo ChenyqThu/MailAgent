@@ -1213,8 +1213,11 @@ body[data-batch-mode='true'] .email-row > .avatar {
  * bar (#batch-bar) are hidden, so the inbox reads as a normal mail list.
  * The list-header batch button sets body[data-batch-mode='true'] (via the
  * useBatch store's syncBodyAttr helper) and reveals both. Single source of
- * truth = body attribute, so CSS handles the swap with no JSX branches. */
-body:not([data-batch-mode='true']) .cb {
+ * truth = body attribute, so CSS handles the swap with no JSX branches.
+ * Scoped to .email-row so the same stylesheet (loaded by the onboarding
+ * window via main.tsx) does NOT hide onboarding's own .cb checkboxes —
+ * the onboarding body never carries data-batch-mode. */
+body:not([data-batch-mode='true']) .email-row .cb {
   display: none !important;
 }
 /* #batch-bar 的显隐由组件 useExitAnimation 接管（shouldRender 控制挂载 +

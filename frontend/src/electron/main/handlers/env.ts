@@ -103,7 +103,7 @@ function readSnapshot(): EnvSnapshot {
   }
 }
 
-function writePatch(patch: Record<string, string | null>): EnvSetResult {
+export function writePatch(patch: Record<string, string | null>): EnvSetResult {
   const path = resolveEnvPath()
 
   // Defensive whitelist check at the handler boundary so the error is well-

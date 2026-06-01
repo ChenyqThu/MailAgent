@@ -53,6 +53,7 @@ davmail-poc/
 
 # Python build artifacts
 *.egg-info/
+/build/          # setuptools bdist 产物 (build-python-venv.sh 跑 pip install . 时生成于仓库根; 不影响 frontend/build/)
 
 # Node / 前端构建产物
 node_modules/

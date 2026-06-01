@@ -3,6 +3,9 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { bootNativeTheme, registerAppearanceIpc } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
+import { registerBackendLifecycle, registerBackendQuitHook } from './backend_lifecycle'
+import { detectUserState } from './onboarding/detect'
+import { registerOnboardingHandlers } from './handlers/onboarding'
 import { registerEmailHandlers } from './handlers/email'
 import { registerFolderHandlers } from './handlers/folder'
 import { registerAttachmentHandlers } from './handlers/attachment'
@@ -112,12 +115,19 @@ if (!is.dev) {
 // signed .app bundle's Info.plist; this fixes the dev experience.
 app.setName('MailAgent')
 
-function createWindow(): void {
+function createWindow(opts: { onboarding?: boolean } = {}): void {
+  // onboarding 模式: 用 ?onboarding=1 query 让 renderer main.tsx 渲染配置向导而非主 App
+  // (复用 popout 的 ?popout=1 query 同款机制)。完成后 onboarding:complete 会 reload 去掉它。
+  const search = opts.onboarding ? 'onboarding=1' : ''
+  // onboarding 向导用固定小窗 (768×640, 不可缩放, 居中); 主 App 用 1280×800。
+  // titleBarStyle 两者都保持 hiddenInset (OS 画红绿灯)。
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 940,
-    minHeight: 600,
+    width: opts.onboarding ? 768 : 1280,
+    height: opts.onboarding ? 640 : 800,
+    minWidth: opts.onboarding ? 768 : 940,
+    minHeight: opts.onboarding ? 640 : 600,
+    resizable: !opts.onboarding,
+    center: opts.onboarding ? true : undefined,
     show: false,
     title: 'MailAgent',
     titleBarStyle: 'hiddenInset',
@@ -164,9 +174,13 @@ function createWindow(): void {
   attachExternalLinkGuard(mainWindow.webContents)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    mainWindow.loadURL(
+      search
+        ? `${process.env['ELECTRON_RENDERER_URL']}?${search}`
+        : process.env['ELECTRON_RENDERER_URL']
+    )
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'), search ? { search } : undefined)
   }
 }
 
@@ -220,7 +234,7 @@ function createPopoutWindow(emailId: number): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ink.chenge.mailagent')
 
   // Sprint 11 user-feedback — dev-mode dock icon. Packaged builds inherit
@@ -353,6 +367,8 @@ app.whenReady().then(() => {
   // a handler to hit. Both registrations are side-effect-only (no state).
   registerEnvHandlers()
   registerServicesHandlers()
+  // 打包 P2/P3 — onboarding 向导 IPC (status / complete)。
+  registerOnboardingHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 
@@ -365,7 +381,39 @@ app.whenReady().then(() => {
     createPopoutWindow(emailId)
   })
 
-  createWindow()
+  // 打包 P1-4/P1-6 — 后端进程托管 + DB 就绪门控。仅打包模式 (app.isPackaged) 接管:
+  //   spawn `mailagent serve` (注入三 env, cwd=DATA_ROOT) + 注册 before-quit SIGTERM,
+  //   然后等 DB 就绪 (db_version==EXPECTED 且关键表齐全) 再开窗, 避免首帧 IPC 撞
+  //   "sync_store.db not found"。dev / 服务器部署: registerBackendLifecycle 内部 start()
+  //   为 no-op (后端走 pm2), 不阻塞、行为零变更。
+  // 降级: 后端起不来 (缺 .env / bad config → serve 崩 → waitReady 快速失败) 或大库迁移
+  //   超 120s, 仍开窗 (renderer 各 IPC 自带 not-found 兜底, 用户见空态而非黑屏)。
+  //   TODO P2/P3: 此处接 onboarding 门控 —— 新用户无配置时走配置向导而非降级空态。
+  if (app.isPackaged) {
+    // 先检测用户状态决定分流:
+    //   configured → 起后端 + 等 DB 就绪 + 开主窗;
+    //   new / config-incomplete → 不起后端 (没 .env 起也会崩), 开 onboarding 向导窗,
+    //     由 onboarding:complete 写完 .env 后再起后端 + reload 主界面。
+    const state = detectUserState()
+    if (state === 'configured') {
+      const backendMgr = registerBackendLifecycle()
+      const ready = await backendMgr.waitReady()
+      if (!ready) {
+        console.error(
+          `[startup] 后端未在超时内就绪 (state=${backendMgr.getState()}); 降级开窗。` +
+            '可能原因: bad config 或大库迁移超时。'
+        )
+      }
+      createWindow()
+    } else {
+      registerBackendQuitHook() // 只挂退出钩子, 不 start
+      console.log(`[startup] 用户状态=${state}, 进入 onboarding 配置向导。`)
+      createWindow({ onboarding: true })
+    }
+  } else {
+    // dev / 服务器部署: 后端走 pm2, 不接管; 行为零变更。
+    createWindow()
+  }
 
   // F6 — deeplink sink: 聚焦主窗口 + 把 target 转给 renderer (useDeeplinkRouter
   // 监听 'mailagent:deeplink' → router.navigate + setActive). createWindow 后注册,
