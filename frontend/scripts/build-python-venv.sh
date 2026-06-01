@@ -49,11 +49,14 @@ PYBIN="$OUT/bin/python3.11"
 [ -x "$PYBIN" ] || { echo "[build-python-venv] 解压后未找到 $PYBIN" >&2; exit 1; }
 
 # 3. 装后端依赖 (核心依赖在 requirements.txt, 不在 pyproject [project.dependencies])
-echo "[build-python-venv] pip install requirements + .[cli] ..."
+echo "[build-python-venv] pip install requirements + .[cli,api] ..."
 "$PYBIN" -m pip install --upgrade pip -q
 "$PYBIN" -m pip install -q -r "$REPO_ROOT/requirements.txt"
-# 非 editable 安装: 把 src/ (含 src/service.py) 复制进 site-packages, 并生成 bin/mailagent
-( cd "$REPO_ROOT" && "$PYBIN" -m pip install -q ".[cli]" )
+# 非 editable 安装: 把 src/ (含 src/service.py) 复制进 site-packages, 并生成 bin/mailagent。
+# .[cli,api]: api extra (fastapi/uvicorn/pyjwt/httpx) 是 serve-api 远程访问后端必需 ——
+# B+C (554df0b) 把 serve-api 纳入 BackendLifecycleManager, 打包模式会 spawn 它; 不装则
+# .app 内 serve-api 'import fastapi' 崩, 远程访问不可用 (requirements.txt 不含 api 依赖)。
+( cd "$REPO_ROOT" && "$PYBIN" -m pip install -q ".[cli,api]" )
 # 清理 setuptools 在仓库根留下的 bdist 产物 (egg-info 已被 .gitignore 忽略, build/ 也忽略但顺手清掉)
 rm -rf "$REPO_ROOT/build"
 
