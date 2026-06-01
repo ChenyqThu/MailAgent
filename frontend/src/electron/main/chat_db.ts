@@ -6,7 +6,11 @@
 // on its own cadence). The fix is a fully separate SQLite file owned by the
 // frontend, with its own version counter and its own migration ladder.
 //
-//   Default path: ~/.mailagent/frontend/ai_chat.db
+//   Default path: <DATA_ROOT>/frontend/ai_chat.db — DATA_ROOT 经 db.ts resolveDataRoot()
+//                 解析 (packaged = userData; dev = ~/Documents/MailAgent), 与 sync_store.db /
+//                 .env 同根, 满足打包 epic「可写数据归集 userData」(随 userData 跨重装保留)。
+//                 旧默认 ~/.mailagent/frontend/ai_chat.db 由 getChatDb() 首次打开时一次性
+//                 搬迁 (含 -wal/-shm), 保住已装用户的 chat history。
 //   Override:     env $AI_CHAT_DB_PATH (tests pass `:memory:` here)
 //   Schema:       ai_chat_sessions + ai_chat_messages (see CREATE statements below)
 //
@@ -17,9 +21,11 @@
 // renderer doesn't try to resume the dropped stream on next mount.
 
 import Database from 'better-sqlite3'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, renameSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
+
+import { resolveDataRoot } from './db'
 
 // ── types ───────────────────────────────────────────────────────────────
 
@@ -167,7 +173,33 @@ const CHAT_DB_VERSION = 4
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
   if (fromEnv) return fromEnv
-  return join(homedir(), '.mailagent', 'frontend', 'ai_chat.db')
+  // DATA_ROOT/frontend/ai_chat.db — 与 sync_store.db / .env 同根 (packaged=userData,
+  // dev=~/Documents/MailAgent)。打包 epic: 可写数据归集 userData, 卸载/重装随 userData 保留。
+  return join(resolveDataRoot(), 'frontend', 'ai_chat.db')
+}
+
+/** 旧默认 ~/.mailagent/frontend/ai_chat.db (改用 DATA_ROOT 之前的落点) 的一次性搬迁。
+ *  仅当「用新默认路径 + 新位置还没库 + 旧库存在」时把旧库整体 move 到新位置, 保住已装
+ *  用户的 chat history。连 -wal/-shm 一起搬 (WAL 模式未 checkpoint 的数据在 -wal 里,
+ *  单搬主文件会丢)。失败不阻断启动 (退化为新位置开空库)。env override / :memory: / 新旧
+ *  恰好同路径 均跳过。仅 getChatDb() 首次打开前调用, 故不在 module-eval 期触发。 */
+function migrateLegacyChatDbIfNeeded(targetPath: string): void {
+  if (targetPath === ':memory:') return
+  if (process.env['AI_CHAT_DB_PATH']) return // 自定义路径 → 不碰旧默认
+  if (existsSync(targetPath)) return // 新位置已有库 (迁过了 / 已是新数据)
+  const legacyPath = join(homedir(), '.mailagent', 'frontend', 'ai_chat.db')
+  if (legacyPath === targetPath) return // 极端: 新旧解析到同一路径
+  if (!existsSync(legacyPath)) return // 全新用户, 无旧库
+  try {
+    mkdirSync(dirname(targetPath), { recursive: true })
+    for (const suffix of ['', '-wal', '-shm']) {
+      const src = legacyPath + suffix
+      if (existsSync(src)) renameSync(src, targetPath + suffix)
+    }
+    console.log(`[chat_db] 旧 ai_chat.db 已搬迁到 ${targetPath} (保留 chat history)`)
+  } catch (err) {
+    console.error('[chat_db] 旧 ai_chat.db 搬迁失败, 以空库继续 (history 未迁移)', err)
+  }
 }
 
 // ── schema migration ────────────────────────────────────────────────────
@@ -421,6 +453,9 @@ export function getChatDb(): Database.Database {
   if (_db) return _db
   const path = resolveChatDbPath()
   if (path !== ':memory:') {
+    // 旧默认 (~/.mailagent/frontend) → 新 DATA_ROOT 一次性搬迁, 必须在 open 前 —— 否则
+    // new Database(path) 先在新位置建空库, existsSync(target) 转真, 搬迁条件不再满足。
+    migrateLegacyChatDbIfNeeded(path)
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   }

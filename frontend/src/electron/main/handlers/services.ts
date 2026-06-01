@@ -24,7 +24,7 @@ import { execa } from 'execa'
 import { app, ipcMain } from 'electron'
 import { existsSync } from 'fs'
 
-import { getBackendLifecycle, type ServiceName } from '../backend_lifecycle'
+import { getBackendLifecycle, probeDbReady, type ServiceName } from '../backend_lifecycle'
 import { whichSync } from '../bin_resolver'
 import { getProjectRoot } from '../cli_runner'
 
@@ -104,7 +104,7 @@ async function restartTarget(target: ServiceTarget): Promise<ServiceRestartResul
   // stop + 重读 enabled gate(从被 env:set 同步过的 process.env, 见 blocker A) + respawn,
   // 让 Settings 改的开关/端口/CF 热生效, 不必重启整个 app。calendar-sync/all 是
   // dev-pm2 概念, 打包态无对应 → 继续走下面 pm2 路径(E_PM2_NOT_FOUND, renderer 兜底)。
-  if (app.isPackaged && (target === 'mail-sync' || target === 'serve-api')) {
+  if (app?.isPackaged && (target === 'mail-sync' || target === 'serve-api')) {
     const svcName: ServiceName = target === 'serve-api' ? 'serve-api' : 'serve'
     try {
       await getBackendLifecycle().restartService(svcName)
@@ -227,6 +227,24 @@ function statusFromRow(row: Pm2JlistRow): ServiceStatus {
 }
 
 async function listStatuses(): Promise<ServiceStatus[]> {
+  // 打包态无 pm2 — serve/serve-api 由 BackendLifecycleManager 托管。读 lifecycle 真实状态,
+  // 而非查 pm2 的 mail-sync (那是 dev 态进程; 打包态恒 stopped/unknown → RestartBanner
+  // 重启后会误报"验证失败")。serve online 判据 = probeDbReady().ready (serve 真正在服务的
+  // 标志; restartService 不把 service.state 推进到 'ready', 故不能只靠 getServiceState,
+  // 只用它抓 'failed' 崩溃态)。
+  if (app?.isPackaged) {
+    const mgr = getBackendLifecycle()
+    const state: ServiceStatus['state'] =
+      mgr.getServiceState('serve') === 'failed'
+        ? 'errored'
+        : probeDbReady().ready
+          ? 'online'
+          : 'stopped'
+    return [
+      { name: 'mail-sync', state, pid: null, uptimeMs: null, cpu: null, memMB: null },
+      { name: 'calendar-sync', state: 'unknown', pid: null, uptimeMs: null, cpu: null, memMB: null }
+    ]
+  }
   const pm2Path = resolvePm2()
   if (pm2Path === null) {
     return [

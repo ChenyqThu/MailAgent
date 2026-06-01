@@ -1582,18 +1582,18 @@
       }
     },
     "restart": {
-      "required": "需要重启 mail-sync",
+      "required": "需要重启后端服务",
       "moreKeys": " 等 {count} 项",
       "cta": "立即重启",
       "cancel": "取消",
       "dismiss": "稍后",
-      "confirmTitle": "确认重启 mail-sync?",
+      "confirmTitle": "确认重启后端服务?",
       "confirmBody": "重启会中断正在同步的批次,通常 5-10 秒恢复。已更改的字段重启后才生效。",
       "restarting": "重启中…",
       "success": "服务已重启",
       "failed": "重启失败",
       "statusProbeSlow": "服务状态确认超时,请稍后在状态栏复核",
-      "notOnline": "mail-sync 当前状态: {state}",
+      "notOnline": "后端服务当前状态: {state}",
       "pm2NotFound": "pm2 未找到",
       "pm2NotFoundHint": "请在终端运行: pm2 restart mail-sync"
     },

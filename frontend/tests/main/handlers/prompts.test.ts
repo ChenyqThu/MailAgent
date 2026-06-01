@@ -1,6 +1,6 @@
 // Prompts IPC tests — path resolution + read + write.
 //
-// We point MAILAGENT_PROJECT_ROOT at an os.tmpdir() per-test scratch so the
+// We point MAILAGENT_DATA_ROOT at an os.tmpdir() per-test scratch so the
 // real prompts/ directory in this repo never gets clobbered. .env reads go
 // through resolveEnvPath (handlers/env-path), which we override with
 // MAILAGENT_ENV_FILE pointing into the same scratch.
@@ -33,13 +33,13 @@ beforeEach(() => {
   envFile = join(root, '.env')
   // Empty .env — handler should fall back to defaults.
   writeFileSync(envFile, '', 'utf8')
-  process.env['MAILAGENT_PROJECT_ROOT'] = root
+  process.env['MAILAGENT_DATA_ROOT'] = root
   process.env['MAILAGENT_ENV_FILE'] = envFile
   refreshEnvPath()
 })
 
 afterEach(() => {
-  delete process.env['MAILAGENT_PROJECT_ROOT']
+  delete process.env['MAILAGENT_DATA_ROOT']
   delete process.env['MAILAGENT_ENV_FILE']
   refreshEnvPath()
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })

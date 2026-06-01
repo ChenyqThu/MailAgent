@@ -30,7 +30,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { getDb } from '../db'
-import { callCli, getProjectRoot } from '../cli_runner'
+import { callCli, resolveBundledResourcesRoot } from '../cli_runner'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   ComposeDraftOpts,
@@ -233,7 +233,7 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
       { code: 'E_NO_MAILBOX' }
     )
   }
-  const scriptPath = join(getProjectRoot(), 'scripts', 'create_reply_draft.sh')
+  const scriptPath = join(resolveBundledResourcesRoot(), 'scripts', 'create_reply_draft.sh')
   if (!existsSync(scriptPath)) {
     throw Object.assign(new Error(`create_reply_draft.sh not found at ${scriptPath}`), {
       code: 'E_NOT_FOUND'

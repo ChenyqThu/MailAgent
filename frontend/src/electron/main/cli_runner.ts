@@ -24,6 +24,8 @@ import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
+import { resolveDataRoot, resolveDbPath } from './db'
+
 // Packaging P1-3 — 打包模式下嵌入式 python 的 `mailagent` 在 .app bundle 的
 // Resources/python/bin 下 (electron-builder extraResources 注入)。
 // 与 02-landing-plan.md §3.3 的布局对齐。dev 模式不走这条, 见 getMailagentBin。
@@ -67,6 +69,22 @@ function packagedResourcesBin(): string {
 export function getProjectRoot(): string {
   const fromEnv = process.env['MAILAGENT_PROJECT_ROOT']
   if (fromEnv && fromEnv.length > 0) return fromEnv
+  return join(homedir(), 'Documents', 'MailAgent')
+}
+
+/** Bundle 内【只读资源】根 (scripts/ 脚本 + prompts/ 出厂模板所在)。打包态 =
+ *  process.resourcesPath (electron-builder extraResources 落点); dev = 仓库根
+ *  ~/Documents/MailAgent。与可写数据根 (resolveDataRoot, 打包态=userData) 区分 ——
+ *  getProjectRoot() 无 packaged 分支, 打包态恒落不存在的 ~/Documents/MailAgent (干净机器),
+ *  故只读资源 (脚本 / 出厂模板) 改锚 resourcesPath。 */
+export function resolveBundledResourcesRoot(): string {
+  const fromEnv = process.env['MAILAGENT_PROJECT_ROOT']
+  if (fromEnv && fromEnv.length > 0) return fromEnv
+  try {
+    if (app.isPackaged) return process.resourcesPath
+  } catch {
+    /* 单测 mock app 可能无 isPackaged → 落 dev 默认 */
+  }
   return join(homedir(), 'Documents', 'MailAgent')
 }
 
@@ -193,8 +211,22 @@ class CliQueue {
       // fields). Electron's app cwd is the .app bundle in production, not
       // the repo; without this the CLI dies in `Config()` before reaching
       // typer and surfaces as exit=1 / E_GENERIC with a python traceback.
-      cwd: getProjectRoot(),
-      env: { ...process.env }
+      // cwd 用可写数据根 (打包态=userData, 必存在) 而非 getProjectRoot() —— 后者打包态恒落
+      // ~/Documents/MailAgent, 干净机器 (无 dev clone) 上不存在 → execa chdir ENOENT → 所有
+      // fork CLI 起不来。DB/.env 已由下面 env override 显式锚定, cwd 只需是存在且可写的目录。
+      cwd: resolveDataRoot(),
+      // 🔴 显式锚定数据根 (与 backend_lifecycle.buildBaseEnv 一致)。不注入则打包态 fork
+      // 的 CLI 的 DB 路径靠 bootstrapDotenv 灌进的 dev .env (相对 SYNC_STORE_DB_PATH=
+      // data/sync_store.db) 或 __file__ fallback → 落到错库 (dev stale 库 / bundle 内
+      // site-packages 空库), draftPlan 等 fork-CLI 操作读不到最近邮件 → 回复预填收件人 +
+      // 引用全空 (邮件列表/详情走 IPC 直读 userData 库, 故正常)。override 排在 ...process.env
+      // 之后, 覆盖 dotenv 灌进的相对值; resolveDbPath/resolveDataRoot 自处理 dev/packaged 分支。
+      env: {
+        ...process.env,
+        MAILAGENT_DATA_ROOT: resolveDataRoot(),
+        MAILAGENT_ENV_FILE: join(resolveDataRoot(), '.env'),
+        SYNC_STORE_DB_PATH: resolveDbPath()
+      }
     })
     this.inFlight.add(sub)
 

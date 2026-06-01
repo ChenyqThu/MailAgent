@@ -16,7 +16,7 @@
 // DBs identically to :memory: but the migration test wants to verify the
 // post-close re-open path).
 
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,6 +44,19 @@ import {
   updateToolCall
 } from '../../src/electron/main/chat_db'
 
+// chat_db 现在 import db.resolveDataRoot() (→ import electron app), 故碰 chat_db 的测试都需
+// mock electron。默认 isPackaged=false (env-override 用例不碰它); packaged 用例临时翻 true
+// + 注入 getPath('userData')。仿 backend_lifecycle.test.ts。
+// vi.hoisted: vi.mock 被 hoist 到文件顶, factory 引用的 appMock 必须在那之前初始化,
+// 否则 TDZ "Cannot access 'appMock' before initialization"。
+const { appMock } = vi.hoisted(() => ({
+  appMock: { isPackaged: false, getPath: (_k: string) => '/tmp' } as {
+    isPackaged: boolean
+    getPath: (key: string) => string
+  }
+}))
+vi.mock('electron', () => ({ app: appMock }))
+
 let tmpDir: string
 let dbPath: string
 
@@ -63,6 +76,25 @@ afterEach(() => {
 describe('chat_db — path + schema bootstrap', () => {
   test('resolveChatDbPath honours $AI_CHAT_DB_PATH', () => {
     expect(resolveChatDbPath()).toBe(dbPath)
+  })
+
+  test('resolveChatDbPath (no env, packaged app) → under userData/frontend', () => {
+    // 打包态无 AI_CHAT_DB_PATH: 经 db.resolveDataRoot() (app.isPackaged → getPath userData)
+    // 拼 frontend/ai_chat.db, 与 sync_store.db / .env 同根 (打包 epic 数据归集 userData)。
+    const prevDataRoot = process.env['MAILAGENT_DATA_ROOT']
+    delete process.env['AI_CHAT_DB_PATH']
+    delete process.env['MAILAGENT_DATA_ROOT'] // 优先级高于 packaged getPath, 清掉
+    const userData = join(tmpDir, 'userData-root')
+    appMock.isPackaged = true
+    appMock.getPath = (k: string) => (k === 'userData' ? userData : '/tmp')
+    try {
+      expect(resolveChatDbPath()).toBe(join(userData, 'frontend', 'ai_chat.db'))
+    } finally {
+      appMock.isPackaged = false
+      appMock.getPath = () => '/tmp'
+      if (prevDataRoot !== undefined) process.env['MAILAGENT_DATA_ROOT'] = prevDataRoot
+      process.env['AI_CHAT_DB_PATH'] = dbPath // 还原 beforeEach, 不污染后续用例
+    }
   })
 
   test('opening a fresh DB creates the file + tables', () => {

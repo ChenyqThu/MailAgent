@@ -21,14 +21,6 @@ import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
 
 import { Button } from '@shared/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@shared/components/ui/dialog'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { useRestartStore } from '@shared/state/restart'
@@ -47,14 +39,12 @@ export function RestartBanner(): React.ReactElement | null {
   const setLastRestartAt = useRestartStore((s) => s.setLastRestartAt)
   const clearRestart = useRestartStore((s) => s.clearRestart)
   const api = useMailApi()
-  const [confirmOpen, setConfirmOpen] = React.useState(false)
 
   if (!required) return null
 
   async function performRestart(): Promise<void> {
     setRestarting(true)
     setRestartError(null)
-    setConfirmOpen(false)
     try {
       const result = await api.services.restart('mail-sync')
       if (result.ok) {
@@ -179,7 +169,7 @@ export function RestartBanner(): React.ReactElement | null {
         </div>
         <Button
           size="sm"
-          onClick={() => setConfirmOpen(true)}
+          onClick={() => void performRestart()}
           disabled={restarting}
           // Button default variant 用 `text-accent-fg`, dark theme 下解析为
           // near-black (15 16 21), 在 coral 背景上视觉读起来"深字深底".
@@ -210,30 +200,6 @@ export function RestartBanner(): React.ReactElement | null {
           <X className="size-3.5" />
         </button>
       </div>
-
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {t('settings.restart.confirmTitle', { defaultValue: '确认重启 mail-sync?' })}
-            </DialogTitle>
-            <DialogDescription>
-              {t('settings.restart.confirmBody', {
-                defaultValue:
-                  '重启会中断正在同步的批次, 通常 5-10 秒恢复. 已更改的字段重启后才生效.'
-              })}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
-              {t('settings.restart.cancel', { defaultValue: '取消' })}
-            </Button>
-            <Button onClick={() => void performRestart()}>
-              {t('settings.restart.cta', { defaultValue: '立即重启' })}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   )
 }

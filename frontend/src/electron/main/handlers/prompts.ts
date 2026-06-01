@@ -13,7 +13,7 @@ import { dirname, isAbsolute, relative, resolve } from 'path'
 
 import { ipcMain } from 'electron'
 
-import { getProjectRoot } from '../cli_runner'
+import { resolveDataRoot } from '../db'
 import { resolveEnvPath } from '../lib/env-path'
 import { parseEnv, toRecord } from '../lib/env-parser'
 
@@ -52,7 +52,11 @@ const ENV_KEY: Record<PromptSlot, string> = {
  * misconfigured .env can't make us read /etc/passwd.
  */
 export function resolvePromptPath(slot: PromptSlot): string {
-  const root = getProjectRoot()
+  // 可写数据根 (打包态=userData, dev=~/Documents/MailAgent) —— 与后端 config.py
+  // _under_data_root('prompts/...') 同口径, 保证前端读/写 prompt == 后端读取位置。旧用
+  // getProjectRoot() 打包态落 ~/Documents/MailAgent, 与后端 userData/prompts 三方分叉
+  // (前端写的 prompt 后端永远读不到; 干净机器上读还落空目录)。
+  const root = resolveDataRoot()
   const envValues = readEnvSafe()
   const override = envValues[ENV_KEY[slot]]
   const rel = override && override.length > 0 ? override : DEFAULTS[slot]

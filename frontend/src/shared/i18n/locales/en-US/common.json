@@ -1579,18 +1579,18 @@
       }
     },
     "restart": {
-      "required": "mail-sync needs a restart",
+      "required": "Backend service needs a restart",
       "moreKeys": " and {count} more",
       "cta": "Restart now",
       "cancel": "Cancel",
       "dismiss": "Later",
-      "confirmTitle": "Restart mail-sync?",
+      "confirmTitle": "Restart backend service?",
       "confirmBody": "The current sync batch will be interrupted (~5-10s downtime). Changed fields take effect after restart.",
       "restarting": "Restarting…",
       "success": "Service restarted",
       "failed": "Restart failed",
       "statusProbeSlow": "Service status probe timed out; verify from the status bar shortly",
-      "notOnline": "mail-sync current state: {state}",
+      "notOnline": "Backend service state: {state}",
       "pm2NotFound": "pm2 not found",
       "pm2NotFoundHint": "Run in Terminal: pm2 restart mail-sync"
     },
