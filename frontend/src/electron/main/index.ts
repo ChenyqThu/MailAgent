@@ -6,6 +6,7 @@ import { registerCliLifecycle } from './cli_runner'
 import { registerBackendLifecycle, registerBackendQuitHook } from './backend_lifecycle'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
+import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
 import { registerEmailHandlers } from './handlers/email'
 import { registerFolderHandlers } from './handlers/folder'
 import { registerAttachmentHandlers } from './handlers/attachment'
@@ -120,12 +121,14 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
   // (复用 popout 的 ?popout=1 query 同款机制)。完成后 onboarding:complete 会 reload 去掉它。
   const search = opts.onboarding ? 'onboarding=1' : ''
   // onboarding 向导用固定小窗 (768×640, 不可缩放, 居中); 主 App 用 1280×800。
+  // 尺寸常量集中在 lib/window-config (reloadToMain 进主界面时也据此恢复, 防漂移)。
   // titleBarStyle 两者都保持 hiddenInset (OS 画红绿灯)。
+  const dims = opts.onboarding ? ONBOARDING_WINDOW : MAIN_WINDOW
   const mainWindow = new BrowserWindow({
-    width: opts.onboarding ? 768 : 1280,
-    height: opts.onboarding ? 640 : 800,
-    minWidth: opts.onboarding ? 768 : 940,
-    minHeight: opts.onboarding ? 640 : 600,
+    width: dims.width,
+    height: dims.height,
+    minWidth: dims.minWidth,
+    minHeight: dims.minHeight,
     resizable: !opts.onboarding,
     center: opts.onboarding ? true : undefined,
     show: false,

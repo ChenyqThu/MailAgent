@@ -55,6 +55,7 @@ import { callCli, getMailagentBin } from '../cli_runner'
 import { getDb, resolveDataRoot, resolveDbPath } from '../db'
 import { MANAGED_ENV_KEY_SET } from '../lib/env-keys'
 import { resolveEnvPath } from '../lib/env-path'
+import { MAIN_WINDOW } from '../lib/window-config'
 import { detectUserState, ONBOARDING_REQUIRED_KEYS } from '../onboarding/detect'
 import { writePatch } from './env'
 
@@ -935,7 +936,17 @@ async function finalize(evt: Electron.IpcMainInvokeEvent, raw: unknown): Promise
 function reloadToMain(evt: Electron.IpcMainInvokeEvent): void {
   try {
     const win = BrowserWindow.fromWebContents(evt.sender)
-    if (win) void win.loadFile(join(__dirname, '../renderer/index.html'))
+    if (!win || win.isDestroyed()) return
+    // onboarding 用固定小窗 (768×640 resizable:false)。进主界面是同窗 reload (不新建窗口),
+    // 故必须把窗口恢复成主窗尺寸 + 可缩放, 否则主 App 被塞进小窗且无法调整大小
+    // (此前 bug: 完成/跳过补全进主界面后窗口卡 768×640, 关闭重开才正常)。
+    // setResizable 必须在 setSize 前 (不可缩放窗口会忽略 setSize); 尺寸单一来源 window-config。
+    win.setResizable(true)
+    win.setMaximizable(true)
+    win.setMinimumSize(MAIN_WINDOW.minWidth, MAIN_WINDOW.minHeight)
+    win.setSize(MAIN_WINDOW.width, MAIN_WINDOW.height)
+    win.center()
+    void win.loadFile(join(__dirname, '../renderer/index.html'))
   } catch {
     /* 窗口已销毁等边界情况, 不阻断 complete 成功返回。 */
   }
