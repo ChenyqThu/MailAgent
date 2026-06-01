@@ -46,6 +46,8 @@ import { registerServicesHandlers } from './handlers/services'
 // 是给 Settings UI read/write 的另一条路径, 跟启动 env 注入是两件事. 详见
 // lib/dotenv-bootstrap.ts header. 已 export 的 process.env 优先, 不被覆盖.
 import { bootstrapDotenv } from './lib/dotenv-bootstrap'
+// 打包首次运行 seed 出厂 prompt 模板 → userData/prompts (后端 LLM 默认读它)。见 lib/seed-prompts。
+import { seedPromptTemplatesIfNeeded } from './lib/seed-prompts'
 // Sprint 19 island F6 — mailagent:// deeplink (灵动岛 open_mail/open_notion →
 // 打开前端对应邮件/视图). 解析 + cold-start buffer 在 ./deeplink.
 import { dispatchDeeplink, extractDeeplinkFromArgv, setDeeplinkSink } from './deeplink'
@@ -396,6 +398,10 @@ app.whenReady().then(async () => {
   //   超 120s, 仍开窗 (renderer 各 IPC 自带 not-found 兜底, 用户见空态而非黑屏)。
   //   TODO P2/P3: 此处接 onboarding 门控 —— 新用户无配置时走配置向导而非降级空态。
   if (app.isPackaged) {
+    // 打包首次运行: 把 bundle 出厂 prompt 模板 seed 到 <userData>/prompts —— 后端 LLM 默认
+    // 读它, 首次该目录空会 fallback 空 prompt (分类质量退化)。须在 backend spawn 前; 仅 copy
+    // 不存在的 (不覆盖用户在 Settings→AI 编辑过的); dev (src=dest) 自动跳过。non-fatal。
+    seedPromptTemplatesIfNeeded()
     // 先检测用户状态决定分流:
     //   configured → 起后端 + 等 DB 就绪 + 开主窗;
     //   new / config-incomplete → 不起后端 (没 .env 起也会崩), 开 onboarding 向导窗,
