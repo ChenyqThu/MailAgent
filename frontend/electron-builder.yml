@@ -47,6 +47,13 @@ extraResources:
     filter:
       - email_inbox.md
       - email_sent.md
+  # V2 远程访问 — serve-api 单 origin 服务前端 SPA (vite base=/app/, app.py mount /app)。
+  # from 相对 projectDir=frontend/ ⇒ out/web 即 frontend/out/web (build:web 产物)。
+  # 落到 Resources/web; serve-api spawn 时注入 MAILAGENT_SPA_DIR=<resources>/web
+  # (与 packagedResourcesBin 同锚点 process.resourcesPath)。打包前必须先跑 build:web
+  # (见 build:mac → build:web 链), 否则此处找不到 out/web 报错。
+  - from: out/web
+    to: web
 # afterPack — 封签前对嵌入式 python 的 .so/.dylib 预签 (afterSign 事后补签会破坏外层
 # seal)。hardenedRuntime 下漏签即 SIGKILL。ad-hoc (identity:null) 先够本地/内部分发;
 # 正式 Developer ID 公证待 P6 (Apple 账号)。

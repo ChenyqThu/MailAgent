@@ -188,6 +188,21 @@ export function writePatch(patch: Record<string, string | null>): EnvSetResult {
     }
   }
 
+  // blocker A 修复: env:set 写 .env 后**同步 process.env**。backend_lifecycle 的
+  // serveApiEnabled() / resolveApiPort() / serveApiEnv() 从 process.env 直读
+  // gate/port/CF env —— 只写 .env 不同步 process.env 时, 后续 restartService() 仍读
+  // 旧值 (改任何远程配置都不生效), 且 onboarding 首启 serve-api 被空 CF_AUDIENCE 软门
+  // 挡掉。对 changedKeys 同步: 注释/删除 (after 无值) → delete; 否则写入。沿用既有
+  // secret-不进-log 契约 (这里不 log value)。
+  for (const key of changedKeys) {
+    const val = after[key]
+    if (val === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = val
+    }
+  }
+
   return {
     ok: true,
     path,

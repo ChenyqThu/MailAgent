@@ -21,13 +21,14 @@
 // (it may exit-1 on a broken `.env`).
 
 import { execa } from 'execa'
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { existsSync } from 'fs'
 
+import { getBackendLifecycle, type ServiceName } from '../backend_lifecycle'
 import { whichSync } from '../bin_resolver'
 import { getProjectRoot } from '../cli_runner'
 
-type ServiceTarget = 'mail-sync' | 'calendar-sync' | 'all'
+type ServiceTarget = 'mail-sync' | 'calendar-sync' | 'all' | 'serve-api'
 
 export interface ServiceRestartResult {
   ok: boolean
@@ -53,7 +54,12 @@ export interface ServiceStatus {
   memMB: number | null
 }
 
-const VALID_TARGETS: ReadonlySet<ServiceTarget> = new Set(['mail-sync', 'calendar-sync', 'all'])
+const VALID_TARGETS: ReadonlySet<ServiceTarget> = new Set([
+  'mail-sync',
+  'calendar-sync',
+  'all',
+  'serve-api'
+])
 
 /** pm2 path resolver. Caches on first successful resolution. */
 let _pm2Cache: string | null = null
@@ -89,6 +95,31 @@ async function restartTarget(target: ServiceTarget): Promise<ServiceRestartResul
       error: {
         code: 'E_INVALID_ARG',
         message: `services:restart: invalid target "${target}"`
+      }
+    }
+  }
+
+  // blocker B 修复: 打包态无 pm2 — 把 restart 分流到 BackendLifecycleManager。
+  // mail-sync→'serve'(主同步), serve-api→'serve-api'(远程后端)。restartService() 会
+  // stop + 重读 enabled gate(从被 env:set 同步过的 process.env, 见 blocker A) + respawn,
+  // 让 Settings 改的开关/端口/CF 热生效, 不必重启整个 app。calendar-sync/all 是
+  // dev-pm2 概念, 打包态无对应 → 继续走下面 pm2 路径(E_PM2_NOT_FOUND, renderer 兜底)。
+  if (app.isPackaged && (target === 'mail-sync' || target === 'serve-api')) {
+    const svcName: ServiceName = target === 'serve-api' ? 'serve-api' : 'serve'
+    try {
+      await getBackendLifecycle().restartService(svcName)
+      return { ok: true, target, exitCode: 0, stdout: '', stderr: '' }
+    } catch (err) {
+      return {
+        ok: false,
+        target,
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        error: {
+          code: 'E_PM2_FAILED',
+          message: `BackendLifecycle restartService('${svcName}') failed: ${(err as Error).message}`
+        }
       }
     }
   }

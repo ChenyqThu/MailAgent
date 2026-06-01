@@ -1072,6 +1072,7 @@
       "notifications": "通知",
       "integrations": "集成",
       "realtime": "实时与存储",
+      "remote": "远程访问",
       "island": "灵动岛与更新"
     },
     "accounts": {
@@ -1433,6 +1434,90 @@
           "label": "启用双写",
           "helper": "关掉 → 仅 Notion 单源,LLM / 重传性能下降 100x"
         }
+      }
+    },
+    "remote": {
+      "page": {
+        "eyebrow": "REMOTE ACCESS",
+        "title": "远程访问",
+        "intro": "通过 Cloudflare Access 在外网安全访问邮件 Web 界面。serve-api 仅监听 127.0.0.1，由 Cloudflare 隧道转发并强制零信任鉴权。"
+      },
+      "gate": {
+        "title": "远程访问",
+        "helper": "开启后 serve-api 随应用启动，监听本机回环端口；关闭则不暴露任何远程能力。"
+      },
+      "enabled": {
+        "label": "启用远程访问 (serve-api)",
+        "helper": "默认开启 · 仅 bind 127.0.0.1，无 Cloudflare 隧道时外网不可达"
+      },
+      "cf": {
+        "title": "Cloudflare Access",
+        "helper": "serve-api 在每个请求上校验 Cloudflare Access 签发的 JWT；Audience 留空进程将拒绝启动。"
+      },
+      "audience": {
+        "label": "Application Audience Tag",
+        "helper": "Cloudflare Zero Trust → Access → 你的应用 → Overview 的 Audience (AUD) 标签"
+      },
+      "teamDomain": {
+        "label": "团队域名",
+        "helper": "xxx.cloudflareaccess.com — 用于拉取 JWKS 公钥验签"
+      },
+      "api": {
+        "title": "本地 API",
+        "helper": "端口与放行邮箱。cloudflared 隧道应指向此回环端口。"
+      },
+      "port": {
+        "label": "本地 API 端口",
+        "helper": "默认 8200，bind 127.0.0.1。改成被占用端口会导致 serve-api 启动失败。"
+      },
+      "allowedEmail": {
+        "label": "允许访问的邮箱",
+        "helper": "只有该邮箱通过 Cloudflare Access 才放行；留空则回退为 USER_EMAIL。"
+      },
+      "statusSection": {
+        "title": "状态与访问",
+        "helper": "改完上面任意配置后，需要重启 serve-api 才会生效。"
+      },
+      "warnAudience": {
+        "label": "缺少 Audience",
+        "hint": "远程访问已开启但 Application Audience Tag 为空，serve-api 会拒绝启动。请在上方 Cloudflare Access 填入 Audience。",
+        "tag": "必填"
+      },
+      "status": {
+        "label": "后端进程",
+        "hint": "serve-api 随后端进程一同托管；下方为后端在线状态。",
+        "refresh": "刷新状态",
+        "idle": "未启用",
+        "loading": "检测中…",
+        "online": "运行中",
+        "stopped": "已停止",
+        "errored": "异常",
+        "unknown": "未知"
+      },
+      "restart": {
+        "label": "应用配置",
+        "hint": "重启会顺带中断当前同步批次几秒，随后用新配置拉起 serve-api。",
+        "cta": "重启 serve-api",
+        "busy": "重启中…",
+        "requested": "已触发重启",
+        "failed": "重启失败",
+        "pm2NotFound": "未找到 pm2"
+      },
+      "url": {
+        "localLabel": "本地地址",
+        "localHint": "在本机浏览器直接打开（不经 Cloudflare）",
+        "teamLabel": "Cloudflare 团队域名",
+        "teamHint": "打开 Zero Trust 应用列表确认 Access 策略",
+        "emailLabel": "当前放行邮箱",
+        "emailHint": "通过 Cloudflare Access 鉴权的允许邮箱",
+        "emailFallback": "(默认 USER_EMAIL)",
+        "open": "在浏览器打开",
+        "copy": "复制"
+      },
+      "runbook": {
+        "label": "公网访问 (隧道)",
+        "hint": "公网 URL 形如 https://你的域名/app，由你自管的 cloudflared 隧道把 hostname 指向上面的本地端口。cloudflared 需你自行用 pm2 / launchd 托管，不在本应用生命周期内。",
+        "tag": "自管"
       }
     },
     "advanced": {

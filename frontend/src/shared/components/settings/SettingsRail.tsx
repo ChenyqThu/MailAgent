@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next'
 import {
   Bell,
   Bot,
+  Globe,
   Palette,
   Plug,
   Radio,
@@ -41,6 +42,7 @@ const TAB_ORDER: TabEntry[] = [
   { value: 'notifications', Icon: Bell, labelKey: 'settings.tabs.notifications' },
   { value: 'integrations', Icon: Plug, labelKey: 'settings.tabs.integrations' },
   { value: 'realtime', Icon: Wifi, labelKey: 'settings.tabs.realtime' },
+  { value: 'remote', Icon: Globe, labelKey: 'settings.tabs.remote' },
   { value: 'island', Icon: Radio, labelKey: 'settings.tabs.island' }
 ]
 

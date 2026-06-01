@@ -36,7 +36,7 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
-import { existsSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'fs'
 import { get as httpGet } from 'http'
 import { join } from 'path'
 
@@ -233,12 +233,31 @@ interface ManagedService {
   state: BackendState
   /** 该 service 是否 spawn (serve 恒 true; serve-api 由 env gate)。 */
   readonly enabled: () => boolean
+  /** 抽干该 service stdout/stderr 的落盘流 (防 pipe 背压死锁, 见 attachLogDrain)。
+   *  🔴 多 service 必须**各自**一条流 + 独立文件名 (serve→backend-process.log /
+   *  serve-api→api-process.log), 共用一个 createWriteStream 会交错/竞争。 */
+  logStream: WriteStream | null
+  /** 该 service 抽干日志的文件名 (落在 DATA_ROOT/logs/<logFile>)。 */
+  readonly logFile: string
 }
 
-/** serve-api 是否启用 (env gate)。默认**开** (打包即远程能力就位, bind loopback 零攻击面);
- *  `MAILAGENT_REMOTE_ACCESS_ENABLED=false` 显式关闭。spec lifecycle_design 倾向(a)。 */
+/**
+ * serve-api 是否启用 (软 gate)。两条必须**同时**成立才 spawn:
+ *   1. `MAILAGENT_REMOTE_ACCESS_ENABLED !== 'false'` —— 远程访问开关默认**开**
+ *      (打包即远程能力就位, bind loopback 零攻击面), 显式 ='false' 才关。
+ *   2. `CF_AUDIENCE` 非空 —— 🔴 致命前置 (spec risk #2): serve-api 的 auth.py 在
+ *      **模块 import 期** `if not AUTH_DISABLED and not CF_AUDIENCE: raise RuntimeError`,
+ *      CF_AUDIENCE 空则进程一启动就 crash → on('exit') 标 failed → waitApiReady warn。
+ *      默认开 flag + 默认空 CF_AUDIENCE 是矛盾的: 99% 新装用户没填 CF 就会看到
+ *      serve-api failed 告警。故未配 Cloudflare 时**静默不起** (软门控降级), 不 crash-loop;
+ *      Settings 填好 CF_AUDIENCE + restart 后该判据转真, serve-api 才被 spawn。
+ *
+ * (CF_AUDIENCE 经 index.ts bootstrapDotenv 从 app .env 注入 process.env, 这里直读。)
+ */
 function serveApiEnabled(): boolean {
-  return process.env.MAILAGENT_REMOTE_ACCESS_ENABLED !== 'false'
+  if (process.env.MAILAGENT_REMOTE_ACCESS_ENABLED === 'false') return false
+  const cfAudience = process.env.CF_AUDIENCE
+  return cfAudience != null && cfAudience.trim().length > 0
 }
 
 /** serve-api uvicorn 端口 (env MAILAGENT_API_PORT, 默认 DEFAULT_API_PORT)。 */
@@ -248,16 +267,45 @@ function resolveApiPort(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_API_PORT
 }
 
+/**
+ * 打包后 web SPA 资源目录 (electron-builder extraResources `to: web` → Resources/web)。
+ * serve-api 的 app.py `_SPA_DIR` 优先读此 env, 命中则 mount /app 静态 SPA (远程 Web);
+ * dev 模式不注入 (返回 null), app.py fallback 到 worktree frontend/out/web (零变更)。
+ * 锚点同 cli_runner.packagedResourcesBin (process.resourcesPath = .app/Contents/Resources)。
+ */
+function resolveSpaDir(): string | null {
+  try {
+    if (app.isPackaged !== true) return null
+  } catch {
+    return null
+  }
+  // process.resourcesPath 是 Electron 运行时注入的 (打包态必有); 单测/非 Electron
+  // 环境缺失 → 不注入 (返 null), app.py fallback worktree out/web。防 join(undefined)。
+  const resourcesPath = process.resourcesPath
+  if (typeof resourcesPath !== 'string' || resourcesPath.length === 0) return null
+  return join(resourcesPath, 'web')
+}
+
 export class BackendLifecycleManager {
   /** service registry (替代旧的单 this.child)。serve 恒在; serve-api 由 enabled() 决定是否 spawn。 */
   private readonly services: ManagedService[] = [
-    { name: 'serve', args: ['serve'], child: null, state: 'idle', enabled: () => true },
+    {
+      name: 'serve',
+      args: ['serve'],
+      child: null,
+      state: 'idle',
+      enabled: () => true,
+      logStream: null,
+      logFile: 'backend-process.log'
+    },
     {
       name: 'serve-api',
       args: ['serve-api'],
       child: null,
       state: 'idle',
-      enabled: serveApiEnabled
+      enabled: serveApiEnabled,
+      logStream: null,
+      logFile: 'api-process.log'
     }
   ]
   private readonly pollIntervalMs: number
@@ -327,40 +375,136 @@ export class BackendLifecycleManager {
       return
     }
     const dataRoot = resolveDataRoot()
-    const bin = getMailagentBin()
-    const baseEnv: NodeJS.ProcessEnv = {
+    const baseEnv = this.buildBaseEnv(dataRoot)
+    for (const svc of this.services) {
+      if (!svc.enabled()) continue
+      this.spawnService(svc, baseEnv, dataRoot)
+    }
+  }
+
+  /** 路径 env (serve + serve-api 共享): DATA_ROOT / ENV_FILE / DB_PATH 等。 */
+  private buildBaseEnv(dataRoot: string): NodeJS.ProcessEnv {
+    return {
       ...process.env,
-      // cwd 已是 DATA_ROOT, 但显式注入三 env 让 Python 侧路径解析无歧义。
+      // cwd 已是 DATA_ROOT, 但显式注入路径 env 让 Python 侧解析无歧义。
+      // 🔴 MAILAGENT_DATA_ROOT 才是 config.py `_resolve_data_root()` 真正读的 key ——
+      // 缺它则后端 (serve + serve-api 都一样) DATA_ROOT fallback 到
+      // dirname(dirname(__file__)) = 打包 bundle 内只读的 site-packages, 令 log_file /
+      // attachment_storage_dir 等所有 _under_data_root 默认路径错锚进只读 .app
+      // (serve-api 的 EmailRepository 读 SQLite / 附件 stream 都靠它锚定可写根)。
+      // PROJECT_ROOT 后端并不读 (仅前端 cli_runner 用), 保留仅为兼容。
       MAILAGENT_PROJECT_ROOT: dataRoot,
+      MAILAGENT_DATA_ROOT: dataRoot,
       MAILAGENT_ENV_FILE: join(dataRoot, '.env'),
       SYNC_STORE_DB_PATH: resolveDbPath()
     }
-    for (const svc of this.services) {
-      if (!svc.enabled()) continue
-      if (svc.child && !svc.child.killed) continue // 幂等: 该 service 已在跑
-      const env: NodeJS.ProcessEnv =
-        svc.name === 'serve-api'
-          ? { ...baseEnv, MAILAGENT_API_PORT: String(resolveApiPort()) }
-          : baseEnv
-      svc.state = 'starting'
-      const child = spawn(bin, svc.args, { cwd: dataRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
-      svc.child = child
-      child.on('exit', (code, signal) => {
-        // 非主动 stop() 触发的退出 → 标记该 service failed (带 name 维度)。
-        if (svc.state !== 'stopped') {
-          svc.state = 'failed'
-          console.error(`[backend_lifecycle] ${svc.name} exited code=${code} signal=${signal}`)
-        }
-        svc.child = null
-      })
-      child.on('error', (err) => {
+  }
+
+  /**
+   * spawn **单个** service + 接 drain + exit/error handler + serve-api 软门控。
+   * 幂等 (child 在跑 → skip)。start() 与 restartService() 共用此路径, 保证两入口
+   * env 注入 / pipe drain / 状态机完全一致。
+   */
+  private spawnService(svc: ManagedService, baseEnv: NodeJS.ProcessEnv, dataRoot: string): void {
+    if (svc.child && !svc.child.killed) return // 幂等: 该 service 已在跑
+    const bin = getMailagentBin()
+    const env: NodeJS.ProcessEnv = svc.name === 'serve-api' ? this.serveApiEnv(baseEnv) : baseEnv
+    svc.state = 'starting'
+    const child = spawn(bin, svc.args, { cwd: dataRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    svc.child = child
+    // 🔴 spawn 后**立刻** (任何 await 之前) 抽干 stdout/stderr —— 不消费 pipe 会背压
+    // 死锁把进程整个拖死 (详见 attachLogDrain)。serve 与 serve-api 各落独立文件。
+    this.attachLogDrain(svc, dataRoot)
+    child.on('exit', (code, signal) => {
+      // 非主动 stop() 触发的退出 → 标记该 service failed (带 name 维度)。
+      if (svc.state !== 'stopped') {
         svc.state = 'failed'
-        console.error(`[backend_lifecycle] ${svc.name} spawn error`, err)
-      })
-      // serve-api 软门控: 后台轮询其 /api/health, 起来标 ready, 超时只 warn — 不阻塞开窗。
-      if (svc.name === 'serve-api') {
-        void this.waitApiReady(svc)
+        console.error(`[backend_lifecycle] ${svc.name} exited code=${code} signal=${signal}`)
       }
+      svc.child = null
+    })
+    child.on('error', (err) => {
+      svc.state = 'failed'
+      console.error(`[backend_lifecycle] ${svc.name} spawn error`, err)
+    })
+    // serve-api 软门控: 后台轮询其 /api/health, 起来标 ready, 超时只 warn — 不阻塞开窗。
+    if (svc.name === 'serve-api') {
+      void this.waitApiReady(svc)
+    }
+  }
+
+  /**
+   * serve-api child 的完整 env (在 baseEnv 之上叠加远程访问专属 env)。
+   *
+   * baseEnv 已含 MAILAGENT_DATA_ROOT / ENV_FILE / DB_PATH (serve 共享)。serve-api 另需:
+   *   - MAILAGENT_API_PORT     : uvicorn bind 端口 (默认 8200, 透传用户自定义);
+   *   - MAILAGENT_SPA_DIR      : 打包后 web 资源绝对路径 (app.py 优先读它 mount /app
+   *                              静态 SPA; dev 不注入 → app.py fallback worktree out/web);
+   *   - CF_AUDIENCE / CF_TEAM_DOMAIN / MAILAGENT_API_ALLOWED_EMAIL : Cloudflare Access
+   *     鉴权三件套, auth.py 模块 import 期直读 (其中 CF_AUDIENCE 缺失会 raise → 进程崩,
+   *     已由 serveApiEnabled() 软 gate 拦在 spawn 前; 此处显式注入是为契约可测 +
+   *     不依赖子命令是否自行 load_dotenv)。
+   *
+   * 这些值经 index.ts bootstrapDotenv 从 app .env 注入 process.env, baseEnv 已透传 ——
+   * 此处再显式列出是为「serve-api spawn 注入完整 env」契约清晰可断言 (而非靠继承的隐式
+   * 透传)。仅当 process.env 里非空才 set, 避免把 undefined 写成字面 "undefined" 字符串。
+   */
+  private serveApiEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...baseEnv, MAILAGENT_API_PORT: String(resolveApiPort()) }
+    const spaDir = resolveSpaDir()
+    if (spaDir) env.MAILAGENT_SPA_DIR = spaDir
+    // Cloudflare Access 鉴权 env: 仅透传非空值 (空值交由 Python 端按未配置处理)。
+    for (const key of ['CF_AUDIENCE', 'CF_TEAM_DOMAIN', 'MAILAGENT_API_ALLOWED_EMAIL'] as const) {
+      const v = process.env[key]
+      if (v != null && v.length > 0) env[key] = v
+    }
+    return env
+  }
+
+  /**
+   * 持续抽干**单个 service** 的 stdout/stderr → DATA_ROOT/logs/<svc.logFile>。
+   *
+   * 🔴 防 pipe 背压死锁 (本类最关键的不变量): stdio=pipe 的内核缓冲区只有几十 KB,
+   * 后端 loguru 默认往 stdout 加了全量 sink, 不读则写满后, 进程下一次 write() 会永久
+   * 阻塞在 asyncio event loop 主线程 → 邮件同步 + SSE / serve-api 全部卡死且永不自愈。
+   * serve-api 比 serve 更危险: 每个请求都可能 log, 写满 pipe 后 /api/health 永不响应
+   * → probeApiHealth 超时 → 误判 failed。
+   *
+   * 多 service 各持独立流 + 独立文件名 (serve→backend-process.log / serve-api→
+   * api-process.log), 决不共用一个 createWriteStream (会交错/竞争)。截断模式 (flags:'w')
+   * 每次 spawn 覆盖, 只留本次进程输出防无限增长。drain 接不上 (建目录/开流失败) 退化
+   * resume() 丢弃 —— 宁丢诊断日志, 也不能让 pipe 写满把进程拖死。
+   */
+  private attachLogDrain(svc: ManagedService, dataRoot: string): void {
+    const child = svc.child
+    if (!child) return
+    try {
+      const logDir = join(dataRoot, 'logs')
+      mkdirSync(logDir, { recursive: true })
+      const stream = createWriteStream(join(logDir, svc.logFile), { flags: 'w' })
+      svc.logStream = stream
+      child.stdout?.on('data', (chunk: Buffer) => stream.write(chunk))
+      child.stderr?.on('data', (chunk: Buffer) => stream.write(chunk))
+    } catch (err) {
+      console.error(
+        `[backend_lifecycle] ${svc.name} log drain 接入失败, 退化为丢弃 (防 pipe 死锁)`,
+        err
+      )
+      svc.logStream = null
+      child.stdout?.resume()
+      child.stderr?.resume()
+    }
+  }
+
+  /** 关闭单个 service 的落盘流 (stop() 内调, 防 fd 泄漏)。 */
+  private closeLogStream(svc: ManagedService): void {
+    if (svc.logStream) {
+      try {
+        svc.logStream.end()
+      } catch {
+        /* 关流失败无所谓 — GC 会回收 fd。 */
+      }
+      svc.logStream = null
     }
   }
 
@@ -444,6 +588,27 @@ export class BackendLifecycleManager {
   }
 
   /**
+   * 只重启**单个** service (不动其它), 供 Settings 改远程访问配置 (CF/port/开关) 后
+   * 单独 reload serve-api —— 不打断 serve 的同步批次 (restart() 会顺带 stop serve 中断
+   * 几秒同步)。dev 模式 no-op。
+   *
+   * 重新读 enabled() gate (serveApiEnabled 重读 MAILAGENT_REMOTE_ACCESS_ENABLED +
+   * CF_AUDIENCE 是否就绪): 关→开 / 填好 CF_AUDIENCE 后 spawn; 开→关 / 清空 CF 后只 stop
+   * 不再 spawn (service 留在 stopped, getState 聚合时 enabled()=false 不计入)。
+   * env 从最新 process.env 重建 —— 但 .env 改动需先经 bootstrapDotenv/env:set 落到
+   * process.env 才会被读到 (Settings 流程: env:set 写 .env + 同步 process.env → 调本方法)。
+   */
+  async restartService(name: ServiceName): Promise<void> {
+    if (!this.safeIsPackaged()) return
+    const svc = this.services.find((s) => s.name === name)
+    if (!svc) return
+    await this.stopService(svc)
+    if (!svc.enabled()) return // gate 关 (开关 off / CF_AUDIENCE 空) → 停了就不再起
+    const dataRoot = resolveDataRoot()
+    this.spawnService(svc, this.buildBaseEnv(dataRoot), dataRoot)
+  }
+
+  /**
    * before-quit: 对所有在跑 service 发 SIGTERM + 等待优雅退出, 各自超过 stopGraceMs
    * 升级 SIGKILL。dev 模式 no-op。逐 service 复用旧的 SIGTERM→grace→SIGKILL→等 exit 语义。
    */
@@ -456,6 +621,7 @@ export class BackendLifecycleManager {
     const child = svc.child
     if (!child || child.killed) {
       svc.state = 'stopped'
+      this.closeLogStream(svc)
       return
     }
     svc.state = 'stopped'
@@ -480,6 +646,7 @@ export class BackendLifecycleManager {
       await Promise.race([exited, delay(SIGKILL_WAIT_MS)])
     }
     svc.child = null
+    this.closeLogStream(svc)
   }
 
   private safeIsPackaged(): boolean {

@@ -10,6 +10,8 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { EventEmitter } from 'events'
+// vi.mock('fs') 下面会 hoist; 这里 import 拿到的是 mock 版 (用于断言 drain 落盘调用)。
+import { createWriteStream, mkdirSync } from 'fs'
 
 // ---- electron app mock (isPackaged 可切换) ---------------------------------
 
@@ -24,6 +26,10 @@ vi.mock('electron', () => ({ app: appMock }))
 interface FakeChild extends EventEmitter {
   kill: ReturnType<typeof vi.fn>
   killed: boolean
+  /** 仿真实 ChildProcess: stdio=['ignore','pipe','pipe'] → stdout/stderr 是可读流。
+   *  attachLogDrain 必须挂 .on('data') 抽干它们 (防 pipe 背压死锁), 测试据此断言消费。 */
+  stdout: EventEmitter
+  stderr: EventEmitter
 }
 
 const spawnCalls: Array<{ bin: string; args: string[]; opts: Record<string, unknown> }> = []
@@ -46,6 +52,11 @@ function makeFakeChild(): FakeChild {
     return true
   })
   ee.killed = false
+  // pipe drain 的消费目标。真实 ChildProcess 的 stdout/stderr 也是 EventEmitter
+  // (Readable)。attachLogDrain 会 child.stdout?.on('data', ...) —— 给真 EventEmitter
+  // 让「消费者已挂上」可被 listenerCount('data') 断言 (防 pipe 背压死锁回归)。
+  ee.stdout = new EventEmitter()
+  ee.stderr = new EventEmitter()
   return ee
 }
 
@@ -57,6 +68,26 @@ vi.mock('child_process', () => ({
     return lastChild
   })
 }))
+
+// ---- fs mock (log drain 落盘流; 不碰真实磁盘) -------------------------------
+//
+// attachLogDrain 用 mkdirSync(DATA_ROOT/logs) + createWriteStream(.../*.log) 抽干
+// stdout/stderr。测试里 DATA_ROOT=/fake/... 不存在, 真 fs 会 ENOENT。把这三个写操作
+// 换成 no-op fake stream, 让 drain 走「成功接上」路径 (而非 catch 里 resume() 丢弃),
+// 这样能断言 child.stdout/stderr 确实被 on('data') 消费。existsSync 仍透传真实 (probeDbReady
+// / db.ts 路径判断用 — 但 db 已整体 mock, 这里 existsSync 透传不影响)。
+const fakeWriteStream = () => ({
+  write: vi.fn(),
+  end: vi.fn()
+})
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  return {
+    ...actual,
+    mkdirSync: vi.fn(),
+    createWriteStream: vi.fn(() => fakeWriteStream())
+  }
+})
 
 // ---- http.get mock (serve-api probeApiHealth 用) ----------------------------
 //
@@ -149,9 +180,15 @@ beforeEach(() => {
   childByArgs.clear()
   // 默认 serve-api gate **关** → 既有单测走「serve-only」向后兼容 lane (行为与改造前
   // 逐字节一致: 只 spawn serve, 不触 http probe)。开 serve-api 的多 service 测试在各自
-  // describe 内显式设 MAILAGENT_REMOTE_ACCESS_ENABLED=''/删掉, 见下。
+  // describe 内 enableGate() (删 MAILAGENT_REMOTE_ACCESS_ENABLED + 设 CF_AUDIENCE)。
   process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
   delete process.env.MAILAGENT_API_PORT
+  // 🔴 serveApiEnabled() 现在要求 CF_AUDIENCE 非空 (risk #2: 缺它 serve-api auth.py
+  // import 期 raise → crash-loop)。默认清空 → 即便 flag 开, gate 也不放行, 直到测试
+  // 显式 enableGate() 提供 CF_AUDIENCE。serve-api env 注入断言也据此设全套 CF env。
+  delete process.env.CF_AUDIENCE
+  delete process.env.CF_TEAM_DOMAIN
+  delete process.env.MAILAGENT_API_ALLOWED_EMAIL
   httpHandler = { kind: 'refused' } // 默认: uvicorn 没起, probe 失败
   _resetBackendLifecycleForTests()
 })
@@ -159,6 +196,9 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
   delete process.env.MAILAGENT_API_PORT
+  delete process.env.CF_AUDIENCE
+  delete process.env.CF_TEAM_DOMAIN
+  delete process.env.MAILAGENT_API_ALLOWED_EMAIL
   vi.clearAllMocks()
 })
 
@@ -337,8 +377,10 @@ describe('serve-api gate — 向后兼容 (gate off → 只 spawn serve)', () =>
 })
 
 describe('serve-api gate — 默认开 (gate on → spawn serve + serve-api)', () => {
+  // gate-on = 开关默认开 (删 flag) + CF_AUDIENCE 已配 (risk #2: 缺它 serve-api 不放行)。
   function enableGate() {
     delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED // 默认开
+    process.env.CF_AUDIENCE = 'aud-test-tag'
   }
 
   test('packaged 默认开: spawn serve + serve-api 两个进程, args 正确', () => {
@@ -412,6 +454,7 @@ describe('serve-api gate — 默认开 (gate on → spawn serve + serve-api)', (
 describe('serve-api 软门控 — waitReady 只 gate serve (向后兼容硬约束)', () => {
   function enableGate() {
     delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-test-tag'
   }
 
   test('serve-api probe 永不就绪也不阻塞 waitReady (软门控): serve ready → waitReady true', async () => {
@@ -495,6 +538,7 @@ describe('serve-api 软门控 — waitReady 只 gate serve (向后兼容硬约�
 describe('serve-api 多 service stop — 全部 SIGTERM', () => {
   function enableGate() {
     delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-test-tag'
   }
 
   test('stop 对 serve + serve-api 两个进程都发 SIGTERM, 各退出后整体 stopped', async () => {
@@ -543,6 +587,229 @@ describe('serve-api 多 service stop — 全部 SIGTERM', () => {
     // 两进程各被 spawn 两次 (首启 + restart 重启)。
     expect(spawnCalls.filter((c) => c.args[0] === 'serve')).toHaveLength(2)
     expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(2)
+  })
+})
+
+// ===========================================================================
+// V2 整合 — pipe drain (防死锁) + DATA_ROOT/CF/SPA env 注入 + 软 gate (CF_AUDIENCE)
+// ===========================================================================
+
+describe('pipe drain — spawn 后消费 stdout/stderr (防 event loop 背压死锁)', () => {
+  function enableGate() {
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-test-tag'
+  }
+
+  test('serve: spawn 后 stdout/stderr 各挂上 data 消费者 (drain 抽干)', () => {
+    appMock.isPackaged = true
+    // gate off → 只 serve, 聚焦 serve 单进程的 drain。
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    const serveChild = childFor('serve')
+    // 🔴 核心不变量: 不消费 pipe 会背压死锁。spawn 后 stdout/stderr 必须各有 ≥1 个
+    // 'data' listener (attachLogDrain 挂的)。这是 V2 上生产的头号 blocker 的回归守卫。
+    expect(serveChild.stdout.listenerCount('data')).toBeGreaterThanOrEqual(1)
+    expect(serveChild.stderr.listenerCount('data')).toBeGreaterThanOrEqual(1)
+  })
+
+  test('serve-api: spawn 后 stdout/stderr 各挂上 data 消费者 (drain 抽干)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    const apiChild = childFor('serve-api')
+    // serve-api 比 serve 更易触发 pipe 死锁 (每请求都 log), 必须同样被消费。
+    expect(apiChild.stdout.listenerCount('data')).toBeGreaterThanOrEqual(1)
+    expect(apiChild.stderr.listenerCount('data')).toBeGreaterThanOrEqual(1)
+  })
+
+  test('多 service 各落独立日志文件 (serve→backend-process.log / serve-api→api-process.log)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    // 每 service 各建一次 logs 目录 + 各开一条独立流 (不共用 createWriteStream)。
+    expect(vi.mocked(mkdirSync)).toHaveBeenCalledWith('/fake/DATA_ROOT/logs', { recursive: true })
+    const streamPaths = vi.mocked(createWriteStream).mock.calls.map((c) => c[0])
+    expect(streamPaths).toContainEqual('/fake/DATA_ROOT/logs/backend-process.log')
+    expect(streamPaths).toContainEqual('/fake/DATA_ROOT/logs/api-process.log')
+    // 两条流互不干扰 → createWriteStream 至少被调两次 (serve + serve-api)。
+    expect(vi.mocked(createWriteStream).mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  test('stop 关闭落盘流 (end() 防 fd 泄漏)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    const mgr = new BackendLifecycleManager({ stopGraceMs: 1000, ...fastApiOpts() })
+    mgr.start()
+    // 抓 serve 那条 stream (createWriteStream 最近一次返回的 fake)。
+    const streamResults = vi.mocked(createWriteStream).mock.results
+    const lastStream = streamResults[streamResults.length - 1].value as { end: ReturnType<typeof vi.fn> }
+    const serveChild = childFor('serve')
+    const stopP = mgr.stop()
+    serveChild.emit('exit', 0, null)
+    await stopP
+    expect(lastStream.end).toHaveBeenCalled()
+  })
+})
+
+describe('serve-api env 注入 — MAILAGENT_DATA_ROOT / CF_* / MAILAGENT_SPA_DIR', () => {
+  function enableGate() {
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-test-tag'
+  }
+
+  test('serve + serve-api 两进程都注入 MAILAGENT_DATA_ROOT (=DATA_ROOT, 锚定可写根)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    for (const name of ['serve', 'serve-api']) {
+      const call = spawnCalls.find((c) => c.args[0] === name)!
+      const env = call.opts.env as NodeJS.ProcessEnv
+      // 🔴 缺 MAILAGENT_DATA_ROOT 后端 DATA_ROOT fallback 到只读 .app bundle → 读不到
+      // 库/附件 + 日志错锚。serve 与 serve-api 必须都注入。
+      expect(env.MAILAGENT_DATA_ROOT).toBe('/fake/DATA_ROOT')
+    }
+  })
+
+  test('serve-api 注入 CF_AUDIENCE / CF_TEAM_DOMAIN / MAILAGENT_API_ALLOWED_EMAIL (从 process.env 透传)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    process.env.CF_TEAM_DOMAIN = 'acme.cloudflareaccess.com'
+    process.env.MAILAGENT_API_ALLOWED_EMAIL = 'boss@acme.com'
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    const apiCall = spawnCalls.find((c) => c.args[0] === 'serve-api')!
+    const env = apiCall.opts.env as NodeJS.ProcessEnv
+    expect(env.CF_AUDIENCE).toBe('aud-test-tag')
+    expect(env.CF_TEAM_DOMAIN).toBe('acme.cloudflareaccess.com')
+    expect(env.MAILAGENT_API_ALLOWED_EMAIL).toBe('boss@acme.com')
+  })
+
+  test('serve-api 注入 MAILAGENT_SPA_DIR (packaged: process.resourcesPath/web)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    // resolveSpaDir 读 process.resourcesPath; 单测里给它一个值模拟打包态。
+    const orig = process.resourcesPath
+    Object.defineProperty(process, 'resourcesPath', {
+      value: '/fake/App.app/Contents/Resources',
+      configurable: true
+    })
+    try {
+      const mgr = new BackendLifecycleManager(fastApiOpts())
+      mgr.start()
+      const apiCall = spawnCalls.find((c) => c.args[0] === 'serve-api')!
+      const env = apiCall.opts.env as NodeJS.ProcessEnv
+      expect(env.MAILAGENT_SPA_DIR).toBe('/fake/App.app/Contents/Resources/web')
+    } finally {
+      Object.defineProperty(process, 'resourcesPath', { value: orig, configurable: true })
+    }
+  })
+
+  test('process.resourcesPath 缺失 (非 Electron 环境) → 不注入 MAILAGENT_SPA_DIR (不崩)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    // vitest 下 process.resourcesPath 本就 undefined; 断言 serve-api 不因此抛 + 不注入 SPA。
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    expect(() => mgr.start()).not.toThrow()
+    const apiCall = spawnCalls.find((c) => c.args[0] === 'serve-api')!
+    const env = apiCall.opts.env as NodeJS.ProcessEnv
+    expect(env.MAILAGENT_SPA_DIR).toBeUndefined()
+  })
+})
+
+describe('serve-api 软 gate — CF_AUDIENCE 前置 (risk #2: 缺它 auth.py import 期崩)', () => {
+  test('flag 开但 CF_AUDIENCE 空 → 软门控不 spawn serve-api (只 serve), 不 crash-loop', () => {
+    appMock.isPackaged = true
+    // 开关开 (默认) 但没配 CF_AUDIENCE — 99% 新装用户的初始态。
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    delete process.env.CF_AUDIENCE
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    // 只 spawn serve; serve-api 静默不起 (避免 auth.py raise → failed 误报)。
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(0)
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve')).toHaveLength(1)
+  })
+
+  test('flag 开但 CF_AUDIENCE 全空白 (trim 后空) → 仍不 spawn serve-api', () => {
+    appMock.isPackaged = true
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = '   '
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(0)
+  })
+
+  test('flag 开 + CF_AUDIENCE 已配 → spawn serve-api', () => {
+    appMock.isPackaged = true
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-real-tag'
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(1)
+  })
+
+  test('flag=false 即便 CF_AUDIENCE 已配 → 仍不 spawn serve-api (显式关优先)', () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    process.env.CF_AUDIENCE = 'aud-real-tag'
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(0)
+  })
+})
+
+describe('restartService — 单独重启 serve-api 不动 serve (Settings 改远程配置用)', () => {
+  function enableGate() {
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-test-tag'
+  }
+
+  test('restartService(serve-api): 只对 serve-api 发 SIGTERM + re-spawn, serve 进程不动', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager({ stopGraceMs: 1000, ...fastApiOpts() })
+    mgr.start()
+    const serveChild = childFor('serve')
+    const apiChild0 = childFor('serve-api')
+
+    const p = mgr.restartService('serve-api')
+    apiChild0.emit('exit', 0, null) // 旧 serve-api 优雅退出
+    await p
+
+    // serve 没被 kill (不打断同步批次), serve-api re-spawn 一次。
+    expect(serveChild.kill).not.toHaveBeenCalled()
+    expect(apiChild0.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve')).toHaveLength(1) // 仅首启
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(2) // 首启 + restart
+  })
+
+  test('restartService(serve-api) 在 CF_AUDIENCE 被清空后 → 停了不再 spawn (gate 重读)', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager({ stopGraceMs: 1000, ...fastApiOpts() })
+    mgr.start()
+    const apiChild0 = childFor('serve-api')
+    // 模拟 Settings 关掉远程访问 (清 CF_AUDIENCE) 后重启 serve-api。
+    delete process.env.CF_AUDIENCE
+    const p = mgr.restartService('serve-api')
+    apiChild0.emit('exit', 0, null)
+    await p
+    // gate 重读 → 不再 spawn; serve-api 停留 stopped。
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(1) // 仅首启, 无 restart spawn
+    expect(mgr.getServiceState('serve-api')).toBe('stopped')
+  })
+
+  test('dev 模式 restartService no-op (不 spawn)', async () => {
+    appMock.isPackaged = false
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-test-tag'
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start() // dev: 不 spawn
+    await mgr.restartService('serve-api')
+    expect(spawnCalls).toHaveLength(0)
   })
 })
 

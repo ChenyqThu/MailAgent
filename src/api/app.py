@@ -407,14 +407,20 @@ async def _liveness() -> dict[str, Any]:
 
 # V2 上线: serve-api 同时服务前端 SPA (frontend/out/web, vite base=/app/) —— 单 origin
 # (mail.chenge.ink/app → SPA, /api/* → 本 API), 单用户省去单独配 Cloudflare Pages。
-# SPA dir 用 __file__ 相对定位 (在 worktree 内, 不受 MAILAGENT_DATA_ROOT 影响)。
 # mount 放在所有 API route 之后声明 (StaticFiles 是 catch-all, 避免遮蔽 /api/*)。
+#
+# SPA dir 解析优先级:
+#   1. env MAILAGENT_SPA_DIR — 打包态由 BackendLifecycleManager 注入绝对路径
+#      (=<.app>/Contents/Resources/web)。打包后本文件位于只读 bundle 内
+#      site-packages, __file__ 相对路径会指向 bundle 内不存在的 frontend/out/web。
+#   2. fallback __file__ 相对 (worktree 内 frontend/out/web) — dev / dogfood 态,
+#      不设该 env, 与历史行为逐字节一致。
 import os as _os_spa  # noqa: E402
 
 from fastapi.responses import RedirectResponse as _RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles as _StaticFiles  # noqa: E402
 
-_SPA_DIR = _os_spa.path.join(
+_SPA_DIR = _os_spa.environ.get("MAILAGENT_SPA_DIR") or _os_spa.path.join(
     _os_spa.path.dirname(_os_spa.path.dirname(_os_spa.path.dirname(_os_spa.path.abspath(__file__)))),
     "frontend",
     "out",

@@ -240,6 +240,7 @@ export const SETTINGS_TABS = [
   'notifications',
   'integrations',
   'realtime',
+  'remote',
   'island'
 ] as const
 export type SettingsTab = (typeof SETTINGS_TABS)[number]

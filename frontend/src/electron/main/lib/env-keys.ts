@@ -139,6 +139,25 @@ export const MANAGED_ENV_KEYS = [
   'PING_ISLAND_ENABLED',
   'ISLAND_SOCKET_PATH',
 
+  // — Remote Access (serve-api / RemoteAccessTab). V2 远程访问从 dogfood (手动
+  // nohup serve-api) 收尾成生产态: serve-api 进程纳入打包 app 的
+  // BackendLifecycleManager。这 5 个字段是 RemoteAccessTab 经 env:set 写 app .env
+  // 的全集, 全部非 secret:
+  //   - MAILAGENT_REMOTE_ACCESS_ENABLED: gate flag, !=='false' 即开 (默认开,
+  //     bind loopback 零攻击面)。serveApiEnabled() 读它决定是否 spawn serve-api。
+  //   - CF_AUDIENCE: Cloudflare Access Application "Audience" tag (公开应用标识非密钥)。
+  //     auth.py 模块 import 期读它做 JWT aud 校验; 空则 serve-api 拒起 (软门控前提)。
+  //   - CF_TEAM_DOMAIN: xxx.cloudflareaccess.com 团队域名 (JWKS issuer)。
+  //   - MAILAGENT_API_PORT: 本地 API 端口 (默认 8200, bind 127.0.0.1)。
+  //   - MAILAGENT_API_ALLOWED_EMAIL: 允许访问的邮箱 (留空=USER_EMAIL)。
+  // CF_AUDIENCE 是 application tag 非密钥, 不入 SECRET_ENV_KEYS。改这些字段后需
+  // 重启 serve-api 生效 (RestartBanner / Tab 内重启按钮触发)。
+  'MAILAGENT_REMOTE_ACCESS_ENABLED',
+  'CF_AUDIENCE',
+  'CF_TEAM_DOMAIN',
+  'MAILAGENT_API_PORT',
+  'MAILAGENT_API_ALLOWED_EMAIL',
+
   // feat/auto-update re-review (codex, trust boundary) — AUTO_UPDATE_ENABLED is
   // intentionally NOT a managed key: it's the master safety gate for proactive
   // updater behavior, read directly via process.env in handlers/updater.ts.

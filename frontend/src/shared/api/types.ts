@@ -1544,7 +1544,7 @@ export interface EnvApi {
   set(patch: Record<string, string | null>): Promise<EnvSetResult>
 }
 
-export type ServiceTarget = 'mail-sync' | 'calendar-sync' | 'all'
+export type ServiceTarget = 'mail-sync' | 'calendar-sync' | 'all' | 'serve-api'
 
 export interface ServiceRestartResult {
   ok: boolean
