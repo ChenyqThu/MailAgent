@@ -1,0 +1,15 @@
+{
+  "name": "MailAgent",
+  "short_name": "MailAgent",
+  "description": "macOS 邮件 → Notion 实时同步系统",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#0F0F10",
+  "theme_color": "#0F0F10",
+  "icons": [
+    { "src": "/app/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/app/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/app/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
