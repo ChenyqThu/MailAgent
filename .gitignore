@@ -69,3 +69,7 @@ email-notion-sync/
 data/_probe_tmp/
 tests/project_progress/fixtures/sample_*.xlsx
 data/notion_ds_cache.json
+
+# 工具产物（OMC 状态 / Playwright MCP 日志）— 不入库
+.omx/
+.playwright-mcp/
