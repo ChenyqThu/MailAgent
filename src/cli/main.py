@@ -105,6 +105,51 @@ def serve() -> None:
     asyncio.run(run_service())
 
 
+@app.command(name="serve-api")
+def serve_api() -> None:
+    """启动 MailAgent V2 远程访问本地 FastAPI 后端 (mailagent-api).
+
+    长驻进程，bind 127.0.0.1:8200，唯一对外通道是 cloudflared tunnel (公网不可直连
+    端口)。读端点经 EmailRepository 读 SQLite，写端点 subprocess 调本 CLI。设计依据
+    frontend/REMOTE-ACCESS.md §3 (FastAPI 设计) + §6.3-6.5 (CF Access JWT + loopback)。
+
+    端口可经 env MAILAGENT_API_PORT 覆盖 (默认 8200)；host 硬绑 127.0.0.1 (§6.4 G2 /
+    §6.5 — 不接受非 loopback，外部网卡不可达)。app 的 startup assertion 二次兜底。
+
+    与 `serve` 平行: 同为长驻进程，不产出 `-o json` 结构化输出 (全局 -o/--output 对它
+    无意义)；日志走 setup_logger / uvicorn 自身。两个进程读同一份 data/sync_store.db
+    (WAL 模式支持并发 reader + 单 mail-sync writer)。
+
+    部署 (REMOTE-ACCESS §3.1):
+        pm2 start "mailagent serve-api" --name mailagent-api --interpreter ./venv/bin/python3
+    打包共托管场景下，亦可作为 BackendLifecycleManager 的第二个子进程
+    spawn(['serve-api'])，与 `serve` 同样的 MAILAGENT_PROJECT_ROOT / MAILAGENT_ENV_FILE /
+    SYNC_STORE_DB_PATH env 注入 + before-quit SIGTERM。
+    """
+    # 延迟 import: 避免 --help / 其他子命令解析时载入 fastapi / uvicorn / 整个后端链
+    # (与 serve / 其它子命令一致)。
+    import os
+
+    import uvicorn
+
+    host = "127.0.0.1"  # 硬绑 loopback (§6.5 startup assertion 二次校验)
+    port = int(os.environ.get("MAILAGENT_API_PORT", "8200"))
+
+    # F1: app 的 lifespan loopback 断言读 MAILAGENT_API_HOST (不是 uvicorn 从不设的
+    # UVICORN_HOST)。在 uvicorn.run 前显式落到 env，让那道二次兜底真正生效。
+    os.environ["MAILAGENT_API_HOST"] = host
+
+    # 用 import string ("src.api.app:app") 而非 import 后的对象 (uvicorn reload/worker
+    # 友好)；log_config=None 让 loguru/uvicorn 自身拥有日志 (与 serve 的 setup_logger
+    # 一致，不被 uvicorn 默认 config 覆盖)。
+    uvicorn.run(
+        "src.api.app:app",
+        host=host,
+        port=port,
+        log_config=None,
+    )
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
