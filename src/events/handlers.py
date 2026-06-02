@@ -763,13 +763,10 @@ class EventHandlers:
                 from src.converter.notion_rich_text import rich_text_to_html
                 html = rich_text_to_html(reply_suggestion_rich)
             elif reply_suggestion:
-                import sys
-                script_path = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts"
-                )
-                if script_path not in sys.path:
-                    sys.path.insert(0, script_path)
-                from html_clipboard import md_to_html
+                # md_to_html 已抽到 src/converter (打包态 site-packages 必含);
+                # 旧版 dirname×3(__file__)/scripts 推路径在 .app 算错位 →
+                # ModuleNotFoundError (同 compose 预填的 E_GENERIC 根因)。
+                from src.converter.markdown_to_html import md_to_html
                 html = md_to_html(reply_suggestion)
 
             # In-Reply-To: 原邮件 Message-ID 加 <> 包裹

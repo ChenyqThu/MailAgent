@@ -153,7 +153,10 @@
       "draftOk": "草稿已保存到草稿箱",
       "sendOk": "邮件已发送",
       "toRequired": "请至少填写一个收件人"
-    }
+    },
+    "modeReply": "回复",
+    "modeReplyAll": "回复所有",
+    "modeForward": "转发"
   },
   "toolbarToast": {
     "draftOk": "已打开 Mail.app 回复草稿",

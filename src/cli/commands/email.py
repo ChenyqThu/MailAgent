@@ -1449,17 +1449,12 @@ def _fetch_reply_suggestion_md(cli: "CliContext", internal_id: int) -> str:
 
 
 def _reply_md_to_html(reply_md: str) -> str:
-    """markdown reply_suggestion → HTML (复用 scripts/html_clipboard.md_to_html,
-    跟 handlers._create_draft_via_imap markdown 路径同款)."""
-    import os
-    import sys
-    scripts = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-        "scripts",
-    )
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
-    from html_clipboard import md_to_html
+    """markdown reply_suggestion → HTML。md_to_html 已抽到 src/converter (随
+    site-packages 必然打进 .app); 旧版用 dirname×4(__file__)/scripts 推路径再
+    ``import html_clipboard``, 在打包态算成不存在的 site-packages/scripts →
+    ModuleNotFoundError → CLI exit 1 = compose 回复「预填加载失败 E_GENERIC」
+    (dev 下 __file__ 布局不同, ×4 恰好仓库根故不复现)。"""
+    from src.converter.markdown_to_html import md_to_html
     return md_to_html(reply_md)
 
 

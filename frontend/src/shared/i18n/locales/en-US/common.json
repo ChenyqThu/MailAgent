@@ -153,7 +153,10 @@
       "draftOk": "Draft saved to Drafts",
       "sendOk": "Email sent",
       "toRequired": "Add at least one recipient"
-    }
+    },
+    "modeReply": "Reply",
+    "modeReplyAll": "Reply all",
+    "modeForward": "Forward"
   },
   "toolbarToast": {
     "draftOk": "Mail.app reply draft opened",
