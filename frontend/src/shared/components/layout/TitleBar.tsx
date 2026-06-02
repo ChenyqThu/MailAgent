@@ -42,7 +42,8 @@ export function TitleBar(): React.ReactElement {
           carry-over from Sprint 10; V1.4 mockup drops the brand label but
           the developer-owner-of-the-SQLite-SSoT wants the chrome to read
           "MailAgent"). */}
-      <div className="text-aux text-ink-fg-1 font-medium tracking-tight pr-3 shrink-0">
+      {/* LAYOUT-CHROME-01 — <sm 隐藏 brand label 给窄屏右簇 picker 让空间, 防折行。 */}
+      <div className="text-aux text-ink-fg-1 font-medium tracking-tight pr-3 shrink-0 hidden sm:block">
         MailAgent
       </div>
 
@@ -50,7 +51,7 @@ export function TitleBar(): React.ReactElement {
           Wrapper itself stays drag-region (inherits from <header>) so the
           empty space around the button still drags the window; only the
           <button> itself opts out of drag via WebkitAppRegion: 'no-drag'. */}
-      <div className="flex-1 flex justify-center">
+      <div className="flex-1 min-w-0 flex justify-center">
         <button
           type="button"
           onClick={togglePalette}
@@ -62,8 +63,9 @@ export function TitleBar(): React.ReactElement {
           )}
         >
           <Search size={13} strokeWidth={2} />
-          <span>{t('search.title')}</span>
-          <kbd className="group-hover:bg-ink-4">⌘K</kbd>
+          {/* <md 退化为纯图标按钮 (省空间防 chrome 折行); 文字 + kbd 桌面才出。 */}
+          <span className="hidden md:inline">{t('search.title')}</span>
+          <kbd className="hidden md:inline-block group-hover:bg-ink-4">⌘K</kbd>
         </button>
       </div>
 
@@ -72,14 +74,14 @@ export function TitleBar(): React.ReactElement {
           themselves as `no-drag`. AccentPicker / ThemeCycle / LocalePicker
           / SystemAlertBadge each set WebkitAppRegion: 'no-drag' on their
           <button> element. SystemAlertBadge renders null when no alerts. */}
-      <div className="flex items-center gap-3 text-meta font-mono text-ink-fg-2">
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0 text-meta font-mono text-ink-fg-2">
         <SystemAlertBadge />
         <AccentPickerPopover />
-        <span className="text-ink-fg-3">·</span>
+        <span className="hidden md:inline text-ink-fg-3">·</span>
         <SurfacePickerPopover />
-        <span className="text-ink-fg-3">·</span>
+        <span className="hidden md:inline text-ink-fg-3">·</span>
         <ThemePickerPopover />
-        <span className="text-ink-fg-3">·</span>
+        <span className="hidden md:inline text-ink-fg-3">·</span>
         <LocalePicker />
       </div>
     </header>

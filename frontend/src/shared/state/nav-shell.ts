@@ -6,10 +6,18 @@
 //   - cross-window sync via the `storage` event so a pop-out compose /
 //     detail window stays in lockstep with the main inbox window
 //
+// 批 E-3 (RESPONSIVE-XCUT-02 / LAYOUT-CHROME-01) — responsive auto-collapse.
+// The *effective* collapsed state is `belowLg || userCollapsed`:
+//   - belowLg     = viewport < lg(1024); forces the 56px icon rail so the
+//                   chrome never breaks on narrow widths. Reuses ALL existing
+//                   `[data-collapsed='true']` CSS — no new authored rules.
+//   - userCollapsed = the user's manual fold preference (persisted), honoured
+//                   at ≥lg. Toggling at <lg flips the pref but the rail stays
+//                   forced (the row is already an icon-only rail there).
+//
 // Mirrors the broadcast convention used by appearance.ts (theme/accent).
-// The module-level `storage` listener installs once per renderer process
-// at import time; SSR-gated by typeof window check. No leak in practice:
-// the listener lives as long as the renderer process.
+// The module-level `storage` + `matchMedia` listeners install once per
+// renderer process at import time; SSR-gated by typeof window check.
 
 import { create } from 'zustand'
 
@@ -26,6 +34,10 @@ const KEY = 'mailagent.nav.collapsed'
 const NAV_W_EXPANDED = '240px'
 const NAV_W_COLLAPSED = '56px'
 
+// <lg auto-collapse breakpoint — aligns with Tailwind `lg`(1024) and the
+// useMediaQuery shell breakpoints (EmailList lg:w-[340px] etc).
+const BELOW_LG = '(max-width: 1023px)'
+
 // Mirror collapsed state into the --app-nav-w CSS var. Gated on `document`
 // (DOM-only API; no-op under SSR / non-renderer import contexts). The 220ms
 // `left` transition on #batch-bar.floating (index.css) animates the realign.
@@ -37,7 +49,7 @@ function applyNavWidthVar(collapsed: boolean): void {
   )
 }
 
-function readPersisted(): boolean {
+function readUserPref(): boolean {
   if (typeof window === 'undefined') return false
   try {
     return window.localStorage.getItem(KEY) === 'true'
@@ -46,7 +58,7 @@ function readPersisted(): boolean {
   }
 }
 
-function writePersisted(next: boolean): void {
+function writeUserPref(next: boolean): void {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(KEY, String(next))
@@ -56,31 +68,66 @@ function writePersisted(next: boolean): void {
   }
 }
 
+function readBelowLg(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia?.(BELOW_LG).matches === true
+}
+
 interface NavShellStore {
+  /** Effective collapsed = belowLg || userCollapsed (see file header). */
   collapsed: boolean
   toggle: () => void
   setCollapsed: (next: boolean) => void
 }
 
-const initialCollapsed = readPersisted()
-// Sync the CSS var to the persisted state on first load so the batch bar is
-// already aligned before the user toggles anything.
+// Module-level latches feeding `effective()`. `belowLg` follows the viewport
+// (matchMedia listener below); `userCollapsed` follows the persisted manual
+// preference (toggle / setCollapsed / cross-window storage event).
+let belowLg = readBelowLg()
+let userCollapsed = readUserPref()
+function effective(): boolean {
+  return belowLg || userCollapsed
+}
+
+const initialCollapsed = effective()
+// Sync the CSS var to the effective state on first load so the batch bar is
+// already aligned before the user toggles anything / before any resize.
 applyNavWidthVar(initialCollapsed)
 
-export const useNavCollapsed = create<NavShellStore>((set, get) => ({
+export const useNavCollapsed = create<NavShellStore>((set) => ({
   collapsed: initialCollapsed,
   toggle: () => {
-    const next = !get().collapsed
-    writePersisted(next)
+    // Flip the *manual* preference (persisted). At <lg the effective state
+    // stays forced-collapsed (the rail is already icon-only there), so the
+    // toggle has no visible effect until the viewport returns to ≥lg.
+    userCollapsed = !userCollapsed
+    writeUserPref(userCollapsed)
+    const next = effective()
     applyNavWidthVar(next)
     set({ collapsed: next })
   },
   setCollapsed: (next) => {
-    writePersisted(next)
-    applyNavWidthVar(next)
-    set({ collapsed: next })
+    userCollapsed = next
+    writeUserPref(next)
+    const eff = effective()
+    applyNavWidthVar(eff)
+    set({ collapsed: eff })
   }
 }))
+
+// Responsive breakpoint linkage — recompute effective collapsed when the
+// viewport crosses the lg boundary (window resize / zoom / web responsive).
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+  const mq = window.matchMedia(BELOW_LG)
+  mq.addEventListener('change', (e) => {
+    belowLg = e.matches
+    const next = effective()
+    applyNavWidthVar(next)
+    if (useNavCollapsed.getState().collapsed !== next) {
+      useNavCollapsed.setState({ collapsed: next })
+    }
+  })
+}
 
 // Cross-window sync. When another renderer window flips the same
 // localStorage key, the `storage` event fires here so this store updates
@@ -89,9 +136,10 @@ export const useNavCollapsed = create<NavShellStore>((set, get) => ({
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
     if (e.key !== KEY) return
-    const next = e.newValue === 'true'
+    userCollapsed = e.newValue === 'true'
+    const next = effective()
+    applyNavWidthVar(next)
     if (useNavCollapsed.getState().collapsed !== next) {
-      applyNavWidthVar(next)
       useNavCollapsed.setState({ collapsed: next })
     }
   })

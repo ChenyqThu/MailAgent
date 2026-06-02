@@ -226,6 +226,9 @@ export function StatusBar(): React.ReactElement {
         'text-micro leading-[12px]'
       )}
     >
+      {/* RESPONSIVE-XCUT-03 — 窄屏按断点砍次要段防挤压重叠。分隔符前置, 隐藏段
+          连同前置 Sep 一起消失 (display:contents wrapper, 不破坏 24px 高度契约
+          也不留孤立 |)。<md: 同步+远程; md–lg: +邮箱+主题; >=lg: 全 6 段。 */}
       <Segment
         icon={<span className={cn('w-1.5 h-1.5 rounded-full', sync.dot)} aria-hidden />}
         title={`${t('statusbar.sync.label')} · ${sync.tooltip}`}
@@ -233,23 +236,25 @@ export function StatusBar(): React.ReactElement {
         <span className="text-ink-fg-3">{t('statusbar.sync.label')}</span>
         <span className="text-ink-fg-1">{sync.label}</span>
       </Segment>
-      <Sep />
 
-      <Segment
-        icon={
-          <span
-            className={cn('w-1.5 h-1.5 rounded-full', islandDotClass(islandStatus.state))}
-            aria-hidden
-          />
-        }
-        title={`${t('titleBar.island.label')} · ${islandStateLabel}`}
-      >
-        <span className="text-ink-fg-3">{t('titleBar.island.label')}</span>
-      </Segment>
-      <Sep />
+      <span className="hidden lg:contents">
+        <Sep />
+        <Segment
+          icon={
+            <span
+              className={cn('w-1.5 h-1.5 rounded-full', islandDotClass(islandStatus.state))}
+              aria-hidden
+            />
+          }
+          title={`${t('titleBar.island.label')} · ${islandStateLabel}`}
+        >
+          <span className="text-ink-fg-3">{t('titleBar.island.label')}</span>
+        </Segment>
+      </span>
 
       {!isWeb && (
         <>
+          <Sep />
           <Segment
             icon={<Globe size={11} strokeWidth={2} className={remoteIconClass} />}
             title={`${t('statusbar.remote.label', { defaultValue: '远程' })} · ${remoteTooltip}`}
@@ -259,34 +264,40 @@ export function StatusBar(): React.ReactElement {
             </span>
             <span className="text-ink-fg-1">{remoteLabel}</span>
           </Segment>
-          <Sep />
         </>
       )}
 
-      <Segment
-        icon={<Database size={11} strokeWidth={2} />}
-        title={`${t('statusbar.mailbox')} · ${active}`}
-      >
-        <span className="text-ink-fg-3">{t('statusbar.mailbox')}</span>
-        <span className="text-ink-fg-1">{active}</span>
-      </Segment>
-      <Sep />
+      <span className="hidden md:contents">
+        <Sep />
+        <Segment
+          icon={<Database size={11} strokeWidth={2} />}
+          title={`${t('statusbar.mailbox')} · ${active}`}
+        >
+          <span className="text-ink-fg-3">{t('statusbar.mailbox')}</span>
+          <span className="text-ink-fg-1">{active}</span>
+        </Segment>
+      </span>
 
-      <Segment
-        icon={<Cpu size={11} strokeWidth={2} />}
-        title={`${t('statusbar.llm')} · ${t('statusbar.llmIdle')}`}
-      >
-        <span className="text-ink-fg-3">{t('statusbar.llm')}</span>
-        <span className="text-ink-fg-1">{t('statusbar.llmIdle')}</span>
-      </Segment>
-      <Sep />
+      <span className="hidden lg:contents">
+        <Sep />
+        <Segment
+          icon={<Cpu size={11} strokeWidth={2} />}
+          title={`${t('statusbar.llm')} · ${t('statusbar.llmIdle')}`}
+        >
+          <span className="text-ink-fg-3">{t('statusbar.llm')}</span>
+          <span className="text-ink-fg-1">{t('statusbar.llmIdle')}</span>
+        </Segment>
+      </span>
 
-      <Segment icon={<Activity size={11} strokeWidth={2} />} title={themeTooltip}>
-        <span className="text-ink-fg-3">{t('statusbar.theme')}</span>
-        <span className="text-ink-fg-1">{t(`settings.theme.${resolved}`)}</span>
-        <span className="text-ink-fg-3">·</span>
-        <span className="text-ink-fg-1 capitalize">{accent}</span>
-      </Segment>
+      <span className="hidden md:contents">
+        <Sep />
+        <Segment icon={<Activity size={11} strokeWidth={2} />} title={themeTooltip}>
+          <span className="text-ink-fg-3">{t('statusbar.theme')}</span>
+          <span className="text-ink-fg-1">{t(`settings.theme.${resolved}`)}</span>
+          <span className="text-ink-fg-3">·</span>
+          <span className="text-ink-fg-1 capitalize">{accent}</span>
+        </Segment>
+      </span>
 
       <span className="ml-auto inline-flex items-center gap-1.5" title={versionTooltip}>
         <Layers size={11} strokeWidth={2} className="text-ink-fg-3" />
