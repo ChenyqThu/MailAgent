@@ -5,7 +5,7 @@
 // detail and the right edge; the grid here doesn't need to change — only
 // EmailDetail's max width does.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
 
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
@@ -56,9 +56,17 @@ export function InboxLayout(): React.ReactElement {
   // 零后台 IPC。
   const reduceMotion = useReducedMotion()
   const wrapperRef = useRef<HTMLDivElement>(null)
-  const mountedOnceRef = useRef(false)
-  if (aiPanelVisible) mountedOnceRef.current = true
-  const mountPanel = mountedOnceRef.current
+  // keep-mounted latch: 初值 = 当前可见态（启动即可见时无一帧延迟），首次可见后
+  // 永久 true（绝不回 false → 保留 chat state / 滚动）。effect 接首次 false→true
+  // 的转变（首次打开晚一帧挂载, 主理人已接受）。
+  const [mountPanel, setMountPanel] = useState(aiPanelVisible)
+  useEffect(() => {
+    // 把 external store 的 visible 信号翻译成一次性 "已挂载" latch（同
+    // useNewlyAddedIds 的 effect-body setState 正解）；只单向 false→true,
+    // 不会级联。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (aiPanelVisible) setMountPanel(true)
+  }, [aiPanelVisible])
 
   useGSAP(
     () => {

@@ -185,6 +185,10 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   useEffect(() => {
     if (requestedBackendKind === null) return
     if (requestedBackendKind !== backend.kind) {
+      // signal-consumption action effect: 消费 store 里的 one-shot
+      // requestedBackendKind 信号执行 selectBackend；setState 是有意的 action,
+      // 不是 derived state, 不能改写成 useState。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       selectBackend(
         requestedBackendKind === 'custom-api'
           ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
@@ -511,9 +515,16 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const SIDEBAR_WIDTH = 140
   const reduceMotion = useReducedMotion()
   const sidebarWrapRef = useRef<HTMLDivElement>(null)
-  const sidebarMountedOnceRef = useRef(false)
-  if (sidebarOpen) sidebarMountedOnceRef.current = true
-  const mountSidebar = sidebarMountedOnceRef.current
+  // keep-mounted latch: 初值 = 当前 sidebarOpen 态（启动即开时无一帧延迟），首次
+  // 打开后永久 true（绝不回 false → 保留 sidebar 状态 / 滚动）。effect 接首次
+  // false→true 的转变（首次打开晚一帧挂载, 主理人已接受）。
+  const [mountSidebar, setMountSidebar] = useState(sidebarOpen)
+  useEffect(() => {
+    // 把 sidebarOpen 信号翻译成一次性 "已挂载" latch（同 useNewlyAddedIds 的
+    // effect-body setState 正解）；只单向 false→true, 不会级联。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (sidebarOpen) setMountSidebar(true)
+  }, [sidebarOpen])
   useGSAP(
     () => {
       const wrap = sidebarWrapRef.current
