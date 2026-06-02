@@ -18,13 +18,15 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import DOMPurify from 'dompurify'
-import { Loader2, RotateCcw, Send, Trash2, X } from 'lucide-react'
+import { ChevronRight, Loader2, RotateCcw, Send, Trash2, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useComposeStore } from '@shared/state/compose'
+import { sanitizeEmailHtml } from '@shared/lib/emailSanitize'
 import type { ComposeMode, DraftPlanResult } from '@shared/api/types'
 
+import { EmailBodyFrame } from '../EmailBodyFrame'
 import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DiscardDialog, SendConfirmDialog } from './ComposeDialogs'
@@ -71,6 +73,10 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
   const [sendOpen, setSendOpen] = useState(false)
   const [discardOpen, setDiscardOpen] = useState(false)
   const [planAttachments, setPlanAttachments] = useState(0)
+  // 原文引用块 —— 与编辑器分离: 不灌进 TipTap (整条线程 HTML 几十~几百 KB 会卡 + 被
+  // ProseMirror 重排), 折叠展示 (默认收起 = 秒开), 发送/存草稿时拼回正文。
+  const [quoteHtml, setQuoteHtml] = useState('')
+  const [quoteOpen, setQuoteOpen] = useState(false)
 
   const markDirty = useCallback(() => setDirty(true), [])
 
@@ -103,6 +109,16 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
   // 收件人/正文都预填不上, 用户只看到空白无从判断, 必须显式告知。
   const planError = planQ.isError ? asWriteError(planQ.error) : null
 
+  // 引用块展开时才拉原邮件 detail (拿 attachments 让 EmailBodyFrame 正确解析内联图)。
+  // 与 EmailDetail 同 queryKey → 多数情况命中缓存不重复请求; 收起时不拉 = compose 秒开。
+  const detailQ = useQuery({
+    queryKey: ['email', internalId],
+    queryFn: () => mailApi.email.get(internalId),
+    enabled: internalId >= 0 && quoteOpen,
+    staleTime: 60_000
+  })
+  const quoteAttachments = detailQ.data?.attachments ?? []
+
   // Apply the plan once when it lands. Setting editor content + recipients is
   // a render-driven side effect (IPC → editor command), so it lives in an
   // effect, guarded so user edits afterward aren't clobbered by a refetch.
@@ -118,15 +134,23 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     if ((plan.cc ?? []).length > 0) setCcVisible(true)
     if ((plan.bcc ?? []).length > 0) setBccVisible(true)
     setPlanAttachments(plan.attachments ?? 0)
-    const html = mode === 'forward' ? plan.forward_intro_html || '' : plan.reply_html || ''
-    if (html) editor.commands.setContent(html)
+    // 编辑器只载 AI 建议; forward 留空让用户写转发语 (reply 建议是对发件人的回复, 转发场景
+    // 无意义)。原文引用块单独折叠展示, 不进 TipTap —— 修复大邮件加载慢 + 引用格式被重排。
+    const editorHtml = mode === 'forward' ? '' : plan.reply_html || ''
+    if (editorHtml) editor.commands.setContent(editorHtml)
+    setQuoteHtml(plan.quote_html || plan.forward_intro_html || '')
     setPlanApplied(true)
   }, [planApplied, planQ.data, editor, mode])
 
+  // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。后端收到 --body-html-file 走
+  // explicit_body, 不再重建引用块 (避免重复)。引用块是原邮件 HTML, 单独 sanitize。
   const getSanitizedHtml = useCallback((): string => {
-    const raw = editor?.getHTML() ?? ''
-    return DOMPurify.sanitize(raw)
-  }, [editor])
+    // editor 输出来自 TipTap (schema 受限), 默认 sanitize 足够; 引用块是不可信原邮件 HTML,
+    // 用与阅读区同一套硬化配置 (sanitizeEmailHtml) → 保证「折叠预览所见 = 实际发送」。
+    const body = DOMPurify.sanitize(editor?.getHTML() ?? '')
+    const quote = quoteHtml ? sanitizeEmailHtml(quoteHtml) : ''
+    return body + quote
+  }, [editor, quoteHtml])
 
   const saveMut = useMutation({
     mutationFn: () =>
@@ -371,6 +395,32 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
 
       {/* format toolbar */}
       {editor && <ComposeFormatToolbar editor={editor} />}
+
+      {/* 原文引用块 — 折叠 (默认收起 = compose 秒开)。展开渲染原邮件正文 (与阅读区同一
+          安全 iframe, 格式零重排); 发送时拼回正文。不进 TipTap 是大邮件加载慢 + 引用
+          换行错乱的根因修复。 */}
+      {quoteHtml && (
+        <div className="border-t border-ink-border/60 shrink-0 min-h-0 flex flex-col">
+          <button
+            type="button"
+            onClick={() => setQuoteOpen((v) => !v)}
+            aria-expanded={quoteOpen}
+            className="shrink-0 w-full flex items-center gap-1.5 px-4 py-2 text-meta text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3/40 transition-colors duration-fast"
+          >
+            <ChevronRight
+              size={13}
+              strokeWidth={2}
+              className={`transition-transform duration-fast ${quoteOpen ? 'rotate-90' : ''}`}
+            />
+            {t(mode === 'forward' ? 'compose.quote.forward' : 'compose.quote.reply')}
+          </button>
+          {quoteOpen && (
+            <div className="min-h-0 max-h-[38vh] overflow-y-auto border-t border-ink-border/40 bg-ink-1/30">
+              <EmailBodyFrame internalId={internalId} attachments={quoteAttachments} />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* send dock — 发送 (coral CTA) + 保存草稿 + 丢弃 */}
       <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2.5 flex items-center gap-2 shrink-0">

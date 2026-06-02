@@ -124,6 +124,23 @@ describe('ComposePanel — pre-fill + send flow', () => {
     expect(mockDraft.mock.calls[0][0]).toMatchObject({ internalId: 42, mode: 'reply' })
   })
 
+  test('quote_html: 引用块折叠 toggle 渲染 + 发送正文拼回引用 (不灌进编辑器)', async () => {
+    // 大邮件引用块从 TipTap 分离: 编辑器只载 reply_html (建议), 引用块折叠展示 + 发送时
+    // 拼回 → bodyHtml 同时含建议与引用。默认收起 → EmailBodyFrame 不挂载 (无需 mock get)。
+    mockDraftPlan.mockResolvedValue({ ...PLAN, quote_html: '<blockquote>原文引用XYZ</blockquote>' })
+    act(() => useComposeStore.getState().openCompose(42, 'reply'))
+    renderWithClient(<ComposePanel />)
+    await waitFor(() => expect(screen.getByText('alice@acme.com')).toBeTruthy())
+    // 折叠 toggle 出现 (引用块没有灌进编辑器)
+    expect(screen.getByText('引用原文')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
+    await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
+    const body = mockSend.mock.calls[0][0].bodyHtml as string
+    expect(body).toContain('你好') // 建议 (编辑器)
+    expect(body).toContain('原文引用XYZ') // 引用块 (发送时拼回)
+  })
+
   test('forward with no recipient blocks send (no dialog)', async () => {
     mockDraftPlan.mockResolvedValue({ ...PLAN, mode: 'forward', to: [], subject: 'Fwd: 合同审阅' })
     act(() => useComposeStore.getState().openCompose(42, 'forward'))

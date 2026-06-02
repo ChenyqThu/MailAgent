@@ -201,7 +201,9 @@ class LLMProcessor:
                 f"`reply_suggestion_md` 仅在 action_required=true 时填；"
                 f"Markdown 仅限 inline (**bold** *italic* ~~strike~~ `code` [t](u)) + 换行；"
                 f"列表用 '- ' 前缀纯文本，禁 heading/code-block/真 list。"
-                f"结尾统一加：\\n\\n----\\nBest,\\nLucien。\n"
+                # 真换行 (非字面 \\n) —— 早期这里写 ``\\n`` 让模型把反斜杠-n 当字面量
+                # 输出, 签名渲染成可见的 "\\n\\n----\\nBest,\\nLucien"。与 schema.py 对齐。
+                f"结尾统一加：\n\n----\nBest,\nLucien。\n"
                 f"`daily_digest_date` 用邮件 Date 转 UTC+8 的日期（YYYY-MM-DD）。"
             ),
         }

@@ -6,6 +6,10 @@ import sys
 
 def md_to_html(text: str, font_size: int = 14) -> str:
     """基础 Markdown → HTML（覆盖常用格式）"""
+    # 与 src/converter/markdown_to_html.py 保持一致 (改其一须同步): 还原字面 "\n"/"\t"
+    # (早期 prompt double-escape 残留) + 收敛 3+ 连续空行。
+    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    text = re.sub(r"\n{3,}", "\n\n", text)
     lines = text.split("\n")
     html_lines = []
     in_list = False
@@ -108,6 +112,8 @@ def _inline_format(text: str) -> str:
     """处理行内格式：加粗、斜体、行内代码、链接、删除线"""
     text = re.sub(r'`(.+?)`', r"<code style='background:#f0f0f0;padding:1px 4px;border-radius:3px'>\1</code>", text)
     text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" style="color:#1a73e8">\1</a>', text)
+    # 占位链接 [文字]（无 URL）去裸方括号; 首字符数字的脚注 [1]/[12] 保留。与 src/converter 同步。
+    text = re.sub(r'\[([^\]\d][^\]]*)\]', r'\1', text)
     text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)

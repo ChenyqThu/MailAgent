@@ -308,9 +308,10 @@ def test_draft_dry_run_no_reply_suggestion_prefills_recipients(cli_runner, seede
     assert plan["dry_run"] is True
     # reply-all (默认 mode) → to 含原发件人; 收件人推导与有无建议无关
     assert "alice@example.com" in plan["to"]
-    # 无建议但有原邮件 → reply_html = 原邮件引用块 (无 suggestion 时正文头为空, 仅引用)
-    assert plan["reply_html"]
-    assert "写道" in plan["reply_html"]  # 回复引用头
+    # 无建议但有原邮件 → reply_html 空 (编辑器留空让用户写); 原邮件引用块单独走 quote_html
+    # (split_quote: 前端折叠展示 + 发送时拼回, 不灌进 TipTap)。
+    assert not plan["reply_html"]
+    assert "写道" in plan["quote_html"]  # 回复引用头单独在 quote_html
 
 
 def test_draft_real_no_reply_suggestion_errors(cli_runner, seeded_db):
@@ -493,11 +494,14 @@ def test_draft_reply_includes_original_quote(cli_runner, seeded_db):
     data = _last_json(r.output)
     assert data["status"] == "success", r.output
     plan = data["data"]
-    # suggestion 在前, 原邮件引用在后 (回复引用头 "写道")
+    # split_quote: 建议在 reply_html (TipTap 编辑器), 原邮件引用块单独在 quote_html /
+    # quote_text (前端折叠展示 + 发送时拼回正文) —— 引用块不再混进编辑器内容。
     assert "Sounds good" in plan["reply_html"]
-    assert "写道" in plan["reply_html"]
+    assert "写道" not in plan["reply_html"]
+    assert "写道" in plan["quote_html"]
     assert plan["reply_text"].startswith(_REPLY_MD)
-    assert "写道" in plan["reply_text"]
+    assert "写道" not in plan["reply_text"]
+    assert "写道" in plan["quote_text"]
 
 
 def test_draft_reply_body_html_no_duplicate_quote(cli_runner, seeded_db, monkeypatch):

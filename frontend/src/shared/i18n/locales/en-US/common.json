@@ -167,7 +167,11 @@
     },
     "modeReply": "Reply",
     "modeReplyAll": "Reply all",
-    "modeForward": "Forward"
+    "modeForward": "Forward",
+    "quote": {
+      "reply": "Quoted message",
+      "forward": "Forwarded content"
+    }
   },
   "toolbarToast": {
     "draftOk": "Mail.app reply draft opened",

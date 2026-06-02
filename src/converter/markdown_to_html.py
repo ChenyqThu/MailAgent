@@ -18,6 +18,12 @@ import re
 
 def md_to_html(text: str, font_size: int = 14) -> str:
     """基础 Markdown → HTML（覆盖常用格式）"""
+    # 存量 reply_suggestion_md 里残留字面 "\n"/"\t"（早期 prompt double-escape, 模型把
+    # 反斜杠-n 当字面量输出 → 签名显示成可见的 "\n\n----\nBest,\nLucien"）。先还原成真
+    # 换行/制表再解析; 新数据已在 processor.py 修正 prompt。顺带把 3+ 连续空行收敛成 1
+    # 个空行, 缓解「正文换行过多」。
+    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    text = re.sub(r"\n{3,}", "\n\n", text)
     lines = text.split("\n")
     html_lines = []
     in_list = False
@@ -120,6 +126,10 @@ def _inline_format(text: str) -> str:
     """处理行内格式：加粗、斜体、行内代码、链接、删除线"""
     text = re.sub(r'`(.+?)`', r"<code style='background:#f0f0f0;padding:1px 4px;border-radius:3px'>\1</code>", text)
     text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" style="color:#1a73e8">\1</a>', text)
+    # 占位链接 [文字]（模型拿不到真实 URL 时常这么写）—— 真实 [t](u) 已在上一步转成 <a>,
+    # 这里把残留的裸方括号去掉按纯文本显示, 避免「看起来坏掉的链接」。首字符为数字的方括号
+    # (脚注标记 [1]/[12]) 保留, 不误伤; 对回复建议而言这是有意的有损转换。
+    text = re.sub(r'\[([^\]\d][^\]]*)\]', r'\1', text)
     text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)

@@ -167,7 +167,11 @@
     },
     "modeReply": "回复",
     "modeReplyAll": "回复所有",
-    "modeForward": "转发"
+    "modeForward": "转发",
+    "quote": {
+      "reply": "引用原文",
+      "forward": "转发内容"
+    }
   },
   "toolbarToast": {
     "draftOk": "已打开 Mail.app 回复草稿",

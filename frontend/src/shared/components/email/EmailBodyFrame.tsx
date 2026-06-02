@@ -20,6 +20,7 @@ import { Minus, Plus, RotateCw, X } from 'lucide-react'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { useAppearance, type BodyFont } from '@shared/state/appearance'
+import { EMAIL_PURIFY_OPTS } from '@shared/lib/emailSanitize'
 import type { EmailDetail, TranslationSegment } from '@shared/api/types'
 
 interface Props {
@@ -31,19 +32,8 @@ interface Props {
   translations?: TranslationSegment[] | null
 }
 
-// DOMPurify URI regex — allow data: ONLY for image MIME types (so an
-// attacker can't slip `data:text/html` payloads), plus the usual safe
-// schemes. Without this, the default regex strips `data:image/png;base64,...`
-// even though we wrote it ourselves to fix the inline-image rendering.
-const SAFE_URI_REGEXP =
-  /^(?:(?:https?|mailto|tel|callto|sms|cid|xmpp|data:image\/(?:png|jpe?g|gif|webp|svg\+xml|heic)):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i
-
-const PURIFY_OPTS = {
-  USE_PROFILES: { html: true },
-  FORBID_TAGS: ['iframe', 'object', 'embed', 'form', 'input', 'button'],
-  FORBID_ATTR: ['target', 'onerror', 'onclick', 'onload'],
-  ALLOWED_URI_REGEXP: SAFE_URI_REGEXP
-}
+// 消毒配置已抽到 @shared/lib/emailSanitize (EMAIL_PURIFY_OPTS) —— 阅读区与 compose
+// 发送拼回引用块共用同一套硬化规则。独立断言见 tests/components/dompurify_xss.test.ts。
 
 const BODY_CSS = `
   :root {
@@ -296,7 +286,7 @@ export function EmailBodyFrame({
   const srcDoc = useMemo(() => {
     const html = bodyQ.data?.content
     if (typeof html !== 'string' || html.length === 0) return null
-    let sanitized = DOMPurify.sanitize(html, PURIFY_OPTS)
+    let sanitized = DOMPurify.sanitize(html, EMAIL_PURIFY_OPTS)
     // Sprint 13 — single-pass rewrite of EVERY `cid:...` in the body so
     // we don't depend on the backend's content_id mapping (which is
     // broken for Apple-Mail-shaped GUIDs across attachments). For each

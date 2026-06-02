@@ -1669,12 +1669,19 @@ def _prepare_draft(
     bcc: Optional[str] = None,
     subject_override: Optional[str] = None,
     allow_missing_reply: bool = False,
-) -> tuple[Any, list[str]]:
+    split_quote: bool = False,
+) -> tuple[Any, list[str], Optional[dict]]:
     """构造 DraftRequest (draft + send 共用, 保证 '草稿预览 = 实际发送内容').
 
     收件人: --to/--cc (to_override/cc_override) 为前端 compose 权威完整列表; 否则
     reply* 推导 + extra, forward 用 --extra-to. 正文: --body-file 优先于 reply_suggestion_md;
     forward 正文可空 (纯转发原文). 出错抛 CliError 子类, 调用方 emit.
+
+    ``split_quote`` (前端 compose dry-run 预填用): True 时**不**把原文引用块并进正文,
+    而是单独作为第 3 个返回值 ``quote = {"html","text"}`` 给前端 —— 前端 TipTap 只载入
+    AI 建议 (小、快、不被 ProseMirror 重排), 引用块单独渲染/折叠, 发送时再拼回正文。
+    False (CLI 直调 / ping-island) 时维持旧行为: 引用块并进 reply_html/forward_intro,
+    ``quote`` 返回 None。
     """
     record = cli.sync_store.get(internal_id)
     if not record:
@@ -1730,22 +1737,28 @@ def _prepare_draft(
     forward_intro_text = forward_intro_html = None
     attachments: list = []
     warnings: list[str] = []
+    quote: Optional[dict] = None  # split_quote=True 时单独返回引用块, 不并进正文
     if mode == "forward":
         # 附件总是 server-side 重新收集 — 前端无法传字节, 必须按 internal_id 重读。
         attachments, warnings = _collect_forward_attachments(cli, internal_id)
         if not explicit_body:
             body_md = cli.email_repo.get_body_markdown(internal_id) or ""
             body_html = cli.email_repo.get_body_html(internal_id)
-            forward_intro_text, forward_intro_html = _build_forward_intro(
-                record, body_md, body_html
-            )
+            fi_text, fi_html = _build_forward_intro(record, body_md, body_html)
+            if split_quote:
+                quote = {"text": fi_text, "html": fi_html}
+            else:
+                forward_intro_text, forward_intro_html = fi_text, fi_html
     elif not explicit_body:  # reply / reply-all
         orig_md = cli.email_repo.get_body_markdown(internal_id) or ""
         orig_html = cli.email_repo.get_body_html(internal_id)
         if orig_md or orig_html:
             q_text, q_html = _build_reply_quote(record, orig_md, orig_html)
-            reply_text = f"{reply_text}\n\n{q_text}" if reply_text.strip() else q_text
-            reply_html = f"{reply_html}{q_html}" if reply_html else q_html
+            if split_quote:
+                quote = {"text": q_text, "html": q_html}
+            else:
+                reply_text = f"{reply_text}\n\n{q_text}" if reply_text.strip() else q_text
+                reply_html = f"{reply_html}{q_html}" if reply_html else q_html
 
     draft = _compose_reply_draft(
         record, internal_id=internal_id, mode=mode,
@@ -1757,7 +1770,7 @@ def _prepare_draft(
         forward_intro_html=forward_intro_html,
         attachments=attachments,
     )
-    return draft, warnings
+    return draft, warnings, quote
 
 
 @app.command("draft")
@@ -1821,13 +1834,15 @@ def email_draft(
 
     # 1-4. 构造 DraftRequest (收件人推导 / 正文 / forward 引用块 + 附件) — draft + send 共用
     try:
-        draft, warnings = _prepare_draft(
+        draft, warnings, quote = _prepare_draft(
             cli, internal_id=internal_id, mode=mode,
             extra_to=extra_to, extra_cc=extra_cc, body_file=body_file,
             body_html_file=body_html_file,
             to_override=to, cc_override=cc, bcc=bcc, subject_override=subject,
             # dry-run = 前端 compose 预填, 无 reply_suggestion 也要返回收件人。
             allow_missing_reply=dry_run,
+            # dry-run: 引用块单独给前端 (TipTap 只载建议; 引用块前端折叠展示 + 发送时拼回)。
+            split_quote=dry_run,
         )
     except CliError as e:
         raise emit_cli_error(cli, e)
@@ -1839,6 +1854,8 @@ def email_draft(
 
     # 5. dry-run: 打 plan 不创建
     if dry_run:
+        quote_html = (quote or {}).get("html", "") or ""
+        quote_text = (quote or {}).get("text", "") or ""
         plan = {
             "internal_id": internal_id,
             "mode": mode,
@@ -1847,17 +1864,24 @@ def email_draft(
             "bcc": draft.bcc,
             "subject": draft.subject,
             "reply_source": "body-file" if body_file else "sqlite:llm_processing.labels_json",
-            # 完整字段供前端 compose 预填 (draftPlan = 预填单一数据源)
+            # 完整字段供前端 compose 预填 (draftPlan = 预填单一数据源):
+            #   reply_html = AI 建议 (TipTap 初始内容, 已不含引用块);
+            #   quote_html = 原文引用块 (前端折叠展示, 发送时拼回正文)。分开后 TipTap 只解析
+            #   小段建议 → 秒开 + 不被 ProseMirror 重排掉格式。
             "reply_text": draft.reply_text,
             "reply_html": draft.reply_html,
-            "forward_intro_text": draft.forward_intro_text,
-            "forward_intro_html": draft.forward_intro_html,
+            "quote_html": quote_html,
+            "quote_text": quote_text,
+            # forward_intro_* 兼容旧字段; forward 时回填 quote 便于老消费者 (前端统一用 quote_html)。
+            "forward_intro_text": draft.forward_intro_text or (quote_text if mode == "forward" else None),
+            "forward_intro_html": draft.forward_intro_html or (quote_html if mode == "forward" else None),
             # 摘要字段供 CLI text 模式展示
             "reply_text_preview": (draft.reply_text or "")[:120],
             "reply_html_len": len(draft.reply_html or ""),
+            "quote_html_len": len(quote_html),
             "in_reply_to": draft.in_reply_to,
             "attachments": len(draft.attachments),
-            "forward_intro_preview": (draft.forward_intro_text or "")[:120],
+            "forward_intro_preview": (draft.forward_intro_text or quote_text or "")[:120],
             "warnings": warnings,
             "dry_run": True,
         }
@@ -1960,9 +1984,11 @@ def email_send(
             f"--mode 必须是 reply-all / reply / forward, got {mode!r}",
         ))
 
-    # 构造 DraftRequest (与 email draft 完全同源)
+    # 构造 DraftRequest (与 email draft 完全同源)。send 不拆引用块 (split_quote 默认 False):
+    # 前端 compose 发送会传 --body-html-file (建议 + 拼回的引用块) → explicit_body 跳过重建;
+    # CLI 直调 send 仍走「建议 + 引用块并进正文」旧行为。第 3 个返回值 (quote) 此处不需要。
     try:
-        draft, warnings = _prepare_draft(
+        draft, warnings, _quote = _prepare_draft(
             cli, internal_id=internal_id, mode=mode,
             extra_to=extra_to, extra_cc=extra_cc, body_file=body_file,
             body_html_file=body_html_file,

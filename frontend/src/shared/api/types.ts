@@ -257,10 +257,16 @@ export interface DraftPlanResult {
   subject: string
   /** 'reply_suggestion' (LLM) / 'fallback' 等 — 来源标识, 调试用。 */
   reply_source?: string | null
-  /** reply/reply-all: LLM reply_suggestion 转的 HTML → TipTap 初始内容。 */
+  /** reply/reply-all: LLM reply_suggestion 转的 HTML → TipTap 初始内容 (仅建议, 不含引用块)。 */
   reply_html: string
-  /** forward: 原文引用块 HTML → TipTap 初始内容。 */
+  /** forward: 原文引用块 HTML (兼容旧字段; 新前端统一读 quote_html)。 */
   forward_intro_html: string
+  /** 原文引用块 HTML (reply:「在…写道」+ blockquote; forward: Forwarded 头 + 正文)。
+   *  与 reply_html 分离 —— 前端折叠展示, **不**灌进 TipTap (整条线程 HTML 几十~几百 KB
+   *  灌进 ProseMirror 会卡 + 重排格式), 发送/存草稿时拼回正文。 */
+  quote_html?: string
+  /** quote_html 的纯文本版 (摘要/降级用)。 */
+  quote_text?: string
   /** 原邮件附件数量 (compose 本期不重新上传, 仅提示)。 */
   attachments: number
   warnings: string[]
