@@ -944,7 +944,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                       className={cn(
                         'mt-1.5 inline-flex items-center gap-1 text-meta text-ink-fg-2',
                         'hover:text-ink-fg-1 transition-colors duration-fast',
-                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 rounded'
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 rounded'
                       )}
                       aria-expanded={propsExpanded}
                     >

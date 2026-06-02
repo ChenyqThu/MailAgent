@@ -26,7 +26,7 @@ export const Switch = React.forwardRef<
       'peer inline-flex h-[18px] w-[32px] shrink-0 cursor-pointer items-center',
       'rounded-full border border-ink-border bg-ink-4',
       'transition-colors duration-fast ease-standard',
-      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-1',
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-1',
       'data-[state=checked]:bg-coral/100 data-[state=checked]:border-coral-hover',
       'disabled:cursor-not-allowed disabled:opacity-50',
       className

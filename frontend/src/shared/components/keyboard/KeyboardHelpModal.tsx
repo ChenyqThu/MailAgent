@@ -66,7 +66,7 @@ function ScopeSection({
         // Without this, NVDA/VoiceOver users can hear the heading via
         // navigation but can't anchor focus on it.
         tabIndex={0}
-        className="text-micro font-mono uppercase text-ink-fg-2 px-2 pt-2 focus:outline-none focus:ring-1 focus:ring-coral/40 rounded"
+        className="text-micro font-mono uppercase text-ink-fg-2 px-2 pt-2 focus:outline-none focus:ring-1 focus:ring-coral/70 rounded"
         style={{ letterSpacing: '0.08em' }}
       >
         {t(`shortcutHelp.scope.${scope}`)}

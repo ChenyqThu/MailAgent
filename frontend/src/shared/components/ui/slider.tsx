@@ -34,7 +34,7 @@ export const Slider = React.forwardRef<
         'block h-[16px] w-[16px] rounded-full bg-accent-fg',
         'shadow-[0_0_0_1px_rgb(var(--ink-border)),0_2px_4px_rgba(0,0,0,0.25)]',
         'transition-transform duration-fast ease-standard',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
         'disabled:pointer-events-none disabled:opacity-50',
         'hover:scale-110'
       )}

@@ -26,7 +26,7 @@ export const SelectTrigger = React.forwardRef<
       'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-ink-border bg-ink-2 px-3',
       'text-aux text-ink-fg',
       'transition-colors duration-fast ease-standard',
-      'focus:outline-none focus:ring-2 focus:ring-coral/40 focus:border-coral/60',
+      'focus:outline-none focus:ring-2 focus:ring-coral/70 focus:border-coral/60',
       'disabled:cursor-not-allowed disabled:opacity-50',
       '[&>span]:line-clamp-1 [&[data-placeholder]]:text-ink-fg-3',
       className

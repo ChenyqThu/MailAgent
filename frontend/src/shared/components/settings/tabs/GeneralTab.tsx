@@ -181,7 +181,7 @@ function Stepper({
     'inline-flex size-7 items-center justify-center rounded-md border border-ink-border-soft',
     'text-ink-fg-1 hover:bg-ink-fg/[0.06] transition-colors duration-fast',
     'disabled:opacity-40 disabled:pointer-events-none',
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40'
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70'
   )
   return (
     <div className="flex w-full items-center gap-3 px-4 py-3">
@@ -260,7 +260,7 @@ function Swatch({
       className={cn(
         'size-11 rounded-full relative cursor-pointer',
         'transition-transform duration-fast ease-standard hover:scale-105',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40'
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70'
       )}
       style={{
         backgroundColor: hex,

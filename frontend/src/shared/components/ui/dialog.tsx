@@ -63,7 +63,7 @@ export const DialogContent = React.forwardRef<
           'absolute right-4 top-4 rounded-md p-1 text-ink-fg-2',
           'transition-colors duration-fast ease-standard',
           'hover:bg-ink-3 hover:text-ink-fg',
-          'focus:outline-none focus:ring-2 focus:ring-coral/40',
+          'focus:outline-none focus:ring-2 focus:ring-coral/70',
           'disabled:pointer-events-none'
         )}
       >

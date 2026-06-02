@@ -20,7 +20,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         'flex h-8 w-full rounded-md border border-ink-border bg-ink-2 px-3',
         'text-aux text-ink-fg placeholder:text-ink-fg-3',
         'transition-colors duration-fast ease-standard',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40 focus-visible:border-coral/60',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 focus-visible:border-coral/60',
         'disabled:cursor-not-allowed disabled:opacity-50',
         '[&[type=number]::-webkit-inner-spin-button]:appearance-none',
         '[&[type=number]::-webkit-outer-spin-button]:appearance-none',

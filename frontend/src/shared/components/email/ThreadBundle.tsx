@@ -72,7 +72,7 @@ function ThreadItem({ email, expanded, onToggle }: ItemProps): React.ReactElemen
         className={cn(
           'w-full text-left px-3 py-2 flex items-center gap-3',
           'hover:bg-ink-4/40 transition-colors duration-fast',
-          'focus:outline-none focus-visible:ring-1 focus-visible:ring-coral/40'
+          'focus:outline-none focus-visible:ring-1 focus-visible:ring-coral/70'
         )}
       >
         <span className="shrink-0 text-ink-fg-2">
@@ -190,7 +190,7 @@ export function ThreadBundle({ threadId, currentInternalId }: Props): React.Reac
           className={cn(
             'ml-auto text-meta text-ink-fg-2 px-2 py-0.5 rounded',
             'hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/40'
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-coral/70'
           )}
         >
           {allExpanded ? t('thread.collapseAll') : t('thread.expandAll')}

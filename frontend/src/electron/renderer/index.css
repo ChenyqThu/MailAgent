@@ -2,6 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── impeccable a11y — global :focus-visible safety net (批B) ──────────
+ * DESIGN.md §9.2/§10 make a visible focus ring non-negotiable, but EmailRow
+ * (role=button), the ~50 AI-panel buttons (AI-CHAT-01), admin controls
+ * (ADMIN-DASHBOARD-04) and folder rows shipped without one. This base-layer
+ * net gives every focusable element a 2px accent outline on keyboard focus.
+ * `:where()` keeps specificity at 0, and Tailwind's `outline-none` (a
+ * transparent outline in the utilities layer) outranks it — so any component
+ * that sets `focus-visible:outline-none` keeps its bespoke ring and only
+ * elements with NO focus styling fall through here. outline (not box-shadow)
+ * never reflows layout or gets clipped by overflow. */
+@layer base {
+  :where(
+    button,
+    [role='button'],
+    a[href],
+    input:not([type='hidden']),
+    select,
+    textarea,
+    summary,
+    [tabindex]:not([tabindex='-1'])
+  ):focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 2px;
+  }
+  /* EmailRow sits in a react-window list with rows flush together; an outset
+   * outline would be clipped by the next row, so it insets (EMAIL-01). */
+  .email-row:focus-visible {
+    outline-offset: -2px;
+  }
+}
+
 /*
  * MailAgent design tokens — DESIGN.md §2.1 / §2.7 / §3.1.
  *

@@ -47,7 +47,7 @@ export const TabsTrigger = React.forwardRef<
       // Sidebar 风格不一致 (Sidebar 默认 font-normal, selected 才 medium).
       'text-aux font-normal ring-offset-ink-1',
       'transition-colors duration-fast ease-standard',
-      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40',
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
       'disabled:pointer-events-none disabled:opacity-50',
       'text-ink-fg-1 hover:text-ink-fg',
       // Horizontal default: coral underline (matches RightPanel pattern)
@@ -89,7 +89,7 @@ export const TabsContent = React.forwardRef<
   <TabsPrimitive.Content
     ref={ref}
     className={cn(
-      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40',
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
       className
     )}
     {...props}

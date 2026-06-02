@@ -885,7 +885,7 @@ function LightboxBtn({
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="rounded-md p-1.5 text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus:outline-none focus:ring-2 focus:ring-coral/40"
+      className="rounded-md p-1.5 text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus:outline-none focus:ring-2 focus:ring-coral/70"
     >
       {children}
     </button>
