@@ -65,6 +65,15 @@ export const MANAGED_ENV_KEYS = [
   'CALENDAR_FUTURE_DAYS',
   'CALENDAR_CALDAV_SYNC_ENABLED',
 
+  // — Folder sync (存档 / 草稿箱 — FolderSyncWorker, davmail-only)。config.py Field;
+  // worker 增量 sync DavMail IMAP Archive/Drafts → folder_email 表 (纯展示, 不跑
+  // AI/Notion)。(FRONTEND_MAILBOX_FOLDERS_ENABLED 暂不暴露: Sidebar 当前无条件渲染
+  // folder 入口、不消费该 gate, 暴露会是 no-op — 等 Sidebar 接 gate 后再加。)
+  'MAILBOX_FOLDER_SYNC_ENABLED',
+  'FOLDER_SYNC_POLL_INTERVAL_SEC',
+  'ARCHIVE_SYNC_PAST_DAYS',
+  'ARCHIVE_SYNC_MAX_MESSAGES',
+
   // — Backend selection (Onboarding 向导 backend 选择)。config.py 的 Field,
   // 值域 'applescript' | 'davmail' (Sprint 16 dual-backend cutover)。向导写入,
   // 默认 applescript (零依赖)。

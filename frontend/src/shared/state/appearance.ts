@@ -15,19 +15,47 @@ export type AccentId = 'coral' | 'cobalt' | 'teal' | 'rose' | 'slate' | 'olive'
 //                    模拟 Apple Liquid Glass / iOS 26 全量样式
 export type SurfaceStyle = 'frosted' | 'solid' | 'liquid'
 
+// 邮件正文外观 (字体族 / 字号 / 行高) — 跟 theme/accent/surface 平行的用户可调
+// 维度, 仅作用于 EmailBodyFrame 的 sandboxed iframe 正文 (不影响 UI chrome /
+// 列表 / 设置面板)。EmailBodyFrame 直接 read store 插值进 BODY_CSS, 无需像
+// theme/accent 那样 apply 到主文档 DOM。
+export type BodyFont = 'system' | 'serif' | 'mono'
+
+/** 正文字号 px 安全范围 (clamp 防 localStorage 被手改成离谱值)。默认 14 = 现状。 */
+export const BODY_FONT_SIZE_MIN = 12
+export const BODY_FONT_SIZE_MAX = 20
+/** 正文行高安全范围。默认 1.15 (用户偏好: 紧凑, 取代旧硬编码 1.7)。 */
+export const BODY_LINE_HEIGHT_MIN = 1.1
+export const BODY_LINE_HEIGHT_MAX = 2.2
+export const BODY_FONT_SIZE_DEFAULT = 14
+export const BODY_LINE_HEIGHT_DEFAULT = 1.15
+
 interface AppearanceStore {
   themeMode: ThemeMode
   resolvedTheme: 'dark' | 'light'
   accent: AccentId
   surface: SurfaceStyle
+  bodyFont: BodyFont
+  bodyFontSize: number
+  bodyLineHeight: number
   setThemeMode(next: ThemeMode): void
   setAccent(next: AccentId): void
   setSurface(next: SurfaceStyle): void
+  setBodyFont(next: BodyFont): void
+  setBodyFontSize(next: number): void
+  setBodyLineHeight(next: number): void
 }
 
 const THEME_KEY = 'mailagent.themeMode'
 const ACCENT_KEY = 'mailagent.accent'
 const SURFACE_KEY = 'mailagent.surface'
+const BODY_FONT_KEY = 'mailagent.bodyFont'
+const BODY_FONT_SIZE_KEY = 'mailagent.bodyFontSize'
+const BODY_LINE_HEIGHT_KEY = 'mailagent.bodyLineHeight'
+
+function clampNum(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n))
+}
 
 function readTheme(): ThemeMode {
   try {
@@ -68,6 +96,40 @@ function readSurface(): SurfaceStyle {
   return 'frosted'
 }
 
+function readBodyFont(): BodyFont {
+  try {
+    const v = localStorage.getItem(BODY_FONT_KEY)
+    if (v === 'system' || v === 'serif' || v === 'mono') return v
+  } catch {
+    /* ignore */
+  }
+  return 'system'
+}
+
+function readBodyFontSize(): number {
+  try {
+    const v = Number(localStorage.getItem(BODY_FONT_SIZE_KEY))
+    if (Number.isFinite(v) && v > 0) {
+      return clampNum(Math.round(v), BODY_FONT_SIZE_MIN, BODY_FONT_SIZE_MAX)
+    }
+  } catch {
+    /* ignore */
+  }
+  return BODY_FONT_SIZE_DEFAULT
+}
+
+function readBodyLineHeight(): number {
+  try {
+    const v = Number(localStorage.getItem(BODY_LINE_HEIGHT_KEY))
+    if (Number.isFinite(v) && v > 0) {
+      return clampNum(v, BODY_LINE_HEIGHT_MIN, BODY_LINE_HEIGHT_MAX)
+    }
+  } catch {
+    /* ignore */
+  }
+  return BODY_LINE_HEIGHT_DEFAULT
+}
+
 function readResolved(themeMode: ThemeMode): 'dark' | 'light' {
   if (themeMode !== 'system') return themeMode
   if (typeof window === 'undefined') return 'dark'
@@ -81,6 +143,9 @@ export const useAppearance = create<AppearanceStore>((set) => ({
   resolvedTheme: readResolved(initialTheme),
   accent: readAccent(),
   surface: readSurface(),
+  bodyFont: readBodyFont(),
+  bodyFontSize: readBodyFontSize(),
+  bodyLineHeight: readBodyLineHeight(),
   setThemeMode(next) {
     try {
       localStorage.setItem(THEME_KEY, next)
@@ -107,6 +172,32 @@ export const useAppearance = create<AppearanceStore>((set) => ({
     }
     set({ surface: next })
     applySurface(next)
+  },
+  setBodyFont(next) {
+    try {
+      localStorage.setItem(BODY_FONT_KEY, next)
+    } catch {
+      /* ignore */
+    }
+    set({ bodyFont: next })
+  },
+  setBodyFontSize(next) {
+    const v = clampNum(Math.round(next), BODY_FONT_SIZE_MIN, BODY_FONT_SIZE_MAX)
+    try {
+      localStorage.setItem(BODY_FONT_SIZE_KEY, String(v))
+    } catch {
+      /* ignore */
+    }
+    set({ bodyFontSize: v })
+  },
+  setBodyLineHeight(next) {
+    const v = clampNum(next, BODY_LINE_HEIGHT_MIN, BODY_LINE_HEIGHT_MAX)
+    try {
+      localStorage.setItem(BODY_LINE_HEIGHT_KEY, String(v))
+    } catch {
+      /* ignore */
+    }
+    set({ bodyLineHeight: v })
   }
 }))
 

@@ -28,8 +28,13 @@ import { useTranslation } from 'react-i18next'
 import {
   useAppearance,
   type AccentId,
+  type BodyFont,
   type SurfaceStyle,
-  type ThemeMode
+  type ThemeMode,
+  BODY_FONT_SIZE_MIN,
+  BODY_FONT_SIZE_MAX,
+  BODY_LINE_HEIGHT_MIN,
+  BODY_LINE_HEIGHT_MAX
 } from '@shared/state/appearance'
 import { SUPPORTED_LOCALES, type Locale } from '@shared/i18n'
 import { cn } from '@shared/lib/cn'
@@ -128,6 +133,88 @@ const SURFACE_ROWS: SurfaceRow[] = [
     metaKey: 'settings.general.surface.liquidMeta'
   }
 ]
+
+interface BodyFontRow {
+  value: BodyFont
+  labelKey: string
+  metaKey: string
+}
+
+const BODY_FONT_ROWS: BodyFontRow[] = [
+  {
+    value: 'system',
+    labelKey: 'settings.general.bodyText.font.system',
+    metaKey: 'settings.general.bodyText.font.systemMeta'
+  },
+  {
+    value: 'serif',
+    labelKey: 'settings.general.bodyText.font.serif',
+    metaKey: 'settings.general.bodyText.font.serifMeta'
+  },
+  {
+    value: 'mono',
+    labelKey: 'settings.general.bodyText.font.mono',
+    metaKey: 'settings.general.bodyText.font.monoMeta'
+  }
+]
+
+/** 紧凑 +/− stepper — 给正文字号 / 行高用 (连续可调, 比 radio 档位更细)。
+ *  左栏 label+meta 复用 RadioRow 节奏, 右侧 [− value +]。 */
+function Stepper({
+  label,
+  meta,
+  display,
+  onDec,
+  onInc,
+  canDec,
+  canInc
+}: {
+  label: React.ReactNode
+  meta: React.ReactNode
+  display: string
+  onDec: () => void
+  onInc: () => void
+  canDec: boolean
+  canInc: boolean
+}): React.ReactElement {
+  const btn = cn(
+    'inline-flex size-7 items-center justify-center rounded-md border border-ink-border-soft',
+    'text-ink-fg-1 hover:bg-ink-fg/[0.06] transition-colors duration-fast',
+    'disabled:opacity-40 disabled:pointer-events-none',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40'
+  )
+  return (
+    <div className="flex w-full items-center gap-3 px-4 py-3">
+      <div className="flex-1 min-w-0">
+        <div className="text-aux font-medium text-ink-fg">{label}</div>
+        <div className="text-meta text-ink-fg-2 mt-0.5">{meta}</div>
+      </div>
+      <div className="inline-flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          aria-label="decrease"
+          onClick={onDec}
+          disabled={!canDec}
+          className={btn}
+        >
+          −
+        </button>
+        <span className="w-14 text-center text-aux font-mono tabular-nums text-ink-fg">
+          {display}
+        </span>
+        <button
+          type="button"
+          aria-label="increase"
+          onClick={onInc}
+          disabled={!canInc}
+          className={btn}
+        >
+          +
+        </button>
+      </div>
+    </div>
+  )
+}
 
 /** 14px 自定义 radio — mockup `.rad` / `.rad-on` 还原, 用 inline 样式
  *  避免依赖未定义的 utility class. selected 态外环 + 中心实心都用
@@ -240,9 +327,7 @@ function RadioRow({ selected, label, meta, right, onSelect }: RadioRowProps): Re
         <div className="text-aux font-medium text-ink-fg">{label}</div>
         <div className="text-meta text-ink-fg-2 mt-0.5">{meta}</div>
       </div>
-      {right ? (
-        <span className="text-meta font-mono text-ink-fg-2 shrink-0">{right}</span>
-      ) : null}
+      {right ? <span className="text-meta font-mono text-ink-fg-2 shrink-0">{right}</span> : null}
     </button>
   )
 }
@@ -273,6 +358,12 @@ export function GeneralTab(): React.ReactElement {
   const setAccent = useAppearance((s) => s.setAccent)
   const surface = useAppearance((s) => s.surface)
   const setSurface = useAppearance((s) => s.setSurface)
+  const bodyFont = useAppearance((s) => s.bodyFont)
+  const setBodyFont = useAppearance((s) => s.setBodyFont)
+  const bodyFontSize = useAppearance((s) => s.bodyFontSize)
+  const setBodyFontSize = useAppearance((s) => s.setBodyFontSize)
+  const bodyLineHeight = useAppearance((s) => s.bodyLineHeight)
+  const setBodyLineHeight = useAppearance((s) => s.setBodyLineHeight)
 
   const currentLocale: Locale = (SUPPORTED_LOCALES as readonly string[]).includes(i18n.language)
     ? (i18n.language as Locale)
@@ -390,9 +481,7 @@ export function GeneralTab(): React.ReactElement {
               selected={value === themeMode}
               label={t(labelKey, { defaultValue: value })}
               meta={t(metaKey, { defaultValue: '' })}
-              right={
-                rightKey ? t(rightKey, { defaultValue: 'recommended' }) : undefined
-              }
+              right={rightKey ? t(rightKey, { defaultValue: 'recommended' }) : undefined}
               onSelect={() => setThemeMode(value)}
             />
           ))}
@@ -420,6 +509,56 @@ export function GeneralTab(): React.ReactElement {
             />
           ))}
         </div>
+      </section>
+
+      {/* ── 5. Body text — 正文外观 (字体 / 字号 / 行高) ──────────────
+          仅作用于 EmailBodyFrame iframe 正文; 通过 appearance store 注入 BODY_CSS
+          的 --ma-body-* 变量。字号/行高用 Stepper 连续可调, 行高默认 1.15。 */}
+      <section className="mb-[var(--settings-block-gap,1.75rem)]">
+        <BlockHeader
+          title={t('settings.general.bodyText.title', { defaultValue: '正文外观' })}
+          meta={t('settings.general.bodyText.meta', { defaultValue: '仅邮件正文' })}
+        />
+        <div className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
+          {/* radiogroup 只包字体选项 — 不把下面的 Stepper 混进 radiogroup (a11y, codex Low)。 */}
+          <div role="radiogroup" aria-label="body font" className="divide-y divide-ink-border-soft">
+            {BODY_FONT_ROWS.map(({ value, labelKey, metaKey }) => (
+              <RadioRow
+                key={value}
+                selected={value === bodyFont}
+                label={t(labelKey, { defaultValue: value })}
+                meta={t(metaKey, { defaultValue: '' })}
+                onSelect={() => setBodyFont(value)}
+              />
+            ))}
+          </div>
+          <Stepper
+            label={t('settings.general.bodyText.size.label', { defaultValue: '字号' })}
+            meta={t('settings.general.bodyText.size.meta', { defaultValue: '正文文字大小' })}
+            display={`${bodyFontSize}px`}
+            onDec={() => setBodyFontSize(bodyFontSize - 1)}
+            onInc={() => setBodyFontSize(bodyFontSize + 1)}
+            canDec={bodyFontSize > BODY_FONT_SIZE_MIN}
+            canInc={bodyFontSize < BODY_FONT_SIZE_MAX}
+          />
+          <Stepper
+            label={t('settings.general.bodyText.lineHeight.label', { defaultValue: '行间距' })}
+            meta={t('settings.general.bodyText.lineHeight.meta', {
+              defaultValue: '行与行的垂直间距'
+            })}
+            display={bodyLineHeight.toFixed(2)}
+            onDec={() => setBodyLineHeight(Math.round((bodyLineHeight - 0.05) * 100) / 100)}
+            onInc={() => setBodyLineHeight(Math.round((bodyLineHeight + 0.05) * 100) / 100)}
+            canDec={bodyLineHeight > BODY_LINE_HEIGHT_MIN + 1e-6}
+            canInc={bodyLineHeight < BODY_LINE_HEIGHT_MAX - 1e-6}
+          />
+        </div>
+        <p className="text-meta text-ink-fg-2 mt-2.5 leading-relaxed">
+          {t('settings.general.bodyText.note', {
+            defaultValue:
+              '仅作用于邮件正文阅读区，不改变列表、AI 字段与界面其它文字。行间距默认 1.15。'
+          })}
+        </p>
       </section>
     </>
   )

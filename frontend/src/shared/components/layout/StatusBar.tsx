@@ -6,8 +6,9 @@
 // the OS-level tooltip still surfaces multi-line detail after a long
 // hover, just without our own floating chip.
 
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Activity, Cpu, Database, Layers } from 'lucide-react'
+import { Activity, Cpu, Database, Globe, Layers } from 'lucide-react'
 
 import type { EventsConnectionState, IslandConnectionState } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -15,6 +16,7 @@ import { useAppearance } from '@shared/state/appearance'
 import { useMailbox } from '@shared/state/mailbox'
 import { useUpdaterStore } from '@shared/state/updater'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
+import { useEnvStore } from '@shared/state/env'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { islandStateI18nKey, useIslandStore } from '@shared/state/island'
 
@@ -132,6 +134,71 @@ export function StatusBar(): React.ReactElement {
   const fallbackMs = usePollingFallback()
   const sync = buildSyncView(t, sseState, fallbackMs)
 
+  // remote access (serve-api) segment — 配置态。serve-api 实际 spawn 需 flag 开
+  // AND CF_AUDIENCE 非空 (backend_lifecycle.serveApiEnabled), 故三态区分: flag 关→
+  // "关" / flag 开但缺 CF→"未配置"(warn, serve-api 其实起不来) / 都齐→"开"(ok)。
+  // 只看 flag 会让新装/未配 CF 的用户看到绿"开"但 serve-api 没起 (codex review)。
+  // web target (HttpApi) 下 env.get 是 notImplemented + remote segment 本身无意义
+  // (web 即远程入口), 故 isWeb 时不 refresh、不渲染该 segment。
+  const isWeb =
+    (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
+    'web'
+  const envStatus = useEnvStore((s) => s.state.status)
+  const refreshEnv = useEnvStore((s) => s.refresh)
+  const remoteEnabledRaw = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? (s.state.snapshot.values['MAILAGENT_REMOTE_ACCESS_ENABLED'] ?? '')
+      : ''
+  )
+  const cfAudience = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['CF_AUDIENCE'] ?? '') : ''
+  )
+  const apiPort = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['MAILAGENT_API_PORT'] ?? '') : ''
+  )
+  useEffect(() => {
+    if (!isWeb && envStatus === 'idle') void refreshEnv()
+  }, [isWeb, envStatus, refreshEnv])
+  const remoteReady = envStatus === 'ready'
+  const remoteEnabledNorm = remoteEnabledRaw.trim().toLowerCase()
+  const remoteFlagOn = remoteEnabledNorm !== 'false' && remoteEnabledNorm !== '0'
+  const remoteCfOk = cfAudience.trim().length > 0
+  const remoteState: 'unknown' | 'off' | 'unconfigured' | 'on' = !remoteReady
+    ? 'unknown'
+    : !remoteFlagOn
+      ? 'off'
+      : !remoteCfOk
+        ? 'unconfigured'
+        : 'on'
+  const remoteIconClass =
+    remoteState === 'on'
+      ? 'text-ok'
+      : remoteState === 'unconfigured'
+        ? 'text-warn'
+        : 'text-ink-fg-3'
+  const remotePort = apiPort.trim() || '8200'
+  const remoteLabel =
+    remoteState === 'unknown'
+      ? '—'
+      : remoteState === 'off'
+        ? t('statusbar.remote.off', { defaultValue: '关' })
+        : remoteState === 'unconfigured'
+          ? t('statusbar.remote.unconfigured', { defaultValue: '未配置' })
+          : t('statusbar.remote.on', { defaultValue: '开' })
+  const remoteTooltip =
+    remoteState === 'on'
+      ? t('statusbar.remote.tooltipOn', {
+          defaultValue: `serve-api 已启用 · 本地 127.0.0.1:${remotePort}/app`,
+          url: `127.0.0.1:${remotePort}/app`
+        })
+      : remoteState === 'unconfigured'
+        ? t('statusbar.remote.tooltipUnconfigured', {
+            defaultValue: '远程访问已开启但缺 CF_AUDIENCE，serve-api 不会启动'
+          })
+        : remoteState === 'off'
+          ? t('statusbar.remote.tooltipOff', { defaultValue: '远程访问已关闭' })
+          : t('statusbar.remote.label', { defaultValue: '远程' })
+
   // Sprint 19 — updater / island 的 hydrate + 事件订阅已上移到 App 根 (单次订阅,
   // 见 App.tsx)。StatusBar 在每个路由都挂一份, 之前各自订阅导致 ipcRenderer 监听
   // 随路由切换累积 (MaxListenersExceededWarning)。这里只通过 store selector 读取
@@ -180,6 +247,21 @@ export function StatusBar(): React.ReactElement {
         <span className="text-ink-fg-3">{t('titleBar.island.label')}</span>
       </Segment>
       <Sep />
+
+      {!isWeb && (
+        <>
+          <Segment
+            icon={<Globe size={11} strokeWidth={2} className={remoteIconClass} />}
+            title={`${t('statusbar.remote.label', { defaultValue: '远程' })} · ${remoteTooltip}`}
+          >
+            <span className="text-ink-fg-3">
+              {t('statusbar.remote.label', { defaultValue: '远程' })}
+            </span>
+            <span className="text-ink-fg-1">{remoteLabel}</span>
+          </Segment>
+          <Sep />
+        </>
+      )}
 
       <Segment
         icon={<Database size={11} strokeWidth={2} />}

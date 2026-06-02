@@ -18,7 +18,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import DOMPurify from 'dompurify'
-import { Loader2, Send, Trash2, X } from 'lucide-react'
+import { Loader2, RotateCcw, Send, Trash2, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -99,6 +99,9 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     staleTime: Infinity,
     retry: false
   })
+  // draftPlan 失败时把错误码提出来渲染成可见 banner + 重试 (而非静默空面板) —— 失败时
+  // 收件人/正文都预填不上, 用户只看到空白无从判断, 必须显式告知。
+  const planError = planQ.isError ? asWriteError(planQ.error) : null
 
   // Apply the plan once when it lands. Setting editor content + recipients is
   // a render-driven side effect (IPC → editor command), so it lives in an
@@ -227,7 +230,11 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
           {t(modeLabelKey(mode))}
         </span>
         <span className="text-meta text-ink-fg-2 truncate">
-          {planQ.isLoading ? t('compose.loadingPlan') : subject || t('compose.untitled')}
+          {planQ.isLoading
+            ? t('compose.loadingPlan')
+            : planQ.isError
+              ? t('compose.planError')
+              : subject || t('compose.untitled')}
         </span>
         <div className="ml-auto">
           <button
@@ -241,6 +248,27 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
           </button>
         </div>
       </header>
+
+      {/* draftPlan 失败 banner — 失败时收件人/正文都预填不上, 必须显式告知错误码 +
+          给重试, 否则用户只看到空面板无从判断 (静默 isError 缺陷修复)。 */}
+      {planQ.isError && (
+        <div className="border-b border-ink-border/60 shrink-0 px-4 py-3 flex items-start gap-3 bg-fail/10">
+          <div className="flex-1 text-aux text-fail">
+            <div className="font-medium">{t('compose.planError')}</div>
+            <div className="text-meta font-mono text-ink-fg-2 mt-0.5">
+              {t('compose.planErrorHint', { code: planError?.code ?? planError?.message ?? 'E_UNKNOWN' })}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void planQ.refetch()}
+            className="shrink-0 px-2.5 py-1.5 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1.5"
+          >
+            <RotateCcw size={11} strokeWidth={2} />
+            {t('compose.planRetry')}
+          </button>
+        </div>
+      )}
 
       {/* recipients block */}
       <div className="border-b border-ink-border/60 shrink-0">

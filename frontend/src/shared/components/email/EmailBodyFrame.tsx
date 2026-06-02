@@ -19,7 +19,7 @@ import { Minus, Plus, RotateCw, X } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
-import { useAppearance } from '@shared/state/appearance'
+import { useAppearance, type BodyFont } from '@shared/state/appearance'
 import type { EmailDetail, TranslationSegment } from '@shared/api/types'
 
 interface Props {
@@ -85,9 +85,12 @@ const BODY_CSS = `
   }
   body {
     color: rgb(var(--ink-fg-1));
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
-    font-size: 14px;
-    line-height: 1.7;
+    /* 字体族 / 字号 / 行高 由设置面板「正文外观」控制 — 经 <html> inline CSS
+       变量注入 (appearance store)。fallback 值 = 旧默认, 保证 store 未注入 /
+       Web target 时仍可读 (行高 fallback 也已从 1.7 收紧到 1.15)。 */
+    font-family: var(--ma-body-font, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif);
+    font-size: var(--ma-body-size, 14px);
+    line-height: var(--ma-body-lh, 1.15);
     font-feature-settings: 'ss01', 'cv11';
   }
   /* Defensive: every direct block should respect parent width so a
@@ -211,6 +214,14 @@ const BODY_CSS = `
   }
 `
 
+/** 正文字体族 (appearance store 的 bodyFont 枚举 → CSS font 栈)。注入 <html>
+ *  的 --ma-body-font 变量。三档覆盖常见偏好: 系统无衬线 / 衬线 / 等宽。 */
+const BODY_FONT_STACK: Record<BodyFont, string> = {
+  system: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif',
+  serif: 'Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC", serif',
+  mono: 'ui-monospace, "SF Mono", Menlo, "PingFang SC", monospace'
+}
+
 export function EmailBodyFrame({
   internalId,
   attachments,
@@ -218,6 +229,10 @@ export function EmailBodyFrame({
 }: Props): React.ReactElement {
   const mailApi = useMailApi()
   const resolvedTheme = useAppearance((s) => s.resolvedTheme)
+  // 正文外观 (设置面板「正文外观」可调) — 注入 srcDoc <html> 的 CSS 变量。
+  const bodyFont = useAppearance((s) => s.bodyFont)
+  const bodyFontSize = useAppearance((s) => s.bodyFontSize)
+  const bodyLineHeight = useAppearance((s) => s.bodyLineHeight)
 
   const bodyQ = useQuery({
     queryKey: ['email', internalId, 'body', 'html'],
@@ -344,15 +359,29 @@ export function EmailBodyFrame({
     // got clipped).  Instead the parent measures `contentDocument
     // .body.scrollHeight` directly (allowed by same-origin) and runs
     // its own ResizeObserver against it.
+    // 正文外观 CSS 变量走独立 :root <style> 块 (不是 <html style="..."> attr) —
+    // BODY_FONT_STACK 含双引号 (如 "SF Pro Text"), 放进 HTML style attribute 会
+    // 截断 attr 导致变量残缺; 放进 CSS 文本里双引号合法。size/lh 是 clamp 后的
+    // number, 拼接安全。
     return `<!doctype html>
 <html data-theme="${resolvedTheme}">
 <head>
   <meta charset="utf-8" />
-  <style>${BODY_CSS}</style>
+  <style>${BODY_CSS}
+:root { --ma-body-font: ${BODY_FONT_STACK[bodyFont]}; --ma-body-size: ${bodyFontSize}px; --ma-body-lh: ${bodyLineHeight}; }</style>
 </head>
 <body>${sanitized}</body>
 </html>`
-  }, [bodyQ.data, byCid, byBaseName, internalId, resolvedTheme])
+  }, [
+    bodyQ.data,
+    byCid,
+    byBaseName,
+    internalId,
+    resolvedTheme,
+    bodyFont,
+    bodyFontSize,
+    bodyLineHeight
+  ])
 
   const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const handleImageClick = useCallback((src: string) => setPreviewSrc(src), [])

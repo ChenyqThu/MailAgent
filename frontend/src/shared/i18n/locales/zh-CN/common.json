@@ -124,6 +124,9 @@
     "chars": "{n} 字",
     "attachmentsNote": "{n} 个附件随转发一并带上",
     "loadingPlan": "加载中…",
+    "planError": "预填加载失败",
+    "planErrorHint": "拿不到收件人与正文建议（{code}）。点重试，或检查后端服务是否在运行。",
+    "planRetry": "重试",
     "editor": {
       "bodyPlaceholder": "撰写正文…",
       "bold": "加粗",
@@ -1052,6 +1055,27 @@
         "frostedMeta": "毛玻璃 · 半透 + backdrop blur,Apple Liquid Glass 轻量版",
         "solidMeta": "纯色 · 不透 + 无 blur,性能最好,prefers-reduced-transparency 等价",
         "liquidMeta": "液态玻璃 · 更高 alpha + saturate + 顶部高光,模拟 iOS 26"
+      },
+      "bodyText": {
+        "title": "正文外观",
+        "meta": "仅邮件正文",
+        "note": "仅作用于邮件正文阅读区，不改变列表、AI 字段与界面其它文字。行间距默认 1.15。",
+        "font": {
+          "system": "系统默认",
+          "systemMeta": "无衬线系统字体",
+          "serif": "衬线",
+          "serifMeta": "适合长文阅读",
+          "mono": "等宽",
+          "monoMeta": "代码 / 日志友好"
+        },
+        "size": {
+          "label": "字号",
+          "meta": "正文文字大小"
+        },
+        "lineHeight": {
+          "label": "行间距",
+          "meta": "行与行的垂直间距"
+        }
       }
     },
     "save": "保存",
@@ -1165,6 +1189,26 @@
       "healthInterval": {
         "label": "健康检查间隔",
         "helper": "秒 — 发现漏同步邮件"
+      },
+      "folder": {
+        "title": "文件夹同步（存档 / 草稿箱）",
+        "helper": "把存档、草稿箱也同步到本地用于查看（仅 davmail 后端）。独立于上方主收件箱同步，纯展示，不跑 AI / Notion。",
+        "enabled": {
+          "label": "同步存档 / 草稿箱",
+          "helper": "默认关闭 · 仅 davmail 后端生效；开启后后台增量拉取 Archive / Drafts。"
+        },
+        "interval": {
+          "label": "轮询间隔（秒）",
+          "helper": "FolderSyncWorker 检查存档 / 草稿箱新邮件的间隔。"
+        },
+        "pastDays": {
+          "label": "存档同步窗口（天）",
+          "helper": "只拉最近 N 天的存档；越大首次越慢、占空间越多。"
+        },
+        "maxMessages": {
+          "label": "存档同步上限（封）",
+          "helper": "防极端大邮箱；超出按时间降序截断。"
+        }
       }
     },
     "ai": {
@@ -1675,6 +1719,15 @@
       "tooltipFallback": "SSE 断线;每 {seconds}s 兜底拉取",
       "tooltipFallbackOff": "SSE 断线;兜底轮询已关 (设置 → 实时事件)",
       "tooltipDisabled": "实时事件已禁用"
+    },
+    "remote": {
+      "label": "远程",
+      "on": "开",
+      "off": "关",
+      "tooltipOn": "serve-api 已启用 · {url}",
+      "tooltipOff": "远程访问已关闭",
+      "unconfigured": "未配置",
+      "tooltipUnconfigured": "远程访问已开启但缺 CF_AUDIENCE，serve-api 不会启动"
     }
   },
   "titleBar": {

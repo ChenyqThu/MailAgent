@@ -146,7 +146,10 @@ function CountRight({
     return (
       <span
         className={cn(
-          'text-micro font-mono tabular-nums px-1.5 py-0.5 rounded',
+          // 收紧选中态 count pill — 旧 px-1.5 py-0.5 text-micro rounded 视觉偏大
+          // (用户反馈)。压到 text-[10px] + px-1 py-px + rounded-[3px], 更贴合
+          // 数字、与 .ext-pill / ai-strip 等紧凑 badge 一档。
+          'text-[10px] leading-none font-mono tabular-nums px-1 py-px rounded-[3px]',
           'border border-coral/30 bg-coral/15 text-ink-fg'
         )}
       >

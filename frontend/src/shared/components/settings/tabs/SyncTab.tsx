@@ -81,6 +81,57 @@ export function SyncTab(): React.ReactElement {
         />
       </Section>
 
+      {/* 文件夹同步 (存档 / 草稿箱) — FolderSyncWorker, davmail-only。独立于上方
+          主收件箱同步: 纯展示, 不跑 AI/Notion。主开关 + 轮询间隔 + 存档窗口/上限。 */}
+      <Section
+        title={t('settings.sync.folder.title', { defaultValue: '文件夹同步（存档 / 草稿箱）' })}
+        helper={t('settings.sync.folder.helper', {
+          defaultValue:
+            '把存档、草稿箱也同步到本地用于查看（仅 davmail 后端）。独立于上方主收件箱同步，纯展示，不跑 AI / Notion。'
+        })}
+      >
+        <EnvField
+          envKey="MAILBOX_FOLDER_SYNC_ENABLED"
+          control="toggle"
+          label={t('settings.sync.folder.enabled.label', { defaultValue: '同步存档 / 草稿箱' })}
+          helper={t('settings.sync.folder.enabled.helper', {
+            defaultValue: '默认关闭 · 仅 davmail 后端生效；开启后后台增量拉取 Archive / Drafts。'
+          })}
+        />
+        <EnvField
+          envKey="FOLDER_SYNC_POLL_INTERVAL_SEC"
+          control="number"
+          label={t('settings.sync.folder.interval.label', { defaultValue: '轮询间隔（秒）' })}
+          helper={t('settings.sync.folder.interval.helper', {
+            defaultValue: 'FolderSyncWorker 检查存档 / 草稿箱新邮件的间隔。'
+          })}
+          min={15}
+          max={3600}
+        />
+        <EnvField
+          envKey="ARCHIVE_SYNC_PAST_DAYS"
+          control="number"
+          label={t('settings.sync.folder.pastDays.label', { defaultValue: '存档同步窗口（天）' })}
+          helper={t('settings.sync.folder.pastDays.helper', {
+            defaultValue: '只拉最近 N 天的存档；越大首次越慢、占空间越多。'
+          })}
+          min={1}
+          max={3650}
+        />
+        <EnvField
+          envKey="ARCHIVE_SYNC_MAX_MESSAGES"
+          control="number"
+          label={t('settings.sync.folder.maxMessages.label', {
+            defaultValue: '存档同步上限（封）'
+          })}
+          helper={t('settings.sync.folder.maxMessages.helper', {
+            defaultValue: '防极端大邮箱；超出按时间降序截断。'
+          })}
+          min={100}
+          max={50000}
+        />
+      </Section>
+
       <Section title={t('settings.sync.calendar.title')}>
         <EnvField
           envKey="CALENDAR_SYNC_MODE"

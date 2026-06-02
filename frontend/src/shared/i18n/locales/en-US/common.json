@@ -124,6 +124,9 @@
     "chars": "{n} chars",
     "attachmentsNote": "{n} attachment(s) forwarded along",
     "loadingPlan": "Loading…",
+    "planError": "Pre-fill failed",
+    "planErrorHint": "Couldn't load recipients & draft body ({code}). Retry, or check the backend service.",
+    "planRetry": "Retry",
     "editor": {
       "bodyPlaceholder": "Write your message…",
       "bold": "Bold",
@@ -1049,6 +1052,27 @@
         "frostedMeta": "Frosted · semi-transparent + backdrop blur, lightweight Liquid Glass.",
         "solidMeta": "Solid · opaque, no blur. Best perf, matches prefers-reduced-transparency.",
         "liquidMeta": "Liquid · richer alpha + saturate + inset highlight, iOS 26 feel."
+      },
+      "bodyText": {
+        "title": "Body text",
+        "meta": "Email body only",
+        "note": "Applies to the email reading area only — list rows, AI fields and other UI text are unaffected. Line height defaults to 1.15.",
+        "font": {
+          "system": "System default",
+          "systemMeta": "Sans-serif system font",
+          "serif": "Serif",
+          "serifMeta": "Better for long reads",
+          "mono": "Monospace",
+          "monoMeta": "Code / log friendly"
+        },
+        "size": {
+          "label": "Font size",
+          "meta": "Body text size"
+        },
+        "lineHeight": {
+          "label": "Line height",
+          "meta": "Vertical spacing between lines"
+        }
       }
     },
     "save": "Save",
@@ -1162,6 +1186,26 @@
       "healthInterval": {
         "label": "Health-check interval",
         "helper": "Seconds — catches missed emails"
+      },
+      "folder": {
+        "title": "Folder sync (Archive / Drafts)",
+        "helper": "Also sync Archive and Drafts locally for viewing (davmail backend only). Independent of the main inbox sync above — view-only, no AI / Notion.",
+        "enabled": {
+          "label": "Sync Archive / Drafts",
+          "helper": "Off by default · davmail backend only; pulls Archive / Drafts incrementally in the background."
+        },
+        "interval": {
+          "label": "Poll interval (sec)",
+          "helper": "How often FolderSyncWorker checks Archive / Drafts for new mail."
+        },
+        "pastDays": {
+          "label": "Archive window (days)",
+          "helper": "Only pull the last N days of archive; larger = slower first sync + more disk."
+        },
+        "maxMessages": {
+          "label": "Archive cap (messages)",
+          "helper": "Guards against huge mailboxes; truncates by date desc beyond the cap."
+        }
       }
     },
     "ai": {
@@ -1672,6 +1716,15 @@
       "tooltipFallback": "SSE offline; fallback poll every {seconds}s",
       "tooltipFallbackOff": "SSE offline; fallback poll disabled (Settings → Realtime events)",
       "tooltipDisabled": "Realtime events disabled"
+    },
+    "remote": {
+      "label": "Remote",
+      "on": "On",
+      "off": "Off",
+      "tooltipOn": "serve-api enabled · {url}",
+      "tooltipOff": "Remote access off",
+      "unconfigured": "Not configured",
+      "tooltipUnconfigured": "Remote access on but CF_AUDIENCE missing — serve-api won't start"
     }
   },
   "titleBar": {

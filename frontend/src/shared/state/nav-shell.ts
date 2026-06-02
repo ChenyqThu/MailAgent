@@ -15,6 +15,28 @@ import { create } from 'zustand'
 
 const KEY = 'mailagent.nav.collapsed'
 
+// Sidebar widths — must stay in sync with `.app-nav` width in index.css
+// (240px expanded / 56px collapsed; DESIGN.md §2.11). The sidebar itself is
+// sized by `.app-nav[data-collapsed]` in CSS; this store mirrors the same
+// width into the `--app-nav-w` custom property so detached fixed-position
+// chrome that cannot read the zustand store — notably `#batch-bar.floating`
+// (index.css §"Floating batch action bar") — reflows in lockstep when the
+// sidebar collapses. Without it the batch bar stuck at the 240px fallback and
+// floated ~184px right of its column once the sidebar shrank to 56px.
+const NAV_W_EXPANDED = '240px'
+const NAV_W_COLLAPSED = '56px'
+
+// Mirror collapsed state into the --app-nav-w CSS var. Gated on `document`
+// (DOM-only API; no-op under SSR / non-renderer import contexts). The 220ms
+// `left` transition on #batch-bar.floating (index.css) animates the realign.
+function applyNavWidthVar(collapsed: boolean): void {
+  if (typeof document === 'undefined') return
+  document.documentElement.style.setProperty(
+    '--app-nav-w',
+    collapsed ? NAV_W_COLLAPSED : NAV_W_EXPANDED
+  )
+}
+
 function readPersisted(): boolean {
   if (typeof window === 'undefined') return false
   try {
@@ -40,15 +62,22 @@ interface NavShellStore {
   setCollapsed: (next: boolean) => void
 }
 
+const initialCollapsed = readPersisted()
+// Sync the CSS var to the persisted state on first load so the batch bar is
+// already aligned before the user toggles anything.
+applyNavWidthVar(initialCollapsed)
+
 export const useNavCollapsed = create<NavShellStore>((set, get) => ({
-  collapsed: readPersisted(),
+  collapsed: initialCollapsed,
   toggle: () => {
     const next = !get().collapsed
     writePersisted(next)
+    applyNavWidthVar(next)
     set({ collapsed: next })
   },
   setCollapsed: (next) => {
     writePersisted(next)
+    applyNavWidthVar(next)
     set({ collapsed: next })
   }
 }))
@@ -62,6 +91,7 @@ if (typeof window !== 'undefined') {
     if (e.key !== KEY) return
     const next = e.newValue === 'true'
     if (useNavCollapsed.getState().collapsed !== next) {
+      applyNavWidthVar(next)
       useNavCollapsed.setState({ collapsed: next })
     }
   })

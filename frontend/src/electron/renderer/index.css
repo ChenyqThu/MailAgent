@@ -1567,7 +1567,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .ai-strip .pname {
   font-weight: 600;
-  letter-spacing: 0.04em;
+  /* 收紧字距 (0.04em→0.02em): priority 文字 (IMPORTANT 等) 更紧凑, 响应
+     "badge 偏大" 反馈; 不动字号, 故不影响 EmailList 行高估算。 */
+  letter-spacing: 0.02em;
 }
 .ai-strip .sep {
   color: rgb(var(--ink-fg-3));

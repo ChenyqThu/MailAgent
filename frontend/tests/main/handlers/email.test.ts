@@ -386,7 +386,9 @@ describe('listEmailsEnriched', () => {
     expect(rows.map((r) => r.internal_id)).toEqual([101, 102, 103, 201])
 
     // 101 — has body + full LLM labels + 2 non-inline attachments (orig + derived)
-    expect(rows[0].snippet).toMatch(/^Hey, the redis client/)
+    // Sprint 19: listEnriched 不再读 body blob → snippet 恒 null (懒取);
+    // 内容断言迁到本 describe 末尾的 listEmailSnippets。
+    expect(rows[0].snippet).toBeNull()
     expect(rows[0].lang).toBe('en')
     expect(rows[0].ai_priority).toBe('critical') // mapped from "🔴 紧急"
     expect(rows[0].ai_action).toBe('需要回复')
@@ -394,7 +396,7 @@ describe('listEmailsEnriched', () => {
 
     // 102 — has CN body + partial LLM labels + only an inline (cid:) attachment
     // The inline image must NOT bump the user-visible attach_count.
-    expect(rows[1].snippet?.startsWith('本周 *产品*')).toBe(true)
+    expect(rows[1].snippet).toBeNull() // Sprint 19 懒取, 内容见末尾 listEmailSnippets
     expect(rows[1].lang).toBe('zh')
     expect(rows[1].ai_priority).toBe('important') // mapped from "🟡 重要"
     expect(rows[1].ai_action).toBe('需要决策')
@@ -411,6 +413,15 @@ describe('listEmailsEnriched', () => {
     expect(rows[3].snippet).toBeNull()
     expect(rows[3].lang).toBe('unknown')
     expect(rows[3].ai_priority).toBeNull()
+
+    // Sprint 19 — snippet 内容由 listEmailSnippets 懒取提供 (listEnriched 只给 null
+    // 占位)。把原先挂在 listEnriched 上的内容断言迁来, 保住覆盖 + 验证懒取路径:
+    // 有 body 的 101/102 返回内容; 无 body 的 103/201 不进 map。
+    const snippets = handlers.listEmailSnippets([101, 102, 103, 201])
+    expect(snippets[101]).toMatch(/^Hey, the redis client/)
+    expect(snippets[102]?.startsWith('本周 *产品*')).toBe(true)
+    expect(snippets[103]).toBeUndefined()
+    expect(snippets[201]).toBeUndefined()
   })
 
   test('mailbox filter does not trip the JOIN ambiguity (m.mailbox vs llm.mailbox)', () => {
