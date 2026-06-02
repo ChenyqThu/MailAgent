@@ -167,7 +167,9 @@ export function ConfirmToolDialog({
         data-anim-card
         className={cn(
           'w-[480px] max-w-[92vw] rounded-lg border border-ink-border-soft',
-          'bg-ink-2 shadow-xl overflow-hidden'
+          // no-heavy-shadow: shadow-xl 超出设计系统; dialog 用 DESIGN.md §4.3
+          // level-1 raised shadow (detached element 的标准 elevation)。
+          'bg-ink-2 shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden'
         )}
       >
         {/* Header — tool name + tier badge */}
