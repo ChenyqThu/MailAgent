@@ -64,8 +64,8 @@
 | `find_experts(topic)` | silent | "谁了解 X" |
 | `get_page(slug)` | silent | 按 slug 精确读一页 |
 | `list_skills` / `get_skill(name)` | silent | 发现 + 取 KOS 工作流指令（照其步骤执行） |
-| `extract_facts(text)` | silent | 从一段文本（邮件正文）抽取个人知识事实（返候选；持久化另走 put_page） |
-| `put_page(slug, content)` | **confirm** | 写/更新一页到 `default` 个人脑（markdown+frontmatter；需 ConfirmToolDialog 批准）。**⏳ 待用户确认是否开放 chat 写** |
+| `extract_facts(text)` | **confirm** | 从邮件正文抽取并**写入**个人知识事实到 default（返 inserted/superseded/fact_ids）；实测确认是写操作 → 需弹窗确认 |
+| `put_page(slug, content)` | **confirm** | 写/更新一页到 `default` 个人脑（markdown+frontmatter；需 ConfirmToolDialog 批准） |
 
 - **读跨源、写定向**：读用默认 `mailagent` client（union 三源）；`put_page` 本 client 写入 `default`。**邮件衍生知识进 `mailagent-emails` 语料由后端 producer（bulk client）独占**，chat 不写邮件语料（防污染）。
 - KOS 不可达 / `E_KOS_*` → tool 返 `ok:false`，LLM 自然降级到本地 `email_search_fulltext`（FTS5）。
@@ -85,7 +85,7 @@
 ### 3.5 开放点（已大幅收敛）
 - ~~源可见性~~ → **已解决**：mailagent client query 跨 3 源 union（Lucien 已配，实测）。
 - ~~skill publishing 关闭~~ → **已解决**：56 skill 已发布。
-- **写能力开放范围**（待用户拍板）：是否允许 chat 经 `put_page` 写 `default` 个人脑（confirm-tier，弹窗批准）。KOS 契约鼓励写回；harness 已有写确认机制。建议开（confirm 兜底，绝不写邮件语料）。
+- ✅ **写能力**（已定 2026-06-02）：用户批准开放 chat 写回 `default` 个人脑 —— `put_page` + `extract_facts` 为 confirm-tier（ConfirmToolDialog 弹窗批准）；绝不写 `mailagent-emails` 邮件语料（producer 独占）。
 
 ---
 

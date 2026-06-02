@@ -22,8 +22,11 @@ import { allKosTools } from './kos'
  *               attachment_list / email_search_attachments
  *    Write (3): email_flag / email_archive / email_draft_reply
  *
- *  PR-2e gated (+2 tools when MAILAGENT_KOS_CONSUMER_ENABLED=true):
- *    Meta  (2): kos_query / kos_digest — cross-domain KOS retrieval
+ *  KOS gated (+9 tools when MAILAGENT_KOS_CONSUMER_ENABLED=true):
+ *    Meta read  (7): kos_query / kos_digest / kos_recall / kos_find_experts /
+ *                    kos_get_page / kos_list_skills / kos_get_skill
+ *    Meta write (2): kos_extract_facts / kos_put_page (confirm-tier → ConfirmToolDialog;
+ *                    write the default personal brain)
  */
 export function registerBuiltinTools(registry: ToolRegistry): void {
   for (const tool of allEmailTools) {

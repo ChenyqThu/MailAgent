@@ -9,6 +9,13 @@ import { createToolRegistry } from '../../../../src/electron/main/chat/tools/reg
 import {
   kosQuery,
   kosDigest,
+  kosRecall,
+  kosFindExperts,
+  kosGetPage,
+  kosListSkills,
+  kosGetSkill,
+  kosExtractFacts,
+  kosPutPage,
   allKosTools,
   __setKosClientForTests
 } from '../../../../src/electron/main/chat/tools/builtin/kos'
@@ -33,18 +40,35 @@ afterEach(() => {
 // Tool catalog shape
 // ============================================================
 
-describe('PR-2e KOS tools catalog', () => {
-  test('allKosTools exports 2 tools: kos_query + kos_digest', () => {
-    expect(allKosTools).toHaveLength(2)
+const ALL_KOS_NAMES = [
+  'kos_digest',
+  'kos_extract_facts',
+  'kos_find_experts',
+  'kos_get_page',
+  'kos_get_skill',
+  'kos_list_skills',
+  'kos_put_page',
+  'kos_query',
+  'kos_recall'
+]
+
+describe('KOS tools catalog', () => {
+  test('allKosTools exports 9 curated tools', () => {
+    expect(allKosTools).toHaveLength(9)
     const names = allKosTools.map((t) => t.name).sort()
-    expect(names).toEqual(['kos_digest', 'kos_query'])
+    expect(names).toEqual(ALL_KOS_NAMES)
   })
 
-  test('both tools are silent category=meta surface=webhook', () => {
+  test('read tools silent; write tools (kos_put_page / kos_extract_facts) need confirm', () => {
+    const writeTools = new Set(['kos_put_page', 'kos_extract_facts'])
     for (const t of allKosTools) {
-      expect(t.confirmationTier).toBe('silent')
       expect(t.category).toBe('meta')
       expect(t.surface).toBe('webhook')
+      if (writeTools.has(t.name)) {
+        expect(t.confirmationTier).toBe('edit')
+      } else {
+        expect(t.confirmationTier).toBe('silent')
+      }
     }
   })
 
@@ -219,6 +243,84 @@ describe('kos_digest handler', () => {
 })
 
 // ============================================================
+// Extended KOS tools (callTool / putPage proxy)
+// ============================================================
+
+describe('KOS extended tools', () => {
+  function mockClientWith(over: Partial<KOSClient>): KOSClient {
+    return over as unknown as KOSClient
+  }
+
+  test('kos_recall proxies callTool(recall) with entity + limit', async () => {
+    const callTool = vi.fn().mockResolvedValue([{ fact: 'x' }])
+    __setKosClientForTests(mockClientWith({ callTool }))
+    const r = await kosRecall.handler({ entity: 'people/bob', limit: 5 }, dummyCtx)
+    expect(r.ok).toBe(true)
+    expect(callTool).toHaveBeenCalledWith('recall', { limit: 5, entity: 'people/bob' })
+  })
+
+  test('kos_find_experts requires topic + proxies callTool', async () => {
+    const callTool = vi.fn().mockResolvedValue([])
+    __setKosClientForTests(mockClientWith({ callTool }))
+    const bad = await kosFindExperts.handler({}, dummyCtx)
+    expect(bad.ok).toBe(false)
+    await kosFindExperts.handler({ topic: 'RADIUS portal' }, dummyCtx)
+    expect(callTool).toHaveBeenCalledWith('find_experts', { topic: 'RADIUS portal', limit: 10 })
+  })
+
+  test('kos_get_page requires slug + passes fuzzy', async () => {
+    const callTool = vi.fn().mockResolvedValue({ slug: 'people/bob' })
+    __setKosClientForTests(mockClientWith({ callTool }))
+    const bad = await kosGetPage.handler({}, dummyCtx)
+    expect(bad.ok).toBe(false)
+    await kosGetPage.handler({ slug: 'people/bob', fuzzy: true }, dummyCtx)
+    expect(callTool).toHaveBeenCalledWith('get_page', { slug: 'people/bob', fuzzy: true })
+  })
+
+  test('kos_list_skills + kos_get_skill proxy callTool', async () => {
+    const callTool = vi.fn().mockResolvedValue({ ok: 1 })
+    __setKosClientForTests(mockClientWith({ callTool }))
+    await kosListSkills.handler({}, dummyCtx)
+    expect(callTool).toHaveBeenCalledWith('list_skills', {})
+    const bad = await kosGetSkill.handler({}, dummyCtx)
+    expect(bad.ok).toBe(false)
+    await kosGetSkill.handler({ name: 'query' }, dummyCtx)
+    expect(callTool).toHaveBeenCalledWith('get_skill', { name: 'query' })
+  })
+
+  test('kos_extract_facts requires turn_text', async () => {
+    const callTool = vi.fn().mockResolvedValue([])
+    __setKosClientForTests(mockClientWith({ callTool }))
+    const bad = await kosExtractFacts.handler({}, dummyCtx)
+    expect(bad.ok).toBe(false)
+    await kosExtractFacts.handler({ turn_text: 'Bob agreed to ship Friday.' }, dummyCtx)
+    expect(callTool).toHaveBeenCalledWith('extract_facts', { turn_text: 'Bob agreed to ship Friday.' })
+  })
+
+  test('kos_put_page is edit-tier, requires slug+content, proxies putPage', async () => {
+    expect(kosPutPage.confirmationTier).toBe('edit')
+    const putPage = vi.fn().mockResolvedValue({ slug: 'notes/x', status: 'created_or_updated' })
+    __setKosClientForTests(mockClientWith({ putPage }))
+    const bad = await kosPutPage.handler({ slug: 'notes/x' }, dummyCtx) // missing content
+    expect(bad.ok).toBe(false)
+    const r = await kosPutPage.handler(
+      { slug: 'notes/x', content: '---\ntype: note\n---\nbody' },
+      dummyCtx
+    )
+    expect(r.ok).toBe(true)
+    expect(putPage).toHaveBeenCalledWith('notes/x', '---\ntype: note\n---\nbody')
+  })
+
+  test('extended-tool KOSError surfaces stable code', async () => {
+    const callTool = vi.fn().mockRejectedValue(new KOSError('down', 'E_KOS_NETWORK'))
+    __setKosClientForTests(mockClientWith({ callTool }))
+    const r = await kosRecall.handler({ entity: 'x' }, dummyCtx)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.code).toBe('E_KOS_NETWORK')
+  })
+})
+
+// ============================================================
 // Registration gate by MAILAGENT_KOS_CONSUMER_ENABLED
 // ============================================================
 
@@ -246,8 +348,8 @@ describe('registerBuiltinTools KOS gate', () => {
     registerBuiltinTools(r)
     const names = r.names().sort()
     expect(names).toContain('kos_query')
-    expect(names).toContain('kos_digest')
-    expect(names).toHaveLength(13) // 11 default + 2 KOS
+    expect(names).toContain('kos_put_page')
+    expect(names).toHaveLength(20) // 11 default + 9 KOS
   })
 
   test('flag ON with value "1" also works', () => {
@@ -262,8 +364,8 @@ describe('registerBuiltinTools KOS gate', () => {
     const r = createToolRegistry()
     registerBuiltinTools(r)
     const metaSchema = r.toAnthropicSchema({ categories: ['meta'] })
-    expect(metaSchema).toHaveLength(2)
+    expect(metaSchema).toHaveLength(9)
     const metaNames = metaSchema.map((s) => s.name).sort()
-    expect(metaNames).toEqual(['kos_digest', 'kos_query'])
+    expect(metaNames).toEqual(ALL_KOS_NAMES)
   })
 })

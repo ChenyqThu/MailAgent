@@ -151,16 +151,19 @@ export class KOSClient {
     }
   }
 
-  /** tools/call name='query' — returns retrieval hit array. */
+  /** tools/call name='query' — returns retrieval hit array.
+   *  默认跨 3 源 union (default + mailagent-emails + omada)；传 sourceId 才限定。 */
   async query(
     query: string,
-    opts?: { limit?: number; expand?: boolean }
+    opts?: { limit?: number; expand?: boolean; sourceId?: string }
   ): Promise<QueryHit[]> {
-    const result = await this.callTool('query', {
+    const args: Record<string, unknown> = {
       query,
       limit: opts?.limit ?? 10,
       expand: opts?.expand ?? false
-    })
+    }
+    if (opts?.sourceId) args.source_id = opts.sourceId
+    const result = await this.callTool('query', args)
     return Array.isArray(result) ? (result as QueryHit[]) : []
   }
 
