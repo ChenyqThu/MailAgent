@@ -256,6 +256,7 @@ function Swatch({
       role="radio"
       aria-checked={selected}
       aria-label={label}
+      tabIndex={selected ? 0 : -1}
       onClick={onSelect}
       className={cn(
         'size-11 rounded-full relative cursor-pointer',
@@ -314,6 +315,7 @@ function RadioRow({ selected, label, meta, right, onSelect }: RadioRowProps): Re
       type="button"
       role="radio"
       aria-checked={selected}
+      tabIndex={selected ? 0 : -1}
       onClick={onSelect}
       className={cn(
         'flex w-full items-center gap-3 px-4 py-3 text-left cursor-pointer',
@@ -350,6 +352,47 @@ function BlockHeader({
   )
 }
 
+/** Roving-tabindex 方向键导航 (WAI-ARIA radiogroup 键盘模式)。返回挂到
+ *  `role="radiogroup"` 容器 onKeyDown 的处理器: ←↑=上一个 / →↓=下一个
+ *  (循环 wrap), Home/End=首/尾。移动时同时 onSelect(next) + 把 DOM 焦点
+ *  移到新选中的 `[role="radio"]`。其它键不拦截。 */
+function makeRovingKeyDown<T>(
+  values: readonly T[],
+  current: T,
+  onSelect: (value: T) => void
+): (e: React.KeyboardEvent<HTMLDivElement>) => void {
+  return (e) => {
+    if (values.length === 0) return
+    const currentIdx = values.indexOf(current)
+    // 选中值不在数组里时, 把方向键起点视作首项 (-1 → prev=末 / next=首)。
+    const base = currentIdx < 0 ? 0 : currentIdx
+    let nextIdx: number
+    switch (e.key) {
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        nextIdx = (base - 1 + values.length) % values.length
+        break
+      case 'ArrowRight':
+      case 'ArrowDown':
+        nextIdx = (base + 1) % values.length
+        break
+      case 'Home':
+        nextIdx = 0
+        break
+      case 'End':
+        nextIdx = values.length - 1
+        break
+      default:
+        return
+    }
+    e.preventDefault()
+    const nextValue = values[nextIdx]
+    if (nextValue !== current) onSelect(nextValue)
+    const radios = e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')
+    radios[nextIdx]?.focus()
+  }
+}
+
 export function GeneralTab(): React.ReactElement {
   const { t, i18n } = useTranslation()
   const themeMode = useAppearance((s) => s.themeMode)
@@ -373,6 +416,14 @@ export function GeneralTab(): React.ReactElement {
     void i18n.changeLanguage(next)
   }
 
+  // 各 radiogroup 的取值数组 (派生自模块级静态常量, 故空依赖 memo —
+  // 避免每次按键重新分配)。供 makeRovingKeyDown 计算 prev/next。
+  const accentValues = React.useMemo(() => ACCENT_LIST.map((a) => a.id), [])
+  const localeValues = React.useMemo(() => LOCALE_ROWS.map((r) => r.value), [])
+  const themeValues = React.useMemo(() => THEME_ROWS.map((r) => r.value), [])
+  const surfaceValues = React.useMemo(() => SURFACE_ROWS.map((r) => r.value), [])
+  const bodyFontValues = React.useMemo(() => BODY_FONT_ROWS.map((r) => r.value), [])
+
   return (
     <>
       <PageHeader
@@ -393,6 +444,7 @@ export function GeneralTab(): React.ReactElement {
           <div
             role="radiogroup"
             aria-label="accent"
+            onKeyDown={makeRovingKeyDown(accentValues, accent, setAccent)}
             className="grid grid-cols-6 gap-x-2 gap-y-3 place-items-center mb-3"
           >
             {ACCENT_LIST.map(({ id, label, hex }) => {
@@ -439,6 +491,7 @@ export function GeneralTab(): React.ReactElement {
         <div
           role="radiogroup"
           aria-label="locale"
+          onKeyDown={makeRovingKeyDown(localeValues, currentLocale, handleLocaleChange)}
           className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
         >
           {LOCALE_ROWS.map(({ value, labelKey, metaKey, code }) => (
@@ -473,6 +526,7 @@ export function GeneralTab(): React.ReactElement {
         <div
           role="radiogroup"
           aria-label="theme"
+          onKeyDown={makeRovingKeyDown(themeValues, themeMode, setThemeMode)}
           className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
         >
           {THEME_ROWS.map(({ value, labelKey, metaKey, rightKey }) => (
@@ -497,6 +551,7 @@ export function GeneralTab(): React.ReactElement {
         <div
           role="radiogroup"
           aria-label="surface"
+          onKeyDown={makeRovingKeyDown(surfaceValues, surface, setSurface)}
           className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
         >
           {SURFACE_ROWS.map(({ value, labelKey, metaKey }) => (
@@ -521,7 +576,12 @@ export function GeneralTab(): React.ReactElement {
         />
         <div className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
           {/* radiogroup 只包字体选项 — 不把下面的 Stepper 混进 radiogroup (a11y, codex Low)。 */}
-          <div role="radiogroup" aria-label="body font" className="divide-y divide-ink-border-soft">
+          <div
+            role="radiogroup"
+            aria-label="body font"
+            onKeyDown={makeRovingKeyDown(bodyFontValues, bodyFont, setBodyFont)}
+            className="divide-y divide-ink-border-soft"
+          >
             {BODY_FONT_ROWS.map(({ value, labelKey, metaKey }) => (
               <RadioRow
                 key={value}
