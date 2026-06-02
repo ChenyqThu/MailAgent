@@ -232,7 +232,7 @@ export function LlmDashboardPage(): React.ReactElement {
   return (
     <div className="px-6 py-5 space-y-6 min-h-full">
       <header className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-display text-ink-fg font-semibold flex items-center gap-2">
+        <h1 className="text-subj text-ink-fg font-semibold flex items-center gap-2">
           <Sparkles size={20} strokeWidth={1.75} className="text-coral" />
           {t('llm.title')}
         </h1>

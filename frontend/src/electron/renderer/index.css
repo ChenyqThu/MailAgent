@@ -2145,7 +2145,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .wk-dayhead.is-today .wk-dn {
   background: rgb(var(--c-accent));
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   border-radius: 8px;
 }
 
@@ -2316,7 +2316,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 10px;
   font-weight: 700;
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   background: rgb(var(--c-accent));
   padding: 2px 5px;
   border-radius: 4px;
@@ -2407,7 +2407,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .mm-cell.today {
   background: rgb(var(--c-accent));
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   font-weight: 700;
 }
 .mm-dot {
@@ -2532,7 +2532,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .m-cell.is-today .m-num .nday {
   background: rgb(var(--c-accent));
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   border-radius: 6px;
   min-width: 20px;
   height: 20px;
@@ -3360,7 +3360,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   justify-content: center;
   font-size: 8.5px;
   font-weight: 700;
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   background: rgb(var(--c-accent));
   flex-shrink: 0;
 }
@@ -3430,7 +3430,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border-radius: 8px;
   font-size: 13.5px;
   font-weight: 600;
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   background: rgb(var(--c-accent));
   border: 1px solid rgb(var(--c-accent-hi));
   cursor: pointer;
@@ -3502,7 +3502,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .btn-rsvp.sel {
   background: rgb(var(--c-accent));
   border-color: rgb(var(--c-accent-hi));
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   font-weight: 600;
 }
 .btn-rsvp.sel:hover { background: rgb(var(--c-accent-hi)); }
@@ -3529,7 +3529,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .btn-op.edit {
   background: rgb(var(--c-accent));
   border-color: rgb(var(--c-accent-hi));
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   font-weight: 600;
 }
 .btn-op.edit:hover:not(:disabled) { background: rgb(var(--c-accent-hi)); }
@@ -3756,7 +3756,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border-radius: 7px;
   font-size: 13px;
   font-weight: 600;
-  color: #fff;
+  color: rgb(var(--c-accent-fg));
   background: rgb(var(--c-accent));
   border: 1px solid rgb(var(--c-accent-hi));
   cursor: pointer;

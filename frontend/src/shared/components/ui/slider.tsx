@@ -27,7 +27,11 @@ export const Slider = React.forwardRef<
     </SliderPrimitive.Track>
     <SliderPrimitive.Thumb
       className={cn(
-        'block h-[16px] w-[16px] rounded-full bg-white',
+        // UI-PRIMITIVES-01: thumb rests on the coral range; bg-white scored
+        // <3:1 (WCAG 1.4.11). --c-accent-fg flips per-mode (dark→near-black /
+        // light→white) for AA on coral; the 1px ink-border ring keeps the
+        // edge legible over the unfilled ink-4 track.
+        'block h-[16px] w-[16px] rounded-full bg-accent-fg',
         'shadow-[0_0_0_1px_rgb(var(--ink-border)),0_2px_4px_rgba(0,0,0,0.25)]',
         'transition-transform duration-fast ease-standard',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/40',

@@ -38,7 +38,10 @@ export const Switch = React.forwardRef<
         'pointer-events-none block h-[14px] w-[14px] rounded-full bg-ink-fg',
         'shadow-[0_1px_2px_rgba(0,0,0,0.25)]',
         'translate-x-[1px] transition-transform duration-fast ease-standard',
-        'data-[state=checked]:translate-x-[15px] data-[state=checked]:bg-white'
+        // UI-PRIMITIVES-01: checked thumb sits on the coral track; hardcoded
+        // bg-white scored 1.66–2.51:1 (WCAG 1.4.11 fail). --c-accent-fg flips
+        // per-mode (dark→near-black / light→white) for AA-clearing on-accent fg.
+        'data-[state=checked]:translate-x-[15px] data-[state=checked]:bg-accent-fg'
       )}
     />
   </SwitchPrimitive.Root>

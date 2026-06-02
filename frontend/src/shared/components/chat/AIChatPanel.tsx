@@ -845,7 +845,8 @@ function BackendOnboarding({
         onClick={onOpenSettings}
         className={cn(
           'mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md',
-          'text-aux font-medium text-white bg-coral/100 hover:bg-coral/90',
+          // AI-CHAT-02: text-white on coral fails AA; --c-accent-fg flips per-mode.
+          'text-aux font-medium text-accent-fg bg-coral/100 hover:bg-coral-hover',
           'transition-colors duration-fast'
         )}
       >

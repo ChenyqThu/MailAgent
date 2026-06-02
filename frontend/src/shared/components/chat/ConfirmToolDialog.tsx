@@ -257,7 +257,10 @@ export function ConfirmToolDialog({
             disabled={busy}
             className={cn(
               'h-7 px-3 rounded text-aux font-medium',
-              'bg-coral text-white hover:bg-coral/90',
+              // AI-CHAT-02: text-white on coral = 2.38:1 (AA fail). Use the
+              // per-mode --c-accent-fg token + the coral-hover utility.
+              // bg-coral→bg-coral/100 also clears no-coral-flood (the one CTA).
+              'bg-coral/100 text-accent-fg hover:bg-coral-hover',
               'disabled:opacity-50'
             )}
           >
