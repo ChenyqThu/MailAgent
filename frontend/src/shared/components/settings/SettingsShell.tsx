@@ -22,6 +22,7 @@ import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { Tabs, TabsContent } from '@shared/components/ui/tabs'
 import { useEnvStore } from '@shared/state/env'
+import { useIsBelowMd } from '@shared/hooks/useMediaQuery'
 import { SETTINGS_TABS, type SettingsTab } from '@shared/router-instance'
 
 import { RestartBanner } from './RestartBanner'
@@ -40,6 +41,10 @@ export function SettingsShell(): React.ReactElement {
   const search = useSearch({ strict: false }) as { tab?: string }
   const navigate = useNavigate()
   const refresh = useEnvStore((s) => s.refresh)
+  // SETTINGS-04 — <md 把 vertical rail 切成 horizontal 顶部 tab 条。orientation
+  // 驱动 Radix data-orientation: vertical→TabsList flex-col (tabs.tsx:29 data-attr
+  // 强制, specificity 压过 className); horizontal→横向 + 下划线 active tab。
+  const belowMd = useIsBelowMd()
 
   React.useEffect(() => {
     void refresh()
@@ -76,7 +81,7 @@ export function SettingsShell(): React.ReactElement {
     <Tabs
       value={tab}
       onValueChange={handleTabChange}
-      orientation="vertical"
+      orientation={belowMd ? 'horizontal' : 'vertical'}
       // Sprint 18 review — SettingsLayout passes `mainClassName="flex"`
       // 让 <main> 变成 row flex 容器, 这里 Tabs root 直接 stretch 填高度.
       // `min-w-0` 让长 content 行 (env path / tag-list) 在 flex 子项中
