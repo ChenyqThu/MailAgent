@@ -262,7 +262,8 @@ class Config(BaseSettings):
         ),
     )
     llm_max_tokens: int = Field(
-        default=4096, env="LLM_MAX_TOKENS", description="单次生成 max_tokens",
+        default=64000, env="LLM_MAX_TOKENS",
+        description="单次生成 max output tokens（默认 64k = Claude Sonnet 4.x 上限；仅上限不强制，按需输出）",
     )
     llm_timeout_sec: int = Field(
         default=60, env="LLM_TIMEOUT_SEC", description="LLM 请求超时（秒）",

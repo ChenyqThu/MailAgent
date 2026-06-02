@@ -32,11 +32,10 @@ from src.config import config as cfg
 # Default urllib/httpx UA can trip Cloudflare rule 1010 on some relays.
 _UA = "MailAgent-LLM/0.1 (Mozilla/5.0 compatible)"
 
-# anthropic-beta header: opt into extended cache TTL ("1h" values on
-# cache_control blocks). Legal across CRS (passes through unchanged) and
-# native Anthropic (required for 1h TTL). Harmless when ttl<=5m. We send
-# it unconditionally so downstream code can set ttl:"1h" freely.
-_ANTHROPIC_BETA = "extended-cache-ttl-2025-04-11"
+# anthropic-beta header（多个 beta 逗号分隔，无条件发，CRS 透传 / native 直认）：
+#   - extended-cache-ttl-2025-04-11: cache_control "1h" TTL（ttl<=5m 时无害）。
+#   - context-1m-2025-08-07: 1M 上下文窗口（输入上限 200K→1M；<200K 输入定价不变）。
+_ANTHROPIC_BETA = "extended-cache-ttl-2025-04-11,context-1m-2025-08-07"
 
 # Models matching these prefixes go via the OpenAI Chat Completions endpoint
 # on CRS (it routes non-Anthropic providers through /v1/chat/completions).

@@ -37,7 +37,9 @@ import type {
 // Anthropic `max_tokens` caps the model's RESPONSE length (not input).
 // Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
 // typical token density.
-const MAX_OUTPUT_TOKENS = 4096
+const MAX_OUTPUT_TOKENS = 64000
+// anthropic-beta（Anthropic /v1/messages；CRS 透传）：1M 上下文窗口 + 1h cache TTL。
+const ANTHROPIC_BETA = 'extended-cache-ttl-2025-04-11,context-1m-2025-08-07'
 const REQUEST_DEADLINE_MS = 60_000
 
 // Sprint 19 — Anthropic message content can be a plain string (legacy
@@ -927,7 +929,8 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
       headers: {
         'content-type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': ANTHROPIC_BETA
       },
       body: JSON.stringify(requestBody),
       signal: timeoutAc.signal
