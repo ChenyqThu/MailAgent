@@ -1001,7 +1001,9 @@ function EmailHitRow({
           {hit.ai_priority && (
             <span
               className={cn(
-                'text-micro font-mono uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0',
+                // badge 收紧 — 与 Sidebar count pill 同档 (px-1 py-px text-[10px]
+                // rounded-[3px]); 旧 px-1.5 py-0.5 text-micro 视觉偏大 (用户反馈)。
+                'text-[10px] leading-none font-mono uppercase tracking-wide px-1 py-px rounded-[3px] border shrink-0',
                 PRIORITY_CLASS[hit.ai_priority]
               )}
             >
