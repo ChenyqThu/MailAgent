@@ -19,6 +19,7 @@ import { useIslandStore, setIslandStatus, islandStateI18nKey } from '@shared/sta
 import { useUpdaterStore } from '@shared/state/updater'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { cn } from '@shared/lib/cn'
+import { RELEASE_DOWNLOAD_URL } from '@shared/lib/appReleases'
 import { Button } from '@shared/components/ui/button'
 import { Switch } from '@shared/components/ui/switch'
 
@@ -296,7 +297,18 @@ function UpdaterSubsection(): React.ReactElement {
               {busy === 'check' ? t('settings.update.checking') : t('settings.update.checkNow')}
             </Button>
           ) : null}
-          {status.state === 'available' ? (
+          {/* available + 未签名 (ad-hoc, enabled=false): 应用内装不上 → 跳转下载页手动
+              覆盖安装。<a target=_blank> 由 main 拦截 → 系统浏览器。 */}
+          {status.state === 'available' && !status.enabled ? (
+            <Button asChild variant="outline" size="sm">
+              <a href={RELEASE_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer">
+                <Download className="size-3" />
+                {t('settings.update.openDownloadCta', { defaultValue: '前往下载页' })}
+              </a>
+            </Button>
+          ) : null}
+          {/* available + 已签名 (未来 Developer ID 世界): 应用内下载 → 重启安装。 */}
+          {status.state === 'available' && status.enabled ? (
             <Button
               onClick={() => void handleDownload()}
               disabled={busy !== null}
@@ -362,7 +374,8 @@ function UpdaterSubsection(): React.ReactElement {
       {!status.enabled ? (
         <div className="px-4 py-3 text-meta text-ink-fg-2 leading-relaxed">
           {t('settings.update.unsignedNotice', {
-            defaultValue: '开发/未签名版本仅支持检查更新;应用更新需正式签名版本。'
+            defaultValue:
+              '当前为 ad-hoc 签名版本:支持检查更新;有新版本时请前往下载页手动下载、覆盖安装(应用内一键更新需正式签名版本)。'
           })}
         </div>
       ) : null}

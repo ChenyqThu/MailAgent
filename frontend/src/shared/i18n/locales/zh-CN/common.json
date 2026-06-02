@@ -1693,7 +1693,8 @@
       "channel": "GitHub Releases · ad-hoc 签名",
       "autoDownload": "自动下载更新",
       "autoDownloadHint": "检测到新版本后自动在后台下载,就绪后提示重启安装。",
-      "unsignedNotice": "开发/未签名版本仅支持检查更新;应用更新需正式签名版本。"
+      "unsignedNotice": "当前为 ad-hoc 签名版本:支持检查更新;有新版本时请前往下载页手动下载、覆盖安装(应用内一键更新需正式签名版本)。",
+      "openDownloadCta": "前往下载页"
     },
     "island": {
       "heading": "灵动岛集成",
@@ -1725,7 +1726,9 @@
     "banner": {
       "title": "新版本 v{version} 已就绪",
       "restartCta": "重启并更新",
-      "dismiss": "稍后"
+      "dismiss": "稍后",
+      "availableTitle": "发现新版本 v{version}",
+      "openCta": "前往下载"
     }
   },
   "statusbar": {

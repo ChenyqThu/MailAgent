@@ -1690,7 +1690,8 @@
       "channel": "GitHub Releases · ad-hoc signed",
       "autoDownload": "Auto-download updates",
       "autoDownloadHint": "Download new versions in the background automatically, then prompt to restart and install.",
-      "unsignedNotice": "Development/unsigned builds can only check for updates; installing updates requires a signed release build."
+      "unsignedNotice": "This is an ad-hoc signed build: update checks work, but new versions must be downloaded and installed manually from the releases page (in-app one-click update requires a signed build).",
+      "openDownloadCta": "Open download page"
     },
     "island": {
       "heading": "Dynamic Island integration",
@@ -1722,7 +1723,9 @@
     "banner": {
       "title": "Version v{version} is ready",
       "restartCta": "Restart & update",
-      "dismiss": "Later"
+      "dismiss": "Later",
+      "availableTitle": "Version v{version} is available",
+      "openCta": "Download"
     }
   },
   "statusbar": {

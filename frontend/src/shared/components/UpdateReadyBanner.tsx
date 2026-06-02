@@ -23,6 +23,7 @@ import { RotateCcw, X } from 'lucide-react'
 import { Button } from '@shared/components/ui/button'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { RELEASE_DOWNLOAD_URL } from '@shared/lib/appReleases'
 import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useUpdaterStore } from '@shared/state/updater'
@@ -44,7 +45,16 @@ export function UpdateReadyBanner(): React.ReactElement | null {
   // Require a concrete latestVersion: the card renders the version string, and
   // a null version would make the version-keyed dismiss compare (null === null)
   // self-suppress the banner on first render (correctness review, LOW).
-  const visible = status.enabled && status.state === 'downloaded' && status.latestVersion != null
+  //
+  // 两种触发模式:
+  //  - installMode (已签名 + 自动更新开, enabled=true): 'downloaded' → 应用内重启安装。
+  //  - notifyMode  (ad-hoc / 未签名, enabled=false): 'available' → 跳转 GitHub Releases
+  //    手动下载、覆盖安装。ad-hoc 下 quitAndInstall 装不上更新, 所以只通知 + 开浏览器。
+  const installMode =
+    status.enabled && status.state === 'downloaded' && status.latestVersion != null
+  const notifyMode =
+    !status.enabled && status.state === 'available' && status.latestVersion != null
+  const visible = installMode || notifyMode
   const dismissed = visible && dismissedVersion === status.latestVersion
 
   // Entry tween — slide-up + fade. reduced-motion clears the inline style so
@@ -85,19 +95,34 @@ export function UpdateReadyBanner(): React.ReactElement | null {
       <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-coral/100" />
       <RotateCcw className="size-4 shrink-0 text-coral" aria-hidden="true" />
       <div className="min-w-0 flex-1 text-aux text-ink-fg">
-        {t('updater.banner.title', {
-          defaultValue: `新版本 v${status.latestVersion ?? ''} 已就绪`,
-          version: status.latestVersion ?? ''
-        })}
+        {installMode
+          ? t('updater.banner.title', {
+              defaultValue: `新版本 v${status.latestVersion ?? ''} 已就绪`,
+              version: status.latestVersion ?? ''
+            })
+          : t('updater.banner.availableTitle', {
+              defaultValue: `发现新版本 v${status.latestVersion ?? ''}`,
+              version: status.latestVersion ?? ''
+            })}
       </div>
-      <Button
-        size="sm"
-        onClick={() => void api.updater.quitAndInstall()}
-        // 同 RestartBanner: coral 背景上强制 text-white 保跨主题对比。
-        className="shrink-0 text-white"
-      >
-        {t('updater.banner.restartCta', { defaultValue: '重启并更新' })}
-      </Button>
+      {installMode ? (
+        <Button
+          size="sm"
+          onClick={() => void api.updater.quitAndInstall()}
+          // 同 RestartBanner: coral 背景上强制 text-white 保跨主题对比。
+          className="shrink-0 text-white"
+        >
+          {t('updater.banner.restartCta', { defaultValue: '重启并更新' })}
+        </Button>
+      ) : (
+        // notifyMode: ad-hoc 不在应用内安装, 跳转下载页手动覆盖安装。<a target=_blank>
+        // 由 main setWindowOpenHandler 拦截 → shell.openExternal 打开系统浏览器。
+        <Button asChild size="sm" className="shrink-0 text-white">
+          <a href={RELEASE_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer">
+            {t('updater.banner.openCta', { defaultValue: '前往下载' })}
+          </a>
+        </Button>
+      )}
       <button
         type="button"
         onClick={() => setDismissedVersion(status.latestVersion)}
