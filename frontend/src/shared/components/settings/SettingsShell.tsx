@@ -81,7 +81,10 @@ export function SettingsShell(): React.ReactElement {
       // 让 <main> 变成 row flex 容器, 这里 Tabs root 直接 stretch 填高度.
       // `min-w-0` 让长 content 行 (env path / tag-list) 在 flex 子项中
       // 正确 shrink, 不会强行撑爆父级宽度.
-      className="flex flex-1 min-h-0 min-w-0"
+      // SETTINGS-04 响应式: <md rail 转顶部水平 tab 条 → flex-col (rail 上 /
+      // content 下); >=md 恢复 rail+content 并排。rail/content 的尺寸 var 在
+      // index.css @media 同步收窄 (rail-w/content-max-w/px → 100%/1rem)。
+      className="flex flex-col md:flex-row flex-1 min-h-0 min-w-0"
     >
       <SettingsRail />
       {/* Sprint 18 review (round 5) — 单滚动条 + sticky banner (EmailDetail
@@ -95,14 +98,7 @@ export function SettingsShell(): React.ReactElement {
         <RestartBanner />
         <div
           ref={panelScopeRef}
-          className="mx-auto"
-          style={{
-            maxWidth: 'var(--settings-content-max-w, 760px)',
-            paddingLeft: 'var(--settings-content-px, 2.5rem)',
-            paddingRight: 'var(--settings-content-px, 2.5rem)',
-            paddingTop: 'var(--settings-content-py, 2rem)',
-            paddingBottom: 'var(--settings-content-pb, 6rem)'
-          }}
+          className="mx-auto w-full max-w-full md:max-w-[760px] px-4 sm:px-6 md:px-10 pt-6 md:pt-8 pb-24"
         >
           <TabsContent value="general">
             <GeneralTab />

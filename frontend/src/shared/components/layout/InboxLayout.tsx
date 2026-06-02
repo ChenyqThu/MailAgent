@@ -7,13 +7,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
-import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
+import { useIsBelowLg, useIsBelowXl } from '@shared/hooks/useMediaQuery'
 import { useActiveEmail } from '@shared/state/active-email'
-import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailFilter } from '@shared/state/email-filter'
 
 import { TitleBar } from './TitleBar'
@@ -32,6 +33,11 @@ export function InboxLayout(): React.ReactElement {
   // RESPONSIVE-XCUT-01 — <lg(1024) 列表/详情单栏切换：选中邮件 → 详情 absolute
   // 覆盖列表；未选中 → 详情 hidden, 列表占满。≥lg 维持桌面三栏并排（零回归）。
   const belowLg = useIsBelowLg()
+  // RESPONSIVE-XCUT-05 — <xl(1280) AI panel 由挤压列改 drawer overlay。窄屏下
+  // 360px 挤压会把正文挤到 <320 (甚至 <md 时 360 > 视口宽导致布局崩)，故 <xl
+  // 改 fixed 右侧抽屉 (不挤压) + backdrop。
+  const belowXl = useIsBelowXl()
+  const { t } = useTranslation()
   // Sprint 11 V1.4 — URL ↔ store sync. The route's `validateSearch` clamps
   // unknown values to 'inbox', so `urlView` is always a real EmailView
   // (the optional type just lets `navigate({to:'/'})` skip the search arg).
@@ -77,6 +83,12 @@ export function InboxLayout(): React.ReactElement {
     () => {
       const wrapper = wrapperRef.current
       if (!wrapper) return
+      // <xl drawer 模式：不挤压, 清掉 GSAP 设的 inline width, 交给 CSS (fixed +
+      // translate-x) 接管出入场; 宽度由 AIChatPanel 自身 (w-[360px] max-w-[92vw])。
+      if (belowXl) {
+        gsap.set(wrapper, { clearProps: 'width' })
+        return
+      }
       const target = aiPanelVisible ? AI_PANEL_WIDTH : 0
       if (reduceMotion) {
         // reduced-motion：直接切到目标 width，不播动画。
@@ -95,7 +107,7 @@ export function InboxLayout(): React.ReactElement {
         }
       })
     },
-    { dependencies: [aiPanelVisible, reduceMotion] }
+    { dependencies: [aiPanelVisible, reduceMotion, belowXl] }
   )
   // Sprint 7 review (opus Nit) — removed local `useShortcut('cmd+k', goSearch)`
   // because `GlobalShortcuts` (mounted in App.tsx) now owns ⌘K → command
@@ -117,24 +129,37 @@ export function InboxLayout(): React.ReactElement {
           <div
             className={cn(
               'flex min-h-0',
-              belowLg
-                ? activeId !== null
-                  ? 'absolute inset-0 z-30'
-                  : 'hidden'
-                : 'flex-1 min-w-0'
+              belowLg ? (activeId !== null ? 'absolute inset-0 z-30' : 'hidden') : 'flex-1 min-w-0'
             )}
           >
             <EmailDetail internalId={activeId} />
           </div>
         </div>
-        {/* Lane C — 挤压 wrapper。移出 master-detail 容器与之平级：AI 宽度 tween
-            0↔360 收缩 master-detail(flex-1) → detail 收缩, list 保持 340（等价
-            旧行为, 零桌面回归）。<xl drawer 化见批 E-5。overflow-hidden 裁掉
-            收缩时溢出的面板；初始 inline width:0 防首帧闪现（GSAP 接管后覆写）。 */}
+        {/* Lane C — AI panel wrapper。≥xl: 挤压列 (width tween 0↔360 收缩
+            master-detail → detail 收缩, list 保持 340, 零桌面回归)。<xl: drawer
+            overlay (fixed 右侧, translate-x 滑入, 不挤压, 见 belowXl 分支)。
+            backdrop 点击关闭, z-30 < drawer z-40。 */}
+        {belowXl && aiPanelVisible && (
+          <button
+            type="button"
+            aria-label={t('chat.closePanel')}
+            onClick={hideAIChatPanel}
+            className="fixed inset-0 z-30 bg-black/30"
+          />
+        )}
         <div
           ref={wrapperRef}
-          className="overflow-hidden shrink-0 flex min-h-0"
-          style={{ width: 0 }}
+          className={cn(
+            'flex min-h-0',
+            belowXl
+              ? cn(
+                  'fixed right-0 top-titlebar bottom-statusbar z-40',
+                  'transition-transform duration-base ease-standard motion-reduce:transition-none',
+                  aiPanelVisible ? 'translate-x-0' : 'translate-x-full pointer-events-none'
+                )
+              : 'overflow-hidden shrink-0'
+          )}
+          style={belowXl ? undefined : { width: 0 }}
         >
           {mountPanel && <AIChatPanel />}
         </div>

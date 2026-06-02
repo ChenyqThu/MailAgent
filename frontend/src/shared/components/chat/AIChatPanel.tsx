@@ -555,7 +555,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         'border-l border-ink-border ai-bg flex flex-col min-h-0',
         // Sprint 14 PR E — popout fills the whole window; inbox use
         // case keeps the 360px right-rail fixed-width contract.
-        fullScreen ? 'flex-1 w-full border-l-0' : 'w-[360px] shrink-0'
+        fullScreen ? 'flex-1 w-full border-l-0' : 'w-[360px] max-w-[92vw] shrink-0'
       )}
     >
       {/* ── Header bar (40px) — title + New / History / Popout / Close ──

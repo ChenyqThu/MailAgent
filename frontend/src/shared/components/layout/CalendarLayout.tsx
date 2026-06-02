@@ -193,7 +193,8 @@ export function CalendarLayout(): React.ReactElement {
         selectedCalendars={selectedCalendars}
         onSelectedCalendarsChange={setSelectedCalendars}
       />
-      <div className="flex-1 min-h-0 px-5 pb-4">
+      {/* CALENDAR-02 — 窄屏收窄横向 padding 多给 grid 空间 (week/month 7 列)。 */}
+      <div className="flex-1 min-h-0 px-2 sm:px-5 pb-4">
         <div className="h-full glass-2 border border-ink-border/60 rounded-[10px] overflow-hidden flex flex-col">
           <div ref={viewScopeRef} className="flex-1 min-h-0 overflow-hidden">
             {/* F7 — 每个 view 套 CalendarErrorBoundary, 任一 view crash

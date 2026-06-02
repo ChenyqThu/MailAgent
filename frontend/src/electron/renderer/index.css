@@ -2378,6 +2378,15 @@ body:not([data-batch-mode='true']) .email-row .cb {
   flex-direction: column;
 }
 
+/* CALENDAR-02 — <md 折叠 day view 的 mini-month rail (250px 在窄屏挤掉
+   day-main 时间轴)；日期切换转由 CalendarToolbar 的 prev/next/today 承担。
+   week/month grid 自适应收缩, event drawer 已 max-width:92vw 兜底。 */
+@media (max-width: 767px) {
+  .day-rail {
+    display: none;
+  }
+}
+
 .mm-head {
   display: flex;
   align-items: center;
