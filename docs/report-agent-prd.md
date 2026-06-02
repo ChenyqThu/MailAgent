@@ -13,7 +13,7 @@
 |---|---|
 | 报告渲染对接 | **LLM 输出结构化 JSON 块模型 → 前端 React 原生渲染**（非 LLM 直出 HTML，非纯 Markdown） |
 | Custom Agent 首版范围 | **报告型模板优先**（日/周/月报），配置 schema 预留全自定义 |
-| KOS 在对话中的用法 | **提供 tools 给 LLM，按邮件上下文按需检索**（不做主动注入） |
+| KOS 在对话中的用法 | **MCP 工具桥：把 KOS 原生工具（curated read-only）+ skill 给 LLM 自驱**（不做主动注入、不硬塞） |
 | 报告触达面 | **v1 仅应用内 Agents 页查看**（不推送 / 不远程 web / 不回写 Notion） |
 
 ---
@@ -45,24 +45,29 @@
 
 ---
 
-## 3. 请求 #1：Custom AI 对话的 KOS 工具
+## 3. 请求 #1：Custom AI 对话的 KOS 工具（MCP 工具桥 + skill）
+
+> **设计哲学**（2026-06-02 用户定调）：不要我们替 LLM 查 / 主动注入；**把 KOS 的原生接口 + skill 给 LLM，让它按邮件上下文自判断该查什么**。更通用、更符合 harness 设计。KOS 本身就是按这个模式设计的。
 
 ### 3.1 现状（实测 2026-06-02）
-- `kos_query` / `kos_digest` chat tool 已存在（[`kos.ts`](../frontend/src/electron/main/chat/tools/builtin/kos.ts)），gated by `MAILAGENT_KOS_CONSUMER_ENABLED`。
-- **关键问题**：这两个 tool 用的是 **default client**（`KOS_OAUTH_CLIENT_*`），实测**够不到 MailAgent 自己 ingest 的邮件 source**（`list_pages(type=email)=0`）。只有 **bulk client**（`MAILAGENT_BULK_CLIENT_*`）能查到 `sources/email/*`（6693 封存量邮件 + 邮件派生 entity）。
-- 两个 client 看到图谱的**不同切片**：default = Notion 同步的全域知识（`companies/` `concepts/` `sources/notion/*`）；bulk = 邮件 source（`sources/email/*` + 派生 entity）。
+- **KOS 是 MCP server**，`tools/list` 实测暴露 **81 个原生工具**，且自带 `list_skills` / `get_skill`：KOS 发布的 "skill" = 教 LLM 如何用这个 brain 的 prose 指令集，`get_skill` 返回 `{body, usable_tools, unavailable_tools, client_guidance}`。**KOS 就是为"skill + 工具给 LLM 自驱"设计的 thin-client 消费模式**。
+- 现有 hand-wrapped `kos_query` / `kos_digest`（PR-2e，[`kos.ts`](../frontend/src/electron/main/chat/tools/builtin/kos.ts)）只暴露 2 个窄工具，且用 **default client 够不到邮件 source**（实测 `list_pages(type=email)=0`；只有 **bulk client** 能查到 `sources/email/*` + 邮件派生 entity）。
 
-### 3.2 设计
-- 保持 **LLM 按需调 tool** 的模式（用户明确不要主动注入）。
-- **修复**：让 chat 的 KOS 检索能到达邮件 source。方案：consumer tool 改用 **bulk client**（或新增一个 `kos_query_email` 专查邮件 source 的 tool）。
-- tool 描述要让 LLM 清楚知道能力："给定当前打开的邮件，可检索**历史邮件**及相关**人物 / 公司 / 项目档案**"。
-- L1 hot block 发件人档案**主动注入**（PR-2f）按用户偏好**默认关**。
+### 3.2 设计：MCP 工具桥（取代 hand-wrapped 2 工具）
+- chat harness 加一个 **MCP 工具桥**：启动时拉 KOS `tools/list` → 按 allowlist 过滤 → 每个工具注册成 `ToolDef`（直接用 KOS 自带 description + inputSchema），handler 代理 `KOSClient.call_tool(name, args)`。LLM 直接调原生工具、自判断查什么。
+- **read-only allowlist**（实测 81 工具**无 annotations**，无法靠 `readOnlyHint` 自动过滤 → 按名手工分类）：
+  `query` / `search` / `get_page` / `list_pages` / `resolve_slugs` / `get_links` / `get_backlinks` / `traverse_graph` / `get_timeline` / `find_experts` / `find_trajectory` / `recall` / `get_recent_salience`（+ `get_skill` 若开放）。
+- **硬护栏**：write / admin 工具（`put_page` / `delete_page` / `add_link` / `*_job` / `sources_*` / `schema_*` / `forget_fact`…）**不进 allowlist**（守住设计原则"chat 不写 KOS、防图谱污染"）。code_* 代码图谱工具与邮件无关，也不进。
+- **skill 注入**：理想是消费 KOS 自己发布的 skill（`get_skill().body` 注入 system prompt）—— 但实测 **`list_skills` 当前被 brain owner 关闭**（"Skill publishing is disabled"）。两条路：(a) 请 Lucien 开放 skill publishing（design-intended，最通用，KOS 升级新 skill 自动生效）；(b) 我们自己写一段简短 KOS skill block 兜底（描述 KOS 是什么 + 何时该查 + 邮件源语义）。建议 (a) 为主 + (b) 兜底。
+- **通用性**：桥做成 **MCP-generic**（`McpToolBridge`：per-server 配置 + allowlist + 底层 client），KOS 是第一个接入的 server，将来可加别的 MCP server，零额外框架成本。
 
-### 3.3 开放点
-- default vs bulk 是不同图谱切片（实测）。是否需要**并查两源**（邮件历史 + Notion 全域知识）取决于 KOS 的 scope / entity-merge 语义 → 需 Lucien（KOS owner）确认。v1 先以**邮件 source 为主**，必要时并查 default 做 entity 补充（代价是 2 次 query，延迟更高；一个中文 query 实测 10s 超时，需带超时降级）。
+### 3.3 源可见性（实测关键点 + 新线索）
+- default client query 够不到 `sources/email/*`；bulk client 能（实测）。两 client 看图谱不同切片。
+- **新线索**：`query` 工具带 `source_id` 参数，且有 `sources_list` 工具 → 也许**单 client 用 `source_id` 就能 scope 到邮件源**，省去双 client。但 default client 之前完全查不到邮件源，说明**跨 OAuth-token 的源可见性**仍是 gating 项。
+- → **需 Lucien 确认**：哪个 client 能看哪些 source、能否一个 client 同时看邮件源 + Notion 全域知识。v1 桥底层用能看到邮件源的凭据（bulk，或 Lucien 给一个能看全的 client）。
 
 ### 3.4 验收
-开 Custom AI，针对一封邮件问"这个供应商以前的合同条款是什么" → LLM 调 `kos_query` → 返回相关 `sources/email/*` + entity → 回答带来源。KOS 不可达时优雅降级到本地 FTS5（`email_search_fulltext`）。
+开 Custom AI 对一封邮件问"这个供应商以前的合同条款是什么" → LLM **自选** KOS 工具（如 `query` / `find_trajectory`）检索 → 返回相关 `sources/email/*` + entity → 回答带来源。KOS 不可达时 LLM 自然降级到本地 FTS5（`email_search_fulltext`）。
 
 ---
 
@@ -247,7 +252,7 @@ CREATE INDEX idx_report_agent_date ON report(agent_id, report_date DESC);
 | P0 | schema 迁移（`report_agent` + `report` 表，bump DB_VERSION）+ config flags |
 | P1 | 数据层（fetch by cadence + 候选 + counts）+ ReportDoc 块模型 + 后端组装器（代码回填） |
 | P2 | LLM 生成器（tool_use schema + 默认日报 prompt）+ `report_worker.tick_loop` 挂 service.py |
-| P3 | KOS chat 工具接 bulk client（请求 #1）+ tool 描述 + flag |
+| P3 | KOS MCP 工具桥（请求 #1）：`McpToolBridge` 拉 tools/list → read-only allowlist → 注册 ToolDef 代理 KOSClient + KOS skill 注入 + 底层用能看邮件源的 client（取代 hand-wrapped kos_query/kos_digest） |
 | P4 | 前端 /agents 路由页 + BlockRenderer + 配置面板（**待 claude design 后实现**） |
 | P5 | dogfood（跑真日报 + 验收 + CLAUDE.md / 文档更新） |
 
@@ -265,8 +270,9 @@ CREATE INDEX idx_report_agent_date ON report(agent_id, report_date DESC);
 
 ## 7. 开放问题 / 待确认
 
-1. **KOS source 可见性**：bulk vs default 是不同图谱切片（实测）→ chat 是否并查两源？需 Lucien 确认 KOS scope / entity-merge 语义。
-2. **默认日报 prompt**：需用户把 Notion 页 `2e015375830d80cb...` 共享给 MailAgent integration，或贴文本，导入为默认 prompt。
-3. **app deeplink 打开邮件**：确认前端打开某封邮件的路由 / 机制（复用 inbox 选中状态？）。
-4. **Run now 触发机制**：CLI 直跑 vs worker 拾取 —— 实现期定（推荐 CLI）。
-5. **报告与灵动岛 DailyDigest 的关系**：二者共用数据层，输出不同（富报告 vs 通知）。是否将来统一 / 灵动岛通知带"日报已生成"deeplink —— v1 先并存。
+1. **KOS source 可见性 + 凭据**（需 Lucien）：实测 default client 查不到 `sources/email/*`，bulk 能。`query` 带 `source_id` 参数 + 有 `sources_list` 工具 → 也许单 client 用 `source_id` 即可 scope。确认：哪个 OAuth client 能看哪些 source、能否一个 client 同时看邮件源 + Notion 全域知识。
+2. **KOS skill publishing**（需 Lucien）：实测 `list_skills` 被 brain owner 关闭。请开放（消费 KOS 自发布 skill 是最通用路径，新 skill 自动生效）；否则我们自写 KOS skill block 兜底。
+3. **默认日报 prompt**（需用户）：把 Notion 页 `2e015375830d80cb...` 共享给 MailAgent integration，或贴文本，导入为默认 prompt。
+4. **app deeplink 打开邮件**：确认前端打开某封邮件的路由 / 机制（复用 inbox 选中状态？）。
+5. **Run now 触发机制**：CLI 直跑 vs worker 拾取 —— 实现期定（推荐 CLI）。
+6. **报告与灵动岛 DailyDigest 的关系**：二者共用数据层，输出不同（富报告 vs 通知）。是否将来统一 / 灵动岛通知带"日报已生成"deeplink —— v1 先并存。
