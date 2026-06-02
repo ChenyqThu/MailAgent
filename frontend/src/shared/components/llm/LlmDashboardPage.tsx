@@ -103,7 +103,7 @@ function StatusDonut({ counts }: { counts: Record<string, number> }): React.Reac
           cy="70"
           r={radius}
           fill="none"
-          stroke="rgb(var(--c-ink-3))"
+          stroke="rgb(var(--ink-3))"
           strokeWidth={stroke}
         />
         {total > 0 &&
@@ -119,7 +119,7 @@ function StatusDonut({ counts }: { counts: Record<string, number> }): React.Reac
                 cy="70"
                 r={radius}
                 fill="none"
-                stroke={STATUS_COLOR[k] ?? 'rgb(var(--c-ink-fg-3))'}
+                stroke={STATUS_COLOR[k] ?? 'rgb(var(--ink-fg-3))'}
                 strokeWidth={stroke}
                 strokeDasharray={`${dashLen} ${circumference - dashLen}`}
                 strokeDashoffset={dashOffset}
@@ -153,7 +153,7 @@ function StatusDonut({ counts }: { counts: Record<string, number> }): React.Reac
             <span className="flex items-center gap-2">
               <span
                 className="w-2 h-2 rounded-sm"
-                style={{ background: STATUS_COLOR[k] ?? 'rgb(var(--c-ink-fg-3))' }}
+                style={{ background: STATUS_COLOR[k] ?? 'rgb(var(--ink-fg-3))' }}
               />
               <span className="text-ink-fg-1">{k}</span>
             </span>
