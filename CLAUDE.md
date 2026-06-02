@@ -21,6 +21,7 @@
 | 架构内核（v3 流程 / 重试 / Processing Status / webhook / 线程 / Sprint15 outbox / Sprint16 dual-backend） | 改正/反向 sync、webhook、状态机前 | [`docs/claude/architecture-internals.md`](./docs/claude/architecture-internals.md) |
 | LLM Agent（本地 LLM 分类，fallback / cache / 监控 / payload） | 改邮件分类、prompt、cache 前 | [`docs/claude/llm-agent.md`](./docs/claude/llm-agent.md) + [`docs/LLM_AGENT_SETUP.md`](./docs/LLM_AGENT_SETUP.md) |
 | 项目周报同步（外挂模块，xlsx → Notion） | 动 `src/project_progress/` 前 | [`docs/claude/project-progress-sync.md`](./docs/claude/project-progress-sync.md) |
+| 报告 Agent 系统（日/周/月报，ReportDoc 块模型 + 定时生成 + 前端渲染 + KOS 工具桥） | 动 `src/reports/` / 报告 / Custom AI Agents 区前 | [`docs/report-agent-prd.md`](./docs/report-agent-prd.md) + [前端 handoff](./docs/report-agent-frontend-handoff.md) |
 | Calendar Module（CalDAV → SQLite SSoT） | 动日历同步 / `calendar_event` 表前 | [`docs/claude/calendar-ops.md`](./docs/claude/calendar-ops.md) + [`docs/calendar-module-prd.md`](./docs/calendar-module-prd.md) |
 | v4 SQLite-SSoT（body/附件 SSoT + FTS5 全文搜索） | 动 `EmailRepository` / 双写 / 搜索前 | [`docs/claude/v4-ssot-ops.md`](./docs/claude/v4-ssot-ops.md) + [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md) |
 | AI Agent Harness + KOS（前端 chat 多轮 agent + 跨域知识图） | 动前端 chat / KOS 集成前 | [`docs/claude/agent-harness-kos.md`](./docs/claude/agent-harness-kos.md) + [`docs/kos-integration-design.md`](./docs/kos-integration-design.md) |
@@ -69,6 +70,7 @@
 | `PROJECT_PROGRESS_SYNC_ENABLED` | `false` | 项目周报 CLI + 钩子总开关 |
 | `MAILAGENT_AGENT_HARNESS` | `false` | 前端 chat 多轮 agent（M1 已 ship 未 dogfood） |
 | `MAILAGENT_KOS_INGEST_ENABLED` / `_CONSUMER_ENABLED` / `_L1_HOT_BLOCK_ENABLED` | `false` | KOS 集成三层，全默认 OFF |
+| `MAILAGENT_REPORT_AGENT_ENABLED` | `false` | 报告 Agent worker（日/周/月报，`src/reports`）；per-agent 还需 `report_agent.enabled`（种子 daily 默认关） |
 | `FEISHU_NOTIFY_ENABLED` / `REDIS_EVENTS_ENABLED` / `ALERT_ENABLED` | `false` | 通知 / 事件消费 / 告警 |
 
 完整配置（必填 + 全部可调项）见 [`.env.example`](./.env.example)（380 行）。必填 5 项：`NOTION_TOKEN` / `EMAIL_DATABASE_ID` / `CALENDAR_DATABASE_ID` / `USER_EMAIL` / `MAIL_ACCOUNT_NAME`。
@@ -153,6 +155,7 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 | `src/converter/` | `html_converter.py`(HTML→Notion blocks+内联图) · `eml_generator.py` · `office_converter.py` · `attachment_text.py`(附件文本化) · `html_to_markdown.py` |
 | `src/repository/` | v4 `EmailRepository` / `AttachmentStore` / FTS5 搜索 |
 | `src/llm_agent/` / `src/project_progress/` / `src/kos/` | 见对应下沉文档 |
+| `src/reports/` | 报告 Agent 系统（日/周/月报）：`models`(ReportDoc 块模型) / `data`(取数+分组) / `summarizer`(LLM tool_use) / `assembler`(防幻觉权威回填) / `worker`(tick_loop 定时) / `store`(report_agent+report 表)。见 [`docs/report-agent-prd.md`](./docs/report-agent-prd.md) |
 | `src/stats_reporter.py` | 定期上报运行统计到远程看板 |
 | `webhook-server/` | FastAPI（接收 Notion Automation webhook → Redis 路由 + 看板 API，端口 8100）|
 
