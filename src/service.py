@@ -551,6 +551,22 @@ class EmailNotionSyncApp:
                         f"window={config.mailagent_daily_digest_window_hours}h)"
                     )
 
+            # 报告 Agent worker（独立于 island，自己的 gate；日/周/月报定时生成）
+            report_worker_task = None
+            if config.mailagent_report_agent_enabled:
+                from src.reports import worker as report_worker
+                from src.reports.store import ReportStore
+                report_db_path = str(self.watcher.sync_store.db_path)
+                report_worker_task = asyncio.create_task(
+                    report_worker.tick_loop(
+                        sync_store=self.watcher.sync_store,
+                        store=ReportStore(db_path=report_db_path),
+                        db_path=report_db_path,
+                        shutdown_event=self._shutdown_event,
+                    )
+                )
+                logger.info("[report] report agent worker enabled")
+
             # 等待关闭信号
             await self._shutdown_event.wait()
 
@@ -585,6 +601,8 @@ class EmailNotionSyncApp:
                 tasks.append(island_snooze_task)
             if daily_digest_task:
                 tasks.append(daily_digest_task)
+            if report_worker_task:
+                tasks.append(report_worker_task)
             if fanout_task:
                 tasks.append(fanout_task)
             if davmail_watchdog_task:
