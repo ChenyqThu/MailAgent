@@ -348,11 +348,7 @@ export function CalendarToolbar({
                   {head.calendar_name && <>calendar {head.calendar_name}</>}
                 </>
               )}
-              {!head &&
-                t(
-                  'calendar.toolbar.syncTipNoRecord',
-                  '尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s'
-                )}
+              {!head && t('calendar.empty.syncHint')}
             </div>
           </div>
         </div>

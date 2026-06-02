@@ -65,6 +65,16 @@
       "close": "关闭"
     }
   },
+  "emailRow": {
+    "unknownSender": "（未知发件人）",
+    "noSubject": "（无主题）",
+    "toggleFlag": "切换旗标",
+    "togglePin": "切换固定",
+    "important": "重要",
+    "archive": "归档",
+    "syncFailed": "同步失败",
+    "new": "新邮件"
+  },
   "ai": {
     "compose": "起草回复",
     "replySuggestion": {
@@ -427,6 +437,8 @@
     "sync": "同步",
     "syncing": "同步中…",
     "newDraft": "新建草稿",
+    "unnamedAttachment": "（未命名）",
+    "emptyBody": "（正文为空）",
     "toolbar": {
       "moveToInbox": "移回收件箱",
       "deletePermanent": "永久删除",
@@ -780,7 +792,8 @@
       "week": "本周无日程",
       "month": "本月无日程",
       "agenda": "未来 {n} 天无日程",
-      "recurring": "未发现周期会议"
+      "recurring": "未发现周期会议",
+      "syncHint": "日历同步尚未就绪，请稍后重试或联系管理员"
     },
     "emptyHint": "调整时间范围或确认 .ics 邀请已被同步",
     "replay": "重放",
@@ -1091,6 +1104,15 @@
     "choose": "选择…",
     "defaultUsed": "(使用默认)",
     "about": "关于",
+    "envField": {
+      "selectPlaceholder": "请选择",
+      "tagListPlaceholder": "逗号分隔",
+      "secretSet": "已设置(留空保持不变)",
+      "secretUnset": "未设置",
+      "reveal": "显示",
+      "hide": "隐藏",
+      "secretSaved": "已写入 keychain + .env"
+    },
     "tabs": {
       "general": "通用",
       "accounts": "账户",

@@ -8,6 +8,7 @@
 // allow-scripts) + DOMPurify + 页面级 CSP。高度走 body.scrollHeight 测量。
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import DOMPurify from 'dompurify'
 
 import { useAppearance } from '@shared/state/appearance'
@@ -76,6 +77,7 @@ const BODY_CSS = `
 `
 
 export function FolderBodyFrame({ html }: Props): React.ReactElement {
+  const { t } = useTranslation()
   const resolvedTheme = useAppearance((s) => s.resolvedTheme)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(200)
@@ -123,7 +125,7 @@ export function FolderBodyFrame({ html }: Props): React.ReactElement {
   }, [srcDoc])
 
   if (srcDoc === null) {
-    return <div className="text-aux text-ink-fg-2">(empty body)</div>
+    return <div className="text-aux text-ink-fg-2">{t('folder.emptyBody')}</div>
   }
   return (
     <iframe

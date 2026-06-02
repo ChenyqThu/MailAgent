@@ -18,6 +18,7 @@
 // keytar write is itself another keychain prompt; cumulatively worse UX.
 
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -61,6 +62,7 @@ export function EnvSecretField({
   disabled = false,
   className
 }: EnvSecretFieldProps): React.ReactElement {
+  const { t } = useTranslation()
   const storeState = useEnvStore((s) => s.state)
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
   const api = useMailApi()
@@ -85,7 +87,10 @@ export function EnvSecretField({
       const result = await applyEnvPatch({ [envKey]: next })
       if (result.ok) {
         if (result.changedKeys.length > 0) markRestartRequired(result.changedKeys)
-        toastSuccess(labelString(savedToastTitle ?? label, envKey), '已写入 keychain + .env')
+        toastSuccess(
+          labelString(savedToastTitle ?? label, envKey),
+          t('settings.envField.secretSaved')
+        )
       } else {
         toastError(
           labelString(label, envKey),
@@ -118,7 +123,11 @@ export function EnvSecretField({
           value={local}
           onChange={(e) => setLocal(e.target.value)}
           onBlur={(e) => handleBlur(e.target.value)}
-          placeholder={hasStored ? '已设置(留空保持不变)' : (placeholder ?? '未设置')}
+          placeholder={
+            hasStored
+              ? t('settings.envField.secretSet')
+              : (placeholder ?? t('settings.envField.secretUnset'))
+          }
           disabled={disabled || submitting}
           className="pr-9"
           aria-label={typeof label === 'string' ? label : envKey}
@@ -128,7 +137,7 @@ export function EnvSecretField({
           tabIndex={-1}
           onClick={() => setRevealed((v) => !v)}
           disabled={local.length === 0}
-          aria-label={revealed ? '隐藏' : '显示'}
+          aria-label={revealed ? t('settings.envField.hide') : t('settings.envField.reveal')}
           className={cn(
             'absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-7 w-7 items-center justify-center rounded-md',
             'text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg',

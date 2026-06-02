@@ -20,6 +20,7 @@
 // CSS class names are the contract — see index.css Sprint 12 block.
 
 import { memo, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Paperclip } from 'lucide-react'
 
@@ -176,6 +177,7 @@ function EmailRowInner({
   threadChevron,
   onSelect
 }: Props): React.ReactElement {
+  const { t } = useTranslation()
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
   const batchMode = useBatch((s) => s.mode)
@@ -371,7 +373,9 @@ function EmailRowInner({
       <div className="row-content">
         <div className="row-top">
           <span className="sender-line">
-            <span className="sender-name">{senderName || senderEmail || '(unknown sender)'}</span>
+            <span className="sender-name">
+              {senderName || senderEmail || t('emailRow.unknownSender')}
+            </span>
             {senderEmail && senderName && <span className="recipient-hint">, {senderEmail}</span>}
             {email.lang === 'en' && (
               <>
@@ -386,13 +390,13 @@ function EmailRowInner({
         </div>
 
         <div className="subject-row">
-          <span className="subject-text">{email.subject || '(no subject)'}</span>
+          <span className="subject-text">{email.subject || t('emailRow.noSubject')}</span>
           <span className="row-actions">
             <button
               type="button"
               className="ricon ricon-flag"
               data-flag-state={flagState}
-              aria-label="Toggle flag"
+              aria-label={t('emailRow.toggleFlag')}
               onClick={stopAnd(() => void handleFlagClick())}
             >
               {flagSvgEl}
@@ -401,7 +405,7 @@ function EmailRowInner({
               type="button"
               className="ricon ricon-pin"
               aria-pressed={pinned}
-              aria-label="Toggle pin"
+              aria-label={t('emailRow.togglePin')}
               onClick={stopAnd(() => {
                 void togglePin(email.internal_id)
               })}
@@ -417,14 +421,14 @@ function EmailRowInner({
               </span>
             )}
             {important && (
-              <span className="ricon ricon-important" aria-label="Important">
+              <span className="ricon ricon-important" aria-label={t('emailRow.important')}>
                 {importantSvg}
               </span>
             )}
             <button
               type="button"
               className="ricon ricon-delete"
-              aria-label="Archive"
+              aria-label={t('emailRow.archive')}
               onClick={stopAnd(() => void handleDeleteClick())}
             >
               {deleteSvg}
@@ -453,14 +457,14 @@ function EmailRowInner({
             {failed && (
               <>
                 {(email.ai_priority || actionLabel) && <span className="sep">·</span>}
-                <span className="ai-failed ai-bit">SYNC FAILED</span>
+                <span className="ai-failed ai-bit">{t('emailRow.syncFailed')}</span>
               </>
             )}
             {isNew && (
               <>
                 {(email.ai_priority || actionLabel || failed) && <span className="sep">·</span>}
                 <span className="ai-bit" style={{ color: 'rgb(var(--c-accent))' }}>
-                  NEW
+                  {t('emailRow.new')}
                 </span>
               </>
             )}

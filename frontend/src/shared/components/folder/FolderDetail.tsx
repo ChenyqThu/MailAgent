@@ -94,6 +94,7 @@ function EmptyShell({ children }: { children: React.ReactNode }): React.ReactEle
 // 只读附件 tile (Phase D 再接二进制下载). 复用 mockup .tile 视觉但不可点:
 // image → warn 调, pdf/office → fail 调, 其余中性 ink。
 function AttachmentTile({ att }: { att: FolderAttachmentMeta }): React.ReactElement {
+  const { t } = useTranslation()
   const ct = (att.content_type ?? '').toLowerCase()
   const name = (att.filename ?? '').toLowerCase()
   const isImage = ct.startsWith('image/') || /\.(png|jpe?g|gif|webp|heic|svg)$/.test(name)
@@ -107,7 +108,7 @@ function AttachmentTile({ att }: { att: FolderAttachmentMeta }): React.ReactElem
       </div>
       <div className="min-w-0 flex-1">
         <div className="text-aux text-ink-fg font-medium truncate">
-          {att.filename || '(unnamed)'}
+          {att.filename || t('folder.unnamedAttachment')}
         </div>
         <div className="text-meta font-mono text-ink-fg-2 tabular-nums">
           {att.size > 0 ? formatFileSize(att.size) : '—'}

@@ -114,7 +114,7 @@ export function AgendaView({
         <EmptyState
           icon={<CalendarIcon size={20} strokeWidth={1.75} className="text-ink-fg-3" />}
           title={t('calendar.empty.agenda', '未来 {n} 天无日程', { n: rangeDays })}
-          hint="CalDAV worker 可能尚未启用 — 检查 CALENDAR_CALDAV_SYNC_ENABLED"
+          hint={t('calendar.empty.syncHint')}
         />
       </div>
     )

@@ -65,6 +65,16 @@
       "close": "Close"
     }
   },
+  "emailRow": {
+    "unknownSender": "(unknown sender)",
+    "noSubject": "(no subject)",
+    "toggleFlag": "Toggle flag",
+    "togglePin": "Toggle pin",
+    "important": "Important",
+    "archive": "Archive",
+    "syncFailed": "SYNC FAILED",
+    "new": "NEW"
+  },
   "ai": {
     "compose": "Draft reply",
     "replySuggestion": {
@@ -427,6 +437,8 @@
     "sync": "Sync",
     "syncing": "Syncing…",
     "newDraft": "New draft",
+    "unnamedAttachment": "(unnamed)",
+    "emptyBody": "(empty body)",
     "toolbar": {
       "moveToInbox": "Move to Inbox",
       "deletePermanent": "Delete permanently",
@@ -777,7 +789,8 @@
       "week": "No events this week",
       "month": "No events this month",
       "agenda": "No events in the next {n} days",
-      "recurring": "No recurring meetings found"
+      "recurring": "No recurring meetings found",
+      "syncHint": "Calendar sync isn't ready yet — try again later or contact your admin"
     },
     "emptyHint": "Widen the time range, or confirm .ics invites synced.",
     "syncTriggered": "Calendar sync triggered",
@@ -1088,6 +1101,15 @@
     "choose": "Choose…",
     "defaultUsed": "(default)",
     "about": "About",
+    "envField": {
+      "selectPlaceholder": "Select…",
+      "tagListPlaceholder": "Comma-separated",
+      "secretSet": "Set (leave blank to keep)",
+      "secretUnset": "Not set",
+      "reveal": "Show",
+      "hide": "Hide",
+      "secretSaved": "Written to keychain + .env"
+    },
     "tabs": {
       "general": "General",
       "accounts": "Accounts",

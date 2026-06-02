@@ -15,6 +15,7 @@
 // keytar + .env so both Python and the main process see the same key.
 
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 
 import type { EnvSetResult } from '@shared/api/types'
@@ -102,6 +103,7 @@ export function EnvField({
   hidden = false,
   className
 }: EnvFieldProps): React.ReactElement | null {
+  const { t } = useTranslation()
   const storeState = useEnvStore((s) => s.state)
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
 
@@ -190,7 +192,7 @@ export function EnvField({
 
   // sharedInputProps is reused across text/number/date/tag-list cases.
   // `placeholder` is deliberately NOT included — each case threads its own
-  // placeholder so the per-case default text ("逗号分隔" for tag-list etc.)
+  // placeholder so the per-case i18n default (tag-list comma-separated hint etc.)
   // can win over the caller-supplied prop without dropping it on tag-list.
   const sharedInputProps = {
     disabled: disabled || submitting,
@@ -221,7 +223,9 @@ export function EnvField({
               disabled={disabled || submitting}
             >
               <SelectTrigger>
-                <SelectValue placeholder={placeholder ?? '请选择'} />
+                <SelectValue
+                  placeholder={placeholder ?? t('settings.envField.selectPlaceholder')}
+                />
               </SelectTrigger>
               <SelectContent>
                 {(options ?? []).map((o) => (
@@ -275,7 +279,7 @@ export function EnvField({
             onChange={(e) => setLocalValue(e.target.value)}
             onBlur={(e) => handleTagListBlur(e.target.value)}
             {...sharedInputProps}
-            placeholder={placeholder ?? '逗号分隔'}
+            placeholder={placeholder ?? t('settings.envField.tagListPlaceholder')}
           />
         </Row>
       )
@@ -290,7 +294,11 @@ export function EnvField({
               value={local}
               onChange={(e) => setLocalValue(e.target.value)}
               onBlur={(e) => handleTextBlur(e.target.value)}
-              placeholder={hasStored ? '已设置(留空保持不变)' : (placeholder ?? '未设置')}
+              placeholder={
+                hasStored
+                  ? t('settings.envField.secretSet')
+                  : (placeholder ?? t('settings.envField.secretUnset'))
+              }
               disabled={disabled || submitting}
               className="pr-9"
               aria-label={typeof label === 'string' ? label : envKey}
@@ -300,7 +308,7 @@ export function EnvField({
               tabIndex={-1}
               onClick={() => setRevealed((v) => !v)}
               disabled={local.length === 0}
-              aria-label={revealed ? '隐藏' : '显示'}
+              aria-label={revealed ? t('settings.envField.hide') : t('settings.envField.reveal')}
               className={cn(
                 'absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-7 w-7 items-center justify-center rounded-md',
                 'text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg',
