@@ -66,6 +66,17 @@ REPORT_TOOL_SCHEMA: Dict[str, Any] = {
                         "title": {"type": "string", "maxLength": 30},
                         "icon": {"type": "string", "enum": _ALLOWED_ICONS},
                         "intro": {"type": "string", "maxLength": 120},
+                        "summary": {
+                            "type": "string",
+                            "maxLength": 400,
+                            "description": (
+                                "本组整体汇总概要（1-2 句）：先讲这组整体在说什么、"
+                                "要你做什么，再用 [锚文本](#email-<internal_id>) 的形式点名"
+                                "其中最关键的 1-3 封邮件。只引用本组 email_refs 里真实存在的"
+                                " internal_id；其余邮件在下方列表展开，不要在 summary 里逐封"
+                                "复述。仅支持 **加粗** 与 [文本](#email-<id>) 两种标记。"
+                            ),
+                        },
                         "email_refs": {
                             "type": "array",
                             "items": {"type": "integer"},
@@ -239,6 +250,7 @@ def _parse(result: LLMResult) -> ReportDraft:
                     "title": (s.get("title") or "").strip(),
                     "icon": s.get("icon"),
                     "intro": (s.get("intro") or "").strip(),
+                    "summary": (s.get("summary") or "").strip(),
                     "email_refs": refs,
                 }
             )

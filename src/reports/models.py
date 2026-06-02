@@ -58,12 +58,22 @@ def stat_row(stats: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"type": "stat_row", "stats": stats}
 
 
-def section(id: str, title: str, icon: Optional[str] = None, intro: Optional[str] = None) -> Dict[str, Any]:
+def section(
+    id: str,
+    title: str,
+    icon: Optional[str] = None,
+    intro: Optional[str] = None,
+    summary: Optional[str] = None,
+) -> Dict[str, Any]:
     b: Dict[str, Any] = {"type": "section", "id": id, "title": title}
     if icon:
         b["icon"] = icon
     if intro:
         b["intro"] = intro
+    # summary: 本组整体汇总（可含 [锚文本](#email-<internal_id>) 跳转 + **bold**）。
+    # 前端解析 → 下划线跳转链接 / 加粗；缺省则该 section 行为不变（向后兼容）。
+    if summary:
+        b["summary"] = summary
     return b
 
 

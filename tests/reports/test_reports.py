@@ -94,6 +94,12 @@ class TestModels:
         assert b["source"]["app_deeplink"] == "mailagent://email/7"
         assert b["source"]["notion_url"] is None
 
+    def test_section_summary_optional(self):
+        # 无 summary → 省略（向后兼容）；有 summary → 带上。
+        assert "summary" not in m.section("a", "T")
+        s = m.section("a", "T", summary="本组 [x](#email-1) 待办。")
+        assert s["summary"] == "本组 [x](#email-1) 待办。"
+
     def test_reportdoc_to_dict_and_headline(self):
         doc = m.ReportDoc(
             agent_id="a", cadence="daily", report_date="2026-06-02",
@@ -216,6 +222,26 @@ class TestAssembler:
         assert any(b["type"] == "callout" for b in d["blocks"])
         assert any(b["type"] == "key_points" for b in d["blocks"])
 
+    def test_assemble_summary_sanitizes_hallucinated_links(self):
+        # summary 里真实 #email-1 保留跳转，幻觉 #email-999 降级为纯锚文本。
+        draft = ReportDraft(
+            headline="h", overview="ov",
+            sections=[{
+                "id": "attention", "title": "关注", "icon": "alert", "intro": "i",
+                "summary": "见 [真实邮件](#email-1) 和 [假邮件](#email-999)，注意**截止**。",
+                "email_refs": [1],
+            }],
+            model="mk",
+        )
+        doc = assemble_report_doc(draft=draft, briefs=self._briefs(), counts={"total": 2},
+                                  agent_id="a", cadence="daily", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g", model="mk", now=_NOW)
+        sec = next(b for b in doc.blocks if b["type"] == "section")
+        assert "[真实邮件](#email-1)" in sec["summary"]   # 命中真实 → 保留跳转
+        assert "[假邮件](#email-999)" not in sec["summary"]  # 幻觉 → 去链接
+        assert "假邮件" in sec["summary"]                  # 锚文本保留
+        assert "**截止**" in sec["summary"]                # 其他标记不动
+
     def test_assemble_skips_empty_section(self):
         draft = ReportDraft(headline="h", overview="",
                             sections=[{"id": "x", "title": "空", "email_refs": [999], "intro": ""}])
@@ -243,13 +269,15 @@ class TestSummarizer:
         props = REPORT_TOOL_SCHEMA["input_schema"]["properties"]
         assert set(REPORT_TOOL_SCHEMA["input_schema"]["required"]) == {"headline", "overview", "sections"}
         assert "counts" not in props and "stat_row" not in props  # counts 不交给 LLM
-        assert props["sections"]["items"]["properties"]["email_refs"]["items"]["type"] == "integer"
+        sec_props = props["sections"]["items"]["properties"]
+        assert sec_props["email_refs"]["items"]["type"] == "integer"
+        assert "summary" in sec_props  # 设计稿新增：分组汇总（含跳转链接）
 
     def test_parse_filters(self):
         res = LLMResult(
             tool_input={
                 "headline": "h", "overview": "ov",
-                "sections": [{"id": "a", "title": "T", "email_refs": [1, "bad", 2]}],
+                "sections": [{"id": "a", "title": "T", "summary": "组 [x](#email-1)", "email_refs": [1, "bad", 2]}],
                 "key_points": ["k1", "  ", ""],
                 "highlights": [{"tone": "warn", "body": "B"}, {"body": ""}],
             },
@@ -258,6 +286,7 @@ class TestSummarizer:
         )
         draft = _parse(res)
         assert draft.sections[0]["email_refs"] == [1, 2]  # 非 int 过滤
+        assert draft.sections[0]["summary"] == "组 [x](#email-1)"  # summary 透传
         assert draft.key_points == ["k1"]                  # 空白过滤
         assert len(draft.highlights) == 1                  # 空 body 丢弃
         assert draft.model == "mk" and draft.input_tokens == 10

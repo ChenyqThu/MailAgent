@@ -8,12 +8,16 @@ email_refs 必须命中真实 brief，否则丢弃。LLM 出错爆炸半径限�
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from src.reports import models as m
 from src.reports.data import ReportEmailBrief, group_for_report
 from src.reports.summarizer import ReportDraft
+
+# section.summary 内的跳转标记：[锚文本](#email-<internal_id>)。
+_SUMMARY_LINK_RE = re.compile(r"\[([^\]]+)\]\(#email-(\d+)\)")
 
 _WEEKDAY_CN = "一二三四五六日"
 
@@ -51,6 +55,25 @@ def _stat_row(counts: Dict[str, Any]) -> Dict[str, Any]:
     return m.stat_row(
         [m.stat(key, label, int(counts.get(key, 0)), tone) for key, label, tone in _STAT_SPEC]
     )
+
+
+def _sanitize_summary(summary: str, valid_ids: Set[int]) -> str:
+    """防幻觉：把 summary 里指向不存在邮件的 [锚文本](#email-<id>) 降级为纯锚文本。
+
+    valid_ids = 本报告候选集（真实 brief 的 internal_id）。命中 → 保留跳转；
+    未命中（LLM 编造的 id）→ 去掉 [..](#email-..) 包裹只留锚文本（§3.3）。
+    **bold** 等其他标记原样保留（前端 renderSummary 解析）。
+    """
+
+    def _repl(match: "re.Match[str]") -> str:
+        anchor, sid = match.group(1), match.group(2)
+        try:
+            iid = int(sid)
+        except ValueError:
+            return anchor
+        return match.group(0) if iid in valid_ids else anchor
+
+    return _SUMMARY_LINK_RE.sub(_repl, summary)
 
 
 def _email_item(b: ReportEmailBrief) -> Dict[str, Any]:
@@ -93,6 +116,7 @@ def assemble_report_doc(
         blocks.append(m.overview(draft.overview.strip()))
     blocks.append(_stat_row(counts))
 
+    valid_ids = set(brief_map.keys())
     used: set = set()
     for sec in draft.sections:
         ids: List[int] = []
@@ -101,8 +125,11 @@ def assemble_report_doc(
                 ids.append(iid)
                 used.add(iid)
         intro = (sec.get("intro") or "").strip() or None
-        # 空 section（无有效邮件且无 intro）跳过。
-        if not ids and not intro:
+        summary = (sec.get("summary") or "").strip()
+        # summary 里的跳转链接对齐到真实候选集；幻觉 id 降级为纯文本。
+        summary = (_sanitize_summary(summary, valid_ids) or None) if summary else None
+        # 空 section（无有效邮件且无 intro/summary）跳过。
+        if not ids and not intro and not summary:
             continue
         icon = sec.get("icon")
         if icon not in _ALLOWED_ICONS:
@@ -113,6 +140,7 @@ def assemble_report_doc(
                 (sec.get("title") or "").strip() or "邮件",
                 icon,
                 intro,
+                summary,
             )
         )
         for iid in ids:
