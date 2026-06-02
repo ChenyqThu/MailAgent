@@ -220,7 +220,7 @@ class SyncStore:
     #                imap_uid); folder 两态 (archive / drafts). 草稿编辑 = 删旧 APPEND 新 →
     #                imap_uid 变但本地 id 不变. FolderSyncWorker (davmail-only) 增量同步,
     #                前端 /archive /drafts 直读. 详见 plan mailagent-davmail-zesty-eclipse.md.
-    DB_VERSION = 17
+    DB_VERSION = 18  # v18: report_agent + report（报告 Agent 系统）
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1082,6 +1082,65 @@ class SyncStore:
                 CHECK (folder IN ('archive', 'drafts'))
             )
         """)
+
+        # v18: 报告 Agent 系统 —— agent 配置表 + 报告产物表。
+        # Python 后端 report_worker 写, Electron main (better-sqlite3) 直读展示。
+        # report_agent: 可扩展向全自定义 agent（v1 固定 type=report）。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS report_agent (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL DEFAULT 'report',
+                enabled INTEGER NOT NULL DEFAULT 0,
+                title TEXT,
+                schedule_json TEXT,            -- {"cadence":"daily","hours":[9],"weekday":0,"day_of_month":1}
+                window_hours INTEGER,
+                prompt TEXT,                   -- NULL = 用内置默认 prompt
+                model TEXT,                    -- NULL = 用 config.llm_model 默认
+                tools_json TEXT,               -- 预留: agent 可用 tool 白名单
+                kos_enrich INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL
+            )
+        """)
+        # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS report (
+                id TEXT PRIMARY KEY,           -- "{agent_id}:{cadence}:{report_date}"
+                agent_id TEXT NOT NULL,
+                cadence TEXT,
+                report_date TEXT,              -- slot 日期 "YYYY-MM-DD"
+                window_start TEXT,
+                window_end TEXT,
+                status TEXT NOT NULL DEFAULT 'generating',  -- generating|ready|failed|skipped|empty
+                blocks_json TEXT,              -- ReportDoc SSoT (前端直接渲染)
+                counts_json TEXT,
+                headline TEXT,                 -- 冗余: 列表展示用 (从 blocks 抽)
+                model TEXT,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                cost_usd REAL DEFAULT 0,
+                error TEXT,
+                created_at REAL,
+                generated_at REAL
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_agent_date ON report(agent_id, report_date DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_created ON report(created_at DESC)"
+        )
+        # 种子: 默认邮件日报 agent (enabled=0, prompt=NULL→用内置默认)。幂等。
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO report_agent
+                (id, type, enabled, title, schedule_json, window_hours,
+                 prompt, model, tools_json, kos_enrich, updated_at)
+            VALUES ('daily_email_digest', 'report', 0, '邮件日报',
+                    '{"cadence": "daily", "hours": [9]}', 24,
+                    NULL, NULL, NULL, 0, ?)
+            """,
+            (time.time(),),
+        )
 
         # 更新数据库版本
         cursor.execute("""
