@@ -9,11 +9,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { mockDraftPlan, mockDraft, mockSend, mockSettingsGet } = vi.hoisted(() => ({
+const { mockDraftPlan, mockDraft, mockSend, mockSettingsGet, mockEmailGet } = vi.hoisted(() => ({
   mockDraftPlan: vi.fn(),
   mockDraft: vi.fn(),
   mockSend: vi.fn(),
-  mockSettingsGet: vi.fn()
+  mockSettingsGet: vi.fn(),
+  mockEmailGet: vi.fn()
 }))
 
 vi.mock('@shared/hooks/useMailApi', () => ({
@@ -21,10 +22,18 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     email: {
       draftPlan: mockDraftPlan,
       draft: mockDraft,
-      send: mockSend
+      send: mockSend,
+      // 引用块默认展开 → detailQ 拉 email.get 取 attachments (供 EmailBodyFrame 内联图)。
+      get: mockEmailGet
     },
     settings: { get: mockSettingsGet }
   })
+}))
+
+// 引用块用 EmailBodyFrame (sandbox iframe + 自身 IPC) 渲染原文 —— compose 单测不测它
+// (XSS/渲染由 dompurify_xss.test 覆盖), stub 成空避免真挂载触发 IPC。
+vi.mock('../../src/shared/components/email/EmailBodyFrame', () => ({
+  EmailBodyFrame: () => null
 }))
 
 import i18n from '@shared/i18n'
@@ -61,6 +70,7 @@ beforeEach(() => {
   mockDraft.mockResolvedValue({ success: true })
   mockSend.mockResolvedValue({ sent: true })
   mockSettingsGet.mockResolvedValue({ userEmail: 'me@acme.com' })
+  mockEmailGet.mockResolvedValue({ internal_id: 42, attachments: [] })
   // Reset the singleton store between tests.
   useComposeStore.setState({ open: false, internalId: null, mode: 'reply' })
 })

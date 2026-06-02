@@ -74,9 +74,11 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
   const [discardOpen, setDiscardOpen] = useState(false)
   const [planAttachments, setPlanAttachments] = useState(0)
   // 原文引用块 —— 与编辑器分离: 不灌进 TipTap (整条线程 HTML 几十~几百 KB 会卡 + 被
-  // ProseMirror 重排), 折叠展示 (默认收起 = 秒开), 发送/存草稿时拼回正文。
+  // ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认展开
+  // (与标准邮件回复一致, 让用户确认将带出去的引用)。渲染走 iframe 不走 TipTap, 故展开
+  // 也不影响打开速度。
   const [quoteHtml, setQuoteHtml] = useState('')
-  const [quoteOpen, setQuoteOpen] = useState(false)
+  const [quoteOpen, setQuoteOpen] = useState(true)
 
   const markDirty = useCallback(() => setDirty(true), [])
 
@@ -396,27 +398,30 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
       {/* format toolbar */}
       {editor && <ComposeFormatToolbar editor={editor} />}
 
-      {/* 原文引用块 — 折叠 (默认收起 = compose 秒开)。展开渲染原邮件正文 (与阅读区同一
-          安全 iframe, 格式零重排); 发送时拼回正文。不进 TipTap 是大邮件加载慢 + 引用
-          换行错乱的根因修复。 */}
+      {/* 原文引用块 — 与编辑器分离, 阅读区同款安全 iframe 渲染 (格式零重排), 发送时拼回。
+          toggle 条复用格式工具栏同款 (border-t + bg-ink-2/40 + px-3 py-2); 展开内容套既有
+          inset 卡片 (border-ink-border-soft rounded-md bg-ink-2/40, 同 ThreadSidebar) +
+          内边距, 文本不再贴边。 */}
       {quoteHtml && (
-        <div className="border-t border-ink-border/60 shrink-0 min-h-0 flex flex-col">
+        <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0 min-h-0 flex flex-col">
           <button
             type="button"
             onClick={() => setQuoteOpen((v) => !v)}
             aria-expanded={quoteOpen}
-            className="shrink-0 w-full flex items-center gap-1.5 px-4 py-2 text-meta text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3/40 transition-colors duration-fast"
+            className="shrink-0 flex items-center gap-1.5 px-3 py-2 text-meta font-mono uppercase tracking-wider text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
           >
             <ChevronRight
-              size={13}
+              size={12}
               strokeWidth={2}
               className={`transition-transform duration-fast ${quoteOpen ? 'rotate-90' : ''}`}
             />
             {t(mode === 'forward' ? 'compose.quote.forward' : 'compose.quote.reply')}
           </button>
           {quoteOpen && (
-            <div className="min-h-0 max-h-[38vh] overflow-y-auto border-t border-ink-border/40 bg-ink-1/30">
-              <EmailBodyFrame internalId={internalId} attachments={quoteAttachments} />
+            <div className="min-h-0 max-h-[36vh] overflow-y-auto px-3 pb-3">
+              <div className="border border-ink-border-soft rounded-md bg-ink-2/40 px-4 py-3.5">
+                <EmailBodyFrame internalId={internalId} attachments={quoteAttachments} />
+              </div>
             </div>
           )}
         </div>
