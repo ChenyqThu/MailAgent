@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
 
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
@@ -24,6 +24,7 @@ import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
 import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
+import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useActiveEmail, pickNext, pickPrev } from '@shared/state/active-email'
 
@@ -132,11 +133,28 @@ function TranslationErrorBanner({
 }
 
 function EmptyShell({ children }: { children: React.ReactNode }): React.ReactElement {
+  // <lg 详情覆盖列表时，loading / error 等空态分支没有 EmailToolbar 的返回
+  // 按钮，这里自带一个返回入口防止窄屏卡死（仅选中态显示；未选中态整列已被
+  // InboxLayout 隐藏）。≥lg 三栏并排无需返回，lg:hidden 收起 → 桌面零回归。
+  const { t } = useTranslation()
+  const belowLg = useIsBelowLg()
+  const activeId = useActiveEmail((s) => s.activeInternalId)
+  const setActive = useActiveEmail((s) => s.setActive)
   return (
     <main
       aria-label="inbox-main"
-      className="flex-1 min-w-0 bg-ink-3 flex items-center justify-center"
+      className="relative flex-1 min-w-0 bg-ink-3 flex items-center justify-center"
     >
+      {belowLg && activeId !== null && (
+        <button
+          type="button"
+          onClick={() => setActive(null)}
+          aria-label={t('toolbar.backToList', { defaultValue: '返回列表' })}
+          className="lg:hidden absolute top-2 left-2 inline-flex items-center justify-center w-8 h-8 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+        >
+          <ArrowLeft size={16} strokeWidth={2} />
+        </button>
+      )}
       {children}
     </main>
   )
@@ -648,6 +666,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         </div>
       )}
       <EmailToolbar
+        onBack={() => setActive(null)}
         translate={{
           langIsEn,
           status: translateStatus,

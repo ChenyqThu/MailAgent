@@ -87,7 +87,8 @@ export function FolderList({
   return (
     <section
       aria-label={isDrafts ? 'drafts-list' : 'archive-list'}
-      className="w-[340px] shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
+      // FOLDER-03 响应式：<lg 列表占满（详情 absolute 覆盖）；≥lg 恢复 340 固定列。
+      className="w-full lg:w-[340px] lg:shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
     >
       {/* Header — title + count + sync; drafts 多一个满宽「新建草稿」 */}
       <div className="px-4 pt-3.5 pb-3 border-b border-ink-border-soft shrink-0">

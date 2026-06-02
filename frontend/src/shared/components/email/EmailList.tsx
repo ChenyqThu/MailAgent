@@ -1151,7 +1151,9 @@ export function EmailList(): React.ReactElement {
   return (
     <section
       aria-label="email-list"
-      className="w-[340px] shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
+      // EMAIL-02 响应式：<lg 列表占满 master-detail 容器（详情走 absolute 覆盖）；
+      // ≥lg 恢复 340 固定列 + shrink-0（桌面三栏零回归）。
+      className="w-full lg:w-[340px] lg:shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
     >
       {/* Header — Focused/Other tabs · batch + filter cluster · meta line */}
       <div className="relative px-3 pt-3 pb-2.5 border-b border-ink-border-soft">

@@ -27,6 +27,7 @@ import { useTranslation } from 'react-i18next'
 import {
   AlertCircle,
   Archive,
+  ArrowLeft,
   CheckCheck,
   ChevronDown,
   ChevronUp,
@@ -103,6 +104,10 @@ interface ToolbarProps {
 
   onPrev?: () => void
   onNext?: () => void
+
+  /** <lg 详情覆盖列表时的"返回列表"入口（清 activeId）。仅窄屏 EmailDetail
+   *  传入；按钮自身 lg:hidden，≥lg 不渲染 → 桌面零回归。 */
+  onBack?: () => void
 }
 
 // ─── Density observer ───────────────────────────────────────────────────
@@ -639,7 +644,8 @@ export function EmailToolbar({
   isImportant,
   notionUrl,
   onPrev,
-  onNext
+  onNext,
+  onBack
 }: ToolbarProps = {}): React.ReactElement {
   const { t } = useTranslation()
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -682,8 +688,24 @@ export function EmailToolbar({
       // 时画在 sticky 标题 (z-10) 之上、compose overlay (z-20) 之下.
       // pl-8 (= 正文 px-8 的 32px) 让首个按钮 (回复 CTA) 左边缘与下方标题/正文左起点
       // 对齐; 右侧 pr-3 不变 (右端 nav/AI 按钮维持原边距)。
-      className="relative z-[15] h-11 border-b border-ink-border-soft flex items-center pl-8 pr-3 gap-1 shrink-0"
+      className={cn(
+        'relative z-[15] h-11 border-b border-ink-border-soft flex items-center pr-3 gap-1 shrink-0',
+        // <lg 返回按钮占左侧 → pl 收窄；≥lg 无返回按钮 → pl-8 对齐正文起点。
+        onBack ? 'pl-2 lg:pl-8' : 'pl-8'
+      )}
     >
+      {/* <lg 返回列表 — 详情覆盖态的返回入口（EmailDetail 主分支传 onBack）。
+          lg:hidden 在桌面三栏并排时收起 → 零回归。 */}
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label={t('toolbar.backToList', { defaultValue: '返回列表' })}
+          className="lg:hidden shrink-0 p-1.5 -ml-0.5 mr-0.5 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+        >
+          <ArrowLeft size={16} strokeWidth={2} />
+        </button>
+      )}
       {/* Primary CTA — DESIGN.md §2.2 "one CTA per surface". Sprint 13:
           the label flips on at medium density so the headline action stays
           self-explanatory even when secondary buttons collapse to icons.

@@ -92,6 +92,7 @@
   },
   "toolbar": {
     "back": "返回",
+    "backToList": "返回列表",
     "draft": "起草回复",
     "draftPending": "草稿创建中…",
     "markRead": "已读",

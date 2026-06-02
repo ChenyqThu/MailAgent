@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import {
   AlertCircle,
+  ArrowLeft,
   FileText,
   Flag,
   Image as ImageIcon,
@@ -25,6 +26,7 @@ import {
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { formatFileSize } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
@@ -69,6 +71,8 @@ interface Props {
   id: number | null
   /** drafts 模式 — 点「编辑」时回调, FolderLayout 用它打开 DraftEditor. */
   onEdit?: (id: number) => void
+  /** <lg 详情覆盖列表时的返回入口（清选中）。FolderLayout 传 setSelectedId(null)。 */
+  onBack?: () => void
 }
 
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }): React.ReactElement {
@@ -80,12 +84,33 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }): R
   )
 }
 
-function EmptyShell({ children }: { children: React.ReactNode }): React.ReactElement {
+function EmptyShell({
+  children,
+  onBack
+}: {
+  children: React.ReactNode
+  onBack?: () => void
+}): React.ReactElement {
+  // <lg 详情覆盖列表时，loading / error 空态没有 FolderToolbar 的返回按钮，
+  // 这里自带一个防窄屏卡死。≥lg lg:hidden 收起 → 桌面零回归。onBack 仅选中态
+  // 由 FolderDetail 传入（未选中态整列已被 FolderLayout 隐藏，不会显示）。
+  const { t } = useTranslation()
+  const belowLg = useIsBelowLg()
   return (
     <main
       aria-label="folder-main"
-      className="flex-1 min-w-0 glass-3 flex items-center justify-center"
+      className="relative flex-1 min-w-0 glass-3 flex items-center justify-center"
     >
+      {belowLg && onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label={t('toolbar.backToList', { defaultValue: '返回列表' })}
+          className="lg:hidden absolute top-2 left-2 inline-flex items-center justify-center w-8 h-8 rounded-md text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+        >
+          <ArrowLeft size={16} strokeWidth={2} />
+        </button>
+      )}
       {children}
     </main>
   )
@@ -126,7 +151,7 @@ function AttachmentTile({ att }: { att: FolderAttachmentMeta }): React.ReactElem
 
 type DialogKind = 'move' | 'delete' | 'send' | null
 
-export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement {
+export function FolderDetail({ folder, id, onEdit, onBack }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
@@ -199,7 +224,7 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
 
   if (id === null) {
     return (
-      <EmptyShell>
+      <EmptyShell onBack={onBack}>
         <div className="flex flex-col items-center text-center px-8">
           <div className="w-14 h-14 rounded-2xl grid place-items-center mb-4 bg-ink-2/50 border border-ink-border-soft">
             <PlaceholderIcon size={24} strokeWidth={1.5} className="text-ink-fg-3" />
@@ -214,7 +239,7 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
   }
   if (detailQ.isLoading) {
     return (
-      <EmptyShell>
+      <EmptyShell onBack={onBack}>
         <div className="text-aux text-ink-fg-2 animate-pulse motion-reduce:animate-none">
           {t('folder.loading')}
         </div>
@@ -223,7 +248,7 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
   }
   if (detailQ.isError || !detailQ.data) {
     return (
-      <EmptyShell>
+      <EmptyShell onBack={onBack}>
         <div className="flex flex-col items-center text-center px-8">
           <div className="w-14 h-14 rounded-2xl grid place-items-center mb-4 bg-fail/10 border border-fail/25">
             <AlertCircle size={24} strokeWidth={1.6} className="text-fail" />
@@ -356,6 +381,7 @@ export function FolderDetail({ folder, id, onEdit }: Props): React.ReactElement 
     <main aria-label="folder-main" className="flex-1 min-w-0 glass-3 flex flex-col min-h-0">
       <FolderToolbar
         folder={folder}
+        onBack={onBack}
         onMoveToInbox={!isDrafts ? () => setDialog('move') : undefined}
         onDelete={() => setDialog('delete')}
         onEdit={isDrafts && onEdit ? () => onEdit(email.id) : undefined}

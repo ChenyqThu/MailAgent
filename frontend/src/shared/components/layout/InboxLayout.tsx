@@ -8,8 +8,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
 
+import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailFilter } from '@shared/state/email-filter'
@@ -27,6 +29,9 @@ const AI_PANEL_WIDTH = 360
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
+  // RESPONSIVE-XCUT-01 — <lg(1024) 列表/详情单栏切换：选中邮件 → 详情 absolute
+  // 覆盖列表；未选中 → 详情 hidden, 列表占满。≥lg 维持桌面三栏并排（零回归）。
+  const belowLg = useIsBelowLg()
   // Sprint 11 V1.4 — URL ↔ store sync. The route's `validateSearch` clamps
   // unknown values to 'inbox', so `urlView` is always a real EmailView
   // (the optional type just lets `navigate({to:'/'})` skip the search arg).
@@ -103,11 +108,29 @@ export function InboxLayout(): React.ReactElement {
       <TitleBar />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
-        <EmailList />
-        <EmailDetail internalId={activeId} />
-        {/* Lane C — 挤压 wrapper。overflow-hidden 裁掉宽度收缩时溢出的面板内容；
-            初始 inline width:0 防首帧闪现（GSAP 接管后由 tween/set 覆写）。
-            AIChatPanel 自身仍是 w-[360px] shrink-0，wrapper 收到 0 时把它裁没。 */}
+        {/* master-detail 容器 — relative 给 <lg 时 EmailDetail 的 absolute 覆盖
+            提供定位上下文（只盖 list, 不盖 Sidebar / AI panel）。≥lg 内部
+            list(340) + detail(flex-1) 并排；<lg list 占满, detail 覆盖(选中) /
+            hidden(未选中)。 */}
+        <div className="relative flex flex-1 min-h-0 min-w-0">
+          <EmailList />
+          <div
+            className={cn(
+              'flex min-h-0',
+              belowLg
+                ? activeId !== null
+                  ? 'absolute inset-0 z-30'
+                  : 'hidden'
+                : 'flex-1 min-w-0'
+            )}
+          >
+            <EmailDetail internalId={activeId} />
+          </div>
+        </div>
+        {/* Lane C — 挤压 wrapper。移出 master-detail 容器与之平级：AI 宽度 tween
+            0↔360 收缩 master-detail(flex-1) → detail 收缩, list 保持 340（等价
+            旧行为, 零桌面回归）。<xl drawer 化见批 E-5。overflow-hidden 裁掉
+            收缩时溢出的面板；初始 inline width:0 防首帧闪现（GSAP 接管后覆写）。 */}
         <div
           ref={wrapperRef}
           className="overflow-hidden shrink-0 flex min-h-0"

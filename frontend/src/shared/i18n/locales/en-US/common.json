@@ -92,6 +92,7 @@
   },
   "toolbar": {
     "back": "Back",
+    "backToList": "Back to list",
     "draft": "Draft reply",
     "draftPending": "Opening draft…",
     "markRead": "Read",

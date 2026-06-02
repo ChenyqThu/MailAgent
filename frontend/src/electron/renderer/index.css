@@ -368,6 +368,14 @@ body,
   overscroll-behavior: none;
 }
 
+/* RESPONSIVE-XCUT-06 — 根级横向溢出护栏。窄视口下任一固定宽度列短暂溢出
+ * 不该让整个窗口横向滚动。用 `clip`（非 `hidden`）：hidden 会把另一轴的
+ * overflow 计算成 auto，给 #root 引入意外的纵向滚动条；clip 不创建滚动容器
+ * 也不影响纵轴，shell 内部各列仍自管 overflow-y。仅兜底，不替代逐组件降级。 */
+#root {
+  overflow-x: clip;
+}
+
 body {
   margin: 0;
   background: rgb(var(--ink-0));

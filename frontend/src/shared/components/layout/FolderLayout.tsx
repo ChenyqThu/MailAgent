@@ -15,7 +15,9 @@
 import { useCallback, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
+import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useTranslation } from 'react-i18next'
 import type { FolderEmailDetail, FolderName } from '@shared/api/types'
@@ -118,29 +120,49 @@ export function FolderLayout({ folder }: Props): React.ReactElement {
 
   const closeEditor = useCallback(() => setEditor(null), [])
 
+  // FOLDER-03 响应式 — <lg 详情(编辑器 / 选中邮件)覆盖列表；未激活则 hidden
+  // 露出列表占满。≥lg 维持列表+详情并排（零回归）。
+  const belowLg = useIsBelowLg()
+  const detailActive = editor !== null || selectedId !== null
+
   return (
     <div className="flex flex-col h-full text-ink-fg">
       <TitleBar />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
-        <FolderList
-          folder={folder}
-          activeId={selectedId}
-          onSelect={handleSelect}
-          onNewDraft={isDrafts ? handleNewDraft : undefined}
-          onSync={() => syncMut.mutate()}
-          syncing={syncMut.isPending}
-          onRequestDelete={handleRequestDelete}
-        />
-        {editor !== null ? (
-          <DraftEditor draft={editor.mode === 'edit' ? editor.draft : null} onClose={closeEditor} />
-        ) : (
-          <FolderDetail
+        {/* master-detail 容器 — 同 InboxLayout: <lg 详情(编辑器/选中邮件)
+            absolute 覆盖 list, 未激活则 hidden 露出 list; ≥lg 并排。 */}
+        <div className="relative flex flex-1 min-h-0 min-w-0">
+          <FolderList
             folder={folder}
-            id={selectedId}
-            onEdit={isDrafts ? (id) => void handleEdit(id) : undefined}
+            activeId={selectedId}
+            onSelect={handleSelect}
+            onNewDraft={isDrafts ? handleNewDraft : undefined}
+            onSync={() => syncMut.mutate()}
+            syncing={syncMut.isPending}
+            onRequestDelete={handleRequestDelete}
           />
-        )}
+          <div
+            className={cn(
+              'flex min-h-0',
+              belowLg ? (detailActive ? 'absolute inset-0 z-30' : 'hidden') : 'flex-1 min-w-0'
+            )}
+          >
+            {editor !== null ? (
+              <DraftEditor
+                draft={editor.mode === 'edit' ? editor.draft : null}
+                onClose={closeEditor}
+              />
+            ) : (
+              <FolderDetail
+                folder={folder}
+                id={selectedId}
+                onEdit={isDrafts ? (id) => void handleEdit(id) : undefined}
+                onBack={() => setSelectedId(null)}
+              />
+            )}
+          </div>
+        </div>
       </div>
       <StatusBar />
 

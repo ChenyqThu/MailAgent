@@ -92,6 +92,8 @@ export interface FolderToolbarPending {
 
 interface Props {
   folder: FolderName
+  /** <lg 详情覆盖列表时的"返回列表"入口（清选中）。lg:hidden，≥lg 不渲染。 */
+  onBack?: () => void
   onMoveToInbox?: () => void
   onDelete?: () => void
   onEdit?: () => void
@@ -101,6 +103,7 @@ interface Props {
 
 export function FolderToolbar({
   folder,
+  onBack,
   onMoveToInbox,
   onDelete,
   onEdit,
@@ -117,6 +120,18 @@ export function FolderToolbar({
       ref={ref}
       className="h-12 shrink-0 border-b border-ink-border/60 flex items-center gap-2 px-4"
     >
+      {/* <lg 返回列表 — 详情覆盖态返回入口; lg:hidden 桌面收起。archive 模式
+          下方另有「移回收件箱」(同 ArrowLeft, 语义不同), 靠 HoverTip 区分。 */}
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label={t('toolbar.backToList', { defaultValue: '返回列表' })}
+          className="lg:hidden shrink-0 -ml-1 p-1.5 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+        >
+          <ArrowLeft size={16} strokeWidth={2} />
+        </button>
+      )}
       {isDrafts ? (
         <>
           {onEdit && (
