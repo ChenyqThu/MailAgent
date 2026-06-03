@@ -17,8 +17,9 @@ from loguru import logger
 from src.config import config
 from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
+from src.reports.agent_tools import kos_is_available
 from src.reports.store import ReportStore
-from src.reports.summarizer import summarize_report
+from src.reports.summarizer import summarize_report, summarize_report_agentic
 
 _BEIJING = timezone(timedelta(hours=8))
 
@@ -99,6 +100,7 @@ async def run_report_once(
     agent: Dict[str, Any],
     now: Optional[datetime] = None,
     summarize_fn: Callable[..., Awaitable[Any]] = summarize_report,
+    agentic_fn: Callable[..., Awaitable[Any]] = summarize_report_agentic,
     client: Any = None,
 ) -> str:
     """单次生成一份报告，写 report 表，返回 report_id。
@@ -124,10 +126,14 @@ async def run_report_once(
         report_id=rid, agent_id=agent["id"], cadence=cadence,
         report_date=report_date, window_start=win_start, window_end=win_end,
     )
+    # daily 走 agentic（摘要 + 按需工具下钻 + KOS）；周月报 M5 改层级聚合，这里暂沿用单次。
+    is_daily = cadence == "daily"
+    body_max = int(agent.get("body_full_max") or 15) if is_daily else 0
     try:
         briefs = rdata.fetch_report_briefs(
             db_path, window_hours=window_hours,
             max_emails=config.mailagent_report_max_emails, now=win_end_dt,
+            body_full_max=body_max,
         )
         counts = rdata.compute_report_counts(briefs)
         counts_json = json.dumps(counts, ensure_ascii=False)
@@ -141,10 +147,17 @@ async def run_report_once(
             return rid
 
         try:
-            draft = await summarize_fn(
-                briefs=briefs, counts=counts, cadence=cadence, now=now,
-                persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
-            )
+            if is_daily:
+                draft = await agentic_fn(
+                    briefs=briefs, counts=counts, db_path=db_path,
+                    kos_enabled=kos_is_available(), cadence=cadence, now=now,
+                    persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
+                )
+            else:
+                draft = await summarize_fn(
+                    briefs=briefs, counts=counts, cadence=cadence, now=now,
+                    persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
+                )
             doc = assemble_report_doc(
                 draft=draft, briefs=briefs, counts=counts, agent_id=agent["id"],
                 cadence=cadence, report_date=report_date, window_start=win_start,

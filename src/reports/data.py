@@ -17,6 +17,7 @@ from loguru import logger
 
 from src.llm_agent.schema import PRIORITY_ENUM
 from src.notify.island_dispatch import ACTION_NEEDS_FLAG, URGENT_PRIORITY_LABELS
+from src.repository.email_repository import EmailRepository
 
 _BEIJING = timezone(timedelta(hours=8))
 
@@ -34,6 +35,9 @@ _PRIORITY_RANK: Dict[str, int] = {
 
 # 置顶邮件固定带入的上限（无视时间窗口，按收件时间倒序取最近 N 封），防历史置顶刷屏。
 _PINNED_EXTRA_CAP = 50
+
+# agentic 日报预载正文的单封截断（省 token；AI 要全文再用 get_email_body 工具取 12K）。
+_BODY_PRELOAD_CHARS = 4000
 
 # brief 投影列（窗口查询 + 置顶补充查询共用）。
 _BRIEF_SELECT = """
@@ -101,6 +105,7 @@ class ReportEmailBrief:
     thread_id: str = ""
     replied: bool = False  # 同 thread 有更晚的发件箱邮件 → 已回复
     is_outbound: bool = False  # mailbox ∈ 发件箱 —— 你自己发出的，仅用于统计「已发出」/讲处理情况，不铺成条目
+    body_text: Optional[str] = None  # 重要邮件预载正文（agentic 日报）；None=未载，AI 可用 get_email_body 工具按需取
 
 
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
@@ -133,6 +138,7 @@ def fetch_report_briefs(
     window_hours: int = 24,
     max_emails: int = 80,
     now: Optional[datetime] = None,
+    body_full_max: int = 0,
 ) -> List[ReportEmailBrief]:
     """取窗口 ``[now - window_hours, now)`` 内邮件 brief（metadata + AI 字段）。
 
@@ -208,7 +214,11 @@ def fetch_report_briefs(
         key=lambda b: (is_attention(b), _PRIORITY_RANK.get(b.priority, 0), b.date_received),
         reverse=True,
     )
-    return inbound[:max_emails] + outbound
+    capped = inbound[:max_emails]
+    # agentic 日报：给最重要的前 body_full_max 封预载正文（其余只摘要，AI 按需查）。
+    if body_full_max > 0:
+        _preload_bodies(db_path, capped, body_full_max)
+    return capped + outbound
 
 
 def _mark_replied(conn: sqlite3.Connection, briefs: List[ReportEmailBrief]) -> None:
@@ -260,6 +270,31 @@ def is_attention(b: ReportEmailBrief) -> bool:
     if b.is_pinned:
         return True
     return b.priority in URGENT_PRIORITY_LABELS and b.action_type in ACTION_NEEDS_FLAG
+
+
+def _is_body_worthy(b: ReportEmailBrief) -> bool:
+    """agentic 日报预载正文的判定：紧急/重要优先级（URGENT_PRIORITY_LABELS）或 已标旗/置顶
+    （用户手动重要信号）。其余邮件只给 AI Summary，AI 可用 get_email_body 工具按需下钻。"""
+    return b.is_flagged or b.is_pinned or (b.priority in URGENT_PRIORITY_LABELS)
+
+
+def _preload_bodies(db_path: str, briefs: List[ReportEmailBrief], max_n: int) -> None:
+    """就地给 briefs 里最重要的前 max_n 封（_is_body_worthy）预载正文（截断）。
+
+    briefs 已按重要性排序，取前 max_n 个 worthy。正文缺失 / 读失败跳过（保持 None，
+    AI 仍可用 get_email_body 工具按需取全文）。
+    """
+    worthy = [b for b in briefs if _is_body_worthy(b)][:max_n]
+    if not worthy:
+        return
+    repo = EmailRepository(db_path)
+    for b in worthy:
+        try:
+            md = repo.get_body_markdown(b.internal_id, max_chars=_BODY_PRELOAD_CHARS)
+            if md:
+                b.body_text = md
+        except Exception as e:  # noqa: BLE001 — 预载失败不阻断报告
+            logger.debug(f"[report] preload body {b.internal_id} failed: {e}")
 
 
 def is_fyi(b: ReportEmailBrief) -> bool:

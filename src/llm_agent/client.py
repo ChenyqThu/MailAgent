@@ -17,10 +17,11 @@ Notes:
 
 from __future__ import annotations
 
+import inspect
 import json as _json
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -51,6 +52,25 @@ class LLMResult:
     cache_read_input_tokens: int
     model: str
     latency_ms: int
+
+
+# 工具 handler：收 tool input dict → 返字符串结果（同步或异步）。loop 把返回值原样
+# 回灌成 tool_result。handler 内部自处理错误（返 "error: ..." 字符串，不要抛）。
+ToolHandler = Callable[[Dict[str, Any]], Union[str, Awaitable[str]]]
+
+
+@dataclass
+class ToolLoopResult:
+    """run_tool_loop 的产物：final_tool 的 input + token/轮次统计 + 调用轨迹。"""
+
+    final_input: Dict[str, Any]
+    iterations: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int
+    model: str
+    latency_ms: int
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # 审计：[{name,input,output_preview,ms}]
 
 
 class LLMCallError(RuntimeError):
@@ -104,6 +124,29 @@ def _to_openai_tool(schema: Dict[str, Any]) -> Dict[str, Any]:
             "parameters": schema.get("input_schema") or {"type": "object", "properties": {}},
         },
     }
+
+
+def _serialize_assistant_content(content: Any) -> List[Dict[str, Any]]:
+    """Anthropic 返回的 assistant content blocks → 可回灌 messages 的 dict 列表。
+
+    多轮 loop 把上一轮 assistant turn（含 tool_use）加回 messages，必须转成 dict
+    （SDK 对象不能直接当 messages content）。只保留 text / tool_use 两类。
+    """
+    out: List[Dict[str, Any]] = []
+    for b in content or []:
+        bt = getattr(b, "type", None)
+        if bt == "text":
+            out.append({"type": "text", "text": getattr(b, "text", "") or ""})
+        elif bt == "tool_use":
+            out.append(
+                {
+                    "type": "tool_use",
+                    "id": getattr(b, "id", ""),
+                    "name": getattr(b, "name", ""),
+                    "input": dict(getattr(b, "input", {}) or {}),
+                }
+            )
+    return out
 
 
 class LLMClient:
@@ -368,6 +411,172 @@ class LLMClient:
             cache_read_input_tokens=0,
             model=model,
             latency_ms=latency_ms,
+        )
+
+    # ---- Multi-turn tool loop (Anthropic-only) -----------------------------
+
+    async def run_tool_loop(
+        self,
+        *,
+        system_blocks: List[Dict[str, Any]],
+        user_content: str,
+        tools: List[Dict[str, Any]],
+        tool_handlers: Dict[str, ToolHandler],
+        final_tool: str,
+        model_chain: Optional[List[str]] = None,
+        max_iter: int = 8,
+        max_tokens: int = 64000,
+    ) -> ToolLoopResult:
+        """多轮 tool_use loop（仅 Anthropic leg）。
+
+        模型按需调 ``tools`` 里的工具（``tool_handlers`` 执行 + 回灌 tool_result），
+        直到它调用 ``final_tool`` —— 返回该工具的 input（**不执行 handler**，交给 caller
+        消费，如 build_report → ReportDraft）。``tool_choice=auto``（最后一轮强制 final_tool
+        保证收尾），与 classify 的单次强制调用不同。
+
+        走 fallback chain，但**只在 Anthropic 模型上**跑（OpenAI proto 的多轮原生 tool
+        协议这里不实现，从链里过滤）。复用 caller 设在 system_blocks / tools 上的
+        cache_control + 1M context beta。
+
+        raises LLMCallError：链里无 Anthropic 模型 / 全部失败 / 用尽 max_iter 仍未产出。
+        """
+        chain = [m for m in _resolve_model_chain(model_chain) if not _is_openai_proto(m)]
+        if not chain:
+            raise LLMCallError("run_tool_loop needs an Anthropic model in the chain")
+
+        last_err: Optional[BaseException] = None
+        for i, model in enumerate(chain):
+            try:
+                return await self._run_loop_anthropic(
+                    model=model,
+                    system_blocks=system_blocks,
+                    user_content=user_content,
+                    tools=tools,
+                    tool_handlers=tool_handlers,
+                    final_tool=final_tool,
+                    max_iter=max_iter,
+                    max_tokens=max_tokens,
+                )
+            except LLMCallError as e:
+                last_err = e
+                if i + 1 < len(chain):
+                    logger.warning(f"[llm] loop model={model} failed, fallback to {chain[i+1]}: {e}")
+                    continue
+                logger.warning(f"[llm] loop model={model} failed (last in chain): {e}")
+                raise
+        raise last_err or LLMCallError("loop model chain exhausted")
+
+    async def _run_loop_anthropic(
+        self,
+        *,
+        model: str,
+        system_blocks: List[Dict[str, Any]],
+        user_content: str,
+        tools: List[Dict[str, Any]],
+        tool_handlers: Dict[str, ToolHandler],
+        final_tool: str,
+        max_iter: int,
+        max_tokens: int,
+    ) -> ToolLoopResult:
+        client = self._lazy()
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": user_content}]
+        total_in = total_out = total_cache_read = 0
+        tool_calls: List[Dict[str, Any]] = []
+        t0 = time.monotonic()
+
+        for it in range(max_iter):
+            # 最后一轮强制收尾（必产 final_tool），否则 auto 让模型自由调工具/收尾。
+            tool_choice: Dict[str, Any] = (
+                {"type": "tool", "name": final_tool}
+                if it == max_iter - 1
+                else {"type": "auto"}
+            )
+            try:
+                msg = await client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system_blocks,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    messages=messages,
+                )
+            except Exception as e:
+                raise LLMCallError(
+                    f"loop messages.create failed (model={model}, iter={it}): {e!r}"
+                ) from e
+
+            usage = msg.usage
+            total_in += int(getattr(usage, "input_tokens", 0) or 0)
+            total_out += int(getattr(usage, "output_tokens", 0) or 0)
+            total_cache_read += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+
+            blocks = msg.content or []
+            tool_uses = [b for b in blocks if getattr(b, "type", None) == "tool_use"]
+
+            # 命中 final_tool → 收尾返回它的 input（不执行 handler）。
+            final_block = next(
+                (b for b in tool_uses if getattr(b, "name", "") == final_tool), None
+            )
+            if final_block is not None:
+                return ToolLoopResult(
+                    final_input=dict(getattr(final_block, "input", {}) or {}),
+                    iterations=it + 1,
+                    input_tokens=total_in,
+                    output_tokens=total_out,
+                    cache_read_input_tokens=total_cache_read,
+                    model=getattr(msg, "model", model),
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                    tool_calls=tool_calls,
+                )
+
+            # 回灌上一轮 assistant turn（含 tool_use）。
+            messages.append(
+                {"role": "assistant", "content": _serialize_assistant_content(blocks)}
+            )
+
+            if not tool_uses:
+                # 既没调工具也没调 final_tool（纯 end_turn）→ 提示收尾，再给一轮机会。
+                messages.append(
+                    {"role": "user", "content": f"请基于以上信息调用 {final_tool} 工具产出最终报告。"}
+                )
+                continue
+
+            # 执行非 final 工具 + 回灌 tool_result（错误也回灌，让模型自适应）。
+            results: List[Dict[str, Any]] = []
+            for tu in tool_uses:
+                name = getattr(tu, "name", "")
+                tinput = dict(getattr(tu, "input", {}) or {})
+                handler = tool_handlers.get(name)
+                ts = time.monotonic()
+                if handler is None:
+                    out = f"error: unknown tool {name!r}"
+                else:
+                    try:
+                        res = handler(tinput)
+                        out = await res if inspect.isawaitable(res) else res
+                        out = out if isinstance(out, str) else _json.dumps(out, ensure_ascii=False)
+                    except Exception as e:  # noqa: BLE001 — 工具错误回灌给模型，不中断 loop
+                        out = f"error: {e!r}"
+                tool_calls.append(
+                    {
+                        "name": name,
+                        "input": tinput,
+                        "output_preview": out[:200],
+                        "ms": int((time.monotonic() - ts) * 1000),
+                    }
+                )
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": getattr(tu, "id", ""),
+                        "content": out,
+                        "is_error": out.startswith("error:"),
+                    }
+                )
+            messages.append({"role": "user", "content": results})
+
+        raise LLMCallError(
+            f"tool loop exhausted {max_iter} iters without calling {final_tool!r} (model={model})"
         )
 
     async def close(self):

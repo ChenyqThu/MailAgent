@@ -422,7 +422,8 @@ class TestRunReportOnce:
         store = ReportStore(str(db))
         agent = store.get_agent("daily_email_digest")
         rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
-                                          now=_NOW, summarize_fn=self._mock_sum))
+                                          now=_NOW, summarize_fn=self._mock_sum,
+                                          agentic_fn=self._mock_sum))  # daily 走 agentic_fn
         rep = store.get_report(rid)
         assert rep["status"] == "ready" and rep["input_tokens"] == 12
         doc = json.loads(rep["blocks_json"])
@@ -445,7 +446,7 @@ class TestRunReportOnce:
 
         rid = asyncio.run(run_report_once(store=store, db_path=str(db),
                                           agent=store.get_agent("daily_email_digest"),
-                                          now=_NOW, summarize_fn=boom))
+                                          now=_NOW, summarize_fn=boom, agentic_fn=boom))
         rep = store.get_report(rid)
         assert rep["status"] == "ready" and "summarize_failed" in (rep["error"] or "")
         assert rep["blocks_json"]  # fallback 仍产出 blocks

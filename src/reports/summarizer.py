@@ -11,9 +11,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
 
 from src.llm_agent.client import LLMClient, LLMResult
 from src.llm_agent.processor import _build_cache_control
+from src.reports.agent_tools import build_report_tools
 from src.reports.data import ReportEmailBrief, group_for_report
 from src.reports.prompts import get_default_prompt
 
@@ -155,18 +157,24 @@ def _build_system(persona: str, now: datetime) -> List[Dict[str, Any]]:
     return [block]
 
 
-def _build_user(
-    *,
-    briefs: List[ReportEmailBrief],
-    counts: Dict[str, Any],
-    groups: Dict[str, List[ReportEmailBrief]],
-    ai_summary_max_chars: int = 100,
-) -> str:
-    parts: List[str] = [f"把下面的邮件策展成报告，调用 {_TOOL_NAME}。"]
+def _status_marks(b: ReportEmailBrief) -> str:
+    """邮件当前状态标记（LLM 据此判断已处理 / 待办）。"""
+    marks = ["已读" if b.is_read else "未读"]
+    if b.replied:
+        marks.append("已回复")
+    if b.is_flagged:
+        marks.append("旗标")
+    if b.is_pinned:
+        marks.append("置顶")
+    if b.is_important:
+        marks.append("重要")
+    return " ".join(marks)
 
+
+def _counts_block(counts: Dict[str, Any]) -> str:
     by_cat = counts.get("by_category") or {}
     cat_line = "、".join(f"{k}:{v}" for k, v in by_cat.items()) or "(无)"
-    parts.append(
+    return (
         "\n## 已知 counts（代码算好，勿改）\n"
         f"- 总数（收件）：{counts.get('total', 0)}\n"
         f"- 未读：{counts.get('unread', 0)}\n"
@@ -178,46 +186,103 @@ def _build_user(
         f"- 各分类：{cat_line}"
     )
 
-    # 代码分组提示（参考，LLM 可调整 —— 但 id 仍须来自清单）
+
+def _groups_hint_block(groups: Dict[str, List[ReportEmailBrief]]) -> str:
     hint = {k: [b.internal_id for b in v] for k, v in groups.items()}
-    parts.append(
+    return (
         "\n## 代码分组提示（参考，可调整）\n"
         f"- 需关注: {hint.get('attention', [])}\n"
         f"- 已处理: {hint.get('handled', [])}\n"
         f"- FYI: {hint.get('fyi', [])}"
     )
 
-    # 只枚举收件类邮件供 LLM 引用（email_refs）；发件箱仅参与上面的「已发出」统计，
-    # 不进清单（避免 LLM 把你自己发的邮件铺成条目）。
+
+def _email_line(b: ReportEmailBrief, ai_summary_max_chars: int) -> str:
+    ai = b.ai_summary.strip()
+    if len(ai) > ai_summary_max_chars:
+        ai = ai[:ai_summary_max_chars] + "…"
+    return (
+        f"- id={b.internal_id} [{_status_marks(b)}] {b.subject or '(无主题)'}"
+        f" | 发件人：{b.sender_name or b.sender_addr or '(未知)'}"
+        f" | 分类：{b.category or '-'}"
+        f" | 优先级：{b.priority or '-'}"
+        f" | 类型：{b.action_type or '-'}"
+        + (f" | 摘要：{ai}" if ai else "")
+    )
+
+
+def _build_user(
+    *,
+    briefs: List[ReportEmailBrief],
+    counts: Dict[str, Any],
+    groups: Dict[str, List[ReportEmailBrief]],
+    ai_summary_max_chars: int = 100,
+) -> str:
+    """单次 classify 的 user prompt（全摘要，不带正文）。"""
+    parts: List[str] = [f"把下面的邮件策展成报告，调用 {_TOOL_NAME}。"]
+    parts.append(_counts_block(counts))
+    parts.append(_groups_hint_block(groups))
+    # 只枚举收件类邮件供 LLM 引用（email_refs）；发件箱仅参与「已发出」统计，不进清单。
     inbound = [b for b in briefs if not b.is_outbound]
     if inbound:
         lines = ["\n## 邮件清单（按优先级排序；用 internal_id 引用；不含正文）"]
         for b in inbound:
-            ai = b.ai_summary.strip()
-            if len(ai) > ai_summary_max_chars:
-                ai = ai[:ai_summary_max_chars] + "…"
-            # 当前状态标记 —— LLM 据此判断哪些已处理（已回复/已读/旗标）。
-            marks = ["已读" if b.is_read else "未读"]
-            if b.replied:
-                marks.append("已回复")
-            if b.is_flagged:
-                marks.append("旗标")
-            if b.is_pinned:
-                marks.append("置顶")
-            if b.is_important:
-                marks.append("重要")
-            lines.append(
-                f"- id={b.internal_id} [{' '.join(marks)}] {b.subject or '(无主题)'}"
-                f" | 发件人：{b.sender_name or b.sender_addr or '(未知)'}"
-                f" | 分类：{b.category or '-'}"
-                f" | 优先级：{b.priority or '-'}"
-                f" | 类型：{b.action_type or '-'}"
-                + (f" | 摘要：{ai}" if ai else "")
-            )
+            lines.append(_email_line(b, ai_summary_max_chars))
         parts.append("\n".join(lines))
     else:
         parts.append("\n## 邮件清单\n(窗口内无收件邮件)")
+    return "\n".join(parts)
 
+
+def _build_system_agentic(persona: str, now: datetime, kos_enabled: bool) -> List[Dict[str, Any]]:
+    """agentic 日报 system：persona + 工具说明 + 收尾约束。"""
+    weekday_cn = "一二三四五六日"[now.weekday()]
+    kos_tool = "- kos_query(query)：查 Gbrain 知识库里跨人 / 项目 / 历史的背景\n" if kos_enabled else ""
+    body = (
+        persona.rstrip()
+        + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
+        + "\n\n## 工具（按需调用，别为每封都查）\n"
+        + "邮件清单是**摘要**：重要邮件已附正文、其余仅摘要。某封需要更多细节才能正确"
+        + "策展时再下钻：\n"
+        + "- get_email_body(internal_id)：取单封完整正文\n"
+        + "- search_emails(query)：全文搜相关邮件（清单外 / 跨线程）\n"
+        + "- search_attachments(query)：搜附件文本里的事实 / 数字\n"
+        + kos_tool
+        + f"**先读摘要、只在确有必要时下钻**；信息够了就调 {_TOOL_NAME} 收尾产出报告。"
+        + _FIXED_RULES
+    )
+    block: Dict[str, Any] = {"type": "text", "text": body}
+    cc = _build_cache_control()
+    if cc is not None:
+        block["cache_control"] = cc
+    return [block]
+
+
+def _build_user_agentic(
+    *,
+    briefs: List[ReportEmailBrief],
+    counts: Dict[str, Any],
+    groups: Dict[str, List[ReportEmailBrief]],
+    ai_summary_max_chars: int = 120,
+) -> str:
+    """agentic 日报 user prompt：重要邮件附正文，其余摘要 + 提示可下钻。"""
+    parts: List[str] = [
+        f"把下面的邮件策展成报告。先看摘要，必要时用工具下钻，最后调 {_TOOL_NAME}。"
+    ]
+    parts.append(_counts_block(counts))
+    parts.append(_groups_hint_block(groups))
+    inbound = [b for b in briefs if not b.is_outbound]
+    if inbound:
+        lines = ["\n## 邮件清单（按优先级排序；用 internal_id 引用）"]
+        for b in inbound:
+            lines.append(_email_line(b, ai_summary_max_chars))
+            if b.body_text:
+                lines.append(f"  【正文已附】{b.body_text}")
+            else:
+                lines.append(f"  （仅摘要；需细节用 get_email_body({b.internal_id}) 取正文）")
+        parts.append("\n".join(lines))
+    else:
+        parts.append("\n## 邮件清单\n(窗口内无收件邮件)")
     return "\n".join(parts)
 
 
@@ -269,9 +334,65 @@ async def summarize_report(
     return _parse(result)
 
 
-def _parse(result: LLMResult) -> ReportDraft:
-    ti = result.tool_input or {}
+async def summarize_report_agentic(
+    *,
+    briefs: List[ReportEmailBrief],
+    counts: Dict[str, Any],
+    db_path: str,
+    cadence: str = "daily",
+    now: Optional[datetime] = None,
+    persona_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    kos_enabled: bool = False,
+    client: Optional[LLMClient] = None,
+    max_iter: int = 8,
+) -> ReportDraft:
+    """agentic 日报：喂摘要清单（重要邮件附正文）+ 工具（按需查正文/附件/Gbrain），
+    多轮后调 build_report 收尾 → ReportDraft。raises LLMCallError on failure（caller 降级）。
 
+    与 summarize_report（单次 classify）的区别：走 LLMClient.run_tool_loop，模型可下钻查
+    任意邮件细节，从而控制上下文体积（不全量塞正文）。build_report 作为 final_tool。
+    """
+    now = now or datetime.now(_BEIJING)
+    persona = persona_prompt if (persona_prompt and persona_prompt.strip()) else get_default_prompt(cadence)
+    groups = group_for_report(briefs)
+    aux_tools, handlers = build_report_tools(db_path, kos_enabled=kos_enabled)
+    tools = [*aux_tools, REPORT_TOOL_SCHEMA]  # build_report = final_tool（命中即收尾）
+
+    own_client = client is None
+    client = client or LLMClient()
+    try:
+        result = await client.run_tool_loop(
+            system_blocks=_build_system_agentic(persona, now, kos_enabled),
+            user_content=_build_user_agentic(briefs=briefs, counts=counts, groups=groups),
+            tools=tools,
+            tool_handlers=handlers,
+            final_tool=_TOOL_NAME,
+            model_chain=_model_chain(model),
+            max_iter=max_iter,
+        )
+    finally:
+        if own_client:
+            await client.close()
+    if result.tool_calls:
+        logger.info(
+            f"[report] agentic daily: {result.iterations} 轮 / "
+            f"{len(result.tool_calls)} 次工具调用 → "
+            + ", ".join(tc.get("name", "?") for tc in result.tool_calls)
+        )
+    return ReportDraft(
+        **_parse_draft_fields(result.final_input),
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cache_read_input_tokens=result.cache_read_input_tokens,
+        model=result.model,
+    )
+
+
+def _parse_draft_fields(ti: Dict[str, Any]) -> Dict[str, Any]:
+    """build_report 的 tool input → ReportDraft 内容字段（headline/overview/sections/
+    key_points/highlights）。单次 classify 与 agentic loop 共用（过滤非法 email_refs/空白）。"""
+    ti = ti or {}
     sections: List[Dict[str, Any]] = []
     raw_sections = ti.get("sections")
     if isinstance(raw_sections, list):
@@ -307,12 +428,18 @@ def _parse(result: LLMResult) -> ReportDraft:
                 }
             )
 
+    return {
+        "headline": (ti.get("headline") or "").strip()[:50],
+        "overview": (ti.get("overview") or "").strip()[:400],
+        "sections": sections,
+        "key_points": key_points,
+        "highlights": highlights,
+    }
+
+
+def _parse(result: LLMResult) -> ReportDraft:
     return ReportDraft(
-        headline=(ti.get("headline") or "").strip()[:50],
-        overview=(ti.get("overview") or "").strip()[:400],
-        sections=sections,
-        key_points=key_points,
-        highlights=highlights,
+        **_parse_draft_fields(result.tool_input or {}),
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cache_read_input_tokens=result.cache_read_input_tokens,
