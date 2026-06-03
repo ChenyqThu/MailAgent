@@ -1236,8 +1236,10 @@ function legacyVerify(): LegacyVerifyResult {
 
     checks.push({
       key: 'db_version',
-      label: `db_version == ${EXPECTED_DB_VERSION}`,
-      pass: probe.dbVersion === EXPECTED_DB_VERSION
+      // `>=` 与 backend_lifecycle 就绪门控一致 (迁到 >= 期望下限即通过); 用 `===` 会在
+      // 后端 bump schema 后误报 legacy 库不达标。见 backend_lifecycle.EXPECTED_DB_VERSION 注释。
+      label: `db_version >= ${EXPECTED_DB_VERSION}`,
+      pass: probe.dbVersion != null && probe.dbVersion >= EXPECTED_DB_VERSION
     })
     checks.push({
       key: 'required_tables',

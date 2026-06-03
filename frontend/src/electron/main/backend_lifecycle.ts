@@ -8,7 +8,7 @@
 //   - start()     : `app.whenReady` 后、`createWindow` 前 spawn `mailagent serve`
 //                   (注入 MAILAGENT_PROJECT_ROOT / MAILAGENT_ENV_FILE /
 //                   SYNC_STORE_DB_PATH 三 env), cwd = DATA_ROOT。
-//   - waitReady() : 直读 SQLite `sync_state` 判 db_version==EXPECTED 且关键表
+//   - waitReady() : 直读 SQLite `sync_state` 判 db_version>=EXPECTED 且关键表
 //                   exist (取代 admin:health CLI fork 500ms), 迁移期锁表 (SQLITE_BUSY)
 //                   退避重试 → DB 就绪门控放行 createWindow。
 //   - restart()   : kill + re-spawn (取代 pm2 restart), 供 env:set 后 banner 调用。
@@ -50,16 +50,23 @@ import { resolveDataRoot, resolveDbPath } from './db'
 // ---------------------------------------------------------------------------
 
 /** 与 src/mail/sync_store.py `SyncStore.DB_VERSION` 及 admin.py `EXPECTED_DB_VERSION`
- *  保持同步 (当前 v17)。后端完成 `_init_database()` schema migration 后会把
- *  sync_state.db_version 写成这个值 —— 就绪门控等它到位再开主窗口。 */
-export const EXPECTED_DB_VERSION = 17
+ *  对齐 (当前 v19)。后端完成 `_init_database()` schema migration 后会把
+ *  sync_state.db_version 写成 >= 此值 —— 就绪门控等它到位再开主窗口。
+ *
+ *  🔴 判据用 `>=` 而非 `===` (见 probeDbReady)。TS 无法 import Python 常量, 此处只能手抄;
+ *  历史教训: bump 后端 DB_VERSION 时漏改这里 → `19 === 17` 恒假 → 等满 readyTimeout(120s)
+ *  才降级开窗 (用户感知"App 打不开")。改 `>=` 后此常量退化为「就绪下限」: 只要 DB 迁到
+ *  >= 此值即放行, 后端再 bump schema 也不会卡旧前端 (一体化 app 迁移单向前进 + 向后兼容
+ *  加列加表, 不删不改语义)。bump 后端 schema 时**仍建议**同步抬高此下限保持语义清晰,
+ *  但漏改不再致命 (admin.py 用 `= _SyncStore.DB_VERSION` 动态引用, 无此问题)。 */
+export const EXPECTED_DB_VERSION = 19
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」三表已建: 元数据 / 正文 SSoT / outbox。 */
 export const REQUIRED_TABLES = ['email_metadata', 'email_body', 'email_outbox'] as const
 
 export interface ReadinessResult {
-  /** db 文件存在 + 能打开 + db_version==EXPECTED + 关键表齐全。 */
+  /** db 文件存在 + 能打开 + db_version>=EXPECTED + 关键表齐全。 */
   ready: boolean
   /** db 文件还不存在 (后端首启建表前) / 打不开。 */
   dbAccessible: boolean
@@ -106,7 +113,13 @@ export function probeDbReady(dbPath: string = resolveDbPath()): ReadinessResult 
     const present = new Set(tableRows.map((r) => r.name))
     const missingTables = REQUIRED_TABLES.filter((t) => !present.has(t))
 
-    const ready = dbVersion === EXPECTED_DB_VERSION && missingTables.length === 0
+    // `>=` 而非 `===`: DB 迁到 >= 期望下限即就绪 (见 EXPECTED_DB_VERSION 注释)。
+    // dbVersion 为 null/NaN (verRow 缺 / parse 失败) 时显式判 not-ready, 不靠 null→0 隐式转换。
+    const ready =
+      dbVersion != null &&
+      Number.isFinite(dbVersion) &&
+      dbVersion >= EXPECTED_DB_VERSION &&
+      missingTables.length === 0
     return { ready, dbAccessible: true, dbVersion, missingTables, busy: false }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -543,7 +556,7 @@ export class BackendLifecycleManager {
   }
 
   /**
-   * 轮询直读 SQLite 直到 **serve** 就绪 (db_version==EXPECTED 且关键表齐全)。
+   * 轮询直读 SQLite 直到 **serve** 就绪 (db_version>=EXPECTED 且关键表齐全)。
    * **只 gate serve** (开主窗门控): Electron 本地 IPC 走 serve 的 SQLite, 与 serve-api
    * 无关 — serve-api 是远程 Web 用的, 主窗不依赖它, 故其就绪不入此返回值 (软门控)。
    * 这是向后兼容关键点: 不开 serve-api 时 waitReady 行为与改造前逐字节一致。
