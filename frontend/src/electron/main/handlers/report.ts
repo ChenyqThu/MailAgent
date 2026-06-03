@@ -1,10 +1,13 @@
 // Sprint 20 — 报告 Agent (/agents 页) IPC。
 //
 // 两类通道，分别走两条路径（与 folder.ts 同款混合策略）：
-//   • report:list / report:get — **直读 sync_store.db**（better-sqlite3, readonly,
-//     热路径、无 LLM）。表 schema 归 Python SyncStore._init_database (DB v18) owns。
-//   • report:getConfig / setConfig / runNow — 经 `mailagent report` CLI fork
-//     （需 Python 解析默认 prompt / 跑 LLM / 走 ReportStore 白名单）。
+//   • report:list / report:get / getConfig — **直读 sync_store.db**（better-sqlite3,
+//     readonly, 热路径、无 LLM）。getConfig 在 TS 复刻 _resolve_agent 的加工（schedule
+//     解析 / bool 还原 / model 默认 / prompt is_default flag），避开 CLI fork 的 ~秒级
+//     Python 冷启 —— 前端热路径不该 fork CLI（CLI 是给 agent 用的）。
+//   • report:setConfig / runNow / delete — 经 `mailagent report` CLI fork（写需 ReportStore
+//     白名单 + auth；runNow 跑 LLM）。低频，fork 开销可接受。
+// 表 schema 归 Python SyncStore._init_database (DB v19) owns。
 //
 // 列名严格对齐 src/reports/store.py 的 report / report_agent 表。
 import { ipcMain } from 'electron'
@@ -51,6 +54,52 @@ function _toListItem(row: ReportRow): ReportListItem {
   return {
     ...(rest as unknown as Omit<ReportListItem, 'counts'>),
     counts: _parseJson<ReportCounts>(counts_json, {})
+  }
+}
+
+// 与 src/cli/commands/report.py:DEFAULT_REPORT_MODEL 对齐。
+const _DEFAULT_REPORT_MODEL = 'claude-opus-4-8'
+
+interface AgentRow {
+  id: string
+  type?: string | null
+  enabled?: number | null
+  title?: string | null
+  schedule_json?: string | null
+  window_hours?: number | null
+  prompt?: string | null
+  model?: string | null
+  kos_enrich?: number | null
+  trigger_mode?: string | null
+  timezone?: string | null
+  body_full_max?: number | null
+  updated_at?: number | null
+}
+
+/** report_agent 行 → ReportAgentConfig（TS 复刻 _resolve_agent）。prompt 直读原始：
+ *  空 → prompt_is_default=true（前端 textarea 留空 + 提示"用内置默认 persona"），不回填
+ *  默认全文（默认 persona 的 SSoT 在 src/reports/prompts.py，避免复制进 TS 漂移）。 */
+function _toAgentConfig(row: AgentRow): ReportAgentConfig {
+  const schedule = _parseJson<ReportAgentConfig['schedule']>(row.schedule_json, {
+    cadence: 'daily',
+    hours: [9]
+  })
+  const prompt = (row.prompt ?? '').trim()
+  return {
+    id: row.id,
+    type: row.type || 'report',
+    enabled: !!row.enabled,
+    title: row.title || '',
+    schedule,
+    window_hours: row.window_hours ?? null,
+    prompt,
+    prompt_is_default: !prompt,
+    model: (row.model || '').trim() || _DEFAULT_REPORT_MODEL,
+    kos_enrich: !!row.kos_enrich,
+    trigger_mode: row.trigger_mode === 'natural_day' ? 'natural_day' : 'rolling_24h',
+    timezone: row.timezone || '',
+    body_full_max: row.body_full_max ?? null,
+    updated_at: row.updated_at ?? null
   }
 }
 
@@ -110,13 +159,17 @@ export function registerReportHandlers(): void {
     }
   })
 
-  // ── report:getConfig — agent 配置（CLI: 解析默认 prompt + schedule）。失败返 []。
+  // ── report:getConfig — agent 配置（**直读 report_agent**，TS 复刻 _resolve_agent，
+  //    避开 CLI fork 的秒级冷启）。失败返 []。
   ipcMain.handle('report:getConfig', async (): Promise<ReportAgentConfig[]> => {
     try {
-      const data = await callCli(['report', 'config-get'], { needsAuth: false })
-      return Array.isArray(data) ? (data as ReportAgentConfig[]) : []
+      const db = getDb()
+      // SELECT *（非显式新列）→ 即便库尚未迁移到 v19（缺 trigger_mode/timezone/body_full_max）
+      // 也不报错；_toAgentConfig 用可选字段兜底默认，避免「迁移前 getConfig 报错→空列表」。
+      const rows = db.prepare('SELECT * FROM report_agent ORDER BY id').all() as AgentRow[]
+      return rows.map(_toAgentConfig)
     } catch (err) {
-      console.error('[report:getConfig] CLI failed:', err)
+      console.error('[report:getConfig] read failed:', err)
       return []
     }
   })

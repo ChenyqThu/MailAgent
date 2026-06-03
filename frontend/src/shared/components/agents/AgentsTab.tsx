@@ -507,6 +507,7 @@ function ConfigDrawer({
             <Field label={t('agents.config.prompt')} hint={t('agents.config.promptHint')}>
               <textarea
                 value={prompt}
+                placeholder={t('agents.config.promptPlaceholder')}
                 onChange={(e) => {
                   setPrompt(e.target.value)
                   setPromptDirty(true)

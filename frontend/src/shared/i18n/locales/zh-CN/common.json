@@ -1864,6 +1864,7 @@
       "model": "模型",
       "kos": "Gbrain 知识库增强",
       "kosHint": "对重点项目 / 发件人附加 Gbrain 知识库档案片段",
+      "promptPlaceholder": "留空 = 用内置默认幕僚 persona（按日 / 周 / 月自动套用）；在此输入可完全覆写",
       "triggerMode": "触发方式",
       "triggerHint": "回看的时间口径",
       "trigger": { "rolling_24h": "回溯 24h", "natural_day": "自然日（昨天）" },

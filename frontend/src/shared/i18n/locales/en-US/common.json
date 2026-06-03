@@ -1861,6 +1861,7 @@
       "model": "Model",
       "kos": "Gbrain knowledge enrichment",
       "kosHint": "Attach Gbrain knowledge-base profile snippets for key projects / senders",
+      "promptPlaceholder": "Empty = built-in chief-of-staff persona (auto per daily/weekly/monthly); type to override",
       "triggerMode": "Trigger",
       "triggerHint": "Lookback basis",
       "trigger": { "rolling_24h": "Rolling 24h", "natural_day": "Natural day (yesterday)" },
