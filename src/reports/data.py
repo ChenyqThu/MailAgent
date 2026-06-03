@@ -66,16 +66,23 @@ def fetch_report_briefs(
     max_emails: int = 80,
     now: Optional[datetime] = None,
 ) -> List[ReportEmailBrief]:
-    """取最近 ``window_hours`` 小时邮件 brief（metadata + AI 字段）。
+    """取窗口 ``[now - window_hours, now)`` 内邮件 brief（metadata + AI 字段）。
 
-    JOIN email_metadata（date_received 窗口）+ llm_processing（labels_json）。
-    LEFT JOIN：没跑过 LLM 的邮件 AI 字段为空，仍计入。按 priority DESC +
-    date DESC 取前 ``max_emails``。date_received 是 ISO 字符串，字典序==时间序。
+    ``now`` = 窗口**上界**（exclusive）。worker 传「今天 00:00（北京）」→ daily 即
+    昨天一整天、weekly 即过去 7 个完整日（见 worker 锚定逻辑）。
+
+    JOIN email_metadata + llm_processing（labels_json）。LEFT JOIN：没跑过 LLM 的
+    邮件 AI 字段为空仍计入。
+
+    **时区**：``date_received`` 存的是**各封邮件原始本地时区**（混合 -08/-07/+00…，
+    未归一化），所以**不能字符串比较**——用 SQLite ``julianday()`` 按真实时刻比
+    （它能正确解析 ±HH:MM 偏移转 UTC）。窗口边界传 tz-aware ISO，julianday 同样归一。
     """
     if max_emails <= 0:
         return []
     now = now or datetime.now(_BEIJING)
     since_iso = (now - timedelta(hours=window_hours)).isoformat()
+    until_iso = now.isoformat()
 
     conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
@@ -92,9 +99,11 @@ def fetch_report_briefs(
                    l.labels_json        AS labels_json
               FROM email_metadata m
               LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
-             WHERE m.date_received >= ?
+             WHERE m.date_received IS NOT NULL
+               AND julianday(m.date_received) >= julianday(?)
+               AND julianday(m.date_received) <  julianday(?)
             """,
-            (since_iso,),
+            (since_iso, until_iso),
         ).fetchall()
     except sqlite3.OperationalError as e:
         logger.warning(f"[report] fetch_report_briefs query failed: {e}")

@@ -336,8 +336,10 @@ class TestRunReportOnce:
                            input_tokens=12, output_tokens=8)
 
     def test_ready_with_mock(self, db: Path):
-        _insert(db, 1, labels=_labels())
-        _insert(db, 2, labels=_labels(priority="🟢 一般", action="仅供参考"))
+        # run_report_once 锚定「今天 00:00」往前 → daily 窗口 = 昨天一整天。
+        # _NOW=6/2 09:05，故数据要落在昨天(6/1)：hours_ago=15 → 6/1 18:05。
+        _insert(db, 1, labels=_labels(), hours_ago=15)
+        _insert(db, 2, labels=_labels(priority="🟢 一般", action="仅供参考"), hours_ago=15)
         store = ReportStore(str(db))
         agent = store.get_agent("daily_email_digest")
         rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
@@ -356,7 +358,7 @@ class TestRunReportOnce:
         assert store.get_report(rid)["status"] == "empty"
 
     def test_fallback_on_llm_error(self, db: Path):
-        _insert(db, 1, labels=_labels())
+        _insert(db, 1, labels=_labels(), hours_ago=15)  # 落昨天窗口（见 test_ready_with_mock）
         store = ReportStore(str(db))
 
         async def boom(**kw):

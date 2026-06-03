@@ -747,10 +747,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       className="scrollbar-thin"
       style={{ position: 'relative', flex: 1, overflowY: 'auto', height: '100%' }}
     >
-      {/* 全宽（左对齐 + 侧边距）——不再 maxWidth:760 居中，避免宽窗口下右侧
-          留白被误读为「预留 chat panel 宽度」。 */}
+      {/* 左对齐 + 限宽 880（margin 留默认即贴左，不 auto 居中）：标题贴左 = 全宽感、
+          不再有「居中两侧留白」被误读为预留 chat panel；卡片限宽避免宽屏拉伸变形。 */}
       <div
         style={{
+          maxWidth: 880,
           padding: '22px 28px 60px',
           display: 'flex',
           flexDirection: 'column',

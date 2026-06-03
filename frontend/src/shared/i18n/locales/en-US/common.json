@@ -1825,8 +1825,8 @@
       "failed": "Report generation failed",
       "failedHint": "LLM call errored, retry available.",
       "regenerate": "Regenerate",
-      "empty": "Nothing needing attention in this window",
-      "emptyHint": "{count} emails in the window, all low priority — Jarvis auto-archived them.",
+      "empty": "No new email in this period",
+      "emptyHint": "No new email in the selected time window — nothing to report.",
       "generatedAt": "Generated",
       "backToList": "Back to list"
     },

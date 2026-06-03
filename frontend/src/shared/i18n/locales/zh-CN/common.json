@@ -1828,8 +1828,8 @@
       "failed": "报告生成失败",
       "failedHint": "LLM 调用出错，可重试。",
       "regenerate": "重新生成",
-      "empty": "窗口内没有需要特别关注的邮件",
-      "emptyHint": "过去窗口共 {count} 封邮件，均为低优先级，Jarvis 已自动归档。",
+      "empty": "这段时间没有新邮件",
+      "emptyHint": "所选时间窗口内没有新邮件，无需生成报告。",
       "generatedAt": "生成于",
       "backToList": "返回列表"
     },

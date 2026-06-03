@@ -22,7 +22,9 @@ _SUMMARY_LINK_RE = re.compile(r"\[([^\]]+)\]\(#email-(\d+)\)")
 _WEEKDAY_CN = "一二三四五六日"
 
 _TITLE_BY_CADENCE = {"daily": "邮件日报", "weekly": "邮件周报", "monthly": "邮件月报"}
-_SPAN_BY_CADENCE = {"daily": "过去 24 小时", "weekly": "过去 7 天", "monthly": "过去 30 天"}
+# daily 的 report_date 即覆盖当天（昨天），日期本身够清楚，不再标"过去 24 小时"
+# （会被误读为 rolling）；周/月报标明覆盖跨度。
+_SPAN_BY_CADENCE = {"daily": "", "weekly": "近 7 日", "monthly": "近 30 日"}
 
 # stat_row 规格（key 与 compute_report_counts 对齐）。
 _STAT_SPEC = [
@@ -41,14 +43,18 @@ _FALLBACK_SECTION_CAP = 25
 
 
 def _subtitle(report_date: str, cadence: str, now: datetime) -> tuple[str, str]:
+    # weekday 从 report_date（覆盖日，通常是昨天）推导 —— 不用 now（生成日），
+    # 否则"昨天的报告"会标成今天的星期。
+    weekday = ""
     try:
-        y, mo, d = report_date.split("-")
-        date_str = f"{int(y)}年{int(mo)}月{int(d)}日"
-    except (ValueError, AttributeError):
+        dt = datetime.strptime(report_date, "%Y-%m-%d")
+        date_str = f"{dt.year}年{dt.month}月{dt.day}日"
+        weekday = f"周{_WEEKDAY_CN[dt.weekday()]}"
+    except (ValueError, TypeError):
         date_str = report_date
     span = _SPAN_BY_CADENCE.get(cadence, "")
     subtitle = f"{date_str} · {span}" if span else date_str
-    return subtitle, f"周{_WEEKDAY_CN[now.weekday()]}"
+    return subtitle, weekday
 
 
 def _stat_row(counts: Dict[str, Any]) -> Dict[str, Any]:

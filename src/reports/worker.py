@@ -110,9 +110,16 @@ async def run_report_once(
     sched = _schedule_of(agent)
     cadence = sched.get("cadence", "daily")
     window_hours = int(agent.get("window_hours") or _DEFAULT_WINDOW_HOURS.get(cadence, 24))
-    report_date = now.strftime("%Y-%m-%d")
-    win_start = (now - timedelta(hours=window_hours)).isoformat()
-    win_end = now.isoformat()
+    # 锚定到北京当天 00:00：报告覆盖「截至今天零点往前 window_hours」的完整时段，
+    # 与运行时刻无关（早上跑/下午跑结果一致）。daily=昨天一整天、weekly=过去 7 个
+    # 完整日、monthly=过去 30 个完整日。fetch_report_briefs 的 now=上界(exclusive)。
+    anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    win_end_dt = anchor
+    win_start_dt = anchor - timedelta(hours=window_hours)
+    win_start = win_start_dt.isoformat()
+    win_end = win_end_dt.isoformat()
+    # report_date = 覆盖时段的最后一个完整日（= 昨天），不是生成日。
+    report_date = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
     rid = _report_id(agent["id"], cadence, report_date)
 
     store.create_report(
@@ -122,7 +129,7 @@ async def run_report_once(
     try:
         briefs = rdata.fetch_report_briefs(
             db_path, window_hours=window_hours,
-            max_emails=config.mailagent_report_max_emails, now=now,
+            max_emails=config.mailagent_report_max_emails, now=win_end_dt,
         )
         counts = rdata.compute_report_counts(briefs)
         counts_json = json.dumps(counts, ensure_ascii=False)
@@ -130,7 +137,7 @@ async def run_report_once(
         if counts["total"] == 0:
             store.finish_report(
                 rid, status="empty", counts_json=counts_json,
-                headline="窗口内没有需要关注的邮件",
+                headline="这段时间没有新邮件",
             )
             logger.info(f"[report] {rid} empty (no emails in window)")
             return rid
