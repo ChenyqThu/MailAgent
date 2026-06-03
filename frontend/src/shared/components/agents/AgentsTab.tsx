@@ -10,15 +10,28 @@ import { useReportConfig, useReportList, useRunNow, useSetConfig } from './hooks
 
 const DEFAULT_AGENT_ID = 'daily_email_digest'
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
-const WINDOW_OPTIONS: Array<[number, string]> = [
-  [24, '24h'],
-  [48, '48h'],
-  [72, '72h'],
-  [168, '7d']
-]
+// 回看窗口随 cadence 自适应：日报按小时、周报按天、月报按月。每个 cadence 都是
+// 独立取数 + 总结（非层级聚合：月报不是周报的综合），所以窗口确实有意义 ——
+// 它就是「这份报告覆盖多长时间」。切 cadence 时窗口重置为该档默认。
+const WINDOW_BY_CADENCE: Record<ReportCadence, Array<[number, string]>> = {
+  daily: [
+    [24, '24h'],
+    [48, '48h'],
+    [72, '72h']
+  ],
+  weekly: [
+    [168, '7d'],
+    [336, '14d']
+  ],
+  monthly: [
+    [720, '30d'],
+    [1440, '60d']
+  ]
+}
+const DEFAULT_WINDOW: Record<ReportCadence, number> = { daily: 24, weekly: 168, monthly: 720 }
 const MODELS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: '默认 · 速度/质量均衡' },
-  { id: 'claude-opus-4-1', label: 'Claude Opus 4.1', hint: '更深推理 · 慢/贵' },
+  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', hint: '更深推理 · 慢/贵' },
   { id: 'gpt-5.5', label: 'GPT-5.5', hint: '快 · 限流时自动兜底' }
 ]
 
@@ -515,7 +528,10 @@ function ConfigDrawer({
                     type="button"
                     className={cadence === k ? 'on' : ''}
                     style={{ flex: 1, justifyContent: 'center' }}
-                    onClick={() => setCadence(k)}
+                    onClick={() => {
+                      setCadence(k)
+                      setWindowHours(DEFAULT_WINDOW[k])
+                    }}
                   >
                     {t(`agents.cadence.${k}`)}
                   </button>
@@ -542,7 +558,7 @@ function ConfigDrawer({
             {/* window */}
             <Field label={t('agents.config.window')} hint={t('agents.config.windowHint')}>
               <div className="seg" style={{ width: '100%' }}>
-                {WINDOW_OPTIONS.map(([v, l]) => (
+                {WINDOW_BY_CADENCE[cadence].map(([v, l]) => (
                   <button
                     key={v}
                     type="button"
@@ -731,11 +747,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       className="scrollbar-thin"
       style={{ position: 'relative', flex: 1, overflowY: 'auto', height: '100%' }}
     >
+      {/* 全宽（左对齐 + 侧边距）——不再 maxWidth:760 居中，避免宽窗口下右侧
+          留白被误读为「预留 chat panel 宽度」。 */}
       <div
         style={{
-          maxWidth: 760,
-          margin: '0 auto',
-          padding: '22px 24px 60px',
+          padding: '22px 28px 60px',
           display: 'flex',
           flexDirection: 'column',
           gap: 16
