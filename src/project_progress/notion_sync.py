@@ -420,7 +420,7 @@ def build_properties(
     if row.product_model:
         name = row.product_model[:100].strip()
         if name:
-            props[PROP_PRODUCT_MODELS] = {"multi_select": [{"name": name}]}
+            props[PROP_PRODUCT_MODELS] = {"multi_select": [{"name": _safe_select_name(name)}]}
 
     # 产品线: 多 select. Notion 自动创建新 option. option name 不允许含逗号 → 替换为 /.
     if row.product_lines:
@@ -436,7 +436,7 @@ def build_properties(
             props[PROP_PRODUCT_LINE] = {"multi_select": pl_options}
 
     if row.rnd_division:
-        props[PROP_RND_DIV] = {"select": {"name": row.rnd_division[:100]}}
+        props[PROP_RND_DIV] = {"select": {"name": _safe_select_name(row.rnd_division)[:100]}}
     if row.pm:
         props[PROP_PM] = _rich_text(row.pm)
     if row.assist_pm:
@@ -477,7 +477,7 @@ def build_properties(
         _safe_set(props, PROP_REASONS_FOR_DELAY, _rich_text(row.reasons_for_delay))
     if row.current_status:
         _safe_set(props, PROP_CURRENT_STATUS,
-                  {"select": {"name": row.current_status[:100]}})
+                  {"select": {"name": _safe_select_name(row.current_status)[:100]}})
 
     # ---- Status 写入 ----
     if force_status is not None:
@@ -525,6 +525,14 @@ def _rich_text(content: str) -> Dict[str, Any]:
             {"type": "text", "text": {"content": str(content)[:2000]}}
         ]
     }
+
+
+def _safe_select_name(name: str) -> str:
+    """Notion select / multi_select 的 option name 不允许半角逗号 (逗号是 Notion
+    内部的 option 分隔符, 含逗号会 HTTP 400 "commas not allowed") —— 替换为 '/'.
+    与产品线字段既有处理一致. 用于值来自 xlsx 自由文本的 select (研发分部等).
+    """
+    return str(name).replace(",", "/")
 
 
 # ---------- high-level upsert ----------
