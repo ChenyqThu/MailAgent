@@ -7,7 +7,10 @@ import { ChatsTab } from '../agents/ChatsTab'
 
 export function NotionAgentLayout(): React.ReactElement {
   return (
-    <PageFrame ariaLabel="notion-agent" mainClassName="flex flex-col overflow-hidden min-w-0">
+    <PageFrame
+      ariaLabel="notion-agent"
+      mainClassName="flex-1 flex flex-col overflow-hidden min-w-0"
+    >
       <ChatsTab backend="notion-agent" />
     </PageFrame>
   )

@@ -8,7 +8,7 @@ import { ChatsTab } from '../agents/ChatsTab'
 
 export function SessionsLayout(): React.ReactElement {
   return (
-    <PageFrame ariaLabel="ai-sessions" mainClassName="flex flex-col overflow-hidden min-w-0">
+    <PageFrame ariaLabel="ai-sessions" mainClassName="flex-1 flex flex-col overflow-hidden min-w-0">
       <ChatsTab />
     </PageFrame>
   )

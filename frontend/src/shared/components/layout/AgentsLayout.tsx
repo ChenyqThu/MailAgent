@@ -7,7 +7,7 @@ import { AgentsPage } from '../agents/AgentsPage'
 
 export function AgentsLayout(): React.ReactElement {
   return (
-    <PageFrame ariaLabel="agents" mainClassName="flex flex-col overflow-hidden min-w-0">
+    <PageFrame ariaLabel="agents" mainClassName="flex-1 flex flex-col overflow-hidden min-w-0">
       <AgentsPage />
     </PageFrame>
   )

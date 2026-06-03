@@ -1859,8 +1859,8 @@
       "window": "Lookback window",
       "windowHint": "How far back to pull emails when generating",
       "model": "Model",
-      "kos": "KOS knowledge enrichment",
-      "kosHint": "Attach knowledge-base profile snippets for key projects / senders",
+      "kos": "Gbrain knowledge enrichment",
+      "kosHint": "Attach Gbrain knowledge-base profile snippets for key projects / senders",
       "cancel": "Cancel",
       "save": "Save"
     },

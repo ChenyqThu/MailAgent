@@ -100,6 +100,19 @@ export function useSetConfig(): {
   }
 }
 
+/** KOS（Gbrain）是否已配好（KOS_MCP_BASE + OAuth creds）→ 决定是否展示「Gbrain
+ *  知识库增强」配置项。未配好返回 false（隐藏该项）。复用 chat:kosAvailable IPC，
+ *  Query 缓存去重（与 MessageList 的保存按钮同一信号）。 */
+export function useKosAvailable(): boolean {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: ['chat', 'kosAvailable'],
+    queryFn: () => api.chat.kosAvailable(),
+    staleTime: Infinity
+  })
+  return q.data ?? false
+}
+
 /** 窄屏（< 780px）→ 报告/会话用单栏 + 返回栈（移植自设计稿 useNarrow）。 */
 export function useNarrow(breakpoint = 780): boolean {
   const [narrow, setNarrow] = useState(() => window.innerWidth < breakpoint)

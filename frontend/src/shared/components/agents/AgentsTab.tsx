@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next'
 
 import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
 import { ReportIcon, StatusBadge, Switch } from './primitives'
-import { useReportConfig, useReportList, useRunNow, useSetConfig } from './hooks'
+import { useKosAvailable, useReportConfig, useReportList, useRunNow, useSetConfig } from './hooks'
 
 const DEFAULT_AGENT_ID = 'daily_email_digest'
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
@@ -382,6 +382,9 @@ function ConfigDrawer({
   const [windowHours, setWindowHours] = useState<number>(cfg.window_hours ?? 24)
   const [model, setModel] = useState<string>(cfg.model || MODELS[0].id)
   const [kosEnrich, setKosEnrich] = useState(cfg.kos_enrich)
+  // 仅当 Gbrain（KOS）本身已启用并配好（KOS_MCP_BASE + OAuth）才展示「Gbrain 知识库
+  // 增强」开关 —— 没配好就别让用户开一个跑不起来的功能。
+  const kosAvailable = useKosAvailable()
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
@@ -634,30 +637,32 @@ function ConfigDrawer({
               </div>
             </Field>
 
-            {/* kos enrich */}
-            <div
-              className="flex items-center"
-              style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--c-ai) / 0.06)',
-                border: '1px solid rgb(var(--c-ai) / 0.22)'
-              }}
-            >
-              <span style={{ color: 'rgb(var(--c-ai))', flexShrink: 0 }}>
-                <ReportIcon name="database" size={16} />
-              </span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.config.kos')}
+            {/* kos enrich —— 仅 Gbrain 已配好时展示 */}
+            {kosAvailable && (
+              <div
+                className="flex items-center"
+                style={{
+                  gap: 12,
+                  padding: '13px 14px',
+                  borderRadius: 10,
+                  background: 'rgb(var(--c-ai) / 0.06)',
+                  border: '1px solid rgb(var(--c-ai) / 0.22)'
+                }}
+              >
+                <span style={{ color: 'rgb(var(--c-ai))', flexShrink: 0 }}>
+                  <ReportIcon name="database" size={16} />
+                </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                    {t('agents.config.kos')}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                    {t('agents.config.kosHint')}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.config.kosHint')}
-                </div>
+                <Switch on={kosEnrich} onChange={setKosEnrich} />
               </div>
-              <Switch on={kosEnrich} onChange={setKosEnrich} />
-            </div>
+            )}
           </div>
         </div>
 
@@ -747,11 +752,10 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       className="scrollbar-thin"
       style={{ position: 'relative', flex: 1, overflowY: 'auto', height: '100%' }}
     >
-      {/* 左对齐 + 限宽 880（margin 留默认即贴左，不 auto 居中）：标题贴左 = 全宽感、
-          不再有「居中两侧留白」被误读为预留 chat panel；卡片限宽避免宽屏拉伸变形。 */}
+      {/* 全宽（不限宽）：内容靠 28px 侧 padding 撑满 main —— 与报告/Chats 同为
+          full-bleed，消除被误读为「预留旧 chat panel」的右侧留白（用户多次反馈）。 */}
       <div
         style={{
-          maxWidth: 880,
           padding: '22px 28px 60px',
           display: 'flex',
           flexDirection: 'column',

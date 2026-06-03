@@ -1862,8 +1862,8 @@
       "window": "回看窗口",
       "windowHint": "生成时回溯的邮件时间范围",
       "model": "模型",
-      "kos": "KOS 知识库增强",
-      "kosHint": "对重点项目 / 发件人附加知识库档案片段",
+      "kos": "Gbrain 知识库增强",
+      "kosHint": "对重点项目 / 发件人附加 Gbrain 知识库档案片段",
       "cancel": "取消",
       "save": "保存"
     },

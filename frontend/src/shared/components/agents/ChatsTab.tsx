@@ -186,7 +186,7 @@ function SessionListPane({
                   aria-selected={active}
                   onClick={() => onFilter(key)}
                   className={cn(
-                    'flex-1 justify-center px-2.5 h-7 rounded text-meta font-medium transition-colors duration-fast',
+                    'flex-1 justify-center px-2 h-7 rounded text-meta font-medium whitespace-nowrap transition-colors duration-fast',
                     active ? 'bg-ink-3 text-ink-fg shadow-sm' : 'text-ink-fg-2 hover:text-ink-fg'
                   )}
                 >
