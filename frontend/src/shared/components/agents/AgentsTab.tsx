@@ -814,62 +814,66 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     [reportAgents, configId]
   )
 
-  // 外层 = 纯定位上下文（relative）且**不滚动**：ConfigDrawer 的 absolute inset:0 钉在这层
-  // → 始终覆盖可视区，不随列表上下滚（修「drawer 跟随页面滚动」）。滚动职责下沉到内层容器。
+  // 三层各司其职：①外层 relative 不滚 → drawer 钉这层（不随列表滚）②滚动层 absolute inset:0
+  // 承接滚动、**block 流非 flex**（子项自然高度、超出滚动，绝不压缩卡片）③内容层 flex column
+  // 仅排列 + gap。drawer 打开时滚动层切 overflow:hidden → 列表锁定（不滚 + 隐藏滚动条）。
   return (
     <div style={{ position: 'relative', flex: 1, height: '100%' }}>
-      {/* 全宽（不限宽）：内容靠 28px 侧 padding 撑满 main —— 与报告/Chats 同为
-          full-bleed，消除被误读为「预留旧 chat panel」的右侧留白（用户多次反馈）。
-          本层承接滚动；drawer 打开时切 overflow:hidden → 背景锁定（不滚 + 隐藏滚动条）。 */}
+      {/* 滚动层 absolute 脱流，外层须有明确高度（height:100%，依赖 main 的确定高度）撑起，
+          否则 absolute inset:0 塌成 0 → 整页只剩背景。 */}
       <div
         className="scrollbar-thin"
-        style={{
-          height: '100%',
-          overflowY: configAgent ? 'hidden' : 'auto',
-          padding: '22px 28px 60px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 16
-        }}
+        style={{ position: 'absolute', inset: 0, overflowY: configAgent ? 'hidden' : 'auto' }}
       >
-        <div>
-          <h1
-            style={{
-              fontSize: 20,
-              fontWeight: 600,
-              color: 'rgb(var(--ink-fg))',
-              letterSpacing: '-0.01em'
-            }}
-          >
-            {t('agents.title')}
-          </h1>
-          <p style={{ fontSize: 13.5, color: 'rgb(var(--ink-fg-2))', marginTop: 5 }}>
-            {t('agents.subtitle')}
-          </p>
-        </div>
-        {reportAgents.length > 0 ? (
-          reportAgents.map((cfg) => (
-            <AgentCard
-              key={cfg.id}
-              cfg={cfg}
-              onConfig={() => setConfigId(cfg.id)}
-              onOpenReports={onOpenReports}
-            />
-          ))
-        ) : (
-          <div
-            style={{
-              borderRadius: 14,
-              border: '1px solid rgb(var(--ink-border))',
-              padding: '22px 20px',
-              fontSize: 13,
-              color: 'rgb(var(--ink-fg-3))'
-            }}
-          >
-            {isLoading ? t('agents.reports.loading') : t('agents.card.noAgent')}
+        {/* 内容层自然高度（不设 height）—— 卡片始终自然高度，agent 再多也只是列表变长后滚动。
+            全宽（不限宽）：内容靠 28px 侧 padding 撑满 main，与报告/Chats 同 full-bleed。 */}
+        <div
+          style={{
+            padding: '22px 28px 60px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16
+          }}
+        >
+          <div>
+            <h1
+              style={{
+                fontSize: 20,
+                fontWeight: 600,
+                color: 'rgb(var(--ink-fg))',
+                letterSpacing: '-0.01em'
+              }}
+            >
+              {t('agents.title')}
+            </h1>
+            <p style={{ fontSize: 13.5, color: 'rgb(var(--ink-fg-2))', marginTop: 5 }}>
+              {t('agents.subtitle')}
+            </p>
           </div>
-        )}
-        <NewAgentTile />
+          {reportAgents.length > 0 ? (
+            reportAgents.map((cfg) => (
+              <AgentCard
+                key={cfg.id}
+                cfg={cfg}
+                onConfig={() => setConfigId(cfg.id)}
+                onOpenReports={onOpenReports}
+              />
+            ))
+          ) : (
+            <div
+              style={{
+                borderRadius: 14,
+                border: '1px solid rgb(var(--ink-border))',
+                padding: '22px 20px',
+                fontSize: 13,
+                color: 'rgb(var(--ink-fg-3))'
+              }}
+            >
+              {isLoading ? t('agents.reports.loading') : t('agents.card.noAgent')}
+            </div>
+          )}
+          <NewAgentTile />
+        </div>
       </div>
       {configAgent && <ConfigDrawer cfg={configAgent} onClose={() => setConfigId(null)} />}
     </div>
