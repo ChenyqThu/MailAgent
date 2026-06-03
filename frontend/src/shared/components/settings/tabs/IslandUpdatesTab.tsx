@@ -255,16 +255,19 @@ function UpdaterSubsection(): React.ReactElement {
       await api.updater.quitAndInstall()
     })
 
-  // feat/auto-update re-review (codex, LOW) — map the two states whose i18n key
-  // differs from the state string: not-available→upToDate, downloaded→readyToInstall
-  // (there is no settings.update.downloaded key, and 'downloaded' is a common state
-  // once auto-download is on, so it must show a localized label not the raw enum).
+  // feat/auto-update re-review (codex, LOW) — map the states whose i18n key
+  // differs from the state string: not-available→upToDate, downloaded→readyToInstall,
+  // dev-disabled→devDisabled (i18n key is camelCase but the state string is
+  // hyphenated; without this the --dir/unpackaged graceful state renders the raw
+  // "dev-disabled" enum). 'downloaded' has no settings.update.downloaded key either.
   const stateLabelKey = `settings.update.${
     status.state === 'not-available'
       ? 'upToDate'
       : status.state === 'downloaded'
         ? 'readyToInstall'
-        : status.state
+        : status.state === 'dev-disabled'
+          ? 'devDisabled'
+          : status.state
   }`
   // 这些状态串含 ICU 占位符: error={message} / available+readyToInstall={version}
   // / downloading={percent}。必须把对应值传进 t(), 否则 ICU 原样渲染 "{message}" 字面量
@@ -281,7 +284,7 @@ function UpdaterSubsection(): React.ReactElement {
       <Row label={t('settings.update.currentVersion')}>
         <span className="text-aux font-mono text-ink-fg">v{status.currentVersion}</span>
       </Row>
-      <Row label={t('settings.update.channel')} helper={status.message ?? undefined}>
+      <Row label={t('settings.update.channel')}>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-meta font-mono text-ink-fg-2">{stateLabel}</span>
           {status.state === 'idle' ||

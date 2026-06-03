@@ -1686,7 +1686,7 @@
       "readyToInstall": "Downloaded v{version} — restart to install",
       "restartCta": "Restart & install",
       "error": "Update check failed: {message}",
-      "devDisabled": "Auto-updater disabled in dev (packaged builds only)",
+      "devDisabled": "Auto-updater inactive (dev or unpackaged --dir build)",
       "channel": "GitHub Releases · ad-hoc signed",
       "autoDownload": "Auto-download updates",
       "autoDownloadHint": "Download new versions in the background automatically, then prompt to restart and install.",

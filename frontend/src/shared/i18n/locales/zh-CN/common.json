@@ -1689,7 +1689,7 @@
       "readyToInstall": "已下载 v{version},重启即可安装",
       "restartCta": "重启并安装",
       "error": "更新检查失败:{message}",
-      "devDisabled": "Dev 模式下 auto-updater 已禁用,仅打包版本可用",
+      "devDisabled": "auto-updater 未启用（开发或未签名 --dir 打包）",
       "channel": "GitHub Releases · ad-hoc 签名",
       "autoDownload": "自动下载更新",
       "autoDownloadHint": "检测到新版本后自动在后台下载,就绪后提示重启安装。",

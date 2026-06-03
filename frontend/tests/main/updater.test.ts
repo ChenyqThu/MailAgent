@@ -160,6 +160,21 @@ describe('updater: state machine via bindAutoUpdater', () => {
     expect(getStatus().message).toBe('GitHub 503')
   })
 
+  test('error event with missing app-update.yml degrades to dev-disabled (not error)', () => {
+    // --dir / unpackaged build: electron-updater can't read app-update.yml →
+    // ENOENT. Should land on the graceful dev-disabled sentinel instead of
+    // surfacing the raw ENOENT stack as an 'error' (the reported Settings bug).
+    const { stub, fire } = makeStubUpdater()
+    bindAutoUpdater(stub)
+    fire(
+      'error',
+      new Error(
+        "ENOENT: no such file or directory, open '/Applications/MailAgent.app/Contents/Resources/app-update.yml'"
+      )
+    )
+    expect(getStatus().state).toBe('dev-disabled')
+  })
+
   test('bindAutoUpdater enforces autoDownload=false + autoInstallOnAppQuit=true', () => {
     const { stub } = makeStubUpdater()
     bindAutoUpdater(stub)
@@ -241,6 +256,18 @@ describe('updater: handler operations', () => {
     const s = await __testing.check()
     expect(s.state).toBe('error')
     expect(s.message).toBe('no connection')
+  })
+
+  test('check() with ENOENT app-update.yml rejection degrades to dev-disabled (not error)', async () => {
+    const { stub } = makeStubUpdater()
+    bindAutoUpdater(stub)
+    ;(stub as unknown as { checkForUpdates: () => Promise<never> }).checkForUpdates =
+      async (): Promise<never> => {
+        throw new Error("ENOENT: no such file or directory, open 'app-update.yml'")
+      }
+    setBoundUpdater(stub)
+    const s = await __testing.check()
+    expect(s.state).toBe('dev-disabled')
   })
 })
 

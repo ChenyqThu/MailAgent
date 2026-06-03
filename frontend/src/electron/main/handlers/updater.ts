@@ -73,6 +73,27 @@ function readMasterFlag(): boolean {
   return raw === '1' || raw.toLowerCase() === 'true'
 }
 
+/** electron-updater throws/emits ENOENT for `app-update.yml` when the build
+ *  has no updater config — i.e. an unpackaged / `npx electron-builder --dir`
+ *  build run with is.dev=false (it slips past the dev guard, then every
+ *  checkForUpdates() rejects). That's not a real "update check failed", it's
+ *  "this build can't self-update". Detect it so we degrade to the same graceful
+ *  `dev-disabled` sentinel instead of surfacing a raw ENOENT stack in Settings. */
+function isUpdaterConfigMissing(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes('app-update.yml') || msg.includes('ENOENT')
+}
+
+/** Shared graceful landing for a missing updater config (see above). Mirrors
+ *  the dev guard's `dev-disabled` state so the renderer renders the unsigned/
+ *  inactive notice (enabled stays false) rather than an error stack. */
+function markUpdaterUnavailable(): void {
+  setStatus({
+    state: 'dev-disabled',
+    message: 'updater unavailable — app-update.yml missing (unpackaged/--dir build)'
+  })
+}
+
 export type UpdaterState =
   | 'idle'
   | 'checking'
@@ -223,6 +244,12 @@ export function bindAutoUpdater(updater: AutoUpdaterLike): void {
     // vanish the banner + install CTA with no path back until restart). A real
     // download failure still surfaces via maybeAutoDownload()/download()'s catch.
     if (hasStagedBuild()) return
+    // --dir/未打包构建缺 app-update.yml → ENOENT。降级 dev-disabled 而非把原始
+    // 堆栈糊到 Settings（用户现象: "GitHub Releases · ad-hoc 签名" 下糊 ENOENT）。
+    if (isUpdaterConfigMissing(err)) {
+      markUpdaterUnavailable()
+      return
+    }
     setStatus({ state: 'error', message: err.message })
   })
 }
@@ -300,7 +327,12 @@ async function check(): Promise<UpdaterStatus> {
     // an already-staged build (see hasStagedBuild). A real download failure
     // surfaces via maybeAutoDownload()/download()'s own catch, not here.
     if (!hasStagedBuild()) {
-      setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+      // --dir/未打包构建缺 app-update.yml → ENOENT, 降级 dev-disabled graceful.
+      if (isUpdaterConfigMissing(err)) {
+        markUpdaterUnavailable()
+      } else {
+        setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+      }
     }
   }
   return _status
