@@ -21,7 +21,7 @@ import {
   Sparkles
 } from 'lucide-react'
 
-import type { ChatMessage, ChatSessionListItem } from '@shared/api/types'
+import type { ChatBackendKind, ChatMessage, ChatSessionListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useActiveEmail } from '@shared/state/active-email'
@@ -118,6 +118,8 @@ function SessionListPane({
   onQuery,
   filter,
   onFilter,
+  showFilter,
+  title,
   total,
   isLoading,
   fluid,
@@ -130,6 +132,9 @@ function SessionListPane({
   onQuery: (v: string) => void
   filter: BackendFilter
   onFilter: (f: BackendFilter) => void
+  /** 锁定 backend 时隐藏筛选 chips（per-agent 视图无需筛选）。 */
+  showFilter: boolean
+  title: string
   total: number
   isLoading: boolean
   fluid?: boolean
@@ -147,7 +152,7 @@ function SessionListPane({
       <div className="shrink-0 px-3.5 pt-3.5 pb-2.5 border-b border-ink-border-soft">
         <div className="flex items-center gap-2 mb-2.5">
           <History size={15} strokeWidth={1.75} className="text-coral" />
-          <h2 className="text-body font-semibold text-ink-fg">{t('sessions.title')}</h2>
+          <h2 className="text-body font-semibold text-ink-fg">{title}</h2>
           <span className="text-meta font-mono text-ink-fg-3">{total}</span>
         </div>
         <label className="relative block mb-2.5">
@@ -169,30 +174,32 @@ function SessionListPane({
             )}
           />
         </label>
-        <div role="tablist" className="flex rounded-md bg-ink-2 p-0.5 gap-0.5">
-          {(['all', 'notion-agent', 'custom-api'] as const).map((key) => {
-            const active = filter === key
-            return (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => onFilter(key)}
-                className={cn(
-                  'flex-1 justify-center px-2.5 h-7 rounded text-meta font-medium transition-colors duration-fast',
-                  active ? 'bg-ink-3 text-ink-fg shadow-sm' : 'text-ink-fg-2 hover:text-ink-fg'
-                )}
-              >
-                {key === 'all'
-                  ? t('sessions.filterAll')
-                  : key === 'notion-agent'
-                    ? t('chat.backend.notionAgent')
-                    : t('chat.backend.customApi')}
-              </button>
-            )
-          })}
-        </div>
+        {showFilter && (
+          <div role="tablist" className="flex rounded-md bg-ink-2 p-0.5 gap-0.5">
+            {(['all', 'notion-agent', 'custom-api'] as const).map((key) => {
+              const active = filter === key
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => onFilter(key)}
+                  className={cn(
+                    'flex-1 justify-center px-2.5 h-7 rounded text-meta font-medium transition-colors duration-fast',
+                    active ? 'bg-ink-3 text-ink-fg shadow-sm' : 'text-ink-fg-2 hover:text-ink-fg'
+                  )}
+                >
+                  {key === 'all'
+                    ? t('sessions.filterAll')
+                    : key === 'notion-agent'
+                      ? t('chat.backend.notionAgent')
+                      : t('chat.backend.customApi')}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
         {isLoading && items.length === 0 ? (
@@ -298,10 +305,14 @@ function TranscriptPane({
 }
 
 // ─── tab ─────────────────────────────────────────────────────────────────────
-export function ChatsTab(): React.ReactElement {
+// backend 传值 → 锁定该 backend（隐藏筛选 chips，标题用 backend 名）；不传 → 全部
+// 会话 + 筛选分类（AI 会话历史）。三处复用：Custom AI=custom-api、Notion Agent 页=
+// notion-agent、/sessions=不传（全部）。
+export function ChatsTab({ backend }: { backend?: ChatBackendKind } = {}): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const narrow = useNarrow()
+  const scoped = backend !== undefined
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<BackendFilter>('all')
   const [picked, setPicked] = useState<number | null>(null)
@@ -313,10 +324,16 @@ export function ChatsTab(): React.ReactElement {
     staleTime: 10_000
   })
   const all = useMemo(() => sessionsQ.data ?? [], [sessionsQ.data])
+  // scoped 视图先按 backend 取全集（用于计数 + 空态）。
+  const scopedAll = useMemo(
+    () => (backend ? all.filter((s) => s.backend_kind === backend) : all),
+    [all, backend]
+  )
+  const effFilter: BackendFilter = scoped ? (backend as BackendFilter) : filter
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return all.filter((s) => {
-      if (filter !== 'all' && s.backend_kind !== filter) return false
+      if (effFilter !== 'all' && s.backend_kind !== effFilter) return false
       if (q === '') return true
       return [s.email_subject, s.email_sender, s.first_user_message, s.backend_model]
         .filter((v): v is string => typeof v === 'string')
@@ -324,7 +341,7 @@ export function ChatsTab(): React.ReactElement {
         .toLowerCase()
         .includes(q)
     })
-  }, [all, query, filter])
+  }, [all, query, effFilter])
 
   // 派生选中：picked 仍在过滤结果里 → 用它，否则回落第一条（避免 set-state-in-effect）。
   const selected = useMemo(() => {
@@ -340,6 +357,12 @@ export function ChatsTab(): React.ReactElement {
     if (narrow) setMobileDetail(true)
   }
 
+  const title = scoped
+    ? backend === 'notion-agent'
+      ? t('chat.backend.notionAgent')
+      : t('chat.backend.customApi')
+    : t('sessions.title')
+
   const list = (
     <SessionListPane
       items={filtered}
@@ -349,14 +372,16 @@ export function ChatsTab(): React.ReactElement {
       onQuery={setQuery}
       filter={filter}
       onFilter={setFilter}
-      total={all.length}
+      showFilter={!scoped}
+      title={title}
+      total={scopedAll.length}
       isLoading={sessionsQ.isLoading}
       fluid={narrow}
       t={t}
     />
   )
 
-  if (all.length === 0 && !sessionsQ.isLoading) {
+  if (scopedAll.length === 0 && !sessionsQ.isLoading) {
     return (
       <EmptyState
         fill

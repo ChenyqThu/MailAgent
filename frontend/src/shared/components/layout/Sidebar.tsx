@@ -16,7 +16,7 @@
 
 import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate, useRouterState, useSearch } from '@tanstack/react-router'
+import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   Activity,
@@ -44,7 +44,6 @@ import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
-import { openAIChatPanelWithBackend } from '@shared/state/ai-chat-panel'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { deriveAccount } from '@shared/lib/account'
 
@@ -200,10 +199,7 @@ export function Sidebar(): React.ReactElement {
   const setView = useEmailFilter((s) => s.setView)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  // /agents 当前 tab（深链选中态）。strict:false → 任意路由都可读，非 /agents 时为空。
-  const agentsSearch = useSearch({ strict: false }) as { tab?: string }
   const onAgents = pathname === '/agents'
-  const agentsTab = agentsSearch.tab ?? 'agents'
 
   // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
   // polling 作 SSE 断线 fallback.
@@ -461,33 +457,29 @@ export function Sidebar(): React.ReactElement {
           </h2>
         </div>
         <nav className="px-2 space-y-px">
-          {/* Notion Agent / Custom AI — open the panel ON the chosen backend
-              (not a blind toggle): the old code wired both to toggleAIChatPanel
-              so clicking "Notion Agent" could surface a panel still parked on
-              Custom AI. openAIChatPanelWithBackend parks the requested kind in
-              the panel store; AIChatPanel switches to it on the next render. */}
+          {/* Notion Agent — Sprint 20 起进 /notion-agent（仅 chats，notion-agent
+              scoped 的会话历史）。未来加 Notion Agent 的 agents/报告时升级成多 tab。 */}
           <NavRow
             icon={<Sparkles size={15} strokeWidth={1.75} />}
             label={t('chat.backend.notionAgent')}
-            onClick={() => openAIChatPanelWithBackend('notion-agent')}
+            selected={pathname === '/notion-agent'}
+            onClick={() => navigate({ to: '/notion-agent' })}
             right={<OnlineDot online={notionAgentOnline} />}
           />
-          {/* Custom AI — Sprint 20 起指向 /agents hub（Agents / 报告 / Chats），
-              不再直接开聊天面板。报告 Agent + 会话历史 + 自定义 agent 都在这页。
-              （从邮件上下文「问 AI」仍开 AIChatPanel 实时对话，不受影响。） */}
+          {/* Custom AI — /agents hub（Agents / 报告 / Chats=custom-api scoped）。
+              整个 /agents 都属 Custom AI。（邮件上下文「问 AI」仍开 AIChatPanel。） */}
           <NavRow
             icon={<Sliders size={15} strokeWidth={1.75} />}
             label={t('chat.backend.customApi')}
-            selected={onAgents && agentsTab !== 'chats'}
+            selected={onAgents}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
-          {/* AI 会话历史 — /agents 的 Chats tab（复用 SessionsPage）。/sessions
-              路由仍在，侧栏统一深链到 hub。 */}
+          {/* AI 会话历史 — /sessions 全局视图（全部 backend + 搜索 + 筛选分类）。 */}
           <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
             label={t('nav.aiSessions')}
-            selected={onAgents && agentsTab === 'chats'}
-            onClick={() => navigate({ to: '/agents', search: { tab: 'chats' } })}
+            selected={pathname === '/sessions'}
+            onClick={() => navigate({ to: '/sessions' })}
           />
         </nav>
 
