@@ -1798,5 +1798,83 @@
     "frosted": "毛玻璃",
     "solid": "纯色",
     "liquid": "液态玻璃"
+  },
+  "agents": {
+    "title": "Agents",
+    "subtitle": "自动生成、可溯源的邮件报告。日报为主，周报 / 月报同引擎。",
+    "tabAgents": "Agents",
+    "tabReports": "报告",
+    "tabChats": "Chats",
+    "cadence": {
+      "all": "全部",
+      "daily": "日报",
+      "weekly": "周报",
+      "monthly": "月报"
+    },
+    "status": {
+      "ready": "已就绪",
+      "generating": "生成中",
+      "failed": "失败",
+      "empty": "空",
+      "skipped": "已跳过"
+    },
+    "reports": {
+      "history": "历史报告",
+      "loading": "加载中…",
+      "none": "暂无报告",
+      "selectHint": "选择左侧一份报告查看",
+      "generating": "正在生成报告…",
+      "generatingHint": "Jarvis 正在回顾邮件并策展。通常需要 20–40 秒。",
+      "failed": "报告生成失败",
+      "failedHint": "LLM 调用出错，可重试。",
+      "regenerate": "重新生成",
+      "empty": "窗口内没有需要特别关注的邮件",
+      "emptyHint": "过去窗口共 {{count}} 封邮件，均为低优先级，Jarvis 已自动归档。",
+      "generatedAt": "生成于",
+      "backToList": "返回列表"
+    },
+    "card": {
+      "enabled": "已启用",
+      "disabled": "已停用",
+      "schedDaily": "每天 {{hour}}:00",
+      "schedWeekly": "每周一 {{hour}}:00",
+      "schedMonthly": "每月 1 日 {{hour}}:00",
+      "window": "回看 {{hours}}h",
+      "lastReport": "最近一次报告",
+      "noReport": "尚无报告，点「立即运行」生成第一份。",
+      "running": "生成中…",
+      "runNow": "立即运行",
+      "runningHint": "生成中，约 20–40 秒…",
+      "configure": "配置",
+      "newAgent": "新建 Agent",
+      "newAgentHint": "自定义触发、工具与模型 · 即将推出",
+      "noAgent": "未找到报告 Agent（数据库未初始化？）"
+    },
+    "config": {
+      "title": "配置 · {{title}}",
+      "enable": "启用此 Agent",
+      "enableHint": "按排程自动生成报告",
+      "prompt": "报告 Prompt",
+      "promptHint": "调报告的「口味」",
+      "promptNote": "计数、internal_ids、链接由系统权威回填；Prompt 只影响文案、分组与挑选。",
+      "schedule": "排程",
+      "at": "每天",
+      "window": "回看窗口",
+      "windowHint": "生成时回溯的邮件时间范围",
+      "model": "模型",
+      "kos": "KOS 知识库增强",
+      "kosHint": "对重点项目 / 发件人附加知识库档案片段",
+      "cancel": "取消",
+      "save": "保存"
+    },
+    "source": {
+      "title": "邮件溯源",
+      "close": "关闭",
+      "noSubject": "(无主题)",
+      "aiFields": "AI 字段",
+      "summary": "摘要",
+      "openNotion": "在 Notion 打开",
+      "openInbox": "在收件箱打开"
+    }
   }
 }

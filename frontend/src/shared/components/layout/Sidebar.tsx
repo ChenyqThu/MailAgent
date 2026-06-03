@@ -16,7 +16,7 @@
 
 import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate, useRouterState } from '@tanstack/react-router'
+import { useNavigate, useRouterState, useSearch } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   Activity,
@@ -200,6 +200,10 @@ export function Sidebar(): React.ReactElement {
   const setView = useEmailFilter((s) => s.setView)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  // /agents 当前 tab（深链选中态）。strict:false → 任意路由都可读，非 /agents 时为空。
+  const agentsSearch = useSearch({ strict: false }) as { tab?: string }
+  const onAgents = pathname === '/agents'
+  const agentsTab = agentsSearch.tab ?? 'agents'
 
   // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
   // polling 作 SSE 断线 fallback.
@@ -468,19 +472,22 @@ export function Sidebar(): React.ReactElement {
             onClick={() => openAIChatPanelWithBackend('notion-agent')}
             right={<OnlineDot online={notionAgentOnline} />}
           />
+          {/* Custom AI — Sprint 20 起指向 /agents hub（Agents / 报告 / Chats），
+              不再直接开聊天面板。报告 Agent + 会话历史 + 自定义 agent 都在这页。
+              （从邮件上下文「问 AI」仍开 AIChatPanel 实时对话，不受影响。） */}
           <NavRow
             icon={<Sliders size={15} strokeWidth={1.75} />}
             label={t('chat.backend.customApi')}
-            onClick={() => openAIChatPanelWithBackend('custom-api')}
+            selected={onAgents && agentsTab !== 'chats'}
+            onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
-          {/* AI 会话历史 — global cross-email history page (/sessions). Now
-              fully wired (ai_chat.db + chat:listAllSessions); the Sprint 18
-              "coming soon" noop is gone. */}
+          {/* AI 会话历史 — /agents 的 Chats tab（复用 SessionsPage）。/sessions
+              路由仍在，侧栏统一深链到 hub。 */}
           <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
             label={t('nav.aiSessions')}
-            selected={pathname === '/sessions'}
-            onClick={() => navigate({ to: '/sessions' })}
+            selected={onAgents && agentsTab === 'chats'}
+            onClick={() => navigate({ to: '/agents', search: { tab: 'chats' } })}
           />
         </nav>
 

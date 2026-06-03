@@ -44,6 +44,13 @@ import type {
   NotionAgentConfig,
   NotionAgentDoctorCheck,
   NotionAgentListItem,
+  ReportApi,
+  ReportAgentConfig,
+  ReportCadence,
+  ReportConfigPatch,
+  ReportDetail,
+  ReportListItem,
+  ReportRunResult,
   CleanupDeadLetterOpts,
   ComposeDraftOpts,
   CreateDraftOpts,
@@ -776,6 +783,38 @@ class ElectronNotionAgentApi implements NotionAgentApi {
   }
 }
 
+class ElectronReportApi implements ReportApi {
+  async list(opts?: {
+    cadence?: ReportCadence
+    agentId?: string
+    limit?: number
+  }): Promise<ReportListItem[]> {
+    return (await invoker()('report:list', opts ?? {})) as ReportListItem[]
+  }
+  async get(reportId: string): Promise<ReportDetail | null> {
+    return (await invoker()('report:get', reportId)) as ReportDetail | null
+  }
+  async getConfig(): Promise<ReportAgentConfig[]> {
+    return (await invoker()('report:getConfig')) as ReportAgentConfig[]
+  }
+  async setConfig(agentId: string, patch: ReportConfigPatch): Promise<ReportAgentConfig> {
+    const env = (await invoker()(
+      'report:setConfig',
+      agentId,
+      patch
+    )) as WriteEnvelope<ReportAgentConfig>
+    return unwrap(env)
+  }
+  async runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult> {
+    const env = (await invoker()(
+      'report:runNow',
+      agentId,
+      opts ?? {}
+    )) as WriteEnvelope<ReportRunResult>
+    return unwrap(env)
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   folder: FolderApi = new ElectronFolderApi()
@@ -794,4 +833,5 @@ export class ElectronApi implements MailApi {
   services: ServicesApi = new ElectronServicesApi()
   prompts: PromptsApi = new ElectronPromptsApi()
   notionAgent: NotionAgentApi = new ElectronNotionAgentApi()
+  report: ReportApi = new ElectronReportApi()
 }
