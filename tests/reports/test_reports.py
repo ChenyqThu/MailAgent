@@ -23,7 +23,14 @@ from src.reports import models as m
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.store import ReportStore
 from src.reports.summarizer import REPORT_TOOL_SCHEMA, ReportDraft, _parse
-from src.reports.worker import _due_hour, run_report_once
+from src.reports.agent_tools import build_report_tools
+from src.reports.worker import (
+    _daily_window,
+    _due_hour,
+    _period_bounds,
+    _sum_counts,
+    run_report_once,
+)
 
 _BJ = timezone(timedelta(hours=8))
 _NOW = datetime(2026, 6, 2, 9, 5, 0, tzinfo=_BJ)  # 周二 09:05
@@ -450,3 +457,166 @@ class TestRunReportOnce:
         rep = store.get_report(rid)
         assert rep["status"] == "ready" and "summarize_failed" in (rep["error"] or "")
         assert rep["blocks_json"]  # fallback 仍产出 blocks
+
+
+# ============================================================
+# M1-M6: agentic loop / 工具桥 / 触发窗口 / 聚合 / 正文预载
+# ============================================================
+
+class TestToolLoop:
+    def _msg(self, blocks, in_tok=10, out_tok=5):
+        from types import SimpleNamespace as NS
+        return NS(
+            content=blocks,
+            usage=NS(input_tokens=in_tok, output_tokens=out_tok, cache_read_input_tokens=0),
+            model="claude-x", stop_reason="tool_use",
+        )
+
+    def _tu(self, tid, name, inp):
+        from types import SimpleNamespace as NS
+        return NS(type="tool_use", id=tid, name=name, input=inp)
+
+    def test_loop_runs_tool_then_final(self):
+        from types import SimpleNamespace as NS
+        from src.llm_agent.client import LLMClient
+        seq = [
+            self._msg([self._tu("t1", "get_x", {"q": "a"})]),
+            self._msg([self._tu("t2", "build_report", {"headline": "H"})]),
+        ]
+        calls: list = []
+
+        class FakeMessages:
+            async def create(self, **kw):
+                calls.append(kw)
+                return seq[len(calls) - 1]
+
+        client = LLMClient()
+        client._client = NS(messages=FakeMessages())  # 注入 fake，跳过 _lazy / 真网络
+        handled: list = []
+
+        def h(inp):
+            handled.append(inp)
+            return "result-x"
+
+        res = asyncio.run(client.run_tool_loop(
+            system_blocks=[{"type": "text", "text": "s"}], user_content="u",
+            tools=[{"name": "get_x"}, {"name": "build_report"}],
+            tool_handlers={"get_x": h}, final_tool="build_report",
+            model_chain=["claude-x"], max_iter=5,
+        ))
+        assert res.final_input == {"headline": "H"}   # final_tool 的 input
+        assert res.iterations == 2
+        assert handled == [{"q": "a"}]                 # 非 final 工具被执行
+        assert res.input_tokens == 20                  # 两轮累加
+        replayed = calls[1]["messages"]               # 第 2 轮回灌了 tool_result
+        assert any(
+            mm.get("role") == "user" and isinstance(mm.get("content"), list)
+            and mm["content"][0].get("type") == "tool_result"
+            for mm in replayed
+        )
+
+    def test_loop_requires_anthropic_model(self):
+        from src.llm_agent.client import LLMCallError, LLMClient
+        with pytest.raises(LLMCallError):
+            asyncio.run(LLMClient().run_tool_loop(
+                system_blocks=[], user_content="u", tools=[], tool_handlers={},
+                final_tool="build_report", model_chain=["gpt-5.5"],  # 全 openai proto
+            ))
+
+
+class TestAgentTools:
+    def test_kos_gate(self):
+        tools_no, h_no = build_report_tools("x.db", kos_enabled=False)
+        tools_yes, _ = build_report_tools("x.db", kos_enabled=True)
+        assert "kos_query" not in {t["name"] for t in tools_no}
+        assert "kos_query" in {t["name"] for t in tools_yes}
+        assert set(h_no) == {"get_email_body", "search_emails", "search_attachments"}
+
+    def test_handler_bad_input_returns_error(self, db: Path):
+        _, handlers = build_report_tools(str(db), kos_enabled=False)
+        assert handlers["get_email_body"]({"internal_id": "not-int"}).startswith("error:")
+        assert handlers["search_emails"]({"query": ""}).startswith("error:")
+
+
+class TestWindowBounds:
+    def test_period_bounds_weekly(self):
+        n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)  # 周三
+        assert _period_bounds("weekly", n) == ("2026-05-25", "2026-05-31", "2026-05-25", 7)
+
+    def test_period_bounds_monthly(self):
+        n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)
+        start, end, rdate, _ = _period_bounds("monthly", n)
+        assert (start, end, rdate) == ("2026-05-01", "2026-05-31", "2026-05-01")
+
+    def test_daily_window_rolling_vs_natural(self):
+        n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)
+        s, e, rd = _daily_window({"trigger_mode": "rolling_24h", "window_hours": 48}, n)
+        assert rd == "2026-06-03" and (e - s) == timedelta(hours=48)
+        s2, e2, rd2 = _daily_window({"trigger_mode": "natural_day"}, n)
+        assert rd2 == "2026-06-02" and s2.hour == 0 and (e2 - s2) == timedelta(days=1)
+
+    def test_sum_counts(self):
+        subs = [
+            {"counts_json": json.dumps({"total": 10, "replied": 2, "sent": 3})},
+            {"counts_json": json.dumps({"total": 5, "replied": 1})},
+            {"counts_json": "bad-json"},  # 容错
+        ]
+        c = _sum_counts(subs)
+        assert c["total"] == 15 and c["replied"] == 3 and c["sent"] == 3
+
+
+class TestBodyPreload:
+    def test_important_email_preloads_body(self, db: Path):
+        _insert(db, 1, labels=_labels(priority="🔴 紧急", action="需要回复"))  # 重要
+        _insert(db, 2, labels=_labels(priority="🟢 一般", action="仅供参考"))  # 普通
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "INSERT INTO email_body (internal_id, body_markdown, body_format, "
+            "body_size_bytes, fetched_at, fetched_source) VALUES (1, '紧急正文', 'text', 6, ?, 'test')",
+            (time.time(),),
+        )
+        conn.commit()
+        conn.close()
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW, body_full_max=15)
+        bm = {b.internal_id: b for b in briefs}
+        assert bm[1].body_text == "紧急正文"   # 重要 → 预载
+        assert bm[2].body_text is None          # 普通 → 不预载
+        briefs0 = rdata.fetch_report_briefs(str(db), now=_NOW, body_full_max=0)
+        assert all(b.body_text is None for b in briefs0)  # 关闭 → 都不预载
+
+
+class TestAggregateRun:
+    async def _mock_agg(self, **kw):
+        return ReportDraft(
+            headline="周报", overview="综合。" + kw.get("missing_note", ""), model="mk"
+        )
+
+    def test_weekly_aggregates_subreports_with_missing_note(self, db: Path):
+        store = ReportStore(str(db))
+        # _NOW=2026-06-02 周二 → 上周一 5-25 ~ 上周日 5-31；seed 2 份日报（缺 5）
+        for d in ["2026-05-25", "2026-05-26"]:
+            rid = f"daily_email_digest:daily:{d}"
+            store.create_report(report_id=rid, agent_id="daily_email_digest", cadence="daily",
+                                report_date=d, window_start="s", window_end="e")
+            store.finish_report(rid, status="ready",
+                                blocks_json=json.dumps([{"type": "overview", "text": f"{d} 概览"}]),
+                                counts_json=json.dumps({"total": 10, "replied": 2}), headline=d)
+        store.update_agent("weekly_email_digest", {"timezone": "Asia/Shanghai"})
+        wk = store.get_agent("weekly_email_digest")
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
+                                          now=_NOW, aggregate_fn=self._mock_agg))
+        rep = store.get_report(rid)
+        assert rep["status"] == "ready"
+        blocks = json.loads(rep["blocks_json"])["blocks"]
+        ov = next((b["text"] for b in blocks if b["type"] == "overview"), "")
+        assert "缺失" in ov                              # 缺数据标注
+        c = json.loads(rep["counts_json"])
+        assert c["total"] == 20 and c["replied"] == 4    # 子报告 counts 汇总
+
+    def test_weekly_empty_when_no_subreports(self, db: Path):
+        store = ReportStore(str(db))
+        store.update_agent("weekly_email_digest", {"timezone": "Asia/Shanghai"})
+        wk = store.get_agent("weekly_email_digest")
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
+                                          now=_NOW, aggregate_fn=self._mock_agg))
+        assert store.get_report(rid)["status"] == "empty"  # 无子报告 → empty
