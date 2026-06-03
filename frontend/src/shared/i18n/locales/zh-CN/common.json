@@ -1875,6 +1875,11 @@
       "summary": "摘要",
       "openNotion": "在 Notion 打开",
       "openInbox": "在收件箱打开"
+    },
+    "chats": {
+      "continue": "在收件箱继续",
+      "selectHint": "选择左侧一个会话查看",
+      "emptyTranscript": "这个会话还没有消息"
     }
   }
 }

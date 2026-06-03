@@ -4,8 +4,8 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
-import { SessionsPage } from '@shared/components/chat/SessionsPage'
 import { AgentsTab } from './AgentsTab'
+import { ChatsTab } from './ChatsTab'
 import { ReportsTab } from './ReportsTab'
 import { useReportList } from './hooks'
 
@@ -132,7 +132,7 @@ export function AgentsPage(): React.ReactElement {
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {tab === 'agents' && <AgentsTab onOpenReports={() => go('reports')} />}
         {tab === 'reports' && <ReportsTab />}
-        {tab === 'chats' && <SessionsPage />}
+        {tab === 'chats' && <ChatsTab />}
       </div>
     </div>
   )

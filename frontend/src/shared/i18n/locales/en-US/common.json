@@ -1872,6 +1872,11 @@
       "summary": "Summary",
       "openNotion": "Open in Notion",
       "openInbox": "Open in inbox"
+    },
+    "chats": {
+      "continue": "Continue in inbox",
+      "selectHint": "Select a conversation on the left",
+      "emptyTranscript": "No messages in this conversation yet"
     }
   }
 }

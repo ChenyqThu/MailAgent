@@ -1,0 +1,390 @@
+// Sprint 20 — Chats tab（按设计稿 chat-tab.jsx 双栏实现）：左会话列表（搜索 +
+// backend 过滤 + 选中）+ 右 transcript 内联预览。transcript 复用生产 MessageList
+// （read-only：不传 draft/user handlers → draft 卡按钮禁用、编辑入口消失），自带
+// 升级后的工具调用 chip + 正文渲染。「在收件箱继续」仍可跳回实时 chat 面板。
+//
+// 取代了原先直接复用单栏 SessionsPage 的临时做法。/sessions 路由 + SessionsPage
+// 保持不变（独立入口）。
+import type { TFunction } from 'i18next'
+import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
+import {
+  ChevronLeft,
+  ExternalLink,
+  History,
+  Mail,
+  MessageSquare,
+  Search,
+  Sliders,
+  Sparkles
+} from 'lucide-react'
+
+import type { ChatMessage, ChatSessionListItem } from '@shared/api/types'
+import { cn } from '@shared/lib/cn'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { useActiveEmail } from '@shared/state/active-email'
+import { openAIChatSession } from '@shared/state/ai-chat-panel'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { MessageList } from '@shared/components/chat/MessageList'
+import { useNarrow } from './hooks'
+
+type BackendFilter = 'all' | 'notion-agent' | 'custom-api'
+const SESSIONS_QUERY_KEY = ['chat', 'allSessions'] as const
+
+function relTime(epochMs: number, t: TFunction): string {
+  const diff = Date.now() - epochMs
+  if (diff < 60_000) return t('chat.sidebar.justNow')
+  if (diff < 3_600_000) return t('chat.sidebar.minutesAgo', { n: Math.floor(diff / 60_000) })
+  if (diff < 86_400_000) return t('chat.sidebar.hoursAgo', { n: Math.floor(diff / 3_600_000) })
+  return t('chat.sidebar.daysAgo', { n: Math.floor(diff / 86_400_000) })
+}
+
+function backendLabel(item: ChatSessionListItem, t: TFunction): string {
+  return item.backend_kind === 'notion-agent'
+    ? t('chat.backend.notionAgent')
+    : (item.backend_model ?? t('chat.backend.customApi'))
+}
+
+// ─── 会话行 ──────────────────────────────────────────────────────────────────
+function SessionRow({
+  item,
+  selected,
+  onSelect,
+  t
+}: {
+  item: ChatSessionListItem
+  selected: boolean
+  onSelect: () => void
+  t: TFunction
+}): React.ReactElement {
+  const subject = item.email_subject?.trim() || null
+  const firstMsg = item.first_user_message?.trim() || null
+  const title = subject ?? firstMsg ?? t('sessions.untitled')
+  const preview = subject ? firstMsg : null
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        'relative w-full text-left px-3 py-2.5 rounded-lg',
+        'border transition-colors duration-fast',
+        selected
+          ? 'bg-ink-3 border-ink-border'
+          : 'bg-transparent border-transparent hover:bg-ink-fg/[0.03]'
+      )}
+    >
+      {selected && (
+        <span
+          className="absolute left-0 top-2 bottom-2 w-[3px] rounded-sm"
+          style={{ background: 'rgb(var(--c-accent))' }}
+        />
+      )}
+      <div className="flex items-center gap-2 min-w-0">
+        <Mail size={13} strokeWidth={1.75} className="text-ink-fg-3 shrink-0" />
+        <span className="text-body font-medium text-ink-fg truncate min-w-0" title={title}>
+          {title}
+        </span>
+      </div>
+      {preview && (
+        <p className="mt-1 text-meta text-ink-fg-2 line-clamp-1" title={preview}>
+          {preview}
+        </p>
+      )}
+      <div className="mt-1.5 flex items-center gap-2 text-micro font-mono text-ink-fg-3">
+        <span className="inline-flex items-center gap-1">
+          <Sparkles size={10} strokeWidth={2} className="text-coral" />
+          {backendLabel(item, t)}
+        </span>
+        <span aria-hidden>·</span>
+        <span className="inline-flex items-center gap-1">
+          <MessageSquare size={10} strokeWidth={2} />
+          {t('chat.sidebar.messageCount', { n: item.message_count })}
+        </span>
+        <span aria-hidden>·</span>
+        <span>{relTime(item.updated_at, t)}</span>
+      </div>
+    </button>
+  )
+}
+
+// ─── 左：会话列表面板 ─────────────────────────────────────────────────────────
+function SessionListPane({
+  items,
+  selectedId,
+  onSelect,
+  query,
+  onQuery,
+  filter,
+  onFilter,
+  total,
+  isLoading,
+  fluid,
+  t
+}: {
+  items: ChatSessionListItem[]
+  selectedId: number | null
+  onSelect: (id: number) => void
+  query: string
+  onQuery: (v: string) => void
+  filter: BackendFilter
+  onFilter: (f: BackendFilter) => void
+  total: number
+  isLoading: boolean
+  fluid?: boolean
+  t: TFunction
+}): React.ReactElement {
+  return (
+    <div
+      className="flex flex-col h-full bg-ink-1"
+      style={{
+        width: fluid ? '100%' : 340,
+        flexShrink: 0,
+        borderRight: fluid ? 'none' : '1px solid rgb(var(--ink-border))'
+      }}
+    >
+      <div className="shrink-0 px-3.5 pt-3.5 pb-2.5 border-b border-ink-border-soft">
+        <div className="flex items-center gap-2 mb-2.5">
+          <History size={15} strokeWidth={1.75} className="text-coral" />
+          <h2 className="text-body font-semibold text-ink-fg">{t('sessions.title')}</h2>
+          <span className="text-meta font-mono text-ink-fg-3">{total}</span>
+        </div>
+        <label className="relative block mb-2.5">
+          <Search
+            size={13}
+            strokeWidth={1.75}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-fg-3 pointer-events-none"
+          />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            placeholder={t('sessions.searchPlaceholder')}
+            aria-label={t('sessions.searchPlaceholder')}
+            className={cn(
+              'w-full h-8 pl-8 pr-3 rounded-md text-body',
+              'bg-ink-2 border border-ink-border-soft text-ink-fg',
+              'placeholder:text-ink-fg-3 focus:outline-none focus:ring-1 focus:ring-c-accent/40'
+            )}
+          />
+        </label>
+        <div role="tablist" className="flex rounded-md bg-ink-2 p-0.5 gap-0.5">
+          {(['all', 'notion-agent', 'custom-api'] as const).map((key) => {
+            const active = filter === key
+            return (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => onFilter(key)}
+                className={cn(
+                  'flex-1 justify-center px-2.5 h-7 rounded text-meta font-medium transition-colors duration-fast',
+                  active ? 'bg-ink-3 text-ink-fg shadow-sm' : 'text-ink-fg-2 hover:text-ink-fg'
+                )}
+              >
+                {key === 'all'
+                  ? t('sessions.filterAll')
+                  : key === 'notion-agent'
+                    ? t('chat.backend.notionAgent')
+                    : t('chat.backend.customApi')}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
+        {isLoading && items.length === 0 ? (
+          <div className="px-2 py-6 text-meta text-ink-fg-3">{t('agents.reports.loading')}</div>
+        ) : items.length === 0 ? (
+          <div className="px-2 py-6 text-meta text-ink-fg-3">{t('sessions.noMatchTitle')}</div>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            {items.map((it) => (
+              <SessionRow
+                key={it.id}
+                item={it}
+                selected={it.id === selectedId}
+                onSelect={() => onSelect(it.id)}
+                t={t}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── 右：transcript 预览（复用 MessageList read-only）──────────────────────────
+function TranscriptPane({
+  session,
+  onBack,
+  narrow,
+  t
+}: {
+  session: ChatSessionListItem
+  onBack?: () => void
+  narrow: boolean
+  t: TFunction
+}): React.ReactElement {
+  const mailApi = useMailApi()
+  const navigate = useNavigate()
+  const setActiveEmail = useActiveEmail((s) => s.setActive)
+  const msgsQ = useQuery({
+    queryKey: ['chat', 'messages', session.id],
+    queryFn: () => mailApi.chat.listMessages(session.id),
+    staleTime: 10_000
+  })
+  const messages: ChatMessage[] = msgsQ.data ?? []
+  const title =
+    session.email_subject?.trim() || session.first_user_message?.trim() || t('sessions.untitled')
+
+  const continueInInbox = (): void => {
+    setActiveEmail(session.email_id, { navTarget: true })
+    openAIChatSession(session.email_id, session.id)
+    void navigate({ to: '/' })
+  }
+
+  return (
+    <div className="flex-1 flex flex-col h-full min-w-0">
+      <div className="shrink-0 flex items-center gap-2.5 px-4 py-3 border-b border-ink-border-soft">
+        {narrow && (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label={t('agents.reports.backToList')}
+            className="grid place-items-center text-ink-fg-1 hover:text-ink-fg"
+          >
+            <ChevronLeft size={16} strokeWidth={2} />
+          </button>
+        )}
+        <Mail size={14} strokeWidth={1.75} className="text-ink-fg-3 shrink-0" />
+        <h2 className="text-body font-semibold text-ink-fg flex-1 truncate min-w-0" title={title}>
+          {title}
+        </h2>
+        <span className="inline-flex items-center gap-1.5 text-meta font-mono text-coral shrink-0">
+          <Sliders size={11} strokeWidth={2} />
+          {backendLabel(session, t)}
+        </span>
+        <button
+          type="button"
+          onClick={continueInInbox}
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 h-7 rounded-md text-meta font-medium shrink-0',
+            'text-ink-fg-1 bg-transparent border border-ink-border',
+            'hover:bg-ink-4 hover:text-ink-fg transition-colors duration-fast'
+          )}
+        >
+          <ExternalLink size={12} strokeWidth={2} />
+          {t('agents.chats.continue')}
+        </button>
+      </div>
+      {msgsQ.isLoading ? (
+        <div className="flex-1 grid place-items-center text-meta text-ink-fg-3">
+          {t('agents.reports.loading')}
+        </div>
+      ) : messages.length === 0 ? (
+        <div className="flex-1 grid place-items-center text-meta text-ink-fg-3">
+          {t('agents.chats.emptyTranscript')}
+        </div>
+      ) : (
+        // read-only：不传 draftHandlers / userHandlers → draft 卡按钮禁用、编辑入口消失。
+        <MessageList messages={messages} streamingMessageId={null} />
+      )}
+    </div>
+  )
+}
+
+// ─── tab ─────────────────────────────────────────────────────────────────────
+export function ChatsTab(): React.ReactElement {
+  const { t } = useTranslation()
+  const mailApi = useMailApi()
+  const narrow = useNarrow()
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<BackendFilter>('all')
+  const [picked, setPicked] = useState<number | null>(null)
+  const [mobileDetail, setMobileDetail] = useState(false)
+
+  const sessionsQ = useQuery({
+    queryKey: SESSIONS_QUERY_KEY,
+    queryFn: () => mailApi.chat.listAllSessions(),
+    staleTime: 10_000
+  })
+  const all = useMemo(() => sessionsQ.data ?? [], [sessionsQ.data])
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return all.filter((s) => {
+      if (filter !== 'all' && s.backend_kind !== filter) return false
+      if (q === '') return true
+      return [s.email_subject, s.email_sender, s.first_user_message, s.backend_model]
+        .filter((v): v is string => typeof v === 'string')
+        .join(' ')
+        .toLowerCase()
+        .includes(q)
+    })
+  }, [all, query, filter])
+
+  // 派生选中：picked 仍在过滤结果里 → 用它，否则回落第一条（避免 set-state-in-effect）。
+  const selected = useMemo(() => {
+    if (picked !== null) {
+      const hit = filtered.find((s) => s.id === picked)
+      if (hit) return hit
+    }
+    return filtered[0] ?? null
+  }, [filtered, picked])
+
+  const onSelect = (id: number): void => {
+    setPicked(id)
+    if (narrow) setMobileDetail(true)
+  }
+
+  const list = (
+    <SessionListPane
+      items={filtered}
+      selectedId={selected?.id ?? null}
+      onSelect={onSelect}
+      query={query}
+      onQuery={setQuery}
+      filter={filter}
+      onFilter={setFilter}
+      total={all.length}
+      isLoading={sessionsQ.isLoading}
+      fluid={narrow}
+      t={t}
+    />
+  )
+
+  if (all.length === 0 && !sessionsQ.isLoading) {
+    return (
+      <EmptyState
+        fill
+        icon={<Sparkles size={28} strokeWidth={1.5} />}
+        title={t('sessions.emptyTitle')}
+        hint={t('sessions.emptyHint')}
+      />
+    )
+  }
+
+  if (narrow) {
+    return mobileDetail && selected ? (
+      <TranscriptPane session={selected} narrow onBack={() => setMobileDetail(false)} t={t} />
+    ) : (
+      <div className="h-full w-full">{list}</div>
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0">
+      {list}
+      {selected ? (
+        <TranscriptPane session={selected} narrow={false} t={t} />
+      ) : (
+        <div className="flex-1 grid place-items-center text-meta text-ink-fg-3">
+          {t('agents.chats.selectHint')}
+        </div>
+      )}
+    </div>
+  )
+}
