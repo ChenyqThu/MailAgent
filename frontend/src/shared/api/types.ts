@@ -1863,6 +1863,12 @@ export interface ReportAgentConfig {
   prompt_is_default: boolean
   model: string
   kos_enrich: boolean
+  /** daily 触发模式：rolling_24h（往前推 window_hours）| natural_day（指定时区昨天整天）。 */
+  trigger_mode: 'rolling_24h' | 'natural_day'
+  /** IANA 时区（'' = 本地）；natural_day 边界 + 周/月报自然周/月用。 */
+  timezone: string
+  /** daily 预载正文的重要邮件上限（null = 默认 15）。 */
+  body_full_max: number | null
   updated_at: number | null
 }
 
@@ -1876,6 +1882,9 @@ export interface ReportConfigPatch {
   window_hours?: number
   schedule?: ReportSchedule
   kos_enrich?: boolean
+  trigger_mode?: 'rolling_24h' | 'natural_day'
+  timezone?: string
+  body_full_max?: number
 }
 
 export interface ReportRunResult {

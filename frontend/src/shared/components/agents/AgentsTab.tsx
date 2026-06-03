@@ -5,10 +5,9 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
-import { ReportIcon, StatusBadge, Switch } from './primitives'
+import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import { useKosAvailable, useReportConfig, useReportList, useRunNow, useSetConfig } from './hooks'
 
-const DEFAULT_AGENT_ID = 'daily_email_digest'
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
 // 回看窗口随 cadence 自适应：日报按小时、周报按天、月报按月。每个 cadence 都是
 // 独立取数 + 总结（非层级聚合：月报不是周报的综合），所以窗口确实有意义 ——
@@ -28,7 +27,6 @@ const WINDOW_BY_CADENCE: Record<ReportCadence, Array<[number, string]>> = {
     [1440, '60d']
   ]
 }
-const DEFAULT_WINDOW: Record<ReportCadence, number> = { daily: 24, weekly: 168, monthly: 720 }
 const MODELS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', hint: '默认 · 最强推理' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: '更快 · 质量均衡' },
@@ -59,7 +57,8 @@ function AgentCard({
   const { save } = useSetConfig()
   const { run, isRunning } = useRunNow()
   const { items } = useReportList()
-  const last = items[0]
+  // 该 agent 的最近一份报告（items 按 report_date 倒序 → find 命中即最新）。
+  const last = useMemo(() => items.find((it) => it.agent_id === cfg.id) ?? null, [items, cfg.id])
 
   const toggle = (v: boolean): void => {
     void save(cfg.id, { enabled: v })
@@ -374,16 +373,22 @@ function ConfigDrawer({
 }): React.ReactElement {
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
+  // cadence 固定（三独立 agent，不在 drawer 内切换）。
+  const cadence = cfg.schedule.cadence
+  const isDaily = cadence === 'daily'
   const [enabled, setEnabled] = useState(cfg.enabled)
   const [prompt, setPrompt] = useState(cfg.prompt)
   const [promptDirty, setPromptDirty] = useState(false)
-  const [cadence, setCadence] = useState<ReportCadence>(cfg.schedule.cadence)
   const [hour, setHour] = useState<number>(cfg.schedule.hours?.[0] ?? 9)
   const [windowHours, setWindowHours] = useState<number>(cfg.window_hours ?? 24)
+  const [triggerMode, setTriggerMode] = useState<'rolling_24h' | 'natural_day'>(
+    cfg.trigger_mode || 'rolling_24h'
+  )
+  const [timezone, setTimezone] = useState<string>(cfg.timezone || '')
+  const [bodyMax, setBodyMax] = useState<number>(cfg.body_full_max ?? 15)
   const [model, setModel] = useState<string>(cfg.model || MODELS[0].id)
   const [kosEnrich, setKosEnrich] = useState(cfg.kos_enrich)
-  // 仅当 Gbrain（KOS）本身已启用并配好（KOS_MCP_BASE + OAuth）才展示「Gbrain 知识库
-  // 增强」开关 —— 没配好就别让用户开一个跑不起来的功能。
+  // 仅当 Gbrain（KOS）已配好（KOS_MCP_BASE + OAuth）才展示增强开关。
   const kosAvailable = useKosAvailable()
 
   const inputStyle: React.CSSProperties = {
@@ -404,9 +409,15 @@ function ConfigDrawer({
       // prompt 未改且仍是默认态 → 传 null 保持"用默认"；改过 → 传文本。
       prompt: promptDirty ? prompt : cfg.prompt_is_default ? null : cfg.prompt,
       model,
-      window_hours: windowHours,
       kos_enrich: kosEnrich,
       schedule: { ...cfg.schedule, cadence, hours: [hour] }
+    }
+    // 触发模式 / 时区 / 正文上限 / 回看窗口仅 daily 有意义；周月报走层级聚合，不带这些。
+    if (isDaily) {
+      patch.trigger_mode = triggerMode
+      patch.timezone = timezone.trim()
+      patch.body_full_max = bodyMax
+      if (triggerMode === 'rolling_24h') patch.window_hours = windowHours
     }
     void save(cfg.id, patch).then(onClose)
   }
@@ -522,25 +533,10 @@ function ConfigDrawer({
               </div>
             </Field>
 
-            {/* schedule */}
+            {/* schedule（cadence 固定，只选时点） */}
             <Field label={t('agents.config.schedule')}>
-              <div className="seg" style={{ width: '100%', marginBottom: 10 }}>
-                {(['daily', 'weekly', 'monthly'] as ReportCadence[]).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    className={cadence === k ? 'on' : ''}
-                    style={{ flex: 1, justifyContent: 'center' }}
-                    onClick={() => {
-                      setCadence(k)
-                      setWindowHours(DEFAULT_WINDOW[k])
-                    }}
-                  >
-                    {t(`agents.cadence.${k}`)}
-                  </button>
-                ))}
-              </div>
               <div className="flex items-center" style={{ gap: 10 }}>
+                <CadencePill cadence={cadence} />
                 <span style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))' }}>
                   {t('agents.config.at')}
                 </span>
@@ -558,22 +554,84 @@ function ConfigDrawer({
               </div>
             </Field>
 
-            {/* window */}
-            <Field label={t('agents.config.window')} hint={t('agents.config.windowHint')}>
-              <div className="seg" style={{ width: '100%' }}>
-                {WINDOW_BY_CADENCE[cadence].map(([v, l]) => (
-                  <button
-                    key={v}
-                    type="button"
-                    className={windowHours === v ? 'on' : ''}
-                    style={{ flex: 1, justifyContent: 'center' }}
-                    onClick={() => setWindowHours(v)}
-                  >
-                    {l}
-                  </button>
-                ))}
-              </div>
-            </Field>
+            {isDaily ? (
+              <>
+                {/* 触发模式 */}
+                <Field label={t('agents.config.triggerMode')} hint={t('agents.config.triggerHint')}>
+                  <div className="seg" style={{ width: '100%' }}>
+                    {(['rolling_24h', 'natural_day'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={triggerMode === mode ? 'on' : ''}
+                        style={{ flex: 1, justifyContent: 'center' }}
+                        onClick={() => setTriggerMode(mode)}
+                      >
+                        {t(`agents.config.trigger.${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+
+                {/* 回看窗口（仅 rolling_24h；natural_day 固定整天） */}
+                {triggerMode === 'rolling_24h' && (
+                  <Field label={t('agents.config.window')} hint={t('agents.config.windowHint')}>
+                    <div className="seg" style={{ width: '100%' }}>
+                      {WINDOW_BY_CADENCE.daily.map(([v, l]) => (
+                        <button
+                          key={v}
+                          type="button"
+                          className={windowHours === v ? 'on' : ''}
+                          style={{ flex: 1, justifyContent: 'center' }}
+                          onClick={() => setWindowHours(v)}
+                        >
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                )}
+
+                {/* 时区 */}
+                <Field label={t('agents.config.timezone')} hint={t('agents.config.timezoneHint')}>
+                  <input
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    placeholder={t('agents.config.timezonePlaceholder')}
+                    style={inputStyle}
+                  />
+                </Field>
+
+                {/* 预载正文上限 */}
+                <Field label={t('agents.config.bodyMax')} hint={t('agents.config.bodyMaxHint')}>
+                  <input
+                    type="number"
+                    min={0}
+                    value={bodyMax}
+                    onChange={(e) => setBodyMax(Math.max(0, Number(e.target.value) || 0))}
+                    style={inputStyle}
+                  />
+                </Field>
+              </>
+            ) : (
+              <Field label={t('agents.config.aggregation')}>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    lineHeight: 1.6,
+                    color: 'rgb(var(--ink-fg-2))',
+                    padding: '11px 13px',
+                    borderRadius: 9,
+                    background: 'rgb(var(--ink-1))',
+                    border: '1px solid rgb(var(--ink-border-soft))'
+                  }}
+                >
+                  {cadence === 'weekly'
+                    ? t('agents.config.aggWeekly')
+                    : t('agents.config.aggMonthly')}
+                </div>
+              </Field>
+            )}
 
             {/* model */}
             <Field label={t('agents.config.model')}>
@@ -740,11 +798,18 @@ function Field({
 export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): React.ReactElement {
   const { t } = useTranslation()
   const { agents, isLoading } = useReportConfig()
-  const [configOpen, setConfigOpen] = useState(false)
+  const [configId, setConfigId] = useState<string | null>(null)
 
-  const cfg = useMemo(
-    () => agents.find((a) => a.id === DEFAULT_AGENT_ID) ?? agents[0] ?? null,
-    [agents]
+  // 所有报告 agent（type=report），按 cadence 日→周→月稳定排序，各渲染一张卡。
+  const reportAgents = useMemo(() => {
+    const order: Record<string, number> = { daily: 0, weekly: 1, monthly: 2 }
+    return agents
+      .filter((a) => a.type === 'report')
+      .sort((a, b) => (order[a.schedule?.cadence] ?? 9) - (order[b.schedule?.cadence] ?? 9))
+  }, [agents])
+  const configAgent = useMemo(
+    () => reportAgents.find((a) => a.id === configId) ?? null,
+    [reportAgents, configId]
   )
 
   return (
@@ -777,8 +842,15 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             {t('agents.subtitle')}
           </p>
         </div>
-        {cfg ? (
-          <AgentCard cfg={cfg} onConfig={() => setConfigOpen(true)} onOpenReports={onOpenReports} />
+        {reportAgents.length > 0 ? (
+          reportAgents.map((cfg) => (
+            <AgentCard
+              key={cfg.id}
+              cfg={cfg}
+              onConfig={() => setConfigId(cfg.id)}
+              onOpenReports={onOpenReports}
+            />
+          ))
         ) : (
           <div
             style={{
@@ -794,7 +866,7 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         )}
         <NewAgentTile />
       </div>
-      {cfg && configOpen && <ConfigDrawer cfg={cfg} onClose={() => setConfigOpen(false)} />}
+      {configAgent && <ConfigDrawer cfg={configAgent} onClose={() => setConfigId(null)} />}
     </div>
   )
 }

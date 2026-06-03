@@ -65,6 +65,9 @@ def _resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "prompt_is_default": not prompt,
         "model": (agent.get("model") or "").strip() or DEFAULT_REPORT_MODEL,
         "kos_enrich": bool(agent.get("kos_enrich")),
+        "trigger_mode": (agent.get("trigger_mode") or "rolling_24h"),
+        "timezone": (agent.get("timezone") or ""),
+        "body_full_max": agent.get("body_full_max"),
         "updated_at": agent.get("updated_at"),
     }
 
@@ -288,6 +291,18 @@ def report_config_set(
         db_patch["schedule_json"] = json.dumps(raw["schedule"], ensure_ascii=False)
     if "tools" in raw:
         db_patch["tools_json"] = json.dumps(raw["tools"], ensure_ascii=False)
+    if "trigger_mode" in raw:
+        tm = str(raw["trigger_mode"] or "").strip()
+        if tm not in ("rolling_24h", "natural_day"):
+            raise emit_cli_error(cli, CliInvalidArgError("trigger_mode must be rolling_24h|natural_day"))
+        db_patch["trigger_mode"] = tm
+    if "timezone" in raw:
+        db_patch["timezone"] = str(raw["timezone"] or "").strip() or None
+    if "body_full_max" in raw:
+        try:
+            db_patch["body_full_max"] = int(raw["body_full_max"])
+        except (TypeError, ValueError):
+            raise emit_cli_error(cli, CliInvalidArgError("body_full_max must be int"))
 
     store = _store(cli)
     if store.get_agent(agent_id) is None:
