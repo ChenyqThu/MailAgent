@@ -1,12 +1,13 @@
 // Sprint 20 — Agents tab：邮件日报 agent 概览卡（启用/运行/配置 + 最近报告）+
 // 配置 slide-over（prompt / 排程 / 触发模式 / 带正文优先级 / 模型 / KOS 增强）+ 新建占位。
 // 移植自 ~/Downloads/agents/agents-tab.jsx，接 report:getConfig/setConfig/runNow。
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
+import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
 import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import { useKosAvailable, useReportConfig, useReportList, useRunNow, useSetConfig } from './hooks'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
 // weekday：与后端 worker.py 一致，Python datetime.weekday() 口径 0=周一 … 6=周日。
@@ -366,35 +367,67 @@ function NewAgentTile(): React.ReactElement {
 // 主流程仍只经 AgentsTab 内部使用。
 export function ConfigDrawer({
   cfg,
+  open,
   onClose
 }: {
-  cfg: ReportAgentConfig
+  cfg: ReportAgentConfig | null
+  open: boolean
   onClose: () => void
-}): React.ReactElement {
+}): React.ReactElement | null {
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
-  // cadence 固定（三独立 agent，不在 drawer 内切换）。
-  const cadence = cfg.schedule.cadence
-  const isDaily = cadence === 'daily'
-  const [enabled, setEnabled] = useState(cfg.enabled)
-  const [prompt, setPrompt] = useState(cfg.prompt)
+
+  // 进/退场动效：遮罩淡入(DUR.fast) + aside 右侧滑入(DUR.base, standard 曲线)，退场
+  // 对称、可中断、自动尊重 reduced-motion（DESIGN.md §8 / docs/motion-gsap.md）。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: 'aside',
+    from: { autoAlpha: 0, xPercent: 100 }
+  })
+
+  // cadence 进 state（渲染期不读 cfg，退场时 cfg→null 也不崩）；useEffect 按 cfg 预填。
+  const [cadence, setCadence] = useState<ReportCadence>('daily')
+
+  // useState 初始化为中性默认；真正预填由下方 useEffect 在 open 时按 cfg 灌入。这样
+  // 退场期间(open=false, cfg→null)不会重置，重开能正确反映目标 agent。
+  const [enabled, setEnabled] = useState(false)
+  const [prompt, setPrompt] = useState('')
   const [promptDirty, setPromptDirty] = useState(false)
-  const [hour, setHour] = useState<number>(cfg.schedule.hours?.[0] ?? 9)
+  const [hour, setHour] = useState<number>(9)
   // weekly 选周几（0=周一…6=周日，与 worker.py 一致）；monthly 选每月几日（1–28）。
-  const [weekday, setWeekday] = useState<number>(cfg.schedule.weekday ?? 0)
-  const [dayOfMonth, setDayOfMonth] = useState<number>(cfg.schedule.day_of_month ?? 1)
-  const [triggerMode, setTriggerMode] = useState<'rolling_24h' | 'natural_day'>(
-    cfg.trigger_mode || 'rolling_24h'
-  )
-  const [timezone, setTimezone] = useState<string>(cfg.timezone || '')
+  const [weekday, setWeekday] = useState<number>(0)
+  const [dayOfMonth, setDayOfMonth] = useState<number>(1)
+  const [triggerMode, setTriggerMode] = useState<'rolling_24h' | 'natural_day'>('rolling_24h')
+  const [timezone, setTimezone] = useState<string>('')
   // 带完整正文的优先级集合；空配置回落到默认（紧急 + 重要）。
-  const [bodyPriorities, setBodyPriorities] = useState<string[]>(
-    cfg.body_full_priorities?.length ? cfg.body_full_priorities : ['🔴 紧急', '🟡 重要']
-  )
-  const [model, setModel] = useState<string>(cfg.model || MODELS[0].id)
-  const [kosEnrich, setKosEnrich] = useState(cfg.kos_enrich)
+  const [bodyPriorities, setBodyPriorities] = useState<string[]>(['🔴 紧急', '🟡 重要'])
+  const [model, setModel] = useState<string>(MODELS[0].id)
+  const [kosEnrich, setKosEnrich] = useState(false)
   // 仅当 Gbrain（KOS）已配好（KOS_MCP_BASE + OAuth）才展示增强开关。
   const kosAvailable = useKosAvailable()
+
+  // 打开时按 cfg 预填（参考 EventFormModal）。依赖 [open, cfg]：open 切 true 或切换
+  // 不同 agent(cfg 变) 时重置；关闭时 if(!open) 提前返回，保留旧值供退场动画。
+  useEffect(() => {
+    if (!open || !cfg) return
+    setCadence(cfg.schedule.cadence)
+    setEnabled(cfg.enabled)
+    setPrompt(cfg.prompt)
+    setPromptDirty(false)
+    setHour(cfg.schedule.hours?.[0] ?? 9)
+    setWeekday(cfg.schedule.weekday ?? 0)
+    setDayOfMonth(cfg.schedule.day_of_month ?? 1)
+    setTriggerMode(cfg.trigger_mode || 'rolling_24h')
+    setTimezone(cfg.timezone || '')
+    setBodyPriorities(
+      cfg.body_full_priorities?.length ? cfg.body_full_priorities : ['🔴 紧急', '🟡 重要']
+    )
+    setModel(cfg.model || MODELS[0].id)
+    setKosEnrich(cfg.kos_enrich)
+  }, [open, cfg])
+
+  if (!shouldRender) return null
+
+  const isDaily = cadence === 'daily'
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
@@ -409,6 +442,7 @@ export function ConfigDrawer({
   }
 
   const onSave = (): void => {
+    if (!cfg) return
     const patch: ReportConfigPatch = {
       enabled,
       // prompt 未改且仍是默认态 → 传 null 保持"用默认"；改过 → 传文本。
@@ -431,16 +465,17 @@ export function ConfigDrawer({
       // 时区只在 natural_day 有意义；rolling_24h 固定回溯 24h、不读时区，显式清空。
       patch.timezone = triggerMode === 'natural_day' ? timezone.trim() : ''
     }
-    void save(cfg.id, patch).then(onClose)
+    void save(activeCfg.id, patch).then(onClose)
   }
 
   return (
-    <>
-      <div
-        onClick={onClose}
-        style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
-      />
+    <div
+      ref={scopeRef}
+      onClick={onClose}
+      style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgb(0 0 0 / 0.4)' }}
+    >
       <aside
+        onClick={(e) => e.stopPropagation()}
         style={{
           position: 'absolute',
           top: 0,
@@ -838,7 +873,7 @@ export function ConfigDrawer({
           </button>
         </footer>
       </aside>
-    </>
+    </div>
   )
 }
 
@@ -943,7 +978,12 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
           <NewAgentTile />
         </div>
       </div>
-      {configAgent && <ConfigDrawer cfg={configAgent} onClose={() => setConfigId(null)} />}
+      {/* 始终挂载，由 open 驱动进/退场动画（退场播完才卸载，见 useExitAnimation）。 */}
+      <ConfigDrawer
+        cfg={configAgent}
+        open={configAgent !== null}
+        onClose={() => setConfigId(null)}
+      />
     </div>
   )
 }

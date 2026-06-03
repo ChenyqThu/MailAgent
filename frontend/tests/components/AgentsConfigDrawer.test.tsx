@@ -55,6 +55,7 @@ describe('ConfigDrawer schedule controls (Bug2)', () => {
           type: 'weekly',
           schedule: { cadence: 'weekly', hours: [9], weekday: 2 }
         })}
+        open
         onClose={() => {}}
       />
     )
@@ -72,6 +73,7 @@ describe('ConfigDrawer schedule controls (Bug2)', () => {
           type: 'monthly',
           schedule: { cadence: 'monthly', hours: [9], day_of_month: 15 }
         })}
+        open
         onClose={() => {}}
       />
     )
@@ -83,7 +85,7 @@ describe('ConfigDrawer schedule controls (Bug2)', () => {
   })
 
   test('daily：weekday / 每月几日 均不出现', () => {
-    render(<ConfigDrawer cfg={makeCfg({})} onClose={() => {}} />)
+    render(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
     expect(screen.queryByRole('option', { name: '周一' })).toBeNull()
     expect(screen.queryByRole('option', { name: '1 日' })).toBeNull()
   })
