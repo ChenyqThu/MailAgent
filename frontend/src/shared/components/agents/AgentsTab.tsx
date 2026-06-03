@@ -814,15 +814,18 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     [reportAgents, configId]
   )
 
+  // 外层 = 纯定位上下文（relative）且**不滚动**：ConfigDrawer 的 absolute inset:0 钉在这层
+  // → 始终覆盖可视区，不随列表上下滚（修「drawer 跟随页面滚动」）。滚动职责下沉到内层容器。
   return (
-    <div
-      className="scrollbar-thin"
-      style={{ position: 'relative', flex: 1, overflowY: 'auto', height: '100%' }}
-    >
+    <div style={{ position: 'relative', flex: 1, height: '100%' }}>
       {/* 全宽（不限宽）：内容靠 28px 侧 padding 撑满 main —— 与报告/Chats 同为
-          full-bleed，消除被误读为「预留旧 chat panel」的右侧留白（用户多次反馈）。 */}
+          full-bleed，消除被误读为「预留旧 chat panel」的右侧留白（用户多次反馈）。
+          本层承接滚动；drawer 打开时切 overflow:hidden → 背景锁定（不滚 + 隐藏滚动条）。 */}
       <div
+        className="scrollbar-thin"
         style={{
+          height: '100%',
+          overflowY: configAgent ? 'hidden' : 'auto',
           padding: '22px 28px 60px',
           display: 'flex',
           flexDirection: 'column',
