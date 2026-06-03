@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -19,7 +20,12 @@ from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.agent_tools import kos_is_available
 from src.reports.store import ReportStore
-from src.reports.summarizer import summarize_report, summarize_report_agentic
+from src.reports.summarizer import (
+    ReportDraft,
+    summarize_aggregate,
+    summarize_report,
+    summarize_report_agentic,
+)
 
 _BEIJING = timezone(timedelta(hours=8))
 
@@ -101,6 +107,7 @@ async def run_report_once(
     now: Optional[datetime] = None,
     summarize_fn: Callable[..., Awaitable[Any]] = summarize_report,
     agentic_fn: Callable[..., Awaitable[Any]] = summarize_report_agentic,
+    aggregate_fn: Callable[..., Awaitable[Any]] = summarize_aggregate,
     client: Any = None,
 ) -> str:
     """单次生成一份报告，写 report 表，返回 report_id。
@@ -111,24 +118,31 @@ async def run_report_once(
     now = now or datetime.now(_BEIJING)
     sched = _schedule_of(agent)
     cadence = sched.get("cadence", "daily")
-    window_hours = int(agent.get("window_hours") or _DEFAULT_WINDOW_HOURS.get(cadence, 24))
-    # 遵循配置 window_hours：取「跑的时刻往前推 N 小时」的滚动窗口（24/48h…），
-    # 不按物理自然日。fetch_report_briefs 的 now=窗口上界(exclusive)=运行时刻。
-    # （时区正确性靠 data.py 的 julianday 比较，不受混合偏移影响。）
-    win_end_dt = now
-    win_start_dt = now - timedelta(hours=window_hours)
+    # 时区：agent.timezone（IANA）或本地系统时区。窗口边界 / 自然日 / 自然周月 都按它算。
+    zone = _zone(agent)
+    n = now.astimezone(zone) if zone is not None else now.astimezone()
+
+    # 周 / 月报走层级聚合（综合下层报告，不读原始邮件）。
+    if cadence in ("weekly", "monthly"):
+        return await _run_aggregate(
+            store=store, agent=agent, cadence=cadence, n=n, gen_now=now,
+            aggregate_fn=aggregate_fn, client=client,
+        )
+
+    # ===== daily：agentic（摘要 + 按需工具下钻 + KOS）=====
+    # 触发模式 rolling_24h（跑的时刻往前推 window_hours）/ natural_day（指定时区昨天整天）；
+    # 时区正确性靠 data.py julianday 比较，窗口边界传 tz-aware ISO。
+    win_start_dt, win_end_dt, report_date = _daily_window(agent, n)
+    window_hours = max(1, int((win_end_dt - win_start_dt).total_seconds() // 3600))
     win_start = win_start_dt.isoformat()
     win_end = win_end_dt.isoformat()
-    report_date = now.strftime("%Y-%m-%d")
     rid = _report_id(agent["id"], cadence, report_date)
 
     store.create_report(
         report_id=rid, agent_id=agent["id"], cadence=cadence,
         report_date=report_date, window_start=win_start, window_end=win_end,
     )
-    # daily 走 agentic（摘要 + 按需工具下钻 + KOS）；周月报 M5 改层级聚合，这里暂沿用单次。
-    is_daily = cadence == "daily"
-    body_max = int(agent.get("body_full_max") or 15) if is_daily else 0
+    body_max = int(agent.get("body_full_max") or 15)
     try:
         briefs = rdata.fetch_report_briefs(
             db_path, window_hours=window_hours,
@@ -147,17 +161,11 @@ async def run_report_once(
             return rid
 
         try:
-            if is_daily:
-                draft = await agentic_fn(
-                    briefs=briefs, counts=counts, db_path=db_path,
-                    kos_enabled=kos_is_available(), cadence=cadence, now=now,
-                    persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
-                )
-            else:
-                draft = await summarize_fn(
-                    briefs=briefs, counts=counts, cadence=cadence, now=now,
-                    persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
-                )
+            draft = await agentic_fn(
+                briefs=briefs, counts=counts, db_path=db_path,
+                kos_enabled=kos_is_available(), cadence=cadence, now=now,
+                persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
+            )
             doc = assemble_report_doc(
                 draft=draft, briefs=briefs, counts=counts, agent_id=agent["id"],
                 cadence=cadence, report_date=report_date, window_start=win_start,
@@ -186,6 +194,144 @@ async def run_report_once(
         return rid
     except Exception as e:  # noqa: BLE001
         logger.error(f"[report] {rid} failed: {e}")
+        store.finish_report(rid, status="failed", error=str(e)[:300])
+        return rid
+
+
+# ── 时区 / 窗口 / 周期 helper ─────────────────────────────────────────────────
+
+def _zone(agent: Dict[str, Any]) -> Optional[ZoneInfo]:
+    """agent.timezone（IANA）→ ZoneInfo；空 / 非法 → None（用本地系统时区）。"""
+    tz = (agent.get("timezone") or "").strip()
+    if not tz:
+        return None
+    try:
+        return ZoneInfo(tz)
+    except Exception as e:  # noqa: BLE001 — 非法时区名退回本地
+        logger.warning(f"[report] bad timezone {tz!r} ({e}); using local")
+        return None
+
+
+def _daily_window(agent: Dict[str, Any], n: datetime) -> Tuple[datetime, datetime, str]:
+    """daily 窗口 (start, end, report_date)。n = 配置时区的当前时刻。
+
+    rolling_24h：[n - window_hours, n)，report_date = 今天。
+    natural_day：指定时区昨天 [00:00, 24:00)，report_date = 昨天。
+    """
+    if (agent.get("trigger_mode") or "rolling_24h") == "natural_day":
+        today0 = n.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = today0 - timedelta(days=1)
+        return start, today0, start.strftime("%Y-%m-%d")
+    wh = int(agent.get("window_hours") or 24)
+    return n - timedelta(hours=wh), n, n.strftime("%Y-%m-%d")
+
+
+def _period_bounds(cadence: str, n: datetime) -> Tuple[str, str, str, int]:
+    """周 / 月报聚合的**上一个完整周期** (sub_start, sub_end, report_date, expected_count)，
+    全 'YYYY-MM-DD'。report_date 字典序与日期序一致，可直接比较。"""
+    d: date = n.date()
+    if cadence == "weekly":
+        this_mon = d - timedelta(days=d.weekday())  # 本周一
+        last_mon = this_mon - timedelta(days=7)
+        last_sun = this_mon - timedelta(days=1)
+        return last_mon.isoformat(), last_sun.isoformat(), last_mon.isoformat(), 7
+    # monthly：上一个自然月
+    first_this = d.replace(day=1)
+    prev_end = first_this - timedelta(days=1)
+    first_prev = prev_end.replace(day=1)
+    expected = sum(  # 上月内的周一数 ≈ 期望周报数
+        1
+        for i in range((prev_end - first_prev).days + 1)
+        if (first_prev + timedelta(days=i)).weekday() == 0
+    )
+    return first_prev.isoformat(), prev_end.isoformat(), first_prev.isoformat(), max(expected, 1)
+
+
+def _sum_counts(subs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """汇总子报告 counts_json（total/unread/urgent/replied/sent/ai_handled/flagged 求和）。"""
+    keys = ("total", "unread", "urgent", "replied", "sent", "ai_handled", "flagged")
+    out: Dict[str, Any] = {k: 0 for k in keys}
+    for s in subs:
+        try:
+            c = json.loads(s.get("counts_json") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            c = {}
+        for k in keys:
+            out[k] += int(c.get(k) or 0)
+    return out
+
+
+async def _run_aggregate(
+    *,
+    store: ReportStore,
+    agent: Dict[str, Any],
+    cadence: str,
+    n: datetime,
+    gen_now: datetime,
+    aggregate_fn: Callable[..., Awaitable[Any]],
+    client: Any,
+) -> str:
+    """周 / 月报层级聚合：读上一个完整周期的子报告 → LLM 综合 → ReportDoc。缺则跳过 + 标注。"""
+    start_date, end_date, report_date, expected = _period_bounds(cadence, n)
+    sub_cadence = "daily" if cadence == "weekly" else "weekly"
+    sub_unit = "日报" if sub_cadence == "daily" else "周报"
+    rid = _report_id(agent["id"], cadence, report_date)
+    store.create_report(
+        report_id=rid, agent_id=agent["id"], cadence=cadence,
+        report_date=report_date, window_start=start_date, window_end=end_date,
+    )
+    try:
+        subs = store.list_reports_in_range(
+            cadence=sub_cadence, start_date=start_date, end_date=end_date
+        )
+        if not subs:
+            store.finish_report(
+                rid, status="empty", headline=f"这段时间没有可综合的{sub_unit}"
+            )
+            logger.info(f"[report] {rid} empty (no {sub_cadence} reports in period)")
+            return rid
+
+        counts = _sum_counts(subs)
+        counts_json = json.dumps(counts, ensure_ascii=False)
+        missing = max(0, expected - len(subs))
+        period_cn = "周" if cadence == "weekly" else "月"
+        missing_note = (
+            f"本{period_cn}有 {missing} 份{sub_unit}缺失，下面只综合已有的 {len(subs)} 份。"
+            if missing > 0
+            else ""
+        )
+        try:
+            draft = await aggregate_fn(
+                sub_reports=subs, cadence=cadence, now=gen_now,
+                persona_prompt=agent.get("prompt"), model=agent.get("model"),
+                missing_note=missing_note, client=client,
+            )
+            model_used = draft.model
+        except Exception as e:  # noqa: BLE001 — LLM 失败降级为纯统计 + 缺失说明
+            logger.warning(f"[report] {rid} aggregate failed → fallback: {e}")
+            draft = ReportDraft(
+                overview=(missing_note + " AI 综合暂不可用，请查看各子报告。").strip(),
+                model="",
+            )
+            model_used = ""
+
+        doc = assemble_report_doc(
+            draft=draft, briefs=[], counts=counts, agent_id=agent["id"],
+            cadence=cadence, report_date=report_date, window_start=start_date,
+            window_end=end_date, generated_at=gen_now.isoformat(), model=model_used, now=gen_now,
+        )
+        store.finish_report(
+            rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
+            headline=doc.derive_headline(), model=model_used,
+            input_tokens=draft.input_tokens, output_tokens=draft.output_tokens,
+            error=("" if model_used else "aggregate_fallback"),
+        )
+        logger.info(
+            f"[report] {rid} ready (aggregate {len(subs)} {sub_cadence}, missing={missing})"
+        )
+        return rid
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[report] {rid} aggregate failed: {e}")
         store.finish_report(rid, status="failed", error=str(e)[:300])
         return rid
 

@@ -22,6 +22,9 @@ _AGENT_PATCH_FIELDS = {
     "model",
     "tools_json",
     "kos_enrich",
+    "trigger_mode",
+    "timezone",
+    "body_full_max",
 }
 
 # 列表查询不返回 blocks_json（重），详情才取。
@@ -167,5 +170,29 @@ class ReportStore:
                 f"SELECT {_REPORT_LIST_COLS} FROM report{where_sql} "
                 "ORDER BY report_date DESC, created_at DESC LIMIT ? OFFSET ?",
                 params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_reports_in_range(
+        self,
+        *,
+        cadence: str,
+        start_date: str,
+        end_date: str,
+        status: str = "ready",
+        limit: int = 400,
+    ) -> List[Dict[str, Any]]:
+        """取某 cadence 在 [start_date, end_date]（含, 'YYYY-MM-DD'）内的报告，**含 blocks_json**。
+
+        周 / 月报层级聚合用：综合下层报告（需要子报告内容，故带 blocks_json）。report_date
+        字典序与日期序一致，可直接 >= / <= 比较；按日期升序返回（便于按时间叙述）。
+        """
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT id, agent_id, cadence, report_date, status, headline, "
+                "blocks_json, counts_json FROM report "
+                "WHERE cadence = ? AND report_date >= ? AND report_date <= ? AND status = ? "
+                "ORDER BY report_date ASC LIMIT ?",
+                (cadence, start_date, end_date, status, limit),
             ).fetchall()
             return [dict(r) for r in rows]

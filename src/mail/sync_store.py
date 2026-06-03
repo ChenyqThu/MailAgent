@@ -220,7 +220,7 @@ class SyncStore:
     #                imap_uid); folder 两态 (archive / drafts). 草稿编辑 = 删旧 APPEND 新 →
     #                imap_uid 变但本地 id 不变. FolderSyncWorker (davmail-only) 增量同步,
     #                前端 /archive /drafts 直读. 详见 plan mailagent-davmail-zesty-eclipse.md.
-    DB_VERSION = 18  # v18: report_agent + report（报告 Agent 系统）
+    DB_VERSION = 19  # v19: report_agent +trigger_mode/timezone/body_full_max + 周/月报 agent
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1098,6 +1098,9 @@ class SyncStore:
                 model TEXT,                    -- NULL = 用 config.llm_model 默认
                 tools_json TEXT,               -- 预留: agent 可用 tool 白名单
                 kos_enrich INTEGER NOT NULL DEFAULT 0,
+                trigger_mode TEXT,             -- daily: rolling_24h | natural_day（NULL=rolling_24h）
+                timezone TEXT,                 -- IANA 时区（NULL=本地）; natural_day 边界 + 周/月报自然周/月用
+                body_full_max INTEGER,         -- daily: 预载正文的重要邮件上限（NULL=默认 15）
                 updated_at REAL
             )
         """)
@@ -1129,18 +1132,37 @@ class SyncStore:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_report_created ON report(created_at DESC)"
         )
-        # 种子: 默认邮件日报 agent (enabled=0, prompt=NULL→用内置默认)。幂等。
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO report_agent
-                (id, type, enabled, title, schedule_json, window_hours,
-                 prompt, model, tools_json, kos_enrich, updated_at)
-            VALUES ('daily_email_digest', 'report', 0, '邮件日报',
-                    '{"cadence": "daily", "hours": [9]}', 24,
-                    NULL, 'claude-opus-4-8', NULL, 0, ?)
-            """,
-            (time.time(),),
+
+        # === v19: 旧 v18 库 report_agent 无新列 → ALTER 补。**必须在 seed 前**（下面 seed
+        # 引用新列）；新库 CREATE 已含, PRAGMA 检查会跳过。
+        if current_version < 19:
+            try:
+                _ra_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
+                for _c, _t in (("trigger_mode", "TEXT"), ("timezone", "TEXT"), ("body_full_max", "INTEGER")):
+                    if _c not in _ra_cols:
+                        cursor.execute(f"ALTER TABLE report_agent ADD COLUMN {_c} {_t}")
+                logger.info("v19 migration: report_agent +trigger_mode/timezone/body_full_max")
+            except sqlite3.OperationalError as e:
+                logger.warning(f"v19 migration skipped: {e}")
+
+        # 种子: 日 / 周 / 月报三个独立 agent（enabled=0, prompt=NULL→内置默认）。幂等。
+        # daily=rolling_24h 触发 + 预载 15 封正文；周 / 月报走层级聚合（读子报告，无窗口 /
+        # 正文配置，trigger_mode/body_full_max 留 NULL）。
+        _seed_cols = (
+            "(id, type, enabled, title, schedule_json, window_hours, prompt, model, "
+            "tools_json, kos_enrich, trigger_mode, timezone, body_full_max, updated_at)"
         )
+        _seed_now = time.time()
+        for _id, _title, _sched, _win, _trig, _bmax in (
+            ("daily_email_digest", "邮件日报", '{"cadence": "daily", "hours": [9]}', 24, "rolling_24h", 15),
+            ("weekly_email_digest", "邮件周报", '{"cadence": "weekly", "hours": [9], "weekday": 0}', 168, None, None),
+            ("monthly_email_digest", "邮件月报", '{"cadence": "monthly", "hours": [9], "day_of_month": 1}', 720, None, None),
+        ):
+            cursor.execute(
+                f"INSERT OR IGNORE INTO report_agent {_seed_cols} "
+                "VALUES (?, 'report', 0, ?, ?, ?, NULL, 'claude-opus-4-8', NULL, 0, ?, NULL, ?, ?)",
+                (_id, _title, _sched, _win, _trig, _bmax, _seed_now),
+            )
 
         # 更新数据库版本
         cursor.execute("""

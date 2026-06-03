@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -445,3 +446,78 @@ def _parse(result: LLMResult) -> ReportDraft:
         cache_read_input_tokens=result.cache_read_input_tokens,
         model=result.model,
     )
+
+
+# ── 层级聚合（周报综合日报 / 月报综合周报）──────────────────────────────────────
+
+def _extract_sub_summary(row: Dict[str, Any]) -> Dict[str, Any]:
+    """从子报告行（含 blocks_json）抽 date / headline / overview / key_points 供综合。"""
+    out: Dict[str, Any] = {
+        "date": row.get("report_date", "") or "",
+        "headline": row.get("headline", "") or "",
+        "overview": "",
+        "key_points": [],
+    }
+    try:
+        blocks = json.loads(row.get("blocks_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        blocks = []
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "overview" and not out["overview"]:
+            out["overview"] = (b.get("text") or "")[:500]
+        elif b.get("type") == "key_points":
+            out["key_points"] = [str(x) for x in (b.get("items") or [])][:6]
+    return out
+
+
+def _build_user_aggregate(subs: List[Dict[str, Any]], cadence: str, missing_note: str) -> str:
+    sub_unit = "日报" if cadence == "weekly" else "周报"
+    out_unit = "周报" if cadence == "weekly" else "月报"
+    parts: List[str] = [
+        f"下面是这段时间的 {len(subs)} 份{sub_unit}。把它们综合成一份{out_unit}，调用 {_TOOL_NAME}。"
+        "聚合层不要逐封罗列邮件，sections 用文字概述即可（email_refs 留空数组）。"
+    ]
+    if missing_note:
+        parts.append(f"\n⚠️ {missing_note}（请在 overview 里如实提及覆盖不完整）")
+    for s in subs:
+        block = f"\n### {s['date']} {s['headline']}".rstrip()
+        if s["overview"]:
+            block += f"\n{s['overview']}"
+        if s["key_points"]:
+            block += "\n要点：" + "；".join(s["key_points"])
+        parts.append(block)
+    return "\n".join(parts)
+
+
+async def summarize_aggregate(
+    *,
+    sub_reports: List[Dict[str, Any]],
+    cadence: str,
+    now: Optional[datetime] = None,
+    persona_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    missing_note: str = "",
+    client: Optional[LLMClient] = None,
+) -> ReportDraft:
+    """层级聚合：下层报告（日报 / 周报）综合成上层（周报 / 月报）。单次 classify（输入已是
+    浓缩摘要，无需 agentic）。raises LLMCallError on failure（caller 降级）。"""
+    now = now or datetime.now(_BEIJING)
+    persona = persona_prompt if (persona_prompt and persona_prompt.strip()) else get_default_prompt(cadence)
+    subs = [_extract_sub_summary(r) for r in sub_reports]
+
+    own_client = client is None
+    client = client or LLMClient()
+    try:
+        result = await client.classify(
+            system_blocks=_build_system(persona, now),
+            user_content=_build_user_aggregate(subs, cadence, missing_note),
+            tool_schema=REPORT_TOOL_SCHEMA,
+            tool_name=_TOOL_NAME,
+            model_chain=_model_chain(model),
+        )
+    finally:
+        if own_client:
+            await client.close()
+    return _parse(result)
