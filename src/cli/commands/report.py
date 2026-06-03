@@ -54,6 +54,12 @@ def _resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         schedule = {}
     cadence = schedule.get("cadence", "daily")
     prompt = (agent.get("prompt") or "").strip()
+    try:
+        body_full_priorities = json.loads(agent.get("body_full_priorities") or "[]")
+        if not isinstance(body_full_priorities, list):
+            body_full_priorities = []
+    except (json.JSONDecodeError, TypeError):
+        body_full_priorities = []
     return {
         "id": agent.get("id"),
         "type": agent.get("type", "report"),
@@ -67,7 +73,7 @@ def _resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "kos_enrich": bool(agent.get("kos_enrich")),
         "trigger_mode": (agent.get("trigger_mode") or "rolling_24h"),
         "timezone": (agent.get("timezone") or ""),
-        "body_full_max": agent.get("body_full_max"),
+        "body_full_priorities": body_full_priorities,
         "updated_at": agent.get("updated_at"),
     }
 
@@ -298,11 +304,8 @@ def report_config_set(
         db_patch["trigger_mode"] = tm
     if "timezone" in raw:
         db_patch["timezone"] = str(raw["timezone"] or "").strip() or None
-    if "body_full_max" in raw:
-        try:
-            db_patch["body_full_max"] = int(raw["body_full_max"])
-        except (TypeError, ValueError):
-            raise emit_cli_error(cli, CliInvalidArgError("body_full_max must be int"))
+    if "body_full_priorities" in raw and isinstance(raw["body_full_priorities"], list):
+        db_patch["body_full_priorities"] = json.dumps(raw["body_full_priorities"], ensure_ascii=False)
 
     store = _store(cli)
     if store.get_agent(agent_id) is None:

@@ -25,6 +25,7 @@ _AGENT_PATCH_FIELDS = {
     "trigger_mode",
     "timezone",
     "body_full_max",
+    "body_full_priorities",
 }
 
 # 列表查询不返回 blocks_json（重），详情才取。

@@ -1867,8 +1867,8 @@ export interface ReportAgentConfig {
   trigger_mode: 'rolling_24h' | 'natural_day'
   /** IANA 时区（'' = 本地）；natural_day 边界 + 周/月报自然周/月用。 */
   timezone: string
-  /** daily 预载正文的重要邮件上限（null = 默认 15）。 */
-  body_full_max: number | null
+  /** daily 带完整正文的优先级集合（priority label）；命中的邮件才预载正文，其余只摘要、不带附件。 */
+  body_full_priorities: string[]
   updated_at: number | null
 }
 
@@ -1884,7 +1884,7 @@ export interface ReportConfigPatch {
   kos_enrich?: boolean
   trigger_mode?: 'rolling_24h' | 'natural_day'
   timezone?: string
-  body_full_max?: number
+  body_full_priorities?: string[]
 }
 
 export interface ReportRunResult {

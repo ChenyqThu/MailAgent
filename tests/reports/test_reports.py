@@ -550,8 +550,9 @@ class TestWindowBounds:
 
     def test_daily_window_rolling_vs_natural(self):
         n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)
+        # rolling_24h 固定回溯 24h，忽略遗留的 window_hours（窗口不再可配）。
         s, e, rd = _daily_window({"trigger_mode": "rolling_24h", "window_hours": 48}, n)
-        assert rd == "2026-06-03" and (e - s) == timedelta(hours=48)
+        assert rd == "2026-06-03" and (e - s) == timedelta(hours=24)
         s2, e2, rd2 = _daily_window({"trigger_mode": "natural_day"}, n)
         assert rd2 == "2026-06-02" and s2.hour == 0 and (e2 - s2) == timedelta(days=1)
 
@@ -577,12 +578,14 @@ class TestBodyPreload:
         )
         conn.commit()
         conn.close()
-        briefs = rdata.fetch_report_briefs(str(db), now=_NOW, body_full_max=15)
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW, body_priorities=["🔴 紧急"])
         bm = {b.internal_id: b for b in briefs}
-        assert bm[1].body_text == "紧急正文"   # 重要 → 预载
-        assert bm[2].body_text is None          # 普通 → 不预载
-        briefs0 = rdata.fetch_report_briefs(str(db), now=_NOW, body_full_max=0)
-        assert all(b.body_text is None for b in briefs0)  # 关闭 → 都不预载
+        assert bm[1].body_text == "紧急正文"   # 紧急（命中勾选优先级）→ 预载
+        assert bm[2].body_text is None          # 一般（未命中）→ 不预载
+        briefs_none = rdata.fetch_report_briefs(str(db), now=_NOW, body_priorities=None)
+        assert all(b.body_text is None for b in briefs_none)  # None → 都不预载
+        briefs_empty = rdata.fetch_report_briefs(str(db), now=_NOW, body_priorities=[])
+        assert all(b.body_text is None for b in briefs_empty)  # [] → 都不预载
 
 
 class TestAggregateRun:

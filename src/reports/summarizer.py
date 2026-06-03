@@ -202,6 +202,9 @@ def _email_line(b: ReportEmailBrief, ai_summary_max_chars: int) -> str:
     ai = b.ai_summary.strip()
     if len(ai) > ai_summary_max_chars:
         ai = ai[:ai_summary_max_chars] + "…"
+    reply = b.reply_suggestion.strip()
+    if len(reply) > 200:
+        reply = reply[:200] + "…"
     return (
         f"- id={b.internal_id} [{_status_marks(b)}] {b.subject or '(无主题)'}"
         f" | 发件人：{b.sender_name or b.sender_addr or '(未知)'}"
@@ -209,6 +212,7 @@ def _email_line(b: ReportEmailBrief, ai_summary_max_chars: int) -> str:
         f" | 优先级：{b.priority or '-'}"
         f" | 类型：{b.action_type or '-'}"
         + (f" | 摘要：{ai}" if ai else "")
+        + (f" | 建议回复：{reply}" if reply else "")
     )
 
 
@@ -243,8 +247,8 @@ def _build_system_agentic(persona: str, now: datetime, kos_enabled: bool) -> Lis
         persona.rstrip()
         + f"\n\n当前时间：{now.isoformat()}（周{weekday_cn}，时区 +08:00 北京）。"
         + "\n\n## 工具（按需调用，别为每封都查）\n"
-        + "邮件清单是**摘要**：重要邮件已附正文、其余仅摘要。某封需要更多细节才能正确"
-        + "策展时再下钻：\n"
+        + "邮件清单含 AI 摘要 + 回复建议（若有）+ 命中优先级邮件的正文；其余仅摘要。"
+        + "某封需要更多细节才能正确策展时再下钻：\n"
         + "- get_email_body(internal_id)：取单封完整正文\n"
         + "- search_emails(query)：全文搜相关邮件（清单外 / 跨线程）\n"
         + "- search_attachments(query)：搜附件文本里的事实 / 数字\n"

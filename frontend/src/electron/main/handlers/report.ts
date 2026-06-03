@@ -72,7 +72,7 @@ interface AgentRow {
   kos_enrich?: number | null
   trigger_mode?: string | null
   timezone?: string | null
-  body_full_max?: number | null
+  body_full_priorities?: string | null
   updated_at?: number | null
 }
 
@@ -98,7 +98,8 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
     kos_enrich: !!row.kos_enrich,
     trigger_mode: row.trigger_mode === 'natural_day' ? 'natural_day' : 'rolling_24h',
     timezone: row.timezone || '',
-    body_full_max: row.body_full_max ?? null,
+    // body_full_priorities 落库是 JSON 字符串（priority label 数组）；解析失败 / 缺列兜底 []。
+    body_full_priorities: _parseJson<string[]>(row.body_full_priorities, []),
     updated_at: row.updated_at ?? null
   }
 }
@@ -164,7 +165,7 @@ export function registerReportHandlers(): void {
   ipcMain.handle('report:getConfig', async (): Promise<ReportAgentConfig[]> => {
     try {
       const db = getDb()
-      // SELECT *（非显式新列）→ 即便库尚未迁移到 v19（缺 trigger_mode/timezone/body_full_max）
+      // SELECT *（非显式新列）→ 即便库尚未迁移（缺 trigger_mode/timezone/body_full_priorities）
       // 也不报错；_toAgentConfig 用可选字段兜底默认，避免「迁移前 getConfig 报错→空列表」。
       const rows = db.prepare('SELECT * FROM report_agent ORDER BY id').all() as AgentRow[]
       return rows.map(_toAgentConfig)

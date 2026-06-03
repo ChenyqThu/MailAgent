@@ -142,12 +142,12 @@ async def run_report_once(
         report_id=rid, agent_id=agent["id"], cadence=cadence,
         report_date=report_date, window_start=win_start, window_end=win_end,
     )
-    body_max = int(agent.get("body_full_max") or 15)
+    body_priorities = _parse_body_priorities(agent.get("body_full_priorities"))
     try:
         briefs = rdata.fetch_report_briefs(
             db_path, window_hours=window_hours,
             max_emails=config.mailagent_report_max_emails, now=win_end_dt,
-            body_full_max=body_max,
+            body_priorities=body_priorities,
         )
         counts = rdata.compute_report_counts(briefs)
         counts_json = json.dumps(counts, ensure_ascii=False)
@@ -212,18 +212,34 @@ def _zone(agent: Dict[str, Any]) -> Optional[ZoneInfo]:
         return None
 
 
+_DEFAULT_BODY_PRIORITIES = ["🔴 紧急", "🟡 重要"]
+
+
+def _parse_body_priorities(raw: Any) -> List[str]:
+    """agent.body_full_priorities（JSON 数组字符串）→ list[str]。
+    解析失败 / 为空 → 默认 ['🔴 紧急', '🟡 重要']（带正文的优先级集合）。"""
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+    if isinstance(parsed, list):
+        labels = [str(x) for x in parsed if isinstance(x, str) and x.strip()]
+        if labels:
+            return labels
+    return list(_DEFAULT_BODY_PRIORITIES)
+
+
 def _daily_window(agent: Dict[str, Any], n: datetime) -> Tuple[datetime, datetime, str]:
     """daily 窗口 (start, end, report_date)。n = 配置时区的当前时刻。
 
-    rolling_24h：[n - window_hours, n)，report_date = 今天。
+    rolling_24h：固定回溯 24 小时 [n - 24h, n)，report_date = 今天（不可配窗口）。
     natural_day：指定时区昨天 [00:00, 24:00)，report_date = 昨天。
     """
     if (agent.get("trigger_mode") or "rolling_24h") == "natural_day":
         today0 = n.replace(hour=0, minute=0, second=0, microsecond=0)
         start = today0 - timedelta(days=1)
         return start, today0, start.strftime("%Y-%m-%d")
-    wh = int(agent.get("window_hours") or 24)
-    return n - timedelta(hours=wh), n, n.strftime("%Y-%m-%d")
+    return n - timedelta(hours=24), n, n.strftime("%Y-%m-%d")
 
 
 def _period_bounds(cadence: str, n: datetime) -> Tuple[str, str, str, int]:

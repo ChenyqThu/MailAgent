@@ -1099,8 +1099,9 @@ class SyncStore:
                 tools_json TEXT,               -- 预留: agent 可用 tool 白名单
                 kos_enrich INTEGER NOT NULL DEFAULT 0,
                 trigger_mode TEXT,             -- daily: rolling_24h | natural_day（NULL=rolling_24h）
-                timezone TEXT,                 -- IANA 时区（NULL=本地）; natural_day 边界 + 周/月报自然周/月用
-                body_full_max INTEGER,         -- daily: 预载正文的重要邮件上限（NULL=默认 15）
+                timezone TEXT,                 -- IANA 时区（NULL=本地）; 仅 natural_day 用
+                body_full_max INTEGER,         -- 遗留(v19 早期)，不再读写；带正文改 body_full_priorities
+                body_full_priorities TEXT,     -- daily: JSON 数组 of priority label，命中则带正文（NULL=默认紧急+重要）
                 updated_at REAL
             )
         """)
@@ -1138,7 +1139,7 @@ class SyncStore:
         if current_version < 19:
             try:
                 _ra_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
-                for _c, _t in (("trigger_mode", "TEXT"), ("timezone", "TEXT"), ("body_full_max", "INTEGER")):
+                for _c, _t in (("trigger_mode", "TEXT"), ("timezone", "TEXT"), ("body_full_max", "INTEGER"), ("body_full_priorities", "TEXT")):
                     if _c not in _ra_cols:
                         cursor.execute(f"ALTER TABLE report_agent ADD COLUMN {_c} {_t}")
                 logger.info("v19 migration: report_agent +trigger_mode/timezone/body_full_max")
@@ -1150,19 +1151,34 @@ class SyncStore:
         # 正文配置，trigger_mode/body_full_max 留 NULL）。
         _seed_cols = (
             "(id, type, enabled, title, schedule_json, window_hours, prompt, model, "
-            "tools_json, kos_enrich, trigger_mode, timezone, body_full_max, updated_at)"
+            "tools_json, kos_enrich, trigger_mode, timezone, body_full_priorities, updated_at)"
         )
         _seed_now = time.time()
-        for _id, _title, _sched, _win, _trig, _bmax in (
-            ("daily_email_digest", "邮件日报", '{"cadence": "daily", "hours": [9]}', 24, "rolling_24h", 15),
+        for _id, _title, _sched, _win, _trig, _bpri in (
+            ("daily_email_digest", "邮件日报", '{"cadence": "daily", "hours": [9]}', 24,
+             "rolling_24h", '["🔴 紧急", "🟡 重要"]'),
             ("weekly_email_digest", "邮件周报", '{"cadence": "weekly", "hours": [9], "weekday": 0}', 168, None, None),
             ("monthly_email_digest", "邮件月报", '{"cadence": "monthly", "hours": [9], "day_of_month": 1}', 720, None, None),
         ):
             cursor.execute(
                 f"INSERT OR IGNORE INTO report_agent {_seed_cols} "
                 "VALUES (?, 'report', 0, ?, ?, ?, NULL, 'claude-opus-4-8', NULL, 0, ?, NULL, ?, ?)",
-                (_id, _title, _sched, _win, _trig, _bmax, _seed_now),
+                (_id, _title, _sched, _win, _trig, _bpri, _seed_now),
             )
+
+        # 旧库（v18→v19 升级）daily 行已存在 → 上面 INSERT OR IGNORE 跳过 → ALTER 新列仍 NULL。
+        # 补默认（仅当 NULL，幂等自愈，覆盖已升到 v19 的库）：daily 走 rolling_24h + 紧急/重要
+        # 带正文；timezone 留 NULL（rolling 不需要，natural_day 时前端兜底本地）。周 / 月报新列
+        # NULL 是正确语义（层级聚合无触发模式 / 正文配置），不回填。
+        cursor.execute(
+            "UPDATE report_agent SET trigger_mode = 'rolling_24h' "
+            "WHERE id = 'daily_email_digest' AND trigger_mode IS NULL"
+        )
+        cursor.execute(
+            "UPDATE report_agent SET body_full_priorities = ? "
+            "WHERE id = 'daily_email_digest' AND body_full_priorities IS NULL",
+            ('["🔴 紧急", "🟡 重要"]',),
+        )
 
         # 更新数据库版本
         cursor.execute("""

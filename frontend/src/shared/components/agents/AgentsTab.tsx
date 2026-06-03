@@ -1,37 +1,21 @@
 // Sprint 20 — Agents tab：邮件日报 agent 概览卡（启用/运行/配置 + 最近报告）+
-// 配置 slide-over（prompt / 排程 / 回看窗口 / 模型 / KOS 增强）+ 新建占位。
+// 配置 slide-over（prompt / 排程 / 触发模式 / 带正文优先级 / 模型 / KOS 增强）+ 新建占位。
 // 移植自 ~/Downloads/agents/agents-tab.jsx，接 report:getConfig/setConfig/runNow。
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
+import type { ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
 import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import { useKosAvailable, useReportConfig, useReportList, useRunNow, useSetConfig } from './hooks'
 
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
-// 回看窗口随 cadence 自适应：日报按小时、周报按天、月报按月。每个 cadence 都是
-// 独立取数 + 总结（非层级聚合：月报不是周报的综合），所以窗口确实有意义 ——
-// 它就是「这份报告覆盖多长时间」。切 cadence 时窗口重置为该档默认。
-const WINDOW_BY_CADENCE: Record<ReportCadence, Array<[number, string]>> = {
-  daily: [
-    [24, '24h'],
-    [48, '48h'],
-    [72, '72h']
-  ],
-  weekly: [
-    [168, '7d'],
-    [336, '14d']
-  ],
-  monthly: [
-    [720, '30d'],
-    [1440, '60d']
-  ]
-}
 const MODELS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', hint: '默认 · 最强推理' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: '更快 · 质量均衡' },
   { id: 'gpt-5.5', label: 'GPT-5.5', hint: '限流时自动兜底' }
 ]
+// 顺序固定，与 src/llm_agent/schema.py PRIORITY_ENUM 对齐 —— 勾选的优先级邮件带完整正文。
+const PRIORITY_ENUM = ['🔴 紧急', '🟡 重要', '🟢 一般', '⚪ 低'] as const
 
 function scheduleText(
   cfg: ReportAgentConfig,
@@ -380,12 +364,14 @@ function ConfigDrawer({
   const [prompt, setPrompt] = useState(cfg.prompt)
   const [promptDirty, setPromptDirty] = useState(false)
   const [hour, setHour] = useState<number>(cfg.schedule.hours?.[0] ?? 9)
-  const [windowHours, setWindowHours] = useState<number>(cfg.window_hours ?? 24)
   const [triggerMode, setTriggerMode] = useState<'rolling_24h' | 'natural_day'>(
     cfg.trigger_mode || 'rolling_24h'
   )
   const [timezone, setTimezone] = useState<string>(cfg.timezone || '')
-  const [bodyMax, setBodyMax] = useState<number>(cfg.body_full_max ?? 15)
+  // 带完整正文的优先级集合；空配置回落到默认（紧急 + 重要）。
+  const [bodyPriorities, setBodyPriorities] = useState<string[]>(
+    cfg.body_full_priorities?.length ? cfg.body_full_priorities : ['🔴 紧急', '🟡 重要']
+  )
   const [model, setModel] = useState<string>(cfg.model || MODELS[0].id)
   const [kosEnrich, setKosEnrich] = useState(cfg.kos_enrich)
   // 仅当 Gbrain（KOS）已配好（KOS_MCP_BASE + OAuth）才展示增强开关。
@@ -412,12 +398,12 @@ function ConfigDrawer({
       kos_enrich: kosEnrich,
       schedule: { ...cfg.schedule, cadence, hours: [hour] }
     }
-    // 触发模式 / 时区 / 正文上限 / 回看窗口仅 daily 有意义；周月报走层级聚合，不带这些。
+    // 触发模式 / 时区 / 带正文优先级仅 daily 有意义；周月报走层级聚合，不带这些。
     if (isDaily) {
       patch.trigger_mode = triggerMode
-      patch.timezone = timezone.trim()
-      patch.body_full_max = bodyMax
-      if (triggerMode === 'rolling_24h') patch.window_hours = windowHours
+      patch.body_full_priorities = bodyPriorities
+      // 时区只在 natural_day 有意义；rolling_24h 固定回溯 24h、不读时区，显式清空。
+      patch.timezone = triggerMode === 'natural_day' ? timezone.trim() : ''
     }
     void save(cfg.id, patch).then(onClose)
   }
@@ -574,44 +560,59 @@ function ConfigDrawer({
                   </div>
                 </Field>
 
-                {/* 回看窗口（仅 rolling_24h；natural_day 固定整天） */}
-                {triggerMode === 'rolling_24h' && (
-                  <Field label={t('agents.config.window')} hint={t('agents.config.windowHint')}>
-                    <div className="seg" style={{ width: '100%' }}>
-                      {WINDOW_BY_CADENCE.daily.map(([v, l]) => (
-                        <button
-                          key={v}
-                          type="button"
-                          className={windowHours === v ? 'on' : ''}
-                          style={{ flex: 1, justifyContent: 'center' }}
-                          onClick={() => setWindowHours(v)}
-                        >
-                          {l}
-                        </button>
+                {/* 时区（仅 natural_day：rolling_24h 固定回溯 24h、不需要时区） */}
+                {triggerMode === 'natural_day' && (
+                  <Field label={t('agents.config.timezone')} hint={t('agents.config.timezoneHint')}>
+                    <select
+                      value={timezone}
+                      onChange={(e) => setTimezone(e.target.value)}
+                      style={inputStyle}
+                    >
+                      <option value="">{t('agents.config.timezoneLocal')}</option>
+                      {Intl.supportedValuesOf('timeZone').map((tz) => (
+                        <option key={tz} value={tz}>
+                          {tz}
+                        </option>
                       ))}
-                    </div>
+                    </select>
                   </Field>
                 )}
 
-                {/* 时区 */}
-                <Field label={t('agents.config.timezone')} hint={t('agents.config.timezoneHint')}>
-                  <input
-                    value={timezone}
-                    onChange={(e) => setTimezone(e.target.value)}
-                    placeholder={t('agents.config.timezonePlaceholder')}
-                    style={inputStyle}
-                  />
-                </Field>
-
-                {/* 预载正文上限 */}
-                <Field label={t('agents.config.bodyMax')} hint={t('agents.config.bodyMaxHint')}>
-                  <input
-                    type="number"
-                    min={0}
-                    value={bodyMax}
-                    onChange={(e) => setBodyMax(Math.max(0, Number(e.target.value) || 0))}
-                    style={inputStyle}
-                  />
+                {/* 带正文的优先级（多选 chip）—— 命中的邮件带完整正文，其余只摘要、不带附件 */}
+                <Field
+                  label={t('agents.config.bodyPriorities')}
+                  hint={t('agents.config.bodyPrioritiesHint')}
+                >
+                  <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    {PRIORITY_ENUM.map((p) => {
+                      const on = bodyPriorities.includes(p)
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() =>
+                            setBodyPriorities((prev) =>
+                              prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
+                            )
+                          }
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: 8,
+                            fontFamily: 'inherit',
+                            fontSize: 13,
+                            cursor: 'pointer',
+                            color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
+                            background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1))',
+                            border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
+                            transition: 'all 120ms'
+                          }}
+                        >
+                          {p}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </Field>
               </>
             ) : (
