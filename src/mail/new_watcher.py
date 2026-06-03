@@ -217,6 +217,29 @@ class NewWatcher:
                 logger.warning(f"[llm-agent] init failed, disabling: {e}")
                 self._llm_runner = None
 
+        # 飞书通知器（本地 LLM review 路径直推重要邮件）
+        # 背景: 本地 LLM Agent 取代 Notion Email Agent 后, Notion 端不再触发
+        # ai_reviewed automation webhook → 旧的 webhook→Redis→handle_ai_reviewed→飞书
+        # 回环断供. 这里在 LLM review 完成处直接补飞书通知 (见 _maybe_notify_feishu).
+        # 飞书自带 page_id 去重(10min) + 3 天时效, 可与未来恢复的 webhook 路径共存.
+        self._feishu = None
+        if getattr(settings, "feishu_notify_enabled", False):
+            try:
+                from src.notify.feishu import FeishuNotifier
+                self._feishu = FeishuNotifier(
+                    app_id=settings.feishu_app_id,
+                    app_secret=settings.feishu_app_secret,
+                    chat_id=settings.feishu_chat_id,
+                    webhook_url=settings.feishu_webhook_url,
+                    secret=settings.feishu_webhook_secret,
+                    database_id=settings.email_database_id,
+                )
+                mode = "app_api" if settings.feishu_app_id else "webhook"
+                logger.info(f"[feishu] notifier enabled on LLM-review path (mode={mode})")
+            except Exception as e:
+                logger.warning(f"[feishu] init failed, disabling: {e}")
+                self._feishu = None
+
         # 运行状态
         self._running = False
         self._healthy = True  # 服务健康状态
@@ -314,6 +337,11 @@ class NewWatcher:
     async def stop(self):
         """停止监听器"""
         self._running = False
+        if self._feishu is not None:
+            try:
+                await self._feishu.close()
+            except Exception as e:
+                logger.debug(f"[feishu] close failed: {e}")
         logger.info("NewWatcher stopped")
 
     async def _flush_v4_rollout_stats_loop(
@@ -746,6 +774,10 @@ class NewWatcher:
                         self._maybe_dispatch_island_reviewed(
                             email_obj, internal_id, notion_page_id, labels,
                         )
+                        # 本地 LLM review 路径补飞书通知（取代停用的 Notion webhook 回环）
+                        await self._maybe_notify_feishu(
+                            email_obj, internal_id, notion_page_id, labels,
+                        )
                     else:
                         logger.warning(
                             f"[llm-hook] failed internal_id={internal_id} "
@@ -903,6 +935,76 @@ class NewWatcher:
             )
         except Exception as e:
             logger.debug(f"[island-hook] llm_reviewed dispatch failed: {e}")
+
+    async def _maybe_notify_feishu(
+        self, email_obj: Email, internal_id: int,
+        notion_page_id: str, labels: Dict[str, Any],
+    ) -> None:
+        """本地 LLM review 完成后, 对重要/紧急且需行动的邮件直推飞书通知.
+
+        取代旧链路: Notion Email Agent → Automation webhook(ai_reviewed) → Redis
+        → handle_ai_reviewed → 飞书. 本地 LLM 接管分类后 Notion 端不再触发该
+        automation, 旧链路断供 (用户现象: 切换后再也收不到飞书通知).
+
+        判据与 handlers.handle_ai_reviewed / reverse_sync._try_notify 一致
+        (重要/紧急 + 需行动 + 非发件箱). priority/action_type 直接来自
+        labels.summary_for_log(), 格式与飞书判据天然一致 (PRIORITY_ENUM).
+        飞书内部自带 page_id 去重(10min) + 3 天时效过滤; 失败仅 warning 不阻塞.
+        """
+        if self._feishu is None:
+            return
+        # 与 handlers.FLAG_ACTIONS / reverse_sync.NOTIFY_PRIORITIES 同口径
+        notify_priorities = {"🔴 紧急", "🟡 重要"}
+        flag_actions = {
+            "需要回复", "需要决策", "需要Review",
+            "需要会议", "需要跟进", "等待响应",
+        }
+        try:
+            priority = str(labels.get("priority") or "")
+            action = str(labels.get("action_type") or "")
+            mailbox = getattr(email_obj, "mailbox", "") or ""
+            if priority not in notify_priorities:
+                return
+            if action not in flag_actions:
+                return
+            if mailbox in ("发件箱", "已发送邮件", "已发送"):
+                return
+
+            email_date = getattr(email_obj, "date", None)
+            date_iso = (
+                email_date.isoformat()
+                if isinstance(email_date, datetime)
+                else ""
+            )
+            page_info = {
+                "page_id": notion_page_id or "",
+                "message_id": getattr(email_obj, "message_id", "") or "",
+                "internal_id": internal_id,
+                "subject": getattr(email_obj, "subject", "") or "",
+                "from_name": getattr(email_obj, "sender_name", "") or "",
+                "from_email": getattr(email_obj, "sender", "") or "",
+                "to_addr": getattr(email_obj, "to", "") or "",
+                "cc_addr": getattr(email_obj, "cc", "") or "",
+                "date": date_iso,
+                "mailbox": mailbox,
+                "ai_action": action,
+                "ai_priority": priority,
+                "ai_summary": str(
+                    labels.get("ai_summary_full") or labels.get("ai_summary") or ""
+                ),
+                "category": str(labels.get("category") or ""),
+                # reply_suggestion 不在 summary_for_log (防完整回复泄露进日志),
+                # 飞书卡片回复按钮由 Openclaw 按 page_id/message_id 处理, 此处留空.
+                "reply_suggestion": "",
+            }
+            ok = await self._feishu.notify_important_email(page_info)
+            if ok:
+                logger.info(
+                    f"[feishu] notified internal_id={internal_id} "
+                    f"priority={priority} action={action}"
+                )
+        except Exception as e:
+            logger.warning(f"[feishu] notify failed internal_id={internal_id}: {e}")
 
     async def _process_llm_retry_queue(self) -> None:
         """重试 LLM 失败的邮件（指数退避：1m/5m/15m/1h/2h）。
