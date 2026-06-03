@@ -9,6 +9,10 @@ import { CadencePill, ReportIcon, StatusBadge, Switch } from './primitives'
 import { useKosAvailable, useReportConfig, useReportList, useRunNow, useSetConfig } from './hooks'
 
 const HOUR_OPTIONS = [6, 7, 8, 9, 10, 12, 18, 21]
+// weekday：与后端 worker.py 一致，Python datetime.weekday() 口径 0=周一 … 6=周日。
+const WEEKDAY_OPTIONS = [0, 1, 2, 3, 4, 5, 6]
+// day_of_month：后端 worker 用 now.day 精确匹配、无月末回退 → 限 1–28，保证每月都触发。
+const DAY_OF_MONTH_OPTIONS = Array.from({ length: 28 }, (_, i) => i + 1)
 const MODELS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', hint: '默认 · 最强推理' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: '更快 · 质量均衡' },
@@ -22,8 +26,13 @@ function scheduleText(
   t: (k: string, o?: Record<string, unknown>) => string
 ): string {
   const h = String(cfg.schedule.hours?.[0] ?? 9).padStart(2, '0')
-  if (cfg.schedule.cadence === 'weekly') return t('agents.card.schedWeekly', { hour: h })
-  if (cfg.schedule.cadence === 'monthly') return t('agents.card.schedMonthly', { hour: h })
+  if (cfg.schedule.cadence === 'weekly') {
+    const wd = cfg.schedule.weekday ?? 0
+    return t('agents.card.schedWeekly', { hour: h, weekday: t(`agents.config.weekday.${wd}`) })
+  }
+  if (cfg.schedule.cadence === 'monthly') {
+    return t('agents.card.schedMonthly', { hour: h, day: cfg.schedule.day_of_month ?? 1 })
+  }
   return t('agents.card.schedDaily', { hour: h })
 }
 
@@ -121,8 +130,13 @@ function AgentCard({
               <ReportIcon name="clock" size={11} />
               {scheduleText(cfg, t)}
             </span>
-            <span>·</span>
-            <span>{t('agents.card.window', { hours: cfg.window_hours ?? 24 })}</span>
+            {/* 回看窗口仅对日报有意义；周/月报走层级聚合（综合上周日报/上月周报），不显示 */}
+            {cfg.schedule.cadence === 'daily' ? (
+              <>
+                <span>·</span>
+                <span>{t('agents.card.window', { hours: cfg.window_hours ?? 24 })}</span>
+              </>
+            ) : null}
             <span>·</span>
             <span>{modelLabel}</span>
           </div>
@@ -348,7 +362,9 @@ function NewAgentTile(): React.ReactElement {
 }
 
 // ─── 配置 slide-over ─────────────────────────────────────────────────────────
-function ConfigDrawer({
+// export for component tests (tests/components/AgentsConfigDrawer.test.tsx);
+// 主流程仍只经 AgentsTab 内部使用。
+export function ConfigDrawer({
   cfg,
   onClose
 }: {
@@ -364,6 +380,9 @@ function ConfigDrawer({
   const [prompt, setPrompt] = useState(cfg.prompt)
   const [promptDirty, setPromptDirty] = useState(false)
   const [hour, setHour] = useState<number>(cfg.schedule.hours?.[0] ?? 9)
+  // weekly 选周几（0=周一…6=周日，与 worker.py 一致）；monthly 选每月几日（1–28）。
+  const [weekday, setWeekday] = useState<number>(cfg.schedule.weekday ?? 0)
+  const [dayOfMonth, setDayOfMonth] = useState<number>(cfg.schedule.day_of_month ?? 1)
   const [triggerMode, setTriggerMode] = useState<'rolling_24h' | 'natural_day'>(
     cfg.trigger_mode || 'rolling_24h'
   )
@@ -396,7 +415,14 @@ function ConfigDrawer({
       prompt: promptDirty ? prompt : cfg.prompt_is_default ? null : cfg.prompt,
       model,
       kos_enrich: kosEnrich,
-      schedule: { ...cfg.schedule, cadence, hours: [hour] }
+      schedule: {
+        ...cfg.schedule,
+        cadence,
+        hours: [hour],
+        // weekday 仅 weekly 有意义、day_of_month 仅 monthly 有意义；按 cadence 写入。
+        ...(cadence === 'weekly' ? { weekday } : {}),
+        ...(cadence === 'monthly' ? { day_of_month: dayOfMonth } : {})
+      }
     }
     // 触发模式 / 时区 / 带正文优先级仅 daily 有意义；周月报走层级聚合，不带这些。
     if (isDaily) {
@@ -520,13 +546,43 @@ function ConfigDrawer({
               </div>
             </Field>
 
-            {/* schedule（cadence 固定，只选时点） */}
+            {/* schedule：daily 只选时点；weekly 选周几 + 时点；monthly 选每月几日 + 时点 */}
             <Field label={t('agents.config.schedule')}>
-              <div className="flex items-center" style={{ gap: 10 }}>
+              <div className="flex items-center" style={{ gap: 10, flexWrap: 'wrap' }}>
                 <CadencePill cadence={cadence} />
-                <span style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))' }}>
-                  {t('agents.config.at')}
-                </span>
+                {cadence === 'daily' && (
+                  <span style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))' }}>
+                    {t('agents.config.at')}
+                  </span>
+                )}
+                {cadence === 'weekly' && (
+                  <select
+                    value={weekday}
+                    onChange={(e) => setWeekday(Number(e.target.value))}
+                    style={{ ...inputStyle, width: 'auto' }}
+                    aria-label={t('agents.config.weekdayLabel')}
+                  >
+                    {WEEKDAY_OPTIONS.map((d) => (
+                      <option key={d} value={d}>
+                        {t(`agents.config.weekday.${d}`)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {cadence === 'monthly' && (
+                  <select
+                    value={dayOfMonth}
+                    onChange={(e) => setDayOfMonth(Number(e.target.value))}
+                    style={{ ...inputStyle, width: 'auto' }}
+                    aria-label={t('agents.config.dayOfMonthLabel')}
+                  >
+                    {DAY_OF_MONTH_OPTIONS.map((d) => (
+                      <option key={d} value={d}>
+                        {t('agents.config.dayOfMonthN', { day: d })}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <select
                   value={hour}
                   onChange={(e) => setHour(Number(e.target.value))}
@@ -539,6 +595,18 @@ function ConfigDrawer({
                   ))}
                 </select>
               </div>
+              {cadence === 'monthly' && (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: 'rgb(var(--ink-fg-3))',
+                    marginTop: 6,
+                    lineHeight: 1.5
+                  }}
+                >
+                  {t('agents.config.dayOfMonthHint')}
+                </div>
+              )}
             </Field>
 
             {isDaily ? (
