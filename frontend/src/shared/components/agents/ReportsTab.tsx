@@ -434,7 +434,9 @@ function ReportDetailView({
   const { t } = useTranslation()
   const { report, isLoading } = useReport(item.id)
   const status = item.status
-  const maxW = ctx.layout === 'document' ? 720 : 920
+  // console（定稿）→ 详情全宽，与 Agents/Chats tab 一致（消除右侧留白）；
+  // document（长文阅读模式，当前未启用）→ 720 居中。空态/失败态各自内部已居中限宽。
+  const docLayout = ctx.layout === 'document'
 
   return (
     <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', height: '100%' }}>
@@ -491,7 +493,7 @@ function ReportDetailView({
         </div>
       )}
       <div style={{ padding: ctx.dense ? '20px 24px 60px' : '28px 24px 60px' }}>
-        <div style={{ maxWidth: maxW, margin: '0 auto' }}>
+        <div style={docLayout ? { maxWidth: 720, margin: '0 auto' } : undefined}>
           {status === 'generating' && <GeneratingState />}
           {status === 'failed' && (
             <FailedState error={item.error} onRetry={onRetry} retrying={retrying} />
