@@ -220,7 +220,7 @@ class SyncStore:
     #                imap_uid); folder 两态 (archive / drafts). 草稿编辑 = 删旧 APPEND 新 →
     #                imap_uid 变但本地 id 不变. FolderSyncWorker (davmail-only) 增量同步,
     #                前端 /archive /drafts 直读. 详见 plan mailagent-davmail-zesty-eclipse.md.
-    DB_VERSION = 17
+    DB_VERSION = 19  # v19: report_agent +trigger_mode/timezone/body_full_max + 周/月报 agent
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1082,6 +1082,103 @@ class SyncStore:
                 CHECK (folder IN ('archive', 'drafts'))
             )
         """)
+
+        # v18: 报告 Agent 系统 —— agent 配置表 + 报告产物表。
+        # Python 后端 report_worker 写, Electron main (better-sqlite3) 直读展示。
+        # report_agent: 可扩展向全自定义 agent（v1 固定 type=report）。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS report_agent (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL DEFAULT 'report',
+                enabled INTEGER NOT NULL DEFAULT 0,
+                title TEXT,
+                schedule_json TEXT,            -- {"cadence":"daily","hours":[9],"weekday":0,"day_of_month":1}
+                window_hours INTEGER,
+                prompt TEXT,                   -- NULL = 用内置默认 prompt
+                model TEXT,                    -- NULL = 用 config.llm_model 默认
+                tools_json TEXT,               -- 预留: agent 可用 tool 白名单
+                kos_enrich INTEGER NOT NULL DEFAULT 0,
+                trigger_mode TEXT,             -- daily: rolling_24h | natural_day（NULL=rolling_24h）
+                timezone TEXT,                 -- IANA 时区（NULL=本地）; 仅 natural_day 用
+                body_full_max INTEGER,         -- 遗留(v19 早期)，不再读写；带正文改 body_full_priorities
+                body_full_priorities TEXT,     -- daily: JSON 数组 of priority label，命中则带正文（NULL=默认紧急+重要）
+                updated_at REAL
+            )
+        """)
+        # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS report (
+                id TEXT PRIMARY KEY,           -- "{agent_id}:{cadence}:{report_date}"
+                agent_id TEXT NOT NULL,
+                cadence TEXT,
+                report_date TEXT,              -- slot 日期 "YYYY-MM-DD"
+                window_start TEXT,
+                window_end TEXT,
+                status TEXT NOT NULL DEFAULT 'generating',  -- generating|ready|failed|skipped|empty
+                blocks_json TEXT,              -- ReportDoc SSoT (前端直接渲染)
+                counts_json TEXT,
+                headline TEXT,                 -- 冗余: 列表展示用 (从 blocks 抽)
+                model TEXT,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                cost_usd REAL DEFAULT 0,
+                error TEXT,
+                created_at REAL,
+                generated_at REAL
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_agent_date ON report(agent_id, report_date DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_created ON report(created_at DESC)"
+        )
+
+        # === v19: 旧 v18 库 report_agent 无新列 → ALTER 补。**必须在 seed 前**（下面 seed
+        # 引用新列）；新库 CREATE 已含, PRAGMA 检查会跳过。
+        if current_version < 19:
+            try:
+                _ra_cols = {r[1] for r in cursor.execute("PRAGMA table_info(report_agent)").fetchall()}
+                for _c, _t in (("trigger_mode", "TEXT"), ("timezone", "TEXT"), ("body_full_max", "INTEGER"), ("body_full_priorities", "TEXT")):
+                    if _c not in _ra_cols:
+                        cursor.execute(f"ALTER TABLE report_agent ADD COLUMN {_c} {_t}")
+                logger.info("v19 migration: report_agent +trigger_mode/timezone/body_full_max")
+            except sqlite3.OperationalError as e:
+                logger.warning(f"v19 migration skipped: {e}")
+
+        # 种子: 日 / 周 / 月报三个独立 agent（enabled=0, prompt=NULL→内置默认）。幂等。
+        # daily=rolling_24h 触发 + 预载 15 封正文；周 / 月报走层级聚合（读子报告，无窗口 /
+        # 正文配置，trigger_mode/body_full_max 留 NULL）。
+        _seed_cols = (
+            "(id, type, enabled, title, schedule_json, window_hours, prompt, model, "
+            "tools_json, kos_enrich, trigger_mode, timezone, body_full_priorities, updated_at)"
+        )
+        _seed_now = time.time()
+        for _id, _title, _sched, _win, _trig, _bpri in (
+            ("daily_email_digest", "邮件日报", '{"cadence": "daily", "hours": [9]}', 24,
+             "rolling_24h", '["🔴 紧急", "🟡 重要"]'),
+            ("weekly_email_digest", "邮件周报", '{"cadence": "weekly", "hours": [9], "weekday": 0}', 168, None, None),
+            ("monthly_email_digest", "邮件月报", '{"cadence": "monthly", "hours": [9], "day_of_month": 1}', 720, None, None),
+        ):
+            cursor.execute(
+                f"INSERT OR IGNORE INTO report_agent {_seed_cols} "
+                "VALUES (?, 'report', 0, ?, ?, ?, NULL, 'claude-opus-4-8', NULL, 0, ?, NULL, ?, ?)",
+                (_id, _title, _sched, _win, _trig, _bpri, _seed_now),
+            )
+
+        # 旧库（v18→v19 升级）daily 行已存在 → 上面 INSERT OR IGNORE 跳过 → ALTER 新列仍 NULL。
+        # 补默认（仅当 NULL，幂等自愈，覆盖已升到 v19 的库）：daily 走 rolling_24h + 紧急/重要
+        # 带正文；timezone 留 NULL（rolling 不需要，natural_day 时前端兜底本地）。周 / 月报新列
+        # NULL 是正确语义（层级聚合无触发模式 / 正文配置），不回填。
+        cursor.execute(
+            "UPDATE report_agent SET trigger_mode = 'rolling_24h' "
+            "WHERE id = 'daily_email_digest' AND trigger_mode IS NULL"
+        )
+        cursor.execute(
+            "UPDATE report_agent SET body_full_priorities = ? "
+            "WHERE id = 'daily_email_digest' AND body_full_priorities IS NULL",
+            ('["🔴 紧急", "🟡 重要"]',),
+        )
 
         # 更新数据库版本
         cursor.execute("""

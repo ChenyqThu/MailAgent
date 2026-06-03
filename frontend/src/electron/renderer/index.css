@@ -4290,3 +4290,53 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--c-accent));
 }
 
+
+/* ════════════════════════════════════════════════════════════════════
+   Sprint 20 — /agents 报告页动效 + 分段控件
+   设计稿 Agents.html <style> + ds.css .seg 移植。token 复用全局 --ink/--c-accent。
+   ════════════════════════════════════════════════════════════════════ */
+@keyframes agents-spin { to { transform: rotate(360deg); } }
+.spin > * { animation: agents-spin 0.9s linear infinite; }
+
+@keyframes agents-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.shimmer {
+  background: linear-gradient(90deg, rgb(var(--ink-2)) 0%, rgb(var(--ink-3)) 50%, rgb(var(--ink-2)) 100%);
+  background-size: 800px 100%;
+  animation: agents-shimmer 1.4s linear infinite;
+}
+
+@keyframes agents-email-flash {
+  0% { box-shadow: 0 0 0 2px rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.10); }
+  100% { box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0); background: rgb(var(--c-accent) / 0); }
+}
+.email-flash { animation: agents-email-flash 1.6s ease; border-radius: 8px; }
+
+/* 分段控件（报告 cadence 过滤 / 配置排程 + 窗口）。 */
+.seg {
+  display: inline-flex;
+  background: rgb(var(--ink-3));
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  transition: all var(--dur-fast, 120ms);
+  background: transparent;
+  border: 0;
+  font-family: inherit;
+}
+.seg button:hover { color: rgb(var(--ink-fg)); }
+.seg button.on { background: rgb(var(--ink-5)); color: rgb(var(--ink-fg)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .spin > *, .shimmer, .email-flash { animation: none !important; }
+}

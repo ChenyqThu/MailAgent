@@ -1678,6 +1678,243 @@ export interface NotionAgentApi {
   setModel(alias: string): Promise<NotionAgentConfig>
 }
 
+// ──── Report Agent (Sprint 20 — /agents 页) ────────────────────────────────
+// ReportDoc 块模型契约，与 Python src/reports/models.py + docs/report-agent-
+// frontend-handoff.md §5 + agents/CHANGES-vs-PRD.md §2 1:1 对齐。
+// **改字段名必须同步改后端 models.py + handoff 文档**。
+
+export type ReportTone = 'neutral' | 'info' | 'success' | 'warn' | 'critical'
+export type ReportCadence = 'daily' | 'weekly' | 'monthly'
+export type ReportStatus = 'generating' | 'ready' | 'empty' | 'failed' | 'skipped'
+
+export interface ReportHeaderBlock {
+  type: 'header'
+  title: string
+  subtitle?: string
+  date_label?: string
+}
+export interface ReportOverviewBlock {
+  type: 'overview'
+  text: string
+}
+export interface ReportStat {
+  key: string
+  label: string
+  value: number
+  tone: ReportTone
+}
+export interface ReportStatRowBlock {
+  type: 'stat_row'
+  stats: ReportStat[]
+}
+export interface ReportSectionBlock {
+  type: 'section'
+  id: string
+  title: string
+  icon?: string
+  intro?: string
+  /** CHANGES-vs-PRD §2 — 本组整体汇总（含 [文本](#email-<id>) 跳转 + **bold**）。 */
+  summary?: string
+}
+export interface ReportEmailSource {
+  notion_url: string | null
+  app_deeplink: string
+}
+export interface ReportEmailItemBlock {
+  type: 'email_item'
+  internal_id: number
+  subject: string
+  sender_name: string
+  time: string
+  sender_addr?: string
+  category?: string
+  priority?: string
+  ai_summary?: string
+  ai_action?: string
+  source: ReportEmailSource
+  badges?: string[]
+}
+export interface ReportKeyPointsBlock {
+  type: 'key_points'
+  items: string[]
+  title?: string
+}
+export interface ReportCalloutBlock {
+  type: 'callout'
+  tone: ReportTone
+  body: string
+  title?: string
+}
+export interface ReportKosContextBlock {
+  type: 'kos_context'
+  entity_slug: string
+  title: string
+  snippet: string
+  source: string
+}
+export interface ReportActionSuggestionBlock {
+  type: 'action_suggestion'
+  id: string
+  title: string
+  internal_ids: number[]
+  action_type: string
+  enabled: boolean
+  detail?: string
+}
+export interface ReportTrendPoint {
+  label: string
+  value: number
+}
+export interface ReportTrendBlock {
+  type: 'trend'
+  metric: string
+  points: ReportTrendPoint[]
+  compare?: { label: string; delta: number }
+}
+export interface ReportDividerBlock {
+  type: 'divider'
+}
+/** 未知 block 优雅降级（BlockRenderer 渲染 UnknownBlock）。 */
+export interface ReportUnknownBlock {
+  type: string
+  [k: string]: unknown
+}
+export type ReportBlock =
+  | ReportHeaderBlock
+  | ReportOverviewBlock
+  | ReportStatRowBlock
+  | ReportSectionBlock
+  | ReportEmailItemBlock
+  | ReportKeyPointsBlock
+  | ReportCalloutBlock
+  | ReportKosContextBlock
+  | ReportActionSuggestionBlock
+  | ReportTrendBlock
+  | ReportDividerBlock
+  | ReportUnknownBlock
+
+export interface ReportDoc {
+  version: number
+  agent_id: string
+  cadence: ReportCadence
+  report_date: string
+  window: { start: string; end: string }
+  generated_at: string
+  model: string
+  blocks: ReportBlock[]
+}
+
+export interface ReportCounts {
+  total?: number
+  unread?: number
+  urgent?: number
+  ai_handled?: number
+  todo?: number
+  /** 已回复（同 thread 有更晚发件箱邮件）。 */
+  replied?: number
+  /** 已发出（本窗口发件箱邮件数）。 */
+  sent?: number
+  /** 已标旗。 */
+  flagged?: number
+  by_category?: Record<string, number>
+}
+
+/** report:list 行（不含 blocks，热路径直读 sync_store.db）。 */
+export interface ReportListItem {
+  id: string
+  agent_id: string
+  cadence: ReportCadence
+  report_date: string
+  window_start: string
+  window_end: string
+  status: ReportStatus
+  counts: ReportCounts
+  headline: string
+  model: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  cost_usd: number | null
+  error: string | null
+  created_at: number | null
+  generated_at: number | null
+}
+
+/** report:get — 完整行 + 解析后的 doc。 */
+export interface ReportDetail extends ReportListItem {
+  doc: ReportDoc | null
+}
+
+export interface ReportSchedule {
+  cadence: ReportCadence
+  hours: number[]
+  weekday?: number
+  day_of_month?: number
+}
+
+/** report:getConfig — 解析后的 agent 配置（prompt 缺省已回填默认）。 */
+export interface ReportAgentConfig {
+  id: string
+  type: string
+  enabled: boolean
+  title: string
+  schedule: ReportSchedule
+  window_hours: number | null
+  prompt: string
+  prompt_is_default: boolean
+  model: string
+  kos_enrich: boolean
+  /** daily 触发模式：rolling_24h（往前推 window_hours）| natural_day（指定时区昨天整天）。 */
+  trigger_mode: 'rolling_24h' | 'natural_day'
+  /** IANA 时区（'' = 本地）；natural_day 边界 + 周/月报自然周/月用。 */
+  timezone: string
+  /** daily 带完整正文的优先级集合（priority label）；命中的邮件才预载正文，其余只摘要、不带附件。 */
+  body_full_priorities: string[]
+  updated_at: number | null
+}
+
+/** report:setConfig — friendly patch（后端 CLI 映射到 DB 列）。 */
+export interface ReportConfigPatch {
+  enabled?: boolean
+  title?: string
+  /** null / '' → 重置为内置默认 prompt。 */
+  prompt?: string | null
+  model?: string
+  window_hours?: number
+  schedule?: ReportSchedule
+  kos_enrich?: boolean
+  trigger_mode?: 'rolling_24h' | 'natural_day'
+  timezone?: string
+  body_full_priorities?: string[]
+}
+
+export interface ReportRunResult {
+  report_id: string
+  status: ReportStatus
+  headline: string
+  cadence?: string
+  report_date?: string
+  error?: string | null
+}
+
+export interface ReportApi {
+  /** 报告列表（不含 blocks，按 report_date 倒序）。失败返 []。 */
+  list(opts?: {
+    cadence?: ReportCadence
+    agentId?: string
+    limit?: number
+  }): Promise<ReportListItem[]>
+  /** 单份报告详情（含解析后的 doc）。不存在返 null。 */
+  get(reportId: string): Promise<ReportDetail | null>
+  /** agent 配置列表（v1 一个 daily agent）。失败返 []。 */
+  getConfig(): Promise<ReportAgentConfig[]>
+  /** 部分更新 agent 配置（写, needs auth）。返回更新后的解析配置。 */
+  setConfig(agentId: string, patch: ReportConfigPatch): Promise<ReportAgentConfig>
+  /** 立即生成一份报告（runNow, 写, needs auth, 跑 LLM）。 */
+  runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult>
+  /** 删除一份报告（写, needs auth）。 */
+  delete(reportId: string): Promise<void>
+}
+
 export interface MailApi {
   email: EmailApi
   /** Phase C — 存档 / 草稿箱 folder_email 表 (DB v17). */
@@ -1711,4 +1948,7 @@ export interface MailApi {
   /** Notion Agent CLI config — read/edit the bound Custom Agent + default
    *  model in ~/.notionagents/notion_account.json. */
   notionAgent: NotionAgentApi
+  /** Sprint 20 — 报告 Agent (/agents 页): list/get 直读 sync_store.db,
+   *  runNow/getConfig/setConfig 经 `mailagent report` CLI fork. */
+  report: ReportApi
 }

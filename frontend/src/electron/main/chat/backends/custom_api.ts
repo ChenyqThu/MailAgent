@@ -24,7 +24,7 @@
 //     + `usage` (last chunk) + `[DONE]` sentinel
 
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../../llm_settings'
-import { isKosL1HotBlockEnabled } from '../config'
+import { isKosConsumerEnabled, isKosL1HotBlockEnabled } from '../config'
 import { getCachedSenderDigest } from '../../kos/sender_digest_cache'
 import type {
   BackendToolDescriptor,
@@ -37,7 +37,9 @@ import type {
 // Anthropic `max_tokens` caps the model's RESPONSE length (not input).
 // Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
 // typical token density.
-const MAX_OUTPUT_TOKENS = 4096
+const MAX_OUTPUT_TOKENS = 64000
+// anthropic-beta（Anthropic /v1/messages；CRS 透传）：1M 上下文窗口 + 1h cache TTL。
+const ANTHROPIC_BETA = 'extended-cache-ttl-2025-04-11,context-1m-2025-08-07'
 const REQUEST_DEADLINE_MS = 60_000
 
 // Sprint 19 — Anthropic message content can be a plain string (legacy
@@ -183,9 +185,38 @@ function buildStaticSystemHeader(): string {
     '  ConfirmToolDialog. Never bypass with a different tool.',
     '- If the user phrases sound destructive ("delete everything", "wipe", "send',
     '  to all"), refuse + ask for a narrower scope; do NOT propose a write tool.',
-    '- KOS / search tools (kos_query / kos_digest / email_search_fulltext /',
-    '  email_search_attachments) are read-only — safe to call freely; but cap to',
-    '  3 calls per turn unless the user is iteratively narrowing the search.'
+    '- KOS / search read tools (kos_query / kos_recall / kos_get_page /',
+    '  email_search_fulltext / email_search_attachments) are read-only — safe to',
+    '  call freely; cap to 3 calls per turn unless iteratively narrowing.',
+    '- kos_put_page WRITES the knowledge brain — the user MUST confirm it in the',
+    '  ConfirmToolDialog; only use it for genuinely durable facts.'
+  ].join('\n')
+}
+
+/** Sprint 19 PR-2e+ — KOS usage guidance block, injected into the stable
+ *  system prefix ONLY when the KOS consumer is enabled (so the LLM self-directs
+ *  KOS reads/writes per the brain's consumption contract). Static (not
+ *  per-email) → stays cacheable. Mirrors docs/report-agent-prd.md §3.3. */
+function buildKosGuidanceBlock(): string {
+  return [
+    '## KOS knowledge brain (read cross-source, write to default):',
+    'Call KOS tools to fetch/persist knowledge on demand. Reads (kos_query /',
+    'kos_recall / kos_find_experts / kos_get_page) UNION across 3 sources —',
+    '"default" (personal brain: people/companies/projects/notes), "mailagent-emails"',
+    '(your email corpus), "omada" (product knowledge: user guides / FAQ). No source',
+    'needed unless restricting.',
+    '- WHEN an email mentions a person / company / product / tech point: kos_query',
+    '  FIRST to see what the brain knows (background, history, product facts), then',
+    '  reply/process grounded in it. Answer ONLY from retrieved content; if nothing',
+    '  relevant, say "the brain has nothing on this" — never fabricate.',
+    '- WHEN the email yields a durable fact / decision / commitment worth keeping:',
+    '  persist it via kos_put_page (writes the personal brain; user confirms). Make',
+    '  content traceable — note the email message-id / sender / date.',
+    '- Discover workflows with kos_list_skills / kos_get_skill (e.g. query,',
+    '  meeting-ingestion, enrich) and follow their steps. NEVER invoke whole-corpus',
+    '  / operator skills (corpus-ingest, synthesis-sweep, enrich-sweep, kos-patrol,',
+    '  digest-to-memory) — expensive batch jobs, not per-email actions.',
+    '- When unsure, kos_query / kos_get_skill first; do not kos_put_page blindly.'
   ].join('\n')
 }
 
@@ -202,6 +233,10 @@ function buildStaticSystemHeader(): string {
  */
 function buildStableSystemPrompt(ctx: EmailContext | null): string {
   let text = buildStaticSystemHeader()
+  // KOS consumer 开启时注入使用指南（静态、可缓存；与 allKosTools 注册同 gate）。
+  if (isKosConsumerEnabled()) {
+    text += '\n\n' + buildKosGuidanceBlock()
+  }
   if (isKosL1HotBlockEnabled() && ctx?.senderAddr) {
     const digest = getCachedSenderDigest(ctx.senderAddr)
     if (typeof digest === 'string' && digest.length > 0) {
@@ -927,7 +962,8 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
       headers: {
         'content-type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': ANTHROPIC_BETA
       },
       body: JSON.stringify(requestBody),
       signal: timeoutAc.signal

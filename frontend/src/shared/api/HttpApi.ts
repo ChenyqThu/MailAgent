@@ -20,6 +20,10 @@
 // folder READS.
 
 import type {
+  ReportApi,
+  ReportAgentConfig,
+  ReportDetail,
+  ReportListItem,
   AdminHealthData,
   AdminStatsData,
   AIFields,
@@ -543,8 +547,18 @@ export class HttpApi implements MailApi {
   // status/reconnect stay notImplemented; onEvent/onStatus → noop unsub.
   events = {
     // web 走 react-query polling 而非 SSE: 返回 disabled 态, graceful 不 throw。
-    status: async () => ({ state: 'disabled' as const, lastError: null, lastEventTs: null, url: '' }),
-    reconnect: async () => ({ state: 'disabled' as const, lastError: null, lastEventTs: null, url: '' }),
+    status: async () => ({
+      state: 'disabled' as const,
+      lastError: null,
+      lastEventTs: null,
+      url: ''
+    }),
+    reconnect: async () => ({
+      state: 'disabled' as const,
+      lastError: null,
+      lastEventTs: null,
+      url: ''
+    }),
     onEvent: (): (() => void) => () => undefined,
     onStatus: (): (() => void) => () => undefined
   }
@@ -582,7 +596,12 @@ export class HttpApi implements MailApi {
   island = {
     // web 无 ping-island: 返回 disabled 态, graceful 不 throw —— TitleBar/Settings
     // mount 时 island state hydration 会调它。
-    status: async () => ({ state: 'disabled' as const, socketPath: '', lastProbeAt: null, lastError: null }),
+    status: async () => ({
+      state: 'disabled' as const,
+      socketPath: '',
+      lastProbeAt: null,
+      lastError: null
+    }),
     testConnection: () => notImplemented('island.testConnection'),
     setEnabled: () => notImplemented('island.setEnabled'),
     appearance: (): void => {
@@ -598,5 +617,16 @@ export class HttpApi implements MailApi {
       /* no-op stub */
     },
     onEvent: (): (() => void) => () => undefined
+  }
+
+  // Sprint 20 — 报告 Agent: serve-api 暂无 report 端点。读优雅降级（空列表 →
+  // /agents 页渲染空态，与 island/updater 同款 graceful disabled），写 notImplemented。
+  report: ReportApi = {
+    list: (): Promise<ReportListItem[]> => Promise.resolve([]),
+    get: (): Promise<ReportDetail | null> => Promise.resolve(null),
+    getConfig: (): Promise<ReportAgentConfig[]> => Promise.resolve([]),
+    setConfig: () => notImplemented('report.setConfig'),
+    runNow: () => notImplemented('report.runNow'),
+    delete: () => notImplemented('report.delete')
   }
 }

@@ -9,6 +9,7 @@ import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
 import { registerEmailHandlers } from './handlers/email'
 import { registerFolderHandlers } from './handlers/folder'
+import { registerReportHandlers } from './handlers/report'
 import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
 import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
@@ -313,6 +314,9 @@ app.whenReady().then(async () => {
   })
   // Phase C — 存档 / 草稿箱 folder_email 读写 (better-sqlite3 直读 + CLI fork).
   registerFolderHandlers()
+  // Sprint 20 — 报告 Agent (/agents 页): list/get 直读 sync_store.db,
+  // runNow/getConfig/setConfig 经 `mailagent report` CLI fork.
+  registerReportHandlers()
   registerAttachmentHandlers()
   registerTranslateHandlers()
   // Sprint 4 §2.1 — AI chat IPC stream bridge + the two production

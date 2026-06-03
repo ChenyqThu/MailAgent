@@ -262,7 +262,8 @@ class Config(BaseSettings):
         ),
     )
     llm_max_tokens: int = Field(
-        default=4096, env="LLM_MAX_TOKENS", description="单次生成 max_tokens",
+        default=64000, env="LLM_MAX_TOKENS",
+        description="单次生成 max output tokens（默认 64k = Claude Sonnet 4.x 上限；仅上限不强制，按需输出）",
     )
     llm_timeout_sec: int = Field(
         default=60, env="LLM_TIMEOUT_SEC", description="LLM 请求超时（秒）",
@@ -466,6 +467,16 @@ class Config(BaseSettings):
     mailagent_daily_digest_max_bulk_ids: int = Field(
         default=30, env="MAILAGENT_DAILY_DIGEST_MAX_BULK_IDS",
         description="每个 bulk action 携带的 internal_id 列表上限（单次一键批量处理封数），默认 30。",
+    )
+
+    # ---- 报告 Agent 系统（v18, src/reports；默认关）----
+    mailagent_report_agent_enabled: bool = Field(
+        default=False, env="MAILAGENT_REPORT_AGENT_ENABLED",
+        description="报告 Agent 总开关（日/周/月报 report_worker tick_loop）。默认关；per-agent 还需 report_agent.enabled。",
+    )
+    mailagent_report_max_emails: int = Field(
+        default=80, env="MAILAGENT_REPORT_MAX_EMAILS",
+        description="单次报告喂给 LLM 的邮件 brief 封数上限（按 priority/date 排序取前 N），默认 80。",
     )
 
     # =========================================================================

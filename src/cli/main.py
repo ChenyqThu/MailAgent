@@ -43,6 +43,7 @@ from src.cli.commands import debug as _debug_module  # noqa: E402
 from src.cli.commands import notion as _notion_module  # noqa: E402
 from src.cli.commands import project_progress as _project_progress_module  # noqa: E402
 from src.cli.commands import folder as _folder_module  # noqa: E402
+from src.cli.commands import report as _report_module  # noqa: E402
 
 app.add_typer(_email_module.app, name="email", help="邮件 CRUD / 搜索 / 重传")
 app.add_typer(_admin_module.app, name="admin", help="统计 / 健康 / db-version")
@@ -81,6 +82,10 @@ app.add_typer(
 app.add_typer(
     _folder_module.app, name="folder",
     help="存档/草稿文件夹 list / get / search / sync / delete / move / send-draft / edit/create-draft (davmail-only)",
+)
+app.add_typer(
+    _report_module.app, name="report",
+    help="报告 Agent run / list / get / config-get / config-set (/agents 页 IPC 后端)",
 )
 
 

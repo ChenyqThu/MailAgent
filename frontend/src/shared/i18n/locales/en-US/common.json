@@ -1795,5 +1795,101 @@
     "frosted": "Frosted",
     "solid": "Solid",
     "liquid": "Liquid"
+  },
+  "agents": {
+    "title": "Agents",
+    "subtitle": "Auto-generated, traceable email reports. Daily by default; weekly / monthly share the engine.",
+    "tabAgents": "Agents",
+    "tabReports": "Reports",
+    "tabChats": "Chats",
+    "cadence": {
+      "all": "All",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly"
+    },
+    "status": {
+      "ready": "Ready",
+      "generating": "Generating",
+      "failed": "Failed",
+      "empty": "Empty",
+      "skipped": "Skipped"
+    },
+    "reports": {
+      "history": "History",
+      "loading": "Loading…",
+      "none": "No reports yet",
+      "selectHint": "Select a report on the left",
+      "generating": "Generating report…",
+      "generatingHint": "Jarvis is reviewing your mail and curating. Usually 20–40s.",
+      "failed": "Report generation failed",
+      "failedHint": "LLM call errored, retry available.",
+      "regenerate": "Regenerate",
+      "empty": "No new email in this period",
+      "emptyHint": "No new email in the selected time window — nothing to report.",
+      "generatedAt": "Generated",
+      "backToList": "Back to list"
+    },
+    "card": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "schedDaily": "Daily {hour}:00",
+      "schedWeekly": "Mondays {hour}:00",
+      "schedMonthly": "1st of month {hour}:00",
+      "window": "{hours}h lookback",
+      "lastReport": "Latest report",
+      "noReport": "No report yet — click Run now to generate the first.",
+      "running": "Generating…",
+      "runNow": "Run now",
+      "runningHint": "Generating, ~20–40s…",
+      "configure": "Configure",
+      "newAgent": "New Agent",
+      "newAgentHint": "Custom trigger, tools & model · coming soon",
+      "noAgent": "No report agent found (database not initialized?)"
+    },
+    "config": {
+      "title": "Configure · {title}",
+      "enable": "Enable this Agent",
+      "enableHint": "Auto-generate on schedule",
+      "prompt": "Report Prompt",
+      "promptHint": "tune the report's voice",
+      "promptNote": "Counts, internal_ids and links are authoritatively filled by the system; the prompt only affects prose, grouping and selection.",
+      "schedule": "Schedule",
+      "at": "At",
+      "window": "Lookback window",
+      "windowHint": "How far back to pull emails when generating",
+      "model": "Model",
+      "kos": "Gbrain knowledge enrichment",
+      "kosHint": "Attach Gbrain knowledge-base profile snippets for key projects / senders",
+      "promptPlaceholder": "Empty = built-in chief-of-staff persona (auto per daily/weekly/monthly); type to override",
+      "triggerMode": "Trigger",
+      "triggerHint": "Lookback basis",
+      "trigger": { "rolling_24h": "Rolling 24h", "natural_day": "Natural day (yesterday)" },
+      "timezone": "Timezone",
+      "timezoneHint": "Empty = local; used for natural-day / week / month bounds",
+      "timezonePlaceholder": "e.g. Asia/Shanghai (empty = local)",
+      "timezoneLocal": "(Local)",
+      "bodyPriorities": "Bodies for priorities",
+      "bodyPrioritiesHint": "Checked priorities get full body; others summary-only (no attachments)",
+      "aggregation": "Data source",
+      "aggWeekly": "Weekly auto-aggregates the prior natural week's (Mon–Sun) daily reports; missing days are noted.",
+      "aggMonthly": "Monthly auto-aggregates the prior natural month's weekly reports; missing weeks are noted.",
+      "cancel": "Cancel",
+      "save": "Save"
+    },
+    "source": {
+      "title": "Email source",
+      "close": "Close",
+      "noSubject": "(no subject)",
+      "aiFields": "AI Fields",
+      "summary": "Summary",
+      "openNotion": "Open in Notion",
+      "openInbox": "Open in inbox"
+    },
+    "chats": {
+      "continue": "Continue in inbox",
+      "selectHint": "Select a conversation on the left",
+      "emptyTranscript": "No messages in this conversation yet"
+    }
   }
 }

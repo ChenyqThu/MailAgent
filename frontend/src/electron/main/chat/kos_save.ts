@@ -43,7 +43,7 @@ const SLUG_PREFIX = 'chat-history/mailagent'
 // toast); too short risks a needless fallback to raw transcript. Failure
 // here is non-fatal — fallback body keeps the save working.
 const SUMMARIZE_DEADLINE_MS = 45_000
-const SUMMARIZE_MAX_TOKENS = 1024
+const SUMMARIZE_MAX_TOKENS = 64000
 
 // ── Lazy singleton — 复用 token cache 不每次重 fetch ───────────────
 
@@ -210,7 +210,9 @@ async function summarizeConversation(opts: {
       headers = {
         'content-type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        // 1M 上下文 + 1h cache TTL beta（CRS 透传）。
+        'anthropic-beta': 'extended-cache-ttl-2025-04-11,context-1m-2025-08-07'
       }
       body = {
         model,

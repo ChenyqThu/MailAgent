@@ -30,6 +30,8 @@ import {
 } from '@tanstack/react-router'
 
 import { AdminLayout } from './components/layout/AdminLayout'
+import { AgentsLayout } from './components/layout/AgentsLayout'
+import { NotionAgentLayout } from './components/layout/NotionAgentLayout'
 import { CalendarLayout } from './components/layout/CalendarLayout'
 import { FolderLayout } from './components/layout/FolderLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
@@ -186,6 +188,31 @@ const sessionsRoute = createRoute({
   component: SessionsLayout
 })
 
+// /agents — Custom AI Agents 区（Agents / 报告 / Chats）。?tab= 控制激活 tab，
+// 侧栏「Custom AI」「AI 会话历史」直接深链。validateSearch 把未知 tab 归到 agents。
+const AGENTS_TABS = ['agents', 'reports', 'chats'] as const
+// Notion Agent 区（仅 chats，notion-agent scoped）。参考 Custom AI 但暂无 agents/报告。
+const notionAgentRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/notion-agent',
+  component: NotionAgentLayout
+})
+
+const agentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/agents',
+  component: AgentsLayout,
+  validateSearch: (search: Record<string, unknown>): { tab: (typeof AGENTS_TABS)[number] } => {
+    const tab = search.tab
+    return {
+      tab:
+        typeof tab === 'string' && (AGENTS_TABS as readonly string[]).includes(tab)
+          ? (tab as (typeof AGENTS_TABS)[number])
+          : 'agents'
+    }
+  }
+})
+
 // `/admin` is a parent route that only renders <Outlet/> — visit a child
 // directly (/admin/llm, /admin/kanban, /admin/calendar). The Sidebar +
 // CommandPalette always navigate to a specific child, never to `/admin`
@@ -273,7 +300,7 @@ const isPackagedFileProtocol =
 
 // web build (vite base=/app/) 跑在 mail.chenge.ink/app 下 → router basepath 必须 = /app,
 // 否则 /app/ 不匹配任何 route → NotFound。electron (file: memory history / dev base=/) 不设。
-const _baseUrl = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL) ?? '/'
+const _baseUrl = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/'
 const _routerBasepath =
   !isPackagedFileProtocol && _baseUrl.startsWith('/') && _baseUrl !== '/'
     ? _baseUrl.replace(/\/+$/, '')
@@ -285,6 +312,8 @@ export const router = createRouter({
     archiveRoute,
     draftsRoute,
     sessionsRoute,
+    agentsRoute,
+    notionAgentRoute,
     adminRoute.addChildren([adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),
