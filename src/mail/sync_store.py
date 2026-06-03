@@ -1137,7 +1137,7 @@ class SyncStore:
                  prompt, model, tools_json, kos_enrich, updated_at)
             VALUES ('daily_email_digest', 'report', 0, '邮件日报',
                     '{"cadence": "daily", "hours": [9]}', 24,
-                    NULL, NULL, NULL, 0, ?)
+                    NULL, 'claude-opus-4-8', NULL, 0, ?)
             """,
             (time.time(),),
         )

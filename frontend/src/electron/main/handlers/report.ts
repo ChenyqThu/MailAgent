@@ -155,4 +155,17 @@ export function registerReportHandlers(): void {
       )
     }
   )
+
+  // ── report:delete — 删一份报告（写, needs auth）。
+  ipcMain.handle(
+    'report:delete',
+    async (_evt, reportId: unknown): Promise<WriteEnvelope<{ deleted: string }>> => {
+      if (typeof reportId !== 'string' || !reportId) {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'reportId required' }
+      }
+      return envelopeFromCli<{ deleted: string }>(
+        callCli(['report', 'delete', reportId], { needsAuth: true })
+      )
+    }
+  )
 }

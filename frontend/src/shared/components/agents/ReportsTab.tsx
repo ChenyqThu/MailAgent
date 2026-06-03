@@ -2,8 +2,10 @@
 // + generating/failed/empty 态）。窄屏单栏 + 返回栈。移植自 ~/Downloads/agents/reports.jsx。
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Check, Trash2, X } from 'lucide-react'
 
 import type { ReportCadence, ReportListItem } from '@shared/api/types'
+import { cn } from '@shared/lib/cn'
 import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
@@ -14,7 +16,7 @@ import {
   type RenderCtx,
   type ReportEmailItemForPanel
 } from './lib'
-import { useNarrow, useReport, useReportList, useRunNow } from './hooks'
+import { useDeleteReport, useNarrow, useReport, useReportList, useRunNow } from './hooks'
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const CADENCE_FILTERS: Array<[string, string]> = [
@@ -28,104 +30,156 @@ const CADENCE_FILTERS: Array<[string, string]> = [
 function ReportListRow({
   item,
   selected,
-  onClick
+  onClick,
+  onDelete
 }: {
   item: ReportListItem
   selected: boolean
   onClick: () => void
+  onDelete: () => void
 }): React.ReactElement {
+  const { t } = useTranslation()
+  const [confirming, setConfirming] = useState(false)
   const weekday = (() => {
     const d = new Date(item.report_date)
     return Number.isNaN(d.getTime()) ? '' : WEEKDAYS[d.getDay()]
   })()
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        position: 'relative',
-        display: 'block',
-        width: '100%',
-        textAlign: 'left',
-        padding: '11px 14px 11px 16px',
-        borderRadius: 9,
-        cursor: 'pointer',
-        fontFamily: 'inherit',
-        background: selected ? 'rgb(var(--ink-3))' : 'transparent',
-        border: `1px solid ${selected ? 'rgb(var(--ink-border))' : 'transparent'}`,
-        transition: 'background 120ms'
-      }}
-      onMouseEnter={(e) => {
-        if (!selected) e.currentTarget.style.background = 'rgb(var(--ink-fg) / 0.03)'
-      }}
-      onMouseLeave={(e) => {
-        if (!selected) e.currentTarget.style.background = 'transparent'
-      }}
-    >
-      {selected && (
-        <span
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 8,
-            bottom: 8,
-            width: 3,
-            borderRadius: 2,
-            background: 'rgb(var(--c-accent))'
-          }}
-        />
-      )}
-      <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
-        <span
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: 'rgb(var(--ink-fg))',
-            fontVariantNumeric: 'tabular-nums'
-          }}
-        >
-          {item.report_date.slice(5).replace('-', '/')}
-        </span>
-        <span style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))' }}>{weekday}</span>
-        <CadencePill cadence={item.cadence} />
-        <span style={{ flex: 1 }} />
-        <StatusBadge status={item.status} />
-      </div>
-      <p
+    <div className="relative group">
+      <button
+        type="button"
+        onClick={onClick}
         style={{
-          fontSize: 13,
-          color: 'rgb(var(--ink-fg-1))',
-          lineHeight: 1.45,
-          textWrap: 'pretty',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden'
+          position: 'relative',
+          display: 'block',
+          width: '100%',
+          textAlign: 'left',
+          padding: '11px 36px 11px 16px',
+          borderRadius: 9,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          background: selected ? 'rgb(var(--ink-3))' : 'transparent',
+          border: `1px solid ${selected ? 'rgb(var(--ink-border))' : 'transparent'}`,
+          transition: 'background 120ms'
+        }}
+        onMouseEnter={(e) => {
+          if (!selected) e.currentTarget.style.background = 'rgb(var(--ink-fg) / 0.03)'
+        }}
+        onMouseLeave={(e) => {
+          if (!selected) e.currentTarget.style.background = 'transparent'
         }}
       >
-        {item.headline}
-      </p>
-      {item.status === 'ready' && item.counts && (
-        <div
-          className="flex items-center"
+        {selected && (
+          <span
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 8,
+              bottom: 8,
+              width: 3,
+              borderRadius: 2,
+              background: 'rgb(var(--c-accent))'
+            }}
+          />
+        )}
+        <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
+          <span
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: 'rgb(var(--ink-fg))',
+              fontVariantNumeric: 'tabular-nums'
+            }}
+          >
+            {item.report_date.slice(5).replace('-', '/')}
+          </span>
+          <span style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))' }}>{weekday}</span>
+          <CadencePill cadence={item.cadence} />
+          <span style={{ flex: 1 }} />
+          <StatusBadge status={item.status} />
+        </div>
+        <p
           style={{
-            gap: 8,
-            marginTop: 7,
-            fontFamily: 'ui-monospace, monospace',
-            fontSize: 11,
-            color: 'rgb(var(--ink-fg-3))'
+            fontSize: 13,
+            color: 'rgb(var(--ink-fg-1))',
+            lineHeight: 1.45,
+            textWrap: 'pretty',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden'
           }}
         >
-          <span>{item.counts.total ?? 0} 封</span>
-          {(item.counts.urgent ?? 0) > 0 && (
-            <>
-              <span>·</span>
-              <span style={{ color: 'rgb(var(--c-crit))' }}>{item.counts.urgent} 紧急</span>
-            </>
+          {item.headline}
+        </p>
+        {item.status === 'ready' && item.counts && (
+          <div
+            className="flex items-center"
+            style={{
+              gap: 8,
+              marginTop: 7,
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: 11,
+              color: 'rgb(var(--ink-fg-3))'
+            }}
+          >
+            <span>{item.counts.total ?? 0} 封</span>
+            {(item.counts.urgent ?? 0) > 0 && (
+              <>
+                <span>·</span>
+                <span style={{ color: 'rgb(var(--c-crit))' }}>{item.counts.urgent} 紧急</span>
+              </>
+            )}
+          </div>
+        )}
+      </button>
+      {/* 删除：hover 露出垃圾桶 → 点一下进确认（✓/✗），与 SessionsPage 同款 */}
+      {confirming ? (
+        <span className="absolute top-2 right-2 flex items-center gap-0.5">
+          <button
+            type="button"
+            aria-label={t('chat.sidebar.deleteConfirm')}
+            onClick={(e) => {
+              e.stopPropagation()
+              setConfirming(false)
+              onDelete()
+            }}
+            className="p-1.5 rounded bg-fail/15 text-fail hover:bg-fail/25 transition-colors duration-fast"
+          >
+            <Check size={13} strokeWidth={2.5} />
+          </button>
+          <button
+            type="button"
+            aria-label={t('chat.sidebar.deleteCancel')}
+            onClick={(e) => {
+              e.stopPropagation()
+              setConfirming(false)
+            }}
+            className="p-1.5 rounded text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast"
+          >
+            <X size={13} strokeWidth={2.5} />
+          </button>
+        </span>
+      ) : (
+        <button
+          type="button"
+          aria-label={t('chat.sidebar.delete')}
+          title={t('chat.sidebar.delete')}
+          onClick={(e) => {
+            e.stopPropagation()
+            setConfirming(true)
+          }}
+          className={cn(
+            'absolute top-2 right-2 p-1.5 rounded',
+            'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            'transition-opacity duration-fast',
+            'text-ink-fg-3 hover:text-fail hover:bg-fail/10'
           )}
-        </div>
+        >
+          <Trash2 size={13} strokeWidth={2} />
+        </button>
       )}
-    </button>
+    </div>
   )
 }
 
@@ -133,6 +187,7 @@ function ReportList({
   items,
   selectedId,
   onSelect,
+  onDelete,
   filter,
   onFilter,
   fluid,
@@ -141,6 +196,7 @@ function ReportList({
   items: ReportListItem[]
   selectedId: string | null
   onSelect: (id: string) => void
+  onDelete: (id: string) => void
   filter: string
   onFilter: (f: string) => void
   fluid?: boolean
@@ -211,6 +267,7 @@ function ReportList({
                 item={it}
                 selected={it.id === selectedId}
                 onClick={() => onSelect(it.id)}
+                onDelete={() => onDelete(it.id)}
               />
             ))}
           </div>
@@ -460,6 +517,11 @@ export function ReportsTab(): React.ReactElement {
   const [sourceEmail, setSourceEmail] = useState<ReportEmailItemForPanel | null>(null)
   const narrow = useNarrow()
   const { run, isRunning } = useRunNow()
+  const { remove } = useDeleteReport()
+  // 删除当前选中项时，refetch 后 picked 不再命中 → selected 自动回落第一份（派生逻辑）。
+  const onDelete = (id: string): void => {
+    void remove(id)
+  }
 
   const selected = useMemo(() => {
     if (picked) {
@@ -533,6 +595,7 @@ export function ReportsTab(): React.ReactElement {
             items={items}
             selectedId={selectedId}
             onSelect={onSelect}
+            onDelete={onDelete}
             filter={filter}
             onFilter={setFilter}
             loading={isLoading}
@@ -550,6 +613,7 @@ export function ReportsTab(): React.ReactElement {
         items={items}
         selectedId={selectedId}
         onSelect={onSelect}
+        onDelete={onDelete}
         filter={filter}
         onFilter={setFilter}
         loading={isLoading}

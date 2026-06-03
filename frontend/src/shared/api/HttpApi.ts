@@ -626,6 +626,7 @@ export class HttpApi implements MailApi {
     get: (): Promise<ReportDetail | null> => Promise.resolve(null),
     getConfig: (): Promise<ReportAgentConfig[]> => Promise.resolve([]),
     setConfig: () => notImplemented('report.setConfig'),
-    runNow: () => notImplemented('report.runNow')
+    runNow: () => notImplemented('report.runNow'),
+    delete: () => notImplemented('report.delete')
   }
 }

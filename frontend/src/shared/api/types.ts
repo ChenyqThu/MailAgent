@@ -1896,6 +1896,8 @@ export interface ReportApi {
   setConfig(agentId: string, patch: ReportConfigPatch): Promise<ReportAgentConfig>
   /** 立即生成一份报告（runNow, 写, needs auth, 跑 LLM）。 */
   runNow(agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult>
+  /** 删除一份报告（写, needs auth）。 */
+  delete(reportId: string): Promise<void>
 }
 
 export interface MailApi {

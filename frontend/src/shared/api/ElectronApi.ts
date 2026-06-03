@@ -813,6 +813,10 @@ class ElectronReportApi implements ReportApi {
     )) as WriteEnvelope<ReportRunResult>
     return unwrap(env)
   }
+  async delete(reportId: string): Promise<void> {
+    const env = (await invoker()('report:delete', reportId)) as WriteEnvelope<{ deleted: string }>
+    unwrap(env)
+  }
 }
 
 export class ElectronApi implements MailApi {

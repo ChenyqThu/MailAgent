@@ -66,6 +66,21 @@ export function useRunNow(): {
   }
 }
 
+export function useDeleteReport(): {
+  remove: (reportId: string) => Promise<void>
+  isDeleting: boolean
+} {
+  const api = useMailApi()
+  const qc = useQueryClient()
+  const mut = useMutation({
+    mutationFn: (reportId: string) => api.report.delete(reportId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: LIST_KEY })
+    }
+  })
+  return { remove: (id) => mut.mutateAsync(id), isDeleting: mut.isPending }
+}
+
 export function useSetConfig(): {
   save: (agentId: string, patch: ReportConfigPatch) => Promise<ReportAgentConfig>
   isSaving: boolean

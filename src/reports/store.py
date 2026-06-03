@@ -136,6 +136,13 @@ class ReportStore:
             ).fetchone()
             return dict(row) if row else None
 
+    def delete_report(self, report_id: str) -> bool:
+        """删一份报告。返回是否真的删到（不存在 → False）。"""
+        with self._connection() as conn:
+            cur = conn.execute("DELETE FROM report WHERE id = ?", (report_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
     def list_reports(
         self,
         *,

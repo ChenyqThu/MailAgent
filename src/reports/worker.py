@@ -110,16 +110,14 @@ async def run_report_once(
     sched = _schedule_of(agent)
     cadence = sched.get("cadence", "daily")
     window_hours = int(agent.get("window_hours") or _DEFAULT_WINDOW_HOURS.get(cadence, 24))
-    # 锚定到北京当天 00:00：报告覆盖「截至今天零点往前 window_hours」的完整时段，
-    # 与运行时刻无关（早上跑/下午跑结果一致）。daily=昨天一整天、weekly=过去 7 个
-    # 完整日、monthly=过去 30 个完整日。fetch_report_briefs 的 now=上界(exclusive)。
-    anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    win_end_dt = anchor
-    win_start_dt = anchor - timedelta(hours=window_hours)
+    # 遵循配置 window_hours：取「跑的时刻往前推 N 小时」的滚动窗口（24/48h…），
+    # 不按物理自然日。fetch_report_briefs 的 now=窗口上界(exclusive)=运行时刻。
+    # （时区正确性靠 data.py 的 julianday 比较，不受混合偏移影响。）
+    win_end_dt = now
+    win_start_dt = now - timedelta(hours=window_hours)
     win_start = win_start_dt.isoformat()
     win_end = win_end_dt.isoformat()
-    # report_date = 覆盖时段的最后一个完整日（= 昨天），不是生成日。
-    report_date = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
+    report_date = now.strftime("%Y-%m-%d")
     rid = _report_id(agent["id"], cadence, report_date)
 
     store.create_report(
@@ -145,7 +143,7 @@ async def run_report_once(
         try:
             draft = await summarize_fn(
                 briefs=briefs, counts=counts, cadence=cadence, now=now,
-                persona_prompt=agent.get("prompt"), client=client,
+                persona_prompt=agent.get("prompt"), model=agent.get("model"), client=client,
             )
             doc = assemble_report_doc(
                 draft=draft, briefs=briefs, counts=counts, agent_id=agent["id"],

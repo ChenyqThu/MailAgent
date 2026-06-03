@@ -44,8 +44,9 @@ def _store(cli: "CliContext") -> "ReportStore":
 
 
 def _resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
-    """DB 行 → 前端友好配置：schedule_json 解析、bool 还原、prompt 缺省回填默认。"""
+    """DB 行 → 前端友好配置：schedule_json 解析、bool 还原、prompt/model 缺省回填默认。"""
     from src.reports.prompts import get_default_prompt
+    from src.reports.summarizer import DEFAULT_REPORT_MODEL
 
     try:
         schedule = json.loads(agent.get("schedule_json") or "{}") or {}
@@ -62,7 +63,7 @@ def _resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "window_hours": agent.get("window_hours"),
         "prompt": prompt or get_default_prompt(cadence),
         "prompt_is_default": not prompt,
-        "model": agent.get("model") or "",
+        "model": (agent.get("model") or "").strip() or DEFAULT_REPORT_MODEL,
         "kos_enrich": bool(agent.get("kos_enrich")),
         "updated_at": agent.get("updated_at"),
     }
@@ -193,6 +194,28 @@ def report_get(
     row["doc"] = doc
     row["counts"] = _parse_counts(row.pop("counts_json", None))
     emit(cli, row)
+
+
+# ============================================================
+# delete — 删一份报告（写）
+# ============================================================
+@app.command("delete")
+def report_delete(
+    ctx: typer.Context,
+    report_id: str = typer.Argument(..., help="report.id"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """删除一份报告。"""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    store = _store(cli)
+    if not store.delete_report(report_id):
+        raise emit_cli_error(cli, CliNotFoundError(f"report {report_id!r} not found"))
+    emit(cli, {"deleted": report_id})
 
 
 # ============================================================

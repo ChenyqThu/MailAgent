@@ -30,9 +30,9 @@ const WINDOW_BY_CADENCE: Record<ReportCadence, Array<[number, string]>> = {
 }
 const DEFAULT_WINDOW: Record<ReportCadence, number> = { daily: 24, weekly: 168, monthly: 720 }
 const MODELS: Array<{ id: string; label: string; hint: string }> = [
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: '默认 · 速度/质量均衡' },
-  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', hint: '更深推理 · 慢/贵' },
-  { id: 'gpt-5.5', label: 'GPT-5.5', hint: '快 · 限流时自动兜底' }
+  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', hint: '默认 · 最强推理' },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: '更快 · 质量均衡' },
+  { id: 'gpt-5.5', label: 'GPT-5.5', hint: '限流时自动兜底' }
 ]
 
 function scheduleText(

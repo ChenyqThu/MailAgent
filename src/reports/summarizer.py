@@ -19,6 +19,10 @@ from src.reports.prompts import get_default_prompt
 
 _BEIJING = timezone(timedelta(hours=8))
 
+# 报告默认模型：opus 4.8（比全局 llm_model 的 sonnet 更强，用户指定）。agent.model
+# 为空时兜底用它；后面接全局 llm_fallback_models 作降级链。1M+64k 由 client 统一加。
+DEFAULT_REPORT_MODEL = "claude-opus-4-8"
+
 _TOOL_NAME = "build_report"
 
 # email_refs / section.icon / highlight.tone 的取值约束。
@@ -202,6 +206,19 @@ def _build_user(
     return "\n".join(parts)
 
 
+def _model_chain(model: Optional[str]) -> List[str]:
+    """[agent.model 或 opus-4.8 默认, *全局 llm_fallback_models]（去重，保序）。"""
+    from src.config import config as _cfg
+
+    primary = (model or "").strip() or DEFAULT_REPORT_MODEL
+    chain = [primary]
+    for m in (_cfg.llm_fallback_models or "").split(","):
+        m = m.strip()
+        if m and m not in chain:
+            chain.append(m)
+    return chain
+
+
 async def summarize_report(
     *,
     briefs: List[ReportEmailBrief],
@@ -209,11 +226,13 @@ async def summarize_report(
     cadence: str = "daily",
     now: Optional[datetime] = None,
     persona_prompt: Optional[str] = None,
+    model: Optional[str] = None,
     client: Optional[LLMClient] = None,
 ) -> ReportDraft:
     """LLM 单次 tool_use：邮件 → ReportDraft。raises LLMCallError on failure（caller 降级）。
 
     persona_prompt 为 None → 用 cadence 对应的内置默认 persona。
+    model 为 agent 选定模型（空 → DEFAULT_REPORT_MODEL=opus 4.8），接全局 fallback 链。
     """
     now = now or datetime.now(_BEIJING)
     persona = persona_prompt if (persona_prompt and persona_prompt.strip()) else get_default_prompt(cadence)
@@ -227,6 +246,7 @@ async def summarize_report(
             user_content=_build_user(briefs=briefs, counts=counts, groups=groups),
             tool_schema=REPORT_TOOL_SCHEMA,
             tool_name=_TOOL_NAME,
+            model_chain=_model_chain(model),
         )
     finally:
         if own_client:

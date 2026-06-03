@@ -22,9 +22,8 @@ _SUMMARY_LINK_RE = re.compile(r"\[([^\]]+)\]\(#email-(\d+)\)")
 _WEEKDAY_CN = "一二三四五六日"
 
 _TITLE_BY_CADENCE = {"daily": "邮件日报", "weekly": "邮件周报", "monthly": "邮件月报"}
-# daily 的 report_date 即覆盖当天（昨天），日期本身够清楚，不再标"过去 24 小时"
-# （会被误读为 rolling）；周/月报标明覆盖跨度。
-_SPAN_BY_CADENCE = {"daily": "", "weekly": "近 7 日", "monthly": "近 30 日"}
+# 滚动窗口（遵循 window_hours，跑的时刻往前推 N 小时）→ 标"过去 N"。
+_SPAN_BY_CADENCE = {"daily": "过去 24 小时", "weekly": "过去 7 天", "monthly": "过去 30 天"}
 
 # stat_row 规格（key 与 compute_report_counts 对齐）。
 _STAT_SPEC = [
