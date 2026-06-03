@@ -1240,7 +1240,7 @@
     },
     "ai": {
       "title": "Local LLM Agent",
-      "helper": "Replaces Notion Email Agent for classification / priority / digest relations",
+      "helper": "Replaces Notion Email Agent for email triage / priority; the gateway / key below are also the LLM source for the Agents-tab reports (daily / weekly / monthly)",
       "enabled": {
         "label": "Enable local LLM",
         "helper": "Pause the Notion Email Agent first, or add a Status filter to its automation"
@@ -1251,7 +1251,7 @@
       },
       "apiKey": {
         "label": "LLM API key",
-        "helper": "Dual-written to keychain + .env; shared by translate / chat / LLM agent"
+        "helper": "Dual-written to keychain + .env; shared by translate / chat / email triage / report agent"
       },
       "model": {
         "label": "Primary model",

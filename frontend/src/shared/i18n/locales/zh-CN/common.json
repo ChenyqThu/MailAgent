@@ -1243,7 +1243,7 @@
     },
     "ai": {
       "title": "本地 LLM Agent",
-      "helper": "AI 分类 / 优先级 / Daily Digest relation 由本地 LLM 接管(取代 Notion Email Agent)",
+      "helper": "邮件 AI 分类 / 优先级由本地 LLM 接管(取代 Notion Email Agent); 下方网关 / 密钥同时是 Agents 页报告(日 / 周 / 月报)的 LLM 来源",
       "enabled": {
         "label": "启用本地 LLM",
         "helper": "需先在 Notion 端暂停 Email Agent 或加 Status 过滤"
@@ -1254,7 +1254,7 @@
       },
       "apiKey": {
         "label": "LLM API Key",
-        "helper": "双写 keychain + .env,翻译 / chat / LLM agent 共用"
+        "helper": "双写 keychain + .env,翻译 / chat / 邮件分类 / 报告 Agent 共用"
       },
       "model": {
         "label": "主模型",
