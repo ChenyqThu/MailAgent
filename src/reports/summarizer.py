@@ -168,10 +168,12 @@ def _build_user(
     cat_line = "、".join(f"{k}:{v}" for k, v in by_cat.items()) or "(无)"
     parts.append(
         "\n## 已知 counts（代码算好，勿改）\n"
-        f"- 总数：{counts.get('total', 0)}\n"
+        f"- 总数（收件）：{counts.get('total', 0)}\n"
         f"- 未读：{counts.get('unread', 0)}\n"
-        f"- 需关注（urgent，已排除已回复）：{counts.get('urgent', 0)}\n"
-        f"- 已回复：{counts.get('replied', 0)}\n"
+        f"- 需关注（urgent，已排除已回复，含置顶）：{counts.get('urgent', 0)}\n"
+        f"- 已回复（收到且你已回复的）：{counts.get('replied', 0)}\n"
+        f"- 已发出（本窗口你发出的邮件数）：{counts.get('sent', 0)}\n"
+        f"- 已标旗：{counts.get('flagged', 0)}\n"
         f"- AI 已处理：{counts.get('ai_handled', 0)}\n"
         f"- 各分类：{cat_line}"
     )
@@ -185,9 +187,12 @@ def _build_user(
         f"- FYI: {hint.get('fyi', [])}"
     )
 
-    if briefs:
+    # 只枚举收件类邮件供 LLM 引用（email_refs）；发件箱仅参与上面的「已发出」统计，
+    # 不进清单（避免 LLM 把你自己发的邮件铺成条目）。
+    inbound = [b for b in briefs if not b.is_outbound]
+    if inbound:
         lines = ["\n## 邮件清单（按优先级排序；用 internal_id 引用；不含正文）"]
-        for b in briefs:
+        for b in inbound:
             ai = b.ai_summary.strip()
             if len(ai) > ai_summary_max_chars:
                 ai = ai[:ai_summary_max_chars] + "…"
@@ -211,7 +216,7 @@ def _build_user(
             )
         parts.append("\n".join(lines))
     else:
-        parts.append("\n## 邮件清单\n(窗口内无邮件)")
+        parts.append("\n## 邮件清单\n(窗口内无收件邮件)")
 
     return "\n".join(parts)
 

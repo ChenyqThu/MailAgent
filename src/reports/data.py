@@ -32,6 +32,51 @@ _PRIORITY_RANK: Dict[str, int] = {
     label: len(PRIORITY_ENUM) - i for i, label in enumerate(PRIORITY_ENUM)
 }
 
+# 置顶邮件固定带入的上限（无视时间窗口，按收件时间倒序取最近 N 封），防历史置顶刷屏。
+_PINNED_EXTRA_CAP = 50
+
+# brief 投影列（窗口查询 + 置顶补充查询共用）。
+_BRIEF_SELECT = """
+    SELECT m.internal_id        AS internal_id,
+           COALESCE(m.subject, '') AS subject,
+           m.sender_name        AS sender_name,
+           m.sender             AS sender_addr,
+           m.date_received      AS date_received,
+           m.is_read            AS is_read,
+           m.is_flagged         AS is_flagged,
+           m.is_pinned          AS is_pinned,
+           m.is_important       AS is_important,
+           m.mailbox            AS mailbox,
+           m.thread_id          AS thread_id,
+           m.notion_page_id     AS notion_page_id,
+           l.labels_json        AS labels_json
+      FROM email_metadata m
+      LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
+"""
+
+
+def _row_to_brief(r: sqlite3.Row, *, is_outbound: bool) -> "ReportEmailBrief":
+    labels = _parse_labels(r["labels_json"])
+    return ReportEmailBrief(
+        internal_id=int(r["internal_id"]),
+        subject=r["subject"] or "",
+        sender_name=(r["sender_name"] or ""),
+        sender_addr=(r["sender_addr"] or ""),
+        date_received=(r["date_received"] or ""),
+        category=(labels.get("category") or "").strip(),
+        priority=(labels.get("priority") or "").strip(),
+        action_type=(labels.get("action_type") or "").strip(),
+        ai_summary=(labels.get("ai_summary") or "").strip(),
+        is_read=bool(r["is_read"]),
+        notion_page_id=r["notion_page_id"],
+        is_flagged=bool(r["is_flagged"]),
+        is_pinned=bool(r["is_pinned"]),
+        is_important=bool(r["is_important"]),
+        mailbox=(r["mailbox"] or ""),
+        thread_id=(r["thread_id"] or ""),
+        is_outbound=is_outbound,
+    )
+
 
 @dataclass
 class ReportEmailBrief:
@@ -55,6 +100,7 @@ class ReportEmailBrief:
     mailbox: str = ""
     thread_id: str = ""
     replied: bool = False  # 同 thread 有更晚的发件箱邮件 → 已回复
+    is_outbound: bool = False  # mailbox ∈ 发件箱 —— 你自己发出的，仅用于统计「已发出」/讲处理情况，不铺成条目
 
 
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
@@ -111,52 +157,42 @@ def fetch_report_briefs(
     conn.row_factory = sqlite3.Row
     briefs: List[ReportEmailBrief] = []
     try:
-        rows = conn.execute(
-            f"""
-            SELECT m.internal_id        AS internal_id,
-                   COALESCE(m.subject, '') AS subject,
-                   m.sender_name        AS sender_name,
-                   m.sender             AS sender_addr,
-                   m.date_received      AS date_received,
-                   m.is_read            AS is_read,
-                   m.is_flagged         AS is_flagged,
-                   m.is_pinned          AS is_pinned,
-                   m.is_important       AS is_important,
-                   m.mailbox            AS mailbox,
-                   m.thread_id          AS thread_id,
-                   m.notion_page_id     AS notion_page_id,
-                   l.labels_json        AS labels_json
-              FROM email_metadata m
-              LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
+        # ① 窗口查询：**含**发件箱（按 mailbox 现场判 is_outbound）。发件箱邮件不铺成
+        #    报告条目，但带入用于「已发出」统计 + 让 LLM 了解你回复/处理了什么。
+        window_rows = conn.execute(
+            _BRIEF_SELECT
+            + """
              WHERE m.date_received IS NOT NULL
-               AND m.mailbox NOT IN ({sent_ph})
                AND julianday(m.date_received) >= julianday(?)
                AND julianday(m.date_received) <  julianday(?)
             """,
-            (*_SENT_MAILBOXES, since_iso, until_iso),
+            (since_iso, until_iso),
         ).fetchall()
-        for r in rows:
-            labels = _parse_labels(r["labels_json"])
-            briefs.append(
-                ReportEmailBrief(
-                    internal_id=int(r["internal_id"]),
-                    subject=r["subject"] or "",
-                    sender_name=(r["sender_name"] or ""),
-                    sender_addr=(r["sender_addr"] or ""),
-                    date_received=(r["date_received"] or ""),
-                    category=(labels.get("category") or "").strip(),
-                    priority=(labels.get("priority") or "").strip(),
-                    action_type=(labels.get("action_type") or "").strip(),
-                    ai_summary=(labels.get("ai_summary") or "").strip(),
-                    is_read=bool(r["is_read"]),
-                    notion_page_id=r["notion_page_id"],
-                    is_flagged=bool(r["is_flagged"]),
-                    is_pinned=bool(r["is_pinned"]),
-                    is_important=bool(r["is_important"]),
-                    mailbox=(r["mailbox"] or ""),
-                    thread_id=(r["thread_id"] or ""),
-                )
-            )
+        seen: set = set()
+        for r in window_rows:
+            is_out = (r["mailbox"] or "") in _SENT_MAILBOXES
+            briefs.append(_row_to_brief(r, is_outbound=is_out))
+            seen.add(int(r["internal_id"]))
+
+        # ② 置顶邮件固定带入（**无视时间窗口** —— 置顶=重要且通常未处理，应在每次报告
+        #    都浮现，直到取消置顶/处理掉）。排除发件箱 + 已在窗口内的，取最近 N 封。
+        pinned_rows = conn.execute(
+            _BRIEF_SELECT
+            + f"""
+             WHERE m.is_pinned = 1
+               AND m.date_received IS NOT NULL
+               AND m.mailbox NOT IN ({sent_ph})
+             ORDER BY m.date_received DESC
+             LIMIT ?
+            """,
+            (*_SENT_MAILBOXES, _PINNED_EXTRA_CAP),
+        ).fetchall()
+        for r in pinned_rows:
+            if int(r["internal_id"]) in seen:
+                continue
+            briefs.append(_row_to_brief(r, is_outbound=False))
+            seen.add(int(r["internal_id"]))
+
         _mark_replied(conn, briefs)
     except sqlite3.OperationalError as e:
         logger.warning(f"[report] fetch_report_briefs query failed: {e}")
@@ -164,11 +200,15 @@ def fetch_report_briefs(
     finally:
         conn.close()
 
-    briefs.sort(
-        key=lambda b: (_PRIORITY_RANK.get(b.priority, 0), b.date_received),
+    # 收件类排序 + cap（置顶/紧急靠 is_attention 排最前，保证不被 cap 截掉）；
+    # 发件箱（outbound）不参与 cap，整体附在尾部（仅供统计 + LLM 上下文，不渲染）。
+    inbound = [b for b in briefs if not b.is_outbound]
+    outbound = [b for b in briefs if b.is_outbound]
+    inbound.sort(
+        key=lambda b: (is_attention(b), _PRIORITY_RANK.get(b.priority, 0), b.date_received),
         reverse=True,
     )
-    return briefs[:max_emails]
+    return inbound[:max_emails] + outbound
 
 
 def _mark_replied(conn: sqlite3.Connection, briefs: List[ReportEmailBrief]) -> None:
@@ -209,15 +249,17 @@ def _mark_replied(conn: sqlite3.Connection, briefs: List[ReportEmailBrief]) -> N
 def is_attention(b: ReportEmailBrief) -> bool:
     """需要用户亲自关注（**fallback 分组用**；主分组由 LLM 在 summarizer 里决定）。
 
-    严格规则：priority 命中 URGENT_PRIORITY_LABELS 且 action 命中 ACTION_NEEDS_FLAG
-    —— 与灵动岛 / 飞书 "urgent" 定义一致，避免把大半邮件都塞进"需关注"。
-    **已回复（replied）的不再算待办** —— 即使紧急，回过了就归"已处理"。
+    规则（满足任一即关注，但发件箱/已回复一律排除）：
+    - **置顶（is_pinned）**：置顶=重要且通常未处理 → 固定算待办。
+    - priority 命中 URGENT_PRIORITY_LABELS 且 action 命中 ACTION_NEEDS_FLAG
+      —— 与灵动岛 / 飞书 "urgent" 定义一致，避免把大半邮件都塞进"需关注"。
+    发件箱（outbound）是你发出的、不是待办；**已回复（replied）**即使紧急也归"已处理"。
     """
-    return (
-        b.priority in URGENT_PRIORITY_LABELS
-        and b.action_type in ACTION_NEEDS_FLAG
-        and not b.replied
-    )
+    if b.is_outbound or b.replied:
+        return False
+    if b.is_pinned:
+        return True
+    return b.priority in URGENT_PRIORITY_LABELS and b.action_type in ACTION_NEEDS_FLAG
 
 
 def is_fyi(b: ReportEmailBrief) -> bool:
@@ -228,11 +270,16 @@ def is_fyi(b: ReportEmailBrief) -> bool:
 def group_for_report(
     briefs: List[ReportEmailBrief],
 ) -> Dict[str, List[ReportEmailBrief]]:
-    """分三组（互斥，按 attention → fyi → handled 优先级）。"""
+    """分三组（互斥，按 attention → fyi → handled 优先级）。
+
+    发件箱（outbound）不进任何渲染分组 —— 它只用于统计/上下文，不铺成条目。
+    """
     attention: List[ReportEmailBrief] = []
     fyi: List[ReportEmailBrief] = []
     handled: List[ReportEmailBrief] = []
     for b in briefs:
+        if b.is_outbound:
+            continue
         if is_attention(b):
             attention.append(b)
         elif is_fyi(b):
@@ -243,15 +290,18 @@ def group_for_report(
 
 
 def compute_report_counts(briefs: List[ReportEmailBrief]) -> Dict[str, Any]:
-    """确定性 counts：total / unread / urgent(=attention) / ai_handled / todo / by_category。"""
-    total = len(briefs)
-    unread = sum(1 for b in briefs if not b.is_read)
-    urgent = sum(1 for b in briefs if is_attention(b))
-    ai_handled = sum(1 for b in briefs if b.priority)  # priority 非空 = 跑过 LLM
-    replied = sum(1 for b in briefs if b.replied)
-    flagged = sum(1 for b in briefs if b.is_flagged)
+    """确定性 counts。收件类指标（total/unread/urgent/ai_handled/replied/flagged）只数
+    收件箱侧（非 outbound）；``sent`` = 本窗口你发出的邮件数（outbound）。"""
+    inbound = [b for b in briefs if not b.is_outbound]
+    total = len(inbound)
+    unread = sum(1 for b in inbound if not b.is_read)
+    urgent = sum(1 for b in inbound if is_attention(b))
+    ai_handled = sum(1 for b in inbound if b.priority)  # priority 非空 = 跑过 LLM
+    replied = sum(1 for b in inbound if b.replied)
+    flagged = sum(1 for b in inbound if b.is_flagged)
+    sent = sum(1 for b in briefs if b.is_outbound)
     by_category: Dict[str, int] = {}
-    for b in briefs:
+    for b in inbound:
         if b.category:
             by_category[b.category] = by_category.get(b.category, 0) + 1
     return {
@@ -262,5 +312,6 @@ def compute_report_counts(briefs: List[ReportEmailBrief]) -> Dict[str, Any]:
         "todo": urgent,
         "replied": replied,
         "flagged": flagged,
+        "sent": sent,
         "by_category": by_category,
     }

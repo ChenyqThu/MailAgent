@@ -51,6 +51,7 @@ def _insert(
     hours_ago: float = 1,
     is_read: int = 0,
     is_flagged: int = 0,
+    is_pinned: int = 0,
     mailbox: str = "收件箱",
     thread_id: str | None = None,
     notion_page_id: str | None = "page-x",
@@ -62,11 +63,11 @@ def _insert(
         """
         INSERT INTO email_metadata
             (internal_id, subject, sender, sender_name, date_received, mailbox,
-             is_read, is_flagged, thread_id, sync_status, notion_page_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?)
+             is_read, is_flagged, is_pinned, thread_id, sync_status, notion_page_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?)
         """,
         (iid, subject, sender, sender_name, _iso(hours_ago), mailbox,
-         is_read, is_flagged, thread_id, notion_page_id, now, now),
+         is_read, is_flagged, is_pinned, thread_id, notion_page_id, now, now),
     )
     if labels is not None:
         conn.execute(
@@ -166,17 +167,35 @@ class TestData:
         assert c["urgent"] == 1 and c["todo"] == 1
         assert c["ai_handled"] == 2  # 1,2 有 priority；3 无
 
-    def test_sent_excluded_and_replied(self, db: Path):
+    def test_sent_brought_in_replied_derived(self, db: Path):
         # 收件箱：紧急 + 需回复（thread t1）
         _insert(db, 1, thread_id="t1", labels=_labels(priority="🔴 紧急", action="需要回复"))
-        # 同 thread 的发件箱回复（更晚 0.5h）→ 推出 replied；发件箱本身不入条目
+        # 同 thread 的发件箱回复（更晚 0.5h）→ 推出 replied；发件箱带入但不算收件条目
         _insert(db, 2, mailbox="发件箱", thread_id="t1", hours_ago=0.5)
         briefs = rdata.fetch_report_briefs(str(db), now=_NOW)
-        assert [b.internal_id for b in briefs] == [1]  # 发件箱排除出报告条目
-        assert briefs[0].replied is True  # 同 thread 有更晚发件箱邮件 → 已回复
-        assert rdata.is_attention(briefs[0]) is False  # 已回复 → 不再算待办
+        inbound = [b for b in briefs if not b.is_outbound]
+        outbound = [b for b in briefs if b.is_outbound]
+        assert [b.internal_id for b in inbound] == [1]   # 发件箱不算收件条目
+        assert [b.internal_id for b in outbound] == [2]  # 发件箱带入（供统计/上下文）
+        assert inbound[0].replied is True                # 同 thread 有更晚发件箱邮件 → 已回复
+        assert rdata.is_attention(inbound[0]) is False   # 已回复 → 不再算待办
         c = rdata.compute_report_counts(briefs)
         assert c["replied"] == 1 and c["urgent"] == 0
+        assert c["sent"] == 1 and c["total"] == 1        # total 只数收件；sent 数发件箱
+
+    def test_pinned_always_included(self, db: Path):
+        # 置顶邮件在窗口外（48h 前）+ 非 urgent → 仍固定带入且算「需关注」
+        _insert(db, 1, hours_ago=48, is_pinned=1,
+                labels=_labels(priority="🟢 一般", action="仅供参考"))
+        # 普通窗口外邮件（无置顶）→ 不带入
+        _insert(db, 2, hours_ago=48, labels=_labels())
+        briefs = rdata.fetch_report_briefs(str(db), window_hours=24, now=_NOW)
+        assert {b.internal_id for b in briefs} == {1}    # 仅置顶的固定带入
+        assert briefs[0].is_pinned is True
+        assert rdata.is_attention(briefs[0]) is True     # 置顶（未回复）→ 需关注
+        # 已回复的置顶不再算待办
+        briefs[0].replied = True
+        assert rdata.is_attention(briefs[0]) is False
 
     def test_flag_status_in_brief(self, db: Path):
         _insert(db, 1, is_flagged=1, labels=_labels())
@@ -278,6 +297,33 @@ class TestAssembler:
                                     window_start="s", window_end="e", generated_at="g", model="", now=_NOW)
         titles = [b["title"] for b in doc.blocks if b["type"] == "section"]
         assert "需要你亲自关注" in titles  # brief 1 是 attention
+
+    def test_outbound_not_rendered_even_if_referenced(self):
+        # 发件箱 brief（is_outbound）即使被 LLM 放进 email_refs，也不渲染成条目。
+        inbound = rdata.ReportEmailBrief(1, "收到的", "A", "a@x.com", _iso(1),
+                                         "📊 项目管理", "🟡 重要", "需要回复", "", False, "pg1")
+        outbound = rdata.ReportEmailBrief(3, "我发的", "Me", "me@x.com", _iso(0.5),
+                                          "", "", "", "", True, None, is_outbound=True)
+        draft = ReportDraft(headline="h", overview="",
+                            sections=[{"id": "a", "title": "T", "email_refs": [1, 3]}])
+        doc = assemble_report_doc(draft=draft, briefs=[inbound, outbound], counts={},
+                                  agent_id="a", cadence="daily", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g",
+                                  model="mk", now=_NOW)
+        eids = [b["internal_id"] for b in doc.blocks if b["type"] == "email_item"]
+        assert eids == [1]  # 发件箱 id=3 被丢弃（不在 brief_map）
+
+    def test_stat_row_includes_sent(self):
+        draft = ReportDraft(headline="h", overview="ov",
+                            sections=[{"id": "a", "title": "T", "email_refs": [1]}])
+        doc = assemble_report_doc(draft=draft, briefs=self._briefs(),
+                                  counts={"total": 2, "replied": 1, "sent": 4},
+                                  agent_id="a", cadence="daily", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g",
+                                  model="mk", now=_NOW)
+        sr = next(b for b in doc.blocks if b["type"] == "stat_row")
+        kv = {s["key"]: s["value"] for s in sr["stats"]}
+        assert kv["sent"] == 4 and kv["replied"] == 1  # 已发出/已回复 都进统计卡
 
     def test_email_item_badges_from_status(self):
         # replied + flagged → email_item.badges 含「已回复」「已标旗」

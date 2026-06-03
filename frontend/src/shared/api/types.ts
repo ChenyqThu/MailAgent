@@ -1812,6 +1812,8 @@ export interface ReportCounts {
   todo?: number
   /** 已回复（同 thread 有更晚发件箱邮件）。 */
   replied?: number
+  /** 已发出（本窗口发件箱邮件数）。 */
+  sent?: number
   /** 已标旗。 */
   flagged?: number
   by_category?: Record<string, number>

@@ -130,6 +130,12 @@ function ReportListRow({
                 <span style={{ color: 'rgb(var(--c-crit))' }}>{item.counts.urgent} 紧急</span>
               </>
             )}
+            {(item.counts.replied ?? 0) > 0 && (
+              <>
+                <span>·</span>
+                <span style={{ color: 'rgb(var(--c-ok))' }}>{item.counts.replied} 已回复</span>
+              </>
+            )}
           </div>
         )}
       </button>

@@ -25,13 +25,14 @@ _TITLE_BY_CADENCE = {"daily": "邮件日报", "weekly": "邮件周报", "monthly
 # 滚动窗口（遵循 window_hours，跑的时刻往前推 N 小时）→ 标"过去 N"。
 _SPAN_BY_CADENCE = {"daily": "过去 24 小时", "weekly": "过去 7 天", "monthly": "过去 30 天"}
 
-# stat_row 规格（key 与 compute_report_counts 对齐）。urgent 已排除已回复 = 真待办；
-# 加「已回复」让已处理/待办分布一目了然（替换原与 urgent 同值的冗余 todo）。
+# stat_row 规格（key 与 compute_report_counts 对齐）。urgent 已排除已回复+含置顶 = 真待办；
+# 「已回复 / 已发出」让处理产出一目了然（已回复=收到且回了的，已发出=本窗口你发出的封数）。
 _STAT_SPEC = [
     ("total", "总邮件", m.TONE_NEUTRAL),
     ("unread", "未读", m.TONE_INFO),
     ("urgent", "待你处理", m.TONE_CRITICAL),
     ("replied", "已回复", m.TONE_SUCCESS),
+    ("sent", "已发出", m.TONE_INFO),
     ("ai_handled", "AI 已处理", m.TONE_NEUTRAL),
 ]
 
@@ -120,8 +121,12 @@ def assemble_report_doc(
     model: str,
     now: datetime,
 ) -> m.ReportDoc:
-    """LLM draft → ReportDoc。email_refs 校验回真实 brief，每封最多出现一次。"""
-    brief_map = {b.internal_id: b for b in briefs}
+    """LLM draft → ReportDoc。email_refs 校验回真实 brief，每封最多出现一次。
+
+    发件箱（outbound）排除出 brief_map —— 即便 LLM 误把已发出的 id 放进 email_refs，
+    也不会渲染成条目（它只用于统计 + 上下文）。
+    """
+    brief_map = {b.internal_id: b for b in briefs if not b.is_outbound}
     subtitle, weekday = _subtitle(report_date, cadence, now)
 
     blocks: List[Dict[str, Any]] = [
