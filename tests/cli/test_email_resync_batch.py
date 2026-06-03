@@ -159,9 +159,10 @@ class TestBatchAuth:
         monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
         # 显式覆盖 conftest 默认放行, 这个 case 就是要验 PM2 检测路径
         monkeypatch.delenv("MAILAGENT_CLI_ALLOW_CONCURRENT", raising=False)
-        # Mock subprocess.run 用于 pm2_check
+        # Mock subprocess.run（pm2 检测实现已下沉 src/services/guards.py）
         from types import SimpleNamespace
-        from src.cli import pm2_check as pm2_module
+
+        from src.services import guards as guards_module
 
         def fake_run(*args, **kwargs):
             return SimpleNamespace(
@@ -171,7 +172,7 @@ class TestBatchAuth:
                 returncode=0,
             )
 
-        with patch.object(pm2_module.subprocess, "run", fake_run):
+        with patch.object(guards_module.subprocess, "run", fake_run):
             result = _invoke(
                 cli_runner, "--ids", "12345", "-o", "json",
                 db_path=seeded_db,

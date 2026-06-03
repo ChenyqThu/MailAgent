@@ -15,10 +15,11 @@ from typing import Any, Iterable, Optional, TYPE_CHECKING
 
 import typer
 
-from src.cli.exceptions import CliError
+from src.cli.exceptions import CODE_TO_EXIT
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
+    from src.services.errors import ServiceError
 
 
 SCHEMA_VERSION = 1
@@ -227,13 +228,20 @@ def emit_error(
     return typer.Exit(code=exit_code)
 
 
-def emit_cli_error(ctx: "CliContext", err: CliError) -> "typer.Exit":
-    """Adapter — 从 CliError 派生 emit_error 调用。"""
+def emit_cli_error(ctx: "CliContext", err: "ServiceError") -> "typer.Exit":
+    """Adapter — 从 ServiceError / CliError 派生 emit_error 调用。
+
+    ``exit_code``: ``CliError`` 子类自带 (逐字段不变); service 层抛的 transport-neutral
+    ``ServiceError`` 没有 exit_code → 按 ``code`` 查 ``CODE_TO_EXIT`` 回填 (CLI transport
+    拥有退出码语义)。未知 code → 1 (与历史 ``CliError`` 默认一致)。"""
+    exit_code = getattr(err, "exit_code", None)
+    if exit_code is None:
+        exit_code = CODE_TO_EXIT.get(err.code, 1)
     return emit_error(
         ctx,
         err.code,
         err.message,
-        exit_code=err.exit_code,
+        exit_code=exit_code,
         hint=err.hint,
         context=err.context,
     )
