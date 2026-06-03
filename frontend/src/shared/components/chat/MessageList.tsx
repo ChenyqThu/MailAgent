@@ -16,12 +16,15 @@ import {
   Check,
   ChevronRight,
   Copy,
+  Database,
   ExternalLink,
   Loader2,
   Pencil,
   RotateCcw,
+  Search,
   Send,
   Sparkles,
+  Wrench,
   X
 } from 'lucide-react'
 
@@ -711,11 +714,155 @@ function AssistantMessageFooter({
   )
 }
 
-// Sprint 19 §D #3 — chat_tool_call audit row 折叠卡片. AssistantBubble
-// mount 时 (stream 结束后) 拉一次 listToolCalls, 渲染折叠 chip "(N 个
-// 工具调用) [▶]", 用户点击展开看每个 tool 的 (name / status / duration),
-// 单 tool 再点击展开看 input/output JSON. Streaming 期间 skip 避免抖动 —
-// `tool_call` event 触发的 listMessages refresh 会让本组件 unmount→remount.
+// Sprint 20 — tool-call chip 升级（Claude Code 风）。每个 chat_tool_call 渲染成
+// 一张可展开卡：工具图标 + 工具名 + 参数预览 + 状态/耗时 + KOS 徽标，展开看
+// 参数 / 命中结果 JSON。数据来自 listToolCalls(messageId)（ChatToolCall）。
+// Streaming 期间 skip 避免抖动（tool_call event 触发 listMessages refresh →
+// 本组件 unmount→remount）。移植自 ~/Downloads/agents/chat-tab.jsx ToolCallChip。
+
+/** tool_name → lucide 图标元素。KOS 工具用 Database，搜索类用 Search，其余 Wrench。
+ *  返回 ReactElement（而非组件引用）以避开 react-hooks/static-components —— 这里是
+ *  从固定的 3 个 lucide 组件里**选择**，不是 render 期创建新组件。 */
+function toolIconEl(name: string, size = 11): React.ReactElement {
+  if (name.startsWith('kos_')) return <Database size={size} strokeWidth={2} />
+  if (name.includes('search') || name.includes('find'))
+    return <Search size={size} strokeWidth={2} />
+  return <Wrench size={size} strokeWidth={2} />
+}
+
+/** 从 input_json 提取一个代表性参数值做行内预览（首个非空字符串，否则首个数字）。 */
+function toolInputPreview(json: string): string {
+  try {
+    const o = JSON.parse(json) as Record<string, unknown>
+    if (o && typeof o === 'object') {
+      for (const v of Object.values(o)) {
+        if (typeof v === 'string' && v.trim()) return v.length > 48 ? `${v.slice(0, 48)}…` : v
+      }
+      for (const v of Object.values(o)) {
+        if (typeof v === 'number') return String(v)
+      }
+    }
+  } catch {
+    /* 非 JSON / 空 → 无预览 */
+  }
+  return ''
+}
+
+function ToolCallChip({ call }: { call: ChatToolCall }): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const isKos = call.tool_name.startsWith('kos_')
+  const running =
+    call.status === 'running' || call.status === 'pending' || call.status === 'confirmed'
+  const err = call.status === 'error' || call.status === 'canceled'
+  const inputEffective = call.user_edited_input_json ?? call.input_json
+  const preview = toolInputPreview(inputEffective)
+
+  return (
+    <div className="rounded-md border border-ink-border-soft bg-ink-2/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left hover:bg-ink-fg/[0.03] transition-colors duration-fast"
+        aria-expanded={open}
+      >
+        <span
+          className="grid place-items-center w-[18px] h-[18px] rounded shrink-0"
+          style={{ background: 'rgb(var(--c-ai) / 0.12)', color: 'rgb(var(--c-ai))' }}
+        >
+          {toolIconEl(call.tool_name)}
+        </span>
+        <span className="text-meta font-mono text-ink-fg shrink-0">{call.tool_name}</span>
+        {preview && (
+          <span className="text-meta text-ink-fg-2 truncate min-w-0" title={preview}>
+            {preview}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {running ? (
+            <Loader2 size={11} strokeWidth={2} className="text-coral animate-spin" />
+          ) : (
+            <>
+              {err ? (
+                <X size={11} strokeWidth={2.5} className="text-fail" />
+              ) : (
+                <Check size={11} strokeWidth={2.5} className="text-ok" />
+              )}
+              {call.duration_ms !== null && (
+                <span className="text-micro font-mono text-ink-fg-3 tabular-nums">
+                  {formatMs(call.duration_ms)}
+                </span>
+              )}
+            </>
+          )}
+        </span>
+        <ChevronRight
+          size={12}
+          className={cn(
+            'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+            open && 'rotate-90'
+          )}
+        />
+      </button>
+      {/* 展开走纯 CSS grid-template-rows 0fr→1fr（§4.1：能 grid-rows 不上 GSAP；
+          也避开 MessageList 内 bubble/DraftCard GSAP 冲突）。内容常驻挂载双向过渡；
+          reduced-motion 走 motion-reduce 去过渡。 */}
+      <div
+        aria-hidden={!open}
+        className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
+        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <div className="px-2.5 pb-2.5 pt-1 space-y-2 border-t border-ink-border-soft">
+            <div className="flex items-center gap-2 pt-1">
+              <span className="text-micro font-mono text-ink-fg-2">{call.tool_name}</span>
+              {isKos && (
+                <span
+                  className="text-micro font-mono px-1.5 py-px rounded"
+                  style={{
+                    color: 'rgb(var(--c-ai))',
+                    background: 'rgb(var(--c-ai) / 0.12)',
+                    border: '1px solid rgb(var(--c-ai) / 0.22)'
+                  }}
+                >
+                  KOS
+                </span>
+              )}
+            </div>
+            <div>
+              <div className="text-ink-fg-3 text-micro mb-0.5 font-mono uppercase tracking-wide">
+                {t('chat.toolCalls.input')}
+                {call.user_edited_input_json !== null && (
+                  <span className="ml-1 text-coral">({t('chat.toolCalls.userEdited')})</span>
+                )}
+              </div>
+              <pre className="text-micro font-mono bg-ink-1 rounded px-2 py-1 overflow-x-auto whitespace-pre-wrap break-words scrollbar-thin">
+                {inputEffective}
+              </pre>
+            </div>
+            {call.output_json !== null ? (
+              <div>
+                <div className="text-ink-fg-3 text-micro mb-0.5 font-mono uppercase tracking-wide">
+                  {t('chat.toolCalls.output')}
+                </div>
+                <pre className="text-micro font-mono bg-ink-1 rounded px-2 py-1 overflow-x-auto overflow-y-auto max-h-48 whitespace-pre-wrap break-words scrollbar-thin">
+                  {call.output_json}
+                </pre>
+              </div>
+            ) : (
+              running && (
+                <div className="text-micro font-mono text-ink-fg-3">
+                  {t('chat.toolCall.running')}…
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ToolCallAuditRow({
   messageId,
   isStreaming
@@ -723,11 +870,8 @@ function ToolCallAuditRow({
   messageId: number
   isStreaming: boolean
 }): React.ReactElement | null {
-  const { t } = useTranslation()
   const mailApi = useMailApi()
   const [calls, setCalls] = useState<ChatToolCall[]>([])
-  const [collapsedAll, setCollapsedAll] = useState(true)
-  const [expanded, setExpanded] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     if (isStreaming) return
@@ -747,111 +891,11 @@ function ToolCallAuditRow({
 
   if (calls.length === 0) return null
 
-  const statusBadge = (s: ChatToolCall['status']): React.ReactElement => {
-    if (s === 'ok') return <Check size={11} className="text-ok shrink-0" />
-    if (s === 'error' || s === 'canceled') return <X size={11} className="text-fail shrink-0" />
-    if (s === 'running' || s === 'pending' || s === 'confirmed')
-      return <Loader2 size={11} className="text-ink-fg-3 shrink-0 animate-spin" />
-    return <Check size={11} className="text-ink-fg-3 shrink-0" />
-  }
-
-  const toggleOne = (id: number): void => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
   return (
-    <div className="rounded-md border border-ink-border-soft bg-ink-2/40 text-meta font-mono">
-      <button
-        type="button"
-        onClick={() => setCollapsedAll(!collapsedAll)}
-        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
-        aria-expanded={!collapsedAll}
-      >
-        <ChevronRight
-          size={11}
-          className={cn(
-            'shrink-0 transition-transform duration-fast',
-            !collapsedAll && 'rotate-90'
-          )}
-        />
-        <span>{t('chat.toolCalls.summary', { count: calls.length })}</span>
-      </button>
-      {!collapsedAll && (
-        <ul className="border-t border-ink-border-soft divide-y divide-ink-border-soft">
-          {calls.map((c) => {
-            const isOpen = expanded.has(c.id)
-            const inputEffective = c.user_edited_input_json ?? c.input_json
-            return (
-              <li key={c.id} className="px-3 py-1.5">
-                <button
-                  type="button"
-                  onClick={() => toggleOne(c.id)}
-                  className="flex items-center gap-2 w-full text-left hover:text-ink-fg transition-colors duration-fast"
-                  aria-expanded={isOpen}
-                >
-                  <ChevronRight
-                    size={10}
-                    className={cn(
-                      'shrink-0 text-ink-fg-3 transition-transform duration-fast',
-                      isOpen && 'rotate-90'
-                    )}
-                  />
-                  {statusBadge(c.status)}
-                  <span className="text-ink-fg">{c.tool_name}</span>
-                  {c.duration_ms !== null && (
-                    <span className="text-ink-fg-3 tabular-nums ml-auto">
-                      {formatMs(c.duration_ms)}
-                    </span>
-                  )}
-                </button>
-                {/* 高度展开走纯 CSS grid-template-rows 0fr→1fr（§4.1 优先级：能 grid-rows
-                    解决不上 GSAP；也避开 MessageList 内既有 bubble/DraftCard GSAP 冲突）。
-                    内容常驻挂载, grid-rows 折叠/展开双向过渡；reduced-motion 走 motion-reduce
-                    去过渡（纯 CSS @media, 无需 JS hook）。inner overflow-hidden 在过渡期裁剪,
-                    pre 自带的 max-h-48 滚动不受影响（只动 row track, 不动子元素 max-height）。 */}
-                <div
-                  aria-hidden={!isOpen}
-                  className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
-                  style={{ gridTemplateRows: isOpen ? '1fr' : '0fr' }}
-                >
-                  <div className="overflow-hidden">
-                    <div className="mt-1.5 pl-5 space-y-1">
-                      <div>
-                        <div className="text-ink-fg-3 text-micro mb-0.5">
-                          {t('chat.toolCalls.input')}
-                          {c.user_edited_input_json !== null && (
-                            <span className="ml-1 text-coral">
-                              ({t('chat.toolCalls.userEdited')})
-                            </span>
-                          )}
-                        </div>
-                        <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto whitespace-pre-wrap break-words">
-                          {inputEffective}
-                        </pre>
-                      </div>
-                      {c.output_json !== null && (
-                        <div>
-                          <div className="text-ink-fg-3 text-micro mb-0.5">
-                            {t('chat.toolCalls.output')}
-                          </div>
-                          <pre className="text-micro bg-ink-1 rounded px-2 py-1 overflow-x-auto overflow-y-auto max-h-48 whitespace-pre-wrap break-words">
-                            {c.output_json}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
+    <div className="space-y-1">
+      {calls.map((c) => (
+        <ToolCallChip key={c.id} call={c} />
+      ))}
     </div>
   )
 }
