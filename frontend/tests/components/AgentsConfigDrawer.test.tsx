@@ -18,6 +18,13 @@ vi.mock('../../src/shared/components/agents/hooks', () => ({
   useRunNow: () => ({ run: vi.fn(), isRunning: false })
 }))
 
+// useExitAnimation 强制 shouldRender=true：覆盖「退场动画播放中、父组件已把 cfg 置 null」
+// 这一真实渲染路径（regression: 此时若 header 读 cfg.title 会空指针崩）。open=true 的
+// 既有用例同样 shouldRender=true，不受影响。
+vi.mock('@shared/hooks/useExitAnimation', () => ({
+  useExitAnimation: () => ({ shouldRender: true, scopeRef: { current: null } })
+}))
+
 import i18n from '@shared/i18n'
 import { ConfigDrawer } from '../../src/shared/components/agents/AgentsTab'
 import type { ReportAgentConfig } from '@shared/api/types'
@@ -88,5 +95,11 @@ describe('ConfigDrawer schedule controls (Bug2)', () => {
     render(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
     expect(screen.queryByRole('option', { name: '周一' })).toBeNull()
     expect(screen.queryByRole('option', { name: '1 日' })).toBeNull()
+  })
+
+  test('退场期 cfg=null 不崩（regression：header title 改用 state，不读 cfg.title）', () => {
+    // shouldRender 被 mock 成恒 true，模拟退场动画播放中、父组件已把 cfg 置 null。
+    // 修复前 header 读 cfg.title → null.title 空指针崩；修复后读 title state（中性默认）→ 安全。
+    expect(() => render(<ConfigDrawer cfg={null} open={false} onClose={() => {}} />)).not.toThrow()
   })
 })

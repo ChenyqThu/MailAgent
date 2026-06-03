@@ -384,8 +384,9 @@ export function ConfigDrawer({
     from: { autoAlpha: 0, xPercent: 100 }
   })
 
-  // cadence 进 state（渲染期不读 cfg，退场时 cfg→null 也不崩）；useEffect 按 cfg 预填。
+  // cadence + title 进 state（渲染期不读 cfg，退场时 cfg→null 也不崩）；useEffect 按 cfg 预填。
   const [cadence, setCadence] = useState<ReportCadence>('daily')
+  const [title, setTitle] = useState('')
 
   // useState 初始化为中性默认；真正预填由下方 useEffect 在 open 时按 cfg 灌入。这样
   // 退场期间(open=false, cfg→null)不会重置，重开能正确反映目标 agent。
@@ -410,6 +411,7 @@ export function ConfigDrawer({
   useEffect(() => {
     if (!open || !cfg) return
     setCadence(cfg.schedule.cadence)
+    setTitle(cfg.title)
     setEnabled(cfg.enabled)
     setPrompt(cfg.prompt)
     setPromptDirty(false)
@@ -504,7 +506,7 @@ export function ConfigDrawer({
             <ReportIcon name="cog" size={16} />
           </span>
           <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
-            {t('agents.config.title', { title: cfg.title })}
+            {t('agents.config.title', { title })}
           </h2>
           <button
             type="button"
