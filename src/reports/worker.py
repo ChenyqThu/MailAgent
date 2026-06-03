@@ -251,15 +251,11 @@ def _period_bounds(cadence: str, n: datetime) -> Tuple[str, str, str, int]:
         last_mon = this_mon - timedelta(days=7)
         last_sun = this_mon - timedelta(days=1)
         return last_mon.isoformat(), last_sun.isoformat(), last_mon.isoformat(), 7
-    # monthly：上一个自然月
+    # monthly：上一个自然月（方案 A：聚合整月日报，expected = 当月天数）
     first_this = d.replace(day=1)
     prev_end = first_this - timedelta(days=1)
     first_prev = prev_end.replace(day=1)
-    expected = sum(  # 上月内的周一数 ≈ 期望周报数
-        1
-        for i in range((prev_end - first_prev).days + 1)
-        if (first_prev + timedelta(days=i)).weekday() == 0
-    )
+    expected = (prev_end - first_prev).days + 1  # 上月天数 = 期望日报数
     return first_prev.isoformat(), prev_end.isoformat(), first_prev.isoformat(), max(expected, 1)
 
 
@@ -289,8 +285,10 @@ async def _run_aggregate(
 ) -> str:
     """周 / 月报层级聚合：读上一个完整周期的子报告 → LLM 综合 → ReportDoc。缺则跳过 + 标注。"""
     start_date, end_date, report_date, expected = _period_bounds(cadence, n)
-    sub_cadence = "daily" if cadence == "weekly" else "weekly"
-    sub_unit = "日报" if sub_cadence == "daily" else "周报"
+    # 方案 A：周报和月报都聚合「日报」—— 每份日报 report_date=当天、明确归月，无跨月周
+    # 归属歧义；月报综合整月 ~30 份日报，context 充足（远低于 LLM 上限）。
+    sub_cadence = "daily"
+    sub_unit = "日报"
     rid = _report_id(agent["id"], cadence, report_date)
     store.create_report(
         report_id=rid, agent_id=agent["id"], cadence=cadence,

@@ -545,8 +545,10 @@ class TestWindowBounds:
 
     def test_period_bounds_monthly(self):
         n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)
-        start, end, rdate, _ = _period_bounds("monthly", n)
+        start, end, rdate, expected = _period_bounds("monthly", n)
         assert (start, end, rdate) == ("2026-05-01", "2026-05-31", "2026-05-01")
+        # 方案 A：月报聚合整月日报，expected = 当月天数（5 月 31 天）
+        assert expected == 31
 
     def test_daily_window_rolling_vs_natural(self):
         n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)
@@ -623,3 +625,27 @@ class TestAggregateRun:
         rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
                                           now=_NOW, aggregate_fn=self._mock_agg))
         assert store.get_report(rid)["status"] == "empty"  # 无子报告 → empty
+
+    def test_monthly_aggregates_daily_reports(self, db: Path):
+        """方案 A：月报聚合整月「日报」(非周报)。seed 5 月日报 → monthly 读到并综合;
+        旧逻辑(月报读周报)下 seed 的 daily 读不到 → empty, 故此测试能区分新旧。"""
+        store = ReportStore(str(db))
+        # _NOW=2026-06-02 → 上一个自然月 5 月 [5-01, 5-31]；seed 2 份日报(缺其余 29 天)
+        for d in ["2026-05-01", "2026-05-15"]:
+            rid = f"daily_email_digest:daily:{d}"
+            store.create_report(report_id=rid, agent_id="daily_email_digest", cadence="daily",
+                                report_date=d, window_start="s", window_end="e")
+            store.finish_report(rid, status="ready",
+                                blocks_json=json.dumps([{"type": "overview", "text": f"{d} 概览"}]),
+                                counts_json=json.dumps({"total": 10, "replied": 2}), headline=d)
+        store.update_agent("monthly_email_digest", {"timezone": "Asia/Shanghai"})
+        mo = store.get_agent("monthly_email_digest")
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=mo,
+                                          now=_NOW, aggregate_fn=self._mock_agg))
+        rep = store.get_report(rid)
+        assert rep["status"] == "ready"                 # 读到 daily(旧逻辑找 weekly 会 empty)
+        c = json.loads(rep["counts_json"])
+        assert c["total"] == 20 and c["replied"] == 4   # 2 份日报 counts 汇总
+        ov = next((b["text"] for b in json.loads(rep["blocks_json"])["blocks"]
+                   if b["type"] == "overview"), "")
+        assert "缺失" in ov                             # 29 天缺 → 标注

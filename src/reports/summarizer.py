@@ -452,7 +452,7 @@ def _parse(result: LLMResult) -> ReportDraft:
     )
 
 
-# ── 层级聚合（周报综合日报 / 月报综合周报）──────────────────────────────────────
+# ── 层级聚合（周报 / 月报均综合日报 —— 方案 A：月报不综合周报，避免跨月周错位）────────
 
 def _extract_sub_summary(row: Dict[str, Any]) -> Dict[str, Any]:
     """从子报告行（含 blocks_json）抽 date / headline / overview / key_points 供综合。"""
@@ -477,7 +477,8 @@ def _extract_sub_summary(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _build_user_aggregate(subs: List[Dict[str, Any]], cadence: str, missing_note: str) -> str:
-    sub_unit = "日报" if cadence == "weekly" else "周报"
+    # 方案 A：周报/月报都综合「日报」（月报不再综合周报，避免跨月周归属错位）。
+    sub_unit = "日报"
     out_unit = "周报" if cadence == "weekly" else "月报"
     parts: List[str] = [
         f"下面是这段时间的 {len(subs)} 份{sub_unit}。把它们综合成一份{out_unit}，调用 {_TOOL_NAME}。"
@@ -505,7 +506,7 @@ async def summarize_aggregate(
     missing_note: str = "",
     client: Optional[LLMClient] = None,
 ) -> ReportDraft:
-    """层级聚合：下层报告（日报 / 周报）综合成上层（周报 / 月报）。单次 classify（输入已是
+    """层级聚合：日报综合成上层（周报 / 月报）。单次 classify（输入已是
     浓缩摘要，无需 agentic）。raises LLMCallError on failure（caller 降级）。"""
     now = now or datetime.now(_BEIJING)
     persona = persona_prompt if (persona_prompt and persona_prompt.strip()) else get_default_prompt(cadence)
