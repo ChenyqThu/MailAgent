@@ -128,10 +128,26 @@ class ProjectProgressRunner:
 
     @property
     def arm(self):
-        if self._arm is None:
-            from src.mail.applescript_arm import AppleScriptArm
+        """邮件抓取后端（lazy）。按 MAILAGENT_BACKEND 选择，与主同步链路一致。
 
-            self._arm = AppleScriptArm()
+        davmail 邮件的 internal_id 是合成 ID (>=10^9)，AppleScript 无法按
+        `whose id` 抓源码；davmail 模式必须用 DavMailBackend 按 imap_uid 重抓，
+        否则 _fetch_xlsx 的 SSoT-miss 回退会必然失败（合成 ID 在 Mail.app 报
+        “无效的索引”）。
+        """
+        if self._arm is None:
+            backend_name = getattr(config, "mailagent_backend", "applescript")
+            if backend_name == "davmail":
+                from src.mail.backend.factory import create_backend
+                from src.mail.sync_store import SyncStore
+
+                self._arm = create_backend(
+                    config, SyncStore(db_path=self.sync_store_db_path)
+                )
+            else:
+                from src.mail.applescript_arm import AppleScriptArm
+
+                self._arm = AppleScriptArm()
         return self._arm
 
     @property
@@ -713,14 +729,15 @@ class ProjectProgressRunner:
     ) -> Tuple[Optional[str], Optional[bytes]]:
         """取邮件的第一个 .xlsx 附件字节.
 
-        优先从 v4 SQLite SSoT (email_attachment.local_path) 读盘 —— davmail 邮件的
-        internal_id 是合成 ID (>=10^9), AppleScript 无法按 `whose id` 回 Mail.app 抓源码.
-        仅当 SSoT 无该附件 (老 applescript-origin 邮件未双写) 时, 才回退 AppleScript 现抠.
+        优先从 v4 SQLite SSoT (email_attachment.local_path) 读盘. SSoT 未命中时
+        (davmail 落盘失败 / 老 applescript-origin 邮件未双写) 回退当前 backend 现抓:
+        davmail 邮件的 internal_id 是合成 ID (>=10^9), 必须由 DavMailBackend 按
+        imap_uid 抓; AppleScript backend 按 `whose id` 抓.
         """
         fn, payload = self._fetch_xlsx_from_sqlite(internal_id)
         if payload is not None:
             return fn, payload
-        return self._fetch_xlsx_from_applescript(internal_id, mailbox)
+        return self._fetch_xlsx_from_backend(internal_id, mailbox)
 
     def _fetch_xlsx_from_sqlite(
         self, internal_id: int
@@ -759,14 +776,18 @@ class ProjectProgressRunner:
         )
         return row["filename"], payload
 
-    def _fetch_xlsx_from_applescript(
+    def _fetch_xlsx_from_backend(
         self, internal_id: int, mailbox: str
     ) -> Tuple[Optional[str], Optional[bytes]]:
-        """从 AppleScript 拉源码 → 提取第一个 .xlsx 附件 (applescript-origin 回退路径)。"""
+        """SSoT-miss 回退: 用当前 backend 拉源码 → 提取第一个 .xlsx 附件.
+
+        backend 由 ``self.arm`` 按 MAILAGENT_BACKEND 决定 (davmail→IMAP imap_uid /
+        applescript→whose id), 两者 fetch_email_content_by_id 接口一致.
+        """
         try:
             result = self.arm.fetch_email_content_by_id(internal_id, mailbox)
         except Exception as e:
-            logger.error(f"[pp] AppleScript fetch failed for {internal_id}: {e}")
+            logger.error(f"[pp] backend fetch failed for {internal_id}: {e}")
             return None, None
         if not result or not result.get("source"):
             return None, None
