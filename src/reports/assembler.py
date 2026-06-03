@@ -25,13 +25,14 @@ _TITLE_BY_CADENCE = {"daily": "邮件日报", "weekly": "邮件周报", "monthly
 # 滚动窗口（遵循 window_hours，跑的时刻往前推 N 小时）→ 标"过去 N"。
 _SPAN_BY_CADENCE = {"daily": "过去 24 小时", "weekly": "过去 7 天", "monthly": "过去 30 天"}
 
-# stat_row 规格（key 与 compute_report_counts 对齐）。
+# stat_row 规格（key 与 compute_report_counts 对齐）。urgent 已排除已回复 = 真待办；
+# 加「已回复」让已处理/待办分布一目了然（替换原与 urgent 同值的冗余 todo）。
 _STAT_SPEC = [
     ("total", "总邮件", m.TONE_NEUTRAL),
     ("unread", "未读", m.TONE_INFO),
-    ("urgent", "需关注", m.TONE_CRITICAL),
-    ("ai_handled", "AI 已处理", m.TONE_SUCCESS),
-    ("todo", "待你处理", m.TONE_WARN),
+    ("urgent", "待你处理", m.TONE_CRITICAL),
+    ("replied", "已回复", m.TONE_SUCCESS),
+    ("ai_handled", "AI 已处理", m.TONE_NEUTRAL),
 ]
 
 _ALLOWED_ICONS = {"alert", "check", "info", "inbox", "star", "archive"}
@@ -82,6 +83,14 @@ def _sanitize_summary(summary: str, valid_ids: Set[int]) -> str:
 
 
 def _email_item(b: ReportEmailBrief) -> Dict[str, Any]:
+    # 状态 → badges（前端 email_item 渲染为小标签）：已处理/答复一目了然。
+    badges: List[str] = []
+    if b.replied:
+        badges.append("已回复")
+    if b.is_flagged:
+        badges.append("已标旗")
+    if b.is_pinned:
+        badges.append("置顶")
     return m.email_item(
         internal_id=b.internal_id,
         subject=b.subject,
@@ -93,6 +102,7 @@ def _email_item(b: ReportEmailBrief) -> Dict[str, Any]:
         ai_summary=b.ai_summary or None,
         ai_action=b.action_type or None,
         notion_page_id=b.notion_page_id,
+        badges=badges or None,
     )
 
 

@@ -170,7 +170,8 @@ def _build_user(
         "\n## 已知 counts（代码算好，勿改）\n"
         f"- 总数：{counts.get('total', 0)}\n"
         f"- 未读：{counts.get('unread', 0)}\n"
-        f"- 需关注（urgent）：{counts.get('urgent', 0)}\n"
+        f"- 需关注（urgent，已排除已回复）：{counts.get('urgent', 0)}\n"
+        f"- 已回复：{counts.get('replied', 0)}\n"
         f"- AI 已处理：{counts.get('ai_handled', 0)}\n"
         f"- 各分类：{cat_line}"
     )
@@ -190,9 +191,18 @@ def _build_user(
             ai = b.ai_summary.strip()
             if len(ai) > ai_summary_max_chars:
                 ai = ai[:ai_summary_max_chars] + "…"
-            read_mark = "已读" if b.is_read else "未读"
+            # 当前状态标记 —— LLM 据此判断哪些已处理（已回复/已读/旗标）。
+            marks = ["已读" if b.is_read else "未读"]
+            if b.replied:
+                marks.append("已回复")
+            if b.is_flagged:
+                marks.append("旗标")
+            if b.is_pinned:
+                marks.append("置顶")
+            if b.is_important:
+                marks.append("重要")
             lines.append(
-                f"- id={b.internal_id} [{read_mark}] {b.subject or '(无主题)'}"
+                f"- id={b.internal_id} [{' '.join(marks)}] {b.subject or '(无主题)'}"
                 f" | 发件人：{b.sender_name or b.sender_addr or '(未知)'}"
                 f" | 分类：{b.category or '-'}"
                 f" | 优先级：{b.priority or '-'}"

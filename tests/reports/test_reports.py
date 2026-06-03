@@ -50,6 +50,9 @@ def _insert(
     sender_name: str = "A",
     hours_ago: float = 1,
     is_read: int = 0,
+    is_flagged: int = 0,
+    mailbox: str = "收件箱",
+    thread_id: str | None = None,
     notion_page_id: str | None = "page-x",
     labels: dict | None = None,
 ) -> None:
@@ -59,10 +62,11 @@ def _insert(
         """
         INSERT INTO email_metadata
             (internal_id, subject, sender, sender_name, date_received, mailbox,
-             is_read, is_flagged, sync_status, notion_page_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, '收件箱', ?, 0, 'synced', ?, ?, ?)
+             is_read, is_flagged, thread_id, sync_status, notion_page_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?)
         """,
-        (iid, subject, sender, sender_name, _iso(hours_ago), is_read, notion_page_id, now, now),
+        (iid, subject, sender, sender_name, _iso(hours_ago), mailbox,
+         is_read, is_flagged, thread_id, notion_page_id, now, now),
     )
     if labels is not None:
         conn.execute(
@@ -162,6 +166,23 @@ class TestData:
         assert c["urgent"] == 1 and c["todo"] == 1
         assert c["ai_handled"] == 2  # 1,2 有 priority；3 无
 
+    def test_sent_excluded_and_replied(self, db: Path):
+        # 收件箱：紧急 + 需回复（thread t1）
+        _insert(db, 1, thread_id="t1", labels=_labels(priority="🔴 紧急", action="需要回复"))
+        # 同 thread 的发件箱回复（更晚 0.5h）→ 推出 replied；发件箱本身不入条目
+        _insert(db, 2, mailbox="发件箱", thread_id="t1", hours_ago=0.5)
+        briefs = rdata.fetch_report_briefs(str(db), now=_NOW)
+        assert [b.internal_id for b in briefs] == [1]  # 发件箱排除出报告条目
+        assert briefs[0].replied is True  # 同 thread 有更晚发件箱邮件 → 已回复
+        assert rdata.is_attention(briefs[0]) is False  # 已回复 → 不再算待办
+        c = rdata.compute_report_counts(briefs)
+        assert c["replied"] == 1 and c["urgent"] == 0
+
+    def test_flag_status_in_brief(self, db: Path):
+        _insert(db, 1, is_flagged=1, labels=_labels())
+        b = rdata.fetch_report_briefs(str(db), now=_NOW)[0]
+        assert b.is_flagged is True and b.replied is False
+
 
 # ============================================================
 # store
@@ -257,6 +278,20 @@ class TestAssembler:
                                     window_start="s", window_end="e", generated_at="g", model="", now=_NOW)
         titles = [b["title"] for b in doc.blocks if b["type"] == "section"]
         assert "需要你亲自关注" in titles  # brief 1 是 attention
+
+    def test_email_item_badges_from_status(self):
+        # replied + flagged → email_item.badges 含「已回复」「已标旗」
+        b = rdata.ReportEmailBrief(
+            7, "S", "A", "a@x.com", _iso(1), "📊 项目管理", "🔴 紧急", "需要回复",
+            "", True, "pg", is_flagged=True, replied=True,
+        )
+        draft = ReportDraft(headline="h", overview="",
+                            sections=[{"id": "a", "title": "T", "email_refs": [7]}])
+        doc = assemble_report_doc(draft=draft, briefs=[b], counts={}, agent_id="a",
+                                  cadence="daily", report_date="2026-06-02", window_start="s",
+                                  window_end="e", generated_at="g", model="mk", now=_NOW)
+        item = next(x for x in doc.blocks if x["type"] == "email_item")
+        assert "已回复" in item["badges"] and "已标旗" in item["badges"]
 
 
 # ============================================================

@@ -1810,6 +1810,10 @@ export interface ReportCounts {
   urgent?: number
   ai_handled?: number
   todo?: number
+  /** 已回复（同 thread 有更晚发件箱邮件）。 */
+  replied?: number
+  /** 已标旗。 */
+  flagged?: number
   by_category?: Record<string, number>
 }
 
