@@ -246,15 +246,15 @@ function AgentCard({
             fontSize: 13.5,
             fontWeight: 500,
             cursor: isRunning ? 'wait' : 'pointer',
-            color: 'rgb(var(--c-accent-fg))',
-            background: 'rgb(var(--c-accent-dim))',
+            color: 'rgb(var(--c-cta-fg))',
+            background: 'rgb(var(--c-cta-bg))',
             border: 0
           }}
           onMouseEnter={(e) => {
-            if (!isRunning) e.currentTarget.style.background = 'rgb(var(--c-accent))'
+            if (!isRunning) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'rgb(var(--c-accent-dim))'
+            e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
           }}
         >
           {isRunning ? (
@@ -377,11 +377,13 @@ export function ConfigDrawer({
   const { t } = useTranslation()
   const { save, isSaving } = useSetConfig()
 
-  // 进/退场动效：遮罩淡入(DUR.fast) + aside 右侧滑入(DUR.base, standard 曲线)，退场
-  // 对称、可中断、自动尊重 reduced-motion（DESIGN.md §8 / docs/motion-gsap.md）。
+  // 进/退场动效：遮罩与 aside 同步进退 —— 遮罩淡入与抽屉右滑同走 DUR.base、同 standard
+  // 曲线、同起止（syncBackdrop），避免"遮罩先啪一下、抽屉再慢慢滑"脱节；退场对称、
+  // 可中断、自动尊重 reduced-motion（DESIGN.md §8 / docs/motion-gsap.md）。
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
     card: 'aside',
-    from: { autoAlpha: 0, xPercent: 100 }
+    from: { autoAlpha: 0, xPercent: 100 },
+    syncBackdrop: true
   })
 
   // cadence + title 进 state（渲染期不读 cfg，退场时 cfg→null 也不崩）；useEffect 按 cfg 预填。
@@ -860,15 +862,15 @@ export function ConfigDrawer({
               padding: '8px 18px',
               borderRadius: 8,
               cursor: isSaving ? 'wait' : 'pointer',
-              color: 'rgb(var(--c-accent-fg))',
-              background: 'rgb(var(--c-accent-dim))',
+              color: 'rgb(var(--c-cta-fg))',
+              background: 'rgb(var(--c-cta-bg))',
               border: 0
             }}
             onMouseEnter={(e) => {
-              if (!isSaving) e.currentTarget.style.background = 'rgb(var(--c-accent))'
+              if (!isSaving) e.currentTarget.style.background = 'rgb(var(--c-cta-bg-hover))'
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgb(var(--c-accent-dim))'
+              e.currentTarget.style.background = 'rgb(var(--c-cta-bg))'
             }}
           >
             {t('agents.config.save')}

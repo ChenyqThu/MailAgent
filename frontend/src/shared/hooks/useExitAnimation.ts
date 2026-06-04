@@ -37,6 +37,13 @@ export interface ExitAnimationOpts {
   enterDuration?: number
   /** 退场时长。默认 DUR.fast。 */
   exitDuration?: number
+  /**
+   * 进场时让 backdrop 淡入与卡片同时长（enterDuration）、同起止，而非默认 DUR.fast。
+   * 用于 slide-over 等卡片大幅位移场景：遮罩快淡入(0.12s)与抽屉慢滑入(0.22s)不同步会
+   * 显得"遮罩先啪一下、抽屉再慢慢滑"脱节；同步后两者一起进来，连贯。默认 false
+   * （模态卡片微动场景维持遮罩快淡入的既有手感）。退场两者本就同 exitDuration，不受影响。
+   */
+  syncBackdrop?: boolean
 }
 
 export interface ExitAnimationReturn<T extends HTMLElement> {
@@ -50,7 +57,14 @@ export function useExitAnimation<T extends HTMLElement = HTMLDivElement>(
   isOpen: boolean,
   opts: ExitAnimationOpts = {}
 ): ExitAnimationReturn<T> {
-  const { card, backdrop = true, from, enterDuration = DUR.base, exitDuration = DUR.fast } = opts
+  const {
+    card,
+    backdrop = true,
+    from,
+    enterDuration = DUR.base,
+    exitDuration = DUR.fast,
+    syncBackdrop = false
+  } = opts
   const cardFrom = from ?? DEFAULT_FROM
 
   const scopeRef = useRef<T>(null)
@@ -85,7 +99,13 @@ export function useExitAnimation<T extends HTMLElement = HTMLDivElement>(
         }
         const tl = gsap.timeline()
         if (hasBackdrop) {
-          tl.fromTo(backdropEl, { autoAlpha: 0 }, { autoAlpha: 1, duration: DUR.fast }, 0)
+          // syncBackdrop：与卡片同时长，遮罩与抽屉一起进来（slide-over 连贯感）。
+          tl.fromTo(
+            backdropEl,
+            { autoAlpha: 0 },
+            { autoAlpha: 1, duration: syncBackdrop ? enterDuration : DUR.fast },
+            0
+          )
         }
         tl.fromTo(
           cardEl,
