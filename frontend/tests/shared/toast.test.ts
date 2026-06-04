@@ -68,6 +68,32 @@ describe('toast store — push', () => {
     // Oldest dropped, newest at the tail.
     expect(useToastStore.getState().items[MAX_VISIBLE - 1].title).toBe(`t${MAX_VISIBLE + 2}`)
   })
+
+  test('over-cap demotion exempts a sticky progress toast (drops oldest regular instead)', () => {
+    const store = useToastStore.getState()
+    // An in-flight long-task progress toast (sticky), then a burst of regular
+    // toasts that pushes the queue past MAX_VISIBLE.
+    const progressId = store.push({ title: 'resync', progress: 0, ttlMs: 0 })
+    for (let i = 0; i < MAX_VISIBLE; i++) store.push({ title: `n${i}` })
+    const items = useToastStore.getState().items
+    expect(items.length).toBe(MAX_VISIBLE)
+    // The progress toast survived; the oldest REGULAR toast (n0) was dropped.
+    expect(items.some((t) => t.id === progressId)).toBe(true)
+    expect(items.some((t) => t.title === 'n0')).toBe(false)
+    expect(items.some((t) => t.title === 'n1')).toBe(true)
+  })
+
+  test('over-cap with all-progress toasts falls back to dropping the oldest', () => {
+    const store = useToastStore.getState()
+    const ids = Array.from({ length: MAX_VISIBLE + 1 }, (_, i) =>
+      store.push({ title: `p${i}`, progress: 0, ttlMs: 0 })
+    )
+    const items = useToastStore.getState().items
+    expect(items.length).toBe(MAX_VISIBLE)
+    // No non-progress toast to drop → oldest progress (ids[0]) is dropped.
+    expect(items.some((t) => t.id === ids[0])).toBe(false)
+    expect(items.some((t) => t.id === ids[MAX_VISIBLE])).toBe(true)
+  })
 })
 
 describe('toast store — setProgress / dismiss / clear', () => {

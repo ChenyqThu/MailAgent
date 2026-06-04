@@ -83,18 +83,26 @@ export const useToastStore = create<ToastStore>((set, get) => ({
     }
     set((s) => {
       const next = [...s.items, toast]
-      // Demote oldest if over cap — also clear their pending timers so the
-      // closures don't sit in the event loop trying to dismiss a toast
-      // that's no longer in the queue.
+      // Over cap — drop the oldest NON-sticky toast first, so an in-flight
+      // long-task progress toast (progress !== undefined, e.g. batch resync's
+      // watchResyncJob) isn't silently demoted by a burst of regular toasts.
+      // Only when every toast is a progress toast do we fall back to dropping
+      // the oldest. Clear the dropped toast's pending timer so its closure
+      // doesn't linger in the event loop.
       while (next.length > MAX_VISIBLE) {
-        const dropped = next.shift()
+        let dropIdx = next.findIndex((t) => t.progress === undefined)
+        if (dropIdx === -1) dropIdx = 0 // all sticky progress → drop oldest
+        const [dropped] = next.splice(dropIdx, 1)
         if (dropped) clearTimerFor(dropped.id)
       }
       return { items: next }
     })
-    // Schedule auto-dismiss only when TTL > 0 AND no progress (sticky).
+    // Schedule auto-dismiss only when TTL > 0 AND no progress (sticky), and
+    // only if this toast survived the over-cap demotion above (a non-progress
+    // toast can be dropped on push when every visible slot holds a progress
+    // toast — don't arm a timer for a toast that's already gone).
     const ttl = toast.ttlMs ?? DEFAULT_TTL_MS
-    if (ttl > 0 && toast.progress === undefined) {
+    if (ttl > 0 && toast.progress === undefined && get().items.some((t) => t.id === id)) {
       const tid = setTimeout(() => {
         _timers.delete(id)
         // Re-check that the toast still exists — it may have been dismissed
