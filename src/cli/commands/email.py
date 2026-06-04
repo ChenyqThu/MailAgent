@@ -15,15 +15,11 @@ import typer
 
 from src.cli.exceptions import CliError, CliInvalidArgError, CliNotFoundError
 from src.cli.output import emit, emit_cli_error
+from src.services import wire
 from src.services.errors import ServiceError
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
-    from src.repository import (
-        AttachmentRecord,
-        EmailBodyRecord,
-        EmailMetadataRecord,
-    )
 
 app = typer.Typer(name="email", help="邮件 CRUD / 搜索 / 重传", no_args_is_help=True)
 
@@ -57,57 +53,8 @@ VALID_INCLUDE = {"body", "attachments", "all"}
 VALID_BODY_FORMATS = {"markdown", "html", "raw"}
 
 
-def _meta_to_dict(meta: "EmailMetadataRecord") -> dict:
-    """EmailMetadataRecord → wire dict — 不含 body / attachments."""
-    return {
-        "internal_id": meta.internal_id,
-        "message_id": meta.message_id,
-        "thread_id": meta.thread_id,
-        "subject": meta.subject,
-        "sender": meta.sender,
-        "sender_name": meta.sender_name,
-        "to_addr": meta.to_addr,
-        "cc_addr": meta.cc_addr,
-        "date_received": meta.date_received,
-        "mailbox": meta.mailbox,
-        "is_read": meta.is_read,
-        "is_flagged": meta.is_flagged,
-        "sync_status": meta.sync_status,
-        "notion_page_id": meta.notion_page_id,
-        "notion_thread_id": meta.notion_thread_id,
-        "notion_url": meta.notion_url,
-        "sync_error": meta.sync_error,
-        "retry_count": meta.retry_count,
-    }
-
-
-def _body_summary(body: Optional["EmailBodyRecord"]) -> Optional[dict]:
-    if body is None:
-        return None
-    return {
-        "format": body.body_format,
-        "size_bytes": body.body_size_bytes,
-        "has_inline_images": body.has_inline_images,
-        "fetched_at": body.fetched_at,
-        "fetched_source": body.fetched_source,
-        "raw_mime_sha256": body.raw_mime_sha256,
-    }
-
-
-def _attachment_to_dict(att: "AttachmentRecord") -> dict:
-    return {
-        "id": att.id,
-        "filename": att.filename,
-        "size_bytes": att.size_bytes,
-        "content_type": att.content_type,
-        "is_inline": att.is_inline,
-        "content_id": att.content_id,
-        "sha256": att.sha256,
-        "derived_from": att.derived_from,
-        "derived_format": att.derived_format,
-        "notion_file_id": att.notion_file_id,
-        "notion_block_id": att.notion_block_id,
-    }
+# wire dict 投影 (meta_to_dict / body_summary / attachment_to_dict /
+# meta_record_to_list_item) → src/services/wire.py (D2a 去重, CLI + API 共用单一真源)。
 
 
 def _parse_include(include: str) -> set[str]:
@@ -160,10 +107,10 @@ def email_get(
                 f"Email with internal_id={internal_id} not found",
                 hint="Use 'mailagent email list' to find available IDs",
             ))
-        data = _meta_to_dict(full.metadata)
-        data["body"] = _body_summary(full.body) if "body" in parts else None
+        data = wire.meta_to_dict(full.metadata)
+        data["body"] = wire.body_summary(full.body) if "body" in parts else None
         data["attachments"] = (
-            [_attachment_to_dict(a) for a in full.attachments]
+            [wire.attachment_to_dict(a) for a in full.attachments]
             if "attachments" in parts else []
         )
     else:
@@ -173,7 +120,7 @@ def email_get(
                 f"Email with internal_id={internal_id} not found",
                 hint="Use 'mailagent email list' to find available IDs",
             ))
-        data = _meta_to_dict(meta)
+        data = wire.meta_to_dict(meta)
         data["body"] = None
         data["attachments"] = []
 
@@ -381,7 +328,7 @@ def email_list(
     )
     rows = result.get("emails", [])
 
-    data = [_meta_record_to_list_item(r) for r in rows]
+    data = [wire.meta_record_to_list_item(r) for r in rows]
     meta_extra = {
         "total": result.get("total", len(rows)),
         "limit": result.get("limit", limit),
@@ -393,30 +340,6 @@ def email_list(
         _render_list_text(data, meta_extra)
     else:
         emit(cli, data, meta_extra=meta_extra)
-
-
-def _meta_record_to_list_item(meta: "EmailMetadataRecord") -> dict:
-    """EmailMetadataRecord → list 输出 item (含 sync_status + thread_id)."""
-    page_id = meta.notion_page_id
-    notion_url = (
-        f"https://www.notion.so/{page_id.replace('-', '')}"
-        if page_id else None
-    )
-    return {
-        "internal_id": meta.internal_id,
-        "message_id": meta.message_id,
-        "thread_id": meta.thread_id,
-        "subject": meta.subject,
-        "sender": meta.sender,
-        "sender_name": meta.sender_name,
-        "date_received": meta.date_received,
-        "mailbox": meta.mailbox,
-        "is_read": meta.is_read,
-        "is_flagged": meta.is_flagged,
-        "sync_status": meta.sync_status,
-        "notion_page_id": page_id,
-        "notion_url": notion_url,
-    }
 
 
 def _render_list_text(data: list[dict], meta: dict) -> None:

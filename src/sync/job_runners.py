@@ -6,13 +6,13 @@ callable)`` unit，交 ``LongTaskContext`` 执行 (checkpoint / 熔断 / 进度�
 
 分层说明 (有意, 见 plan §C1「执行器复用 cli/long_task.py」):
   - 本模块属 **sync-engine 层** (与 fanout 并列), 故可 import ``cli/long_task`` 复用
-    长任务执行器 + lazy 复用 ``cli/commands/backfill`` 的 transport-neutral builder。
+    长任务执行器 + 同层 import ``sync/backfill_builders`` 的 transport-neutral builder。
     ``src/services/`` (MailWriteService 等) 仍**绝不 import cli** —— 那条不变式不受影响。
   - resync runner 用领域类 ``NotionSync.create_email_page_from_sqlite`` (src/notion),
     与 CLI batch ``_resync_batch._make_unit`` **逐字段对齐** (仅 CliNotFoundError →
     ServiceNotFoundError, 同 code=E_NOT_FOUND)。parity 见 tests/cli/test_service_parity.py。
-  - backfill runner 直接复用 ``cli/commands/backfill`` 现成的模块级 picker / unit-builder
-    (backfill.py 零改动); 完整下沉到 src/services/ 留 D2 (wire-shape 去重) 一并做。
+  - backfill runner import ``sync/backfill_builders`` 的 picker / unit-builder (D2a 已从
+    cli/commands/backfill.py 下沉到本 engine 层 → 同层 import, 消除原 lazy sync→cli)。
 """
 
 from __future__ import annotations
@@ -228,10 +228,11 @@ def run_backfill_job(
     on_unit_done: Optional[UnitDoneHook],
     resume_from: Optional[int],
 ) -> RunOutcome:
-    # lazy sync→cli import: 复用 backfill 的 transport-neutral picker/unit-builder
-    # (D2 wire-shape 去重时再下沉到 src/services/; 此前不动 44k 的 backfill.py)。
+    # 同层 engine import (D2a 已把 backfill builder 从 cli/commands/backfill.py 下沉到
+    # src/sync/backfill_builders.py, 消除原 lazy sync→cli 反向 import)。lazy import 仅为
+    # 避免顶部拉重 domain 依赖 (NotionSync/AppleScriptArm 等)。
     # job 恒 dry_run=False (dry-run 是 CLI 预览语义, job 一定实跑)。
-    from src.cli.commands import backfill as bf
+    from src.sync import backfill_builders as bf
 
     cfg = deps.config
     db_path = cfg.sync_store_db_path

@@ -24,10 +24,10 @@ from src.cli.exceptions import (
     CliNotFoundError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
+from src.services import wire
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
-    from src.repository import AttachmentRecord
 
 app = typer.Typer(
     name="attachment",
@@ -40,21 +40,8 @@ app = typer.Typer(
 # list (US-001)
 # ============================================================
 
-def _attachment_to_dict(att: "AttachmentRecord") -> dict:
-    return {
-        "id": att.id,
-        "internal_id": att.internal_id,
-        "filename": att.filename,
-        "size_bytes": att.size_bytes,
-        "content_type": att.content_type,
-        "is_inline": att.is_inline,
-        "content_id": att.content_id,
-        "sha256": att.sha256,
-        "derived_from": att.derived_from,
-        "derived_format": att.derived_format,
-        "notion_file_id": att.notion_file_id,
-        "notion_block_id": att.notion_block_id,
-    }
+# 附件 wire dict (含 internal_id) → wire.attachment_to_dict(include_internal_id=True)
+# (D2a 去重; email get 内嵌附件用默认形不含 internal_id, gotcha #1)。
 
 
 @app.command("list")
@@ -76,7 +63,7 @@ def attachment_list(
         ))
 
     rows = repo.get_attachments(internal_id)
-    data = [_attachment_to_dict(r) for r in rows]
+    data = [wire.attachment_to_dict(r, include_internal_id=True) for r in rows]
     meta_extra = {"count": len(data), "internal_id": internal_id}
 
     if cli.output.lower() == "text":

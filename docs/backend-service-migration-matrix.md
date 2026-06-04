@@ -35,12 +35,12 @@
 
 | 读操作 | Electron 直读(TS) | EmailRepository(Py) | serve-api 端点 | wire-shape 去重 |
 |---|---|---|---|---|
-| list / list_enriched | ✅ | ✅ | ✅ | ⬜ D2 抽 `services/wire.py` |
-| get / body | ✅ | ✅ | ✅ | ⬜ D2 |
-| search(FTS5) | ✅ | ✅ | ✅ | ⬜ D2 |
-| mailboxes / thread / snippets / ai_fields | ✅ | ✅ | ✅ | ⬜ D2 |
-| attachment list / download | ✅ | ✅ | ✅ | ⬜ D2 |
-| calendar / folder | ✅ | ✅ | 🟡 骨架 | ⬜ D2 |
+| list / list_enriched | ✅ | ✅ | ✅ | ✅ D2a `wire.meta_record_to_list_item` |
+| get / body | ✅ | ✅ | ✅ | ✅ D2a `wire.meta_to_dict`(±`include_important`)/`body_summary`/`attachment_to_dict` |
+| search(FTS5) | ✅ | ✅ | ✅ | ➖ 非 D2 范围(EmailSearchHit 投影各端未重叠) |
+| mailboxes / thread / snippets / ai_fields | ✅ | ✅ | ✅ | ➖ 非 D2 范围 |
+| attachment list / download | ✅ | ✅ | ✅ | ✅ D2a `wire.attachment_to_dict(include_internal_id)` |
+| calendar / folder | ✅ | ✅ | 🟡 骨架 | ➖ folder `_attachment_to_dict` 接 dict 不并入(结构不同) |
 
 ## 横切基础设施
 
@@ -54,6 +54,8 @@
 | 双层鉴权（本地 token + CF Access）+ SSE 9200 鉴权 | ✅ | C2 |
 | serve-api 崩溃自拉起 + 断路器 | ✅ | C2 |
 | 前端统一 http_client 写路径 | ✅ | D1 |
+| backfill builder 下沉 engine 层（`sync/backfill_builders.py`，消除 sync→cli 反向 import） | ✅ | D2a |
+| 读 wire-shape 投影单一真源（`services/wire.py`，email/attachment record→dict） | ✅ | D2a |
 
 ## 残留检测（每阶段末跑，应为「预期内」或空）
 
@@ -76,6 +78,12 @@ grep -rln "maybeRestartAfterCrash" frontend/src/electron/main/backend_lifecycle.
 grep -rn "writeFlagDirect" frontend/src/            # D1 后应为空
 # D1 后：前端 fork CLI 写应消失（保留 draft.ts 的 AppleScript emergency fork）
 grep -rn "callCli(" frontend/src/electron/main/handlers/write_ops.ts   # D1 后应为空
+# D2a 后：backfill builder 下沉 engine 层 → job_runners 不再 sync→cli
+grep -c "from src.cli.commands import backfill" src/sync/job_runners.py   # D2a 后 = 0
+grep -rn "from src.cli\|import src.cli" src/services/wire.py src/sync/backfill_builders.py  # 空（两新模块零 cli import）
+# D2a 后：读 wire 投影收编单一真源 → CLI + routers 不再各自 def helper
+grep -rn "^def _meta_to_dict\|^def _meta_record_to_list_item\|^def _body_summary" \
+  src/cli/commands/email.py src/api/routers/email.py src/cli/commands/attachment.py  # 空
 # 全程：契约测试锚点必须全绿
 pytest tests/cli/test_schema_contract.py -q
 ```
@@ -192,3 +200,17 @@ pytest tests/cli/test_schema_contract.py -q
   - **next-phase handoff → D2**（D1 收官；A+B+C+D1 全完成，剩 D2 最终验收 + 文档）：
     - **D2**：① backfill builder 从 `cli/commands/backfill.py` 正式下沉（C1 lazy 复用转正式）；② 读路径 wire-shape 去重（`routers/email.py` 的 `_meta_to_dict` 等抽 `services/wire.py`，CLI 同名 helper 改调）；③ 能力矩阵 100% 绿（含 batch_resync jobs API 前端接线：前端经 `POST /api/jobs` 起长任务 + `GET` 轮询 + `job.*` SSE，events_bridge 接线 —— 这是矩阵唯一剩的 `⬜`）；④ 性能基线前后对比（serve-api 写 ~500ms→几十 ms）；⑤ 端到端每写操作 CLI/本地 Electron/远程 web 各实跑；⑥ CLAUDE.md 文档地图 + `docs/claude/` 服务层架构文档 + 本看板归档。
     - **D1 复用点**：`daemon_api.daemonRequest`（D2 jobs API 前端接线复用）；`http_client.headers` 注入；`serveApiEnabled` flip（serve-api 恒本地写面）。**前瞻注记**：dev 模式需起 serve-api 才能写（见 dev 模式注记），D2 端到端验收时本地 Electron 测试需确保 serve-api 在跑。
+
+- **D2a（✅ 完成）** `feat/backend-service-layer`：D2 拆分后第一段 = 后端代码下沉（纯后端、行为保持、有 parity 网）。
+  - **D2 拆分裁定（用户拍板）**：D2 看板原列 6 项实测 = 3 个 session 量级 —— 子项③前端 batch_resync 是**从零新增**（jobs client + `job.*` SSE + UI 入口 + 真机验证，当前前端零 jobs 接线）；子项④⑤需真实 serve-api/Notion/davmail/邮箱（本 session 无法诚实执行，也不应真发邮件/改生产 Notion）。故拆：**D2a**(后端下沉 ①②, 本 phase) / **D2b**(前端接线 ③) / **D2c**(验收④⑤ + 文档⑥)。
+  - **① backfill builder 下沉**：新建 `src/sync/backfill_builders.py`（engine 层），把 23 个 transport-neutral builder（dead-table helpers + body `_pick_candidates`/`_make_body_units`/`_backfill_one_body` + derivative `_find_candidates`/`_make_derivative_units`/`_insert_derived` + metadata `_pick_metadata_candidates`/`_make_metadata_units`/`_backfill_one_metadata`±applescript 等）**整段搬迁逐字节不改**（reviewer AST 验证 23 函数源码段相等）。`cli/commands/backfill.py` 删 727 行 → 顶部 import 下沉模块（命令体 / render / auth / target 适配器保留）；`sync/job_runners.py::run_backfill_job` 把 `from src.cli.commands import backfill` 改 `from src.sync import backfill_builders`（**消除 C1 遗留的 lazy sync→cli 反向 import**）。
+  - **下沉目标 = `src/sync/`（非 plan/C1 注释字面的 `src/services/`）= 关键决策**：理由 —— builder 是 sync-engine 的「取数 + 重 IO 执行单元」(sqlite/AppleScript/office convert/写库)，与 fanout/job_runners 内聚；放 sync 既消 sync→cli 又保 `src/services/` 纯净（只放写操作编排 + 守卫）。C1 硬不变式「services 零 cli import」完全满足（backfill_builders 零 cli import）。reviewer 认同。
+  - **② 读 wire 去重**：新建 `src/services/wire.py` 单一真源（`meta_to_dict`/`body_summary`/`attachment_to_dict`/`meta_record_to_list_item`），收编原 3 处手抄（`cli/commands/email.py` + `cli/commands/attachment.py` + `api/routers/email.py`）。**两处故意差异参数化保各端字节序**：① `meta_to_dict(include_important=False)` —— CLI email get 18 字段 / API GET 19 字段(末尾追加 `is_important` 给前端 EmailDetail)；② `attachment_to_dict(include_internal_id=False)` —— email get 内嵌 11 字段(gotcha #1 无 internal_id/local_path) / attachment list 12 字段(internal_id 紧跟 id 保字节序)。`folder.py::_attachment_to_dict`(接 dict 非 record, 结构不同) 不并入。
+  - **验收**：`pytest tests/cli tests/api` = **717 passed, 1 failed**（=708 基线 + 新增 test_wire_parity 9；唯一 failed = 预存 env-coupled `test_resolve_allowed_email`，与 D2a 无关，未碰 auth.py）；test_schema_contract 全绿（读形状零漂移）；test_backfill + test_job_parity + test_async_jobs + test_job_worker + test_jobs_api = 45 passed（下沉行为 parity）。新增 `tests/cli/test_wire_parity.py`(9：golden 字段 + 字节序 + 两参数分叉 + gotcha#1 + None 边界)。`test_backfill.py` 改 5 处 `build_storage_payloads` patch target → `src.sync.backfill_builders`（`_backfill_one_body` 下沉故 caller 不在 backfill 模块；其余 AppleScriptArm/EmailReader/EmailRepository/_find_candidates patch 因 caller 仍在 backfill 模块 / 类方法 patch 不改）。ruff 全绿。**未碰前端**（Python-only）。
+  - **残留**：`run_cli(` routers 仍 **4**（D2a 不动写端点 fork）；`src/sync/backfill_builders.py` + `src/services/wire.py` 零 cli import；job_runners backfill sync→cli **= 0**；三 caller 本地 wire helper def 清零。
+  - **坑**：再次踩 ruff-autofix 删 import —— 先加 `from src.services import wire`（调用点尚未改）→ PostToolUse ruff autofix 当 unused 删掉 → 改完调用点后 F821；解法 = 调用点先改好(wire 已被引用)再重加 import 即留住。
+  - **独立 review（code-reviewer subagent, opus）**：**APPROVE**，0 Crit/0 High/0 Med，两高危 claim 机械验证（下沉 23 函数 AST 逐字节相等 / 6 wire 投影 runtime 匹配 golden key 序含两参数分叉 + gotcha#1）；分层不变式 grep 确认；确认全程只读未碰 git。2 doc-only nit（wire.py 注释路径 tests/services→tests/cli **已修** / 参数化不对称是 baseline-justified 故意）。
+  - **next-phase handoff → D2b**（D2a 收官；剩 D2b 前端接线 + D2c 验收文档）：
+    - **D2b**（前端 batch_resync jobs API 接线，= 能力矩阵唯一剩的写操作 `⬜`）：前端**从零新增** —— `daemon_api.daemonRequest`(D1 已建) 调 `POST /api/jobs`(C1 端点) 起长任务 + `GET /api/jobs/{id}` 轮询 + `events_bridge.ts` 接 `job.*` SSE(C1 JobWorker 发) + UI 入口(选中多封 → 起 resync job → 进度)。涉及 UI **必真机/Playwright 验证**；改前端 → 跑 `cd frontend && pnpm test`。
+    - **D2c**（最终验收 + 文档归档）：④ 性能基线(serve-api 写 ~500ms→几十 ms，需起 serve-api 实测) + ⑤ 端到端每写操作 CLI/本地 Electron/远程 web 各实跑(需真实 Notion/davmail/邮箱凭证) + ⑥ CLAUDE.md 文档地图加「服务层架构」指针 + `docs/claude/` 新建服务层架构文档 + 本看板归档 + 能力矩阵 100% 绿终判。
+    - **D2a 复用点**：`backfill_builders` 已正式下沉(D2b 若需直接 import)；`wire.py` 投影(D2c 文档可引为「读形状单一真源」范例)；`test_wire_parity` golden 模式。

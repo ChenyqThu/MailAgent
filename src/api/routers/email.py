@@ -45,115 +45,22 @@ from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.cli_runner import CliRunnerError, get_cli_api_key, run_cli
 from src.api.deps import get_repository, get_service_ctx
+from src.services import wire
 from src.services.errors import ServiceError
 from src.services.guards import Actor
 from src.services.mail_write import MailWriteService
 
 if TYPE_CHECKING:
-    from src.repository import (
-        AttachmentRecord,
-        EmailBodyRecord,
-        EmailMetadataRecord,
-        EmailRepository,
-    )
+    from src.repository import EmailRepository
 
 router = APIRouter(prefix="/api/email", tags=["email"])
 
 
 # ---------------------------------------------------------------------------
-# wire-shape helpers — 1:1 镜像 CLI src/cli/commands/email.py, 保证 data 形状
-# 与 docs/cli-schema/email-*.schema.json + cli.gen.ts 一致 (不可漂移)。
+# wire-shape 投影 → src/services/wire.py (D2a 去重, CLI + API 共用单一真源)。
+# GET /email/{id} 用 wire.meta_to_dict(include_important=True) 给前端 EmailDetail
+# 扩展 is_important; 其余 (list / body / attachment) 与 CLI 逐字段相同。
 # ---------------------------------------------------------------------------
-
-
-def _meta_to_dict(meta: "EmailMetadataRecord") -> dict[str, Any]:
-    """EmailMetadataRecord → `email get` wire dict (不含 body / attachments)。
-
-    镜像 email.py::_meta_to_dict (email-get.schema.json email_record)。
-    """
-    return {
-        "internal_id": meta.internal_id,
-        "message_id": meta.message_id,
-        "thread_id": meta.thread_id,
-        "subject": meta.subject,
-        "sender": meta.sender,
-        "sender_name": meta.sender_name,
-        "to_addr": meta.to_addr,
-        "cc_addr": meta.cc_addr,
-        "date_received": meta.date_received,
-        "mailbox": meta.mailbox,
-        "is_read": meta.is_read,
-        "is_flagged": meta.is_flagged,
-        "sync_status": meta.sync_status,
-        "notion_page_id": meta.notion_page_id,
-        "notion_thread_id": meta.notion_thread_id,
-        "notion_url": meta.notion_url,
-        "sync_error": meta.sync_error,
-        "retry_count": meta.retry_count,
-        # 前端 EmailDetail 扩展 (types.ts) — handlers/email.ts 暴露此 SQLite 列。
-        "is_important": meta.is_important,
-    }
-
-
-def _body_summary(body: Optional["EmailBodyRecord"]) -> Optional[dict[str, Any]]:
-    """EmailBodyRecord → body SUMMARY (非内容)。镜像 email.py::_body_summary。"""
-    if body is None:
-        return None
-    return {
-        "format": body.body_format,
-        "size_bytes": body.body_size_bytes,
-        "has_inline_images": body.has_inline_images,
-        "fetched_at": body.fetched_at,
-        "fetched_source": body.fetched_source,
-        "raw_mime_sha256": body.raw_mime_sha256,
-    }
-
-
-def _attachment_to_dict(att: "AttachmentRecord") -> dict[str, Any]:
-    """AttachmentRecord → `email get` 内嵌附件 dict。
-
-    镜像 email.py::_attachment_to_dict — **不含** local_path / internal_id
-    (实现规格 gotcha #1: 绝不回显 host 路径)。
-    """
-    return {
-        "id": att.id,
-        "filename": att.filename,
-        "size_bytes": att.size_bytes,
-        "content_type": att.content_type,
-        "is_inline": att.is_inline,
-        "content_id": att.content_id,
-        "sha256": att.sha256,
-        "derived_from": att.derived_from,
-        "derived_format": att.derived_format,
-        "notion_file_id": att.notion_file_id,
-        "notion_block_id": att.notion_block_id,
-    }
-
-
-def _meta_record_to_list_item(meta: "EmailMetadataRecord") -> dict[str, Any]:
-    """EmailMetadataRecord → `email list` item。镜像 email.py::_meta_record_to_list_item。
-
-    比 _meta_to_dict 窄 (无 to/cc/sync_error/retry_count), 但含 notion_url。
-    """
-    page_id = meta.notion_page_id
-    notion_url = (
-        f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else None
-    )
-    return {
-        "internal_id": meta.internal_id,
-        "message_id": meta.message_id,
-        "thread_id": meta.thread_id,
-        "subject": meta.subject,
-        "sender": meta.sender,
-        "sender_name": meta.sender_name,
-        "date_received": meta.date_received,
-        "mailbox": meta.mailbox,
-        "is_read": meta.is_read,
-        "is_flagged": meta.is_flagged,
-        "sync_status": meta.sync_status,
-        "notion_page_id": page_id,
-        "notion_url": notion_url,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +194,7 @@ async def list_emails(
         offset=offset,
     )
     rows = result.get("emails", [])
-    data = [_meta_record_to_list_item(r) for r in rows]
+    data = [wire.meta_record_to_list_item(r) for r in rows]
     return success_envelope(
         data,
         request=request,
@@ -333,10 +240,10 @@ async def get_email(
                 hint="Use GET /api/email/list to find available IDs",
                 source="sqlite",
             )
-        data = _meta_to_dict(full.metadata)
-        data["body"] = _body_summary(full.body) if "body" in parts else None
+        data = wire.meta_to_dict(full.metadata, include_important=True)
+        data["body"] = wire.body_summary(full.body) if "body" in parts else None
         data["attachments"] = (
-            [_attachment_to_dict(a) for a in full.attachments]
+            [wire.attachment_to_dict(a) for a in full.attachments]
             if "attachments" in parts
             else []
         )
@@ -349,7 +256,7 @@ async def get_email(
                 hint="Use GET /api/email/list to find available IDs",
                 source="sqlite",
             )
-        data = _meta_to_dict(meta)
+        data = wire.meta_to_dict(meta, include_important=True)
         data["body"] = None
         data["attachments"] = []
 
