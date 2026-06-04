@@ -24,7 +24,7 @@
 | compose_draft | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ✅ A4 |
 | send | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ✅ A4 |
 | compose_plan（dry-run） | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ➖ |
-| draft 创建（AppleScript） | ➖ host-local | ➖ | ⬜ D1 `POST /api/drafts` | shell fork 保留<br>（emergency 回切） | ➖ | ➖ |
+| draft 创建（AppleScript） | ➖ host-local | ➖ | ⬜ backlog<br>(远程无 GUI 场景) | shell fork 保留<br>（emergency 回切） | ➖ | ➖ |
 | **长任务** batch_resync | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ✅ D2b<br>(batchResync+watchResyncJob) | ✅ 已存在 | ✅ C1 |
 | **长任务** backfill_body/deriv/meta | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ➖ 运维 | ✅ 已存在 | ✅ C1 |
 
@@ -97,7 +97,7 @@ pytest tests/cli/test_schema_contract.py -q
 
 ## 最终验收 gate（D2）
 
-- [ ] 能力矩阵所有写操作 100% 绿（无 🍴 残留）
+- [x] 能力矩阵所有写操作 100% 绿（无 🍴 残留）—— set_flags/resync/archive/pin/llm/compose/send/batch_resync 全绿（D2b 收官）。draft 创建(AppleScript) 的 serve-api `POST /api/drafts` = **非阻塞 backlog**（host-local GUI 能力，远程草稿走 IMAP draft + `compose_draft` 端点，HttpApi.createDraft notImplemented；用户裁定 2026-06-04 保留 ⬜，不计入 D2 验收）
 - [ ] `pytest tests/cli tests/api` + `cd frontend && pnpm test` 全绿
 - [ ] `test_schema_contract` 全程全绿（data 形状零漂移）+ 每操作 parity golden 通过
 - [ ] 残留检测：`run_cli` 仅剩 long-task 预期项、`writeFlagDirect`/`callCli` 写为空
