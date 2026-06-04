@@ -235,6 +235,131 @@ def test_auth_disabled_without_dev_context_refuses_to_start(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# C2 — dual-layer auth: local ephemeral token leg (same-machine Electron)
+# ---------------------------------------------------------------------------
+#
+# verify_cf_access gains a SECOND leg before the (byte-unchanged) CF JWT path:
+# a configured _LOCAL_API_TOKEN + matching X-MailAgent-Local-Token header →
+# pass as the local identity. Unconfigured token / mismatch → fall through to
+# the CF JWT path (fail-closed). monkeypatch the module global like AUTH_DISABLED.
+
+
+def _req_with_local_token(tok: str | None):
+    class _Req:
+        def __init__(self):
+            self.headers = {} if tok is None else {auth_mod.LOCAL_TOKEN_HEADER: tok}
+
+            class _S:
+                pass
+
+            self.state = _S()
+
+    return _Req()
+
+
+@pytest.mark.asyncio
+async def test_local_token_match_passes_stamps_email(monkeypatch):
+    """配了 token + header 匹配 → 放行, 落 allowed email 身份 (不碰 CF JWT)。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "ephemeral-secret")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "owner@example.com")
+    req = _req_with_local_token("ephemeral-secret")
+    result = await verify_cf_access(req)  # type: ignore[arg-type]
+    assert result is None
+    assert req.state.user_email == "owner@example.com"
+
+
+@pytest.mark.asyncio
+async def test_local_token_match_fallback_sentinel_when_no_allowlist(monkeypatch):
+    """token 匹配但 allowed email 解析不出 → 回落 same-machine sentinel (仍放行)。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "ephemeral-secret")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "")
+    req = _req_with_local_token("ephemeral-secret")
+    await verify_cf_access(req)  # type: ignore[arg-type]
+    assert req.state.user_email == "local@127.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_local_token_mismatch_falls_through_to_401(monkeypatch):
+    """token 配了但 header 不匹配 + 无 CF JWT → 回落 CF 腿 → 401 (fail-closed)。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "ephemeral-secret")
+    with pytest.raises(HTTPException) as ei:
+        await verify_cf_access(_req_with_local_token("wrong-token"))  # type: ignore[arg-type]
+    assert ei.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_local_token_unconfigured_ignores_header_401(monkeypatch):
+    """未配 token (_LOCAL_API_TOKEN 空) → 本地腿停用, 带 header 也回落 CF → 401。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "")
+    with pytest.raises(HTTPException) as ei:
+        await verify_cf_access(_req_with_local_token("anything"))  # type: ignore[arg-type]
+    assert ei.value.status_code == 401
+
+
+def test_local_token_via_testclient_passes(client, monkeypatch):
+    """端到端: bypass off + 配 token, 带正确 header 打受保护读端点 → 200 (走 dependency 全栈)。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "ephemeral-secret")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "owner@example.com")
+    r = client.get("/api/email/list", headers={auth_mod.LOCAL_TOKEN_HEADER: "ephemeral-secret"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "success"
+
+
+def test_local_token_wrong_via_testclient_401(client, monkeypatch):
+    """端到端: bypass off + 配 token, 带错误 header → 401 (无 CF JWT 回落)。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", "ephemeral-secret")
+    r = client.get("/api/email/list", headers={auth_mod.LOCAL_TOKEN_HEADER: "nope"})
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "E_AUTH_FAILED"
+
+
+# ---------------------------------------------------------------------------
+# C2 — relaxed import guard: ≥1 auth method required (CF_AUDIENCE OR local token)
+# ---------------------------------------------------------------------------
+
+
+def test_import_guard_allows_local_token_only(monkeypatch):
+    """CF_AUDIENCE 空但配了 MAILAGENT_LOCAL_API_TOKEN → 不再 RuntimeError (本地-only 合法)。"""
+    import importlib
+
+    monkeypatch.delenv("MAILAGENT_API_AUTH_DISABLED", raising=False)
+    monkeypatch.delenv("CF_AUDIENCE", raising=False)
+    monkeypatch.setenv("MAILAGENT_LOCAL_API_TOKEN", "ephemeral-secret")
+    try:
+        importlib.reload(auth_mod)  # must NOT raise
+        assert auth_mod._LOCAL_API_TOKEN == "ephemeral-secret"
+        assert auth_mod.AUTH_DISABLED is False
+    finally:
+        # 还原 conftest 一致的干净模块 (bypass on + dev), 不污染后续用例。
+        monkeypatch.setenv("MAILAGENT_API_AUTH_DISABLED", "true")
+        monkeypatch.setenv("MAILAGENT_API_DEV", "true")
+        monkeypatch.delenv("MAILAGENT_LOCAL_API_TOKEN", raising=False)
+        importlib.reload(auth_mod)
+
+
+def test_import_guard_raises_without_any_auth_method(monkeypatch):
+    """三种鉴权方式 (CF_AUDIENCE / 本地 token / bypass) 全无 → 启动即 RuntimeError (fail-closed)。"""
+    import importlib
+
+    monkeypatch.delenv("MAILAGENT_API_AUTH_DISABLED", raising=False)
+    monkeypatch.delenv("CF_AUDIENCE", raising=False)
+    monkeypatch.delenv("MAILAGENT_LOCAL_API_TOKEN", raising=False)
+    try:
+        with pytest.raises(RuntimeError, match="No auth method"):
+            importlib.reload(auth_mod)
+    finally:
+        monkeypatch.setenv("MAILAGENT_API_AUTH_DISABLED", "true")
+        monkeypatch.setenv("MAILAGENT_API_DEV", "true")
+        importlib.reload(auth_mod)
+
+
+# ---------------------------------------------------------------------------
 # Loopback bind assertion (REMOTE-ACCESS §6.5)
 # ---------------------------------------------------------------------------
 

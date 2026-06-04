@@ -51,8 +51,8 @@
 | ServiceContext / ServiceDeps | ✅ | A1 |
 | outbox merge 原子 SQL + JS/Py 契约测试 | ✅ | B1 |
 | async_jobs 表 + JobWorker（挂 serve） | ✅ | C1 |
-| 双层鉴权（本地 token + CF Access）+ SSE 9200 鉴权 | ⬜ | C2 |
-| serve-api 崩溃自拉起 + 断路器 | ⬜ | C2 |
+| 双层鉴权（本地 token + CF Access）+ SSE 9200 鉴权 | ✅ | C2 |
+| serve-api 崩溃自拉起 + 断路器 | ✅ | C2 |
 | 前端统一 http_client 写路径 | ⬜ | D1 |
 
 ## 残留检测（每阶段末跑，应为「预期内」或空）
@@ -67,6 +67,11 @@ grep -rn "run_cli(" src/api/routers/ | wc -l        # 基线 12 → A2 后 10 �
 # C1: jobs router 全 in-process (run_cli 仍 4 — C1 新增端点不 fork); 分层不变式保持
 grep -c "run_cli\|cli_runner" src/api/routers/jobs.py   # = 0 (in-process)
 grep -rn "from src.cli\|import src.cli" src/services/    # 空 (src/services/ 零 cli import 不变式)
+# C2: dual-auth + SSE 门接线 (header/env 名三处一致; 改鉴权 dependency 不碰端点 fork)
+grep -rl "X-MailAgent-Local-Token" src/api/auth.py src/sse_server.py \
+  frontend/src/electron/main/local_token.ts | wc -l     # = 3 (header 名三处一致)
+grep -rn "run_cli(" src/api/routers/ | wc -l            # 仍 = 4 (C2 不动端点 fork)
+grep -rln "maybeRestartAfterCrash" frontend/src/electron/main/backend_lifecycle.ts  # serve-api 崩溃自拉起就位
 # D1 后：前端 TS 直写 outbox 应消失
 grep -rn "writeFlagDirect" frontend/src/            # D1 后应为空
 # D1 后：前端 fork CLI 写应消失（保留 draft.ts 的 AppleScript emergency fork）
@@ -158,3 +163,15 @@ pytest tests/cli/test_schema_contract.py -q
     - **C2**（双层鉴权 + serve-api 崩溃自拉起）：远程 `verify_cf_access` 不动 + 本地 per-session ephemeral token（Electron `crypto.randomBytes` → env 注入 serve-api + IPC 给 renderer）；**SSE 9200 补鉴权**（C1 的 `job.progress` 经它推，远程 cloudflared 暴露时 CF Access 必须覆盖 9200，否则泄漏 internal_id + 操作时序）；`backend_lifecycle.ts::spawnService` 加指数退避 re-spawn + crash-loop 断路器。风险中。
     - **D1**（前端写收编 daemon + 删 writeFlagDirect）：依赖 B1+C1+C2。前端可经 `POST /api/jobs` 起长任务 + `GET /api/jobs/{id}` 轮询进度 + 消费 `job.*` SSE（events_bridge 接线）。**C1 复用点**：`AsyncJobRepository` 的 DO-NOTHING 幂等 enqueue 范式；JobWorker 的 on_unit_done 进度 hook；job 执行器在 sync 层复用 cli/long_task 的分层处理。
     - **D2**（读 wire 去重 + 最终验收 + 文档）：**把 backfill 的 `_pick_candidates`/`_make_*_units` 等 transport-neutral builder 从 `cli/commands/backfill.py` 正式下沉**（C1 lazy 复用是务实临时态，D2 wire 去重一并做，届时 `job_runners.run_backfill_job` 改 import 下沉后的模块）。
+
+- **C2（✅ 完成）** `feat/backend-service-layer`：双层鉴权（本地 token + CF Access）+ SSE 9200 补鉴权 + serve-api 崩溃自拉起。**横切基础设施收官（A+B+C 全完成），D1 前端写收编前置就位**。
+  - **8200 dual-auth（`src/api/auth.py`）**：`verify_cf_access` 前置一条**本地 token 腿**（CF JWT decode/allowlist 逻辑**一字不改**，纯前插）—— 配了 `_LOCAL_API_TOKEN`（env `MAILAGENT_LOCAL_API_TOKEN`）且 `X-MailAgent-Local-Token` header 经 `hmac.compare_digest` 匹配 → 放行本地身份（=allowed email，解析不出回落 `local@127.0.0.1` sentinel）；未配（`_LOCAL_API_TOKEN and ...` 短路停用，空 header 不可绕过）/ 不匹配 → 回落 CF JWT；都没有 → 401 fail-closed。47 个 router 的 `Depends(verify_cf_access)` **零改动**（仅扩 dependency 体）。**import 守卫放宽**：`if not AUTH_DISABLED and not CF_AUDIENCE` → 加 `and not _LOCAL_API_TOKEN`（判据「必须 CF_AUDIENCE」→「≥1 鉴权方式」；三种全无仍 RuntimeError 拒启 = fail-closed；AUTH_DISABLED-without-dev 守卫不动）。
+  - **9200 SSE 门（`src/sse_server.py`）**：抽纯函数 `_local_token_ok(request)` —— 未配 token 放行（dev/pm2 serve 无注入 → 向后兼容）；配了则 header 必须 compare_digest 匹配。`_stream_events` **首行**早返回 401（在 `_get_redis_url()` / `prepare` 之前，不触 streaming、不泄漏、不 hang）；`_health` 仍无鉴权（liveness，仅暴露 coarse 计数无 internal_id/payload）。**关键决策**：9200 当前**未经 cloudflared 暴露**（只本地 Electron main 用 node fetch 连，远程 SSE 走 webhook-server 8100 独立端点），故只做**本地 token 校验**，不在 aiohttp 重做 CF JWT（若将来 tunnel 暴露由 CF Access 隧道层覆盖；已注释）。附带：预存未用 `import json`（F401，HEAD 即死）被仓库 ruff hook 顺手清掉（非 C2 逻辑 orphan，1 行透明标注）。
+  - **token 生成/注入（前端 `local_token.ts` 新 + `backend_lifecycle.ts`）**：`getLocalApiToken()` 进程内单例（首用 `randomBytes(32).toString('hex')` = 256-bit hex）；`buildBaseEnv` 注入 `MAILAGENT_LOCAL_API_TOKEN` 给 **serve + serve-api 两进程**（9200 门 + 8200 dual-auth 都靠它；`serveApiEnv` 经 `{...baseEnv}` 继承同值不重生）；同一单例供 `events_bridge.ts` SSE fetch 带 `X-MailAgent-Local-Token` header → **两端天然同值**（消「两端 drift」一类 bug）。header/env 名三处手抄（auth.py/sse_server.py/local_token.ts），契约测试 + 🔴 注释钉死。
+  - **serve-api 崩溃自拉起（`backend_lifecycle.ts`）**：`spawnService` exit handler 非主动 stop 退出（先 `child=null` 再调）→ `maybeRestartAfterCrash(svc)`（仅 serve-api；serve 崩由 waitReady 门控兜底降级）。指数退避 re-spawn（仿 events_bridge `BACKOFF_MS` 1s→2s→5s→10s→30s）+ crash-loop 断路器（连续崩溃达 `MAX_CRASH_RESTARTS=5`、中间无一次 ready → 放弃停 failed，防必崩配置烧 CPU）；`waitApiReady` 标 ready 时 `restartAttempts=0` 复位（`state==='starting'` 守卫下 clobber-safe）；`stopService` 清 `restartTimer` + timer 回调守卫 `state==='stopped'`/`child` 防停后复活；`restartService` 手动重启复位计数。退避梯度 + 上限经 `LifecycleOptions.crashBackoffMs/maxCrashRestarts` 可注入（仿 `apiProbe` 单测注入范式）。
+  - **范围裁定（不属 C2，归 D1）**：renderer IPC token + http_client 带 header + flip `serveApiEnabled` 为常驻 —— 矩阵把「前端统一 http_client 写路径」划归 D1；`http_client.ts` 只被远程 web SPA 的 `HttpApi.ts` 用（Electron renderer 走 IPC 不用它，远程用 CF JWT 不带本地 token），8200 本地 token 消费者要到 D1 renderer 写收编才出现。**⚠️ 前瞻注记（reviewer LOW）**：8200 dual-auth 本地腿现已接好但**纯本地装机（无 CF_AUDIENCE）下 serve-api 不 spawn → 该腿暂不活跃**（仅单测覆盖能力）；唯一现存活跃本地消费者 = events_bridge→9200 SSE 端到端打通。D1 flip gate 后 8200 本地腿才上线。
+  - **验收**：`pytest tests/cli tests/api` = **708 passed, 1 failed**（唯一=预存 env-coupled `test_resolve_allowed_email`；test_schema_contract + test_service_parity 全绿；C2 给 tests/api +8）。新增测试：`tests/api/test_auth_and_bind.py` +8（dual-auth 放行/sentinel 回落/mismatch-401/unconfigured-401/TestClient 端到端 ×2 + 放宽守卫 local-only 不崩/全空 raise）；`tests/events/test_sse_auth.py` 新 +6（`_local_token_ok` 全分支 + `_stream_events` 401 + header/env 名跨模块契约）；前端 `backend_lifecycle.test.ts` +6（token 注入两进程同值 + 崩溃自拉起 5: re-spawn/serve 不自拉/断路器/ready 清零[`maxCrashRestarts:1` 证复位 load-bearing]/stop 取消 pending）；`local_token.test.ts` 新 +4（单例/hex/reset/常量名）。前端 `pnpm test` = **1281 passed**，9 failed 全是预存 EmailRow i18n（C2 文件零失败）；测后 `rebuild:electron` 还原 ABI。残留：`run_cli(` routers 仍 **4**（C2 改鉴权 dependency 不碰端点 fork）；`src/services/` 零 cli import；header 名三处一致。ruff 全绿；tsc 0 error。
+  - **独立 review（code-reviewer subagent，opus）**：**APPROVE**，0 Critical/0 High/0 Medium，7 个核查项全 PASS（CF JWT 逐字未改 diff 可证 / compare_digest 两腿都用 / 三种凭证缺失全 fail-closed / SSE 401 早于 redis / 两进程同 token 单源 / 断路器 reset-on-ready 经 `maxCrashRestarts:1` 测证 load-bearing / 无 D1 越界 grep 确认）。1 LOW = 上述 8200 腿前瞻注记（已纳入 handoff，非缺陷）+ 3 NIT（stale waitApiReady 协程并发但 `starting`-only 守卫中和无害 / `_health` 无鉴权计数可接受 / auth↔sse header 读法风格微异，均 reviewer 明示 not required）。确认全程只读、未碰 git 状态/工作树。
+  - **next-phase handoff → D1**（C2 收官；剩 D1/D2）：
+    - **D1**（前端写收编 daemon + 删 writeFlagDirect）：依赖 B1+C1+C2 全就位。`write_ops.ts` 删 `writeFlagDirect`、`email:flag`/复杂写（resync/pin/archive/llm/folder/draft/send）改调本机 daemon（复用 `http_client.ts`）。**C2 复用点**：① `getLocalApiToken()` 经 **IPC/preload** 暴露给 renderer → http_client 在 Electron 上下文带 `X-MailAgent-Local-Token` header（远程 web 仍走 CF JWT，不带本地 token）；② **flip `serveApiEnabled`**（`backend_lifecycle.ts:270`）为「本地 token 已生成即可起」（让没配 CF 的本地用户也起 serve-api 作写面）—— C2 放宽的 import 守卫 + 崩溃自拉起即其安全网；③ B1 的原子 UPSERT + JS/Py 契约 golden 是写收编回归网；④ events_bridge 接 `job.*` SSE（C1）。
+    - **D2**（读 wire 去重 + 最终验收 + 文档）：backfill builder 下沉 + 能力矩阵 100% 绿验收 + CLAUDE.md 文档地图 + `docs/claude/` 服务层架构文档 + 本看板归档。

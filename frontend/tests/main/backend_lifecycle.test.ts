@@ -111,41 +111,39 @@ interface FakeRes extends EventEmitter {
   destroy: ReturnType<typeof vi.fn>
 }
 
-const httpGetMock = vi.fn(
-  (_opts: unknown, cb?: (res: FakeRes) => void): FakeReq => {
-    const req = new EventEmitter() as FakeReq
-    req.destroy = vi.fn(() => {
-      // 真实 http: req.destroy() 触发 'error' (ECONNRESET-ish)。probeApiHealth 的
-      // timeout handler 调 req.destroy() 后靠这条 'error' 收敛成 false。
-      queueMicrotask(() => req.emit('error', new Error('socket destroyed')))
-    })
-    const scenario = httpHandler
-    if (scenario.kind === 'refused') {
-      // uvicorn 还没 bind → ECONNREFUSED 走 req 'error'。
-      queueMicrotask(() => req.emit('error', new Error('connect ECONNREFUSED 127.0.0.1:8200')))
-      return req
-    }
-    if (scenario.kind === 'timeout') {
-      // 不回 response, 模拟 socket timeout → probeApiHealth req.on('timeout') 触发。
-      queueMicrotask(() => req.emit('timeout'))
-      return req
-    }
-    // json 场景: 构造 fake response, 异步喂 data/end。
-    const res = new EventEmitter() as FakeRes
-    res.statusCode = scenario.statusCode
-    res.setEncoding = () => {}
-    res.resume = vi.fn()
-    res.destroy = vi.fn()
-    queueMicrotask(() => {
-      cb?.(res)
-      queueMicrotask(() => {
-        if (scenario.body) res.emit('data', scenario.body)
-        res.emit('end')
-      })
-    })
+const httpGetMock = vi.fn((_opts: unknown, cb?: (res: FakeRes) => void): FakeReq => {
+  const req = new EventEmitter() as FakeReq
+  req.destroy = vi.fn(() => {
+    // 真实 http: req.destroy() 触发 'error' (ECONNRESET-ish)。probeApiHealth 的
+    // timeout handler 调 req.destroy() 后靠这条 'error' 收敛成 false。
+    queueMicrotask(() => req.emit('error', new Error('socket destroyed')))
+  })
+  const scenario = httpHandler
+  if (scenario.kind === 'refused') {
+    // uvicorn 还没 bind → ECONNREFUSED 走 req 'error'。
+    queueMicrotask(() => req.emit('error', new Error('connect ECONNREFUSED 127.0.0.1:8200')))
     return req
   }
-)
+  if (scenario.kind === 'timeout') {
+    // 不回 response, 模拟 socket timeout → probeApiHealth req.on('timeout') 触发。
+    queueMicrotask(() => req.emit('timeout'))
+    return req
+  }
+  // json 场景: 构造 fake response, 异步喂 data/end。
+  const res = new EventEmitter() as FakeRes
+  res.statusCode = scenario.statusCode
+  res.setEncoding = () => {}
+  res.resume = vi.fn()
+  res.destroy = vi.fn()
+  queueMicrotask(() => {
+    cb?.(res)
+    queueMicrotask(() => {
+      if (scenario.body) res.emit('data', scenario.body)
+      res.emit('end')
+    })
+  })
+  return req
+})
 
 vi.mock('http', () => ({
   get: (opts: unknown, cb?: (res: FakeRes) => void) => httpGetMock(opts, cb)
@@ -497,7 +495,9 @@ describe('serve-api 软门控 — waitReady 只 gate serve (向后兼容硬约�
       apiProbe: vi.fn(async () => false)
     })
     mgr.start()
-    await vi.waitFor(() => expect(mgr.getServiceState('serve-api')).toBe('failed'), { timeout: 500 })
+    await vi.waitFor(() => expect(mgr.getServiceState('serve-api')).toBe('failed'), {
+      timeout: 500
+    })
     // serve 仍是 starting (SQLite 未就绪, 没 emit exit) → 不受 serve-api 软失败影响。
     expect(mgr.getServiceState('serve')).toBe('starting')
     expect(warnSpy).toHaveBeenCalled()
@@ -517,7 +517,9 @@ describe('serve-api 软门控 — waitReady 只 gate serve (向后兼容硬约�
     })
     mgr.start()
     // 等 serve-api 软失败定型。
-    await vi.waitFor(() => expect(mgr.getServiceState('serve-api')).toBe('failed'), { timeout: 500 })
+    await vi.waitFor(() => expect(mgr.getServiceState('serve-api')).toBe('failed'), {
+      timeout: 500
+    })
     // serve 没 emit exit → 仍 starting → 聚合恒 starting (serve 门控未定型, serve-api 软态不抢占)。
     expect(mgr.getServiceState('serve')).toBe('starting')
     expect(mgr.getState()).toBe('starting')
@@ -645,7 +647,9 @@ describe('pipe drain — spawn 后消费 stdout/stderr (防 event loop 背压死
     mgr.start()
     // 抓 serve 那条 stream (createWriteStream 最近一次返回的 fake)。
     const streamResults = vi.mocked(createWriteStream).mock.results
-    const lastStream = streamResults[streamResults.length - 1].value as { end: ReturnType<typeof vi.fn> }
+    const lastStream = streamResults[streamResults.length - 1].value as {
+      end: ReturnType<typeof vi.fn>
+    }
     const serveChild = childFor('serve')
     const stopP = mgr.stop()
     serveChild.emit('exit', 0, null)
@@ -672,6 +676,20 @@ describe('serve-api env 注入 — MAILAGENT_DATA_ROOT / CF_* / MAILAGENT_SPA_DI
       // 库/附件 + 日志错锚。serve 与 serve-api 必须都注入。
       expect(env.MAILAGENT_DATA_ROOT).toBe('/fake/DATA_ROOT')
     }
+  })
+
+  test('C2: serve + serve-api 两进程都注入 MAILAGENT_LOCAL_API_TOKEN (同一非空 token)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    const serveEnv = spawnCalls.find((c) => c.args[0] === 'serve')!.opts.env as NodeJS.ProcessEnv
+    const apiEnv = spawnCalls.find((c) => c.args[0] === 'serve-api')!.opts.env as NodeJS.ProcessEnv
+    // 9200 SSE 门 (serve) + 8200 dual-auth 本地腿 (serve-api) 都靠它 → 两进程必须同值非空。
+    expect(serveEnv.MAILAGENT_LOCAL_API_TOKEN).toBeTruthy()
+    expect(serveEnv.MAILAGENT_LOCAL_API_TOKEN).toBe(apiEnv.MAILAGENT_LOCAL_API_TOKEN)
+    // 256-bit hex (randomBytes(32).toString('hex') = 64 hex chars)。
+    expect(serveEnv.MAILAGENT_LOCAL_API_TOKEN).toMatch(/^[0-9a-f]{64}$/)
   })
 
   test('serve-api 注入 CF_AUDIENCE / CF_TEAM_DOMAIN / MAILAGENT_API_ALLOWED_EMAIL (从 process.env 透传)', () => {
@@ -842,5 +860,116 @@ describe('probeApiHealth — HTTP GET /api/health 三态 (Node http.get mock)', 
   test('socket timeout → false (req.destroy 收敛)', async () => {
     httpHandler = { kind: 'timeout' }
     await expect(probeApiHealth(8200)).resolves.toBe(false)
+  })
+})
+
+// ===========================================================================
+// C2 — serve-api 崩溃自拉起 (指数退避 re-spawn + crash-loop 断路器)
+// ===========================================================================
+
+describe('serve-api 崩溃自拉起 — 退避 re-spawn + 断路器', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  function enableGate() {
+    delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
+    process.env.CF_AUDIENCE = 'aud-test-tag'
+  }
+  const apiCount = () => spawnCalls.filter((c) => c.args[0] === 'serve-api').length
+
+  test('serve-api 崩溃 (emit exit, 非 stop) → 退避后自动 re-spawn', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 5
+    })
+    mgr.start()
+    expect(apiCount()).toBe(1)
+    childFor('serve-api').emit('exit', 1, null) // 崩溃 (非 stop)
+    await vi.waitFor(() => expect(apiCount()).toBe(2), { timeout: 500 })
+  })
+
+  test('serve 崩溃不自拉起 (只 serve-api 有自拉起, serve 由 waitReady 门控兜底)', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 5
+    })
+    mgr.start()
+    childFor('serve').emit('exit', 1, null)
+    await sleep(30) // 给足退避窗口
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve')).toHaveLength(1) // 未 re-spawn
+    expect(mgr.getServiceState('serve')).toBe('failed')
+  })
+
+  test('断路器: 连续崩溃达上限 (maxCrashRestarts) 后停止自拉起 (不无限重启)', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 2
+    })
+    mgr.start() // spawn #1
+    // crash #1 → re-spawn #2
+    childFor('serve-api').emit('exit', 1, null)
+    await vi.waitFor(() => expect(apiCount()).toBe(2), { timeout: 500 })
+    // crash #2 → re-spawn #3
+    childFor('serve-api').emit('exit', 1, null)
+    await vi.waitFor(() => expect(apiCount()).toBe(3), { timeout: 500 })
+    // crash #3 → 断路器打开, 不再 re-spawn
+    childFor('serve-api').emit('exit', 1, null)
+    await sleep(40)
+    expect(apiCount()).toBe(3) // 无 #4
+  })
+
+  test('崩溃后 ready → 计数清零 (再崩仍有完整退避额度, 不被旧计数提前断路)', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    // re-spawn #2 起 apiProbe 转 true → waitApiReady 标 ready + 清零 restartAttempts。
+    const apiProbe = vi.fn(async () => apiCount() >= 2)
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 300,
+      apiProbe,
+      crashBackoffMs: [5],
+      maxCrashRestarts: 1 // 若计数不清零, crash#2 必被断路 (attempts 1>=1)
+    })
+    mgr.start() // #1
+    childFor('serve-api').emit('exit', 1, null) // crash#1 → re-spawn #2 (attempts 0→1)
+    await vi.waitFor(() => expect(apiCount()).toBe(2), { timeout: 500 })
+    await vi.waitFor(() => expect(mgr.getServiceState('serve-api')).toBe('ready'), { timeout: 500 }) // 清零
+    childFor('serve-api').emit('exit', 1, null) // crash#2 (清零后 attempts 0→1) → re-spawn #3
+    await vi.waitFor(() => expect(apiCount()).toBe(3), { timeout: 500 })
+  })
+
+  test('stop() 取消退避中的 pending re-spawn (停掉后不再拉起)', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager({
+      stopGraceMs: 1000,
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [50], // 较长退避, 留出 stop() 抢先清 timer 的窗口
+      maxCrashRestarts: 5
+    })
+    mgr.start()
+    const serveChild = childFor('serve')
+    childFor('serve-api').emit('exit', 1, null) // 崩溃 → 排了一个 50ms 后的 re-spawn
+    const stopP = mgr.stop() // 退避未到即 stop → 应清掉 restartTimer
+    serveChild.emit('exit', 0, null) // serve 优雅退出让 stop 收敛
+    await stopP
+    await sleep(80) // 越过退避窗口
+    expect(apiCount()).toBe(1) // 无第二次 serve-api spawn
   })
 })

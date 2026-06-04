@@ -44,6 +44,7 @@ import Database from 'better-sqlite3'
 
 import { getMailagentBin } from './cli_runner'
 import { resolveDataRoot, resolveDbPath } from './db'
+import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 
 // ---------------------------------------------------------------------------
 // DB 就绪判据 (复用 admin.py:193 health 逻辑, 但直读不走 CLI fork)
@@ -226,6 +227,10 @@ export interface LifecycleOptions {
   apiReadyTimeoutMs?: number
   /** serve-api 就绪探针 (可注入便于单测; 默认 probeApiHealth → 真实 HTTP GET /api/health)。 */
   apiProbe?: (port: number) => Promise<boolean>
+  /** serve-api 崩溃自拉起退避梯度 (ms, 可注入便于单测; 默认 CRASH_RESTART_BACKOFF_MS)。 */
+  crashBackoffMs?: number[]
+  /** crash-loop 断路器上限: 连续崩溃达此数 (中间无一次 ready) → 放弃自拉起 (可注入; 默认 MAX_CRASH_RESTARTS)。 */
+  maxCrashRestarts?: number
 }
 
 export type BackendState = 'idle' | 'starting' | 'ready' | 'stopped' | 'failed'
@@ -244,6 +249,11 @@ interface ManagedService {
   child: ChildProcess | null
   /** 每 service 独立状态 (getState() 聚合成单个 BackendState 不破坏调用方)。 */
   state: BackendState
+  /** C2 崩溃自拉起 — 连续 crash 计数 (waitApiReady 标 ready 后清零; 达 maxCrashRestarts
+   *  触发断路器停止重启)。仅 serve-api 用。 */
+  restartAttempts: number
+  /** C2 崩溃自拉起 — 退避中的 re-spawn 定时器 (stop/restartService 时清, 防多余重启)。 */
+  restartTimer: NodeJS.Timeout | null
   /** 该 service 是否 spawn (serve 恒 true; serve-api 由 env gate)。 */
   readonly enabled: () => boolean
   /** 抽干该 service stdout/stderr 的落盘流 (防 pipe 背压死锁, 见 attachLogDrain)。
@@ -307,6 +317,8 @@ export class BackendLifecycleManager {
       args: ['serve'],
       child: null,
       state: 'idle',
+      restartAttempts: 0,
+      restartTimer: null,
       enabled: () => true,
       logStream: null,
       logFile: 'backend-process.log'
@@ -316,6 +328,8 @@ export class BackendLifecycleManager {
       args: ['serve-api'],
       child: null,
       state: 'idle',
+      restartAttempts: 0,
+      restartTimer: null,
       enabled: serveApiEnabled,
       logStream: null,
       logFile: 'api-process.log'
@@ -326,6 +340,8 @@ export class BackendLifecycleManager {
   private readonly stopGraceMs: number
   private readonly apiReadyTimeoutMs: number
   private readonly apiProbe: (port: number) => Promise<boolean>
+  private readonly crashBackoffMs: number[]
+  private readonly maxCrashRestarts: number
 
   constructor(opts: LifecycleOptions = {}) {
     this.pollIntervalMs = opts.pollIntervalMs ?? 500
@@ -334,6 +350,8 @@ export class BackendLifecycleManager {
     // serve-api 软门控: uvicorn import 远快于大库迁移, 默认 min(readyTimeout, 30s) 上限。
     this.apiReadyTimeoutMs = opts.apiReadyTimeoutMs ?? Math.min(this.readyTimeoutMs, 30_000)
     this.apiProbe = opts.apiProbe ?? probeApiHealth
+    this.crashBackoffMs = opts.crashBackoffMs ?? CRASH_RESTART_BACKOFF_MS
+    this.maxCrashRestarts = opts.maxCrashRestarts ?? MAX_CRASH_RESTARTS
   }
 
   /**
@@ -409,7 +427,11 @@ export class BackendLifecycleManager {
       MAILAGENT_PROJECT_ROOT: dataRoot,
       MAILAGENT_DATA_ROOT: dataRoot,
       MAILAGENT_ENV_FILE: join(dataRoot, '.env'),
-      SYNC_STORE_DB_PATH: resolveDbPath()
+      SYNC_STORE_DB_PATH: resolveDbPath(),
+      // C2 双层鉴权: per-session 本地 token 注入 serve (9200 SSE 门) + serve-api (8200
+      // dual-auth 本地腿)。同一单例也供 events_bridge 带 header → 两端同值。getLocalApiToken
+      // 首次取用即 randomBytes 生成, 进程级常驻。
+      [LOCAL_TOKEN_ENV]: getLocalApiToken()
     }
   }
 
@@ -433,6 +455,10 @@ export class BackendLifecycleManager {
       if (svc.state !== 'stopped') {
         svc.state = 'failed'
         console.error(`[backend_lifecycle] ${svc.name} exited code=${code} signal=${signal}`)
+        svc.child = null
+        // C2: serve-api 崩溃自拉起 (指数退避 + crash-loop 断路器)。其它 service / 主动 stop 不触发。
+        this.maybeRestartAfterCrash(svc)
+        return
       }
       svc.child = null
     })
@@ -444,6 +470,40 @@ export class BackendLifecycleManager {
     if (svc.name === 'serve-api') {
       void this.waitApiReady(svc)
     }
+  }
+
+  /**
+   * C2 — serve-api 崩溃自拉起 (指数退避 + crash-loop 断路器)。仅 serve-api: 它是远程写面,
+   * 崩了不该静默无人拉 (serve 崩由 waitReady 门控兜底降级, 不在此列)。dev 模式不接管。
+   *
+   * 断路器: 连续崩溃 (中间无一次就绪) 达 maxCrashRestarts → 放弃自拉起, 停在 failed —
+   * 防 import 期必崩的配置错误 (坏依赖等) 把 CPU 烧穿。waitApiReady 标 ready 时清零计数,
+   * 故「崩→恢复→再崩」每次都有完整退避额度, 只有持续崩才触发断路器。
+   * gate 关 (enabled()=false, 如 CF_AUDIENCE 被清空) 也不重启 (留在 failed)。
+   */
+  private maybeRestartAfterCrash(svc: ManagedService): void {
+    if (svc.name !== 'serve-api') return
+    if (!this.safeIsPackaged()) return
+    if (!svc.enabled()) return // gate 关 → 不自拉起
+    if (svc.restartAttempts >= this.maxCrashRestarts) {
+      console.error(
+        `[backend_lifecycle] serve-api 连续崩溃 ${svc.restartAttempts} 次 (断路器打开), 停止自拉起。` +
+          ' 检查 .env (CF_AUDIENCE / 依赖) 后手动 restart。远程访问暂不可用, 本地 Electron 不受影响。'
+      )
+      return
+    }
+    const idx = Math.min(svc.restartAttempts, this.crashBackoffMs.length - 1)
+    const delayMs = this.crashBackoffMs[idx]
+    svc.restartAttempts += 1
+    if (svc.restartTimer) clearTimeout(svc.restartTimer)
+    svc.restartTimer = setTimeout(() => {
+      svc.restartTimer = null
+      // 退避期间被 stop() (state=stopped) 或已被别的路径拉起 → 不重复 spawn。
+      if (svc.state === 'stopped') return
+      if (svc.child) return
+      const dataRoot = resolveDataRoot()
+      this.spawnService(svc, this.buildBaseEnv(dataRoot), dataRoot)
+    }, delayMs)
   }
 
   /**
@@ -538,7 +598,10 @@ export class BackendLifecycleManager {
       const ok = await this.apiProbe(port)
       if (ok) {
         // 仅当未被 stop()/崩溃抢先改状态时才标 ready (避免 clobber stopped/failed)。
-        if (svc.state === 'starting') svc.state = 'ready'
+        if (svc.state === 'starting') {
+          svc.state = 'ready'
+          svc.restartAttempts = 0 // C2: 一次成功就绪 → 清零崩溃计数 (断路器复位)
+        }
         return
       }
       if (Date.now() >= deadline) {
@@ -617,6 +680,7 @@ export class BackendLifecycleManager {
     if (!svc) return
     await this.stopService(svc)
     if (!svc.enabled()) return // gate 关 (开关 off / CF_AUDIENCE 空) → 停了就不再起
+    svc.restartAttempts = 0 // C2: 手动重启 = 一次干净起步, 复位崩溃自拉起断路器计数。
     const dataRoot = resolveDataRoot()
     this.spawnService(svc, this.buildBaseEnv(dataRoot), dataRoot)
   }
@@ -631,6 +695,11 @@ export class BackendLifecycleManager {
 
   /** 停单个 service (SIGTERM → grace → SIGKILL → 等真正 exit)。逐 service 复用 codex #3/#4 教训。 */
   private async stopService(svc: ManagedService): Promise<void> {
+    // C2: 取消退避中的崩溃自拉起定时器 (主动 stop 优先于自拉起, 防停掉后又被拉起)。
+    if (svc.restartTimer) {
+      clearTimeout(svc.restartTimer)
+      svc.restartTimer = null
+    }
     const child = svc.child
     if (!child || child.killed) {
       svc.state = 'stopped'
@@ -675,6 +744,11 @@ export class BackendLifecycleManager {
 /** SIGKILL 后等待进程真正 exit 的硬上限 (codex #3): 防极端僵死 (uninterruptible
  *  syscall) 让 stop() 永久 hang。正常 SIGKILL 内核毫秒级回收, 远不到此上限。 */
 const SIGKILL_WAIT_MS = 2000
+
+/** C2 serve-api 崩溃自拉起退避梯度 (ms, 仿 events_bridge BACKOFF_MS): 1s→2s→5s→10s→30s 封顶。 */
+const CRASH_RESTART_BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000]
+/** C2 crash-loop 断路器上限: 连续崩溃 (中间无一次 ready) 达此数 → 放弃自拉起 (防必崩配置烧 CPU)。 */
+const MAX_CRASH_RESTARTS = 5
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

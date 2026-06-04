@@ -23,6 +23,8 @@
 
 import { app, BrowserWindow, ipcMain } from 'electron'
 
+import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
+
 // ---- types --------------------------------------------------------------
 
 export type EventsConnectionState =
@@ -144,7 +146,10 @@ async function streamLoop(myAttemptId: number): Promise<void> {
       method: 'GET',
       headers: {
         Accept: 'text/event-stream',
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-cache',
+        // C2: 本地 token 鉴权 — 9200 SSE 配了 token 时要求此 header (sse_server._local_token_ok)。
+        // 同机非 Electron 进程读不到流。dev/pm2 serve 未注入 token → 后端门关, 此 header 被忽略。
+        [LOCAL_TOKEN_HEADER]: getLocalApiToken()
       },
       signal: _abortController.signal
     })

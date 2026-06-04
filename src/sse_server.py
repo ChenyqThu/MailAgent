@@ -19,7 +19,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import hmac
+import os
 import time
 from typing import Any, Dict, Optional
 
@@ -55,6 +56,21 @@ if not getattr(_aiohttp_web_protocol.tcp_keepalive, "_mailagent_safe", False):
 SSE_CHANNEL = "mailagent:events:v1"
 SSE_HEARTBEAT_SEC = 15
 
+# C2 — SSE 9200 本地 token 门 (补鉴权)。9200 仅 loopback, 但同机任意进程都能读这条流 →
+# 泄漏 internal_id + 操作时序。配了 token 时要求 X-MailAgent-Local-Token header 匹配; 未配
+# (dev / pm2 serve 无注入) → 门关 (向后兼容)。当前 9200 未经 cloudflared 暴露 (仅本地 Electron
+# main 连), 故只做本地 token 校验; 若将来 tunnel 暴露远程, 由 CF Access 在隧道层覆盖 9200。
+LOCAL_TOKEN_HEADER = "X-MailAgent-Local-Token"  # 🔴 必须与 src/api/auth.py + local_token.ts 一致
+_LOCAL_API_TOKEN = os.environ.get("MAILAGENT_LOCAL_API_TOKEN", "").strip()
+
+
+def _local_token_ok(request: web.Request) -> bool:
+    """SSE 本地 token 鉴权: 未配 token → 放行 (门关); 配了 → header 必须 compare_digest 匹配。"""
+    if not _LOCAL_API_TOKEN:
+        return True
+    provided = request.headers.get(LOCAL_TOKEN_HEADER, "")
+    return bool(provided) and hmac.compare_digest(provided, _LOCAL_API_TOKEN)
+
 # Module-level 状态, 给 /api/events/health 用
 _state: Dict[str, Any] = {
     "subscriber_count": 0,
@@ -78,8 +94,13 @@ async def _stream_events(request: web.Request) -> web.StreamResponse:
     心跳: 每 SSE_HEARTBEAT_SEC 秒发 `event: ping` 防代理空闲断连
           (cloudflare 默认 100s, 内网代理通常 30-60s).
     断连: client close → asyncio.CancelledError; redis 失联 → 500 + log.
-    无鉴权: 仅绑定 127.0.0.1, 不暴露公网 (远端 cloudflared 自己加 token).
+    鉴权 (C2): 配了 MAILAGENT_LOCAL_API_TOKEN 时要求 X-MailAgent-Local-Token header 匹配
+          (同机非 Electron 进程读不到流); 未配 → 门关 (向后兼容)。绑定 127.0.0.1 不暴露公网。
     """
+    # C2 本地 token 门: 未配 token 放行; 配了则 header 必须匹配。早返回 401, 不触 redis/streaming。
+    if not _local_token_ok(request):
+        return web.json_response({"error": "unauthorized"}, status=401)
+
     redis_url = _get_redis_url()
     if not redis_url:
         return web.json_response(

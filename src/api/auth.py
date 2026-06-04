@@ -29,6 +29,7 @@ dev bypass (仅本地 dev:web 用): MAILAGENT_API_AUTH_DISABLED=true 时整层�
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 
@@ -55,6 +56,15 @@ _DEV_CONTEXT = os.environ.get("MAILAGENT_API_DEV", "").lower() == "true"
 # 留空则回退到 config.user_email (= USER_EMAIL)。解析见 _resolve_allowed_email。
 ALLOWED_EMAIL_OVERRIDE = os.environ.get("MAILAGENT_API_ALLOWED_EMAIL", "").strip()
 
+# C2 双层鉴权第二条腿 — 本地 per-session ephemeral token。
+# 同机 Electron 客户端 (主进程 events_bridge→9200 SSE; D1 起 renderer→8200 写) 用自定义
+# header X-MailAgent-Local-Token 携带, 由 Electron 主进程 crypto.randomBytes 每会话生成,
+# 经 env MAILAGENT_LOCAL_API_TOKEN 注入本进程 (见 frontend local_token.ts + backend_lifecycle)。
+# loopback ≠ 安全: 同机任意进程都能打 127.0.0.1:8200, 自定义 header 天然抗 CSRF (浏览器无法
+# 伪造 + CORS 白名单只放 mail.chenge.ink)。空 = 未配置 (远程-only / dev), 此腿停用回落 CF JWT。
+LOCAL_TOKEN_HEADER = "X-MailAgent-Local-Token"  # 🔴 必须与 src/sse_server.py + local_token.ts 一致
+_LOCAL_API_TOKEN = os.environ.get("MAILAGENT_LOCAL_API_TOKEN", "").strip()
+
 # codex C2: auth-disable **仅 dev 允许**。设了 AUTH_DISABLED 却无明确 dev 上下文
 # (MAILAGENT_API_DEV != true) → 极可能是生产误配把整层鉴权敞开，启动即 RuntimeError
 # 拒绝起服务，逼操作者要么撤掉 bypass、要么显式声明这是 dev。
@@ -68,14 +78,16 @@ if AUTH_DISABLED and not _DEV_CONTEXT:
         "(REMOTE-ACCESS §6.3 — never ship with JWT verification disabled)."
     )
 
-# fail-fast: 鉴权开启 (生产) 却漏配 CF_AUDIENCE → 每个 jwt.decode 都会因 audience 不匹配
-# 静默 403，全员被锁在外且难诊断。启动即 RuntimeError 退出，逼配置补齐。dev bypass 下
-# 不校验 (本地无 CF Access)。
-if not AUTH_DISABLED and not CF_AUDIENCE:
+# fail-fast: 鉴权开启 (生产) 却**一种鉴权方式都没配** → 整层敞开或全员被锁在外且难诊断。
+# C2 起判据从「必须有 CF_AUDIENCE」放宽为「至少一种鉴权方式」: CF_AUDIENCE (远程 CF Access)
+# 或 _LOCAL_API_TOKEN (同机 ephemeral token, 让没配 Cloudflare 的本地 Electron 也能用 daemon
+# 写面)。两者都空才 fail-closed 退出。dev bypass 下不校验 (本地无 CF Access)。
+if not AUTH_DISABLED and not CF_AUDIENCE and not _LOCAL_API_TOKEN:
     raise RuntimeError(
-        "CF_AUDIENCE is empty but MAILAGENT_API_AUTH_DISABLED is not 'true'. "
-        "Set CF_AUDIENCE (CF Zero Trust application audience tag) or, for local dev, "
-        "set MAILAGENT_API_AUTH_DISABLED=true (REMOTE-ACCESS §6.3)."
+        "No auth method configured: set CF_AUDIENCE (CF Zero Trust application audience "
+        "tag, for remote CF Access) and/or MAILAGENT_LOCAL_API_TOKEN (same-machine "
+        "ephemeral token) — or, for local dev, set MAILAGENT_API_AUTH_DISABLED=true "
+        "(REMOTE-ACCESS §6.3)."
     )
 
 # 1) lazy + cache by kid + 自动 refresh on unknown key (CF key rotation 友好)
@@ -126,9 +138,20 @@ async def verify_cf_access(request: Request) -> None:
 
     dev bypass: AUTH_DISABLED 时直接放行，user_email = "dev@localhost" (仅 dev，
     模块加载期已强制 MAILAGENT_API_DEV=true，见顶部 C2 守卫)。
+
+    C2 双层鉴权: 远程 CF JWT 逻辑**一字不改** (下方); 仅在其之前加一条本地 token 腿 ——
+    配了 _LOCAL_API_TOKEN 且 X-MailAgent-Local-Token header 匹配 (compare_digest 防时序
+    侧信道) → 放行本地身份。未配 token / 不匹配 → 跳过, 回落 CF JWT (fail-closed: 都没有→401)。
     """
     if AUTH_DISABLED:
         request.state.user_email = "dev@localhost"
+        return
+
+    # --- 本地 ephemeral token 腿 (同机 Electron/renderer) ---------------------
+    local_tok = request.headers.get(LOCAL_TOKEN_HEADER)
+    if _LOCAL_API_TOKEN and local_tok and hmac.compare_digest(local_tok, _LOCAL_API_TOKEN):
+        # 本地身份 = 配置的 allowed email (USER_EMAIL); 解析不出则回落同机 sentinel。
+        request.state.user_email = _resolve_allowed_email() or "local@127.0.0.1"
         return
 
     token = request.headers.get("Cf-Access-Jwt-Assertion")
