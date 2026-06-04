@@ -181,9 +181,11 @@ beforeEach(() => {
   // describe 内 enableGate() (删 MAILAGENT_REMOTE_ACCESS_ENABLED + 设 CF_AUDIENCE)。
   process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
   delete process.env.MAILAGENT_API_PORT
-  // 🔴 serveApiEnabled() 现在要求 CF_AUDIENCE 非空 (risk #2: 缺它 serve-api auth.py
-  // import 期 raise → crash-loop)。默认清空 → 即便 flag 开, gate 也不放行, 直到测试
-  // 显式 enableGate() 提供 CF_AUDIENCE。serve-api env 注入断言也据此设全套 CF env。
+  // D1: serveApiEnabled() 只看 MAILAGENT_REMOTE_ACCESS_ENABLED (serve-api 是 Electron
+  // 本地写面, 本地 token 恒可用, 不再要求 CF_AUDIENCE)。beforeEach 设 flag='false' → gate
+  // off, 既有单测走 serve-only 向后兼容 lane; 多 service 测试在 describe 内 enableGate()
+  // (删 flag → serveApiEnabled true)。CF_AUDIENCE 仅影响 serveApiEnv 透传 (远程 CF 腿) +
+  // 相关 env 注入断言, 不再 gate spawn。
   delete process.env.CF_AUDIENCE
   delete process.env.CF_TEAM_DOMAIN
   delete process.env.MAILAGENT_API_ALLOWED_EMAIL
@@ -738,29 +740,29 @@ describe('serve-api env 注入 — MAILAGENT_DATA_ROOT / CF_* / MAILAGENT_SPA_DI
   })
 })
 
-describe('serve-api 软 gate — CF_AUDIENCE 前置 (risk #2: 缺它 auth.py import 期崩)', () => {
-  test('flag 开但 CF_AUDIENCE 空 → 软门控不 spawn serve-api (只 serve), 不 crash-loop', () => {
+describe('serve-api gate — D1 flip (本地写面: flag 开即起, CF_AUDIENCE 不再前置)', () => {
+  test('flag 开 + CF_AUDIENCE 空 (纯本地装机) → 仍 spawn serve-api (本地写面)', () => {
     appMock.isPackaged = true
-    // 开关开 (默认) 但没配 CF_AUDIENCE — 99% 新装用户的初始态。
+    // 99% 新装用户初始态: 远程访问开关默认开, 没配 CF。D1 起 serve-api 是 Electron 写面,
+    // 必须起 (C2 已放宽 auth.py import 守卫为「≥1 鉴权方式」, 本地 token 即可起, 不 crash)。
     delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
     delete process.env.CF_AUDIENCE
     const mgr = new BackendLifecycleManager(fastApiOpts())
     mgr.start()
-    // 只 spawn serve; serve-api 静默不起 (避免 auth.py raise → failed 误报)。
-    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(0)
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(1)
     expect(spawnCalls.filter((c) => c.args[0] === 'serve')).toHaveLength(1)
   })
 
-  test('flag 开但 CF_AUDIENCE 全空白 (trim 后空) → 仍不 spawn serve-api', () => {
+  test('flag 开 + CF_AUDIENCE 全空白 → 仍 spawn (CF_AUDIENCE 值不再 gate spawn)', () => {
     appMock.isPackaged = true
     delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
     process.env.CF_AUDIENCE = '   '
     const mgr = new BackendLifecycleManager(fastApiOpts())
     mgr.start()
-    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(0)
+    expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(1)
   })
 
-  test('flag 开 + CF_AUDIENCE 已配 → spawn serve-api', () => {
+  test('flag 开 + CF_AUDIENCE 已配 → spawn serve-api (远程经 cloudflared 亦可达)', () => {
     appMock.isPackaged = true
     delete process.env.MAILAGENT_REMOTE_ACCESS_ENABLED
     process.env.CF_AUDIENCE = 'aud-real-tag'
@@ -769,7 +771,7 @@ describe('serve-api 软 gate — CF_AUDIENCE 前置 (risk #2: 缺它 auth.py imp
     expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(1)
   })
 
-  test('flag=false 即便 CF_AUDIENCE 已配 → 仍不 spawn serve-api (显式关优先)', () => {
+  test('flag=false → 不 spawn serve-api (显式关优先, 即便 CF_AUDIENCE 已配)', () => {
     appMock.isPackaged = true
     process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
     process.env.CF_AUDIENCE = 'aud-real-tag'
@@ -804,14 +806,14 @@ describe('restartService — 单独重启 serve-api 不动 serve (Settings 改�
     expect(spawnCalls.filter((c) => c.args[0] === 'serve-api')).toHaveLength(2) // 首启 + restart
   })
 
-  test('restartService(serve-api) 在 CF_AUDIENCE 被清空后 → 停了不再 spawn (gate 重读)', async () => {
+  test('restartService(serve-api) 在远程访问开关被关 (flag=false) 后 → 停了不再 spawn (gate 重读)', async () => {
     appMock.isPackaged = true
     enableGate()
     const mgr = new BackendLifecycleManager({ stopGraceMs: 1000, ...fastApiOpts() })
     mgr.start()
     const apiChild0 = childFor('serve-api')
-    // 模拟 Settings 关掉远程访问 (清 CF_AUDIENCE) 后重启 serve-api。
-    delete process.env.CF_AUDIENCE
+    // 模拟 Settings 关掉远程访问开关后重启 serve-api (D1: gate 只看此开关, 不看 CF_AUDIENCE)。
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
     const p = mgr.restartService('serve-api')
     apiChild0.emit('exit', 0, null)
     await p

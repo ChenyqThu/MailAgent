@@ -265,22 +265,21 @@ interface ManagedService {
 }
 
 /**
- * serve-api 是否启用 (软 gate)。两条必须**同时**成立才 spawn:
- *   1. `MAILAGENT_REMOTE_ACCESS_ENABLED !== 'false'` —— 远程访问开关默认**开**
- *      (打包即远程能力就位, bind loopback 零攻击面), 显式 ='false' 才关。
- *   2. `CF_AUDIENCE` 非空 —— 🔴 致命前置 (spec risk #2): serve-api 的 auth.py 在
- *      **模块 import 期** `if not AUTH_DISABLED and not CF_AUDIENCE: raise RuntimeError`,
- *      CF_AUDIENCE 空则进程一启动就 crash → on('exit') 标 failed → waitApiReady warn。
- *      默认开 flag + 默认空 CF_AUDIENCE 是矛盾的: 99% 新装用户没填 CF 就会看到
- *      serve-api failed 告警。故未配 Cloudflare 时**静默不起** (软门控降级), 不 crash-loop;
- *      Settings 填好 CF_AUDIENCE + restart 后该判据转真, serve-api 才被 spawn。
+ * serve-api 是否启用 (软 gate)。D1 起 serve-api 是 **Electron 本地写面** (write_ops /
+ * draft / chat 写工具经 daemon_api 转发到它), 不再只是远程访问后端 —— 故纯本地装机 (无
+ * CF_AUDIENCE) 也必须起。唯一关掉条件 = 显式 `MAILAGENT_REMOTE_ACCESS_ENABLED='false'`。
  *
- * (CF_AUDIENCE 经 index.ts bootstrapDotenv 从 app .env 注入 process.env, 这里直读。)
+ * 历史 (C2 及之前): 曾额外要求 `CF_AUDIENCE` 非空才 spawn —— 因 serve-api 的 auth.py
+ * 在**模块 import 期** `if not AUTH_DISABLED and not CF_AUDIENCE: raise` 会 crash。
+ * C2 已把该守卫放宽为「≥1 鉴权方式」(CF_AUDIENCE 或 MAILAGENT_LOCAL_API_TOKEN 任一即可),
+ * 而本地 token 恒由 buildBaseEnv 注入 → 无 CF 也不再 crash。配合 C2 的崩溃自拉起 + 断路器
+ * (maybeRestartAfterCrash), 此 flip 安全。CF_AUDIENCE 现仅决定「远程 (cloudflared) 是否
+ * 可达」(serveApiEnv 透传它给远程 CF 腿), 不再是 serve-api 启动的前提。
+ *
+ * (env 经 index.ts bootstrapDotenv 从 app .env 注入 process.env, 这里直读。)
  */
 function serveApiEnabled(): boolean {
-  if (process.env.MAILAGENT_REMOTE_ACCESS_ENABLED === 'false') return false
-  const cfAudience = process.env.CF_AUDIENCE
-  return cfAudience != null && cfAudience.trim().length > 0
+  return process.env.MAILAGENT_REMOTE_ACCESS_ENABLED !== 'false'
 }
 
 /** serve-api uvicorn 端口 (env MAILAGENT_API_PORT, 默认 DEFAULT_API_PORT)。 */

@@ -1,83 +1,63 @@
-// Compose — `email draft|send` argv builder + opts validation.
+// Compose — daemon forwarder + opts validation (D1: 收编本机 serve-api in-process)。
 //
-// Locks in the CLI contract the renderer depends on:
-//   - composeArgs() exact argv shape per mode / recipients / subject / dry-run
-//   - --yes is only appended for the send verb (via withYes)
-//   - empty recipient arrays are NOT passed (CLI keeps derived recipients)
-//   - validateComposeOpts rejects bad internalId / mode before forking
+// 旧契约测 composeArgs 的 CLI argv 形状; D1 起 compose 经 daemonRequest 转发本机
+// serve-api (bodyHtml 直进 JSON body, 无临时文件), 故改测:
+//   - runComposeDraft/runComposeSend/runDraftPlan 的 method/path/body
+//     (mirror HttpApi.email.draft/.send/.draftPlan)
+//   - validateComposeOpts 仍守 internalId / mode (转发前早校验)
 
-import { describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+
+const { mockDaemonRequest } = vi.hoisted(() => ({ mockDaemonRequest: vi.fn() }))
+
+vi.mock('../../src/electron/main/daemon_api', () => ({
+  daemonRequest: mockDaemonRequest
+}))
 
 import { __testing } from '../../src/electron/main/handlers/draft'
 import type { ComposeDraftOpts } from '@shared/api/types'
 
-const { composeArgs, validateComposeOpts } = __testing
+const { validateComposeOpts, runComposeDraft, runComposeSend, runDraftPlan } = __testing
 
-describe('composeArgs — argv shape', () => {
-  test('minimal reply = ["email","draft","<id>","--mode","reply"]', () => {
-    expect(composeArgs('draft', { internalId: 53675, mode: 'reply' })).toEqual([
-      'email',
-      'draft',
-      '53675',
-      '--mode',
-      'reply'
-    ])
-  })
+beforeEach(() => {
+  mockDaemonRequest.mockReset()
+  mockDaemonRequest.mockResolvedValue({ ok: 'stub' })
+})
 
-  test('reply-all with to/cc/bcc joins arrays with commas', () => {
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('compose forwarders — daemon path/body (mock daemonRequest)', () => {
+  test('draft → POST /email/draft, body = full ComposeDraftOpts (bodyHtml inline, no temp file)', async () => {
     const opts: ComposeDraftOpts = {
-      internalId: 1,
+      internalId: 53675,
       mode: 'reply-all',
       to: ['a@b.com', 'c@d.com'],
       cc: ['e@f.com'],
-      bcc: ['g@h.com']
+      subject: 'Re: x',
+      bodyHtml: '<p>hi</p>'
     }
-    expect(composeArgs('draft', opts)).toEqual([
-      'email',
-      'draft',
-      '1',
-      '--mode',
-      'reply-all',
-      '--to',
-      'a@b.com,c@d.com',
-      '--cc',
-      'e@f.com',
-      '--bcc',
-      'g@h.com'
-    ])
+    await runComposeDraft(opts)
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/draft', { body: opts })
   })
 
-  test('empty recipient arrays are not passed', () => {
-    const args = composeArgs('draft', { internalId: 1, mode: 'reply', to: [], cc: [] })
-    expect(args).not.toContain('--to')
-    expect(args).not.toContain('--cc')
-    expect(args).not.toContain('--bcc')
+  test('send → POST /email/send, body = opts (no --yes; server forces confirmed)', async () => {
+    const opts: ComposeDraftOpts = {
+      internalId: 1,
+      mode: 'forward',
+      to: ['x@y.z'],
+      bodyHtml: '<p>fwd</p>'
+    }
+    await runComposeSend(opts)
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/send', { body: opts })
   })
 
-  test('subject (incl. empty string) is forwarded verbatim', () => {
-    const args = composeArgs('draft', { internalId: 1, mode: 'reply', subject: 'Re: x' })
-    expect(args[args.indexOf('--subject') + 1]).toBe('Re: x')
-    // empty string still overrides the Re:/Fwd: auto-prefix → must be passed
-    const empty = composeArgs('draft', { internalId: 1, mode: 'reply', subject: '' })
-    expect(empty).toContain('--subject')
-    expect(empty[empty.indexOf('--subject') + 1]).toBe('')
-  })
-
-  test('dry-run appends --dry-run', () => {
-    const args = composeArgs('draft', { internalId: 1, mode: 'forward' }, { dryRun: true })
-    expect(args).toContain('--dry-run')
-  })
-
-  test('send verb with withYes appends --yes', () => {
-    const args = composeArgs('send', { internalId: 1, mode: 'forward', to: ['x@y.z'] }, { withYes: true })
-    expect(args[0]).toBe('email')
-    expect(args[1]).toBe('send')
-    expect(args).toContain('--yes')
-    expect(args).toContain('--to')
-  })
-
-  test('draft verb never auto-appends --yes', () => {
-    expect(composeArgs('draft', { internalId: 1, mode: 'reply' })).not.toContain('--yes')
+  test('draftPlan → POST /email/{id}/draft-plan, body = { mode } only (id in path)', async () => {
+    await runDraftPlan({ internalId: 53675, mode: 'reply' })
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/draft-plan', {
+      body: { mode: 'reply' }
+    })
   })
 })
 

@@ -16,16 +16,16 @@
 
 | 操作 | 领域 service<br>`src/services/` | CLI 适配器<br>（薄壳） | serve-api 端点<br>（in-process 非 fork） | Electron 客户端<br>（daemon HTTP） | schema 契约测试 | parity golden<br>（service==旧 CLI） |
 |---|---|---|---|---|---|---|
-| set_flags（flag/read/状态） | ✅ A2 | ✅ A2 | ✅ A2 | TS 直写→⬜ D1 | ✅ 已存在 | ✅ A2 |
-| resync | ✅ A2 | ✅ A2 | ✅ A2 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A2 |
-| archive | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
-| pin / unpin | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
-| llm_run | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
-| compose_draft | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ✅ A4 |
-| send | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ✅ A4 |
-| compose_plan（dry-run） | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ➖ |
+| set_flags（flag/read/状态） | ✅ A2 | ✅ A2 | ✅ A2 | ✅ D1 | ✅ 已存在 | ✅ A2 |
+| resync | ✅ A2 | ✅ A2 | ✅ A2 | ✅ D1 | ✅ 已存在 | ✅ A2 |
+| archive | ✅ A3 | ✅ A3 | ✅ A3 | ✅ D1 | ✅ 已存在 | ✅ A3 |
+| pin / unpin | ✅ A3 | ✅ A3 | ✅ A3 | ✅ D1 | ✅ 已存在 | ✅ A3 |
+| llm_run | ✅ A3 | ✅ A3 | ✅ A3 | ✅ D1 | ✅ 已存在 | ✅ A3 |
+| compose_draft | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ✅ A4 |
+| send | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ✅ A4 |
+| compose_plan（dry-run） | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ➖ |
 | draft 创建（AppleScript） | ➖ host-local | ➖ | ⬜ D1 `POST /api/drafts` | shell fork 保留<br>（emergency 回切） | ➖ | ➖ |
-| **长任务** batch_resync | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ⬜ D1 | ✅ 已存在 | ✅ C1 |
+| **长任务** batch_resync | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ⬜ D2<br>(jobs API 前端未接) | ✅ 已存在 | ✅ C1 |
 | **长任务** backfill_body/deriv/meta | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ➖ 运维 | ✅ 已存在 | ✅ C1 |
 
 ## 读路径（保留直读，仅追 wire-shape parity）
@@ -53,7 +53,7 @@
 | async_jobs 表 + JobWorker（挂 serve） | ✅ | C1 |
 | 双层鉴权（本地 token + CF Access）+ SSE 9200 鉴权 | ✅ | C2 |
 | serve-api 崩溃自拉起 + 断路器 | ✅ | C2 |
-| 前端统一 http_client 写路径 | ⬜ | D1 |
+| 前端统一 http_client 写路径 | ✅ | D1 |
 
 ## 残留检测（每阶段末跑，应为「预期内」或空）
 
@@ -175,3 +175,20 @@ pytest tests/cli/test_schema_contract.py -q
   - **next-phase handoff → D1**（C2 收官；剩 D1/D2）：
     - **D1**（前端写收编 daemon + 删 writeFlagDirect）：依赖 B1+C1+C2 全就位。`write_ops.ts` 删 `writeFlagDirect`、`email:flag`/复杂写（resync/pin/archive/llm/folder/draft/send）改调本机 daemon（复用 `http_client.ts`）。**C2 复用点**：① `getLocalApiToken()` 经 **IPC/preload** 暴露给 renderer → http_client 在 Electron 上下文带 `X-MailAgent-Local-Token` header（远程 web 仍走 CF JWT，不带本地 token）；② **flip `serveApiEnabled`**（`backend_lifecycle.ts:270`）为「本地 token 已生成即可起」（让没配 CF 的本地用户也起 serve-api 作写面）—— C2 放宽的 import 守卫 + 崩溃自拉起即其安全网；③ B1 的原子 UPSERT + JS/Py 契约 golden 是写收编回归网；④ events_bridge 接 `job.*` SSE（C1）。
     - **D2**（读 wire 去重 + 最终验收 + 文档）：backfill builder 下沉 + 能力矩阵 100% 绿验收 + CLAUDE.md 文档地图 + `docs/claude/` 服务层架构文档 + 本看板归档。
+
+- **D1（✅ 完成）** `feat/backend-service-layer`：前端写操作收编到本机 daemon（main 进程转发 serve-api），删 `writeFlagDirect` + 前端写 fork CLI 清零。**写源从 4 收敛到 1（daemon service），剩 D2 最终验收**。
+  - **架构方向（用户拍板）= Main 进程转发**（plan §D1 钦定，**否决** C2 handoff 设想的 renderer 直连）：renderer/ElectronApi **零改动**（仍走 IPC channel），main 侧 handler 内部 `callCli`/`writeFlagDirect` → `daemonRequest`。理由：renderer 零改动 / token 不进 renderer（renderer 是不可信邮件 HTML 宿主，攻击面最小）/ 读写分离干净（读仍 IPC 直读 SQLite 快路径）/ 符合 plan §D1 字面。renderer 直连被否（改动大 + token 进 renderer + 需调 CSP + 读 IPC 写 HTTP 混合不干净）。
+  - **新增 `daemon_api.ts`**：`daemonRequest(method,path,opts)` = `http_client.request('http://127.0.0.1:<port>/api', …, {headers:{'X-MailAgent-Local-Token': getLocalApiToken()}})`，port 读 `MAILAGENT_API_PORT` 默认 8200（独立读 env 不 import backend_lifecycle，避免拉 electron app 进单测）。**复用 web SPA 同款 `http_client.request`**（plan 钦定「统一客户端」），注入 C2 本地 token → serve-api auth.py 本地腿放行；request 返回 envelope.data **原样**（不 renderer-unwrap）。`http_client.ts` 加 `RequestOptions.headers` 注入点（Accept 后 spread、Content-Type 最后设防覆盖；web 默认无 headers 行为零变化）。
+  - **write_ops.ts（6 写收编）**：删 `writeFlagDirect` + 全部 CLI args builders；6 forwarder（runResync/runPin/runArchive/runLlmRun/runEmailFlag + `flagBody`）调 daemonRequest，**path/body/query 严格 mirror HttpApi**（llm 用 query 非 body / flag batch `/email/0/flag`+body.ids / flag body 只非 undefined + 不发 allowConcurrent）。handler guard 全保留。**notion:updateFlag**（legacy，renderer 无调用点）映射 daemon flag + dryRun guard（防静默真写）。
+  - **draft.ts（compose 收编 + 净简化）**：删 composeArgs/runCompose 的**临时文件**（mkdtemp/writeFile→`--body-html-file`）整段 —— A4 已让 serve-api 直收 bodyHtml 字符串；3 forwarder（runComposeDraft/Send/DraftPlan）body 直传 ComposeDraftOpts。send 不带 --yes（serve-api 恒 confirmed=True）。**保留** createDraft（AppleScript host-local emergency 直 fork）+ validateComposeOpts。
+  - **chat 写工具收编**：`chat/tools/builtin/write.ts` emailFlag/emailArchive 从 writeFlagDirect(同步) 改调 `runEmailFlag`(async+try/catch)，output `outbox_ids/merged_ids` → `updated_ids/outbox_entries`（**flag 单行是唯一 parity 形状断点**：原 writeFlagDirect `{outbox_ids,merged_ids}` vs daemon FlagResult；唯一读字段消费点=chat 工具，renderer 其它 flag 消费者 EmailRow/useInboxActionShortcuts/CommandPalette 只 await 不读 data）。emailDraftReply 保留 ipcCreateDraft。
+  - **envelope.ts**：`envelopeFromCli` 加 ApiError 分支（带 string `code` 的 Error → {ok:false,code,hint}）—— daemon 抛 ApiError 非 CliError；CliError(errorCode)/ApiError(code)/普通 Error(E_DISPATCH) 三分支，admin/calendar 仍走 CliError 不受影响。
+  - **backend_lifecycle.ts（serveApiEnabled flip，D1 硬前置）**：`CF_AUDIENCE 非空` → `REMOTE_ACCESS_ENABLED !== 'false'`。serve-api 成 **Electron 本地写面**（main 转发的前提），纯本地无 CF 也起；本地 token 恒由 buildBaseEnv 注入，C2 已放宽 auth.py import 守卫（≥1 鉴权方式）+ 崩溃自拉起作安全网。CF_AUDIENCE 仅决定「远程是否可达」。
+  - **pin parity 关键决策**：runPin 返回**完整** `{internal_id,is_pinned,changed,dry_run}` data 块（request 返 env.data 原样，**不**像 HttpApi.pin unwrap 成 bool）→ ElectronApi.pin 的 `data?.is_pinned` 二次取字段继续工作，零改动。其余写 ElectronApi 纯 unwrap，daemon data==CLI data（A2-A4 service==CLI golden）天然 parity。
+  - **验收**：`pytest tests/cli tests/api` = **708 passed, 1 failed**（唯一=预存 env-coupled test_resolve_allowed_email，与 C2 逐字一致，**Python 零回归** —— D1 不动 Python）。前端 D1 相关 **125 测试全绿**（write_ops/compose_draft/daemon_api/http_client/envelope/backend_lifecycle/chat builtin/dispatch 8 文件）；全量 pnpm test 除**预存 9 个 `EmailRow.test.tsx`**（stash baseline 验证：C2 基线 = 9 failed/1281 passed 全 EmailRow combo snapshot + isNew semantic，与 D1 无关）+ **flaky useEmailChat**（forks 并发 artifact，单独跑 36 绿）外全绿。typecheck exit 0；测后 `rebuild:electron` 还原 ABI。残留：`writeFlagDirect` frontend/src **空**、`callCli(` write_ops/draft **空**、`run_cli(` routers 仍 **4**（Python 未动）。
+  - **测试改动**：write_ops/compose_draft.test 重写（删 argv builders/composeArgs，改测 daemon forwarder mock daemonRequest + flagBody + ApiError envelope）；backend_lifecycle.test「CF_AUDIENCE 前置」describe 语义反转（空 CF→现在 spawn）；新增 daemon_api.test（baseUrl/token header）+ http_client.test（headers 合并）；**删** write_ops_outbox_parity.test.ts（TS 不再直写 outbox → B1 的 TS 端字节契约失去意义；Python 侧 test_outbox_parity.py 保留）。
+  - **dev 模式注记**：`pnpm dev`（app.isPackaged=false）BackendLifecycleManager 不接管 → serve-api 靠用户手动 pm2 起；dev dogfood 写前需手动 `mailagent serve-api`，否则写抛 E_NETWORK（诚实降级，读仍 IPC 直读）。打包态 flip 后自动起。
+  - **独立 review（code-reviewer subagent，opus）**：**APPROVE WITH NITS**，0 Critical/0 High/0 Medium，7 核查项全 PASS（forwarder parity 逐项对 HttpApi + 实跑 Python `routers/{email,llm}.py` / pin 返完整 data 块→ElectronApi.pin `data?.is_pinned` 对得上 / flag 单行断点 chat 工具 + BatchActionBar 已适配、其余 flag 消费者只 await / token main-only + header 顺序安全 + auth.py 守卫确放宽 `not _LOCAL_API_TOKEN` 无 CF 不 import-crash / envelope 三分支 admin-calendar 仍 CliError 不受影响 / 残留 writeFlagDirect 0·callCli 0·run_cli 4 / 删 outbox_parity 正确 Python `test_outbox_parity.py` 保留）。2 LOW（notion:updateFlag 语义变化 dormant→**已补注释** / daemon_api↔backend_lifecycle 8200 重复=已文档化 tradeoff 无需改）+ 2 NIT（registry arrow-paren=formatter 合规修正[prettier 默认 always]保留 / email:pin `_opts` underscore 故意 signature-compat）。确认全程只读、git 工作树未污染。
+  - **next-phase handoff → D2**（D1 收官；A+B+C+D1 全完成，剩 D2 最终验收 + 文档）：
+    - **D2**：① backfill builder 从 `cli/commands/backfill.py` 正式下沉（C1 lazy 复用转正式）；② 读路径 wire-shape 去重（`routers/email.py` 的 `_meta_to_dict` 等抽 `services/wire.py`，CLI 同名 helper 改调）；③ 能力矩阵 100% 绿（含 batch_resync jobs API 前端接线：前端经 `POST /api/jobs` 起长任务 + `GET` 轮询 + `job.*` SSE，events_bridge 接线 —— 这是矩阵唯一剩的 `⬜`）；④ 性能基线前后对比（serve-api 写 ~500ms→几十 ms）；⑤ 端到端每写操作 CLI/本地 Electron/远程 web 各实跑；⑥ CLAUDE.md 文档地图 + `docs/claude/` 服务层架构文档 + 本看板归档。
+    - **D1 复用点**：`daemon_api.daemonRequest`（D2 jobs API 前端接线复用）；`http_client.headers` 注入；`serveApiEnabled` flip（serve-api 恒本地写面）。**前瞻注记**：dev 模式需起 serve-api 才能写（见 dev 模式注记），D2 端到端验收时本地 Electron 测试需确保 serve-api 在跑。

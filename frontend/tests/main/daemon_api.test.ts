@@ -1,0 +1,94 @@
+// D1 — daemon_api: 本机 serve-api 写客户端 (baseUrl 解析 + 本地 token header 注入)。
+//
+// mock http_client.request + local_token, 验证 daemonRequest 把请求打到
+// http://127.0.0.1:<port>/api 且带 X-MailAgent-Local-Token header, 并返回
+// request 的 resolve 值 (envelope.data 原样, 不再二次处理)。
+
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+
+const { mockRequest } = vi.hoisted(() => ({ mockRequest: vi.fn() }))
+
+vi.mock('@shared/api/http_client', () => ({
+  request: mockRequest
+}))
+
+vi.mock('../../src/electron/main/local_token', () => ({
+  getLocalApiToken: () => 'test-token-abc',
+  LOCAL_TOKEN_HEADER: 'X-MailAgent-Local-Token'
+}))
+
+import { daemonRequest } from '../../src/electron/main/daemon_api'
+
+beforeEach(() => {
+  mockRequest.mockReset()
+  mockRequest.mockResolvedValue({ ok: 'stub' })
+  delete process.env.MAILAGENT_API_PORT
+})
+
+afterEach(() => {
+  delete process.env.MAILAGENT_API_PORT
+  vi.restoreAllMocks()
+})
+
+describe('daemonRequest — baseUrl + 本地 token header', () => {
+  test('默认端口 8200 + 注入 X-MailAgent-Local-Token header', async () => {
+    await daemonRequest('POST', '/email/1/flag', { body: { isRead: true } })
+    expect(mockRequest).toHaveBeenCalledWith(
+      'http://127.0.0.1:8200/api',
+      'POST',
+      '/email/1/flag',
+      expect.objectContaining({
+        body: { isRead: true },
+        headers: { 'X-MailAgent-Local-Token': 'test-token-abc' }
+      })
+    )
+  })
+
+  test('MAILAGENT_API_PORT 覆盖端口', async () => {
+    process.env.MAILAGENT_API_PORT = '9300'
+    await daemonRequest('GET', '/email/list')
+    expect(mockRequest).toHaveBeenCalledWith(
+      'http://127.0.0.1:9300/api',
+      'GET',
+      '/email/list',
+      expect.objectContaining({ headers: { 'X-MailAgent-Local-Token': 'test-token-abc' } })
+    )
+  })
+
+  test('非法端口 fallback 8200', async () => {
+    process.env.MAILAGENT_API_PORT = 'not-a-number'
+    await daemonRequest('GET', '/x')
+    expect(mockRequest).toHaveBeenCalledWith(
+      'http://127.0.0.1:8200/api',
+      'GET',
+      '/x',
+      expect.anything()
+    )
+  })
+
+  test('caller opts.headers 与 token 合并', async () => {
+    await daemonRequest('GET', '/x', { headers: { 'X-Other': 'v' } })
+    expect(mockRequest).toHaveBeenCalledWith(
+      'http://127.0.0.1:8200/api',
+      'GET',
+      '/x',
+      expect.objectContaining({
+        headers: { 'X-MailAgent-Local-Token': 'test-token-abc', 'X-Other': 'v' }
+      })
+    )
+  })
+
+  test('返回 request 的 resolve 值 (envelope.data 原样)', async () => {
+    mockRequest.mockResolvedValueOnce({ internal_id: 1, is_pinned: true })
+    const out = await daemonRequest('POST', '/email/1/pin', { body: { pinned: true } })
+    expect(out).toEqual({ internal_id: 1, is_pinned: true })
+  })
+
+  test('request reject (ApiError) 透传给 caller', async () => {
+    const apiErr = Object.assign(new Error('not found'), { code: 'E_NOT_FOUND' })
+    mockRequest.mockRejectedValueOnce(apiErr)
+    await expect(daemonRequest('POST', '/email/9/pin', { body: { pinned: true } })).rejects.toBe(
+      apiErr
+    )
+  })
+})

@@ -1,298 +1,136 @@
-// Sprint 5 §2.2 — CLI-backed write IPC handler contract.
+// D1 — 写操作 IPC handler 收编到本机 daemon (serve-api) 后的契约。
 //
-// Mocks `callCli` so we exercise:
-//   - exact argv shape (--dry-run / --replace-existing / --is-read / …)
-//   - write+auth flags forwarded correctly (dry runs don't enroll the queue
-//     write slot, real runs do)
-//   - timeoutMs per command class (resync 120s, llm 90s, updateFlag 30s)
-//   - envelope shape on success + on CliError + on unknown rejection
-//   - notion:updateFlag rejects when no flag is supplied
+// 旧契约 (Sprint 5/15/16) 测 callCli argv 形状 + writeFlagDirect 直写 outbox; D1 起这些
+// 写经 daemonRequest 转发本机 serve-api, 故改测:
+//   - flagBody 构造 (mirror HttpApi.email.flag wire: 只非 undefined 字段, 无 allowConcurrent)
+//   - 各 forwarder 的 method/path/body/query (mirror serve-api 端点, 与 HttpApi 零漂移)
+//   - envelope 形状: daemon resolve → {ok:true,data}; ApiError → {ok:false,code,hint}
+//   - ensureInternalId guard
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-const { mockCallCli } = vi.hoisted(() => ({
-  mockCallCli: vi.fn()
+const { mockDaemonRequest } = vi.hoisted(() => ({ mockDaemonRequest: vi.fn() }))
+
+vi.mock('../../src/electron/main/daemon_api', () => ({
+  daemonRequest: mockDaemonRequest
 }))
 
-vi.mock('../../src/electron/main/cli_runner', async () => {
-  const actual = await vi.importActual<typeof import('../../src/electron/main/cli_runner')>(
-    '../../src/electron/main/cli_runner'
-  )
-  return {
-    ...actual,
-    callCli: mockCallCli
-  }
-})
-
-import { CliError } from '../../src/electron/main/cli_runner'
 import {
   __testing,
-  runResync,
-  runLlmRun,
-  runUpdateFlag,
+  runArchive,
   runEmailFlag,
+  runLlmRun,
+  runPin,
+  runResync,
   type WriteEnvelope
 } from '../../src/electron/main/handlers/write_ops'
 
 beforeEach(() => {
-  mockCallCli.mockReset()
+  mockDaemonRequest.mockReset()
+  mockDaemonRequest.mockResolvedValue({ ok: 'stub' })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('write_ops — argv builders', () => {
-  test('resync minimal args = ["email", "resync", "<id>"]', () => {
-    expect(__testing.resyncArgs(53675, {})).toEqual(['email', 'resync', '53675'])
+describe('write_ops — flagBody (mirror HttpApi.email.flag wire)', () => {
+  test('isRead=true → { isRead: true }', () => {
+    expect(__testing.flagBody({ isRead: true })).toEqual({ isRead: true })
   })
 
-  test('resync flags compose: dry-run + replace-existing + skip-parent', () => {
+  test('isRead=false preserved (not dropped — tri-bool)', () => {
+    expect(__testing.flagBody({ isRead: false })).toEqual({ isRead: false })
+  })
+
+  test('processingStatus → { processingStatus }', () => {
+    expect(__testing.flagBody({ processingStatus: '已完成' })).toEqual({
+      processingStatus: '已完成'
+    })
+  })
+
+  test('combines isRead + isFlagged + processingStatus', () => {
     expect(
-      __testing.resyncArgs(53675, { dryRun: true, replaceExisting: true, skipParentLookup: true })
-    ).toEqual(['email', 'resync', '53675', '--dry-run', '--replace-existing', '--no-parent'])
+      __testing.flagBody({ isRead: true, isFlagged: false, processingStatus: '已完成' })
+    ).toEqual({ isRead: true, isFlagged: false, processingStatus: '已完成' })
   })
 
-  test('archive args = ["email", "archive", "<id>", "-o", "json"]', () => {
-    expect(__testing.archiveArgs(53675)).toEqual(['email', 'archive', '53675', '-o', 'json'])
+  test('batch ids included', () => {
+    expect(__testing.flagBody({ ids: [1, 2, 3], isRead: true })).toEqual({
+      ids: [1, 2, 3],
+      isRead: true
+    })
   })
 
-  test('llm:run flags compose: --dry-run + --force + --no-overwrite', () => {
-    expect(__testing.llmRunArgs(53675, { dryRun: true, force: true, noOverwrite: true })).toEqual([
-      'llm',
-      'run',
-      '53675',
-      '--dry-run',
-      '--force',
-      '--no-overwrite'
-    ])
+  test('empty ids array dropped (no batch)', () => {
+    expect(__testing.flagBody({ ids: [], isFlagged: true })).toEqual({ isFlagged: true })
   })
 
-  test('updateFlag emits --is-read true / false explicitly (CLI expects boolean text)', () => {
-    expect(__testing.updateFlagArgs(53675, { isRead: true })).toEqual([
-      'notion',
-      'update-flag',
-      '53675',
-      '--is-read',
-      'true'
-    ])
-    expect(__testing.updateFlagArgs(53675, { isRead: false })).toEqual([
-      'notion',
-      'update-flag',
-      '53675',
-      '--is-read',
-      'false'
-    ])
-  })
-
-  test('updateFlag emits --processing-status with the literal status string', () => {
-    expect(__testing.updateFlagArgs(53675, { processingStatus: 'AI Reviewed' })).toEqual([
-      'notion',
-      'update-flag',
-      '53675',
-      '--processing-status',
-      'AI Reviewed'
-    ])
-  })
-
-  test('updateFlag combines flag + processing-status (single CLI call updates both)', () => {
-    expect(
-      __testing.updateFlagArgs(53675, {
-        isFlagged: true,
-        processingStatus: '已完成'
-      })
-    ).toEqual([
-      'notion',
-      'update-flag',
-      '53675',
-      '--is-flagged',
-      'true',
-      '--processing-status',
-      '已完成'
-    ])
-  })
-
-  // ---- Sprint 15 D — email:flag args ---------------------------------------
-  //
-  // The flag uses typer's `--flag/--no-flag` pattern (NOT `--flag <bool>` like
-  // `notion update-flag`), so we emit bare tokens.  The handler defaults
-  // `--allow-concurrent` ON because mail-sync is always online in the
-  // frontend's environment; opts.allowConcurrent === false opts out.
-
-  test('emailFlag single-row minimal — isRead=true emits --is-read + --allow-concurrent', () => {
-    expect(__testing.emailFlagArgs(53675, { isRead: true })).toEqual([
-      'email',
-      'flag',
-      '53675',
-      '--is-read',
-      '--allow-concurrent'
-    ])
-  })
-
-  test('emailFlag single-row — isRead=false flips to --no-is-read', () => {
-    expect(__testing.emailFlagArgs(53675, { isRead: false })).toEqual([
-      'email',
-      'flag',
-      '53675',
-      '--no-is-read',
-      '--allow-concurrent'
-    ])
-  })
-
-  test('emailFlag emits --processing-status with the literal string', () => {
-    expect(__testing.emailFlagArgs(53675, { processingStatus: '已完成' })).toEqual([
-      'email',
-      'flag',
-      '53675',
-      '--processing-status',
-      '已完成',
-      '--allow-concurrent'
-    ])
-  })
-
-  test('emailFlag combines is-read + is-flagged + processing-status in one call', () => {
-    expect(
-      __testing.emailFlagArgs(53675, {
-        isRead: true,
-        isFlagged: false,
-        processingStatus: '已完成'
-      })
-    ).toEqual([
-      'email',
-      'flag',
-      '53675',
-      '--is-read',
-      '--no-is-flagged',
-      '--processing-status',
-      '已完成',
-      '--allow-concurrent'
-    ])
-  })
-
-  test('emailFlag batch — opts.ids replaces positional id', () => {
-    // BatchActionBar collapses N emails into one CLI fork via --ids.
-    expect(__testing.emailFlagArgs(null, { ids: [1, 2, 3], isRead: true })).toEqual([
-      'email',
-      'flag',
-      '--ids',
-      '1,2,3',
-      '--is-read',
-      '--allow-concurrent'
-    ])
-  })
-
-  test('emailFlag allowConcurrent=false drops the bypass flag', () => {
-    expect(__testing.emailFlagArgs(53675, { isFlagged: true, allowConcurrent: false })).toEqual([
-      'email',
-      'flag',
-      '53675',
-      '--is-flagged'
-    ])
-  })
-
-  test('emailFlag empty ids array falls back to positional id', () => {
-    // Edge case: caller passed both. Empty array means "no batch" so the
-    // positional id wins; this matches the handler's `opts.ids.length > 0`
-    // batch-mode guard.
-    expect(__testing.emailFlagArgs(53675, { ids: [], isFlagged: true })).toEqual([
-      'email',
-      'flag',
-      '53675',
-      '--is-flagged',
-      '--allow-concurrent'
-    ])
-  })
-
-  test('emailFlag throws when neither internalId nor ids supplied', () => {
-    // Caller-contract violation; the IPC handler should have short-circuited
-    // already, but the builder defends against UI bugs.
-    expect(() => __testing.emailFlagArgs(null, { isRead: true })).toThrow(/internalId or opts.ids/)
+  test('empty processingStatus dropped', () => {
+    expect(__testing.flagBody({ processingStatus: '' })).toEqual({})
   })
 })
 
-describe('write_ops — runResync / runLlmRun / runUpdateFlag → callCli plumbing', () => {
-  test('resync forwards write:true + needsAuth:true + 120s timeout (non-dry-run)', async () => {
-    mockCallCli.mockResolvedValueOnce({ status: 'success', internal_id: 53675 })
+describe('write_ops — daemon forwarders (mock daemonRequest)', () => {
+  test('resync → POST /email/{id}/resync, camelCase body', async () => {
     await runResync(53675, { replaceExisting: true })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['email', 'resync', '53675', '--replace-existing'],
-      expect.objectContaining({ write: true, needsAuth: true, timeoutMs: 120_000 })
-    )
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/resync', {
+      body: { replaceExisting: true, skipParentLookup: undefined, dryRun: undefined }
+    })
   })
 
-  test('resync dry-run flips write/needsAuth to false (skips auth + write slot)', async () => {
-    mockCallCli.mockResolvedValueOnce({ status: 'success', dry_run: true })
+  test('resync dry-run forwards dryRun: true', async () => {
     await runResync(53675, { dryRun: true, replaceExisting: true })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['email', 'resync', '53675', '--dry-run', '--replace-existing'],
-      expect.objectContaining({ write: false, needsAuth: false })
-    )
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/resync', {
+      body: { replaceExisting: true, skipParentLookup: undefined, dryRun: true }
+    })
   })
 
-  test('llm:run timeout is 90s', async () => {
-    mockCallCli.mockResolvedValueOnce({ status: 'success' })
+  test('pin → POST /email/{id}/pin { pinned }', async () => {
+    await runPin(53675, true)
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/pin', {
+      body: { pinned: true }
+    })
+  })
+
+  test('unpin → POST /email/{id}/pin { pinned: false }', async () => {
+    await runPin(53675, false)
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/pin', {
+      body: { pinned: false }
+    })
+  })
+
+  test('archive → POST /email/{id}/archive {}', async () => {
+    await runArchive(53675)
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/archive', { body: {} })
+  })
+
+  test('llm → POST /llm/run/{id} with QUERY params (not body)', async () => {
     await runLlmRun(53675, { force: true })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['llm', 'run', '53675', '--force'],
-      expect.objectContaining({ timeoutMs: 90_000 })
-    )
-  })
-
-  test('updateFlag timeout is 30s', async () => {
-    mockCallCli.mockResolvedValueOnce({ status: 'success' })
-    await runUpdateFlag(53675, { isFlagged: false })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['notion', 'update-flag', '53675', '--is-flagged', 'false'],
-      expect.objectContaining({ timeoutMs: 30_000 })
-    )
-  })
-
-  // Sprint 15 D — `email:flag` is always a write + always needs auth; even
-  // dry-run support isn't plumbed yet (the CLI has --dry-run but the renderer
-  // never exercises it). Timeout matches updateFlag (30s) since both are
-  // bounded SQL inserts; fanout dispatch is async on mail-sync's side.
-
-  test('emailFlag forwards write:true + needsAuth:true + 30s timeout (single)', async () => {
-    mockCallCli.mockResolvedValueOnce({
-      status: 'success',
-      data: { dry_run: false, updated_ids: [53675] }
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/llm/run/53675', {
+      query: { dry_run: undefined, force: true, no_overwrite: undefined }
     })
+  })
+
+  test('flag single → POST /email/{id}/flag', async () => {
     await runEmailFlag(53675, { isFlagged: true })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['email', 'flag', '53675', '--is-flagged', '--allow-concurrent'],
-      expect.objectContaining({ write: true, needsAuth: true, timeoutMs: 30_000 })
-    )
-  })
-
-  test('emailFlag batch — single CLI fork enqueues N×2 outbox rows', async () => {
-    mockCallCli.mockResolvedValueOnce({
-      status: 'success',
-      data: { dry_run: false, updated_ids: [1, 2, 3] }
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/flag', {
+      body: { isFlagged: true }
     })
-    await runEmailFlag(null, { ids: [1, 2, 3], isRead: true })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['email', 'flag', '--ids', '1,2,3', '--is-read', '--allow-concurrent'],
-      expect.objectContaining({ write: true, needsAuth: true, timeoutMs: 30_000 })
-    )
-    // One call — not three. This is the whole point of --ids batching.
-    expect(mockCallCli).toHaveBeenCalledTimes(1)
   })
 
-  test('emailFlag E_PM2_RUNNING surfaces verbatim through envelope (CliError → code)', async () => {
-    mockCallCli.mockRejectedValueOnce(
-      new CliError('E_PM2_RUNNING', 9, 'pass --allow-concurrent to bypass')
-    )
-    const env = await __testing.envelopeFromCli<unknown>(runEmailFlag(53675, { isFlagged: true }))
-    expect(env.ok).toBe(false)
-    if (!env.ok) {
-      expect(env.code).toBe('E_PM2_RUNNING')
-      expect(env.hint).toBe('pass --allow-concurrent to bypass')
-    }
+  test('flag batch → POST /email/0/flag with body.ids (server ignores path id)', async () => {
+    await runEmailFlag(null, { ids: [1, 2, 3], isRead: true })
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/0/flag', {
+      body: { ids: [1, 2, 3], isRead: true }
+    })
+    // One request — not three. This is the whole point of --ids batching.
+    expect(mockDaemonRequest).toHaveBeenCalledTimes(1)
   })
 })
 
-describe('write_ops — envelopeFromCli', () => {
-  test('resolved CLI value → { ok: true, data }', async () => {
+describe('write_ops — envelopeFromCli (daemon ApiError path)', () => {
+  test('resolved daemon value → { ok: true, data }', async () => {
     const env = (await __testing.envelopeFromCli<{ x: 1 }>(
       Promise.resolve({ x: 1 })
     )) as WriteEnvelope<{ x: 1 }>
@@ -300,22 +138,25 @@ describe('write_ops — envelopeFromCli', () => {
     if (env.ok) expect(env.data).toEqual({ x: 1 })
   })
 
-  test('CliError → envelope preserves code + hint (renderer branches on code)', async () => {
-    const err = new CliError('E_AUTH', 4, 'set MAILAGENT_CLI_API_KEY')
-    const env = await __testing.envelopeFromCli<unknown>(Promise.reject(err))
+  test('ApiError (daemon) → envelope preserves code + hint (renderer branches on code)', async () => {
+    const apiErr = Object.assign(new Error('email not found'), {
+      code: 'E_NOT_FOUND',
+      hint: 'check internal_id'
+    })
+    const env = await __testing.envelopeFromCli<unknown>(Promise.reject(apiErr))
     expect(env.ok).toBe(false)
     if (!env.ok) {
-      expect(env.code).toBe('E_AUTH')
-      expect(env.hint).toBe('set MAILAGENT_CLI_API_KEY')
+      expect(env.code).toBe('E_NOT_FOUND')
+      expect(env.hint).toBe('check internal_id')
     }
   })
 
-  test('unknown rejection → E_DISPATCH (the IPC adapter contract)', async () => {
-    const env = await __testing.envelopeFromCli<unknown>(Promise.reject(new Error('something bad')))
+  test('unknown rejection (no code) → E_DISPATCH', async () => {
+    const env = await __testing.envelopeFromCli<unknown>(Promise.reject(new Error('boom')))
     expect(env.ok).toBe(false)
     if (!env.ok) {
       expect(env.code).toBe('E_DISPATCH')
-      expect(env.message).toBe('something bad')
+      expect(env.message).toBe('boom')
     }
   })
 })

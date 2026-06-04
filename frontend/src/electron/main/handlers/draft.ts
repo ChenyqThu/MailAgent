@@ -25,19 +25,14 @@
 
 import { ipcMain } from 'electron'
 import { execa } from 'execa'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { existsSync } from 'fs'
 import { join } from 'path'
 
 import { getDb } from '../db'
-import { callCli, resolveBundledResourcesRoot } from '../cli_runner'
+import { resolveBundledResourcesRoot } from '../cli_runner'
+import { daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
-import type {
-  ComposeDraftOpts,
-  ComposeMode,
-  DraftPlanOpts,
-  SendEmailOpts
-} from '@shared/api/types'
+import type { ComposeDraftOpts, ComposeMode, DraftPlanOpts, SendEmailOpts } from '@shared/api/types'
 
 // ---- request / response shapes ---------------------------------------------
 
@@ -289,72 +284,19 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
   throw Object.assign(new Error(message), { code })
 }
 
-// ---- Compose: `mailagent email draft|send` ---------------------------------
+// ---- Compose: 转发本机 daemon (serve-api in-process) -----------------------
 //
-// Three channels fork the `mailagent` CLI (mirrors write_ops.ts / folder.ts):
-//   email:draft     → email draft <id> --mode … [recipients/subject/body]
-//   email:send      → email send  <id> --mode … --yes [same]
-//   email:draftPlan → email draft <id> --mode … --dry-run  (read-only, no auth)
+// 三 channel 收编到 serve-api (D1, 不再 fork CLI + 临时文件传 bodyHtml):
+//   email:draft     → POST /email/draft           (写进 Drafts, IMAP APPEND)
+//   email:send      → POST /email/send             (SMTP 真实发送, 不可逆; serve-api
+//                     端恒 confirmed=True, renderer 已先弹 SendConfirmDialog)
+//   email:draftPlan → POST /email/{id}/draft-plan  (dry-run 预填, 无 auth)
 //
-// bodyHtml is TipTap's getHTML() output (zero conversion). The CLI takes it
-// via `--body-html-file PATH`, so we drop it into a per-call temp file and
-// clean up in `finally`. to/cc/bcc arrays → comma-joined; empty arrays are
-// not passed (the CLI then keeps its derived recipients for reply/reply-all).
+// bodyHtml (TipTap getHTML()) 直接进 JSON body —— 旧 fork 路径落临时文件
+// --body-html-file 那套整段删 (A4 已让 serve-api 直收字符串)。mirror
+// HttpApi.email.draft/.send/.draftPlan (raw-data 视角)。
 
-const COMPOSE_TIMEOUT_MS = 120_000
 const VALID_MODES: ReadonlySet<string> = new Set<ComposeMode>(['reply', 'reply-all', 'forward'])
-
-/** Build the shared `email draft|send` argv (minus the `--body-html-file`
- *  flag, which is appended by the runner once the temp file exists). Exported
- *  for unit tests so argv shape can be asserted without forking the CLI. */
-export function composeArgs(
-  verb: 'draft' | 'send',
-  opts: ComposeDraftOpts,
-  o: { dryRun?: boolean; withYes?: boolean } = {}
-): string[] {
-  const args = ['email', verb, String(opts.internalId), '--mode', opts.mode]
-  if (Array.isArray(opts.to) && opts.to.length > 0) args.push('--to', opts.to.join(','))
-  if (Array.isArray(opts.cc) && opts.cc.length > 0) args.push('--cc', opts.cc.join(','))
-  if (Array.isArray(opts.bcc) && opts.bcc.length > 0) args.push('--bcc', opts.bcc.join(','))
-  if (typeof opts.subject === 'string') args.push('--subject', opts.subject)
-  if (o.dryRun) args.push('--dry-run')
-  if (o.withYes) args.push('--yes')
-  return args
-}
-
-/** Run `email draft|send`, materialising bodyHtml into a temp file first.
- *  Returns the CLI `data` block; throws CliError on failure. */
-async function runCompose(
-  verb: 'draft' | 'send',
-  opts: ComposeDraftOpts,
-  o: { dryRun?: boolean; withYes?: boolean }
-): Promise<unknown> {
-  const args = composeArgs(verb, opts, o)
-  let tmpDir: string | null = null
-  if (typeof opts.bodyHtml === 'string' && opts.bodyHtml.length > 0) {
-    tmpDir = mkdtempSync(join(tmpdir(), 'mailagent-compose-'))
-    const htmlPath = join(tmpDir, 'body.html')
-    writeFileSync(htmlPath, opts.bodyHtml, 'utf8')
-    args.push('--body-html-file', htmlPath)
-  }
-  try {
-    // dry-run is read-only (no auth / no write slot); draft + send are writes.
-    const isWrite = !o.dryRun
-    return await callCli([...args, '-o', 'json'], {
-      write: isWrite,
-      needsAuth: isWrite,
-      timeoutMs: COMPOSE_TIMEOUT_MS
-    })
-  } finally {
-    if (tmpDir) {
-      try {
-        rmSync(tmpDir, { recursive: true, force: true })
-      } catch (e) {
-        console.warn('[email:compose] temp cleanup failed:', e)
-      }
-    }
-  }
-}
 
 function validateComposeOpts(
   opts: ComposeDraftOpts | undefined,
@@ -377,6 +319,26 @@ function validateComposeOpts(
   return opts
 }
 
+// ---- compose forwarders (unit-testable: tests mock daemonRequest) ---------
+//
+// path/body mirror HttpApi.email.draft/.send/.draftPlan. draft/send 直传整个
+// ComposeDraftOpts 作 body (含 internalId/mode/to/cc/bcc/subject/bodyHtml) ——
+// serve-api A4 的 _compose_request_from_body 读 camelCase body, bodyHtml 字符串直收。
+
+export function runComposeDraft(opts: ComposeDraftOpts): Promise<unknown> {
+  return daemonRequest('POST', '/email/draft', { body: opts })
+}
+
+export function runComposeSend(opts: SendEmailOpts): Promise<unknown> {
+  return daemonRequest('POST', '/email/send', { body: opts })
+}
+
+export function runDraftPlan(opts: { internalId: number; mode: ComposeMode }): Promise<unknown> {
+  return daemonRequest('POST', `/email/${opts.internalId}/draft-plan`, {
+    body: { mode: opts.mode }
+  })
+}
+
 // ---- IPC wiring ------------------------------------------------------------
 
 export function registerDraftHandlers(): void {
@@ -397,24 +359,26 @@ export function registerDraftHandlers(): void {
     }
   )
 
-  // Compose — write draft into Drafts (IMAP APPEND).
+  // Compose — write draft into Drafts (IMAP APPEND). bodyHtml rides in the JSON
+  // body (no temp file) — serve-api A4 takes the TipTap string directly.
   ipcMain.handle(
     'email:draft',
     async (_evt, opts: ComposeDraftOpts): Promise<WriteEnvelope<unknown>> => {
       const valid = validateComposeOpts(opts, 'email:draft')
       if (!('mode' in valid)) return valid
-      return envelopeFromCli(runCompose('draft', valid, {}))
+      return envelopeFromCli(runComposeDraft(valid))
     }
   )
 
-  // Compose — SMTP real send (irreversible). Handler always passes --yes;
-  // the renderer must confirm via SendConfirmDialog before invoking.
+  // Compose — SMTP real send (irreversible). serve-api /email/send is always
+  // confirmed=True (renderer shows SendConfirmDialog first), so no --yes knob
+  // crosses the wire.
   ipcMain.handle(
     'email:send',
     async (_evt, opts: SendEmailOpts): Promise<WriteEnvelope<unknown>> => {
       const valid = validateComposeOpts(opts, 'email:send')
       if (!('mode' in valid)) return valid
-      return envelopeFromCli(runCompose('send', valid, { withYes: true }))
+      return envelopeFromCli(runComposeSend(valid))
     }
   )
 
@@ -427,7 +391,7 @@ export function registerDraftHandlers(): void {
         'email:draftPlan'
       )
       if (!('mode' in valid)) return valid
-      return envelopeFromCli(runCompose('draft', valid, { dryRun: true }))
+      return envelopeFromCli(runDraftPlan(valid))
     }
   )
 }
@@ -437,6 +401,8 @@ export const __testing = {
   classifyScriptError,
   lookupMailbox,
   parseScriptOutput,
-  composeArgs,
-  validateComposeOpts
+  validateComposeOpts,
+  runComposeDraft,
+  runComposeSend,
+  runDraftPlan
 }

@@ -7,15 +7,23 @@
 // creates the draft). The actual confirmation dance lives in dispatch.ts;
 // these handlers just do the write once dispatch invokes them.
 //
-// Surface choices (per Plan D6):
-//   - email_flag / email_archive  → IPC writeFlagDirect (Sprint 16 outbox
-//     SSoT, ~5ms direct SQLite write + outbox enqueue, no CLI fork)
+// Surface choices (per Plan D6, D1 收编):
+//   - email_flag / email_archive  → daemon flag (runEmailFlag → 本机 serve-api
+//     POST /email/{id}/flag, in-process outbox SSoT 写; D1 起不再 IPC 直写
+//     SQLite, 写源统一 daemon service)
 //   - email_draft_reply           → IPC createDraft (AppleScript via shell
-//     script, ~3-5s, returns Mail.app draft_id)
+//     script, ~3-5s, returns Mail.app draft_id; host-local, 保留 emergency 直 fork)
 
 import type { ToolDef, ToolResult, ToolExecCtx } from '../registry'
-import { writeFlagDirect } from '../../../handlers/write_ops'
+import { runEmailFlag } from '../../../handlers/write_ops'
 import { createDraft as ipcCreateDraft } from '../../../handlers/draft'
+
+/** daemon flag 返回的 FlagResult data 块的相关字段 (替代旧 IPC 直写路径的
+ *  {outbox_ids,merged_ids} —— D1 parity 调查确认的唯一形状变更点)。 */
+interface FlagData {
+  updated_ids?: number[]
+  outbox_entries?: unknown[]
+}
 
 // ── helpers ────────────────────────────────────────────────────────────
 
@@ -45,7 +53,10 @@ function err(code: string, message: string, start: number): ToolResult {
  *  payload into `ctx.userEditedInput`. The tool handler uses that, NOT the
  *  original LLM-proposed input. Returns both shapes so the tool can also
  *  surface "user changed X to Y" detail in the result envelope. */
-function effective(input: unknown, ctx: ToolExecCtx): {
+function effective(
+  input: unknown,
+  ctx: ToolExecCtx
+): {
   resolved: unknown
   userEdited: boolean
 } {
@@ -102,18 +113,22 @@ export const emailFlag: ToolDef = {
         start
       )
     }
-    const result = writeFlagDirect(id, { isRead, isFlagged, processingStatus })
-    if (!result.ok) return err(result.code, result.message, start)
-    return ok(
-      {
-        internal_id: id,
-        applied: { is_read: isRead, is_flagged: isFlagged, processing_status: processingStatus },
-        outbox_ids: result.data.outbox_ids,
-        merged_ids: result.data.merged_ids,
-        user_edited: userEdited
-      },
-      start
-    )
+    try {
+      const data = (await runEmailFlag(id, { isRead, isFlagged, processingStatus })) as FlagData
+      return ok(
+        {
+          internal_id: id,
+          applied: { is_read: isRead, is_flagged: isFlagged, processing_status: processingStatus },
+          updated_ids: data.updated_ids ?? [],
+          outbox_entries: data.outbox_entries ?? [],
+          user_edited: userEdited
+        },
+        start
+      )
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? 'E_INTERNAL'
+      return err(code, e instanceof Error ? e.message : String(e), start)
+    }
   }
 }
 
@@ -146,18 +161,22 @@ export const emailArchive: ToolDef = {
     if (id === null || id < 0) {
       return err('E_INVALID_ARG', 'internal_id required (non-negative integer)', start)
     }
-    const result = writeFlagDirect(id, { processingStatus: '已完成' })
-    if (!result.ok) return err(result.code, result.message, start)
-    return ok(
-      {
-        internal_id: id,
-        archived: true,
-        outbox_ids: result.data.outbox_ids,
-        merged_ids: result.data.merged_ids,
-        user_edited: userEdited
-      },
-      start
-    )
+    try {
+      const data = (await runEmailFlag(id, { processingStatus: '已完成' })) as FlagData
+      return ok(
+        {
+          internal_id: id,
+          archived: true,
+          updated_ids: data.updated_ids ?? [],
+          outbox_entries: data.outbox_entries ?? [],
+          user_edited: userEdited
+        },
+        start
+      )
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? 'E_INTERNAL'
+      return err(code, e instanceof Error ? e.message : String(e), start)
+    }
   }
 }
 

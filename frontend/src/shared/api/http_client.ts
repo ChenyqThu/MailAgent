@@ -98,6 +98,11 @@ export interface RequestOptions {
   /** Override the default Accept header (binary endpoints don't use this
    *  helper at all — see HttpApi attachment methods). */
   signal?: AbortSignal
+  /** Extra request headers merged on top of Accept (and below the body
+   *  Content-Type). D1 — the Electron main process injects
+   *  `X-MailAgent-Local-Token` here when forwarding writes to the loopback
+   *  serve-api; the remote web build leaves this unset (CF Access cookie). */
+  headers?: Record<string, string>
 }
 
 /**
@@ -122,7 +127,7 @@ export async function request<T>(
 ): Promise<T> {
   const url = `${baseUrl}${path}${buildQuery(opts.query)}`
 
-  const headers: Record<string, string> = { Accept: 'application/json' }
+  const headers: Record<string, string> = { Accept: 'application/json', ...(opts.headers ?? {}) }
   const init: RequestInit = {
     method,
     headers,
@@ -130,6 +135,7 @@ export async function request<T>(
     signal: opts.signal
   }
   if (opts.body !== undefined) {
+    // Content-Type set last so a caller-supplied opts.headers can't clobber it.
     headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(opts.body)
   }

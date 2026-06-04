@@ -5,8 +5,8 @@
 //
 // Design doc: docs/agent-harness-design.md §4.1.
 // Plan: ~/.claude/plans/subagent-plan-lexical-moler.md (D5: tool dispatch
-// surface = IPC handler direct for reads, IPC writeFlagDirect for writes,
-// CLI subprocess only for long tasks).
+// surface = IPC handler direct for reads, IPC direct writes [D1 收编后改经
+// 本机 daemon serve-api], CLI subprocess only for long tasks).
 //
 // Why a fresh module rather than extending `chat/registry.ts`:
 //   `chat/registry.ts` is the backend registry (notion-agent / custom-api),
@@ -121,14 +121,14 @@ export class ToolRegistry {
     const all = [...this.byName.values()]
     if (!filter?.categories || filter.categories.length === 0) return all
     const set = new Set(filter.categories)
-    return all.filter(t => set.has(t.category))
+    return all.filter((t) => set.has(t.category))
   }
 
   /** Emit the array that Anthropic `/v1/messages` expects under `tools`.
    *  Returns `[]` when nothing's registered; the backend strips the field
    *  in that case (Anthropic rejects empty `tools` arrays). */
   toAnthropicSchema(filter?: { categories?: ToolCategory[] }): BackendToolDescriptor[] {
-    return this.list(filter).map(t => ({
+    return this.list(filter).map((t) => ({
       name: t.name,
       description: t.description,
       input_schema: t.inputSchema
@@ -146,7 +146,7 @@ export class ToolRegistry {
       parameters: Record<string, unknown>
     }
   }> {
-    return this.list(filter).map(t => ({
+    return this.list(filter).map((t) => ({
       type: 'function' as const,
       function: {
         name: t.name,

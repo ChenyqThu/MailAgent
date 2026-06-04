@@ -24,6 +24,14 @@ export function envelopeFromCli<T>(p: Promise<unknown>): Promise<WriteEnvelope<T
       if (err instanceof CliError) {
         return { ok: false, code: err.errorCode, message: err.message, hint: err.hint }
       }
+      // D1 — writes now forward to the loopback daemon (serve-api) via
+      // http_client, which throws an ApiError (a plain Error carrying a string
+      // `code` + optional `hint`). Preserve both so the renderer keeps
+      // branching on `err.code === 'E_NOT_FOUND'` exactly as with CliError.
+      if (err instanceof Error && typeof (err as { code?: unknown }).code === 'string') {
+        const e = err as Error & { code: string; hint?: string }
+        return { ok: false, code: e.code, message: e.message, hint: e.hint }
+      }
       const message = err instanceof Error ? err.message : String(err)
       return { ok: false, code: 'E_DISPATCH', message }
     }
