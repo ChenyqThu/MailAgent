@@ -116,6 +116,9 @@ class EmailNotionSyncApp:
         # 必须先于 reverse_sync 构造（reverse_sync 需注入 outbox_repo）。
         self.outbox_repo = None
         self.fanout_worker = None
+        # C1: JobWorker 在 start() 里按 gate 构造; 这里先初始化为 None, 与 fanout_worker
+        # 对齐, 避免 start() 早退路径下 shutdown 引用 self.job_worker 时 AttributeError。
+        self.job_worker = None
         if config.mailagent_outbox_enabled:
             from src.sync import (
                 FanoutWorker,
@@ -422,6 +425,27 @@ class EmailNotionSyncApp:
             if self.fanout_worker:
                 fanout_task = asyncio.create_task(self.fanout_worker.run())
 
+            # C1: 启动 async_jobs JobWorker（长任务 batch resync / backfill 统一执行器）。
+            # 默认关闭灰度 (MAILAGENT_ASYNC_JOBS_ENABLED)；关闭时 POST /api/jobs 仍可
+            # enqueue 但无 worker 执行 (行保持 queued)。串行 claim + 复用 LongTaskContext。
+            job_worker_task = None
+            if config.mailagent_async_jobs_enabled:
+                from src.sync import AsyncJobRepository, JobWorker
+                self.job_worker = JobWorker(
+                    repo=AsyncJobRepository(config.sync_store_db_path),
+                    config=config,
+                    poll_interval_sec=config.mailagent_async_jobs_poll_interval_sec,
+                )
+                job_worker_task = asyncio.create_task(self.job_worker.run())
+                logger.info(
+                    f"[job-worker] enabled "
+                    f"(poll={config.mailagent_async_jobs_poll_interval_sec}s)"
+                )
+            else:
+                logger.info(
+                    "[job-worker] disabled (MAILAGENT_ASYNC_JOBS_ENABLED=false)"
+                )
+
             # Phase 1 Calendar SSoT: 启动 CalendarSyncWorker (DavMail CalDAV → SQLite
             # calendar_event 表的增量 sync). 默认关闭, 灰度期手动启用. 详见 plan §1.4 +
             # frontend-view-silly-knuth.md.
@@ -580,6 +604,9 @@ class EmailNotionSyncApp:
             if self.fanout_worker:
                 self.fanout_worker.stop()
                 logger.info(f"[outbox] fanout_worker.stats={self.fanout_worker.stats}")
+            if self.job_worker:
+                self.job_worker.stop()
+                logger.info(f"[job-worker] job_worker.stats={self.job_worker.stats}")
 
             # 发送停止告警
             if self.alerter:
@@ -605,6 +632,8 @@ class EmailNotionSyncApp:
                 tasks.append(report_worker_task)
             if fanout_task:
                 tasks.append(fanout_task)
+            if job_worker_task:
+                tasks.append(job_worker_task)
             if davmail_watchdog_task:
                 tasks.append(davmail_watchdog_task)
             if calendar_sync_task:

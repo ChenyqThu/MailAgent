@@ -410,6 +410,23 @@ class Config(BaseSettings):
         description="FanoutWorker tick 最大并发 fanout 数（gated by asyncio.Semaphore）。",
     )
 
+    # C1: async_jobs 子系统 —— 长任务 (batch resync / backfill) 走统一 daemon API。
+    # POST /api/jobs enqueue → serve 进程内 JobWorker 串行 claim + 执行 (复用
+    # LongTaskContext checkpoint/熔断) + SSE job.progress 进度。默认关闭灰度期。
+    # 详见 docs/backend-service-migration-matrix.md C1 + plan §C1。
+    mailagent_async_jobs_enabled: bool = Field(
+        default=False, env="MAILAGENT_ASYNC_JOBS_ENABLED",
+        description=(
+            "是否启用 async_jobs 长任务子系统 (serve 进程内 JobWorker)。默认 false 灰度期 —— "
+            "关闭时 POST /api/jobs 仍可 enqueue 但无 worker 执行 (行保持 queued)。"
+            "CLI 长任务 (email resync --range / backfill) 不受影响, 仍走 LongTaskContext 直跑。"
+        ),
+    )
+    mailagent_async_jobs_poll_interval_sec: int = Field(
+        default=5, env="MAILAGENT_ASYNC_JOBS_POLL_INTERVAL_SEC",
+        description="JobWorker 主循环 poll 间隔（秒），默认 5。空闲时 claim 不到 job 即 sleep 此值。",
+    )
+
     # =========================================================================
     # ping-island 灵动岛集成 (Island-Sprint 2)
     # 详见 frontend/ISLAND-PLUGIN.md。ping_island_enabled 默认开（Phase 1+2+F1-F6 已 ship）；仍需装 ping-island.app，未装则 socket fail-open

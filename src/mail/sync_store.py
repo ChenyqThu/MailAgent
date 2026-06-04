@@ -220,7 +220,11 @@ class SyncStore:
     #                imap_uid); folder 两态 (archive / drafts). 草稿编辑 = 删旧 APPEND 新 →
     #                imap_uid 变但本地 id 不变. FolderSyncWorker (davmail-only) 增量同步,
     #                前端 /archive /drafts 直读. 详见 plan mailagent-davmail-zesty-eclipse.md.
-    DB_VERSION = 20  # v20: email_outbox partial unique index (merge 原子化前置, B1)
+    # v21 (async_jobs, C1 2026-06): 新增 async_jobs 表 (长任务统一 enqueue + 执行账本) +
+    #                ux_async_jobs_idempotency partial unique + ix_async_jobs_status。纯加表,
+    #                CREATE TABLE IF NOT EXISTS 对新/旧库均生效, 无 data migration。serve 进程内
+    #                JobWorker (灰度 MAILAGENT_ASYNC_JOBS_ENABLED) 消费。详见 C1 看板格。
+    DB_VERSION = 21  # v21: async_jobs 表 (C1 长任务子系统)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1132,6 +1136,40 @@ class SyncStore:
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_report_created ON report(created_at DESC)"
+        )
+
+        # async_jobs (C1): 长任务 (batch resync / backfill) 的统一 enqueue + 执行账本。
+        # 与 email_outbox 同构 (sync-engine 队列): serve 进程内 JobWorker 串行 claim
+        # (status queued→running 条件 UPDATE, 仿 fanout) + 执行 (复用 LongTaskContext) +
+        # 写终态。idempotency_key partial unique → 弱网重发同一 job 不重复起 (返已有 job_id)。
+        # checkpoint_internal_id 让 worker 崩溃重启后从断点续跑。不复用 email_outbox
+        # (outbox=字段级 merge 幂等 intent; job=带 checkpoint/熔断/进度的过程, 语义不同)。
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS async_jobs (
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL,                 -- resync | backfill_body | backfill_derivatives | backfill_metadata
+                target_kind TEXT NOT NULL DEFAULT '',   -- range | ids | all (LongTaskContext target_kind)
+                target_key TEXT NOT NULL DEFAULT '',     -- '53000-53100' / 'ids:1,2,3' / 'all'
+                params_json TEXT NOT NULL DEFAULT '{}',  -- job_type 特定参数 (replace_existing / force / ...)
+                status TEXT NOT NULL DEFAULT 'queued',   -- queued|running|succeeded|partial_failure|failed|aborted
+                idempotency_key TEXT,                    -- hash(job_type+target+request_id); partial unique 防弱网重发
+                progress_done INTEGER NOT NULL DEFAULT 0,
+                progress_total INTEGER NOT NULL DEFAULT 0,
+                checkpoint_internal_id INTEGER,          -- 最后完成的 unit internal_id (crash resume floor)
+                result_json TEXT,                        -- 终态 summary (succeeded/failed/aborted counts)
+                last_error TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                started_at REAL,
+                finished_at REAL
+            )
+        """)
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_async_jobs_idempotency "
+            "ON async_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_async_jobs_status ON async_jobs(status, job_id)"
         )
 
         # === v19: 旧 v18 库 report_agent 无新列 → ALTER 补。**必须在 seed 前**（下面 seed

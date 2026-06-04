@@ -25,8 +25,8 @@
 | send | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ✅ A4 |
 | compose_plan（dry-run） | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ➖ |
 | draft 创建（AppleScript） | ➖ host-local | ➖ | ⬜ D1 `POST /api/drafts` | shell fork 保留<br>（emergency 回切） | ➖ | ➖ |
-| **长任务** batch_resync | ⬜ C1 job | ✅ LongTaskContext | ⬜ C1 `POST /api/jobs` | ⬜ D1 | ✅ 已存在 | ⬜ C1 |
-| **长任务** backfill_body/deriv | ⬜ C1 job | ✅ LongTaskContext | ⬜ C1 `POST /api/jobs` | ➖ 运维 | ✅ 已存在 | ⬜ C1 |
+| **长任务** batch_resync | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ⬜ D1 | ✅ 已存在 | ✅ C1 |
+| **长任务** backfill_body/deriv/meta | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ➖ 运维 | ✅ 已存在 | ✅ C1 |
 
 ## 读路径（保留直读，仅追 wire-shape parity）
 
@@ -50,7 +50,7 @@
 | guards：Actor + require_write_auth + check_pm2_conflict | ✅ | A1 |
 | ServiceContext / ServiceDeps | ✅ | A1 |
 | outbox merge 原子 SQL + JS/Py 契约测试 | ✅ | B1 |
-| async_jobs 表 + JobWorker（挂 serve） | ⬜ | C1 |
+| async_jobs 表 + JobWorker（挂 serve） | ✅ | C1 |
 | 双层鉴权（本地 token + CF Access）+ SSE 9200 鉴权 | ⬜ | C2 |
 | serve-api 崩溃自拉起 + 断路器 | ⬜ | C2 |
 | 前端统一 http_client 写路径 | ⬜ | D1 |
@@ -64,6 +64,9 @@ grep -rn "run_cli(" src/api/routers/ | wc -l        # 基线 12 → A2 后 10 �
                                                     # + email 1（legacy notion update-flag）+ llm 1
                                                     # （selftest 读命令，不烧 token）。A 系列 fork 已清零，
                                                     # 余 4 全是 D1/后续阶段目标（非 compose）
+# C1: jobs router 全 in-process (run_cli 仍 4 — C1 新增端点不 fork); 分层不变式保持
+grep -c "run_cli\|cli_runner" src/api/routers/jobs.py   # = 0 (in-process)
+grep -rn "from src.cli\|import src.cli" src/services/    # 空 (src/services/ 零 cli import 不变式)
 # D1 后：前端 TS 直写 outbox 应消失
 grep -rn "writeFlagDirect" frontend/src/            # D1 后应为空
 # D1 后：前端 fork CLI 写应消失（保留 draft.ts 的 AppleScript emergency fork）
@@ -141,3 +144,17 @@ pytest tests/cli/test_schema_contract.py -q
     - **C1**（async_jobs 子系统）：长任务（batch_resync/backfill）走统一 API 前置。新建 async_jobs 表（DB migration，**B1 已把 DB_VERSION 推到 20 → C1 用 21**）+ serve 进程 JobWorker（复用 `cli/long_task.py::LongTaskContext` 的 checkpoint/熔断/SIGINT + SSE 9200 进度推送；执行进程=**serve** 非 serve-api）。HTTP `POST /api/jobs` 只 enqueue + `idempotency_key` 防弱网重发 + claim 用条件 UPDATE（仿 `fanout.py:116`）。风险中高（新子系统）。
     - **C2**（双层鉴权本地 token + CF Access + SSE 9200 鉴权 + serve-api 崩溃自拉起）、**D1**（前端写收编 daemon + 删 `writeFlagDirect`，**B1 的原子 UPSERT + 契约 golden 即其安全网**）、**D2**（读 wire 去重 + 最终验收 + 文档）。
     - **B1 复用点**：`ux_outbox_pending_intent` 的 UPSERT 范式（C1 job claim 条件 UPDATE 可仿）；JS/Py 契约 golden 模式（D1 收编后回归保护）；`was_inserted` 判别（C1 如需区分 insert/update 可复用，注意亚毫秒边缘）。
+
+- **C1（✅ 完成）** `feat/backend-service-layer`：async_jobs 长任务子系统（batch resync + backfill body/derivatives/metadata 走统一 daemon API）。**横切基础设施就位**（A+B+C1 全完成）。
+  - **DB v20→v21（纯加表）**：`sync_store.py` `_init_database` 加 `async_jobs` 表（job_id PK / job_type / target_kind|key / params_json / status(queued→running→succeeded|partial_failure|failed|aborted) / idempotency_key / progress_done|total / checkpoint_internal_id / result_json / 时间戳）+ `ux_async_jobs_idempotency` partial unique（WHERE idempotency_key IS NOT NULL）+ `ix_async_jobs_status`。`CREATE TABLE IF NOT EXISTS` 无条件跑 → 新/老库都建，**无 data migration**。bump `DB_VERSION` 21 + 前端 `EXPECTED_DB_VERSION` 21（`db_version_consistency.test.ts` 自动校验通过）。**不复用 email_outbox**（outbox=字段级 merge 幂等 intent；job=带 checkpoint/熔断/进度的过程，语义不同，强塞破坏 merge 不变式）。
+  - **`AsyncJobRepository`（`src/sync/async_jobs.py`，仿 OutboxRepository）**：`enqueue`（**幂等**：`INSERT ... ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING` → 命中既有 key 回查既有 job_id + was_created=False，弱网重发不重复起；NULL key 恒 INSERT。比 B1 的 `created_at==updated_at` 探针更稳，**不依赖时钟分辨率**——reviewer L1 建议已落地）/ `claim_next`（SELECT 最老 queued + 条件 UPDATE queued→running 原子 claim，仿 `fanout.py:116`）/ `update_progress`（COALESCE 保留未传字段）/ `mark_terminal` / `recover_orphaned`（启动时 running→queued，crash resume 前置）/ `get`。
+  - **job 执行器（`src/sync/job_runners.py`，engine 层）**：`run_resync_job` 复用领域类 `NotionSync.create_email_page_from_sqlite`（src/notion，**逐字段对齐 CLI `_resync_batch._make_unit`**，仅 `CliNotFoundError`→`ServiceNotFoundError`，二者 code 同为 `E_NOT_FOUND`）；`run_backfill_job` **lazy 复用** `cli/commands/backfill` 现成模块级 builder（`_pick_candidates`/`_make_body_units`/`_find_candidates`/`_make_derivative_units`/`_make_metadata_units`，**backfill.py 零改动**，完整下沉留 D2 wire 去重）；`drive_units` 共享 LongTaskContext driver（`install_signal_handler=False` + `checkpoint_every=0`，async_jobs 是 checkpoint 真源）；`summary_to_status` 映射终态。**关键决策**：job 执行器在 `src/sync/`（engine 层）而非 `src/services/` —— 因要复用 `cli/long_task`（plan §C1 钦定）+ backfill builder；这样 **`src/services/` 的「零 cli import」审计不变式保持干净**（grep 验证）。
+  - **`LongTaskContext` 加 opt-in `on_unit_done` hook**（`run()` 新增可选回调，返 False → 协作式停止；CLI 不传 → **零行为变更**）+ `except CliError` 泛化为 `except ServiceError`（CliError 是 ServiceError 子类 → CLI 行为不变，但 job unit 抛的 ServiceNotFoundError 也拿到正确 `.code` 而非 E_INTERNAL）。
+  - **`JobWorker`（`src/sync/job_worker.py`，挂 serve 进程，仿 FanoutWorker）**：asyncio loop 串行 claim + `asyncio.to_thread(run_job)` + 写终态 + SSE（`job.running`/`job.progress` 每 10 unit/`job.done`/`job.failed`）。启动 `recover_orphaned()` crash-resume，resume_from=checkpoint_internal_id+1。每 job 新建 ServiceContext（fresh NotionSync client，与 serve-api per-request 同语义——asyncio.run 每次新 loop 复用 client 会撞）。`stop()` 经 on_unit_done 返 False 协作式停。`service.py` start() 按 `MAILAGENT_ASYNC_JOBS_ENABLED`（默认关灰度）gate + create_task + shutdown stop；`self.job_worker=None` 在 `__init__`（reviewer L2 已落地）。
+  - **serve-api 端点（in-process 无 fork）**：`src/api/routers/jobs.py` `POST /api/jobs`（enqueue，job_type 校验 + idempotencyKey 透传 + 仅新建发 `job.enqueued` SSE，**不做 pm2 检测**——job 在 serve=mail-sync 进程内跑不与自己冲突）+ `GET /api/jobs/{job_id}`（状态/进度/终态查询，404）；`deps.get_job_repo()` lazy 单例；`app.py` 注册。
+  - **验收**：`pytest tests/cli tests/api` = **700 passed, 1 failed**（唯一=预存 env-coupled `test_resolve_allowed_email`；test_schema_contract + test_service_parity 全绿；C1 给 tests/api +6）。新增测试 **38 个全绿**：`tests/mail/test_sync_store_v21_migration.py`(6) + `tests/sync/test_async_jobs.py`(18, repo 全语义 + JOB_TYPES==VALID_JOB_TYPES + summary_to_status) + `tests/sync/test_job_parity.py`(4, **resync job 输出==CLI golden + E_NOT_FOUND parity**) + `tests/sync/test_job_worker.py`(4, e2e claim→执行→终态 + 协作式停 + checkpoint 续跑 + runner 失败) + `tests/api/test_jobs_api.py`(6, 端点 enqueue/get/校验/幂等 SSE)。前端 `pnpm test` 除 **9 个预存 EmailRow i18n** 外全绿（1271 passed，含 db_version 一致性）；测后 `rebuild:electron` 还原 ABI。残留：`run_cli(` routers 仍 **4**（C1 端点 in-process 不 fork）；`src/services/` 零 cli import（不变式保持）；ruff 新文件全绿。
+  - **独立 review（code-reviewer subagent，opus）**：**APPROVE**，0 Critical/0 High/0 Medium，8 个核查项全 PASS（parity 逐字段对齐有 golden 锁死 / except 泛化经类层级证明 CLI 零变更 / 分层不变式 grep 确认 / claim 原子 + 幂等 / crash-resume 闭环 / migration 标准 / backfill 签名齐 / SQL 全参数化无泄漏）。确认只读 git + 未碰生产库。3 LOW（was_created 时钟边角→**已改 DO NOTHING 消除** / self.job_worker 初始化→**已移 __init__** / update_progress|mark_terminal 无 status 守卫=单 worker 不变式，已文档化）+ 2 NIT（陈旧 doc 引用→**已修** / aborted/partial 都发 job.done=data.status 可区分，留 D1）。
+  - **next-phase handoff → C2**（C1 收官；剩 C2/D1/D2 横切基础设施 + 前端收编）：
+    - **C2**（双层鉴权 + serve-api 崩溃自拉起）：远程 `verify_cf_access` 不动 + 本地 per-session ephemeral token（Electron `crypto.randomBytes` → env 注入 serve-api + IPC 给 renderer）；**SSE 9200 补鉴权**（C1 的 `job.progress` 经它推，远程 cloudflared 暴露时 CF Access 必须覆盖 9200，否则泄漏 internal_id + 操作时序）；`backend_lifecycle.ts::spawnService` 加指数退避 re-spawn + crash-loop 断路器。风险中。
+    - **D1**（前端写收编 daemon + 删 writeFlagDirect）：依赖 B1+C1+C2。前端可经 `POST /api/jobs` 起长任务 + `GET /api/jobs/{id}` 轮询进度 + 消费 `job.*` SSE（events_bridge 接线）。**C1 复用点**：`AsyncJobRepository` 的 DO-NOTHING 幂等 enqueue 范式；JobWorker 的 on_unit_done 进度 hook；job 执行器在 sync 层复用 cli/long_task 的分层处理。
+    - **D2**（读 wire 去重 + 最终验收 + 文档）：**把 backfill 的 `_pick_candidates`/`_make_*_units` 等 transport-neutral builder 从 `cli/commands/backfill.py` 正式下沉**（C1 lazy 复用是务实临时态，D2 wire 去重一并做，届时 `job_runners.run_backfill_job` 改 import 下沉后的模块）。

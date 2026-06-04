@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # 仅类型提示，运行期不 import (避免裸 worktree i
     from src.config import Config
     from src.repository import EmailRepository
     from src.services.context import ServiceContext
+    from src.sync.async_jobs import AsyncJobRepository
 
 
 def get_settings() -> "Config":
@@ -61,6 +62,20 @@ def get_repository() -> "EmailRepository":
     FastAPI ``Depends(get_repository)`` 用。所有读端点经此拿 repo，统一 db_path 来源。
     """
     return _build_repository()
+
+
+@lru_cache(maxsize=1)
+def _build_job_repo() -> "AsyncJobRepository":
+    """构造 AsyncJobRepository 单例 (lazy)。只持 db_path，连接 per-call 短命，WAL 并发安全。"""
+    from src.config import config as _config_singleton
+    from src.sync.async_jobs import AsyncJobRepository
+
+    return AsyncJobRepository(db_path=_config_singleton.sync_store_db_path)
+
+
+def get_job_repo() -> "AsyncJobRepository":
+    """返回进程内 AsyncJobRepository 单例 (C1 async_jobs 端点用)。"""
+    return _build_job_repo()
 
 
 def get_service_ctx() -> "ServiceContext":

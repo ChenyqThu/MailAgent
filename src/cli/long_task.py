@@ -35,9 +35,7 @@ from typing import (
 
 import typer
 
-from src.cli.exceptions import (
-    CliError,
-)
+from src.services.errors import ServiceError
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -223,10 +221,19 @@ class LongTaskContext:
         units: Iterable[UnitItem],
         *,
         dry_run: bool = False,
+        on_unit_done: Optional[
+            Callable[["UnitResult", "LongTaskSummary"], Optional[bool]]
+        ] = None,
     ) -> Tuple[List[UnitResult], LongTaskSummary]:
         """执行一组 unit, 返回 (results, summary).
 
         caller 拿到结果后自行 ``emit_results_and_exit``.
+
+        Args:
+            on_unit_done: 可选 per-unit 回调 (C1 async-jobs JobWorker 用 —— 刷
+                ``async_jobs`` 进度 + SSE ``job.progress``)。返回 ``False`` → 像
+                SIGINT 一样**优雅中止** (协作式停止, serve 关停时 worker 用)。CLI 直跑
+                不传 → 零行为变更; hook 自身异常仅 warn 不杀主任务。
         """
         resume_floor = self._read_resume_floor()
         units_list = list(units)
@@ -252,7 +259,9 @@ class LongTaskContext:
                     )
                     self._consecutive_failures = 0
                     summary.succeeded += 1
-                except CliError as exc:
+                except ServiceError as exc:
+                    # CliError 是 ServiceError 子类 → CLI 行为不变; C1 async-jobs 的
+                    # unit 抛 ServiceNotFoundError 等也能拿到正确 .code (非 E_INTERNAL)。
                     dur = int((time.monotonic() - t0) * 1000)
                     res = UnitResult(
                         internal_id=internal_id,
@@ -281,6 +290,30 @@ class LongTaskContext:
                     self._emit_ndjson_line(res)
                 else:
                     self._maybe_print_progress(idx + 1, summary, res)
+
+                # C1: per-unit hook (async-jobs JobWorker 刷进度 + SSE + 协作式停止)。
+                # 返回 False → 像 SIGINT 一样优雅中止 (serve 关停时 worker 用)。CLI 不传。
+                if on_unit_done is not None:
+                    try:
+                        _cont = on_unit_done(res, summary)
+                    except Exception as exc:  # noqa: BLE001 — hook 故障不阻断长任务
+                        print(
+                            f"[long-task] WARN: on_unit_done hook failed: "
+                            f"{type(exc).__name__}: {exc}",
+                            file=sys.stderr,
+                        )
+                        _cont = None
+                    if _cont is False:
+                        summary.aborted = True
+                        summary.aborted_reason = "stop requested (cooperative)"
+                        if not dry_run:
+                            self._write_checkpoint(
+                                last_completed=internal_id,
+                                succeeded=summary.succeeded,
+                                failed=summary.failed,
+                                aborted_at=time.time(),
+                            )
+                        break
 
                 # checkpoint
                 if (
