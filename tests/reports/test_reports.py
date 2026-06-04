@@ -346,6 +346,93 @@ class TestAssembler:
         item = next(x for x in doc.blocks if x["type"] == "email_item")
         assert "已回复" in item["badges"] and "已标旗" in item["badges"]
 
+    def test_block_order_highlights_top_keypoints_before_fyi(self):
+        # 重排契约（按信息重要度）：highlights(callout) + key_points 并置顶部「必看区」
+        # ——紧随 stat_row、在所有 section 之前；FYI section 整组殿后，避免海量 list
+        # 淹没关键信息。
+        draft = ReportDraft(
+            headline="h", overview="ov",
+            sections=[
+                {"id": "attention", "title": "需要关注", "icon": "alert", "email_refs": [1]},
+                {"id": "fyi", "title": "FYI 已汇总", "icon": "inbox", "email_refs": [2]},
+            ],
+            key_points=["必须知道的事"],
+            highlights=[{"tone": "critical", "title": "截止", "body": "周五前交付"}],
+            model="mk",
+        )
+        doc = assemble_report_doc(draft=draft, briefs=self._briefs(), counts={"total": 2, "urgent": 1},
+                                  agent_id="a", cadence="daily", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g", model="mk", now=_NOW)
+        types = [b["type"] for b in doc.blocks]
+        sec_is = [i for i, t in enumerate(types) if t == "section"]
+        kp_i = types.index("key_points")
+        # ① 顶部「必看区」：stat_row → callout(核心要点) → key_points，全在首个 section 之前。
+        assert types.index("stat_row") < types.index("callout") < kp_i < sec_is[0]
+        # ② 末尾 section 即 FYI；其邮件(id=2)整组殿后，排在 attention 邮件(id=1)之后。
+        assert doc.blocks[sec_is[-1]]["id"] == "fyi"
+        att_eid_i = next(i for i, b in enumerate(doc.blocks)
+                         if b["type"] == "email_item" and b["internal_id"] == 1)
+        fyi_eid_i = next(i for i, b in enumerate(doc.blocks)
+                         if b["type"] == "email_item" and b["internal_id"] == 2)
+        assert kp_i < att_eid_i < fyi_eid_i
+
+    def test_is_fyi_section_multiple_signals(self):
+        # FYI 识别多重兜底：id / icon / 标题任一命中即整组殿后（LLM 偶尔不严格遵守也能 catch）。
+        from src.reports.assembler import _is_fyi_section
+        assert _is_fyi_section({"id": "fyi", "title": "随便", "icon": "info"})
+        assert _is_fyi_section({"id": "x", "title": "随便", "icon": "inbox"})
+        assert _is_fyi_section({"id": "x", "title": "FYI / 系统通知", "icon": "info"})
+        assert not _is_fyi_section({"id": "attention", "title": "需要关注", "icon": "alert"})
+        assert not _is_fyi_section({"id": "handled", "title": "已处理", "icon": "check"})
+
+    def test_is_attention_section_signals(self):
+        # attention 识别：id=attention/alert 或 icon=alert → 排在 key_points 之前、other 之前。
+        from src.reports.assembler import _is_attention_section
+        assert _is_attention_section({"id": "attention", "title": "x", "icon": "alert"})
+        assert _is_attention_section({"id": "alert", "title": "x", "icon": "info"})
+        assert _is_attention_section({"id": "x", "title": "x", "icon": "alert"})
+        assert not _is_attention_section({"id": "handled", "title": "已处理", "icon": "check"})
+        assert not _is_attention_section({"id": "fyi", "title": "FYI", "icon": "inbox"})
+
+    def test_block_order_three_tier_keypoints_top(self):
+        # 三档分类：callout + key_points 提顶；section 重排为 attention → other(handled) → fyi
+        # （即便 LLM 把 handled 给在前面也纠正）。
+        draft = ReportDraft(
+            headline="h", overview="ov",
+            sections=[
+                {"id": "handled", "title": "已处理", "icon": "check", "intro": "x", "email_refs": []},
+                {"id": "attention", "title": "需要关注", "icon": "alert", "intro": "x", "email_refs": []},
+                {"id": "fyi", "title": "FYI", "icon": "inbox", "intro": "x", "email_refs": []},
+            ],
+            key_points=["要点"], highlights=[{"tone": "warn", "body": "B"}], model="mk",
+        )
+        doc = assemble_report_doc(draft=draft, briefs=[], counts={"total": 0},
+                                  agent_id="a", cadence="daily", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g", model="mk", now=_NOW)
+        sec_ids = [b["id"] for b in doc.blocks if b["type"] == "section"]
+        assert sec_ids == ["attention", "handled", "fyi"]
+        types = [b["type"] for b in doc.blocks]
+        assert types.index("callout") < types.index("key_points") < types.index("section")
+
+    def test_weekly_text_sections_preserved(self):
+        # 周报 / 聚合层：section 纯文字概述（email_refs 空），有 intro/summary 即保留（不跳过、
+        # 无 email_item）；key_points/highlights 同样提顶。
+        draft = ReportDraft(
+            headline="h", overview="ov",
+            sections=[
+                {"id": "trend", "title": "本周态势", "icon": "info", "intro": "主线推进", "email_refs": []},
+                {"id": "followup", "title": "仍需跟进", "icon": "info", "summary": "PoC 待拍板", "email_refs": []},
+            ],
+            key_points=["本周要点"], highlights=[{"tone": "warn", "body": "风险"}], model="mk",
+        )
+        doc = assemble_report_doc(draft=draft, briefs=[], counts={"total": 0},
+                                  agent_id="a", cadence="weekly", report_date="2026-06-02",
+                                  window_start="s", window_end="e", generated_at="g", model="mk", now=_NOW)
+        types = [b["type"] for b in doc.blocks]
+        assert types.count("section") == 2 and "email_item" not in types
+        assert types.index("callout") < types.index("key_points") < types.index("section")
+        assert doc.blocks[0]["title"] == "邮件周报"
+
 
 # ============================================================
 # summarizer

@@ -58,8 +58,10 @@ REPORT_TOOL_SCHEMA: Dict[str, Any] = {
                 "maxItems": 6,
                 "description": (
                     "把邮件分组。每组 email_refs 是该组邮件的 internal_id，"
-                    "**必须从给定邮件清单里选，绝不能编造**。建议分组："
-                    "需要你亲自关注 / Jarvis 已处理 / FYI 已汇总。空组不要给。"
+                    "**必须从给定邮件清单里选，绝不能编造**。建议分组（按行动优先级）："
+                    "需要你亲自关注 / Jarvis 已处理 / FYI 已汇总。**FYI / 通知类"
+                    "必须用 id='fyi'、icon='inbox'**（报告据此把它整组排到最末尾，"
+                    "避免淹没上面的关键信息）。空组不要给。"
                 ),
                 "items": {
                     "type": "object",
@@ -95,13 +97,19 @@ REPORT_TOOL_SCHEMA: Dict[str, Any] = {
             "key_points": {
                 "type": "array",
                 "maxItems": 6,
-                "description": "你必须知道的关键信息，0-5 条，每条带来源语境。",
+                "description": (
+                    "你必须知道的关键信息，0-5 条，每条带来源语境。"
+                    "报告会把它紧跟 highlights 置于报告顶部「必看信息区」。"
+                ),
                 "items": {"type": "string", "maxLength": 160},
             },
             "highlights": {
                 "type": "array",
                 "maxItems": 3,
-                "description": "高亮提示（截止 / 风险），0-3 条；无则空数组。",
+                "description": (
+                    "高亮提示（截止 / 风险），0-3 条；无则空数组。"
+                    "报告会把它置顶到统计卡正下方，只放最该第一眼看到的。"
+                ),
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
