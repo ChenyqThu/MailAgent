@@ -13,8 +13,17 @@ import { describe, expect, test, beforeEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
+import i18n from '@shared/i18n'
 import { EmailRow } from '../../src/shared/components/email/EmailRow'
 import type { EnrichedEmailMeta } from '../../src/shared/api/types'
+
+// EmailRow renders i18n aria-labels (emailRow.toggleFlag/togglePin/important/
+// archive/…) + the NEW chip. The stored combo snapshots + the isNew assertion
+// are en-US ("Toggle flag" / "NEW"). Init i18n to en-US so t() returns real
+// strings instead of raw keys (same pattern as EmailDetail/ChatSidebar tests,
+// which call i18n.changeLanguage at module top-level). Without this every
+// aria-label renders as its key and the 8 snapshots + NEW chip mismatch.
+await i18n.changeLanguage('en-US')
 
 function makeEmail(over: Partial<EnrichedEmailMeta> = {}): EnrichedEmailMeta {
   return {
