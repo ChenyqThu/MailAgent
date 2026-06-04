@@ -313,46 +313,36 @@ export function writeFlagDirect(
       const outboxIds: number[] = []
       const mergedIds: number[] = []
 
-      // 复刻 Python OutboxRepository.enqueue 的 merge 语义:
-      // 同 (internal_id, op_type='flag_sync', target, status='pending') 已存在 → UPDATE payload
-      // 否则 INSERT 新行.
+      // B1: 单条原子 UPSERT, 与 Python OutboxRepository.enqueue 同一条 SQL (语义真源
+      // = SQLite 引擎, 不再两份手抄 merge + 消读-改-写竞态). 命中 partial unique index
+      // ux_outbox_pending_intent (同 internal_id+op_type+target 且 status='pending') →
+      // DO UPDATE json_patch (后写覆盖同 key, RFC7396); 否则 INSERT 新行. was_inserted
+      // (INSERT 时 created_at==updated_at) 区分 outboxIds / mergedIds.
       const enqueueOne = (target: 'mailapp' | 'notion', payload: Record<string, unknown>) => {
         if (Object.keys(payload).length === 0) return // 空 payload 跳过
+        // 紧凑 sorted —— 与 Python json.dumps(sort_keys, separators) + SQL json_patch
+        // 输出逐字节一致 (B1 契约: write_ops_outbox_parity.test.ts ↔ test_outbox_parity.py).
         const payloadJson = JSON.stringify(payload, Object.keys(payload).sort())
-        const existing = db
+        const row = db
           .prepare(
-            `SELECT outbox_id, payload_json FROM email_outbox
-             WHERE internal_id = ? AND op_type = 'flag_sync' AND target = ? AND status = 'pending'
-             ORDER BY outbox_id DESC LIMIT 1`
+            `INSERT INTO email_outbox
+               (internal_id, op_type, target, payload_json, source,
+                status, attempts, last_error, next_retry_at, created_at, updated_at)
+             VALUES (?, 'flag_sync', ?, ?, 'frontend_direct',
+                     'pending', 0, NULL, NULL, ?, ?)
+             ON CONFLICT(internal_id, op_type, target) WHERE status = 'pending'
+             DO UPDATE SET
+               payload_json = json_patch(payload_json, excluded.payload_json),
+               source = COALESCE(excluded.source, source),
+               updated_at = excluded.updated_at
+             RETURNING outbox_id, (created_at = updated_at) AS was_inserted`
           )
-          .get(internalId, target) as { outbox_id: number; payload_json: string | null } | undefined
-        if (existing) {
-          let base: Record<string, unknown> = {}
-          try {
-            base = JSON.parse(existing.payload_json || '{}') as Record<string, unknown>
-          } catch {
-            /* malformed: 当 empty 处理 */
-          }
-          const merged = { ...base, ...payload }
-          const mergedJson = JSON.stringify(merged, Object.keys(merged).sort())
-          db.prepare(
-            `UPDATE email_outbox SET payload_json = ?, source = COALESCE(?, source), updated_at = ?
-             WHERE outbox_id = ?`
-          ).run(mergedJson, 'frontend_direct', now, existing.outbox_id)
-          mergedIds.push(existing.outbox_id)
-        } else {
-          const ins = db
-            .prepare(
-              `INSERT INTO email_outbox
-                 (internal_id, op_type, target, payload_json, source,
-                  status, attempts, last_error, next_retry_at,
-                  created_at, updated_at)
-               VALUES (?, 'flag_sync', ?, ?, 'frontend_direct',
-                       'pending', 0, NULL, NULL, ?, ?)`
-            )
-            .run(internalId, target, payloadJson, now, now)
-          outboxIds.push(Number(ins.lastInsertRowid))
+          .get(internalId, target, payloadJson, now, now) as {
+          outbox_id: number
+          was_inserted: number
         }
+        if (row.was_inserted) outboxIds.push(Number(row.outbox_id))
+        else mergedIds.push(Number(row.outbox_id))
       }
 
       enqueueOne('mailapp', mailappPayload)

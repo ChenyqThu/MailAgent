@@ -220,7 +220,7 @@ class SyncStore:
     #                imap_uid); folder 两态 (archive / drafts). 草稿编辑 = 删旧 APPEND 新 →
     #                imap_uid 变但本地 id 不变. FolderSyncWorker (davmail-only) 增量同步,
     #                前端 /archive /drafts 直读. 详见 plan mailagent-davmail-zesty-eclipse.md.
-    DB_VERSION = 19  # v19: report_agent +trigger_mode/timezone/body_full_max + 周/月报 agent
+    DB_VERSION = 20  # v20: email_outbox partial unique index (merge 原子化前置, B1)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1179,6 +1179,71 @@ class SyncStore:
             "WHERE id = 'daily_email_digest' AND body_full_priorities IS NULL",
             ('["🔴 紧急", "🟡 重要"]',),
         )
+
+        # === v20: email_outbox merge 原子化前置 —— partial unique index ===
+        # B1: enqueue 的 read-modify-write merge 换成单条原子 UPSERT
+        # (ON CONFLICT(internal_id,op_type,target) WHERE status='pending'
+        #  DO UPDATE json_patch)，消「TS write_ops.ts 与 Python outbox.py 两份手抄
+        # merge」+ 读-改-写竞态。建唯一索引前必须先合并历史竞态产生的重复 pending
+        # 行 (同 key 多条 pending → 否则 CREATE UNIQUE INDEX 失败)。幂等：已迁移库
+        # 重跑时无重复行 (索引已挡) → dedup no-op。
+        if current_version < 20:
+            try:
+                _dup_groups = cursor.execute(
+                    """
+                    SELECT internal_id, op_type, target FROM email_outbox
+                     WHERE status = 'pending'
+                     GROUP BY internal_id, op_type, target HAVING COUNT(*) > 1
+                    """
+                ).fetchall()
+                for _iid, _op, _tgt in _dup_groups:
+                    _rows = cursor.execute(
+                        """
+                        SELECT outbox_id, payload_json FROM email_outbox
+                         WHERE internal_id = ? AND op_type = ? AND target = ?
+                           AND status = 'pending'
+                         ORDER BY outbox_id ASC
+                        """,
+                        (_iid, _op, _tgt),
+                    ).fetchall()
+                    # 按 outbox_id 升序合并 payload (后写覆盖同 key)，保留最新 (max
+                    # outbox_id) 那行作聚合点 (与运行时 merge 进 latest 语义一致)。
+                    _merged: dict = {}
+                    for _r in _rows:
+                        try:
+                            _merged.update(json.loads(_r[1] or "{}"))
+                        except json.JSONDecodeError:
+                            pass
+                    _keep_id = _rows[-1][0]
+                    cursor.execute(
+                        "UPDATE email_outbox SET payload_json = ? WHERE outbox_id = ?",
+                        (
+                            json.dumps(
+                                _merged, ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            _keep_id,
+                        ),
+                    )
+                    cursor.executemany(
+                        "DELETE FROM email_outbox WHERE outbox_id = ?",
+                        [(_r[0],) for _r in _rows[:-1]],
+                    )
+                if _dup_groups:
+                    logger.info(
+                        f"v20 migration: merged {len(_dup_groups)} duplicate "
+                        f"outbox pending group(s) before unique index"
+                    )
+                cursor.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS ux_outbox_pending_intent
+                    ON email_outbox(internal_id, op_type, target)
+                    WHERE status = 'pending'
+                    """
+                )
+                logger.info("v20 migration: email_outbox partial unique index ready")
+            except sqlite3.OperationalError as e:
+                logger.warning(f"v20 migration skipped: {e}")
 
         # 更新数据库版本
         cursor.execute("""

@@ -138,62 +138,52 @@ class OutboxRepository:
             )
             return -1
 
-        payload_json = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)
+        # 紧凑 sorted —— 与 SQL json_patch 输出 (紧凑) + TS 侧 JSON.stringify (紧凑)
+        # 逐字节一致 (B1 契约)。merge 不再应用层 dict 合并, 全交给下面的 json_patch。
+        # ⚠️ 不变式: payload 值非 None —— json_patch 按 RFC7396 会删 value=null 的 key
+        # (与旧 dict-merge 设 None 分歧); 现所有 caller 经 _flag_payloads 只放非 None 字段。
+        payload_json = json.dumps(
+            payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         now = time.time()
 
         conn = self._connect()
         try:
-            # 合并语义：同 (internal_id, op_type, target, status='pending') 已存在 → merge
-            existing = conn.execute(
-                """
-                SELECT outbox_id, payload_json FROM email_outbox
-                WHERE internal_id = ? AND op_type = ? AND target = ? AND status = 'pending'
-                ORDER BY outbox_id DESC LIMIT 1
-                """,
-                (internal_id, op_type, target),
-            ).fetchone()
-
-            if existing:
-                # merge payload: 已有 payload 为 base, 新 payload 后写覆盖同 key
-                try:
-                    base_payload = json.loads(existing["payload_json"] or "{}")
-                except json.JSONDecodeError:
-                    base_payload = {}
-                merged = {**base_payload, **(payload or {})}
-                merged_json = json.dumps(merged, ensure_ascii=False, sort_keys=True)
-                conn.execute(
-                    """
-                    UPDATE email_outbox
-                       SET payload_json = ?, source = COALESCE(?, source), updated_at = ?
-                     WHERE outbox_id = ?
-                    """,
-                    (merged_json, source, now, existing["outbox_id"]),
-                )
-                conn.commit()
-                logger.debug(
-                    f"[outbox] merged into pending outbox_id={existing['outbox_id']} "
-                    f"(internal_id={internal_id}, target={target})"
-                )
-                return int(existing["outbox_id"])
-
-            # INSERT 新行
-            cursor = conn.execute(
+            # B1: 单条原子 UPSERT。命中 partial unique index ux_outbox_pending_intent
+            # (同 internal_id+op_type+target 且 status='pending') → DO UPDATE json_patch
+            # (后写覆盖同 key, 保留旧独有 key, RFC7396); 否则 INSERT 新行。一次性消
+            # 「读-改-写竞态」+「JS/Python 两份手抄 merge」。was_inserted 区分两路:
+            # INSERT 的 created_at==updated_at (同一 now); DO UPDATE 的 created_at 是
+            # 历史值 != 新 updated_at → 用于保持「仅新 intent 发 SSE」parity。
+            row = conn.execute(
                 """
                 INSERT INTO email_outbox
                     (internal_id, op_type, target, payload_json, source,
                      status, attempts, last_error, next_retry_at,
                      created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, ?, ?)
+                ON CONFLICT(internal_id, op_type, target) WHERE status = 'pending'
+                DO UPDATE SET
+                    payload_json = json_patch(payload_json, excluded.payload_json),
+                    source = COALESCE(excluded.source, source),
+                    updated_at = excluded.updated_at
+                RETURNING outbox_id, (created_at = updated_at) AS was_inserted
                 """,
                 (internal_id, op_type, target, payload_json, source, now, now),
-            )
+            ).fetchone()
             conn.commit()
-            outbox_id = int(cursor.lastrowid)
+            outbox_id = int(row["outbox_id"])
+            was_inserted = bool(row["was_inserted"])
+        finally:
+            conn.close()
+
+        if was_inserted:
             logger.debug(
                 f"[outbox] enqueued outbox_id={outbox_id} "
                 f"(internal_id={internal_id}, op_type={op_type}, target={target}, source={source})"
             )
-            # Sprint 15 Stage 2: SSE publish (silent on failure)
+            # Sprint 15 Stage 2: SSE publish (out of DB transaction, silent on failure)。
+            # merge 路径不发, 保持「仅新 intent 通知」语义 parity。
             from src.events.publisher import safe_publish
             safe_publish(
                 "outbox.enqueued",
@@ -206,9 +196,12 @@ class OutboxRepository:
                 },
                 source="outbox",
             )
-            return outbox_id
-        finally:
-            conn.close()
+        else:
+            logger.debug(
+                f"[outbox] merged into pending outbox_id={outbox_id} "
+                f"(internal_id={internal_id}, target={target})"
+            )
+        return outbox_id
 
     def enqueue_many(self, entries: List[Dict[str, Any]]) -> List[int]:
         """批量 enqueue（前端 BatchActionBar 一次 50 封 / `email flag --ids` 多封用）.
