@@ -206,9 +206,17 @@ async def test_valid_jwt_but_no_allowlist_configured_fails_closed_403(monkeypatc
 
 
 def test_resolve_allowed_email_prefers_override_when_config_absent(monkeypatch):
-    """In the bare worktree config() raises → resolver falls back to the override env."""
+    """config 不可用 (裸 worktree / 缺 .env) → resolver 回退 override env。
+
+    hermetic: 不依赖 worktree 磁盘上是否有 .env。删掉 ``src.config.config`` 符号, 强制
+    ``_resolve_allowed_email`` 里 lazy 的 ``from src.config import config`` 抛 ImportError
+    (= 裸 worktree config 单例构造失败的等效, 同样被 ``except Exception`` 吞掉), 验证
+    解析器回退到 ``MAILAGENT_API_ALLOWED_EMAIL`` override。
+    """
+    import src.config as config_mod
+
     monkeypatch.setattr(auth_mod, "ALLOWED_EMAIL_OVERRIDE", "Fallback@Example.com")
-    # config import will ValidationError here (no .env) — resolver must swallow + fall back.
+    monkeypatch.delattr(config_mod, "config", raising=False)
     assert auth_mod._resolve_allowed_email() == "fallback@example.com"
 
 
