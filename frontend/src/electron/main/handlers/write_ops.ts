@@ -97,6 +97,39 @@ export async function runEmailFlag(
   return daemonRequest('POST', `/email/${internalId}/flag`, { body: flagBody(opts) })
 }
 
+/** D2b — batch resync: enqueue an async_jobs resync job (mirror
+ *  HttpApi.email.batchResync — POST /jobs). Returns {job_id, status:'queued',
+ *  …} immediately; the serve process JobWorker runs it serially in the
+ *  background. `params` stays snake_case (backend
+ *  job_runners._resolve_resync_ids reads params.internal_ids); replace_existing
+ *  defaults true (live-resync parity with single resync); no idempotencyKey
+ *  (every click is a fresh job — re-running the same batch is allowed).
+ *  targetKind/targetKey are informational only here — backend batch mode reads
+ *  params.internal_ids and only parses target_key for targetKind:'range'. */
+export async function runBatchResync(
+  internalIds: number[],
+  opts: ResyncOpts = {}
+): Promise<unknown> {
+  return daemonRequest('POST', '/jobs', {
+    body: {
+      jobType: 'resync',
+      targetKind: 'batch',
+      targetKey: String(internalIds.length),
+      params: {
+        internal_ids: internalIds,
+        replace_existing: opts.replaceExisting ?? true,
+        skip_parent_lookup: opts.skipParentLookup ?? false
+      }
+    }
+  })
+}
+
+/** D2b — query async_jobs status / progress / terminal summary (mirror
+ *  HttpApi.jobs.get — GET /jobs/{id}). watchResyncJob's polling fallback. */
+export async function runGetJob(jobId: number): Promise<unknown> {
+  return daemonRequest('GET', `/jobs/${jobId}`)
+}
+
 // ---- IPC wiring ------------------------------------------------------------
 
 export function registerWriteOpsHandlers(): void {
@@ -245,6 +278,39 @@ export function registerWriteOpsHandlers(): void {
       )
     }
   )
+
+  // D2b — batch resync: 选中多封 → enqueue 一个 async_jobs resync job。前置校验
+  // internalIds 是非空整数数组 (server 也校验, 这里挡明显错误省一次 daemon RTT)。
+  ipcMain.handle(
+    'email:batchResync',
+    async (_evt, internalIds: unknown, opts: ResyncOpts = {}): Promise<WriteEnvelope<unknown>> => {
+      if (!Array.isArray(internalIds) || internalIds.length === 0) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'email:batchResync requires a non-empty internalIds array'
+        }
+      }
+      for (const id of internalIds) {
+        if (!Number.isInteger(id) || (id as number) < 0) {
+          return {
+            ok: false,
+            code: 'E_INVALID_ARG',
+            message: `email:batchResync: internalIds contains a non-integer id ${String(id)}`
+          }
+        }
+      }
+      return envelopeFromCli(runBatchResync(internalIds as number[], opts ?? {}))
+    }
+  )
+
+  // D2b — async_jobs status query (watchResyncJob polling). jobId is the
+  // async_jobs INTEGER PK — same non-negative-integer guard as internal ids.
+  ipcMain.handle('jobs:get', async (_evt, jobId: unknown): Promise<WriteEnvelope<unknown>> => {
+    const idOrErr = ensureInternalId(jobId, 'jobs:get')
+    if (typeof idOrErr !== 'number') return idOrErr
+    return envelopeFromCli(runGetJob(idOrErr))
+  })
 }
 
 // ---- test escape hatch -----------------------------------------------------

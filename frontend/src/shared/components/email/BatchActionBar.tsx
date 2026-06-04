@@ -11,12 +11,14 @@ import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, CheckCircle2, Flag, Mail, X } from 'lucide-react'
+import { Archive, CheckCircle2, Flag, Mail, RefreshCw, X } from 'lucide-react'
 
+import type { JobEnqueueResult } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useBatch } from '@shared/state/batch'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { watchResyncJob } from '@shared/state/resyncJob'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 interface Props {
@@ -95,6 +97,20 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
     await queryClient.invalidateQueries({ queryKey: ['emails'] })
   }
 
+  // D2b — 批量重传 Notion: 起一个 async_jobs resync job (后台串行), watchResyncJob
+  // 接管进度 toast + 终态 (不阻塞 / 不依赖本组件存活)。enqueue 本身失败才在此报错。
+  async function runResyncBatch(): Promise<void> {
+    if (selectedIds.length === 0) return
+    const ids = [...selectedIds]
+    try {
+      const res = (await mailApi.email.batchResync(ids)) as JobEnqueueResult
+      watchResyncJob({ mailApi, queryClient, t, jobId: res.job_id, total: ids.length })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(`${t('batchbar.resync')} 失败`, msg)
+    }
+  }
+
   return createPortal(
     <div
       ref={scopeRef}
@@ -169,6 +185,14 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
       >
         <Archive size={13} strokeWidth={2} />
         <span>{t('batchbar.archive')}</span>
+      </button>
+      <button
+        type="button"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
+        onClick={() => void runResyncBatch()}
+      >
+        <RefreshCw size={13} strokeWidth={2} />
+        <span>{t('batchbar.resync')}</span>
       </button>
 
       <div className="w-px h-5 bg-ink-border mx-1 ml-auto" />

@@ -25,7 +25,7 @@
 | send | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ✅ A4 |
 | compose_plan（dry-run） | ✅ A4 | ✅ A4 | ✅ A4 | ✅ D1 | ➖<br>(无独立 schema) | ➖ |
 | draft 创建（AppleScript） | ➖ host-local | ➖ | ⬜ D1 `POST /api/drafts` | shell fork 保留<br>（emergency 回切） | ➖ | ➖ |
-| **长任务** batch_resync | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ⬜ D2<br>(jobs API 前端未接) | ✅ 已存在 | ✅ C1 |
+| **长任务** batch_resync | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ✅ D2b<br>(batchResync+watchResyncJob) | ✅ 已存在 | ✅ C1 |
 | **长任务** backfill_body/deriv/meta | ✅ C1 job | ✅ LongTaskContext | ✅ C1 `POST /api/jobs` | ➖ 运维 | ✅ 已存在 | ✅ C1 |
 
 ## 读路径（保留直读，仅追 wire-shape parity）
@@ -56,6 +56,7 @@
 | 前端统一 http_client 写路径 | ✅ | D1 |
 | backfill builder 下沉 engine 层（`sync/backfill_builders.py`，消除 sync→cli 反向 import） | ✅ | D2a |
 | 读 wire-shape 投影单一真源（`services/wire.py`，email/attachment record→dict） | ✅ | D2a |
+| 前端 batch_resync jobs 接线（`daemon_api`→`POST /api/jobs` + `GET` 轮询 + `job.*` SSE + `watchResyncJob` 进度 toast + BatchActionBar 按钮） | ✅ | D2b |
 
 ## 残留检测（每阶段末跑，应为「预期内」或空）
 
@@ -84,6 +85,12 @@ grep -rn "from src.cli\|import src.cli" src/services/wire.py src/sync/backfill_b
 # D2a 后：读 wire 投影收编单一真源 → CLI + routers 不再各自 def helper
 grep -rn "^def _meta_to_dict\|^def _meta_record_to_list_item\|^def _body_summary" \
   src/cli/commands/email.py src/api/routers/email.py src/cli/commands/attachment.py  # 空
+# D2b 后：前端 batch_resync 接线就位（新增能力, 非消除）；后端零改动
+grep -c "batchResync" frontend/src/shared/api/types.ts frontend/src/shared/api/ElectronApi.ts \
+  frontend/src/shared/api/HttpApi.ts frontend/src/electron/main/handlers/write_ops.ts  # 各 ≥1
+grep -rln "watchResyncJob" frontend/src/shared/state/resyncJob.ts \
+  frontend/src/shared/components/email/BatchActionBar.tsx   # 2 文件（定义 + 调用）
+grep -rn "run_cli(" src/api/routers/ | wc -l                # 仍 4（D2b 零后端改动）
 # 全程：契约测试锚点必须全绿
 pytest tests/cli/test_schema_contract.py -q
 ```
@@ -214,3 +221,14 @@ pytest tests/cli/test_schema_contract.py -q
     - **D2b**（前端 batch_resync jobs API 接线，= 能力矩阵唯一剩的写操作 `⬜`）：前端**从零新增** —— `daemon_api.daemonRequest`(D1 已建) 调 `POST /api/jobs`(C1 端点) 起长任务 + `GET /api/jobs/{id}` 轮询 + `events_bridge.ts` 接 `job.*` SSE(C1 JobWorker 发) + UI 入口(选中多封 → 起 resync job → 进度)。涉及 UI **必真机/Playwright 验证**；改前端 → 跑 `cd frontend && pnpm test`。
     - **D2c**（最终验收 + 文档归档）：④ 性能基线(serve-api 写 ~500ms→几十 ms，需起 serve-api 实测) + ⑤ 端到端每写操作 CLI/本地 Electron/远程 web 各实跑(需真实 Notion/davmail/邮箱凭证) + ⑥ CLAUDE.md 文档地图加「服务层架构」指针 + `docs/claude/` 新建服务层架构文档 + 本看板归档 + 能力矩阵 100% 绿终判。
     - **D2a 复用点**：`backfill_builders` 已正式下沉(D2b 若需直接 import)；`wire.py` 投影(D2c 文档可引为「读形状单一真源」范例)；`test_wire_parity` golden 模式。
+
+- **D2b（✅ 完成）** `feat/backend-service-layer`：前端 batch_resync jobs API 接线（选中多封 → 起 async_jobs resync 长任务 → 看进度）。**纯前端 phase，后端零改动**（C1 的 `POST /api/jobs` + `GET /jobs/{id}` + `job.*` SSE 全就绪）。**能力矩阵唯一剩的写操作 `⬜` 点亮 → 写操作 100% 绿**。
+  - **设计发现**：项目早有完整 UI 占位 —— i18n `batchbar.resync`(「重传 Notion」) + `batchToast.{running,ok,partial,cancelled}`(零消费者) + Toast 的 long-task progress 机制(`push({progress})` → 进度条 + sticky，注释点名 BatchActionBar)。D2b = 把这套早规划的 UI 接到 C1 后端 → **零新增 i18n key**。
+  - **两路客户端（daemon_api mirror 约束）**：`EmailApi.batchResync(internalIds, opts)` + `JobsApi.get(jobId)` 加进 `types.ts`(MailApi.jobs) / `ElectronApi.ts`(ElectronJobsApi) / `HttpApi.ts`(jobs 对象)；`write_ops.ts` 加 `runBatchResync`/`runGetJob` forwarder + `email:batchResync`/`jobs:get` IPC handler。wire **逐字段一致**：`POST /jobs {jobType:'resync', targetKind:'batch', targetKey:String(len), params:{internal_ids, replace_existing, skip_parent_lookup}}`(camelCase 信封 + snake_case params，对齐后端 `_resolve_resync_ids` 读 params.internal_ids)。replace_existing 默认 true(实跑重传，与单封 resync UX parity)；不传 idempotencyKey(每次新 job，允许重跑同批)。write_ops.test 锁 Electron forwarder wire，HttpApi 注释 mirror + 同 `EmailApi.batchResync` 签名(沿用 D1 模式)。
+  - **进度 watcher（`src/shared/state/resyncJob.ts` 新，核心）**：`watchResyncJob` fire-and-forget，**不依赖 React 组件生命周期**(闭包持 mailApi/queryClient/toast store，用户退批量模式 / BatchActionBar unmount 仍跑到终态)。一个 sticky progress toast + 两路进度源：① SSE `job.*`(Electron: events_bridge 已转发全部 mailagent 事件，无需改 main 层；web: HttpApi.events.onEvent no-op 静默) ② GET `/jobs/{id}` 轮询(两端兜底: web 无 SSE 靠它拿终态 / Electron SSE 断线兜底)。`settled` 闸防 SSE×轮询双 finish + 互相 cleanup；轮询 reject 不终结(继续重试)；`MAX_WATCH_MS`(15min) 自毁兜底防永不终态泄漏；job_id 过滤防串扰。终态 5 路映射(succeeded→`batchToast.ok` / partial_failure→partial / failed-with-summary→partial / failed-runner-crash→`toolbarToast.resyncFailGeneric`+error detail / aborted→cancelled)对齐后端 `job_worker.py` 两形状 `job.failed`。
+  - **UI**：BatchActionBar 加「重传 Notion」按钮(RefreshCw，byte-identical 既有 markRead/archive 等按钮)；`runResyncBatch` 起 job 拿 job_id → `watchResyncJob` 接管(enqueue 本身失败才在此 toastError)。
+  - **验收**：typecheck(node+web) 0 error；`pytest tests/cli tests/api`=**718 passed 全绿**(零后端改动零回归；test_schema_contract + test_job_parity 含其中)；前端 D2b 测试 **31 passed**(write_ops +3 forwarder wire 断言 / 新 `resyncJob.test` 9: progress/终态 5 路/job_id 过滤/轮询兜底/reject 重试)；全量前端 **1287 passed**，9 failed 全是预存 `EmailRow.test.tsx` i18n(与 D2b 无关，C1/C2/D1 基线一致)；better-sqlite3 ABI 已还原。残留：batchResync 接线 types/ElectronApi/HttpApi/write_ops 各 ≥1 + watchResyncJob 2 文件 + `run_cli(` routers 仍 **4**(零后端改动)。lint：D2b 6 源文件 0 error(余 1 = email:pin `_opts` 预存，非 D2b)。
+  - **独立 review（code-reviewer subagent, opus）**：**APPROVE WITH NITS**，0 Crit/0 High/0 Med。对照后端源码逐项验证 wire 两路 byte-for-byte 一致 + SSE 5 路终态映射全对 + watcher 生命周期(尝试构造 SSE/轮询双 finish 与 in-flight-poll-after-cleanup 泄漏，均正确闭合) + IPC 边界校验。**2 NIT 已收**：runner-crash 文案 → `toolbarToast.resyncFailGeneric`(本地化 zh/en) / `targetKey` informational 注释。**1 LOW 不修(out of D2b scope)**：sticky progress toast 在 ≥4 toast 涌入时被 `MAX_VISIBLE` 降级挤掉 = **预存 toast store 限制，非 D2b 引入**，happy path 不受影响(已 spawn_task 标记 toast.ts 豁免 progress toast 降级)。确认全程只读未污染 git。
+  - **next-phase handoff → D2c**(D2b 收官；**A+B+C+D1+D2a+D2b 全完成，写操作 100% 绿**，剩 D2c = 最终验收 + 文档)：
+    - **D2c**：④ 性能基线(serve-api 写 ~500ms→几十 ms，需起 serve-api 实测) + ⑤ 端到端每写操作 CLI/本地 Electron/远程 web 各实跑(需真实 Notion/davmail/邮箱凭证 + 真机；batch resync 走 Playwright/真机选多封点「重传 Notion」看进度 toast) + ⑥ CLAUDE.md 文档地图加「服务层架构」指针 + `docs/claude/` 新建服务层架构文档 + 本看板归档 + 能力矩阵 100% 绿终判(写操作已全绿，D2c 补验收 gate 的性能/e2e/文档 checkbox)。
+    - **D2b 复用点**：`watchResyncJob` 进度 watcher 范式(未来 backfill UI 直接复用 jobs API + watcher)；两路 wire mirror + `write_ops.test` 锁形状；`MailApi.jobs` 已就位。**LOW 待办**：sticky progress toast 豁免 `MAX_VISIBLE` 降级(toast.ts，独立小任务)。

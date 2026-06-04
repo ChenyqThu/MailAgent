@@ -18,7 +18,9 @@ vi.mock('../../src/electron/main/daemon_api', () => ({
 import {
   __testing,
   runArchive,
+  runBatchResync,
   runEmailFlag,
+  runGetJob,
   runLlmRun,
   runPin,
   runResync,
@@ -126,6 +128,37 @@ describe('write_ops — daemon forwarders (mock daemonRequest)', () => {
     })
     // One request — not three. This is the whole point of --ids batching.
     expect(mockDaemonRequest).toHaveBeenCalledTimes(1)
+  })
+
+  test('batchResync → POST /jobs {jobType:resync, params.internal_ids}, replace_existing defaults true', async () => {
+    await runBatchResync([1, 2, 3])
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/jobs', {
+      body: {
+        jobType: 'resync',
+        targetKind: 'batch',
+        targetKey: '3',
+        params: { internal_ids: [1, 2, 3], replace_existing: true, skip_parent_lookup: false }
+      }
+    })
+    // One enqueue for the whole batch — N internal_ids ride in params, not N jobs.
+    expect(mockDaemonRequest).toHaveBeenCalledTimes(1)
+  })
+
+  test('batchResync opts override replace_existing / skip_parent_lookup', async () => {
+    await runBatchResync([5], { replaceExisting: false, skipParentLookup: true })
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/jobs', {
+      body: {
+        jobType: 'resync',
+        targetKind: 'batch',
+        targetKey: '1',
+        params: { internal_ids: [5], replace_existing: false, skip_parent_lookup: true }
+      }
+    })
+  })
+
+  test('getJob → GET /jobs/{id}', async () => {
+    await runGetJob(42)
+    expect(mockDaemonRequest).toHaveBeenCalledWith('GET', '/jobs/42')
   })
 })
 

@@ -52,6 +52,8 @@ import type {
   FolderSearchOpts,
   FolderSearchResult,
   FolderSyncStatusResult,
+  JobEnqueueResult,
+  JobRecord,
   ListOpts,
   LlmRunOpts,
   LlmSelfTestData,
@@ -280,7 +282,32 @@ export class HttpApi implements MailApi {
     archive: (internalId: number): Promise<unknown> =>
       // davmail-only → non-davmail backend yields E_INVALID_ARG (400) which
       // throws with the code. No --allow-concurrent on this one.
-      this.req<unknown>('POST', `/email/${internalId}/archive`, { body: {} })
+      this.req<unknown>('POST', `/email/${internalId}/archive`, { body: {} }),
+
+    batchResync: (internalIds: number[], opts?: ResyncOpts): Promise<JobEnqueueResult> =>
+      // D2b — enqueue an async_jobs resync job (mirror write_ops.runBatchResync).
+      // POST /jobs, camelCase envelope + params snake_case. replace_existing
+      // defaults true (live-resync parity with single resync); no idempotencyKey
+      // (every click is a fresh job — re-running the same batch is allowed).
+      // targetKind/targetKey informational only (backend reads params.internal_ids).
+      this.req<JobEnqueueResult>('POST', '/jobs', {
+        body: {
+          jobType: 'resync',
+          targetKind: 'batch',
+          targetKey: String(internalIds.length),
+          params: {
+            internal_ids: internalIds,
+            replace_existing: opts?.replaceExisting ?? true,
+            skip_parent_lookup: opts?.skipParentLookup ?? false
+          }
+        }
+      })
+  }
+
+  // D2b — async_jobs 长任务查询 (batch resync 进度轮询兜底)。web 无 SSE →
+  // watchResyncJob 纯靠此轮询拿终态。GET /api/jobs/{id}。
+  jobs = {
+    get: (jobId: number): Promise<JobRecord> => this.req<JobRecord>('GET', `/jobs/${jobId}`)
   }
 
   // Phase C — 存档 / 草稿箱. READS implemented (better-sqlite3-backed FastAPI

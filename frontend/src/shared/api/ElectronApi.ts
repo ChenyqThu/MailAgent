@@ -94,6 +94,9 @@ import type {
   IslandApi,
   IslandAppearancePayload,
   IslandStatus,
+  JobEnqueueResult,
+  JobRecord,
+  JobsApi,
   ListOpts,
   LlmApi,
   LlmRunOpts,
@@ -291,6 +294,17 @@ class ElectronEmailApi implements EmailApi {
     // Write IPC → envelope. CLI does IMAP MOVE INBOX→Archive + SQLite/Notion
     // Mailbox→存档 and returns {success, from_mailbox, to_mailbox, notion_updated}.
     const env = (await invoker()('email:archive', internalId)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
+  async batchResync(internalIds: number[], opts?: ResyncOpts): Promise<JobEnqueueResult> {
+    // D2b — Write IPC → envelope. Enqueues an async_jobs resync job and returns
+    // {job_id, status:'queued', was_created, …}; watchResyncJob then tracks
+    // progress via SSE job.* + jobs.get polling.
+    const env = (await invoker()(
+      'email:batchResync',
+      internalIds,
+      opts ?? {}
+    )) as WriteEnvelope<JobEnqueueResult>
     return unwrap(env)
   }
 }
@@ -714,6 +728,15 @@ class ElectronEventsApi implements EventsApi {
   }
 }
 
+// D2b — async_jobs 长任务查询 (batch resync 进度轮询)。jobs:get 经 daemonRequest
+// 转发 GET /api/jobs/{id}; 返回 envelope → unwrap (E_NOT_FOUND 抛 Error & {code})。
+class ElectronJobsApi implements JobsApi {
+  async get(jobId: number): Promise<JobRecord> {
+    const env = (await invoker()('jobs:get', jobId)) as WriteEnvelope<JobRecord>
+    return unwrap(env)
+  }
+}
+
 // Sprint 18 §PR B — repo-root .env + pm2 services. Both APIs are pure
 // thin IPC bridges; no caching here (cache lives in useEnvStore on the
 // renderer side, refreshed on demand).
@@ -821,6 +844,7 @@ class ElectronReportApi implements ReportApi {
 
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
+  jobs: JobsApi = new ElectronJobsApi()
   folder: FolderApi = new ElectronFolderApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()
