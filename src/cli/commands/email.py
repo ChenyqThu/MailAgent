@@ -15,6 +15,7 @@ import typer
 
 from src.cli.exceptions import CliError, CliInvalidArgError, CliNotFoundError
 from src.cli.output import emit, emit_cli_error
+from src.services.errors import ServiceError
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -709,29 +710,28 @@ def email_resync(
         if len(batch_ids) > 5:
             target_key += f"+{len(batch_ids) - 5}"
 
-    # 写命令 auth: dry-run 跳过
-    if not dry_run:
-        try:
-            cli.require_auth()
-        except CliError as e:
-            raise emit_cli_error(cli, e)
-        # PM2 conflict 检测 (写命令)
-        from src.cli.pm2_check import check_pm2_conflict
-        try:
-            check_pm2_conflict(cli, allow_concurrent=allow_concurrent)
-        except CliError as e:
-            raise emit_cli_error(cli, e)
-
-    # Single-id 走原 PR-2 路径
+    # Single-id 走 service (auth + pm2 下沉到 MailWriteService; dry-run 跳过)
     if batch_ids is None:
         return _resync_single(
             cli, internal_id,  # type: ignore[arg-type]
             dry_run=dry_run,
             replace_existing=replace_existing,
             no_parent=no_parent,
+            allow_concurrent=allow_concurrent,
         )
 
-    # Batch 模式
+    # Batch 模式: 命令体做 auth + pm2 (batch 走 LongTaskContext, 不经 service; dry-run 跳过)
+    if not dry_run:
+        try:
+            cli.require_auth()
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+        from src.cli.pm2_check import check_pm2_conflict
+        try:
+            check_pm2_conflict(cli, allow_concurrent=allow_concurrent)
+        except CliError as e:
+            raise emit_cli_error(cli, e)
+
     return _resync_batch(
         cli,
         internal_ids=batch_ids,
@@ -753,24 +753,23 @@ def _resync_single(
     dry_run: bool,
     replace_existing: bool,
     no_parent: bool,
+    allow_concurrent: bool,
 ) -> None:
-    """PR-2 单封 resync 路径 (保留向后兼容)."""
-    meta = cli.email_repo.get_metadata(internal_id)
-    if meta is None:
-        raise emit_cli_error(cli, CliNotFoundError(
-            f"Email metadata not found for internal_id={internal_id}",
-        ))
+    """PR-2 单封 resync 路径 —— A2 退化成调 ``MailWriteService`` (编排 + auth/pm2 下沉)."""
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(cli)
 
     if dry_run:
-        plan = {
-            "internal_id": internal_id,
-            "subject": meta.subject,
-            "current_page_id": meta.notion_page_id,
-            "action": "replace" if replace_existing else "create_or_skip",
-            "would_replace": replace_existing,
-            "skip_parent_lookup": no_parent,
-            "dry_run": True,
-        }
+        try:
+            plan = svc.plan_resync(
+                internal_id,
+                replace_existing=replace_existing,
+                skip_parent_lookup=no_parent,
+            )
+        except ServiceError as e:
+            raise emit_cli_error(cli, e)
         if cli.output.lower() == "text":
             print("=== resync plan (dry-run) ===")
             for key, value in plan.items():
@@ -779,28 +778,27 @@ def _resync_single(
             emit(cli, plan)
         return
 
-    notion_sync = cli.notion_sync
+    # 写鉴权: token 校验留在 CLI 侧 (require_auth → exit 4); 通过后构造已鉴权 Actor 交
+    # service。service 内部 require_write_auth(actor) + check_pm2_conflict(allow_concurrent)。
     try:
-        result = asyncio.run(
-            notion_sync.create_email_page_from_sqlite(
-                internal_id,
-                repo=cli.email_repo,
-                sync_store=cli.sync_store,
-                replace_existing=replace_existing,
-                skip_parent_lookup=no_parent,
-            )
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    try:
+        result = svc.resync(
+            internal_id,
+            replace_existing=replace_existing,
+            skip_parent_lookup=no_parent,
+            actor=Actor(kind="cli", authenticated=True, label="cli"),
+            allow_concurrent=allow_concurrent,
         )
-    except ValueError as e:
-        raise emit_cli_error(cli, CliNotFoundError(
-            str(e),
-            hint="Phase 1 之前的邮件正文未双写; 跑 `mailagent backfill body --internal-ids <id>` "
-                 "回填后再 resync",
-        ))
+    except ServiceError as e:
+        raise emit_cli_error(cli, e)
 
     data = {
-        "internal_id": internal_id,
-        "old_page_id": result.existing_page_id or meta.notion_page_id,
-        "new_page_id": result.page_id,
+        "internal_id": result.internal_id,
+        "old_page_id": result.old_page_id,
+        "new_page_id": result.new_page_id,
         "archived_page_id": result.archived_page_id,
         "action": result.action,
         "dry_run": False,
@@ -808,8 +806,8 @@ def _resync_single(
 
     if cli.output.lower() == "text":
         print(
-            f"resync {result.action}: internal_id={internal_id} "
-            f"new_page={result.page_id}"
+            f"resync {result.action}: internal_id={result.internal_id} "
+            f"new_page={result.new_page_id}"
         )
     else:
         emit(cli, data)
@@ -1287,109 +1285,56 @@ def email_flag(
     else:
         target_ids = [internal_id]  # type: ignore[list-item]
 
-    # 构造完整 payload (fanout 自己挑相关字段)
-    payload: dict = {}
-    if is_read is not None:
-        payload["is_read"] = is_read
-    if is_flagged is not None:
-        payload["is_flagged"] = is_flagged
-    if processing_status is not None:
-        payload["processing_status"] = processing_status
+    # A2: 编排 + 守卫下沉到 MailWriteService; 命令体只解析 target + 调 service + 格式化。
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
 
-    # MailAppFanout 只读 is_read / is_flagged, processing_status 让它跳过
-    mailapp_payload = {k: v for k, v in payload.items() if k in ("is_read", "is_flagged")}
+    svc = MailWriteService(cli)
 
-    # dry-run: 跳过 auth + pm2; 直接 emit plan
+    # dry-run: 跳过 auth + pm2; plan_flags 纯预览 (CLI + serve-api 共用同一份)
     if dry_run:
-        plan = {
-            "dry_run": True,
-            "internal_ids": target_ids,
-            "payload": payload,
-            "would_enqueue": [
-                {
-                    "internal_id": iid,
-                    "mailapp_payload": mailapp_payload,
-                    "notion_payload": payload,
-                }
-                for iid in target_ids
-            ],
-        }
+        plan = svc.plan_flags(
+            target_ids,
+            is_read=is_read,
+            is_flagged=is_flagged,
+            processing_status=processing_status,
+        )
         emit(cli, plan, meta_extra={"count": len(target_ids)})
         return
 
-    # auth + pm2 check
+    # 写鉴权: token 校验留在 CLI 侧 (require_auth → exit 4); 通过后构造已鉴权 Actor。
+    # service 内部 require_write_auth(actor) + check_pm2_conflict(allow_concurrent)。
     try:
         cli.require_auth()
     except CliError as e:
         raise emit_cli_error(cli, e)
-    from src.cli.pm2_check import check_pm2_conflict
     try:
-        check_pm2_conflict(cli, allow_concurrent=allow_concurrent)
-    except CliError as e:
-        raise emit_cli_error(cli, e)
-
-    # 执行: 每封邮件写 SQLite (echo prevention) + outbox 双 target
-    from src.sync.outbox import OutboxRepository
-
-    repo = cli.email_repo
-    sync_store = cli.sync_store  # 保证 v10 schema
-    outbox_repo = OutboxRepository(cli.cli_config.sync_store_db_path)
-
-    updated: list[int] = []
-    outbox_entries: list[dict] = []
-    not_found: list[int] = []
-
-    for iid in target_ids:
-        meta = repo.get_metadata(iid)
-        if meta is None:
-            not_found.append(iid)
-            continue
-
-        # 立即 update_local_flags 做 echo prevention.
-        # Sprint 15 D 块: processing_status 也镜像到 SQLite (列已存在), 让前端
-        # listEnriched 能立即读到 done 状态 (processing_status='已完成'),
-        # 不需要等 fanout 派发 Notion 完成. None 时不动 SQLite 该字段.
-        new_read = bool(is_read) if is_read is not None else bool(meta.is_read)
-        new_flagged = bool(is_flagged) if is_flagged is not None else bool(meta.is_flagged)
-        sync_store.update_local_flags(
-            iid, new_read, new_flagged,
+        result = svc.set_flags(
+            target_ids,
+            is_read=is_read,
+            is_flagged=is_flagged,
             processing_status=processing_status,
+            actor=Actor(kind="cli", authenticated=True, label="cli"),
+            allow_concurrent=allow_concurrent,
         )
-
-        # outbox 双 target: mailapp + notion, source='cli'
-        oid_mailapp = outbox_repo.enqueue(
-            internal_id=iid,
-            op_type="flag_sync",
-            target="mailapp",
-            payload=mailapp_payload,
-            source="cli",
-        ) if mailapp_payload else None
-        oid_notion = outbox_repo.enqueue(
-            internal_id=iid,
-            op_type="flag_sync",
-            target="notion",
-            payload=payload,
-            source="cli",
-        )
-        updated.append(iid)
-        outbox_entries.append({
-            "internal_id": iid,
-            "mailapp_outbox_id": oid_mailapp,
-            "notion_outbox_id": oid_notion,
-        })
+    except ServiceError as e:
+        raise emit_cli_error(cli, e)
 
     data = {
         "dry_run": False,
-        "updated_ids": updated,
-        "payload": payload,
-        "outbox_entries": outbox_entries,
+        "updated_ids": result.updated_ids,
+        "payload": result.payload,
+        "outbox_entries": result.outbox_entries,
     }
-    if not_found:
-        data["not_found"] = not_found
+    if result.not_found:
+        data["not_found"] = result.not_found
 
     emit(
         cli, data,
-        meta_extra={"count": len(updated), "not_found_count": len(not_found)},
+        meta_extra={
+            "count": len(result.updated_ids),
+            "not_found_count": len(result.not_found),
+        },
     )
 
 

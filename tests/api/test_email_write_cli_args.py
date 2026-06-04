@@ -1,13 +1,15 @@
 """email WRITE endpoints — CLI argv construction (the happy path, minus the fork).
 
-The write endpoints (flag / archive / draft / send / draft-plan) fork the real
-`mailagent` CLI via cli_runner.run_cli. Forking a real CLI needs a full `.env`
-(NOTION_TOKEN, …) + a davmail bridge, so the *happy* paths are e2e territory.
-What we CAN and MUST pin here is the **argv the router builds** — the slash-vs-
-tri-bool flag form (#7), the always-on `--allow-concurrent` on flag (#9) vs its
-ABSENCE on archive (#6/#9), the `--body-html-file <tmp>` temp-file dance (#8),
-snake_case body keys NOT getting camel-cased into CLI flags (#8), and the temp
-file being cleaned up afterwards.
+The write endpoints still backed by a fork (archive / draft / send / draft-plan)
+fork the real `mailagent` CLI via cli_runner.run_cli. Forking a real CLI needs a
+full `.env` (NOTION_TOKEN, …) + a davmail bridge, so the *happy* paths are e2e
+territory. What we CAN and MUST pin here is the **argv the router builds** — the
+ABSENCE of `--allow-concurrent` on archive (#6/#9), the `--body-html-file <tmp>`
+temp-file dance (#8), snake_case body keys NOT getting camel-cased into CLI flags
+(#8), and the temp file being cleaned up afterwards.
+
+NOTE: flag + resync moved to in-process MailWriteService in A2 (no longer fork
+CLI) — their endpoint tests live in tests/api/test_email_write_service.py.
 
 Technique: monkeypatch `src.api.routers.email.run_cli` (the name the router
 imported) with an async spy that records the argv and returns a canned
@@ -62,185 +64,6 @@ def spy(monkeypatch) -> _Spy:
     s = _Spy()
     monkeypatch.setattr(email_router, "run_cli", s)
     return s
-
-
-# ===========================================================================
-# POST /api/email/{id}/flag  — slash form (#7) + always --allow-concurrent (#9)
-# ===========================================================================
-
-
-def test_flag_single_slash_form_and_allow_concurrent(client, spy):
-    r = client.post(f"/api/email/{EMAIL_ID}/flag", json={"isRead": True})
-    assert r.status_code == 200
-    args = spy.last_args
-    # subcommand + single path id (no --ids).
-    assert args[:3] == ["email", "flag", str(EMAIL_ID)]
-    # slash form, NOT `--is-read true`.
-    assert "--is-read" in args
-    assert "true" not in args  # tri-bool string must NOT appear.
-    # always-on concurrency bypass (#9).
-    assert "--allow-concurrent" in args
-
-
-def test_flag_false_uses_no_slash_variant(client, spy):
-    r = client.post(f"/api/email/{EMAIL_ID}/flag", json={"isRead": False, "isFlagged": False})
-    assert r.status_code == 200
-    args = spy.last_args
-    assert "--no-is-read" in args
-    assert "--no-is-flagged" in args
-    # never the positive variants when the value is False.
-    assert "--is-read" not in args
-    assert "--is-flagged" not in args
-
-
-def test_flag_processing_status_passthrough(client, spy):
-    r = client.post(
-        f"/api/email/{EMAIL_ID}/flag", json={"processingStatus": "Needs Reply"}
-    )
-    assert r.status_code == 200
-    args = spy.last_args
-    i = args.index("--processing-status")
-    assert args[i + 1] == "Needs Reply"
-    assert "--allow-concurrent" in args
-
-
-def test_flag_batch_ids_mutually_exclusive_with_path(client, spy):
-    r = client.post(
-        f"/api/email/{EMAIL_ID}/flag", json={"isRead": True, "ids": [3, 4, 5]}
-    )
-    assert r.status_code == 200
-    args = spy.last_args
-    # batch → --ids comma list, and the path id is NOT a positional arg.
-    i = args.index("--ids")
-    assert args[i + 1] == "3,4,5"
-    assert str(EMAIL_ID) not in args
-    assert "--allow-concurrent" in args
-
-
-def test_flag_dry_run_skips_api_key_and_adds_flag(client, spy):
-    r = client.post(f"/api/email/{EMAIL_ID}/flag", json={"isRead": True, "dryRun": True})
-    assert r.status_code == 200
-    args = spy.last_args
-    assert "--dry-run" in args
-    assert "--allow-concurrent" in args
-    # dry-run → api_key not injected (None passed to run_cli).
-    assert spy.calls[-1]["api_key"] is None
-
-
-def test_flag_cli_error_maps_to_http(client, monkeypatch):
-    # CLI self-reports E_PM2_RUNNING (exit 9) → 409 via ERROR_CODE_TO_HTTP.
-    spy = _Spy(raises=CliRunnerError(
-        code="E_PM2_RUNNING", exit_code=9, message="mail-sync online",
-    ))
-    monkeypatch.setattr(email_router, "run_cli", spy)
-    r = client.post(f"/api/email/{EMAIL_ID}/flag", json={"isRead": True})
-    assert r.status_code == 409
-    assert r.json()["error"]["code"] == "E_PM2_RUNNING"
-    assert r.json()["meta"]["source"] == "cli"
-
-
-def test_flag_single_partial_failure_maps_to_207(client, monkeypatch):
-    # A1: a partial_failure wrapper (CLI exit 6) → HTTP 207, status partial_failure,
-    # error null, data = {succeeded, failed, summary} re-emitted verbatim.
-    data = {
-        "succeeded": [{"internal_id": 3}],
-        "failed": [{"internal_id": 4, "error": {"code": "E_GENERIC", "message": "x"}}],
-        "summary": {"total": 2, "succeeded": 1, "failed": 1, "aborted_by": None},
-    }
-    spy = _Spy(data=data, status="partial_failure")
-    monkeypatch.setattr(email_router, "run_cli", spy)
-    r = client.post(f"/api/email/{EMAIL_ID}/flag", json={"isRead": True, "ids": [3, 4]})
-    assert r.status_code == 207
-    body = r.json()
-    assert body["status"] == "partial_failure"
-    assert body["error"] is None
-    assert body["data"]["summary"]["failed"] == 1
-    assert body["meta"]["source"] == "cli"
-
-
-# ===========================================================================
-# POST /api/email/flag  — batch route, NO path id (C8), reject empty ids (400)
-# ===========================================================================
-
-
-def test_batch_flag_route_builds_ids_argv(client, spy):
-    # C8: dedicated no-path-id batch route. Body.ids → --ids comma list;
-    # slash-form flag (#7) + always --allow-concurrent (#9).
-    r = client.post("/api/email/flag", json={"ids": [7, 8, 9], "isFlagged": True})
-    assert r.status_code == 200
-    args = spy.last_args
-    assert args[:2] == ["email", "flag"]
-    i = args.index("--ids")
-    assert args[i + 1] == "7,8,9"
-    assert "--is-flagged" in args
-    assert "--allow-concurrent" in args
-    # no stray positional id segment (the only non-flag token is "email"/"flag").
-    assert "0" not in args
-
-
-def test_batch_flag_route_rejects_empty_ids_400(client, spy):
-    # C8: empty ids must 400 (no silent fallback to a path id — there is none).
-    r = client.post("/api/email/flag", json={"ids": [], "isRead": True})
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-    assert spy.calls == []  # rejected before any fork.
-
-
-def test_batch_flag_route_rejects_missing_ids_400(client, spy):
-    # C8: ids omitted entirely → 400 (batch route requires ids).
-    r = client.post("/api/email/flag", json={"isRead": True})
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-    assert spy.calls == []
-
-
-def test_batch_flag_route_requires_a_mutation_field_400(client, spy):
-    # Even with valid ids, at least one of isRead/isFlagged/processingStatus needed.
-    r = client.post("/api/email/flag", json={"ids": [1, 2]})
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-    assert spy.calls == []
-
-
-def test_batch_flag_route_rejects_noninteger_ids_400(client, spy):
-    r = client.post("/api/email/flag", json={"ids": [1, "two"], "isRead": True})
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-    assert spy.calls == []
-
-
-def test_batch_flag_route_rejects_bool_ids_400(client, spy):
-    # bool is an int subclass — True/False are NOT valid ids.
-    r = client.post("/api/email/flag", json={"ids": [True], "isRead": True})
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-    assert spy.calls == []
-
-
-def test_batch_flag_route_dry_run_skips_api_key(client, spy):
-    r = client.post("/api/email/flag", json={"ids": [5, 6], "isRead": True, "dryRun": True})
-    assert r.status_code == 200
-    args = spy.last_args
-    assert "--dry-run" in args
-    assert "--allow-concurrent" in args
-    assert spy.calls[-1]["api_key"] is None
-
-
-def test_batch_flag_route_partial_failure_maps_to_207(client, monkeypatch):
-    # A1 on the dedicated batch route: exit-6 partial_failure → 207.
-    data = {
-        "succeeded": [{"internal_id": 5}],
-        "failed": [{"internal_id": 6, "error": {"code": "E_GENERIC", "message": "x"}}],
-        "summary": {"total": 2, "succeeded": 1, "failed": 1, "aborted_by": None},
-    }
-    spy = _Spy(data=data, status="partial_failure")
-    monkeypatch.setattr(email_router, "run_cli", spy)
-    r = client.post("/api/email/flag", json={"ids": [5, 6], "isRead": True})
-    assert r.status_code == 207
-    body = r.json()
-    assert body["status"] == "partial_failure"
-    assert body["error"] is None
-    assert body["data"]["summary"]["total"] == 2
 
 
 # ===========================================================================

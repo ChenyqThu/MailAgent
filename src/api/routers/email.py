@@ -12,9 +12,9 @@ update-flag)。
   GET  /api/email/search                — repo.search_email_bodies  (SearchResult)
   POST /api/email/draft                 — CLI `email draft`          (DraftResult)
   POST /api/email/send                  — CLI `email send --yes`     (SendResult)
-  POST /api/email/{internal_id}/resync  — CLI `email resync`         (ResyncResult|plan)
+  POST /api/email/{internal_id}/resync  — service MailWriteService.resync (ResyncResult|plan)
   POST /api/email/{internal_id}/update-flag — CLI `notion update-flag` (legacy notion.updateFlag)
-  POST /api/email/{internal_id}/flag    — CLI `email flag`           (Sprint 15 outbox SSoT)
+  POST /api/email/{internal_id}/flag    — service MailWriteService.set_flags (Sprint 15 outbox SSoT)
   POST /api/email/{internal_id}/archive — CLI `email archive`        (davmail-only)
   POST /api/email/{internal_id}/draft-plan — CLI `email draft --dry-run` (DraftPlanResult)
   POST /api/email/{internal_id}/pin     — CLI `email pin|unpin`      (pin toggle)
@@ -25,25 +25,30 @@ update-flag)。
     ``_meta_to_dict`` / ``_body_summary`` / ``_attachment_to_dict`` /
     ``_meta_record_to_list_item`` helper, 让 cli.gen.ts 校验不变。
   - 统一响应走 app.success_envelope / app.APIError (全局 handler 转 envelope error +
-    正确 HTTP)。meta.source='sqlite' (repo 直查) / 'cli' (subprocess)。
-  - 写端点经 cli_runner.run_cli; resync 必带 ``--allow-concurrent`` (mail-sync 生产在线
-    → 否则 exit 9 E_PM2_RUNNING → 409)。notion update-flag **不做** pm2 检测, 不带该 flag。
-  - notion update-flag 用 **tri-bool 字符串形** ``--is-read true/false`` (与 email flag 的
-    ``--is-read/--no-is-read`` slash 形不同 — 实现规格 gotcha #7)。
+    正确 HTTP)。meta.source='sqlite' (repo 直查) / 'cli' (in-process service 或 subprocess)。
+  - flag / resync 写端点 (A2) 走进程内 MailWriteService (不再 fork CLI), 恒 allow_concurrent
+    (mail-sync 生产在线 → pm2 检测会拒)。其余写端点 (archive / draft / send / draft-plan / pin /
+    legacy notion update-flag) 仍经 cli_runner.run_cli, 由 A3/A4 续迁。
+  - notion update-flag (仍 fork) 用 **tri-bool 字符串形** ``--is-read true/false`` + **不做**
+    pm2 检测 (不带 --allow-concurrent), 与 email flag 路径区别 (实现规格 gotcha #6/#7)。
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from src.api.app import APIError, partial_envelope, success_envelope
+from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.cli_runner import CliRunnerError, get_cli_api_key, run_cli
-from src.api.deps import get_repository
+from src.api.deps import get_repository, get_service_ctx
+from src.services.errors import ServiceError
+from src.services.guards import Actor
+from src.services.mail_write import MailWriteService
 
 if TYPE_CHECKING:
     from src.repository import (
@@ -219,6 +224,16 @@ def _raise_from_cli_error(exc: CliRunnerError) -> None:
         hint=exc.hint,
         source="cli",
     ) from exc
+
+
+def _raise_from_service_error(exc: ServiceError) -> None:
+    """把 in-process service 抛的 ServiceError 转成 APIError (全局 handler 据 code 映 HTTP)。
+
+    与 ``_raise_from_cli_error`` 对称 (后者处理 fork CLI 的 CliRunnerError)。code 用
+    service 自报的 ``ServiceError.code`` (E_NOT_FOUND / E_PM2_RUNNING / ...), http_status
+    由 app.ERROR_CODE_TO_HTTP[code] 推导。``source='cli'`` 维持既有 wire 契约 (meta.source)。
+    """
+    raise APIError(exc.code, exc.message, hint=exc.hint, source="cli") from exc
 
 
 # ===========================================================================
@@ -504,36 +519,48 @@ async def resync_email(
     internal_id: int,
     body: Optional[dict[str, Any]] = None,
 ):
-    """重传单封邮件到 Notion (CLI `email resync`)。
+    """重传单封邮件到 Notion (A2: in-process MailWriteService, 不再 fork CLI)。
 
     body (ResyncOpts, 全可选): {replaceExisting, skipParentLookup, dryRun}。
     data = oneOf plan | result (email-resync.schema.json)。
-    **始终带 --allow-concurrent** (mail-sync 生产在线 → 否则 exit 9 → 409)；
-    dry-run 跳过 auth (run_cli api_key=None 时 CLI 自行处理写鉴权)。
+    **恒 allow_concurrent=True** (mail-sync 生产在线 → pm2 检测会拒; 「恒并发」决策上移到
+    HTTP 适配器)；dry-run 跳过 auth (plan_resync 纯预览, 无写)。
     """
     opts = body or {}
     dry_run = bool(opts.get("dryRun"))
+    replace_existing = bool(opts.get("replaceExisting"))
+    skip_parent_lookup = bool(opts.get("skipParentLookup"))
 
-    args: list[str] = ["email", "resync", str(internal_id), "--allow-concurrent"]
-    if opts.get("replaceExisting"):
-        args.append("--replace-existing")
-    if opts.get("skipParentLookup"):
-        args.append("--no-parent")
-    if dry_run:
-        args.append("--dry-run")
-
-    api_key = None if dry_run else get_cli_api_key()
+    svc = MailWriteService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=api_key)
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
+        if dry_run:
+            data = await asyncio.to_thread(
+                svc.plan_resync,
+                internal_id,
+                replace_existing=replace_existing,
+                skip_parent_lookup=skip_parent_lookup,
+            )
+        else:
+            result = await asyncio.to_thread(
+                svc.resync,
+                internal_id,
+                replace_existing=replace_existing,
+                skip_parent_lookup=skip_parent_lookup,
+                actor=Actor(kind="http", authenticated=True, label="cf-access"),
+                allow_concurrent=True,
+            )
+            data = {
+                "internal_id": result.internal_id,
+                "old_page_id": result.old_page_id,
+                "new_page_id": result.new_page_id,
+                "archived_page_id": result.archived_page_id,
+                "action": result.action,
+                "dry_run": False,
+            }
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(
-        result.data,
-        request=request,
-        source="cli",
-        meta_extra=result.meta or None,
-    )
+    return success_envelope(data, request=request, source="cli")
 
 
 # ===========================================================================
@@ -640,34 +667,34 @@ async def list_pinned_ids(
 
 # ===========================================================================
 # POST /api/email/{internal_id}/flag  +  POST /api/email/flag (batch)
-#   — CLI `email flag` (Sprint 15 outbox SSoT)
+#   — A2: in-process MailWriteService.set_flags / plan_flags (Sprint 15 outbox SSoT)
 # ===========================================================================
-# email flag 的 flag 约定与 notion update-flag 不同 (实现规格 gotcha #7):
-#   - email flag:        slash 形 ``--is-read`` / ``--no-is-read`` (typer --flag/--no-flag)
-#   - notion update-flag: tri-bool 字符串 ``--is-read true/false``
-# 永远带 ``--allow-concurrent`` (#9): mail-sync 生产在线, 否则 exit 9 E_PM2_RUNNING → 409。
-#
-# 两个入口共享同一 flag-mutation argv 构建 + 执行 (_build_flag_mutation_args /
-# _run_flag_cli), 只在 **target** 段不同:
+# A2 起不再 fork CLI: 端点解析 body 后直接调进程内 service (asyncio.to_thread)。两个
+# 入口共享 _extract_flag_mutation (取 is_read/is_flagged/processing_status) + _run_flag_service,
+# 只在 **target** 段不同:
 #   - 单封: path ``/{id}/flag`` → positional id (body 也可带 ids[] 走批量, 互斥时 path 被忽略)。
 #   - 批量: ``/flag`` (无 path id) → 必带 body ``ids[]``, 空/缺 ids → 400 (C8 契约,
 #     对齐 types.ts flag(null,{ids}))。
-# A1: CLI exit 6 + wrapper status=='partial_failure' (批量逐项失败) → partial_envelope
-#   → HTTP 207 Multi-Status (data = {succeeded, failed, summary}); 单封不会触发。
-# A6: EmailFlagOpts.allowConcurrent 是 client field, 服务端**恒忽略** —— 永远拼
-#   ``--allow-concurrent`` (gotcha #9 的安全选择, mail-sync 生产恒在线)。勿未来误接它。
+# **恒 allow_concurrent=True** (gotcha #9: mail-sync 生产恒在线, 否则 pm2 检测拒写;「恒并发」
+#   决策上移到 HTTP 适配器)。EmailFlagOpts.allowConcurrent 是 client field, 服务端**恒忽略**。
+# email flag 不走 LongTaskContext → 无 partial_failure: 逐项 not_found 落 data.not_found
+#   (HTTP 200), 不再有 207 路径。
 
 
-def _build_flag_mutation_args(opts: dict[str, Any]) -> list[str]:
-    """据 EmailFlagOpts 构建 ``email flag`` 的 **mutation** 段 (不含 target / dry-run)。
+def _extract_flag_mutation(
+    opts: dict[str, Any],
+) -> tuple[Optional[bool], Optional[bool], Optional[str]]:
+    """从 EmailFlagOpts 取出 (is_read, is_flagged, processing_status)。
 
-    返回 slash 形 (#7) 的 ``--is-read``/``--no-is-read`` 等。至少一个
-    isRead / isFlagged / processingStatus, 否则 raise E_INVALID_ARG (→ 400)。
-    target (--ids vs positional id) 与 --dry-run / --allow-concurrent 由 caller 拼。
+    至少一个 isRead / isFlagged / processingStatus, 否则 raise E_INVALID_ARG (→ 400)。
+    isRead/isFlagged 非 bool 视作未给 (与历史 slash-form 严格 bool 行为一致);
+    processingStatus 空串/非串视作未给。
     """
     is_read = opts.get("isRead")
     is_flagged = opts.get("isFlagged")
     processing_status = opts.get("processingStatus")
+    is_read = is_read if isinstance(is_read, bool) else None
+    is_flagged = is_flagged if isinstance(is_flagged, bool) else None
     has_processing = isinstance(processing_status, str) and len(processing_status) > 0
 
     if is_read is None and is_flagged is None and not has_processing:
@@ -676,55 +703,69 @@ def _build_flag_mutation_args(opts: dict[str, Any]) -> list[str]:
             "at least one of isRead / isFlagged / processingStatus required",
             source="cli",
         )
-
-    mutation: list[str] = []
-    # slash 形 (gotcha #7): --is-read/--no-is-read, --is-flagged/--no-is-flagged。
-    if is_read is True:
-        mutation.append("--is-read")
-    elif is_read is False:
-        mutation.append("--no-is-read")
-    if is_flagged is True:
-        mutation.append("--is-flagged")
-    elif is_flagged is False:
-        mutation.append("--no-is-flagged")
-    if has_processing:
-        mutation += ["--processing-status", str(processing_status)]
-    return mutation
+    return is_read, is_flagged, (processing_status if has_processing else None)
 
 
-async def _run_flag_cli(
-    request: Request, target: list[str], mutation: list[str], *, dry_run: bool
+async def _run_flag_service(
+    request: Request,
+    internal_ids: list[int],
+    *,
+    is_read: Optional[bool],
+    is_flagged: Optional[bool],
+    processing_status: Optional[str],
+    dry_run: bool,
 ):
-    """拼 ``email flag <target> <mutation> [--dry-run] --allow-concurrent`` 并执行。
+    """in-process ``MailWriteService.set_flags`` / ``plan_flags`` + envelope。
 
-    永远 ``--allow-concurrent`` (gotcha #9: mail-sync 在线 → 否则 exit 9 → 409)。
-    dry-run 跳过 auth (api_key=None)。A1: 批量 partial_failure (CLI exit 6) →
-    partial_envelope (HTTP 207); 其余成功 → success_envelope。
+    **恒 allow_concurrent=True** (gotcha #9)。dry-run 跳过 auth (plan_flags 纯预览, 无写);
+    执行路径用已鉴权 Actor (请求已过 verify_cf_access)。data 形状 = email-flag.schema.json
+    (executed flag_result | dry-run plan)。
     """
-    args: list[str] = ["email", "flag", *target, *mutation]
+    svc = MailWriteService(get_service_ctx())
+
     if dry_run:
-        args.append("--dry-run")
-    args.append("--allow-concurrent")
-
-    api_key = None if dry_run else get_cli_api_key()
-    try:
-        result = await run_cli(args, api_key=api_key)
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
-
-    if result.is_partial_failure:
-        # 批量逐项失败 (CLI exit 6) → 207；逐项 error 落在 data.failed[].error。
-        return partial_envelope(
-            result.data,
+        data = svc.plan_flags(
+            internal_ids,
+            is_read=is_read,
+            is_flagged=is_flagged,
+            processing_status=processing_status,
+        )
+        return success_envelope(
+            data,
             request=request,
             source="cli",
-            meta_extra=result.meta or None,
+            meta_extra={"count": len(internal_ids)},
         )
+
+    try:
+        result = await asyncio.to_thread(
+            svc.set_flags,
+            internal_ids,
+            is_read=is_read,
+            is_flagged=is_flagged,
+            processing_status=processing_status,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+            allow_concurrent=True,
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
+
+    data = {
+        "dry_run": False,
+        "updated_ids": result.updated_ids,
+        "payload": result.payload,
+        "outbox_entries": result.outbox_entries,
+    }
+    if result.not_found:
+        data["not_found"] = result.not_found
     return success_envelope(
-        result.data,
+        data,
         request=request,
         source="cli",
-        meta_extra=result.meta or None,
+        meta_extra={
+            "count": len(result.updated_ids),
+            "not_found_count": len(result.not_found),
+        },
     )
 
 
@@ -761,26 +802,31 @@ async def flag_email(
     Sprint 15 SSoT inversion 主写路径 (区别 legacy notion.updateFlag 直写 Notion)。
     body (EmailFlagOpts): {isRead?, isFlagged?, processingStatus?, ids?, dryRun?}。
     - 单封: path ``internal_id`` (body 不传 ids)。
-    - 批量: body ``ids: [1,2,3]`` → 走 CLI ``--ids`` (与 path id 互斥, 此时忽略 path)。
+    - 批量: body ``ids: [1,2,3]`` (与 path id 互斥, 此时忽略 path)。
       (无 path id 的纯批量入口见 ``POST /api/email/flag``。)
     至少给一个 isRead / isFlagged / processingStatus, 否则 400。
-    slash 形 flag (#7) + 永远 ``--allow-concurrent`` (#9)。dry-run 跳过 auth。
-    data = email-flag.schema.json (executed flag_result | dry-run plan); 批量逐项
-    失败 → 207 partial_failure (gotcha A1)。
+    A2: in-process service, 恒 allow_concurrent (#9)。dry-run 跳过 auth。
+    data = email-flag.schema.json (executed flag_result | dry-run plan)。
     """
     opts = body or {}
     dry_run = bool(opts.get("dryRun"))
-    mutation = _build_flag_mutation_args(opts)
+    is_read, is_flagged, processing_status = _extract_flag_mutation(opts)
 
     # target: --ids 批量 与 单封 path id 互斥 (镜像 emailFlagArgs in write_ops.ts)。
     ids = opts.get("ids")
     if isinstance(ids, list) and len(ids) > 0:
-        validated = _coerce_flag_ids(ids)
-        target = ["--ids", ",".join(str(i) for i in validated)]
+        internal_ids = _coerce_flag_ids(ids)
     else:
-        target = [str(internal_id)]
+        internal_ids = [internal_id]
 
-    return await _run_flag_cli(request, target, mutation, dry_run=dry_run)
+    return await _run_flag_service(
+        request,
+        internal_ids,
+        is_read=is_read,
+        is_flagged=is_flagged,
+        processing_status=processing_status,
+        dry_run=dry_run,
+    )
 
 
 @router.post("/flag", dependencies=[Depends(verify_cf_access)])
@@ -794,19 +840,24 @@ async def flag_emails_batch(
     (EmailFlagOpts): {ids: [1,2,3], isRead?, isFlagged?, processingStatus?, dryRun?}。
     ``ids`` **必填且非空** (空/缺 → 400, 不像单封端点那样静默 fallback 到 path id)。
     至少给一个 isRead / isFlagged / processingStatus, 否则 400。
-    slash 形 flag (#7) + 永远 ``--allow-concurrent`` (#9)。dry-run 跳过 auth。
-    data = email-flag.schema.json; 逐项失败 → 207 partial_failure (gotcha A1,
-    data = {succeeded, failed, summary})。
+    A2: in-process service, 恒 allow_concurrent (#9)。dry-run 跳过 auth。
+    data = email-flag.schema.json。
 
     NOTE: 与单封 ``/{id}/flag`` 不冲突 —— 后者用 ``:int`` 转换器, 字面量 "flag" 不匹配整数段。
     """
     opts = body or {}
     dry_run = bool(opts.get("dryRun"))
-    mutation = _build_flag_mutation_args(opts)
-    validated = _coerce_flag_ids(opts.get("ids"))
-    target = ["--ids", ",".join(str(i) for i in validated)]
+    is_read, is_flagged, processing_status = _extract_flag_mutation(opts)
+    internal_ids = _coerce_flag_ids(opts.get("ids"))
 
-    return await _run_flag_cli(request, target, mutation, dry_run=dry_run)
+    return await _run_flag_service(
+        request,
+        internal_ids,
+        is_read=is_read,
+        is_flagged=is_flagged,
+        processing_status=processing_status,
+        dry_run=dry_run,
+    )
 
 
 # ===========================================================================

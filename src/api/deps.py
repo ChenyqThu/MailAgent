@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # 仅类型提示，运行期不 import (避免裸 worktree import 即 Config())
     from src.config import Config
     from src.repository import EmailRepository
+    from src.services.context import ServiceContext
 
 
 def get_settings() -> "Config":
@@ -60,3 +61,23 @@ def get_repository() -> "EmailRepository":
     FastAPI ``Depends(get_repository)`` 用。所有读端点经此拿 repo，统一 db_path 来源。
     """
     return _build_repository()
+
+
+def get_service_ctx() -> "ServiceContext":
+    """返回 in-process 写端点 (A2: resync/flag) 用的 ServiceContext。
+
+    FastAPI ``Depends(get_service_ctx)`` 用。MailWriteService 经它编排领域类, 不再
+    fork CLI (见 docs/backend-service-migration-matrix.md)。复用 import-time config
+    单例 → 与 mail-sync / serve 同一份 .env + db_path。
+
+    **每次新建 (非单例)**: ServiceContext.notion_sync 持 ``NotionClient`` 的 httpx
+    AsyncClient, 连接池绑定首个 event loop; resync 经 ``asyncio.to_thread`` →
+    ``asyncio.run`` 每次起新 loop, 复用同一 client 会撞「loop is closed」。每请求新建
+    一份 ctx (fresh NotionSync → fresh client) 即匹配旧 fork 的 per-call 隔离, 且远比
+    fork 整个 Python 进程便宜。其余 dep (email_repo/sync_store) 是 per-call 连接, 重建
+    成本可忽略。
+    """
+    from src.config import config as _config_singleton
+    from src.services.context import ServiceContext
+
+    return ServiceContext(_config_singleton)
