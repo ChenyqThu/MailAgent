@@ -57,6 +57,7 @@
 | backfill builder 下沉 engine 层（`sync/backfill_builders.py`，消除 sync→cli 反向 import） | ✅ | D2a |
 | 读 wire-shape 投影单一真源（`services/wire.py`，email/attachment record→dict） | ✅ | D2a |
 | 前端 batch_resync jobs 接线（`daemon_api`→`POST /api/jobs` + `GET` 轮询 + `job.*` SSE + `watchResyncJob` 进度 toast + BatchActionBar 按钮） | ✅ | D2b |
+| 性能基线（dry-run 隔离 fork 税 benchmark）+ 服务层架构文档 + e2e 真机 runbook | ✅ | D2c |
 
 ## 残留检测（每阶段末跑，应为「预期内」或空）
 
@@ -98,13 +99,13 @@ pytest tests/cli/test_schema_contract.py -q
 ## 最终验收 gate（D2）
 
 - [x] 能力矩阵所有写操作 100% 绿（无 🍴 残留）—— set_flags/resync/archive/pin/llm/compose/send/batch_resync 全绿（D2b 收官）。draft 创建(AppleScript) 的 serve-api `POST /api/drafts` = **非阻塞 backlog**（host-local GUI 能力，远程草稿走 IMAP draft + `compose_draft` 端点，HttpApi.createDraft notImplemented；用户裁定 2026-06-04 保留 ⬜，不计入 D2 验收）
-- [ ] `pytest tests/cli tests/api` + `cd frontend && pnpm test` 全绿
-- [ ] `test_schema_contract` 全程全绿（data 形状零漂移）+ 每操作 parity golden 通过
-- [ ] 残留检测：`run_cli` 仅剩 long-task 预期项、`writeFlagDirect`/`callCli` 写为空
-- [ ] 性能基线前后对比：serve-api 写 ~500ms→几十 ms（数字化「感觉慢」）
-- [ ] 端到端：每个写操作从 CLI / 本地 Electron / 远程 web 各实跑一遍
-- [ ] 迁移监控：`email_outbox` dead_letter / gt_30m pending 无异常堆积
-- [ ] 文档更新：CLAUDE.md 文档地图 + docs/claude/ 服务层架构文档 + 本看板归档
+- [x] `pytest tests/cli tests/api` 全绿 —— **718 passed**（D2c green-gate，零回归；曾经的 env-coupled `test_resolve_allowed_email` 已 commit 1947642 修 hermetic）。前端 `pnpm test` 除预存基线外全绿（D2c 未碰前端）
+- [x] `test_schema_contract` 全程全绿（data 形状零漂移）+ 每操作 parity golden 通过（A2-A4 + C1 job + D2a wire，全有 golden）
+- [x] 残留检测：`run_cli` routers = 4（admin 2 = dead-letter retry/purge 运维端点 + email 1 = legacy update-flag + llm 1 = selftest；均非 A 系列消灭的通用写操作 fork）、`writeFlagDirect`/`callCli` 写为空、`src/services/` + `backfill_builders`/`wire` 零 cli import（D2c 复跑确认）
+- [x] 性能基线前后对比：fork-cli ~759ms → in-process 3.75ms（**~200x**），脚本 `scripts/dev/benchmark_service_layer.py`（dry-run 隔离 fork 税；详见 [`service-layer-architecture.md`](./claude/service-layer-architecture.md) §性能基线）
+- [ ] **端到端**：每个写操作从 CLI / 本地 Electron / 远程 web 各实跑一遍 —— **待真机**（含真发邮件/改生产 Notion，不可逆+外发，agent session 不执行）→ 照 [`docs/backend-service-e2e-runbook.md`](./backend-service-e2e-runbook.md) 由人跑
+- [ ] **迁移监控**：`email_outbox` dead_letter / gt_30m pending 无异常堆积 —— **待真机**（随 e2e 跑，监控 SQL 在 runbook）
+- [x] 文档更新：CLAUDE.md 文档地图指针 + [`docs/claude/service-layer-architecture.md`](./claude/service-layer-architecture.md)（架构导航）+ [`docs/backend-service-e2e-runbook.md`](./backend-service-e2e-runbook.md)（真机验收）+ 本看板归档
 
 ## 进度日志
 
@@ -232,3 +233,11 @@ pytest tests/cli/test_schema_contract.py -q
   - **next-phase handoff → D2c**(D2b 收官；**A+B+C+D1+D2a+D2b 全完成，写操作 100% 绿**，剩 D2c = 最终验收 + 文档)：
     - **D2c**：④ 性能基线(serve-api 写 ~500ms→几十 ms，需起 serve-api 实测) + ⑤ 端到端每写操作 CLI/本地 Electron/远程 web 各实跑(需真实 Notion/davmail/邮箱凭证 + 真机；batch resync 走 Playwright/真机选多封点「重传 Notion」看进度 toast) + ⑥ CLAUDE.md 文档地图加「服务层架构」指针 + `docs/claude/` 新建服务层架构文档 + 本看板归档 + 能力矩阵 100% 绿终判(写操作已全绿，D2c 补验收 gate 的性能/e2e/文档 checkbox)。
     - **D2b 复用点**：`watchResyncJob` 进度 watcher 范式(未来 backfill UI 直接复用 jobs API + watcher)；两路 wire mirror + `write_ops.test` 锁形状；`MailApi.jobs` 已就位。**LOW 待办**：sticky progress toast 豁免 `MAX_VISIBLE` 降级(toast.ts，独立小任务)。
+
+- **D2c（✅ 完成）** `feat/backend-service-layer`：性能基线 + 服务层架构文档 + e2e 真机 runbook。**9 阶段重构软件验收收官（A1→D2c），写操作矩阵 100% 绿**，唯一遗留 = 真机 e2e（由人照 runbook 执行）。
+  - **范围裁定（用户拍板，AskUserQuestion 确认）**：D2c 原列 ④性能基线 + ⑤端到端实跑 + ⑥文档。⑤ 含真发邮件/改生产 Notion（不可逆+外发，D2a 已裁定 agent session 不应真做）→ 选「软件能闭环的最大范围本 session 做满（④⑥ + e2e 写成 runbook），⑤ 真机实跑留人执行」。
+  - **④ 性能基线**：新建 `scripts/dev/benchmark_service_layer.py` —— dry-run 隔离 fork 税：三路径跑**同一个** `plan_flags` 编排，`--dry-run` 不写 Notion/Mail/SQLite/outbox + 跳 auth/pm2 → fork 税与真实 IO 解耦；临时库（mkdtemp）+ 假 env，**绝不碰生产库**（reviewer 验 sha256 前后逐字一致）。实测 fork-cli mean **758.5ms**/p50 660.8ms → inproc-perreq mean **3.75ms**/p50 3.64ms → inproc-warm **0.0005ms**（纯编排下界）= **~200x**。验证 plan 断言「写慢不是认证(hmac<1ms)，是每次 fork 进程 + 重载配置/服务」（税 99.5% 在 fork+import+重载，编排本身几 μs）。fork 759ms > plan 估 ~500ms（完整 wall-clock 含 venv console script + 全量 import src 树 + typer 启动）。**非 CI gate**（机器/负载相关，仅基线参考，可重跑）。
+  - **⑥ 文档**：新建 [`docs/claude/service-layer-architecture.md`](./claude/service-layer-architecture.md)（代码视角权威导航：分层架构图/5 不变式/`src/services/` 详解/9 阶段表/能力矩阵现状/性能基线/横切设施/关键文件/残留检测 grep/验收状态/回切监控；**反映实际落地非 plan 字面** —— serve-api per-request 新建 ctx、config 经 ctx.config、D1=Main 转发、backfill 下沉 src/sync、守卫三模式、draft 端点 backlog）+ [`docs/backend-service-e2e-runbook.md`](./backend-service-e2e-runbook.md)（真机验收：🔴安全红线 + 起 serve-api + 8 写操作×3 传输验收矩阵 + 分操作 CLI 步骤 + 监控 SQL + 签收表）+ CLAUDE.md 文档地图加「后端服务层」指针行。
+  - **验收**：`pytest tests/cli tests/api` = **718 passed 全绿**（D2c green-gate，零 fail；曾经的 env-coupled `test_resolve_allowed_email` 已 commit 1947642 修 hermetic；D2c 只加 benchmark 脚本[scripts/dev/，不在测试路径] + 文档，未碰 src/tests → 零回归）。残留检测复跑全绿：`run_cli` routers **4**、`src/services/` + `backfill_builders`/`wire` 零 cli import、`job_runners` backfill sync→cli **0**、前端 `writeFlagDirect`/`callCli` 写**空**。最终验收 gate：软件项（矩阵/green-gate/schema_contract+parity/残留/性能/文档）**全勾**；e2e+监控两项**标待真机**（不勾死，照 runbook 由人执行）。
+  - **独立 review（code-reviewer subagent，opus）**：**APPROVE WITH NITS**，0 Critical/0 High/0 Medium，2 LOW。两条底线过硬：① benchmark **绝对不碰生产库**（sha256 `ddd2b40c…ded6` 跑前跑后逐字一致 + 临时库清理 + 假 env + dry-run 真不写 + ruff 绿 + 实跑 exit 0 ~180x）；② 看板归档**诚实**（e2e/监控如实标待真机未虚勾）。所有代码事实声明（run_cli=4/零 cli import/writeFlagDirect 空/文件表/serve-api 命令/health 路由/性能量级）经独立 grep+实跑核对**全部属实**。**2 LOW 已本 session 修**：NIT-1（run_cli=4 breakdown 把 admin dead-letter retry/purge 误标「selftest/全非写」，与本看板 line 68 自相矛盾 → 架构文档 + gate 行均改 dead-letter 措辞）+ NIT-2（runbook batch_resync curl 的 `$MAILAGENT_LOCAL_API_TOKEN` 补来源：Electron randomBytes 单源 + local_token.ts）。确认全程只读未污染 git。
+  - **next-phase = 无（重构正式收官）**：A1→D2c 9 阶段全完成 + 写操作矩阵 100% 绿 + 软件验收全过。**唯一遗留 = 真机 e2e**（[`docs/backend-service-e2e-runbook.md`](./backend-service-e2e-runbook.md)，需真实 serve-api/Notion/davmail/邮箱 + 真机，人跑完勾上 gate 的 e2e+监控两项即正式归档）。**最大真机盲区**（静态 review 验不了，只真机暴露）：① 打包态 serve-api 自启 + C2 本地 token 腿（reviewer 自标「仅单测覆盖」）；② D1 前端 Main 转发 daemon 打包态自启（从未 dogfood）；③ D2b batch_resync 真机进度 toast；④ send/archive 不可逆外发。**推荐验收序**：feature 分支 build 本地 `.app` → 装机跑 runbook（本地 Electron + CLI e2e，唯打包态能验写收编自启）→ 绿了再合 main + bump version + tag。可选后续：draft AppleScript serve-api 端点（非阻塞 backlog）。**注**：D2b 遗留 LOW（toast.ts sticky progress 豁免 MAX_VISIBLE）已本 session commit 6d78705 修。

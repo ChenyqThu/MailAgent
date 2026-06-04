@@ -24,6 +24,7 @@
 | 报告 Agent 系统（日/周/月报，ReportDoc 块模型 + 定时生成 + 前端渲染 + KOS 工具桥） | 动 `src/reports/` / 报告 / Custom AI Agents 区前 | [`docs/report-agent-prd.md`](./docs/report-agent-prd.md) + [前端 handoff](./docs/report-agent-frontend-handoff.md) |
 | Calendar Module（CalDAV → SQLite SSoT） | 动日历同步 / `calendar_event` 表前 | [`docs/claude/calendar-ops.md`](./docs/claude/calendar-ops.md) + [`docs/calendar-module-prd.md`](./docs/calendar-module-prd.md) |
 | v4 SQLite-SSoT（body/附件 SSoT + FTS5 全文搜索） | 动 `EmailRepository` / 双写 / 搜索前 | [`docs/claude/v4-ssot-ops.md`](./docs/claude/v4-ssot-ops.md) + [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md) |
+| 后端服务层（统一写面：`src/services/` 应用服务 + CLI/serve-api 薄适配器 in-process + async-jobs + 双层鉴权 + 前端 daemon 转发） | 改写操作（flag/resync/archive/pin/llm/compose/send）/ 加传输端 / 动 `src/services/` 前 | [`docs/claude/service-layer-architecture.md`](./docs/claude/service-layer-architecture.md) + `~/.claude/plans/cli-streamed-brook.md` |
 | AI Agent Harness + KOS（前端 chat 多轮 agent + 跨域知识图） | 动前端 chat / KOS 集成前 | [`docs/claude/agent-harness-kos.md`](./docs/claude/agent-harness-kos.md) + [`docs/kos-integration-design.md`](./docs/kos-integration-design.md) |
 | CLI 完整命令表 + 退出码 + schema 契约 | 查命令明细 / 加 CLI 命令前 | [`docs/claude/cli-reference.md`](./docs/claude/cli-reference.md) + [`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) |
 | 存档/草稿箱双入口（folder_sync） | 动 folder 同步前 | [`docs/folder-ui-prd.md`](./docs/folder-ui-prd.md) + [`docs/folder-next-session-handoff.md`](./docs/folder-next-session-handoff.md) |
