@@ -467,7 +467,7 @@ export function ConfigDrawer({
       // 时区只在 natural_day 有意义；rolling_24h 固定回溯 24h、不读时区，显式清空。
       patch.timezone = triggerMode === 'natural_day' ? timezone.trim() : ''
     }
-    void save(activeCfg.id, patch).then(onClose)
+    void save(cfg.id, patch).then(onClose)
   }
 
   return (
