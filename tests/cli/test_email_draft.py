@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cli.commands.email import _compose_reply_draft, _split_addrs
+from src.services.mail_write import _compose_reply_draft, _split_addrs
 from tests.cli.conftest import extract_last_json_object as _last_json
 
 

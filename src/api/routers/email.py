@@ -10,13 +10,13 @@ update-flag)。
   GET  /api/email/{internal_id}         — repo.get_email_full/get_metadata (EmailFull)
   GET  /api/email/{internal_id}/body    — repo.get_body             (EmailBody)
   GET  /api/email/search                — repo.search_email_bodies  (SearchResult)
-  POST /api/email/draft                 — CLI `email draft`          (DraftResult)
-  POST /api/email/send                  — CLI `email send --yes`     (SendResult)
+  POST /api/email/draft                 — service MailWriteService.compose_draft (DraftResult)
+  POST /api/email/send                  — service MailWriteService.send (SendResult)
   POST /api/email/{internal_id}/resync  — service MailWriteService.resync (ResyncResult|plan)
   POST /api/email/{internal_id}/update-flag — CLI `notion update-flag` (legacy notion.updateFlag)
   POST /api/email/{internal_id}/flag    — service MailWriteService.set_flags (Sprint 15 outbox SSoT)
   POST /api/email/{internal_id}/archive — service MailWriteService.archive (davmail-only)
-  POST /api/email/{internal_id}/draft-plan — CLI `email draft --dry-run` (DraftPlanResult)
+  POST /api/email/{internal_id}/draft-plan — service MailWriteService.compose_plan (DraftPlanResult)
   POST /api/email/{internal_id}/pin     — service MailWriteService.set_pin (pin toggle)
 
 设计纪律 (实现规格 + sibling 已写的 envelope/schemas):
@@ -26,10 +26,10 @@ update-flag)。
     ``_meta_record_to_list_item`` helper, 让 cli.gen.ts 校验不变。
   - 统一响应走 app.success_envelope / app.APIError (全局 handler 转 envelope error +
     正确 HTTP)。meta.source='sqlite' (repo 直查) / 'cli' (in-process service 或 subprocess)。
-  - flag / resync (A2) + archive / pin (A3) 写端点走进程内 MailWriteService (不再 fork CLI)。
-    flag/resync 恒 allow_concurrent (mail-sync 生产在线 → pm2 检测会拒); archive/pin 不做 pm2
-    检测。其余写端点 (draft / send / draft-plan / legacy notion update-flag) 仍经
-    cli_runner.run_cli, 由 A4 续迁。
+  - flag / resync (A2) + archive / pin (A3) + compose draft/send/draft-plan (A4) 写端点走
+    进程内 MailWriteService (不再 fork CLI)。flag/resync 恒 allow_concurrent (mail-sync 生产
+    在线 → pm2 检测会拒); archive/pin/compose 不做 pm2 检测; send 端点恒 confirmed=True (前端
+    已弹 SendConfirmDialog)。仅剩 legacy notion update-flag 仍经 cli_runner.run_cli。
   - notion update-flag (仍 fork) 用 **tri-bool 字符串形** ``--is-read true/false`` + **不做**
     pm2 检测 (不带 --allow-concurrent), 与 email flag 路径区别 (实现规格 gotcha #6/#7)。
 """
@@ -37,8 +37,6 @@ update-flag)。
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
 from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -909,22 +907,13 @@ async def archive_email(
 
 
 # ===========================================================================
-# Compose (draft / send / draft-plan) — shared argv builder + body-html-file
+# Compose (draft / send / draft-plan) — A4: in-process MailWriteService
 # ===========================================================================
-# bodyHtml 走 **临时文件** ``--body-html-file`` (gotcha #8): TipTap getHTML() 输出
-# 落 NamedTemporaryFile(.html) 传路径, 调用后清理。DraftPlanResult 保持 snake_case
-# (reply_html / forward_intro_html / reply_source), **勿 camelCase** (历史 bug)。
+# bodyHtml (TipTap getHTML()) **直接传字符串** 给 service (不再落临时文件
+# ``--body-html-file`` —— A4 净简化); DraftPlanResult 保持 snake_case (reply_html /
+# forward_intro_html / reply_source), **勿 camelCase** (历史 bug)。
 
 VALID_COMPOSE_MODES = {"reply", "reply-all", "forward"}
-
-
-def _cleanup_tmp(path: Optional[str]) -> None:
-    """best-effort 删除 compose 临时 html 文件 (gotcha #8 的清理段)。"""
-    if path:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
 
 
 def _validate_compose_mode(mode: Any) -> str:
@@ -941,52 +930,40 @@ def _validate_compose_mode(mode: Any) -> str:
     return m
 
 
-def _build_compose_args(
-    internal_id: int,
-    opts: dict[str, Any],
-    *,
-    verb: str,
-    dry_run: bool = False,
-    with_yes: bool = False,
-) -> tuple[list[str], Optional[str]]:
-    """构造 ``email draft|send <id> --mode … [recipients/subject] [--dry-run|--yes]``。
+def _compose_request_from_body(internal_id: int, opts: dict[str, Any]):
+    """HTTP body (camelCase + list 收件人) → ``ComposeRequest`` (service 入参)。
 
-    镜像 frontend/src/electron/main/handlers/draft.ts::buildComposeArgs。返回
-    (argv_without_api_key, html_tmp_path | None) —— html_tmp_path 由调用方在 finally
-    清理 (gotcha #8)。to/cc/bcc 是 compose 用户编辑后的权威列表 (覆盖后端推导)。
+    to/cc/bcc 是 list → join 成逗号串 (service ``_split_addrs`` 再提纯); bodyHtml 直接
+    传字符串 (A4: 不再落临时文件)。mode 缺省 reply-all (校验早于 service 构造)。
     """
-    mode = _validate_compose_mode(opts.get("mode"))
-    args: list[str] = ["email", verb, str(internal_id), "--mode", mode]
+    from src.services.mail_write import ComposeRequest
 
-    to = opts.get("to")
-    cc = opts.get("cc")
-    bcc = opts.get("bcc")
-    if isinstance(to, list) and len(to) > 0:
-        args += ["--to", ",".join(str(x) for x in to)]
-    if isinstance(cc, list) and len(cc) > 0:
-        args += ["--cc", ",".join(str(x) for x in cc)]
-    if isinstance(bcc, list) and len(bcc) > 0:
-        args += ["--bcc", ",".join(str(x) for x in bcc)]
+    def _join(v: Any) -> Optional[str]:
+        return ",".join(str(x) for x in v) if isinstance(v, list) and v else None
 
     subject = opts.get("subject")
-    if isinstance(subject, str):
-        args += ["--subject", subject]
-
-    if dry_run:
-        args.append("--dry-run")
-    if with_yes:
-        args.append("--yes")
-
-    # bodyHtml → 临时 .html 文件 → --body-html-file (gotcha #8)。
-    html_tmp_path: Optional[str] = None
     body_html = opts.get("bodyHtml")
-    if isinstance(body_html, str) and len(body_html) > 0:
-        fd, html_tmp_path = tempfile.mkstemp(suffix=".html", prefix="mailagent-compose-")
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(body_html)
-        args += ["--body-html-file", html_tmp_path]
+    return ComposeRequest(
+        internal_id=internal_id,
+        mode=_validate_compose_mode(opts.get("mode")),
+        to=_join(opts.get("to")),
+        cc=_join(opts.get("cc")),
+        bcc=_join(opts.get("bcc")),
+        subject=subject if isinstance(subject, str) else None,
+        body_html=body_html if isinstance(body_html, str) and body_html else None,
+    )
 
-    return args, html_tmp_path
+
+def _require_compose_internal_id(opts: dict[str, Any]) -> int:
+    """从 body 取 ``internalId`` (non-negative int), 校验早于 service 构造。"""
+    internal_id = opts.get("internalId")
+    if not isinstance(internal_id, int) or isinstance(internal_id, bool) or internal_id < 0:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"internalId (non-negative int) required, got {internal_id!r}",
+            source="cli",
+        )
+    return internal_id
 
 
 @router.post("/draft", dependencies=[Depends(verify_cf_access)])
@@ -994,36 +971,39 @@ async def compose_draft(
     request: Request,
     body: Optional[dict[str, Any]] = None,
 ):
-    """把 compose 内容写进 Drafts folder (IMAP APPEND, CLI `email draft`)。
+    """把 compose 内容写进 Drafts folder (IMAP APPEND, A4: in-process MailWriteService)。
 
     body (ComposeDraftOpts): {internalId, mode, to?, cc?, bcc?, subject?, bodyHtml?}。
-    bodyHtml (TipTap getHTML()) 落临时 .html → --body-html-file (gotcha #8)。
-    davmail-only (append_draft 走 IMAP); 非 davmail → CLI 自报错透传。
-    data = DraftResult (drafts_folder/appended_uid/method/...)。
+    bodyHtml (TipTap getHTML()) 直接传字符串 (不再落临时文件)。davmail-only
+    (append_draft 走 IMAP); 非 davmail → service 报错透传。data = DraftResult。
     """
     opts = body or {}
-    internal_id = opts.get("internalId")
-    if not isinstance(internal_id, int) or isinstance(internal_id, bool) or internal_id < 0:
-        raise APIError(
-            "E_INVALID_ARG",
-            f"internalId (non-negative int) required, got {internal_id!r}",
-            source="cli",
-        )
-
-    args, html_tmp_path = _build_compose_args(internal_id, opts, verb="draft")
+    internal_id = _require_compose_internal_id(opts)
+    req = _compose_request_from_body(internal_id, opts)
+    svc = MailWriteService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=get_cli_api_key())
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
-    finally:
-        _cleanup_tmp(html_tmp_path)
+        result = await asyncio.to_thread(
+            svc.compose_draft,
+            req,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(
-        result.data,
-        request=request,
-        source="cli",
-        meta_extra=result.meta or None,
-    )
+    data = {
+        "internal_id": result.internal_id,
+        "success": True,
+        "drafts_folder": result.drafts_folder,
+        "appended_uid": result.appended_uid,
+        "method": result.method,
+        "mode": result.mode,
+        "to_count": result.to_count,
+        "cc_count": result.cc_count,
+        "attachments": result.attachments,
+        "warnings": result.warnings,
+        "dry_run": False,
+    }
+    return success_envelope(data, request=request, source="cli")
 
 
 @router.post("/send", dependencies=[Depends(verify_cf_access)])
@@ -1031,38 +1011,39 @@ async def compose_send(
     request: Request,
     body: Optional[dict[str, Any]] = None,
 ):
-    """SMTP 真实发送 (不可逆, CLI `email send --yes`)。
+    """SMTP 真实发送 (不可逆, A4: in-process MailWriteService.send)。
 
     body (SendEmailOpts = ComposeDraftOpts): {internalId, mode, to?, cc?, bcc?,
-    subject?, bodyHtml?}。始终带 ``--yes`` (前端已弹 SendConfirmDialog) 否则 json
-    模式 CLI 拒发。bodyHtml 走临时文件 (#8)。data = SendResult
-    (sent/message_id/archived_to_sent/method)。
+    subject?, bodyHtml?}。前端已弹 SendConfirmDialog → 端点恒 ``confirmed=True``。
+    data = SendResult (sent/message_id/archived_to_sent/method)。
     """
     opts = body or {}
-    internal_id = opts.get("internalId")
-    if not isinstance(internal_id, int) or isinstance(internal_id, bool) or internal_id < 0:
-        raise APIError(
-            "E_INVALID_ARG",
-            f"internalId (non-negative int) required, got {internal_id!r}",
-            source="cli",
-        )
-
-    args, html_tmp_path = _build_compose_args(
-        internal_id, opts, verb="send", with_yes=True
-    )
+    internal_id = _require_compose_internal_id(opts)
+    req = _compose_request_from_body(internal_id, opts)
+    svc = MailWriteService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=get_cli_api_key())
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
-    finally:
-        _cleanup_tmp(html_tmp_path)
+        result = await asyncio.to_thread(
+            svc.send,
+            req,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+            confirmed=True,
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(
-        result.data,
-        request=request,
-        source="cli",
-        meta_extra=result.meta or None,
-    )
+    data = {
+        "internal_id": result.internal_id,
+        "sent": True,
+        "mode": result.mode,
+        "message_id": result.message_id,
+        "archived_to_sent": result.archived_to_sent,
+        "method": result.method,
+        "to_count": result.to_count,
+        "cc_count": result.cc_count,
+        "attachments": result.attachments,
+        "warnings": result.warnings,
+    }
+    return success_envelope(data, request=request, source="cli")
 
 
 @router.post("/{internal_id:int}/draft-plan", dependencies=[Depends(verify_cf_access)])
@@ -1071,7 +1052,7 @@ async def draft_plan(
     internal_id: int,
     body: Optional[dict[str, Any]] = None,
 ):
-    """compose 预填单一数据源 (CLI `email draft --dry-run`)。
+    """compose 预填单一数据源 (A4: in-process MailWriteService.compose_plan)。
 
     body (DraftPlanOpts 子集): {mode}。返回收件人 / 主题 / 正文 HTML
     (reply 用 LLM reply_suggestion 转的 HTML, forward 用原文引用块 HTML)。
@@ -1080,20 +1061,14 @@ async def draft_plan(
     """
     opts = body or {}
     # draft-plan 无 body/recipient override, 仅 mode (compose 打开时调一次)。
-    args, _ = _build_compose_args(
-        internal_id, {"mode": opts.get("mode")}, verb="draft", dry_run=True
-    )
+    req = _compose_request_from_body(internal_id, {"mode": opts.get("mode")})
+    svc = MailWriteService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=None)  # dry-run 跳过 auth
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
+        data = await asyncio.to_thread(svc.compose_plan, req)
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(
-        result.data,
-        request=request,
-        source="cli",
-        meta_extra=result.meta or None,
-    )
+    return success_envelope(data, request=request, source="cli")
 
 
 # ===========================================================================

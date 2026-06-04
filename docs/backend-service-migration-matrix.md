@@ -21,9 +21,9 @@
 | archive | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
 | pin / unpin | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
 | llm_run | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
-| compose_draft | ⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ D1 | ✅ 已存在 | ⬜ A4 |
-| send | ⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ D1 | ✅ 已存在 | ⬜ A4 |
-| compose_plan（dry-run） | ⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ D1 | ✅ 已存在 | ➖ |
+| compose_draft | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ✅ A4 |
+| send | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ✅ A4 |
+| compose_plan（dry-run） | ✅ A4 | ✅ A4 | ✅ A4 | 🍴→⬜ D1 | ➖<br>(无独立 schema) | ➖ |
 | draft 创建（AppleScript） | ➖ host-local | ➖ | ⬜ D1 `POST /api/drafts` | shell fork 保留<br>（emergency 回切） | ➖ | ➖ |
 | **长任务** batch_resync | ⬜ C1 job | ✅ LongTaskContext | ⬜ C1 `POST /api/jobs` | ⬜ D1 | ✅ 已存在 | ⬜ C1 |
 | **长任务** backfill_body/deriv | ⬜ C1 job | ✅ LongTaskContext | ⬜ C1 `POST /api/jobs` | ➖ 运维 | ✅ 已存在 | ⬜ C1 |
@@ -59,10 +59,11 @@
 
 ```bash
 # A2-A4 推进中：serve-api router 里还在 fork CLI 的写端点（目标逐步归零）
-grep -rn "run_cli(" src/api/routers/ | wc -l        # 基线 12 → A2 后 10 → A3 后 7（消 archive/pin/llm_run 各 1）；
-                                                    # 余 7 = admin 2 + email 4（draft/send/draft-plan/legacy notion
-                                                    # update-flag）+ llm 1（selftest 读命令，不烧 token）；
-                                                    # A4 消 email draft/send/draft-plan → 余 4
+grep -rn "run_cli(" src/api/routers/ | wc -l        # 基线 12 → A2 后 10 → A3 后 7 → A4 后 4（消 email
+                                                    # draft/send/draft-plan 各 1）；余 4 = admin 2
+                                                    # + email 1（legacy notion update-flag）+ llm 1
+                                                    # （selftest 读命令，不烧 token）。A 系列 fork 已清零，
+                                                    # 余 4 全是 D1/后续阶段目标（非 compose）
 # D1 后：前端 TS 直写 outbox 应消失
 grep -rn "writeFlagDirect" frontend/src/            # D1 后应为空
 # D1 后：前端 fork CLI 写应消失（保留 draft.ts 的 AppleScript emergency fork）
@@ -112,3 +113,17 @@ pytest tests/cli/test_schema_contract.py -q
     - **A4**（compose: draft / send / draft-plan）：A 系列最后一块，最重命令。`mail_write.py` 加 `compose_draft`/`send`/`compose_plan` + `ComposeRequest`（搬 `_prepare_draft` + `email_draft`/`email_send` 命令体，整段搬迁不重写）。**净简化**：serve-api 今天用临时文件 `--body-html-file` 传 bodyHtml（routers/email.py `_build_compose_args` + `_cleanup_tmp`），service 化后直接传字符串，临时文件那段整段删（连同 test_email_write_cli_args 的 draft/send/draft-plan argv 测试迁出）。风险中高（compose 逻辑最密；send 不可逆，parity 用 dry-run + mock backend）。消 email router run_cli 3 个（7→4）。
     - **B1**（outbox merge 原子 SQL + JS/Py 契约测试）：D1 硬前置，独立于 A 系列，留 D1 前做。走 `/db-migration`（bump DB_VERSION + 同步前端 EXPECTED_DB_VERSION）。
     - 建议先 A4 收尾 A 系列（同一套 service+adapter 模式，惯性最低）。**A3 的 ServiceDeps.config 别名 + LlmService `_maybe_davmail_backend` 复刻 + archive token-auth 上移决策** A4/后续可复用/复审。
+
+- **A4（✅ 完成）** `feat/backend-service-layer`：compose draft / send / draft-plan 下沉，**A 系列收官**（写操作 fork CLI 清零）。
+  - **service 层**：`MailWriteService` 加 `compose_plan`/`compose_draft`/`send` + `ComposeRequest`/`ComposeDraftResult`/`ComposeSendResult`；从 CLI **整段搬迁不重写** 5 个 module helper（`_split_addrs`/`_reply_md_to_html`/`_compose_reply_draft`/`_build_forward_intro`/`_build_reply_quote`）+ 3 个 service method（`_fetch_reply_suggestion_md`/`_collect_forward_attachments`/`_prepare_draft`）。reviewer AST 验证：forward_intro/reply_quote 逐字节相同、`_compose_reply_draft` 仅多 `self_email` 参数、其余仅 `cli.*`→`self._ctx.*`。
+  - **净简化（字符串 body）**：service `_prepare_draft` 接**字符串** body_html/body_text（非文件路径）；CLI 适配器新增 `_build_compose_request` 读 `--body-file`/`--body-html-file` 成字符串；serve-api 直接传 TipTap HTML 字符串 —— 旧 fork 路径的 `--body-html-file` 临时文件那套（`_build_compose_args`+`_cleanup_tmp`+`tempfile`/`os` import）整段删。body 优先级 body_html>body_text>SQLite 对齐旧 body_html_file>body_file>reply_md。
+  - **守卫分工（关键决策，与 A3「token 上移」分歧）**：compose 有**非 _bypass_auth 测试**（`test_draft_forward_requires_extra_to`→E_INVALID_ARG / `test_draft_real_no_reply_suggestion_errors`→E_NOT_FOUND）要求**业务校验先于 auth**（旧 email_draft 顺序：_prepare_draft NotFound→forward 校验→require_auth）。故 CLI 适配器把 `cli.require_auth()` 的 raise **转成 `authed` bool**（不提前 raise），构造 `Actor(authenticated=authed)` 传 service；service 在业务校验**之后**才 `require_write_auth(actor)`。三重保证：① 保持业务先于 auth 原顺序；② `_bypass_auth`（patch require_auth no-op）→authed=True 仍生效；③ ServiceAuthError==CliAuthError==E_AUTH_FAILED→exit 4 / HTTP 403 不变。compose **不做** pm2 检测（原 CLI 无 → 无 allow_concurrent）。
+  - **send 二次确认**：`send(confirmed)` —— confirmed=False（json 无 --yes）→ ServiceInvalidArgError「发送需二次确认」（对齐旧）；HTTP /send 端点恒 confirmed=True（前端已弹 SendConfirmDialog）；CLI text 交互 confirm 留适配器（compose_plan 预览 to/cc/subject + typer.confirm）。不可逆路径安全闸完整（auth→确认→send_email，send_email 严格最后）。**已知 LOW 边缘**（reviewer 确认 Acceptable）：text 交互+无 reply_suggestion 时确认后才报 NotFound（compose_plan allow_missing 预览，非 send_email），前端 json 路径不受影响，已加注释。
+  - **_compose_reply_draft self_email**：参数默认 None→读全局 config（纯函数测试便利保留），service 显式传 `self._ctx.config.user_email`（A3「不读全局」原则）。reviewer 验证 CliContext.config=cli_config 别名 + `_sync_global_cfg_from_cli` 推全局 → 运行时两路同值，reply-all 自我排除零漂移。
+  - **serve-api in-process**：compose_draft/compose_send/draft_plan 从 run_cli fork（+临时文件）改 `await asyncio.to_thread(svc.method)`；新增 `_compose_request_from_body`（camelCase body + list 收件人→ComposeRequest，to/cc/bcc join 逗号串、bodyHtml 直传字符串）+ `_require_compose_internal_id`；保留 `_validate_compose_mode`（mode 校验早于 service）。
+  - **验收**：`pytest tests/cli tests/api` = **694 passed, 1 failed**（唯一=预存 env-coupled `test_resolve_allowed_email`，与 A2/A3 逐字一致）；`test_service_parity` 新增 14 compose（golden + CLI==service draft/send 逐字节）；`test_email_write_service` 新增 11 compose 端点 spy；`test_email_draft` import 改指向 service（纯函数测试随迁）；**删** `test_email_write_cli_args.py`（整文件是 compose fork argv，1:1 迁入 service 端点测试）。`run_cli(` routers **7→4**（A 系列 fork 清零；余 4=admin 2+email 1 legacy update-flag+llm 1 selftest）。ruff 全绿。**未碰前端**。
+  - **独立 review（code-reviewer subagent，opus）**：**APPROVE**，0 Critical/0 High/0 Medium，7 个 parity 决策全部独立验证（含 AST 逐字节对比）；实测 `data/sync_store.db` sha256 测试前后不变（`1c1872bb…73dd494`）；service 无 `src.cli` import（分层干净）。1 LOW（text 交互 send 边缘，已加注释）+ 2 NIT（_split_addrs ruff 空行无影响 / `.claude/settings.json` 工具改动不进 A4 commit —— commit 已只 stage 6 src+tests）。
+  - **next-phase handoff → B1 或 C1**（A 系列收官，剩横切基础设施 + 前端收编）：
+    - **B1**（outbox merge 原子 SQL + JS/Py 契约测试）：**D1 前端写收编硬前置**。把 `OutboxRepository.enqueue` 的 read-modify-write merge 换成单条原子 `INSERT...ON CONFLICT(internal_id,op_type,target) WHERE status='pending' DO UPDATE SET payload_json=json_patch(...)`（partial unique index + json1），消「TS write_ops.ts:319 与 Python outbox.py 两份手抄 merge」+ read-modify-write 竞态。走 `/db-migration`（bump DB_VERSION + 同步前端 `EXPECTED_DB_VERSION`）。风险中。
+    - **C1**（async_jobs 子系统）：长任务（batch_resync/backfill）走统一 API 的前置，新建 async_jobs 表 + serve 进程 JobWorker（复用 `cli/long_task.py::LongTaskContext` + SSE 9200）。风险中高（新子系统）。
+    - 建议先 **B1**（D1 硬前置、独立小改动）再 C1。**A4 的 authed-bool token 处理 + ComposeRequest 字符串 body + compose_plan 预览复用** 可供 D1 前端写收编复审。

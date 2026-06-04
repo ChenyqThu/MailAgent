@@ -1,15 +1,19 @@
-"""MailWriteService —— transport-neutral 邮件写操作 (A2: set_flags + resync)。
+"""MailWriteService —— transport-neutral 邮件写操作 (A2-A4: flag/resync/archive/pin/compose)。
 
 把「编排 + 守卫」从 CLI 命令体下沉到这里, 让 CLI (typer) 与 serve-api (FastAPI)
 各自退化成「解析 → 调 service → 格式化」的薄壳, 不再 fork CLI 跨传输复用
-(见 plan cli-streamed-brook.md §A2 / docs/backend-service-migration-matrix.md)。
+(见 plan cli-streamed-brook.md §A2-A4 / docs/backend-service-migration-matrix.md)。
 
 两类方法:
-  - ``plan_flags`` / ``plan_resync``: dry-run 纯预览, **不过** auth/pm2、**不写**任何东西,
-    CLI 与 serve-api 共用 (RFC: dry-run 跳过写鉴权)。
-  - ``set_flags`` / ``resync``: 执行路径, 入口过 ``require_write_auth(actor)`` +
-    ``check_pm2_conflict(allow_concurrent)``, 再调领域类 (NotionSync / SyncStore /
-    OutboxRepository, 一行不改)。
+  - ``plan_*`` (plan_flags/plan_resync/plan_archive/plan_pin/compose_plan): dry-run 纯预览,
+    **不过** auth/pm2、**不写**任何东西, CLI 与 serve-api 共用 (RFC: dry-run 跳过写鉴权)。
+  - 执行路径 (set_flags/resync/archive/set_pin/compose_draft/send): 入口过
+    ``require_write_auth(actor)`` (+ flag/resync 还过 ``check_pm2_conflict``), 再调领域类
+    (NotionSync / SyncStore / OutboxRepository / backend, 一行不改)。
+
+A4 compose 净简化: service 接**字符串** body_html/body_text (非文件路径) —— CLI 适配器读
+``--body-file``/``--body-html-file`` 成字符串, serve-api 直接传 TipTap HTML, 旧 fork 路径的
+``--body-html-file`` 临时文件那段整段删 (见 routers/email.py)。
 
 返回的 ``@dataclass`` 字段与现 CLI ``emit`` 的 ``data`` 形状**逐字段对齐** (parity
 golden 锚定: tests/cli/test_service_parity.py)。方法同步; serve-api 经
@@ -94,6 +98,268 @@ class PinResult:
     internal_id: int
     is_pinned: bool
     changed: bool
+
+
+# forward 附件总大小上限 (编码前). base64 膨胀 ~33%, Exchange 常见上限 25-35MB.
+_MAX_FORWARD_ATTACH_BYTES = 20 * 1024 * 1024
+
+
+@dataclass
+class ComposeRequest:
+    """compose (draft / send / draft-plan) 的 transport-neutral 入参。
+
+    收件人 ``to`` / ``cc`` / ``bcc`` 是**逗号分隔字符串** (CLI ``--to`` 原样; serve-api 把
+    list ``join`` 成逗号串), service 内 ``_split_addrs`` 再提纯。``body_text`` / ``body_html``
+    是**字符串内容** (非文件路径) —— CLI 适配器读 ``--body-file`` / ``--body-html-file`` 成
+    字符串, serve-api 直接传 TipTap HTML (A4 净简化: 旧 fork 路径的临时文件那段整段删)。
+    """
+
+    internal_id: int
+    mode: str = "reply-all"
+    extra_to: Optional[str] = None
+    extra_cc: Optional[str] = None
+    body_text: Optional[str] = None  # markdown (--body-file)
+    body_html: Optional[str] = None  # HTML (--body-html-file / 前端 TipTap)
+    to: Optional[str] = None  # 完整收件人覆盖 (--to)
+    cc: Optional[str] = None  # 完整抄送覆盖 (--cc)
+    bcc: Optional[str] = None  # 密送 (--bcc)
+    subject: Optional[str] = None  # 完整主题覆盖 (--subject)
+
+
+@dataclass
+class ComposeDraftResult:
+    """``compose_draft`` 执行结果 —— 对齐 ``email_draft`` execute emit 的 data。
+
+    ``success`` (恒 True) / ``dry_run`` (恒 False) 由适配器回填 (历史 data 形状)。
+    """
+
+    internal_id: int
+    drafts_folder: str
+    appended_uid: Optional[int]
+    method: Optional[str]
+    mode: str
+    to_count: int
+    cc_count: int
+    attachments: int
+    warnings: list[str]
+
+
+@dataclass
+class ComposeSendResult:
+    """``send`` 执行结果 —— 对齐 ``email_send`` execute emit 的 data。
+
+    ``sent`` (恒 True) 由适配器回填。
+    """
+
+    internal_id: int
+    mode: str
+    message_id: Optional[str]
+    archived_to_sent: bool
+    method: Optional[str]
+    to_count: int
+    cc_count: int
+    attachments: int
+    warnings: list[str]
+
+
+def _split_addrs(addrs: str) -> list[str]:
+    """split RFC 822 to/cc 字段提纯 email. 对齐 handlers._split_addrs (getaddresses
+    正确处理 quoted display name + Outlook semicolon)."""
+    if not addrs:
+        return []
+    from email.utils import getaddresses
+
+    normalized = addrs.replace(";", ",")
+    out: list[str] = []
+    try:
+        for _name, email in getaddresses([normalized]):
+            email = (email or "").strip()
+            if email:
+                out.append(email)
+    except Exception:
+        # getaddresses 理论上不抛, 兜底逗号切
+        out = [a.strip() for a in normalized.split(",") if a.strip()]
+    return out
+
+
+def _reply_md_to_html(reply_md: str) -> str:
+    """markdown reply_suggestion → HTML。md_to_html 已抽到 src/converter (随
+    site-packages 必然打进 .app)。"""
+    from src.converter.markdown_to_html import md_to_html
+
+    return md_to_html(reply_md)
+
+
+def _compose_reply_draft(
+    record: dict,
+    *,
+    internal_id: int,
+    mode: str,
+    reply_text: str,
+    reply_html: Optional[str],
+    extra_to: Optional[str],
+    extra_cc: Optional[str],
+    to_override: Optional[str] = None,
+    cc_override: Optional[str] = None,
+    bcc: Optional[str] = None,
+    subject_override: Optional[str] = None,
+    forward_intro_text: Optional[str] = None,
+    forward_intro_html: Optional[str] = None,
+    attachments: Optional[list] = None,
+    self_email: Optional[str] = None,
+):
+    """从原邮件 metadata + reply 内容构造 DraftRequest.
+
+    收件人语义:
+    - ``to_override`` / ``cc_override`` 非 None → 权威完整列表 (前端 compose 用户编辑后的),
+      不做推导也不叠加 extra.
+    - 否则 reply/reply-all 推导原收件人 + ``extra_to``/``extra_cc`` 追加; forward 用
+      ``extra_to`` 作收件人本体.
+    ``bcc`` 总是直接 split. forward: Fwd: 前缀 + 独立邮件 (无 threading) + intro + 附件.
+
+    ``self_email`` (reply-all 排除自己用): service 调用方传 ``ctx.config.user_email``
+    (尊重各传输持有的 cfg, 不读全局); 缺省 None → 读全局 config (纯函数测试便利)。
+    """
+    from src.mail.backend import DraftRequest
+
+    if self_email is None:
+        from src.config import config as _cfg
+
+        self_email = _cfg.user_email or ""
+    self_email = self_email.lower().strip()
+    bcc_list = list(dict.fromkeys(_split_addrs(bcc or "")))
+    orig_subj = record.get("subject", "") or ""
+
+    if mode == "forward":
+        if to_override is not None:
+            to_list = list(dict.fromkeys(_split_addrs(to_override)))
+            cc_list = list(dict.fromkeys(_split_addrs(cc_override or "")))
+        else:
+            to_list = list(dict.fromkeys(_split_addrs(extra_to or "")))
+            cc_list = list(dict.fromkeys(_split_addrs(extra_cc or "")))
+        subject = subject_override if subject_override is not None else (
+            orig_subj if orig_subj.lower().startswith(("fwd:", "fw:")) else f"Fwd: {orig_subj}"
+        )
+        return DraftRequest(
+            mode=mode,
+            internal_id_for_threading=internal_id,
+            to=to_list, cc=cc_list, bcc=bcc_list,
+            subject=subject or "(no subject)",
+            reply_text=reply_text or "",
+            reply_html=reply_html,
+            forward_intro_text=forward_intro_text,
+            forward_intro_html=forward_intro_html,
+            attachments=attachments or [],
+        )
+
+    if to_override is not None:
+        # 前端 compose 传权威完整列表 — 不推导, 不叠加 extra.
+        to_list = list(dict.fromkeys(_split_addrs(to_override)))
+        cc_list = list(dict.fromkeys(_split_addrs(cc_override or "")))
+    else:
+        extra_to_list = _split_addrs(extra_to or "")
+        extra_cc_list = _split_addrs(extra_cc or "")
+        orig_from = (record.get("sender") or "").strip()
+        orig_to = _split_addrs(record.get("to_addr") or "")
+        orig_cc = _split_addrs(record.get("cc_addr") or "")
+        if mode == "reply":
+            to_list = [orig_from] if orig_from else []
+            cc_list = []
+        else:  # reply-all
+            candidates = ([orig_from] if orig_from else []) + orig_to
+            to_list = [a for a in candidates if a.lower() != self_email]
+            cc_list = [a for a in orig_cc if a.lower() != self_email]
+        to_list = list(dict.fromkeys(to_list + extra_to_list))  # dedup 保序
+        cc_list = list(dict.fromkeys(cc_list + extra_cc_list))
+
+    subject = subject_override if subject_override is not None else (
+        orig_subj if orig_subj.lower().startswith("re:") else f"Re: {orig_subj}"
+    )
+
+    # In-Reply-To + References (Outlook 线程 fold)
+    message_id = (record.get("message_id") or "").strip().strip("<>")
+    in_reply_to: Optional[str] = None
+    references: Optional[str] = None
+    if message_id:
+        in_reply_to = f"<{message_id}>"
+        tid = (record.get("thread_id") or "").strip().strip("<>")
+        chunks: list[str] = []
+        if tid and tid != message_id:
+            chunks.append(f"<{tid}>")
+        chunks.append(in_reply_to)
+        references = " ".join(chunks)
+
+    return DraftRequest(
+        mode=mode,
+        internal_id_for_threading=internal_id,
+        to=to_list, cc=cc_list, bcc=bcc_list,
+        subject=subject or "(no subject)",
+        reply_text=reply_text or "(rich text body)",
+        reply_html=reply_html,
+        in_reply_to=in_reply_to,
+        references=references,
+    )
+
+
+def _build_forward_intro(
+    record: dict, body_text: str, body_html: Optional[str]
+) -> tuple[str, str]:
+    """构造转发引用块 (plain + html): 原文 From/Date/Subject/To 摘要 + 正文."""
+    import html as _html
+
+    sender = (record.get("sender") or "").strip()
+    date = (record.get("date_received") or "").strip()
+    subj = (record.get("subject") or "").strip()
+    to = (record.get("to_addr") or "").strip()
+
+    intro_text = (
+        "---------- Forwarded message ----------\n"
+        f"From: {sender}\n"
+        f"Date: {date}\n"
+        f"Subject: {subj}\n"
+        f"To: {to}\n\n"
+        f"{body_text or ''}"
+    )
+    header_html = (
+        '<div style="border-top:1px solid #ccc;margin-top:16px;padding-top:8px;'
+        'color:#555;font-size:13px">'
+        "---------- Forwarded message ----------<br>"
+        f"From: {_html.escape(sender)}<br>"
+        f"Date: {_html.escape(date)}<br>"
+        f"Subject: {_html.escape(subj)}<br>"
+        f"To: {_html.escape(to)}</div>"
+    )
+    intro_html = header_html + (body_html or f"<pre>{_html.escape(body_text or '')}</pre>")
+    return intro_text, intro_html
+
+
+def _build_reply_quote(
+    record: dict, body_text: str, body_html: Optional[str]
+) -> tuple[str, str]:
+    """构造回复引用块 (plain + html): 像 Mail.app / Outlook 一样在回复正文下方附原邮件.
+
+    与 forward 的 "Forwarded message" 头不同, reply 用 "在 <date>, <sender> 写道:" 头 +
+    blockquote 包原文 (Outlook / Apple Mail 通用回复引用形态). 原邮件正文本身已含整条线程
+    (Exchange 每次回复嵌套前文), 故引这一层即带上全部历史.
+    """
+    import html as _html
+
+    sender = (record.get("sender") or "").strip()
+    date = (record.get("date_received") or "").strip()
+
+    intro_text = f"在 {date}，{sender} 写道：\n\n{body_text or ''}"
+    header_html = (
+        '<div style="color:#555;font-size:13px;margin-top:16px">'
+        f"在 {_html.escape(date)}，{_html.escape(sender)} 写道：</div>"
+    )
+    quoted = body_html or f"<pre>{_html.escape(body_text or '')}</pre>"
+    intro_html = (
+        f"{header_html}"
+        '<blockquote style="margin:8px 0 0;padding-left:12px;'
+        'border-left:2px solid #ccc;color:#555">'
+        f"{quoted}</blockquote>"
+    )
+    return intro_text, intro_html
 
 
 class MailWriteService:
@@ -480,4 +746,262 @@ class MailWriteService:
             internal_id=internal_id,
             is_pinned=pinned,
             changed=self._pin_changed(already, pinned),
+        )
+
+    # ------------------------------------------------------------
+    # compose (draft / send / draft-plan) — backend.append_draft / send_email
+    # ------------------------------------------------------------
+
+    def _fetch_reply_suggestion_md(self, internal_id: int) -> str:
+        """从 SQLite ``llm_processing.labels_json`` 读 ``reply_suggestion_md`` (SSoT)。
+
+        SQLite 是 reply_suggestion 的 SSoT (LLM 生成 + 用户/Notion 改动回灌), 不读 Notion。
+        搬自 CLI ``_fetch_reply_suggestion_md`` (读 ``ctx.config`` 而非全局 cfg)。
+        """
+        import json as _json
+
+        from src.llm_agent.store import LLMProcessingStore
+
+        store = LLMProcessingStore(self._ctx.config.sync_store_db_path)
+        row = store.get(internal_id)
+        if not row:
+            return ""
+        raw = row.get("labels_json") or ""
+        if not raw:
+            return ""
+        try:
+            labels = _json.loads(raw)
+        except (ValueError, TypeError):
+            return ""
+        if not isinstance(labels, dict):
+            return ""
+        return (labels.get("reply_suggestion_md") or "").strip()
+
+    def _collect_forward_attachments(
+        self, internal_id: int
+    ) -> tuple[list, list[str]]:
+        """读原邮件常规附件 (过滤 inline), 累计不超 cap。返回 (attachments, warnings)。
+
+        inline 图片 (cid:) 默认不带 — forward_intro_html 重拼, cid 引用会失效 (已知限制)。
+        搬自 CLI ``_collect_forward_attachments`` (用 ``ctx.email_repo``)。
+        """
+        out: list = []
+        warnings: list[str] = []
+        total = 0
+        for a in self._ctx.email_repo.get_attachments(internal_id):
+            if a.is_inline:
+                continue
+            data = self._ctx.email_repo.get_attachment_bytes(a.id)
+            if not data:
+                warnings.append(f"附件 {a.filename!r} 读取失败, 跳过")
+                continue
+            if total + len(data) > _MAX_FORWARD_ATTACH_BYTES:
+                warnings.append(
+                    f"附件总大小超 {_MAX_FORWARD_ATTACH_BYTES // (1024 * 1024)}MB, "
+                    f"跳过 {a.filename!r} 及之后附件"
+                )
+                break
+            total += len(data)
+            out.append((a.filename, data, a.content_type or "application/octet-stream"))
+        return out, warnings
+
+    def _prepare_draft(
+        self,
+        request: "ComposeRequest",
+        *,
+        allow_missing_reply: bool,
+        split_quote: bool,
+    ) -> tuple[Any, list[str], Optional[dict]]:
+        """构造 DraftRequest (compose_draft + send 共用)。搬自 CLI ``_prepare_draft`` 行 1508-1623。
+
+        正文优先级: ``body_html`` (字符串) > ``body_text`` (markdown 字符串) > SQLite
+        reply_suggestion_md。``split_quote=True`` (dry-run 预填): 引用块单独作第 3 个返回值
+        ``quote`` 不并进正文; False (执行路径): 引用块并进 reply_html/forward_intro。
+        meta 不存在 → ``ServiceNotFoundError``。
+        """
+        internal_id = request.internal_id
+        mode = request.mode
+        record = self._ctx.sync_store.get(internal_id)
+        if not record:
+            raise ServiceNotFoundError(
+                f"Email metadata not found for internal_id={internal_id}"
+            )
+
+        # explicit_body: 调用方传了完整正文 (前端 compose 发送 / 用户 body_text)。forward 时
+        # 已含引用块 (dry-run 预填阶段拼进 editor 后随 body_html 传回), 不能再单独构造
+        # forward_intro — 否则 build_outgoing_mime 二次 append 致引用块重复。
+        explicit_body = bool(request.body_html or request.body_text)
+        if request.body_html:
+            from src.converter.html_to_markdown import html_to_markdown
+
+            reply_html = request.body_html
+            reply_text = html_to_markdown(reply_html) if reply_html.strip() else ""
+        elif request.body_text:
+            reply_text = request.body_text
+            reply_html = _reply_md_to_html(reply_text) if reply_text.strip() else None
+        else:
+            reply_md = self._fetch_reply_suggestion_md(internal_id)
+            # allow_missing_reply: dry-run 预填放宽 — 没建议也要能预填收件人 (正文留空)。
+            # 真实 draft/send 仍要求有正文来源, 避免误发空回复。
+            if not reply_md and mode != "forward" and not allow_missing_reply:
+                raise ServiceNotFoundError(
+                    f"Email {internal_id} 无 reply_suggestion (SQLite labels_json 空)",
+                    hint="先 mailagent llm run <id> 生成回复建议, 或用 --body-file 传正文",
+                )
+            reply_text = reply_md or ""
+            reply_html = _reply_md_to_html(reply_md) if reply_md else None
+
+        # 引用原邮件 (Mail.app / Outlook: reply/reply-all/forward 都在正文下方附原文)。仅
+        # "无显式正文" 时构造 — 显式正文已含预填引用, 跳过避免二次拼接重复。
+        forward_intro_text = forward_intro_html = None
+        attachments: list = []
+        warnings: list[str] = []
+        quote: Optional[dict] = None  # split_quote=True 时单独返回引用块, 不并进正文
+        if mode == "forward":
+            # 附件总是 server-side 重新收集 — 前端无法传字节, 必须按 internal_id 重读。
+            attachments, warnings = self._collect_forward_attachments(internal_id)
+            if not explicit_body:
+                body_md = self._ctx.email_repo.get_body_markdown(internal_id) or ""
+                body_html = self._ctx.email_repo.get_body_html(internal_id)
+                fi_text, fi_html = _build_forward_intro(record, body_md, body_html)
+                if split_quote:
+                    quote = {"text": fi_text, "html": fi_html}
+                else:
+                    forward_intro_text, forward_intro_html = fi_text, fi_html
+        elif not explicit_body:  # reply / reply-all
+            orig_md = self._ctx.email_repo.get_body_markdown(internal_id) or ""
+            orig_html = self._ctx.email_repo.get_body_html(internal_id)
+            if orig_md or orig_html:
+                q_text, q_html = _build_reply_quote(record, orig_md, orig_html)
+                if split_quote:
+                    quote = {"text": q_text, "html": q_html}
+                else:
+                    reply_text = f"{reply_text}\n\n{q_text}" if reply_text.strip() else q_text
+                    reply_html = f"{reply_html}{q_html}" if reply_html else q_html
+
+        draft = _compose_reply_draft(
+            record, internal_id=internal_id, mode=mode,
+            reply_text=reply_text, reply_html=reply_html,
+            extra_to=request.extra_to, extra_cc=request.extra_cc,
+            to_override=request.to, cc_override=request.cc, bcc=request.bcc,
+            subject_override=request.subject,
+            forward_intro_text=forward_intro_text,
+            forward_intro_html=forward_intro_html,
+            attachments=attachments,
+            self_email=self._ctx.config.user_email,
+        )
+        return draft, warnings, quote
+
+    def compose_plan(self, request: "ComposeRequest") -> dict[str, Any]:
+        """dry-run 预览 (无 auth/写)。形状 = ``email_draft`` 的 dry-run plan 分支。
+
+        ``allow_missing_reply=True`` (前端预填无 reply_suggestion 也返回收件人) +
+        ``split_quote=True`` (引用块单独给前端折叠展示, TipTap 只载建议)。
+        """
+        internal_id = request.internal_id
+        mode = request.mode
+        draft, warnings, quote = self._prepare_draft(
+            request, allow_missing_reply=True, split_quote=True
+        )
+        quote_html = (quote or {}).get("html", "") or ""
+        quote_text = (quote or {}).get("text", "") or ""
+        return {
+            "internal_id": internal_id,
+            "mode": mode,
+            "to": draft.to,
+            "cc": draft.cc,
+            "bcc": draft.bcc,
+            "subject": draft.subject,
+            "reply_source": "body-file" if request.body_text else "sqlite:llm_processing.labels_json",
+            "reply_text": draft.reply_text,
+            "reply_html": draft.reply_html,
+            "quote_html": quote_html,
+            "quote_text": quote_text,
+            "forward_intro_text": draft.forward_intro_text or (quote_text if mode == "forward" else None),
+            "forward_intro_html": draft.forward_intro_html or (quote_html if mode == "forward" else None),
+            "reply_text_preview": (draft.reply_text or "")[:120],
+            "reply_html_len": len(draft.reply_html or ""),
+            "quote_html_len": len(quote_html),
+            "in_reply_to": draft.in_reply_to,
+            "attachments": len(draft.attachments),
+            "forward_intro_preview": (draft.forward_intro_text or quote_text or "")[:120],
+            "warnings": warnings,
+            "dry_run": True,
+        }
+
+    def compose_draft(
+        self, request: "ComposeRequest", *, actor: Actor
+    ) -> ComposeDraftResult:
+        """创建草稿 (backend.append_draft)。搬自 ``email_draft`` execute 行 1700-1779。
+
+        compose **不做** pm2 检测 (原 CLI 无 → 无 ``allow_concurrent``)。顺序: 构造 draft →
+        forward 收件人校验 → ``require_write_auth`` → append_draft (token 校验留 CLI 适配器,
+        更早; 顺序差异同 A3 archive 决策, 测试不可见)。
+        """
+        draft, warnings, _quote = self._prepare_draft(
+            request, allow_missing_reply=False, split_quote=False
+        )
+        if request.mode == "forward" and not draft.to:
+            raise ServiceInvalidArgError(
+                "forward 模式必须指定收件人 (--extra-to 或 --to)"
+            )
+
+        require_write_auth(actor)
+
+        result = self._ctx.backend.append_draft(draft)
+        if not result.success:
+            raise ServiceError(f"草稿创建失败: {result.error}")
+
+        return ComposeDraftResult(
+            internal_id=request.internal_id,
+            drafts_folder=result.drafts_folder,
+            appended_uid=result.appended_uid,
+            method=result.method,
+            mode=request.mode,
+            to_count=len(draft.to),
+            cc_count=len(draft.cc),
+            attachments=len(draft.attachments),
+            warnings=warnings,
+        )
+
+    def send(
+        self, request: "ComposeRequest", *, actor: Actor, confirmed: bool
+    ) -> ComposeSendResult:
+        """真实发送 (backend.send_email, 不可逆)。搬自 ``email_send`` 行 1840-1901。
+
+        与 compose_draft 同源构造 (split_quote=False, 保 '草稿预览 = 实际发送内容')。顺序:
+        构造 draft → forward 校验 → ``require_write_auth`` → 二次确认 (``confirmed=False`` →
+        ``ServiceInvalidArgError``, 对齐 json 模式无 ``--yes``) → send_email。text 模式交互
+        confirm 留 CLI 适配器 (service 不做交互)。
+        """
+        draft, warnings, _quote = self._prepare_draft(
+            request, allow_missing_reply=False, split_quote=False
+        )
+        if request.mode == "forward" and not draft.to:
+            raise ServiceInvalidArgError(
+                "forward 模式必须指定收件人 (--extra-to 或 --to)"
+            )
+
+        require_write_auth(actor)
+
+        if not confirmed:
+            raise ServiceInvalidArgError(
+                "发送需二次确认: 加 --yes 显式发送",
+                hint="前端应在确认对话框后传 --yes",
+            )
+
+        result = self._ctx.backend.send_email(draft)
+        if not result.success:
+            raise ServiceError(f"邮件发送失败: {result.error}")
+
+        return ComposeSendResult(
+            internal_id=request.internal_id,
+            mode=request.mode,
+            message_id=result.message_id,
+            archived_to_sent=result.archived_to_sent,
+            method=result.method,
+            to_count=len(draft.to),
+            cc_count=len(draft.cc),
+            attachments=len(draft.attachments),
+            warnings=warnings,
         )

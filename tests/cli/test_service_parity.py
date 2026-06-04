@@ -614,3 +614,308 @@ def test_cli_archive_executed_data_equals_service_direct(
     data_cli = _extract(result_cli.output)["data"]
 
     assert data_cli == data_svc
+
+
+# ============================================================
+# compose — golden 字面量 + CLI==service (A4)
+# ============================================================
+
+
+def _seed_reply(db_path, internal_id, reply_md):
+    """seed llm_processing.labels_json.reply_suggestion_md (compose 正文来源 SSoT)。"""
+    import json
+    import sqlite3
+    import time as _time
+
+    from src.llm_agent.store import LLMProcessingStore
+
+    LLMProcessingStore(str(db_path))  # _init 建 llm_processing 表
+    conn = sqlite3.connect(str(db_path))
+    labels = {"reply_suggestion_md": reply_md}
+    now = _time.time()
+    conn.execute(
+        "INSERT INTO llm_processing (internal_id, status, labels_json, created_at, updated_at) "
+        "VALUES (?, 'success', ?, ?, ?) "
+        "ON CONFLICT(internal_id) DO UPDATE SET labels_json=excluded.labels_json, "
+        "updated_at=excluded.updated_at",
+        (internal_id, json.dumps(labels, ensure_ascii=False), now, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+class _FakeComposeBackend:
+    """fake IMailBackend: append_draft + send_email, 记录 DraftRequest。"""
+
+    def __init__(self):
+        self.appended = []
+        self.sent = []
+
+    def append_draft(self, draft):
+        from src.mail.backend.types import DraftAppendResult
+
+        self.appended.append(draft)
+        return DraftAppendResult(
+            success=True, drafts_folder="Drafts", appended_uid=42, method="imap_append",
+        )
+
+    def send_email(self, draft):
+        from src.mail.backend.types import SendResult
+
+        self.sent.append(draft)
+        return SendResult(
+            success=True, message_id="<sent-1@mailagent.local>", method="smtp_davmail",
+        )
+
+
+def _patch_compose_backend(monkeypatch, fake):
+    """patch factory.create_backend → CLI (cli.backend) 与 service (ctx.backend) 同 fake。"""
+    monkeypatch.setattr(
+        "src.mail.backend.factory.create_backend", lambda *a, **k: fake
+    )
+
+
+_REPLY_MD = "Hi Alice,\n\nSounds good."
+
+
+def test_compose_plan_matches_golden(cli_env, seeded_db):
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    plan = MailWriteService(_service_ctx(seeded_db)).compose_plan(
+        ComposeRequest(internal_id=12345, mode="reply-all")
+    )
+    # 无 reply_suggestion → allow_missing_reply 放宽: reply_html 空, 收件人照常推导
+    # (reply-all: sender alice + to_addr bob, self=test@example.com 不在内不排除)。
+    assert plan["internal_id"] == 12345
+    assert plan["mode"] == "reply-all"
+    assert plan["to"] == ["alice@example.com", "bob@example.com"]
+    assert plan["subject"] == "Re: Hello Test"
+    assert plan["reply_source"] == "sqlite:llm_processing.labels_json"
+    assert not plan["reply_html"]
+    # 引用块单独走 quote_html (split_quote: TipTap 只载建议, 引用前端折叠)。
+    assert "写道" in plan["quote_html"]
+    assert "写道" not in (plan["reply_html"] or "")
+    assert plan["dry_run"] is True
+
+
+def test_compose_plan_forward_prefills_intro(cli_env, seeded_db):
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    plan = MailWriteService(_service_ctx(seeded_db)).compose_plan(
+        ComposeRequest(internal_id=12345, mode="forward")
+    )
+    assert plan["mode"] == "forward"
+    assert plan["subject"] == "Fwd: Hello Test"
+    assert plan["forward_intro_html"] is not None
+    assert "Forwarded message" in plan["forward_intro_html"]
+
+
+def test_compose_plan_body_text_reply_source(cli_env, seeded_db):
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    plan = MailWriteService(_service_ctx(seeded_db)).compose_plan(
+        ComposeRequest(internal_id=12345, mode="reply", body_text="用户正文")
+    )
+    assert plan["reply_source"] == "body-file"
+
+
+def test_compose_plan_not_found_raises(cli_env, seeded_db):
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).compose_plan(
+            ComposeRequest(internal_id=99999, mode="reply")
+        )
+
+
+def test_compose_draft_matches_golden(cli_env, seeded_db, monkeypatch):
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    _seed_reply(seeded_db, 12345, _REPLY_MD)
+    fake = _FakeComposeBackend()
+    _patch_compose_backend(monkeypatch, fake)
+    result = MailWriteService(_service_ctx(seeded_db)).compose_draft(
+        ComposeRequest(internal_id=12345, mode="reply-all"), actor=_cli_actor()
+    )
+    assert result.internal_id == 12345
+    assert result.drafts_folder == "Drafts"
+    assert result.appended_uid == 42
+    assert result.method == "imap_append"
+    assert result.mode == "reply-all"
+    assert result.to_count == 2  # alice + bob
+    # backend.append_draft 真被调 + reply_text = suggestion + 原邮件引用 (Mail.app 行为)。
+    assert len(fake.appended) == 1
+    draft = fake.appended[0]
+    assert draft.reply_text.startswith(_REPLY_MD)
+    assert "写道" in draft.reply_text
+
+
+def test_compose_draft_no_reply_raises(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    fake = _FakeComposeBackend()
+    _patch_compose_backend(monkeypatch, fake)
+    # execute (allow_missing_reply=False) 无 reply_suggestion → NotFound, 不发。
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).compose_draft(
+            ComposeRequest(internal_id=12345, mode="reply"), actor=_cli_actor()
+        )
+    assert fake.appended == []
+
+
+def test_compose_draft_forward_requires_recipient(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    fake = _FakeComposeBackend()
+    _patch_compose_backend(monkeypatch, fake)
+    # forward 无收件人 → InvalidArg (业务校验, 在 require_write_auth 之前)。
+    with pytest.raises(ServiceInvalidArgError):
+        MailWriteService(_service_ctx(seeded_db)).compose_draft(
+            ComposeRequest(internal_id=12345, mode="forward"), actor=_cli_actor()
+        )
+    assert fake.appended == []
+
+
+def test_compose_draft_requires_authenticated_actor(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceAuthError
+    from src.services.guards import Actor
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    _seed_reply(seeded_db, 12345, _REPLY_MD)
+    _patch_compose_backend(monkeypatch, _FakeComposeBackend())
+    with pytest.raises(ServiceAuthError):
+        MailWriteService(_service_ctx(seeded_db)).compose_draft(
+            ComposeRequest(internal_id=12345, mode="reply"),
+            actor=Actor(kind="cli", authenticated=False),
+        )
+
+
+def test_send_matches_golden(cli_env, seeded_db, monkeypatch):
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    _seed_reply(seeded_db, 12345, _REPLY_MD)
+    fake = _FakeComposeBackend()
+    _patch_compose_backend(monkeypatch, fake)
+    result = MailWriteService(_service_ctx(seeded_db)).send(
+        ComposeRequest(internal_id=12345, mode="reply-all"),
+        actor=_cli_actor(), confirmed=True,
+    )
+    assert result.internal_id == 12345
+    assert result.message_id == "<sent-1@mailagent.local>"
+    assert result.method == "smtp_davmail"
+    assert result.to_count == 2
+    assert len(fake.sent) == 1
+
+
+def test_send_unconfirmed_raises(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    _seed_reply(seeded_db, 12345, _REPLY_MD)
+    fake = _FakeComposeBackend()
+    _patch_compose_backend(monkeypatch, fake)
+    # confirmed=False → 二次确认拒绝 (对齐 json 模式无 --yes), 不发。
+    with pytest.raises(ServiceInvalidArgError):
+        MailWriteService(_service_ctx(seeded_db)).send(
+            ComposeRequest(internal_id=12345, mode="reply"),
+            actor=_cli_actor(), confirmed=False,
+        )
+    assert fake.sent == []
+
+
+def test_send_requires_authenticated_actor(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceAuthError
+    from src.services.guards import Actor
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    _seed_reply(seeded_db, 12345, _REPLY_MD)
+    _patch_compose_backend(monkeypatch, _FakeComposeBackend())
+    with pytest.raises(ServiceAuthError):
+        MailWriteService(_service_ctx(seeded_db)).send(
+            ComposeRequest(internal_id=12345, mode="reply"),
+            actor=Actor(kind="cli", authenticated=False), confirmed=True,
+        )
+
+
+def test_cli_draft_dryrun_data_equals_service_direct(cli_runner, cli_env, seeded_db):
+    from src.cli.main import app
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    # dry-run 只读 → 同一 DB 双跑无副作用。
+    plan_svc = MailWriteService(_service_ctx(seeded_db)).compose_plan(
+        ComposeRequest(internal_id=12345, mode="reply-all")
+    )
+    result_cli = cli_runner.invoke(
+        app,
+        ["--db-path", str(seeded_db), "email", "draft", "12345",
+         "--dry-run", "-o", "json"],
+    )
+    assert result_cli.exit_code == 0, result_cli.output
+    data_cli = _extract(result_cli.output)["data"]
+
+    assert data_cli == plan_svc
+
+
+def test_cli_draft_execute_data_equals_service_direct(
+    cli_runner, cli_env, seeded_db, monkeypatch
+):
+    from src.cli.main import app
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+    _seed_reply(seeded_db, 12345, _REPLY_MD)
+    # append_draft 无 DB 副作用 → 同 db 双跑可比 (fake backend 恒返回同结果)。
+    _patch_compose_backend(monkeypatch, _FakeComposeBackend())
+
+    res = MailWriteService(_service_ctx(seeded_db)).compose_draft(
+        ComposeRequest(internal_id=12345, mode="reply-all"), actor=_cli_actor()
+    )
+    data_svc = {
+        "internal_id": res.internal_id, "success": True,
+        "drafts_folder": res.drafts_folder, "appended_uid": res.appended_uid,
+        "method": res.method, "mode": res.mode,
+        "to_count": res.to_count, "cc_count": res.cc_count,
+        "attachments": res.attachments, "warnings": res.warnings,
+        "dry_run": False,
+    }
+    result_cli = cli_runner.invoke(
+        app,
+        ["--db-path", str(seeded_db), "email", "draft", "12345", "-o", "json"],
+    )
+    assert result_cli.exit_code == 0, result_cli.output
+    data_cli = _extract(result_cli.output)["data"]
+
+    assert data_cli == data_svc
+
+
+def test_cli_send_execute_data_equals_service_direct(
+    cli_runner, cli_env, seeded_db, monkeypatch
+):
+    from src.cli.main import app
+    from src.services.mail_write import ComposeRequest, MailWriteService
+
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+    _seed_reply(seeded_db, 12345, _REPLY_MD)
+    _patch_compose_backend(monkeypatch, _FakeComposeBackend())
+
+    res = MailWriteService(_service_ctx(seeded_db)).send(
+        ComposeRequest(internal_id=12345, mode="reply-all"),
+        actor=_cli_actor(), confirmed=True,
+    )
+    data_svc = {
+        "internal_id": res.internal_id, "sent": True, "mode": res.mode,
+        "message_id": res.message_id, "archived_to_sent": res.archived_to_sent,
+        "method": res.method, "to_count": res.to_count, "cc_count": res.cc_count,
+        "attachments": res.attachments, "warnings": res.warnings,
+    }
+    result_cli = cli_runner.invoke(
+        app,
+        ["--db-path", str(seeded_db), "email", "send", "12345", "--yes", "-o", "json"],
+    )
+    assert result_cli.exit_code == 0, result_cli.output
+    data_cli = _extract(result_cli.output)["data"]
+
+    assert data_cli == data_svc

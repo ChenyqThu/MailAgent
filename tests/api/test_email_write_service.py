@@ -25,7 +25,14 @@ from src.services.errors import (
     ServicePM2ConflictError,
 )
 from src.services.llm_service import LlmRunResult
-from src.services.mail_write import ArchiveResult, FlagResult, PinResult, ResyncResult
+from src.services.mail_write import (
+    ArchiveResult,
+    ComposeDraftResult,
+    ComposeSendResult,
+    FlagResult,
+    PinResult,
+    ResyncResult,
+)
 
 from tests.api.conftest import EMAIL_ID
 
@@ -129,6 +136,34 @@ class _SvcSpy:
         if _SvcSpy._raise is not None:
             raise _SvcSpy._raise
         return PinResult(internal_id=internal_id, is_pinned=pinned, changed=True)
+
+    # --- compose (A4): target = ComposeRequest (router 透传后的入参对象) ---
+    def compose_plan(self, request):
+        self.calls.append(("compose_plan", request, {}))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return {"internal_id": request.internal_id, "mode": request.mode,
+                "to": ["x@example.com"], "cc": [], "bcc": [], "subject": "Re: S",
+                "reply_source": "sqlite:llm_processing.labels_json",
+                "reply_html": "<p>r</p>", "forward_intro_html": None, "dry_run": True}
+
+    def compose_draft(self, request, *, actor):
+        self.calls.append(("compose_draft", request, {"actor": actor}))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return ComposeDraftResult(
+            internal_id=request.internal_id, drafts_folder="Drafts", appended_uid=7,
+            method="imap_append", mode=request.mode, to_count=1, cc_count=0,
+            attachments=0, warnings=[])
+
+    def send(self, request, *, actor, confirmed):
+        self.calls.append(("send", request, {"actor": actor, "confirmed": confirmed}))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return ComposeSendResult(
+            internal_id=request.internal_id, mode=request.mode, message_id="<m@x>",
+            archived_to_sent=False, method="smtp_davmail", to_count=1, cc_count=0,
+            attachments=0, warnings=[])
 
 
 @pytest.fixture()
@@ -450,6 +485,133 @@ def test_pin_not_found_maps_to_404(client, svc_spy):
     r = client.post("/api/email/42/pin", json={"pinned": True})
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ===========================================================================
+# POST /api/email/draft + /send + /draft-plan — in-process compose (A4)
+# ===========================================================================
+# camelCase body + list 收件人 → ComposeRequest (to/cc/bcc join 逗号串, bodyHtml 直接
+# 传字符串, 不再落临时文件); 校验 (internalId / mode) 早于 service 构造。
+
+
+def test_compose_draft_passes_request_and_envelope(client, svc_spy):
+    r = client.post(
+        "/api/email/draft",
+        json={
+            "internalId": EMAIL_ID, "mode": "reply",
+            "to": ["x@example.com", "y@example.com"], "cc": ["c@example.com"],
+            "subject": "Re: hello", "bodyHtml": "<p>hi</p>",
+        },
+    )
+    assert r.status_code == 200
+    method, req, kw = _last(svc_spy)
+    assert method == "compose_draft"
+    assert req.internal_id == EMAIL_ID
+    assert req.mode == "reply"
+    # list 收件人 join 成逗号串 (service _split_addrs 再提纯); subject 透传。
+    assert req.to == "x@example.com,y@example.com"
+    assert req.cc == "c@example.com"
+    assert req.subject == "Re: hello"
+    # bodyHtml 直接传字符串 (A4: 不再落临时文件 --body-html-file)。
+    assert req.body_html == "<p>hi</p>"
+    # 恒已鉴权 http actor; compose 不传 allow_concurrent。
+    assert kw["actor"].authenticated is True
+    assert kw["actor"].kind == "http"
+    assert "allow_concurrent" not in kw
+    data = r.json()["data"]
+    assert data["success"] is True
+    assert data["drafts_folder"] == "Drafts"
+    assert data["mode"] == "reply"
+    assert data["dry_run"] is False
+
+
+def test_compose_draft_no_body_html_is_none(client, svc_spy):
+    r = client.post("/api/email/draft", json={"internalId": EMAIL_ID, "mode": "reply"})
+    assert r.status_code == 200
+    _, req, _ = _last(svc_spy)
+    assert req.body_html is None
+
+
+def test_compose_draft_camel_keys_not_leaked(client, svc_spy):
+    # camelCase body (internalId/bodyHtml) → ComposeRequest 字段, 不泄漏成 CLI flag。
+    r = client.post(
+        "/api/email/draft",
+        json={"internalId": EMAIL_ID, "mode": "forward", "bodyHtml": "<p>x</p>"},
+    )
+    assert r.status_code == 200
+    _, req, _ = _last(svc_spy)
+    assert req.internal_id == EMAIL_ID
+    assert req.mode == "forward"
+    assert req.body_html == "<p>x</p>"
+
+
+def test_compose_draft_missing_internal_id_400(client, svc_spy):
+    r = client.post("/api/email/draft", json={"mode": "reply"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert svc_spy.instances == []  # 校验早于 service 构造
+
+
+def test_compose_draft_invalid_mode_400(client, svc_spy):
+    r = client.post("/api/email/draft", json={"internalId": EMAIL_ID, "mode": "bogus"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert svc_spy.instances == []
+
+
+def test_compose_draft_service_error_maps_to_404(client, svc_spy):
+    _SvcSpy._raise = ServiceNotFoundError("Email 42 无 reply_suggestion")
+    r = client.post("/api/email/draft", json={"internalId": EMAIL_ID, "mode": "reply"})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+def test_compose_send_passes_confirmed_true(client, svc_spy):
+    r = client.post(
+        "/api/email/send",
+        json={"internalId": EMAIL_ID, "mode": "reply", "bodyHtml": "<p>send</p>"},
+    )
+    assert r.status_code == 200
+    method, req, kw = _last(svc_spy)
+    assert method == "send"
+    assert req.internal_id == EMAIL_ID
+    assert req.body_html == "<p>send</p>"
+    # send 端点恒 confirmed=True (前端已弹 SendConfirmDialog); 已鉴权 actor; 无 pm2。
+    assert kw["confirmed"] is True
+    assert kw["actor"].authenticated is True
+    assert "allow_concurrent" not in kw
+    data = r.json()["data"]
+    assert data["sent"] is True
+    assert data["message_id"] == "<m@x>"
+
+
+def test_compose_send_invalid_mode_400(client, svc_spy):
+    r = client.post("/api/email/send", json={"internalId": EMAIL_ID, "mode": "bogus"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert svc_spy.instances == []
+
+
+def test_draft_plan_uses_compose_plan_no_actor(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/draft-plan", json={"mode": "reply"})
+    assert r.status_code == 200
+    method, req, kw = _last(svc_spy)
+    assert method == "compose_plan"
+    assert req.internal_id == EMAIL_ID
+    assert req.mode == "reply"
+    assert "actor" not in kw  # dry-run 跳过 auth
+    assert r.json()["data"]["dry_run"] is True
+
+
+def test_draft_plan_snake_case_passthrough(client, svc_spy):
+    # DraftPlanResult snake_case (reply_html / forward_intro_html / reply_source) 原样透传。
+    r = client.post(f"/api/email/{EMAIL_ID}/draft-plan", json={"mode": "reply"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert "reply_html" in data
+    assert "reply_source" in data
+    assert "replyHtml" not in data
+    assert "forwardIntroHtml" not in data
 
 
 # ===========================================================================
