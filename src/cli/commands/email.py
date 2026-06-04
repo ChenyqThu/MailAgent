@@ -942,6 +942,51 @@ def _emit_pin_result(
     })
 
 
+def _run_pin(cli: "CliContext", internal_id: int, *, pinned: bool, dry_run: bool) -> None:
+    """pin / unpin 共享退化体 (A3: 编排 + 守卫下沉 MailWriteService)。
+
+    dry-run 走 ``plan_pin`` (无 auth/写); 执行先 ``cli.require_auth()`` (token, exit 4)
+    再 ``set_pin`` (service 内 ``require_write_auth`` + ensure v8 schema)。
+    """
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService(cli)
+    if dry_run:
+        try:
+            plan = svc.plan_pin(internal_id, pinned=pinned)
+        except ServiceError as e:
+            raise emit_cli_error(cli, e)
+        _emit_pin_result(
+            cli,
+            internal_id=internal_id,
+            pinned=plan["is_pinned"],
+            changed=plan["changed"],
+            dry_run=True,
+        )
+        return
+
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    try:
+        result = svc.set_pin(
+            internal_id,
+            pinned=pinned,
+            actor=Actor(kind="cli", authenticated=True, label="cli"),
+        )
+    except ServiceError as e:
+        raise emit_cli_error(cli, e)
+    _emit_pin_result(
+        cli,
+        internal_id=result.internal_id,
+        pinned=result.is_pinned,
+        changed=result.changed,
+        dry_run=False,
+    )
+
+
 @app.command("pin")
 def email_pin(
     ctx: typer.Context,
@@ -951,55 +996,12 @@ def email_pin(
 ) -> None:
     """置顶邮件（写 email_metadata.is_pinned=1 + pinned_at=now）。
 
-    Mail.app 没有 pin 概念；该字段仅作本地 / 前端持久化，
-    pm2 mail-sync 主进程不读不写它。Electron 也走同一份 SQLite，
-    所以 CLI 改完前端 5s 内 refetch 自动看到。
+    Mail.app 没有 pin 概念；该字段仅作本地 / 前端持久化，pm2 mail-sync 主进程不读不写它。
+    Electron 也走同一份 SQLite，所以 CLI 改完前端 5s 内 refetch 自动看到。
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
-    # v8 schema (is_pinned + pinned_at) is owned by SyncStore.__init__'s
-    # ALTER TABLE migration; touching `cli.sync_store` here makes the pin
-    # command self-sufficient when pm2 mail-sync hasn't been restarted yet
-    # against the v8-aware codebase.
-    _ = cli.sync_store
-    repo = cli.email_repo
-
-    meta = repo.get_metadata(internal_id)
-    if meta is None:
-        raise emit_cli_error(cli, CliNotFoundError(
-            f"Email with internal_id={internal_id} not found",
-            hint="Use 'mailagent email list' to find available IDs",
-        ))
-    already = bool(meta.is_pinned)
-
-    if dry_run:
-        _emit_pin_result(
-            cli,
-            internal_id=internal_id,
-            pinned=True,
-            changed=not already,
-            dry_run=True,
-        )
-        return
-
-    try:
-        cli.require_auth()
-    except CliError as e:
-        raise emit_cli_error(cli, e)
-
-    result = repo.set_pin(internal_id, True)
-    if result is None:
-        # race: 写命令之间被删
-        raise emit_cli_error(cli, CliNotFoundError(
-            f"Email with internal_id={internal_id} disappeared mid-write",
-        ))
-    _emit_pin_result(
-        cli,
-        internal_id=internal_id,
-        pinned=True,
-        changed=not already,
-        dry_run=False,
-    )
+    _run_pin(cli, internal_id, pinned=True, dry_run=dry_run)
 
 
 @app.command("unpin")
@@ -1012,39 +1014,7 @@ def email_unpin(
     """取消置顶（写 is_pinned=0, pinned_at=NULL）。"""
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
-    _ = cli.sync_store  # ensure v8 schema (see email_pin docstring)
-    repo = cli.email_repo
-
-    meta = repo.get_metadata(internal_id)
-    if meta is None:
-        raise emit_cli_error(cli, CliNotFoundError(
-            f"Email with internal_id={internal_id} not found",
-        ))
-    was = bool(meta.is_pinned)
-
-    if dry_run:
-        _emit_pin_result(
-            cli,
-            internal_id=internal_id,
-            pinned=False,
-            changed=was,
-            dry_run=True,
-        )
-        return
-
-    try:
-        cli.require_auth()
-    except CliError as e:
-        raise emit_cli_error(cli, e)
-
-    repo.set_pin(internal_id, False)
-    _emit_pin_result(
-        cli,
-        internal_id=internal_id,
-        pinned=False,
-        changed=was,
-        dry_run=False,
-    )
+    _run_pin(cli, internal_id, pinned=False, dry_run=dry_run)
 
 
 @app.command("list-pinned")
@@ -1070,36 +1040,8 @@ def email_list_pinned(
 
 # ============================================================
 # email archive — 收件箱邮件归档 (IMAP MOVE INBOX→Archive + Mailbox→存档). davmail-only.
+# A3: 编排 + IMAP/Notion helper + 守卫下沉 src/services/mail_write.py::MailWriteService。
 # ============================================================
-
-_ARCHIVE_MAILBOX = "存档"
-
-
-def _folder_imap_reader(cli: "CliContext"):
-    """构造 FolderImapReader (归档走 IMAP); 要求 davmail backend, 否则 raise CliError.
-
-    与 folder.py _reader 同 gate (folder 级 IMAP 操作 applescript 模式不支持)。
-    """
-    from src.folder_sync.imap_folder_reader import FolderImapReader
-    from src.mail.backend.davmail_backend import DavMailBackend
-
-    backend = cli.backend
-    if not isinstance(backend, DavMailBackend):
-        raise CliInvalidArgError(
-            "归档需要 MAILAGENT_BACKEND=davmail (IMAP MOVE); "
-            f"当前 backend={getattr(backend, 'backend_origin', '?')!r} 不支持.",
-            hint="在 .env 设 MAILAGENT_BACKEND=davmail 并确认 DavMail JVM 在跑.",
-        )
-    return FolderImapReader(backend)
-
-
-async def _update_notion_mailbox(cli: "CliContext", page_id: str, mailbox: str) -> None:
-    """把 Notion 邮件页的 Mailbox (Select) 属性改成目标值 (归档 = 存档)。"""
-    client = cli.notion_sync.client.client  # AsyncClient
-    await client.pages.update(
-        page_id=page_id,
-        properties={"Mailbox": {"select": {"name": mailbox}}},
-    )
 
 
 @app.command("archive")
@@ -1119,28 +1061,15 @@ def email_archive(
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
 
-    meta = cli.sync_store.get(internal_id)
-    if not meta:
-        raise emit_cli_error(cli, CliNotFoundError(
-            f"Email metadata not found for internal_id={internal_id}",
-        ))
-    current_mailbox = meta.get("mailbox") or ""
-    message_id = meta.get("message_id")
-    imap_uid = meta.get("imap_uid")
-    notion_page_id = meta.get("notion_page_id")
-
+    svc = MailWriteService(cli)
     if dry_run:
-        plan = {
-            "internal_id": internal_id,
-            "action": "archive",
-            "from_mailbox": current_mailbox,
-            "to_mailbox": _ARCHIVE_MAILBOX,
-            "message_id": message_id,
-            "has_imap_uid": imap_uid is not None,
-            "notion_page_id": notion_page_id,
-            "dry_run": True,
-        }
+        try:
+            plan = svc.plan_archive(internal_id)
+        except ServiceError as e:
+            raise emit_cli_error(cli, e)
         if cli.output.lower() == "text":
             print("=== email archive plan (dry-run) ===")
             for key, value in plan.items():
@@ -1149,57 +1078,33 @@ def email_archive(
             emit(cli, plan)
         return
 
-    if current_mailbox == _ARCHIVE_MAILBOX:
-        raise emit_cli_error(cli, CliInvalidArgError(
-            f"Email {internal_id} 已在存档 (mailbox={current_mailbox!r})",
-        ))
-
     try:
         cli.require_auth()
     except CliError as e:
         raise emit_cli_error(cli, e)
-
-    # 1. IMAP MOVE INBOX → Archive (davmail-only)
     try:
-        reader = _folder_imap_reader(cli)
-    except CliError as e:
+        result = svc.archive(
+            internal_id,
+            actor=Actor(kind="cli", authenticated=True, label="cli"),
+        )
+    except ServiceError as e:
         raise emit_cli_error(cli, e)
-    moved = reader.archive_inbox_message(message_id, fallback_uid=imap_uid)
-    if not moved:
-        raise emit_cli_error(cli, CliError(
-            f"IMAP 归档失败 (INBOX→Archive) internal_id={internal_id}; "
-            "邮件可能已不在 INBOX 或 Archive 文件夹未发现",
-        ))
 
-    # 2. SQLite: mailbox → 存档 (移出收件箱视图; body/附件保留)
-    cli.sync_store.update_mailbox(internal_id, _ARCHIVE_MAILBOX)
-
-    # 3. Notion 镜像: Mailbox 属性 → 存档 (可逆, 不删页)。失败仅 warn — IMAP 已成功,
-    #    不该因 Notion 抖动让整体算失败 (下次 resync 可纠正)。
-    notion_updated = False
-    notion_error = None
-    if notion_page_id:
-        try:
-            asyncio.run(_update_notion_mailbox(cli, notion_page_id, _ARCHIVE_MAILBOX))
-            notion_updated = True
-        except Exception as e:  # noqa: BLE001 — Notion SDK 抛各种, 不阻断归档
-            notion_error = str(e)
-
-    result = {
-        "internal_id": internal_id,
+    data = {
+        "internal_id": result.internal_id,
         "action": "archive",
         "success": True,
-        "from_mailbox": current_mailbox,
-        "to_mailbox": _ARCHIVE_MAILBOX,
-        "notion_updated": notion_updated,
-        "notion_error": notion_error,
+        "from_mailbox": result.from_mailbox,
+        "to_mailbox": result.to_mailbox,
+        "notion_updated": result.notion_updated,
+        "notion_error": result.notion_error,
         "dry_run": False,
     }
     if cli.output.lower() == "text":
-        print(f"archived internal_id={internal_id}: {current_mailbox} → {_ARCHIVE_MAILBOX} "
-              f"(notion_updated={notion_updated})")
+        print(f"archived internal_id={result.internal_id}: {result.from_mailbox} → "
+              f"{result.to_mailbox} (notion_updated={result.notion_updated})")
     else:
-        emit(cli, result)
+        emit(cli, data)
 
 
 # ============================================================

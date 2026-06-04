@@ -114,14 +114,20 @@ class _FakeReader:
 def test_archive_success_updates_mailbox(cli_runner, seeded_db, monkeypatch):
     _bypass_auth(monkeypatch)
     fake_reader = _FakeReader()
-    monkeypatch.setattr("src.cli.commands.email._folder_imap_reader", lambda cli: fake_reader)
+    # A3: archive 编排 + IMAP/Notion helper 下沉 MailWriteService → monkeypatch service 方法。
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._folder_imap_reader",
+        lambda self: fake_reader,
+    )
 
     notion_calls = []
 
-    async def _fake_notion(cli, page_id, mailbox):
+    async def _fake_notion(self, page_id, mailbox):
         notion_calls.append((page_id, mailbox))
 
-    monkeypatch.setattr("src.cli.commands.email._update_notion_mailbox", _fake_notion)
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._update_notion_mailbox", _fake_notion
+    )
 
     r = _invoke(cli_runner, "email", "archive", "12345",
                 "-o", "json", db_path=seeded_db)
@@ -147,7 +153,10 @@ def test_archive_imap_failure_keeps_mailbox(cli_runner, seeded_db, monkeypatch):
         def archive_inbox_message(self, message_id, fallback_uid=None):
             return False
 
-    monkeypatch.setattr("src.cli.commands.email._folder_imap_reader", lambda cli: _FailReader())
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._folder_imap_reader",
+        lambda self: _FailReader(),
+    )
 
     r = _invoke(cli_runner, "email", "archive", "12345",
                 "-o", "json", db_path=seeded_db)

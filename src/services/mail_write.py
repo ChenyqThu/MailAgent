@@ -23,7 +23,11 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
-from src.services.errors import ServiceNotFoundError
+from src.services.errors import (
+    ServiceError,
+    ServiceInvalidArgError,
+    ServiceNotFoundError,
+)
 from src.services.guards import Actor, check_pm2_conflict, require_write_auth
 from src.sync.outbox import OutboxRepository
 
@@ -35,6 +39,9 @@ if TYPE_CHECKING:
 # parity (echo prevention 只特判 source='notion_webhook', 其余 source 仅审计用)。
 # 前端写收编 (D1) 时再按传输区分 source。
 _OUTBOX_SOURCE = "cli"
+
+# 归档目标 mailbox (IMAP MOVE INBOX→Archive 后 SQLite/Notion 的 Mailbox 标签)。
+_ARCHIVE_MAILBOX = "存档"
 
 
 @dataclass
@@ -60,6 +67,33 @@ class ResyncResult:
     new_page_id: Optional[str]
     archived_page_id: Optional[str]
     action: str
+
+
+@dataclass
+class ArchiveResult:
+    """``archive`` 执行结果 —— 对齐 ``email_archive`` emit 的 data (dry_run=False 分支)。
+
+    ``action`` (恒 "archive") / ``success`` (恒 True) / ``dry_run`` (恒 False) 由适配器
+    回填 (历史 data 形状), 这里只放动态字段。
+    """
+
+    internal_id: int
+    from_mailbox: str
+    to_mailbox: str
+    notion_updated: bool
+    notion_error: Optional[str]
+
+
+@dataclass
+class PinResult:
+    """``set_pin`` 执行结果 —— 对齐 ``email_pin`` / ``email_unpin`` emit 的 data。
+
+    ``dry_run`` (恒 False) 由适配器回填。
+    """
+
+    internal_id: int
+    is_pinned: bool
+    changed: bool
 
 
 class MailWriteService:
@@ -280,4 +314,170 @@ class MailWriteService:
             new_page_id=result.page_id,
             archived_page_id=result.archived_page_id,
             action=result.action,
+        )
+
+    # ------------------------------------------------------------
+    # archive (收件箱归档: IMAP MOVE INBOX→Archive + Mailbox→存档, davmail-only)
+    # ------------------------------------------------------------
+
+    def _folder_imap_reader(self):
+        """构造 FolderImapReader (归档走 IMAP); 要求 davmail backend, 否则
+        ``ServiceInvalidArgError``。搬自 CLI ``_folder_imap_reader`` (与 folder.py 同 gate:
+        folder 级 IMAP 操作 applescript 模式不支持)。"""
+        from src.folder_sync.imap_folder_reader import FolderImapReader
+        from src.mail.backend.davmail_backend import DavMailBackend
+
+        backend = self._ctx.backend
+        if not isinstance(backend, DavMailBackend):
+            raise ServiceInvalidArgError(
+                "归档需要 MAILAGENT_BACKEND=davmail (IMAP MOVE); "
+                f"当前 backend={getattr(backend, 'backend_origin', '?')!r} 不支持.",
+                hint="在 .env 设 MAILAGENT_BACKEND=davmail 并确认 DavMail JVM 在跑.",
+            )
+        return FolderImapReader(backend)
+
+    async def _update_notion_mailbox(self, page_id: str, mailbox: str) -> None:
+        """把 Notion 邮件页的 Mailbox (Select) 属性改成目标值 (归档 = 存档)。"""
+        client = self._ctx.notion_sync.client.client  # AsyncClient
+        await client.pages.update(
+            page_id=page_id,
+            properties={"Mailbox": {"select": {"name": mailbox}}},
+        )
+
+    def plan_archive(self, internal_id: int) -> dict[str, Any]:
+        """dry-run 预览 (无 auth/写)。meta 不存在 → ``ServiceNotFoundError``。
+        形状 = ``email_archive`` 的 dry-run 分支。"""
+        meta = self._ctx.sync_store.get(internal_id)
+        if not meta:
+            raise ServiceNotFoundError(
+                f"Email metadata not found for internal_id={internal_id}"
+            )
+        return {
+            "internal_id": internal_id,
+            "action": "archive",
+            "from_mailbox": meta.get("mailbox") or "",
+            "to_mailbox": _ARCHIVE_MAILBOX,
+            "message_id": meta.get("message_id"),
+            "has_imap_uid": meta.get("imap_uid") is not None,
+            "notion_page_id": meta.get("notion_page_id"),
+            "dry_run": True,
+        }
+
+    def archive(self, internal_id: int, *, actor: Actor) -> ArchiveResult:
+        """归档收件箱邮件 (IMAP MOVE INBOX→Archive + SQLite/Notion Mailbox→存档)。
+
+        搬自 ``src/cli/commands/email.py::email_archive`` 行 1152-1196 (行为保持)。
+        archive **不做** pm2 检测 (原 CLI 无 → 无 ``allow_concurrent`` 参数); Notion 镜像
+        失败仅 warn 不阻断 (IMAP 已成功, 下次 resync 可纠正)。``require_write_auth`` 在
+        already-archived 业务校验之后 (贴近原 CLI 顺序; CLI 适配器的 token 校验更早)。
+        """
+        meta = self._ctx.sync_store.get(internal_id)
+        if not meta:
+            raise ServiceNotFoundError(
+                f"Email metadata not found for internal_id={internal_id}"
+            )
+        current_mailbox = meta.get("mailbox") or ""
+        message_id = meta.get("message_id")
+        imap_uid = meta.get("imap_uid")
+        notion_page_id = meta.get("notion_page_id")
+
+        if current_mailbox == _ARCHIVE_MAILBOX:
+            raise ServiceInvalidArgError(
+                f"Email {internal_id} 已在存档 (mailbox={current_mailbox!r})"
+            )
+
+        require_write_auth(actor)
+
+        # 1. IMAP MOVE INBOX → Archive (davmail-only)
+        reader = self._folder_imap_reader()
+        moved = reader.archive_inbox_message(message_id, fallback_uid=imap_uid)
+        if not moved:
+            raise ServiceError(
+                f"IMAP 归档失败 (INBOX→Archive) internal_id={internal_id}; "
+                "邮件可能已不在 INBOX 或 Archive 文件夹未发现"
+            )
+
+        # 2. SQLite: mailbox → 存档 (移出收件箱视图; body/附件保留)
+        self._ctx.sync_store.update_mailbox(internal_id, _ARCHIVE_MAILBOX)
+
+        # 3. Notion 镜像: Mailbox 属性 → 存档 (可逆, 不删页)。失败仅 warn — IMAP 已成功,
+        #    不该因 Notion 抖动让整体算失败 (下次 resync 可纠正)。
+        notion_updated = False
+        notion_error = None
+        if notion_page_id:
+            try:
+                asyncio.run(
+                    self._update_notion_mailbox(notion_page_id, _ARCHIVE_MAILBOX)
+                )
+                notion_updated = True
+            except Exception as e:  # noqa: BLE001 — Notion SDK 抛各种, 不阻断归档
+                notion_error = str(e)
+
+        return ArchiveResult(
+            internal_id=internal_id,
+            from_mailbox=current_mailbox,
+            to_mailbox=_ARCHIVE_MAILBOX,
+            notion_updated=notion_updated,
+            notion_error=notion_error,
+        )
+
+    # ------------------------------------------------------------
+    # pin / unpin (v8 前端置顶持久化; Mail.app 无 pin 概念, mail-sync 不读写)
+    # ------------------------------------------------------------
+
+    @staticmethod
+    def _pin_changed(already: bool, pinned: bool) -> bool:
+        """是否真正改变了置顶态: pin(True) → not already; unpin(False) → already。
+
+        统一表达 = ``already != pinned`` (逐字段对齐 ``email_pin`` 的 ``changed=not already``
+        与 ``email_unpin`` 的 ``changed=was``)。
+        """
+        return already != pinned
+
+    def plan_pin(self, internal_id: int, *, pinned: bool) -> dict[str, Any]:
+        """dry-run 预览 (无 auth/写)。meta 不存在 → ``ServiceNotFoundError``。
+        形状 = ``email_pin`` / ``email_unpin`` 的 dry-run 分支。"""
+        _ = self._ctx.sync_store  # ensure v8 schema (is_pinned + pinned_at ALTER)
+        meta = self._ctx.email_repo.get_metadata(internal_id)
+        if meta is None:
+            raise ServiceNotFoundError(
+                f"Email with internal_id={internal_id} not found",
+                hint="Use 'mailagent email list' to find available IDs",
+            )
+        already = bool(meta.is_pinned)
+        return {
+            "internal_id": internal_id,
+            "is_pinned": pinned,
+            "changed": self._pin_changed(already, pinned),
+            "dry_run": True,
+        }
+
+    def set_pin(self, internal_id: int, *, pinned: bool, actor: Actor) -> PinResult:
+        """写 email_metadata.is_pinned (pin=True / unpin=False)。
+
+        搬自 ``email_pin`` 行 964-1002 + ``email_unpin`` 行 1015-1046 (行为保持)。pin
+        **不做** pm2 检测 (Mail.app 无 pin 概念, mail-sync 不读写该字段 → 无并发损坏风险
+        → 无 ``allow_concurrent`` 参数)。set_pin 返回 None = race (写命令间被删) → NotFound。
+        """
+        _ = self._ctx.sync_store  # ensure v8 schema (is_pinned + pinned_at ALTER)
+        repo = self._ctx.email_repo
+        meta = repo.get_metadata(internal_id)
+        if meta is None:
+            raise ServiceNotFoundError(
+                f"Email with internal_id={internal_id} not found",
+                hint="Use 'mailagent email list' to find available IDs",
+            )
+        already = bool(meta.is_pinned)
+
+        require_write_auth(actor)
+
+        result = repo.set_pin(internal_id, pinned)
+        if result is None:
+            raise ServiceNotFoundError(
+                f"Email with internal_id={internal_id} disappeared mid-write"
+            )
+        return PinResult(
+            internal_id=internal_id,
+            is_pinned=pinned,
+            changed=self._pin_changed(already, pinned),
         )

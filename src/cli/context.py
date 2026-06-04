@@ -92,6 +92,18 @@ class CliContext:
         return self._cli_config
 
     @property
+    def config(self) -> "Config":
+        """``ServiceDeps.config`` 别名 → ``cli_config`` (只读)。
+
+        让 CliContext 结构上满足 ``src/services/context.py::ServiceDeps`` 新增的
+        ``config`` 契约: service 层 (A3 ``LlmService``) 经 ``ctx.config`` 拿
+        ``attachment_storage_dir`` / ``mailagent_backend`` 等, 而非直接读全局
+        ``src.config.config`` —— 这样测试注入的 CLI-scoped cfg (``--db-path`` /
+        ``--config`` override) 被尊重 (ServiceContext 同理持有自己的 cfg)。
+        """
+        return self.cli_config
+
+    @property
     def email_repo(self) -> "EmailRepository":
         if self._email_repo is None:
             from src.repository import AttachmentStore, EmailRepository

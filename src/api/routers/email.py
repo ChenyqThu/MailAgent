@@ -15,9 +15,9 @@ update-flag)。
   POST /api/email/{internal_id}/resync  — service MailWriteService.resync (ResyncResult|plan)
   POST /api/email/{internal_id}/update-flag — CLI `notion update-flag` (legacy notion.updateFlag)
   POST /api/email/{internal_id}/flag    — service MailWriteService.set_flags (Sprint 15 outbox SSoT)
-  POST /api/email/{internal_id}/archive — CLI `email archive`        (davmail-only)
+  POST /api/email/{internal_id}/archive — service MailWriteService.archive (davmail-only)
   POST /api/email/{internal_id}/draft-plan — CLI `email draft --dry-run` (DraftPlanResult)
-  POST /api/email/{internal_id}/pin     — CLI `email pin|unpin`      (pin toggle)
+  POST /api/email/{internal_id}/pin     — service MailWriteService.set_pin (pin toggle)
 
 设计纪律 (实现规格 + sibling 已写的 envelope/schemas):
   - 读端点 ``data`` 形状 = CLI 同名命令 emit 的 ``data`` (复用
@@ -26,9 +26,10 @@ update-flag)。
     ``_meta_record_to_list_item`` helper, 让 cli.gen.ts 校验不变。
   - 统一响应走 app.success_envelope / app.APIError (全局 handler 转 envelope error +
     正确 HTTP)。meta.source='sqlite' (repo 直查) / 'cli' (in-process service 或 subprocess)。
-  - flag / resync 写端点 (A2) 走进程内 MailWriteService (不再 fork CLI), 恒 allow_concurrent
-    (mail-sync 生产在线 → pm2 检测会拒)。其余写端点 (archive / draft / send / draft-plan / pin /
-    legacy notion update-flag) 仍经 cli_runner.run_cli, 由 A3/A4 续迁。
+  - flag / resync (A2) + archive / pin (A3) 写端点走进程内 MailWriteService (不再 fork CLI)。
+    flag/resync 恒 allow_concurrent (mail-sync 生产在线 → pm2 检测会拒); archive/pin 不做 pm2
+    检测。其余写端点 (draft / send / draft-plan / legacy notion update-flag) 仍经
+    cli_runner.run_cli, 由 A4 续迁。
   - notion update-flag (仍 fork) 用 **tri-bool 字符串形** ``--is-read true/false`` + **不做**
     pm2 检测 (不带 --allow-concurrent), 与 email flag 路径区别 (实现规格 gotcha #6/#7)。
 """
@@ -871,33 +872,40 @@ async def archive_email(
     internal_id: int,
     body: Optional[dict[str, Any]] = None,
 ):
-    """归档收件箱邮件: IMAP MOVE INBOX→Archive + Mailbox→存档 (CLI `email archive`)。
+    """归档收件箱邮件: IMAP MOVE INBOX→Archive + Mailbox→存档 (A3: in-process MailWriteService)。
 
-    body (可选): {dryRun?}。davmail-only — 非 davmail backend 时 CLI 自报
-    E_INVALID_ARG → 400 (gotcha #6, 由 _raise_from_cli_error 透传, 不在 router 重复
-    探测 backend: CLI 子进程继承 server env, 它的判断才权威)。archive **不做** pm2
-    检测 → **不带** --allow-concurrent (gotcha #9)。
-    data = email-archive 结果 (ArchiveResult: success/from_mailbox/to_mailbox/...)。
+    body (可选): {dryRun?}。davmail-only — 非 davmail backend 时 service 抛
+    E_INVALID_ARG → 400 (gotcha #6)。archive **不做** pm2 检测 → 无 allow_concurrent
+    (gotcha #9)。dry-run 跳过 auth (plan_archive 纯预览, 无写)。
+    data = ArchiveResult (success/from_mailbox/to_mailbox/notion_updated/...)。
     """
     opts = body or {}
     dry_run = bool(opts.get("dryRun"))
 
-    args: list[str] = ["email", "archive", str(internal_id)]
-    if dry_run:
-        args.append("--dry-run")
-
-    api_key = None if dry_run else get_cli_api_key()
+    svc = MailWriteService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=api_key)
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
+        if dry_run:
+            data = await asyncio.to_thread(svc.plan_archive, internal_id)
+        else:
+            result = await asyncio.to_thread(
+                svc.archive,
+                internal_id,
+                actor=Actor(kind="http", authenticated=True, label="cf-access"),
+            )
+            data = {
+                "internal_id": result.internal_id,
+                "action": "archive",
+                "success": True,
+                "from_mailbox": result.from_mailbox,
+                "to_mailbox": result.to_mailbox,
+                "notion_updated": result.notion_updated,
+                "notion_error": result.notion_error,
+                "dry_run": False,
+            }
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(
-        result.data,
-        request=request,
-        source="cli",
-        meta_extra=result.meta or None,
-    )
+    return success_envelope(data, request=request, source="cli")
 
 
 # ===========================================================================
@@ -1099,11 +1107,12 @@ async def pin_email(
     internal_id: int,
     body: Optional[dict[str, Any]] = None,
 ):
-    """置顶 / 取消置顶邮件 (CLI `email pin` / `email unpin`)。
+    """置顶 / 取消置顶邮件 (A3: in-process MailWriteService.set_pin / plan_pin)。
 
     body (PinOpts): {pinned: bool, dryRun?}。``pinned=true`` → pin, ``false`` → unpin
     (镜像 write_ops.ts pinArgs: ``email pin|unpin <id>``)。写 SQLite is_pinned;
-    mail-sync 不读不写该字段。data = {internal_id, is_pinned, changed, dry_run}。
+    mail-sync 不读不写该字段 → **不做** pm2 检测。dry-run 跳过 auth。
+    data = {internal_id, is_pinned, changed, dry_run}。
     """
     opts = body or {}
     pinned = opts.get("pinned")
@@ -1115,19 +1124,24 @@ async def pin_email(
         )
     dry_run = bool(opts.get("dryRun"))
 
-    args: list[str] = ["email", "pin" if pinned else "unpin", str(internal_id)]
-    if dry_run:
-        args.append("--dry-run")
-
-    api_key = None if dry_run else get_cli_api_key()
+    svc = MailWriteService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=api_key)
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
+        if dry_run:
+            data = await asyncio.to_thread(svc.plan_pin, internal_id, pinned=pinned)
+        else:
+            result = await asyncio.to_thread(
+                svc.set_pin,
+                internal_id,
+                pinned=pinned,
+                actor=Actor(kind="http", authenticated=True, label="cf-access"),
+            )
+            data = {
+                "internal_id": result.internal_id,
+                "is_pinned": result.is_pinned,
+                "changed": result.changed,
+                "dry_run": False,
+            }
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(
-        result.data,
-        request=request,
-        source="cli",
-        meta_extra=result.meta or None,
-    )
+    return success_envelope(data, request=request, source="cli")

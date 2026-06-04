@@ -16,10 +16,9 @@ import typer
 from src.cli.exceptions import (
     CliError,
     CliInvalidArgError,
-    CliLLMFailedError,
-    CliNotFoundError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
+from src.services.errors import ServiceError
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -80,7 +79,11 @@ def llm_run(
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
-    """对单封邮件跑 LLM 分类 → 填 Notion AI 字段 (PR-5 起 inline; 取代旧 scripts/run_llm_on_email.py)."""
+    """对单封邮件跑 LLM 分类 → 填 Notion AI 字段 (PR-5 起 inline; 取代旧 scripts/run_llm_on_email.py).
+
+    A3: 编排 + 守卫下沉 src/services/llm_service.py::LlmService (token auth 留 CLI 侧;
+    dry-run 真跑 LLM 不写 Notion → 跳过 token auth)。
+    """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 
@@ -90,55 +93,30 @@ def llm_run(
         except CliError as e:
             raise emit_cli_error(cli, e)
 
-    from src.llm_agent.runner import LLMRunner
+    from src.services.guards import Actor
+    from src.services.llm_service import LlmService
 
-    cfg = cli.cli_config
-    backend = _maybe_create_davmail_backend(cli)
-    runner = LLMRunner(
-        db_path=cfg.sync_store_db_path,
-        attachment_storage_dir=cfg.attachment_storage_dir,
-        backend=backend,
-    )
+    svc = LlmService(cli)
     try:
-        result = asyncio.run(runner.run_for_internal_id(
+        result = svc.run(
             internal_id,
             dry_run=dry_run,
-            overwrite=not no_overwrite,
             force=force,
-        ))
-    except Exception as e:  # pragma: no cover - 兜底网关意外异常
-        raise emit_cli_error(cli, CliLLMFailedError(
-            f"LLMRunner unexpected error: {e!r}",
-            hint="网关/依赖故障; 看 pm2 logs 或检查 LLM_API_KEY / LLM_API_BASE",
-        ))
-    finally:
-        # runner.close() 是 async, 但 LLMRunner.close 内部 try/except, 不重试
-        try:
-            asyncio.run(runner.close())
-        except Exception:
-            pass
-
-    if not result.get("ok"):
-        err = result.get("error") or "unknown LLM error"
-        if "not found" in err.lower() or "notion_page_id empty" in err.lower():
-            raise emit_cli_error(cli, CliNotFoundError(
-                err,
-                hint="确认 internal_id 已 sync 到 Notion (notion_page_id != null)",
-            ))
-        raise emit_cli_error(cli, CliLLMFailedError(
-            err,
-            hint=f"retry_count={result.get('retry_count')} status={result.get('status')}",
-        ))
+            no_overwrite=no_overwrite,
+            actor=Actor(kind="cli", authenticated=True, label="cli"),
+        )
+    except ServiceError as e:
+        raise emit_cli_error(cli, e)
 
     data = {
-        "internal_id": result.get("internal_id"),
-        "page_id": result.get("page_id"),
-        "mailbox": result.get("mailbox"),
-        "dry_run": result.get("dry_run", dry_run),
-        "skipped": result.get("skipped"),
-        "labels": result.get("labels"),
-        "writer_summary": result.get("writer_summary"),
-        "stored_at": result.get("stored_at"),
+        "internal_id": result.internal_id,
+        "page_id": result.page_id,
+        "mailbox": result.mailbox,
+        "dry_run": result.dry_run,
+        "skipped": result.skipped,
+        "labels": result.labels,
+        "writer_summary": result.writer_summary,
+        "stored_at": result.stored_at,
     }
 
     if cli.output.lower() == "text":

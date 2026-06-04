@@ -1,11 +1,12 @@
 """llm 路由 — /api/llm/*。
 
-run (写, subprocess) / stats (读, 直查 llm_processing)。
+run (写, in-process LlmService) / stats (读, 直查 llm_processing) / selftest (读, subprocess)。
 契约: llm-run.schema.json + llm-stats.schema.json + frontend llm.{run,stats}。
 
 读端点 (stats) 经 ``Depends(get_repository)`` 拿 EmailRepository, 复用其 _connect()
 直查 llm_processing 表 (镜像 src/cli/commands/llm.py llm_stats 的 SQL), meta.source='sqlite'。
-写端点 (run) 经 cli_runner.run_cli 调 ``mailagent llm run {id}``, meta.source='cli'。
+写端点 (run) A3 起经进程内 ``LlmService`` (asyncio.to_thread, 不再 fork CLI), meta.source='cli';
+selftest (读, 不烧 token) 仍经 cli_runner.run_cli。
 
 统一响应走 app.success_envelope / app.APIError (与 email/attachment router 一致;
 app.py 已把 router import 下沉到 helper 定义之后, 无循环导入)。
@@ -13,6 +14,7 @@ app.py 已把 router import 下沉到 helper 定义之后, 无循环导入)。
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import TYPE_CHECKING, Optional
@@ -21,8 +23,11 @@ from fastapi import APIRouter, Depends, Request
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.cli_runner import CliRunnerError, get_cli_api_key, run_cli
-from src.api.deps import get_repository
+from src.api.cli_runner import CliRunnerError, run_cli
+from src.api.deps import get_repository, get_service_ctx
+from src.services.errors import ServiceError
+from src.services.guards import Actor
+from src.services.llm_service import LlmService
 
 if TYPE_CHECKING:
     from src.repository import EmailRepository
@@ -48,6 +53,15 @@ def _raise_from_cli_error(exc: CliRunnerError) -> None:
 
     优先用 CLI 自报的 ``error.code`` (exc.code); http_status 缺省由
     ERROR_CODE_TO_HTTP[code] 推导。exc.stdout/stderr 不回显客户端 (仅 runner 留底)。
+    """
+    raise APIError(exc.code, exc.message, hint=exc.hint, source="cli") from exc
+
+
+def _raise_from_service_error(exc: ServiceError) -> None:
+    """in-process service 抛的 ServiceError → APIError (与 _raise_from_cli_error 对称)。
+
+    code 用 service 自报的 ``ServiceError.code`` (E_LLM_FAILED / E_NOT_FOUND / ...),
+    http_status 由 app.ERROR_CODE_TO_HTTP[code] 推导。``source='cli'`` 维持既有 wire 契约。
     """
     raise APIError(exc.code, exc.message, hint=exc.hint, source="cli") from exc
 
@@ -163,29 +177,38 @@ async def llm_run(
     no_overwrite: bool = False,
     _: None = Depends(verify_cf_access),
 ):
-    """对单封邮件跑 LLM 分类 → 填 Notion AI 字段。
+    """对单封邮件跑 LLM 分类 → 填 Notion AI 字段 (A3: in-process LlmService, 不再 fork CLI)。
 
-    LlmRunOpts: dryRun→--dry-run, force→--force, noOverwrite→--no-overwrite。
-    经 ``mailagent llm run {id}`` subprocess (写命令, 注入 --api-key; dry-run 跳过 auth
-    但 cli_runner 仍注入 key 无害)。data 透传 CLI 的 llm-run.schema.json 形状
-    {internal_id, page_id, mailbox, dry_run, skipped, labels, writer_summary, stored_at}。
-
-    E_LLM_FAILED → 500, E_NOT_FOUND → 404 (CLI 自报 code, 经 ERROR_CODE_TO_HTTP 映射)。
+    LlmRunOpts: dryRun→dry_run, force→force, noOverwrite→no_overwrite。dry-run 真跑 LLM
+    不写 Notion → 跳过 write auth (请求已过 verify_cf_access, 执行路径用已鉴权 Actor)。
+    data 透传 llm-run.schema.json 形状 {internal_id, page_id, mailbox, dry_run, skipped,
+    labels, writer_summary, stored_at}。E_LLM_FAILED → 500, E_NOT_FOUND → 404
+    (service 自报 code, 经 ERROR_CODE_TO_HTTP 映射)。
     """
-    args = ["llm", "run", str(internal_id)]
-    if dry_run:
-        args.append("--dry-run")
-    if force:
-        args.append("--force")
-    if no_overwrite:
-        args.append("--no-overwrite")
-
+    svc = LlmService(get_service_ctx())
     try:
-        result = await run_cli(args, api_key=get_cli_api_key())
-    except CliRunnerError as exc:
-        _raise_from_cli_error(exc)
+        result = await asyncio.to_thread(
+            svc.run,
+            internal_id,
+            dry_run=dry_run,
+            force=force,
+            no_overwrite=no_overwrite,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
 
-    return success_envelope(result.data, request=request, source="cli")
+    data = {
+        "internal_id": result.internal_id,
+        "page_id": result.page_id,
+        "mailbox": result.mailbox,
+        "dry_run": result.dry_run,
+        "skipped": result.skipped,
+        "labels": result.labels,
+        "writer_summary": result.writer_summary,
+        "stored_at": result.stored_at,
+    }
+    return success_envelope(data, request=request, source="cli")
 
 
 # ============================================================

@@ -247,3 +247,370 @@ def test_cli_resync_dryrun_data_equals_service_direct(
     data_cli = _extract(result_cli.output)["data"]
 
     assert data_cli == plan_svc
+
+
+# ============================================================
+# archive — golden 字面量 (A3)
+# ============================================================
+
+
+def _fake_archive_reader(moved=True):
+    class _Reader:
+        def __init__(self):
+            self.calls = []
+
+        def archive_inbox_message(self, message_id, fallback_uid=None):
+            self.calls.append((message_id, fallback_uid))
+            return moved
+
+    return _Reader()
+
+
+def test_plan_archive_matches_golden(cli_env, seeded_db):
+    from src.services.mail_write import MailWriteService
+
+    plan = MailWriteService(_service_ctx(seeded_db)).plan_archive(12345)
+    assert plan == {
+        "internal_id": 12345,
+        "action": "archive",
+        "from_mailbox": "收件箱",
+        "to_mailbox": "存档",
+        "message_id": "<msg-12345@example.com>",
+        "has_imap_uid": False,  # seeded 无 imap_uid
+        "notion_page_id": "abc12345-0000-0000-0000-000000000001",
+        "dry_run": True,
+    }
+
+
+def test_plan_archive_not_found_raises(cli_env, seeded_db):
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).plan_archive(99999)
+
+
+def test_archive_already_archived_raises(cli_env, seeded_db):
+    import sqlite3
+
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.mail_write import MailWriteService
+
+    conn = sqlite3.connect(str(seeded_db))
+    conn.execute("UPDATE email_metadata SET mailbox='存档' WHERE internal_id=12345")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(ServiceInvalidArgError):
+        MailWriteService(_service_ctx(seeded_db)).archive(12345, actor=_cli_actor())
+
+
+def test_archive_executed_matches_golden(cli_env, seeded_db, monkeypatch):
+    from src.services.mail_write import MailWriteService
+
+    reader = _fake_archive_reader(moved=True)
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._folder_imap_reader",
+        lambda self: reader,
+    )
+    notion_calls = []
+
+    async def _fake_notion(self, page_id, mailbox):
+        notion_calls.append((page_id, mailbox))
+
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._update_notion_mailbox", _fake_notion
+    )
+
+    result = MailWriteService(_service_ctx(seeded_db)).archive(12345, actor=_cli_actor())
+    assert result.internal_id == 12345
+    assert result.from_mailbox == "收件箱"
+    assert result.to_mailbox == "存档"
+    assert result.notion_updated is True
+    assert result.notion_error is None
+    assert reader.calls == [("<msg-12345@example.com>", None)]
+    assert notion_calls == [("abc12345-0000-0000-0000-000000000001", "存档")]
+
+
+def test_archive_imap_failure_raises(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceError
+    from src.services.mail_write import MailWriteService
+
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._folder_imap_reader",
+        lambda self: _fake_archive_reader(moved=False),
+    )
+    with pytest.raises(ServiceError):
+        MailWriteService(_service_ctx(seeded_db)).archive(12345, actor=_cli_actor())
+
+
+def test_archive_requires_authenticated_actor(cli_env, seeded_db):
+    from src.services.errors import ServiceAuthError
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceAuthError):
+        MailWriteService(_service_ctx(seeded_db)).archive(
+            12345, actor=Actor(kind="cli", authenticated=False)
+        )
+
+
+# ============================================================
+# pin — golden 字面量 (A3)
+# ============================================================
+
+
+def test_plan_pin_matches_golden(cli_env, seeded_db):
+    from src.services.mail_write import MailWriteService
+
+    plan = MailWriteService(_service_ctx(seeded_db)).plan_pin(12345, pinned=True)
+    assert plan == {
+        "internal_id": 12345,
+        "is_pinned": True,
+        "changed": True,  # seeded is_pinned=0 → pin 改变
+        "dry_run": True,
+    }
+
+
+def test_plan_unpin_already_unpinned_no_change(cli_env, seeded_db):
+    from src.services.mail_write import MailWriteService
+
+    plan = MailWriteService(_service_ctx(seeded_db)).plan_pin(12345, pinned=False)
+    # seeded is_pinned=0, unpin → changed=False (already != pinned → False != False)
+    assert plan["is_pinned"] is False
+    assert plan["changed"] is False
+
+
+def test_set_pin_matches_golden(cli_env, seeded_db):
+    from src.services.mail_write import MailWriteService
+
+    result = MailWriteService(_service_ctx(seeded_db)).set_pin(
+        12345, pinned=True, actor=_cli_actor()
+    )
+    assert result.internal_id == 12345
+    assert result.is_pinned is True
+    assert result.changed is True
+
+
+def test_plan_pin_not_found_raises(cli_env, seeded_db):
+    from src.services.errors import ServiceNotFoundError
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceNotFoundError):
+        MailWriteService(_service_ctx(seeded_db)).plan_pin(99999, pinned=True)
+
+
+def test_set_pin_requires_authenticated_actor(cli_env, seeded_db):
+    from src.services.errors import ServiceAuthError
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    with pytest.raises(ServiceAuthError):
+        MailWriteService(_service_ctx(seeded_db)).set_pin(
+            12345, pinned=True, actor=Actor(kind="cli", authenticated=False)
+        )
+
+
+# ============================================================
+# llm run — golden 字面量 (A3)
+# ============================================================
+
+
+def _patch_llm_runner(monkeypatch, run_returns):
+    """Mock LLMRunner.__init__/run_for_internal_id/close (service.run function-level
+    import 拿 monkeypatched 类)。"""
+    from src.llm_agent import runner as runner_mod
+
+    async def fake_run(self, internal_id, *, dry_run=False, overwrite=True, force=False):
+        return run_returns
+
+    async def fake_close(self):
+        return None
+
+    def safe_init(self, *args, **kwargs):
+        pass
+
+    monkeypatch.setattr(runner_mod.LLMRunner, "__init__", safe_init)
+    monkeypatch.setattr(runner_mod.LLMRunner, "run_for_internal_id", fake_run)
+    monkeypatch.setattr(runner_mod.LLMRunner, "close", fake_close)
+
+
+def test_llm_run_matches_golden(cli_env, seeded_db, monkeypatch):
+    from src.services.llm_service import LlmService
+
+    _patch_llm_runner(monkeypatch, {
+        "ok": True, "internal_id": 12345,
+        "page_id": "abc12345-0000-0000-0000-000000000001",
+        "mailbox": "收件箱", "dry_run": False,
+        "labels": {"category": "Action"}, "writer_summary": {"updated": 5},
+    })
+    result = LlmService(_service_ctx(seeded_db)).run(12345, actor=_cli_actor())
+    assert result.internal_id == 12345
+    assert result.page_id == "abc12345-0000-0000-0000-000000000001"
+    assert result.mailbox == "收件箱"
+    assert result.dry_run is False
+    assert result.labels == {"category": "Action"}
+    assert result.writer_summary == {"updated": 5}
+
+
+def test_llm_run_not_found_raises(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceNotFoundError
+    from src.services.llm_service import LlmService
+
+    _patch_llm_runner(monkeypatch, {
+        "ok": False, "internal_id": 12345,
+        "error": "email not synced to Notion yet (notion_page_id empty)",
+    })
+    with pytest.raises(ServiceNotFoundError):
+        LlmService(_service_ctx(seeded_db)).run(12345, actor=_cli_actor())
+
+
+def test_llm_run_failed_raises(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceLLMFailedError
+    from src.services.llm_service import LlmService
+
+    _patch_llm_runner(monkeypatch, {
+        "ok": False, "internal_id": 12345, "error": "gateway HTTP 500",
+        "retry_count": 1, "status": "failed",
+    })
+    with pytest.raises(ServiceLLMFailedError):
+        LlmService(_service_ctx(seeded_db)).run(12345, actor=_cli_actor())
+
+
+def test_llm_run_dry_run_skips_auth(cli_env, seeded_db, monkeypatch):
+    from src.services.guards import Actor
+    from src.services.llm_service import LlmService
+
+    _patch_llm_runner(monkeypatch, {
+        "ok": True, "internal_id": 12345, "page_id": "p",
+        "mailbox": "收件箱", "dry_run": True, "labels": {},
+    })
+    # dry_run=True → 不过 require_write_auth, 未鉴权 actor 也 OK (真跑 LLM 不写 Notion)。
+    result = LlmService(_service_ctx(seeded_db)).run(
+        12345, dry_run=True, actor=Actor(kind="cli", authenticated=False)
+    )
+    assert result.dry_run is True
+
+
+def test_llm_run_requires_authenticated_actor(cli_env, seeded_db, monkeypatch):
+    from src.services.errors import ServiceAuthError
+    from src.services.guards import Actor
+    from src.services.llm_service import LlmService
+
+    _patch_llm_runner(monkeypatch, {"ok": True, "internal_id": 12345})
+    with pytest.raises(ServiceAuthError):
+        LlmService(_service_ctx(seeded_db)).run(
+            12345, actor=Actor(kind="cli", authenticated=False)
+        )
+
+
+# ============================================================
+# CLI (走 service) == service 直调 —— archive / pin dry-run 薄壳无漂移
+# ============================================================
+
+
+def test_cli_pin_dryrun_data_equals_service_direct(cli_runner, cli_env, seeded_db):
+    from src.cli.main import app
+    from src.services.mail_write import MailWriteService
+
+    plan_svc = MailWriteService(_service_ctx(seeded_db)).plan_pin(12345, pinned=True)
+    result_cli = cli_runner.invoke(
+        app,
+        ["--db-path", str(seeded_db), "email", "pin", "12345", "--dry-run", "-o", "json"],
+    )
+    assert result_cli.exit_code == 0, result_cli.output
+    data_cli = _extract(result_cli.output)["data"]
+
+    assert data_cli == plan_svc
+
+
+def test_cli_archive_dryrun_data_equals_service_direct(cli_runner, cli_env, seeded_db):
+    from src.cli.main import app
+    from src.services.mail_write import MailWriteService
+
+    plan_svc = MailWriteService(_service_ctx(seeded_db)).plan_archive(12345)
+    result_cli = cli_runner.invoke(
+        app,
+        ["--db-path", str(seeded_db), "email", "archive", "12345",
+         "--dry-run", "-o", "json"],
+    )
+    assert result_cli.exit_code == 0, result_cli.output
+    data_cli = _extract(result_cli.output)["data"]
+
+    assert data_cli == plan_svc
+
+
+def test_cli_pin_executed_data_equals_service_direct(
+    cli_runner, cli_env, seeded_db, tmp_path, monkeypatch
+):
+    from src.cli.main import app
+    from src.services.mail_write import MailWriteService
+
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+
+    # service 直调跑在副本 (set_pin 写 is_pinned; 两边都从 is_pinned=0 起 → 逐字段可比)。
+    copy_db = tmp_path / "copy.db"
+    shutil.copy(seeded_db, copy_db)
+    res = MailWriteService(_service_ctx(copy_db)).set_pin(
+        12345, pinned=True, actor=_cli_actor()
+    )
+    data_svc = {
+        "internal_id": res.internal_id,
+        "is_pinned": res.is_pinned,
+        "changed": res.changed,
+        "dry_run": False,
+    }
+
+    result_cli = cli_runner.invoke(
+        app,
+        ["--db-path", str(seeded_db), "email", "pin", "12345", "-o", "json"],
+    )
+    assert result_cli.exit_code == 0, result_cli.output
+    data_cli = _extract(result_cli.output)["data"]
+
+    assert data_cli == data_svc
+
+
+def test_cli_archive_executed_data_equals_service_direct(
+    cli_runner, cli_env, seeded_db, tmp_path, monkeypatch
+):
+    from src.cli.main import app
+    from src.services.mail_write import MailWriteService
+
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+    # IMAP MOVE + Notion 镜像下沉为 service 私有方法 → 同一份 mock 覆盖 CLI 与直调两路。
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._folder_imap_reader",
+        lambda self: _fake_archive_reader(moved=True),
+    )
+
+    async def _fake_notion(self, page_id, mailbox):
+        return None
+
+    monkeypatch.setattr(
+        "src.services.mail_write.MailWriteService._update_notion_mailbox", _fake_notion
+    )
+
+    # service 直调跑在副本 (archive 改 mailbox→存档; 防 CLI 先改后直调撞 already-archived)。
+    copy_db = tmp_path / "copy.db"
+    shutil.copy(seeded_db, copy_db)
+    res = MailWriteService(_service_ctx(copy_db)).archive(12345, actor=_cli_actor())
+    data_svc = {
+        "internal_id": res.internal_id,
+        "action": "archive",
+        "success": True,
+        "from_mailbox": res.from_mailbox,
+        "to_mailbox": res.to_mailbox,
+        "notion_updated": res.notion_updated,
+        "notion_error": res.notion_error,
+        "dry_run": False,
+    }
+
+    result_cli = cli_runner.invoke(
+        app,
+        ["--db-path", str(seeded_db), "email", "archive", "12345", "-o", "json"],
+    )
+    assert result_cli.exit_code == 0, result_cli.output
+    data_cli = _extract(result_cli.output)["data"]
+
+    assert data_cli == data_svc

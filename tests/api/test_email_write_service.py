@@ -17,8 +17,15 @@ from typing import Optional
 import pytest
 
 import src.api.routers.email as email_router
-from src.services.errors import ServiceNotFoundError, ServicePM2ConflictError
-from src.services.mail_write import FlagResult, ResyncResult
+import src.api.routers.llm as llm_router
+from src.services.errors import (
+    ServiceInvalidArgError,
+    ServiceLLMFailedError,
+    ServiceNotFoundError,
+    ServicePM2ConflictError,
+)
+from src.services.llm_service import LlmRunResult
+from src.services.mail_write import ArchiveResult, FlagResult, PinResult, ResyncResult
 
 from tests.api.conftest import EMAIL_ID
 
@@ -90,6 +97,38 @@ class _SvcSpy:
         return ResyncResult(internal_id=internal_id, old_page_id="old-pg",
                             new_page_id="new-pg", archived_page_id=None,
                             action="created")
+
+    # --- archive (A3) ---
+    def plan_archive(self, internal_id):
+        self.calls.append(("plan_archive", internal_id, {}))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return {"internal_id": internal_id, "action": "archive",
+                "from_mailbox": "收件箱", "to_mailbox": "存档",
+                "message_id": "<m>", "has_imap_uid": False,
+                "notion_page_id": "pg", "dry_run": True}
+
+    def archive(self, internal_id, *, actor):
+        self.calls.append(("archive", internal_id, {"actor": actor}))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return ArchiveResult(internal_id=internal_id, from_mailbox="收件箱",
+                             to_mailbox="存档", notion_updated=True,
+                             notion_error=None)
+
+    # --- pin (A3) ---
+    def plan_pin(self, internal_id, *, pinned):
+        self.calls.append(("plan_pin", internal_id, {"pinned": pinned}))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return {"internal_id": internal_id, "is_pinned": pinned,
+                "changed": True, "dry_run": True}
+
+    def set_pin(self, internal_id, *, pinned, actor):
+        self.calls.append(("set_pin", internal_id, {"pinned": pinned, "actor": actor}))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        return PinResult(internal_id=internal_id, is_pinned=pinned, changed=True)
 
 
 @pytest.fixture()
@@ -310,5 +349,197 @@ def test_resync_not_found_maps_to_404(client, svc_spy):
 def test_resync_dry_run_not_found_maps_to_404(client, svc_spy):
     _SvcSpy._raise = ServiceNotFoundError("Email metadata not found for internal_id=42")
     r = client.post("/api/email/42/resync", json={"dryRun": True})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ===========================================================================
+# POST /api/email/{id}/archive — in-process archive / plan_archive (A3)
+# ===========================================================================
+
+
+def test_archive_executed_passes_actor_and_envelope(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/archive", json={})
+    assert r.status_code == 200
+    method, iid, kw = _last(svc_spy)
+    assert method == "archive"
+    assert iid == EMAIL_ID
+    # 恒已鉴权 http actor (请求已过 verify_cf_access); archive 不传 allow_concurrent。
+    assert kw["actor"].authenticated is True
+    assert kw["actor"].kind == "http"
+    assert "allow_concurrent" not in kw
+    data = r.json()["data"]
+    assert data["action"] == "archive"
+    assert data["success"] is True
+    assert data["to_mailbox"] == "存档"
+    assert data["dry_run"] is False
+
+
+def test_archive_dry_run_uses_plan_and_skips_actor(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/archive", json={"dryRun": True})
+    assert r.status_code == 200
+    method, iid, kw = _last(svc_spy)
+    assert method == "plan_archive"
+    assert iid == EMAIL_ID
+    assert "actor" not in kw
+    assert r.json()["data"]["dry_run"] is True
+
+
+def test_archive_non_davmail_maps_to_400(client, svc_spy):
+    # 非 davmail backend → service ServiceInvalidArgError → 400。
+    _SvcSpy._raise = ServiceInvalidArgError("归档需要 MAILAGENT_BACKEND=davmail")
+    r = client.post(f"/api/email/{EMAIL_ID}/archive", json={})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_archive_not_found_maps_to_404(client, svc_spy):
+    _SvcSpy._raise = ServiceNotFoundError("Email metadata not found for internal_id=42")
+    r = client.post("/api/email/42/archive", json={})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ===========================================================================
+# POST /api/email/{id}/pin — in-process set_pin / plan_pin (A3)
+# ===========================================================================
+
+
+def test_pin_executed_passes_actor(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/pin", json={"pinned": True})
+    assert r.status_code == 200
+    method, iid, kw = _last(svc_spy)
+    assert method == "set_pin"
+    assert iid == EMAIL_ID
+    assert kw["pinned"] is True
+    assert kw["actor"].authenticated is True
+    # pin 不做 pm2 检测 → 无 allow_concurrent。
+    assert "allow_concurrent" not in kw
+    data = r.json()["data"]
+    assert data["is_pinned"] is True
+    assert data["dry_run"] is False
+
+
+def test_unpin_passes_pinned_false(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/pin", json={"pinned": False})
+    assert r.status_code == 200
+    method, _, kw = _last(svc_spy)
+    assert method == "set_pin"
+    assert kw["pinned"] is False
+
+
+def test_pin_dry_run_uses_plan_and_skips_actor(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/pin", json={"pinned": True, "dryRun": True})
+    assert r.status_code == 200
+    method, _, kw = _last(svc_spy)
+    assert method == "plan_pin"
+    assert kw["pinned"] is True
+    assert "actor" not in kw
+    assert r.json()["data"]["dry_run"] is True
+
+
+def test_pin_requires_bool_400(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/pin", json={"pinned": "yes"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert svc_spy.instances == []  # 校验早于 service 构造
+
+
+def test_pin_not_found_maps_to_404(client, svc_spy):
+    _SvcSpy._raise = ServiceNotFoundError("Email with internal_id=42 not found")
+    r = client.post("/api/email/42/pin", json={"pinned": True})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ===========================================================================
+# POST /api/llm/run/{id} — in-process LlmService.run (A3, query-param opts)
+# ===========================================================================
+
+
+class _LlmSvcSpy:
+    """``LlmService`` 替身: 记录 run 调用, 返回 canned LlmRunResult。"""
+
+    instances: list["_LlmSvcSpy"] = []
+    _raise: Optional[Exception] = None
+
+    def __init__(self, ctx=None):
+        self.ctx = ctx
+        self.calls: list[tuple] = []
+        _LlmSvcSpy.instances.append(self)
+
+    def run(self, internal_id, *, dry_run=False, force=False, no_overwrite=False, actor):
+        self.calls.append((
+            "run", internal_id,
+            {"dry_run": dry_run, "force": force, "no_overwrite": no_overwrite,
+             "actor": actor},
+        ))
+        if _LlmSvcSpy._raise is not None:
+            raise _LlmSvcSpy._raise
+        return LlmRunResult(internal_id=internal_id, page_id="pg", mailbox="收件箱",
+                            dry_run=dry_run, skipped=None, labels={"x": 1},
+                            writer_summary=None, stored_at=None)
+
+
+@pytest.fixture()
+def llm_svc_spy(monkeypatch):
+    """Patch llm router 的 LlmService with a fresh recording spy."""
+    _LlmSvcSpy.instances = []
+    _LlmSvcSpy._raise = None
+    monkeypatch.setattr(llm_router, "LlmService", _LlmSvcSpy)
+    return _LlmSvcSpy
+
+
+def _last_llm(spy):
+    assert spy.instances, "LlmService was never constructed"
+    inst = spy.instances[-1]
+    assert inst.calls, "run was never called"
+    return inst.calls[-1]
+
+
+def test_llm_run_executed_passes_args(client, llm_svc_spy):
+    r = client.post(f"/api/llm/run/{EMAIL_ID}?force=true")
+    assert r.status_code == 200
+    method, iid, kw = _last_llm(llm_svc_spy)
+    assert method == "run"
+    assert iid == EMAIL_ID
+    assert kw["force"] is True
+    assert kw["dry_run"] is False
+    assert kw["no_overwrite"] is False
+    # llm run 端点总传已鉴权 actor (service.run 内部按 dry_run 决定是否 require_write_auth)。
+    assert kw["actor"].authenticated is True
+    assert kw["actor"].kind == "http"
+    data = r.json()["data"]
+    assert data["internal_id"] == EMAIL_ID
+    assert data["page_id"] == "pg"
+    assert data["labels"] == {"x": 1}
+    assert data["dry_run"] is False
+
+
+def test_llm_run_dry_run_passes_flag(client, llm_svc_spy):
+    r = client.post(f"/api/llm/run/{EMAIL_ID}?dry_run=true")
+    assert r.status_code == 200
+    _, _, kw = _last_llm(llm_svc_spy)
+    assert kw["dry_run"] is True
+    assert r.json()["data"]["dry_run"] is True
+
+
+def test_llm_run_no_overwrite_passes_flag(client, llm_svc_spy):
+    r = client.post(f"/api/llm/run/{EMAIL_ID}?no_overwrite=true")
+    assert r.status_code == 200
+    _, _, kw = _last_llm(llm_svc_spy)
+    assert kw["no_overwrite"] is True
+
+
+def test_llm_run_failed_maps_to_500(client, llm_svc_spy):
+    _LlmSvcSpy._raise = ServiceLLMFailedError("gateway HTTP 500")
+    r = client.post(f"/api/llm/run/{EMAIL_ID}")
+    assert r.status_code == 500
+    assert r.json()["error"]["code"] == "E_LLM_FAILED"
+
+
+def test_llm_run_not_found_maps_to_404(client, llm_svc_spy):
+    _LlmSvcSpy._raise = ServiceNotFoundError("email not synced (notion_page_id empty)")
+    r = client.post("/api/llm/run/42")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_NOT_FOUND"

@@ -1,15 +1,15 @@
 """email WRITE endpoints — CLI argv construction (the happy path, minus the fork).
 
-The write endpoints still backed by a fork (archive / draft / send / draft-plan)
-fork the real `mailagent` CLI via cli_runner.run_cli. Forking a real CLI needs a
-full `.env` (NOTION_TOKEN, …) + a davmail bridge, so the *happy* paths are e2e
+The write endpoints still backed by a fork (draft / send / draft-plan) fork the
+real `mailagent` CLI via cli_runner.run_cli. Forking a real CLI needs a full
+`.env` (NOTION_TOKEN, …) + a davmail bridge, so the *happy* paths are e2e
 territory. What we CAN and MUST pin here is the **argv the router builds** — the
-ABSENCE of `--allow-concurrent` on archive (#6/#9), the `--body-html-file <tmp>`
-temp-file dance (#8), snake_case body keys NOT getting camel-cased into CLI flags
-(#8), and the temp file being cleaned up afterwards.
+`--body-html-file <tmp>` temp-file dance (#8), snake_case body keys NOT getting
+camel-cased into CLI flags (#8), and the temp file being cleaned up afterwards.
 
-NOTE: flag + resync moved to in-process MailWriteService in A2 (no longer fork
-CLI) — their endpoint tests live in tests/api/test_email_write_service.py.
+NOTE: flag + resync (A2) and archive + pin (A3) moved to in-process
+MailWriteService (no longer fork CLI) — their endpoint tests live in
+tests/api/test_email_write_service.py.
 
 Technique: monkeypatch `src.api.routers.email.run_cli` (the name the router
 imported) with an async spy that records the argv and returns a canned
@@ -64,43 +64,6 @@ def spy(monkeypatch) -> _Spy:
     s = _Spy()
     monkeypatch.setattr(email_router, "run_cli", s)
     return s
-
-
-# ===========================================================================
-# POST /api/email/{id}/archive  — NO --allow-concurrent (#9), davmail gate (#6)
-# ===========================================================================
-
-
-def test_archive_argv_has_no_allow_concurrent(client, spy):
-    r = client.post(f"/api/email/{EMAIL_ID}/archive", json={})
-    assert r.status_code == 200
-    args = spy.last_args
-    assert args[:3] == ["email", "archive", str(EMAIL_ID)]
-    # archive does NOT do a pm2 check → must NOT carry --allow-concurrent (#9).
-    assert "--allow-concurrent" not in args
-
-
-def test_archive_dry_run(client, spy):
-    r = client.post(f"/api/email/{EMAIL_ID}/archive", json={"dryRun": True})
-    assert r.status_code == 200
-    assert "--dry-run" in spy.last_args
-    assert spy.calls[-1]["api_key"] is None
-
-
-def test_archive_non_davmail_gate_400(client, monkeypatch):
-    # gotcha #6: on a non-davmail backend the CLI self-reports E_INVALID_ARG;
-    # the router surfaces it cleanly as 400 (no backend re-probe in the router).
-    spy = _Spy(raises=CliRunnerError(
-        code="E_INVALID_ARG", exit_code=2,
-        message="email archive requires MAILAGENT_BACKEND=davmail",
-        hint="set MAILAGENT_BACKEND=davmail",
-    ))
-    monkeypatch.setattr(email_router, "run_cli", spy)
-    r = client.post(f"/api/email/{EMAIL_ID}/archive", json={})
-    assert r.status_code == 400
-    body = r.json()
-    assert body["error"]["code"] == "E_INVALID_ARG"
-    assert "davmail" in body["error"]["message"]
 
 
 # ===========================================================================

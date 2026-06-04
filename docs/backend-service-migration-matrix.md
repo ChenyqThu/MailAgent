@@ -18,9 +18,9 @@
 |---|---|---|---|---|---|---|
 | set_flags（flag/read/状态） | ✅ A2 | ✅ A2 | ✅ A2 | TS 直写→⬜ D1 | ✅ 已存在 | ✅ A2 |
 | resync | ✅ A2 | ✅ A2 | ✅ A2 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A2 |
-| archive | ⬜ A3 | 🍴→⬜ A3 | 🍴→⬜ A3 | 🍴→⬜ D1 | ✅ 已存在 | ⬜ A3 |
-| pin / unpin | ⬜ A3 | 🍴→⬜ A3 | 🍴→⬜ A3 | 🍴→⬜ D1 | ✅ 已存在 | ⬜ A3 |
-| llm_run | ⬜ A3 | 🍴→⬜ A3 | 🍴→⬜ A3 | 🍴→⬜ D1 | ✅ 已存在 | ⬜ A3 |
+| archive | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
+| pin / unpin | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
+| llm_run | ✅ A3 | ✅ A3 | ✅ A3 | 🍴→⬜ D1 | ✅ 已存在 | ✅ A3 |
 | compose_draft | ⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ D1 | ✅ 已存在 | ⬜ A4 |
 | send | ⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ D1 | ✅ 已存在 | ⬜ A4 |
 | compose_plan（dry-run） | ⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ A4 | 🍴→⬜ D1 | ✅ 已存在 | ➖ |
@@ -59,10 +59,10 @@
 
 ```bash
 # A2-A4 推进中：serve-api router 里还在 fork CLI 的写端点（目标逐步归零）
-grep -rn "run_cli(" src/api/routers/ | wc -l        # 基线 12 → A2 后 10（flag 两端点共用一个 helper，
-                                                    # 故 resync+flag 实际只消 2 个 call-site，非估的 ~5）；
-                                                    # 余 10 = admin 2 + email 6（archive/draft/send/draft-plan/
-                                                    # pin + legacy notion update-flag）+ llm 2；A4 后仅剩 long-task
+grep -rn "run_cli(" src/api/routers/ | wc -l        # 基线 12 → A2 后 10 → A3 后 7（消 archive/pin/llm_run 各 1）；
+                                                    # 余 7 = admin 2 + email 4（draft/send/draft-plan/legacy notion
+                                                    # update-flag）+ llm 1（selftest 读命令，不烧 token）；
+                                                    # A4 消 email draft/send/draft-plan → 余 4
 # D1 后：前端 TS 直写 outbox 应消失
 grep -rn "writeFlagDirect" frontend/src/            # D1 后应为空
 # D1 后：前端 fork CLI 写应消失（保留 draft.ts 的 AppleScript emergency fork）
@@ -98,3 +98,17 @@ pytest tests/cli/test_schema_contract.py -q
     - **B1**（outbox merge 原子 SQL + JS/Py 契约测试）：是 D1（前端写收编）的**硬前置**，且独立于 A 系列。设计见 plan §B1：把 `OutboxRepository.enqueue` 的 read-modify-write merge 换成单条原子 `INSERT ... ON CONFLICT(internal_id,op_type,target) WHERE status='pending' DO UPDATE SET payload_json=json_patch(...)`（partial unique index + json1），消「TS write_ops.ts:319 与 Python outbox.py merge 两份手抄」+ read-modify-write 竞态。需走 `/db-migration` skill（bump DB_VERSION + idempotent migration + 同步前端 `EXPECTED_DB_VERSION`）。风险中。
     - **A3**（archive + pin + LlmService.run）：延续 A2 模式把 `email archive`（IMAP MOVE + Notion mirror，保「Notion 失败仅 warn」）/ `set_pin` / `llm run` 搬进 service，serve-api archive/pin/llm 端点改 in-process（再消 ~3 个 run_cli call-site）。风险中。
     - 顺序无硬约束（B1 只硬前置于 D1）；建议先 A3 把 A 系列连续做完（同一套 service+adapter 模式，惯性低），B1 留到 D1 前。**A2 的 source='cli' 硬编码 + get_service_ctx 每请求新建**两点 B1/C2 可复用/复审。
+
+- **A3（✅ 完成）** `feat/backend-service-layer`：archive + pin/unpin + llm_run 下沉。
+  - **service 层**：`MailWriteService` 加 `archive`/`plan_archive` + `set_pin`/`plan_pin`（+ `_folder_imap_reader`/`_update_notion_mailbox` 私有方法 + `ArchiveResult`/`PinResult` + `_ARCHIVE_MAILBOX` 常量）；新建 `src/services/llm_service.py::LlmService.run`（+ `LlmRunResult` + `_maybe_davmail_backend`）。archive 搬自 `email_archive` 1152-1196、pin 搬自 `email_pin`/`email_unpin`、llm 搬自 `llm_run` 87-142，逐字段对齐旧 emit data。
+  - **config 访问**（A3 新地基）：`ServiceDeps` Protocol 加 `config` 契约 + `CliContext` 加 `config` property 别名（=cli_config，只读零风险，保 A1/A2「CliContext 零改动」精神）—— LlmService 经 `ctx.config` 拿 attachment_storage_dir/mailagent_backend/sync_store_db_path，尊重各传输持有的 cfg（**不读全局 src.config.config，否则 test_service_parity 注入的 cli-scoped cfg 失效**）。
+  - **守卫分工**（关键决策）：① **archive/pin 不做 pm2 检测**（原 CLI 无 → service 方法不调 check_pm2_conflict、无 allow_concurrent 参数）。② **archive token-auth 上移**（原 CLI [already-archived → require_auth(token)]，退化后 CLI 适配器 token 校验早于 already-archived/meta；仅「无 token+已存档」双重错误时报哪个不同，现存测试全 _bypass_auth 不可见，与 A2 架构一致；service 内 require_write_auth 仍在 already-archived 之后）。③ **llm dry-run 真跑 LLM 不写 Notion → 跳过 write auth**（与 CLI `if not dry_run: require_auth` 一致）。token 校验留 CLI 侧，require_write_auth(actor) 在 service。
+  - **llm backend**：service `_maybe_davmail_backend` 复刻 CLI `_maybe_create_davmail_backend`（davmail 才给 backend / 否则 None → LLMRunner lazy-init AppleScriptArm），但读 `ctx.config` 而非全局 cfg。CLI `_maybe_create_davmail_backend` **保留**（retry-failed 还用，不删）。
+  - **serve-api in-process**：`archive_email`/`pin_email`（email router）+ `llm_run`（llm router）从 run_cli fork 改 `await asyncio.to_thread(svc.method)`；llm router 加 `_raise_from_service_error`（仿 email router）+ ServiceError/Actor/LlmService/get_service_ctx import；保留 run_cli（selftest 读命令仍 fork）。pin 端点保留 router 层 pinned bool 校验（早于 service 构造）。
+  - **pin changed 统一**：`_pin_changed = (already != pinned)`，等价原 pin `not already` + unpin `was`。pin/unpin meta-None hint 统一带「Use email list」（原 unpin 无 hint，纯改进）。unpin race NotFound（原 unpin 不检 set_pin 返回 None，现统一检 → 更正确）。
+  - **验收**：`pytest tests/cli tests/api` = **677 passed, 1 failed**（唯一=预存 env-coupled `test_resolve_allowed_email`，与 A2 逐字一致）；新增 `test_service_parity` archive/pin/llm golden + CLI==service（dry-run + **executed-path 逐字节相等**，补 review M1）；新增 `test_email_write_service` archive/pin/llm-run 端点 spy 测试；`test_email_archive` monkeypatch 路径随迁 service method；`test_email_write_cli_args` 删 3 个 archive argv 测试（迁 in-process）。`test_schema_contract` 全绿（llm-run dry-run schema 不漂移）。残留：`run_cli(` routers **10→7**。ruff 全绿。**未碰前端**。
+  - **独立 review（code-reviewer subagent，opus）**：**APPROVE WITH NITS**，0 Critical / 0 High，6 个 parity 决策全部独立验证正确；实测 `data/sync_store.db` sha256 测试前后逐字节不变。2 Medium = M1 executed-path 相等测试（已补）+ M2 commit 卫生（只 stage A3 的 12+1 文件，不混 .claude/Trellis 工具改动）。
+  - **next-phase handoff → A4 或 B1**：
+    - **A4**（compose: draft / send / draft-plan）：A 系列最后一块，最重命令。`mail_write.py` 加 `compose_draft`/`send`/`compose_plan` + `ComposeRequest`（搬 `_prepare_draft` + `email_draft`/`email_send` 命令体，整段搬迁不重写）。**净简化**：serve-api 今天用临时文件 `--body-html-file` 传 bodyHtml（routers/email.py `_build_compose_args` + `_cleanup_tmp`），service 化后直接传字符串，临时文件那段整段删（连同 test_email_write_cli_args 的 draft/send/draft-plan argv 测试迁出）。风险中高（compose 逻辑最密；send 不可逆，parity 用 dry-run + mock backend）。消 email router run_cli 3 个（7→4）。
+    - **B1**（outbox merge 原子 SQL + JS/Py 契约测试）：D1 硬前置，独立于 A 系列，留 D1 前做。走 `/db-migration`（bump DB_VERSION + 同步前端 EXPECTED_DB_VERSION）。
+    - 建议先 A4 收尾 A 系列（同一套 service+adapter 模式，惯性最低）。**A3 的 ServiceDeps.config 别名 + LlmService `_maybe_davmail_backend` 复刻 + archive token-auth 上移决策** A4/后续可复用/复审。

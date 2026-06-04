@@ -30,6 +30,9 @@ class ServiceDeps(Protocol):
     """service 层依赖的结构化契约。``ServiceContext`` 与 ``CliContext`` 都满足它。"""
 
     @property
+    def config(self) -> "Config": ...
+
+    @property
     def email_repo(self) -> "EmailRepository": ...
 
     @property
