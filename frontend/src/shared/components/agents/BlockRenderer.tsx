@@ -732,7 +732,7 @@ function CalloutBlock({
       style={{
         display: 'flex',
         gap: 11,
-        padding: ctx.dense ? '12px 14px' : '14px 16px',
+        padding: ctx.dense ? '9px 14px' : '14px 16px',
         borderRadius: 10,
         background: toneAlpha(tone, 0.08),
         border: `1px solid ${toneAlpha(tone, 0.28)}`
@@ -1031,6 +1031,114 @@ function renderLeaf(block: ReportBlock, key: number, ctx: RenderCtx): React.Reac
 
 const _SECTION_CHILDREN = new Set(['email_item', 'callout', 'kos_context', 'action_suggestion'])
 
+// ─── section group — 折叠容器 ────────────────────────────────────────────────
+// 默认折叠：报告默认呈"摘要视图"（header + 汇总一句话 + 邮件数/重点数），长邮件
+// 列表按需展开，不被海量 FYI/已处理刷屏。summary 折叠态保留（它是浓缩结论，不是
+// 长列表）；email 列表只在展开时渲染。
+function SectionGroup({
+  sec,
+  items,
+  ctx
+}: {
+  sec: ReportSectionBlock
+  items: ReportBlock[]
+  ctx: RenderCtx
+}): React.ReactElement {
+  const [collapsed, setCollapsed] = useState(true)
+  const groupedList = ctx.rowStyle === 'list' && ctx.layout === 'console'
+  const emails = items.filter((it) => it.type === 'email_item') as ReportEmailItemBlock[]
+  const total = emails.length
+  // 简单统计：priority 非 neutral（紧急 / 重要）的封数 —— 该组里值得优先看的"重点"数。
+  const flagged = emails.filter((e) => priorityTone(e.priority) !== 'neutral').length
+  // 有邮件列表才折叠；纯文字概述的 section（周 / 月报 email_refs 留空）无列表可展开，
+  // 直接常显，不挂无效的展开箭头。
+  const collapsible = total > 0
+
+  const headerBody = (
+    <>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <SectionHeader block={sec} ctx={ctx} />
+      </div>
+      {collapsible && (
+        <>
+          <span
+            style={{
+              fontSize: 12,
+              color: 'rgb(var(--ink-fg-2))',
+              fontVariantNumeric: 'tabular-nums',
+              whiteSpace: 'nowrap',
+              flexShrink: 0
+            }}
+          >
+            {total} 封{flagged > 0 ? ` · ${flagged} 重点` : ''}
+          </span>
+          <ReportIcon
+            name={collapsed ? 'chevrondown' : 'chevronup'}
+            size={16}
+            style={{ color: 'rgb(var(--ink-fg-3))', flexShrink: 0 }}
+          />
+        </>
+      )}
+    </>
+  )
+
+  return (
+    <section
+      style={{ display: 'flex', flexDirection: 'column', gap: ctx.layout === 'document' ? 12 : 8 }}
+    >
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-expanded={!collapsed}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 9,
+            width: '100%',
+            textAlign: 'left',
+            background: 'transparent',
+            border: 0,
+            padding: 0,
+            cursor: 'pointer',
+            fontFamily: 'inherit'
+          }}
+        >
+          {headerBody}
+        </button>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>{headerBody}</div>
+      )}
+      {sec.summary && <SectionSummary text={sec.summary} ctx={ctx} />}
+      {collapsible && !collapsed && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: groupedList ? 0 : ctx.dense ? 8 : 10,
+            ...(groupedList
+              ? {
+                  border: '1px solid rgb(var(--ink-border-soft))',
+                  borderRadius: 10,
+                  overflow: 'hidden',
+                  background: 'rgb(var(--ink-1))'
+                }
+              : {})
+          }}
+        >
+          {items.map((it, k) =>
+            it.type === 'email_item' ? (
+              <EmailItemBlock key={k} block={it as ReportEmailItemBlock} ctx={ctx} />
+            ) : (
+              renderLeaf(it, k, ctx)
+            )
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function BlockRenderer({
   blocks,
   ctx
@@ -1051,47 +1159,25 @@ export function BlockRenderer({
         items.push(blocks[j])
         j++
       }
-      const groupedList = ctx.rowStyle === 'list' && ctx.layout === 'console'
-      out.push(
-        <section
-          key={i}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: ctx.layout === 'document' ? 12 : 8
-          }}
-        >
-          <SectionHeader block={sec} ctx={ctx} />
-          {sec.summary && <SectionSummary text={sec.summary} ctx={ctx} />}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: groupedList ? 0 : ctx.dense ? 8 : 10,
-              ...(groupedList
-                ? {
-                    border: '1px solid rgb(var(--ink-border-soft))',
-                    borderRadius: 10,
-                    overflow: 'hidden',
-                    background: 'rgb(var(--ink-1))'
-                  }
-                : {})
-            }}
-          >
-            {items.map((it, k) =>
-              it.type === 'email_item' ? (
-                <EmailItemBlock key={k} block={it as ReportEmailItemBlock} ctx={ctx} />
-              ) : (
-                renderLeaf(it, k, ctx)
-              )
-            )}
-          </div>
-        </section>
-      )
+      out.push(<SectionGroup key={i} sec={sec} items={items} ctx={ctx} />)
       i = j
     } else if (b.type === 'email_item') {
       out.push(<EmailItemBlock key={i} block={b as ReportEmailItemBlock} ctx={ctx} />)
       i++
+    } else if (b.type === 'callout') {
+      // 连续顶层 callout 收成一组，组内间距收紧（"几个核心"成组陈列，而非松散卡片）。
+      const group: ReportBlock[] = []
+      let j = i
+      while (j < blocks.length && blocks[j].type === 'callout') {
+        group.push(blocks[j])
+        j++
+      }
+      out.push(
+        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {group.map((c, k) => renderLeaf(c, k, ctx))}
+        </div>
+      )
+      i = j
     } else {
       out.push(renderLeaf(b, i, ctx))
       i++

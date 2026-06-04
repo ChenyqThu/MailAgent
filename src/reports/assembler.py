@@ -83,6 +83,25 @@ def _sanitize_summary(summary: str, valid_ids: Set[int]) -> str:
     return _SUMMARY_LINK_RE.sub(_repl, summary)
 
 
+def _is_fyi_section(sec: Dict[str, Any]) -> bool:
+    """FYI / 通知类 section 的识别 —— 重排时整组移到报告末尾（看过即可，避免海量
+    list 把上面的关键信息淹没）。LLM 正常用 id='fyi' + icon='inbox'（prompt + schema
+    已约定）；多重判据兜底，某次没严格遵守也能识别，不至于把 FYI 留在报告中部。"""
+    sid = (sec.get("id") or "").strip().lower()
+    icon = (sec.get("icon") or "").strip().lower()
+    title = sec.get("title") or ""
+    return "fyi" in sid or icon == "inbox" or "FYI" in title.upper()
+
+
+def _is_attention_section(sec: Dict[str, Any]) -> bool:
+    """"需要你亲自关注"类 section —— 行动 / 决策项，排在 callout 之后、key_points 之前
+    （最该拍板的事先看）。id=attention/alert 或 icon=alert 命中；识别不到时归入 other，
+    key_points 则落到正文最前（仍优于沉底）。"""
+    sid = (sec.get("id") or "").strip().lower()
+    icon = (sec.get("icon") or "").strip().lower()
+    return sid in {"attention", "alert"} or icon == "alert"
+
+
 def _email_item(b: ReportEmailBrief) -> Dict[str, Any]:
     # 状态 → badges（前端 email_item 渲染为小标签）：已处理/答复一目了然。
     badges: List[str] = []
@@ -136,8 +155,29 @@ def assemble_report_doc(
         blocks.append(m.overview(draft.overview.strip()))
     blocks.append(_stat_row(counts))
 
+    # ── 板块重排（按信息重要度，而非 LLM 自然产出顺序）──────────────────────
+    # header → overview → stat_row → highlights(核心要点) → key_points(你必须知道的
+    #   关键信息) → attention(需要你亲自关注) → other(已处理等) → FYI（殿后）。
+    # 理由：① highlights + key_points 并置顶部组成"必看信息区"（截止/风险 + 关键硬信息），
+    # 第一屏一眼掌握，旧版垫在报告最底基本看不到；② attention/other/FYI 是邮件分组列表
+    # （前端默认折叠成摘要），按重要度递减排列，FYI 整组殿后。
+
+    # ① highlights → callout，紧随 stat_row（核心要点先声夺人）。
+    for h in draft.highlights or []:
+        body = (h.get("body") or "").strip()
+        if body:
+            tone = h.get("tone") if h.get("tone") in {
+                m.TONE_INFO, m.TONE_WARN, m.TONE_CRITICAL, m.TONE_SUCCESS
+            } else m.TONE_INFO
+            blocks.append(m.callout(body, tone, (h.get("title") or "").strip() or None))
+
+    # ② sections + email_items：按重要度分三档收集（各档内保 LLM 相对顺序）——
+    #   attention(行动/关注) · other(已处理等中间态) · fyi(殿后)。
     valid_ids = set(brief_map.keys())
     used: set = set()
+    attention_blocks: List[Dict[str, Any]] = []
+    other_blocks: List[Dict[str, Any]] = []
+    fyi_blocks: List[Dict[str, Any]] = []
     for sec in draft.sections:
         ids: List[int] = []
         for iid in sec.get("email_refs") or []:
@@ -154,7 +194,7 @@ def assemble_report_doc(
         icon = sec.get("icon")
         if icon not in _ALLOWED_ICONS:
             icon = _SECTION_ICON_FALLBACK.get(sec.get("id", ""), "info")
-        blocks.append(
+        sec_blocks: List[Dict[str, Any]] = [
             m.section(
                 sec.get("id") or "section",
                 (sec.get("title") or "").strip() or "邮件",
@@ -162,21 +202,23 @@ def assemble_report_doc(
                 intro,
                 summary,
             )
-        )
+        ]
         for iid in ids:
-            blocks.append(_email_item(brief_map[iid]))
+            sec_blocks.append(_email_item(brief_map[iid]))
+        if _is_fyi_section(sec):
+            fyi_blocks.extend(sec_blocks)
+        elif _is_attention_section(sec):
+            attention_blocks.extend(sec_blocks)
+        else:
+            other_blocks.extend(sec_blocks)
 
+    # ③ 组装：key_points 紧跟 callout（顶部"必看信息区"）→ attention → other → fyi。
     kps = [k.strip() for k in (draft.key_points or []) if k and k.strip()]
     if kps:
         blocks.append(m.key_points(kps, "你必须知道的关键信息"))
-
-    for h in draft.highlights or []:
-        body = (h.get("body") or "").strip()
-        if body:
-            tone = h.get("tone") if h.get("tone") in {
-                m.TONE_INFO, m.TONE_WARN, m.TONE_CRITICAL, m.TONE_SUCCESS
-            } else m.TONE_INFO
-            blocks.append(m.callout(body, tone, (h.get("title") or "").strip() or None))
+    blocks.extend(attention_blocks)
+    blocks.extend(other_blocks)
+    blocks.extend(fyi_blocks)
 
     return m.ReportDoc(
         agent_id=agent_id,
