@@ -18,7 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { CustomApiBackend, __testing } from '../../src/electron/main/chat/backends/custom_api'
-import type { ChatStreamEvent } from '../../src/electron/main/chat/types'
+import type { ChatStreamEvent } from '../../src/shared/chat/types'
 import type { ChatMessage } from '../../src/electron/main/chat_db'
 
 vi.mock('../../src/electron/main/llm_settings', () => ({

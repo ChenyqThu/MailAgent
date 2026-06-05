@@ -33,7 +33,7 @@ import type {
   ChatBackend,
   ChatStreamEnvelope,
   ChatStreamEvent
-} from '../../src/electron/main/chat/types'
+} from '../../src/shared/chat/types'
 
 let tmpDir: string
 

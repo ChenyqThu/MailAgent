@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'vitest'
 import { __testing } from '../../../../src/electron/main/chat/backends/custom_api'
-import type { ChatStreamEvent } from '../../../../src/electron/main/chat/types'
+import type { ChatStreamEvent } from '../../../../src/shared/chat/types'
 import {
   __resetCacheForTests as resetSenderDigestCache,
   __setCacheClientForTests as setSenderDigestClient,

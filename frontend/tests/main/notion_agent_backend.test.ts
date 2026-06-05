@@ -15,7 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-import type { ChatStreamEvent } from '../../src/electron/main/chat/types'
+import type { ChatStreamEvent } from '../../src/shared/chat/types'
 import type { ChatMessage } from '../../src/electron/main/chat_db'
 
 const { mockExeca, mockReaddir, mockStat } = vi.hoisted(() => ({
