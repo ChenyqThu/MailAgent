@@ -50,7 +50,12 @@ import { join } from 'path'
 import { StringDecoder } from 'node:string_decoder'
 
 import { whichSync } from '../../bin_resolver'
-import type { ChatBackend, ChatStreamEvent, ChatStreamRequest, EmailContext } from '../types'
+import type {
+  ChatBackend,
+  ChatStreamEvent,
+  ChatStreamRequest,
+  EmailContext
+} from '@shared/chat/types'
 import { notionAgentGate, type GateRelease } from './notion_agent_gate'
 
 /** Idle (no-output) timeout for a `notion-agent chat` stream. This is NOT a

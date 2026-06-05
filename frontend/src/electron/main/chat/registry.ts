@@ -4,7 +4,7 @@
 // real two at app boot in index.ts.
 
 import type { BackendKind } from '../chat_db'
-import type { ChatBackend } from './types'
+import type { ChatBackend } from '@shared/chat/types'
 
 const _backends = new Map<BackendKind, ChatBackend>()
 

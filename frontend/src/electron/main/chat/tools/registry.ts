@@ -15,7 +15,7 @@
 //   sibling modules avoids overloading the "registry" word and lets tests
 //   mock one without touching the other.
 
-import type { BackendToolDescriptor } from '../types'
+import type { BackendToolDescriptor } from '@shared/chat/types'
 
 /** Coarse grouping used for filtering the catalog when advertising to the
  *  LLM. The harness can show all tools at once (M1) or curate by category

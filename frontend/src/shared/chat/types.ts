@@ -13,7 +13,7 @@
 // reach the renderer bundle). The renderer only sees the post-IPC stream
 // events on `chat:stream`.
 
-import type { BackendKind, ChatMessage } from '../chat_db'
+import type { BackendKind, ChatMessage } from './model'
 
 // ── stream events backend → orchestrator ─────────────────────────────────
 

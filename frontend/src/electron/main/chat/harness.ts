@@ -50,7 +50,7 @@ import type {
   ChatStreamEnvelope,
   ChatStreamEvent,
   EmailContext
-} from './types'
+} from '@shared/chat/types'
 
 export interface HarnessSink {
   send(envelope: ChatStreamEnvelope): void

@@ -32,7 +32,7 @@ import type {
   ChatStreamEvent,
   ChatStreamRequest,
   EmailContext
-} from '../types'
+} from '@shared/chat/types'
 
 // Anthropic `max_tokens` caps the model's RESPONSE length (not input).
 // Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
@@ -353,10 +353,7 @@ function createStreamState(initialModel: string | null): AnthropicStreamState {
  *    message_stop
  *  Plus out-of-band `error` events that override the normal flow.
  */
-function processAnthropicEvent(
-  parsed: unknown,
-  state: AnthropicStreamState
-): ChatStreamEvent[] {
+function processAnthropicEvent(parsed: unknown, state: AnthropicStreamState): ChatStreamEvent[] {
   const e = parsed as Record<string, unknown> & { type?: string; __done?: boolean }
   if (e.__done === true) {
     // Some gateways still emit [DONE] sentinel; Anthropic itself uses
@@ -365,8 +362,7 @@ function processAnthropicEvent(
   }
   switch (e.type) {
     case 'message_start': {
-      const msg = (e as { message?: { usage?: { input_tokens?: number }; model?: string } })
-        .message
+      const msg = (e as { message?: { usage?: { input_tokens?: number }; model?: string } }).message
       if (msg) {
         if (typeof msg.usage?.input_tokens === 'number') state.inputTokens = msg.usage.input_tokens
         if (typeof msg.model === 'string') state.modelSeen = msg.model
@@ -374,7 +370,10 @@ function processAnthropicEvent(
       return []
     }
     case 'content_block_start': {
-      const block = (e as { index?: number; content_block?: { type?: string; id?: string; name?: string } })
+      const block = e as {
+        index?: number
+        content_block?: { type?: string; id?: string; name?: string }
+      }
       const idx = block.index
       const cb = block.content_block
       if (typeof idx === 'number' && cb?.type === 'tool_use' && cb.id && cb.name) {
@@ -383,7 +382,10 @@ function processAnthropicEvent(
       return []
     }
     case 'content_block_delta': {
-      const wrap = e as { index?: number; delta?: { type?: string; text?: string; partial_json?: string } }
+      const wrap = e as {
+        index?: number
+        delta?: { type?: string; text?: string; partial_json?: string }
+      }
       const delta = wrap.delta
       if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
         state.accumulated += delta.text
@@ -550,7 +552,13 @@ function buildOpenAiMessages(req: ChatStreamRequest): OpenAiMessage[] {
         const textParts: string[] = []
         const toolCalls: NonNullable<OpenAiMessage['tool_calls']> = []
         for (const block of m.content) {
-          const b = block as { type?: string; text?: string; id?: string; name?: string; input?: unknown }
+          const b = block as {
+            type?: string
+            text?: string
+            id?: string
+            name?: string
+            input?: unknown
+          }
           if (b.type === 'text' && typeof b.text === 'string') {
             textParts.push(b.text)
           } else if (b.type === 'tool_use' && b.id && b.name) {
@@ -575,7 +583,12 @@ function buildOpenAiMessages(req: ChatStreamRequest): OpenAiMessage[] {
         let userText = ''
         const toolResults: Array<{ tool_use_id: string; content: string }> = []
         for (const block of m.content) {
-          const b = block as { type?: string; text?: string; tool_use_id?: string; content?: unknown }
+          const b = block as {
+            type?: string
+            text?: string
+            tool_use_id?: string
+            content?: unknown
+          }
           if (b.type === 'text' && typeof b.text === 'string') {
             userText += (userText ? '\n' : '') + b.text
           } else if (b.type === 'tool_result' && b.tool_use_id) {
@@ -703,10 +716,7 @@ function flushOpenAiToolCalls(state: OpenAiStreamState): ChatStreamEvent[] {
   return events
 }
 
-function processOpenAiEvent(
-  parsed: unknown,
-  state: OpenAiStreamState
-): ChatStreamEvent[] {
+function processOpenAiEvent(parsed: unknown, state: OpenAiStreamState): ChatStreamEvent[] {
   const e = parsed as Record<string, unknown> & { __done?: boolean }
   if (e.__done === true) {
     // Stream sentinel — flush any unfinalized tool_calls (defensive).
