@@ -28,142 +28,42 @@ import { dirname, join } from 'path'
 import { resolveDataRoot } from './db'
 
 // ── types ───────────────────────────────────────────────────────────────
+// V2.1 阶段 3：数据模型类型下沉到 shared/chat/model.ts（B-pure-unified —
+// harness 在 UI 进程跑需要这些类型但不能引 better-sqlite3）。下方 import 供
+// 本文件函数签名使用；re-export 保既有 importer（dispatcher / harness /
+// kos_save / registry / handlers/chat）的 `from '../chat_db'` 路径不变。
+import type {
+  AppendMessageInput,
+  AppendToolCallInput,
+  BackendKind,
+  ChatMessage,
+  ChatSession,
+  ChatSessionSummary,
+  ChatToolCall,
+  ConfirmationTier,
+  MessageRole,
+  MessageStatus,
+  OpenSessionInput,
+  ToolCallStatus,
+  UpdateMessagePatch,
+  UpdateToolCallPatch
+} from '@shared/chat/model'
 
-export type BackendKind = 'notion-agent' | 'custom-api'
-export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
-export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
-
-// Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
-// in `chat_tool_call`. See docs/agent-harness-design.md §4.5.
-export type ToolCallStatus =
-  | 'pending' // awaiting confirmation (tier=preview/edit)
-  | 'confirmed' // user approved, not yet running
-  | 'running' // handler in flight
-  | 'ok' // handler returned success
-  | 'error' // handler returned ToolResult.ok=false OR threw
-  | 'canceled' // user clicked Cancel in ConfirmToolDialog
-export type ConfirmationTier = 'silent' | 'preview' | 'edit'
-
-export interface ChatSession {
-  id: number
-  email_id: number
-  backend_kind: BackendKind
-  backend_model: string | null
-  backend_agent_page_id: string | null
-  created_at: number
-  updated_at: number
-}
-
-// Global session-history row. Unlike `ChatSession` (per-email, used by the
-// in-panel sidebar), this carries enough to render a cross-email history list
-// without an N+1 listMessages round-trip per row: the first user-message
-// preview and the message count are aggregated in the same SELECT. The
-// owning email's subject/sender are NOT here — they live in sync_store.db, so
-// handlers/chat.ts joins them in best-effort after the fact.
-export interface ChatSessionSummary extends ChatSession {
-  /** First user-authored message, truncated server-side. Null for sessions
-   *  seeded by automation that never got a user turn. */
-  first_user_message: string | null
-  message_count: number
-}
-
-export interface ChatMessage {
-  id: number
-  session_id: number
-  role: MessageRole
-  content: string
-  tokens_input: number | null
-  tokens_output: number | null
-  cost_usd: number | null
-  model: string | null
-  status: MessageStatus
-  error_message: string | null
-  // schema_version=2 (Sprint 4 review opus L carry-forward): JSON blob
-  // for backend-specific data that doesn't fit the shared columns. Used
-  // today by notion_agent to persist thread_id without abusing the
-  // `model` column. Null when no extras. NEVER store secrets here —
-  // the field crosses the IPC boundary.
-  metadata: string | null
-  created_at: number
-  updated_at: number
-}
-
-export interface OpenSessionInput {
-  emailId: number
-  backendKind: BackendKind
-  backendModel?: string | null
-  backendAgentPageId?: string | null
-}
-
-export interface AppendMessageInput {
-  sessionId: number
-  role: MessageRole
-  content: string
-  status: MessageStatus
-  model?: string | null
-  tokensInput?: number | null
-  tokensOutput?: number | null
-  costUsd?: number | null
-  errorMessage?: string | null
-  metadata?: string | null
-}
-
-export interface UpdateMessagePatch {
-  content?: string
-  status?: MessageStatus
-  tokensInput?: number | null
-  tokensOutput?: number | null
-  costUsd?: number | null
-  errorMessage?: string | null
-  model?: string | null
-  metadata?: string | null
-}
-
-// Sprint 19 — chat_tool_call row + CRUD inputs.
-
-export interface ChatToolCall {
-  id: number
-  message_id: number
-  /** Anthropic toolu_xxx. MUST match across `tool_use` → `tool_result`
-   *  round-trip in the LLM message stream. UNIQUE per (message_id). */
-  tool_use_id: string
-  tool_name: string
-  /** Original LLM-proposed input, serialized JSON. */
-  input_json: string
-  /** Set only when tier was 'edit' and the user changed the input via the
-   *  ConfirmToolDialog. The tool handler receives this as effective input;
-   *  the result envelope returned to the LLM includes
-   *  `{ user_edited: true, original_input, final_input }` so the model
-   *  knows what was actually executed. */
-  user_edited_input_json: string | null
-  /** Tool handler's `ToolResult` serialized as JSON. Null until completion. */
-  output_json: string | null
-  status: ToolCallStatus
-  duration_ms: number | null
-  confirmation_tier: ConfirmationTier
-  /** Epoch ms when the user clicked Confirm. Null for silent / canceled. */
-  confirmed_at: number | null
-  created_at: number
-  updated_at: number
-}
-
-export interface AppendToolCallInput {
-  messageId: number
-  toolUseId: string
-  toolName: string
-  inputJson: string
-  confirmationTier: ConfirmationTier
-  /** Initial status — usually 'pending' for preview/edit tiers, 'running'
-   *  for silent. */
-  status: ToolCallStatus
-}
-
-export interface UpdateToolCallPatch {
-  status?: ToolCallStatus
-  outputJson?: string | null
-  durationMs?: number | null
-  userEditedInputJson?: string | null
-  confirmedAt?: number | null
+export type {
+  AppendMessageInput,
+  AppendToolCallInput,
+  BackendKind,
+  ChatMessage,
+  ChatSession,
+  ChatSessionSummary,
+  ChatToolCall,
+  ConfirmationTier,
+  MessageRole,
+  MessageStatus,
+  OpenSessionInput,
+  ToolCallStatus,
+  UpdateMessagePatch,
+  UpdateToolCallPatch
 }
 
 // ── path resolution ─────────────────────────────────────────────────────
