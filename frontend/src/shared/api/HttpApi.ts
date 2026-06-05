@@ -78,8 +78,14 @@ import type {
 } from './types'
 import { fetchAsDataUrl, request, type QueryValue, type RequestOptions } from './http_client'
 
-function notImplemented(method: string): never {
-  throw new Error(`HttpApi.${method}() not implemented yet (V2-Sprint 3)`)
+function notImplemented(method: string): Promise<never> {
+  // V2-Sprint 3 stub. MUST reject, never throw synchronously: every stubbed
+  // surface is an async API method whose renderer call sites degrade via
+  // `.catch()` / try-await. A sync throw escapes those handlers and trips the
+  // React ErrorBoundary ("Something went wrong") — e.g. AiTab's prompts.list()
+  // on mount when opened from remote. Rejecting keeps the failure inside the
+  // promise chain so each call site can fall back to a toast.
+  return Promise.reject(new Error(`HttpApi.${method}() not implemented yet (V2-Sprint 3)`))
 }
 
 /** True only for an ApiError whose code === 'E_NOT_FOUND'. Used by the few
