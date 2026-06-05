@@ -5,16 +5,21 @@
 // stopping when the LLM emits stop_reason='end_turn' or a guard trips
 // (MAX_ITER / MAX_COST_USD / abort).
 //
+// V2.1 阶段 3：harness 下沉 shared/chat/（B-pure-unified，在 UI 进程跑 —— 本地
+// renderer / 远程 browser）。所有外部能力经注入的 ChatInfraPlatform（args.platform）
+// 访问：persist（流式/终态/工具审计/abort）· resolveConfig（迭代/成本上限 + KOS
+// flag）· prefetchSenderDigest。backend / sink / registry 仍是注入式。本文件零
+// Electron/Node import（不变式 1，pnpm build:web 验证）。
+//
 // dispatcher.runStream still owns:
 //   - session-level AbortController
-//   - DB persistence of the streaming assistant message row
-//   - IPC fanout (sink.send)
+//   - the IPC fanout sink (constructed there, injected as args.sink)
 //
 // What lives HERE:
 //   - iteration loop
-//   - tool_use accumulation per iter + chat_tool_call audit writes
+//   - tool_use accumulation per iter + chat_tool_call audit writes (via platform)
 //   - confirmation callback wiring (forwards PendingConfirmationEvent,
-//     awaits chat:confirmTool IPC reply)
+//     awaits chat:confirmTool reply)
 //   - history rebuild between iterations (assistant tool_use blocks +
 //     user tool_result blocks in Anthropic multi-block content shape)
 //   - end-of-turn finalization (status='complete' on the assistant row)
@@ -24,25 +29,16 @@
 // double-gates at the entry point — when either condition fails the
 // legacy single-pass runStream path takes over verbatim.
 
-import {
-  appendToolCall,
-  getToolCallByUseId,
-  updateMessage,
-  updateToolCall,
-  abortStreamingMessages,
-  type ChatMessage,
-  type ConfirmationTier
-} from '../chat_db'
-import { getMaxCostUsd, getMaxIter, isKosL1HotBlockEnabled } from './config'
-import { prefetchSenderDigest } from '../kos/sender_digest_cache'
-import { defaultToolRegistry, type ToolRegistry } from '@shared/chat/tools/registry'
+import type { ChatMessage, ConfirmationTier, UpdateToolCallPatch } from './model'
+import type { ChatInfraPlatform } from './platform'
+import { defaultToolRegistry, type ToolRegistry } from './tools/registry'
 import {
   dispatchTools,
   type DispatchContext,
   type ToolDispatchResult,
   type ToolUseRequest
-} from '@shared/chat/tools/dispatch'
-import { awaitConfirmation } from '@shared/chat/tools/confirmation'
+} from './tools/dispatch'
+import { awaitConfirmation } from './tools/confirmation'
 import type {
   AnthropicContentBlock,
   AnthropicHistoryMessage,
@@ -50,7 +46,7 @@ import type {
   ChatStreamEnvelope,
   ChatStreamEvent,
   EmailContext
-} from '@shared/chat/types'
+} from './types'
 
 export interface HarnessSink {
   send(envelope: ChatStreamEnvelope): void
@@ -66,6 +62,10 @@ export interface RunHarnessArgs {
   emailContext: EmailContext | null
   ac: AbortController
   sink: HarnessSink
+  /** 基础设施板（注入式，跨端 electron/http impl 不同）：persist（流式 streamContent /
+   *  终态 finalizeMessage / 工具审计 appendToolCall+updateToolCall / abort）+
+   *  resolveConfig（迭代/成本上限 + KOS L1 flag）+ prefetchSenderDigest。 */
+  platform: ChatInfraPlatform
   /** Test injection point. Production callers omit and the harness uses
    *  the module-level `defaultToolRegistry`. */
   registry?: ToolRegistry
@@ -173,16 +173,18 @@ function chatToolStatus(status: ToolDispatchResult['status']): 'ok' | 'error' | 
 export async function runHarness(args: RunHarnessArgs): Promise<void> {
   const registry = args.registry ?? defaultToolRegistry
   const tools = registry.toAnthropicSchema()
-  const MAX_ITER = getMaxIter()
-  const MAX_COST_USD_PER_TURN = getMaxCostUsd()
+  // V2.1 阶段 3：配置快照一次性取（整轮用同一份），取代原 getMaxIter()/getMaxCostUsd()。
+  const cfg = await args.platform.resolveConfig()
+  const MAX_ITER = cfg.maxIter
+  const MAX_COST_USD_PER_TURN = cfg.maxCostUsd
 
   // Sprint 19 PR-2f — Fire-and-forget prefetch KOS sender digest. First
   // iteration's buildSystemBlocks sync-reads getCachedSenderDigest to decide
   // whether to inject the L1 hot block. We intentionally do NOT await:
   // prefetch should not delay backend.stream start, and typically completes
   // before the first content_block arrives.
-  if (isKosL1HotBlockEnabled() && args.emailContext?.senderAddr) {
-    void prefetchSenderDigest(args.emailContext.senderAddr)
+  if (cfg.kosL1HotBlockEnabled && args.emailContext?.senderAddr) {
+    args.platform.prefetchSenderDigest(args.emailContext.senderAddr)
   }
 
   const baseHistory = chatHistoryToAnthropic(args.initialHistory)
@@ -225,7 +227,8 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
           case 'chunk':
             iterText += event.delta
             buffer += event.delta
-            updateMessage(args.assistantMessageId, { content: buffer })
+            // fire-and-forget 同步直写（electron 零回归）；http debounce 在 impl 侧。
+            args.platform.persist.streamContent(args.assistantMessageId, buffer)
             forward(event)
             break
           case 'tool_use': {
@@ -240,7 +243,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             // status='running' for silent (we dispatch immediately after
             // the iter's tool_use stream ends).
             const initStatus: 'pending' | 'running' = tier === 'silent' ? 'running' : 'pending'
-            appendToolCall({
+            await args.platform.persist.appendToolCall({
               messageId: args.assistantMessageId,
               toolUseId: event.toolUseId,
               toolName: event.name,
@@ -268,7 +271,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             break
           case 'error':
             forward(event)
-            updateMessage(args.assistantMessageId, {
+            await args.platform.persist.finalizeMessage(args.assistantMessageId, {
               status: 'error',
               errorMessage: event.message,
               model: modelSeen
@@ -285,12 +288,12 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
       }
     } catch (err) {
       if (args.ac.signal.aborted) {
-        abortStreamingMessages(args.sessionId)
+        await args.platform.persist.abortStreamingMessages(args.sessionId)
         return
       }
       const message = err instanceof Error ? err.message : String(err)
       forward({ type: 'error', code: 'E_BACKEND_CRASH', message })
-      updateMessage(args.assistantMessageId, {
+      await args.platform.persist.finalizeMessage(args.assistantMessageId, {
         status: 'error',
         errorMessage: message,
         model: modelSeen
@@ -299,13 +302,13 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
     }
 
     if (args.ac.signal.aborted) {
-      abortStreamingMessages(args.sessionId)
+      await args.platform.persist.abortStreamingMessages(args.sessionId)
       return
     }
 
     // Terminal conditions for the harness loop.
     if (stopReason === 'end_turn' || collected.length === 0) {
-      updateMessage(args.assistantMessageId, {
+      await args.platform.persist.finalizeMessage(args.assistantMessageId, {
         status: 'complete',
         content: buffer,
         tokensInput: lastUsage?.input ?? null,
@@ -321,7 +324,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
         code: 'E_COST_BUDGET',
         message: `turn exceeded $${MAX_COST_USD_PER_TURN.toFixed(2)} cap (spent $${costUsd.toFixed(4)})`
       })
-      updateMessage(args.assistantMessageId, {
+      await args.platform.persist.finalizeMessage(args.assistantMessageId, {
         status: 'error',
         errorMessage: 'cost cap exceeded',
         model: modelSeen
@@ -348,22 +351,25 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
     const results = await dispatchTools(collected, dispatchCtx, registry)
 
     if (args.ac.signal.aborted) {
-      abortStreamingMessages(args.sessionId)
+      await args.platform.persist.abortStreamingMessages(args.sessionId)
       return
     }
 
     // Persist tool results to chat_tool_call + forward tool_result events.
     for (const r of results) {
-      const row = getToolCallByUseId(args.assistantMessageId, r.toolUseId)
+      const row = await args.platform.persist.getToolCallByUseId(
+        args.assistantMessageId,
+        r.toolUseId
+      )
       if (row) {
-        const patch: Parameters<typeof updateToolCall>[1] = {
+        const patch: UpdateToolCallPatch = {
           status: chatToolStatus(r.status),
           durationMs: r.durationMs
         }
         if (r.output !== undefined) patch.outputJson = serializeToolOutput(r.output)
         else if (r.errorMessage) patch.outputJson = r.errorMessage
         if (r.userEdited) patch.confirmedAt = Date.now()
-        updateToolCall(row.id, patch)
+        await args.platform.persist.updateToolCall(row.id, patch)
       }
       forward({
         type: 'tool_result',
@@ -386,7 +392,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
     code: 'E_MAX_ITER',
     message: `harness exceeded ${MAX_ITER} iterations without end_turn`
   })
-  updateMessage(args.assistantMessageId, {
+  await args.platform.persist.finalizeMessage(args.assistantMessageId, {
     status: 'error',
     errorMessage: `max iterations (${MAX_ITER}) exceeded`,
     model: modelSeen

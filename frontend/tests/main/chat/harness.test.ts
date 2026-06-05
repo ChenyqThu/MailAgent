@@ -20,7 +20,8 @@ import {
   getOrCreateSession,
   listToolCallsForMessage
 } from '../../../src/electron/main/chat_db'
-import { runHarness } from '../../../src/electron/main/chat/harness'
+import { runHarness } from '../../../src/shared/chat/harness'
+import { electronChatPlatform } from '../../../src/electron/main/chat/electron_platform'
 import {
   createToolRegistry,
   type ToolDef,
@@ -78,14 +79,18 @@ function recordingSink(): {
 
 /** A scriptable backend: each entry in `iters` is the event sequence for
  *  one runHarness iteration. The mock advances by index per call. */
-function scriptedBackend(iters: ChatStreamEvent[][]): ChatBackend & { lastReq: ChatStreamRequest | null } {
+function scriptedBackend(
+  iters: ChatStreamEvent[][]
+): ChatBackend & { lastReq: ChatStreamRequest | null } {
   let idx = 0
   const backend = {
     kind: 'custom-api' as const,
     lastReq: null as ChatStreamRequest | null,
     async *stream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
       backend.lastReq = req
-      const events = iters[idx] ?? [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+      const events = iters[idx] ?? [
+        { type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }
+      ]
       idx++
       for (const e of events) {
         yield e
@@ -164,6 +169,7 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink,
       registry
     })
@@ -216,6 +222,7 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink: recordingSink(),
       registry
     })
@@ -253,6 +260,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink: recordingSink(),
       registry: createToolRegistry()
     })
@@ -287,6 +295,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink,
       registry
     })
@@ -332,6 +341,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink,
       registry
     })
@@ -363,6 +373,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink: recordingSink(),
       registry: createToolRegistry()
     })
@@ -389,6 +400,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink,
       registry: createToolRegistry()
     })
@@ -425,6 +437,7 @@ describe('runHarness — unknown tool resilience', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: electronChatPlatform,
       sink,
       registry
     })

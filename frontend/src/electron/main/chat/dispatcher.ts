@@ -27,72 +27,17 @@ import {
   type ChatMessage,
   type ChatSession
 } from '../chat_db'
-import { getDb } from '../db'
 import { drainNotionAgentGate } from './backends/notion_agent_gate'
 import { backendSupportsTools, isHarnessEnabled } from './config'
-import { runHarness } from './harness'
+import { electronChatPlatform } from './electron_platform'
 import { getChatBackend } from './registry'
+import { runHarness } from '@shared/chat/harness'
 import { cancelConfirmationsForSession } from '@shared/chat/tools/confirmation'
 import type { ChatStreamEnvelope, ChatStreamEvent, EmailContext } from '@shared/chat/types'
 
-// Sprint 4 review (Opus H-1): cap the email body we ship to the model so
-// a giant marketing email doesn't blow the context window. Matches the
-// Sprint 3 translate.ts limit + backend LLM_BODY_MAX_CHARS.
-const MAX_BODY_CHARS = 12_000
-
-/** Pull the active email's metadata + markdown body from the SQLite SSoT
- *  so the backend's system prompt can actually include the email content.
- *  Returns null when the row is missing or the DB is unreachable (chat
- *  still works, the model just won't see the email). */
-function loadEmailContext(emailId: number): EmailContext | null {
-  try {
-    const db = getDb()
-    // PR-2g dogfood fix: 加 ai_priority / ai_action / processing_status 进
-    // ctx, 让 chat agent system prompt 看到 'AI 已标 🟡 重要 + 需要决策'
-    // 直接判断, 不必先 query 一轮. 字段从 email_metadata v14 主表读
-    // (LLM agent processor.py write 进主表 + labels_json sidecar).
-    const row = db
-      .prepare(
-        `SELECT m.internal_id, m.subject, m.sender_name, m.sender, m.date_received,
-                m.notion_page_id, m.ai_priority, m.ai_action, m.processing_status,
-                b.body_markdown
-           FROM email_metadata m
-           LEFT JOIN email_body b ON b.internal_id = m.internal_id
-          WHERE m.internal_id = ?`
-      )
-      .get(emailId) as
-      | {
-          internal_id: number
-          subject: string | null
-          sender_name: string | null
-          sender: string | null
-          date_received: string | null
-          notion_page_id: string | null
-          ai_priority: string | null
-          ai_action: string | null
-          processing_status: string | null
-          body_markdown: string | null
-        }
-      | undefined
-    if (!row) return null
-    const body =
-      typeof row.body_markdown === 'string' ? row.body_markdown.slice(0, MAX_BODY_CHARS) : null
-    return {
-      internalId: row.internal_id,
-      subject: row.subject,
-      senderName: row.sender_name,
-      senderAddr: row.sender,
-      dateIso: row.date_received,
-      bodyMarkdown: body && body.length > 0 ? body : null,
-      notionPageId: row.notion_page_id,
-      aiPriority: row.ai_priority,
-      aiAction: row.ai_action,
-      processingStatus: row.processing_status
-    }
-  } catch {
-    return null
-  }
-}
+// V2.1 阶段 3：loadEmailContext + MAX_BODY_CHARS 已移入 ElectronChatPlatform
+// （electron_platform.ts，单一真源 —— dispatcher 下沉 shared 后 raw SQL 不能进
+// shared，归 platform 实现）。dispatcher 改调 electronChatPlatform.loadEmailContext。
 
 export interface StartChatInput {
   emailId: number
@@ -211,7 +156,7 @@ export async function startChat(input: StartChatInput, sink: StreamSink): Promis
   _inflight.set(session.id, ac)
 
   const backend = getChatBackend(input.backendKind)
-  const emailContext = loadEmailContext(input.emailId)
+  const emailContext = await electronChatPlatform.loadEmailContext(input.emailId)
 
   // Kick off the consumer loop without awaiting — handler returns ids
   // immediately so the renderer can mount the empty bubble.
@@ -263,7 +208,8 @@ async function runStream(args: RunStreamArgs): Promise<void> {
       agentPageId: args.agentPageId,
       emailContext: args.emailContext,
       ac: args.ac,
-      sink: args.sink
+      sink: args.sink,
+      platform: electronChatPlatform
     })
   }
   const {
@@ -478,7 +424,7 @@ export async function editChatMessage(
   _inflight.set(input.sessionId, ac)
 
   const backend = getChatBackend(input.backendKind)
-  const emailContext = loadEmailContext(session.email_id)
+  const emailContext = await electronChatPlatform.loadEmailContext(session.email_id)
 
   void runStream({
     sessionId: input.sessionId,

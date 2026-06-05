@@ -29,11 +29,7 @@ import {
   type StreamSink
 } from '../../src/electron/main/chat/dispatcher'
 import { __resetBackendRegistry, registerChatBackend } from '../../src/electron/main/chat/registry'
-import type {
-  ChatBackend,
-  ChatStreamEnvelope,
-  ChatStreamEvent
-} from '../../src/shared/chat/types'
+import type { ChatBackend, ChatStreamEnvelope, ChatStreamEvent } from '../../src/shared/chat/types'
 
 let tmpDir: string
 
@@ -670,7 +666,13 @@ describe('dispatcher — sink behaviour', () => {
       },
       orderedSink
     )
-    await tickAsync()
+    // V2.1 platform seam 后 custom-api 走 harness，从 chat:start 到事件全部 drain
+    // 的异步链比 tickAsync 固定 microtask burst 更深（同 2026-05-26 happy-path
+    // 注释的根因）——轮询到 done 落地再断言顺序，不耦合具体 microtask-chain 深度。
+    const waitDeadline = Date.now() + 2000
+    while (!ordered.includes('done') && Date.now() < waitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
     expect(ordered).toEqual(['chunk', 'chunk', 'usage', 'done'])
   })
 
