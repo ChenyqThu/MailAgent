@@ -17,7 +17,7 @@ import { registerChatBackend } from './chat/registry'
 import { CustomApiBackend } from './chat/backends/custom_api'
 import { NotionAgentBackend } from './chat/backends/notion_agent'
 // Sprint 19 PR-1d.1 — populate agent harness tool catalog at boot.
-import { defaultToolRegistry } from './chat/tools/registry'
+import { defaultToolRegistry } from '@shared/chat/tools/registry'
 import { registerBuiltinTools } from './chat/tools/builtin'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'

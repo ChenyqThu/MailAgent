@@ -14,7 +14,7 @@
 //   - email_draft_reply           → IPC createDraft (AppleScript via shell
 //     script, ~3-5s, returns Mail.app draft_id; host-local, 保留 emergency 直 fork)
 
-import type { ToolDef, ToolResult, ToolExecCtx } from '../registry'
+import type { ToolDef, ToolResult, ToolExecCtx } from '@shared/chat/tools/registry'
 import { runEmailFlag } from '../../../handlers/write_ops'
 import { createDraft as ipcCreateDraft } from '../../../handlers/draft'
 

@@ -32,7 +32,7 @@ import { drainNotionAgentGate } from './backends/notion_agent_gate'
 import { backendSupportsTools, isHarnessEnabled } from './config'
 import { runHarness } from './harness'
 import { getChatBackend } from './registry'
-import { cancelConfirmationsForSession } from './tools/confirmation'
+import { cancelConfirmationsForSession } from '@shared/chat/tools/confirmation'
 import type { ChatStreamEnvelope, ChatStreamEvent, EmailContext } from '@shared/chat/types'
 
 // Sprint 4 review (Opus H-1): cap the email body we ship to the model so

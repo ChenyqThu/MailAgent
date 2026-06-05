@@ -38,7 +38,7 @@ import {
   startChat,
   type StartChatResult
 } from '../chat/dispatcher'
-import { resolveConfirmation } from '../chat/tools/confirmation'
+import { resolveConfirmation } from '@shared/chat/tools/confirmation'
 
 export interface ChatStartOpts {
   emailId: number

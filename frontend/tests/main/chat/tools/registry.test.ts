@@ -1,7 +1,7 @@
 // Sprint 19 PR-1b — ToolRegistry contract tests.
 
 import { describe, expect, test } from 'vitest'
-import { createToolRegistry, type ToolDef, type ToolResult } from '../../../../src/electron/main/chat/tools/registry'
+import { createToolRegistry, type ToolDef, type ToolResult } from '../../../../src/shared/chat/tools/registry'
 
 function makeTool(overrides: Partial<ToolDef> = {}): ToolDef {
   return {

@@ -5,7 +5,7 @@
 // Tests use a fresh registry via createToolRegistry() and call this with it
 // to mirror production wiring without sharing state.
 
-import type { ToolRegistry } from '../registry'
+import type { ToolRegistry } from '@shared/chat/tools/registry'
 import { isKosConsumerEnabled } from '../../config'
 import { allEmailTools } from './email'
 import { allAttachmentTools } from './attachment'

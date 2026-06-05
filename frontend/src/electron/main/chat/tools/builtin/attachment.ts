@@ -8,7 +8,7 @@
 // can be megabytes and would blow the LLM context. Use the local-path tool
 // (M3) instead when the LLM needs to reference a file path.
 
-import type { ToolDef, ToolResult } from '../registry'
+import type { ToolDef, ToolResult } from '@shared/chat/tools/registry'
 import {
   listAttachments as ipcListAttachments,
   searchAttachments as ipcSearchAttachments

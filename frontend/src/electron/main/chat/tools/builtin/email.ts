@@ -14,7 +14,7 @@
 //   intended pattern — see how `handlers/admin.ts` reuses `getAIFields`
 //   from `handlers/email.ts`.
 
-import type { ToolDef, ToolResult } from '../registry'
+import type { ToolDef, ToolResult } from '@shared/chat/tools/registry'
 import {
   getEmail as ipcGetEmail,
   getEmailBody as ipcGetEmailBody,

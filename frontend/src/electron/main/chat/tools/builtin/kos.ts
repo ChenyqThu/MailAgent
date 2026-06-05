@@ -13,7 +13,7 @@
 // 这俩 tool 进 default registry, 默认关闭. 启用前确认 PR-2c 的
 // KOS_MCP_BASE + KOS_OAUTH_CLIENT_ID + KOS_OAUTH_CLIENT_SECRET 都已配齐.
 
-import type { ToolDef, ToolResult } from '../registry'
+import type { ToolDef, ToolResult } from '@shared/chat/tools/registry'
 import { KOSClient, KOSError, rerankByRecency } from '../../../kos/client'
 import { isKosTimeDecayEnabled } from '../../config'
 

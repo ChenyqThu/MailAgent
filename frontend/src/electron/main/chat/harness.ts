@@ -35,14 +35,14 @@ import {
 } from '../chat_db'
 import { getMaxCostUsd, getMaxIter, isKosL1HotBlockEnabled } from './config'
 import { prefetchSenderDigest } from '../kos/sender_digest_cache'
-import { defaultToolRegistry, type ToolRegistry } from './tools/registry'
+import { defaultToolRegistry, type ToolRegistry } from '@shared/chat/tools/registry'
 import {
   dispatchTools,
   type DispatchContext,
   type ToolDispatchResult,
   type ToolUseRequest
-} from './tools/dispatch'
-import { awaitConfirmation } from './tools/confirmation'
+} from '@shared/chat/tools/dispatch'
+import { awaitConfirmation } from '@shared/chat/tools/confirmation'
 import type {
   AnthropicContentBlock,
   AnthropicHistoryMessage,

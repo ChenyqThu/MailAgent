@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-import { createToolRegistry } from '../../../../src/electron/main/chat/tools/registry'
+import { createToolRegistry } from '../../../../src/shared/chat/tools/registry'
 import {
   kosQuery,
   kosDigest,

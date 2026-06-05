@@ -5,7 +5,7 @@
 // in PR-1d once dispatcher + custom_api.ts + mail-sync DB fixture all align.
 
 import { describe, expect, test } from 'vitest'
-import { createToolRegistry } from '../../../../src/electron/main/chat/tools/registry'
+import { createToolRegistry } from '../../../../src/shared/chat/tools/registry'
 import {
   allEmailTools,
   allAttachmentTools,

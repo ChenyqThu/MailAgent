@@ -25,8 +25,8 @@ import {
   createToolRegistry,
   type ToolDef,
   type ToolResult
-} from '../../../src/electron/main/chat/tools/registry'
-import { __resetConfirmations } from '../../../src/electron/main/chat/tools/confirmation'
+} from '../../../src/shared/chat/tools/registry'
+import { __resetConfirmations } from '../../../src/shared/chat/tools/confirmation'
 import type {
   ChatBackend,
   ChatStreamEnvelope,

@@ -15,12 +15,12 @@ import {
   __resetThrottleForTests,
   type DispatchContext,
   type ToolUseRequest
-} from '../../../../src/electron/main/chat/tools/dispatch'
+} from '../../../../src/shared/chat/tools/dispatch'
 import {
   createToolRegistry,
   type ToolDef,
   type ToolResult
-} from '../../../../src/electron/main/chat/tools/registry'
+} from '../../../../src/shared/chat/tools/registry'
 
 beforeEach(() => {
   __resetThrottleForTests()
