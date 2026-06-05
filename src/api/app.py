@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -359,6 +360,26 @@ async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONRe
     return error_envelope(code, message, http_status=status, request=request, source="cli")
 
 
+@app.exception_handler(RequestValidationError)
+async def _handle_validation_error(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """请求体/参数校验失败 (malformed JSON / 类型不符 / 缺必填) → 统一 envelope。
+
+    默认 FastAPI 返回 422 + ``{detail:[...]}`` (非本 app envelope)，HttpApi.req() 解析不出
+    error.code。映射成 E_INVALID_ARG envelope (保持 422 HTTP status，仅修 body 形状)，让所有
+    端点 (reports/jobs/email ``body: Optional[dict]`` 收 malformed 时) 的客户端拿稳定 code。
+    """
+    errors = exc.errors()
+    msg = "request validation failed"
+    if errors:
+        first = errors[0]
+        loc = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
+        first_msg = str(first.get("msg", "invalid"))
+        msg = f"{loc}: {first_msg}" if loc else first_msg
+    return error_envelope("E_INVALID_ARG", msg, http_status=422, request=request, source="cli")
+
+
 @app.exception_handler(Exception)
 async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
     """兜底: 未捕获异常 → 500 E_INTERNAL envelope (不泄漏 traceback 给客户端)。"""
@@ -388,6 +409,7 @@ from src.api.routers import (  # noqa: E402
     folder,
     jobs,
     llm,
+    reports,
 )
 
 app.include_router(email.router)
@@ -399,6 +421,7 @@ app.include_router(folder.router)
 app.include_router(ai.router)
 app.include_router(email_views.router)
 app.include_router(jobs.router)
+app.include_router(reports.router)
 
 
 @app.get("/api/health")

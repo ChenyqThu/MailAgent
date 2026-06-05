@@ -22,8 +22,11 @@
 import type {
   ReportApi,
   ReportAgentConfig,
+  ReportCadence,
+  ReportConfigPatch,
   ReportDetail,
   ReportListItem,
+  ReportRunResult,
   AdminHealthData,
   AdminStatsData,
   AIFields,
@@ -646,14 +649,48 @@ export class HttpApi implements MailApi {
     onEvent: (): (() => void) => () => undefined
   }
 
-  // Sprint 20 — 报告 Agent: serve-api 暂无 report 端点。读优雅降级（空列表 →
-  // /agents 页渲染空态，与 island/updater 同款 graceful disabled），写 notImplemented。
+  // V2.1 — 报告 Agent: serve-api /api/reports + /api/report-agents 端点（in-process
+  // ReportStore + wire.py，镜像 IPC report:*）。读优雅降级（失败返 []/null → /agents 页
+  // 空态，守 ReportApi「失败返 []/null」契约，与 ElectronApi 依赖 handler graceful 对齐）；
+  // 写经 req() 解包 envelope（成功返 data，失败 throw，镜像 ElectronApi unwrap）。
   report: ReportApi = {
-    list: (): Promise<ReportListItem[]> => Promise.resolve([]),
-    get: (): Promise<ReportDetail | null> => Promise.resolve(null),
-    getConfig: (): Promise<ReportAgentConfig[]> => Promise.resolve([]),
-    setConfig: () => notImplemented('report.setConfig'),
-    runNow: () => notImplemented('report.runNow'),
-    delete: () => notImplemented('report.delete')
+    list: async (opts?: {
+      cadence?: ReportCadence
+      agentId?: string
+      limit?: number
+    }): Promise<ReportListItem[]> => {
+      try {
+        return await this.req<ReportListItem[]>('GET', '/reports', {
+          query: { cadence: opts?.cadence, agentId: opts?.agentId, limit: opts?.limit }
+        })
+      } catch {
+        return []
+      }
+    },
+    get: async (reportId: string): Promise<ReportDetail | null> => {
+      try {
+        return await this.req<ReportDetail>('GET', `/reports/${encodeURIComponent(reportId)}`)
+      } catch {
+        return null
+      }
+    },
+    getConfig: async (): Promise<ReportAgentConfig[]> => {
+      try {
+        return await this.req<ReportAgentConfig[]>('GET', '/report-agents')
+      } catch {
+        return []
+      }
+    },
+    setConfig: (agentId: string, patch: ReportConfigPatch): Promise<ReportAgentConfig> =>
+      this.req<ReportAgentConfig>('PUT', `/report-agents/${encodeURIComponent(agentId)}`, {
+        body: patch
+      }),
+    runNow: (agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult> =>
+      this.req<ReportRunResult>('POST', `/report-agents/${encodeURIComponent(agentId)}/run`, {
+        body: opts ?? {}
+      }),
+    delete: async (reportId: string): Promise<void> => {
+      await this.req('DELETE', `/reports/${encodeURIComponent(reportId)}`)
+    }
   }
 }
