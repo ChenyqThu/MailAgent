@@ -205,7 +205,13 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
 
   while (iter < MAX_ITER) {
     iter++
-    if (args.ac.signal.aborted) break
+    if (args.ac.signal.aborted) {
+      // abort 命中（含本增量新增的 await resolveConfig 让步窗口被取消 / 轮间取消）——
+      // 与 for-await 内/后、dispatch 后的 abort 处理一致，标 aborted 并 return，而非
+      // 落到 while 末尾的 E_MAX_ITER 误报（codex steps3-4 review MEDIUM-1）。
+      await args.platform.persist.abortStreamingMessages(args.sessionId)
+      return
+    }
 
     const collected: ToolUseRequest[] = []
     let iterText = ''
@@ -273,6 +279,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             forward(event)
             await args.platform.persist.finalizeMessage(args.assistantMessageId, {
               status: 'error',
+              content: buffer,
               errorMessage: event.message,
               model: modelSeen
             })
@@ -295,6 +302,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
       forward({ type: 'error', code: 'E_BACKEND_CRASH', message })
       await args.platform.persist.finalizeMessage(args.assistantMessageId, {
         status: 'error',
+        content: buffer,
         errorMessage: message,
         model: modelSeen
       })
@@ -326,6 +334,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
       })
       await args.platform.persist.finalizeMessage(args.assistantMessageId, {
         status: 'error',
+        content: buffer,
         errorMessage: 'cost cap exceeded',
         model: modelSeen
       })
@@ -394,6 +403,7 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
   })
   await args.platform.persist.finalizeMessage(args.assistantMessageId, {
     status: 'error',
+    content: buffer,
     errorMessage: `max iterations (${MAX_ITER}) exceeded`,
     model: modelSeen
   })

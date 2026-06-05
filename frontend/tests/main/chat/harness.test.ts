@@ -381,6 +381,32 @@ describe('runHarness — terminal conditions', () => {
     expect(getMessage(assistantMessageId)?.status).toBe('aborted')
   })
 
+  test('abort before first iteration → aborted, not E_MAX_ITER 误报 (codex MEDIUM-1)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const ac = new AbortController()
+    ac.abort('pre-aborted') // 模拟 http 下 await resolveConfig 让步窗口内被 chat:abort 取消
+    const backend = scriptedBackend([
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const sink = recordingSink()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      sink,
+      platform: electronChatPlatform,
+      registry: createToolRegistry()
+    })
+    // while 顶部 abort 检测应标 aborted + return，不落到末尾 E_MAX_ITER。
+    expect(getMessage(assistantMessageId)?.status).toBe('aborted')
+    expect(sink.events.find((e) => e.type === 'error')).toBeUndefined()
+  })
+
   test('backend yields error event → harness propagates + flips assistant to error', async () => {
     const { sessionId, assistantMessageId } = seedAssistantTurn()
     const backend = scriptedBackend([

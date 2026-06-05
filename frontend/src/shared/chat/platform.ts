@@ -56,8 +56,11 @@ export interface ChatPersistPort {
    *  ~1/s 合并 PATCH（终态由 finalizeMessage flush）。 */
   streamContent(messageId: number, content: string): void
   /** 终态落库（complete/error/aborted + token/cost/model/metadata）。await。
-   *  http 实现先取消该 messageId 待发的 debounced streamContent 增量再写，
-   *  保证 last-write 是完整正文，不被迟到的旧增量覆盖。 */
+   *  http 实现**必须先 flush（落库）**该 messageId 待发的 debounced streamContent
+   *  增量、**再**写终态 patch —— 不丢最后一段 partial 正文（codex review MEDIUM-2；
+   *  「取消未发增量」会丢 error/cost/max_iter 终态前的尾段）。另：harness 所有终态
+   *  patch 均带 `content=buffer`（complete/error/cost/max_iter），即使 http 实现误
+   *  cancel pending 增量也不丢正文 —— 双保险。 */
   finalizeMessage(messageId: number, patch: UpdateMessagePatch): Promise<void>
   deleteMessagesFromId(sessionId: number, fromMessageId: number): Promise<number>
   abortStreamingMessages(sessionId: number): Promise<number>
