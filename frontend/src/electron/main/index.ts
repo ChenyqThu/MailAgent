@@ -14,7 +14,8 @@ import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
 import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
 import { registerChatBackend } from './chat/registry'
-import { CustomApiBackend } from './chat/backends/custom_api'
+import { createCustomApiBackend } from '@shared/chat/backends/custom_api'
+import { electronChatPlatform } from './chat/electron_platform'
 import { NotionAgentBackend } from './chat/backends/notion_agent'
 // Sprint 19 PR-1d.1 — populate agent harness tool catalog at boot.
 import { defaultToolRegistry } from '@shared/chat/tools/registry'
@@ -322,7 +323,9 @@ app.whenReady().then(async () => {
   // Sprint 4 §2.1 — AI chat IPC stream bridge + the two production
   // backends (Custom API via Anthropic Messages SSE; Notion Agent via
   // `notion-agent chat --stream` subprocess, agent bound in account.json).
-  registerChatBackend(new CustomApiBackend())
+  // 3b-1：custom-api 下沉 shared，factory 注入 electronChatPlatform（模型板①=本地 fetch
+  // 注入 key）。notion-agent execa 留 main（3b-2 才 serve-api 复刻），仍 new NotionAgentBackend()。
+  registerChatBackend(createCustomApiBackend(electronChatPlatform))
   registerChatBackend(new NotionAgentBackend())
   // Sprint 19 PR-1d.1 — populate the agent harness tool registry once at
   // boot. The harness only consults `defaultToolRegistry` when the

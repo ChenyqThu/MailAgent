@@ -99,16 +99,47 @@ export interface ChatInfraPlatform {
   prefetchSenderDigest(senderAddr: string): void
 }
 
-// ─── 模型板 ChatModelPlatform（3b 定形，此处仅占位说明）───────────────────
-// custom-api SSE 解析下沉 shared 后调 llmFetch(req) → Response（body = 原始
-// Anthropic/OpenAI SSE，key 注入在实现侧）；notion-agent 子进程经 serve-api
-// notionAgentStream(req) → AsyncIterable<ChatStreamEvent>；getCachedSenderDigest
-// （custom_api buildSystemBlocks 下沉后与 prefetchSenderDigest 配对）。
-// 3a 不写空 interface —— 其唯一消费方（两后端）3a 留 main 经 args.backend 注入，
-// 不调 platform。3b custom_api/notion_agent 下沉时按真实形状定义。
+// ─── 模型板 ChatModelPlatform（3b-1 定形：custom_api 下沉消费）─────────────
+// custom-api SSE 解析下沉 shared/chat/backends/custom_api.ts 后，经此访问 3 类外部
+// 能力：key 注入的 LLM fetch（key 永不进 shared）+ L1 hot block 的 sender digest 同步
+// 读 + system prompt/protocol 路由的配置快照。electron 实现直调 llm_settings/kos cache/
+// config getter（字节级零回归）；http 实现 fetch serve-api /api/chat/llm-proxy（注入 key 透传）。
 
-// ─── 工具板 ChatToolPlatform（3b 定形，此处仅占位说明）───────────────────
-// 工具集（email_search/get/flag/draft/attachment/kos_query/…）+ saveToKos。
-// 未来海量工具补充的落点。3a 不写 —— tools/builtin 经 args.registry 注入、
-// kos_save 经 handlers/chat 的 chat:saveToKos channel 直调，均留 main 不调
-// platform。3b tools/builtin + kos_save 下沉时定义。
+/** custom-api 上游 LLM 请求（shared 构造 body + 判 protocol，实现侧注入 key + 选 endpoint + fetch）。 */
+export interface LlmFetchRequest {
+  /** shared 据 model 前缀判定：'anthropic'→/v1/messages(x-api-key+anthropic-version)；
+   *  'openai'→/v1/chat/completions(Bearer)。实现侧据此选 endpoint + header 风格。 */
+  protocol: 'anthropic' | 'openai'
+  /** shared 已构造好的上游请求体（model/max_tokens/system/messages/tools/stream:true）。 */
+  body: Record<string, unknown>
+  /** 已组合 deadline+parent 的取消信号（shared 持有 timeout 逻辑，实现侧只透传给 fetch）。 */
+  signal: AbortSignal
+}
+
+/** custom-api buildSystemBlocks + protocol 路由需要的配置快照（同步读，session 级）。 */
+export interface ChatModelConfig {
+  /** req.model 为 null 时的默认（electron: getLlmModel()=LLM_MODEL/claude-sonnet-4-6）。 */
+  defaultModel: string
+  /** 注入 KOS 使用指南块（buildKosGuidanceBlock gate；MAILAGENT_KOS_CONSUMER_ENABLED）。 */
+  kosConsumerEnabled: boolean
+  /** 注入 L1 sender digest hot block gate（MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED）。 */
+  kosL1HotBlockEnabled: boolean
+}
+
+export interface ChatModelPlatform {
+  /** 发起 LLM 上游请求 → 原始 SSE Response（body 由 shared custom_api 解析）。key 不进 shared。
+   *  返回**未检查**的 Response（shared 查 !ok/!body 分类 E_QUOTA/E_UPSTREAM，避免 body 泄漏）；
+   *  key 缺失 → throw Error&{code:'E_NO_LLM_KEY'}；fetch 失败 → 自然 throw（shared catch 读
+   *  code 归 E_NO_LLM_KEY，否则 E_UPSTREAM）。 */
+  llmFetch(req: LlmFetchRequest): Promise<Response>
+  /** L1 hot block 同步读 sender digest cache（与 ChatInfraPlatform.prefetchSenderDigest 配对）。
+   *  electron: getCachedSenderDigest(addr)；http: 暂返 null（L1 默认 OFF，后续接）。 */
+  getCachedSenderDigest(senderAddr: string): string | null
+  /** custom_api 构造 system prompt + protocol 路由的配置快照（同步）。 */
+  modelConfig(): ChatModelConfig
+}
+
+// ─── 模型板②/工具板（仍占位，3b-2/3b-4 定形）──────────────────────────────
+// ChatNotionAgentPlatform（notionAgentStream，仅 http 实现，electron execa 留 main）→ 3b-2。
+// ChatToolPlatform（8 读+3 写原语 / kosCallTool / kosConfig / saveToKos，工具逻辑下沉
+// shared createBuiltinTools 单一真源）→ 3b-4。按「有消费方才定」纪律，下沉对应模块时定义。

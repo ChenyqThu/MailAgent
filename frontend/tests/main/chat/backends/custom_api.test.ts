@@ -9,14 +9,9 @@
 // the protocol surface cleanly.
 
 import { describe, expect, test } from 'vitest'
-import { __testing } from '../../../../src/electron/main/chat/backends/custom_api'
+import { __testing } from '../../../../src/shared/chat/backends/custom_api'
 import type { ChatStreamEvent } from '../../../../src/shared/chat/types'
-import {
-  __resetCacheForTests as resetSenderDigestCache,
-  __setCacheClientForTests as setSenderDigestClient,
-  prefetchSenderDigest
-} from '../../../../src/electron/main/kos/sender_digest_cache'
-import type { KOSClient } from '../../../../src/electron/main/kos/client'
+import type { ChatModelConfig } from '../../../../src/shared/chat/platform'
 
 const {
   buildSystemBlocks,
@@ -26,9 +21,23 @@ const {
   processAnthropicEvent
 } = __testing
 
+// 3b-1：buildSystemBlocks/buildSystemPrompt 下沉 shared 后接 cfg + getCachedSenderDigest
+// 参数（取代直读 env + main 的 sender_digest_cache）。测试用 mock cfg + getDigest 注入 ——
+// L1 注入逻辑（flag gate + digest 截断）在此层验，cache miss/null-entry 的差异已下沉到
+// sender_digest_cache 自己的测试（本层只看 digest: string | null）。
+function cfg(opts?: Partial<ChatModelConfig>): ChatModelConfig {
+  return {
+    defaultModel: 'claude-sonnet-4-6',
+    kosConsumerEnabled: false,
+    kosL1HotBlockEnabled: false,
+    ...opts
+  }
+}
+const noDigest = (): string | null => null
+
 describe('buildSystemBlocks — cache_control breakpoint', () => {
   test('null ctx → single stable block with cache_control:ephemeral', () => {
-    const blocks = buildSystemBlocks(null)
+    const blocks = buildSystemBlocks(null, cfg(), noDigest)
     expect(blocks).toHaveLength(1)
     expect(blocks[0]?.type).toBe('text')
     expect(blocks[0]?.cache_control).toEqual({ type: 'ephemeral' })
@@ -36,15 +45,19 @@ describe('buildSystemBlocks — cache_control breakpoint', () => {
   })
 
   test('PR-2f: splits into [stable, ctx] blocks; cache_control only on stable', () => {
-    const blocks = buildSystemBlocks({
-      internalId: 42,
-      subject: 'Q3 OKR review',
-      senderName: 'Bob',
-      senderAddr: 'bob@acme.com',
-      dateIso: '2026-05-22T10:00:00Z',
-      bodyMarkdown: 'Hello world',
-      notionPageId: null
-    })
+    const blocks = buildSystemBlocks(
+      {
+        internalId: 42,
+        subject: 'Q3 OKR review',
+        senderName: 'Bob',
+        senderAddr: 'bob@acme.com',
+        dateIso: '2026-05-22T10:00:00Z',
+        bodyMarkdown: 'Hello world',
+        notionPageId: null
+      },
+      cfg(),
+      noDigest
+    )
     expect(blocks).toHaveLength(2)
     // Block 1: stable prefix (STATIC header) with cache_control
     expect(blocks[0]?.cache_control).toEqual({ type: 'ephemeral' })
@@ -59,17 +72,21 @@ describe('buildSystemBlocks — cache_control breakpoint', () => {
   })
 
   test('buildSystemPrompt stays available for non-blocks consumers (legacy combined form)', () => {
-    expect(typeof buildSystemPrompt(null)).toBe('string')
+    expect(typeof buildSystemPrompt(null, cfg(), noDigest)).toBe('string')
     // 含 ctx 时 legacy form 把 stable + ctx 拼一起
-    const combined = buildSystemPrompt({
-      internalId: 1,
-      subject: 'merged',
-      senderName: null,
-      senderAddr: null,
-      dateIso: null,
-      bodyMarkdown: 'body',
-      notionPageId: null
-    })
+    const combined = buildSystemPrompt(
+      {
+        internalId: 1,
+        subject: 'merged',
+        senderName: null,
+        senderAddr: null,
+        dateIso: null,
+        bodyMarkdown: 'body',
+        notionPageId: null
+      },
+      cfg(),
+      noDigest
+    )
     expect(combined).toContain('You are the AI assistant')
     expect(combined).toContain('merged')
     expect(combined).toContain('body')
@@ -90,84 +107,43 @@ describe('buildSystemBlocks — PR-2f L1 hot block', () => {
     notionPageId: null
   }
 
-  function fakeClient(
-    query: (q: string, opts?: { limit?: number; expand?: boolean }) => Promise<unknown[]>,
-    configured: boolean = true
-  ): KOSClient {
-    return { query, configured } as unknown as KOSClient
-  }
-
-  test('flag OFF → no L1 even if cache has digest', async () => {
-    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
-    resetSenderDigestCache()
-    setSenderDigestClient(
-      fakeClient(async () => [
-        { slug: 'people/bob-acme-com', chunk_text: 'CTO at Acme', score: 0.9 }
-      ])
-    )
-    await prefetchSenderDigest('bob@acme.com')
-
-    const blocks = buildSystemBlocks(ctx)
+  test('flag OFF → no L1 even if digest available', () => {
+    const blocks = buildSystemBlocks(ctx, cfg({ kosL1HotBlockEnabled: false }), () => 'CTO at Acme')
     expect(blocks[0]?.text).not.toContain('KOS sender digest')
     expect(blocks[0]?.text).not.toContain('CTO at Acme')
-    setSenderDigestClient(null)
   })
 
-  test('flag ON + cache hit → injects L1 hot block into stable prefix', async () => {
-    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
-    resetSenderDigestCache()
-    setSenderDigestClient(
-      fakeClient(async () => [
-        { slug: 'people/bob-acme-com', chunk_text: 'CTO at Acme since 2024', score: 0.95 }
-      ])
+  test('flag ON + digest hit → injects L1 hot block into stable prefix', () => {
+    const blocks = buildSystemBlocks(
+      ctx,
+      cfg({ kosL1HotBlockEnabled: true }),
+      () => 'CTO at Acme since 2024'
     )
-    await prefetchSenderDigest('bob@acme.com')
-
-    const blocks = buildSystemBlocks(ctx)
     expect(blocks[0]?.text).toContain('--- KOS sender digest ---')
     expect(blocks[0]?.text).toContain('sender: bob@acme.com')
     expect(blocks[0]?.text).toContain('CTO at Acme since 2024')
     expect(blocks[0]?.cache_control).toEqual({ type: 'ephemeral' })
     expect(blocks[1]?.text).toContain('hello')
-    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
-    setSenderDigestClient(null)
   })
 
-  test('flag ON + cache miss → no L1 (graceful no-injection)', () => {
-    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
-    resetSenderDigestCache()
-
-    const blocks = buildSystemBlocks(ctx)
+  test('flag ON + digest null (cache miss / KOS no hits) → no L1 (graceful)', () => {
+    const blocks = buildSystemBlocks(ctx, cfg({ kosL1HotBlockEnabled: true }), () => null)
     expect(blocks[0]?.text).not.toContain('KOS sender digest')
-    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
   })
 
-  test('flag ON + cache null entry (KOS returned no hits) → no L1', async () => {
-    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
-    resetSenderDigestCache()
-    setSenderDigestClient(fakeClient(async () => []))
-    await prefetchSenderDigest('bob@acme.com')
-
-    const blocks = buildSystemBlocks(ctx)
-    expect(blocks[0]?.text).not.toContain('KOS sender digest')
-    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
-    setSenderDigestClient(null)
-  })
-
-  test('flag ON + huge digest truncated to ≤ 4000 chars + (truncated) marker', async () => {
-    process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED = 'true'
-    resetSenderDigestCache()
+  test('flag ON + huge digest truncated to ≤ 4000 chars + (truncated) marker', () => {
     const big = 'x'.repeat(8000)
-    setSenderDigestClient(
-      fakeClient(async () => [{ slug: 'people/x', chunk_text: big, score: 0.9 }])
-    )
-    await prefetchSenderDigest('bob@acme.com')
-
-    const blocks = buildSystemBlocks(ctx)
+    const blocks = buildSystemBlocks(ctx, cfg({ kosL1HotBlockEnabled: true }), () => big)
     expect(blocks[0]?.text).toContain('--- KOS sender digest ---')
     expect(blocks[0]?.text).toContain('... (truncated)')
-    delete process.env.MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED
-    setSenderDigestClient(null)
+  })
+
+  test('kosConsumerEnabled gates the KOS guidance block in the stable prefix', () => {
+    // 3b-1：buildKosGuidanceBlock 由 cfg.kosConsumerEnabled 控（取代旧 isKosConsumerEnabled()）。
+    const on = buildSystemBlocks(null, cfg({ kosConsumerEnabled: true }), noDigest)
+    expect(on[0]?.text).toContain('KOS knowledge brain')
+    const off = buildSystemBlocks(null, cfg({ kosConsumerEnabled: false }), noDigest)
+    expect(off[0]?.text).not.toContain('KOS knowledge brain')
   })
 })
 
@@ -191,9 +167,7 @@ describe('decorateToolsWithCacheControl', () => {
   })
 
   test('does not mutate the caller-provided tools array (defensive copy)', () => {
-    const tools = [
-      { name: 'a', description: 'tool a', input_schema: { type: 'object' } }
-    ]
+    const tools = [{ name: 'a', description: 'tool a', input_schema: { type: 'object' } }]
     decorateToolsWithCacheControl(tools)
     expect((tools[0] as { cache_control?: unknown }).cache_control).toBeUndefined()
   })
@@ -270,7 +244,10 @@ describe('processAnthropicEvent — text streaming (legacy path unchanged)', () 
 })
 
 describe('processAnthropicEvent — tool_use accumulation (Sprint 19)', () => {
-  function feed(events: unknown[]): { state: ReturnType<typeof createStreamState>; emitted: ChatStreamEvent[] } {
+  function feed(events: unknown[]): {
+    state: ReturnType<typeof createStreamState>
+    emitted: ChatStreamEvent[]
+  } {
     const state = createStreamState('claude-sonnet-4-6')
     const emitted: ChatStreamEvent[] = []
     for (const e of events) {
@@ -286,9 +263,21 @@ describe('processAnthropicEvent — tool_use accumulation (Sprint 19)', () => {
         index: 0,
         content_block: { type: 'tool_use', id: 'toolu_01abc', name: 'email_search' }
       },
-      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"sub' } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: 'ject_contains":"' } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: 'q3"}' } },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"sub' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: 'ject_contains":"' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: 'q3"}' }
+      },
       { type: 'content_block_stop', index: 0 }
     ])
     expect(emitted).toEqual([
@@ -329,8 +318,16 @@ describe('processAnthropicEvent — tool_use accumulation (Sprint 19)', () => {
         index: 1,
         content_block: { type: 'tool_use', id: 'toolu_b', name: 'email_get' }
       },
-      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"q":"a"}' } },
-      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"id":42}' } },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"q":"a"}' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'input_json_delta', partial_json: '{"id":42}' }
+      },
       { type: 'content_block_stop', index: 0 },
       { type: 'content_block_stop', index: 1 }
     ])
@@ -346,13 +343,21 @@ describe('processAnthropicEvent — tool_use accumulation (Sprint 19)', () => {
 
   test('text_delta and tool_use can interleave in the same turn', () => {
     const { emitted, state } = feed([
-      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Let me check. ' } },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Let me check. ' }
+      },
       {
         type: 'content_block_start',
         index: 1,
         content_block: { type: 'tool_use', id: 'toolu_a', name: 'email_search' }
       },
-      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'input_json_delta', partial_json: '{}' }
+      },
       { type: 'content_block_stop', index: 1 }
     ])
     expect(emitted[0]).toEqual({ type: 'chunk', delta: 'Let me check. ' })
@@ -367,7 +372,11 @@ describe('processAnthropicEvent — tool_use accumulation (Sprint 19)', () => {
         index: 0,
         content_block: { type: 'tool_use', id: 'toolu_bad', name: 'email_search' }
       },
-      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{not valid json' } },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{not valid json' }
+      },
       { type: 'content_block_stop', index: 0 }
     ])
     expect(emitted).toHaveLength(1)

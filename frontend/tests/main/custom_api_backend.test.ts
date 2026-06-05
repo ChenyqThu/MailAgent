@@ -1,33 +1,27 @@
 // Sprint 4 Task #11 — Custom API backend behavioural contract.
 //
-// Exercises the Anthropic SSE parser + the high-level ChatBackend
-// `stream()` contract by mocking `global.fetch` and feeding the parser
-// known SSE chunks. No real network — all happy-dom-free, pure node.
+// V2.1 阶段 3 3b-1：custom-api 解析下沉 shared，HTTP fetch（注入 key）下沉
+// ChatModelPlatform.llmFetch。本测试改为注入 mock ChatModelPlatform（llmFetch 返回
+// 预设 SSE Response / throw），取代旧的 mock global.fetch + getLlmApiKey —— shared
+// custom_api 不再碰 key/fetch，seam 在 platform.llmFetch。
 //
 // Covered:
-//   - SSE chunk parser (helper)
-//   - Anthropic message conversion (helper)
+//   - SSE chunk parser (helper, __testing 纯逻辑)
+//   - Anthropic message conversion (helper, __testing 纯逻辑)
 //   - happy path: message_start → content_block_delta(×N) → message_delta → message_stop
 //     → orchestrator-shaped events (chunk × N, usage, done)
-//   - upstream HTTP 429 → ErrorEvent(E_QUOTA)
-//   - missing API key → ErrorEvent(E_NO_LLM_KEY)
-//   - non-Anthropic model → ErrorEvent(E_MODEL_UNSUPPORTED)
-//   - abort before send → no events emitted
+//   - upstream HTTP 429 → ErrorEvent(E_QUOTA) / 500 → E_UPSTREAM
+//   - llmFetch throws {code:E_NO_LLM_KEY} → ErrorEvent(E_NO_LLM_KEY)
+//   - non-Anthropic model → ErrorEvent(E_MODEL_UNSUPPORTED)（llmFetch 不被调）
+//   - abort before send → E_ABORTED（llmFetch 不被调）
 //   - mid-stream abort → loop exits, no `done` event
 
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { CustomApiBackend, __testing } from '../../src/electron/main/chat/backends/custom_api'
+import { createCustomApiBackend, __testing } from '../../src/shared/chat/backends/custom_api'
+import type { ChatModelPlatform } from '../../src/shared/chat/platform'
 import type { ChatStreamEvent } from '../../src/shared/chat/types'
 import type { ChatMessage } from '../../src/electron/main/chat_db'
-
-vi.mock('../../src/electron/main/llm_settings', () => ({
-  getLlmApiKey: vi.fn(async () => 'cr_TESTING_KEY'),
-  getLlmBaseUrl: () => 'https://crs.example.com',
-  getLlmModel: () => 'claude-sonnet-4-6'
-}))
-
-import { getLlmApiKey } from '../../src/electron/main/llm_settings'
 
 function userMsg(content: string, id = 1): ChatMessage {
   return {
@@ -44,6 +38,21 @@ function userMsg(content: string, id = 1): ChatMessage {
     metadata: null,
     created_at: Date.now(),
     updated_at: Date.now()
+  }
+}
+
+/** Inject a mock ChatModelPlatform — llmFetch is the test seam (returns a
+ *  preset SSE Response or throws). getCachedSenderDigest/modelConfig are fixed
+ *  defaults (custom-api default model = claude-sonnet-4-6 → anthropic path). */
+function makePlatform(llmFetch: ChatModelPlatform['llmFetch']): ChatModelPlatform {
+  return {
+    llmFetch,
+    getCachedSenderDigest: () => null,
+    modelConfig: () => ({
+      defaultModel: 'claude-sonnet-4-6',
+      kosConsumerEnabled: false,
+      kosL1HotBlockEnabled: false
+    })
   }
 }
 
@@ -83,15 +92,7 @@ async function collect(
   return out
 }
 
-let originalFetch: typeof fetch
-
-beforeEach(() => {
-  originalFetch = global.fetch
-  vi.mocked(getLlmApiKey).mockResolvedValue('cr_TESTING_KEY')
-})
-
 afterEach(() => {
-  global.fetch = originalFetch
   vi.restoreAllMocks()
 })
 
@@ -137,6 +138,7 @@ describe('CustomApiBackend — buildAnthropicMessages', () => {
       ],
       model: null,
       agentPageId: null,
+      emailContext: null,
       signal: new AbortController().signal
     })
     expect(messages).toEqual([
@@ -156,6 +158,7 @@ describe('CustomApiBackend — buildAnthropicMessages', () => {
       ],
       model: null,
       agentPageId: null,
+      emailContext: null,
       signal: new AbortController().signal
     })
     expect(messages.map((m) => m.role)).toEqual(['user', 'user'])
@@ -174,6 +177,7 @@ describe('CustomApiBackend — buildAnthropicMessages', () => {
       ],
       model: null,
       agentPageId: null,
+      emailContext: null,
       signal: new AbortController().signal
     })
     expect(messages[messages.length - 1].content).toContain('[tool: lookup')
@@ -185,6 +189,7 @@ describe('CustomApiBackend — buildAnthropicMessages', () => {
       history: [],
       model: null,
       agentPageId: null,
+      emailContext: null,
       signal: new AbortController().signal
     })
     expect(messages).toHaveLength(1)
@@ -218,19 +223,23 @@ describe('CustomApiBackend — model gating', () => {
 
   test('stream emits E_MODEL_UNSUPPORTED only for unknown model families', async () => {
     // Sprint 19 §D #4 — gpt-* now routes to openaiStream (not unsupported).
-    // The unsupported envelope kicks in for genuinely unknown families.
-    const backend = new CustomApiBackend()
+    // The unsupported envelope kicks in for genuinely unknown families; llmFetch
+    // is never reached (routing short-circuits before send).
+    const llmFetch = vi.fn(async () => sseStream([]))
+    const backend = createCustomApiBackend(makePlatform(llmFetch))
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: 'llama-3-70b',
         agentPageId: null,
+        emailContext: null,
         signal: new AbortController().signal
       })
     )
     expect(events).toEqual([
       expect.objectContaining({ type: 'error', code: 'E_MODEL_UNSUPPORTED' })
     ])
+    expect(llmFetch).not.toHaveBeenCalled()
   })
 })
 
@@ -248,13 +257,13 @@ describe('CustomApiBackend — happy path', () => {
       'event: message_stop\n',
       'data: {"type":"message_stop"}\n\n'
     ]
-    global.fetch = vi.fn(async () => sseStream(sse)) as unknown as typeof fetch
-    const backend = new CustomApiBackend()
+    const backend = createCustomApiBackend(makePlatform(async () => sseStream(sse)))
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
         agentPageId: null,
+        emailContext: null,
         signal: new AbortController().signal
       })
     )
@@ -279,13 +288,13 @@ describe('CustomApiBackend — happy path', () => {
       'event: error\n',
       'data: {"type":"error","error":{"type":"overloaded","message":"servers busy"}}\n\n'
     ]
-    global.fetch = vi.fn(async () => sseStream(sse)) as unknown as typeof fetch
-    const backend = new CustomApiBackend()
+    const backend = createCustomApiBackend(makePlatform(async () => sseStream(sse)))
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
         agentPageId: null,
+        emailContext: null,
         signal: new AbortController().signal
       })
     )
@@ -296,14 +305,18 @@ describe('CustomApiBackend — happy path', () => {
 })
 
 describe('CustomApiBackend — error paths', () => {
-  test('missing API key → E_NO_LLM_KEY', async () => {
-    vi.mocked(getLlmApiKey).mockResolvedValue(null)
-    const backend = new CustomApiBackend()
+  test('llmFetch throws {code:E_NO_LLM_KEY} → E_NO_LLM_KEY', async () => {
+    const backend = createCustomApiBackend(
+      makePlatform(async () => {
+        throw Object.assign(new Error('LLM API key not configured'), { code: 'E_NO_LLM_KEY' })
+      })
+    )
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
         agentPageId: null,
+        emailContext: null,
         signal: new AbortController().signal
       })
     )
@@ -311,15 +324,15 @@ describe('CustomApiBackend — error paths', () => {
   })
 
   test('HTTP 429 → E_QUOTA', async () => {
-    global.fetch = vi.fn(
-      async () => new Response('quota exceeded', { status: 429 })
-    ) as unknown as typeof fetch
-    const backend = new CustomApiBackend()
+    const backend = createCustomApiBackend(
+      makePlatform(async () => new Response('quota exceeded', { status: 429 }))
+    )
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
         agentPageId: null,
+        emailContext: null,
         signal: new AbortController().signal
       })
     )
@@ -328,15 +341,15 @@ describe('CustomApiBackend — error paths', () => {
   })
 
   test('HTTP 500 → E_UPSTREAM', async () => {
-    global.fetch = vi.fn(
-      async () => new Response('boom', { status: 500 })
-    ) as unknown as typeof fetch
-    const backend = new CustomApiBackend()
+    const backend = createCustomApiBackend(
+      makePlatform(async () => new Response('boom', { status: 500 }))
+    )
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
         agentPageId: null,
+        emailContext: null,
         signal: new AbortController().signal
       })
     )
@@ -344,16 +357,18 @@ describe('CustomApiBackend — error paths', () => {
     if (events[0].type === 'error') expect(events[0].code).toBe('E_UPSTREAM')
   })
 
-  test('network thrown error → E_UPSTREAM', async () => {
-    global.fetch = vi.fn(async () => {
-      throw new Error('econnrefused')
-    }) as unknown as typeof fetch
-    const backend = new CustomApiBackend()
+  test('llmFetch network throw (no code) → E_UPSTREAM', async () => {
+    const backend = createCustomApiBackend(
+      makePlatform(async () => {
+        throw new Error('econnrefused')
+      })
+    )
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
         agentPageId: null,
+        emailContext: null,
         signal: new AbortController().signal
       })
     )
@@ -364,35 +379,36 @@ describe('CustomApiBackend — error paths', () => {
     }
   })
 
-  test('abort before send → no events emitted', async () => {
-    global.fetch = vi.fn(async () => {
+  test('abort before send → E_ABORTED (llmFetch not called)', async () => {
+    const llmFetch = vi.fn(async () => {
       throw new Error('should not be called')
-    }) as unknown as typeof fetch
+    })
     const ac = new AbortController()
     ac.abort()
-    const backend = new CustomApiBackend()
+    const backend = createCustomApiBackend(makePlatform(llmFetch))
     const events = await collect(
       backend.stream({
         history: [userMsg('hi')],
         model: null,
         agentPageId: null,
+        emailContext: null,
         signal: ac.signal
       })
     )
-    // The hook only emits a hint if the upstream HTTP call begins; here we
-    // short-circuit before fetch, surfacing an E_ABORTED ErrorEvent.
+    // Short-circuit before llmFetch, surfacing an E_ABORTED ErrorEvent.
     expect(events).toEqual([expect.objectContaining({ type: 'error', code: 'E_ABORTED' })])
+    expect(llmFetch).not.toHaveBeenCalled()
   })
 
   test('mid-stream abort exits the read loop cleanly (no done event)', async () => {
     const { response, close } = neverEndingStream()
-    global.fetch = vi.fn(async () => response) as unknown as typeof fetch
     const ac = new AbortController()
-    const backend = new CustomApiBackend()
+    const backend = createCustomApiBackend(makePlatform(async () => response))
     const it = backend.stream({
       history: [userMsg('hi')],
       model: null,
       agentPageId: null,
+      emailContext: null,
       signal: ac.signal
     })
     const events: ChatStreamEvent[] = []

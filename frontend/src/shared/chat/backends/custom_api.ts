@@ -23,26 +23,28 @@
 //     events 含 `choices[0].delta` (content / tool_calls index-based merge)
 //     + `usage` (last chunk) + `[DONE]` sentinel
 
-import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../../llm_settings'
-import { isKosConsumerEnabled, isKosL1HotBlockEnabled } from '../config'
-import { getCachedSenderDigest } from '../../kos/sender_digest_cache'
+// V2.1 阶段 3 — 3b-1：custom-api SSE 解析下沉 shared（B-pure-unified，UI 进程跑）。
+// 外部能力经注入的 ChatModelPlatform（createCustomApiBackend 闭包）：llmFetch（key 注入
+// 在实现侧，本文件不碰 key/baseUrl/UA）+ getCachedSenderDigest（L1 hot block）+ modelConfig
+// （defaultModel/kos flags）。本文件零 Electron/Node import（不变式 1，pnpm build:web 验）。
+// 解析逻辑（parseSse/processAnthropic/processOpenAi/buildMessages/buildSystemBlocks）单一
+// 真源在此，electron + http 共用。
 import type {
   BackendToolDescriptor,
   ChatBackend,
   ChatStreamEvent,
   ChatStreamRequest,
   EmailContext
-} from '@shared/chat/types'
+} from '../types'
+import type { ChatModelConfig, ChatModelPlatform } from '../platform'
 
 // Anthropic `max_tokens` caps the model's RESPONSE length (not input).
 // Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
 // typical token density.
 const MAX_OUTPUT_TOKENS = 64000
-// CRS/Cloudflare is picky about user agents; mirror the browser-like UA used by
-// working CRS scripts. Keep ordinary cache_control, but avoid anthropic-beta on
-// CRS Sonnet because extended-cache/context betas can trip account-level locks.
-const CRS_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36'
+// 注：CRS user-agent（CRS/Cloudflare 挑剔 UA）+ baseUrl + key 注入 = ChatModelPlatform.llmFetch
+// 实现侧职责（electron_platform.ts / serve-api llm-proxy），不在 shared。REQUEST_DEADLINE_MS
+// 留 shared（timeout 逻辑统一），实现侧只透传 shared 组合后的 signal。
 const REQUEST_DEADLINE_MS = 60_000
 
 // Sprint 19 — Anthropic message content can be a plain string (legacy
@@ -142,8 +144,12 @@ interface AnthropicToolBlock extends BackendToolDescriptor {
  *  cache_control 始终在 block 1 (stable) 末 — Anthropic prompt cache 是
  *  prefix match, breakpoint 之后的 block (block 2) 自然不参与 cache.
  */
-function buildSystemBlocks(ctx: EmailContext | null): AnthropicSystemBlock[] {
-  const stableText = buildStableSystemPrompt(ctx)
+function buildSystemBlocks(
+  ctx: EmailContext | null,
+  cfg: ChatModelConfig,
+  getCachedSenderDigest: (senderAddr: string) => string | null
+): AnthropicSystemBlock[] {
+  const stableText = buildStableSystemPrompt(ctx, cfg, getCachedSenderDigest)
   const stableBlock: AnthropicSystemBlock = {
     type: 'text',
     text: stableText,
@@ -234,13 +240,17 @@ function buildKosGuidanceBlock(): string {
  *      KOS returned a hit)
  *  Cache miss / null / flag off → no injection (graceful degrade).
  */
-function buildStableSystemPrompt(ctx: EmailContext | null): string {
+function buildStableSystemPrompt(
+  ctx: EmailContext | null,
+  cfg: ChatModelConfig,
+  getCachedSenderDigest: (senderAddr: string) => string | null
+): string {
   let text = buildStaticSystemHeader()
   // KOS consumer 开启时注入使用指南（静态、可缓存；与 allKosTools 注册同 gate）。
-  if (isKosConsumerEnabled()) {
+  if (cfg.kosConsumerEnabled) {
     text += '\n\n' + buildKosGuidanceBlock()
   }
-  if (isKosL1HotBlockEnabled() && ctx?.senderAddr) {
+  if (cfg.kosL1HotBlockEnabled && ctx?.senderAddr) {
     const digest = getCachedSenderDigest(ctx.senderAddr)
     if (typeof digest === 'string' && digest.length > 0) {
       const trimmed = digest.length > 4000 ? digest.slice(0, 4000) + '\n... (truncated)' : digest
@@ -297,8 +307,12 @@ function buildEmailContextSection(ctx: EmailContext): string {
 
 /** Legacy combined form kept for tests / external readers that still call
  *  buildSystemPrompt directly. New code should use buildSystemBlocks. */
-function buildSystemPrompt(ctx: EmailContext | null): string {
-  const stable = buildStableSystemPrompt(ctx)
+function buildSystemPrompt(
+  ctx: EmailContext | null,
+  cfg: ChatModelConfig,
+  getCachedSenderDigest: (senderAddr: string) => string | null
+): string {
+  const stable = buildStableSystemPrompt(ctx, cfg, getCachedSenderDigest)
   if (!ctx) return stable
   const section = buildEmailContextSection(ctx)
   return section ? `${stable}\n\n${section}` : stable
@@ -786,19 +800,15 @@ function processOpenAiEvent(parsed: unknown, state: OpenAiStreamState): ChatStre
   return out
 }
 
-async function* openaiStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
-  const apiKey = await getLlmApiKey()
-  if (!apiKey) {
-    yield {
-      type: 'error',
-      code: 'E_NO_LLM_KEY',
-      message: 'LLM API key not configured — set it in Settings or LLM_API_KEY env'
-    }
-    return
-  }
-  const baseUrl = getLlmBaseUrl()
-  const model = req.model ?? getLlmModel()
-  const systemText = flattenSystemBlocksToText(buildSystemBlocks(req.emailContext))
+async function* openaiStream(
+  req: ChatStreamRequest,
+  platform: ChatModelPlatform
+): AsyncIterable<ChatStreamEvent> {
+  const cfg = platform.modelConfig()
+  const model = req.model ?? cfg.defaultModel
+  const systemText = flattenSystemBlocksToText(
+    buildSystemBlocks(req.emailContext, cfg, platform.getCachedSenderDigest)
+  )
   const userMessages = buildOpenAiMessages(req)
   const messages: OpenAiMessage[] =
     systemText.length > 0
@@ -827,27 +837,30 @@ async function* openaiStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEv
   }
   if (tools) requestBody.tools = tools
 
+  // 3b-1：HTTP fetch（注入 key + Bearer + endpoint 选择）下沉 platform.llmFetch（openai
+  // protocol → /v1/chat/completions）。key 缺失 → throw E_NO_LLM_KEY；fetch 失败 → throw。
+  // 返回未检查 Response，下方查 !ok/!body 分类（避免 body 泄漏，与原逻辑一致）。
   let response: Response
   try {
-    response = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        // CRS gateway accepts either `x-api-key` or `Authorization: Bearer`
-        // for OpenAI-protocol models; send Bearer (standard for /v1/chat).
-        authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(requestBody),
+    response = await platform.llmFetch({
+      protocol: 'openai',
+      body: requestBody,
       signal: timeoutAc.signal
     })
   } catch (err) {
     clearTimeout(timer)
     req.signal.removeEventListener('abort', onParentAbort)
     if (req.signal.aborted) return
+    const code = (err as { code?: string })?.code === 'E_NO_LLM_KEY' ? 'E_NO_LLM_KEY' : 'E_UPSTREAM'
     yield {
       type: 'error',
-      code: 'E_UPSTREAM',
-      message: `LLM fetch failed: ${err instanceof Error ? err.message : String(err)}`
+      code,
+      message:
+        code === 'E_NO_LLM_KEY'
+          ? err instanceof Error
+            ? err.message
+            : 'LLM API key not configured'
+          : `LLM fetch failed: ${err instanceof Error ? err.message : String(err)}`
     }
     return
   }
@@ -928,22 +941,16 @@ async function* openaiStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEv
   }
 }
 
-async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
-  const apiKey = await getLlmApiKey()
-  if (!apiKey) {
-    yield {
-      type: 'error',
-      code: 'E_NO_LLM_KEY',
-      message: 'LLM API key not configured — set it in Settings or LLM_API_KEY env'
-    }
-    return
-  }
-  const baseUrl = getLlmBaseUrl()
-  const model = req.model ?? getLlmModel()
+async function* anthropicStream(
+  req: ChatStreamRequest,
+  platform: ChatModelPlatform
+): AsyncIterable<ChatStreamEvent> {
+  const cfg = platform.modelConfig()
+  const model = req.model ?? cfg.defaultModel
   const messages = buildAnthropicMessages(req)
   // Sprint 19 — system 改 blocks 数组以承载 cache_control 断点;
   // tools 数组同样在最后一个加 cache_control (双 prefix 缓存).
-  const systemBlocks = buildSystemBlocks(req.emailContext)
+  const systemBlocks = buildSystemBlocks(req.emailContext, cfg, platform.getCachedSenderDigest)
   const tools = decorateToolsWithCacheControl(req.tools)
 
   const timeoutAc = new AbortController()
@@ -968,27 +975,29 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   }
   if (tools) requestBody.tools = tools
 
+  // 3b-1：HTTP fetch（注入 key + x-api-key + anthropic-version + CRS UA）下沉 platform.llmFetch
+  // （anthropic protocol → /v1/messages）。key 缺失 → throw E_NO_LLM_KEY；fetch 失败 → throw。
   let response: Response
   try {
-    response = await fetch(`${baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'user-agent': CRS_USER_AGENT
-      },
-      body: JSON.stringify(requestBody),
+    response = await platform.llmFetch({
+      protocol: 'anthropic',
+      body: requestBody,
       signal: timeoutAc.signal
     })
   } catch (err) {
     clearTimeout(timer)
     req.signal.removeEventListener('abort', onParentAbort)
     if (req.signal.aborted) return
+    const code = (err as { code?: string })?.code === 'E_NO_LLM_KEY' ? 'E_NO_LLM_KEY' : 'E_UPSTREAM'
     yield {
       type: 'error',
-      code: 'E_UPSTREAM',
-      message: `LLM fetch failed: ${err instanceof Error ? err.message : String(err)}`
+      code,
+      message:
+        code === 'E_NO_LLM_KEY'
+          ? err instanceof Error
+            ? err.message
+            : 'LLM API key not configured'
+          : `LLM fetch failed: ${err instanceof Error ? err.message : String(err)}`
     }
     return
   }
@@ -1074,29 +1083,33 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
   }
 }
 
-export class CustomApiBackend implements ChatBackend {
-  readonly kind = 'custom-api' as const
-
-  async *stream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
-    // Sprint 19 §D #4 — route by model-family prefix:
-    //   claude-* / claude:*  → Anthropic Messages (prompt cache 双断点)
-    //   gpt-* / gemini-* / codex-*  → OpenAI Chat Completions (index-merge tool_calls)
-    //   其他 → E_MODEL_UNSUPPORTED
-    // Backend kind is the only stable signal; the harness gate uses the same
-    // routing (dispatcher.ts) so multi-turn works on both paths.
-    const model = req.model ?? getLlmModel()
-    if (isAnthropicModel(model)) {
-      yield* anthropicStream(req)
-      return
-    }
-    if (isOpenAiCompatibleModel(model)) {
-      yield* openaiStream(req)
-      return
-    }
-    yield {
-      type: 'error',
-      code: 'E_MODEL_UNSUPPORTED',
-      message: `Model "${model}" not supported (expected claude-* / gpt-* / gemini-* / codex-*).`
+// V2.1 阶段 3 — 3b-1：custom-api backend factory（取代旧 CustomApiBackend class）。
+// 闭包持注入的 ChatModelPlatform（electron = electronChatPlatform 本地 fetch 注入 key；
+// 3c renderer = HttpChatPlatform fetch serve-api llm-proxy）。dispatcher 经 getBackend 取。
+export function createCustomApiBackend(platform: ChatModelPlatform): ChatBackend {
+  return {
+    kind: 'custom-api',
+    async *stream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
+      // Sprint 19 §D #4 — route by model-family prefix:
+      //   claude-* / claude:*  → Anthropic Messages (prompt cache 双断点)
+      //   gpt-* / gemini-* / codex-*  → OpenAI Chat Completions (index-merge tool_calls)
+      //   其他 → E_MODEL_UNSUPPORTED
+      // Backend kind is the only stable signal; the harness gate uses the same
+      // routing (dispatcher.ts) so multi-turn works on both paths.
+      const model = req.model ?? platform.modelConfig().defaultModel
+      if (isAnthropicModel(model)) {
+        yield* anthropicStream(req, platform)
+        return
+      }
+      if (isOpenAiCompatibleModel(model)) {
+        yield* openaiStream(req, platform)
+        return
+      }
+      yield {
+        type: 'error',
+        code: 'E_MODEL_UNSUPPORTED',
+        message: `Model "${model}" not supported (expected claude-* / gpt-* / gemini-* / codex-*).`
+      }
     }
   }
 }
