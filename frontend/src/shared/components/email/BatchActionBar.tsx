@@ -24,9 +24,14 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 interface Props {
   /** Live ids on the current view — feeds "select all N" and clamps clears. */
   visibleIds: ReadonlyArray<number>
+  /** 选中邮件是否全部已加旗标 — 决定旗标按钮 toggle 方向 (全 flagged→取消, 否则→加旗标)。 */
+  selectedAllFlagged: boolean
 }
 
-export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null {
+export function BatchActionBar({
+  visibleIds,
+  selectedAllFlagged
+}: Props): React.ReactElement | null {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
@@ -155,7 +160,7 @@ export function BatchActionBar({ visibleIds }: Props): React.ReactElement | null
       <button
         type="button"
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-aux text-ink-fg-1 hover:text-ink-fg hover:bg-ink-3 transition-colors duration-fast"
-        onClick={() => void runBulk(t('batchbar.toggleFlag'), { isFlagged: true })}
+        onClick={() => void runBulk(t('batchbar.toggleFlag'), { isFlagged: !selectedAllFlagged })}
       >
         <Flag size={13} strokeWidth={2} />
         <span>{t('batchbar.toggleFlag')}</span>

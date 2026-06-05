@@ -632,6 +632,7 @@ export function EmailList(): React.ReactElement {
   const batchMode = useBatch((s) => s.mode)
   const enterBatch = useBatch((s) => s.enter)
   const exitBatch = useBatch((s) => s.exit)
+  const selectedIds = useBatch((s) => s.selectedIds)
 
   const [filterOpen, setFilterOpen] = useState(false)
   const [pageCount, setPageCount] = useState(1)
@@ -938,6 +939,14 @@ export function EmailList(): React.ReactElement {
     for (const e of all) m.set(e.internal_id, e)
     return m
   }, [all, crossAll, pinnedSupp])
+  // 批量旗标 toggle 方向: 选中邮件全部已加旗标 → 点按钮取消, 否则加旗标 (enrichedById
+  // 覆盖 all+cross+pinned; 选中邮件不在其中的边缘 case → undefined → 视为未全 flagged → 加旗标)。
+  const selectedAllFlagged = useMemo(
+    () =>
+      selectedIds.length > 0 &&
+      selectedIds.every((id) => enrichedById.get(id)?.is_flagged === true),
+    [selectedIds, enrichedById]
+  )
   const threadSupplement = useMemo(() => {
     const m = new Map<string, EnrichedEmailMeta[]>()
     if (!threadBatch) return m
@@ -1380,7 +1389,7 @@ export function EmailList(): React.ReactElement {
         )}
       </div>
 
-      <BatchActionBar visibleIds={visibleIds} />
+      <BatchActionBar visibleIds={visibleIds} selectedAllFlagged={selectedAllFlagged} />
     </section>
   )
 }
