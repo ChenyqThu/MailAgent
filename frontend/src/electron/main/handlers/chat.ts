@@ -128,8 +128,12 @@ export function registerChatHandlers(): void {
   ipcMain.on('chat:abort', (_evt, sessionId: number) => {
     if (Number.isInteger(sessionId) && sessionId >= 0) {
       // abortChatSession 现 async（abortStreamingMessages 走 platform Promise）；
-      // chat:abort 是 fire-and-forget send channel，不 await 返回的 promise。
-      void dispatcher.abortChatSession(sessionId)
+      // chat:abort 是 fire-and-forget send channel，不 await 返回的 promise，但必须 .catch
+      // 防未捕获 rejection（electron persist 不抛；3c HttpChatPlatform fetch 会，见 codex
+      // review MEDIUM）。abort 失败非致命，warn 即可。
+      void dispatcher.abortChatSession(sessionId).catch((err) => {
+        console.warn('[chat:abort] abortChatSession failed', err)
+      })
     }
   })
 

@@ -167,6 +167,13 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       })
     }
 
+    // Pre-empt any prior stream on the same session BEFORE appending new rows.
+    // V2.1 阶段 3 step 5-6（codex review MEDIUM）：旧 dispatcher 从 append 到 pre-empt 是
+    // 同步连续段；下沉后 persist 转 Promise，若 pre-empt 仍排在 append 之后，rapid resend
+    // 期间每个 await 让步窗口都给旧 stream 跑完的机会 → 旧 assistant 被错标 complete 而非
+    // aborted，破坏 rapid-click guard 零回归。故在任何新行落库前先 abort 旧 AC。
+    _inflight.get(session.id)?.abort()
+
     const userMsg = await deps.platform.persist.appendMessage({
       sessionId: session.id,
       role: 'user',
@@ -182,9 +189,6 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       model: input.backendModel
     })
 
-    // Pre-empt any prior stream on the same session before swapping in the
-    // new AbortController.
-    _inflight.get(session.id)?.abort()
     const ac = new AbortController()
     _inflight.set(session.id, ac)
 
@@ -204,6 +208,11 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       emailContext,
       ac,
       sink
+    }).catch((err) => {
+      // 最后防线（codex step5-6 复审 LOW）：runStream 内部已 try/catch/finally 兜底，但
+      // catch-path 的 finalizeMessage 自身 reject（persist 完全不可用）时，fire-and-forget
+      // 仍会成未捕获 rejection。这层 .catch 把背景任务的 rejection 完全收口。
+      console.warn('[chat] startChat runStream rejected after internal handling', err)
     })
 
     return {
@@ -214,28 +223,6 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
   }
 
   async function runStream(args: RunStreamArgs): Promise<void> {
-    // Sprint 19 PR-1d.1 — harness gate. When the env flag is on AND the
-    // backend speaks Anthropic tool_use, the multi-turn harness owns the
-    // run; legacy single-pass continues for notion-agent + the (default)
-    // flag-off path. Backend kind is the only stable signal — we don't
-    // probe per-instance capability because every backend either fully
-    // supports tools or doesn't at all.
-    // V2.1 阶段 3 step 5：harnessEnabled 从配置快照读（取代同步 isHarnessEnabled()）。
-    const cfg = await deps.platform.resolveConfig()
-    if (cfg.harnessEnabled && backendSupportsTools(args.backend.kind)) {
-      return runHarness({
-        sessionId: args.sessionId,
-        assistantMessageId: args.assistantMessageId,
-        backend: args.backend,
-        initialHistory: args.history,
-        model: args.model,
-        agentPageId: args.agentPageId,
-        emailContext: args.emailContext,
-        ac: args.ac,
-        sink: args.sink,
-        platform: deps.platform
-      })
-    }
     const {
       sessionId,
       assistantMessageId,
@@ -264,7 +251,31 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       sink.send({ sessionId, messageId: assistantMessageId, event })
     }
 
+    // V2.1 阶段 3 step 5-6（codex review HIGH）：gate(resolveConfig) + harness 分支 + legacy
+    // 单遍全部包进同一 try/catch/finally。startChat/editChatMessage 用 `void runStream(...)`
+    // fire-and-forget —— 若 resolveConfig 或 runHarness 抛（electron 实现不抛，3c
+    // HttpChatPlatform fetch serve-api 会），未捕获 rejection 会让 assistant 行永久
+    // streaming 且 _inflight 不清。catch 兜底 finalize error，finally 无条件按当前 AC 清。
     try {
+      // Sprint 19 PR-1d.1 — harness gate. harnessEnabled 从配置快照读（取代同步
+      // isHarnessEnabled()）；custom-api 走 harness，notion-agent / flag-off 走下方 legacy
+      // 单遍。Backend kind 是唯一稳定信号（每个 backend 要么全支持 tool_use 要么完全不）。
+      const cfg = await deps.platform.resolveConfig()
+      if (cfg.harnessEnabled && backendSupportsTools(backend.kind)) {
+        await runHarness({
+          sessionId,
+          assistantMessageId,
+          backend,
+          initialHistory: history,
+          model,
+          agentPageId,
+          emailContext,
+          ac,
+          sink,
+          platform: deps.platform
+        })
+        return
+      }
       for await (const event of backend.stream({
         history,
         model,
@@ -451,6 +462,10 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       emailContext,
       ac,
       sink
+    }).catch((err) => {
+      // 最后防线（codex step5-6 复审 LOW）：同 startChat —— 收口 runStream 背景任务在
+      // catch-path finalizeMessage 自身 reject 时的未捕获 rejection。
+      console.warn('[chat] editChatMessage runStream rejected after internal handling', err)
     })
 
     return {

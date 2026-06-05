@@ -78,6 +78,24 @@ function tickAsync(times = 50): Promise<void> {
   })
 }
 
+/** V2.1 阶段 3 step 6（codex review LOW）：轮询到 assistant 行进入目标终态（或超时），
+ *  替代固定 tickAsync —— 不耦合 microtask 链深度（dispatcher gate 多一层 resolveConfig +
+ *  persist 全 Promise 化后链会随 3b/3c 继续变长）。用于"断言 stream 跑完后终态"的场景；
+ *  断言中间态（streaming）/ abort 态的 test 仍用 tickAsync。 */
+async function waitForAssistant(
+  sessionId: number,
+  statuses: ReadonlyArray<string>,
+  timeoutMs = 2000
+): Promise<ReturnType<typeof listMessages>[number] | undefined> {
+  const deadline = Date.now() + timeoutMs
+  let row = listMessages(sessionId).find((r) => r.role === 'assistant')
+  while ((!row || !statuses.includes(row.status)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    row = listMessages(sessionId).find((r) => r.role === 'assistant')
+  }
+  return row
+}
+
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'chat-disp-'))
   process.env['AI_CHAT_DB_PATH'] = join(tmpDir, 'ai_chat.db')
@@ -189,7 +207,7 @@ describe('dispatcher — happy path', () => {
       },
       sink
     )
-    await tickAsync()
+    await waitForAssistant(result.sessionId, ['complete'])
     const rows = listMessages(result.sessionId)
     const toolRows = rows.filter((r) => r.role === 'tool')
     expect(toolRows.length).toBe(2)
@@ -613,7 +631,7 @@ describe('dispatcher — metadata pass-through (opus L carry-forward)', () => {
       },
       sink
     )
-    await tickAsync()
+    await waitForAssistant(r.sessionId, ['complete'])
     const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
     expect(assistant.metadata).toBe('{"thread_id":"thr-xyz"}')
     expect(assistant.model).toBe('claude-sonnet-4-6')
@@ -645,7 +663,7 @@ describe('dispatcher — metadata pass-through (opus L carry-forward)', () => {
       },
       sink
     )
-    await tickAsync()
+    await waitForAssistant(r.sessionId, ['complete'])
     const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
     expect(assistant.metadata).toBe('{"thread_id":"thr-mid"}')
   })
