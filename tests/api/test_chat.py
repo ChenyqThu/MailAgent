@@ -391,3 +391,45 @@ def test_llm_proxy_upstream_429_status_passthrough(
     )
     assert r.status_code == 429
     assert b"should-not-leak" not in r.content
+
+
+def test_llm_proxy_upstream_302_status_passthrough(
+    llm_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """上游 3xx（重定向）→ 透传 status（不当 streaming success 转发 redirect body）。codex MEDIUM 回归。"""
+    _patch_upstream(monkeypatch, 302, [b"<html>redirect</html>"])
+    r = llm_client.post(
+        "/api/chat/llm-proxy",
+        json={"protocol": "anthropic", "body": {"model": "x"}},
+    )
+    assert r.status_code == 302
+    assert b"redirect" not in r.content  # 仅 2xx passthrough，3xx body 不转发
+
+
+def test_llm_proxy_build_request_invalid_url_cleanup_502(
+    llm_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """build_request 抛 httpx.InvalidURL（非 HTTPError）→ broad except aclose + 502（不泄漏/不 500）。
+    codex LOW 回归：旧 except httpx.HTTPError 漏 InvalidURL → 跳 aclose + generic 500。"""
+    import httpx as _httpx
+
+    closed = {"v": False}
+
+    class _Client:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        def build_request(self, *a, **k):
+            raise _httpx.InvalidURL("malformed url")
+
+        async def aclose(self) -> None:
+            closed["v"] = True
+
+    monkeypatch.setattr("src.api.routers.chat.httpx.AsyncClient", _Client)
+    r = llm_client.post(
+        "/api/chat/llm-proxy",
+        json={"protocol": "anthropic", "body": {"model": "x"}},
+    )
+    assert r.status_code == 502
+    assert r.json()["error"]["code"] == "E_UPSTREAM"
+    assert closed["v"] is True  # client.aclose() 被调，无连接泄漏
