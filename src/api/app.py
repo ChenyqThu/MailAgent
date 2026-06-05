@@ -404,6 +404,7 @@ from src.api.routers import (  # noqa: E402
     ai,
     attachment,
     calendar,
+    chat,
     email,
     email_views,
     folder,
@@ -422,6 +423,7 @@ app.include_router(ai.router)
 app.include_router(email_views.router)
 app.include_router(jobs.router)
 app.include_router(reports.router)
+app.include_router(chat.router)
 
 
 @app.get("/api/health")

@@ -35,6 +35,10 @@ import type {
   CalendarEventDetail,
   CalendarEventOccurrence,
   CalendarSyncStateItem,
+  ChatMessage,
+  ChatSession,
+  ChatSessionListItem,
+  ChatToolCall,
   EventGetOpts,
   EventsListOpts,
   CleanupDeadLetterOpts,
@@ -408,28 +412,59 @@ export class HttpApi implements MailApi {
     }
   }
 
-  // Sprint 4 §2.1 — AI Chat. SSE deferred to V2.1; all chat methods stay as
-  // notImplemented / noop stubs (kosAvailable→false so the save button doesn't
-  // render, listToolCalls→[], confirmTool→ok:false, onStream→noop unsub).
+  // V2.1 阶段 2 — AI Chat 只读历史（serve-api /api/chat/* 读端点，镜像 IPC chat:list*）。
+  // 读方法接端点（失败 graceful 返 []/false，守 ChatApi 契约 + 与 ElectronApi 依赖 handler
+  // graceful 一致）。写/流方法（start/send/editMessage/newSession/saveToKos/confirmTool/
+  // onStream）= 阶段 3（chat 对话 B-pure-unified，harness 下沉 shared），保留 stub。
   chat = {
     start: () => notImplemented('chat.start'),
     abort: () => {
-      /* no-op stub */
+      /* no-op stub — 阶段 3 接 abort */
     },
-    listMessages: () => notImplemented('chat.listMessages'),
-    listSessions: () => notImplemented('chat.listSessions'),
-    listAllSessions: () => notImplemented('chat.listAllSessions'),
+    listMessages: async (sessionId: number): Promise<ChatMessage[]> => {
+      try {
+        return await this.req<ChatMessage[]>('GET', `/chat/sessions/${sessionId}/messages`)
+      } catch {
+        return []
+      }
+    },
+    listSessions: async (emailId: number): Promise<ChatSession[]> => {
+      try {
+        return await this.req<ChatSession[]>('GET', '/chat/sessions', { query: { emailId } })
+      } catch {
+        return []
+      }
+    },
+    listAllSessions: async (): Promise<ChatSessionListItem[]> => {
+      try {
+        return await this.req<ChatSessionListItem[]>('GET', '/chat/sessions/all')
+      } catch {
+        return []
+      }
+    },
     editMessage: () => notImplemented('chat.editMessage'),
     openPopout: () => {
       /* no-op stub — no second-window in V2 web SPA */
     },
     deleteSession: () => {
-      /* no-op stub */
+      /* no-op stub — 阶段 3 接写 */
     },
     newSession: () => notImplemented('chat.newSession'),
     saveToKos: () => notImplemented('chat.saveToKos'),
-    kosAvailable: async () => false,
-    listToolCalls: async () => [],
+    kosAvailable: async (): Promise<boolean> => {
+      try {
+        return await this.req<boolean>('GET', '/chat/kos-available')
+      } catch {
+        return false
+      }
+    },
+    listToolCalls: async (messageId: number): Promise<ChatToolCall[]> => {
+      try {
+        return await this.req<ChatToolCall[]>('GET', `/chat/messages/${messageId}/tool-calls`)
+      } catch {
+        return []
+      }
+    },
     confirmTool: async () => ({
       ok: false as const,
       code: 'E_NOT_IMPLEMENTED',
