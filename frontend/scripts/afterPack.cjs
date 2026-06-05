@@ -15,6 +15,32 @@ const { execFileSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// codesign 偶发 EAGAIN: build 链 (vite/electron-vite/python provision) 刚跑完, 系统瞬时
+// fork 资源未释放, afterPack 立刻 fork 上百个 codesign 子进程会撞 spawnSync EAGAIN。
+// 短退避重试 (前面步骤资源很快释放, 实测重跑一次即过) → 免去人工重跑 electron-builder。
+async function codesignWithRetry(args, label) {
+  const MAX_ATTEMPTS = 4
+  for (let attempt = 1; ; attempt++) {
+    try {
+      execFileSync('codesign', args, { stdio: 'pipe' })
+      return
+    } catch (err) {
+      const isEagain = err.code === 'EAGAIN' || /EAGAIN/.test(String(err.message))
+      if (isEagain && attempt < MAX_ATTEMPTS) {
+        const backoffMs = attempt * 250
+        console.warn(
+          `[afterPack] codesign EAGAIN (${label}; 尝试 ${attempt}/${MAX_ATTEMPTS}), ${backoffMs}ms 后重试 …`
+        )
+        await sleep(backoffMs)
+        continue
+      }
+      throw err
+    }
+  }
+}
+
 /** 递归收集需签名的 Mach-O (真实文件, 跳过符号链接)。 */
 function collectMachO(dir, acc) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -49,13 +75,13 @@ exports.default = async function afterPack(context) {
   let signed = 0
   for (const file of targets) {
     try {
-      execFileSync('codesign', [
+      await codesignWithRetry([
         '--force', '--sign', '-',
         '--options', 'runtime',
         '--entitlements', entitlements,
         '--timestamp=none',
         file,
-      ], { stdio: 'pipe' })
+      ], path.basename(file))
       signed++
     } catch (err) {
       console.error(`[afterPack] 散装 .so 签名失败: ${file}\n`, err.stderr?.toString() || err.message)
@@ -67,17 +93,18 @@ exports.default = async function afterPack(context) {
   // electron-builder 跳过了签名 → 自己对整个 bundle 做完整 deep ad-hoc 签
   // (Frameworks/Helpers/主二进制 + 再覆盖一遍 .so)。inside-out, 一次完成。
   try {
-    execFileSync('codesign', [
+    await codesignWithRetry([
       '--deep', '--force', '--sign', '-',
       '--options', 'runtime',
       '--entitlements', entitlements,
       '--timestamp=none',
       appPath,
-    ], { stdio: 'pipe' })
+    ], 'deep app')
   } catch (err) {
     console.error('[afterPack] 整 app deep 签名失败:\n', err.stderr?.toString() || err.message)
     throw err
   }
+
 
   // verify gate: ad-hoc 下用 --verify (不加 --deep --strict, 后者对 ad-hoc 误报)。
   // arm64 上能通过基础 verify 即表示可加载运行; 失败则构建中止。
