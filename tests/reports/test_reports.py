@@ -572,10 +572,29 @@ class TestToolLoop:
         ]
         calls: list = []
 
+        class FakeStream:
+            def __init__(self, msg):
+                self._msg = msg
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def get_final_message(self):
+                return self._msg
+
         class FakeMessages:
-            async def create(self, **kw):
+            def stream(self, **kw):
                 calls.append(kw)
-                return seq[len(calls) - 1]
+                return FakeStream(seq[len(calls) - 1])
 
         client = LLMClient()
         client._client = NS(messages=FakeMessages())  # 注入 fake，跳过 _lazy / 真网络

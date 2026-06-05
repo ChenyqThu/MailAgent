@@ -38,8 +38,11 @@ import type {
 // Same 4096 ceiling Sprint 3 translate.ts used; ~12k Chinese chars at
 // typical token density.
 const MAX_OUTPUT_TOKENS = 64000
-// anthropic-beta（Anthropic /v1/messages；CRS 透传）：1M 上下文窗口 + 1h cache TTL。
-const ANTHROPIC_BETA = 'extended-cache-ttl-2025-04-11,context-1m-2025-08-07'
+// CRS/Cloudflare is picky about user agents; mirror the browser-like UA used by
+// working CRS scripts. Keep ordinary cache_control, but avoid anthropic-beta on
+// CRS Sonnet because extended-cache/context betas can trip account-level locks.
+const CRS_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36'
 const REQUEST_DEADLINE_MS = 60_000
 
 // Sprint 19 — Anthropic message content can be a plain string (legacy
@@ -963,7 +966,7 @@ async function* anthropicStream(req: ChatStreamRequest): AsyncIterable<ChatStrea
         'content-type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': ANTHROPIC_BETA
+        'user-agent': CRS_USER_AGENT
       },
       body: JSON.stringify(requestBody),
       signal: timeoutAc.signal

@@ -48,9 +48,7 @@ def _build_cache_control() -> Dict[str, Any] | None:
     """Return a cache_control dict per cfg, or None when caching is disabled.
 
     - cfg.llm_cache_enabled=False         → None (no breakpoint emitted)
-    - cfg.llm_cache_ttl=""                → {type: ephemeral} (gateway picks TTL;
-                                            CRS defaults to 1h, native Anthropic
-                                            defaults to 5m)
+    - cfg.llm_cache_ttl=""                → {type: ephemeral} (Anthropic default 5m)
     - cfg.llm_cache_ttl in {"5m", "1h"}   → {type: ephemeral, ttl: <value>}
     """
     if not cfg.llm_cache_enabled:

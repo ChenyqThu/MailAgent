@@ -311,9 +311,8 @@ class Config(BaseSettings):
     llm_cache_ttl: str = Field(
         default="1h", env="LLM_CACHE_TTL",
         description=(
-            "显式 cache TTL：'5m' / '1h'，或空串让网关决定。默认 '1h'：协议兼容性最好——"
-            "走 CRS 时会被透传保留；走原生 Anthropic 端点时配合 client.py 发的 "
-            "'anthropic-beta: extended-cache-ttl-2025-04-11' header 一起 1h 生效。"
+            "显式 cache TTL：'5m' / '1h'，或空串使用 Anthropic 默认 5m。"
+            "CRS Sonnet 上不再搭配 anthropic-beta 头，避免触发账号级限流锁。"
             "仅当 LLM_CACHE_ENABLED=true 时生效。"
         ),
     )

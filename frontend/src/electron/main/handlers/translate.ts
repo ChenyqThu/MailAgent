@@ -226,6 +226,8 @@ const BATCH_SIZE = 10
 const CONCURRENCY = 2
 const FETCH_TIMEOUT_MS = 60_000
 const MAX_OUTPUT_TOKENS = 4096
+const CRS_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36'
 // Abort controller registry — one per internalId; renderer fires
 // `email:translateAbort` on email switch to drop all in-flight batches for
 // the now-stale email.
@@ -412,7 +414,8 @@ async function runOneBatch(
       headers: {
         'content-type': 'application/json',
         'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        'user-agent': CRS_USER_AGENT
       },
       body: JSON.stringify({
         model,
