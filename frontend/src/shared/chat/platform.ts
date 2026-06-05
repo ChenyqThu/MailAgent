@@ -37,7 +37,7 @@ import type {
   UpdateMessagePatch,
   UpdateToolCallPatch
 } from './model'
-import type { EmailContext } from './types'
+import type { ChatStreamEvent, ChatStreamRequest, EmailContext } from './types'
 
 // ─── 基础设施板：持久化端口（ai_chat.db 写读）────────────────────────────
 //
@@ -139,7 +139,20 @@ export interface ChatModelPlatform {
   modelConfig(): ChatModelConfig
 }
 
-// ─── 模型板②/工具板（仍占位，3b-2/3b-4 定形）──────────────────────────────
-// ChatNotionAgentPlatform（notionAgentStream，仅 http 实现，electron execa 留 main）→ 3b-2。
-// ChatToolPlatform（8 读+3 写原语 / kosCallTool / kosConfig / saveToKos，工具逻辑下沉
-// shared createBuiltinTools 单一真源）→ 3b-4。按「有消费方才定」纪律，下沉对应模块时定义。
+// ─── 模型板②：notion-agent http backend 消费（3b-2 定形；仅 http 实现）───────────
+// serve-api 复刻 notion_agent.ts 全语义（asyncio spawn `notion-agent chat --stream`，见
+// src/chat/notion_agent.py），输出「语义 event SSE」。http 实现 fetch POST /api/chat/notion-agent
+// + parseSse 反序列化为 ChatStreamEvent —— 与 custom_api backend 在 UI 进程产出的 event 同形，
+// harness 直接消费（3b-5 的 HttpChatPlatform.notionAgentStream + createHttpNotionAgentBackend）。
+// electron **不实现此板**：NotionAgentBackend = execa 子进程留 main，经 args.backend 注入、不经
+// platform（execa 浏览器跑不了是硬约束，按后端性质分 D2）。故拆成独立小板，避免逼 electron 实现
+// 用不到的 notionAgentStream（占位假线）。
+export interface ChatNotionAgentPlatform {
+  /** notion-agent 子进程流。req = ChatStreamRequest（CLI 无工具，忽略 tools/iterHistory）；
+   *  yield 语义 ChatStreamEvent（tool_call/chunk/usage/done/error），与 custom_api backend 同形。 */
+  notionAgentStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent>
+}
+
+// ─── 工具板 ChatToolPlatform（仍占位，3b-4 定形）──────────────────────────────
+// 8 读+3 写原语 / kosCallTool / kosConfig / saveToKos，工具逻辑下沉 shared createBuiltinTools
+// 单一真源。按「有消费方才定」纪律，tools/builtin + kos_save 下沉时定义。

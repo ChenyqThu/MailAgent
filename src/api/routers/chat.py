@@ -25,6 +25,7 @@ from fastapi.responses import Response, StreamingResponse
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_settings
+from src.chat.notion_agent import run_notion_agent, sse_encode
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -231,3 +232,32 @@ async def llm_proxy(request: Request):
         status_code=upstream_resp.status_code,
         media_type="text/event-stream",
     )
+
+
+@router.post("/notion-agent", dependencies=[Depends(verify_cf_access)])
+async def notion_agent(request: Request):
+    """notion-agent 多轮对话（V2.1 阶段 3 3b-2）：asyncio spawn ``notion-agent chat --stream``
+    复刻 frontend ``notion_agent.ts`` 全语义，输出「语义 event SSE」。
+
+    **非 envelope**（chat 流式端点，对齐 llm-proxy）：成功 → StreamingResponse
+    （``text/event-stream``，每个事件一行 ``data: {ChatStreamEvent}\\n\\n``：
+    tool_call / chunk / usage / done / error），client 端 ``notionAgentStream``（3b-5）fetch +
+    parseSse 反序列化为 ChatStreamEvent —— 与 custom-api 后端在 UI 进程产出的 event 同形。
+
+    req body = ChatStreamRequest 子集 ``{history, model, agentPageId, emailContext}``（去
+    signal/tools/iterHistory —— notion-agent CLI 不支持工具，单遍 end_turn）。流内错误（空
+    history / spawn 失败 / exit 分类）作 ``error`` 事件随流下发（对齐 TS runNotionAgent），
+    仅 body 不可解析（client bug）才 pre-stream APIError envelope。
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise APIError("E_INVALID_ARG", "notion-agent body must be JSON")
+    if not isinstance(payload, dict):
+        raise APIError("E_INVALID_ARG", "notion-agent body must be a JSON object")
+
+    async def event_stream():
+        async for event in run_notion_agent(payload):
+            yield sse_encode(event)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
