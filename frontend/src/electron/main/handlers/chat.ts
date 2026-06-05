@@ -30,14 +30,11 @@ import {
 import { getDb } from '../db'
 import { saveConversationToKos } from '../chat/kos_save'
 import { isKosSaveAvailable } from '../chat/config'
-import {
-  abortAllChatSessions,
-  abortChatSession,
-  editChatMessage,
-  makeWebContentsSink,
-  startChat,
-  type StartChatResult
-} from '../chat/dispatcher'
+import { createChatDispatcher, type StartChatResult } from '@shared/chat/dispatcher'
+import { makeWebContentsSink } from '../chat/web_contents_sink'
+import { electronChatPlatform } from '../chat/electron_platform'
+import { getChatBackend } from '../chat/registry'
+import { drainNotionAgentGate } from '../chat/backends/notion_agent_gate'
 import { resolveConfirmation } from '@shared/chat/tools/confirmation'
 
 export interface ChatStartOpts {
@@ -76,6 +73,14 @@ export interface ChatSessionListItem extends ChatSessionSummary {
   email_sender: string | null
 }
 
+// V2.1 阶段 3 step 5 — 桌面端 dispatcher 单例。注入 ElectronChatPlatform（基础设施
+// 板直调 chat_db/db/config/kos，字节级零回归）+ getChatBackend（注册表）。harness /
+// legacy 编排逻辑全在 shared/chat/dispatcher，本进程只提供 platform + backend + sink。
+const dispatcher = createChatDispatcher({
+  platform: electronChatPlatform,
+  getBackend: getChatBackend
+})
+
 function validateStartOpts(opts: ChatStartOpts | undefined): ChatStartOpts | string {
   if (!opts) return 'opts missing'
   if (!Number.isInteger(opts.emailId) || opts.emailId < 0)
@@ -99,7 +104,7 @@ export function registerChatHandlers(): void {
     }
     try {
       const sink = makeWebContentsSink(evt.sender)
-      const data = await startChat(
+      const data = await dispatcher.startChat(
         {
           emailId: valid.emailId,
           userMessage: valid.message,
@@ -122,7 +127,9 @@ export function registerChatHandlers(): void {
 
   ipcMain.on('chat:abort', (_evt, sessionId: number) => {
     if (Number.isInteger(sessionId) && sessionId >= 0) {
-      abortChatSession(sessionId)
+      // abortChatSession 现 async（abortStreamingMessages 走 platform Promise）；
+      // chat:abort 是 fire-and-forget send channel，不 await 返回的 promise。
+      void dispatcher.abortChatSession(sessionId)
     }
   })
 
@@ -289,7 +296,7 @@ export function registerChatHandlers(): void {
       }
       try {
         const sink = makeWebContentsSink(evt.sender)
-        const data = await editChatMessage(
+        const data = await dispatcher.editChatMessage(
           {
             sessionId: valid.sessionId,
             editingMessageId: valid.editingMessageId,
@@ -390,4 +397,10 @@ function validateEditOpts(opts: ChatEditOpts | undefined): ChatEditOpts | string
   return opts
 }
 
-export { abortAllChatSessions }
+// App-quit hook（index.ts:15/465 仍 import 此名，路径/签名不变）。shared dispatcher
+// 只 abort+clear _inflight；drainNotionAgentGate（main-only 子进程串行闸的 min-interval
+// 定时器，不挂任何 signal）在此补齐 —— 不能进 shared（无 Electron/Node）。
+export function abortAllChatSessions(): void {
+  dispatcher.abortAllChatSessions()
+  drainNotionAgentGate()
+}

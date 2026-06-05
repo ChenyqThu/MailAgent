@@ -21,17 +21,21 @@ import {
   type BackendKind
 } from '../../src/electron/main/chat_db'
 import {
-  abortAllChatSessions,
-  abortChatSession,
-  editChatMessage,
-  startChat,
-  __resetChatDispatcher,
+  createChatDispatcher,
+  type ChatDispatcher,
   type StreamSink
-} from '../../src/electron/main/chat/dispatcher'
-import { __resetBackendRegistry, registerChatBackend } from '../../src/electron/main/chat/registry'
+} from '../../src/shared/chat/dispatcher'
+import { electronChatPlatform } from '../../src/electron/main/chat/electron_platform'
+import {
+  __resetBackendRegistry,
+  getChatBackend,
+  registerChatBackend
+} from '../../src/electron/main/chat/registry'
 import type { ChatBackend, ChatStreamEnvelope, ChatStreamEvent } from '../../src/shared/chat/types'
 
 let tmpDir: string
+// V2.1 阶段 3 step 6 — driver 改 factory（仿 harness.test 注入 electronChatPlatform）。
+let d: ChatDispatcher
 
 function recordingSink(): StreamSink & { events: ChatStreamEnvelope[] } {
   const events: ChatStreamEnvelope[] = []
@@ -55,10 +59,15 @@ function fakeBackend(kind: BackendKind, script: ChatStreamEvent[]): ChatBackend 
   }
 }
 
-function tickAsync(times = 6): Promise<void> {
+function tickAsync(times = 50): Promise<void> {
   // The dispatcher runs `void runStream(...)` — it scheduled microtasks
   // before chat:start returned. Give the event loop a few iterations to
   // drain them before asserting on persisted state.
+  // V2.1 阶段 3 step 6：默认次数 6→50。dispatcher 下沉 shared 后 runStream 多了
+  // 一层 `await resolveConfig()` gate + persist 全转 Promise（appendMessage /
+  // finalizeMessage / abortStreamingMessages await），legacy 单遍的 for-await 链比
+  // 旧同步直写深得多。50 远超实测最长链（notion-agent legacy ~11-22 microtask），
+  // 对 blocking backend test 只是空转无副作用（它们挂在 signal，不靠 microtask 推进）。
   return new Promise((resolve) => {
     let n = 0
     const tick = (): void => {
@@ -74,14 +83,16 @@ beforeEach(() => {
   process.env['AI_CHAT_DB_PATH'] = join(tmpDir, 'ai_chat.db')
   closeChatDb()
   __resetBackendRegistry()
-  __resetChatDispatcher()
+  // 每个 test 新建 dispatcher：electronChatPlatform（基础设施板，真调本 test 的临时
+  // ai_chat.db）+ getChatBackend（registry，下方 registerChatBackend 注入 mock）。
+  d = createChatDispatcher({ platform: electronChatPlatform, getBackend: getChatBackend })
 })
 
 afterEach(() => {
   closeChatDb()
   delete process.env['AI_CHAT_DB_PATH']
   __resetBackendRegistry()
-  __resetChatDispatcher()
+  d.__resetForTests()
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true })
 })
 
@@ -96,7 +107,7 @@ describe('dispatcher — happy path', () => {
       ])
     )
     const sink = recordingSink()
-    const result = await startChat(
+    const result = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -168,7 +179,7 @@ describe('dispatcher — happy path', () => {
       ])
     )
     const sink = recordingSink()
-    const result = await startChat(
+    const result = await d.startChat(
       {
         emailId: 101,
         userMessage: 'help me reply',
@@ -211,7 +222,7 @@ describe('dispatcher — abort', () => {
     }
     registerChatBackend(backend)
     const sink = recordingSink()
-    const r = await startChat(
+    const r = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -225,7 +236,7 @@ describe('dispatcher — abort', () => {
 
     expect(listMessages(r.sessionId).find((m) => m.role === 'assistant')!.status).toBe('streaming')
 
-    const flipped = abortChatSession(r.sessionId)
+    const flipped = await d.abortChatSession(r.sessionId)
     await tickAsync()
 
     expect(flipped).toBeGreaterThanOrEqual(1)
@@ -249,7 +260,7 @@ describe('dispatcher — abort', () => {
     }
     registerChatBackend(firstBackend)
     const sink1 = recordingSink()
-    const r1 = await startChat(
+    const r1 = await d.startChat(
       {
         emailId: 101,
         userMessage: 'first',
@@ -272,7 +283,7 @@ describe('dispatcher — abort', () => {
       ])
     )
     const sink2 = recordingSink()
-    const r2 = await startChat(
+    const r2 = await d.startChat(
       {
         emailId: 101,
         userMessage: 'second',
@@ -308,7 +319,7 @@ describe('dispatcher — abort', () => {
     registerChatBackend(backend)
     const sinkA = recordingSink()
     const sinkB = recordingSink()
-    const ra = await startChat(
+    const ra = await d.startChat(
       {
         emailId: 101,
         userMessage: 'a',
@@ -318,7 +329,7 @@ describe('dispatcher — abort', () => {
       },
       sinkA
     )
-    const rb = await startChat(
+    const rb = await d.startChat(
       {
         emailId: 102,
         userMessage: 'b',
@@ -330,7 +341,7 @@ describe('dispatcher — abort', () => {
     )
     await tickAsync()
 
-    abortAllChatSessions()
+    d.abortAllChatSessions()
     await tickAsync()
 
     expect(listMessages(ra.sessionId).find((m) => m.role === 'assistant')!.status).toBe('aborted')
@@ -349,7 +360,7 @@ describe('dispatcher — error paths', () => {
     }
     registerChatBackend(backend)
     const sink = recordingSink()
-    const r = await startChat(
+    const r = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -379,7 +390,7 @@ describe('dispatcher — error paths', () => {
       ])
     )
     const sink = recordingSink()
-    const r = await startChat(
+    const r = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -409,7 +420,7 @@ describe('dispatcher — error paths', () => {
       ])
     )
     const sink = recordingSink()
-    const r = await startChat(
+    const r = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -434,7 +445,7 @@ describe('dispatcher — error paths', () => {
     // No registerChatBackend — registry is empty after beforeEach reset.
     const sink = recordingSink()
     await expect(
-      startChat(
+      d.startChat(
         {
           emailId: 101,
           userMessage: 'hi',
@@ -451,7 +462,7 @@ describe('dispatcher — error paths', () => {
     registerChatBackend(fakeBackend('custom-api', []))
     const sink = recordingSink()
     await expect(
-      startChat(
+      d.startChat(
         {
           emailId: -1,
           userMessage: 'hi',
@@ -468,7 +479,7 @@ describe('dispatcher — error paths', () => {
     registerChatBackend(fakeBackend('custom-api', []))
     const sink = recordingSink()
     await expect(
-      startChat(
+      d.startChat(
         {
           emailId: 101,
           userMessage: '',
@@ -492,7 +503,7 @@ describe('dispatcher — multi-session isolation', () => {
     )
     const sink1 = recordingSink()
     const sink2 = recordingSink()
-    const r1 = await startChat(
+    const r1 = await d.startChat(
       {
         emailId: 101,
         userMessage: 'one',
@@ -502,7 +513,7 @@ describe('dispatcher — multi-session isolation', () => {
       },
       sink1
     )
-    const r2 = await startChat(
+    const r2 = await d.startChat(
       {
         emailId: 202,
         userMessage: 'two',
@@ -532,7 +543,7 @@ describe('dispatcher — multi-session isolation', () => {
     registerChatBackend(blockingBackend)
     const sink1 = recordingSink()
     const sink2 = recordingSink()
-    const r1 = await startChat(
+    const r1 = await d.startChat(
       {
         emailId: 101,
         userMessage: 'one',
@@ -542,7 +553,7 @@ describe('dispatcher — multi-session isolation', () => {
       },
       sink1
     )
-    const r2 = await startChat(
+    const r2 = await d.startChat(
       {
         emailId: 202,
         userMessage: 'two',
@@ -554,19 +565,19 @@ describe('dispatcher — multi-session isolation', () => {
     )
     await tickAsync()
 
-    abortChatSession(r1.sessionId)
+    await d.abortChatSession(r1.sessionId)
     await tickAsync()
 
     expect(listMessages(r1.sessionId).find((m) => m.role === 'assistant')!.status).toBe('aborted')
     expect(listMessages(r2.sessionId).find((m) => m.role === 'assistant')!.status).toBe('streaming')
 
-    abortChatSession(r2.sessionId)
+    await d.abortChatSession(r2.sessionId)
   })
 
-  test('abortChatSession on a nonexistent session is a no-op (returns 0)', () => {
+  test('abortChatSession on a nonexistent session is a no-op (returns 0)', async () => {
     // No backend registered, no session created — call should return 0.
     getOrCreateSession({ emailId: 1, backendKind: 'custom-api' }) // create empty
-    expect(abortChatSession(99999)).toBe(0)
+    expect(await d.abortChatSession(99999)).toBe(0)
   })
 })
 
@@ -592,7 +603,7 @@ describe('dispatcher — metadata pass-through (opus L carry-forward)', () => {
       ])
     )
     const sink = recordingSink()
-    const r = await startChat(
+    const r = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -624,7 +635,7 @@ describe('dispatcher — metadata pass-through (opus L carry-forward)', () => {
       ])
     )
     const sink = recordingSink()
-    const r = await startChat(
+    const r = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -656,7 +667,7 @@ describe('dispatcher — sink behaviour', () => {
         { type: 'done', finalContent: 'ab', model: null }
       ])
     )
-    await startChat(
+    await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -693,7 +704,7 @@ describe('dispatcher — sink behaviour', () => {
         { type: 'done', finalContent: 'ab', model: null }
       ])
     )
-    const r = await startChat(
+    const r = await d.startChat(
       {
         emailId: 101,
         userMessage: 'hi',
@@ -754,7 +765,7 @@ describe('dispatcher — editChatMessage', () => {
     })
 
     const sink = recordingSink()
-    const result = await editChatMessage(
+    const result = await d.editChatMessage(
       {
         sessionId: session.id,
         editingMessageId: userB.id,
@@ -766,7 +777,7 @@ describe('dispatcher — editChatMessage', () => {
       sink
     )
     expect(result.sessionId).toBe(session.id)
-    await tickAsync(8)
+    await tickAsync()
 
     const after = listMessages(session.id)
     // userA + its assistant reply survive; userB + tail were truncated;
@@ -798,7 +809,7 @@ describe('dispatcher — editChatMessage', () => {
     })
 
     await expect(
-      editChatMessage(
+      d.editChatMessage(
         {
           sessionId: session.id,
           editingMessageId: assistant.id,
@@ -817,7 +828,7 @@ describe('dispatcher — editChatMessage', () => {
   test('rejects an unknown session with E_NOT_FOUND', async () => {
     registerChatBackend(fakeBackend('custom-api', [{ type: 'done', finalContent: '' }]))
     await expect(
-      editChatMessage(
+      d.editChatMessage(
         {
           sessionId: 9999,
           editingMessageId: 1,
@@ -843,7 +854,7 @@ describe('dispatcher — editChatMessage', () => {
     })
 
     await expect(
-      editChatMessage(
+      d.editChatMessage(
         {
           sessionId: sessionA.id,
           editingMessageId: orphan.id,
@@ -869,7 +880,7 @@ describe('dispatcher — editChatMessage', () => {
     })
 
     await expect(
-      editChatMessage(
+      d.editChatMessage(
         {
           sessionId: session.id,
           editingMessageId: user.id,
