@@ -305,7 +305,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,  # CF Access cookie / JWT 走 credentials
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    # PATCH: V2.1 阶段 3 3b-3 chat 持久化引入（streamContent/finalizeMessage/updateToolCall）—
+    # 远程 browser 跑 HttpChatPlatform.persist 时 PATCH 触发 CORS preflight，须在白名单（3c transport 用）。
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
