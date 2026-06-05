@@ -73,3 +73,26 @@ data/notion_ds_cache.json
 # 工具产物（OMC 状态 / Playwright MCP 日志）— 不入库
 .omx/
 .playwright-mcp/
+
+# --- v0.3.0 后清理（2026-06-04）: 本地运行时 / 产物（文件保留, git 不再 track）---
+# AI chat 运行时库（dogfood 对话数据）
+frontend/ai_chat.db
+frontend/ai_chat.db-shm
+frontend/ai_chat.db-wal
+# electron-vite build 误落根目录的 main bundle 产物（正常应在 out/main/）
+frontend/index.js
+# 编辑器配置
+.cursor/
+# 验证截图 + 误创建的 .app 残骸目录
+/live-*.png
+/v2-app-*.png
+/onboarding）/
+
+# --- Trellis 工具（用户裁定: 留本地工具, 不进 git）---
+.trellis/
+.claude/agents/trellis-*.md
+.claude/commands/trellis/
+.claude/skills/trellis-*/
+.claude/hooks/inject-subagent-context.py
+.claude/hooks/inject-workflow-state.py
+.claude/hooks/session-start.py
