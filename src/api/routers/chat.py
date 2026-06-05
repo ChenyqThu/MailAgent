@@ -200,15 +200,18 @@ async def llm_proxy(request: Request):
             "POST", url, json=upstream_body, headers=headers
         )
         upstream_resp = await client.send(upstream_req, stream=True)
-    except httpx.HTTPError as exc:
+    except Exception as exc:  # noqa: BLE001 — codex review LOW
+        # httpx.InvalidURL（malformed LLM_API_BASE）不是 HTTPError，旧 except httpx.HTTPError
+        # 会漏它 → 跳过 aclose 泄漏 + generic 500。broad except 兜底：必 aclose + 502 envelope。
         await client.aclose()
-        # 上游连接失败 → 502（shared 据 !response.ok 归 E_UPSTREAM）。
         raise APIError(
-            "E_UPSTREAM", f"LLM upstream connect failed: {exc}", http_status=502
+            "E_UPSTREAM", f"LLM upstream request failed: {exc}", http_status=502
         )
 
-    # 上游非 2xx：透传 status（空 body），shared 据 response.ok 分类，不泄漏上游错误页。
-    if upstream_resp.status_code >= 400:
+    # 非 2xx 一律透传 status（空 body），shared 据 response.ok 分类，不泄漏上游 body。
+    # codex review MEDIUM：含 3xx —— follow_redirects 默认 False，3xx body 非 SSE，不能当
+    # streaming success 转发 redirect body。用 <200 or >=300 覆盖全部非 2xx（仅 2xx passthrough）。
+    if upstream_resp.status_code < 200 or upstream_resp.status_code >= 300:
         status = upstream_resp.status_code
         await upstream_resp.aclose()
         await client.aclose()

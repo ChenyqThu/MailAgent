@@ -819,6 +819,7 @@ async function* openaiStream(
   const timeoutAc = new AbortController()
   const timer = setTimeout(() => timeoutAc.abort(), REQUEST_DEADLINE_MS)
   const onParentAbort = (): void => timeoutAc.abort()
+  // 3b-1 codex review MEDIUM-1：见 anthropicStream 同处注释 —— abort 优先于 key（新契约）。
   if (req.signal.aborted) {
     clearTimeout(timer)
     yield { type: 'error', code: 'E_ABORTED', message: 'request aborted before send' }
@@ -958,6 +959,10 @@ async function* anthropicStream(
   // Compose the parent signal (orchestrator-owned, fires on user cancel /
   // email switch) with the deadline signal so either can cut the request.
   const onParentAbort = (): void => timeoutAc.abort()
+  // 3b-1 codex review MEDIUM-1：原 electron 在 fetch 前先 getLlmApiKey() 再 check abort，故
+  // 「已 aborted + 缺 key」旧报 E_NO_LLM_KEY。下沉后 key check 进 platform.llmFetch（实现侧），
+  // shared 在调 llmFetch 前先判 abort → 该竞态改报 E_ABORTED。新顺序语义更优（已取消的请求不
+  // 应再报 key 错）+ 竞态生产几乎不触发 → bless 为新契约（abort 优先于 key），非回归。
   if (req.signal.aborted) {
     clearTimeout(timer)
     yield { type: 'error', code: 'E_ABORTED', message: 'request aborted before send' }
