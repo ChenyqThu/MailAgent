@@ -1,0 +1,111 @@
+// V2.1 阶段 3 — ChatPlatform seam（分层接线板）。
+//
+// B-pure-unified：chat harness/dispatcher 逻辑下沉 shared/ 后在 UI 进程
+// （本地 renderer / 远程 browser）跑，经 ChatPlatform 抽象访问所有外部能力；
+// 背后由各端实现：main = ElectronChatPlatform 直调既有 chat_db/db/config/kos
+// （字节级零回归）；远程 = HttpChatPlatform fetch serve-api（3b/3c 落地）。
+//
+// 🔴 不变式 1：本文件零 Electron/Node-only 依赖（只引 shared/chat 内类型）。
+//    pnpm build:web 验证 —— 方案成败根本。
+//
+// ── 分层接线板（用户拍板 2026-06-05）─────────────────────────────────────
+// 不把外部能力堆成一个大 interface，而按「变更频率 + 职责」拆成几块独立小板，
+// 组件各取所需的板。红利：未来海量工具/后端补充只动对应板 interface + 各端
+// 实现，地基板（ChatInfraPlatform）与 harness/dispatcher 核心零改动。
+//
+//   板                     | 定形 | 含                                          | 消费方
+//   ──────────────────────┼──────┼─────────────────────────────────────────────┼────────────────────
+//   ChatInfraPlatform     | 3a   | persist / loadEmailContext / resolveConfig / | harness + dispatcher
+//   （基础设施板，本文件） |      | prefetchSenderDigest                         |
+//   ChatModelPlatform     | 3b   | llmFetch / notionAgentStream /               | custom_api/notion_agent
+//   （模型板）             |      | getCachedSenderDigest                        | 下沉时
+//   ChatToolPlatform      | 3b   | 工具集 / saveToKos                           | tools/builtin + kos_save
+//   （工具板）             |      |                                              | 下沉时
+//
+// 为何 3a 只定基础设施板：harness + dispatcher 全部外部调用实测只落这 4 类
+// （grep 钉死）。模型/工具板的 7 原语其消费方（两后端 / 工具 / KOS 保存）3a
+// 全留 main 走现有注入口，根本不调 platform → 3a 写它们 = 无消费方占位假线。
+// 按真实形状 3b 定形，避免「猜的形状 3b 还得改」。详见
+// docs/v2.1-stage3-chat-platform-design.md §3。
+
+import type {
+  AppendMessageInput,
+  AppendToolCallInput,
+  ChatMessage,
+  ChatSession,
+  OpenSessionInput,
+  UpdateMessagePatch,
+  UpdateToolCallPatch
+} from './model'
+import type { EmailContext } from './types'
+
+// ─── 基础设施板：持久化端口（ai_chat.db 写读）────────────────────────────
+//
+// 全部方法返回 Promise（http 实现异步）；streamContent 例外 = fire-and-forget
+// void（守 harness 每 chunk 同步写热路径零回归 —— electron 实现同步直写）。
+// ElectronChatPlatform 直接转发同步 chat_db.* 函数（包成 async），字节级零回归。
+export interface ChatPersistPort {
+  getOrCreateSession(input: OpenSessionInput): Promise<ChatSession>
+  createNewSession(input: OpenSessionInput): Promise<ChatSession>
+  getSession(sessionId: number): Promise<ChatSession | null>
+  getMessage(messageId: number): Promise<ChatMessage | null>
+  listLastNMessages(sessionId: number, limit: number): Promise<ChatMessage[]>
+  appendMessage(input: AppendMessageInput): Promise<ChatMessage>
+  /** 流式正文增量。**fire-and-forget，不 await**——守 harness 每 chunk 同步写
+   *  热路径零回归。cadence 由实现定：electron 同步直写 chat_db；http debounce
+   *  ~1/s 合并 PATCH（终态由 finalizeMessage flush）。 */
+  streamContent(messageId: number, content: string): void
+  /** 终态落库（complete/error/aborted + token/cost/model/metadata）。await。
+   *  http 实现先取消该 messageId 待发的 debounced streamContent 增量再写，
+   *  保证 last-write 是完整正文，不被迟到的旧增量覆盖。 */
+  finalizeMessage(messageId: number, patch: UpdateMessagePatch): Promise<void>
+  deleteMessagesFromId(sessionId: number, fromMessageId: number): Promise<number>
+  abortStreamingMessages(sessionId: number): Promise<number>
+  appendToolCall(input: AppendToolCallInput): Promise<{ id: number }>
+  updateToolCall(toolCallId: number, patch: UpdateToolCallPatch): Promise<void>
+  getToolCallByUseId(messageId: number, toolUseId: string): Promise<{ id: number } | null>
+}
+
+// ─── 基础设施板：运行配置快照（env 读，harness 启动时一次性取）─────────────
+export interface ChatRuntimeConfig {
+  /** harness 每用户消息最大迭代次数（AGENT_MAX_ITER，默认 8）。 */
+  maxIter: number
+  /** harness 每轮成本上限 USD（AGENT_MAX_COST_USD，默认 0.5）。 */
+  maxCostUsd: number
+  /** KOS L1 hot block 注入开关（MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED，默认 OFF）。
+   *  harness 据此决定是否 fire-and-forget 预取发件人 digest。 */
+  kosL1HotBlockEnabled: boolean
+  /** 多轮 harness 总开关（MAILAGENT_AGENT_HARNESS，默认 ON）。dispatcher 据此
+   *  + backendSupportsTools(kind) 双门 gate harness vs legacy 单遍。 */
+  harnessEnabled: boolean
+}
+
+// ─── 基础设施板（3a 定形）────────────────────────────────────────────────
+// harness + dispatcher 的形参类型 = 此 interface（只声明依赖基础设施板）；
+// 传入实现了全部板的 ElectronChatPlatform / HttpChatPlatform 实例（TS 结构化兼容）。
+export interface ChatInfraPlatform {
+  persist: ChatPersistPort
+  /** 从 SQLite SSoT 读邮件元数据 + markdown 正文，供 backend system prompt
+   *  inline。行缺失 / DB 不可达 → null（chat 仍可跑，模型看不到邮件正文）。 */
+  loadEmailContext(emailId: number): Promise<EmailContext | null>
+  /** 取运行配置快照（harness 启动时一次性取，整轮用同一份）。 */
+  resolveConfig(): Promise<ChatRuntimeConfig>
+  /** fire-and-forget 预取发件人 KOS digest（L1 hot block 用）。harness 启动时
+   *  调；**不 await**（不阻塞 backend.stream 启动，通常首 chunk 前已返回）。
+   *  实现内部幂等 + 并发去重 + 失败缓存（见 kos/sender_digest_cache.ts）。 */
+  prefetchSenderDigest(senderAddr: string): void
+}
+
+// ─── 模型板 ChatModelPlatform（3b 定形，此处仅占位说明）───────────────────
+// custom-api SSE 解析下沉 shared 后调 llmFetch(req) → Response（body = 原始
+// Anthropic/OpenAI SSE，key 注入在实现侧）；notion-agent 子进程经 serve-api
+// notionAgentStream(req) → AsyncIterable<ChatStreamEvent>；getCachedSenderDigest
+// （custom_api buildSystemBlocks 下沉后与 prefetchSenderDigest 配对）。
+// 3a 不写空 interface —— 其唯一消费方（两后端）3a 留 main 经 args.backend 注入，
+// 不调 platform。3b custom_api/notion_agent 下沉时按真实形状定义。
+
+// ─── 工具板 ChatToolPlatform（3b 定形，此处仅占位说明）───────────────────
+// 工具集（email_search/get/flag/draft/attachment/kos_query/…）+ saveToKos。
+// 未来海量工具补充的落点。3a 不写 —— tools/builtin 经 args.registry 注入、
+// kos_save 经 handlers/chat 的 chat:saveToKos channel 直调，均留 main 不调
+// platform。3b tools/builtin + kos_save 下沉时定义。

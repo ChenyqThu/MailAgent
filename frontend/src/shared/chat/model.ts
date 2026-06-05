@@ -6,7 +6,7 @@
 // chat_db.ts re-export 保所有既有 importer（dispatcher/harness/kos_save/
 // handlers 等）import 路径不变。
 //
-// 不变式 1：本文件**零 Electron/Node-only 依赖**（纯 type 声明，无 import）。
+// 不变式 1：本文件**零 Electron/Node-only 依赖**（纯类型 + 派生自类型的纯逻辑，无 import）。
 //
 // 这些类型 1:1 对齐 ai_chat.db 的 ai_chat_sessions / ai_chat_messages /
 // chat_tool_call 三表（CREATE 语句见 chat_db.ts），是 chat 持久化的契约面。
@@ -146,4 +146,16 @@ export interface UpdateToolCallPatch {
   durationMs?: number | null
   userEditedInputJson?: string | null
   confirmedAt?: number | null
+}
+
+// ── 后端能力查询（派生自 BackendKind 的纯逻辑）──────────────────────────────
+// V2.1 阶段 3：从 chat/config.ts 下沉。dispatcher 下沉 shared 后需在 UI 进程做
+// harness-vs-legacy gate，但 config.ts（env 读）留 main —— 而这函数是 backend 的
+// 静态能力声明（与 env 无关），故跟 BackendKind 一起落 shared，单一真源在此。
+
+/** 某 backend kind 是否端到端支持 Anthropic tool_use 协议（驱动 dispatcher 的
+ *  harness vs legacy 单遍 gate）。notion-agent CLI 是黑盒一次性调用，无 tool_use
+ *  循环。纯静态映射 —— 未来加 backend 在此扩展。 */
+export function backendSupportsTools(kind: BackendKind): boolean {
+  return kind === 'custom-api'
 }

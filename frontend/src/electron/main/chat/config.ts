@@ -114,12 +114,10 @@ export function getMaxCostUsd(): number {
   return n > 0 ? n : 0.5
 }
 
-/** Determines whether a backend supports the Anthropic tool_use protocol
- *  end-to-end. Drives the harness vs legacy gate in dispatcher.runStream.
- *  notion-agent CLI is a black-box one-shot — no tool_use loop possible. */
-export function backendSupportsTools(kind: 'notion-agent' | 'custom-api'): boolean {
-  return kind === 'custom-api'
-}
+// V2.1 阶段 3：backendSupportsTools 下沉 @shared/chat/model（dispatcher 下沉 shared
+// 后需在 UI 进程用；config.ts env 读留 main）。此处 re-export 保既有 importer
+// （dispatcher）的 `from './config'` 路径不变，单一真源在 model.ts。
+export { backendSupportsTools } from '@shared/chat/model'
 
 /** Minimum ms the notion-agent serial gate spaces consecutive subprocess
  *  *starts* apart (see backends/notion_agent_gate.ts). The handoff recommends
