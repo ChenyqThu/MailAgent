@@ -35,10 +35,7 @@ import type {
   CalendarEventDetail,
   CalendarEventOccurrence,
   CalendarSyncStateItem,
-  ChatMessage,
-  ChatSession,
-  ChatSessionListItem,
-  ChatToolCall,
+  ChatApi,
   EventGetOpts,
   EventsListOpts,
   CleanupDeadLetterOpts,
@@ -77,6 +74,7 @@ import type {
   TranslationCache
 } from './types'
 import { fetchAsDataUrl, request, type QueryValue, type RequestOptions } from './http_client'
+import { createChatRuntime } from '../chat/runtime'
 
 function notImplemented(method: string): Promise<never> {
   // V2-Sprint 3 stub. MUST reject, never throw synchronously: every stubbed
@@ -418,65 +416,20 @@ export class HttpApi implements MailApi {
     }
   }
 
-  // V2.1 阶段 2 — AI Chat 只读历史（serve-api /api/chat/* 读端点，镜像 IPC chat:list*）。
-  // 读方法接端点（失败 graceful 返 []/false，守 ChatApi 契约 + 与 ElectronApi 依赖 handler
-  // graceful 一致）。写/流方法（start/send/editMessage/newSession/saveToKos/confirmTool/
-  // onStream）= 阶段 3（chat 对话 B-pure-unified，harness 下沉 shared），保留 stub。
-  chat = {
-    start: () => notImplemented('chat.start'),
-    abort: () => {
-      /* no-op stub — 阶段 3 接 abort */
-    },
-    listMessages: async (sessionId: number): Promise<ChatMessage[]> => {
-      try {
-        return await this.req<ChatMessage[]>('GET', `/chat/sessions/${sessionId}/messages`)
-      } catch {
-        return []
-      }
-    },
-    listSessions: async (emailId: number): Promise<ChatSession[]> => {
-      try {
-        return await this.req<ChatSession[]>('GET', '/chat/sessions', { query: { emailId } })
-      } catch {
-        return []
-      }
-    },
-    listAllSessions: async (): Promise<ChatSessionListItem[]> => {
-      try {
-        return await this.req<ChatSessionListItem[]>('GET', '/chat/sessions/all')
-      } catch {
-        return []
-      }
-    },
-    editMessage: () => notImplemented('chat.editMessage'),
-    openPopout: () => {
-      /* no-op stub — no second-window in V2 web SPA */
-    },
-    deleteSession: () => {
-      /* no-op stub — 阶段 3 接写 */
-    },
-    newSession: () => notImplemented('chat.newSession'),
-    saveToKos: () => notImplemented('chat.saveToKos'),
-    kosAvailable: async (): Promise<boolean> => {
-      try {
-        return await this.req<boolean>('GET', '/chat/kos-available')
-      } catch {
-        return false
-      }
-    },
-    listToolCalls: async (messageId: number): Promise<ChatToolCall[]> => {
-      try {
-        return await this.req<ChatToolCall[]>('GET', `/chat/messages/${messageId}/tool-calls`)
-      } catch {
-        return []
-      }
-    },
-    confirmTool: async () => ({
-      ok: false as const,
-      code: 'E_NOT_IMPLEMENTED',
-      message: 'chat.confirmTool not implemented in HttpApi stub'
-    }),
-    onStream: (): (() => void) => () => undefined
+  // V2.1 阶段 3 — 3c-2：chat 引擎在 UI 进程跑（B-pure-unified）。chat 整面 = ChatRuntime
+  // （createChatDispatcher + HttpChatPlatform + 进程内 emitter sink，shared/chat/runtime.ts）
+  // 取代阶段 2 的只读 stub —— 读 + 跑单一真源 fetch serve-api。
+  //
+  // 🔴 lazy getter 破循环：createChatRuntime({reads:this}) 把本 HttpApi 作工具读委托
+  // （runtime → new HttpChatPlatform(this) 只用 email/attachment，不回访 .chat）。electron
+  // 注入的 new HttpApi(loopback) 只取 email/attachment、不访问 .chat → 其 runtime 永不构造
+  // （3c-3 electron 切走自己的 createChatRuntime）；远程 web 不用 chat 时零开销。
+  private _chat?: ChatApi
+  get chat(): ChatApi {
+    if (!this._chat) {
+      this._chat = createChatRuntime({ reads: this, baseUrl: this.baseUrl })
+    }
+    return this._chat
   }
 
   llm = {

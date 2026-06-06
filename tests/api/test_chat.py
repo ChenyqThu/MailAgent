@@ -739,6 +739,46 @@ def test_delete_messages_from_id(chat_client: TestClient) -> None:
     assert [m["id"] for m in remaining] == [ids[0]]
 
 
+def test_delete_session(chat_client: TestClient) -> None:
+    """deleteSession：建独立 session + 消息 → DELETE → session 不可见 + 返 {deleted: True}。
+    （CASCADE 删消息 + 工具调用是真实 schema FK 的职责，测试 DDL 无 FK 故不在此验，由前端
+    chat_db deleteSession 测试钉；serve-api 端点职责 = 转发 DELETE + 正确 envelope。）"""
+    sid = chat_client.post(
+        "/api/chat/sessions/new", json={"emailId": 5005, "backendKind": "custom-api"}
+    ).json()["data"]["id"]
+    chat_client.post(
+        f"/api/chat/sessions/{sid}/messages",
+        json={"role": "user", "content": "hi", "status": "complete"},
+    )
+    # 删前可见。
+    assert chat_client.get(f"/api/chat/sessions/{sid}").json()["data"]["id"] == sid
+    r = chat_client.delete(f"/api/chat/sessions/{sid}")
+    assert r.status_code == 200
+    assert r.json()["data"] == {"deleted": True}
+    # 删后 session 不可见（data=null，对齐 getSession row ?? null）。
+    assert chat_client.get(f"/api/chat/sessions/{sid}").json()["data"] is None
+
+
+def test_delete_session_nonexistent(chat_client: TestClient) -> None:
+    """删不存在的 id 是 no-op（fire-and-forget 语义）→ 仍 200 {deleted: True}。"""
+    r = chat_client.delete("/api/chat/sessions/99999")
+    assert r.status_code == 200
+    assert r.json()["data"] == {"deleted": True}
+
+
+def test_open_session_invalid_backend_kind(chat_client: TestClient) -> None:
+    """getOrCreateSession 非法 backendKind → E_INVALID_ARG（route 前置校验，不落 SQLite CHECK→500）。
+    对齐 handlers/chat.ts validateStartOpts；cutover 后 runtime 经 HttpChatPlatform.persist 调此端点。"""
+    r = chat_client.post("/api/chat/sessions", json={"emailId": 1, "backendKind": "bogus"})
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_new_session_invalid_backend_kind(chat_client: TestClient) -> None:
+    """createNewSession 非法 backendKind → E_INVALID_ARG（同 open_session）。"""
+    r = chat_client.post("/api/chat/sessions/new", json={"emailId": 1, "backendKind": "bogus"})
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_abort_streaming_messages(chat_client: TestClient) -> None:
     """pending/streaming → aborted；complete 不动。"""
     sid = chat_client.post(

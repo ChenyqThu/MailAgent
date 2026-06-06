@@ -267,6 +267,15 @@ class ChatDb:
             "SELECT * FROM ai_chat_sessions WHERE id = ?", (session_id,)
         )
 
+    def delete_session(self, session_id: int) -> None:
+        """删整个 session（其消息 + 工具调用经 FK ON DELETE CASCADE 连带删）。镜像 chat_db.ts
+        deleteSession（3c-2 补：cutover 后 renderer ChatRuntime.deleteSession 经此删，取代
+        electron chat:deleteSession IPC）。CASCADE 由 _write_connection 的 ``PRAGMA foreign_keys
+        = ON`` + 真实 schema 的 message→session / tool_call→message FK 生效（删不存在的 id 是
+        no-op，对齐 fire-and-forget 语义）。"""
+        with self._write_connection() as conn:
+            conn.execute("DELETE FROM ai_chat_sessions WHERE id = ?", (session_id,))
+
     # ── messages（写 + 单读，3b-3）─────────────────────────────────────────
 
     def append_message(

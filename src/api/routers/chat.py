@@ -329,8 +329,12 @@ async def open_session(request: Request, body: Optional[Dict[str, Any]] = None):
     backend_kind = opts.get("backendKind")
     if not isinstance(email_id, int) or isinstance(email_id, bool):
         raise APIError("E_INVALID_ARG", "sessions requires emailId:int", source="sqlite")
-    if not isinstance(backend_kind, str) or not backend_kind:
-        raise APIError("E_INVALID_ARG", "sessions requires backendKind:str", source="sqlite")
+    if backend_kind not in ("notion-agent", "custom-api"):
+        raise APIError(
+            "E_INVALID_ARG",
+            "sessions requires backendKind in {notion-agent, custom-api}",
+            source="sqlite",
+        )
     session = get_chat_db().get_or_create_session(
         email_id=email_id,
         backend_kind=backend_kind,
@@ -348,8 +352,12 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
     backend_kind = opts.get("backendKind")
     if not isinstance(email_id, int) or isinstance(email_id, bool):
         raise APIError("E_INVALID_ARG", "sessions/new requires emailId:int", source="sqlite")
-    if not isinstance(backend_kind, str) or not backend_kind:
-        raise APIError("E_INVALID_ARG", "sessions/new requires backendKind:str", source="sqlite")
+    if backend_kind not in ("notion-agent", "custom-api"):
+        raise APIError(
+            "E_INVALID_ARG",
+            "sessions/new requires backendKind in {notion-agent, custom-api}",
+            source="sqlite",
+        )
     session = get_chat_db().create_new_session(
         email_id=email_id,
         backend_kind=backend_kind,
@@ -364,6 +372,15 @@ async def get_session(request: Request, session_id: int):
     """单 session 行。镜像 chat_db getSession → ChatSession | null（data=null 当不存在，不 404）。"""
     session = get_chat_db().get_session(session_id)
     return success_envelope(session, request=request, source="sqlite")
+
+
+@router.delete("/sessions/{session_id:int}", dependencies=[Depends(verify_cf_access)])
+async def delete_session(request: Request, session_id: int):
+    """deleteSession：删整个 session（其消息 + 工具调用经 FK CASCADE 连带删）。镜像 chat_db
+    deleteSession（fire-and-forget，删不存在的 id 也返 {deleted: True}）。3c-2 补：cutover 后
+    renderer ChatRuntime.deleteSession 经此删（取代 electron chat:deleteSession IPC）。"""
+    get_chat_db().delete_session(session_id)
+    return success_envelope({"deleted": True}, request=request, source="sqlite")
 
 
 @router.post("/sessions/{session_id:int}/messages", dependencies=[Depends(verify_cf_access)])
