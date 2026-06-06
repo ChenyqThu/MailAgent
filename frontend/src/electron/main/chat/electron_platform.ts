@@ -17,19 +17,43 @@ import {
   getMaxIter,
   isHarnessEnabled,
   isKosConsumerEnabled,
-  isKosL1HotBlockEnabled
+  isKosL1HotBlockEnabled,
+  isKosTimeDecayEnabled
 } from './config'
 import {
   getCachedSenderDigest as kosGetCachedSenderDigest,
   prefetchSenderDigest as kosPrefetchSenderDigest
 } from '../kos/sender_digest_cache'
+// 工具板后端原语（3b-4）：读直调 handlers / 写 runEmailFlag·createDraft / KOS callTool / saveToKos。
+import {
+  getEmail as ipcGetEmail,
+  getEmailBody as ipcGetEmailBody,
+  getAIFields as ipcGetAIFields,
+  listEmails as ipcListEmails,
+  listEmailsByThread as ipcListEmailsByThread,
+  searchEmails as ipcSearchEmails
+} from '../handlers/email'
+import {
+  listAttachments as ipcListAttachments,
+  searchAttachments as ipcSearchAttachments
+} from '../handlers/attachment'
+import { runEmailFlag } from '../handlers/write_ops'
+import { createDraft as ipcCreateDraft } from '../handlers/draft'
+import { KOSClient } from '../kos/client'
+import { saveConversationToKos } from './kos_save'
 import type {
   ChatInfraPlatform,
   ChatModelConfig,
   ChatModelPlatform,
   ChatPersistPort,
   ChatRuntimeConfig,
-  LlmFetchRequest
+  ChatToolFlagPatch,
+  ChatToolKosConfig,
+  ChatToolListEmailsOpts,
+  ChatToolPlatform,
+  ChatToolSearchOpts,
+  LlmFetchRequest,
+  SaveConversationInput
 } from '@shared/chat/platform'
 import type { EmailContext } from '@shared/chat/types'
 
@@ -138,10 +162,21 @@ function queryEmailContext(emailId: number): EmailContext | null {
   }
 }
 
-/** 桌面端 ChatPlatform 单例（实现基础设施板 + 模型板①[3b-1]；工具板[3b-4] 后续扩同对象）。
- *  类型 = ChatInfraPlatform & ChatModelPlatform（TS 结构化兼容：harness/dispatcher 形参取
- *  InfraPlatform 子集，createCustomApiBackend 形参取 ModelPlatform 子集，各取所需）。 */
-export const electronChatPlatform: ChatInfraPlatform & ChatModelPlatform = {
+// 工具板（3b-4）KOS 通用代理用的 KOSClient 单例（复用 token cache 跨 chat session；
+// 与 kos_save.ts 的 save 专用 client 各自独立 lazy singleton）。
+let _kosToolClient: KOSClient | null = null
+function getKosToolClient(): KOSClient {
+  if (_kosToolClient === null) {
+    _kosToolClient = new KOSClient()
+  }
+  return _kosToolClient
+}
+
+/** 桌面端 ChatPlatform 单例（实现基础设施板 + 模型板①[3b-1] + 工具板[3b-4]，同一对象）。
+ *  类型 = ChatInfraPlatform & ChatModelPlatform & ChatToolPlatform（TS 结构化兼容：
+ *  harness/dispatcher 取 Infra 子集，createCustomApiBackend 取 Model 子集，createBuiltinTools
+ *  取 Tool 子集，各取所需）。 */
+export const electronChatPlatform: ChatInfraPlatform & ChatModelPlatform & ChatToolPlatform = {
   persist,
   async loadEmailContext(emailId) {
     return queryEmailContext(emailId)
@@ -208,5 +243,55 @@ export const electronChatPlatform: ChatInfraPlatform & ChatModelPlatform = {
       kosConsumerEnabled: isKosConsumerEnabled(),
       kosL1HotBlockEnabled: isKosL1HotBlockEnabled()
     }
+  },
+
+  // ── 工具板（3b-4）：读直调 handlers（同步包 async，字节级零回归）/ 写 runEmailFlag·createDraft / KOS ──
+  async listEmails(opts: ChatToolListEmailsOpts) {
+    return ipcListEmails(opts)
+  },
+  async getEmail(internalId: number) {
+    return ipcGetEmail(internalId)
+  },
+  // 12000 截断是工具纯逻辑（shared email_body handler 做）；原语固定 format=markdown 返回完整 body。
+  async getEmailBody(internalId: number) {
+    return ipcGetEmailBody(internalId, 'markdown')
+  },
+  async getAiFields(internalId: number) {
+    return ipcGetAIFields(internalId)
+  },
+  async listEmailsByThread(threadId: string) {
+    return ipcListEmailsByThread(threadId)
+  },
+  async searchEmailsFulltext(opts: ChatToolSearchOpts) {
+    return ipcSearchEmails(opts)
+  },
+  async listAttachments(internalId: number) {
+    return ipcListAttachments(internalId)
+  },
+  async searchAttachments(opts: ChatToolSearchOpts) {
+    return ipcSearchAttachments(opts)
+  },
+  /** flag/archive → 本机 serve-api outbox SSoT（runEmailFlag 已 D1 统一 daemon 转发，与 http 端零 parity）。 */
+  async flagEmail(internalId: number, patch: ChatToolFlagPatch) {
+    return runEmailFlag(internalId, patch)
+  },
+  /** 回复草稿 = AppleScript createDraft（host-local，~3-5s；http 端 throw E_NOT_IMPLEMENTED）。 */
+  async draftReply(internalId: number, bodyMarkdown: string) {
+    return ipcCreateDraft({ internalId, body: bodyMarkdown })
+  },
+  /** kos 注册 + rerank gate 快照：configured = isKosConsumerEnabled()（注册 gate 零回归语义，非 OAuth 凭据齐）。 */
+  kosConfig(): ChatToolKosConfig {
+    return {
+      configured: isKosConsumerEnabled(),
+      timeDecayEnabled: isKosTimeDecayEnabled()
+    }
+  },
+  /** 9 KOS 工具收敛 tools/call → 本机 KOSClient（OAuth + MCP JSON-RPC）。 */
+  async kosCallTool(name: string, args: Record<string, unknown>) {
+    return getKosToolClient().callTool(name, args)
+  },
+  /** chat 一键保存对话到 KOS（读 chat_db + summarize LLM + put_page，留 main kos_save.ts）。 */
+  async saveToKos(input: SaveConversationInput) {
+    return saveConversationToKos(input)
   }
 }

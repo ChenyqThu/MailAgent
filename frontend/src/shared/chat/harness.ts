@@ -31,7 +31,7 @@
 
 import type { ChatMessage, ConfirmationTier, UpdateToolCallPatch } from './model'
 import type { ChatInfraPlatform } from './platform'
-import { defaultToolRegistry, type ToolRegistry } from './tools/registry'
+import type { ToolRegistry } from './tools/registry'
 import {
   dispatchTools,
   type DispatchContext,
@@ -66,9 +66,10 @@ export interface RunHarnessArgs {
    *  终态 finalizeMessage / 工具审计 appendToolCall+updateToolCall / abort）+
    *  resolveConfig（迭代/成本上限 + KOS L1 flag）+ prefetchSenderDigest。 */
   platform: ChatInfraPlatform
-  /** Test injection point. Production callers omit and the harness uses
-   *  the module-level `defaultToolRegistry`. */
-  registry?: ToolRegistry
+  /** Tool registry（3b-4 起注入式必传）：dispatcher 用 createBuiltinTools(platform) 构造后
+   *  注入，测试传 mock registry。取代 module-global defaultToolRegistry —— 让 3c renderer 能
+   *  注入 http 工具板的 registry，与 main 的 electron 工具板 registry 隔离（per-dispatcher）。 */
+  registry: ToolRegistry
 }
 
 /** Translate the chat_db ChatMessage[] history into Anthropic's shape for
@@ -171,7 +172,7 @@ function chatToolStatus(status: ToolDispatchResult['status']): 'ok' | 'error' | 
 }
 
 export async function runHarness(args: RunHarnessArgs): Promise<void> {
-  const registry = args.registry ?? defaultToolRegistry
+  const registry = args.registry
   const tools = registry.toAnthropicSchema()
   // V2.1 阶段 3：配置快照一次性取（整轮用同一份），取代原 getMaxIter()/getMaxCostUsd()。
   const cfg = await args.platform.resolveConfig()

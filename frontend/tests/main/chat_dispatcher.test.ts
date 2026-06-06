@@ -25,6 +25,8 @@ import {
   type ChatDispatcher,
   type StreamSink
 } from '../../src/shared/chat/dispatcher'
+import { createToolRegistry } from '../../src/shared/chat/tools/registry'
+import { createBuiltinTools } from '../../src/shared/chat/tools/builtin'
 import { electronChatPlatform } from '../../src/electron/main/chat/electron_platform'
 import {
   __resetBackendRegistry,
@@ -102,8 +104,15 @@ beforeEach(() => {
   closeChatDb()
   __resetBackendRegistry()
   // 每个 test 新建 dispatcher：electronChatPlatform（基础设施板，真调本 test 的临时
-  // ai_chat.db）+ getChatBackend（registry，下方 registerChatBackend 注入 mock）。
-  d = createChatDispatcher({ platform: electronChatPlatform, getBackend: getChatBackend })
+  // ai_chat.db）+ getChatBackend（registry，下方 registerChatBackend 注入 mock）+ toolRegistry
+  // （3b-4：createBuiltinTools 注入 electron 工具板，与生产 handlers/chat.ts 同构）。
+  const toolRegistry = createToolRegistry()
+  for (const t of createBuiltinTools(electronChatPlatform)) toolRegistry.register(t)
+  d = createChatDispatcher({
+    platform: electronChatPlatform,
+    getBackend: getChatBackend,
+    toolRegistry
+  })
 })
 
 afterEach(() => {

@@ -31,6 +31,8 @@ import { getDb } from '../db'
 import { saveConversationToKos } from '../chat/kos_save'
 import { isKosSaveAvailable } from '../chat/config'
 import { createChatDispatcher, type StartChatResult } from '@shared/chat/dispatcher'
+import { createToolRegistry } from '@shared/chat/tools/registry'
+import { createBuiltinTools } from '@shared/chat/tools/builtin'
 import { makeWebContentsSink } from '../chat/web_contents_sink'
 import { electronChatPlatform } from '../chat/electron_platform'
 import { getChatBackend } from '../chat/registry'
@@ -74,11 +76,17 @@ export interface ChatSessionListItem extends ChatSessionSummary {
 }
 
 // V2.1 阶段 3 step 5 — 桌面端 dispatcher 单例。注入 ElectronChatPlatform（基础设施
-// 板直调 chat_db/db/config/kos，字节级零回归）+ getChatBackend（注册表）。harness /
-// legacy 编排逻辑全在 shared/chat/dispatcher，本进程只提供 platform + backend + sink。
+// 板直调 chat_db/db/config/kos，字节级零回归）+ getChatBackend（注册表）+ toolRegistry。
+// harness / legacy 编排逻辑全在 shared/chat/dispatcher，本进程只提供 platform + backend + sink。
+//
+// 3b-4：工具 registry 注入式取代 module-global defaultToolRegistry。空 registry 模块级建、
+// dispatcher 持引用；工具在 registerChatHandlers() 填充（app-ready 后 env 已 load → KOS gate
+// 读准 isKosConsumerEnabled），与旧 index.ts registerBuiltinTools 同时序，零回归。
+const toolRegistry = createToolRegistry()
 const dispatcher = createChatDispatcher({
   platform: electronChatPlatform,
-  getBackend: getChatBackend
+  getBackend: getChatBackend,
+  toolRegistry
 })
 
 function validateStartOpts(opts: ChatStartOpts | undefined): ChatStartOpts | string {
@@ -93,6 +101,18 @@ function validateStartOpts(opts: ChatStartOpts | undefined): ChatStartOpts | str
 }
 
 export function registerChatHandlers(): void {
+  // 3b-4：填充工具 registry（注入 electron 工具板）。app-ready 后 env 已 load → KOS gate
+  // 读准 isKosConsumerEnabled()。取代旧 index.ts registerBuiltinTools(defaultToolRegistry)：
+  // 同时序、同 gate；harness 经 dispatcher 注入的 registry 取工具（不再 module-global）。
+  for (const tool of createBuiltinTools(electronChatPlatform)) {
+    toolRegistry.register(tool)
+  }
+  if (process.env.NODE_ENV !== 'test') {
+    const names = toolRegistry.names().sort()
+    // eslint-disable-next-line no-console
+    console.log(`[V2.1 3b-4] registered ${names.length} chat tools: ${names.join(', ')}`)
+  }
+
   ipcMain.handle('chat:start', async (evt, opts: ChatStartOpts): Promise<ChatStartEnvelope> => {
     const valid = validateStartOpts(opts)
     if (typeof valid === 'string') {

@@ -121,3 +121,60 @@ def test_attachment_download_unknown_id_404(client):
     r = client.get("/api/attachment/424242/download")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/attachment/search — FTS5 附件文本搜索（V2.1 3b-4）
+# ---------------------------------------------------------------------------
+
+
+def test_attachment_search_empty_no_fts_graceful(client):
+    """conftest 无 email_attachment_fts 表 → repo + count helper graceful → empty（不 500）。"""
+    r = client.get("/api/attachment/search?q=redis")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["items"] == []
+    assert data["total_indexed"] == 0
+    assert data["mode"] == "smart"
+    assert body["meta"]["query"] == "redis"
+
+
+def test_attachment_search_missing_q_422(client):
+    r = client.get("/api/attachment/search")
+    assert r.status_code == 422
+
+
+def test_attachment_search_raw_mode_field(client):
+    r = client.get("/api/attachment/search?q=redis&raw=true")
+    assert r.status_code == 200
+    assert r.json()["data"]["mode"] == "raw"
+
+
+def test_attachment_search_hits(client, temp_db):
+    """自建 email_attachment_fts seed（conftest 无此表）→ 验证 hit 映射 + JOIN 邮件上下文。"""
+    import sqlite3
+
+    conn = sqlite3.connect(str(temp_db))
+    conn.execute("CREATE VIRTUAL TABLE email_attachment_fts USING fts5(text)")
+    conn.execute(
+        "INSERT INTO email_attachment_fts (rowid, text) VALUES (?, ?)",
+        (ATT_NORMAL_ID, "redis configuration and timeout guide"),
+    )
+    conn.commit()
+    conn.close()
+
+    # raw=true 直 match（避开 smart transform 的不确定性）；hit 映射与 mode 无关。
+    r = client.get("/api/attachment/search?q=redis&raw=true")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["total_indexed"] == 1
+    assert len(data["items"]) == 1
+    hit = data["items"][0]
+    assert hit["attachment_id"] == ATT_NORMAL_ID
+    assert hit["internal_id"] == EMAIL_ID
+    assert hit["filename"] == "report.pdf"
+    assert "redis" in hit["snippet"]
+    assert "rank" in hit
+    assert "notion_url" in hit

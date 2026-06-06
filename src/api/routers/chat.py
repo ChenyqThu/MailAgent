@@ -16,16 +16,20 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_settings
+from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.chat.notion_agent import run_notion_agent, sse_encode
+from src.kos.client import KOSClient, KOSError
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -473,3 +477,95 @@ async def get_message(request: Request, message_id: int):
     """单消息行。镜像 chat_db getMessage → ChatMessage | null（data=null 当不存在，不 404）。"""
     msg = get_chat_db().get_message(message_id)
     return success_envelope(msg, request=request, source="sqlite")
+
+
+# ── KOS 代理端点（V2.1 阶段 3 3b-4：工具板 kosCallTool / saveToKos 的 http 面）─────────────
+#
+# 镜像前端 chat 工具板（ChatToolPlatform）KOS 成员：9 KOS 工具全收敛 kosCallTool(name,args)
+# → 本端点 → src/kos/client.py KOSClient.call_tool；chat:saveToKos → save-to-kos（复刻
+# kos_save.ts：读 chat_db + summarize LLM + put_page）。KOSClient 同步（httpx.Client），用
+# run_in_threadpool 避免阻塞 event loop。HttpChatPlatform（3b-5）fetch 这俩端点。
+#
+# KOSClient 单例（复用 OAuth token cache 跨请求；env KOS_MCP_BASE/CLIENT_ID/SECRET 由 serve-api
+# 注入）。与 chat:kosAvailable 的 _kos_available() env 检查同源。
+
+_kos_client_singleton: Optional[KOSClient] = None
+
+
+def _get_kos_client() -> KOSClient:
+    global _kos_client_singleton
+    if _kos_client_singleton is None:
+        _kos_client_singleton = KOSClient()
+    return _kos_client_singleton
+
+
+@router.post("/kos-call", dependencies=[Depends(verify_cf_access)])
+async def kos_call(request: Request):
+    """KOS 通用工具代理（3b-4）：``{name, args}`` → KOSClient.call_tool → caller-friendly value。
+
+    镜像前端工具板 kosCallTool（query/put_page/recall/find_experts/get_page/list_skills/
+    get_skill/extract_facts 全收敛 tools/call）。data = call_tool 返回（list/dict/str）。KOS 不可达
+    → KOSError 转 502 envelope（code=E_KOS_*，前端工具 duck-type 读 code → LLM fallback 本地 FTS5）。
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise APIError("E_INVALID_ARG", "kos-call body must be JSON")
+    if not isinstance(payload, dict):
+        raise APIError("E_INVALID_ARG", "kos-call body must be a JSON object")
+    name = payload.get("name")
+    args = payload.get("args")
+    if not isinstance(name, str) or not name:
+        raise APIError("E_INVALID_ARG", "kos-call requires name:str")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        raise APIError("E_INVALID_ARG", "kos-call requires args:object")
+    try:
+        result = await run_in_threadpool(_get_kos_client().call_tool, name, args)
+    except KOSError as e:
+        raise APIError(e.code, str(e), http_status=502)
+    return success_envelope(result, request=request, source="kos")
+
+
+@router.post("/save-to-kos", dependencies=[Depends(verify_cf_access)])
+async def save_to_kos(request: Request, body: Optional[Dict[str, Any]] = None):
+    """chat 一键保存对话到 KOS（3b-4）：复刻 kos_save.ts（读 chat_db + summarize LLM + put_page）。
+
+    body = SaveConversationInput ``{messageId, slug?, title?}``。data = {slug, status, contentBytes}。
+    summarize LLM 失败非致命（fallback raw transcript）；校验 / KOS 错误 → 对应 status envelope
+    （E_NOT_FOUND→404 / E_INVALID_ARG→400 / E_KOS_*→502）。 """
+    opts = body or {}
+    message_id = opts.get("messageId")
+    if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id < 0:
+        raise APIError("E_INVALID_ARG", "save-to-kos requires messageId:int (non-negative)")
+    slug = opts.get("slug")
+    title = opts.get("title")
+    cfg = get_settings()
+    # saved_at（动态；frontmatter saved_at 行，非字节对齐字段）。ISO 8601 + 真实毫秒 + Z
+    # （仿 TS new Date().toISOString()，codex review NIT）。
+    _now = datetime.now(timezone.utc)
+    saved_at_iso = _now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{_now.microsecond // 1000:03d}Z"
+    try:
+        result = await run_in_threadpool(
+            save_conversation_to_kos,
+            chat_db=get_chat_db(),
+            kos_client=_get_kos_client(),
+            message_id=message_id,
+            slug=slug if isinstance(slug, str) and slug else None,
+            title=title if isinstance(title, str) and title else None,
+            sync_db_path=cfg.sync_store_db_path,
+            saved_at_iso=saved_at_iso,
+            llm_api_key=(cfg.llm_api_key or "").strip(),
+            llm_api_base=(cfg.llm_api_base or ""),
+            llm_model=(cfg.llm_model or ""),
+        )
+    except SaveConversationError as e:
+        if e.code == "E_NOT_FOUND":
+            status = 404
+        elif e.code == "E_INVALID_ARG":
+            status = 400
+        else:
+            status = 502
+        raise APIError(e.code, str(e), http_status=status)
+    return success_envelope(result, request=request, source="kos")

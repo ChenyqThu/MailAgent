@@ -38,6 +38,14 @@ import type {
   UpdateToolCallPatch
 } from './model'
 import type { ChatStreamEvent, ChatStreamRequest, EmailContext } from './types'
+// 工具板读原语返回类型 = 既有 cli.gen / api 形状（均 shared 零 Electron，不变式 1）。
+import type {
+  AttachmentList_AttachmentItem,
+  EmailGet_EmailRecord,
+  EmailList_EmailListItem,
+  MailagentEmailBody
+} from '../types/cli.gen'
+import type { AIFields, SearchResult } from '../api/types'
 
 // ─── 基础设施板：持久化端口（ai_chat.db 写读）────────────────────────────
 //
@@ -153,6 +161,99 @@ export interface ChatNotionAgentPlatform {
   notionAgentStream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent>
 }
 
-// ─── 工具板 ChatToolPlatform（仍占位，3b-4 定形）──────────────────────────────
-// 8 读+3 写原语 / kosCallTool / kosConfig / saveToKos，工具逻辑下沉 shared createBuiltinTools
-// 单一真源。按「有消费方才定」纪律，tools/builtin + kos_save 下沉时定义。
+// ─── 工具板 ChatToolPlatform（3b-4 定形：tools/builtin + kos_save 下沉消费）────────
+// 工具逻辑（input 校验 + shape massage + kos_query rerankByRecency）下沉 shared 单一真源
+// createBuiltinTools(toolPlatform): ToolDef[]；electron/http 只提供后端原语两实现（零 parity）。
+// harness 经注入的 registry 取工具（取代 module-global defaultToolRegistry，dispatcher 注入）。
+//
+// 读原语统一 Promise 签名（electron 实现包同步 handler 返回值；http fetch serve-api）。返回 shape
+// = 既有 serve-api/handlers data 块（cli.gen / api 类型，均 shared）；search* 结果工具直接塞、
+// 不读字段 → unknown 足够（AttachmentSearchResult 形状在 main handlers，不为类型拖进 shared）。
+
+/** email_search 工具构造的元数据过滤 opts（handlers ListOpts 子集；shared 自有，
+ *  不引 main handlers 的 Electron 类型）。 */
+export interface ChatToolListEmailsOpts {
+  subject?: string
+  fromAddr?: string
+  mailbox?: string
+  sinceDate?: string
+  untilDate?: string
+  isRead?: boolean
+  isFlagged?: boolean
+  limit?: number
+}
+
+/** email_search_fulltext / email_search_attachments 工具构造的 FTS opts（SearchOpts 子集）。 */
+export interface ChatToolSearchOpts {
+  query: string
+  mailbox?: string
+  since?: string
+  until?: string
+  limit?: number
+}
+
+/** email_flag / email_archive 工具构造的 flag patch（EmailFlagOpts 子集，至少一项非空由工具校验）。 */
+export interface ChatToolFlagPatch {
+  isRead?: boolean
+  isFlagged?: boolean
+  processingStatus?: string
+}
+
+/** email_draft_reply 工具读的 createDraft 结果形状（main CreateDraftResult 镜像；shared 自有）。 */
+export interface ChatToolDraftResult {
+  internalId: number
+  mailbox: string | null
+  accountName: string | null
+  draftId: string
+}
+
+/** kos 工具注册 + rerank gate 的配置快照（同步）。configured = 注册 gate
+ *  （electron: isKosConsumerEnabled()，零回归注册语义，非 OAuth 凭据齐）；
+ *  timeDecayEnabled = kos_query rerankByRecency gate（isKosTimeDecayEnabled()）。 */
+export interface ChatToolKosConfig {
+  configured: boolean
+  timeDecayEnabled: boolean
+}
+
+/** chat:saveToKos 入参（main kos_save.ts 真源迁此，工具板契约 + electron impl 共用）。 */
+export interface SaveConversationInput {
+  /** assistant message 的 id；service 自己向前找最近 user message 配对。 */
+  messageId: number
+  /** Optional override — 不传走 default `chat-history/mailagent/<email>/<sess>/<msg>`。 */
+  slug?: string
+  /** Optional override title — 不传从 user message 首句生成（≤ 50 字符）。 */
+  title?: string
+}
+
+/** chat:saveToKos 结果。 */
+export interface SaveConversationResult {
+  slug: string
+  status: string
+  contentBytes: number
+}
+
+export interface ChatToolPlatform {
+  // ── 读原语（8 silent 工具）— electron 直调 handlers（同步包 async）/ http fetch serve-api ──
+  listEmails(opts: ChatToolListEmailsOpts): Promise<EmailList_EmailListItem[]>
+  getEmail(internalId: number): Promise<EmailGet_EmailRecord | null>
+  /** markdown 正文（固定 format=markdown；12000 截断是工具纯逻辑，原语返回完整 body）。 */
+  getEmailBody(internalId: number): Promise<MailagentEmailBody['data'] | null>
+  getAiFields(internalId: number): Promise<AIFields | null>
+  listEmailsByThread(threadId: string): Promise<EmailList_EmailListItem[]>
+  searchEmailsFulltext(opts: ChatToolSearchOpts): Promise<SearchResult>
+  listAttachments(internalId: number): Promise<AttachmentList_AttachmentItem[]>
+  searchAttachments(opts: ChatToolSearchOpts): Promise<unknown>
+  // ── 写原语（preview/edit 工具）─────────────────────────────────────────────
+  /** flag/archive 经此（electron+http 都→serve-api，runEmailFlag 已 D1 统一，零 parity）。
+   *  返回 daemon FlagResult（{updated_ids?,outbox_entries?}），工具内 as 投影。 */
+  flagEmail(internalId: number, patch: ChatToolFlagPatch): Promise<unknown>
+  /** 回复草稿（electron: AppleScript createDraft；http: throw E_NOT_IMPLEMENTED，fork 3 远程推迟）。 */
+  draftReply(internalId: number, bodyMarkdown: string): Promise<ChatToolDraftResult>
+  // ── KOS（9 工具，gated by kosConfig().configured）───────────────────────────
+  /** kos 注册 + rerank gate 的同步配置快照。 */
+  kosConfig(): ChatToolKosConfig
+  /** query/put_page/recall/… 全收敛为 tools/call（electron: KOSClient.callTool；http: serve-api 代理）。 */
+  kosCallTool(name: string, args: Record<string, unknown>): Promise<unknown>
+  /** 手动保存对话到 KOS（electron: saveConversationToKos；http: serve-api /save-to-kos）。 */
+  saveToKos(input: SaveConversationInput): Promise<SaveConversationResult>
+}

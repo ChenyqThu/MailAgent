@@ -35,6 +35,8 @@ import {
 import { getDb } from '../db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../llm_settings'
 import { KOSClient, KOSError } from '../kos/client'
+// SaveConversationInput / SaveConversationResult 真源 3b-4 起在 shared 工具板契约（单一真源）。
+import type { SaveConversationInput, SaveConversationResult } from '@shared/chat/platform'
 
 const SLUG_PREFIX = 'chat-history/mailagent'
 
@@ -263,25 +265,12 @@ async function summarizeConversation(opts: {
 }
 
 // ── 输入 + 输出契约 ────────────────────────────────────────────────
+//
+// SaveConversationInput / SaveConversationResult 真源 3b-4 起在 `@shared/chat/platform`
+// （工具板 ChatToolPlatform.saveToKos 契约 + electron/http impl 共用）。此处 re-export 保持
+// 既有 importer（`from '../chat/kos_save'`）路径不变。
 
-export interface SaveConversationInput {
-  /** assistant message 的 id. service 自己向前找最近的 user message
-   *  作为 context (因为 conversation 都是 user/assistant 交替). */
-  messageId: number
-  /** Optional override — 不传走 default `chat-history/mailagent/<email>/<sess>/<msg>`. */
-  slug?: string
-  /** Optional override title — 不传从 user message 首句生成 (<= 50 字符). */
-  title?: string
-}
-
-export interface SaveConversationResult {
-  /** Final slug pushed (default or user override). */
-  slug: string
-  /** KOS server-side status: 'created' / 'updated' / 'unknown'. */
-  status: string
-  /** Bytes of markdown content actually pushed (debug / size budget). */
-  contentBytes: number
-}
+export type { SaveConversationInput, SaveConversationResult } from '@shared/chat/platform'
 
 export interface SaveConversationError {
   code: string

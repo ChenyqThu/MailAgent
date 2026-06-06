@@ -1,17 +1,44 @@
-// Sprint 19 PR-1b — Builtin tool catalog smoke tests.
+// V2.1 阶段 3 — 3b-4：Builtin tool catalog smoke tests（工具下沉 shared 后改注入 mock platform）。
 //
-// Verifies static shape (names, schemas, tiers) without hitting the real
-// sync_store.db. Actual handler execution is covered by integration tests
-// in PR-1d once dispatcher + custom_api.ts + mail-sync DB fixture all align.
+// Verifies static shape (names, schemas, tiers) + createBuiltinTools wiring without hitting
+// the real sync_store.db. 工具下沉 shared 后经 createBuiltinTools(platform) factory 构造，
+// 注入 stub ChatToolPlatform（catalog shape 测试只读 ToolDef 元数据，不调 handler）。
 
 import { describe, expect, test } from 'vitest'
 import { createToolRegistry } from '../../../../src/shared/chat/tools/registry'
 import {
-  allEmailTools,
-  allAttachmentTools,
-  allWriteTools,
-  registerBuiltinTools
-} from '../../../../src/electron/main/chat/tools/builtin'
+  createBuiltinTools,
+  createEmailTools,
+  createAttachmentTools,
+  createWriteTools
+} from '../../../../src/shared/chat/tools/builtin'
+import type { ChatToolPlatform } from '../../../../src/shared/chat/platform'
+
+/** Stub platform — catalog shape 测试只读 ToolDef 元数据（不调 handler），方法 stub 即可；
+ *  kosConfig().configured 决定 createBuiltinTools 是否含 9 KOS 工具（默认 false = 11 工具）。 */
+function makePlatform(over: Partial<ChatToolPlatform> = {}): ChatToolPlatform {
+  return {
+    listEmails: async () => [],
+    getEmail: async () => null,
+    getEmailBody: async () => null,
+    getAiFields: async () => null,
+    listEmailsByThread: async () => [],
+    searchEmailsFulltext: async () => ({ items: [], total_indexed: 0 }),
+    listAttachments: async () => [],
+    searchAttachments: async () => ({ items: [], total_indexed: 0 }),
+    flagEmail: async () => ({}),
+    draftReply: async () => ({ internalId: 0, mailbox: null, accountName: null, draftId: '' }),
+    kosConfig: () => ({ configured: false, timeDecayEnabled: false }),
+    kosCallTool: async () => null,
+    saveToKos: async () => ({ slug: '', status: 'unknown', contentBytes: 0 }),
+    ...over
+  }
+}
+
+const platform = makePlatform()
+const allEmailTools = createEmailTools(platform)
+const allAttachmentTools = createAttachmentTools(platform)
+const allWriteTools = createWriteTools(platform)
 
 describe('builtin tool catalog — M1', () => {
   test('email tools: exactly 6 tools, all silent-tier read', () => {
@@ -95,7 +122,7 @@ describe('builtin tool catalog — M1', () => {
       email_body: ['internal_id'],
       email_list_thread: ['thread_id'],
       email_search_fulltext: ['query'],
-      email_search_attachments: ['query'],  // PR-2b
+      email_search_attachments: ['query'], // PR-2b
       email_get_ai_fields: ['internal_id'],
       attachment_list: ['internal_id'],
       // write tools require internal_id + (for draft) body_markdown.
@@ -111,10 +138,10 @@ describe('builtin tool catalog — M1', () => {
   })
 })
 
-describe('registerBuiltinTools — boot wiring', () => {
-  test('registers all 11 tools (M1 10 + PR-2b email_search_attachments) into a fresh registry (8 read + 3 write)', () => {
+describe('createBuiltinTools — boot wiring', () => {
+  test('builds all 11 default tools (KOS off) into a fresh registry (8 read + 3 write)', () => {
     const r = createToolRegistry()
-    registerBuiltinTools(r)
+    for (const t of createBuiltinTools(makePlatform())) r.register(t)
     expect(r.names().sort()).toEqual(
       [
         'attachment_list',
@@ -134,9 +161,9 @@ describe('registerBuiltinTools — boot wiring', () => {
 
   test('emits a clean Anthropic schema (every entry has name/description/input_schema)', () => {
     const r = createToolRegistry()
-    registerBuiltinTools(r)
+    for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const schema = r.toAnthropicSchema()
-    expect(schema).toHaveLength(11)  // PR-2b: 10 → 11
+    expect(schema).toHaveLength(11) // PR-2b: 10 → 11
     for (const t of schema) {
       expect(t.name).toBeTruthy()
       expect(t.description).toBeTruthy()
@@ -146,17 +173,30 @@ describe('registerBuiltinTools — boot wiring', () => {
 
   test('category filter — toAnthropicSchema({categories:["read"]}) excludes write tools', () => {
     const r = createToolRegistry()
-    registerBuiltinTools(r)
+    for (const t of createBuiltinTools(makePlatform())) r.register(t)
     const readOnly = r.toAnthropicSchema({ categories: ['read'] })
-    expect(readOnly).toHaveLength(8)  // PR-2b: 7 → 8
+    expect(readOnly).toHaveLength(8) // PR-2b: 7 → 8
     for (const t of readOnly) {
       expect(t.name).not.toMatch(/_flag|_archive|_draft_reply/)
     }
   })
 
-  test('double-register throws (registry duplicate-name guard)', () => {
+  test('KOS gate — kosConfig().configured=true adds the 9 KOS tools (11 → 20)', () => {
+    const off = createBuiltinTools(makePlatform())
+    expect(off).toHaveLength(11)
+    const on = createBuiltinTools(
+      makePlatform({ kosConfig: () => ({ configured: true, timeDecayEnabled: false }) })
+    )
+    expect(on).toHaveLength(20) // 11 default + 9 KOS
+    const names = on.map((t) => t.name)
+    expect(names).toContain('kos_query')
+    expect(names).toContain('kos_put_page')
+  })
+
+  test('duplicate registration throws (registry duplicate-name guard)', () => {
     const r = createToolRegistry()
-    registerBuiltinTools(r)
-    expect(() => registerBuiltinTools(r)).toThrow(/already registered/)
+    const tools = createBuiltinTools(makePlatform())
+    for (const t of tools) r.register(t)
+    expect(() => r.register(tools[0]!)).toThrow(/already registered/)
   })
 })

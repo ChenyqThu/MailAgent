@@ -31,6 +31,7 @@ import { backendSupportsTools, type BackendKind, type ChatMessage, type ChatSess
 import { runHarness } from './harness'
 import { cancelConfirmationsForSession } from './tools/confirmation'
 import type { ChatInfraPlatform } from './platform'
+import type { ToolRegistry } from './tools/registry'
 import type { ChatBackend, ChatStreamEnvelope, ChatStreamEvent, EmailContext } from './types'
 
 export interface StartChatInput {
@@ -81,6 +82,10 @@ export interface StreamSink {
 export interface ChatDispatcherDeps {
   platform: ChatInfraPlatform
   getBackend: (kind: BackendKind) => ChatBackend
+  /** 工具 registry（3b-4 注入式）：caller 用 createBuiltinTools(platform) 构造后注入；runStream
+   *  传给 runHarness，取代 module-global defaultToolRegistry。main = electron 工具板 registry；
+   *  3c renderer = http 工具板 registry（per-dispatcher 隔离）。 */
+  toolRegistry: ToolRegistry
 }
 
 export interface ChatDispatcher {
@@ -272,7 +277,8 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
           emailContext,
           ac,
           sink,
-          platform: deps.platform
+          platform: deps.platform,
+          registry: deps.toolRegistry
         })
         return
       }

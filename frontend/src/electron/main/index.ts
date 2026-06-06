@@ -17,9 +17,6 @@ import { registerChatBackend } from './chat/registry'
 import { createCustomApiBackend } from '@shared/chat/backends/custom_api'
 import { electronChatPlatform } from './chat/electron_platform'
 import { NotionAgentBackend } from './chat/backends/notion_agent'
-// Sprint 19 PR-1d.1 — populate agent harness tool catalog at boot.
-import { defaultToolRegistry } from '@shared/chat/tools/registry'
-import { registerBuiltinTools } from './chat/tools/builtin'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'
 import { registerDraftHandlers } from './handlers/draft'
@@ -327,12 +324,9 @@ app.whenReady().then(async () => {
   // 注入 key）。notion-agent execa 留 main（3b-2 才 serve-api 复刻），仍 new NotionAgentBackend()。
   registerChatBackend(createCustomApiBackend(electronChatPlatform))
   registerChatBackend(new NotionAgentBackend())
-  // Sprint 19 PR-1d.1 — populate the agent harness tool registry once at
-  // boot. The harness only consults `defaultToolRegistry` when the
-  // MAILAGENT_AGENT_HARNESS env flag is set, so registering tools here is
-  // safe even when the harness is off — no behavioural change until the
-  // flag flips.
-  registerBuiltinTools(defaultToolRegistry)
+  // 3b-4：工具 registry 不再 module-global 填充——registerChatHandlers() 内用
+  // createBuiltinTools(electronChatPlatform) 填充 dispatcher 持有的 registry（注入式取代
+  // defaultToolRegistry）。harness 经 dispatcher 注入的 registry 取工具。
   registerChatHandlers()
   // Sprint 5 §2.2 — Mail.app write commands (createDraft via AppleScript,
   // resync / llm:run / notion:updateFlag via `mailagent` CLI fork).

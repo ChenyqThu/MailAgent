@@ -167,13 +167,9 @@ export class ToolRegistry {
   }
 }
 
-/** Production singleton. Tools register here at app boot
- *  (`frontend/src/electron/main/index.ts` → `registerBuiltinTools()`).
- *  Tests should prefer `createToolRegistry()` to avoid global state. */
-export const defaultToolRegistry = new ToolRegistry()
-
-/** Factory for tests + future per-feature registries (e.g. if we ever
- *  curate tools by user permission level). */
+/** Factory for per-dispatcher registries（3b-4 注入式：main = createBuiltinTools(electron 工具板),
+ *  3c renderer = http 工具板, 测试 = mock 工具）。每个 dispatcher 注入独立 registry，取代
+ *  module-global defaultToolRegistry（已随工具下沉 shared 移除，避免 main/renderer 双进程共享）。 */
 export function createToolRegistry(): ToolRegistry {
   return new ToolRegistry()
 }

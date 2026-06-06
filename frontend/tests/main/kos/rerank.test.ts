@@ -9,11 +9,12 @@
 
 import { describe, expect, test } from 'vitest'
 
+// V2.1 3b-4：rerank 逻辑随 chat 工具下沉 shared 单一真源（原 main kos/client.ts 那份已删）。
 import {
   extractHitTimestampMs,
   rerankByRecency,
   type QueryHit
-} from '../../../src/electron/main/kos/client'
+} from '../../../src/shared/chat/tools/builtin/kos_rerank'
 
 const DAY_MS = 86_400_000
 const NOW = 1_700_000_000_000 // arbitrary fixed epoch ms for reproducibility

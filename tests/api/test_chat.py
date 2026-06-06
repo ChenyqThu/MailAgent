@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.chat.db import ChatDb
+from src.kos.client import KOSError  # kos-call 端点 KOSError→502 测试用
 
 # ai_chat.db schema（端点 SELECT 字段，对齐 chat_db.ts v4）。
 _AI_CHAT_DDL = """
@@ -774,4 +775,131 @@ def test_finalize_message_missing_body_400(chat_client: TestClient) -> None:
 def test_update_tool_call_missing_body_400(chat_client: TestClient) -> None:
     """PATCH /tool-calls/{id} 无 body → E_INVALID_ARG（同 finalize_message，codex LOW）。"""
     r = chat_client.patch("/api/chat/tool-calls/1")
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+# ── KOS 代理端点（3b-4：kos-call + save-to-kos）──────────────────────────────
+
+
+def test_kos_call_proxies_name_args(
+    chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list = []
+
+    class _MockKos:
+        def call_tool(self, name, args):
+            calls.append((name, args))
+            return [{"slug": "people/bob"}]
+
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: _MockKos())
+    r = chat_client.post(
+        "/api/chat/kos-call", json={"name": "query", "args": {"query": "redis"}}
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "success"
+    assert body["data"] == [{"slug": "people/bob"}]
+    assert calls == [("query", {"query": "redis"})]
+
+
+def test_kos_call_missing_args_defaults_empty(
+    chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list = []
+
+    class _MockKos:
+        def call_tool(self, name, args):
+            calls.append((name, args))
+            return {"ok": 1}
+
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: _MockKos())
+    r = chat_client.post("/api/chat/kos-call", json={"name": "list_skills"})
+    assert r.status_code == 200
+    assert calls == [("list_skills", {})]
+
+
+def test_kos_call_kos_error_502(
+    chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _MockKos:
+        def call_tool(self, name, args):
+            raise KOSError("network down", "E_KOS_NETWORK")
+
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: _MockKos())
+    r = chat_client.post("/api/chat/kos-call", json={"name": "query", "args": {}})
+    assert r.status_code == 502
+    assert r.json()["error"]["code"] == "E_KOS_NETWORK"
+
+
+def test_kos_call_missing_name_400(chat_client: TestClient) -> None:
+    r = chat_client.post("/api/chat/kos-call", json={"args": {}})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+@pytest.fixture
+def kos_save_client(
+    ai_chat_db: Path, sync_store_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    """save-to-kos 端点 client：含 llm config stub（空 key → summarize fallback transcript，不打网）。"""
+    chat_db = ChatDb(str(ai_chat_db))
+    monkeypatch.setattr("src.api.routers.chat.get_chat_db", lambda: chat_db)
+
+    class _Cfg:
+        sync_store_db_path = str(sync_store_db)
+        llm_api_key = ""  # 空 → summarize raise E_NO_LLM_KEY → fallback raw transcript
+        llm_api_base = ""
+        llm_model = ""
+
+    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _Cfg())
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
+
+
+def test_save_to_kos_fallback_transcript(
+    kos_save_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict = {}
+
+    class _MockKos:
+        def put_page(self, slug, content):
+            captured["slug"] = slug
+            captured["content"] = content
+            return {"slug": slug, "status": "created_or_updated"}
+
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: _MockKos())
+    r = kos_save_client.post("/api/chat/save-to-kos", json={"messageId": MSG_ASSISTANT_ID})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["slug"] == f"chat-history/mailagent/{EMAIL_ID}/{SESSION_ID}/{MSG_ASSISTANT_ID}"
+    assert data["status"] == "created_or_updated"
+    assert data["contentBytes"] > 0
+    # LLM 未配置 → fallback transcript（含 User/Assistant）+ frontmatter source_refs。
+    assert "## User\n\n这封邮件讲什么?" in captured["content"]
+    assert "## Assistant\n\n讲的是 redis timeout." in captured["content"]
+    assert f"  - 'sources/email/{EMAIL_ID}'" in captured["content"]
+
+
+def test_save_to_kos_message_not_found_404(
+    kos_save_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: object())
+    r = kos_save_client.post("/api/chat/save-to-kos", json={"messageId": 99999})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+def test_save_to_kos_invalid_message_id_400(kos_save_client: TestClient) -> None:
+    r = kos_save_client.post("/api/chat/save-to-kos", json={"messageId": -1})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_save_to_kos_role_not_assistant_400(
+    kos_save_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # MSG_USER_ID 是 user role → E_INVALID_ARG（400）。
+    monkeypatch.setattr("src.api.routers.chat._get_kos_client", lambda: object())
+    r = kos_save_client.post("/api/chat/save-to-kos", json={"messageId": MSG_USER_ID})
+    assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
