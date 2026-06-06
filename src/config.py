@@ -354,6 +354,45 @@ class Config(BaseSettings):
         ),
     )
 
+    # =========================================================================
+    # Chat Agent Harness 配置 (V2.1 阶段 3c — serve-api GET /api/chat/config 暴露给
+    # renderer chat 引擎 HttpChatPlatform 的运行配置快照)。
+    #
+    # 🔴 env 名 + 默认值必须与 frontend/src/electron/main/chat/config.ts 的 getter
+    #    逐一对齐: cutover 前 electron dispatcher 直读 process.env, cutover 后 (3c-4
+    #    删 chat/config.ts) serve-api 是 chat 配置的唯一真源。读 .env 经 pydantic
+    #    env_file (robust, 不依赖 serve-api 进程 load_dotenv — serve_api() 不 load)。
+    # =========================================================================
+    agent_max_iter: int = Field(
+        default=8, env="AGENT_MAX_ITER",
+        description="harness 每条用户消息最大迭代次数 (backend.stream 调用数硬上限)。",
+    )
+    agent_max_cost_usd: float = Field(
+        default=0.5, env="AGENT_MAX_COST_USD",
+        description="harness 每轮成本上限 USD (累加 usage.costUsd, 超出 emit E_COST_BUDGET)。",
+    )
+    agent_harness_enabled: bool = Field(
+        default=True, env="MAILAGENT_AGENT_HARNESS",
+        description="多轮 agent harness 总开关。false → dispatcher 走 legacy 单遍 (应急回退)。",
+    )
+    kos_consumer_enabled: bool = Field(
+        default=False, env="MAILAGENT_KOS_CONSUMER_ENABLED",
+        description=(
+            "KOS consumer chat 工具 (kos_query / kos_digest 等 9 个) 是否注册 + KOS "
+            "使用指南块是否注入 system prompt。/chat/config 的 kosConfigured 即此值 "
+            "(对齐 electron kosConfig().configured = isKosConsumerEnabled(), 决定 "
+            "createBuiltinTools 是否 push 9 个 KOS 工具 —— **非** OAuth 凭据齐)。"
+        ),
+    )
+    kos_l1_hot_block_enabled: bool = Field(
+        default=False, env="MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED",
+        description="L1 hot block: chat start 按发件人预取 KOS people digest 注入 system prompt。",
+    )
+    kos_time_decay_enabled: bool = Field(
+        default=True, env="MAILAGENT_KOS_TIME_DECAY_ENABLED",
+        description="kos_query 命中按 14d 半衰期时间衰减 rerank (false → 纯服务端 bm25 序)。",
+    )
+
     # CLI: API key 用于写命令鉴权 (RFC v2 §5.3 / PR-2)
     mailagent_cli_api_key: str = Field(
         default="", env="MAILAGENT_CLI_API_KEY",

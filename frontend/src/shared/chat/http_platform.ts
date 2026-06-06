@@ -72,8 +72,7 @@ export const STREAM_DEBOUNCE_MS = 1_000
 
 /** HttpChatPlatform 运行配置快照（远程无 env，构造时注入；可选 → 用远程默认）。
  *  resolveConfig / modelConfig / kosConfig 同步返回此快照的对应子集。3c renderer
- *  构造前预取真实值（尤其 kosConfigured = await httpApi.chat.kosAvailable()，同步
- *  方法无法 fetch）并覆盖默认。 */
+ *  构造前 await GET /api/chat/config 预取真实值（同步方法无法 fetch）并覆盖默认。 */
 export interface HttpPlatformConfig {
   /** harness 每用户消息最大迭代（AGENT_MAX_ITER）。 */
   maxIter: number
@@ -87,8 +86,9 @@ export interface HttpPlatformConfig {
   defaultModel: string
   /** KOS 使用指南块注入 gate（MAILAGENT_KOS_CONSUMER_ENABLED）。 */
   kosConsumerEnabled: boolean
-  /** KOS 工具是否注册（createBuiltinTools 据此 push 9 KOS 工具）。远程 = serve-api
-   *  kos-available（OAuth 凭据齐）。同步快照 → caller 预取传入。 */
+  /** KOS 工具是否注册（createBuiltinTools 据此 push 9 KOS 工具）。= serve-api /chat/config
+   *  的 kosConfigured = MAILAGENT_KOS_CONSUMER_ENABLED（对齐 electron kosConfig().configured
+   *  = isKosConsumerEnabled()，**非** OAuth 凭据齐的 kos-available）。同步快照 → caller 预取传入。 */
   kosConfigured: boolean
   /** kos_query rerankByRecency gate（MAILAGENT_KOS_TIME_DECAY_ENABLED）。 */
   kosTimeDecayEnabled: boolean

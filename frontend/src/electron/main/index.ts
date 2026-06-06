@@ -17,6 +17,7 @@ import { registerChatBackend } from './chat/registry'
 import { createCustomApiBackend } from '@shared/chat/backends/custom_api'
 import { electronChatPlatform } from './chat/electron_platform'
 import { NotionAgentBackend } from './chat/backends/notion_agent'
+import { registerChatLocalBridge } from './chat_local_bridge'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'
 import { registerDraftHandlers } from './handlers/draft'
@@ -328,6 +329,10 @@ app.whenReady().then(async () => {
   // createBuiltinTools(electronChatPlatform) 填充 dispatcher 持有的 registry（注入式取代
   // defaultToolRegistry）。harness 经 dispatcher 注入的 registry 取工具。
   registerChatHandlers()
+  // V2.1 阶段 3c (3c-1) — 本地 renderer 直连 loopback serve-api 的透明 token + CORS
+  // 注入桥。提前铺设 webRequest 拦截器；electron chat 切 ChatRuntime（3c-3）后 renderer
+  // 才真正打 8200。dev 仅注 token（CORS 走 serve-api _DEV_CORS）。
+  registerChatLocalBridge()
   // Sprint 5 §2.2 — Mail.app write commands (createDraft via AppleScript,
   // resync / llm:run / notion:updateFlag via `mailagent` CLI fork).
   registerDraftHandlers()

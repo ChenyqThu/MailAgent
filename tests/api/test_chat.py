@@ -215,6 +215,96 @@ def test_kos_available_true(chat_client: TestClient, monkeypatch: pytest.MonkeyP
     assert chat_client.get("/api/chat/kos-available").json()["data"] is True
 
 
+# ── /config（V2.1 阶段 3c — chat 运行配置快照，renderer 预取覆盖 DEFAULT_HTTP_CONFIG）──
+
+
+class _ChatConfigStub:
+    """带全 chat 配置字段的 stub。chat_client fixture 的 _StubConfig 只有
+    sync_store_db_path，config 端点读 agent_*/kos_*/llm_model 会 AttributeError，故自带。
+    默认值对齐 electron chat/config.ts getter + DEFAULT_HTTP_CONFIG。"""
+
+    agent_max_iter = 8
+    agent_max_cost_usd = 0.5
+    agent_harness_enabled = True
+    kos_consumer_enabled = False
+    kos_l1_hot_block_enabled = False
+    kos_time_decay_enabled = True
+    llm_model = "claude-sonnet-4-6"
+
+
+def _config_client(monkeypatch: pytest.MonkeyPatch, cfg: object) -> TestClient:
+    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: cfg)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认快照：8 字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。"""
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        r = c.get("/api/chat/config")
+    assert r.status_code == 200
+    assert r.json()["data"] == {
+        "maxIter": 8,
+        "maxCostUsd": 0.5,
+        "harnessEnabled": True,
+        "kosL1HotBlockEnabled": False,
+        "defaultModel": "claude-sonnet-4-6",
+        "kosConsumerEnabled": False,
+        "kosConfigured": False,
+        "kosTimeDecayEnabled": True,
+    }
+
+
+def test_chat_config_kos_configured_mirrors_consumer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """kosConfigured == kosConsumerEnabled（同源 MAILAGENT_KOS_CONSUMER_ENABLED，对齐
+    electron kosConfig().configured = isKosConsumerEnabled()，gate 9 KOS 工具注册；
+    **非** OAuth 凭据齐的 _kos_available，那个 gate 的是 [✨ 保存到 KOS] 按钮）。"""
+
+    class _Stub(_ChatConfigStub):
+        kos_consumer_enabled = True
+
+    with _config_client(monkeypatch, _Stub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["kosConsumerEnabled"] is True
+    assert data["kosConfigured"] is True
+
+
+def test_chat_config_non_default_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非默认 env（用户改 .env）原样透传 —— serve-api 是 chat 配置唯一真源（D-3c-3）。"""
+
+    class _Stub(_ChatConfigStub):
+        agent_max_iter = 12
+        agent_max_cost_usd = 1.5
+        agent_harness_enabled = False
+        kos_l1_hot_block_enabled = True
+        kos_time_decay_enabled = False
+        llm_model = "claude-opus-4-8"
+
+    with _config_client(monkeypatch, _Stub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["maxIter"] == 12
+    assert data["maxCostUsd"] == 1.5
+    assert data["harnessEnabled"] is False
+    assert data["kosL1HotBlockEnabled"] is True
+    assert data["kosTimeDecayEnabled"] is False
+    assert data["defaultModel"] == "claude-opus-4-8"
+
+
+def test_chat_config_normalizes_malformed_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """malformed/empty 值归一化对齐 electron getter（防过渡期 3c-2/3c-3 与 electron
+    并存漂移；codex 3c-1 review MEDIUM）：maxIter<1→1、maxCostUsd≤0→0.5、llm_model ''→fallback。"""
+
+    class _Stub(_ChatConfigStub):
+        agent_max_iter = 0
+        agent_max_cost_usd = -1.0
+        llm_model = ""
+
+    with _config_client(monkeypatch, _Stub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["maxIter"] == 1
+    assert data["maxCostUsd"] == 0.5
+    assert data["defaultModel"] == "claude-sonnet-4-6"
+
+
 # ── graceful（库不存在）─────────────────────────────────────────────────────
 
 

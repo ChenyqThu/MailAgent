@@ -155,6 +155,45 @@ async def kos_available(request: Request):
     return success_envelope(_kos_available(), request=request, source="sqlite")
 
 
+@router.get("/config", dependencies=[Depends(verify_cf_access)])
+async def chat_config(request: Request):
+    """chat 运行配置快照（V2.1 阶段 3c — renderer 构造 HttpChatPlatform 前预取）。
+
+    serve-api 读 config.py（pydantic env_file → .env）暴露 chat 引擎运行配置；前端
+    原样覆盖 DEFAULT_HTTP_CONFIG（D-3c-3：配置以 serve-api 为准）。data 形状 =
+    HttpPlatformConfig（frontend/src/shared/chat/http_platform.ts），camelCase 对齐前端。
+
+    ``kosConfigured`` = ``kos_consumer_enabled``（对齐 electron kosConfig().configured =
+    isKosConsumerEnabled() —— createBuiltinTools 据此 gate 9 个 KOS 工具注册；**非**
+    OAuth 凭据齐的 ``_kos_available``，后者 gate 的是 [✨ 保存到 KOS] 按钮）。
+    """
+    cfg = get_settings()
+    # 归一化对齐 electron chat/config.ts getter 的防御（malformed/empty env 不漂移 ——
+    # cutover 后 serve-api 单源，但过渡期 3c-2/3c-3 与 electron getter 并存须等价）：
+    #   getMaxIter = max(1, floor(n)); getMaxCostUsd = n>0 ? n : 0.5; getLlmModel '' → fallback。
+    # bool 字段：pydantic 已解析（1/true/yes/on → true）。electron readEnvBool 仅 '1'/'true'
+    # → true、未设/空 → default、其余非空（含 yes/on）→ false。两者对标准 true/false/1/0
+    # 一致，差异仅在 yes/on 等非标准值（罕见）+ cutover 后 serve-api 单源无漂移，不额外归一化
+    # （codex 3c-1 review MEDIUM/nit 已记此微差）。
+    max_iter = max(1, int(cfg.agent_max_iter))
+    max_cost = cfg.agent_max_cost_usd if cfg.agent_max_cost_usd > 0 else 0.5
+    default_model = cfg.llm_model or "claude-sonnet-4-6"
+    return success_envelope(
+        {
+            "maxIter": max_iter,
+            "maxCostUsd": max_cost,
+            "harnessEnabled": cfg.agent_harness_enabled,
+            "kosL1HotBlockEnabled": cfg.kos_l1_hot_block_enabled,
+            "defaultModel": default_model,
+            "kosConsumerEnabled": cfg.kos_consumer_enabled,
+            "kosConfigured": cfg.kos_consumer_enabled,
+            "kosTimeDecayEnabled": cfg.kos_time_decay_enabled,
+        },
+        request=request,
+        source="config",
+    )
+
+
 @router.post("/llm-proxy", dependencies=[Depends(verify_cf_access)])
 async def llm_proxy(request: Request):
     """custom-api LLM 上游代理（V2.1 阶段 3 3b-1）：注入 key + 透传原始 SSE。
