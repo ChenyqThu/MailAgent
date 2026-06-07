@@ -266,8 +266,11 @@ interface ManagedService {
 
 /**
  * serve-api 是否启用 (软 gate)。D1 起 serve-api 是 **Electron 本地写面** (write_ops /
- * draft / chat 写工具经 daemon_api 转发到它), 不再只是远程访问后端 —— 故纯本地装机 (无
- * CF_AUDIENCE) 也必须起。唯一关掉条件 = 显式 `MAILAGENT_REMOTE_ACCESS_ENABLED='false'`。
+ * draft 写工具经 daemon_api 转发到它); V2.1 3c cutover 后 **整个 chat 引擎** 也经它
+ * (renderer 经 chat_local_bridge webRequest 直连 loopback 8200 跑 shared harness) —— 故
+ * flag 名为「远程访问」实为**本地 daemon/serve-api 总开关**, `=false` 连本地写 + chat 都挂
+ * (非仅关远程)。纯本地装机 (无 CF_AUDIENCE) 也必须起。唯一关掉条件 = 显式
+ * `MAILAGENT_REMOTE_ACCESS_ENABLED='false'`。详见 docs/claude/remote-chat-report-architecture.md §8。
  *
  * 历史 (C2 及之前): 曾额外要求 `CF_AUDIENCE` 非空才 spawn —— 因 serve-api 的 auth.py
  * 在**模块 import 期** `if not AUTH_DISABLED and not CF_AUDIENCE: raise` 会 crash。
