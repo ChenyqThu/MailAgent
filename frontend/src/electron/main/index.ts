@@ -16,12 +16,8 @@ import { registerFolderHandlers } from './handlers/folder'
 import { registerReportHandlers } from './handlers/report'
 import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
-import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
-import { registerChatBackend } from './chat/registry'
-import { createCustomApiBackend } from '@shared/chat/backends/custom_api'
-import { electronChatPlatform } from './chat/electron_platform'
-import { NotionAgentBackend } from './chat/backends/notion_agent'
 import { registerChatLocalBridge } from './chat_local_bridge'
+import { getChatDb } from './chat_db'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'
 import { registerDraftHandlers } from './handlers/draft'
@@ -328,17 +324,16 @@ app.whenReady().then(async () => {
   registerReportHandlers()
   registerAttachmentHandlers()
   registerTranslateHandlers()
-  // Sprint 4 §2.1 — AI chat IPC stream bridge + the two production
-  // backends (Custom API via Anthropic Messages SSE; Notion Agent via
-  // `notion-agent chat --stream` subprocess, agent bound in account.json).
-  // 3b-1：custom-api 下沉 shared，factory 注入 electronChatPlatform（模型板①=本地 fetch
-  // 注入 key）。notion-agent execa 留 main（3b-2 才 serve-api 复刻），仍 new NotionAgentBackend()。
-  registerChatBackend(createCustomApiBackend(electronChatPlatform))
-  registerChatBackend(new NotionAgentBackend())
-  // 3b-4：工具 registry 不再 module-global 填充——registerChatHandlers() 内用
-  // createBuiltinTools(electronChatPlatform) 填充 dispatcher 持有的 registry（注入式取代
-  // defaultToolRegistry）。harness 经 dispatcher 注入的 registry 取工具。
-  registerChatHandlers()
+  // V2.1 阶段 3c-4 cutover — chat 引擎全部下沉 renderer（ElectronApi.chat = ChatRuntime 经
+  // loopback serve-api，3c-3）。main 不再持 chat IPC handler / dispatcher / 本地 backend
+  // （custom-api + notion-agent 由 serve-api 接管）。仅保留 ai_chat.db schema bootstrap：
+  // chat_db.ts 是 schema owner（CHAT_DB_VERSION），serve-api ChatDb 绝不建表 → 这里显式
+  // getChatDb() 触发首次打开 + migrate，保证 renderer / serve-api 首次 HTTP 写前表已就位。
+  try {
+    getChatDb()
+  } catch (err) {
+    console.error('[chat] ai_chat.db bootstrap failed — chat 持久化可能不可用', err)
+  }
   // V2.1 阶段 3c (3c-1) — 本地 renderer 直连 loopback serve-api 的透明 token + CORS
   // 注入桥。提前铺设 webRequest 拦截器；electron chat 切 ChatRuntime（3c-3）后 renderer
   // 才真正打 8200。dev 仅注 token（CORS 走 serve-api _DEV_CORS）。
@@ -474,5 +469,7 @@ app.on('window-all-closed', () => {
 // teardown (`registerCliLifecycle`) isn't the only path cleaning up.
 app.on('before-quit', () => {
   abortAllTranslations()
-  abortAllChatSessions()
+  // V2.1 阶段 3c-4 cutover：chat dispatcher 的 _inflight 现在在 renderer 进程（ChatRuntime），
+  // 随窗口生命周期销毁，main 不再持 → 无 abortAllChatSessions()。notion-agent 子进程串行闸
+  // （drainNotionAgentGate）随 main execa backend 一并删除（serve-api asyncio spawn 接管）。
 })

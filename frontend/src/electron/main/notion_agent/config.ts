@@ -19,12 +19,49 @@ import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } fro
 import { homedir } from 'os'
 import { join } from 'path'
 
-import { resolveNotionAgentBin } from '../chat/backends/notion_agent'
+import { whichSync } from '../bin_resolver'
 
 const ACCOUNT_PATH = join(homedir(), '.notionagents', 'notion_account.json')
 const MODELS_PATH = join(homedir(), '.notionagents', 'models.json')
 
 const CLI_TIMEOUT_MS = 30_000
+
+// V2.1 阶段 3c-4：从删除的 chat/backends/notion_agent.ts 迁入。cutover 删了 main execa
+// NotionAgentBackend（notion-agent 执行归 serve-api asyncio spawn），但 notion-agent 的
+// binary 解析是**配置探测**（agent 列表 / 默认 model 写入 / cliFound 都需要它），不是 chat
+// 执行 —— 归属本配置模块（唯一非测试消费方就是本文件的 resolveConfig / list / write 路径）。
+let _notionAgentBinCache: string | null = null
+
+/** Resolve the `notion-agent` binary once and cache.
+ *  Search order:
+ *    1. $NOTION_AGENT_BIN (full path; ops escape hatch)
+ *    2. `which notion-agent` (PATH lookup; pipx default if user ran `pipx ensurepath`)
+ *    3. ~/.local/bin/notion-agent (pipx install location without PATH integration) */
+export function resolveNotionAgentBin(): string {
+  if (_notionAgentBinCache) return _notionAgentBinCache
+  const fromEnv = process.env['NOTION_AGENT_BIN']
+  if (fromEnv && existsSync(fromEnv)) {
+    _notionAgentBinCache = fromEnv
+    return fromEnv
+  }
+  try {
+    const resolved = whichSync('notion-agent')
+    if (resolved) {
+      _notionAgentBinCache = resolved
+      return resolved
+    }
+  } catch {
+    /* fall through to pipx default */
+  }
+  const fallback = join(homedir(), '.local', 'bin', 'notion-agent')
+  _notionAgentBinCache = fallback
+  return fallback
+}
+
+/** Test-only — reset the binary path cache so tests can swap env vars. */
+export function __resetNotionAgentBinCache(): void {
+  _notionAgentBinCache = null
+}
 
 export interface NotionAgentConfig {
   /** Path we read/write (the symlink, not its target). */

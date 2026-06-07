@@ -20,19 +20,17 @@
 // （per-dispatcher 实例隔离，3c renderer 可独立构造）。本文件零 Electron/Node
 // import（不变式 1，pnpm build:web 验证）。
 //
-// 留 main（不进本文件）：
-//   - makeWebContentsSink（用 electron WebContents）→ chat/web_contents_sink.ts，
-//     经 sink 注入（StreamSink 纯类型仍在此声明）。
-//   - drainNotionAgentGate（main-only 子进程串行闸）→ abortAllChatSessions 拆为
-//     两半：shared 版只 abort+clear _inflight；main handlers/chat.ts wrapper 在其后
-//     补 drainNotionAgentGate。
+// V2.1 阶段 3c-4 cutover 后：sink = renderer 进程内 emitter（shared/chat/runtime.ts 的
+// ChatStreamEmitter，无 IPC / 无序列化）；StreamSink 纯类型仍在本文件声明（注入式抽象）。
+// 旧的 main-only makeWebContentsSink / drainNotionAgentGate / abortAllChatSessions wrapper
+// 已随 chat 直跑路径一并删除（notion-agent 子进程串行闸由 serve-api asyncio spawn 接管）。
 
-import { backendSupportsTools, type BackendKind, type ChatMessage, type ChatSession } from './model'
+import type { BackendKind, ChatMessage, ChatSession } from './model'
 import { runHarness } from './harness'
 import { cancelConfirmationsForSession } from './tools/confirmation'
 import type { ChatInfraPlatform } from './platform'
 import type { ToolRegistry } from './tools/registry'
-import type { ChatBackend, ChatStreamEnvelope, ChatStreamEvent, EmailContext } from './types'
+import type { ChatBackend, ChatStreamEnvelope, EmailContext } from './types'
 
 export interface StartChatInput {
   emailId: number
@@ -239,152 +237,49 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       ac,
       sink
     } = args
-    let buffer = ''
-    let lastUsage: { input: number; output: number; cost: number | null } | null = null
-    let modelSeen: string | null = model
-    let metadataSeen: Record<string, unknown> | null = null
-    // Sprint 4 review (codex N carry-forward): once a backend emits an `error`
-    // event, stop persisting and forwarding subsequent events. Today neither
-    // notion_agent nor custom_api emits `error` then keeps streaming, but a
-    // future backend that did would flip the assistant row error → complete
-    // (or worse, leak chunks past the surfaced failure). Sticky flag + break
-    // gives us the safe behavior without depending on backend authors to
-    // remember.
-    let sawError = false
-
-    function forward(event: ChatStreamEvent): void {
-      sink.send({ sessionId, messageId: assistantMessageId, event })
-    }
-
-    // V2.1 阶段 3 step 5-6（codex review HIGH）：gate(resolveConfig) + harness 分支 + legacy
-    // 单遍全部包进同一 try/catch/finally。startChat/editChatMessage 用 `void runStream(...)`
-    // fire-and-forget —— 若 resolveConfig 或 runHarness 抛（electron 实现不抛，3c
-    // HttpChatPlatform fetch serve-api 会），未捕获 rejection 会让 assistant 行永久
-    // streaming 且 _inflight 不清。catch 兜底 finalize error，finally 无条件按当前 AC 清。
+    // V2.1 阶段 3c-4（D4）：删 legacy 单遍 + harnessEnabled gate —— 所有 backend 统一走
+    // harness。notion-agent（不支持 tool_use 协议；http backend 剥离 tools/iterHistory）首轮
+    // collected.length===0 即 end_turn = 等价单遍（设计 §6.6.5 D4）。harness 内部自管 buffer /
+    // 每 chunk forward / 全部终态（complete/error/cost/max_iter/abort），dispatcher 不再持
+    // legacy 的 buffer/usage/forward 状态。
+    //
+    // 本 try/catch/finally 是 harness 自身抛出未捕获异常的最后防线（codex step5-6 HIGH：
+    // startChat/editChatMessage 用 `void runStream(...)` fire-and-forget，harness 抛出会致
+    // assistant 行永久 streaming + _inflight 不清）。harness 内部已 catch backend crash + 落
+    // error 终态，故正常路径不进此 catch；resolveConfig 在 harness 内最先调，它抛（如 http
+    // config 端点挂）由此兜底。finalize 不带 content → 保留 harness 经 streamContent 已落库的
+    // partial 正文（finalizeMessage 契约：http 实现先 flush pending 再写终态）。finally 无条件
+    // 按当前 AC 清 _inflight。
     try {
-      // Sprint 19 PR-1d.1 — harness gate. harnessEnabled 从配置快照读（取代同步
-      // isHarnessEnabled()）；custom-api 走 harness，notion-agent / flag-off 走下方 legacy
-      // 单遍。Backend kind 是唯一稳定信号（每个 backend 要么全支持 tool_use 要么完全不）。
-      const cfg = await deps.platform.resolveConfig()
-      if (cfg.harnessEnabled && backendSupportsTools(backend.kind)) {
-        await runHarness({
-          sessionId,
-          assistantMessageId,
-          backend,
-          initialHistory: history,
-          model,
-          agentPageId,
-          emailContext,
-          ac,
-          sink,
-          platform: deps.platform,
-          registry: deps.toolRegistry
-        })
-        return
-      }
-      for await (const event of backend.stream({
-        history,
+      await runHarness({
+        sessionId,
+        assistantMessageId,
+        backend,
+        initialHistory: history,
         model,
         agentPageId,
         emailContext,
-        signal: ac.signal
-      })) {
-        if (ac.signal.aborted) break
-        if (sawError) break // (codex N) defensive: error already surfaced.
-
-        switch (event.type) {
-          case 'chunk': {
-            buffer += event.delta
-            // fire-and-forget 同步直写（electron 零回归）；http debounce 在 impl 侧。
-            deps.platform.persist.streamContent(assistantMessageId, buffer)
-            forward(event)
-            break
-          }
-          case 'tool_call': {
-            // Tool calls persist as separate `role='tool'` rows so the
-            // panel can render them inline above the assistant bubble.
-            // Status transitions ('running' → 'ok' / 'error') are
-            // emitted by the backend as separate events; the renderer
-            // keys by (name, args-hash) to update the row in place.
-            await deps.platform.persist.appendMessage({
-              sessionId,
-              role: 'tool',
-              content: JSON.stringify({
-                name: event.name,
-                args: event.args,
-                status: event.status,
-                durationMs: event.durationMs,
-                detail: event.detail
-              }),
-              status: event.status === 'error' ? 'error' : 'complete',
-              errorMessage: event.status === 'error' ? (event.detail ?? null) : null
-            })
-            forward(event)
-            break
-          }
-          case 'usage': {
-            lastUsage = {
-              input: event.inputTokens,
-              output: event.outputTokens,
-              cost: event.costUsd
-            }
-            modelSeen = event.model ?? modelSeen
-            if (event.metadata) metadataSeen = { ...(metadataSeen ?? {}), ...event.metadata }
-            forward(event)
-            break
-          }
-          case 'done': {
-            modelSeen = event.model ?? modelSeen
-            if (event.metadata) metadataSeen = { ...(metadataSeen ?? {}), ...event.metadata }
-            await deps.platform.persist.finalizeMessage(assistantMessageId, {
-              status: 'complete',
-              content: event.finalContent || buffer,
-              model: modelSeen,
-              tokensInput: lastUsage?.input ?? null,
-              tokensOutput: lastUsage?.output ?? null,
-              costUsd: lastUsage?.cost ?? null,
-              metadata: metadataSeen ? JSON.stringify(metadataSeen) : null
-            })
-            forward(event)
-            break
-          }
-          case 'error': {
-            // V2.1 阶段 3 step 5：终态带 content=buffer（与 harness 一致，http 实现
-            // 不丢 error 前的 partial 正文 —— steps 3-4 codex review 双保险）。
-            await deps.platform.persist.finalizeMessage(assistantMessageId, {
-              status: 'error',
-              content: buffer,
-              errorMessage: event.message,
-              model: modelSeen,
-              metadata: metadataSeen ? JSON.stringify(metadataSeen) : null
-            })
-            forward(event)
-            sawError = true
-            break
-          }
-        }
-      }
-
-      // If we exited the loop because of abort, mark the streaming message
-      // as aborted (one tick at most; backend already stopped emitting).
-      if (ac.signal.aborted) {
-        await deps.platform.persist.abortStreamingMessages(sessionId)
-      }
+        ac,
+        sink,
+        platform: deps.platform,
+        registry: deps.toolRegistry
+      })
     } catch (err) {
-      // Unhandled backend exception — surface as error event + DB row.
       if (ac.signal.aborted) {
         await deps.platform.persist.abortStreamingMessages(sessionId)
         return
       }
       const message = err instanceof Error ? err.message : String(err)
-      // V2.1 阶段 3 step 5：终态带 content=buffer（同上，不丢 partial）。
       await deps.platform.persist.finalizeMessage(assistantMessageId, {
         status: 'error',
-        content: buffer,
         errorMessage: message,
-        model: modelSeen
+        model
       })
-      forward({ type: 'error', code: 'E_BACKEND_CRASH', message })
+      sink.send({
+        sessionId,
+        messageId: assistantMessageId,
+        event: { type: 'error', code: 'E_BACKEND_CRASH', message }
+      })
     } finally {
       if (_inflight.get(sessionId) === ac) _inflight.delete(sessionId)
     }

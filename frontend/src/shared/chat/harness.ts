@@ -193,6 +193,16 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
   let buffer = '' // running accumulation of every iter's text (DB content)
   let lastUsage: { input: number; output: number; cost: number | null } | null = null
   let modelSeen: string | null = args.model
+  // V2.1 阶段 3c-4（D4）：harness 也累积 + 持久化 usage/done 的 metadata（对齐被删的
+  // legacy 单遍）。notion-agent 走 harness 后，其 thread_id（metadata.thread_id）必须落到
+  // assistant 终态 —— 否则下一轮 extract_turn 找不到 thread_id，多轮 thread 续接断。
+  // custom-api 通常无 metadata → metadataSeen 保持 null → 终态 metadata:null（等价旧行为）。
+  let metadataSeen: Record<string, unknown> | null = null
+  // V2.1 阶段 3c-4（codex MEDIUM）：记录最近一次 done.finalContent，单遍终态用它对齐被删的
+  // legacy（content: finalContent || buffer）。notion-agent done.finalContent 已 trim 尾换行，
+  // 而 buffer 是含 CLI 尾换行的 chunk 累积 —— 单遍直接用 buffer 会比 legacy 多尾换行；多轮
+  // （custom-api）仍用 buffer（跨轮累积，finalContent 只有最后一轮、不能替代）。
+  let lastFinalContent: string | null = null
   let costUsd = 0
   let iter = 0
 
@@ -238,6 +248,27 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             args.platform.persist.streamContent(args.assistantMessageId, buffer)
             forward(event)
             break
+          case 'tool_call': {
+            // V2.1 阶段 3c-4（D4）：notion-agent 子进程的工具调用**展示**事件（非 Anthropic
+            // tool_use 协议）—— 复刻被删的 legacy 单遍：持久化成 role='tool' 消息行，让 renderer
+            // reload 会话后仍渲染工具卡片（实时 forward 之外的持久化）。custom-api 用 tool_use
+            // 不 emit tool_call → 不进此分支、不进 collected → 不触发 harness 多轮逻辑。
+            await args.platform.persist.appendMessage({
+              sessionId: args.sessionId,
+              role: 'tool',
+              content: JSON.stringify({
+                name: event.name,
+                args: event.args,
+                status: event.status,
+                durationMs: event.durationMs,
+                detail: event.detail
+              }),
+              status: event.status === 'error' ? 'error' : 'complete',
+              errorMessage: event.status === 'error' ? (event.detail ?? null) : null
+            })
+            forward(event)
+            break
+          }
           case 'tool_use': {
             collected.push({
               toolUseId: event.toolUseId,
@@ -269,11 +300,14 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             }
             if (typeof event.costUsd === 'number') costUsd += event.costUsd
             if (event.model) modelSeen = event.model
+            if (event.metadata) metadataSeen = { ...(metadataSeen ?? {}), ...event.metadata }
             forward(event)
             break
           case 'done':
             stopReason = event.stopReason ?? 'end_turn'
             modelSeen = event.model ?? modelSeen
+            if (event.metadata) metadataSeen = { ...(metadataSeen ?? {}), ...event.metadata }
+            if (typeof event.finalContent === 'string') lastFinalContent = event.finalContent
             forward(event)
             break
           case 'error':
@@ -282,7 +316,8 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
               status: 'error',
               content: buffer,
               errorMessage: event.message,
-              model: modelSeen
+              model: modelSeen,
+              metadata: metadataSeen ? JSON.stringify(metadataSeen) : null
             })
             return
           // Other event types (tool_call legacy, pending_confirmation, tool_result)
@@ -319,11 +354,14 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
     if (stopReason === 'end_turn' || collected.length === 0) {
       await args.platform.persist.finalizeMessage(args.assistantMessageId, {
         status: 'complete',
-        content: buffer,
+        // 单遍（iter===1）→ finalContent || buffer 对齐被删 legacy（notion-agent finalContent
+        // 已 trim 尾换行）；多轮 → buffer 跨轮累积（finalContent 仅最后一轮、不能替代）。
+        content: iter === 1 ? lastFinalContent || buffer : buffer,
         tokensInput: lastUsage?.input ?? null,
         tokensOutput: lastUsage?.output ?? null,
         costUsd: lastUsage?.cost ?? null,
-        model: modelSeen
+        model: modelSeen,
+        metadata: metadataSeen ? JSON.stringify(metadataSeen) : null
       })
       return
     }

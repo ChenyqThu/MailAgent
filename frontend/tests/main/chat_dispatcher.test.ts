@@ -27,16 +27,16 @@ import {
 } from '../../src/shared/chat/dispatcher'
 import { createToolRegistry } from '../../src/shared/chat/tools/registry'
 import { createBuiltinTools } from '../../src/shared/chat/tools/builtin'
-import { electronChatPlatform } from '../../src/electron/main/chat/electron_platform'
+import { testChatPlatform } from './chat/_fixtures/test_chat_platform'
 import {
   __resetBackendRegistry,
   getChatBackend,
   registerChatBackend
-} from '../../src/electron/main/chat/registry'
+} from './chat/_fixtures/test_backend_registry'
 import type { ChatBackend, ChatStreamEnvelope, ChatStreamEvent } from '../../src/shared/chat/types'
 
 let tmpDir: string
-// V2.1 阶段 3 step 6 — driver 改 factory（仿 harness.test 注入 electronChatPlatform）。
+// V2.1 阶段 3 step 6 — driver 改 factory（仿 harness.test 注入 testChatPlatform）。
 let d: ChatDispatcher
 
 function recordingSink(): StreamSink & { events: ChatStreamEnvelope[] } {
@@ -103,13 +103,13 @@ beforeEach(() => {
   process.env['AI_CHAT_DB_PATH'] = join(tmpDir, 'ai_chat.db')
   closeChatDb()
   __resetBackendRegistry()
-  // 每个 test 新建 dispatcher：electronChatPlatform（基础设施板，真调本 test 的临时
+  // 每个 test 新建 dispatcher：testChatPlatform（基础设施板，真调本 test 的临时
   // ai_chat.db）+ getChatBackend（registry，下方 registerChatBackend 注入 mock）+ toolRegistry
   // （3b-4：createBuiltinTools 注入 electron 工具板，与生产 handlers/chat.ts 同构）。
   const toolRegistry = createToolRegistry()
-  for (const t of createBuiltinTools(electronChatPlatform)) toolRegistry.register(t)
+  for (const t of createBuiltinTools(testChatPlatform)) toolRegistry.register(t)
   d = createChatDispatcher({
-    platform: electronChatPlatform,
+    platform: testChatPlatform,
     getBackend: getChatBackend,
     toolRegistry
   })
@@ -675,6 +675,34 @@ describe('dispatcher — metadata pass-through (opus L carry-forward)', () => {
     await waitForAssistant(r.sessionId, ['complete'])
     const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
     expect(assistant.metadata).toBe('{"thread_id":"thr-mid"}')
+  })
+})
+
+describe('dispatcher — notion-agent single-pass finalContent (D4 parity)', () => {
+  test('uses trimmed done.finalContent over chunk buffer (trailing newline)', async () => {
+    // V2.1 3c-4 D4（codex MEDIUM）：notion-agent 走 harness 单遍。serve-api stream 的 chunk 含
+    // CLI 尾换行，done.finalContent 已 trim → 终态须用 finalContent（对齐被删 legacy 的
+    // finalContent||buffer），否则 DB 比 legacy 多尾换行。
+    registerChatBackend(
+      fakeBackend('notion-agent', [
+        { type: 'chunk', delta: 'Answer line\n\n' },
+        { type: 'done', finalContent: 'Answer line', model: 'gpt-5.4' }
+      ])
+    )
+    const sink = recordingSink()
+    const r = await d.startChat(
+      {
+        emailId: 101,
+        userMessage: 'q',
+        backendKind: 'notion-agent',
+        backendModel: 'gpt-5.4',
+        backendAgentPageId: 'agent-1'
+      },
+      sink
+    )
+    await waitForAssistant(r.sessionId, ['complete'])
+    const assistant = listMessages(r.sessionId).find((m) => m.role === 'assistant')!
+    expect(assistant.content).toBe('Answer line')
   })
 })
 

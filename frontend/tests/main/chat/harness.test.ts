@@ -21,7 +21,7 @@ import {
   listToolCallsForMessage
 } from '../../../src/electron/main/chat_db'
 import { runHarness } from '../../../src/shared/chat/harness'
-import { electronChatPlatform } from '../../../src/electron/main/chat/electron_platform'
+import { testChatPlatform } from './_fixtures/test_chat_platform'
 import {
   createToolRegistry,
   type ToolDef,
@@ -169,7 +169,7 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink,
       registry
     })
@@ -222,7 +222,7 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink: recordingSink(),
       registry
     })
@@ -260,7 +260,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink: recordingSink(),
       registry: createToolRegistry()
     })
@@ -295,7 +295,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink,
       registry
     })
@@ -341,7 +341,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink,
       registry
     })
@@ -373,7 +373,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink: recordingSink(),
       registry: createToolRegistry()
     })
@@ -399,7 +399,7 @@ describe('runHarness — terminal conditions', () => {
       emailContext: null,
       ac,
       sink,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       registry: createToolRegistry()
     })
     // while 顶部 abort 检测应标 aborted + return，不落到末尾 E_MAX_ITER。
@@ -426,7 +426,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink,
       registry: createToolRegistry()
     })
@@ -463,7 +463,7 @@ describe('runHarness — unknown tool resilience', () => {
       agentPageId: null,
       emailContext: null,
       ac,
-      platform: electronChatPlatform,
+      platform: testChatPlatform,
       sink,
       registry
     })
