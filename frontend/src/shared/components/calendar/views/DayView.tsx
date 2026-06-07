@@ -140,17 +140,15 @@ export function DayView({
   const selectedDate = useMemo(() => date ?? todayStartLocal(), [date])
   const [miniMonth, setMiniMonth] = useState<Date>(() => startOfMonth(selectedDate))
 
-  // F12 — sync mini-month displayed month when selectedDate jumps to another
-  // month. 老代码 deps=[selectedDate.getTime()] 但 body 读 miniMonth.getTime,
-  // stale-closure: 用户翻 miniMonth 到 6 月又把 selectedDate 设回 5 月某天
-  // (相同 ms), effect 不跑, mini-month 卡在错的月. 改 deps=[selectedDate,
-  // miniMonth] 让 exhaustive-deps 满意.
-  useEffect(() => {
-    const ms = startOfMonth(selectedDate)
-    if (ms.getTime() !== miniMonth.getTime()) {
-      setMiniMonth(ms)
-    }
-  }, [selectedDate, miniMonth])
+  // F12 — selectedDate 跳到别的月时把 mini-month 同步过去。React 官方 "adjusting
+  // state during render"：render 期间条件 setState（getTime 不等守卫防循环），比 effect
+  // 少一次 commit+paint，无 set-state-in-effect 级联告警。原 effect 版 deps=[selectedDate,
+  // miniMonth] 修过 stale-closure（翻 miniMonth 到 6 月又把 selectedDate 设回 5 月同 ms 时
+  // effect 不跑卡月）——render 期间判定天然无此问题（每帧都比对当前值）。
+  const targetMonth = startOfMonth(selectedDate)
+  if (targetMonth.getTime() !== miniMonth.getTime()) {
+    setMiniMonth(targetMonth)
+  }
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000)

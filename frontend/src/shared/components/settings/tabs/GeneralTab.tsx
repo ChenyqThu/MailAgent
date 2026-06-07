@@ -53,6 +53,10 @@ interface AccentMeta {
   hex: string
 }
 
+// accent swatch 填充 = 主题色值定义（见上方 AccentMeta.hex 注释：per-accent
+// `--c-accent-${id}` CSS 变量并不存在，swatch 只能 inline hex）。调色板字面量非
+// token 滥用，规则豁免。
+/* eslint-disable mailagent/no-raw-hex */
 const ACCENT_LIST: AccentMeta[] = [
   { id: 'coral', label: 'Coral', hex: '#E5654B' },
   { id: 'cobalt', label: 'Cobalt', hex: '#4A78E5' },
@@ -61,6 +65,7 @@ const ACCENT_LIST: AccentMeta[] = [
   { id: 'slate', label: 'Slate', hex: '#7E8694' },
   { id: 'olive', label: 'Olive', hex: '#9CA552' }
 ]
+/* eslint-enable mailagent/no-raw-hex */
 
 interface ThemeRow {
   value: ThemeMode
@@ -229,7 +234,7 @@ function Rad({ selected }: { selected: boolean }): React.ReactElement {
         selected ? 'border-coral' : 'border-ink-fg-3'
       )}
     >
-      {selected ? <span className="size-1.5 rounded-full bg-coral" /> : null}
+      {selected ? <span className="size-1.5 rounded-full bg-coral/100" /> : null}
     </span>
   )
 }

@@ -44,7 +44,9 @@ import { pad } from './lib/format'
 import { useUndoToastStore } from '@shared/state/calendar-undo'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
-// 与会者头像 — mockup 同色, 6 色循环按 index.
+// 与会者头像 — mockup 同色, 6 色循环按 index. 数据驱动的头像底色循环表，本就该以
+// hex 字面量定义（非 UI token 滥用），规则豁免。
+// eslint-disable-next-line mailagent/no-raw-hex
 const ATT_HUES = ['#6FA8DC', '#B58CDB', '#E89B4A', '#5DBA8C', '#E5634F', '#DB5B7C']
 
 interface Props {
@@ -58,7 +60,12 @@ interface Props {
 
 // F32 — pad 抽到 ./lib/format
 
-function formatRange(startIso: string, endIso: string, isAllDay: boolean, allDayLabel: string): string {
+function formatRange(
+  startIso: string,
+  endIso: string,
+  isAllDay: boolean,
+  allDayLabel: string
+): string {
   const s = new Date(startIso)
   const e = new Date(endIso)
   const dateStr = `${s.getFullYear()}-${pad(s.getMonth() + 1)}-${pad(s.getDate())}`
@@ -74,18 +81,17 @@ function formatRange(startIso: string, endIso: string, isAllDay: boolean, allDay
 /** Normalize organizer/userEmail for case-insensitive compare; strips
  *  "mailto:" prefix CalDAV ICS 出 organizer 时常带. */
 function normalizeEmail(s: string | null | undefined): string {
-  return (s || '').trim().toLowerCase().replace(/^mailto:/, '')
+  return (s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^mailto:/, '')
 }
 
 /** F27 — runtime narrow ``occurrence.source`` (string) → CalendarEventSource.
  *  DB legacy v14 row 可能含未知 source 值, ``as CalendarEventSource`` 强转
  *  silent mismatch. 走 helper 白名单校验, 未知值 → undefined + 一次 warn.
  *  调用方传 undefined 给 CLI 让 ``SOURCES_TRY_ORDER`` 自动 fallback. */
-const _VALID_SOURCES: ReadonlySet<string> = new Set([
-  'caldav',
-  'email_ics',
-  'legacy_calendar_app'
-])
+const _VALID_SOURCES: ReadonlySet<string> = new Set(['caldav', 'email_ics', 'legacy_calendar_app'])
 function narrowSource(s: string | null | undefined): CalendarEventSource | undefined {
   if (!s) return undefined
   if (_VALID_SOURCES.has(s)) return s as CalendarEventSource
@@ -232,7 +238,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     },
     onError: (err: unknown, response) => {
       const e = err as Error
-      toastError(t('calendar.drawer.rsvp.toastErr', '发送 RSVP ({response}) 失败', { response }), e.message || t('calendar.toolbar.syncTipUnknownErr', '未知错误'))
+      toastError(
+        t('calendar.drawer.rsvp.toastErr', '发送 RSVP ({response}) 失败', { response }),
+        e.message || t('calendar.toolbar.syncTipUnknownErr', '未知错误')
+      )
     }
   })
 
@@ -245,10 +254,14 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     }
     const organizer = normalizeEmail(occurrence.organizer)
     const ok = window.confirm(
-      t('calendar.drawer.rsvp.confirmBody', '此操作会通过 DavMail SMTP 立即发邮件给组织者, 不可撤销.\n\n事件: {summary}\n组织者: {organizer}', {
-        summary: occurrence.summary || t('calendar.shared.untitled', '未命名事件'),
-        organizer: organizer || '(未知)'
-      })
+      t(
+        'calendar.drawer.rsvp.confirmBody',
+        '此操作会通过 DavMail SMTP 立即发邮件给组织者, 不可撤销.\n\n事件: {summary}\n组织者: {organizer}',
+        {
+          summary: occurrence.summary || t('calendar.shared.untitled', '未命名事件'),
+          organizer: organizer || '(未知)'
+        }
+      )
     )
     if (!ok) return
     rsvpMut.mutate(response)
@@ -268,7 +281,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     },
     onError: (err: unknown) => {
       const e = err as Error
-      toastError(t('calendar.undo.deleteFailed', '删除事件失败'), e.message || t('calendar.toolbar.syncTipUnknownErr', '未知错误'))
+      toastError(
+        t('calendar.undo.deleteFailed', '删除事件失败'),
+        e.message || t('calendar.toolbar.syncTipUnknownErr', '未知错误')
+      )
     }
   })
 
@@ -276,7 +292,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     if (!occurrence) return
     // capture 当前 occurrence 到 closure, 避免后续 drawer 重选别的事件错改 UID
     const target = occurrence
-    const summaryShort = (target.summary || t('calendar.shared.untitled', '未命名事件')).slice(0, 30)
+    const summaryShort = (target.summary || t('calendar.shared.untitled', '未命名事件')).slice(
+      0,
+      30
+    )
     onClose()
     pushUndo({
       title: t('calendar.undo.deleted', '已删除「{title}」', { title: summaryShort }),
@@ -304,8 +323,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
   }, [open, onClose])
 
   const hasMeeting = !!(
-    occurrence?.url ||
-    occurrence?.location?.toLowerCase().includes('teams.microsoft.com')
+    occurrence?.url || occurrence?.location?.toLowerCase().includes('teams.microsoft.com')
   )
 
   // 当前 response_status (用于 RSVP button .sel 高亮 + label "待回复" 提示)
@@ -316,11 +334,7 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
 
   return (
     <>
-      <div
-        className={cn('drawer-backdrop', open && 'open')}
-        onClick={onClose}
-        aria-hidden
-      />
+      <div className={cn('drawer-backdrop', open && 'open')} onClick={onClose} aria-hidden />
       <aside
         className={cn('drawer', open && 'open')}
         role="dialog"
@@ -349,7 +363,9 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                 </span>
                 <h2 className="dw-title">
                   {occurrence.summary || (
-                    <span className="empty-field">{t('calendar.shared.untitled', '未命名事件')}</span>
+                    <span className="empty-field">
+                      {t('calendar.shared.untitled', '未命名事件')}
+                    </span>
                   )}
                 </h2>
               </div>
@@ -382,7 +398,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                 </MetaRow>
               )}
 
-              <MetaRow icon={<MapPin size={13} strokeWidth={2} />} label={t('calendar.drawer.meta.location', '地点')}>
+              <MetaRow
+                icon={<MapPin size={13} strokeWidth={2} />}
+                label={t('calendar.drawer.meta.location', '地点')}
+              >
                 {occurrence.location ? (
                   <span className="break-all">{occurrence.location}</span>
                 ) : (
@@ -391,7 +410,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
               </MetaRow>
 
               {occurrence.organizer && (
-                <MetaRow icon={<User size={13} strokeWidth={2} />} label={t('calendar.drawer.meta.organizer', '组织者')}>
+                <MetaRow
+                  icon={<User size={13} strokeWidth={2} />}
+                  label={t('calendar.drawer.meta.organizer', '组织者')}
+                >
                   <span className="meta-v mono">
                     {occurrence.organizer}
                     {isOwner && (
@@ -404,15 +426,24 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
               )}
 
               {occurrence.attendees && occurrence.attendees.length > 0 && (
-                <MetaRow icon={<Users size={13} strokeWidth={2} />} label={t('calendar.drawer.meta.attendees', '与会者')}>
-                  <div>{t('calendar.drawer.attendeeCount', '{n} 人', { n: occurrence.attendees.length })}</div>
+                <MetaRow
+                  icon={<Users size={13} strokeWidth={2} />}
+                  label={t('calendar.drawer.meta.attendees', '与会者')}
+                >
+                  <div>
+                    {t('calendar.drawer.attendeeCount', '{n} 人', {
+                      n: occurrence.attendees.length
+                    })}
+                  </div>
                   <div className="mt-1.5">
                     {occurrence.attendees.slice(0, 12).map((a, i) => (
                       <AttRow key={i} attendee={a} hue={ATT_HUES[i % ATT_HUES.length]} />
                     ))}
                     {occurrence.attendees.length > 12 && (
                       <div className="att-row text-[11px] text-ink-fg-2">
-                        {t('calendar.drawer.moreAttendees', '… 还有 {n} 位', { n: occurrence.attendees.length - 12 })}
+                        {t('calendar.drawer.moreAttendees', '… 还有 {n} 位', {
+                          n: occurrence.attendees.length - 12
+                        })}
                       </div>
                     )}
                   </div>
@@ -426,7 +457,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
               )}
 
               {hasMeeting && (
-                <MetaRow icon={<Video size={13} strokeWidth={2} />} label={t('calendar.drawer.meta.meetingLink', '会议链接')}>
+                <MetaRow
+                  icon={<Video size={13} strokeWidth={2} />}
+                  label={t('calendar.drawer.meta.meetingLink', '会议链接')}
+                >
                   {occurrence.url ? (
                     <a
                       href={occurrence.url}
@@ -444,13 +478,18 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                   ) : (
                     <span className="link-row">
                       <Video size={11} strokeWidth={2} />
-                      <span className="text-aux">{t('calendar.drawer.teamsMeeting', 'Teams 会议')}</span>
+                      <span className="text-aux">
+                        {t('calendar.drawer.teamsMeeting', 'Teams 会议')}
+                      </span>
                     </span>
                   )}
                 </MetaRow>
               )}
 
-              <MetaRow icon={<Mail size={13} strokeWidth={2} />} label={t('calendar.drawer.meta.relatedEmail', '关联邮件')}>
+              <MetaRow
+                icon={<Mail size={13} strokeWidth={2} />}
+                label={t('calendar.drawer.meta.relatedEmail', '关联邮件')}
+              >
                 {occurrence.related_email_internal_id ? (
                   <a
                     className="link-row"
@@ -461,7 +500,9 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                     <ExternalLink size={11} strokeWidth={2} />
                   </a>
                 ) : (
-                  <span className="empty-field">{t('calendar.drawer.noRelatedEmail', '无关联邮件')}</span>
+                  <span className="empty-field">
+                    {t('calendar.drawer.noRelatedEmail', '无关联邮件')}
+                  </span>
                 )}
               </MetaRow>
 
@@ -496,7 +537,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                     type="button"
                     className="btn-op edit"
                     onClick={() => setEditModalOpen(true)}
-                    title={t('calendar.drawer.ops.editTitle', '编辑事件 — 通过 CalDAV PUT 改 Exchange 端')}
+                    title={t(
+                      'calendar.drawer.ops.editTitle',
+                      '编辑事件 — 通过 CalDAV PUT 改 Exchange 端'
+                    )}
                   >
                     <Pencil size={13} strokeWidth={2} />
                     {t('calendar.drawer.ops.edit', '编辑')}
@@ -505,7 +549,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                     type="button"
                     className="btn-op delete"
                     onClick={handleDelete}
-                    title={t('calendar.drawer.ops.deleteTitle', '删除事件 — 5 秒撤销窗口后通过 CalDAV DELETE')}
+                    title={t(
+                      'calendar.drawer.ops.deleteTitle',
+                      '删除事件 — 5 秒撤销窗口后通过 CalDAV DELETE'
+                    )}
                   >
                     <Trash2 size={13} strokeWidth={2} />
                     {t('calendar.drawer.ops.delete', '删除')}
@@ -516,7 +563,8 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                 <>
                   <div className="rsvp-label">
                     <Check size={11} strokeWidth={2} />
-                    {t('calendar.drawer.rsvp.label', '我的回复')}{isNeedsAction ? ' ' + t('calendar.drawer.rsvp.labelPending', '· 待回复') : ''}
+                    {t('calendar.drawer.rsvp.label', '我的回复')}
+                    {isNeedsAction ? ' ' + t('calendar.drawer.rsvp.labelPending', '· 待回复') : ''}
                   </div>
                   <div className="rsvp-row">
                     <button
@@ -524,7 +572,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                       className={cn('btn-rsvp', myResp === 'ACCEPTED' && 'sel')}
                       disabled={rsvpMut.isPending}
                       onClick={() => handleRsvp('accept')}
-                      title={t('calendar.drawer.rsvp.acceptTitle', '接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者')}
+                      title={t(
+                        'calendar.drawer.rsvp.acceptTitle',
+                        '接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者'
+                      )}
                     >
                       {rsvpMut.isPending && rsvpMut.variables === 'accept' ? (
                         <Loader2 size={13} strokeWidth={2} className="animate-spin" />
@@ -538,7 +589,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                       className={cn('btn-rsvp', myResp === 'TENTATIVE' && 'sel')}
                       disabled={rsvpMut.isPending}
                       onClick={() => handleRsvp('tentative')}
-                      title={t('calendar.drawer.rsvp.tentativeTitle', '暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者')}
+                      title={t(
+                        'calendar.drawer.rsvp.tentativeTitle',
+                        '暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者'
+                      )}
                     >
                       {rsvpMut.isPending && rsvpMut.variables === 'tentative' && (
                         <Loader2 size={13} strokeWidth={2} className="animate-spin" />
@@ -550,7 +604,10 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                       className={cn('btn-rsvp', myResp === 'DECLINED' && 'sel')}
                       disabled={rsvpMut.isPending}
                       onClick={() => handleRsvp('decline')}
-                      title={t('calendar.drawer.rsvp.declineTitle', '拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者')}
+                      title={t(
+                        'calendar.drawer.rsvp.declineTitle',
+                        '拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者'
+                      )}
                     >
                       {rsvpMut.isPending && rsvpMut.variables === 'decline' && (
                         <Loader2 size={13} strokeWidth={2} className="animate-spin" />
@@ -589,7 +646,8 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                 UID: {occurrence.ical_uid}
                 <br />
                 源: {occurrence.source}
-                {occurrence.is_recurrence_instance && ' · ' + t('calendar.drawer.rruleInstance', 'RRULE 实例')}
+                {occurrence.is_recurrence_instance &&
+                  ' · ' + t('calendar.drawer.rruleInstance', 'RRULE 实例')}
               </div>
             </div>
           </>

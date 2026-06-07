@@ -806,6 +806,7 @@ function ImageLightbox({ src, onClose }: ImageLightboxProps): React.ReactPortal 
         onPointerCancel={onPointerUp}
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale}) rotate(${rotation}deg)`,
+          // eslint-disable-next-line react-hooks/refs -- lightbox 拖拽时即时跟手(transition:none)、松手恢复 120ms 过渡。dragRef 存拖拽态避免每次 pointermove re-render（性能）；render 读 ref 决定 transition 是有意权衡。真重构 ref→state 会每拖拽帧 re-render。React Compiler 迁移债。
           transition: dragRef.current ? 'none' : 'transform 120ms ease',
           maxWidth: '92vw',
           maxHeight: '88vh',

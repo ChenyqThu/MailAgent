@@ -133,12 +133,14 @@ export function NotionAgentSection(): React.ReactElement {
     ) {
       const p: PrimaryAgent = { name: config.agentName, pageId: config.agentPageId }
       writePrimaryAgent(p)
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 检测到 config 绑定的是 main agent 时记住它（writePrimaryAgent 写 localStorage + setPrimary）。带 localStorage 副作用 + 需 customPageIds 加载后判定，effect 合理。React Compiler 迁移债。
       setPrimary(p)
     }
   }, [config?.agentPageId, config?.agentName, customPageIds])
 
   // Picker options = main agent (pinned top) + custom agents. Fall back to the
   // current non-custom binding when localStorage hasn't recorded one yet.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- React Compiler 无法保留此手动 useMemo（依赖 config 可选链 + customPageIds Set）。现状 memo 正确，迁移 Compiler 时再处理。React Compiler 迁移债。
   const primaryOption = React.useMemo<PrimaryAgent | null>(() => {
     if (primary) return primary
     if (config?.agentPageId && config.agentName && !customPageIds.has(config.agentPageId)) {

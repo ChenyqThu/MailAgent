@@ -412,6 +412,7 @@ export function ConfigDrawer({
   // 不同 agent(cfg 变) 时重置；关闭时 if(!open) 提前返回，保留旧值供退场动画。
   useEffect(() => {
     if (!open || !cfg) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 模态打开按 cfg 预填表单（多字段响应 open&&cfg 变化）。React Compiler 迁移债：真重构需父组件 key 重置 remount + 预填逻辑搬 useState initializer，等价性风险（occurrence vs create defaults 各转换）高于收益。effect 合理保留。
     setCadence(cfg.schedule.cadence)
     setTitle(cfg.title)
     setEnabled(cfg.enabled)

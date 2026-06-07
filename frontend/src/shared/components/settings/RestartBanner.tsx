@@ -143,10 +143,7 @@ export function RestartBanner(): React.ReactElement | null {
           'flex items-center gap-3'
         )}
       >
-        <span
-          aria-hidden="true"
-          className="absolute inset-y-0 left-0 w-1 bg-coral"
-        />
+        <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-coral/100" />
         <AlertTriangle className="size-4 shrink-0 text-coral" aria-hidden="true" />
         <div className="flex-1 min-w-0 text-aux text-ink-fg-1">
           <span className="font-medium text-ink-fg">
