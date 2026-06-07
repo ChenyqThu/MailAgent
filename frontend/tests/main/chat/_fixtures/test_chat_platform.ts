@@ -17,12 +17,6 @@
 //     不打 LLM → 不实现（替身类型 = ChatInfraPlatform & ChatToolPlatform）。
 
 import * as chatDb from '../../../../src/electron/main/chat_db'
-import {
-  getMaxCostUsd,
-  getMaxIter,
-  isHarnessEnabled,
-  isKosL1HotBlockEnabled
-} from '../../../../src/electron/main/chat/config'
 import type {
   ChatInfraPlatform,
   ChatPersistPort,
@@ -30,6 +24,23 @@ import type {
   ChatToolKosConfig,
   ChatToolPlatform
 } from '../../../../src/shared/chat/platform'
+
+// ── env 读 helper：原 chat/main/config.ts 在 V2.1 3c-5 cutover 收尾删除（整文件仅本
+//    替身引用——生产 resolveConfig 已下沉 serve-api/HttpChatPlatform GET /chat/config）。
+//    这里内联复刻它的 readEnvBool/readEnvNumber，逐项对齐 resolveConfig 用到的 4 个 flag
+//    默认值与边界：maxIter 默认 8 下限 1 / maxCostUsd 默认 0.5 取正 / harness 默认 ON / kosL1 默认 OFF。
+function readEnvBool(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return defaultValue
+  return raw === '1' || raw.toLowerCase() === 'true'
+}
+
+function readEnvNumber(name: string, defaultValue: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return defaultValue
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : defaultValue
+}
 
 // ── 持久化端口：转发既有 chat_db（同步），包成 Promise 满足跨端异步接口（复刻
 //    生产 ElectronChatPlatform.persist 逐法语义；零 this 依赖，解构调用安全）──────
@@ -93,11 +104,12 @@ export const testChatPlatform: ChatInfraPlatform & ChatToolPlatform = {
     return null
   },
   async resolveConfig(): Promise<ChatRuntimeConfig> {
+    const maxCostUsd = readEnvNumber('AGENT_MAX_COST_USD', 0.5)
     return {
-      maxIter: getMaxIter(),
-      maxCostUsd: getMaxCostUsd(),
-      kosL1HotBlockEnabled: isKosL1HotBlockEnabled(),
-      harnessEnabled: isHarnessEnabled()
+      maxIter: Math.max(1, Math.floor(readEnvNumber('AGENT_MAX_ITER', 8))),
+      maxCostUsd: maxCostUsd > 0 ? maxCostUsd : 0.5,
+      kosL1HotBlockEnabled: readEnvBool('MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED', false),
+      harnessEnabled: readEnvBool('MAILAGENT_AGENT_HARNESS', true)
     }
   },
   prefetchSenderDigest() {

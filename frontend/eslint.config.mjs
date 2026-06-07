@@ -29,7 +29,10 @@ export default defineConfig(
       // RuleTester fixtures intentionally contain banned tailwind classes /
       // raw hex / `@media (prefers-color-scheme)` as *invalid* examples;
       // linting the test file would re-flag them.
-      'tests/**'
+      'tests/**',
+      // docs/ 下是一次性审计 / workflow 脚本（如 impeccable-review/*.mjs），与
+      // scripts/** 同类——非产品 renderer/main 代码，不参与产品 lint。
+      'docs/**'
     ]
   },
   tseslint.configs.recommended,
@@ -52,6 +55,18 @@ export default defineConfig(
     rules: {
       ...eslintPluginReactHooks.configs.recommended.rules,
       ...eslintPluginReactRefresh.configs.vite.rules,
+      // `_` 前缀 = 有意未使用（接口契约要求的位置参数 / 解构出但本实现不取的字段，
+      // 如 chat 工具 handler 的 _ctx、http_platform 的 _senderAddr）。tseslint.recommended
+      // 默认不豁免 `_`，这里显式开 ignorePattern 对齐业界约定（避免为消 lint 去删签名参数）。
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          destructuredArrayIgnorePattern: '^_'
+        }
+      ],
       // REVIEW-LOG H-08 / DESIGN.md §14 + §16.6 + §17 non-negotiables.
       'mailagent/no-raw-hex': 'error',
       'mailagent/no-banned-colors': 'error',
