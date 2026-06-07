@@ -49,7 +49,8 @@ import {
   REQUIRED_TABLES,
   getBackendLifecycle,
   probeDbReady,
-  registerBackendQuitHook
+  registerBackendQuitHook,
+  resolveApiPort
 } from '../backend_lifecycle'
 import { callCli, getMailagentBin } from '../cli_runner'
 import { getDb, resolveDataRoot, resolveDbPath } from '../db'
@@ -946,7 +947,11 @@ function reloadToMain(evt: Electron.IpcMainInvokeEvent): void {
     win.setMinimumSize(MAIN_WINDOW.minWidth, MAIN_WINDOW.minHeight)
     win.setSize(MAIN_WINDOW.width, MAIN_WINDOW.height)
     win.center()
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
+    // V2.1 3c-3: 同 createWindow，reload 进主界面也须注入 apiPort —— 否则
+    // MAILAGENT_API_PORT 覆盖时 onboarding 完成进入的窗口 ElectronApi.chat 丢端口
+    // 静默回退 8200（codex 3c-3 MEDIUM）。端口同源 resolveApiPort（= serve-api 实际端口）。
+    const search = new URLSearchParams({ apiPort: String(resolveApiPort()) }).toString()
+    void win.loadFile(join(__dirname, '../renderer/index.html'), { search })
   } catch {
     /* 窗口已销毁等边界情况, 不阻断 complete 成功返回。 */
   }

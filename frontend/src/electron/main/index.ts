@@ -3,7 +3,11 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { bootNativeTheme, registerAppearanceIpc } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
-import { registerBackendLifecycle, registerBackendQuitHook } from './backend_lifecycle'
+import {
+  registerBackendLifecycle,
+  registerBackendQuitHook,
+  resolveApiPort
+} from './backend_lifecycle'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
@@ -121,7 +125,12 @@ app.setName('MailAgent')
 function createWindow(opts: { onboarding?: boolean } = {}): void {
   // onboarding 模式: 用 ?onboarding=1 query 让 renderer main.tsx 渲染配置向导而非主 App
   // (复用 popout 的 ?popout=1 query 同款机制)。完成后 onboarding:complete 会 reload 去掉它。
-  const search = opts.onboarding ? 'onboarding=1' : ''
+  // V2.1 3c-3: 透传 serve-api 端口给 renderer —— ChatRuntime 的 loopback baseUrl
+  // 端口须 = serve-api 实际端口 = chat_local_bridge webRequest filter 端口 (三者
+  // 同源 resolveApiPort)；renderer 进程无 process.env，故经 `?apiPort=` 注入。
+  const params = new URLSearchParams({ apiPort: String(resolveApiPort()) })
+  if (opts.onboarding) params.set('onboarding', '1')
+  const search = params.toString()
   // onboarding 向导用固定小窗 (768×640, 不可缩放, 居中); 主 App 用 1280×800。
   // 尺寸常量集中在 lib/window-config (reloadToMain 进主界面时也据此恢复, 防漂移)。
   // titleBarStyle 两者都保持 hiddenInset (OS 画红绿灯)。
@@ -227,7 +236,8 @@ function createPopoutWindow(emailId: number): void {
   })
   attachExternalLinkGuard(popout.webContents)
 
-  const search = `popout=1&email=${emailId}`
+  // V2.1 3c-3: popout 窗口同样需 apiPort (它也跑 ChatRuntime → loopback serve-api)。
+  const search = `popout=1&email=${emailId}&apiPort=${resolveApiPort()}`
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     popout.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
   } else {

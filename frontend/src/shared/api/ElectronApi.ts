@@ -31,15 +31,6 @@ import type {
   EventsListOpts,
   SyncNowOpts,
   ChatApi,
-  ChatBackendKind,
-  ChatEditOpts,
-  ChatMessage,
-  ChatSession,
-  ChatSessionListItem,
-  ChatStartOpts,
-  ChatStartResult,
-  ChatStreamEnvelope,
-  ChatToolCall,
   NotionAgentApi,
   NotionAgentConfig,
   NotionAgentDoctorCheck,
@@ -129,6 +120,8 @@ import type {
   UpdaterApi,
   UpdaterStatus
 } from './types'
+import { createChatRuntime } from '../chat/runtime'
+import { HttpApi } from './HttpApi'
 
 type IpcInvoker = (channel: string, ...args: unknown[]) => Promise<unknown>
 type IpcSender = (channel: string, ...args: unknown[]) => void
@@ -535,124 +528,44 @@ class ElectronAiApi implements AiApi {
   }
 }
 
-// Mirror of ChatStartEnvelope in src/electron/main/handlers/chat.ts. Same
-// rationale as TranslateEnvelope above (REVIEW-LOG codex M-3): IPC drops
-// custom Error properties, so we route failures through `{ ok: false, code }`.
-type ChatStartEnvelope =
-  | { ok: true; data: ChatStartResult }
-  | { ok: false; code: string; message: string }
+// V2.1 3c-3 cutover — ElectronApi.chat 不再走 IPC (`chat:*` → main dispatcher)，
+// 改为在 renderer 进程内跑 shared `createChatRuntime`（dispatcher + HttpChatPlatform
+// + 进程内 emitter sink），经 loopback serve-api fetch（token + CORS 由 main
+// `chat_local_bridge` 的 webRequest 透明注入）。旧 `ElectronChatApi`（IPC 封装）+
+// `ChatStartEnvelope`（IPC 丢 Error.code 才需的 envelope）随之删除 —— runtime 同进程
+// 直 throw `Error & {code}`，无 IPC 边界，不需 envelope 解包。main 侧 `chat:*` IPC
+// handler 暂留为 dead code（3c-4 cutover 整体删 main 直跑路径）。
 
-class ElectronChatApi implements ChatApi {
-  async start(opts: ChatStartOpts): Promise<ChatStartResult> {
-    const env = (await invoker()('chat:start', opts)) as ChatStartEnvelope
-    if (env.ok) return env.data
-    const err = new Error(env.message) as Error & { code?: string }
-    err.code = env.code
-    throw err
+/** renderer 内 ChatRuntime 的 loopback serve-api baseUrl。host 恒 127.0.0.1
+ *  (loopback)；端口由 main `createWindow` 经 `?apiPort=N` 注入（`resolveApiPort()`
+ *  单一真源 = serve-api 实际端口 = `chat_local_bridge` webRequest filter 端口）。
+ *  renderer 进程无 `process.env`，故端口必须由 main 透传；缺省 / 解析失败回退 8200。 */
+function loopbackChatBaseUrl(): string {
+  let port = 8200
+  try {
+    const raw = new URLSearchParams(window.location.search).get('apiPort')
+    const n = raw != null ? Number.parseInt(raw, 10) : NaN
+    if (Number.isFinite(n) && n > 0) port = n
+  } catch {
+    // window/location 不可用（非 renderer 测试环境）→ 回退默认端口。
   }
-  abort(sessionId: number): void {
-    // Same fire-and-forget pattern as ai.abortTranslate (Sprint 3).
-    sender()?.('chat:abort', sessionId)
-  }
-  async listMessages(sessionId: number): Promise<ChatMessage[]> {
-    return (await invoker()('chat:listMessages', sessionId)) as ChatMessage[]
-  }
-  async listSessions(emailId: number): Promise<ChatSession[]> {
-    return (await invoker()('chat:listSessions', emailId)) as ChatSession[]
-  }
-  async listAllSessions(): Promise<ChatSessionListItem[]> {
-    return (await invoker()('chat:listAllSessions')) as ChatSessionListItem[]
-  }
-  async editMessage(opts: ChatEditOpts): Promise<ChatStartResult> {
-    // Same envelope shape as `start` — Electron IPC strips custom Error
-    // properties, so the main process wraps dispatch failures in
-    // `{ ok: false, code, message }`.
-    const env = (await invoker()('chat:editMessage', opts)) as ChatStartEnvelope
-    if (env.ok) return env.data
-    const err = new Error(env.message) as Error & { code?: string }
-    err.code = env.code
-    throw err
-  }
-  openPopout(emailId: number): void {
-    // Fire-and-forget; main process spawns the BrowserWindow + handles
-    // load + show lifecycle. Bad emailId is silently dropped by the
-    // handler — renderer validates the input upstream anyway.
-    if (!Number.isInteger(emailId) || emailId < 0) return
-    sender()?.('window:openChatPopout', emailId)
-  }
-  deleteSession(sessionId: number): void {
-    // Fire-and-forget — chat_db's CASCADE FK takes care of message rows.
-    if (!Number.isInteger(sessionId) || sessionId < 0) return
-    sender()?.('chat:deleteSession', sessionId)
-  }
-  async newSession(input: {
-    emailId: number
-    backendKind: ChatBackendKind
-    backendModel?: string | null
-    backendAgentPageId?: string | null
-  }): Promise<ChatSession> {
-    // Sprint 19 — INSERT a fresh ai_chat_sessions row. v4 schema dropped
-    // the UNIQUE so this always creates a brand-new row instead of
-    // reusing the latest. Same envelope shape as `start` for code/message
-    // error surfacing through the IPC boundary.
-    type Env = { ok: true; data: ChatSession } | { ok: false; code: string; message: string }
-    const env = (await invoker()('chat:newSession', input)) as Env
-    if (env.ok) return env.data
-    const err = new Error(env.message) as Error & { code?: string }
-    err.code = env.code
-    throw err
-  }
-  async confirmTool(
-    toolUseId: string,
-    approved: boolean,
-    editedInput?: unknown
-  ): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
-    // Sprint 19 PR-1d.2 — replies a pending ConfirmToolDialog. Bad input
-    // is rejected upstream by validateConfirmToolPayload in handlers/chat.ts,
-    // and the renderer always passes a string toolUseId so the validation
-    // is defensive only.
-    if (typeof toolUseId !== 'string' || toolUseId.length === 0) {
-      return { ok: false, code: 'E_INVALID_ARG', message: 'toolUseId required' }
+  return `http://127.0.0.1:${port}/api`
+}
+
+/** ElectronApi.chat 的进程内 ChatRuntime（V2.1 3c-3）。`reads = new HttpApi(loopback)`
+ *  仅供 `HttpChatPlatform` 的工具读（email/attachment）；该 HttpApi 的 lazy `.chat`
+ *  getter 永不构造（破循环，见 HttpApi.chat 注释）。`openPopout` 是 Electron
+ *  BrowserWindow 能力（shared runtime 里是 no-op）→ 这里 override 回 main 的
+ *  `window:openChatPopout` IPC（runtime 透明，web 无此第二窗口场景）。 */
+function createElectronChatRuntime(): ChatApi {
+  const baseUrl = loopbackChatBaseUrl()
+  const runtime = createChatRuntime({ reads: new HttpApi(baseUrl), baseUrl })
+  return {
+    ...runtime,
+    openPopout(emailId: number): void {
+      if (!Number.isInteger(emailId) || emailId < 0) return
+      sender()?.('window:openChatPopout', emailId)
     }
-    return (await invoker()('chat:confirmTool', {
-      toolUseId,
-      approved: !!approved,
-      editedInput
-    })) as { ok: true } | { ok: false; code: string; message: string }
-  }
-  async saveToKos(input: {
-    messageId: number
-    slug?: string
-    title?: string
-  }): Promise<{ slug: string; status: string; contentBytes: number }> {
-    // Sprint 19 P1-C — user clicked [✨ 保存到 KOS]. Same envelope shape
-    // as `start` so the main process can surface E_NOT_FOUND / E_INVALID_ARG
-    // / E_KOS_* with a structured code instead of dropping the Error
-    // property across IPC.
-    type Env =
-      | { ok: true; data: { slug: string; status: string; contentBytes: number } }
-      | { ok: false; code: string; message: string }
-    const env = (await invoker()('chat:saveToKos', input)) as Env
-    if (env.ok) return env.data
-    const err = new Error(env.message) as Error & { code?: string }
-    err.code = env.code
-    throw err
-  }
-  async kosAvailable(): Promise<boolean> {
-    // Sprint 19 P1-C — env→renderer bridge gating the [✨ 保存到 KOS] button.
-    // Plain pass-through; the main handler returns a bare boolean.
-    return (await invoker()('chat:kosAvailable')) as boolean
-  }
-  async listToolCalls(messageId: number): Promise<ChatToolCall[]> {
-    // Sprint 19 §D #3 — ToolCallRow audit fetch. Plain pass-through; the
-    // main handler returns [] for invalid inputs (no envelope wrap needed).
-    return (await invoker()('chat:listToolCalls', messageId)) as ChatToolCall[]
-  }
-  onStream(handler: (envelope: ChatStreamEnvelope) => void): () => void {
-    return subscribe('chat:stream', (...args: unknown[]) => {
-      const env = args[0] as ChatStreamEnvelope | undefined
-      if (env && typeof env === 'object') handler(env)
-    })
   }
 }
 
@@ -848,7 +761,7 @@ export class ElectronApi implements MailApi {
   folder: FolderApi = new ElectronFolderApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()
-  chat: ChatApi = new ElectronChatApi()
+  chat: ChatApi = createElectronChatRuntime()
   llm: LlmApi = new ElectronLlmApi()
   notion: NotionWriteApi = new ElectronNotionWriteApi()
   admin: AdminApi = new ElectronAdminApi()

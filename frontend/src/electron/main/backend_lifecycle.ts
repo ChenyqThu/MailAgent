@@ -282,8 +282,11 @@ function serveApiEnabled(): boolean {
   return process.env.MAILAGENT_REMOTE_ACCESS_ENABLED !== 'false'
 }
 
-/** serve-api uvicorn 端口 (env MAILAGENT_API_PORT, 默认 DEFAULT_API_PORT)。 */
-function resolveApiPort(): number {
+/** serve-api uvicorn 端口 (env MAILAGENT_API_PORT, 默认 DEFAULT_API_PORT)。
+ *  V2.1 3c-3: export 供 index.ts createWindow 经 `?apiPort=` 把端口透传 renderer
+ *  —— ChatRuntime 的 loopback baseUrl 端口须 = serve-api 实际端口 =
+ *  chat_local_bridge webRequest filter 端口 (三者同源此函数, 单一真源)。 */
+export function resolveApiPort(): number {
   const raw = process.env.MAILAGENT_API_PORT
   const n = raw != null ? Number.parseInt(raw, 10) : NaN
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_API_PORT
