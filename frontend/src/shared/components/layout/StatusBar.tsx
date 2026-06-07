@@ -208,7 +208,13 @@ export function StatusBar(): React.ReactElement {
   })
 
   const themeTooltip = `${t('statusbar.theme')} ${t(`settings.theme.${resolved}`)} · ${accent}`
+  // Build-time 注入的构建标识（electron.vite.config renderer.define；web build 不注入
+  // → typeof guard 退化 ''）。让「未 bump version / ad-hoc 重 build」也能从 UI 辨别构建。
+  const buildId = typeof __GIT_HASH__ !== 'undefined' ? __GIT_HASH__ : ''
+  const buildTime = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : ''
   const versionTooltip = `${t('statusbar.version', { version: status.currentVersion ?? 'dev' })}${
+    buildId ? ` · ${buildId}` : ''
+  }${buildTime ? ` · ${buildTime}` : ''}${
     status.state === 'downloaded' ? ` · ${t('statusbar.updateReady')}` : ''
   }`
 
@@ -303,6 +309,7 @@ export function StatusBar(): React.ReactElement {
         <Layers size={11} strokeWidth={2} className="text-ink-fg-3" />
         <span className="text-ink-fg-3">
           {t('statusbar.version', { version: status.currentVersion })}
+          {buildId ? <span className="opacity-60"> · {buildId}</span> : null}
         </span>
         {status.state === 'downloaded' && (
           <>
