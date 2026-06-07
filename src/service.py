@@ -575,21 +575,38 @@ class EmailNotionSyncApp:
                         f"window={config.mailagent_daily_digest_window_hours}h)"
                     )
 
-            # 报告 Agent worker（独立于 island，自己的 gate；日/周/月报定时生成）
+            # 报告 Agent worker（独立于 island，自己的 gate；日/周/月报定时生成）。
+            # 启动条件 = 总开关 flag 开 OR report_agent 表里存在 enabled 的 report
+            # agent。后者让「前端启用某个报告 agent」即可自动定时生成，无需用户去翻
+            # MAILAGENT_REPORT_AGENT_ENABLED env（打包 app 用户尤其碰不到 env）。
+            # 表为空 / 无 enabled / 旧库无表 → list_agents 抛 → 回退 flag-only。
             report_worker_task = None
-            if config.mailagent_report_agent_enabled:
+            report_db_path = str(self.watcher.sync_store.db_path)
+            from src.reports.store import ReportStore
+            report_store = ReportStore(db_path=report_db_path)
+            try:
+                has_enabled_report_agent = any(
+                    a.get("enabled") and (a.get("type") or "report") == "report"
+                    for a in report_store.list_agents()
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[report] list_agents probe failed: {e}")
+                has_enabled_report_agent = False
+            if config.mailagent_report_agent_enabled or has_enabled_report_agent:
                 from src.reports import worker as report_worker
-                from src.reports.store import ReportStore
-                report_db_path = str(self.watcher.sync_store.db_path)
                 report_worker_task = asyncio.create_task(
                     report_worker.tick_loop(
                         sync_store=self.watcher.sync_store,
-                        store=ReportStore(db_path=report_db_path),
+                        store=report_store,
                         db_path=report_db_path,
                         shutdown_event=self._shutdown_event,
                     )
                 )
-                logger.info("[report] report agent worker enabled")
+                logger.info(
+                    f"[report] worker enabled "
+                    f"(flag={config.mailagent_report_agent_enabled} "
+                    f"enabled_agent={has_enabled_report_agent})"
+                )
 
             # 等待关闭信号
             await self._shutdown_event.wait()

@@ -530,8 +530,8 @@ class Config(BaseSettings):
         description="报告 Agent 总开关（日/周/月报 report_worker tick_loop）。默认关；per-agent 还需 report_agent.enabled。",
     )
     mailagent_report_max_emails: int = Field(
-        default=80, env="MAILAGENT_REPORT_MAX_EMAILS",
-        description="单次报告喂给 LLM 的邮件 brief 封数上限（按 priority/date 排序取前 N），默认 80。",
+        default=0, env="MAILAGENT_REPORT_MAX_EMAILS",
+        description="单次报告喂给 LLM 的邮件 brief 封数上限（按 priority/date 排序取前 N）。≤0 = 不限制（取窗口内全部邮件），默认 0 不限制。",
     )
 
     # =========================================================================
