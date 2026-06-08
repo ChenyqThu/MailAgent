@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多文件夹同步 · 设计稿 — MailAgent</title>
+<link rel="stylesheet" href="feature.css">
+<style>
+  /* ── doc-level chrome (not part of the product design system) ── */
+  :root { color-scheme: light dark; }
+  body { background: #e9eaee; transition: background var(--dur-base); }
+  body[data-page='dark'] { background: #0a0c10; }
+  .spec-bar { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 16px;
+    padding: 12px 24px; background: rgba(20,22,28,0.86); backdrop-filter: saturate(160%) blur(20px);
+    border-bottom: 1px solid rgba(255,255,255,0.08); color: #e8eaee; }
+  .spec-bar .sb-mark { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center;
+    background: #f48c72; color: #15181d; flex-shrink: 0; }
+  .spec-bar .sb-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .spec-bar .sb-title small { display: block; font-family: var(--mono); font-size: 11px; font-weight: 400;
+    color: #8b909b; letter-spacing: 0.02em; margin-top: 1px; }
+  .spec-nav { display: flex; gap: 2px; margin-left: 12px; flex-wrap: wrap; }
+  .spec-nav a { font-size: 12.5px; color: #b6bcc6; text-decoration: none; padding: 4px 9px; border-radius: 6px;
+    transition: all var(--dur-fast); white-space: nowrap; }
+  .spec-nav a:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  .seg { margin-left: auto; display: inline-flex; background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 2px; gap: 2px; flex-shrink: 0; }
+  .seg button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 6px;
+    font-size: 12.5px; color: #b6bcc6; cursor: pointer; background: transparent; border: 0; font-family: inherit; transition: all var(--dur-fast); }
+  .seg button.on { background: rgba(255,255,255,0.14); color: #fff; }
+
+  .doc { padding: 36px 24px 120px; max-width: 1280px; margin: 0 auto; }
+  .spec-sec { margin-top: 64px; }
+  .spec-sec:first-child { margin-top: 8px; }
+  .spec-eye { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em;
+    color: rgb(var(--c-accent)); }
+  .spec-h2 { font-size: 26px; line-height: 1.18; font-weight: 600; letter-spacing: -0.02em;
+    color: rgb(var(--ink-fg)); margin: 8px 0 0; }
+  .spec-lede { font-size: 14.5px; line-height: 1.6; color: rgb(var(--ink-fg-1)); max-width: 720px; margin: 12px 0 0; }
+  .spec-sub { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: rgb(var(--ink-fg-2)); margin: 38px 0 16px; display: flex; align-items: center; gap: 12px; }
+  .spec-sub::after { content: ''; flex: 1; height: 1px; background: rgb(var(--ink-border)); }
+  .cap { font-size: 12.5px; color: rgb(var(--ink-fg-2)); margin: 0 0 9px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .cap b { color: rgb(var(--ink-fg)); font-weight: 600; font-size: 13px; }
+  .cap .tk { font-family: var(--mono); font-size: 11px; color: rgb(var(--ink-fg-3)); }
+  .frame { margin-bottom: 8px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 1000px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  .stack { display: flex; flex-direction: column; gap: 28px; }
+  .pin-label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+    padding: 2px 7px; border-radius: 4px; background: rgb(var(--ink-fg) / 0.06); color: rgb(var(--ink-fg-2));
+    border: 1px solid rgb(var(--ink-border)); }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 18px; padding: 16px 18px;
+    border: 1px solid rgb(var(--ink-border)); border-radius: 10px; background: rgb(var(--ink-2)); }
+  .legend .lg { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: rgb(var(--ink-fg-1)); }
+</style>
+</head>
+<body data-page="light">
+
+<!-- ─── icon sprite ─────────────────────────────────────────────── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-chevdown" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-chevleft" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-folderplus" viewBox="0 0 24 24"><path d="M20 13V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7M16 16h6M19 13v6"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 16v-4M12 8h.01M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2M5 5h14l3 7v7H2v-7z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M3 5h18v4H3zM5 9v10h14V9M9 13h6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 3v5h5"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 2l3 7 7 .5-5.5 4.5 1.8 7L12 17l-6.3 4 1.8-7L2 9.5 9 9z"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><path d="M3 5h18v14H3zM3 6l9 7 9-7"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+  <symbol id="i-bars" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-6M22 20V8"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><path d="M3 5h18v16H3zM3 9h18M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 0 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><path d="M9.1 9a3 3 0 1 1 4 2.8c-1 .6-1.6 1.2-1.6 2.2M12 17h.01M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><path d="M3 4h18v6H3zM3 14h18v6H3zM7 7h.01M7 17h.01"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><path d="M12 7v5l3 2M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></symbol>
+</svg>
+
+<!-- ─── control bar ─────────────────────────────────────────────── -->
+<header class="spec-bar">
+  <span class="sb-mark"><svg class="i fill" style="font-size:14px"><use href="#i-spark"/></svg></span>
+  <div class="sb-title">多文件夹同步 · 高保真设计稿<small>MailAgent · Multi-Folder Sync — 5 界面 · 全状态 · 亮暗双主题</small></div>
+  <nav class="spec-nav">
+    <a href="#s1">① Settings</a>
+    <a href="#s5">⑤ 管理交互</a>
+    <a href="#s2">② Onboarding</a>
+    <a href="#s3">③ Sidebar</a>
+    <a href="#s4">④ 列表头部</a>
+  </nav>
+  <div class="seg" id="themeSeg">
+    <button data-mode="light" class="on">浅色</button>
+    <button data-mode="dark">深色</button>
+  </div>
+</header>
+
+<main class="doc themeable" data-theme="light" id="doc">
+
+<!-- ════════════════════════════════════════════════════════════════
+     ① SETTINGS — 文件夹选择器
+     ════════════════════════════════════════════════════════════════ -->
+<section class="spec-sec" id="s1">
+  <div class="spec-eye">界面 ① · Settings → 同步 Tab</div>
+  <h2 class="spec-h2">自定义文件夹同步</h2>
+  <p class="spec-lede">在现有「同步」Tab 重构出动态文件夹树（实时从后端拉取，区别于纯文本 <span class="mono">EnvField</span>）。复用 <span class="mono">PageHeader · Section · Row · Switch</span> 组件语言；勾选框 + 层级缩进 + 行尾 <b style="color:inherit">⋯</b> 管理菜单，管理操作低调藏在 hover。</p>
+
+  <div class="spec-sub">主态 · 完整窗口</div>
+  <p class="cap"><b>默认态</b> 已勾选 4 个自定义文件夹 · 父文件夹「项目」展开 · 系统文件夹锁定 · 大文件夹警示 · 行 hover 显 ⋯ 菜单 <span class="tk">tile · Section · Switch · coral</span></p>
+  <div class="frame" data-screen-label="①-settings-main">
+    <div class="win">
+      <div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span><span class="win-title">设置 — 同步</span></div>
+      <div class="set">
+        <!-- rail -->
+        <div class="set-rail">
+          <div class="set-rail-h">设置</div>
+          <div class="set-tab"><svg class="i nrow-ic"><use href="#i-settings"/></svg>通用</div>
+          <div class="set-tab"><svg class="i nrow-ic"><use href="#i-mail"/></svg>账户</div>
+          <div class="set-tab active"><svg class="i nrow-ic"><use href="#i-refresh"/></svg>同步</div>
+          <div class="set-tab"><svg class="i nrow-ic"><use href="#i-spark"/></svg>AI Agent</div>
+          <div class="set-tab"><svg class="i nrow-ic"><use href="#i-info"/></svg>通知</div>
+          <div class="set-tab"><svg class="i nrow-ic"><use href="#i-sliders"/></svg>集成</div>
+        </div>
+        <!-- content -->
+        <div class="set-content">
+          <header style="margin-bottom:24px">
+            <div class="ph-eye">SYNC</div>
+            <h1 class="ph-title">同步</h1>
+            <p class="ph-desc">SQLite radar 同步窗口、节拍，与自定义文件夹白名单。</p>
+          </header>
+
+          <!-- folder sync section -->
+          <div class="sec">
+            <div class="sec-head">
+              <div class="sec-title">自定义文件夹同步</div>
+              <div class="sec-meta">davmail</div>
+            </div>
+            <div class="sec-helper">选择要同步进 MailAgent 的文件夹；邮件将享受 AI 分类、Notion 同步、全文搜索等能力。默认一个不选。</div>
+            <div class="tile">
+              <!-- toolbar -->
+              <div class="ftbar">
+                <button class="btn btn-ghost btn-sm"><svg class="i"><use href="#i-refresh"/></svg>刷新</button>
+                <span class="t-meta" style="color:rgb(var(--ink-fg-2))">共 18 个文件夹 · 上次刷新 2 分钟前</span>
+                <span class="grow"></span>
+                <button class="btn btn-quiet btn-sm"><svg class="i"><use href="#i-folderplus"/></svg>新建文件夹</button>
+              </div>
+              <!-- tree -->
+              <div class="ftree" style="border-top:1px solid rgb(var(--ink-border-soft))">
+                <!-- DMS固件发布 -->
+                <div class="frow">
+                  <div class="cbx on"><svg class="i ck"><use href="#i-check"/></svg></div>
+                  <span class="f-tw leaf"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">DMS固件发布</span>
+                  <span class="f-cnt">728</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state"><span class="dot dot-ok"></span>已同步 2 分钟前</span>
+                  <span class="f-actions"><button class="iconbtn" aria-label="管理">⋯</button></span>
+                </div>
+                <!-- 项目 (parent, expanded) -->
+                <div class="frow">
+                  <div class="cbx partial" title="部分子文件夹已选"></div>
+                  <span class="f-tw open" data-tw><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">项目</span>
+                  <span class="f-cnt">—</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state badge badge-muted">3 子文件夹</span>
+                  <span class="f-actions"><button class="iconbtn" aria-label="管理">⋯</button></span>
+                </div>
+                <!-- child 2026 Q2 -->
+                <div class="frow" data-child>
+                  <span class="f-ind" style="width:26px"></span>
+                  <div class="cbx on"><svg class="i ck"><use href="#i-check"/></svg></div>
+                  <span class="f-tw leaf"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">2026 Q2</span>
+                  <span class="f-cnt">156</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state"><span class="dot dot-ok"></span>已同步</span>
+                  <span class="f-actions"><button class="iconbtn" aria-label="管理">⋯</button></span>
+                </div>
+                <!-- child 2026 Q1 -->
+                <div class="frow" data-child>
+                  <span class="f-ind" style="width:26px"></span>
+                  <div class="cbx"></div>
+                  <span class="f-tw leaf"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">2026 Q1</span>
+                  <span class="f-cnt">312</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state" style="color:rgb(var(--ink-fg-3))">未同步</span>
+                  <span class="f-actions"><button class="iconbtn" aria-label="管理">⋯</button></span>
+                </div>
+                <!-- Jira (large) -->
+                <div class="frow">
+                  <div class="cbx"></div>
+                  <span class="f-tw leaf"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">Jira</span>
+                  <span class="f-cnt">3,458</span>
+                  <span class="badge badge-warn" title="超过 1000 封，首次同步可能较慢"><svg class="i" style="font-size:11px"><use href="#i-alert"/></svg>较大</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state" style="color:rgb(var(--ink-fg-3))">未同步</span>
+                  <span class="f-actions"><button class="iconbtn" aria-label="管理">⋯</button></span>
+                </div>
+                <!-- Notion -->
+                <div class="frow">
+                  <div class="cbx on"><svg class="i ck"><use href="#i-check"/></svg></div>
+                  <span class="f-tw leaf"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">Notion</span>
+                  <span class="f-cnt">381</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state"><span class="dot dot-run"></span>同步中…</span>
+                  <span class="f-actions"><button class="iconbtn" aria-label="管理">⋯</button></span>
+                </div>
+                <!-- 收件箱 (system) -->
+                <div class="frow sys">
+                  <div class="cbx lock" title="系统文件夹 · 始终同步"><svg class="i" style="font-size:9px"><use href="#i-lock"/></svg></div>
+                  <span class="f-tw leaf"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-inbox"/></svg>
+                  <span class="f-name">收件箱</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state" style="color:rgb(var(--ink-fg-3))">系统 · 始终同步</span>
+                  <span class="f-actions"><button class="iconbtn disabled" title="系统文件夹不可改">⋯</button></span>
+                </div>
+                <!-- 发件箱 (system) -->
+                <div class="frow sys">
+                  <div class="cbx lock" title="系统文件夹 · 始终同步"><svg class="i" style="font-size:9px"><use href="#i-lock"/></svg></div>
+                  <span class="f-tw leaf"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-send"/></svg>
+                  <span class="f-name">发件箱</span>
+                  <span class="f-spring"></span>
+                  <span class="f-state" style="color:rgb(var(--ink-fg-3))">系统 · 始终同步</span>
+                  <span class="f-actions"><button class="iconbtn disabled" title="系统文件夹不可改">⋯</button></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- sync window section -->
+          <div class="sec" style="margin-bottom:0">
+            <div class="sec-head"><div class="sec-title">同步窗口</div></div>
+            <div class="tile">
+              <div class="srow">
+                <div class="srow-main"><div class="srow-lbl">首次同步窗口（天）</div><div class="srow-help">只拉最近 N 天；越大首次越慢、占空间越多。</div></div>
+                <input class="f-input plain mono" style="width:96px;text-align:right" value="90">
+              </div>
+              <div class="srow">
+                <div class="srow-main"><div class="srow-lbl">单文件夹上限（封）</div><div class="srow-help">防极端大邮箱；超出按时间降序截断。</div></div>
+                <input class="f-input plain mono" style="width:96px;text-align:right" value="2000">
+              </div>
+              <div class="srow" style="justify-content:flex-end;gap:9px">
+                <button class="btn btn-ghost">取消</button>
+                <button class="btn btn-cta">保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- secondary states -->
+  <div class="spec-sub">状态 · 加载 / 空 / 门控 / 保存中</div>
+  <div class="grid2">
+    <div>
+      <p class="cap"><b>加载中</b> 拉取文件夹树时骨架占位 <span class="tk">.sk skeleton · animate</span></p>
+      <div class="frame" data-screen-label="①-loading">
+        <div class="win"><div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span></div>
+          <div style="background:rgb(var(--ink-3));padding:18px" data-theme="inherit">
+            <div class="tile">
+              <div class="ftbar"><span class="sk" style="width:64px;height:24px"></span><span class="sk" style="width:160px;height:13px"></span></div>
+              <div class="ftree" style="border-top:1px solid rgb(var(--ink-border-soft))">
+                <div class="frow"><span class="sk" style="width:16px;height:16px;border-radius:4px"></span><span class="sk" style="width:15px;height:15px;border-radius:4px"></span><span class="sk" style="width:130px;height:13px"></span><span class="f-spring"></span><span class="sk" style="width:40px;height:12px"></span></div>
+                <div class="frow"><span class="sk" style="width:16px;height:16px;border-radius:4px"></span><span class="sk" style="width:15px;height:15px;border-radius:4px"></span><span class="sk" style="width:90px;height:13px"></span><span class="f-spring"></span><span class="sk" style="width:54px;height:12px"></span></div>
+                <div class="frow"><span class="sk" style="width:16px;height:16px;border-radius:4px"></span><span class="sk" style="width:15px;height:15px;border-radius:4px"></span><span class="sk" style="width:150px;height:13px"></span><span class="f-spring"></span><span class="sk" style="width:36px;height:12px"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>空态</b> 未发现自定义文件夹 → 引导文案 <span class="tk">EmptyState 复用</span></p>
+      <div class="frame" data-screen-label="①-empty">
+        <div class="win"><div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span></div>
+          <div style="background:rgb(var(--ink-3));padding:18px">
+            <div class="tile">
+              <div class="ftbar"><button class="btn btn-ghost btn-sm"><svg class="i"><use href="#i-refresh"/></svg>刷新</button><span class="t-meta" style="color:rgb(var(--ink-fg-2))">共 2 个文件夹 · 仅系统</span></div>
+              <div class="empty" style="border-top:1px solid rgb(var(--ink-border-soft))">
+                <span class="empty-ic"><svg class="i"><use href="#i-folder"/></svg></span>
+                <div class="empty-t">没有可同步的自定义文件夹</div>
+                <div class="empty-d">你的 Exchange 邮箱里暂未发现收件箱 / 发件箱以外的文件夹。在 Outlook 里新建文件夹后点「刷新」重新拉取。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>门控态</b> 非 davmail 后端 → 整区禁用 <span class="tk">dashed veil · ink-fg-2</span></p>
+      <div class="frame" data-screen-label="①-gated">
+        <div class="win"><div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span></div>
+          <div style="background:rgb(var(--ink-3));padding:18px">
+            <div class="gated-veil">
+              <svg class="i gv-ic"><use href="#i-server"/></svg>
+              <div>
+                <div style="font-size:14px;font-weight:500;color:rgb(var(--ink-fg))">需要 davmail 后端</div>
+                <div style="font-size:13px;color:rgb(var(--ink-fg-2));margin-top:4px;line-height:1.55">多文件夹发现、勾选、同步与管理仅在 davmail 后端可用。当前为 <span class="mono" style="color:rgb(var(--ink-fg-1))">AppleScript</span> 模式。前往「账户」切换后端后即可启用本区。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>保存中</b> CTA loading + 计数变更提示 <span class="tk">btn-cta · spin · 需重启</span></p>
+      <div class="frame" data-screen-label="①-saving">
+        <div class="win"><div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span></div>
+          <div style="background:rgb(var(--ink-3));padding:18px">
+            <div class="ibanner info" style="margin-bottom:14px"><svg class="i ib-ic"><use href="#i-info"/></svg><div>白名单已变更：<b>+2</b> 同步 · <b>−1</b> 取消。保存后按白名单增量同步（约 90 天窗口）。</div></div>
+            <div style="display:flex;justify-content:flex-end;gap:9px">
+              <button class="btn btn-ghost">取消</button>
+              <button class="btn btn-cta"><span class="spin"><svg class="i"><use href="#i-refresh"/></svg></span>保存中…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     ⑤ 文件夹管理交互
+     ════════════════════════════════════════════════════════════════ -->
+<section class="spec-sec" id="s5">
+  <div class="spec-eye">界面 ⑤ · 文件夹管理交互（davmail 支持前提）</div>
+  <h2 class="spec-h2">新建 / 重命名 / 删除</h2>
+  <p class="spec-lede">由界面①行尾 <b style="color:inherit">⋯</b> 菜单触发。这些是「偶尔用」的管理动作 —— UI 克制，藏在 hover / 右键 + 轻量弹窗，不常驻大按钮、不喧宾夺主。删除会回写真实 Exchange，故需二次确认。</p>
+
+  <div class="spec-sub">行内 ⋯ 菜单 · 系统文件夹禁用态</div>
+  <div class="grid2">
+    <div>
+      <p class="cap"><b>自定义文件夹</b> 菜单三项可用 <span class="tk">menu · pop-shadow</span></p>
+      <div class="frame" data-screen-label="⑤-menu" style="display:flex;justify-content:center;padding:18px;background:rgb(var(--ink-3));border:1px solid rgb(var(--ink-border));border-radius:10px">
+        <div style="position:relative;width:100%;max-width:380px">
+          <div class="tile">
+            <div class="frow show-actions" style="background:rgb(var(--ink-3))">
+              <div class="cbx on"><svg class="i ck"><use href="#i-check"/></svg></div>
+              <span class="f-tw leaf"></span>
+              <svg class="i f-ic"><use href="#i-folder"/></svg>
+              <span class="f-name">Notion</span>
+              <span class="f-cnt">381</span>
+              <span class="f-spring"></span>
+              <span class="f-actions"><button class="iconbtn" style="background:rgb(var(--ink-4));color:rgb(var(--ink-fg))">⋯</button></span>
+            </div>
+          </div>
+          <div class="menu" style="position:absolute;right:6px;top:42px">
+            <div class="menu-item"><svg class="i mi-ic"><use href="#i-folderplus"/></svg>新建子文件夹</div>
+            <div class="menu-item"><svg class="i mi-ic"><use href="#i-pencil"/></svg>重命名</div>
+            <div class="menu-sep"></div>
+            <div class="menu-item danger"><svg class="i mi-ic"><use href="#i-trash"/></svg>删除</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>系统文件夹</b> 三项灰态禁用 + tooltip <span class="tk">.disabled</span></p>
+      <div class="frame" data-screen-label="⑤-menu-sys" style="display:flex;justify-content:center;padding:18px;background:rgb(var(--ink-3));border:1px solid rgb(var(--ink-border));border-radius:10px">
+        <div style="position:relative;width:100%;max-width:380px">
+          <div class="tile">
+            <div class="frow sys show-actions" style="background:rgb(var(--ink-3))">
+              <div class="cbx lock"><svg class="i" style="font-size:9px"><use href="#i-lock"/></svg></div>
+              <span class="f-tw leaf"></span>
+              <svg class="i f-ic"><use href="#i-inbox"/></svg>
+              <span class="f-name">收件箱</span>
+              <span class="f-spring"></span>
+              <span class="f-state" style="color:rgb(var(--ink-fg-3))">系统</span>
+              <span class="f-actions"><button class="iconbtn" style="background:rgb(var(--ink-4));color:rgb(var(--ink-fg))">⋯</button></span>
+            </div>
+          </div>
+          <div class="menu" style="position:absolute;right:6px;top:42px">
+            <div class="menu-hint">系统文件夹不可修改</div>
+            <div class="menu-item disabled"><svg class="i mi-ic"><use href="#i-folderplus"/></svg>新建子文件夹</div>
+            <div class="menu-item disabled"><svg class="i mi-ic"><use href="#i-pencil"/></svg>重命名</div>
+            <div class="menu-sep"></div>
+            <div class="menu-item disabled"><svg class="i mi-ic"><use href="#i-trash"/></svg>删除</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec-sub">Inline 输入 · 新建 / 重命名 · 勾父作用域</div>
+  <div class="grid3">
+    <div>
+      <p class="cap"><b>新建子文件夹</b> inline 输入 + 确认 <span class="tk">.f-input · coral ring</span></p>
+      <div class="frame" data-screen-label="⑤-new" style="padding:18px;background:rgb(var(--ink-3));border:1px solid rgb(var(--ink-border));border-radius:10px">
+        <div class="tile">
+          <div class="frow" style="background:rgb(var(--ink-3))">
+            <div class="cbx partial"></div>
+            <span class="f-tw open"><svg class="i"><use href="#i-chevron"/></svg></span>
+            <svg class="i f-ic"><use href="#i-folder"/></svg>
+            <span class="f-name">项目</span><span class="f-spring"></span>
+          </div>
+          <div class="frow" style="background:rgb(var(--ink-2))">
+            <span class="f-ind" style="width:26px"></span>
+            <span class="f-tw leaf"></span>
+            <svg class="i f-ic" style="color:rgb(var(--c-accent))"><use href="#i-folderplus"/></svg>
+            <input class="f-input" value="2026 Q3" autofocus>
+            <span class="f-spring"></span>
+            <button class="iconbtn" style="color:rgb(var(--c-ok))"><svg class="i"><use href="#i-check"/></svg></button>
+            <button class="iconbtn"><svg class="i"><use href="#i-x"/></svg></button>
+          </div>
+        </div>
+        <div class="cap" style="margin:10px 0 0"><span class="tk">在父文件夹「项目」下新建（IMAP CREATE）；确认后入树可勾选。</span></div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>重命名</b> inline 编辑预填当前名 <span class="tk">.f-input plain</span></p>
+      <div class="frame" data-screen-label="⑤-rename" style="padding:18px;background:rgb(var(--ink-3));border:1px solid rgb(var(--ink-border));border-radius:10px">
+        <div class="tile">
+          <div class="frow" style="background:rgb(var(--ink-2))">
+            <div class="cbx on"><svg class="i ck"><use href="#i-check"/></svg></div>
+            <span class="f-tw leaf"></span>
+            <svg class="i f-ic" style="color:rgb(var(--c-accent))"><use href="#i-pencil"/></svg>
+            <input class="f-input" value="DMS固件发布">
+            <span class="f-spring"></span>
+            <button class="iconbtn" style="color:rgb(var(--c-ok))"><svg class="i"><use href="#i-check"/></svg></button>
+            <button class="iconbtn"><svg class="i"><use href="#i-x"/></svg></button>
+          </div>
+        </div>
+        <div class="cap" style="margin:10px 0 0"><span class="tk">IMAP RENAME；已同步本地邮件的 mailbox 字段随之更新。</span></div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>勾父作用域</b> 仅本级 / 含全部子文件夹 <span class="tk">scope-pop · radio</span></p>
+      <div class="frame" data-screen-label="⑤-scope" style="padding:18px;background:rgb(var(--ink-3));border:1px solid rgb(var(--ink-border));border-radius:10px;display:flex;justify-content:center">
+        <div class="scope-pop">
+          <div class="menu-hint" style="padding:2px 7px 6px">勾选「项目」</div>
+          <div class="scope-opt on"><span class="rad"></span><div><div class="so-t">仅本级</div><div class="so-d">只同步「项目」本身的邮件</div></div></div>
+          <div class="scope-opt"><span class="rad"></span><div><div class="so-t">含全部子文件夹</div><div class="so-d">连同 2026 Q2 · Q1 等 3 个子文件夹</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec-sub">删除二次确认 · 进行中 · 失败回滚</div>
+  <div class="grid3">
+    <div>
+      <p class="cap"><b>删除二次确认弹窗</b> 危险态 + 影响说明 <span class="tk">modal · btn-danger · fail</span></p>
+      <div class="frame" data-screen-label="⑤-delete">
+        <div class="scrim">
+          <div class="modal">
+            <div class="modal-body">
+              <div class="modal-ic"><svg class="i"><use href="#i-trash"/></svg></div>
+              <h3 class="modal-t">删除文件夹「DMS固件发布」？</h3>
+              <p class="modal-d">将删除 <strong>Exchange 上的该文件夹</strong>，以及本地已同步的 <strong>728 封</strong>邮件副本。此操作<strong>不可撤销</strong>。</p>
+              <div class="modal-warn"><svg class="i mw-ic"><use href="#i-alert"/></svg><div>该文件夹在 Outlook 规则中可能仍被引用；删除后相关规则会失效。Notion 已归档页面不受影响。</div></div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn btn-ghost">取消</button>
+              <button class="btn btn-danger"><svg class="i"><use href="#i-trash"/></svg>删除文件夹</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>进行中</b> 操作 loading <span class="tk">spin · disabled</span></p>
+      <div class="frame" data-screen-label="⑤-deleting">
+        <div class="scrim">
+          <div class="modal">
+            <div class="modal-body">
+              <div class="modal-ic" style="background:rgb(var(--ink-4));color:rgb(var(--ink-fg-2))"><span class="spin"><svg class="i"><use href="#i-refresh"/></svg></span></div>
+              <h3 class="modal-t">正在删除…</h3>
+              <p class="modal-d">向 Exchange 提交删除请求（走 outbox SSoT），并清理本地 728 封副本。请勿关闭窗口。</p>
+            </div>
+            <div class="modal-foot">
+              <button class="btn btn-ghost" disabled style="opacity:.5">取消</button>
+              <button class="btn btn-danger" disabled style="opacity:.7"><span class="spin"><svg class="i"><use href="#i-refresh"/></svg></span>删除中…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>失败回滚</b> Exchange 操作失败 → 本地树回滚 <span class="tk">ibanner fail</span></p>
+      <div class="frame" data-screen-label="⑤-fail" style="padding:18px;background:rgb(var(--ink-3));border:1px solid rgb(var(--ink-border));border-radius:10px;display:flex;flex-direction:column;gap:14px;justify-content:center;min-height:212px">
+        <div class="ibanner fail"><svg class="i ib-ic"><use href="#i-alert"/></svg><div><div style="font-weight:600;margin-bottom:2px">删除失败</div>Exchange 拒绝了删除请求（权限不足或文件夹被占用）。本地文件夹树已<b>回滚到服务器真实状态</b>，未改动任何本地副本。</div></div>
+        <div style="display:flex;justify-content:flex-end;gap:9px"><button class="btn btn-ghost btn-sm">关闭</button><button class="btn btn-ghost btn-sm"><svg class="i"><use href="#i-refresh"/></svg>重试</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     ② ONBOARDING — 选择文件夹步骤
+     ════════════════════════════════════════════════════════════════ -->
+<section class="spec-sec" id="s2">
+  <div class="spec-eye">界面 ② · Onboarding 新增步骤</div>
+  <h2 class="spec-h2">选择要同步的文件夹</h2>
+  <p class="spec-lede">在现有 7 步向导「邮箱配置后、完成前」插入一步。临摹 <span class="mono">steps.tsx</span> 版式（rail + wiz-body + footer）。树形多选 · 系统文件夹默认选中并锁定 · 自定义默认全不选 · 大文件夹轻量提示 · 强调<b style="color:inherit">可跳过</b>。此步<b style="color:inherit">不放</b>管理操作，保持引导简洁。</p>
+
+  <p class="cap"><b>选择文件夹步骤</b> <span class="tk">ob-rail · chip · step-item · btn-cta</span></p>
+  <div class="frame" data-screen-label="②-onboarding">
+    <div class="win">
+      <div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span><span class="win-title">MailAgent — 设置向导</span></div>
+      <div class="ob-shell">
+        <div class="ob-rail">
+          <div class="ob-brand"><span class="bm"><svg class="i fill" style="font-size:15px"><use href="#i-spark"/></svg></span><div><div class="bt">MailAgent</div><div class="bs">设置向导</div></div></div>
+          <div>
+            <div class="step-item done"><span class="sdot"><svg class="i" style="font-size:12px"><use href="#i-check"/></svg></span><span class="slbl">环境与权限</span></div>
+            <div class="step-conn filled"></div>
+            <div class="step-item done"><span class="sdot"><svg class="i" style="font-size:12px"><use href="#i-check"/></svg></span><span class="slbl">后端选择</span></div>
+            <div class="step-conn filled"></div>
+            <div class="step-item done"><span class="sdot"><svg class="i" style="font-size:12px"><use href="#i-check"/></svg></span><span class="slbl">邮箱配置</span></div>
+            <div class="step-conn filled"></div>
+            <div class="step-item active"><span class="sdot">4</span><span class="slbl">选择文件夹</span></div>
+            <div class="step-conn"></div>
+            <div class="step-item"><span class="sdot">5</span><span class="slbl">完成</span></div>
+          </div>
+        </div>
+        <div class="ob-content">
+          <div class="ob-main">
+            <div class="ob-eye">Step 4 — 文件夹</div>
+            <h1 class="ob-h1">选择要同步的文件夹</h1>
+            <p class="ob-lede">勾选要同步进 MailAgent 的文件夹，邮件将享受 AI 分类、Notion 同步等完整能力。可稍后在「设置 → 同步」修改。</p>
+            <div class="ob-tree">
+              <div class="ftree">
+                <div class="frow sys">
+                  <div class="cbx lock"><svg class="i" style="font-size:9px"><use href="#i-lock"/></svg></div>
+                  <span class="f-tw leaf"></span><svg class="i f-ic"><use href="#i-inbox"/></svg>
+                  <span class="f-name">收件箱</span><span class="f-spring"></span>
+                  <span class="f-state" style="color:rgb(var(--ink-fg-3))">默认 · 已锁定</span>
+                </div>
+                <div class="frow sys">
+                  <div class="cbx lock"><svg class="i" style="font-size:9px"><use href="#i-lock"/></svg></div>
+                  <span class="f-tw leaf"></span><svg class="i f-ic"><use href="#i-send"/></svg>
+                  <span class="f-name">发件箱</span><span class="f-spring"></span>
+                  <span class="f-state" style="color:rgb(var(--ink-fg-3))">默认 · 已锁定</span>
+                </div>
+                <div class="frow">
+                  <div class="cbx partial"></div>
+                  <span class="f-tw open"><svg class="i"><use href="#i-chevron"/></svg></span>
+                  <svg class="i f-ic"><use href="#i-folder"/></svg><span class="f-name">项目</span>
+                  <span class="f-spring"></span><span class="f-state badge badge-muted">3 子文件夹</span>
+                </div>
+                <div class="frow" data-child>
+                  <span class="f-ind" style="width:26px"></span>
+                  <div class="cbx on"><svg class="i ck"><use href="#i-check"/></svg></div>
+                  <span class="f-tw leaf"></span><svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">2026 Q2</span><span class="f-cnt">156</span><span class="f-spring"></span>
+                </div>
+                <div class="frow">
+                  <div class="cbx on"><svg class="i ck"><use href="#i-check"/></svg></div>
+                  <span class="f-tw leaf"></span><svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">DMS固件发布</span><span class="f-cnt">728</span><span class="f-spring"></span>
+                </div>
+                <div class="frow">
+                  <div class="cbx"></div>
+                  <span class="f-tw leaf"></span><svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">Jira</span><span class="f-cnt">3,458</span>
+                  <span class="badge badge-warn"><svg class="i" style="font-size:11px"><use href="#i-clock"/></svg>首次同步较慢</span><span class="f-spring"></span>
+                </div>
+                <div class="frow">
+                  <div class="cbx"></div>
+                  <span class="f-tw leaf"></span><svg class="i f-ic"><use href="#i-folder"/></svg>
+                  <span class="f-name">Notion</span><span class="f-cnt">381</span><span class="f-spring"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="ob-foot">
+            <button class="btn btn-ghost"><svg class="i"><use href="#i-chevleft"/></svg>上一步</button>
+            <span style="flex:1"></span>
+            <button class="btn-link">跳过（仅同步收件箱 / 发件箱）</button>
+            <button class="btn btn-cta">继续<svg class="i"><use href="#i-chevron"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     ③ SIDEBAR — MAILBOXES 段
+     ════════════════════════════════════════════════════════════════ -->
+<section class="spec-sec" id="s3">
+  <div class="spec-eye">界面 ③ · Sidebar MAILBOXES 段</div>
+  <h2 class="spec-h2">嵌套层级文件夹树</h2>
+  <p class="spec-lede">复用 <span class="mono">NavRow + CountRight</span>，在 MAILBOXES 段「收件箱 / 发件箱 / 存档 / 草稿箱 / 已标旗 / 所有邮件」之后追加已勾选文件夹。<b style="color:inherit">🔴 三段铁律</b>：文件夹挂在 MAILBOXES 段内，绝不新增第四个 section header。嵌套用缩进 + 展开/收起 chevron；选中态 coral 计数 pill；过长时「展开更多 / 折叠」。</p>
+
+  <div class="spec-sub">亮 + 暗双主题并排 · 展开态</div>
+  <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+    <div>
+      <p class="cap"><span class="pin-label">浅色 · 固定</span> <b>已选中「Jira」</b> coral pill</p>
+      <div class="frame" data-screen-label="③-light" data-theme="light">
+        <div class="win" style="width:248px">
+          <div class="win-bar" style="height:30px"><span class="tl tl-r" style="width:9px;height:9px"></span><span class="tl tl-y" style="width:9px;height:9px"></span><span class="tl tl-g" style="width:9px;height:9px"></span></div>
+          <div class="nav" style="width:100%;height:540px">
+            <div class="nav-head"><div class="nav-acct"><span class="acct-badge">me</span><span style="font-size:14px;color:rgb(var(--ink-fg))">me</span><svg class="i" style="font-size:11px;margin-left:auto;color:rgb(var(--ink-fg-2))"><use href="#i-chevdown"/></svg></div><button class="iconbtn" style="width:24px;height:24px"><svg class="i" style="font-size:13px"><use href="#i-chevleft"/></svg></button></div>
+            <div class="nav-body scrollbar-thin">
+              <div class="nav-sec">Mailboxes</div>
+              <div class="nav-list" id="navLight"></div>
+              <div class="nav-spacer"></div>
+              <div class="nav-sec">AI Agents</div>
+              <div class="nav-list">
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-spark"/></svg><span class="nrow-lbl">Notion Agent</span><span class="online-dot" style="background:rgb(var(--c-ok))"></span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-sliders"/></svg><span class="nrow-lbl">Custom AI</span></button>
+              </div>
+              <div class="nav-spacer"></div>
+              <div class="nav-sec">View</div>
+              <div class="nav-list">
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-activity"/></svg><span class="nrow-lbl">LLM Dashboard</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-cal"/></svg><span class="nrow-lbl">日历</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><span class="pin-label">深色 · 固定</span> <b>同结构</b> 收起「项目」</p>
+      <div class="frame" data-screen-label="③-dark" data-theme="dark">
+        <div class="win" style="width:248px">
+          <div class="win-bar" style="height:30px"><span class="tl tl-r" style="width:9px;height:9px"></span><span class="tl tl-y" style="width:9px;height:9px"></span><span class="tl tl-g" style="width:9px;height:9px"></span></div>
+          <div class="nav" style="width:100%;height:540px">
+            <div class="nav-head"><div class="nav-acct"><span class="acct-badge">me</span><span style="font-size:14px;color:rgb(var(--ink-fg))">me</span><svg class="i" style="font-size:11px;margin-left:auto;color:rgb(var(--ink-fg-2))"><use href="#i-chevdown"/></svg></div><button class="iconbtn" style="width:24px;height:24px"><svg class="i" style="font-size:13px"><use href="#i-chevleft"/></svg></button></div>
+            <div class="nav-body scrollbar-thin">
+              <div class="nav-sec">Mailboxes</div>
+              <div class="nav-list" id="navDark"></div>
+              <div class="nav-spacer"></div>
+              <div class="nav-sec">AI Agents</div>
+              <div class="nav-list">
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-spark"/></svg><span class="nrow-lbl">Notion Agent</span><span class="online-dot" style="background:rgb(var(--c-ok))"></span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-sliders"/></svg><span class="nrow-lbl">Custom AI</span></button>
+              </div>
+              <div class="nav-spacer"></div>
+              <div class="nav-sec">View</div>
+              <div class="nav-list">
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-activity"/></svg><span class="nrow-lbl">LLM Dashboard</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-cal"/></svg><span class="nrow-lbl">日历</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><span class="pin-label">收起态 · 56px</span> <b>图标 + hover tooltip</b></p>
+      <div class="frame" data-screen-label="③-collapsed" data-theme="light" style="display:flex;gap:14px;align-items:flex-start">
+        <div class="win" style="width:58px">
+          <div class="win-bar" style="height:30px;padding:0;justify-content:center;gap:4px"><span class="tl tl-r" style="width:8px;height:8px"></span><span class="tl tl-y" style="width:8px;height:8px"></span><span class="tl tl-g" style="width:8px;height:8px"></span></div>
+          <div class="nav collapsed" style="width:100%;height:540px">
+            <div style="display:flex;justify-content:center;padding:8px 0;border-bottom:1px solid rgb(var(--ink-border-soft))"><span style="width:30px;height:30px;border-radius:50%;background:rgb(var(--c-accent));color:rgb(var(--c-accent-fg));display:grid;place-items:center;font-size:13px;font-weight:600">m</span></div>
+            <div class="nav-body" style="padding:10px 0">
+              <div class="crow"><svg class="i"><use href="#i-inbox"/></svg><span class="cdot"></span></div>
+              <div class="crow"><svg class="i"><use href="#i-send"/></svg></div>
+              <div class="crow"><svg class="i"><use href="#i-star"/></svg></div>
+              <div style="height:1px;background:rgb(var(--ink-border-soft));margin:10px 12px"></div>
+              <div class="crow sel tip"><svg class="i"><use href="#i-folder"/></svg><div class="tip-pop">Jira<span class="cnt-pill">3,458</span></div></div>
+              <div class="crow"><svg class="i"><use href="#i-folder"/></svg></div>
+              <div class="crow"><svg class="i"><use href="#i-folder"/></svg></div>
+              <div class="crow" style="color:rgb(var(--ink-fg-2));font-size:13px">+2</div>
+            </div>
+          </div>
+        </div>
+        <div style="max-width:200px;font-size:12.5px;color:rgb(var(--ink-fg-2));line-height:1.6;padding-top:6px">收起态隐藏层级，仅显已勾选文件夹的「叶子」图标；父级折叠为同一 📁，超出 4 个折成 <span class="mono">+N</span>。hover 弹 tooltip 显全名 + 计数。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec-sub">侧栏右键 · 直接在主菜单管理文件夹</div>
+  <p class="spec-lede" style="margin-bottom:18px">对侧栏里<b style="color:inherit">已勾选(可见)</b>的文件夹直接<b style="color:inherit">右键</b> → 弹与界面⑤ 同一套菜单(删除仍走二次确认弹窗)。右键是「藏起来」的低调入口,不破坏主菜单的安静气质。系统文件夹仍 gate;想管理未勾选/不可见的文件夹,菜单底部一键跳「设置」全量树。</p>
+  <div class="grid2">
+    <div>
+      <p class="cap"><b>自定义文件夹右键</b> 三项可用 <span class="tk">menu · pop-shadow</span></p>
+      <div class="frame" data-screen-label="③-ctx-custom" data-theme="light">
+        <div class="win" style="width:248px">
+          <div class="win-bar" style="height:30px"><span class="tl tl-r" style="width:9px;height:9px"></span><span class="tl tl-y" style="width:9px;height:9px"></span><span class="tl tl-g" style="width:9px;height:9px"></span></div>
+          <div class="nav" style="width:100%;position:relative">
+            <div class="nav-body" style="padding:10px 0 24px">
+              <div class="nav-sec">Mailboxes</div>
+              <div class="nav-list">
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-inbox"/></svg><span class="nrow-lbl">收件箱</span><span class="cnt">9</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-star"/></svg><span class="nrow-lbl">已标旗</span><span class="cnt">27</span></button>
+                <button class="nrow" style="background:rgb(var(--ink-3));outline:1.5px solid rgb(var(--c-accent) / 0.45);outline-offset:-1px"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">Jira</span><span class="cnt">3,458</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">DMS固件发布</span><span class="cnt">728</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">Notion</span><span class="cnt">381</span></button>
+              </div>
+            </div>
+            <div class="menu" style="position:absolute;left:96px;top:88px;min-width:172px">
+              <div class="menu-item"><svg class="i mi-ic"><use href="#i-folderplus"/></svg>新建子文件夹</div>
+              <div class="menu-item"><svg class="i mi-ic"><use href="#i-pencil"/></svg>重命名</div>
+              <div class="menu-sep"></div>
+              <div class="menu-item danger"><svg class="i mi-ic"><use href="#i-trash"/></svg>删除</div>
+              <div class="menu-sep"></div>
+              <div class="menu-item"><svg class="i mi-ic"><use href="#i-settings"/></svg>在设置里管理…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>系统文件夹右键</b> 管理项禁用 + gate <span class="tk">.disabled · menu-hint</span></p>
+      <div class="frame" data-screen-label="③-ctx-system" data-theme="dark">
+        <div class="win" style="width:248px">
+          <div class="win-bar" style="height:30px"><span class="tl tl-r" style="width:9px;height:9px"></span><span class="tl tl-y" style="width:9px;height:9px"></span><span class="tl tl-g" style="width:9px;height:9px"></span></div>
+          <div class="nav" style="width:100%;position:relative">
+            <div class="nav-body" style="padding:10px 0 24px">
+              <div class="nav-sec">Mailboxes</div>
+              <div class="nav-list">
+                <button class="nrow" style="background:rgb(var(--ink-3));outline:1.5px solid rgb(var(--ink-border));outline-offset:-1px"><svg class="i nrow-ic"><use href="#i-inbox"/></svg><span class="nrow-lbl">收件箱</span><span class="cnt">9</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-send"/></svg><span class="nrow-lbl">发件箱</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-star"/></svg><span class="nrow-lbl">已标旗</span><span class="cnt">27</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">Jira</span><span class="cnt">3,458</span></button>
+                <button class="nrow"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">Notion</span><span class="cnt">381</span></button>
+              </div>
+            </div>
+            <div class="menu" style="position:absolute;left:96px;top:36px;min-width:172px">
+              <div class="menu-item"><svg class="i mi-ic"><use href="#i-bolt"/></svg>标记全部已读</div>
+              <div class="menu-sep"></div>
+              <div class="menu-hint">系统文件夹不可修改</div>
+              <div class="menu-item disabled"><svg class="i mi-ic"><use href="#i-folderplus"/></svg>新建子文件夹</div>
+              <div class="menu-item disabled"><svg class="i mi-ic"><use href="#i-pencil"/></svg>重命名</div>
+              <div class="menu-item disabled"><svg class="i mi-ic"><use href="#i-trash"/></svg>删除</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="lg"><span class="cnt-pill">9</span> 选中 + 未读 → coral 计数 pill</div>
+    <div class="lg"><span class="cnt">381</span> 未选中 → 裸 mono 数字</div>
+    <div class="lg"><span class="tw open" style="color:rgb(var(--ink-fg-2))"><svg class="i" style="font-size:13px"><use href="#i-chevron"/></svg></span> 展开/收起 chevron（仅父文件夹）</div>
+    <div class="lg"><svg class="i" style="font-size:14px;color:rgb(var(--ink-fg-2))"><use href="#i-folder"/></svg> 统一「文件夹」图标</div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     ④ 列表头部 — 面包屑
+     ════════════════════════════════════════════════════════════════ -->
+<section class="spec-sec" id="s4">
+  <div class="spec-eye">界面 ④ · 文件夹邮件列表头部</div>
+  <h2 class="spec-h2">层级路径面包屑</h2>
+  <p class="spec-lede">点击某文件夹后，右侧列表顶部标识当前位置，面包屑体现层级路径（如 <span class="mono">项目 / 2026 Q2</span>）。临摹现有收件箱列表头，给示意即可。</p>
+
+  <div class="grid2">
+    <div>
+      <p class="cap"><b>嵌套子文件夹</b> 含路径 + 同步态 <span class="tk">crumb · lhead</span></p>
+      <div class="frame" data-screen-label="④-nested">
+        <div class="win">
+          <div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span></div>
+          <div class="lhead">
+            <div class="crumb"><span class="cb-seg">项目</span><span class="cb-sl"><svg class="i" style="font-size:13px"><use href="#i-chevron"/></svg></span><span class="cb-cur">2026 Q2</span></div>
+            <div class="lhead-title"><svg class="i" style="font-size:17px;color:rgb(var(--ink-fg-2))"><use href="#i-folder"/></svg><h3>2026 Q2</h3><span class="lhead-meta"><span class="dot dot-ok"></span>已同步 · 156 封</span></div>
+          </div>
+          <div style="background:rgb(var(--ink-2));padding:14px 18px;display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;gap:10px;align-items:flex-start"><span style="width:6px;height:6px;border-radius:50%;background:rgb(var(--c-accent));margin-top:6px"></span><div><div style="font-size:13px;color:rgb(var(--ink-fg))">Jenkins · ci@build</div><div style="font-size:13px;color:rgb(var(--ink-fg));font-weight:600;margin-top:2px">#4821 部署成功 · 2026 Q2 里程碑</div></div><span class="t-meta" style="margin-left:auto;color:rgb(var(--ink-fg-2))">14:02</span></div>
+            <div style="display:flex;gap:10px;align-items:flex-start;opacity:.7"><span style="width:6px;height:6px;margin-top:6px"></span><div><div style="font-size:13px;color:rgb(var(--ink-fg-1))">Confluence · noreply</div><div style="font-size:13px;color:rgb(var(--ink-fg-1));margin-top:2px">页面「Q2 排期」已更新</div></div><span class="t-meta" style="margin-left:auto;color:rgb(var(--ink-fg-2))">昨天</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap"><b>顶层文件夹</b> 单段 + 大文件夹截断提示 <span class="tk">badge-warn</span></p>
+      <div class="frame" data-screen-label="④-top">
+        <div class="win">
+          <div class="win-bar"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span></div>
+          <div class="lhead">
+            <div class="crumb"><span class="cb-cur">Jira</span></div>
+            <div class="lhead-title"><svg class="i" style="font-size:17px;color:rgb(var(--ink-fg-2))"><use href="#i-folder"/></svg><h3>Jira</h3><span class="lhead-meta"><span class="dot dot-run"></span>同步中 · 1,204 / 3,458</span><span class="badge badge-warn" style="margin-left:2px"><svg class="i" style="font-size:11px"><use href="#i-alert"/></svg>窗口 90 天</span></div>
+          </div>
+          <div style="background:rgb(var(--ink-2));padding:14px 18px;display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;gap:10px;align-items:flex-start"><span style="width:6px;height:6px;border-radius:50%;background:rgb(var(--c-accent));margin-top:6px"></span><div><div style="font-size:13px;color:rgb(var(--ink-fg))">Jira · jira@company</div><div style="font-size:13px;color:rgb(var(--ink-fg));font-weight:600;margin-top:2px">[PROJ-2031] 状态变更为 In Review</div></div><span class="t-meta" style="margin-left:auto;color:rgb(var(--ink-fg-2))">09:51</span></div>
+            <div style="display:flex;gap:10px;align-items:flex-start;opacity:.7"><span style="width:6px;height:6px;margin-top:6px"></span><div><div style="font-size:13px;color:rgb(var(--ink-fg-1))">Jira · jira@company</div><div style="font-size:13px;color:rgb(var(--ink-fg-1));margin-top:2px">[PROJ-2030] 已分配给你</div></div><span class="t-meta" style="margin-left:auto;color:rgb(var(--ink-fg-2))">09:48</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script>
+  // ── theme toggle ──
+  const seg = document.getElementById('themeSeg');
+  const doc = document.getElementById('doc');
+  seg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    const mode = btn.dataset.mode;
+    seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn));
+    document.body.dataset.page = mode;
+    // swap every themeable container EXCEPT frames pinned with their own data-theme
+    document.querySelectorAll('.themeable').forEach(el => { el.dataset.theme = mode; });
+  });
+
+  // ── sidebar MAILBOXES content (rendered into both light + dark) ──
+  function navMarkup(opts) {
+    const sel = opts.sel; // 'jira' | 'project'
+    const pill = (n, on) => on ? `<span class="cnt-pill">${n}</span>` : `<span class="cnt">${n}</span>`;
+    const folderOpen = opts.projectOpen;
+    return `
+      <button class="nrow sel"><svg class="i nrow-ic"><use href="#i-inbox"/></svg><span class="nrow-lbl">收件箱</span><span class="cnt-pill">9</span></button>
+      <button class="nrow"><svg class="i nrow-ic"><use href="#i-send"/></svg><span class="nrow-lbl">发件箱</span></button>
+      <button class="nrow"><svg class="i nrow-ic"><use href="#i-archive"/></svg><span class="nrow-lbl">存档</span></button>
+      <button class="nrow"><svg class="i nrow-ic"><use href="#i-file"/></svg><span class="nrow-lbl">草稿箱</span></button>
+      <button class="nrow"><svg class="i nrow-ic"><use href="#i-star"/></svg><span class="nrow-lbl">已标旗</span><span class="cnt">27</span></button>
+      <button class="nrow"><svg class="i nrow-ic"><use href="#i-mail"/></svg><span class="nrow-lbl">所有邮件</span><span class="cnt">6,951</span></button>
+      <button class="nrow ${sel==='jira'?'sel':''}"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">Jira</span>${pill('3,458', sel==='jira')}</button>
+      <button class="nrow"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">DMS固件发布</span><span class="cnt">728</span></button>
+      <button class="nrow"><svg class="i nrow-ic"><use href="#i-folder"/></svg><span class="nrow-lbl">Notion</span><span class="cnt">381</span></button>
+      <button class="nrow"><span class="tw ${folderOpen?'open':''}" style="margin-right:-4px"><svg class="i" style="font-size:13px"><use href="#i-chevron"/></svg></span><svg class="i nrow-ic" style="margin-left:-2px"><use href="#i-folder"/></svg><span class="nrow-lbl">项目</span></button>
+      ${folderOpen ? `
+      <button class="nrow child" style="padding-left:30px"><svg class="i nrow-ic" style="font-size:14px"><use href="#i-folder"/></svg><span class="nrow-lbl">2026 Q2</span><span class="cnt">156</span></button>
+      <button class="nrow child" style="padding-left:30px"><svg class="i nrow-ic" style="font-size:14px"><use href="#i-folder"/></svg><span class="nrow-lbl">2026 Q1</span><span class="cnt">312</span></button>` : ''}
+      <div class="nav-more"><svg class="i" style="font-size:13px"><use href="#i-chevdown"/></svg>展开更多（+2）</div>
+    `;
+  }
+  document.getElementById('navLight').innerHTML = navMarkup({ sel: 'jira', projectOpen: true });
+  document.getElementById('navDark').innerHTML  = navMarkup({ sel: 'jira', projectOpen: false });
+
+  // ── tree expand/collapse demo (settings main frame) ──
+  document.querySelectorAll('[data-tw]').forEach(tw => {
+    tw.style.cursor = 'pointer';
+    tw.addEventListener('click', () => {
+      const open = tw.classList.toggle('open');
+      let n = tw.closest('.frow').nextElementSibling;
+      while (n && n.hasAttribute('data-child')) { n.style.display = open ? '' : 'none'; n = n.nextElementSibling; }
+    });
+  });
+</script>
+</body>
+</html>
