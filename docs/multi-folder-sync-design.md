@@ -2,7 +2,8 @@
 
 > 实现 [`multi-folder-sync-prd.md`](./multi-folder-sync-prd.md) 所定义的「自定义文件夹完整 pipeline 同步」。
 >
-> **决策基线**：完整 pipeline · 完整写操作 · 白名单手动勾选 · davmail-only
+> **决策基线**：完整 pipeline · 完整写操作 · 白名单手动勾选 · davmail-only · 文件夹管理 + 嵌套层级（davmail 支持前提，D5/D6）· 统一接管废弃旧 folder_sync 展示链路（D7，附录 B）
+> **看板/设计/mockup**：[能力矩阵](./multi-folder-sync-matrix.md) · [设计 handoff](./multi-folder-sync-design-handoff.md) · [mockup](./mockups/multi-folder-sync/index.html)
 > **关联**：[`architecture-internals.md`](./claude/architecture-internals.md)（v3/Sprint15-16 主链路）、[`service-layer-architecture.md`](./claude/service-layer-architecture.md)（写面）、[`folder-ui-prd.md`](./folder-ui-prd.md)（folder_sync 展示模块）、[`multi-folder-sync-handoff.md`](./multi-folder-sync-handoff.md)（实现作战地图）
 > **最后更新**：2026-06-08
 >
