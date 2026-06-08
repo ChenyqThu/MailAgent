@@ -224,6 +224,28 @@ def get_new_emails(self, since_row_id: int) -> list[dict]:
 
 ---
 
+### 4.8 文件夹管理（创建/重命名/删除，davmail 支持前提）
+
+> 🔴 P1 前置实测：用一个测试文件夹验证 davmail 的 `CREATE`/`RENAME`/`DELETE` 能成功映射到 EWS（系统文件夹通常不可删/改）。
+
+- **新增 backend/services 方法**：`create_folder(imap_name)` / `rename_folder(old, new)` / `delete_folder(imap_name)`，底层 imaplib `imap.create/rename/delete`。
+- **系统文件夹保护**：维护保护集（INBOX/Sent/Drafts/Junk/Trash + special-use 标志的），管理前 gate，拒绝并提示。
+- **走 outbox SSoT**：管理操作作为 intent 入 outbox + FanoutWorker 派发（与 flag/archive 一致），失败回滚本地树到服务器真实状态。
+- **重命名一致性**：RENAME 成功 → 批量 UPDATE email_metadata 该 folder 的 `mailbox` 字段 + Notion 镜像。
+- **删除一致性**：DELETE 成功 → 清理该 folder 的本地 email_metadata 行（+ 可选 Notion 页）+ 从白名单移除。
+- CLI/serve-api：`folder create/rename/delete` + `POST/PATCH/DELETE /api/folder/{name}`（写鉴权）。
+
+### 4.9 嵌套层级树（davmail 支持前提）
+
+> 🔴 P1 前置实测：建一个 `测试/子` 嵌套文件夹，确认 davmail LIST 返回 `测试/子`（delimiter `/`）+ 中文层级解码正常。
+
+- **发现**：`list_folders()` 解析 LIST 每行的 hierarchy delimiter（实测 `/`）+ `\HasChildren`/`\HasNoChildren` 标志，把平铺的 `parent/child` 列表**还原成树**（`FolderNode{imap_name, display, children[], has_children}`）。
+- **白名单存储**：仍存 IMAP 原始名（含层级路径如 `测试/子`，ASCII modified-UTF7）。勾父文件夹「含子」时展开成子路径集。
+- **同步**：每个被勾选 folder（无论层级）独立走 §4.4 遍历 + per-folder 游标；层级只影响**呈现与勾选语义**，不影响取数。
+- **降级**：解析不出层级（当前都顶层）→ 退化平铺，零影响。
+
+---
+
 ## 5. 前端详细设计
 
 ### 5.1 folder 发现 API / IPC
@@ -270,6 +292,23 @@ def get_new_emails(self, since_row_id: int) -> list[dict]:
 
 ---
 
+### 5.5 文件夹树组件（替代纯列表）
+
+- `<FolderPicker>` 内部用**树形**渲染（缩进 + 展开/收起 chevron），数据源 = `list_folders()` 树结构。
+- 复用现有 NavRow/行样式；层级缩进用左 padding 递增。
+- 勾父节点弹「仅本级 / 含子文件夹」。
+- Sidebar 自定义文件夹区同样树形（缩进 + 展开/收起），严守三段 header 铁律（挂 MAILBOXES 段内）。
+
+### 5.6 文件夹管理 UI
+
+- 配置页树每行 hover/右键出操作菜单（新建子文件夹 / 重命名 / 删除）。
+- 系统文件夹：操作灰态禁用 + tooltip「系统文件夹不可改」。
+- 删除/重命名：二次确认弹窗（说明影响真实 Exchange + 本地副本）。
+- 新建：inline 输入或小弹窗（选父 + 输名）。
+- 操作走 `mailApi.folder.create/rename/delete()` → daemon 转发 serve-api（D1 架构）。
+
+---
+
 ## 6. 数据流（自定义文件夹新邮件）
 
 ```
@@ -300,8 +339,11 @@ davmail IMAP (folder=Jira)
 | **P3 前端配置 + Sidebar** | `<FolderPicker>` + serve-api/IPC + Sidebar 动态渲染 + 列表过滤 | 设置页勾选 → Sidebar 出现 → 点击过滤 | 2-3 天 |
 | **P4 onboarding + 写操作泛化** | onboarding 步骤 + 归档/移动 src/dst 泛化 + move_message 扩展 | 新用户 onboarding 勾选；自定义文件夹内归档/移动/回复 | 2-3 天 |
 | **P5 边界打磨** | 取消同步数据清理 + UIDVALIDITY 重拉 + 大文件夹分批 | 取消勾选行为；改 Outlook 文件夹结构重拉 | 1-2 天 |
+| **P6 folder_sync 展示链路清理**（独立 cleanup，功能稳定后） | 删 FolderSyncWorker + folder_email/_fts/folder_sync_state 三表 + 老 folder router/CLI 展示端点 + Sidebar 老数据源；**FolderImapReader 迁出 folder_sync 保留**（归档/草稿/写操作泛化依赖） | 归档/草稿/发送回归全过 + 残留检测无 folder_email 引用 | 1-2 天 |
 
 **MVP = P1 + P2**（后端可单独验收，纯 CLI/sqlite 验证，不依赖前端）。
+
+> **文件夹管理（§4.8）+ 嵌套层级（§4.9）的阶段归属**：层级**发现**在 P1（list_folders 解析树，含 davmail 嵌套实测前置）、层级**树 UI** 在 P3、文件夹**管理 CRUD** 在 P4（含 davmail CREATE/RENAME/DELETE 实测前置）。davmail 不支持某子项时优雅降级（平铺 / 隐藏管理操作）。
 
 ---
 
@@ -386,13 +428,17 @@ sqlite3 data/sync_store.db "SELECT mailbox, COUNT(*) FROM email_metadata WHERE b
 
 PRD 决策「完整 pipeline」与「通知骚扰」存在张力。本设计采取：**自定义文件夹默认 AI 分类 + Notion + 搜索 + 列表（完整），但通知默认关**，per-folder 可选开启。若产品要求自定义文件夹也默认通知，仅需翻转 §4.5 的 gate 默认值——不影响架构。
 
-## 附录 B：与 folder_sync 展示模块的关系
+## 附录 B：旧 folder_sync 展示模块的处置（接管废弃，决策 D7，更新 2026-06-08）
 
-| | 本功能（多文件夹同步） | folder_sync（存档/草稿箱） |
+**实测发现**：旧 folder_sync（存档/草稿箱展示链路）在打包应用中**从未工作**——`MAILBOX_FOLDER_SYNC_ENABLED=true` + davmail + 前端入口全开，但 `folder_sync_state` 表零记录（FolderSyncWorker 从未启动一次 tick）、`folder_email` 表 0 行。一个「装了门面没接管线」的半成品。
+
+**决策：新链路统一接管 + 旧展示链路分阶段废弃**（取代原「正交共存」）：
+
+| 旧组件 | 性质 | 处置 |
 |---|---|---|
-| 表 | `email_metadata`（主链路） | `folder_email`（独立展示表） |
-| 能力 | 完整 pipeline | 纯展示（不 Notion/不 AI） |
-| 配置 | `SYNC_FOLDERS` | `MAILBOX_FOLDER_SYNC_ENABLED` |
-| 定位 | Exchange 自定义规则文件夹 | IMAP 标准特殊文件夹（Archive/Drafts） |
+| `FolderImapReader`（imap_folder_reader.py，IMAP 写底层） | **活**：归档（mail_write.py:659）+ 草稿（draft_service.py）依赖，**本功能写操作泛化（§4.6/§4.8）还要复用** | **永久保留**；P6 迁出 folder_sync（如挪 `src/mail/backend/`），**不删** |
+| FolderSyncWorker（worker.py） | 死（从没启动） | 本功能内停用 → P6 删 |
+| folder_email / _fts / folder_sync_state 三表 | 死（空） | 本功能保留 → P6 删 migration |
+| 老 folder router/CLI 展示端点 + Sidebar 老数据源 | 死 | 本功能切新链路源 → P6 删 |
 
-两者**正交共存**，不复用彼此的表与 worker。存档/草稿箱仍走 folder_sync；自定义文件夹走主链路。
+**本功能内（P1-P5）一律不删旧代码**（diff 干净 + 可回滚）；删除是 **P6 独立 cleanup**，只删确认无依赖的展示链路，**FolderImapReader 不删反而迁移保留**。存档/草稿箱作为可勾选文件夹并入白名单走主链路。
