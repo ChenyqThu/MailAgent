@@ -36,13 +36,7 @@ function makePending(overrides: Partial<PendingConfirmation> = {}): PendingConfi
 
 describe('ConfirmToolDialog — preview tier', () => {
   test('renders tool name + preview banner + JSON dump', () => {
-    render(
-      <ConfirmToolDialog
-        pending={makePending()}
-        onConfirm={vi.fn()}
-        onCancel={vi.fn()}
-      />
-    )
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={vi.fn()} onCancel={vi.fn()} />)
     expect(screen.getByText(/email_flag/i)).toBeTruthy()
     expect(screen.getByText('Mark email 42 as read')).toBeTruthy()
     // JSON pre-block shows the input.
@@ -52,13 +46,7 @@ describe('ConfirmToolDialog — preview tier', () => {
 
   test('Confirm click fires onConfirm with undefined (no edits in preview tier)', async () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined)
-    render(
-      <ConfirmToolDialog
-        pending={makePending()}
-        onConfirm={onConfirm}
-        onCancel={vi.fn()}
-      />
-    )
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={onConfirm} onCancel={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
     expect(onConfirm).toHaveBeenCalledWith(undefined)
@@ -66,41 +54,37 @@ describe('ConfirmToolDialog — preview tier', () => {
 
   test('Cancel click fires onCancel', async () => {
     const onCancel = vi.fn().mockResolvedValue(undefined)
-    render(
-      <ConfirmToolDialog
-        pending={makePending()}
-        onConfirm={vi.fn()}
-        onCancel={onCancel}
-      />
-    )
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={vi.fn()} onCancel={onCancel} />)
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
     await vi.waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
   })
 
-  test('Escape key triggers onCancel', async () => {
+  // task 06-08-chat Bug 4 — the card is now inline (not a fixed overlay) and
+  // its keydown listener is scoped to the card element, NOT window, so an
+  // inline card can't steal the Composer's Escape / Cmd+Return. The shortcuts
+  // fire when focus is inside the card (a button / textarea is auto-focused on
+  // mount); the tests fire on the card root (role="group").
+  test('Escape key on the card triggers onCancel', async () => {
     const onCancel = vi.fn().mockResolvedValue(undefined)
-    render(
-      <ConfirmToolDialog
-        pending={makePending()}
-        onConfirm={vi.fn()}
-        onCancel={onCancel}
-      />
-    )
-    fireEvent.keyDown(window, { key: 'Escape' })
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={vi.fn()} onCancel={onCancel} />)
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'Escape' })
     await vi.waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
   })
 
-  test('Cmd+Enter triggers onConfirm', async () => {
+  test('Cmd+Enter on the card triggers onConfirm', async () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined)
-    render(
-      <ConfirmToolDialog
-        pending={makePending()}
-        onConfirm={onConfirm}
-        onCancel={vi.fn()}
-      />
-    )
-    fireEvent.keyDown(window, { key: 'Enter', metaKey: true })
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={onConfirm} onCancel={vi.fn()} />)
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'Enter', metaKey: true })
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
+  })
+
+  test('Escape on window does NOT trigger onCancel (inline card scopes keys)', async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined)
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={vi.fn()} onCancel={onCancel} />)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    // No await-waitFor success path; assert it stayed un-called after a tick.
+    await Promise.resolve()
+    expect(onCancel).not.toHaveBeenCalled()
   })
 })
 
@@ -115,18 +99,14 @@ describe('ConfirmToolDialog — edit tier (email_draft_reply)', () => {
   }
 
   test('renders editable textarea seeded with body_markdown', () => {
-    render(
-      <ConfirmToolDialog pending={draftPending()} onConfirm={vi.fn()} onCancel={vi.fn()} />
-    )
+    render(<ConfirmToolDialog pending={draftPending()} onConfirm={vi.fn()} onCancel={vi.fn()} />)
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement
     expect(ta.value).toBe('See you Tuesday.')
   })
 
   test('Confirm without edits passes undefined (no userEdited flag)', async () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined)
-    render(
-      <ConfirmToolDialog pending={draftPending()} onConfirm={onConfirm} onCancel={vi.fn()} />
-    )
+    render(<ConfirmToolDialog pending={draftPending()} onConfirm={onConfirm} onCancel={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
     expect(onConfirm).toHaveBeenCalledWith(undefined)
@@ -134,9 +114,7 @@ describe('ConfirmToolDialog — edit tier (email_draft_reply)', () => {
 
   test('Confirm with edits passes merged input + edited body_markdown', async () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined)
-    render(
-      <ConfirmToolDialog pending={draftPending()} onConfirm={onConfirm} onCancel={vi.fn()} />
-    )
+    render(<ConfirmToolDialog pending={draftPending()} onConfirm={onConfirm} onCancel={vi.fn()} />)
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(ta, { target: { value: 'See you Wednesday — Tuesday no good.' } })
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
@@ -152,11 +130,12 @@ describe('ConfirmToolDialog — busy state', () => {
   test('disables buttons while onConfirm is pending', async () => {
     let resolveConfirm: () => void = () => undefined
     const onConfirm = vi.fn(
-      () => new Promise<void>((resolve) => { resolveConfirm = resolve })
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfirm = resolve
+        })
     )
-    render(
-      <ConfirmToolDialog pending={makePending()} onConfirm={onConfirm} onCancel={vi.fn()} />
-    )
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={onConfirm} onCancel={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
     // While pending, the buttons should disable.
     await vi.waitFor(() => {

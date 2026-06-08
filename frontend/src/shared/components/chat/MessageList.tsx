@@ -37,6 +37,8 @@ import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ChatMessage, ChatToolCall } from '@shared/api/types'
+import type { PendingConfirmation } from '@shared/hooks/useEmailChat'
+import { ConfirmToolDialog } from './ConfirmToolDialog'
 
 /** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
  *  handlers; if a panel doesn't (e.g. read-only conversation viewer), the
@@ -86,6 +88,15 @@ interface Props {
   draftHandlers?: DraftHandlers
   /** Sprint 14 PR B — wired by AIChatPanel; flows down to UserBubble. */
   userHandlers?: UserHandlers
+  /** task 06-08-chat Bug 4 — pending tool-confirmations from the harness.
+   *  The HEAD entry renders an inline authorization card at the bottom of
+   *  the stream (after the streaming assistant turn). Empty = no card. */
+  pendingConfirmations?: ReadonlyArray<PendingConfirmation>
+  /** Authorize the head confirmation. `editedInput` carries the user's
+   *  edited tool input when the edit-tier textarea was changed. */
+  onConfirmTool?: (editedInput?: unknown) => Promise<void> | void
+  /** Reject the head confirmation. */
+  onCancelTool?: () => Promise<void> | void
 }
 
 const DRAFT_REPLY_MARKER = /^\s*(?:#+\s*)?DRAFT REPLY\b/i
@@ -1064,7 +1075,10 @@ export function MessageList({
   messages,
   streamingMessageId,
   draftHandlers,
-  userHandlers
+  userHandlers,
+  pendingConfirmations,
+  onConfirmTool,
+  onCancelTool
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   // (opus M) CJK-safe class for the truncated / system divider strings —
@@ -1160,6 +1174,23 @@ export function MessageList({
       className="flex-1 min-h-0 min-w-0 overflow-y-auto scrollbar-thin space-y-3 py-3"
     >
       {rendered}
+      {/* Bug 4 (task 06-08-chat) — inline tool-confirmation card at the
+          bottom of the stream (after the streaming assistant turn). The
+          harness blocks on this while dispatching a write-class tool, so
+          the streaming assistant is the last row → the card reads as "the
+          AI wants to run X, please authorize" right where it belongs.
+          px-3 matches the message rows; the card itself is min-w-0 + w-full
+          so it stays inside the 360px drawer. */}
+      {pendingConfirmations && pendingConfirmations.length > 0 && (
+        <div className="px-3">
+          <ConfirmToolDialog
+            key={pendingConfirmations[0].toolUseId}
+            pending={pendingConfirmations[0]}
+            onConfirm={(editedInput) => onConfirmTool?.(editedInput)}
+            onCancel={() => onCancelTool?.()}
+          />
+        </div>
+      )}
       <div ref={bottomRef} />
     </div>
   )

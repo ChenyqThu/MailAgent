@@ -32,7 +32,6 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { ChatSidebar } from './ChatSidebar'
 import { Composer } from './Composer'
-import { ConfirmToolDialog } from './ConfirmToolDialog'
 import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
@@ -475,6 +474,28 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const handlePickAction = useCallback((prompt: string) => setDraft(prompt), [])
   const handleCancel = useCallback(() => chat.abortCurrent(), [chat])
 
+  // task 06-08-chat Bug 4 — tool-confirmation handlers for the inline
+  // authorization card (now rendered inside MessageList at the bottom of
+  // the stream, was a fixed overlay here). The confirmTool → resolveConfirmation
+  // chain is unchanged; only the render shape + location moved. We act on the
+  // HEAD of the pending queue (MessageList renders that one card).
+  const pendingConfirmations = chat.pendingConfirmations
+  const headConfirmation = pendingConfirmations[0] ?? null
+  const handleConfirmTool = useCallback(
+    async (editedInput?: unknown): Promise<void> => {
+      if (!headConfirmation) return
+      const result = await chat.confirmTool(headConfirmation.toolUseId, true, editedInput)
+      if (!result.ok && result.code !== 'E_NOT_PENDING') {
+        toastError(t('chat.confirmTool.failed', { defaultValue: 'Confirm failed' }))
+      }
+    },
+    [chat, headConfirmation, t]
+  )
+  const handleCancelTool = useCallback(async (): Promise<void> => {
+    if (!headConfirmation) return
+    await chat.confirmTool(headConfirmation.toolUseId, false)
+  }, [chat, headConfirmation])
+
   // ⌥⇧B — toggle backend kind. Sprint 11 V1.4 moved from bare ⌥B because
   // the global nav-shell collapse claimed that keystroke per DESIGN.md
   // §2.11. Backend cycling is rare enough that the extra modifier is fine.
@@ -755,6 +776,9 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                   streamingMessageId={chat.streamingMessageId}
                   draftHandlers={draftHandlers}
                   userHandlers={userHandlers}
+                  pendingConfirmations={pendingConfirmations}
+                  onConfirmTool={handleConfirmTool}
+                  onCancelTool={handleCancelTool}
                 />
               )}
 
@@ -791,31 +815,10 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           )}
         </div>
       </div>
-
-      {/* Sprint 19 PR-1d.2 — Agent harness confirmation dialog. Renders one
-          ConfirmToolDialog per pending entry (head of queue first). The
-          dialog blocks the panel chrome via a fixed-position overlay; only
-          one is visible at a time. confirmTool() resolves remove the head
-          from the queue; cancel does the same via main-process E_USER_CANCELED. */}
-      {chat.pendingConfirmations.length > 0 && (
-        <ConfirmToolDialog
-          key={chat.pendingConfirmations[0].toolUseId}
-          pending={chat.pendingConfirmations[0]}
-          onConfirm={async (editedInput) => {
-            const result = await chat.confirmTool(
-              chat.pendingConfirmations[0].toolUseId,
-              true,
-              editedInput
-            )
-            if (!result.ok && result.code !== 'E_NOT_PENDING') {
-              toastError(t('chat.confirmTool.failed', { defaultValue: 'Confirm failed' }))
-            }
-          }}
-          onCancel={async () => {
-            await chat.confirmTool(chat.pendingConfirmations[0].toolUseId, false)
-          }}
-        />
-      )}
+      {/* Sprint 19 PR-1d.2 / task 06-08-chat Bug 4 — the harness confirmation
+          UI moved from a fixed-position overlay here to an inline authorization
+          card rendered inside MessageList (bottom of the stream). See
+          handleConfirmTool / handleCancelTool + the MessageList props above. */}
     </aside>
   )
 }

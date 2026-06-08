@@ -1,25 +1,30 @@
-// Sprint 19 PR-1d.2 — Confirmation dialog for write-class agent tools.
+// Sprint 19 PR-1d.2 — Confirmation card for write-class agent tools.
 //
 // Mounts ONCE per `PendingConfirmation` entry in useEmailChat. The harness
 // in the main process is blocked on a per-toolUseId promise until the user
 // clicks Confirm or Cancel; the click → chat.confirmTool IPC unblocks it.
 //
+// task 06-08-chat Bug 4 — was a fixed inset-0 full-screen overlay with a
+// black backdrop; now an INLINE authorization card rendered inside the
+// message stream (MessageList, after the streaming assistant turn). The
+// confirmation happens while the harness is dispatching a tool, so the
+// streaming assistant is the last row — the card reads as "the AI wants to
+// run tool X, please authorize" right where it belongs. Width hugs the
+// 360px drawer (min-w-0 + content break) and survives the popout layout.
+//
 // Three render shapes:
 //   tier='preview' (email_flag / email_archive) — read-only JSON dump of
-//     the input with a 1-line preview banner. OK / Cancel buttons.
+//     the input with a 1-line preview banner. Authorize / Reject buttons.
 //   tier='edit' (email_draft_reply) — same banner + editable textarea for
 //     the body field. The submitted value diff-checks against the proposed
 //     body; if changed, we hand the edited input back to the harness via
 //     editedInput so the tool handler sees the user's words verbatim.
 //   tier=other — fallback to preview shape; future tiers slot in here.
 //
-// Keyboard:
+// Keyboard (scoped to the card element, NOT window — an inline card must
+// not steal the Composer's keystrokes):
 //   Escape          → Cancel (matches macOS sheet idiom)
 //   Cmd+Return      → Confirm (mirrors the Composer's Cmd+Return Send)
-//
-// Why this lives in shared/components/chat rather than next to MessageList:
-//   it's a top-level overlay anchored to the panel root, not a nested
-//   message-row affordance. ChatPanel owns the queue render loop.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -77,16 +82,16 @@ export function ConfirmToolDialog({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // Focus the textarea (edit tier) or the Confirm button (preview tier)
-  // when the dialog mounts so keyboard users can act immediately.
+  // when the card mounts so keyboard users can act immediately.
   const confirmBtnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     if (editable) textareaRef.current?.focus()
     else confirmBtnRef.current?.focus()
   }, [editable])
 
-  // 进场动画：backdrop 淡入 + 卡片位移缩放，消除原硬出现的 "AI slop" 感。
-  // 退场不做（父 AIChatPanel 按 pending 队列硬卸载，且由用户点 Confirm/Cancel
-  // 主动触发，瞬时消失符合预期）——故此处用 useGSAP 进场而非 useExitAnimation。
+  // 进场动画：卡片位移缩放淡入，消除硬出现的 "AI slop" 感。inline 卡无 backdrop
+  // (Bug 4 去掉了全屏遮罩)，所以只对卡片本身做进场；退场不做（父按 pending 队列
+  // 硬卸载，且由用户点 授权/拒绝 主动触发，瞬时消失符合预期）。
   const rootRef = useRef<HTMLDivElement>(null)
   const reduce = useReducedMotion()
   useGSAP(
@@ -94,17 +99,11 @@ export function ConfirmToolDialog({
       if (reduce) return
       const root = rootRef.current
       if (!root) return
-      const card = root.querySelector<HTMLElement>('[data-anim-card]')
-      const tl = gsap.timeline()
-      tl.fromTo(root, { autoAlpha: 0 }, { autoAlpha: 1, duration: DUR.fast }, 0)
-      if (card) {
-        tl.fromTo(
-          card,
-          { autoAlpha: 0, y: 8, scale: 0.97 },
-          { autoAlpha: 1, y: 0, scale: 1, clearProps: 'transform' },
-          0
-        )
-      }
+      gsap.fromTo(
+        root,
+        { autoAlpha: 0, y: 8, scale: 0.97 },
+        { autoAlpha: 1, y: 0, scale: 1, duration: DUR.fast, clearProps: 'transform' }
+      )
     },
     { scope: rootRef, dependencies: [reduce] }
   )
@@ -140,8 +139,13 @@ export function ConfirmToolDialog({
     }
   }, [busy, onCancel])
 
-  // Keyboard shortcuts.
+  // Keyboard shortcuts — scoped to the card element (NOT window). As an
+  // inline card living in the message stream it must not intercept the
+  // Composer's Escape / Cmd+Return; the listener only fires when focus is
+  // inside the card (textarea / buttons get auto-focused on mount).
   useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -151,126 +155,122 @@ export function ConfirmToolDialog({
         void handleConfirm()
       }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    root.addEventListener('keydown', onKey)
+    return () => root.removeEventListener('keydown', onKey)
   }, [handleConfirm, handleCancel])
 
   return (
     <div
       ref={rootRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
+      // Bug 4 (task 06-08-chat) — inline card in the message stream, NOT a
+      // fixed overlay. min-w-0 + content break keep it inside the 360px
+      // drawer (same flex `min-width:auto` trap Bug 3 hit). w-full hugs the
+      // message column; border + level-1 raised shadow per DESIGN.md §4.3.
+      className={cn(
+        'w-full min-w-0 rounded-lg border border-ink-border-soft overflow-hidden',
+        'bg-ink-2 shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
+      )}
+      role="group"
       aria-labelledby={`confirm-tool-${pending.toolUseId}`}
     >
-      <div
-        data-anim-card
-        className={cn(
-          'w-[480px] max-w-[92vw] rounded-lg border border-ink-border-soft',
-          // no-heavy-shadow: shadow-xl 超出设计系统; dialog 用 DESIGN.md §4.3
-          // level-1 raised shadow (detached element 的标准 elevation)。
-          'bg-ink-2 shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden'
-        )}
-      >
-        {/* Header — tool name + tier badge */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-ink-border-soft bg-ink-3/60">
-          <div className="flex items-center gap-2">
-            <span
-              id={`confirm-tool-${pending.toolUseId}`}
-              className="text-meta font-mono uppercase tracking-wider text-ink-fg-1"
-            >
-              {t('chat.confirmTool.title', { defaultValue: 'Confirm action' })}
-            </span>
-            <span className="text-meta font-mono text-ink-fg-2">→ {pending.toolName}</span>
-          </div>
+      {/* Header — tool name + tier badge */}
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-ink-border-soft bg-ink-3/60">
+        <div className="flex items-center gap-2 min-w-0">
           <span
-            className={cn(
-              'text-meta font-mono px-1.5 py-0.5 rounded',
-              pending.tier === 'edit' ? 'bg-coral/15 text-coral' : 'bg-ink-fg-3/15 text-ink-fg-2'
-            )}
+            id={`confirm-tool-${pending.toolUseId}`}
+            className="text-meta font-mono uppercase tracking-wider text-ink-fg-1 shrink-0"
           >
-            {pending.tier}
+            {t('chat.confirmTool.title', { defaultValue: 'Confirm action' })}
           </span>
+          <span className="text-meta font-mono text-ink-fg-2 truncate">→ {pending.toolName}</span>
         </div>
-
-        {/* Preview banner */}
-        {pending.preview && (
-          <div className="px-4 py-2 text-aux text-ink-fg border-b border-ink-border-soft bg-ink-3/30">
-            {pending.preview}
-          </div>
-        )}
-
-        {/* Body — editable textarea or read-only JSON */}
-        <div className="px-4 py-3">
-          {editable ? (
-            <div className="space-y-1.5">
-              <label className="text-meta font-mono text-ink-fg-2">{editable.key}</label>
-              <textarea
-                ref={textareaRef}
-                value={editedBody}
-                onChange={(e) => setEditedBody(e.target.value)}
-                className={cn(
-                  'w-full min-h-[140px] max-h-[280px] resize-y',
-                  'rounded border border-ink-border-soft bg-ink-3',
-                  'px-2 py-1.5 text-aux text-ink-fg',
-                  'focus:outline-none focus:ring-2 focus:ring-coral/50 focus:border-coral'
-                )}
-                disabled={busy}
-                spellCheck={false}
-              />
-              <div className="text-meta text-ink-fg-3">
-                {t('chat.confirmTool.editHint', {
-                  defaultValue:
-                    'Edit and Confirm to use your version; the LLM will see what you actually sent.'
-                })}
-              </div>
-            </div>
-          ) : (
-            <pre
-              className={cn(
-                'text-aux font-mono whitespace-pre-wrap break-all',
-                'rounded border border-ink-border-soft bg-ink-3 px-2 py-1.5',
-                'max-h-[280px] overflow-auto'
-              )}
-            >
-              {safeStringify(pending.input)}
-            </pre>
+        <span
+          className={cn(
+            'text-meta font-mono px-1.5 py-0.5 rounded shrink-0',
+            pending.tier === 'edit' ? 'bg-coral/15 text-coral' : 'bg-ink-fg-3/15 text-ink-fg-2'
           )}
-        </div>
+        >
+          {pending.tier}
+        </span>
+      </div>
 
-        {/* Footer — Cancel + Confirm */}
-        <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-ink-border-soft bg-ink-3/40">
-          <button
-            type="button"
-            onClick={handleCancel}
-            disabled={busy}
-            className={cn(
-              'h-7 px-3 rounded text-aux',
-              'border border-ink-border-soft bg-ink-2 text-ink-fg',
-              'hover:bg-ink-3 disabled:opacity-50'
-            )}
-          >
-            {t('chat.confirmTool.cancel', { defaultValue: 'Cancel' })}
-          </button>
-          <button
-            ref={confirmBtnRef}
-            type="button"
-            onClick={handleConfirm}
-            disabled={busy}
-            className={cn(
-              'h-7 px-3 rounded text-aux font-medium',
-              // AI-CHAT-02: text-white on coral = 2.38:1 (AA fail). Use the
-              // per-mode --c-accent-fg token + the coral-hover utility.
-              // bg-coral→bg-coral/100 also clears no-coral-flood (the one CTA).
-              'bg-coral/100 text-accent-fg hover:bg-coral-hover',
-              'disabled:opacity-50'
-            )}
-          >
-            {busy
-              ? t('chat.confirmTool.confirming', { defaultValue: 'Confirming…' })
-              : t('chat.confirmTool.confirm', { defaultValue: 'Confirm' })}
-          </button>
+      {/* Preview banner */}
+      {pending.preview && (
+        <div className="px-4 py-2 text-aux text-ink-fg border-b border-ink-border-soft bg-ink-3/30 break-words">
+          {pending.preview}
         </div>
+      )}
+
+      {/* Body — editable textarea or read-only JSON */}
+      <div className="px-4 py-3">
+        {editable ? (
+          <div className="space-y-1.5">
+            <label className="text-meta font-mono text-ink-fg-2">{editable.key}</label>
+            <textarea
+              ref={textareaRef}
+              value={editedBody}
+              onChange={(e) => setEditedBody(e.target.value)}
+              className={cn(
+                'w-full min-h-[140px] max-h-[280px] resize-y',
+                'rounded border border-ink-border-soft bg-ink-3',
+                'px-2 py-1.5 text-aux text-ink-fg',
+                'focus:outline-none focus:ring-2 focus:ring-coral/50 focus:border-coral'
+              )}
+              disabled={busy}
+              spellCheck={false}
+            />
+            <div className="text-meta text-ink-fg-3">
+              {t('chat.confirmTool.editHint', {
+                defaultValue:
+                  'Edit and Confirm to use your version; the LLM will see what you actually sent.'
+              })}
+            </div>
+          </div>
+        ) : (
+          <pre
+            className={cn(
+              'text-aux font-mono whitespace-pre-wrap break-all',
+              'rounded border border-ink-border-soft bg-ink-3 px-2 py-1.5',
+              'max-h-[280px] overflow-auto scrollbar-thin'
+            )}
+          >
+            {safeStringify(pending.input)}
+          </pre>
+        )}
+      </div>
+
+      {/* Footer — Reject + Authorize */}
+      <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-ink-border-soft bg-ink-3/40">
+        <button
+          type="button"
+          onClick={handleCancel}
+          disabled={busy}
+          className={cn(
+            'h-7 px-3 rounded text-aux',
+            'border border-ink-border-soft bg-ink-2 text-ink-fg',
+            'hover:bg-ink-3 disabled:opacity-50'
+          )}
+        >
+          {t('chat.confirmTool.cancel', { defaultValue: 'Cancel' })}
+        </button>
+        <button
+          ref={confirmBtnRef}
+          type="button"
+          onClick={handleConfirm}
+          disabled={busy}
+          className={cn(
+            'h-7 px-3 rounded text-aux font-medium',
+            // AI-CHAT-02: text-white on coral = 2.38:1 (AA fail). Use the
+            // per-mode --c-accent-fg token + the coral-hover utility.
+            // bg-coral→bg-coral/100 also clears no-coral-flood (the one CTA).
+            'bg-coral/100 text-accent-fg hover:bg-coral-hover',
+            'disabled:opacity-50'
+          )}
+        >
+          {busy
+            ? t('chat.confirmTool.confirming', { defaultValue: 'Confirming…' })
+            : t('chat.confirmTool.confirm', { defaultValue: 'Confirm' })}
+        </button>
       </div>
     </div>
   )

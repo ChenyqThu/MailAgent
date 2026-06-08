@@ -722,6 +722,14 @@
       "ok": "ok",
       "error": "failed"
     },
+    "confirmTool": {
+      "title": "Confirm action",
+      "editHint": "Edit and Confirm to use your version; the LLM will see what you actually sent.",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "confirming": "Confirming…",
+      "failed": "Confirm failed"
+    },
     "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
   },
   "admin": {

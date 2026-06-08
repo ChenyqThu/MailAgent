@@ -725,6 +725,14 @@
       "ok": "完成",
       "error": "失败"
     },
+    "confirmTool": {
+      "title": "确认操作",
+      "editHint": "编辑后授权将使用你的版本；模型会看到你实际发送的内容。",
+      "cancel": "拒绝",
+      "confirm": "授权",
+      "confirming": "授权中…",
+      "failed": "授权失败"
+    },
     "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
   },
   "admin": {
