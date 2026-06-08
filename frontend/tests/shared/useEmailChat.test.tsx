@@ -332,6 +332,64 @@ describe('useEmailChat — send + stream', () => {
     expect(assistant.tokens_output).toBe(4)
   })
 
+  // task 06-08-chat Bug 1 — after the 3c cutover `finalizeMessage` is an
+  // async PATCH; the harness forwards `done` synchronously via the in-process
+  // emitter, so the done-handler's refresh (a GET) can read the assistant row
+  // while it's STILL `streaming`. The fix passes syncStreaming=false on the
+  // done path, so even a racing refresh that returns a streaming row must NOT
+  // re-set streamingMessageId — otherwise the panel stays stuck in "Streaming…"
+  // until the user clicks abort.
+  test('done event keeps streamingMessageId null even if the racing refresh still returns a streaming row', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'so far',
+        status: 'streaming'
+      })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+
+    // The finalize PATCH hasn't landed yet — the post-done refresh still sees
+    // the row in `streaming` state (the exact race the cutover introduced).
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'so far and final',
+        status: 'streaming'
+      })
+    ])
+
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'done', finalContent: 'so far and final', model: 'claude' }
+      })
+    })
+
+    // Local done handling cleared streamingMessageId synchronously.
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+
+    // Let the racing refresh (GET) resolve; it must NOT resurrect the
+    // streaming target despite the row still reading `streaming`.
+    await waitFor(() => expect(mockChatListMessages).toHaveBeenCalledTimes(2))
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+    // The done event's finalContent still applied to the bubble (so the user
+    // sees the completed answer, marked complete by the local reducer).
+    const assistant = result.current.messages.find((m) => m.id === 101)!
+    expect(assistant.content).toBe('so far and final')
+  })
+
   test('error event surfaces in error slot + clears streamingMessageId', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     mockChatListMessages.mockResolvedValue([

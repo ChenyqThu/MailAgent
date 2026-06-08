@@ -690,7 +690,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
             />
           )}
         </div>
-        <div className="flex-1 flex flex-col min-h-0">
+        {/* Bug 3 (task 06-08-chat) — min-w-0 on the main column. As a flex
+            item in the horizontal row above, its default min-width:auto would
+            otherwise let wide MessageList tool-output content push the column
+            (and thus the 360px <aside>) past its fixed width. Pairs with the
+            MessageList root's own min-w-0. */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <BackendSelector value={backend} onChange={selectBackend} agentName={agentName} />
           <ContextChips
             hasEmailBody={activeInternalId !== null}

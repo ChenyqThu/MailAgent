@@ -303,17 +303,35 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     activeSessionRef.current = activeSessionId
   }, [activeSessionId])
 
+  // `syncStreaming` (default true) — whether this refresh should re-derive
+  // `streamingMessageId` from the DB's freshest live assistant row. Initial
+  // load / email switch / selectSession / tool_call mid-stream all want this
+  // so a resumable streaming row is picked up from the SSoT.
+  //
+  // The `done` (complete) handler passes `false`: task 06-08-chat Bug 1. After
+  // the 3c cutover `finalizeMessage` is an async PATCH, while the harness
+  // forwards `done` synchronously via the in-process emitter. The done-handler
+  // refresh (a GET) races that PATCH and almost always reads the row while it's
+  // still `streaming`, which would re-set streamingMessageId right after the
+  // handler cleared it — leaving the panel stuck in "Streaming…" until the user
+  // hits the abort (X). done has already locally set status=complete +
+  // streamingMessageId=null, so this refresh only needs the latest messages
+  // (tool rows / token counts), not a streaming re-derive.
   const refresh = useCallback(
-    async (sessionId: number): Promise<void> => {
+    async (sessionId: number, syncStreaming = true): Promise<void> => {
       const fresh = await mailApi.chat.listMessages(sessionId)
       setMessages(fresh)
-      // If the freshest assistant message is still pending/streaming,
-      // mark it as the streaming target — protects against a stream
-      // event that arrived before `refresh()` resolved.
-      const liveAssistant = [...fresh]
-        .reverse()
-        .find((m) => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending'))
-      setStreamingMessageId(liveAssistant ? liveAssistant.id : null)
+      if (syncStreaming) {
+        // If the freshest assistant message is still pending/streaming,
+        // mark it as the streaming target — protects against a stream
+        // event that arrived before `refresh()` resolved.
+        const liveAssistant = [...fresh]
+          .reverse()
+          .find(
+            (m) => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending')
+          )
+        setStreamingMessageId(liveAssistant ? liveAssistant.id : null)
+      }
     },
     [mailApi]
   )
@@ -466,7 +484,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         // Sprint 5 #3 — clear the retry buffer once the turn finished cleanly.
         setLastFailedInput(null)
         // SSoT refresh (catch tool rows + token counts in one network query).
-        void refresh(envelope.sessionId)
+        // task 06-08-chat Bug 1 — pass syncStreaming=false: the finalize PATCH
+        // races this GET after the 3c cutover, so re-deriving streamingMessageId
+        // here would resurrect the just-cleared streaming state.
+        void refresh(envelope.sessionId, false)
         // Sprint 9 §2.3 + Sprint 10 reviewer L1/L3 — final island envelope
         // sequence. L1: emit one trailing AIDraftStream with the final char
         // count so the Phase 1 pill ends on a truthful number (the 500 ms

@@ -1153,7 +1153,11 @@ export function MessageList({
   return (
     <div
       ref={containerRef}
-      className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-3 py-3"
+      // Bug 3 (task 06-08-chat) — min-w-0 lets wide tool-output <pre> blocks
+      // scroll/wrap inside the fixed 360px drawer instead of forcing this
+      // flex item to its content's min-content width (the flex `min-width:auto`
+      // default), which otherwise stretches the whole <aside> past 360px.
+      className="flex-1 min-h-0 min-w-0 overflow-y-auto scrollbar-thin space-y-3 py-3"
     >
       {rendered}
       <div ref={bottomRef} />
