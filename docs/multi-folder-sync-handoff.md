@@ -20,7 +20,9 @@
 |---|---|---|
 | [`multi-folder-sync-prd.md`](./multi-folder-sync-prd.md) | **PRD** — 需求背景、功能表现、配置页/Sidebar/onboarding 交互、决策记录、给设计师的出稿清单（§9） | ✅ 完成 |
 | [`multi-folder-sync-design.md`](./multi-folder-sync-design.md) | **总设 + 详设（合一）** — §1-3 总体设计（架构/瓶颈/改动总览），§4-10 详细设计（接口/schema/函数/数据流/分阶段/验收/风险/文件清单） | ✅ 完成 |
-| **mockup** | claude design 基于 PRD §9 产出的设计稿（配置页 / onboarding 步骤 / Sidebar） | ⏳ 待产出 |
+| [`multi-folder-sync-design-handoff.md`](./multi-folder-sync-design-handoff.md) | **设计 handoff** — 5 界面设计规格 + 全状态 + 气质约束 | ✅ 完成 |
+| [`multi-folder-sync-matrix.md`](./multi-folder-sync-matrix.md) | **能力矩阵 & 验收看板** — P1-P6 + i18n/主题/隔离横切 + 出口（执行驱动） | ✅ 完成 |
+| `mockups/multi-folder-sync/index.html` | **mockup** — claude design 5 界面高保真稿（亮暗双主题，逐字复用生产 token） | ✅ 完成 |
 | 本文档 | **handoff 作战地图** — 工作流编排 | ✅ 完成 |
 
 **阅读顺序（新 session）**：PRD → design → 本 handoff → mockup（到手后）→ 创建 worktree → P1 开工。
