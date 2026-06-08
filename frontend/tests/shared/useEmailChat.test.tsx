@@ -390,6 +390,162 @@ describe('useEmailChat — send + stream', () => {
     expect(assistant.content).toBe('so far and final')
   })
 
+  // task 06-08-chat Bug 1 (codex MEDIUM finding) — the real harness order is
+  // forward(done) → await finalizeMessage(); usage/token/cost/model are ONLY
+  // persisted by that finalize. A racing post-done refresh (GET) that lands in
+  // the gap returns the row still `streaming`, tokens=null, stale content. The
+  // terminal-id merge must keep the local complete bubble (with the reducer's
+  // finalContent + usage) instead of overwriting it with that stale row.
+  test('done event: a racing refresh with a stale streaming row does not overwrite local complete state / token+cost', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'so far',
+        status: 'streaming'
+      })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+
+    // The post-done refresh races the finalize PATCH: the row is still
+    // streaming, token/cost not yet written, and content is the pre-final
+    // partial. Using this verbatim would roll the bubble back to streaming and
+    // wipe the usage the done/usage reducers set locally.
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'so far', // stale partial — finalContent not persisted yet
+        status: 'streaming', // finalize hasn't flipped it to complete yet
+        tokens_input: null,
+        tokens_output: null,
+        cost_usd: null,
+        model: null
+      })
+    ])
+
+    // Drive a usage event (token/cost/model land via the local reducer first,
+    // mirroring custom-api emitting usage just before done) then done.
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: {
+          type: 'usage',
+          inputTokens: 5,
+          outputTokens: 4,
+          costUsd: 0.0002,
+          model: 'claude'
+        }
+      })
+    })
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'done', finalContent: 'so far and final', model: 'claude' }
+      })
+    })
+
+    // Let the racing refresh (GET) resolve.
+    await waitFor(() => expect(mockChatListMessages).toHaveBeenCalledTimes(2))
+
+    const assistant = result.current.messages.find((m) => m.id === 101)!
+    // Local terminal state survives the stale row: complete, finalContent kept,
+    // and the finalize-only fields (token/cost/model) NOT clobbered back to null.
+    expect(assistant.status).toBe('complete')
+    expect(assistant.content).toBe('so far and final')
+    expect(assistant.tokens_input).toBe(5)
+    expect(assistant.tokens_output).toBe(4)
+    expect(assistant.cost_usd).toBe(0.0002)
+    expect(assistant.model).toBe('claude')
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+  })
+
+  // task 06-08-chat Bug 1 (codex HIGH finding) — done's OWN refresh passes
+  // syncStreaming=false, but other refresh callsites (tool_call mid-stream,
+  // idx=-1 recovery, send, abort) pass syncStreaming=true. A refresh(true)
+  // issued BEFORE done but resolving AFTER it would re-derive
+  // streamingMessageId from the not-yet-finalized streaming row and resurrect
+  // the spinner. The terminal-id guard must make the streaming re-derive skip
+  // ids we already finished, even on a syncStreaming=true refresh.
+  test('a late refresh(true) (e.g. tool_call) resolving after done does not resurrect the spinner', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'so far',
+        status: 'streaming'
+      })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+
+    // Make the NEXT listMessages call hang so we can land it AFTER done. This
+    // is the tool_call branch's refresh(true) (notion-agent multi-turn) that
+    // was inflight when the turn finished.
+    let resolveLate: ((rows: ChatMessage[]) => void) | null = null
+    mockChatListMessages.mockImplementationOnce(
+      () =>
+        new Promise<ChatMessage[]>((res) => {
+          resolveLate = res
+        })
+    )
+
+    // Fire tool_call → schedules refresh(envelope.sessionId) [syncStreaming
+    // defaults to true]. Its listMessages promise is the pending one above.
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'tool_call', name: 'x', args: {}, status: 'ok' }
+      })
+    })
+    await waitFor(() => expect(resolveLate).not.toBeNull())
+
+    // done lands first (synchronous emitter). done's own refresh(false) reads
+    // the default mock; we don't care about its rows here — only that the
+    // tool_call refresh (still pending) can't undo the terminal state.
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'done', finalContent: 'so far and final', model: 'claude' }
+      })
+    })
+    expect(result.current.streamingMessageId).toBeNull()
+
+    // NOW resolve the late tool_call refresh with a row still reading
+    // `streaming` (finalize hasn't landed). The HIGH bug was that this
+    // re-derived streamingMessageId=101 and brought the spinner back.
+    act(() => {
+      resolveLate!([
+        fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+        fakeMessage({
+          id: 101,
+          session_id: 1,
+          role: 'assistant',
+          content: 'so far',
+          status: 'streaming'
+        })
+      ])
+    })
+
+    await waitFor(() => expect(result.current.messages.length).toBeGreaterThan(0))
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+  })
+
   test('error event surfaces in error slot + clears streamingMessageId', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     mockChatListMessages.mockResolvedValue([

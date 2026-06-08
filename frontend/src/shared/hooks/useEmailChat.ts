@@ -239,6 +239,27 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     }
   }, [])
 
+  // task 06-08-chat Bug 1 (codex REQUEST CHANGES follow-up) — assistant
+  // message ids whose stream has reached a terminal state locally (done /
+  // error / abort). After the 3c cutover `finalizeMessage` is an async PATCH
+  // that runs AFTER the harness forwards the terminal event, so a refresh
+  // (GET) issued before the terminal event — but resolving after it — can
+  // still read the row as `streaming` with null token/cost and stale content.
+  // This generation guard lets `refresh` ignore such stale live rows for ids
+  // we already finished:
+  //   - the streamingMessageId re-derive skips terminal ids → a late
+  //     refresh(true) (tool_call / idx=-1 recovery / send / abort) can't
+  //     resurrect the spinner (the HIGH finding);
+  //   - the setMessages merge keeps the local terminal row when the DB still
+  //     reports it streaming → a racing GET can't roll the bubble back to
+  //     streaming or drop the finalize-only token/cost fields (the MEDIUM
+  //     finding).
+  // Cleared at the top of the email switch / initial load effect and in
+  // newSession so a fresh conversation — and crucially the reload-resume
+  // path, which loads with this set empty — re-derives streaming rows from
+  // the DB SSoT normally.
+  const terminalIdsRef = useRef<Set<number>>(new Set())
+
   // React 19 "Adjusting state on prop change" (react.dev/learn/you-might-not-need-an-effect).
   // When emailId switches, reset derived state synchronously inside
   // render rather than via an effect — keeps the renderer from showing
@@ -320,15 +341,47 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const refresh = useCallback(
     async (sessionId: number, syncStreaming = true): Promise<void> => {
       const fresh = await mailApi.chat.listMessages(sessionId)
-      setMessages(fresh)
+      const terminal = terminalIdsRef.current
+      // MEDIUM finding — merge rather than blindly overwrite. The real harness
+      // ordering is forward(done) → await finalizeMessage(), and token / cost /
+      // model are only persisted by that finalize. A GET that lands in the gap
+      // returns the row still `streaming`, tokens=null, stale content; using it
+      // verbatim would roll the local terminal bubble back to streaming and
+      // wipe the done reducer's finalContent + usage. So for any fresh row that
+      // (a) we already marked terminal AND (b) the DB still reports as
+      // streaming/pending (i.e. finalize hasn't landed), keep the local copy.
+      // Once the DB row is itself terminal (complete/error/aborted) it's the
+      // canonical version — it carries the finalize-written fields — so we take
+      // it. Ids absent from `prev` (e.g. very first load) fall through to fresh.
+      setMessages((prev) => {
+        if (terminal.size === 0) return fresh
+        return fresh.map((row) => {
+          if (!terminal.has(row.id)) return row
+          const isStaleLive = row.status === 'streaming' || row.status === 'pending'
+          if (!isStaleLive) return row
+          const local = prev.find((m) => m.id === row.id)
+          return local ?? row
+        })
+      })
       if (syncStreaming) {
         // If the freshest assistant message is still pending/streaming,
         // mark it as the streaming target — protects against a stream
         // event that arrived before `refresh()` resolved.
+        //
+        // HIGH finding — skip ids we already finished locally. A refresh(true)
+        // issued before a terminal event but resolving after it (tool_call /
+        // idx=-1 recovery / send / abort all pass syncStreaming=true) would
+        // otherwise re-derive streamingMessageId from the not-yet-finalized
+        // streaming row and resurrect the just-cleared spinner. The
+        // reload-resume path loads with `terminal` empty, so legitimately
+        // in-flight rows still resume.
         const liveAssistant = [...fresh]
           .reverse()
           .find(
-            (m) => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending')
+            (m) =>
+              m.role === 'assistant' &&
+              (m.status === 'streaming' || m.status === 'pending') &&
+              !terminal.has(m.id)
           )
         setStreamingMessageId(liveAssistant ? liveAssistant.id : null)
       }
@@ -341,6 +394,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // above; this effect only owns the async load side-effect.
   useEffect(() => {
     if (emailId === null) return undefined
+    // task 06-08-chat Bug 1 (codex follow-up) — drop the previous email's
+    // terminal-id guard set here (in an effect, not the render-phase reset
+    // block, to satisfy react-hooks/refs). Runs before the refresh(latest.id)
+    // below re-derives streamingMessageId, so a genuinely in-flight DB row for
+    // the incoming email (the reload-resume case) is NOT suppressed — the set
+    // is empty at that point. No-op on the very first mount (already empty).
+    terminalIdsRef.current.clear()
     let cancelled = false
     void (async (): Promise<void> => {
       try {
@@ -480,6 +540,11 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       })
 
       if (event.type === 'done') {
+        // task 06-08-chat Bug 1 (codex follow-up) — record the terminal id so
+        // any refresh(true) still in flight (or the done-path refresh below)
+        // can't re-derive this as streaming or overwrite the local complete
+        // bubble with a not-yet-finalized DB row. See terminalIdsRef + refresh.
+        terminalIdsRef.current.add(messageId)
         setStreamingMessageId(null)
         // Sprint 5 #3 — clear the retry buffer once the turn finished cleanly.
         setLastFailedInput(null)
@@ -516,6 +581,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
           sessionMetaRef.current.delete(envelope.sessionId)
         }
       } else if (event.type === 'error') {
+        // task 06-08-chat Bug 1 (codex follow-up) — same terminal guard as the
+        // done path: a refresh(true) already in flight when the error lands
+        // must not re-derive the errored row back into the streaming target.
+        terminalIdsRef.current.add(messageId)
         setStreamingMessageId(null)
         setError({ code: event.code, message: event.message })
         // Sprint 5 state machine #4 — engage cooldown on quota cap.
@@ -720,7 +789,17 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     // stay in `isStreaming = true` until the next event lands (or never,
     // if the backend died). Clear the streaming id immediately and pull
     // the canonical `aborted` row off the SSoT so the UI reflects state.
-    setStreamingMessageId(null)
+    //
+    // task 06-08-chat Bug 1 (codex follow-up) — mark the in-flight id terminal
+    // BEFORE the refresh below (which passes syncStreaming=true). Without this,
+    // a refresh that lands before the backend wrote the `aborted` row would
+    // see the still-streaming row and re-set streamingMessageId, resurrecting
+    // the spinner the user just dismissed. Functional updater so we read the
+    // latest streamingMessageId without widening this callback's deps.
+    setStreamingMessageId((prev) => {
+      if (prev !== null) terminalIdsRef.current.add(prev)
+      return null
+    })
     // Sprint 10 L2 — drop the meta entry; no more envelopes will fire for
     // this session.
     sessionMetaRef.current.delete(sid)
@@ -749,6 +828,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setStreamingMessageId(null)
     setError(null)
     setLastFailedInput(null)
+    // task 06-08-chat Bug 1 (codex follow-up) — a fresh conversation starts
+    // with no terminal history; clear so a future genuinely-streaming row in
+    // the new session isn't suppressed by a stale id from the old one.
+    terminalIdsRef.current.clear()
     // Sprint 19 PR-1d.2 — leftover dialogs from the previous session must
     // not survive the abort (main-process side already cancels the
     // suspended promise; the renderer state must mirror that to avoid a
