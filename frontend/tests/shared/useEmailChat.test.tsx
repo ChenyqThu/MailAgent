@@ -546,6 +546,216 @@ describe('useEmailChat — send + stream', () => {
     expect(result.current.isStreaming).toBe(false)
   })
 
+  // task 06-08-chat Bug 1 (codex P0 NIT, promoted to a fix) — navigation-level
+  // race. Unlike the message-level terminal guard (done/finalize race on a
+  // single row), this is a SESSION-level race: a refresh(true) still in flight
+  // for the session the user is LEAVING (issued by send / chunk idx=-1 recovery
+  // / tool_call / done) resolves AFTER a navigation switch and would otherwise
+  // setMessages(old session rows) + setStreamingMessageId(old streaming) on top
+  // of the freshly-loaded NEW session. The navGenerationRef guard makes such a
+  // late refresh discard ALL its setState. Reverting the guard turns this red.
+  test('selectSession: a late refresh(true) for the previous session does not pollute the switched-to session', async () => {
+    // Email 101 has two sessions: A (active, id=1) and B (id=2). A loads with a
+    // streaming assistant so a refresh(true) re-derive would target it.
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 }), fakeSession({ id: 2 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'A-user' }),
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'A-streaming',
+        status: 'streaming'
+      })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+
+    // Fire a tool_call on session A → schedules refresh(1) [syncStreaming
+    // defaults to true], the exact "in-flight refresh for the session we're
+    // about to leave" vector. Make its listMessages hang so we can land it
+    // AFTER the navigation switch below.
+    let resolveLateA: ((rows: ChatMessage[]) => void) | null = null
+    mockChatListMessages.mockImplementationOnce(
+      () =>
+        new Promise<ChatMessage[]>((res) => {
+          resolveLateA = res
+        })
+    )
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'tool_call', name: 'x', args: {}, status: 'ok' }
+      })
+    })
+    await waitFor(() => expect(resolveLateA).not.toBeNull())
+
+    // selectSession(2) → bumps the navigation generation, aborts A, and runs
+    // its own refresh(2) which resolves with B's (complete, no-streaming) rows.
+    mockChatListMessages.mockResolvedValueOnce([
+      fakeMessage({ id: 200, session_id: 2, role: 'user', content: 'B-user' }),
+      fakeMessage({
+        id: 201,
+        session_id: 2,
+        role: 'assistant',
+        content: 'B-answer',
+        status: 'complete'
+      })
+    ])
+    await act(async () => {
+      await result.current.selectSession(2)
+    })
+    expect(result.current.activeSessionId).toBe(2)
+    expect(result.current.messages.map((m) => m.id)).toEqual([200, 201])
+    expect(result.current.streamingMessageId).toBeNull()
+
+    // NOW resolve the late refresh(1) for the LEFT-BEHIND session A, returning
+    // A's still-streaming rows. Without the generation guard this would
+    // setMessages(A's rows) + re-derive streamingMessageId=101, clobbering B.
+    //
+    // codex MEDIUM — flush the refresh promise's continuation before asserting.
+    // `refresh` awaits `listMessages` then runs its gen check + (here) the
+    // discard. Resolving inside `await act(async () => { …; await Promise.resolve() })`
+    // forces that microtask continuation to run so the assertions observe the
+    // guard's decision, not a not-yet-resumed promise (a plain act() leaves a
+    // false-green window where the late setState simply hasn't fired yet).
+    await act(async () => {
+      resolveLateA!([
+        fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'A-user' }),
+        fakeMessage({
+          id: 101,
+          session_id: 1,
+          role: 'assistant',
+          content: 'A-streaming',
+          status: 'streaming'
+        })
+      ])
+      // Two turns: one for the listMessages.then continuation (the await in
+      // refresh resumes), one for any setState-batched render it might schedule.
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // B's state is intact: A's late refresh was discarded by the gen guard.
+    expect(result.current.activeSessionId).toBe(2)
+    expect(result.current.messages.map((m) => m.id)).toEqual([200, 201])
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+  })
+
+  // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — the email-switch
+  // navigation vector. Unlike selectSession (a synchronous event handler that
+  // bumps the generation inline), an email switch is driven by a prop change,
+  // so the bump rides a useLayoutEffect. The race the layout effect closes:
+  // email A has a refresh(true) in flight (issued by tool_call / send / chunk
+  // recovery) when the user switches to email B; if the gen isn't bumped before
+  // A's refresh resolves, the guard passes it through and A's (streaming) rows
+  // overwrite B.
+  //
+  // GUARD: this test goes red if the email-switch bump is removed entirely
+  // (verified — without it A's rows [100,101] clobber B's [200,201]).
+  //
+  // ⚠️ TEST-HARNESS LIMITATION (why layout-vs-passive isn't the discriminator
+  // HERE): under RTL + React 19, `rerender` flushes BOTH the layout effect and
+  // the passive load effect synchronously before returning, with any pending
+  // microtask (the awaited stale-refresh continuation) running only afterwards
+  // (probed order: layout → passive → after-rerender-sync → microtask). So in
+  // the test, a passive-effect bump would ALSO beat the late continuation and
+  // this test would stay green either way. The layout effect matters in
+  // PRODUCTION, where passive effects are deferred to a scheduler macrotask:
+  // there the stale refresh's microtask resolves BEFORE a passive bump (→
+  // pollution) but AFTER a synchronous layout bump (→ discarded). The fix is
+  // therefore useLayoutEffect; this test locks the "must bump on email switch"
+  // contract, while the production-timing distinction is argued in the hook's
+  // useLayoutEffect comment.
+  test('email switch: a late refresh for the previous email does not pollute the switched-to email', async () => {
+    // Email A=101 loads with session id=1 carrying a streaming assistant, so a
+    // refresh(true) re-derive would target it.
+    mockChatListSessions.mockResolvedValueOnce([fakeSession({ id: 1, email_id: 101 })])
+    mockChatListMessages.mockResolvedValueOnce([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'A-user' }),
+      fakeMessage({
+        id: 101,
+        session_id: 1,
+        role: 'assistant',
+        content: 'A-streaming',
+        status: 'streaming'
+      })
+    ])
+    const { result, rerender } = renderHook(({ id }: { id: number | null }) => useEmailChat(id), {
+      initialProps: { id: 101 }
+    })
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
+
+    // Fire a tool_call on session A → schedules refresh(1) [syncStreaming
+    // defaults to true]. Make its listMessages hang so we can land it AFTER the
+    // email switch — the exact "in-flight refresh for the email we're leaving".
+    let resolveLateA: ((rows: ChatMessage[]) => void) | null = null
+    mockChatListMessages.mockImplementationOnce(
+      () =>
+        new Promise<ChatMessage[]>((res) => {
+          resolveLateA = res
+        })
+    )
+    act(() => {
+      emitStream({
+        sessionId: 1,
+        messageId: 101,
+        event: { type: 'tool_call', name: 'x', args: {}, status: 'ok' }
+      })
+    })
+    await waitFor(() => expect(resolveLateA).not.toBeNull())
+
+    // Switch to email B=202: session id=2 with a complete (no-streaming) reply.
+    // The useLayoutEffect bumps the navGeneration synchronously at commit; the
+    // passive load effect then runs refresh(2) which captures the bumped gen.
+    mockChatListSessions.mockResolvedValueOnce([fakeSession({ id: 2, email_id: 202 })])
+    mockChatListMessages.mockResolvedValueOnce([
+      fakeMessage({ id: 200, session_id: 2, role: 'user', content: 'B-user' }),
+      fakeMessage({
+        id: 201,
+        session_id: 2,
+        role: 'assistant',
+        content: 'B-answer',
+        status: 'complete'
+      })
+    ])
+    rerender({ id: 202 })
+    await waitFor(() => expect(result.current.activeSessionId).toBe(2))
+    expect(result.current.messages.map((m) => m.id)).toEqual([200, 201])
+    expect(result.current.streamingMessageId).toBeNull()
+
+    // NOW resolve the late refresh(1) for the LEFT-BEHIND email A, returning A's
+    // still-streaming rows. Without the layout-effect bump this would
+    // setMessages(A's rows) + re-derive streamingMessageId=101, clobbering B.
+    // Flush the promise continuation (see the selectSession test above) so the
+    // assertions observe the guard's discard, not an unresumed promise.
+    await act(async () => {
+      resolveLateA!([
+        fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'A-user' }),
+        fakeMessage({
+          id: 101,
+          session_id: 1,
+          role: 'assistant',
+          content: 'A-streaming',
+          status: 'streaming'
+        })
+      ])
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // B's state is intact: A's late refresh was discarded by the gen guard the
+    // useLayoutEffect bumped before A's refresh resolved.
+    expect(result.current.activeSessionId).toBe(2)
+    expect(result.current.messages.map((m) => m.id)).toEqual([200, 201])
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+  })
+
   test('error event surfaces in error slot + clears streamingMessageId', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     mockChatListMessages.mockResolvedValue([

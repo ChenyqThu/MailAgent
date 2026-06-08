@@ -29,7 +29,7 @@
 //   switch emailId         → useEffect cleanup fires chat.abort(prevSession)
 //   unmount                → same path; stream stays correctly cancelled
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
 import type { ChatBackendKind, ChatMessage, ChatSession, ChatStartResult } from '../api/types'
@@ -260,6 +260,63 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // the DB SSoT normally.
   const terminalIdsRef = useRef<Set<number>>(new Set())
 
+  // task 06-08-chat Bug 1 (codex P0 NIT, promoted to a fix) — navigation
+  // generation counter. The terminalIdsRef guard above is MESSAGE-level: it
+  // protects a single assistant row against the done/finalize PATCH race.
+  // Navigation switches (email change / newSession / selectSession /
+  // deleteSession of the active session) are a SESSION-level race: each one
+  // aborts the current session and resets renderer state, but a refresh(true)
+  // already in flight for the OLD session (issued by send / chunk idx=-1
+  // recovery / tool_call / done) will still resolve after the switch and call
+  // setMessages(old rows) + setStreamingMessageId(old streaming) on top of the
+  // freshly-loaded NEW session/email — pollution the message-level guard
+  // can't catch (newSession even CLEARS terminalIdsRef, so it'd be empty).
+  //
+  // We bump this counter synchronously at every navigation switch point;
+  // `refresh` captures it on entry and, after its `await listMessages`,
+  // discards ALL of its setState if the counter moved (navigation happened
+  // mid-flight). A generation counter is deliberately chosen over an
+  // activeSessionRef/sessionId equality check: the initial-load path does
+  // `setActiveSessionIdState(latest)` then immediately `await refresh(latest.id)`
+  // while `activeSessionRef` is still the PRE-switch value (the effect that
+  // syncs it hasn't run yet), so a sessionId guard would false-negative and
+  // kill the legitimate refresh. The counter bumps synchronously at the
+  // navigation site, so it has no such ordering dependency.
+  // NOTE: abortCurrent does NOT bump — it terminates the current stream
+  // (handled by terminalIdsRef) but stays on the same session, so its own
+  // post-abort refresh must be allowed through.
+  const navGenerationRef = useRef(0)
+
+  // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — email switch is the
+  // one navigation vector whose bump can't ride the synchronous-event path the
+  // other three (newSession / selectSession / deleteSession) use: it's driven
+  // by a prop change. The bump MUST happen before the OLD email's in-flight
+  // refresh(true) resolves, otherwise that refresh sees the un-bumped gen, the
+  // guard passes it through, and it clobbers the freshly-loaded NEW email with
+  // the old session's (streaming) rows.
+  //
+  // useLayoutEffect (not the passive load effect below, not a render-phase ref
+  // mutation): it fires SYNCHRONOUSLY after commit — earlier than any passive
+  // useEffect (so earlier than the async load's own refresh) AND, because JS is
+  // single-threaded, earlier than the .then continuation of any refresh promise
+  // that was already awaiting `listMessages` when emailId changed (that
+  // continuation can only run once the current synchronous work unit — including
+  // this layout effect — yields). So an old-email refresh that resolves right
+  // after the switch necessarily reads the bumped gen and is discarded.
+  //
+  // A render-phase `navGenerationRef.current += 1` would trip
+  // react-hooks/refs (no ref writes during render) and double-bump under
+  // StrictMode's double-invoked render — hence the layout effect.
+  //
+  // terminalIdsRef is cleared here too (was in the passive load effect): the
+  // incoming email starts with no terminal history, and clearing it in the
+  // same synchronous commit step keeps the reload-resume path (which loads with
+  // the set empty) deriving streaming rows from the DB SSoT normally.
+  useLayoutEffect(() => {
+    navGenerationRef.current += 1
+    terminalIdsRef.current.clear()
+  }, [emailId])
+
   // React 19 "Adjusting state on prop change" (react.dev/learn/you-might-not-need-an-effect).
   // When emailId switches, reset derived state synchronously inside
   // render rather than via an effect — keeps the renderer from showing
@@ -340,7 +397,21 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // (tool rows / token counts), not a streaming re-derive.
   const refresh = useCallback(
     async (sessionId: number, syncStreaming = true): Promise<void> => {
+      // task 06-08-chat Bug 1 (codex P0 NIT) — snapshot the navigation
+      // generation on entry. If a navigation switch (email / newSession /
+      // selectSession / deleteSession-of-active) bumps it while listMessages
+      // is in flight, this refresh belongs to a session/email the user has
+      // left behind; discarding its setState (below) keeps it from clobbering
+      // the freshly-loaded new conversation. Read before the await so the
+      // value reflects the navigation state at the moment the refresh was
+      // requested.
+      const gen = navGenerationRef.current
       const fresh = await mailApi.chat.listMessages(sessionId)
+      // Bail before ANY setState if we unmounted or navigated away mid-flight.
+      // This MUST precede the terminalIdsRef merge / syncStreaming re-derive
+      // below — those guards are message-level and can't tell a stale-session
+      // refresh from a current one.
+      if (!mountedRef.current || gen !== navGenerationRef.current) return
       const terminal = terminalIdsRef.current
       // MEDIUM finding — merge rather than blindly overwrite. The real harness
       // ordering is forward(done) → await finalizeMessage(), and token / cost /
@@ -394,13 +465,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // above; this effect only owns the async load side-effect.
   useEffect(() => {
     if (emailId === null) return undefined
-    // task 06-08-chat Bug 1 (codex follow-up) — drop the previous email's
-    // terminal-id guard set here (in an effect, not the render-phase reset
-    // block, to satisfy react-hooks/refs). Runs before the refresh(latest.id)
-    // below re-derives streamingMessageId, so a genuinely in-flight DB row for
-    // the incoming email (the reload-resume case) is NOT suppressed — the set
-    // is empty at that point. No-op on the very first mount (already empty).
-    terminalIdsRef.current.clear()
+    // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — the email-switch
+    // navGeneration bump + terminalIdsRef clear moved to the useLayoutEffect
+    // above so they run synchronously at commit time, BEFORE the OLD email's
+    // in-flight refresh can resolve. This passive effect now only owns the
+    // async load. Because passive effects run after layout effects, the
+    // refresh(latest.id) below captures the already-bumped gen and is allowed
+    // through (it doesn't kill itself).
     let cancelled = false
     void (async (): Promise<void> => {
       try {
@@ -832,6 +903,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     // with no terminal history; clear so a future genuinely-streaming row in
     // the new session isn't suppressed by a stale id from the old one.
     terminalIdsRef.current.clear()
+    // task 06-08-chat Bug 1 (codex P0 NIT) — newSession is a navigation event
+    // and crucially CLEARS terminalIdsRef above, so the message-level guard
+    // can't help here. Bump the generation so a refresh(true) still in flight
+    // for the old session (send / chunk recovery / tool_call / done) is
+    // discarded on resolve instead of re-populating the just-blanked list +
+    // resurrecting the old streaming target.
+    navGenerationRef.current += 1
     // Sprint 19 PR-1d.2 — leftover dialogs from the previous session must
     // not survive the abort (main-process side already cancels the
     // suspended promise; the renderer state must mirror that to avoid a
@@ -913,6 +991,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       if (sessionId === activeSessionRef.current) {
         mailApi.chat.abort(sessionId)
         sessionMetaRef.current.delete(sessionId)
+        // task 06-08-chat Bug 1 (codex P0 NIT) — only bump when the deleted
+        // session WAS the active one (the branch that clears messages /
+        // streaming, i.e. an actual navigation away). Deleting a non-active
+        // sidebar row leaves the active conversation untouched, so an
+        // in-flight refresh for it stays legitimate and must NOT be discarded.
+        navGenerationRef.current += 1
         setActiveSessionIdState(null)
         activeSessionRef.current = null
         setMessages([])
@@ -943,6 +1027,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         mailApi.chat.abort(prev)
         sessionMetaRef.current.delete(prev)
       }
+      // task 06-08-chat Bug 1 (codex P0 NIT) — switching sessions is a
+      // navigation event. Bump BEFORE this callback's own refresh(sessionId)
+      // below (which captures the post-bump gen and is allowed through) so a
+      // refresh(true) still resolving for the session we just left can't
+      // overwrite the incoming session's messages / streaming target.
+      navGenerationRef.current += 1
       setError(null)
       setLastFailedInput(null)
       setStreamingMessageId(null)
