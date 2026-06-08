@@ -891,6 +891,66 @@ describe('useEmailChat — send + stream', () => {
     expect(assistant.content).toBe('Answer.')
     expect(assistant.status).toBe('streaming')
   })
+
+  // task 06-08-chat Bug 1 (codex LOW-1) — refreshSessions is an email-scoped
+  // async write to the sidebar that previously didn't ride the navGeneration
+  // guard. send() fires it fire-and-forget; if the user switches emails before
+  // its listSessions resolves, the OLD email's sessions would land in the NEW
+  // email's sidebar. The guard (gen snapshot + bail) makes such a late write a
+  // no-op. Reverting the guard turns this red (A's session id=1 pollutes B).
+  test('refreshSessions: a late listSessions for the previous email does not pollute the new email sidebar', async () => {
+    // Email A=101: one session id=1.
+    mockChatListSessions.mockResolvedValueOnce([fakeSession({ id: 1, email_id: 101 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'A-user' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: 'A-answer' })
+    ])
+    const { result, rerender } = renderHook(({ id }: { id: number | null }) => useEmailChat(id), {
+      initialProps: { id: 101 }
+    })
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1]))
+
+    // send() runs chat.start → refresh(listMessages) → refreshSessions(listSessions).
+    // Make refreshSessions's listSessions hang so we can land it AFTER the email
+    // switch below. (refresh's listMessages uses the default mock above.)
+    mockChatStart.mockResolvedValueOnce({
+      sessionId: 1,
+      userMessageId: 102,
+      assistantMessageId: 103
+    })
+    let resolveLateSessions: ((rows: ChatSession[]) => void) | null = null
+    mockChatListSessions.mockImplementationOnce(
+      () =>
+        new Promise<ChatSession[]>((res) => {
+          resolveLateSessions = res
+        })
+    )
+    await act(async () => {
+      await result.current.send({
+        message: 'go',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6'
+      })
+    })
+    await waitFor(() => expect(resolveLateSessions).not.toBeNull())
+
+    // Switch to email B=202: its own session id=2. The email-switch layout
+    // effect bumps the navGeneration synchronously at commit.
+    mockChatListSessions.mockResolvedValueOnce([fakeSession({ id: 2, email_id: 202 })])
+    rerender({ id: 202 })
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([2]))
+
+    // NOW resolve the late refreshSessions for the LEFT-BEHIND email A with A's
+    // session. Without the gen guard this would setSessions([A]) into B's sidebar.
+    await act(async () => {
+      resolveLateSessions!([fakeSession({ id: 1, email_id: 101 })])
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // B's sidebar is intact: A's late refreshSessions was discarded by the guard.
+    expect(result.current.sessions.map((s) => s.id)).toEqual([2])
+  })
 })
 
 describe('useEmailChat — abort + lifecycle', () => {
@@ -1540,6 +1600,40 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
     })
     await waitFor(() => expect(result.current.streamingMessageId).toBe(201))
     expect(result.current.messages.map((m) => m.id)).toEqual([200, 201])
+  })
+
+  test('forwards the thinking flag to chat.editMessage (codex MEDIUM-2)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'old' }),
+      fakeMessage({ id: 101, session_id: 7, role: 'assistant', content: 'reply' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(7))
+
+    mockChatEditMessage.mockResolvedValue({
+      sessionId: 7,
+      userMessageId: 200,
+      assistantMessageId: 201
+    })
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 200, session_id: 7, role: 'user', content: 'edited' }),
+      fakeMessage({ id: 201, session_id: 7, role: 'assistant', content: '', status: 'streaming' })
+    ])
+
+    await act(async () => {
+      await result.current.editMessage({
+        messageId: 100,
+        newContent: 'edited',
+        backendKind: 'custom-api',
+        backendModel: 'claude-sonnet-4-6',
+        thinking: true
+      })
+    })
+
+    expect(mockChatEditMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thinking: true, editingMessageId: 100, newContent: 'edited' })
+    )
   })
 
   test('clears prior error before dispatching the edit (matches send() contract)', async () => {

@@ -30,6 +30,7 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { BackendSelector, type BackendChoice } from './BackendSelector'
+import { backendSupportsThinking } from './backend_thinking'
 import { ChatSidebar } from './ChatSidebar'
 import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
@@ -169,6 +170,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // Record<number, string | null> so a "no first user message" hit
   // (assistant-only seeded session) is distinct from "not loaded yet".
   const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
+
+  // task 06-08-chat 需求 5 (codex MEDIUM-1) — single source of truth for "may the
+  // current backend/model use extended thinking". Drives both the Composer toggle's
+  // disabled state AND the per-turn gate in send/edit, so a toggle left ON after
+  // switching to a non-Claude model (gpt-5.5 / notion-agent) never sends thinking:true.
+  const thinkingSupported = backendSupportsThinking(backend)
 
   const chat = useEmailChat(activeInternalId)
 
@@ -372,10 +379,14 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         newContent,
         backendKind: backend.kind,
         backendModel: backend.model,
-        backendAgentPageId: backend.agentPageId
+        backendAgentPageId: backend.agentPageId,
+        // task 06-08-chat 需求 5 (codex MEDIUM-2) — the edit re-stream must honor the
+        // thinking toggle just like send() does, gated on backendSupportsThinking so
+        // a non-Claude model never re-runs with thinking:true.
+        thinking: thinkingSupported && thinkingEnabled
       })
     },
-    [chat, backend]
+    [chat, backend, thinkingSupported, thinkingEnabled]
   )
   const userHandlers: UserHandlers = {
     onEdit: handleEditUserMessage,
@@ -456,9 +467,11 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           backendAgentPageId: backend.agentPageId,
           senderName: detailQ.data?.sender_name ?? null,
           subject: detailQ.data?.subject ?? null,
-          // task 06-08-chat 需求 5 — per-turn thinking toggle. Only custom-api
-          // Anthropic honors it; runtime maps the boolean → ThinkingOptions.
-          thinking: backend.kind === 'custom-api' ? thinkingEnabled : false
+          // task 06-08-chat 需求 5 (codex MEDIUM-1) — per-turn thinking toggle, gated
+          // on backendSupportsThinking (custom-api + claude-* model). Anything else
+          // (gpt-5.5 via CRS, notion-agent) sends false even if the toggle is
+          // residually ON from a model switch — openaiStream / the agent ignore it.
+          thinking: thinkingSupported && thinkingEnabled
         })
         setMentions([])
         setAttachments([])
@@ -475,7 +488,8 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
       chat,
       detailQ.data,
       mentions,
-      thinkingEnabled
+      thinkingEnabled,
+      thinkingSupported
     ]
   )
 
@@ -851,11 +865,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                   selectBackend({ kind: 'custom-api', model, agentPageId: null })
                 }
                 modelPickerDisabled={backend.kind === 'notion-agent'}
-                // task 06-08-chat 需求 5 — extended-thinking toggle. Only custom-api
-                // Anthropic supports it; notion-agent disables the button.
+                // task 06-08-chat 需求 5 (codex MEDIUM-1) — extended-thinking toggle.
+                // Enabled only for custom-api + a claude-* model; notion-agent and
+                // OpenAI-protocol models (gpt-5.5) grey it out (no thinking support).
                 thinkingEnabled={thinkingEnabled}
                 onToggleThinking={toggleThinking}
-                thinkingDisabled={backend.kind !== 'custom-api'}
+                thinkingDisabled={!thinkingSupported}
               />
             </>
           )}

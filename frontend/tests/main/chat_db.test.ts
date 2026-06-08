@@ -235,6 +235,45 @@ describe('chat_db — path + schema bootstrap', () => {
     closeChatDb()
     expect(() => getChatDb()).toThrow(/schema is at v99/)
   })
+
+  // task 06-08-chat (codex LOW-2) — crash-resilience. A migration that committed
+  // the physical v5/v6 columns but crashed before persisting the matching
+  // schema_version would leave the DB at "physical v6 columns + meta v3". On the
+  // next open the old code re-ran ADD COLUMN content_offset/thinking and threw
+  // "duplicate column name". The per-column idempotency guards + the gated v3
+  // meta-write must now climb such a DB to v6 cleanly without re-adding columns.
+  test('re-entry with physical v6 columns but a lagging meta v3 converges to v6 without throwing', () => {
+    // First build a fully-migrated v6 DB.
+    const db = getChatDb()
+    expect(
+      (
+        db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
+          value: string
+        }
+      ).value
+    ).toBe('6')
+    // Simulate the crash window: roll the meta back to v3 while the physical
+    // schema (content_offset + thinking columns, v4 table shape) stays at v6.
+    db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
+    closeChatDb()
+
+    // Re-open: must NOT throw on duplicate ADD COLUMN, and must re-converge to v6.
+    expect(() => getChatDb()).not.toThrow()
+    const reopened = getChatDb()
+    const ver = reopened
+      .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
+      .get() as { value: string }
+    expect(ver.value).toBe('6')
+    // Columns are still present exactly once (no duplication, no loss).
+    const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
+      name: string
+    }>
+    expect(msgCols.filter((c) => c.name === 'thinking').length).toBe(1)
+    const toolCols = reopened.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{
+      name: string
+    }>
+    expect(toolCols.filter((c) => c.name === 'content_offset').length).toBe(1)
+  })
 })
 
 describe('chat_db — sessions', () => {

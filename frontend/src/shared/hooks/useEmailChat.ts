@@ -752,8 +752,18 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // useCallback's dep array can reference it without a TDZ.
   const refreshSessions = useCallback(async (): Promise<void> => {
     if (emailId === null) return
+    // task 06-08-chat Bug 1 (codex LOW-1) — refreshSessions is an email-scoped
+    // async write to the sidebar that, unlike refresh(), didn't ride the
+    // navGeneration guard. A navigation switch (email change / newSession /
+    // selectSession / deleteSession-of-active) mid-flight would let the OLD
+    // email's listSessions resolve and setSessions() the previous email's
+    // history into the NEW email's sidebar (messages/spinner are protected by
+    // refresh's own guard; only the sidebar leaked). Snapshot the generation on
+    // entry + bail after the await if it moved (or we unmounted).
+    const gen = navGenerationRef.current
     try {
       const fresh = await mailApi.chat.listSessions(emailId)
+      if (!mountedRef.current || gen !== navGenerationRef.current) return
       setSessions(fresh)
     } catch {
       // Sidebar is non-critical; swallow.

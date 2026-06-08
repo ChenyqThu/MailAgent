@@ -104,6 +104,18 @@ function migrateLegacyChatDbIfNeeded(targetPath: string): void {
 
 // ── schema migration ────────────────────────────────────────────────────
 
+/** task 06-08-chat (codex LOW-2) — column-existence probe for the additive
+ *  ALTER segments. SQLite has no `ADD COLUMN IF NOT EXISTS`, so re-running an
+ *  `ALTER TABLE … ADD COLUMN` against a table that already has the column
+ *  throws "duplicate column name". Guarding the additive segments with this
+ *  makes the migration ladder idempotent even if a prior run committed the
+ *  physical column but crashed before persisting the matching schema_version
+ *  (leaving "physical vN + meta v(N-1)"), so the next open won't hard-fail. */
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  return cols.some((c) => c.name === column)
+}
+
 function migrate(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_db_meta (
@@ -275,9 +287,19 @@ function migrate(db: Database.Database): void {
     // v4 has to run OUTSIDE this transaction because it needs PRAGMA
     // foreign_keys=OFF (see block below for why). Bump to v3 here so the
     // v4 block sees the correct starting version even on fresh installs.
-    db.prepare(
-      "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '3')"
-    ).run()
+    //
+    // task 06-08-chat (codex LOW-2) — only write v3 when the DB is BELOW v4.
+    // The previous unconditional INSERT OR REPLACE would, on a DB already at
+    // v4/v5/v6 that re-enters migrate (e.g. meta lagging the physical schema
+    // after a crash), roll schema_version BACK to 3 — then the v5/v6 blocks
+    // below would re-run their ADD COLUMN and fail on duplicates. Gating on
+    // `current < 4` leaves an already-migrated DB's version untouched here;
+    // the additive blocks have their own per-column idempotency guards.
+    if (current < 4) {
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '3')"
+      ).run()
+    }
     db.exec('COMMIT')
   } catch (err) {
     db.exec('ROLLBACK')
@@ -354,7 +376,12 @@ function migrate(db: Database.Database): void {
   if (current < 5) {
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.exec('ALTER TABLE chat_tool_call ADD COLUMN content_offset INTEGER')
+      // task 06-08-chat (codex LOW-2) — skip the ADD COLUMN if the physical
+      // column is already present (crash-after-ALTER-before-version-bump re-entry).
+      // Still advances schema_version to 5 so the ladder converges.
+      if (!hasColumn(db, 'chat_tool_call', 'content_offset')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN content_offset INTEGER')
+      }
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '5')"
       ).run()
@@ -376,7 +403,10 @@ function migrate(db: Database.Database): void {
   if (current < 6) {
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.exec('ALTER TABLE ai_chat_messages ADD COLUMN thinking TEXT')
+      // task 06-08-chat (codex LOW-2) — idempotent ADD COLUMN, same rationale as v5.
+      if (!hasColumn(db, 'ai_chat_messages', 'thinking')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN thinking TEXT')
+      }
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '6')"
       ).run()
