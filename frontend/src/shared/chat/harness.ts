@@ -287,7 +287,13 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
               toolName: event.name,
               inputJson: JSON.stringify(event.input),
               confirmationTier: tier,
-              status: initStatus
+              status: initStatus,
+              // task 06-08-chat Bug 2 — `buffer` holds every iter's text so far
+              // and tool_use blocks always arrive AFTER this iter's chunks, so
+              // buffer.length is exactly the insertion point for this chip in
+              // the assembled `content`. The renderer splits content at these
+              // offsets to interleave chips in time order.
+              contentOffset: buffer.length
             })
             forward(event)
             break

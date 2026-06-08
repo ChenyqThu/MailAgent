@@ -489,6 +489,13 @@ async def append_tool_call(
         )
     if not isinstance(status, str) or not status:
         raise APIError("E_INVALID_ARG", "tool-calls requires status:str", source="sqlite")
+    # contentOffset（task 06-08-chat Bug 2）= 可选 int（工具卡在 content 里的插入偏移）；
+    # 缺省 / null → None（持久化 NULL，前端 degrade 到「工具卡在正文后」）。非 int 拒绝。
+    content_offset = opts.get("contentOffset")
+    if content_offset is not None and not isinstance(content_offset, int):
+        raise APIError(
+            "E_INVALID_ARG", "tool-calls contentOffset must be an int", source="sqlite"
+        )
     call = get_chat_db().append_tool_call(
         message_id=message_id,
         tool_use_id=tool_use_id,
@@ -496,6 +503,7 @@ async def append_tool_call(
         input_json=input_json,
         confirmation_tier=confirmation_tier,
         status=status,
+        content_offset=content_offset,
     )
     return success_envelope(call, request=request, source="sqlite")
 

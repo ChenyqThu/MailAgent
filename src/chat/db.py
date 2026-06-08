@@ -392,9 +392,16 @@ class ChatDb:
         input_json: str,
         confirmation_tier: str,
         status: str,
+        content_offset: Optional[int] = None,
     ) -> Dict[str, Any]:
         """INSERT 一条工具调用审计行（user_edited/output/duration/confirmed_at 初始 NULL）。
-        镜像 chat_db.ts appendToolCall → ChatToolCall。"""
+        镜像 chat_db.ts appendToolCall → ChatToolCall。
+
+        ``content_offset``（task 06-08-chat Bug 2）= 该工具卡在父 assistant 消息 ``content``
+        里的插入字符偏移（harness 见 tool_use 时的累积正文长度）；前端据此把 content split
+        交错渲染工具卡。chat_tool_call.content_offset 列由前端 chat_db.ts v5 迁移建（schema
+        归前端 owns）—— serve-api 只写既有列（生产里 renderer getChatDb() 已迁好库）。
+        """
         now = _now_ms()
         with self._write_connection() as conn:
             cur = conn.execute(
@@ -402,8 +409,8 @@ class ChatDb:
                 "(message_id, tool_use_id, tool_name, input_json, "
                 "user_edited_input_json, output_json, "
                 "status, duration_ms, confirmation_tier, confirmed_at, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?)",
+                "content_offset, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?)",
                 (
                     message_id,
                     tool_use_id,
@@ -411,6 +418,7 @@ class ChatDb:
                     input_json,
                     status,
                     confirmation_tier,
+                    content_offset,
                     now,
                     now,
                 ),
@@ -427,6 +435,7 @@ class ChatDb:
                 "duration_ms": None,
                 "confirmation_tier": confirmation_tier,
                 "confirmed_at": None,
+                "content_offset": content_offset,
                 "created_at": now,
                 "updated_at": now,
             }

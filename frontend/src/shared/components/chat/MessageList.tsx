@@ -39,6 +39,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ChatMessage, ChatToolCall } from '@shared/api/types'
 import type { PendingConfirmation } from '@shared/hooks/useEmailChat'
 import { ConfirmToolDialog } from './ConfirmToolDialog'
+import { planAssistantSegments } from './tool_interleave'
 
 /** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
  *  handlers; if a panel doesn't (e.g. read-only conversation viewer), the
@@ -874,13 +875,11 @@ function ToolCallChip({ call }: { call: ChatToolCall }): React.ReactElement {
   )
 }
 
-function ToolCallAuditRow({
-  messageId,
-  isStreaming
-}: {
-  messageId: number
-  isStreaming: boolean
-}): React.ReactElement | null {
+/** Fetch the chat_tool_call audit rows for a finished assistant message.
+ *  Skips the fetch while the message is still streaming (chips only settle
+ *  after the turn completes — during streaming they ride the live event
+ *  forwarding path, not the DB). Returns [] until resolved / when streaming. */
+function useToolCalls(messageId: number, isStreaming: boolean): ChatToolCall[] {
   const mailApi = useMailApi()
   const [calls, setCalls] = useState<ChatToolCall[]>([])
 
@@ -900,13 +899,59 @@ function ToolCallAuditRow({
     }
   }, [messageId, isStreaming, mailApi])
 
-  if (calls.length === 0) return null
+  return calls
+}
 
+/** Legacy "all chips stacked below the body" layout. Used by the draft-reply
+ *  path (single final output, no time-ordered text) and as the degrade target
+ *  when no tool call carries a content_offset (pre-v5 rows / non-harness). */
+function ToolCallList({
+  calls
+}: {
+  calls: ReadonlyArray<ChatToolCall>
+}): React.ReactElement | null {
+  if (calls.length === 0) return null
   return (
     <div className="space-y-1">
       {calls.map((c) => (
         <ToolCallChip key={c.id} call={c} />
       ))}
+    </div>
+  )
+}
+
+/** task 06-08-chat Bug 2 — render the assistant text with tool chips
+ *  interleaved at their `content_offset` ("text → tool → more text") instead of
+ *  stacking every chip below the body. Layout logic lives in the pure
+ *  `planAssistantSegments`; this component only maps the plan to elements. */
+function AssistantTextWithToolCalls({
+  content,
+  calls,
+  isStreaming
+}: {
+  content: string
+  calls: ReadonlyArray<ChatToolCall>
+  isStreaming: boolean
+}): React.ReactElement {
+  const { segments, trailing } = planAssistantSegments(content, calls)
+  let textIdx = 0
+  return (
+    <div className="space-y-2">
+      {segments.map((seg) => {
+        if (seg.kind === 'chip') return <ToolCallChip key={`chip-${seg.call.id}`} call={seg.call} />
+        const key = `seg-${textIdx++}`
+        // min-w-0 keeps wide markdown (tables/code) from forcing the 360px
+        // drawer wider (Bug 3 lesson). The caret only rides the last text slice;
+        // interleaving only runs post-stream so this is normally false anyway.
+        return (
+          <div key={key} className="text-body text-ink-fg leading-relaxed min-w-0">
+            <TranslatedBody text={seg.text || ' '} streaming={isStreaming && seg.isLast} />
+          </div>
+        )
+      })}
+      {/* Chips the harness couldn't place (null offset) still render below so a
+          mixed old/new conversation never silently drops a tool call. */}
+      <ToolCallList calls={trailing} />
     </div>
   )
 }
@@ -921,6 +966,11 @@ function AssistantBubble({
   draftHandlers?: DraftHandlers
 }): React.ReactElement {
   const { t } = useTranslation()
+  // task 06-08-chat Bug 2 — tool-call audit rows for this message. Fetched once
+  // here (hook must precede the early returns below) and shared by both the
+  // draft path (legacy stacked) and the text path (interleaved by offset). The
+  // hook skips the fetch while streaming, so the early returns don't waste it.
+  const toolCalls = useToolCalls(message.id, isStreaming)
   // Empty + streaming: render the thinking pulse instead of an empty bubble.
   if (message.content.length === 0 && isStreaming) {
     return (
@@ -1000,7 +1050,9 @@ function AssistantBubble({
           handlers={draftHandlers}
           isStreaming={isStreaming}
         />
-        <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
+        {/* Draft replies are a single final output (no time-ordered text to
+            interleave into) → keep tool chips stacked below the card. */}
+        <ToolCallList calls={toolCalls} />
         {!isStreaming && (
           <AssistantMessageFooter messageId={message.id} content={message.content} />
         )}
@@ -1015,12 +1067,16 @@ function AssistantBubble({
           {headerMeta}
         </div>
       )}
-      <div className="text-body text-ink-fg leading-relaxed">
-        {/* Streamdown 的 caret="block" 在文末 inline 渲染打字光标 (依赖 isAnimating
-            =streaming); 不再叠加外部 cursor-blink span, 避免双光标。 */}
-        <TranslatedBody text={message.content || ' '} streaming={isStreaming} />
-      </div>
-      <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
+      {/* task 06-08-chat Bug 2 — interleave tool chips at their content_offset
+          ("text → tool → more text") instead of stacking them all below the
+          body. Falls back to body-then-chips when no chip carries an offset
+          (pre-v5 rows / non-harness). Streamdown's caret renders inline at the
+          end of the trailing text segment while streaming. */}
+      <AssistantTextWithToolCalls
+        content={message.content || ' '}
+        calls={toolCalls}
+        isStreaming={isStreaming}
+      />
       {!isStreaming && <AssistantMessageFooter messageId={message.id} content={message.content} />}
     </div>
   )

@@ -183,6 +183,11 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
     expect(rows[0]?.status).toBe('ok')
     expect(JSON.parse(rows[0]?.output_json ?? 'null')).toEqual({ echoed: { q: 'hello' } })
 
+    // task 06-08-chat Bug 2 — content_offset = buffer length when the harness
+    // saw the tool_use, i.e. the length of the text streamed before it
+    // ('Let me check. ' = 14 chars). Drives time-ordered chip interleaving.
+    expect(rows[0]?.content_offset).toBe('Let me check. '.length)
+
     // Assistant message flipped to complete + buffer accumulated across iters.
     const finalMsg = getMessage(assistantMessageId)
     expect(finalMsg?.status).toBe('complete')
@@ -238,6 +243,100 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
     expect(Array.isArray(userBlocks)).toBe(true)
     expect(userBlocks?.[0]?.type).toBe('tool_result')
     expect(userBlocks?.[0]?.tool_use_id).toBe('toolu_x')
+  })
+})
+
+describe('runHarness — content_offset (task 06-08-chat Bug 2)', () => {
+  test('offsets track the running buffer across text + multiple tool_use across iters', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'noop',
+        async (): Promise<ToolResult> => ({ ok: true, output: 'r', durationMs: 0 })
+      )
+    )
+    // iter-1: "AAAA" then tool a, then "BB" then tool b (still in iter-1).
+    // iter-2: "CCC" then tool c, then end_turn.
+    // Running buffer at each tool_use:
+    //   a → 4   ("AAAA")
+    //   b → 6   ("AAAA" + "BB")
+    //   c → 9   ("AAAA" + "BB" + "CCC")
+    const backend = scriptedBackend([
+      [
+        { type: 'chunk', delta: 'AAAA' },
+        { type: 'tool_use', toolUseId: 'toolu_a', name: 'noop', input: {} },
+        { type: 'chunk', delta: 'BB' },
+        { type: 'tool_use', toolUseId: 'toolu_b', name: 'noop', input: {} },
+        { type: 'done', finalContent: 'AAAABB', model: null, stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'chunk', delta: 'CCC' },
+        { type: 'tool_use', toolUseId: 'toolu_c', name: 'noop', input: {} },
+        { type: 'done', finalContent: 'CCC', model: null, stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry
+    })
+
+    const rows = listToolCallsForMessage(assistantMessageId)
+    const byId = new Map(rows.map((r) => [r.tool_use_id, r.content_offset]))
+    expect(byId.get('toolu_a')).toBe(4)
+    expect(byId.get('toolu_b')).toBe(6)
+    expect(byId.get('toolu_c')).toBe(9)
+    // Final content is the full buffer so offsets index into it cleanly.
+    expect(getMessage(assistantMessageId)?.content).toBe('AAAABBCCC')
+  })
+
+  test('a tool_use with no preceding text gets content_offset 0', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'noop',
+        async (): Promise<ToolResult> => ({ ok: true, output: 'r', durationMs: 0 })
+      )
+    )
+    const backend = scriptedBackend([
+      [
+        { type: 'tool_use', toolUseId: 'toolu_first', name: 'noop', input: {} },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'chunk', delta: 'after' },
+        { type: 'done', finalContent: 'after', model: null, stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry
+    })
+    const rows = listToolCallsForMessage(assistantMessageId)
+    expect(rows[0]?.tool_use_id).toBe('toolu_first')
+    expect(rows[0]?.content_offset).toBe(0)
   })
 })
 

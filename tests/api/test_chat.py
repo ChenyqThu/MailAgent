@@ -46,6 +46,7 @@ CREATE TABLE chat_tool_call (
     tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
     user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
     duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
+    content_offset INTEGER,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 """
@@ -831,6 +832,77 @@ def test_append_tool_call_missing_fields_400(chat_client: TestClient) -> None:
     r = chat_client.post(
         f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
         json={"toolUseId": "toolu_x"},  # 缺 toolName/inputJson/confirmationTier/status
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_append_tool_call_content_offset_round_trip(chat_client: TestClient) -> None:
+    """task 06-08-chat Bug 2 — contentOffset 写入 + by-use-id 读回（前端据此交错渲染工具卡）。"""
+    r = chat_client.post(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
+        json={
+            "toolUseId": "toolu_off",
+            "toolName": "email_search",
+            "inputJson": "{}",
+            "confirmationTier": "silent",
+            "status": "running",
+            "contentOffset": 23,
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["content_offset"] == 23
+    got = chat_client.get(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls/toolu_off"
+    ).json()["data"]
+    assert got["content_offset"] == 23
+
+
+def test_append_tool_call_content_offset_zero(chat_client: TestClient) -> None:
+    """contentOffset=0（工具卡在任何文本之前）必须落 0、不被当成「缺省」置 NULL。"""
+    r = chat_client.post(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
+        json={
+            "toolUseId": "toolu_zero",
+            "toolName": "email_get",
+            "inputJson": "{}",
+            "confirmationTier": "silent",
+            "status": "running",
+            "contentOffset": 0,
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["content_offset"] == 0
+
+
+def test_append_tool_call_no_content_offset_is_null(chat_client: TestClient) -> None:
+    """缺 contentOffset → NULL（旧前端 / degrade 路径，渲染回退到「工具卡在正文后」）。"""
+    r = chat_client.post(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
+        json={
+            "toolUseId": "toolu_noff",
+            "toolName": "email_get",
+            "inputJson": "{}",
+            "confirmationTier": "silent",
+            "status": "running",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["content_offset"] is None
+
+
+def test_append_tool_call_content_offset_non_int_400(chat_client: TestClient) -> None:
+    """contentOffset 非 int（字符串）→ E_INVALID_ARG。"""
+    r = chat_client.post(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
+        json={
+            "toolUseId": "toolu_bad",
+            "toolName": "email_get",
+            "inputJson": "{}",
+            "confirmationTier": "silent",
+            "status": "running",
+            "contentOffset": "nope",
+        },
     )
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"

@@ -125,6 +125,15 @@ export interface ChatToolCall {
   confirmation_tier: ConfirmationTier
   /** Epoch ms when the user clicked Confirm. Null for silent / canceled. */
   confirmed_at: number | null
+  /** task 06-08-chat Bug 2 — character offset into the parent assistant
+   *  message's `content` at which this tool call was proposed (= the running
+   *  buffer length when the harness saw the `tool_use` block, i.e. after this
+   *  iter's text but before the next iter's). The renderer splits `content` at
+   *  these offsets to interleave tool chips in time order ("text → tool → more
+   *  text") instead of stacking all chips below the body. Null for rows written
+   *  before v5 (and for non-custom-api / non-harness paths) → renderer falls
+   *  back to the legacy "all chips after the body" layout. */
+  content_offset: number | null
   created_at: number
   updated_at: number
 }
@@ -138,6 +147,10 @@ export interface AppendToolCallInput {
   /** Initial status — usually 'pending' for preview/edit tiers, 'running'
    *  for silent. */
   status: ToolCallStatus
+  /** task 06-08-chat Bug 2 — running content length at the moment the harness
+   *  saw the tool_use block (insertion point for time-ordered interleaving).
+   *  Omitted by callers that don't track it → persisted as NULL. */
+  contentOffset?: number
 }
 
 export interface UpdateToolCallPatch {

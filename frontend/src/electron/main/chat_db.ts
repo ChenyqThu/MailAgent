@@ -68,7 +68,7 @@ export type {
 
 // ── path resolution ─────────────────────────────────────────────────────
 
-const CHAT_DB_VERSION = 4
+const CHAT_DB_VERSION = 5
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -341,6 +341,27 @@ function migrate(db: Database.Database): void {
       }
     } finally {
       db.pragma('foreign_keys = ON')
+    }
+  }
+
+  // v4 → v5 — task 06-08-chat Bug 2. Add chat_tool_call.content_offset: the
+  // char offset into the parent assistant message's `content` where this tool
+  // call was proposed. The renderer splits `content` at these offsets to
+  // interleave tool chips in time order instead of stacking them all below the
+  // body. Plain additive ALTER (no UNIQUE/FK drop) → safe in its own
+  // transaction. NULL for all pre-v5 rows → renderer degrades to the legacy
+  // "all chips after the body" layout for old conversations.
+  if (current < 5) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec('ALTER TABLE chat_tool_call ADD COLUMN content_offset INTEGER')
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '5')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
     }
   }
 }
@@ -696,14 +717,15 @@ export function abortStreamingMessages(sessionId: number): number {
 export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
   const db = getChatDb()
   const now = Date.now()
+  const contentOffset = input.contentOffset ?? null
   const result = db
     .prepare(
       `INSERT INTO chat_tool_call
         (message_id, tool_use_id, tool_name, input_json,
          user_edited_input_json, output_json,
          status, duration_ms, confirmation_tier, confirmed_at,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?)`
+         content_offset, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?)`
     )
     .run(
       input.messageId,
@@ -712,6 +734,7 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
       input.inputJson,
       input.status,
       input.confirmationTier,
+      contentOffset,
       now,
       now
     )
@@ -727,6 +750,7 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
     duration_ms: null,
     confirmation_tier: input.confirmationTier,
     confirmed_at: null,
+    content_offset: contentOffset,
     created_at: now,
     updated_at: now
   }

@@ -1164,6 +1164,11 @@ export interface ChatToolCall {
   duration_ms: number | null
   confirmation_tier: ChatConfirmationTier
   confirmed_at: number | null
+  /** task 06-08-chat Bug 2 — char offset into the parent assistant message's
+   *  `content` where this tool call was proposed; the renderer splits `content`
+   *  at these offsets to interleave tool chips in time order. Null for v4 rows
+   *  → renderer falls back to "all chips after the body". */
+  content_offset: number | null
   created_at: number
   updated_at: number
 }
