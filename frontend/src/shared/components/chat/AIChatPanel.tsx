@@ -58,6 +58,25 @@ function writeBackendKindPref(kind: ChatBackendKind): void {
   }
 }
 
+// task 06-08-chat 需求 5 — extended-thinking 开关偏好。用户体感是「常驻开关」（持久
+// localStorage），实现是 per-turn（每次 send 把当前值塞进 opts.thinking）。仅 custom-api
+// Anthropic 模型生效（notion-agent / OpenAI 协议忽略）。默认 OFF。
+const THINKING_PREF = 'mailagent.chat.thinkingEnabled'
+function readThinkingPref(): boolean {
+  try {
+    return localStorage.getItem(THINKING_PREF) === '1'
+  } catch {
+    return false
+  }
+}
+function writeThinkingPref(enabled: boolean): void {
+  try {
+    localStorage.setItem(THINKING_PREF, enabled ? '1' : '0')
+  } catch {
+    /* 同 backend pref —— 拒写无伤大雅 */
+  }
+}
+
 /** Short, ASCII-safe label for the active backend — used by the Composer
  *  footer chip. For Custom API we trim the longest model id (`claude-sonnet-4-6`
  *  → `sonnet-4-6`) so it fits next to ⌘↩ without truncation in 99% of cases. */
@@ -122,6 +141,16 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     setBackend(next)
   }, [])
   const [draft, setDraft] = useState('')
+  // task 06-08-chat 需求 5 — extended-thinking toggle (persisted localStorage,
+  // applied per-turn at send time). Only meaningful for custom-api Anthropic.
+  const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(() => readThinkingPref())
+  const toggleThinking = useCallback(() => {
+    setThinkingEnabled((cur) => {
+      const next = !cur
+      writeThinkingPref(next)
+      return next
+    })
+  }, [])
   // Sprint 14 PR D — @-mention chip stack. Each chip carries a SearchHit
   // so we can pull its subject + sender + bm25 snippet inline when
   // composing the prompt. handleSend below resolves each chip's full
@@ -426,7 +455,10 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           backendModel: backend.model,
           backendAgentPageId: backend.agentPageId,
           senderName: detailQ.data?.sender_name ?? null,
-          subject: detailQ.data?.subject ?? null
+          subject: detailQ.data?.subject ?? null,
+          // task 06-08-chat 需求 5 — per-turn thinking toggle. Only custom-api
+          // Anthropic honors it; runtime maps the boolean → ThinkingOptions.
+          thinking: backend.kind === 'custom-api' ? thinkingEnabled : false
         })
         setMentions([])
         setAttachments([])
@@ -435,7 +467,16 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         // stack is preserved so retry doesn't lose the user's selection.
       }
     },
-    [activeInternalId, attachments, backend, buildMentionContext, chat, detailQ.data, mentions]
+    [
+      activeInternalId,
+      attachments,
+      backend,
+      buildMentionContext,
+      chat,
+      detailQ.data,
+      mentions,
+      thinkingEnabled
+    ]
   )
 
   // Sprint 14 review LOW fix — preview cache + delete bookkeeping in a
@@ -810,6 +851,11 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                   selectBackend({ kind: 'custom-api', model, agentPageId: null })
                 }
                 modelPickerDisabled={backend.kind === 'notion-agent'}
+                // task 06-08-chat 需求 5 — extended-thinking toggle. Only custom-api
+                // Anthropic supports it; notion-agent disables the button.
+                thinkingEnabled={thinkingEnabled}
+                onToggleThinking={toggleThinking}
+                thinkingDisabled={backend.kind !== 'custom-api'}
               />
             </>
           )}

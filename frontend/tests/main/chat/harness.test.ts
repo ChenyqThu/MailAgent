@@ -340,6 +340,97 @@ describe('runHarness — content_offset (task 06-08-chat Bug 2)', () => {
   })
 })
 
+describe('runHarness — extended thinking (task 06-08-chat 需求 5)', () => {
+  test('thinking events forward live + thinking buffer persists on terminal complete', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const backend = scriptedBackend([
+      [
+        { type: 'thinking', delta: 'Let me ' },
+        { type: 'thinking', delta: 'reason about this.' },
+        { type: 'chunk', delta: 'Here is the answer.' },
+        { type: 'done', finalContent: 'Here is the answer.', model: null, stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    const sink = recordingSink()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink,
+      registry: createToolRegistry(),
+      thinking: { enabled: true }
+    })
+    // Live forward: both thinking deltas surfaced to the sink in order.
+    const thinkingEvents = sink.events.filter((e) => e.type === 'thinking')
+    expect(thinkingEvents).toEqual([
+      { type: 'thinking', delta: 'Let me ' },
+      { type: 'thinking', delta: 'reason about this.' }
+    ])
+    // Terminal complete persisted the full thinking buffer + the answer content.
+    const row = getMessage(assistantMessageId)
+    expect(row?.status).toBe('complete')
+    expect(row?.content).toBe('Here is the answer.')
+    expect(row?.thinking).toBe('Let me reason about this.')
+  })
+
+  test('no thinking events → thinking persisted as null (regression: today unchanged)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const backend = scriptedBackend([
+      [
+        { type: 'chunk', delta: 'Plain reply.' },
+        { type: 'done', finalContent: 'Plain reply.', model: null, stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry: createToolRegistry()
+    })
+    const row = getMessage(assistantMessageId)
+    expect(row?.status).toBe('complete')
+    expect(row?.thinking).toBeNull()
+  })
+
+  test('thinking option forwarded to backend.stream req.thinking', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const backend = scriptedBackend([
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry: createToolRegistry(),
+      thinking: { enabled: true }
+    })
+    expect(backend.lastReq?.thinking).toEqual({ enabled: true })
+  })
+})
+
 describe('runHarness — terminal conditions', () => {
   test('end_turn on iter-1 with zero tools collected terminates immediately', async () => {
     const { sessionId, assistantMessageId } = seedAssistantTurn()

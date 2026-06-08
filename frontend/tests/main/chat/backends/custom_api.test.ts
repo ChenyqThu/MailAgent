@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'vitest'
 import { __testing } from '../../../../src/shared/chat/backends/custom_api'
-import type { ChatStreamEvent } from '../../../../src/shared/chat/types'
+import type { ChatStreamEvent, ChatStreamRequest } from '../../../../src/shared/chat/types'
 import type { ChatModelConfig } from '../../../../src/shared/chat/platform'
 
 const {
@@ -18,7 +18,9 @@ const {
   buildSystemPrompt,
   decorateToolsWithCacheControl,
   createStreamState,
-  processAnthropicEvent
+  processAnthropicEvent,
+  modelSupportsManualThinking,
+  buildAnthropicRequestBody
 } = __testing
 
 // 3b-1：buildSystemBlocks/buildSystemPrompt 下沉 shared 后接 cfg + getCachedSenderDigest
@@ -425,5 +427,181 @@ describe('processAnthropicEvent — stop_reason captured for harness loop', () =
     const state = createStreamState(null)
     processAnthropicEvent({ type: 'message_delta', delta: { stop_reason: 'future_reason' } }, state)
     expect(state.messageStopReason).toBeNull()
+  })
+})
+
+// ============================================================
+// task 06-08-chat 需求 5 — extended-thinking SSE parse
+// ============================================================
+describe('processAnthropicEvent — extended-thinking (task 06-08-chat 需求 5)', () => {
+  function feed(events: unknown[]): {
+    state: ReturnType<typeof createStreamState>
+    emitted: ChatStreamEvent[]
+  } {
+    const state = createStreamState('claude-sonnet-4-6')
+    const emitted: ChatStreamEvent[] = []
+    for (const e of events) {
+      emitted.push(...processAnthropicEvent(e, state))
+    }
+    return { state, emitted }
+  }
+
+  test('thinking_delta accumulates into state + emits ThinkingEvent per delta', () => {
+    const { emitted, state } = feed([
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'Let me ' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'think about it.' }
+      }
+    ])
+    expect(emitted).toEqual([
+      { type: 'thinking', delta: 'Let me ' },
+      { type: 'thinking', delta: 'think about it.' }
+    ])
+    expect(state.thinkingAccumulated).toBe('Let me think about it.')
+  })
+
+  test('signature_delta is captured but NOT emitted (no display value)', () => {
+    const { emitted, state } = feed([
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'signature_delta', signature: 'EqQBCgIYAhIM==' }
+      }
+    ])
+    // only the thinking_delta surfaced; signature stored on state.
+    expect(emitted).toEqual([{ type: 'thinking', delta: 'hmm' }])
+    expect(state.thinkingSignature).toBe('EqQBCgIYAhIM==')
+  })
+
+  test('thinking block then text block: thinking events precede chunk events', () => {
+    const { emitted } = feed([
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'reason ' }
+      },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Answer.' } }
+    ])
+    expect(emitted).toEqual([
+      { type: 'thinking', delta: 'reason ' },
+      { type: 'chunk', delta: 'Answer.' }
+    ])
+  })
+
+  test('thinking off (no thinking blocks) → text-only stream unchanged + thinkingAccumulated empty', () => {
+    const { emitted, state } = feed([
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hi' } }
+    ])
+    expect(emitted).toEqual([{ type: 'chunk', delta: 'Hi' }])
+    expect(state.thinkingAccumulated).toBe('')
+    expect(state.thinkingSignature).toBe('')
+  })
+})
+
+// ============================================================
+// task 06-08-chat 需求 5 — request-body thinking matrix (model-aware)
+// ============================================================
+describe('modelSupportsManualThinking — model matrix (research §1.1)', () => {
+  test('sonnet-4-6 (project default) supports manual budget_tokens', () => {
+    expect(modelSupportsManualThinking('claude-sonnet-4-6')).toBe(true)
+  })
+  test('opus-4-7 / opus-4-8 require adaptive (manual budget_tokens → 400)', () => {
+    expect(modelSupportsManualThinking('claude-opus-4-7')).toBe(false)
+    expect(modelSupportsManualThinking('claude-opus-4-8')).toBe(false)
+  })
+  test('claude: prefix opus variant also requires adaptive', () => {
+    expect(modelSupportsManualThinking('claude:opus-4-8')).toBe(false)
+  })
+  test('unknown / other Claude 4 falls to manual (sonnet-style default)', () => {
+    expect(modelSupportsManualThinking('claude-opus-4-6')).toBe(true)
+    expect(modelSupportsManualThinking('claude-sonnet-4-5')).toBe(true)
+  })
+})
+
+describe('buildAnthropicRequestBody — thinking toggle (task 06-08-chat 需求 5)', () => {
+  const systemBlocks = [{ type: 'text' as const, text: 'sys' }]
+  const messages = [{ role: 'user' as const, content: 'hi' }]
+  const tools = [
+    { name: 'email_search', description: 'd', input_schema: { type: 'object' as const } }
+  ]
+  // minimal ChatStreamRequest — buildAnthropicRequestBody only reads `thinking`.
+  function req(thinking?: { enabled: boolean }): ChatStreamRequest {
+    return {
+      history: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      signal: new AbortController().signal,
+      thinking
+    }
+  }
+
+  test('thinking off → no thinking param + tools passed through (legacy body)', () => {
+    const body = buildAnthropicRequestBody(
+      req(undefined),
+      'claude-sonnet-4-6',
+      systemBlocks,
+      messages,
+      tools
+    )
+    expect(body.thinking).toBeUndefined()
+    expect(body.output_config).toBeUndefined()
+    expect(body.tools).toEqual(tools)
+    expect(body.max_tokens).toBe(64000)
+  })
+
+  test('thinking on + sonnet → manual {enabled, budget_tokens} (budget < max_tokens) + NO tools', () => {
+    const body = buildAnthropicRequestBody(
+      req({ enabled: true }),
+      'claude-sonnet-4-6',
+      systemBlocks,
+      messages,
+      tools
+    )
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 16000 })
+    expect(body.output_config).toBeUndefined()
+    // MVP方案 A取舍: thinking on → tools dropped (single-turn end_turn).
+    expect(body.tools).toBeUndefined()
+    expect((body.thinking as { budget_tokens: number }).budget_tokens).toBeLessThan(
+      body.max_tokens as number
+    )
+  })
+
+  test('thinking on + opus-4-8 → adaptive + output_config.effort (manual would 400) + NO tools', () => {
+    const body = buildAnthropicRequestBody(
+      req({ enabled: true }),
+      'claude-opus-4-8',
+      systemBlocks,
+      messages,
+      tools
+    )
+    expect(body.thinking).toEqual({ type: 'adaptive' })
+    expect(body.output_config).toEqual({ effort: 'high' })
+    expect(body.tools).toBeUndefined()
+  })
+
+  test('thinking enabled:false → treated as off (legacy body, tools kept)', () => {
+    const body = buildAnthropicRequestBody(
+      req({ enabled: false }),
+      'claude-sonnet-4-6',
+      systemBlocks,
+      messages,
+      tools
+    )
+    expect(body.thinking).toBeUndefined()
+    expect(body.tools).toEqual(tools)
   })
 })

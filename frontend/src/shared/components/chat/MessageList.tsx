@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Bookmark,
+  Brain,
   Check,
   ChevronRight,
   Copy,
@@ -956,6 +957,55 @@ function AssistantTextWithToolCalls({
   )
 }
 
+/** task 06-08-chat 需求 5 — extended-thinking collapsible block. Renders the
+ *  model's reasoning summary (message.thinking) above the answer, default
+ *  collapsed. Mirrors ToolCallChip's pure-CSS grid-template-rows 0fr→1fr
+ *  collapse (§4.1: grid-rows over GSAP; motion-reduce degrade). min-w-0 keeps
+ *  long reasoning lines from forcing the 360px drawer wider (Bug 3 lesson).
+ *  Empty thinking → caller doesn't render this (see AssistantBubble). */
+function ThinkingChip({ thinking }: { thinking: string }): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-md border border-ink-border-soft bg-ink-2/40 overflow-hidden min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left hover:bg-ink-fg/[0.03] transition-colors duration-fast"
+        aria-expanded={open}
+      >
+        <span
+          className="grid place-items-center w-[18px] h-[18px] rounded shrink-0"
+          style={{ background: 'rgb(var(--c-ai) / 0.12)', color: 'rgb(var(--c-ai))' }}
+        >
+          <Brain size={11} strokeWidth={2} />
+        </span>
+        <span className="text-meta text-ink-fg-2">{t('chat.thinking.label')}</span>
+        <ChevronRight
+          size={12}
+          className={cn(
+            'ml-auto shrink-0 text-ink-fg-3 transition-transform duration-fast',
+            open && 'rotate-90'
+          )}
+        />
+      </button>
+      <div
+        aria-hidden={!open}
+        className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
+        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <div className="px-2.5 pb-2.5 pt-1 border-t border-ink-border-soft">
+            <pre className="text-micro text-ink-fg-2 whitespace-pre-wrap break-words overflow-x-auto scrollbar-thin font-sans leading-relaxed">
+              {thinking}
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AssistantBubble({
   message,
   isStreaming,
@@ -971,12 +1021,22 @@ function AssistantBubble({
   // draft path (legacy stacked) and the text path (interleaved by offset). The
   // hook skips the fetch while streaming, so the early returns don't waste it.
   const toolCalls = useToolCalls(message.id, isStreaming)
-  // Empty + streaming: render the thinking pulse instead of an empty bubble.
+  // task 06-08-chat 需求 5 — extended-thinking summary for this message. Rendered
+  // in a collapsible block ABOVE the answer (thinking precedes the answer, both in
+  // SSE order + reading intuition). Empty → not rendered.
+  const thinkingText = message.thinking ?? ''
+  // Empty + streaming: render the thinking pulse instead of an empty bubble. If
+  // the extended-thinking stream has already produced reasoning (thinking mode on,
+  // answer not started yet), surface the collapsible thinking block above the pulse
+  // so the user can watch the reasoning stream in.
   if (message.content.length === 0 && isStreaming) {
     return (
-      <div className="flex items-center gap-2 py-1 text-aux text-ink-fg-2">
-        <Loader2 size={12} strokeWidth={2} className="animate-spin" />
-        <span>{t('chat.status.thinking')}</span>
+      <div className="space-y-2">
+        {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
+        <div className="flex items-center gap-2 py-1 text-aux text-ink-fg-2">
+          <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+          <span>{t('chat.status.thinking')}</span>
+        </div>
       </div>
     )
   }
@@ -1044,6 +1104,7 @@ function AssistantBubble({
             {headerMeta}
           </div>
         )}
+        {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
         <DraftPreviewCard
           content={message.content}
           recipient={draftHandlers?.recipient ?? null}
@@ -1067,6 +1128,8 @@ function AssistantBubble({
           {headerMeta}
         </div>
       )}
+      {/* task 06-08-chat 需求 5 — extended-thinking block, above the answer. */}
+      {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
       {/* task 06-08-chat Bug 2 — interleave tool chips at their content_offset
           ("text → tool → more text") instead of stacking them all below the
           body. Falls back to body-then-chips when no chip carries an offset

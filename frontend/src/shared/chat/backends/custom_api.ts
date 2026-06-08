@@ -47,6 +47,27 @@ const MAX_OUTPUT_TOKENS = 64000
 // 留 shared（timeout 逻辑统一），实现侧只透传 shared 组合后的 signal。
 const REQUEST_DEADLINE_MS = 60_000
 
+// task 06-08-chat 需求 5 — extended-thinking defaults (research §1.1 / §5.3).
+// manual `budget_tokens` (sonnet) MUST be < max_tokens (64000) → 16000 is safe.
+// adaptive `effort` (opus) controls thinking depth; 'high' is the default tier
+// and almost always produces a thinking block.
+const THINKING_BUDGET_TOKENS = 16_000
+const THINKING_EFFORT = 'high'
+
+/** task 06-08-chat 需求 5 — does this Claude model accept manual extended
+ *  thinking (`thinking:{type:'enabled', budget_tokens}`)? opus-4-7 / opus-4-8
+ *  REJECT manual budget_tokens with HTTP 400 — they require adaptive thinking
+ *  (`thinking:{type:'adaptive'}` + top-level `output_config.effort`). sonnet-4-6
+ *  (project default) + older Claude 4 accept manual (research §1.1 matrix).
+ *  Anything we can't positively classify as opus-4-7/4-8 falls to manual
+ *  (the default model is sonnet, so manual is the safe default). */
+function modelSupportsManualThinking(model: string): boolean {
+  const lower = model.toLowerCase()
+  // opus-4-7 / opus-4-8 (and the `claude:` prefix variants) → adaptive only.
+  if (lower.includes('opus-4-7') || lower.includes('opus-4-8')) return false
+  return true
+}
+
 // Sprint 19 — Anthropic message content can be a plain string (legacy
 // single-block) or an array of content blocks (multi-block: text +
 // tool_use + tool_result). Both shapes are valid in /v1/messages.
@@ -339,6 +360,12 @@ interface AnthropicStreamState {
   accumulated: string
   modelSeen: string | null
   sawError: boolean
+  // task 06-08-chat 需求 5 — extended-thinking accumulation. `thinkingAccumulated`
+  // grows from `thinking_delta` events (emitted as ThinkingEvent); `thinkingSignature`
+  // captures the trailing `signature_delta` (kept for多轮 passback in方案 B but not
+  // emitted today). Both stay empty when thinking is off (no thinking blocks arrive).
+  thinkingAccumulated: string
+  thinkingSignature: string
 }
 
 function createStreamState(initialModel: string | null): AnthropicStreamState {
@@ -349,7 +376,9 @@ function createStreamState(initialModel: string | null): AnthropicStreamState {
     outputTokens: 0,
     accumulated: '',
     modelSeen: initialModel,
-    sawError: false
+    sawError: false,
+    thinkingAccumulated: '',
+    thinkingSignature: ''
   }
 }
 
@@ -398,12 +427,31 @@ function processAnthropicEvent(parsed: unknown, state: AnthropicStreamState): Ch
     case 'content_block_delta': {
       const wrap = e as {
         index?: number
-        delta?: { type?: string; text?: string; partial_json?: string }
+        delta?: {
+          type?: string
+          text?: string
+          partial_json?: string
+          thinking?: string
+          signature?: string
+        }
       }
       const delta = wrap.delta
       if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
         state.accumulated += delta.text
         return [{ type: 'chunk', delta: delta.text }]
+      }
+      // task 06-08-chat 需求 5 — extended-thinking deltas. `thinking_delta`
+      // accumulates the reasoning summary + emits a ThinkingEvent (rendered in
+      // a collapsible block, kept out of the answer `content`). `signature_delta`
+      // (one before the block's content_block_stop) is the integrity signature —
+      // stored for多轮 passback (方案 B) but not emitted (no display value).
+      if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+        state.thinkingAccumulated += delta.thinking
+        return [{ type: 'thinking', delta: delta.thinking }]
+      }
+      if (delta?.type === 'signature_delta' && typeof delta.signature === 'string') {
+        state.thinkingSignature = delta.signature
+        return []
       }
       if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
         if (typeof wrap.index === 'number') {
@@ -942,6 +990,47 @@ async function* openaiStream(
   }
 }
 
+/** task 06-08-chat 需求 5 — assemble the Anthropic /v1/messages request body,
+ *  applying the per-turn thinking toggle. Extracted (vs inline) so the
+ *  thinking-vs-model-matrix branch is unit-testable without a fetch mock.
+ *
+ *  When `req.thinking?.enabled`:
+ *    - inject `thinking` by model family — manual `{type:'enabled', budget_tokens}`
+ *      for sonnet (budget < max_tokens), adaptive `{type:'adaptive'}` +
+ *      `output_config.effort` for opus-4-7/4-8 (manual would 400, research §1.1);
+ *    - DROP tools (MVP方案 A取舍, research §6): single-turn end_turn pure-thinking
+ *      展示, avoids the multi-turn thinking-block passback hard constraint (§2.4).
+ *  When off: identical to the legacy body (tools passed through). */
+function buildAnthropicRequestBody(
+  req: ChatStreamRequest,
+  model: string,
+  systemBlocks: AnthropicSystemBlock[],
+  messages: AnthropicMessage[],
+  tools: AnthropicToolBlock[] | undefined
+): Record<string, unknown> {
+  const requestBody: Record<string, unknown> = {
+    model,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    system: systemBlocks,
+    messages,
+    stream: true
+  }
+  if (req.thinking?.enabled) {
+    if (modelSupportsManualThinking(model)) {
+      requestBody.thinking = { type: 'enabled', budget_tokens: THINKING_BUDGET_TOKENS }
+    } else {
+      requestBody.thinking = { type: 'adaptive' }
+      requestBody.output_config = { effort: THINKING_EFFORT }
+    }
+    // MVP: thinking on → no tools (single-turn). 不带 tools 字段（Anthropic rejects
+    // tools:[] 且方案 A 不调工具）。
+    return requestBody
+  }
+  // Sprint 19 — `tools` is omitted when empty (Anthropic rejects `tools: []`).
+  if (tools) requestBody.tools = tools
+  return requestBody
+}
+
 async function* anthropicStream(
   req: ChatStreamRequest,
   platform: ChatModelPlatform
@@ -970,15 +1059,9 @@ async function* anthropicStream(
   }
   req.signal.addEventListener('abort', onParentAbort, { once: true })
 
-  // Sprint 19 — `tools` is omitted when empty (Anthropic rejects `tools: []`).
-  const requestBody: Record<string, unknown> = {
-    model,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    system: systemBlocks,
-    messages,
-    stream: true
-  }
-  if (tools) requestBody.tools = tools
+  // task 06-08-chat 需求 5 — body assembly + thinking toggle delegated to a
+  // testable helper (manual vs adaptive by model; tools dropped when thinking on).
+  const requestBody = buildAnthropicRequestBody(req, model, systemBlocks, messages, tools)
 
   // 3b-1：HTTP fetch（注入 key + x-api-key + anthropic-version + CRS UA）下沉 platform.llmFetch
   // （anthropic protocol → /v1/messages）。key 缺失 → throw E_NO_LLM_KEY；fetch 失败 → throw。
@@ -1147,6 +1230,9 @@ export const __testing = {
   createStreamState,
   processAnthropicEvent,
   isAnthropicModel,
+  // task 06-08-chat 需求 5 — extended-thinking request-body matrix surface.
+  modelSupportsManualThinking,
+  buildAnthropicRequestBody,
   // Sprint 19 §D #4 — OpenAI path test surface.
   flattenSystemBlocksToText,
   buildOpenAiMessages,

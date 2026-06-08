@@ -23,6 +23,18 @@ export interface ChunkEvent {
   delta: string
 }
 
+/** task 06-08-chat 需求 5 — extended-thinking delta (Claude extended thinking,
+ *  Anthropic `thinking_delta`). A separate event from `chunk` so downstream
+ *  consumers (harness forward / useEmailChat onStream / MessageList render)
+ *  keep the model's reasoning summary out of the canonical answer `content`
+ *  — it accumulates into `ChatMessage.thinking` and renders in a collapsible
+ *  block above the answer. Only the custom-api Anthropic path emits it (and
+ *  only when the per-turn thinking toggle is on). */
+export interface ThinkingEvent {
+  type: 'thinking'
+  delta: string
+}
+
 /** A tool call the backend dispatched (Notion query, mail fetch, etc.).
  *  Rendered as a mono "log line" in the UI per DESIGN.md §6.3. */
 export interface ToolCallEvent {
@@ -118,6 +130,7 @@ export interface PendingConfirmationEvent {
 
 export type ChatStreamEvent =
   | ChunkEvent
+  | ThinkingEvent
   | ToolCallEvent
   | ToolUseEvent
   | ToolResultEvent
@@ -185,6 +198,14 @@ export interface AnthropicHistoryMessage {
   content: string | AnthropicContentBlock[]
 }
 
+/** task 06-08-chat 需求 5 — per-turn extended-thinking options. Threaded
+ *  ChatStartOpts → dispatcher → harness → ChatStreamRequest. MVP carries only
+ *  `enabled`; budget_tokens (manual sonnet) / effort (adaptive opus) use
+ *  hardcoded defaults in the custom-api backend (research §5.3). */
+export interface ThinkingOptions {
+  enabled: boolean
+}
+
 export interface ChatStreamRequest {
   /** Sequential chat history including the just-inserted user message
    *  the orchestrator wants the backend to respond to. The backend
@@ -213,6 +234,14 @@ export interface ChatStreamRequest {
    *  iterations within one user turn. Undefined → fall back to translating
    *  `history: ChatMessage[]` via the backend's own builder (legacy path). */
   iterHistory?: AnthropicHistoryMessage[]
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle. When
+   *  `enabled`, the custom-api Anthropic path injects the `thinking` request
+   *  param (manual for sonnet / adaptive+effort for opus) and emits
+   *  ThinkingEvent deltas. MVP取舍: thinking on → tools are NOT passed
+   *  upstream (single-turn end_turn, avoids the multi-turn thinking-block
+   *  passback hard constraint, research §2.4 / §6 方案 A). Undefined/off →
+   *  identical to today. */
+  thinking?: ThinkingOptions
 }
 
 export interface ChatBackend {

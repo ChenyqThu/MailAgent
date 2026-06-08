@@ -45,7 +45,8 @@ import type {
   ChatBackend,
   ChatStreamEnvelope,
   ChatStreamEvent,
-  EmailContext
+  EmailContext,
+  ThinkingOptions
 } from './types'
 
 export interface HarnessSink {
@@ -70,6 +71,10 @@ export interface RunHarnessArgs {
    *  注入，测试传 mock registry。取代 module-global defaultToolRegistry —— 让 3c renderer 能
    *  注入 http 工具板的 registry，与 main 的 electron 工具板 registry 隔离（per-dispatcher）。 */
   registry: ToolRegistry
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking options. Forwarded to
+   *  backend.stream() so the custom-api Anthropic path injects the thinking
+   *  request param + emits ThinkingEvent deltas. Undefined → thinking off. */
+  thinking?: ThinkingOptions
 }
 
 /** Translate the chat_db ChatMessage[] history into Anthropic's shape for
@@ -191,6 +196,10 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
   const baseHistory = chatHistoryToAnthropic(args.initialHistory)
   const priorTurns: AnthropicHistoryMessage[] = []
   let buffer = '' // running accumulation of every iter's text (DB content)
+  // task 06-08-chat 需求 5 — running accumulation of extended-thinking deltas (DB
+  // thinking column). Stays '' when thinking is off (no ThinkingEvent arrives).
+  // Persisted on终态 via finalizeMessage; streamed live to the UI via forward().
+  let thinkingBuffer = ''
   let lastUsage: { input: number; output: number; cost: number | null } | null = null
   let modelSeen: string | null = args.model
   // V2.1 阶段 3c-4（D4）：harness 也累积 + 持久化 usage/done 的 metadata（对齐被删的
@@ -236,7 +245,11 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
         emailContext: args.emailContext,
         signal: args.ac.signal,
         tools: tools.length > 0 ? tools : undefined,
-        iterHistory: [...baseHistory, ...priorTurns]
+        iterHistory: [...baseHistory, ...priorTurns],
+        // task 06-08-chat 需求 5 — per-turn thinking toggle. The custom-api
+        // Anthropic path reads this to inject the thinking param + drop tools
+        // (MVP single-turn). Other backends ignore it.
+        thinking: args.thinking
       })) {
         if (args.ac.signal.aborted) break
 
@@ -246,6 +259,16 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             buffer += event.delta
             // fire-and-forget 同步直写（electron 零回归）；http debounce 在 impl 侧。
             args.platform.persist.streamContent(args.assistantMessageId, buffer)
+            forward(event)
+            break
+          case 'thinking':
+            // task 06-08-chat 需求 5 — extended-thinking delta. Accumulate into
+            // thinkingBuffer (persisted on终态) + forward live (UI appends to the
+            // collapsible block via useEmailChat onStream). No DB write per-delta:
+            // thinking has no streamContent equivalent — finalizeMessage carries
+            // the full buffer (reload reads it from the DB). Only the custom-api
+            // Anthropic path emits this, and only when the thinking toggle is on.
+            thinkingBuffer += event.delta
             forward(event)
             break
           case 'tool_call': {
@@ -367,7 +390,10 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
         tokensOutput: lastUsage?.output ?? null,
         costUsd: lastUsage?.cost ?? null,
         model: modelSeen,
-        metadata: metadataSeen ? JSON.stringify(metadataSeen) : null
+        metadata: metadataSeen ? JSON.stringify(metadataSeen) : null,
+        // task 06-08-chat 需求 5 — persist the thinking summary so reload renders
+        // it. null when the turn produced no thinking (toggle off / opus skipped).
+        thinking: thinkingBuffer.length > 0 ? thinkingBuffer : null
       })
       return
     }

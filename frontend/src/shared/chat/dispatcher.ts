@@ -30,7 +30,7 @@ import { runHarness } from './harness'
 import { cancelConfirmationsForSession } from './tools/confirmation'
 import type { ChatInfraPlatform } from './platform'
 import type { ToolRegistry } from './tools/registry'
-import type { ChatBackend, ChatStreamEnvelope, EmailContext } from './types'
+import type { ChatBackend, ChatStreamEnvelope, EmailContext, ThinkingOptions } from './types'
 
 export interface StartChatInput {
   emailId: number
@@ -44,6 +44,9 @@ export interface StartChatInput {
    *  E_DISPATCH). Threaded from renderer's activeSessionIdRef after
    *  chat.newSession() creates a fresh row. */
   sessionId?: number | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking options, threaded to
+   *  runHarness → ChatStreamRequest.thinking (custom-api Anthropic path only). */
+  thinking?: ThinkingOptions
 }
 
 export interface StartChatResult {
@@ -66,6 +69,8 @@ export interface EditChatInput {
   backendKind: BackendKind
   backendModel: string | null
   backendAgentPageId: string | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking options for the re-stream. */
+  thinking?: ThinkingOptions
 }
 
 export interface StreamSink {
@@ -119,6 +124,8 @@ interface RunStreamArgs {
   emailContext: EmailContext | null
   ac: AbortController
   sink: StreamSink
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking options (透传 runHarness). */
+  thinking?: ThinkingOptions
 }
 
 export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
@@ -210,7 +217,9 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       agentPageId: input.backendAgentPageId,
       emailContext,
       ac,
-      sink
+      sink,
+      // task 06-08-chat 需求 5 — per-turn thinking toggle.
+      thinking: input.thinking
     }).catch((err) => {
       // 最后防线（codex step5-6 复审 LOW）：runStream 内部已 try/catch/finally 兜底，但
       // catch-path 的 finalizeMessage 自身 reject（persist 完全不可用）时，fire-and-forget
@@ -235,7 +244,8 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       agentPageId,
       emailContext,
       ac,
-      sink
+      sink,
+      thinking
     } = args
     // V2.1 阶段 3c-4（D4）：删 legacy 单遍 + harnessEnabled gate —— 所有 backend 统一走
     // harness。notion-agent（不支持 tool_use 协议；http backend 剥离 tools/iterHistory）首轮
@@ -262,7 +272,9 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
         ac,
         sink,
         platform: deps.platform,
-        registry: deps.toolRegistry
+        registry: deps.toolRegistry,
+        // task 06-08-chat 需求 5 — per-turn thinking toggle.
+        thinking
       })
     } catch (err) {
       if (ac.signal.aborted) {
@@ -362,7 +374,9 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       agentPageId: input.backendAgentPageId,
       emailContext,
       ac,
-      sink
+      sink,
+      // task 06-08-chat 需求 5 — per-turn thinking toggle.
+      thinking: input.thinking
     }).catch((err) => {
       // 最后防线（codex step5-6 复审 LOW）：同 startChat —— 收口 runStream 背景任务在
       // catch-path finalizeMessage 自身 reject 时的未捕获 rejection。

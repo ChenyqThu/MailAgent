@@ -38,6 +38,7 @@ CREATE TABLE ai_chat_messages (
     content TEXT NOT NULL,
     tokens_input INTEGER, tokens_output INTEGER, cost_usd REAL, model TEXT,
     status TEXT NOT NULL, error_message TEXT, metadata TEXT,
+    thinking TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE TABLE chat_tool_call (
@@ -688,6 +689,27 @@ def test_finalize_message_full_patch(chat_client: TestClient) -> None:
     assert got["cost_usd"] == 0.0123
     assert got["model"] == "claude-opus-4-8"
     assert got["metadata"] == '{"thread_id":"t-9"}'
+
+
+def test_finalize_message_persists_thinking(chat_client: TestClient) -> None:
+    """task 06-08-chat 需求 5 — finalizeMessage 写 thinking 列（extended-thinking 摘要），
+    readback 带出。append 不 seed thinking → 初始 null；patch thinking → 持久化 + 读回。"""
+    appended = chat_client.post(
+        f"/api/chat/sessions/{SESSION_ID}/messages",
+        json={"role": "assistant", "content": "", "status": "streaming"},
+    ).json()["data"]
+    # append 不 seed thinking → 返回 + 行均 null（镜像 chat_db.ts appendMessage）。
+    assert appended["thinking"] is None
+    mid = appended["id"]
+    r = chat_client.patch(
+        f"/api/chat/messages/{mid}",
+        json={"status": "complete", "content": "答案", "thinking": "Let me reason about it."},
+    )
+    assert r.status_code == 200
+    got = chat_client.get(f"/api/chat/messages/{mid}").json()["data"]
+    assert got["status"] == "complete"
+    assert got["content"] == "答案"
+    assert got["thinking"] == "Let me reason about it."
 
 
 def test_finalize_message_partial_patch_preserves_unset(chat_client: TestClient) -> None:

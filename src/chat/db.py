@@ -50,6 +50,8 @@ _MESSAGE_PATCH_FIELDS = (
     ("errorMessage", "error_message"),
     ("model", "model"),
     ("metadata", "metadata"),
+    # task 06-08-chat 需求 5 — extended-thinking summary（finalizeMessage 终态写）。
+    ("thinking", "thinking"),
 )
 _TOOL_CALL_PATCH_FIELDS = (
     ("status", "status"),
@@ -330,6 +332,9 @@ class ChatDb:
                 "status": status,
                 "error_message": error_message,
                 "metadata": metadata,
+                # task 06-08-chat 需求 5 — appendMessage 不 seed thinking（finalizeMessage
+                # 终态经 update_message 写）；INSERT 未写该列 → 行 thinking=NULL。镜像 chat_db.ts。
+                "thinking": None,
                 "created_at": now,
                 "updated_at": now,
             }

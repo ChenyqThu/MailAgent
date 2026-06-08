@@ -698,6 +698,12 @@
       "aborted": "Aborted",
       "error": "Error"
     },
+    "thinking": {
+      "label": "Thinking",
+      "toggleOn": "Turn on thinking mode (stream the model's reasoning)",
+      "toggleOff": "Turn off thinking mode",
+      "unsupported": "Thinking mode is only available with Custom API (Claude)"
+    },
     "empty": {
       "noEmail": "Select an email to start the conversation",
       "noMessages": "Ask the AI to summarize, draft a reply, or extract action items",

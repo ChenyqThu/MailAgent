@@ -66,6 +66,12 @@ export interface ChatMessage {
   // `model` column. Null when no extras. NEVER store secrets here —
   // the field crosses the IPC boundary.
   metadata: string | null
+  // task 06-08-chat 需求 5 — extended-thinking summary (Claude extended thinking).
+  // First-class column (not metadata) because it's body-level content: streamed,
+  // rendered in a collapsible block above the answer, and reloaded from the DB.
+  // Null for non-thinking turns + all pre-v6 rows (ALTER ADD default). chat_db.ts
+  // v6 migration adds the column; serve-api db.py mirrors the read/write.
+  thinking: string | null
   created_at: number
   updated_at: number
 }
@@ -99,6 +105,9 @@ export interface UpdateMessagePatch {
   errorMessage?: string | null
   model?: string | null
   metadata?: string | null
+  // task 06-08-chat 需求 5 — finalizeMessage persists the full thinking buffer
+  // here (harness streams it live, writes it on终态). Omitted on non-thinking turns.
+  thinking?: string | null
 }
 
 // Sprint 19 — chat_tool_call row + CRUD inputs.

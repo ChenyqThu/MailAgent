@@ -45,6 +45,9 @@ export interface SendChatInput {
    *  before calling `send()`. */
   senderName?: string | null
   subject?: string | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle. AIChatPanel
+   *  reads its persisted Composer toggle and passes the value at send time. */
+  thinking?: boolean
 }
 
 // Sprint 14 PR B — inline message edit. The caller (MessageList) supplies
@@ -60,6 +63,8 @@ export interface EditChatInput {
   backendKind: ChatBackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle for the re-stream. */
+  thinking?: boolean
 }
 
 export interface ChatError {
@@ -588,6 +593,14 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
             }
             break
           }
+          case 'thinking':
+            // task 06-08-chat 需求 5 — extended-thinking delta. Append to the
+            // message's `thinking` (kept separate from `content`; rendered in the
+            // collapsible block above the answer). Reload reads the finalized
+            // buffer from the DB (harness persists it on终态), so this is the
+            // live-stream-only path. status stays whatever it was (still streaming).
+            updated.thinking = (updated.thinking ?? '') + event.delta
+            break
           case 'usage':
             updated.tokens_input = event.inputTokens
             updated.tokens_output = event.outputTokens
@@ -789,7 +802,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         // the freshly-created session row (set above when forceNewSessionRef
         // was true, or by a previous send()'s setActiveSessionIdState).
         // Ref read (not state) to avoid stale closure across rapid sends.
-        sessionId: activeSessionRef.current
+        sessionId: activeSessionRef.current,
+        // task 06-08-chat 需求 5 — per-turn thinking toggle (AIChatPanel reads it
+        // from the persisted Composer state at send time).
+        thinking: input.thinking
       })
       if (!mountedRef.current || emailIdRef.current !== myEmail) {
         // Email moved on (or hook unmounted) before the dispatcher returned.
@@ -969,7 +985,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         newContent: input.newContent,
         backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
-        backendAgentPageId: input.backendAgentPageId ?? null
+        backendAgentPageId: input.backendAgentPageId ?? null,
+        // task 06-08-chat 需求 5 — per-turn thinking toggle for the re-stream.
+        thinking: input.thinking
       })
       setStreamingMessageId(result.assistantMessageId)
       activeSessionRef.current = result.sessionId

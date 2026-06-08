@@ -68,7 +68,7 @@ export type {
 
 // ── path resolution ─────────────────────────────────────────────────────
 
-const CHAT_DB_VERSION = 5
+const CHAT_DB_VERSION = 6
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -364,6 +364,28 @@ function migrate(db: Database.Database): void {
       throw err
     }
   }
+
+  // v5 → v6 — task 06-08-chat 需求 5. Add ai_chat_messages.thinking: the Claude
+  // extended-thinking summary streamed during a thinking-mode turn, rendered in a
+  // collapsible block above the answer + reloaded from the DB. First-class column
+  // (not metadata) since it's body-level content. Plain additive ALTER → safe in
+  // its own transaction. NULL for all pre-v6 rows + non-thinking turns → renderer
+  // simply doesn't render the thinking block. (chat is a frontend-owned DB with
+  // its own version ladder — does NOT touch backend_lifecycle EXPECTED_DB_VERSION,
+  // which gates sync_store.db only.)
+  if (current < 6) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec('ALTER TABLE ai_chat_messages ADD COLUMN thinking TEXT')
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '6')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
 }
 
 // ── singleton ───────────────────────────────────────────────────────────
@@ -580,6 +602,9 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     status: input.status,
     error_message: input.errorMessage ?? null,
     metadata: input.metadata ?? null,
+    // task 06-08-chat 需求 5 — appendMessage never seeds thinking (finalizeMessage
+    // writes it on终态 via updateMessage); the inserted row column defaults to NULL.
+    thinking: null,
     created_at: now,
     updated_at: now
   }
@@ -621,6 +646,11 @@ export function updateMessage(messageId: number, patch: UpdateMessagePatch): voi
   if (patch.metadata !== undefined) {
     fields.push('metadata = ?')
     params.push(patch.metadata)
+  }
+  // task 06-08-chat 需求 5 — thinking summary (finalizeMessage on a thinking turn).
+  if (patch.thinking !== undefined) {
+    fields.push('thinking = ?')
+    params.push(patch.thinking)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

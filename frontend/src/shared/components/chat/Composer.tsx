@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AtSign, ArrowUp, Cpu, Paperclip, X } from 'lucide-react'
+import { AtSign, ArrowUp, Brain, Cpu, Paperclip, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
@@ -52,6 +52,14 @@ interface Props {
   onModelChange?(model: string): void
   /** Hides the model picker entirely (used by Notion Agent backend kind). */
   modelPickerDisabled?: boolean
+  /** task 06-08-chat 需求 5 — extended-thinking toggle state. When the button
+   *  is on, the next send streams the model's reasoning into a collapsible
+   *  block. Only meaningful for custom-api Anthropic — pass thinkingDisabled
+   *  for notion-agent / OpenAI. */
+  thinkingEnabled?: boolean
+  onToggleThinking?(): void
+  /** Disables the thinking toggle (backend doesn't support extended thinking). */
+  thinkingDisabled?: boolean
   /** Sprint 14 PR D — currently selected @-mention emails. Rendered as a
    *  chip stack above the textarea. AIChatPanel owns the state so the
    *  list survives send (we prepend each chip's subject + snippet to
@@ -84,7 +92,10 @@ export function Composer({
   onRemoveMention,
   attachments = [],
   onAddAttachment,
-  onRemoveAttachment
+  onRemoveAttachment,
+  thinkingEnabled = false,
+  onToggleThinking,
+  thinkingDisabled = false
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -524,6 +535,43 @@ export function Composer({
               </div>
             )}
           </div>
+
+          {/* task 06-08-chat 需求 5 — extended-thinking toggle (Brain icon).
+              On → coral fill (same active idiom as the @-mention button); the
+              next send streams the model's reasoning into a collapsible block.
+              Disabled for notion-agent / OpenAI (no extended-thinking support). */}
+          {onToggleThinking && (
+            <HoverTip
+              text={
+                thinkingDisabled
+                  ? t('chat.thinking.unsupported')
+                  : thinkingEnabled
+                    ? t('chat.thinking.toggleOff')
+                    : t('chat.thinking.toggleOn')
+              }
+              side="top"
+            >
+              <button
+                type="button"
+                disabled={thinkingDisabled}
+                aria-label={t('chat.thinking.label')}
+                aria-pressed={thinkingEnabled}
+                onClick={() => !thinkingDisabled && onToggleThinking()}
+                tabIndex={thinkingDisabled ? -1 : 0}
+                data-disabled={thinkingDisabled ? '' : undefined}
+                className={cn(
+                  'w-7 h-7 rounded-md grid place-items-center transition-colors duration-fast',
+                  thinkingDisabled
+                    ? 'text-ink-fg-3 opacity-50 cursor-not-allowed'
+                    : thinkingEnabled
+                      ? 'text-coral bg-coral/10'
+                      : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-4'
+                )}
+              >
+                <Brain size={13} strokeWidth={2} />
+              </button>
+            </HoverTip>
+          )}
 
           {/* Backend label + ⌘↩ kbd — `ml-auto` shoves the affordance
               icons left and the send button stays at the right edge. */}

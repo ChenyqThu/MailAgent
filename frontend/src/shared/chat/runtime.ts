@@ -188,7 +188,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       backendKind: opts.backendKind,
       backendModel: opts.backendModel ?? null,
       backendAgentPageId: opts.backendAgentPageId ?? null,
-      sessionId: opts.sessionId ?? null
+      sessionId: opts.sessionId ?? null,
+      // task 06-08-chat 需求 5 — public boolean toggle → internal ThinkingOptions
+      // (only carry an object when on; off/undefined → undefined = thinking off).
+      thinking: opts.thinking ? { enabled: true } : undefined
     }
   }
 
@@ -199,7 +202,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       newContent: opts.newContent,
       backendKind: opts.backendKind,
       backendModel: opts.backendModel ?? null,
-      backendAgentPageId: opts.backendAgentPageId ?? null
+      backendAgentPageId: opts.backendAgentPageId ?? null,
+      // task 06-08-chat 需求 5 — same boolean → ThinkingOptions mapping as mapStart.
+      thinking: opts.thinking ? { enabled: true } : undefined
     }
   }
 

@@ -121,6 +121,7 @@ function fakeMessage(over: Partial<ChatMessage>): ChatMessage {
     status: 'complete',
     error_message: null,
     metadata: null,
+    thinking: null,
     created_at: 1_700_000_000_000,
     updated_at: 1_700_000_000_000,
     ...over
@@ -859,6 +860,36 @@ describe('useEmailChat — send + stream', () => {
     })
     await waitFor(() => expect(mockChatListMessages).toHaveBeenCalled())
     await waitFor(() => expect(result.current.messages.length).toBe(1))
+  })
+
+  // task 06-08-chat 需求 5 — thinking deltas append to assistant.thinking (kept
+  // separate from `content`; rendered in the collapsible block above the answer).
+  // Placed at the tail of this block so it doesn't interleave with the
+  // done-refresh timing-sensitive tests above.
+  test('thinking event grows assistant.thinking in place (not content)', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
+      fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101))
+    await waitFor(() => expect(result.current.messages.length).toBe(2))
+
+    act(() => {
+      emitStream({ sessionId: 1, messageId: 101, event: { type: 'thinking', delta: 'Let me ' } })
+    })
+    act(() => {
+      emitStream({ sessionId: 1, messageId: 101, event: { type: 'thinking', delta: 'reason.' } })
+    })
+    // Answer chunk arrives after thinking — must NOT bleed into thinking.
+    act(() => {
+      emitStream({ sessionId: 1, messageId: 101, event: { type: 'chunk', delta: 'Answer.' } })
+    })
+
+    const assistant = result.current.messages.find((m) => m.id === 101)!
+    expect(assistant.thinking).toBe('Let me reason.')
+    expect(assistant.content).toBe('Answer.')
+    expect(assistant.status).toBe('streaming')
   })
 })
 

@@ -1113,6 +1113,10 @@ export interface ChatMessage {
    *  Renderer treats it as opaque — only the backend that wrote it knows
    *  how to read it. See ai_chat.db schema_version 2 (Sprint 4 opus L). */
   metadata: string | null
+  /** task 06-08-chat 需求 5 — Claude extended-thinking summary. Rendered in a
+   *  collapsible block above the answer; null for non-thinking turns + pre-v6
+   *  rows. Mirror of ai_chat.db schema_version 6 (model.ts ChatMessage). */
+  thinking: string | null
   created_at: number
   updated_at: number
 }
@@ -1177,6 +1181,13 @@ export interface ChatChunkEvent {
   type: 'chunk'
   delta: string
 }
+/** task 06-08-chat 需求 5 — extended-thinking delta. Mirror of chat/types
+ *  ThinkingEvent across the IPC/emitter seam. Carries the model's reasoning
+ *  summary increment (rendered in a collapsible block, kept out of `content`). */
+export interface ChatThinkingEvent {
+  type: 'thinking'
+  delta: string
+}
 export interface ChatToolCallEvent {
   type: 'tool_call'
   name: string
@@ -1238,6 +1249,7 @@ export interface ChatErrorEvent {
 
 export type ChatStreamEvent =
   | ChatChunkEvent
+  | ChatThinkingEvent
   | ChatToolCallEvent
   | ChatToolUseEvent
   | ChatToolResultEvent
@@ -1266,6 +1278,11 @@ export interface ChatStartOpts {
    *  row, not the latest pre-existing one. `null` / undefined keeps the
    *  legacy "find or create the latest session for this email" behaviour. */
   sessionId?: number | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle. When true, the
+   *  custom-api Anthropic path streams the model's reasoning summary into a
+   *  collapsible block + (MVP) drops tools for this turn. Undefined/false →
+   *  today's behaviour. Ignored by notion-agent + OpenAI-protocol models. */
+  thinking?: boolean
 }
 
 // Sprint 14 PR B — inline message edit. The renderer sends the session +
@@ -1280,6 +1297,9 @@ export interface ChatEditOpts {
   backendKind: ChatBackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle (parity with
+   *  ChatStartOpts). Applies to the re-streamed assistant reply. */
+  thinking?: boolean
 }
 
 export interface ChatStartResult {
