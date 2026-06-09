@@ -238,12 +238,16 @@ def _config_client(
     monkeypatch: pytest.MonkeyPatch, cfg: object, user_context: str = ""
 ) -> TestClient:
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: cfg)
-    # task 06-08-chat 第二波 Bug B — stub the module-level ContextLoader so /config
-    # tests don't hit Notion. Default "" (not configured); override per-test.
+    # task 06-08-chat 第二波 Bug B — stub the lazy ContextLoader so /config tests
+    # don't hit Notion. Patch the _get_context_loader accessor (the singleton is
+    # lazy / None until first use). Default "" (not configured); override per-test.
     async def _ctx() -> str:
         return user_context
 
-    monkeypatch.setattr("src.api.routers.chat._context_loader.get_markdown", _ctx)
+    class _StubLoader:
+        get_markdown = staticmethod(_ctx)
+
+    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _StubLoader())
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -283,8 +287,11 @@ def test_chat_config_user_context_graceful_on_loader_error(
     async def _boom() -> str:
         raise RuntimeError("notion down")
 
+    class _BoomLoader:
+        get_markdown = staticmethod(_boom)
+
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatConfigStub())
-    monkeypatch.setattr("src.api.routers.chat._context_loader.get_markdown", _boom)
+    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _BoomLoader())
     with TestClient(app, raise_server_exceptions=False) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200

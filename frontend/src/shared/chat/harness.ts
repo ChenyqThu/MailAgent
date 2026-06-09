@@ -260,9 +260,10 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
         signal: args.ac.signal,
         tools: tools.length > 0 ? tools : undefined,
         iterHistory: [...baseHistory, ...priorTurns],
-        // task 06-08-chat 需求 5 — per-turn thinking toggle. The custom-api
-        // Anthropic path reads this to inject the thinking param + drop tools
-        // (MVP single-turn). Other backends ignore it.
+        // task 06-08-chat 需求 5 + 第二波 Bug A — per-turn thinking toggle. The
+        // custom-api Anthropic path reads this to inject the thinking param while
+        // keeping tools (方案 B); thinking blocks are replayed unmodified across
+        // iters via iterHistory. Other backends ignore it.
         thinking: args.thinking
       })) {
         if (args.ac.signal.aborted) break

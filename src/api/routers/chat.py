@@ -30,15 +30,27 @@ from src.api.deps import get_chat_db, get_settings
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.chat.notion_agent import run_notion_agent, sse_encode
 from src.kos.client import KOSClient, KOSError
-from src.llm_agent.context_loader import ContextLoader
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 # task 06-08-chat 第二波 Bug B — reuse the email-classification context page
 # (user profile / Sender Priority / focus projects / 研发课组 / 邮件风格 / 时区)
-# for the custom-api chat system prompt. Module-level singleton preserves the
-# 1800s TTL cache across /config requests (mirrors processor.py持有 ContextLoader)。
-_context_loader = ContextLoader()
+# for the custom-api chat system prompt. Lazy singleton (NOT a module-level
+# instance): ContextLoader imports `src.config.config` at module load, which
+# would bypass deps.py's lazy-config discipline and crash import-time when the
+# required .env is absent (bare worktree / CI import self-check). The singleton
+# still preserves the 1800s TTL cache across /config requests once built.
+_context_loader = None  # type: ignore[var-annotated]
+
+
+def _get_context_loader():
+    """Lazily build the ContextLoader singleton (defers the config import)."""
+    global _context_loader
+    if _context_loader is None:
+        from src.llm_agent.context_loader import ContextLoader
+
+        _context_loader = ContextLoader()
+    return _context_loader
 
 # 3b-1：CRS/Cloudflare 挑剔 UA（mirror custom_api.ts / electron_platform.ts llmFetch 注入侧）。
 _CRS_USER_AGENT = (
@@ -192,7 +204,7 @@ async def chat_config(request: Request):
     # /config — chat still runs, just without the user profile).
     user_context = ""
     try:
-        user_context = await _context_loader.get_markdown()
+        user_context = await _get_context_loader().get_markdown()
     except Exception:  # noqa: BLE001 — context is best-effort; never fail /config
         user_context = ""
     return success_envelope(

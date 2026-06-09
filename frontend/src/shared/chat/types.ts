@@ -256,12 +256,12 @@ export interface ChatStreamRequest {
    *  iterations within one user turn. Undefined → fall back to translating
    *  `history: ChatMessage[]` via the backend's own builder (legacy path). */
   iterHistory?: AnthropicHistoryMessage[]
-  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle. When
-   *  `enabled`, the custom-api Anthropic path injects the `thinking` request
-   *  param (manual for sonnet / adaptive+effort for opus) and emits
-   *  ThinkingEvent deltas. MVP取舍: thinking on → tools are NOT passed
-   *  upstream (single-turn end_turn, avoids the multi-turn thinking-block
-   *  passback hard constraint, research §2.4 / §6 方案 A). Undefined/off →
+  /** task 06-08-chat 需求 5 + 第二波 Bug A — per-turn extended-thinking toggle.
+   *  When `enabled`, the custom-api Anthropic path injects the `thinking` request
+   *  param (manual for sonnet / adaptive+effort for opus) and emits ThinkingEvent
+   *  deltas. 方案 B: tools are STILL passed upstream while thinking is on, so
+   *  thinking + multi-turn tool use coexist — the harness replays the thinking
+   *  blocks unmodified across iters (research §2.4 / §6 方案 B). Undefined/off →
    *  identical to today. */
   thinking?: ThinkingOptions
 }

@@ -32,7 +32,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
@@ -41,6 +41,40 @@ from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 
 router = APIRouter(prefix="/api", tags=["settings"])
+
+
+# ============================================================
+# .env merged read (serve-api does NOT load_dotenv)
+# ============================================================
+# serve-api (src/service.py) never calls load_dotenv — pydantic reads .env into
+# Config fields but does NOT inject os.environ (only main.py local service does).
+# So `os.environ.get()` alone misses .env-only values on the remote serve-api:
+# secrets-status would read false, /prompts ignores LLM_*_PROMPT_PATH, /settings
+# drops CUSTOM_API_ENDPOINT. We merge dotenv_values(env_file) under os.environ
+# (os.environ wins → shell exports override .env, matching pydantic precedence).
+#
+# Read per-request (NOT cached): secrets are dual-written to .env, so a freshly
+# saved value must be reflected immediately — lru_cache would pin a stale map.
+def _load_env_merged() -> Dict[str, str]:
+    """Merge ``.env`` values under ``os.environ`` → single name→value map.
+
+    Uses config.py's ``_resolve_env_file()`` (single source: MAILAGENT_ENV_FILE
+    or DATA_ROOT/.env) so it tracks the same file pydantic reads. ``os.environ``
+    is layered last so shell exports win over .env (pydantic precedence). Graceful:
+    a missing / unparseable env_file falls back to plain ``os.environ``.
+    """
+    file_values: Dict[str, str] = {}
+    try:
+        from dotenv import dotenv_values
+
+        from src.config import _resolve_env_file
+
+        parsed = dotenv_values(_resolve_env_file())
+        # dotenv_values can yield None values for bare `KEY` lines — drop them.
+        file_values = {k: v for k, v in parsed.items() if isinstance(v, str)}
+    except Exception:  # noqa: BLE001 — missing / garbled env_file → os.environ only
+        file_values = {}
+    return {**file_values, **os.environ}
 
 
 # ============================================================
@@ -218,18 +252,19 @@ _SECRET_ENV_NAMES = {
 }
 
 
-def _env_value(name: str) -> str:
-    """读 env var（os.environ；serve-api 启动经 config.py pydantic env_file 注入 .env，
-    且 process.env 也带 shell override）。trim 后判非空。"""
-    return (os.environ.get(name) or "").strip()
+def _env_value(name: str, env_map: Dict[str, str]) -> str:
+    """读 merged env var（os.environ over .env，见 ``_load_env_merged``）。trim 后判非空。"""
+    return (env_map.get(name) or "").strip()
 
 
 @router.get("/settings/secrets-status", dependencies=[Depends(verify_cf_access)])
 async def secrets_status(request: Request):
     """4 个 secret 是否配置（读 .env，非 keychain）。镜像 settings:secrets:status →
-    SecretsStatus（4 boolean，never 返值）。"""
+    SecretsStatus（4 boolean，never 返值）。一次请求读一次 merged env map（4 key 不重复读文件）。"""
+    env_map = _load_env_merged()
     status = {
-        slot: _env_value(env_name) != "" for slot, env_name in _SECRET_ENV_NAMES.items()
+        slot: _env_value(env_name, env_map) != ""
+        for slot, env_name in _SECRET_ENV_NAMES.items()
     }
     return success_envelope(status, request=request, source="config")
 
@@ -250,7 +285,7 @@ async def get_settings_payload(request: Request):
 
     cfg = _get_config()
     user_email = getattr(cfg, "user_email", None) or None
-    custom_endpoint = _env_value("CUSTOM_API_ENDPOINT") or None
+    custom_endpoint = _env_value("CUSTOM_API_ENDPOINT", _load_env_merged()) or None
     payload = {
         "dbPath": None,
         "attachmentDir": None,
@@ -282,12 +317,12 @@ _PROMPT_ENV_KEYS = {
 }
 
 
-def _resolve_prompt_path(slot: str) -> str:
+def _resolve_prompt_path(slot: str, env_map: Dict[str, str]) -> str:
     """复刻 prompts.ts ``resolvePromptPath()`` —— env override / 默认，clamp 在 data root。"""
     from src.config import _resolve_data_root
 
     root = Path(_resolve_data_root()).resolve()
-    override = _env_value(_PROMPT_ENV_KEYS[slot])
+    override = _env_value(_PROMPT_ENV_KEYS[slot], env_map)
     rel = override if override else _PROMPT_DEFAULTS[slot]
     candidate = Path(rel)
     absolute = (candidate if candidate.is_absolute() else root / candidate).resolve()
@@ -305,7 +340,7 @@ def _resolve_prompt_path(slot: str) -> str:
 
 
 def _prompt_info(slot: str) -> dict[str, Any]:
-    path = _resolve_prompt_path(slot)
+    path = _resolve_prompt_path(slot, _load_env_merged())
     return {"slot": slot, "path": path, "exists": os.path.exists(path)}
 
 

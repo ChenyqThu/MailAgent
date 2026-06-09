@@ -318,6 +318,125 @@ def test_get_settings_custom_endpoint(
 
 
 # ============================================================
+# .env merged read — serve-api does NOT load_dotenv (codex HIGH)
+# ============================================================
+# serve-api reads .env via pydantic env_file but never injects os.environ. These
+# tests put values ONLY in a .env file (via MAILAGENT_ENV_FILE) and DO NOT
+# setenv the business keys → simulate the real remote serve-api: value lives in
+# the file, not in os.environ. _load_env_merged must still surface them.
+def _clear_business_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure tested keys are absent from os.environ so the .env file is the
+    only source (real repo .env / shell exports don't mask the assertion)."""
+    for k in (
+        "MAILAGENT_CLI_API_KEY",
+        "LLM_API_KEY",
+        "LLM_TRANSLATE_API_KEY",
+        "CUSTOM_API_KEY",
+        "CUSTOM_API_ENDPOINT",
+        "LLM_INBOX_PROMPT_PATH",
+        "LLM_SENT_PROMPT_PATH",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_secrets_status_reads_env_file_only(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Secrets present ONLY in the .env file (not os.environ) → status true.
+
+    Mirrors serve-api: no load_dotenv, so os.environ.get() alone would read
+    false. _load_env_merged(dotenv_values(env_file)) must surface them.
+    """
+    _clear_business_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "MAILAGENT_CLI_API_KEY=cli-from-file\n"
+        "LLM_API_KEY=llm-from-file\n"
+        # LLM_TRANSLATE_API_KEY / CUSTOM_API_KEY intentionally absent → false
+        "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    r = client.get("/api/settings/secrets-status")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data == {
+        "cliApiKey": True,
+        "llmApiKey": True,
+        "llmTranslateApiKey": False,
+        "customApiKey": False,
+    }
+    # status only — file VALUES never leak into the response.
+    assert "cli-from-file" not in r.text
+
+
+def test_secrets_status_os_environ_overrides_env_file(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """os.environ wins over .env file (pydantic precedence): a shell export of
+    empty string masks a configured file value → false."""
+    _clear_business_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_API_KEY=llm-from-file\n", encoding="utf-8")
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    monkeypatch.setenv("LLM_API_KEY", "")  # shell export empty → overrides file
+    r = client.get("/api/settings/secrets-status")
+    assert r.json()["data"]["llmApiKey"] is False
+
+
+def test_settings_custom_endpoint_from_env_file(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CUSTOM_API_ENDPOINT present ONLY in .env file → customApiEndpoint surfaced.
+
+    CUSTOM_API_ENDPOINT is NOT a config.py field, so get_settings() cfg can't
+    carry it — must come from the merged env_file read.
+    """
+    _clear_business_env(monkeypatch)
+
+    class _StubConfig:
+        user_email = "owner@example.com"
+
+    monkeypatch.setattr("src.api.deps.get_settings", lambda: _StubConfig())
+    env_file = tmp_path / ".env"
+    env_file.write_text("CUSTOM_API_ENDPOINT=https://crs.from-file\n", encoding="utf-8")
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    r = client.get("/api/settings")
+    assert r.status_code == 200
+    assert r.json()["data"]["customApiEndpoint"] == "https://crs.from-file"
+
+
+def test_prompts_env_override_from_env_file(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLM_INBOX_PROMPT_PATH override present ONLY in .env file (not os.environ)
+    → resolved + read. Data root = same tmp_path so the override stays clamped."""
+    _clear_business_env(monkeypatch)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "custom").mkdir()
+    (tmp_path / "custom" / "from_file.md").write_text("inbox via env_file", encoding="utf-8")
+    monkeypatch.setattr("src.config._resolve_data_root", lambda: str(tmp_path))
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_INBOX_PROMPT_PATH=custom/from_file.md\n", encoding="utf-8")
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    r = client.get("/api/prompts/inbox")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["path"].endswith("custom/from_file.md")
+    assert data["content"] == "inbox via env_file"
+
+
+def test_load_env_merged_graceful_when_env_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing env_file → falls back to plain os.environ (never raises)."""
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(tmp_path / "does-not-exist.env"))
+    monkeypatch.setenv("SOME_PROBE_KEY", "probe-value")
+    merged = settings_router._load_env_merged()
+    assert merged.get("SOME_PROBE_KEY") == "probe-value"
+
+
+# ============================================================
 # prompts
 # ============================================================
 @pytest.fixture
