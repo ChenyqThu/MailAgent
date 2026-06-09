@@ -449,6 +449,45 @@ def test_resolve_imap_box_prefers_discovered_sent_folder():
     assert backend._resolve_imap_box("收件箱") == "INBOX"
 
 
+def test_resolve_imap_box_encodes_chinese_custom_folder():
+    """Bug B: 自定义中文文件夹 fallthrough → encode 回 modified-UTF7 原始名.
+
+    真机 internal_id=1000004131 "DMS固件发布" 反向 SELECT 时若原样传中文 →
+    imaplib ascii 编码炸 (position 3-6 = 固件发布)。修后 _resolve_imap_box 返回
+    encode_imap_utf7 后的 ASCII-safe 原始名。
+    """
+    from src.mail.backend.imap_utf7 import encode_imap_utf7
+
+    backend = _make_backend()
+    expected = encode_imap_utf7("DMS固件发布")
+    assert expected == "DMS&VvpO9lPRXgM-"  # 锚定真机样本 (与 multi-folder-sync gate 一致)
+    assert backend._resolve_imap_box("DMS固件发布") == expected
+    # 返回值是纯 ASCII (不会再触发 imaplib 编码炸)
+    backend._resolve_imap_box("DMS固件发布").encode("ascii")
+
+
+def test_resolve_imap_box_does_not_double_encode_probe_sent_folder():
+    """Bug B: probe 探测的 sent_folder (来自 IMAP LIST, 已编码) 不可二次 encode.
+
+    若对 ``DMS&VvpO9lPRXgM-`` 这类已编码名再 encode → ``&`` 被错改为 ``&-`` (变成
+    ``DMS&-VvpO9lPRXgM-``) → SELECT 失败。故 probe 分支提前 return, 原样透传。
+    """
+    backend = _make_backend()
+    # 模拟 probe 探测到一个本身含 & 的已编码 Sent 名 (中文 "已发送邮件" 编码后含 &)
+    encoded_sent = "&XfJSIJZk-"  # 任意已编码名 (含 &), 模拟 LIST 原始名
+    backend.sent_folder = encoded_sent
+    assert backend._resolve_imap_box("发件箱") == encoded_sent  # 原样, 无二次编码
+
+
+def test_resolve_imap_box_pure_ascii_custom_folder_unchanged():
+    """Bug B: 纯 ASCII 自定义名 (如 "Notion"/"Jira") encode 恒等 → 原样返回."""
+    backend = _make_backend()
+    backend.sent_folder = None
+    backend.drafts_folder = None
+    assert backend._resolve_imap_box("Notion") == "Notion"
+    assert backend._resolve_imap_box("Jira") == "Jira"
+
+
 def test_sent_search_criteria_date_floor_then_uid(monkeypatch):
     """首次 (无 davmail 发件箱行) 走 SENTSINCE 日期下限; 有 marker 后走 UID 增量."""
     backend = _make_backend()

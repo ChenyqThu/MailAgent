@@ -36,7 +36,7 @@ from src.mail.backend.imap_client import (
     probe_tcp,
     quote_mailbox,
 )
-from src.mail.backend.imap_utf7 import decode_imap_utf7
+from src.mail.backend.imap_utf7 import decode_imap_utf7, encode_imap_utf7
 from src.mail.backend.types import (
     BackendHealth,
     BackendOrigin,
@@ -443,7 +443,10 @@ class DavMailBackend(IMailBackend):
         fetch_timeout = int(getattr(self.cfg, "davmail_fetch_timeout_sec", 120))
         try:
             with imap_session(self.cfg, timeout=fetch_timeout) as imap:
-                typ, _ = imap.select(imap_box, readonly=True)
+                # quote_mailbox: 含空格的名 (probe "Sent Items" / 编码后的自定义名如
+                # "&mHl27g- &VGhipQ-") 不 quote 会被 imaplib 拆成多 atom → SELECT 失败;
+                # 简单名 quote 无害 (与 _fetch_folder_headers 的既有约定一致)。
+                typ, _ = imap.select(quote_mailbox(imap_box), readonly=True)
                 if typ != "OK":
                     logger.warning(f"[davmail-backend] SELECT {imap_box!r} failed")
                     return None
@@ -575,7 +578,7 @@ class DavMailBackend(IMailBackend):
         imap_box = self._resolve_imap_box(mailbox)
         try:
             with imap_session(self.cfg, timeout=60) as imap:
-                typ, _ = imap.select(imap_box, readonly=True)
+                typ, _ = imap.select(quote_mailbox(imap_box), readonly=True)
                 if typ != "OK":
                     return []
                 uv = _read_uidvalidity_from_select(imap)
@@ -691,7 +694,9 @@ class DavMailBackend(IMailBackend):
         imap_box = self._resolve_imap_box(mailbox or record.get("mailbox"))
         try:
             with imap_session(self.cfg, timeout=30) as imap:
-                typ, _ = imap.select(imap_box, readonly=False)
+                # quote_mailbox: flag 写回同样要 SELECT 对 folder; 中文自定义文件夹的
+                # flag 写回 (真机 internal_id=1000004131) 与拉正文同样会撞编码炸。
+                typ, _ = imap.select(quote_mailbox(imap_box), readonly=False)
                 if typ != "OK":
                     logger.warning(f"[davmail-backend] SELECT {imap_box!r} (rw) failed")
                     return False
@@ -1007,7 +1012,7 @@ class DavMailBackend(IMailBackend):
         imap_box = self._resolve_imap_box(mailbox)
         try:
             with imap_session(self.cfg, timeout=60) as imap:
-                typ, _ = imap.select(imap_box, readonly=True)
+                typ, _ = imap.select(quote_mailbox(imap_box), readonly=True)
                 if typ != "OK":
                     return None
                 imap_uid = self._lookup_uid_by_message_id(imap, message_id)
@@ -1101,18 +1106,36 @@ class DavMailBackend(IMailBackend):
         return 0
 
     def _resolve_imap_box(self, mailbox: Optional[str]) -> str:
-        """中文 mailbox → IMAP folder, 优先用 probe 探测到的实际名。
+        """中文 mailbox → IMAP folder 原始名 (modified-UTF7), 优先用 probe 探测到的实际名。
 
         _mailbox_to_imap 是静态映射 (发件箱→"Sent Items", 草稿→"Drafts"), 但不同
         服务器 Sent/Drafts 实际名可能不同 (如 "已发送邮件")。probe 探测到 self.sent_folder
         / self.drafts_folder 后, 这里优先用探测值, 保证 fetch/flag/read 操作 SELECT 对
         folder (否则发件箱邮件取不到全文)。
+
+        🔴 自定义文件夹 fallthrough: ``_mailbox_to_imap`` 未命中映射时**原样返回显示名**
+        (含中文, 如 "DMS固件发布")。直接 SELECT 中文名 → imaplib 内部按 ASCII 编码 args
+        → ``'ascii' codec can't encode`` 炸 (真机 internal_id=1000004131 fetch/flag 都炸)。
+        这里把 fallthrough 的自定义名用 ``encode_imap_utf7`` 编回 IMAP 原始名 (modified-UTF7,
+        纯 ASCII), 与正向 sync 的 ``_effective_custom_folders`` (白名单存的就是原始名) +
+        ``mail_write._resolve_folder_imap`` 语义对齐。
+
+        ⚠️ **严禁对 probe 值 / 已命中映射的标准名 encode**: probe 的 self.sent_folder /
+        self.drafts_folder 来自 IMAP LIST, **已是编码后的原始名**; 对其二次 encode 会把
+        ``&`` 错改写为 ``&-`` (如 ``DMS&VvpO9lPRXgM-`` → ``DMS&-VvpO9lPRXgM-``) → SELECT 失败。
+        故 probe/映射两分支提前 return, 不经过下面的 encode。纯 ASCII 自定义名 encode 是
+        恒等 (仅转义 ``&``), 故对 ``Notion``/``Jira`` 等也安全。
         """
         if mailbox in ("发件箱", "已发送", "已发送邮件") and self.sent_folder:
             return self.sent_folder
         if mailbox in ("草稿箱", "草稿", "Drafts") and self.drafts_folder:
             return self.drafts_folder
-        return _mailbox_to_imap(mailbox)
+        mapped = _mailbox_to_imap(mailbox)
+        # fallthrough (未命中映射 → 原样返回显示名) 才 encode; 命中映射的标准 IMAP 名
+        # (INBOX / "Sent Items" / "Drafts" 等) 原样透传, 不二次编码。
+        if mapped == mailbox and mapped not in (None, "", "INBOX"):
+            return encode_imap_utf7(mapped)
+        return mapped
 
     def _folder_uidnext(self, imap_folder: str) -> int:
         """STATUS <folder> (UIDNEXT) — 给发件箱变化检测用 (INBOX 走 get_current_max_row_id)."""

@@ -55,7 +55,43 @@ def _require_davmail(cfg: "Config") -> None:
         )
 
 
+def _parse_whitelist_raw(raw: str) -> list[str]:
+    """SYNC_FOLDERS 原始串 → 去重保序的自定义文件夹 imap_name 列表。
+
+    解析语义**必须与 watcher 侧 (DavMailBackend._parse_custom_folders) + serve-api PUT
+    完全一致**: parse_folder_csv_or_json (JSON 数组优先, 兼容旧 CSV) + 排除 INBOX
+    (主路径单独管, 大小写不敏感)。这里抽出接收 raw 串的版本, 供 _current_whitelist
+    热读 .env 复用 (不经过 import-time Config 单例)。
+    """
+    from src.mail.backend.imap_client import parse_folder_csv_or_json
+
+    names = parse_folder_csv_or_json(raw or "")
+    return [n for n in names if n.upper() != "INBOX"]
+
+
 def _current_whitelist(cfg: "Config") -> list[str]:
+    """读当前白名单 —— **热读 .env** (脱离 import-time Config 单例)。
+
+    serve-api 是常驻进程 (「重启后端」只重启 mail-sync 不重启 serve-api), ``cfg`` 来自
+    ``get_settings`` 的 import-time ``Config()`` 单例 → 启动后写入的 SYNC_FOLDERS 永远
+    读不到 (GET /whitelist + discover 的 is_synced 永远空, UI 勾选状态丢失)。修法与 main 侧
+    commit 3f451e4d 对 /api/env 同构: 用 ``dotenv_values(_resolve_env_file())`` 取
+    SYNC_FOLDERS 原始串热解析; key 存在时用它 (即便空串/空数组也尊重, 代表"已清空"),
+    .env 缺该 key 或文件不存在时 fallback 现有 cfg 路径 (dev/test 兼容)。
+    """
+    try:
+        from src.config import _resolve_env_file
+        from dotenv import dotenv_values
+
+        env_file = _resolve_env_file()
+        if env_file:
+            parsed = dotenv_values(env_file)
+            if "SYNC_FOLDERS" in parsed:
+                raw = parsed.get("SYNC_FOLDERS")
+                return _parse_whitelist_raw(raw if isinstance(raw, str) else "")
+    except Exception:  # noqa: BLE001 — .env 不可读/单例构造抛 → fallback cfg 路径
+        pass
+
     from src.mail.backend.davmail_backend import DavMailBackend
 
     return DavMailBackend._parse_custom_folders(cfg)
@@ -128,6 +164,7 @@ async def folder_set_whitelist(
             continue
         seen.add(n)
         names.append(n)
+    new_raw = _json.dumps(names, ensure_ascii=False)
     try:
         env_file = _resolve_env_file()
         from pathlib import Path as _Path
@@ -135,9 +172,16 @@ async def folder_set_whitelist(
         _p = _Path(env_file)
         if not _p.exists():
             _p.touch()
-        _set_key(str(env_file), "SYNC_FOLDERS", _json.dumps(names, ensure_ascii=False), quote_mode="auto")
+        _set_key(str(env_file), "SYNC_FOLDERS", new_raw, quote_mode="auto")
     except Exception as e:  # noqa: BLE001
         raise APIError("E_GENERIC", f".env write failed: {e}", source="sqlite")
+    # 同进程其它 cfg.sync_folders 读者一致性: 写 .env 后顺手把 import-time 单例的
+    # sync_folders 更新为新值 (_current_whitelist 已热读 .env, 此处兜底其它直读 cfg 者)。
+    # pydantic settings 实例可 setattr; 失败 (validation/frozen) 不阻断 (热读已是主路径)。
+    try:
+        cfg.sync_folders = new_raw  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — 单例更新 best-effort, 热读 .env 才是一致性主保证
+        pass
     return success_envelope(
         {"folders": names, "restart_required": True}, request=request, source="sqlite"
     )
