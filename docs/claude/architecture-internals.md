@@ -359,3 +359,28 @@ pm2 restart mail-sync
 - [`docs/dual-backend-phase-abc-handoff.md`](../dual-backend-phase-abc-handoff.md) — Phase A/B/C 实施 handoff
 - [`docs/next-session-handoff.md`](../next-session-handoff.md) — cold-pickup
 - [`docs/roadmap-post-cutover.md`](../roadmap-post-cutover.md) — 短中长期 roadmap
+
+## 多文件夹同步（2026-06，davmail-only）
+
+让用户勾选的自定义 Exchange 文件夹（Jira / Notion / 中文名 DMS固件发布 等）并入 `email_metadata` **主链路**，享受与收件箱**等同**的全部能力（AI 分类 / Notion 同步 / FTS 全文 / 线程 / 标旗·归档·移动·回复·转发）。davmail-only（依赖 IMAP）。
+
+**核心语义**：
+- **配置 `SYNC_FOLDERS`**：白名单是 **JSON 数组**（不用 CSV）—— 中文文件夹名经 modified-UTF7（RFC 3501）编码后 base64 段含逗号（`对话历史记录` = `&W,mL3VOGU,KLsF9V-`），CSV 会被逗号劈碎。`parse_folder_csv_or_json` JSON 优先 + CSV 兜底。空数组 = 零激活。
+- **imap_name vs display_name**：`imap_name` = 存储键（modified-UTF7，IMAP SELECT 用），`display_name` = `decode_imap_utf7(imap_name)`（解码中文，= `email_metadata.mailbox`）。过滤正确性命根：`WHERE mailbox = display_name`（用解码名，不是编码名）。带空格的名字（`Sent Items`）必须 `quote_mailbox` 加引号，imaplib 不自动加。
+- **per-folder marker**：游标从 `email_metadata` 派生 `MAX(imap_uid) WHERE mailbox=label AND backend_origin='davmail'`（`_max_folder_imap_uid`）；uidvalidity 存 `sync_state` KV（`folder_uidvalidity:<imap_name>`）。UIDVALIDITY 变 → 全量重拉（SINCE 窗口）+ message_id merge 去重兜底。不复用 INBOX marker（独立每文件夹）。
+- **取数循环**：`get_new_emails` INBOX 段后追加白名单循环（`_fetch_custom_folder` → `_fetch_new_in_folder` 双模式）+ 每文件夹独立 try（单文件夹失败隔离）+ 窗口（`FOLDER_SYNC_PAST_DAYS`=90）+ 上限（`FOLDER_SYNC_MAX_MESSAGES`=2000，取最新 N 截断防极端大邮箱）。
+- **🔒 隔离不变量**：`SYNC_FOLDERS` 空 → `_custom_folders=[]` → `get_new_emails`/`check_for_changes` 循环整段跳过（零 STATUS 探测，只 SELECT INBOX）= 逐字节同现状。
+- **L2/L3 gate（降噪）**：自定义文件夹默认 **L2-on**（跑 LLM；`FOLDER_LLM_DISABLED` JSON 黑名单可关 `should_skip_llm_for_folder`）/ **L3-off**（默认不推飞书 `should_skip_feishu_for_folder`；`FOLDER_NOTIFY_ENABLED` JSON 白名单 opt-in）。下游 Notion/FTS/线程零改动（mailbox 字段透传，Select 自动建 option，FTS 触发器 mailbox-agnostic）。
+- **写操作泛化**：归档 `archive_inbox_message` 加 `src_imap`（解析邮件当前文件夹，修自定义文件夹归档）+ 新 `move_to_folder(internal_id, dst_imap)`（trash 守卫）+ 文件夹管理 CRUD（`create/rename/delete_folder`，IMAP + `quote_mailbox` + 系统文件夹保护 `_assert_not_system_folder`；delete 走 `delete_email_full` 级联清 body/attachment/FTS + 附件目录；rename UPDATE mailbox 含子前缀）。
+- **取消勾选清理**：`cleanup_local_folder`（删本地 `email_metadata` 级联 + 移白名单，**不碰 Exchange** —— 不调任何 reader）；默认保留，前端 opt-in。
+
+**关键模块**：
+- `src/mail/backend/imap_utf7.py` — `encode/decode_imap_utf7`。
+- `src/mail/backend/imap_client.py` — `list_folders`（`imap.list` + special-use + STATUS 计数 + `build_folder_tree` 层级）/ `quote_mailbox` / `parse_folder_csv_or_json`。
+- `src/mail/backend/davmail_backend.py` — `get_new_emails`/`check_for_changes` 自定义文件夹遍历 + per-folder marker/uidvalidity helper。
+- `src/mail/backend/imap_folder_reader.py` — `FolderImapReader`（IMAP 写底层：list/move/create/delete/draft）；归档/草稿/CRUD 依赖。**注：P6 从已废弃的 `src/folder_sync/` 迁来**。
+- `src/services/mail_write.py` — 归档/移动/CRUD/cleanup service 层。
+
+**P6 清理（旧展示链路废弃）**：旧 `folder_sync` 模块（`FolderSyncWorker` + `folder_email`/`_fts`/`folder_sync_state` 三表，专做"存档/草稿箱纯展示"）**实测从未工作**（打包应用里 worker 从没 tick 一次、表 0 行），是"装了门面没接管线"的半成品。P6 统一删除（DB v23 DROP 三表 + 删老 router/CLI 展示端点 + 删前端老 viewer），存档/草稿箱作为可勾选文件夹并入主链路。`FolderImapReader` 永久保留（迁 `src/mail/backend/`）。
+
+**详见**：[`docs/multi-folder-sync-prd.md`](../multi-folder-sync-prd.md) · [`docs/multi-folder-sync-design.md`](../multi-folder-sync-design.md) · [`docs/multi-folder-sync-handoff.md`](../multi-folder-sync-handoff.md) · 看板 [`docs/multi-folder-sync-matrix.md`](../multi-folder-sync-matrix.md)。

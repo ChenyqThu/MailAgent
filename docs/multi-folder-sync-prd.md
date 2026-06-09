@@ -2,10 +2,10 @@
 
 > 让用户自主勾选并同步 Exchange 邮箱里的多个自定义文件夹，使这些文件夹的邮件享受与收件箱完全一致的能力（AI 分类 / Notion 同步 / 通知 / 线程 / 搜索 / 全套读写），并支持文件夹管理与嵌套层级呈现。
 >
-> **状态**：需求定稿，待设计稿 + 技术设计评审
+> **状态**：✅ **已实现**（P1-P6 全部落地，2026-06-09；davmail 多文件夹取数 + 完整 pipeline + L2/L3 gate + 写操作泛化 + 文件夹 CRUD + onboarding + 旧 folder_sync 展示链路清理；实现语义见 [`architecture-internals.md`「多文件夹同步」](./claude/architecture-internals.md)）
 > **关联**：[技术设计](./multi-folder-sync-design.md) · [实现 handoff](./multi-folder-sync-handoff.md) · [设计 handoff](./multi-folder-sync-design-handoff.md)
 > **决策基线**：完整 pipeline · 完整写操作 · 白名单手动勾选 · davmail-only · **文件夹管理 + 嵌套层级（davmail 支持前提）** · **统一接管并废弃旧 folder_sync 展示链路**（见 §7）
-> **最后更新**：2026-06-08
+> **最后更新**：2026-06-09
 
 ---
 

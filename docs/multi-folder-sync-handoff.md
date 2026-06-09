@@ -2,9 +2,9 @@
 
 > 给**新 session**的开箱即用交付包：串起 PRD / 设计 / mockup + 分阶段落地 + 每阶段 codex review gate + 最终验收 + 文档更新 + 统一提交。
 >
-> **本功能当前状态**：需求 + 设计澄清**已完成**（本 handoff 所在 session 产出），**代码未动**。下一步 = claude design 出 mockup → 新 session 按本图分阶段实现。
+> **本功能当前状态**：✅ **已实现**（P1-P6 全部落地，2026-06-09，每阶段独立 review + 软件全绿）。实现语义见 [`architecture-internals.md`「多文件夹同步」](./claude/architecture-internals.md)，逐阶段验收见 [matrix](./multi-folder-sync-matrix.md) 进度日志。
 > **决策基线**：完整 pipeline · 完整写操作（含回复/转发/移动）· 白名单手动勾选 · davmail-only
-> **最后更新**：2026-06-08
+> **最后更新**：2026-06-09
 
 ---
 
