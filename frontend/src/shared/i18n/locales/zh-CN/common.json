@@ -643,7 +643,7 @@
       "userEdited": "已编辑"
     },
     "toolGroup": {
-      "using": "使用了 {{n}} 个工具",
+      "using": "使用了 {n} 个工具",
       "running": "正在使用工具…"
     },
     "toolStep": {

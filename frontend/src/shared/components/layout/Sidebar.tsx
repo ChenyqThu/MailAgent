@@ -39,6 +39,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
@@ -74,6 +75,22 @@ function renderIcon(icon: React.ReactNode): React.ReactNode {
   })
 }
 
+/** Wrap a nav row in HoverTip when a tooltip `title` is set. Callers pass
+ *  `title={collapsed ? label : undefined}` so the tooltip ONLY appears in
+ *  collapsed (icon-only) mode where the label text is hidden. Native `title=`
+ *  is unreliable in Electron (HoverTip.tsx header) — so when wrapping we drop
+ *  the native attr to avoid a double tooltip. `side="right"` because the nav
+ *  is the leftmost rail; the chip pops toward the content area. Expanded mode
+ *  (title undefined) renders the row bare — no tooltip, as before. */
+function maybeWrapTip(title: string | undefined, child: React.ReactElement): React.ReactElement {
+  if (!title) return child
+  return (
+    <HoverTip text={title} side="right" className="w-full">
+      {child}
+    </HoverTip>
+  )
+}
+
 function NavRow({
   icon,
   label,
@@ -87,12 +104,12 @@ function NavRow({
   // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
   // `.row-selected` capability. Screenreaders announce aria-disabled.
   if (disabled) {
-    return (
+    return maybeWrapTip(
+      title,
       <div
         role="link"
         aria-disabled="true"
         tabIndex={-1}
-        title={title}
         data-disabled="true"
         className={cn(
           'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
@@ -105,11 +122,11 @@ function NavRow({
       </div>
     )
   }
-  return (
+  return maybeWrapTip(
+    title,
     <button
       type="button"
       onClick={onClick}
-      title={title}
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',

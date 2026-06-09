@@ -640,7 +640,7 @@
       "userEdited": "user-edited"
     },
     "toolGroup": {
-      "using": "Used {{n}} tools",
+      "using": "Used {n} tools",
       "running": "Using tools…"
     },
     "toolStep": {

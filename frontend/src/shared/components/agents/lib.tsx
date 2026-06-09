@@ -127,6 +127,13 @@ export function renderSummary(text: string | undefined, onJump: (id: number) => 
   return parts
 }
 
+// task 06-08-chat Bug 2 — top whitespace reserved above the jump target. The
+// report detail view (ReportsTab ReportDetailView) has a `position:sticky;
+// top:0` meta header (~40px: padding 10px + caption). The old 18px landed the
+// target row under that header, hiding its upper half ("跳转过头"). 64 ≈ sticky
+// header ~40px + ~24px breathing room so the row sits fully below the header.
+const SCROLL_TOP_MARGIN = 64
+
 // ─── 滚动到报告内某封 email_item 锚点并高亮闪烁一次 ─────────────────────────
 export function scrollToEmail(id: number): void {
   const el = document.getElementById(`email-${id}`)
@@ -140,7 +147,7 @@ export function scrollToEmail(id: number): void {
   if (c && c !== document.body) {
     const er = el.getBoundingClientRect()
     const cr = c.getBoundingClientRect()
-    c.scrollBy({ top: er.top - cr.top - 18, behavior: 'smooth' })
+    c.scrollBy({ top: er.top - cr.top - SCROLL_TOP_MARGIN, behavior: 'smooth' })
   }
   el.classList.remove('email-flash')
   void el.offsetWidth

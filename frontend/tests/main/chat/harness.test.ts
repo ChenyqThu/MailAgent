@@ -196,6 +196,20 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
     // Event stream: chunks + tool_use + tool_result + done events all forwarded.
     expect(sink.events.some((e) => e.type === 'tool_use')).toBe(true)
     expect(sink.events.some((e) => e.type === 'tool_result')).toBe(true)
+
+    // task 06-08-chat Bug 4 — across a MULTI-ITER turn (iter-1 ends in a
+    // tool_use-stopReason done, iter-2 ends in an end_turn done), the harness
+    // forwards EXACTLY ONE done to the sink. The intermediate iter's done is
+    // swallowed (forwarding it would prematurely clear streamingMessageId /
+    // show the footer mid-turn). The single terminal done carries the final
+    // stopReason + the cross-iter accumulated content.
+    const doneEvents = sink.events.filter((e) => e.type === 'done')
+    expect(doneEvents).toHaveLength(1)
+    expect(doneEvents[0]).toMatchObject({
+      type: 'done',
+      stopReason: 'end_turn',
+      finalContent: 'Let me check. Done — echoed back.'
+    })
   })
 
   test('iter-2 backend request carries priorTurns with tool_use + tool_result blocks', async () => {
@@ -373,6 +387,10 @@ describe('runHarness — extended thinking (task 06-08-chat 需求 5)', () => {
       { type: 'thinking', delta: 'Let me ' },
       { type: 'thinking', delta: 'reason about this.' }
     ])
+    // task 06-08-chat Bug 4 — single-iter (end_turn on iter-1) still forwards
+    // the terminal done exactly once (no double-emit from the loop-body case +
+    // the success-exit forward).
+    expect(sink.events.filter((e) => e.type === 'done')).toHaveLength(1)
     // Terminal complete persisted the full thinking buffer + the answer content.
     const row = getMessage(assistantMessageId)
     expect(row?.status).toBe('complete')

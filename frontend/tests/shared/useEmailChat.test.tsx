@@ -327,10 +327,17 @@ describe('useEmailChat — send + stream', () => {
     })
 
     await waitFor(() => expect(result.current.streamingMessageId).toBeNull())
-    const assistant = result.current.messages.find((m) => m.id === 101)!
-    expect(assistant.status).toBe('complete')
-    expect(assistant.content).toBe('so far and final')
-    expect(assistant.tokens_output).toBe(4)
+    // streamingMessageId clears synchronously in the done handler, but the
+    // canonical status/content/tokens land via the async refresh() that the
+    // handler kicks off afterwards. Asserting them synchronously here races the
+    // refresh (flaky: pass/pass/fail) — so poll inside waitFor until the
+    // refetched message is observed. tokens_output===4 is the refresh tell.
+    await waitFor(() => {
+      const assistant = result.current.messages.find((m) => m.id === 101)!
+      expect(assistant.status).toBe('complete')
+      expect(assistant.content).toBe('so far and final')
+      expect(assistant.tokens_output).toBe(4)
+    })
   })
 
   // task 06-08-chat Bug 1 — after the 3c cutover `finalizeMessage` is an
@@ -1756,8 +1763,14 @@ describe('useEmailChat — per-kind session scoping (交付文档 §3.1)', () =>
     // active conversation flips to the notion session.
     rerender({ id: 101, kind: 'notion-agent' })
     await waitFor(() => expect(result.current.activeSessionId).toBe(2))
-    expect(result.current.sessions.map((s) => s.id)).toEqual([2])
-    expect(result.current.messages.map((m) => m.id)).toEqual([200])
+    // sessions re-filters synchronously, but messages load via the async
+    // listMessages(2) that resolves a tick after activeSessionId flips —
+    // asserting them synchronously here races that fetch (flaky). Poll both
+    // inside waitFor until the notion session's messages ([200]) are observed.
+    await waitFor(() => {
+      expect(result.current.sessions.map((s) => s.id)).toEqual([2])
+      expect(result.current.messages.map((m) => m.id)).toEqual([200])
+    })
     // Crucially: still only one listSessions call — the kind switch reused the
     // cached whole-email list instead of re-fetching.
     expect(mockChatListSessions).toHaveBeenCalledTimes(1)

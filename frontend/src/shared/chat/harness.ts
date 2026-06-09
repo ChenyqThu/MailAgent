@@ -355,7 +355,12 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             // task 06-08-chat 第二波 Bug A — capture this iter's thinking blocks so
             // buildAssistantTurnFromIter can replay them (unmodified) in priorTurns.
             if (event.thinkingBlocks) iterThinkingBlocks = event.thinkingBlocks
-            forward(event)
+            // task 06-08-chat Bug 4 — do NOT forward intermediate-iter done events.
+            // A tool-calling iter (stopReason='tool_use') ends its backend stream
+            // with a done, but the harness loop continues (more text/tools follow).
+            // Forwarding it to the renderer would prematurely clear streamingMessageId
+            // → AssistantMessageFooter appears mid-turn, then more content streams in.
+            // The single terminal done is forwarded at the loop's success exit below.
             break
           case 'error':
             forward(event)
@@ -399,11 +404,12 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
 
     // Terminal conditions for the harness loop.
     if (stopReason === 'end_turn' || collected.length === 0) {
+      // 单遍（iter===1）→ finalContent || buffer 对齐被删 legacy（notion-agent finalContent
+      // 已 trim 尾换行）；多轮 → buffer 跨轮累积（finalContent 仅最后一轮、不能替代）。
+      const finalContent = iter === 1 ? lastFinalContent || buffer : buffer
       await args.platform.persist.finalizeMessage(args.assistantMessageId, {
         status: 'complete',
-        // 单遍（iter===1）→ finalContent || buffer 对齐被删 legacy（notion-agent finalContent
-        // 已 trim 尾换行）；多轮 → buffer 跨轮累积（finalContent 仅最后一轮、不能替代）。
-        content: iter === 1 ? lastFinalContent || buffer : buffer,
+        content: finalContent,
         tokensInput: lastUsage?.input ?? null,
         tokensOutput: lastUsage?.output ?? null,
         costUsd: lastUsage?.cost ?? null,
@@ -412,6 +418,18 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
         // task 06-08-chat 需求 5 — persist the thinking summary so reload renders
         // it. null when the turn produced no thinking (toggle off / opus skipped).
         thinking: thinkingBuffer.length > 0 ? thinkingBuffer : null
+      })
+      // task 06-08-chat Bug 4 — forward the SINGLE terminal done here (intermediate
+      // tool_use iters no longer forward done; see `case 'done'` above). This fires
+      // once per turn, AFTER finalize, so the renderer clears streamingMessageId /
+      // shows the footer / triggers island aiDraftReady exactly when the turn truly
+      // ends. finalContent uses the SAME expression as the finalize write above.
+      forward({
+        type: 'done',
+        finalContent,
+        model: modelSeen,
+        stopReason,
+        metadata: metadataSeen ?? null
       })
       return
     }
