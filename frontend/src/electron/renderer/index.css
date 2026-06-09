@@ -4313,6 +4313,38 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .email-flash { animation: agents-email-flash 1.6s ease; border-radius: 8px; }
 
+/* ── Chat thinking block — text shimmer (streaming head) + blink caret ──
+   task 06-08-chat PR A. Distinct from the block-skeleton `.shimmer` above:
+   this is a *text* gradient (bg-clip-text) for the "思考中…" head while the
+   model reasons, plus a blinking caret at the streamed thinking tail. Both
+   stop under prefers-reduced-motion (see block below). Tokens from ds (light
+   + .dark). */
+@keyframes chat-think-shimmer { to { background-position: -200% center; } }
+.think-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--ink-fg-2)) 30%,
+    rgb(var(--c-ai)) 55%,
+    rgb(var(--ink-fg-2)) 75%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: chat-think-shimmer 1.5s linear infinite;
+}
+@keyframes chat-think-blink { 50% { opacity: 0; } }
+.think-caret {
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  background: rgb(var(--c-ai));
+  vertical-align: -2px;
+  margin-left: 1px;
+  animation: chat-think-blink 1s steps(2) infinite;
+}
+
 /* 分段控件（报告 cadence 过滤 / 配置排程 + 窗口）。 */
 .seg {
   display: inline-flex;
@@ -4340,5 +4372,14 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .seg button.on { background: rgb(var(--ink-5)); color: rgb(var(--ink-fg)); }
 
 @media (prefers-reduced-motion: reduce) {
-  .spin > *, .shimmer, .email-flash { animation: none !important; }
+  .spin > *, .shimmer, .email-flash, .think-shimmer, .think-caret { animation: none !important; }
+  /* No shimmer sweep → fall back to a plain solid head color (otherwise the
+     bg-clip text would render transparent). */
+  .think-shimmer {
+    background: none;
+    -webkit-text-fill-color: rgb(var(--ink-fg-2));
+    color: rgb(var(--ink-fg-2));
+  }
+  /* Hide the (now non-blinking) caret so it doesn't read as a stuck cursor. */
+  .think-caret { display: none; }
 }

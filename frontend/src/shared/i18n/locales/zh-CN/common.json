@@ -703,6 +703,7 @@
     },
     "thinking": {
       "label": "思考过程",
+      "streaming": "思考中…",
       "toggleOn": "开启思考模式（展示模型推理过程）",
       "toggleOff": "关闭思考模式",
       "unsupported": "思考模式仅支持 Custom API（Claude）"

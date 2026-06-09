@@ -13,7 +13,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Bookmark,
-  Brain,
   Check,
   ChevronRight,
   Copy,
@@ -957,49 +956,71 @@ function AssistantTextWithToolCalls({
   )
 }
 
-/** task 06-08-chat 需求 5 — extended-thinking collapsible block. Renders the
- *  model's reasoning summary (message.thinking) above the answer, default
- *  collapsed. Mirrors ToolCallChip's pure-CSS grid-template-rows 0fr→1fr
- *  collapse (§4.1: grid-rows over GSAP; motion-reduce degrade). min-w-0 keeps
- *  long reasoning lines from forcing the 360px drawer wider (Bug 3 lesson).
- *  Empty thinking → caller doesn't render this (see AssistantBubble). */
-function ThinkingChip({ thinking }: { thinking: string }): React.ReactElement {
+/** task 06-08-chat PR A — extended-thinking block, Claude Cowork style. Renders
+ *  the model's reasoning (message.thinking) above the answer.
+ *
+ *  Borderless (no card): a plain grey toggle head `› 思考过程` with the reasoning
+ *  prose indented under the head text (pl-[18px] = chevron + gap).
+ *
+ *  `active` = thinking is streaming in (set while message.content is still empty;
+ *  the answer hasn't begun). While active: the head reads `思考中…` with a text
+ *  shimmer, the prose is dim + carries a blinking caret, and the body is force-
+ *  shown (open is ignored). When the thinking phase ends (active flips false) the
+ *  block auto-collapses; the user can click the head to re-open and re-read.
+ *
+ *  Collapse uses `display` (hidden ↔ block), NOT grid-template-rows / max-height
+ *  (handoff §7: those drop content in offscreen render / screenshot / PDF).
+ *
+ *  Auto-open/collapse on `active` change uses the adjust-on-prop-change render
+ *  pattern (react.dev / CommandPalette.tsx prevOpen), not a useEffect+setState.
+ *  min-w-0 keeps long reasoning lines from forcing the 360px drawer wider
+ *  (Bug 3 lesson). Empty thinking → caller doesn't render this. */
+function ThinkingBlock({
+  thinking,
+  active
+}: {
+  thinking: string
+  active: boolean
+}): React.ReactElement {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  const reduceMotion = useReducedMotion()
+  // Default open while active (watch the reasoning stream), collapsed once done.
+  const [open, setOpen] = useState(active)
+  const [prevActive, setPrevActive] = useState(active)
+  if (prevActive !== active) {
+    setPrevActive(active)
+    setOpen(active) // active → expand; thinking finished → auto-collapse
+  }
+  // While active the body is force-shown regardless of `open`, and clicking the
+  // head can't hide it (there's nothing to collapse mid-stream).
+  const bodyShown = open || active
   return (
-    <div className="rounded-md border border-ink-border-soft bg-ink-2/40 overflow-hidden min-w-0">
+    <div className="min-w-0">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left hover:bg-ink-fg/[0.03] transition-colors duration-fast"
-        aria-expanded={open}
+        onClick={() => {
+          if (!active) setOpen((o) => !o)
+        }}
+        className="inline-flex items-center gap-1.5 py-0.5 text-left text-ink-fg-2 hover:text-ink-fg-1 transition-colors duration-fast"
+        aria-expanded={bodyShown}
       >
-        <span
-          className="grid place-items-center w-[18px] h-[18px] rounded shrink-0"
-          style={{ background: 'rgb(var(--c-ai) / 0.12)', color: 'rgb(var(--c-ai))' }}
-        >
-          <Brain size={11} strokeWidth={2} />
-        </span>
-        <span className="text-meta text-ink-fg-2">{t('chat.thinking.label')}</span>
         <ChevronRight
-          size={12}
+          size={13}
           className={cn(
-            'ml-auto shrink-0 text-ink-fg-3 transition-transform duration-fast',
-            open && 'rotate-90'
+            'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+            bodyShown && 'rotate-90'
           )}
         />
+        <span className={cn('text-aux', active && !reduceMotion && 'think-shimmer')}>
+          {active ? t('chat.thinking.streaming') : t('chat.thinking.label')}
+        </span>
       </button>
-      <div
-        aria-hidden={!open}
-        className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          <div className="px-2.5 pb-2.5 pt-1 border-t border-ink-border-soft">
-            <pre className="text-micro text-ink-fg-2 whitespace-pre-wrap break-words overflow-x-auto scrollbar-thin font-sans leading-relaxed">
-              {thinking}
-            </pre>
-          </div>
+      <div className={cn('pl-[18px]', bodyShown ? 'block' : 'hidden')} aria-hidden={!bodyShown}>
+        <div className="pt-1 pb-0.5">
+          <pre className="text-aux text-ink-fg-1 whitespace-pre-wrap break-words overflow-x-auto scrollbar-thin font-sans leading-relaxed">
+            {thinking}
+            {active && <span className="think-caret" aria-hidden="true" />}
+          </pre>
         </div>
       </div>
     </div>
@@ -1025,18 +1046,21 @@ function AssistantBubble({
   // in a collapsible block ABOVE the answer (thinking precedes the answer, both in
   // SSE order + reading intuition). Empty → not rendered.
   const thinkingText = message.thinking ?? ''
-  // Empty + streaming: render the thinking pulse instead of an empty bubble. If
-  // the extended-thinking stream has already produced reasoning (thinking mode on,
-  // answer not started yet), surface the collapsible thinking block above the pulse
-  // so the user can watch the reasoning stream in.
+  // Empty + streaming: the thinking phase. If the extended-thinking stream has
+  // already produced reasoning, render the active ThinkingBlock (its shimmer head
+  // already expresses "思考中…", so we drop the separate Loader2 pulse to avoid a
+  // double indicator). If no thinking yet → keep the generic pulse.
   if (message.content.length === 0 && isStreaming) {
     return (
       <div className="space-y-2">
-        {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
-        <div className="flex items-center gap-2 py-1 text-aux text-ink-fg-2">
-          <Loader2 size={12} strokeWidth={2} className="animate-spin" />
-          <span>{t('chat.status.thinking')}</span>
-        </div>
+        {thinkingText.length > 0 ? (
+          <ThinkingBlock thinking={thinkingText} active />
+        ) : (
+          <div className="flex items-center gap-2 py-1 text-aux text-ink-fg-2">
+            <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+            <span>{t('chat.status.thinking')}</span>
+          </div>
+        )}
       </div>
     )
   }
@@ -1104,7 +1128,7 @@ function AssistantBubble({
             {headerMeta}
           </div>
         )}
-        {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
+        {thinkingText.length > 0 && <ThinkingBlock thinking={thinkingText} active={false} />}
         <DraftPreviewCard
           content={message.content}
           recipient={draftHandlers?.recipient ?? null}
@@ -1128,8 +1152,9 @@ function AssistantBubble({
           {headerMeta}
         </div>
       )}
-      {/* task 06-08-chat 需求 5 — extended-thinking block, above the answer. */}
-      {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
+      {/* task 06-08-chat PR A — extended-thinking block, above the answer. Done
+          state → default collapsed, click to re-open. */}
+      {thinkingText.length > 0 && <ThinkingBlock thinking={thinkingText} active={false} />}
       {/* task 06-08-chat Bug 2 — interleave tool chips at their content_offset
           ("text → tool → more text") instead of stacking them all below the
           body. Falls back to body-then-chips when no chip carries an offset

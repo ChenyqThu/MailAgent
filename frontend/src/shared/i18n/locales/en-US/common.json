@@ -700,6 +700,7 @@
     },
     "thinking": {
       "label": "Thinking",
+      "streaming": "Thinking…",
       "toggleOn": "Turn on thinking mode (stream the model's reasoning)",
       "toggleOff": "Turn off thinking mode",
       "unsupported": "Thinking mode is only available with Custom API (Claude)"

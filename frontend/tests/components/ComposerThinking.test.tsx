@@ -3,8 +3,8 @@
 // task 06-08-chat 需求 5 — Composer extended-thinking toggle coverage.
 // The thinking toggle button is the new user-facing control (renders only when
 // onToggleThinking is provided; coral-active when on; disabled for non-custom-api).
-// Render-level coverage of the button states + click callback (the ThinkingChip
-// render in MessageList is a trivial `thinking.length > 0 && <ThinkingChip>`
+// Render-level coverage of the button states + click callback (the ThinkingBlock
+// render in MessageList is a trivial `thinking.length > 0 && <ThinkingBlock>`
 // conditional; the thinking DATA path is covered by custom_api / harness /
 // useEmailChat / chat_db suites).
 
