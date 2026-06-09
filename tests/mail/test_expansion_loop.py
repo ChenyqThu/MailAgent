@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
@@ -13,6 +12,17 @@ import pytest
 
 
 BJ_TZ = ZoneInfo("Asia/Shanghai")
+
+
+@pytest.fixture(autouse=True)
+def _stub_main_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main.py 顶部 import 期会校验 config；为延迟 import 的 EmailNotionSyncApp 提供
+    最小必填 env。用 monkeypatch 逐测试还原，杜绝 os.environ.setdefault 的进程级泄漏
+    （旧写法会污染后续测试文件，如 tests/api 的 env-snapshot 断言）。"""
+    monkeypatch.setenv("NOTION_TOKEN", "test")
+    monkeypatch.setenv("EMAIL_DATABASE_ID", "test")
+    monkeypatch.setenv("USER_EMAIL", "test@example.com")
+    monkeypatch.setenv("MAIL_ACCOUNT_NAME", "test")
 
 
 class FakeSyncStore:
@@ -46,11 +56,7 @@ class FakeSyncStore:
 def _build_app(rows, state=None):
     """构造一个 mock 的 EmailNotionSyncApp 实例（只挂 _run_expansion_tick 需要的属性）."""
     # 延迟 import 以避免顶部 main.py 加载时检查 config
-    import os
-    os.environ.setdefault("NOTION_TOKEN", "test")
-    os.environ.setdefault("EMAIL_DATABASE_ID", "test")
-    os.environ.setdefault("USER_EMAIL", "test@example.com")
-    os.environ.setdefault("MAIL_ACCOUNT_NAME", "test")
+    # （必填 env 由 autouse fixture _stub_main_config_env 在测试运行时提供并逐测试还原）
     from main import EmailNotionSyncApp
 
     app = EmailNotionSyncApp.__new__(EmailNotionSyncApp)
