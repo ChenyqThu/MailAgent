@@ -743,7 +743,12 @@
       "cancel": "Cancel",
       "confirm": "Confirm",
       "confirming": "Confirming…",
-      "failed": "Confirm failed"
+      "failed": "Confirm failed",
+      "tierWrite": "Write",
+      "tierEdit": "Edit",
+      "viewDetails": "View details",
+      "decidedOk": "Authorized · callback received, executing",
+      "decidedNo": "Rejected · no changes made to your mailbox"
     },
     "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
   },

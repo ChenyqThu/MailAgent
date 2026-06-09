@@ -103,6 +103,11 @@ export interface PendingConfirmation {
   /** preview = read-only OK/Cancel; edit = the user MAY edit `input` before
    *  approving (used for email_draft_reply). */
   tier: 'preview' | 'edit'
+  /** task 06-08-chat PR D (§4.3) — once the user decides, the IPC fires
+   *  IMMEDIATELY (闭环不变) but the card lingers ~1.3s showing a "decided"
+   *  banner before being filtered out. This flag drives that banner; absent
+   *  while the card is still awaiting a decision. */
+  resolved?: 'confirmed' | 'rejected'
 }
 
 export interface UseEmailChatReturn {
@@ -1027,11 +1032,20 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     forceNewSessionRef.current = true
   }, [mailApi])
 
-  // Sprint 19 PR-1d.2 — Confirmation dialog reply. Synchronously removes
-  // the entry from `pendingConfirmations` on `ok:true` so the dialog
-  // unmounts without waiting for a render tick. Returns the envelope so
-  // the caller (the dialog component itself) can show an "already
-  // closed" toast on `E_NOT_PENDING`.
+  // Sprint 19 PR-1d.2 — Confirmation dialog reply. The harness IPC fires
+  // FIRST and unblocks the suspended main-process promise (闭环不变); only the
+  // VISUAL removal is deferred.
+  //
+  // task 06-08-chat PR D (§4.3) — instead of filtering the entry out
+  // immediately on `ok:true`, we mark it `resolved` (keeping it in the array)
+  // so ConfirmToolDialog can render a "decided" banner (✓ authorized / ✕
+  // rejected). After ~1.3s the entry is filtered out for real. The IPC call is
+  // unchanged and still awaited up front, so the harness is unblocked the
+  // moment the user clicks — the lingering card is purely cosmetic.
+  //
+  // Cleanup safety: navigation / email-switch / new-session call
+  // `setPendingConfirmations([])`, so a stray timer's filter just no-ops
+  // (the toolUseId is already gone). No clearTimeout needed.
   const confirmTool = useCallback(
     async (
       toolUseId: string,
@@ -1040,7 +1054,16 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     ): Promise<{ ok: true } | { ok: false; code: string; message: string }> => {
       const result = await mailApi.chat.confirmTool(toolUseId, approved, editedInput)
       if (result.ok) {
-        setPendingConfirmations((prev) => prev.filter((p) => p.toolUseId !== toolUseId))
+        // Mark resolved (card lingers showing the decided banner)…
+        setPendingConfirmations((prev) =>
+          prev.map((p) =>
+            p.toolUseId === toolUseId ? { ...p, resolved: approved ? 'confirmed' : 'rejected' } : p
+          )
+        )
+        // …then remove it for real after the banner has been read.
+        setTimeout(() => {
+          setPendingConfirmations((prev) => prev.filter((p) => p.toolUseId !== toolUseId))
+        }, 1300)
       }
       return result
     },

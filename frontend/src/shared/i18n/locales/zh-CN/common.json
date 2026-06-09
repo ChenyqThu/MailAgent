@@ -746,7 +746,12 @@
       "cancel": "拒绝",
       "confirm": "授权",
       "confirming": "授权中…",
-      "failed": "授权失败"
+      "failed": "授权失败",
+      "tierWrite": "写操作",
+      "tierEdit": "可编辑",
+      "viewDetails": "查看详情",
+      "decidedOk": "已授权 · 收到回调，开始执行",
+      "decidedNo": "已拒绝 · 未对邮箱做任何改动"
     },
     "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
   },

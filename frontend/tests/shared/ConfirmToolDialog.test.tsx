@@ -35,13 +35,25 @@ function makePending(overrides: Partial<PendingConfirmation> = {}): PendingConfi
 }
 
 describe('ConfirmToolDialog — preview tier', () => {
-  test('renders tool name + preview banner + JSON dump', () => {
+  test('renders tool name + preview banner; JSON dump is collapsed until "View details"', () => {
     render(<ConfirmToolDialog pending={makePending()} onConfirm={vi.fn()} onCancel={vi.fn()} />)
     expect(screen.getByText(/email_flag/i)).toBeTruthy()
     expect(screen.getByText('Mark email 42 as read')).toBeTruthy()
-    // JSON pre-block shows the input.
-    expect(screen.getByText(/internal_id/)).toBeTruthy()
-    expect(screen.getByText(/is_read/)).toBeTruthy()
+    // task 06-08-chat PR D §4.2 — preview-tier input JSON now starts collapsed
+    // behind a "View details" toggle, so the <pre> is display:hidden initially.
+    const toggle = screen.getByRole('button', { name: /view details/i })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    // The <pre> exists in the DOM but is hidden (display switch, §7).
+    expect(screen.getByText(/internal_id/).closest('pre')?.className).toContain('hidden')
+    // Clicking the toggle reveals it.
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(/internal_id/).closest('pre')?.className).toContain('block')
+  })
+
+  test('renders the tier badge ("Write" for preview / write-class tools)', () => {
+    render(<ConfirmToolDialog pending={makePending()} onConfirm={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.getByText('Write')).toBeTruthy()
   })
 
   test('Confirm click fires onConfirm with undefined (no edits in preview tier)', async () => {
@@ -104,6 +116,13 @@ describe('ConfirmToolDialog — edit tier (email_draft_reply)', () => {
     expect(ta.value).toBe('See you Tuesday.')
   })
 
+  test('renders the "Edit" tier badge and no "View details" toggle', () => {
+    render(<ConfirmToolDialog pending={draftPending()} onConfirm={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.getByText('Edit')).toBeTruthy()
+    // The textarea is the main surface — no collapsed-JSON toggle in edit tier.
+    expect(screen.queryByRole('button', { name: /view details/i })).toBeNull()
+  })
+
   test('Confirm without edits passes undefined (no userEdited flag)', async () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined)
     render(<ConfirmToolDialog pending={draftPending()} onConfirm={onConfirm} onCancel={vi.fn()} />)
@@ -123,6 +142,50 @@ describe('ConfirmToolDialog — edit tier (email_draft_reply)', () => {
       internal_id: 7,
       body_markdown: 'See you Wednesday — Tuesday no good.'
     })
+  })
+})
+
+describe('ConfirmToolDialog — resolved banner (§4.3)', () => {
+  test('confirmed → renders the decided-OK banner, hides the action footer', () => {
+    render(
+      <ConfirmToolDialog
+        pending={makePending({ resolved: 'confirmed' })}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/callback received, executing/i)).toBeTruthy()
+    // Action buttons are gone once decided.
+    expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull()
+  })
+
+  test('rejected → renders the decided-NO banner', () => {
+    render(
+      <ConfirmToolDialog
+        pending={makePending({ resolved: 'rejected' })}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/no changes made to your mailbox/i)).toBeTruthy()
+  })
+
+  test('keyboard shortcuts are inert once resolved (decision already made)', async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined)
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ConfirmToolDialog
+        pending={makePending({ resolved: 'confirmed' })}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />
+    )
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'Enter', metaKey: true })
+    await Promise.resolve()
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(onConfirm).not.toHaveBeenCalled()
   })
 })
 
