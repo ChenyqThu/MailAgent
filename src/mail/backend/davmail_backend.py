@@ -14,7 +14,6 @@ internal_id = AUTOINCREMENT 起点 1_000_000_000 (永不跟 Mail.app ROWID 冲�
 """
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 import time
@@ -33,6 +32,7 @@ from src.mail.backend.imap_client import (
     discover_sent_folder,
     imap_connect,
     imap_session,
+    parse_folder_csv_or_json,
     probe_tcp,
     quote_mailbox,
 )
@@ -275,29 +275,8 @@ class DavMailBackend(IMailBackend):
 
         排除空项 + INBOX (主路径单独管, 避免双拉)。
         """
-        raw = (getattr(cfg, "sync_folders", "") or "").strip()
-        if not raw:
-            return []
-        names: list[str]
-        if raw.startswith("["):
-            try:
-                loaded = json.loads(raw)
-                names = [str(x) for x in loaded] if isinstance(loaded, list) else []
-            except (json.JSONDecodeError, TypeError):
-                names = raw.split(",")   # 退化兼容
-        else:
-            names = raw.split(",")
-        seen: set[str] = set()
-        out: list[str] = []
-        for part in names:
-            name = part.strip()
-            if not name or name.upper() == "INBOX":
-                continue
-            if name in seen:
-                continue
-            seen.add(name)
-            out.append(name)
-        return out
+        names = parse_folder_csv_or_json(getattr(cfg, "sync_folders", "") or "")
+        return [n for n in names if n.upper() != "INBOX"]
 
     def _effective_custom_folders(self) -> list[str]:
         """白名单去掉运行时探测到的系统文件夹 (Sent / Drafts)。

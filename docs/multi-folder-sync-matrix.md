@@ -45,17 +45,20 @@
 **验收**：`pytest tests/mail tests/cli tests/api` → **1166 passed / 75 新测试全绿、零新增失败**（7 预存 calendar/reverse_sync 与本功能无关）+ ruff 全过。真机 e2e：`SYNC_FOLDERS=Notion` 跑真实 davmail → `email_metadata` 出现 `mailbox='Notion'`（5 封）、per-folder 增量二次 poll 不重复（5→5）、uidvalidity 持久化。**codex review（GPT-5.5）：REQUEST CHANGES → 修 3 finding → APPROVE WITH NITS（NIT 已修）**。
 > **codex 复审修复**（3 finding 全闭环）：① SYNC_FOLDERS 改 **JSON 数组**（modified-UTF7 中文名含逗号，如 对话历史记录=`&W,mL3VOGU,KLsF9V-`，逗号分隔会拆坏；CSV 简单名仍兼容）② IMAP STATUS/SELECT **mailbox 加引号**`quote_mailbox()`（含空格名如 `Unsent Messages` 不 quote → `folder not found`；顺带修 Sent="Sent Items" 潜在 bug）③ `_effective_custom_folders()` 运行时过滤 Sent/Drafts + CLI `enable` 拒绝 `is_system`（防双拉）。
 
-## P2 — 下游 pipeline 验证 + 通知/AI gate（L2/L3）⬜　MVP
+## P2 — 下游 pipeline 验证 + 通知/AI gate（L2/L3）✅　MVP
 
 | 能力 | 实现 | 验收 | 状态 |
 |---|---|---|---|
-| Notion 同步（L3） | 零改动验证（Mailbox Select 自动建 option） | 自定义文件夹邮件 Notion 页 Mailbox 字段对 | ⬜ |
-| LLM 分类（L2） | 零改动验证 + per-folder gate（默认开，可关） | 分类正确；gate 可关 | ⬜ |
-| FTS 搜索 | 零改动验证 | `email search` 命中自定义文件夹邮件 | ⬜ |
-| 线程 | 零改动验证 | Parent Item 正确关联 | ⬜ |
-| 通知降噪（L3） | 通知判定加 `mailbox in custom → 默认 skip` | 自定义文件夹新邮件不刷飞书 | ⬜ |
+| Notion 同步（L3） | 零改动（Mailbox Select 自动建 option，mailbox 字段透传） | 真机 e2e：邮件落 `mailbox='Notion'`（P1 已验）；`test_custom_folder_email_saved_with_mailbox` | ✅ |
+| LLM 分类（L2） | per-folder gate：`should_skip_llm_for_folder` + `FOLDER_LLM_DISABLED`（默认开，黑名单可关） | gate 单测（默认跑/黑名单跳/标准邮箱不受影响） | ✅ |
+| FTS 搜索 | 零改动（email_body 触发器自动入 FTS5，mailbox-agnostic） | `test_custom_folder_email_fts_searchable`（真实索引+mailbox 过滤命中/不命中） | ✅ |
+| 线程 | 零改动（thread_id 透传） | `test_custom_folder_thread_id_passthrough` + 列表 mailbox 过滤 | ✅ |
+| 通知降噪（L3） | `should_skip_feishu_for_folder`（自定义文件夹默认 skip）+ `FOLDER_NOTIFY_ENABLED` 白名单可开；插在 `_maybe_notify_feishu` 发件箱过滤后 | gate 单测（自定义默认不通知/收件箱照常/白名单可开） | ✅ |
 
-**验收**：上述 5 项真实数据验证通过。**codex review APPROVE**。（MVP = P1+P2，纯后端 CLI/sqlite 可独立验收）
+DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FOLDERS/FOLDER_NOTIFY_ENABLED/FOLDER_LLM_DISABLED 共用），`_parse_custom_folders` 改 delegate（行为不变）。
+
+**验收**：27 P2 测试全绿，pytest **1452 passed（含 tests/notify）零新增失败** + ruff 全过。MVP = P1+P2 纯后端独立验收。**两轮独立 review**：codex(GPT-5.5) APPROVE WITH NITS → 修 3 finding（① retry 队列也接 L2 gate ② getattr 兜底修 tests/notify 回归 ③ config JSON 描述）→ codex 用量上限不可用 → **fallback opus 4.8 critic 对抗式复审 APPROVE WITH NITS**（NIT-1 存档有意为自定义[PRD D7]+注释、NIT-2 meta=None 补测试、NIT-3 perf 守卫保留）。
+> 🔴 **review 暴露的范围缺口**：L2/L3 gate 改 `new_watcher.py` 会影响 `tests/notify`（之前回归只跑 tests/mail/cli/api 漏了），已纳入回归范围。
 
 ## P3 — 前端配置 + Sidebar（树形）⬜
 
@@ -128,4 +131,5 @@
 |---|---|---|---|
 | 2026-06-08 | — | 需求+设计+mockup+矩阵就绪，goal 待启动 | `f0ceb84` 等 |
 | 2026-06-08 | P1 gate | davmail 前置实测全过：CRUD/嵌套/系统保护全支持，无降级 | — |
-| 2026-06-08 | P1 | 实现完成（imap_utf7/list_folders/SYNC_FOLDERS/per-folder marker+uidvalidity/get_new_emails 多文件夹/DB v22/CLI discover·enable·disable）；75 新测试绿 + 真机 e2e 过 + 零新增回归（1166 passed）；codex REQUEST CHANGES→修 3 finding（JSON 白名单/mailbox quoting/系统文件夹排除）→ APPROVE WITH NITS（NIT 修） | _见 P1 commit_ |
+| 2026-06-08 | P1 | 实现完成（imap_utf7/list_folders/SYNC_FOLDERS/per-folder marker+uidvalidity/get_new_emails 多文件夹/DB v22/CLI discover·enable·disable）；75 新测试绿 + 真机 e2e 过 + 零新增回归（1166 passed）；codex REQUEST CHANGES→修 3 finding（JSON 白名单/mailbox quoting/系统文件夹排除）→ APPROVE WITH NITS（NIT 修） | `22c7f759` |
+| 2026-06-08 | P2 | L3 通知降噪 + L2 LLM gate（per-folder）+ 下游零改动验证（Notion/FTS/线程/mailbox 过滤）+ DRY 抽 parse_folder_csv_or_json；27 测试 + 1452 passed（含 notify）零新增；codex APPROVE WITH NITS→修 3→opus critic APPROVE WITH NITS | 待提交 |

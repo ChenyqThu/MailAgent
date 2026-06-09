@@ -154,6 +154,19 @@ class Config(BaseSettings):
         default=2000, env="FOLDER_SYNC_MAX_MESSAGES",
         description="单个自定义文件夹单次拉取上限（取最新 N 封）。0=不限。",
     )
+    # L2/L3 per-folder gate（按 mailbox 显示名匹配，JSON 数组；PRD §2.3 分层）
+    folder_notify_enabled: str = Field(
+        default="",
+        env="FOLDER_NOTIFY_ENABLED",
+        description='自定义文件夹**默认不触发飞书通知**（L3 降噪）；仅此白名单内的文件夹通知。'
+                    '存 mailbox 显示名（如 ["Jira"]），JSON 数组。空=所有自定义文件夹都不通知。',
+    )
+    folder_llm_disabled: str = Field(
+        default="",
+        env="FOLDER_LLM_DISABLED",
+        description='自定义文件夹**默认跑 LLM 分类**（L2）；此黑名单内的文件夹跳过 LLM（省成本去噪）。'
+                    '存 mailbox 显示名（如 ["Jira","Bugzilla"]），JSON 数组。空=所有自定义文件夹都分类。',
+    )
 
     # 飞书通知配置
     feishu_app_id: str = Field(default="", env="FEISHU_APP_ID", description="飞书应用 App ID")

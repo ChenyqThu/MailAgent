@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import imaplib
+import json
 import re
 import smtplib
 import socket
@@ -308,6 +309,34 @@ _LIST_LINE_RE = re.compile(rb'^\((?P<flags>[^)]*)\)\s+(?P<delim>"[^"]*"|NIL)\s+(
 # 且 收件箱/发件箱 由 SYNC_MAILBOXES 单独管 (不进 SYNC_FOLDERS 白名单)。
 # 注意: \\Archive **不在**此列 —— Archive 是普通可同步文件夹 (用户可勾选)。
 _SYSTEM_SPECIAL_USE = {"\\inbox", "\\sent", "\\drafts", "\\junk", "\\trash"}
+
+
+def parse_folder_csv_or_json(raw: str) -> list[str]:
+    """解析 folder 名列表配置 → 去重保序的 list。
+
+    **JSON 数组优先** (``["Notion","&W,mL3VOGU,KLsF9V-"]``) —— modified-UTF7 名含逗号
+    (base64 段用 ``,`` 代替 ``/``)，逗号分隔会拆坏。非 ``[`` 开头或 JSON 解析失败退回逗号
+    分隔 (兼容旧简单 ASCII 名)。SYNC_FOLDERS / FOLDER_NOTIFY_ENABLED / FOLDER_LLM_DISABLED 共用。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            loaded = json.loads(raw)
+            names = [str(x) for x in loaded] if isinstance(loaded, list) else []
+        except (json.JSONDecodeError, TypeError):
+            names = raw.split(",")
+    else:
+        names = raw.split(",")
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in names:
+        n = part.strip()
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
 
 
 def quote_mailbox(name: str) -> str:

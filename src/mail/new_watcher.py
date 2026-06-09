@@ -43,6 +43,37 @@ from src.repository import (
     EmailRepository,
     build_storage_payloads,
 )
+from src.mail.backend.imap_client import parse_folder_csv_or_json
+
+# 标准邮箱 (非自定义文件夹) —— L2/L3 gate 不影响这些; 自定义文件夹 = mailbox 不在此集合。
+# 注: "存档" **有意**不在此列 —— PRD §7 D7「存档/草稿箱并入白名单走主链路」, 存档作为可同步
+# 自定义文件夹, 享受 L3 默认静默 (归档邮件不该刷飞书, 这正是想要的)。
+_STANDARD_MAILBOXES = frozenset({"收件箱", "发件箱", "已发送", "已发送邮件", "草稿", "草稿箱"})
+
+
+def is_custom_folder_mailbox(mailbox: str) -> bool:
+    """mailbox 是自定义文件夹 (多文件夹同步接入的, 非收件箱/发件箱/草稿)。"""
+    return bool(mailbox) and mailbox not in _STANDARD_MAILBOXES
+
+
+def should_skip_feishu_for_folder(mailbox: str, notify_enabled: frozenset) -> bool:
+    """L3 通知降噪: 自定义文件夹**默认不通知**, 仅 notify_enabled 内的才通知。
+
+    标准邮箱 (收件箱等) 不受影响 (返回 False = 不 skip)。
+    """
+    if not is_custom_folder_mailbox(mailbox):
+        return False
+    return mailbox not in notify_enabled
+
+
+def should_skip_llm_for_folder(mailbox: str, llm_disabled: frozenset) -> bool:
+    """L2 LLM gate: 自定义文件夹**默认跑 LLM**, 仅 llm_disabled 内的才跳过。
+
+    标准邮箱不受影响 (返回 False = 不 skip)。
+    """
+    if not is_custom_folder_mailbox(mailbox):
+        return False
+    return mailbox in llm_disabled
 
 
 def _parse_sync_start_date() -> Optional[datetime]:
@@ -177,6 +208,15 @@ class NewWatcher:
             except Exception as e:
                 logger.warning(f"Failed to enable project-progress detector: {e}")
                 self._progress_detector = None
+
+        # 多文件夹同步 L2/L3 per-folder gate（按 mailbox 显示名匹配，PRD §2.3）。
+        # 自定义文件夹默认: L2 LLM 开 / L3 通知关。空配置 = 默认行为。
+        self._folder_notify_enabled = frozenset(
+            parse_folder_csv_or_json(getattr(settings, "folder_notify_enabled", "") or "")
+        )
+        self._folder_llm_disabled = frozenset(
+            parse_folder_csv_or_json(getattr(settings, "folder_llm_disabled", "") or "")
+        )
 
         # LLM Agent 钩子（需 LLM_AGENT_ENABLED=true 且配置了 API key）
         # ⚠️ 启用前先到 Notion automation 暂停 Email Agent，避免双跑撞车
@@ -746,6 +786,15 @@ class NewWatcher:
         """
         if self._llm_runner is None:
             return
+        # L2 gate: 自定义文件夹默认跑 LLM, FOLDER_LLM_DISABLED 内的跳过 (省成本去噪)。
+        # getattr 兜底: 最小 NewWatcher.__new__ 构造 (部分测试) 不走 __init__ 无此属性。
+        mailbox = getattr(email_obj, "mailbox", "") or ""
+        if should_skip_llm_for_folder(mailbox, getattr(self, "_folder_llm_disabled", frozenset())):
+            logger.debug(
+                f"[llm-hook] skip internal_id={internal_id} mailbox={mailbox!r} "
+                f"(FOLDER_LLM_DISABLED)"
+            )
+            return
         try:
             subject_preview = (getattr(email_obj, "subject", "") or "")[:60]
             logger.debug(
@@ -969,6 +1018,14 @@ class NewWatcher:
                 return
             if mailbox in ("发件箱", "已发送邮件", "已发送"):
                 return
+            # L3 降噪: 自定义文件夹默认不通知 (PRD §2.3); FOLDER_NOTIFY_ENABLED 内的才通知。
+            # getattr 兜底: 最小 NewWatcher.__new__ 构造 (部分测试) 不走 __init__ 无此属性。
+            if should_skip_feishu_for_folder(mailbox, getattr(self, "_folder_notify_enabled", frozenset())):
+                logger.debug(
+                    f"[feishu] skip custom folder internal_id={internal_id} "
+                    f"mailbox={mailbox!r} (L3 降噪; 加 FOLDER_NOTIFY_ENABLED 可开)"
+                )
+                return
 
             email_date = getattr(email_obj, "date", None)
             date_iso = (
@@ -1025,8 +1082,20 @@ class NewWatcher:
         if not ready:
             return
         logger.info(f"[llm-retry] retrying {len(ready)} failed email(s)")
+        llm_disabled = getattr(self, "_folder_llm_disabled", frozenset())
         for row in ready:
             internal_id = row.get("internal_id")
+            # L2 gate: 黑名单文件夹的 retry 也跳过 (与新邮件 dispatch 一致，省成本去噪)。
+            # mailbox 不在 llm_processing 表 → 从 sync_store 按 internal_id 查。
+            if llm_disabled:
+                meta = self.sync_store.get(internal_id)
+                mailbox = (meta or {}).get("mailbox", "") if meta else ""
+                if should_skip_llm_for_folder(mailbox or "", llm_disabled):
+                    logger.debug(
+                        f"[llm-retry] skip internal_id={internal_id} "
+                        f"mailbox={mailbox!r} (FOLDER_LLM_DISABLED)"
+                    )
+                    continue
             try:
                 result = await self._llm_runner.run_for_internal_id(
                     internal_id,
