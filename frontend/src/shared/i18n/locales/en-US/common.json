@@ -1370,7 +1370,7 @@
         "cliMissing": "notion-agent CLI not found",
         "needsAuth": "notion-agent is not authenticated (missing token_v2)",
         "account": "Account",
-        "workspace": "Workspace {{space}}",
+        "workspace": "Workspace {space}",
         "agent": "Bound Agent",
         "agentHelper": "Main agent (personal persona) + workspace Custom Agents; switching writes account.json",
         "agentPlaceholder": "Select agent",
