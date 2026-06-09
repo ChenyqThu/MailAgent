@@ -102,7 +102,11 @@ export function ChatHistoryPopover({
     >
       {/* Header — "{Agent} · Recent" + a New-session shortcut. */}
       <div className="flex items-center gap-1 px-2 pt-1.5 pb-2">
-        <span className="flex-1 text-micro font-mono uppercase tracking-wider text-ink-fg-2 truncate">
+        {/* §14 fix (codex r4) — recentTitle is "{agent} · 最近会话": the localized
+            half is CJK, so this label is SANS, NOT font-mono/uppercase. mono+CJK
+            renders muddy at any size, and text-micro/-meta are English-only
+            tokens — so a plain sans 10px label is the §14-correct treatment. */}
+        <span className="flex-1 text-[10px] text-ink-fg-2 truncate">
           {t('chat.sidebar.recentTitle', { agent: agentLabel })}
         </span>
         <HoverTip text={t('chat.sidebar.newSession')} side="bottom">
@@ -124,7 +128,7 @@ export function ChatHistoryPopover({
       </div>
 
       {sessions.length === 0 ? (
-        <div className="px-3 py-6 text-micro text-ink-fg-3 text-center">
+        <div className="px-3 py-6 text-[10px] text-ink-fg-3 text-center">
           {t('chat.sidebar.empty')}
         </div>
       ) : (
@@ -146,7 +150,7 @@ export function ChatHistoryPopover({
       )}
 
       {/* Footer — the two agents keep separate threads. */}
-      <div className="px-2.5 pt-2 pb-1 mt-1 text-micro text-ink-fg-3 border-t border-ink-border-soft">
+      <div className="px-2.5 pt-2 pb-1 mt-1 text-[10px] text-ink-fg-3 border-t border-ink-border-soft">
         {t('chat.sidebar.notShared')}
       </div>
     </div>
@@ -194,19 +198,23 @@ function HistoryItem({
             active ? 'bg-coral/[0.09]' : 'text-ink-fg-1 hover:bg-ink-1'
           )}
         >
-          {/* task 06-08-chat dogfood r3 — "字体小一号". Item title (a CJK
-              user-message preview / model label) drops text-body(14px)→
-              text-meta(12px), still above the 11px CJK floor (DESIGN.md §14).
-              The header / meta / footer are already at text-micro(11px), the
-              CJK floor, so they hold there (a further step would go sub-11px
-              and blur CJK glyphs). */}
+          {/* task 06-08-chat dogfood r3→r4 — "字体再小一号". Item title (a CJK
+              user-message preview / model label) is SANS at text-micro(11px):
+              r3 dropped body(14)→meta(12), r4 →micro(11). It is NOT font-mono,
+              so CJK stays legible (§14 only forbids CJK in *mono* small text).
+              The header + item-meta carry CJK too (agent label "… · 最近会话",
+              relative time 刚刚/{n}分钟前), so the r4 fix dropped font-mono on
+              those spans as well (see their §14 notes); footer/empty are
+              already sans 10px CJK captions. */}
           <span
-            className={cn('text-meta truncate', active && 'text-coral font-semibold')}
+            className={cn('text-micro truncate', active && 'text-coral font-semibold')}
             title={primary}
           >
             {primary}
           </span>
-          <span className="text-micro font-mono text-ink-fg-3 truncate">
+          {/* §14 fix (codex r4) — `time` is localized (刚刚 / {n} 分钟前 …) = CJK,
+              so the whole meta line is SANS, not font-mono. */}
+          <span className="text-[10px] text-ink-fg-3 truncate">
             {hasPreview ? `${backendLabel} · ${time}` : time}
           </span>
         </button>
