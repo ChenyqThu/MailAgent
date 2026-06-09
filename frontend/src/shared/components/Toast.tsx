@@ -182,6 +182,7 @@ export function ToastContainer(): React.ReactElement | null {
   )
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Toast 离场 reconciliation：每帧 diff prev-frame items vs store，把离场项标 exiting 保留到 slide-out 完成。离场动画状态机本质需 effect+state（非纯 derived）。React Compiler 迁移债。
     setRendered((prev) => {
       // Refresh live entries (progress / detail updates) and detect those
       // that left the store this frame → mark exiting (keep cached toast so

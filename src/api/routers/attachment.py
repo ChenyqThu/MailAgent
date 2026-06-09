@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from src.api.app import APIError, success_envelope
@@ -308,6 +308,101 @@ def _stream_response(
 # ---------------------------------------------------------------------------
 # 端点
 # ---------------------------------------------------------------------------
+
+
+_ATTACHMENT_SEARCH_LIMIT_MAX = 50
+
+
+def _count_attachment_fts_indexed(repo: "EmailRepository") -> int:
+    """``SELECT count(*) FROM email_attachment_fts`` — AttachmentSearchResult.total_indexed 用。
+
+    repo 无现成 helper（同 email.py ``_count_fts_indexed``）；用 repo._connect() 起短命连接。
+    FTS5 表缺失 / 异常 → 0，不让搜索因 count 失败而 500。
+    """
+    import sqlite3
+
+    conn = repo._connect()
+    try:
+        row = conn.execute("SELECT count(*) AS c FROM email_attachment_fts").fetchone()
+        return int(row["c"]) if row else 0
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
+
+
+@router.get("/search", dependencies=[Depends(verify_cf_access)])
+async def search_attachments(
+    request: Request,
+    repo: "EmailRepository" = Depends(get_repository),
+    q: str = Query(..., description="自然语言关键词 或 FTS5 query 语法"),
+    mailbox: Optional[str] = Query(None),
+    since: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    until: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    limit: int = Query(20, ge=1, le=_ATTACHMENT_SEARCH_LIMIT_MAX),
+    raw: bool = Query(False, description="true=直传 FTS5; false(默认)=CJK smart 改写"),
+):
+    """FTS5 搜附件抽取文本（PDF/docx/pptx/xlsx）+ JOIN 邮件上下文（V2.1 3b-4）。
+
+    镜像前端 chat 工具 ``email_search_attachments`` 的后端原语（handlers/attachment.ts
+    searchAttachments → repo.search_attachment_texts）。data = AttachmentSearchResult
+    （前端 types：{items, total_indexed, mode, transformed_query?}）。默认 smart（CJK-aware
+    改写，与前端 smartQueryTransform 同算法）；raw=true 走原 FTS5 syntax。FTS 语法错误 → 空
+    命中（repo 内部吞掉）。HttpChatPlatform.searchAttachments（3b-5）fetch 本端点。
+    """
+    from src.repository.email_repository import smart_query_transform
+
+    effective_query = q if raw else smart_query_transform(q)
+    hits = repo.search_attachment_texts(
+        effective_query,
+        limit=limit,
+        mailbox=mailbox,
+        since_date=since,
+        until_date=until,
+    )
+
+    items = [
+        {
+            "attachment_id": h.attachment_id,
+            "internal_id": h.internal_id,
+            "filename": h.filename,
+            "content_type": h.content_type,
+            "email_subject": h.email_subject,
+            "email_sender": h.email_sender,
+            "email_date": h.email_date,
+            "email_mailbox": h.email_mailbox,
+            "snippet": h.snippet,
+            "rank": h.rank,
+            "notion_page_id": h.notion_page_id,
+            "notion_url": h.notion_url,
+        }
+        for h in hits
+    ]
+
+    mode = "raw" if raw else "smart"
+    total_indexed = _count_attachment_fts_indexed(repo)
+    data: dict[str, Any] = {
+        "items": items,
+        "total_indexed": total_indexed,
+        "mode": mode,
+    }
+    transformed_changed = (not raw) and effective_query != q
+    if transformed_changed:
+        data["transformed_query"] = effective_query
+
+    meta_extra: dict[str, Any] = {
+        "query": q,
+        "mode": mode,
+        "count": len(items),
+        "limit": limit,
+        "total_indexed": total_indexed,
+    }
+    if transformed_changed:
+        meta_extra["transformed_query"] = effective_query
+
+    return success_envelope(
+        data, request=request, source="sqlite", meta_extra=meta_extra
+    )
 
 
 @router.get("/list/{internal_id}", dependencies=[Depends(verify_cf_access)])

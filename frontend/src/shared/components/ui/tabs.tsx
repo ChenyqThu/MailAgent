@@ -74,7 +74,7 @@ export const TabsTrigger = React.forwardRef<
       'data-[orientation=vertical]:data-[state=active]:before:left-0',
       'data-[orientation=vertical]:data-[state=active]:before:inset-y-0',
       'data-[orientation=vertical]:data-[state=active]:before:w-[3px]',
-      'data-[orientation=vertical]:data-[state=active]:before:bg-coral',
+      'data-[orientation=vertical]:data-[state=active]:before:bg-coral/100',
       className
     )}
     {...props}

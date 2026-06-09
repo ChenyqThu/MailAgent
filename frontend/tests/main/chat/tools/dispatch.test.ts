@@ -4,12 +4,12 @@ import { describe, expect, test } from 'vitest'
 import {
   dispatchTools,
   type ToolUseRequest
-} from '../../../../src/electron/main/chat/tools/dispatch'
+} from '../../../../src/shared/chat/tools/dispatch'
 import {
   createToolRegistry,
   type ToolDef,
   type ToolResult
-} from '../../../../src/electron/main/chat/tools/registry'
+} from '../../../../src/shared/chat/tools/registry'
 
 function makeTool(name: string, overrides: Partial<ToolDef> = {}): ToolDef {
   return {

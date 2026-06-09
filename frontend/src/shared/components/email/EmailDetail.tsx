@@ -323,6 +323,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     const cache = translationCacheQ.data
     if (cache && cache.segments.length > 0) {
       autoOnFiredRef.current.add(internalId)
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- cache 命中+同邮件首次自动开译文（ref guard 仅一次）。响应异步 translationCacheQ 数据，effect 合理；render 期间替代会改触 refs 规则（render 写 ref）。React Compiler 迁移债。
       setShowTranslation(true)
     }
   }, [internalId, translationCacheQ.data])

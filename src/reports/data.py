@@ -138,7 +138,7 @@ def fetch_report_briefs(
     db_path: str,
     *,
     window_hours: int = 24,
-    max_emails: int = 80,
+    max_emails: int = 0,
     now: Optional[datetime] = None,
     body_priorities: Optional[List[str]] = None,
 ) -> List[ReportEmailBrief]:
@@ -154,8 +154,6 @@ def fetch_report_briefs(
     未归一化），所以**不能字符串比较**——用 SQLite ``julianday()`` 按真实时刻比
     （它能正确解析 ±HH:MM 偏移转 UTC）。窗口边界传 tz-aware ISO，julianday 同样归一。
     """
-    if max_emails <= 0:
-        return []
     now = now or datetime.now(_BEIJING)
     since_iso = (now - timedelta(hours=window_hours)).isoformat()
     until_iso = now.isoformat()
@@ -216,7 +214,8 @@ def fetch_report_briefs(
         key=lambda b: (is_attention(b), _PRIORITY_RANK.get(b.priority, 0), b.date_received),
         reverse=True,
     )
-    capped = inbound[:max_emails]
+    # max_emails ≤0 = 不限制（取窗口内全部 inbound）；否则按排序取前 N。
+    capped = inbound if max_emails <= 0 else inbound[:max_emails]
     # agentic 日报：给 priority ∈ body_priorities（用户勾选）的邮件预载正文（其余只摘要，AI 按需查）。
     priorities = set(body_priorities or [])
     if priorities:

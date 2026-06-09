@@ -18,7 +18,21 @@ const ACCOUNT_LLM = 'llm-api-key'
 const ACCOUNT_LLM_TRANSLATE = 'llm-translate-api-key'
 const ACCOUNT_CUSTOM_API = 'custom-api-key'
 
+// ad-hoc 签名的 .app 每次 build 签名都变 → keychain item 的 ACL 绑的是旧签名 → 每次读都
+// 弹授权（getSecretsStatus 一次读 4 个 = 一次弹 4 次，极烦）。secret 已经 dual-write 到
+// .env（EnvSecretField）+ bootstrapDotenv 启动把 .env 注入 process.env → 读取改 **env 优先**：
+// env 有值就直接用、根本不碰 keytar（不弹）；env 无才 fallback keytar（兼容未 dual-write 的旧 key）。
+const ENV_BY_ACCOUNT: Record<string, string> = {
+  [ACCOUNT_CLI]: 'MAILAGENT_CLI_API_KEY',
+  [ACCOUNT_LLM]: 'LLM_API_KEY',
+  [ACCOUNT_LLM_TRANSLATE]: 'LLM_TRANSLATE_API_KEY',
+  [ACCOUNT_CUSTOM_API]: 'CUSTOM_API_KEY'
+}
+
 async function readSecret(account: string): Promise<string | null> {
+  const envName = ENV_BY_ACCOUNT[account]
+  const fromEnv = envName ? process.env[envName] : undefined
+  if (fromEnv && fromEnv.length > 0) return fromEnv
   return keytar.getPassword(SERVICE, account)
 }
 async function writeSecret(account: string, value: string): Promise<void> {

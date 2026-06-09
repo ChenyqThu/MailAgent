@@ -7,7 +7,7 @@ import {
   cancelConfirmationsForSession,
   pendingConfirmationCount,
   resolveConfirmation
-} from '../../../../src/electron/main/chat/tools/confirmation'
+} from '../../../../src/shared/chat/tools/confirmation'
 
 afterEach(() => {
   __resetConfirmations()

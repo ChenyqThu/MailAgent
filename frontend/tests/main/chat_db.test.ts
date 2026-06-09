@@ -116,13 +116,27 @@ describe('chat_db — path + schema bootstrap', () => {
     // Sprint 19 (PR-1a): bumped to 3 — chat_tool_call + wiki_pages + wiki_fts + agent_memory_kv.
     // Sprint 19 (bug-fix): bumped to 4 — drop UNIQUE on ai_chat_sessions so
     // newSession() can INSERT a fresh row instead of resurrecting old.
-    expect(ver.value).toBe('4')
+    // task 06-08-chat Bug 2: bumped to 5 — chat_tool_call.content_offset.
+    // task 06-08-chat 需求 5: bumped to 6 — ai_chat_messages.thinking.
+    expect(ver.value).toBe('6')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
     const db = getChatDb()
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
+  })
+
+  test('fresh DB schema includes the v5 chat_tool_call.content_offset column', () => {
+    const db = getChatDb()
+    const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('content_offset')
+  })
+
+  test('fresh DB schema includes the v6 ai_chat_messages.thinking column', () => {
+    const db = getChatDb()
+    const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('thinking')
   })
 
   test('re-opening an existing DB does not re-run migrations (idempotent)', () => {
@@ -133,7 +147,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('4')
+    expect(ver.value).toBe('6')
   })
 
   test('v1-version DB ALTERs in the metadata column on first open (forward migration)', () => {
@@ -184,10 +198,18 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    // Sprint 19 (PR-1a → bug-fix): v1 DB now jumps straight to v4.
-    expect(ver.value).toBe('4')
+    // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
+    // bumped to v5; 需求 5 bumped to v6 → a v1 DB now climbs the whole ladder to v6.
+    expect(ver.value).toBe('6')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
+    // v6 column present after climbing from v1.
+    expect(cols.map((c) => c.name)).toContain('thinking')
+    // v5 column present after climbing from v1.
+    const toolCols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{
+      name: string
+    }>
+    expect(toolCols.map((c) => c.name)).toContain('content_offset')
     // Old data preserved verbatim — the v1-stored thread_id encoding stays
     // in `model`, where notion_agent.extractTurn's backcompat reader picks
     // it up.
@@ -212,6 +234,45 @@ describe('chat_db — path + schema bootstrap', () => {
     db.prepare("UPDATE chat_db_meta SET value = '99' WHERE key = 'schema_version'").run()
     closeChatDb()
     expect(() => getChatDb()).toThrow(/schema is at v99/)
+  })
+
+  // task 06-08-chat (codex LOW-2) — crash-resilience. A migration that committed
+  // the physical v5/v6 columns but crashed before persisting the matching
+  // schema_version would leave the DB at "physical v6 columns + meta v3". On the
+  // next open the old code re-ran ADD COLUMN content_offset/thinking and threw
+  // "duplicate column name". The per-column idempotency guards + the gated v3
+  // meta-write must now climb such a DB to v6 cleanly without re-adding columns.
+  test('re-entry with physical v6 columns but a lagging meta v3 converges to v6 without throwing', () => {
+    // First build a fully-migrated v6 DB.
+    const db = getChatDb()
+    expect(
+      (
+        db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
+          value: string
+        }
+      ).value
+    ).toBe('6')
+    // Simulate the crash window: roll the meta back to v3 while the physical
+    // schema (content_offset + thinking columns, v4 table shape) stays at v6.
+    db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
+    closeChatDb()
+
+    // Re-open: must NOT throw on duplicate ADD COLUMN, and must re-converge to v6.
+    expect(() => getChatDb()).not.toThrow()
+    const reopened = getChatDb()
+    const ver = reopened
+      .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
+      .get() as { value: string }
+    expect(ver.value).toBe('6')
+    // Columns are still present exactly once (no duplication, no loss).
+    const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
+      name: string
+    }>
+    expect(msgCols.filter((c) => c.name === 'thinking').length).toBe(1)
+    const toolCols = reopened.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{
+      name: string
+    }>
+    expect(toolCols.filter((c) => c.name === 'content_offset').length).toBe(1)
   })
 })
 
@@ -649,6 +710,53 @@ describe('chat_db — chat_tool_call (Sprint 19)', () => {
     expect(rows.map((r) => r.tool_use_id)).toEqual(['toolu_001', 'toolu_002'])
   })
 
+  test('appendToolCall round-trips content_offset (task 06-08-chat Bug 2)', () => {
+    const { messageId } = seedAssistantMessage()
+    const row = appendToolCall({
+      messageId,
+      toolUseId: 'toolu_offset',
+      toolName: 'email_search',
+      inputJson: '{}',
+      confirmationTier: 'silent',
+      status: 'running',
+      contentOffset: 17
+    })
+    expect(row.content_offset).toBe(17)
+    const fresh = getToolCallByUseId(messageId, 'toolu_offset')!
+    expect(fresh.content_offset).toBe(17)
+  })
+
+  test('appendToolCall without contentOffset persists NULL (degrade path)', () => {
+    const { messageId } = seedAssistantMessage()
+    const row = appendToolCall({
+      messageId,
+      toolUseId: 'toolu_no_offset',
+      toolName: 'email_get',
+      inputJson: '{}',
+      confirmationTier: 'silent',
+      status: 'running'
+    })
+    expect(row.content_offset).toBeNull()
+    const fresh = getToolCallByUseId(messageId, 'toolu_no_offset')!
+    expect(fresh.content_offset).toBeNull()
+  })
+
+  test('appendToolCall accepts contentOffset of 0 (chip before any text)', () => {
+    const { messageId } = seedAssistantMessage()
+    const row = appendToolCall({
+      messageId,
+      toolUseId: 'toolu_zero',
+      toolName: 'email_get',
+      inputJson: '{}',
+      confirmationTier: 'silent',
+      status: 'running',
+      contentOffset: 0
+    })
+    // 0 must persist as 0, not coerce to NULL (?? guards only null/undefined).
+    expect(row.content_offset).toBe(0)
+    expect(getToolCallByUseId(messageId, 'toolu_zero')!.content_offset).toBe(0)
+  })
+
   test('UNIQUE (message_id, tool_use_id) — duplicate toolUseId on same message throws', () => {
     const { messageId } = seedAssistantMessage()
     appendToolCall({
@@ -805,6 +913,24 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      -- A real v3 DB also has chat_tool_call (created by the v3 migration); the
+      -- v4→v5 ALTER targets it, so the seed must include it (task 06-08-chat).
+      CREATE TABLE chat_tool_call (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+        tool_use_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        input_json TEXT NOT NULL,
+        user_edited_input_json TEXT,
+        output_json TEXT,
+        status TEXT NOT NULL,
+        duration_ms INTEGER,
+        confirmation_tier TEXT NOT NULL,
+        confirmed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (message_id, tool_use_id)
+      );
       INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '3');
       INSERT INTO ai_chat_sessions
         (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
@@ -816,11 +942,11 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     seed.close()
 
     const db = getChatDb()
-    // Schema upgraded to v4.
+    // Schema climbs v3 → v4 → v5 → v6.
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('4')
+    expect(ver.value).toBe('6')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -884,6 +1010,16 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
         role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
         metadata TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
+      -- chat_tool_call must exist for the v4→v5 ALTER (task 06-08-chat Bug 2).
+      CREATE TABLE chat_tool_call (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+        tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+        user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
+        duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE (message_id, tool_use_id)
+      );
       INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '3');
     `)
     seed.close()
@@ -893,6 +1029,133 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
       .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ai_chat_sessions'")
       .all() as Array<{ name: string }>
     expect(indexes.map((i) => i.name)).toContain('idx_sessions_email')
+  })
+})
+
+// task 06-08-chat Bug 2 — v4 → v5 migration adds chat_tool_call.content_offset
+// so the renderer can interleave tool chips at their proposal position in the
+// assistant message body instead of stacking them all below it.
+
+describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () => {
+  test('v4-version DB ALTERs in content_offset (NULL for existing rows) + climbs to v5', () => {
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    // Hand-build a v4 DB (no UNIQUE on sessions; chat_tool_call WITHOUT
+    // content_offset) with one pre-existing tool-call row.
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_id INTEGER NOT NULL,
+        backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api')),
+        backend_model TEXT, backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
+        metadata TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE chat_tool_call (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+        tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+        user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
+        duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE (message_id, tool_use_id)
+      );
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '4');
+      INSERT INTO ai_chat_sessions
+        (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+        VALUES (600, 'custom-api', 'sonnet', NULL, 1000, 1000);
+      INSERT INTO ai_chat_messages
+        (session_id, role, content, status, created_at, updated_at)
+        VALUES (1, 'assistant', 'pre-v5 reply', 'complete', 1000, 1000);
+      INSERT INTO chat_tool_call
+        (message_id, tool_use_id, tool_name, input_json, status, confirmation_tier, created_at, updated_at)
+        VALUES (1, 'toolu_legacy', 'email_search', '{"q":"x"}', 'ok', 'silent', 1000, 1000);
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
+      value: string
+    }
+    // v4 DB now climbs the whole ladder to v6 (content_offset added at v5).
+    expect(ver.value).toBe('6')
+    // Column present, pre-existing row reads NULL (degrade path in renderer).
+    const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('content_offset')
+    const legacy = db
+      .prepare("SELECT content_offset FROM chat_tool_call WHERE tool_use_id = 'toolu_legacy'")
+      .get() as { content_offset: number | null }
+    expect(legacy.content_offset).toBeNull()
+  })
+})
+
+// task 06-08-chat 需求 5 — v5 → v6 migration adds ai_chat_messages.thinking so
+// the renderer can show the Claude extended-thinking summary in a collapsible
+// block. Plain additive ALTER; pre-v6 rows read NULL (no thinking block rendered).
+
+describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
+  test('v5-version DB ALTERs in thinking (NULL for existing rows) + climbs to v6', () => {
+    closeChatDb()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+    const seed = new BetterSqlite3(dbPath)
+    // Hand-build a v5 DB (chat_tool_call WITH content_offset; ai_chat_messages
+    // WITHOUT thinking) carrying one pre-existing assistant message.
+    seed.exec(`
+      CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_id INTEGER NOT NULL,
+        backend_kind TEXT NOT NULL CHECK (backend_kind IN ('notion-agent', 'custom-api')),
+        backend_model TEXT, backend_agent_page_id TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
+        metadata TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE chat_tool_call (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+        tool_use_id TEXT NOT NULL, tool_name TEXT NOT NULL, input_json TEXT NOT NULL,
+        user_edited_input_json TEXT, output_json TEXT, status TEXT NOT NULL,
+        duration_ms INTEGER, confirmation_tier TEXT NOT NULL, confirmed_at INTEGER,
+        content_offset INTEGER,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE (message_id, tool_use_id)
+      );
+      INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '5');
+      INSERT INTO ai_chat_sessions
+        (email_id, backend_kind, backend_model, backend_agent_page_id, created_at, updated_at)
+        VALUES (700, 'custom-api', 'sonnet', NULL, 1000, 1000);
+      INSERT INTO ai_chat_messages
+        (session_id, role, content, status, created_at, updated_at)
+        VALUES (1, 'assistant', 'pre-v6 reply', 'complete', 1000, 1000);
+    `)
+    seed.close()
+
+    const db = getChatDb()
+    const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
+      value: string
+    }
+    expect(ver.value).toBe('6')
+    // Column present, pre-existing row reads NULL (no thinking block in renderer).
+    const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
+    expect(cols.map((c) => c.name)).toContain('thinking')
+    const legacy = db
+      .prepare("SELECT thinking FROM ai_chat_messages WHERE content = 'pre-v6 reply'")
+      .get() as { thinking: string | null }
+    expect(legacy.thinking).toBeNull()
   })
 })
 

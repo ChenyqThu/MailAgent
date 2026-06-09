@@ -3,7 +3,11 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { bootNativeTheme, registerAppearanceIpc } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
-import { registerBackendLifecycle, registerBackendQuitHook } from './backend_lifecycle'
+import {
+  registerBackendLifecycle,
+  registerBackendQuitHook,
+  resolveApiPort
+} from './backend_lifecycle'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
@@ -12,13 +16,8 @@ import { registerFolderHandlers } from './handlers/folder'
 import { registerReportHandlers } from './handlers/report'
 import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
-import { abortAllChatSessions, registerChatHandlers } from './handlers/chat'
-import { registerChatBackend } from './chat/registry'
-import { CustomApiBackend } from './chat/backends/custom_api'
-import { NotionAgentBackend } from './chat/backends/notion_agent'
-// Sprint 19 PR-1d.1 — populate agent harness tool catalog at boot.
-import { defaultToolRegistry } from './chat/tools/registry'
-import { registerBuiltinTools } from './chat/tools/builtin'
+import { registerChatLocalBridge } from './chat_local_bridge'
+import { getChatDb } from './chat_db'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'
 import { registerDraftHandlers } from './handlers/draft'
@@ -122,7 +121,12 @@ app.setName('MailAgent')
 function createWindow(opts: { onboarding?: boolean } = {}): void {
   // onboarding 模式: 用 ?onboarding=1 query 让 renderer main.tsx 渲染配置向导而非主 App
   // (复用 popout 的 ?popout=1 query 同款机制)。完成后 onboarding:complete 会 reload 去掉它。
-  const search = opts.onboarding ? 'onboarding=1' : ''
+  // V2.1 3c-3: 透传 serve-api 端口给 renderer —— ChatRuntime 的 loopback baseUrl
+  // 端口须 = serve-api 实际端口 = chat_local_bridge webRequest filter 端口 (三者
+  // 同源 resolveApiPort)；renderer 进程无 process.env，故经 `?apiPort=` 注入。
+  const params = new URLSearchParams({ apiPort: String(resolveApiPort()) })
+  if (opts.onboarding) params.set('onboarding', '1')
+  const search = params.toString()
   // onboarding 向导用固定小窗 (768×640, 不可缩放, 居中); 主 App 用 1280×800。
   // 尺寸常量集中在 lib/window-config (reloadToMain 进主界面时也据此恢复, 防漂移)。
   // titleBarStyle 两者都保持 hiddenInset (OS 画红绿灯)。
@@ -228,7 +232,8 @@ function createPopoutWindow(emailId: number): void {
   })
   attachExternalLinkGuard(popout.webContents)
 
-  const search = `popout=1&email=${emailId}`
+  // V2.1 3c-3: popout 窗口同样需 apiPort (它也跑 ChatRuntime → loopback serve-api)。
+  const search = `popout=1&email=${emailId}&apiPort=${resolveApiPort()}`
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     popout.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
   } else {
@@ -319,18 +324,20 @@ app.whenReady().then(async () => {
   registerReportHandlers()
   registerAttachmentHandlers()
   registerTranslateHandlers()
-  // Sprint 4 §2.1 — AI chat IPC stream bridge + the two production
-  // backends (Custom API via Anthropic Messages SSE; Notion Agent via
-  // `notion-agent chat --stream` subprocess, agent bound in account.json).
-  registerChatBackend(new CustomApiBackend())
-  registerChatBackend(new NotionAgentBackend())
-  // Sprint 19 PR-1d.1 — populate the agent harness tool registry once at
-  // boot. The harness only consults `defaultToolRegistry` when the
-  // MAILAGENT_AGENT_HARNESS env flag is set, so registering tools here is
-  // safe even when the harness is off — no behavioural change until the
-  // flag flips.
-  registerBuiltinTools(defaultToolRegistry)
-  registerChatHandlers()
+  // V2.1 阶段 3c-4 cutover — chat 引擎全部下沉 renderer（ElectronApi.chat = ChatRuntime 经
+  // loopback serve-api，3c-3）。main 不再持 chat IPC handler / dispatcher / 本地 backend
+  // （custom-api + notion-agent 由 serve-api 接管）。仅保留 ai_chat.db schema bootstrap：
+  // chat_db.ts 是 schema owner（CHAT_DB_VERSION），serve-api ChatDb 绝不建表 → 这里显式
+  // getChatDb() 触发首次打开 + migrate，保证 renderer / serve-api 首次 HTTP 写前表已就位。
+  try {
+    getChatDb()
+  } catch (err) {
+    console.error('[chat] ai_chat.db bootstrap failed — chat 持久化可能不可用', err)
+  }
+  // V2.1 阶段 3c (3c-1) — 本地 renderer 直连 loopback serve-api 的透明 token + CORS
+  // 注入桥。提前铺设 webRequest 拦截器；electron chat 切 ChatRuntime（3c-3）后 renderer
+  // 才真正打 8200。dev 仅注 token（CORS 走 serve-api _DEV_CORS）。
+  registerChatLocalBridge()
   // Sprint 5 §2.2 — Mail.app write commands (createDraft via AppleScript,
   // resync / llm:run / notion:updateFlag via `mailagent` CLI fork).
   registerDraftHandlers()
@@ -462,5 +469,7 @@ app.on('window-all-closed', () => {
 // teardown (`registerCliLifecycle`) isn't the only path cleaning up.
 app.on('before-quit', () => {
   abortAllTranslations()
-  abortAllChatSessions()
+  // V2.1 阶段 3c-4 cutover：chat dispatcher 的 _inflight 现在在 renderer 进程（ChatRuntime），
+  // 随窗口生命周期销毁，main 不再持 → 无 abortAllChatSessions()。notion-agent 子进程串行闸
+  // （drainNotionAgentGate）随 main execa backend 一并删除（serve-api asyncio spawn 接管）。
 })

@@ -16,7 +16,7 @@
 // 用法（popover：单元素，无 backdrop，从右上微展开）：
 //   useExitAnimation(open, { backdrop: false, from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' }, enterDuration: DUR.fast })
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
@@ -71,10 +71,12 @@ export function useExitAnimation<T extends HTMLElement = HTMLDivElement>(
   const [shouldRender, setShouldRender] = useState<boolean>(isOpen)
   const reduce = useReducedMotion()
 
-  // 开启时立刻挂载（下一次 render 元素入 DOM，useGSAP 随即播进场）。
-  useEffect(() => {
-    if (isOpen && !shouldRender) setShouldRender(true)
-  }, [isOpen, shouldRender])
+  // 开启时立刻挂载：render 期间条件 setState（React 官方 "adjusting state during
+  // render"，守卫 isOpen && !shouldRender 防循环），比 effect 少一帧 commit，元素更早
+  // 入 DOM 让同轮 useGSAP 播进场。退场卸载仍在下方 useGSAP 的 onComplete。
+  if (isOpen && !shouldRender) {
+    setShouldRender(true)
+  }
 
   useGSAP(
     () => {

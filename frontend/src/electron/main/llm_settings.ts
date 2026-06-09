@@ -22,10 +22,12 @@ const ACCOUNT_LLM_TRANSLATE = 'llm-translate-api-key'
  * an E_NO_LLM_KEY user-facing error.
  */
 export async function getLlmApiKey(): Promise<string | null> {
-  const fromKey = await keytar.getPassword(SERVICE, ACCOUNT_LLM)
-  if (fromKey && fromKey.length > 0) return fromKey
+  // env 优先（bootstrapDotenv 把 .env 注入 process.env）：避开 ad-hoc 签名导致 keychain
+  // 反复弹授权。env 无才 fallback keytar（兼容未 dual-write 到 .env 的旧 key）。
   const fromEnv = process.env['LLM_API_KEY']
   if (fromEnv && fromEnv.length > 0) return fromEnv
+  const fromKey = await keytar.getPassword(SERVICE, ACCOUNT_LLM)
+  if (fromKey && fromKey.length > 0) return fromKey
   return null
 }
 
@@ -95,9 +97,10 @@ export function getLlmTranslateBaseUrl(): string {
  * dedicated key for translation; null only when the main key is also unset.
  */
 export async function getLlmTranslateApiKey(): Promise<string | null> {
-  const fromKey = await keytar.getPassword(SERVICE, ACCOUNT_LLM_TRANSLATE)
-  if (fromKey && fromKey.length > 0) return fromKey
+  // env 优先（见 getLlmApiKey）。env 无才 fallback keytar，再 fallback 主 LLM key。
   const fromEnv = process.env['LLM_TRANSLATE_API_KEY']
   if (fromEnv && fromEnv.length > 0) return fromEnv
+  const fromKey = await keytar.getPassword(SERVICE, ACCOUNT_LLM_TRANSLATE)
+  if (fromKey && fromKey.length > 0) return fromKey
   return getLlmApiKey()
 }

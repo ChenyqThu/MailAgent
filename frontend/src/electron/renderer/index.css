@@ -616,9 +616,11 @@ mark {
   transition: all 0.12s ease;
   cursor: pointer;
 }
+/* hover = 预选提示 (浅 accent tint + 高亮边框), 与 .cb-on 实心选中态明确区分 —
+ * hover 仅预览, 点击行才真正 toggle 选中 (避免用户误以为 hover 已勾选/取消)。 */
 .cb:hover {
-  border-color: rgb(var(--ink-fg-2));
-  background: rgb(var(--ink-3));
+  border-color: rgb(var(--c-accent) / 0.6);
+  background: rgb(var(--c-accent) / 0.12);
 }
 .cb-on {
   border-color: rgb(var(--c-accent));

@@ -20,19 +20,20 @@ import {
   getOrCreateSession,
   listToolCallsForMessage
 } from '../../../src/electron/main/chat_db'
-import { runHarness } from '../../../src/electron/main/chat/harness'
+import { runHarness } from '../../../src/shared/chat/harness'
+import { testChatPlatform } from './_fixtures/test_chat_platform'
 import {
   createToolRegistry,
   type ToolDef,
   type ToolResult
-} from '../../../src/electron/main/chat/tools/registry'
-import { __resetConfirmations } from '../../../src/electron/main/chat/tools/confirmation'
+} from '../../../src/shared/chat/tools/registry'
+import { __resetConfirmations } from '../../../src/shared/chat/tools/confirmation'
 import type {
   ChatBackend,
   ChatStreamEnvelope,
   ChatStreamEvent,
   ChatStreamRequest
-} from '../../../src/electron/main/chat/types'
+} from '../../../src/shared/chat/types'
 
 let tmpDir: string
 
@@ -78,14 +79,18 @@ function recordingSink(): {
 
 /** A scriptable backend: each entry in `iters` is the event sequence for
  *  one runHarness iteration. The mock advances by index per call. */
-function scriptedBackend(iters: ChatStreamEvent[][]): ChatBackend & { lastReq: ChatStreamRequest | null } {
+function scriptedBackend(
+  iters: ChatStreamEvent[][]
+): ChatBackend & { lastReq: ChatStreamRequest | null } {
   let idx = 0
   const backend = {
     kind: 'custom-api' as const,
     lastReq: null as ChatStreamRequest | null,
     async *stream(req: ChatStreamRequest): AsyncIterable<ChatStreamEvent> {
       backend.lastReq = req
-      const events = iters[idx] ?? [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+      const events = iters[idx] ?? [
+        { type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }
+      ]
       idx++
       for (const e of events) {
         yield e
@@ -164,6 +169,7 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink,
       registry
     })
@@ -176,6 +182,11 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
     expect(rows[0]?.tool_use_id).toBe('toolu_abc')
     expect(rows[0]?.status).toBe('ok')
     expect(JSON.parse(rows[0]?.output_json ?? 'null')).toEqual({ echoed: { q: 'hello' } })
+
+    // task 06-08-chat Bug 2 — content_offset = buffer length when the harness
+    // saw the tool_use, i.e. the length of the text streamed before it
+    // ('Let me check. ' = 14 chars). Drives time-ordered chip interleaving.
+    expect(rows[0]?.content_offset).toBe('Let me check. '.length)
 
     // Assistant message flipped to complete + buffer accumulated across iters.
     const finalMsg = getMessage(assistantMessageId)
@@ -216,6 +227,7 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink: recordingSink(),
       registry
     })
@@ -231,6 +243,303 @@ describe('runHarness — happy path (single tool roundtrip then end_turn)', () =
     expect(Array.isArray(userBlocks)).toBe(true)
     expect(userBlocks?.[0]?.type).toBe('tool_result')
     expect(userBlocks?.[0]?.tool_use_id).toBe('toolu_x')
+  })
+})
+
+describe('runHarness — content_offset (task 06-08-chat Bug 2)', () => {
+  test('offsets track the running buffer across text + multiple tool_use across iters', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'noop',
+        async (): Promise<ToolResult> => ({ ok: true, output: 'r', durationMs: 0 })
+      )
+    )
+    // iter-1: "AAAA" then tool a, then "BB" then tool b (still in iter-1).
+    // iter-2: "CCC" then tool c, then end_turn.
+    // Running buffer at each tool_use:
+    //   a → 4   ("AAAA")
+    //   b → 6   ("AAAA" + "BB")
+    //   c → 9   ("AAAA" + "BB" + "CCC")
+    const backend = scriptedBackend([
+      [
+        { type: 'chunk', delta: 'AAAA' },
+        { type: 'tool_use', toolUseId: 'toolu_a', name: 'noop', input: {} },
+        { type: 'chunk', delta: 'BB' },
+        { type: 'tool_use', toolUseId: 'toolu_b', name: 'noop', input: {} },
+        { type: 'done', finalContent: 'AAAABB', model: null, stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'chunk', delta: 'CCC' },
+        { type: 'tool_use', toolUseId: 'toolu_c', name: 'noop', input: {} },
+        { type: 'done', finalContent: 'CCC', model: null, stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry
+    })
+
+    const rows = listToolCallsForMessage(assistantMessageId)
+    const byId = new Map(rows.map((r) => [r.tool_use_id, r.content_offset]))
+    expect(byId.get('toolu_a')).toBe(4)
+    expect(byId.get('toolu_b')).toBe(6)
+    expect(byId.get('toolu_c')).toBe(9)
+    // Final content is the full buffer so offsets index into it cleanly.
+    expect(getMessage(assistantMessageId)?.content).toBe('AAAABBCCC')
+  })
+
+  test('a tool_use with no preceding text gets content_offset 0', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'noop',
+        async (): Promise<ToolResult> => ({ ok: true, output: 'r', durationMs: 0 })
+      )
+    )
+    const backend = scriptedBackend([
+      [
+        { type: 'tool_use', toolUseId: 'toolu_first', name: 'noop', input: {} },
+        { type: 'done', finalContent: '', model: null, stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'chunk', delta: 'after' },
+        { type: 'done', finalContent: 'after', model: null, stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry
+    })
+    const rows = listToolCallsForMessage(assistantMessageId)
+    expect(rows[0]?.tool_use_id).toBe('toolu_first')
+    expect(rows[0]?.content_offset).toBe(0)
+  })
+})
+
+describe('runHarness — extended thinking (task 06-08-chat 需求 5)', () => {
+  test('thinking events forward live + thinking buffer persists on terminal complete', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const backend = scriptedBackend([
+      [
+        { type: 'thinking', delta: 'Let me ' },
+        { type: 'thinking', delta: 'reason about this.' },
+        { type: 'chunk', delta: 'Here is the answer.' },
+        { type: 'done', finalContent: 'Here is the answer.', model: null, stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    const sink = recordingSink()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink,
+      registry: createToolRegistry(),
+      thinking: { enabled: true }
+    })
+    // Live forward: both thinking deltas surfaced to the sink in order.
+    const thinkingEvents = sink.events.filter((e) => e.type === 'thinking')
+    expect(thinkingEvents).toEqual([
+      { type: 'thinking', delta: 'Let me ' },
+      { type: 'thinking', delta: 'reason about this.' }
+    ])
+    // Terminal complete persisted the full thinking buffer + the answer content.
+    const row = getMessage(assistantMessageId)
+    expect(row?.status).toBe('complete')
+    expect(row?.content).toBe('Here is the answer.')
+    expect(row?.thinking).toBe('Let me reason about this.')
+  })
+
+  test('no thinking events → thinking persisted as null (regression: today unchanged)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const backend = scriptedBackend([
+      [
+        { type: 'chunk', delta: 'Plain reply.' },
+        { type: 'done', finalContent: 'Plain reply.', model: null, stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry: createToolRegistry()
+    })
+    const row = getMessage(assistantMessageId)
+    expect(row?.status).toBe('complete')
+    expect(row?.thinking).toBeNull()
+  })
+
+  test('thinking option forwarded to backend.stream req.thinking', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const backend = scriptedBackend([
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry: createToolRegistry(),
+      thinking: { enabled: true }
+    })
+    expect(backend.lastReq?.thinking).toEqual({ enabled: true })
+  })
+
+  // ── 第二波 Bug A (方案 B) — thinking blocks replayed in multi-turn priorTurns ──
+  test('iter-1 thinking blocks lead the assistant turn in iter-2 iterHistory (passback)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'echo',
+        async (input): Promise<ToolResult> => ({
+          ok: true,
+          output: { echoed: input },
+          durationMs: 1
+        })
+      )
+    )
+    // iter-1: thinking → text → tool_use; done carries the structured thinking block.
+    const backend = scriptedBackend([
+      [
+        { type: 'thinking', delta: 'I should call echo.' },
+        { type: 'chunk', delta: 'Let me check. ' },
+        { type: 'tool_use', toolUseId: 'toolu_t', name: 'echo', input: { q: 'x' } },
+        {
+          type: 'done',
+          finalContent: 'Let me check. ',
+          model: 'm',
+          stopReason: 'tool_use',
+          thinkingBlocks: [
+            { type: 'thinking', thinking: 'I should call echo.', signature: 'SIG==' }
+          ]
+        }
+      ],
+      [
+        { type: 'chunk', delta: 'Done.' },
+        { type: 'done', finalContent: 'Done.', model: 'm', stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: 'claude-sonnet-4-6',
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry,
+      thinking: { enabled: true }
+    })
+    // iter-2 (last backend call) iterHistory: ... assistant(thinking,text,tool_use), user(tool_result).
+    const iterHistory = backend.lastReq?.iterHistory ?? []
+    const assistantTurn = iterHistory.find(
+      (m) => Array.isArray(m.content) && m.role === 'assistant'
+    )
+    const blocks = assistantTurn?.content as Array<{
+      type: string
+      thinking?: string
+      signature?: string
+    }>
+    expect(Array.isArray(blocks)).toBe(true)
+    // thinking block leads (content[0]), unmodified incl. signature.
+    expect(blocks[0]).toEqual({
+      type: 'thinking',
+      thinking: 'I should call echo.',
+      signature: 'SIG=='
+    })
+    // followed by the iter text + tool_use.
+    expect(blocks.some((b) => b.type === 'text')).toBe(true)
+    expect(blocks.some((b) => b.type === 'tool_use')).toBe(true)
+  })
+
+  test('no thinking blocks → assistant turn has no thinking entry (zero-regression)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'noop',
+        async (): Promise<ToolResult> => ({ ok: true, output: 'r', durationMs: 0 })
+      )
+    )
+    const backend = scriptedBackend([
+      [
+        { type: 'chunk', delta: 'text' },
+        { type: 'tool_use', toolUseId: 'toolu_n', name: 'noop', input: {} },
+        { type: 'done', finalContent: 'text', model: null, stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry
+    })
+    const iterHistory = backend.lastReq?.iterHistory ?? []
+    const assistantTurn = iterHistory.find(
+      (m) => Array.isArray(m.content) && m.role === 'assistant'
+    )
+    const blocks = (assistantTurn?.content ?? []) as Array<{ type: string }>
+    expect(blocks.some((b) => b.type === 'thinking')).toBe(false)
+    expect(blocks[0]?.type).toBe('text')
   })
 })
 
@@ -253,6 +562,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink: recordingSink(),
       registry: createToolRegistry()
     })
@@ -287,6 +597,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink,
       registry
     })
@@ -332,6 +643,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink,
       registry
     })
@@ -363,11 +675,38 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink: recordingSink(),
       registry: createToolRegistry()
     })
     // assistant row marked 'aborted' via abortStreamingMessages.
     expect(getMessage(assistantMessageId)?.status).toBe('aborted')
+  })
+
+  test('abort before first iteration → aborted, not E_MAX_ITER 误报 (codex MEDIUM-1)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const ac = new AbortController()
+    ac.abort('pre-aborted') // 模拟 http 下 await resolveConfig 让步窗口内被 chat:abort 取消
+    const backend = scriptedBackend([
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const sink = recordingSink()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      sink,
+      platform: testChatPlatform,
+      registry: createToolRegistry()
+    })
+    // while 顶部 abort 检测应标 aborted + return，不落到末尾 E_MAX_ITER。
+    expect(getMessage(assistantMessageId)?.status).toBe('aborted')
+    expect(sink.events.find((e) => e.type === 'error')).toBeUndefined()
   })
 
   test('backend yields error event → harness propagates + flips assistant to error', async () => {
@@ -389,6 +728,7 @@ describe('runHarness — terminal conditions', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink,
       registry: createToolRegistry()
     })
@@ -425,6 +765,7 @@ describe('runHarness — unknown tool resilience', () => {
       agentPageId: null,
       emailContext: null,
       ac,
+      platform: testChatPlatform,
       sink,
       registry
     })

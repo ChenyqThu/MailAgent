@@ -159,6 +159,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     if (!open) return
     lastFocusRef.current = (document.activeElement as HTMLElement | null) ?? null
     if (occurrence) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 模态打开按 occurrence 预填表单（各字段转换 / 下方 else 走 create defaults）。React Compiler 迁移债：真重构需 key 重置 remount，预填等价性风险高于收益。effect 合理保留。
       setSummary(occurrence.summary || '')
       setStartLocal(isoToDatetimeLocal(occurrence.occurrence_start_iso))
       setEndLocal(isoToDatetimeLocal(occurrence.occurrence_end_iso))
@@ -214,6 +215,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   // 提交时不传 rrule → 后端保留原值, 不破坏.
   useEffect(() => {
     if (open && occurrence && detail && !rruleDirty) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- detail.rrule 异步到达后预填 RRuleEditor（仅 edit+未 dirty，防覆盖用户编辑）。响应异步 detail 数据，effect 合理。React Compiler 迁移债。
       setRruleState(parseRRule(detail.rrule))
     }
   }, [open, occurrence, detail, rruleDirty])
@@ -311,16 +313,13 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     return ok
   }, [summary, startLocal, endLocal, isAllDay, startDate, endDate])
 
-  // 用户边改边清错 (mockup behaviour)
-  useEffect(() => {
-    if (errTitle && summary.trim()) setErrTitle(false)
-  }, [summary, errTitle])
-  useEffect(() => {
-    const valid = isAllDay
-      ? !!(startDate && endDate && endDate >= startDate)
-      : !!(startLocal && endLocal && new Date(endLocal) > new Date(startLocal))
-    if (errTime && valid) setErrTime(false)
-  }, [startLocal, endLocal, startDate, endDate, isAllDay, errTime])
+  // 用户边改边清错 (mockup behaviour)：render 期间条件 setState（输入转有效即清错误，
+  // 守卫 errX && valid 防循环），取代原两个 set-state-in-effect。
+  if (errTitle && summary.trim()) setErrTitle(false)
+  const timeValidNow = isAllDay
+    ? !!(startDate && endDate && endDate >= startDate)
+    : !!(startLocal && endLocal && new Date(endLocal) > new Date(startLocal))
+  if (errTime && timeValidNow) setErrTime(false)
 
   const handleSubmit = (): void => {
     if (!validate()) {

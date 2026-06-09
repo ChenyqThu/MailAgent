@@ -120,12 +120,6 @@ export function AiTab(): React.ReactElement {
           helper={t('settings.ai.fallbacks.helper')}
           placeholder="gpt-5.5,claude-opus-4-7"
         />
-        <EnvField
-          envKey="LLM_CONTEXT_PAGE_ID"
-          control="text"
-          label={t('settings.ai.contextPageId.label')}
-          helper={t('settings.ai.contextPageId.helper')}
-        />
         <Row
           label={t('settings.ai.testGateway.label')}
           helper={t('settings.ai.testGateway.helper')}
@@ -204,6 +198,14 @@ export function AiTab(): React.ReactElement {
             {t('settings.ai.prompts.editButton')}
           </Button>
         </Row>
+        {/* context page = 给 AI 分类/报告提供额外上下文的 Notion 页面，属 prompt
+            输入材料的一部分，故与 prompt 路径同段（原在「本地 LLM Agent」段）。 */}
+        <EnvField
+          envKey="LLM_CONTEXT_PAGE_ID"
+          control="text"
+          label={t('settings.ai.contextPageId.label')}
+          helper={t('settings.ai.contextPageId.helper')}
+        />
       </Section>
 
       <Section title={t('settings.ai.translate.title')} helper={t('settings.ai.translate.helper')}>

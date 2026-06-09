@@ -40,6 +40,7 @@ export function PromptEditorDialog({ slot, open, onClose }: Props): React.ReactE
   // Load whenever (open, slot) flips on.
   React.useEffect(() => {
     if (!open || slot === null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- open 时 async fetch prompt（setLoading→read→setContent/.finally）。数据加载 effect，真重构需 react-query 改造。React Compiler 迁移债。
     setLoading(true)
     setDirty(false)
     api.prompts

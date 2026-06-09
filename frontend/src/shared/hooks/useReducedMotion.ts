@@ -5,22 +5,27 @@
 // CSS 媒体查询对它失效。所以凡是用 GSAP 的动画都必须在 JS 层读这个 hook，
 // 在 reduce 时把 duration 归零或直接切换状态。useExitAnimation 已内置短路。
 
-import { useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
 
 const QUERY = '(prefers-reduced-motion: reduce)'
 
+function subscribe(onStoreChange: () => void): () => void {
+  if (typeof window === 'undefined' || !window.matchMedia) return () => {}
+  const mq = window.matchMedia(QUERY)
+  mq.addEventListener('change', onStoreChange)
+  return () => mq.removeEventListener('change', onStoreChange)
+}
+
+function getSnapshot(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia?.(QUERY).matches === true
+}
+
+function getServerSnapshot(): boolean {
+  return false
+}
+
+// useSyncExternalStore：matchMedia 外部 store，消除旧实现 effect 内 `setReduce(mq.matches)`
+// 对齐首帧的级联 render。QUERY 固定 → subscribe/getSnapshot 提到模块级保持引用稳定。
 export function useReducedMotion(): boolean {
-  const [reduce, setReduce] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.matchMedia?.(QUERY).matches === true
-  )
-
-  useEffect(() => {
-    const mq = window.matchMedia(QUERY)
-    const onChange = (e: MediaQueryListEvent): void => setReduce(e.matches)
-    mq.addEventListener('change', onChange)
-    setReduce(mq.matches)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
-
-  return reduce
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 }

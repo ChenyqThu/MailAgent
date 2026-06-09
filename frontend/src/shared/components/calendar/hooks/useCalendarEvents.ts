@@ -232,7 +232,9 @@ export function relativeTime(d: Date): string {
  *  即便 useCalendarSyncStatus 数据没变, UI 上的时间差也会更新.
  *  默认 30s 一次, 跟"30 秒/60 秒"档位对齐. */
 export function useNowTick(tickMs = 30_000): number {
-  const [now, setNow] = useState(Date.now())
+  // lazy init：把 Date.now() 移出 render body（react-hooks/purity 禁止 render 期间
+  // 调 impure 函数）；interval 回调里的 setNow(Date.now()) 在事件回调非 render，合规。
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), tickMs)
     return () => clearInterval(id)

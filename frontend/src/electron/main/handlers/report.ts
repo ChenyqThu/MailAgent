@@ -14,6 +14,7 @@ import { ipcMain } from 'electron'
 
 import { getDb } from '../db'
 import { callCli } from '../cli_runner'
+import { daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   ReportAgentConfig,
@@ -104,32 +105,6 @@ function _toAgentConfig(row: AgentRow): ReportAgentConfig {
   }
 }
 
-// 默认 prompt 缓存（按 cadence）。getConfig 直读 SQLite 拿不到 prompts.py 的默认全文
-// （库里 prompt=NULL 只是「用内置默认」标记），故首次遇到「未自定义」agent 时 fork 一次
-// CLI config-get（_resolve_agent 会 `prompt or get_default_prompt(cadence)` 回填），解析出
-// 各 cadence 默认全文缓存；之后直读 + 缓存回填，列表不再每次 fork。prompts.py 默认运行期不变，
-// 缓存到 app 退出；改了默认重启 app 即刷新。
-let _defaultPromptCache: Record<string, string> | null = null
-
-async function loadDefaultPrompts(): Promise<Record<string, string>> {
-  if (_defaultPromptCache) return _defaultPromptCache
-  try {
-    const env = await envelopeFromCli<ReportAgentConfig[]>(callCli(['report', 'config-get']))
-    if (env.ok && Array.isArray(env.data)) {
-      const m: Record<string, string> = {}
-      for (const a of env.data) {
-        const cad = a.schedule?.cadence
-        if (cad && a.prompt) m[cad] = a.prompt
-      }
-      _defaultPromptCache = m
-      return m
-    }
-  } catch (err) {
-    console.error('[report] loadDefaultPrompts failed:', err)
-  }
-  return {} // 失败不缓存，下次重试
-}
-
 export function registerReportHandlers(): void {
   // ── report:list — 报告列表（不含 blocks_json）。失败返 []。
   ipcMain.handle(
@@ -190,26 +165,22 @@ export function registerReportHandlers(): void {
   //    每次 fork CLI（旧版全 CLI 要刷 ~5s）。仅对「未自定义 prompt」的 agent 首次 fork 一次
   //    config-get 取默认全文（缓存），供配置 drawer 预填显示。失败返 []。
   ipcMain.handle('report:getConfig', async (): Promise<ReportAgentConfig[]> => {
+    // V2.1 修慢: 走本机 serve-api in-process resolve（wire.resolve_agent 经
+    // get_default_prompt 回填默认 prompt，~ms），取代旧 fork CLI config-get
+    // （冷启 ~759ms+ 拖慢 /agents 列表）。serve-api 不可达兜底直读 SQLite
+    // （prompt_is_default 的 agent prompt 留空，drawer 按需；不再 fork）。
     try {
-      const db = getDb()
-      // SELECT *（非显式新列）→ 即便库尚未迁移（缺 trigger_mode/timezone/body_full_priorities）
-      // 也不报错；_toAgentConfig 用可选字段兜底默认，避免「迁移前 getConfig 报错→空列表」。
-      const rows = db.prepare('SELECT * FROM report_agent ORDER BY id').all() as AgentRow[]
-      const configs = rows.map(_toAgentConfig)
-      // 回填默认 prompt 全文：直读拿不到 prompts.py 默认，对 prompt_is_default 的 agent 用缓存的
-      // 默认填入 prompt，供 drawer 预填可编辑。列表卡不显示 prompt；prompt_is_default 仍 true，
-      // drawer 未改动保存时传 null 保持「用默认」（见 AgentsTab onSave）。
-      if (configs.some((c) => c.prompt_is_default)) {
-        const defaults = await loadDefaultPrompts()
-        for (const c of configs) {
-          const def = defaults[c.schedule.cadence]
-          if (c.prompt_is_default && def) c.prompt = def
-        }
-      }
-      return configs
+      return await daemonRequest<ReportAgentConfig[]>('GET', '/report-agents')
     } catch (err) {
-      console.error('[report:getConfig] read failed:', err)
-      return []
+      console.warn('[report:getConfig] serve-api unreachable, fallback to direct SQLite:', err)
+      try {
+        const db = getDb()
+        const rows = db.prepare('SELECT * FROM report_agent ORDER BY id').all() as AgentRow[]
+        return rows.map(_toAgentConfig)
+      } catch (e) {
+        console.error('[report:getConfig] fallback read failed:', e)
+        return []
+      }
     }
   })
 

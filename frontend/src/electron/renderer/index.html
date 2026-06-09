@@ -14,6 +14,13 @@
       same hash-locked inline script from a file:// origin.
       connect-src adds `ws:` for vite HMR; `http://localhost:5173` for the
       dev module server. Production wraps these in is.dev gating.
+      🔴 V2.1 3c cutover — renderer 进程内跑 ChatRuntime 直 fetch loopback
+      serve-api，baseUrl 恒 `http://127.0.0.1:<port>/api`（ElectronApi
+      loopbackChatBaseUrl；serve-api bind IPv4 127.0.0.1，**不能**用 localhost
+      —— macOS 下 localhost 可能解析到 IPv6 ::1 → 连接失败）。CSP 里
+      `127.0.0.1` ≠ `localhost`（不同 host），故 connect-src 必须显式放行
+      `http://127.0.0.1:*`，否则 chat 全部 fetch 被 CSP 拦在请求发出前
+      （main webRequest token/CORS 注入根本没机会跑）→ chat 完全无响应。
 
       img-src whitelist (review round 9):
         - 'self' / data: / file:     本地资源 / inline data URI / 本地附件
@@ -27,7 +34,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-JWOW0ZmF4KlXR10H32vpWS66AIWsa1+1swsTHiO0YpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:*"
+      content="default-src 'self'; script-src 'self' 'sha256-JWOW0ZmF4KlXR10H32vpWS66AIWsa1+1swsTHiO0YpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*"
     />
     <!--
       Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>

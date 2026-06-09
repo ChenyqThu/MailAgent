@@ -1,7 +1,7 @@
 """LLM gateway client with multi-model fallback (Anthropic + OpenAI proto).
 
 `LLMClient` routes per model:
-  - claude-* → Anthropic Messages (`/v1/messages`) + native tool_use
+  - claude-* → Anthropic Messages streaming (`/v1/messages`) + native tool_use
   - gpt-* / gemini-* / codex-* → OpenAI Chat Completions
     (`/v1/chat/completions`, stream-only on CRS) + tool_calls
 
@@ -30,13 +30,12 @@ from loguru import logger
 from src.config import config as cfg
 
 
-# Default urllib/httpx UA can trip Cloudflare rule 1010 on some relays.
-_UA = "MailAgent-LLM/0.1 (Mozilla/5.0 compatible)"
-
-# anthropic-beta header（多个 beta 逗号分隔，无条件发，CRS 透传 / native 直认）：
-#   - extended-cache-ttl-2025-04-11: cache_control "1h" TTL（ttl<=5m 时无害）。
-#   - context-1m-2025-08-07: 1M 上下文窗口（输入上限 200K→1M；<200K 输入定价不变）。
-_ANTHROPIC_BETA = "extended-cache-ttl-2025-04-11,context-1m-2025-08-07"
+# CRS/Cloudflare is picky about user agents; mirror the browser-like UA used by
+# other working CRS scripts instead of a custom bot-looking token.
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "Chrome/146.0.0.0 Safari/537.36"
+)
 
 # Models matching these prefixes go via the OpenAI Chat Completions endpoint
 # on CRS (it routes non-Anthropic providers through /v1/chat/completions).
@@ -166,7 +165,6 @@ class LLMClient:
                 timeout=float(cfg.llm_timeout_sec),
                 default_headers={
                     "User-Agent": _UA,
-                    "anthropic-beta": _ANTHROPIC_BETA,
                 },
             )
         return self._client
@@ -237,6 +235,19 @@ class LLMClient:
 
     # ---- Anthropic leg -----------------------------------------------------
 
+    async def _stream_anthropic_message(self, **kwargs: Any) -> Any:
+        """Call Anthropic Messages in streaming mode and return the final Message.
+
+        CRS routes Sonnet more reliably through the streaming path; callers still
+        consume a completed Message so the rest of the LLM pipeline stays
+        unchanged.
+        """
+        client = self._lazy()
+        async with client.messages.stream(**kwargs) as stream:
+            async for _event in stream:
+                pass
+            return await stream.get_final_message()
+
     async def _classify_anthropic(
         self,
         *,
@@ -246,10 +257,9 @@ class LLMClient:
         tool_schema: Dict[str, Any],
         tool_name: str,
     ) -> LLMResult:
-        client = self._lazy()
         t0 = time.monotonic()
         try:
-            msg = await client.messages.create(
+            msg = await self._stream_anthropic_message(
                 model=model,
                 max_tokens=cfg.llm_max_tokens,
                 system=system_blocks,
@@ -436,7 +446,7 @@ class LLMClient:
 
         走 fallback chain，但**只在 Anthropic 模型上**跑（OpenAI proto 的多轮原生 tool
         协议这里不实现，从链里过滤）。复用 caller 设在 system_blocks / tools 上的
-        cache_control + 1M context beta。
+        cache_control breakpoints。
 
         raises LLMCallError：链里无 Anthropic 模型 / 全部失败 / 用尽 max_iter 仍未产出。
         """
@@ -478,7 +488,6 @@ class LLMClient:
         max_iter: int,
         max_tokens: int,
     ) -> ToolLoopResult:
-        client = self._lazy()
         messages: List[Dict[str, Any]] = [{"role": "user", "content": user_content}]
         total_in = total_out = total_cache_read = 0
         tool_calls: List[Dict[str, Any]] = []
@@ -492,7 +501,7 @@ class LLMClient:
                 else {"type": "auto"}
             )
             try:
-                msg = await client.messages.create(
+                msg = await self._stream_anthropic_message(
                     model=model,
                     max_tokens=max_tokens,
                     system=system_blocks,
@@ -502,7 +511,7 @@ class LLMClient:
                 )
             except Exception as e:
                 raise LLMCallError(
-                    f"loop messages.create failed (model={model}, iter={it}): {e!r}"
+                    f"loop messages.stream failed (model={model}, iter={it}): {e!r}"
                 ) from e
 
             usage = msg.usage

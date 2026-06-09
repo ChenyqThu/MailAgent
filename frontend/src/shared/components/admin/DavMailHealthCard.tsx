@@ -90,8 +90,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
 
   const lvl = levelStyles(h.level)
   const tokenColor = tokenAgeColor(h.token_age_days)
-  const daysLeft =
-    h.token_age_days !== null ? Math.max(0, 90 - h.token_age_days) : null
+  const daysLeft = h.token_age_days !== null ? Math.max(0, 90 - h.token_age_days) : null
 
   return (
     <section className="space-y-3">
@@ -123,16 +122,11 @@ export function DavMailHealthCard(): React.ReactElement | null {
             )}
             IMAP :1143
           </div>
-          <div
-            className={cn(
-              'text-lead tabular-nums',
-              h.imap_reachable ? 'text-ok' : 'text-fail'
-            )}
-          >
+          <div className={cn('text-lead tabular-nums', h.imap_reachable ? 'text-ok' : 'text-fail')}>
             {h.imap_reachable ? '✓ reachable' : '✗ down'}
           </div>
           {h.consecutive_imap_failures > 0 && (
-            <div className="text-meta text-ink-fg-3 mt-1">
+            <div className="text-aux text-ink-fg-3 mt-1">
               连续失败 {h.consecutive_imap_failures} 次
             </div>
           )}
@@ -148,16 +142,11 @@ export function DavMailHealthCard(): React.ReactElement | null {
             )}
             SMTP :1025
           </div>
-          <div
-            className={cn(
-              'text-lead tabular-nums',
-              h.smtp_reachable ? 'text-ok' : 'text-fail'
-            )}
-          >
+          <div className={cn('text-lead tabular-nums', h.smtp_reachable ? 'text-ok' : 'text-fail')}>
             {h.smtp_reachable ? '✓ reachable' : '✗ down'}
           </div>
           {h.consecutive_smtp_failures > 0 && (
-            <div className="text-meta text-ink-fg-3 mt-1">
+            <div className="text-aux text-ink-fg-3 mt-1">
               连续失败 {h.consecutive_smtp_failures} 次
             </div>
           )}
@@ -170,9 +159,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
             OAuth Token
           </div>
           <div className={cn('text-lead tabular-nums', tokenColor)}>
-            {h.token_age_days !== null
-              ? `${h.token_age_days.toFixed(1)} 天`
-              : '未知'}
+            {h.token_age_days !== null ? `${h.token_age_days.toFixed(1)} 天` : '未知'}
           </div>
           <div className="text-meta text-ink-fg-3 mt-1">
             {daysLeft !== null ? `估剩余 ${daysLeft.toFixed(0)} / 90 天` : '—'}
@@ -204,7 +191,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
             {h.throttle_events_5min} 次
           </div>
           {h.uid_backfill_paused && (
-            <div className="text-meta text-warn mt-1 flex items-center gap-1">
+            <div className="text-aux text-warn mt-1 flex items-center gap-1">
               <Pause size={10} strokeWidth={2} />
               uid-mapper 已暂停
             </div>
@@ -216,11 +203,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
       {h.last_oauth_error && (
         <div className="rounded-md border border-fail/40 bg-fail/10 p-3">
           <div className="flex items-start gap-2">
-            <ShieldAlert
-              size={14}
-              strokeWidth={2}
-              className="text-fail shrink-0 mt-0.5"
-            />
+            <ShieldAlert size={14} strokeWidth={2} className="text-fail shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <div className="text-aux font-medium text-fail mb-1">
                 OAuth 错误
@@ -234,7 +217,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
               >
                 {h.last_oauth_error}
               </pre>
-              <div className="text-meta text-ink-fg-2 mt-2">
+              <div className="text-aux text-ink-fg-2 mt-2">
                 可能 refresh_token 失效 — 重走 O365Manual OAuth flow 或回切
                 <code className="font-mono text-ink-fg-1 mx-1">applescript</code>
                 backend。
@@ -247,8 +230,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
       {/* Token mtime footer (small print) */}
       {h.token_mtime_iso && (
         <div className="text-meta font-mono text-ink-fg-3">
-          token.dat last refresh:{' '}
-          <span className="text-ink-fg-2">{h.token_mtime_iso}</span>
+          token.dat last refresh: <span className="text-ink-fg-2">{h.token_mtime_iso}</span>
         </div>
       )}
     </section>

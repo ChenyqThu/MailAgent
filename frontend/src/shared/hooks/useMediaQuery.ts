@@ -9,25 +9,31 @@
 // 断点对齐 Tailwind 默认 screens（tailwind.config.ts 经核实无 override）：
 // md=768 / lg=1024 / xl=1280。语义 hook 返回"是否窄于某档"，shell 据此降级。
 
-import { useEffect, useState } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 
 function read(query: string): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.(query).matches === true
 }
 
 export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState<boolean>(() => read(query))
-
-  useEffect(() => {
-    const mq = window.matchMedia(query)
-    const onChange = (e: MediaQueryListEvent): void => setMatches(e.matches)
-    mq.addEventListener('change', onChange)
-    // 订阅后立即对齐一次：query 变更或挂载到首帧之间窗口可能已 resize。
-    setMatches(mq.matches)
-    return () => mq.removeEventListener('change', onChange)
-  }, [query])
-
-  return matches
+  // useSyncExternalStore：matchMedia 是典型外部 store。subscribe 监听 change，
+  // getSnapshot 每次 render 读当前值——天然消除旧实现 useEffect 内 `setMatches(mq.matches)`
+  // 对齐首帧的级联 render（react-hooks/set-state-in-effect）。getServerSnapshot 兜
+  // SSR / 非 renderer 导入（typeof window === undefined）。
+  const subscribe = useCallback(
+    (onStoreChange: () => void): (() => void) => {
+      if (typeof window === 'undefined' || !window.matchMedia) return () => {}
+      const mq = window.matchMedia(query)
+      mq.addEventListener('change', onStoreChange)
+      return () => mq.removeEventListener('change', onStoreChange)
+    },
+    [query]
+  )
+  return useSyncExternalStore(
+    subscribe,
+    () => read(query),
+    () => false
+  )
 }
 
 // Tailwind 默认断点（px）。max-width 查询用 BP-1 避免与 min-width 前缀

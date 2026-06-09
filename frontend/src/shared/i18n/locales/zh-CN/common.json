@@ -701,6 +701,12 @@
       "aborted": "已取消",
       "error": "出错"
     },
+    "thinking": {
+      "label": "思考过程",
+      "toggleOn": "开启思考模式（展示模型推理过程）",
+      "toggleOff": "关闭思考模式",
+      "unsupported": "思考模式仅支持 Custom API（Claude）"
+    },
     "empty": {
       "noEmail": "选中一封邮件开始对话",
       "noMessages": "向 AI 提问，对当前邮件做总结、回复草稿或提取动作项",
@@ -724,6 +730,14 @@
       "running": "执行中",
       "ok": "完成",
       "error": "失败"
+    },
+    "confirmTool": {
+      "title": "确认操作",
+      "editHint": "编辑后授权将使用你的版本；模型会看到你实际发送的内容。",
+      "cancel": "拒绝",
+      "confirm": "授权",
+      "confirming": "授权中…",
+      "failed": "授权失败"
     },
     "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
   },

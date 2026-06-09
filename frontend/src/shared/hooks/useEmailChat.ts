@@ -29,7 +29,7 @@
 //   switch emailId         → useEffect cleanup fires chat.abort(prevSession)
 //   unmount                → same path; stream stays correctly cancelled
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
 import type { ChatBackendKind, ChatMessage, ChatSession, ChatStartResult } from '../api/types'
@@ -45,6 +45,9 @@ export interface SendChatInput {
    *  before calling `send()`. */
   senderName?: string | null
   subject?: string | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle. AIChatPanel
+   *  reads its persisted Composer toggle and passes the value at send time. */
+  thinking?: boolean
 }
 
 // Sprint 14 PR B — inline message edit. The caller (MessageList) supplies
@@ -60,6 +63,8 @@ export interface EditChatInput {
   backendKind: ChatBackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
+  /** task 06-08-chat 需求 5 — per-turn extended-thinking toggle for the re-stream. */
+  thinking?: boolean
 }
 
 export interface ChatError {
@@ -239,6 +244,84 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     }
   }, [])
 
+  // task 06-08-chat Bug 1 (codex REQUEST CHANGES follow-up) — assistant
+  // message ids whose stream has reached a terminal state locally (done /
+  // error / abort). After the 3c cutover `finalizeMessage` is an async PATCH
+  // that runs AFTER the harness forwards the terminal event, so a refresh
+  // (GET) issued before the terminal event — but resolving after it — can
+  // still read the row as `streaming` with null token/cost and stale content.
+  // This generation guard lets `refresh` ignore such stale live rows for ids
+  // we already finished:
+  //   - the streamingMessageId re-derive skips terminal ids → a late
+  //     refresh(true) (tool_call / idx=-1 recovery / send / abort) can't
+  //     resurrect the spinner (the HIGH finding);
+  //   - the setMessages merge keeps the local terminal row when the DB still
+  //     reports it streaming → a racing GET can't roll the bubble back to
+  //     streaming or drop the finalize-only token/cost fields (the MEDIUM
+  //     finding).
+  // Cleared at the top of the email switch / initial load effect and in
+  // newSession so a fresh conversation — and crucially the reload-resume
+  // path, which loads with this set empty — re-derives streaming rows from
+  // the DB SSoT normally.
+  const terminalIdsRef = useRef<Set<number>>(new Set())
+
+  // task 06-08-chat Bug 1 (codex P0 NIT, promoted to a fix) — navigation
+  // generation counter. The terminalIdsRef guard above is MESSAGE-level: it
+  // protects a single assistant row against the done/finalize PATCH race.
+  // Navigation switches (email change / newSession / selectSession /
+  // deleteSession of the active session) are a SESSION-level race: each one
+  // aborts the current session and resets renderer state, but a refresh(true)
+  // already in flight for the OLD session (issued by send / chunk idx=-1
+  // recovery / tool_call / done) will still resolve after the switch and call
+  // setMessages(old rows) + setStreamingMessageId(old streaming) on top of the
+  // freshly-loaded NEW session/email — pollution the message-level guard
+  // can't catch (newSession even CLEARS terminalIdsRef, so it'd be empty).
+  //
+  // We bump this counter synchronously at every navigation switch point;
+  // `refresh` captures it on entry and, after its `await listMessages`,
+  // discards ALL of its setState if the counter moved (navigation happened
+  // mid-flight). A generation counter is deliberately chosen over an
+  // activeSessionRef/sessionId equality check: the initial-load path does
+  // `setActiveSessionIdState(latest)` then immediately `await refresh(latest.id)`
+  // while `activeSessionRef` is still the PRE-switch value (the effect that
+  // syncs it hasn't run yet), so a sessionId guard would false-negative and
+  // kill the legitimate refresh. The counter bumps synchronously at the
+  // navigation site, so it has no such ordering dependency.
+  // NOTE: abortCurrent does NOT bump — it terminates the current stream
+  // (handled by terminalIdsRef) but stays on the same session, so its own
+  // post-abort refresh must be allowed through.
+  const navGenerationRef = useRef(0)
+
+  // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — email switch is the
+  // one navigation vector whose bump can't ride the synchronous-event path the
+  // other three (newSession / selectSession / deleteSession) use: it's driven
+  // by a prop change. The bump MUST happen before the OLD email's in-flight
+  // refresh(true) resolves, otherwise that refresh sees the un-bumped gen, the
+  // guard passes it through, and it clobbers the freshly-loaded NEW email with
+  // the old session's (streaming) rows.
+  //
+  // useLayoutEffect (not the passive load effect below, not a render-phase ref
+  // mutation): it fires SYNCHRONOUSLY after commit — earlier than any passive
+  // useEffect (so earlier than the async load's own refresh) AND, because JS is
+  // single-threaded, earlier than the .then continuation of any refresh promise
+  // that was already awaiting `listMessages` when emailId changed (that
+  // continuation can only run once the current synchronous work unit — including
+  // this layout effect — yields). So an old-email refresh that resolves right
+  // after the switch necessarily reads the bumped gen and is discarded.
+  //
+  // A render-phase `navGenerationRef.current += 1` would trip
+  // react-hooks/refs (no ref writes during render) and double-bump under
+  // StrictMode's double-invoked render — hence the layout effect.
+  //
+  // terminalIdsRef is cleared here too (was in the passive load effect): the
+  // incoming email starts with no terminal history, and clearing it in the
+  // same synchronous commit step keeps the reload-resume path (which loads with
+  // the set empty) deriving streaming rows from the DB SSoT normally.
+  useLayoutEffect(() => {
+    navGenerationRef.current += 1
+    terminalIdsRef.current.clear()
+  }, [emailId])
+
   // React 19 "Adjusting state on prop change" (react.dev/learn/you-might-not-need-an-effect).
   // When emailId switches, reset derived state synchronously inside
   // render rather than via an effect — keeps the renderer from showing
@@ -303,17 +386,81 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     activeSessionRef.current = activeSessionId
   }, [activeSessionId])
 
+  // `syncStreaming` (default true) — whether this refresh should re-derive
+  // `streamingMessageId` from the DB's freshest live assistant row. Initial
+  // load / email switch / selectSession / tool_call mid-stream all want this
+  // so a resumable streaming row is picked up from the SSoT.
+  //
+  // The `done` (complete) handler passes `false`: task 06-08-chat Bug 1. After
+  // the 3c cutover `finalizeMessage` is an async PATCH, while the harness
+  // forwards `done` synchronously via the in-process emitter. The done-handler
+  // refresh (a GET) races that PATCH and almost always reads the row while it's
+  // still `streaming`, which would re-set streamingMessageId right after the
+  // handler cleared it — leaving the panel stuck in "Streaming…" until the user
+  // hits the abort (X). done has already locally set status=complete +
+  // streamingMessageId=null, so this refresh only needs the latest messages
+  // (tool rows / token counts), not a streaming re-derive.
   const refresh = useCallback(
-    async (sessionId: number): Promise<void> => {
+    async (sessionId: number, syncStreaming = true): Promise<void> => {
+      // task 06-08-chat Bug 1 (codex P0 NIT) — snapshot the navigation
+      // generation on entry. If a navigation switch (email / newSession /
+      // selectSession / deleteSession-of-active) bumps it while listMessages
+      // is in flight, this refresh belongs to a session/email the user has
+      // left behind; discarding its setState (below) keeps it from clobbering
+      // the freshly-loaded new conversation. Read before the await so the
+      // value reflects the navigation state at the moment the refresh was
+      // requested.
+      const gen = navGenerationRef.current
       const fresh = await mailApi.chat.listMessages(sessionId)
-      setMessages(fresh)
-      // If the freshest assistant message is still pending/streaming,
-      // mark it as the streaming target — protects against a stream
-      // event that arrived before `refresh()` resolved.
-      const liveAssistant = [...fresh]
-        .reverse()
-        .find((m) => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending'))
-      setStreamingMessageId(liveAssistant ? liveAssistant.id : null)
+      // Bail before ANY setState if we unmounted or navigated away mid-flight.
+      // This MUST precede the terminalIdsRef merge / syncStreaming re-derive
+      // below — those guards are message-level and can't tell a stale-session
+      // refresh from a current one.
+      if (!mountedRef.current || gen !== navGenerationRef.current) return
+      const terminal = terminalIdsRef.current
+      // MEDIUM finding — merge rather than blindly overwrite. The real harness
+      // ordering is forward(done) → await finalizeMessage(), and token / cost /
+      // model are only persisted by that finalize. A GET that lands in the gap
+      // returns the row still `streaming`, tokens=null, stale content; using it
+      // verbatim would roll the local terminal bubble back to streaming and
+      // wipe the done reducer's finalContent + usage. So for any fresh row that
+      // (a) we already marked terminal AND (b) the DB still reports as
+      // streaming/pending (i.e. finalize hasn't landed), keep the local copy.
+      // Once the DB row is itself terminal (complete/error/aborted) it's the
+      // canonical version — it carries the finalize-written fields — so we take
+      // it. Ids absent from `prev` (e.g. very first load) fall through to fresh.
+      setMessages((prev) => {
+        if (terminal.size === 0) return fresh
+        return fresh.map((row) => {
+          if (!terminal.has(row.id)) return row
+          const isStaleLive = row.status === 'streaming' || row.status === 'pending'
+          if (!isStaleLive) return row
+          const local = prev.find((m) => m.id === row.id)
+          return local ?? row
+        })
+      })
+      if (syncStreaming) {
+        // If the freshest assistant message is still pending/streaming,
+        // mark it as the streaming target — protects against a stream
+        // event that arrived before `refresh()` resolved.
+        //
+        // HIGH finding — skip ids we already finished locally. A refresh(true)
+        // issued before a terminal event but resolving after it (tool_call /
+        // idx=-1 recovery / send / abort all pass syncStreaming=true) would
+        // otherwise re-derive streamingMessageId from the not-yet-finalized
+        // streaming row and resurrect the just-cleared spinner. The
+        // reload-resume path loads with `terminal` empty, so legitimately
+        // in-flight rows still resume.
+        const liveAssistant = [...fresh]
+          .reverse()
+          .find(
+            (m) =>
+              m.role === 'assistant' &&
+              (m.status === 'streaming' || m.status === 'pending') &&
+              !terminal.has(m.id)
+          )
+        setStreamingMessageId(liveAssistant ? liveAssistant.id : null)
+      }
     },
     [mailApi]
   )
@@ -323,6 +470,13 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // above; this effect only owns the async load side-effect.
   useEffect(() => {
     if (emailId === null) return undefined
+    // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — the email-switch
+    // navGeneration bump + terminalIdsRef clear moved to the useLayoutEffect
+    // above so they run synchronously at commit time, BEFORE the OLD email's
+    // in-flight refresh can resolve. This passive effect now only owns the
+    // async load. Because passive effects run after layout effects, the
+    // refresh(latest.id) below captures the already-bumped gen and is allowed
+    // through (it doesn't kill itself).
     let cancelled = false
     void (async (): Promise<void> => {
       try {
@@ -439,6 +593,14 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
             }
             break
           }
+          case 'thinking':
+            // task 06-08-chat 需求 5 — extended-thinking delta. Append to the
+            // message's `thinking` (kept separate from `content`; rendered in the
+            // collapsible block above the answer). Reload reads the finalized
+            // buffer from the DB (harness persists it on终态), so this is the
+            // live-stream-only path. status stays whatever it was (still streaming).
+            updated.thinking = (updated.thinking ?? '') + event.delta
+            break
           case 'usage':
             updated.tokens_input = event.inputTokens
             updated.tokens_output = event.outputTokens
@@ -462,11 +624,19 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       })
 
       if (event.type === 'done') {
+        // task 06-08-chat Bug 1 (codex follow-up) — record the terminal id so
+        // any refresh(true) still in flight (or the done-path refresh below)
+        // can't re-derive this as streaming or overwrite the local complete
+        // bubble with a not-yet-finalized DB row. See terminalIdsRef + refresh.
+        terminalIdsRef.current.add(messageId)
         setStreamingMessageId(null)
         // Sprint 5 #3 — clear the retry buffer once the turn finished cleanly.
         setLastFailedInput(null)
         // SSoT refresh (catch tool rows + token counts in one network query).
-        void refresh(envelope.sessionId)
+        // task 06-08-chat Bug 1 — pass syncStreaming=false: the finalize PATCH
+        // races this GET after the 3c cutover, so re-deriving streamingMessageId
+        // here would resurrect the just-cleared streaming state.
+        void refresh(envelope.sessionId, false)
         // Sprint 9 §2.3 + Sprint 10 reviewer L1/L3 — final island envelope
         // sequence. L1: emit one trailing AIDraftStream with the final char
         // count so the Phase 1 pill ends on a truthful number (the 500 ms
@@ -495,6 +665,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
           sessionMetaRef.current.delete(envelope.sessionId)
         }
       } else if (event.type === 'error') {
+        // task 06-08-chat Bug 1 (codex follow-up) — same terminal guard as the
+        // done path: a refresh(true) already in flight when the error lands
+        // must not re-derive the errored row back into the streaming target.
+        terminalIdsRef.current.add(messageId)
         setStreamingMessageId(null)
         setError({ code: event.code, message: event.message })
         // Sprint 5 state machine #4 — engage cooldown on quota cap.
@@ -578,8 +752,18 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // useCallback's dep array can reference it without a TDZ.
   const refreshSessions = useCallback(async (): Promise<void> => {
     if (emailId === null) return
+    // task 06-08-chat Bug 1 (codex LOW-1) — refreshSessions is an email-scoped
+    // async write to the sidebar that, unlike refresh(), didn't ride the
+    // navGeneration guard. A navigation switch (email change / newSession /
+    // selectSession / deleteSession-of-active) mid-flight would let the OLD
+    // email's listSessions resolve and setSessions() the previous email's
+    // history into the NEW email's sidebar (messages/spinner are protected by
+    // refresh's own guard; only the sidebar leaked). Snapshot the generation on
+    // entry + bail after the await if it moved (or we unmounted).
+    const gen = navGenerationRef.current
     try {
       const fresh = await mailApi.chat.listSessions(emailId)
+      if (!mountedRef.current || gen !== navGenerationRef.current) return
       setSessions(fresh)
     } catch {
       // Sidebar is non-critical; swallow.
@@ -628,7 +812,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         // the freshly-created session row (set above when forceNewSessionRef
         // was true, or by a previous send()'s setActiveSessionIdState).
         // Ref read (not state) to avoid stale closure across rapid sends.
-        sessionId: activeSessionRef.current
+        sessionId: activeSessionRef.current,
+        // task 06-08-chat 需求 5 — per-turn thinking toggle (AIChatPanel reads it
+        // from the persisted Composer state at send time).
+        thinking: input.thinking
       })
       if (!mountedRef.current || emailIdRef.current !== myEmail) {
         // Email moved on (or hook unmounted) before the dispatcher returned.
@@ -699,7 +886,17 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     // stay in `isStreaming = true` until the next event lands (or never,
     // if the backend died). Clear the streaming id immediately and pull
     // the canonical `aborted` row off the SSoT so the UI reflects state.
-    setStreamingMessageId(null)
+    //
+    // task 06-08-chat Bug 1 (codex follow-up) — mark the in-flight id terminal
+    // BEFORE the refresh below (which passes syncStreaming=true). Without this,
+    // a refresh that lands before the backend wrote the `aborted` row would
+    // see the still-streaming row and re-set streamingMessageId, resurrecting
+    // the spinner the user just dismissed. Functional updater so we read the
+    // latest streamingMessageId without widening this callback's deps.
+    setStreamingMessageId((prev) => {
+      if (prev !== null) terminalIdsRef.current.add(prev)
+      return null
+    })
     // Sprint 10 L2 — drop the meta entry; no more envelopes will fire for
     // this session.
     sessionMetaRef.current.delete(sid)
@@ -728,6 +925,17 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setStreamingMessageId(null)
     setError(null)
     setLastFailedInput(null)
+    // task 06-08-chat Bug 1 (codex follow-up) — a fresh conversation starts
+    // with no terminal history; clear so a future genuinely-streaming row in
+    // the new session isn't suppressed by a stale id from the old one.
+    terminalIdsRef.current.clear()
+    // task 06-08-chat Bug 1 (codex P0 NIT) — newSession is a navigation event
+    // and crucially CLEARS terminalIdsRef above, so the message-level guard
+    // can't help here. Bump the generation so a refresh(true) still in flight
+    // for the old session (send / chunk recovery / tool_call / done) is
+    // discarded on resolve instead of re-populating the just-blanked list +
+    // resurrecting the old streaming target.
+    navGenerationRef.current += 1
     // Sprint 19 PR-1d.2 — leftover dialogs from the previous session must
     // not survive the abort (main-process side already cancels the
     // suspended promise; the renderer state must mirror that to avoid a
@@ -787,7 +995,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         newContent: input.newContent,
         backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
-        backendAgentPageId: input.backendAgentPageId ?? null
+        backendAgentPageId: input.backendAgentPageId ?? null,
+        // task 06-08-chat 需求 5 — per-turn thinking toggle for the re-stream.
+        thinking: input.thinking
       })
       setStreamingMessageId(result.assistantMessageId)
       activeSessionRef.current = result.sessionId
@@ -809,6 +1019,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       if (sessionId === activeSessionRef.current) {
         mailApi.chat.abort(sessionId)
         sessionMetaRef.current.delete(sessionId)
+        // task 06-08-chat Bug 1 (codex P0 NIT) — only bump when the deleted
+        // session WAS the active one (the branch that clears messages /
+        // streaming, i.e. an actual navigation away). Deleting a non-active
+        // sidebar row leaves the active conversation untouched, so an
+        // in-flight refresh for it stays legitimate and must NOT be discarded.
+        navGenerationRef.current += 1
         setActiveSessionIdState(null)
         activeSessionRef.current = null
         setMessages([])
@@ -839,6 +1055,12 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         mailApi.chat.abort(prev)
         sessionMetaRef.current.delete(prev)
       }
+      // task 06-08-chat Bug 1 (codex P0 NIT) — switching sessions is a
+      // navigation event. Bump BEFORE this callback's own refresh(sessionId)
+      // below (which captures the post-bump gen and is allowed through) so a
+      // refresh(true) still resolving for the session we just left can't
+      // overwrite the incoming session's messages / streaming target.
+      navGenerationRef.current += 1
       setError(null)
       setLastFailedInput(null)
       setStreamingMessageId(null)

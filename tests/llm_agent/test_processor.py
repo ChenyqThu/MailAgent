@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from src.llm_agent.client import LLMResult
-from src.llm_agent.processor import LLMProcessor
+from src.llm_agent.processor import LLMProcessor, _build_cache_control
 
 
 def _fake_email(**overrides):
@@ -58,6 +58,15 @@ def test_build_user_contains_subject_and_from():
     msg = p._build_user(_fake_email())
     assert "Test Subject" in msg
     assert "a@example.com" in msg
+
+
+def test_cache_control_preserves_1h_ttl(monkeypatch):
+    from src.llm_agent import processor as mod
+
+    monkeypatch.setattr(mod.cfg, "llm_cache_enabled", True)
+    monkeypatch.setattr(mod.cfg, "llm_cache_ttl", "1h")
+
+    assert _build_cache_control() == {"type": "ephemeral", "ttl": "1h"}
 
 
 def test_build_user_derives_utc8_date():

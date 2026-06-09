@@ -28,147 +28,47 @@ import { dirname, join } from 'path'
 import { resolveDataRoot } from './db'
 
 // ── types ───────────────────────────────────────────────────────────────
+// V2.1 阶段 3：数据模型类型下沉到 shared/chat/model.ts（B-pure-unified —
+// harness 在 UI 进程跑需要这些类型但不能引 better-sqlite3）。下方 import 供
+// 本文件函数签名使用；re-export 保既有 importer（dispatcher / harness /
+// kos_save / registry / handlers/chat）的 `from '../chat_db'` 路径不变。
+import type {
+  AppendMessageInput,
+  AppendToolCallInput,
+  BackendKind,
+  ChatMessage,
+  ChatSession,
+  ChatSessionSummary,
+  ChatToolCall,
+  ConfirmationTier,
+  MessageRole,
+  MessageStatus,
+  OpenSessionInput,
+  ToolCallStatus,
+  UpdateMessagePatch,
+  UpdateToolCallPatch
+} from '@shared/chat/model'
 
-export type BackendKind = 'notion-agent' | 'custom-api'
-export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
-export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
-
-// Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
-// in `chat_tool_call`. See docs/agent-harness-design.md §4.5.
-export type ToolCallStatus =
-  | 'pending' // awaiting confirmation (tier=preview/edit)
-  | 'confirmed' // user approved, not yet running
-  | 'running' // handler in flight
-  | 'ok' // handler returned success
-  | 'error' // handler returned ToolResult.ok=false OR threw
-  | 'canceled' // user clicked Cancel in ConfirmToolDialog
-export type ConfirmationTier = 'silent' | 'preview' | 'edit'
-
-export interface ChatSession {
-  id: number
-  email_id: number
-  backend_kind: BackendKind
-  backend_model: string | null
-  backend_agent_page_id: string | null
-  created_at: number
-  updated_at: number
-}
-
-// Global session-history row. Unlike `ChatSession` (per-email, used by the
-// in-panel sidebar), this carries enough to render a cross-email history list
-// without an N+1 listMessages round-trip per row: the first user-message
-// preview and the message count are aggregated in the same SELECT. The
-// owning email's subject/sender are NOT here — they live in sync_store.db, so
-// handlers/chat.ts joins them in best-effort after the fact.
-export interface ChatSessionSummary extends ChatSession {
-  /** First user-authored message, truncated server-side. Null for sessions
-   *  seeded by automation that never got a user turn. */
-  first_user_message: string | null
-  message_count: number
-}
-
-export interface ChatMessage {
-  id: number
-  session_id: number
-  role: MessageRole
-  content: string
-  tokens_input: number | null
-  tokens_output: number | null
-  cost_usd: number | null
-  model: string | null
-  status: MessageStatus
-  error_message: string | null
-  // schema_version=2 (Sprint 4 review opus L carry-forward): JSON blob
-  // for backend-specific data that doesn't fit the shared columns. Used
-  // today by notion_agent to persist thread_id without abusing the
-  // `model` column. Null when no extras. NEVER store secrets here —
-  // the field crosses the IPC boundary.
-  metadata: string | null
-  created_at: number
-  updated_at: number
-}
-
-export interface OpenSessionInput {
-  emailId: number
-  backendKind: BackendKind
-  backendModel?: string | null
-  backendAgentPageId?: string | null
-}
-
-export interface AppendMessageInput {
-  sessionId: number
-  role: MessageRole
-  content: string
-  status: MessageStatus
-  model?: string | null
-  tokensInput?: number | null
-  tokensOutput?: number | null
-  costUsd?: number | null
-  errorMessage?: string | null
-  metadata?: string | null
-}
-
-export interface UpdateMessagePatch {
-  content?: string
-  status?: MessageStatus
-  tokensInput?: number | null
-  tokensOutput?: number | null
-  costUsd?: number | null
-  errorMessage?: string | null
-  model?: string | null
-  metadata?: string | null
-}
-
-// Sprint 19 — chat_tool_call row + CRUD inputs.
-
-export interface ChatToolCall {
-  id: number
-  message_id: number
-  /** Anthropic toolu_xxx. MUST match across `tool_use` → `tool_result`
-   *  round-trip in the LLM message stream. UNIQUE per (message_id). */
-  tool_use_id: string
-  tool_name: string
-  /** Original LLM-proposed input, serialized JSON. */
-  input_json: string
-  /** Set only when tier was 'edit' and the user changed the input via the
-   *  ConfirmToolDialog. The tool handler receives this as effective input;
-   *  the result envelope returned to the LLM includes
-   *  `{ user_edited: true, original_input, final_input }` so the model
-   *  knows what was actually executed. */
-  user_edited_input_json: string | null
-  /** Tool handler's `ToolResult` serialized as JSON. Null until completion. */
-  output_json: string | null
-  status: ToolCallStatus
-  duration_ms: number | null
-  confirmation_tier: ConfirmationTier
-  /** Epoch ms when the user clicked Confirm. Null for silent / canceled. */
-  confirmed_at: number | null
-  created_at: number
-  updated_at: number
-}
-
-export interface AppendToolCallInput {
-  messageId: number
-  toolUseId: string
-  toolName: string
-  inputJson: string
-  confirmationTier: ConfirmationTier
-  /** Initial status — usually 'pending' for preview/edit tiers, 'running'
-   *  for silent. */
-  status: ToolCallStatus
-}
-
-export interface UpdateToolCallPatch {
-  status?: ToolCallStatus
-  outputJson?: string | null
-  durationMs?: number | null
-  userEditedInputJson?: string | null
-  confirmedAt?: number | null
+export type {
+  AppendMessageInput,
+  AppendToolCallInput,
+  BackendKind,
+  ChatMessage,
+  ChatSession,
+  ChatSessionSummary,
+  ChatToolCall,
+  ConfirmationTier,
+  MessageRole,
+  MessageStatus,
+  OpenSessionInput,
+  ToolCallStatus,
+  UpdateMessagePatch,
+  UpdateToolCallPatch
 }
 
 // ── path resolution ─────────────────────────────────────────────────────
 
-const CHAT_DB_VERSION = 4
+const CHAT_DB_VERSION = 6
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -203,6 +103,18 @@ function migrateLegacyChatDbIfNeeded(targetPath: string): void {
 }
 
 // ── schema migration ────────────────────────────────────────────────────
+
+/** task 06-08-chat (codex LOW-2) — column-existence probe for the additive
+ *  ALTER segments. SQLite has no `ADD COLUMN IF NOT EXISTS`, so re-running an
+ *  `ALTER TABLE … ADD COLUMN` against a table that already has the column
+ *  throws "duplicate column name". Guarding the additive segments with this
+ *  makes the migration ladder idempotent even if a prior run committed the
+ *  physical column but crashed before persisting the matching schema_version
+ *  (leaving "physical vN + meta v(N-1)"), so the next open won't hard-fail. */
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  return cols.some((c) => c.name === column)
+}
 
 function migrate(db: Database.Database): void {
   db.exec(`
@@ -375,9 +287,19 @@ function migrate(db: Database.Database): void {
     // v4 has to run OUTSIDE this transaction because it needs PRAGMA
     // foreign_keys=OFF (see block below for why). Bump to v3 here so the
     // v4 block sees the correct starting version even on fresh installs.
-    db.prepare(
-      "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '3')"
-    ).run()
+    //
+    // task 06-08-chat (codex LOW-2) — only write v3 when the DB is BELOW v4.
+    // The previous unconditional INSERT OR REPLACE would, on a DB already at
+    // v4/v5/v6 that re-enters migrate (e.g. meta lagging the physical schema
+    // after a crash), roll schema_version BACK to 3 — then the v5/v6 blocks
+    // below would re-run their ADD COLUMN and fail on duplicates. Gating on
+    // `current < 4` leaves an already-migrated DB's version untouched here;
+    // the additive blocks have their own per-column idempotency guards.
+    if (current < 4) {
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '3')"
+      ).run()
+    }
     db.exec('COMMIT')
   } catch (err) {
     db.exec('ROLLBACK')
@@ -441,6 +363,57 @@ function migrate(db: Database.Database): void {
       }
     } finally {
       db.pragma('foreign_keys = ON')
+    }
+  }
+
+  // v4 → v5 — task 06-08-chat Bug 2. Add chat_tool_call.content_offset: the
+  // char offset into the parent assistant message's `content` where this tool
+  // call was proposed. The renderer splits `content` at these offsets to
+  // interleave tool chips in time order instead of stacking them all below the
+  // body. Plain additive ALTER (no UNIQUE/FK drop) → safe in its own
+  // transaction. NULL for all pre-v5 rows → renderer degrades to the legacy
+  // "all chips after the body" layout for old conversations.
+  if (current < 5) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      // task 06-08-chat (codex LOW-2) — skip the ADD COLUMN if the physical
+      // column is already present (crash-after-ALTER-before-version-bump re-entry).
+      // Still advances schema_version to 5 so the ladder converges.
+      if (!hasColumn(db, 'chat_tool_call', 'content_offset')) {
+        db.exec('ALTER TABLE chat_tool_call ADD COLUMN content_offset INTEGER')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '5')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v5 → v6 — task 06-08-chat 需求 5. Add ai_chat_messages.thinking: the Claude
+  // extended-thinking summary streamed during a thinking-mode turn, rendered in a
+  // collapsible block above the answer + reloaded from the DB. First-class column
+  // (not metadata) since it's body-level content. Plain additive ALTER → safe in
+  // its own transaction. NULL for all pre-v6 rows + non-thinking turns → renderer
+  // simply doesn't render the thinking block. (chat is a frontend-owned DB with
+  // its own version ladder — does NOT touch backend_lifecycle EXPECTED_DB_VERSION,
+  // which gates sync_store.db only.)
+  if (current < 6) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      // task 06-08-chat (codex LOW-2) — idempotent ADD COLUMN, same rationale as v5.
+      if (!hasColumn(db, 'ai_chat_messages', 'thinking')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN thinking TEXT')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '6')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
     }
   }
 }
@@ -659,6 +632,9 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     status: input.status,
     error_message: input.errorMessage ?? null,
     metadata: input.metadata ?? null,
+    // task 06-08-chat 需求 5 — appendMessage never seeds thinking (finalizeMessage
+    // writes it on终态 via updateMessage); the inserted row column defaults to NULL.
+    thinking: null,
     created_at: now,
     updated_at: now
   }
@@ -700,6 +676,11 @@ export function updateMessage(messageId: number, patch: UpdateMessagePatch): voi
   if (patch.metadata !== undefined) {
     fields.push('metadata = ?')
     params.push(patch.metadata)
+  }
+  // task 06-08-chat 需求 5 — thinking summary (finalizeMessage on a thinking turn).
+  if (patch.thinking !== undefined) {
+    fields.push('thinking = ?')
+    params.push(patch.thinking)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')
@@ -796,14 +777,15 @@ export function abortStreamingMessages(sessionId: number): number {
 export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
   const db = getChatDb()
   const now = Date.now()
+  const contentOffset = input.contentOffset ?? null
   const result = db
     .prepare(
       `INSERT INTO chat_tool_call
         (message_id, tool_use_id, tool_name, input_json,
          user_edited_input_json, output_json,
          status, duration_ms, confirmation_tier, confirmed_at,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?)`
+         content_offset, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?)`
     )
     .run(
       input.messageId,
@@ -812,6 +794,7 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
       input.inputJson,
       input.status,
       input.confirmationTier,
+      contentOffset,
       now,
       now
     )
@@ -827,6 +810,7 @@ export function appendToolCall(input: AppendToolCallInput): ChatToolCall {
     duration_ms: null,
     confirmation_tier: input.confirmationTier,
     confirmed_at: null,
+    content_offset: contentOffset,
     created_at: now,
     updated_at: now
   }

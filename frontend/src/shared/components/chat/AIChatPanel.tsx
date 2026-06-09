@@ -30,9 +30,9 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { BackendSelector, type BackendChoice } from './BackendSelector'
+import { backendSupportsThinking } from './backend_thinking'
 import { ChatSidebar } from './ChatSidebar'
 import { Composer } from './Composer'
-import { ConfirmToolDialog } from './ConfirmToolDialog'
 import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
 import { QuickActions } from './QuickActions'
@@ -56,6 +56,25 @@ function writeBackendKindPref(kind: ChatBackendKind): void {
     localStorage.setItem(BACKEND_KIND_PREF, kind)
   } catch {
     /* localStorage 在 sandbox / privacy 模式可能拒写; 偏好丢失无伤大雅 */
+  }
+}
+
+// task 06-08-chat 需求 5 — extended-thinking 开关偏好。用户体感是「常驻开关」（持久
+// localStorage），实现是 per-turn（每次 send 把当前值塞进 opts.thinking）。仅 custom-api
+// Anthropic 模型生效（notion-agent / OpenAI 协议忽略）。默认 OFF。
+const THINKING_PREF = 'mailagent.chat.thinkingEnabled'
+function readThinkingPref(): boolean {
+  try {
+    return localStorage.getItem(THINKING_PREF) === '1'
+  } catch {
+    return false
+  }
+}
+function writeThinkingPref(enabled: boolean): void {
+  try {
+    localStorage.setItem(THINKING_PREF, enabled ? '1' : '0')
+  } catch {
+    /* 同 backend pref —— 拒写无伤大雅 */
   }
 }
 
@@ -123,6 +142,16 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     setBackend(next)
   }, [])
   const [draft, setDraft] = useState('')
+  // task 06-08-chat 需求 5 — extended-thinking toggle (persisted localStorage,
+  // applied per-turn at send time). Only meaningful for custom-api Anthropic.
+  const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(() => readThinkingPref())
+  const toggleThinking = useCallback(() => {
+    setThinkingEnabled((cur) => {
+      const next = !cur
+      writeThinkingPref(next)
+      return next
+    })
+  }, [])
   // Sprint 14 PR D — @-mention chip stack. Each chip carries a SearchHit
   // so we can pull its subject + sender + bm25 snippet inline when
   // composing the prompt. handleSend below resolves each chip's full
@@ -141,6 +170,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // Record<number, string | null> so a "no first user message" hit
   // (assistant-only seeded session) is distinct from "not loaded yet".
   const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
+
+  // task 06-08-chat 需求 5 (codex MEDIUM-1) — single source of truth for "may the
+  // current backend/model use extended thinking". Drives both the Composer toggle's
+  // disabled state AND the per-turn gate in send/edit, so a toggle left ON after
+  // switching to a non-Claude model (gpt-5.5 / notion-agent) never sends thinking:true.
+  const thinkingSupported = backendSupportsThinking(backend)
 
   const chat = useEmailChat(activeInternalId)
 
@@ -344,10 +379,14 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         newContent,
         backendKind: backend.kind,
         backendModel: backend.model,
-        backendAgentPageId: backend.agentPageId
+        backendAgentPageId: backend.agentPageId,
+        // task 06-08-chat 需求 5 (codex MEDIUM-2) — the edit re-stream must honor the
+        // thinking toggle just like send() does, gated on backendSupportsThinking so
+        // a non-Claude model never re-runs with thinking:true.
+        thinking: thinkingSupported && thinkingEnabled
       })
     },
-    [chat, backend]
+    [chat, backend, thinkingSupported, thinkingEnabled]
   )
   const userHandlers: UserHandlers = {
     onEdit: handleEditUserMessage,
@@ -427,7 +466,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           backendModel: backend.model,
           backendAgentPageId: backend.agentPageId,
           senderName: detailQ.data?.sender_name ?? null,
-          subject: detailQ.data?.subject ?? null
+          subject: detailQ.data?.subject ?? null,
+          // task 06-08-chat 需求 5 (codex MEDIUM-1) — per-turn thinking toggle, gated
+          // on backendSupportsThinking (custom-api + claude-* model). Anything else
+          // (gpt-5.5 via CRS, notion-agent) sends false even if the toggle is
+          // residually ON from a model switch — openaiStream / the agent ignore it.
+          thinking: thinkingSupported && thinkingEnabled
         })
         setMentions([])
         setAttachments([])
@@ -436,7 +480,17 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
         // stack is preserved so retry doesn't lose the user's selection.
       }
     },
-    [activeInternalId, attachments, backend, buildMentionContext, chat, detailQ.data, mentions]
+    [
+      activeInternalId,
+      attachments,
+      backend,
+      buildMentionContext,
+      chat,
+      detailQ.data,
+      mentions,
+      thinkingEnabled,
+      thinkingSupported
+    ]
   )
 
   // Sprint 14 review LOW fix — preview cache + delete bookkeeping in a
@@ -474,6 +528,28 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
 
   const handlePickAction = useCallback((prompt: string) => setDraft(prompt), [])
   const handleCancel = useCallback(() => chat.abortCurrent(), [chat])
+
+  // task 06-08-chat Bug 4 — tool-confirmation handlers for the inline
+  // authorization card (now rendered inside MessageList at the bottom of
+  // the stream, was a fixed overlay here). The confirmTool → resolveConfirmation
+  // chain is unchanged; only the render shape + location moved. We act on the
+  // HEAD of the pending queue (MessageList renders that one card).
+  const pendingConfirmations = chat.pendingConfirmations
+  const headConfirmation = pendingConfirmations[0] ?? null
+  const handleConfirmTool = useCallback(
+    async (editedInput?: unknown): Promise<void> => {
+      if (!headConfirmation) return
+      const result = await chat.confirmTool(headConfirmation.toolUseId, true, editedInput)
+      if (!result.ok && result.code !== 'E_NOT_PENDING') {
+        toastError(t('chat.confirmTool.failed', { defaultValue: 'Confirm failed' }))
+      }
+    },
+    [chat, headConfirmation, t]
+  )
+  const handleCancelTool = useCallback(async (): Promise<void> => {
+    if (!headConfirmation) return
+    await chat.confirmTool(headConfirmation.toolUseId, false)
+  }, [chat, headConfirmation])
 
   // ⌥⇧B — toggle backend kind. Sprint 11 V1.4 moved from bare ⌥B because
   // the global nav-shell collapse claimed that keystroke per DESIGN.md
@@ -690,7 +766,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
             />
           )}
         </div>
-        <div className="flex-1 flex flex-col min-h-0">
+        {/* Bug 3 (task 06-08-chat) — min-w-0 on the main column. As a flex
+            item in the horizontal row above, its default min-width:auto would
+            otherwise let wide MessageList tool-output content push the column
+            (and thus the 360px <aside>) past its fixed width. Pairs with the
+            MessageList root's own min-w-0. */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <BackendSelector value={backend} onChange={selectBackend} agentName={agentName} />
           <ContextChips
             hasEmailBody={activeInternalId !== null}
@@ -750,6 +831,9 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                   streamingMessageId={chat.streamingMessageId}
                   draftHandlers={draftHandlers}
                   userHandlers={userHandlers}
+                  pendingConfirmations={pendingConfirmations}
+                  onConfirmTool={handleConfirmTool}
+                  onCancelTool={handleCancelTool}
                 />
               )}
 
@@ -781,36 +865,21 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                   selectBackend({ kind: 'custom-api', model, agentPageId: null })
                 }
                 modelPickerDisabled={backend.kind === 'notion-agent'}
+                // task 06-08-chat 需求 5 (codex MEDIUM-1) — extended-thinking toggle.
+                // Enabled only for custom-api + a claude-* model; notion-agent and
+                // OpenAI-protocol models (gpt-5.5) grey it out (no thinking support).
+                thinkingEnabled={thinkingEnabled}
+                onToggleThinking={toggleThinking}
+                thinkingDisabled={!thinkingSupported}
               />
             </>
           )}
         </div>
       </div>
-
-      {/* Sprint 19 PR-1d.2 — Agent harness confirmation dialog. Renders one
-          ConfirmToolDialog per pending entry (head of queue first). The
-          dialog blocks the panel chrome via a fixed-position overlay; only
-          one is visible at a time. confirmTool() resolves remove the head
-          from the queue; cancel does the same via main-process E_USER_CANCELED. */}
-      {chat.pendingConfirmations.length > 0 && (
-        <ConfirmToolDialog
-          key={chat.pendingConfirmations[0].toolUseId}
-          pending={chat.pendingConfirmations[0]}
-          onConfirm={async (editedInput) => {
-            const result = await chat.confirmTool(
-              chat.pendingConfirmations[0].toolUseId,
-              true,
-              editedInput
-            )
-            if (!result.ok && result.code !== 'E_NOT_PENDING') {
-              toastError(t('chat.confirmTool.failed', { defaultValue: 'Confirm failed' }))
-            }
-          }}
-          onCancel={async () => {
-            await chat.confirmTool(chat.pendingConfirmations[0].toolUseId, false)
-          }}
-        />
-      )}
+      {/* Sprint 19 PR-1d.2 / task 06-08-chat Bug 4 — the harness confirmation
+          UI moved from a fixed-position overlay here to an inline authorization
+          card rendered inside MessageList (bottom of the stream). See
+          handleConfirmTool / handleCancelTool + the MessageList props above. */}
     </aside>
   )
 }

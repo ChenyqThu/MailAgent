@@ -548,6 +548,11 @@ function listOptsForView(view: EmailView, limit: number): ListOpts {
   return { limit }
 }
 
+// 标旗视图传给 groupByThread 的空线程补充集 (模块级稳定引用, 不破 useMemo)。
+// 见 threadGroups useMemo 注释: 标旗邮件离散于各线程, 线程补充会引入 bare 的
+// 非标旗邮件抢占 head, 导致非置顶标旗邮件矮行 + 丢 AI strip。
+const EMPTY_THREAD_SUPPLEMENT: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMeta>> = new Map()
+
 const PAGE_SIZE = 100
 const MAX_PAGES = 30 // safety cap — 3000 rows is enough for visual scrolling
 // 首屏 100 行渲染落一帧后, 静默拉到 8 页 (800 行). 旧 100 行借 keepPreviousData
@@ -967,7 +972,13 @@ export function EmailList(): React.ReactElement {
     () =>
       view === 'outbox'
         ? groupBySentAnchor(filtered, threadSupplement)
-        : groupByThread(filtered, threadSupplement),
+        : // 标旗视图: 标旗邮件离散分布在各线程, threadSupplement 补进来的非标旗
+          // 邮件既不在 all (仅标旗) 也无 cross 源 (crossMailbox=null) → enrichDefaults
+          // 兜底成 bare (has_body=false / ai_priority=null), 一旦它是线程最新邮件就
+          // 被 groupByThread 选成 head → "非置顶标旗邮件矮行 + 无 AI strip"。标旗
+          // 视图语义=只看我标的邮件, 故线程只在标旗邮件之间聚合 (head 必为标旗邮件,
+          // enriched 完整), 不 merge 跨邮件补充。
+          groupByThread(filtered, view === 'flagged' ? EMPTY_THREAD_SUPPLEMENT : threadSupplement),
     [view, filtered, threadSupplement]
   )
 

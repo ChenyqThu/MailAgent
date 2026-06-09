@@ -129,6 +129,7 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     if (planApplied) return
     const plan = planQ.data
     if (!plan || !editor) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- plan 落地时一次性填表单（planApplied guard）+ editor.commands.setContent 命令式副作用。后者本须留 effect（IPC→editor 命令非 render 安全）。React Compiler 迁移债。
     setTo(plan.to ?? [])
     setCc(plan.cc ?? [])
     setBcc(plan.bcc ?? [])
@@ -282,7 +283,9 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
           <div className="flex-1 text-aux text-fail">
             <div className="font-medium">{t('compose.planError')}</div>
             <div className="text-meta font-mono text-ink-fg-2 mt-0.5">
-              {t('compose.planErrorHint', { code: planError?.code ?? planError?.message ?? 'E_UNKNOWN' })}
+              {t('compose.planErrorHint', {
+                code: planError?.code ?? planError?.message ?? 'E_UNKNOWN'
+              })}
             </div>
           </div>
           <button

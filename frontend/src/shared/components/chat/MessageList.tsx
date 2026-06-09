@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Bookmark,
+  Brain,
   Check,
   ChevronRight,
   Copy,
@@ -37,6 +38,9 @@ import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ChatMessage, ChatToolCall } from '@shared/api/types'
+import type { PendingConfirmation } from '@shared/hooks/useEmailChat'
+import { ConfirmToolDialog } from './ConfirmToolDialog'
+import { planAssistantSegments } from './tool_interleave'
 
 /** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
  *  handlers; if a panel doesn't (e.g. read-only conversation viewer), the
@@ -86,6 +90,15 @@ interface Props {
   draftHandlers?: DraftHandlers
   /** Sprint 14 PR B — wired by AIChatPanel; flows down to UserBubble. */
   userHandlers?: UserHandlers
+  /** task 06-08-chat Bug 4 — pending tool-confirmations from the harness.
+   *  The HEAD entry renders an inline authorization card at the bottom of
+   *  the stream (after the streaming assistant turn). Empty = no card. */
+  pendingConfirmations?: ReadonlyArray<PendingConfirmation>
+  /** Authorize the head confirmation. `editedInput` carries the user's
+   *  edited tool input when the edit-tier textarea was changed. */
+  onConfirmTool?: (editedInput?: unknown) => Promise<void> | void
+  /** Reject the head confirmation. */
+  onCancelTool?: () => Promise<void> | void
 }
 
 const DRAFT_REPLY_MARKER = /^\s*(?:#+\s*)?DRAFT REPLY\b/i
@@ -863,13 +876,11 @@ function ToolCallChip({ call }: { call: ChatToolCall }): React.ReactElement {
   )
 }
 
-function ToolCallAuditRow({
-  messageId,
-  isStreaming
-}: {
-  messageId: number
-  isStreaming: boolean
-}): React.ReactElement | null {
+/** Fetch the chat_tool_call audit rows for a finished assistant message.
+ *  Skips the fetch while the message is still streaming (chips only settle
+ *  after the turn completes — during streaming they ride the live event
+ *  forwarding path, not the DB). Returns [] until resolved / when streaming. */
+function useToolCalls(messageId: number, isStreaming: boolean): ChatToolCall[] {
   const mailApi = useMailApi()
   const [calls, setCalls] = useState<ChatToolCall[]>([])
 
@@ -889,13 +900,108 @@ function ToolCallAuditRow({
     }
   }, [messageId, isStreaming, mailApi])
 
-  if (calls.length === 0) return null
+  return calls
+}
 
+/** Legacy "all chips stacked below the body" layout. Used by the draft-reply
+ *  path (single final output, no time-ordered text) and as the degrade target
+ *  when no tool call carries a content_offset (pre-v5 rows / non-harness). */
+function ToolCallList({
+  calls
+}: {
+  calls: ReadonlyArray<ChatToolCall>
+}): React.ReactElement | null {
+  if (calls.length === 0) return null
   return (
     <div className="space-y-1">
       {calls.map((c) => (
         <ToolCallChip key={c.id} call={c} />
       ))}
+    </div>
+  )
+}
+
+/** task 06-08-chat Bug 2 — render the assistant text with tool chips
+ *  interleaved at their `content_offset` ("text → tool → more text") instead of
+ *  stacking every chip below the body. Layout logic lives in the pure
+ *  `planAssistantSegments`; this component only maps the plan to elements. */
+function AssistantTextWithToolCalls({
+  content,
+  calls,
+  isStreaming
+}: {
+  content: string
+  calls: ReadonlyArray<ChatToolCall>
+  isStreaming: boolean
+}): React.ReactElement {
+  const { segments, trailing } = planAssistantSegments(content, calls)
+  let textIdx = 0
+  return (
+    <div className="space-y-2">
+      {segments.map((seg) => {
+        if (seg.kind === 'chip') return <ToolCallChip key={`chip-${seg.call.id}`} call={seg.call} />
+        const key = `seg-${textIdx++}`
+        // min-w-0 keeps wide markdown (tables/code) from forcing the 360px
+        // drawer wider (Bug 3 lesson). The caret only rides the last text slice;
+        // interleaving only runs post-stream so this is normally false anyway.
+        return (
+          <div key={key} className="text-body text-ink-fg leading-relaxed min-w-0">
+            <TranslatedBody text={seg.text || ' '} streaming={isStreaming && seg.isLast} />
+          </div>
+        )
+      })}
+      {/* Chips the harness couldn't place (null offset) still render below so a
+          mixed old/new conversation never silently drops a tool call. */}
+      <ToolCallList calls={trailing} />
+    </div>
+  )
+}
+
+/** task 06-08-chat 需求 5 — extended-thinking collapsible block. Renders the
+ *  model's reasoning summary (message.thinking) above the answer, default
+ *  collapsed. Mirrors ToolCallChip's pure-CSS grid-template-rows 0fr→1fr
+ *  collapse (§4.1: grid-rows over GSAP; motion-reduce degrade). min-w-0 keeps
+ *  long reasoning lines from forcing the 360px drawer wider (Bug 3 lesson).
+ *  Empty thinking → caller doesn't render this (see AssistantBubble). */
+function ThinkingChip({ thinking }: { thinking: string }): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-md border border-ink-border-soft bg-ink-2/40 overflow-hidden min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left hover:bg-ink-fg/[0.03] transition-colors duration-fast"
+        aria-expanded={open}
+      >
+        <span
+          className="grid place-items-center w-[18px] h-[18px] rounded shrink-0"
+          style={{ background: 'rgb(var(--c-ai) / 0.12)', color: 'rgb(var(--c-ai))' }}
+        >
+          <Brain size={11} strokeWidth={2} />
+        </span>
+        <span className="text-meta text-ink-fg-2">{t('chat.thinking.label')}</span>
+        <ChevronRight
+          size={12}
+          className={cn(
+            'ml-auto shrink-0 text-ink-fg-3 transition-transform duration-fast',
+            open && 'rotate-90'
+          )}
+        />
+      </button>
+      <div
+        aria-hidden={!open}
+        className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
+        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <div className="px-2.5 pb-2.5 pt-1 border-t border-ink-border-soft">
+            <pre className="text-micro text-ink-fg-2 whitespace-pre-wrap break-words overflow-x-auto scrollbar-thin font-sans leading-relaxed">
+              {thinking}
+            </pre>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -910,12 +1016,27 @@ function AssistantBubble({
   draftHandlers?: DraftHandlers
 }): React.ReactElement {
   const { t } = useTranslation()
-  // Empty + streaming: render the thinking pulse instead of an empty bubble.
+  // task 06-08-chat Bug 2 — tool-call audit rows for this message. Fetched once
+  // here (hook must precede the early returns below) and shared by both the
+  // draft path (legacy stacked) and the text path (interleaved by offset). The
+  // hook skips the fetch while streaming, so the early returns don't waste it.
+  const toolCalls = useToolCalls(message.id, isStreaming)
+  // task 06-08-chat 需求 5 — extended-thinking summary for this message. Rendered
+  // in a collapsible block ABOVE the answer (thinking precedes the answer, both in
+  // SSE order + reading intuition). Empty → not rendered.
+  const thinkingText = message.thinking ?? ''
+  // Empty + streaming: render the thinking pulse instead of an empty bubble. If
+  // the extended-thinking stream has already produced reasoning (thinking mode on,
+  // answer not started yet), surface the collapsible thinking block above the pulse
+  // so the user can watch the reasoning stream in.
   if (message.content.length === 0 && isStreaming) {
     return (
-      <div className="flex items-center gap-2 py-1 text-aux text-ink-fg-2">
-        <Loader2 size={12} strokeWidth={2} className="animate-spin" />
-        <span>{t('chat.status.thinking')}</span>
+      <div className="space-y-2">
+        {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
+        <div className="flex items-center gap-2 py-1 text-aux text-ink-fg-2">
+          <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+          <span>{t('chat.status.thinking')}</span>
+        </div>
       </div>
     )
   }
@@ -983,13 +1104,16 @@ function AssistantBubble({
             {headerMeta}
           </div>
         )}
+        {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
         <DraftPreviewCard
           content={message.content}
           recipient={draftHandlers?.recipient ?? null}
           handlers={draftHandlers}
           isStreaming={isStreaming}
         />
-        <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
+        {/* Draft replies are a single final output (no time-ordered text to
+            interleave into) → keep tool chips stacked below the card. */}
+        <ToolCallList calls={toolCalls} />
         {!isStreaming && (
           <AssistantMessageFooter messageId={message.id} content={message.content} />
         )}
@@ -1004,12 +1128,18 @@ function AssistantBubble({
           {headerMeta}
         </div>
       )}
-      <div className="text-body text-ink-fg leading-relaxed">
-        {/* Streamdown 的 caret="block" 在文末 inline 渲染打字光标 (依赖 isAnimating
-            =streaming); 不再叠加外部 cursor-blink span, 避免双光标。 */}
-        <TranslatedBody text={message.content || ' '} streaming={isStreaming} />
-      </div>
-      <ToolCallAuditRow messageId={message.id} isStreaming={isStreaming} />
+      {/* task 06-08-chat 需求 5 — extended-thinking block, above the answer. */}
+      {thinkingText.length > 0 && <ThinkingChip thinking={thinkingText} />}
+      {/* task 06-08-chat Bug 2 — interleave tool chips at their content_offset
+          ("text → tool → more text") instead of stacking them all below the
+          body. Falls back to body-then-chips when no chip carries an offset
+          (pre-v5 rows / non-harness). Streamdown's caret renders inline at the
+          end of the trailing text segment while streaming. */}
+      <AssistantTextWithToolCalls
+        content={message.content || ' '}
+        calls={toolCalls}
+        isStreaming={isStreaming}
+      />
       {!isStreaming && <AssistantMessageFooter messageId={message.id} content={message.content} />}
     </div>
   )
@@ -1064,7 +1194,10 @@ export function MessageList({
   messages,
   streamingMessageId,
   draftHandlers,
-  userHandlers
+  userHandlers,
+  pendingConfirmations,
+  onConfirmTool,
+  onCancelTool
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   // (opus M) CJK-safe class for the truncated / system divider strings —
@@ -1153,9 +1286,30 @@ export function MessageList({
   return (
     <div
       ref={containerRef}
-      className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-3 py-3"
+      // Bug 3 (task 06-08-chat) — min-w-0 lets wide tool-output <pre> blocks
+      // scroll/wrap inside the fixed 360px drawer instead of forcing this
+      // flex item to its content's min-content width (the flex `min-width:auto`
+      // default), which otherwise stretches the whole <aside> past 360px.
+      className="flex-1 min-h-0 min-w-0 overflow-y-auto scrollbar-thin space-y-3 py-3"
     >
       {rendered}
+      {/* Bug 4 (task 06-08-chat) — inline tool-confirmation card at the
+          bottom of the stream (after the streaming assistant turn). The
+          harness blocks on this while dispatching a write-class tool, so
+          the streaming assistant is the last row → the card reads as "the
+          AI wants to run X, please authorize" right where it belongs.
+          px-3 matches the message rows; the card itself is min-w-0 + w-full
+          so it stays inside the 360px drawer. */}
+      {pendingConfirmations && pendingConfirmations.length > 0 && (
+        <div className="px-3">
+          <ConfirmToolDialog
+            key={pendingConfirmations[0].toolUseId}
+            pending={pendingConfirmations[0]}
+            onConfirm={(editedInput) => onConfirmTool?.(editedInput)}
+            onCancel={() => onCancelTool?.()}
+          />
+        </div>
+      )}
       <div ref={bottomRef} />
     </div>
   )

@@ -22,8 +22,11 @@
 import type {
   ReportApi,
   ReportAgentConfig,
+  ReportCadence,
+  ReportConfigPatch,
   ReportDetail,
   ReportListItem,
+  ReportRunResult,
   AdminHealthData,
   AdminStatsData,
   AIFields,
@@ -32,6 +35,7 @@ import type {
   CalendarEventDetail,
   CalendarEventOccurrence,
   CalendarSyncStateItem,
+  ChatApi,
   EventGetOpts,
   EventsListOpts,
   CleanupDeadLetterOpts,
@@ -60,19 +64,33 @@ import type {
   LlmStatsData,
   MailApi,
   MailboxSummary,
+  NotionAgentConfig,
+  NotionAgentListItem,
+  PersistentSettings,
+  PromptContent,
+  PromptInfo,
+  PromptSlot,
   ResyncOpts,
   ResyncResult,
   SearchOpts,
   SearchResult,
+  SecretsStatus,
   SendEmailOpts,
   SystemAlertsData,
   TargetLang,
   TranslationCache
 } from './types'
 import { fetchAsDataUrl, request, type QueryValue, type RequestOptions } from './http_client'
+import { createChatRuntime } from '../chat/runtime'
 
-function notImplemented(method: string): never {
-  throw new Error(`HttpApi.${method}() not implemented yet (V2-Sprint 3)`)
+function notImplemented(method: string): Promise<never> {
+  // V2-Sprint 3 stub. MUST reject, never throw synchronously: every stubbed
+  // surface is an async API method whose renderer call sites degrade via
+  // `.catch()` / try-await. A sync throw escapes those handlers and trips the
+  // React ErrorBoundary ("Something went wrong") — e.g. AiTab's prompts.list()
+  // on mount when opened from remote. Rejecting keeps the failure inside the
+  // promise chain so each call site can fall back to a toast.
+  return Promise.reject(new Error(`HttpApi.${method}() not implemented yet (V2-Sprint 3)`))
 }
 
 /** True only for an ApiError whose code === 'E_NOT_FOUND'. Used by the few
@@ -405,34 +423,20 @@ export class HttpApi implements MailApi {
     }
   }
 
-  // Sprint 4 §2.1 — AI Chat. SSE deferred to V2.1; all chat methods stay as
-  // notImplemented / noop stubs (kosAvailable→false so the save button doesn't
-  // render, listToolCalls→[], confirmTool→ok:false, onStream→noop unsub).
-  chat = {
-    start: () => notImplemented('chat.start'),
-    abort: () => {
-      /* no-op stub */
-    },
-    listMessages: () => notImplemented('chat.listMessages'),
-    listSessions: () => notImplemented('chat.listSessions'),
-    listAllSessions: () => notImplemented('chat.listAllSessions'),
-    editMessage: () => notImplemented('chat.editMessage'),
-    openPopout: () => {
-      /* no-op stub — no second-window in V2 web SPA */
-    },
-    deleteSession: () => {
-      /* no-op stub */
-    },
-    newSession: () => notImplemented('chat.newSession'),
-    saveToKos: () => notImplemented('chat.saveToKos'),
-    kosAvailable: async () => false,
-    listToolCalls: async () => [],
-    confirmTool: async () => ({
-      ok: false as const,
-      code: 'E_NOT_IMPLEMENTED',
-      message: 'chat.confirmTool not implemented in HttpApi stub'
-    }),
-    onStream: (): (() => void) => () => undefined
+  // V2.1 阶段 3 — 3c-2：chat 引擎在 UI 进程跑（B-pure-unified）。chat 整面 = ChatRuntime
+  // （createChatDispatcher + HttpChatPlatform + 进程内 emitter sink，shared/chat/runtime.ts）
+  // 取代阶段 2 的只读 stub —— 读 + 跑单一真源 fetch serve-api。
+  //
+  // 🔴 lazy getter 破循环：createChatRuntime({reads:this}) 把本 HttpApi 作工具读委托
+  // （runtime → new HttpChatPlatform(this) 只用 email/attachment，不回访 .chat）。electron
+  // 注入的 new HttpApi(loopback) 只取 email/attachment、不访问 .chat → 其 runtime 永不构造
+  // （3c-3 electron 切走自己的 createChatRuntime）；远程 web 不用 chat 时零开销。
+  private _chat?: ChatApi
+  get chat(): ChatApi {
+    if (!this._chat) {
+      this._chat = createChatRuntime({ reads: this, baseUrl: this.baseUrl })
+    }
+    return this._chat
   }
 
   llm = {
@@ -538,13 +542,15 @@ export class HttpApi implements MailApi {
     eventDelete: () => notImplemented('calendar.eventDelete')
   }
 
-  // No OS keychain / native folder picker on web — all writes + secret slots
-  // stay stubbed. settings.get has no endpoint yet; keep stub for now.
+  // task 06-08-chat 第二波 — 远程 config: 只读配置端点接线（serve-api 读 host .env）。
+  // secretsStatus / get 走 serve-api（settings AI tab loading gate）；写 + 原生 folder
+  // picker + ping test 仍 stub —— 远程无 keychain / 无 .app dialog / 用 host 已配置。
   settings = {
-    secretsStatus: () => notImplemented('settings.secretsStatus'),
+    secretsStatus: (): Promise<SecretsStatus> =>
+      this.req<SecretsStatus>('GET', '/settings/secrets-status'),
     setSecret: () => notImplemented('settings.setSecret'),
     clearSecret: () => notImplemented('settings.clearSecret'),
-    get: () => notImplemented('settings.get'),
+    get: (): Promise<PersistentSettings> => this.req<PersistentSettings>('GET', '/settings'),
     set: () => notImplemented('settings.set'),
     pickFolder: () => notImplemented('settings.pickFolder'),
     testLlm: () => notImplemented('settings.testLlm'),
@@ -602,19 +608,26 @@ export class HttpApi implements MailApi {
     status: async () => []
   }
 
-  // No host fs access to the Mac's prompt files; no endpoint.
+  // task 06-08-chat 第二波 — 远程 config: prompt 文件读经 serve-api（host fs，clamp
+  // 在 data root）。write 仍 stub —— 远程只读 host 已配置的 prompt。
   prompts = {
-    list: () => notImplemented('prompts.list'),
-    read: () => notImplemented('prompts.read'),
+    list: (): Promise<{ inbox: PromptInfo; sent: PromptInfo }> =>
+      this.req<{ inbox: PromptInfo; sent: PromptInfo }>('GET', '/prompts'),
+    read: (slot: PromptSlot): Promise<PromptContent> =>
+      this.req<PromptContent>('GET', `/prompts/${encodeURIComponent(slot)}`),
     write: () => notImplemented('prompts.write')
   }
 
-  // Notion Agent CLI is Mac-host-only (~/.notionagents + local binary).
+  // task 06-08-chat 第二波 — 远程 config: notion-agent 账户/model/agent 读经 serve-api
+  // （host ~/.notionagents + CLI spawn）。getConfig 是 chat 启动 gate 第一读，必须成功。
+  // doctor / setAgent / setModel 仍 stub —— 远程无 CLI 写/连通性写场景，用 host 已绑定。
   notionAgent = {
-    getConfig: () => notImplemented('notionAgent.getConfig'),
-    listModels: () => notImplemented('notionAgent.listModels'),
+    getConfig: (): Promise<NotionAgentConfig> =>
+      this.req<NotionAgentConfig>('GET', '/notion-agent/config'),
+    listModels: (): Promise<string[]> => this.req<string[]>('GET', '/notion-agent/models'),
     doctor: () => notImplemented('notionAgent.doctor'),
-    listAgents: () => notImplemented('notionAgent.listAgents'),
+    listAgents: (): Promise<NotionAgentListItem[]> =>
+      this.req<NotionAgentListItem[]>('GET', '/notion-agent/agents'),
     setAgent: () => notImplemented('notionAgent.setAgent'),
     setModel: () => notImplemented('notionAgent.setModel')
   }
@@ -646,14 +659,48 @@ export class HttpApi implements MailApi {
     onEvent: (): (() => void) => () => undefined
   }
 
-  // Sprint 20 — 报告 Agent: serve-api 暂无 report 端点。读优雅降级（空列表 →
-  // /agents 页渲染空态，与 island/updater 同款 graceful disabled），写 notImplemented。
+  // V2.1 — 报告 Agent: serve-api /api/reports + /api/report-agents 端点（in-process
+  // ReportStore + wire.py，镜像 IPC report:*）。读优雅降级（失败返 []/null → /agents 页
+  // 空态，守 ReportApi「失败返 []/null」契约，与 ElectronApi 依赖 handler graceful 对齐）；
+  // 写经 req() 解包 envelope（成功返 data，失败 throw，镜像 ElectronApi unwrap）。
   report: ReportApi = {
-    list: (): Promise<ReportListItem[]> => Promise.resolve([]),
-    get: (): Promise<ReportDetail | null> => Promise.resolve(null),
-    getConfig: (): Promise<ReportAgentConfig[]> => Promise.resolve([]),
-    setConfig: () => notImplemented('report.setConfig'),
-    runNow: () => notImplemented('report.runNow'),
-    delete: () => notImplemented('report.delete')
+    list: async (opts?: {
+      cadence?: ReportCadence
+      agentId?: string
+      limit?: number
+    }): Promise<ReportListItem[]> => {
+      try {
+        return await this.req<ReportListItem[]>('GET', '/reports', {
+          query: { cadence: opts?.cadence, agentId: opts?.agentId, limit: opts?.limit }
+        })
+      } catch {
+        return []
+      }
+    },
+    get: async (reportId: string): Promise<ReportDetail | null> => {
+      try {
+        return await this.req<ReportDetail>('GET', `/reports/${encodeURIComponent(reportId)}`)
+      } catch {
+        return null
+      }
+    },
+    getConfig: async (): Promise<ReportAgentConfig[]> => {
+      try {
+        return await this.req<ReportAgentConfig[]>('GET', '/report-agents')
+      } catch {
+        return []
+      }
+    },
+    setConfig: (agentId: string, patch: ReportConfigPatch): Promise<ReportAgentConfig> =>
+      this.req<ReportAgentConfig>('PUT', `/report-agents/${encodeURIComponent(agentId)}`, {
+        body: patch
+      }),
+    runNow: (agentId: string, opts?: { cadence?: ReportCadence }): Promise<ReportRunResult> =>
+      this.req<ReportRunResult>('POST', `/report-agents/${encodeURIComponent(agentId)}/run`, {
+        body: opts ?? {}
+      }),
+    delete: async (reportId: string): Promise<void> => {
+      await this.req('DELETE', `/reports/${encodeURIComponent(reportId)}`)
+    }
   }
 }
