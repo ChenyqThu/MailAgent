@@ -64,10 +64,17 @@ import type {
   LlmStatsData,
   MailApi,
   MailboxSummary,
+  NotionAgentConfig,
+  NotionAgentListItem,
+  PersistentSettings,
+  PromptContent,
+  PromptInfo,
+  PromptSlot,
   ResyncOpts,
   ResyncResult,
   SearchOpts,
   SearchResult,
+  SecretsStatus,
   SendEmailOpts,
   SystemAlertsData,
   TargetLang,
@@ -535,13 +542,15 @@ export class HttpApi implements MailApi {
     eventDelete: () => notImplemented('calendar.eventDelete')
   }
 
-  // No OS keychain / native folder picker on web — all writes + secret slots
-  // stay stubbed. settings.get has no endpoint yet; keep stub for now.
+  // task 06-08-chat 第二波 — 远程 config: 只读配置端点接线（serve-api 读 host .env）。
+  // secretsStatus / get 走 serve-api（settings AI tab loading gate）；写 + 原生 folder
+  // picker + ping test 仍 stub —— 远程无 keychain / 无 .app dialog / 用 host 已配置。
   settings = {
-    secretsStatus: () => notImplemented('settings.secretsStatus'),
+    secretsStatus: (): Promise<SecretsStatus> =>
+      this.req<SecretsStatus>('GET', '/settings/secrets-status'),
     setSecret: () => notImplemented('settings.setSecret'),
     clearSecret: () => notImplemented('settings.clearSecret'),
-    get: () => notImplemented('settings.get'),
+    get: (): Promise<PersistentSettings> => this.req<PersistentSettings>('GET', '/settings'),
     set: () => notImplemented('settings.set'),
     pickFolder: () => notImplemented('settings.pickFolder'),
     testLlm: () => notImplemented('settings.testLlm'),
@@ -599,19 +608,26 @@ export class HttpApi implements MailApi {
     status: async () => []
   }
 
-  // No host fs access to the Mac's prompt files; no endpoint.
+  // task 06-08-chat 第二波 — 远程 config: prompt 文件读经 serve-api（host fs，clamp
+  // 在 data root）。write 仍 stub —— 远程只读 host 已配置的 prompt。
   prompts = {
-    list: () => notImplemented('prompts.list'),
-    read: () => notImplemented('prompts.read'),
+    list: (): Promise<{ inbox: PromptInfo; sent: PromptInfo }> =>
+      this.req<{ inbox: PromptInfo; sent: PromptInfo }>('GET', '/prompts'),
+    read: (slot: PromptSlot): Promise<PromptContent> =>
+      this.req<PromptContent>('GET', `/prompts/${encodeURIComponent(slot)}`),
     write: () => notImplemented('prompts.write')
   }
 
-  // Notion Agent CLI is Mac-host-only (~/.notionagents + local binary).
+  // task 06-08-chat 第二波 — 远程 config: notion-agent 账户/model/agent 读经 serve-api
+  // （host ~/.notionagents + CLI spawn）。getConfig 是 chat 启动 gate 第一读，必须成功。
+  // doctor / setAgent / setModel 仍 stub —— 远程无 CLI 写/连通性写场景，用 host 已绑定。
   notionAgent = {
-    getConfig: () => notImplemented('notionAgent.getConfig'),
-    listModels: () => notImplemented('notionAgent.listModels'),
+    getConfig: (): Promise<NotionAgentConfig> =>
+      this.req<NotionAgentConfig>('GET', '/notion-agent/config'),
+    listModels: (): Promise<string[]> => this.req<string[]>('GET', '/notion-agent/models'),
     doctor: () => notImplemented('notionAgent.doctor'),
-    listAgents: () => notImplemented('notionAgent.listAgents'),
+    listAgents: (): Promise<NotionAgentListItem[]> =>
+      this.req<NotionAgentListItem[]>('GET', '/notion-agent/agents'),
     setAgent: () => notImplemented('notionAgent.setAgent'),
     setModel: () => notImplemented('notionAgent.setModel')
   }
