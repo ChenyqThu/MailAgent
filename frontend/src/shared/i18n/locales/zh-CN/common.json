@@ -1132,6 +1132,10 @@
       "hide": "隐藏",
       "secretSaved": "已写入 keychain + .env"
     },
+    "env": {
+      "loadError": "配置加载失败",
+      "remoteReadonly": "远程为只读，配置请在本机修改"
+    },
     "tabs": {
       "general": "通用",
       "accounts": "账户",

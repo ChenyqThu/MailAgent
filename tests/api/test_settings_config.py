@@ -437,6 +437,71 @@ def test_load_env_merged_graceful_when_env_file_missing(
 
 
 # ============================================================
+# env snapshot (GET /api/env — managed .env, read-only)
+# ============================================================
+def test_env_snapshot_shape_and_redaction(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EnvSnapshot 形状：path/exists/values/managedKeys/secretKeys。secret 脱敏，
+    非 secret 原值，非受管 key 不出现在 values。"""
+    _clear_business_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "USER_EMAIL=owner@example.com\n"  # managed, non-secret → plaintext
+        "NOTION_TOKEN=secret-token-DO-NOT-LEAK\n"  # managed secret → '***'
+        "DASHBOARD_PASSWORD=\n"  # managed secret, empty → ''
+        "SOME_UNMANAGED_KEY=should-not-leak\n"  # not managed → absent from values
+        "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(env_file))
+    r = client.get("/api/env")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["exists"] is True
+    assert data["path"].endswith(".env")
+    # managedKeys / secretKeys echoed.
+    assert "NOTION_TOKEN" in data["managedKeys"]
+    assert "USER_EMAIL" in data["managedKeys"]
+    assert "NOTION_TOKEN" in data["secretKeys"]
+    assert "USER_EMAIL" not in data["secretKeys"]
+    # values: non-secret plaintext, secret redacted, empty secret '', unmanaged absent.
+    assert data["values"]["USER_EMAIL"] == "owner@example.com"
+    assert data["values"]["NOTION_TOKEN"] == "***"
+    assert data["values"]["DASHBOARD_PASSWORD"] == ""
+    assert "SOME_UNMANAGED_KEY" not in data["values"]
+    # plaintext secret + unmanaged value NEVER cross the wire.
+    assert "secret-token-DO-NOT-LEAK" not in r.text
+    assert "should-not-leak" not in r.text
+
+
+def test_env_snapshot_missing_file_graceful(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缺 .env → exists:false / values:{}（never throw），managedKeys 照常返回。"""
+    _clear_business_env(monkeypatch)
+    monkeypatch.setenv("MAILAGENT_ENV_FILE", str(tmp_path / "nope.env"))
+    r = client.get("/api/env")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["exists"] is False
+    assert data["values"] == {}
+    assert len(data["managedKeys"]) > 0
+    assert len(data["secretKeys"]) > 0
+
+
+def test_env_snapshot_managed_secret_keys_match_ts() -> None:
+    """受管 / secret key 数量与 TS SSoT 对齐（防漂移：env-keys.ts 改了这里也要改）。"""
+    snap = settings_router._build_env_snapshot()
+    # SECRET_ENV_KEYS in env-keys.ts has exactly 10 entries.
+    assert len(snap["secretKeys"]) == 10
+    # All secret keys must be a subset of managed keys.
+    assert set(snap["secretKeys"]).issubset(set(snap["managedKeys"]))
+    # No duplicate managed keys.
+    assert len(snap["managedKeys"]) == len(set(snap["managedKeys"]))
+
+
+# ============================================================
 # prompts
 # ============================================================
 @pytest.fixture
@@ -528,6 +593,7 @@ def test_endpoints_require_auth(monkeypatch: pytest.MonkeyPatch) -> None:
             "/api/notion-agent/models",
             "/api/settings/secrets-status",
             "/api/settings",
+            "/api/env",
             "/api/prompts",
             "/api/prompts/inbox",
         ):

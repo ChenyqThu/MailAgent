@@ -16,7 +16,9 @@
 // pane 顶部 sticky, 此 PR 留 placeholder 注释.
 
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearch } from '@tanstack/react-router'
+import { Info } from 'lucide-react'
 
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
@@ -38,9 +40,18 @@ import { RemoteAccessTab } from './tabs/RemoteAccessTab'
 import { SyncTab } from './tabs/SyncTab'
 
 export function SettingsShell(): React.ReactElement {
+  const { t } = useTranslation()
   const search = useSearch({ strict: false }) as { tab?: string }
   const navigate = useNavigate()
   const refresh = useEnvStore((s) => s.refresh)
+  // Remote web (HttpApi) is read-only: env.set is notImplemented and every
+  // EnvField renders disabled. Surface that ONCE here as a page-level note,
+  // instead of repeating it on each of the ~72 fields (which would also
+  // clobber each field's own helper). Mirror EnvField.tsx's VITE_BUILD_TARGET
+  // probe.
+  const isWeb =
+    (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
+    'web'
   // SETTINGS-04 — <md 把 vertical rail 切成 horizontal 顶部 tab 条。orientation
   // 驱动 Radix data-orientation: vertical→TabsList flex-col (tabs.tsx:29 data-attr
   // 强制, specificity 压过 className); horizontal→横向 + 下划线 active tab。
@@ -101,6 +112,17 @@ export function SettingsShell(): React.ReactElement {
         className="glass-3 flex-1 min-w-0 min-h-0 overflow-y-auto scrollbar-thin"
       >
         <RestartBanner />
+        {isWeb ? (
+          <div
+            role="note"
+            className="mx-auto w-full max-w-full md:max-w-[760px] px-4 sm:px-6 md:px-10 pt-6 md:pt-4"
+          >
+            <div className="flex items-center gap-2 rounded-md border border-ink-border-soft bg-ink-3/40 px-3 py-2 text-aux text-ink-fg-2">
+              <Info className="size-4 shrink-0 text-ink-fg-3" aria-hidden="true" />
+              <span>{t('settings.env.remoteReadonly')}</span>
+            </div>
+          </div>
+        ) : null}
         <div
           ref={panelScopeRef}
           className="mx-auto w-full max-w-full md:max-w-[760px] px-4 sm:px-6 md:px-10 pt-6 md:pt-8 pb-24"

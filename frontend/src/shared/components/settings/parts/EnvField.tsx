@@ -107,6 +107,12 @@ export function EnvField({
   const storeState = useEnvStore((s) => s.state)
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
 
+  // Remote web (HttpApi) is read-only: env.set is notImplemented, so all write
+  // controls render disabled. Mirror StatusBar.tsx's VITE_BUILD_TARGET probe.
+  const isWeb =
+    (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
+    'web'
+
   // store value — for secrets this is '***' (set) or '' (unset); for non-
   // secrets it's the plaintext .env value (managed keys only).
   const storeValue = storeState.status === 'ready' ? (storeState.snapshot.values[envKey] ?? '') : ''
@@ -182,7 +188,8 @@ export function EnvField({
     void persist({ [envKey]: normalized })
   }
 
-  if (storeState.status !== 'ready') {
+  // idle / loading → spinner (first env:get round-trip in flight).
+  if (storeState.status === 'idle' || storeState.status === 'loading') {
     return (
       <Row label={label} helper={helper} className={className}>
         <Loader2 className="size-4 animate-spin text-ink-fg-3" aria-label="loading" />
@@ -190,12 +197,36 @@ export function EnvField({
     )
   }
 
+  // error → render the field disabled with empty value (storeValue=''/isSecret=
+  // false default above) + a tiny error hint. NEVER an infinite spinner: a failed
+  // env.get used to leave the whole tab spinning (Bug 6 — remote web env.get).
+  const loadFailed = storeState.status === 'error'
+
+  // Remote web is read-only; a failed load disables writes too.
+  // The "remote read-only" notice is surfaced ONCE page-level (SettingsShell
+  // banner), not per-field — repeating it on ~72 fields would be noise AND
+  // would clobber each field's own helper. Here we only keep the control
+  // disabled in web; the helper is preserved verbatim.
+  const effectiveDisabled = disabled || isWeb || loadFailed
+
+  // helper line: on load failure APPEND a one-line error hint below the field's
+  // own helper (never replace it — keep the field documentation). Otherwise the
+  // original helper passes through untouched.
+  const helperWithNotice: React.ReactNode = loadFailed ? (
+    <>
+      {helper}
+      <span className="block text-ink-fg-3">{t('settings.env.loadError')}</span>
+    </>
+  ) : (
+    helper
+  )
+
   // sharedInputProps is reused across text/number/date/tag-list cases.
   // `placeholder` is deliberately NOT included — each case threads its own
   // placeholder so the per-case i18n default (tag-list comma-separated hint etc.)
   // can win over the caller-supplied prop without dropping it on tag-list.
   const sharedInputProps = {
-    disabled: disabled || submitting,
+    disabled: effectiveDisabled || submitting,
     className: cn('w-[260px]')
   }
 
@@ -203,10 +234,10 @@ export function EnvField({
     case 'toggle': {
       const isOn = storeValue === 'true' || storeValue === '1'
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <Switch
             checked={isOn}
-            disabled={disabled || submitting}
+            disabled={effectiveDisabled || submitting}
             onCheckedChange={handleToggle}
             aria-label={typeof label === 'string' ? label : envKey}
           />
@@ -215,12 +246,12 @@ export function EnvField({
     }
     case 'select': {
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <div className="w-[200px]">
             <Select
               value={storeValue}
               onValueChange={handleSelect}
-              disabled={disabled || submitting}
+              disabled={effectiveDisabled || submitting}
             >
               <SelectTrigger>
                 <SelectValue
@@ -241,7 +272,7 @@ export function EnvField({
     }
     case 'number': {
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <Input
             type="number"
             value={local}
@@ -258,7 +289,7 @@ export function EnvField({
     }
     case 'date': {
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <Input
             type="date"
             value={local}
@@ -273,7 +304,7 @@ export function EnvField({
     }
     case 'tag-list': {
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <Input
             value={local}
             onChange={(e) => setLocalValue(e.target.value)}
@@ -287,7 +318,7 @@ export function EnvField({
     case 'password': {
       const hasStored = storeValue.length > 0
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <div className="relative w-[260px]">
             <Input
               type={revealed ? 'text' : 'password'}
@@ -299,7 +330,7 @@ export function EnvField({
                   ? t('settings.envField.secretSet')
                   : (placeholder ?? t('settings.envField.secretUnset'))
               }
-              disabled={disabled || submitting}
+              disabled={effectiveDisabled || submitting}
               className="pr-9"
               aria-label={typeof label === 'string' ? label : envKey}
             />
@@ -326,7 +357,7 @@ export function EnvField({
     }
     case 'readonly': {
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <div className="w-[260px] text-aux text-ink-fg-1 truncate" title={storeValue}>
             {storeValue.length > 0 ? storeValue : <span className="text-ink-fg-3">—</span>}
           </div>
@@ -336,7 +367,7 @@ export function EnvField({
     case 'text':
     default: {
       return (
-        <Row label={label} helper={helper} className={className}>
+        <Row label={label} helper={helperWithNotice} className={className}>
           <Input
             type="text"
             value={local}

@@ -1129,6 +1129,10 @@
       "hide": "Hide",
       "secretSaved": "Written to keychain + .env"
     },
+    "env": {
+      "loadError": "Failed to load settings",
+      "remoteReadonly": "Remote is read-only; edit settings on the host machine"
+    },
     "tabs": {
       "general": "General",
       "accounts": "Accounts",

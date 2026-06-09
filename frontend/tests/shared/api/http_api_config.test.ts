@@ -171,6 +171,24 @@ describe('HttpApi — 远程 config 只读端点', () => {
     expect(calledUrl()).toContain('/api/prompts/inbox')
     expect(out.content).toBe('prompt body')
   })
+
+  test('env.get → GET /env，解包 EnvSnapshot（Bug 6 — 远程 Settings 读 .env 快照）', async () => {
+    const snapshot = {
+      path: '/root/.env',
+      exists: true,
+      values: { USER_EMAIL: 'owner@example.com', NOTION_TOKEN: '***' },
+      managedKeys: ['USER_EMAIL', 'NOTION_TOKEN'],
+      secretKeys: ['NOTION_TOKEN']
+    }
+    fetchMock.mockResolvedValue(envelopeResponse(snapshot))
+    const out = await api.env.get()
+    expect(calledMethod()).toBe('GET')
+    expect(calledUrl()).toContain('/api/env')
+    expect(out.exists).toBe(true)
+    expect(out.values.USER_EMAIL).toBe('owner@example.com')
+    expect(out.values.NOTION_TOKEN).toBe('***')
+    expect(out.secretKeys).toContain('NOTION_TOKEN')
+  })
 })
 
 describe('HttpApi — 远程 config 写方法仍 notImplemented (reject, 不 fetch)', () => {
@@ -215,5 +233,10 @@ describe('HttpApi — 远程 config 写方法仍 notImplemented (reject, 不 fet
 
   test('prompts.write rejects', async () => {
     await expect(api.prompts.write('inbox', 'x')).rejects.toThrow(/not implemented/)
+  })
+
+  test('env.set rejects (远程只读，EnvField 控件 disabled)', async () => {
+    await expect(api.env.set({ USER_EMAIL: 'x@y.com' })).rejects.toThrow(/not implemented/)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

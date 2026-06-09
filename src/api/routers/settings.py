@@ -44,6 +44,146 @@ router = APIRouter(prefix="/api", tags=["settings"])
 
 
 # ============================================================
+# managed .env keys whitelist (mirror of env-keys.ts)
+# ============================================================
+# 逐字 port 自 SSoT = ``frontend/src/electron/main/lib/env-keys.ts``
+# (``MANAGED_ENV_KEYS`` + ``SECRET_ENV_KEYS``). 远程 ``GET /api/env`` 只返回
+# 受管 key 的值 —— 安全边界: 绝不把非受管的 os.environ 值出网 (那会泄漏 shell
+# 里的任意密钥)。secret key 值脱敏成 '***' (set) / '' (unset), 复刻 env.ts
+# ``redactSnapshot``。**新增受管 key 须同步两处** (这里 + env-keys.ts)。
+_MANAGED_ENV_KEYS: List[str] = [
+    # — Accounts
+    "NOTION_TOKEN",
+    "EMAIL_DATABASE_ID",
+    "CALENDAR_DATABASE_ID",
+    "USER_EMAIL",
+    "MAIL_ACCOUNT_NAME",
+    "MAIL_INBOX_NAME",
+    "MAIL_SENT_NAME",
+    "MAIL_ACCOUNT_URL_PREFIX",
+    # — DavMail backend
+    "DAVMAIL_HOST",
+    "DAVMAIL_IMAP_PORT",
+    "DAVMAIL_SMTP_PORT",
+    "DAVMAIL_POC_CIPHER_KEY",
+    "DAVMAIL_CIPHER_KEY",
+    "DAVMAIL_POC_MODE",
+    "DAVMAIL_FETCH_TIMEOUT_SEC",
+    "DAVMAIL_UID_BACKFILL_ENABLED",
+    "DAVMAIL_UID_BACKFILL_BATCH_SIZE",
+    "DAVMAIL_UID_BACKFILL_SLEEP_SEC",
+    "DAVMAIL_DRAFTS_FOLDER",
+    "DAVMAIL_SENT_FOLDER",
+    "DAVMAIL_ARCHIVE_SENT",
+    "DAVMAIL_POLL_INTERVAL_SEC",
+    "DAVMAIL_CALDAV_PORT",
+    # — Sync
+    "SYNC_DATE_MODE",
+    "SYNC_START_DATE",
+    "SYNC_LOOKBACK_DAYS",
+    "SYNC_MAILBOXES",
+    "RADAR_POLL_INTERVAL",
+    "REVERSE_SYNC_INTERVAL",
+    "HEALTH_CHECK_INTERVAL",
+    "SYNC_MODE",
+    "CALENDAR_SYNC_MODE",
+    "CALENDAR_PAST_DAYS",
+    "CALENDAR_FUTURE_DAYS",
+    "CALENDAR_CALDAV_SYNC_ENABLED",
+    # — Folder sync
+    "MAILBOX_FOLDER_SYNC_ENABLED",
+    "FOLDER_SYNC_POLL_INTERVAL_SEC",
+    "ARCHIVE_SYNC_PAST_DAYS",
+    "ARCHIVE_SYNC_MAX_MESSAGES",
+    # — Backend selection
+    "MAILAGENT_BACKEND",
+    # — Daily digest
+    "MAILAGENT_DAILY_DIGEST_ENABLED",
+    # — AI Agent
+    "LLM_AGENT_ENABLED",
+    "LLM_API_BASE",
+    "LLM_API_KEY",
+    "LLM_MODEL",
+    "LLM_TRANSLATE_BASE_URL",
+    "LLM_TRANSLATE_API_KEY",
+    "LLM_TRANSLATE_MODEL",
+    "LLM_FALLBACK_MODELS",
+    "LLM_CONTEXT_PAGE_ID",
+    "LLM_INBOX_PROMPT_PATH",
+    "LLM_SENT_PROMPT_PATH",
+    "LLM_CACHE_ENABLED",
+    "LLM_CACHE_TTL",
+    # — Notifications
+    "FEISHU_NOTIFY_ENABLED",
+    "FEISHU_APP_ID",
+    "FEISHU_APP_SECRET",
+    "FEISHU_CHAT_ID",
+    "ALERT_ENABLED",
+    "ALERT_FEISHU_WEBHOOK_URL",
+    "ALERT_FEISHU_WEBHOOK_SECRET",
+    "ALERT_LEVELS",
+    # — Integrations
+    "PROJECT_PROGRESS_SYNC_ENABLED",
+    "PROJECT_PROGRESS_AUTO_SYNC_ENABLED",
+    "PROJECT_PROGRESS_DATABASE_ID",
+    "PROJECT_PROGRESS_FILTER_BU",
+    "PROJECT_PROGRESS_SUBJECT_PATTERN",
+    "PROJECT_PROGRESS_SENDER",
+    "OFFICE_CONVERT_ENABLED",
+    "STATS_REPORT_URL",
+    "STATS_REPORT_INTERVAL",
+    "STATS_REPORT_TOKEN",
+    "DASHBOARD_PASSWORD",
+    "MAILAGENT_CLI_API_KEY",
+    # — Realtime & Storage
+    "REDIS_EVENTS_ENABLED",
+    "REDIS_URL",
+    "BODY_DUAL_WRITE_ENABLED",
+    "MAILAGENT_SSE_ENABLED",
+    "LOG_LEVEL",
+    "MAILAGENT_OUTBOX_ENABLED",
+    "MAILAGENT_OUTBOX_POLL_INTERVAL_SEC",
+    "MAILAGENT_OUTBOX_MAX_ATTEMPTS",
+    "MAILAGENT_OUTBOX_CONCURRENCY",
+    # — Agent Harness + KOS
+    "MAILAGENT_AGENT_HARNESS",
+    "MAILAGENT_KOS_CONSUMER_ENABLED",
+    "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED",
+    "MAILAGENT_KOS_INGEST_ENABLED",
+    "MAILAGENT_KOS_TIME_DECAY_ENABLED",
+    # — Island
+    "PING_ISLAND_ENABLED",
+    "ISLAND_SOCKET_PATH",
+    # — Remote Access
+    "MAILAGENT_REMOTE_ACCESS_ENABLED",
+    "CF_AUDIENCE",
+    "CF_TEAM_DOMAIN",
+    "MAILAGENT_API_PORT",
+    "MAILAGENT_API_ALLOWED_EMAIL",
+    # — Advanced / readonly display
+    "SSE_LOCAL_HOST",
+    "SSE_LOCAL_PORT",
+]
+
+# Keys whose values must NEVER cross the wire in plaintext — redacted to '***'
+# (set) / '' (unset). Mirror of env-keys.ts SECRET_ENV_KEYS.
+_SECRET_ENV_KEYS = {
+    "NOTION_TOKEN",
+    "FEISHU_APP_SECRET",
+    "ALERT_FEISHU_WEBHOOK_SECRET",
+    "LLM_API_KEY",
+    "LLM_TRANSLATE_API_KEY",
+    "STATS_REPORT_TOKEN",
+    "DASHBOARD_PASSWORD",
+    "MAILAGENT_CLI_API_KEY",
+    "DAVMAIL_POC_CIPHER_KEY",
+    "DAVMAIL_CIPHER_KEY",
+}
+
+_MANAGED_ENV_KEY_SET = set(_MANAGED_ENV_KEYS)
+
+
+# ============================================================
 # .env merged read (serve-api does NOT load_dotenv)
 # ============================================================
 # serve-api (src/service.py) never calls load_dotenv — pydantic reads .env into
@@ -296,6 +436,53 @@ async def get_settings_payload(request: Request):
         "autoDownloadUpdates": True,
         "userEmail": user_email,
     }
+    return success_envelope(payload, request=request, source="config")
+
+
+# ============================================================
+# managed .env snapshot（远程只读，逐字段对齐 EnvSnapshot）
+# ============================================================
+# 镜像本地 IPC env:get → EnvSnapshot
+# (frontend/src/electron/main/handlers/env.ts / shared/api/types.ts:1615)。
+# 远程 SettingsShell mount 时无条件调 useEnvStore.refresh() → mailApi.env.get()；
+# HttpApi 接此端点。远程**只读**：EnvField 在 web 下控件 disabled，env:set 仍 stub。
+def _build_env_snapshot() -> Dict[str, Any]:
+    """读 merged .env → EnvSnapshot dict。过滤到受管 key（非受管不出网），secret
+    脱敏。缺文件 → exists:false / values:{}（never throw，复刻 env.ts readSnapshot）。"""
+    try:
+        from src.config import _resolve_env_file
+
+        path = str(_resolve_env_file())
+    except Exception:  # noqa: BLE001 — config import 失败 → 仍返回受管 key 列表
+        path = ""
+    exists = bool(path) and Path(path).exists()
+    merged = _load_env_merged()
+    values: Dict[str, str] = {}
+    for key in _MANAGED_ENV_KEYS:
+        # Active keys only — 仅纳入在 merged map 里出现的受管 key（镜像 env.ts
+        # "active keys only"，缺失的不放进 values）。
+        if key not in merged:
+            continue
+        raw = merged.get(key) or ""
+        if key in _SECRET_ENV_KEYS:
+            # 明文密钥绝不出网：非空 → '***'，空 → ''（复刻 env.ts redactSnapshot）。
+            values[key] = "***" if len(raw) > 0 else ""
+        else:
+            values[key] = raw
+    return {
+        "path": path,
+        "exists": exists,
+        "values": values,
+        "managedKeys": list(_MANAGED_ENV_KEYS),
+        "secretKeys": sorted(_SECRET_ENV_KEYS),
+    }
+
+
+@router.get("/env", dependencies=[Depends(verify_cf_access)])
+async def get_env_snapshot(request: Request):
+    """受管 .env 快照（远程只读展示）。镜像 env:get → EnvSnapshot。secret 脱敏，
+    非受管 key 绝不出网。缺文件 → exists:false / values:{}，never throw。"""
+    payload = await run_in_threadpool(_build_env_snapshot)
     return success_envelope(payload, request=request, source="config")
 
 
