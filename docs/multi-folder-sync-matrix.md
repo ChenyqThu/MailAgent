@@ -87,16 +87,16 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 **验收**：pytest 1492 passed（含 tests/notify/folder_sync）零新增失败 + ruff 清；前端 typecheck + 1379 passed（+12 P4 管理 UI 测试）+ build:web ✓ + eslint。**独立 review**（codex 用量上限 → opus code-reviewer 对抗式）：**REQUEST CHANGES → 修 2 MEDIUM blocking + 4 LOW → APPROVE WITH NITS**。
 > **修复**：① delete 不级联（raw connect FK OFF → orphan body/attachment/FTS）→ 改 `delete_email_full` 逐行（FK CASCADE + 附件目录）② rename/delete 不返 `restart_required` → `_rewrite_whitelist` 返 bool 透到 result + serve-api/CLI emit ③ 嵌套 rename 漏子行 → `SET mailbox=new||SUBSTR(...) WHERE LIKE old||'/%'` ④ move dst 无 trash 守卫 → 拒 Trash/Junk ⑤ 前端零测试 → 补 12 管理 UI 测试 ⑥ CLI restart_required NIT 补 emit。
 
-## P5 — 边界打磨 ⬜
+## P5 — 边界打磨 ✅
 
 | 能力 | 实现 | 验收 | 状态 |
 |---|---|---|---|
-| 取消勾选清理 | 默认保留 + 「同时清理」选项 | 取消行为符合预期 | ⬜ |
-| UIDVALIDITY 重拉 | 变化检测→全量重拉（message_id 去重兜底） | 改服务端结构后正确重拉 | ⬜ |
-| 大文件夹分批 | 窗口+上限+独立 try | Jira 3458 封不阻塞主同步 | ⬜ |
-| 层级/管理降级 | davmail 不支持时平铺/隐藏管理 | 降级优雅无报错 | ⬜ |
+| 取消勾选清理 | `cleanup_local_folder` service（删本地 email_metadata 级联 body/附件/FTS+附件目录 + 移白名单，**不碰 Exchange**）+ serve-api `POST /api/folder/cleanup` + CLI `folder cleanup` + 前端 FolderPicker「同时清理」选项（默认保留） | `test_cleanup_local_folder_deletes_rows_not_exchange`（reader 未调）+ CLI + serve-api 测 | ✅ |
+| UIDVALIDITY 重拉 | **P1 已实现**：per-folder uidvalidity 存 KV，变化→全量重拉(SINCE 窗口)，message_id merge 去重兜底 | `test_get_new_emails_multifolder::test_uidvalidity_change_triggers_full_repull` | ✅ |
+| 大文件夹分批 | **P1 已实现**：窗口(FOLDER_SYNC_PAST_DAYS)+上限(FOLDER_SYNC_MAX_MESSAGES 取最新 N)+每文件夹独立 try | `test_max_messages_truncation_keeps_newest`；真机 Jira 3458 封受上限约束 | ✅ |
+| 层级/管理降级 | davmail 实测全支持（gate 过）→ 无需降级；`build_folder_tree` 孤儿/无嵌套自动退化平铺 | `test_build_tree_flat_all_roots` + `test_build_folder_tree_nesting`（孤儿当顶层不丢） | ✅ |
 
-**验收**：边界场景全过。**codex review APPROVE**。
+**验收**：cleanup 5 测 + 边界场景 P1 测试覆盖（uidvalidity 重拉 / max_messages 截断 / tree 降级，reviewer 真实核查属实）。pytest 1495 passed 零新增 + ruff 清；前端 1381 passed + build:web ✓ + cleanup UI/接线/2 测试。**独立 review**（codex 限流 → opus code-reviewer）：**APPROVE WITH NITS**（0 CRIT/HIGH/MEDIUM；cleanup 不碰 Exchange 用 _NoReader 哨兵测试坐实）→ 修 3 LOW：① cleanup 加空名/系统邮箱守卫（防 raw API 误删收件箱本地行）② 删/清父文件夹含子文件夹本地行（`OR mailbox LIKE label||'/%'`，与 rename 对称防孤儿）③ 空 imap_name 拒绝。
 
 ## P6 — folder_sync 展示链路清理（独立 cleanup）⬜
 
@@ -137,4 +137,5 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 | 2026-06-08 | P1 | 实现完成（imap_utf7/list_folders/SYNC_FOLDERS/per-folder marker+uidvalidity/get_new_emails 多文件夹/DB v22/CLI discover·enable·disable）；75 新测试绿 + 真机 e2e 过 + 零新增回归（1166 passed）；codex REQUEST CHANGES→修 3 finding（JSON 白名单/mailbox quoting/系统文件夹排除）→ APPROVE WITH NITS（NIT 修） | `22c7f759` |
 | 2026-06-08 | P2 | L3 通知降噪 + L2 LLM gate（per-folder）+ 下游零改动验证（Notion/FTS/线程/mailbox 过滤）+ DRY 抽 parse_folder_csv_or_json；27 测试 + 1452 passed（含 notify）零新增；codex APPROVE WITH NITS→修 3→opus critic APPROVE WITH NITS | `f12f173e` |
 | 2026-06-08 | P3 | serve-api discover/whitelist 端点（6 api 测）+ 前端 FolderPicker 树/SidebarFolderTree/API wiring(HttpApi+Electron IPC)/i18n 双语 44/主题 token；executor 实现；opus code-reviewer APPROVE WITH NITS→修 MEDIUM 嵌套叶子名+2 LOW+NIT；typecheck+1367 前端测试+build:web+384 api+ruff/eslint 全绿 | `efb73a02` |
-| 2026-06-08 | P4 | 写操作泛化（archive src 泛化+move_to_folder+trash 守卫）+ 文件夹管理 CRUD（create/rename/delete+系统保护+级联+一致性+白名单 restart）+ serve-api manage/move + CLI + onboarding 步 + FolderPicker 管理 UI；opus code-reviewer REQUEST CHANGES→修 2 MEDIUM blocking（delete 级联/restart_required）+4 LOW→APPROVE WITH NITS；1492 py + 1379 fe 全绿 | 待提交 |
+| 2026-06-08 | P4 | 写操作泛化（archive src 泛化+move_to_folder+trash 守卫）+ 文件夹管理 CRUD（create/rename/delete+系统保护+级联+一致性+白名单 restart）+ serve-api manage/move + CLI + onboarding 步 + FolderPicker 管理 UI；opus code-reviewer REQUEST CHANGES→修 2 MEDIUM blocking（delete 级联/restart_required）+4 LOW→APPROVE WITH NITS；1492 py + 1379 fe 全绿 | `c01229f0` |
+| 2026-06-08 | P5 | 取消勾选清理（cleanup_local_folder 不碰 Exchange + serve-api/CLI + 前端选项默认保留）+ 验证 P1 边界（UIDVALIDITY 重拉/max_messages/tree 降级）；opus review APPROVE WITH NITS→修 3 LOW（cleanup 守卫/含子行/空名）；1495 py + 1381 fe 全绿 | 待提交 |

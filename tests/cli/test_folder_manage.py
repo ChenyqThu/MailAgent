@@ -322,3 +322,89 @@ def test_move_to_trash_rejected(seeded_db, monkeypatch):
         svc.move_to_folder(12345, "Trash", actor=Actor(kind="cli", authenticated=True, label="t"))
     with pytest.raises(ServiceInvalidArgError):
         svc.move_to_folder(12345, "Junk", actor=Actor(kind="cli", authenticated=True, label="t"))
+
+
+# ============================================================
+# P5: 取消勾选清理 (cleanup_local_folder — 删本地副本, 不碰 Exchange)
+# ============================================================
+
+def test_cleanup_local_folder_deletes_rows_not_exchange(seeded_db, monkeypatch):
+    """cleanup: 删本地 email_metadata (级联) + 移白名单; **不调 reader (不碰 Exchange)**。"""
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    _seed_custom_email_full(seeded_db, 1_000_300_001, "Jira")
+    reader_called = {"n": 0}
+
+    class _NoReader:
+        def __getattr__(self, name):
+            reader_called["n"] += 1
+            raise AssertionError(f"cleanup 不该调 reader.{name} (不碰 Exchange)")
+
+    from src.cli.context import CliContext
+    cli = CliContext.from_flags(db_path=str(seeded_db))
+    monkeypatch.setattr(MailWriteService, "_folder_imap_reader", lambda self: _NoReader())
+    monkeypatch.setattr(MailWriteService, "_rewrite_whitelist", lambda self, mutate: True)
+    svc = MailWriteService(cli)
+    result = svc.cleanup_local_folder("Jira", actor=Actor(kind="cli", authenticated=True, label="t"))
+    assert result.action == "cleanup"
+    assert result.affected_local_rows == 1
+    assert result.restart_required is True
+    assert reader_called["n"] == 0   # Exchange 未碰
+    import sqlite3
+    conn = sqlite3.connect(str(seeded_db))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM email_metadata WHERE internal_id=1000300001").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM email_body WHERE internal_id=1000300001").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_cleanup_cli(cli_runner, davmail_env, seeded_db, monkeypatch):
+    from src.services.mail_write import MailWriteService
+
+    _seed_custom_email_full(seeded_db, 1_000_300_002, "Notion", with_body=False)
+    monkeypatch.setattr(MailWriteService, "_rewrite_whitelist", lambda self, mutate: True)
+    r = _invoke(cli_runner, "folder", "cleanup", "Notion", "-o", "json", db_path=seeded_db)
+    assert r.exit_code == 0, r.output
+    data = _last_json(r.output)["data"]
+    assert data["action"] == "cleanup" and data["affected_local_rows"] == 1
+
+
+# ============================================================
+# P5 review 修复: cleanup 守卫 (空名/系统邮箱) + 删/清含子文件夹本地行
+# ============================================================
+
+def test_cleanup_rejects_empty_and_system(seeded_db, monkeypatch):
+    """review LOW: cleanup 拒空 imap_name + INBOX/标准邮箱（防误删收件箱本地行）。"""
+    from src.services.errors import ServiceInvalidArgError
+    from src.services.guards import Actor
+    from src.services.mail_write import MailWriteService
+
+    monkeypatch.setattr(MailWriteService, "_rewrite_whitelist", lambda self, mutate: False)
+    svc = _svc_with_fake_reader(seeded_db, monkeypatch)
+    actor = Actor(kind="cli", authenticated=True, label="t")
+    for bad in ("", "  ", "INBOX", "收件箱", "发件箱"):
+        with pytest.raises(ServiceInvalidArgError):
+            svc.cleanup_local_folder(bad, actor=actor)
+
+
+def test_delete_local_rows_includes_subfolders(seeded_db, monkeypatch):
+    """review LOW: 删/清父文件夹时子文件夹 (label/子) 本地行也清, 不留孤儿。"""
+    from src.services.mail_write import MailWriteService
+
+    _seed_custom_email_full(seeded_db, 1_000_400_001, "项目", with_body=False)
+    _seed_custom_email_full(seeded_db, 1_000_400_002, "项目/2026 Q2", with_body=False)
+    _seed_custom_email_full(seeded_db, 1_000_400_003, "项目别的", with_body=False)  # 非子, 不该删
+    svc = MailWriteService.__new__(MailWriteService)
+    from src.cli.context import CliContext
+    svc._ctx = CliContext.from_flags(db_path=str(seeded_db))
+    n = svc._delete_local_mailbox_rows("项目")
+    assert n == 2   # 项目 + 项目/2026 Q2 (不含 项目别的)
+    import sqlite3
+    conn = sqlite3.connect(str(seeded_db))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM email_metadata WHERE internal_id IN (1000400001,1000400002)").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM email_metadata WHERE internal_id=1000400003").fetchone()[0] == 1  # 非子保留
+    finally:
+        conn.close()

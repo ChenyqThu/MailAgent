@@ -513,3 +513,30 @@ async def folder_manage_delete(body: _FolderDeleteBody, request: Request, cfg: "
         )
     except ServiceError as exc:
         _svc_error_to_api(exc)
+
+
+class _FolderCleanupBody(BaseModel):
+    imap_name: str
+
+
+@router.post("/cleanup", dependencies=[Depends(verify_cf_access)])
+async def folder_manage_cleanup(body: _FolderCleanupBody, request: Request):
+    """取消同步某文件夹时清理本地副本 (P5)。**不碰 Exchange 文件夹**, 纯本地删除 +
+    白名单移除。非 davmail 也可 (纯本地操作)。"""
+    from src.services.errors import ServiceError
+
+    try:
+        result = await _asyncio.to_thread(
+            _svc(request).cleanup_local_folder, body.imap_name, actor=_http_actor()
+        )
+        return success_envelope(
+            {
+                "action": result.action,
+                "imap_name": result.imap_name,
+                "affected_local_rows": result.affected_local_rows,
+                "restart_required": result.restart_required,
+            },
+            request=request, source="cli",
+        )
+    except ServiceError as exc:
+        _svc_error_to_api(exc)

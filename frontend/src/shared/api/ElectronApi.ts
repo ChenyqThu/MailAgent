@@ -59,6 +59,7 @@ import type {
   EmailMeta,
   EnrichedEmailMeta,
   FolderApi,
+  FolderCleanupResult,
   FolderCreateDraftOpts,
   FolderDiscoverResult,
   FolderEditDraftOpts,
@@ -385,6 +386,10 @@ class ElectronFolderApi implements FolderApi {
       'folder:manageDelete',
       imapName
     )) as WriteEnvelope<FolderManageResult>
+    return unwrap(env)
+  }
+  async cleanup(imapName: string): Promise<FolderCleanupResult> {
+    const env = (await invoker()('folder:cleanup', imapName)) as WriteEnvelope<FolderCleanupResult>
     return unwrap(env)
   }
 }

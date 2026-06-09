@@ -826,6 +826,33 @@ class MailWriteService:
             raise ServiceError(f"创建文件夹失败 (IMAP CREATE {child_imap!r})")
         return FolderMutationResult(action="create", imap_name=child_imap)
 
+    def cleanup_local_folder(self, imap_name: str, *, actor: Actor) -> FolderMutationResult:
+        """取消同步某文件夹时**清理本地副本** (P5: 取消勾选 + 同时清理选项)。
+
+        **不碰 Exchange 文件夹** (与 delete_folder 区别) —— 只删本地 email_metadata
+        (级联 body/attachment/FTS + 附件目录) + 从白名单移除。davmail-only 不要求 (纯本地)。
+        """
+        from src.mail.backend.imap_utf7 import decode_imap_utf7
+
+        # 守卫: 空名 / INBOX / 标准邮箱不可清 (防 raw API/CLI 误删收件箱本地行)。
+        # 纯静态检查 (cleanup 非 davmail 也可, 不能用 _assert_not_system_folder 的 IMAP LIST)。
+        if not imap_name or not imap_name.strip():
+            raise ServiceInvalidArgError("imap_name 不能为空")
+        label = decode_imap_utf7(imap_name.strip())
+        if imap_name.strip().upper() == "INBOX" or label in (
+            "收件箱", "发件箱", "已发送", "已发送邮件", "草稿", "草稿箱",
+        ):
+            raise ServiceInvalidArgError(
+                f"{label!r} 是系统邮箱, 不可清理本地副本 (仅自定义文件夹可清)"
+            )
+        require_write_auth(actor)
+        affected = self._delete_local_mailbox_rows(label)
+        wl_changed = self._remove_whitelist_entry(imap_name)
+        return FolderMutationResult(
+            action="cleanup", imap_name=imap_name,
+            affected_local_rows=affected, restart_required=wl_changed,
+        )
+
     def rename_folder(
         self, imap_name: str, new_name: str, *, actor: Actor
     ) -> FolderMutationResult:
@@ -916,9 +943,13 @@ class MailWriteService:
         try:
             conn = sqlite3.connect(str(self._ctx.sync_store.db_path), timeout=10.0)
             try:
+                # 精确 label + 子文件夹 (label/...) —— 删/清父文件夹时子文件夹本地行也清
+                # (label 存完整路径; 与 _rename_local_mailbox 的子前缀处理对称, 防孤儿)。
                 ids = [
                     r[0] for r in conn.execute(
-                        "SELECT internal_id FROM email_metadata WHERE mailbox = ?", (label,)
+                        "SELECT internal_id FROM email_metadata "
+                        "WHERE mailbox = ? OR mailbox LIKE ?",
+                        (label, label + "/%"),
                     ).fetchall()
                 ]
             finally:

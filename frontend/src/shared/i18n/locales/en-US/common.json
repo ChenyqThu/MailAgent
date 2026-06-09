@@ -1801,7 +1801,15 @@
           "deleteBody": "This deletes the folder on Exchange and its synced message copies stored locally. This cannot be undone.",
           "deleteWarn": "This folder may still be referenced by Outlook rules; deleting it breaks those rules. Already-archived Notion pages are unaffected.",
           "deleting": "Deleting…",
-          "deleteConfirm": "Delete folder"
+          "deleteConfirm": "Delete folder",
+          "cleanupPrompt": "Also clean up local copies?",
+          "cleanupHint": "Deletes only the {{count}} locally synced message copies — Exchange folder and emails are untouched",
+          "cleanupHintNoCount": "Deletes only locally synced message copies — Exchange folder and emails are untouched",
+          "cleanupKeep": "Keep",
+          "cleanupDo": "Clean up",
+          "cleanupOk": "Cleaned up local copies of \"{{name}}\" ({{count}} messages)",
+          "cleanupFail": "Failed to clean up local copies",
+          "cleanupBusy": "Cleaning…"
         }
       }
     }

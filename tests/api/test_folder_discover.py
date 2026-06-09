@@ -167,3 +167,19 @@ class TestFolderManage:
         r = folder_client.post("/api/folder/manage", json={"parent": "", "name": "X"})
         assert r.status_code == 400
         assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+    def test_cleanup(self, folder_client, monkeypatch):
+        from src.services.mail_write import FolderMutationResult, MailWriteService
+
+        monkeypatch.setattr(
+            MailWriteService, "cleanup_local_folder",
+            lambda self, imap_name, *, actor: FolderMutationResult(
+                action="cleanup", imap_name=imap_name, affected_local_rows=7, restart_required=True
+            ),
+        )
+        r = folder_client.post("/api/folder/cleanup", json={"imap_name": "Jira"})
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["action"] == "cleanup" and data["affected_local_rows"] == 7
+        assert data["restart_required"] is True

@@ -20,6 +20,7 @@ import { smartQueryTransform } from './email'
 import type {
   FolderApi,
   FolderAttachmentMeta,
+  FolderCleanupResult,
   FolderDiscoverResult,
   FolderEmailDetail,
   FolderEmailMeta,
@@ -363,6 +364,14 @@ export function runFolderManageDelete(imapName: string): Promise<FolderManageRes
   })
 }
 
+// 本地副本清理 (P5) — POST /folder/cleanup {imap_name}。
+// 不碰 Exchange, 仅删本地已同步邮件 + 从白名单移除; 非 davmail 也可。
+export function runFolderCleanup(imapName: string): Promise<FolderCleanupResult> {
+  return daemonRequest<FolderCleanupResult>('POST', '/folder/cleanup', {
+    body: { imap_name: imapName }
+  })
+}
+
 // ---- IPC wiring -------------------------------------------------------------
 
 export function registerFolderHandlers(): void {
@@ -537,6 +546,22 @@ export function registerFolderHandlers(): void {
       return envelopeFromCli<FolderManageResult>(runFolderManageDelete(imapName))
     }
   )
+
+  // 本地副本清理 (P5) — daemon → serve-api POST /folder/cleanup 转发。
+  // 不碰 Exchange; 非 davmail 也可 (纯本地操作)。
+  ipcMain.handle(
+    'folder:cleanup',
+    async (_evt, imapName: unknown): Promise<WriteEnvelope<FolderCleanupResult>> => {
+      if (typeof imapName !== 'string' || imapName.trim() === '') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:cleanup requires a non-empty imapName'
+        }
+      }
+      return envelopeFromCli<FolderCleanupResult>(runFolderCleanup(imapName))
+    }
+  )
 }
 
 // Test escape hatch (mirrors handlers/calendar.ts __testing).
@@ -556,7 +581,8 @@ export const __testing = {
   runFolderSetWhitelist,
   runFolderCreate,
   runFolderRename,
-  runFolderManageDelete
+  runFolderManageDelete,
+  runFolderCleanup
 }
 
 // Re-export the renderer-facing type so test / other modules can import from

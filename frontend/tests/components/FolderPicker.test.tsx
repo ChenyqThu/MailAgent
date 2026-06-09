@@ -17,7 +17,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import i18n from '../../src/shared/i18n'
-import type { FolderDiscoverResult, FolderManageResult } from '../../src/shared/api/types'
+import type {
+  FolderCleanupResult,
+  FolderDiscoverResult,
+  FolderManageResult
+} from '../../src/shared/api/types'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -30,13 +34,15 @@ const mockSetWhitelist = vi.fn()
 const mockCreateFolder = vi.fn<[string | null, string], Promise<FolderManageResult>>()
 const mockRenameFolder = vi.fn<[string, string], Promise<FolderManageResult>>()
 const mockDeleteFolder = vi.fn<[string], Promise<FolderManageResult>>()
+const mockCleanup = vi.fn<[string], Promise<FolderCleanupResult>>()
 const stableApi = {
   folder: {
     discover: mockDiscover,
     setWhitelist: mockSetWhitelist,
     createFolder: mockCreateFolder,
     renameFolder: mockRenameFolder,
-    deleteFolder: mockDeleteFolder
+    deleteFolder: mockDeleteFolder,
+    cleanup: mockCleanup
   }
 }
 
@@ -152,6 +158,7 @@ beforeEach(() => {
   mockCreateFolder.mockReset()
   mockRenameFolder.mockReset()
   mockDeleteFolder.mockReset()
+  mockCleanup.mockReset()
   toastSuccess.mockReset()
   toastError.mockReset()
   useRestartStore.setState({ required: false, changedKeys: [] })
@@ -433,5 +440,60 @@ describe('FolderPicker — P4 管理操作', () => {
     // restart_required=true → markRestartRequired(['SYNC_FOLDERS']) 被调用。
     await waitFor(() => expect(useRestartStore.getState().required).toBe(true))
     expect(useRestartStore.getState().changedKeys).toContain('SYNC_FOLDERS')
+  })
+
+  // ── P5 本地副本清理 ────────────────────────────────────────────────────────
+  test('P5 取消勾选已同步文件夹 → 出现清理提示; 点「清理」→ cleanup 被调用 + toast + restart', async () => {
+    // DMS&VvpO9lPRXgM- 在 whitelist 中 (is_synced), 取消勾选后应出现清理提示。
+    mockDiscover.mockResolvedValue(discoverResult())
+    // cleanup 成功后会 refetch discover (第二次调用)。
+    mockDiscover
+      .mockResolvedValueOnce(discoverResult())
+      .mockResolvedValueOnce(discoverResult({ whitelist: [] }))
+    mockCleanup.mockResolvedValue({
+      imap_name: 'DMS&VvpO9lPRXgM-',
+      affected_local_rows: 42,
+      restart_required: true
+    })
+
+    render(<FolderPicker />)
+    await screen.findByText('DMS固件发布')
+
+    // DMS固件发布 初始已选中 (在 whitelist) — 取消勾选。
+    const dmsCheckbox = screen.getByRole('checkbox', { name: 'DMS固件发布' })
+    fireEvent.click(dmsCheckbox)
+
+    // 清理提示应出现 (role=group with cleanup aria-label or text content)。
+    // 取文案「也清理本地副本？」所在区域。
+    await waitFor(() => expect(screen.queryByText('728')).toBeTruthy()) // count still visible
+    // 点「清理」按钮。
+    const cleanupBtn = await screen.findByRole('button', { name: /清理/ })
+    fireEvent.click(cleanupBtn)
+
+    await waitFor(() => expect(mockCleanup).toHaveBeenCalledWith('DMS&VvpO9lPRXgM-'))
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+    // restart_required=true → markRestartRequired(['SYNC_FOLDERS'])。
+    await waitFor(() => expect(useRestartStore.getState().required).toBe(true))
+    expect(useRestartStore.getState().changedKeys).toContain('SYNC_FOLDERS')
+  })
+
+  test('P5 取消勾选已同步文件夹 → 点「保留」→ cleanup 未被调用', async () => {
+    mockDiscover.mockResolvedValue(discoverResult())
+
+    render(<FolderPicker />)
+    await screen.findByText('DMS固件发布')
+
+    // 取消勾选 DMS固件发布 (在 whitelist, 应出现清理提示)。
+    const dmsCheckbox = screen.getByRole('checkbox', { name: 'DMS固件发布' })
+    fireEvent.click(dmsCheckbox)
+
+    // 点「保留」→ 清理提示消失, cleanup 不调用。
+    const keepBtn = await screen.findByRole('button', { name: '保留' })
+    fireEvent.click(keepBtn)
+
+    // 提示消失。
+    await waitFor(() => expect(screen.queryByRole('button', { name: '保留' })).toBeNull())
+    // cleanup 未被调用。
+    expect(mockCleanup).not.toHaveBeenCalled()
   })
 })

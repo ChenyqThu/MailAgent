@@ -653,3 +653,28 @@ def folder_delete_folder(
     emit(cli, {"action": "delete", "imap_name": result.imap_name,
                "affected_local_rows": result.affected_local_rows,
                "restart_required": result.restart_required})
+
+
+@app.command("cleanup")
+def folder_cleanup(
+    ctx: typer.Context,
+    imap_name: str = typer.Argument(..., help="要清理本地副本的文件夹 imap_name"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """取消同步某文件夹时清理本地副本 (P5)。**不碰 Exchange 文件夹**, 只删本地已同步邮件
+    (级联 body/附件/FTS) + 从白名单移除。"""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    from src.services.errors import ServiceError
+
+    try:
+        result = _mail_write_svc(cli).cleanup_local_folder(imap_name, actor=_http_or_cli_actor(cli))
+    except ServiceError as e:
+        raise emit_cli_error(cli, CliError(getattr(e, "message", str(e))))
+    emit(cli, {"action": "cleanup", "imap_name": result.imap_name,
+               "affected_local_rows": result.affected_local_rows,
+               "restart_required": result.restart_required})

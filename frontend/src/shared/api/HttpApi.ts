@@ -50,6 +50,7 @@ import type {
   EmailFlagOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  FolderCleanupResult,
   FolderDiscoverResult,
   FolderEmailDetail,
   FolderEmailMeta,
@@ -396,6 +397,11 @@ export class HttpApi implements MailApi {
 
     deleteFolder: (imapName: string): Promise<FolderManageResult> =>
       this.req<FolderManageResult>('DELETE', '/folder/manage', {
+        body: { imap_name: imapName }
+      }),
+
+    cleanup: (imapName: string): Promise<FolderCleanupResult> =>
+      this.req<FolderCleanupResult>('POST', '/folder/cleanup', {
         body: { imap_name: imapName }
       }),
 

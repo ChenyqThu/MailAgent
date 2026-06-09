@@ -1804,7 +1804,15 @@
           "deleteBody": "将删除 Exchange 上的该文件夹，以及本地已同步的邮件副本。此操作不可撤销。",
           "deleteWarn": "该文件夹在 Outlook 规则中可能仍被引用；删除后相关规则会失效。Notion 已归档页面不受影响。",
           "deleting": "删除中…",
-          "deleteConfirm": "删除文件夹"
+          "deleteConfirm": "删除文件夹",
+          "cleanupPrompt": "也清理本地副本？",
+          "cleanupHint": "仅删本地已同步的 {{count}} 封副本，不删 Exchange 文件夹/邮件",
+          "cleanupHintNoCount": "仅删本地已同步副本，不删 Exchange 文件夹/邮件",
+          "cleanupKeep": "保留",
+          "cleanupDo": "清理",
+          "cleanupOk": "已清理「{{name}}」的本地副本（{{count}} 封）",
+          "cleanupFail": "清理本地副本失败",
+          "cleanupBusy": "清理中…"
         }
       }
     }

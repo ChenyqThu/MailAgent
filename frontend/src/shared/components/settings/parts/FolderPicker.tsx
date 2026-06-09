@@ -34,7 +34,7 @@ import {
   X
 } from 'lucide-react'
 
-import type { FolderInfo, FolderTreeNode } from '@shared/api/types'
+import type { FolderCleanupResult, FolderInfo, FolderTreeNode } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useEnvStore } from '@shared/state/env'
 import { useEmailFilter } from '@shared/state/email-filter'
@@ -89,6 +89,16 @@ interface ManageHandlers {
   onEditCancel: () => void
 }
 
+// P5 — inline 清理提示 props。
+interface CleanupRowHandlers {
+  /** 正在清理中的 imap_name (null = 无)。 */
+  cleanupBusy: string | null
+  /** 当前待确认清理的 imap_name 集合。 */
+  cleanupPrompts: ReadonlySet<string>
+  onCleanup: (imapName: string, displayName: string) => void
+  onDismissCleanup: (imapName: string) => void
+}
+
 interface FolderRowProps {
   node: FolderTreeNode
   depth: number
@@ -97,6 +107,7 @@ interface FolderRowProps {
   onToggleSelect: (imapName: string) => void
   onToggleExpand: (imapName: string) => void
   manage: ManageHandlers
+  cleanup: CleanupRowHandlers
 }
 
 /** inline 输入行 (新建子文件夹 / 重命名)。coral ring + 勾/叉确认。 */
@@ -184,7 +195,8 @@ function FolderRow({
   expanded,
   onToggleSelect,
   onToggleExpand,
-  manage
+  manage,
+  cleanup
 }: FolderRowProps): React.ReactElement {
   const { t } = useTranslation()
   const hasChildren = node.children.length > 0
@@ -401,6 +413,7 @@ function FolderRow({
               onToggleSelect={onToggleSelect}
               onToggleExpand={onToggleExpand}
               manage={manage}
+              cleanup={cleanup}
             />
           ))
         : null}
@@ -419,6 +432,53 @@ function FolderRow({
           onSubmit={manage.onEditSubmit}
           onCancel={manage.onEditCancel}
         />
+      ) : null}
+
+      {/* P5 — 本地副本清理提示。仅自定义文件夹 + 有 pending 清理请求时渲染。 */}
+      {!node.is_system && cleanup.cleanupPrompts.has(node.imap_name) ? (
+        <div
+          className="flex items-center gap-2 px-3 py-1.5 bg-ink-2 border-t border-ink-border-soft/50"
+          style={{ paddingLeft: `${12 + depth * 22 + 24}px` }}
+          role="group"
+          aria-label={t('settings.folder.picker.manage.cleanupPrompt', {
+            defaultValue: '也清理本地副本？'
+          })}
+        >
+          <AlertTriangle size={12} strokeWidth={2} className="shrink-0 text-warn" />
+          <span className="text-meta text-ink-fg-2 flex-1 min-w-0 truncate">
+            {typeof node.message_count === 'number' && node.message_count > 0
+              ? t('settings.folder.picker.manage.cleanupHint', {
+                  defaultValue: '仅删本地已同步的 {{count}} 封副本，不删 Exchange 文件夹/邮件',
+                  count: node.message_count
+                })
+              : t('settings.folder.picker.manage.cleanupHintNoCount', {
+                  defaultValue: '仅删本地已同步副本，不删 Exchange 文件夹/邮件'
+                })}
+          </span>
+          <button
+            type="button"
+            onClick={() => cleanup.onDismissCleanup(node.imap_name)}
+            disabled={cleanup.cleanupBusy === node.imap_name}
+            className="shrink-0 inline-flex items-center px-2 py-0.5 rounded text-meta text-ink-fg-1 hover:bg-ink-3 transition-colors duration-fast disabled:opacity-40"
+          >
+            {t('settings.folder.picker.manage.cleanupKeep', { defaultValue: '保留' })}
+          </button>
+          <button
+            type="button"
+            onClick={() => cleanup.onCleanup(node.imap_name, node.display_name)}
+            disabled={cleanup.cleanupBusy === node.imap_name}
+            className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded text-meta text-ink-fg bg-warn/20 hover:bg-warn/30 transition-colors duration-fast disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {cleanup.cleanupBusy === node.imap_name ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <Trash2 size={11} strokeWidth={2} />
+            )}
+            {cleanup.cleanupBusy === node.imap_name
+              ? t('settings.folder.picker.manage.cleanupBusy', { defaultValue: '清理中…' })
+              : t('settings.folder.picker.manage.cleanupDo', { defaultValue: '清理' })}
+          </button>
+        </div>
       ) : null}
     </>
   )
@@ -452,6 +512,13 @@ export function FolderPicker(): React.ReactElement {
   const [lastRefresh, setLastRefresh] = React.useState<number | null>(null)
   const [saving, setSaving] = React.useState(false)
 
+  // P5 — 本地副本清理提示。取消勾选一个「已在白名单中」的文件夹时, 在其行下方
+  // 展示 inline 提示「也清理本地副本？[保留][清理]」。默认保留 (不主动清理)。
+  // Set<imap_name> 存需要展示提示的文件夹; 重新勾选 / 刷新 / 清理完成后移除。
+  const [cleanupPrompts, setCleanupPrompts] = React.useState<ReadonlySet<string>>(new Set())
+  // 正在执行 cleanup 的 imap_name (null = 无), 同时禁用两按钮防重复。
+  const [cleanupBusy, setCleanupBusy] = React.useState<string | null>(null)
+
   const refresh = React.useCallback(async (): Promise<void> => {
     setState({ status: 'loading' })
     try {
@@ -463,6 +530,8 @@ export function FolderPicker(): React.ReactElement {
         whitelist: res.whitelist
       })
       setSelected(new Set(res.whitelist))
+      // 刷新后 whitelist 已重设 → 清空所有 pending 清理提示 (旧提示基于旧 baseline)。
+      setCleanupPrompts(new Set())
       // 默认展开有已选子节点的父文件夹, 让用户直接看到选中态。
       const toExpand = new Set<string>()
       for (const f of res.folders) {
@@ -492,14 +561,37 @@ export function FolderPicker(): React.ReactElement {
     void refresh()
   }, [envGated, refresh])
 
-  const toggleSelect = React.useCallback((imapName: string): void => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(imapName)) next.delete(imapName)
-      else next.add(imapName)
-      return next
-    })
-  }, [])
+  const toggleSelect = React.useCallback(
+    (imapName: string): void => {
+      // 是否当前已选中 (取消方向)。
+      const isDeselecting = selected.has(imapName)
+      setSelected((prev) => {
+        const next = new Set(prev)
+        if (next.has(imapName)) next.delete(imapName)
+        else next.add(imapName)
+        return next
+      })
+      if (isDeselecting) {
+        // 取消勾选 + 该文件夹在白名单 (有本地已同步副本) → 展示清理提示。
+        if (state.status === 'ready' && state.whitelist.includes(imapName)) {
+          setCleanupPrompts((p) => {
+            const np = new Set(p)
+            np.add(imapName)
+            return np
+          })
+        }
+      } else {
+        // 重新勾选 → 撤销清理提示。
+        setCleanupPrompts((p) => {
+          if (!p.has(imapName)) return p
+          const np = new Set(p)
+          np.delete(imapName)
+          return np
+        })
+      }
+    },
+    [selected, state]
+  )
 
   const toggleExpand = React.useCallback((imapName: string): void => {
     setExpanded((prev) => {
@@ -542,6 +634,8 @@ export function FolderPicker(): React.ReactElement {
         }
       }
       toastSuccess(t('settings.folder.picker.saveOk', { defaultValue: '文件夹白名单已保存' }))
+      // 保存后重置所有 pending 清理提示 (whitelist 已更新, 旧提示失效)。
+      setCleanupPrompts(new Set())
     } catch (e) {
       toastError(
         t('settings.folder.picker.saveFail', { defaultValue: '保存失败' }),
@@ -551,6 +645,49 @@ export function FolderPicker(): React.ReactElement {
       setSaving(false)
     }
   }
+
+  // P5 — 清理本地副本。用户点「清理」时调用 cleanup(imapName), 成功后关闭提示 +
+  // restart_required 处理 + refetch。失败 → toast 不关提示 (用户可重试)。
+  const handleCleanup = React.useCallback(
+    async (imapName: string, displayName: string): Promise<void> => {
+      setCleanupBusy(imapName)
+      try {
+        const res: FolderCleanupResult = await mailApi.folder.cleanup(imapName)
+        if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
+        setCleanupPrompts((p) => {
+          const np = new Set(p)
+          np.delete(imapName)
+          return np
+        })
+        toastSuccess(
+          t('settings.folder.picker.manage.cleanupOk', {
+            defaultValue: '已清理「{{name}}」的本地副本（{{count}} 封）',
+            name: displayName,
+            count: res.affected_local_rows
+          })
+        )
+        // refetch discover (本地行数已变)。
+        await refresh()
+      } catch (e) {
+        toastError(
+          t('settings.folder.picker.manage.cleanupFail', { defaultValue: '清理本地副本失败' }),
+          (e as Error).message
+        )
+      } finally {
+        setCleanupBusy(null)
+      }
+    },
+    [mailApi, markRestartRequired, refresh, t]
+  )
+
+  const dismissCleanup = React.useCallback((imapName: string): void => {
+    setCleanupPrompts((p) => {
+      if (!p.has(imapName)) return p
+      const np = new Set(p)
+      np.delete(imapName)
+      return np
+    })
+  }, [])
 
   // ── 文件夹管理 (P4) — ⋯ 菜单 / inline 输入 / 删除二次确认 ──────────────────
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
@@ -681,6 +818,13 @@ export function FolderPicker(): React.ReactElement {
     onEditCancel: editCancel
   }
 
+  const cleanupHandlers: CleanupRowHandlers = {
+    cleanupBusy,
+    cleanupPrompts,
+    onCleanup: (imapName, displayName) => void handleCleanup(imapName, displayName),
+    onDismissCleanup: dismissCleanup
+  }
+
   // ── 门控态 ────────────────────────────────────────────────────────────
   // env 乐观门控 (本机 MAILAGENT_BACKEND≠davmail) 或 discover 返回 E_INVALID_ARG。
   if (envGated || state.status === 'gated') {
@@ -799,6 +943,7 @@ export function FolderPicker(): React.ReactElement {
                 onToggleSelect={toggleSelect}
                 onToggleExpand={toggleExpand}
                 manage={manage}
+                cleanup={cleanupHandlers}
               />
             ))}
           </div>

@@ -583,6 +583,18 @@ export interface FolderManageResult {
   restart_required?: boolean
 }
 
+// 多文件夹同步 (P5) — 本地副本清理。serve-api `POST /api/folder/cleanup`
+// body `{imap_name}` → 仅删本地已同步邮件 (email_metadata 级联 body/附件/FTS +
+// 从白名单移除)。**不碰 Exchange 文件夹/邮件**, 非 davmail 也可 (纯本地操作)。
+export interface FolderCleanupResult {
+  /** 被清理的文件夹 imap_name。 */
+  imap_name: string
+  /** 实际删除的本地行数。 */
+  affected_local_rows: number
+  /** true → 白名单已变动, 需重启同步服务。 */
+  restart_required: boolean
+}
+
 export interface FolderApi {
   // 读 (无 auth, better-sqlite3 直读)
   list(opts: FolderListOpts): Promise<FolderEmailMeta[]>
@@ -605,6 +617,9 @@ export interface FolderApi {
   renameFolder(imapName: string, newName: string): Promise<FolderManageResult>
   /** 删除 imapName (含 Exchange 文件夹 + 本地已同步副本, 不可撤销)。 */
   deleteFolder(imapName: string): Promise<FolderManageResult>
+  // 本地副本清理 (P5) — 仅删本地已同步邮件, 不碰 Exchange (非 davmail 也可)。
+  /** 清理 imapName 对应的本地已同步邮件副本 + 从白名单移除; **不操作 Exchange**。 */
+  cleanup(imapName: string): Promise<FolderCleanupResult>
   // 写 (needsAuth + davmail-only, fork CLI). 返回 unwrap 后的 CLI data,
   // 失败抛带 `code` 的 Error (同 calendar 写方法约定)。
   syncNow(folder: FolderName, full?: boolean): Promise<unknown>
