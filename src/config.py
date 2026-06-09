@@ -152,7 +152,8 @@ class Config(BaseSettings):
     )
     folder_sync_max_messages: int = Field(
         default=2000, env="FOLDER_SYNC_MAX_MESSAGES",
-        description="单个自定义文件夹单次拉取上限（取最新 N 封）。0=不限。",
+        description="单个自定义文件夹单次拉取上限（取最新 N 封）。0=不限。"
+                    "注意截断语义：首次回填超上限时只取最新 N 封，被截掉的更旧邮件后续不会补拉（marker 已推进）。",
     )
     # L2/L3 per-folder gate（按 mailbox 显示名匹配，JSON 数组；PRD §2.3 分层）
     folder_notify_enabled: str = Field(

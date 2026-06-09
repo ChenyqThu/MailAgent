@@ -15,6 +15,7 @@
 // 值做乐观门控(避免无谓的 discover 请求)。
 
 import * as React from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   AlertTriangle,
@@ -496,6 +497,7 @@ function errorCode(e: unknown): string | undefined {
 export function FolderPicker(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const qc = useQueryClient()
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
 
   // MAILAGENT_BACKEND env 值做乐观门控 (默认 applescript)。空 → 视作未知, 仍尝试
@@ -636,6 +638,9 @@ export function FolderPicker(): React.ReactElement {
       toastSuccess(t('settings.folder.picker.saveOk', { defaultValue: '文件夹白名单已保存' }))
       // 保存后重置所有 pending 清理提示 (whitelist 已更新, 旧提示失效)。
       setCleanupPrompts(new Set())
+      // 失效共享 folder 缓存 → SidebarFolderTree 的 ['folder','whitelist'] /
+      // ['folder','discover'] 重拉, 否则其 staleTime(30s / 5min) 内滞后。
+      void qc.invalidateQueries({ queryKey: ['folder'] })
     } catch (e) {
       toastError(
         t('settings.folder.picker.saveFail', { defaultValue: '保存失败' }),
@@ -668,6 +673,8 @@ export function FolderPicker(): React.ReactElement {
         )
         // refetch discover (本地行数已变)。
         await refresh()
+        // 失效共享 folder 缓存 (sidebar whitelist/discover)。
+        void qc.invalidateQueries({ queryKey: ['folder'] })
       } catch (e) {
         toastError(
           t('settings.folder.picker.manage.cleanupFail', { defaultValue: '清理本地副本失败' }),
@@ -677,7 +684,7 @@ export function FolderPicker(): React.ReactElement {
         setCleanupBusy(null)
       }
     },
-    [mailApi, markRestartRequired, refresh, t]
+    [mailApi, markRestartRequired, refresh, qc, t]
   )
 
   const dismissCleanup = React.useCallback((imapName: string): void => {
@@ -752,6 +759,8 @@ export function FolderPicker(): React.ReactElement {
       setEdit(null)
       // 成功后 refetch discover (拿到 Exchange 真实状态 + 新计数)。
       await refresh()
+      // 失效共享 folder 缓存 (sidebar whitelist/discover)。
+      void qc.invalidateQueries({ queryKey: ['folder'] })
     } catch (e) {
       toastError(
         edit.mode === 'create'
@@ -762,7 +771,7 @@ export function FolderPicker(): React.ReactElement {
     } finally {
       setEditBusy(false)
     }
-  }, [edit, mailApi, markRestartRequired, refresh, t])
+  }, [edit, mailApi, markRestartRequired, refresh, qc, t])
 
   const requestDelete = React.useCallback((node: FolderTreeNode): void => {
     setMenuFor(null)
@@ -789,6 +798,8 @@ export function FolderPicker(): React.ReactElement {
       )
       // 成功后 refetch discover (本地树同步到 Exchange 真实状态)。
       await refresh()
+      // 失效共享 folder 缓存 (sidebar whitelist/discover)。
+      void qc.invalidateQueries({ queryKey: ['folder'] })
     } catch (e) {
       // 失败: 后端已把本地树回滚到服务器真实状态; 关弹窗 + toast 提示回滚。
       setDeleteTarget(null)
@@ -803,7 +814,7 @@ export function FolderPicker(): React.ReactElement {
     } finally {
       setDeleting(false)
     }
-  }, [deleteTarget, mailApi, markRestartRequired, customMailbox, setView, refresh, t])
+  }, [deleteTarget, mailApi, markRestartRequired, customMailbox, setView, refresh, qc, t])
 
   const manage: ManageHandlers = {
     menuFor,

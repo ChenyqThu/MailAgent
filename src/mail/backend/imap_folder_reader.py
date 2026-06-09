@@ -403,8 +403,6 @@ class FolderImapReader:
             logger.error("[folder-reader] archive: Archive 文件夹未发现, 无法归档")
             return False
         try:
-            from src.mail.backend.davmail_backend import DavMailBackend
-
             with imap_session(self.cfg, timeout=60) as imap:
                 typ, _ = imap.select(quote_mailbox(src_imap), readonly=False)
                 if typ != "OK" or not _select_is_writable(imap):

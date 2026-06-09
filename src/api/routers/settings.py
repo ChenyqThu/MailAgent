@@ -90,11 +90,9 @@ _MANAGED_ENV_KEYS: List[str] = [
     "CALENDAR_PAST_DAYS",
     "CALENDAR_FUTURE_DAYS",
     "CALENDAR_CALDAV_SYNC_ENABLED",
-    # — Folder sync
-    "MAILBOX_FOLDER_SYNC_ENABLED",
-    "FOLDER_SYNC_POLL_INTERVAL_SEC",
-    "ARCHIVE_SYNC_PAST_DAYS",
-    "ARCHIVE_SYNC_MAX_MESSAGES",
+    # — Folder sync (多文件夹同步窗口; SYNC_FOLDERS 白名单走 folder API 不在此列)
+    "FOLDER_SYNC_PAST_DAYS",
+    "FOLDER_SYNC_MAX_MESSAGES",
     # — Backend selection
     "MAILAGENT_BACKEND",
     # — Daily digest

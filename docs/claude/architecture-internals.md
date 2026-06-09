@@ -368,6 +368,7 @@ pm2 restart mail-sync
 - **配置 `SYNC_FOLDERS`**：白名单是 **JSON 数组**（不用 CSV）—— 中文文件夹名经 modified-UTF7（RFC 3501）编码后 base64 段含逗号（`对话历史记录` = `&W,mL3VOGU,KLsF9V-`），CSV 会被逗号劈碎。`parse_folder_csv_or_json` JSON 优先 + CSV 兜底。空数组 = 零激活。
 - **imap_name vs display_name**：`imap_name` = 存储键（modified-UTF7，IMAP SELECT 用），`display_name` = `decode_imap_utf7(imap_name)`（解码中文，= `email_metadata.mailbox`）。过滤正确性命根：`WHERE mailbox = display_name`（用解码名，不是编码名）。带空格的名字（`Sent Items`）必须 `quote_mailbox` 加引号，imaplib 不自动加。
 - **per-folder marker**：游标从 `email_metadata` 派生 `MAX(imap_uid) WHERE mailbox=label AND backend_origin='davmail'`（`_max_folder_imap_uid`）；uidvalidity 存 `sync_state` KV（`folder_uidvalidity:<imap_name>`）。UIDVALIDITY 变 → 全量重拉（SINCE 窗口）+ message_id merge 去重兜底。不复用 INBOX marker（独立每文件夹）。
+  - **已知边界**：per-folder 增量 marker 按**解码后的 display label** 查（`MAX(imap_uid) WHERE mailbox=label`），若两个不同的 IMAP 文件夹解码出**相同显示名**（病态命名场景），它们会共享同一个 marker → 增量游标互相干扰。属已知限制（正常命名不触发）。
 - **取数循环**：`get_new_emails` INBOX 段后追加白名单循环（`_fetch_custom_folder` → `_fetch_new_in_folder` 双模式）+ 每文件夹独立 try（单文件夹失败隔离）+ 窗口（`FOLDER_SYNC_PAST_DAYS`=90）+ 上限（`FOLDER_SYNC_MAX_MESSAGES`=2000，取最新 N 截断防极端大邮箱）。
 - **🔒 隔离不变量**：`SYNC_FOLDERS` 空 → `_custom_folders=[]` → `get_new_emails`/`check_for_changes` 循环整段跳过（零 STATUS 探测，只 SELECT INBOX）= 逐字节同现状。
 - **L2/L3 gate（降噪）**：自定义文件夹默认 **L2-on**（跑 LLM；`FOLDER_LLM_DISABLED` JSON 黑名单可关 `should_skip_llm_for_folder`）/ **L3-off**（默认不推飞书 `should_skip_feishu_for_folder`；`FOLDER_NOTIFY_ENABLED` JSON 白名单 opt-in）。下游 Notion/FTS/线程零改动（mailbox 字段透传，Select 自动建 option，FTS 触发器 mailbox-agnostic）。

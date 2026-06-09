@@ -85,9 +85,9 @@ export function useEventBridge(): void {
         )
         return
       }
-      // Phase C — folder 同步完成 (worker safe_publish('folder.synced', ...))
-      // → 刷新 archive / drafts 列表 + sync-status. FolderList useQuery key 是
-      // ['folder', folder], 这里宽 invalidate ['folder'] 命中两个 folder + status.
+      // folder 同步完成 (worker safe_publish('folder.synced', ...))
+      // → 宽 invalidate ['folder'] 命中多文件夹 whitelist (['folder','whitelist'])
+      // + discover (['folder','discover']) 查询, 让 SidebarFolderTree 等及时反映新状态。
       if (t === 'folder.synced') {
         debounceInvalidate('["folder"]', () =>
           queryClient.invalidateQueries({ queryKey: ['folder'] })

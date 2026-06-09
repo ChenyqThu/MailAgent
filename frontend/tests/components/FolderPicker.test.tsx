@@ -15,6 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import i18n from '../../src/shared/i18n'
 import type {
@@ -167,10 +168,22 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
+// FolderPicker 现用 useQueryClient() 失效共享 ['folder'] 缓存 → 必须包 provider。
+function renderPicker(): ReturnType<typeof render> {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <FolderPicker />
+    </QueryClientProvider>
+  )
+}
+
 describe('FolderPicker — 多文件夹选择器', () => {
   test('davmail 后端: 拉取 discover → 树渲染文件夹名 + 计数', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
-    render(<FolderPicker />)
+    renderPicker()
     await waitFor(() => expect(mockDiscover).toHaveBeenCalled())
     expect(await screen.findByText('Jira')).toBeTruthy()
     expect(screen.getByText('DMS固件发布')).toBeTruthy()
@@ -186,7 +199,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
       folders: ['DMS&VvpO9lPRXgM-', 'Jira'],
       restart_required: true
     })
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     // 勾 Jira (初始未选)。其 checkbox aria-label = display_name。
@@ -210,7 +223,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
 
   test('系统文件夹不可勾选 (无 checkbox, 只有 lock)', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('收件箱')
     // 系统文件夹 (收件箱) 不应有 role=checkbox; 只有自定义文件夹 (Jira) 有。
     const checkboxes = screen.getAllByRole('checkbox')
@@ -221,7 +234,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
 
   test('保存按钮在无改动时禁用', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
     const saveBtn = screen.getByRole('button', { name: '保存' })
     expect((saveBtn as HTMLButtonElement).disabled).toBe(true)
@@ -229,7 +242,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
 
   test('空态: tree 为空 → 引导文案 + 不渲染保存', async () => {
     mockDiscover.mockResolvedValue(discoverResult({ folders: [], tree: [], whitelist: [] }))
-    render(<FolderPicker />)
+    renderPicker()
     await waitFor(() => expect(mockDiscover).toHaveBeenCalled())
     expect(await screen.findByText('没有可同步的自定义文件夹')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
@@ -237,7 +250,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
 
   test('门控态: 非 davmail 后端 → veil + 不发 discover', async () => {
     setBackend('applescript')
-    render(<FolderPicker />)
+    renderPicker()
     expect(await screen.findByText('需要 davmail 后端')).toBeTruthy()
     // env 门控时不应发 discover 请求。
     expect(mockDiscover).not.toHaveBeenCalled()
@@ -248,7 +261,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
     setBackend('')
     const err = Object.assign(new Error('需要 davmail 后端'), { code: 'E_INVALID_ARG' })
     mockDiscover.mockRejectedValue(err)
-    render(<FolderPicker />)
+    renderPicker()
     await waitFor(() => expect(mockDiscover).toHaveBeenCalled())
     expect(await screen.findByText('需要 davmail 后端')).toBeTruthy()
   })
@@ -258,7 +271,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
 describe('FolderPicker — P4 管理操作', () => {
   test('自定义文件夹 ⋯ 按钮点击后出现菜单 (新建子文件夹 / 重命名 / 删除)', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     // 点击 Jira 行的 ⋯ 管理菜单按钮 (aria-label = '管理文件夹' 有多个, 取第一个可用的)。
@@ -276,7 +289,7 @@ describe('FolderPicker — P4 管理操作', () => {
 
   test('系统文件夹 ⋯ 按钮 disabled (不可管理)', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('收件箱')
 
     const menuBtns = screen.getAllByRole('button', { name: '管理文件夹' })
@@ -293,7 +306,7 @@ describe('FolderPicker — P4 管理操作', () => {
       .mockResolvedValueOnce(discoverResult({ whitelist: [] }))
     mockDeleteFolder.mockResolvedValue({ imap_name: 'Jira', restart_required: false })
 
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     // 打开 Jira 的 ⋯ 菜单。
@@ -320,7 +333,7 @@ describe('FolderPicker — P4 管理操作', () => {
 
   test('删除流程: 取消 → deleteFolder 未被调用', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     // 打开菜单 → 点删除 → modal 出现。
@@ -344,7 +357,7 @@ describe('FolderPicker — P4 管理操作', () => {
     mockDiscover.mockResolvedValueOnce(discoverResult()).mockResolvedValueOnce(discoverResult())
     mockRenameFolder.mockResolvedValue({ imap_name: 'Jira', restart_required: false })
 
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     // 打开 Jira 的 ⋯ 菜单 → 点重命名。
@@ -373,7 +386,7 @@ describe('FolderPicker — P4 管理操作', () => {
     mockDiscover.mockResolvedValueOnce(discoverResult()).mockResolvedValueOnce(discoverResult())
     mockCreateFolder.mockResolvedValue({ imap_name: 'Jira/Sub', restart_required: false })
 
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     // 打开 Jira 的 ⋯ 菜单 → 点新建子文件夹。
@@ -399,7 +412,7 @@ describe('FolderPicker — P4 管理操作', () => {
     // 后端返回 restart_required=true。
     mockRenameFolder.mockResolvedValue({ imap_name: 'Jira', restart_required: true })
 
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     const menuBtns = screen.getAllByRole('button', { name: '管理文件夹' })
@@ -425,7 +438,7 @@ describe('FolderPicker — P4 管理操作', () => {
     // 后端返回 restart_required=true。
     mockDeleteFolder.mockResolvedValue({ imap_name: 'Jira', restart_required: true })
 
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('Jira')
 
     const menuBtns = screen.getAllByRole('button', { name: '管理文件夹' })
@@ -456,7 +469,7 @@ describe('FolderPicker — P4 管理操作', () => {
       restart_required: true
     })
 
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('DMS固件发布')
 
     // DMS固件发布 初始已选中 (在 whitelist) — 取消勾选。
@@ -480,7 +493,7 @@ describe('FolderPicker — P4 管理操作', () => {
   test('P5 取消勾选已同步文件夹 → 点「保留」→ cleanup 未被调用', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
 
-    render(<FolderPicker />)
+    renderPicker()
     await screen.findByText('DMS固件发布')
 
     // 取消勾选 DMS固件发布 (在 whitelist, 应出现清理提示)。
