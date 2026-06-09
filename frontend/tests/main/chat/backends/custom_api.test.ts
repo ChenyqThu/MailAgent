@@ -16,6 +16,7 @@ import type { ChatModelConfig } from '../../../../src/shared/chat/platform'
 const {
   buildSystemBlocks,
   buildSystemPrompt,
+  buildStableSystemPrompt,
   decorateToolsWithCacheControl,
   createStreamState,
   processAnthropicEvent,
@@ -32,6 +33,7 @@ function cfg(opts?: Partial<ChatModelConfig>): ChatModelConfig {
     defaultModel: 'claude-sonnet-4-6',
     kosConsumerEnabled: false,
     kosL1HotBlockEnabled: false,
+    userContext: null,
     ...opts
   }
 }
@@ -469,10 +471,17 @@ describe('processAnthropicEvent — extended-thinking (task 06-08-chat 需求 5)
       { type: 'thinking', delta: 'think about it.' }
     ])
     expect(state.thinkingAccumulated).toBe('Let me think about it.')
+    // 第二波 Bug A — structured block in flight (text accumulated, not yet finalized).
+    expect(state.currentThinking?.thinking).toBe('Let me think about it.')
   })
 
-  test('signature_delta is captured but NOT emitted (no display value)', () => {
+  test('signature_delta is captured on the current block but NOT emitted', () => {
     const { emitted, state } = feed([
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' }
+      },
       { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } },
       {
         type: 'content_block_delta',
@@ -480,13 +489,147 @@ describe('processAnthropicEvent — extended-thinking (task 06-08-chat 需求 5)
         delta: { type: 'signature_delta', signature: 'EqQBCgIYAhIM==' }
       }
     ])
-    // only the thinking_delta surfaced; signature stored on state.
+    // only the thinking_delta surfaced; signature stored on the current block.
     expect(emitted).toEqual([{ type: 'thinking', delta: 'hmm' }])
-    expect(state.thinkingSignature).toBe('EqQBCgIYAhIM==')
+    expect(state.currentThinking?.signature).toBe('EqQBCgIYAhIM==')
+  })
+
+  // ── 第二波 Bug A (方案 B) — structured thinking block collection for passback ──
+  test('full thinking block (start → thinking → signature → stop) collected with byte-exact signature', () => {
+    const { state } = feed([
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'I should ' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'flag it.' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'signature_delta', signature: 'EqQBCgIYAhIMabc==' }
+      },
+      { type: 'content_block_stop', index: 0 }
+    ])
+    // finalized into completedThinkingBlocks; currentThinking cleared.
+    expect(state.currentThinking).toBeNull()
+    expect(state.completedThinkingBlocks).toEqual([
+      { type: 'thinking', thinking: 'I should flag it.', signature: 'EqQBCgIYAhIMabc==' }
+    ])
+  })
+
+  test('thinking block then tool_use: thinking collected + tool_use emitted (方案 B coexist)', () => {
+    const { emitted, state } = feed([
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'flag this' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'signature_delta', signature: 'SIG==' }
+      },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'content_block_start',
+        index: 1,
+        content_block: { type: 'tool_use', id: 'toolu_f', name: 'email_flag' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'input_json_delta', partial_json: '{"isFlagged":false}' }
+      },
+      { type: 'content_block_stop', index: 1 }
+    ])
+    // thinking events surfaced live; tool_use emitted (real call, not hallucinated text).
+    expect(emitted).toEqual([
+      { type: 'thinking', delta: 'flag this' },
+      { type: 'tool_use', toolUseId: 'toolu_f', name: 'email_flag', input: { isFlagged: false } }
+    ])
+    expect(state.completedThinkingBlocks).toEqual([
+      { type: 'thinking', thinking: 'flag this', signature: 'SIG==' }
+    ])
+  })
+
+  test('redacted_thinking block collected directly at content_block_start (no deltas)', () => {
+    const { emitted, state } = feed([
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'redacted_thinking', data: 'ENCRYPTED_BLOB==' }
+      },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Answer.' } }
+    ])
+    expect(emitted).toEqual([{ type: 'chunk', delta: 'Answer.' }])
+    expect(state.completedThinkingBlocks).toEqual([
+      { type: 'redacted_thinking', data: 'ENCRYPTED_BLOB==' }
+    ])
+  })
+
+  test('two thinking blocks in SSE order are both collected in order', () => {
+    const { state } = feed([
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'first' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'signature_delta', signature: 'S1' }
+      },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'content_block_start',
+        index: 1,
+        content_block: { type: 'thinking', thinking: '', signature: '' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'thinking_delta', thinking: 'second' }
+      },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'signature_delta', signature: 'S2' }
+      },
+      { type: 'content_block_stop', index: 1 }
+    ])
+    expect(state.completedThinkingBlocks).toEqual([
+      { type: 'thinking', thinking: 'first', signature: 'S1' },
+      { type: 'thinking', thinking: 'second', signature: 'S2' }
+    ])
   })
 
   test('thinking block then text block: thinking events precede chunk events', () => {
     const { emitted } = feed([
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' }
+      },
       {
         type: 'content_block_delta',
         index: 0,
@@ -501,13 +644,14 @@ describe('processAnthropicEvent — extended-thinking (task 06-08-chat 需求 5)
     ])
   })
 
-  test('thinking off (no thinking blocks) → text-only stream unchanged + thinkingAccumulated empty', () => {
+  test('thinking off (no thinking blocks) → text-only stream unchanged + thinking state empty', () => {
     const { emitted, state } = feed([
       { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hi' } }
     ])
     expect(emitted).toEqual([{ type: 'chunk', delta: 'Hi' }])
     expect(state.thinkingAccumulated).toBe('')
-    expect(state.thinkingSignature).toBe('')
+    expect(state.currentThinking).toBeNull()
+    expect(state.completedThinkingBlocks).toEqual([])
   })
 })
 
@@ -563,7 +707,7 @@ describe('buildAnthropicRequestBody — thinking toggle (task 06-08-chat 需求 
     expect(body.max_tokens).toBe(64000)
   })
 
-  test('thinking on + sonnet → manual {enabled, budget_tokens} (budget < max_tokens) + NO tools', () => {
+  test('thinking on + sonnet → manual {enabled, budget_tokens} (budget < max_tokens) + tools KEPT (第二波 方案 B)', () => {
     const body = buildAnthropicRequestBody(
       req({ enabled: true }),
       'claude-sonnet-4-6',
@@ -573,14 +717,16 @@ describe('buildAnthropicRequestBody — thinking toggle (task 06-08-chat 需求 
     )
     expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 16000 })
     expect(body.output_config).toBeUndefined()
-    // MVP方案 A取舍: thinking on → tools dropped (single-turn end_turn).
-    expect(body.tools).toBeUndefined()
+    // 第二波 Bug A (方案 B): thinking on now KEEPS tools (was dropped in MVP方案 A —
+    // dropping caused the model to hallucinate <tool_call> text instead of real
+    // tool_use blocks → writes never ran). thinking + tool use now coexist.
+    expect(body.tools).toEqual(tools)
     expect((body.thinking as { budget_tokens: number }).budget_tokens).toBeLessThan(
       body.max_tokens as number
     )
   })
 
-  test('thinking on + opus-4-8 → adaptive + output_config.effort (manual would 400) + NO tools', () => {
+  test('thinking on + opus-4-8 → adaptive + output_config.effort (manual would 400) + tools KEPT (方案 B)', () => {
     const body = buildAnthropicRequestBody(
       req({ enabled: true }),
       'claude-opus-4-8',
@@ -590,6 +736,18 @@ describe('buildAnthropicRequestBody — thinking toggle (task 06-08-chat 需求 
     )
     expect(body.thinking).toEqual({ type: 'adaptive' })
     expect(body.output_config).toEqual({ effort: 'high' })
+    expect(body.tools).toEqual(tools)
+  })
+
+  test('thinking on + no tools registered → no tools field (Anthropic rejects tools:[])', () => {
+    const body = buildAnthropicRequestBody(
+      req({ enabled: true }),
+      'claude-sonnet-4-6',
+      systemBlocks,
+      messages,
+      undefined
+    )
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 16000 })
     expect(body.tools).toBeUndefined()
   })
 
@@ -603,5 +761,54 @@ describe('buildAnthropicRequestBody — thinking toggle (task 06-08-chat 需求 
     )
     expect(body.thinking).toBeUndefined()
     expect(body.tools).toEqual(tools)
+  })
+})
+
+// ============================================================
+// task 06-08-chat 第二波 Bug B — user-context injection (custom-api only)
+// ============================================================
+describe('buildStableSystemPrompt — userContext injection (第二波 Bug B)', () => {
+  const CONTEXT = '# Lucien\nRole: ENBU R&D\nSender Priority: boss@acme.com → Critical'
+
+  test('userContext null → not injected (static header unchanged)', () => {
+    const text = buildStableSystemPrompt(null, cfg({ userContext: null }), noDigest)
+    expect(text).toContain('You are the AI assistant inside MailAgent')
+    expect(text).not.toContain('# Reference context')
+    expect(text).not.toContain('Lucien')
+  })
+
+  test('userContext "" (empty) → not injected', () => {
+    const text = buildStableSystemPrompt(null, cfg({ userContext: '' }), noDigest)
+    expect(text).not.toContain('# Reference context')
+  })
+
+  test('userContext present → injected with the silent-read header (mirrors processor.py format)', () => {
+    const text = buildStableSystemPrompt(null, cfg({ userContext: CONTEXT }), noDigest)
+    expect(text).toContain('# Reference context (user profile / Sender Priority / focus projects)')
+    expect(text).toContain('# Read silently; never echo back.')
+    expect(text).toContain('Lucien')
+    expect(text).toContain('Sender Priority: boss@acme.com → Critical')
+    // injected AFTER the static header (header → context order).
+    expect(text.indexOf('You are the AI assistant')).toBeLessThan(
+      text.indexOf('# Reference context')
+    )
+  })
+
+  test('userContext appears in the stable (cacheable) block from buildSystemBlocks', () => {
+    const blocks = buildSystemBlocks(null, cfg({ userContext: CONTEXT }), noDigest)
+    expect(blocks[0]?.text).toContain('# Reference context')
+    expect(blocks[0]?.text).toContain('Lucien')
+    // stable block carries cache_control (context is static per session → cacheable).
+    expect(blocks[0]?.cache_control).toEqual({ type: 'ephemeral' })
+  })
+
+  test('userContext + KOS guidance coexist in the stable prefix', () => {
+    const text = buildStableSystemPrompt(
+      null,
+      cfg({ userContext: CONTEXT, kosConsumerEnabled: true }),
+      noDigest
+    )
+    expect(text).toContain('# Reference context')
+    expect(text).toContain('KOS knowledge brain')
   })
 })

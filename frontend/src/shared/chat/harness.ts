@@ -42,6 +42,7 @@ import { awaitConfirmation } from './tools/confirmation'
 import type {
   AnthropicContentBlock,
   AnthropicHistoryMessage,
+  AnthropicThinkingBlock,
   ChatBackend,
   ChatStreamEnvelope,
   ChatStreamEvent,
@@ -107,12 +108,21 @@ function chatHistoryToAnthropic(history: ChatMessage[]): AnthropicHistoryMessage
 /** Build the assistant turn entry the harness appends to priorTurns after
  *  one iteration completes. Anthropic requires the SAME tool_use blocks
  *  (id + name + input) the LLM emitted to appear in the next request's
- *  history so it can match its own prior tool calls. */
+ *  history so it can match its own prior tool calls.
+ *
+ *  task 06-08-chat 第二波 Bug A — when extended thinking is on, the thinking /
+ *  redacted_thinking blocks from THIS iter MUST lead the content array (SSE
+ *  order: thinking → text → tool_use) and be passed back UNMODIFIED (signature
+ *  byte-exact). Anthropic 400s if a tool-calling assistant turn omits its prior
+ *  thinking block (research §2.4). `thinkingBlocks` is empty when thinking is
+ *  off → identical to the pre-Bug-A behavior (zero-regression). */
 function buildAssistantTurnFromIter(
   iterText: string,
-  collected: ToolUseRequest[]
+  collected: ToolUseRequest[],
+  thinkingBlocks: AnthropicThinkingBlock[]
 ): AnthropicHistoryMessage {
   const blocks: AnthropicContentBlock[] = []
+  for (const tb of thinkingBlocks) blocks.push(tb)
   if (iterText.length > 0) blocks.push({ type: 'text', text: iterText })
   for (const tu of collected) {
     blocks.push({ type: 'tool_use', id: tu.toolUseId, name: tu.name, input: tu.input })
@@ -236,6 +246,10 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
     const collected: ToolUseRequest[] = []
     let iterText = ''
     let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' = 'end_turn'
+    // task 06-08-chat 第二波 Bug A — this iter's structured thinking blocks (set
+    // from done.thinkingBlocks). Reset per iter; replayed at the front of this
+    // iter's assistant turn in priorTurns. Empty when thinking is off.
+    let iterThinkingBlocks: AnthropicThinkingBlock[] = []
 
     try {
       for await (const event of args.backend.stream({
@@ -337,6 +351,9 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
             modelSeen = event.model ?? modelSeen
             if (event.metadata) metadataSeen = { ...(metadataSeen ?? {}), ...event.metadata }
             if (typeof event.finalContent === 'string') lastFinalContent = event.finalContent
+            // task 06-08-chat 第二波 Bug A — capture this iter's thinking blocks so
+            // buildAssistantTurnFromIter can replay them (unmodified) in priorTurns.
+            if (event.thinkingBlocks) iterThinkingBlocks = event.thinkingBlocks
             forward(event)
             break
           case 'error':
@@ -462,7 +479,9 @@ export async function runHarness(args: RunHarnessArgs): Promise<void> {
     }
 
     // Append this iter to priorTurns for the next backend.stream call.
-    priorTurns.push(buildAssistantTurnFromIter(iterText, collected))
+    // task 06-08-chat 第二波 Bug A — iterThinkingBlocks lead the assistant turn
+    // (passed back unmodified for the extended-thinking + tool-use constraint).
+    priorTurns.push(buildAssistantTurnFromIter(iterText, collected, iterThinkingBlocks))
     priorTurns.push(buildToolResultTurn(collected, results))
   }
 

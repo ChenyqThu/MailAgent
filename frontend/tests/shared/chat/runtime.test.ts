@@ -97,7 +97,8 @@ const CONFIG_LEGACY = {
   defaultModel: 'claude-sonnet-4-6',
   kosConsumerEnabled: false,
   kosConfigured: false,
-  kosTimeDecayEnabled: true
+  kosTimeDecayEnabled: true,
+  userContext: ''
 }
 
 const SESSION_ROW = {

@@ -30,6 +30,7 @@
 // 解析逻辑（parseSse/processAnthropic/processOpenAi/buildMessages/buildSystemBlocks）单一
 // 真源在此，electron + http 共用。
 import type {
+  AnthropicThinkingBlock,
   BackendToolDescriptor,
   ChatBackend,
   ChatStreamEvent,
@@ -267,6 +268,18 @@ function buildStableSystemPrompt(
   getCachedSenderDigest: (senderAddr: string) => string | null
 ): string {
   let text = buildStaticSystemHeader()
+  // task 06-08-chat 第二波 Bug B — inject the user-context page (role / Sender
+  // Priority / focus projects) into the stable prefix so the assistant knows who
+  // the user is. Mirrors src/llm_agent/processor.py:167-176 format (header → then
+  // context). Stays cacheable (static per session). null / "" → skip (graceful).
+  // Only custom_api calls this builder → naturally custom-api-only (notion-agent
+  // carries its own Notion context).
+  if (cfg.userContext && cfg.userContext.length > 0) {
+    text +=
+      '\n\n# Reference context (user profile / Sender Priority / focus projects)\n' +
+      '# Read silently; never echo back.\n\n' +
+      cfg.userContext
+  }
   // KOS consumer 开启时注入使用指南（静态、可缓存；与 allKosTools 注册同 gate）。
   if (cfg.kosConsumerEnabled) {
     text += '\n\n' + buildKosGuidanceBlock()
@@ -361,11 +374,19 @@ interface AnthropicStreamState {
   modelSeen: string | null
   sawError: boolean
   // task 06-08-chat 需求 5 — extended-thinking accumulation. `thinkingAccumulated`
-  // grows from `thinking_delta` events (emitted as ThinkingEvent); `thinkingSignature`
-  // captures the trailing `signature_delta` (kept for多轮 passback in方案 B but not
-  // emitted today). Both stay empty when thinking is off (no thinking blocks arrive).
+  // grows from `thinking_delta` events (emitted as ThinkingEvent for the live
+  // collapsible UI). Stays empty when thinking is off (no thinking blocks arrive).
   thinkingAccumulated: string
-  thinkingSignature: string
+  // task 06-08-chat 第二波 Bug A (方案 B) — STRUCTURED thinking blocks for multi-turn
+  // passback. `currentThinking` accumulates the in-flight `thinking` block
+  // (thinking text + trailing signature) between its content_block_start and
+  // content_block_stop; on stop it's finalized into `completedThinkingBlocks`
+  // (in SSE order). `redacted_thinking` blocks land there directly at
+  // content_block_start (no deltas). anthropicStream attaches the completed
+  // list to the DoneEvent so the harness can replay it verbatim (signature
+  // byte-exact) when the same turn calls tools. Empty when thinking is off.
+  currentThinking: { index: number; thinking: string; signature: string } | null
+  completedThinkingBlocks: AnthropicThinkingBlock[]
 }
 
 function createStreamState(initialModel: string | null): AnthropicStreamState {
@@ -378,7 +399,8 @@ function createStreamState(initialModel: string | null): AnthropicStreamState {
     modelSeen: initialModel,
     sawError: false,
     thinkingAccumulated: '',
-    thinkingSignature: ''
+    currentThinking: null,
+    completedThinkingBlocks: []
   }
 }
 
@@ -415,12 +437,22 @@ function processAnthropicEvent(parsed: unknown, state: AnthropicStreamState): Ch
     case 'content_block_start': {
       const block = e as {
         index?: number
-        content_block?: { type?: string; id?: string; name?: string }
+        content_block?: { type?: string; id?: string; name?: string; data?: string }
       }
       const idx = block.index
       const cb = block.content_block
       if (typeof idx === 'number' && cb?.type === 'tool_use' && cb.id && cb.name) {
         state.pendingToolBlocks.set(idx, { id: cb.id, name: cb.name, jsonStr: '' })
+      }
+      // task 06-08-chat 第二波 Bug A — extended-thinking block opens. `thinking`
+      // accumulates text + signature across deltas until content_block_stop;
+      // `redacted_thinking` has no deltas (encrypted data arrives whole here) →
+      // collect it immediately. Both feed completedThinkingBlocks for multi-turn
+      // passback (DoneEvent.thinkingBlocks). thinking off → these never fire.
+      if (typeof idx === 'number' && cb?.type === 'thinking') {
+        state.currentThinking = { index: idx, thinking: '', signature: '' }
+      } else if (cb?.type === 'redacted_thinking' && typeof cb.data === 'string') {
+        state.completedThinkingBlocks.push({ type: 'redacted_thinking', data: cb.data })
       }
       return []
     }
@@ -440,17 +472,20 @@ function processAnthropicEvent(parsed: unknown, state: AnthropicStreamState): Ch
         state.accumulated += delta.text
         return [{ type: 'chunk', delta: delta.text }]
       }
-      // task 06-08-chat 需求 5 — extended-thinking deltas. `thinking_delta`
-      // accumulates the reasoning summary + emits a ThinkingEvent (rendered in
-      // a collapsible block, kept out of the answer `content`). `signature_delta`
-      // (one before the block's content_block_stop) is the integrity signature —
-      // stored for多轮 passback (方案 B) but not emitted (no display value).
+      // task 06-08-chat 需求 5 + 第二波 Bug A — extended-thinking deltas.
+      // `thinking_delta` accumulates the reasoning summary into BOTH the live UI
+      // buffer (thinkingAccumulated → emits ThinkingEvent, rendered collapsible,
+      // kept out of the answer `content`) AND the structured currentThinking
+      // block (for multi-turn passback). `signature_delta` (one before the
+      // block's content_block_stop) is the integrity signature — written to the
+      // current block (passback byte-exact, 方案 B), not emitted (no display value).
       if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
         state.thinkingAccumulated += delta.thinking
+        if (state.currentThinking) state.currentThinking.thinking += delta.thinking
         return [{ type: 'thinking', delta: delta.thinking }]
       }
       if (delta?.type === 'signature_delta' && typeof delta.signature === 'string') {
-        state.thinkingSignature = delta.signature
+        if (state.currentThinking) state.currentThinking.signature = delta.signature
         return []
       }
       if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
@@ -466,6 +501,19 @@ function processAnthropicEvent(parsed: unknown, state: AnthropicStreamState): Ch
     case 'content_block_stop': {
       const wrap = e as { index?: number }
       if (typeof wrap.index !== 'number') return []
+      // task 06-08-chat 第二波 Bug A — finalize an in-flight thinking block:
+      // push {thinking, signature} (unmodified) into completedThinkingBlocks for
+      // multi-turn passback, then clear currentThinking. Falls through to the
+      // tool/text handling below (a thinking index is never a pendingToolBlock).
+      if (state.currentThinking && state.currentThinking.index === wrap.index) {
+        state.completedThinkingBlocks.push({
+          type: 'thinking',
+          thinking: state.currentThinking.thinking,
+          signature: state.currentThinking.signature
+        })
+        state.currentThinking = null
+        return []
+      }
       const rec = state.pendingToolBlocks.get(wrap.index)
       if (!rec) return [] // text block stop — nothing to flush
       let input: unknown = {}
@@ -990,17 +1038,22 @@ async function* openaiStream(
   }
 }
 
-/** task 06-08-chat 需求 5 — assemble the Anthropic /v1/messages request body,
- *  applying the per-turn thinking toggle. Extracted (vs inline) so the
- *  thinking-vs-model-matrix branch is unit-testable without a fetch mock.
+/** task 06-08-chat 需求 5 + 第二波 Bug A — assemble the Anthropic /v1/messages
+ *  request body, applying the per-turn thinking toggle. Extracted (vs inline) so
+ *  the thinking-vs-model-matrix branch is unit-testable without a fetch mock.
  *
- *  When `req.thinking?.enabled`:
- *    - inject `thinking` by model family — manual `{type:'enabled', budget_tokens}`
- *      for sonnet (budget < max_tokens), adaptive `{type:'adaptive'}` +
- *      `output_config.effort` for opus-4-7/4-8 (manual would 400, research §1.1);
- *    - DROP tools (MVP方案 A取舍, research §6): single-turn end_turn pure-thinking
- *      展示, avoids the multi-turn thinking-block passback hard constraint (§2.4).
- *  When off: identical to the legacy body (tools passed through). */
+ *  When `req.thinking?.enabled`, inject `thinking` by model family — manual
+ *  `{type:'enabled', budget_tokens}` for sonnet (budget < max_tokens), adaptive
+ *  `{type:'adaptive'}` + `output_config.effort` for opus-4-7/4-8 (manual would
+ *  400, research §1.1). Tools are ALWAYS passed through (方案 B): the original
+ *  MVP (方案 A) dropped tools when thinking was on, but the model still saw the
+ *  tool names in the system prompt → it hallucinated `<tool_call>` TEXT + faked
+ *  `<tool_response>` instead of emitting real tool_use blocks → writes never
+ *  ran (data-correctness bug). Keeping tools lets thinking + multi-turn tool use
+ *  coexist; the harness replays the thinking blocks unmodified on each iter
+ *  (extended thinking + tool use hard constraint, research §2.4). tool_choice is
+ *  left unset (= auto) — thinking is incompatible with `any`/named tool_choice.
+ *  When off: identical to the legacy body. */
 function buildAnthropicRequestBody(
   req: ChatStreamRequest,
   model: string,
@@ -1022,11 +1075,9 @@ function buildAnthropicRequestBody(
       requestBody.thinking = { type: 'adaptive' }
       requestBody.output_config = { effort: THINKING_EFFORT }
     }
-    // MVP: thinking on → no tools (single-turn). 不带 tools 字段（Anthropic rejects
-    // tools:[] 且方案 A 不调工具）。
-    return requestBody
   }
   // Sprint 19 — `tools` is omitted when empty (Anthropic rejects `tools: []`).
+  // 方案 B: passed through whether or not thinking is on (see jsdoc).
   if (tools) requestBody.tools = tools
   return requestBody
 }
@@ -1167,7 +1218,12 @@ async function* anthropicStream(
     // Fallback to 'end_turn' when upstream omitted message_delta (older
     // gateways occasionally do this); a missing stop_reason can never mean
     // "more to come" — message_stop already fired.
-    stopReason: state.messageStopReason ?? 'end_turn'
+    stopReason: state.messageStopReason ?? 'end_turn',
+    // task 06-08-chat 第二波 Bug A — this iter's structured thinking blocks (in
+    // SSE order, signature byte-exact). The harness replays them at the FRONT of
+    // the assistant turn it appends to multi-turn history (extended thinking +
+    // tool use passback). Empty array when thinking is off (zero-regression).
+    thinkingBlocks: state.completedThinkingBlocks
   }
 }
 

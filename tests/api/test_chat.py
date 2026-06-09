@@ -234,13 +234,22 @@ class _ChatConfigStub:
     llm_model = "claude-sonnet-4-6"
 
 
-def _config_client(monkeypatch: pytest.MonkeyPatch, cfg: object) -> TestClient:
+def _config_client(
+    monkeypatch: pytest.MonkeyPatch, cfg: object, user_context: str = ""
+) -> TestClient:
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: cfg)
+    # task 06-08-chat 第二波 Bug B — stub the module-level ContextLoader so /config
+    # tests don't hit Notion. Default "" (not configured); override per-test.
+    async def _ctx() -> str:
+        return user_context
+
+    monkeypatch.setattr("src.api.routers.chat._context_loader.get_markdown", _ctx)
     return TestClient(app, raise_server_exceptions=False)
 
 
 def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认快照：8 字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。"""
+    """默认快照：9 字段 camelCase 齐全 + 值对齐 electron 默认 + DEFAULT_HTTP_CONFIG。
+    userContext 默认 ""（未配置 LLM_CONTEXT_PAGE_ID / ContextLoader 返回空）。"""
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200
@@ -253,7 +262,33 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "kosConsumerEnabled": False,
         "kosConfigured": False,
         "kosTimeDecayEnabled": True,
+        "userContext": "",
     }
+
+
+def test_chat_config_user_context_injected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """task 06-08-chat 第二波 Bug B — ContextLoader 返回非空 markdown 时 userContext
+    原样透传（custom-api system prompt 注入用户身份/Sender Priority）。"""
+    ctx_md = "# Lucien\nRole: ENBU R&D\nSender Priority: boss@acme.com → Critical"
+    with _config_client(monkeypatch, _ChatConfigStub(), user_context=ctx_md) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["userContext"] == ctx_md
+
+
+def test_chat_config_user_context_graceful_on_loader_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ContextLoader 抛异常时 /config 不崩 —— userContext 降级 ""（best-effort，chat 仍可跑）。"""
+
+    async def _boom() -> str:
+        raise RuntimeError("notion down")
+
+    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatConfigStub())
+    monkeypatch.setattr("src.api.routers.chat._context_loader.get_markdown", _boom)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.get("/api/chat/config")
+    assert r.status_code == 200
+    assert r.json()["data"]["userContext"] == ""
 
 
 def test_chat_config_kos_configured_mirrors_consumer(monkeypatch: pytest.MonkeyPatch) -> None:

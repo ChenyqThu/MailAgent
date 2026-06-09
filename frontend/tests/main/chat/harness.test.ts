@@ -429,6 +429,118 @@ describe('runHarness — extended thinking (task 06-08-chat 需求 5)', () => {
     })
     expect(backend.lastReq?.thinking).toEqual({ enabled: true })
   })
+
+  // ── 第二波 Bug A (方案 B) — thinking blocks replayed in multi-turn priorTurns ──
+  test('iter-1 thinking blocks lead the assistant turn in iter-2 iterHistory (passback)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'echo',
+        async (input): Promise<ToolResult> => ({
+          ok: true,
+          output: { echoed: input },
+          durationMs: 1
+        })
+      )
+    )
+    // iter-1: thinking → text → tool_use; done carries the structured thinking block.
+    const backend = scriptedBackend([
+      [
+        { type: 'thinking', delta: 'I should call echo.' },
+        { type: 'chunk', delta: 'Let me check. ' },
+        { type: 'tool_use', toolUseId: 'toolu_t', name: 'echo', input: { q: 'x' } },
+        {
+          type: 'done',
+          finalContent: 'Let me check. ',
+          model: 'm',
+          stopReason: 'tool_use',
+          thinkingBlocks: [
+            { type: 'thinking', thinking: 'I should call echo.', signature: 'SIG==' }
+          ]
+        }
+      ],
+      [
+        { type: 'chunk', delta: 'Done.' },
+        { type: 'done', finalContent: 'Done.', model: 'm', stopReason: 'end_turn' }
+      ]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: 'claude-sonnet-4-6',
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry,
+      thinking: { enabled: true }
+    })
+    // iter-2 (last backend call) iterHistory: ... assistant(thinking,text,tool_use), user(tool_result).
+    const iterHistory = backend.lastReq?.iterHistory ?? []
+    const assistantTurn = iterHistory.find(
+      (m) => Array.isArray(m.content) && m.role === 'assistant'
+    )
+    const blocks = assistantTurn?.content as Array<{
+      type: string
+      thinking?: string
+      signature?: string
+    }>
+    expect(Array.isArray(blocks)).toBe(true)
+    // thinking block leads (content[0]), unmodified incl. signature.
+    expect(blocks[0]).toEqual({
+      type: 'thinking',
+      thinking: 'I should call echo.',
+      signature: 'SIG=='
+    })
+    // followed by the iter text + tool_use.
+    expect(blocks.some((b) => b.type === 'text')).toBe(true)
+    expect(blocks.some((b) => b.type === 'tool_use')).toBe(true)
+  })
+
+  test('no thinking blocks → assistant turn has no thinking entry (zero-regression)', async () => {
+    const { sessionId, assistantMessageId } = seedAssistantTurn()
+    const registry = createToolRegistry()
+    registry.register(
+      makeSilentTool(
+        'noop',
+        async (): Promise<ToolResult> => ({ ok: true, output: 'r', durationMs: 0 })
+      )
+    )
+    const backend = scriptedBackend([
+      [
+        { type: 'chunk', delta: 'text' },
+        { type: 'tool_use', toolUseId: 'toolu_n', name: 'noop', input: {} },
+        { type: 'done', finalContent: 'text', model: null, stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', finalContent: '', model: null, stopReason: 'end_turn' }]
+    ])
+    const ac = new AbortController()
+    await runHarness({
+      sessionId,
+      assistantMessageId,
+      backend,
+      initialHistory: [],
+      model: null,
+      agentPageId: null,
+      emailContext: null,
+      ac,
+      platform: testChatPlatform,
+      sink: recordingSink(),
+      registry
+    })
+    const iterHistory = backend.lastReq?.iterHistory ?? []
+    const assistantTurn = iterHistory.find(
+      (m) => Array.isArray(m.content) && m.role === 'assistant'
+    )
+    const blocks = (assistantTurn?.content ?? []) as Array<{ type: string }>
+    expect(blocks.some((b) => b.type === 'thinking')).toBe(false)
+    expect(blocks[0]?.type).toBe('text')
+  })
 })
 
 describe('runHarness — terminal conditions', () => {

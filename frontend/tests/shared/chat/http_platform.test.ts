@@ -708,7 +708,8 @@ describe('HttpChatPlatform config 快照', () => {
     expect(p.modelConfig()).toEqual({
       defaultModel: 'claude-sonnet-4-6',
       kosConsumerEnabled: false,
-      kosL1HotBlockEnabled: false
+      kosL1HotBlockEnabled: false,
+      userContext: null
     })
     expect(p.kosConfig()).toEqual({ configured: false, timeDecayEnabled: true })
   })

@@ -51,7 +51,8 @@ function makePlatform(llmFetch: ChatModelPlatform['llmFetch']): ChatModelPlatfor
     modelConfig: () => ({
       defaultModel: 'claude-sonnet-4-6',
       kosConsumerEnabled: false,
-      kosL1HotBlockEnabled: false
+      kosL1HotBlockEnabled: false,
+      userContext: null
     })
   }
 }

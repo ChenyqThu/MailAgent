@@ -30,8 +30,15 @@ from src.api.deps import get_chat_db, get_settings
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.chat.notion_agent import run_notion_agent, sse_encode
 from src.kos.client import KOSClient, KOSError
+from src.llm_agent.context_loader import ContextLoader
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# task 06-08-chat 第二波 Bug B — reuse the email-classification context page
+# (user profile / Sender Priority / focus projects / 研发课组 / 邮件风格 / 时区)
+# for the custom-api chat system prompt. Module-level singleton preserves the
+# 1800s TTL cache across /config requests (mirrors processor.py持有 ContextLoader)。
+_context_loader = ContextLoader()
 
 # 3b-1：CRS/Cloudflare 挑剔 UA（mirror custom_api.ts / electron_platform.ts llmFetch 注入侧）。
 _CRS_USER_AGENT = (
@@ -178,6 +185,16 @@ async def chat_config(request: Request):
     max_iter = max(1, int(cfg.agent_max_iter))
     max_cost = cfg.agent_max_cost_usd if cfg.agent_max_cost_usd > 0 else 0.5
     default_model = cfg.llm_model or "claude-sonnet-4-6"
+    # task 06-08-chat 第二波 Bug B — user context (Notion context page markdown,
+    # TTL-cached) injected into the custom-api chat system prompt so the assistant
+    # knows the user's role / responsibilities / Sender Priority. Not configured
+    # (LLM_CONTEXT_PAGE_ID empty) → "". Fetch failure → "" (graceful, never blocks
+    # /config — chat still runs, just without the user profile).
+    user_context = ""
+    try:
+        user_context = await _context_loader.get_markdown()
+    except Exception:  # noqa: BLE001 — context is best-effort; never fail /config
+        user_context = ""
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -188,6 +205,7 @@ async def chat_config(request: Request):
             "kosConsumerEnabled": cfg.kos_consumer_enabled,
             "kosConfigured": cfg.kos_consumer_enabled,
             "kosTimeDecayEnabled": cfg.kos_time_decay_enabled,
+            "userContext": user_context,
         },
         request=request,
         source="config",

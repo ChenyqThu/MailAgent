@@ -132,6 +132,13 @@ export interface ChatModelConfig {
   kosConsumerEnabled: boolean
   /** 注入 L1 sender digest hot block gate（MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED）。 */
   kosL1HotBlockEnabled: boolean
+  /** task 06-08-chat 第二波 Bug B — Notion context page markdown (user profile /
+   *  Sender Priority / focus projects / 研发课组 / 邮件风格 / 时区), injected into
+   *  the stable (cacheable) system prefix so the custom-api assistant knows who
+   *  the user is. null / "" → not injected (LLM_CONTEXT_PAGE_ID unset or fetch
+   *  failed; graceful). Sourced from serve-api GET /chat/config (ContextLoader,
+   *  TTL-cached). notion-agent carries its own Notion context → not injected. */
+  userContext: string | null
 }
 
 export interface ChatModelPlatform {

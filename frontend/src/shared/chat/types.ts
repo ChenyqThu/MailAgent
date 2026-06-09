@@ -77,6 +77,14 @@ export interface DoneEvent {
   /** See UsageEvent.metadata — orchestrator merges this with any prior
    *  metadata observed on usage events (last-write-wins). */
   metadata?: Record<string, unknown> | null
+  /** task 06-08-chat 第二波 Bug A — the structured thinking/redacted_thinking
+   *  blocks the model emitted THIS iter, in SSE order. The harness puts these
+   *  (unmodified, incl. signature) at the FRONT of the assistant turn it
+   *  appends to multi-turn history — Anthropic requires the prior thinking
+   *  block to be passed back verbatim when the same turn calls tools (extended
+   *  thinking + tool use hard constraint, research §2.4 / §6 方案 B). Empty /
+   *  omitted when thinking is off (zero-regression: harness sees []). */
+  thinkingBlocks?: AnthropicThinkingBlock[]
 }
 
 /** Backend-internal failure. Orchestrator maps to renderer error UI. */
@@ -178,14 +186,28 @@ export interface BackendToolDescriptor {
   input_schema: Record<string, unknown>
 }
 
+/** task 06-08-chat 第二波 Bug A — Anthropic extended-thinking content blocks.
+ *  A `thinking` block carries the (summarized) reasoning text + an opaque
+ *  integrity `signature`; a `redacted_thinking` block carries only encrypted
+ *  `data` (no readable text). Both MUST be passed back to the API UNMODIFIED
+ *  (signature byte-exact) on the next turn when the same assistant turn calls
+ *  tools — otherwise Anthropic returns 400. Used for DoneEvent.thinkingBlocks
+ *  + the harness's multi-turn history rebuild (research §2.4). */
+export type AnthropicThinkingBlock =
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string }
+
 /** Sprint 19 PR-1d — Anthropic content block discriminator. The harness
  *  reuses these to build multi-turn `iterHistory` entries: an assistant
- *  turn that ends in tool_use has `content: [text, tool_use…]`; the next
- *  user turn carries the `tool_result` blocks. */
+ *  turn that ends in tool_use has `content: [thinking…, text, tool_use…]`
+ *  (thinking blocks lead, task 06-08-chat 第二波 Bug A); the next user turn
+ *  carries the `tool_result` blocks. */
 export type AnthropicContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string }
 
 /** Sprint 19 PR-1d — Anthropic-shape history message for the multi-turn
  *  loop. When `ChatStreamRequest.iterHistory` is set, the backend uses

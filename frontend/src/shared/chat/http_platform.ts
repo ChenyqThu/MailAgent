@@ -92,6 +92,11 @@ export interface HttpPlatformConfig {
   kosConfigured: boolean
   /** kos_query rerankByRecency gate（MAILAGENT_KOS_TIME_DECAY_ENABLED）。 */
   kosTimeDecayEnabled: boolean
+  /** task 06-08-chat 第二波 Bug B — Notion context page markdown (user profile /
+   *  Sender Priority / focus projects), from serve-api /chat/config（ContextLoader
+   *  TTL-cached）。注入 custom-api system prompt（buildStableSystemPrompt）。远程默认
+   *  ""（不注入；端点未返回该字段 / 未配置 LLM_CONTEXT_PAGE_ID → 降级空串）。 */
+  userContext: string
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -104,7 +109,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   defaultModel: 'claude-sonnet-4-6',
   kosConsumerEnabled: false,
   kosConfigured: false,
-  kosTimeDecayEnabled: true
+  kosTimeDecayEnabled: true,
+  // task 06-08-chat 第二波 Bug B — no user context until /chat/config supplies it.
+  userContext: ''
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文
@@ -398,7 +405,10 @@ export class HttpChatPlatform
     return {
       defaultModel: this.config.defaultModel,
       kosConsumerEnabled: this.config.kosConsumerEnabled,
-      kosL1HotBlockEnabled: this.config.kosL1HotBlockEnabled
+      kosL1HotBlockEnabled: this.config.kosL1HotBlockEnabled,
+      // task 06-08-chat 第二波 Bug B — "" → null (not injected). custom_api
+      // buildStableSystemPrompt only injects when non-null + non-empty.
+      userContext: this.config.userContext.length > 0 ? this.config.userContext : null
     }
   }
 
