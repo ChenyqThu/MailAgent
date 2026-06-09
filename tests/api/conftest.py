@@ -304,16 +304,14 @@ def client(repo: EmailRepository) -> Iterator[TestClient]:
 
 
 # ===========================================================================
-# Phase B — calendar + folder fixtures
+# Phase B — calendar fixtures
 # ---------------------------------------------------------------------------
-# The calendar/folder routers do NOT use EmailRepository; they build their own
-# CalendarService / FolderEmailRepository from `get_settings().sync_store_db_path`.
-# Their tables (calendar_event / calendar_sync_state / folder_email +
-# folder_email_fts triggers / folder_sync_state) carry NOT-NULL / trigger logic
-# the trimmed `_DDL` above deliberately omits, so we build a SEPARATE DB via the
-# REAL `SyncStore._init_database()` (all v17 tables, FTS triggers included) and
-# seed a deterministic corpus. The `cal_folder_client` overrides `get_settings`
-# to point those routers at this DB.
+# The calendar router does NOT use EmailRepository; it builds its own
+# CalendarService from `get_settings().sync_store_db_path`. Its tables
+# (calendar_event / calendar_sync_state) carry NOT-NULL logic the trimmed
+# `_DDL` above deliberately omits, so we build a SEPARATE DB via the REAL
+# `SyncStore._init_database()` and seed a deterministic corpus. The
+# `cal_folder_client` overrides `get_settings` to point the router at this DB.
 # ===========================================================================
 
 # Stable calendar identifiers the tests reference.
@@ -324,22 +322,15 @@ CAL_NAME = "Work"
 CAL_WINDOW_FROM = "2026-06-01"
 CAL_WINDOW_TO = "2026-06-03"
 
-# Stable folder identifiers (folder_email row id is assigned by AUTOINCREMENT;
-# the fixture exposes it via the `folder_seed_ids` fixture).
-FOLDER_ARCHIVE_SUBJECT = "Archived hello redis"
-FOLDER_DRAFT_SUBJECT = "Draft in progress"
 
-
-def _seed_cal_folder(db_path: Path) -> dict[str, int]:
-    """Seed calendar_event / calendar_sync_state / folder_email into a real
-    SyncStore-initialised DB. Returns {'archive_id': N, 'drafts_id': M}."""
+def _seed_cal_folder(db_path: Path) -> None:
+    """Seed calendar_event / calendar_sync_state into a real SyncStore-initialised DB."""
     import json
     from datetime import datetime, timezone
 
-    from src.folder_sync.repository import FolderEmailRepository
     from src.mail.sync_store import SyncStore
 
-    # Real schema init (creates every v17 table + FTS triggers).
+    # Real schema init (creates every table; calendar_event + calendar_sync_state).
     SyncStore(str(db_path))
 
     now = time.time()
@@ -384,72 +375,23 @@ def _seed_cal_folder(db_path: Path) -> dict[str, int]:
     finally:
         conn.close()
 
-    # folder_email via the repo (so FTS triggers fire → search works).
-    import json as _json
-
-    frepo = FolderEmailRepository(str(db_path))
-    frepo.upsert_emails([
-        {
-            "folder": "archive", "imap_uidvalidity": 1, "imap_uid": 10,
-            "message_id": "<farch@example.com>", "thread_id": "ft1",
-            "subject": FOLDER_ARCHIVE_SUBJECT, "sender": "s@example.com",
-            "sender_name": "Sender", "to_addr": "me@example.com", "cc_addr": "",
-            "date_received": "2026-05-01 09:00:00", "is_flagged": 1,
-            "has_attachments": 1, "body_html": "<p>hi archive</p>",
-            "body_markdown": "hi archive body",
-            "snippet": "archive snippet preview",
-            "attachments_json": _json.dumps(
-                [{"filename": "a.pdf", "size": 12, "content_type": "application/pdf"}]
-            ),
-            "raw_mime_sha256": "x" * 64,
-        },
-        {
-            "folder": "drafts", "imap_uidvalidity": 1, "imap_uid": 20,
-            "message_id": "<fdraft@example.com>", "thread_id": "ft2",
-            "subject": FOLDER_DRAFT_SUBJECT, "sender": "me@example.com",
-            "sender_name": "Me", "to_addr": "boss@example.com", "cc_addr": "",
-            "date_received": "2026-05-02 10:00:00", "is_flagged": 0,
-            "has_attachments": 0, "body_html": "<p>draft</p>",
-            "body_markdown": "draft body", "snippet": "draft snippet",
-            "attachments_json": None, "raw_mime_sha256": "y" * 64,
-        },
-    ])
-    frepo.upsert_sync_state(
-        "archive", imap_uidvalidity=1, last_uidnext=11, last_error=None
-    )
-
-    with frepo._connect() as c:
-        arch = c.execute(
-            "SELECT id FROM folder_email WHERE imap_uid=10"
-        ).fetchone()["id"]
-        draft = c.execute(
-            "SELECT id FROM folder_email WHERE imap_uid=20"
-        ).fetchone()["id"]
-    return {"archive_id": int(arch), "drafts_id": int(draft)}
-
 
 @pytest.fixture(scope="session")
-def cal_folder_db(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict]:
-    """A real-schema SQLite DB seeded with calendar_event + folder_email rows."""
+def cal_folder_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A real-schema SQLite DB seeded with calendar_event rows."""
     db = tmp_path_factory.mktemp("calfolder") / "cf_store.db"
-    ids = _seed_cal_folder(db)
-    return db, ids
+    _seed_cal_folder(db)
+    return db
 
 
 @pytest.fixture()
-def folder_seed_ids(cal_folder_db: tuple[Path, dict]) -> dict:
-    """The AUTOINCREMENT ids of the seeded folder rows (archive / drafts)."""
-    return cal_folder_db[1]
-
-
-@pytest.fixture()
-def cal_folder_client(cal_folder_db: tuple[Path, dict]) -> Iterator[TestClient]:
-    """TestClient whose `get_settings` points calendar/folder routers at the
+def cal_folder_client(cal_folder_db: Path) -> Iterator[TestClient]:
+    """TestClient whose `get_settings` points the calendar router at the
     real-schema seeded DB. A tiny stub Config supplies only the two attributes
-    those routers read (`sync_store_db_path`, `calendar_caldav_sync_enabled`)."""
+    that router reads (`sync_store_db_path`, `calendar_caldav_sync_enabled`)."""
     from src.api.deps import get_settings
 
-    db_path, _ids = cal_folder_db
+    db_path = cal_folder_db
 
     class _StubConfig:
         sync_store_db_path = str(db_path)

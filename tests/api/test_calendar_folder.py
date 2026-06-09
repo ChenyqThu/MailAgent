@@ -1,17 +1,15 @@
-"""calendar + folder READ endpoints (src/api/routers/{calendar,folder}.py).
+"""calendar READ endpoints (src/api/routers/calendar.py).
 
-Phase B §2: 8 READ endpoints. Exercised against a REAL-schema SQLite DB
-(conftest `cal_folder_client` / `cal_folder_db`) seeded with calendar_event +
-folder_email rows, going through the actual CalendarService /
-FolderEmailRepository the routers build internally.
+Phase B §2 calendar READ endpoints. Exercised against a REAL-schema SQLite DB
+(conftest `cal_folder_client` / `cal_folder_db`) seeded with calendar_event
+rows, going through the actual CalendarService the router builds internally.
 
-Discipline checks the handoff calls out for this lane (§2 + gotcha #6):
-  - calendar/folder reads carry the §3.4 envelope with meta.source='sqlite'.
-  - folder reads go straight to folder_email / folder_email_fts and NEVER touch
-    the davmail gate (the gate lives only on the CLI write path); we prove this
-    by getting 200s for archive/drafts with NO MAILAGENT_BACKEND set.
-  - route-ordering: /sync-status, /{folder}/search must not be swallowed by the
-    /{folder}/{id:int} dynamic segment.
+Discipline checks the handoff calls out for this lane (§2):
+  - calendar reads carry the §3.4 envelope with meta.source='sqlite'.
+
+NOTE: the old folder READ endpoints (/api/folder/{folder}/list|search|{id},
+/by-id, /sync-status) backed by the never-used folder_email table were removed
+in P6 (folder_sync display-path cleanup); their tests went with them.
 """
 
 from __future__ import annotations
@@ -22,7 +20,6 @@ from tests.api.conftest import (
     CAL_NAME,
     CAL_WINDOW_FROM,
     CAL_WINDOW_TO,
-    FOLDER_ARCHIVE_SUBJECT,
 )
 
 
@@ -188,232 +185,3 @@ def test_calendar_names_excludes_deleted(cal_folder_client):
     assert body["meta"]["count"] == 1
     # sanity: the deleted uid never leaks into names.
     assert CAL_DELETED_UID not in str(body["data"])
-
-
-# ===========================================================================
-# GET /api/folder/{folder}/list  — proves NO davmail gate on the read path
-# ===========================================================================
-
-
-def test_folder_list_archive_no_davmail_gate(cal_folder_client):
-    # gotcha #6: folder READS hit folder_email directly; with no MAILAGENT_BACKEND
-    # set this must still 200 (the gate is CLI-write-only).
-    r = cal_folder_client.get("/api/folder/archive/list")
-    assert r.status_code == 200
-    body = r.json()
-    _ok_envelope(body)
-    data = body["data"]
-    assert len(data) == 1
-    row = data[0]
-    # FolderEmailMeta projection — NO body_html/body_markdown on the list item,
-    # and NEVER a host path (gotcha #1).
-    assert "body_html" not in row
-    assert "body_markdown" not in row
-    assert "local_path" not in str(row)
-    assert row["subject"] == FOLDER_ARCHIVE_SUBJECT
-    assert row["is_flagged"] is True
-    assert row["has_attachments"] is True
-    # attachment projection = {filename,size,content_type} only.
-    assert row["attachments"] == [
-        {"filename": "a.pdf", "size": 12, "content_type": "application/pdf"}
-    ]
-    assert body["meta"]["count"] == 1
-    assert body["meta"]["limit"] == 200
-    assert body["meta"]["offset"] == 0
-
-
-def test_folder_list_drafts(cal_folder_client):
-    r = cal_folder_client.get("/api/folder/drafts/list")
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert len(data) == 1
-    assert data[0]["folder"] == "drafts"
-    assert data[0]["attachments"] == []  # null attachments_json → []
-
-
-def test_folder_list_bad_folder_400(cal_folder_client):
-    r = cal_folder_client.get("/api/folder/spam/list")
-    assert r.status_code == 400
-    _err(r.json(), code="E_INVALID_ARG")
-
-
-def test_folder_list_limit_out_of_range_422(cal_folder_client):
-    r = cal_folder_client.get("/api/folder/archive/list", params={"limit": 9999})
-    assert r.status_code == 422  # le=500 FastAPI validation.
-
-
-# ===========================================================================
-# GET /api/folder/{folder}/{id}
-# ===========================================================================
-
-
-def test_folder_get_detail_has_body(cal_folder_client, folder_seed_ids):
-    arch_id = folder_seed_ids["archive_id"]
-    r = cal_folder_client.get(f"/api/folder/archive/{arch_id}")
-    assert r.status_code == 200
-    body = r.json()
-    _ok_envelope(body)
-    data = body["data"]
-    # FolderEmailDetail = meta + body.
-    assert data["id"] == arch_id
-    assert data["body_html"] == "<p>hi archive</p>"
-    assert data["body_markdown"] == "hi archive body"
-
-
-def test_folder_get_missing_404(cal_folder_client):
-    r = cal_folder_client.get("/api/folder/archive/424242")
-    assert r.status_code == 404
-    _err(r.json(), code="E_NOT_FOUND")
-
-
-def test_folder_get_cross_folder_mismatch_404(cal_folder_client, folder_seed_ids):
-    # The archive row id requested under /drafts/ → folder mismatch → 404
-    # (guards against cross-folder id reads).
-    arch_id = folder_seed_ids["archive_id"]
-    r = cal_folder_client.get(f"/api/folder/drafts/{arch_id}")
-    assert r.status_code == 404
-    _err(r.json(), code="E_NOT_FOUND")
-
-
-def test_folder_get_bad_folder_400(cal_folder_client, folder_seed_ids):
-    arch_id = folder_seed_ids["archive_id"]
-    r = cal_folder_client.get(f"/api/folder/spam/{arch_id}")
-    assert r.status_code == 400
-    _err(r.json(), code="E_INVALID_ARG")
-
-
-# ===========================================================================
-# GET /api/folder/by-id/{id}  — folder-agnostic detail (mirrors Electron
-# folder:get(id); web FolderApi.get(id) carries only the numeric row id).
-# Declared BEFORE /{folder}/{id:int} so the literal 'by-id' prefix wins.
-# ===========================================================================
-
-
-def test_folder_get_by_id_has_body(cal_folder_client, folder_seed_ids):
-    # (a) existing row id → 200 + FolderEmailDetail (body_html/body_markdown),
-    # envelope meta.source=sqlite. folder is self-parsed from the row.
-    arch_id = folder_seed_ids["archive_id"]
-    r = cal_folder_client.get(f"/api/folder/by-id/{arch_id}")
-    assert r.status_code == 200
-    body = r.json()
-    _ok_envelope(body)  # asserts meta.source == "sqlite"
-    data = body["data"]
-    assert data["id"] == arch_id
-    assert data["folder"] == "archive"
-    assert data["subject"] == FOLDER_ARCHIVE_SUBJECT
-    assert data["body_html"] == "<p>hi archive</p>"
-    assert data["body_markdown"] == "hi archive body"
-
-
-def test_folder_get_by_id_missing_404(cal_folder_client):
-    # (b) non-existent id → 404 E_NOT_FOUND.
-    r = cal_folder_client.get("/api/folder/by-id/424242")
-    assert r.status_code == 404
-    _err(r.json(), code="E_NOT_FOUND")
-
-
-def test_folder_get_by_id_not_swallowed_by_folder_route(
-    cal_folder_client, folder_seed_ids
-):
-    # (c) route-ordering: /by-id/{existing} must hit folder_get_by_id, NOT be
-    # parsed as /{folder}/{id} with folder='by-id' (which would 400 on the
-    # _validate_folder whitelist). Returning 200 (not 400 E_INVALID_ARG) proves
-    # the literal 'by-id' route — declared before /{folder}/{id:int} — wins.
-    arch_id = folder_seed_ids["archive_id"]
-    r = cal_folder_client.get(f"/api/folder/by-id/{arch_id}")
-    assert r.status_code == 200
-    assert r.json()["status"] == "success"
-    # explicit: NOT the folder-whitelist rejection.
-    assert r.status_code != 400
-
-
-# ===========================================================================
-# GET /api/folder/{folder}/search
-# ===========================================================================
-
-
-def test_folder_search_smart(cal_folder_client):
-    r = cal_folder_client.get(
-        "/api/folder/archive/search", params={"q": "redis"}
-    )
-    assert r.status_code == 200
-    body = r.json()
-    _ok_envelope(body)
-    data = body["data"]
-    # FolderSearchResult = {query, transformed_query, total_hits, hits}.
-    assert set(data) == {"query", "transformed_query", "total_hits", "hits"}
-    assert data["query"] == "redis"
-    assert data["total_hits"] == 1
-    hit = data["hits"][0]
-    assert hit["subject"] == FOLDER_ARCHIVE_SUBJECT
-    # hits are meta (no body).
-    assert "body_html" not in hit
-    assert body["meta"]["total_hits"] == 1
-
-
-def test_folder_search_raw_no_transform(cal_folder_client):
-    r = cal_folder_client.get(
-        "/api/folder/archive/search", params={"q": "redis", "raw": "true"}
-    )
-    assert r.status_code == 200
-    data = r.json()["data"]
-    # raw mode → transformed_query is null (passthrough).
-    assert data["transformed_query"] is None
-    assert data["total_hits"] == 1
-
-
-def test_folder_search_no_match_empty(cal_folder_client):
-    r = cal_folder_client.get(
-        "/api/folder/archive/search", params={"q": "zzzznotpresentzzzz"}
-    )
-    assert r.status_code == 200
-    assert r.json()["data"]["hits"] == []
-    assert r.json()["data"]["total_hits"] == 0
-
-
-def test_folder_search_scoped_to_folder(cal_folder_client):
-    # The draft subject ("Draft in progress") must NOT surface when searching
-    # the archive folder — search is folder-scoped.
-    r = cal_folder_client.get(
-        "/api/folder/archive/search", params={"q": "Draft"}
-    )
-    assert r.status_code == 200
-    assert r.json()["data"]["hits"] == []
-
-
-def test_folder_search_bad_folder_400(cal_folder_client):
-    r = cal_folder_client.get("/api/folder/spam/search", params={"q": "x"})
-    assert r.status_code == 400
-    _err(r.json(), code="E_INVALID_ARG")
-
-
-def test_folder_search_missing_q_422(cal_folder_client):
-    r = cal_folder_client.get("/api/folder/archive/search")
-    assert r.status_code == 422  # q is required.
-
-
-# ===========================================================================
-# GET /api/folder/sync-status  — must not be shadowed by /{folder}/...
-# ===========================================================================
-
-
-def test_folder_sync_status(cal_folder_client):
-    r = cal_folder_client.get("/api/folder/sync-status")
-    assert r.status_code == 200
-    body = r.json()
-    _ok_envelope(body)
-    data = body["data"]
-    assert set(data) == {"states", "counts"}
-    # counts per folder from the seed (1 archive + 1 drafts).
-    assert data["counts"] == {"archive": 1, "drafts": 1}
-    arch_state = next(s for s in data["states"] if s["folder"] == "archive")
-    assert arch_state["last_uidnext"] == 11
-    assert arch_state["imap_uidvalidity"] == 1
-
-
-def test_folder_sync_status_not_shadowed_by_folder_route(cal_folder_client):
-    # "sync-status" must resolve to the dedicated handler, not be parsed as a
-    # {folder} value (which would 400 on the folder whitelist).
-    r = cal_folder_client.get("/api/folder/sync-status")
-    assert r.status_code == 200
-    assert "states" in r.json()["data"]

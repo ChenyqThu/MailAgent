@@ -60,18 +60,9 @@ import type {
   EnrichedEmailMeta,
   FolderApi,
   FolderCleanupResult,
-  FolderCreateDraftOpts,
   FolderDiscoverResult,
-  FolderEditDraftOpts,
-  FolderEmailDetail,
-  FolderEmailMeta,
-  FolderListOpts,
   FolderManageResult,
-  FolderName,
-  FolderSearchOpts,
-  FolderSearchResult,
   FolderSetWhitelistResult,
-  FolderSyncStatusResult,
   FolderWhitelistResult,
   EnvApi,
   EnvSetResult,
@@ -308,44 +299,6 @@ class ElectronEmailApi implements EmailApi {
 }
 
 class ElectronFolderApi implements FolderApi {
-  // Reads — better-sqlite3 直读, no envelope (mirrors ElectronEmailApi reads)
-  async list(opts: FolderListOpts): Promise<FolderEmailMeta[]> {
-    return (await invoker()('folder:list', opts)) as FolderEmailMeta[]
-  }
-  async get(id: number): Promise<FolderEmailDetail | null> {
-    return (await invoker()('folder:get', id)) as FolderEmailDetail | null
-  }
-  async search(opts: FolderSearchOpts): Promise<FolderSearchResult> {
-    return (await invoker()('folder:search', opts)) as FolderSearchResult
-  }
-  async syncStatus(): Promise<FolderSyncStatusResult> {
-    return (await invoker()('folder:syncStatus')) as FolderSyncStatusResult
-  }
-  // Writes — envelope → unwrap (mirrors ElectronCalendarApi write methods)
-  async syncNow(folder: FolderName, full?: boolean): Promise<unknown> {
-    const env = (await invoker()('folder:syncNow', folder, full)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async deleteMsg(id: number): Promise<unknown> {
-    const env = (await invoker()('folder:delete', id)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async move(id: number, to?: string): Promise<unknown> {
-    const env = (await invoker()('folder:move', id, to)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async sendDraft(id: number): Promise<unknown> {
-    const env = (await invoker()('folder:sendDraft', id)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async createDraft(opts: FolderCreateDraftOpts): Promise<unknown> {
-    const env = (await invoker()('folder:createDraft', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async editDraft(opts: FolderEditDraftOpts): Promise<unknown> {
-    const env = (await invoker()('folder:editDraft', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
   // 多文件夹同步 (P3) — discover/whitelist 走 Main→daemon→serve-api 转发 (D1)。
   // 用 envelope 形态过 IPC 边界以保住 error.code (非 davmail → E_INVALID_ARG, 给
   // FolderPicker 门控)。

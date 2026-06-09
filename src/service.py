@@ -488,48 +488,6 @@ class EmailNotionSyncApp:
                     "[calendar-sync] disabled (CALENDAR_CALDAV_SYNC_ENABLED=false)"
                 )
 
-            # Folder SSoT: 启动 FolderSyncWorker (DavMail IMAP Archive/Drafts → SQLite
-            # folder_email 表的增量 sync). davmail-only + 默认关闭灰度. 详见 plan
-            # mailagent-davmail-zesty-eclipse.md.
-            folder_sync_task = None
-            if config.mailbox_folder_sync_enabled and config.mailagent_backend == "davmail":
-                try:
-                    from src.mail.backend.davmail_backend import DavMailBackend
-                    from src.folder_sync.imap_folder_reader import FolderImapReader
-                    from src.folder_sync.repository import FolderEmailRepository
-                    from src.folder_sync.worker import FolderSyncWorker
-
-                    # 复用 watcher 已 probe 的 DavMailBackend (含 drafts_folder 探测结果)
-                    _folder_backend = self.watcher.backend
-                    if not isinstance(_folder_backend, DavMailBackend):
-                        from src.mail.backend.factory import create_backend
-                        _folder_backend = create_backend(config, self.watcher.sync_store)
-                    self.folder_sync_worker = FolderSyncWorker(
-                        cfg=config,
-                        reader=FolderImapReader(_folder_backend),
-                        repo=FolderEmailRepository(config.sync_store_db_path),
-                        poll_interval=float(config.folder_sync_poll_interval_sec),
-                    )
-                    folder_sync_task = asyncio.create_task(
-                        self.folder_sync_worker.run()
-                    )
-                    logger.info(
-                        f"[folder-sync] worker started "
-                        f"(poll={config.folder_sync_poll_interval_sec}s, "
-                        f"archive_window={config.archive_sync_past_days}d)"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"[folder-sync] failed to start (main loop continues): {e}"
-                    )
-                    self.folder_sync_worker = None
-            else:
-                self.folder_sync_worker = None
-                if config.mailbox_folder_sync_enabled:
-                    logger.info(
-                        "[folder-sync] disabled (requires MAILAGENT_BACKEND=davmail)"
-                    )
-
             # Sprint 16: 启动本地 SSE server (mail-sync 进程内)
             # 前端 Electron main 直连 127.0.0.1:9200, 0 RTT;
             # 失败 silent (主链路不受影响, 前端自动 fallback 轮询).
@@ -658,11 +616,6 @@ class EmailNotionSyncApp:
                 if self.calendar_sync_worker:
                     self.calendar_sync_worker.stop()
                 tasks.append(calendar_sync_task)
-            if folder_sync_task:
-                # Folder SSoT — graceful stop 同 calendar
-                if self.folder_sync_worker:
-                    self.folder_sync_worker.stop()
-                tasks.append(folder_sync_task)
             for task in tasks:
                 task.cancel()
                 try:

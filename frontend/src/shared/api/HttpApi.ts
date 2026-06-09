@@ -52,14 +52,8 @@ import type {
   EnrichedEmailMeta,
   FolderCleanupResult,
   FolderDiscoverResult,
-  FolderEmailDetail,
-  FolderEmailMeta,
-  FolderListOpts,
   FolderManageResult,
-  FolderSearchOpts,
-  FolderSearchResult,
   FolderSetWhitelistResult,
-  FolderSyncStatusResult,
   FolderWhitelistResult,
   JobEnqueueResult,
   JobRecord,
@@ -100,7 +94,7 @@ function notImplemented(method: string): Promise<never> {
 
 /** True only for an ApiError whose code === 'E_NOT_FOUND'. Used by the few
  *  methods whose interface returns `T | null` on a missing row (email.get,
- *  email.body, email.pin, calendar.eventGet, folder.get) — mirrors
+ *  email.body, email.pin, calendar.eventGet) — mirrors
  *  ElectronApi which returns null rather than throwing for those. */
 function isNotFound(e: unknown): boolean {
   return (
@@ -333,39 +327,11 @@ export class HttpApi implements MailApi {
     get: (jobId: number): Promise<JobRecord> => this.req<JobRecord>('GET', `/jobs/${jobId}`)
   }
 
-  // Phase C — 存档 / 草稿箱. READS implemented (better-sqlite3-backed FastAPI
-  // routes); WRITES stay stubbed (CalDAV/IMAP-write CLI forks on the Mac host).
+  // 多文件夹同步 (P3/P4/P5) — discover/whitelist/manage/cleanup。davmail-only
+  // (discover/manage); serve-api 对非 davmail 后端返回 400 E_INVALID_ARG → req()
+  // 抛带 code 的 Error, FolderPicker 据此切门控态。远程 web 直连这些端点 (与本地
+  // daemon 转发同 wire)。
   folder = {
-    list: (opts: FolderListOpts): Promise<FolderEmailMeta[]> =>
-      this.req<FolderEmailMeta[]>('GET', `/folder/${opts.folder}/list`, {
-        query: { limit: opts.limit, offset: opts.offset }
-      }),
-
-    get: async (id: number): Promise<FolderEmailDetail | null> => {
-      // FolderApi.get(id) carries only the numeric row id. The backend
-      // /folder/by-id/{id} route resolves the folder from the folder_email
-      // row (mirrors Electron folder:get(id)); the old /folder/_/{id} path
-      // tripped _validate_folder('_') → 400.
-      try {
-        return await this.req<FolderEmailDetail>('GET', `/folder/by-id/${id}`)
-      } catch (e) {
-        if (isNotFound(e)) return null
-        throw e
-      }
-    },
-
-    search: (opts: FolderSearchOpts): Promise<FolderSearchResult> =>
-      this.req<FolderSearchResult>('GET', `/folder/${opts.folder ?? '_'}/search`, {
-        query: { q: opts.query, raw: opts.raw, limit: opts.limit }
-      }),
-
-    syncStatus: (): Promise<FolderSyncStatusResult> =>
-      // Returns the whole {states, counts} shape.
-      this.req<FolderSyncStatusResult>('GET', '/folder/sync-status'),
-
-    // 多文件夹同步 (P3) — discover + whitelist。davmail-only: serve-api 对非
-    // davmail 后端返回 400 E_INVALID_ARG → req() 抛带 code 的 Error, FolderPicker
-    // 据此切门控态。远程 web 直连这些端点 (与本地 daemon 转发同 wire)。
     discover: (opts?: { counts?: boolean }): Promise<FolderDiscoverResult> =>
       this.req<FolderDiscoverResult>('GET', '/folder/discover', {
         // 后端默认 counts=true; 显式传以保持 wire 清晰。
@@ -403,15 +369,7 @@ export class HttpApi implements MailApi {
     cleanup: (imapName: string): Promise<FolderCleanupResult> =>
       this.req<FolderCleanupResult>('POST', '/folder/cleanup', {
         body: { imap_name: imapName }
-      }),
-
-    // Writes — CLI-write/CalDAV-write, deferred.
-    syncNow: () => notImplemented('folder.syncNow'),
-    deleteMsg: () => notImplemented('folder.deleteMsg'),
-    move: () => notImplemented('folder.move'),
-    sendDraft: () => notImplemented('folder.sendDraft'),
-    createDraft: () => notImplemented('folder.createDraft'),
-    editDraft: () => notImplemented('folder.editDraft')
+      })
   }
 
   attachment = {

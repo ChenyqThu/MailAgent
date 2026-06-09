@@ -213,18 +213,18 @@ class SyncStore:
     #                source 三态 (caldav / email_ics / legacy_calendar_app) 灰度共存. 时间一律存
     #                UTC epoch (REAL), 前端按 toLocaleString 转本地 TZ. 详见 plan
     #                §"Phase 1.1 DB 升级" + frontend-view-silly-knuth.md.
-    # v17 (Folder Archive/Drafts, 2026-05): 新增 folder_email + folder_email_fts +
-    #                folder_sync_state 三表, 把 Archive / Drafts 两个 IMAP 文件夹落地为
-    #                SQLite 独立表 (不污染 email_metadata 主表 / 不碰 internal_id 主键体系).
-    #                folder_email: PK=id AUTOINCREMENT + UNIQUE(folder, imap_uidvalidity,
-    #                imap_uid); folder 两态 (archive / drafts). 草稿编辑 = 删旧 APPEND 新 →
-    #                imap_uid 变但本地 id 不变. FolderSyncWorker (davmail-only) 增量同步,
-    #                前端 /archive /drafts 直读. 详见 plan mailagent-davmail-zesty-eclipse.md.
+    # v17 (Folder Archive/Drafts, 2026-05): 曾新增 folder_email + folder_email_fts +
+    #                folder_sync_state 三表 (旧 FolderSyncWorker 展示链路)。该链路实测从未
+    #                工作 (folder_email 0 行), 多文件夹同步 (v22) 改走 email_metadata 主链路。
+    #                v23 (P6 cleanup) 已 DROP 这三表 + FTS 触发器, 见下方 v23 迁移块。
     # v21 (async_jobs, C1 2026-06): 新增 async_jobs 表 (长任务统一 enqueue + 执行账本) +
     #                ux_async_jobs_idempotency partial unique + ix_async_jobs_status。纯加表,
     #                CREATE TABLE IF NOT EXISTS 对新/旧库均生效, 无 data migration。serve 进程内
     #                JobWorker (灰度 MAILAGENT_ASYNC_JOBS_ENABLED) 消费。详见 C1 看板格。
-    DB_VERSION = 22  # v22: 多文件夹同步 — per-folder uidvalidity 走 sync_state KV (无新表, marker-only bump)
+    # v23 (P6 folder_sync cleanup, 2026-06): DROP folder_email + folder_email_fts +
+    #                folder_sync_state 三表 + FTS 触发器 (旧 FolderSyncWorker 展示链路实测从未
+    #                工作)。多文件夹同步走 email_metadata 主链路 (v22)。幂等 DROP IF EXISTS。
+    DB_VERSION = 23  # v23: DROP 旧 folder_sync 三表 (展示链路死代码清理)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -997,96 +997,6 @@ class SyncStore:
             END
         """)
 
-        # === v17: folder_email + folder_email_fts + folder_sync_state ===
-        # Archive / Drafts 两个 IMAP 文件夹的本地镜像 (独立表, 不碰 email_metadata 主表).
-        # id = 稳定本地主键 (草稿编辑后 imap_uid 变, 但本地 id 不变); folder ∈ {archive, drafts}.
-        # FolderSyncWorker (davmail-only) 增量同步, 前端 /archive /drafts 直读 (~5ms).
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS folder_email (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                folder TEXT NOT NULL,
-                imap_uidvalidity INTEGER,
-                imap_uid INTEGER,
-                message_id TEXT,
-                thread_id TEXT,
-                subject TEXT,
-                sender TEXT,
-                sender_name TEXT,
-                to_addr TEXT,
-                cc_addr TEXT,
-                date_received TEXT,
-                is_flagged INTEGER DEFAULT 0,
-                has_attachments INTEGER DEFAULT 0,
-                body_html TEXT,
-                body_markdown TEXT,
-                snippet TEXT,
-                attachments_json TEXT,
-                raw_mime_sha256 TEXT,
-                synced_at REAL,
-                created_at REAL,
-                updated_at REAL,
-                deleted_at REAL,
-                CHECK (folder IN ('archive', 'drafts'))
-            )
-        """)
-        # UNIQUE(folder, uidvalidity, uid) — reconcile 用 (folder, uid) 定位 IMAP 端邮件.
-        cursor.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_email_unique
-            ON folder_email(folder, imap_uidvalidity, imap_uid)
-        """)
-        # 列表查询主路径: WHERE folder=? AND deleted_at IS NULL ORDER BY date_received DESC.
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_folder_email_list
-            ON folder_email(folder, deleted_at, date_received DESC)
-        """)
-
-        # folder_email_fts — 对标 email_body_fts (v5) contentful FTS5. folder_email 单表
-        # 自带 subject/sender/body_markdown, 故 trigger 直接取 NEW.* (无需 join email_metadata).
-        cursor.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS folder_email_fts USING fts5(
-                subject,
-                sender,
-                body_markdown,
-                tokenize='porter unicode61 remove_diacritics 2'
-            )
-        """)
-        cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS folder_email_fts_insert
-            AFTER INSERT ON folder_email BEGIN
-                INSERT INTO folder_email_fts(rowid, subject, sender, body_markdown)
-                VALUES (NEW.id, COALESCE(NEW.subject, ''), COALESCE(NEW.sender, ''),
-                        COALESCE(NEW.body_markdown, ''));
-            END
-        """)
-        cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS folder_email_fts_delete
-            AFTER DELETE ON folder_email BEGIN
-                DELETE FROM folder_email_fts WHERE rowid = OLD.id;
-            END
-        """)
-        cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS folder_email_fts_update
-            AFTER UPDATE ON folder_email BEGIN
-                DELETE FROM folder_email_fts WHERE rowid = OLD.id;
-                INSERT INTO folder_email_fts(rowid, subject, sender, body_markdown)
-                VALUES (NEW.id, COALESCE(NEW.subject, ''), COALESCE(NEW.sender, ''),
-                        COALESCE(NEW.body_markdown, ''));
-            END
-        """)
-
-        # folder_sync_state — 对标 calendar_sync_state, 每 folder 一行记 UID 游标 + 时间戳.
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS folder_sync_state (
-                folder TEXT PRIMARY KEY,
-                imap_uidvalidity INTEGER,
-                last_uidnext INTEGER,
-                last_full_sync_at REAL,
-                last_incremental_sync_at REAL,
-                last_error TEXT,
-                CHECK (folder IN ('archive', 'drafts'))
-            )
-        """)
-
         # v18: 报告 Agent 系统 —— agent 配置表 + 报告产物表。
         # Python 后端 report_worker 写, Electron main (better-sqlite3) 直读展示。
         # report_agent: 可扩展向全自定义 agent（v1 固定 type=report）。
@@ -1288,6 +1198,18 @@ class SyncStore:
         # per-folder UIDVALIDITY 存现有 sync_state KV 表 (key=folder_uidvalidity:<imap_name>)，
         # 无需新表/新列 → 本版本是 marker-only bump (记录语义 + 同步前端 EXPECTED_DB_VERSION)。
         # 无结构迁移动作，幂等天然成立。
+
+        # === v23: DROP 旧 folder_sync 三表 (P6 展示链路死代码清理) ===
+        # 旧 FolderSyncWorker → folder_email/folder_email_fts/folder_sync_state 展示链路
+        # 实测从未工作 (folder_email 0 行)。多文件夹同步走 email_metadata 主链路 (v22)。
+        # 幂等: DROP ... IF EXISTS 对有无三表的库均安全。先 DROP 触发器再 DROP 表 (避免
+        # AFTER DELETE 触发器在 DROP TABLE 时触碰已不存在的 FTS 影子表)。
+        cursor.execute("DROP TRIGGER IF EXISTS folder_email_fts_insert")
+        cursor.execute("DROP TRIGGER IF EXISTS folder_email_fts_delete")
+        cursor.execute("DROP TRIGGER IF EXISTS folder_email_fts_update")
+        cursor.execute("DROP TABLE IF EXISTS folder_email_fts")
+        cursor.execute("DROP TABLE IF EXISTS folder_email")
+        cursor.execute("DROP TABLE IF EXISTS folder_sync_state")
 
         # 更新数据库版本
         cursor.execute("""
@@ -1693,8 +1615,7 @@ class SyncStore:
 
         归档把邮件 IMAP MOVE 到 Archive 文件夹后, 调本方法把 email_metadata.mailbox
         改成目标值; 列表查询按 mailbox 过滤 (见 query_emails), 改后该邮件即不再出现在
-        收件箱视图。不删行 (保 v4 body/附件 SSoT + Notion 镜像引用); Archive 副本由
-        FolderSyncWorker 另入 folder_email 表。
+        收件箱视图。不删行 (保 v4 body/附件 SSoT + Notion 镜像引用)。
 
         Returns: True=更新成功且值有变; False=邮件不存在 / 值未变 / SQL 错误。
         """

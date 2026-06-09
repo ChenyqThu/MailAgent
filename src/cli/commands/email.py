@@ -979,8 +979,7 @@ def email_archive(
     """归档收件箱邮件: IMAP MOVE INBOX→Archive + SQLite/Notion Mailbox→存档 (davmail-only).
 
     像 Mail.app / Outlook 归档一样把邮件移出收件箱进 Archive 文件夹。不删本地 body /
-    附件 / Notion 页 (仅改 Mailbox 标签, 可逆); Archive 副本由 FolderSyncWorker 入
-    folder_email 表, 前端 /archive 视图可见。
+    附件 / Notion 页 (仅改 Mailbox 标签, 可逆)。
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)

@@ -317,7 +317,7 @@ app.whenReady().then(async () => {
       void shell.openExternal(url)
     }
   })
-  // Phase C — 存档 / 草稿箱 folder_email 读写 (better-sqlite3 直读 + CLI fork).
+  // 多文件夹同步管理 IPC: folder discover / whitelist / 文件夹 CRUD / cleanup (davmail-only).
   registerFolderHandlers()
   // Sprint 20 — 报告 Agent (/agents 页): list/get 直读 sync_store.db,
   // runNow/getConfig/setConfig 经 `mailagent report` CLI fork.

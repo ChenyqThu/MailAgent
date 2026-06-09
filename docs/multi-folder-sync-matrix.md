@@ -98,15 +98,15 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 
 **验收**：cleanup 5 测 + 边界场景 P1 测试覆盖（uidvalidity 重拉 / max_messages 截断 / tree 降级，reviewer 真实核查属实）。pytest 1495 passed 零新增 + ruff 清；前端 1381 passed + build:web ✓ + cleanup UI/接线/2 测试。**独立 review**（codex 限流 → opus code-reviewer）：**APPROVE WITH NITS**（0 CRIT/HIGH/MEDIUM；cleanup 不碰 Exchange 用 _NoReader 哨兵测试坐实）→ 修 3 LOW：① cleanup 加空名/系统邮箱守卫（防 raw API 误删收件箱本地行）② 删/清父文件夹含子文件夹本地行（`OR mailbox LIKE label||'/%'`，与 rename 对称防孤儿）③ 空 imap_name 拒绝。
 
-## P6 — folder_sync 展示链路清理（独立 cleanup）⬜
+## P6 — folder_sync 展示链路清理（独立 cleanup）✅
 
 | 动作 | 处置 | 验收 | 状态 |
 |---|---|---|---|
-| 删 FolderSyncWorker + folder_email/_fts/folder_sync_state 三表 | 删（+ DB migration 降级处理） | 残留检测无引用 | ⬜ |
-| 删老 folder router/CLI 展示端点 + Sidebar 老数据源 | 删 | — | ⬜ |
-| `FolderImapReader` **迁出保留** | 挪 `src/mail/backend/`，归档/草稿改 import | 归档/草稿/发送回归全过 | ⬜ |
+| 删 FolderSyncWorker + folder_email/_fts/folder_sync_state 三表 | 删 worker/repository/sync_ops + DB v23 DROP migration（trigger→FTS→主表→state，全 IF EXISTS idempotent）；DB_VERSION 22→23 同步前端 EXPECTED_DB_VERSION=23 | 残留检测无生产引用（顺带清 4 处 stale 注释/docstring） | ✅ |
+| 删老 folder router/CLI 展示端点 + Sidebar 老数据源 | 删 `src/api/schemas/folder.py` + 老 router/CLI 展示端点（保留 P3-P5 discover/whitelist/manage/cleanup）+ 前端老 viewer（folder/ 7 组件 + FolderLayout + Sidebar 老 nav + router archive/drafts route + HttpApi/ElectronApi/types 老方法 + handlers/folder.ts 老 IPC）+ 老 i18n（settings.sync.folder 孤儿，双语）+ 死 config（`frontend_mailbox_folders_enabled`）+ env-keys 4 死 key（**顺带修 P3 遗漏**：`FOLDER_SYNC_PAST_DAYS`/`FOLDER_SYNC_MAX_MESSAGES` 入 MANAGED_ENV_KEYS 白名单，否则新 SyncTab EnvField env:set 抛 E_INVALID_KEY 存不了） | typecheck + 1364 fe + build:web 全过，无 404 残留调用 | ✅ |
+| `FolderImapReader` **迁出保留** | `git mv src/folder_sync/imap_folder_reader.py → src/mail/backend/`，删空 folder_sync 包，5 import 站点（mail_write + tests）改路径；无循环 import（davmail_backend 不反向 import） | 归档/草稿/CRUD 回归全过（21 测 + 1467 py 零新增） | ✅ |
 
-**验收**：归档/草稿/发送回归全绿 + 残留检测干净。**codex review APPROVE**。
+**验收**：后端 1467 passed 零新增（7 全 pre-existing：6 expansion_loop + 1 reverse_sync_outbox）+ 前端 typecheck + 1364 passed（1 useEmailChat 流式 flaky，隔离 44/44）+ build:web 全绿 + 残留检测干净。**独立 review（codex GPT-5.5 xhigh）：APPROVE**（0 blocking；2 NIT [stale 注释×4 + EOF 空行] 已修）。
 
 ---
 
@@ -138,4 +138,5 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 | 2026-06-08 | P2 | L3 通知降噪 + L2 LLM gate（per-folder）+ 下游零改动验证（Notion/FTS/线程/mailbox 过滤）+ DRY 抽 parse_folder_csv_or_json；27 测试 + 1452 passed（含 notify）零新增；codex APPROVE WITH NITS→修 3→opus critic APPROVE WITH NITS | `f12f173e` |
 | 2026-06-08 | P3 | serve-api discover/whitelist 端点（6 api 测）+ 前端 FolderPicker 树/SidebarFolderTree/API wiring(HttpApi+Electron IPC)/i18n 双语 44/主题 token；executor 实现；opus code-reviewer APPROVE WITH NITS→修 MEDIUM 嵌套叶子名+2 LOW+NIT；typecheck+1367 前端测试+build:web+384 api+ruff/eslint 全绿 | `efb73a02` |
 | 2026-06-08 | P4 | 写操作泛化（archive src 泛化+move_to_folder+trash 守卫）+ 文件夹管理 CRUD（create/rename/delete+系统保护+级联+一致性+白名单 restart）+ serve-api manage/move + CLI + onboarding 步 + FolderPicker 管理 UI；opus code-reviewer REQUEST CHANGES→修 2 MEDIUM blocking（delete 级联/restart_required）+4 LOW→APPROVE WITH NITS；1492 py + 1379 fe 全绿 | `c01229f0` |
-| 2026-06-08 | P5 | 取消勾选清理（cleanup_local_folder 不碰 Exchange + serve-api/CLI + 前端选项默认保留）+ 验证 P1 边界（UIDVALIDITY 重拉/max_messages/tree 降级）；opus review APPROVE WITH NITS→修 3 LOW（cleanup 守卫/含子行/空名）；1495 py + 1381 fe 全绿 | 待提交 |
+| 2026-06-08 | P5 | 取消勾选清理（cleanup_local_folder 不碰 Exchange + serve-api/CLI + 前端选项默认保留）+ 验证 P1 边界（UIDVALIDITY 重拉/max_messages/tree 降级）；opus review APPROVE WITH NITS→修 3 LOW（cleanup 守卫/含子行/空名）；1495 py + 1381 fe 全绿 | `2a7cb86b` |
+| 2026-06-09 | P6 | folder_sync 展示链路清理：删 worker/repository/sync_ops + DB v23 DROP 三表（idempotent）+ 老 router/CLI 展示端点 + 前端老 viewer（folder/ 7 组件/FolderLayout/Sidebar 老 nav/archive·drafts route/老 IPC·API 方法）+ i18n 孤儿（settings.sync.folder 双语）+ 死 config（frontend_mailbox_folders_enabled）；`FolderImapReader` git mv → `src/mail/backend/`（5 import 改）；**顺带修 P3 env 白名单遗漏**（FOLDER_SYNC_PAST_DAYS/MAX_MESSAGES 入 MANAGED_ENV_KEYS）；后端 1467 passed 零新增 + 前端 typecheck+1364+build:web 全绿；codex GPT-5.5 xhigh **APPROVE**→修 2 NIT（stale 注释×4 / EOF 空行） | `dda814f2` |

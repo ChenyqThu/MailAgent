@@ -618,7 +618,7 @@ class MailWriteService:
         """构造 FolderImapReader (归档走 IMAP); 要求 davmail backend, 否则
         ``ServiceInvalidArgError``。搬自 CLI ``_folder_imap_reader`` (与 folder.py 同 gate:
         folder 级 IMAP 操作 applescript 模式不支持)。"""
-        from src.folder_sync.imap_folder_reader import FolderImapReader
+        from src.mail.backend.imap_folder_reader import FolderImapReader
         from src.mail.backend.davmail_backend import DavMailBackend
 
         backend = self._ctx.backend

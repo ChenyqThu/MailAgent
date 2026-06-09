@@ -33,7 +33,6 @@ import { AdminLayout } from './components/layout/AdminLayout'
 import { AgentsLayout } from './components/layout/AgentsLayout'
 import { NotionAgentLayout } from './components/layout/NotionAgentLayout'
 import { CalendarLayout } from './components/layout/CalendarLayout'
-import { FolderLayout } from './components/layout/FolderLayout'
 import { InboxLayout } from './components/layout/InboxLayout'
 import { LlmDashboardLayout } from './components/layout/LlmDashboardLayout'
 import { SessionsLayout } from './components/layout/SessionsLayout'
@@ -161,22 +160,6 @@ const inboxRoute = createRoute({
     }
     return { view: 'inbox' }
   }
-})
-
-// Phase C — 存档 / 草稿箱. Two top-level mailbox routes, each mounting the
-// shared FolderLayout shell with a fixed `folder` prop (no `view` search
-// param — these are distinct routes, not inbox filters). Mirrors the
-// inboxRoute style (createRoute + addChildren below).
-const archiveRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/archive',
-  component: () => <FolderLayout folder="archive" />
-})
-
-const draftsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/drafts',
-  component: () => <FolderLayout folder="drafts" />
 })
 
 // Global "AI 会话历史" page — cross-email conversation history. Top-level
@@ -309,8 +292,6 @@ const _routerBasepath =
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     inboxRoute,
-    archiveRoute,
-    draftsRoute,
     sessionsRoute,
     agentsRoute,
     notionAgentRoute,

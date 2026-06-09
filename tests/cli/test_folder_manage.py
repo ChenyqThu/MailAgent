@@ -29,7 +29,7 @@ def davmail_env(cli_env, monkeypatch):
 # ============================================================
 
 def test_build_child_imap_name_toplevel():
-    from src.folder_sync.imap_folder_reader import FolderImapReader
+    from src.mail.backend.imap_folder_reader import FolderImapReader
 
     assert FolderImapReader.build_child_imap_name("", "Jira") == "Jira"
     # 中文叶子 → modified-UTF7 编码
@@ -37,7 +37,7 @@ def test_build_child_imap_name_toplevel():
 
 
 def test_build_child_imap_name_nested():
-    from src.folder_sync.imap_folder_reader import FolderImapReader
+    from src.mail.backend.imap_folder_reader import FolderImapReader
 
     assert FolderImapReader.build_child_imap_name("Proj", "Q2") == "Proj/Q2"
     assert FolderImapReader.build_child_imap_name("Proj", "子") == "Proj/&W1A-"
@@ -72,7 +72,7 @@ class _FakeReader:
 
     @staticmethod
     def build_child_imap_name(parent, child, delimiter="/"):
-        from src.folder_sync.imap_folder_reader import FolderImapReader
+        from src.mail.backend.imap_folder_reader import FolderImapReader
 
         return FolderImapReader.build_child_imap_name(parent, child, delimiter)
 

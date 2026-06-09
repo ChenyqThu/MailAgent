@@ -78,15 +78,6 @@ from src.api.schemas.calendar import (
     CalendarSyncStatusData,
     CalendarWindow,
 )
-from src.api.schemas.folder import (
-    FolderAttachmentMeta,
-    FolderEmailDetail,
-    FolderEmailMeta,
-    FolderName,
-    FolderSearchResult,
-    FolderSyncStateItem,
-    FolderSyncStatusResult,
-)
 from src.api.schemas.ai import (
     DeleteCachedResult,
     TargetLang,
@@ -121,11 +112,6 @@ __all__ = [
     "CalendarEventsListData",
     "CalendarEventDetail", "CalendarEventGetData",
     "CalendarSyncStateItem", "CalendarSyncStatusData",
-    # folder
-    "FolderName", "FolderAttachmentMeta",
-    "FolderEmailMeta", "FolderEmailDetail",
-    "FolderSearchResult",
-    "FolderSyncStateItem", "FolderSyncStatusResult",
     # ai / translation
     "TargetLang", "TranslationSegment", "TranslationCache",
     "TranslateBatchResult", "DeleteCachedResult",

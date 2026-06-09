@@ -1,7 +1,7 @@
 """FolderImapReader — Archive / Drafts IMAP 文件夹的读写操作.
 
-对标 src/calendar_sync/caldav_reader.py: 封装一类资源的 IMAP/SMTP 操作, 供
-FolderSyncWorker (同步) + CLI (按需操作) 调用. 复用 DavMailBackend 已有的
+对标 src/calendar_sync/caldav_reader.py: 封装一类资源的 IMAP/SMTP 操作, 供归档
+(mail_write) / 草稿 (draft) / 多文件夹 CRUD 按需调用. 复用 DavMailBackend 已有的
 imap_session / _build_reply_mime / 模块级 helper, 不重复造轮子.
 
 davmail-only: 构造时接收一个 DavMailBackend 实例 (持 cfg + drafts_folder +
@@ -52,7 +52,7 @@ _MONTHS = (
 
 
 # =============================================================================
-# 纯函数: MIME → folder_email dict (无 IMAP 依赖, 可单测)
+# 纯函数: MIME → folder row dict (无 IMAP 依赖, 可单测)
 # =============================================================================
 
 def _extract_bodies(msg: Message) -> tuple[str, str]:
@@ -120,7 +120,7 @@ def parse_message_to_folder_dict(
     imap_uidvalidity: Optional[int],
     is_flagged: bool = False,
 ) -> dict:
-    """把 raw MIME bytes 解析成 folder_email row dict (不含本地 id / 时间戳).
+    """把 raw MIME bytes 解析成 folder row dict (不含本地 id / 时间戳).
 
     drafts: date_received 取邮件 Date 头 (草稿创建/修改时间); 调用方可覆盖.
     """
@@ -222,7 +222,7 @@ class FolderImapReader:
     ) -> list[dict]:
         """列文件夹邮件 (含 body + 附件元数据). since=窗口左界 (archive 用), limit=末尾 N 封.
 
-        返回 folder_email row dict list (不含本地 id / created_at / updated_at).
+        返回 folder row dict list (不含本地 id / created_at / updated_at).
         """
         imap_box = self.resolve_imap_folder(folder)
         if not imap_box:
@@ -264,7 +264,7 @@ class FolderImapReader:
 
     @staticmethod
     def _parse_fetch_item(item, folder: str, uidvalidity: Optional[int]) -> Optional[dict]:
-        """单个 FETCH 响应 tuple → folder_email dict."""
+        """单个 FETCH 响应 tuple → folder row dict."""
         if not (isinstance(item, tuple) and len(item) >= 2):
             return None
         meta = item[0] if isinstance(item[0], (bytes, bytearray)) else b""

@@ -975,13 +975,13 @@ class DavMailBackend(IMailBackend):
 
         委托 ``sender.build_outgoing_mime`` 单一来源 — forward 引用块 + 附件 multipart/mixed
         + threading 头逻辑都在那. 保留 ``_build_reply_mime`` 别名供 append_draft /
-        folder_sync.imap_folder_reader 等现有调用点 (zero 改动).
+        imap_folder_reader 等现有调用点 (zero 改动).
         """
         from src.mail.backend.sender import build_outgoing_mime
 
         return build_outgoing_mime(self.cfg, draft)
 
-    # 向后兼容别名: append_draft / folder_sync.imap_folder_reader 仍调 _build_reply_mime.
+    # 向后兼容别名: append_draft / imap_folder_reader 仍调 _build_reply_mime.
     _build_reply_mime = _build_mime
 
     # =========================================================================

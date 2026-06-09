@@ -8,6 +8,7 @@
 //   3. at most one .row-selected inside the shell
 //   4. no <a href="#"> inside .app-nav-bottom
 //   5. exactly 12 nav rows (4 MAILBOXES + 3 AI AGENTS + 3 VIEW + 2 bottom)
+//      P6: removed archive + drafts rows (old folder_email viewer deleted)
 //   6. AI 会话历史 row renders as a disabled <div> (DESIGN.md §9.4)
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -119,10 +120,12 @@ describe('Sidebar §2.11 contract', () => {
     expect(bottomDeadAnchors).toHaveLength(0)
   })
 
-  test('exactly 14 nav rows (6 + 3 + 3 + 2)', async () => {
+  test('exactly 12 nav rows (4 + 3 + 3 + 2)', async () => {
+    // MAILBOXES: 收件箱, 发件箱, 已标旗, 所有邮件 (4)
+    // AI AGENTS: 3; VIEW: 3; bottom: 2
     const container = await renderSidebar()
     const allRows = container.querySelectorAll('[data-app-nav] .row')
-    expect(allRows).toHaveLength(14)
+    expect(allRows).toHaveLength(12)
   })
 
   test('AI 会话历史 row renders enabled (Sprint 18 review — 不再灰禁)', async () => {

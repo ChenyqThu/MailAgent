@@ -374,7 +374,7 @@ export interface EmailApi {
   flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown>
   /** 归档收件箱邮件: CLI `email archive` 做 IMAP MOVE INBOX→Archive + SQLite/Notion
    *  Mailbox→存档 (davmail-only)。成功后 renderer 失效 emails/email 查询, 邮件移出收件箱
-   *  视图; Archive 副本由 FolderSyncWorker 进 folder_email, /archive 视图可见。
+   *  视图 (Archive 副本留在 Exchange 端; 若 Archive 在 SYNC_FOLDERS 白名单则走主链路可见)。
    *  返回 CLI data 块 {success, from_mailbox, to_mailbox, notion_updated} 或抛 Error&{code}。 */
   archive(internalId: number): Promise<unknown>
 }
@@ -434,99 +434,6 @@ export interface JobsApi {
   /** 查 job 状态 / 进度 / 终态 summary (轮询兜底: SSE 断线 / web 无 SSE 时拿终态)。
    *  E_NOT_FOUND 抛 Error & {code}。 */
   get(jobId: number): Promise<JobRecord>
-}
-
-// ---- Phase C — 存档 / 草稿箱 folder surface --------------------------------
-//
-// 独立于 email_metadata 的 `folder_email` 表 (DB v17). 读 (list/get/search/
-// syncStatus) 走 Electron main handler 的 better-sqlite3 直读 (~5ms); 写
-// (sync-now / delete / move / send-draft / create-draft / edit-draft) fork
-// `mailagent folder <cmd>` CLI (davmail-only). 写方法跟 calendar 写方法一致,
-// 返回 unwrap 后的 CLI `data` (失败时 ElectronApi 抛带 code 的 Error)。
-
-export type FolderName = 'archive' | 'drafts'
-
-export interface FolderAttachmentMeta {
-  filename: string
-  size: number
-  content_type: string
-}
-
-/** 列表项 — 不含正文 (body_html/body_markdown). */
-export interface FolderEmailMeta {
-  id: number
-  folder: FolderName
-  imap_uid: number
-  imap_uidvalidity: number
-  message_id: string | null
-  thread_id: string | null
-  subject: string
-  sender: string
-  sender_name: string | null
-  to_addr: string
-  cc_addr: string
-  date_received: string | null
-  is_flagged: boolean
-  has_attachments: boolean
-  snippet: string | null
-  attachments: FolderAttachmentMeta[]
-}
-
-/** 详情 — 列表项 + 正文. */
-export interface FolderEmailDetail extends FolderEmailMeta {
-  body_html: string | null
-  body_markdown: string | null
-}
-
-/** folder_sync_state 表行 (sync-status 输出). */
-export interface FolderSyncStateItem {
-  folder: string
-  imap_uidvalidity: number | null
-  last_uidnext: number | null
-  last_full_sync_at: number | null
-  last_incremental_sync_at: number | null
-  last_error: string | null
-}
-
-export interface FolderListOpts {
-  folder: FolderName
-  limit?: number
-  offset?: number
-}
-
-export interface FolderSearchOpts {
-  query: string
-  folder?: FolderName
-  /** Default false → CJK-aware smart 改写; true → 原样 FTS5 passthrough. */
-  raw?: boolean
-  limit?: number
-}
-
-export interface FolderSearchResult {
-  query: string
-  transformed_query: string | null
-  total_hits: number
-  hits: FolderEmailMeta[]
-}
-
-export interface FolderSyncStatusResult {
-  states: FolderSyncStateItem[]
-  counts: Record<string, number>
-}
-
-export interface FolderCreateDraftOpts {
-  to: string
-  cc?: string
-  subject?: string
-  html: string
-}
-
-export interface FolderEditDraftOpts {
-  id: number
-  html: string
-  to?: string
-  cc?: string
-  subject?: string
 }
 
 // ---- 多文件夹同步 (P3) — discover + whitelist (davmail-only) ----------------
@@ -596,11 +503,6 @@ export interface FolderCleanupResult {
 }
 
 export interface FolderApi {
-  // 读 (无 auth, better-sqlite3 直读)
-  list(opts: FolderListOpts): Promise<FolderEmailMeta[]>
-  get(id: number): Promise<FolderEmailDetail | null>
-  search(opts: FolderSearchOpts): Promise<FolderSearchResult>
-  syncStatus(): Promise<FolderSyncStatusResult>
   // 多文件夹同步 (P3, davmail-only). discover 走 serve-api (IMAP LIST); 本地经
   // daemon 转发, 远程 HttpApi 直连。非 davmail 后端 serve-api 返回 400
   // E_INVALID_ARG → 抛带 code 的 Error (前端据此 gate)。
@@ -620,14 +522,6 @@ export interface FolderApi {
   // 本地副本清理 (P5) — 仅删本地已同步邮件, 不碰 Exchange (非 davmail 也可)。
   /** 清理 imapName 对应的本地已同步邮件副本 + 从白名单移除; **不操作 Exchange**。 */
   cleanup(imapName: string): Promise<FolderCleanupResult>
-  // 写 (needsAuth + davmail-only, fork CLI). 返回 unwrap 后的 CLI data,
-  // 失败抛带 `code` 的 Error (同 calendar 写方法约定)。
-  syncNow(folder: FolderName, full?: boolean): Promise<unknown>
-  deleteMsg(id: number): Promise<unknown>
-  move(id: number, to?: string): Promise<unknown>
-  sendDraft(id: number): Promise<unknown>
-  createDraft(opts: FolderCreateDraftOpts): Promise<unknown>
-  editDraft(opts: FolderEditDraftOpts): Promise<unknown>
 }
 
 // ---- Sprint 6 §2.2 — LLM dashboard surface --------------------------------
@@ -2092,7 +1986,7 @@ export interface MailApi {
   email: EmailApi
   /** D2b — async_jobs 长任务查询 (batch resync 进度轮询; backfill UI 未来复用)。 */
   jobs: JobsApi
-  /** Phase C — 存档 / 草稿箱 folder_email 表 (DB v17). */
+  /** 多文件夹同步管理: folder discover / whitelist / 文件夹 CRUD / cleanup (davmail-only)。 */
   folder: FolderApi
   attachment: AttachmentApi
   ai: AiApi
