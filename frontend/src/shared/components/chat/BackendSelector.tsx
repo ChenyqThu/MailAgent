@@ -66,6 +66,11 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
           reduced-motion drops the slide (snaps via no transition). */}
       <div
         role="tablist"
+        // task 06-08-chat §3.1 — marks the agent switcher so the History
+        // popover's outside-click handler can EXCLUDE it: switching agents
+        // with the popover open must keep it open (the list re-scopes in
+        // place between Notion Agent / Custom AI).
+        data-chat-agent-switch
         aria-label={t('chat.backend.selectorLabel')}
         className="relative flex rounded-[10px] bg-ink-2 border border-ink-border p-[3px]"
       >

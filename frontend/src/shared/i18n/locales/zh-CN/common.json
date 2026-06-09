@@ -579,6 +579,8 @@
     },
     "sidebar": {
       "title": "会话历史",
+      "recentTitle": "{agent} · 最近会话",
+      "notShared": "两个 Agent 不共享会话历史",
       "empty": "暂无历史会话 · 发送第一条消息后会出现在这里",
       "newSession": "新会话",
       "close": "关闭侧栏",

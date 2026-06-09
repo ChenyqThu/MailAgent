@@ -576,6 +576,8 @@
     },
     "sidebar": {
       "title": "History",
+      "recentTitle": "{agent} · Recent",
+      "notShared": "The two agents don't share history",
       "empty": "No previous sessions · send the first message to start one",
       "newSession": "New chat",
       "close": "Close sidebar",
