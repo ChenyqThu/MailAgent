@@ -4,7 +4,7 @@
 // 固定渲染：layout=console / rowStyle=list / aiSummary=hover / dense（用户定稿）。
 // section 与其后续 email_item / callout / kos_context / action_suggestion 收拢进
 // 一个 <section> 容器（console+list → 收件箱式行组）。
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type {
   ReportBlock,
@@ -25,6 +25,7 @@ import {
   mdLite,
   priorityTone,
   renderSummary,
+  scrollToEmail,
   toneAlpha,
   toneColor,
   fmtClock
@@ -1038,13 +1039,17 @@ const _SECTION_CHILDREN = new Set(['email_item', 'callout', 'kos_context', 'acti
 function SectionGroup({
   sec,
   items,
-  ctx
+  ctx,
+  expanded,
+  onToggle
 }: {
   sec: ReportSectionBlock
   items: ReportBlock[]
   ctx: RenderCtx
+  expanded: boolean
+  onToggle: () => void
 }): React.ReactElement {
-  const [collapsed, setCollapsed] = useState(true)
+  const collapsed = !expanded
   const groupedList = ctx.rowStyle === 'list' && ctx.layout === 'console'
   const emails = items.filter((it) => it.type === 'email_item') as ReportEmailItemBlock[]
   const total = emails.length
@@ -1089,7 +1094,7 @@ function SectionGroup({
       {collapsible ? (
         <button
           type="button"
-          onClick={() => setCollapsed((c) => !c)}
+          onClick={onToggle}
           aria-expanded={!collapsed}
           style={{
             display: 'flex',
@@ -1139,15 +1144,22 @@ function SectionGroup({
   )
 }
 
-export function BlockRenderer({
-  blocks,
-  ctx
-}: {
-  blocks: ReportBlock[]
-  ctx: RenderCtx
-}): React.ReactElement {
-  const out: React.ReactNode[] = []
-  const gap = ctx.dense ? 12 : 16
+// 把 blocks[] 折成"段"（命令式扫描的结果）：section 组 / 顶层 callout 组 / 顶层 leaf。
+// 与原 while 扫描语义逐字对齐，仅把结果物化成数据（再 map 渲染）。key 仍是各段起始索引 i。
+type RenderSegment =
+  | { kind: 'section'; key: number; sec: ReportSectionBlock; items: ReportBlock[] }
+  | { kind: 'callout-group'; key: number; group: ReportBlock[] }
+  | { kind: 'leaf'; key: number; block: ReportBlock }
+
+interface BlockLayout {
+  segments: RenderSegment[]
+  // email_item internal_id → 所属 section 段的 key（仅 section 内 email_item；顶层 email_item 不入表）。
+  emailToSection: Map<number, number>
+}
+
+function planBlocks(blocks: ReportBlock[]): BlockLayout {
+  const segments: RenderSegment[] = []
+  const emailToSection = new Map<number, number>()
   let i = 0
   while (i < blocks.length) {
     const b = blocks[i]
@@ -1156,14 +1168,15 @@ export function BlockRenderer({
       const items: ReportBlock[] = []
       let j = i + 1
       while (j < blocks.length && _SECTION_CHILDREN.has(blocks[j].type)) {
-        items.push(blocks[j])
+        const child = blocks[j]
+        items.push(child)
+        if (child.type === 'email_item') {
+          emailToSection.set((child as ReportEmailItemBlock).internal_id, i)
+        }
         j++
       }
-      out.push(<SectionGroup key={i} sec={sec} items={items} ctx={ctx} />)
+      segments.push({ kind: 'section', key: i, sec, items })
       i = j
-    } else if (b.type === 'email_item') {
-      out.push(<EmailItemBlock key={i} block={b as ReportEmailItemBlock} ctx={ctx} />)
-      i++
     } else if (b.type === 'callout') {
       // 连续顶层 callout 收成一组，组内间距收紧（"几个核心"成组陈列，而非松散卡片）。
       const group: ReportBlock[] = []
@@ -1172,16 +1185,105 @@ export function BlockRenderer({
         group.push(blocks[j])
         j++
       }
-      out.push(
-        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {group.map((c, k) => renderLeaf(c, k, ctx))}
-        </div>
-      )
+      segments.push({ kind: 'callout-group', key: i, group })
       i = j
     } else {
-      out.push(renderLeaf(b, i, ctx))
+      segments.push({ kind: 'leaf', key: i, block: b })
       i++
     }
   }
-  return <div style={{ display: 'flex', flexDirection: 'column', gap }}>{out}</div>
+  return { segments, emailToSection }
+}
+
+export function BlockRenderer({
+  blocks,
+  ctx
+}: {
+  blocks: ReportBlock[]
+  ctx: RenderCtx
+}): React.ReactElement {
+  const gap = ctx.dense ? 12 : 16
+
+  // 受控折叠态：key = section 段起始索引（planBlocks 里的 i）。空集 = 全折叠（保持现状默认）。
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set())
+  const [pendingScrollId, setPendingScrollId] = useState<number | null>(null)
+
+  const { segments, emailToSection } = useMemo(() => planBlocks(blocks), [blocks])
+
+  const handleToggle = useCallback((key: number) => {
+    setExpanded((s) => {
+      const n = new Set(s)
+      if (n.has(key)) n.delete(key)
+      else n.add(key)
+      return n
+    })
+  }, [])
+
+  // 跳转包装：目标 email 在某折叠 section 内 → 先展开该 section（受控），再排队滚动。
+  // 顶层 / 无映射的 email_item 锚点本就在 DOM，直接排队滚动即可。
+  const handleJump = useCallback(
+    (id: number) => {
+      const secKey = emailToSection.get(id)
+      if (secKey != null) {
+        setExpanded((s) => {
+          if (s.has(secKey)) return s
+          const n = new Set(s)
+          n.add(secKey)
+          return n
+        })
+      }
+      setPendingScrollId(id)
+    },
+    [emailToSection]
+  )
+
+  // DOM commit 后再滚动：依赖 expanded 让"展开 section 引发的重渲染"提交后才执行，
+  // 此时目标 email_item 锚点已挂载 → getElementById 命中（不靠 rAF 猜时序）。
+  // 滚动后清 pendingScrollId（响应"展开 commit"这一异步信号、做一次性副作用），
+  // 是 effect 的合理用法；render 期间替代会改写 ref/触 react-hooks/refs。React Compiler 迁移债。
+  useEffect(() => {
+    if (pendingScrollId == null) return
+    scrollToEmail(pendingScrollId)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPendingScrollId(null)
+  }, [pendingScrollId, expanded])
+
+  // 给 section 及其子块的 ctx 覆盖 onJump（SectionSummary 直接读 ctx.onJump）。
+  const childCtx = useMemo(() => ({ ...ctx, onJump: handleJump }), [ctx, handleJump])
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap }}>
+      {segments.map((seg) => {
+        if (seg.kind === 'section') {
+          return (
+            <SectionGroup
+              key={seg.key}
+              sec={seg.sec}
+              items={seg.items}
+              ctx={childCtx}
+              expanded={expanded.has(seg.key)}
+              onToggle={() => handleToggle(seg.key)}
+            />
+          )
+        }
+        if (seg.kind === 'callout-group') {
+          return (
+            <div key={seg.key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {seg.group.map((c, k) => renderLeaf(c, k, childCtx))}
+            </div>
+          )
+        }
+        if (seg.block.type === 'email_item') {
+          return (
+            <EmailItemBlock
+              key={seg.key}
+              block={seg.block as ReportEmailItemBlock}
+              ctx={childCtx}
+            />
+          )
+        }
+        return renderLeaf(seg.block, seg.key, childCtx)
+      })}
+    </div>
+  )
 }
