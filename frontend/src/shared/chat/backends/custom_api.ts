@@ -12,7 +12,7 @@
 //   - OpenAI Chat Completions 协议 (`gpt-*` / `gemini-*` / `codex-*` prefix)
 //     走 openaiStream — CRS 把这些模型 routed 到 /v1/chat/completions, 协议
 //     用 index-based tool_calls 增量 merge. 无 prompt cache (协议限制).
-//     主要给 fallback 链 `claude-sonnet-4-6 → gpt-5.4 → claude-opus-4-7`
+//     主要给 fallback 链 `claude-sonnet-4-6 → gpt-5.4 → claude-opus-4-8`
 //     命中 gpt 时用, 不阻塞 multi-turn harness.
 //
 // Stream protocols:

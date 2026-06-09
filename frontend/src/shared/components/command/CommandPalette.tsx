@@ -39,9 +39,9 @@
 //     so `产品` matches `本周产品评审` — fixes the pre-rewrite palette bug
 //     where this normalisation lived only inside SearchPage.
 //
-// Persistence:
-//   localStorage `mailagent.search.lastQuery` — restored on every open
-//   transition (Linear / Raycast pattern, mockup line 1289-1313).
+// Open behaviour:
+//   Each closed→open transition starts from an empty query — the palette is
+//   a fresh search every time (no last-session prefill).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -80,7 +80,6 @@ import type { AIPriority, MailboxSummary, SearchHit, SearchResult } from '@share
 
 // ─── Tunables ──────────────────────────────────────────────────────────
 
-const LAST_QUERY_KEY = 'mailagent.search.lastQuery'
 const MAX_EMAIL_HITS = 8
 const MAX_JUMP_MAILBOXES = 3
 const DEBOUNCE_MS = 250
@@ -123,21 +122,6 @@ function useDebouncedValue<T>(value: T, ms: number): T {
     return (): void => window.clearTimeout(tid)
   }, [value, ms])
   return v
-}
-
-function safeRead(key: string): string {
-  try {
-    return localStorage.getItem(key) ?? ''
-  } catch {
-    return ''
-  }
-}
-function safeWrite(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    /* privacy mode — drop the persist, in-memory state still works */
-  }
 }
 
 function shortTime(iso: string | null | undefined): string {
@@ -229,14 +213,13 @@ export function CommandPalette(): React.ReactElement | null {
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
   const [actionRunning, setActionRunning] = useState<string | null>(null)
   // Adjust-on-prop-change pattern (react.dev): reset query + highlight when
-  // the palette transitions closed→open. Prefer lastQuery prefill so the
-  // user can rebound to whatever they had typed last session.
+  // the palette transitions closed→open. Always start from an empty query so
+  // each open is a fresh search (no stale last-session prefill).
   const [prevOpen, setPrevOpen] = useState(open)
   if (prevOpen !== open) {
     setPrevOpen(open)
     if (open) {
-      const prefill = safeRead(LAST_QUERY_KEY)
-      setQuery(prefill)
+      setQuery('')
       setHighlight(0)
       setLastLatencyMs(null)
       setActionRunning(null)
@@ -255,16 +238,12 @@ export function CommandPalette(): React.ReactElement | null {
     from: { autoAlpha: 0, xPercent: -50, y: 8, scale: 0.97 }
   })
 
-  // Focus input on open transition + persist query on every change.
+  // Focus input on open transition.
   useEffect(() => {
     if (!open) return
     const tid = window.setTimeout(() => inputRef.current?.focus(), 0)
     return (): void => window.clearTimeout(tid)
   }, [open])
-  useEffect(() => {
-    if (!open) return
-    safeWrite(LAST_QUERY_KEY, query)
-  }, [open, query])
 
   const debouncedRaw = useDebouncedValue(query, DEBOUNCE_MS)
   const normalised = useMemo(() => normalizeFtsQuery(debouncedRaw), [debouncedRaw])

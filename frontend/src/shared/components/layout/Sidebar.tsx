@@ -384,6 +384,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={MAILBOX_ICON.inbox}
             label={t('nav.inbox')}
+            title={collapsed ? t('nav.inbox') : undefined}
             selected={selectedView === 'inbox'}
             onClick={() => handleViewClick('inbox')}
             right={
@@ -398,6 +399,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={MAILBOX_ICON.outbox}
             label={t('nav.outbox')}
+            title={collapsed ? t('nav.outbox') : undefined}
             selected={selectedView === 'outbox'}
             onClick={() => handleViewClick('outbox')}
           />
@@ -406,6 +408,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<Archive size={15} strokeWidth={1.75} />}
             label={t('nav.archive')}
+            title={collapsed ? t('nav.archive') : undefined}
             selected={pathname === '/archive'}
             onClick={() => navigate({ to: '/archive' })}
             right={
@@ -417,6 +420,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<FileText size={15} strokeWidth={1.75} />}
             label={t('nav.drafts')}
+            title={collapsed ? t('nav.drafts') : undefined}
             selected={pathname === '/drafts'}
             onClick={() => navigate({ to: '/drafts' })}
             right={
@@ -428,6 +432,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={MAILBOX_ICON.flagged}
             label={t('nav.flagged')}
+            title={collapsed ? t('nav.flagged') : undefined}
             selected={selectedView === 'flagged'}
             onClick={() => handleViewClick('flagged')}
             right={
@@ -439,6 +444,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={MAILBOX_ICON.all}
             label={t('nav.allMail')}
+            title={collapsed ? t('nav.allMail') : undefined}
             selected={selectedView === 'all'}
             onClick={() => handleViewClick('all')}
             right={allTotal > 0 ? <TotalCount count={allTotal} /> : undefined}
@@ -462,6 +468,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<Sparkles size={15} strokeWidth={1.75} />}
             label={t('chat.backend.notionAgent')}
+            title={collapsed ? t('chat.backend.notionAgent') : undefined}
             selected={pathname === '/notion-agent'}
             onClick={() => navigate({ to: '/notion-agent' })}
             right={<OnlineDot online={notionAgentOnline} />}
@@ -471,6 +478,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<Sliders size={15} strokeWidth={1.75} />}
             label={t('chat.backend.customApi')}
+            title={collapsed ? t('chat.backend.customApi') : undefined}
             selected={onAgents}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
@@ -478,6 +486,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
             label={t('nav.aiSessions')}
+            title={collapsed ? t('nav.aiSessions') : undefined}
             selected={pathname === '/sessions'}
             onClick={() => navigate({ to: '/sessions' })}
           />
@@ -498,18 +507,21 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<Activity size={15} strokeWidth={1.75} />}
             label="LLM Dashboard"
+            title={collapsed ? 'LLM Dashboard' : undefined}
             selected={pathname.startsWith('/admin/llm') || pathname === '/llm'}
             onClick={() => navigate({ to: '/admin/llm' })}
           />
           <NavRow
             icon={<BarChart3 size={15} strokeWidth={1.75} />}
             label={t('nav.adminKanban')}
+            title={collapsed ? t('nav.adminKanban') : undefined}
             selected={pathname === '/admin/kanban' || pathname === '/admin'}
             onClick={() => navigate({ to: '/admin/kanban' })}
           />
           <NavRow
             icon={<CalendarDays size={15} strokeWidth={1.75} />}
             label={t('nav.calendar')}
+            title={collapsed ? t('nav.calendar') : undefined}
             selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
             onClick={() => navigate({ to: '/admin/calendar', search: { view: 'week' } })}
           />
@@ -521,6 +533,7 @@ export function Sidebar(): React.ReactElement {
         <NavRow
           icon={<Settings size={15} strokeWidth={1.75} />}
           label={t('nav.settings')}
+          title={collapsed ? t('nav.settings') : undefined}
           selected={pathname === '/settings'}
           onClick={() => navigate({ to: '/settings', search: { tab: 'general' } })}
           right={<kbd>⌘,</kbd>}
@@ -528,6 +541,7 @@ export function Sidebar(): React.ReactElement {
         <NavRow
           icon={<HelpCircle size={15} strokeWidth={1.75} />}
           label={t('nav.shortcuts')}
+          title={collapsed ? t('nav.shortcuts') : undefined}
           onClick={openKeyboardHelp}
           right={<kbd>?</kbd>}
         />

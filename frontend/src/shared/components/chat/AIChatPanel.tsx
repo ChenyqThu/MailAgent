@@ -858,7 +858,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                 currentModel={backend.kind === 'custom-api' ? backend.model : null}
                 availableModels={
                   backend.kind === 'custom-api'
-                    ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5']
+                    ? ['claude-sonnet-4-6', 'claude-opus-4-8', 'gpt-5.5']
                     : []
                 }
                 onModelChange={(model) =>
