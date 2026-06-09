@@ -202,25 +202,46 @@ _MANAGED_ENV_KEY_SET = set(_MANAGED_ENV_KEYS)
 #
 # Read per-request (NOT cached): secrets are dual-written to .env, so a freshly
 # saved value must be reflected immediately — lru_cache would pin a stale map.
+def _resolve_env_file_safe() -> str:
+    """Resolve the .env path, surviving a failed ``Config()`` singleton.
+
+    Prefer config.py's canonical ``_resolve_env_file`` (single source: MAILAGENT_ENV_FILE
+    or DATA_ROOT/.env). But ``import src.config`` eagerly constructs the module-level
+    ``config = Config()`` singleton, which raises ``ValidationError`` when the resolved
+    .env is missing required business keys. The settings/diagnostic endpoints below
+    (``/api/env``, secrets-status, prompts) only need the env-file PATH, not a VALID
+    config — and they must still work in a degraded state (onboarding, half-filled
+    .env). So on import failure, fall back to the same ``MAILAGENT_ENV_FILE`` resolution
+    inline. Returns '' only when neither source is determinable (→ exists:false).
+    """
+    try:
+        from src.config import _resolve_env_file
+
+        return str(_resolve_env_file())
+    except Exception:  # noqa: BLE001 — singleton construction failed; resolve inline
+        override = os.environ.get("MAILAGENT_ENV_FILE")
+        return os.path.abspath(os.path.expanduser(override)) if override else ""
+
+
 def _load_env_merged() -> Dict[str, str]:
     """Merge ``.env`` values under ``os.environ`` → single name→value map.
 
-    Uses config.py's ``_resolve_env_file()`` (single source: MAILAGENT_ENV_FILE
-    or DATA_ROOT/.env) so it tracks the same file pydantic reads. ``os.environ``
-    is layered last so shell exports win over .env (pydantic precedence). Graceful:
-    a missing / unparseable env_file falls back to plain ``os.environ``.
+    Uses ``_resolve_env_file_safe()`` (config.py's single source, but resilient to a
+    failed singleton) so it tracks the same file pydantic reads. ``os.environ`` is
+    layered last so shell exports win over .env (pydantic precedence). Graceful: a
+    missing / unparseable env_file falls back to plain ``os.environ``.
     """
     file_values: Dict[str, str] = {}
-    try:
-        from dotenv import dotenv_values
+    path = _resolve_env_file_safe()
+    if path:
+        try:
+            from dotenv import dotenv_values
 
-        from src.config import _resolve_env_file
-
-        parsed = dotenv_values(_resolve_env_file())
-        # dotenv_values can yield None values for bare `KEY` lines — drop them.
-        file_values = {k: v for k, v in parsed.items() if isinstance(v, str)}
-    except Exception:  # noqa: BLE001 — missing / garbled env_file → os.environ only
-        file_values = {}
+            parsed = dotenv_values(path)
+            # dotenv_values can yield None values for bare `KEY` lines — drop them.
+            file_values = {k: v for k, v in parsed.items() if isinstance(v, str)}
+        except Exception:  # noqa: BLE001 — missing / garbled env_file → os.environ only
+            file_values = {}
     return {**file_values, **os.environ}
 
 
@@ -456,12 +477,7 @@ async def get_settings_payload(request: Request):
 def _build_env_snapshot() -> Dict[str, Any]:
     """读 merged .env → EnvSnapshot dict。过滤到受管 key（非受管不出网），secret
     脱敏。缺文件 → exists:false / values:{}（never throw，复刻 env.ts readSnapshot）。"""
-    try:
-        from src.config import _resolve_env_file
-
-        path = str(_resolve_env_file())
-    except Exception:  # noqa: BLE001 — config import 失败 → 仍返回受管 key 列表
-        path = ""
+    path = _resolve_env_file_safe()
     exists = bool(path) and Path(path).exists()
     merged = _load_env_merged()
     values: Dict[str, str] = {}
