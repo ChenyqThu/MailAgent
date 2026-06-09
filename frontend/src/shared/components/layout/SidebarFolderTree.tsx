@@ -225,6 +225,12 @@ export function SidebarFolderTree(): React.ReactElement | null {
   const visible = overflow && !showAll ? tree.slice(0, COLLAPSE_THRESHOLD) : tree
   const hiddenCount = tree.length - COLLAPSE_THRESHOLD
 
+  // 自定义文件夹高亮仅在邮件列表路由 (`/`) 有效。切到非邮件主视图 (Custom AI
+  // Agents /agents · 报告 · 日历 · 设置 · 会话历史 等) 时 customMailbox 不走 setView
+  // 清除 → 残留会导致与目标区双高亮。与内建 MAILBOXES 行的 `onInbox` 选中态门控
+  // (Sidebar.tsx selectedView) 对齐: 仅 pathname==='/' 时按 customMailbox 高亮。
+  const activeMailbox = pathname === '/' ? customMailbox : null
+
   return (
     <>
       {visible.map((node) => (
@@ -232,7 +238,7 @@ export function SidebarFolderTree(): React.ReactElement | null {
           key={node.imapName}
           node={node}
           depth={0}
-          activeMailbox={customMailbox}
+          activeMailbox={activeMailbox}
           expanded={expanded}
           onSelect={handleSelect}
           onToggleExpand={toggleExpand}

@@ -27,9 +27,10 @@ import type {
 await i18n.changeLanguage('zh-CN')
 
 // ── mailApi mock ──────────────────────────────────────────────────────────
-// 🔴 必须返回稳定单例 — 真 useMailApi 是 makeMailApi() 单例; 若每次 render 返回新
-// 对象, FolderPicker 的 refresh=useCallback([mailApi]) 会每帧重建 → mount effect
-// [envGated, refresh] 每帧重跑 → setState('loading') → 死循环 (复刻真实 bug 风险)。
+// 🔴 必须返回稳定单例 — 真 useMailApi 是 makeMailApi() 单例; 不稳定的 queryFn 闭包
+// 不影响 React Query 缓存 (按 queryKey 索引), 但稳定单例仍是真实语义的忠实复刻。
+// discover 现走 React Query (['folder','discover'], 与 SidebarFolderTree 共用), 防
+// 重复拉取由 staleTime 承担 — 同一 QueryClient 内重 mount 命中缓存零请求。
 const mockDiscover = vi.fn<[], Promise<FolderDiscoverResult>>()
 const mockSetWhitelist = vi.fn()
 const mockCreateFolder = vi.fn<[string | null, string], Promise<FolderManageResult>>()
@@ -168,13 +169,16 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
-// FolderPicker 现用 useQueryClient() 失效共享 ['folder'] 缓存 → 必须包 provider。
-function renderPicker(): ReturnType<typeof render> {
-  const queryClient = new QueryClient({
+// FolderPicker 现用 React Query (['folder','discover']) + useQueryClient() 失效共享
+// ['folder'] 缓存 → 必须包 provider。可传入共享 QueryClient 验证跨 mount 缓存复用。
+function makeQc(): QueryClient {
+  return new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
   })
+}
+function renderPicker(qc: QueryClient = makeQc()): ReturnType<typeof render> {
   return render(
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={qc}>
       <FolderPicker />
     </QueryClientProvider>
   )
@@ -191,6 +195,32 @@ describe('FolderPicker — 多文件夹选择器', () => {
     expect(screen.getByText('3,458')).toBeTruthy()
     // 系统文件夹展示「系统 · 始终同步」状态。
     expect(screen.getByText('收件箱')).toBeTruthy()
+  })
+
+  test('共享 QueryClient: 重进设置页命中缓存 → 不再发 discover (零请求)', async () => {
+    mockDiscover.mockResolvedValue(discoverResult())
+    const qc = makeQc()
+    // 首次打开 → 拉一次 discover。
+    const first = renderPicker(qc)
+    await screen.findByText('Jira')
+    expect(mockDiscover).toHaveBeenCalledTimes(1)
+    // 关闭设置页 (卸载 picker)。
+    first.unmount()
+    // 重新打开 (同一 QueryClient, staleTime 10min 内) → 命中缓存, 直接渲染零请求。
+    renderPicker(qc)
+    expect(await screen.findByText('Jira')).toBeTruthy()
+    // 仍然只调过一次 discover (缓存复用, 无重复 IMAP STATUS 扫描)。
+    expect(mockDiscover).toHaveBeenCalledTimes(1)
+  })
+
+  test('手动刷新按钮 → refetch discover (再发一次请求)', async () => {
+    mockDiscover.mockResolvedValue(discoverResult())
+    renderPicker()
+    await screen.findByText('Jira')
+    expect(mockDiscover).toHaveBeenCalledTimes(1)
+    // 点「刷新」→ 强制 refetch (即便 staleTime 未过期)。
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => expect(mockDiscover).toHaveBeenCalledTimes(2))
   })
 
   test('勾选自定义文件夹 → 保存调 setWhitelist + 标记 restart', async () => {

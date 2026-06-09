@@ -15,7 +15,7 @@
 // 值做乐观门控(避免无谓的 discover 请求)。
 
 import * as React from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   AlertTriangle,
@@ -52,13 +52,6 @@ function useEnvValue(key: string): string {
     s.state.status === 'ready' ? (s.state.snapshot.values[key] ?? '') : ''
   )
 }
-
-type LoadState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'ready'; tree: FolderTreeNode[]; folders: FolderInfo[]; whitelist: string[] }
-  | { status: 'gated' }
-  | { status: 'error'; message: string }
 
 /** system folder 图标 — special_use / INBOX 用对应图标, 其余 fallback Folder。 */
 function systemIcon(node: FolderInfo): React.ReactNode {
@@ -508,10 +501,8 @@ export function FolderPicker(): React.ReactElement {
   const customMailbox = useEmailFilter((s) => s.customMailbox)
   const setView = useEmailFilter((s) => s.setView)
 
-  const [state, setState] = React.useState<LoadState>({ status: 'idle' })
   const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set())
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(new Set())
-  const [lastRefresh, setLastRefresh] = React.useState<number | null>(null)
   const [saving, setSaving] = React.useState(false)
 
   // P5 — 本地副本清理提示。取消勾选一个「已在白名单中」的文件夹时, 在其行下方
@@ -521,47 +512,62 @@ export function FolderPicker(): React.ReactElement {
   // 正在执行 cleanup 的 imap_name (null = 无), 同时禁用两按钮防重复。
   const [cleanupBusy, setCleanupBusy] = React.useState<string | null>(null)
 
-  const refresh = React.useCallback(async (): Promise<void> => {
-    setState({ status: 'loading' })
-    try {
-      const res = await mailApi.folder.discover({ counts: true })
-      setState({
-        status: 'ready',
-        tree: res.tree,
-        folders: res.folders,
-        whitelist: res.whitelist
-      })
-      setSelected(new Set(res.whitelist))
-      // 刷新后 whitelist 已重设 → 清空所有 pending 清理提示 (旧提示基于旧 baseline)。
-      setCleanupPrompts(new Set())
-      // 默认展开有已选子节点的父文件夹, 让用户直接看到选中态。
-      const toExpand = new Set<string>()
-      for (const f of res.folders) {
-        if (f.parent && res.whitelist.includes(f.imap_name)) toExpand.add(f.parent)
-      }
-      setExpanded(toExpand)
-      setLastRefresh(Date.now())
-    } catch (e) {
-      if (errorCode(e) === 'E_INVALID_ARG') {
-        setState({ status: 'gated' })
-        return
-      }
-      setState({ status: 'error', message: (e as Error).message })
-    }
-  }, [mailApi])
+  // discover 走 React Query, 与 SidebarFolderTree 共用 ['folder','discover'] 缓存 (counts
+  // 一致) → 重进设置页命中缓存零请求, 只在 staleTime(10min) 过期 / 手动刷新 / CRUD
+  // invalidate 时才重打 IMAP STATUS。env 门控时 enabled=false 不发请求 (gated 由渲染期
+  // envGated 短路)。retry:false 让 E_INVALID_ARG 立即落到 error → 兜底门控。无
+  // refetchInterval → 不会有意外的后台刷新 clobber 用户选中态。
+  const discoverQuery = useQuery({
+    queryKey: ['folder', 'discover'],
+    queryFn: () => mailApi.folder.discover({ counts: true }),
+    enabled: !envGated,
+    staleTime: 10 * 60_000,
+    gcTime: 15 * 60_000,
+    retry: false
+  })
+  const refresh = discoverQuery.refetch
 
-  // 首次 mount: 非 env 门控时自动拉一次 (env 门控时不发请求, gated 由渲染期
-  // envGated 短路)。ref guard 让首拉只跑一次 — 不依赖 refresh 身份 (refresh
-  // 随 mailApi 变, 若依赖会在 setState('loading') 后再触发 → 死循环风险)。手动
-  // 刷新走 toolbar 按钮的 refresh()。refresh 含 setState('loading')→fetch 的数据
-  // 加载语义 (同 PromptEditorDialog open-时 async fetch); react-query 化收益低于
-  // 「叠本地选中态 mutation」的改造风险, effect 合理保留。
-  const didInitRef = React.useRef(false)
-  React.useEffect(() => {
-    if (envGated || didInitRef.current) return
-    didInitRef.current = true
-    void refresh()
-  }, [envGated, refresh])
+  const discoverData = discoverQuery.data
+  const dataUpdatedAt = discoverQuery.dataUpdatedAt
+
+  // 派生加载态/门控态/错误态 — 替代旧 LoadState 机。E_INVALID_ARG → gated; 其余
+  // error → 错误态。ready = 有数据且非 fetching-without-data。
+  const gated = errorCode(discoverQuery.error) === 'E_INVALID_ARG'
+  // isLoading = 仅首拉无数据时 (body 显 skeleton); isFetching = 任意在途请求 (含
+  // 手动刷新 refetch, toolbar 转圈反馈)。distinguish initial-load vs refetch 避免
+  // 重进/刷新时 body 闪 skeleton (react-pitfalls.md「Avoiding Flash of Loading」)。
+  const isLoading = discoverQuery.isPending && discoverQuery.fetchStatus === 'fetching'
+  const isFetching = discoverQuery.isFetching
+  const isError = discoverQuery.isError && !gated
+  const errorMessage = isError ? (discoverQuery.error as Error).message : ''
+  const isReady = discoverData !== undefined
+  // useMemo 稳定引用 (discoverData?.x ?? [] 每次 render 新建空数组 → 下游 hook 依赖
+  // 抖动)。仅在 discoverData 身份变 (refetch 落地) 时重算。
+  const tree = React.useMemo(() => discoverData?.tree ?? [], [discoverData])
+  const folders = React.useMemo(() => discoverData?.folders ?? [], [discoverData])
+  const whitelist = React.useMemo(() => discoverData?.whitelist ?? [], [discoverData])
+  const lastRefresh = isReady ? dataUpdatedAt : null
+
+  // 本机选中态/展开态/清理提示从 discover 的 whitelist seed。每次 discover 数据更新
+  // (首拉 / 手动刷新 / CRUD 后 invalidate refetch) → 把用户编辑回归到后端真实白名单
+  // baseline (= 旧 refresh() 体的 setSelected/setExpanded/clear cleanupPrompts 语义)。
+  // 用 render 期对比 dataUpdatedAt (存 useState, 非 ref) 触发 set-state — React 文档
+  // 「storing info from previous renders / adjusting state when data changes」官方模式,
+  // 收敛 (seededAt guard 保证每 dataUpdatedAt 仅 seed 一次), 比 effect 少一次 commit, 且
+  // React-Compiler 友好 (无 ref-during-render / set-state-in-effect)。无 refetchInterval,
+  // 仅上述显式时机数据会变。
+  const [seededAt, setSeededAt] = React.useState<number | null>(null)
+  if (discoverData && dataUpdatedAt !== seededAt) {
+    setSeededAt(dataUpdatedAt)
+    const wl = discoverData.whitelist
+    setSelected(new Set(wl))
+    setCleanupPrompts(new Set())
+    const toExpand = new Set<string>()
+    for (const f of discoverData.folders) {
+      if (f.parent && wl.includes(f.imap_name)) toExpand.add(f.parent)
+    }
+    setExpanded(toExpand)
+  }
 
   const toggleSelect = React.useCallback(
     (imapName: string): void => {
@@ -575,7 +581,7 @@ export function FolderPicker(): React.ReactElement {
       })
       if (isDeselecting) {
         // 取消勾选 + 该文件夹在白名单 (有本地已同步副本) → 展示清理提示。
-        if (state.status === 'ready' && state.whitelist.includes(imapName)) {
+        if (isReady && whitelist.includes(imapName)) {
           setCleanupPrompts((p) => {
             const np = new Set(p)
             np.add(imapName)
@@ -592,7 +598,7 @@ export function FolderPicker(): React.ReactElement {
         })
       }
     },
-    [selected, state]
+    [selected, isReady, whitelist]
   )
 
   const toggleExpand = React.useCallback((imapName: string): void => {
@@ -604,21 +610,22 @@ export function FolderPicker(): React.ReactElement {
     })
   }, [])
 
-  // dirty: 当前选中 ≠ 上次保存的白名单 (baseline = state.whitelist)。
+  // dirty: 当前选中 ≠ 上次保存的白名单 (baseline = discover 的 whitelist)。保存后
+  // invalidate→refetch 会把 whitelist baseline 推进, dirty 收敛回 false。
   const dirty = React.useMemo(() => {
-    if (state.status !== 'ready') return false
-    const baseline = state.whitelist
+    if (!isReady) return false
+    const baseline = whitelist
     if (selected.size !== baseline.length) return true
     for (const n of baseline) if (!selected.has(n)) return true
     return false
-  }, [selected, state])
+  }, [selected, isReady, whitelist])
 
   async function handleSave(): Promise<void> {
     setSaving(true)
     try {
       const res = await mailApi.folder.setWhitelist(Array.from(selected))
-      // 保存成功后把 baseline 推进到后端返回的去重排序结果。
-      setState((prev) => (prev.status === 'ready' ? { ...prev, whitelist: res.folders } : prev))
+      // 乐观推进选中态到后端去重排序结果 (baseline 由下方 invalidate→refetch 的
+      // re-seed effect 落地)。
       setSelected(new Set(res.folders))
       if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
       // customMailbox 若已被从白名单移除, 继续保留会导致列表永久空 → 重置到 inbox。
@@ -628,9 +635,8 @@ export function FolderPicker(): React.ReactElement {
       // 所以只要 whitelist 变小就保守地检查: 若 selected 里不含任何已删的 imap, 则
       // customMailbox 对应的 imap 也已被移出 → 清 inbox)。
       if (customMailbox !== null) {
-        // state 里存有完整 discover 结果, 找当前 customMailbox 对应的 imap_name。
-        const curState = state as Extract<typeof state, { status: 'ready' }>
-        const match = curState.folders.find((f) => f.display_name === customMailbox)
+        // 用当前 discover 结果找 customMailbox 对应的 imap_name。
+        const match = folders.find((f) => f.display_name === customMailbox)
         if (match && !res.folders.includes(match.imap_name)) {
           setView('inbox')
         }
@@ -671,9 +677,8 @@ export function FolderPicker(): React.ReactElement {
             count: res.affected_local_rows
           })
         )
-        // refetch discover (本地行数已变)。
-        await refresh()
-        // 失效共享 folder 缓存 (sidebar whitelist/discover)。
+        // 失效共享 folder 缓存 → 本组件 + sidebar 的 ['folder','discover'] 重拉
+        // (本地行数已变)。re-seed effect 据新 whitelist 重置选中/展开态。
         void qc.invalidateQueries({ queryKey: ['folder'] })
       } catch (e) {
         toastError(
@@ -684,7 +689,7 @@ export function FolderPicker(): React.ReactElement {
         setCleanupBusy(null)
       }
     },
-    [mailApi, markRestartRequired, refresh, qc, t]
+    [mailApi, markRestartRequired, qc, t]
   )
 
   const dismissCleanup = React.useCallback((imapName: string): void => {
@@ -757,9 +762,8 @@ export function FolderPicker(): React.ReactElement {
         )
       }
       setEdit(null)
-      // 成功后 refetch discover (拿到 Exchange 真实状态 + 新计数)。
-      await refresh()
-      // 失效共享 folder 缓存 (sidebar whitelist/discover)。
+      // 成功后失效共享 folder 缓存 → discover 重拉 (拿到 Exchange 真实状态 + 新计数,
+      // sidebar 同步)。re-seed effect 据新 whitelist 重置选中/展开态。
       void qc.invalidateQueries({ queryKey: ['folder'] })
     } catch (e) {
       toastError(
@@ -771,7 +775,7 @@ export function FolderPicker(): React.ReactElement {
     } finally {
       setEditBusy(false)
     }
-  }, [edit, mailApi, markRestartRequired, refresh, qc, t])
+  }, [edit, mailApi, markRestartRequired, qc, t])
 
   const requestDelete = React.useCallback((node: FolderTreeNode): void => {
     setMenuFor(null)
@@ -796,9 +800,8 @@ export function FolderPicker(): React.ReactElement {
           name: node.display_name
         })
       )
-      // 成功后 refetch discover (本地树同步到 Exchange 真实状态)。
-      await refresh()
-      // 失效共享 folder 缓存 (sidebar whitelist/discover)。
+      // 成功后失效共享 folder 缓存 → discover 重拉 (本地树同步到 Exchange 真实状态,
+      // sidebar 同步)。
       void qc.invalidateQueries({ queryKey: ['folder'] })
     } catch (e) {
       // 失败: 后端已把本地树回滚到服务器真实状态; 关弹窗 + toast 提示回滚。
@@ -809,12 +812,12 @@ export function FolderPicker(): React.ReactElement {
           defaultValue: 'Exchange 操作失败，本地文件夹树已回滚到服务器真实状态。'
         })}`
       )
-      // 回滚后 refetch, 确保本地树与服务器一致。
-      await refresh()
+      // 回滚后失效缓存 refetch, 确保本地树与服务器一致。
+      void qc.invalidateQueries({ queryKey: ['folder'] })
     } finally {
       setDeleting(false)
     }
-  }, [deleteTarget, mailApi, markRestartRequired, customMailbox, setView, refresh, qc, t])
+  }, [deleteTarget, mailApi, markRestartRequired, customMailbox, setView, qc, t])
 
   const manage: ManageHandlers = {
     menuFor,
@@ -838,7 +841,7 @@ export function FolderPicker(): React.ReactElement {
 
   // ── 门控态 ────────────────────────────────────────────────────────────
   // env 乐观门控 (本机 MAILAGENT_BACKEND≠davmail) 或 discover 返回 E_INVALID_ARG。
-  if (envGated || state.status === 'gated') {
+  if (envGated || gated) {
     return (
       <div className="flex items-start gap-3 rounded-lg border border-dashed border-ink-border px-4 py-5 bg-ink-2">
         <Server size={18} strokeWidth={1.75} className="shrink-0 mt-0.5 text-ink-fg-2" />
@@ -868,30 +871,26 @@ export function FolderPicker(): React.ReactElement {
         <button
           type="button"
           onClick={() => void refresh()}
-          disabled={state.status === 'loading'}
+          disabled={isFetching}
           className={cn(
             'inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-meta',
             'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast',
             'disabled:opacity-50 disabled:pointer-events-none'
           )}
         >
-          <RefreshCw
-            size={13}
-            strokeWidth={2}
-            className={cn(state.status === 'loading' && 'animate-spin')}
-          />
+          <RefreshCw size={13} strokeWidth={2} className={cn(isFetching && 'animate-spin')} />
           {t('settings.folder.picker.refresh', { defaultValue: '刷新' })}
         </button>
         <span className="text-meta text-ink-fg-2 truncate">
-          {state.status === 'ready'
+          {isReady
             ? t('settings.folder.picker.summary', {
                 defaultValue: '共 {{count}} 个文件夹',
-                count: state.folders.length
+                count: folders.length
               })
-            : state.status === 'loading'
+            : isLoading
               ? t('settings.folder.picker.loadingMeta', { defaultValue: '拉取文件夹…' })
               : ''}
-          {lastRefresh && state.status === 'ready' ? (
+          {lastRefresh && isReady ? (
             <span className="text-ink-fg-3">
               {' · '}
               {t('settings.folder.picker.refreshedAt', {
@@ -903,28 +902,9 @@ export function FolderPicker(): React.ReactElement {
         </span>
       </div>
 
-      {/* body */}
-      {state.status === 'loading' ? (
-        <div className="px-4 py-8 flex items-center justify-center gap-2 text-meta text-ink-fg-2">
-          <Loader2 size={14} className="animate-spin" />
-          {t('settings.folder.picker.loading', { defaultValue: '加载中…' })}
-        </div>
-      ) : state.status === 'error' ? (
-        <div className="px-4 py-6 flex flex-col items-center gap-2 text-center">
-          <div className="text-aux text-fail">
-            {t('settings.folder.picker.errorTitle', { defaultValue: '拉取文件夹失败' })}
-          </div>
-          <div className="text-meta text-ink-fg-2">{state.message}</div>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="mt-1 inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-meta text-ink-fg-1 hover:bg-ink-3 transition-colors duration-fast"
-          >
-            <RefreshCw size={13} strokeWidth={2} />
-            {t('settings.folder.picker.retry', { defaultValue: '重试' })}
-          </button>
-        </div>
-      ) : state.status === 'ready' && state.tree.length === 0 ? (
+      {/* body — isReady 优先 (有数据时即便后台 refetch 也不闪 skeleton); 仅首拉无
+          数据时显 loading; error 仅在无缓存数据时显 (有数据则静默保留旧树)。 */}
+      {isReady && tree.length === 0 ? (
         <div className="px-4 py-8 flex flex-col items-center gap-2 text-center">
           <span className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-ink-3 text-ink-fg-3">
             <Folder size={18} strokeWidth={1.75} />
@@ -941,10 +921,10 @@ export function FolderPicker(): React.ReactElement {
             })}
           </div>
         </div>
-      ) : state.status === 'ready' ? (
+      ) : isReady ? (
         <>
           <div className="max-h-80 overflow-y-auto scrollbar-thin divide-y divide-ink-border-soft/60">
-            {state.tree.map((node) => (
+            {tree.map((node) => (
               <FolderRow
                 key={node.imap_name}
                 node={node}
@@ -985,7 +965,27 @@ export function FolderPicker(): React.ReactElement {
             </button>
           </div>
         </>
-      ) : null}
+      ) : isError ? (
+        <div className="px-4 py-6 flex flex-col items-center gap-2 text-center">
+          <div className="text-aux text-fail">
+            {t('settings.folder.picker.errorTitle', { defaultValue: '拉取文件夹失败' })}
+          </div>
+          <div className="text-meta text-ink-fg-2">{errorMessage}</div>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="mt-1 inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-meta text-ink-fg-1 hover:bg-ink-3 transition-colors duration-fast"
+          >
+            <RefreshCw size={13} strokeWidth={2} />
+            {t('settings.folder.picker.retry', { defaultValue: '重试' })}
+          </button>
+        </div>
+      ) : (
+        <div className="px-4 py-8 flex items-center justify-center gap-2 text-meta text-ink-fg-2">
+          <Loader2 size={14} className="animate-spin" />
+          {t('settings.folder.picker.loading', { defaultValue: '加载中…' })}
+        </div>
+      )}
 
       {/* 删除二次确认弹窗 (P4 · 界面⑤) — 危险态 + 影响说明 + Exchange 回写警示。 */}
       {deleteTarget ? (
