@@ -95,11 +95,22 @@ function writeTab(tab: InboxTab): void {
 interface EmailFilterStore {
   filter: EmailFilter
   view: EmailView
+  /** 多文件夹同步 (P3) — 当前激活的自定义文件夹 (mailbox = display_name)。非空时
+   *  列表只展示该文件夹邮件 (listEnriched WHERE mailbox=display_name); 切到任一
+   *  内建 view (inbox/outbox/flagged/all) 时清空。null = 走内建 view 语义。 */
+  customMailbox: string | null
+  /** 当前自定义文件夹的层级路径 (display_name 段, 末段 = customMailbox)。列表头部
+   *  面包屑展示用 (界面④)。空数组 = 无自定义文件夹激活。 */
+  customMailboxPath: string[]
   tab: InboxTab
   selectedPriorities: ReadonlySet<AIPriority>
   selectedCategories: ReadonlySet<EmailCategory>
   setFilter(next: EmailFilter): void
   setView(next: EmailView): void
+  /** 选中自定义文件夹 (mailbox = display_name)。其余过滤轴归零, view 占位 inbox
+   *  (Sidebar 自行据 customMailbox 控制选中态, 内建 view 高亮全部解除)。`path`
+   *  是层级 display_name 段 (末段 = mailbox), 列表头部面包屑用。 */
+  setCustomMailbox(mailbox: string, path?: string[]): void
   setTab(next: InboxTab): void
   togglePriority(p: AIPriority): void
   toggleCategory(c: EmailCategory): void
@@ -116,6 +127,8 @@ interface EmailFilterStore {
 export const useEmailFilter = create<EmailFilterStore>((set, get) => ({
   filter: 'all',
   view: 'inbox',
+  customMailbox: null,
+  customMailboxPath: [],
   tab: readTab(),
   selectedPriorities: readSet<AIPriority>(KEY_PRI, ALL_PRIORITIES),
   selectedCategories: readSet<EmailCategory>(KEY_CAT, ALL_CATEGORIES),
@@ -124,7 +137,11 @@ export const useEmailFilter = create<EmailFilterStore>((set, get) => ({
     set({ filter: next })
   },
   setView(next) {
-    set({ view: next, filter: 'all' })
+    // 切内建 view 必清掉自定义文件夹选中态 (互斥)。
+    set({ view: next, filter: 'all', customMailbox: null, customMailboxPath: [] })
+  },
+  setCustomMailbox(mailbox, path) {
+    set({ customMailbox: mailbox, customMailboxPath: path ?? [mailbox], filter: 'all' })
   },
   setTab(next) {
     writeTab(next)

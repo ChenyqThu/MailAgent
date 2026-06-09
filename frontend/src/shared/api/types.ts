@@ -529,12 +529,63 @@ export interface FolderEditDraftOpts {
   subject?: string
 }
 
+// ---- 多文件夹同步 (P3) — discover + whitelist (davmail-only) ----------------
+//
+// serve-api `GET /api/folder/discover` / `GET|PUT /api/folder/whitelist` 的 wire
+// 形状 (src/api/routers/folder.py + src/mail/backend/imap_client.FolderInfo)。
+// 白名单存 IMAP 原始名 (modified-UTF7 ASCII, 可能含逗号如 `&W,mL3VOGU,KLsF9V-`);
+// display_name 是解码后中文, 仅展示。勾选用 imap_name 作 key, 展示用 display_name。
+// 远程 (HttpApi 直连) + 本地 (Electron→daemon→serve-api 转发) 同一 wire。
+
+/** 单个 Exchange 文件夹 (LIST → FolderInfo)。flat 列表带 `is_synced`; tree 节点
+ *  额外带 `children` 但不带 `is_synced` (后端 build_folder_tree 用 bare to_dict)。 */
+export interface FolderInfo {
+  imap_name: string
+  display_name: string
+  delimiter: string
+  special_use: string | null
+  is_system: boolean
+  has_children: boolean
+  parent: string | null
+  message_count: number | null
+  /** 仅 discover 的 flat 列表带此字段 (= imap_name ∈ 当前白名单)。 */
+  is_synced?: boolean
+}
+
+/** 嵌套树节点 = FolderInfo + children。 */
+export interface FolderTreeNode extends FolderInfo {
+  children: FolderTreeNode[]
+}
+
+export interface FolderDiscoverResult {
+  folders: FolderInfo[]
+  tree: FolderTreeNode[]
+  /** 当前已同步的 imap_name 列表 (= SYNC_FOLDERS 白名单, 已排序)。 */
+  whitelist: string[]
+}
+
+export interface FolderWhitelistResult {
+  folders: string[]
+}
+
+export interface FolderSetWhitelistResult {
+  folders: string[]
+  restart_required: boolean
+}
+
 export interface FolderApi {
   // 读 (无 auth, better-sqlite3 直读)
   list(opts: FolderListOpts): Promise<FolderEmailMeta[]>
   get(id: number): Promise<FolderEmailDetail | null>
   search(opts: FolderSearchOpts): Promise<FolderSearchResult>
   syncStatus(): Promise<FolderSyncStatusResult>
+  // 多文件夹同步 (P3, davmail-only). discover 走 serve-api (IMAP LIST); 本地经
+  // daemon 转发, 远程 HttpApi 直连。非 davmail 后端 serve-api 返回 400
+  // E_INVALID_ARG → 抛带 code 的 Error (前端据此 gate)。
+  discover(opts?: { counts?: boolean }): Promise<FolderDiscoverResult>
+  getWhitelist(): Promise<FolderWhitelistResult>
+  /** 覆盖式保存白名单 (imap 原始名)。返回去重排序后的列表 + restart_required。 */
+  setWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult>
   // 写 (needsAuth + davmail-only, fork CLI). 返回 unwrap 后的 CLI data,
   // 失败抛带 `code` 的 Error (同 calendar 写方法约定)。
   syncNow(folder: FolderName, full?: boolean): Promise<unknown>

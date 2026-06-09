@@ -294,3 +294,115 @@ async def folder_get(
             source="sqlite",
         )
     return success_envelope(_row_to_detail(row), request=request, source="sqlite")
+
+
+# ============================================================
+# 多文件夹同步: discover + whitelist (davmail-only)
+# ============================================================
+# 注: 路径为定长段 (/discover /whitelist)，与上面 /{folder}/... (2-3 段) 无歧义。
+
+from pydantic import BaseModel  # noqa: E402
+
+
+class _WhitelistBody(BaseModel):
+    """PUT /api/folder/whitelist 请求体 — 完整白名单 (imap 原始名列表, 覆盖式保存)。"""
+
+    folders: list[str]
+
+
+def _require_davmail(cfg: "Config") -> None:
+    if (getattr(cfg, "mailagent_backend", "") or "").lower() != "davmail":
+        raise APIError(
+            "E_INVALID_ARG",
+            "多文件夹发现/白名单需要 davmail 后端 (MAILAGENT_BACKEND=davmail)",
+            hint="AppleScript 后端不支持自定义文件夹同步",
+            source="imap",
+        )
+
+
+def _current_whitelist(cfg: "Config") -> list[str]:
+    from src.mail.backend.davmail_backend import DavMailBackend
+
+    return DavMailBackend._parse_custom_folders(cfg)
+
+
+@router.get("/discover", dependencies=[Depends(verify_cf_access)])
+async def folder_discover(
+    request: Request,
+    cfg: "Config" = Depends(get_settings),
+    counts: bool = Query(True, description="是否逐文件夹 STATUS 邮件数 (慢, 可关)"),
+):
+    """发现 Exchange 全部文件夹 (LIST → 层级树 + special-use + 邮件数)。davmail-only。
+
+    data = {folders: [扁平含 is_synced/parent/has_children], tree: [嵌套], whitelist: [已同步 imap_name]}。
+    """
+    _require_davmail(cfg)
+    from src.mail.backend.imap_client import build_folder_tree, list_folders
+
+    try:
+        folders = list_folders(cfg, with_counts=counts)
+    except Exception as e:  # noqa: BLE001 — IMAP/连接失败统一上报
+        raise APIError("E_UPSTREAM", f"folder discover failed: {e}", source="imap")
+    whitelist = set(_current_whitelist(cfg))
+    flat = []
+    for fi in folders:
+        d = fi.to_dict()
+        d["is_synced"] = fi.imap_name in whitelist
+        flat.append(d)
+    return success_envelope(
+        {"folders": flat, "tree": build_folder_tree(folders), "whitelist": sorted(whitelist)},
+        request=request,
+        source="imap",
+    )
+
+
+@router.get("/whitelist", dependencies=[Depends(verify_cf_access)])
+async def folder_get_whitelist(
+    request: Request,
+    cfg: "Config" = Depends(get_settings),
+):
+    """读当前 SYNC_FOLDERS 白名单 (imap 原始名列表)。"""
+    return success_envelope(
+        {"folders": _current_whitelist(cfg)}, request=request, source="sqlite"
+    )
+
+
+@router.put("/whitelist", dependencies=[Depends(verify_cf_access)])
+async def folder_set_whitelist(
+    body: _WhitelistBody,
+    request: Request,
+    cfg: "Config" = Depends(get_settings),
+):
+    """覆盖式保存 SYNC_FOLDERS 白名单 (写 .env, JSON 数组)。需 restart mail-sync 生效。
+
+    排除空项 + INBOX (主路径单独管)，去重保序。系统文件夹由前端 gate (本端点不强校验,
+    避免每次 PUT 都 IMAP LIST; 误存系统名也由 _effective_custom_folders 运行时兜底过滤)。
+    """
+    _require_davmail(cfg)
+    import json as _json
+
+    from dotenv import set_key as _set_key
+
+    from src.config import _resolve_env_file
+
+    seen: set[str] = set()
+    names: list[str] = []
+    for raw in body.folders:
+        n = (raw or "").strip()
+        if not n or n.upper() == "INBOX" or n in seen:
+            continue
+        seen.add(n)
+        names.append(n)
+    try:
+        env_file = _resolve_env_file()
+        from pathlib import Path as _Path
+
+        _p = _Path(env_file)
+        if not _p.exists():
+            _p.touch()
+        _set_key(str(env_file), "SYNC_FOLDERS", _json.dumps(names, ensure_ascii=False), quote_mode="auto")
+    except Exception as e:  # noqa: BLE001
+        raise APIError("E_GENERIC", f".env write failed: {e}", source="sqlite")
+    return success_envelope(
+        {"folders": names, "restart_required": True}, request=request, source="sqlite"
+    )

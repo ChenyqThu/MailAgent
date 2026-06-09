@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
+import { FolderPicker } from '../parts/FolderPicker'
 
 export function SyncTab(): React.ReactElement {
   const { t } = useTranslation()
@@ -78,6 +79,46 @@ export function SyncTab(): React.ReactElement {
           helper={t('settings.sync.healthInterval.helper')}
           min={60}
           max={86400}
+        />
+      </Section>
+
+      {/* 多文件夹同步 (P3) — 自定义 Exchange 文件夹白名单。davmail-only, 走完整
+          pipeline (AI/Notion/搜索)。动态文件夹树 (FolderPicker) 实时从后端拉取,
+          区别于纯文本 EnvField。窗口配置 (首次窗口 + 单文件夹上限) 用 EnvField。 */}
+      <Section
+        title={t('settings.folder.section.title', { defaultValue: '自定义文件夹同步' })}
+        meta="davmail"
+        helper={t('settings.folder.section.helper', {
+          defaultValue:
+            '选择要同步进 MailAgent 的文件夹；邮件将享受 AI 分类、Notion 同步、全文搜索等完整能力。默认一个不选。'
+        })}
+      >
+        <div className="px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
+          <FolderPicker />
+        </div>
+        <EnvField
+          envKey="FOLDER_SYNC_PAST_DAYS"
+          control="number"
+          label={t('settings.folder.window.pastDays.label', {
+            defaultValue: '首次同步窗口（天）'
+          })}
+          helper={t('settings.folder.window.pastDays.helper', {
+            defaultValue: '只拉最近 N 天；越大首次越慢、占空间越多。'
+          })}
+          min={1}
+          max={3650}
+        />
+        <EnvField
+          envKey="FOLDER_SYNC_MAX_MESSAGES"
+          control="number"
+          label={t('settings.folder.window.maxMessages.label', {
+            defaultValue: '单文件夹上限（封）'
+          })}
+          helper={t('settings.folder.window.maxMessages.helper', {
+            defaultValue: '防极端大邮箱；超出按时间降序截断。'
+          })}
+          min={100}
+          max={50000}
         />
       </Section>
 

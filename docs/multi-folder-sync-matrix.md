@@ -60,18 +60,18 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 **验收**：27 P2 测试全绿，pytest **1452 passed（含 tests/notify）零新增失败** + ruff 全过。MVP = P1+P2 纯后端独立验收。**两轮独立 review**：codex(GPT-5.5) APPROVE WITH NITS → 修 3 finding（① retry 队列也接 L2 gate ② getattr 兜底修 tests/notify 回归 ③ config JSON 描述）→ codex 用量上限不可用 → **fallback opus 4.8 critic 对抗式复审 APPROVE WITH NITS**（NIT-1 存档有意为自定义[PRD D7]+注释、NIT-2 meta=None 补测试、NIT-3 perf 守卫保留）。
 > 🔴 **review 暴露的范围缺口**：L2/L3 gate 改 `new_watcher.py` 会影响 `tests/notify`（之前回归只跑 tests/mail/cli/api 漏了），已纳入回归范围。
 
-## P3 — 前端配置 + Sidebar（树形）⬜
+## P3 — 前端配置 + Sidebar（树形）✅
 
 | 能力 | 后端 | 前端 | i18n(中/英) | 主题(亮/暗) | 测试 | 状态 |
 |---|---|---|---|---|---|---|
-| folder 发现 API | serve-api `GET /api/folder/discover`（树结构+count） | — | ➖ | ➖ | `test_folder_discover`(api) | ⬜ |
-| 白名单读写 API | `GET/PUT /api/folder/whitelist` | — | ➖ | ➖ | api 测 | ⬜ |
-| IPC + useMailApi | daemon 转发（D1，注本地 token） | `mailApi.folder.discover/getWhitelist/setWhitelist` | ➖ | ➖ | mock | ⬜ |
-| `<FolderPicker>` 树组件 | — | 树形（缩进+展开收起）+勾选+窗口+空态+门控（**照 mockup ①**） | ✅ 所有文案 key | ✅ token 取色 | 组件测（拉取/勾选/保存/门控/空态） | ⬜ |
-| Sidebar 文件夹树 | — | MAILBOXES 段树形渲染+计数+点击过滤（**照 mockup ③**，三段铁律） | ✅ | ✅ | Sidebar 渲染+过滤测 | ⬜ |
-| 列表头部上下文 | — | 层级面包屑（**照 mockup ④**） | ✅ | ✅ | — | ⬜ |
+| folder 发现 API | serve-api `GET /api/folder/discover`（扁平+tree+count+is_synced，davmail 门控） | — | ➖ | ➖ | `test_folder_discover`(api 6) | ✅ |
+| 白名单读写 API | `GET/PUT /api/folder/whitelist`（JSON 写 .env，去重排 INBOX，restart_required） | — | ➖ | ➖ | api 测 | ✅ |
+| IPC + useMailApi | daemon 转发（D1，Main handler→serve-api）+ HttpApi 远程直连 | `mailApi.folder.discover/getWhitelist/setWhitelist` | ➖ | ➖ | mock | ✅ |
+| `<FolderPicker>` 树组件 | — | 树形（缩进+展开收起）+勾选(imap_name)+窗口(EnvField)+空态+davmail 门控（**照 mockup ①**） | ✅ 44 双语 key 对称 | ✅ token 取色（51 处） | `FolderPicker.test`（拉取/勾选/保存/门控/空态） | ✅ |
+| Sidebar 文件夹树 | — | MAILBOXES 段树形（缩进+展开收起）+计数+点击过滤（display_name）（**照 mockup ③**，三段铁律守住） | ✅ | ✅ | `SidebarFolderTree.test`(8，含叶子名/全路径/隔离) | ✅ |
+| 列表头部上下文 | — | 层级面包屑（叶子名段，**照 mockup ④**） | ✅ | ✅ | — | ✅ |
 
-**验收**：设置页勾选→Sidebar 出现→点击过滤；`pnpm typecheck && build:web` 零 Electron 回归；**i18n 中英切换无 raw key**；**亮暗主题渲染正确**。**codex review APPROVE**。
+**验收**：`pnpm typecheck` 零错 + `pnpm test` **94 文件 1367 passed 零 Electron 回归** + `build:web` ✓ + eslint 新文件干净；`pytest tests/api` 384 passed + ruff 清。i18n 中英对称、token 取色无 raw hex、三段 header 铁律守住、隔离不变量（whitelist 空→Sidebar 不渲染）。**独立 review**：codex 用量上限不可用 → **opus code-reviewer 对抗式 APPROVE WITH NITS**（0 CRIT/HIGH；修 MEDIUM 嵌套文件夹叶子名显示[decode 全路径→split delimiter 取末段，过滤仍用全路径]+ 2 LOW[取消勾选活跃文件夹清 customMailbox / discover-fail fallback 禁点击] + NIT 注释；测试 fixture 改真实全路径覆盖嵌套）。
 
 ## P4 — Onboarding + 写操作泛化 + 文件夹管理 ⬜
 
@@ -132,4 +132,5 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 | 2026-06-08 | — | 需求+设计+mockup+矩阵就绪，goal 待启动 | `f0ceb84` 等 |
 | 2026-06-08 | P1 gate | davmail 前置实测全过：CRUD/嵌套/系统保护全支持，无降级 | — |
 | 2026-06-08 | P1 | 实现完成（imap_utf7/list_folders/SYNC_FOLDERS/per-folder marker+uidvalidity/get_new_emails 多文件夹/DB v22/CLI discover·enable·disable）；75 新测试绿 + 真机 e2e 过 + 零新增回归（1166 passed）；codex REQUEST CHANGES→修 3 finding（JSON 白名单/mailbox quoting/系统文件夹排除）→ APPROVE WITH NITS（NIT 修） | `22c7f759` |
-| 2026-06-08 | P2 | L3 通知降噪 + L2 LLM gate（per-folder）+ 下游零改动验证（Notion/FTS/线程/mailbox 过滤）+ DRY 抽 parse_folder_csv_or_json；27 测试 + 1452 passed（含 notify）零新增；codex APPROVE WITH NITS→修 3→opus critic APPROVE WITH NITS | 待提交 |
+| 2026-06-08 | P2 | L3 通知降噪 + L2 LLM gate（per-folder）+ 下游零改动验证（Notion/FTS/线程/mailbox 过滤）+ DRY 抽 parse_folder_csv_or_json；27 测试 + 1452 passed（含 notify）零新增；codex APPROVE WITH NITS→修 3→opus critic APPROVE WITH NITS | `f12f173e` |
+| 2026-06-08 | P3 | serve-api discover/whitelist 端点（6 api 测）+ 前端 FolderPicker 树/SidebarFolderTree/API wiring(HttpApi+Electron IPC)/i18n 双语 44/主题 token；executor 实现；opus code-reviewer APPROVE WITH NITS→修 MEDIUM 嵌套叶子名+2 LOW+NIT；typecheck+1367 前端测试+build:web+384 api+ruff/eslint 全绿 | 待提交 |

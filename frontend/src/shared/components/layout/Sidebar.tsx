@@ -48,6 +48,7 @@ import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { deriveAccount } from '@shared/lib/account'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
+import { SidebarFolderTree } from './SidebarFolderTree'
 
 interface NavRowProps {
   icon: React.ReactNode
@@ -197,6 +198,8 @@ export function Sidebar(): React.ReactElement {
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const view = useEmailFilter((s) => s.view)
   const setView = useEmailFilter((s) => s.setView)
+  // 多文件夹同步 (P3) — 自定义文件夹激活时内建 MAILBOXES 行全不高亮 (互斥)。
+  const customMailbox = useEmailFilter((s) => s.customMailbox)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const onAgents = pathname === '/agents'
@@ -250,7 +253,9 @@ export function Sidebar(): React.ReactElement {
   // VIEW rows derive selection from pathname so §2.11 lint rule #4
   // (`row-selected` count ≤ 1) holds for free.
   const onInbox = pathname === '/'
-  const selectedView = onInbox ? view : null
+  // 自定义文件夹激活 (customMailbox 非空) 时内建 view 行全不选中 (列表已切到该
+  // 文件夹, 选中态由 SidebarFolderTree 那侧的 row-selected 表达)。
+  const selectedView = onInbox && !customMailbox ? view : null
 
   // Account popover — anchored under the header row. Outside-click /
   // Escape dismiss + add-account ghost row live in AccountSwitcherPopover.
@@ -443,6 +448,9 @@ export function Sidebar(): React.ReactElement {
             onClick={() => handleViewClick('all')}
             right={allTotal > 0 ? <TotalCount count={allTotal} /> : undefined}
           />
+          {/* 多文件夹同步 (P3) — 已勾选自定义文件夹树。挂在 MAILBOXES 段内 (三段
+              铁律: 不新增 header)。whitelist 空 → 渲染 null, 不破坏现有行。 */}
+          <SidebarFolderTree />
         </nav>
 
         <div className="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft" />

@@ -12,11 +12,11 @@
 // CSS classes (.inbox-tabs / .filter-pop / .group-header / .filter-option)
 // live in index.css Sprint 12 block.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { List, type ListImperativeAPI, type RowComponentProps } from 'react-window'
-import { Filter, ListChecks, Mail } from 'lucide-react'
+import { ChevronRight, Filter, Folder, ListChecks, Mail } from 'lucide-react'
 
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
@@ -40,6 +40,7 @@ import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
+import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
@@ -541,7 +542,10 @@ function flattenGroups(
 }
 
 // ─── List query opts per Sidebar view ────────────────────────────────
-function listOptsForView(view: EmailView, limit: number): ListOpts {
+// customMailbox 非空 (多文件夹同步 P3 — 选中某自定义文件夹) 时优先, 列表只拉该
+// mailbox (= display_name), 跳过内建 view 语义。
+function listOptsForView(view: EmailView, limit: number, customMailbox: string | null): ListOpts {
+  if (customMailbox) return { mailbox: customMailbox, limit }
   if (view === 'inbox') return { mailbox: '收件箱', limit }
   if (view === 'outbox') return { mailbox: '发件箱', limit }
   if (view === 'flagged') return { isFlagged: true, limit }
@@ -574,6 +578,9 @@ export function EmailList(): React.ReactElement {
   const filter = useEmailFilter((s) => s.filter)
   const setFilter = useEmailFilter((s) => s.setFilter)
   const view = useEmailFilter((s) => s.view)
+  // 多文件夹同步 (P3) — 当前自定义文件夹 (mailbox=display_name); 非空时列表只拉它。
+  const customMailbox = useEmailFilter((s) => s.customMailbox)
+  const customMailboxPath = useEmailFilter((s) => s.customMailboxPath)
   const tab = useEmailFilter((s) => s.tab)
   const setTab = useEmailFilter((s) => s.setTab)
 
@@ -650,9 +657,12 @@ export function EmailList(): React.ReactElement {
   // React 19 "Adjusting state on prop change" pattern — paging resets on
   // view transition without scheduling an effect (see EmailDetail.tsx for
   // the same pattern).
-  const [lastView, setLastView] = useState(view)
-  if (lastView !== view) {
-    setLastView(view)
+  // view + customMailbox 合成 key — 多文件夹同步 (P3) 切自定义文件夹时 view 仍为
+  // inbox, 故把 customMailbox 也并入重置键, 切文件夹同样重置分页。
+  const viewKey = customMailbox ? `custom:${customMailbox}` : view
+  const [lastView, setLastView] = useState(viewKey)
+  if (lastView !== viewKey) {
+    setLastView(viewKey)
     setPageCount(1)
   }
   // 首屏 100 行落幕后静默升到 500: useQuery 已经拿着 limit=100 的结果在渲染,
@@ -665,7 +675,7 @@ export function EmailList(): React.ReactElement {
       setPageCount((c) => Math.max(c, INITIAL_PREFETCH_PAGES))
     }, INITIAL_PREFETCH_DELAY_MS)
     return () => window.clearTimeout(t)
-  }, [view, activeMailbox, pageCount])
+  }, [view, activeMailbox, customMailbox, pageCount])
   // Sprint 12.6 user-feedback — outside-click previously checked the whole
   // header container, which meant clicking on the inbox tabs / batch button
   // inside the header kept the popover open. We now scope the "inside"
@@ -716,8 +726,8 @@ export function EmailList(): React.ReactElement {
   // 70% 阈值预加载, 用户感知不到分页边界. (react-best-practices · Client
   // Data Fetching)
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['emails', view, activeMailbox, fetchLimit],
-    queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit)),
+    queryKey: ['emails', view, customMailbox, activeMailbox, fetchLimit],
+    queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit, customMailbox)),
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
     // 切到 设置/日历 再切回邮箱不重拉: 路由是独立顶级 route, EmailList 切走即
@@ -736,7 +746,14 @@ export function EmailList(): React.ReactElement {
   // when supplement merge looks up the row, it finds the enriched
   // version.  User: "email list 里对我发出的邮件,只有发件人/标题行,
   // 没有正文摘要行和 AI 行".
-  const crossMailbox = view === 'inbox' ? '发件箱' : view === 'outbox' ? '收件箱' : null
+  // 多文件夹同步 (P3) — 自定义文件夹无收件箱/发件箱跨线程补充语义, 不拉 cross。
+  const crossMailbox = customMailbox
+    ? null
+    : view === 'inbox'
+      ? '发件箱'
+      : view === 'outbox'
+        ? '收件箱'
+        : null
   const crossQ = useQuery({
     queryKey: ['emails', 'cross', crossMailbox, fetchLimit],
     queryFn: () =>
@@ -777,7 +794,12 @@ export function EmailList(): React.ReactElement {
   // 全部邮件, 套 focused tab 会把 ai_priority='low' 的标旗邮件藏进 Other, 导致
   // 列表 < sidebar badge (badge 是纯 SQL is_flagged=1 计数)。故仅收件箱视图应用
   // tab 过滤; 其余视图直接用 all (tab bar 在下方 header 也只对收件箱渲染)。
-  const tabFiltered = useMemo(() => (view === 'inbox' ? applyTab(tab, all) : all), [view, tab, all])
+  // 多文件夹同步 (P3) — 自定义文件夹无 Focused/Other 分流 (header 也不渲染 tab),
+  // 故 customMailbox 激活时不套 tab 过滤 (否则 low 优先级邮件被藏进 Other)。
+  const tabFiltered = useMemo(
+    () => (view === 'inbox' && !customMailbox ? applyTab(tab, all) : all),
+    [view, tab, all, customMailbox]
+  )
   const chipFiltered = useMemo(() => applyChipFilter(filter, tabFiltered), [filter, tabFiltered])
   const filteredBase = useMemo(
     () => applyMultiFilter(chipFiltered, selectedPriorities, selectedCategories),
@@ -1178,7 +1200,40 @@ export function EmailList(): React.ReactElement {
       {/* Header — Focused/Other tabs · batch + filter cluster · meta line */}
       <div className="relative px-3 pt-3 pb-2.5 border-b border-ink-border-soft">
         <div className="flex items-center justify-between gap-2">
-          {view === 'inbox' ? (
+          {customMailbox ? (
+            // 多文件夹同步 (P3) — 选中自定义文件夹时左侧显层级面包屑 (界面④)。
+            // 末段 = 当前文件夹 (高亮), 前缀段为父路径 (弱化), 中间用 chevron 分隔。
+            <div
+              className="flex items-center gap-1 min-w-0"
+              aria-label={t('list.folderCrumb.aria')}
+            >
+              <Folder size={14} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
+              {(customMailboxPath.length > 0 ? customMailboxPath : [customMailbox]).map(
+                (seg, i, arr) => {
+                  const isLast = i === arr.length - 1
+                  return (
+                    <Fragment key={`${seg}-${i}`}>
+                      {i > 0 ? (
+                        <ChevronRight
+                          size={12}
+                          strokeWidth={2}
+                          className="shrink-0 text-ink-fg-3"
+                        />
+                      ) : null}
+                      <span
+                        className={cn(
+                          'truncate text-aux',
+                          isLast ? 'font-semibold text-ink-fg' : 'text-ink-fg-2'
+                        )}
+                      >
+                        {seg}
+                      </span>
+                    </Fragment>
+                  )
+                }
+              )}
+            </div>
+          ) : view === 'inbox' ? (
             <div
               ref={tabListRef}
               className="inbox-tabs"

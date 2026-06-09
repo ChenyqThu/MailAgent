@@ -45,6 +45,9 @@
       "reset": "清除过滤",
       "selectAll": "全选",
       "clearLink": "清除"
+    },
+    "folderCrumb": {
+      "aria": "文件夹路径"
     }
   },
   "emailDetail": {
@@ -416,6 +419,12 @@
     "account": {
       "add": "添加账户...",
       "tooltip": "{email} — 切换账户"
+    },
+    "folderTree": {
+      "expand": "展开",
+      "collapse": "收起",
+      "showMore": "展开更多（+{{count}}）",
+      "showLess": "折叠"
     }
   },
   "sessions": {
@@ -1734,6 +1743,46 @@
         "devDisabled": "Dev 模式 · 已禁用",
         "disabled": "已关闭"
       }
+    },
+    "folder": {
+      "section": {
+        "title": "自定义文件夹同步",
+        "helper": "选择要同步进 MailAgent 的文件夹；邮件将享受 AI 分类、Notion 同步、全文搜索等完整能力。默认一个不选。"
+      },
+      "window": {
+        "pastDays": {
+          "label": "首次同步窗口（天）",
+          "helper": "只拉最近 N 天；越大首次越慢、占空间越多。"
+        },
+        "maxMessages": {
+          "label": "单文件夹上限（封）",
+          "helper": "防极端大邮箱；超出按时间降序截断。"
+        }
+      },
+      "picker": {
+        "refresh": "刷新",
+        "retry": "重试",
+        "save": "保存",
+        "saving": "保存中…",
+        "loading": "加载中…",
+        "loadingMeta": "拉取文件夹…",
+        "summary": "共 {{count}} 个文件夹",
+        "refreshedAt": "上次刷新 {{time}}",
+        "expand": "展开",
+        "collapse": "收起",
+        "large": "较大",
+        "largeTip": "超过 1000 封，首次同步可能较慢",
+        "systemLockTip": "系统文件夹 · 始终同步",
+        "systemState": "系统 · 始终同步",
+        "dirtyHint": "保存后需重启同步服务生效",
+        "saveOk": "文件夹白名单已保存",
+        "saveFail": "保存失败",
+        "errorTitle": "拉取文件夹失败",
+        "emptyTitle": "没有可同步的自定义文件夹",
+        "emptyBody": "你的邮箱里暂未发现收件箱 / 发件箱以外的文件夹。在 Outlook 里新建文件夹后点「刷新」重新拉取。",
+        "gatedTitle": "需要 davmail 后端",
+        "gatedBody": "多文件夹发现、勾选与同步仅在 davmail 后端可用。请在「账户」切换后端后再启用本区。"
+      }
     }
   },
   "updater": {
@@ -1894,7 +1943,10 @@
       "promptPlaceholder": "留空 = 用内置默认幕僚 persona（按日 / 周 / 月自动套用）；在此输入可完全覆写",
       "triggerMode": "触发方式",
       "triggerHint": "回看的时间口径",
-      "trigger": { "rolling_24h": "回溯 24h", "natural_day": "自然日（昨天）" },
+      "trigger": {
+        "rolling_24h": "回溯 24h",
+        "natural_day": "自然日（昨天）"
+      },
       "timezone": "时区",
       "timezoneHint": "留空 = 本地；自然日 / 周月边界按此时区",
       "timezonePlaceholder": "如 Asia/Shanghai（留空 = 本地）",

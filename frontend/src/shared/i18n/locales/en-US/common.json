@@ -45,6 +45,9 @@
       "reset": "Reset",
       "selectAll": "All",
       "clearLink": "Clear"
+    },
+    "folderCrumb": {
+      "aria": "Folder path"
     }
   },
   "emailDetail": {
@@ -416,6 +419,12 @@
     "account": {
       "add": "Add account…",
       "tooltip": "{email} — switch account"
+    },
+    "folderTree": {
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "showMore": "Show more (+{{count}})",
+      "showLess": "Collapse"
     }
   },
   "sessions": {
@@ -1731,6 +1740,46 @@
         "devDisabled": "Dev · disabled",
         "disabled": "Off"
       }
+    },
+    "folder": {
+      "section": {
+        "title": "Custom folder sync",
+        "helper": "Pick the folders to sync into MailAgent; their mail gets full AI triage, Notion sync, and full-text search. None selected by default."
+      },
+      "window": {
+        "pastDays": {
+          "label": "Initial sync window (days)",
+          "helper": "Only fetch the last N days; larger = slower first sync and more disk."
+        },
+        "maxMessages": {
+          "label": "Per-folder cap (messages)",
+          "helper": "Guards against huge mailboxes; truncates oldest beyond the cap."
+        }
+      },
+      "picker": {
+        "refresh": "Refresh",
+        "retry": "Retry",
+        "save": "Save",
+        "saving": "Saving…",
+        "loading": "Loading…",
+        "loadingMeta": "Fetching folders…",
+        "summary": "{{count}} folders",
+        "refreshedAt": "refreshed {{time}}",
+        "expand": "Expand",
+        "collapse": "Collapse",
+        "large": "Large",
+        "largeTip": "Over 1,000 messages — first sync may be slow",
+        "systemLockTip": "System folder · always synced",
+        "systemState": "System · always synced",
+        "dirtyHint": "Restart the sync service to apply",
+        "saveOk": "Folder whitelist saved",
+        "saveFail": "Save failed",
+        "errorTitle": "Failed to fetch folders",
+        "emptyTitle": "No custom folders to sync",
+        "emptyBody": "No folders beyond Inbox / Outbox were found in your mailbox. Create one in Outlook, then hit Refresh.",
+        "gatedTitle": "Requires the davmail backend",
+        "gatedBody": "Folder discovery, selection, and sync are only available on the davmail backend. Switch backends under Accounts to enable this section."
+      }
     }
   },
   "updater": {
@@ -1891,7 +1940,10 @@
       "promptPlaceholder": "Empty = built-in chief-of-staff persona (auto per daily/weekly/monthly); type to override",
       "triggerMode": "Trigger",
       "triggerHint": "Lookback basis",
-      "trigger": { "rolling_24h": "Rolling 24h", "natural_day": "Natural day (yesterday)" },
+      "trigger": {
+        "rolling_24h": "Rolling 24h",
+        "natural_day": "Natural day (yesterday)"
+      },
       "timezone": "Timezone",
       "timezoneHint": "Empty = local; used for natural-day / week / month bounds",
       "timezonePlaceholder": "e.g. Asia/Shanghai (empty = local)",

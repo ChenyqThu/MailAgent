@@ -50,12 +50,15 @@ import type {
   EmailFlagOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  FolderDiscoverResult,
   FolderEmailDetail,
   FolderEmailMeta,
   FolderListOpts,
   FolderSearchOpts,
   FolderSearchResult,
+  FolderSetWhitelistResult,
   FolderSyncStatusResult,
+  FolderWhitelistResult,
   JobEnqueueResult,
   JobRecord,
   ListOpts,
@@ -357,6 +360,23 @@ export class HttpApi implements MailApi {
     syncStatus: (): Promise<FolderSyncStatusResult> =>
       // Returns the whole {states, counts} shape.
       this.req<FolderSyncStatusResult>('GET', '/folder/sync-status'),
+
+    // 多文件夹同步 (P3) — discover + whitelist。davmail-only: serve-api 对非
+    // davmail 后端返回 400 E_INVALID_ARG → req() 抛带 code 的 Error, FolderPicker
+    // 据此切门控态。远程 web 直连这些端点 (与本地 daemon 转发同 wire)。
+    discover: (opts?: { counts?: boolean }): Promise<FolderDiscoverResult> =>
+      this.req<FolderDiscoverResult>('GET', '/folder/discover', {
+        // 后端默认 counts=true; 显式传以保持 wire 清晰。
+        query: { counts: opts?.counts ?? true }
+      }),
+
+    getWhitelist: (): Promise<FolderWhitelistResult> =>
+      this.req<FolderWhitelistResult>('GET', '/folder/whitelist'),
+
+    setWhitelist: (imapNames: string[]): Promise<FolderSetWhitelistResult> =>
+      this.req<FolderSetWhitelistResult>('PUT', '/folder/whitelist', {
+        body: { folders: imapNames }
+      }),
 
     // Writes — CLI-write/CalDAV-write, deferred.
     syncNow: () => notImplemented('folder.syncNow'),

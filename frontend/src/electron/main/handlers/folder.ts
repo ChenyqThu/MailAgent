@@ -13,20 +13,24 @@ import type { Database, Statement } from 'better-sqlite3'
 import { ipcMain } from 'electron'
 
 import { callCli } from '../cli_runner'
+import { daemonRequest } from '../daemon_api'
 import { getDb } from '../db'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import { smartQueryTransform } from './email'
 import type {
   FolderApi,
   FolderAttachmentMeta,
+  FolderDiscoverResult,
   FolderEmailDetail,
   FolderEmailMeta,
   FolderListOpts,
   FolderName,
   FolderSearchOpts,
   FolderSearchResult,
+  FolderSetWhitelistResult,
   FolderSyncStateItem,
-  FolderSyncStatusResult
+  FolderSyncStatusResult,
+  FolderWhitelistResult
 } from '@shared/api/types'
 
 const WRITE_TIMEOUT_MS = 120_000
@@ -307,6 +311,30 @@ export function runFolderEditDraft(opts: FolderEditDraftArgs): Promise<unknown> 
   return callCli(args, { write: true, needsAuth: true, timeoutMs: WRITE_TIMEOUT_MS })
 }
 
+// ---- 多文件夹同步 (P3) — discover/whitelist (daemon → serve-api 转发) ---------
+//
+// 这三个不直读 SQLite (discover 要现连 IMAP LIST, whitelist 读/写 .env), 故经
+// daemonRequest 转发到本机 serve-api in-process service (D1 架构, 注本地 token),
+// 与远程 web 的 HttpApi 同 wire。serve-api 对非 davmail 后端返回 400 E_INVALID_ARG
+// → daemonRequest 抛 ApiError{code} → envelopeFromCli 收成 {ok:false,code} 过 IPC →
+// ElectronApi.unwrap 重抛带 code → FolderPicker 据此切门控态。
+
+export function runFolderDiscover(counts = true): Promise<FolderDiscoverResult> {
+  return daemonRequest<FolderDiscoverResult>('GET', '/folder/discover', {
+    query: { counts }
+  })
+}
+
+export function runFolderGetWhitelist(): Promise<FolderWhitelistResult> {
+  return daemonRequest<FolderWhitelistResult>('GET', '/folder/whitelist')
+}
+
+export function runFolderSetWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult> {
+  return daemonRequest<FolderSetWhitelistResult>('PUT', '/folder/whitelist', {
+    body: { folders: imapNames }
+  })
+}
+
 // ---- IPC wiring -------------------------------------------------------------
 
 export function registerFolderHandlers(): void {
@@ -399,6 +427,32 @@ export function registerFolderHandlers(): void {
       return envelopeFromCli(runFolderEditDraft(opts))
     }
   )
+
+  // 多文件夹同步 (P3) — discover/whitelist。daemon → serve-api 转发, envelope 形态
+  // 过 IPC 保住 error.code (davmail 门控)。
+  ipcMain.handle(
+    'folder:discover',
+    async (_evt, opts?: { counts?: boolean }): Promise<WriteEnvelope<FolderDiscoverResult>> =>
+      envelopeFromCli<FolderDiscoverResult>(runFolderDiscover(opts?.counts ?? true))
+  )
+  ipcMain.handle(
+    'folder:getWhitelist',
+    async (): Promise<WriteEnvelope<FolderWhitelistResult>> =>
+      envelopeFromCli<FolderWhitelistResult>(runFolderGetWhitelist())
+  )
+  ipcMain.handle(
+    'folder:setWhitelist',
+    async (_evt, imapNames: unknown): Promise<WriteEnvelope<FolderSetWhitelistResult>> => {
+      if (!Array.isArray(imapNames) || !imapNames.every((n) => typeof n === 'string')) {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:setWhitelist requires string[]'
+        }
+      }
+      return envelopeFromCli<FolderSetWhitelistResult>(runFolderSetWhitelist(imapNames))
+    }
+  )
 }
 
 // Test escape hatch (mirrors handlers/calendar.ts __testing).
@@ -412,7 +466,10 @@ export const __testing = {
   runFolderMove,
   runFolderSendDraft,
   runFolderCreateDraft,
-  runFolderEditDraft
+  runFolderEditDraft,
+  runFolderDiscover,
+  runFolderGetWhitelist,
+  runFolderSetWhitelist
 }
 
 // Re-export the renderer-facing type so test / other modules can import from
