@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
@@ -73,6 +74,27 @@ function renderIcon(icon: React.ReactNode): React.ReactNode {
   })
 }
 
+/** Wrap a nav row in HoverTip when a tooltip `title` is set. Callers pass
+ *  `title={collapsed ? label : undefined}` so the tooltip ONLY appears in
+ *  collapsed (icon-only) mode where the label text is hidden. Native `title=`
+ *  is unreliable in Electron (HoverTip.tsx header) — so when wrapping we drop
+ *  the native attr to avoid a double tooltip. `side="right"` because the nav
+ *  is the leftmost rail; the chip pops toward the content area. Expanded mode
+ *  (title undefined) renders the row bare — no tooltip, as before.
+ *
+ *  `portal` lifts the chip to `document.body` (fixed) so it isn't clipped by
+ *  the collapsed `<aside>` (~56px wide) nor by the body's `overflow-y-auto`,
+ *  which previously hid the `side="right"` chip + forced a horizontal
+ *  scrollbar (user: "tooltip 应该在更高独立层级出现"). */
+function maybeWrapTip(title: string | undefined, child: React.ReactElement): React.ReactElement {
+  if (!title) return child
+  return (
+    <HoverTip text={title} side="right" portal className="w-full">
+      {child}
+    </HoverTip>
+  )
+}
+
 function NavRow({
   icon,
   label,
@@ -86,12 +108,12 @@ function NavRow({
   // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
   // `.row-selected` capability. Screenreaders announce aria-disabled.
   if (disabled) {
-    return (
+    return maybeWrapTip(
+      title,
       <div
         role="link"
         aria-disabled="true"
         tabIndex={-1}
-        title={title}
         data-disabled="true"
         className={cn(
           'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
@@ -104,11 +126,11 @@ function NavRow({
       </div>
     )
   }
-  return (
+  return maybeWrapTip(
+    title,
     <button
       type="button"
       onClick={onClick}
-      title={title}
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
@@ -375,6 +397,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={MAILBOX_ICON.inbox}
             label={t('nav.inbox')}
+            title={collapsed ? t('nav.inbox') : undefined}
             selected={selectedView === 'inbox'}
             onClick={() => handleViewClick('inbox')}
             right={
@@ -389,12 +412,14 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={MAILBOX_ICON.outbox}
             label={t('nav.outbox')}
+            title={collapsed ? t('nav.outbox') : undefined}
             selected={selectedView === 'outbox'}
             onClick={() => handleViewClick('outbox')}
           />
           <NavRow
             icon={MAILBOX_ICON.flagged}
             label={t('nav.flagged')}
+            title={collapsed ? t('nav.flagged') : undefined}
             selected={selectedView === 'flagged'}
             onClick={() => handleViewClick('flagged')}
             right={
@@ -406,6 +431,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={MAILBOX_ICON.all}
             label={t('nav.allMail')}
+            title={collapsed ? t('nav.allMail') : undefined}
             selected={selectedView === 'all'}
             onClick={() => handleViewClick('all')}
             right={allTotal > 0 ? <TotalCount count={allTotal} /> : undefined}
@@ -432,6 +458,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<Sparkles size={15} strokeWidth={1.75} />}
             label={t('chat.backend.notionAgent')}
+            title={collapsed ? t('chat.backend.notionAgent') : undefined}
             selected={pathname === '/notion-agent'}
             onClick={() => navigate({ to: '/notion-agent' })}
             right={<OnlineDot online={notionAgentOnline} />}
@@ -441,6 +468,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<Sliders size={15} strokeWidth={1.75} />}
             label={t('chat.backend.customApi')}
+            title={collapsed ? t('chat.backend.customApi') : undefined}
             selected={onAgents}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
@@ -448,6 +476,7 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<History size={15} strokeWidth={1.75} />}
             label={t('nav.aiSessions')}
+            title={collapsed ? t('nav.aiSessions') : undefined}
             selected={pathname === '/sessions'}
             onClick={() => navigate({ to: '/sessions' })}
           />
@@ -468,18 +497,21 @@ export function Sidebar(): React.ReactElement {
           <NavRow
             icon={<Activity size={15} strokeWidth={1.75} />}
             label="LLM Dashboard"
+            title={collapsed ? 'LLM Dashboard' : undefined}
             selected={pathname.startsWith('/admin/llm') || pathname === '/llm'}
             onClick={() => navigate({ to: '/admin/llm' })}
           />
           <NavRow
             icon={<BarChart3 size={15} strokeWidth={1.75} />}
             label={t('nav.adminKanban')}
+            title={collapsed ? t('nav.adminKanban') : undefined}
             selected={pathname === '/admin/kanban' || pathname === '/admin'}
             onClick={() => navigate({ to: '/admin/kanban' })}
           />
           <NavRow
             icon={<CalendarDays size={15} strokeWidth={1.75} />}
             label={t('nav.calendar')}
+            title={collapsed ? t('nav.calendar') : undefined}
             selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
             onClick={() => navigate({ to: '/admin/calendar', search: { view: 'week' } })}
           />
@@ -491,6 +523,7 @@ export function Sidebar(): React.ReactElement {
         <NavRow
           icon={<Settings size={15} strokeWidth={1.75} />}
           label={t('nav.settings')}
+          title={collapsed ? t('nav.settings') : undefined}
           selected={pathname === '/settings'}
           onClick={() => navigate({ to: '/settings', search: { tab: 'general' } })}
           right={<kbd>⌘,</kbd>}
@@ -498,6 +531,7 @@ export function Sidebar(): React.ReactElement {
         <NavRow
           icon={<HelpCircle size={15} strokeWidth={1.75} />}
           label={t('nav.shortcuts')}
+          title={collapsed ? t('nav.shortcuts') : undefined}
           onClick={openKeyboardHelp}
           right={<kbd>?</kbd>}
         />

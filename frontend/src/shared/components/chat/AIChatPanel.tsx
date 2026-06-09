@@ -24,14 +24,12 @@ import { useShortcut } from '@shared/hooks/useShortcut'
 import { useQuery } from '@tanstack/react-query'
 
 import { cn } from '@shared/lib/cn'
-import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
-import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { BackendSelector, type BackendChoice } from './BackendSelector'
 import { backendSupportsThinking } from './backend_thinking'
-import { ChatSidebar } from './ChatSidebar'
+import { ChatHistoryPopover } from './ChatHistoryPopover'
 import { Composer } from './Composer'
 import { ContextChips } from './ContextChips'
 import { MessageList, type DraftHandlers, type UserHandlers } from './MessageList'
@@ -177,7 +175,20 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // switching to a non-Claude model (gpt-5.5 / notion-agent) never sends thinking:true.
   const thinkingSupported = backendSupportsThinking(backend)
 
-  const chat = useEmailChat(activeInternalId)
+  // 交付文档 §3.1 (Bug 4) — scope the chat surface to (email, backend kind).
+  // Notion Agent and Custom AI are independent assistants; passing backend.kind
+  // makes a backend switch re-scope sessions + active conversation so the two
+  // agents' histories never bleed into each other. backend.kind change → the
+  // hook treats it as a navigation event (re-filter sessions, restore that
+  // kind's last-open conversation, abort any in-flight stream on the old kind).
+  const chat = useEmailChat(activeInternalId, backend.kind)
+  // 交付文档 §3.1 — alias the two chat members the pendingOpen effect reads so
+  // react-hooks/exhaustive-deps tracks each as a distinct identifier (the rule
+  // collapses multi-member access on the un-memoized `chat` object to a demand
+  // for the whole `chat`, which changes identity every render and would re-run
+  // the effect spuriously). Equivalent to listing chat.sessions/chat.selectSession.
+  const chatSessions = chat.sessions
+  const chatSelectSession = chat.selectSession
 
   // Sprint 14 PR G polish — lazy-load preview effect. Lives AFTER
   // `chat = useEmailChat(...)` so the JSX hoisting ordering lint
@@ -239,15 +250,43 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // loaded sessions belong to the target email (email_id match) so we don't
   // act on the previous email's stale list mid-switch, and we drop a target
   // that no longer exists once the list is in hand rather than looping.
+  //
+  // 交付文档 §3.1 — with per-kind session scoping the target row only appears in
+  // `chat.sessions` once the panel is on the session's OWN backend kind. So if
+  // the panel is on a different kind, switch first (selectBackend) and bail —
+  // the next render (now on the right kind, the hook re-filtered + reloaded that
+  // kind's sessions) finds the target and selects it. One-shot pendingOpen is
+  // consumed only after the select fires, so the kind-switch pass doesn't drop it.
   useEffect(() => {
     if (pendingOpen === null) return
     if (activeInternalId !== pendingOpen.emailId) return
-    const loadedForThisEmail = chat.sessions.some((s) => s.email_id === pendingOpen.emailId)
+    if (backend.kind !== pendingOpen.backendKind) {
+      // signal-consumption action effect: park the kind switch so the next
+      // render re-scopes the hook onto the session's agent. setState is the
+      // intended action here, not derived state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      selectBackend(
+        pendingOpen.backendKind === 'custom-api'
+          ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
+          : { kind: 'notion-agent', model: null, agentPageId: null }
+      )
+      return
+    }
+    const loadedForThisEmail = chatSessions.some((s) => s.email_id === pendingOpen.emailId)
     if (!loadedForThisEmail) return
-    const target = chat.sessions.find((s) => s.id === pendingOpen.sessionId)
-    if (target) void chat.selectSession(pendingOpen.sessionId)
+    const target = chatSessions.find((s) => s.id === pendingOpen.sessionId)
+    if (target) void chatSelectSession(pendingOpen.sessionId)
     consumePendingOpen()
-  }, [pendingOpen, activeInternalId, chat.sessions, chat.selectSession, consumePendingOpen])
+  }, [
+    pendingOpen,
+    activeInternalId,
+    backend.kind,
+    backend.model,
+    selectBackend,
+    chatSessions,
+    chatSelectSession,
+    consumePendingOpen
+  ])
 
   // Pull AI fields + email detail (for thread_id) + thread sibling count
   // for the ContextChips header.
@@ -585,45 +624,6 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
 
   const backendName = backendShortLabel(backend, agentName)
 
-  // Lane C2 — ChatSidebar (140px) 展开/折叠挤压。同 C1 手法：始终 mount（首次
-  // 打开后不卸载）+ overflow:hidden wrapper width 0↔140 tween，sidebarOpen 切换
-  // 触发。reduced-motion 直接切。首帧 sidebarOpen=false 时初始 width:0 防闪现。
-  const SIDEBAR_WIDTH = 140
-  const reduceMotion = useReducedMotion()
-  const sidebarWrapRef = useRef<HTMLDivElement>(null)
-  // keep-mounted latch: 初值 = 当前 sidebarOpen 态（启动即开时无一帧延迟），首次
-  // 打开后永久 true（绝不回 false → 保留 sidebar 状态 / 滚动）。effect 接首次
-  // false→true 的转变（首次打开晚一帧挂载, 主理人已接受）。
-  const [mountSidebar, setMountSidebar] = useState(sidebarOpen)
-  useEffect(() => {
-    // 把 sidebarOpen 信号翻译成一次性 "已挂载" latch（同 useNewlyAddedIds 的
-    // effect-body setState 正解）；只单向 false→true, 不会级联。
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sidebarOpen) setMountSidebar(true)
-  }, [sidebarOpen])
-  useGSAP(
-    () => {
-      const wrap = sidebarWrapRef.current
-      if (!wrap) return
-      const target = sidebarOpen ? SIDEBAR_WIDTH : 0
-      if (reduceMotion) {
-        gsap.set(wrap, { width: target })
-        return
-      }
-      gsap.to(wrap, {
-        width: target,
-        duration: sidebarOpen ? DUR.base : DUR.fast,
-        onStart: () => {
-          wrap.style.willChange = 'width'
-        },
-        onComplete: () => {
-          wrap.style.willChange = ''
-        }
-      })
-    },
-    { dependencies: [sidebarOpen, reduceMotion] }
-  )
-
   return (
     <aside
       aria-label="ai-chat-panel"
@@ -642,7 +642,9 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
           no-drag 防止点击穿透到 drag handle. */}
       <div
         className={cn(
-          'h-10 border-b border-ink-border flex items-center shrink-0',
+          // task 06-08-chat §3.1 — `relative` so the History popover anchors
+          // under the header's History button (was a left-rail sidebar).
+          'relative h-10 border-b border-ink-border flex items-center shrink-0',
           fullScreen ? 'pl-[78px] pr-3' : 'px-3'
         )}
         style={fullScreen ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
@@ -670,12 +672,15 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
               <Plus size={13} strokeWidth={2} />
             </button>
           </HoverTip>
-          {/* Sprint 14 PR A — History button toggles the session sidebar
-              (left rail inside the panel). aria-pressed reflects state so
-              screen readers announce the toggle correctly. */}
+          {/* task 06-08-chat §3.1 — History button toggles the session-history
+              POPOVER (anchored under this header; was a left-rail sidebar).
+              aria-pressed reflects open state. data-chat-history-toggle lets
+              the popover's outside-click handler exclude this button (it owns
+              open/close). */}
           <HoverTip text={`${t('chat.history')}\n${t('chat.historyHint')}`} side="bottom">
             <button
               type="button"
+              data-chat-history-toggle
               aria-label={t('chat.history')}
               aria-pressed={sidebarOpen}
               onClick={() => toggleSidebar()}
@@ -738,39 +743,32 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
             </button>
           </HoverTip>
         </div>
+
+        {/* task 06-08-chat §3.1 — per-agent session history popover, anchored
+            under the History button. Open state = sidebarOpen (reused; the
+            store key is now popover-open semantics). Switching agents keeps it
+            open (outside-click excludes [data-chat-agent-switch]) and the list
+            re-scopes because chat.sessions is filtered by backend.kind. */}
+        {sidebarOpen && (
+          <ChatHistoryPopover
+            backendKind={backend.kind}
+            sessions={chat.sessions}
+            activeSessionId={chat.activeSessionId}
+            previews={sessionPreviews}
+            onSelectSession={(sid) => void chat.selectSession(sid)}
+            onNewSession={() => chat.newSession()}
+            onClose={() => setSidebarOpen(false)}
+            onDeleteSession={handleDeleteSession}
+          />
+        )}
       </div>
 
-      {/* Sprint 14 PR A — wrap sidebar + main column in a flex row so the
-          collapsible history rail can sit left-of the BackendSelector /
-          MessageList / Composer stack. min-h-0 keeps the children's
-          overflow-auto regions correctly scrollable inside the parent
-          flex-col aside. */}
+      {/* task 06-08-chat §3.1 — main column now spans the full panel width
+          (the 140px history rail became a floating popover). min-w-0 keeps
+          the Bug 3 fix: as a flex child its default min-width:auto would let
+          wide MessageList tool-output push the 360px <aside> past its fixed
+          width. Pairs with the MessageList root's own min-w-0. */}
       <div className="flex-1 flex min-h-0">
-        {/* Lane C2 — 挤压 wrapper。overflow-hidden 裁掉折叠时溢出的 140px 侧栏；
-            初始 inline width:0 防首帧闪现（GSAP 接管后覆写）。ChatSidebar 自身仍
-            是 w-[140px] shrink-0，wrapper 收到 0 时把它裁没。 */}
-        <div
-          ref={sidebarWrapRef}
-          className="overflow-hidden shrink-0 flex min-h-0"
-          style={{ width: 0 }}
-        >
-          {mountSidebar && (
-            <ChatSidebar
-              sessions={chat.sessions}
-              activeSessionId={chat.activeSessionId}
-              previews={sessionPreviews}
-              onSelectSession={(sid) => void chat.selectSession(sid)}
-              onNewSession={() => chat.newSession()}
-              onClose={() => setSidebarOpen(false)}
-              onDeleteSession={handleDeleteSession}
-            />
-          )}
-        </div>
-        {/* Bug 3 (task 06-08-chat) — min-w-0 on the main column. As a flex
-            item in the horizontal row above, its default min-width:auto would
-            otherwise let wide MessageList tool-output content push the column
-            (and thus the 360px <aside>) past its fixed width. Pairs with the
-            MessageList root's own min-w-0. */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <BackendSelector value={backend} onChange={selectBackend} agentName={agentName} />
           <ContextChips
@@ -832,6 +830,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                   draftHandlers={draftHandlers}
                   userHandlers={userHandlers}
                   pendingConfirmations={pendingConfirmations}
+                  liveToolCalls={chat.liveToolCalls}
                   onConfirmTool={handleConfirmTool}
                   onCancelTool={handleCancelTool}
                 />
@@ -858,7 +857,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                 currentModel={backend.kind === 'custom-api' ? backend.model : null}
                 availableModels={
                   backend.kind === 'custom-api'
-                    ? ['claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.5']
+                    ? ['claude-sonnet-4-6', 'claude-opus-4-8', 'gpt-5.5']
                     : []
                 }
                 onModelChange={(model) =>

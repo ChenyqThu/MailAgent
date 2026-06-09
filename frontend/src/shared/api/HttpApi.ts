@@ -13,11 +13,12 @@
 //
 // Methods listed in the 减法清单 (stub_keep) stay as notImplemented/noop:
 // chat.*, ai.translateBatch/abortTranslate, email.createDraft, calendar
-// WRITES, folder WRITES, settings WRITE/secret, updater.*, env.*, services.*,
-// prompts.*, notionAgent.*, island.*, notion.updateFlag, events.status/
+// WRITES, folder WRITES, settings WRITE/secret, updater.*, env.set, services.*,
+// prompts.write, notionAgent WRITES, island.*, notion.updateFlag, events.status/
 // reconnect. Implemented surfaces: email/attachment (full read + write),
 // ai.getCached/deleteCached, llm.run/stats/selftest, admin.*, calendar READS,
-// folder READS.
+// folder READS, env.get (read-only .env snapshot), prompts.list/read,
+// notionAgent.getConfig/listModels/listAgents, settings.get/secretsStatus.
 
 import type {
   ReportApi,
@@ -50,6 +51,7 @@ import type {
   EmailFlagOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  EnvSnapshot,
   FolderCleanupResult,
   FolderDiscoverResult,
   FolderManageResult,
@@ -601,9 +603,11 @@ export class HttpApi implements MailApi {
     onStatus: (): (() => void) => () => undefined
   }
 
-  // No `.env` access / pm2 spawn from a remote browser; no endpoint.
+  // task 06-08-chat Bug 6 — 远程 config: env.get 读 host .env 受管快照经 serve-api
+  // （GET /api/env，secret 脱敏 + 非受管 key 不出网）。SettingsShell mount 必调它，
+  // 否则 EnvField 全卡 loading。env.set 仍 stub —— 远程只读，EnvField 在 web 下控件 disabled。
   env = {
-    get: () => notImplemented('env.get'),
+    get: (): Promise<EnvSnapshot> => this.req<EnvSnapshot>('GET', '/env'),
     set: () => notImplemented('env.set')
   }
 

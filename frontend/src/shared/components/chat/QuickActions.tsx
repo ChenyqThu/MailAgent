@@ -8,7 +8,7 @@
 // a toolbar, not a forgettable text-only pill bar.
 
 import { useTranslation } from 'react-i18next'
-import { AlignLeft, Languages, Link2, ListChecks, Send } from 'lucide-react'
+import { AlignLeft, ListChecks, Send } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -36,28 +36,16 @@ const ACTIONS: ActionDef[] = [
     icon: AlignLeft
   },
   {
-    key: 'draft',
-    labelKey: 'chat.quickActions.draft',
-    promptKey: 'chat.quickActions.draftPrompt',
-    icon: Send
-  },
-  {
-    key: 'translate',
-    labelKey: 'chat.quickActions.translate',
-    promptKey: 'chat.quickActions.translatePrompt',
-    icon: Languages
-  },
-  {
     key: 'extract',
     labelKey: 'chat.quickActions.extract',
     promptKey: 'chat.quickActions.extractPrompt',
     icon: ListChecks
   },
   {
-    key: 'linkNotion',
-    labelKey: 'chat.quickActions.linkNotion',
-    promptKey: 'chat.quickActions.linkNotionPrompt',
-    icon: Link2
+    key: 'draft',
+    labelKey: 'chat.quickActions.draft',
+    promptKey: 'chat.quickActions.draftPrompt',
+    icon: Send
   }
 ]
 

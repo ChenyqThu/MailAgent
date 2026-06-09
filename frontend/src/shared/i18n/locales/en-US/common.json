@@ -454,6 +454,8 @@
     },
     "sidebar": {
       "title": "History",
+      "recentTitle": "{agent} · Recent",
+      "notShared": "The two agents don't share history",
       "empty": "No previous sessions · send the first message to start one",
       "newSession": "New chat",
       "close": "Close sidebar",
@@ -517,6 +519,14 @@
       "output": "Output",
       "userEdited": "user-edited"
     },
+    "toolGroup": {
+      "using": "Used {n} tools",
+      "running": "Using tools…"
+    },
+    "toolStep": {
+      "request": "Request",
+      "result": "Result"
+    },
     "attachment": {
       "remove": "Remove attachment"
     },
@@ -578,6 +588,7 @@
     },
     "thinking": {
       "label": "Thinking",
+      "streaming": "Thinking…",
       "toggleOn": "Turn on thinking mode (stream the model's reasoning)",
       "toggleOff": "Turn off thinking mode",
       "unsupported": "Thinking mode is only available with Custom API (Claude)"
@@ -612,7 +623,12 @@
       "cancel": "Cancel",
       "confirm": "Confirm",
       "confirming": "Confirming…",
-      "failed": "Confirm failed"
+      "failed": "Confirm failed",
+      "tierWrite": "Write",
+      "tierEdit": "Edit",
+      "viewDetails": "View details",
+      "decidedOk": "Authorized · callback received, executing",
+      "decidedNo": "Rejected · no changes made to your mailbox"
     },
     "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
   },
@@ -1006,6 +1022,10 @@
       "reveal": "Show",
       "hide": "Hide",
       "secretSaved": "Written to keychain + .env"
+    },
+    "env": {
+      "loadError": "Failed to load settings",
+      "remoteReadonly": "Remote is read-only; edit settings on the host machine"
     },
     "tabs": {
       "general": "General",

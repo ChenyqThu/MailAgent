@@ -454,6 +454,8 @@
     },
     "sidebar": {
       "title": "会话历史",
+      "recentTitle": "{agent} · 最近会话",
+      "notShared": "两个 Agent 不共享会话历史",
       "empty": "暂无历史会话 · 发送第一条消息后会出现在这里",
       "newSession": "新会话",
       "close": "关闭侧栏",
@@ -517,6 +519,14 @@
       "output": "输出",
       "userEdited": "已编辑"
     },
+    "toolGroup": {
+      "using": "使用了 {n} 个工具",
+      "running": "正在使用工具…"
+    },
+    "toolStep": {
+      "request": "Request",
+      "result": "Result"
+    },
     "attachment": {
       "remove": "移除附件"
     },
@@ -578,6 +588,7 @@
     },
     "thinking": {
       "label": "思考过程",
+      "streaming": "思考中…",
       "toggleOn": "开启思考模式（展示模型推理过程）",
       "toggleOff": "关闭思考模式",
       "unsupported": "思考模式仅支持 Custom API（Claude）"
@@ -612,7 +623,12 @@
       "cancel": "拒绝",
       "confirm": "授权",
       "confirming": "授权中…",
-      "failed": "授权失败"
+      "failed": "授权失败",
+      "tierWrite": "写操作",
+      "tierEdit": "可编辑",
+      "viewDetails": "查看详情",
+      "decidedOk": "已授权 · 收到回调，开始执行",
+      "decidedNo": "已拒绝 · 未对邮箱做任何改动"
     },
     "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
   },
@@ -1006,6 +1022,10 @@
       "reveal": "显示",
       "hide": "隐藏",
       "secretSaved": "已写入 keychain + .env"
+    },
+    "env": {
+      "loadError": "配置加载失败",
+      "remoteReadonly": "远程为只读，配置请在本机修改"
     },
     "tabs": {
       "general": "通用",

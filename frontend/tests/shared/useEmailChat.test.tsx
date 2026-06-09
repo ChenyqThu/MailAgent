@@ -166,7 +166,7 @@ afterEach(() => {
 
 describe('useEmailChat — initial load', () => {
   test('emailId=null yields empty messages, no API calls', () => {
-    const { result } = renderHook(() => useEmailChat(null))
+    const { result } = renderHook(() => useEmailChat(null, 'custom-api'))
     expect(result.current.messages).toEqual([])
     expect(result.current.activeSessionId).toBeNull()
     expect(result.current.isStreaming).toBe(false)
@@ -175,7 +175,7 @@ describe('useEmailChat — initial load', () => {
 
   test('emailId set with no sessions → empty messages, null activeSessionId', async () => {
     mockChatListSessions.mockResolvedValue([])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalledWith(101))
     expect(result.current.messages).toEqual([])
     expect(result.current.activeSessionId).toBeNull()
@@ -190,7 +190,7 @@ describe('useEmailChat — initial load', () => {
       fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 7, role: 'assistant', content: 'hello' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.messages.length).toBe(2))
     expect(result.current.activeSessionId).toBe(7)
     expect(mockChatListMessages).toHaveBeenCalledWith(7)
@@ -208,14 +208,14 @@ describe('useEmailChat — initial load', () => {
         content: 'so far'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
     expect(result.current.isStreaming).toBe(true)
   })
 
   test('listSessions throws → error state populated', async () => {
     mockChatListSessions.mockRejectedValue(new Error('db locked'))
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.error).not.toBeNull())
     expect(result.current.error?.code).toBe('E_LOAD')
     expect(result.current.error?.message).toBe('db locked')
@@ -234,7 +234,7 @@ describe('useEmailChat — send + stream', () => {
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
 
     await act(async () => {
@@ -264,7 +264,7 @@ describe('useEmailChat — send + stream', () => {
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.messages.length).toBe(2))
 
     act(() => {
@@ -299,7 +299,7 @@ describe('useEmailChat — send + stream', () => {
         status: 'streaming'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
     // After done, refresh returns the canonical complete message.
@@ -327,10 +327,17 @@ describe('useEmailChat — send + stream', () => {
     })
 
     await waitFor(() => expect(result.current.streamingMessageId).toBeNull())
-    const assistant = result.current.messages.find((m) => m.id === 101)!
-    expect(assistant.status).toBe('complete')
-    expect(assistant.content).toBe('so far and final')
-    expect(assistant.tokens_output).toBe(4)
+    // streamingMessageId clears synchronously in the done handler, but the
+    // canonical status/content/tokens land via the async refresh() that the
+    // handler kicks off afterwards. Asserting them synchronously here races the
+    // refresh (flaky: pass/pass/fail) — so poll inside waitFor until the
+    // refetched message is observed. tokens_output===4 is the refresh tell.
+    await waitFor(() => {
+      const assistant = result.current.messages.find((m) => m.id === 101)!
+      expect(assistant.status).toBe('complete')
+      expect(assistant.content).toBe('so far and final')
+      expect(assistant.tokens_output).toBe(4)
+    })
   })
 
   // task 06-08-chat Bug 1 — after the 3c cutover `finalizeMessage` is an
@@ -352,7 +359,7 @@ describe('useEmailChat — send + stream', () => {
         status: 'streaming'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
     // The finalize PATCH hasn't landed yet — the post-done refresh still sees
@@ -409,7 +416,7 @@ describe('useEmailChat — send + stream', () => {
         status: 'streaming'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
     // The post-done refresh races the finalize PATCH: the row is still
@@ -489,7 +496,7 @@ describe('useEmailChat — send + stream', () => {
         status: 'streaming'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
     // Make the NEXT listMessages call hang so we can land it AFTER done. This
@@ -569,7 +576,7 @@ describe('useEmailChat — send + stream', () => {
         status: 'streaming'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
@@ -685,9 +692,12 @@ describe('useEmailChat — send + stream', () => {
         status: 'streaming'
       })
     ])
-    const { result, rerender } = renderHook(({ id }: { id: number | null }) => useEmailChat(id), {
-      initialProps: { id: 101 }
-    })
+    const { result, rerender } = renderHook(
+      ({ id }: { id: number | null }) => useEmailChat(id, 'custom-api'),
+      {
+        initialProps: { id: 101 }
+      }
+    )
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
@@ -769,7 +779,7 @@ describe('useEmailChat — send + stream', () => {
         status: 'streaming'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
     act(() => {
@@ -794,7 +804,7 @@ describe('useEmailChat — send + stream', () => {
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.messages.length).toBe(2))
 
     // After tool_call, the refetch returns 3 rows.
@@ -818,7 +828,7 @@ describe('useEmailChat — send + stream', () => {
     mockChatListMessages.mockResolvedValue([
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
 
     act(() => {
@@ -835,7 +845,7 @@ describe('useEmailChat — send + stream', () => {
   test('event for unknown messageId schedules a refresh (recovers state)', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     mockChatListMessages.mockResolvedValue([])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
 
     // Initial render: messages=[]. A streaming chunk arrives for a
@@ -872,7 +882,7 @@ describe('useEmailChat — send + stream', () => {
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.messages.length).toBe(2))
 
     act(() => {
@@ -905,9 +915,12 @@ describe('useEmailChat — send + stream', () => {
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'A-user' }),
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: 'A-answer' })
     ])
-    const { result, rerender } = renderHook(({ id }: { id: number | null }) => useEmailChat(id), {
-      initialProps: { id: 101 }
-    })
+    const { result, rerender } = renderHook(
+      ({ id }: { id: number | null }) => useEmailChat(id, 'custom-api'),
+      {
+        initialProps: { id: 101 }
+      }
+    )
     await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1]))
 
     // send() runs chat.start → refresh(listMessages) → refreshSessions(listSessions).
@@ -959,9 +972,12 @@ describe('useEmailChat — abort + lifecycle', () => {
     mockChatListMessages.mockResolvedValueOnce([
       fakeMessage({ id: 101, session_id: 7, role: 'assistant', content: 'a', status: 'streaming' })
     ])
-    const { result, rerender } = renderHook(({ id }: { id: number | null }) => useEmailChat(id), {
-      initialProps: { id: 101 }
-    })
+    const { result, rerender } = renderHook(
+      ({ id }: { id: number | null }) => useEmailChat(id, 'custom-api'),
+      {
+        initialProps: { id: 101 }
+      }
+    )
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
 
     mockChatListSessions.mockResolvedValueOnce([fakeSession({ id: 8, email_id: 202 })])
@@ -974,7 +990,7 @@ describe('useEmailChat — abort + lifecycle', () => {
   test('unmount fires chat.abort on the active session', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
     mockChatListMessages.mockResolvedValue([])
-    const { unmount, result } = renderHook(() => useEmailChat(101))
+    const { unmount, result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
     unmount()
     expect(mockChatAbort).toHaveBeenCalledWith(7)
@@ -983,7 +999,7 @@ describe('useEmailChat — abort + lifecycle', () => {
   test('abortCurrent() fires chat.abort on the active session', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
     mockChatListMessages.mockResolvedValue([])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
     act(() => result.current.abortCurrent())
     expect(mockChatAbort).toHaveBeenCalledWith(7)
@@ -1001,7 +1017,7 @@ describe('useEmailChat — abort + lifecycle', () => {
         status: 'streaming'
       })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
 
     // The SSoT refresh after the abort should pull the row in its
@@ -1042,9 +1058,12 @@ describe('useEmailChat — abort + lifecycle', () => {
         })
     )
 
-    const { result, rerender } = renderHook(({ id }: { id: number | null }) => useEmailChat(id), {
-      initialProps: { id: 101 }
-    })
+    const { result, rerender } = renderHook(
+      ({ id }: { id: number | null }) => useEmailChat(id, 'custom-api'),
+      {
+        initialProps: { id: 101 }
+      }
+    )
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalledWith(101))
 
     // Fire send() — promise stays pending.
@@ -1070,7 +1089,7 @@ describe('useEmailChat — abort + lifecycle', () => {
 
   test('clearError() resets the error slot', async () => {
     mockChatListSessions.mockRejectedValue(new Error('db locked'))
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.error).not.toBeNull())
     act(() => result.current.clearError())
     expect(result.current.error).toBeNull()
@@ -1082,7 +1101,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
     expect(result.current.quotaCooldownUntil).toBeNull()
 
@@ -1112,7 +1131,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       userMessageId: 100,
       assistantMessageId: 101
     })
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
     expect(result.current.quotaCooldownUntil).toBeNull()
 
@@ -1143,7 +1162,7 @@ describe('useEmailChat — abort + lifecycle', () => {
 
   test('retryLast is null when no error / no failed input (state machine #3)', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
     expect(result.current.retryLast).toBeNull()
   })
@@ -1159,7 +1178,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       userMessageId: 100,
       assistantMessageId: 101
     })
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
 
     // Fire a send + emit a network error to surface retryLast.
@@ -1204,7 +1223,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       userMessageId: 100,
       assistantMessageId: 101
     })
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
 
     await act(async () => {
@@ -1223,7 +1242,7 @@ describe('useEmailChat — abort + lifecycle', () => {
   })
 
   test('send() rejects when emailId is null', async () => {
-    const { result } = renderHook(() => useEmailChat(null))
+    const { result } = renderHook(() => useEmailChat(null, 'custom-api'))
     await expect(result.current.send({ message: 'hi', backendKind: 'custom-api' })).rejects.toThrow(
       /no active email/
     )
@@ -1244,7 +1263,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       userMessageId: 100,
       assistantMessageId: 101
     })
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
 
     await act(async () => {
@@ -1272,7 +1291,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       userMessageId: 100,
       assistantMessageId: 101
     })
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(1))
 
     await act(async () => {
@@ -1323,7 +1342,7 @@ describe('useEmailChat — abort + lifecycle', () => {
     const future = Date.now() + 240_000
     withStubbedStorage({ 'mailagent.chat.quotaCooldownUntil': String(future) })
     mockChatListSessions.mockResolvedValue([])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
     expect(result.current.quotaCooldownUntil).toBe(future)
     vi.unstubAllGlobals()
@@ -1334,7 +1353,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       'mailagent.chat.quotaCooldownUntil': String(Date.now() - 5000)
     })
     mockChatListSessions.mockResolvedValue([])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
     expect(result.current.quotaCooldownUntil).toBeNull()
     // Expired entry was GC'd on read.
@@ -1349,7 +1368,7 @@ describe('useEmailChat — abort + lifecycle', () => {
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 1, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.streamingMessageId).toBe(101))
     act(() => {
       emitStream({
@@ -1391,7 +1410,7 @@ describe('useEmailChat — Sprint 10 reviewer L1/L2/L3 island envelope contracts
       fakeMessage({ id: 100, session_id: 5, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 5, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
 
     await act(async () => {
@@ -1458,7 +1477,7 @@ describe('useEmailChat — Sprint 10 reviewer L1/L2/L3 island envelope contracts
       fakeMessage({ id: 100, session_id: 5, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 5, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
     await act(async () => {
       await result.current.send({
@@ -1516,7 +1535,7 @@ describe('useEmailChat — Sprint 10 reviewer L1/L2/L3 island envelope contracts
       fakeMessage({ id: 100, session_id: 5, role: 'user', content: 'hi' }),
       fakeMessage({ id: 101, session_id: 5, role: 'assistant', content: '', status: 'streaming' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(mockChatListSessions).toHaveBeenCalled())
 
     await act(async () => {
@@ -1541,7 +1560,7 @@ describe('useEmailChat — Sprint 10 reviewer L1/L2/L3 island envelope contracts
 // Sprint 14 PR B — editMessage hook action.
 describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
   test('throws when no active session', async () => {
-    const { result } = renderHook(() => useEmailChat(null))
+    const { result } = renderHook(() => useEmailChat(null, 'custom-api'))
     await expect(
       result.current.editMessage({
         messageId: 1,
@@ -1559,7 +1578,7 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
       fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'old' }),
       fakeMessage({ id: 101, session_id: 7, role: 'assistant', content: 'reply' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
 
     // editMessage backend returns the new ids the dispatcher freshly
@@ -1608,7 +1627,7 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
       fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'old' }),
       fakeMessage({ id: 101, session_id: 7, role: 'assistant', content: 'reply' })
     ])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
 
     mockChatEditMessage.mockResolvedValue({
@@ -1639,7 +1658,7 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
   test('clears prior error before dispatching the edit (matches send() contract)', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
     mockChatListMessages.mockResolvedValue([fakeMessage({ id: 100, session_id: 7, role: 'user' })])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
 
     // Simulate a prior error landed on the panel — editMessage should
@@ -1678,7 +1697,7 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
   test('propagates dispatch failures so the caller (UserBubble) keeps editor open', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 7 })])
     mockChatListMessages.mockResolvedValue([fakeMessage({ id: 100, session_id: 7, role: 'user' })])
-    const { result } = renderHook(() => useEmailChat(101))
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
     await waitFor(() => expect(result.current.activeSessionId).toBe(7))
 
     const err = new Error('cannot edit assistant') as Error & { code?: string }
@@ -1695,5 +1714,127 @@ describe('useEmailChat — editMessage (Sprint 14 PR B)', () => {
         })
       ).rejects.toMatchObject({ code: 'E_INVALID_ARG' })
     })
+  })
+})
+
+// 交付文档 §3.1 (Bug 4) — per-(email, backendKind) session scoping. Notion Agent
+// and Custom AI are independent assistants: their session history + active
+// conversation must not bleed into each other. The hook filters the whole-email
+// session list to the active kind, remembers the active session per scope, and
+// treats a kind switch as a navigation event.
+describe('useEmailChat — per-kind session scoping (交付文档 §3.1)', () => {
+  type Props = { id: number | null; kind: 'notion-agent' | 'custom-api' }
+
+  test('sessions are filtered to the active backend kind', async () => {
+    // One email, two sessions on two kinds.
+    mockChatListSessions.mockResolvedValue([
+      fakeSession({ id: 1, backend_kind: 'custom-api', updated_at: 1_700_000_200_000 }),
+      fakeSession({ id: 2, backend_kind: 'notion-agent', updated_at: 1_700_000_100_000 })
+    ])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 1, role: 'assistant', content: 'custom' })
+    ])
+    const { result } = renderHook(() => useEmailChat(101, 'custom-api'))
+    // Public `sessions` only carries the custom-api row, never the notion one.
+    await waitFor(() => expect(result.current.sessions.map((s) => s.id)).toEqual([1]))
+    expect(result.current.activeSessionId).toBe(1)
+  })
+
+  test('kind switch re-scopes sessions + active conversation without a second listSessions', async () => {
+    mockChatListSessions.mockResolvedValue([
+      fakeSession({ id: 1, backend_kind: 'custom-api', updated_at: 1_700_000_200_000 }),
+      fakeSession({ id: 2, backend_kind: 'notion-agent', updated_at: 1_700_000_100_000 })
+    ])
+    // Session 1 (custom) loads first, then session 2 (notion) after the switch.
+    mockChatListMessages.mockImplementation(async (id: number) =>
+      id === 1
+        ? [fakeMessage({ id: 100, session_id: 1, role: 'assistant', content: 'custom-answer' })]
+        : [fakeMessage({ id: 200, session_id: 2, role: 'assistant', content: 'notion-answer' })]
+    )
+    const { result, rerender } = renderHook(({ id, kind }: Props) => useEmailChat(id, kind), {
+      initialProps: { id: 101, kind: 'custom-api' }
+    })
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+    expect(result.current.messages.map((m) => m.id)).toEqual([100])
+    // listSessions fetched exactly once for the email.
+    expect(mockChatListSessions).toHaveBeenCalledTimes(1)
+
+    // Switch kind → notion-agent. No new listSessions (cached list re-filtered);
+    // active conversation flips to the notion session.
+    rerender({ id: 101, kind: 'notion-agent' })
+    await waitFor(() => expect(result.current.activeSessionId).toBe(2))
+    // sessions re-filters synchronously, but messages load via the async
+    // listMessages(2) that resolves a tick after activeSessionId flips —
+    // asserting them synchronously here races that fetch (flaky). Poll both
+    // inside waitFor until the notion session's messages ([200]) are observed.
+    await waitFor(() => {
+      expect(result.current.sessions.map((s) => s.id)).toEqual([2])
+      expect(result.current.messages.map((m) => m.id)).toEqual([200])
+    })
+    // Crucially: still only one listSessions call — the kind switch reused the
+    // cached whole-email list instead of re-fetching.
+    expect(mockChatListSessions).toHaveBeenCalledTimes(1)
+  })
+
+  test('switching back to a kind restores the last-open session, not just the latest', async () => {
+    // custom-api has TWO sessions; the user will select the OLDER one, switch
+    // away to notion, and switch back — expecting the older one restored.
+    mockChatListSessions.mockResolvedValue([
+      fakeSession({ id: 1, backend_kind: 'custom-api', updated_at: 1_700_000_300_000 }),
+      fakeSession({ id: 3, backend_kind: 'custom-api', updated_at: 1_700_000_200_000 }),
+      fakeSession({ id: 2, backend_kind: 'notion-agent', updated_at: 1_700_000_100_000 })
+    ])
+    mockChatListMessages.mockImplementation(async (id: number) => [
+      fakeMessage({ id: id * 10, session_id: id, role: 'assistant', content: `s${id}` })
+    ])
+    const { result, rerender } = renderHook(({ id, kind }: Props) => useEmailChat(id, kind), {
+      initialProps: { id: 101, kind: 'custom-api' }
+    })
+    // Loads the latest custom session (id=1) by default.
+    await waitFor(() => expect(result.current.activeSessionId).toBe(1))
+
+    // User picks the OLDER custom session (id=3) from the sidebar.
+    await act(async () => {
+      await result.current.selectSession(3)
+    })
+    expect(result.current.activeSessionId).toBe(3)
+
+    // Switch to notion (loads its latest = id=2).
+    rerender({ id: 101, kind: 'notion-agent' })
+    await waitFor(() => expect(result.current.activeSessionId).toBe(2))
+
+    // Switch BACK to custom → restores id=3 (the last-open), NOT the latest id=1.
+    rerender({ id: 101, kind: 'custom-api' })
+    await waitFor(() => expect(result.current.activeSessionId).toBe(3))
+  })
+
+  test('kind switch aborts the in-flight stream on the old kind', async () => {
+    mockChatListSessions.mockResolvedValue([
+      fakeSession({ id: 1, backend_kind: 'custom-api' }),
+      fakeSession({ id: 2, backend_kind: 'notion-agent' })
+    ])
+    mockChatListMessages.mockImplementation(async (id: number) => [
+      fakeMessage({
+        id: id * 10,
+        session_id: id,
+        role: 'assistant',
+        content: 'x',
+        status: id === 1 ? 'streaming' : 'complete'
+      })
+    ])
+    const { result, rerender } = renderHook(({ id, kind }: Props) => useEmailChat(id, kind), {
+      initialProps: { id: 101, kind: 'custom-api' }
+    })
+    await waitFor(() => expect(result.current.streamingMessageId).toBe(10))
+
+    // Switching kind must tear down the old kind's stream (same as an email
+    // switch): the abort effect is keyed on (emailId, backendKind), so a
+    // kind-only change fires its cleanup → chat.abort(oldSession). The new
+    // kind's non-streaming session then leaves the panel un-streamed.
+    rerender({ id: 101, kind: 'notion-agent' })
+    await waitFor(() => expect(mockChatAbort).toHaveBeenCalledWith(1))
+    await waitFor(() => expect(result.current.activeSessionId).toBe(2))
+    expect(result.current.streamingMessageId).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
   })
 })

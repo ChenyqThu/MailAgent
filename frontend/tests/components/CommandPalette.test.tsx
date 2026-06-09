@@ -14,7 +14,7 @@
 //   4. Wired AI actions — markAllRead fires `mailApi.email.flag` batch;
 //      reRunAi fires `mailApi.llm.run` for each hit; summarize is
 //      disabled with a Soon pill.
-//   5. lastQuery persistence — localStorage prefill on reopen.
+//   5. Open behaviour — query starts empty on each open (no prefill).
 //
 // Everything is mocked; the real palette mounts inside a QueryClient host
 // + a RouterProvider stub (useNavigate is the only router API we touch).
@@ -376,27 +376,23 @@ describe('CommandPalette — interactions', () => {
   })
 })
 
-describe('CommandPalette — persistence', () => {
-  test('lastQuery is restored on reopen', async () => {
-    // Pre-seed localStorage via the same safe-write helper used by the
-    // component. Going through `window.localStorage` directly is brittle
-    // across happy-dom versions (some setups stub it differently); the
-    // component's own helper guarantees we match the production storage
-    // semantics.
+describe('CommandPalette — open behaviour', () => {
+  test('query starts empty on open (no last-session prefill)', async () => {
+    // Even if a stale last-session value lingers in localStorage, each open
+    // must start from an empty query — the palette is a fresh search every
+    // time. (Pre-seeding is best-effort; some happy-dom setups stub
+    // localStorage differently. The component never reads it anyway.)
     try {
       window.localStorage.setItem('mailagent.search.lastQuery', 'project')
     } catch {
-      /* skip — storage not available in this env, test still meaningful via prefill */
+      /* storage not available in this env — irrelevant, component never reads it */
     }
 
     openPalette()
     renderPalette()
     await waitFor(() => {
       const input = screen.getByRole('combobox') as HTMLInputElement
-      // Prefill should have happened during the open transition. If the
-      // env lacks localStorage entirely we tolerate '' (covered by the
-      // try/catch above; component never throws).
-      expect(['project', '']).toContain(input.value)
+      expect(input.value).toBe('')
     })
   })
 })
