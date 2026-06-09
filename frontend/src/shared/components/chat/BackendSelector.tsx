@@ -99,7 +99,10 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
               onClick={() => switchKind(kind)}
               className={cn(
                 'relative z-[1] flex-1 inline-flex items-center justify-center gap-1.5',
-                'h-8 rounded-[7px] text-meta',
+                // task 06-08-chat dogfood r3 — "字体小一号". seg tab labels
+                // (zh-CN "Notion Agent" / "Custom AI") drop text-meta(12px)→
+                // text-micro(11px), the CJK legibility floor (DESIGN.md §14).
+                'h-8 rounded-[7px] text-micro',
                 'transition-colors duration-fast',
                 active ? 'text-ink-fg font-semibold' : 'text-ink-fg-2 hover:text-ink-fg-1'
               )}
@@ -130,10 +133,13 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-body text-ink-fg font-medium truncate min-w-0">{activeName}</span>
+            {/* "字体小一号": active name text-body(14px)→text-meta(12px). Name
+                may be a CJK agent name — 12px stays above the 11px CJK floor. */}
+            <span className="text-meta text-ink-fg font-medium truncate min-w-0">{activeName}</span>
             <span className="w-1.5 h-1.5 rounded-full bg-ok shrink-0" aria-label="ok" />
           </div>
-          <div className="text-meta font-mono text-ink-fg-2 truncate">{activeMeta}</div>
+          {/* mono ascii sub-line text-meta(12px)→text-micro(11px). */}
+          <div className="text-micro font-mono text-ink-fg-2 truncate">{activeMeta}</div>
         </div>
       </div>
     </div>

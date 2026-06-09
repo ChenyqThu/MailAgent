@@ -194,8 +194,14 @@ function HistoryItem({
             active ? 'bg-coral/[0.09]' : 'text-ink-fg-1 hover:bg-ink-1'
           )}
         >
+          {/* task 06-08-chat dogfood r3 — "字体小一号". Item title (a CJK
+              user-message preview / model label) drops text-body(14px)→
+              text-meta(12px), still above the 11px CJK floor (DESIGN.md §14).
+              The header / meta / footer are already at text-micro(11px), the
+              CJK floor, so they hold there (a further step would go sub-11px
+              and blur CJK glyphs). */}
           <span
-            className={cn('text-body truncate', active && 'text-coral font-semibold')}
+            className={cn('text-meta truncate', active && 'text-coral font-semibold')}
             title={primary}
           >
             {primary}

@@ -10,7 +10,8 @@
 // Multi-line `text` is rendered with `whitespace-pre-line` so callers can
 // pass strings with `\n` for stacked detail (mockup §footer convention).
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import { cn } from '@shared/lib/cn'
 
@@ -24,7 +25,55 @@ interface HoverTipProps {
   side?: HoverTipSide
   /** Tailwind classes applied to the wrapper. */
   className?: string
+  /** Opt-in: render the tooltip chip into `document.body` via `createPortal`
+   *  with `position: fixed`, instead of as an inline absolutely-positioned
+   *  child of the wrapper. Needed where an ancestor clips overflow or has a
+   *  low z-context that would hide/clip the tip — e.g. the COLLAPSED left
+   *  nav rail (Sidebar.tsx), whose narrow `<aside>` + `overflow-y-auto` body
+   *  clips a `side="right"` chip and triggers a horizontal scrollbar. Default
+   *  `false` keeps the legacy inline behaviour for all other call-sites. */
+  portal?: boolean
   children: React.ReactNode
+}
+
+/** Pixel offset (matches the inline `mb/mt/mr/ml-1.5` = 6px) between the
+ *  wrapper edge and the tooltip chip in portal mode. */
+const PORTAL_GAP = 6
+
+/** Compute a `position: fixed` placement from the wrapper's viewport rect for
+ *  each side. `transform` re-centers / anchors the chip on the correct edge,
+ *  mirroring the inline `SIDE_POSITION` centering semantics. */
+function portalPlacement(
+  side: HoverTipSide,
+  rect: DOMRect
+): { top: number; left: number; transform: string } {
+  switch (side) {
+    case 'right':
+      return {
+        top: rect.top + rect.height / 2,
+        left: rect.right + PORTAL_GAP,
+        transform: 'translateY(-50%)'
+      }
+    case 'left':
+      return {
+        top: rect.top + rect.height / 2,
+        left: rect.left - PORTAL_GAP,
+        transform: 'translate(-100%, -50%)'
+      }
+    case 'top':
+      return {
+        top: rect.top - PORTAL_GAP,
+        left: rect.left + rect.width / 2,
+        transform: 'translate(-50%, -100%)'
+      }
+    case 'bottom':
+    default:
+      return {
+        top: rect.bottom + PORTAL_GAP,
+        left: rect.left + rect.width / 2,
+        transform: 'translateX(-50%)'
+      }
+  }
 }
 
 // 4-way positioning lookup. Centering axis swaps per side:
@@ -38,50 +87,79 @@ const SIDE_POSITION: Record<HoverTipSide, string> = {
   right: 'top-1/2 -translate-y-1/2 left-full ml-1.5'
 }
 
+// Shared chip class string — identical look in both inline & portal modes;
+// only the positioning differs (absolute+SIDE_POSITION vs fixed+computed).
+const CHIP_CLASS = cn(
+  // Sprint 13 user-feedback — width caps at 150px and wraps to multiple
+  // lines for long verbs (e.g. zh-CN "归档 · 等待 Sprint 14 接 CLI" → 2
+  // lines). `whitespace-pre-line` already honours explicit \n; `break-words`
+  // forces wrap mid-word when zh-CN strings have no spaces. `w-max` lets
+  // short labels stay single-line — only longs hit the 150px ceiling.
+  'w-max max-w-[150px] whitespace-pre-line break-words text-center',
+  // Sprint 13 round 8 user feedback — "再小 2 个号" from text-micro (11px).
+  // 9px arbitrary value approaches the macOS mini-control caption (Navi-
+  // style). Deliberately NOT `font-mono` so CJK glyphs don't go mossy at
+  // this size (DESIGN.md §14 #2 bans CJK at mono 11/12px). Sans 9px stays
+  // legible enough for hover labels which are glanceable, not body copy.
+  'text-[9px] leading-none text-ink-fg-2 px-1.5 py-1 rounded',
+  'glass-pop pointer-events-none select-none',
+  'shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
+)
+
 export function HoverTip({
   text,
   side = 'top',
   className,
+  portal = false,
   children
 }: HoverTipProps): React.ReactElement {
   const [hover, setHover] = useState(false)
+  const wrapperRef = useRef<HTMLSpanElement>(null)
+  // Portal mode measures the wrapper's viewport rect on enter and pins the
+  // chip with `position: fixed`, so it escapes any clipping/scroll context.
+  const [pos, setPos] = useState<{ top: number; left: number; transform: string } | null>(null)
+
+  const show = (): void => {
+    if (portal && wrapperRef.current) {
+      setPos(portalPlacement(side, wrapperRef.current.getBoundingClientRect()))
+    }
+    setHover(true)
+  }
+  const hide = (): void => setHover(false)
+
   return (
     <span
+      ref={wrapperRef}
       className={cn('relative inline-flex items-center', className)}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      onFocus={() => setHover(true)}
-      onBlur={() => setHover(false)}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
     >
       {children}
-      {hover && (
-        <span
-          role="tooltip"
-          className={cn(
-            'absolute z-50',
-            SIDE_POSITION[side],
-            // Sprint 13 user-feedback — width caps at 150px and wraps to
-            // multiple lines for long verbs (e.g. zh-CN "归档 · 等待 Sprint
-            // 14 接 CLI" → 2 lines). `whitespace-pre-line` already honours
-            // explicit \n; `break-words` forces wrap mid-word when zh-CN
-            // strings have no spaces. `w-max` lets short labels stay
-            // single-line — only longs hit the 150px ceiling.
-            'w-max max-w-[150px] whitespace-pre-line break-words text-center',
-            // Sprint 13 round 8 user feedback — "再小 2 个号" from
-            // text-micro (11px). 9px arbitrary value approaches the
-            // macOS mini-control caption (Navi-style). Deliberately
-            // NOT `font-mono` so CJK glyphs don't go mossy at this
-            // size (DESIGN.md §14 #2 bans CJK at mono 11/12px). Sans
-            // 9px stays legible enough for hover labels which are
-            // glanceable, not body copy.
-            'text-[9px] leading-none text-ink-fg-2 px-1.5 py-1 rounded',
-            'glass-pop pointer-events-none select-none',
-            'shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
-          )}
-        >
-          {text}
-        </span>
-      )}
+      {hover &&
+        (portal && pos
+          ? createPortal(
+              <span
+                role="tooltip"
+                style={{
+                  position: 'fixed',
+                  top: pos.top,
+                  left: pos.left,
+                  transform: pos.transform,
+                  zIndex: 100
+                }}
+                className={CHIP_CLASS}
+              >
+                {text}
+              </span>,
+              document.body
+            )
+          : !portal && (
+              <span role="tooltip" className={cn('absolute z-50', SIDE_POSITION[side], CHIP_CLASS)}>
+                {text}
+              </span>
+            ))}
     </span>
   )
 }

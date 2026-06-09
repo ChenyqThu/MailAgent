@@ -81,11 +81,16 @@ function renderIcon(icon: React.ReactNode): React.ReactNode {
  *  is unreliable in Electron (HoverTip.tsx header) — so when wrapping we drop
  *  the native attr to avoid a double tooltip. `side="right"` because the nav
  *  is the leftmost rail; the chip pops toward the content area. Expanded mode
- *  (title undefined) renders the row bare — no tooltip, as before. */
+ *  (title undefined) renders the row bare — no tooltip, as before.
+ *
+ *  `portal` lifts the chip to `document.body` (fixed) so it isn't clipped by
+ *  the collapsed `<aside>` (~56px wide) nor by the body's `overflow-y-auto`,
+ *  which previously hid the `side="right"` chip + forced a horizontal
+ *  scrollbar (user: "tooltip 应该在更高独立层级出现"). */
 function maybeWrapTip(title: string | undefined, child: React.ReactElement): React.ReactElement {
   if (!title) return child
   return (
-    <HoverTip text={title} side="right" className="w-full">
+    <HoverTip text={title} side="right" portal className="w-full">
       {child}
     </HoverTip>
   )
