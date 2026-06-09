@@ -24,10 +24,12 @@ python-dateutil>=2.8.0
 # CalDAV 日历同步（calendar_sync worker：DavMail CalDAV 桥 → SQLite SSoT）
 # 之前只在 dev venv 手动装过，没进 requirements → 打包 app 缺 caldav，
 # CalDAVReader import 失败、每分钟重试。caldav 会带 icalendar / recurring-ical-events
-# 等传递依赖；显式 pin calendar_sync 直接 import 的两个，防传递依赖漂移断链。
+# 等传递依赖；显式 pin calendar_sync 直接 import 的三个，防传递依赖漂移断链。
+# vobject 自 caldav 3.2.1 起不再是传递依赖，须显式声明。
 caldav>=3.2.0
 icalendar>=7.1.1
 recurring-ical-events>=3.8.2
+vobject>=0.9.9
 
 # Redis
 redis>=5.0.0
