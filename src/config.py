@@ -137,6 +137,24 @@ class Config(BaseSettings):
     )
     mail_sent_name: str = Field(default="已发送", env="MAIL_SENT_NAME", description="发件箱名称（AppleScript用）")
 
+    # 多文件夹同步（davmail-only）：自定义 Exchange 文件夹白名单，邮件接入 email_metadata 主链路
+    sync_folders: str = Field(
+        default="",
+        env="SYNC_FOLDERS",
+        description="额外同步的自定义文件夹白名单（davmail-only）。存 IMAP 原始名"
+                    '(modified-UTF7, ASCII)，**JSON 数组**格式 ["Notion","&W,mL3VOGU,KLsF9V-"]'
+                    "（modified-UTF7 中文名含逗号，不能用逗号分隔；旧 CSV 简单名仍兼容）。"
+                    "空=不同步任何自定义文件夹(默认, 零激活)。收件箱/发件箱由 SYNC_MAILBOXES 管。",
+    )
+    folder_sync_past_days: int = Field(
+        default=90, env="FOLDER_SYNC_PAST_DAYS",
+        description="自定义文件夹首次同步窗口（最近 N 天）。防大文件夹历史邮件灌爆。",
+    )
+    folder_sync_max_messages: int = Field(
+        default=2000, env="FOLDER_SYNC_MAX_MESSAGES",
+        description="单个自定义文件夹单次拉取上限（取最新 N 封）。0=不限。",
+    )
+
     # 飞书通知配置
     feishu_app_id: str = Field(default="", env="FEISHU_APP_ID", description="飞书应用 App ID")
     feishu_app_secret: str = Field(default="", env="FEISHU_APP_SECRET", description="飞书应用 App Secret")

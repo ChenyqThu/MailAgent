@@ -224,7 +224,7 @@ class SyncStore:
     #                ux_async_jobs_idempotency partial unique + ix_async_jobs_status。纯加表,
     #                CREATE TABLE IF NOT EXISTS 对新/旧库均生效, 无 data migration。serve 进程内
     #                JobWorker (灰度 MAILAGENT_ASYNC_JOBS_ENABLED) 消费。详见 C1 看板格。
-    DB_VERSION = 21  # v21: async_jobs 表 (C1 长任务子系统)
+    DB_VERSION = 22  # v22: 多文件夹同步 — per-folder uidvalidity 走 sync_state KV (无新表, marker-only bump)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1282,6 +1282,12 @@ class SyncStore:
                 logger.info("v20 migration: email_outbox partial unique index ready")
             except sqlite3.OperationalError as e:
                 logger.warning(f"v20 migration skipped: {e}")
+
+        # === v22: 多文件夹同步 ===
+        # per-folder 增量游标 = email_metadata 派生的 MAX(imap_uid) (复用 Sent 模式)；
+        # per-folder UIDVALIDITY 存现有 sync_state KV 表 (key=folder_uidvalidity:<imap_name>)，
+        # 无需新表/新列 → 本版本是 marker-only bump (记录语义 + 同步前端 EXPECTED_DB_VERSION)。
+        # 无结构迁移动作，幂等天然成立。
 
         # 更新数据库版本
         cursor.execute("""

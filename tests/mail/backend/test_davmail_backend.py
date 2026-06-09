@@ -508,9 +508,9 @@ def test_get_new_emails_scans_sent_folder_when_enabled(monkeypatch):
     assert set(by_mailbox) == {"收件箱", "发件箱"}
     assert by_mailbox["收件箱"]["imap_uid"] == 100
     assert by_mailbox["发件箱"]["imap_uid"] == 4300
-    # 两个 folder 都被 SELECT
+    # 两个 folder 都被 SELECT (mailbox 名 quote, 含空格的 "Sent Items" 必须 quote)
     selected = [c.args[0] for c in fake_imap.select.call_args_list]
-    assert "INBOX" in selected and "Sent Items" in selected
+    assert '"INBOX"' in selected and '"Sent Items"' in selected
 
 
 def test_get_new_emails_sent_disabled_skips_sent(monkeypatch):
@@ -544,7 +544,7 @@ def test_get_new_emails_sent_disabled_skips_sent(monkeypatch):
     assert len(out) == 1
     assert out[0]["mailbox"] == "收件箱"
     selected = [c.args[0] for c in fake_imap.select.call_args_list]
-    assert selected == ["INBOX"]  # 只 SELECT 了 INBOX
+    assert selected == ['"INBOX"']  # 只 SELECT 了 INBOX (mailbox 名 quote)
 
 
 def test_get_new_emails_sent_failure_does_not_break_inbox(monkeypatch):
@@ -627,4 +627,6 @@ def _make_backend(uidvalidity=12345):
     backend.radar = backend
     backend.db_path = None
     backend._cached_marker = None
+    # 多文件夹同步白名单 (空 = 零激活, 与 __init__ 默认一致)。需要时测试自行设。
+    backend._custom_folders = []
     return backend

@@ -16,9 +16,12 @@ import re
 import smtplib
 import socket
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator, Optional
 
 from loguru import logger
+
+from src.mail.backend.imap_utf7 import decode_imap_utf7
 
 if TYPE_CHECKING:
     from src.config import Config
@@ -292,3 +295,164 @@ def discover_sent_folder(imap: imaplib.IMAP4) -> Optional[str]:
 
     logger.warning("[imap-client] could not discover Sent folder")
     return None
+
+
+# =============================================================================
+# 多文件夹同步: 文件夹发现 (LIST → FolderInfo 树)
+# =============================================================================
+
+# IMAP LIST 行: ``(\Flags) "delim" name`` — name 可带引号(含空格如 "Sent Items")或裸 atom。
+_LIST_LINE_RE = re.compile(rb'^\((?P<flags>[^)]*)\)\s+(?P<delim>"[^"]*"|NIL)\s+(?P<name>.*)$')
+
+# 系统/受保护文件夹的 SPECIAL-USE 标志 (RFC 6154)。这些文件夹不可重命名/删除 (P4 管理 gate)，
+# 且 收件箱/发件箱 由 SYNC_MAILBOXES 单独管 (不进 SYNC_FOLDERS 白名单)。
+# 注意: \\Archive **不在**此列 —— Archive 是普通可同步文件夹 (用户可勾选)。
+_SYSTEM_SPECIAL_USE = {"\\inbox", "\\sent", "\\drafts", "\\junk", "\\trash"}
+
+
+def quote_mailbox(name: str) -> str:
+    """IMAP mailbox 名加引号 — imaplib **不自动 quote**, 含空格/特殊字符的名字 (如
+    ``Unsent Messages`` / ``Sent Items``) 不 quote 会被拆成多个 atom → ``folder not found``。
+    简单名加引号无害 (实测 ``"INBOX"`` STATUS/SELECT 正常)。RFC 3501 §9 quoted-string:
+    转义 ``\\`` 与 ``"``。
+    """
+    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+@dataclass
+class FolderInfo:
+    """一个 IMAP 文件夹的发现结果。
+
+    - ``imap_name``: LIST 返回的原始名 (modified-UTF7, ASCII)。**白名单存储 / SELECT 用这个**。
+    - ``display_name``: 解码后的可读名 (中文)。仅展示用。
+    - ``delimiter``: 层级分隔符 (实测 davmail = "/")。
+    - ``special_use``: RFC 6154 SPECIAL-USE 标志 (小写, 如 "\\sent")，无则 None。
+    - ``is_system``: 系统文件夹 (INBOX 或受保护 special-use)，管理操作 gate + 前端锁定。
+    - ``has_children``: LIST \\HasChildren 标志。
+    - ``parent``: 父文件夹 imap_name (按 delimiter 推导)，顶层为 None。
+    - ``message_count``: STATUS MESSAGES (懒加载，未取时 None)。
+    """
+
+    imap_name: str
+    display_name: str
+    delimiter: str = "/"
+    special_use: Optional[str] = None
+    is_system: bool = False
+    has_children: bool = False
+    parent: Optional[str] = None
+    message_count: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "imap_name": self.imap_name,
+            "display_name": self.display_name,
+            "delimiter": self.delimiter,
+            "special_use": self.special_use,
+            "is_system": self.is_system,
+            "has_children": self.has_children,
+            "parent": self.parent,
+            "message_count": self.message_count,
+        }
+
+
+def _special_use_from_flags(flags: str) -> Optional[str]:
+    """从 LIST flags 串提取 SPECIAL-USE 标志 (小写, 如 "\\sent")，无则 None。"""
+    low = flags.lower()
+    for su in ("\\inbox", "\\sent", "\\drafts", "\\junk", "\\trash", "\\archive", "\\all", "\\flagged"):
+        if su in low:
+            return su
+    return None
+
+
+def parse_list_line(line: bytes) -> Optional[FolderInfo]:
+    """解析单行 IMAP LIST 响应 → FolderInfo (不含 message_count)。无法解析返回 None。"""
+    if not line:
+        return None
+    m = _LIST_LINE_RE.match(line.strip())
+    if not m:
+        return None
+    flags = m.group("flags").decode("ascii", "replace")
+    delim_raw = m.group("delim").decode("ascii", "replace")
+    delimiter = "" if delim_raw == "NIL" else delim_raw.strip('"')
+    imap_name = m.group("name").decode("ascii", "replace").strip().strip('"')
+    if not imap_name:
+        return None
+    special = _special_use_from_flags(flags)
+    has_children = "haschildren" in flags.lower().replace("\\", "")
+    is_system = imap_name.upper() == "INBOX" or (special in _SYSTEM_SPECIAL_USE)
+    parent = None
+    if delimiter and delimiter in imap_name:
+        parent = imap_name.rsplit(delimiter, 1)[0]
+    return FolderInfo(
+        imap_name=imap_name,
+        display_name=decode_imap_utf7(imap_name),
+        delimiter=delimiter or "/",
+        special_use=special,
+        is_system=is_system,
+        has_children=has_children,
+        parent=parent,
+    )
+
+
+def parse_list_response(lines) -> list[FolderInfo]:
+    """解析整段 IMAP LIST 响应 (list[bytes]) → list[FolderInfo]。跳过无法解析的行。"""
+    out: list[FolderInfo] = []
+    for line in lines or []:
+        info = parse_list_line(line if isinstance(line, (bytes, bytearray)) else str(line).encode())
+        if info is not None:
+            out.append(info)
+    return out
+
+
+def _status_message_count(imap: imaplib.IMAP4, imap_name: str) -> Optional[int]:
+    """STATUS <folder> (MESSAGES) → 邮件总数。失败返回 None (不阻断发现)。"""
+    try:
+        # imaplib 按 ASCII 编码 mailbox 名 (modified-UTF7 本就 ASCII); 但含空格的名字必须
+        # quote, 否则被拆成多 atom → folder not found。
+        typ, data = imap.status(quote_mailbox(imap_name), "(MESSAGES)")
+        if typ == "OK" and data:
+            m = re.search(rb"MESSAGES\s+(\d+)", data[0] if isinstance(data[0], (bytes, bytearray)) else str(data[0]).encode())
+            if m:
+                return int(m.group(1))
+    except Exception as e:
+        logger.debug(f"[imap-client] STATUS {imap_name!r} MESSAGES failed: {e}")
+    return None
+
+
+def list_folders(cfg: "Config", *, with_counts: bool = True, timeout: int = 30) -> list[FolderInfo]:
+    """IMAP LIST 全部文件夹 → list[FolderInfo] (含层级 + 可选邮件数)。
+
+    供 CLI ``folder discover`` / serve-api ``GET /api/folder/discover`` 调用。
+    ``with_counts=False`` 时跳过逐文件夹 STATUS (快, 不含 message_count)。
+    """
+    with imap_session(cfg, timeout=timeout) as imap:
+        typ, data = imap.list("", "*")
+        if typ != "OK":
+            raise DavMailConnectionError(f"IMAP LIST failed: {typ}")
+        folders = parse_list_response(data)
+        if with_counts:
+            for fi in folders:
+                fi.message_count = _status_message_count(imap, fi.imap_name)
+    return folders
+
+
+def build_folder_tree(folders: list[FolderInfo]) -> list[dict]:
+    """把扁平 FolderInfo 列表按 delimiter 还原成嵌套树 (供前端 / serve-api)。
+
+    返回顶层节点列表; 每节点 = ``{**folder.to_dict(), "children": [...]}``。孤儿节点
+    (parent 不在列表里) 当顶层处理 (降级, 不丢)。顺序保持输入顺序。
+    """
+    by_name: dict[str, dict] = {}
+    for fi in folders:
+        node = fi.to_dict()
+        node["children"] = []
+        by_name[fi.imap_name] = node
+    roots: list[dict] = []
+    for fi in folders:
+        node = by_name[fi.imap_name]
+        parent = by_name.get(fi.parent) if fi.parent else None
+        if parent is not None:
+            parent["children"].append(node)
+        else:
+            roots.append(node)
+    return roots

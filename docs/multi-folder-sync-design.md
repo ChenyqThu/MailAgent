@@ -138,9 +138,9 @@ folder_sync_past_days: int = Field(default=90, env="FOLDER_SYNC_PAST_DAYS", ...)
 folder_sync_max_messages: int = Field(default=2000, env="FOLDER_SYNC_MAX_MESSAGES", ...)  # 单文件夹上限
 ```
 
-**关键决策**：白名单存 **IMAP 原始名（modified-UTF7，纯 ASCII）**，不存中文 display name——避免中文逗号/特殊字符破坏逗号分隔，也避免 display name 不稳定。前端展示时解码。
+**关键决策**：白名单存 **IMAP 原始名（modified-UTF7，纯 ASCII）**，不存中文 display name——避免 display name 不稳定。前端展示时解码。
 
-> 若担心逗号本身出现在 folder 名中（罕见），可改存 JSON 数组字符串。首期逗号分隔够用（modified-UTF7 名不含逗号）。
+> **🔴 已实现修正（P1 codex review）**：白名单用 **JSON 数组**字符串存（`["Notion","&W,mL3VOGU,KLsF9V-"]`），**不能用逗号分隔** —— modified-UTF7 的 base64 段**本身用逗号**代替 `/`（如 对话历史记录 = `&W,mL3VOGU,KLsF9V-` 含两个逗号），逗号分隔会拆坏中文名。`_parse_custom_folders` JSON 优先 + CSV 回退（兼容旧简单 ASCII 名）。CLI `folder enable/disable` 写 JSON。
 
 ### 4.3 per-folder 游标存储（核心）
 

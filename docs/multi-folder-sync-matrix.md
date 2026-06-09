@@ -22,20 +22,28 @@
 
 ---
 
-## P1 — 后端取数核心（含层级发现）⬜　MVP
+## P1 — 后端取数核心（含层级发现）✅　MVP
 
 > 🔴 **前置实测 gate（P1 第一步，未过不继续）**：① davmail `CREATE/RENAME/DELETE` 测试文件夹能映射 EWS（给 P4）② davmail LIST 对 `测试/子` 嵌套返回 `测试/子`（delimiter `/`）+ 中文层级解码。结果写回本节，不支持的子项降级（平铺/隐藏管理）。
+>
+> **✅ gate 实测结论（2026-06-08，davmail-poc IMAP 127.0.0.1:1143）**：全部支持，**无需任何降级**。
+> - **文件夹管理 CRUD（P4）支持**：`CREATE`/`RENAME`/`DELETE`（含中文名 modified-UTF7）全映射 EWS（resp `folder created`/`rename completed`/`folder deleted`）。
+> - **嵌套层级（D6）支持**：`CREATE 多文件夹探针ZZ/子文件夹` → LIST 返回 delimiter `/` + 父行 `\HasChildren`；真实邮箱 `对话历史记录` 已带 `\HasChildren`。
+> - **系统文件夹保护坐实**：EWS 自身拒删 distinguished folder（`DELETE INBOX` → `ErrorDeleteDistinguishedFolder Distinguished folders cannot be deleted`）；P4 仍做应用层 gate 给干净 UX（不依赖 EWS 报错）。
+> - 18 文件夹全列出、中文解码正常（DMS固件发布/存档/对话历史记录/待办/必要文档路径）、delimiter 统一 `/`。探针文件夹已清理。
 
 | 能力 | 后端实现 | 测试 | 验收 | 状态 |
 |---|---|---|---|---|
-| 文件夹发现 `list_folders()` | `imap.list("","*")` + `decode_imap_utf7` + special-use 标志 + STATUS 邮件数 + **层级树解析**（delimiter→FolderNode） | `test_imap_utf7` + `test_list_folders`（mock LIST，含嵌套行） | CLI `folder discover -o json` 列 18 文件夹含中文+层级 | ⬜ |
-| 配置 `SYNC_FOLDERS` + 窗口 | `config.py` 加 `sync_folders`/`folder_sync_past_days`/`folder_sync_max_messages` + `.env.example` | `test_config` | 配置可读、空=默认 | ⬜ |
-| per-folder marker | 从 `email_metadata` 派生 `MAX(imap_uid)` + uidvalidity 存 state KV；UIDVALIDITY 变→全量重拉 | `test_get_new_emails_multifolder`（marker 推进 / uidvalidity 重拉） | 二次 poll 不重复拉 | ⬜ |
-| `get_new_emails` 多文件夹遍历 | INBOX 段后追加白名单循环（复用 `_fetch_new_in_folder`）+ 每文件夹独立 try + max_messages 截断 | 同上（单文件夹失败隔离 / 截断） | `sqlite … GROUP BY mailbox` 出现自定义文件夹行 | ⬜ |
-| DB v22 迁移 | bump `DB_VERSION` 21→22 + 同步前端 `EXPECTED_DB_VERSION` | `test_db_version_consistency`（前端） | 迁移 idempotent | ⬜ |
-| 🔒 隔离不变量 | `SYNC_FOLDERS` 空时循环跳过 | 回归 | 空配置行为与现状一致 | ⬜ |
+| 文件夹发现 `list_folders()` | `imap.list("","*")` + `decode_imap_utf7` + special-use 标志 + STATUS 邮件数 + **层级树解析**（delimiter→`build_folder_tree`） | `test_imap_utf7`(13) + `test_list_folders`(11，mock LIST 含嵌套行) | CLI `folder discover -o json` 列 18 文件夹含中文+层级 ✓ | ✅ |
+| 配置 `SYNC_FOLDERS` + 窗口 | `config.py` 加 `sync_folders`/`folder_sync_past_days`/`folder_sync_max_messages` + `.env.example` | `test_folder_config`(7) | 配置可读、空=默认 ✓ | ✅ |
+| per-folder marker | 从 `email_metadata` 派生 `MAX(imap_uid)`（`_max_folder_imap_uid`）+ uidvalidity 存 `sync_state` KV（`folder_uidvalidity:<imap_name>`）；UIDVALIDITY 变→全量重拉 | `test_get_new_emails_multifolder`（marker 推进 / uidvalidity 重拉） | 二次 poll 不重复拉 ✓（真机 e2e 5→5） | ✅ |
+| `get_new_emails` 多文件夹遍历 | INBOX 段后追加白名单循环（`_fetch_custom_folder`→`_fetch_new_in_folder` 双模式）+ 每文件夹独立 try + max_messages 截断（取最新 N） | 同上（单文件夹失败隔离 / 截断 / 中文 label / criteria 决策） | `sqlite … GROUP BY mailbox` 出现 `mailbox='Notion'` ✓（真机 e2e） | ✅ |
+| DB v22 迁移 | bump `DB_VERSION` 21→22（marker-only，uidvalidity 走 KV 无新表）+ 同步前端 `EXPECTED_DB_VERSION`=22 | `db_version_consistency.test.ts`（前端，✓ 1 passed） | 迁移 idempotent ✓ | ✅ |
+| 🔒 隔离不变量 | `SYNC_FOLDERS` 空 → `_custom_folders=[]` → get_new_emails/check_for_changes 循环整段跳过 | `test_get_new_emails_multifolder`（空→只 SELECT INBOX / 零 STATUS 探测）+ 50 现有 davmail 测试回归全绿 | 空配置只 SELECT INBOX ✓ | ✅ |
+| CLI `folder discover/enable/disable` | `discover`(只读) + `enable/disable`(写 .env SYNC_FOLDERS, 复用 dotenv set_key) + davmail 门控 | `test_folder_discover`(9, CLI 契约) | `folder discover` 真机列 18 文件夹 ✓ | ✅ |
 
-**验收**：`pytest tests/mail tests/cli` 全绿 + 配 `SYNC_FOLDERS=Notion,Jira` 跑 main.py，`email_metadata` 出现 `mailbox='Notion'/'Jira'`，per-folder 增量不重复。**codex review APPROVE**。
+**验收**：`pytest tests/mail tests/cli tests/api` → **1166 passed / 75 新测试全绿、零新增失败**（7 预存 calendar/reverse_sync 与本功能无关）+ ruff 全过。真机 e2e：`SYNC_FOLDERS=Notion` 跑真实 davmail → `email_metadata` 出现 `mailbox='Notion'`（5 封）、per-folder 增量二次 poll 不重复（5→5）、uidvalidity 持久化。**codex review（GPT-5.5）：REQUEST CHANGES → 修 3 finding → APPROVE WITH NITS（NIT 已修）**。
+> **codex 复审修复**（3 finding 全闭环）：① SYNC_FOLDERS 改 **JSON 数组**（modified-UTF7 中文名含逗号，如 对话历史记录=`&W,mL3VOGU,KLsF9V-`，逗号分隔会拆坏；CSV 简单名仍兼容）② IMAP STATUS/SELECT **mailbox 加引号**`quote_mailbox()`（含空格名如 `Unsent Messages` 不 quote → `folder not found`；顺带修 Sent="Sent Items" 潜在 bug）③ `_effective_custom_folders()` 运行时过滤 Sent/Drafts + CLI `enable` 拒绝 `is_system`（防双拉）。
 
 ## P2 — 下游 pipeline 验证 + 通知/AI gate（L2/L3）⬜　MVP
 
@@ -104,7 +112,7 @@
 | **多主题** | 所有新 UI 从 token 取色（`rgb(var(--ink-*))`/`--c-accent`），**亮暗都正确**；mockup 已给两套基准 | 亮/暗切换渲染对照 mockup |
 | **🔒 隔离不变量** | `SYNC_FOLDERS` 空=零激活=逐字节一致 | 每阶段回归收件箱主路径 |
 | **DB 版本** | `DB_VERSION` bump 必同步 `backend_lifecycle.ts` 的 `EXPECTED_DB_VERSION` | `db_version_consistency.test.ts` |
-| **davmail 能力前置** | 写操作/嵌套先实测再实现，不支持则降级 | P1 gate 结果回写本表 |
+| **davmail 能力前置** | 写操作/嵌套先实测再实现，不支持则降级 | ✅ P1 gate 全过（CRUD+嵌套+系统保护全支持，无降级）→ 见 P1 节 gate 结论 |
 | **打包铁律** | 真机 build 前 `build-python-venv.sh` 重 provision + `rebuild:electron` | 见 handoff §3 |
 
 ## 最终验收（goal 出口）
@@ -119,3 +127,5 @@
 | 日期 | 阶段 | 事件 | commit |
 |---|---|---|---|
 | 2026-06-08 | — | 需求+设计+mockup+矩阵就绪，goal 待启动 | `f0ceb84` 等 |
+| 2026-06-08 | P1 gate | davmail 前置实测全过：CRUD/嵌套/系统保护全支持，无降级 | — |
+| 2026-06-08 | P1 | 实现完成（imap_utf7/list_folders/SYNC_FOLDERS/per-folder marker+uidvalidity/get_new_emails 多文件夹/DB v22/CLI discover·enable·disable）；75 新测试绿 + 真机 e2e 过 + 零新增回归（1166 passed）；codex REQUEST CHANGES→修 3 finding（JSON 白名单/mailbox quoting/系统文件夹排除）→ APPROVE WITH NITS（NIT 修） | _见 P1 commit_ |
