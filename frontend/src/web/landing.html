@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>MailAgent - macOS 邮件自动化工作台</title>
+    <meta
+      name="description"
+      content="MailAgent 将 Mail.app、SQLite、Notion、LLM 分类、日程和通知接成一条本机优先的邮件处理流水线。"
+    />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-JWOW0ZmF4KlXR10H32vpWS66AIWsa1+1swsTHiO0YpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:*; manifest-src 'self'; worker-src 'self'"
+    />
+    <link rel="icon" type="image/png" sizes="512x512" href="/app/icons/icon-512.png" />
+    <meta name="theme-color" content="#0E1013" />
+    <style id="theme-bootstrap">
+      html[data-theme='dark'] {
+        background: #0e1013;
+        color: #e8eaee;
+      }
+      html[data-theme='light'] {
+        background: #fafafa;
+        color: #1a1d22;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/landing.tsx"></script>
+  </body>
+</html>
