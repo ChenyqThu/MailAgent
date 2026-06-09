@@ -68,7 +68,9 @@ export function SessionsPage(): React.ReactElement {
     // current list — exempt it from EmailList's active-reset (same as the
     // CommandPalette search-jump path).
     setActiveEmail(item.email_id, { navTarget: true })
-    openAIChatSession(item.email_id, item.id)
+    // 交付文档 §3.1 — pass the session's own backend kind so AIChatPanel switches
+    // the panel onto that agent before selecting (per-kind session scoping).
+    openAIChatSession(item.email_id, item.id, item.backend_kind)
     void navigate({ to: '/' })
   }
 

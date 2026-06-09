@@ -250,7 +250,9 @@ function TranscriptPane({
 
   const continueInInbox = (): void => {
     setActiveEmail(session.email_id, { navTarget: true })
-    openAIChatSession(session.email_id, session.id)
+    // 交付文档 §3.1 — pass the session's backend kind so the panel opens on the
+    // matching agent (per-kind session scoping).
+    openAIChatSession(session.email_id, session.id, session.backend_kind)
     void navigate({ to: '/' })
   }
 

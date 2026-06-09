@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next'
 import { Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import type { ChatBackendKind } from '@shared/api/types'
 
 export interface BackendChoice {
@@ -33,6 +34,7 @@ const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
 
 export function BackendSelector({ value, onChange, agentName }: Props): React.ReactElement {
   const { t } = useTranslation()
+  const reduceMotion = useReducedMotion()
 
   const isNotionAgent = value.kind === 'notion-agent'
   const activeModel = value.model ?? DEFAULT_CUSTOM_MODEL
@@ -41,7 +43,9 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
   // truncate + min-w-0 flex-1 防止长 agent name (Jarvis / 中文名 / 长 model id)
   // 撑破侧栏边界.
   const activeName = isNotionAgent ? (agentName ?? 'Jarvis') : activeModel
-  const activeMeta = isNotionAgent ? 'notion-agent-cli · token_v2' : `openai-compat · ${activeModel}`
+  const activeMeta = isNotionAgent
+    ? 'notion-agent-cli · token_v2'
+    : `openai-compat · ${activeModel}`
 
   const switchKind = (next: ChatBackendKind): void => {
     if (next === value.kind) return
@@ -54,14 +58,31 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
 
   return (
     <div className="px-3 py-2.5 border-b border-ink-border-soft">
-      {/* Segmented control — 两按钮并排, 当前 kind 高亮; 点哪个切到哪个.
-          替代之前的"hero card + ChevronDown" 视觉, 后者看起来像下拉但实际
-          只是 2 选项 toggle, 不符合切换型交互的直觉. */}
+      {/* 交付文档 §3 — sliding-thumb segmented control (mockup `.seg`/`.seg-thumb`/
+          `.sdot`). A single track holds a white thumb that slides between the two
+          halves (transform translateX) — more refined than two independent
+          buttons. Active item: solid text + leading GREEN dot (--c-ok); inactive:
+          a grey dot (--ink-fg-3). Click still toggles backend KIND (⌥⇧B parity).
+          reduced-motion drops the slide (snaps via no transition). */}
       <div
         role="tablist"
         aria-label={t('chat.backend.selectorLabel')}
-        className="flex rounded-md bg-ink-2 p-0.5 gap-0.5"
+        className="relative flex rounded-[10px] bg-ink-2 border border-ink-border p-[3px]"
       >
+        {/* Sliding white thumb — half the track width minus the 3px padding gutter,
+            translated to the right half for custom-api. */}
+        <span
+          aria-hidden
+          className={cn(
+            'absolute top-[3px] bottom-[3px] left-[3px] rounded-[7px] bg-white',
+            'shadow-[0_1px_2px_rgba(28,34,48,0.10),0_0_0_0.5px_rgba(28,34,48,0.04)]',
+            !reduceMotion && 'transition-transform duration-fast ease-out'
+          )}
+          style={{
+            width: 'calc(50% - 3px)',
+            transform: isNotionAgent ? 'translateX(0)' : 'translateX(100%)'
+          }}
+        />
         {(['notion-agent', 'custom-api'] as const).map((kind) => {
           const active = value.kind === kind
           return (
@@ -72,13 +93,18 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
               aria-selected={active}
               onClick={() => switchKind(kind)}
               className={cn(
-                'flex-1 px-2.5 py-1 rounded text-meta font-medium',
+                'relative z-[1] flex-1 inline-flex items-center justify-center gap-1.5',
+                'h-8 rounded-[7px] text-meta',
                 'transition-colors duration-fast',
-                active
-                  ? 'bg-ink-3 text-ink-fg shadow-sm'
-                  : 'text-ink-fg-2 hover:text-ink-fg'
+                active ? 'text-ink-fg font-semibold' : 'text-ink-fg-2 hover:text-ink-fg-1'
               )}
             >
+              <span
+                className={cn(
+                  'w-1.5 h-1.5 rounded-full transition-colors duration-fast',
+                  active ? 'bg-ok' : 'bg-ink-fg-3'
+                )}
+              />
               {kind === 'notion-agent'
                 ? t('chat.backend.notionAgent')
                 : t('chat.backend.customApi')}
@@ -99,9 +125,7 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-body text-ink-fg font-medium truncate min-w-0">
-              {activeName}
-            </span>
+            <span className="text-body text-ink-fg font-medium truncate min-w-0">{activeName}</span>
             <span className="w-1.5 h-1.5 rounded-full bg-ok shrink-0" aria-label="ok" />
           </div>
           <div className="text-meta font-mono text-ink-fg-2 truncate">{activeMeta}</div>

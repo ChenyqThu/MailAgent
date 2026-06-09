@@ -177,7 +177,20 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // switching to a non-Claude model (gpt-5.5 / notion-agent) never sends thinking:true.
   const thinkingSupported = backendSupportsThinking(backend)
 
-  const chat = useEmailChat(activeInternalId)
+  // 交付文档 §3.1 (Bug 4) — scope the chat surface to (email, backend kind).
+  // Notion Agent and Custom AI are independent assistants; passing backend.kind
+  // makes a backend switch re-scope sessions + active conversation so the two
+  // agents' histories never bleed into each other. backend.kind change → the
+  // hook treats it as a navigation event (re-filter sessions, restore that
+  // kind's last-open conversation, abort any in-flight stream on the old kind).
+  const chat = useEmailChat(activeInternalId, backend.kind)
+  // 交付文档 §3.1 — alias the two chat members the pendingOpen effect reads so
+  // react-hooks/exhaustive-deps tracks each as a distinct identifier (the rule
+  // collapses multi-member access on the un-memoized `chat` object to a demand
+  // for the whole `chat`, which changes identity every render and would re-run
+  // the effect spuriously). Equivalent to listing chat.sessions/chat.selectSession.
+  const chatSessions = chat.sessions
+  const chatSelectSession = chat.selectSession
 
   // Sprint 14 PR G polish — lazy-load preview effect. Lives AFTER
   // `chat = useEmailChat(...)` so the JSX hoisting ordering lint
@@ -239,15 +252,43 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // loaded sessions belong to the target email (email_id match) so we don't
   // act on the previous email's stale list mid-switch, and we drop a target
   // that no longer exists once the list is in hand rather than looping.
+  //
+  // 交付文档 §3.1 — with per-kind session scoping the target row only appears in
+  // `chat.sessions` once the panel is on the session's OWN backend kind. So if
+  // the panel is on a different kind, switch first (selectBackend) and bail —
+  // the next render (now on the right kind, the hook re-filtered + reloaded that
+  // kind's sessions) finds the target and selects it. One-shot pendingOpen is
+  // consumed only after the select fires, so the kind-switch pass doesn't drop it.
   useEffect(() => {
     if (pendingOpen === null) return
     if (activeInternalId !== pendingOpen.emailId) return
-    const loadedForThisEmail = chat.sessions.some((s) => s.email_id === pendingOpen.emailId)
+    if (backend.kind !== pendingOpen.backendKind) {
+      // signal-consumption action effect: park the kind switch so the next
+      // render re-scopes the hook onto the session's agent. setState is the
+      // intended action here, not derived state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      selectBackend(
+        pendingOpen.backendKind === 'custom-api'
+          ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
+          : { kind: 'notion-agent', model: null, agentPageId: null }
+      )
+      return
+    }
+    const loadedForThisEmail = chatSessions.some((s) => s.email_id === pendingOpen.emailId)
     if (!loadedForThisEmail) return
-    const target = chat.sessions.find((s) => s.id === pendingOpen.sessionId)
-    if (target) void chat.selectSession(pendingOpen.sessionId)
+    const target = chatSessions.find((s) => s.id === pendingOpen.sessionId)
+    if (target) void chatSelectSession(pendingOpen.sessionId)
     consumePendingOpen()
-  }, [pendingOpen, activeInternalId, chat.sessions, chat.selectSession, consumePendingOpen])
+  }, [
+    pendingOpen,
+    activeInternalId,
+    backend.kind,
+    backend.model,
+    selectBackend,
+    chatSessions,
+    chatSelectSession,
+    consumePendingOpen
+  ])
 
   // Pull AI fields + email detail (for thread_id) + thread sibling count
   // for the ContextChips header.

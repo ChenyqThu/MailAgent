@@ -35,10 +35,16 @@ interface AIChatPanelStore {
   // session. The page sets `pendingOpen` + flips the active email; AIChatPanel
   // consumes it once the matching email's sessions are in hand (see
   // consumePendingOpen). One-shot, same lifecycle as requestedBackendKind.
-  pendingOpen: { emailId: number; sessionId: number } | null
+  //
+  // 交付文档 §3.1 — `backendKind` rides along so AIChatPanel can switch the panel
+  // onto the SESSION's own agent before selecting it. With per-kind session
+  // scoping the target row only lives in `chat.sessions` once the panel is on
+  // the matching kind, so opening a cross-kind history row must flip the kind
+  // first.
+  pendingOpen: { emailId: number; sessionId: number; backendKind: ChatBackendKind } | null
   requestBackend(kind: ChatBackendKind): void
   consumeRequestedBackend(): void
-  requestOpenSession(emailId: number, sessionId: number): void
+  requestOpenSession(emailId: number, sessionId: number, backendKind: ChatBackendKind): void
   consumePendingOpen(): void
 }
 
@@ -92,8 +98,8 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
   consumeRequestedBackend() {
     set({ requestedBackendKind: null })
   },
-  requestOpenSession(emailId, sessionId) {
-    set({ pendingOpen: { emailId, sessionId } })
+  requestOpenSession(emailId, sessionId, backendKind) {
+    set({ pendingOpen: { emailId, sessionId, backendKind } })
   },
   consumePendingOpen() {
     set({ pendingOpen: null })
@@ -124,9 +130,16 @@ export function openAIChatPanelWithBackend(kind: ChatBackendKind): void {
 /** Open the AI panel pinned to a specific (email, session) pair. The caller
  *  is responsible for flipping the active email (active-email store) so the
  *  panel re-keys onto it; this only parks the target session + reveals the
- *  panel. AIChatPanel.selectSession's the row once that email's sessions load. */
-export function openAIChatSession(emailId: number, sessionId: number): void {
+ *  panel. AIChatPanel.selectSession's the row once that email's sessions load.
+ *
+ *  交付文档 §3.1 — `backendKind` is the session's own agent; AIChatPanel switches
+ *  the panel onto it before selecting (per-kind session scoping). */
+export function openAIChatSession(
+  emailId: number,
+  sessionId: number,
+  backendKind: ChatBackendKind
+): void {
   const s = useAIChatPanel.getState()
-  s.requestOpenSession(emailId, sessionId)
+  s.requestOpenSession(emailId, sessionId, backendKind)
   s.setVisible(true)
 }

@@ -29,7 +29,7 @@
 //   switch emailId         → useEffect cleanup fires chat.abort(prevSession)
 //   unmount                → same path; stream stays correctly cancelled
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useMailApi } from './useMailApi'
 import type { ChatBackendKind, ChatMessage, ChatSession, ChatStartResult } from '../api/types'
@@ -221,17 +221,45 @@ function readPersistedQuotaCooldown(): number | null {
   }
 }
 
-export function useEmailChat(emailId: number | null): UseEmailChatReturn {
+// 交付文档 §3.1 (用户清单 Bug 4) — per-scope key. The chat surface is scoped
+// to BOTH the email AND the backend kind: Notion Agent and Custom AI are two
+// independent assistants whose session history + active conversation must NOT
+// bleed into each other. `${emailId}:${backendKind}` is that scope identity;
+// it keys the all-sessions filter, the latest-session pick, and the
+// per-scope activeSessionId memory below.
+function scopeKey(emailId: number | null, backendKind: ChatBackendKind): string {
+  return `${emailId ?? 'null'}:${backendKind}`
+}
+
+export function useEmailChat(
+  emailId: number | null,
+  backendKind: ChatBackendKind
+): UseEmailChatReturn {
   const mailApi = useMailApi()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [activeSessionId, setActiveSessionIdState] = useState<number | null>(null)
   const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null)
   const [error, setError] = useState<ChatError | null>(null)
+  // 交付文档 §3.1 — track the LAST committed scope (email + kind) so the
+  // "Adjusting state on prop change" block can reset derived state synchronously
+  // when EITHER the email OR the backend kind changes (kind switch is now a
+  // first-class navigation event, same weight as an email switch).
+  const [lastScope, setLastScope] = useState<string>(scopeKey(emailId, backendKind))
+  // Tracks the last committed emailId separately from the scope so the adjust
+  // block can tell an EMAIL change (invalidates `allSessions`) from a kind-only
+  // change (reuses the cached list).
   const [lastEmailId, setLastEmailId] = useState<number | null>(emailId)
-  // Sprint 14 PR A — sessions for the current email; surfaced to the
-  // history sidebar. Loaded by effect #1 on email switch, refreshed
-  // after each successful send (which may have created a new row).
-  const [sessions, setSessions] = useState<ChatSession[]>([])
+  // Sprint 14 PR A — sessions for the current email/kind scope; surfaced to the
+  // history sidebar. The full email-scoped list is fetched once per email; the
+  // kind filter is applied below before exposing `sessions`. Loaded by effect #1
+  // on email switch, refreshed after each successful send (which may have
+  // created a new row).
+  //
+  // 交付文档 §3.1 — `allSessions` holds the WHOLE email's sessions (every
+  // backend kind); `sessions` (the public field) is the current-kind subset.
+  // Keeping the raw list lets a kind switch re-filter without a redundant
+  // listSessions IPC (only the kind changed; the DB rows didn't).
+  const [allSessions, setAllSessions] = useState<ChatSession[]>([])
   /** Sprint 5 state machine #3 — captures the last input that failed so a
    *  Retry button can re-fire it. Set on every send(); cleared on success
    *  done event. */
@@ -268,6 +296,23 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   useEffect(() => {
     emailIdRef.current = emailId
   }, [emailId])
+
+  // 交付文档 §3.1 — mirror the backend kind into a ref so async callbacks
+  // (send / refresh-derived helpers) can read the kind active at call time
+  // without widening their dep arrays. Written from an effect, never during
+  // render (react-hooks/refs).
+  const backendKindRef = useRef(backendKind)
+  useEffect(() => {
+    backendKindRef.current = backendKind
+  }, [backendKind])
+
+  // 交付文档 §3.1 — per-(email, kind) activeSessionId memory. When the user
+  // switches scope (email OR kind) we restore the session they last had open in
+  // the TARGET scope rather than always falling back to "latest". key =
+  // scopeKey(emailId, kind); value = the activeSessionId last seen in that scope
+  // (or null for "no session yet"). A ref (not state): it's a side-table read at
+  // navigation time, not rendered, and writing it must not trigger a re-render.
+  const activeByScopeRef = useRef<Map<string, number | null>>(new Map())
 
   // Track whether the component is still mounted so a `chat.start()` that
   // resolves after unmount can abort the stranded session and skip the
@@ -329,6 +374,14 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // post-abort refresh must be allowed through.
   const navGenerationRef = useRef(0)
 
+  // 交付文档 §3.1 — set by the navigation layout effect to the activeSessionId
+  // the incoming scope was last on (or undefined when this scope was never
+  // visited). The load effect (#1) consumes it to restore the remembered
+  // conversation instead of always defaulting to the kind's latest session.
+  // `undefined` = "no memory, fall back to latest"; a number = restore that id;
+  // `null` = "scope was last on a blank new-session" (restore the empty state).
+  const pendingScopeRestoreRef = useRef<number | null | undefined>(undefined)
+
   // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — email switch is the
   // one navigation vector whose bump can't ride the synchronous-event path the
   // other three (newSession / selectSession / deleteSession) use: it's driven
@@ -354,40 +407,66 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // incoming email starts with no terminal history, and clearing it in the
   // same synchronous commit step keeps the reload-resume path (which loads with
   // the set empty) deriving streaming rows from the DB SSoT normally.
+  //
+  // 交付文档 §3.1 — a backend-KIND switch is now a navigation event of the same
+  // weight as an email switch (the two agents are independent threads), so this
+  // layout effect bumps on EITHER emailId OR backendKind changing. Both are
+  // prop-driven, so both ride the synchronous-commit useLayoutEffect path that
+  // beats any old-scope refresh(true) still in flight (same argument as the
+  // email-switch HIGH finding above).
   useLayoutEffect(() => {
     navGenerationRef.current += 1
     terminalIdsRef.current.clear()
-  }, [emailId])
+    // 交付文档 §3.1 — snapshot the session this scope was last on BEFORE any
+    // passive effect runs. The activeSessionRef sync effect (passive) writes
+    // activeByScopeRef[newScope]=activeSessionId, and the "adjust on prop
+    // change" block reset activeSessionId to null this render — so that passive
+    // write would clobber the remembered value before the load effect could read
+    // it. Reading it here (layout phase, before passive effects) captures the
+    // pre-clobber value; the load effect consumes + clears it.
+    pendingScopeRestoreRef.current = activeByScopeRef.current.get(scopeKey(emailId, backendKind))
+  }, [emailId, backendKind])
 
   // React 19 "Adjusting state on prop change" (react.dev/learn/you-might-not-need-an-effect).
-  // When emailId switches, reset derived state synchronously inside
-  // render rather than via an effect — keeps the renderer from showing
-  // a frame of stale data, and avoids the `react-hooks/set-state-in-effect`
-  // lint that would fire if we did the same work in useEffect.
-  if (lastEmailId !== emailId) {
+  // When the scope (emailId OR backendKind) switches, reset derived state
+  // synchronously inside render rather than via an effect — keeps the renderer
+  // from showing a frame of stale data, and avoids the
+  // `react-hooks/set-state-in-effect` lint that would fire if we did the same
+  // work in useEffect.
+  //
+  // 交付文档 §3.1 — keying on the full scope (email + kind) means a kind switch
+  // resets the same derived state an email switch does, so the panel never shows
+  // the OTHER agent's messages/streaming for a frame while effect #1 re-derives.
+  const currentScope = scopeKey(emailId, backendKind)
+  if (lastScope !== currentScope) {
+    const emailChanged = lastEmailId !== emailId
+    setLastScope(currentScope)
     setLastEmailId(emailId)
     setError(null)
     setMessages([])
     setActiveSessionIdState(null)
     setStreamingMessageId(null)
     setLastFailedInput(null)
-    // Sprint 14 PR A — sessions are email-scoped; clear so the sidebar
-    // doesn't briefly show the previous email's history while effect #1
-    // re-fetches.
-    setSessions([])
+    // Sprint 14 PR A / 交付文档 §3.1 — `allSessions` is the WHOLE email's list
+    // (every kind). Only an EMAIL change invalidates it; a kind-only switch
+    // re-filters the SAME cached list (effect #1 skips the listSessions IPC
+    // below when the email didn't change), so we keep `allSessions` intact.
+    // Clearing on a kind switch would blank the sidebar for a frame and force a
+    // redundant refetch.
+    if (emailChanged) setAllSessions([])
     // Sprint 19 PR-1d.2 — confirmations are tied to a session that's
     // about to be left behind; the main process's
     // cancelConfirmationsForSession() will reject the suspended promise
     // when chat.abort fires, but the renderer state should drop the
-    // dialog now or it'd briefly render for the previous email.
+    // dialog now or it'd briefly render for the previous scope.
     setPendingConfirmations([])
     // task 06-08-chat PR B — live tool steps are scoped to the in-flight turn
-    // of the previous email; drop them so the new email's panel starts clean
+    // of the previous scope; drop them so the new scope's panel starts clean
     // (the abort effect tears down the old stream; no more events will land for
     // those message ids).
     setLiveToolCalls(new Map())
-    // NOTE: do NOT clear quotaCooldownUntil on email switch — the
-    // upstream quota is global to the CRS account; switching emails
+    // NOTE: do NOT clear quotaCooldownUntil on scope switch — the
+    // upstream quota is global to the CRS account; switching emails / kinds
     // doesn't lift the cap. The cooldown timer below clears it on its
     // own schedule.
   }
@@ -426,6 +505,16 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   const sessionMetaRef = useRef<Map<number, SessionIslandMeta>>(new Map())
   useEffect(() => {
     activeSessionRef.current = activeSessionId
+    // 交付文档 §3.1 — remember the active session for the CURRENT scope so a
+    // later switch back (email or kind) restores this exact conversation rather
+    // than the kind's "latest". Written here (not at each call site) so every
+    // path that lands an activeSessionId — initial load, send, selectSession,
+    // newSession — records it uniformly. `null` is a meaningful value ("user is
+    // on a blank new-session for this scope"), so we store it too.
+    activeByScopeRef.current.set(
+      scopeKey(emailIdRef.current, backendKindRef.current),
+      activeSessionId
+    )
   }, [activeSessionId])
 
   // `syncStreaming` (default true) — whether this refresh should re-derive
@@ -507,35 +596,76 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     [mailApi]
   )
 
-  // --- 1) email switch / initial load --------------------------------------
-  // Derived-state resets live in the "Adjusting on prop change" block
-  // above; this effect only owns the async load side-effect.
+  // 交付文档 §3.1 — tracks which email `allSessions` currently holds. The load
+  // effect skips the listSessions IPC when ONLY the kind changed (same email,
+  // list already loaded) and re-filters the cached rows instead — avoids a
+  // redundant round-trip on every Notion⇄Custom toggle.
+  const allSessionsEmailRef = useRef<number | null>(null)
+
+  // --- 1) scope switch (email OR kind) / initial load ----------------------
+  // Derived-state resets live in the "Adjusting on prop change" block above;
+  // this effect only owns the async load side-effect.
+  //
+  // 交付文档 §3.1 — keyed on (emailId, backendKind). Both an email switch and a
+  // backend-kind switch land here:
+  //   - email change → fetch the new email's full session list
+  //   - kind-only change (same email) → reuse the cached `allSessions`, no IPC
+  // then filter to the current kind, restore the per-scope remembered session
+  // (or fall back to the kind's latest), and load its messages.
   useEffect(() => {
-    if (emailId === null) return undefined
-    // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — the email-switch
-    // navGeneration bump + terminalIdsRef clear moved to the useLayoutEffect
-    // above so they run synchronously at commit time, BEFORE the OLD email's
-    // in-flight refresh can resolve. This passive effect now only owns the
-    // async load. Because passive effects run after layout effects, the
-    // refresh(latest.id) below captures the already-bumped gen and is allowed
-    // through (it doesn't kill itself).
+    if (emailId === null) {
+      allSessionsEmailRef.current = null
+      return undefined
+    }
+    // task 06-08-chat Bug 1 (codex REQUEST CHANGES — HIGH) — the navigation
+    // navGeneration bump + terminalIdsRef clear ran in the useLayoutEffect above
+    // (synchronously at commit, BEFORE the OLD scope's in-flight refresh can
+    // resolve). This passive effect only owns the async load; its refresh()
+    // captures the already-bumped gen and is allowed through.
     let cancelled = false
+    // Consume the per-scope restore target the layout effect snapshotted (before
+    // the activeSessionRef passive write could clobber it). undefined = no memory.
+    const restoreTarget = pendingScopeRestoreRef.current
+    pendingScopeRestoreRef.current = undefined
+
+    // Pick the target session for THIS (email, kind) scope from a candidate list:
+    //   1. the remembered session, IF it still exists in the kind subset
+    //   2. else the kind's latest (updated_at DESC → first)
+    //   3. else null (no session yet for this kind)
+    const pickTarget = (kindSessions: ChatSession[]): number | null => {
+      if (typeof restoreTarget === 'number' && kindSessions.some((s) => s.id === restoreTarget)) {
+        return restoreTarget
+      }
+      return kindSessions.length > 0 ? kindSessions[0].id : null
+    }
+
+    const applyTarget = async (kindSessions: ChatSession[]): Promise<void> => {
+      const target = pickTarget(kindSessions)
+      if (target === null) {
+        setActiveSessionIdState(null)
+        setMessages([])
+        setStreamingMessageId(null)
+        return
+      }
+      setActiveSessionIdState(target)
+      await refresh(target)
+    }
+
     void (async (): Promise<void> => {
       try {
-        const fetched = await mailApi.chat.listSessions(emailId)
+        // Reuse the cached list iff it's for THIS email (kind-only switch);
+        // otherwise fetch. allSessions is updated_at DESC from the DB query.
+        const fetched =
+          allSessionsEmailRef.current === emailId
+            ? allSessions
+            : await mailApi.chat.listSessions(emailId)
         if (cancelled) return
-        // Sprint 14 PR A — persist to state so the sidebar can render
-        // them; order is already updated_at DESC from the DB query.
-        setSessions(fetched)
-        if (fetched.length === 0) {
-          setActiveSessionIdState(null)
-          setMessages([])
-          setStreamingMessageId(null)
-          return
+        if (allSessionsEmailRef.current !== emailId) {
+          allSessionsEmailRef.current = emailId
+          setAllSessions(fetched)
         }
-        const latest = fetched[0]
-        setActiveSessionIdState(latest.id)
-        await refresh(latest.id)
+        const kindSessions = fetched.filter((s) => s.backend_kind === backendKind)
+        await applyTarget(kindSessions)
       } catch (err) {
         if (cancelled) return
         const message = err instanceof Error ? err.message : String(err)
@@ -545,7 +675,21 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     return (): void => {
       cancelled = true
     }
-  }, [emailId, mailApi, refresh])
+    // `allSessions` is intentionally NOT a dep: it's read only on the kind-only
+    // branch (where the ref already matches emailId so we read the freshest
+    // committed value), and adding it would re-run the effect on every
+    // setAllSessions (send → refreshSessions), reloading messages spuriously.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emailId, backendKind, mailApi, refresh])
+
+  // 交付文档 §3.1 — the PUBLIC sessions list is the current-kind subset of the
+  // whole-email `allSessions`. ChatSidebar / history therefore only ever show
+  // the active agent's conversations, never the other agent's. updated_at DESC
+  // order is preserved from the DB query (filter is order-stable).
+  const sessions = useMemo(
+    () => allSessions.filter((s) => s.backend_kind === backendKind),
+    [allSessions, backendKind]
+  )
 
   // --- 2) stream subscription ----------------------------------------------
   useEffect(() => {
@@ -810,17 +954,23 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     }
   }, [quotaCooldownUntil])
 
-  // --- 3) abort on email switch / unmount ----------------------------------
+  // --- 3) abort on scope switch (email OR kind) / unmount ------------------
   // `activeSessionRef.current` may still be null at effect-run time (the
   // session id arrives from the async `listSessions` promise) — reading
   // the ref inside the cleanup closure gets the latest value at the
-  // moment the email actually switches or the panel unmounts.
+  // moment the scope actually switches or the panel unmounts.
+  //
+  // 交付文档 §3.1 — also keyed on backendKind so a kind switch tears down the
+  // OLD kind's in-flight stream, exactly like an email switch (the user's spec:
+  // "切 kind 应像 email 切换一样 abort"). The cleanup runs before the next
+  // render's effects re-sync activeSessionRef, so it still reads the pre-switch
+  // session id.
   useEffect(() => {
     return (): void => {
       const sid = activeSessionRef.current
       if (sid !== null) mailApi.chat.abort(sid)
     }
-  }, [emailId, mailApi])
+  }, [emailId, backendKind, mailApi])
 
   // --- 4) public actions ---------------------------------------------------
 
@@ -844,7 +994,11 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     try {
       const fresh = await mailApi.chat.listSessions(emailId)
       if (!mountedRef.current || gen !== navGenerationRef.current) return
-      setSessions(fresh)
+      // 交付文档 §3.1 — write the WHOLE-email list; the public `sessions` memo
+      // re-filters to the active kind. Keep the email-tracking ref in sync so the
+      // load effect's kind-only branch reuses this freshest snapshot.
+      allSessionsEmailRef.current = emailId
+      setAllSessions(fresh)
     } catch {
       // Sidebar is non-critical; swallow.
     }
@@ -1136,7 +1290,10 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         setLiveToolCalls(new Map())
       }
       mailApi.chat.deleteSession(sessionId)
-      setSessions((cur) => cur.filter((s) => s.id !== sessionId))
+      // 交付文档 §3.1 — scrub from the whole-email list; the public `sessions`
+      // memo re-derives the kind subset. pickTarget already guards a restore
+      // against a since-deleted id, so the per-scope memory needs no cleanup.
+      setAllSessions((cur) => cur.filter((s) => s.id !== sessionId))
     },
     [mailApi]
   )
