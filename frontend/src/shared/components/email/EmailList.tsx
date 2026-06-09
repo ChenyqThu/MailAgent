@@ -788,6 +788,15 @@ export function EmailList(): React.ReactElement {
     placeholderData: keepPreviousData
   })
   const pinnedSupp = useMemo(() => pinnedSupplementQ.data ?? [], [pinnedSupplementQ.data])
+  // 多文件夹同步 (P3) — 自定义文件夹视图下「固定/置顶」区只显示该文件夹的置顶邮件
+  // (而非全部 mailbox 的置顶)。pinnedSupp 按 internal_id 跨 mailbox 拉全部置顶,
+  // customMailbox 非空时收窄到 mailbox === customMailbox; 收窄后为空 → union 不进任何
+  // 行 → partitionByDate 的 pinned 桶为空 → flattenGroups 跳过该桶 (含标题), 整区隐藏。
+  // 内建 view (收件箱/全部/已标旗) customMailbox 为空 → 行为不变 (全局置顶)。
+  const pinnedSuppScoped = useMemo(
+    () => (customMailbox ? pinnedSupp.filter((e) => e.mailbox === customMailbox) : pinnedSupp),
+    [customMailbox, pinnedSupp]
+  )
 
   // Focused/Other tab 是收件箱分流概念 (按 AI 优先级把进站邮件拆 重点/其他)。
   // 对「已标旗 / 发件箱 / 全部」这些跨邮箱视图无意义 — 标旗视图本应显示我标的
@@ -811,14 +820,14 @@ export function EmailList(): React.ReactElement {
   // 发件箱只锚在我发出的邮件上, 置顶的发件邮件本就在 all 里 (会被 partitionByDate
   // 路由到 pinned 桶), 故 outbox 直接用 filteredBase, 不 union 收件箱置顶。
   const filtered = useMemo(() => {
-    if (view === 'outbox' || pinnedSupp.length === 0) return filteredBase
+    if (view === 'outbox' || pinnedSuppScoped.length === 0) return filteredBase
     const ids = new Set(filteredBase.map((e) => e.internal_id))
     const out = filteredBase.slice()
-    for (const p of pinnedSupp) {
+    for (const p of pinnedSuppScoped) {
       if (!ids.has(p.internal_id)) out.push(p)
     }
     return out
-  }, [view, filteredBase, pinnedSupp])
+  }, [view, filteredBase, pinnedSuppScoped])
 
   // Limit useNewlyAddedIds to the first page so paginated reads don't make
   // the entire newly-loaded slab flash "NEW".

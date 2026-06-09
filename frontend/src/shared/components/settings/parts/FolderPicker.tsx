@@ -442,7 +442,7 @@ function FolderRow({
           <span className="text-meta text-ink-fg-2 flex-1 min-w-0 truncate">
             {typeof node.message_count === 'number' && node.message_count > 0
               ? t('settings.folder.picker.manage.cleanupHint', {
-                  defaultValue: '仅删本地已同步的 {{count}} 封副本，不删 Exchange 文件夹/邮件',
+                  defaultValue: '仅删本地已同步的 {count} 封副本，不删 Exchange 文件夹/邮件',
                   count: node.message_count
                 })
               : t('settings.folder.picker.manage.cleanupHintNoCount', {
@@ -672,7 +672,7 @@ export function FolderPicker(): React.ReactElement {
         })
         toastSuccess(
           t('settings.folder.picker.manage.cleanupOk', {
-            defaultValue: '已清理「{{name}}」的本地副本（{{count}} 封）',
+            defaultValue: '已清理「{name}」的本地副本（{count} 封）',
             name: displayName,
             count: res.affected_local_rows
           })
@@ -747,7 +747,7 @@ export function FolderPicker(): React.ReactElement {
         if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
         toastSuccess(
           t('settings.folder.picker.manage.createOk', {
-            defaultValue: '已新建文件夹「{{name}}」',
+            defaultValue: '已新建文件夹「{name}」',
             name
           })
         )
@@ -756,7 +756,7 @@ export function FolderPicker(): React.ReactElement {
         if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
         toastSuccess(
           t('settings.folder.picker.manage.renameOk', {
-            defaultValue: '已重命名为「{{name}}」',
+            defaultValue: '已重命名为「{name}」',
             name
           })
         )
@@ -796,7 +796,7 @@ export function FolderPicker(): React.ReactElement {
       setDeleteTarget(null)
       toastSuccess(
         t('settings.folder.picker.manage.deleteOk', {
-          defaultValue: '已删除文件夹「{{name}}」',
+          defaultValue: '已删除文件夹「{name}」',
           name: node.display_name
         })
       )
@@ -884,7 +884,7 @@ export function FolderPicker(): React.ReactElement {
         <span className="text-meta text-ink-fg-2 truncate">
           {isReady
             ? t('settings.folder.picker.summary', {
-                defaultValue: '共 {{count}} 个文件夹',
+                defaultValue: '共 {count} 个文件夹',
                 count: folders.length
               })
             : isLoading
@@ -894,7 +894,7 @@ export function FolderPicker(): React.ReactElement {
             <span className="text-ink-fg-3">
               {' · '}
               {t('settings.folder.picker.refreshedAt', {
-                defaultValue: '上次刷新 {{time}}',
+                defaultValue: '上次刷新 {time}',
                 time: new Date(lastRefresh).toLocaleTimeString()
               })}
             </span>
@@ -1001,7 +1001,7 @@ export function FolderPicker(): React.ReactElement {
               </div>
               <h3 className="text-aux font-semibold text-ink-fg">
                 {t('settings.folder.picker.manage.deleteTitle', {
-                  defaultValue: '删除文件夹「{{name}}」？',
+                  defaultValue: '删除文件夹「{name}」？',
                   name: deleteTarget.display_name
                 })}
               </h3>
@@ -1009,7 +1009,7 @@ export function FolderPicker(): React.ReactElement {
                 {typeof deleteTarget.message_count === 'number'
                   ? t('settings.folder.picker.manage.deleteBodyWithCount', {
                       defaultValue:
-                        '将删除 Exchange 上的该文件夹，以及本地已同步的 {{count}} 封邮件副本。此操作不可撤销。',
+                        '将删除 Exchange 上的该文件夹，以及本地已同步的 {count} 封邮件副本。此操作不可撤销。',
                       count: deleteTarget.message_count
                     })
                   : t('settings.folder.picker.manage.deleteBody', {
