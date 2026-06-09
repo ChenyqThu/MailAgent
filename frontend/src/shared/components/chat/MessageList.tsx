@@ -14,16 +14,21 @@ import { useTranslation } from 'react-i18next'
 import {
   Bookmark,
   Check,
+  CheckSquare,
   ChevronRight,
   Copy,
   Database,
   ExternalLink,
+  FileText,
+  Flag,
+  Link2,
   Loader2,
   Pencil,
   RotateCcw,
   Search,
   Send,
   Sparkles,
+  Terminal,
   Wrench,
   X
 } from 'lucide-react'
@@ -37,9 +42,9 @@ import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ChatMessage, ChatToolCall } from '@shared/api/types'
-import type { PendingConfirmation } from '@shared/hooks/useEmailChat'
+import type { LiveToolCall, PendingConfirmation } from '@shared/hooks/useEmailChat'
 import { ConfirmToolDialog } from './ConfirmToolDialog'
-import { planAssistantSegments } from './tool_interleave'
+import { auditSteps, classifyTool, liveSteps, type ToolKind, type ToolStepData } from './tool_steps'
 
 /** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
  *  handlers; if a panel doesn't (e.g. read-only conversation viewer), the
@@ -93,6 +98,11 @@ interface Props {
    *  The HEAD entry renders an inline authorization card at the bottom of
    *  the stream (after the streaming assistant turn). Empty = no card. */
   pendingConfirmations?: ReadonlyArray<PendingConfirmation>
+  /** task 06-08-chat PR B — live (streaming) tool-call steps keyed by assistant
+   *  message id. The streaming AssistantBubble reads its own message's entry to
+   *  drive the Cowork tool group step-by-step; settled bubbles read DB audit
+   *  rows instead. Empty map when no turn is streaming tools. */
+  liveToolCalls?: Map<number, LiveToolCall[]>
   /** Authorize the head confirmation. `editedInput` carries the user's
    *  edited tool input when the edit-tier textarea was changed. */
   onConfirmTool?: (editedInput?: unknown) => Promise<void> | void
@@ -742,6 +752,38 @@ function toolIconEl(name: string, size = 11): React.ReactElement {
   return <Wrench size={size} strokeWidth={2} />
 }
 
+/** ToolKind → lucide icon element. Returns a ReactElement chosen from a fixed
+ *  set of lucide components (not a render-time component factory), matching the
+ *  existing `toolIconEl` constraint that avoids react-hooks/static-components. */
+function toolKindIconEl(kind: ToolKind, size = 13): React.ReactElement {
+  switch (kind) {
+    case 'read':
+      return <FileText size={size} strokeWidth={2} />
+    case 'task':
+      return <CheckSquare size={size} strokeWidth={2} />
+    case 'write':
+      return <Flag size={size} strokeWidth={2} />
+    case 'cmd':
+      return <Terminal size={size} strokeWidth={2} />
+    case 'link':
+      return <Link2 size={size} strokeWidth={2} />
+    case 'search':
+    default:
+      return <Search size={size} strokeWidth={2} />
+  }
+}
+
+/** ToolKind → text color class (ds token). Kept clamped per handoff §2.4: only
+ *  a light hue shift, not high-saturation per step. search = neutral. */
+const TOOL_KIND_COLOR: Record<ToolKind, string> = {
+  search: 'text-ink-fg-1',
+  read: 'text-info',
+  task: 'text-coral',
+  write: 'text-coral',
+  cmd: 'text-ai',
+  link: 'text-ok'
+}
+
 /** 从 input_json 提取一个代表性参数值做行内预览（首个非空字符串，否则首个数字）。 */
 function toolInputPreview(json: string): string {
   try {
@@ -920,38 +962,258 @@ function ToolCallList({
   )
 }
 
-/** task 06-08-chat Bug 2 — render the assistant text with tool chips
- *  interleaved at their `content_offset` ("text → tool → more text") instead of
- *  stacking every chip below the body. Layout logic lives in the pure
- *  `planAssistantSegments`; this component only maps the plan to elements. */
-function AssistantTextWithToolCalls({
-  content,
-  calls,
-  isStreaming
-}: {
-  content: string
-  calls: ReadonlyArray<ChatToolCall>
-  isStreaming: boolean
-}): React.ReactElement {
-  const { segments, trailing } = planAssistantSegments(content, calls)
-  let textIdx = 0
+// ── task 06-08-chat PR B — Cowork tool group (summary + timeline + windowing +
+// progressive disclosure). Replaces the per-offset interleaving (Bug 2) with a
+// grouped, time-ordered step list per handoff §2 + §6. Data feeds from two
+// sources, normalized into a single ToolStepData: the live `LiveToolCall` map
+// (during streaming) and the persisted `ChatToolCall` audit rows (after done).
+
+/** Safely tokenize a JSON string into colored <span>s — NO dangerouslySetInnerHTML
+ *  (tool output may contain arbitrary / HTML-looking content). Splits on a single
+ *  regex into key / string / number / bool / null / punctuation runs and maps each
+ *  to a ds-token text color. Pretty-printing is the caller's job (prettyJson). */
+function HighlightedJson({ json }: { json: string }): React.ReactElement {
+  // One pass: capture group 1 = a key ("...":), 2 = a quoted string value,
+  // 3 = a number, 4 = a boolean/null literal. Everything else falls through as
+  // plain punctuation/whitespace text. The 'g' flag drives a manual scan so we
+  // can interleave the unmatched gaps (braces, colons, commas, newlines).
+  const re =
+    /("(?:\\.|[^"\\])*")\s*:|("(?:\\.|[^"\\])*")|(-?\d+\.?\d*(?:[eE][+-]?\d+)?)|\b(true|false|null)\b/g
+  const out: React.ReactNode[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  let i = 0
+  while ((m = re.exec(json)) !== null) {
+    if (m.index > last) out.push(json.slice(last, m.index))
+    if (m[1] !== undefined) {
+      // key — keep the trailing colon as plain punctuation.
+      out.push(
+        <span key={`k${i}`} className="text-coral">
+          {m[1]}
+        </span>
+      )
+      out.push(':')
+    } else if (m[2] !== undefined) {
+      out.push(
+        <span key={`s${i}`} className="text-ok">
+          {m[2]}
+        </span>
+      )
+    } else if (m[3] !== undefined) {
+      out.push(
+        <span key={`n${i}`} className="text-info">
+          {m[3]}
+        </span>
+      )
+    } else if (m[4] !== undefined) {
+      out.push(
+        <span key={`b${i}`} className="text-ai">
+          {m[4]}
+        </span>
+      )
+    }
+    last = re.lastIndex
+    i += 1
+  }
+  if (last < json.length) out.push(json.slice(last))
+  return <>{out}</>
+}
+
+/** One step row + its 3-level progressive disclosure (row → Request card +
+ *  Result chip → output JSON). Collapse uses `display` (hidden ↔ block), never
+ *  grid-rows / max-height (handoff §7). While running the detail is force-shown
+ *  and the Result chip is hidden (output not ready yet). */
+function ToolStep({ step }: { step: ToolStepData }): React.ReactElement {
+  const { t } = useTranslation()
+  const kind = classifyTool(step.toolName)
+  const running =
+    step.status === 'running' || step.status === 'pending' || step.status === 'confirmed'
+  const err = step.status === 'error' || step.status === 'canceled'
+  const preview = toolInputPreview(step.inputJson)
+
+  // Step-level expand (level 1 → level 2). While running, detail is force-shown.
+  const [open, setOpen] = useState(false)
+  // Result chip expand (level 2 → level 3).
+  const [resultOpen, setResultOpen] = useState(false)
+  const detailShown = open || running
+
   return (
-    <div className="space-y-2">
-      {segments.map((seg) => {
-        if (seg.kind === 'chip') return <ToolCallChip key={`chip-${seg.call.id}`} call={seg.call} />
-        const key = `seg-${textIdx++}`
-        // min-w-0 keeps wide markdown (tables/code) from forcing the 360px
-        // drawer wider (Bug 3 lesson). The caret only rides the last text slice;
-        // interleaving only runs post-stream so this is normally false anyway.
-        return (
-          <div key={key} className="text-body text-ink-fg leading-relaxed min-w-0">
-            <TranslatedBody text={seg.text || ' '} streaming={isStreaming && seg.isLast} />
+    <div>
+      <button
+        type="button"
+        onClick={() => {
+          if (!running) setOpen((o) => !o)
+        }}
+        className="group flex items-center gap-2.5 w-full py-1 text-left"
+        aria-expanded={detailShown}
+      >
+        <span
+          className={cn(
+            'tool-step-ic grid place-items-center w-5 h-5 rounded-md shrink-0 bg-ink-1',
+            TOOL_KIND_COLOR[kind]
+          )}
+        >
+          {toolKindIconEl(kind)}
+        </span>
+        <span className="flex-1 min-w-0 text-aux text-ink-fg truncate">
+          {step.toolName}
+          {preview && (
+            <span className="ml-1.5 font-mono text-meta text-ink-fg-2" title={preview}>
+              {preview}
+            </span>
+          )}
+          {step.userEdited && (
+            <span className="ml-1 text-meta text-coral">({t('chat.toolCalls.userEdited')})</span>
+          )}
+        </span>
+        <span className="shrink-0 grid place-items-center w-3.5">
+          {running ? (
+            <Loader2 size={13} strokeWidth={2} className="text-coral animate-spin" />
+          ) : err ? (
+            <X size={13} strokeWidth={2.5} className="text-fail" />
+          ) : (
+            <Check size={13} strokeWidth={2.5} className="text-ok" />
+          )}
+        </span>
+        {!running && step.durationMs !== null && (
+          <span className="shrink-0 text-micro font-mono text-ink-fg-3 tabular-nums">
+            {formatMs(step.durationMs)}
+          </span>
+        )}
+        {!running && (
+          <ChevronRight
+            size={13}
+            className={cn(
+              'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+              'opacity-0 group-hover:opacity-100',
+              open && 'rotate-90 opacity-100'
+            )}
+          />
+        )}
+      </button>
+
+      {/* Level 2 — step detail (Request card + Result chip). display toggle. */}
+      <div
+        className={cn('ml-[29px] mb-1.5', detailShown ? 'block' : 'hidden')}
+        aria-hidden={!detailShown}
+      >
+        <div className="rounded-lg border border-ink-border-soft bg-ink-1 px-2.5 py-2 mb-1.5">
+          <div className="text-meta font-medium text-ink-fg-1 mb-1">
+            {t('chat.toolStep.request')}
           </div>
-        )
-      })}
-      {/* Chips the harness couldn't place (null offset) still render below so a
-          mixed old/new conversation never silently drops a tool call. */}
-      <ToolCallList calls={trailing} />
+          <pre className="text-micro font-mono leading-relaxed text-ink-fg-1 whitespace-pre-wrap break-words overflow-x-auto scrollbar-thin">
+            <HighlightedJson json={step.inputJson} />
+          </pre>
+        </div>
+        {/* Level 3 — Result chip + body (hidden while running; output not ready). */}
+        {!running && step.outputJson !== null && (
+          <>
+            <button
+              type="button"
+              onClick={() => setResultOpen((o) => !o)}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-md px-2 py-0.5',
+                'bg-ink-2 border border-ink-border-soft text-micro font-mono text-ink-fg-1',
+                'hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast'
+              )}
+              aria-expanded={resultOpen}
+            >
+              <ChevronRight
+                size={11}
+                className={cn('transition-transform duration-fast', resultOpen && 'rotate-90')}
+              />
+              {t('chat.toolStep.result')}
+              {step.durationMs !== null && (
+                <span className="text-ink-fg-3"> · {formatMs(step.durationMs)}</span>
+              )}
+            </button>
+            <div
+              className={cn(
+                'mt-1.5 rounded-lg border border-ink-border-soft bg-ink-1 px-2.5 py-2',
+                resultOpen ? 'block' : 'hidden'
+              )}
+              aria-hidden={!resultOpen}
+            >
+              <pre className="text-micro font-mono leading-relaxed text-ink-fg-1 whitespace-pre-wrap break-words overflow-x-auto overflow-y-auto max-h-48 scrollbar-thin">
+                <HighlightedJson json={step.outputJson} />
+              </pre>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const TOOL_WINDOW = 3
+
+/** Cowork tool group — collapsible summary head + windowed step list with a
+ *  timeline hairline. Borderless, aligned with ThinkingBlock (pl-[18px] indent,
+ *  display-toggle collapse, adjust-on-prop-change auto-collapse).
+ *
+ *  `running` = the turn is still producing tool steps (streaming, or a step is
+ *  in a running/pending state). While running the head reads "正在使用工具…"
+ *  (shimmer), the group is expanded, and only the most recent TOOL_WINDOW steps
+ *  are shown. Once running flips false the group auto-collapses; clicking the
+ *  head re-opens it and reveals ALL steps (window released). */
+function ToolGroup({
+  steps,
+  running
+}: {
+  steps: ToolStepData[]
+  running: boolean
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const reduceMotion = useReducedMotion()
+  // Default expanded while running; auto-collapse when finished. Adjust-on-prop-
+  // change (react.dev / ThinkingBlock prevActive), not useEffect+setState.
+  const [open, setOpen] = useState(running)
+  const [prevRunning, setPrevRunning] = useState(running)
+  if (prevRunning !== running) {
+    setPrevRunning(running)
+    setOpen(running) // running → expand; finished → auto-collapse
+  }
+  // While running the list is force-shown regardless of `open`.
+  const listShown = open || running
+
+  // Windowing: show only the most recent TOOL_WINDOW steps while running; once
+  // finished + expanded, show all (handoff §2.3 / §8: hide earlier ones outright,
+  // no "+N earlier" hint).
+  const windowed = running ? steps.slice(Math.max(0, steps.length - TOOL_WINDOW)) : steps
+
+  return (
+    <div className="min-w-0">
+      <button
+        type="button"
+        onClick={() => {
+          if (!running) setOpen((o) => !o)
+        }}
+        className="inline-flex items-center gap-1.5 py-0.5 text-left text-ink-fg-2 hover:text-ink-fg-1 transition-colors duration-fast"
+        aria-expanded={listShown}
+      >
+        <ChevronRight
+          size={13}
+          className={cn(
+            'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+            listShown && 'rotate-90'
+          )}
+        />
+        {running ? (
+          <span className={cn('text-aux', !reduceMotion && 'think-shimmer')}>
+            {t('chat.toolGroup.running')}
+          </span>
+        ) : (
+          <span className="text-aux">{t('chat.toolGroup.using', { n: steps.length })}</span>
+        )}
+      </button>
+      <div
+        className={cn('tool-timeline pl-[18px]', listShown ? 'block' : 'hidden')}
+        aria-hidden={!listShown}
+      >
+        {windowed.map((s) => (
+          <ToolStep key={s.key} step={s} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -1030,32 +1292,61 @@ function ThinkingBlock({
 function AssistantBubble({
   message,
   isStreaming,
+  liveToolCalls,
   draftHandlers
 }: {
   message: ChatMessage
   isStreaming: boolean
+  /** task 06-08-chat PR B — live tool-call steps for THIS message, forwarded
+   *  from the harness stream. Used while streaming; the DB audit rows take over
+   *  once the turn settles. Undefined for non-streaming / no live steps. */
+  liveToolCalls?: ReadonlyArray<LiveToolCall>
   draftHandlers?: DraftHandlers
 }): React.ReactElement {
   const { t } = useTranslation()
   // task 06-08-chat Bug 2 — tool-call audit rows for this message. Fetched once
   // here (hook must precede the early returns below) and shared by both the
-  // draft path (legacy stacked) and the text path (interleaved by offset). The
-  // hook skips the fetch while streaming, so the early returns don't waste it.
+  // draft path (legacy stacked) and the text path (Cowork tool group). The hook
+  // skips the fetch while streaming, so the early returns don't waste it.
   const toolCalls = useToolCalls(message.id, isStreaming)
+  // task 06-08-chat PR B — Cowork tool steps. Streaming → live event map;
+  // settled → DB audit rows. The two phases must dovetail WITHOUT a gap: at
+  // `done` the bubble flips to !isStreaming, but `useToolCalls` only starts its
+  // async listToolCalls fetch then — so for the frames between `done` and that
+  // fetch resolving, auditSteps([]) would be empty and the whole ToolGroup would
+  // vanish then pop back. The live map for this message id isn't cleared on
+  // `done` (only on navigation), so we bridge the gap by falling back to live
+  // steps while the audit rows are still empty. Once the audit rows arrive they
+  // take over (they carry the persisted ids / user-edited input). `running` is
+  // true when a step is still in flight, or simply because the turn is streaming.
+  const auditRows = auditSteps(toolCalls)
+  const steps = isStreaming
+    ? liveSteps(liveToolCalls)
+    : auditRows.length > 0
+      ? auditRows
+      : liveSteps(liveToolCalls)
+  const toolsRunning =
+    isStreaming &&
+    (steps.length === 0 ||
+      steps.some(
+        (s) => s.status === 'running' || s.status === 'pending' || s.status === 'confirmed'
+      ))
   // task 06-08-chat 需求 5 — extended-thinking summary for this message. Rendered
   // in a collapsible block ABOVE the answer (thinking precedes the answer, both in
   // SSE order + reading intuition). Empty → not rendered.
   const thinkingText = message.thinking ?? ''
-  // Empty + streaming: the thinking phase. If the extended-thinking stream has
-  // already produced reasoning, render the active ThinkingBlock (its shimmer head
-  // already expresses "思考中…", so we drop the separate Loader2 pulse to avoid a
-  // double indicator). If no thinking yet → keep the generic pulse.
+  // Empty content + streaming: the pre-answer phase (thinking and/or tools are
+  // running, but no answer tokens yet). Render the §6 stack — ThinkingBlock then
+  // ToolGroup — instead of a bare pulse. Only when there is neither thinking nor
+  // a tool step do we fall back to the generic "AI 思考中…" pulse.
   if (message.content.length === 0 && isStreaming) {
+    const hasThinking = thinkingText.length > 0
+    const hasSteps = steps.length > 0
     return (
       <div className="space-y-2">
-        {thinkingText.length > 0 ? (
-          <ThinkingBlock thinking={thinkingText} active />
-        ) : (
+        {hasThinking && <ThinkingBlock thinking={thinkingText} active />}
+        {hasSteps && <ToolGroup steps={steps} running={toolsRunning} />}
+        {!hasThinking && !hasSteps && (
           <div className="flex items-center gap-2 py-1 text-aux text-ink-fg-2">
             <Loader2 size={12} strokeWidth={2} className="animate-spin" />
             <span>{t('chat.status.thinking')}</span>
@@ -1152,19 +1443,21 @@ function AssistantBubble({
           {headerMeta}
         </div>
       )}
-      {/* task 06-08-chat PR A — extended-thinking block, above the answer. Done
-          state → default collapsed, click to re-open. */}
+      {/* §6 render order — task 06-08-chat PR A/PR B: thinking → tool group →
+          answer → footer. ThinkingBlock (PR A) renders above; done state opens
+          collapsed, click to re-open. */}
       {thinkingText.length > 0 && <ThinkingBlock thinking={thinkingText} active={false} />}
-      {/* task 06-08-chat Bug 2 — interleave tool chips at their content_offset
-          ("text → tool → more text") instead of stacking them all below the
-          body. Falls back to body-then-chips when no chip carries an offset
-          (pre-v5 rows / non-harness). Streamdown's caret renders inline at the
-          end of the trailing text segment while streaming. */}
-      <AssistantTextWithToolCalls
-        content={message.content || ' '}
-        calls={toolCalls}
-        isStreaming={isStreaming}
-      />
+      {/* task 06-08-chat PR B — Cowork tool group (summary + timeline + windowing
+          + progressive disclosure), grouped BEFORE the answer instead of
+          interleaved per content_offset. Streaming → live steps; settled → audit
+          rows. Rendered only when there's at least one step. */}
+      {steps.length > 0 && <ToolGroup steps={steps} running={toolsRunning} />}
+      {/* Answer body — full content, streaming caret on the trailing token.
+          min-w-0 keeps wide markdown (tables/code) from forcing the 360px
+          drawer wider (Bug 3 lesson). */}
+      <div className="text-body text-ink-fg leading-relaxed min-w-0">
+        <TranslatedBody text={message.content || ' '} streaming={isStreaming} />
+      </div>
       {!isStreaming && <AssistantMessageFooter messageId={message.id} content={message.content} />}
     </div>
   )
@@ -1221,6 +1514,7 @@ export function MessageList({
   draftHandlers,
   userHandlers,
   pendingConfirmations,
+  liveToolCalls,
   onConfirmTool,
   onCancelTool
 }: Props): React.ReactElement {
@@ -1283,6 +1577,7 @@ export function MessageList({
           <AssistantBubble
             message={m}
             isStreaming={m.id === streamingMessageId}
+            liveToolCalls={liveToolCalls?.get(m.id)}
             draftHandlers={draftHandlers}
           />
         </MessageRow>

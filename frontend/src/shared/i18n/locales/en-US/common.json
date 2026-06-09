@@ -639,6 +639,14 @@
       "output": "Output",
       "userEdited": "user-edited"
     },
+    "toolGroup": {
+      "using": "Used {{n}} tools",
+      "running": "Using tools…"
+    },
+    "toolStep": {
+      "request": "Request",
+      "result": "Result"
+    },
     "attachment": {
       "remove": "Remove attachment"
     },

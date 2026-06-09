@@ -72,6 +72,22 @@ export interface ChatError {
   message: string
 }
 
+/** task 06-08-chat PR B — one live tool-call row, built from the harness's
+ *  streaming `tool_use` / `tool_result` events. Mirrors the persisted
+ *  `ChatToolCall` audit shape closely enough that MessageList can normalize
+ *  both into a single `ToolStepData`. Lives only in renderer memory for the
+ *  duration of a streaming turn; once `done` fires the renderer switches to the
+ *  DB audit rows (`useToolCalls`). */
+export interface LiveToolCall {
+  toolUseId: string
+  name: string
+  input: unknown
+  status: 'running' | 'ok' | 'error' | 'canceled'
+  output?: unknown
+  errorMessage?: string
+  durationMs: number | null
+}
+
 /** Sprint 19 PR-1d.2 — one pending ConfirmToolDialog. The harness in
  *  the main process is blocked on a per-toolUseId promise waiting for the
  *  renderer to call confirmTool(); each entry here is one such block.
@@ -156,6 +172,13 @@ export interface UseEmailChatReturn {
     approved: boolean,
     editedInput?: unknown
   ) => Promise<{ ok: true } | { ok: false; code: string; message: string }>
+  /** task 06-08-chat PR B — live (streaming) tool-call rows keyed by the
+   *  assistant message id. Built from the harness's `tool_use` / `tool_result`
+   *  events so the Cowork tool group updates step-by-step during the turn,
+   *  without waiting for the post-`done` audit fetch. Empty for any message not
+   *  currently streaming tools; the renderer reads the DB audit rows once the
+   *  turn settles. */
+  liveToolCalls: Map<number, LiveToolCall[]>
 }
 
 // Sprint 5 §2.3 state-machine #4: quota cooldown duration. The Anthropic
@@ -220,6 +243,15 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
   // when the LLM emits N tool_use blocks of preview/edit tier in one turn),
   // so this stays an array — UI renders them in arrival order.
   const [pendingConfirmations, setPendingConfirmations] = useState<PendingConfirmation[]>([])
+
+  // task 06-08-chat PR B — live tool-call rows for the in-flight turn, keyed by
+  // assistant message id. The harness forwards `tool_use` (running start) +
+  // `tool_result` (terminal) events on the stream; we mirror them here so the
+  // Cowork tool group renders steps as they happen instead of waiting for the
+  // post-`done` audit fetch. Cleared on navigation switches (email change /
+  // newSession / selectSession / deleteSession-of-active) so a stale turn's
+  // steps never bleed into a fresh conversation.
+  const [liveToolCalls, setLiveToolCalls] = useState<Map<number, LiveToolCall[]>>(new Map())
 
   // Mirror the latest committed emailId into a ref so `send()` can detect
   // a switch that happened while `chat.start()` was in flight. The closure
@@ -344,6 +376,11 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     // when chat.abort fires, but the renderer state should drop the
     // dialog now or it'd briefly render for the previous email.
     setPendingConfirmations([])
+    // task 06-08-chat PR B — live tool steps are scoped to the in-flight turn
+    // of the previous email; drop them so the new email's panel starts clean
+    // (the abort effect tears down the old stream; no more events will land for
+    // those message ids).
+    setLiveToolCalls(new Map())
     // NOTE: do NOT clear quotaCooldownUntil on email switch — the
     // upstream quota is global to the CRS account; switching emails
     // doesn't lift the cap. The cooldown timer below clears it on its
@@ -523,16 +560,54 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       // Sprint 19 PR-1d.2 — agent harness events. The chat_tool_call
       // audit rows are sidecar to ai_chat_messages (not joined into
       // listMessages), so we DON'T refresh on every tool_use — the
-      // renderer reads them via a separate listToolCalls query keyed
-      // by messageId when the assistant bubble mounts the ToolCallRow.
-      // The hook only forwards the live state transitions here.
-      if (event.type === 'tool_use' || event.type === 'tool_result') {
-        // Currently a no-op at the hook level — MessageList renders the
-        // call/result UI off its own listToolCalls fetch keyed by the
-        // assistant message. Future enhancement could maintain a
-        // hook-local Map<messageId, ToolCall[]> so the UI updates without
-        // a round-trip. For PR-1d.2 we stay simple and let the next
-        // `done` event trigger the SSoT refresh.
+      // renderer reads them via a separate listToolCalls query keyed by
+      // messageId once the turn settles.
+      //
+      // task 06-08-chat PR B — but during the turn we mirror the live
+      // transitions into liveToolCalls so the Cowork tool group renders
+      // each step as it runs (running spinner → ✓ + duration). The keys are
+      // assistant message ids; the renderer reads liveToolCalls[message.id]
+      // while streaming and the DB audit rows afterwards. Immutable updates
+      // (new Map + new arrays) so React sees the change.
+      if (event.type === 'tool_use') {
+        setLiveToolCalls((prev) => {
+          const next = new Map(prev)
+          const existing = next.get(messageId) ?? []
+          // Guard against a stray duplicate tool_use envelope re-appending the
+          // same toolUseId (the forward path is best-effort).
+          if (existing.some((c) => c.toolUseId === event.toolUseId)) return prev
+          next.set(messageId, [
+            ...existing,
+            {
+              toolUseId: event.toolUseId,
+              name: event.name,
+              input: event.input,
+              status: 'running',
+              durationMs: null
+            }
+          ])
+          return next
+        })
+        return
+      }
+      if (event.type === 'tool_result') {
+        setLiveToolCalls((prev) => {
+          const existing = prev.get(messageId)
+          if (!existing) return prev
+          const idx = existing.findIndex((c) => c.toolUseId === event.toolUseId)
+          if (idx === -1) return prev
+          const next = new Map(prev)
+          const updatedArr = [...existing]
+          updatedArr[idx] = {
+            ...updatedArr[idx],
+            status: event.status,
+            output: event.output,
+            errorMessage: event.errorMessage,
+            durationMs: event.durationMs
+          }
+          next.set(messageId, updatedArr)
+          return next
+        })
         return
       }
       if (event.type === 'pending_confirmation') {
@@ -925,6 +1000,8 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     setStreamingMessageId(null)
     setError(null)
     setLastFailedInput(null)
+    // task 06-08-chat PR B — drop any in-flight turn's live tool steps.
+    setLiveToolCalls(new Map())
     // task 06-08-chat Bug 1 (codex follow-up) — a fresh conversation starts
     // with no terminal history; clear so a future genuinely-streaming row in
     // the new session isn't suppressed by a stale id from the old one.
@@ -1031,6 +1108,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
         setStreamingMessageId(null)
         setLastFailedInput(null)
         setError(null)
+        // task 06-08-chat PR B — the active session is being deleted; clear its
+        // live tool steps along with the rest of the renderer state.
+        setLiveToolCalls(new Map())
       }
       mailApi.chat.deleteSession(sessionId)
       setSessions((cur) => cur.filter((s) => s.id !== sessionId))
@@ -1064,6 +1144,9 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
       setError(null)
       setLastFailedInput(null)
       setStreamingMessageId(null)
+      // task 06-08-chat PR B — leaving the current session drops its live tool
+      // steps; the incoming session reads its own DB audit rows via refresh().
+      setLiveToolCalls(new Map())
       setActiveSessionIdState(sessionId)
       activeSessionRef.current = sessionId
       try {
@@ -1111,7 +1194,8 @@ export function useEmailChat(emailId: number | null): UseEmailChatReturn {
     editMessage,
     deleteSession,
     pendingConfirmations,
-    confirmTool
+    confirmTool,
+    liveToolCalls
   }
 }
 

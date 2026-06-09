@@ -4345,6 +4345,36 @@ body:not([data-batch-mode='true']) .email-row .cb {
   animation: chat-think-blink 1s steps(2) infinite;
 }
 
+/* ── Chat tool group (Cowork mode) — timeline hairline behind step icons ──
+   task 06-08-chat PR B. The step list draws a single vertical hairline behind
+   the column of type icons; each icon paints a box-shadow ring in the panel's
+   base layer (--ink-2, the dominant .ai-bg gradient stop) so the line visibly
+   "breaks" at each icon, reading as icons threaded onto the timeline. Layout
+   (indent, sizing) stays in Tailwind on the elements; only the line + the
+   icon-break ring live here because they need ::before + box-shadow that
+   Tailwind can't express cleanly. */
+.tool-timeline {
+  position: relative;
+}
+.tool-timeline::before {
+  content: '';
+  position: absolute;
+  /* Align to the icon column centre: pl-[18px] container + 20px icon → centre
+     at 18 + 10 = 28px from the list's left edge. */
+  left: 27.25px;
+  top: 14px;
+  bottom: 13px;
+  width: 1.5px;
+  background: rgb(var(--ink-border));
+  border-radius: 1px;
+}
+.tool-step-ic {
+  position: relative;
+  z-index: 1;
+  /* Break the hairline at the icon: a 3px ring in the panel base colour. */
+  box-shadow: 0 0 0 3px rgb(var(--ink-2));
+}
+
 /* 分段控件（报告 cadence 过滤 / 配置排程 + 窗口）。 */
 .seg {
   display: inline-flex;

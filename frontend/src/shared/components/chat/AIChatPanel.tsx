@@ -832,6 +832,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                   draftHandlers={draftHandlers}
                   userHandlers={userHandlers}
                   pendingConfirmations={pendingConfirmations}
+                  liveToolCalls={chat.liveToolCalls}
                   onConfirmTool={handleConfirmTool}
                   onCancelTool={handleCancelTool}
                 />
