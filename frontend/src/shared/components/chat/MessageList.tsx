@@ -17,7 +17,6 @@ import {
   CheckSquare,
   ChevronRight,
   Copy,
-  Database,
   ExternalLink,
   FileText,
   Flag,
@@ -29,7 +28,6 @@ import {
   Send,
   Sparkles,
   Terminal,
-  Wrench,
   X
 } from 'lucide-react'
 
@@ -736,22 +734,6 @@ function AssistantMessageFooter({
   )
 }
 
-// Sprint 20 — tool-call chip 升级（Claude Code 风）。每个 chat_tool_call 渲染成
-// 一张可展开卡：工具图标 + 工具名 + 参数预览 + 状态/耗时 + KOS 徽标，展开看
-// 参数 / 命中结果 JSON。数据来自 listToolCalls(messageId)（ChatToolCall）。
-// Streaming 期间 skip 避免抖动（tool_call event 触发 listMessages refresh →
-// 本组件 unmount→remount）。移植自 ~/Downloads/agents/chat-tab.jsx ToolCallChip。
-
-/** tool_name → lucide 图标元素。KOS 工具用 Database，搜索类用 Search，其余 Wrench。
- *  返回 ReactElement（而非组件引用）以避开 react-hooks/static-components —— 这里是
- *  从固定的 3 个 lucide 组件里**选择**，不是 render 期创建新组件。 */
-function toolIconEl(name: string, size = 11): React.ReactElement {
-  if (name.startsWith('kos_')) return <Database size={size} strokeWidth={2} />
-  if (name.includes('search') || name.includes('find'))
-    return <Search size={size} strokeWidth={2} />
-  return <Wrench size={size} strokeWidth={2} />
-}
-
 /** ToolKind → lucide icon element. Returns a ReactElement chosen from a fixed
  *  set of lucide components (not a render-time component factory), matching the
  *  existing `toolIconEl` constraint that avoids react-hooks/static-components. */
@@ -802,121 +784,6 @@ function toolInputPreview(json: string): string {
   return ''
 }
 
-function ToolCallChip({ call }: { call: ChatToolCall }): React.ReactElement {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const isKos = call.tool_name.startsWith('kos_')
-  const running =
-    call.status === 'running' || call.status === 'pending' || call.status === 'confirmed'
-  const err = call.status === 'error' || call.status === 'canceled'
-  const inputEffective = call.user_edited_input_json ?? call.input_json
-  const preview = toolInputPreview(inputEffective)
-
-  return (
-    <div className="rounded-md border border-ink-border-soft bg-ink-2/40 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left hover:bg-ink-fg/[0.03] transition-colors duration-fast"
-        aria-expanded={open}
-      >
-        <span
-          className="grid place-items-center w-[18px] h-[18px] rounded shrink-0"
-          style={{ background: 'rgb(var(--c-ai) / 0.12)', color: 'rgb(var(--c-ai))' }}
-        >
-          {toolIconEl(call.tool_name)}
-        </span>
-        <span className="text-meta font-mono text-ink-fg shrink-0">{call.tool_name}</span>
-        {preview && (
-          <span className="text-meta text-ink-fg-2 truncate min-w-0" title={preview}>
-            {preview}
-          </span>
-        )}
-        <span className="ml-auto flex items-center gap-1.5 shrink-0">
-          {running ? (
-            <Loader2 size={11} strokeWidth={2} className="text-coral animate-spin" />
-          ) : (
-            <>
-              {err ? (
-                <X size={11} strokeWidth={2.5} className="text-fail" />
-              ) : (
-                <Check size={11} strokeWidth={2.5} className="text-ok" />
-              )}
-              {call.duration_ms !== null && (
-                <span className="text-micro font-mono text-ink-fg-3 tabular-nums">
-                  {formatMs(call.duration_ms)}
-                </span>
-              )}
-            </>
-          )}
-        </span>
-        <ChevronRight
-          size={12}
-          className={cn(
-            'shrink-0 text-ink-fg-3 transition-transform duration-fast',
-            open && 'rotate-90'
-          )}
-        />
-      </button>
-      {/* 展开走纯 CSS grid-template-rows 0fr→1fr（§4.1：能 grid-rows 不上 GSAP；
-          也避开 MessageList 内 bubble/DraftCard GSAP 冲突）。内容常驻挂载双向过渡；
-          reduced-motion 走 motion-reduce 去过渡。 */}
-      <div
-        aria-hidden={!open}
-        className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
-        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          <div className="px-2.5 pb-2.5 pt-1 space-y-2 border-t border-ink-border-soft">
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-micro font-mono text-ink-fg-2">{call.tool_name}</span>
-              {isKos && (
-                <span
-                  className="text-micro font-mono px-1.5 py-px rounded"
-                  style={{
-                    color: 'rgb(var(--c-ai))',
-                    background: 'rgb(var(--c-ai) / 0.12)',
-                    border: '1px solid rgb(var(--c-ai) / 0.22)'
-                  }}
-                >
-                  KOS
-                </span>
-              )}
-            </div>
-            <div>
-              <div className="text-ink-fg-3 text-micro mb-0.5 font-mono uppercase tracking-wide">
-                {t('chat.toolCalls.input')}
-                {call.user_edited_input_json !== null && (
-                  <span className="ml-1 text-coral">({t('chat.toolCalls.userEdited')})</span>
-                )}
-              </div>
-              <pre className="text-micro font-mono bg-ink-1 rounded px-2 py-1 overflow-x-auto whitespace-pre-wrap break-words scrollbar-thin">
-                {inputEffective}
-              </pre>
-            </div>
-            {call.output_json !== null ? (
-              <div>
-                <div className="text-ink-fg-3 text-micro mb-0.5 font-mono uppercase tracking-wide">
-                  {t('chat.toolCalls.output')}
-                </div>
-                <pre className="text-micro font-mono bg-ink-1 rounded px-2 py-1 overflow-x-auto overflow-y-auto max-h-48 whitespace-pre-wrap break-words scrollbar-thin">
-                  {call.output_json}
-                </pre>
-              </div>
-            ) : (
-              running && (
-                <div className="text-micro font-mono text-ink-fg-3">
-                  {t('chat.toolCall.running')}…
-                </div>
-              )
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 /** Fetch the chat_tool_call audit rows for a finished assistant message.
  *  Skips the fetch while the message is still streaming (chips only settle
  *  after the turn completes — during streaming they ride the live event
@@ -942,24 +809,6 @@ function useToolCalls(messageId: number, isStreaming: boolean): ChatToolCall[] {
   }, [messageId, isStreaming, mailApi])
 
   return calls
-}
-
-/** Legacy "all chips stacked below the body" layout. Used by the draft-reply
- *  path (single final output, no time-ordered text) and as the degrade target
- *  when no tool call carries a content_offset (pre-v5 rows / non-harness). */
-function ToolCallList({
-  calls
-}: {
-  calls: ReadonlyArray<ChatToolCall>
-}): React.ReactElement | null {
-  if (calls.length === 0) return null
-  return (
-    <div className="space-y-1">
-      {calls.map((c) => (
-        <ToolCallChip key={c.id} call={c} />
-      ))}
-    </div>
-  )
 }
 
 // ── task 06-08-chat PR B — Cowork tool group (summary + timeline + windowing +
@@ -1420,15 +1269,18 @@ function AssistantBubble({
           </div>
         )}
         {thinkingText.length > 0 && <ThinkingBlock thinking={thinkingText} active={false} />}
+        {/* §6 render order — r4/codex review: thinking → tool group → answer
+            (the draft card). The draft path previously stacked a legacy
+            chip list BELOW the card; unified with the text path so ToolGroup
+            (summary + timeline + windowing) precedes the body in BOTH paths.
+            Rendered only when there's at least one step. */}
+        {steps.length > 0 && <ToolGroup steps={steps} running={toolsRunning} />}
         <DraftPreviewCard
           content={message.content}
           recipient={draftHandlers?.recipient ?? null}
           handlers={draftHandlers}
           isStreaming={isStreaming}
         />
-        {/* Draft replies are a single final output (no time-ordered text to
-            interleave into) → keep tool chips stacked below the card. */}
-        <ToolCallList calls={toolCalls} />
         {!isStreaming && (
           <AssistantMessageFooter messageId={message.id} content={message.content} />
         )}

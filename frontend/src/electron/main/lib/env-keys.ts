@@ -203,7 +203,15 @@ export const SECRET_ENV_KEYS: Set<string> = new Set<string>([
   'DASHBOARD_PASSWORD',
   'MAILAGENT_CLI_API_KEY',
   'DAVMAIL_POC_CIPHER_KEY',
-  'DAVMAIL_CIPHER_KEY'
+  'DAVMAIL_CIPHER_KEY',
+  // codex r4 [HIGH] — MANAGED (returned) URLs whose value embeds a credential,
+  // so they're redacted, not sent in plaintext. Parity mirror of
+  // settings.py `_SECRET_ENV_KEYS`. ALERT_FEISHU_WEBHOOK_URL's trailing path
+  // segment IS the bot token; REDIS_URL can carry an inline password
+  // (`redis://[:password@]host:port`). Both stay in MANAGED_ENV_KEYS above
+  // (L107 / L127) so env:get still returns them — just redacted.
+  'ALERT_FEISHU_WEBHOOK_URL',
+  'REDIS_URL'
 ])
 
 /** Keys the UI surfaces as readonly display only. env:set on these is

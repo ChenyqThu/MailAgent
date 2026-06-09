@@ -1837,4 +1837,97 @@ describe('useEmailChat — per-kind session scoping (交付文档 §3.1)', () =>
     expect(result.current.streamingMessageId).toBeNull()
     expect(result.current.isStreaming).toBe(false)
   })
+
+  // codex r4 [HIGH] — same-email KIND switch while send()'s chat.start is in
+  // flight. The bare `emailIdRef.current !== myEmail` check the email-switch
+  // test exercises CANNOT catch this (email is unchanged); the fix snapshots
+  // `navGenerationRef.current` (which the useLayoutEffect bumps on EITHER email
+  // OR kind change) before the await and discards the resolved turn if it
+  // bumped. Without the guard the OLD kind's session would be written into the
+  // NEW kind's scope (串台).
+  test('kind-switch-during-send: stale kind session is aborted, not written to the new scope', async () => {
+    mockChatListSessions.mockResolvedValue([])
+    mockChatListMessages.mockResolvedValue([])
+    // chat.start hangs so we can switch kind mid-promise.
+    let resolveStart: ((v: ChatStartResult) => void) | null = null
+    mockChatStart.mockImplementation(
+      () =>
+        new Promise<ChatStartResult>((res) => {
+          resolveStart = res
+        })
+    )
+
+    const { result, rerender } = renderHook(({ id, kind }: Props) => useEmailChat(id, kind), {
+      initialProps: { id: 101, kind: 'notion-agent' }
+    })
+    await waitFor(() => expect(mockChatListSessions).toHaveBeenCalledWith(101))
+
+    // Fire send() on notion-agent — promise stays pending.
+    let sendPromise: Promise<ChatStartResult> | null = null
+    act(() => {
+      sendPromise = result.current.send({ message: 'hi', backendKind: 'notion-agent' })
+    })
+    await waitFor(() => expect(resolveStart).not.toBeNull())
+
+    // Switch KIND (same email) before the pending start() resolves. This bumps
+    // navGenerationRef via the useLayoutEffect; emailId is unchanged.
+    rerender({ id: 101, kind: 'custom-api' })
+
+    // Resolve start() — the hook should detect the bumped generation and abort
+    // instead of mutating state for the (now-left) notion-agent scope.
+    resolveStart!({ sessionId: 999, userMessageId: 1000, assistantMessageId: 1001 })
+    await sendPromise
+
+    expect(mockChatAbort).toHaveBeenCalledWith(999)
+    // The stale kind's session must NOT have been written into the new scope.
+    expect(result.current.activeSessionId).not.toBe(999)
+    expect(result.current.streamingMessageId).not.toBe(1001)
+    expect(result.current.streamingMessageId).toBeNull()
+  })
+
+  // codex r4 [HIGH] — same as above but for editMessage(). The pre-fix
+  // editMessage had NO staleness guard at all (its comment assumed only email
+  // switches null activeSessionId — a kind switch also strands the IPC).
+  test('kind-switch-during-edit: stale kind re-stream is aborted, not written to the new scope', async () => {
+    mockChatListSessions.mockResolvedValue([fakeSession({ id: 7, backend_kind: 'notion-agent' })])
+    mockChatListMessages.mockResolvedValue([
+      fakeMessage({ id: 100, session_id: 7, role: 'user', content: 'old' }),
+      fakeMessage({ id: 101, session_id: 7, role: 'assistant', content: 'reply' })
+    ])
+    const { result, rerender } = renderHook(({ id, kind }: Props) => useEmailChat(id, kind), {
+      initialProps: { id: 101, kind: 'notion-agent' }
+    })
+    await waitFor(() => expect(result.current.activeSessionId).toBe(7))
+
+    // editMessage hangs so we can switch kind mid-promise.
+    let resolveEdit: ((v: ChatStartResult) => void) | null = null
+    mockChatEditMessage.mockImplementation(
+      () =>
+        new Promise<ChatStartResult>((res) => {
+          resolveEdit = res
+        })
+    )
+
+    let editPromise: Promise<ChatStartResult> | null = null
+    act(() => {
+      editPromise = result.current.editMessage({
+        messageId: 100,
+        newContent: 'edited',
+        backendKind: 'notion-agent',
+        backendModel: 'claude'
+      })
+    })
+    await waitFor(() => expect(resolveEdit).not.toBeNull())
+
+    // Switch KIND (same email) before the re-stream returns → navGeneration bumps.
+    rerender({ id: 101, kind: 'custom-api' })
+
+    resolveEdit!({ sessionId: 7, userMessageId: 200, assistantMessageId: 201 })
+    await editPromise
+
+    expect(mockChatAbort).toHaveBeenCalledWith(7)
+    // The stranded re-stream must NOT flip the new scope to streaming.
+    expect(result.current.streamingMessageId).not.toBe(201)
+    expect(result.current.streamingMessageId).toBeNull()
+  })
 })

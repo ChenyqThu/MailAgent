@@ -178,6 +178,13 @@ _SECRET_ENV_KEYS = {
     "MAILAGENT_CLI_API_KEY",
     "DAVMAIL_POC_CIPHER_KEY",
     "DAVMAIL_CIPHER_KEY",
+    # codex r4 [HIGH] — these are MANAGED (returned) URLs whose value embeds a
+    # credential, so they must be redacted, not sent in plaintext:
+    #   ALERT_FEISHU_WEBHOOK_URL — the trailing path segment IS the bot token;
+    #     anyone holding the full URL can post to the Feishu webhook.
+    #   REDIS_URL — `redis://[:password@]host:port` can carry an inline password.
+    "ALERT_FEISHU_WEBHOOK_URL",
+    "REDIS_URL",
 }
 
 _MANAGED_ENV_KEY_SET = set(_MANAGED_ENV_KEYS)

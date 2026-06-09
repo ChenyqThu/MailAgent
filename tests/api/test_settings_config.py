@@ -326,16 +326,25 @@ def test_get_settings_custom_endpoint(
 # the file, not in os.environ. _load_env_merged must still surface them.
 def _clear_business_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure tested keys are absent from os.environ so the .env file is the
-    only source (real repo .env / shell exports don't mask the assertion)."""
-    for k in (
-        "MAILAGENT_CLI_API_KEY",
-        "LLM_API_KEY",
-        "LLM_TRANSLATE_API_KEY",
+    only source (real repo .env / shell exports don't mask the assertion).
+
+    Hermetic against ambient os.environ pollution: ``_load_env_merged`` layers
+    ``os.environ`` OVER the .env file (shell exports win, mirroring pydantic
+    precedence), so ANY managed key present in os.environ — exported in the dev
+    shell, or leaked by another test's module-level ``os.environ.setdefault``
+    (e.g. tests/mail/test_expansion_loop.py seeds USER_EMAIL/NOTION_TOKEN under
+    test reordering) — would override the file value and break the env-snapshot
+    assertions. Clear the FULL managed-key set (the exact keys ``_build_env_snapshot``
+    surfaces) plus the extra non-managed business keys the secrets-status tests
+    null out, so the .env file is the sole contributor regardless of run order.
+    """
+    extra = (
         "CUSTOM_API_KEY",
         "CUSTOM_API_ENDPOINT",
         "LLM_INBOX_PROMPT_PATH",
         "LLM_SENT_PROMPT_PATH",
-    ):
+    )
+    for k in (*settings_router._MANAGED_ENV_KEYS, *extra):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -450,6 +459,10 @@ def test_env_snapshot_shape_and_redaction(
         "USER_EMAIL=owner@example.com\n"  # managed, non-secret → plaintext
         "NOTION_TOKEN=secret-token-DO-NOT-LEAK\n"  # managed secret → '***'
         "DASHBOARD_PASSWORD=\n"  # managed secret, empty → ''
+        # codex r4 [HIGH] — credential-bearing URLs: managed (returned) but
+        # redacted, so the embedded token / password never crosses the wire.
+        "ALERT_FEISHU_WEBHOOK_URL=https://open.feishu.cn/hook/feishu-token-DO-NOT-LEAK\n"
+        "REDIS_URL=redis://:redis-pass-DO-NOT-LEAK@host:6379\n"
         "SOME_UNMANAGED_KEY=should-not-leak\n"  # not managed → absent from values
         "\n",
         encoding="utf-8",
@@ -470,9 +483,15 @@ def test_env_snapshot_shape_and_redaction(
     assert data["values"]["NOTION_TOKEN"] == "***"
     assert data["values"]["DASHBOARD_PASSWORD"] == ""
     assert "SOME_UNMANAGED_KEY" not in data["values"]
+    # codex r4 [HIGH] — credential URLs returned but redacted to '***'.
+    assert data["values"]["ALERT_FEISHU_WEBHOOK_URL"] == "***"
+    assert data["values"]["REDIS_URL"] == "***"
     # plaintext secret + unmanaged value NEVER cross the wire.
     assert "secret-token-DO-NOT-LEAK" not in r.text
     assert "should-not-leak" not in r.text
+    # codex r4 [HIGH] — the embedded webhook token / redis password must not leak.
+    assert "feishu-token-DO-NOT-LEAK" not in r.text
+    assert "redis-pass-DO-NOT-LEAK" not in r.text
 
 
 def test_env_snapshot_missing_file_graceful(
@@ -493,8 +512,15 @@ def test_env_snapshot_missing_file_graceful(
 def test_env_snapshot_managed_secret_keys_match_ts() -> None:
     """受管 / secret key 数量与 TS SSoT 对齐（防漂移：env-keys.ts 改了这里也要改）。"""
     snap = settings_router._build_env_snapshot()
-    # SECRET_ENV_KEYS in env-keys.ts has exactly 10 entries.
-    assert len(snap["secretKeys"]) == 10
+    # SECRET_ENV_KEYS in env-keys.ts has exactly 12 entries (codex r4 [HIGH]
+    # added ALERT_FEISHU_WEBHOOK_URL + REDIS_URL — credential-bearing URLs).
+    assert len(snap["secretKeys"]) == 12
+    # codex r4 [HIGH] — the two credential URLs are MANAGED (returned) but must
+    # be SECRET (redacted). Assert they're in both sets so they never leak.
+    assert "ALERT_FEISHU_WEBHOOK_URL" in snap["secretKeys"]
+    assert "ALERT_FEISHU_WEBHOOK_URL" in snap["managedKeys"]
+    assert "REDIS_URL" in snap["secretKeys"]
+    assert "REDIS_URL" in snap["managedKeys"]
     # All secret keys must be a subset of managed keys.
     assert set(snap["secretKeys"]).issubset(set(snap["managedKeys"]))
     # No duplicate managed keys.
