@@ -573,6 +573,16 @@ export interface FolderSetWhitelistResult {
   restart_required: boolean
 }
 
+// 多文件夹同步 (P4) — 文件夹管理 (新建/重命名/删除)。serve-api
+// `POST|PATCH|DELETE /api/folder/manage` 的 wire (davmail-only, 回写真实 Exchange
+// + 本地副本)。失败时后端把本地树回滚到服务器真实状态, 前端 refetch discover。
+export interface FolderManageResult {
+  /** 操作影响后的 imap_name (新建 = 新文件夹名; 重命名 = 新名; 删除 = 已删名)。 */
+  imap_name: string
+  /** 删除/重命名牵动了白名单时为 true → 前端标记需重启同步服务。 */
+  restart_required?: boolean
+}
+
 export interface FolderApi {
   // 读 (无 auth, better-sqlite3 直读)
   list(opts: FolderListOpts): Promise<FolderEmailMeta[]>
@@ -586,6 +596,15 @@ export interface FolderApi {
   getWhitelist(): Promise<FolderWhitelistResult>
   /** 覆盖式保存白名单 (imap 原始名)。返回去重排序后的列表 + restart_required。 */
   setWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult>
+  // 文件夹管理 (P4, davmail-only). serve-api POST/PATCH/DELETE /api/folder/manage,
+  // 回写真实 Exchange (新建 IMAP CREATE / 重命名 RENAME / 删除 DELETE + 清本地副本)。
+  // 失败抛带 `code` 的 Error (本地树由后端回滚到服务器真实状态, 前端 refetch discover)。
+  /** 在 parentImapName 下新建子文件夹 name (顶层 = parentImapName 传 null)。 */
+  createFolder(parentImapName: string | null, name: string): Promise<FolderManageResult>
+  /** 重命名 imapName → newName (叶子名, 后端拼父路径)。 */
+  renameFolder(imapName: string, newName: string): Promise<FolderManageResult>
+  /** 删除 imapName (含 Exchange 文件夹 + 本地已同步副本, 不可撤销)。 */
+  deleteFolder(imapName: string): Promise<FolderManageResult>
   // 写 (needsAuth + davmail-only, fork CLI). 返回 unwrap 后的 CLI data,
   // 失败抛带 `code` 的 Error (同 calendar 写方法约定)。
   syncNow(folder: FolderName, full?: boolean): Promise<unknown>

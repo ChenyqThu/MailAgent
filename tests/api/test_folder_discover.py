@@ -103,3 +103,67 @@ class TestWhitelist:
         r = folder_client.put("/api/folder/whitelist", json={"folders": ["Jira"]})
         assert r.status_code == 400
         assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+# ============================================================
+# P4: 文件夹管理 CRUD (POST/PATCH/DELETE /api/folder/manage)
+# ============================================================
+
+class TestFolderManage:
+    def test_create(self, folder_client, monkeypatch):
+        from src.services.mail_write import FolderMutationResult, MailWriteService
+
+        monkeypatch.setattr(
+            MailWriteService, "create_folder",
+            lambda self, parent, name, *, actor: FolderMutationResult(action="create", imap_name=f"{parent}/X" if parent else "X"),
+        )
+        r = folder_client.post("/api/folder/manage", json={"parent": "Proj", "name": "新"})
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["action"] == "create" and data["imap_name"] == "Proj/X"
+
+    def test_rename(self, folder_client, monkeypatch):
+        from src.services.mail_write import FolderMutationResult, MailWriteService
+
+        monkeypatch.setattr(
+            MailWriteService, "rename_folder",
+            lambda self, imap_name, new_name, *, actor: FolderMutationResult(
+                action="rename", imap_name=imap_name, new_imap_name="项目enc",
+                affected_local_rows=3, restart_required=True,
+            ),
+        )
+        r = folder_client.patch("/api/folder/manage", json={"imap_name": "Jira", "new_name": "项目"})
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["action"] == "rename" and data["affected_local_rows"] == 3
+        # review#2: 改白名单内文件夹 → restart_required 透传给前端 banner
+        assert data["restart_required"] is True
+
+    def test_delete(self, folder_client, monkeypatch):
+        from src.services.mail_write import FolderMutationResult, MailWriteService
+
+        monkeypatch.setattr(
+            MailWriteService, "delete_folder",
+            lambda self, imap_name, *, actor: FolderMutationResult(action="delete", imap_name=imap_name, affected_local_rows=5),
+        )
+        r = folder_client.request("DELETE", "/api/folder/manage", json={"imap_name": "Jira"})
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["affected_local_rows"] == 5
+
+    def test_rename_system_rejected(self, folder_client, monkeypatch):
+        from src.services.errors import ServiceInvalidArgError
+        from src.services.mail_write import MailWriteService
+
+        def _raise(self, imap_name, new_name, *, actor):
+            raise ServiceInvalidArgError("Sent 是系统文件夹, 不可重命名/删除")
+
+        monkeypatch.setattr(MailWriteService, "rename_folder", _raise)
+        r = folder_client.patch("/api/folder/manage", json={"imap_name": "Sent", "new_name": "x"})
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+    def test_create_gated_applescript(self, folder_client):
+        folder_client._cfg.mailagent_backend = "applescript"
+        r = folder_client.post("/api/folder/manage", json={"parent": "", "name": "X"})
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"

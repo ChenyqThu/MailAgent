@@ -557,3 +557,99 @@ def folder_disable(
         except Exception as e:
             raise emit_cli_error(cli, CliError(f".env write failed: {e}"))
     emit(cli, {"changed": not dry_run, "dry_run": dry_run, "imap_name": imap_name, "whitelist": new})
+
+
+# ============================================================
+# 多文件夹同步: 文件夹管理 create / rename / delete (davmail-only, 写鉴权)
+# ============================================================
+
+def _mail_write_svc(cli: "CliContext"):
+    from src.services.mail_write import MailWriteService
+
+    return MailWriteService(cli)
+
+
+def _http_or_cli_actor(cli: "CliContext"):
+    from src.services.guards import Actor
+
+    return Actor(kind="cli", authenticated=True, label="cli")
+
+
+@app.command("create")
+def folder_create(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="子文件夹显示名 (可中文)"),
+    parent: str = typer.Option("", "--parent", help="父文件夹 imap_name (空=顶层)"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """新建子文件夹 (IMAP CREATE → EWS)。davmail-only。"""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    _require_davmail_cfg(cli)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    from src.services.errors import ServiceError
+
+    try:
+        result = _mail_write_svc(cli).create_folder(parent, name, actor=_http_or_cli_actor(cli))
+    except ServiceError as e:
+        raise emit_cli_error(cli, CliError(getattr(e, "message", str(e))))
+    emit(cli, {"action": "create", "imap_name": result.imap_name})
+
+
+@app.command("rename")
+def folder_rename(
+    ctx: typer.Context,
+    imap_name: str = typer.Argument(..., help="要重命名的文件夹 imap_name"),
+    new_name: str = typer.Argument(..., help="新叶子显示名 (可中文)"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """重命名文件夹 (IMAP RENAME + 本地一致性)。系统文件夹拒绝。davmail-only。"""
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    _require_davmail_cfg(cli)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    from src.services.errors import ServiceError
+
+    try:
+        result = _mail_write_svc(cli).rename_folder(imap_name, new_name, actor=_http_or_cli_actor(cli))
+    except ServiceError as e:
+        raise emit_cli_error(cli, CliError(getattr(e, "message", str(e))))
+    emit(cli, {
+        "action": "rename", "imap_name": result.imap_name,
+        "new_imap_name": result.new_imap_name, "affected_local_rows": result.affected_local_rows,
+        "restart_required": result.restart_required,
+    })
+
+
+@app.command("delete-folder")
+def folder_delete_folder(
+    ctx: typer.Context,
+    imap_name: str = typer.Argument(..., help="要删除的文件夹 imap_name"),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """删除文件夹 (IMAP DELETE + 本地清理 + 白名单移除)。系统文件夹拒绝。davmail-only。
+
+    🔴 不可撤销: 同时删 Exchange 文件夹 + 本地已同步副本。
+    """
+    cli: "CliContext" = ctx.obj
+    _apply_local_output(ctx, output)
+    _require_davmail_cfg(cli)
+    try:
+        cli.require_auth()
+    except CliError as e:
+        raise emit_cli_error(cli, e)
+    from src.services.errors import ServiceError
+
+    try:
+        result = _mail_write_svc(cli).delete_folder(imap_name, actor=_http_or_cli_actor(cli))
+    except ServiceError as e:
+        raise emit_cli_error(cli, CliError(getattr(e, "message", str(e))))
+    emit(cli, {"action": "delete", "imap_name": result.imap_name,
+               "affected_local_rows": result.affected_local_rows,
+               "restart_required": result.restart_required})

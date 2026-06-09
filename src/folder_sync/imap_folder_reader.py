@@ -34,8 +34,10 @@ from src.mail.backend.davmail_backend import (
 from src.mail.backend.imap_client import (
     discover_archive_folder,
     imap_session,
+    quote_mailbox,
     smtp_session,
 )
+from src.mail.backend.imap_utf7 import encode_imap_utf7
 from src.mail.backend.types import DraftRequest
 
 if TYPE_CHECKING:
@@ -384,14 +386,17 @@ class FolderImapReader:
             return False
 
     def archive_inbox_message(
-        self, message_id: Optional[str], fallback_uid: Optional[int] = None
+        self,
+        message_id: Optional[str],
+        fallback_uid: Optional[int] = None,
+        src_imap: str = "INBOX",
     ) -> bool:
-        """把 INBOX 里的邮件 MOVE 到 Archive 文件夹 (收件箱归档).
+        """把 ``src_imap`` 文件夹里的邮件 MOVE 到 Archive 文件夹 (归档).
 
-        与 move_message 对称, 但 src 固定 INBOX (move_message 只接 archive/drafts).
-        SELECT INBOX (writable) → 按 Message-ID 反查**当前** UID (避免用 SQLite 存的可能
-        过期的 imap_uid) → UID COPY → Archive → STORE \\Deleted → EXPUNGE. message_id
-        查不到时回退 fallback_uid (调用方传 email_metadata.imap_uid).
+        ``src_imap`` 默认 INBOX (收件箱归档); 多文件夹同步传邮件**当前**文件夹的 imap_name
+        (自定义文件夹邮件归档时 src 不是 INBOX)。SELECT src (writable, quote) → 按 Message-ID
+        反查**当前** UID (避免 SQLite 存的过期 imap_uid) → UID COPY → Archive → STORE
+        \\Deleted → EXPUNGE。message_id 查不到回退 fallback_uid。
         """
         dst = self.resolve_imap_folder("archive")
         if not dst:
@@ -401,9 +406,9 @@ class FolderImapReader:
             from src.mail.backend.davmail_backend import DavMailBackend
 
             with imap_session(self.cfg, timeout=60) as imap:
-                typ, _ = imap.select("INBOX", readonly=False)
+                typ, _ = imap.select(quote_mailbox(src_imap), readonly=False)
                 if typ != "OK" or not _select_is_writable(imap):
-                    logger.error("[folder-reader] archive: INBOX SELECT 不可写, 中止")
+                    logger.error(f"[folder-reader] archive: {src_imap!r} SELECT 不可写, 中止")
                     return False
                 uid = DavMailBackend._lookup_uid_by_message_id(imap, message_id or "")
                 if uid is None:
@@ -424,6 +429,109 @@ class FolderImapReader:
         except Exception as e:
             logger.error(f"[folder-reader] archive_inbox_message failed: {e}")
             return False
+
+    # ------------------------------------------------------------
+    # 多文件夹同步: 泛化移动 (任意 src→dst) + 文件夹管理 CRUD (davmail-only)
+    # ------------------------------------------------------------
+
+    def move_by_message_id(
+        self,
+        src_imap: str,
+        message_id: Optional[str],
+        dst_imap: str,
+        fallback_uid: Optional[int] = None,
+    ) -> bool:
+        """泛化版 archive_inbox_message: src/dst 都是任意 IMAP folder 原始名 (modified-UTF7)。
+
+        SELECT src (writable, quote) → 按 Message-ID 反查**当前** UID (避免 SQLite 存的过期
+        imap_uid) → UID COPY → dst → STORE \\Deleted → EXPUNGE。message_id 查不到回退
+        fallback_uid。归档 (任意文件夹→Archive) + 移动 (任意→任意) 共用。
+        """
+        try:
+            with imap_session(self.cfg, timeout=60) as imap:
+                typ, _ = imap.select(quote_mailbox(src_imap), readonly=False)
+                if typ != "OK" or not _select_is_writable(imap):
+                    logger.error(
+                        f"[folder-reader] move: SELECT {src_imap!r} 不可写, 中止"
+                    )
+                    return False
+                uid = DavMailBackend._lookup_uid_by_message_id(imap, message_id or "")
+                if uid is None:
+                    uid = fallback_uid
+                if uid is None:
+                    logger.warning(
+                        f"[folder-reader] move: 找不到 {src_imap!r} UID (mid={message_id!r})"
+                    )
+                    return False
+                typ, _ = imap.uid("copy", str(uid), quote_mailbox(dst_imap))
+                if typ != "OK":
+                    logger.warning(
+                        f"[folder-reader] move: UID COPY {uid}→{dst_imap!r} 失败"
+                    )
+                    return False
+                imap.uid("store", str(uid), "+FLAGS", "(\\Deleted)")
+                imap.expunge()
+                logger.info(f"[folder-reader] moved {src_imap!r} uid={uid} → {dst_imap!r}")
+                return True
+        except Exception as e:
+            logger.error(
+                f"[folder-reader] move_by_message_id({src_imap!r}→{dst_imap!r}) failed: {e}"
+            )
+            return False
+
+    def create_folder(self, imap_name: str) -> bool:
+        """IMAP CREATE (davmail→EWS CreateFolder)。imap_name = modified-UTF7 原始名 (含层级路径)。"""
+        try:
+            with imap_session(self.cfg, timeout=30) as imap:
+                typ, resp = imap.create(quote_mailbox(imap_name))
+                if typ != "OK":
+                    logger.error(f"[folder-reader] CREATE {imap_name!r} failed: {resp}")
+                    return False
+                return True
+        except Exception as e:
+            logger.error(f"[folder-reader] create_folder({imap_name!r}) failed: {e}")
+            return False
+
+    def rename_folder(self, old_imap: str, new_imap: str) -> bool:
+        """IMAP RENAME (davmail→EWS UpdateFolder)。old/new = modified-UTF7 原始名。"""
+        try:
+            with imap_session(self.cfg, timeout=30) as imap:
+                typ, resp = imap.rename(quote_mailbox(old_imap), quote_mailbox(new_imap))
+                if typ != "OK":
+                    logger.error(
+                        f"[folder-reader] RENAME {old_imap!r}→{new_imap!r} failed: {resp}"
+                    )
+                    return False
+                return True
+        except Exception as e:
+            logger.error(
+                f"[folder-reader] rename_folder({old_imap!r}→{new_imap!r}) failed: {e}"
+            )
+            return False
+
+    def delete_folder(self, imap_name: str) -> bool:
+        """IMAP DELETE (davmail→EWS DeleteFolder)。系统文件夹 EWS 自身拒删 (返回非 OK)。"""
+        try:
+            with imap_session(self.cfg, timeout=30) as imap:
+                typ, resp = imap.delete(quote_mailbox(imap_name))
+                if typ != "OK":
+                    logger.error(f"[folder-reader] DELETE {imap_name!r} failed: {resp}")
+                    return False
+                return True
+        except Exception as e:
+            logger.error(f"[folder-reader] delete_folder({imap_name!r}) failed: {e}")
+            return False
+
+    @staticmethod
+    def build_child_imap_name(parent_imap: str, child_display: str, delimiter: str = "/") -> str:
+        """父 imap_name + 子显示名 → 子文件夹完整 imap_name (modified-UTF7)。
+
+        顶层 (parent 空) → 直接 encode(child)。child_display 是用户输入的可读名 (可中文)。
+        """
+        child_enc = encode_imap_utf7(child_display)
+        if not parent_imap:
+            return child_enc
+        return f"{parent_imap}{delimiter}{child_enc}"
 
     def create_draft(self, draft: DraftRequest) -> Optional[int]:
         """构建 MIME (复用 backend._build_reply_mime, 支持 mode=new) → IMAP APPEND Drafts.

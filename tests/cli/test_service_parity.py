@@ -259,7 +259,8 @@ def _fake_archive_reader(moved=True):
         def __init__(self):
             self.calls = []
 
-        def archive_inbox_message(self, message_id, fallback_uid=None):
+        def archive_inbox_message(self, message_id, fallback_uid=None, src_imap="INBOX"):
+            # P4: archive_inbox_message 加 src_imap 泛化; 仍记 (message_id, fallback_uid)。
             self.calls.append((message_id, fallback_uid))
             return moved
 

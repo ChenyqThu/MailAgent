@@ -1781,7 +1781,31 @@
         "emptyTitle": "没有可同步的自定义文件夹",
         "emptyBody": "你的邮箱里暂未发现收件箱 / 发件箱以外的文件夹。在 Outlook 里新建文件夹后点「刷新」重新拉取。",
         "gatedTitle": "需要 davmail 后端",
-        "gatedBody": "多文件夹发现、勾选与同步仅在 davmail 后端可用。请在「账户」切换后端后再启用本区。"
+        "gatedBody": "多文件夹发现、勾选与同步仅在 davmail 后端可用。请在「账户」切换后端后再启用本区。",
+        "manage": {
+          "menuLabel": "管理文件夹",
+          "newChild": "新建子文件夹",
+          "rename": "重命名",
+          "delete": "删除",
+          "systemHint": "系统文件夹不可修改",
+          "confirm": "确认",
+          "cancel": "取消",
+          "newChildPlaceholder": "子文件夹名称",
+          "renamePlaceholder": "文件夹名称",
+          "createOk": "已新建文件夹「{{name}}」",
+          "createFail": "新建文件夹失败",
+          "renameOk": "已重命名为「{{name}}」",
+          "renameFail": "重命名失败",
+          "deleteOk": "已删除文件夹「{{name}}」",
+          "deleteFail": "删除失败",
+          "deleteRollback": "Exchange 操作失败，本地文件夹树已回滚到服务器真实状态。",
+          "deleteTitle": "删除文件夹「{{name}}」？",
+          "deleteBodyWithCount": "将删除 Exchange 上的该文件夹，以及本地已同步的 {{count}} 封邮件副本。此操作不可撤销。",
+          "deleteBody": "将删除 Exchange 上的该文件夹，以及本地已同步的邮件副本。此操作不可撤销。",
+          "deleteWarn": "该文件夹在 Outlook 规则中可能仍被引用；删除后相关规则会失效。Notion 已归档页面不受影响。",
+          "deleting": "删除中…",
+          "deleteConfirm": "删除文件夹"
+        }
       }
     }
   },

@@ -814,6 +814,46 @@ async def archive_email(
 
 
 # ===========================================================================
+# POST /api/email/{internal_id}/move — 多文件夹同步: 移动到任意文件夹 (davmail-only)
+# ===========================================================================
+
+
+@router.post("/{internal_id:int}/move", dependencies=[Depends(verify_cf_access)])
+async def move_email(
+    request: Request,
+    internal_id: int,
+    body: dict[str, Any],
+):
+    """把邮件移到任意目标文件夹 (IMAP MOVE + Mailbox 更新)。davmail-only。
+
+    body: {dstImapName} (IMAP 原始名 modified-UTF7)。data = MoveResult。
+    """
+    dst = (body or {}).get("dstImapName") or ""
+    if not dst:
+        raise APIError("E_INVALID_ARG", "dstImapName required", source="cli")
+    svc = MailWriteService(get_service_ctx())
+    try:
+        result = await asyncio.to_thread(
+            svc.move_to_folder,
+            internal_id,
+            dst,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+        data = {
+            "internal_id": result.internal_id,
+            "action": "move",
+            "success": True,
+            "from_mailbox": result.from_mailbox,
+            "to_mailbox": result.to_mailbox,
+            "notion_updated": result.notion_updated,
+            "notion_error": result.notion_error,
+        }
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
+    return success_envelope(data, request=request, source="cli")
+
+
+# ===========================================================================
 # Compose (draft / send / draft-plan) — A4: in-process MailWriteService
 # ===========================================================================
 # bodyHtml (TipTap getHTML()) **直接传字符串** 给 service (不再落临时文件

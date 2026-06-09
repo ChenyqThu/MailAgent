@@ -73,16 +73,19 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 
 **验收**：`pnpm typecheck` 零错 + `pnpm test` **94 文件 1367 passed 零 Electron 回归** + `build:web` ✓ + eslint 新文件干净；`pytest tests/api` 384 passed + ruff 清。i18n 中英对称、token 取色无 raw hex、三段 header 铁律守住、隔离不变量（whitelist 空→Sidebar 不渲染）。**独立 review**：codex 用量上限不可用 → **opus code-reviewer 对抗式 APPROVE WITH NITS**（0 CRIT/HIGH；修 MEDIUM 嵌套文件夹叶子名显示[decode 全路径→split delimiter 取末段，过滤仍用全路径]+ 2 LOW[取消勾选活跃文件夹清 customMailbox / discover-fail fallback 禁点击] + NIT 注释；测试 fixture 改真实全路径覆盖嵌套）。
 
-## P4 — Onboarding + 写操作泛化 + 文件夹管理 ⬜
+## P4 — Onboarding + 写操作泛化 + 文件夹管理 ✅
 
 | 能力 | 后端 | 前端 | i18n | 主题 | 验收 | 状态 |
 |---|---|---|---|---|---|---|
-| onboarding 文件夹步骤 | — | 树形多选步（**照 mockup ②**，可跳过/系统锁定） | ✅ | ✅ | 新用户勾选生效 | ⬜ |
-| 归档/移动泛化 | `mail_write` archive→`move(src,dst)` 泛化 + `move_message` 扩展任意 src/dst | — | ➖ | ➖ | 自定义文件夹归档/移动正确 | ⬜ |
-| 文件夹管理 CRUD（🔴 davmail 实测过才做） | `create/rename/delete_folder`（IMAP）+ 系统文件夹保护 + outbox SSoT + 一致性回填 | 树行 hover/右键菜单 + 删除二次确认（**照 mockup ⑤**） | ✅ | ✅ | 新建/重命名/删除回写 Exchange + 系统文件夹禁用 | ⬜ |
-| 回复/转发 | 零改动（compose 复用） | 零改动 | ➖ | ➖ | 自定义文件夹内回复/转发 | ⬜ |
+| onboarding 文件夹步骤 | — | 树形多选步（**照 mockup ②**，可跳过/系统锁定/大文件夹提示） | ⚠️ Chinese-only* | ✅ | 新用户勾选生效 + 可跳过不阻塞 | ✅ |
+| 归档/移动泛化 | `archive_inbox_message` 加 `src_imap`（邮件当前文件夹解析，修自定义文件夹归档）+ 新 `move_by_message_id`(任意 src→dst) + `move_to_folder` service（trash 守卫）；`POST /api/email/{id}/move` | — | ➖ | ➖ | 自定义文件夹归档/移动正确（src 解析单测） | ✅ |
+| 文件夹管理 CRUD（davmail 实测过） | `create/rename/delete_folder`(IMAP, quote_mailbox) + 系统文件夹保护(`_assert_not_system_folder`+EWS 兜底) + 一致性（rename UPDATE mailbox 含子前缀 / delete `delete_email_full` 级联清 body/attachment/FTS+附件目录 / 白名单 rewrite + restart_required）; `POST/PATCH/DELETE /api/folder/manage` + CLI | 树行 ⋯ 菜单（新建/重命名/删除+二次确认+系统禁用，**照 mockup ⑤**） | ✅ | ✅ | 新建/重命名/删除回写 Exchange + 系统保护 + 删除级联 | ✅ |
+| 回复/转发 | 零改动（compose 复用） | 零改动 | ➖ | ➖ | 自定义文件夹内回复/转发 | ✅ |
 
-**验收**：onboarding+管理全链路；管理操作回写 Exchange 正确、系统文件夹保护、删除二次确认；i18n+主题全覆盖。**codex review APPROVE**。
+\* onboarding 步骤硬编码中文 —— 既有 onboarding 全 7 步 Chinese-only 无 i18n 基础设施（HEAD 确认 0 useTranslation），新步保持同一面一致；reviewer 裁定可接受，onboarding 整面 i18n 记独立 backlog。settings 面的管理 UI 已正确 i18n（24 双语 key 对称）。
+
+**验收**：pytest 1492 passed（含 tests/notify/folder_sync）零新增失败 + ruff 清；前端 typecheck + 1379 passed（+12 P4 管理 UI 测试）+ build:web ✓ + eslint。**独立 review**（codex 用量上限 → opus code-reviewer 对抗式）：**REQUEST CHANGES → 修 2 MEDIUM blocking + 4 LOW → APPROVE WITH NITS**。
+> **修复**：① delete 不级联（raw connect FK OFF → orphan body/attachment/FTS）→ 改 `delete_email_full` 逐行（FK CASCADE + 附件目录）② rename/delete 不返 `restart_required` → `_rewrite_whitelist` 返 bool 透到 result + serve-api/CLI emit ③ 嵌套 rename 漏子行 → `SET mailbox=new||SUBSTR(...) WHERE LIKE old||'/%'` ④ move dst 无 trash 守卫 → 拒 Trash/Junk ⑤ 前端零测试 → 补 12 管理 UI 测试 ⑥ CLI restart_required NIT 补 emit。
 
 ## P5 — 边界打磨 ⬜
 
@@ -133,4 +136,5 @@ DRY 重构：抽 `parse_folder_csv_or_json`(imap_client) 共享 helper（SYNC_FO
 | 2026-06-08 | P1 gate | davmail 前置实测全过：CRUD/嵌套/系统保护全支持，无降级 | — |
 | 2026-06-08 | P1 | 实现完成（imap_utf7/list_folders/SYNC_FOLDERS/per-folder marker+uidvalidity/get_new_emails 多文件夹/DB v22/CLI discover·enable·disable）；75 新测试绿 + 真机 e2e 过 + 零新增回归（1166 passed）；codex REQUEST CHANGES→修 3 finding（JSON 白名单/mailbox quoting/系统文件夹排除）→ APPROVE WITH NITS（NIT 修） | `22c7f759` |
 | 2026-06-08 | P2 | L3 通知降噪 + L2 LLM gate（per-folder）+ 下游零改动验证（Notion/FTS/线程/mailbox 过滤）+ DRY 抽 parse_folder_csv_or_json；27 测试 + 1452 passed（含 notify）零新增；codex APPROVE WITH NITS→修 3→opus critic APPROVE WITH NITS | `f12f173e` |
-| 2026-06-08 | P3 | serve-api discover/whitelist 端点（6 api 测）+ 前端 FolderPicker 树/SidebarFolderTree/API wiring(HttpApi+Electron IPC)/i18n 双语 44/主题 token；executor 实现；opus code-reviewer APPROVE WITH NITS→修 MEDIUM 嵌套叶子名+2 LOW+NIT；typecheck+1367 前端测试+build:web+384 api+ruff/eslint 全绿 | 待提交 |
+| 2026-06-08 | P3 | serve-api discover/whitelist 端点（6 api 测）+ 前端 FolderPicker 树/SidebarFolderTree/API wiring(HttpApi+Electron IPC)/i18n 双语 44/主题 token；executor 实现；opus code-reviewer APPROVE WITH NITS→修 MEDIUM 嵌套叶子名+2 LOW+NIT；typecheck+1367 前端测试+build:web+384 api+ruff/eslint 全绿 | `efb73a02` |
+| 2026-06-08 | P4 | 写操作泛化（archive src 泛化+move_to_folder+trash 守卫）+ 文件夹管理 CRUD（create/rename/delete+系统保护+级联+一致性+白名单 restart）+ serve-api manage/move + CLI + onboarding 步 + FolderPicker 管理 UI；opus code-reviewer REQUEST CHANGES→修 2 MEDIUM blocking（delete 级联/restart_required）+4 LOW→APPROVE WITH NITS；1492 py + 1379 fe 全绿 | 待提交 |

@@ -48,7 +48,10 @@ export const ICON_PATHS: Record<string, string> = {
   server: 'M3 4h18v6H3zM3 14h18v6H3zM7 7h.01M7 17h.01',
   fileWarn: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 3v5h5M12 12v3M12 18h.01',
   pause: 'M8 5v14M16 5v14',
-  layers: 'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5'
+  layers: 'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
+  chevron: 'M9 18l6-6-6-6',
+  send: 'M22 2 11 13M22 2l-7 20-4-9-9-4z',
+  inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5 5h14l3 7v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-6z'
 }
 
 export type IconName = keyof typeof ICON_PATHS | string

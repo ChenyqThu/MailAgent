@@ -106,8 +106,9 @@ class _FakeReader:
     def __init__(self):
         self.calls = []
 
-    def archive_inbox_message(self, message_id, fallback_uid=None):
-        self.calls.append((message_id, fallback_uid))
+    def archive_inbox_message(self, message_id, fallback_uid=None, src_imap="INBOX"):
+        # P4: archive_inbox_message 加 src_imap 泛化 (自定义文件夹邮件归档 src≠INBOX)。
+        self.calls.append((message_id, fallback_uid, src_imap))
         return True
 
 
@@ -136,9 +137,10 @@ def test_archive_success_updates_mailbox(cli_runner, seeded_db, monkeypatch):
     assert data["data"]["success"] is True
     assert data["data"]["to_mailbox"] == "存档"
     assert data["data"]["notion_updated"] is True
-    # reader 真被调 (传 message_id)
+    # reader 真被调 (传 message_id, src=INBOX 因邮件在收件箱)
     assert len(fake_reader.calls) == 1
     assert fake_reader.calls[0][0] == "<msg-12345@example.com>"
+    assert fake_reader.calls[0][2] == "INBOX"
     # SQLite mailbox 真被改 → 移出收件箱视图
     assert _read_mailbox(seeded_db, 12345) == "存档"
     # Notion 镜像也更新
@@ -150,7 +152,7 @@ def test_archive_imap_failure_keeps_mailbox(cli_runner, seeded_db, monkeypatch):
     _bypass_auth(monkeypatch)
 
     class _FailReader:
-        def archive_inbox_message(self, message_id, fallback_uid=None):
+        def archive_inbox_message(self, message_id, fallback_uid=None, src_imap="INBOX"):
             return False
 
     monkeypatch.setattr(

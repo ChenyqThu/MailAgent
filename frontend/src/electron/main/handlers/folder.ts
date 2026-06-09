@@ -24,6 +24,7 @@ import type {
   FolderEmailDetail,
   FolderEmailMeta,
   FolderListOpts,
+  FolderManageResult,
   FolderName,
   FolderSearchOpts,
   FolderSearchResult,
@@ -335,6 +336,33 @@ export function runFolderSetWhitelist(imapNames: string[]): Promise<FolderSetWhi
   })
 }
 
+// 文件夹管理 (P4) — 新建/重命名/删除。daemon → serve-api `POST|PATCH|DELETE
+// /folder/manage` 转发 (davmail-only, 回写真实 Exchange + 本地副本)。非 davmail /
+// 失败 → serve-api 抛 ApiError{code} → envelopeFromCli 收成 {ok:false,code} 过 IPC。
+
+export function runFolderCreate(
+  parentImapName: string | null,
+  name: string
+): Promise<FolderManageResult> {
+  // serve-api `_FolderCreateBody.parent: str = ""` (空串 = 顶层); null 会被 Pydantic
+  // 拒成 422, 故顶层 (null) 归一化为空串。
+  return daemonRequest<FolderManageResult>('POST', '/folder/manage', {
+    body: { parent: parentImapName ?? '', name }
+  })
+}
+
+export function runFolderRename(imapName: string, newName: string): Promise<FolderManageResult> {
+  return daemonRequest<FolderManageResult>('PATCH', '/folder/manage', {
+    body: { imap_name: imapName, new_name: newName }
+  })
+}
+
+export function runFolderManageDelete(imapName: string): Promise<FolderManageResult> {
+  return daemonRequest<FolderManageResult>('DELETE', '/folder/manage', {
+    body: { imap_name: imapName }
+  })
+}
+
 // ---- IPC wiring -------------------------------------------------------------
 
 export function registerFolderHandlers(): void {
@@ -453,6 +481,62 @@ export function registerFolderHandlers(): void {
       return envelopeFromCli<FolderSetWhitelistResult>(runFolderSetWhitelist(imapNames))
     }
   )
+
+  // 文件夹管理 (P4) — 新建/重命名/删除。daemon → serve-api /folder/manage 转发,
+  // envelope 形态过 IPC 保住 error.code (非 davmail / Exchange 失败)。
+  ipcMain.handle(
+    'folder:create',
+    async (_evt, parent: unknown, name: unknown): Promise<WriteEnvelope<FolderManageResult>> => {
+      if ((parent !== null && typeof parent !== 'string') || typeof name !== 'string') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:create requires (parent: string|null, name: string)'
+        }
+      }
+      if (name.trim() === '') {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'folder:create name must be non-empty' }
+      }
+      return envelopeFromCli<FolderManageResult>(runFolderCreate(parent, name))
+    }
+  )
+  ipcMain.handle(
+    'folder:rename',
+    async (
+      _evt,
+      imapName: unknown,
+      newName: unknown
+    ): Promise<WriteEnvelope<FolderManageResult>> => {
+      if (typeof imapName !== 'string' || typeof newName !== 'string') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:rename requires (imapName: string, newName: string)'
+        }
+      }
+      if (newName.trim() === '') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:rename newName must be non-empty'
+        }
+      }
+      return envelopeFromCli<FolderManageResult>(runFolderRename(imapName, newName))
+    }
+  )
+  ipcMain.handle(
+    'folder:manageDelete',
+    async (_evt, imapName: unknown): Promise<WriteEnvelope<FolderManageResult>> => {
+      if (typeof imapName !== 'string' || imapName.trim() === '') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:manageDelete requires a non-empty imapName'
+        }
+      }
+      return envelopeFromCli<FolderManageResult>(runFolderManageDelete(imapName))
+    }
+  )
 }
 
 // Test escape hatch (mirrors handlers/calendar.ts __testing).
@@ -469,7 +553,10 @@ export const __testing = {
   runFolderEditDraft,
   runFolderDiscover,
   runFolderGetWhitelist,
-  runFolderSetWhitelist
+  runFolderSetWhitelist,
+  runFolderCreate,
+  runFolderRename,
+  runFolderManageDelete
 }
 
 // Re-export the renderer-facing type so test / other modules can import from

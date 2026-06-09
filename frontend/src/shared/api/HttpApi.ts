@@ -54,6 +54,7 @@ import type {
   FolderEmailDetail,
   FolderEmailMeta,
   FolderListOpts,
+  FolderManageResult,
   FolderSearchOpts,
   FolderSearchResult,
   FolderSetWhitelistResult,
@@ -376,6 +377,26 @@ export class HttpApi implements MailApi {
     setWhitelist: (imapNames: string[]): Promise<FolderSetWhitelistResult> =>
       this.req<FolderSetWhitelistResult>('PUT', '/folder/whitelist', {
         body: { folders: imapNames }
+      }),
+
+    // 文件夹管理 (P4) — 新建/重命名/删除。davmail-only: serve-api 对非 davmail /
+    // Exchange 失败抛带 code 的 Error, FolderPicker 据此反馈 + refetch。远程 web
+    // 直连这些端点 (与本地 daemon 转发同 wire)。
+    createFolder: (parentImapName: string | null, name: string): Promise<FolderManageResult> =>
+      this.req<FolderManageResult>('POST', '/folder/manage', {
+        // serve-api `_FolderCreateBody.parent: str = ""` (空串 = 顶层); null → 422,
+        // 故顶层归一化为空串。
+        body: { parent: parentImapName ?? '', name }
+      }),
+
+    renameFolder: (imapName: string, newName: string): Promise<FolderManageResult> =>
+      this.req<FolderManageResult>('PATCH', '/folder/manage', {
+        body: { imap_name: imapName, new_name: newName }
+      }),
+
+    deleteFolder: (imapName: string): Promise<FolderManageResult> =>
+      this.req<FolderManageResult>('DELETE', '/folder/manage', {
+        body: { imap_name: imapName }
       }),
 
     // Writes — CLI-write/CalDAV-write, deferred.

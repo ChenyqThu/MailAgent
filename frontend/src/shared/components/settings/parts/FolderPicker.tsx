@@ -18,14 +18,20 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   AlertTriangle,
+  Check,
   ChevronRight,
   Folder,
+  FolderPlus,
   Inbox,
   Loader2,
   Lock,
+  MoreHorizontal,
+  Pencil,
   RefreshCw,
   Send,
-  Server
+  Server,
+  Trash2,
+  X
 } from 'lucide-react'
 
 import type { FolderInfo, FolderTreeNode } from '@shared/api/types'
@@ -62,6 +68,27 @@ function systemIcon(node: FolderInfo): React.ReactNode {
   return <Folder size={15} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
 }
 
+// 管理操作 (P4) — inline 输入态: create(在 parent 下新建) / rename(改本节点)。
+type EditState =
+  | { mode: 'create'; parentImapName: string | null; value: string }
+  | { mode: 'rename'; imapName: string; value: string }
+
+interface ManageHandlers {
+  /** 当前打开 ⋯ 菜单的 imap_name (null = 全关)。 */
+  menuFor: string | null
+  /** 当前 inline 编辑态 (null = 无)。 */
+  edit: EditState | null
+  /** 编辑提交中 (新建/重命名) 锁输入。 */
+  editBusy: boolean
+  onOpenMenu: (imapName: string | null) => void
+  onStartCreate: (parentImapName: string) => void
+  onStartRename: (node: FolderTreeNode) => void
+  onRequestDelete: (node: FolderTreeNode) => void
+  onEditChange: (value: string) => void
+  onEditSubmit: () => void
+  onEditCancel: () => void
+}
+
 interface FolderRowProps {
   node: FolderTreeNode
   depth: number
@@ -69,16 +96,95 @@ interface FolderRowProps {
   expanded: ReadonlySet<string>
   onToggleSelect: (imapName: string) => void
   onToggleExpand: (imapName: string) => void
+  manage: ManageHandlers
 }
 
-/** 单行 + 递归子节点。系统文件夹: lock 灰态不可选; 自定义: checkbox + count + 大徽标。 */
+/** inline 输入行 (新建子文件夹 / 重命名)。coral ring + 勾/叉确认。 */
+function InlineEditRow({
+  depth,
+  value,
+  placeholder,
+  busy,
+  icon,
+  onChange,
+  onSubmit,
+  onCancel
+}: {
+  depth: number
+  value: string
+  placeholder: string
+  busy: boolean
+  icon: React.ReactNode
+  onChange: (v: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}): React.ReactElement {
+  const indentPx = depth * 22
+  // inline 编辑刚由用户主动触发 → mount 时聚焦 + 全选 (ref+effect, 不用 autoFocus
+  // 属性以满足 jsx-a11y 与 React 受控聚焦时机)。
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  React.useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-2 bg-ink-2"
+      style={{ paddingLeft: `${12 + indentPx}px` }}
+    >
+      <span className="shrink-0 w-4 h-4" aria-hidden="true" />
+      <span className="shrink-0 w-4 h-4" aria-hidden="true" />
+      {icon}
+      <input
+        ref={inputRef}
+        value={value}
+        placeholder={placeholder}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onSubmit()
+          else if (e.key === 'Escape') onCancel()
+        }}
+        className={cn(
+          'flex-1 min-w-0 px-2 py-1 rounded-md text-aux bg-ink-1 text-ink-fg',
+          'border border-coral/60 outline-none focus:ring-2 focus:ring-coral/30',
+          'disabled:opacity-60'
+        )}
+      />
+      <button
+        type="button"
+        onClick={onSubmit}
+        disabled={busy || value.trim() === ''}
+        className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded text-ok hover:bg-ink-3 transition-colors duration-fast disabled:opacity-40 disabled:pointer-events-none"
+      >
+        {busy ? (
+          <Loader2 size={13} className="animate-spin" />
+        ) : (
+          <Check size={14} strokeWidth={2.5} />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={busy}
+        className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast disabled:opacity-40"
+      >
+        <X size={14} strokeWidth={2} />
+      </button>
+    </div>
+  )
+}
+
+/** 单行 + 递归子节点。系统文件夹: lock 灰态不可选; 自定义: checkbox + count + 大徽标
+ *  + 行尾 ⋯ 管理菜单 (P4, hover 显)。 */
 function FolderRow({
   node,
   depth,
   selected,
   expanded,
   onToggleSelect,
-  onToggleExpand
+  onToggleExpand,
+  manage
 }: FolderRowProps): React.ReactElement {
   const { t } = useTranslation()
   const hasChildren = node.children.length > 0
@@ -88,11 +194,34 @@ function FolderRow({
   // 缩进: 22px / 层 (照 mockup f-ind 宽度)。chevron 占位让叶子与父对齐。
   const indentPx = depth * 22
 
+  const isRenaming = manage.edit?.mode === 'rename' && manage.edit.imapName === node.imap_name
+  const isCreatingHere =
+    manage.edit?.mode === 'create' && manage.edit.parentImapName === node.imap_name
+  const menuOpen = manage.menuFor === node.imap_name
+
+  // 重命名态: 整行替换为 inline 输入 (预填当前名)。
+  if (isRenaming && manage.edit) {
+    return (
+      <InlineEditRow
+        depth={depth}
+        value={manage.edit.value}
+        placeholder={t('settings.folder.picker.manage.renamePlaceholder', {
+          defaultValue: '文件夹名称'
+        })}
+        busy={manage.editBusy}
+        icon={<Pencil size={15} strokeWidth={1.75} className="shrink-0 text-coral" />}
+        onChange={manage.onEditChange}
+        onSubmit={manage.onEditSubmit}
+        onCancel={manage.onEditCancel}
+      />
+    )
+  }
+
   return (
     <>
       <div
         className={cn(
-          'flex items-center gap-2 px-3 py-2 transition-colors duration-fast',
+          'group/frow relative flex items-center gap-2 px-3 py-2 transition-colors duration-fast',
           node.is_system ? 'opacity-70' : 'hover:bg-ink-3'
         )}
         style={{ paddingLeft: `${12 + indentPx}px` }}
@@ -194,6 +323,71 @@ function FolderRow({
             {t('settings.folder.picker.systemState', { defaultValue: '系统 · 始终同步' })}
           </span>
         ) : null}
+
+        {/* ⋯ 管理菜单 (P4) — hover 显 (菜单打开时常驻); 系统文件夹禁用 + tooltip。 */}
+        <button
+          type="button"
+          aria-label={t('settings.folder.picker.manage.menuLabel', { defaultValue: '管理文件夹' })}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          disabled={node.is_system}
+          title={
+            node.is_system
+              ? t('settings.folder.picker.manage.systemHint', {
+                  defaultValue: '系统文件夹不可修改'
+                })
+              : undefined
+          }
+          onClick={() => manage.onOpenMenu(menuOpen ? null : node.imap_name)}
+          className={cn(
+            'shrink-0 inline-flex items-center justify-center w-6 h-6 rounded transition-colors duration-fast',
+            node.is_system
+              ? 'opacity-40 cursor-not-allowed text-ink-fg-3'
+              : cn(
+                  'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg',
+                  menuOpen ? 'bg-ink-4 text-ink-fg' : 'opacity-0 group-hover/frow:opacity-100'
+                )
+          )}
+        >
+          <MoreHorizontal size={15} strokeWidth={2} />
+        </button>
+
+        {/* 菜单 popup — 仅自定义文件夹。新建子文件夹 / 重命名 / 删除。 */}
+        {menuOpen && !node.is_system ? (
+          <div
+            role="menu"
+            className="absolute right-2 top-9 z-20 min-w-40 py-1 rounded-md border border-ink-border bg-ink-1 shadow-md"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => manage.onStartCreate(node.imap_name)}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 text-meta text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast"
+            >
+              <FolderPlus size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
+              {t('settings.folder.picker.manage.newChild', { defaultValue: '新建子文件夹' })}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => manage.onStartRename(node)}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 text-meta text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast"
+            >
+              <Pencil size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
+              {t('settings.folder.picker.manage.rename', { defaultValue: '重命名' })}
+            </button>
+            <div className="my-1 h-px bg-ink-border-soft" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => manage.onRequestDelete(node)}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 text-meta text-fail hover:bg-fail/10 transition-colors duration-fast"
+            >
+              <Trash2 size={13} strokeWidth={1.75} className="shrink-0" />
+              {t('settings.folder.picker.manage.delete', { defaultValue: '删除' })}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {hasChildren && isOpen
@@ -206,9 +400,26 @@ function FolderRow({
               expanded={expanded}
               onToggleSelect={onToggleSelect}
               onToggleExpand={onToggleExpand}
+              manage={manage}
             />
           ))
         : null}
+
+      {/* inline 新建子文件夹行 — 在本节点的子列表末尾 (depth+1)。 */}
+      {isCreatingHere && manage.edit ? (
+        <InlineEditRow
+          depth={depth + 1}
+          value={manage.edit.value}
+          placeholder={t('settings.folder.picker.manage.newChildPlaceholder', {
+            defaultValue: '子文件夹名称'
+          })}
+          busy={manage.editBusy}
+          icon={<FolderPlus size={15} strokeWidth={1.75} className="shrink-0 text-coral" />}
+          onChange={manage.onEditChange}
+          onSubmit={manage.onEditSubmit}
+          onCancel={manage.onEditCancel}
+        />
+      ) : null}
     </>
   )
 }
@@ -341,6 +552,135 @@ export function FolderPicker(): React.ReactElement {
     }
   }
 
+  // ── 文件夹管理 (P4) — ⋯ 菜单 / inline 输入 / 删除二次确认 ──────────────────
+  const [menuFor, setMenuFor] = React.useState<string | null>(null)
+  const [edit, setEdit] = React.useState<EditState | null>(null)
+  const [editBusy, setEditBusy] = React.useState(false)
+  const [deleteTarget, setDeleteTarget] = React.useState<FolderTreeNode | null>(null)
+  const [deleting, setDeleting] = React.useState(false)
+
+  const openMenu = React.useCallback((imapName: string | null): void => {
+    setMenuFor(imapName)
+  }, [])
+
+  const startCreate = React.useCallback((parentImapName: string): void => {
+    setMenuFor(null)
+    setEdit({ mode: 'create', parentImapName, value: '' })
+    // 展开父节点, 让 inline 新建行可见。
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      next.add(parentImapName)
+      return next
+    })
+  }, [])
+
+  const startRename = React.useCallback((node: FolderTreeNode): void => {
+    setMenuFor(null)
+    setEdit({ mode: 'rename', imapName: node.imap_name, value: node.display_name })
+  }, [])
+
+  const editChange = React.useCallback((value: string): void => {
+    setEdit((prev) => (prev ? { ...prev, value } : prev))
+  }, [])
+
+  const editCancel = React.useCallback((): void => {
+    setEdit(null)
+  }, [])
+
+  const editSubmit = React.useCallback(async (): Promise<void> => {
+    if (!edit) return
+    const name = edit.value.trim()
+    if (name === '') return
+    setEditBusy(true)
+    try {
+      if (edit.mode === 'create') {
+        const res = await mailApi.folder.createFolder(edit.parentImapName, name)
+        if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
+        toastSuccess(
+          t('settings.folder.picker.manage.createOk', {
+            defaultValue: '已新建文件夹「{{name}}」',
+            name
+          })
+        )
+      } else {
+        const res = await mailApi.folder.renameFolder(edit.imapName, name)
+        if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
+        toastSuccess(
+          t('settings.folder.picker.manage.renameOk', {
+            defaultValue: '已重命名为「{{name}}」',
+            name
+          })
+        )
+      }
+      setEdit(null)
+      // 成功后 refetch discover (拿到 Exchange 真实状态 + 新计数)。
+      await refresh()
+    } catch (e) {
+      toastError(
+        edit.mode === 'create'
+          ? t('settings.folder.picker.manage.createFail', { defaultValue: '新建文件夹失败' })
+          : t('settings.folder.picker.manage.renameFail', { defaultValue: '重命名失败' }),
+        (e as Error).message
+      )
+    } finally {
+      setEditBusy(false)
+    }
+  }, [edit, mailApi, markRestartRequired, refresh, t])
+
+  const requestDelete = React.useCallback((node: FolderTreeNode): void => {
+    setMenuFor(null)
+    setDeleteTarget(node)
+  }, [])
+
+  const confirmDelete = React.useCallback(async (): Promise<void> => {
+    if (!deleteTarget) return
+    const node = deleteTarget
+    setDeleting(true)
+    try {
+      const res = await mailApi.folder.deleteFolder(node.imap_name)
+      if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
+      // 删除的若是当前正在看的文件夹 → 重置到收件箱 (列表否则永久空)。
+      if (customMailbox !== null && customMailbox === node.display_name) {
+        setView('inbox')
+      }
+      setDeleteTarget(null)
+      toastSuccess(
+        t('settings.folder.picker.manage.deleteOk', {
+          defaultValue: '已删除文件夹「{{name}}」',
+          name: node.display_name
+        })
+      )
+      // 成功后 refetch discover (本地树同步到 Exchange 真实状态)。
+      await refresh()
+    } catch (e) {
+      // 失败: 后端已把本地树回滚到服务器真实状态; 关弹窗 + toast 提示回滚。
+      setDeleteTarget(null)
+      toastError(
+        t('settings.folder.picker.manage.deleteFail', { defaultValue: '删除失败' }),
+        `${(e as Error).message} · ${t('settings.folder.picker.manage.deleteRollback', {
+          defaultValue: 'Exchange 操作失败，本地文件夹树已回滚到服务器真实状态。'
+        })}`
+      )
+      // 回滚后 refetch, 确保本地树与服务器一致。
+      await refresh()
+    } finally {
+      setDeleting(false)
+    }
+  }, [deleteTarget, mailApi, markRestartRequired, customMailbox, setView, refresh, t])
+
+  const manage: ManageHandlers = {
+    menuFor,
+    edit,
+    editBusy,
+    onOpenMenu: openMenu,
+    onStartCreate: startCreate,
+    onStartRename: startRename,
+    onRequestDelete: requestDelete,
+    onEditChange: editChange,
+    onEditSubmit: () => void editSubmit(),
+    onEditCancel: editCancel
+  }
+
   // ── 门控态 ────────────────────────────────────────────────────────────
   // env 乐观门控 (本机 MAILAGENT_BACKEND≠davmail) 或 discover 返回 E_INVALID_ARG。
   if (envGated || state.status === 'gated') {
@@ -363,7 +703,11 @@ export function FolderPicker(): React.ReactElement {
   }
 
   return (
-    <div className="rounded-lg border border-ink-border-soft overflow-hidden">
+    <div className="relative rounded-lg border border-ink-border-soft overflow-visible">
+      {/* 点击空白处关 ⋯ 菜单 (overlay 在菜单层之下, 不挡菜单项点击)。 */}
+      {menuFor !== null ? (
+        <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setMenuFor(null)} />
+      ) : null}
       {/* toolbar */}
       <div className="flex items-center gap-2.5 px-3 py-2 border-b border-ink-border-soft">
         <button
@@ -454,6 +798,7 @@ export function FolderPicker(): React.ReactElement {
                 expanded={expanded}
                 onToggleSelect={toggleSelect}
                 onToggleExpand={toggleExpand}
+                manage={manage}
               />
             ))}
           </div>
@@ -484,6 +829,77 @@ export function FolderPicker(): React.ReactElement {
             </button>
           </div>
         </>
+      ) : null}
+
+      {/* 删除二次确认弹窗 (P4 · 界面⑤) — 危险态 + 影响说明 + Exchange 回写警示。 */}
+      {deleteTarget ? (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-xl border border-ink-border bg-ink-1 shadow-md overflow-hidden">
+            <div className="px-5 pt-5 pb-4">
+              <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-fail/12 text-fail mb-3">
+                <Trash2 size={18} strokeWidth={1.75} />
+              </div>
+              <h3 className="text-aux font-semibold text-ink-fg">
+                {t('settings.folder.picker.manage.deleteTitle', {
+                  defaultValue: '删除文件夹「{{name}}」？',
+                  name: deleteTarget.display_name
+                })}
+              </h3>
+              <p className="text-meta text-ink-fg-1 mt-2 leading-relaxed">
+                {typeof deleteTarget.message_count === 'number'
+                  ? t('settings.folder.picker.manage.deleteBodyWithCount', {
+                      defaultValue:
+                        '将删除 Exchange 上的该文件夹，以及本地已同步的 {{count}} 封邮件副本。此操作不可撤销。',
+                      count: deleteTarget.message_count
+                    })
+                  : t('settings.folder.picker.manage.deleteBody', {
+                      defaultValue:
+                        '将删除 Exchange 上的该文件夹，以及本地已同步的邮件副本。此操作不可撤销。'
+                    })}
+              </p>
+              <div className="mt-3 flex items-start gap-2 rounded-md bg-warn/10 px-3 py-2 text-[12px] text-ink-fg-1 leading-relaxed">
+                <AlertTriangle size={14} strokeWidth={2} className="shrink-0 mt-0.5 text-warn" />
+                <span>
+                  {t('settings.folder.picker.manage.deleteWarn', {
+                    defaultValue:
+                      '该文件夹在 Outlook 规则中可能仍被引用；删除后相关规则会失效。Notion 已归档页面不受影响。'
+                  })}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2.5 px-5 py-3 border-t border-ink-border-soft bg-ink-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="inline-flex items-center px-3 py-1 rounded-md text-aux text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg transition-colors duration-fast disabled:opacity-50"
+              >
+                {t('settings.folder.picker.manage.cancel', { defaultValue: '取消' })}
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDelete()}
+                disabled={deleting}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-aux text-on-fail bg-fail hover:bg-fail/90 transition-colors duration-fast disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {deleting ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Trash2 size={13} strokeWidth={2} />
+                )}
+                {deleting
+                  ? t('settings.folder.picker.manage.deleting', { defaultValue: '删除中…' })
+                  : t('settings.folder.picker.manage.deleteConfirm', {
+                      defaultValue: '删除文件夹'
+                    })}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   )

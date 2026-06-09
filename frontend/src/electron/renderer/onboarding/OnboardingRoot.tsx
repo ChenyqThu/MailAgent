@@ -9,7 +9,7 @@
 //     normally render here, but if it does we still allow re-config (mode 'new').
 //   - detectLegacy() once: if found, Welcome's secondary entry switches to 'legacy'.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import './onboarding.css'
 
@@ -22,6 +22,7 @@ import {
   StepConfig,
   StepDone,
   StepFDA,
+  StepFolders,
   StepPlugins,
   StepSync,
   StepWelcome,
@@ -32,15 +33,24 @@ import {
 
 type Mode = 'new' | 'legacy' | 'half' | 'dbcorrupt' | 'rollback'
 
-const STEPS: StepDef[] = [
-  { key: 'welcome', label: '欢迎' },
-  { key: 'fda', label: '环境与权限' },
-  { key: 'backend', label: '后端选择' },
-  { key: 'config', label: '邮件同步配置' },
-  { key: 'sync', label: '首次同步' },
-  { key: 'plugins', label: '插件' },
-  { key: 'done', label: '完成' }
-]
+/** 多文件夹同步 (P4): 「选择文件夹」步仅 davmail 后端插入 (邮箱配置后、首次同步前)。
+ *  applescript 后端无多文件夹概念 → 不展示, 保持原 7 步。STEPS 随 backend 动态生成,
+ *  rail + step 索引 + renderNewStep switch 都据此自适应。 */
+function buildSteps(backend: BackendKind): StepDef[] {
+  const steps: StepDef[] = [
+    { key: 'welcome', label: '欢迎' },
+    { key: 'fda', label: '环境与权限' },
+    { key: 'backend', label: '后端选择' },
+    { key: 'config', label: '邮件同步配置' }
+  ]
+  if (backend === 'davmail') steps.push({ key: 'folders', label: '选择文件夹' })
+  steps.push(
+    { key: 'sync', label: '首次同步' },
+    { key: 'plugins', label: '插件' },
+    { key: 'done', label: '完成' }
+  )
+  return steps
+}
 
 const TITLE_MAP: Record<Mode, string> = {
   new: '设置 · MailAgent',
@@ -71,6 +81,10 @@ export default function OnboardingRoot(): React.JSX.Element {
   const [fdaSkipped, setFdaSkipped] = useState(false)
   const [background, setBackground] = useState(false)
   const [submitError, setSubmitError] = useState<SubmitError | null>(null)
+
+  // STEPS 随 backend 动态生成 (davmail 多一步「选择文件夹」)。backend 在 'backend' 步
+  // (索引 2) 选定, 早于 config/folders, 所以 STEPS 增长时用户尚未走过 → 索引不漂移。
+  const STEPS = useMemo<StepDef[]>(() => buildSteps(backend), [backend])
 
   // theme floor + status/legacy detection
   useEffect(() => {
@@ -151,6 +165,11 @@ export default function OnboardingRoot(): React.JSX.Element {
             onBack={back}
           />
         )
+      case 'folders':
+        // 多文件夹同步 (P4, davmail-only)。whitelist 由 StepFolders 直接经 IPC 写
+        // (folder:setWhitelist), 不进 form / StepDone 提交。跳过 = 不写白名单 (空 =
+        // 仅同步收件箱/发件箱)。
+        return <StepFolders onNext={next} onBack={back} onSkip={() => undefined} />
       case 'sync':
         return <StepSync onNext={next} onBack={back} setBackground={setBackground} />
       case 'plugins':

@@ -65,6 +65,7 @@ import type {
   FolderEmailDetail,
   FolderEmailMeta,
   FolderListOpts,
+  FolderManageResult,
   FolderName,
   FolderSearchOpts,
   FolderSearchResult,
@@ -360,6 +361,30 @@ class ElectronFolderApi implements FolderApi {
       'folder:setWhitelist',
       imapNames
     )) as WriteEnvelope<FolderSetWhitelistResult>
+    return unwrap(env)
+  }
+  // 文件夹管理 (P4) — 新建/重命名/删除 走 Main→daemon→serve-api 转发 (envelope 保 code)。
+  async createFolder(parentImapName: string | null, name: string): Promise<FolderManageResult> {
+    const env = (await invoker()(
+      'folder:create',
+      parentImapName,
+      name
+    )) as WriteEnvelope<FolderManageResult>
+    return unwrap(env)
+  }
+  async renameFolder(imapName: string, newName: string): Promise<FolderManageResult> {
+    const env = (await invoker()(
+      'folder:rename',
+      imapName,
+      newName
+    )) as WriteEnvelope<FolderManageResult>
+    return unwrap(env)
+  }
+  async deleteFolder(imapName: string): Promise<FolderManageResult> {
+    const env = (await invoker()(
+      'folder:manageDelete',
+      imapName
+    )) as WriteEnvelope<FolderManageResult>
     return unwrap(env)
   }
 }

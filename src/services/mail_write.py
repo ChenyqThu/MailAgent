@@ -27,6 +27,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from loguru import logger
+
 from src.services.errors import (
     ServiceError,
     ServiceInvalidArgError,
@@ -46,6 +48,10 @@ _OUTBOX_SOURCE = "cli"
 
 # 归档目标 mailbox (IMAP MOVE INBOX→Archive 后 SQLite/Notion 的 Mailbox 标签)。
 _ARCHIVE_MAILBOX = "存档"
+
+# move_to_folder 拒绝的目标 (移到回收站/垃圾邮件 = 变相删除, 不该走 move)。
+_TRASH_LIKE_IMAP = {"TRASH", "JUNK", "DELETED ITEMS", "DELETED MESSAGES"}
+_TRASH_LIKE_LABEL = {"回收站", "已删除", "已删除邮件", "垃圾邮件", "Trash", "Junk", "Deleted Items"}
 
 
 @dataclass
@@ -86,6 +92,28 @@ class ArchiveResult:
     to_mailbox: str
     notion_updated: bool
     notion_error: Optional[str]
+
+
+@dataclass
+class MoveResult:
+    """``move_to_folder`` 执行结果 (多文件夹同步: 任意文件夹→任意文件夹移动)。"""
+
+    internal_id: int
+    from_mailbox: str
+    to_mailbox: str
+    notion_updated: bool
+    notion_error: Optional[str]
+
+
+@dataclass
+class FolderMutationResult:
+    """文件夹管理 (create/rename/delete) 执行结果。"""
+
+    action: str            # create | rename | delete
+    imap_name: str
+    new_imap_name: Optional[str] = None
+    affected_local_rows: int = 0   # rename/delete 影响的本地 email_metadata 行数
+    restart_required: bool = False  # 改了 .env SYNC_FOLDERS 白名单 → 需 restart mail-sync 生效
 
 
 @dataclass
@@ -654,13 +682,18 @@ class MailWriteService:
 
         require_write_auth(actor)
 
-        # 1. IMAP MOVE INBOX → Archive (davmail-only)
+        # 1. IMAP MOVE <当前文件夹> → Archive (davmail-only)。
+        #    src 从邮件**当前** mailbox 解析 (自定义文件夹邮件归档时 src 不是 INBOX 而是
+        #    Jira/Notion 等 → 写死 INBOX 会找不到 UID。archive_inbox_message 的 src_imap 泛化)。
         reader = self._folder_imap_reader()
-        moved = reader.archive_inbox_message(message_id, fallback_uid=imap_uid)
+        src_imap = self._resolve_folder_imap(current_mailbox)
+        moved = reader.archive_inbox_message(
+            message_id, fallback_uid=imap_uid, src_imap=src_imap
+        )
         if not moved:
             raise ServiceError(
-                f"IMAP 归档失败 (INBOX→Archive) internal_id={internal_id}; "
-                "邮件可能已不在 INBOX 或 Archive 文件夹未发现"
+                f"IMAP 归档失败 ({src_imap!r}→Archive) internal_id={internal_id}; "
+                "邮件可能已不在源文件夹或 Archive 文件夹未发现"
             )
 
         # 2. SQLite: mailbox → 存档 (移出收件箱视图; body/附件保留)
@@ -686,6 +719,251 @@ class MailWriteService:
             notion_updated=notion_updated,
             notion_error=notion_error,
         )
+
+    # ------------------------------------------------------------
+    # 多文件夹同步: move_to_folder + 文件夹管理 CRUD (davmail-only)
+    # ------------------------------------------------------------
+
+    def _resolve_folder_imap(self, mailbox: str) -> str:
+        """email_metadata.mailbox (显示名) → IMAP folder 原始名 (SELECT 用)。
+
+        标准邮箱用映射 (探测到的 sent/drafts 优先); 自定义文件夹 = encode_imap_utf7(显示名)。
+        """
+        from src.mail.backend.imap_utf7 import encode_imap_utf7
+
+        # ⚠️ 不在这里提前取 self._ctx.backend —— 它 lazy 创建真 davmail backend (连 IMAP)。
+        # 收件箱/自定义文件夹的解析不需要 backend; 仅 发件箱/草稿 需探测到的 folder 名。
+        if not mailbox or mailbox in ("收件箱", "INBOX"):
+            return "INBOX"
+        if mailbox in ("发件箱", "已发送", "已发送邮件"):
+            return getattr(self._ctx.backend, "sent_folder", None) or "Sent"
+        if mailbox in ("草稿", "草稿箱", "Drafts"):
+            return getattr(self._ctx.backend, "drafts_folder", None) or "Drafts"
+        if mailbox == _ARCHIVE_MAILBOX:
+            return self._folder_imap_reader().resolve_imap_folder("archive") or "Archive"
+        return encode_imap_utf7(mailbox)
+
+    def _assert_not_system_folder(self, imap_name: str) -> None:
+        """管理 gate: imap_name 是系统文件夹则拒绝 (收件箱/发件箱/Drafts/Junk/Trash)。
+
+        best-effort discover; IMAP 不可用时不阻塞 (EWS 自身也会拒删 distinguished folder)。
+        """
+        if imap_name.upper() == "INBOX":
+            raise ServiceInvalidArgError("INBOX 是系统文件夹, 不可管理")
+        try:
+            from src.mail.backend.imap_client import list_folders
+
+            for fi in list_folders(self._ctx.config, with_counts=False):
+                if fi.imap_name == imap_name and fi.is_system:
+                    raise ServiceInvalidArgError(
+                        f"{imap_name!r} 是系统文件夹 (收件箱/发件箱/Drafts/Junk/Trash), 不可重命名/删除"
+                    )
+        except ServiceInvalidArgError:
+            raise
+        except Exception:  # noqa: BLE001 — discover 失败不阻塞 (EWS 兜底拒删)
+            pass
+
+    def move_to_folder(
+        self, internal_id: int, dst_imap_name: str, *, actor: Actor
+    ) -> MoveResult:
+        """把邮件从当前文件夹移到任意目标文件夹 (IMAP MOVE + SQLite/Notion mailbox 更新)。"""
+        from src.mail.backend.imap_utf7 import decode_imap_utf7
+
+        meta = self._ctx.sync_store.get(internal_id)
+        if not meta:
+            raise ServiceNotFoundError(
+                f"Email metadata not found for internal_id={internal_id}"
+            )
+        current_mailbox = meta.get("mailbox") or ""
+        dst_label = decode_imap_utf7(dst_imap_name)
+        if current_mailbox == dst_label:
+            raise ServiceInvalidArgError(
+                f"Email {internal_id} 已在 {dst_label!r}"
+            )
+        # 防误「移动=删除」: 拒绝移到回收站/垃圾邮件 (移到那等于删除, 应走 delete)。
+        if dst_imap_name.upper() in _TRASH_LIKE_IMAP or dst_label in _TRASH_LIKE_LABEL:
+            raise ServiceInvalidArgError(
+                f"不能移动到回收站/垃圾邮件 ({dst_label!r}); 删除请用归档或专门的删除操作"
+            )
+        require_write_auth(actor)
+
+        reader = self._folder_imap_reader()
+        src_imap = self._resolve_folder_imap(current_mailbox)
+        moved = reader.move_by_message_id(
+            src_imap, meta.get("message_id"), dst_imap_name,
+            fallback_uid=meta.get("imap_uid"),
+        )
+        if not moved:
+            raise ServiceError(
+                f"IMAP 移动失败 ({src_imap!r}→{dst_imap_name!r}) internal_id={internal_id}"
+            )
+        self._ctx.sync_store.update_mailbox(internal_id, dst_label)
+        notion_updated = False
+        notion_error = None
+        page_id = meta.get("notion_page_id")
+        if page_id:
+            try:
+                asyncio.run(self._update_notion_mailbox(page_id, dst_label))
+                notion_updated = True
+            except Exception as e:  # noqa: BLE001
+                notion_error = str(e)
+        return MoveResult(
+            internal_id=internal_id,
+            from_mailbox=current_mailbox,
+            to_mailbox=dst_label,
+            notion_updated=notion_updated,
+            notion_error=notion_error,
+        )
+
+    def create_folder(
+        self, parent_imap: str, name: str, *, actor: Actor
+    ) -> FolderMutationResult:
+        """在父文件夹下新建子文件夹 (IMAP CREATE)。parent_imap 空=顶层。"""
+        require_write_auth(actor)
+        reader = self._folder_imap_reader()
+        child_imap = reader.build_child_imap_name(parent_imap, name)
+        if not reader.create_folder(child_imap):
+            raise ServiceError(f"创建文件夹失败 (IMAP CREATE {child_imap!r})")
+        return FolderMutationResult(action="create", imap_name=child_imap)
+
+    def rename_folder(
+        self, imap_name: str, new_name: str, *, actor: Actor
+    ) -> FolderMutationResult:
+        """重命名文件夹 (IMAP RENAME + 本地 email_metadata.mailbox 一致性回填)。
+
+        new_name 是叶子显示名; 保留原父路径。系统文件夹拒绝。
+        """
+        from src.mail.backend.imap_utf7 import decode_imap_utf7, encode_imap_utf7
+
+        require_write_auth(actor)
+        self._assert_not_system_folder(imap_name)
+        # 保留父路径, 仅换叶子段。
+        if "/" in imap_name:
+            parent = imap_name.rsplit("/", 1)[0]
+            new_imap = f"{parent}/{encode_imap_utf7(new_name)}"
+        else:
+            new_imap = encode_imap_utf7(new_name)
+        reader = self._folder_imap_reader()
+        if not reader.rename_folder(imap_name, new_imap):
+            raise ServiceError(f"重命名失败 (IMAP RENAME {imap_name!r}→{new_imap!r})")
+        # 一致性: 本地 email_metadata.mailbox (旧显示名→新显示名) + 白名单。
+        old_label = decode_imap_utf7(imap_name)
+        new_label = decode_imap_utf7(new_imap)
+        affected = self._rename_local_mailbox(old_label, new_label)
+        wl_changed = self._rename_whitelist_entry(imap_name, new_imap)
+        return FolderMutationResult(
+            action="rename", imap_name=imap_name, new_imap_name=new_imap,
+            affected_local_rows=affected, restart_required=wl_changed,
+        )
+
+    def delete_folder(self, imap_name: str, *, actor: Actor) -> FolderMutationResult:
+        """删除文件夹 (IMAP DELETE + 本地 email_metadata 清理 + 白名单移除)。系统文件夹拒绝。"""
+        from src.mail.backend.imap_utf7 import decode_imap_utf7
+
+        require_write_auth(actor)
+        self._assert_not_system_folder(imap_name)
+        reader = self._folder_imap_reader()
+        if not reader.delete_folder(imap_name):
+            raise ServiceError(
+                f"删除失败 (IMAP DELETE {imap_name!r}); 可能是系统文件夹或非空受保护"
+            )
+        label = decode_imap_utf7(imap_name)
+        affected = self._delete_local_mailbox_rows(label)
+        wl_changed = self._remove_whitelist_entry(imap_name)
+        return FolderMutationResult(
+            action="delete", imap_name=imap_name, affected_local_rows=affected,
+            restart_required=wl_changed,
+        )
+
+    # --- 文件夹管理一致性 helper (本地 SQLite + 白名单) ---
+
+    def _rename_local_mailbox(self, old_label: str, new_label: str) -> int:
+        """重命名本地 mailbox 标签 —— 精确匹配 + **子文件夹前缀替换** (label 存完整路径,
+        重命名父文件夹时 `old/子` 邮件的 label 仍是旧前缀, 精确匹配漏掉 → 误导)。
+        """
+        import sqlite3
+
+        try:
+            conn = sqlite3.connect(str(self._ctx.sync_store.db_path), timeout=10.0)
+            try:
+                cur1 = conn.execute(
+                    "UPDATE email_metadata SET mailbox = ? WHERE mailbox = ?",
+                    (new_label, old_label),
+                )
+                # 子文件夹: `old_label/...` → `new_label/...` (SUBSTR 1-indexed, 截 old_label 后的 /...)
+                cur2 = conn.execute(
+                    "UPDATE email_metadata SET mailbox = ? || SUBSTR(mailbox, ?) "
+                    "WHERE mailbox LIKE ?",
+                    (new_label, len(old_label) + 1, old_label + "/%"),
+                )
+                conn.commit()
+                return (cur1.rowcount or 0) + (cur2.rowcount or 0)
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[mail-write] rename local mailbox {old_label!r}→{new_label!r} failed: {e}")
+            return 0
+
+    def _delete_local_mailbox_rows(self, label: str) -> int:
+        """删该 mailbox 的本地 email_metadata 行 —— 走 EmailRepository.delete_email_full
+        逐行删 (FK CASCADE 清 body/attachment/FTS + 删本地附件目录)。
+
+        🔴 不能 raw `sqlite3.connect` 直接 DELETE: 那条连接 FK 默认 OFF → body/attachment/FTS
+        孤儿 + 附件目录残留 (与 delete_email_full 的 DB 完整性契约不一致)。
+        """
+        import sqlite3
+
+        try:
+            conn = sqlite3.connect(str(self._ctx.sync_store.db_path), timeout=10.0)
+            try:
+                ids = [
+                    r[0] for r in conn.execute(
+                        "SELECT internal_id FROM email_metadata WHERE mailbox = ?", (label,)
+                    ).fetchall()
+                ]
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[mail-write] collect rows mailbox={label!r} failed: {e}")
+            return 0
+        repo = self._ctx.email_repo
+        n = 0
+        for iid in ids:
+            try:
+                repo.delete_email_full(iid)   # FK CASCADE (body/attachment/FTS) + 附件目录
+                n += 1
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[mail-write] delete_email_full({iid}) failed: {e}")
+        return n
+
+    def _rewrite_whitelist(self, mutate) -> bool:
+        """读 SYNC_FOLDERS → mutate(list) → 写回 .env (JSON)。返回是否**真改动**白名单
+        (用于 restart_required 信号)。失败仅 warn 返 False。"""
+        import json as _json
+
+        try:
+            from dotenv import set_key as _set_key
+
+            from src.config import _resolve_env_file
+            from src.mail.backend.davmail_backend import DavMailBackend
+
+            cfg = self._ctx.config
+            current = DavMailBackend._parse_custom_folders(cfg) if cfg else []
+            new = mutate(list(current))
+            if new == current:
+                return False   # 文件夹不在白名单 → 不写 → 无需 restart
+            env_file = _resolve_env_file()
+            _set_key(str(env_file), "SYNC_FOLDERS", _json.dumps(new, ensure_ascii=False), quote_mode="auto")
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[mail-write] rewrite whitelist failed: {e}")
+            return False
+
+    def _rename_whitelist_entry(self, old_imap: str, new_imap: str) -> bool:
+        return self._rewrite_whitelist(lambda lst: [new_imap if x == old_imap else x for x in lst])
+
+    def _remove_whitelist_entry(self, imap_name: str) -> bool:
+        return self._rewrite_whitelist(lambda lst: [x for x in lst if x != imap_name])
 
     # ------------------------------------------------------------
     # pin / unpin (v8 前端置顶持久化; Mail.app 无 pin 概念, mail-sync 不读写)

@@ -1778,7 +1778,31 @@
         "emptyTitle": "No custom folders to sync",
         "emptyBody": "No folders beyond Inbox / Outbox were found in your mailbox. Create one in Outlook, then hit Refresh.",
         "gatedTitle": "Requires the davmail backend",
-        "gatedBody": "Folder discovery, selection, and sync are only available on the davmail backend. Switch backends under Accounts to enable this section."
+        "gatedBody": "Folder discovery, selection, and sync are only available on the davmail backend. Switch backends under Accounts to enable this section.",
+        "manage": {
+          "menuLabel": "Manage folder",
+          "newChild": "New subfolder",
+          "rename": "Rename",
+          "delete": "Delete",
+          "systemHint": "System folders can't be changed",
+          "confirm": "Confirm",
+          "cancel": "Cancel",
+          "newChildPlaceholder": "Subfolder name",
+          "renamePlaceholder": "Folder name",
+          "createOk": "Created folder “{{name}}”",
+          "createFail": "Failed to create folder",
+          "renameOk": "Renamed to “{{name}}”",
+          "renameFail": "Rename failed",
+          "deleteOk": "Deleted folder “{{name}}”",
+          "deleteFail": "Delete failed",
+          "deleteRollback": "The Exchange operation failed; the local folder tree was rolled back to the server's real state.",
+          "deleteTitle": "Delete folder “{{name}}”?",
+          "deleteBodyWithCount": "This deletes the folder on Exchange and the {{count}} synced message copies stored locally. This cannot be undone.",
+          "deleteBody": "This deletes the folder on Exchange and its synced message copies stored locally. This cannot be undone.",
+          "deleteWarn": "This folder may still be referenced by Outlook rules; deleting it breaks those rules. Already-archived Notion pages are unaffected.",
+          "deleting": "Deleting…",
+          "deleteConfirm": "Delete folder"
+        }
       }
     }
   },

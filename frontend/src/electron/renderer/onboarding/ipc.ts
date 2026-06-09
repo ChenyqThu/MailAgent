@@ -7,6 +7,8 @@
 // own try/catch + graceful-degradation fallbacks (the wizard must never
 // white-screen when a single channel errors or the preload is absent).
 
+import type { FolderDiscoverResult, FolderSetWhitelistResult } from '@shared/api/types'
+
 export type Status = 'pass' | 'fail' | 'warn'
 
 type IpcInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -271,4 +273,41 @@ export function bootBackend(): Promise<BootBackendResult> {
  *  可能 hang, enterApp 是同步 reload 必定生效。 */
 export function enterApp(): Promise<{ ok: boolean }> {
   return getInvoke()('onboarding:enterApp') as Promise<{ ok: boolean }>
+}
+
+// ─── 多文件夹同步 (P4) — onboarding 「选择文件夹」步骤 ──────────────────────────
+//
+// 复用 handlers/folder.ts 已注册的 folder:discover / folder:setWhitelist 通道
+// (davmail-only, Main→daemon→serve-api 转发)。这些通道返回 WriteEnvelope 形态
+// ({ok,data} / {ok:false,code,message}) 以跨 IPC 保住 error.code, 故这里 unwrap:
+// 成功 → data; 失败 → throw 带 .code 的 Error。非 davmail 后端 → code='E_INVALID_ARG',
+// StepFolders 据此走门控态 (整步可跳过)。
+
+interface FolderEnvelope<T> {
+  ok: boolean
+  data?: T
+  code?: string
+  message?: string
+}
+
+function unwrapFolderEnvelope<T>(raw: unknown): T {
+  const env = raw as FolderEnvelope<T> | null
+  if (env && env.ok === true) return env.data as T
+  const err = new Error(env?.message ?? 'folder IPC failed')
+  if (env?.code) (err as Error & { code?: string }).code = env.code
+  throw err
+}
+
+/** 拉文件夹树 (davmail-only)。失败抛带 .code 的 Error (非 davmail = E_INVALID_ARG)。 */
+export function discoverFolders(counts = true): Promise<FolderDiscoverResult> {
+  return getInvoke()('folder:discover', { counts }).then((raw) =>
+    unwrapFolderEnvelope<FolderDiscoverResult>(raw)
+  )
+}
+
+/** 覆盖式保存白名单 (imap 原始名)。返回去重排序结果 + restart_required。 */
+export function setFolderWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult> {
+  return getInvoke()('folder:setWhitelist', imapNames).then((raw) =>
+    unwrapFolderEnvelope<FolderSetWhitelistResult>(raw)
+  )
 }

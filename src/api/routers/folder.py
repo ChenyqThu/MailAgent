@@ -406,3 +406,110 @@ async def folder_set_whitelist(
     return success_envelope(
         {"folders": names, "restart_required": True}, request=request, source="sqlite"
     )
+
+
+# ============================================================
+# 多文件夹同步: 文件夹管理 CRUD (POST/PATCH/DELETE /api/folder/manage, davmail-only)
+# ============================================================
+import asyncio as _asyncio  # noqa: E402
+
+from src.services.guards import Actor as _Actor  # noqa: E402
+from src.services.mail_write import MailWriteService as _MailWriteService  # noqa: E402
+
+
+class _FolderCreateBody(BaseModel):
+    parent: str = ""    # 父文件夹 imap_name (空=顶层)
+    name: str           # 子文件夹显示名 (可中文)
+
+
+class _FolderRenameBody(BaseModel):
+    imap_name: str
+    new_name: str       # 新叶子显示名 (可中文)
+
+
+class _FolderDeleteBody(BaseModel):
+    imap_name: str
+
+
+def _svc(request: Request) -> "_MailWriteService":
+    from src.api.deps import get_service_ctx
+
+    return _MailWriteService(get_service_ctx())
+
+
+def _http_actor() -> "_Actor":
+    return _Actor(kind="http", authenticated=True, label="cf-access")
+
+
+def _svc_error_to_api(exc) -> None:
+    raise APIError(
+        getattr(exc, "code", "E_GENERIC"),
+        getattr(exc, "message", str(exc)),
+        hint=getattr(exc, "hint", None),
+        source="cli",
+    )
+
+
+@router.post("/manage", dependencies=[Depends(verify_cf_access)])
+async def folder_manage_create(body: _FolderCreateBody, request: Request, cfg: "Config" = Depends(get_settings)):
+    """新建子文件夹 (IMAP CREATE → EWS)。davmail-only。"""
+    _require_davmail(cfg)
+    from src.services.errors import ServiceError
+
+    try:
+        result = await _asyncio.to_thread(
+            _svc(request).create_folder, body.parent, body.name, actor=_http_actor()
+        )
+        return success_envelope(
+            {"action": result.action, "imap_name": result.imap_name},
+            request=request, source="cli",
+        )
+    except ServiceError as exc:
+        _svc_error_to_api(exc)
+
+
+@router.patch("/manage", dependencies=[Depends(verify_cf_access)])
+async def folder_manage_rename(body: _FolderRenameBody, request: Request, cfg: "Config" = Depends(get_settings)):
+    """重命名文件夹 (IMAP RENAME + 本地一致性)。系统文件夹拒绝。davmail-only。"""
+    _require_davmail(cfg)
+    from src.services.errors import ServiceError
+
+    try:
+        result = await _asyncio.to_thread(
+            _svc(request).rename_folder, body.imap_name, body.new_name, actor=_http_actor()
+        )
+        return success_envelope(
+            {
+                "action": result.action,
+                "imap_name": result.imap_name,
+                "new_imap_name": result.new_imap_name,
+                "affected_local_rows": result.affected_local_rows,
+                "restart_required": result.restart_required,
+            },
+            request=request, source="cli",
+        )
+    except ServiceError as exc:
+        _svc_error_to_api(exc)
+
+
+@router.delete("/manage", dependencies=[Depends(verify_cf_access)])
+async def folder_manage_delete(body: _FolderDeleteBody, request: Request, cfg: "Config" = Depends(get_settings)):
+    """删除文件夹 (IMAP DELETE + 本地清理 + 白名单移除)。系统文件夹拒绝。davmail-only。"""
+    _require_davmail(cfg)
+    from src.services.errors import ServiceError
+
+    try:
+        result = await _asyncio.to_thread(
+            _svc(request).delete_folder, body.imap_name, actor=_http_actor()
+        )
+        return success_envelope(
+            {
+                "action": result.action,
+                "imap_name": result.imap_name,
+                "affected_local_rows": result.affected_local_rows,
+                "restart_required": result.restart_required,
+            },
+            request=request, source="cli",
+        )
+    except ServiceError as exc:
+        _svc_error_to_api(exc)
