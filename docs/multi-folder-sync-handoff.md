@@ -81,7 +81,7 @@ claude design 出 mockup
 
 ## 3. Worktree 创建与 setup
 
-**从干净的 main 切**（本功能不依赖在途的 feat/v2.1-remote-chat-report）：
+**main 已是最新最全**（v2.1 已合入）。worktree 可由 **Claude Code 自动创建**（新 session 勾选 worktree 功能 → 从当前分支/main 切，都完整），或用下面命令手动建。**无论哪种，provision 必做**（新 worktree 的 `node_modules` / venv 是 gitignored 本地产物）。自动 worktree 时跳过下面 `#0 #1`，直接从 `#2` provision：
 
 ```bash
 # 0. 确保 main 最新
