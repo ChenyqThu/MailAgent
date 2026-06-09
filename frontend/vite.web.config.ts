@@ -112,7 +112,10 @@ export default defineConfig({
         outDir: resolve(__dirname, 'out/web'),
         emptyOutDir: true,
         rollupOptions: {
-          input: { index: resolve(__dirname, 'src/web/index.html') },
+          input: {
+            index: resolve(__dirname, 'src/web/index.html'),
+            landing: resolve(__dirname, 'src/web/landing.html')
+          },
           // Defensive: fail loudly if any electron-only dep is statically
           // imported into the web graph (see ELECTRON_ONLY note above).
           external: ELECTRON_ONLY

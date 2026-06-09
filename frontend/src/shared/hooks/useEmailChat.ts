@@ -1016,6 +1016,15 @@ export function useEmailChat(
       // know to abort the stranded session instead of touching state for
       // the wrong email (codex High carry-forward).
       const myEmail = emailId
+      // codex r4 [HIGH] — snapshot the navigation generation BEFORE the first
+      // await, same as refresh()'s `gen`. navGenerationRef bumps on EITHER
+      // emailId OR backendKind changing (the useLayoutEffect above), so a
+      // same-email KIND switch counts as a navigation event the bare `myEmail`
+      // check below can't catch. Reading it pre-await captures the nav state at
+      // send time; the post-await guards discard a turn whose scope the user
+      // left behind, preventing the stale kind's session from being written
+      // into the new kind's scope (串台).
+      const myGen = navGenerationRef.current
       // Sprint 19 — if the user just clicked "+ 新建会话" (newSession() set
       // forceNewSessionRef), INSERT a fresh ai_chat_sessions row first so
       // this turn lands in a brand-new session. Backend info comes from
@@ -1033,6 +1042,19 @@ export function useEmailChat(
           backendModel: input.backendModel ?? null,
           backendAgentPageId: input.backendAgentPageId ?? null
         })
+        // codex r4 [HIGH] — if the scope moved (email switch OR same-email kind
+        // switch) while newSession was in flight, the freshly-INSERTed row
+        // belongs to a scope the user has left. newSession() only created an
+        // empty ai_chat_sessions row (no stream started yet), so there's
+        // nothing to abort; just skip chat.start and return ids reflecting that
+        // row WITHOUT touching any streaming/active state for the current scope.
+        if (
+          !mountedRef.current ||
+          emailIdRef.current !== myEmail ||
+          myGen !== navGenerationRef.current
+        ) {
+          return { sessionId: newSess.id, userMessageId: 0, assistantMessageId: 0 }
+        }
         activeSessionRef.current = newSess.id
         setActiveSessionIdState(newSess.id)
       }
@@ -1051,11 +1073,17 @@ export function useEmailChat(
         // from the persisted Composer state at send time).
         thinking: input.thinking
       })
-      if (!mountedRef.current || emailIdRef.current !== myEmail) {
-        // Email moved on (or hook unmounted) before the dispatcher returned.
-        // Abort the stranded session and skip the state mutations — the
-        // current email's panel must not flip to streaming on a sessionId
-        // it didn't subscribe to.
+      if (
+        !mountedRef.current ||
+        emailIdRef.current !== myEmail ||
+        myGen !== navGenerationRef.current
+      ) {
+        // Email moved on, hook unmounted, OR the scope's KIND switched (same
+        // email, different agent) before the dispatcher returned. A same-email
+        // kind switch also bumps navGenerationRef, so `myGen !== current`
+        // covers the path the bare `myEmail` check misses. Abort the stranded
+        // session and skip the state mutations — the current scope's panel must
+        // not flip to streaming on a sessionId it didn't subscribe to.
         mailApi.chat.abort(result.sessionId)
         // Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — we no
         // longer set `lastFailedInput` BEFORE the stranded check (the
@@ -1243,6 +1271,15 @@ export function useEmailChat(
         throw new Error('useEmailChat.editMessage: no active session')
       }
       setError(null)
+      // codex r4 [HIGH] — snapshot the navigation generation + email BEFORE the
+      // editMessage IPC, same as send(). A same-email KIND switch (or email
+      // switch) while the IPC is in flight bumps navGenerationRef; without a
+      // post-await guard the re-streamed session would be written into the new
+      // scope (串台). The comment block above ("no stranded-send guard")
+      // assumed only email switches null activeSessionId — but a kind switch
+      // also leaves the IPC resolving against a scope the user has left.
+      const myEmail = emailIdRef.current
+      const myGen = navGenerationRef.current
       const result = await mailApi.chat.editMessage({
         sessionId: activeSessionId,
         editingMessageId: input.messageId,
@@ -1253,6 +1290,18 @@ export function useEmailChat(
         // task 06-08-chat 需求 5 — per-turn thinking toggle for the re-stream.
         thinking: input.thinking
       })
+      if (
+        !mountedRef.current ||
+        emailIdRef.current !== myEmail ||
+        myGen !== navGenerationRef.current
+      ) {
+        // Scope moved on (email switch OR same-email kind switch) before the
+        // re-stream returned. Abort the stranded session and skip the state
+        // mutations — the current scope must not flip to streaming on a
+        // sessionId it didn't subscribe to.
+        mailApi.chat.abort(result.sessionId)
+        return result
+      }
       setStreamingMessageId(result.assistantMessageId)
       activeSessionRef.current = result.sessionId
       // Refresh the message list so the truncated tail + the freshly

@@ -1228,7 +1228,7 @@
         "cliMissing": "未找到 notion-agent 命令行工具",
         "needsAuth": "notion-agent 尚未认证(缺少 token_v2)",
         "account": "账号",
-        "workspace": "工作区 {{space}}",
+        "workspace": "工作区 {space}",
         "agent": "绑定 Agent",
         "agentHelper": "主 Agent（个人 persona）+ 工作区 Custom Agent，切换即写入 account.json",
         "agentPlaceholder": "选择 Agent",

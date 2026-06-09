@@ -267,7 +267,7 @@ export function NotionAgentSection(): React.ReactElement {
         helper={
           config?.spaceName
             ? t('settings.ai.notionAgent.workspace', {
-                defaultValue: '工作区 {{space}}',
+                defaultValue: '工作区 {space}',
                 space: config.spaceName
               })
             : undefined
