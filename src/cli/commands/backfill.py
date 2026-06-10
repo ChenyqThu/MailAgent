@@ -330,9 +330,11 @@ def backfill_body(
     initial_body_count = _body_row_count(db_path)
     initial_dead_count = _dead_count(db_path)
 
-    arm = AppleScriptArm(
-        account_name=cfg.mail_account_name, inbox_name=cfg.mail_inbox_name,
-    )
+    # 走 cli.backend 工厂尊重 MAILAGENT_BACKEND: davmail 下 backend.arm 是
+    # DavMailBackend 自身 (按 imap_uid/message_id IMAP 重抓), applescript 下是
+    # 真 AppleScriptArm — 否则 davmail 库的合成 internal_id 打到 Mail.app 报
+    # "无效的索引" (同 1dcff6f 项目周报修过的坑)
+    arm = cli.backend.arm
     reader = EmailReader()
     repo = EmailRepository(
         db_path=db_path,

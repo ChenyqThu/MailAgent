@@ -40,11 +40,17 @@ def _invoke(cli_runner, *args, db_path):
 # ---------------------------------------------------------------------------
 
 def _make_arm_mock(fetch_result: dict | None = None):
-    """Return a mock AppleScriptArm that returns fetch_result from fetch_email_content_by_id."""
+    """Mock cli.backend (factory 路由): backend.arm.fetch_email_content_by_id → fetch_result.
+
+    backfill body 走 ``cli.backend.arm`` (尊重 MAILAGENT_BACKEND), 测试 patch
+    ``src.mail.backend.factory.create_backend`` 返回这个 backend mock — 保持
+    hermetic, 不碰磁盘 .env 选中的真实 backend (davmail 会真连 IMAP).
+    """
     arm = MagicMock()
     arm.fetch_email_content_by_id.return_value = fetch_result
-    arm_cls = MagicMock(return_value=arm)
-    return arm_cls, arm
+    backend_mock = MagicMock()
+    backend_mock.arm = arm
+    return backend_mock, arm
 
 
 def _make_reader_mock(email_obj=None):
@@ -98,12 +104,12 @@ def _seed_synced_email(db_path, internal_id=99901, mailbox="收件箱",
 class TestBackfillBody:
     def test_dry_run_smoke(self, cli_runner, cli_env, seeded_db):
         """dry-run with --limit 5: exits 0, data.mode=='inline', no subprocess."""
-        arm_cls, arm = _make_arm_mock(_minimal_fetch_result())
+        backend_mock, arm = _make_arm_mock(_minimal_fetch_result())
         reader_cls, reader = _make_reader_mock()
         _seed_synced_email(seeded_db, internal_id=99901)
 
         with (
-            patch("src.cli.commands.backfill.AppleScriptArm", arm_cls),
+            patch("src.mail.backend.factory.create_backend", return_value=backend_mock),
             patch("src.cli.commands.backfill.EmailReader", reader_cls),
             patch("src.cli.commands.backfill.EmailRepository.commit_email_with_body",
                   return_value={}),
@@ -129,11 +135,11 @@ class TestBackfillBody:
         _seed_synced_email(seeded_db, internal_id=99902, date_received="2026-03-15 10:00:00")
         _seed_synced_email(seeded_db, internal_id=99903, date_received="2026-02-01 10:00:00")
 
-        arm_cls, _ = _make_arm_mock(_minimal_fetch_result())
+        backend_mock, _ = _make_arm_mock(_minimal_fetch_result())
         reader_cls, _ = _make_reader_mock()
 
         with (
-            patch("src.cli.commands.backfill.AppleScriptArm", arm_cls),
+            patch("src.mail.backend.factory.create_backend", return_value=backend_mock),
             patch("src.cli.commands.backfill.EmailReader", reader_cls),
             patch("src.sync.backfill_builders.build_storage_payloads",
                   return_value=(MagicMock(body_format="html", markdown="x",
@@ -200,7 +206,7 @@ class TestBackfillBody:
         _seed_synced_email(seeded_db, internal_id=88801)
         _seed_synced_email(seeded_db, internal_id=88802)
 
-        arm_cls, arm = _make_arm_mock(_minimal_fetch_result())
+        backend_mock, arm = _make_arm_mock(_minimal_fetch_result())
         reader_cls, _ = _make_reader_mock()
 
         call_count = {"n": 0}
@@ -212,7 +218,7 @@ class TestBackfillBody:
             return {}
 
         with (
-            patch("src.cli.commands.backfill.AppleScriptArm", arm_cls),
+            patch("src.mail.backend.factory.create_backend", return_value=backend_mock),
             patch("src.cli.commands.backfill.EmailReader", reader_cls),
             patch("src.cli.commands.backfill.EmailRepository.commit_email_with_body",
                   side_effect=_commit_side_effect),
@@ -244,11 +250,11 @@ class TestBackfillBody:
         for iid in [77701, 77702, 77703, 77704, 77705]:
             _seed_synced_email(seeded_db, internal_id=iid)
 
-        arm_cls, _ = _make_arm_mock(_minimal_fetch_result())
+        backend_mock, _ = _make_arm_mock(_minimal_fetch_result())
         reader_cls, _ = _make_reader_mock()
 
         with (
-            patch("src.cli.commands.backfill.AppleScriptArm", arm_cls),
+            patch("src.mail.backend.factory.create_backend", return_value=backend_mock),
             patch("src.cli.commands.backfill.EmailReader", reader_cls),
             patch("src.cli.commands.backfill.EmailRepository.commit_email_with_body",
                   side_effect=RuntimeError("always fail")),
@@ -280,7 +286,7 @@ class TestBackfillBody:
             _seed_synced_email(seeded_db, internal_id=iid)
 
         processed = []
-        arm_cls, arm = _make_arm_mock(_minimal_fetch_result())
+        backend_mock, arm = _make_arm_mock(_minimal_fetch_result())
         reader_cls, _ = _make_reader_mock()
 
         def _tracking_fetch(iid, mailbox):
@@ -290,7 +296,7 @@ class TestBackfillBody:
         arm.fetch_email_content_by_id.side_effect = _tracking_fetch
 
         with (
-            patch("src.cli.commands.backfill.AppleScriptArm", arm_cls),
+            patch("src.mail.backend.factory.create_backend", return_value=backend_mock),
             patch("src.cli.commands.backfill.EmailReader", reader_cls),
             patch("src.cli.commands.backfill.EmailRepository.commit_email_with_body",
                   return_value={}),
@@ -322,11 +328,11 @@ class TestBackfillBody:
         _seed_synced_email(seeded_db, internal_id=66601)
 
         # Arm returns None → dead
-        arm_cls, arm = _make_arm_mock(None)
+        backend_mock, arm = _make_arm_mock(None)
         reader_cls, _ = _make_reader_mock()
 
         with (
-            patch("src.cli.commands.backfill.AppleScriptArm", arm_cls),
+            patch("src.mail.backend.factory.create_backend", return_value=backend_mock),
             patch("src.cli.commands.backfill.EmailReader", reader_cls),
         ):
             result = _invoke(
