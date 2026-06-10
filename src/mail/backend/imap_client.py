@@ -46,6 +46,11 @@ _SENT_FLAG_PATTERN = re.compile(rb"\\Sent\b", re.IGNORECASE)
 
 _POC_DEFAULT_CIPHER_KEY = "mailagent-poc-shared-key"
 
+# task 06-10: PoC fallback 警告降频 — 每个 tick 的完整 IMAP connect/login 都会
+# 走到 get_cipher_key (生产实证 20h 15294 条 WARNING)。首条保留 WARNING (合规
+# 提醒语义不变), 后续降 debug (once-per-process)。
+_poc_warned = False
+
 
 def get_cipher_key(cfg: "Config") -> str:
     """从配置拿 DavMail cipher key (StringEncryptor password).
@@ -64,10 +69,16 @@ def get_cipher_key(cfg: "Config") -> str:
         _os.environ.get("DAVMAIL_POC_MODE", "").lower() in ("1", "true", "yes")
     )
     if poc_mode:
-        logger.warning(
+        global _poc_warned
+        msg = (
             "[imap-client] DAVMAIL_CIPHER_KEY empty + POC mode on → "
             "using PoC default cipher key (NOT for production)"
         )
+        if _poc_warned:
+            logger.debug(msg)
+        else:
+            _poc_warned = True
+            logger.warning(msg)
         return _POC_DEFAULT_CIPHER_KEY
     raise DavMailConnectionError(
         "DAVMAIL_CIPHER_KEY required when MAILAGENT_BACKEND=davmail. "

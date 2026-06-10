@@ -886,6 +886,12 @@ def _default_option(opt_id: str) -> InterventionOption:
     return InterventionOption(id=opt_id, title=island_i18n.t(title_key_map.get(opt_id, title_key)))
 
 
+# task 06-10 (prd Fix 2d): _fire 的 background task 强引用集合 — Python 3.11
+# asyncio loop 只弱引用 task, 无强引用的 pending task 可能被 GC 中途回收
+# (同类生产实证见 new_watcher._rollout_flush_task 注释)。done 后自动 discard。
+_bg_tasks: set = set()
+
+
 def _fire(envelope: BridgeEnvelope, *, internal_id: Optional[int]) -> None:
     """把 send_async 包成 background task；记录 dispatch 结果."""
     # 问题 A 去重: 同 (session_key, event_type) 在 DEDUP_WINDOW_SEC 内重复 → 静默 skip。
@@ -934,7 +940,9 @@ def _fire(envelope: BridgeEnvelope, *, internal_id: Optional[int]) -> None:
             except Exception as e:  # noqa: BLE001
                 log.warning("[island] response handler error: %s", e)
 
-    loop.create_task(_bg())
+    task = loop.create_task(_bg())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 def _extract_choice(response: Dict[str, Any]) -> Optional[str]:

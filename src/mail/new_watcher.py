@@ -283,6 +283,11 @@ class NewWatcher:
         # 运行状态
         self._running = False
         self._healthy = True  # 服务健康状态
+        # task 06-10 (prd Fix 2d): fire-and-forget hook task (pp/llm/kos) 的强
+        # 引用集合 — Python 3.11 asyncio loop 只弱引用 task, 无强引用的 pending
+        # task 会被 GC 中途回收 (生产实证见 start() 里 _rollout_flush_task 注释)。
+        # add_done_callback(discard) 完成即自动移除, len 可观测 in-flight 数。
+        self._bg_tasks: set = set()
         self._stats = {
             "polls": 0,
             "new_emails_detected": 0,
@@ -738,6 +743,22 @@ class NewWatcher:
                 f"[v4] dual-write to SQLite failed for internal_id={internal_id}: {e}"
             )
 
+    def _track_bg_task(self, task) -> None:
+        """持有 fire-and-forget hook task 的强引用 (task 06-10, prd Fix 2d).
+
+        Python 3.11 asyncio loop 只弱引用 task — 无强引用的 pending task 可能
+        被 GC 中途回收 (生产实证: start() 里 _rollout_flush_task 注释记录的同
+        类 bug)。完成后 done_callback 自动 discard, 集合大小 = 当前 in-flight
+        hook 数 (可观测)。部分测试用 NewWatcher.__new__ 构造不走 __init__ →
+        lazy init 防 AttributeError。
+        """
+        tasks = getattr(self, "_bg_tasks", None)
+        if tasks is None:
+            tasks = set()
+            self._bg_tasks = tasks
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
     def _maybe_trigger_project_progress_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str
     ) -> None:
@@ -772,7 +793,7 @@ class NewWatcher:
                 except Exception as e:
                     logger.warning(f"[pp-hook] background task failed: {e}")
 
-            asyncio.create_task(_bg())
+            self._track_bg_task(asyncio.create_task(_bg()))
         except Exception as e:
             logger.warning(f"[pp-hook] dispatch failed: {e}")
 
@@ -835,7 +856,7 @@ class NewWatcher:
                 except Exception as e:
                     logger.warning(f"[llm-hook] background task failed: {e}")
 
-            asyncio.create_task(_bg())
+            self._track_bg_task(asyncio.create_task(_bg()))
         except Exception as e:
             logger.warning(f"[llm-hook] dispatch failed: {e}")
 
@@ -912,7 +933,7 @@ class NewWatcher:
                         f"[kos-hook] background task failed internal_id={internal_id}: {e}"
                     )
 
-            asyncio.create_task(_bg())
+            self._track_bg_task(asyncio.create_task(_bg()))
         except Exception as e:
             logger.warning(
                 f"[kos-hook] dispatch failed internal_id={internal_id}: {e}"
