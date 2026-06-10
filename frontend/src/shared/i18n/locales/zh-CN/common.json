@@ -954,7 +954,9 @@
     "accentHint": "6 种 swatch · 影响主 CTA 与 chip 染色",
     "general": {
       "page": {
-        "intro": "控制强调色、主题、语言与界面材质。所有偏好仅保存在本机。"
+        "intro": "控制强调色、主题、语言与界面材质。所有偏好仅保存在本机。",
+        "eyebrow": "GENERAL",
+        "title": "通用"
       },
       "accent": {
         "meta": "6 prebuilt",
@@ -1073,6 +1075,11 @@
           "label": "发件箱名",
           "helper": "AppleScript 用,默认 已发送邮件"
         }
+      },
+      "page": {
+        "eyebrow": "ACCOUNTS",
+        "title": "账户",
+        "intro": "Notion 集成凭据与 Mail.app 邮箱账户配置。"
       }
     },
     "sync": {
@@ -1128,6 +1135,11 @@
       "healthInterval": {
         "label": "健康检查间隔",
         "helper": "秒 — 发现漏同步邮件"
+      },
+      "page": {
+        "eyebrow": "SYNC",
+        "title": "同步",
+        "intro": "SQLite radar 同步窗口、节拍与日历采集范围。"
       }
     },
     "ai": {
@@ -1152,6 +1164,8 @@
         "refreshing": "刷新中…",
         "loading": "加载中…",
         "noModels": "未拉取到模型列表，请检查 API Base / Key 后刷新。",
+        "allDefault": "全部默认",
+        "countEnabled": "已启用 {count} 个模型",
         "saved": "启用模型列表已更新",
         "saveFailed": "保存失败",
         "notEnabled": "（未启用）"
@@ -1223,7 +1237,9 @@
         },
         "ttl": {
           "label": "缓存 TTL",
-          "helper": "1h 需 extended-cache-ttl beta header,客户端已自动带"
+          "helper": "1h 需 extended-cache-ttl beta header,客户端已自动带",
+          "5m": "5 分钟",
+          "1h": "1 小时"
         }
       },
       "testGateway": {
@@ -1262,6 +1278,11 @@
           "modelSet": "已设默认模型",
           "fail": "操作失败"
         }
+      },
+      "page": {
+        "eyebrow": "AI AGENT",
+        "title": "AI Agent",
+        "intro": "本地 LLM 网关、模型路由、prompt 配置与邮件翻译。"
       }
     },
     "notifications": {
@@ -1304,6 +1325,11 @@
           "label": "告警级别",
           "helper": "逗号分隔: critical, error, warning, info"
         }
+      },
+      "page": {
+        "eyebrow": "NOTIFICATIONS",
+        "title": "通知",
+        "intro": "飞书应用机器人推送重要邮件 · 告警机器人推送服务异常。"
       }
     },
     "integrations": {
@@ -1368,6 +1394,11 @@
           "label": "MAILAGENT_CLI_API_KEY",
           "helper": "双写 keychain + .env,main 进程和 Python CLI 共用"
         }
+      },
+      "page": {
+        "eyebrow": "INTEGRATIONS",
+        "title": "集成",
+        "intro": "项目周报同步、Office 文档转换、看板上报与 CLI 鉴权。"
       }
     },
     "realtime": {
@@ -1409,6 +1440,11 @@
           "label": "启用双写",
           "helper": "关掉 → 仅 Notion 单源,LLM / 重传性能下降 100x"
         }
+      },
+      "page": {
+        "eyebrow": "REALTIME & STORAGE",
+        "title": "实时与存储",
+        "intro": "SSE 事件总线、Redis 队列与附件 / SQLite 本地存储路径。"
       }
     },
     "remote": {
@@ -1620,6 +1656,11 @@
         "disconnected": "未运行",
         "devDisabled": "Dev 模式 · 已禁用",
         "disabled": "已关闭"
+      },
+      "page": {
+        "eyebrow": "ISLAND & UPDATES",
+        "title": "灵动岛与更新",
+        "intro": "ping-island 桥接状态与应用自动更新通道。"
       }
     },
     "folder": {
@@ -1883,5 +1924,8 @@
       "selectHint": "选择左侧一个会话查看",
       "emptyTranscript": "这个会话还没有消息"
     }
+  },
+  "common": {
+    "cancel": "取消"
   }
 }

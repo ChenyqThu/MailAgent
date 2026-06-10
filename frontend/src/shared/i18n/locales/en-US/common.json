@@ -954,7 +954,9 @@
     "accentHint": "6 swatches · drives the primary CTA + chip color",
     "general": {
       "page": {
-        "intro": "Accent, theme, language and glass material. Preferences stay local."
+        "intro": "Accent, theme, language and glass material. Preferences stay local.",
+        "eyebrow": "GENERAL",
+        "title": "General"
       },
       "accent": {
         "meta": "6 prebuilt",
@@ -1073,6 +1075,11 @@
           "label": "Sent name",
           "helper": "AppleScript label, default 已发送邮件"
         }
+      },
+      "page": {
+        "eyebrow": "ACCOUNTS",
+        "title": "Accounts",
+        "intro": "Notion integration credentials and Mail.app account configuration."
       }
     },
     "sync": {
@@ -1128,6 +1135,11 @@
       "healthInterval": {
         "label": "Health-check interval",
         "helper": "Seconds — catches missed emails"
+      },
+      "page": {
+        "eyebrow": "SYNC",
+        "title": "Sync",
+        "intro": "SQLite radar sync window, cadence, and calendar collection range."
       }
     },
     "ai": {
@@ -1152,6 +1164,8 @@
         "refreshing": "Refreshing…",
         "loading": "Loading…",
         "noModels": "No models found — check API Base / Key and refresh.",
+        "allDefault": "All defaults",
+        "countEnabled": "{count} models enabled",
         "saved": "Enabled model list updated",
         "saveFailed": "Save failed",
         "notEnabled": "(not enabled)"
@@ -1223,7 +1237,9 @@
         },
         "ttl": {
           "label": "Cache TTL",
-          "helper": "1h needs extended-cache-ttl beta header (client adds it automatically)"
+          "helper": "1h needs extended-cache-ttl beta header (client adds it automatically)",
+          "5m": "5 minutes",
+          "1h": "1 hour"
         }
       },
       "testGateway": {
@@ -1262,6 +1278,11 @@
           "modelSet": "Default model set",
           "fail": "Operation failed"
         }
+      },
+      "page": {
+        "eyebrow": "AI AGENT",
+        "title": "AI Agent",
+        "intro": "Local LLM gateway, model routing, prompt configuration and email translation."
       }
     },
     "notifications": {
@@ -1304,6 +1325,11 @@
           "label": "Alert levels",
           "helper": "Comma-separated: critical, error, warning, info"
         }
+      },
+      "page": {
+        "eyebrow": "NOTIFICATIONS",
+        "title": "Notifications",
+        "intro": "Feishu bot for important email push · alert bot for service errors."
       }
     },
     "integrations": {
@@ -1368,6 +1394,11 @@
           "label": "MAILAGENT_CLI_API_KEY",
           "helper": "Dual-written to keychain + .env; shared by main process and Python CLI"
         }
+      },
+      "page": {
+        "eyebrow": "INTEGRATIONS",
+        "title": "Integrations",
+        "intro": "Project progress sync, Office document conversion, dashboard reporting and CLI auth."
       }
     },
     "realtime": {
@@ -1409,6 +1440,11 @@
           "label": "Enable dual write",
           "helper": "Off → Notion-only; LLM / resync go ~100× slower"
         }
+      },
+      "page": {
+        "eyebrow": "REALTIME & STORAGE",
+        "title": "Realtime & Storage",
+        "intro": "SSE event bus, Redis queue, and attachment / SQLite local storage paths."
       }
     },
     "remote": {
@@ -1620,6 +1656,11 @@
         "disconnected": "Not running",
         "devDisabled": "Dev · disabled",
         "disabled": "Off"
+      },
+      "page": {
+        "eyebrow": "ISLAND & UPDATES",
+        "title": "Island & Updates",
+        "intro": "ping-island bridge status and app auto-update channel."
       }
     },
     "folder": {
@@ -1883,5 +1924,8 @@
       "selectHint": "Select a conversation on the left",
       "emptyTranscript": "No messages in this conversation yet"
     }
+  },
+  "common": {
+    "cancel": "Cancel"
   }
 }
