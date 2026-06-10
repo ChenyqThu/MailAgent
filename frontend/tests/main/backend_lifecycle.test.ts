@@ -15,9 +15,14 @@ import { createWriteStream, mkdirSync } from 'fs'
 
 // ---- electron app mock (isPackaged 可切换) ---------------------------------
 
-const appMock = { isPackaged: false } as { isPackaged: boolean; on: ReturnType<typeof vi.fn> }
-// before-quit 钩子收集器
+const appMock = { isPackaged: false } as {
+  isPackaged: boolean
+  on: ReturnType<typeof vi.fn>
+  quit: ReturnType<typeof vi.fn>
+}
+// before-quit 钩子收集器 + quit 放行断言点 (registerBackendQuitHook 等 stop 后补发 app.quit)
 appMock.on = vi.fn()
+appMock.quit = vi.fn()
 
 vi.mock('electron', () => ({ app: appMock }))
 
@@ -168,6 +173,7 @@ const {
   REQUIRED_TABLES,
   DEFAULT_API_PORT,
   probeApiHealth,
+  registerBackendQuitHook,
   _resetBackendLifecycleForTests
 } = await import('../../src/electron/main/backend_lifecycle')
 
@@ -189,6 +195,7 @@ beforeEach(() => {
   delete process.env.CF_AUDIENCE
   delete process.env.CF_TEAM_DOMAIN
   delete process.env.MAILAGENT_API_ALLOWED_EMAIL
+  delete process.env.MAILAGENT_MEM_LIMIT_MB // 防宿主 env 污染 buildBaseEnv 默认值断言
   httpHandler = { kind: 'refused' } // 默认: uvicorn 没起, probe 失败
   _resetBackendLifecycleForTests()
 })
@@ -199,6 +206,7 @@ afterEach(() => {
   delete process.env.CF_AUDIENCE
   delete process.env.CF_TEAM_DOMAIN
   delete process.env.MAILAGENT_API_ALLOWED_EMAIL
+  delete process.env.MAILAGENT_MEM_LIMIT_MB
   vi.clearAllMocks()
 })
 
@@ -530,12 +538,19 @@ describe('serve-api 软门控 — waitReady 只 gate serve (向后兼容硬约�
   test('serve 崩溃 (emit exit) → getState failed (serve 门控定型为崩, 正常聚合)', async () => {
     appMock.isPackaged = true
     enableGate()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     const mgr = new BackendLifecycleManager(fastApiOpts())
     mgr.start()
-    // 模拟 serve 进程崩溃 (bad config → exit)。
+    // 模拟 serve 进程崩溃 (bad config → exit)。崩溃瞬间~退避 re-spawn 前的窗口 = failed。
     childFor('serve').emit('exit', 1, null)
     expect(mgr.getServiceState('serve')).toBe('failed')
     expect(mgr.getState()).toBe('failed')
+    // 清理: serve 崩溃现在也排自拉起退避 timer (memleak-orphan 修复), stop() 清掉它
+    // 防 timer 在后续测试中途 fire 污染共享 spawnCalls。serve child 已 null → 立即收敛;
+    // serve-api child 仍在 → emit exit 让 stop 不等 grace。
+    const stopP = mgr.stop()
+    childFor('serve-api').emit('exit', 0, null)
+    await stopP
   })
 })
 
@@ -738,6 +753,34 @@ describe('serve-api env 注入 — MAILAGENT_DATA_ROOT / CF_* / MAILAGENT_SPA_DI
     const env = apiCall.opts.env as NodeJS.ProcessEnv
     expect(env.MAILAGENT_SPA_DIR).toBeUndefined()
   })
+
+  test('memleak-orphan: serve + serve-api 都注入 MAILAGENT_PARENT_WATCHDOG=1 + MAILAGENT_MEM_LIMIT_MB 默认 4096', () => {
+    appMock.isPackaged = true
+    enableGate()
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    for (const name of ['serve', 'serve-api']) {
+      const call = spawnCalls.find((c) => c.args[0] === name)!
+      const env = call.opts.env as NodeJS.ProcessEnv
+      // Python 侧 src/utils/parent_watchdog.py (孤儿自杀兜底) + src/utils/mem_guard.py
+      // (内存水位自愈) 全靠这两个 env gate; pm2/dev 不注入 → 那边零行为变更。
+      expect(env.MAILAGENT_PARENT_WATCHDOG).toBe('1')
+      expect(env.MAILAGENT_MEM_LIMIT_MB).toBe('4096')
+    }
+  })
+
+  test('MAILAGENT_MEM_LIMIT_MB 可被用户 .env 覆盖 (bootstrapDotenv 注入 process.env 后优先于默认 4096)', () => {
+    appMock.isPackaged = true
+    enableGate()
+    process.env.MAILAGENT_MEM_LIMIT_MB = '8192'
+    const mgr = new BackendLifecycleManager(fastApiOpts())
+    mgr.start()
+    for (const name of ['serve', 'serve-api']) {
+      const call = spawnCalls.find((c) => c.args[0] === name)!
+      const env = call.opts.env as NodeJS.ProcessEnv
+      expect(env.MAILAGENT_MEM_LIMIT_MB).toBe('8192')
+    }
+  })
 })
 
 describe('serve-api gate — D1 flip (本地写面: flag 开即起, CF_AUDIENCE 不再前置)', () => {
@@ -893,23 +936,6 @@ describe('serve-api 崩溃自拉起 — 退避 re-spawn + 断路器', () => {
     await vi.waitFor(() => expect(apiCount()).toBe(2), { timeout: 500 })
   })
 
-  test('serve 崩溃不自拉起 (只 serve-api 有自拉起, serve 由 waitReady 门控兜底)', async () => {
-    appMock.isPackaged = true
-    enableGate()
-    const mgr = new BackendLifecycleManager({
-      pollIntervalMs: 1,
-      apiReadyTimeoutMs: 5,
-      apiProbe: neverReadyApiProbe(),
-      crashBackoffMs: [5],
-      maxCrashRestarts: 5
-    })
-    mgr.start()
-    childFor('serve').emit('exit', 1, null)
-    await sleep(30) // 给足退避窗口
-    expect(spawnCalls.filter((c) => c.args[0] === 'serve')).toHaveLength(1) // 未 re-spawn
-    expect(mgr.getServiceState('serve')).toBe('failed')
-  })
-
   test('断路器: 连续崩溃达上限 (maxCrashRestarts) 后停止自拉起 (不无限重启)', async () => {
     appMock.isPackaged = true
     enableGate()
@@ -973,5 +999,212 @@ describe('serve-api 崩溃自拉起 — 退避 re-spawn + 断路器', () => {
     await stopP
     await sleep(80) // 越过退避窗口
     expect(apiCount()).toBe(1) // 无第二次 serve-api spawn
+  })
+})
+
+// ===========================================================================
+// memleak-orphan 修复 — serve 纳入崩溃自拉起 + before-quit 等 stop 完成
+// ===========================================================================
+
+describe('serve 崩溃自拉起 — 与 serve-api 同一退避 + 断路器 (memleak-orphan 修复)', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const serveCount = () => spawnCalls.filter((c) => c.args[0] === 'serve').length
+  // gate off → serve-only lane, 聚焦 serve 的自拉起 (serve-api 不掺和)。
+
+  test('serve 崩溃 (emit exit, 非 stop) → 退避后自动 re-spawn (邮件同步/mem_guard 退出后不再静默死)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 5
+    })
+    mgr.start()
+    expect(serveCount()).toBe(1)
+    childFor('serve').emit('exit', 1, null) // 崩溃 (非 stop)
+    // 崩溃瞬间~re-spawn 前的窗口: failed (waitReady 若命中此窗口快速 false 是接受的取舍)。
+    expect(mgr.getServiceState('serve')).toBe('failed')
+    await vi.waitFor(() => expect(serveCount()).toBe(2), { timeout: 500 })
+    // 🔴 getState 聚合硬约束: 自拉起 re-spawn 把 serve 置回 starting → 聚合恒 starting
+    // (onboarding 靠 getState()==='failed' 区分真崩 vs 慢迁移, 自拉起期间不得误报 failed)。
+    expect(mgr.getServiceState('serve')).toBe('starting')
+    expect(mgr.getState()).toBe('starting')
+  })
+
+  test('断路器: serve 连续崩溃达上限 (maxCrashRestarts) 后停止自拉起, 停在 failed', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 2
+    })
+    mgr.start() // spawn #1
+    childFor('serve').emit('exit', 1, null) // crash#1 → re-spawn #2
+    await vi.waitFor(() => expect(serveCount()).toBe(2), { timeout: 500 })
+    childFor('serve').emit('exit', 1, null) // crash#2 → re-spawn #3
+    await vi.waitFor(() => expect(serveCount()).toBe(3), { timeout: 500 })
+    childFor('serve').emit('exit', 1, null) // crash#3 → 断路器打开, 不再 re-spawn
+    await sleep(40)
+    expect(serveCount()).toBe(3) // 无 #4
+    expect(mgr.getServiceState('serve')).toBe('failed')
+    expect(mgr.getState()).toBe('failed') // 断路器打开后正确停在 failed (onboarding 可见真崩)
+  })
+
+  test('waitReady 标 ready → serve 崩溃计数清零 (再崩仍有完整退避额度, 不被旧计数提前断路)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      readyTimeoutMs: 1000,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 1 // 若计数不清零, crash#2 必被断路 (attempts 1>=1)
+    })
+    mgr.start() // #1
+    childFor('serve').emit('exit', 1, null) // crash#1 (attempts 0→1) → re-spawn #2
+    await vi.waitFor(() => expect(serveCount()).toBe(2), { timeout: 500 })
+    await expect(mgr.waitReady(() => readyResult())).resolves.toBe(true) // ready → 清零
+    expect(mgr.getServiceState('serve')).toBe('ready')
+    childFor('serve').emit('exit', 1, null) // crash#2 (清零后 0→1, 不被断路) → re-spawn #3
+    await vi.waitFor(() => expect(serveCount()).toBe(3), { timeout: 500 })
+  })
+
+  test('stop() 取消退避中的 serve pending re-spawn (退出后不再拉起)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = new BackendLifecycleManager({
+      stopGraceMs: 1000,
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [50], // 较长退避, 留出 stop() 抢先清 timer 的窗口
+      maxCrashRestarts: 5
+    })
+    mgr.start()
+    childFor('serve').emit('exit', 1, null) // 崩溃 → 排了一个 50ms 后的 re-spawn
+    await mgr.stop() // serve child 已 null (崩溃清掉) → stop 立即收敛, 同时清 restartTimer
+    await sleep(80) // 越过退避窗口
+    expect(serveCount()).toBe(1) // 无第二次 serve spawn
+  })
+})
+
+describe('registerBackendQuitHook — before-quit 等 stop 完成 (SIGKILL 升级链 / 孤儿进程修复)', () => {
+  type QuitEvent = { preventDefault: ReturnType<typeof vi.fn> }
+  /** 取最近一次注册的 before-quit handler (每个测试 reset 后重新注册, 绑定当前单例 mgr)。 */
+  function lastBeforeQuitHandler(): (event: QuitEvent) => void {
+    const calls = appMock.on.mock.calls.filter((c) => c[0] === 'before-quit')
+    expect(calls.length).toBeGreaterThan(0)
+    return calls[calls.length - 1][1] as (event: QuitEvent) => void
+  }
+
+  test('打包态首次 before-quit: preventDefault + stop 被调; settle 后 app.quit 放行 (不再拦截)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false' // serve-only
+    const mgr = registerBackendQuitHook()
+    mgr.start()
+    const serveChild = childFor('serve')
+    const handler = lastBeforeQuitHandler()
+
+    const event = { preventDefault: vi.fn() }
+    handler(event)
+    // 🔴 必须 preventDefault + 等 stop: 旧 fire-and-forget 下 SIGTERM 发出后 main 立即
+    // 退出 → 5s grace 后的 SIGKILL 升级永不执行 → 17GB 孤儿进程 (生产事故)。
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    expect(serveChild.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(appMock.quit).not.toHaveBeenCalled() // stop 未 settle → 还不放行
+
+    serveChild.emit('exit', 0, null) // 后端优雅退出 → stop settle
+    await vi.waitFor(() => expect(appMock.quit).toHaveBeenCalledTimes(1))
+
+    // stop 完成后的 before-quit (app.quit() 重新触发的那次) → 放行, 不再 preventDefault。
+    const event2 = { preventDefault: vi.fn() }
+    handler(event2)
+    expect(event2.preventDefault).not.toHaveBeenCalled()
+  })
+
+  test('重复 before-quit (连按 Cmd+Q): 共享同一 stop promise, 不重复调度 stop()', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    const mgr = registerBackendQuitHook()
+    mgr.start()
+    const serveChild = childFor('serve')
+    const handler = lastBeforeQuitHandler()
+    const stopSpy = vi.spyOn(mgr, 'stop')
+
+    handler({ preventDefault: vi.fn() })
+    const event2 = { preventDefault: vi.fn() }
+    handler(event2) // stop settle 前再按一次 Cmd+Q
+    expect(event2.preventDefault).toHaveBeenCalledTimes(1) // 仍拦截
+    expect(stopSpy).toHaveBeenCalledTimes(1) // 但不重复调度
+
+    serveChild.emit('exit', 0, null)
+    await vi.waitFor(() => expect(appMock.quit).toHaveBeenCalledTimes(1)) // quit 也只补发一次
+  })
+
+  test('stop() 拒绝 (异常) → 记日志 + 仍放行 quit (退出绝不被错误卡死)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = registerBackendQuitHook()
+    // Once: 首次 before-quit 的 stop() 炸; 放行后补发 quit 触发的二次 handler 里
+    // `void mgr.stop()` 落回真实实现 (无 child → 立即收敛), 不留 unhandled rejection。
+    vi.spyOn(mgr, 'stop').mockRejectedValueOnce(new Error('boom'))
+    const handler = lastBeforeQuitHandler()
+
+    const event = { preventDefault: vi.fn() }
+    handler(event)
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(appMock.quit).toHaveBeenCalledTimes(1)) // 拒绝也放行
+    expect(errSpy).toHaveBeenCalled() // 不吞错: 失败留日志
+
+    // 放行后的 before-quit → 不再拦截 (失败也算"停妥", 不能反复拦截卡死退出)。
+    const event2 = { preventDefault: vi.fn() }
+    handler(event2)
+    expect(event2.preventDefault).not.toHaveBeenCalled()
+  })
+
+  test('stop() hang (永不 settle) → 10s 硬上限后仍放行 quit (最后防线)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    vi.useFakeTimers()
+    try {
+      const mgr = registerBackendQuitHook()
+      vi.spyOn(mgr, 'stop').mockReturnValue(new Promise<void>(() => {})) // 永不 settle
+      const handler = lastBeforeQuitHandler()
+      const event = { preventDefault: vi.fn() }
+      handler(event)
+      expect(event.preventDefault).toHaveBeenCalledTimes(1)
+      expect(appMock.quit).not.toHaveBeenCalled()
+      // 9.9s: 硬上限未到 → 仍在等 stop (不提前放行)。
+      await vi.advanceTimersByTimeAsync(9_900)
+      expect(appMock.quit).not.toHaveBeenCalled()
+      // 满 10s (QUIT_STOP_HARD_CAP_MS) → hardCap 赢下 race → 放行 quit。
+      await vi.advanceTimersByTimeAsync(100)
+      expect(appMock.quit).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('dev 模式 (isManaged=false): 不 preventDefault, 行为与旧版零变更', () => {
+    appMock.isPackaged = false
+    const mgr = registerBackendQuitHook()
+    mgr.start() // dev: 不 spawn
+    expect(mgr.isManaged()).toBe(false)
+    const handler = lastBeforeQuitHandler()
+    const event = { preventDefault: vi.fn() }
+    handler(event)
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(appMock.quit).not.toHaveBeenCalled()
+    expect(spawnCalls).toHaveLength(0)
   })
 })

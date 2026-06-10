@@ -227,7 +227,7 @@ export interface LifecycleOptions {
   apiReadyTimeoutMs?: number
   /** serve-api 就绪探针 (可注入便于单测; 默认 probeApiHealth → 真实 HTTP GET /api/health)。 */
   apiProbe?: (port: number) => Promise<boolean>
-  /** serve-api 崩溃自拉起退避梯度 (ms, 可注入便于单测; 默认 CRASH_RESTART_BACKOFF_MS)。 */
+  /** 崩溃自拉起退避梯度 (serve + serve-api 共用; ms, 可注入便于单测; 默认 CRASH_RESTART_BACKOFF_MS)。 */
   crashBackoffMs?: number[]
   /** crash-loop 断路器上限: 连续崩溃达此数 (中间无一次 ready) → 放弃自拉起 (可注入; 默认 MAX_CRASH_RESTARTS)。 */
   maxCrashRestarts?: number
@@ -249,8 +249,8 @@ interface ManagedService {
   child: ChildProcess | null
   /** 每 service 独立状态 (getState() 聚合成单个 BackendState 不破坏调用方)。 */
   state: BackendState
-  /** C2 崩溃自拉起 — 连续 crash 计数 (waitApiReady 标 ready 后清零; 达 maxCrashRestarts
-   *  触发断路器停止重启)。仅 serve-api 用。 */
+  /** 崩溃自拉起 — 连续 crash 计数 (就绪后清零: serve-api 由 waitApiReady / serve 由
+   *  waitReady; 达 maxCrashRestarts 触发断路器停止重启)。serve + serve-api 都用。 */
   restartAttempts: number
   /** C2 崩溃自拉起 — 退避中的 re-spawn 定时器 (stop/restartService 时清, 防多余重启)。 */
   restartTimer: NodeJS.Timeout | null
@@ -436,7 +436,17 @@ export class BackendLifecycleManager {
       // C2 双层鉴权: per-session 本地 token 注入 serve (9200 SSE 门) + serve-api (8200
       // dual-auth 本地腿)。同一单例也供 events_bridge 带 header → 两端同值。getLocalApiToken
       // 首次取用即 randomBytes 生成, 进程级常驻。
-      [LOCAL_TOKEN_ENV]: getLocalApiToken()
+      [LOCAL_TOKEN_ENV]: getLocalApiToken(),
+      // memleak-orphan 修复 — 两个止血 env (仅打包态 spawn 注入; pm2/dev 不设 → Python 侧
+      // 零行为变更, 不会误杀 pm2 daemon 重启等场景):
+      //   - MAILAGENT_PARENT_WATCHDOG: src/utils/parent_watchdog.py 的 gate。子进程 daemon
+      //     线程每 5s 查 getppid()==1 (Electron main 死了被 launchd 收养) → os._exit 自杀。
+      //     兜底 force-quit / main crash 时 before-quit 钩子根本不跑的场景 (17GB 孤儿进程事故)。
+      //   - MAILAGENT_MEM_LIMIT_MB: src/utils/mem_guard.py 的内存水位阈值。自身 RSS 超限 →
+      //     dump 诊断 + graceful exit (配合下方 maybeRestartAfterCrash 自拉起回收内存)。
+      //     用户可在 app .env 覆盖 (bootstrapDotenv 已注入 process.env, `||` 透传非空值)。
+      MAILAGENT_PARENT_WATCHDOG: '1',
+      MAILAGENT_MEM_LIMIT_MB: process.env.MAILAGENT_MEM_LIMIT_MB || '4096'
     }
   }
 
@@ -461,7 +471,7 @@ export class BackendLifecycleManager {
         svc.state = 'failed'
         console.error(`[backend_lifecycle] ${svc.name} exited code=${code} signal=${signal}`)
         svc.child = null
-        // C2: serve-api 崩溃自拉起 (指数退避 + crash-loop 断路器)。其它 service / 主动 stop 不触发。
+        // 崩溃自拉起 (指数退避 + crash-loop 断路器): serve + serve-api 都纳入。主动 stop 不触发。
         this.maybeRestartAfterCrash(svc)
         return
       }
@@ -478,22 +488,34 @@ export class BackendLifecycleManager {
   }
 
   /**
-   * C2 — serve-api 崩溃自拉起 (指数退避 + crash-loop 断路器)。仅 serve-api: 它是远程写面,
-   * 崩了不该静默无人拉 (serve 崩由 waitReady 门控兜底降级, 不在此列)。dev 模式不接管。
+   * 崩溃自拉起 (指数退避 + crash-loop 断路器)。serve + serve-api 都纳入:
+   *   - serve-api (C2 起): 远程/本地写面, 崩了不该静默无人拉;
+   *   - serve (memleak-orphan 修复起): 主同步进程崩 (或被 src/utils/mem_guard.py 超内存
+   *     水位主动 graceful exit) 后此前无人拉起 → 邮件同步静默死; mem_guard 的「超限退出 →
+   *     重启回收内存」自愈闭环也依赖这里 re-spawn。主动 stop() 不触发 (exit handler 只在
+   *     state!=='stopped' 时进来)。dev 模式不接管。
    *
    * 断路器: 连续崩溃 (中间无一次就绪) 达 maxCrashRestarts → 放弃自拉起, 停在 failed —
-   * 防 import 期必崩的配置错误 (坏依赖等) 把 CPU 烧穿。waitApiReady 标 ready 时清零计数,
-   * 故「崩→恢复→再崩」每次都有完整退避额度, 只有持续崩才触发断路器。
-   * gate 关 (enabled()=false, 如 CF_AUDIENCE 被清空) 也不重启 (留在 failed)。
+   * 防 import 期必崩的配置错误 (坏依赖等) 把 CPU 烧穿。计数清零时机: serve-api 由
+   * waitApiReady 标 ready 时清零 (持续探测, 「崩→恢复→再崩」每次都有完整退避额度);
+   * serve 由 waitReady 标 ready 时清零 — 但 waitReady 仅启动期调用, 启动后的崩溃自拉起
+   * 无再就绪探测, 计数在 app 会话内**累计**, 达上限即停 (有意取舍: 一个会话内崩 5 次
+   * 说明后端有系统性问题, 停在 failed + 日志比无限重启循环更安全; 重启 App 即复位)。
+   * gate 关 (enabled()=false, 如远程访问开关被关) 也不重启 (留在 failed)。
+   *
+   * 🔴 与 getState() 聚合的硬约束兼容 (onboarding 靠 `getState()==='failed'` 区分真崩 vs
+   * 慢迁移): 自拉起的 spawnService 会把 serve.state 置回 'starting' → 聚合恒 'starting',
+   * 不误报 failed; 断路器打开后停在 'failed' → 聚合正确显示 failed。waitReady 轮询若恰在
+   * 「崩溃后、退避 re-spawn 前」的 failed 窗口命中 → 快速 return false 是接受的现状取舍:
+   * 拉起在后台继续, 开窗降级后下次 IPC 兜底。
    */
   private maybeRestartAfterCrash(svc: ManagedService): void {
-    if (svc.name !== 'serve-api') return
     if (!this.safeIsPackaged()) return
     if (!svc.enabled()) return // gate 关 → 不自拉起
     if (svc.restartAttempts >= this.maxCrashRestarts) {
       console.error(
-        `[backend_lifecycle] serve-api 连续崩溃 ${svc.restartAttempts} 次 (断路器打开), 停止自拉起。` +
-          ' 检查 .env (CF_AUDIENCE / 依赖) 后手动 restart。远程访问暂不可用, 本地 Electron 不受影响。'
+        `[backend_lifecycle] ${svc.name} 连续崩溃 ${svc.restartAttempts} 次 (断路器打开), 停止自拉起。` +
+          ' 检查 .env / 依赖后手动 restart 或重启 App。'
       )
       return
     }
@@ -640,7 +662,12 @@ export class BackendLifecycleManager {
     for (;;) {
       const r = probe()
       if (r.ready) {
-        if (this.safeIsPackaged()) serve.state = 'ready'
+        if (this.safeIsPackaged()) {
+          serve.state = 'ready'
+          // 一次成功就绪 → 清零崩溃计数 (断路器复位, 与 waitApiReady 对称): 启动期 crash-loop
+          // 后修好配置重启成功, 不该带着旧计数被提前断路。
+          serve.restartAttempts = 0
+        }
         return true
       }
       // serve 进程已崩溃 (bad config / spawn error → on('exit'/'error') 置 failed) →
@@ -750,9 +777,9 @@ export class BackendLifecycleManager {
  *  syscall) 让 stop() 永久 hang。正常 SIGKILL 内核毫秒级回收, 远不到此上限。 */
 const SIGKILL_WAIT_MS = 2000
 
-/** C2 serve-api 崩溃自拉起退避梯度 (ms, 仿 events_bridge BACKOFF_MS): 1s→2s→5s→10s→30s 封顶。 */
+/** 崩溃自拉起退避梯度 (serve + serve-api 共用; ms, 仿 events_bridge BACKOFF_MS): 1s→2s→5s→10s→30s 封顶。 */
 const CRASH_RESTART_BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000]
-/** C2 crash-loop 断路器上限: 连续崩溃 (中间无一次 ready) 达此数 → 放弃自拉起 (防必崩配置烧 CPU)。 */
+/** crash-loop 断路器上限: 连续崩溃 (中间无一次 ready) 达此数 → 放弃自拉起 (防必崩配置烧 CPU)。 */
 const MAX_CRASH_RESTARTS = 5
 
 function delay(ms: number): Promise<void> {
@@ -779,19 +806,57 @@ export function getBackendLifecycle(): BackendLifecycleManager {
  * 后端是两类进程, 各自清理)。返回 manager 供调用方在 createWindow 前 waitReady。
  */
 let _quitHookRegistered = false
+/** before-quit 的共享 stop promise: 重复 before-quit (连按 Cmd+Q) 复用同一个, 不重复调度 stop()。 */
+let _stopPromise: Promise<void> | null = null
+/** 后端已停妥 (或等停达硬上限放弃) → 后续 before-quit 直接放行, 不再 preventDefault。 */
+let _backendStopped = false
+
+/** before-quit 等 stop() 完成的硬上限 (ms)。stop() 自身已有 5s grace + 2s SIGKILL wait
+ *  (≈7s), 10s 是其之上的最后防线: 即便 stop() 异常 hang, quit 也不会被永久卡住。 */
+const QUIT_STOP_HARD_CAP_MS = 10_000
 
 /**
  * 只注册 before-quit SIGTERM 钩子 (幂等), 不 start。供 onboarding 场景: 新用户开窗时
  * 还没配置、不能 start 后端, 但要先挂好退出清理钩子; 待 onboarding:complete 写完 .env
  * 再调 mgr.start()。dev 模式 stop() 内部 no-op, 钩子无害。
+ *
+ * 🔴 打包态必须 preventDefault + 等 stop() 完成再放行 quit (17GB 孤儿进程事故根因):
+ * 旧实现 fire-and-forget `void mgr.stop()` 下, stopService 同步段发完 SIGTERM 后
+ * Electron main 立即退出 → **5s grace 后的 SIGKILL 升级链永远不会执行**。Python 侧
+ * graceful shutdown 在高内存水位 (swap 换页地狱) 下可能卡分钟级甚至卡死 → 子进程被
+ * launchd 收养 (PPID→1) 成 17GB 孤儿进程, 持续吃 CPU 只能手动 kill (生产实证)。
+ * preventDefault + await 保证 SIGTERM→grace→SIGKILL 全链路在 main 存活期间走完。
  */
 export function registerBackendQuitHook(): BackendLifecycleManager {
   const mgr = getBackendLifecycle()
   if (!_quitHookRegistered) {
     _quitHookRegistered = true
-    app.on('before-quit', () => {
-      // fire-and-forget: before-quit 不等 async; SIGTERM 已发出, OS 会回收。
-      void mgr.stop()
+    app.on('before-quit', (event) => {
+      // dev 模式 (isManaged()=false): stop() 是 no-op, 保持旧行为 (不 preventDefault),
+      // 零行为变更。_backendStopped: stop 完成后我们自己补发的 app.quit() 重新触发
+      // before-quit → 直接放行 (mgr.stop() 此时幂等 no-op)。
+      if (_backendStopped || !mgr.isManaged()) {
+        void mgr.stop()
+        return
+      }
+      event.preventDefault()
+      if (!_stopPromise) {
+        // 硬上限: 防 stop() 本身 hang 把 quit 永久卡死。unref 让该 timer 不撑住进程
+        // (单测/极端场景下事件循环可正常排空)。
+        const hardCap = new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, QUIT_STOP_HARD_CAP_MS)
+          if (typeof t.unref === 'function') t.unref()
+        })
+        _stopPromise = Promise.race([mgr.stop(), hardCap]).catch((err) => {
+          // stop() 异常也必须放行 quit (绝不让退出被错误卡死), 只留日志。
+          console.error('[backend_lifecycle] before-quit stop() 失败', err)
+        })
+        void _stopPromise.finally(() => {
+          _backendStopped = true
+          app.quit() // 重新触发 quit; 这次 _backendStopped=true → 放行
+        })
+      }
+      // 重复 before-quit (用户连按 Cmd+Q): 共享同一 _stopPromise, 只拦截不重复调度。
     })
   }
   return mgr
@@ -806,4 +871,6 @@ export function registerBackendLifecycle(): BackendLifecycleManager {
 export function _resetBackendLifecycleForTests(): void {
   _manager = null
   _quitHookRegistered = false
+  _stopPromise = null
+  _backendStopped = false
 }

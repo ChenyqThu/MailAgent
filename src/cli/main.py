@@ -137,6 +137,17 @@ def serve_api() -> None:
 
     import uvicorn
 
+    # task 06-10-memleak-orphan: 打包态进程护栏 (env-gated, pm2/dev 不设对应
+    # env 时零行为变更; 与 serve 入口同一套, 见 src/service.py run_service)。
+    # serve-api 无 shutdown_event, mem guard 不传 on_breach → 超限直接走 60s
+    # Timer 硬退, Electron 侧 serve-api 崩溃自拉起已有 (backend_lifecycle)。
+    from src.utils.mem_guard import maybe_start_tracemalloc, start_mem_guard
+    from src.utils.parent_watchdog import start_parent_watchdog
+
+    maybe_start_tracemalloc()
+    start_parent_watchdog()
+    start_mem_guard()
+
     host = "127.0.0.1"  # 硬绑 loopback (§6.5 startup assertion 二次校验)
     port = int(os.environ.get("MAILAGENT_API_PORT", "8200"))
 

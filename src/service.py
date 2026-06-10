@@ -24,6 +24,7 @@ import asyncio
 import os
 import signal
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -337,12 +338,24 @@ class EmailNotionSyncApp:
             logger.info(f"Keep-alive configured: dim={config.keep_alive_dim}")
 
         self._shutdown_event = asyncio.Event()
+        # task 06-10 (prd Fix 1c): SIGTERM 硬退兜底 Timer 引用 (重复信号幂等)
+        self._hard_exit_timer = None
 
     def _handle_signal(self, signum, frame):
         """处理系统信号"""
         sig_name = signal.Signals(signum).name
         logger.info(f"Received signal {sig_name}, initiating graceful shutdown...")
         self._shutdown_event.set()
+        # task 06-10 (prd Fix 1c): graceful shutdown 本身卡死 (17GB 换页地狱下
+        # cancel tasks + alert/stats 网络调用慢到分钟级) 的硬兜底 —— 30s 内没
+        # 退完就 os._exit(1)。正常 shutdown ~1s (日志实证), 30s 余量充足。
+        # daemon Timer 不阻塞正常退出; 重复信号 (连按 Ctrl+C / SIGTERM 重发)
+        # 只挂一个 Timer。对 pm2 模式同样有益 (kill timeout 前自清)。
+        if self._hard_exit_timer is None:
+            t = threading.Timer(30.0, os._exit, args=(1,))
+            t.daemon = True
+            t.start()
+            self._hard_exit_timer = t
 
     def _handle_toggle_keep_alive(self, signum, frame):
         """SIGUSR1: 切换保活状态"""
@@ -877,5 +890,27 @@ async def run_service():
     副作用, 同时保证两条入口在 app 启动前都已配好日志 —— 运行时行为与原来一致。
     """
     setup_logger(config.log_level, config.log_file)
+
+    # task 06-10-memleak-orphan: 打包态进程护栏 (全部 env-gated, pm2/dev 不设
+    # 对应 env 时零行为变更)。
+    # - tracemalloc 诊断 (MAILAGENT_MEM_DIAG=1): 尽早启动才能覆盖后续分配。
+    # - parent watchdog (MAILAGENT_PARENT_WATCHDOG=1): Electron force-quit /
+    #   crash 后 PPID→1 即 os._exit, 防孤儿进程 (prd Fix 1b)。
+    from src.utils.mem_guard import maybe_start_tracemalloc, start_mem_guard
+    from src.utils.parent_watchdog import start_parent_watchdog
+
+    maybe_start_tracemalloc()
+    start_parent_watchdog()
+
     app = EmailNotionSyncApp()
+
+    # mem guard (MAILAGENT_MEM_LIMIT_MB): RSS 超限 → 诊断 dump + 优雅退出 +
+    # 60s 硬兜底 (prd Fix 2a)。on_breach 在 guard 线程里跑, 而 _shutdown_event
+    # 是 asyncio.Event — 跨线程 set 必须经 loop.call_soon_threadsafe (直接
+    # set() 不会唤醒 loop 里的 waiter)。loop 在本协程里取好闭包捕获。
+    _loop = asyncio.get_running_loop()
+    start_mem_guard(
+        on_breach=lambda: _loop.call_soon_threadsafe(app._shutdown_event.set)
+    )
+
     await app.start()
