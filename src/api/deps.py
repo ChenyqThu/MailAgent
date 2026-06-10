@@ -125,3 +125,21 @@ def _build_chat_db() -> "ChatDb":
 def get_chat_db() -> "ChatDb":
     """返回进程内 ChatDb 单例 (chat 历史读端点用，只读 ai_chat.db)。"""
     return _build_chat_db()
+
+
+def get_env_file_path() -> str:
+    """公共：返回 .env 文件的绝对路径（与 settings.py ``_resolve_env_file_safe`` 等价语义）。
+
+    优先走 ``src.config._resolve_env_file``（MAILAGENT_ENV_FILE / DATA_ROOT/.env 单源），
+    Config() 构造失败（缺必填 env）时回退 MAILAGENT_ENV_FILE env 内联解析，不存在返 ""。
+    供需要热读 .env 的端点使用（``dotenv_values(get_env_file_path())``），避免两份解析逻辑漂移。
+    """
+    import os
+
+    try:
+        from src.config import _resolve_env_file
+
+        return str(_resolve_env_file())
+    except Exception:  # noqa: BLE001 — singleton construction failed; resolve inline
+        override = os.environ.get("MAILAGENT_ENV_FILE")
+        return os.path.abspath(os.path.expanduser(override)) if override else ""

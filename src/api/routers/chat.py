@@ -23,10 +23,11 @@ import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
+from dotenv import dotenv_values
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.deps import get_chat_db, get_settings
+from src.api.deps import get_chat_db, get_env_file_path, get_settings
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.chat.notion_agent import run_notion_agent, sse_encode
 from src.kos.client import KOSClient, KOSError
@@ -207,6 +208,17 @@ async def chat_config(request: Request):
         user_context = await _get_context_loader().get_markdown()
     except Exception:  # noqa: BLE001 — context is best-effort; never fail /config
         user_context = ""
+    # enabledModels: hot-read LLM_ENABLED_MODELS from .env (dotenv_values, not pydantic
+    # Config) so changes take effect without a serve-api restart — same pattern as
+    # 155eb006 (SYNC_FOLDERS hot-read). Best-effort: empty list on any error.
+    enabled_models: list = []
+    try:
+        env_path = get_env_file_path()
+        if env_path:
+            raw = dotenv_values(env_path).get("LLM_ENABLED_MODELS") or ""
+            enabled_models = [m.strip() for m in raw.split(",") if m.strip()]
+    except Exception:  # noqa: BLE001 — best-effort; never fail /config
+        enabled_models = []
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -218,6 +230,7 @@ async def chat_config(request: Request):
             "kosConfigured": cfg.kos_consumer_enabled,
             "kosTimeDecayEnabled": cfg.kos_time_decay_enabled,
             "userContext": user_context,
+            "enabledModels": enabled_models,
         },
         request=request,
         source="config",

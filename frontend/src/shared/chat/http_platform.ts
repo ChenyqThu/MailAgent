@@ -97,6 +97,9 @@ export interface HttpPlatformConfig {
    *  TTL-cached）。注入 custom-api system prompt（buildStableSystemPrompt）。远程默认
    *  ""（不注入；端点未返回该字段 / 未配置 LLM_CONTEXT_PAGE_ID → 降级空串）。 */
   userContext: string
+  /** dynamic-models — LLM_ENABLED_MODELS from serve-api /chat/config (dotenv_values
+   *  hot-read). Empty array = not configured → consumers fall back to FALLBACK_MODELS. */
+  enabledModels: string[]
 }
 
 /** 远程默认快照（对齐 electron chat/config.ts 默认：harness ON / timeDecay ON / 其余
@@ -111,7 +114,9 @@ export const DEFAULT_HTTP_CONFIG: HttpPlatformConfig = {
   kosConfigured: false,
   kosTimeDecayEnabled: true,
   // task 06-08-chat 第二波 Bug B — no user context until /chat/config supplies it.
-  userContext: ''
+  userContext: '',
+  // dynamic-models — empty until /chat/config supplies it; consumers fall back to FALLBACK_MODELS.
+  enabledModels: []
 }
 
 /** per-messageId 的 streamContent debounce 状态。`latest` = 最近一次累积全量正文

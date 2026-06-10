@@ -548,6 +548,14 @@ export interface LlmSelfTestData {
   latency_ms?: number
 }
 
+/** dynamic-models — serve-api GET /api/llm/models response. */
+export interface LlmUpstreamModelsData {
+  models: string[]
+  cached: boolean
+  cached_at: number | null
+  error?: string
+}
+
 export interface LlmApi {
   /** Sprint 5 — re-run AI classification for one email via `mailagent llm run`. */
   run(internalId: number, opts?: LlmRunOpts): Promise<unknown>
@@ -555,6 +563,9 @@ export interface LlmApi {
   stats(days?: number): Promise<LlmStatsData>
   /** Sprint 6 — no-token health probe for the LLM gateway. */
   selftest(): Promise<LlmSelfTestData>
+  /** dynamic-models — fetch upstream model list (GET /api/llm/models).
+   *  Pass refresh=true to bypass the server-side 5-min TTL cache. */
+  listUpstreamModels(opts?: { refresh?: boolean }): Promise<LlmUpstreamModelsData>
 }
 
 // ---- Sprint 6 §2.2 — admin dashboard surface ------------------------------

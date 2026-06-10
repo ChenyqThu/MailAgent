@@ -13,9 +13,12 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, FileText } from 'lucide-react'
+import { Loader2, FileText, RefreshCw } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useUpstreamModels, useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
+import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { Button } from '@shared/components/ui/button'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type { PromptInfo, PromptSlot } from '@shared/api/types'
@@ -31,7 +34,58 @@ import { NotionAgentSection } from './NotionAgentSection'
 export function AiTab(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
+  const qc = useQueryClient()
   const [testing, setTesting] = React.useState(false)
+
+  // dynamic-models
+  const {
+    models: upstreamModels,
+    isLoading: upstreamLoading,
+    refresh: refreshUpstream
+  } = useUpstreamModels()
+  const { models: enabledModels, rawEnabled } = useEnabledModels()
+  const [refreshing, setRefreshing] = React.useState(false)
+
+  // Current .env values for orphan detection on model selects.
+  const currentLlmModel = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_MODEL'] ?? '') : ''
+  )
+  const currentLlmFallback = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_FALLBACK_MODELS'] ?? '') : ''
+  )
+
+  // Remote web is read-only for env writes (matches EnvField.isWeb logic).
+  const isWeb =
+    (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
+    'web'
+
+  async function handleRefreshUpstream(): Promise<void> {
+    setRefreshing(true)
+    try {
+      await refreshUpstream()
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  async function handleToggleModel(modelId: string, checked: boolean): Promise<void> {
+    const next = checked
+      ? [...rawEnabled.filter((m) => m !== modelId), modelId]
+      : rawEnabled.filter((m) => m !== modelId)
+    const result = await applyEnvPatch({ LLM_ENABLED_MODELS: next.join(',') })
+    if (result.ok) {
+      // LLM_ENABLED_MODELS is hot-read by serve-api dotenv_values — no restart needed.
+      // Invalidate so chat picker and AgentsTab ConfigDrawer immediately reflect the change.
+      // No success toast: checkbox state is immediate visual feedback; toasting every
+      // checkbox click causes toast storms when enabling multiple models in a row.
+      await qc.invalidateQueries({ queryKey: ['chat', 'config', 'enabledModels'] })
+    } else {
+      toastError(
+        t('settings.ai.enabledModels.saveFailed', { defaultValue: '保存失败' }),
+        result.error?.message ?? ''
+      )
+    }
+  }
   const [promptInfo, setPromptInfo] = React.useState<{
     inbox: PromptInfo | null
     sent: PromptInfo | null
@@ -106,19 +160,116 @@ export function AiTab(): React.ReactElement {
           label={t('settings.ai.apiKey.label')}
           helper={t('settings.ai.apiKey.helper')}
         />
+        {/* 启用模型列表 — LLM_ENABLED_MODELS (comma-separated). Serve-api hot-reads
+            this key via dotenv_values; no restart needed after changes. This is an
+            intentional departure from other EnvField rows that call markRestartRequired
+            on write — see comment in handleToggleModel above. */}
+        <Row
+          label={t('settings.ai.enabledModels.label', { defaultValue: '启用模型列表' })}
+          helper={t('settings.ai.enabledModels.helper', {
+            defaultValue:
+              '勾选后三处模型选项（chat picker / 报告 agent / 主备模型下拉）同步显示已启用集合；未勾选时自动 fallback 到默认四模型。'
+          })}
+        >
+          <div className="flex flex-col gap-1.5 w-full">
+            {upstreamLoading ? (
+              <span className="text-xs text-ink-fg-3">
+                <Loader2 className="inline size-3 animate-spin mr-1" />
+                {t('settings.ai.enabledModels.loading', { defaultValue: '加载中…' })}
+              </span>
+            ) : upstreamModels.length === 0 ? (
+              <span className="text-xs text-ink-fg-3">
+                {t('settings.ai.enabledModels.noModels', {
+                  defaultValue: '未拉取到模型列表，请检查 API Base / Key 后刷新。'
+                })}
+              </span>
+            ) : (
+              upstreamModels.map((id) => (
+                <label
+                  key={id}
+                  className={`flex items-center gap-2 text-sm cursor-pointer select-none${isWeb ? ' opacity-50' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={isWeb}
+                    checked={rawEnabled.includes(id)}
+                    onChange={(e) => void handleToggleModel(id, e.target.checked)}
+                    className="accent-[rgb(var(--c-accent))]"
+                  />
+                  <span className="font-mono text-[12.5px]">{id}</span>
+                </label>
+              ))
+            )}
+            <Button
+              onClick={() => void handleRefreshUpstream()}
+              disabled={refreshing || upstreamLoading || isWeb}
+              variant="secondary"
+              size="sm"
+              className="mt-1 self-start"
+            >
+              {refreshing ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  {t('settings.ai.enabledModels.refreshing', { defaultValue: '刷新中…' })}
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="size-3.5" />
+                  {t('settings.ai.enabledModels.refresh', { defaultValue: '刷新模型列表' })}
+                </>
+              )}
+            </Button>
+          </div>
+        </Row>
+        {/* LLM_MODEL: single-select from enabled list (+ current value if orphan).
+            When the saved value is not in the enabled list (e.g. list was narrowed),
+            we append it so the select shows the actual value rather than going blank. */}
         <EnvField
           envKey="LLM_MODEL"
-          control="text"
+          control="select"
           label={t('settings.ai.model.label')}
           helper={t('settings.ai.model.helper')}
-          placeholder="claude-sonnet-4-6"
+          options={(() => {
+            const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+            const withOrphan =
+              currentLlmModel && !base.includes(currentLlmModel) ? [...base, currentLlmModel] : base
+            return withOrphan.map((id) => ({
+              value: id,
+              label:
+                id === currentLlmModel && !base.includes(id)
+                  ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
+                  : id
+            }))
+          })()}
         />
+        {/* LLM_FALLBACK_MODELS: single-select (user decided no multi-select ranking).
+            Python reads it as comma-separated fallback chain; single value works fine.
+            Same orphan handling: if the saved value is not in the enabled list, append it. */}
         <EnvField
           envKey="LLM_FALLBACK_MODELS"
-          control="tag-list"
+          control="select"
           label={t('settings.ai.fallbacks.label')}
           helper={t('settings.ai.fallbacks.helper')}
-          placeholder="gpt-5.5,claude-opus-4-8"
+          options={(() => {
+            const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+            const withOrphan =
+              currentLlmFallback && !base.includes(currentLlmFallback)
+                ? [...base, currentLlmFallback]
+                : base
+            return [
+              {
+                value: '',
+                label: t('settings.ai.fallbacks.none', { defaultValue: '（不设备模型）' })
+              },
+              ...withOrphan.map((id) => ({
+                value: id,
+                label:
+                  id === currentLlmFallback && !base.includes(id)
+                    ? `${id} ${t('settings.ai.enabledModels.notEnabled')}`
+                    : id
+              }))
+            ]
+          })()}
         />
         <Row
           label={t('settings.ai.testGateway.label')}

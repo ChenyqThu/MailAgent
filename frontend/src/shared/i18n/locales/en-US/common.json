@@ -1145,9 +1145,20 @@
         "label": "LLM API key",
         "helper": "Dual-written to keychain + .env; shared by translate / chat / email triage / report agent"
       },
+      "enabledModels": {
+        "label": "Enabled model list",
+        "helper": "Checked models appear in the chat picker, report agent, and primary/fallback dropdowns. When empty, falls back to the default four models.",
+        "refresh": "Refresh model list",
+        "refreshing": "Refreshing…",
+        "loading": "Loading…",
+        "noModels": "No models found — check API Base / Key and refresh.",
+        "saved": "Enabled model list updated",
+        "saveFailed": "Save failed",
+        "notEnabled": "(not enabled)"
+      },
       "model": {
         "label": "Primary model",
-        "helper": "If all fallbacks fail, errors are queued for retry"
+        "helper": "Select from the enabled list; errors are queued for retry when all fallbacks fail"
       },
       "prompts": {
         "title": "Prompt configuration",
@@ -1196,7 +1207,8 @@
       },
       "fallbacks": {
         "label": "Fallback chain",
-        "helper": "Tried in order when the primary fails; cross-protocol = cache miss"
+        "helper": "Used when the primary fails; select one model from the enabled list, or leave empty for none",
+        "none": "(no fallback)"
       },
       "contextPageId": {
         "label": "Context page ID",

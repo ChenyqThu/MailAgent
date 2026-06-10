@@ -267,6 +267,7 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "kosConfigured": False,
         "kosTimeDecayEnabled": True,
         "userContext": "",
+        "enabledModels": [],
     }
 
 

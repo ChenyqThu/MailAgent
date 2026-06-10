@@ -20,6 +20,7 @@ import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailChat } from '@shared/hooks/useEmailChat'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useQuery } from '@tanstack/react-query'
 
@@ -110,6 +111,8 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     queryFn: () => mailApi.notionAgent.getConfig(),
     staleTime: 30_000
   })
+  // dynamic-models — responds to Settings → AI "启用模型列表" invalidation without remount.
+  const { models: availableModels } = useEnabledModels()
   const agentName = notionConfigQ.data?.agentName ?? null
   const notionConfigured = notionConfigQ.data?.configured === true
 
@@ -855,11 +858,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                 // (mockup L2530). Notion Agent has no model picker — the
                 // agent decides; Custom API exposes the 4 supported models.
                 currentModel={backend.kind === 'custom-api' ? backend.model : null}
-                availableModels={
-                  backend.kind === 'custom-api'
-                    ? ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-fable-5', 'gpt-5.5']
-                    : []
-                }
+                availableModels={backend.kind === 'custom-api' ? availableModels : []}
                 onModelChange={(model) =>
                   selectBackend({ kind: 'custom-api', model, agentPageId: null })
                 }

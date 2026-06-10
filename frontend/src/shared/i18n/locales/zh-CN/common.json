@@ -1145,9 +1145,20 @@
         "label": "LLM API Key",
         "helper": "双写 keychain + .env,翻译 / chat / 邮件分类 / 报告 Agent 共用"
       },
+      "enabledModels": {
+        "label": "启用模型列表",
+        "helper": "勾选后三处模型选项（chat picker / 报告 agent / 主备模型下拉）同步显示已启用集合；未配置时自动 fallback 到默认四模型。",
+        "refresh": "刷新模型列表",
+        "refreshing": "刷新中…",
+        "loading": "加载中…",
+        "noModels": "未拉取到模型列表，请检查 API Base / Key 后刷新。",
+        "saved": "启用模型列表已更新",
+        "saveFailed": "保存失败",
+        "notEnabled": "（未启用）"
+      },
       "model": {
         "label": "主模型",
-        "helper": "fallback 失败时上抛 LLMCallError 进重试队列"
+        "helper": "从启用列表中选择主模型；fallback 失败时上抛 LLMCallError 进重试队列"
       },
       "prompts": {
         "title": "Prompt 配置",
@@ -1196,7 +1207,8 @@
       },
       "fallbacks": {
         "label": "Fallback 链",
-        "helper": "主模型挂掉时按序兜底; 跨协议自动 cache miss"
+        "helper": "主模型挂掉时兜底；从启用列表中选择一个备用模型，留空表示不设备模型",
+        "none": "（不设备模型）"
       },
       "contextPageId": {
         "label": "Context 页面 ID",

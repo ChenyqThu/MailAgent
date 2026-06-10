@@ -17,14 +17,15 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
-from fastapi import APIRouter, Depends, Request
+import httpx
+from fastapi import APIRouter, Depends, Query, Request
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.cli_runner import CliRunnerError, run_cli
-from src.api.deps import get_repository, get_service_ctx
+from src.api.deps import get_repository, get_service_ctx, get_settings
 from src.services.errors import ServiceError
 from src.services.guards import Actor
 from src.services.llm_service import LlmService
@@ -33,6 +34,110 @@ if TYPE_CHECKING:
     from src.repository import EmailRepository
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
+
+# ============================================================
+# GET /api/llm/models  (读, 上游 /v1/models + TTL 缓存)
+# ============================================================
+# 模块级内存缓存结构：{"models": [...], "cached_at": float, "error": str|None}
+# None = 未初始化（尚未取过）。多 worker 各自独立（单 worker 场景可接受）。
+_models_cache: Optional[dict] = None
+_MODELS_CACHE_TTL_SEC = 300  # 5 min
+_UPSTREAM_TIMEOUT = httpx.Timeout(connect=10.0, read=10.0, write=10.0, pool=10.0)
+
+
+async def _fetch_upstream_models(api_base: str, api_key: str) -> List[str]:
+    """上游 GET /v1/models 双协议重试 → 解析 data[].id。
+
+    Round 1: ``Authorization: Bearer <key>``（OpenAI 协议标准）。
+    Round 2（仅当 Round 1 返 401/404）: ``x-api-key`` + ``anthropic-version: 2023-06-01``
+    （Anthropic 原生协议）。
+    任何网络 / 解析错误 → 返 []，不抛（best-effort，前端 fallback 到硬编码列表）。
+    """
+    url = f"{api_base.rstrip('/')}/v1/models"
+
+    def _parse_models(body: dict) -> List[str]:
+        data = body.get("data")
+        if not isinstance(data, list):
+            return []
+        return [item["id"] for item in data if isinstance(item, dict) and isinstance(item.get("id"), str)]
+
+    try:
+        async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT) as client:
+            # Round 1: Bearer
+            r1 = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+            if r1.status_code not in (401, 404):
+                if r1.is_success:
+                    return _parse_models(r1.json())
+                return []
+            # Round 2: x-api-key (Anthropic)
+            r2 = await client.get(
+                url,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+            )
+            if r2.is_success:
+                return _parse_models(r2.json())
+            return []
+    except Exception:  # noqa: BLE001 — network/parse error → graceful empty
+        return []
+
+
+@router.get("/models")
+async def list_upstream_models(
+    request: Request,
+    refresh: bool = Query(False),
+    _: None = Depends(verify_cf_access),
+):
+    """上游 /v1/models 全量列表（TTL 缓存 5 min）。
+
+    ``?refresh=true`` 强刷绕过缓存。api_base 未配置 → error:'api_base_not_configured'。
+    响应恒 200：``{models, cached, cached_at, error?}``（前端 fallback 到硬编码列表）。
+
+    鉴权：``Depends(verify_cf_access)`` （与同文件其他端点一致）。
+    """
+    global _models_cache
+
+    cfg = get_settings()
+    api_base = (getattr(cfg, "llm_api_base", None) or "").strip()
+    api_key = (getattr(cfg, "llm_api_key", None) or "").strip()
+
+    if not api_base:
+        return success_envelope(
+            {"models": [], "cached": False, "cached_at": None, "error": "api_base_not_configured"},
+            request=request,
+            source="upstream",
+        )
+
+    now = time.time()
+    use_cache = (
+        not refresh
+        and _models_cache is not None
+        and (now - _models_cache["cached_at"]) < _MODELS_CACHE_TTL_SEC
+    )
+    if use_cache:
+        return success_envelope(
+            {
+                "models": _models_cache["models"],
+                "cached": True,
+                "cached_at": _models_cache["cached_at"],
+                "error": _models_cache.get("error"),
+            },
+            request=request,
+            source="upstream",
+        )
+
+    try:
+        models = await _fetch_upstream_models(api_base, api_key)
+    except Exception:  # noqa: BLE001 — best-effort; _fetch_upstream_models should not raise
+        models = []
+    _models_cache = {"models": models, "cached_at": now, "error": None}
+    return success_envelope(
+        {"models": models, "cached": False, "cached_at": now, "error": None},
+        request=request,
+        source="upstream",
+    )
 
 
 def _zero_cost() -> dict:

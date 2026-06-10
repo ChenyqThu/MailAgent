@@ -89,6 +89,7 @@ import type {
   LlmRunOpts,
   LlmSelfTestData,
   LlmStatsData,
+  LlmUpstreamModelsData,
   MailApi,
   MailboxSummary,
   NotionWriteApi,
@@ -118,6 +119,7 @@ import type {
 } from './types'
 import { createChatRuntime } from '../chat/runtime'
 import { HttpApi } from './HttpApi'
+import { request } from './http_client'
 
 type IpcInvoker = (channel: string, ...args: unknown[]) => Promise<unknown>
 type IpcSender = (channel: string, ...args: unknown[]) => void
@@ -151,6 +153,20 @@ function sender(): IpcSender | null {
   const w = window as unknown as { electron?: { ipcRenderer?: IpcBridge } }
   const fn = w.electron?.ipcRenderer?.send
   return typeof fn === 'function' ? fn : null
+}
+
+/** Loopback serve-api base URL for zero-IPC HTTP calls from Electron renderer
+ *  (e.g. llm/models). Port injected by main via ?apiPort=N; falls back to 8200. */
+function loopbackBaseUrl(): string {
+  let port = 8200
+  try {
+    const raw = new URLSearchParams(window.location.search).get('apiPort')
+    const n = raw != null ? Number.parseInt(raw, 10) : NaN
+    if (Number.isFinite(n) && n > 0) port = n
+  } catch {
+    /* non-renderer test env — fall back to default port */
+  }
+  return `http://127.0.0.1:${port}/api`
 }
 
 /**
@@ -357,6 +373,16 @@ class ElectronLlmApi implements LlmApi {
   }
   async selftest(): Promise<LlmSelfTestData> {
     return (await invoker()('llm:selftest')) as LlmSelfTestData
+  }
+  async listUpstreamModels(opts?: { refresh?: boolean }): Promise<LlmUpstreamModelsData> {
+    // Zero new IPC: Electron renderer calls the loopback serve-api directly
+    // (same pattern as chat runtime). The API key stays on the serve-api host.
+    return request<LlmUpstreamModelsData>(
+      loopbackBaseUrl(),
+      'GET',
+      '/llm/models',
+      opts?.refresh ? { query: { refresh: 'true' } } : undefined
+    )
   }
 }
 
