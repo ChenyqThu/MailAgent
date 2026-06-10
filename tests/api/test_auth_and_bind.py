@@ -167,7 +167,7 @@ def _stub_decode(monkeypatch, claims: dict):
 async def test_valid_jwt_matching_email_passes(monkeypatch):
     """Signed JWT whose email == allowed email → passes, stamps that email."""
     _stub_decode(monkeypatch, {"email": "Owner@Example.com"})
-    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "owner@example.com")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_emails", lambda: {"owner@example.com"})
     req = _ReqWithToken()
     result = await verify_cf_access(req)  # type: ignore[arg-type]
     assert result is None
@@ -176,10 +176,25 @@ async def test_valid_jwt_matching_email_passes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_valid_jwt_matching_second_email_in_allowlist_passes(monkeypatch):
+    """JWT email matches the second entry in a multi-email allowlist → passes."""
+    _stub_decode(monkeypatch, {"email": "lucien.chen@tp-link.com"})
+    monkeypatch.setattr(
+        auth_mod,
+        "_resolve_allowed_emails",
+        lambda: {"lucien.chen@omadanetworks.com", "lucien.chen@tp-link.com"},
+    )
+    req = _ReqWithToken()
+    result = await verify_cf_access(req)  # type: ignore[arg-type]
+    assert result is None
+    assert req.state.user_email == "lucien.chen@tp-link.com"
+
+
+@pytest.mark.asyncio
 async def test_valid_jwt_missing_email_claim_403(monkeypatch):
     """A correctly-signed JWT with NO email claim → 403 (C1)."""
     _stub_decode(monkeypatch, {"sub": "service-token", "aud": "x"})
-    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "owner@example.com")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_emails", lambda: {"owner@example.com"})
     with pytest.raises(HTTPException) as ei:
         await verify_cf_access(_ReqWithToken())  # type: ignore[arg-type]
     assert ei.value.status_code == 403
@@ -187,9 +202,9 @@ async def test_valid_jwt_missing_email_claim_403(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_valid_jwt_wrong_email_403(monkeypatch):
-    """Signed JWT whose email is NOT the allowed one → 403 (C1 allowlist)."""
+    """Signed JWT whose email is NOT in the allowlist → 403 (C1 allowlist)."""
     _stub_decode(monkeypatch, {"email": "intruder@evil.com"})
-    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "owner@example.com")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_emails", lambda: {"owner@example.com"})
     with pytest.raises(HTTPException) as ei:
         await verify_cf_access(_ReqWithToken())  # type: ignore[arg-type]
     assert ei.value.status_code == 403
@@ -197,27 +212,91 @@ async def test_valid_jwt_wrong_email_403(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_valid_jwt_but_no_allowlist_configured_fails_closed_403(monkeypatch):
-    """allowed email unresolved (USER_EMAIL + override both empty) → fail-closed 403."""
+    """allowed emails unresolved (USER_EMAIL + override both empty) → fail-closed 403."""
     _stub_decode(monkeypatch, {"email": "owner@example.com"})
-    monkeypatch.setattr(auth_mod, "_resolve_allowed_email", lambda: "")
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_emails", lambda: set())
     with pytest.raises(HTTPException) as ei:
         await verify_cf_access(_ReqWithToken())  # type: ignore[arg-type]
     assert ei.value.status_code == 403
 
 
-def test_resolve_allowed_email_prefers_override_when_config_absent(monkeypatch):
-    """config 不可用 (裸 worktree / 缺 .env) → resolver 回退 override env。
+# ---------------------------------------------------------------------------
+# _resolve_allowed_emails unit tests
+# ---------------------------------------------------------------------------
 
-    hermetic: 不依赖 worktree 磁盘上是否有 .env。删掉 ``src.config.config`` 符号, 强制
-    ``_resolve_allowed_email`` 里 lazy 的 ``from src.config import config`` 抛 ImportError
-    (= 裸 worktree config 单例构造失败的等效, 同样被 ``except Exception`` 吞掉), 验证
-    解析器回退到 ``MAILAGENT_API_ALLOWED_EMAIL`` override。
+
+def test_resolve_allowed_emails_union_of_config_and_override(monkeypatch):
+    """USER_EMAIL + override 都配 → 两者并集，两个邮箱都在白名单。"""
+    import src.config as config_mod
+
+    class _FakeConfig:
+        user_email = "lucien.chen@omadanetworks.com"
+
+    monkeypatch.setattr(config_mod, "config", _FakeConfig())
+    monkeypatch.setattr(auth_mod, "ALLOWED_EMAIL_OVERRIDE", "lucien.chen@tp-link.com")
+    result = auth_mod._resolve_allowed_emails()
+    assert result == {"lucien.chen@omadanetworks.com", "lucien.chen@tp-link.com"}
+
+
+def test_resolve_allowed_emails_comma_separated_override(monkeypatch):
+    """override 逗号分隔多邮箱（含空白、大小写）→ 全部解析进集合，统一小写。"""
+    import src.config as config_mod
+
+    monkeypatch.delattr(config_mod, "config", raising=False)
+    monkeypatch.setattr(
+        auth_mod, "ALLOWED_EMAIL_OVERRIDE", "  Alice@Example.com , bob@Example.com  , "
+    )
+    result = auth_mod._resolve_allowed_emails()
+    assert result == {"alice@example.com", "bob@example.com"}
+
+
+def test_resolve_allowed_emails_empty_set_when_both_unconfigured(monkeypatch):
+    """USER_EMAIL 不可用 + override 空 → 空集合 → 调用方 fail-closed。"""
+    import src.config as config_mod
+
+    monkeypatch.delattr(config_mod, "config", raising=False)
+    monkeypatch.setattr(auth_mod, "ALLOWED_EMAIL_OVERRIDE", "")
+    result = auth_mod._resolve_allowed_emails()
+    assert result == set()
+
+
+def test_resolve_allowed_emails_config_absent_falls_back_to_override(monkeypatch):
+    """config 不可用 (裸 worktree / 缺 .env) → resolver 使用 override env。
+
+    hermetic: 删掉 ``src.config.config`` 符号, 强制 lazy import 抛 ImportError
+    (= 裸 worktree config 单例构造失败的等效), 验证解析器只取 override。
     """
     import src.config as config_mod
 
     monkeypatch.setattr(auth_mod, "ALLOWED_EMAIL_OVERRIDE", "Fallback@Example.com")
     monkeypatch.delattr(config_mod, "config", raising=False)
+    result = auth_mod._resolve_allowed_emails()
+    assert result == {"fallback@example.com"}
+
+
+def test_resolve_allowed_email_prefers_override_when_config_absent(monkeypatch):
+    """_resolve_allowed_email() compat shim: config 不可用 → 回退 override env (hermetic)。"""
+    import src.config as config_mod
+
+    monkeypatch.setattr(auth_mod, "ALLOWED_EMAIL_OVERRIDE", "Fallback@Example.com")
+    monkeypatch.delattr(config_mod, "config", raising=False)
     assert auth_mod._resolve_allowed_email() == "fallback@example.com"
+
+
+def test_resolve_allowed_email_prefers_config_over_override(monkeypatch):
+    """_resolve_allowed_email(): config.user_email 可用时优先于 ALLOWED_EMAIL_OVERRIDE。
+
+    即使 override 也配了，返回值应是 config.user_email（主配置身份），而不是 override。
+    """
+    import src.config as config_mod
+
+    class _FakeConfig:
+        user_email = "primary@example.com"
+
+    monkeypatch.setattr(config_mod, "config", _FakeConfig())
+    monkeypatch.setattr(auth_mod, "ALLOWED_EMAIL_OVERRIDE", "override@example.com")
+    result = auth_mod._resolve_allowed_email()
+    assert result == "primary@example.com"
 
 
 # ---------------------------------------------------------------------------
