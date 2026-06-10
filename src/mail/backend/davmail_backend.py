@@ -384,9 +384,11 @@ class DavMailBackend(IMailBackend):
         或 fetch_email_by_id), 避免大批量 backfill 阻塞雷达节奏.
         """
         try:
-            with imap_session(self.cfg, timeout=30) as imap:
+            # STATUS 不带 MESSAGES: 超大 INBOX (7w+) 数 MESSAGES 会让 davmail 翻译 EWS 超时;
+            # radar 只需 UIDNEXT 判变化 (估新邮件数用 uidnext 差值, 不依赖 MESSAGES count).
+            with imap_session(self.cfg, timeout=90) as imap:
                 t0 = time.time()
-                typ, data = imap.status("INBOX", "(UIDNEXT UIDVALIDITY MESSAGES)")
+                typ, data = imap.status("INBOX", "(UIDNEXT UIDVALIDITY)")
                 self.last_op_latency_ms = int((time.time() - t0) * 1000)
         except Exception as e:
             logger.warning(f"[davmail-backend] STATUS INBOX failed: {e}")
