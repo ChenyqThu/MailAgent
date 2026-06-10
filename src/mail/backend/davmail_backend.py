@@ -1117,7 +1117,9 @@ class DavMailBackend(IMailBackend):
         作为 SyncStore.last_max_row_id 持久化.
         """
         try:
-            with imap_session(self.cfg, timeout=30) as imap:
+            # timeout 90: 超大 INBOX 的 STATUS 偶尔慢过 30s; 超时 return 0 会让 marker 存 0,
+            # 下次 radar 拿 0 比 uidnext 误判几十万封新邮件 → 必须给足超时。
+            with imap_session(self.cfg, timeout=90) as imap:
                 typ, data = imap.status("INBOX", "(UIDNEXT UIDVALIDITY)")
                 if typ == "OK" and data:
                     uidnext = self._extract_status_value(data[0], "UIDNEXT")
