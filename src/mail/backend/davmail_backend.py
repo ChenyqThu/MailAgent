@@ -19,6 +19,8 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
+
+from src.mail.charset_utils import decode_mime_bytes
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -70,8 +72,19 @@ def _decode_mime_header(value: Optional[str]) -> str:
     try:
         return str(make_header(decode_header(value)))
     except Exception as e:
-        logger.warning(f"[davmail-backend] RFC 2047 decode failed for header={value[:60]!r}: {e}")
-        return value
+        # make_header 是 strict 解码: 声明 gb2312 实际 GBK 字节会抛 →
+        # 逐 chunk 按超集 charset 重解, 避免把 raw encoded-word 存进库
+        logger.warning(
+            f"[davmail-backend] RFC 2047 strict decode failed for header={value[:60]!r}: {e}, "
+            f"retrying with superset charsets"
+        )
+        try:
+            return "".join(
+                chunk if isinstance(chunk, str) else decode_mime_bytes(chunk, charset)
+                for chunk, charset in decode_header(value)
+            )
+        except Exception:
+            return value
 
 
 def _normalize_date_iso(date_str: str) -> str:
@@ -943,9 +956,7 @@ class DavMailBackend(IMailBackend):
                     try:
                         payload = part.get_payload(decode=True)
                         if payload:
-                            content = payload.decode(
-                                part.get_content_charset() or "utf-8", errors="replace",
-                            )
+                            content = decode_mime_bytes(payload, part.get_content_charset())
                             break
                     except Exception:
                         pass
@@ -953,9 +964,7 @@ class DavMailBackend(IMailBackend):
             try:
                 payload = msg.get_payload(decode=True)
                 if payload:
-                    content = payload.decode(
-                        msg.get_content_charset() or "utf-8", errors="replace",
-                    )
+                    content = decode_mime_bytes(payload, msg.get_content_charset())
             except Exception:
                 pass
 

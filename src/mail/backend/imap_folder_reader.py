@@ -38,6 +38,7 @@ from src.mail.backend.imap_client import (
     smtp_session,
 )
 from src.mail.backend.imap_utf7 import encode_imap_utf7
+from src.mail.charset_utils import decode_mime_bytes
 from src.mail.backend.types import DraftRequest
 
 if TYPE_CHECKING:
@@ -76,8 +77,7 @@ def _extract_bodies(msg: Message) -> tuple[str, str]:
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
-            charset = part.get_content_charset() or "utf-8"
-            text = payload.decode(charset, errors="replace")
+            text = decode_mime_bytes(payload, part.get_content_charset())
         except Exception:
             continue
         if ctype == "text/html":

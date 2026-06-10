@@ -2,7 +2,6 @@ from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import tempfile
-import os
 import hashlib
 import re
 import email
@@ -12,6 +11,7 @@ from email.utils import parsedate_to_datetime
 from loguru import logger
 from src.models import Email, Attachment
 from src.mail.applescript import MailAppScripts
+from src.mail.charset_utils import decode_text_part
 from src.config import config
 
 # 北京时区 (UTC+8)
@@ -414,13 +414,13 @@ class EmailReader:
                 for part in msg.walk():
                     content_type = part.get_content_type()
                     if content_type == "text/html":
-                        # 获取HTML内容
-                        html_content = part.get_content()
+                        # 获取HTML内容（charset 超集解码，防声明 gb2312 实际 GBK）
+                        html_content = decode_text_part(part)
                         break
             else:
                 # 单部分邮件
                 if msg.get_content_type() == "text/html":
-                    html_content = msg.get_content()
+                    html_content = decode_text_part(msg)
 
             # 2. 提取Thread ID
             # 优先使用 References 头部（包含完整的线程链）
@@ -601,15 +601,15 @@ class EmailReader:
                 for part in msg.walk():
                     part_type = part.get_content_type()
                     if part_type == "text/html":
-                        html_content = part.get_content()
+                        html_content = decode_text_part(part)
                         break
                     elif part_type == "text/plain" and not content:
-                        content = part.get_content()
+                        content = decode_text_part(part)
             else:
                 if msg.get_content_type() == "text/html":
-                    html_content = msg.get_content()
+                    html_content = decode_text_part(msg)
                 else:
-                    content = msg.get_content() if hasattr(msg, 'get_content') else str(msg.get_payload(decode=True) or "")
+                    content = decode_text_part(msg)
 
             if html_content:
                 content = html_content

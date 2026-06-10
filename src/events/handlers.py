@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Dict, Optional
 from loguru import logger
 
 from src.mail.applescript_arm import AppleScriptArm
+from src.mail.charset_utils import decode_mime_bytes
 from src.mail.sync_store import SyncStore
 from src.notify.feishu import FeishuNotifier
 from src.notion.sync import NotionSync
@@ -1120,15 +1121,13 @@ class EventHandlers:
                 for part in msg.walk():
                     ct = part.get_content_type()
                     if ct == "text/html" and not html_body:
-                        charset = part.get_content_charset() or "utf-8"
                         payload = part.get_payload(decode=True)
                         if payload:
-                            html_body = payload.decode(charset, errors="replace")
+                            html_body = decode_mime_bytes(payload, part.get_content_charset())
                     elif ct == "text/plain" and not plain_body:
-                        charset = part.get_content_charset() or "utf-8"
                         payload = part.get_payload(decode=True)
                         if payload:
-                            plain_body = payload.decode(charset, errors="replace")
+                            plain_body = decode_mime_bytes(payload, part.get_content_charset())
             except Exception as e:
                 logger.warning(f"MIME parse error for {internal_id}: {e}")
 
