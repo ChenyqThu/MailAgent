@@ -65,6 +65,55 @@ def _coerce_aware(dt: Any) -> Optional[datetime]:
     return None
 
 
+# ============================================================
+# task 06-10 (prd Fix 2c): getctag 兼容修复 + WARNING 降频
+# ============================================================
+
+# lazy 构造的 BaseElement 子类缓存 (见 _get_ctag_element)
+_ctag_element_cls: Optional[type] = None
+
+# WARNING 降频: 同 (calendar, 错误类型) 的 getctag 失败只 WARNING 一次, 后续降
+# debug; 成功后清除并 INFO recovered 一次。生产实证 caldav 3.2.0 + 老 tuple 传参
+# 双双失败 → 每 ~70s 一条 WARNING 刷屏 (20h 1046 条), 这本身也是「异常对象每
+# 70s 构造一次」的消除点。
+_ctag_warned: set = set()
+
+
+def _get_ctag_element():
+    """Lazy 构造 ``{http://calendarserver.org/ns/}getctag`` 的 BaseElement 子类.
+
+    不能放模块顶部 import — 本模块约定「未装 caldav 时仍可 import」(lazy import
+    见 ``_connect``)。类缓存在模块级, 只构造一次。
+    """
+    global _ctag_element_cls
+    if _ctag_element_cls is None:
+        from caldav.elements.base import BaseElement
+
+        class _CTag(BaseElement):
+            tag = "{http://calendarserver.org/ns/}getctag"
+
+        _ctag_element_cls = _CTag
+    return _ctag_element_cls
+
+
+def _warn_ctag_once(calendar_name: str, kind: str, msg: str) -> None:
+    """同 (calendar, kind) 的失败只 WARNING 一次, 后续降 debug."""
+    key = f"{calendar_name}:{kind}"
+    if key in _ctag_warned:
+        logger.debug(msg)
+    else:
+        _ctag_warned.add(key)
+        logger.warning(f"{msg} (同类失败后续降 debug)")
+
+
+def _note_ctag_success(calendar_name: str) -> None:
+    """getctag 成功: 若该 calendar 曾失败过, 清除标记 + INFO recovered 一次."""
+    stale = {k for k in _ctag_warned if k.startswith(f"{calendar_name}:")}
+    if stale:
+        _ctag_warned.difference_update(stale)
+        logger.info(f"[caldav-reader] getctag({calendar_name!r}) recovered")
+
+
 @dataclass
 class CalendarEvent:
     """从 CalDAV 拿到的单个 event.
@@ -144,8 +193,12 @@ class CalDAVReader:
         base_url = f"http://{self.host}:{self.port}/"
         logger.info(f"[caldav-reader] connecting {base_url} as {self.user!r}")
         try:
+            # task 06-10: timeout=30 (caldav 3.x 透传 requests, venv 3.2.0 实测
+            # 签名含 timeout) — 防 DavMail 响应挂起把 asyncio.to_thread 线程
+            # 永久吊死 (实测 1080 端口响应可挂数秒)。
             self._client = caldav.DAVClient(
                 url=base_url, username=self.user, password=self.password,
+                timeout=30,
             )
             self._principal = self._client.principal()
         except Exception as e:
@@ -287,47 +340,68 @@ class CalDAVReader:
         return all_events
 
     def get_collection_ctag(self, calendar_name: str) -> Optional[str]:
-        """拉指定 calendar 的 RFC 4791 CTag (整库变更检测).
+        """拉指定 calendar 的 CTag (calendarserver.org 扩展, 整库变更检测).
 
         Worker 主循环每 60s 调一次, 跟存的 ctag 比对 — 没变跳过全量 search,
         变了才走 sync_collection / 全窗口 re-read. 失败返回 None (worker 降级
         到 polling).
 
-        实现: caldav lib 在 `Calendar` 对象上暴露 `get_ctag()` 方法 (内部走
-        PROPFIND `{urn:ietf:params:xml:ns:caldav}getctag`). 不同 lib 版本签名
-        可能微变, 用 hasattr probe.
+        task 06-10 (prd Fix 2c) 根因: venv 装的是 caldav 3.2.0,
+        ``Calendar.get_ctag`` 根本不存在 (hasattr False); 而 ``get_properties``
+        传 ``("DAV:", "getctag")`` tuple 是老版本 API 格式, 3.x 内部要
+        ``prop.xmlelement`` → 炸 ``'tuple' object has no attribute 'xmlelement'``
+        → ctag 永远 None → worker 每小时全量 re-read + 每 ~70s WARNING 刷屏。
+        调用方传参与库版本不匹配, 非库 bug。
+
+        修法 (本机 caldav 3.2.0 + 真实 DavMail 实测成功): 第一优先传 BaseElement
+        子类实例 (``_get_ctag_element()``), 返回
+        ``{'{http://calendarserver.org/ns/}getctag': 'MjAyNi0...'}``;
+        失败 fallback 旧 tuple 写法 (防未来库版本 API 又变回去); 再失败 None。
         """
         principal = self._connect()
         for cal in principal.calendars():
             cal_name = str(cal.name) if cal.name else ""
             if cal_name != calendar_name:
                 continue
-            # caldav lib >=1.3 cal.get_ctag() 直返字符串, 但实测某些 ARM mac /
-            # 老 DavMail 组合下抛 'tuple' object has no attribute 'xmlelement'
-            # (lib 内部 _query() 返回 tuple, get_ctag 假设是单值). 先 try, 失败
-            # fall through 到 PROPFIND.
-            if hasattr(cal, "get_ctag"):
-                try:
-                    return cal.get_ctag()
-                except Exception as e:
-                    logger.debug(
-                        f"[caldav-reader] cal.get_ctag({cal_name!r}) raised "
-                        f"({e}); fallback to PROPFIND"
-                    )
-            # Fallback: PROPFIND on the calendar collection
+
+            # 路径 1 (caldav 3.x): PROPFIND with BaseElement 实例
+            element_err: Optional[Exception] = None
+            try:
+                ctag_cls = _get_ctag_element()
+                props = cal.get_properties([ctag_cls()])
+                for v in props.values():
+                    if v:
+                        _note_ctag_success(cal_name)
+                        return str(v)
+            except Exception as e:
+                element_err = e
+
+            # 路径 2 fallback: 老 tuple 写法 (老版本 caldav lib API)
             try:
                 props = cal.get_properties(
                     [("DAV:", "getctag"), ("urn:ietf:params:xml:ns:caldav", "getctag")]
                 )
                 for v in props.values():
                     if v:
+                        _note_ctag_success(cal_name)
                         return str(v)
-                return None
             except Exception as e:
-                logger.warning(
-                    f"[caldav-reader] PROPFIND getctag({cal_name!r}) failed: {e}"
+                _warn_ctag_once(
+                    cal_name,
+                    type(e).__name__,
+                    f"[caldav-reader] getctag({cal_name!r}) failed: "
+                    f"element path={element_err!r}; tuple fallback={e!r}",
                 )
                 return None
+
+            # 双路径都没炸但都拿不到值 → server 不支持 getctag
+            _warn_ctag_once(
+                cal_name,
+                "empty",
+                f"[caldav-reader] getctag({cal_name!r}) empty "
+                f"(element path err={element_err!r}; tuple path returned no value)",
+            )
+            return None
         logger.warning(f"[caldav-reader] calendar not found: {calendar_name!r}")
         return None
 
