@@ -564,8 +564,13 @@ export interface LlmApi {
   /** Sprint 6 — no-token health probe for the LLM gateway. */
   selftest(): Promise<LlmSelfTestData>
   /** dynamic-models — fetch upstream model list (GET /api/llm/models).
-   *  Pass refresh=true to bypass the server-side 5-min TTL cache. */
-  listUpstreamModels(opts?: { refresh?: boolean }): Promise<LlmUpstreamModelsData>
+   *  Pass refresh=true to bypass the server-side 5-min TTL cache.
+   *  Pass provider='translate' to fetch from the translation provider instead of
+   *  the main LLM gateway (falls back to main if LLM_TRANSLATE_BASE_URL is unset). */
+  listUpstreamModels(opts?: {
+    refresh?: boolean
+    provider?: 'main' | 'translate'
+  }): Promise<LlmUpstreamModelsData>
 }
 
 // ---- Sprint 6 §2.2 — admin dashboard surface ------------------------------

@@ -458,9 +458,15 @@ export class HttpApi implements MailApi {
 
     selftest: (): Promise<LlmSelfTestData> => this.req<LlmSelfTestData>('GET', '/llm/selftest'),
 
-    listUpstreamModels: (opts?: { refresh?: boolean }): Promise<LlmUpstreamModelsData> =>
+    listUpstreamModels: (opts?: {
+      refresh?: boolean
+      provider?: 'main' | 'translate'
+    }): Promise<LlmUpstreamModelsData> =>
       this.req<LlmUpstreamModelsData>('GET', '/llm/models', {
-        query: { refresh: opts?.refresh ? 'true' : undefined }
+        query: {
+          refresh: opts?.refresh ? 'true' : undefined,
+          provider: opts?.provider ?? undefined
+        }
       })
   }
 

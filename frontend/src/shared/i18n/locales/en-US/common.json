@@ -1217,7 +1217,11 @@
       },
       "translateModel": {
         "label": "Translation model",
-        "helper": "Used only for email translation; defaults to Haiku (~3-5× faster than Sonnet, quality is enough)"
+        "helper": "Used only for email translation; defaults to Haiku (~3-5× faster than Sonnet, quality is enough)",
+        "notInList": "(not in list)",
+        "refresh": "Refresh model list",
+        "refreshing": "Refreshing…",
+        "refreshHelper": "Pull latest model list from the translation provider"
       },
       "fallbacks": {
         "label": "Fallback chain",

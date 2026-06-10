@@ -38,14 +38,22 @@ export function AiTab(): React.ReactElement {
   const qc = useQueryClient()
   const [testing, setTesting] = React.useState(false)
 
-  // dynamic-models
+  // dynamic-models (main provider — for LLM_MODEL / LLM_FALLBACK_MODELS / enabled list)
   const {
     models: upstreamModels,
     isLoading: upstreamLoading,
     refresh: refreshUpstream
-  } = useUpstreamModels()
+  } = useUpstreamModels('main')
   const { models: enabledModels, rawEnabled } = useEnabledModels()
   const [refreshing, setRefreshing] = React.useState(false)
+
+  // dynamic-models (translate provider — for LLM_TRANSLATE_MODEL select)
+  const {
+    models: translateModels,
+    isLoading: translateModelsLoading,
+    refresh: refreshTranslateUpstream
+  } = useUpstreamModels('translate')
+  const [translateRefreshing, setTranslateRefreshing] = React.useState(false)
 
   // Current .env values for orphan detection on model selects.
   const currentLlmModel = useEnvStore((s) =>
@@ -53,6 +61,9 @@ export function AiTab(): React.ReactElement {
   )
   const currentLlmFallback = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_FALLBACK_MODELS'] ?? '') : ''
+  )
+  const currentTranslateModel = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_TRANSLATE_MODEL'] ?? '') : ''
   )
 
   // Remote web is read-only for env writes (matches EnvField.isWeb logic).
@@ -66,6 +77,15 @@ export function AiTab(): React.ReactElement {
       await refreshUpstream()
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  async function handleRefreshTranslate(): Promise<void> {
+    setTranslateRefreshing(true)
+    try {
+      await refreshTranslateUpstream()
+    } finally {
+      setTranslateRefreshing(false)
     }
   }
 
@@ -414,13 +434,55 @@ export function AiTab(): React.ReactElement {
           label={t('settings.ai.translateApiKey.label')}
           helper={t('settings.ai.translateApiKey.helper')}
         />
+        {/* LLM_TRANSLATE_MODEL: single-select from translate provider's upstream list.
+            Falls back to showing the current value if not in the list (orphan).
+            Refresh button pulls fresh list from the translate provider endpoint. */}
         <EnvField
           envKey="LLM_TRANSLATE_MODEL"
-          control="text"
+          control="select"
           label={t('settings.ai.translateModel.label')}
           helper={t('settings.ai.translateModel.helper')}
+          options={(() => {
+            const base = translateModels.length > 0 ? translateModels : []
+            const withOrphan =
+              currentTranslateModel && !base.includes(currentTranslateModel)
+                ? [...base, currentTranslateModel]
+                : base.length > 0
+                  ? base
+                  : currentTranslateModel
+                    ? [currentTranslateModel]
+                    : ['claude-haiku-4-5']
+            return withOrphan.map((id) => ({
+              value: id,
+              label:
+                id === currentTranslateModel && base.length > 0 && !base.includes(id)
+                  ? `${id} ${t('settings.ai.translateModel.notInList', { defaultValue: '（不在列表）' })}`
+                  : id
+            }))
+          })()}
           placeholder="claude-haiku-4-5"
         />
+        <Row
+          label=""
+          helper={t('settings.ai.translateModel.refreshHelper', {
+            defaultValue: '从翻译 provider 拉取最新模型列表'
+          })}
+        >
+          <button
+            onClick={() => void handleRefreshTranslate()}
+            disabled={translateRefreshing || translateModelsLoading || isWeb}
+            className="flex items-center gap-1.5 text-xs text-ink-fg-2 hover:text-ink-fg disabled:opacity-40 transition-colors"
+          >
+            {translateRefreshing || translateModelsLoading ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3" />
+            )}
+            {translateRefreshing
+              ? t('settings.ai.translateModel.refreshing', { defaultValue: '刷新中…' })
+              : t('settings.ai.translateModel.refresh', { defaultValue: '刷新模型列表' })}
+          </button>
+        </Row>
       </Section>
 
       <Section title={t('settings.ai.cache.title')} helper={t('settings.ai.cache.helper')}>

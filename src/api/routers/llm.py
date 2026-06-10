@@ -38,9 +38,10 @@ router = APIRouter(prefix="/api/llm", tags=["llm"])
 # ============================================================
 # GET /api/llm/models  (读, 上游 /v1/models + TTL 缓存)
 # ============================================================
-# 模块级内存缓存结构：{"models": [...], "cached_at": float, "error": str|None}
+# 模块级内存缓存结构：per-provider dict，key = 'main' | 'translate'。
+# 每个 entry: {"models": [...], "cached_at": float, "error": str|None}
 # None = 未初始化（尚未取过）。多 worker 各自独立（单 worker 场景可接受）。
-_models_cache: Optional[dict] = None
+_models_cache: dict = {}  # key: 'main' | 'translate' → cache entry dict
 _MODELS_CACHE_TTL_SEC = 300  # 5 min
 _UPSTREAM_TIMEOUT = httpx.Timeout(connect=10.0, read=10.0, write=10.0, pool=10.0)
 
@@ -84,24 +85,71 @@ async def _fetch_upstream_models(api_base: str, api_key: str) -> List[str]:
         return []
 
 
+def _resolve_translate_credentials() -> tuple[str, str]:
+    """翻译 provider 的 base/key，对齐 llm_settings.ts 的回退语义。
+
+    LLM_TRANSLATE_BASE_URL 未配置 → 回退主网关 LLM_API_BASE。
+    LLM_TRANSLATE_API_KEY 未配置 → 回退主网关 LLM_API_KEY。
+    热读 .env（不走 pydantic 单例，与 chat.py dotenv_values 模式一致），
+    让运行中修改 .env 后 ?refresh=true 立即生效。
+    """
+    from dotenv import dotenv_values as _dotenv_values
+
+    from src.api.deps import get_env_file_path
+
+    env_path = get_env_file_path()
+    env_vals: dict = {}
+    if env_path:
+        try:
+            env_vals = {k: v for k, v in _dotenv_values(env_path).items() if v is not None}
+        except Exception:  # noqa: BLE001
+            pass
+
+    cfg = get_settings()
+    main_base = (getattr(cfg, "llm_api_base", None) or "").strip()
+    main_key = (getattr(cfg, "llm_api_key", None) or "").strip()
+
+    translate_base = (env_vals.get("LLM_TRANSLATE_BASE_URL") or "").strip()
+    translate_key = (env_vals.get("LLM_TRANSLATE_API_KEY") or "").strip()
+
+    api_base = translate_base if translate_base else main_base
+    api_key = translate_key if translate_key else main_key
+    return api_base, api_key
+
+
 @router.get("/models")
 async def list_upstream_models(
     request: Request,
     refresh: bool = Query(False),
+    provider: str = Query("main"),
     _: None = Depends(verify_cf_access),
 ):
-    """上游 /v1/models 全量列表（TTL 缓存 5 min）。
+    """上游 /v1/models 全量列表（TTL 缓存 5 min，按 provider 分键）。
+
+    ``?provider=main``（默认）用主 LLM 网关（LLM_API_BASE / LLM_API_KEY）。
+    ``?provider=translate`` 用翻译 provider（LLM_TRANSLATE_BASE_URL / LLM_TRANSLATE_API_KEY，
+    未配置则回退主网关，对齐 llm_settings.ts 语义）。
+    其他 provider 值返 400。
 
     ``?refresh=true`` 强刷绕过缓存。api_base 未配置 → error:'api_base_not_configured'。
     响应恒 200：``{models, cached, cached_at, error?}``（前端 fallback 到硬编码列表）。
 
     鉴权：``Depends(verify_cf_access)`` （与同文件其他端点一致）。
     """
-    global _models_cache
+    if provider not in ("main", "translate"):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"invalid provider: {provider!r}; must be 'main' or 'translate'",
+            hint="use ?provider=main or ?provider=translate",
+            source="upstream",
+        )
 
-    cfg = get_settings()
-    api_base = (getattr(cfg, "llm_api_base", None) or "").strip()
-    api_key = (getattr(cfg, "llm_api_key", None) or "").strip()
+    if provider == "translate":
+        api_base, api_key = _resolve_translate_credentials()
+    else:
+        cfg = get_settings()
+        api_base = (getattr(cfg, "llm_api_base", None) or "").strip()
+        api_key = (getattr(cfg, "llm_api_key", None) or "").strip()
 
     if not api_base:
         return success_envelope(
@@ -110,19 +158,20 @@ async def list_upstream_models(
             source="upstream",
         )
 
+    cache_entry = _models_cache.get(provider)
     now = time.time()
     use_cache = (
         not refresh
-        and _models_cache is not None
-        and (now - _models_cache["cached_at"]) < _MODELS_CACHE_TTL_SEC
+        and cache_entry is not None
+        and (now - cache_entry["cached_at"]) < _MODELS_CACHE_TTL_SEC
     )
     if use_cache:
         return success_envelope(
             {
-                "models": _models_cache["models"],
+                "models": cache_entry["models"],
                 "cached": True,
-                "cached_at": _models_cache["cached_at"],
-                "error": _models_cache.get("error"),
+                "cached_at": cache_entry["cached_at"],
+                "error": cache_entry.get("error"),
             },
             request=request,
             source="upstream",
@@ -132,7 +181,7 @@ async def list_upstream_models(
         models = await _fetch_upstream_models(api_base, api_key)
     except Exception:  # noqa: BLE001 — best-effort; _fetch_upstream_models should not raise
         models = []
-    _models_cache = {"models": models, "cached_at": now, "error": None}
+    _models_cache[provider] = {"models": models, "cached_at": now, "error": None}
     return success_envelope(
         {"models": models, "cached": False, "cached_at": now, "error": None},
         request=request,

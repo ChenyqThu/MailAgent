@@ -374,14 +374,20 @@ class ElectronLlmApi implements LlmApi {
   async selftest(): Promise<LlmSelfTestData> {
     return (await invoker()('llm:selftest')) as LlmSelfTestData
   }
-  async listUpstreamModels(opts?: { refresh?: boolean }): Promise<LlmUpstreamModelsData> {
+  async listUpstreamModels(opts?: {
+    refresh?: boolean
+    provider?: 'main' | 'translate'
+  }): Promise<LlmUpstreamModelsData> {
     // Zero new IPC: Electron renderer calls the loopback serve-api directly
     // (same pattern as chat runtime). The API key stays on the serve-api host.
+    const query: Record<string, string> = {}
+    if (opts?.refresh) query['refresh'] = 'true'
+    if (opts?.provider) query['provider'] = opts.provider
     return request<LlmUpstreamModelsData>(
       loopbackBaseUrl(),
       'GET',
       '/llm/models',
-      opts?.refresh ? { query: { refresh: 'true' } } : undefined
+      Object.keys(query).length > 0 ? { query } : undefined
     )
   }
 }

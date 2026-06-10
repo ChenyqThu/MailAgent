@@ -25,7 +25,12 @@ import type { LlmUpstreamModelsData } from '../../src/shared/api/types'
 // ── mock useMailApi ───────────────────────────────────────────────────────────
 
 const mockListUpstreamModels =
-  vi.fn<(opts?: { refresh?: boolean }) => Promise<LlmUpstreamModelsData>>()
+  vi.fn<
+    (opts?: {
+      refresh?: boolean
+      provider?: 'main' | 'translate'
+    }) => Promise<LlmUpstreamModelsData>
+  >()
 
 vi.mock('../../src/shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
@@ -133,8 +138,8 @@ describe('useUpstreamModels', () => {
       await result.current.refresh()
     })
 
-    expect(mockListUpstreamModels).toHaveBeenCalledWith({ refresh: true })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['llm', 'upstream-models'] })
+    expect(mockListUpstreamModels).toHaveBeenCalledWith({ refresh: true, provider: 'main' })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['llm', 'upstream-models', 'main'] })
   })
 })
 

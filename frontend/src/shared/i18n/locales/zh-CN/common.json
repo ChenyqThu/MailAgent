@@ -1217,7 +1217,11 @@
       },
       "translateModel": {
         "label": "翻译模型",
-        "helper": "邮件正文翻译专用; 默认 Haiku (~3-5× 比 Sonnet 快, 翻译质量足够)"
+        "helper": "邮件正文翻译专用; 默认 Haiku (~3-5× 比 Sonnet 快, 翻译质量足够)",
+        "notInList": "（不在列表）",
+        "refresh": "刷新模型列表",
+        "refreshing": "刷新中…",
+        "refreshHelper": "从翻译 provider 拉取最新模型列表"
       },
       "fallbacks": {
         "label": "Fallback 链",

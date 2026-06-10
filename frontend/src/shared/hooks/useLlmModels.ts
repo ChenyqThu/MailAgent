@@ -17,7 +17,7 @@ export const FALLBACK_MODELS: string[] = [
 
 // ── upstream models (from LLM gateway GET /v1/models via serve-api) ─────────
 
-export function useUpstreamModels(): {
+export function useUpstreamModels(provider: 'main' | 'translate' = 'main'): {
   models: string[]
   isLoading: boolean
   error: string | undefined
@@ -27,15 +27,15 @@ export function useUpstreamModels(): {
   const qc = useQueryClient()
 
   const q = useQuery({
-    queryKey: ['llm', 'upstream-models'] as const,
-    queryFn: () => api.llm.listUpstreamModels(),
+    queryKey: ['llm', 'upstream-models', provider] as const,
+    queryFn: () => api.llm.listUpstreamModels({ provider }),
     staleTime: 5 * 60 * 1_000, // 5 min mirrors server-side TTL
     retry: false
   })
 
   const refresh = async (): Promise<void> => {
-    await api.llm.listUpstreamModels({ refresh: true })
-    await qc.invalidateQueries({ queryKey: ['llm', 'upstream-models'] })
+    await api.llm.listUpstreamModels({ refresh: true, provider })
+    await qc.invalidateQueries({ queryKey: ['llm', 'upstream-models', provider] })
   }
 
   return {
