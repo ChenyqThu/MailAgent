@@ -18,6 +18,7 @@ import { join } from 'path'
 
 import { __test__ as envHandler } from '../../src/electron/main/handlers/env'
 import { refreshEnvPath } from '../../src/electron/main/lib/env-path'
+import { MANAGED_ENV_KEY_SET } from '../../src/electron/main/lib/env-keys'
 
 let dir: string
 let envPath: string
@@ -141,5 +142,12 @@ describe('env:set', () => {
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.changedKeys).toEqual(['LLM_AGENT_ENABLED'])
     expect(readFileSync(envPath, 'utf8')).toContain('LLM_AGENT_ENABLED=true')
+  })
+
+  // Regression: LLM_ENABLED_MODELS was missing from MANAGED_ENV_KEYS and caused
+  // a runtime E_INVALID_KEY when AiTab's handleToggleModel called applyEnvPatch.
+  // This test is intentionally minimal — just assert membership in the set.
+  test('LLM_ENABLED_MODELS is in MANAGED_ENV_KEY_SET (AiTab multi-select regression)', () => {
+    expect(MANAGED_ENV_KEY_SET.has('LLM_ENABLED_MODELS')).toBe(true)
   })
 })

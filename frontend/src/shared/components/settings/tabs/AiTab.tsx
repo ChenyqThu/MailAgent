@@ -13,13 +13,14 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, FileText, RefreshCw } from 'lucide-react'
+import { Loader2, FileText, RefreshCw, ChevronDown } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpstreamModels, useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { Button } from '@shared/components/ui/button'
+import { Popover, PopoverTrigger, PopoverContent } from '@shared/components/ui/popover'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type { PromptInfo, PromptSlot } from '@shared/api/types'
 
@@ -163,7 +164,9 @@ export function AiTab(): React.ReactElement {
         {/* 启用模型列表 — LLM_ENABLED_MODELS (comma-separated). Serve-api hot-reads
             this key via dotenv_values; no restart needed after changes. This is an
             intentional departure from other EnvField rows that call markRestartRequired
-            on write — see comment in handleToggleModel above. */}
+            on write — see comment in handleToggleModel above.
+            UI = popover multi-select: trigger shows a summary badge, content has a
+            refresh button + scrollable checkbox list. Width matches SelectTrigger (w-[200px]). */}
         <Row
           label={t('settings.ai.enabledModels.label', { defaultValue: '启用模型列表' })}
           helper={t('settings.ai.enabledModels.helper', {
@@ -171,55 +174,91 @@ export function AiTab(): React.ReactElement {
               '勾选后三处模型选项（chat picker / 报告 agent / 主备模型下拉）同步显示已启用集合；未勾选时自动 fallback 到默认四模型。'
           })}
         >
-          <div className="flex flex-col gap-1.5 w-full">
-            {upstreamLoading ? (
-              <span className="text-xs text-ink-fg-3">
-                <Loader2 className="inline size-3 animate-spin mr-1" />
-                {t('settings.ai.enabledModels.loading', { defaultValue: '加载中…' })}
-              </span>
-            ) : upstreamModels.length === 0 ? (
-              <span className="text-xs text-ink-fg-3">
-                {t('settings.ai.enabledModels.noModels', {
-                  defaultValue: '未拉取到模型列表，请检查 API Base / Key 后刷新。'
-                })}
-              </span>
-            ) : (
-              upstreamModels.map((id) => (
-                <label
-                  key={id}
-                  className={`flex items-center gap-2 text-sm cursor-pointer select-none${isWeb ? ' opacity-50' : ''}`}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                disabled={isWeb}
+                className={[
+                  'flex h-8 w-[200px] items-center justify-between gap-2 rounded-md border border-ink-border bg-ink-2 px-3',
+                  'text-aux text-ink-fg',
+                  'transition-colors duration-fast ease-standard',
+                  'focus:outline-none focus:ring-2 focus:ring-coral/70 focus:border-coral/60',
+                  'disabled:cursor-not-allowed disabled:opacity-50'
+                ].join(' ')}
+              >
+                <span className="line-clamp-1">
+                  {upstreamLoading ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="size-3 animate-spin" />
+                      {t('settings.ai.enabledModels.loading', { defaultValue: '加载中…' })}
+                    </span>
+                  ) : rawEnabled.length === 0 ? (
+                    t('settings.ai.enabledModels.allDefault', { defaultValue: '全部默认' })
+                  ) : (
+                    t('settings.ai.enabledModels.countEnabled', {
+                      count: rawEnabled.length,
+                      defaultValue: '已启用 {count} 个模型'
+                    })
+                  )}
+                </span>
+                <ChevronDown className="size-4 opacity-60 shrink-0" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[280px] p-2">
+              {/* Refresh row */}
+              <div className="flex items-center justify-between mb-2 pb-2 border-b border-ink-border-soft">
+                <span className="text-meta text-ink-fg-2 uppercase tracking-wider font-mono">
+                  {t('settings.ai.enabledModels.label', { defaultValue: '启用模型列表' })}
+                </span>
+                <button
+                  onClick={() => void handleRefreshUpstream()}
+                  disabled={refreshing || upstreamLoading || isWeb}
+                  className="flex items-center gap-1 text-xs text-ink-fg-2 hover:text-ink-fg disabled:opacity-40 transition-colors"
                 >
-                  <input
-                    type="checkbox"
-                    disabled={isWeb}
-                    checked={rawEnabled.includes(id)}
-                    onChange={(e) => void handleToggleModel(id, e.target.checked)}
-                    className="accent-[rgb(var(--c-accent))]"
-                  />
-                  <span className="font-mono text-[12.5px]">{id}</span>
-                </label>
-              ))
-            )}
-            <Button
-              onClick={() => void handleRefreshUpstream()}
-              disabled={refreshing || upstreamLoading || isWeb}
-              variant="secondary"
-              size="sm"
-              className="mt-1 self-start"
-            >
-              {refreshing ? (
-                <>
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {t('settings.ai.enabledModels.refreshing', { defaultValue: '刷新中…' })}
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="size-3.5" />
-                  {t('settings.ai.enabledModels.refresh', { defaultValue: '刷新模型列表' })}
-                </>
-              )}
-            </Button>
-          </div>
+                  {refreshing || upstreamLoading ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="size-3" />
+                  )}
+                  {refreshing
+                    ? t('settings.ai.enabledModels.refreshing', { defaultValue: '刷新中…' })
+                    : t('settings.ai.enabledModels.refresh', { defaultValue: '刷新模型列表' })}
+                </button>
+              </div>
+              {/* Model list */}
+              <div className="max-h-[240px] overflow-y-auto flex flex-col gap-0.5">
+                {upstreamModels.length === 0 ? (
+                  <span className="px-1 py-2 text-xs text-ink-fg-3">
+                    {t('settings.ai.enabledModels.noModels', {
+                      defaultValue: '未拉取到模型列表，请检查 API Base / Key 后刷新。'
+                    })}
+                  </span>
+                ) : (
+                  upstreamModels.map((id) => (
+                    <label
+                      key={id}
+                      className={[
+                        'flex items-center gap-2 px-1 py-1 rounded-sm text-aux text-ink-fg',
+                        'hover:bg-ink-3 cursor-pointer select-none',
+                        isWeb ? 'opacity-50 pointer-events-none' : ''
+                      ]
+                        .join(' ')
+                        .trim()}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={isWeb}
+                        checked={rawEnabled.includes(id)}
+                        onChange={(e) => void handleToggleModel(id, e.target.checked)}
+                        className="accent-[rgb(var(--c-accent))] shrink-0"
+                      />
+                      <span className="font-mono text-[12px] truncate">{id}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
         </Row>
         {/* LLM_MODEL: single-select from enabled list (+ current value if orphan).
             When the saved value is not in the enabled list (e.g. list was narrowed),

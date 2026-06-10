@@ -89,6 +89,11 @@ export const MANAGED_ENV_KEYS = [
   'LLM_TRANSLATE_API_KEY',
   'LLM_TRANSLATE_MODEL',
   'LLM_FALLBACK_MODELS',
+  // Hot-read by serve-api via dotenv_values — changing this does NOT require
+  // a backend restart (AiTab handleToggleModel intentionally skips
+  // markRestartRequired). Must be writable so the multi-select dropdown can
+  // persist the enabled set via env:set.
+  'LLM_ENABLED_MODELS',
   'LLM_CONTEXT_PAGE_ID',
   'LLM_INBOX_PROMPT_PATH',
   'LLM_SENT_PROMPT_PATH',
