@@ -74,11 +74,11 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
   const [discardOpen, setDiscardOpen] = useState(false)
   const [planAttachments, setPlanAttachments] = useState(0)
   // 原文引用块 —— 与编辑器分离: 不灌进 TipTap (整条线程 HTML 几十~几百 KB 会卡 + 被
-  // ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认展开
-  // (与标准邮件回复一致, 让用户确认将带出去的引用)。渲染走 iframe 不走 TipTap, 故展开
-  // 也不影响打开速度。
+  // ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认收起
+  // (懒加载: detailQ 的 enabled: internalId >= 0 && quoteOpen 在收起时不触发请求, compose
+  // 秒开; 发送/存草稿拼回正文用 quoteHtml state, 不依赖 quoteOpen, 收起不影响发送内容)。
   const [quoteHtml, setQuoteHtml] = useState('')
-  const [quoteOpen, setQuoteOpen] = useState(true)
+  const [quoteOpen, setQuoteOpen] = useState(false)
 
   const markDirty = useCallback(() => setDirty(true), [])
 

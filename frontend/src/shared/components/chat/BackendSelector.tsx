@@ -101,9 +101,9 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
                 'relative z-[1] flex-1 inline-flex items-center justify-center gap-1.5',
                 // task 06-08-chat dogfood r3→r4 — "字体再小一号". seg tab
                 // labels ("Notion Agent" / "Custom AI", ASCII in both locales)
-                // r3 dropped text-meta(12)→text-micro(11); r4 drops to 10px.
-                // Below the 11px CJK floor is fine here — the labels are ASCII.
-                'h-8 rounded-[7px] text-[10px]',
+                // r3 dropped text-meta(12)→text-micro(11); r4 drops to 10px;
+                // r5 user feedback "大一号" — back to text-micro(11px).
+                'h-8 rounded-[7px] text-micro',
                 'transition-colors duration-fast',
                 active ? 'text-ink-fg font-semibold' : 'text-ink-fg-2 hover:text-ink-fg-1'
               )}

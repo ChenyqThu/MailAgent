@@ -205,9 +205,12 @@ function HistoryItem({
               The header + item-meta carry CJK too (agent label "… · 最近会话",
               relative time 刚刚/{n}分钟前), so the r4 fix dropped font-mono on
               those spans as well (see their §14 notes); footer/empty are
-              already sans 10px CJK captions. */}
+              already sans 10px CJK captions.
+              r5 user feedback — "再小一号" to 10px. This is below the DESIGN.md
+              §14 11px CJK floor; user explicitly approved the deviation (title
+              may be a CJK user-message preview). */}
           <span
-            className={cn('text-micro truncate', active && 'text-coral font-semibold')}
+            className={cn('text-[10px] truncate', active && 'text-coral font-semibold')}
             title={primary}
           >
             {primary}
