@@ -853,11 +853,11 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
                 onRemoveAttachment={handleRemoveAttachment}
                 // Sprint 13 — model switcher lives in Composer Cpu button
                 // (mockup L2530). Notion Agent has no model picker — the
-                // agent decides; Custom API exposes the 3 supported models.
+                // agent decides; Custom API exposes the 4 supported models.
                 currentModel={backend.kind === 'custom-api' ? backend.model : null}
                 availableModels={
                   backend.kind === 'custom-api'
-                    ? ['claude-sonnet-4-6', 'claude-opus-4-8', 'gpt-5.5']
+                    ? ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-fable-5', 'gpt-5.5']
                     : []
                 }
                 onModelChange={(model) =>

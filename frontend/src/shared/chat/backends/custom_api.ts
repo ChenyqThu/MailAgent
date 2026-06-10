@@ -60,12 +60,15 @@ const THINKING_EFFORT = 'high'
  *  REJECT manual budget_tokens with HTTP 400 — they require adaptive thinking
  *  (`thinking:{type:'adaptive'}` + top-level `output_config.effort`). sonnet-4-6
  *  (project default) + older Claude 4 accept manual (research §1.1 matrix).
- *  Anything we can't positively classify as opus-4-7/4-8 falls to manual
- *  (the default model is sonnet, so manual is the safe default). */
+ *  Anything we can't positively classify as opus-4-7/4-8/fable falls to manual
+ *  (the default model is sonnet, so manual is the safe default).
+ *  fable-5 shares the same API surface as opus-4-7/4-8: manual budget_tokens
+ *  returns 400; only adaptive + output_config.effort is accepted. */
 function modelSupportsManualThinking(model: string): boolean {
   const lower = model.toLowerCase()
-  // opus-4-7 / opus-4-8 (and the `claude:` prefix variants) → adaptive only.
-  if (lower.includes('opus-4-7') || lower.includes('opus-4-8')) return false
+  // opus-4-7 / opus-4-8 / fable-* → adaptive only (manual budget_tokens → 400).
+  if (lower.includes('opus-4-7') || lower.includes('opus-4-8') || lower.includes('fable'))
+    return false
   return true
 }
 

@@ -666,6 +666,9 @@ describe('modelSupportsManualThinking — model matrix (research §1.1)', () => 
     expect(modelSupportsManualThinking('claude-opus-4-7')).toBe(false)
     expect(modelSupportsManualThinking('claude-opus-4-8')).toBe(false)
   })
+  test('fable-5 requires adaptive (same surface as opus-4-7/4-8)', () => {
+    expect(modelSupportsManualThinking('claude-fable-5')).toBe(false)
+  })
   test('claude: prefix opus variant also requires adaptive', () => {
     expect(modelSupportsManualThinking('claude:opus-4-8')).toBe(false)
   })

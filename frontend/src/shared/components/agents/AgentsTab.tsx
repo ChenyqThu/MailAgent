@@ -16,6 +16,7 @@ const WEEKDAY_OPTIONS = [0, 1, 2, 3, 4, 5, 6]
 const DAY_OF_MONTH_OPTIONS = Array.from({ length: 28 }, (_, i) => i + 1)
 const MODELS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', hint: '默认 · 最强推理' },
+  { id: 'claude-fable-5', label: 'Claude Fable 5', hint: '最新旗舰 · 最高智能' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: '更快 · 质量均衡' },
   { id: 'gpt-5.5', label: 'GPT-5.5', hint: '限流时自动兜底' }
 ]
