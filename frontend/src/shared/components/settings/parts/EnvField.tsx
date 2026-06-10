@@ -250,8 +250,8 @@ export function EnvField({
       // value='' are mapped to this sentinel for rendering and mapped back on
       // change so callers (e.g. AiTab LLM_FALLBACK_MODELS) need no changes.
       const SELECT_EMPTY_SENTINEL = '__empty__'
-      const toDisplay = (v: string) => (v === '' ? SELECT_EMPTY_SENTINEL : v)
-      const fromDisplay = (v: string) => (v === SELECT_EMPTY_SENTINEL ? '' : v)
+      const toDisplay = (v: string): string => (v === '' ? SELECT_EMPTY_SENTINEL : v)
+      const fromDisplay = (v: string): string => (v === SELECT_EMPTY_SENTINEL ? '' : v)
 
       return (
         <Row label={label} helper={helperWithNotice} className={className}>

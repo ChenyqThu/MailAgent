@@ -24,7 +24,17 @@ export const SelectTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-ink-border bg-ink-2 px-3',
-      'text-aux text-ink-fg',
+      // `text-left` is load-bearing, not cosmetic: a <button> carries the UA
+      // default `text-align:center`. The value <span> is a flex item that the
+      // `[&>span]:line-clamp-1` rule turns into a block box (display:flow-root),
+      // and flex can size that box WIDER than its text. When the box is wider
+      // than the glyphs, the inherited center alignment leaves equal left/right
+      // gaps — which reads as a phantom "indent" on the collapsed value, but
+      // ONLY for values long enough to make the box outgrow its text (short
+      // values get a tight box, so no visible gap). Forcing left alignment
+      // pins the value flush-left regardless of value length. (Verified in
+      // chromium: long value glyphLeft offset 17.55px → 0px after this.)
+      'text-left text-aux text-ink-fg',
       'transition-colors duration-fast ease-standard',
       'focus:outline-none focus:ring-2 focus:ring-coral/70 focus:border-coral/60',
       'disabled:cursor-not-allowed disabled:opacity-50',
