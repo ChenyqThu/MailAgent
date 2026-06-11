@@ -1,6 +1,6 @@
 {
   "name": "mailagent-frontend",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "MailAgent macOS Electron desktop client (V1)",
   "main": "./out/main/index.js",
   "author": "chenyqthu",
