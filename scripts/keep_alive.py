@@ -127,11 +127,13 @@ def is_work_hours(now: datetime = None) -> bool:
 
 
 def get_idle_seconds() -> float:
-    """获取系统空闲时间（秒）"""
+    """获取系统空闲时间（秒）；ioreg 失败/超时返回 -1（调用方按"未知"处理）"""
     try:
+        # 必须带 timeout：ioreg 偶发卡死会永久阻塞单线程主循环
+        # （正常 <10ms，5s 已是充分容错）
         result = subprocess.run(
             ["ioreg", "-c", "IOHIDSystem", "-d", "4"],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=5
         )
         for line in result.stdout.split("\n"):
             if "HIDIdleTime" in line:
