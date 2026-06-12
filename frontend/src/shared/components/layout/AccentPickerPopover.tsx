@@ -98,7 +98,7 @@ export function AccentPickerPopover(): React.ReactElement {
             ref={scopeRef}
             role="dialog"
             aria-label={t('titleBar.accent.aria')}
-            className="theme-popover"
+            className="theme-popover glass-pop"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <div className="px-4 pt-3 pb-2 border-b border-ink-border-soft">

@@ -226,7 +226,8 @@ export function StatusBar(): React.ReactElement {
     // 才是正解, 而不是绕开 Tailwind 系统.
     <footer
       className={cn(
-        'h-statusbar shrink-0 glass border-t border-ink-border/60',
+        // 主题 v2 — 状态栏与标题栏同 tier (.glass-bar)
+        'h-statusbar shrink-0 glass-bar border-t border-ink-border/60',
         'flex items-center px-3 gap-3 select-none',
         'font-mono text-ink-fg-2',
         'text-micro leading-[12px]'

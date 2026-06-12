@@ -141,8 +141,9 @@ function SessionListPane({
   t: TFunction
 }): React.ReactElement {
   return (
+    // 主题 v2 — 会话列表面板透到页面玻璃底, 不画 ink 实底 (割裂)。
     <div
-      className="flex flex-col h-full bg-ink-1"
+      className="flex flex-col h-full"
       style={{
         width: fluid ? '100%' : 340,
         flexShrink: 0,

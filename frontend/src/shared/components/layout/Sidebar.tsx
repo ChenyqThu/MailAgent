@@ -134,8 +134,10 @@ function NavRow({
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-md',
         'text-body text-left transition-colors duration-fast',
+        // 主题 v2 — 选中行从 ink-4 平涂换 .acc-select accent wash
+        // (左光条由 .row-selected::before 提供)。
         selected
-          ? 'row-selected bg-ink-4 text-ink-fg font-medium'
+          ? 'row-selected acc-select text-ink-fg font-medium'
           : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
       )}
     >
@@ -169,8 +171,10 @@ function CountRight({
           // 收紧选中态 count pill — 旧 px-1.5 py-0.5 text-micro rounded 视觉偏大
           // (用户反馈)。压到 text-[10px] + px-1 py-px + rounded-[3px], 更贴合
           // 数字、与 .ext-pill / ai-strip 等紧凑 badge 一档。
+          // 主题 v2 — 配色走 .acc-pill 配方 (accent/.16 底 + accent/.32 描边
+          // + 内顶 1px 白光, 亮色字转 accent-dim), 几何仍由上行 utility 控制。
           'text-[10px] leading-none font-mono tabular-nums px-1 py-px rounded-[3px]',
-          'border border-coral/30 bg-coral/15 text-ink-fg'
+          'acc-pill'
         )}
       >
         {count}

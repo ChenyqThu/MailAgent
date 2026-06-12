@@ -70,15 +70,17 @@ function TabButton({
         </span>
       )}
       {active && (
+        // 主题 v2 — 下划线挂 .acc-underline 光条配方 (accent + 辉光,
+        // solid 档辉光由 CSS 收掉), inline 只留几何。
         <span
+          className="acc-underline"
           style={{
             position: 'absolute',
             bottom: -1,
             left: 10,
             right: 10,
             height: 2,
-            borderRadius: 1,
-            background: 'rgb(var(--c-accent))'
+            borderRadius: 1
           }}
         />
       )}
@@ -108,13 +110,17 @@ export function AgentsPage(): React.ReactElement {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div
         className="flex items-center"
+        // 主题 v2 — tab 条不再画 ink-1 实底 (玻璃下是一条死色横带, 割裂),
+        // 透到页面玻璃底; 分割线统一 hairline。height 41 = sidebar
+        // app-nav-header 的占位高 (py-1.5×2 + 28px 账号行 + border 1):
+        // 两条 border-bottom 在 sidebar 展开时必须共线, 否则有跳变。
         style={{
           gap: 2,
           padding: '0 18px',
-          borderBottom: '1px solid rgb(var(--ink-border))',
-          background: 'rgb(var(--ink-1))',
+          borderBottom: '1px solid var(--hairline)',
+          background: 'transparent',
           flexShrink: 0,
-          height: 46
+          height: 41
         }}
         role="tablist"
       >

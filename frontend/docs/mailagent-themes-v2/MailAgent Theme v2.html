@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" data-glass="tinted" data-vib="on">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MailAgent · 主题 v2 (磨砂 & 主题色重做)</title>
+<link rel="stylesheet" href="theme-v2.css" />
+<link rel="stylesheet" href="app.css" />
+</head>
+<body data-wp="sonoma">
+  <div id="desk"></div>
+  <div class="ghost-win" id="ghost-a"></div>
+  <div class="ghost-win" id="ghost-b"></div>
+  <div id="menubar">
+    <b></b><span class="mi" style="font-weight:600">MailAgent</span><span class="mi">File</span><span class="mi">Edit</span><span class="mi">View</span>
+    <span class="sp"></span><span class="mi">100%</span><span class="mi">Thu 14:32</span>
+  </div>
+
+  <!-- ═══════════ MailAgent window ═══════════ -->
+  <section id="win" data-screen-label="MailAgent 收件箱 · 主题 v2">
+    <div class="win-base win-glass"></div>
+    <div class="grain"></div>
+
+    <header id="titlebar" class="glass-bar specular">
+      <div class="lights"><span class="tl c"></span><span class="tl m"></span><span class="tl x"></span></div>
+      <div class="title">MailAgent</div>
+      <div class="sp"></div>
+      <div class="tb-search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+        搜索 / 跳转 <kbd>⌘K</kbd>
+      </div>
+      <div class="sp"></div>
+      <div class="sync"><span class="dot-ok"></span>Synced · 14:32:08</div>
+      <button id="btn-settings" class="tb-btn" title="设置 · 通用"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg></button>
+    </header>
+
+    <div id="appbody">
+      <!-- sidebar -->
+      <aside class="side glass">
+        <div class="grp">Mailboxes</div>
+        <div class="it on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>收件箱<span class="pill acc-pill">32</span></div>
+        <div class="it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>发件箱</div>
+        <div class="it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>已标旗<span class="c">7</span></div>
+        <div class="it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="20" height="14" rx="2"></rect><path d="m2 9 10 6 10-6"></path></svg>所有邮件<span class="c">6,184</span></div>
+        <div class="grp">AI Agents</div>
+        <div class="it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"></path></svg>Notion Agent<span class="dot-ok" style="margin-left:auto"></span></div>
+        <div class="it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>Custom API<span class="c">3</span></div>
+        <div class="it"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>AI 会话历史<span class="c">128</span></div>
+        <div class="grp">Accounts</div>
+        <div class="it"><span style="width:8px;height:8px;border-radius:50%;background:rgb(var(--c-accent))"></span>chenge.ink<span class="c">28</span></div>
+        <div class="it"><span style="width:8px;height:8px;border-radius:50%;background:#6FA8DC"></span>icloud.com<span class="c">4</span></div>
+      </aside>
+
+      <!-- list -->
+      <section class="list glass-2">
+        <div class="list-h">
+          <div class="t">收件箱<span>32 未读 · 184</span></div>
+          <div class="filters"><span class="fil on">未读</span><span class="fil">已标旗</span><span class="fil">附件</span></div>
+        </div>
+        <div class="rows">
+          <article class="erow sel">
+            <div class="top"><span class="from">Michael Svoldgaard</span><span class="lang">EN</span><span class="time">18:42</span></div>
+            <div class="subj">RE:【S2】北欧 Elkjøp 标案 PoC 排期确认</div>
+            <div class="snip">对方要求本周五前确认 PoC 设备到货时间，否则影响决赛圈评估…</div>
+            <div class="foot"><span class="tag crit">紧急</span><span class="tag g">需回复</span></div>
+          </article>
+          <article class="erow">
+            <div class="top"><span class="from">Faizal Rahman</span><span class="time">16:05</span></div>
+            <div class="subj">JENDELA 2 标案需求澄清 — 待你拍板</div>
+            <div class="snip">TM 仍未锁定 PoE 端口密度需求，研发排期承压…</div>
+            <div class="foot"><span class="tag crit">紧急</span><span class="tag g">需决策</span></div>
+          </article>
+          <article class="erow">
+            <div class="top"><span class="from">财务 · 周敏</span><span class="time">11:20</span></div>
+            <div class="subj">Re: 季度供应商对账差异（3 笔）</div>
+            <div class="snip">三笔差异已附明细，需你确认其中一笔是否计入本季…</div>
+            <div class="foot"><span class="tag impt">重要</span><span class="tag g">需确认</span></div>
+          </article>
+          <article class="erow read">
+            <div class="top"><span class="from">GitHub</span><span class="lang">EN</span><span class="time">13:30</span></div>
+            <div class="subj">PR #218 review requested: frontend-design v2</div>
+            <div class="snip">forrest opened pull request: adds dark-mode token stories…</div>
+            <div class="foot"><span class="tag norm">一般</span><span class="tag g">Review</span></div>
+          </article>
+          <article class="erow read">
+            <div class="top"><span class="from">Stripe</span><span class="lang">EN</span><span class="time">12:04</span></div>
+            <div class="subj">Receipt for May 2026 · $42.00 paid</div>
+            <div class="snip">You paid Anthropic — Claude API usage May 1–15…</div>
+            <div class="foot"><span class="tag impt">重要</span><span class="tag g">Archive</span></div>
+          </article>
+          <article class="erow read">
+            <div class="top"><span class="from">张敏 · zhang.min@chenge.ink</span><span class="time">10:55</span></div>
+            <div class="subj">Re: [飞书] 周报 — w20 项目进度对齐</div>
+            <div class="snip">这周 v4 SSoT 迁移基本收口了，6184 封邮件全部迁完…</div>
+            <div class="foot"><span class="tag norm">一般</span><span class="tag g">需回复</span></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- detail -->
+      <section class="detail glass-3">
+        <header class="dtoolbar">
+          <span class="btn ghost" style="padding:6px 8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></span>
+          <span class="dsep"></span>
+          <span class="btn cta acc-cta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12z"></path></svg>起草回复</span>
+          <span class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 8 6 6"></path><path d="M2 5h12"></path><path d="m22 22-5-10-5 10"></path></svg>翻译</span>
+          <span class="dsep"></span>
+          <span class="btn">已读</span>
+          <span class="btn" style="color:#E89B4A">已标旗</span>
+          <span class="btn">归档</span>
+        </header>
+        <div class="dscroll">
+          <div class="subj-h">RE:【S2】北欧 Elkjøp 标案 PoC 排期确认</div>
+          <div class="meta-row">
+            <div class="avatar">MS</div>
+            <div><div style="color:rgb(var(--ink-fg));font-weight:600">Michael Svoldgaard</div><div style="font-size:11.5px;color:rgb(var(--ink-fg-2));font-family:var(--mono)">michael.s@elkjop.no · 2026/05/31 18:42</div></div>
+          </div>
+          <div class="ai-card">
+            <div class="h"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12z"></path></svg>AI Summary<span class="rev">✓ Reviewed</span></div>
+            <p>对方采购总监确认 PoC 已进入决赛圈，要求本周五（6/5）前给出设备到货窗口，否则影响评估排期。建议今天回一个保守到货时间稳住节奏。</p>
+          </div>
+          <div class="prose">
+            <p>Hi Lucien,</p>
+            <p>Thanks for the detailed PoC scope. Our evaluation committee has shortlisted Omada as the first vendor to run the on-site test across the 8 flagship stores.</p>
+            <p>To lock the finals schedule, could you confirm the equipment delivery window by <strong>Friday</strong>? We need at least the IES210GPP switches and two APs on site before the 12th.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI panel -->
+      <aside class="ai glass-panel">
+        <div class="ai-tabs"><span class="ai-tab on">✦ AI</span><span class="ai-tab">Thread</span><span class="ai-tab">Sync</span></div>
+        <div class="ai-body">
+          <div class="msg u">这个供应商以前的合同条款是什么？帮我查一下 KOS。</div>
+          <div class="toolrow"><span class="ar">→</span>query · Elkjøp 合同条款</div>
+          <div class="toolrow"><span class="ar">→</span>get_page · companies/elkjp</div>
+          <div class="msg a">查到了。Elkjøp 历史合同关键条款：付款 NET-45、SLA 99.5%、框架额 ≥1.2M EUR。要把这些整理进给 Michael 的回复草稿吗？</div>
+          <div class="draft">
+            <div class="h">✦ Draft Reply</div>
+            <p>Hi Michael, 我们可在 6/10 前完成首批 IES210GPP 与 2 台 AP 到货，正式合同沿用 NET-45 / SLA 99.5% 框架条款……</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <footer id="statusbar" class="glass-bar">
+      <span>同步 已启用</span><span>·</span><span>灵动岛 已连接</span><span class="sp"></span>
+      <span id="combo-label">磨砂 · 染色 · Coral</span>
+    </footer>
+
+    <!-- 设置 · 通用 (外观) — 生产环境落在 Settings → General -->
+    <div id="settings" class="glass-pop" data-screen-label="设置 · 通用 · 外观" hidden>
+      <div class="set-h"><span>设置 · 通用<span class="sub">外观 Appearance</span></span><button id="set-close" title="关闭">✕</button></div>
+      <div class="slab">主题</div>
+      <div class="seg" data-key="theme"><button data-v="dark">暗色</button><button data-v="light">亮色</button></div>
+      <div class="slab">主题色</div>
+      <div class="swatches" data-key="accent">
+        <button class="sw" data-v="coral" title="Coral" style="background:rgb(248 138 125)"></button>
+        <button class="sw" data-v="cobalt" title="Cobalt" style="background:rgb(126 173 255)"></button>
+        <button class="sw" data-v="teal" title="Teal" style="background:rgb(55 199 174)"></button>
+        <button class="sw" data-v="rose" title="Rose" style="background:rgb(241 136 175)"></button>
+        <button class="sw" data-v="slate" title="Slate" style="background:rgb(158 176 196)"></button>
+        <button class="sw" data-v="olive" title="Olive" style="background:rgb(163 185 108)"></button>
+      </div>
+      <div class="slab">窗口材质</div>
+      <div class="seg" data-key="surface"><button data-v="solid">实色</button><button data-v="frosted">磨砂</button></div>
+      <div class="slab">玻璃气质</div>
+      <div class="seg" data-key="glass" id="set-glass"><button data-v="neutral">银纱</button><button data-v="tinted">染色</button><button data-v="bright">亮砂</button></div>
+      <div class="slab">高级玻璃调节<button id="set-reset">恢复默认</button></div>
+      <div class="knob" data-knob="alpha" data-min="0.5" data-max="0.95" data-step="0.01"><label>不透明度</label><input type="range" /><span class="val"></span></div>
+      <div class="knob" data-knob="blur" data-min="8" data-max="40" data-step="1"><label>基底模糊</label><input type="range" /><span class="val"></span></div>
+      <div class="knob" data-knob="sat" data-min="1" data-max="2.2" data-step="0.05"><label>饱和增益</label><input type="range" /><span class="val"></span></div>
+      <div class="knob" data-knob="mix" data-min="0" data-max="20" data-step="1"><label>Accent 染色</label><input type="range" /><span class="val"></span></div>
+      <div class="knob" data-knob="ambient" data-min="0" data-max="0.3" data-step="0.01"><label>氛围光</label><input type="range" /><span class="val"></span></div>
+      <div class="knob" data-knob="grain" data-min="0" data-max="0.12" data-step="0.005"><label>噪点强度</label><input type="range" /><span class="val"></span></div>
+      <div class="set-note">玻璃气质与高级调节仅在「磨砂」材质下生效；切换气质会重置高级调节。「基底模糊」仅在无原生 vibrancy 的平台（及本 demo）生效。</div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 桌面控制卡 ═══════════ -->
+  <div id="ctl">
+    <div class="lab">外观 · Theme</div>
+    <div class="seg" data-key="theme">
+      <button data-v="dark">暗色</button>
+      <button data-v="light">亮色</button>
+    </div>
+    <div class="lab lab2">材质 · Surface</div>
+    <div class="seg" data-key="surface">
+      <button data-v="solid">实色</button>
+      <button data-v="frosted">磨砂</button>
+    </div>
+    <div class="lab lab2">玻璃气质 · Glass mood</div>
+    <div class="seg" data-key="glass" id="glass-seg">
+      <button data-v="neutral">银纱</button>
+      <button data-v="tinted">染色</button>
+      <button data-v="bright">亮砂</button>
+    </div>
+    <div class="lab lab2">主题色 · Accent</div>
+    <div class="swatches" data-key="accent">
+      <button class="sw" data-v="coral" title="Coral" style="background:rgb(248 138 125)"></button>
+      <button class="sw" data-v="cobalt" title="Cobalt" style="background:rgb(126 173 255)"></button>
+      <button class="sw" data-v="teal" title="Teal" style="background:rgb(55 199 174)"></button>
+      <button class="sw" data-v="rose" title="Rose" style="background:rgb(241 136 175)"></button>
+      <button class="sw" data-v="slate" title="Slate" style="background:rgb(158 176 196)"></button>
+      <button class="sw" data-v="olive" title="Olive" style="background:rgb(163 185 108)"></button>
+    </div>
+    <div class="lab lab2">桌面壁纸（模拟 vibrancy）</div>
+    <div class="wps" data-key="wp">
+      <button class="wpb" data-v="sonoma" data-wp="sonoma">暖</button>
+      <button class="wpb" data-v="ventura" data-wp="ventura">蓝</button>
+      <button class="wpb" data-v="graphite" data-wp="graphite">灰</button>
+      <button class="wpb" data-v="builtin" data-wp="builtin">回退</button>
+    </div>
+    <div class="note" id="note"></div>
+  </div>
+
+  <div id="tweaks-root"></div>
+
+<script>
+  // ── 状态 store: 单一事实源 — 控制卡 / 设置面板 / Tweaks 都通过它写 DOM ──
+  window.MA = (function () {
+    var KEY = 'mathemev2.state';
+    // 高级玻璃调节: key → [CSS var, 单位]。默认值即 theme-v2.css :root (定稿 2026-06-12)
+    var KNOB_VARS = {
+      alpha:   ['--glass-alpha', ''],
+      blur:    ['--glass-blur', 'px'],
+      sat:     ['--glass-sat', ''],
+      mix:     ['--glass-accent-mix', '%'],
+      ambient: ['--ambient', ''],
+      grain:   ['--grain', '']
+    };
+    var st = { theme: 'dark', accent: 'coral', surface: 'frosted', glass: 'tinted', wp: 'sonoma', knobs: {} };
+    try {
+      var saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+      Object.assign(st, saved);
+      st.knobs = (saved && typeof saved.knobs === 'object' && saved.knobs) || {};
+    } catch (e) {}
+    if (st.surface === 'liquid') st.surface = 'frosted'; // 旧档迁移
+    var subs = [];
+    function apply() {
+      var r = document.documentElement;
+      r.setAttribute('data-theme', st.theme);
+      if (st.accent === 'coral') r.removeAttribute('data-accent'); else r.setAttribute('data-accent', st.accent);
+      if (st.surface === 'frosted') r.removeAttribute('data-surface'); else r.setAttribute('data-surface', st.surface);
+      r.setAttribute('data-glass', st.glass);
+      r.setAttribute('data-vib', st.wp === 'builtin' ? 'off' : 'on');
+      document.body.setAttribute('data-wp', st.wp);
+      Object.keys(KNOB_VARS).forEach(function (k) {
+        if (st.knobs[k] != null) r.style.setProperty(KNOB_VARS[k][0], st.knobs[k] + KNOB_VARS[k][1]);
+        else r.style.removeProperty(KNOB_VARS[k][0]);
+      });
+      try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {}
+      subs.forEach(function (f) { f(st); });
+    }
+    return {
+      vars: KNOB_VARS,
+      get: function () { return st; },
+      set: function (k, v) { st[k] = v; if (k === 'glass') st.knobs = {}; apply(); },
+      setKnob: function (k, v) { st.knobs[k] = v; apply(); },
+      resetKnobs: function () { st.knobs = {}; apply(); },
+      // 生效值: 覆写优先, 否则读当前气质档的 CSS 预设
+      effective: function (k) {
+        if (st.knobs[k] != null) return st.knobs[k];
+        var raw = getComputedStyle(document.documentElement).getPropertyValue(KNOB_VARS[k][0]);
+        return Math.round(parseFloat(raw) * 1000) / 1000;
+      },
+      sub: function (f) { subs.push(f); },
+      apply: apply
+    };
+  })();
+
+  // ── 控制卡 + 设置面板 wiring ──
+  (function () {
+    var NOTES = {
+      neutral: '<b>银纱</b>：近中性、克制，最接近 macOS 系统材质。阅读优先，accent 只出现在控件上。',
+      tinted: '<b>染色</b>（定稿默认）：accent 揉进玻璃基色 + 左上单光源氛围光，品牌感最强。',
+      bright: '<b>亮砂</b>：基色抬白、整体提亮，轻盈通透，接近 acrylic 的明亮感。'
+    };
+    var SURF = { solid: '实色', frosted: '磨砂' };
+    var GLASS = { neutral: '银纱', tinted: '染色', bright: '亮砂' };
+    function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+    function wire(sel) {
+      document.querySelector(sel).addEventListener('click', function (e) {
+        var b = e.target.closest('button'); if (!b || b.disabled) return;
+        var group = b.closest('[data-key]'); if (!group) return;
+        window.MA.set(group.getAttribute('data-key'), b.getAttribute('data-v'));
+      });
+    }
+    wire('#ctl'); wire('#settings');
+
+    // 高级玻璃调节滑杆
+    document.querySelectorAll('#settings .knob').forEach(function (row) {
+      var k = row.getAttribute('data-knob');
+      var input = row.querySelector('input');
+      input.min = row.getAttribute('data-min');
+      input.max = row.getAttribute('data-max');
+      input.step = row.getAttribute('data-step');
+      input.addEventListener('input', function () { window.MA.setKnob(k, parseFloat(input.value)); });
+    });
+    document.getElementById('set-reset').addEventListener('click', function () { window.MA.resetKnobs(); });
+
+    var gear = document.getElementById('btn-settings');
+    var panel = document.getElementById('settings');
+    gear.addEventListener('click', function () { panel.hidden = !panel.hidden; gear.classList.toggle('on', !panel.hidden); });
+    document.getElementById('set-close').addEventListener('click', function () { panel.hidden = true; gear.classList.remove('on'); });
+
+    function sync(st) {
+      document.querySelectorAll('#ctl [data-key], #settings [data-key]').forEach(function (group) {
+        var k = group.getAttribute('data-key');
+        group.querySelectorAll('button').forEach(function (b) {
+          b.classList.toggle('on', b.getAttribute('data-v') === st[k]);
+        });
+      });
+      var solid = st.surface === 'solid';
+      document.querySelectorAll('#glass-seg button, #set-glass button').forEach(function (b) { b.disabled = solid; });
+      document.querySelectorAll('#settings .knob').forEach(function (row) {
+        row.classList.toggle('dis', solid);
+        var k = row.getAttribute('data-knob');
+        var input = row.querySelector('input');
+        var v = window.MA.effective(k);
+        if (document.activeElement !== input) input.value = v;
+        row.querySelector('.val').textContent = v + (window.MA.vars[k][1] || '');
+      });
+      var custom = Object.keys(st.knobs).length > 0;
+      document.getElementById('note').innerHTML = solid
+        ? '<b>实色</b>：不透明 ink 梯度，无模糊无发光。性能最佳，等同 reduced-transparency 降级。'
+        : NOTES[st.glass] + (st.wp === 'builtin' ? '<br/><b>回退</b>：模拟 Linux/Win10 无原生 vibrancy — 窗内自绘 accent 派生壁纸，零 blur。' : '');
+      document.getElementById('combo-label').textContent =
+        SURF[st.surface] + (solid ? '' : ' · ' + GLASS[st.glass]) + ' · ' + cap(st.accent) + (custom && !solid ? ' · 自定义' : '');
+    }
+    window.MA.sub(sync);
+    window.MA.apply();
+  })();
+</script>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="tweaks.jsx"></script>
+</body>
+</html>

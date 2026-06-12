@@ -979,10 +979,9 @@
       },
       "surface": {
         "title": "Surface",
-        "meta": "3 styles",
-        "frostedMeta": "Frosted · semi-transparent + backdrop blur, lightweight Liquid Glass.",
-        "solidMeta": "Solid · opaque, no blur. Best perf, matches prefers-reduced-transparency.",
-        "liquidMeta": "Liquid · richer alpha + saturate + inset highlight, iOS 26 feel."
+        "meta": "2 styles",
+        "frostedMeta": "Frosted · one sheet of glass: OS-level blur + tint. Mood & tuning below.",
+        "solidMeta": "Solid · opaque, zero blur & glow. Best perf, matches prefers-reduced-transparency."
       },
       "bodyText": {
         "title": "Body text",
@@ -1003,6 +1002,31 @@
         "lineHeight": {
           "label": "Line height",
           "meta": "Vertical spacing between lines"
+        }
+      },
+      "glass": {
+        "title": "Glass mood",
+        "meta": "Frosted only",
+        "mood": {
+          "neutral": "Silver",
+          "neutralMeta": "Near-neutral and restrained — closest to the macOS system material. Reading first.",
+          "tinted": "Tinted",
+          "tintedMeta": "Accent mixed into the glass + one ambient light from the top-left. Strongest brand feel.",
+          "bright": "Bright",
+          "brightMeta": "Whitened base with lifted brightness — airy and light, close to acrylic.",
+          "recommended": "default"
+        },
+        "knobs": {
+          "title": "Advanced glass tuning",
+          "reset": "Reset",
+          "alpha": "Opacity",
+          "blur": "Base blur",
+          "sat": "Saturation boost",
+          "mix": "Accent tint",
+          "ambient": "Ambient light",
+          "grain": "Grain",
+          "blurNote": "Blur is provided by the OS here; this slider only applies on platforms without native glass.",
+          "note": "Switching mood resets tuning; Reset only clears the sliders, not the mood. Everything applies live and is stored locally."
         }
       }
     },
@@ -1802,7 +1826,7 @@
     },
     "surface": {
       "title": "Surface Material",
-      "tooltip": "Switch Frosted / Solid / Liquid (View → Appearance)",
+      "tooltip": "Switch Frosted / Solid (fine-tune glass in Settings → General)",
       "aria": "Pick surface material",
       "note": "Affects chrome + all panel backgrounds. Stored locally."
     },
@@ -1810,12 +1834,21 @@
       "label": "Language",
       "tooltip": "Switch language (⌥G)",
       "aria": "Switch language"
+    },
+    "alerts": {
+      "kicker": "System Health",
+      "title": "System Alerts",
+      "aria": "{count, plural, one {# active system alert} other {# active system alerts}}",
+      "tooltip": "{count, plural, one {# active alert} other {# active alerts}} · click for details",
+      "critical": "{count} critical",
+      "warning": "{count} warning",
+      "goToBoard": "Open system board",
+      "asOf": "as of {time}"
     }
   },
   "surface": {
     "frosted": "Frosted",
-    "solid": "Solid",
-    "liquid": "Liquid"
+    "solid": "Solid"
   },
   "agents": {
     "title": "Agents",

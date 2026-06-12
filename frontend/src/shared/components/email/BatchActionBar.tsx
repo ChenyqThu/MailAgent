@@ -125,10 +125,11 @@ export function BatchActionBar({
       aria-label={t('batchbar.aria')}
     >
       <div className="flex items-center gap-2">
-        <span className="w-7 h-7 rounded-md bg-coral/15 border border-coral/30 grid place-items-center">
-          <span className="text-meta font-mono font-semibold text-coral tabular-nums">
-            {selected}
-          </span>
+        {/* 主题 v2 — text-coral 上移到带 wash 的父级: 亮色 accent 变浅后,
+            index.css 的 [bg-coral/*][text-coral] 亮色护栏按元素匹配, 计数字色
+            随父级继承才能吃到 -hi 加深 (a11y AA)。 */}
+        <span className="w-7 h-7 rounded-md bg-coral/15 border border-coral/30 text-coral grid place-items-center">
+          <span className="text-meta font-mono font-semibold tabular-nums">{selected}</span>
         </span>
         <span className="text-aux text-ink-fg">{t('batchbar.selection', { n: selected })}</span>
         <button

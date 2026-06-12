@@ -978,11 +978,10 @@
         "lightMeta": "画布主色 #F6F7FB → #ECEEF4,强调色再走暖色调"
       },
       "surface": {
-        "title": "界面材质",
-        "meta": "3 styles",
-        "frostedMeta": "毛玻璃 · 半透 + backdrop blur,Apple Liquid Glass 轻量版",
-        "solidMeta": "纯色 · 不透 + 无 blur,性能最好,prefers-reduced-transparency 等价",
-        "liquidMeta": "液态玻璃 · 更高 alpha + saturate + 顶部高光,模拟 iOS 26"
+        "title": "窗口材质",
+        "meta": "2 styles",
+        "frostedMeta": "磨砂 ·「一块玻璃」：系统级模糊 + 玻璃染色，气质与细调见下方",
+        "solidMeta": "实色 · 不透明、零模糊零辉光，性能最好，等价 reduced-transparency"
       },
       "bodyText": {
         "title": "正文外观",
@@ -1003,6 +1002,31 @@
         "lineHeight": {
           "label": "行间距",
           "meta": "行与行的垂直间距"
+        }
+      },
+      "glass": {
+        "title": "玻璃气质",
+        "meta": "仅磨砂生效",
+        "mood": {
+          "neutral": "银纱",
+          "neutralMeta": "近中性、克制，最接近 macOS 系统材质，阅读优先",
+          "tinted": "染色",
+          "tintedMeta": "主题色揉进玻璃 + 左上单光源氛围光，品牌感最强",
+          "bright": "亮砂",
+          "brightMeta": "基色抬白、整体提亮，轻盈通透，接近 acrylic",
+          "recommended": "默认"
+        },
+        "knobs": {
+          "title": "高级玻璃调节",
+          "reset": "恢复默认",
+          "alpha": "不透明度",
+          "blur": "基底模糊",
+          "sat": "饱和增益",
+          "mix": "Accent 染色",
+          "ambient": "氛围光",
+          "grain": "噪点强度",
+          "blurNote": "当前由系统提供模糊，此项仅在不支持原生玻璃的平台生效",
+          "note": "切换气质会重置高级调节；「恢复默认」只重置滑杆、不改气质。所有调节实时生效并保存在本机。"
         }
       }
     },
@@ -1802,7 +1826,7 @@
     },
     "surface": {
       "title": "界面材质",
-      "tooltip": "切换毛玻璃 / 纯色 / 液态玻璃 (查看 → 外观)",
+      "tooltip": "切换磨砂 / 实色（设置 → 通用 → 外观可细调玻璃）",
       "aria": "选择界面材质",
       "note": "影响 chrome 与所有面板的背景 · 仅本机保存"
     },
@@ -1810,12 +1834,21 @@
       "label": "语言",
       "tooltip": "切换语言 (⌥G)",
       "aria": "切换语言"
+    },
+    "alerts": {
+      "kicker": "系统健康",
+      "title": "系统告警",
+      "aria": "{count} 条活动系统告警",
+      "tooltip": "{count} 条活动告警 · 点击查看详情",
+      "critical": "严重 {count}",
+      "warning": "警告 {count}",
+      "goToBoard": "前往系统看板",
+      "asOf": "更新于 {time}"
     }
   },
   "surface": {
-    "frosted": "毛玻璃",
-    "solid": "纯色",
-    "liquid": "液态玻璃"
+    "frosted": "磨砂",
+    "solid": "实色"
   },
   "agents": {
     "title": "Agents",

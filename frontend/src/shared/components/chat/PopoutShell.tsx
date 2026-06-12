@@ -33,7 +33,9 @@ export function PopoutShell(): React.ReactElement {
   }, [emailId, setActive])
 
   return (
-    <div className="h-screen w-screen flex bg-ink-2">
+    // 主题 v2 — 去掉不透明 bg-ink-2: popout 窗同样走「一块玻璃」, 基底
+    // tint 由 body::before 提供 (solid/降级路径它会画不透明 ink-0)。
+    <div className="h-screen w-screen flex">
       <AIChatPanel fullScreen />
     </div>
   )

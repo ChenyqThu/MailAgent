@@ -1,7 +1,13 @@
 import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { bootNativeTheme, registerAppearanceIpc } from './appearance'
+import {
+  applyNativeSurface,
+  bootNativeTheme,
+  getPersistedSurface,
+  registerAppearanceIpc,
+  surfaceWindowOptions
+} from './appearance'
 import { registerCliLifecycle } from './cli_runner'
 import {
   registerBackendLifecycle,
@@ -142,6 +148,11 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
     title: 'MailAgent',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0E1013',
+    // 主题 v2 — frosted 时由 OS 提供整窗唯一一层重模糊 (macOS vibrancy /
+    // Win11 acrylic) + 透明底, 用持久化 surface 让首帧免闪; solid /
+    // Linux / Win10 覆盖回不透明。onboarding 向导窗保持不透明 (.ob 自带
+    // 不透明底, 开了 vibrancy 也看不见, 不必引入透明窗复杂度)。
+    ...(opts.onboarding ? {} : surfaceWindowOptions()),
     webPreferences: {
       // electron-vite outputs the preload bundle as `.mjs` (ESM); Electron 28+
       // loads .mjs preloads natively. Sprint 1 hardcoded `.js` and the file
@@ -155,6 +166,9 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+    // 主题 v2 — 用持久化 surface 应用一次原生材质 + 回写 vibrancyState
+    // (防首帧闪 / 兜底 renderer 侧 applySurface 腿)。onboarding 窗不开。
+    if (!opts.onboarding) applyNativeSurface(mainWindow, getPersistedSurface())
     if (is.dev) {
       // Open devtools so renderer-side errors are visible without Cmd+Opt+I.
       // Detached panel keeps the inbox layout undisturbed.
@@ -209,6 +223,8 @@ function createPopoutWindow(emailId: number): void {
     title: 'MailAgent — AI Chat',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0E1013',
+    // 主题 v2 — popout 与主窗同走「一块玻璃」(PopoutShell 已去不透明底)。
+    ...surfaceWindowOptions(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false
@@ -217,6 +233,7 @@ function createPopoutWindow(emailId: number): void {
 
   popout.on('ready-to-show', () => {
     popout.show()
+    applyNativeSurface(popout, getPersistedSurface())
   })
 
   popout.webContents.on('console-message', (event) => {

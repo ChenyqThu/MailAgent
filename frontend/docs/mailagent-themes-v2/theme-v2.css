@@ -1,0 +1,311 @@
+/* ════════════════════════════════════════════════════════════════════
+   MailAgent · Theme v2 — 材质 & 主题色系统 (production-shaped CSS)
+   ────────────────────────────────────────────────────────────────────
+   这份文件就是交接配方本体。维度:
+     data-theme   = dark (默认) | light
+     data-accent  = (无 = coral) | cobalt | teal | rose | slate | olive
+     data-surface = (无 = frosted 磨砂) | solid 实色      ← 液态档已移除
+     data-glass   = neutral 银纱 | tinted 染色 (默认) | bright 亮砂
+     data-vib     = on (OS vibrancy 生效, 默认) | off (Linux/Win10 回退)
+
+   磨砂核心原则 (修复 v1 的「发灰浑浊 + 整窗花」):
+     1. 一块玻璃: 整窗只有一层带 blur 的基底 (#win::before / 生产环境 =
+        OS vibrancy + html 透明)。面板 .glass-* 一律【无 backdrop-filter】,
+        只叠极轻的白/黑分层 (tier overlay), 所以整窗深浅均匀。
+     2. 不发灰: 玻璃基色不再是中性深灰 — 用 color-mix 把 accent 揉进
+        ink-0 (--glass-accent-mix), 再配高 saturate 让透过的桌面色保持鲜活。
+     3. 细腻质感: 一层静态 SVG 噪点 (overlay 混合) + 顶部 1px 镜面高光
+        + 统一 hairline 描边。没有逐帧成本。
+     4. accent 氛围: 一个方向一致的「单光源」ambient (窗口左上角的
+        accent 辉光), 替代 v1 壁纸里不连贯的多个模糊圆点。
+   ════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── ink surfaces (dark 默认, 与生产一致) ─────────────────────── */
+  --ink-0: 14 16 19;
+  --ink-1: 21 24 29;
+  --ink-2: 26 30 36;
+  --ink-3: 31 36 43;
+  --ink-4: 38 44 53;
+  --ink-5: 46 52 62;
+  --ink-fg: 232 234 238;
+  --ink-fg-1: 192 198 208;
+  --ink-fg-2: 162 168 180;
+  --ink-fg-3: 152 158 170;
+
+  /* ── accent v2 — oklch 重调 (设计源: L .75 / C .135, hue 变量) ───
+     coral 由旧 hue≈40 (偏橙三文鱼) 移到 hue 28 (真珊瑚, 偏粉红)。
+     全部 6 色等亮度等彩度, 对 ink-1/2/3 全部 ≥ 6.6:1 (AA+)。 */
+  --c-accent: 248 138 125;   /* coral  · oklch(.75 .135 28) */
+  --c-accent-hi: 230 123 110;
+  --c-accent-dim: 142 63 54;
+  --c-accent-fg: 15 16 21;
+
+  /* CTA 渐变端点 + 发光 — 从 accent 用相对色法派生, 换 accent 自动跟 */
+  --A: rgb(var(--c-accent));
+  --cta-top: oklch(from var(--A) 0.60 c h);
+  --cta-bot: oklch(from var(--A) 0.49 calc(min(c, 0.12)) h);
+  --cta-fg: 255 255 255;
+  --acc-glow: oklch(from var(--A) l c h / 0.30);
+
+  /* ── 玻璃调参 knobs — 2026-06-12 评审定稿默认值 (染色 tinted) ──────
+     这组值同时是「设置→通用→高级玻璃调节」的出厂默认 (规范 §3.5) */
+  --glass-alpha: 0.85;       /* 基底 tint 不透明度 (暗色下限 .50 / 亮色 .72) */
+  --glass-blur: 30px;        /* 仅 demo/回退路径生效; macOS/Win11 由 OS 扫blur */
+  --glass-sat: 1.8;          /* 透过色的鲜活度 — 抗发灰的主力 */
+  --glass-bright: 1.0;
+  --glass-accent-mix: 16%;   /* accent 揉进玻璃基色的比例 */
+  --glass-white-mix: 0%;     /* 亮砂档把基色抬向白 */
+  --grain: 0.07;             /* 噪点层 opacity */
+  --ambient: 0.20;           /* 窗口左上 accent 氛围光强度 */
+
+  /* 派生玻璃基色 — 不要手写色值, 一律从 ink-0 + accent 混出 */
+  --glass-lift: color-mix(in oklab, rgb(var(--ink-0)), white var(--glass-white-mix));
+  --glass-base: color-mix(in oklab, var(--glass-lift), var(--A) var(--glass-accent-mix));
+
+  /* ── 分层 overlay (面板差异只来自这里 → 整窗均匀) ────────────── */
+  --tier-bar: rgb(255 255 255 / 0.04);     /* titlebar / statusbar */
+  --tier-side: transparent;                /* sidebar — 最透 */
+  --tier-list: rgb(255 255 255 / 0.03);    /* 列表 */
+  --tier-detail: rgb(255 255 255 / 0.065); /* 详情 — 阅读面, 最亮 */
+  --tier-panel: rgb(255 255 255 / 0.045);  /* AI 面板 */
+
+  --hairline: rgb(255 255 255 / 0.085);
+  --hairline-strong: rgb(255 255 255 / 0.16);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 24px 60px rgb(0 0 0 / 0.55),
+    0 6px 16px rgb(0 0 0 / 0.4);
+
+  /* 无 vibrancy 平台的内置回退壁纸 — 单光源, 与 ambient 同向, accent 派生 */
+  --wp-fallback:
+    radial-gradient(110% 70% at 14% -8%, oklch(from var(--A) 0.42 calc(c * 0.85) h / 0.50), transparent 60%),
+    linear-gradient(168deg, oklch(from var(--A) 0.26 calc(c * 0.40) h), rgb(var(--ink-0)) 62%);
+}
+
+/* ── accent presets (dark) — oklch(.75 .135 h), slate/olive 刻意低彩 ── */
+:root[data-accent='cobalt'] { --c-accent: 126 173 255; --c-accent-hi: 111 157 242; --c-accent-dim: 55 89 152; }
+:root[data-accent='teal']   { --c-accent: 55 199 174;  --c-accent-hi: 25 183 158;  --c-accent-dim: 0 110 91; }
+:root[data-accent='rose']   { --c-accent: 241 136 175; --c-accent-hi: 224 120 160; --c-accent-dim: 138 61 92; }
+:root[data-accent='slate']  { --c-accent: 158 176 196; --c-accent-hi: 142 161 180; --c-accent-dim: 76 93 110; }
+:root[data-accent='olive']  { --c-accent: 163 185 108; --c-accent-hi: 147 169 92;  --c-accent-dim: 81 99 18; }
+
+/* ── light theme ──────────────────────────────────────────────────── */
+:root[data-theme='light'] {
+  --ink-0: 250 250 250;
+  --ink-1: 242 242 244;
+  --ink-2: 234 235 237;
+  --ink-3: 255 255 255;
+  --ink-4: 225 227 230;
+  --ink-5: 215 217 220;
+  --ink-fg: 26 29 34;
+  --ink-fg-1: 48 54 66;
+  --ink-fg-2: 68 74 86;
+  --ink-fg-3: 82 88 100;
+
+  /* accent (light) — oklch(.50 .14 h), 对 ink-1/2/3 全部 ≥ 4.75 AA */
+  --c-accent: 164 60 51;     /* coral light */
+  --c-accent-hi: 144 40 34;
+  --c-accent-dim: 104 35 29;
+  --c-accent-fg: 255 255 255;
+
+  --cta-top: oklch(from var(--A) 0.56 c h);
+  --cta-bot: oklch(from var(--A) 0.46 c h);
+
+  /* 亮色偏离默认值的护栏微调 (规范 §3.1): sat 高了会脏, ambient 高了眩光 */
+  --glass-alpha: 0.85;
+  --glass-sat: 1.4;
+  --glass-bright: 1.06;
+  --glass-white-mix: 10%;
+  --grain: 0.07;
+  --ambient: 0.16;
+
+  --tier-bar: rgb(255 255 255 / 0.38);
+  --tier-side: transparent;
+  --tier-list: rgb(255 255 255 / 0.32);
+  --tier-detail: rgb(255 255 255 / 0.62);
+  --tier-panel: rgb(255 255 255 / 0.44);
+
+  --hairline: rgb(15 23 42 / 0.10);
+  --hairline-strong: rgb(15 23 42 / 0.16);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.85),
+    0 18px 50px rgb(18 24 46 / 0.18),
+    0 4px 14px rgb(18 24 46 / 0.10);
+
+  --wp-fallback:
+    radial-gradient(110% 70% at 14% -8%, oklch(from var(--A) 0.85 calc(c * 0.45) h / 0.65), transparent 60%),
+    linear-gradient(168deg, oklch(from var(--A) 0.93 calc(c * 0.18) h), rgb(var(--ink-0)) 62%);
+}
+:root[data-theme='light'][data-accent='cobalt'] { --c-accent: 52 95 178;  --c-accent-hi: 36 77 158;  --c-accent-dim: 30 58 113; }
+:root[data-theme='light'][data-accent='teal']   { --c-accent: 0 117 95;   --c-accent-hi: 0 100 80;   --c-accent-dim: 0 77 61; }
+:root[data-theme='light'][data-accent='rose']   { --c-accent: 158 58 100; --c-accent-hi: 138 39 84;  --c-accent-dim: 100 34 62; }
+:root[data-theme='light'][data-accent='slate']  { --c-accent: 82 101 122; --c-accent-hi: 66 84 104;  --c-accent-dim: 47 63 79; }
+:root[data-theme='light'][data-accent='olive']  { --c-accent: 89 108 23;  --c-accent-hi: 73 91 0;    --c-accent-dim: 53 68 0; }
+
+/* ── 玻璃气质 data-glass — 用户设置 (设置→通用), 默认 tinted ────────
+   tinted  染色 — 默认。accent 揉进玻璃 + 氛围光, 品牌感最强。knob 值即 :root 默认。
+   neutral 银纱 — 近中性克制, 最接近 macOS 系统材质, 阅读优先。
+   bright  亮砂 — 基色抬白提亮, 轻盈通透, 接近 acrylic。
+   切气质 = 加载该档预设并清空高级调节覆写 (规范 §3.5)。 */
+:root[data-glass='neutral'] {
+  --glass-accent-mix: 0%;
+  --glass-alpha: 0.88;
+  --glass-sat: 1.5;
+  --ambient: 0;
+  --grain: 0.05;
+}
+:root[data-glass='bright'] {
+  --glass-accent-mix: 6%;
+  --glass-white-mix: 10%;
+  --glass-alpha: 0.78;
+  --glass-sat: 1.7;
+  --glass-bright: 1.06;
+  --ambient: 0.12;
+  --grain: 0.08;
+}
+:root[data-theme='light'][data-glass='neutral'] { --glass-alpha: 0.90; --glass-sat: 1.25; --grain: 0.06; }
+:root[data-theme='light'][data-glass='bright']  { --glass-white-mix: 40%; --glass-alpha: 0.76; --glass-bright: 1.08; --grain: 0.09; }
+
+/* ════════════════ 材质结构 ════════════════ */
+
+/* 窗口玻璃基底 — 生产环境 = OS vibrancy + html 透明; demo 用 ::before 模拟 */
+.win-glass {
+  background-color: color-mix(in srgb, var(--glass-base) calc(var(--glass-alpha) * 100%), transparent);
+  background-image:
+    radial-gradient(120% 90% at 16% -12%, rgb(var(--c-accent) / var(--ambient)), transparent 58%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 16%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+}
+
+/* 面板分层 — 全部【无 backdrop-filter】, 只有均匀 overlay */
+.glass     { background-color: var(--tier-side); }
+.glass-2   { background-color: var(--tier-list); }
+.glass-3   { background-color: var(--tier-detail); }
+.glass-bar { background-color: var(--tier-bar); }
+/* 浮层 (真 popover / menu) 是唯一保留自带 blur 的层 — 它浮在内容上 */
+.glass-pop {
+  background-color: color-mix(in srgb, var(--glass-base) 86%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
+  backdrop-filter: blur(20px) saturate(var(--glass-sat));
+  border: 1px solid var(--hairline);
+  box-shadow: var(--pop-shadow);
+}
+.glass-panel { background-color: var(--tier-panel); }
+
+/* 噪点 — 一层静态 SVG turbulence, overlay 混合。160px tile, 无逐帧成本 */
+.grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--grain);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+:root[data-theme='light'] .grain { mix-blend-mode: multiply; }
+
+/* 顶部镜面高光 — 标题栏上沿 1px, 唯一的「打光」装饰 */
+.specular { position: relative; }
+.specular::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 4%, rgb(255 255 255 / 0.38) 42%, rgb(255 255 255 / 0.16) 62%, transparent 96%);
+}
+:root[data-theme='light'] .specular::after {
+  background: linear-gradient(90deg, transparent 4%, rgb(255 255 255 / 0.9) 42%, rgb(255 255 255 / 0.45) 62%, transparent 96%);
+}
+
+/* ── solid 实色 — 不透明 ink 梯度, 关掉一切玻璃装饰 ─────────────── */
+:root[data-surface='solid'] .win-glass {
+  background-color: rgb(var(--ink-0));
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-surface='solid'] .glass     { background-color: rgb(var(--ink-1)); }
+:root[data-surface='solid'] .glass-2   { background-color: rgb(var(--ink-2)); }
+:root[data-surface='solid'] .glass-3   { background-color: rgb(var(--ink-3)); }
+:root[data-surface='solid'] .glass-bar { background-color: rgb(var(--ink-1)); }
+:root[data-surface='solid'] .glass-panel { background-color: rgb(var(--ink-2)); }
+:root[data-surface='solid'] .glass-pop {
+  background-color: rgb(var(--ink-2));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-surface='solid'] .grain,
+:root[data-surface='solid'] .specular::after { display: none; }
+
+/* ── 无 vibrancy 回退 (Linux / Win10): 窗内自绘壁纸, 零 blur ─────── */
+:root[data-vib='off'] .win-glass {
+  background-color: transparent;
+  background-image: var(--wp-fallback);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* 回退时分层略加深保可读 (壁纸自己可控, 比真实桌面温和) */
+:root[data-vib='off'] .glass-3 { background-color: color-mix(in srgb, var(--tier-detail), rgb(var(--ink-0) / 0.18)); }
+:root[data-vib='off'][data-theme='light'] .glass-3 { background-color: rgb(255 255 255 / 0.66); }
+
+/* ── reduced transparency → 等价 solid ────────────────────────────── */
+@media (prefers-reduced-transparency: reduce) {
+  .win-glass { background-color: rgb(var(--ink-0)); background-image: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass     { background-color: rgb(var(--ink-1)); }
+  .glass-2   { background-color: rgb(var(--ink-2)); }
+  .glass-3   { background-color: rgb(var(--ink-3)); }
+  .glass-bar { background-color: rgb(var(--ink-1)); }
+  .glass-panel { background-color: rgb(var(--ink-2)); }
+  .glass-pop { background-color: rgb(var(--ink-2)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .grain, .specular::after { display: none; }
+}
+
+/* ════════════════ accent 材质化表达 ════════════════ */
+
+/* 主 CTA — 纵向渐变 + 内高光 + accent 辉光, 白字全 6 色 AA (≥5.6) */
+.acc-cta {
+  background: linear-gradient(180deg, var(--cta-top), var(--cta-bot));
+  color: rgb(var(--cta-fg));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.22),
+    0 1px 3px rgb(0 0 0 / 0.35),
+    0 0 18px var(--acc-glow);
+}
+.acc-cta:hover { filter: brightness(1.08); }
+
+/* 选中行 / 选中邮箱 — 左 accent 光条 + 向右衰减的同色 wash */
+.acc-select {
+  background: linear-gradient(90deg, rgb(var(--c-accent) / 0.13), rgb(var(--c-accent) / 0.035) 55%, transparent 85%);
+}
+.acc-bar {
+  background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.10) c h), var(--A));
+  box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
+}
+
+/* 激活 tab 下划线 — 同样的光条语言 */
+.acc-underline {
+  background: var(--A);
+  box-shadow: 0 0 8px rgb(var(--c-accent) / 0.6);
+}
+
+/* 计数 pill / 轻 chip */
+.acc-pill {
+  color: rgb(var(--ink-fg));
+  background: rgb(var(--c-accent) / 0.16);
+  border: 1px solid rgb(var(--c-accent) / 0.32);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+:root[data-theme='light'] .acc-pill { color: rgb(var(--c-accent-dim)); }
+
+/* solid 档收掉发光 (实色 = 安静) */
+:root[data-surface='solid'] .acc-cta { box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18); }
+:root[data-surface='solid'] .acc-bar { box-shadow: none; }
+:root[data-surface='solid'] .acc-underline { box-shadow: none; }
+
+/* 切档过渡 — 只过渡颜色/阴影, 永不过渡 blur */
+.win-glass, .glass, .glass-2, .glass-3, .glass-bar, .glass-panel {
+  transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}

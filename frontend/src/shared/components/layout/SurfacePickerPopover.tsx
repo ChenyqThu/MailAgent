@@ -1,10 +1,10 @@
 // Sprint 18 #4 — Surface (材质) picker.
 //
-// 跟 AccentPicker / ThemePicker 平行的第三个外观维度: 控制 .glass-1/2/3
-// 的视觉风格. 三档 frosted / solid / liquid 由 :root[data-surface='...']
-// attribute 驱动 (见 index.css 末段). 持久化走 localStorage, 跨 session
-// 复用; index.html inline bootstrap 在 paint 前读 storage 设 attribute
-// 避免 FOUC.
+// 跟 AccentPicker / ThemePicker 平行的第三个外观维度: 控制 .glass-* 的
+// 视觉风格. 主题 v2 起两档 frosted / solid 由 :root[data-surface='...']
+// attribute 驱动 (见 index.css 材质结构段). 持久化走 localStorage, 跨
+// session 复用; index.html inline bootstrap 在 paint 前读 storage 设
+// attribute 避免 FOUC.
 //
 // 视觉模式参考 ThemePicker 的 list 模式而非 AccentPicker 的 swatch grid —
 // 3 个选项时 list 更直观, 每个 option 左侧带一块 mini preview swatch 让
@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { Droplet, Sparkles, Square } from 'lucide-react'
+import { Droplet, Square } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
@@ -25,15 +25,15 @@ interface SurfaceOption {
   icon: React.ReactNode
 }
 
+// 主题 v2 — 三选一 → 二选一 (液态档删除)。玻璃气质与高级调节只在
+// 设置 → 通用 → 外观 出现, 快捷入口保持极简。
 const SURFACE_OPTIONS: ReadonlyArray<SurfaceOption> = [
   { id: 'frosted', icon: <Droplet size={13} strokeWidth={2} /> },
-  { id: 'solid', icon: <Square size={13} strokeWidth={2} /> },
-  { id: 'liquid', icon: <Sparkles size={13} strokeWidth={2} /> }
+  { id: 'solid', icon: <Square size={13} strokeWidth={2} /> }
 ]
 
 function CurrentIcon({ surface }: { surface: SurfaceStyle }): React.ReactElement {
   if (surface === 'solid') return <Square size={11} strokeWidth={2} />
-  if (surface === 'liquid') return <Sparkles size={11} strokeWidth={2} />
   return <Droplet size={11} strokeWidth={2} />
 }
 
