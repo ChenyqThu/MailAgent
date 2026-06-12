@@ -98,15 +98,14 @@
       })()
     </script>
     <style id="theme-bootstrap">
-      /* 主题 v2 — frosted (默认) 首帧给半透明 tint 近似 (≈ --glass-alpha 0.85),
-         让 OS vibrancy 在 index.css 就绪前不被不透明底挡死; solid 保持不透明。
-         这层只活在 CSS 加载前的极短窗口 (主窗 show:false 时基本不可见)。 */
+      /* 主题 v2 — frosted (默认) 时 html 不画底: 这段 <style> 在文档里常驻,
+         specificity (0,1,1) 高于 index.css 的 `html, body { transparent }`,
+         任何半透/不透明底都会与 body::before 的玻璃 tint 叠成双 tint 或挡死
+         OS vibrancy。solid 才给不透明锚点 (pre-CSS 极短窗口的兜底)。 */
       html[data-theme='dark'] {
-        background: rgb(14 16 19 / 0.85);
         color: #e8eaee;
       }
       html[data-theme='light'] {
-        background: rgb(250 250 250 / 0.85);
         color: #1a1d22;
       }
       html[data-surface='solid'][data-theme='dark'] {

@@ -631,7 +631,8 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     <aside
       aria-label="ai-chat-panel"
       className={cn(
-        'border-l border-ink-border ai-bg flex flex-col min-h-0',
+        // 主题 v2 — .ai-bg (渐变+blur) 退役, AI 面板走 .glass-panel tier overlay
+        'border-l border-ink-border glass-panel flex flex-col min-h-0',
         // Sprint 14 PR E — popout fills the whole window; inbox use
         // case keeps the 360px right-rail fixed-width contract.
         fullScreen ? 'flex-1 w-full border-l-0' : 'w-[360px] max-w-[92vw] shrink-0'

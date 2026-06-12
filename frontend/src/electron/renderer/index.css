@@ -122,26 +122,49 @@
   --c-info: 184 214 244;
   --c-ai: 224 196 244;
 
-  /* Sprint 11 V1.4 chrome — glass material tuples used by the nav-shell
-   * account popover + theme popover. Saturation 180% pulls accent color
-   * through the blur (Apple signature). --pop-shadow is the dark recipe;
-   * :root[data-theme='light'] overrides --glass-stroke + --pop-shadow. */
-  --glass: saturate(180%) blur(28px);
-  --glass-lg: saturate(180%) blur(40px);
-  --glass-stroke: rgb(255 255 255 / 0.08);
+  /* ── 主题 v2 — 「一块玻璃」材质 token (theme-v2.css §root 照搬) ─────
+   * v1 的 --glass/--glass-lg (28/40px 全屏 blur) 永久退役: OS vibrancy/
+   * acrylic 扛唯一一层重模糊, CSS 只画 tint + 氛围光; 面板差异只来自
+   * --tier-* overlay。--glass-stroke 更名 --hairline (全文件已替换)。 */
+  --hairline: rgb(255 255 255 / 0.085);
+  --hairline-strong: rgb(255 255 255 / 0.16);
   --pop-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.07),
-    0 24px 60px rgba(0, 0, 0, 0.55),
-    0 6px 16px rgba(0, 0, 0, 0.4);
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 24px 60px rgb(0 0 0 / 0.55),
+    0 6px 16px rgb(0 0 0 / 0.4);
 
-  /* Aurora wallpaper tinted with the live accent — sits behind the
-   * Liquid-Glass chrome panes so the blur picks up colour from the
-   * accent. body::before pulls this in via `background: var(--wallpaper)`. */
-  --wallpaper:
-    radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.30), transparent 60%),
-    radial-gradient(55vw 60vh at 95% 6%, rgb(var(--c-accent) / 0.22), transparent 65%),
-    radial-gradient(60vw 55vh at 50% 110%, rgba(160, 110, 255, 0.18), transparent 70%),
-    linear-gradient(180deg, #0e1013 0%, #15181d 100%);
+  /* 玻璃调参 knobs — 2026-06-12 评审定稿默认值 (染色 tinted)。这组值同时是
+   * 「设置→通用→外观→高级玻璃调节」的出厂默认 (规范 §3.1/§3.5); 用户覆写
+   * 由 appearance.ts applyGlass 以 inline 变量盖在这里之上。 */
+  --glass-alpha: 0.85; /* 基底 tint 不透明度 (护栏: 暗 ≥.50 / 亮 ≥.72) */
+  --glass-blur: 30px; /* 仅 data-vib=off 回退路径生效; macOS/Win11 由 OS 扛 blur */
+  --glass-sat: 1.8; /* 透过色饱和增益 — 抗发灰主力 (浮层 .glass-pop 消费) */
+  --glass-bright: 1.0;
+  --glass-accent-mix: 16%; /* accent 揉进玻璃基色的比例 */
+  --glass-white-mix: 0%; /* 亮砂档把基色抬向白 */
+  --grain: 0.07; /* 噪点层 opacity */
+  --ambient: 0.2; /* 窗口左上 accent 氛围光强度 */
+
+  /* 派生玻璃基色 — 不要手写色值, 一律从 ink-0 + accent 混出 */
+  --glass-lift: color-mix(in oklab, rgb(var(--ink-0)), white var(--glass-white-mix));
+  --glass-base: color-mix(in oklab, var(--glass-lift), var(--A) var(--glass-accent-mix));
+
+  /* 分层 overlay — 面板深浅差异的唯一来源 (整窗均匀) */
+  --tier-bar: rgb(255 255 255 / 0.04); /* titlebar / statusbar */
+  --tier-side: transparent; /* sidebar — 最透 */
+  --tier-list: rgb(255 255 255 / 0.03); /* 列表 */
+  --tier-detail: rgb(255 255 255 / 0.065); /* 详情 — 阅读面, 最亮 */
+  --tier-panel: rgb(255 255 255 / 0.045); /* AI 面板 */
+
+  /* 无 vibrancy 平台 (data-vib=off / web) 的内置回退壁纸 — 单光源, 与
+   * ambient 同向, accent 派生换色自动跟; 本身是平滑渐变, 零 blur。 */
+  --wp-fallback:
+    radial-gradient(
+      110% 70% at 14% -8%,
+      oklch(from var(--A) 0.42 calc(c * 0.85) h / 0.5),
+      transparent 60%
+    ),
+    linear-gradient(168deg, oklch(from var(--A) 0.26 calc(c * 0.4) h), rgb(var(--ink-0)) 62%);
 
   /* Sprint 17 — EmailRow 第一/二列几何 SSoT.
    * chevron-cell / avatar 圆 / 未读 dot 的对齐参数集中在这里, 避免散布
@@ -281,21 +304,36 @@
   --c-info: 24 70 116;
   --c-ai: 92 58 130;
 
-  /* Glass surface stroke flips to a translucent white so the hairline
-   * remains visible against the brighter paper. Pop-shadow softens too —
-   * dark drop on warm paper would feel out of character. */
-  --glass-stroke: rgb(255 255 255 / 0.7);
+  /* 主题 v2 — 亮色玻璃 token (theme-v2.css light 块照搬)。hairline 转
+   * 深色细线 (亮纸上白线不可见); 亮色偏离暗色定稿默认的两项 (sat 1.4 /
+   * ambient 0.16) 是可读性护栏 (规范 §3.1), 其余与暗色共用。 */
+  --hairline: rgb(15 23 42 / 0.1);
+  --hairline-strong: rgb(15 23 42 / 0.16);
   --pop-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.85),
-    0 18px 50px rgba(18, 24, 46, 0.16),
-    0 4px 14px rgba(18, 24, 46, 0.1);
+    0 18px 50px rgb(18 24 46 / 0.18),
+    0 4px 14px rgb(18 24 46 / 0.1);
 
-  /* Lighter aurora on warm paper for light mode. */
-  --wallpaper:
-    radial-gradient(60vw 60vh at 8% 12%, rgb(var(--c-accent) / 0.28), transparent 60%),
-    radial-gradient(55vw 60vh at 95% 6%, rgb(var(--c-accent) / 0.30), transparent 65%),
-    radial-gradient(60vw 55vh at 50% 110%, rgba(180, 140, 235, 0.22), transparent 70%),
-    linear-gradient(180deg, #f6f7fb 0%, #eceef4 100%);
+  --glass-alpha: 0.85;
+  --glass-sat: 1.4;
+  --glass-bright: 1.06;
+  --glass-white-mix: 10%;
+  --grain: 0.07;
+  --ambient: 0.16;
+
+  --tier-bar: rgb(255 255 255 / 0.38);
+  --tier-side: transparent;
+  --tier-list: rgb(255 255 255 / 0.32);
+  --tier-detail: rgb(255 255 255 / 0.62);
+  --tier-panel: rgb(255 255 255 / 0.44);
+
+  --wp-fallback:
+    radial-gradient(
+      110% 70% at 14% -8%,
+      oklch(from var(--A) 0.85 calc(c * 0.45) h / 0.65),
+      transparent 60%
+    ),
+    linear-gradient(168deg, oklch(from var(--A) 0.93 calc(c * 0.18) h), rgb(var(--ink-0)) 62%);
 }
 
 /* Per-accent dark-mode swatches — accent v2 (oklch .75 .135 h 导出;
@@ -360,15 +398,53 @@
   --c-accent-dim: 53 68 0;
 }
 
-/* Pre-paint anchors so the first frame doesn't show "Electron blue". */
+/* ── 主题 v2 — 玻璃气质 data-glass (用户设置, 默认 tinted) ─────────────
+ * tinted  染色 — 默认。accent 揉进玻璃 + 氛围光, knob 值即 :root 默认。
+ * neutral 银纱 — 近中性克制, 最接近 macOS 系统材质, 阅读优先。
+ * bright  亮砂 — 基色抬白提亮, 轻盈通透, 接近 acrylic。
+ * 切气质 = 加载该档预设并清空高级调节覆写 (规范 §3.5 R2)。 */
+:root[data-glass='neutral'] {
+  --glass-accent-mix: 0%;
+  --glass-alpha: 0.88;
+  --glass-sat: 1.5;
+  --ambient: 0;
+  --grain: 0.05;
+}
+:root[data-glass='bright'] {
+  --glass-accent-mix: 6%;
+  --glass-white-mix: 10%;
+  --glass-alpha: 0.78;
+  --glass-sat: 1.7;
+  --glass-bright: 1.06;
+  --ambient: 0.12;
+  --grain: 0.08;
+}
+:root[data-theme='light'][data-glass='neutral'] {
+  --glass-alpha: 0.9;
+  --glass-sat: 1.25;
+  --grain: 0.06;
+}
+:root[data-theme='light'][data-glass='bright'] {
+  --glass-white-mix: 40%;
+  --glass-alpha: 0.76;
+  --glass-bright: 1.08;
+  --grain: 0.09;
+}
+
+/* Pre-paint anchors so the first frame doesn't show "Electron blue".
+ * 主题 v2: frosted + vibrancy 时 html 必须真透明 — 不透明锚点会挡死 OS
+ * 玻璃, 半透明锚点会跟 body::before 叠成双 tint。锚点只保留文字色;
+ * 不透明兜底收窄到 solid / data-vib=off (无原生玻璃) 两条路径。 */
 html[data-theme='dark'],
 html:not([data-theme]) {
-  background: #0e1013;
   color: #e8eaee;
 }
 html[data-theme='light'] {
-  background: #fafafa;
   color: #1a1d22;
+}
+html[data-surface='solid'],
+html[data-vib='off'] {
+  background: rgb(var(--ink-0));
 }
 
 html,
@@ -668,10 +744,6 @@ mark {
 }
 
 /* AI panel subtle gradient bg */
-.ai-bg {
-  background: linear-gradient(180deg, rgb(var(--ink-2)) 0%, rgb(var(--ink-1)) 100%);
-}
-
 /* Pulse dot for "新邮件" pill etc. */
 @keyframes pulse-dot {
   0%,
@@ -717,13 +789,12 @@ mark {
   background: linear-gradient(135deg, rgb(163, 185, 108), rgb(147, 169, 92));
 }
 
-/* ─── Sprint 11 V1.4 — Liquid Glass material layers ──────────────────
- * Mockup ref §2.8 Liquid Glass over an aurora wallpaper. Chrome surfaces
- * pick ink-1 (sidebar/titlebar/statusbar), interior list pane is ink-2,
- * and the email detail pane is ink-3. The wallpaper bleeds through via
- * `body::before` (declared in this block) and each `.glass-*` class
- * applies the same blur filter at progressively higher opacities so the
- * deeper into the layout you go, the less aurora shows. */
+/* ─── 主题 v2 —「一块玻璃」材质结构 (theme-v2.css §材质结构) ──────────
+ * 自底向上: ① OS vibrancy/acrylic (整窗唯一一层重模糊, html 透明) →
+ * ② body::before 玻璃 tint + 氛围光 (CSS 只画这一层, 无 backdrop-filter)
+ * → ③ 面板 .glass-* — 一律【无 backdrop-filter】只叠 --tier-* overlay
+ * (整窗深浅均匀) → ④ .grain 静态噪点 → ⑤ 内容。唯一保留自带 blur 的类
+ * 是真浮层 .glass-pop (20px, 浮在内容上)。 */
 html,
 body {
   background: transparent;
@@ -734,32 +805,99 @@ body::before {
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: var(--wallpaper);
-  background-attachment: fixed;
   pointer-events: none;
-  transition: background 320ms cubic-bezier(0.4, 0, 0.2, 1);
+  background-color: color-mix(in srgb, var(--glass-base) calc(var(--glass-alpha) * 100%), transparent);
+  background-image:
+    radial-gradient(120% 90% at 16% -12%, rgb(var(--c-accent) / var(--ambient)), transparent 58%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 16%);
+  transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* 无 vibrancy 回退 (Linux / Win10 / web): 窗内自绘单光源壁纸, 零 blur */
+:root[data-vib='off'] body::before {
+  background-color: transparent;
+  background-image: var(--wp-fallback);
 }
 .glass {
-  background-color: rgb(var(--ink-1) / 0.55);
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
+  background-color: var(--tier-side);
 }
 .glass-2 {
-  background-color: rgb(var(--ink-2) / 0.45);
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
+  background-color: var(--tier-list);
 }
 .glass-3 {
-  background-color: rgb(var(--ink-3) / 0.55);
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
+  background-color: var(--tier-detail);
 }
+.glass-bar {
+  background-color: var(--tier-bar);
+}
+.glass-panel {
+  background-color: var(--tier-panel);
+}
+/* 真浮层 (popover / menu / palette / drawer) — 唯一保留自带 blur 的层 */
 .glass-pop {
-  background-color: rgb(var(--ink-2) / 0.82);
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
-  border: 1px solid var(--glass-stroke);
+  background-color: color-mix(in srgb, var(--glass-base) 86%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
+  backdrop-filter: blur(20px) saturate(var(--glass-sat));
+  border: 1px solid var(--hairline);
   box-shadow: var(--pop-shadow);
+}
+/* 回退路径分层略加深保可读 (壁纸自己可控, 比真实桌面温和) */
+:root[data-vib='off'] .glass-3 {
+  background-color: color-mix(in srgb, var(--tier-detail), rgb(var(--ink-0) / 0.18));
+}
+:root[data-vib='off'][data-theme='light'] .glass-3 {
+  background-color: rgb(255 255 255 / 0.66);
+}
+
+/* 噪点 — 一层静态 SVG turbulence (App 根挂载, fixed 全窗)。160px tile,
+ * 零逐帧成本; 🔴 红线: 禁止动画此层。暗用 overlay / 亮用 multiply 混合。 */
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--grain);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+:root[data-theme='light'] .grain {
+  mix-blend-mode: multiply;
+}
+
+/* 顶部镜面高光 — 标题栏上沿 1px, 唯一的「打光」装饰 (TitleBar 挂载)。 */
+.specular {
+  position: relative;
+}
+.specular::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 4%,
+    rgb(255 255 255 / 0.38) 42%,
+    rgb(255 255 255 / 0.16) 62%,
+    transparent 96%
+  );
+}
+:root[data-theme='light'] .specular::after {
+  background: linear-gradient(
+    90deg,
+    transparent 4%,
+    rgb(255 255 255 / 0.9) 42%,
+    rgb(255 255 255 / 0.45) 62%,
+    transparent 96%
+  );
+}
+
+/* 切档/换色过渡 — 只过渡颜色, 永不过渡 filter (红线 §4) */
+.glass,
+.glass-2,
+.glass-3,
+.glass-bar,
+.glass-panel {
+  transition: background-color 280ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ─── 主题 v2 — accent 材质化表达 (theme-v2.css §accent 材质化) ──────
@@ -843,151 +981,92 @@ body::before {
 :root[data-surface='solid'] .acc-underline {
   box-shadow: none;
 }
-/* Honour accessibility opt-outs — flatten to opaque ink and skip the
- * blur. Layout and contrast stay identical. */
+/* Honour accessibility opt-outs — 等价 solid: 不透明 ink 梯度, 关掉一切
+ * 玻璃装饰 (含基底 tint / 噪点 / specular)。Layout 与对比度不变。 */
 @media (prefers-reduced-transparency: reduce) {
+  body::before {
+    background-color: rgb(var(--ink-0));
+    background-image: none;
+  }
   .glass {
     background-color: rgb(var(--ink-1));
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
   }
   .glass-2 {
     background-color: rgb(var(--ink-2));
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
   }
   .glass-3 {
     background-color: rgb(var(--ink-3));
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
+  }
+  .glass-bar {
+    background-color: rgb(var(--ink-1));
+  }
+  .glass-panel {
+    background-color: rgb(var(--ink-2));
   }
   .glass-pop {
     background-color: rgb(var(--ink-2));
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+  .grain,
+  .specular::after {
+    display: none;
+  }
 }
 
-/* ─── Sprint 18 #4 — Surface (材质) 三档切换 ─────────────────────────
- * SurfacePickerPopover 写 :root[data-surface='solid'|'liquid'] (frosted 默
- * 认不写 attribute, base .glass-* 自然生效).
- *
- * solid:  完全不透明 + 无 backdrop, 性能最好, 也是 prefers-reduced-
- *         transparency 的等价物. wallpaper 仍在 body::before 但被 ink-N
- *         覆盖.
- * liquid: 更高 blur + saturate + brightness 模拟 Apple Liquid Glass /
- *         iOS 26 全量样式; 加 inset top-highlight (折射光) + 底部阴影
- *         (厚度). alpha 比 frosted 略低让 wallpaper 透出更多色感. */
+/* ─── Surface (材质) 切换 — 主题 v2 两档 (液态档已删) ─────────────────
+ * SurfacePickerPopover / 设置页写 :root[data-surface='solid'] (frosted 默
+ * 认不写 attribute, base .glass-* 自然生效)。solid = 不透明 ink 梯度 +
+ * 零 blur / 零辉光 / 零噪点 (实色 = 安静), 也是 reduced-transparency 的
+ * 用户主动等价物。基底 tint 不画, 由不透明 ink-0 兜底。 */
+:root[data-surface='solid'] body::before {
+  background-color: rgb(var(--ink-0));
+  background-image: none;
+}
 :root[data-surface='solid'] .glass {
   background-color: rgb(var(--ink-1));
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 :root[data-surface='solid'] .glass-2 {
   background-color: rgb(var(--ink-2));
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 :root[data-surface='solid'] .glass-3 {
   background-color: rgb(var(--ink-3));
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+}
+:root[data-surface='solid'] .glass-bar {
+  background-color: rgb(var(--ink-1));
+}
+:root[data-surface='solid'] .glass-panel {
+  background-color: rgb(var(--ink-2));
 }
 :root[data-surface='solid'] .glass-pop {
   background-color: rgb(var(--ink-2));
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-/* solid 模式下 wallpaper 完全用不到, 隐藏掉 (省掉一次 paint). */
-:root[data-surface='solid'] body::before {
+:root[data-surface='solid'] .grain,
+:root[data-surface='solid'] .specular::after {
   display: none;
 }
 
-:root[data-surface='liquid'] .glass {
-  background-color: rgb(var(--ink-1) / 0.42);
-  -webkit-backdrop-filter: blur(48px) saturate(180%) brightness(1.04);
-  backdrop-filter: blur(48px) saturate(180%) brightness(1.04);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.08),
-    inset 0 -1px 0 rgb(0 0 0 / 0.18);
-}
-:root[data-surface='liquid'] .glass-2 {
-  background-color: rgb(var(--ink-2) / 0.32);
-  -webkit-backdrop-filter: blur(56px) saturate(190%) brightness(1.04);
-  backdrop-filter: blur(56px) saturate(190%) brightness(1.04);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.07),
-    inset 0 -1px 0 rgb(0 0 0 / 0.2);
-}
-:root[data-surface='liquid'] .glass-3 {
-  background-color: rgb(var(--ink-3) / 0.4);
-  -webkit-backdrop-filter: blur(60px) saturate(190%) brightness(1.05);
-  backdrop-filter: blur(60px) saturate(190%) brightness(1.05);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.06),
-    inset 0 -1px 0 rgb(0 0 0 / 0.22);
-}
-:root[data-surface='liquid'] .glass-pop {
-  background-color: rgb(var(--ink-2) / 0.7);
-  -webkit-backdrop-filter: blur(56px) saturate(200%) brightness(1.06);
-  backdrop-filter: blur(56px) saturate(200%) brightness(1.06);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.1),
-    var(--pop-shadow);
-}
-/* liquid 让 wallpaper 更鲜艳一点, 透过 glass 的色感更明显. */
-:root[data-surface='liquid'] body::before {
-  filter: saturate(1.15) brightness(1.05);
-}
-
-/* prefers-reduced-transparency 是 OS 级 accessibility 设置, 强制 win 用户
- * 主动选择: liquid 在 reduced-transparency 下退化到 solid 等价 (跟上面
- * @media block 同样的覆盖). 用户主动选 solid 已经在 :root 上写 attribute,
- * @media 覆盖会被 attribute selector specificity (1,0,1) 等于 attribute
- * (0,1,0) + media wrapper, 但 @media 不影响 specificity 计算, 这里需要
- * 显式让 reduced-transparency 在 [data-surface='liquid'] 上也降级. */
-@media (prefers-reduced-transparency: reduce) {
-  :root[data-surface='liquid'] .glass,
-  :root[data-surface='liquid'] .glass-2,
-  :root[data-surface='liquid'] .glass-3,
-  :root[data-surface='liquid'] .glass-pop {
-    background-color: rgb(var(--ink-2));
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    box-shadow: none;
-  }
-}
-
-/* ─── Sprint 18 #4 — Surface picker mini preview swatch ─────────────
+/* ─── Surface picker mini preview swatch (主题 v2 两档) ─────────────
  * 14×14 圆角小块, 每个 variant 视觉化对应材质. SurfacePickerPopover
- * 里 list option 左侧渲染. */
+ * 里 list option 左侧渲染. 装饰性小块不占 backdrop-filter 预算 (红线:
+ * 同屏 CSS blur ≤2 仅真浮层), frosted 用半透渐变示意即可. */
 .surface-swatch {
   width: 14px;
   height: 14px;
   border-radius: 4px;
   flex-shrink: 0;
   border: 1px solid rgb(var(--ink-border-soft));
-  background:
-    linear-gradient(135deg, rgb(122, 162, 248, 0.6), rgb(232, 124, 98, 0.6));
+  background: linear-gradient(135deg, rgb(126 173 255 / 0.6), rgb(248 138 125 / 0.6));
 }
 .surface-swatch-frosted {
   background-color: rgb(var(--ink-2) / 0.5);
-  background-image:
-    linear-gradient(135deg, rgb(122, 162, 248, 0.6), rgb(232, 124, 98, 0.6));
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
+  background-image: linear-gradient(135deg, rgb(126 173 255 / 0.6), rgb(248 138 125 / 0.6));
 }
 .surface-swatch-solid {
   background: rgb(var(--ink-3));
   background-image: linear-gradient(180deg, rgb(var(--ink-2)), rgb(var(--ink-4)));
-}
-.surface-swatch-liquid {
-  background-color: rgb(var(--ink-2) / 0.3);
-  background-image:
-    linear-gradient(135deg, rgb(122, 162, 248, 0.8), rgb(232, 124, 98, 0.8));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.3),
-    inset 0 -1px 0 rgb(0 0 0 / 0.25);
 }
 
 /* ─── Sprint 11 V1.4 — Theme picker popover (TitleBar Accent picker) ──
@@ -997,16 +1076,13 @@ body::before {
  * inset white check via ::after. Lives in authored CSS (not Tailwind
  * utilities) so Tailwind purge cannot touch the class names. */
 .theme-popover {
+  /* 主题 v2 — 材质 (bg/blur/border/shadow) 移交 .glass-pop (各 picker 组件
+   * 同时挂两类), 这里只留几何。 */
   position: fixed;
   top: 44px;
   right: 12px;
   width: 264px;
-  background-color: rgb(var(--ink-2) / 0.82);
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
-  border: 1px solid var(--glass-stroke);
   border-radius: 12px;
-  box-shadow: var(--pop-shadow);
   z-index: 60;
   overflow: hidden;
 }
@@ -1126,16 +1202,8 @@ body::before {
   transition: opacity 140ms linear;
 }
 
-/* Account dropdown popover — sits below the nav header; glass surface
- * that picks up the active theme. Dark + light variants. */
-.app-nav-account-popover {
-  background: rgba(28, 28, 30, 0.94);
-  backdrop-filter: blur(24px) saturate(1.6);
-  -webkit-backdrop-filter: blur(24px) saturate(1.6);
-}
-:root[data-theme='light'] .app-nav-account-popover {
-  background: rgba(252, 252, 252, 0.98);
-}
+/* Account dropdown popover — 主题 v2: 材质由组件同挂的 .glass-pop 提供,
+ * 旧的自带 bg + blur(24px) 是重复涂层 (双 blur), 删除。 */
 
 /* Reduced-motion: flatten chrome transitions. Layout identical. */
 @media (prefers-reduced-motion: reduce) {
@@ -1690,11 +1758,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
   height: 26px;
   border-radius: 6px;
   color: rgb(var(--ink-fg-1));
-  background: rgb(var(--ink-2) / 0.92);
+  /* 主题 v2 — 非浮层去 blur (红线: blur 只留真浮层), alpha 提到 0.97 遮底 */
+  background: rgb(var(--ink-2) / 0.97);
   border: 1px solid rgb(var(--ink-border));
   box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
   opacity: 0;
   transform: translateY(2px);
   transition:
@@ -1822,9 +1889,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg-2));
   cursor: pointer;
   user-select: none;
-  background: linear-gradient(180deg, rgb(var(--ink-1) / 0.62) 0%, rgb(var(--ink-2) / 0.55) 100%);
-  -webkit-backdrop-filter: saturate(180%) blur(28px);
-  backdrop-filter: saturate(180%) blur(28px);
+  /* 主题 v2 — 非浮层去 blur; alpha 加深遮住滚过的行文字 */
+  background: linear-gradient(180deg, rgb(var(--ink-1) / 0.94) 0%, rgb(var(--ink-2) / 0.9) 100%);
   border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.7);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
   transition:
@@ -1922,12 +1988,13 @@ body:not([data-batch-mode='true']) .email-row .cb {
   right: 8px;
   width: 248px;
   z-index: 30;
-  background: rgb(var(--ink-2) / 0.92);
-  border: 1px solid var(--glass-stroke);
+  /* 主题 v2 — 真浮层走 .glass-pop 配方 (20px 上限) */
+  background: color-mix(in srgb, var(--glass-base) 86%, transparent);
+  border: 1px solid var(--hairline);
   border-radius: 10px;
   box-shadow: var(--pop-shadow);
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
+  -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
+  backdrop-filter: blur(20px) saturate(var(--glass-sat));
   overflow: hidden;
 }
 .filter-section {
@@ -2049,26 +2116,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   box-shadow: 0 0 0 2px rgb(var(--ink-2));
 }
 
-/* ─── AI Chat panel — ai-bg sheen + ai-tool-row + qchip + draft-card ── */
-/* Override the earlier solid-gradient .ai-bg with mockup's Liquid Glass
- * version: linear gradient between two translucent ink layers + backdrop
- * blur so the panel reads as glass over the aurora wallpaper. */
-.ai-bg {
-  background: linear-gradient(
-    180deg,
-    rgb(var(--ink-2) / 0.5) 0%,
-    rgb(var(--ink-1) / 0.55) 100%
-  );
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
-}
-@media (prefers-reduced-transparency: reduce) {
-  .ai-bg {
-    background: linear-gradient(180deg, rgb(var(--ink-2)) 0%, rgb(var(--ink-1)) 100%);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-}
+/* ─── AI Chat panel — tool-row + qchip + draft-card ─────────────────── */
+/* 主题 v2: 旧 .ai-bg (渐变 + glass-lg blur) 删除, AIChatPanel 容器改挂
+ * .glass-panel (tier overlay, 无 backdrop-filter) — 见「一块玻璃」结构。 */
 
 /* AI tool-call row — mono one-liner showing a backend tool invocation
  * inside an assistant message (DESIGN.md §6.3). */
@@ -2135,9 +2185,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
 /* Draft preview card — coral ring + faint glow because the draft IS the
  * primary AI output (the one place we lean on color for emphasis). */
 .draft-card {
+  /* 主题 v2 — 面板内卡片非浮层, 去 blur (底下是 tier overlay 无文字) */
   background: rgb(var(--ink-3) / 0.85);
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
   border: 1px solid rgb(var(--c-accent) / 0.3);
   box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.06);
   border-radius: 6px;
@@ -2163,9 +2212,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .palette-veil {
   position: fixed;
   inset: 36px 0 24px 0;
-  background: rgb(var(--ink-0) / 0.55);
-  -webkit-backdrop-filter: saturate(120%) blur(10px);
-  backdrop-filter: saturate(120%) blur(10px);
+  /* 主题 v2 — veil 去 blur 纯 dim (blur 预算只留真浮层面板), 加深补偿 */
+  background: rgb(var(--ink-0) / 0.62);
   z-index: 40;
 }
 @media (prefers-reduced-transparency: reduce) {
@@ -2920,9 +2968,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   font-weight: 500;
   position: sticky;
   top: 0;
-  background: rgb(var(--ink-2) / 0.85);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  /* 主题 v2 — sticky 表头非浮层去 blur, alpha 加深遮滚动行 */
+  background: rgb(var(--ink-2) / 0.94);
 }
 .rec-table td {
   padding: 11px 12px;
@@ -2972,10 +3019,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   width: 420px;
   max-width: 92vw;
   z-index: 95;
+  /* 主题 v2 — 真浮层 blur 收到 20px 上限, 描边换 hairline */
   background-color: rgb(var(--ink-2) / 0.94);
-  -webkit-backdrop-filter: var(--glass-lg);
-  backdrop-filter: var(--glass-lg);
-  border-left: 1px solid var(--glass-stroke);
+  -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
+  backdrop-filter: blur(20px) saturate(var(--glass-sat));
+  border-left: 1px solid var(--hairline);
   /* 减弱 mockup 原 -24px 0 60px 0.4 阴影 — 视觉太重, 用 border-left 强调
      分隔代替深阴影. light 主题更轻. */
   box-shadow: -6px 0 18px rgba(0, 0, 0, 0.18);
@@ -3399,9 +3447,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.42);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
+  /* 主题 v2 — 遮罩去 blur 纯 dim (加深补偿) */
+  background: rgba(0, 0, 0, 0.48);
   /* 出入场交给 GSAP（useExitAnimation，EventFormModal）。原 .open 的
      opacity/transform 过渡 + 第二曲线已移除，避免与 GSAP 双重动画。 */
 }
@@ -4132,11 +4179,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
   height: 26px;
   border-radius: 6px;
   color: rgb(var(--ink-fg-1));
-  background: rgb(var(--ink-2) / 0.92);
+  /* 主题 v2 — 非浮层去 blur, alpha 提到 0.97 遮底 */
+  background: rgb(var(--ink-2) / 0.97);
   border: 1px solid rgb(var(--ink-border));
   box-shadow: 0 2px 8px rgb(0 0 0 / 0.28);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4286,9 +4332,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   z-index: 80;
   display: grid;
   place-items: center;
-  background: rgba(6, 8, 11, 0.55);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
+  /* 主题 v2 — 遮罩去 blur 纯 dim (加深补偿) */
+  background: rgba(6, 8, 11, 0.6);
   padding: 24px;
   /* 进/退场动画交给 GSAP（useExitAnimation，folder/ConfirmDialog）。原
      folder-modal-fade/-rise keyframes 已移除，顺带消除旧第二曲线。 */
