@@ -304,7 +304,7 @@ function ReplyDraftHero({
             rows={Math.min(Math.max(editedBody.split('\n').length, 5), 16)}
             className={cn(
               'w-full mt-1 px-2 py-1.5 rounded border border-ink-border-soft',
-              'bg-ink-2 text-meta text-ink-fg leading-snug font-sans',
+              'bg-ink-2/55 text-meta text-ink-fg leading-snug font-sans',
               'focus:outline-none focus:border-coral resize-y'
             )}
           />
@@ -399,10 +399,12 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
       className="ai-fields rounded-lg border border-ink-border overflow-hidden"
     >
       {/* Header — icon + "AI Fields · N" + reviewed chip + model name.
+          主题 v2 round 5 续: title/底部汇总栏实底 (bg-ink-2/3) 在玻璃上
+          读纯黑色块 → 半透化 + 分隔线 hairline (用户反馈)。
           Sprint 14 round 20: tighter — py-2 → py-1.5, chip dropped one
           step to text-[10px], BadgeCheck/Clock icons 10→8px so the
           whole strip reads as a single thin caption bar. */}
-      <div className="px-4 py-1.5 bg-ink-2 border-b border-ink-border flex items-center justify-between">
+      <div className="px-4 py-1.5 bg-ink-2/55 border-b [border-bottom-color:var(--hairline)] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={12} strokeWidth={2} className="text-info" />
           <span
@@ -460,7 +462,7 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
           视觉太"窒息"; 新版只用一行 px-4 py-2 容器, gap-x-3 分隔 pair, items
           内 label-value 用 gap-1.5 紧靠. whitespace-nowrap 保证 pair 不被拆散. */}
       {cells.length > 0 && (
-        <div className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-aux text-ink-fg-1 bg-ink-3">
+        <div className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-aux text-ink-fg-1 bg-ink-3/50">
           {cells.map((cell, idx) => (
             <Fragment key={`${cell.label}-${idx}`}>
               {idx > 0 && (
