@@ -29,15 +29,20 @@ import {
   useAppearance,
   type AccentId,
   type BodyFont,
+  type GlassKnobs,
+  type GlassMood,
   type SurfaceStyle,
   type ThemeMode,
   BODY_FONT_SIZE_MIN,
   BODY_FONT_SIZE_MAX,
   BODY_LINE_HEIGHT_MIN,
-  BODY_LINE_HEIGHT_MAX
+  BODY_LINE_HEIGHT_MAX,
+  GLASS_KNOB_RANGE,
+  GLASS_KNOB_VARS
 } from '@shared/state/appearance'
 import { SUPPORTED_LOCALES, type Locale } from '@shared/i18n'
 import { cn } from '@shared/lib/cn'
+import { Slider } from '@shared/components/ui/slider'
 
 import { PageHeader } from '../parts/PageHeader'
 
@@ -137,6 +142,75 @@ const SURFACE_ROWS: SurfaceRow[] = [
     metaKey: 'settings.general.surface.solidMeta'
   }
 ]
+
+// 主题 v2 — 玻璃气质三档 (规范 §3.3/§3.5)。仅磨砂材质下可用 (R1)。
+interface GlassMoodRow {
+  value: GlassMood
+  labelKey: string
+  metaKey: string
+  rightKey?: string
+}
+
+const GLASS_MOOD_ROWS: GlassMoodRow[] = [
+  {
+    value: 'neutral',
+    labelKey: 'settings.general.glass.mood.neutral',
+    metaKey: 'settings.general.glass.mood.neutralMeta'
+  },
+  {
+    value: 'tinted',
+    labelKey: 'settings.general.glass.mood.tinted',
+    metaKey: 'settings.general.glass.mood.tintedMeta',
+    rightKey: 'settings.general.glass.mood.recommended'
+  },
+  {
+    value: 'bright',
+    labelKey: 'settings.general.glass.mood.bright',
+    metaKey: 'settings.general.glass.mood.brightMeta'
+  }
+]
+
+/** 6 个高级玻璃调节滑杆的展示顺序 (规范 §3.5 控件表)。范围/步长读
+ *  GLASS_KNOB_RANGE (滑杆范围即护栏, R5)。 */
+const GLASS_KNOB_KEYS: (keyof GlassKnobs)[] = ['alpha', 'blur', 'sat', 'mix', 'ambient', 'grain']
+
+function formatKnobValue(key: keyof GlassKnobs, v: number): string {
+  switch (key) {
+    case 'blur':
+      return `${Math.round(v)}px`
+    case 'mix':
+      return `${Math.round(v)}%`
+    case 'grain':
+      return v.toFixed(3)
+    default:
+      return v.toFixed(2)
+  }
+}
+
+/** 读 knob 的「生效值」: 覆写以 inline 变量写在 :root 上, getComputedStyle
+ *  已合并覆写与 [data-glass] 预设 — 单一读取面 (demo MA.effective 同款)。
+ *  气质/主题/覆写变化后等一帧再读 (applyGlass 的 DOM 写入是 rAF 合并的)。 */
+function useEffectiveKnobs(
+  mood: GlassMood,
+  knobs: GlassKnobs,
+  resolvedTheme: 'dark' | 'light'
+): Record<keyof GlassKnobs, number> {
+  const read = (): Record<keyof GlassKnobs, number> => {
+    const style = getComputedStyle(document.documentElement)
+    const out = {} as Record<keyof GlassKnobs, number>
+    for (const key of GLASS_KNOB_KEYS) {
+      const raw = parseFloat(style.getPropertyValue(GLASS_KNOB_VARS[key][0]))
+      out[key] = Number.isFinite(raw) ? Math.round(raw * 1000) / 1000 : GLASS_KNOB_RANGE[key][0]
+    }
+    return out
+  }
+  const [vals, setVals] = React.useState(read)
+  React.useEffect(() => {
+    const id = requestAnimationFrame(() => setVals(read()))
+    return () => cancelAnimationFrame(id)
+  }, [mood, knobs, resolvedTheme])
+  return vals
+}
 
 interface BodyFontRow {
   value: BodyFont
@@ -405,6 +479,12 @@ export function GeneralTab(): React.ReactElement {
   const setAccent = useAppearance((s) => s.setAccent)
   const surface = useAppearance((s) => s.surface)
   const setSurface = useAppearance((s) => s.setSurface)
+  const resolvedTheme = useAppearance((s) => s.resolvedTheme)
+  const glassMood = useAppearance((s) => s.glassMood)
+  const setGlassMood = useAppearance((s) => s.setGlassMood)
+  const glassKnobs = useAppearance((s) => s.glassKnobs)
+  const setGlassKnob = useAppearance((s) => s.setGlassKnob)
+  const resetGlassKnobs = useAppearance((s) => s.resetGlassKnobs)
   const bodyFont = useAppearance((s) => s.bodyFont)
   const setBodyFont = useAppearance((s) => s.setBodyFont)
   const bodyFontSize = useAppearance((s) => s.bodyFontSize)
@@ -427,6 +507,17 @@ export function GeneralTab(): React.ReactElement {
   const themeValues = React.useMemo(() => THEME_ROWS.map((r) => r.value), [])
   const surfaceValues = React.useMemo(() => SURFACE_ROWS.map((r) => r.value), [])
   const bodyFontValues = React.useMemo(() => BODY_FONT_ROWS.map((r) => r.value), [])
+  const glassMoodValues = React.useMemo(() => GLASS_MOOD_ROWS.map((r) => r.value), [])
+
+  // 主题 v2 — R1: 玻璃气质与高级调节仅磨砂可用; 实色置灰不隐藏 (防控件跳动)。
+  const glassDisabled = surface === 'solid'
+  const effectiveKnobs = useEffectiveKnobs(glassMood, glassKnobs, resolvedTheme)
+  // R3: 基底模糊只在无原生 vibrancy (data-vib=off) 时生效 — macOS/Win11 显示
+  // 但加说明。data-vib 由主进程 boot 时回写一次, 初读即可。
+  const [vibOn] = React.useState(
+    () =>
+      typeof document !== 'undefined' && document.documentElement.getAttribute('data-vib') !== 'off'
+  )
 
   return (
     <>
@@ -568,6 +659,101 @@ export function GeneralTab(): React.ReactElement {
             />
           ))}
         </div>
+      </section>
+
+      {/* ── 4b. Glass mood — 玻璃气质 (主题 v2, 规范 §3.5; R1 实色置灰) ── */}
+      <section
+        className={cn(
+          'mb-[var(--settings-block-gap,1.75rem)]',
+          glassDisabled && 'opacity-45 pointer-events-none select-none'
+        )}
+        aria-disabled={glassDisabled || undefined}
+      >
+        <BlockHeader
+          title={t('settings.general.glass.title', { defaultValue: '玻璃气质' })}
+          meta={t('settings.general.glass.meta', { defaultValue: '仅磨砂生效' })}
+        />
+        <div
+          role="radiogroup"
+          aria-label="glass mood"
+          onKeyDown={makeRovingKeyDown(glassMoodValues, glassMood, setGlassMood)}
+          className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft"
+        >
+          {GLASS_MOOD_ROWS.map(({ value, labelKey, metaKey, rightKey }) => (
+            <RadioRow
+              key={value}
+              selected={value === glassMood}
+              label={t(labelKey, { defaultValue: value })}
+              meta={t(metaKey, { defaultValue: '' })}
+              right={rightKey ? t(rightKey, { defaultValue: 'default' }) : undefined}
+              onSelect={() => setGlassMood(value)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* ── 4c. Advanced glass tuning — 高级玻璃调节 (6 滑杆 + 恢复默认)。
+          R2 切气质清空覆写 / R4 拖动即生效 / R5 滑杆范围即护栏。 */}
+      <section
+        className={cn(
+          'mb-[var(--settings-block-gap,1.75rem)]',
+          glassDisabled && 'opacity-45 pointer-events-none select-none'
+        )}
+        aria-disabled={glassDisabled || undefined}
+      >
+        <BlockHeader
+          title={t('settings.general.glass.knobs.title', { defaultValue: '高级玻璃调节' })}
+          meta={
+            <button
+              type="button"
+              onClick={() => resetGlassKnobs()}
+              disabled={glassDisabled}
+              className={cn(
+                'text-meta font-mono px-2 py-0.5 rounded border border-ink-border-soft',
+                'text-ink-fg-1 hover:bg-ink-fg/[0.06] transition-colors duration-fast',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70'
+              )}
+            >
+              {t('settings.general.glass.knobs.reset', { defaultValue: '恢复默认' })}
+            </button>
+          }
+        />
+        <div className="tile rounded-lg border border-ink-border-soft divide-y divide-ink-border-soft">
+          {GLASS_KNOB_KEYS.map((key) => {
+            const [min, max, step] = GLASS_KNOB_RANGE[key]
+            const value = glassKnobs[key] ?? effectiveKnobs[key]
+            return (
+              <div key={key} className="flex w-full items-center gap-3 px-4 py-3">
+                <div className="w-[148px] shrink-0">
+                  <div className="text-aux font-medium text-ink-fg">
+                    {t(`settings.general.glass.knobs.${key}`, { defaultValue: key })}
+                  </div>
+                  {key === 'blur' && vibOn ? (
+                    <div className="text-meta text-ink-fg-3 mt-0.5 leading-snug">
+                      {t('settings.general.glass.knobs.blurNote', { defaultValue: '' })}
+                    </div>
+                  ) : null}
+                </div>
+                <Slider
+                  aria-label={t(`settings.general.glass.knobs.${key}`, { defaultValue: key })}
+                  min={min}
+                  max={max}
+                  step={step}
+                  value={[value]}
+                  disabled={glassDisabled}
+                  onValueChange={([v]) => setGlassKnob(key, v)}
+                  className="flex-1 min-w-0"
+                />
+                <span className="w-14 shrink-0 text-right text-meta font-mono tabular-nums text-ink-fg-1">
+                  {formatKnobValue(key, value)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+        <p className="text-meta text-ink-fg-2 mt-2.5 leading-relaxed">
+          {t('settings.general.glass.knobs.note', { defaultValue: '' })}
+        </p>
       </section>
 
       {/* ── 5. Body text — 正文外观 (字体 / 字号 / 行高) ──────────────
