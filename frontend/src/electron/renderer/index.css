@@ -138,7 +138,7 @@
    * 由 appearance.ts applyGlass 以 inline 变量盖在这里之上。 */
   --glass-alpha: 0.85; /* 基底 tint 不透明度 (护栏: 暗 ≥.50 / 亮 ≥.72) */
   --glass-blur: 30px; /* 仅 data-vib=off 回退路径生效; macOS/Win11 由 OS 扛 blur */
-  --glass-sat: 1.8; /* 透过色饱和增益 — 抗发灰主力 (浮层 .glass-pop 消费) */
+  --glass-sat: 1.8; /* 透过色饱和增益 — 抗发灰主力 (glass-pop/filter-pop/drawer/batch-bar 等浮层消费) */
   --glass-bright: 1.0;
   --glass-accent-mix: 16%; /* accent 揉进玻璃基色的比例 */
   --glass-white-mix: 0%; /* 亮砂档把基色抬向白 */
@@ -1314,6 +1314,15 @@ body::before {
       rgb(var(--ink-border-soft) / 0.5) var(--chevron-col-w),
       rgb(var(--ink-border-soft) / 0.5) 100%
     );
+  /* longhand 与暗色 rule 重复声明 — 不依赖层叠保留: 若只覆 image 不覆
+   * size, 日后改层数会让 size 数组错位、分割线被拉成整块。 */
+  background-repeat: no-repeat, no-repeat;
+  background-position:
+    0 0,
+    0 100%;
+  background-size:
+    100% 100%,
+    100% 1px;
 }
 /* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
    不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: 平涂条升级为
@@ -1494,8 +1503,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border-radius: 14px;
   border: 1px solid rgb(var(--ink-border) / 0.7);
   background-color: rgb(var(--ink-2) / 0.92);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--glass-sat));
   box-shadow:
     0 12px 28px rgba(0, 0, 0, 0.32),
     0 2px 6px rgba(0, 0, 0, 0.2);

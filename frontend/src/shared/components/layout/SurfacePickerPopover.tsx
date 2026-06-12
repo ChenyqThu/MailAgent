@@ -1,10 +1,10 @@
 // Sprint 18 #4 — Surface (材质) picker.
 //
-// 跟 AccentPicker / ThemePicker 平行的第三个外观维度: 控制 .glass-1/2/3
-// 的视觉风格. 三档 frosted / solid / liquid 由 :root[data-surface='...']
-// attribute 驱动 (见 index.css 末段). 持久化走 localStorage, 跨 session
-// 复用; index.html inline bootstrap 在 paint 前读 storage 设 attribute
-// 避免 FOUC.
+// 跟 AccentPicker / ThemePicker 平行的第三个外观维度: 控制 .glass-* 的
+// 视觉风格. 主题 v2 起两档 frosted / solid 由 :root[data-surface='...']
+// attribute 驱动 (见 index.css 材质结构段). 持久化走 localStorage, 跨
+// session 复用; index.html inline bootstrap 在 paint 前读 storage 设
+// attribute 避免 FOUC.
 //
 // 视觉模式参考 ThemePicker 的 list 模式而非 AccentPicker 的 swatch grid —
 // 3 个选项时 list 更直观, 每个 option 左侧带一块 mini preview swatch 让
