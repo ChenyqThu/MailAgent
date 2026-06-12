@@ -533,14 +533,17 @@ kbd,
   position: relative;
 }
 /* 主题 v2 — 选中左条升级为 .acc-bar 光条配方 (伪元素挂不了类, 配方内联;
- * 顶端提亮渐变 + 9px 辉光, solid 档辉光归零)。 */
+ * 顶端提亮渐变 + 9px 辉光, solid 档辉光归零)。几何照 demo .it.on::before:
+ * 上下 inset 6px + 圆角 2px 的「胶囊光条」, 区别于 EmailRow 的通高直角条
+ * (demo .erow.sel::before 即通高, 两者有意不同)。 */
 .row-selected::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 0;
-  bottom: 0;
+  top: 6px;
+  bottom: 6px;
   width: 3px;
+  border-radius: 2px;
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
   box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
 }
@@ -1260,8 +1263,8 @@ body::before {
     to right,
     transparent 0,
     transparent var(--chevron-col-w),
-    rgb(var(--ink-border-soft) / 0.5) var(--chevron-col-w),
-    rgb(var(--ink-border-soft) / 0.5) 100%
+    var(--hairline) var(--chevron-col-w),
+    var(--hairline) 100%
   );
   background-repeat: no-repeat;
   background-position: 0 100%;
@@ -1288,8 +1291,8 @@ body::before {
       to right,
       transparent 0,
       transparent var(--chevron-col-w),
-      rgb(var(--ink-border-soft) / 0.5) var(--chevron-col-w),
-      rgb(var(--ink-border-soft) / 0.5) 100%
+      var(--hairline) var(--chevron-col-w),
+      var(--hairline) 100%
     );
   background-repeat: no-repeat, no-repeat;
   background-position:
@@ -1311,8 +1314,8 @@ body::before {
       to right,
       transparent 0,
       transparent var(--chevron-col-w),
-      rgb(var(--ink-border-soft) / 0.5) var(--chevron-col-w),
-      rgb(var(--ink-border-soft) / 0.5) 100%
+      var(--hairline) var(--chevron-col-w),
+      var(--hairline) 100%
     );
   /* longhand 与暗色 rule 重复声明 — 不依赖层叠保留: 若只覆 image 不覆
    * size, 日后改层数会让 size 数组错位、分割线被拉成整块。 */
@@ -4078,7 +4081,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   grid-template-columns: 34px 1fr;
   gap: 3px 12px;
   padding: 13px 16px 14px;
-  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.5);
+  border-bottom: 1px solid var(--hairline); /* 主题 v2 — 列表行分割线统一 hairline */
   cursor: pointer;
   transition: background-color 120ms ease;
 }
