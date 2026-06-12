@@ -719,7 +719,7 @@ export function EmailList(): React.ReactElement {
       document.removeEventListener('mousedown', onClickAway)
       document.removeEventListener('keydown', onKey)
     }
-  }, [filterOpen])
+  }, [filterOpen, filterPopoverRef])
 
   // Sprint 12.5 — pageCount drives the LIMIT clause; offset=0 because the
   // backend sorts by date_received DESC and we re-fetch the full window.

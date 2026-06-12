@@ -68,7 +68,6 @@ export function bootstrapDotenv(): DotenvBootstrapResult {
   try {
     const result = loadDotenvIntoProcessEnv()
     if (process.env.NODE_ENV !== 'test') {
-      // eslint-disable-next-line no-console
       console.log(
         `[dotenv-bootstrap] path=${result.path} exists=${result.exists} ` +
           `loaded=${result.loaded}/${result.totalInFile} skipped=${result.skipped}`
@@ -77,7 +76,6 @@ export function bootstrapDotenv(): DotenvBootstrapResult {
     return result
   } catch (err) {
     if (process.env.NODE_ENV !== 'test') {
-      // eslint-disable-next-line no-console
       console.warn('[dotenv-bootstrap] failed:', (err as Error).message)
     }
     return { path: '', exists: false, loaded: 0, skipped: 0, totalInFile: 0 }

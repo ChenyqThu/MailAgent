@@ -257,6 +257,7 @@ export function CommandPalette(): React.ReactElement | null {
     staleTime: 30_000,
     enabled: open
   })
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: `?? []` 仅在 query 空档产生新数组; 包 useMemo 属 React Compiler 迁移债, 此处行为无害。
   const mailboxes: MailboxSummary[] = mailboxesQ.data ?? []
 
   // Single search query covers both "user typed something" and "open the
@@ -284,6 +285,7 @@ export function CommandPalette(): React.ReactElement | null {
     enabled: open
   })
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: 同上, `?? []` 空档新数组无害, React Compiler 迁移时统一收。
   const hits: SearchHit[] = searchQ.data?.items ?? []
   const totalIndexed = searchQ.data?.total_indexed ?? null
   const isSearching = searchQ.isFetching && normalised.length > 0
@@ -509,6 +511,7 @@ export function CommandPalette(): React.ReactElement | null {
       })
     )
     return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: setActiveMailbox/setView 是 zustand 稳定 setter、viewForMailbox 是模块级纯函数, 列入只添噪声。
   }, [jumpItems, hits, actionItems, navigate, setActiveEmail])
 
   // Clamp highlight in render (no extra paint cycle).

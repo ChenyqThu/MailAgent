@@ -63,7 +63,11 @@ function Row({ item, onReplay, pending }: RowProps): React.ReactElement {
         {item.organizer ?? '—'}
       </td>
       <td>
-        {item.rrule ? <span className="rrule-code">{item.rrule}</span> : <span className="empty-field">—</span>}
+        {item.rrule ? (
+          <span className="rrule-code">{item.rrule}</span>
+        ) : (
+          <span className="empty-field">—</span>
+        )}
       </td>
       <td className="mono-num">{fmtIso(item.first_occurrence)}</td>
       <td className="mono-num">{fmtIso(item.last_occurrence)}</td>
@@ -115,9 +119,9 @@ export function CalendarPage(): React.ReactElement {
   const listQ = useQuery({
     queryKey: ['calendar', 'recurring', since],
     queryFn: () => mailApi.calendar.recurringDiscover({ since }),
-    staleTime: 5 * 60_000,        // 5min cache, recurring 列表变化慢
-    refetchOnWindowFocus: false,  // 不靠 focus 刷
-    refetchOnMount: 'always'      // 切到 recurring tab 主动刷
+    staleTime: 5 * 60_000, // 5min cache, recurring 列表变化慢
+    refetchOnWindowFocus: false, // 不靠 focus 刷
+    refetchOnMount: 'always' // 切到 recurring tab 主动刷
   })
 
   // Phase 2.4: 走 eventReplay (基于 SQLite calendar_event 行) 替代老 recurringReplay

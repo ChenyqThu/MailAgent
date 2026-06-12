@@ -89,12 +89,7 @@ export function SendConfirmDialog({
         )}
 
         <DialogFooter>
-          <button
-            type="button"
-            className="gbtn gbtn-bare"
-            onClick={onCancel}
-            disabled={pending}
-          >
+          <button type="button" className="gbtn gbtn-bare" onClick={onCancel} disabled={pending}>
             {t('compose.cancel')}
           </button>
           <button

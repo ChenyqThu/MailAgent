@@ -43,9 +43,7 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
 
   const toggleDay = (d: string): void => {
     set({
-      byday: value.byday.includes(d)
-        ? value.byday.filter((x) => x !== d)
-        : [...value.byday, d]
+      byday: value.byday.includes(d) ? value.byday.filter((x) => x !== d) : [...value.byday, d]
     })
   }
 
@@ -88,7 +86,11 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
 
           {/* WEEKLY — 星期多选 */}
           {value.freq === 'WEEKLY' && (
-            <div className="flex items-center gap-1" role="group" aria-label={t('calendar.form.repeat.bydayAria', '每周重复日')}>
+            <div
+              className="flex items-center gap-1"
+              role="group"
+              aria-label={t('calendar.form.repeat.bydayAria', '每周重复日')}
+            >
               {WEEKDAYS.map((d) => (
                 <button
                   key={d}

@@ -52,8 +52,7 @@ export function UpdateReadyBanner(): React.ReactElement | null {
   //    手动下载、覆盖安装。ad-hoc 下 quitAndInstall 装不上更新, 所以只通知 + 开浏览器。
   const installMode =
     status.enabled && status.state === 'downloaded' && status.latestVersion != null
-  const notifyMode =
-    !status.enabled && status.state === 'available' && status.latestVersion != null
+  const notifyMode = !status.enabled && status.state === 'available' && status.latestVersion != null
   const visible = installMode || notifyMode
   const dismissed = visible && dismissedVersion === status.latestVersion
 

@@ -638,6 +638,7 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
       clickDoc?.removeEventListener('click', onDocClick, true)
       setDocReady(false)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: 此 effect 是 iframe 文档生命周期, 只能跟 srcDoc; onImageClick 列入会让正文 iframe 整个重挂。
   }, [srcDoc])
 
   // Translation inject — 用户切换译文/原文时同步:

@@ -77,7 +77,10 @@ registerRoute(
     // so the NetworkFirst fallback never serves a stale enumeration later.
     const path = new URL(params.request.url).pathname
     if (API_NO_STORE.some((re) => re.test(path))) {
-      caches.open(API_CACHE).then((c) => c.delete(params.request)).catch(() => undefined)
+      caches
+        .open(API_CACHE)
+        .then((c) => c.delete(params.request))
+        .catch(() => undefined)
     }
     return res
   }

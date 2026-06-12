@@ -29,7 +29,9 @@ export interface PromptContent extends PromptInfo {
   content: string
 }
 
-export type PromptWriteResult = { ok: true; info: PromptInfo } | { ok: false; code: string; message: string }
+export type PromptWriteResult =
+  | { ok: true; info: PromptInfo }
+  | { ok: false; code: string; message: string }
 
 const DEFAULTS: Record<PromptSlot, string> = {
   inbox: 'prompts/email_inbox.md',
@@ -67,10 +69,7 @@ export function resolvePromptPath(slot: PromptSlot): string {
   // backreference.
   const rel2root = relative(root, absolute)
   if (rel2root.startsWith('..') || isAbsolute(rel2root)) {
-    throw new PromptIpcError(
-      'E_PATH_ESCAPE',
-      `Prompt path "${rel}" escapes project root "${root}"`
-    )
+    throw new PromptIpcError('E_PATH_ESCAPE', `Prompt path "${rel}" escapes project root "${root}"`)
   }
   return absolute
 }
@@ -118,15 +117,12 @@ export function writePrompt(slot: PromptSlot, content: string): PromptInfo {
 }
 
 export function registerPromptHandlers(): void {
-  ipcMain.handle(
-    'prompts:list',
-    async (): Promise<{ inbox: PromptInfo; sent: PromptInfo }> => {
-      return {
-        inbox: getPromptInfo('inbox'),
-        sent: getPromptInfo('sent')
-      }
+  ipcMain.handle('prompts:list', async (): Promise<{ inbox: PromptInfo; sent: PromptInfo }> => {
+    return {
+      inbox: getPromptInfo('inbox'),
+      sent: getPromptInfo('sent')
     }
-  )
+  })
   ipcMain.handle('prompts:read', async (_evt, slot: PromptSlot): Promise<PromptContent> => {
     if (slot !== 'inbox' && slot !== 'sent') {
       throw new PromptIpcError('E_INVALID_SLOT', `unknown prompt slot "${String(slot)}"`)

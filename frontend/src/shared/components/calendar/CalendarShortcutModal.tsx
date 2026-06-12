@@ -34,7 +34,9 @@ export function CalendarShortcutModal({ open, onClose }: Props): React.ReactElem
     <div className="sk-backdrop" onClick={onClose} role="dialog" aria-modal="true">
       <div className="sk-modal glass-pop" onClick={(e) => e.stopPropagation()}>
         <h3>{t('calendar.shortcut.title', '键盘快捷键')}</h3>
-        <div className="sk-sub">{t('calendar.shortcut.subtitle', 'G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)')}</div>
+        <div className="sk-sub">
+          {t('calendar.shortcut.subtitle', 'G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)')}
+        </div>
         {ROWS.map((r) => (
           <div key={r.labelKey} className="sk-row">
             <span className="sk-label">{t(r.labelKey, r.labelFallback)}</span>

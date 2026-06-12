@@ -59,10 +59,7 @@ export function parseJsonArray<T>(s: string | null): T[] {
 // 测试环境兜底, 但 Electron lifecycle 早期 / BrowserView 刚 attach /
 // about:blank 中转都可能拿到空 URL, 等于把 D in D 漏成 D in 0. 改成空
 // URL 也 throw, vitest 直调 __testing.runXxx 不走 wrapper 不受影响.
-export function assertSafeSender(
-  event: IpcMainInvokeEvent,
-  channel: string
-): void {
+export function assertSafeSender(event: IpcMainInvokeEvent, channel: string): void {
   const url = (event.senderFrame?.url || '').toLowerCase()
   if (
     url.startsWith('file://') ||
@@ -72,7 +69,7 @@ export function assertSafeSender(
     return
   }
   // 空 URL 或非白名单 — 拒绝
-  // eslint-disable-next-line no-console
+
   console.warn(
     `[calendar-handler] rejected unexpected IPC sender url=${JSON.stringify(url)} channel=${channel}`
   )

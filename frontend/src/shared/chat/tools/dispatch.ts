@@ -76,8 +76,7 @@ export async function dispatchTools(
     results.push({
       toolUseId: use.toolUseId,
       status: 'error',
-      errorMessage:
-        `Unknown tool "${use.name}". Available tools: ${registry.names().join(', ')}.`,
+      errorMessage: `Unknown tool "${use.name}". Available tools: ${registry.names().join(', ')}.`,
       durationMs: 0
     })
   }

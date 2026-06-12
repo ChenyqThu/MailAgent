@@ -37,7 +37,6 @@ export class CalendarErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    // eslint-disable-next-line no-console
     console.error(
       `[calendar-error-boundary] view=${this.props.viewName} crashed:`,
       error,
@@ -74,11 +73,7 @@ export class CalendarErrorBoundary extends Component<Props, State> {
               '切换视图或点 [重试] 重新加载. 详情见 DevTools console.'
             )}
           </div>
-          <button
-            type="button"
-            className="today-btn mt-2"
-            onClick={this.handleReset}
-          >
+          <button type="button" className="today-btn mt-2" onClick={this.handleReset}>
             <RefreshCw size={13} strokeWidth={2} />
             {i18n.t('calendar.errorBoundary.retry', '重试')}
           </button>

@@ -224,8 +224,7 @@ export function runDavmailHealth(): DavMailHealthData {
   const throttleCount = parseInt(state['davmail.throttle_events_5min'] || '0', 10)
   const lastOAuthErr = state['davmail.last_oauth_error'] || null
   const lastOAuthAt = state['davmail.last_oauth_error_at'] || null
-  const oauthRecent =
-    !!lastOAuthAt && Date.now() - Date.parse(lastOAuthAt) < 3600 * 1000
+  const oauthRecent = !!lastOAuthAt && Date.now() - Date.parse(lastOAuthAt) < 3600 * 1000
 
   let level: DavMailHealthData['level'] = 'ok'
   if (oauthRecent) level = 'critical'

@@ -195,6 +195,7 @@ export function DayView({
     if (!isLoading && scrollRef.current) {
       scrollRef.current.scrollTop = 8 * HOUR_PX - 16
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: Date 对象引用不稳定, 用 getTime() 数值比较才能避免每渲染重滚; React Compiler 迁移时再提取变量。
   }, [isLoading, dayStart.getTime()])
 
   const dayEvents = dayEventsRaw ?? []

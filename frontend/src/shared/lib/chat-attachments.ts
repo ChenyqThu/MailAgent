@@ -72,7 +72,9 @@ export function isTextAttachment(filename: string, mimeType: string): boolean {
     if (TEXT_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) return true
     if (TEXT_MIME_EXACT.has(mimeType)) return true
   }
-  const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1).toLowerCase() : ''
+  const ext = filename.includes('.')
+    ? filename.slice(filename.lastIndexOf('.') + 1).toLowerCase()
+    : ''
   return TEXT_EXTENSIONS.has(ext)
 }
 

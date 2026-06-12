@@ -14,12 +14,10 @@ export function registerServiceWorker(): void {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register(SW_URL, { scope: import.meta.env.BASE_URL })
-      .catch((err) => {
-        // A failed SW registration must never break the app — the SPA works
-        // fine online without it; the SW only adds offline-shell + caching.
-        console.warn('[pwa] service worker registration failed:', err)
-      })
+    navigator.serviceWorker.register(SW_URL, { scope: import.meta.env.BASE_URL }).catch((err) => {
+      // A failed SW registration must never break the app — the SPA works
+      // fine online without it; the SW only adds offline-shell + caching.
+      console.warn('[pwa] service worker registration failed:', err)
+    })
   })
 }

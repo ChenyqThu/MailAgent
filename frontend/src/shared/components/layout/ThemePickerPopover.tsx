@@ -65,7 +65,7 @@ export function ThemePickerPopover(): React.ReactElement {
       document.removeEventListener('mousedown', onPointer)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, scopeRef])
 
   return (
     <>

@@ -96,11 +96,7 @@ function nodePath(node: HTMLElement): string {
       for (const sib of parent.childNodes) {
         const sibEl = sib as HTMLElement
         const sibTag = sibEl.tagName
-        if (
-          sibEl.nodeType === 1 &&
-          typeof sibTag === 'string' &&
-          sibTag.toLowerCase() === tag
-        ) {
+        if (sibEl.nodeType === 1 && typeof sibTag === 'string' && sibTag.toLowerCase() === tag) {
           if (sibEl === cur) {
             parts.unshift(`${tag}[${idx}]`)
             found = true

@@ -100,7 +100,7 @@ export function MentionPopover({
       document.removeEventListener('mousedown', onDocClick)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open, onClose])
+  }, [open, onClose, containerRef])
 
   const normalised = normalizeFtsQuery(debounced)
   const searchQ = useQuery<SearchResult>({

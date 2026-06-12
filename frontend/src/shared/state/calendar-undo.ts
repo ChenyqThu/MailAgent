@@ -69,7 +69,7 @@ export const useUndoToastStore = create<UndoStore>((set, get) => ({
           cur.onCommit()
         } catch (err) {
           // 不重 throw — UX 上 commit 失败应该走业务侧 onError 而非这层
-          // eslint-disable-next-line no-console
+
           console.error('[calendar-undo] commit error', err)
         }
         set((s) => ({ items: s.items.filter((t) => t.id !== id) }))
@@ -85,7 +85,6 @@ export const useUndoToastStore = create<UndoStore>((set, get) => ({
     try {
       cur.onCommit()
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('[calendar-undo] commit error', err)
     }
     set((s) => ({ items: s.items.filter((t) => t.id !== id) }))
@@ -97,7 +96,6 @@ export const useUndoToastStore = create<UndoStore>((set, get) => ({
     try {
       cur.onUndo?.()
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('[calendar-undo] undo error', err)
     }
     set((s) => ({ items: s.items.filter((t) => t.id !== id) }))

@@ -270,9 +270,7 @@ export async function readAttachmentAsDataUrl(attachmentId: number): Promise<str
 // UX intuitive (matches Mail.app's "Save Attachment…" behaviour) and works
 // across dev / packaged builds. Returns the final absolute path, or null if
 // the source is missing or the row has no on-disk content.
-export async function downloadAttachmentToDownloads(
-  attachmentId: number
-): Promise<string | null> {
+export async function downloadAttachmentToDownloads(attachmentId: number): Promise<string | null> {
   const db = getDb()
   const row = db
     .prepare('SELECT local_path, filename FROM email_attachment WHERE id = ?')

@@ -16,10 +16,7 @@
 // 老 Sprint 6 IPC channel (recurringDiscover / recurringReplay / expand) 保留作
 // /calendar/recurring 运维页用. 新 Phase 3 SSoT 通道走 better-sqlite3 直读.
 
-import {
-  assertSafeSender,
-  safeIpcHandle
-} from './calendar-shared'
+import { assertSafeSender, safeIpcHandle } from './calendar-shared'
 
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
@@ -105,10 +102,8 @@ export type {
 }
 
 export function registerCalendarHandlers(): void {
-  safeIpcHandle(
-    'calendar:recurringDiscover',
-    async (_evt, ...args) =>
-      runRecurringDiscover((args[0] as RecurringDiscoverOpts) ?? {})
+  safeIpcHandle('calendar:recurringDiscover', async (_evt, ...args) =>
+    runRecurringDiscover((args[0] as RecurringDiscoverOpts) ?? {})
   )
   safeIpcHandle(
     'calendar:recurringReplay',
@@ -126,26 +121,19 @@ export function registerCalendarHandlers(): void {
       return envelopeFromCli(runRecurringReplay(opts))
     }
   )
-  safeIpcHandle(
-    'calendar:expand',
-    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
-      return envelopeFromCli(runCalendarExpand((args[0] as CalendarExpandOpts) ?? {}))
-    }
-  )
+  safeIpcHandle('calendar:expand', async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+    return envelopeFromCli(runCalendarExpand((args[0] as CalendarExpandOpts) ?? {}))
+  })
 
   // Phase 3 §3.1 — SSoT 直读 handlers (better-sqlite3 + npm rrule)
-  safeIpcHandle(
-    'calendar:eventsList',
-    async (_evt, ...args) => runEventsList((args[0] as EventsListOpts) ?? {})
+  safeIpcHandle('calendar:eventsList', async (_evt, ...args) =>
+    runEventsList((args[0] as EventsListOpts) ?? {})
   )
-  safeIpcHandle(
-    'calendar:eventGet',
-    async (_evt, ...args): Promise<CalendarEventRow | null> => {
-      const opts = args[0] as EventGetOpts | undefined
-      if (!opts || !opts.icalUid) return null
-      return runEventGet(opts)
-    }
-  )
+  safeIpcHandle('calendar:eventGet', async (_evt, ...args): Promise<CalendarEventRow | null> => {
+    const opts = args[0] as EventGetOpts | undefined
+    if (!opts || !opts.icalUid) return null
+    return runEventGet(opts)
+  })
   safeIpcHandle('calendar:syncStatus', async () => runSyncStatus())
   safeIpcHandle('calendar:calendarNames', async () => runCalendarNames())
   safeIpcHandle(
@@ -154,87 +142,72 @@ export function registerCalendarHandlers(): void {
       envelopeFromCli(runSyncNow((args[0] as SyncNowOpts) ?? {}))
   )
   // Phase 2.4 — calendar:eventReplay (基于 calendar_event 重导出 Notion)
-  safeIpcHandle(
-    'calendar:eventReplay',
-    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
-      const opts = args[0] as EventReplayOpts | undefined
-      if (!opts || !opts.icalUid) {
-        return {
-          ok: false,
-          code: 'E_INVALID_ARG',
-          message: 'calendar:eventReplay requires icalUid'
-        }
+  safeIpcHandle('calendar:eventReplay', async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+    const opts = args[0] as EventReplayOpts | undefined
+    if (!opts || !opts.icalUid) {
+      return {
+        ok: false,
+        code: 'E_INVALID_ARG',
+        message: 'calendar:eventReplay requires icalUid'
       }
-      return envelopeFromCli(runEventReplay(opts))
     }
-  )
+    return envelopeFromCli(runEventReplay(opts))
+  })
   // Phase 2.1 — calendar:eventRsvp (发 iTIP REPLY 给 organizer)
-  safeIpcHandle(
-    'calendar:eventRsvp',
-    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
-      const opts = args[0] as EventRsvpOpts | undefined
-      if (!opts || !opts.icalUid) {
-        return {
-          ok: false,
-          code: 'E_INVALID_ARG',
-          message: 'calendar:eventRsvp requires icalUid'
-        }
+  safeIpcHandle('calendar:eventRsvp', async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+    const opts = args[0] as EventRsvpOpts | undefined
+    if (!opts || !opts.icalUid) {
+      return {
+        ok: false,
+        code: 'E_INVALID_ARG',
+        message: 'calendar:eventRsvp requires icalUid'
       }
-      if (!opts.response || !['accept', 'tentative', 'decline'].includes(opts.response)) {
-        return {
-          ok: false,
-          code: 'E_INVALID_ARG',
-          message: `calendar:eventRsvp response must be accept/tentative/decline, got ${opts.response}`
-        }
-      }
-      return envelopeFromCli(runEventRsvp(opts))
     }
-  )
+    if (!opts.response || !['accept', 'tentative', 'decline'].includes(opts.response)) {
+      return {
+        ok: false,
+        code: 'E_INVALID_ARG',
+        message: `calendar:eventRsvp response must be accept/tentative/decline, got ${opts.response}`
+      }
+    }
+    return envelopeFromCli(runEventRsvp(opts))
+  })
   // Phase 2.2 — calendar:eventCreate (CalDAV PUT 新建事件)
-  safeIpcHandle(
-    'calendar:eventCreate',
-    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
-      const opts = args[0] as EventCreateOpts | undefined
-      if (!opts || !opts.summary || !opts.startIso || !opts.endIso) {
-        return {
-          ok: false,
-          code: 'E_INVALID_ARG',
-          message: 'calendar:eventCreate requires summary + startIso + endIso'
-        }
+  safeIpcHandle('calendar:eventCreate', async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+    const opts = args[0] as EventCreateOpts | undefined
+    if (!opts || !opts.summary || !opts.startIso || !opts.endIso) {
+      return {
+        ok: false,
+        code: 'E_INVALID_ARG',
+        message: 'calendar:eventCreate requires summary + startIso + endIso'
       }
-      return envelopeFromCli(runEventCreate(opts))
     }
-  )
+    return envelopeFromCli(runEventCreate(opts))
+  })
   // Phase 2.3 — calendar:eventUpdate (CalDAV PUT 更新事件)
-  safeIpcHandle(
-    'calendar:eventUpdate',
-    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
-      const opts = args[0] as EventUpdateOpts | undefined
-      if (!opts || !opts.icalUid) {
-        return {
-          ok: false,
-          code: 'E_INVALID_ARG',
-          message: 'calendar:eventUpdate requires icalUid'
-        }
+  safeIpcHandle('calendar:eventUpdate', async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+    const opts = args[0] as EventUpdateOpts | undefined
+    if (!opts || !opts.icalUid) {
+      return {
+        ok: false,
+        code: 'E_INVALID_ARG',
+        message: 'calendar:eventUpdate requires icalUid'
       }
-      return envelopeFromCli(runEventUpdate(opts))
     }
-  )
+    return envelopeFromCli(runEventUpdate(opts))
+  })
   // Phase 2.3 — calendar:eventDelete (CalDAV DELETE 删除事件)
-  safeIpcHandle(
-    'calendar:eventDelete',
-    async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
-      const opts = args[0] as EventDeleteOpts | undefined
-      if (!opts || !opts.icalUid) {
-        return {
-          ok: false,
-          code: 'E_INVALID_ARG',
-          message: 'calendar:eventDelete requires icalUid'
-        }
+  safeIpcHandle('calendar:eventDelete', async (_evt, ...args): Promise<WriteEnvelope<unknown>> => {
+    const opts = args[0] as EventDeleteOpts | undefined
+    if (!opts || !opts.icalUid) {
+      return {
+        ok: false,
+        code: 'E_INVALID_ARG',
+        message: 'calendar:eventDelete requires icalUid'
       }
-      return envelopeFromCli(runEventDelete(opts))
     }
-  )
+    return envelopeFromCli(runEventDelete(opts))
+  })
 }
 
 // F4 export for unit testing the sender check

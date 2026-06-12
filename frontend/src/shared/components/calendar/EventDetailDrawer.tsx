@@ -95,7 +95,7 @@ const _VALID_SOURCES: ReadonlySet<string> = new Set(['caldav', 'email_ics', 'leg
 function narrowSource(s: string | null | undefined): CalendarEventSource | undefined {
   if (!s) return undefined
   if (_VALID_SOURCES.has(s)) return s as CalendarEventSource
-  // eslint-disable-next-line no-console
+
   console.warn(`[calendar] unknown event source=${JSON.stringify(s)}, falling back`)
   return undefined
 }

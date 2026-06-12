@@ -40,9 +40,7 @@ export function awaitConfirmation(
   if (_pending.has(toolUseId)) {
     // Same toolUseId twice in one harness run = a bug in our protocol code;
     // fail loud rather than silently shadow.
-    throw new Error(
-      `awaitConfirmation: duplicate toolUseId ${toolUseId} (session=${sessionId})`
-    )
+    throw new Error(`awaitConfirmation: duplicate toolUseId ${toolUseId} (session=${sessionId})`)
   }
   return new Promise<ConfirmationOutcome>((resolve, reject) => {
     const onAbort = (): void => {
@@ -68,10 +66,7 @@ export function awaitConfirmation(
 /** Called from the `chat:confirmTool` IPC handler when the user clicks
  *  Confirm or Cancel in the dialog. Returns true when a pending entry was
  *  resolved (renderer can show a toast on false — late click after abort). */
-export function resolveConfirmation(
-  toolUseId: string,
-  outcome: ConfirmationOutcome
-): boolean {
+export function resolveConfirmation(toolUseId: string, outcome: ConfirmationOutcome): boolean {
   const entry = _pending.get(toolUseId)
   if (!entry) return false
   _pending.delete(toolUseId)

@@ -6,12 +6,7 @@ import rrulePkg from 'rrule'
 
 import { callCli } from '../cli_runner'
 import { getDb } from '../db'
-import {
-  type DbCalendarRow,
-  READ_TIMEOUT_MS,
-  epochToIso,
-  parseJsonArray
-} from './calendar-shared'
+import { type DbCalendarRow, READ_TIMEOUT_MS, epochToIso, parseJsonArray } from './calendar-shared'
 
 const { rrulestr } = rrulePkg
 
@@ -280,14 +275,8 @@ export function runEventsList(opts: EventsListOpts = {}): CalendarEventOccurrenc
   const now = new Date()
   const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   const windowStartMs = opts.fromIso ? Date.parse(opts.fromIso) : todayUtc
-  const windowEndMs = opts.toIso
-    ? Date.parse(opts.toIso)
-    : windowStartMs + 7 * 24 * 60 * 60 * 1000
-  if (
-    Number.isNaN(windowStartMs) ||
-    Number.isNaN(windowEndMs) ||
-    windowEndMs <= windowStartMs
-  ) {
+  const windowEndMs = opts.toIso ? Date.parse(opts.toIso) : windowStartMs + 7 * 24 * 60 * 60 * 1000
+  if (Number.isNaN(windowStartMs) || Number.isNaN(windowEndMs) || windowEndMs <= windowStartMs) {
     return []
   }
 
@@ -349,8 +338,7 @@ export function runEventsList(opts: EventsListOpts = {}): CalendarEventOccurrenc
   }
 
   occurrences.sort(
-    (a, b) =>
-      Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
+    (a, b) => Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
   )
   return occurrences
 }

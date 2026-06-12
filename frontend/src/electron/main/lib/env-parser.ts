@@ -60,8 +60,7 @@ export interface EnvParsed {
 //   2. KV_UNQUOTED_RE — value is bare; the first `#` (with optional whitespace
 //      in front) starts a trailing inline comment, which we preserve verbatim
 //      so the round-trip keeps the user's annotations.
-const KV_QUOTED_RE =
-  /^(\s*)([A-Z_][A-Z0-9_]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*(#.*)?$/
+const KV_QUOTED_RE = /^(\s*)([A-Z_][A-Z0-9_]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*(#.*)?$/
 const KV_UNQUOTED_RE = /^(\s*)([A-Z_][A-Z0-9_]*)\s*=\s*([^#]*?)\s*(#.*)?$/
 const KV_COMMENTED_RE = /^(\s*)#\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/
 

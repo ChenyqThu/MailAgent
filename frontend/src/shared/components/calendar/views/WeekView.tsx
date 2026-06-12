@@ -76,6 +76,7 @@ export function WeekView({
     if (!isLoading && scrollRef.current) {
       scrollRef.current.scrollTop = 8 * HOUR_PX - 16
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: 同 DayView, getTime() 数值比较防 Date 引用不稳定导致每渲染重滚。
   }, [isLoading, weekStart.getTime()])
 
   // 首次加载 (无 placeholderData 旧数据可借) 才显骨架; 切周时 isLoading=false,

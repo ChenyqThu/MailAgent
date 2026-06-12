@@ -10,10 +10,7 @@ import { SettingsShell } from '../settings/SettingsShell'
 
 export function SettingsLayout(): React.ReactElement {
   return (
-    <PageFrame
-      ariaLabel="settings"
-      mainClassName="flex flex-1 min-w-0 min-h-0 overflow-hidden"
-    >
+    <PageFrame ariaLabel="settings" mainClassName="flex flex-1 min-w-0 min-h-0 overflow-hidden">
       <SettingsShell />
     </PageFrame>
   )
