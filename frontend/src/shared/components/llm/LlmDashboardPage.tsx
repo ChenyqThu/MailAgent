@@ -58,8 +58,9 @@ function StatCard({
   return (
     <div
       className={cn(
-        'rounded-md border p-3',
-        accent ? 'border-coral/30 bg-coral/5' : 'border-ink-border'
+        // round 8c — 容器统一 accent 染色卡 (用户定稿「都要已处理那样的」),
+        // accent prop 只剩数字字色/字重差异。
+        'rounded-md border p-3 border-coral/30 bg-coral/5'
       )}
     >
       <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1">{label}</div>
@@ -304,13 +305,13 @@ export function LlmDashboardPage(): React.ReactElement {
           </section>
 
           <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-ink-border p-3">
+            <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
               <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
                 {t('llm.statusDist')}
               </div>
               <StatusDonut counts={data.by_status} />
             </div>
-            <div className="rounded-md border border-ink-border p-3 space-y-3">
+            <div className="rounded-md border border-coral/30 bg-coral/5 p-3 space-y-3">
               <div>
                 <div className="text-micro font-mono uppercase text-ink-fg-2 mb-2">
                   {t('llm.cacheHit')}

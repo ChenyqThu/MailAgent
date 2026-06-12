@@ -113,7 +113,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {/* IMAP probe */}
-        <div className="rounded-md border border-ink-border p-3">
+        <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
           <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1 flex items-center gap-1.5">
             {h.imap_reachable ? (
               <Cloud size={11} strokeWidth={2} className="text-ok" />
@@ -133,7 +133,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
         </div>
 
         {/* SMTP probe */}
-        <div className="rounded-md border border-ink-border p-3">
+        <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
           <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1 flex items-center gap-1.5">
             {h.smtp_reachable ? (
               <Cloud size={11} strokeWidth={2} className="text-ok" />
@@ -153,7 +153,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
         </div>
 
         {/* OAuth token age */}
-        <div className="rounded-md border border-ink-border p-3">
+        <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
           <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1 flex items-center gap-1.5">
             <KeyRound size={11} strokeWidth={2} className={tokenColor} />
             OAuth Token
@@ -167,7 +167,7 @@ export function DavMailHealthCard(): React.ReactElement | null {
         </div>
 
         {/* EWS throttling + backfill state */}
-        <div className="rounded-md border border-ink-border p-3">
+        <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
           <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1 flex items-center gap-1.5">
             {h.throttle_events_5min >= 3 ? (
               <AlertTriangle size={11} strokeWidth={2} className="text-warn" />
