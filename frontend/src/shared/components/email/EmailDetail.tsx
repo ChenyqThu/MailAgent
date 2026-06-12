@@ -182,6 +182,8 @@ const NO_PENDING: PendingMap = {
   archive: false
 }
 
+const llmAgentUpgradeFired = new Set<number>()
+
 interface WriteErrorShape {
   code?: string
   message: string
@@ -243,6 +245,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     staleTime: 30_000,
     placeholderData: keepPreviousData
   })
+  const ai = aiQ.data ?? null
+  // Route through mapLanguage so the EN pip survives LLM enum drift
+  // ("English" / "en" / "en-US" all resolve to 'en'). NOTES 2026-05-17 #7.
+  const langRaw = ai?.labels_raw?.language
+  const langIsEn = mapLanguage(typeof langRaw === 'string' ? langRaw : null) === 'en'
 
   // ---- immersive translation ----------------------------------------------
   //
@@ -329,6 +336,26 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       setShowTranslation(true)
     }
   }, [internalId, translationCacheQ.data])
+
+  // Path A 的 llm_agent 译文覆盖率偏低；英文邮件命中后后台升级成 Path B cache。
+  // 不复用 translateMut，避免 loading/toast/showTranslation 等用户可见副作用。
+  useEffect(() => {
+    if (internalId === null || !langIsEn) return
+    const cache = translationCacheQ.data
+    if (!cache || cache.source !== 'llm_agent') return
+    if (llmAgentUpgradeFired.has(internalId)) return
+    llmAgentUpgradeFired.add(internalId)
+    void (async () => {
+      try {
+        await mailApi.ai.translateBatch(internalId, 'zh')
+        await queryClient.invalidateQueries({
+          queryKey: ['email', internalId, 'translation', 'zh']
+        })
+      } catch (err) {
+        console.warn('llm_agent translation cache upgrade failed', err)
+      }
+    })()
+  }, [internalId, langIsEn, mailApi, queryClient, translationCacheQ.data])
 
   // 显示原文 / 显示译文 切换。在 Path B 翻译中按显示原文不取消 mutation, 因为
   // 写 cache 是有价值的; 用户随时可以再切回译文。
@@ -640,14 +667,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   }
 
   const email = detailQ.data
-  const ai = aiQ.data ?? null
   const fromParsed = parseSender(email.sender)
   const fromName = email.sender_name || fromParsed.name
   const fromAddr = fromParsed.email || email.sender
-  // Route through mapLanguage so the EN pip survives LLM enum drift
-  // ("English" / "en" / "en-US" all resolve to 'en'). NOTES 2026-05-17 #7.
-  const langRaw = ai?.labels_raw?.language
-  const langIsEn = mapLanguage(typeof langRaw === 'string' ? langRaw : null) === 'en'
   // Sprint 13 — AttachmentList now owns the inline / derived filter so it
   // can surface derived-from children inline as "→ pdf · 142 KB" chips
   // instead of cluttering the grid with sibling tiles. We just hand it

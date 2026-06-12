@@ -1,6 +1,6 @@
 // Sprint Immersive-Translate — translate.ts handler tests.
 //
-// 覆盖 7 个轴:
+// 覆盖 10 个轴:
 //   1. happy path: extractBlocks → batched LLM → returns segments + writes cache
 //   2. empty body_html → E_NO_BODY (before fetch, no API spend)
 //   3. missing API key → E_NO_LLM_KEY (before fetch)
@@ -8,6 +8,9 @@
 //   5. abort via abortAllTranslations → in-flight batches reject
 //   6. JSON parse failure in one batch → that batch failed, others continue
 //   7. cache get / delete roundtrip
+//   8. batch assembly: count cap + char budget
+//   9. cache anti-downgrade guard
+//  10. no existing cache still writes normally
 //
 // Mocks: getDb + resolveDbPath (in-memory better-sqlite3 fixture),
 // llm_settings (mocked key + base + model), global fetch.
@@ -120,6 +123,62 @@ function ok(text: string): { ok: true; json: () => Promise<unknown> } {
       model: 'test-model'
     })
   }
+}
+
+function insertEmail(internalId: number, bodyHtml: string): void {
+  fixtureDb.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
+    .run(internalId, `m${internalId}@x`, 'pending', 1, 1)
+  fixtureDb.prepare('INSERT INTO email_body VALUES (?,?,?)').run(internalId, bodyHtml, '')
+}
+
+function htmlParagraphs(count: number, textFor: (idx: number) => string): string {
+  return Array.from({ length: count }, (_, i) => `<p>${textFor(i)}</p>`).join('\n')
+}
+
+function exactEnglishText(prefix: string, length: number): string {
+  let out = prefix
+  while (out.length < length) out += 'alpha beta gamma delta '
+  out = out.slice(0, length)
+  return out.endsWith(' ') ? out.slice(0, -1) + 'x' : out
+}
+
+function seedTranslationCache(internalId: number, count: number): void {
+  const oldSegments = Array.from({ length: count }, (_, i) => ({
+    src: `old src ${i}`,
+    tgt: `old tgt ${i}`
+  }))
+  fixtureDb
+    .prepare(
+      `INSERT INTO email_translation
+         (internal_id, target_lang, segments_json, model, source, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(internalId, 'zh', JSON.stringify(oldSegments), 'old-model', 'llm_agent', 1, 1)
+}
+
+function cachedSegmentCount(internalId: number): number {
+  const row = fixtureDb
+    .prepare('SELECT segments_json FROM email_translation WHERE internal_id = ?')
+    .get(internalId) as { segments_json: string } | undefined
+  if (!row) return 0
+  return (JSON.parse(row.segments_json) as unknown[]).length
+}
+
+function mockEchoTranslation(calls?: Array<{ count: number; chars: number }>): void {
+  fetchMock.mockImplementation((_url, init) => {
+    const reqBody = JSON.parse((init as RequestInit).body as string)
+    const segs = JSON.parse(reqBody.messages[0].content as string) as Array<{
+      id: string
+      text: string
+    }>
+    calls?.push({
+      count: segs.length,
+      chars: segs.reduce((sum, s) => sum + s.text.length, 0)
+    })
+    return Promise.resolve(
+      ok(JSON.stringify(segs.map((s, i) => ({ id: s.id, tgt: `译文 ${i}` }))))
+    )
+  })
 }
 
 describe('translateBatch', () => {
@@ -276,5 +335,80 @@ describe('translateBatch', () => {
     // Aborted batches show up as failures; segments empty.
     expect(captured?.aborted).toBe(true)
     expect(result.failedBatches).toBeGreaterThan(0)
+  })
+
+  test('batch assembly respects count cap: 11 short blocks → 2 batches', async () => {
+    insertEmail(
+      103,
+      htmlParagraphs(11, (i) => `This is short translatable paragraph number ${i} for batching.`)
+    )
+    const calls: Array<{ count: number; chars: number }> = []
+    mockEchoTranslation(calls)
+
+    const result = await handler.translateBatch({ internalId: 103 })
+
+    expect(result.totalBatches).toBe(2)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(calls.map((c) => c.count)).toEqual([10, 1])
+  })
+
+  test('batch assembly respects char budget: 4 x 800-char blocks → 2 batches (3 + 1)', async () => {
+    insertEmail(
+      104,
+      htmlParagraphs(4, (i) => exactEnglishText(`Long paragraph ${i}. `, 800))
+    )
+    const calls: Array<{ count: number; chars: number }> = []
+    mockEchoTranslation(calls)
+
+    const result = await handler.translateBatch({ internalId: 104 })
+
+    expect(result.totalBatches).toBe(2)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(calls.map((c) => c.count)).toEqual([3, 1])
+    expect(calls.map((c) => c.chars)).toEqual([2400, 800])
+  })
+
+  test('cache guard keeps old row when fresh result has fewer segments', async () => {
+    insertEmail(
+      105,
+      htmlParagraphs(2, (i) => `This downgrade test paragraph ${i} should translate.`)
+    )
+    seedTranslationCache(105, 5)
+    mockEchoTranslation()
+
+    const result = await handler.translateBatch({ internalId: 105 })
+
+    expect(result.segments).toHaveLength(2)
+    expect(result.cacheKept).toBe(true)
+    expect(cachedSegmentCount(105)).toBe(5)
+  })
+
+  test('cache guard overwrites old row when fresh result has more segments', async () => {
+    insertEmail(
+      106,
+      htmlParagraphs(8, (i) => `This upgrade test paragraph ${i} should translate.`)
+    )
+    seedTranslationCache(106, 5)
+    mockEchoTranslation()
+
+    const result = await handler.translateBatch({ internalId: 106 })
+
+    expect(result.segments).toHaveLength(8)
+    expect(result.cacheKept).toBeUndefined()
+    expect(cachedSegmentCount(106)).toBe(8)
+  })
+
+  test('cache guard writes normally when no old row exists', async () => {
+    insertEmail(
+      107,
+      htmlParagraphs(2, (i) => `This fresh cache paragraph ${i} should translate.`)
+    )
+    mockEchoTranslation()
+
+    const result = await handler.translateBatch({ internalId: 107 })
+
+    expect(result.segments).toHaveLength(2)
+    expect(result.cacheKept).toBeUndefined()
+    expect(cachedSegmentCount(107)).toBe(2)
   })
 })

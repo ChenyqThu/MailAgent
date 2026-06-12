@@ -67,17 +67,17 @@ export function getLlmModel(): string {
 }
 
 /**
- * Translate-specific model override. Empty/unset → Haiku 4.5 — translation
- * needs speed > nuance, and Haiku is ~3-5× faster than Sonnet 4.6 with
- * comparable quality. Model name follows CRS's "no date stamp" convention
- * (matches .env.example's `claude-sonnet-4-6` style); Anthropic's official
- * date-stamped names like `claude-haiku-4-5-20251001` fail CRS account
- * lookup and surface as a Cloudflare 502.
+ * Translate-specific model override. Empty/unset → Sonnet 4.6 — 翻译质量优先,
+ * 且 64K max output 能承接长文批翻。用户仍可在 Settings 下拉切回更快模型。
+ * Model name follows CRS's "no date stamp" convention (matches .env.example's
+ * `claude-sonnet-4-6` style); Anthropic's official date-stamped names like
+ * `claude-haiku-4-5-20251001` fail CRS account lookup and surface as a
+ * Cloudflare 502.
  */
 export function getLlmTranslateModel(): string {
   const fromEnv = process.env['LLM_TRANSLATE_MODEL']
   if (fromEnv && fromEnv.length > 0) return fromEnv
-  return 'claude-haiku-4-5'
+  return 'claude-sonnet-4-6'
 }
 
 /**
