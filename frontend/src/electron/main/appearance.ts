@@ -26,7 +26,6 @@ const SETTINGS_FILE = join(app.getPath('userData'), 'appearance.json')
 
 /* 不透明首帧底色 — 与 renderer pre-paint anchor 同色 (index.html bootstrap)。 */
 const OPAQUE_BG = '#0E1013'
-const TRANSPARENT_BG = '#00000000'
 
 function readSettings(): PersistedSettings {
   const out: PersistedSettings = { themeMode: 'system', surface: 'frosted' }
@@ -85,12 +84,18 @@ export function surfaceWindowOptions(): Electron.BrowserWindowConstructorOptions
       // 'fullscreen-ui' (Control Center / Spotlight 同款) — 透出桌面壁纸
       // 明显。初版用 'under-window', 是 macOS 透感最弱的材质 (模拟窗口
       // 下层背景, 暗色下近乎不透明深灰), 用户反馈"看不出玻璃"。
+      //
+      // 🔴 frosted 分支绝不能设 backgroundColor: Electron 对非 transparent
+      // 窗口会丢弃 backgroundColor 的 alpha ('#00000000' 实际落成不透明),
+      // 把 vibrancy 层整个挡死 (真机「零透明」事故)。vibrancy 窗口不设
+      // backgroundColor 时 Electron 内部走透明 webContents 背景 — 官方
+      // vibrancy 示例同款。调用方 (index.ts createWindow/createPopoutWindow)
+      // 也不得在 spread 之外再写 backgroundColor。
       vibrancy: 'fullscreen-ui',
-      visualEffectState: 'active',
-      backgroundColor: TRANSPARENT_BG
+      visualEffectState: 'active'
     }
   }
-  return { backgroundMaterial: 'acrylic', backgroundColor: TRANSPARENT_BG }
+  return { backgroundMaterial: 'acrylic' }
 }
 
 /** 运行时开关原生材质 + 回写 data-vib。solid → 关 vibrancy + 不透明底。 */
@@ -103,7 +108,11 @@ export function applyNativeSurface(win: BrowserWindow, surface: SurfaceStyle): v
     } else if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
       win.setBackgroundMaterial(frosted && isWin11() ? 'acrylic' : 'none')
     }
-    win.setBackgroundColor(nativeSurfaceActive(surface) ? TRANSPARENT_BG : OPAQUE_BG)
+    // 透明腿不走 setBackgroundColor('#00000000') — alpha 同样被丢弃, 反而
+    // 把构造时的透明背景盖死。只有切回 solid (无原生材质) 才设不透明锚;
+    // solid → frosted 的运行时切换若留有不透明残留, 重启窗口即恢复
+    // (构造路径已正确)。
+    if (!nativeSurfaceActive(surface)) win.setBackgroundColor(OPAQUE_BG)
   } catch {
     /* 平台不支持的调用一律降级为「无原生材质」, 由下方回写让 CSS 走回退 */
   }

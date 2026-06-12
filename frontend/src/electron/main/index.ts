@@ -147,12 +147,13 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
     show: false,
     title: 'MailAgent',
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0E1013',
     // 主题 v2 — frosted 时由 OS 提供整窗唯一一层重模糊 (macOS vibrancy /
-    // Win11 acrylic) + 透明底, 用持久化 surface 让首帧免闪; solid /
-    // Linux / Win10 覆盖回不透明。onboarding 向导窗保持不透明 (.ob 自带
-    // 不透明底, 开了 vibrancy 也看不见, 不必引入透明窗复杂度)。
-    ...(opts.onboarding ? {} : surfaceWindowOptions()),
+    // Win11 acrylic), 用持久化 surface 让首帧免闪; solid / Linux / Win10
+    // 由 surfaceWindowOptions 给不透明锚。🔴 frosted 路径不能出现任何
+    // backgroundColor (含本对象字面量里的) — 非 transparent 窗口会丢弃
+    // alpha, 不透明底直接盖死 vibrancy (真机「零透明」)。onboarding 向导
+    // 窗保持不透明 (.ob 自带不透明底, 不必引入透明窗复杂度)。
+    ...(opts.onboarding ? { backgroundColor: '#0E1013' } : surfaceWindowOptions()),
     webPreferences: {
       // electron-vite outputs the preload bundle as `.mjs` (ESM); Electron 28+
       // loads .mjs preloads natively. Sprint 1 hardcoded `.js` and the file
@@ -222,8 +223,9 @@ function createPopoutWindow(emailId: number): void {
     show: false,
     title: 'MailAgent — AI Chat',
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0E1013',
     // 主题 v2 — popout 与主窗同走「一块玻璃」(PopoutShell 已去不透明底)。
+    // backgroundColor 完全交给 surfaceWindowOptions: frosted 路径不能出现
+    // 任何不透明锚 (alpha 被丢弃会盖死 vibrancy, 见 createWindow 注释)。
     ...surfaceWindowOptions(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
