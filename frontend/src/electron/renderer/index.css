@@ -130,11 +130,13 @@
    * v1 的 --glass/--glass-lg (28/40px 全屏 blur) 永久退役: OS vibrancy/
    * acrylic 扛唯一一层重模糊, CSS 只画 tint + 氛围光; 面板差异只来自
    * --tier-* overlay。--glass-stroke 更名 --hairline (全文件已替换)。 */
-  --hairline: rgb(255 255 255 / 0.085);
-  --hairline-strong: rgb(255 255 255 / 0.16);
+  /* round 6 — hairline 全系弱化 (.085→.065 / .16→.13): 用户反馈分割线把
+   * 界面切得太碎, 要「稍微弱化避免割裂感」。 */
+  --hairline: rgb(255 255 255 / 0.065);
+  --hairline-strong: rgb(255 255 255 / 0.13);
   /* EmailRow 行间分割线 — 用户定稿: 两主题都是白色 1px 细线 (亮色不沿用
    * hairline 的深灰, 浅底上走白色蚀刻线, alpha 抬高才可见)。 */
-  --row-divider: rgb(255 255 255 / 0.085);
+  --row-divider: rgb(255 255 255 / 0.065);
   --pop-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.08),
     0 24px 60px rgb(0 0 0 / 0.55),
@@ -319,9 +321,12 @@
   /* 主题 v2 — 亮色玻璃 token (theme-v2.css light 块照搬)。hairline 转
    * 深色细线 (亮纸上白线不可见); 亮色偏离暗色定稿默认的两项 (sat 1.4 /
    * ambient 0.16) 是可读性护栏 (规范 §3.1), 其余与暗色共用。 */
-  --hairline: rgb(15 23 42 / 0.1);
-  --hairline-strong: rgb(15 23 42 / 0.16);
-  --row-divider: rgb(255 255 255 / 0.7);
+  /* round 6 — 亮色 hairline 比暗色降更多 (.1→.06 / .16→.1): round 4 用它
+   * 统一分割线后, 深灰 10% 在亮底上比原 ink-border-soft 浅灰线显眼一截
+   * (用户报「加白/加粗了? 割裂感反而强了」— 实为换色变明显)。 */
+  --hairline: rgb(15 23 42 / 0.06);
+  --hairline-strong: rgb(15 23 42 / 0.1);
+  --row-divider: rgb(255 255 255 / 0.5);
   --pop-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.85),
     0 18px 50px rgb(18 24 46 / 0.18),
@@ -999,14 +1004,15 @@ body::before {
   color: rgb(var(--c-accent-hi));
 }
 
-/* 暗色玻璃 hover 止血 (round 5) — v1 的 hover:bg-ink-3/4 是不透明深灰,
- * 在透壁纸玻璃上 hover 出一块死色补丁 (用户报「hover 主菜单实色丑」)。
- * 属性子串规则把 93 处消费点零 diff 收编成半透白 wash (同上方亮色 chip
- * 护栏手法)。solid 档维持 v1 实底 hover 语言, 不收编。 */
-:root[data-theme='dark']:not([data-surface='solid']) [class*='hover:bg-ink-3']:hover {
+/* 玻璃 hover 止血 (round 5, round 6 扩两主题) — v1 的 hover:bg-ink-3/4
+ * 是不透明实色 (暗=深灰补丁 / 亮=ink-3 纯白「漂白补丁」), 在透壁纸玻璃上
+ * 都突兀。属性子串规则把 93 处消费点零 diff 收编成 ink-fg 半透 wash —
+ * 它随主题翻转: 暗色 ink-fg 近白=轻提亮, 亮色 ink-fg 近黑=轻加深。
+ * solid 档维持 v1 实底 hover 语言, 不收编。 */
+:root:not([data-surface='solid']) [class*='hover:bg-ink-3']:hover {
   background-color: rgb(var(--ink-fg) / 0.07);
 }
-:root[data-theme='dark']:not([data-surface='solid']) [class*='hover:bg-ink-4']:hover {
+:root:not([data-surface='solid']) [class*='hover:bg-ink-4']:hover {
   background-color: rgb(var(--ink-fg) / 0.1);
 }
 
