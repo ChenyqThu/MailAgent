@@ -128,6 +128,9 @@
    * --tier-* overlay。--glass-stroke 更名 --hairline (全文件已替换)。 */
   --hairline: rgb(255 255 255 / 0.085);
   --hairline-strong: rgb(255 255 255 / 0.16);
+  /* EmailRow 行间分割线 — 用户定稿: 两主题都是白色 1px 细线 (亮色不沿用
+   * hairline 的深灰, 浅底上走白色蚀刻线, alpha 抬高才可见)。 */
+  --row-divider: rgb(255 255 255 / 0.085);
   --pop-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.08),
     0 24px 60px rgb(0 0 0 / 0.55),
@@ -309,6 +312,7 @@
    * ambient 0.16) 是可读性护栏 (规范 §3.1), 其余与暗色共用。 */
   --hairline: rgb(15 23 42 / 0.1);
   --hairline-strong: rgb(15 23 42 / 0.16);
+  --row-divider: rgb(255 255 255 / 0.7);
   --pop-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.85),
     0 18px 50px rgb(18 24 46 / 0.18),
@@ -1274,8 +1278,8 @@ body::before {
     to right,
     transparent 0,
     transparent var(--chevron-col-w),
-    var(--hairline) var(--chevron-col-w),
-    var(--hairline) 100%
+    var(--row-divider) var(--chevron-col-w),
+    var(--row-divider) 100%
   );
   background-repeat: no-repeat;
   background-position: 0 100%;
@@ -1302,8 +1306,8 @@ body::before {
       to right,
       transparent 0,
       transparent var(--chevron-col-w),
-      var(--hairline) var(--chevron-col-w),
-      var(--hairline) 100%
+      var(--row-divider) var(--chevron-col-w),
+      var(--row-divider) 100%
     );
   background-repeat: no-repeat, no-repeat;
   background-position:
@@ -1325,8 +1329,8 @@ body::before {
       to right,
       transparent 0,
       transparent var(--chevron-col-w),
-      var(--hairline) var(--chevron-col-w),
-      var(--hairline) 100%
+      var(--row-divider) var(--chevron-col-w),
+      var(--row-divider) 100%
     );
   /* longhand 与暗色 rule 重复声明 — 不依赖层叠保留: 若只覆 image 不覆
    * size, 日后改层数会让 size 数组错位、分割线被拉成整块。 */
@@ -4105,7 +4109,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   grid-template-columns: 34px 1fr;
   gap: 3px 12px;
   padding: 13px 16px 14px;
-  border-bottom: 1px solid var(--hairline); /* 主题 v2 — 列表行分割线统一 hairline */
+  border-bottom: 1px solid var(--row-divider); /* 行间分割线 — 与 EmailRow 同源白色细线 */
   cursor: pointer;
   transition: background-color 120ms ease;
 }
