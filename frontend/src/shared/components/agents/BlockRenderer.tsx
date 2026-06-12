@@ -122,8 +122,11 @@ function OverviewBlock({
         fontSize: ctx.layout === 'document' ? 15.5 : 14.5,
         lineHeight: 1.75,
         color: muted ? 'rgb(var(--ink-fg-3))' : 'rgb(var(--ink-fg-1))',
-        textWrap: 'pretty',
-        maxWidth: 680
+        // 行宽跟容器: document 布局外层已有 720 居中容器管可读行长;
+        // console 卡片里 stat_row/callout 等块全部撑满卡片宽, overview 单独
+        // 限 680 会让第一段右缘明显窄于下方块 — 用户观感"摘要提前换行"
+        // (dogfood round 3)。textWrap pretty 保留防孤字。
+        textWrap: 'pretty'
       }}
     >
       {mdLite(block.text)}
