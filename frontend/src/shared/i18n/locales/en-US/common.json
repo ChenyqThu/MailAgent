@@ -348,7 +348,13 @@
       "countLabel": "{n} / {total}",
       "untitled": "(no subject)",
       "emptyTitle": "No matching emails",
-      "emptyHint": "Try a shorter query, or append * for Chinese terms (e.g. 产品*)"
+      "emptyHint": "Try a shorter query, or append * for Chinese terms (e.g. 产品*)",
+      "syntaxLabel": "Search by field",
+      "syntaxFrom": "sender",
+      "syntaxAfter": "after date",
+      "syntaxHas": "has attachment",
+      "syntaxUnread": "unread only",
+      "syntaxHint": "Combine them, e.g. from:alice has:attachment"
     },
     "actions": {
       "subtitle": "on {n, plural, one {# result} other {# results}}",
