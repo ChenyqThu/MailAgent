@@ -59,7 +59,7 @@ function StatCard({
     <div
       className={cn(
         'rounded-md border p-3',
-        accent ? 'border-coral/30 bg-coral/5' : 'border-ink-border bg-[var(--tier-panel)]'
+        accent ? 'border-coral/30 bg-coral/5' : 'border-ink-border'
       )}
     >
       <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1">{label}</div>
@@ -238,7 +238,7 @@ export function LlmDashboardPage(): React.ReactElement {
         </h1>
         <div className="flex items-center gap-2">
           {/* Range chips — segmented control */}
-          <div className="inline-flex rounded-md border border-ink-border bg-[var(--tier-panel)] p-0.5">
+          <div className="inline-flex rounded-md border border-ink-border p-0.5">
             {RANGES.map((r) => (
               <button
                 key={r.days}
@@ -304,13 +304,13 @@ export function LlmDashboardPage(): React.ReactElement {
           </section>
 
           <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3">
+            <div className="rounded-md border border-ink-border p-3">
               <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
                 {t('llm.statusDist')}
               </div>
               <StatusDonut counts={data.by_status} />
             </div>
-            <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3 space-y-3">
+            <div className="rounded-md border border-ink-border p-3 space-y-3">
               <div>
                 <div className="text-micro font-mono uppercase text-ink-fg-2 mb-2">
                   {t('llm.cacheHit')}

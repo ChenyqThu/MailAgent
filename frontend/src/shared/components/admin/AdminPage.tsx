@@ -93,7 +93,7 @@ function StatCard({
   hint?: string
 }): React.ReactElement {
   return (
-    <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3">
+    <div className="rounded-md border border-ink-border p-3">
       <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1">{label}</div>
       <div className="text-lead text-ink-fg tabular-nums">{value}</div>
       {hint && <div className="text-meta text-ink-fg-3 mt-1">{hint}</div>}
@@ -317,13 +317,13 @@ export function AdminPage(): React.ReactElement {
             <StatCard label={t('admin.lastRowId')} value={stats.last_max_row_id ?? '—'} />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3">
+            <div className="rounded-md border border-ink-border p-3">
               <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
                 {t('admin.statusDist')}
               </div>
               <StatusHistogram counts={stats.by_status} />
             </div>
-            <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3">
+            <div className="rounded-md border border-ink-border p-3">
               <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
                 {t('admin.byMailbox')}
               </div>
@@ -373,7 +373,7 @@ export function AdminPage(): React.ReactElement {
           {t('admin.deadLetter')}
           <span className="text-meta font-mono text-ink-fg-2">({dlQ.data?.length ?? 0})</span>
         </h2>
-        <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] overflow-hidden">
+        <div className="rounded-md border border-ink-border overflow-hidden">
           {dlQ.isLoading ? (
             <div>
               <SkeletonRow />
