@@ -145,7 +145,14 @@ export function EnvSecretField({
             'disabled:opacity-40 disabled:pointer-events-none'
           )}
         >
-          {revealed ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+          <span className="icon-swap">
+            <span className="icon-swap-item" data-active={revealed ? 'true' : 'false'}>
+              <EyeOff className="size-4" />
+            </span>
+            <span className="icon-swap-item" data-active={revealed ? 'false' : 'true'}>
+              <Eye className="size-4" />
+            </span>
+          </span>
         </button>
       </div>
     </Row>

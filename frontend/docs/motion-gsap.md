@@ -111,7 +111,11 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 - Toast 通用退场：AnimatePresence-lite（ToastContainer diff store items + 延迟卸载），TTL/手动/demote 三路径统一 slide-out。
 - 滑动 indicator：view-chip + Inbox tab 激活态用绝对定位 indicator + GSAP x/width 滑动（getBoundingClientRect 测量）。
 - 展开：AdvancedDisclosure（受控 + CSS grid-rows，保 a11y）/ ToolCallAuditRow（CSS grid-rows）。
-- §8 曲线收口：移除全部旧第二曲线 `cubic-bezier(0.32,0.72,0,1)`（folder-modal / efm-modal / batch-bar / undo-toast / view-chip / inbox-tab），统一 standard。
+- §8 曲线收口：移除全部旧第二曲线 `cubic-bezier(0.32,0.72,0,1)`（folder-modal / efm-modal / batch-bar / undo-toast / view-chip / inbox-tab），统一 standard。二轮收口（transitions.dev review 轮）：清掉漏网的 `.app-nav`(260ms 旧曲线→220 standard) / `.drawer`(0.26s 旧曲线→220 standard) / glass 切档(280→220) / nav label fade(140 linear→120 standard) / drawer-backdrop(0.2s→220 standard)。
+- 微交互原语（transitions.dev review 轮新增）：
+  - `.icon-swap`/`.icon-swap-item`（index.css）：同 slot 双图标 cross-fade（opacity+scale 0.85，120ms standard，**无 blur** —— filter 永不过渡红线）。已接：copy→check（RemoteAccessTab）/ Eye↔EyeOff（EnvField+EnvSecretField）/ 主题三态（ThemePickerPopover trigger）。data-active 必须传字符串 `'true'/'false'`。
+  - 树状展开 chevron：单 `<ChevronRight>` + `transition-transform duration-fast` + 条件 `rotate-90`（SidebarFolderTree），**不用双图标 swap**——旋转比 cross-fade 自然。
+- 出入场补缺（同轮）：EventFormModal 周期 scope 确认 / FolderPicker 删除确认 / AccountSwitcherPopover 接入 useExitAnimation。
 
 **有意延后**（透明记录，非遗漏）：
 - **ui/tabs underline 滑动 indicator**：全仓仅 SettingsRail 消费 Tabs 且全 `orientation=vertical`，横向 coral underline 零渲染实例 → 做了等于 dead code，跳过。
@@ -122,7 +126,17 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 **canvas / 数学曲线 loader = 不采用**（用户拍板 2026-05-29）。理由：站点上的曲线本质是
 spring/elastic/fourier，违 §8 禁 spring/bounce/elastic + "This is a tool." 克制哲学；
 独立审计也确认现有 `animate-spin`（图标）+ skeleton `animate-pulse` 已 100% 合规且足够。
-loading 不该成为视觉焦点。**loading 只用这两个 §8 词汇**，别引入装饰性 canvas/rAF 逐帧动画。
+loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 用户拍板把 shimmer text 纳入第三员），
+别引入装饰性 canvas/rAF 逐帧动画：
+1. `animate-spin` —— 图标类进行中指示。
+2. skeleton `animate-pulse` —— 块级占位。
+3. `.think-shimmer` —— **文字类** in-progress 标签（思考中/翻译中/生成中/加载中…）的唯一写法：
+   bg-clip-text 渐变扫过，1.5s linear loop（loop 类同 pulse 豁免三档时长）。AI 语境（chat 面板内）
+   用默认 `--c-ai` 高光；其余加 `.shimmer-neutral` 切 ink-fg 中性高光。reduced-motion 由 index.css
+   末尾 @media 块统一降级为纯色文字（纯 CSS 动画不经 GSAP，CSS @media 足够，无需 JS 判断）。
+   已接：chat thinking 头 / ToolGroup running / pre-answer「AI 思考中…」/「翻译中…」/
+   报告「生成中」/ 邮件正文「加载中…」。spinner 与 shimmer **不并存**于同一条 loading 行
+   （双动效闹；ReportsTab GeneratingState 的页级 spin 是既有信息锚点，例外保留）。
 
 **骨架屏 + 渐进式加载**（工具型 app「高级感」的正解）：
 - 骨架原语：`feedback/LoadingSkeleton.tsx`（`Skeleton`/`SkeletonRow`/`SkeletonCard`，自带 `animate-pulse motion-reduce:animate-none`）+ `EmptyState`。

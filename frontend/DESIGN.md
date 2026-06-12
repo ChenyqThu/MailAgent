@@ -958,6 +958,12 @@ scroll-jacking. This is a tool.
 - `animate-pulse` (Tailwind default) on skeleton rows.
 - `animate-spin` on the sync/loading icon.
 - Streaming text cursor `▎` blink (1s steps(2)).
+- `.think-shimmer` text shimmer (1.5s loop) on in-progress *text* labels
+  (thinking / translating / generating / loading) — the third loading word
+  alongside spin + pulse. Never pair it with a spinner on the same line.
+- `.icon-swap` cross-fade (opacity + scale, 120ms) when two icons share one
+  slot (copy→check, eye toggle, theme tri-state). No blur — filter is never
+  transitioned.
 
 > **GSAP 落地规范** → [`docs/motion-gsap.md`](docs/motion-gsap.md)。退场/出入场统一、
 > 虚拟列表铁律、Radix 共存、reduced-motion JS 策略、`useExitAnimation` API 全在那里。

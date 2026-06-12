@@ -398,8 +398,9 @@ export function Sidebar(): React.ReactElement {
       </div>
 
       {/* ── Account dropdown popover (expanded only — V1 single account) ─ */}
-      {accountOpen && !collapsed && (
+      {!collapsed && (
         <AccountSwitcherPopover
+          open={accountOpen}
           account={account}
           anchorRef={accountButtonRef}
           onClose={() => setAccountOpen(false)}

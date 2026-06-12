@@ -135,11 +135,11 @@ function SidebarFolderRow({
               }}
               className="shrink-0 -ml-1 inline-flex items-center justify-center w-4 h-4 rounded text-ink-fg-2 hover:text-ink-fg"
             >
-              {isOpen ? (
-                <ChevronDown size={12} strokeWidth={2} />
-              ) : (
-                <ChevronRight size={12} strokeWidth={2} />
-              )}
+              <ChevronRight
+                size={12}
+                strokeWidth={2}
+                className={cn('transition-transform duration-fast', isOpen && 'rotate-90')}
+              />
             </span>
           ) : depth > 0 ? (
             <span className="shrink-0 w-4 h-4" aria-hidden="true" />

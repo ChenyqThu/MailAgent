@@ -519,7 +519,14 @@ function UrlPill({
           'transition-colors duration-fast ease-standard'
         )}
       >
-        {copied ? <CheckCircle2 className="size-3.5 text-ok" /> : <Copy className="size-3.5" />}
+        <span className="icon-swap">
+          <span className="icon-swap-item" data-active={copied ? 'true' : 'false'}>
+            <CheckCircle2 className="size-3.5 text-ok" />
+          </span>
+          <span className="icon-swap-item" data-active={copied ? 'false' : 'true'}>
+            <Copy className="size-3.5" />
+          </span>
+        </span>
       </button>
     </div>
   )
