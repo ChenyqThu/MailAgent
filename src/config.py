@@ -594,6 +594,15 @@ class Config(BaseSettings):
         default="127.0.0.1", env="DAVMAIL_HOST",
         description="DavMail JVM bind 地址 (PM2 davmail-poc 默认仅 127.0.0.1, 勿暴露公网)",
     )
+    davmail_root: str = Field(
+        default="", env="DAVMAIL_ROOT",
+        description=(
+            "davmail-poc 部署目录绝对路径 (watchdog 读 token/token.dat mtime + "
+            "logs/davmail.log)。留空 = 仓库根/davmail-poc (pm2 dev 模式 OK); "
+            "打包 .app 里 _REPO_ROOT 解析进 site-packages 找不到 token → 看板 "
+            "token 状态恒'未知', 必须在 userData .env 配绝对路径。"
+        ),
+    )
     davmail_imap_port: int = Field(
         default=1143, env="DAVMAIL_IMAP_PORT", description="DavMail IMAP 端口",
     )

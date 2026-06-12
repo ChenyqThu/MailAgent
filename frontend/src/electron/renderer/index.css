@@ -1280,6 +1280,19 @@ body::before {
   pointer-events: none;
 }
 
+/* chat BackendSelector segmented thumb — 亮色 = mockup 白 thumb (ink-3 亮色
+ * 即 255,255,255)；深色切 ink-5 (46,52,62, 比 track ink-2 亮 3 阶的 elevated
+ * surface)。此前硬编码 bg-white: 深色下白 thumb + active 文字 text-ink-fg
+ * (近白 232,234,238) = 白底白字不可读 (dogfood round 3 用户反馈)。
+ * tailwind darkMode:'class' 与本项目 data-theme 属性驱动不兼容 (dark: variant
+ * 全仓不可用), 故走 authored class 按 data-theme 翻转。 */
+.seg-thumb {
+  background: rgb(var(--ink-3));
+}
+:root[data-theme='dark'] .seg-thumb {
+  background: rgb(var(--ink-5));
+}
+
 /* Label cross-fade — softens the abrupt display:none flip during the
  * width transition. The labels still toggle; this just makes the brief
  * overlap less jarring (140ms linear < 260ms width). */

@@ -1335,16 +1335,24 @@ class MailWriteService:
             logger.warning(f"[compose] draft local mirror failed (reconcile 兜底): {e}")
 
     def delete_draft(self, internal_id: int, *, actor: Actor) -> DeleteDraftResult:
-        """删除草稿 (IMAP \\Deleted+EXPUNGE Exchange Drafts + 本地 delete_email_full)。
+        """删除草稿 (本地行先删 + SSE 即时刷, IMAP \\Deleted+EXPUNGE 后置)。
 
         草稿箱列表行的删除按钮走这里 — 区别于收件箱"删除"按钮的归档语义
         (flag→done): 草稿是未发出的本地物, 真删除才符合预期 (用户验收)。
         davmail-only (FolderImapReader gate); 仅 mailbox=草稿箱 的行可删。
-        IMAP 删除成功后本地行立即清理 (CASCADE body/附件/FTS), 不等 reconcile。
+
+        dogfood round 3 顺序反转: IMAP 链每次重建连接+probe 实测 6-13s
+        (davmail 慢窗口更久), 放在本地删之前会让 UI 等整条链才移除行。
+        现在本地 delete_email_full + SSE 在前 (行 <1s 消失), IMAP 在后;
+        IMAP 失败仅 warning — Exchange 残留由 reconcile 把行拉回 (自愈),
+        用户重删即可。行不存在 → 幂等成功 (连点第二次不再重复 IMAP 链)。
         """
         meta = self._ctx.sync_store.get(internal_id)
         if not meta:
-            raise ServiceInvalidArgError(f"邮件 {internal_id} 不存在")
+            # DELETE 幂等: 行已不在 (连点 / 已删) → 目标状态达成, 不走 IMAP。
+            return DeleteDraftResult(
+                internal_id=internal_id, imap_uid=0, local_deleted=False
+            )
         if (meta.get("mailbox") or "") not in ("草稿箱", "草稿", "Drafts"):
             raise ServiceInvalidArgError(
                 f"邮件 {internal_id} 不是草稿 (mailbox={meta.get('mailbox')!r}); "
@@ -1358,21 +1366,14 @@ class MailWriteService:
 
         require_write_auth(actor)
 
-        reader = self._folder_imap_reader()
-        if not reader.delete_message("drafts", int(imap_uid)):
-            raise ServiceError(
-                f"删除 Exchange 草稿失败 (uid={imap_uid}); 本地行保留, 可重试"
-            )
+        # ── 本地先删 + SSE: UI 即时移除行 + badge 减一 (events_bridge 对
+        # email.synced 宽 invalidate ['emails']+['mailboxes'])。 ──
         local_deleted = True
         try:
             self._ctx.email_repo.delete_email_full(internal_id)
-        except Exception as e:  # noqa: BLE001 — IMAP 已删, 本地残留交 reconcile 清
-            logger.warning(
-                f"[delete-draft] local cleanup failed (reconcile 兜底): {e}"
-            )
+        except Exception as e:  # noqa: BLE001 — 本地残留交 reconcile 清
+            logger.warning(f"[delete-draft] local delete failed (reconcile 兜底): {e}")
             local_deleted = False
-        # SSE 让远程 web / 其它窗口刷新列表+badge (events_bridge 对 email.synced
-        # 宽 invalidate ['emails']+['mailboxes']); Electron 本窗口由前端自 invalidate。
         try:
             from src.events.publisher import safe_publish
 
@@ -1384,6 +1385,15 @@ class MailWriteService:
             )
         except Exception:
             pass
+
+        # ── IMAP 后置 (慢链): 失败不抛 — 本地已删, 抛错会让前端报失败但行已
+        # 消失 (语义混乱); Exchange 残留由下次 reconcile to_add 拉回行重现。 ──
+        reader = self._folder_imap_reader()
+        if not reader.delete_message("drafts", int(imap_uid)):
+            logger.warning(
+                f"[delete-draft] IMAP delete failed uid={imap_uid} "
+                "(本地已删; Exchange 残留由 reconcile 拉回, 重删即可)"
+            )
         logger.info(f"[delete-draft] internal_id={internal_id} uid={imap_uid} done")
         return DeleteDraftResult(
             internal_id=internal_id, imap_uid=int(imap_uid), local_deleted=local_deleted

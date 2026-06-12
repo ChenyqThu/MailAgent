@@ -465,19 +465,23 @@ def _actor():
     return Actor(kind="test", authenticated=True, label="t")
 
 
-def test_delete_draft_happy_path(tmp_path):
+def test_delete_draft_happy_path_local_first(tmp_path):
+    """dogfood round 3: 本地删 + SSE 必须先于 IMAP 慢链 (UI 即时移除行)。"""
     svc = _delete_service(tmp_path)
     svc._ctx.sync_store.save_email({
         "internal_id": 5, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
         "sync_status": "synced", "backend_origin": "davmail", "imap_uid": 42,
     })
+    order = []
+    svc._ctx.email_repo.delete_email_full.side_effect = lambda i: order.append("local")
     reader = MagicMock()
-    reader.delete_message.return_value = True
+    reader.delete_message.side_effect = lambda f, u: (order.append("imap"), True)[1]
     svc._folder_imap_reader = MagicMock(return_value=reader)
 
     result = svc.delete_draft(5, actor=_actor())
     reader.delete_message.assert_called_once_with("drafts", 42)
     svc._ctx.email_repo.delete_email_full.assert_called_once_with(5)
+    assert order == ["local", "imap"]
     assert result.imap_uid == 42 and result.local_deleted is True
 
 
@@ -493,9 +497,9 @@ def test_delete_draft_rejects_non_draft(tmp_path):
         svc.delete_draft(6, actor=_actor())
 
 
-def test_delete_draft_imap_failure_keeps_local(tmp_path):
-    from src.services.errors import ServiceError
-
+def test_delete_draft_imap_failure_no_raise(tmp_path):
+    """IMAP 失败不抛 (本地已删, 抛错 = 前端报失败但行已消失的语义混乱);
+    Exchange 残留由 reconcile 拉回行自愈。"""
     svc = _delete_service(tmp_path)
     svc._ctx.sync_store.save_email({
         "internal_id": 7, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
@@ -504,6 +508,18 @@ def test_delete_draft_imap_failure_keeps_local(tmp_path):
     reader = MagicMock()
     reader.delete_message.return_value = False
     svc._folder_imap_reader = MagicMock(return_value=reader)
-    with pytest.raises(ServiceError):
-        svc.delete_draft(7, actor=_actor())
+
+    result = svc.delete_draft(7, actor=_actor())
+    svc._ctx.email_repo.delete_email_full.assert_called_once_with(7)
+    assert result.local_deleted is True and result.imap_uid == 43
+
+
+def test_delete_draft_idempotent_missing_row(tmp_path):
+    """行不存在 (连点第二次 / 已删) → 幂等成功, 不发起 IMAP 慢链。"""
+    svc = _delete_service(tmp_path)
+    svc._folder_imap_reader = MagicMock()
+
+    result = svc.delete_draft(99999, actor=_actor())
+    svc._folder_imap_reader.assert_not_called()
     svc._ctx.email_repo.delete_email_full.assert_not_called()
+    assert result.imap_uid == 0 and result.local_deleted is False

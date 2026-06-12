@@ -20,6 +20,7 @@ import { Minus, Plus, RotateCw, X } from 'lucide-react'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { useAppearance, type BodyFont } from '@shared/state/appearance'
+import { adaptHtmlForDarkMode } from '@shared/lib/emailDarkMode'
 import { EMAIL_PURIFY_OPTS } from '@shared/lib/emailSanitize'
 import type { EmailDetail, TranslationSegment } from '@shared/api/types'
 
@@ -342,6 +343,12 @@ export function EmailBodyFrame({
       // glyph rather than the data:URL pipeline failing silently.
       return _whole
     })
+    // dogfood round 3 — 深色主题下邮件自带 inline color/bgcolor 覆盖 BODY_CSS
+    // token (黑字配深底不可读)。保色相亮度翻转 (HSL 只翻 L, 蓝仍是蓝), 亮背景
+    // 移除露主题底, 发件人 authored 深底配色整树保留。详见 emailDarkMode.ts。
+    if (resolvedTheme === 'dark') {
+      sanitized = adaptHtmlForDarkMode(sanitized)
+    }
     // Sprint 14 round 15 — no inline <script>.  iframe sandbox is
     // `allow-same-origin` *without* `allow-scripts`, so any inline
     // script we put inside srcDoc would never execute and the iframe

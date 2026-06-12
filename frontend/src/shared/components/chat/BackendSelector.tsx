@@ -74,12 +74,14 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
         aria-label={t('chat.backend.selectorLabel')}
         className="relative flex rounded-[10px] bg-ink-2 border border-ink-border p-[3px]"
       >
-        {/* Sliding white thumb — half the track width minus the 3px padding gutter,
-            translated to the right half for custom-api. */}
+        {/* Sliding thumb — half the track width minus the 3px padding gutter,
+            translated to the right half for custom-api. Color via authored
+            .seg-thumb (index.css): light = mockup white, dark = ink-5 elevated
+            (bg-white 在深色下与 text-ink-fg 白底白字, dogfood round 3). */}
         <span
           aria-hidden
           className={cn(
-            'absolute top-[3px] bottom-[3px] left-[3px] rounded-[7px] bg-white',
+            'absolute top-[3px] bottom-[3px] left-[3px] rounded-[7px] seg-thumb',
             'shadow-[0_1px_2px_rgba(28,34,48,0.10),0_0_0_0.5px_rgba(28,34,48,0.04)]',
             !reduceMotion && 'transition-transform duration-fast ease-out'
           )}

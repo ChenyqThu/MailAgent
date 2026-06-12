@@ -88,8 +88,9 @@ describe('EmailToolbar — write button wiring', () => {
     const onToggleFlag = vi.fn()
     render(<EmailToolbar onToggleFlag={onToggleFlag} isFlagged={true} />)
     const btn = screen.getByRole('button', { name: /^标旗$/ })
-    // active=true gives text-urg per Ghost component.
-    expect(btn.className).toContain('text-urg')
+    // active=true gives text-coral (主题 accent) — v0.7.1 round 2 把固定橙黄
+    // text-urg 换成跟随主题的 accent (用户反馈 active 填充色应是主题高亮色)。
+    expect(btn.className).toContain('text-coral')
   })
 
   test('notionUrl renders a Notion button that opens in a new tab on click', () => {

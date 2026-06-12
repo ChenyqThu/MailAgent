@@ -273,10 +273,17 @@ class EmailNotionSyncApp:
         self.davmail_watchdog = None
         if self.backend.backend_origin == "davmail":
             from src.mail.davmail_watchdog import DavMailWatchdog
+            # DAVMAIL_ROOT 显式配置优先 — 打包 .app 里 _REPO_ROOT 解析进
+            # site-packages, token.dat/davmail.log 都找不到 (看板 token 恒'未知')。
+            _davmail_root = (
+                Path(config.davmail_root)
+                if config.davmail_root
+                else _REPO_ROOT / "davmail-poc"
+            )
             self.davmail_watchdog = DavMailWatchdog(
                 sync_store=self.watcher.sync_store,
                 alerter=self.alerter,
-                davmail_root=_REPO_ROOT / "davmail-poc",
+                davmail_root=_davmail_root,
                 imap_host=config.davmail_imap_host,
                 imap_port=config.davmail_imap_port,
                 smtp_port=config.davmail_smtp_port,
