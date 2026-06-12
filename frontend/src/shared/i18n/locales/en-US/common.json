@@ -1834,6 +1834,16 @@
       "label": "Language",
       "tooltip": "Switch language (⌥G)",
       "aria": "Switch language"
+    },
+    "alerts": {
+      "kicker": "System Health",
+      "title": "System Alerts",
+      "aria": "{count, plural, one {# active system alert} other {# active system alerts}}",
+      "tooltip": "{count, plural, one {# active alert} other {# active alerts}} · click for details",
+      "critical": "{count} critical",
+      "warning": "{count} warning",
+      "goToBoard": "Open system board",
+      "asOf": "as of {time}"
     }
   },
   "surface": {

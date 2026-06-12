@@ -1834,6 +1834,16 @@
       "label": "语言",
       "tooltip": "切换语言 (⌥G)",
       "aria": "切换语言"
+    },
+    "alerts": {
+      "kicker": "系统健康",
+      "title": "系统告警",
+      "aria": "{count} 条活动系统告警",
+      "tooltip": "{count} 条活动告警 · 点击查看详情",
+      "critical": "严重 {count}",
+      "warning": "警告 {count}",
+      "goToBoard": "前往系统看板",
+      "asOf": "更新于 {time}"
     }
   },
   "surface": {
