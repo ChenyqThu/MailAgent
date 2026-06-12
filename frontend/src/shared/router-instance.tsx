@@ -26,7 +26,8 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet
+  Outlet,
+  redirect
 } from '@tanstack/react-router'
 
 import { AdminLayout } from './components/layout/AdminLayout'
@@ -207,6 +208,17 @@ const adminRoute = createRoute({
   component: Outlet
 })
 
+// Index route — a bare `/admin` visit (hand-typed URL, stale deep link)
+// redirects to the kanban system board instead of rendering the empty
+// parent Outlet as a blank page, fulfilling the header-comment promise.
+const adminIndexRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/',
+  beforeLoad: () => {
+    throw redirect({ to: '/admin/kanban', replace: true })
+  }
+})
+
 const adminLlmRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: 'llm',
@@ -295,7 +307,7 @@ export const router = createRouter({
     sessionsRoute,
     agentsRoute,
     notionAgentRoute,
-    adminRoute.addChildren([adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
+    adminRoute.addChildren([adminIndexRoute, adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),
   basepath: _routerBasepath,
