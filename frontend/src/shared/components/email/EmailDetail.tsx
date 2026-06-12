@@ -418,9 +418,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       from: { autoAlpha: 0, y: 20 }
     })
 
-  // B2 — 切邮件时正文内容区交叉淡入. internalId 变化时 from autoAlpha:0 (120ms),
+  // B2 — 切邮件时正文内容区交叉淡入. internalId 变化时 fromTo autoAlpha 0→1 (120ms),
   // overwrite:'auto' 让快速 J/K 连切打断上一个 tween. 仅淡入正文滚动容器 (不含
   // toolbar, 避免 toolbar 闪). keepPreviousData 防内容闪。reduced-motion 短路.
+  // 🔴 必须 fromTo 而非 from: from 被 overwrite 打断后, 下一个 from 会把打断时的
+  // 半透明值当终点 → 正文永久卡在 ~35% 透明 (实测踩过)。fromTo 显式终点 1 +
+  // clearProps 完成后移除内联样式, 任何打断序列最终都收敛到完全可见。
   const bodyScopeRef = useRef<HTMLDivElement>(null)
   const reduceMotion = useReducedMotion()
   useGSAP(
@@ -428,7 +431,16 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       if (reduceMotion) return
       const el = bodyScopeRef.current
       if (!el) return
-      gsap.from(el, { autoAlpha: 0, duration: DUR.fast, overwrite: 'auto' })
+      gsap.fromTo(
+        el,
+        { autoAlpha: 0 },
+        {
+          autoAlpha: 1,
+          duration: DUR.fast,
+          overwrite: 'auto',
+          clearProps: 'opacity,visibility'
+        }
+      )
     },
     { dependencies: [internalId, reduceMotion], scope: bodyScopeRef }
   )
