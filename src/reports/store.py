@@ -132,6 +132,29 @@ class ReportStore:
             )
             conn.commit()
 
+    def reclaim_stale_generating(self, *, stale_sec: int = 900) -> int:
+        """回收孤儿 generating 行 → failed（进程在生成中途被杀/崩溃的遗留）。
+
+        generating 无终态写入时 UI 永远转圈且 worker 不重试 (dogfood round 3:
+        用户点日报生成后 app 重启, 行卡 generating 永不恢复)。每 tick 调一次,
+        把 created_at 早于 stale_sec (默认 15min, 远大于单份报告 LLM 生成时长)
+        的 generating 行标 failed — UI 即显示失败态可手动重新生成。返回回收数。
+        """
+        cutoff = time.time() - stale_sec
+        with self._connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE report SET
+                    status = 'failed',
+                    error = 'orphaned: process exited mid-generation (auto-reclaimed)',
+                    generated_at = ?
+                WHERE status = 'generating' AND created_at < ?
+                """,
+                (time.time(), cutoff),
+            )
+            conn.commit()
+            return cur.rowcount
+
     def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
         """取单份报告（含 blocks_json）。"""
         with self._connection() as conn:

@@ -245,6 +245,37 @@ class TestStore:
         lst = store.list_reports(cadence="daily")
         assert len(lst) == 1 and "blocks_json" not in lst[0]  # 列表不返重字段
 
+    def test_reclaim_stale_generating(self, db: Path):
+        """dogfood round 3 — 进程在生成中途被杀的 generating 孤儿行必须可回收:
+        否则 UI 永远转圈且 worker 视作"已在生成"不重试。"""
+        import sqlite3 as _sq
+        import time as _t
+
+        store = ReportStore(str(db))
+        old_id = "daily_email_digest:daily:2026-06-13"
+        fresh_id = "daily_email_digest:daily:2026-06-14"
+        for rid, date in ((old_id, "2026-06-13"), (fresh_id, "2026-06-14")):
+            store.create_report(report_id=rid, agent_id="daily_email_digest",
+                                cadence="daily", report_date=date,
+                                window_start="s", window_end="e")
+        done_id = "daily_email_digest:daily:2026-06-11"
+        store.create_report(report_id=done_id, agent_id="daily_email_digest",
+                            cadence="daily", report_date="2026-06-11",
+                            window_start="s", window_end="e")
+        store.finish_report(done_id, status="ready", headline="H")
+        # 把 old_id 行的 created_at 拨老到阈值外 (20min 前)
+        with _sq.connect(str(db)) as conn:
+            conn.execute("UPDATE report SET created_at = ? WHERE id = ?",
+                         (_t.time() - 1200, old_id))
+            conn.commit()
+
+        assert store.reclaim_stale_generating(stale_sec=900) == 1
+        assert store.get_report(old_id)["status"] == "failed"
+        assert "orphaned" in store.get_report(old_id)["error"]
+        assert store.get_report(fresh_id)["status"] == "generating"  # 新行不动
+        assert store.get_report(done_id)["status"] == "ready"        # 终态不动
+        assert store.reclaim_stale_generating(stale_sec=900) == 0    # 幂等
+
 
 # ============================================================
 # assembler

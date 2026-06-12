@@ -370,6 +370,16 @@ async def tick_loop(
 
     while shutdown_event is None or not shutdown_event.is_set():
         try:
+            # 孤儿回收: 进程在生成中途被杀的 generating 行 → failed (UI 可重试)。
+            # cheap UPDATE, 幂等, 每 tick 一次。
+            try:
+                reclaimed = store.reclaim_stale_generating()
+                if reclaimed:
+                    logger.warning(
+                        f"[report] reclaimed {reclaimed} orphaned generating report(s) → failed"
+                    )
+            except Exception as e:  # noqa: BLE001 — 回收失败不阻塞正常 tick
+                logger.debug(f"[report] reclaim_stale_generating failed: {e}")
             for agent in store.list_agents():
                 if not agent.get("enabled") or agent.get("type", "report") != "report":
                     continue
