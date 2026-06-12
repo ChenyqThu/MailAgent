@@ -82,7 +82,10 @@ export function surfaceWindowOptions(): Electron.BrowserWindowConstructorOptions
   if (!nativeSurfaceActive(surface)) return { backgroundColor: OPAQUE_BG }
   if (process.platform === 'darwin') {
     return {
-      vibrancy: 'under-window',
+      // 'fullscreen-ui' (Control Center / Spotlight 同款) — 透出桌面壁纸
+      // 明显。初版用 'under-window', 是 macOS 透感最弱的材质 (模拟窗口
+      // 下层背景, 暗色下近乎不透明深灰), 用户反馈"看不出玻璃"。
+      vibrancy: 'fullscreen-ui',
       visualEffectState: 'active',
       backgroundColor: TRANSPARENT_BG
     }
@@ -96,7 +99,7 @@ export function applyNativeSurface(win: BrowserWindow, surface: SurfaceStyle): v
   const frosted = surface === 'frosted'
   try {
     if (process.platform === 'darwin') {
-      win.setVibrancy(frosted ? 'under-window' : null)
+      win.setVibrancy(frosted ? 'fullscreen-ui' : null)
     } else if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
       win.setBackgroundMaterial(frosted && isWin11() ? 'acrylic' : 'none')
     }
