@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { Droplet, Sparkles, Square } from 'lucide-react'
+import { Droplet, Square } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
@@ -25,15 +25,15 @@ interface SurfaceOption {
   icon: React.ReactNode
 }
 
+// 主题 v2 — 三选一 → 二选一 (液态档删除)。玻璃气质与高级调节只在
+// 设置 → 通用 → 外观 出现, 快捷入口保持极简。
 const SURFACE_OPTIONS: ReadonlyArray<SurfaceOption> = [
   { id: 'frosted', icon: <Droplet size={13} strokeWidth={2} /> },
-  { id: 'solid', icon: <Square size={13} strokeWidth={2} /> },
-  { id: 'liquid', icon: <Sparkles size={13} strokeWidth={2} /> }
+  { id: 'solid', icon: <Square size={13} strokeWidth={2} /> }
 ]
 
 function CurrentIcon({ surface }: { surface: SurfaceStyle }): React.ReactElement {
   if (surface === 'solid') return <Square size={11} strokeWidth={2} />
-  if (surface === 'liquid') return <Sparkles size={11} strokeWidth={2} />
   return <Droplet size={11} strokeWidth={2} />
 }
 

@@ -121,6 +121,8 @@ interface SurfaceRow {
   metaKey: string
 }
 
+// 主题 v2 — 液态档已删 (SurfaceStyle 收敛两档), 存量 localStorage 由
+// appearance.ts readSurface 迁移为 frosted。
 const SURFACE_ROWS: SurfaceRow[] = [
   {
     value: 'frosted',
@@ -131,11 +133,6 @@ const SURFACE_ROWS: SurfaceRow[] = [
     value: 'solid',
     labelKey: 'surface.solid',
     metaKey: 'settings.general.surface.solidMeta'
-  },
-  {
-    value: 'liquid',
-    labelKey: 'surface.liquid',
-    metaKey: 'settings.general.surface.liquidMeta'
   }
 ]
 

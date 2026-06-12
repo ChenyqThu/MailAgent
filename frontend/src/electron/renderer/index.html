@@ -34,7 +34,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-JWOW0ZmF4KlXR10H32vpWS66AIWsa1+1swsTHiO0YpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*"
+      content="default-src 'self'; script-src 'self' 'sha256-+/aDVUkVEjs5BEmxhoHnyHv2iuPqBLuJRmkC6F2x0WY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*"
     />
     <!--
       Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>
@@ -58,9 +58,37 @@
           if (accent && accent !== 'coral') {
             root.setAttribute('data-accent', accent)
           }
+          // 主题 v2: 材质两档 (liquid 已删, 存量值视同 frosted = 不写 attribute)
           var surface = localStorage.getItem('mailagent.surface')
-          if (surface === 'solid' || surface === 'liquid') {
+          if (surface === 'solid') {
             root.setAttribute('data-surface', surface)
+          }
+          // 主题 v2: 玻璃气质 + 高级调节覆写的首帧应用 (appearance.ts
+          // applyGlass 同款语义, 含亮色 alpha ≥ 0.72 护栏), 防切档闪烁。
+          var mood = localStorage.getItem('mailagent.glassMood')
+          root.setAttribute(
+            'data-glass',
+            mood === 'neutral' || mood === 'bright' ? mood : 'tinted'
+          )
+          var knobVars = {
+            alpha: ['--glass-alpha', ''],
+            blur: ['--glass-blur', 'px'],
+            sat: ['--glass-sat', ''],
+            mix: ['--glass-accent-mix', '%'],
+            ambient: ['--ambient', ''],
+            grain: ['--grain', '']
+          }
+          var knobs = {}
+          try {
+            knobs = JSON.parse(localStorage.getItem('mailagent.glassKnobs') || '{}') || {}
+          } catch (e2) {
+            /* 损坏的 JSON → 全部回落气质预设 */
+          }
+          for (var k in knobVars) {
+            var v = knobs[k]
+            if (typeof v !== 'number' || !isFinite(v)) continue
+            if (k === 'alpha' && resolved === 'light' && v < 0.72) v = 0.72
+            root.style.setProperty(knobVars[k][0], v + knobVars[k][1])
           }
         } catch (e) {
           /* localStorage may be unavailable; fall through to default dark */
@@ -70,13 +98,22 @@
       })()
     </script>
     <style id="theme-bootstrap">
+      /* 主题 v2 — frosted (默认) 首帧给半透明 tint 近似 (≈ --glass-alpha 0.85),
+         让 OS vibrancy 在 index.css 就绪前不被不透明底挡死; solid 保持不透明。
+         这层只活在 CSS 加载前的极短窗口 (主窗 show:false 时基本不可见)。 */
       html[data-theme='dark'] {
-        background: #0e1013;
+        background: rgb(14 16 19 / 0.85);
         color: #e8eaee;
       }
       html[data-theme='light'] {
-        background: #fafafa;
+        background: rgb(250 250 250 / 0.85);
         color: #1a1d22;
+      }
+      html[data-surface='solid'][data-theme='dark'] {
+        background: #0e1013;
+      }
+      html[data-surface='solid'][data-theme='light'] {
+        background: #fafafa;
       }
       body {
         margin: 0;

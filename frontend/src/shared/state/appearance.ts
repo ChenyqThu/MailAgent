@@ -8,12 +8,53 @@ export type ThemeMode = 'system' | 'dark' | 'light'
 export type AccentId = 'coral' | 'cobalt' | 'teal' | 'rose' | 'slate' | 'olive'
 // Sprint 18 #4 — 表面材质风格. 跟 themeMode / accent 平行的第三个独立维度,
 // 让用户在主题色之外也能控制 glass-*  的视觉:
-//   frosted (默认): 半透 + backdrop blur (Apple Liquid Glass 的轻量版)
+//   frosted (默认): 「一块玻璃」— OS vibrancy/acrylic 扛唯一一层重模糊,
+//                    CSS 只画 tint + 氛围光, 面板 .glass-* 是 tier overlay
 //   solid:           不透明 + 无 backdrop, 性能最好, 也是 prefers-reduced-
 //                    transparency 的等价物
-//   liquid:          更高 alpha + 高 blur + saturate + brightness + 高光,
-//                    模拟 Apple Liquid Glass / iOS 26 全量样式
-export type SurfaceStyle = 'frosted' | 'solid' | 'liquid'
+// 主题 v2 (2026-06-12): 液态档移除 (评审结论: 区分度低 + 费 GPU)。存量
+// localStorage 的 'liquid' 在 readSurface / index.html bootstrap 迁移为 frosted。
+export type SurfaceStyle = 'frosted' | 'solid'
+
+// 主题 v2 — 玻璃气质 (data-glass) + 高级玻璃调节 (knob 覆写)。
+// 参照实现 = docs/mailagent-themes-v2 demo 的 `window.MA` store。气质是
+// :root[data-glass] 的 CSS 预设档; knob 是「设置→通用→外观」的用户覆写,
+// 以 inline CSS 变量盖在预设之上 — 未覆写的 knob 读 CSS 预设 (UI 显示生效值
+// 用 getComputedStyle)。规范: HANDOFF-theme-spec-v2.md §3.1 / §3.5。
+export type GlassMood = 'neutral' | 'tinted' | 'bright'
+
+export interface GlassKnobs {
+  alpha?: number
+  blur?: number
+  sat?: number
+  mix?: number
+  ambient?: number
+  grain?: number
+}
+
+/** knob → [CSS 变量, 单位]。设置页读生效值 / applyGlass 写覆写共用一张表。 */
+export const GLASS_KNOB_VARS: Record<keyof GlassKnobs, [cssVar: string, unit: string]> = {
+  alpha: ['--glass-alpha', ''],
+  blur: ['--glass-blur', 'px'],
+  sat: ['--glass-sat', ''],
+  mix: ['--glass-accent-mix', '%'],
+  ambient: ['--ambient', ''],
+  grain: ['--grain', '']
+}
+
+/** 滑杆范围即护栏 (规范 §3.5 R5) — read / set 双侧 clamp 防 localStorage 离谱值。 */
+export const GLASS_KNOB_RANGE: Record<keyof GlassKnobs, [min: number, max: number, step: number]> =
+  {
+    alpha: [0.5, 0.95, 0.01],
+    blur: [8, 40, 1],
+    sat: [1, 2.2, 0.05],
+    mix: [0, 20, 1],
+    ambient: [0, 0.3, 0.01],
+    grain: [0, 0.12, 0.005]
+  }
+
+/** 亮色主题下基底不透明度护栏 (规范 §3.1) — 应用时 clamp, 不改存储值。 */
+export const GLASS_ALPHA_LIGHT_MIN = 0.72
 
 // 邮件正文外观 (字体族 / 字号 / 行高) — 跟 theme/accent/surface 平行的用户可调
 // 维度, 仅作用于 EmailBodyFrame 的 sandboxed iframe 正文 (不影响 UI chrome /
@@ -35,12 +76,17 @@ interface AppearanceStore {
   resolvedTheme: 'dark' | 'light'
   accent: AccentId
   surface: SurfaceStyle
+  glassMood: GlassMood
+  glassKnobs: GlassKnobs
   bodyFont: BodyFont
   bodyFontSize: number
   bodyLineHeight: number
   setThemeMode(next: ThemeMode): void
   setAccent(next: AccentId): void
   setSurface(next: SurfaceStyle): void
+  setGlassMood(next: GlassMood): void
+  setGlassKnob(key: keyof GlassKnobs, value: number): void
+  resetGlassKnobs(): void
   setBodyFont(next: BodyFont): void
   setBodyFontSize(next: number): void
   setBodyLineHeight(next: number): void
@@ -49,6 +95,8 @@ interface AppearanceStore {
 const THEME_KEY = 'mailagent.themeMode'
 const ACCENT_KEY = 'mailagent.accent'
 const SURFACE_KEY = 'mailagent.surface'
+const GLASS_MOOD_KEY = 'mailagent.glassMood'
+const GLASS_KNOBS_KEY = 'mailagent.glassKnobs'
 const BODY_FONT_KEY = 'mailagent.bodyFont'
 const BODY_FONT_SIZE_KEY = 'mailagent.bodyFontSize'
 const BODY_LINE_HEIGHT_KEY = 'mailagent.bodyLineHeight'
@@ -89,11 +137,41 @@ function readAccent(): AccentId {
 function readSurface(): SurfaceStyle {
   try {
     const v = localStorage.getItem(SURFACE_KEY)
-    if (v === 'frosted' || v === 'solid' || v === 'liquid') return v
+    if (v === 'frosted' || v === 'solid') return v
+    if (v === 'liquid') return 'frosted' // v1 存量迁移 (主题 v2 删液态档)
   } catch {
     /* ignore */
   }
   return 'frosted'
+}
+
+function readGlassMood(): GlassMood {
+  try {
+    const v = localStorage.getItem(GLASS_MOOD_KEY)
+    if (v === 'neutral' || v === 'tinted' || v === 'bright') return v
+  } catch {
+    /* ignore */
+  }
+  return 'tinted'
+}
+
+function readGlassKnobs(): GlassKnobs {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(GLASS_KNOBS_KEY) ?? '{}')
+    if (raw === null || typeof raw !== 'object') return {}
+    const out: GlassKnobs = {}
+    for (const key of Object.keys(GLASS_KNOB_RANGE) as (keyof GlassKnobs)[]) {
+      const v = (raw as Record<string, unknown>)[key]
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        const [lo, hi] = GLASS_KNOB_RANGE[key]
+        out[key] = clampNum(v, lo, hi)
+      }
+    }
+    return out
+  } catch {
+    /* ignore */
+  }
+  return {}
 }
 
 function readBodyFont(): BodyFont {
@@ -138,11 +216,13 @@ function readResolved(themeMode: ThemeMode): 'dark' | 'light' {
 
 const initialTheme = readTheme()
 
-export const useAppearance = create<AppearanceStore>((set) => ({
+export const useAppearance = create<AppearanceStore>((set, get) => ({
   themeMode: initialTheme,
   resolvedTheme: readResolved(initialTheme),
   accent: readAccent(),
   surface: readSurface(),
+  glassMood: readGlassMood(),
+  glassKnobs: readGlassKnobs(),
   bodyFont: readBodyFont(),
   bodyFontSize: readBodyFontSize(),
   bodyLineHeight: readBodyLineHeight(),
@@ -172,6 +252,38 @@ export const useAppearance = create<AppearanceStore>((set) => ({
     }
     set({ surface: next })
     applySurface(next)
+  },
+  setGlassMood(next) {
+    try {
+      localStorage.setItem(GLASS_MOOD_KEY, next)
+      // 规范 §3.5 R2 — 切气质清空高级调节覆写 (滑杆回到该档预设)。
+      localStorage.setItem(GLASS_KNOBS_KEY, '{}')
+    } catch {
+      /* ignore */
+    }
+    set({ glassMood: next, glassKnobs: {} })
+    scheduleApplyGlass()
+  },
+  setGlassKnob(key, value) {
+    const [lo, hi] = GLASS_KNOB_RANGE[key]
+    const next: GlassKnobs = { ...get().glassKnobs, [key]: clampNum(value, lo, hi) }
+    try {
+      localStorage.setItem(GLASS_KNOBS_KEY, JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ glassKnobs: next })
+    scheduleApplyGlass()
+  },
+  resetGlassKnobs() {
+    // 规范 §3.5 R2 — 「恢复默认」只清覆写, 不改气质。
+    try {
+      localStorage.setItem(GLASS_KNOBS_KEY, '{}')
+    } catch {
+      /* ignore */
+    }
+    set({ glassKnobs: {} })
+    scheduleApplyGlass()
   },
   setBodyFont(next) {
     try {
@@ -232,6 +344,10 @@ export function applyResolvedTheme(): void {
     root.setAttribute('data-theme', resolved)
     root.classList.toggle('dark', resolved === 'dark')
     useAppearance.setState({ resolvedTheme: resolved })
+    // 主题 v2 — 主题翻转后重放 glass 覆写: 亮色 alpha 护栏 clamp 依赖
+    // resolvedTheme, 不重放的话「暗色调到 0.6 → 切亮色」会停在 0.6 漏过护栏。
+    const { glassMood, glassKnobs } = useAppearance.getState()
+    applyGlass(glassMood, glassKnobs)
     // Electron IPC broadcast (no-op in Web build)
     // `@electron-toolkit/preload`'s electronAPI exposes `ipcRenderer.send`,
     // NOT `electron.send` directly. Sprint 1 had this typo'd — it never fired
@@ -268,12 +384,50 @@ export function applyAccent(accent: AccentId): void {
 
 // Sprint 18 #4 — Surface 是 UI 视觉风格, 不广播到 Island (Island 是 ping-
 // island 单独的视觉, 没有 glass-* layer 共享需求). 默认 'frosted' 不写
-// attribute, 让 CSS 的 base .glass-* 自然生效; solid / liquid 才写 attribute
+// attribute, 让 CSS 的 base .glass-* 自然生效; solid 才写 attribute
 // 触发 :root[data-surface='...'] selector 覆盖.
 export function applySurface(surface: SurfaceStyle): void {
   const root = document.documentElement
   if (surface === 'frosted') root.removeAttribute('data-surface')
   else root.setAttribute('data-surface', surface)
+  // 主题 v2 — 联动原生材质 (solid=关 vibrancy)。main 的 registerSurfaceIpc
+  // 处理后回写 appearance:vibrancyState → data-vib (见 bootAppearance)。
+  // web build / 测试环境 electron 缺位 → optional chain 自然 no-op。
+  const w = window as unknown as {
+    electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
+  }
+  w.electron?.ipcRenderer?.send('appearance:surface', surface)
+}
+
+// 主题 v2 — 玻璃气质 + 高级调节落 DOM。覆写以 inline CSS 变量盖在
+// :root[data-glass] 预设上; 未覆写的 knob removeProperty 回落 CSS 预设。
+// 亮色主题下 alpha 应用时 clamp ≥ GLASS_ALPHA_LIGHT_MIN (护栏, 不改存储值);
+// applyResolvedTheme 在主题翻转后会重跑本函数让 clamp 跟上。
+export function applyGlass(mood: GlassMood, knobs: GlassKnobs): void {
+  const root = document.documentElement
+  root.setAttribute('data-glass', mood)
+  const resolved = useAppearance.getState().resolvedTheme
+  for (const key of Object.keys(GLASS_KNOB_VARS) as (keyof GlassKnobs)[]) {
+    const [cssVar, unit] = GLASS_KNOB_VARS[key]
+    let v = knobs[key]
+    if (v != null && key === 'alpha' && resolved === 'light') {
+      v = Math.max(v, GLASS_ALPHA_LIGHT_MIN)
+    }
+    if (v != null) root.style.setProperty(cssVar, `${v}${unit}`)
+    else root.style.removeProperty(cssVar)
+  }
+}
+
+// 滑杆 input 高频触发 → rAF 合并 DOM 写入 (同上方 C-06 / Sprint 10 L7 模式)。
+let glassRafId: ReturnType<typeof requestAnimationFrame> | null = null
+
+function scheduleApplyGlass(): void {
+  if (glassRafId !== null) return
+  glassRafId = requestAnimationFrame(() => {
+    glassRafId = null
+    const { glassMood, glassKnobs } = useAppearance.getState()
+    applyGlass(glassMood, glassKnobs)
+  })
 }
 
 // Boot: register OS-change listener once. Caller should also call
@@ -284,9 +438,22 @@ export function bootAppearance(): void {
   applyResolvedTheme()
   applyAccent(useAppearance.getState().accent)
   applySurface(useAppearance.getState().surface)
+  applyGlass(useAppearance.getState().glassMood, useAppearance.getState().glassKnobs)
   if (typeof window === 'undefined') return
   const mq = window.matchMedia('(prefers-color-scheme: dark)')
   mq.addEventListener('change', () => {
     if (useAppearance.getState().themeMode === 'system') applyResolvedTheme()
+  })
+  // 主题 v2 — 主进程回写: 原生 vibrancy 是否生效 (macOS/Win11 frosted=on;
+  // solid / Linux / Win10 = off)。CSS 以 :root[data-vib='off'] 切到
+  // --wp-fallback 窗内自绘回退。App 生命周期单订阅, 不退订 (同窗口共存亡);
+  // 注册发生在 applySurface() 发出请求之后、main 异步回包到达之前, 不丢首包。
+  const w = window as unknown as {
+    electron?: {
+      ipcRenderer?: { on?: (ch: string, listener: (...args: unknown[]) => void) => void }
+    }
+  }
+  w.electron?.ipcRenderer?.on?.('appearance:vibrancyState', (_evt: unknown, active: unknown) => {
+    document.documentElement.setAttribute('data-vib', active ? 'on' : 'off')
   })
 }
