@@ -14,6 +14,7 @@ ChatSessionSummary / ChatSessionListItem / ChatMessage / ChatToolCall（``types.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -42,6 +43,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 # required .env is absent (bare worktree / CI import self-check). The singleton
 # still preserves the 1800s TTL cache across /config requests once built.
 _context_loader = None  # type: ignore[var-annotated]
+
+# /chat/config 等待 user context (Notion) 的上限 — renderer chat 引擎构造
+# await 本端点, 无界等待 = chat panel 整体卡死 (dogfood round 3)。超时降级
+# 空 context, shield 让加载后台跑完填 TTL 缓存。
+_USER_CONTEXT_TIMEOUT_SEC = 8.0
 
 
 def _get_context_loader():
@@ -203,9 +209,21 @@ async def chat_config(request: Request):
     # knows the user's role / responsibilities / Sender Priority. Not configured
     # (LLM_CONTEXT_PAGE_ID empty) → "". Fetch failure → "" (graceful, never blocks
     # /config — chat still runs, just without the user profile).
+    # dogfood round 3 — get_markdown 冷缓存时父页+子页串行打 Notion (单请求 30s
+    # 上限 × N) 可达分钟级, 而 renderer chat 引擎 lazy 构造必须 await 本端点 →
+    # chat panel 整体卡"加载不出"。限时 8s: 超时降级空 context (chat 照跑, 仅无
+    # 用户画像); shield 让底层加载继续跑完填 TTL 缓存 → 下一次 /config 秒回。
     user_context = ""
+    _ctx_task = asyncio.ensure_future(_get_context_loader().get_markdown())
+    # 超时弃等后无人 await task — 吞掉 exception 防 "never retrieved" 警告
+    # (get_markdown 内部已全 catch, 此处纯保险)。
+    _ctx_task.add_done_callback(
+        lambda t: t.exception() if not t.cancelled() else None
+    )
     try:
-        user_context = await _get_context_loader().get_markdown()
+        user_context = await asyncio.wait_for(
+            asyncio.shield(_ctx_task), timeout=_USER_CONTEXT_TIMEOUT_SEC
+        )
     except Exception:  # noqa: BLE001 — context is best-effort; never fail /config
         user_context = ""
     # enabledModels: hot-read LLM_ENABLED_MODELS from .env (dotenv_values, not pydantic

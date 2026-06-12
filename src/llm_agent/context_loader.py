@@ -6,6 +6,7 @@ path (see docs/notion_markdown_api.md). Same mechanism as project_progress.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Optional
 
@@ -64,10 +65,14 @@ class ContextLoader:
                 if not child_pages:
                     return parent_md
 
+                # 子页并行拉取 — 串行 N×RTT 是 /chat/config 慢的根源 (dogfood
+                # round 3); _fetch_page_markdown 内部全 catch 返 "", gather 安全。
+                child_mds = await asyncio.gather(
+                    *[self._fetch_page_markdown(sess, cid) for cid, _ in child_pages]
+                )
                 parts = [parent_md]
                 fetched = 0
-                for child_id, title in child_pages:
-                    child_md = await self._fetch_page_markdown(sess, child_id)
+                for (_child_id, title), child_md in zip(child_pages, child_mds):
                     if child_md:
                         parts.append(f"\n\n## {title}\n\n{child_md}")
                         fetched += 1

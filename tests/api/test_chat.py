@@ -299,6 +299,30 @@ def test_chat_config_user_context_graceful_on_loader_error(
     assert r.json()["data"]["userContext"] == ""
 
 
+def test_chat_config_user_context_timeout_degrades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dogfood round 3 — ContextLoader 慢 (冷缓存串行打 Notion 可达分钟级) 时
+    /config 必须限时返回: renderer chat 引擎构造 await 本端点, 无界等待 = chat
+    panel 整体卡死。超时降级 userContext=""，端点本身 200。"""
+    import asyncio as _asyncio
+
+    async def _slow() -> str:
+        await _asyncio.sleep(5)
+        return "too late"
+
+    class _SlowLoader:
+        get_markdown = staticmethod(_slow)
+
+    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatConfigStub())
+    monkeypatch.setattr("src.api.routers.chat._get_context_loader", lambda: _SlowLoader())
+    monkeypatch.setattr("src.api.routers.chat._USER_CONTEXT_TIMEOUT_SEC", 0.05)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.get("/api/chat/config")
+    assert r.status_code == 200
+    assert r.json()["data"]["userContext"] == ""
+
+
 def test_chat_config_kos_configured_mirrors_consumer(monkeypatch: pytest.MonkeyPatch) -> None:
     """kosConfigured == kosConsumerEnabled（同源 MAILAGENT_KOS_CONSUMER_ENABLED，对齐
     electron kosConfig().configured = isKosConsumerEnabled()，gate 9 KOS 工具注册；

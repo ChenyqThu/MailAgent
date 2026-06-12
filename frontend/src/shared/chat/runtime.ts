@@ -138,10 +138,19 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     // 用 DEFAULT_HTTP_CONFIG（harness ON / sonnet / KOS·L1 OFF）：chat 仍可跑，仅 9 个 KOS
     // 工具不注册（kosConfigured 默认 false，远程安全降级）。
     let snapshot: Partial<HttpPlatformConfig> = {}
+    // 10s abort 兜底 (dogfood round 3): /chat/config 背后的 Notion context 加载
+    // 慢时 (冷缓存/网络差) 此 await 是 chat panel 整体卡死点 — 后端已限 8s,
+    // 这里再兜一层防旧版后端/远程链路慢, 超时同失败路径落 DEFAULT 继续构造。
+    const ctrl = new AbortController()
+    const prefetchTimer = setTimeout(() => ctrl.abort(), 10_000)
     try {
-      snapshot = await request<HttpPlatformConfig>(baseUrl, 'GET', '/chat/config')
+      snapshot = await request<HttpPlatformConfig>(baseUrl, 'GET', '/chat/config', {
+        signal: ctrl.signal
+      })
     } catch (err) {
       console.warn('[chat] runtime config prefetch failed, using DEFAULT_HTTP_CONFIG', err)
+    } finally {
+      clearTimeout(prefetchTimer)
     }
     const platform = new HttpChatPlatform(reads, baseUrl, snapshot)
 
