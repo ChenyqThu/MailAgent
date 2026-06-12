@@ -40,12 +40,17 @@ const TAILWIND_INPUT = join(FRONTEND, 'src/electron/renderer/index.css')
 
 const ACCENTS = ['coral', 'cobalt', 'teal', 'rose', 'slate', 'olive'] as const
 const MODES = ['dark', 'light'] as const
+// 主题 v2 — 材质两档也进组合矩阵 (规范 §6: 12 组合 × 2 surface = 24)。
+// frosted 不写 attribute (默认), solid 写 data-surface='solid'。
+const SURFACES = ['frosted', 'solid'] as const
 type Accent = (typeof ACCENTS)[number]
 type Mode = (typeof MODES)[number]
+type Surface = (typeof SURFACES)[number]
 
 interface Combo {
   accent: Accent
   mode: Mode
+  surface: Surface
 }
 
 interface ViolationLine {
@@ -100,7 +105,7 @@ function buildTailwindCss(): string {
 
 async function applyCombo(page: Page, combo: Combo): Promise<void> {
   await page.evaluate(
-    ({ accent, mode }: { accent: string; mode: string }) => {
+    ({ accent, mode, surface }: { accent: string; mode: string; surface: string }) => {
       const root = document.documentElement
       root.setAttribute('data-theme', mode)
       if (accent === 'coral') {
@@ -108,9 +113,14 @@ async function applyCombo(page: Page, combo: Combo): Promise<void> {
       } else {
         root.setAttribute('data-accent', accent)
       }
+      if (surface === 'frosted') {
+        root.removeAttribute('data-surface')
+      } else {
+        root.setAttribute('data-surface', surface)
+      }
       root.classList.toggle('dark', mode === 'dark')
     },
-    combo as unknown as { accent: string; mode: string }
+    combo as unknown as { accent: string; mode: string; surface: string }
   )
 }
 
@@ -138,16 +148,16 @@ async function auditCombo(page: Page, combo: Combo): Promise<ViolationLine[]> {
 
 function formatPlain(lines: ViolationLine[]): string {
   if (lines.length === 0)
-    return '✓ a11y:contrast — 12 combinations clean (WCAG AA, color-contrast)\n'
+    return '✓ a11y:contrast — 24 combinations clean (WCAG AA, color-contrast)\n'
 
   // Group by combo for a compact summary; full details on --json only.
   const byCombo = new Map<string, number>()
   for (const v of lines) {
-    const k = `${v.combo.mode}·${v.combo.accent}`
+    const k = `${v.combo.mode}·${v.combo.accent}·${v.combo.surface}`
     byCombo.set(k, (byCombo.get(k) ?? 0) + 1)
   }
   const out: string[] = [
-    `${STRICT_FLAG ? '✗' : '◇'} a11y:contrast — ${lines.length} violation(s) across 12 combinations`,
+    `${STRICT_FLAG ? '✗' : '◇'} a11y:contrast — ${lines.length} violation(s) across 24 combinations`,
     ''
   ]
   for (const [combo, n] of [...byCombo.entries()].sort()) {
@@ -178,12 +188,14 @@ async function main(): Promise<void> {
   await page.addStyleTag({ content: css })
 
   const all: ViolationLine[] = []
-  for (const mode of MODES) {
-    for (const accent of ACCENTS) {
-      const combo: Combo = { accent, mode }
-      log(`a11y:contrast — auditing ${mode}·${accent} ...`)
-      const lines = await auditCombo(page, combo)
-      all.push(...lines)
+  for (const surface of SURFACES) {
+    for (const mode of MODES) {
+      for (const accent of ACCENTS) {
+        const combo: Combo = { accent, mode, surface }
+        log(`a11y:contrast — auditing ${mode}·${accent}·${surface} ...`)
+        const lines = await auditCombo(page, combo)
+        all.push(...lines)
+      }
     }
   }
   await browser.close()
