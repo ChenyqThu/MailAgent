@@ -12,13 +12,22 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 
 from src.repository.attachment_store import AttachmentStore
+from src.repository.search_query import (
+    FilterPredicate,
+    ParsedSearchQuery,
+    TextTerm,
+    build_structured_filter_predicates,
+    parse_search_query,
+)
 
 
 # ============================================================
@@ -153,6 +162,25 @@ class EmailSearchHit:
     rank: float             # bm25 分数（越小越相关，FTS5 约定）
     notion_page_id: Optional[str] = None
     notion_url: Optional[str] = None
+
+
+@dataclass
+class EmailSearchResult:
+    """带搜索 meta 的结果，用于 CLI/API/event 透传 parser warning。"""
+
+    hits: list[EmailSearchHit]
+    transformed_query: str
+    parse_warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ContactSuggestion:
+    """compose 收件人自动补全候选。"""
+
+    email: str
+    name: Optional[str]
+    score: int
+    last_seen: Optional[str]
 
 
 # ============================================================
@@ -338,6 +366,75 @@ def smart_query_transform(query: str) -> str:
     if len(wrapped) == 1:
         return wrapped[0]
     return ' AND '.join(wrapped)
+
+
+_CONTACT_CACHE_TTL_SECONDS = 10 * 60
+_CONTACT_SUGGEST_CACHE: dict[str, tuple[float, list[ContactSuggestion]]] = {}
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+
+
+def _normalize_contact_name(value: Optional[str]) -> Optional[str]:
+    trimmed = (value or "").strip().strip("\"'")
+    return trimmed or None
+
+
+def _contact_date_key(value: Optional[str]) -> float:
+    if not value:
+        return 0.0
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _parse_address_segment(segment: str) -> Optional[tuple[str, Optional[str]]]:
+    angle = re.match(r"^(.*?)<([^>]+)>", segment)
+    if angle:
+        email_match = _EMAIL_RE.search(angle.group(2) or "")
+        if not email_match:
+            return None
+        return email_match.group(0).lower(), _normalize_contact_name(angle.group(1))
+
+    email_match = _EMAIL_RE.search(segment)
+    if not email_match:
+        return None
+    name = _normalize_contact_name(segment[:email_match.start()])
+    return email_match.group(0).lower(), name
+
+
+def _parse_address_list(value: Optional[str]) -> list[tuple[str, Optional[str]]]:
+    if not value:
+        return []
+    items: list[tuple[str, Optional[str]]] = []
+    for segment in value.split(","):
+        parsed = _parse_address_segment(segment.strip())
+        if parsed is not None:
+            items.append(parsed)
+    return items
+
+
+def _normalize_exclude(exclude: Optional[str | list[str]]) -> set[str]:
+    values = exclude if isinstance(exclude, list) else ([exclude] if exclude else [])
+    result: set[str] = set()
+    for value in values:
+        for part in str(value).split(","):
+            email = part.strip().lower()
+            if email:
+                result.add(email)
+    return result
+
+
+def _contact_prefix_match(item: ContactSuggestion, q: str) -> bool:
+    if not q:
+        return False
+    local_part = item.email.split("@", 1)[0]
+    if local_part.startswith(q):
+        return True
+    if any(part.startswith(q) for part in re.split(r"[._%+-]+", local_part)):
+        return True
+    name = (item.name or "").lower()
+    return any(part.startswith(q) for part in re.split(r"[\s,.;:()\"'<>]+", name))
 
 
 # ============================================================
@@ -706,6 +803,147 @@ class EmailRepository:
             conn.close()
 
     # ============================================================
+    # CONTACT SUGGEST (compose 收件人自动补全)
+    # ============================================================
+
+    def suggest_contacts(
+        self,
+        q: str = "",
+        *,
+        limit: int = 8,
+        exclude: Optional[str | list[str]] = None,
+    ) -> list[ContactSuggestion]:
+        """从本地邮件元数据聚合 compose 收件人自动补全候选。"""
+        try:
+            limit = min(max(int(limit), 1), 50)
+        except (TypeError, ValueError):
+            limit = 8
+        query = (q or "").strip().lower()
+        excluded = _normalize_exclude(exclude)
+
+        items = [
+            item
+            for item in self._contact_corpus()
+            if item.email.lower() not in excluded
+        ]
+        if query:
+            items = [
+                item
+                for item in items
+                if query in item.email.lower()
+                or query in (item.name or "").lower()
+            ]
+
+        return sorted(
+            items,
+            key=lambda item: (
+                0 if _contact_prefix_match(item, query) else 1,
+                -item.score,
+                -_contact_date_key(item.last_seen),
+                item.email,
+            ),
+        )[:limit]
+
+    def _contact_corpus(self) -> list[ContactSuggestion]:
+        cache_key = str(self.db_path.resolve())
+        now = time.time()
+        cached = _CONTACT_SUGGEST_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
+        try:
+            items = self._aggregate_contact_suggestions()
+            _CONTACT_SUGGEST_CACHE[cache_key] = (
+                now + _CONTACT_CACHE_TTL_SECONDS,
+                items,
+            )
+            return items
+        except Exception as e:
+            logger.warning(f"suggest_contacts: aggregation failed: {e}")
+            return []
+
+    def _aggregate_contact_suggestions(self) -> list[ContactSuggestion]:
+        conn = self._connect()
+        contacts: dict[str, dict[str, object]] = {}
+
+        def upsert(
+            parsed: Optional[tuple[str, Optional[str]]],
+            *,
+            score_delta: int,
+            date_received: Optional[str],
+        ) -> None:
+            if parsed is None:
+                return
+            email, name = parsed
+            seen_ts = _contact_date_key(date_received)
+            current = contacts.setdefault(
+                email,
+                {
+                    "email": email,
+                    "name": None,
+                    "score": 0,
+                    "last_seen": None,
+                    "last_seen_ts": 0.0,
+                    "name_seen_ts": 0.0,
+                },
+            )
+            current["score"] = int(current["score"]) + score_delta
+            if seen_ts >= float(current["last_seen_ts"]):
+                current["last_seen_ts"] = seen_ts
+                if date_received:
+                    current["last_seen"] = date_received
+            if name and seen_ts >= float(current["name_seen_ts"]):
+                current["name"] = name
+                current["name_seen_ts"] = seen_ts
+
+        try:
+            rows = conn.execute(
+                """SELECT sender, sender_name, to_addr, cc_addr, mailbox, date_received
+                   FROM email_metadata"""
+            ).fetchall()
+            for row in rows:
+                sender = _parse_address_segment(row["sender"] or "")
+                if sender is not None:
+                    sender_email, sender_name = sender
+                    upsert(
+                        (
+                            sender_email,
+                            _normalize_contact_name(row["sender_name"]) or sender_name,
+                        ),
+                        score_delta=1,
+                        date_received=row["date_received"],
+                    )
+
+                recipient_score = 3 if row["mailbox"] == "发件箱" else 1
+                for parsed in _parse_address_list(row["to_addr"]):
+                    upsert(
+                        parsed,
+                        score_delta=recipient_score,
+                        date_received=row["date_received"],
+                    )
+                for parsed in _parse_address_list(row["cc_addr"]):
+                    upsert(
+                        parsed,
+                        score_delta=recipient_score,
+                        date_received=row["date_received"],
+                    )
+
+            return [
+                ContactSuggestion(
+                    email=str(item["email"]),
+                    name=item["name"] if isinstance(item["name"], str) else None,
+                    score=int(item["score"]),
+                    last_seen=(
+                        item["last_seen"]
+                        if isinstance(item["last_seen"], str)
+                        else None
+                    ),
+                )
+                for item in contacts.values()
+            ]
+        finally:
+            conn.close()
+
+    # ============================================================
     # SEARCH (Phase 3: FTS5)
     # ============================================================
 
@@ -718,20 +956,118 @@ class EmailRepository:
         since_date: Optional[str] = None,
         until_date: Optional[str] = None,
     ) -> list[EmailSearchHit]:
-        """FTS5 全文搜索邮件正文 + subject + sender.
+        """FTS5 全文搜索邮件正文 + subject + sender（raw FTS5 入口）.
 
         Args:
             query: FTS5 query 语法 —— 短语用引号，AND/OR/NOT 大写，前缀用 `term*`。
                 示例：'"project plan"', 'redis AND timeout', 'meeting NOT canceled'
             limit: 最多返回多少条（caller 责任 cap，repo 不再约束上限）
             mailbox: 仅返回该 mailbox 的邮件（'收件箱' / '发件箱'）
-            since_date / until_date: 'YYYY-MM-DD'，按 email_metadata.date_received 过滤；
-                date_received 是 ISO 字符串，字典序与时间序一致，直接 `>=` / `<=`
+            since_date / until_date: 'YYYY-MM-DD'，按本地时区解释；内部用
+                SQLite datetime() 归一时区后比较。
 
         Returns:
             EmailSearchHit list，按 bm25 升序（最相关在前）。
             空查询 / 无命中 / FTS 语法错误均返回 []（语法错误会 logger.warning）。
         """
+        return self._search_email_bodies_raw(
+            query,
+            limit=limit,
+            mailbox=mailbox,
+            since_date=since_date,
+            until_date=until_date,
+        )
+
+    def search_email_bodies_with_meta(
+        self,
+        query: str,
+        *,
+        mode: str = "smart",
+        limit: int = 50,
+        mailbox: Optional[str] = None,
+        since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
+        now: Optional[str] = None,
+        tz_offset_minutes: Optional[int] = None,
+    ) -> EmailSearchResult:
+        """搜索正文并返回调用方需要透传的 meta。
+
+        ``mode='raw'`` 保持 FTS5 query 原样下放；``mode='smart'`` 先解析
+        Search Query DSL v1。纯文本 query 命中 fast-path，继续走旧 smart
+        transform + raw 查询路径，确保存量行为不变。
+        """
+        if not query or not query.strip():
+            return EmailSearchResult([], query, [])
+        if limit <= 0:
+            return EmailSearchResult([], query, [])
+
+        normalized_mode = (mode or "smart").lower()
+        if normalized_mode == "raw":
+            structured_filters, structured_warnings = build_structured_filter_predicates(
+                mailbox=mailbox,
+                since_date=since_date,
+                until_date=until_date,
+                now=now,
+                tz_offset_minutes=tz_offset_minutes,
+            )
+            hits = self._search_email_bodies_raw(
+                query,
+                limit=limit,
+                extra_filters=structured_filters,
+            )
+            return EmailSearchResult(hits, query, structured_warnings)
+
+        parsed = parse_search_query(
+            query,
+            now=now,
+            tz_offset_minutes=tz_offset_minutes,
+        )
+        if parsed.is_plain_passthrough:
+            transformed = smart_query_transform(query)
+            structured_filters, structured_warnings = build_structured_filter_predicates(
+                mailbox=mailbox,
+                since_date=since_date,
+                until_date=until_date,
+                now=now,
+                tz_offset_minutes=tz_offset_minutes,
+            )
+            if transformed != query:
+                logger.debug(
+                    f"search_email_bodies_smart: query={query!r} → "
+                    f"transformed={transformed!r}"
+                )
+            hits = self._search_email_bodies_raw(
+                transformed,
+                limit=limit,
+                extra_filters=structured_filters,
+            )
+            return EmailSearchResult(
+                hits,
+                transformed,
+                [*parsed.warnings, *structured_warnings],
+            )
+
+        hits, transformed = self._search_email_bodies_parsed(
+            parsed,
+            limit=limit,
+            mailbox=mailbox,
+            since_date=since_date,
+            until_date=until_date,
+            now=now,
+            tz_offset_minutes=tz_offset_minutes,
+        )
+        return EmailSearchResult(hits, transformed, parsed.warnings)
+
+    def _search_email_bodies_raw(
+        self,
+        query: str,
+        *,
+        limit: int,
+        mailbox: Optional[str] = None,
+        since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
+        extra_filters: Optional[list[FilterPredicate]] = None,
+    ) -> list[EmailSearchHit]:
         if not query or not query.strip():
             return []
         if limit <= 0:
@@ -753,25 +1089,119 @@ class EmailRepository:
              WHERE email_body_fts MATCH ?
         """
         params: list = [query]
-        if mailbox:
-            sql += " AND m.mailbox = ?"
-            params.append(mailbox)
-        if since_date:
-            sql += " AND m.date_received >= ?"
-            params.append(since_date)
-        if until_date:
-            sql += " AND m.date_received <= ?"
-            params.append(until_date)
+        filters = extra_filters
+        if filters is None:
+            filters, _ = build_structured_filter_predicates(
+                mailbox=mailbox,
+                since_date=since_date,
+                until_date=until_date,
+            )
+        for predicate in filters:
+            sql += f" AND ({predicate.sql})"
+            params.extend(predicate.params)
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
 
+        return self._execute_email_search(sql, params, query)
+
+    def _search_email_bodies_parsed(
+        self,
+        parsed: ParsedSearchQuery,
+        *,
+        limit: int,
+        mailbox: Optional[str],
+        since_date: Optional[str],
+        until_date: Optional[str],
+        now: Optional[str],
+        tz_offset_minutes: Optional[int],
+    ) -> tuple[list[EmailSearchHit], str]:
+        fts_expr = self._build_positive_fts_expr(parsed)
+        neg_fts_expr = self._build_negative_fts_expr(parsed)
+        filters, structured_warnings = build_structured_filter_predicates(
+            mailbox=mailbox,
+            since_date=since_date,
+            until_date=until_date,
+            now=now,
+            tz_offset_minutes=tz_offset_minutes,
+        )
+        parsed.warnings.extend(structured_warnings)
+
+        predicates: list[FilterPredicate] = [
+            *parsed.filters,
+            *self._compile_or_filter_groups(parsed.or_filter_groups),
+            *filters,
+        ]
+        predicates.extend(
+            FilterPredicate(f"NOT ({predicate.sql})", predicate.params)
+            for predicate in parsed.neg_filters
+        )
+
+        if not fts_expr and not neg_fts_expr and not predicates:
+            return [], parsed.original_query
+
+        params: list = []
+        if fts_expr:
+            sql = """
+                SELECT m.internal_id,
+                       COALESCE(m.subject, '')        AS subject,
+                       COALESCE(m.sender, '')         AS sender,
+                       m.date_received,
+                       m.mailbox,
+                       m.notion_page_id,
+                       snippet(email_body_fts, 0, '<mark>', '</mark>', '...', 16) AS snippet,
+                       bm25(email_body_fts)           AS rank
+                  FROM email_body_fts
+                  JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
+                 WHERE email_body_fts MATCH ?
+            """
+            params.append(fts_expr)
+            order_by = " ORDER BY rank LIMIT ?"
+        else:
+            sql = """
+                SELECT m.internal_id,
+                       COALESCE(m.subject, '')        AS subject,
+                       COALESCE(m.sender, '')         AS sender,
+                       m.date_received,
+                       m.mailbox,
+                       m.notion_page_id,
+                       ''                             AS snippet,
+                       0.0                            AS rank
+                  FROM email_metadata m
+                 WHERE 1 = 1
+            """
+            order_by = " ORDER BY datetime(m.date_received) DESC LIMIT ?"
+
+        for predicate in predicates:
+            sql += f" AND ({predicate.sql})"
+            params.extend(predicate.params)
+        if neg_fts_expr:
+            sql += (
+                " AND m.internal_id NOT IN ("
+                "SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)"
+            )
+            params.append(neg_fts_expr)
+        sql += order_by
+        params.append(limit)
+
+        query_for_log = fts_expr or parsed.original_query
+        transformed_query = fts_expr if fts_expr else parsed.original_query
+        return self._execute_email_search(sql, params, query_for_log), transformed_query
+
+    def _execute_email_search(
+        self,
+        sql: str,
+        params: list,
+        query_for_log: str,
+    ) -> list[EmailSearchHit]:
         conn = self._connect()
         try:
             try:
                 rows = conn.execute(sql, params).fetchall()
             except sqlite3.OperationalError as e:
                 # FTS5 query 语法错误（unbalanced quote / lone operator 等）
-                logger.warning(f"search_email_bodies: invalid FTS5 query {query!r}: {e}")
+                logger.warning(
+                    f"search_email_bodies: invalid FTS5 query {query_for_log!r}: {e}"
+                )
                 return []
 
             hits: list[EmailSearchHit] = []
@@ -796,6 +1226,52 @@ class EmailRepository:
         finally:
             conn.close()
 
+    def _build_positive_fts_expr(self, parsed: ParsedSearchQuery) -> str:
+        parts: list[str] = []
+        parts.extend(self._text_term_to_fts(term) for term in parsed.fts_terms)
+        parts.extend(
+            self._build_fts_or_group(group)
+            for group in parsed.fts_or_groups
+        )
+        parts = [p for p in parts if p]
+        return " AND ".join(parts)
+
+    def _build_negative_fts_expr(self, parsed: ParsedSearchQuery) -> str:
+        parts = [self._text_term_to_fts(term) for term in parsed.neg_fts_terms]
+        parts = [p for p in parts if p]
+        return " OR ".join(f"({part})" for part in parts)
+
+    def _build_fts_or_group(self, group: list[TextTerm]) -> str:
+        parts = [self._text_term_to_fts(term) for term in group]
+        parts = [p for p in parts if p]
+        if len(parts) <= 1:
+            return parts[0] if parts else ""
+        return "(" + " OR ".join(f"({part})" for part in parts) + ")"
+
+    def _text_term_to_fts(self, term: TextTerm) -> str:
+        if term.is_phrase or term.force_quoted or not _is_simple_natural_query(term.value):
+            return self._quote_fts_value(term.value)
+        return smart_query_transform(term.value)
+
+    @staticmethod
+    def _quote_fts_value(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
+
+    @staticmethod
+    def _compile_or_filter_groups(
+        groups: list[list[FilterPredicate]],
+    ) -> list[FilterPredicate]:
+        predicates: list[FilterPredicate] = []
+        for group in groups:
+            sql_parts: list[str] = []
+            params: list = []
+            for predicate in group:
+                sql_parts.append(f"({predicate.sql})")
+                params.extend(predicate.params)
+            if sql_parts:
+                predicates.append(FilterPredicate(" OR ".join(sql_parts), tuple(params)))
+        return predicates
+
     def search_email_bodies_smart(
         self,
         query: str,
@@ -805,25 +1281,18 @@ class EmailRepository:
         since_date: Optional[str] = None,
         until_date: Optional[str] = None,
     ) -> list[EmailSearchHit]:
-        """Smart wrapper of search_email_bodies — CJK-aware 自动改写 query (PR-2a).
+        """Smart wrapper of search_email_bodies — Search Query DSL v1 + CJK-aware.
 
-        转换由 ``smart_query_transform`` 实现 — 自然语言 '产品' → FTS5
-        '(产品* OR (产* AND 品*))' 等. 主要给 LLM tool / 自然语言用户用.
-        CLI / 高级用户继续走 ``search_email_bodies`` 传完整 FTS5 syntax 即可.
+        纯文本查询仍走旧 smart transform fast-path；含字段语法时由 parser 编译。
         """
-        transformed = smart_query_transform(query)
-        if transformed != query:
-            logger.debug(
-                f"search_email_bodies_smart: query={query!r} → "
-                f"transformed={transformed!r}"
-            )
-        return self.search_email_bodies(
-            transformed,
+        return self.search_email_bodies_with_meta(
+            query,
+            mode="smart",
             limit=limit,
             mailbox=mailbox,
             since_date=since_date,
             until_date=until_date,
-        )
+        ).hits
 
     # ============================================================
     # SEARCH (PR-2b: 附件文本 FTS5)

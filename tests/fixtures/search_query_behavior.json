@@ -1,0 +1,557 @@
+{
+  "now": "2026-06-13T12:00:00",
+  "tz_offset_minutes": 480,
+  "emails": [
+    {
+      "internal_id": 1,
+      "subject": "Redis timeout incident",
+      "sender": "alice@example.com",
+      "sender_name": "Alice Zhang",
+      "to_addr": "bob@example.com",
+      "cc_addr": "ops@example.com",
+      "date_received": "2026-06-01T09:30:00+08:00",
+      "mailbox": "收件箱",
+      "is_read": 0,
+      "is_flagged": 1,
+      "is_pinned": 1,
+      "is_important": 1,
+      "ai_priority": "🔴 紧急",
+      "body_markdown": "redis timeout incident 产品评审 alpha",
+      "attachments": [
+        {
+          "filename": "report.pdf",
+          "is_inline": 0
+        },
+        {
+          "filename": "logo.png",
+          "is_inline": 1
+        }
+      ]
+    },
+    {
+      "internal_id": 2,
+      "subject": "Weekly report",
+      "sender": "bob@example.com",
+      "sender_name": "Bob Lee",
+      "to_addr": "alice@example.com",
+      "cc_addr": "carol@example.com",
+      "date_received": "2026-05-31T20:30:00-06:00",
+      "mailbox": "发件箱",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟡 重要",
+      "body_markdown": "weekly report project budget",
+      "attachments": []
+    },
+    {
+      "internal_id": 3,
+      "subject": "产品评审会议",
+      "sender": "carol@corp.com",
+      "sender_name": "Carol 王",
+      "to_addr": "team@example.com; alice@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-01T00:30:00-07:00",
+      "mailbox": "收件箱",
+      "is_read": 0,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "本周产品评审定在周三下午，请提前同步进度。",
+      "attachments": [
+        {
+          "filename": "cid.png",
+          "is_inline": 1
+        }
+      ]
+    },
+    {
+      "internal_id": 4,
+      "subject": "Noreply alert",
+      "sender": "noreply@example.com",
+      "sender_name": "No Reply",
+      "to_addr": "alerts@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-01T18:00:00+00:00",
+      "mailbox": "收件箱",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🔴 紧急",
+      "body_markdown": "redis alert automated timeout",
+      "attachments": []
+    },
+    {
+      "internal_id": 5,
+      "subject": "Archive note",
+      "sender": "dave@example.com",
+      "sender_name": "Dave",
+      "to_addr": "archive@example.com",
+      "cc_addr": "",
+      "date_received": "2026-05-20T12:00:00+00:00",
+      "mailbox": "存档",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "archive legacy project alpha",
+      "attachments": []
+    },
+    {
+      "internal_id": 6,
+      "subject": "Draft proposal",
+      "sender": "erin@example.com",
+      "sender_name": "Erin",
+      "to_addr": "product@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-12T15:00:00+08:00",
+      "mailbox": "草稿箱",
+      "is_read": 0,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "⚪ 低",
+      "body_markdown": "proposal cache design",
+      "attachments": []
+    },
+    {
+      "internal_id": 7,
+      "subject": "Security follow-up",
+      "sender": "mallory@example.com",
+      "sender_name": "Mallory Ops",
+      "to_addr": "security@example.com",
+      "cc_addr": "alice@example.com",
+      "date_received": "2026-06-10T08:00:00+00:00",
+      "mailbox": "收件箱",
+      "is_read": 1,
+      "is_flagged": 1,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟡 重要",
+      "body_markdown": "security redis follow up",
+      "attachments": [
+        {
+          "filename": "evidence.txt",
+          "is_inline": 0
+        }
+      ]
+    },
+    {
+      "internal_id": 8,
+      "subject": "Release plan",
+      "sender": "alice@example.com",
+      "sender_name": "Alice Zhang",
+      "to_addr": "product@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-13T09:00:00+08:00",
+      "mailbox": "收件箱",
+      "is_read": 0,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "release plan cache timeout",
+      "attachments": []
+    },
+    {
+      "internal_id": 9,
+      "subject": "Low priority digest",
+      "sender": "digest@example.com",
+      "sender_name": "Digest",
+      "to_addr": "alice@example.com",
+      "cc_addr": "",
+      "date_received": "2026-04-30T23:30:00-07:00",
+      "mailbox": "收件箱",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "⚪ 低",
+      "body_markdown": "digest newsletter",
+      "attachments": []
+    },
+    {
+      "internal_id": 10,
+      "subject": "Meeting notes",
+      "sender": "frank@example.com",
+      "sender_name": "Frank",
+      "to_addr": "alice@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-05T12:00:00+08:00",
+      "mailbox": "发件箱",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "meeting notes weekly report",
+      "attachments": []
+    },
+    {
+      "internal_id": 11,
+      "subject": "Emoji priority sample",
+      "sender": "grace@example.com",
+      "sender_name": "Grace",
+      "to_addr": "support@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-03T00:00:00+00:00",
+      "mailbox": "收件箱",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 1,
+      "ai_priority": "🔴 紧急",
+      "body_markdown": "urgent customer escalation ai priority",
+      "attachments": []
+    },
+    {
+      "internal_id": 12,
+      "subject": "Literal foo colon",
+      "sender": "henry@example.com",
+      "sender_name": "Henry",
+      "to_addr": "dev@example.com",
+      "cc_addr": "",
+      "date_received": "2026-06-04T00:00:00+00:00",
+      "mailbox": "收件箱",
+      "is_read": 1,
+      "is_flagged": 0,
+      "is_pinned": 0,
+      "is_important": 0,
+      "ai_priority": "🟢 一般",
+      "body_markdown": "literal foo:bar token for unknown field fallback",
+      "attachments": []
+    }
+  ],
+  "cases": [
+    {
+      "name": "field_from_sender_basic",
+      "query": "from:alice",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_from_sender_name_quoted",
+      "query": "from:\"Alice Zhang\"",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_to_basic",
+      "query": "to:alice@example.com",
+      "expect_ids": [
+        10,
+        3,
+        2,
+        9
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_cc_basic",
+      "query": "cc:alice@example.com",
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_subject_quoted",
+      "query": "subject:\"Weekly report\"",
+      "expect_ids": [
+        2
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_mailbox_alias_sent",
+      "query": "in:sent",
+      "expect_ids": [
+        10,
+        2
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_mailbox_chinese",
+      "query": "mailbox:收件箱",
+      "expect_ids": [
+        1,
+        3,
+        4,
+        7,
+        8,
+        9,
+        11,
+        12
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_since_alias",
+      "query": "since:2026-06-10",
+      "expect_ids": [
+        8,
+        6,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_until_inclusive_date_only",
+      "query": "until:2026-06-01",
+      "expect_ids": [
+        3,
+        2,
+        1,
+        5,
+        9
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_on_alias_date_only",
+      "query": "on:2026-06-01",
+      "expect_ids": [
+        3,
+        2,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_newer_than_relative",
+      "query": "newer_than:7d",
+      "expect_ids": [
+        8,
+        6,
+        7
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_older_than_relative",
+      "query": "older_than:30d",
+      "expect_ids": [
+        9
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_is_unread",
+      "query": "is:unread",
+      "expect_ids": [
+        8,
+        6,
+        3,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_has_attachment_excludes_inline",
+      "query": "has:attachment",
+      "expect_ids": [
+        7,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "field_priority_alias_urgent",
+      "query": "priority:urgent",
+      "expect_ids": [
+        11,
+        4,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "text_and_field_filter",
+      "query": "timeout from:alice",
+      "expect_ids": [
+        1,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "negative_field_filter",
+      "query": "redis -from:noreply",
+      "expect_ids": [
+        1,
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "negative_text_filter",
+      "query": "redis -timeout",
+      "expect_ids": [
+        7
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "pure_negative_text_scan",
+      "query": "-redis",
+      "expect_ids": [
+        8,
+        6,
+        10,
+        12,
+        11,
+        3,
+        2,
+        5,
+        9
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "or_filter_group",
+      "query": "from:alice OR from:bob",
+      "expect_ids": [
+        8,
+        2,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "or_text_group",
+      "query": "redis OR cache",
+      "expect_ids": [
+        1,
+        4,
+        6,
+        7,
+        8
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "or_text_group_with_and_term",
+      "query": "alpha redis OR project",
+      "expect_ids": [
+        1,
+        5
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "or_cross_class_downgrade",
+      "query": "from:alice OR redis",
+      "expect_ids": [
+        1
+      ],
+      "expect_warnings": 1
+    },
+    {
+      "name": "unknown_field_downgrades_to_text",
+      "query": "foo:bar",
+      "expect_ids": [
+        12
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "empty_value_warning",
+      "query": "from:",
+      "expect_ids": [],
+      "expect_warnings": 1
+    },
+    {
+      "name": "unknown_is_value_warning",
+      "query": "is:archived",
+      "expect_ids": [],
+      "expect_warnings": 1
+    },
+    {
+      "name": "date_mixed_timezone_boundary",
+      "query": "date:2026-06-01",
+      "expect_ids": [
+        3,
+        2,
+        1
+      ],
+      "order": "exact",
+      "expect_warnings": 0
+    },
+    {
+      "name": "zero_syntax_fast_path_legacy_smart",
+      "query": "redis timeout",
+      "expect_ids": [
+        1,
+        4
+      ],
+      "expect_warnings": 0,
+      "expect_transformed_query": "redis AND timeout"
+    },
+    {
+      "name": "zero_syntax_phrase_fast_path",
+      "query": "\"weekly report\"",
+      "expect_ids": [
+        2,
+        10
+      ],
+      "expect_warnings": 0,
+      "expect_transformed_query": "\"weekly report\""
+    },
+    {
+      "name": "cjk_smart_body",
+      "query": "产品",
+      "expect_ids": [
+        1,
+        3
+      ],
+      "expect_warnings": 0
+    },
+    {
+      "name": "structured_params_merge",
+      "query": "timeout",
+      "params": {
+        "mailbox": "收件箱",
+        "since_date": "2026-06-10"
+      },
+      "expect_ids": [
+        8
+      ],
+      "expect_warnings": 0,
+      "expect_transformed_query": "timeout"
+    },
+    {
+      "name": "relative_date_invalid_unit_drops_token",
+      "query": "newer_than:7n redis",
+      "expect_ids": [
+        1,
+        4,
+        7
+      ],
+      "expect_warnings": 1,
+      "expect_transformed_query": "redis"
+    }
+  ]
+}

@@ -231,20 +231,25 @@ export function createEmailTools(platform: ChatToolPlatform): ToolDef[] {
     name: 'email_search_fulltext',
     description:
       'Full-text search across all synced email bodies (subject + sender + body) ' +
-      'using SQLite FTS5. Pass natural-language keywords like "产品评审" or ' +
-      '"redis timeout" — they are automatically CJK-aware expanded (smart mode, ' +
-      'PR-2a) so Chinese chunked tokens are handled. Also accepts explicit FTS5 ' +
-      'syntax: phrases ("team meeting"), boolean (redis AND timeout), prefix ' +
-      '(meet*). Returns ranked hits with snippet + sender + date (bm25 rank, ' +
-      'smaller = more relevant).',
+      'using SQLite FTS5 plus Search Query DSL. Mix plain keywords with filters ' +
+      'like from:, to:, subject:, in:, after:, before:, date:, newer_than:, ' +
+      'is:unread|flagged, has:attachment, priority:urgent. Supports quoted ' +
+      'phrases, token-level -negation, uppercase OR, and natural CJK expansion. ' +
+      'Examples: from:alice redis; 产品评审 has:attachment newer_than:7d; ' +
+      'subject:"weekly report" -from:noreply. Returns ranked hits with snippet + ' +
+      'sender + date (bm25 rank, smaller = more relevant).',
     inputSchema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
           description:
-            'Natural-language keywords or FTS5 syntax. Examples: "产品评审" | ' +
-            '"redis timeout" | "redis AND timeout" | "meet*" | "\\"team meeting\\"".'
+            'Keywords or Search Query DSL. Fields: from:/to:/subject:/in:/after:/' +
+            'before:/date:/newer_than:/is:unread|flagged/has:attachment/' +
+            'priority:urgent. Use quotes for phrases, -term to exclude, uppercase ' +
+            'OR for alternatives. Examples: "from:alice redis"; ' +
+            '"产品评审 has:attachment newer_than:7d"; ' +
+            '"subject:\\"weekly report\\" -from:noreply".'
         },
         mailbox: { type: 'string', description: 'Limit to mailbox. Omit for all.' },
         since: { type: 'string', description: 'ISO date YYYY-MM-DD.' },

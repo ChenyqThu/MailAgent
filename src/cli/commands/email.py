@@ -388,7 +388,10 @@ SEARCH_LIMIT_MAX = 200
 @app.command("search")
 def email_search(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="自然语言关键词 或 FTS5 query 语法"),
+    query: str = typer.Argument(
+        ...,
+        help="自然语言关键词，或 from:/to:/subject:/after:/has:attachment 等查询语法",
+    ),
     mailbox: Optional[str] = typer.Option(None, "--mailbox"),
     since: Optional[str] = typer.Option(None, "--since", help="YYYY-MM-DD"),
     until: Optional[str] = typer.Option(None, "--until", help="YYYY-MM-DD"),
@@ -397,15 +400,15 @@ def email_search(
     raw: bool = typer.Option(
         False,
         "--raw",
-        help="不做 CJK smart wrapper, 直接交给 FTS5. 默认 smart (PR-2a)",
+        help="跳过查询语法解析与 CJK smart wrapper，直接交给 FTS5",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
     """FTS5 全文搜索邮件正文 + subject + sender (RFC §4.2 / §7.2).
 
-    默认 smart 模式 (PR-2a): 自然语言 query '产品' 自动改写成
-    '(产品* OR (产* AND 品*))' 等, 解决 unicode61 chunk-level token
-    命不中的中文搜索痛点. 用 --raw 关掉 wrapper 走原 FTS5 syntax.
+    默认 smart 模式支持 Search Query DSL v1: from:alice、subject:"weekly report"、
+    after:2026-06-01、has:attachment、-from:noreply 等；纯文本 query 仍走
+    既有 CJK smart wrapper。用 --raw 关掉 parser，走原 FTS5 syntax。
     """
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
@@ -416,25 +419,16 @@ def email_search(
         ))
 
     repo = cli.email_repo
-    if raw:
-        hits = repo.search_email_bodies(
-            query,
-            limit=limit,
-            mailbox=mailbox,
-            since_date=since,
-            until_date=until,
-        )
-        transformed_query = query
-    else:
-        from src.repository.email_repository import smart_query_transform
-        transformed_query = smart_query_transform(query)
-        hits = repo.search_email_bodies(
-            transformed_query,
-            limit=limit,
-            mailbox=mailbox,
-            since_date=since,
-            until_date=until,
-        )
+    search_result = repo.search_email_bodies_with_meta(
+        query,
+        mode="raw" if raw else "smart",
+        limit=limit,
+        mailbox=mailbox,
+        since_date=since,
+        until_date=until,
+    )
+    hits = search_result.hits
+    transformed_query = search_result.transformed_query
 
     data = []
     for hit in hits:
@@ -461,6 +455,8 @@ def email_search(
     }
     if not raw and transformed_query != query:
         meta_extra["transformed_query"] = transformed_query
+    if search_result.parse_warnings:
+        meta_extra["parse_warnings"] = search_result.parse_warnings
 
     if cli.output.lower() == "text":
         _render_search_text(data, meta_extra, no_snippet)

@@ -44,6 +44,7 @@ import type {
   ReportRunResult,
   CleanupDeadLetterOpts,
   ComposeDraftOpts,
+  ContactSuggestion,
   CreateDraftOpts,
   CreateDraftResult,
   DraftPlanOpts,
@@ -251,6 +252,13 @@ class ElectronEmailApi implements EmailApi {
   }
   async search(opts: SearchOpts): Promise<SearchResult> {
     return (await invoker()('email:search', opts)) as SearchResult
+  }
+  async contactSuggest(
+    q: string,
+    limit?: number,
+    exclude?: string | string[]
+  ): Promise<ContactSuggestion[]> {
+    return (await invoker()('email:contactSuggest', { q, limit, exclude })) as ContactSuggestion[]
   }
   async resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult> {
     const env = (await invoker()('email:resync', internalId, opts ?? {})) as WriteEnvelope<unknown>

@@ -37,13 +37,24 @@ SCHEMA_GET_EMAIL_BODY: Dict[str, Any] = {
 
 SCHEMA_SEARCH_EMAILS: Dict[str, Any] = {
     "name": "search_emails",
-    "description": "全文搜索邮件正文/主题/发件人（CJK 友好）。要找清单外或跨线程的相关邮件时调。",
+    "description": (
+        "全文搜索邮件正文/主题/发件人（CJK 友好），支持 from:/to:/subject:/in:/"
+        "after:/before:/date:/newer_than:/is:/has:attachment/priority: 等查询语法。"
+        "要找清单外或跨线程的相关邮件时调。"
+    ),
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
         "required": ["query"],
         "properties": {
-            "query": {"type": "string", "description": "自然语言或关键词"},
+            "query": {
+                "type": "string",
+                "description": (
+                    "关键词或查询语法；可混用 from:alice、to:bob、subject:\"weekly report\"、"
+                    "in:收件箱、after:2026-06-01、newer_than:7d、is:unread、"
+                    "has:attachment、priority:urgent、-否定、OR。"
+                ),
+            },
             "limit": {"type": "integer", "description": "最多返回条数（默认 15，上限 30）"},
             "mailbox": {"type": "string", "description": "限定邮箱，如 收件箱 / 发件箱（可省）"},
         },

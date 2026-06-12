@@ -7,10 +7,14 @@
 // The normaliser deliberately doesn't touch queries that already contain
 // FTS5 syntax (explicit `*`, quoted phrase, AND/OR/NOT/NEAR), since the
 // user clearly knows what they want and our heuristic could break it.
+// Search DSL tokens (`from:`, `has:attachment`, token-level `-`, `OR`) also
+// pass through untouched; the main process parser owns those semantics.
 //
 // Exported as a separate module so it has its own home (react-refresh
 // `only-export-components` doesn't allow non-component exports in
 // component files) and can be unit-tested directly.
+
+import { queryHasRegisteredSearchSyntax } from './search_query_parser'
 
 const CJK_RE = /[一-鿿㐀-䶿豈-﫿]/
 const FTS5_OP_RE = /\b(AND|OR|NOT|NEAR)\b/i
@@ -19,6 +23,7 @@ const HAS_WILDCARD_RE = /[*"]/
 export function normalizeFtsQuery(raw: string): string {
   const trimmed = raw.trim()
   if (trimmed.length === 0) return ''
+  if (queryHasRegisteredSearchSyntax(trimmed)) return trimmed
   if (HAS_WILDCARD_RE.test(trimmed)) return trimmed
   if (FTS5_OP_RE.test(trimmed)) return trimmed
   if (!CJK_RE.test(trimmed)) return trimmed

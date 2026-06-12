@@ -23,6 +23,10 @@ describe('normalizeFtsQuery', () => {
     ['本周 OR 上周', '本周 OR 上周'],
     ['notion NOT spam', 'notion NOT spam'],
     ['redis NEAR(timeout, 5)', 'redis NEAR(timeout, 5)'],
+    // Search DSL is owned by the main-process parser; renderer does not append CJK wildcard.
+    ['from:alice 产品', 'from:alice 产品'],
+    ['产品 -noreply', '产品 -noreply'],
+    ['redis OR 产品', 'redis OR 产品'],
     // bare CJK gets `*` on last whitespace-separated token
     ['产品', '产品*'],
     ['本周 产品', '本周 产品*'],

@@ -1162,19 +1162,19 @@ class EventHandlers:
         return result_data
 
     async def handle_search_email_bodies(self, event: Dict):
-        """FTS5 全文搜索邮件正文 + subject + sender（v4 Phase 3, PR-2a smart 默认）.
+        """FTS5 全文搜索邮件正文 + subject + sender（Search Query DSL v1, smart 默认）.
 
         请求参数 (event.properties):
-            query: str (必填) — 自然语言关键词或 FTS5 query 语法都行
-            mode: str (可选, 默认 'smart') — 'smart' = CJK-aware 自动改写 query
-                (单字加 *, 多字 CJK 用整 prefix OR 字符 AND 兜底); 'raw' = 不动,
-                直接交给 FTS5 (给 explicit FTS5 语法用户用)
+            query: str (必填) — 自然语言关键词或 from:/subject:/after: 等查询语法
+            mode: str (可选, 默认 'smart') — 'smart' = Search Query DSL v1 +
+                CJK-aware 自动改写; 'raw' = 不动, 直接交给 FTS5
             limit: int (默认 50，最大 200)
             mailbox: str (可选) — 仅返回该邮箱（'收件箱' / '发件箱'）
             since_date / until_date: str (可选) — 'YYYY-MM-DD'，按 date_received 过滤
 
         响应:
-            {status:'success', query, transformed_query (smart 时), mode,
+            {status:'success', query, transformed_query (smart 时), parse_warnings?,
+             mode,
              hits:[{internal_id, subject, sender, date_received, mailbox,
                     snippet, rank, notion_page_id, notion_url}],
              total_hits, latency_ms}
@@ -1183,8 +1183,9 @@ class EventHandlers:
             - rank 是 bm25 分数，越小越相关；按 rank 升序返回
             - snippet 是 FTS5 高亮片段（默认 <mark>...</mark>）
             - 仅覆盖已 dual-written 的邮件；历史未 backfill 的邮件不会出现在结果里
-            - PR-2a: smart 模式自动处理 unicode61 chunk-level token 命不中的洞,
-              中文 query '产品' 自动转 '(产品* OR (产* AND 品*))' 等
+            - smart 模式自动处理 unicode61 chunk-level token 命不中的洞,
+              中文 query '产品' 自动转 '(产品* OR (产* AND 品*))' 等；
+              含字段语法时按 Search Query DSL v1 编译
         """
         self._stats["search_email_bodies"] += 1
         t0 = time.monotonic()
@@ -1218,32 +1219,44 @@ class EventHandlers:
         since_date = props.get("since_date") or None
         until_date = props.get("until_date") or None
 
-        # PR-2a: mode 'smart' (default, CJK-aware) | 'raw' (FTS5 explicit)
+        # Search DSL v1: mode 'smart' (default) | 'raw' (FTS5 explicit)
         mode = (props.get("mode") or "smart").strip().lower()
         if mode not in ("smart", "raw"):
             mode = "smart"
 
-        # 计算实际 FTS5 query (smart 模式可能改写)
-        if mode == "smart":
-            from src.repository.email_repository import smart_query_transform
-            transformed_query = smart_query_transform(query)
-        else:
-            transformed_query = query
-
         logger.info(
             f"search_email_bodies: query={query!r} mode={mode} "
-            f"transformed={transformed_query!r} limit={limit} "
             f"mailbox={mailbox} since={since_date} until={until_date}"
         )
 
         try:
-            hits = self.email_repo.search_email_bodies(
-                transformed_query,
-                limit=limit,
-                mailbox=mailbox,
-                since_date=since_date,
-                until_date=until_date,
-            )
+            if hasattr(self.email_repo, "search_email_bodies_with_meta"):
+                search_result = self.email_repo.search_email_bodies_with_meta(
+                    query,
+                    mode=mode,
+                    limit=limit,
+                    mailbox=mailbox,
+                    since_date=since_date,
+                    until_date=until_date,
+                )
+                hits = search_result.hits
+                transformed_query = search_result.transformed_query
+                parse_warnings = search_result.parse_warnings
+            else:
+                # 测试 fake / 旧 repo 兼容路径。
+                if mode == "smart":
+                    from src.repository.email_repository import smart_query_transform
+                    transformed_query = smart_query_transform(query)
+                else:
+                    transformed_query = query
+                hits = self.email_repo.search_email_bodies(
+                    transformed_query,
+                    limit=limit,
+                    mailbox=mailbox,
+                    since_date=since_date,
+                    until_date=until_date,
+                )
+                parse_warnings = []
         except Exception as e:
             self._stats["search_email_bodies_error"] += 1
             logger.error(f"search_email_bodies: failed for query={query!r}: {e}")
@@ -1281,6 +1294,8 @@ class EventHandlers:
         }
         if mode == "smart" and transformed_query != query:
             payload["transformed_query"] = transformed_query
+        if parse_warnings:
+            payload["parse_warnings"] = parse_warnings
         await self._publish(event_id, payload)
         logger.info(
             f"search_email_bodies: query={query!r} returned {len(hits)} hits "
