@@ -205,6 +205,7 @@ export function CommandPalette(): React.ReactElement | null {
   const viewForMailbox = useCallback((mailbox: string | null | undefined): EmailView => {
     if (mailbox === '收件箱') return 'inbox'
     if (mailbox === '发件箱') return 'outbox'
+    if (mailbox === '草稿箱') return 'drafts'
     return 'all'
   }, [])
 

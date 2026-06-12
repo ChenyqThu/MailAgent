@@ -404,6 +404,7 @@
     },
     "inbox": "Inbox",
     "outbox": "Outbox",
+    "drafts": "Drafts",
     "flagged": "Flagged",
     "allMail": "All mail",
     "aiSessions": "AI sessions",

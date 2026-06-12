@@ -20,7 +20,7 @@ const KEY_PRI = 'mailagent.emailList.priorities'
 const KEY_CAT = 'mailagent.emailList.categories.v2'
 
 export type EmailFilter = 'all' | 'unread' | 'flagged' | 'failed'
-export type EmailView = 'inbox' | 'outbox' | 'flagged' | 'all'
+export type EmailView = 'inbox' | 'outbox' | 'drafts' | 'flagged' | 'all'
 export type InboxTab = 'focused' | 'other'
 
 /** Email category — the verbatim LLM CATEGORY_ENUM string (see

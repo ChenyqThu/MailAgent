@@ -145,6 +145,14 @@ class TestData:
         briefs = rdata.fetch_report_briefs(str(db), window_hours=24, now=_NOW)
         assert [b.internal_id for b in briefs] == [1]
 
+    def test_drafts_excluded(self, db: Path):
+        """草稿不进报告：窗口查询 + 置顶补充都排除草稿 mailbox。"""
+        _insert(db, 1, hours_ago=1)                                   # 收件箱 ✓
+        _insert(db, 2, hours_ago=1, mailbox="草稿箱")                  # 窗口内草稿 ✗
+        _insert(db, 3, hours_ago=999, mailbox="草稿箱", is_pinned=1)   # 置顶草稿 ✗
+        briefs = rdata.fetch_report_briefs(str(db), window_hours=24, now=_NOW)
+        assert [b.internal_id for b in briefs] == [1]
+
     def test_grouping_rules(self, db: Path):
         # attention: 🟡重要 + 需要回复
         _insert(db, 1, labels=_labels(priority="🟡 重要", action="需要回复"))

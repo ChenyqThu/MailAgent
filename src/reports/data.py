@@ -28,6 +28,9 @@ _FYI_CATEGORIES = {"🔔 系统通知"}
 # 发件箱（用户自己发的）—— 从报告**条目**里排除（不是待办），但用来推「已回复」。
 _SENT_MAILBOXES = ("发件箱", "已发送邮件", "Sent", "Sent Messages", "Sent Items")
 
+# 草稿不进报告：未发出的内容既不是"收到"也不是"已发出"，铺进日/周/月报是噪音。
+_DRAFT_MAILBOXES = ("草稿箱", "草稿", "Drafts")
+
 # priority DESC 排序权重（越前越紧急）。
 _PRIORITY_RANK: Dict[str, int] = {
     label: len(PRIORITY_ENUM) - i for i, label in enumerate(PRIORITY_ENUM)
@@ -165,14 +168,16 @@ def fetch_report_briefs(
     try:
         # ① 窗口查询：**含**发件箱（按 mailbox 现场判 is_outbound）。发件箱邮件不铺成
         #    报告条目，但带入用于「已发出」统计 + 让 LLM 了解你回复/处理了什么。
+        draft_ph = ", ".join("?" * len(_DRAFT_MAILBOXES))
         window_rows = conn.execute(
             _BRIEF_SELECT
-            + """
+            + f"""
              WHERE m.date_received IS NOT NULL
                AND julianday(m.date_received) >= julianday(?)
                AND julianday(m.date_received) <  julianday(?)
+               AND m.mailbox NOT IN ({draft_ph})
             """,
-            (since_iso, until_iso),
+            (since_iso, until_iso, *_DRAFT_MAILBOXES),
         ).fetchall()
         seen: set = set()
         for r in window_rows:
@@ -188,10 +193,11 @@ def fetch_report_briefs(
              WHERE m.is_pinned = 1
                AND m.date_received IS NOT NULL
                AND m.mailbox NOT IN ({sent_ph})
+               AND m.mailbox NOT IN ({draft_ph})
              ORDER BY m.date_received DESC
              LIMIT ?
             """,
-            (*_SENT_MAILBOXES, _PINNED_EXTRA_CAP),
+            (*_SENT_MAILBOXES, *_DRAFT_MAILBOXES, _PINNED_EXTRA_CAP),
         ).fetchall()
         for r in pinned_rows:
             if int(r["internal_id"]) in seen:

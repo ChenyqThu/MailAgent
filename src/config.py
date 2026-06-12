@@ -168,6 +168,14 @@ class Config(BaseSettings):
         description='自定义文件夹**默认跑 LLM 分类**（L2）；此黑名单内的文件夹跳过 LLM（省成本去噪）。'
                     '存 mailbox 显示名（如 ["Jira","Bugzilla"]），JSON 数组。空=所有自定义文件夹都分类。',
     )
+    # 草稿箱同步（davmail-only）：Exchange Drafts → email_metadata (mailbox='草稿箱')
+    drafts_sync_enabled: bool = Field(
+        default=True,
+        env="DRAFTS_SYNC_ENABLED",
+        description="同步 Exchange 草稿箱到本地（davmail-only，AppleScript 模式不激活）。"
+                    "草稿仅入本地 SQLite（列表/数量/正文/FTS），不进 Notion / LLM / 飞书 / KOS。"
+                    "全量 UID 对账（非增量）：编辑/发送/删除导致的草稿消失会同步删除本地行。",
+    )
 
     # 飞书通知配置
     feishu_app_id: str = Field(default="", env="FEISHU_APP_ID", description="飞书应用 App ID")

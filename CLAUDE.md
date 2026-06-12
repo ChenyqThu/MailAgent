@@ -64,6 +64,7 @@
 | 开关 | 代码默认 | 说明 |
 |---|---|---|
 | `MAILAGENT_BACKEND` | `applescript` | ★ 生产 = `davmail`（Sprint 16 cutover 后） |
+| `DRAFTS_SYNC_ENABLED` | `true` | 草稿箱同步（davmail-only）：Exchange Drafts 全量 UID 对账进 `email_metadata`（mailbox='草稿箱'，编辑/发送/删除会同步删本地行），仅本地（列表/数量/正文/FTS），不进 Notion / LLM / 飞书 / KOS / 报告 |
 | `MAILAGENT_OUTBOX_ENABLED` | —（Sprint 15 灰度） | false 时 handler + reverse_sync 退回老 AppleScript 直调 |
 | `BODY_DUAL_WRITE_ENABLED` | `true` | v4 双写总开关；失败仅 warning 不阻断 |
 | `NOTION_READ_FROM_SQLITE` | `false` | v4 Phase 4 灰度；切 true 后 sync/resync 走 SQLite SSoT，miss fallback |

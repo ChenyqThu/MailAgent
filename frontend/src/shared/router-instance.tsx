@@ -137,7 +137,7 @@ const rootRoute = createRootRoute({ component: RootLayout })
 // to 'inbox' so a hand-typed URL never crashes the route. The default
 // `view=inbox` is intentionally omitted from the URL when its value is the
 // default — TanStack Router's `stripSearchParams` handles that.
-export type InboxView = 'inbox' | 'outbox' | 'flagged' | 'all'
+export type InboxView = 'inbox' | 'outbox' | 'drafts' | 'flagged' | 'all'
 // `view` is optional in the type — TanStack Router uses this to derive
 // whether `search` must be passed to `navigate({to:'/'})`. We always
 // return a concrete value at runtime via `validateSearch`, so consumers
@@ -155,7 +155,7 @@ const inboxRoute = createRoute({
   component: InboxLayout,
   validateSearch: (search: Record<string, unknown>): InboxSearch => {
     const v = search.view
-    if (v === 'outbox' || v === 'flagged' || v === 'all' || v === 'inbox') {
+    if (v === 'outbox' || v === 'drafts' || v === 'flagged' || v === 'all' || v === 'inbox') {
       return { view: v }
     }
     return { view: 'inbox' }

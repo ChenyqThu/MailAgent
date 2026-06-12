@@ -1511,6 +1511,47 @@ class SyncStore:
         """
         return self._update_for_retry(internal_id, 'failed', error, max_retries)
 
+    def mark_synced_local(self, internal_id: int) -> bool:
+        """标记为已同步（本地-only，无 Notion 页）。
+
+        草稿箱等仅入本地 SQLite（不进 Notion）的邮件用：sync_status='synced' 但
+        notion_page_id 保持 NULL。SSE 同 mark_synced_v3 发 email.synced 让前端
+        刷新列表/badge。
+        """
+        now = time.time()
+        ok = False
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    UPDATE email_metadata
+                    SET sync_status = 'synced',
+                        sync_error = NULL,
+                        next_retry_at = NULL,
+                        updated_at = ?
+                    WHERE internal_id = ?
+                """, (now, internal_id))
+                conn.commit()
+                logger.debug(f"Marked synced (local-only): internal_id={internal_id}")
+                ok = True
+            except sqlite3.Error as e:
+                logger.error(f"Failed to mark synced local: {e}")
+                conn.rollback()
+                ok = False
+
+        if ok:
+            try:
+                from src.events.publisher import safe_publish
+                safe_publish(
+                    "email.synced",
+                    internal_id=internal_id,
+                    data={"local_only": True},
+                    source="new_watcher",
+                )
+            except Exception:
+                pass
+        return ok
+
     def mark_skipped(self, internal_id: int) -> bool:
         """标记邮件为跳过状态（因日期过滤等原因不同步到 Notion）
 

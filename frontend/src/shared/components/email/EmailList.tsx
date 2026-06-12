@@ -548,6 +548,7 @@ function listOptsForView(view: EmailView, limit: number, customMailbox: string |
   if (customMailbox) return { mailbox: customMailbox, limit }
   if (view === 'inbox') return { mailbox: '收件箱', limit }
   if (view === 'outbox') return { mailbox: '发件箱', limit }
+  if (view === 'drafts') return { mailbox: '草稿箱', limit }
   if (view === 'flagged') return { isFlagged: true, limit }
   return { limit }
 }
@@ -828,7 +829,7 @@ export function EmailList(): React.ReactElement {
   // 发件箱只锚在我发出的邮件上, 置顶的发件邮件本就在 all 里 (会被 partitionByDate
   // 路由到 pinned 桶), 故 outbox 直接用 filteredBase, 不 union 收件箱置顶。
   const filtered = useMemo(() => {
-    if (view === 'outbox' || pinnedSuppScoped.length === 0) return filteredBase
+    if (view === 'outbox' || view === 'drafts' || pinnedSuppScoped.length === 0) return filteredBase
     const ids = new Set(filteredBase.map((e) => e.internal_id))
     const out = filteredBase.slice()
     for (const p of pinnedSuppScoped) {
@@ -915,7 +916,8 @@ export function EmailList(): React.ReactElement {
   const expandThread = useThreadExpand((s) => s.expand)
   const toggleThread = useThreadExpand((s) => s.toggle)
   const keyFor = useCallback(
-    (threadId: string): string => (view === 'outbox' ? `outbox:${threadId}` : threadId),
+    (threadId: string): string =>
+      view === 'outbox' || view === 'drafts' ? `${view}:${threadId}` : threadId,
     [view]
   )
   const isThreadExpanded = useCallback(
@@ -1016,8 +1018,12 @@ export function EmailList(): React.ReactElement {
           // 兜底成 bare (has_body=false / ai_priority=null), 一旦它是线程最新邮件就
           // 被 groupByThread 选成 head → "非置顶标旗邮件矮行 + 无 AI strip"。标旗
           // 视图语义=只看我标的邮件, 故线程只在标旗邮件之间聚合 (head 必为标旗邮件,
-          // enriched 完整), 不 merge 跨邮件补充。
-          groupByThread(filtered, view === 'flagged' ? EMPTY_THREAD_SUPPLEMENT : threadSupplement),
+          // enriched 完整), 不 merge 跨邮件补充。草稿视图同理: 每条草稿独立成行
+          // (无 cross 源), 不引入线程补充的 bare 邮件。
+          groupByThread(
+            filtered,
+            view === 'flagged' || view === 'drafts' ? EMPTY_THREAD_SUPPLEMENT : threadSupplement
+          ),
     [view, filtered, threadSupplement]
   )
 
@@ -1285,9 +1291,11 @@ export function EmailList(): React.ReactElement {
             <div className="text-aux font-semibold text-ink-fg truncate">
               {view === 'outbox'
                 ? t('nav.outbox')
-                : view === 'flagged'
-                  ? t('nav.flagged')
-                  : t('nav.allMail')}
+                : view === 'drafts'
+                  ? t('nav.drafts')
+                  : view === 'flagged'
+                    ? t('nav.flagged')
+                    : t('nav.allMail')}
             </div>
           )}
           <div className="flex items-center gap-1">

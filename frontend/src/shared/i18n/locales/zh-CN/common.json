@@ -404,6 +404,7 @@
     },
     "inbox": "收件箱",
     "outbox": "发件箱",
+    "drafts": "草稿箱",
     "flagged": "已标旗",
     "allMail": "所有邮件",
     "aiSessions": "AI 会话历史",

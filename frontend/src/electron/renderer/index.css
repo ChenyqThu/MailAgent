@@ -1251,6 +1251,35 @@ body::before {
   display: none;
 }
 
+/* 收起态数字角标 — 展开态隐藏 (数字由行右侧 CountRight/TotalCount 承担),
+ * 收起态绝对定位到 icon 右上角 (NavRow button 自带 relative)。位置推导:
+ * 56px rail, icon 19px 居中 → icon 右缘距按钮右 ~18px; right:7px 让角标
+ * 骑在 icon 右上象限。`app-nav-keep` 豁免上面的 span 通杀隐藏; 本类默认
+ * display:none 保证展开态不出现 — 两套规则共同钉死"仅收起态可见"。
+ * 尺寸刻意压小 (13px 高 / 9px 字号, 99+ 截断): rail 上位置有限 (用户验收)。 */
+.app-nav .nav-collapsed-badge {
+  display: none;
+}
+.app-nav[data-collapsed='true'] .nav-collapsed-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 2px;
+  right: 7px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 9999px;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  pointer-events: none;
+}
+
 /* Label cross-fade — softens the abrupt display:none flip during the
  * width transition. The labels still toggle; this just makes the brief
  * overlap less jarring (140ms linear < 260ms width). */

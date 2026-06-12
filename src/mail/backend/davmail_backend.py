@@ -253,6 +253,9 @@ class DavMailBackend(IMailBackend):
         self.drafts_folder: Optional[str] = (
             getattr(cfg, "davmail_drafts_folder", "") or None
         )
+        # 草稿箱同步 (DRAFTS_SYNC_ENABLED) — 全量对账路径 (reconcile_drafts), 不走
+        # SYNC_FOLDERS 增量链路 (_effective_custom_folders 有意 block Drafts)。
+        self._sync_drafts: bool = bool(getattr(cfg, "drafts_sync_enabled", True))
         # 发件箱 (Sent) 同步 — 跟 drafts 一样: 配置优先, 留空时 probe 探测。
         # 仅当 sync_mailboxes 含"发件箱"/"已发送"时才启用 (默认 config 已含发件箱)。
         self.sent_folder: Optional[str] = (
@@ -1403,6 +1406,145 @@ class DavMailBackend(IMailBackend):
             )
         _persist_uv()
         return out
+
+    # ---- 草稿箱同步 (DRAFTS_SYNC_ENABLED): 全量对账, 非增量 ----
+
+    DRAFTS_MAILBOX_LABEL = "草稿箱"
+    _DRAFTS_UIDNEXT_KEY = "drafts_uidnext"
+
+    def reconcile_drafts(self) -> tuple[list[dict], list[int]]:
+        """草稿箱对账 — 返回 (新草稿 email dicts, 已消失草稿的 internal_ids)。
+
+        草稿箱区别于 INBOX/Sent 的"只增"语义: 草稿会被编辑 (Exchange 端 = 新 UID 替换
+        旧 UID)、发送 (从 Drafts 消失)、删除。增量 UID marker 只见新增不见消失 → 数量
+        只增不减, 必须全量 UID 对账 (草稿箱通常 < 几十封, UID SEARCH ALL 一个
+        round-trip 很便宜)。
+
+        轻量化: 先 STATUS (MESSAGES UIDNEXT UIDVALIDITY) 与本地快照比对 (COUNT +
+        sync_state KV), 三者都没变 → 零 SELECT 直接返回空 — 静止态每 cycle 只花一次
+        STATUS, 与自定义文件夹 change-probe 同级。UIDVALIDITY 变化 → 本地 davmail
+        草稿行全删重拉 (UID 空间作废)。
+
+        已知限制: OWA/Outlook 端**编辑**老草稿 (Message-ID 不变) 时, save_email 的
+        cross-backend merge 会复用本地行并更新 imap_uid, 但不重置 sync_status →
+        正文/标题停留在首次同步版本。本 app compose 的"保存草稿"每次 APPEND 新
+        Message-ID, 不受影响。
+
+        Caller (new_watcher._reconcile_drafts): to_add 走 save_email(pending) 进主
+        链路 fetch body; to_delete 走 delete_email_full + sync_store.delete。
+        """
+        if not (self._sync_drafts and self.drafts_folder):
+            return [], []
+        label = self.DRAFTS_MAILBOX_LABEL
+        local = self._folder_imap_uid_map(label)
+        stored_uv = self._get_folder_uidvalidity(self.drafts_folder)
+        stored_uidnext = self._get_drafts_uidnext()
+        to_delete: list[int] = []
+        to_add: list[dict] = []
+        try:
+            with imap_session(self.cfg, timeout=60) as imap:
+                # STATUS 必须先于 SELECT 同 mailbox (RFC 3501 §6.3.10)
+                typ, data = imap.status(
+                    quote_mailbox(self.drafts_folder),
+                    "(MESSAGES UIDNEXT UIDVALIDITY)",
+                )
+                if typ != "OK" or not data:
+                    return [], []
+                messages_s = self._extract_status_value(data[0], "MESSAGES")
+                uidnext_s = self._extract_status_value(data[0], "UIDNEXT")
+                uv_s = self._extract_status_value(data[0], "UIDVALIDITY")
+                if messages_s is None or not uidnext_s:
+                    return [], []
+                messages, uidnext = int(messages_s), int(uidnext_s)
+                uv = int(uv_s) if uv_s else None
+                if (
+                    messages == len(local)
+                    and stored_uidnext is not None
+                    and uidnext == stored_uidnext
+                    and (uv is None or stored_uv is None or uv == stored_uv)
+                ):
+                    return [], []  # 静止态: 远端与本地快照一致, 零 SELECT
+
+                typ, _ = imap.select(quote_mailbox(self.drafts_folder), readonly=True)
+                if typ != "OK":
+                    return [], []
+                current_uv = _read_uidvalidity_from_select(imap) or uv
+                if stored_uv is not None and current_uv and current_uv != stored_uv:
+                    # UIDVALIDITY 变化 → 本地 davmail 草稿行 UID 全部作废, 全删重拉
+                    logger.info(
+                        f"[davmail-backend] drafts UIDVALIDITY changed "
+                        f"{stored_uv}→{current_uv} → full rebuild"
+                    )
+                    to_delete.extend(local.values())
+                    local = {}
+                typ, data = imap.uid("search", None, "ALL")
+                if typ != "OK":
+                    return [], []
+                remote_uids = {
+                    int(u) for u in (data[0].split() if data and data[0] else [])
+                }
+                local_uids = set(local.keys())
+                to_delete.extend(local[u] for u in sorted(local_uids - remote_uids))
+                new_uids = sorted(remote_uids - local_uids)
+                if new_uids:
+                    uid_csv = ",".join(str(u) for u in new_uids)
+                    # _fetch_new_in_folder 内部会再 SELECT 同 folder (幂等, 同
+                    # session 开销可忽略) + persist uv KV
+                    to_add = self._fetch_new_in_folder(
+                        imap, self.drafts_folder, label,
+                        ("UID", uid_csv),
+                        track_inbox_uidvalidity=False,
+                        persist_uidvalidity_for=self.drafts_folder,
+                    )
+                elif current_uv:
+                    self._set_folder_uidvalidity(self.drafts_folder, current_uv)
+                # 快照推进 (uidnext)。对账期间新 APPEND 的 race 由下 cycle STATUS
+                # 差异自愈 (messages/uidnext 再变 → 再对账)。
+                self._set_drafts_uidnext(uidnext)
+            if to_add or to_delete:
+                logger.info(
+                    f"[davmail-backend] drafts reconcile: +{len(to_add)} "
+                    f"-{len(to_delete)} (remote={messages})"
+                )
+            return to_add, to_delete
+        except Exception as e:
+            logger.error(f"[davmail-backend] reconcile_drafts failed: {e}")
+            return [], []
+
+    def _folder_imap_uid_map(self, mailbox_label: str) -> dict[int, int]:
+        """SQLite 里某 mailbox 的 {imap_uid: internal_id} (davmail-origin)。草稿对账用。"""
+        try:
+            conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
+            try:
+                rows = conn.execute(
+                    "SELECT imap_uid, internal_id FROM email_metadata "
+                    "WHERE mailbox = ? AND backend_origin = 'davmail' "
+                    "AND imap_uid IS NOT NULL",
+                    (mailbox_label,),
+                ).fetchall()
+                return {int(r[0]): int(r[1]) for r in rows}
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(
+                f"[davmail-backend] _folder_imap_uid_map({mailbox_label!r}) failed: {e}"
+            )
+            return {}
+
+    def _get_drafts_uidnext(self) -> Optional[int]:
+        """读草稿箱 UIDNEXT 快照 (sync_state KV)。未记录返回 None。"""
+        try:
+            val = self.sync_store.get_state(self._DRAFTS_UIDNEXT_KEY)
+            return int(val) if val else None
+        except Exception:
+            return None
+
+    def _set_drafts_uidnext(self, uidnext: int) -> None:
+        """存草稿箱 UIDNEXT 快照 (sync_state KV)。"""
+        try:
+            self.sync_store.set_state(self._DRAFTS_UIDNEXT_KEY, str(int(uidnext)))
+        except Exception as e:
+            logger.warning(f"[davmail-backend] _set_drafts_uidnext({uidnext}) failed: {e}")
 
     def _max_sent_imap_uid(self) -> int:
         """SQLite 里 mailbox='发件箱' 已导入的最大 IMAP UID (任意 backend_origin)。

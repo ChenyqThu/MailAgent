@@ -32,6 +32,7 @@ import {
   Send,
   Settings,
   Sparkles,
+  SquarePen,
   Star,
   Sliders
 } from 'lucide-react'
@@ -59,6 +60,10 @@ interface NavRowProps {
   disabled?: boolean
   /** Tooltip surfaced on hover (esp. for disabled rows). */
   title?: string
+  /** 收起态 icon 右上角数字角标（展开态由 right 槽承担数字展示，互斥）。
+   *  样式/显隐由 authored CSS `.nav-collapsed-badge` 按 data-collapsed 切换；
+   *  `app-nav-keep` 豁免 §2.11 收起态 span 隐藏规则。0/undefined 不渲染。 */
+  collapsedBadge?: number
 }
 
 /** Inject `shrink-0` on the Lucide svg so it doesn't compress in flex
@@ -95,6 +100,16 @@ function maybeWrapTip(title: string | undefined, child: React.ReactElement): Rea
   )
 }
 
+/** 收起态角标渲染 — 99+ 截断（56px rail 上位置有限，控制宽度）。 */
+function collapsedBadgeNode(count: number | undefined): React.ReactNode {
+  if (typeof count !== 'number' || count <= 0) return null
+  return (
+    <span className="app-nav-keep nav-collapsed-badge" aria-hidden="true">
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
+
 function NavRow({
   icon,
   label,
@@ -102,7 +117,8 @@ function NavRow({
   onClick,
   right,
   disabled,
-  title
+  title,
+  collapsedBadge
 }: NavRowProps): React.ReactElement {
   // Disabled rows render as a non-interactive <div> per DESIGN.md §9.4 —
   // opacity-50 + cursor-not-allowed, no hover bg, no keyboard focus, no
@@ -142,6 +158,7 @@ function NavRow({
       )}
     >
       {renderIcon(icon)}
+      {collapsedBadgeNode(collapsedBadge)}
       <span className="flex-1 truncate">{label}</span>
       {right && <span className="shrink-0">{right}</span>}
     </button>
@@ -210,6 +227,7 @@ function OnlineDot({ online }: { online: boolean }): React.ReactElement {
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
   inbox: <Inbox size={15} strokeWidth={1.75} />,
   outbox: <Send size={15} strokeWidth={1.75} />,
+  drafts: <SquarePen size={15} strokeWidth={1.75} />,
   flagged: <Star size={15} strokeWidth={1.75} />,
   all: <Mail size={15} strokeWidth={1.75} />
 }
@@ -257,6 +275,9 @@ export function Sidebar(): React.ReactElement {
   // Aggregate counts for virtual rows (flagged / all-mail).
   const inboxRow = mailboxes.find((m) => m.mailbox === '收件箱')
   const inboxUnread = inboxRow?.unread ?? 0
+  // 草稿箱 = davmail Drafts 对账同步进 email_metadata 的行 (mailbox='草稿箱')。
+  // 数量语义是"草稿总数"而非未读 (草稿是自己写的)。
+  const draftsTotal = mailboxes.find((m) => m.mailbox === '草稿箱')?.total ?? 0
   const allTotal = mailboxes.reduce((sum, mb) => sum + mb.total, 0)
   const flaggedTotal = mailboxes.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
 
@@ -286,6 +307,7 @@ export function Sidebar(): React.ReactElement {
     // flagged/all views use a descriptive label so StatusBar reads sensibly.
     if (next === 'inbox') setActiveMailbox('收件箱')
     else if (next === 'outbox') setActiveMailbox('发件箱')
+    else if (next === 'drafts') setActiveMailbox('草稿箱')
     // flagged + all leave activeMailbox alone — they are cross-mailbox views.
     void navigate({ to: '/', search: { view: next } })
   }
@@ -411,6 +433,7 @@ export function Sidebar(): React.ReactElement {
                 <CountRight count={inboxUnread} selected={selectedView === 'inbox'} />
               ) : undefined
             }
+            collapsedBadge={inboxUnread}
           />
           {/* Mockup §2.11: outbox row has no right-side count (developers
               don't typically have unread sent mail). Drop the right slot
@@ -421,6 +444,21 @@ export function Sidebar(): React.ReactElement {
             title={collapsed ? t('nav.outbox') : undefined}
             selected={selectedView === 'outbox'}
             onClick={() => handleViewClick('outbox')}
+          />
+          {/* 草稿箱 — davmail Drafts 对账同步 (DRAFTS_SYNC_ENABLED)。数量 = 草稿
+              总数; 未同步 (AppleScript 模式 / 开关关) 时 0 → 行仍在, 数字不显示。 */}
+          <NavRow
+            icon={MAILBOX_ICON.drafts}
+            label={t('nav.drafts')}
+            title={collapsed ? t('nav.drafts') : undefined}
+            selected={selectedView === 'drafts'}
+            onClick={() => handleViewClick('drafts')}
+            right={
+              draftsTotal > 0 ? (
+                <CountRight count={draftsTotal} selected={selectedView === 'drafts'} />
+              ) : undefined
+            }
+            collapsedBadge={draftsTotal}
           />
           <NavRow
             icon={MAILBOX_ICON.flagged}
@@ -433,6 +471,7 @@ export function Sidebar(): React.ReactElement {
                 <CountRight count={flaggedTotal} selected={selectedView === 'flagged'} />
               ) : undefined
             }
+            collapsedBadge={flaggedTotal}
           />
           <NavRow
             icon={MAILBOX_ICON.all}

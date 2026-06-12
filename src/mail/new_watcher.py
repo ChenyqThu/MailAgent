@@ -509,6 +509,10 @@ class NewWatcher:
         else:
             logger.debug("Radar unavailable, skipping new email detection")
 
+        # 4.6 草稿箱对账 (davmail-only, DRAFTS_SYNC_ENABLED) — 新草稿入库 (pending,
+        # 下一步即 fetch body) + 删除已消失草稿 (编辑替换/发送/删除)
+        await self._reconcile_drafts()
+
         # 5. 处理 pending 邮件（AppleScript 获取完整内容并同步到 Notion）
         await self._process_pending_emails()
 
@@ -528,6 +532,74 @@ class NewWatcher:
         # 形成死循环). 已在 _detect_and_sync_flag_changes 函数体内 short-circuit;
         # 调用保留以便后续切换到"真 drift -> outbox(notion)"语义时复用。
         await self._detect_and_sync_flag_changes()
+
+    async def _reconcile_drafts(self):
+        """草稿箱对账 (davmail-only, DRAFTS_SYNC_ENABLED)。
+
+        backend.reconcile_drafts() 全量 UID 对账（草稿会被编辑/发送/删除，增量 marker
+        只见新增不见消失）：新草稿 save_email(pending) 进主链路（_sync_single_email_v3
+        的草稿分支只落本地，不进 Notion / LLM / 飞书）；已消失草稿走
+        email_repo.delete_email_full（CASCADE 清 body / 附件 / FTS）。
+        AppleScript fallback 模式无此方法 → 整段 noop。任何失败不影响主循环。
+        """
+        backend = self.arm
+        if not hasattr(backend, "reconcile_drafts"):
+            return
+        try:
+            to_add, to_delete = backend.reconcile_drafts()
+        except Exception as e:
+            logger.warning(f"[drafts] reconcile failed (main loop unaffected): {e}")
+            return
+
+        for email_meta in to_add:
+            internal_id = email_meta.get('internal_id')
+            try:
+                if self.sync_store.get(internal_id):
+                    continue
+                payload = {
+                    'internal_id': internal_id,
+                    'message_id': email_meta.get('message_id'),
+                    'subject': email_meta.get('subject', ''),
+                    'sender': (
+                        email_meta.get('sender')
+                        or email_meta.get('sender_email', '')
+                    ),
+                    'sender_name': email_meta.get('sender_name', ''),
+                    'date_received': email_meta.get('date_received', ''),
+                    'mailbox': email_meta.get('mailbox', '草稿箱'),
+                    # 草稿是自己写的，FLAGS 缺失时按已读处理（不该凸显未读）
+                    'is_read': email_meta.get('is_read', True),
+                    'is_flagged': email_meta.get('is_flagged', False),
+                    'thread_id': email_meta.get('thread_id'),
+                    'sync_status': 'pending',
+                    'backend_origin': email_meta.get('backend_origin') or 'davmail',
+                }
+                if email_meta.get('imap_uid') is not None:
+                    payload['imap_uid'] = email_meta.get('imap_uid')
+                if email_meta.get('imap_uidvalidity') is not None:
+                    payload['imap_uidvalidity'] = email_meta.get('imap_uidvalidity')
+                self.sync_store.save_email(payload)
+                logger.debug(f"[drafts] added draft {internal_id} (pending)")
+            except Exception as e:
+                logger.warning(f"[drafts] save new draft {internal_id} failed: {e}")
+
+        for internal_id in to_delete:
+            try:
+                self.email_repo.delete_email_full(internal_id)
+                logger.info(f"[drafts] deleted vanished draft {internal_id}")
+                # 让前端刷新列表/badge（events_bridge 对 email.synced 宽 invalidate）
+                try:
+                    from src.events.publisher import safe_publish
+                    safe_publish(
+                        "email.synced",
+                        internal_id=internal_id,
+                        data={"deleted": True},
+                        source="new_watcher",
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"[drafts] delete draft {internal_id} failed: {e}")
 
     async def _process_pending_emails(self):
         """处理 pending 状态的邮件（v3 架构）
@@ -606,6 +678,24 @@ class NewWatcher:
                 'subject': full_email.get('subject'),
                 'sender': full_email.get('sender')
             })
+
+            # 2.5 草稿箱分支: 仅落本地 (SQLite body + FTS), 不进 Notion / 会议检测 /
+            # LLM / 飞书 / KOS, 也不做日期过滤 (草稿无论多老都保留 — reconcile 全量
+            # 对账要求本地数量与 Exchange Drafts 一致)。正文依赖 dual-write
+            # (BODY_DUAL_WRITE_ENABLED, 默认开); 关闭时草稿详情无正文但列表/数量正常。
+            if mailbox in ("草稿箱", "草稿", "Drafts"):
+                draft_obj = await self._build_email_object(full_email, mailbox)
+                if not draft_obj:
+                    logger.error(f"Failed to build Email object for draft: {internal_id}")
+                    self.sync_store.mark_failed_v3(internal_id, "Failed to build Email object")
+                    return
+                draft_obj.internal_id = internal_id
+                self._persist_email_metadata_after_parse(internal_id, draft_obj)
+                self._maybe_dual_write_body(draft_obj, internal_id, full_email.get("source"))
+                self.sync_store.mark_synced_local(internal_id)
+                self._stats["emails_synced"] += 1
+                logger.info(f"Draft {internal_id} synced (local-only)")
+                return
 
             # 3. 检测并处理会议邀请
             source = full_email.get('source', '')
@@ -1266,6 +1356,18 @@ class NewWatcher:
                 # (to/cc/sender_name). 主 sync 路径同步落地, 见 _sync_single_
                 # email_v3 内同样调用; 抽 helper 避免两条路径再次漏写.
                 self._persist_email_metadata_after_parse(internal_id, email_obj)
+
+                # 草稿箱分支 (与 _sync_single_email_v3 的 2.5 一致): 仅落本地,
+                # 不进 Notion — retry 路径不能绕过草稿 gate。
+                if mailbox in ("草稿箱", "草稿", "Drafts"):
+                    self._maybe_dual_write_body(
+                        email_obj, internal_id, full_email.get("source")
+                    )
+                    self.sync_store.mark_synced_local(internal_id)
+                    self._stats["retries_succeeded"] += 1
+                    self._stats["emails_synced"] += 1
+                    logger.info(f"Retry succeeded (draft, local-only): {internal_id}")
+                    continue
 
                 # v4: 双写邮件正文 + 附件到 SQLite（重试路径同样需要双写）
                 self._maybe_dual_write_body(
