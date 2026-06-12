@@ -218,7 +218,8 @@ function ReportList({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: 'rgb(var(--ink-1))'
+        // 主题 v2 — 列表面板透到页面玻璃底, 不画 ink 实底 (割裂)。
+        background: 'transparent'
       }}
     >
       <div

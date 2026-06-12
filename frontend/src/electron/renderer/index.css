@@ -547,6 +547,14 @@ kbd,
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
   box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
 }
+/* Sidebar 内光条往左悬挂到行卡片外 (demo .it.on::before left:-8px 同款):
+ * 条占 [-8,-5], 与 wash 圆角框之间留 5px 间距。行容器 (nav.px-2 /
+ * .app-nav-bottom.p-2) 自带 8px padding, 悬挂落在 padding 区不会被
+ * overflow 裁。默认仍 left:0 — popover (SurfacePicker 等) 的选项行贴
+ * 容器边 + overflow hidden, 悬挂会被裁掉。 */
+.app-nav .row-selected::before {
+  left: -8px;
+}
 :root[data-surface='solid'] .row-selected::before {
   box-shadow: none;
 }
@@ -926,7 +934,10 @@ body::before {
 }
 
 /* 选中行 / 选中邮箱 — 向右衰减的 accent wash (左光条配方见 .acc-bar;
- * EmailRow / .row-selected 的左条是伪元素, 配方直接写进对应 rule)。 */
+ * EmailRow / .row-selected 的左条是伪元素, 配方直接写进对应 rule)。
+ * wash 铺满整个元素 — 圆角跟随元素自身 rounded-*; 光条与 wash 的间距由
+ * 光条往左悬挂实现 (.app-nav 内 left:-8px, 见 .row-selected::before),
+ * 不要反过来内缩 wash (会把左侧圆角切成 hard edge)。 */
 .acc-select {
   background: linear-gradient(
     90deg,
@@ -1328,8 +1339,9 @@ body::before {
     100% 1px;
 }
 /* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
-   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: 平涂条升级为
-   .acc-bar 光条配方 (顶端提亮渐变 + 9px 辉光; solid 档辉光收掉见下)。 */
+   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: accent 纯色 +
+   9px 辉光 (solid 档辉光收掉见下)。🔴 不要做垂直渐变: 线程展开时 bundle 内
+   多行的条上下拼接, 渐变会在每行交界处出现明暗拼缝, 整条线程看起来不连续。 */
 .email-row::before {
   content: '';
   position: absolute;
@@ -1337,7 +1349,7 @@ body::before {
   top: 0;
   bottom: 0;
   width: 3px;
-  background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
+  background: var(--A);
   box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
   opacity: 0;
   transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1649,12 +1661,13 @@ body:not([data-batch-mode='true']) .email-row .cb {
 
 /* Flag state row washes — subtle, never compete with selection.
  * background-color (not shorthand) — 见 .email-row base 注释, 保留底部
- * gradient 分割线. */
+ * gradient 分割线. 主题 v2: 旗标 wash 从写死的 v1 coral 改 accent 派生,
+ * 换主题色自动跟; done 绿是「完成」语义色, 不跟 accent。 */
 .email-row[data-flag='flagged'] {
-  background-color: rgba(229, 99, 79, 0.05);
+  background-color: rgb(var(--c-accent) / 0.05);
 }
 .email-row[data-flag='flagged']:hover {
-  background-color: rgba(229, 99, 79, 0.1);
+  background-color: rgb(var(--c-accent) / 0.1);
 }
 .email-row[data-flag='done'] {
   background-color: rgba(93, 186, 140, 0.05);
@@ -1710,7 +1723,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   width: 14px;
   height: 14px;
 }
-/* Flag — 3-state cycler (0=off, 1=flagged coral, 2=done green) */
+/* Flag — 3-state cycler (0=off, 1=flagged accent, 2=done green)
+ * 主题 v2: flagged 态从写死 #e5634f 改 accent, 与行 wash 同源跟主题色。 */
 .ricon-flag[data-flag-state='0'] {
   color: rgb(var(--ink-fg-3));
   opacity: 0.55;
@@ -1719,7 +1733,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   opacity: 1;
 }
 .ricon-flag[data-flag-state='1'] {
-  color: #e5634f;
+  color: rgb(var(--c-accent));
   opacity: 1;
 }
 .ricon-flag[data-flag-state='1'] svg path {
@@ -1729,7 +1743,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: #5dba8c;
   opacity: 1;
 }
-/* Pin — pressed = cobalt-blue */
+/* Pin — pressed = accent (主题 v2: 原写死钴蓝 #4a78e5, 改跟主题色;
+ * 与 flag 的区分靠图标形状, 不再靠双色)。 */
 .ricon-pin[aria-pressed='false'] {
   color: rgb(var(--ink-fg-3));
   opacity: 0.55;
@@ -1738,7 +1753,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   opacity: 1;
 }
 .ricon-pin[aria-pressed='true'] {
-  color: #4a78e5;
+  color: rgb(var(--c-accent));
   opacity: 1;
 }
 .ricon-pin[aria-pressed='true'] svg path {
@@ -1749,7 +1764,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   cursor: default;
 }
 .ricon-important {
-  color: #e5634f;
+  /* 主题 v2: 同 flag/pin, 从写死 v1 coral 改 accent (accent 即强调语义)。 */
+  color: rgb(var(--c-accent));
   cursor: default;
 }
 .ricon-important svg {
@@ -1901,9 +1917,16 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg-2));
   cursor: pointer;
   user-select: none;
-  /* 主题 v2 — 非浮层去 blur; alpha 加深遮住滚过的行文字 */
-  background: linear-gradient(180deg, rgb(var(--ink-1) / 0.94) 0%, rgb(var(--ink-2) / 0.9) 100%);
-  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.7);
+  /* 主题 v2 — 非浮层去 blur。基色从中性 ink 换 --glass-base 派生: 与窗口
+   * tint 同源 (带 accent mix, 换 accent/主题自动跟), 中性 ink 平涂在玻璃
+   * 列表上是一条死色横带 (割裂)。sticky 遮字靠高 alpha — 叠在 body tint
+   * (≥.85) 上有效不透明度 ≈ .97+, 滚过的行文字不会透出来。 */
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--glass-base) 96%, transparent),
+    color-mix(in srgb, var(--glass-base) 88%, transparent)
+  );
+  border-bottom: 1px solid var(--hairline);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
   transition:
     color 0.12s,
@@ -2124,7 +2147,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #e5634f;
+  /* 主题 v2: 激活指示点是 accent 性质的强调, 从写死 v1 coral 改跟主题色。 */
+  background: rgb(var(--c-accent));
   box-shadow: 0 0 0 2px rgb(var(--ink-2));
 }
 
