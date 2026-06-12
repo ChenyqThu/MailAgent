@@ -1,10 +1,11 @@
-// Sprint Immersive-Translate — html-extractor block selection contract.
+// Sprint Immersive-Translate — html-extractor run selection contract.
 //
-// 不测 node-html-parser 自己; 只测我们的 filter / dedupe / CJK skip / ancestor
-// skip 逻辑 + id 稳定性。
+// 不测 node-html-parser 自己；只测我们的 run 划分 / filter / dedupe / 拆长段
+// 逻辑 + id 稳定性。
 
 import { describe, expect, test } from 'vitest'
 
+import { MAX_LEN } from '../../src/shared/lib/translation_blocks'
 import { extractBlocks } from '../../src/electron/main/lib/html-extractor'
 
 describe('extractBlocks', () => {
@@ -29,8 +30,7 @@ describe('extractBlocks', () => {
       <dl><dt>Term defined</dt><dd>Definition explained</dd></dl>
     `
     const blocks = extractBlocks(html)
-    const texts = blocks.map((b) => b.text)
-    expect(texts).toEqual([
+    expect(blocks.map((b) => b.text)).toEqual([
       'Heading One',
       'First paragraph here.',
       'List item alpha',
@@ -60,13 +60,12 @@ describe('extractBlocks', () => {
     const texts = blocks.map((b) => b.text)
     expect(texts).toContain('This English line should survive.')
     expect(texts).toContain('Mixed 中文 with English half-and-half but still mostly English here.')
-    // 全 CJK 段落都被跳了
     expect(texts.some((t) => t.startsWith('这是一段'))).toBe(false)
     expect(texts.some((t) => t.startsWith('これは'))).toBe(false)
     expect(texts.some((t) => t.startsWith('이것은'))).toBe(false)
   })
 
-  test('skips text inside <code> / <pre> / <script> / <style>', () => {
+  test('skips text inside <pre> / <script> / <style>', () => {
     const html = `
       <p>Real paragraph one.</p>
       <pre><code>const x = 'do not translate me';</code></pre>
@@ -96,16 +95,12 @@ describe('extractBlocks', () => {
     const a = extractBlocks(html)
     const b = extractBlocks(html)
     expect(a.map((x) => x.id)).toEqual(b.map((x) => x.id))
-    // ids should be 8 hex chars
     for (const blk of a) {
       expect(blk.id).toMatch(/^[0-9a-f]{8}$/)
     }
   })
 
   test('id differs for different positions of same text', () => {
-    // Two p elements with different paths → different ids even if text is the
-    // same. (Dedupe step still drops one, but the picked one's id must reflect
-    // its position uniquely if we later add the other back.)
     const a = extractBlocks('<div><p>Unique paragraph alpha here.</p></div>')
     const b = extractBlocks('<section><p>Unique paragraph alpha here.</p></section>')
     expect(a[0]?.id).not.toEqual(b[0]?.id)
@@ -121,17 +116,88 @@ describe('extractBlocks', () => {
     expect(blocks[0]?.text).toBe('Line one spans multiple physical lines.')
   })
 
-  test('drops paragraphs over the 800-char max-length cap', () => {
-    const long = 'word '.repeat(200) // 1000 chars
+  test('splits paragraphs over the 800-char max-length cap instead of dropping them', () => {
+    const long = Array.from(
+      { length: 40 },
+      (_, i) => `Sentence ${i} keeps enough English words.`
+    ).join(' ')
+    expect(long.length).toBeGreaterThan(MAX_LEN)
     const html = `<p>${long}</p><p>Short enough paragraph here.</p>`
     const blocks = extractBlocks(html)
-    expect(blocks.map((b) => b.text)).toEqual(['Short enough paragraph here.'])
+    const longChunks = blocks.filter(
+      (b) => b.text.startsWith('Sentence') || b.text.includes('Sentence')
+    )
+    expect(longChunks.length).toBeGreaterThan(1)
+    expect(longChunks.every((b) => b.text.length <= MAX_LEN)).toBe(true)
+    expect(longChunks.map((b) => b.text).join(' ')).toBe(long)
+    expect(blocks.map((b) => b.text)).toContain('Short enough paragraph here.')
+  })
+
+  test('extracts direct mixed-content text before nested blocks', () => {
+    const html = '<div>On Wed, Cole wrote:<p>Nested reply paragraph here.</p></div>'
+    expect(extractBlocks(html).map((b) => b.text)).toEqual([
+      'On Wed, Cole wrote:',
+      'Nested reply paragraph here.'
+    ])
+  })
+
+  test('double br splits runs while single br stays in one run', () => {
+    const html = `
+      <div>First line<br><br>Second line</div>
+      <div>Single br line<br>continues here</div>
+    `
+    expect(extractBlocks(html).map((b) => b.text)).toEqual([
+      'First line',
+      'Second line',
+      'Single br line continues here'
+    ])
+  })
+
+  test('extracts th / center / font container text', () => {
+    const html = `
+      <table><tr><th>Header cell text</th></tr></table>
+      <center>Centered announcement text</center>
+      <div><font>Legacy font wrapped text</font></div>
+    `
+    expect(extractBlocks(html).map((b) => b.text)).toEqual([
+      'Header cell text',
+      'Centered announcement text',
+      'Legacy font wrapped text'
+    ])
+  })
+
+  test('skips display none / aria hidden text', () => {
+    const html = `
+      <div style="display: none">Hidden preheader text</div>
+      <div aria-hidden="true">Hidden aria text</div>
+      <p>Visible English paragraph.</p>
+    `
+    expect(extractBlocks(html).map((b) => b.text)).toEqual(['Visible English paragraph.'])
+  })
+
+  test('skips URL-only, email-only, and numeric/symbol-only runs', () => {
+    const html = `
+      <p>https://example.com/path</p>
+      <p>person@example.com</p>
+      <p>12345 !!! ???</p>
+      <p>Normal English sentence survives.</p>
+    `
+    expect(extractBlocks(html).map((b) => b.text)).toEqual(['Normal English sentence survives.'])
+  })
+
+  test('skips a run that is only one code element but keeps inline code in a sentence', () => {
+    const html = `
+      <div><code>const token = value</code></div>
+      <p>Please run <code>npm install</code> before continuing.</p>
+    `
+    expect(extractBlocks(html).map((b) => b.text)).toEqual([
+      'Please run npm install before continuing.'
+    ])
   })
 
   test('handles real-world malformed email html (unclosed tags) without crashing', () => {
     const html = '<p>First <b>bold paragraph here.<p>Second one (unclosed b).'
     const blocks = extractBlocks(html)
-    // Doesn't crash; gets at least one of them
     expect(blocks.length).toBeGreaterThanOrEqual(1)
     expect(blocks[0]?.text.length).toBeGreaterThanOrEqual(4)
   })

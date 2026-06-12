@@ -24,6 +24,8 @@ import { adaptHtmlForDarkMode } from '@shared/lib/emailDarkMode'
 import { EMAIL_PURIFY_OPTS } from '@shared/lib/emailSanitize'
 import type { EmailDetail, TranslationSegment } from '@shared/api/types'
 
+import { injectTranslations } from './emailTranslationInjection'
+
 interface Props {
   internalId: number
   attachments: NonNullable<EmailDetail['attachments']>
@@ -433,98 +435,9 @@ interface BodyIframeProps {
   onImageClick: (src: string) => void
 }
 
-// Block-level selector mirrors html-extractor.ts so renderer's match space ==
-// LLM's input space. Must include 'div' because Outlook/Gmail wrap paragraphs
-// in <div> not <p>; extractor's leaf-filter (skip blocks containing other
-// blocks) is mirrored here in injectTranslations so we still match the right
-// per-paragraph node and not the giant wrapper div around the whole body.
-const BLOCK_SELECTOR_RENDER = 'p, li, h1, h2, h3, h4, h5, h6, td, blockquote, dt, dd, div'
-
-function escapeHtmlText(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-/** Strip whitespace + lowercase for fuzzy textContent matching. CJK chars
- *  unaffected; en/zh punctuation differences (full-width vs half-width)
- *  remain — we don't normalize those because LLM should copy src verbatim. */
-function normalizeForMatch(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase()
-}
-
 /** Remove any previously-injected translation nodes from the iframe doc. */
 function clearInjectedTranslations(doc: Document): void {
   doc.querySelectorAll('.mailagent-translation').forEach((n) => n.remove())
-}
-
-/** Tags whose `afterend` insertion is invalid HTML — putting a `<div>` next to
- *  a `<li>` puts it inside `<ul>/<ol>` (only li allowed); next to `<td>` puts
- *  it inside `<tr>` (only td/th allowed); next to `<dt>/<dd>` puts it inside
- *  `<dl>` (only dt/dd allowed). Browsers silently re-parent the misplaced
- *  div, dragging the translation outside the list/table/dl and breaking both
- *  layout and order.
- *
- *  For these we instead append the translation div as a CHILD of the matched
- *  node. `.mailagent-translation` has `display: block` inside `td/li` (see
- *  BODY_CSS), so the translation stacks below the original content within
- *  the same cell/list item — order preserved, no re-parenting.
- *
- *  `p / h1-h6 / blockquote / div` accept block siblings freely, so afterend
- *  is fine for them. */
-const APPEND_AS_CHILD = new Set(['LI', 'TD', 'TH', 'DT', 'DD'])
-
-/** Insert a translation `<div>` after / inside each block node whose
- *  textContent matches `src` (either contains src or is contained in src —
- *  handles LLM trimming + paragraph-spanning cases). Each node is matched
- *  at most once across the whole pass. */
-function injectTranslations(doc: Document, segments: TranslationSegment[]): number {
-  clearInjectedTranslations(doc)
-  // Mirror html-extractor leaf filter: keep only nodes that don't contain
-  // another BLOCK descendant. Without this, an outer wrapper <div> around
-  // the entire email matches first (its textContent includes every src) and
-  // every translation gets appended to one giant container — chaos.
-  const all = Array.from(doc.querySelectorAll(BLOCK_SELECTOR_RENDER)) as HTMLElement[]
-  const nodes = all.filter((n) => n.querySelector(BLOCK_SELECTOR_RENDER) === null)
-  // Pre-compute normalized textContent once per node — querySelectorAll
-  // returns reasonable counts (<= a few hundred), and we re-walk it per
-  // segment, so caching pays off.
-  const normalized = nodes.map((n) => normalizeForMatch(n.textContent ?? ''))
-  const used = new Set<number>()
-  let injected = 0
-  for (const seg of segments) {
-    const srcNorm = normalizeForMatch(seg.src)
-    if (srcNorm.length === 0) continue
-    let matched = -1
-    for (let i = 0; i < nodes.length; i++) {
-      if (used.has(i)) continue
-      const t = normalized[i]
-      if (!t) continue
-      if (t.includes(srcNorm) || srcNorm.includes(t)) {
-        matched = i
-        break
-      }
-    }
-    if (matched < 0) continue
-    used.add(matched)
-    const target = nodes[matched]!
-    const div = doc.createElement('div')
-    div.className = 'mailagent-translation'
-    // Tgt is plain text from LLM (per prompt rule "no markdown wrapper");
-    // escape defensively in case a malicious sender slipped HTML into src
-    // that LLM echoed back, or LLM hallucinated tags.
-    div.innerHTML = escapeHtmlText(seg.tgt)
-    if (APPEND_AS_CHILD.has(target.tagName)) {
-      target.appendChild(div)
-    } else {
-      target.insertAdjacentElement('afterend', div)
-    }
-    injected++
-  }
-  return injected
 }
 
 function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): React.ReactElement {
