@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next'
 import { Sparkles } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { SegmentedControl } from '@shared/components/ui/segmented'
 import type { ChatBackendKind } from '@shared/api/types'
 
 export interface BackendChoice {
@@ -34,7 +34,6 @@ const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
 
 export function BackendSelector({ value, onChange, agentName }: Props): React.ReactElement {
   const { t } = useTranslation()
-  const reduceMotion = useReducedMotion()
 
   const isNotionAgent = value.kind === 'notion-agent'
   const activeModel = value.model ?? DEFAULT_CUSTOM_MODEL
@@ -56,72 +55,54 @@ export function BackendSelector({ value, onChange, agentName }: Props): React.Re
     }
   }
 
+  // Label = ok dot + text（dot 的 active/inactive 色跟随当前 kind）。文字保持
+  // text-micro(11px)：task 06-08-chat r3→r5 的字号来回最终定在 11，不随统一
+  // 组件的 12px 基准走。
+  const kindLabel = (kind: ChatBackendKind): React.ReactNode => (
+    <>
+      <span
+        className={cn(
+          'w-1.5 h-1.5 rounded-full transition-colors duration-fast',
+          value.kind === kind ? 'bg-ok' : 'bg-ink-fg-3'
+        )}
+      />
+      <span className="text-micro">
+        {kind === 'notion-agent' ? t('chat.backend.notionAgent') : t('chat.backend.customApi')}
+      </span>
+    </>
+  )
+
   return (
     <div className="px-3 py-2.5 border-b border-ink-border-soft">
-      {/* 交付文档 §3 — sliding-thumb segmented control (mockup `.seg`/`.seg-thumb`/
-          `.sdot`). A single track holds a white thumb that slides between the two
-          halves (transform translateX) — more refined than two independent
-          buttons. Active item: solid text + leading GREEN dot (--c-ok); inactive:
-          a grey dot (--ink-fg-3). Click still toggles backend KIND (⌥⇧B parity).
-          reduced-motion drops the slide (snaps via no transition). */}
-      <div
-        role="tablist"
-        // task 06-08-chat §3.1 — marks the agent switcher so the History
-        // popover's outside-click handler can EXCLUDE it: switching agents
-        // with the popover open must keep it open (the list re-scopes in
-        // place between Notion Agent / Custom AI).
-        data-chat-agent-switch
-        aria-label={t('chat.backend.selectorLabel')}
-        className="relative flex rounded-[10px] bg-ink-2 border border-ink-border p-[3px]"
-      >
-        {/* Sliding thumb — half the track width minus the 3px padding gutter,
-            translated to the right half for custom-api. Color via authored
-            .seg-thumb (index.css): light = mockup white, dark = ink-5 elevated
-            (bg-white 在深色下与 text-ink-fg 白底白字, dogfood round 3). */}
-        <span
-          aria-hidden
-          className={cn(
-            'absolute top-[3px] bottom-[3px] left-[3px] rounded-[7px] seg-thumb',
-            'shadow-[0_1px_2px_rgba(28,34,48,0.10),0_0_0_0.5px_rgba(28,34,48,0.04)]',
-            !reduceMotion && 'transition-transform duration-fast ease-out'
-          )}
-          style={{
-            width: 'calc(50% - 3px)',
-            transform: isNotionAgent ? 'translateX(0)' : 'translateX(100%)'
-          }}
+      {/* v0.7.2 — 统一 SegmentedControl（ui/segmented.tsx，authored `.seg` 视觉
+          基准 + 测量式滑动指示器）取代旧 sliding-thumb。Click 仍 toggle backend
+          KIND（⌥⇧B parity）；reduced-motion / 初帧由组件内部处理。
+
+          task 06-08-chat §3.1 — data-chat-agent-switch marks the agent switcher
+          so the History popover's outside-click handler can EXCLUDE it:
+          switching agents with the popover open must keep it open (the list
+          re-scopes in place between Notion Agent / Custom AI). */}
+      <div data-chat-agent-switch>
+        <SegmentedControl<ChatBackendKind>
+          value={value.kind}
+          onChange={switchKind}
+          ariaLabel={t('chat.backend.selectorLabel')}
+          fluid
+          size="md"
+          className="w-full"
+          options={[
+            {
+              value: 'notion-agent',
+              ariaLabel: t('chat.backend.notionAgent'),
+              label: kindLabel('notion-agent')
+            },
+            {
+              value: 'custom-api',
+              ariaLabel: t('chat.backend.customApi'),
+              label: kindLabel('custom-api')
+            }
+          ]}
         />
-        {(['notion-agent', 'custom-api'] as const).map((kind) => {
-          const active = value.kind === kind
-          return (
-            <button
-              key={kind}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => switchKind(kind)}
-              className={cn(
-                'relative z-[1] flex-1 inline-flex items-center justify-center gap-1.5',
-                // task 06-08-chat dogfood r3→r4 — "字体再小一号". seg tab
-                // labels ("Notion Agent" / "Custom AI", ASCII in both locales)
-                // r3 dropped text-meta(12)→text-micro(11); r4 drops to 10px;
-                // r5 user feedback "大一号" — back to text-micro(11px).
-                'h-8 rounded-[7px] text-micro',
-                'transition-colors duration-fast',
-                active ? 'text-ink-fg font-semibold' : 'text-ink-fg-2 hover:text-ink-fg-1'
-              )}
-            >
-              <span
-                className={cn(
-                  'w-1.5 h-1.5 rounded-full transition-colors duration-fast',
-                  active ? 'bg-ok' : 'bg-ink-fg-3'
-                )}
-              />
-              {kind === 'notion-agent'
-                ? t('chat.backend.notionAgent')
-                : t('chat.backend.customApi')}
-            </button>
-          )
-        })}
       </div>
 
       {/* Active backend meta — icon + name + ok dot + sub-line. */}

@@ -17,7 +17,9 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
       type={type}
       ref={ref}
       className={cn(
-        'flex h-8 w-full rounded-md border border-ink-border bg-ink-2 px-3',
+        // input-surface (authored, index.css): light = ink-2 实底, dark = 半透
+        // 墨色 — 实底在玻璃主题下是死黑块 (dogfood round 3)。
+        'flex h-8 w-full rounded-md border border-ink-border input-surface px-3',
         'text-aux text-ink-fg placeholder:text-ink-fg-3',
         'transition-colors duration-fast ease-standard',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 focus-visible:border-coral/60',

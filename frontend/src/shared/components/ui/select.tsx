@@ -23,7 +23,9 @@ export const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-ink-border bg-ink-2 px-3',
+      // input-surface (authored, index.css): light = ink-2 实底, dark = 半透
+      // 墨色 — 同 <Input>, 实底在玻璃主题下是死黑块 (dogfood round 3)。
+      'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-ink-border input-surface px-3',
       // `text-left` is load-bearing, not cosmetic: a <button> carries the UA
       // default `text-align:center`. The value <span> is a flex item that the
       // `[&>span]:line-clamp-1` rule turns into a block box (display:flow-root),

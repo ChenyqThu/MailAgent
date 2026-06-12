@@ -1280,19 +1280,6 @@ body::before {
   pointer-events: none;
 }
 
-/* chat BackendSelector segmented thumb — 亮色 = mockup 白 thumb (ink-3 亮色
- * 即 255,255,255)；深色切 ink-5 (46,52,62, 比 track ink-2 亮 3 阶的 elevated
- * surface)。此前硬编码 bg-white: 深色下白 thumb + active 文字 text-ink-fg
- * (近白 232,234,238) = 白底白字不可读 (dogfood round 3 用户反馈)。
- * tailwind darkMode:'class' 与本项目 data-theme 属性驱动不兼容 (dark: variant
- * 全仓不可用), 故走 authored class 按 data-theme 翻转。 */
-.seg-thumb {
-  background: rgb(var(--ink-3));
-}
-:root[data-theme='dark'] .seg-thumb {
-  background: rgb(var(--ink-5));
-}
-
 /* Label cross-fade — softens the abrupt display:none flip during the
  * width transition. The labels still toggle; this just makes the brief
  * overlap less jarring (140ms linear < 260ms width). */
@@ -4708,6 +4695,45 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 :root[data-theme='light'] .seg button.on {
   background: rgb(255 255 255 / 0.9);
+}
+
+/* v0.7.2 统一 SegmentedControl（ui/segmented.tsx）—— 测量式滑动指示器。
+ * 指示器复用 .seg button.on 的胶囊语言（暗 ink-fg 半透 / 亮近白，无硬实底）；
+ * 组件的 active 按钮不加 .on（避免 indicator + .on 双底叠加），文字色走
+ * .seg-active。存量 .seg + .on 原生用法（AgentsTab 配置排程/窗口）不受影响。 */
+.seg {
+  position: relative;
+}
+.seg .seg-indicator {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  border-radius: 5px;
+  background: rgb(var(--ink-fg) / 0.12);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+:root[data-theme='light'] .seg .seg-indicator {
+  background: rgb(255 255 255 / 0.9);
+}
+/* 组件在「初次定位」与 reduced-motion 时不加该类 → 指示器直接就位不滑动。 */
+.seg .seg-indicator-anim {
+  transition:
+    transform var(--dur-fast, 120ms),
+    width var(--dur-fast, 120ms);
+}
+.seg button.seg-active {
+  color: rgb(var(--ink-fg));
+}
+
+/* 输入类控件底色 — 亮色保持 off-white 实底 (融合), 深色切半透墨色
+ * (实底 ink-2 在玻璃主题下是死黑块, dogfood round 3 用户反馈)。 */
+.input-surface {
+  background: rgb(var(--ink-2));
+}
+:root[data-theme='dark'] .input-surface {
+  background: rgb(var(--ink-3) / 0.55);
 }
 
 @media (prefers-reduced-motion: reduce) {

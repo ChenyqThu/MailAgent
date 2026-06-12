@@ -6,6 +6,7 @@ import { Check, Trash2, X } from 'lucide-react'
 
 import type { ReportCadence, ReportListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { SegmentedControl } from '@shared/components/ui/segmented'
 import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
@@ -244,19 +245,15 @@ function ReportList({
             {items.length}
           </span>
         </div>
-        <div className="seg" style={{ width: '100%' }}>
-          {CADENCE_FILTERS.map(([k]) => (
-            <button
-              key={k}
-              type="button"
-              className={filter === k ? 'on' : ''}
-              style={{ flex: 1, justifyContent: 'center' }}
-              onClick={() => onFilter(k)}
-            >
-              {t(`agents.cadence.${k}`)}
-            </button>
-          ))}
-        </div>
+        {/* v0.7.2 — 统一 SegmentedControl（视觉与原 .seg + .on 一致 + 滑动指示器）。 */}
+        <SegmentedControl
+          value={filter}
+          onChange={onFilter}
+          ariaLabel={t('agents.reports.history')}
+          fluid
+          className="w-full"
+          options={CADENCE_FILTERS.map(([k]) => ({ value: k, label: t(`agents.cadence.${k}`) }))}
+        />
       </div>
       <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
         {loading && items.length === 0 ? (

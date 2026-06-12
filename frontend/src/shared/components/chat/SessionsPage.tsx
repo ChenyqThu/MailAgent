@@ -25,6 +25,7 @@ import { openAIChatSession } from '@shared/state/ai-chat-panel'
 import { toastSuccess } from '@shared/state/toast'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { SegmentedControl } from '@shared/components/ui/segmented'
 
 const SESSIONS_QUERY_KEY = ['chat', 'allSessions'] as const
 
@@ -119,39 +120,22 @@ export function SessionsPage(): React.ReactElement {
               aria-label={t('sessions.searchPlaceholder')}
               className={cn(
                 'w-full h-8 pl-8 pr-3 rounded-md text-body',
-                'bg-ink-2 border border-ink-border-soft text-ink-fg',
+                'input-surface border border-ink-border-soft text-ink-fg',
                 'placeholder:text-ink-fg-3 focus:outline-none focus:ring-1 focus:ring-c-accent/40'
               )}
             />
           </label>
-          <div
-            role="tablist"
-            aria-label={t('sessions.filterLabel')}
-            className="flex rounded-md bg-ink-2 p-0.5 gap-0.5"
-          >
-            {(['all', 'notion-agent', 'custom-api'] as const).map((key) => {
-              const active = filter === key
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setFilter(key)}
-                  className={cn(
-                    'px-2.5 h-7 rounded text-meta font-medium transition-colors duration-fast',
-                    active ? 'bg-ink-3 text-ink-fg shadow-sm' : 'text-ink-fg-2 hover:text-ink-fg'
-                  )}
-                >
-                  {key === 'all'
-                    ? t('sessions.filterAll')
-                    : key === 'notion-agent'
-                      ? t('chat.backend.notionAgent')
-                      : t('chat.backend.customApi')}
-                </button>
-              )
-            })}
-          </div>
+          {/* v0.7.2 — 统一 SegmentedControl（自适应宽：fluid=false 默认）。 */}
+          <SegmentedControl<BackendFilter>
+            value={filter}
+            onChange={setFilter}
+            ariaLabel={t('sessions.filterLabel')}
+            options={[
+              { value: 'all', label: t('sessions.filterAll') },
+              { value: 'notion-agent', label: t('chat.backend.notionAgent') },
+              { value: 'custom-api', label: t('chat.backend.customApi') }
+            ]}
+          />
         </div>
       </header>
 

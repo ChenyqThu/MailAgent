@@ -28,6 +28,7 @@ import { useActiveEmail } from '@shared/state/active-email'
 import { openAIChatSession } from '@shared/state/ai-chat-panel'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { MessageList } from '@shared/components/chat/MessageList'
+import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useNarrow } from './hooks'
 
 type BackendFilter = 'all' | 'notion-agent' | 'custom-api'
@@ -170,36 +171,25 @@ function SessionListPane({
             aria-label={t('sessions.searchPlaceholder')}
             className={cn(
               'w-full h-8 pl-8 pr-3 rounded-md text-body',
-              'bg-ink-2 border border-ink-border-soft text-ink-fg',
+              'input-surface border border-ink-border-soft text-ink-fg',
               'placeholder:text-ink-fg-3 focus:outline-none focus:ring-1 focus:ring-c-accent/40'
             )}
           />
         </label>
         {showFilter && (
-          <div role="tablist" className="flex rounded-md bg-ink-2 p-0.5 gap-0.5">
-            {(['all', 'notion-agent', 'custom-api'] as const).map((key) => {
-              const active = filter === key
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => onFilter(key)}
-                  className={cn(
-                    'flex-1 justify-center px-2 h-7 rounded text-meta font-medium whitespace-nowrap transition-colors duration-fast',
-                    active ? 'bg-ink-3 text-ink-fg shadow-sm' : 'text-ink-fg-2 hover:text-ink-fg'
-                  )}
-                >
-                  {key === 'all'
-                    ? t('sessions.filterAll')
-                    : key === 'notion-agent'
-                      ? t('chat.backend.notionAgent')
-                      : t('chat.backend.customApi')}
-                </button>
-              )
-            })}
-          </div>
+          /* v0.7.2 — 统一 SegmentedControl（等分：fluid，对应旧 flex-1）。 */
+          <SegmentedControl<BackendFilter>
+            value={filter}
+            onChange={onFilter}
+            ariaLabel={t('sessions.filterLabel')}
+            fluid
+            className="w-full"
+            options={[
+              { value: 'all', label: t('sessions.filterAll') },
+              { value: 'notion-agent', label: t('chat.backend.notionAgent') },
+              { value: 'custom-api', label: t('chat.backend.customApi') }
+            ]}
+          />
         )}
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
