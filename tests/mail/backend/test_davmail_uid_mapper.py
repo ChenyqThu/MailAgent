@@ -19,6 +19,9 @@ import pytest
 from src.mail.backend.davmail_uid_mapper import (
     DavMailUidMapper,
     _LAST_INTERNAL_ID_KEY,
+    _PAUSE_AUTO_RESUME_SEC,
+    _PAUSED_AT_KEY,
+    _PAUSED_KEY,
 )
 from src.mail.sync_store import SyncStore
 
@@ -229,3 +232,212 @@ async def test_backfill_imap_connect_fail_marks_failed(temp_store, monkeypatch):
     result = await mapper.run_backfill()
     assert result["failed"] >= 3
     assert result["backfilled"] == 0
+
+
+# --------- 瞬态失败健壮性 (2026-06-11: SELECT 超时炸穿 task / -1 误标 / marker 跳过) ---------
+
+
+@pytest.mark.asyncio
+async def test_select_exception_marks_batch_failed_not_crash(temp_store, monkeypatch):
+    """SELECT 抛 TimeoutError → 整批计 failed, run_backfill 不许抛穿 (processed=240 事故根因)."""
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store, batch_size=10)
+
+    fake_imap = MagicMock()
+    fake_imap.select.side_effect = TimeoutError("timed out")
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.imap_connect",
+        lambda *a, **kw: fake_imap,
+    )
+
+    async def no_sleep(sec):
+        pass
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.asyncio.sleep", no_sleep
+    )
+
+    result = await mapper.run_backfill()  # 不抛 = 修复生效
+    assert result["backfilled"] == 0
+    # 邮件不许被误标 -1 (永久 miss)
+    conn = sqlite3.connect(db_path)
+    n_neg = conn.execute(
+        "SELECT COUNT(*) FROM email_metadata WHERE imap_uid = -1"
+    ).fetchone()[0]
+    conn.close()
+    assert n_neg == 0
+
+
+@pytest.mark.asyncio
+async def test_lookup_exception_counts_failed_not_missing(temp_store, monkeypatch):
+    """SEARCH 超时 → failed (留待重试), 不许标 imap_uid=-1 永久 miss."""
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store, batch_size=10)
+
+    fake_imap = MagicMock()
+    fake_imap.select.return_value = ("OK", [b""])
+    fake_imap.untagged_responses = {"UIDVALIDITY": [b"99"]}
+    fake_imap.uid.side_effect = TimeoutError("timed out")  # SEARCH 直接超时
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.imap_connect",
+        lambda *a, **kw: fake_imap,
+    )
+
+    batch = mapper._fetch_batch_to_backfill(0)
+    result = await mapper._backfill_one_batch(batch)
+
+    assert result["failed"] == len(batch)
+    assert result["missing"] == 0
+    conn = sqlite3.connect(db_path)
+    n_neg = conn.execute(
+        "SELECT COUNT(*) FROM email_metadata WHERE imap_uid = -1"
+    ).fetchone()[0]
+    conn.close()
+    assert n_neg == 0
+
+
+@pytest.mark.asyncio
+async def test_fully_failed_batch_retried_without_advancing_marker(
+    temp_store, monkeypatch
+):
+    """整批失败 → 不推进 marker 重试同一批; 连续 3 批全失败才放弃."""
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store, batch_size=10)
+
+    calls = []
+
+    async def fake_batch(batch):
+        calls.append([b[0] for b in batch])
+        if len(calls) == 1:  # 第一次整批失败
+            return {"processed": len(batch), "backfilled": 0,
+                    "missing": 0, "failed": len(batch)}
+        return {"processed": len(batch), "backfilled": len(batch),
+                "missing": 0, "failed": 0}
+
+    monkeypatch.setattr(mapper, "_backfill_one_batch", fake_batch)
+
+    async def no_sleep(sec):
+        pass
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.asyncio.sleep", no_sleep
+    )
+
+    result = await mapper.run_backfill()
+    # 第一批失败后重试的是同一批 (marker 未推进)
+    assert calls[0] == calls[1]
+    assert result["backfilled"] == 3
+
+
+@pytest.mark.asyncio
+async def test_three_consecutive_failed_batches_abort(temp_store, monkeypatch):
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store, batch_size=10)
+
+    n_calls = 0
+
+    async def always_fail(batch):
+        nonlocal n_calls
+        n_calls += 1
+        return {"processed": len(batch), "backfilled": 0,
+                "missing": 0, "failed": len(batch)}
+
+    monkeypatch.setattr(mapper, "_backfill_one_batch", always_fail)
+
+    async def no_sleep(sec):
+        pass
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.asyncio.sleep", no_sleep
+    )
+
+    await mapper.run_backfill()
+    assert n_calls == 3  # 第 3 次连续全失败后 abort, 不死循环
+
+
+@pytest.mark.asyncio
+async def test_resume_marker_reset_when_leftovers_remain(temp_store, monkeypatch):
+    """一轮跑完还有残留 pending → marker 回卷 0, 下次启动重扫 (失败行不被永久跳过)."""
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store, batch_size=10)
+
+    async def partial_fail(batch):
+        # 全部 failed 但不满 len(batch) 的场景难造 (batch=3 全失败会走重试),
+        # 直接模拟 "处理过但一条没补上" 的部分失败: 2 失败 1 跳过
+        return {"processed": len(batch), "backfilled": 0,
+                "missing": 0, "failed": len(batch) - 1}
+
+    monkeypatch.setattr(mapper, "_backfill_one_batch", partial_fail)
+
+    await mapper.run_backfill()
+    # pending 还在 (没人真的写 imap_uid) → marker 必须回卷
+    assert store.get_state(_LAST_INTERNAL_ID_KEY) == "0"
+
+
+# --------- EWS throttle 暂停标志 (2026-06-11 修复: 主循环此前根本不读它) ---------
+
+
+@pytest.mark.asyncio
+async def test_wait_if_paused_not_paused_returns_immediately(temp_store):
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store)
+    # 没设标志 → 不 sleep 直接返回 (能跑完即证明)
+    await mapper._wait_if_paused()
+
+
+@pytest.mark.asyncio
+async def test_wait_if_paused_waits_until_flag_cleared(temp_store, monkeypatch):
+    """paused=true → 轮询等待; 标志清除后继续."""
+    import time as _time
+
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store)
+    store.set_state(_PAUSED_KEY, "true")
+    store.set_state(_PAUSED_AT_KEY, str(_time.time()))
+
+    sleep_calls = []
+
+    async def fake_sleep(sec):
+        sleep_calls.append(sec)
+        # 模拟 watchdog 在等待期间解除暂停
+        store.set_state(_PAUSED_KEY, "false")
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.asyncio.sleep", fake_sleep
+    )
+    await mapper._wait_if_paused()
+    assert len(sleep_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_if_paused_auto_resumes_after_24h(temp_store):
+    """paused_at 超过 24h → 自动复位标志, 不再等待 (stale 标志不许永久卡 backfill)."""
+    import time as _time
+
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store)
+    store.set_state(_PAUSED_KEY, "true")
+    store.set_state(_PAUSED_AT_KEY, str(_time.time() - _PAUSE_AUTO_RESUME_SEC - 1))
+
+    await mapper._wait_if_paused()  # 不 sleep 直接返回
+
+    assert store.get_state(_PAUSED_KEY) == "false"
+
+
+@pytest.mark.asyncio
+async def test_wait_if_paused_stamps_missing_paused_at(temp_store, monkeypatch):
+    """旧 watchdog 只写 paused=true 没时间戳 → 补一个, 保证 stale 标志最多再活 24h."""
+    db_path, store = temp_store
+    mapper = DavMailUidMapper(_make_cfg(db_path), store)
+    store.set_state(_PAUSED_KEY, "true")
+
+    async def fake_sleep(sec):
+        store.set_state(_PAUSED_KEY, "false")  # 一轮后解除, 避免死循环
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.asyncio.sleep", fake_sleep
+    )
+    await mapper._wait_if_paused()
+
+    stamped = store.get_state(_PAUSED_AT_KEY)
+    assert stamped and float(stamped) > 0

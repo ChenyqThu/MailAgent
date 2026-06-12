@@ -44,6 +44,7 @@ class EmailNotionSyncApp:
         # backend factory 内部 probe 失败时 raise BackendStartupError, 这里捕获后 print
         # 友好切换提示 + sys.exit(1). PM2 ecosystem 配 autorestart=false, 不死循环重试.
         from src.mail.backend import create_backend, BackendStartupError
+        from src.mail.backend.factory import DAVMAIL_PROBE_MAX_ATTEMPTS
         from src.mail.sync_store import SyncStore
 
         try:
@@ -53,7 +54,13 @@ class EmailNotionSyncApp:
             sys.exit(1)
 
         try:
-            self.backend = create_backend(config, sync_store=sync_store_early)
+            # 开机时序: 登录项 App 比 pm2 davmail-poc (JVM 冷启 ~30-60s) 先就绪,
+            # davmail probe 失败时带间隔重试 ~2 分钟再判死 (CLI 路径仍快速失败)
+            self.backend = create_backend(
+                config,
+                sync_store=sync_store_early,
+                probe_max_attempts=DAVMAIL_PROBE_MAX_ATTEMPTS,
+            )
         except BackendStartupError as e:
             print(f"\n❌ {e}", file=sys.stderr)
             if e.fallback_hint:
@@ -152,6 +159,26 @@ class EmailNotionSyncApp:
             )
         else:
             logger.info("[outbox] FanoutWorker disabled (MAILAGENT_OUTBOX_ENABLED=false)")
+            # 设计漏洞防护: 服务层写路径 (mail_write.set_flags 等) 无视本开关恒
+            # enqueue —— 开关关闭时写操作只改本地 SQLite, 永远不会派发到 Mail
+            # 后端 / Notion (打包 App 曾因 onboarding 漏写该 key 静默积压 1564 条)。
+            # 启动时查积压, 有积压必须告警; admin health 同步暴露 outbox_backlog。
+            try:
+                from src.sync import OutboxRepository
+                _stats = OutboxRepository(config.sync_store_db_path).get_stats()
+                _backlog = sum(
+                    _stats.by_status.get(s, 0)
+                    for s in ("pending", "processing", "failed")
+                )
+                if _backlog:
+                    logger.warning(
+                        f"[outbox] 派发器已关闭但队列积压 {_backlog} 条 "
+                        f"(by_status={_stats.by_status}) — 旗标/已读/完成等写操作"
+                        f"不会同步到 Mail 后端与 Notion; "
+                        f"设 MAILAGENT_OUTBOX_ENABLED=true 后重启"
+                    )
+            except Exception as e:
+                logger.debug(f"[outbox] backlog check failed: {e}")
 
         # 反向同步（Notion -> Mail.app + 飞书通知）
         # Sprint 15: 注入 outbox_repo 后 sync_single_page 改写 SQLite intent + outbox

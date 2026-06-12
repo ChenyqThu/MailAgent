@@ -65,6 +65,40 @@ class TestAdminHealth:
             "cli_checkpoints", "v4_rollout_stats", "island_dispatch", "email_outbox",
         ):
             assert required in payload["data"]["tables_present"]
+        # outbox 字段恒存在; 空队列 → 无 warning
+        assert payload["data"]["outbox_backlog"] == 0
+        assert "outbox_dispatch_enabled" in payload["data"]
+        assert "outbox_warning" not in payload["data"]
+
+    def test_outbox_backlog_warning_when_dispatcher_disabled(
+        self, cli_runner, cli_env, seeded_db, monkeypatch,
+    ):
+        """派发器关闭 + email_outbox 积压 → health 暴露 outbox_backlog +
+        outbox_warning (打包 App 曾因 onboarding 漏写 MAILAGENT_OUTBOX_ENABLED
+        静默积压 1564 条, 写操作永不同步; health 必须能看出来)。"""
+        from src.sync.outbox import OutboxRepository
+
+        monkeypatch.setenv("MAILAGENT_OUTBOX_ENABLED", "false")
+        repo = OutboxRepository(str(seeded_db))
+        repo.enqueue(
+            internal_id=12345, op_type="flag_sync", target="mailapp",
+            payload={"is_flagged": True}, source="cli",
+        )
+        repo.enqueue(
+            internal_id=12345, op_type="flag_sync", target="notion",
+            payload={"is_flagged": True}, source="cli",
+        )
+
+        result = _invoke_admin(
+            cli_runner, "health", "-o", "json", db_path=seeded_db,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _extract_last_json_object(result.output)
+        assert payload["data"]["outbox_dispatch_enabled"] is False
+        assert payload["data"]["outbox_backlog"] == 2
+        assert "MAILAGENT_OUTBOX_ENABLED" in payload["data"]["outbox_warning"]
+        # 积压是配置告警, 不翻转 healthy (schema 仍 OK, 不破坏现有健康闸语义)
+        assert payload["data"]["healthy"] is True
 
 
 class TestAdminStats:

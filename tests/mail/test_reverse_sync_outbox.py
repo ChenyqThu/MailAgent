@@ -58,6 +58,8 @@ def sync_store():
 def outbox_repo():
     r = MagicMock()
     r.enqueue = MagicMock(return_value=42)
+    # SSoT 守卫默认放行 (无未派发完成的本地 intent)。
+    r.count_pending = MagicMock(return_value=0)
     return r
 
 
@@ -147,8 +149,10 @@ class TestOutboxPath:
         assert kwargs["payload"] == {"is_read": True, "is_flagged": True}
         assert kwargs["internal_id"] == 1001
 
-        # update_local_flags 立即写 (echo prevention)
-        sync_store.update_local_flags.assert_called_once_with(1001, True, True)
+        # update_local_flags 立即写 (echo prevention + Notion 已同步镜像)
+        sync_store.update_local_flags.assert_called_once_with(
+            1001, True, True, processing_status="已同步"
+        )
 
         # update_page_mail_sync_status 仍直接调 (带外 ack)
         notion_sync.update_page_mail_sync_status.assert_called_once_with(
@@ -183,6 +187,41 @@ class TestOutboxPath:
         outbox_repo.enqueue.assert_not_called()
         # Notion 仍被标 synced (避免无限重试)
         notion_sync.update_page_mail_sync_status.assert_called_once()
+
+
+# ============================================================
+# SSoT 守卫 — 本地 flag intent 未派发完成时, Notion 端旧状态不回写
+# ============================================================
+
+class TestPendingIntentGuard:
+    async def test_pending_local_intent_skips_overwrite_and_enqueue(
+        self, notion_sync, arm, sync_store, outbox_repo,
+    ):
+        """本邮件有 pending flag_sync intent → 不 update_local_flags / 不 enqueue,
+        仍 ack Notion (防无限重试), 返回 True。防僵尸: 派发器积压期间 resync 重建
+        的页面不得把 Notion 旧旗标写回本地。"""
+        outbox_repo.count_pending = MagicMock(return_value=3)
+        s = _make_sync(notion_sync, arm, sync_store, outbox_repo=outbox_repo)
+        result = await s.sync_single_page(_page(ai_action="需要回复"))
+
+        assert result is True
+        outbox_repo.count_pending.assert_called_once_with(1001, op_type="flag_sync")
+        sync_store.update_local_flags.assert_not_called()
+        outbox_repo.enqueue.assert_not_called()
+        # Notion 页仍被 ack 成已同步, 不会无限重试
+        notion_sync.update_page_mail_sync_status.assert_called_once()
+
+    async def test_count_pending_exception_fails_open(
+        self, notion_sync, arm, sync_store, outbox_repo,
+    ):
+        """守卫查询失败 → fail-open 放行 (守卫是优化不是闸, 不因它断主流程)。"""
+        outbox_repo.count_pending = MagicMock(side_effect=RuntimeError("DB locked"))
+        s = _make_sync(notion_sync, arm, sync_store, outbox_repo=outbox_repo)
+        result = await s.sync_single_page(_page(ai_action="需要回复"))
+
+        assert result is True
+        outbox_repo.enqueue.assert_called_once()
+        sync_store.update_local_flags.assert_called_once()
 
 
 # ============================================================

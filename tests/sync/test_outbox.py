@@ -516,6 +516,36 @@ class TestListing:
         assert repo.get(99999) is None
 
 
+class TestCountPending:
+    def test_counts_only_unfinished_statuses(self, repo):
+        """pending/processing/failed 计入; done/dead_letter 不计."""
+        oid_pending = repo.enqueue(
+            internal_id=1001, op_type="flag_sync", target="mailapp", payload={}
+        )
+        oid_done = repo.enqueue(
+            internal_id=1001, op_type="flag_sync", target="notion", payload={}
+        )
+        repo.mark_processing(oid_done)
+        repo.mark_done(oid_done)
+
+        assert repo.count_pending(1001) == 1
+        assert repo.count_pending(1001, op_type="flag_sync") == 1
+        # 别的邮件不串台
+        assert repo.count_pending(1002) == 0
+
+        # failed (未 dead_letter) 也算未派发完成
+        repo.mark_processing(oid_pending)
+        repo.mark_failed(oid_pending, "boom", max_attempts=5)
+        assert repo.count_pending(1001) == 1
+
+    def test_op_type_filter(self, repo):
+        repo.enqueue(
+            internal_id=1001, op_type="status_sync", target="notion", payload={}
+        )
+        assert repo.count_pending(1001, op_type="flag_sync") == 0
+        assert repo.count_pending(1001) == 1
+
+
 # ============================================================
 # helpers
 # ============================================================

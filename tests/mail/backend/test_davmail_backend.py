@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from unittest.mock import MagicMock
 
 
@@ -621,6 +623,29 @@ def test_get_new_emails_sent_failure_does_not_break_inbox(monkeypatch):
     assert out[0]["mailbox"] == "收件箱"
 
 
+def test_get_new_emails_top_level_failure_raises(monkeypatch):
+    """顶层失败 (IMAP 连接/INBOX 超时) 必须抛出, 不能静默返回空列表.
+
+    静默吞掉会让 _poll_cycle 把失败当"没新邮件"并推进游标 → 失败窗口内的
+    邮件永久跳过 (2026-06-10 两次实际丢信的根因回归测试)。
+    """
+    backend = _make_backend()
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session(*args, **kwargs):
+        raise TimeoutError("timed out")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+
+    with pytest.raises(TimeoutError):
+        backend.get_new_emails(since_row_id=99)
+
+
 def test_check_for_changes_detects_sent_advance(monkeypatch):
     """INBOX 无变化但 Sent UIDNEXT 前进时, check_for_changes 仍返回 has_new=True."""
     backend = _make_backend()
@@ -668,4 +693,118 @@ def _make_backend(uidvalidity=12345):
     backend._cached_marker = None
     # 多文件夹同步白名单 (空 = 零激活, 与 __init__ 默认一致)。需要时测试自行设。
     backend._custom_folders = []
+    backend.last_flag_error = None
     return backend
+
+
+# --------- _store_flag fail-fast (2026-06-11 NULL-uid 超时风暴回归) ---------
+#
+# 背景: 7424 封 AppleScript 迁移存量邮件 imap_uid IS NULL, _store_flag 反查 7w+
+# INBOX 每条吃满 session 30s timeout → outbox 卡死 + davmail JVM 被打满。
+# 修复: 反查限 _FLAG_UID_LOOKUP_TIMEOUT_SEC (5s), miss 时 fail-fast + 明确
+# last_flag_error, 不发 STORE。
+
+from src.mail.backend.davmail_backend import _FLAG_UID_LOOKUP_TIMEOUT_SEC
+
+
+def _flag_imap(uid_search_result):
+    """fake imap: SELECT OK + 可写 + UIDVALIDITY, uid('search') 返回指定结果."""
+    fake = MagicMock()
+    fake.select.return_value = ("OK", [b"OK"])
+    fake.untagged_responses = {"UIDVALIDITY": [b"12345"]}
+
+    def _uid(cmd, *args):
+        if cmd == "search":
+            return uid_search_result
+        return ("OK", [b""])
+
+    fake.uid.side_effect = _uid
+    return fake
+
+
+def _patch_flag_session(monkeypatch, fake_imap):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session(*args, **kwargs):
+        yield fake_imap
+
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_backend.imap_session", fake_session,
+    )
+
+
+def test_store_flag_null_uid_lookup_uses_short_timeout(monkeypatch):
+    """NULL imap_uid → 反查前 socket timeout 必须降到 5s, 不许拿 30s 轰 davmail."""
+    backend = _make_backend()
+    backend.sync_store.get.return_value = {
+        "internal_id": 53675, "message_id": "old@x", "mailbox": "收件箱",
+        "imap_uid": None, "imap_uidvalidity": None,
+    }
+    fake_imap = _flag_imap(uid_search_result=("OK", [b""]))  # miss
+    _patch_flag_session(monkeypatch, fake_imap)
+
+    ok = backend.set_flag(53675, True)
+
+    assert ok is False
+    fake_imap.sock.settimeout.assert_called_once_with(_FLAG_UID_LOOKUP_TIMEOUT_SEC)
+
+
+def test_store_flag_null_uid_miss_fails_fast_with_clear_error(monkeypatch):
+    """反查 miss → 不发 STORE, last_flag_error 写明 pending uid backfill."""
+    backend = _make_backend()
+    backend.sync_store.get.return_value = {
+        "internal_id": 53675, "message_id": "old@x", "mailbox": "收件箱",
+        "imap_uid": None, "imap_uidvalidity": None,
+    }
+    fake_imap = _flag_imap(uid_search_result=("OK", [b""]))
+    _patch_flag_session(monkeypatch, fake_imap)
+
+    ok = backend.set_flag(53675, True)
+
+    assert ok is False
+    assert "pending uid backfill" in (backend.last_flag_error or "")
+    assert "53675" in backend.last_flag_error
+    # 只有 SEARCH 一次 uid 调用, 不许有 STORE
+    cmds = [c.args[0] for c in fake_imap.uid.call_args_list]
+    assert cmds == ["search"]
+
+
+def test_store_flag_null_uid_lookup_hit_restores_timeout_and_stores(monkeypatch):
+    """反查命中 → 恢复 30s timeout, 正常 STORE + 回写 uid."""
+    backend = _make_backend()
+    backend.sync_store.get.return_value = {
+        "internal_id": 53675, "message_id": "old@x", "mailbox": "收件箱",
+        "imap_uid": None, "imap_uidvalidity": None,
+    }
+    backend._update_sync_store_uid = MagicMock()
+    fake_imap = _flag_imap(uid_search_result=("OK", [b"777"]))
+    _patch_flag_session(monkeypatch, fake_imap)
+
+    ok = backend.set_flag(53675, True)
+
+    assert ok is True
+    # 5s (反查前) → 30s (命中后恢复)
+    timeouts = [c.args[0] for c in fake_imap.sock.settimeout.call_args_list]
+    assert timeouts == [_FLAG_UID_LOOKUP_TIMEOUT_SEC, 30]
+    cmds = [c.args[0] for c in fake_imap.uid.call_args_list]
+    assert cmds == ["search", "store"]
+    backend._update_sync_store_uid.assert_called_once_with(53675, 777, 12345)
+
+
+def test_store_flag_fast_path_skips_timeout_tweak(monkeypatch):
+    """imap_uid 已有 → 直接 STORE, 完全不动 socket timeout (现状不回归)."""
+    backend = _make_backend()
+    backend.sync_store.get.return_value = {
+        "internal_id": 60000, "message_id": "new@x", "mailbox": "收件箱",
+        "imap_uid": 888, "imap_uidvalidity": 12345,
+    }
+    fake_imap = _flag_imap(uid_search_result=("OK", [b""]))
+    _patch_flag_session(monkeypatch, fake_imap)
+
+    ok = backend.set_flag(60000, True)
+
+    assert ok is True
+    fake_imap.sock.settimeout.assert_not_called()
+    cmds = [c.args[0] for c in fake_imap.uid.call_args_list]
+    assert cmds == ["store"]

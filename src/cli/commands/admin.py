@@ -200,6 +200,7 @@ def admin_health(
     db_version: Optional[int] = None
     tables_present: list[str] = []
     error_message: Optional[str] = None
+    outbox_backlog = 0
 
     try:
         if not Path(db_path).exists():
@@ -220,6 +221,14 @@ def admin_health(
                 "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
             )
             tables_present = [r[0] for r in cursor.fetchall()]
+            # outbox 积压 (未派发完成的写 intent)。派发器关闭 + 积压 > 0 =
+            # 配置缺陷 (写操作静默永不同步), 下方暴露 outbox_warning。
+            if "email_outbox" in tables_present:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM email_outbox "
+                    "WHERE status IN ('pending', 'processing', 'failed')"
+                ).fetchone()
+                outbox_backlog = int(row[0]) if row else 0
         finally:
             conn.close()
     except Exception as exc:
@@ -233,6 +242,15 @@ def admin_health(
     )
     healthy = schema_ok
 
+    outbox_enabled = bool(cfg.mailagent_outbox_enabled)
+    outbox_warning: Optional[str] = None
+    if not outbox_enabled and outbox_backlog > 0:
+        outbox_warning = (
+            f"派发器关闭 (MAILAGENT_OUTBOX_ENABLED=false) 但 email_outbox 积压 "
+            f"{outbox_backlog} 条 — 旗标/已读/完成等写操作不会同步到 Mail 后端与 "
+            f"Notion; 设 MAILAGENT_OUTBOX_ENABLED=true 后重启"
+        )
+
     data = {
         "db_path": db_path,
         "db_accessible": db_accessible,
@@ -241,8 +259,12 @@ def admin_health(
         "schema_ok": schema_ok,
         "tables_present": tables_present,
         "tables_missing": missing,
+        "outbox_dispatch_enabled": outbox_enabled,
+        "outbox_backlog": outbox_backlog,
         "healthy": healthy,
     }
+    if outbox_warning:
+        data["outbox_warning"] = outbox_warning
     if error_message:
         data["error"] = error_message
 
@@ -253,6 +275,10 @@ def admin_health(
         print(f"schema_ok      {schema_ok}")
         if missing:
             print(f"tables_missing {missing}")
+        print(f"outbox_dispatch_enabled {outbox_enabled}")
+        print(f"outbox_backlog {outbox_backlog}")
+        if outbox_warning:
+            print(f"outbox_warning {outbox_warning}")
         if error_message:
             print(f"error          {error_message}")
         print(f"healthy        {healthy}")

@@ -15,7 +15,8 @@
       "required": [
         "db_path", "db_accessible", "db_version",
         "db_version_expected", "schema_ok",
-        "tables_present", "tables_missing", "healthy"
+        "tables_present", "tables_missing",
+        "outbox_dispatch_enabled", "outbox_backlog", "healthy"
       ],
       "properties": {
         "db_path": {"type": "string"},
@@ -25,6 +26,9 @@
         "schema_ok": {"type": "boolean"},
         "tables_present": {"type": "array", "items": {"type": "string"}},
         "tables_missing": {"type": "array", "items": {"type": "string"}},
+        "outbox_dispatch_enabled": {"type": "boolean"},
+        "outbox_backlog": {"type": "integer", "minimum": 0},
+        "outbox_warning": {"type": "string"},
         "healthy": {"type": "boolean"},
         "error": {"type": "string"}
       }

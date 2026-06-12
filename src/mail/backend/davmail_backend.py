@@ -59,6 +59,12 @@ _APPENDUID_PATTERN = re.compile(rb"APPENDUID\s+(\d+)\s+(\d+)", re.IGNORECASE)
 # RFC 2369 Message-ID 完整匹配 (用 regex 而非 ``in`` 避免 partial match 误判)
 _MSGID_PATTERN = re.compile(r"<[^<>\s]+>")
 
+# _store_flag 的 message_id 反查超时 (秒)。imap_uid IS NULL 的存量邮件 (UID backfill
+# 未补齐) 在 7w+ 大 INBOX 上反查走 davmail/EWS 慢路径, 动辄打满 session 的 30s socket
+# timeout → 单条卡死 outbox 队列 + davmail JVM 被打满 (2026-06-11 事故)。正常反查
+# ~100-300ms, 5s 足够; 超时则 fail-fast 留给 uid backfill 补齐后走快路径。
+_FLAG_UID_LOOKUP_TIMEOUT_SEC = 5
+
 
 def _decode_mime_header(value: Optional[str]) -> str:
     """RFC 2047 decode 邮件 header (subject / from / to 等).
@@ -268,6 +274,9 @@ class DavMailBackend(IMailBackend):
         # 排除空项 + INBOX (主路径单独管) + 去重保序; Sent 由 _sync_sent 单独管，避免双拉。
         self._custom_folders: list[str] = self._parse_custom_folders(cfg)
         self.last_op_latency_ms: Optional[int] = None
+        # _store_flag 最近一次失败原因 (mailapp_fanout 读它写 outbox.last_error,
+        # 让 fail-fast 的 NULL-uid 邮件留下可分诊的明确错误而非笼统 "failed")。
+        self.last_flag_error: Optional[str] = None
 
         # Phase B: 让 NewWatcher / fanout / handler 的 self.arm / self.radar 调用直接 work.
         # davmail backend 自己实现 AppleScriptArm + SQLiteRadar 的兼容接口 (alias methods 在
@@ -701,8 +710,10 @@ class DavMailBackend(IMailBackend):
         flag: str,
         mailbox: Optional[str],
     ) -> bool:
+        self.last_flag_error = None
         record = self._resolve_record_for_flag_op(identifier)
         if not record:
+            self.last_flag_error = f"record not found for identifier={identifier!r}"
             logger.warning(
                 f"[davmail-backend] _store_flag: record not found for "
                 f"identifier={identifier!r} (type={type(identifier).__name__})"
@@ -753,14 +764,34 @@ class DavMailBackend(IMailBackend):
                 if not imap_uid:
                     msg_id = record.get("message_id") or ""
                     if not msg_id:
+                        self.last_flag_error = (
+                            f"no imap_uid + no message_id (internal_id={internal_id})"
+                        )
                         logger.warning(
                             f"[davmail-backend] _store_flag: no imap_uid + no message_id "
                             f"for record (internal_id={internal_id})"
                         )
                         return False
+                    # fail-fast: 反查限 _FLAG_UID_LOOKUP_TIMEOUT_SEC, 不许单条
+                    # 反查拿 session 的 30s timeout 轰 davmail (见常量注释)。
+                    sock = getattr(imap, "sock", None)
+                    if sock is not None:
+                        sock.settimeout(_FLAG_UID_LOOKUP_TIMEOUT_SEC)
                     imap_uid = self._lookup_uid_by_message_id(imap, msg_id)
                     if not imap_uid:
+                        # 反查超时时连接已废, 不恢复 30s — 让退出时的 logout
+                        # 清理也走 5s 短超时, 不再二次卡队列。
+                        self.last_flag_error = (
+                            f"imap_uid missing (pending uid backfill), message_id "
+                            f"lookup failed/timed out within "
+                            f"{_FLAG_UID_LOOKUP_TIMEOUT_SEC}s (internal_id={internal_id})"
+                        )
+                        logger.warning(
+                            f"[davmail-backend] _store_flag fail-fast: {self.last_flag_error}"
+                        )
                         return False
+                    if sock is not None:
+                        sock.settimeout(30)
                     # 命中后回写
                     if internal_id:
                         try:
@@ -774,6 +805,7 @@ class DavMailBackend(IMailBackend):
                 self.last_op_latency_ms = int((time.time() - t0) * 1000)
                 return typ == "OK"
         except Exception as e:
+            self.last_flag_error = f"{type(e).__name__}: {e}"
             logger.error(f"[davmail-backend] _store_flag failed: {e}")
             return False
 
@@ -874,11 +906,16 @@ class DavMailBackend(IMailBackend):
         return None
 
     @staticmethod
-    def _lookup_uid_by_message_id(imap, message_id: str) -> Optional[int]:
+    def _lookup_uid_by_message_id(
+        imap, message_id: str, *, raise_on_error: bool = False
+    ) -> Optional[int]:
         """IMAP UID SEARCH HEADER Message-ID '<msg-id>' 反查 UID.
 
         HIGH #2: 用 ``_quote_imap_string`` quote Message-ID — 含 ``<>+=`` / ``"`` / 空格
         的 message_id 不 quote 会被 server 当 atom 解析失败 (RFC 3501 §4.3 + §6.4.4).
+
+        raise_on_error: uid_mapper 用 — SEARCH 异常 (超时/连接死) 要跟"server 确认
+        无此邮件"区分开, 吞成 None 会被 backfill 误标 imap_uid=-1 永久 miss。
         """
         if not message_id:
             return None
@@ -890,6 +927,8 @@ class DavMailBackend(IMailBackend):
         try:
             typ, data = imap.uid("search", None, "HEADER", "Message-ID", quoted)
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.warning(
                 f"[davmail-backend] UID SEARCH HEADER failed for {mid_clean[:60]!r}: {e}"
             )
@@ -1292,8 +1331,12 @@ class DavMailBackend(IMailBackend):
                         )
             return out
         except Exception as e:
+            # 顶层失败 (IMAP 连接/INBOX 超时) 必须抛给调用方: 静默返回空/部分列表会让
+            # _poll_cycle 误判"本轮没新邮件"并照常推进游标, (last_max, current_max]
+            # 窗口内的邮件被永久跳过 (2026-06-10 两次实际丢信)。Sent/自定义文件夹的
+            # 失败仍由上面的 per-folder try 隔离, 不走到这里。
             logger.error(f"[davmail-backend] get_new_emails failed: {e}")
-            return out
+            raise
 
     def _fetch_custom_folder(self, imap, imap_name: str) -> list[dict]:
         """取一个自定义文件夹的新邮件。marker 派生 + UIDVALIDITY 变化检测 + 上限截断。

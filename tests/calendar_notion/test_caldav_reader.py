@@ -314,3 +314,92 @@ def test_build_llm_caldav_context_caldav_unavailable(monkeypatch):
     monkeypatch.setattr(CalDAVReader, "_connect", boom)
     # 不抛, 返回空串
     assert build_llm_caldav_context(cfg, horizon="today") == ""
+
+
+# --------- get_collection_ctag (caldav 3.x PROPFIND element 修复) ---------
+#
+# 回归: caldav 3.x get_properties 只收 BaseElement 实例, 老写法传
+# ("DAV:", "getctag") tuple 每轮 tick 抛 "'tuple' object has no attribute
+# 'xmlelement'" 刷屏 (24h 613 次 WARNING), worker 永远拿不到 ctag 退化全量拉取.
+
+from loguru import logger as _loguru_logger
+
+
+@pytest.fixture
+def log_messages():
+    """捕获 loguru 输出 (level name + text)."""
+    messages: list[tuple[str, str]] = []
+    hid = _loguru_logger.add(
+        lambda m: messages.append((m.record["level"].name, m.record["message"])),
+        level="DEBUG",
+    )
+    yield messages
+    _loguru_logger.remove(hid)
+
+
+def _reader_with_calendar(cal):
+    reader = _make_reader()
+    reader._principal = SimpleNamespace(calendars=lambda: [cal])
+    return reader
+
+
+def test_get_collection_ctag_uses_base_element():
+    """PROPFIND 用 BaseElement 实例 (带 calendarserver getctag tag), 不是 tuple."""
+    get_property = MagicMock(return_value="ctag-v1")
+    cal = SimpleNamespace(name="日历", get_property=get_property)
+    reader = _reader_with_calendar(cal)
+
+    assert reader.get_collection_ctag("日历") == "ctag-v1"
+    (prop,), _ = get_property.call_args
+    assert not isinstance(prop, tuple)
+    assert prop.tag == "{http://calendarserver.org/ns/}getctag"
+    assert callable(prop.xmlelement)  # caldav 3.x 库内部会调
+
+
+def test_get_collection_ctag_server_returns_none():
+    """server 不支持 getctag (prop 缺失) → None, 不抛."""
+    cal = SimpleNamespace(name="日历", get_property=MagicMock(return_value=None))
+    reader = _reader_with_calendar(cal)
+    assert reader.get_collection_ctag("日历") is None
+
+
+def test_get_collection_ctag_failure_warns_once(log_messages):
+    """探测失败 → None (worker 降级假定有变化); warning 只出第一次, 之后降 DEBUG."""
+    cal = SimpleNamespace(
+        name="日历", get_property=MagicMock(side_effect=RuntimeError("boom"))
+    )
+    reader = _reader_with_calendar(cal)
+
+    assert reader.get_collection_ctag("日历") is None
+    assert reader.get_collection_ctag("日历") is None
+
+    ctag_logs = [(lvl, msg) for lvl, msg in log_messages if "getctag" in msg]
+    warnings = [m for lvl, m in ctag_logs if lvl == "WARNING"]
+    debugs = [m for lvl, m in ctag_logs if lvl == "DEBUG"]
+    assert len(warnings) == 1
+    assert len(debugs) == 1
+
+
+def test_get_collection_ctag_warn_resets_after_recovery(log_messages):
+    """失败 → 成功 → 再失败: 恢复后重置去重, 第二轮失败重新 WARNING."""
+    cal = SimpleNamespace(name="日历", get_property=MagicMock())
+    reader = _reader_with_calendar(cal)
+
+    cal.get_property.side_effect = RuntimeError("boom")
+    assert reader.get_collection_ctag("日历") is None
+    cal.get_property.side_effect = None
+    cal.get_property.return_value = "ctag-v2"
+    assert reader.get_collection_ctag("日历") == "ctag-v2"
+    cal.get_property.side_effect = RuntimeError("boom again")
+    assert reader.get_collection_ctag("日历") is None
+
+    warnings = [
+        m for lvl, m in log_messages if lvl == "WARNING" and "getctag" in m
+    ]
+    assert len(warnings) == 2
+
+
+def test_get_collection_ctag_calendar_not_found():
+    cal = SimpleNamespace(name="日历", get_property=MagicMock(return_value="x"))
+    reader = _reader_with_calendar(cal)
+    assert reader.get_collection_ctag("不存在") is None

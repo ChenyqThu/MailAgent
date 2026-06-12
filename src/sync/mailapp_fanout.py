@@ -34,6 +34,14 @@ class MailAppFanout:
         self.sync_store = sync_store
         self.arm = arm
 
+    def _backend_error_suffix(self) -> str:
+        """DavMailBackend._store_flag 失败时把具体原因带进 outbox.last_error.
+
+        AppleScriptArm 没有 last_flag_error 属性 → 空串, 行为不变。
+        """
+        detail = getattr(self.arm, "last_flag_error", None)
+        return f": {detail}" if detail else ""
+
     async def execute(self, entry: OutboxEntry) -> Tuple[bool, str]:
         """执行一条 mailapp outbox.
 
@@ -79,7 +87,10 @@ class MailAppFanout:
             )
             if not success:
                 ok = False
-                errors.append(f"mark_as_read_by_id failed (target={target_read})")
+                errors.append(
+                    f"mark_as_read_by_id failed (target={target_read})"
+                    + self._backend_error_suffix()
+                )
 
         if has_flagged:
             success = await asyncio.to_thread(
@@ -87,7 +98,10 @@ class MailAppFanout:
             )
             if not success:
                 ok = False
-                errors.append(f"set_flag_by_id failed (target={target_flagged})")
+                errors.append(
+                    f"set_flag_by_id failed (target={target_flagged})"
+                    + self._backend_error_suffix()
+                )
 
         if not ok:
             return (False, "; ".join(errors))

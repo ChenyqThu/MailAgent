@@ -447,7 +447,20 @@ class NewWatcher:
                 self._stats["new_emails_detected"] += estimated_count
 
                 # 2. SQLite 直接获取新邮件元数据（不通过 AppleScript）
-                new_emails = self.radar.get_new_emails(last_max_row_id)
+                #
+                # 拉取失败 (IMAP 超时等) 必须与"没新邮件"区分: 失败时第 4 步绝不能把
+                # 游标推到 current_max, 否则 (last_max, current_max] 窗口内的邮件被
+                # 永久跳过 (2026-06-10 两次实际丢信)。游标不动 = 下轮自动重试同一窗口。
+                try:
+                    new_emails = self.radar.get_new_emails(last_max_row_id)
+                    fetch_ok = True
+                except Exception as e:
+                    logger.error(
+                        f"get_new_emails failed, cursor stays at {last_max_row_id} "
+                        f"(will retry next cycle): {e}"
+                    )
+                    new_emails = []
+                    fetch_ok = False
 
                 if new_emails:
                     logger.info(f"SQLite found {len(new_emails)} new emails")
@@ -503,9 +516,10 @@ class NewWatcher:
                             f"imap_uid={email_meta.get('imap_uid')})"
                         )
 
-                # 4. 更新 last_max_row_id（立即持久化）
-                self.sync_store.set_last_max_row_id(current_max)
-                self.sync_store.set_last_sync_time(datetime.now().isoformat())
+                # 4. 更新 last_max_row_id（立即持久化；仅拉取成功时推进游标）
+                if fetch_ok:
+                    self.sync_store.set_last_max_row_id(current_max)
+                    self.sync_store.set_last_sync_time(datetime.now().isoformat())
         else:
             logger.debug("Radar unavailable, skipping new email detection")
 

@@ -262,6 +262,29 @@ class OutboxRepository:
         finally:
             conn.close()
 
+    def count_pending(
+        self, internal_id: int, *, op_type: Optional[str] = None
+    ) -> int:
+        """某邮件未派发完成 (pending/processing/failed) 的 outbox 条数.
+
+        SSoT 守卫用: 本地 intent 未派发完成前, 服务器/Notion 端的旧状态不是
+        真源, 不应回写覆盖本地 (reverse_sync._enqueue_outbox 据此跳过).
+        """
+        sql = (
+            "SELECT COUNT(*) FROM email_outbox WHERE internal_id = ? "
+            "AND status IN ('pending', 'processing', 'failed')"
+        )
+        params: List[Any] = [internal_id]
+        if op_type:
+            sql += " AND op_type = ?"
+            params.append(op_type)
+        conn = self._connect()
+        try:
+            row = conn.execute(sql, params).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+
     def list_by_internal_id(
         self, internal_id: int, *, limit: int = 50
     ) -> List[OutboxEntry]:

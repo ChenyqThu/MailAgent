@@ -332,6 +332,9 @@ class CalendarSyncWorker:
 
         if new_ctag is not None and new_ctag == old_ctag:
             # ctag 没变 — 只更新 last_incremental_sync_at, 不动 ctag/data
+            logger.debug(
+                f"[calendar-sync-worker] {cal_name!r} ctag unchanged — skip"
+            )
             self.repo.upsert_sync_state(cal_name, last_error=None)
             return
 

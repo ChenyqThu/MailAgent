@@ -251,6 +251,25 @@ class NotionToMailSync:
         to Mail 标记走 update_page_mail_sync_status 直接调 (带外 ack, 不进 outbox)。
         """
         try:
+            # SSoT 守卫: 本邮件还有未派发完成的本地 flag intent (用户刚在前端/CLI
+            # 改过, fanout 没跑完或派发器曾关闭积压) → Notion 端状态是旧的, 不许
+            # 回写覆盖本地 (曾实测: resync 重建页面后本路径把旧旗标写回, 制造
+            # "已完成 + is_flagged=1" 僵尸)。跳过本条, 返回 True 让 Notion 页正常
+            # ack 成已同步, 不无限重试; 本地 intent 派发完成后 Mail 端自然达到终态。
+            try:
+                pending = self.outbox_repo.count_pending(
+                    internal_id, op_type="flag_sync"
+                )
+            except Exception:
+                pending = 0
+            if pending:
+                logger.info(
+                    f"[reverse_sync→outbox] skip internal_id={internal_id}: "
+                    f"{pending} 条本地 flag intent 未派发完成, "
+                    f"Notion 端旧状态不回写本地 (SSoT)"
+                )
+                return True
+
             record = self.sync_store.get(internal_id) if self.sync_store else None
             payload, target_read, target_flagged = self._compute_payload_and_target(
                 ai_action, record

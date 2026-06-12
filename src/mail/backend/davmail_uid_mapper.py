@@ -30,6 +30,25 @@ if TYPE_CHECKING:
 _PROGRESS_KEY = "davmail_backfill_progress"
 _LAST_INTERNAL_ID_KEY = "davmail_backfill_last_internal_id"
 
+# EWS throttle 暂停标志 (davmail_watchdog 写, 此处消费)。2026-06-11 前 backfill
+# 主循环根本不读这个标志 — watchdog "auto-paused" 只是写了个没人看的键; 且 watchdog
+# 的解除分支依赖进程内存态 (_announced_throttle_burst), 重启后 paused=true 永久残留。
+# 修复: 每批前检查; paused 时等待轮询, 超过 _PAUSE_AUTO_RESUME_SEC 自动复位。
+_PAUSED_KEY = "davmail_uid_backfill_paused"
+_PAUSED_AT_KEY = "davmail_uid_backfill_paused_at"
+_PAUSE_AUTO_RESUME_SEC = 24 * 3600
+_PAUSE_POLL_INTERVAL_SEC = 60
+
+# 整批失败 (IMAP connect / SELECT 超时等瞬态故障) 的重试策略: 不推进 marker,
+# 退避后重试同一批; 连续 _MAX_CONSECUTIVE_FAILED_BATCHES 批全失败才放弃。
+# 2026-06-11 实测: davmail EXAMINE 88k INBOX 偶发 >30s, 单次超时不该终结整个 backfill。
+_FAILED_BATCH_BACKOFF_SEC = 30.0
+_MAX_CONSECUTIVE_FAILED_BATCHES = 3
+
+# IMAP 连接/命令超时。EXAMINE 大 INBOX (7w+) davmail 要重建全量 UID map, 偶发 >30s —
+# 与 get_current_max_row_id 的 30→90 修复 (d9b90ec) 同理。
+_IMAP_TIMEOUT_SEC = 90
+
 # IMAP UID SEARCH HEADER 反查特别耗时, 单条 ~100-300ms, 限制并发避免压垮 DavMail.
 # Sprint 16 收尾: batch 50→20 + sleep_between=3s, 防 EWS searchMessages throttling.
 _DEFAULT_BATCH_SIZE = 20
@@ -89,12 +108,37 @@ class DavMailUidMapper:
         logger.info(f"[davmail-uid-mapper] start backfill, pending={pending}, resume_from={last_iid}")
         self.sync_store.set_state(_PROGRESS_KEY, f"running:pending={pending}")
 
+        consecutive_failed_batches = 0
+        completed_naturally = False
         while True:
+            await self._wait_if_paused()
             batch = self._fetch_batch_to_backfill(last_iid)
             if not batch:
+                completed_naturally = True
                 break
 
             result = await self._backfill_one_batch(batch)
+
+            # 整批失败 (connect / SELECT 瞬态超时) → 不推进 marker, 退避重试同一批。
+            # 否则失败的 20 条被 marker 永久跳过 (resume key 不会回卷), 直到下次全量。
+            if result["failed"] >= len(batch):
+                consecutive_failed_batches += 1
+                if consecutive_failed_batches >= _MAX_CONSECUTIVE_FAILED_BATCHES:
+                    total_failed += result["failed"]
+                    logger.warning(
+                        f"[davmail-uid-mapper] aborting: "
+                        f"{consecutive_failed_batches} consecutive fully-failed batches"
+                    )
+                    break
+                logger.warning(
+                    f"[davmail-uid-mapper] batch fully failed "
+                    f"({consecutive_failed_batches}/{_MAX_CONSECUTIVE_FAILED_BATCHES}), "
+                    f"retrying same batch after {_FAILED_BATCH_BACKOFF_SEC}s"
+                )
+                await asyncio.sleep(_FAILED_BATCH_BACKOFF_SEC)
+                continue
+            consecutive_failed_batches = 0
+
             total_processed += result["processed"]
             total_backfilled += result["backfilled"]
             total_missing += result["missing"]
@@ -123,6 +167,15 @@ class DavMailUidMapper:
             if self.sleep_between_batches_sec > 0:
                 await asyncio.sleep(self.sleep_between_batches_sec)
 
+        # 跑完一轮但还有残留 (中途 partial failure 被 marker 跳过的行) → 回卷 marker,
+        # 让下次启动从头再扫一遍。永久 miss 已标 imap_uid=-1 不在 pending 集, 不会死循环。
+        if completed_naturally and self.count_pending() > 0:
+            self.sync_store.set_state(_LAST_INTERNAL_ID_KEY, "0")
+            logger.info(
+                "[davmail-uid-mapper] pass complete with leftovers "
+                f"({self.count_pending()} still pending), resume marker reset to 0"
+            )
+
         elapsed = int(time.time() - t0)
         self.sync_store.set_state(
             _PROGRESS_KEY,
@@ -138,6 +191,38 @@ class DavMailUidMapper:
             "processed": total_processed, "backfilled": total_backfilled,
             "missing": total_missing, "failed": total_failed, "elapsed_sec": elapsed,
         }
+
+    async def _wait_if_paused(self) -> None:
+        """EWS throttle 暂停时等待; 暂停超过 _PAUSE_AUTO_RESUME_SEC 自动复位.
+
+        watchdog 只写 paused=true, 时间戳可能缺 (旧版 watchdog / 手动 set) —
+        缺时补一个 "从现在起算", 保证残留的 stale paused 标志最多再活 24h。
+        """
+        announced = False
+        while self.sync_store.get_state(_PAUSED_KEY) == "true":
+            paused_at_raw = self.sync_store.get_state(_PAUSED_AT_KEY)
+            try:
+                paused_at = float(paused_at_raw) if paused_at_raw else None
+            except (TypeError, ValueError):
+                paused_at = None
+            if paused_at is None:
+                paused_at = time.time()
+                self.sync_store.set_state(_PAUSED_AT_KEY, str(paused_at))
+            if time.time() - paused_at >= _PAUSE_AUTO_RESUME_SEC:
+                self.sync_store.set_state(_PAUSED_KEY, "false")
+                logger.info(
+                    "[davmail-uid-mapper] paused flag exceeded "
+                    f"{_PAUSE_AUTO_RESUME_SEC}s, auto-resuming backfill"
+                )
+                break
+            if not announced:
+                logger.info(
+                    "[davmail-uid-mapper] backfill paused by EWS throttle flag, "
+                    f"polling every {_PAUSE_POLL_INTERVAL_SEC}s (auto-resume after 24h)"
+                )
+                self.sync_store.set_state(_PROGRESS_KEY, "paused:ews_throttle")
+                announced = True
+            await asyncio.sleep(_PAUSE_POLL_INTERVAL_SEC)
 
     def _fetch_batch_to_backfill(self, after_internal_id: int) -> list[tuple[int, str, str]]:
         """SELECT (internal_id, message_id, mailbox) batch_size 条邮件, 排除已处理."""
@@ -174,7 +259,7 @@ class DavMailUidMapper:
         def _sync_backfill():
             nonlocal processed, backfilled, missing, failed
             try:
-                imap = imap_connect(self.cfg, timeout=30)
+                imap = imap_connect(self.cfg, timeout=_IMAP_TIMEOUT_SEC)
             except Exception as e:
                 logger.error(f"[davmail-uid-mapper] IMAP connect failed: {e}")
                 # 整批标 failed
@@ -199,9 +284,26 @@ class DavMailUidMapper:
                     _read_uidvalidity_from_select,
                 )
 
+                conn_dead = False
                 for mbox, items in by_mailbox.items():
                     imap_box = _mailbox_to_imap(mbox)
-                    typ, _ = imap.select(imap_box, readonly=True)
+                    if conn_dead:
+                        failed += len(items)
+                        processed += len(items)
+                        continue
+                    # SELECT 超时必须按"失败"处理而非抛穿 run_backfill —
+                    # 旧版异常直接炸死整个 backfill task (进度残留 "running:",
+                    # 2026-06-11 实锤 processed=240 的中断就是这么来的)。
+                    try:
+                        typ, _ = imap.select(imap_box, readonly=True)
+                    except Exception as e:
+                        logger.warning(
+                            f"[davmail-uid-mapper] SELECT {imap_box!r} raised: {e}"
+                        )
+                        failed += len(items)
+                        processed += len(items)
+                        conn_dead = True  # 连接已废, 剩余组直接计失败
+                        continue
                     if typ != "OK":
                         logger.warning(f"[davmail-uid-mapper] SELECT {imap_box!r} failed")
                         failed += len(items)
@@ -213,7 +315,12 @@ class DavMailUidMapper:
                     for iid, mid in items:
                         processed += 1
                         try:
-                            uid = DavMailBackend._lookup_uid_by_message_id(imap, mid)
+                            # raise_on_error=True: SEARCH 异常 (超时/连接死) 必须计
+                            # failed 留待重试 — 默认吞异常返 None 会被下面误判成
+                            # "永久 miss" 标 imap_uid=-1, 从此被排除在 backfill 外。
+                            uid = DavMailBackend._lookup_uid_by_message_id(
+                                imap, mid, raise_on_error=True
+                            )
                         except Exception as e:
                             logger.warning(
                                 f"[davmail-uid-mapper] lookup iid={iid} failed: {e}"

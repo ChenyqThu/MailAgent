@@ -330,8 +330,10 @@ class SQLiteRadar:
                 return emails
 
         except Exception as e:
+            # 必须抛给调用方 (与 davmail backend 同理): 静默返回 [] 会让 _poll_cycle
+            # 把失败当"没新邮件"并推进游标, 失败窗口内的邮件永久丢失。
             logger.error(f"Failed to get new emails: {e}")
-            return []
+            raise
 
     def get_flags_by_ids(self, internal_ids: List[int]) -> Dict[int, Dict]:
         """查询指定 internal_id 列表的当前 read/flagged 状态"""

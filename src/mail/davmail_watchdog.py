@@ -408,6 +408,11 @@ class DavMailWatchdog:
         if in_burst and not self._announced_throttle_burst:
             await self.alerter.alert_davmail_ews_throttling(throttle_count)
             self.sync_store.set_state("davmail_uid_backfill_paused", "true")
+            # 时间戳给 uid-mapper 的 24h 自动复位用 — 否则进程重启后
+            # _announced_throttle_burst 内存态丢失, paused=true 永久残留。
+            self.sync_store.set_state(
+                "davmail_uid_backfill_paused_at", str(time.time())
+            )
             self._announced_throttle_burst = True
             logger.warning(
                 f"[davmail-watchdog] EWS throttle burst detected ({throttle_count} "
@@ -416,6 +421,7 @@ class DavMailWatchdog:
         elif not in_burst and self._announced_throttle_burst and throttle_count == 0:
             # 完全干净一轮才解除，避免抖动
             self.sync_store.set_state("davmail_uid_backfill_paused", "false")
+            self.sync_store.set_state("davmail_uid_backfill_paused_at", "")
             self._announced_throttle_burst = False
             logger.info(
                 "[davmail-watchdog] EWS throttle cleared — uid-mapper backfill resumed"
