@@ -120,7 +120,7 @@ async def test_backfill_batch_uses_executemany(temp_store, monkeypatch):
     fake_imap.select.return_value = ("OK", [b""])
     fake_imap.untagged_responses = {"UIDVALIDITY": [b"99"]}
 
-    def fake_lookup(imap, mid):
+    def fake_lookup(imap, mid, **kw):
         return {"m1@x": 1000, "m2@x": 1001, "m3@x": None}.get(mid)
 
     monkeypatch.setattr(
@@ -205,7 +205,7 @@ async def test_backfill_progress_persisted(temp_store, monkeypatch):
     fake_imap.untagged_responses = {"UIDVALIDITY": [b"99"]}
     monkeypatch.setattr(
         "src.mail.backend.davmail_backend.DavMailBackend._lookup_uid_by_message_id",
-        staticmethod(lambda imap, mid: 555),
+        staticmethod(lambda imap, mid, **kw: 555),
     )
     monkeypatch.setattr(
         "src.mail.backend.davmail_uid_mapper.imap_connect",
@@ -227,6 +227,14 @@ async def test_backfill_imap_connect_fail_marks_failed(temp_store, monkeypatch):
     monkeypatch.setattr(
         "src.mail.backend.davmail_uid_mapper.imap_connect",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("connect refused")),
+    )
+
+    async def no_sleep(sec):
+        pass
+
+    # 整批失败现在会退避重试 (30s×2), 测试里跳过真实 sleep
+    monkeypatch.setattr(
+        "src.mail.backend.davmail_uid_mapper.asyncio.sleep", no_sleep
     )
 
     result = await mapper.run_backfill()

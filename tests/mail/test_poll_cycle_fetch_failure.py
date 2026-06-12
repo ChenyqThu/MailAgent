@@ -66,6 +66,8 @@ def _make_watcher(radar):
     w._process_retry_queue = _noop
     w._process_llm_retry_queue = _noop
     w._detect_and_sync_flag_changes = _noop
+    # 草稿 reconcile 走 self.arm；stub 无 reconcile_drafts → 整段 noop
+    w.arm = object()
     return w
 
 
