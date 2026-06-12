@@ -70,7 +70,8 @@ function AgentCard({
     <div
       style={{
         borderRadius: 14,
-        background: 'rgb(var(--ink-2))',
+        // 主题 v2 round 5 — 卡片实底转半透 (玻璃下死色块)。
+        background: 'rgb(var(--ink-2) / 0.55)',
         border: '1px solid rgb(var(--ink-border))',
         overflow: 'hidden'
       }}
@@ -182,7 +183,7 @@ function AgentCard({
               borderRadius: 9,
               cursor: 'pointer',
               fontFamily: 'inherit',
-              background: 'rgb(var(--ink-1))',
+              background: 'rgb(var(--ink-1) / 0.5)',
               border: '1px solid rgb(var(--ink-border-soft))',
               transition: 'border-color 120ms'
             }}
@@ -444,7 +445,7 @@ export function ConfigDrawer({
     fontFamily: 'inherit',
     fontSize: 13.5,
     color: 'rgb(var(--ink-fg))',
-    background: 'rgb(var(--ink-1))',
+    background: 'rgb(var(--ink-1) / 0.55)',
     border: '1px solid rgb(var(--ink-border))',
     borderRadius: 8,
     padding: '9px 11px',
@@ -494,8 +495,10 @@ export function ConfigDrawer({
           width: 480,
           maxWidth: '92%',
           zIndex: 61,
-          background: 'rgb(var(--ink-1))',
-          borderLeft: '1px solid rgb(var(--ink-border))',
+          // 主题 v2 round 5 — 抽屉是真浮层: glass-base 高遮挡配方 (与窗口
+          // tint 同源), 不再用 ink 实底。
+          background: 'color-mix(in srgb, var(--glass-base) 94%, transparent)',
+          borderLeft: '1px solid var(--hairline-strong)',
           boxShadow: 'var(--shadow-raised)',
           display: 'flex',
           flexDirection: 'column'
@@ -545,7 +548,7 @@ export function ConfigDrawer({
                 gap: 12,
                 padding: '13px 14px',
                 borderRadius: 10,
-                background: 'rgb(var(--ink-2))',
+                background: 'rgb(var(--ink-2) / 0.55)',
                 border: '1px solid rgb(var(--ink-border))'
               }}
             >
@@ -716,7 +719,9 @@ export function ConfigDrawer({
                             fontSize: 13,
                             cursor: 'pointer',
                             color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                            background: on ? 'rgb(var(--c-accent) / 0.14)' : 'rgb(var(--ink-1))',
+                            background: on
+                              ? 'rgb(var(--c-accent) / 0.14)'
+                              : 'rgb(var(--ink-1) / 0.5)',
                             border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`,
                             transition: 'all 120ms'
                           }}
@@ -737,7 +742,7 @@ export function ConfigDrawer({
                     color: 'rgb(var(--ink-fg-2))',
                     padding: '11px 13px',
                     borderRadius: 9,
-                    background: 'rgb(var(--ink-1))',
+                    background: 'rgb(var(--ink-1) / 0.5)',
                     border: '1px solid rgb(var(--ink-border-soft))'
                   }}
                 >

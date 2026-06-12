@@ -27,11 +27,11 @@ export const Slider = React.forwardRef<
     </SliderPrimitive.Track>
     <SliderPrimitive.Thumb
       className={cn(
-        // UI-PRIMITIVES-01: thumb rests on the coral range; bg-white scored
-        // <3:1 (WCAG 1.4.11). --c-accent-fg flips per-mode (dark→near-black /
-        // light→white) for AA on coral; the 1px ink-border ring keeps the
-        // edge legible over the unfilled ink-4 track.
-        'block h-[16px] w-[16px] rounded-full bg-accent-fg',
+        // 主题 v2 round 5: thumb 恒白 (--slider-thumb, macOS 系统滑块惯例)。
+        // 此前 UI-PRIMITIVES-01 用 bg-accent-fg (暗色=近黑) 压 coral range
+        // 的 AA, 但暗色玻璃下读成「黑色圆点」(用户反馈); 边缘辨识改由
+        // ink-border ring (round 5 已提亮) + 投影承担。
+        'block h-[16px] w-[16px] rounded-full bg-[rgb(var(--slider-thumb))]',
         'shadow-[0_0_0_1px_rgb(var(--ink-border)),0_2px_4px_rgba(0,0,0,0.25)]',
         'transition-transform duration-fast ease-standard',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',

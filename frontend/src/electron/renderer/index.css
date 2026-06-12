@@ -52,8 +52,12 @@
   --ink-3: 31 36 43;
   --ink-4: 38 44 53;
   --ink-5: 46 52 62;
-  --ink-border: 44 50 59;
-  --ink-border-soft: 31 36 43;
+  /* 主题 v2 round 5 — 暗色边框 token 提亮: v1 实底时代的冷暗灰 (44/31 级)
+   * 在透壁纸玻璃上读黑 (用户报「设置项外框黑色」)。demo 真源没有这个
+   * token — 描边全走 hairline 白系; 生产 166 处 tailwind 消费点走 token
+   * 级提亮一次收编, 亮色块的值不动。 */
+  --ink-border: 76 84 96;
+  --ink-border-soft: 58 65 76;
 
   /* Sprint 4 a11y carry-forward (REVIEW-LOG C-08 / H-01):
    * fg-2 and fg-3 needed brighter values to clear WCAG AA (4.5:1) over
@@ -135,6 +139,11 @@
     inset 0 1px 0 rgb(255 255 255 / 0.08),
     0 24px 60px rgb(0 0 0 / 0.55),
     0 6px 16px rgb(0 0 0 / 0.4);
+
+  /* Slider thumb — 两主题恒白 (macOS 系统滑块惯例)。round 5: 此前
+   * bg-accent-fg (暗色=近黑) 是压 coral range 的 AA 设计, 但暗色玻璃下
+   * 读成「黑色圆点」; 边缘辨识由 ink-border ring (已提亮) + 投影承担。 */
+  --slider-thumb: 255 255 255;
 
   /* 玻璃调参 knobs — 2026-06-12 评审定稿默认值 (染色 tinted)。这组值同时是
    * 「设置→通用→外观→高级玻璃调节」的出厂默认 (规范 §3.1/§3.5); 用户覆写
@@ -988,6 +997,17 @@ body::before {
  * (含仅 hover:bg-coral/* 的按钮 — 文字加深无害, AA 只升不降)。 */
 :root[data-theme='light'] [class*='bg-coral/'][class*='text-coral'] {
   color: rgb(var(--c-accent-hi));
+}
+
+/* 暗色玻璃 hover 止血 (round 5) — v1 的 hover:bg-ink-3/4 是不透明深灰,
+ * 在透壁纸玻璃上 hover 出一块死色补丁 (用户报「hover 主菜单实色丑」)。
+ * 属性子串规则把 93 处消费点零 diff 收编成半透白 wash (同上方亮色 chip
+ * 护栏手法)。solid 档维持 v1 实底 hover 语言, 不收编。 */
+:root[data-theme='dark']:not([data-surface='solid']) [class*='hover:bg-ink-3']:hover {
+  background-color: rgb(var(--ink-fg) / 0.07);
+}
+:root[data-theme='dark']:not([data-surface='solid']) [class*='hover:bg-ink-4']:hover {
+  background-color: rgb(var(--ink-fg) / 0.1);
 }
 
 /* solid 档收掉发光 (实色 = 安静); 渐变与 wash 保留。 */
