@@ -589,17 +589,12 @@ export function EmailList(): React.ReactElement {
   // 定位无动画, 之后才滑。reduced-motion 短路。useGSAP({scope}) 自动 cleanup。
   const tabListRef = useRef<HTMLDivElement | null>(null)
   const tabIndicatorRef = useRef<HTMLSpanElement | null>(null)
-  const tabMountedRef = useRef(false)
   const reduceMotion = useReducedMotion()
   useGSAP(
     () => {
       const list = tabListRef.current
       const indicator = tabIndicatorRef.current
-      // 非 inbox 视图 tablist 卸载 → 下次切回需重新 gsap.set 无动画定位。
-      if (!list || !indicator) {
-        tabMountedRef.current = false
-        return
-      }
+      if (!list || !indicator) return
       const activeEl = list.querySelector<HTMLElement>('.inbox-tab.is-active')
       if (!activeEl) return
       const listRect = list.getBoundingClientRect()
@@ -610,12 +605,19 @@ export function EmailList(): React.ReactElement {
       // (用户报「切换后边框丢失」)。
       const left = activeRect.left - listRect.left - list.clientLeft
       const width = activeRect.width
-      if (!tabMountedRef.current || reduceMotion) {
+      // 「首挂 set / 后续 to」的判定必须以 DOM 真实状态为准 (revert 后
+      // inline transform 为空), 🔴 不能用 ref 标志: React StrictMode 的
+      // 模拟卸载会跑 useGSAP cleanup (revert 掉 gsap.set 写的 visibility/
+      // x/width) 但保留 ref 值 — mount 第二跑若凭 ref 走 to 分支, autoAlpha
+      // 不会再写, 胶囊从 CSS 初始 hidden 永远出不来 (「设置页往返后
+      // indicator 丢失」的真根因, dev StrictMode 必现)。to 也补 autoAlpha
+      // 兜底, 任何路径都不再可能停在 hidden。
+      const fresh = !indicator.style.transform
+      if (fresh || reduceMotion) {
         gsap.set(indicator, { x: left, width, autoAlpha: 1 })
-        tabMountedRef.current = true
         return
       }
-      gsap.to(indicator, { x: left, width, duration: DUR.fast, overwrite: 'auto' })
+      gsap.to(indicator, { x: left, width, autoAlpha: 1, duration: DUR.fast, overwrite: 'auto' })
     },
     // i18n.language 在依赖里: tab 文本宽度随语言变 (重点 vs Focused),
     // 不重测会让胶囊保持旧语言的宽度 → 英文文本溢出胶囊。
