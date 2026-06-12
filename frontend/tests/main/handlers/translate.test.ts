@@ -2,7 +2,7 @@
 //
 // 覆盖 10 个轴:
 //   1. happy path: extractBlocks → batched LLM → returns segments + writes cache
-//   2. empty body_html → E_NO_BODY (before fetch, no API spend)
+//   2. empty body_html/body_markdown → E_NO_BODY (before fetch, no API spend)
 //   3. missing API key → E_NO_LLM_KEY (before fetch)
 //   4. non-OK HTTP for a single batch → failedBatches++ (NOT thrown)
 //   5. abort via abortAllTranslations → in-flight batches reject
@@ -125,10 +125,14 @@ function ok(text: string): { ok: true; json: () => Promise<unknown> } {
   }
 }
 
-function insertEmail(internalId: number, bodyHtml: string): void {
+function insertEmail(
+  internalId: number,
+  bodyHtml: string | null,
+  bodyMarkdown: string | null = ''
+): void {
   fixtureDb.prepare('INSERT INTO email_metadata VALUES (?,?,?,?,?)')
     .run(internalId, `m${internalId}@x`, 'pending', 1, 1)
-  fixtureDb.prepare('INSERT INTO email_body VALUES (?,?,?)').run(internalId, bodyHtml, '')
+  fixtureDb.prepare('INSERT INTO email_body VALUES (?,?,?)').run(internalId, bodyHtml, bodyMarkdown)
 }
 
 function htmlParagraphs(count: number, textFor: (idx: number) => string): string {
@@ -216,8 +220,41 @@ describe('translateBatch', () => {
     expect(JSON.parse(cached.segments_json)).toHaveLength(3)
   })
 
-  test('empty body_html → E_NO_BODY, never hits fetch', async () => {
+  test('empty body_html/body_markdown → E_NO_BODY, never hits fetch', async () => {
     await expect(handler.translateBatch({ internalId: 102 })).rejects.toMatchObject({
+      code: 'E_NO_BODY'
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('body_html NULL + body_markdown plaintext → translates extracted segments', async () => {
+    insertEmail(
+      108,
+      null,
+      'Hello team this is plaintext line one.\nPlease keep this line in the same paragraph.\n\nSecond plaintext paragraph needs translation soon.'
+    )
+    mockEchoTranslation()
+
+    const result = await handler.translateBatch({ internalId: 108 })
+
+    expect(result.segments).toEqual([
+      {
+        src: 'Hello team this is plaintext line one. Please keep this line in the same paragraph.',
+        tgt: '译文 0'
+      },
+      {
+        src: 'Second plaintext paragraph needs translation soon.',
+        tgt: '译文 1'
+      }
+    ])
+    expect(result.failedBatches).toBe(0)
+    expect(result.totalBatches).toBe(1)
+  })
+
+  test('body_html NULL + body_markdown NULL → E_NO_BODY, never hits fetch', async () => {
+    insertEmail(109, null, null)
+
+    await expect(handler.translateBatch({ internalId: 109 })).rejects.toMatchObject({
       code: 'E_NO_BODY'
     })
     expect(fetchMock).not.toHaveBeenCalled()

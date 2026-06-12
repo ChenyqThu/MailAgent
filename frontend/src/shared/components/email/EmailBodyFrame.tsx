@@ -22,6 +22,7 @@ import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { useAppearance, type BodyFont } from '@shared/state/appearance'
 import { adaptHtmlForDarkMode } from '@shared/lib/emailDarkMode'
 import { EMAIL_PURIFY_OPTS } from '@shared/lib/emailSanitize'
+import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import type { EmailDetail, TranslationSegment } from '@shared/api/types'
 
 import { injectTranslations } from './emailTranslationInjection'
@@ -229,7 +230,23 @@ export function EmailBodyFrame({
 
   const bodyQ = useQuery({
     queryKey: ['email', internalId, 'body', 'html'],
-    queryFn: () => mailApi.email.body(internalId, { format: 'html' }),
+    queryFn: async () => {
+      const htmlBody = await mailApi.email.body(internalId, { format: 'html' })
+      if (typeof htmlBody?.content === 'string' && htmlBody.content.length > 0) {
+        return htmlBody
+      }
+
+      const markdownBody = await mailApi.email.body(internalId, { format: 'markdown' })
+      if (typeof markdownBody?.content !== 'string' || markdownBody.content.length === 0) {
+        return htmlBody ?? markdownBody
+      }
+
+      // text-only fallback 必须和 translate.ts 共用 plaintextToHtml 产物；
+      // 译文注入按 shared run/text 匹配，任一端单独改 DOM 都会错位。
+      const content = plaintextToHtml(markdownBody.content)
+      if (content.length === 0) return htmlBody ?? markdownBody
+      return { ...markdownBody, format: 'html' as const, content }
+    },
     staleTime: Infinity
   })
 

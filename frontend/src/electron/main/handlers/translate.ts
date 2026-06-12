@@ -30,6 +30,7 @@ import { join } from 'path'
 
 import { getDb, resolveDbPath } from '../db'
 import { extractBlocks, type ExtractedBlock } from '../lib/html-extractor'
+import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import {
   getLlmTranslateApiKey,
   getLlmTranslateBaseUrl,
@@ -134,10 +135,16 @@ export function closeTranslateDb(): void {
 
 function readBodyHtml(internalId: number): string | null {
   const row = getDb()
-    .prepare('SELECT body_html FROM email_body WHERE internal_id = ?')
-    .get(internalId) as { body_html: string | null } | undefined
-  if (!row || typeof row.body_html !== 'string' || row.body_html.length === 0) return null
-  return row.body_html
+    .prepare('SELECT body_html, body_markdown FROM email_body WHERE internal_id = ?')
+    .get(internalId) as { body_html: string | null; body_markdown: string | null } | undefined
+  if (!row) return null
+  if (typeof row.body_html === 'string' && row.body_html.length > 0) return row.body_html
+  if (typeof row.body_markdown !== 'string' || row.body_markdown.length === 0) return null
+
+  // text-only fallback 必须和 EmailBodyFrame 共用 plaintextToHtml 产物；
+  // extractBlocks 与 iframe DOM 同源，译文注入的文本匹配才稳定。
+  const html = plaintextToHtml(row.body_markdown)
+  return html.length > 0 ? html : null
 }
 
 function readCache(internalId: number, targetLang: TargetLang): TranslationCache | null {
@@ -584,7 +591,7 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
   if (html === null) {
     throw new TranslateError(
       'E_NO_BODY',
-      `email_body.body_html for internal_id=${internalId} is empty or missing`
+      `email_body.body_html/body_markdown for internal_id=${internalId} is empty or missing`
     )
   }
 
