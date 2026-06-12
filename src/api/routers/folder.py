@@ -111,7 +111,11 @@ async def folder_discover(
     from src.mail.backend.imap_client import build_folder_tree, list_folders
 
     try:
-        folders = list_folders(cfg, with_counts=counts)
+        # 🔴 必须 to_thread: list_folders = LIST + 逐文件夹 STATUS (每 op 60s 超时
+        # 上限), davmail 慢窗口时同步直调会把 uvicorn event loop 冻结数分钟 —
+        # serve-api 全部端点无响应 (dogfood round 3 "启动不起来"/"chat 加载不出"
+        # 的根因之一, 2026-06-13 实锤)。
+        folders = await _asyncio.to_thread(list_folders, cfg, with_counts=counts)
     except Exception as e:  # noqa: BLE001 — IMAP/连接失败统一上报
         raise APIError("E_UPSTREAM", f"folder discover failed: {e}", source="imap")
     whitelist = set(_current_whitelist(cfg))
