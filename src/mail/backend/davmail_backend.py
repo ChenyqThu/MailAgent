@@ -1512,6 +1512,31 @@ class DavMailBackend(IMailBackend):
                 # 快照推进 (uidnext)。对账期间新 APPEND 的 race 由下 cycle STATUS
                 # 差异自愈 (messages/uidnext 再变 → 再对账)。
                 self._set_drafts_uidnext(uidnext)
+            # 同 Message-ID 替换 (OWA/Outlook 编辑草稿 = 新 UID 同 Message-ID):
+            # 不能走 to_add+to_delete — save_email 的 cross-backend merge guard
+            # 会把 to_add 合并进旧行不建新行, 随后 to_delete 删旧行 → 刚 merge 的
+            # 行被删 (草稿闪没 + internal_id 漂移); 旧行在 grace 内则保留 synced
+            # + 旧正文永久陈旧 (codex review HIGH)。拆成 to_update: 直接更新旧行
+            # UID/UIDVALIDITY + 置 pending 让 watcher 重 fetch 新正文。
+            if to_add:
+                mid_to_iid = self._draft_message_id_map(label)
+                if mid_to_iid:
+                    kept_add: list[dict] = []
+                    delete_set = set(to_delete)
+                    for item in to_add:
+                        old_iid = mid_to_iid.get(item.get("message_id") or "")
+                        if old_iid:
+                            self._update_draft_row_uid(old_iid, item)
+                            delete_set.discard(old_iid)
+                        else:
+                            kept_add.append(item)
+                    if len(kept_add) != len(to_add):
+                        logger.info(
+                            f"[davmail-backend] drafts reconcile: "
+                            f"{len(to_add) - len(kept_add)} edited in-place (same Message-ID)"
+                        )
+                        to_add = kept_add
+                        to_delete = [i for i in to_delete if i in delete_set]
             # Grace window: compose_draft 即时落库的新行, davmail 端 folder 缓存
             # 可能尚未反映 (SELECT 后 SEARCH 仍 stale 数分钟) → 远端"看不到"该 UID
             # 会被误判已删除。创建 < 120s 的行不删, 留给后续 cycle 确认
@@ -1546,6 +1571,54 @@ class DavMailBackend(IMailBackend):
                 f"[davmail-backend] _folder_imap_uid_map({mailbox_label!r}) failed: {e}"
             )
             return {}
+
+    def _draft_message_id_map(self, mailbox_label: str) -> dict[str, int]:
+        """本地草稿行 {message_id: internal_id} (davmail-origin)。同 Message-ID 编辑检测用。"""
+        try:
+            conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
+            try:
+                rows = conn.execute(
+                    "SELECT message_id, internal_id FROM email_metadata "
+                    "WHERE mailbox = ? AND backend_origin = 'davmail' "
+                    "AND message_id IS NOT NULL AND message_id != ''",
+                    (mailbox_label,),
+                ).fetchall()
+                return {str(r[0]): int(r[1]) for r in rows}
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[davmail-backend] _draft_message_id_map failed: {e}")
+            return {}
+
+    def _update_draft_row_uid(self, internal_id: int, item: dict) -> None:
+        """草稿编辑 in-place 更新: 新 UID/UIDVALIDITY/subject + 置 pending 重 fetch 正文。"""
+        try:
+            conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
+            try:
+                conn.execute(
+                    "UPDATE email_metadata SET imap_uid = ?, "
+                    "imap_uidvalidity = COALESCE(?, imap_uidvalidity), "
+                    "subject = COALESCE(NULLIF(?, ''), subject), "
+                    "sync_status = 'pending', sync_error = NULL, "
+                    "next_retry_at = NULL, updated_at = ? "
+                    "WHERE internal_id = ?",
+                    (
+                        item.get("imap_uid"),
+                        item.get("imap_uidvalidity"),
+                        item.get("subject") or "",
+                        time.time(),
+                        internal_id,
+                    ),
+                )
+                conn.commit()
+                logger.info(
+                    f"[davmail-backend] draft {internal_id} edited in-place → "
+                    f"uid={item.get('imap_uid')} (pending refetch)"
+                )
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[davmail-backend] _update_draft_row_uid({internal_id}) failed: {e}")
 
     def _filter_recent_rows(self, internal_ids: list[int], *, grace_sec: int) -> list[int]:
         """从待删列表里剔除创建时间 < grace_sec 的行 (reconcile 误删保护)。

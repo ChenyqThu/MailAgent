@@ -118,6 +118,10 @@ def _backend(
     # grace window 直通 (真方法连 SQLite 查 created_at; 这里 sync_store 是 mock,
     # 连库会炸 → fail-safe 返回 [] 打翻 to_delete 断言)。grace 行为有独立用例。
     b._filter_recent_rows = lambda ids, grace_sec: ids
+    # 同 Message-ID 编辑检测默认无命中 (真方法连库会在 cwd 留 MagicMock 垃圾文件)。
+    # in-place update 行为有独立用例。
+    b._draft_message_id_map = MagicMock(return_value={})
+    b._update_draft_row_uid = MagicMock()
     b._fake = fake
     b._kv = kv
     return b
@@ -207,6 +211,26 @@ def test_edit_replaces_uid(patch_session):
     to_add, to_delete = b.reconcile_drafts()
     assert to_delete == [11]
     assert [i["imap_uid"] for i in to_add] == [102]
+
+
+def test_edit_same_message_id_updates_in_place(patch_session):
+    """OWA/Outlook 编辑草稿 (新 UID 同 Message-ID) → in-place update, 不 add 不 delete。
+
+    若走 to_add+to_delete: save_email merge guard 合并进旧行后 to_delete 再删它
+    → 草稿闪没 + internal_id 漂移; 旧行在 grace 内则正文永久陈旧 (codex HIGH)。
+    """
+    fake = FakeImap(7, [102], {102: ("m1", "d1-edited")})
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "102"}
+    b = _backend(fake, local={101: 11}, kv=kv)
+    b._draft_message_id_map = MagicMock(return_value={"m1": 11})
+    patch_session(b)
+    to_add, to_delete = b.reconcile_drafts()
+    assert to_add == []
+    assert to_delete == []
+    b._update_draft_row_uid.assert_called_once()
+    old_iid, item = b._update_draft_row_uid.call_args[0]
+    assert old_iid == 11
+    assert item["imap_uid"] == 102
 
 
 def test_uidvalidity_change_full_rebuild(patch_session):
@@ -366,9 +390,12 @@ def test_filter_recent_rows_keeps_fresh(tmp_path):
     b = DavMailBackend.__new__(DavMailBackend)
     b.sync_store = store
     assert b._filter_recent_rows([1, 2], grace_sec=120) == [1]
-    # 查询失败 → fail-safe 整批不删
+    # 查询失败 → fail-safe 整批不删。db_path 用不存在父目录的路径触发
+    # OperationalError (⚠️ 不能用 MagicMock: sqlite3.connect(str(mock)) 会在
+    # cwd 创建名为 mock repr 的零字节垃圾文件 — codex review NIT)。
     b2 = DavMailBackend.__new__(DavMailBackend)
-    b2.sync_store = MagicMock()  # db_path 是 MagicMock → connect 炸
+    b2.sync_store = MagicMock()
+    b2.sync_store.db_path = str(tmp_path / "nonexistent-dir" / "x.db")
     assert b2._filter_recent_rows([1, 2], grace_sec=120) == []
 
 

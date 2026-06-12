@@ -298,7 +298,10 @@ function EmailRowInner({
     if (isDraft) {
       try {
         await mailApi.email.deleteDraft(email.internal_id)
+        // 列表行 + 侧边栏草稿数 badge 一起刷 (服务端 SSE 经 Redis, 未配
+        // REDIS_URL 时发不出 — 本窗口自刷最可靠, codex review MEDIUM)。
         await invalidate()
+        await queryClient.invalidateQueries({ queryKey: ['mailboxes'] })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         toastError('Delete draft failed', msg)
@@ -317,7 +320,7 @@ function EmailRowInner({
       const msg = err instanceof Error ? err.message : String(err)
       toastError('Archive failed', msg)
     }
-  }, [email.internal_id, invalidate, isDraft, mailApi, optimisticPatch])
+  }, [email.internal_id, invalidate, isDraft, mailApi, optimisticPatch, queryClient])
 
   const cbClass = useMemo(() => cn('cb', batchIsSelected && 'cb-on'), [batchIsSelected])
 

@@ -476,6 +476,8 @@ export function Sidebar(): React.ReactElement {
             }
             collapsedBadge={flaggedTotal}
           />
+          {/* all-mail 有意不传 collapsedBadge：总数是几千级大数字，收起态角标
+              失去信号价值还占 56px rail 空间（用户只点名 收件箱/草稿/已标旗）。 */}
           <NavRow
             icon={MAILBOX_ICON.all}
             label={t('nav.allMail')}

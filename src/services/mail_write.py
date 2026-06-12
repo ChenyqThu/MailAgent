@@ -1371,6 +1371,19 @@ class MailWriteService:
                 f"[delete-draft] local cleanup failed (reconcile 兜底): {e}"
             )
             local_deleted = False
+        # SSE 让远程 web / 其它窗口刷新列表+badge (events_bridge 对 email.synced
+        # 宽 invalidate ['emails']+['mailboxes']); Electron 本窗口由前端自 invalidate。
+        try:
+            from src.events.publisher import safe_publish
+
+            safe_publish(
+                "email.synced",
+                internal_id=internal_id,
+                data={"deleted": True, "mailbox": "草稿箱"},
+                source="delete_draft",
+            )
+        except Exception:
+            pass
         logger.info(f"[delete-draft] internal_id={internal_id} uid={imap_uid} done")
         return DeleteDraftResult(
             internal_id=internal_id, imap_uid=int(imap_uid), local_deleted=local_deleted

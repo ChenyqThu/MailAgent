@@ -175,7 +175,7 @@ def fetch_report_briefs(
              WHERE m.date_received IS NOT NULL
                AND julianday(m.date_received) >= julianday(?)
                AND julianday(m.date_received) <  julianday(?)
-               AND m.mailbox NOT IN ({draft_ph})
+               AND (m.mailbox IS NULL OR m.mailbox NOT IN ({draft_ph}))
             """,
             (since_iso, until_iso, *_DRAFT_MAILBOXES),
         ).fetchall()
@@ -193,7 +193,7 @@ def fetch_report_briefs(
              WHERE m.is_pinned = 1
                AND m.date_received IS NOT NULL
                AND m.mailbox NOT IN ({sent_ph})
-               AND m.mailbox NOT IN ({draft_ph})
+               AND (m.mailbox IS NULL OR m.mailbox NOT IN ({draft_ph}))
              ORDER BY m.date_received DESC
              LIMIT ?
             """,
