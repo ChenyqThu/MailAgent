@@ -64,13 +64,13 @@
   --ink-fg-2: 162 168 180;
   --ink-fg-3: 152 158 170;
 
-  /* Accent — Coral default. Sprint 4 a11y carry-forward: luminance
-   * lifted from (229,101,75) → (244,140,114) so `text-coral` reads as
-   * AA over `bg-ink-1/2/3` in dark mode. Designer mockup remains
-   * unambiguously coral; the shift is one step lighter. */
-  --c-accent: 244 140 114;
-  --c-accent-hi: 232 124 98;
-  --c-accent-dim: 138 70 56;
+  /* Accent v2 — oklch 重调 (主题 v2, HANDOFF-theme-spec-v2 §2)。
+   * 设计源是 oklch(.75 .135 H), RGB triplet 是导出物 — 调色只动 oklch 重导。
+   * coral 由旧 hue≈40 (偏橙三文鱼) 移到 hue 28 (真珊瑚, 偏粉红); 6 色等亮
+   * 度等彩度, 对 ink-1/2/3 全部 ≥ 6.6:1 (AA+)。 */
+  --c-accent: 248 138 125; /* coral · oklch(.75 .135 28) */
+  --c-accent-hi: 230 123 110;
+  --c-accent-dim: 142 63 54;
 
   /* CTA-on-accent foreground. Sprint 4 a11y carry-forward (REVIEW-LOG
    * H-01): the previous `text-white` on `bg-coral/100` failed WCAG AA
@@ -87,12 +87,19 @@
    * `--c-accent-dim`) is the deepest of the three accent stops; white
    * fg on it lands ≥ 5:1 on every dark-mode swatch. Light mode keeps
    * default accent (already deep) + white. */
-  --c-cta-bg: var(--c-accent-dim);
+  --c-cta-bg: var(--c-accent-dim); /* deprecated (主题 v2) — .btn-cta 已改走 .acc-cta 渐变配方 */
   /* Hover lifts one stop toward the brand accent so the button feels
    * responsive; white fg drops to ~3:1 transiently, which is acceptable
    * for a hover-only state. */
-  --c-cta-bg-hover: var(--c-accent);
+  --c-cta-bg-hover: var(--c-accent); /* deprecated (主题 v2) */
   --c-cta-fg: 255 255 255;
+
+  /* 主题 v2 — CTA 渐变端点 + 发光, 全部相对色法从 accent 派生, 换 accent
+   * 自动跟色 (theme-v2.css §root)。CTA 渐变底端白字全 6 色 ≥ 5.6:1。 */
+  --A: rgb(var(--c-accent));
+  --cta-top: oklch(from var(--A) 0.6 c h);
+  --cta-bot: oklch(from var(--A) 0.49 calc(min(c, 0.12)) h);
+  --acc-glow: oklch(from var(--A) l c h / 0.3);
 
   /* Chip palette — Sprint 4 a11y carry-forward (REVIEW-LOG H-01).
    *
@@ -251,8 +258,12 @@
   --c-accent-fg: 255 255 255;
 
   /* Light mode CTA: default accent is already deep enough for white text. */
-  --c-cta-bg: var(--c-accent);
-  --c-cta-bg-hover: var(--c-accent-hi);
+  --c-cta-bg: var(--c-accent); /* deprecated (主题 v2) */
+  --c-cta-bg-hover: var(--c-accent-hi); /* deprecated (主题 v2) */
+
+  /* 主题 v2 — 亮色 CTA 渐变端点压深 (theme-v2.css light 块, 无 min(c)) */
+  --cta-top: oklch(from var(--A) 0.56 c h);
+  --cta-bot: oklch(from var(--A) 0.46 c h);
 
   /* Light-mode chip palette — same role assignments as dark, but the
    * foreground luminance is dropped so chip text reads as AA over the
@@ -287,67 +298,66 @@
     linear-gradient(180deg, #f6f7fb 0%, #eceef4 100%);
 }
 
-/* Per-accent dark-mode swatches. Sprint 4 a11y carry-forward: all
- * 6 swatches brightened one step to ≥ AA over ink-1/2/3 surfaces. */
+/* Per-accent dark-mode swatches — accent v2 (oklch .75 .135 h 导出;
+ * slate C=.035 / olive C=.105 / teal C=.125 刻意压低彩度)。 */
 :root[data-accent='cobalt'] {
-  --c-accent: 122 162 248;
-  --c-accent-hi: 100 144 240;
-  --c-accent-dim: 56 92 168;
+  --c-accent: 126 173 255;
+  --c-accent-hi: 111 157 242;
+  --c-accent-dim: 55 89 152;
 }
 :root[data-accent='teal'] {
-  --c-accent: 92 212 196;
-  --c-accent-hi: 70 190 174;
-  --c-accent-dim: 30 116 106;
+  --c-accent: 55 199 174;
+  --c-accent-hi: 25 183 158;
+  --c-accent-dim: 0 110 91;
 }
 :root[data-accent='rose'] {
-  --c-accent: 236 132 158;
-  --c-accent-hi: 220 114 140;
-  --c-accent-dim: 148 58 84;
+  --c-accent: 241 136 175;
+  --c-accent-hi: 224 120 160;
+  --c-accent-dim: 138 61 92;
 }
 :root[data-accent='slate'] {
-  --c-accent: 174 184 200;
-  --c-accent-hi: 152 162 178;
-  --c-accent-dim: 80 88 102;
+  --c-accent: 158 176 196;
+  --c-accent-hi: 142 161 180;
+  --c-accent-dim: 76 93 110;
 }
 :root[data-accent='olive'] {
-  --c-accent: 196 208 122;
-  --c-accent-hi: 172 184 106;
-  --c-accent-dim: 100 108 56;
+  --c-accent: 163 185 108;
+  --c-accent-hi: 147 169 92;
+  --c-accent-dim: 81 99 18;
 }
 
-/* Light-mode accent overrides. The bright dark-mode hex would read as
- * a near-AA pastel over white; light mode wants the opposite end of
- * the saturation curve (deeper, more chromatic). */
+/* Light-mode accent overrides — accent v2 (oklch .50 .14 h 导出, teal 用
+ * L .485 过 AA)。对 ink-1/2/3 全部 ≥ 4.75:1。 */
 :root[data-theme='light']:not([data-accent]),
 :root[data-theme='light'][data-accent='coral'] {
-  --c-accent: 146 50 32;
-  --c-accent-hi: 128 42 26;
-  --c-accent-dim: 86 30 18;
+  --c-accent: 164 60 51;
+  --c-accent-hi: 144 40 34;
+  --c-accent-dim: 104 35 29;
 }
 :root[data-theme='light'][data-accent='cobalt'] {
-  --c-accent: 28 68 168;
-  --c-accent-hi: 20 56 148;
-  --c-accent-dim: 14 38 102;
+  --c-accent: 52 95 178;
+  --c-accent-hi: 36 77 158;
+  --c-accent-dim: 30 58 113;
 }
 :root[data-theme='light'][data-accent='teal'] {
-  --c-accent: 10 96 88;
-  --c-accent-hi: 8 84 78;
-  --c-accent-dim: 6 58 54;
+  --c-accent: 0 117 95;
+  --c-accent-hi: 0 100 80;
+  --c-accent-dim: 0 77 61;
 }
 :root[data-theme='light'][data-accent='rose'] {
-  --c-accent: 138 36 66;
-  --c-accent-hi: 122 30 56;
-  --c-accent-dim: 84 22 40;
+  --c-accent: 158 58 100;
+  --c-accent-hi: 138 39 84;
+  --c-accent-dim: 100 34 62;
 }
 :root[data-theme='light'][data-accent='slate'] {
-  --c-accent: 60 68 84;
-  --c-accent-hi: 48 56 72;
-  --c-accent-dim: 32 38 50;
+  --c-accent: 82 101 122;
+  --c-accent-hi: 66 84 104;
+  --c-accent-dim: 47 63 79;
 }
 :root[data-theme='light'][data-accent='olive'] {
-  --c-accent: 76 82 22;
-  --c-accent-hi: 64 70 18;
-  --c-accent-dim: 44 50 14;
+  --c-accent: 89 108 23;
+  --c-accent-hi: 73 91 0;
+  --c-accent-dim: 53 68 0;
 }
 
 /* Pre-paint anchors so the first frame doesn't show "Electron blue". */
@@ -446,6 +456,8 @@ kbd,
 .row {
   position: relative;
 }
+/* 主题 v2 — 选中左条升级为 .acc-bar 光条配方 (伪元素挂不了类, 配方内联;
+ * 顶端提亮渐变 + 9px 辉光, solid 档辉光归零)。 */
 .row-selected::before {
   content: '';
   position: absolute;
@@ -453,7 +465,11 @@ kbd,
   top: 0;
   bottom: 0;
   width: 3px;
-  background: rgb(var(--c-accent));
+  background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
+  box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
+}
+:root[data-surface='solid'] .row-selected::before {
+  box-shadow: none;
 }
 
 /* ─── Language pip (EN / JP — never used for CJK content) ───────────── */
@@ -683,22 +699,22 @@ mark {
  * `mailagent/no-raw-hex` lint rule (DESIGN.md §14 #1).
  */
 .swatch-coral {
-  background: linear-gradient(135deg, rgb(244, 140, 114), rgb(232, 124, 98));
+  background: linear-gradient(135deg, rgb(248, 138, 125), rgb(230, 123, 110));
 }
 .swatch-cobalt {
-  background: linear-gradient(135deg, rgb(122, 162, 248), rgb(100, 144, 240));
+  background: linear-gradient(135deg, rgb(126, 173, 255), rgb(111, 157, 242));
 }
 .swatch-teal {
-  background: linear-gradient(135deg, rgb(92, 212, 196), rgb(70, 190, 174));
+  background: linear-gradient(135deg, rgb(55, 199, 174), rgb(25, 183, 158));
 }
 .swatch-rose {
-  background: linear-gradient(135deg, rgb(236, 132, 158), rgb(220, 114, 140));
+  background: linear-gradient(135deg, rgb(241, 136, 175), rgb(224, 120, 160));
 }
 .swatch-slate {
-  background: linear-gradient(135deg, rgb(174, 184, 200), rgb(152, 162, 178));
+  background: linear-gradient(135deg, rgb(158, 176, 196), rgb(142, 161, 180));
 }
 .swatch-olive {
-  background: linear-gradient(135deg, rgb(196, 208, 122), rgb(172, 184, 106));
+  background: linear-gradient(135deg, rgb(163, 185, 108), rgb(147, 169, 92));
 }
 
 /* ─── Sprint 11 V1.4 — Liquid Glass material layers ──────────────────
@@ -746,16 +762,86 @@ body::before {
   box-shadow: var(--pop-shadow);
 }
 
-/* Sprint 13 round 7 — primary CTA pill ("起草回复"). Token-driven so
- * accent swaps still recolour the button, but the deeper accent stop
- * means white fg + icon stay legible (mockup-faithful) on every accent
- * without falling out of AA. */
-.btn-cta {
-  background-color: rgb(var(--c-cta-bg));
+/* ─── 主题 v2 — accent 材质化表达 (theme-v2.css §accent 材质化) ──────
+ * accent 预算规则不变 (每主界面 ≤4 处), 但每处从「平涂」升级为「发光体」。
+ * 全部相对色法从 --c-accent 派生, 换色自动跟。辉光只许出现在这些配方类上,
+ * 不得自行给新组件加 glow; solid 档辉光归零 (见下方 solid 覆盖块)。 */
+
+/* 主 CTA ("起草回复") — 纵向渐变 + 内顶白高光 + accent 辉光, 白字全 6 色
+ * AA (≥5.6)。.btn-cta 是既有挂接点 (EmailToolbar), .acc-cta 同配方备用。
+ * hover 用 filter 是「即时态」非过渡 — 红线: 永不 transition filter。 */
+.btn-cta,
+.acc-cta {
+  background: linear-gradient(180deg, var(--cta-top), var(--cta-bot));
   color: rgb(var(--c-cta-fg));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.22),
+    0 1px 3px rgb(0 0 0 / 0.35),
+    0 0 18px var(--acc-glow);
 }
-.btn-cta:hover:not(:disabled) {
-  background-color: rgb(var(--c-cta-bg-hover));
+.btn-cta:hover:not(:disabled),
+.acc-cta:hover {
+  filter: brightness(1.08);
+}
+
+/* 选中行 / 选中邮箱 — 向右衰减的 accent wash (左光条配方见 .acc-bar;
+ * EmailRow / .row-selected 的左条是伪元素, 配方直接写进对应 rule)。 */
+.acc-select {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--c-accent) / 0.13),
+    rgb(var(--c-accent) / 0.035) 55%,
+    transparent 85%
+  );
+}
+:root[data-theme='light'] .acc-select {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--c-accent) / 0.12),
+    rgb(var(--c-accent) / 0.03) 55%,
+    transparent 85%
+  );
+}
+.acc-bar {
+  background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
+  box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
+}
+
+/* 激活 tab 下划线 — 同样的光条语言 (当前无下划线式 tab 挂接点, 配方先就位)。 */
+.acc-underline {
+  background: var(--A);
+  box-shadow: 0 0 8px rgb(var(--c-accent) / 0.6);
+}
+
+/* 计数 pill / 轻 chip (Sidebar 未读计数等) */
+.acc-pill {
+  color: rgb(var(--ink-fg));
+  background: rgb(var(--c-accent) / 0.16);
+  border: 1px solid rgb(var(--c-accent) / 0.32);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+:root[data-theme='light'] .acc-pill {
+  color: rgb(var(--c-accent-dim));
+}
+
+/* 亮色护栏 — accent 文字落在 accent wash 上的 chip / badge 组合
+ * (text-coral + bg-coral/10~15, 散布各 tab/toolbar ~20 处):
+ * v2 亮色 accent (oklch .50) 比 v1 浅, 该组合跌破 WCAG AA。demo 的手法
+ * (app.css .fil.on) = 亮色下文字转 -hi (深一档)。Tailwind utility 无法按
+ * 上下文分流, 用属性子串选择器一条规则覆盖全部现有/未来组合点
+ * (含仅 hover:bg-coral/* 的按钮 — 文字加深无害, AA 只升不降)。 */
+:root[data-theme='light'] [class*='bg-coral/'][class*='text-coral'] {
+  color: rgb(var(--c-accent-hi));
+}
+
+/* solid 档收掉发光 (实色 = 安静); 渐变与 wash 保留。 */
+:root[data-surface='solid'] .btn-cta,
+:root[data-surface='solid'] .acc-cta {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
+}
+:root[data-surface='solid'] .acc-bar,
+:root[data-surface='solid'] .acc-underline {
+  box-shadow: none;
 }
 /* Honour accessibility opt-outs — flatten to opaque ink and skip the
  * blur. Layout and contrast stay identical. */
@@ -1118,11 +1204,52 @@ body::before {
 .email-row:hover {
   background-color: rgb(var(--ink-3) / 0.55);
 }
+/* 主题 v2 — 选中行从 ink-4 平涂升级为 .acc-select 的向右衰减 accent wash。
+ * 这里不能直接挂 .acc-select 类: .email-row 的底部 1px 分割线画在
+ * background-image 上 (见上方注释), wash 也是 gradient → 必须把两层合进
+ * 同一组 background-* longhand, 否则 wash 会把分割线整组重置掉。 */
 .email-row.is-selected {
-  background-color: rgb(var(--ink-4) / 0.7);
+  background-image:
+    linear-gradient(
+      90deg,
+      rgb(var(--c-accent) / 0.13),
+      rgb(var(--c-accent) / 0.035) 55%,
+      transparent 85%
+    ),
+    linear-gradient(
+      to right,
+      transparent 0,
+      transparent var(--chevron-col-w),
+      rgb(var(--ink-border-soft) / 0.5) var(--chevron-col-w),
+      rgb(var(--ink-border-soft) / 0.5) 100%
+    );
+  background-repeat: no-repeat, no-repeat;
+  background-position:
+    0 0,
+    0 100%;
+  background-size:
+    100% 100%,
+    100% 1px;
+}
+:root[data-theme='light'] .email-row.is-selected {
+  background-image:
+    linear-gradient(
+      90deg,
+      rgb(var(--c-accent) / 0.12),
+      rgb(var(--c-accent) / 0.03) 55%,
+      transparent 85%
+    ),
+    linear-gradient(
+      to right,
+      transparent 0,
+      transparent var(--chevron-col-w),
+      rgb(var(--ink-border-soft) / 0.5) var(--chevron-col-w),
+      rgb(var(--ink-border-soft) / 0.5) 100%
+    );
 }
 /* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
-   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。 */
+   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: 平涂条升级为
+   .acc-bar 光条配方 (顶端提亮渐变 + 9px 辉光; solid 档辉光收掉见下)。 */
 .email-row::before {
   content: '';
   position: absolute;
@@ -1130,9 +1257,13 @@ body::before {
   top: 0;
   bottom: 0;
   width: 3px;
-  background: rgb(var(--c-accent));
+  background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
+  box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
   opacity: 0;
   transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+:root[data-surface='solid'] .email-row::before {
+  box-shadow: none;
 }
 .email-row.is-selected::before {
   opacity: 1;

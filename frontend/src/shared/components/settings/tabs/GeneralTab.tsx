@@ -57,13 +57,15 @@ interface AccentMeta {
 // `--c-accent-${id}` CSS 变量并不存在，swatch 只能 inline hex）。调色板字面量非
 // token 滥用，规则豁免。
 /* eslint-disable mailagent/no-raw-hex */
+// 主题 v2 — swatch 填充对齐 accent v2 暗色 triplet (oklch .75 .135 h 导出,
+// HANDOFF-theme-spec-v2 §2): coral 由偏橙移到 hue 28 真珊瑚。
 const ACCENT_LIST: AccentMeta[] = [
-  { id: 'coral', label: 'Coral', hex: '#E5654B' },
-  { id: 'cobalt', label: 'Cobalt', hex: '#4A78E5' },
-  { id: 'teal', label: 'Teal', hex: '#2DB5A6' },
-  { id: 'rose', label: 'Rose', hex: '#DB5B7C' },
-  { id: 'slate', label: 'Slate', hex: '#7E8694' },
-  { id: 'olive', label: 'Olive', hex: '#9CA552' }
+  { id: 'coral', label: 'Coral', hex: '#F88A7D' },
+  { id: 'cobalt', label: 'Cobalt', hex: '#7EADFF' },
+  { id: 'teal', label: 'Teal', hex: '#37C7AE' },
+  { id: 'rose', label: 'Rose', hex: '#F188AF' },
+  { id: 'slate', label: 'Slate', hex: '#9EB0C4' },
+  { id: 'olive', label: 'Olive', hex: '#A3B96C' }
 ]
 /* eslint-enable mailagent/no-raw-hex */
 

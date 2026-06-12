@@ -115,7 +115,7 @@ function SidebarFolderRow({
             isDisabled
               ? 'opacity-50 cursor-not-allowed text-ink-fg-2'
               : selected
-                ? 'row-selected bg-ink-4 text-ink-fg font-medium'
+                ? 'row-selected acc-select text-ink-fg font-medium'
                 : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
           )}
         >
