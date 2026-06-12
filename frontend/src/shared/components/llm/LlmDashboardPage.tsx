@@ -59,7 +59,7 @@ function StatCard({
     <div
       className={cn(
         'rounded-md border p-3',
-        accent ? 'border-coral/30 bg-coral/5' : 'border-ink-border bg-ink-2'
+        accent ? 'border-coral/30 bg-coral/5' : 'border-ink-border bg-ink-2/55'
       )}
     >
       <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1">{label}</div>
@@ -184,7 +184,7 @@ function CacheGauge({ pct }: { pct: number }): React.ReactElement {
         <span className="text-ink-fg-1">{`${clamped.toFixed(1)}%`}</span>
         <span className="text-meta font-mono text-ink-fg-3">target ≥ 70%</span>
       </div>
-      <div className="h-2 rounded bg-ink-3 overflow-hidden">
+      <div className="h-2 rounded bg-ink-3/60 overflow-hidden">
         <div
           className={cn('h-full transition-all duration-fast', color)}
           style={{ width: `${clamped}%` }}
@@ -238,7 +238,7 @@ export function LlmDashboardPage(): React.ReactElement {
         </h1>
         <div className="flex items-center gap-2">
           {/* Range chips — segmented control */}
-          <div className="inline-flex rounded-md border border-ink-border bg-ink-2 p-0.5">
+          <div className="inline-flex rounded-md border border-ink-border bg-ink-2/55 p-0.5">
             {RANGES.map((r) => (
               <button
                 key={r.days}
@@ -304,13 +304,13 @@ export function LlmDashboardPage(): React.ReactElement {
           </section>
 
           <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-ink-border bg-ink-2 p-3">
+            <div className="rounded-md border border-ink-border bg-ink-2/55 p-3">
               <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
                 {t('llm.statusDist')}
               </div>
               <StatusDonut counts={data.by_status} />
             </div>
-            <div className="rounded-md border border-ink-border bg-ink-2 p-3 space-y-3">
+            <div className="rounded-md border border-ink-border bg-ink-2/55 p-3 space-y-3">
               <div>
                 <div className="text-micro font-mono uppercase text-ink-fg-2 mb-2">
                   {t('llm.cacheHit')}
