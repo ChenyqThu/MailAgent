@@ -567,7 +567,7 @@ const INITIAL_PREFETCH_PAGES = 8
 const INITIAL_PREFETCH_DELAY_MS = 300
 
 export function EmailList(): React.ReactElement {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const mailApi = useMailApi()
   const activeMailbox = useMailbox((s) => s.active)
   const activeId = useActiveEmail((s) => s.activeInternalId)
@@ -604,7 +604,11 @@ export function EmailList(): React.ReactElement {
       if (!activeEl) return
       const listRect = list.getBoundingClientRect()
       const activeRect = activeEl.getBoundingClientRect()
-      const left = activeRect.left - listRect.left
+      // indicator 是 absolute (left:0) → 锚点在容器 padding box; 而 rect
+      // 差值的参照系是 border box, 必须扣掉容器 border (clientLeft), 否则
+      // x 整体右偏 1px — 激活右侧 tab 时白胶囊正好盖住容器右边框
+      // (用户报「切换后边框丢失」)。
+      const left = activeRect.left - listRect.left - list.clientLeft
       const width = activeRect.width
       if (!tabMountedRef.current || reduceMotion) {
         gsap.set(indicator, { x: left, width, autoAlpha: 1 })
@@ -613,7 +617,9 @@ export function EmailList(): React.ReactElement {
       }
       gsap.to(indicator, { x: left, width, duration: DUR.fast, overwrite: 'auto' })
     },
-    { dependencies: [tab, view, reduceMotion], scope: tabListRef }
+    // i18n.language 在依赖里: tab 文本宽度随语言变 (重点 vs Focused),
+    // 不重测会让胶囊保持旧语言的宽度 → 英文文本溢出胶囊。
+    { dependencies: [tab, view, reduceMotion, i18n.language], scope: tabListRef }
   )
   const selectedPriorities = useEmailFilter((s) => s.selectedPriorities)
   const selectedCategories = useEmailFilter((s) => s.selectedCategories)
