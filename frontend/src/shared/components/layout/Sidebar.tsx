@@ -309,8 +309,10 @@ export function Sidebar(): React.ReactElement {
       aria-label="primary"
       className={cn('app-nav glass border-r border-ink-border/60 flex flex-col relative')}
     >
-      {/* ── Header row · account selector + collapse chevron ───────────── */}
-      <div className="app-nav-header flex items-center gap-1 px-2 py-1.5 border-b border-ink-border-soft shrink-0">
+      {/* ── Header row · account selector + collapse chevron ─────────────
+          高度 (41px) 与分割线 (hairline) 由 authored CSS .app-nav-header
+          钉死 — 与右侧内容区顶栏共线, 收起态不塌高。 */}
+      <div className="app-nav-header flex items-center gap-1 px-2 shrink-0">
         <button
           ref={accountButtonRef}
           type="button"

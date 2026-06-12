@@ -1213,7 +1213,8 @@ export function EmailList(): React.ReactElement {
       className="w-full lg:w-[340px] lg:shrink-0 glass-2 border-r border-ink-border flex flex-col min-h-0"
     >
       {/* Header — Focused/Other tabs · batch + filter cluster · meta line */}
-      <div className="relative px-3 pt-3 pb-2.5 border-b border-ink-border-soft">
+      {/* 分割线统一 hairline — 与 sidebar header / AgentsPage tab 条同色连贯。 */}
+      <div className="relative px-3 pt-3 pb-2.5 border-b [border-bottom-color:var(--hairline)]">
         <div className="flex items-center justify-between gap-2">
           {customMailbox ? (
             // 多文件夹同步 (P3) — 选中自定义文件夹时左侧显层级面包屑 (界面④)。

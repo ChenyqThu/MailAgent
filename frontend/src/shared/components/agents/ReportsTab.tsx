@@ -58,8 +58,9 @@ function ReportListRow({
           borderRadius: 9,
           cursor: 'pointer',
           fontFamily: 'inherit',
-          background: selected ? 'rgb(var(--ink-3))' : 'transparent',
-          border: `1px solid ${selected ? 'rgb(var(--ink-border))' : 'transparent'}`,
+          // 主题 v2 — 选中卡片 ink 实底转半透 (玻璃下死色块割裂)。
+          background: selected ? 'rgb(var(--ink-fg) / 0.07)' : 'transparent',
+          border: `1px solid ${selected ? 'var(--hairline-strong)' : 'transparent'}`,
           transition: 'background 120ms'
         }}
         onMouseEnter={(e) => {
@@ -444,18 +445,20 @@ function ReportDetailView({
       {report?.doc && status === 'ready' && (
         <div
           className="flex items-center"
+          // 主题 v2 — sticky 概要栏走 group-header 同款配方: --glass-base
+          // 派生 (与窗口 tint 同源, 换 accent 自动跟) 替代 ink-0 死色 +
+          // blur(8px) (非浮层去 blur 红线); 遮字靠高 alpha 叠 body tint。
           style={{
             gap: 10,
             padding: '10px 24px',
-            borderBottom: '1px solid rgb(var(--ink-border-soft))',
+            borderBottom: '1px solid var(--hairline)',
             fontFamily: 'ui-monospace, monospace',
             fontSize: 11,
             color: 'rgb(var(--ink-fg-3))',
             position: 'sticky',
             top: 0,
             zIndex: 5,
-            background: 'rgb(var(--ink-0) / 0.9)',
-            backdropFilter: 'blur(8px)'
+            background: 'color-mix(in srgb, var(--glass-base) 92%, transparent)'
           }}
         >
           <CadencePill cadence={report.doc.cadence} />
@@ -584,7 +587,7 @@ export function ReportsTab(): React.ReactElement {
               style={{
                 gap: 6,
                 padding: '10px 16px',
-                borderBottom: '1px solid rgb(var(--ink-border-soft))',
+                borderBottom: '1px solid var(--hairline)',
                 fontFamily: 'inherit',
                 fontSize: 13,
                 color: 'rgb(var(--ink-fg-1))',

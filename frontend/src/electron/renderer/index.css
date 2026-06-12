@@ -1150,6 +1150,14 @@ body::before {
   flex-shrink: 0;
   transition: width 260ms cubic-bezier(0.32, 0.72, 0, 1);
 }
+/* Header 高度钉死 41px (border-box, 含 border-bottom) — 与右侧内容区
+ * 顶栏 (AgentsPage tab 条等, height:41) 的分割线共线。不能靠内容撑:
+ * 收起态把账号按钮 display:none 后 header 会塌到 ~35px, 分割线跳变。
+ * 分割线统一 hairline (原 TSX 上的 border-ink-border-soft 移到这里)。 */
+.app-nav-header {
+  height: 41px;
+  border-bottom: 1px solid var(--hairline);
+}
 .app-nav[data-collapsed='true'] {
   width: 56px;
 }
@@ -1977,7 +1985,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
   display: inline-flex;
   align-items: center;
   background: rgb(var(--ink-3) / 0.6);
-  border: 1px solid rgb(var(--ink-border-soft));
+  /* hairline-strong: 亮色下近纯白的 indicator 胶囊距外框只有 2px,
+   * ink-border-soft (10% 灰) 会被胶囊亮度淹没 — 看起来「切换后边框
+   * 丢失」。加强到 16% 让框在胶囊贴边时仍可辨。 */
+  border: 1px solid var(--hairline-strong);
   border-radius: 999px;
   padding: 2px;
 }
@@ -4594,8 +4605,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
 /* 分段控件（报告 cadence 过滤 / 配置排程 + 窗口）。 */
 .seg {
   display: inline-flex;
-  background: rgb(var(--ink-3));
-  border: 1px solid rgb(var(--ink-border));
+  /* 主题 v2 — ink 实底转半透 (玻璃下死色 segment 割裂), 同 .inbox-tabs。 */
+  background: rgb(var(--ink-3) / 0.6);
+  border: 1px solid var(--hairline-strong);
   border-radius: 7px;
   padding: 2px;
   gap: 2px;
@@ -4615,7 +4627,15 @@ body:not([data-batch-mode='true']) .email-row .cb {
   font-family: inherit;
 }
 .seg button:hover { color: rgb(var(--ink-fg)); }
-.seg button.on { background: rgb(var(--ink-5)); color: rgb(var(--ink-fg)); }
+/* 激活态同 .inbox-tab-indicator 的胶囊语言 (暗 ink-fg 半透 / 亮近白)。 */
+.seg button.on {
+  background: rgb(var(--ink-fg) / 0.12);
+  color: rgb(var(--ink-fg));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+:root[data-theme='light'] .seg button.on {
+  background: rgb(255 255 255 / 0.9);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .spin > *, .shimmer, .email-flash, .think-shimmer, .think-caret { animation: none !important; }
