@@ -555,7 +555,8 @@ kbd,
  * 顶端提亮渐变 + 9px 辉光, solid 档辉光归零)。几何照 demo .it.on::before:
  * 上下 inset 6px + 圆角 2px 的「胶囊光条」, 区别于 EmailRow 的通高直角条
  * (demo .erow.sel::before 即通高, 两者有意不同)。 */
-.row-selected::before {
+.row-selected::before,
+[data-orientation='vertical'] [role='tab'][data-state='active']::before {
   content: '';
   position: absolute;
   left: 0;
@@ -566,15 +567,18 @@ kbd,
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
   box-shadow: 0 0 9px rgb(var(--c-accent) / 0.55);
 }
-/* Sidebar 内光条往左悬挂到行卡片外 (demo .it.on::before left:-8px 同款):
- * 条占 [-8,-5], 与 wash 圆角框之间留 5px 间距。行容器 (nav.px-2 /
- * .app-nav-bottom.p-2) 自带 8px padding, 悬挂落在 padding 区不会被
- * overflow 裁。默认仍 left:0 — popover (SurfacePicker 等) 的选项行贴
- * 容器边 + overflow hidden, 悬挂会被裁掉。 */
-.app-nav .row-selected::before {
+/* Sidebar / 设置 rail 内光条往左悬挂到行卡片外 (demo .it.on::before
+ * left:-8px 同款): 条占 [-8,-5], 与 wash 圆角框之间留 5px 间距。行容器
+ * (nav.px-2 / .app-nav-bottom.p-2 / 设置 rail 滚动区 px-3) 自带 ≥8px
+ * padding, 悬挂落在 padding 区不会被 overflow 裁。默认仍 left:0 —
+ * popover (SurfacePicker 等) 的选项行贴容器边 + overflow hidden,
+ * 悬挂会被裁掉。 */
+.app-nav .row-selected::before,
+[data-orientation='vertical'] [role='tab'][data-state='active']::before {
   left: -8px;
 }
-:root[data-surface='solid'] .row-selected::before {
+:root[data-surface='solid'] .row-selected::before,
+:root[data-surface='solid'] [data-orientation='vertical'] [role='tab'][data-state='active']::before {
   box-shadow: none;
 }
 
@@ -957,7 +961,11 @@ body::before {
  * wash 铺满整个元素 — 圆角跟随元素自身 rounded-*; 光条与 wash 的间距由
  * 光条往左悬挂实现 (.app-nav 内 left:-8px, 见 .row-selected::before),
  * 不要反过来内缩 wash (会把左侧圆角切成 hard edge)。 */
-.acc-select {
+/* 设置 rail 的 Radix Tabs (vertical) 选中行与主菜单同语言 (round 8) —
+ * selector 并入下方各配方, data-state 挂不了类只能属性选择。tabs.tsx
+ * 的 v1 bg-ink-4 灰白平涂已删。 */
+.acc-select,
+[data-orientation='vertical'] [role='tab'][data-state='active'] {
   background: linear-gradient(
     90deg,
     rgb(var(--c-accent) / 0.13),
@@ -965,13 +973,17 @@ body::before {
     transparent 85%
   );
 }
-:root[data-theme='light'] .acc-select {
+:root[data-theme='light'] .acc-select,
+:root[data-theme='light'] [data-orientation='vertical'] [role='tab'][data-state='active'] {
   background: linear-gradient(
     90deg,
     rgb(var(--c-accent) / 0.12),
     rgb(var(--c-accent) / 0.03) 55%,
     transparent 85%
   );
+}
+[data-orientation='vertical'] [role='tab'] {
+  position: relative;
 }
 .acc-bar {
   background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));

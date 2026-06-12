@@ -93,7 +93,7 @@ function StatCard({
   hint?: string
 }): React.ReactElement {
   return (
-    <div className="rounded-md border border-ink-border bg-ink-2/55 p-3">
+    <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3">
       <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1">{label}</div>
       <div className="text-lead text-ink-fg tabular-nums">{value}</div>
       {hint && <div className="text-meta text-ink-fg-3 mt-1">{hint}</div>}
@@ -124,7 +124,7 @@ function StatusHistogram({ counts }: { counts: Record<string, number> }): React.
   }
   return (
     <div>
-      <div className="flex h-2 rounded overflow-hidden bg-ink-3/60 mb-2">
+      <div className="flex h-2 rounded overflow-hidden bg-ink-fg/10 mb-2">
         {sorted.map((k) => (
           <div
             key={k}
@@ -317,13 +317,13 @@ export function AdminPage(): React.ReactElement {
             <StatCard label={t('admin.lastRowId')} value={stats.last_max_row_id ?? '—'} />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-ink-border bg-ink-2/55 p-3">
+            <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3">
               <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
                 {t('admin.statusDist')}
               </div>
               <StatusHistogram counts={stats.by_status} />
             </div>
-            <div className="rounded-md border border-ink-border bg-ink-2/55 p-3">
+            <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] p-3">
               <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
                 {t('admin.byMailbox')}
               </div>
@@ -373,7 +373,7 @@ export function AdminPage(): React.ReactElement {
           {t('admin.deadLetter')}
           <span className="text-meta font-mono text-ink-fg-2">({dlQ.data?.length ?? 0})</span>
         </h2>
-        <div className="rounded-md border border-ink-border bg-ink-2/55 overflow-hidden">
+        <div className="rounded-md border border-ink-border bg-[var(--tier-panel)] overflow-hidden">
           {dlQ.isLoading ? (
             <div>
               <SkeletonRow />
@@ -388,7 +388,7 @@ export function AdminPage(): React.ReactElement {
             />
           ) : (
             <table className="w-full text-aux">
-              <thead className="bg-ink-3/50">
+              <thead className="bg-ink-fg/[0.06]">
                 <tr className="text-micro font-mono uppercase text-ink-fg-2 text-left">
                   <th className="px-3 py-2">ID</th>
                   <th className="px-3 py-2">{t('admin.col.subject')}</th>

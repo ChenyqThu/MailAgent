@@ -67,14 +67,12 @@ export const TabsTrigger = React.forwardRef<
       'data-[orientation=vertical]:justify-start data-[orientation=vertical]:gap-2.5',
       'data-[orientation=vertical]:px-2.5 data-[orientation=vertical]:py-[7px]',
       'data-[orientation=vertical]:hover:bg-ink-3 data-[orientation=vertical]:hover:text-ink-fg',
-      'data-[orientation=vertical]:data-[state=active]:bg-ink-4',
+      // round 8 — vertical active 的底色与光条改走 index.css authored 规则
+      // (与主菜单同语言: accent wash + 悬挂胶囊光条)。v1 的 bg-ink-4 灰白
+      // 平涂 + before:* 通高直角条 (上面五行) 整套退役, 这里只留字色/字重
+      // — 两套 before 规则 specificity 同级, 留着会按源序打架。
       'data-[orientation=vertical]:data-[state=active]:text-ink-fg',
       'data-[orientation=vertical]:data-[state=active]:font-medium',
-      'data-[orientation=vertical]:data-[state=active]:before:absolute',
-      'data-[orientation=vertical]:data-[state=active]:before:left-0',
-      'data-[orientation=vertical]:data-[state=active]:before:inset-y-0',
-      'data-[orientation=vertical]:data-[state=active]:before:w-[3px]',
-      'data-[orientation=vertical]:data-[state=active]:before:bg-coral/100',
       className
     )}
     {...props}
