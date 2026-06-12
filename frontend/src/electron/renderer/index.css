@@ -1776,15 +1776,13 @@ body:not([data-batch-mode='true']) .email-row .cb {
   cursor: default;
 }
 .ricon-important {
-  /* 主题 v2: 同 flag/pin, 从写死 v1 coral 改 accent (accent 即强调语义)。 */
-  color: rgb(var(--c-accent));
+  /* 用户定稿: 重要 = 警示红 (固定, 不跟 accent — 换 Slate/Olive 等冷调
+   * accent 时它仍要读作「重要」), 与 crit 优先级同色。 */
+  color: #e5634f;
   cursor: default;
 }
 .ricon-important svg {
-  fill: none;
-  stroke: currentColor;
-}
-.ricon-important svg circle {
+  /* Fluent regular path 是 fill 型轮廓形状 (无 stroke)。 */
   fill: currentColor;
   stroke: none;
 }
