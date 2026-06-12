@@ -341,6 +341,10 @@ export interface EmailApi {
    *  (drafts_folder / appended_uid / method / …). Throws Error & { code }
    *  on failure (E_AUTH / E_INVALID_ARG / E_DISPATCH …). */
   draft(opts: ComposeDraftOpts): Promise<unknown>
+  /** 草稿真删除 (IMAP \Deleted+EXPUNGE Exchange Drafts + 本地行清理) — 草稿箱
+   *  列表行的删除按钮。区别于收件箱删除按钮的归档语义 (flag→done)。davmail-only,
+   *  仅 mailbox=草稿箱 的行 (否则 E_INVALID_ARG)。Throws Error & { code }。 */
+  deleteDraft(internalId: number): Promise<unknown>
   /** Compose — SMTP real send (irreversible) via `mailagent email send`.
    *  The IPC handler always passes `--yes`; the renderer must show its own
    *  SendConfirmDialog before calling. Throws Error & { code } on failure. */

@@ -338,6 +338,10 @@ function shapeFullRecord(
 
 // ---- DAO --------------------------------------------------------------------
 
+// 草稿 mailbox 值（落库统一 '草稿箱'；'草稿'/'Drafts' 是 _STANDARD_MAILBOXES
+// 的历史别名，保险一并排除）。线程兄弟查询 + 未指定 mailbox 的列表都用它。
+const DRAFTS_EXCLUDE_SQL = "mailbox NOT IN ('草稿箱', '草稿', 'Drafts')"
+
 interface WhereBuild {
   sql: string
   params: unknown[]
@@ -349,6 +353,11 @@ function buildListWhere(opts: ListOpts): WhereBuild {
   if (opts.mailbox) {
     clauses.push('mailbox = ?')
     params.push(opts.mailbox)
+  } else {
+    // 未指定 mailbox (= 「所有邮件」/ 跨邮箱视图) 排除草稿：未发出的内容
+    // 不混入邮件流（用户验收）。要草稿就显式 mailbox='草稿箱'（草稿箱视图）。
+    // serve-api email_views.py 同语义镜像。
+    clauses.push(DRAFTS_EXCLUDE_SQL)
   }
   if (opts.status) {
     clauses.push('sync_status = ?')
@@ -438,6 +447,7 @@ export function listEmailsByThread(threadId: string | null | undefined): EmailLi
     `SELECT ${LIST_COLS}
        FROM email_metadata
       WHERE thread_id = ?
+        AND ${DRAFTS_EXCLUDE_SQL}
       ORDER BY date_received ASC NULLS LAST, internal_id ASC`
   ).all(threadId) as EmailMetadataRow[]
   return rows.map(shapeListItem)
@@ -470,6 +480,7 @@ export function listEmailsByThreads(
     `SELECT ${LIST_COLS}
        FROM email_metadata
       WHERE thread_id IN (${placeholders})
+        AND ${DRAFTS_EXCLUDE_SQL}
       ORDER BY thread_id ASC, date_received ASC NULLS LAST, internal_id ASC`
   ).all(...ids) as EmailMetadataRow[]
   const out: Record<string, EmailList_EmailListItem[]> = {}

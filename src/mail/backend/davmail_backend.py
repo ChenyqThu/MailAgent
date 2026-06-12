@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from src.mail.sync_store import SyncStore
 
 # RFC 4315 APPENDUID response: [APPENDUID uidvalidity uid]
-_APPENDUID_PATTERN = re.compile(rb"APPENDUID\s+\d+\s+(\d+)", re.IGNORECASE)
+_APPENDUID_PATTERN = re.compile(rb"APPENDUID\s+(\d+)\s+(\d+)", re.IGNORECASE)
 # RFC 2369 Message-ID 完整匹配 (用 regex 而非 ``in`` 避免 partial match 误判)
 _MSGID_PATTERN = re.compile(r"<[^<>\s]+>")
 
@@ -807,8 +807,18 @@ class DavMailBackend(IMailBackend):
                         success=False, drafts_folder=folder,
                         error=f"IMAP APPEND failed: {data}",
                     )
-                # APPENDUID extension 返回 UID, 解析它
-                appended_uid = self._parse_appenduid(data)
+                # APPENDUID extension 返回 (uidvalidity, uid), 解析它
+                pair = self._parse_appenduid_pair(data)
+                appended_uv, appended_uid = pair if pair else (None, None)
+                # MIME Message-ID (去尖括号) — 草稿即时落库的 merge key
+                message_id: Optional[str] = None
+                try:
+                    from email.parser import BytesHeaderParser
+                    raw_mid = BytesHeaderParser().parsebytes(mime_bytes).get("Message-ID")
+                    if raw_mid:
+                        message_id = raw_mid.strip().strip("<>") or None
+                except Exception:
+                    pass
                 logger.info(
                     f"[davmail-backend] append_draft → {folder!r} "
                     f"uid={appended_uid} latency={self.last_op_latency_ms}ms"
@@ -816,6 +826,7 @@ class DavMailBackend(IMailBackend):
                 return DraftAppendResult(
                     success=True, drafts_folder=folder, appended_uid=appended_uid,
                     method="imap_append",
+                    message_id=message_id, appended_uidvalidity=appended_uv,
                 )
         except Exception as e:
             logger.error(f"[davmail-backend] append_draft failed: {e}")
@@ -1501,6 +1512,11 @@ class DavMailBackend(IMailBackend):
                 # 快照推进 (uidnext)。对账期间新 APPEND 的 race 由下 cycle STATUS
                 # 差异自愈 (messages/uidnext 再变 → 再对账)。
                 self._set_drafts_uidnext(uidnext)
+            # Grace window: compose_draft 即时落库的新行, davmail 端 folder 缓存
+            # 可能尚未反映 (SELECT 后 SEARCH 仍 stale 数分钟) → 远端"看不到"该 UID
+            # 会被误判已删除。创建 < 120s 的行不删, 留给后续 cycle 确认
+            # (真删除只是晚 ~2min 清理; 误删则是数据丢失, 宁可晚)。
+            to_delete = self._filter_recent_rows(to_delete, grace_sec=120)
             if to_add or to_delete:
                 logger.info(
                     f"[davmail-backend] drafts reconcile: +{len(to_add)} "
@@ -1530,6 +1546,38 @@ class DavMailBackend(IMailBackend):
                 f"[davmail-backend] _folder_imap_uid_map({mailbox_label!r}) failed: {e}"
             )
             return {}
+
+    def _filter_recent_rows(self, internal_ids: list[int], *, grace_sec: int) -> list[int]:
+        """从待删列表里剔除创建时间 < grace_sec 的行 (reconcile 误删保护)。
+
+        查询失败时**整批不删** (fail-safe: 删除是不可逆操作, 宁可这轮跳过)。
+        """
+        if not internal_ids:
+            return internal_ids
+        try:
+            conn = sqlite3.connect(str(self.sync_store.db_path), timeout=10.0)
+            try:
+                ph = ",".join("?" * len(internal_ids))
+                cutoff = time.time() - max(0, grace_sec)
+                rows = conn.execute(
+                    f"SELECT internal_id FROM email_metadata "
+                    f"WHERE internal_id IN ({ph}) "
+                    f"AND (created_at IS NULL OR created_at < ?)",
+                    (*internal_ids, cutoff),
+                ).fetchall()
+                keep = {int(r[0]) for r in rows}
+                dropped = [i for i in internal_ids if i not in keep]
+                if dropped:
+                    logger.debug(
+                        f"[davmail-backend] drafts reconcile: {len(dropped)} recent "
+                        f"rows kept (grace {grace_sec}s): {dropped}"
+                    )
+                return [i for i in internal_ids if i in keep]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[davmail-backend] _filter_recent_rows failed (skip deletes): {e}")
+            return []
 
     def _get_drafts_uidnext(self) -> Optional[int]:
         """读草稿箱 UIDNEXT 快照 (sync_state KV)。未记录返回 None。"""
@@ -1753,6 +1801,12 @@ class DavMailBackend(IMailBackend):
         RFC 4315 响应形如 ``* OK [APPENDUID uidvalidity uid] msg`` — 用 regex 提取
         比 token-split 鲁棒 (server 包装差异 / 不同空白处理都不影响) (review MEDIUM).
         """
+        pair = DavMailBackend._parse_appenduid_pair(data)
+        return pair[1] if pair else None
+
+    @staticmethod
+    def _parse_appenduid_pair(data: list) -> Optional[tuple[int, int]]:
+        """APPENDUID → (uidvalidity, uid)。草稿即时落库需要 uv 走 fetch 快路径。"""
         if not data:
             return None
         joined_parts: list[bytes] = []
@@ -1768,6 +1822,6 @@ class DavMailBackend(IMailBackend):
         if not m:
             return None
         try:
-            return int(m.group(1))
+            return (int(m.group(1)), int(m.group(2)))
         except (TypeError, ValueError):
             return None

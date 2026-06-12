@@ -290,7 +290,21 @@ function EmailRowInner({
     }
   }, [email.internal_id, flagState, invalidate, mailApi, optimisticPatch])
 
+  // 草稿行的删除按钮 = 真删除 (IMAP \Deleted+EXPUNGE + 本地行清理), 不是归档:
+  // 草稿没有"处理完成"语义, 旧的 flag→done 写法对草稿毫无可见效果 (行不消失,
+  // 用户: "点击不生效")。
+  const isDraft = ['草稿箱', '草稿', 'Drafts'].includes(email.mailbox ?? '')
   const handleDeleteClick = useCallback(async () => {
+    if (isDraft) {
+      try {
+        await mailApi.email.deleteDraft(email.internal_id)
+        await invalidate()
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        toastError('Delete draft failed', msg)
+      }
+      return
+    }
     // Archive 语义同 flagged→done — 直接进 'done' 终态
     optimisticPatch({ is_flagged: false, processing_status: '已完成' })
     try {
@@ -303,7 +317,7 @@ function EmailRowInner({
       const msg = err instanceof Error ? err.message : String(err)
       toastError('Archive failed', msg)
     }
-  }, [email.internal_id, invalidate, mailApi, optimisticPatch])
+  }, [email.internal_id, invalidate, isDraft, mailApi, optimisticPatch])
 
   const cbClass = useMemo(() => cn('cb', batchIsSelected && 'cb-on'), [batchIsSelected])
 
@@ -425,7 +439,7 @@ function EmailRowInner({
             <button
               type="button"
               className="ricon ricon-delete"
-              aria-label={t('emailRow.archive')}
+              aria-label={isDraft ? t('emailRow.deleteDraft') : t('emailRow.archive')}
               onClick={stopAnd(() => void handleDeleteClick())}
             >
               {deleteSvg}

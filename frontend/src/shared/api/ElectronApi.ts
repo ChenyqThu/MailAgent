@@ -264,6 +264,10 @@ class ElectronEmailApi implements EmailApi {
     const env = (await invoker()('email:draft', opts)) as WriteEnvelope<unknown>
     return unwrap(env)
   }
+  async deleteDraft(internalId: number): Promise<unknown> {
+    const env = (await invoker()('email:deleteDraft', internalId)) as WriteEnvelope<unknown>
+    return unwrap(env)
+  }
   async send(opts: SendEmailOpts): Promise<unknown> {
     const env = (await invoker()('email:send', opts)) as WriteEnvelope<unknown>
     return unwrap(env)

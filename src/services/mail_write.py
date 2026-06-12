@@ -173,6 +173,15 @@ class ComposeDraftResult:
 
 
 @dataclass
+class DeleteDraftResult:
+    """``delete_draft`` 执行结果 — IMAP 删 Exchange 草稿 + 本地行清理。"""
+
+    internal_id: int
+    imap_uid: int
+    local_deleted: bool
+
+
+@dataclass
 class ComposeSendResult:
     """``send`` 执行结果 —— 对齐 ``email_send`` execute emit 的 data。
 
@@ -1261,6 +1270,8 @@ class MailWriteService:
         if not result.success:
             raise ServiceError(f"草稿创建失败: {result.error}")
 
+        self._mirror_draft_locally(draft, result)
+
         return ComposeDraftResult(
             internal_id=request.internal_id,
             drafts_folder=result.drafts_folder,
@@ -1271,6 +1282,98 @@ class MailWriteService:
             cc_count=len(draft.cc),
             attachments=len(draft.attachments),
             warnings=warnings,
+        )
+
+    def _mirror_draft_locally(self, draft, result) -> None:
+        """草稿即时落库 — 保存成功立刻进 email_metadata (mailbox='草稿箱', pending)。
+
+        不等 reconcile 的 STATUS 探测: davmail 对 Drafts folder 有缓存, 新 APPEND
+        要 2-3 分钟才反映在 STATUS → 用户保存后草稿箱迟迟不出现。这里本地直写
+        (与 SSoT inversion 哲学一致: 本地写入 intent 即本地可见), watcher 下个
+        poll cycle (~5s) 按 imap_uid 快路径 fetch body → synced — 收件箱级速度。
+        reconcile 兜底 Outlook/OWA 端的增删; message_id merge protection 防止
+        davmail 缓存追上后 reconcile 把同一封再 to_add 成重复行。
+
+        仅 davmail 路径 (appended_uid 非空) + DRAFTS_SYNC_ENABLED。任何失败仅
+        warning — 草稿已成功 APPEND 到 Exchange, 本地镜像晚到由 reconcile 补。
+        """
+        try:
+            if not result.appended_uid:
+                return  # AppleScript 路径 / APPENDUID 缺失 → 交给 reconcile
+            cfg = self._ctx.config
+            if not bool(getattr(cfg, "drafts_sync_enabled", True)):
+                return
+            from datetime import datetime
+
+            store = self._ctx.sync_store
+            internal_id = store.allocate_davmail_internal_id()
+            payload = {
+                "internal_id": internal_id,
+                "message_id": result.message_id,
+                "subject": draft.subject or "",
+                "sender": getattr(cfg, "user_email", "") or "",
+                "sender_name": "",
+                "to_addr": ", ".join(draft.to),
+                "cc_addr": ", ".join(draft.cc),
+                "date_received": datetime.now().astimezone().isoformat(),
+                "mailbox": "草稿箱",
+                "is_read": True,
+                "is_flagged": False,
+                "thread_id": None,
+                "sync_status": "pending",
+                "backend_origin": "davmail",
+                "imap_uid": result.appended_uid,
+            }
+            if result.appended_uidvalidity is not None:
+                payload["imap_uidvalidity"] = result.appended_uidvalidity
+            store.save_email(payload)
+            logger.info(
+                f"[compose] draft mirrored locally internal_id={internal_id} "
+                f"uid={result.appended_uid}"
+            )
+        except Exception as e:  # noqa: BLE001 — 镜像失败不影响草稿创建成功语义
+            logger.warning(f"[compose] draft local mirror failed (reconcile 兜底): {e}")
+
+    def delete_draft(self, internal_id: int, *, actor: Actor) -> DeleteDraftResult:
+        """删除草稿 (IMAP \\Deleted+EXPUNGE Exchange Drafts + 本地 delete_email_full)。
+
+        草稿箱列表行的删除按钮走这里 — 区别于收件箱"删除"按钮的归档语义
+        (flag→done): 草稿是未发出的本地物, 真删除才符合预期 (用户验收)。
+        davmail-only (FolderImapReader gate); 仅 mailbox=草稿箱 的行可删。
+        IMAP 删除成功后本地行立即清理 (CASCADE body/附件/FTS), 不等 reconcile。
+        """
+        meta = self._ctx.sync_store.get(internal_id)
+        if not meta:
+            raise ServiceInvalidArgError(f"邮件 {internal_id} 不存在")
+        if (meta.get("mailbox") or "") not in ("草稿箱", "草稿", "Drafts"):
+            raise ServiceInvalidArgError(
+                f"邮件 {internal_id} 不是草稿 (mailbox={meta.get('mailbox')!r}); "
+                "删除草稿仅适用于草稿箱"
+            )
+        imap_uid = meta.get("imap_uid")
+        if not imap_uid:
+            raise ServiceInvalidArgError(
+                f"草稿 {internal_id} 缺 imap_uid (AppleScript 存量行?), 无法定位 Exchange 草稿"
+            )
+
+        require_write_auth(actor)
+
+        reader = self._folder_imap_reader()
+        if not reader.delete_message("drafts", int(imap_uid)):
+            raise ServiceError(
+                f"删除 Exchange 草稿失败 (uid={imap_uid}); 本地行保留, 可重试"
+            )
+        local_deleted = True
+        try:
+            self._ctx.email_repo.delete_email_full(internal_id)
+        except Exception as e:  # noqa: BLE001 — IMAP 已删, 本地残留交 reconcile 清
+            logger.warning(
+                f"[delete-draft] local cleanup failed (reconcile 兜底): {e}"
+            )
+            local_deleted = False
+        logger.info(f"[delete-draft] internal_id={internal_id} uid={imap_uid} done")
+        return DeleteDraftResult(
+            internal_id=internal_id, imap_uid=int(imap_uid), local_deleted=local_deleted
         )
 
     def send(

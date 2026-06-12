@@ -75,6 +75,7 @@
     "togglePin": "切换固定",
     "important": "重要",
     "archive": "归档",
+    "deleteDraft": "删除草稿",
     "syncFailed": "同步失败",
     "new": "新邮件"
   },

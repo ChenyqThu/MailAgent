@@ -953,6 +953,35 @@ async def compose_draft(
     return success_envelope(data, request=request, source="cli")
 
 
+@router.delete("/draft/{internal_id}", dependencies=[Depends(verify_cf_access)])
+async def delete_draft(
+    request: Request,
+    internal_id: int,
+):
+    """删除草稿 (IMAP \\Deleted+EXPUNGE + 本地行清理)。
+
+    草稿箱列表行的删除按钮走这里 — 区别于收件箱删除按钮的归档语义。
+    davmail-only; 仅 mailbox=草稿箱 的行 (否则 E_INVALID_ARG)。
+    """
+    svc = MailWriteService(get_service_ctx())
+    try:
+        result = await asyncio.to_thread(
+            svc.delete_draft,
+            internal_id,
+            actor=Actor(kind="http", authenticated=True, label="cf-access"),
+        )
+    except ServiceError as exc:
+        _raise_from_service_error(exc)
+
+    data = {
+        "internal_id": result.internal_id,
+        "imap_uid": result.imap_uid,
+        "local_deleted": result.local_deleted,
+        "success": True,
+    }
+    return success_envelope(data, request=request, source="cli")
+
+
 @router.post("/send", dependencies=[Depends(verify_cf_access)])
 async def compose_send(
     request: Request,

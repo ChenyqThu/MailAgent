@@ -247,6 +247,10 @@ def _build_enriched_where(opts: dict[str, Any]) -> tuple[list[str], list[Any]]:
     if opts.get("mailbox"):
         clauses.append("m.mailbox = ?")
         params.append(opts["mailbox"])
+    else:
+        # 未指定 mailbox (= 「所有邮件」/ 跨邮箱视图) 排除草稿: 未发出的内容不混入
+        # 邮件流 (用户验收)。要草稿就显式 mailbox='草稿箱' (草稿箱视图)。
+        clauses.append("m.mailbox NOT IN ('草稿箱', '草稿', 'Drafts')")
     if opts.get("status"):
         clauses.append("m.sync_status = ?")
         params.append(opts["status"])
@@ -566,6 +570,7 @@ async def list_by_thread(
         SELECT {_LIST_ITEM_META_COLS}
           FROM email_metadata
          WHERE thread_id = ?
+           AND mailbox NOT IN ('草稿箱', '草稿', 'Drafts')
          ORDER BY date_received ASC NULLS LAST, internal_id ASC
     """
     conn = repo._connect()
@@ -624,6 +629,7 @@ async def list_by_threads(
         SELECT {_LIST_ITEM_META_COLS}
           FROM email_metadata
          WHERE thread_id IN ({placeholders})
+           AND mailbox NOT IN ('草稿箱', '草稿', 'Drafts')
          ORDER BY thread_id ASC, date_received ASC NULLS LAST, internal_id ASC
     """
     conn = repo._connect()

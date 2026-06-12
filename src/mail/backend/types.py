@@ -169,6 +169,10 @@ class DraftAppendResult:
     appended_uid: Optional[int] = None  # DavMail IMAP APPEND 返回的 UID (AppleScript 路径为 None)
     method: Optional[str] = None  # AppleScript sh 返回的 method 字段 (internal_id / message_id / fallback / etc)
     error: Optional[str] = None
+    # 草稿即时落库 (compose_draft → email_metadata) 用: MIME 的 Message-ID (去尖括号)
+    # + APPENDUID 响应的 UIDVALIDITY。AppleScript 路径均为 None。
+    message_id: Optional[str] = None
+    appended_uidvalidity: Optional[int] = None
 
 
 @dataclass

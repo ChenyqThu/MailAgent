@@ -65,7 +65,9 @@ function ExpandableValue({ text, max = 100 }: { text: string; max?: number }): R
         type="button"
         onClick={() => setShown((v) => !v)}
         className={cn(
-          'text-[10px] text-coral hover:text-coral-hover',
+          // 用户验收: 10px 在 text-aux(14px) 文本流里太小难点 → 升一档到
+          // text-meta(12px), 对齐字阶 token (仍小于正文一档, 保持辅助操作感)。
+          'text-meta text-coral hover:text-coral-hover',
           'transition-colors duration-fast ml-1 align-baseline',
           'focus:outline-none focus-visible:underline'
         )}
@@ -383,6 +385,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
 
   const openCompose = useComposeStore((s) => s.openCompose)
   const composeOpen = useComposeStore((s) => s.open)
+  const composeFor = useComposeStore((s) => s.internalId)
   const handleOpenCompose = useCallback(
     (mode: ComposeMode): void => {
       if (internalId === null) return
@@ -391,11 +394,26 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     [internalId, openCompose]
   )
 
+  // 灰白蒙版 bug 修复 — compose store 是全局开关, 渲染条件原本只看 `open`:
+  // 在邮件 A 开过 compose 后切视图/切邮件 (没有任何人调 closeCompose), overlay
+  // 的 bg-ink-3 实心层会盖在任何后续详情上 (用户: 草稿箱↔收件箱往返后正文蒙灰白)。
+  // 双保险: ① overlay 只在 store.internalId === 当前详情时渲染 (scope 校验);
+  // ② 切邮件时把 stale 的 open store 清掉, 防止切回原邮件时 compose 凭空弹回。
+  const composeOpenHere = composeOpen && composeFor === internalId
+  useEffect(() => {
+    if (composeOpen && composeFor !== internalId) {
+      useComposeStore.getState().closeCompose()
+    }
+    // composeOpen/composeFor 故意不进依赖 — 只在切邮件 (internalId 变) 时清
+    // stale store, 打开瞬间 (open 变 true 且 composeFor === internalId) 不触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [internalId])
+
   // B1 — compose overlay 进/退场. backdrop:false (root 即铺满详情区的覆盖层,
   // 非居中卡片, 无独立 backdrop). 进场 y:20→0 autoAlpha 0→1 (DUR.base), 退场
   // DUR.fast. closeCompose() 把 store open=false → 触发退场后延迟卸载.
   const { shouldRender: composeShouldRender, scopeRef: composeScopeRef } =
-    useExitAnimation<HTMLDivElement>(composeOpen, {
+    useExitAnimation<HTMLDivElement>(composeOpenHere, {
       backdrop: false,
       from: { autoAlpha: 0, y: 20 }
     })
@@ -986,8 +1004,10 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             )
           })()}
 
-          {/* AI Fields */}
-          {ai && (
+          {/* AI Fields — 草稿不渲染: 未发出的邮件不会被 AI 处理 (gate 在
+              watcher 草稿分支), `ai` 对存在的行恒非 null (LEFT JOIN 投影),
+              不 gate 会渲染一张全空卡 (用户验收)。 */}
+          {ai && !['草稿箱', '草稿', 'Drafts'].includes(email.mailbox ?? '') && (
             <div className="mt-6">
               <AIFieldsBlock fields={ai} internalId={email.internal_id} />
             </div>

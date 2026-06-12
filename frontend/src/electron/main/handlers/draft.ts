@@ -333,6 +333,10 @@ export function runComposeSend(opts: SendEmailOpts): Promise<unknown> {
   return daemonRequest('POST', '/email/send', { body: opts })
 }
 
+export function runDeleteDraft(internalId: number): Promise<unknown> {
+  return daemonRequest('DELETE', `/email/draft/${internalId}`)
+}
+
 export function runDraftPlan(opts: { internalId: number; mode: ComposeMode }): Promise<unknown> {
   return daemonRequest('POST', `/email/${opts.internalId}/draft-plan`, {
     body: { mode: opts.mode }
@@ -367,6 +371,18 @@ export function registerDraftHandlers(): void {
       const valid = validateComposeOpts(opts, 'email:draft')
       if (!('mode' in valid)) return valid
       return envelopeFromCli(runComposeDraft(valid))
+    }
+  )
+
+  // 草稿真删除 (IMAP \Deleted+EXPUNGE + 本地行清理) — 草稿箱列表行的删除按钮。
+  // 区别于收件箱删除按钮的归档语义 (flag→done)。davmail-only, serve-api 校验 mailbox。
+  ipcMain.handle(
+    'email:deleteDraft',
+    async (_evt, internalId: number): Promise<WriteEnvelope<unknown>> => {
+      if (!Number.isInteger(internalId) || internalId < 0) {
+        return { ok: false, code: 'E_INVALID_ARG', message: `bad internalId ${String(internalId)}` }
+      }
+      return envelopeFromCli(runDeleteDraft(internalId))
     }
   )
 

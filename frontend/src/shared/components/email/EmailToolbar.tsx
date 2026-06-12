@@ -185,7 +185,9 @@ function GhostBtn({
       className={cn(
         'flex items-center gap-1.5 px-2 py-1.5 rounded-md text-aux',
         'transition-colors duration-fast',
-        active ? 'text-urg' : 'text-ink-fg-1',
+        // active 态填充色走主题 accent (text-coral → --c-accent), 不再用固定
+        // 语义色 text-urg (--c-urg 不随 accent 主题切换, 用户验收: 与 UI 规范不符)。
+        active ? 'text-coral' : 'text-ink-fg-1',
         'hover:text-ink-fg hover:bg-ink-4',
         'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
       )}

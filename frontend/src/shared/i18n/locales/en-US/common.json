@@ -75,6 +75,7 @@
     "togglePin": "Toggle pin",
     "important": "Important",
     "archive": "Archive",
+    "deleteDraft": "Delete draft",
     "syncFailed": "SYNC FAILED",
     "new": "NEW"
   },

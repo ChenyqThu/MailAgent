@@ -278,8 +278,11 @@ export function Sidebar(): React.ReactElement {
   // 草稿箱 = davmail Drafts 对账同步进 email_metadata 的行 (mailbox='草稿箱')。
   // 数量语义是"草稿总数"而非未读 (草稿是自己写的)。
   const draftsTotal = mailboxes.find((m) => m.mailbox === '草稿箱')?.total ?? 0
-  const allTotal = mailboxes.reduce((sum, mb) => sum + mb.total, 0)
-  const flaggedTotal = mailboxes.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
+  // 「所有邮件」/「已标旗」badge 排除草稿 — 列表查询 (buildListWhere 未指定
+  // mailbox 时排草稿) 与 badge 计数必须同径, 否则数字与列表行数对不上。
+  const nonDraft = mailboxes.filter((m) => !['草稿箱', '草稿', 'Drafts'].includes(m.mailbox))
+  const allTotal = nonDraft.reduce((sum, mb) => sum + mb.total, 0)
+  const flaggedTotal = nonDraft.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
 
   // MAILBOXES selection: only when we're on the inbox route. Other routes
   // (settings, admin, etc.) leave all MAILBOXES rows unselected. Plus the

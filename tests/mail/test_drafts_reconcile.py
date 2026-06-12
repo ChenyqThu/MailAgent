@@ -115,6 +115,9 @@ def _backend(
     b.drafts_folder = drafts_folder
     b._sync_drafts = sync_drafts
     b._folder_imap_uid_map = MagicMock(return_value=dict(local))
+    # grace window 直通 (真方法连 SQLite 查 created_at; 这里 sync_store 是 mock,
+    # 连库会炸 → fail-safe 返回 [] 打翻 to_delete 断言)。grace 行为有独立用例。
+    b._filter_recent_rows = lambda ids, grace_sec: ids
     b._fake = fake
     b._kv = kv
     return b
@@ -333,3 +336,147 @@ def test_sync_single_draft_local_only(tmp_path):
     assert row["sync_status"] == "synced"
     assert row["notion_page_id"] is None
     assert w._stats["emails_synced"] == 1
+
+# ============================================================
+# grace window — reconcile 不误删刚即时落库的草稿
+# ============================================================
+
+def test_filter_recent_rows_keeps_fresh(tmp_path):
+    """创建 < grace_sec 的行不进 to_delete (davmail folder 缓存 stale 保护)。"""
+    import sqlite3 as _sq
+    import time as _t
+
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1, "subject": "old", "sender": "a@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "davmail", "imap_uid": 10,
+    })
+    store.save_email({
+        "internal_id": 2, "subject": "fresh", "sender": "a@x", "mailbox": "草稿箱",
+        "sync_status": "pending", "backend_origin": "davmail", "imap_uid": 11,
+    })
+    conn = _sq.connect(str(tmp_path / "t.db"))
+    conn.execute(
+        "UPDATE email_metadata SET created_at = ? WHERE internal_id = 1",
+        (_t.time() - 600,),
+    )
+    conn.commit()
+    conn.close()
+
+    b = DavMailBackend.__new__(DavMailBackend)
+    b.sync_store = store
+    assert b._filter_recent_rows([1, 2], grace_sec=120) == [1]
+    # 查询失败 → fail-safe 整批不删
+    b2 = DavMailBackend.__new__(DavMailBackend)
+    b2.sync_store = MagicMock()  # db_path 是 MagicMock → connect 炸
+    assert b2._filter_recent_rows([1, 2], grace_sec=120) == []
+
+
+# ============================================================
+# compose_draft 即时落库 (_mirror_draft_locally)
+# ============================================================
+
+def _mirror_service(tmp_path):
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService.__new__(MailWriteService)
+    ctx = MagicMock()
+    ctx.sync_store = SyncStore(str(tmp_path / "t.db"))
+    ctx.config.drafts_sync_enabled = True
+    ctx.config.user_email = "me@x.com"
+    svc._ctx = ctx
+    return svc
+
+
+def test_mirror_draft_locally_saves_row(tmp_path):
+    from src.mail.backend.types import DraftAppendResult, DraftRequest
+
+    svc = _mirror_service(tmp_path)
+    draft = DraftRequest(mode="new", to=["a@x.com"], cc=["b@x.com"], subject="hi")
+    result = DraftAppendResult(
+        success=True, drafts_folder="Drafts", appended_uid=42,
+        message_id="mid-1", appended_uidvalidity=7,
+    )
+    svc._mirror_draft_locally(draft, result)
+    rows = svc._ctx.sync_store.get_pending_emails(limit=10)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["mailbox"] == "草稿箱"
+    assert row["imap_uid"] == 42
+    assert row["message_id"] == "mid-1"
+    assert row["sender"] == "me@x.com"
+
+
+def test_mirror_draft_skips_without_uid(tmp_path):
+    """AppleScript 路径 (无 APPENDUID) → 不落库, 交给 reconcile。"""
+    from src.mail.backend.types import DraftAppendResult, DraftRequest
+
+    svc = _mirror_service(tmp_path)
+    draft = DraftRequest(mode="new", to=["a@x.com"])
+    result = DraftAppendResult(success=True, drafts_folder="Drafts", appended_uid=None)
+    svc._mirror_draft_locally(draft, result)
+    assert svc._ctx.sync_store.get_pending_emails(limit=10) == []
+
+
+# ============================================================
+# delete_draft — 草稿真删除 (IMAP + 本地清理)
+# ============================================================
+
+def _delete_service(tmp_path):
+    from src.services.mail_write import MailWriteService
+
+    svc = MailWriteService.__new__(MailWriteService)
+    ctx = MagicMock()
+    ctx.sync_store = SyncStore(str(tmp_path / "t.db"))
+    svc._ctx = ctx
+    return svc
+
+
+def _actor():
+    from src.services.guards import Actor
+
+    return Actor(kind="test", authenticated=True, label="t")
+
+
+def test_delete_draft_happy_path(tmp_path):
+    svc = _delete_service(tmp_path)
+    svc._ctx.sync_store.save_email({
+        "internal_id": 5, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "davmail", "imap_uid": 42,
+    })
+    reader = MagicMock()
+    reader.delete_message.return_value = True
+    svc._folder_imap_reader = MagicMock(return_value=reader)
+
+    result = svc.delete_draft(5, actor=_actor())
+    reader.delete_message.assert_called_once_with("drafts", 42)
+    svc._ctx.email_repo.delete_email_full.assert_called_once_with(5)
+    assert result.imap_uid == 42 and result.local_deleted is True
+
+
+def test_delete_draft_rejects_non_draft(tmp_path):
+    from src.services.errors import ServiceInvalidArgError
+
+    svc = _delete_service(tmp_path)
+    svc._ctx.sync_store.save_email({
+        "internal_id": 6, "subject": "x", "sender": "a@x", "mailbox": "收件箱",
+        "sync_status": "synced", "backend_origin": "davmail", "imap_uid": 9,
+    })
+    with pytest.raises(ServiceInvalidArgError):
+        svc.delete_draft(6, actor=_actor())
+
+
+def test_delete_draft_imap_failure_keeps_local(tmp_path):
+    from src.services.errors import ServiceError
+
+    svc = _delete_service(tmp_path)
+    svc._ctx.sync_store.save_email({
+        "internal_id": 7, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "davmail", "imap_uid": 43,
+    })
+    reader = MagicMock()
+    reader.delete_message.return_value = False
+    svc._folder_imap_reader = MagicMock(return_value=reader)
+    with pytest.raises(ServiceError):
+        svc.delete_draft(7, actor=_actor())
+    svc._ctx.email_repo.delete_email_full.assert_not_called()

@@ -240,6 +240,11 @@ export class HttpApi implements MailApi {
       // .html → --body-html-file). Throws Error & { code } on failure.
       this.req<unknown>('POST', '/email/draft', { body: opts }),
 
+    deleteDraft: (internalId: number): Promise<unknown> =>
+      // 草稿真删除 (IMAP \Deleted+EXPUNGE + 本地行清理)。davmail-only,
+      // 仅 mailbox=草稿箱 (否则 E_INVALID_ARG)。
+      this.req<unknown>('DELETE', `/email/draft/${internalId}`),
+
     send: (opts: SendEmailOpts): Promise<unknown> =>
       // Irreversible SMTP send. Server always passes --yes (the renderer
       // shows SendConfirmDialog first — there is no flag to suppress send).

@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import DOMPurify from 'dompurify'
@@ -155,6 +155,7 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     return body + quote
   }, [editor, quoteHtml])
 
+  const queryClient = useQueryClient()
   const saveMut = useMutation({
     mutationFn: () =>
       mailApi.email.draft({
@@ -169,6 +170,11 @@ function ComposePanelInner({ internalId, mode, onClose }: Props): React.ReactEle
     onSuccess: () => {
       toastSuccess(t('compose.toast.draftOk'))
       setDirty(false)
+      // 草稿即时落库 (compose_draft → email_metadata) 后立刻刷新列表/badge,
+      // 保存即出现在草稿箱 — 不等 SSE/轮询 (api-process 的 SSE 经 Redis,
+      // REDIS_URL 未配时发不出, 前端自刷最可靠)。
+      void queryClient.invalidateQueries({ queryKey: ['emails'] })
+      void queryClient.invalidateQueries({ queryKey: ['mailboxes'] })
       onClose()
     },
     onError: (err: unknown) => {
