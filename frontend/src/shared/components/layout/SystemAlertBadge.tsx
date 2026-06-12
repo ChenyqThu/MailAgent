@@ -194,7 +194,7 @@ export function SystemAlertBadge(): React.ReactElement | null {
                 type="button"
                 onClick={goBoard}
                 className={cn(
-                  'flex items-center gap-1 shrink-0 text-aux text-ink-fg-2',
+                  'flex items-center gap-1 shrink-0 text-meta text-ink-fg-2',
                   'hover:text-ink-fg transition-colors duration-fast'
                 )}
               >
