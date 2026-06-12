@@ -404,7 +404,7 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
           Sprint 14 round 20: tighter — py-2 → py-1.5, chip dropped one
           step to text-[10px], BadgeCheck/Clock icons 10→8px so the
           whole strip reads as a single thin caption bar. */}
-      <div className="px-4 py-1.5 bg-ink-2/55 border-b [border-bottom-color:var(--hairline)] flex items-center justify-between">
+      <div className="px-4 py-1.5 border-b [border-bottom-color:var(--hairline)] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Cpu size={12} strokeWidth={2} className="text-info" />
           <span
@@ -462,7 +462,7 @@ export function AIFieldsBlock({ fields, internalId }: Props): React.ReactElement
           视觉太"窒息"; 新版只用一行 px-4 py-2 容器, gap-x-3 分隔 pair, items
           内 label-value 用 gap-1.5 紧靠. whitespace-nowrap 保证 pair 不被拆散. */}
       {cells.length > 0 && (
-        <div className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-aux text-ink-fg-1 bg-ink-3/50">
+        <div className="px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-aux text-ink-fg-1 border-t [border-top-color:var(--hairline)]">
           {cells.map((cell, idx) => (
             <Fragment key={`${cell.label}-${idx}`}>
               {idx > 0 && (

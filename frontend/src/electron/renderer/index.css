@@ -326,7 +326,8 @@
    * (用户报「加白/加粗了? 割裂感反而强了」— 实为换色变明显)。 */
   --hairline: rgb(15 23 42 / 0.06);
   --hairline-strong: rgb(15 23 42 / 0.1);
-  --row-divider: rgb(255 255 255 / 0.5);
+  /* round 7 — 亮色行分割线再弱一档 (.5→.35, 用户反馈仍明显)。 */
+  --row-divider: rgb(255 255 255 / 0.35);
   --pop-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.85),
     0 18px 50px rgb(18 24 46 / 0.18),
@@ -1453,14 +1454,8 @@ body::before {
 .thread-chevron-btn:hover {
   color: rgb(var(--ink-fg));
 }
-.thread-chevron-tether {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 1px;
-  background: rgb(var(--ink-border-soft));
-}
+/* round 7 — .thread-chevron-tether 已删: child 行的竖向 tether 线被用户
+ * 定稿移除 (线程归属由左侧通高条 + child inset tint 表达)。 */
 /* Avatar / cb share the second grid cell so batch-mode can swap without reflow */
 .email-row > .avatar,
 .email-row > .cb {

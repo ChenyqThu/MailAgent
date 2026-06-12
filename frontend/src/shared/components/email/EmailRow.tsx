@@ -344,7 +344,9 @@ function EmailRowInner({
             />
           </button>
         )}
-        {threadChevron?.isChild && <span aria-hidden className="thread-chevron-tether" />}
+        {/* round 7: child 行不再画竖向 tether 线 — 线程归属已由选中态的
+            左侧通高 accent 条 + child 行 inset tint 表达, 不连续的竖线
+            反而添乱 (用户定稿删除)。 */}
       </span>
       {/* Batch checkbox — visible when body[data-batch-mode='true']. */}
       <span

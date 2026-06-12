@@ -447,7 +447,7 @@ export function Sidebar(): React.ReactElement {
           <SidebarFolderTree />
         </nav>
 
-        <div className="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft" />
+        <div className="app-nav-section-spacer my-3 mx-4 border-t [border-top-color:var(--hairline)]" />
 
         {/* AI AGENTS */}
         <div className="app-nav-section-header px-3 pb-1">
@@ -488,7 +488,7 @@ export function Sidebar(): React.ReactElement {
           />
         </nav>
 
-        <div className="app-nav-section-spacer my-3 mx-4 border-t border-ink-border-soft" />
+        <div className="app-nav-section-spacer my-3 mx-4 border-t [border-top-color:var(--hairline)]" />
 
         {/* VIEW (LLM Dashboard / 看板 Admin / 日历) — pathname-driven selection */}
         <div className="app-nav-section-header px-3 pb-1">
@@ -525,7 +525,7 @@ export function Sidebar(): React.ReactElement {
       </div>
 
       {/* ── Bottom strip · 设置 + 快捷键 ──────────────────────────────── */}
-      <div className="app-nav-bottom border-t border-ink-border-soft p-2 space-y-px">
+      <div className="app-nav-bottom border-t [border-top-color:var(--hairline)] p-2 space-y-px">
         <NavRow
           icon={<Settings size={15} strokeWidth={1.75} />}
           label={t('nav.settings')}
