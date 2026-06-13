@@ -13,7 +13,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { Droplet, Square } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
@@ -22,19 +21,16 @@ import { useAppearance, type SurfaceStyle } from '@shared/state/appearance'
 
 interface SurfaceOption {
   id: SurfaceStyle
-  icon: React.ReactNode
 }
 
 // 主题 v2 — 三选一 → 二选一 (液态档删除)。玻璃气质与高级调节只在
 // 设置 → 通用 → 外观 出现, 快捷入口保持极简。
-const SURFACE_OPTIONS: ReadonlyArray<SurfaceOption> = [
-  { id: 'frosted', icon: <Droplet size={13} strokeWidth={2} /> },
-  { id: 'solid', icon: <Square size={13} strokeWidth={2} /> }
-]
+const SURFACE_OPTIONS: ReadonlyArray<SurfaceOption> = [{ id: 'frosted' }, { id: 'solid' }]
 
-function CurrentIcon({ surface }: { surface: SurfaceStyle }): React.ReactElement {
-  if (surface === 'solid') return <Square size={11} strokeWidth={2} />
-  return <Droplet size={11} strokeWidth={2} />
+// 材质回显/选项一律用 mini preview swatch —— swatch 本身已直观表达磨砂/实色差异,
+// droplet/square 图标冗余 (用户反馈), 故移除; 默认回显 (trigger) 也统一用 swatch。
+function SurfaceSwatch({ surface }: { surface: SurfaceStyle }): React.ReactElement {
+  return <span aria-hidden className={cn('surface-swatch', `surface-swatch-${surface}`)} />
 }
 
 export function SurfacePickerPopover(): React.ReactElement {
@@ -85,7 +81,7 @@ export function SurfacePickerPopover(): React.ReactElement {
           'hover:bg-ink-3 hover:text-ink-fg-1 transition-colors duration-fast'
         )}
       >
-        <CurrentIcon surface={surface} />
+        <SurfaceSwatch surface={surface} />
         <span>{t(`surface.${surface}`)}</span>
       </button>
 
@@ -136,9 +132,6 @@ export function SurfacePickerPopover(): React.ReactElement {
                       aria-hidden
                       className={cn('surface-swatch', `surface-swatch-${opt.id}`)}
                     />
-                    <span className="shrink-0 grid place-items-center w-[14px] h-[14px] text-ink-fg-2">
-                      {opt.icon}
-                    </span>
                     <span className="flex-1">{t(`surface.${opt.id}`)}</span>
                   </button>
                 )
