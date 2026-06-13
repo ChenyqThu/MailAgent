@@ -437,12 +437,13 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   }, [internalId])
 
   // B1 — compose overlay 进/退场. backdrop:false (root 即铺满详情区的覆盖层,
-  // 非居中卡片, 无独立 backdrop). 进场 y:20→0 autoAlpha 0→1 (DUR.base), 退场
-  // DUR.fast. closeCompose() 把 store open=false → 触发退场后延迟卸载.
+  // 非居中卡片, 无独立 backdrop). 用同款 modal 卡片入场配方 (autoAlpha + y:8 +
+  // scale:0.97 = useExitAnimation DEFAULT_FROM, 与 EventFormModal / FolderPicker
+  // 一致); 原 y:20 无 scale 偏离同款手感. closeCompose() 触发退场后延迟卸载.
   const { shouldRender: composeShouldRender, scopeRef: composeScopeRef } =
     useExitAnimation<HTMLDivElement>(composeOpenHere, {
       backdrop: false,
-      from: { autoAlpha: 0, y: 20 }
+      from: { autoAlpha: 0, y: 8, scale: 0.97 }
     })
 
   // B2 — 切邮件时正文内容区交叉淡入. internalId 变化时 from autoAlpha:0 (120ms),
