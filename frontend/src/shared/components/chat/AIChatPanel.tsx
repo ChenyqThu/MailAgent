@@ -58,6 +58,27 @@ function writeBackendKindPref(kind: ChatBackendKind): void {
   }
 }
 
+// chat 模型双层记忆 (用户反馈)。第二层「用户默认模型」：持久化用户最后一次在
+// picker 显式选择的 custom-api 模型，作为新开会话的默认 (取代旧硬编码 sonnet-4-6)。
+// 第一层「会话级模型」在 AIChatPanel 内 effect 里从 ChatSession.backend_model 回填，
+// 不走这里 (回填不污染用户默认)。
+const CUSTOM_MODEL_PREF = 'mailagent.chat.customModel'
+const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
+function readModelPref(): string {
+  try {
+    return localStorage.getItem(CUSTOM_MODEL_PREF) || DEFAULT_CUSTOM_MODEL
+  } catch {
+    return DEFAULT_CUSTOM_MODEL
+  }
+}
+function writeModelPref(model: string): void {
+  try {
+    localStorage.setItem(CUSTOM_MODEL_PREF, model)
+  } catch {
+    /* localStorage 在 sandbox / privacy 模式可能拒写; 偏好丢失无伤大雅 */
+  }
+}
+
 // task 06-08-chat 需求 5 — extended-thinking 开关偏好。用户体感是「常驻开关」（持久
 // localStorage），实现是 per-turn（每次 send 把当前值塞进 opts.thinking）。仅 custom-api
 // Anthropic 模型生效（notion-agent / OpenAI 协议忽略）。默认 OFF。
@@ -132,7 +153,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const [backend, setBackend] = useState<BackendChoice>(() => {
     const kind = readBackendKindPref()
     return kind === 'custom-api'
-      ? { kind: 'custom-api', model: 'claude-sonnet-4-6', agentPageId: null }
+      ? { kind: 'custom-api', model: readModelPref(), agentPageId: null }
       : { kind: 'notion-agent', model: null, agentPageId: null }
   })
   // Persist + apply a backend switch (composer toggle / ⌥⇧B / model pick /
@@ -140,6 +161,9 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   // agent from its own account.json, so the renderer never passes one.
   const selectBackend = useCallback((next: BackendChoice): void => {
     writeBackendKindPref(next.kind)
+    // 第二层记忆：用户显式选的 custom-api 模型 → 新会话默认。会话级回填走 setBackend
+    // (不经此函数)，不污染用户默认。
+    if (next.kind === 'custom-api' && next.model) writeModelPref(next.model)
     setBackend(next)
   }, [])
   const [draft, setDraft] = useState('')
@@ -240,7 +264,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
       // eslint-disable-next-line react-hooks/set-state-in-effect
       selectBackend(
         requestedBackendKind === 'custom-api'
-          ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
+          ? { kind: 'custom-api', model: backend.model ?? readModelPref(), agentPageId: null }
           : { kind: 'notion-agent', model: null, agentPageId: null }
       )
     }
@@ -270,7 +294,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
       // eslint-disable-next-line react-hooks/set-state-in-effect
       selectBackend(
         pendingOpen.backendKind === 'custom-api'
-          ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
+          ? { kind: 'custom-api', model: backend.model ?? readModelPref(), agentPageId: null }
           : { kind: 'notion-agent', model: null, agentPageId: null }
       )
       return
@@ -290,6 +314,32 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
     chatSelectSession,
     consumePendingOpen
   ])
+
+  // 第一层记忆 — 切回 / 重开已有会话时恢复它当时用的模型 (per-session)。库里
+  // ChatSession.backend_model 已落 (send 时随 backendModel 持久化)，但 backend
+  // state 在重开 tab / selectSession 后不会自动回填 → 之前总 fallback 到默认模型。
+  // 用 ref 记「已恢复的会话 id」：仅 activeSessionId 真正切换时回填一次，避免把
+  // 用户中途手动切换的模型 clobber 回去 (手动切换不改 activeSessionId)。
+  const restoredModelSessionRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (backend.kind !== 'custom-api') return
+    const sid = chat.activeSessionId
+    if (sid == null) {
+      restoredModelSessionRef.current = null
+      return
+    }
+    if (restoredModelSessionRef.current === sid) return
+    const target = chatSessions.find((s) => s.id === sid)
+    if (!target) return // 会话列表尚未加载到该会话 → 下次 chatSessions 更新再试
+    restoredModelSessionRef.current = sid
+    const nextModel = target.backend_model
+    if (nextModel && nextModel !== backend.model) {
+      // 会话级模型回填是有意 action：切回会话恢复其当时模型；ref 守卫确保仅切换时回填
+      // 一次、不 clobber 用户中途手动切换。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBackend((cur) => (cur.kind === 'custom-api' ? { ...cur, model: nextModel } : cur))
+    }
+  }, [chat.activeSessionId, chatSessions, backend.kind, backend.model])
 
   // Pull AI fields + email detail (for thread_id) + thread sibling count
   // for the ContextChips header.
@@ -599,7 +649,7 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   useShortcut('alt+shift+b', () =>
     selectBackend(
       backend.kind === 'notion-agent'
-        ? { kind: 'custom-api', model: backend.model ?? 'claude-sonnet-4-6', agentPageId: null }
+        ? { kind: 'custom-api', model: backend.model ?? readModelPref(), agentPageId: null }
         : { kind: 'notion-agent', model: null, agentPageId: null }
     )
   )
