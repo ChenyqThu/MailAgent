@@ -26,7 +26,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from src.kos.client import KOSClient, KOSError
-from src.kos.producer import build_kos_page_payload, make_bulk_kos_client
+from src.kos.producer import build_kos_page_payload, make_bulk_kos_client, priority_at_or_above
 from src.repository import EmailRepository
 
 
@@ -38,11 +38,15 @@ class KOSBulkIngester:
         db_path: str = "data/sync_store.db",
         client: Optional[KOSClient] = None,
         rate_qps: float = 2.0,
+        priority_floor: str = "low",
     ):
         self.db_path = db_path
         self.repo = EmailRepository(db_path=db_path)
         self.client = client or make_bulk_kos_client()
         self._sleep = 1.0 / rate_qps if rate_qps > 0 else 0.0
+        # 与增量 producer 同款过滤：priority < floor 的邮件不入 KOS (排除噪音)。
+        # 默认 "low" = 不过滤 (向后兼容原全量行为); "normal" = 排除低优先。
+        self.priority_floor = priority_floor
         self._ensure_log_table()
 
     # ---- resume 追踪表 (独立, 不碰主 schema migration) ----
@@ -195,13 +199,27 @@ class KOSBulkIngester:
                 "bulk KOSClient not configured — 检查 MAILAGENT_BULK_CLIENT_ID/SECRET + KOS_MCP_BASE"
             )
         candidates = self._candidates(limit, retry_failed, require_body)
-        stats = {"total": len(candidates), "pushed": 0, "failed": 0, "skipped_no_meta": 0}
+        stats = {
+            "total": len(candidates),
+            "pushed": 0,
+            "failed": 0,
+            "skipped_no_meta": 0,
+            "skipped_low_priority": 0,
+        }
         logger.info(
             f"[bulk] start total={stats['total']} dry_run={dry_run} "
-            f"verify_canary={verify_canary} rate={1.0 / self._sleep if self._sleep else 'unlimited'}qps"
+            f"verify_canary={verify_canary} priority_floor={self.priority_floor!r} "
+            f"rate={1.0 / self._sleep if self._sleep else 'unlimited'}qps"
         )
 
         for i, iid in enumerate(candidates, 1):
+            # 排除低优先噪音 (与增量 producer priority_at_or_above 同语义;
+            # 未分类/无 priority → 视为 normal → 保留)。floor='low' 时不过滤。
+            if self.priority_floor and self.priority_floor != "low":
+                pri = self._get_labels(iid).get("priority")
+                if not priority_at_or_above(pri, self.priority_floor):
+                    stats["skipped_low_priority"] += 1
+                    continue
             built = self._build_one(iid)
             if built is None:
                 stats["skipped_no_meta"] += 1
@@ -258,9 +276,17 @@ if __name__ == "__main__":
     ap.add_argument("--require-body", action="store_true", help="只 ingest 有 body_markdown 的")
     ap.add_argument("--no-canary", action="store_true", help="跳过第一封 source 校验 (不推荐)")
     ap.add_argument("--db-path", default="data/sync_store.db")
+    ap.add_argument(
+        "--priority-floor",
+        default="low",
+        help="排除低于此优先级的邮件 (low/normal/important/urgent/critical; "
+        "默认 low=不过滤; normal=排除低优先噪音, 未分类视为 normal 保留)",
+    )
     args = ap.parse_args()
 
-    ing = KOSBulkIngester(db_path=args.db_path, rate_qps=args.rate)
+    ing = KOSBulkIngester(
+        db_path=args.db_path, rate_qps=args.rate, priority_floor=args.priority_floor
+    )
     result = ing.run(
         limit=args.limit,
         retry_failed=args.retry_failed,
