@@ -763,7 +763,11 @@ export function ConfigDrawer({
                 <SelectTrigger>
                   <SelectValue placeholder={t('agents.config.model')} />
                 </SelectTrigger>
-                <SelectContent>
+                {/* z-[70]: 本抽屉 (ConfigDrawer) backdrop/panel 是 z-60/61，高于 Radix
+                    Select content 默认的 z-50 (popover 约定层，仅够 clear z-40 的 Settings
+                    Dialog)。不抬高 → 下拉 portal 到 body 后落在抽屉之下被 glass 面板挡住，
+                    表现为「点不开/无法切换」。70 介于抽屉(61)与 lightbox(100)之间。 */}
+                <SelectContent className="z-[70]">
                   {(model && !enabledModels.includes(model)
                     ? [...enabledModels, model]
                     : enabledModels
