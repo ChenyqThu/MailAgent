@@ -685,8 +685,8 @@ class TestAgentTools:
 
 class TestWindowBounds:
     def test_period_bounds_weekly(self):
-        n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)  # 周三
-        assert _period_bounds("weekly", n) == ("2026-05-25", "2026-05-31", "2026-05-25", 7)
+        n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)  # 周三 → 过去 7 完整日 [5-27, 6-02]
+        assert _period_bounds("weekly", n) == ("2026-05-27", "2026-06-02", "2026-05-27", 7)
 
     def test_period_bounds_monthly(self):
         n = datetime(2026, 6, 3, 9, 0, tzinfo=_BJ)
@@ -743,8 +743,8 @@ class TestAggregateRun:
 
     def test_weekly_aggregates_subreports_with_missing_note(self, db: Path):
         store = ReportStore(str(db))
-        # _NOW=2026-06-02 周二 → 上周一 5-25 ~ 上周日 5-31；seed 2 份日报（缺 5）
-        for d in ["2026-05-25", "2026-05-26"]:
+        # _NOW=2026-06-02 → 过去 7 完整日 [5-26, 6-01]；seed 2 份日报（缺 5）
+        for d in ["2026-05-26", "2026-05-27"]:
             rid = f"daily_email_digest:daily:{d}"
             store.create_report(report_id=rid, agent_id="daily_email_digest", cadence="daily",
                                 report_date=d, window_start="s", window_end="e")

@@ -243,14 +243,18 @@ def _daily_window(agent: Dict[str, Any], n: datetime) -> Tuple[datetime, datetim
 
 
 def _period_bounds(cadence: str, n: datetime) -> Tuple[str, str, str, int]:
-    """周 / 月报聚合的**上一个完整周期** (sub_start, sub_end, report_date, expected_count)，
-    全 'YYYY-MM-DD'。report_date 字典序与日期序一致，可直接比较。"""
+    """周 / 月报聚合窗口 (sub_start, sub_end, report_date, expected_count)，全 'YYYY-MM-DD'。
+    weekly = 过去 7 个完整日（rolling）；monthly = 上一个自然月。report_date 字典序与
+    日期序一致，可直接比较。"""
     d: date = n.date()
     if cadence == "weekly":
-        this_mon = d - timedelta(days=d.weekday())  # 本周一
-        last_mon = this_mon - timedelta(days=7)
-        last_sun = this_mon - timedelta(days=1)
-        return last_mon.isoformat(), last_sun.isoformat(), last_mon.isoformat(), 7
+        # 「过去 7 个完整日」[今天-7, 今天-1]（含）—— rolling，而非固定自然周。
+        # 周一 9:00 定时跑时这 7 天恰好 = 上周一~周日（与旧「上一完整周」结果一致）；
+        # 周中手动「立即运行」则给真正最近 7 天（用户预期），不再回退到更早的整周。
+        # report_date = 窗口起始日：周一定时跑仍标上周一，与历史报告 + fire 去重兼容。
+        end = d - timedelta(days=1)
+        start = d - timedelta(days=7)
+        return start.isoformat(), end.isoformat(), start.isoformat(), 7
     # monthly：上一个自然月（方案 A：聚合整月日报，expected = 当月天数）
     first_this = d.replace(day=1)
     prev_end = first_this - timedelta(days=1)
