@@ -436,13 +436,13 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [internalId])
 
-  // B1 — compose overlay 进/退场. backdrop:false (root 即铺满整个详情区的覆盖层).
-  // 用「淡入 + 上滑」干净面板入场, 不用 scale —— scale 适合居中小卡片, 对整列覆盖层
-  // 会变成"整列缩放"观感不对 (用户反馈)。closeCompose() 触发退场后延迟卸载。
+  // B1 — compose overlay 进/退场. backdrop:false (root 即铺满整个详情区的覆盖层,
+  // 非居中卡片). 整列覆盖面板用「淡入 + 上滑」(y:20, 无 scale) —— scale 适合居中小卡片,
+  // 套到整列覆盖层会变成"整列缩放"观感不对。closeCompose() 触发退场后延迟卸载。
   const { shouldRender: composeShouldRender, scopeRef: composeScopeRef } =
     useExitAnimation<HTMLDivElement>(composeOpenHere, {
       backdrop: false,
-      from: { autoAlpha: 0, y: 14 }
+      from: { autoAlpha: 0, y: 20 }
     })
 
   // B2 — 切邮件时正文内容区交叉淡入. internalId 变化时 from autoAlpha:0 (120ms),

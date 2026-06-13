@@ -41,6 +41,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
@@ -282,6 +283,15 @@ function ComposeSplitButton({
   const { t } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // 下拉菜单出入场：与主题/材质弹层同款（顶部微展开 + 淡入），退场延迟卸载。
+  const { shouldRender: menuShouldRender, scopeRef: menuRef } = useExitAnimation<HTMLDivElement>(
+    menuOpen,
+    {
+      backdrop: false,
+      from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top left' },
+      enterDuration: DUR.fast
+    }
+  )
 
   // Close on outside click / Escape (mirrors the appearance popover pattern).
   useEffect(() => {
@@ -354,8 +364,9 @@ function ComposeSplitButton({
         </button>
       </div>
 
-      {menuOpen && (
+      {menuShouldRender && (
         <div
+          ref={menuRef}
           role="menu"
           className={cn(
             'absolute left-0 top-full mt-1 z-50 min-w-[160px]',
