@@ -1,6 +1,10 @@
-# Handoff: KOS consumer client 缺 `mailagent-emails` 源的 query 权限
+# Handoff: KOS consumer client 缺 `mailagent-emails` 源的 query 权限 ✅ RESOLVED
 
-**给 KOS（gbrain）侧的 Claude Code。** MailAgent 这边已把邮件全量入 KOS，但 app 内 AI chat 查不到邮件——定位到是 consumer client 的检索权限问题。
+> **✅ RESOLVED (2026-06-13)**：KOS 侧查证 + MailAgent 侧实测——**权限本来就在**。consumer client `gbrain_cl_348583a3…` 的 `federated_read` 已含 `{default, mailagent-emails, omada}`。当初拿到 0 是**测试时点早于授权生效 / 邮件嵌入未完成**，并非缺权限。用**新 mint 的 token**（TTL 1h，401=过期非无权）重跑即命中：`query {"query":"Latigo","source_id":"mailagent-emails"}` → 命中并引用真实 `sources/email/*`。**保持现有 consumer client 设计，不走下方 bulk client 备选。**
+>
+> 用法要点：① 要原始邮件命中就带 `source_id:"mailagent-emails"`；不带则联邦检索（default 里 dream cycle 合成的实体页常排在原始邮件前面）。② 中文复合词一律用 `query`（含向量路径），勿用关键词 `search`（Postgres tsvector 不能 tokenize 4+ 连续汉字）。③ source 授权服务端实时判定、不写进 token，改授权即时生效、无需重 mint。
+
+**给 KOS（gbrain）侧的 Claude Code。** MailAgent 这边已把邮件全量入 KOS，但 app 内 AI chat 查不到邮件——定位到是 consumer client 的检索权限问题。（↑ 见上方 RESOLVED：实为测试时点过早，权限本就在。）
 
 ## 背景
 - MailAgent 把邮件 ingest 进 KOS 的 **isolated source `mailagent-emails`**，用的是 **bulk OAuth client**（`MAILAGENT_BULK_CLIENT_*`，绑定该 source）。slug 形如 `sources/email/{internal_id}`。目前已入库 **7471 封**。
