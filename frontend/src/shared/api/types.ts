@@ -1058,15 +1058,18 @@ export interface TranslateBatchResult extends TranslationCache {
    *  when this is > 0 but segments.length > 0. */
   failedBatches: number
   totalBatches: number
+  /** true when a shorter fresh result was returned but an existing richer cache
+   *  row was kept to avoid downgrading coverage. */
+  cacheKept?: boolean
 }
 
 export interface AiApi {
   /**
    * Run an on-demand batch translation of an email's body (Path B). Extracts
    * block-level paragraphs from body_html in the main process, batches them
-   * (10 per request, 2 concurrent), calls the LLM gateway, and writes the
-   * result to email_translation (DB v12). Returns the full TranslateBatchResult
-   * including failedBatches for partial-failure UX.
+   * (≤10 segments and ≤3000 chars per request, 2 concurrent), calls the LLM
+   * gateway, and writes the result to email_translation (DB v12). Returns the
+   * full TranslateBatchResult including failedBatches for partial-failure UX.
    *
    * API key + endpoint stay in the main process (REVIEW-LOG C-04). Errors
    * carry `code`: E_NO_BODY / E_NO_LLM_KEY / E_INVALID_ARG / E_UPSTREAM.

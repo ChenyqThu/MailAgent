@@ -30,6 +30,7 @@ import { join } from 'path'
 
 import { getDb, resolveDbPath } from '../db'
 import { extractBlocks, type ExtractedBlock } from '../lib/html-extractor'
+import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import {
   getLlmTranslateApiKey,
   getLlmTranslateBaseUrl,
@@ -65,6 +66,9 @@ export interface TranslateBatchResult extends TranslationCache {
    *  Renderer surfaces a partial-failure indicator when this is non-zero. */
   failedBatches: number
   totalBatches: number
+  /** true when a shorter fresh result was returned but an existing richer cache
+   *  row was kept to avoid downgrading the immersive translation coverage. */
+  cacheKept?: boolean
 }
 
 export class TranslateError extends Error {
@@ -131,10 +135,16 @@ export function closeTranslateDb(): void {
 
 function readBodyHtml(internalId: number): string | null {
   const row = getDb()
-    .prepare('SELECT body_html FROM email_body WHERE internal_id = ?')
-    .get(internalId) as { body_html: string | null } | undefined
-  if (!row || typeof row.body_html !== 'string' || row.body_html.length === 0) return null
-  return row.body_html
+    .prepare('SELECT body_html, body_markdown FROM email_body WHERE internal_id = ?')
+    .get(internalId) as { body_html: string | null; body_markdown: string | null } | undefined
+  if (!row) return null
+  if (typeof row.body_html === 'string' && row.body_html.length > 0) return row.body_html
+  if (typeof row.body_markdown !== 'string' || row.body_markdown.length === 0) return null
+
+  // text-only fallback 必须和 EmailBodyFrame 共用 plaintextToHtml 产物；
+  // extractBlocks 与 iframe DOM 同源，译文注入的文本匹配才稳定。
+  const html = plaintextToHtml(row.body_markdown)
+  return html.length > 0 ? html : null
 }
 
 function readCache(internalId: number, targetLang: TargetLang): TranslationCache | null {
@@ -211,6 +221,38 @@ function writeCache(
   }
 }
 
+function writeCacheGuarded(
+  internalId: number,
+  targetLang: TargetLang,
+  segments: TranslationSegment[],
+  model: string,
+  source: 'on_demand' | 'llm_agent'
+): boolean {
+  let existing: TranslationCache | null = null
+  try {
+    existing = readCache(internalId, targetLang)
+  } catch (err) {
+    logLine({
+      event: 'translate.cache_guard_read_failed',
+      internalId,
+      targetLang,
+      error: err instanceof Error ? err.message : String(err)
+    })
+  }
+  if (existing && segments.length < existing.segments.length) {
+    logLine({
+      event: 'translate.cache_kept',
+      internalId,
+      targetLang,
+      oldSegments: existing.segments.length,
+      newSegments: segments.length
+    })
+    return true
+  }
+  writeCache(internalId, targetLang, segments, model, source)
+  return false
+}
+
 function deleteCache(internalId: number, targetLang: TargetLang): boolean {
   const info = writeDb()
     .prepare('DELETE FROM email_translation WHERE internal_id = ? AND target_lang = ?')
@@ -223,9 +265,10 @@ function deleteCache(internalId: number, targetLang: TargetLang): boolean {
 // ============================================================================
 
 const BATCH_SIZE = 10
+const BATCH_TEXT_CHAR_BUDGET = 3000
 const CONCURRENCY = 2
-const FETCH_TIMEOUT_MS = 60_000
-const MAX_OUTPUT_TOKENS = 4096
+const FETCH_TIMEOUT_MS = 240_000
+const MAX_OUTPUT_TOKENS = 64_000
 const CRS_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36'
 // Abort controller registry — one per internalId; renderer fires
@@ -383,6 +426,7 @@ function parseLeniently(raw: string): Array<{ id: string; tgt: string }> | null 
 interface MessagesResponse {
   content?: Array<{ type?: string; text?: string }>
   model?: string
+  stop_reason?: string
 }
 
 interface BatchOutcome {
@@ -401,6 +445,7 @@ async function runOneBatch(
   parentAc: AbortController
 ): Promise<BatchOutcome> {
   const idText = batch.map((b) => ({ id: b.id, text: b.text }))
+  const batchTextChars = batch.reduce((sum, b) => sum + b.text.length, 0)
   const ac = new AbortController()
   // Bind to parent abort: abortInternalId fires parentAc which we relay here.
   const onParentAbort = (): void => ac.abort()
@@ -441,6 +486,14 @@ async function runOneBatch(
       return { segments: [], modelReturned: model, ok: false }
     }
     const payload = (await response.json()) as MessagesResponse
+    if (payload.stop_reason === 'max_tokens') {
+      logLine({
+        event: 'translate.batch_truncated',
+        internalId,
+        batchBlocks: batch.length,
+        batchChars: batchTextChars
+      })
+    }
     const text = payload.content?.find((b) => b.type === 'text')?.text ?? payload.content?.[0]?.text
     if (typeof text !== 'string' || text.trim().length === 0) {
       logLine({ event: 'translate.batch_empty', internalId })
@@ -481,9 +534,23 @@ async function runOneBatch(
   }
 }
 
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+function buildBatches(blocks: ExtractedBlock[]): ExtractedBlock[][] {
+  const out: ExtractedBlock[][] = []
+  let current: ExtractedBlock[] = []
+  let currentChars = 0
+  for (const block of blocks) {
+    const wouldExceedCount = current.length >= BATCH_SIZE
+    const wouldExceedChars =
+      current.length > 0 && currentChars + block.text.length > BATCH_TEXT_CHAR_BUDGET
+    if (wouldExceedCount || wouldExceedChars) {
+      out.push(current)
+      current = []
+      currentChars = 0
+    }
+    current.push(block)
+    currentChars += block.text.length
+  }
+  if (current.length > 0) out.push(current)
   return out
 }
 
@@ -524,7 +591,7 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
   if (html === null) {
     throw new TranslateError(
       'E_NO_BODY',
-      `email_body.body_html for internal_id=${internalId} is empty or missing`
+      `email_body.body_html/body_markdown for internal_id=${internalId} is empty or missing`
     )
   }
 
@@ -532,8 +599,8 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
   if (blocks.length === 0) {
     // Empty/CJK-only/code-only body — write an empty cache row so we don't
     // re-trigger LLM on next open. Renderer treats empty segments as "nothing
-    // to translate" CTA disabled.
-    writeCache(internalId, targetLang, [], '', 'on_demand')
+    // to translate" CTA disabled. Guard 仍避免覆盖已有非空译文。
+    const cacheKept = writeCacheGuarded(internalId, targetLang, [], '', 'on_demand')
     return {
       internalId,
       targetLang,
@@ -543,7 +610,8 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
       fetchedAt: Date.now() / 1000,
       latencyMs: 0,
       failedBatches: 0,
-      totalBatches: 0
+      totalBatches: 0,
+      ...(cacheKept ? { cacheKept: true } : {})
     }
   }
 
@@ -565,7 +633,7 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
   const parentAc = new AbortController()
   registerAbort(internalId, parentAc)
 
-  const batches = chunk(blocks, BATCH_SIZE)
+  const batches = buildBatches(blocks)
   const start = Date.now()
   logLine({
     event: 'translate.batch_start',
@@ -596,9 +664,15 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
 
     // Write cache even on partial failure — what we got is still useful, and
     // the renderer surfaces a partial-failure indicator via failedBatches.
-    // Full failure with empty segments still writes (empty array) so a stuck
-    // upstream doesn't get hammered on every click.
-    writeCache(internalId, targetLang, segments, modelReturned, 'on_demand')
+    // Full failure with empty segments still writes when no richer cache exists
+    // so a stuck upstream doesn't get hammered on every click.
+    const cacheKept = writeCacheGuarded(
+      internalId,
+      targetLang,
+      segments,
+      modelReturned,
+      'on_demand'
+    )
 
     logLine({
       event: 'translate.batch_done',
@@ -618,7 +692,8 @@ export async function translateBatch(opts: TranslateBatchOpts): Promise<Translat
       fetchedAt: Date.now() / 1000,
       latencyMs,
       failedBatches: failed,
-      totalBatches: batches.length
+      totalBatches: batches.length,
+      ...(cacheKept ? { cacheKept: true } : {})
     }
   } finally {
     unregisterAbort(internalId, parentAc)
