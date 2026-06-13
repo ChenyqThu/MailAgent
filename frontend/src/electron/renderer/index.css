@@ -4776,15 +4776,12 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spin > *, .shimmer, .email-flash, .think-shimmer, .think-caret { animation: none !important; }
+  .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
   .icon-swap-item { transition: none !important; }
-  /* No shimmer sweep → fall back to a plain solid head color (otherwise the
-     bg-clip text would render transparent). */
-  .think-shimmer {
-    background: none;
-    -webkit-text-fill-color: rgb(var(--ink-fg-2));
-    color: rgb(var(--ink-fg-2));
-  }
+  /* think-shimmer 不随 reduce 停：它是 §8 loading 词汇的一员，而 spinner 的 tailwind
+     animate-spin 在 reduce 下本就继续转 —— 文字渐变高光无几何位移、比旋转更温和，又是
+     「AI 思考中 / 生成中」的关键状态反馈，故一致地保留（上面 kill 列表已移除它，否则
+     macOS「减弱动态效果」用户会看到 spinner 转、文字却退成纯灰，观感割裂）。 */
   /* Hide the (now non-blinking) caret so it doesn't read as a stuck cursor. */
   .think-caret { display: none; }
 }
