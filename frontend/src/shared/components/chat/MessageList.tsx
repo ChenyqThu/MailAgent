@@ -1196,7 +1196,13 @@ function AssistantBubble({
         {hasThinking && <ThinkingBlock thinking={thinkingText} active />}
         {hasSteps && <ToolGroup steps={steps} running={toolsRunning} />}
         {!hasThinking && !hasSteps && (
-          <div className="py-1 text-aux">
+          <div className="flex items-center gap-2 py-1 text-aux">
+            <Loader2
+              size={12}
+              strokeWidth={2}
+              className="text-ink-fg-2 shrink-0 animate-spin"
+              aria-hidden
+            />
             <span className="think-shimmer">{t('chat.status.thinking')}</span>
           </div>
         )}
