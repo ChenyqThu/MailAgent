@@ -717,7 +717,17 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
             <button
               type="button"
               aria-label={t('chat.newChat')}
-              onClick={() => chat.newSession()}
+              onClick={() => {
+                // 第二层记忆：新会话回到用户默认模型，不继承上个会话的 per-session 模型
+                // （codex MEDIUM）。重置 ref 让回填 effect 不把它当「已恢复」跳过。
+                if (backend.kind === 'custom-api') {
+                  const def = readModelPref()
+                  if (def && def !== backend.model)
+                    selectBackend({ kind: 'custom-api', model: def, agentPageId: null })
+                  restoredModelSessionRef.current = null
+                }
+                chat.newSession()
+              }}
               className={cn(
                 'text-ink-fg-2 hover:text-ink-fg p-1.5 rounded',
                 'transition-colors duration-fast hover:bg-ink-4'
@@ -810,7 +820,15 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
             activeSessionId={chat.activeSessionId}
             previews={sessionPreviews}
             onSelectSession={(sid) => void chat.selectSession(sid)}
-            onNewSession={() => chat.newSession()}
+            onNewSession={() => {
+              if (backend.kind === 'custom-api') {
+                const def = readModelPref()
+                if (def && def !== backend.model)
+                  selectBackend({ kind: 'custom-api', model: def, agentPageId: null })
+                restoredModelSessionRef.current = null
+              }
+              chat.newSession()
+            }}
             onClose={() => setSidebarOpen(false)}
             onDeleteSession={handleDeleteSession}
           />
