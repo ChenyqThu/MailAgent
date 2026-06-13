@@ -34,6 +34,9 @@ export function AccentPickerPopover(): React.ReactElement {
   const accent = useAppearance((s) => s.accent)
   const setAccent = useAppearance((s) => s.setAccent)
   const [open, setOpen] = useState(false)
+  // popover 相对 trigger 右对齐（替代 .theme-popover 写死的 right:12px —— 那个值与本按钮
+  // 实际位置不符导致弹层偏右；开弹时按按钮右缘算 right，跟随按钮）。
+  const [anchorRight, setAnchorRight] = useState<number | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   // popover 出入场：无 backdrop，从右上微展开；scopeRef 兼作 outside-click 容器。
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
@@ -66,7 +69,13 @@ export function AccentPickerPopover(): React.ReactElement {
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (!open && triggerRef.current) {
+            const r = triggerRef.current.getBoundingClientRect()
+            setAnchorRight(Math.max(8, Math.round(window.innerWidth - r.right)))
+          }
+          setOpen((o) => !o)
+        }}
         title={t('titleBar.accent.tooltip')}
         aria-label={t('titleBar.accent.aria')}
         aria-haspopup="dialog"
@@ -99,7 +108,12 @@ export function AccentPickerPopover(): React.ReactElement {
             role="dialog"
             aria-label={t('titleBar.accent.aria')}
             className="theme-popover glass-pop"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            style={
+              {
+                WebkitAppRegion: 'no-drag',
+                ...(anchorRight != null ? { right: `${anchorRight}px` } : {})
+              } as React.CSSProperties
+            }
           >
             <div className="px-4 pt-3 pb-2 border-b border-ink-border-soft">
               <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2">
