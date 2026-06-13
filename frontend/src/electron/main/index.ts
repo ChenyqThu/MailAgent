@@ -18,6 +18,7 @@ import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
 import { registerEmailHandlers } from './handlers/email'
+import { registerContactHandlers } from './handlers/contacts'
 import { registerFolderHandlers } from './handlers/folder'
 import { registerReportHandlers } from './handlers/report'
 import { registerAttachmentHandlers } from './handlers/attachment'
@@ -327,6 +328,7 @@ app.whenReady().then(async () => {
   // Sprint 1.2: IPC handlers (read-only — SQLite direct, ~4ms).
   // Write handlers (resync / update-flag) land in Sprint 5 atop cli_runner.
   registerEmailHandlers()
+  registerContactHandlers()
   // 邮件正文 iframe 内链接 → 系统默认浏览器。EmailBodyFrame 在 iframe 内拦截
   // <a> 点击 (导航前 preventDefault) 后调本 IPC —— 这是主路径, 因为 iframe 的
   // 页面 CSP (frame-src 'self') 会在渲染层把外部导航抢先拦成空白页, 主进程的

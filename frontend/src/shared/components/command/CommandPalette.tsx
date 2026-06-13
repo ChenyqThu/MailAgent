@@ -89,6 +89,17 @@ const CJK_RE = /[一-鿿㐀-䶿豈-﫿぀-ヿ]/g
 // types match without an `as const` cast (which would mark them readonly).
 const SNIPPET_PURIFY: DOMPurifyConfig = { ALLOWED_TAGS: ['mark'], ALLOWED_ATTR: [] }
 
+// Static syntax legend shown in the empty-result tile — lets users discover
+// field search (from:/after:/has:/is:) without cluttering the high-frequency
+// jump flow. Display-only: clicking would inject a bare prefix that searches
+// to empty, so these intentionally aren't interactive.
+const SEARCH_SYNTAX_HINTS: ReadonlyArray<{ token: string; labelKey: string }> = [
+  { token: 'from:', labelKey: 'palette.email.syntaxFrom' },
+  { token: 'after:', labelKey: 'palette.email.syntaxAfter' },
+  { token: 'has:attachment', labelKey: 'palette.email.syntaxHas' },
+  { token: 'is:unread', labelKey: 'palette.email.syntaxUnread' }
+]
+
 const PRIORITY_LABEL: Record<AIPriority, string> = {
   critical: 'CRITICAL',
   urgent: 'URGENT',
@@ -799,7 +810,32 @@ export function CommandPalette(): React.ReactElement | null {
                       {isSearching ? t('palette.searching') : t('palette.email.emptyTitle')}
                     </div>
                     {!isSearching && (
-                      <div className="text-meta text-ink-fg-3">{t('palette.email.emptyHint')}</div>
+                      <>
+                        <div className="text-meta text-ink-fg-3">
+                          {t('palette.email.emptyHint')}
+                        </div>
+                        <div className="mt-1.5 flex flex-col items-center gap-1">
+                          <div className="text-micro uppercase tracking-wide text-ink-fg-3">
+                            {t('palette.email.syntaxLabel')}
+                          </div>
+                          <div className="flex flex-wrap justify-center gap-x-2.5 gap-y-1">
+                            {SEARCH_SYNTAX_HINTS.map((h) => (
+                              <span
+                                key={h.token}
+                                className="text-micro inline-flex items-center gap-1"
+                              >
+                                <code className="font-mono text-ink-fg-1 bg-ink-fg/[0.06] px-1 py-px rounded">
+                                  {h.token}
+                                </code>
+                                <span className="text-ink-fg-3">{t(h.labelKey)}</span>
+                              </span>
+                            ))}
+                          </div>
+                          <div className="text-micro text-ink-fg-3">
+                            {t('palette.email.syntaxHint')}
+                          </div>
+                        </div>
+                      </>
                     )}
                   </div>
                 </div>

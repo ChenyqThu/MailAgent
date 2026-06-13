@@ -10,6 +10,7 @@ update-flag)。
   GET  /api/email/{internal_id}         — repo.get_email_full/get_metadata (EmailFull)
   GET  /api/email/{internal_id}/body    — repo.get_body             (EmailBody)
   GET  /api/email/search                — repo.search_email_bodies  (SearchResult)
+  GET  /api/email/contacts              — repo.suggest_contacts     (ContactSuggestResult)
   POST /api/email/draft                 — service MailWriteService.compose_draft (DraftResult)
   POST /api/email/send                  — service MailWriteService.send (SendResult)
   POST /api/email/{internal_id}/resync  — service MailWriteService.resync (ResyncResult|plan)
@@ -336,40 +337,36 @@ async def get_email_body(
 async def search_emails(
     request: Request,
     repo: "EmailRepository" = Depends(get_repository),
-    q: str = Query(..., description="自然语言关键词 或 FTS5 query 语法"),
+    q: str = Query(..., description="自然语言关键词，或 from:/subject:/after:/has:attachment 等查询语法"),
     mailbox: Optional[str] = Query(None),
     since: Optional[str] = Query(None, description="YYYY-MM-DD"),
     until: Optional[str] = Query(None, description="YYYY-MM-DD"),
     limit: int = Query(50, ge=1, le=SEARCH_LIMIT_MAX),
-    raw: bool = Query(False, description="true=直传 FTS5; false(默认)=CJK smart 改写"),
+    raw: bool = Query(False, description="true=直传 FTS5; false(默认)=查询语法 + CJK smart"),
 ):
     """FTS5 全文搜索邮件正文 + subject + sender。
 
-    默认 smart 模式 (CJK-aware query 改写); raw=true 走原 FTS5 syntax。
+    默认 smart 模式支持 Search Query DSL v1 + CJK-aware query 改写；
+    raw=true 走原 FTS5 syntax。
     data = SearchResult (前端 types.ts): {items, total_indexed, transformed_query?,
-    mode?}。meta += {query, mode, total_hits, limit, count, transformed_query?}
-    (镜像 CLI `email search` meta)。FTS 语法错误 → 空命中 (repo 内部吞掉)。
+    mode?, parse_warnings?}。meta += {query, mode, total_hits, limit, count,
+    transformed_query?, parse_warnings?} (镜像 CLI `email search` meta)。
+    FTS 语法错误 → 空命中 (repo 内部吞掉)。
 
     A5 (故意偏离 cli-schema): 本端点 ``data`` 是 SearchResult **对象** (含 total_indexed
     等), **非** CLI `email search` emit 的命中数组 —— 因前端 types.ts EmailApi.search
     返回 SearchResult。未来的 schema-conformance 测试勿据 cli-schema 数组形误报本端点。
     """
-    if raw:
-        hits = repo.search_email_bodies(
-            q, limit=limit, mailbox=mailbox, since_date=since, until_date=until
-        )
-        transformed_query = q
-    else:
-        from src.repository.email_repository import smart_query_transform
-
-        transformed_query = smart_query_transform(q)
-        hits = repo.search_email_bodies(
-            transformed_query,
-            limit=limit,
-            mailbox=mailbox,
-            since_date=since,
-            until_date=until,
-        )
+    search_result = repo.search_email_bodies_with_meta(
+        q,
+        mode="raw" if raw else "smart",
+        limit=limit,
+        mailbox=mailbox,
+        since_date=since,
+        until_date=until,
+    )
+    hits = search_result.hits
+    transformed_query = search_result.transformed_query
 
     items = [
         {
@@ -397,6 +394,8 @@ async def search_emails(
     transformed_changed = (not raw) and transformed_query != q
     if transformed_changed:
         data["transformed_query"] = transformed_query
+    if search_result.parse_warnings:
+        data["parse_warnings"] = search_result.parse_warnings
 
     meta_extra: dict[str, Any] = {
         "query": q,
@@ -408,9 +407,46 @@ async def search_emails(
     }
     if transformed_changed:
         meta_extra["transformed_query"] = transformed_query
+    if search_result.parse_warnings:
+        meta_extra["parse_warnings"] = search_result.parse_warnings
 
     return success_envelope(
         data, request=request, source="sqlite", meta_extra=meta_extra
+    )
+
+
+# ===========================================================================
+# GET /api/email/contacts — compose contact suggestions
+# ===========================================================================
+
+
+@router.get("/contacts", dependencies=[Depends(verify_cf_access)])
+async def suggest_contacts(
+    request: Request,
+    repo: "EmailRepository" = Depends(get_repository),
+    q: str = Query("", description="联系人搜索词，空值返回 score top"),
+    limit: int = Query(8, ge=1, le=50),
+    exclude: Optional[str] = Query(None, description="逗号分隔的本账号邮箱，需排除"),
+):
+    """compose 收件人自动补全候选。
+
+    data = {items:[{email,name?,score,last_seen?}]}；数据来自本地
+    email_metadata 聚合，不访问 davmail/GAL。
+    """
+    items = [
+        {
+            "email": item.email,
+            "name": item.name,
+            "score": item.score,
+            "last_seen": item.last_seen,
+        }
+        for item in repo.suggest_contacts(q, limit=limit, exclude=exclude)
+    ]
+    return success_envelope(
+        {"items": items},
+        request=request,
+        source="sqlite",
+        meta_extra={"query": q, "limit": limit, "count": len(items)},
     )
 
 

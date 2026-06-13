@@ -49,15 +49,22 @@ export type ResyncResult = MailagentEmailResync['data']
  * Both fields are required; an empty query still returns `items: []` plus
  * the cached `total_indexed`.
  *
- * PR-2a: 当 smart mode 改写了 query (CJK-aware FTS5 transform) 时,
- * transformed_query 含实际打给 FTS5 的 query, UI 可显示 "your query
- * '产品' was expanded to ..." 提示. 跟原 query 一样时省略.
+ * PR-2a/T2: smart mode 返回 parser/smart transform 后的实际查询表达式，
+ * 可能与原 query 相同；raw mode 通常省略。
  */
 export interface SearchResult {
   items: SearchHit[]
   total_indexed: number
   transformed_query?: string
+  parse_warnings?: string[]
   mode?: 'smart' | 'raw'
+}
+
+export interface ContactSuggestion {
+  email: string
+  name?: string
+  score: number
+  last_seen?: string
 }
 
 // ---- Sprint 2 frontend-only enriched views ---------------------------------
@@ -169,6 +176,10 @@ export interface SearchOpts {
   since?: string
   until?: string
   limit?: number
+  mode?: 'smart' | 'raw'
+  /** Cross-language fixture injection; production callers omit both fields. */
+  now?: string
+  tzOffsetMinutes?: number
 }
 
 export interface ResyncOpts {
@@ -324,6 +335,11 @@ export interface EmailApi {
    * "N of total_indexed" without a second IPC roundtrip.
    */
   search(opts: SearchOpts): Promise<SearchResult>
+  contactSuggest(
+    q: string,
+    limit?: number,
+    exclude?: string | string[]
+  ): Promise<ContactSuggestion[]>
   /** Sprint 5 — Notion resync via `mailagent email resync`. Returns whatever
    *  the CLI's `data` envelope contains (page_id, status, etc.). */
   resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult>

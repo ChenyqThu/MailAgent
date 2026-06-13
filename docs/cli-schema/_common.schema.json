@@ -93,7 +93,12 @@
         "total_hits": {"type": "integer", "minimum": 0},
         "limit": {"type": "integer", "minimum": 0},
         "offset": {"type": "integer", "minimum": 0},
-        "query": {"type": "string"}
+        "query": {"type": "string"},
+        "parse_warnings": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Search Query DSL parser warnings; omitted when empty."
+        }
       }
     },
     "iso_datetime_or_date": {

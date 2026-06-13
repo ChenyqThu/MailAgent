@@ -349,7 +349,13 @@
       "countLabel": "{n} / {total}",
       "untitled": "(无主题)",
       "emptyTitle": "未找到匹配的邮件",
-      "emptyHint": "试试更短的关键词,或中文加 * 后缀(如 产品*)"
+      "emptyHint": "试试更短的关键词，或中文加 * 后缀(如 产品*)",
+      "syntaxLabel": "按字段精确搜索",
+      "syntaxFrom": "发件人",
+      "syntaxAfter": "此日期后",
+      "syntaxHas": "带附件",
+      "syntaxUnread": "仅未读",
+      "syntaxHint": "可组合，如 from:张三 has:attachment"
     },
     "actions": {
       "subtitle": "对当前 {n, plural, one {# 个结果} other {# 个结果}}",

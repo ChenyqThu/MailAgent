@@ -38,7 +38,8 @@ Builders / contract:
   - source:         ``"sqlite"`` (repo/direct-SQLite reads) | ``"cli"`` (subprocess writes).
   - meta extras:    list/pagination → ``total`` / ``limit`` / ``offset`` / ``count``;
                     search → ``query`` / ``total_hits`` / ``total_indexed`` / ``mode`` /
-                    ``transformed_query``. Only set keys are emitted (no wall of nulls).
+                    ``transformed_query`` / ``parse_warnings``. Only set keys are emitted
+                    (no wall of nulls).
 
 This file intentionally defines **no symbols** — it is a docstring-only contract note.
 """

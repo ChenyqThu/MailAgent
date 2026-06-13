@@ -19,6 +19,13 @@ import {
   mapSentiment,
   parseLabels
 } from '@shared/lib/ai_mapping'
+import {
+  buildStructuredFilterPredicates,
+  parseSearchQuery,
+  type FilterPredicate,
+  type ParsedSearchQuery,
+  type TextTerm
+} from '@shared/lib/search_query_parser'
 import type { AIFields, EnrichedEmailMeta, MailboxSummary, SearchResult } from '@shared/api/types'
 import type {
   EmailList_EmailListItem,
@@ -66,6 +73,9 @@ export interface SearchOpts {
    * 含 FTS5 特殊字符的 query 即使 mode='smart' 也会自动判定 raw passthrough.
    */
   mode?: 'smart' | 'raw'
+  /** Cross-language fixture injection; production omits both fields. */
+  now?: string
+  tzOffsetMinutes?: number
 }
 
 // ── PR-2a: FTS5 query smart transform — CJK-aware natural-language → FTS5 ──
@@ -254,6 +264,66 @@ function notionUrl(pageId: string | null): string | null {
   // workspace-scoped prefix when the user supplies one.
   if (!pageId) return null
   return `https://www.notion.so/${pageId.replace(/-/g, '')}`
+}
+
+function shapeSearchHit(row: SearchRow): EmailSearch_SearchHit {
+  return {
+    internal_id: row.internal_id,
+    subject: row.subject ?? '',
+    sender: row.sender ?? '',
+    date_received: row.date_received,
+    mailbox: row.mailbox,
+    rank: row.rank,
+    snippet: row.snippet,
+    notion_page_id: row.notion_page_id,
+    notion_url: notionUrl(row.notion_page_id),
+    ai_priority: mapPriority(row.priority_raw),
+    lang: mapLanguage(row.lang_raw)
+  }
+}
+
+function quoteFtsValue(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`
+}
+
+function textTermToFts(term: TextTerm): string {
+  if (term.is_phrase || term.force_quoted || !isSimpleNaturalQuery(term.value)) {
+    return quoteFtsValue(term.value)
+  }
+  return smartQueryTransform(term.value)
+}
+
+function buildFtsOrGroup(group: TextTerm[]): string {
+  const parts = group.map(textTermToFts).filter((part) => part.length > 0)
+  if (parts.length <= 1) return parts[0] ?? ''
+  return `(${parts.map((part) => `(${part})`).join(' OR ')})`
+}
+
+function buildPositiveFtsExpr(parsed: ParsedSearchQuery): string {
+  const parts = [
+    ...parsed.fts_terms.map(textTermToFts),
+    ...parsed.fts_or_groups.map(buildFtsOrGroup)
+  ].filter((part) => part.length > 0)
+  return parts.join(' AND ')
+}
+
+function buildNegativeFtsExpr(parsed: ParsedSearchQuery): string {
+  const parts = parsed.neg_fts_terms.map(textTermToFts).filter((part) => part.length > 0)
+  return parts.map((part) => `(${part})`).join(' OR ')
+}
+
+function compileOrFilterGroups(groups: FilterPredicate[][]): FilterPredicate[] {
+  const predicates: FilterPredicate[] = []
+  for (const group of groups) {
+    const sqlParts: string[] = []
+    const params: unknown[] = []
+    for (const predicate of group) {
+      sqlParts.push(`(${predicate.sql})`)
+      params.push(...predicate.params)
+    }
+    if (sqlParts.length > 0) predicates.push({ sql: sqlParts.join(' OR '), params })
+  }
+  return predicates
 }
 
 function shapeListItem(row: EmailMetadataRow): EmailList_EmailListItem {
@@ -576,25 +646,18 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     return { items: [], total_indexed }
   }
   const mode: 'smart' | 'raw' = opts.mode ?? 'smart'
-  // PR-2a: smart 模式按 CJK-aware 规则改写; 'raw' / 含 FTS5 special char 时 passthrough
-  const effectiveQuery = mode === 'smart' ? smartQueryTransform(opts.query) : opts.query
   const db = getDb()
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
-  const filterClauses: string[] = []
-  const filterParams: unknown[] = []
-  if (opts.mailbox) {
-    filterClauses.push('m.mailbox = ?')
-    filterParams.push(opts.mailbox)
-  }
-  if (opts.since) {
-    filterClauses.push('m.date_received >= ?')
-    filterParams.push(opts.since)
-  }
-  if (opts.until) {
-    filterClauses.push('m.date_received <= ?')
-    filterParams.push(opts.until)
-  }
-  const filterSql = filterClauses.length === 0 ? '' : 'AND ' + filterClauses.join(' AND ')
+
+  const structured = buildStructuredFilterPredicates({
+    mailbox: opts.mailbox,
+    sinceDate: opts.since,
+    untilDate: opts.until,
+    now: opts.now,
+    tzOffsetMinutes: opts.tzOffsetMinutes
+  })
+  const parseWarnings: string[] = [...structured.warnings]
+
   // FTS5 bm25 returns negative scores where smaller (more negative) = more
   // relevant. We re-emit the value as-is per email-search.schema.json
   // convention ("bm25 score - 越小越相关").
@@ -604,7 +667,12 @@ export function searchEmails(opts: SearchOpts): SearchResult {
   // renders priority chip + lang-pip without a per-hit follow-up IPC.
   // LEFT (not INNER) so emails the LLM hasn't classified yet still appear
   // — those land with null priority + 'unknown' lang.
-  const sql = `
+  const runFtsSearch = (
+    effectiveQuery: string,
+    filters: FilterPredicate[],
+    negFtsExpr?: string
+  ): EmailSearch_SearchHit[] => {
+    let sql = `
     SELECT
       m.internal_id           AS internal_id,
       m.subject               AS subject,
@@ -621,28 +689,120 @@ export function searchEmails(opts: SearchOpts): SearchResult {
     FROM email_body_fts
     JOIN email_metadata m ON m.internal_id = email_body_fts.rowid
     LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
-    WHERE email_body_fts MATCH ?
-    ${filterSql}
+    WHERE email_body_fts MATCH ?`
+    const params: unknown[] = [effectiveQuery]
+    for (const predicate of filters) {
+      sql += ` AND (${predicate.sql})`
+      params.push(...predicate.params)
+    }
+    if (negFtsExpr) {
+      sql +=
+        ' AND m.internal_id NOT IN (' +
+        'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
+      params.push(negFtsExpr)
+    }
+    sql += `
     ORDER BY rank ASC
     LIMIT ?`
-  const rows = prep(db, sql).all(effectiveQuery, ...filterParams, limit) as SearchRow[]
-  const items: EmailSearch_SearchHit[] = rows.map((row) => ({
-    internal_id: row.internal_id,
-    subject: row.subject ?? '',
-    sender: row.sender ?? '',
-    date_received: row.date_received,
-    mailbox: row.mailbox,
-    rank: row.rank,
-    snippet: row.snippet,
-    notion_page_id: row.notion_page_id,
-    notion_url: notionUrl(row.notion_page_id),
-    ai_priority: mapPriority(row.priority_raw),
-    lang: mapLanguage(row.lang_raw)
-  }))
-  const result: SearchResult = { items, total_indexed, mode }
-  if (effectiveQuery !== opts.query) {
-    result.transformed_query = effectiveQuery
+    params.push(limit)
+    try {
+      const rows = prep(db, sql).all(...params) as SearchRow[]
+      return rows.map(shapeSearchHit)
+    } catch (err) {
+      console.warn('[email:search] invalid FTS5 query', effectiveQuery, err)
+      return []
+    }
   }
+
+  const runMetadataSearch = (
+    filters: FilterPredicate[],
+    negFtsExpr?: string
+  ): EmailSearch_SearchHit[] => {
+    let sql = `
+    SELECT
+      m.internal_id           AS internal_id,
+      m.subject               AS subject,
+      m.sender                AS sender,
+      m.date_received         AS date_received,
+      m.mailbox               AS mailbox,
+      0.0                     AS rank,
+      ''                      AS snippet,
+      m.notion_page_id        AS notion_page_id,
+      COALESCE(m.ai_priority,
+        CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.priority') END
+      ) AS priority_raw,
+      CASE WHEN json_valid(l.labels_json) THEN json_extract(l.labels_json, '$.language') END AS lang_raw
+    FROM email_metadata m
+    LEFT JOIN llm_processing l ON l.internal_id = m.internal_id
+    WHERE 1 = 1`
+    const params: unknown[] = []
+    for (const predicate of filters) {
+      sql += ` AND (${predicate.sql})`
+      params.push(...predicate.params)
+    }
+    if (negFtsExpr) {
+      sql +=
+        ' AND m.internal_id NOT IN (' +
+        'SELECT rowid FROM email_body_fts WHERE email_body_fts MATCH ?)'
+      params.push(negFtsExpr)
+    }
+    sql += `
+    ORDER BY datetime(m.date_received) DESC
+    LIMIT ?`
+    params.push(limit)
+    try {
+      const rows = prep(db, sql).all(...params) as SearchRow[]
+      return rows.map(shapeSearchHit)
+    } catch (err) {
+      console.warn('[email:search] invalid FTS5 query', negFtsExpr, err)
+      return []
+    }
+  }
+
+  let items: EmailSearch_SearchHit[]
+  let transformedQuery = opts.query
+
+  if (mode === 'raw') {
+    items = runFtsSearch(opts.query, structured.predicates)
+  } else {
+    const parsed = parseSearchQuery(opts.query, {
+      now: opts.now,
+      tzOffsetMinutes: opts.tzOffsetMinutes
+    })
+    parseWarnings.unshift(...parsed.warnings)
+
+    if (parsed.is_plain_passthrough) {
+      transformedQuery = smartQueryTransform(opts.query)
+      items = runFtsSearch(transformedQuery, structured.predicates)
+    } else {
+      const ftsExpr = buildPositiveFtsExpr(parsed)
+      const negFtsExpr = buildNegativeFtsExpr(parsed)
+      const filters: FilterPredicate[] = [
+        ...parsed.filters,
+        ...compileOrFilterGroups(parsed.or_filter_groups),
+        ...structured.predicates,
+        ...parsed.neg_filters.map((predicate) => ({
+          sql: `NOT (${predicate.sql})`,
+          params: predicate.params
+        }))
+      ]
+
+      if (!ftsExpr && !negFtsExpr && filters.length === 0) {
+        items = []
+      } else if (ftsExpr) {
+        transformedQuery = ftsExpr
+        items = runFtsSearch(ftsExpr, filters, negFtsExpr)
+      } else {
+        items = runMetadataSearch(filters, negFtsExpr)
+      }
+    }
+  }
+
+  const result: SearchResult = { items, total_indexed, mode }
+  if (mode === 'smart' || transformedQuery !== opts.query) {
+    result.transformed_query = transformedQuery
+  }
+  if (parseWarnings.length > 0) result.parse_warnings = parseWarnings
   return result
 }
 

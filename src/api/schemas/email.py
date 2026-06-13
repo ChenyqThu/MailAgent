@@ -175,14 +175,30 @@ class SearchResult(BaseModel):
 
     The CLI emits `data=[hits]` + `meta{query,total_hits,limit,total_indexed}`;
     the frontend's HttpApi reshapes it into `{items, total_indexed,
-    transformed_query?, mode?}`. The router builds this from the CLI/repo hits +
-    a `SELECT count(*) FROM email_body_fts` for `total_indexed`.
+    transformed_query?, mode?, parse_warnings?}`. The router builds this from the
+    CLI/repo hits + a `SELECT count(*) FROM email_body_fts` for `total_indexed`.
     """
 
     items: list[SearchHit]
     total_indexed: int = Field(..., ge=0)
     transformed_query: Optional[str] = None
     mode: Optional[Literal["smart", "raw"]] = None
+    parse_warnings: Optional[list[str]] = None
+
+
+class ContactSuggestion(BaseModel):
+    """`GET /api/email/contacts` item; compose 收件人自动补全候选。"""
+
+    email: str
+    name: Optional[str] = None
+    score: int = Field(..., ge=0)
+    last_seen: Optional[str] = None
+
+
+class ContactSuggestResult(BaseModel):
+    """`GET /api/email/contacts` data shape."""
+
+    items: list[ContactSuggestion]
 
 
 # --- email resync -----------------------------------------------------------

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mailagent.local/cli-schema/email-search.schema.json",
   "title": "mailagent email search",
-  "description": "RFC v2 §4.2 / §7.2 — FTS5 全文搜索结果",
+  "description": "RFC v2 §4.2 / §7.2 — FTS5 全文搜索结果（含 Search Query DSL v1）",
   "type": "object",
   "additionalProperties": false,
   "required": ["status", "schema_version", "data", "meta"],

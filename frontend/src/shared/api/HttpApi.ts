@@ -41,6 +41,7 @@ import type {
   EventsListOpts,
   CleanupDeadLetterOpts,
   ComposeDraftOpts,
+  ContactSuggestion,
   DavMailHealthData,
   DeadLetterItem,
   DeadLetterListOpts,
@@ -219,6 +220,17 @@ export class HttpApi implements MailApi {
           limit: opts.limit
         }
       }),
+
+    contactSuggest: async (
+      q: string,
+      limit?: number,
+      exclude?: string | string[]
+    ): Promise<ContactSuggestion[]> => {
+      const data = await this.req<{ items: ContactSuggestion[] }>('GET', '/email/contacts', {
+        query: { q, limit, exclude }
+      })
+      return data.items
+    },
 
     resync: (internalId: number, opts?: ResyncOpts): Promise<ResyncResult> =>
       // Server always adds --allow-concurrent, so E_PM2_RUNNING shouldn't

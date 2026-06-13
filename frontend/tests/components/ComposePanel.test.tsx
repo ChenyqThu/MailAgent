@@ -167,14 +167,17 @@ describe('ComposePanel — pre-fill + send flow', () => {
 describe('RecipientField — chip entry', () => {
   test('Enter commits a chip; × removes it; self email is filtered out', () => {
     const onChange = vi.fn()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
     const { rerender } = render(
-      <RecipientField
-        label="To"
-        values={[]}
-        placeholder="add"
-        onChange={onChange}
-        selfEmail="me@acme.com"
-      />
+      <QueryClientProvider client={qc}>
+        <RecipientField
+          label="To"
+          values={[]}
+          placeholder="add"
+          onChange={onChange}
+          selfEmail="me@acme.com"
+        />
+      </QueryClientProvider>
     )
     const input = screen.getByLabelText('To') as HTMLInputElement
 
@@ -192,13 +195,15 @@ describe('RecipientField — chip entry', () => {
     // remove an existing chip
     onChange.mockClear()
     rerender(
-      <RecipientField
-        label="To"
-        values={['bob@acme.com']}
-        placeholder="add"
-        onChange={onChange}
-        selfEmail="me@acme.com"
-      />
+      <QueryClientProvider client={qc}>
+        <RecipientField
+          label="To"
+          values={['bob@acme.com']}
+          placeholder="add"
+          onChange={onChange}
+          selfEmail="me@acme.com"
+        />
+      </QueryClientProvider>
     )
     fireEvent.click(screen.getByLabelText('remove bob@acme.com'))
     expect(onChange).toHaveBeenCalledWith([])
@@ -206,7 +211,7 @@ describe('RecipientField — chip entry', () => {
 
   test('comma-separated paste splits into multiple chips', () => {
     const onChange = vi.fn()
-    render(<RecipientField label="Cc" values={[]} placeholder="cc" onChange={onChange} />)
+    renderWithClient(<RecipientField label="Cc" values={[]} placeholder="cc" onChange={onChange} />)
     const input = screen.getByLabelText('Cc') as HTMLInputElement
     fireEvent.change(input, { target: { value: 'a@x.com, b@y.com' } })
     fireEvent.keyDown(input, { key: 'Enter' })
