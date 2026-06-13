@@ -293,7 +293,7 @@ function GeneratingState(): React.ReactElement {
         <span className="spin" style={{ color: 'rgb(var(--c-info))', display: 'flex' }}>
           <ReportIcon name="loader" size={18} />
         </span>
-        <span style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+        <span className="think-shimmer shimmer-neutral" style={{ fontSize: 15, fontWeight: 600 }}>
           {t('agents.reports.generating')}
         </span>
       </div>

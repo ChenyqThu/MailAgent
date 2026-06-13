@@ -651,7 +651,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   if (detailQ.isLoading) {
     return (
       <EmptyShell>
-        <div className="text-aux text-ink-fg-2 animate-pulse">Loading…</div>
+        <div className="text-aux think-shimmer shimmer-neutral">{t('emailDetail.loading')}</div>
       </EmptyShell>
     )
   }
@@ -849,9 +849,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
               </div>
             )}
             {isTranslating && (
-              <div className="mt-2 inline-flex items-center gap-2 text-aux text-ink-fg-2 animate-pulse">
-                <Languages size={13} strokeWidth={2} className="animate-spin" />
-                <span>{t('translate.loading')}</span>
+              <div className="mt-2 inline-flex items-center gap-2 text-aux text-ink-fg-2">
+                <Languages size={13} strokeWidth={2} />
+                <span className="think-shimmer shimmer-neutral">{t('translate.loading')}</span>
               </div>
             )}
             {translateError && (

@@ -51,6 +51,7 @@
     }
   },
   "emailDetail": {
+    "loading": "Loading…",
     "notionOpen": "Open",
     "threadCount": "{n, plural, =1 {1 in thread} other {# in thread}}",
     "viewSource": "View source (.eml)",

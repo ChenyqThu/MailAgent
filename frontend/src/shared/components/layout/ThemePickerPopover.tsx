@@ -27,12 +27,6 @@ const THEME_OPTIONS: ReadonlyArray<ThemeOption> = [
   { id: 'dark', icon: <Moon size={13} strokeWidth={2} /> }
 ]
 
-function CurrentIcon({ mode }: { mode: ThemeMode }): React.ReactElement {
-  if (mode === 'light') return <Sun size={11} strokeWidth={2} />
-  if (mode === 'dark') return <Moon size={11} strokeWidth={2} />
-  return <Monitor size={11} strokeWidth={2} />
-}
-
 export function ThemePickerPopover(): React.ReactElement {
   const { t } = useTranslation()
   const themeMode = useAppearance((s) => s.themeMode)
@@ -84,7 +78,17 @@ export function ThemePickerPopover(): React.ReactElement {
           'hover:bg-ink-3 hover:text-ink-fg-1 transition-colors duration-fast'
         )}
       >
-        <CurrentIcon mode={themeMode} />
+        <span className="icon-swap">
+          <span className="icon-swap-item" data-active={themeMode === 'light' ? 'true' : 'false'}>
+            <Sun size={11} strokeWidth={2} />
+          </span>
+          <span className="icon-swap-item" data-active={themeMode === 'dark' ? 'true' : 'false'}>
+            <Moon size={11} strokeWidth={2} />
+          </span>
+          <span className="icon-swap-item" data-active={themeMode === 'system' ? 'true' : 'false'}>
+            <Monitor size={11} strokeWidth={2} />
+          </span>
+        </span>
         <span>{t(`settings.theme.${themeMode}`)}</span>
       </button>
 

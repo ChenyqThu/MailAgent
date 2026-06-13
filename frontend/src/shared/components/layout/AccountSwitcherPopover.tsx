@@ -5,14 +5,17 @@
 // row-rendering loop needs to change — the popover frame, dismiss
 // behaviour, and animation stay the same.
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import type { DerivedAccount } from '@shared/lib/account'
 
 interface AccountSwitcherPopoverProps {
+  open: boolean
   account: DerivedAccount
   onClose: () => void
   onAddAccount: () => void
@@ -22,18 +25,26 @@ interface AccountSwitcherPopoverProps {
 }
 
 export function AccountSwitcherPopover({
+  open,
   account,
   onClose,
   onAddAccount,
   anchorRef
-}: AccountSwitcherPopoverProps): React.ReactElement {
+}: AccountSwitcherPopoverProps): React.ReactElement | null {
   const { t } = useTranslation()
-  const popoverRef = useRef<HTMLDivElement>(null)
+  // popover 进出场：无 backdrop，从顶部微展开（autoAlpha + y:-6 + scale）。
+  // scopeRef 同时充当 outside-click 命中判定的容器 ref。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top' },
+    enterDuration: DUR.fast
+  })
 
   useEffect(() => {
+    if (!open) return
     const onPointer = (e: MouseEvent): void => {
       const target = e.target as Node
-      if (popoverRef.current?.contains(target)) return
+      if (scopeRef.current?.contains(target)) return
       if (anchorRef?.current?.contains(target)) return
       onClose()
     }
@@ -46,11 +57,13 @@ export function AccountSwitcherPopover({
       document.removeEventListener('mousedown', onPointer)
       document.removeEventListener('keydown', onKey)
     }
-  }, [onClose, anchorRef])
+  }, [open, onClose, anchorRef, scopeRef])
+
+  if (!shouldRender) return null
 
   return (
     <div
-      ref={popoverRef}
+      ref={scopeRef}
       role="menu"
       aria-label={t('nav.account.tooltip', { email: account.localPart })}
       className={cn(

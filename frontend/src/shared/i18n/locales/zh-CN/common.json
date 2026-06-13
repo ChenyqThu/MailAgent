@@ -51,6 +51,7 @@
     }
   },
   "emailDetail": {
+    "loading": "加载中…",
     "notionOpen": "打开",
     "threadCount": "本对话 {n, plural, =1 {1 封} other {# 封}}",
     "viewSource": "查看原文 (.eml)",

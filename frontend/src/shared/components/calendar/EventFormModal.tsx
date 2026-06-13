@@ -153,6 +153,11 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
     card: '.efm-modal'
   })
+  // Phase 4·#3c scope 对话退场动画（居中模态模式）
+  const { shouldRender: scopeDlgRender, scopeRef: scopeDlgRef } = useExitAnimation<HTMLDivElement>(
+    scopeDialogOpen,
+    { card: '[data-anim-card]' }
+  )
 
   // 打开时预填 / 重置
   useEffect(() => {
@@ -705,8 +710,9 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       </div>
 
       {/* Phase 4·#3c — 周期事件 scope 对话 (改这一次 / 整个系列) */}
-      {scopeDialogOpen && (
+      {scopeDlgRender && (
         <div
+          ref={scopeDlgRef}
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40"
           role="dialog"
           aria-modal="true"
@@ -714,7 +720,7 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             if (e.target === e.currentTarget) setScopeDialogOpen(false)
           }}
         >
-          <div className="glass-pop p-5 rounded-xl max-w-[340px] mx-4">
+          <div data-anim-card className="glass-pop p-5 rounded-xl max-w-[340px] mx-4">
             <div className="text-lead text-ink-fg font-medium mb-1">
               {t('calendar.form.recurrenceScope.title', '周期事件')}
             </div>

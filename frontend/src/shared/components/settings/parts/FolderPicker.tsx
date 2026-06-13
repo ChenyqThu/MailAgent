@@ -37,6 +37,7 @@ import {
 
 import type { FolderCleanupResult, FolderInfo, FolderTreeNode } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useEnvStore } from '@shared/state/env'
 import { useEmailFilter } from '@shared/state/email-filter'
 import { useRestartStore } from '@shared/state/restart'
@@ -707,6 +708,11 @@ export function FolderPicker(): React.ReactElement {
   const [editBusy, setEditBusy] = React.useState(false)
   const [deleteTarget, setDeleteTarget] = React.useState<FolderTreeNode | null>(null)
   const [deleting, setDeleting] = React.useState(false)
+  // 退场动画期间 deleteTarget 会置 null，用 lastDeleteTarget 保留最后非 null 值供渲染
+  const [lastDeleteTarget, setLastDeleteTarget] = React.useState<FolderTreeNode | null>(null)
+  const renderDeleteTarget = deleteTarget ?? lastDeleteTarget
+  const { shouldRender: deleteDlgRender, scopeRef: deleteDlgRef } =
+    useExitAnimation<HTMLDivElement>(deleteTarget !== null, { card: '[data-anim-card]' })
 
   const openMenu = React.useCallback((imapName: string | null): void => {
     setMenuFor(imapName)
@@ -779,6 +785,7 @@ export function FolderPicker(): React.ReactElement {
 
   const requestDelete = React.useCallback((node: FolderTreeNode): void => {
     setMenuFor(null)
+    setLastDeleteTarget(node)
     setDeleteTarget(node)
   }, [])
 
@@ -988,13 +995,17 @@ export function FolderPicker(): React.ReactElement {
       )}
 
       {/* 删除二次确认弹窗 (P4 · 界面⑤) — 危险态 + 影响说明 + Exchange 回写警示。 */}
-      {deleteTarget ? (
+      {deleteDlgRender && renderDeleteTarget && (
         <div
+          ref={deleteDlgRef}
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
           role="dialog"
           aria-modal="true"
         >
-          <div className="w-full max-w-md rounded-xl border border-ink-border bg-ink-1 shadow-md overflow-hidden">
+          <div
+            data-anim-card
+            className="w-full max-w-md rounded-xl border border-ink-border bg-ink-1 shadow-md overflow-hidden"
+          >
             <div className="px-5 pt-5 pb-4">
               <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-fail/12 text-fail mb-3">
                 <Trash2 size={18} strokeWidth={1.75} />
@@ -1002,15 +1013,15 @@ export function FolderPicker(): React.ReactElement {
               <h3 className="text-aux font-semibold text-ink-fg">
                 {t('settings.folder.picker.manage.deleteTitle', {
                   defaultValue: '删除文件夹「{name}」？',
-                  name: deleteTarget.display_name
+                  name: renderDeleteTarget.display_name
                 })}
               </h3>
               <p className="text-meta text-ink-fg-1 mt-2 leading-relaxed">
-                {typeof deleteTarget.message_count === 'number'
+                {typeof renderDeleteTarget.message_count === 'number'
                   ? t('settings.folder.picker.manage.deleteBodyWithCount', {
                       defaultValue:
                         '将删除 Exchange 上的该文件夹，以及本地已同步的 {count} 封邮件副本。此操作不可撤销。',
-                      count: deleteTarget.message_count
+                      count: renderDeleteTarget.message_count
                     })
                   : t('settings.folder.picker.manage.deleteBody', {
                       defaultValue:
@@ -1056,7 +1067,7 @@ export function FolderPicker(): React.ReactElement {
             </div>
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   )
 }
