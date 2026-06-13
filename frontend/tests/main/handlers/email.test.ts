@@ -363,18 +363,19 @@ describe('searchEmails smart mode (PR-2a)', () => {
   test('explicit FTS5 syntax passes through unchanged in smart mode', () => {
     const r = handlers.searchEmails({ query: '产品*' })
     expect(r.mode).toBe('smart')
-    // 含 wildcard → smartQueryTransform 判 raw passthrough, transformed_query 不应设置
-    expect(r.transformed_query).toBeUndefined()
+    // 含 wildcard → smartQueryTransform passthrough 不改写查询;
+    // 新 search DSL 契约 (PR #28): smart 模式 transformed_query 恒回填 effective query,
+    // 即便等于原查询 (旧 PR-2a 契约是 passthrough 时 undefined, 已被 #28 取代)。
+    expect(r.transformed_query).toBe('产品*')
   })
 
   test('smart mode equivalence with raw for plain latin', () => {
     const smart = handlers.searchEmails({ query: 'redis' })
     const raw = handlers.searchEmails({ query: 'redis', mode: 'raw' })
-    expect(smart.items.map((i) => i.internal_id)).toEqual(
-      raw.items.map((i) => i.internal_id)
-    )
-    // 单 token latin → transform 不变化, 没 transformed_query
-    expect(smart.transformed_query).toBeUndefined()
+    expect(smart.items.map((i) => i.internal_id)).toEqual(raw.items.map((i) => i.internal_id))
+    // 单 token latin → transform 不改写查询 (smart 与 raw 命中等价);
+    // 新 search DSL 契约 (PR #28): smart 模式仍恒回填 effective query (raw 模式才不回填)。
+    expect(smart.transformed_query).toBe('redis')
   })
 })
 
