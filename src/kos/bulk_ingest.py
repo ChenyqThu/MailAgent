@@ -198,7 +198,12 @@ class KOSBulkIngester:
             raise RuntimeError(
                 "bulk KOSClient not configured — 检查 MAILAGENT_BULK_CLIENT_ID/SECRET + KOS_MCP_BASE"
             )
-        candidates = self._candidates(limit, retry_failed, require_body)
+        # priority_floor 启用时，limit 作用在「实际 ingest 数」而非「候选数」：否则 SQL 先
+        # 按 internal_id DESC 截断 limit 个候选、再按 priority 跳过，会让带 --limit 的分批
+        # 永远卡在最近一批低优先邮件上（codex review HIGH）。故有 floor 时取全部候选、由循环
+        # 累计 pushed 到 limit；无 floor 时 SQL LIMIT 截断（候选=处理，等价）。
+        floor_active = bool(self.priority_floor and self.priority_floor != "low")
+        candidates = self._candidates(None if floor_active else limit, retry_failed, require_body)
         stats = {
             "total": len(candidates),
             "pushed": 0,
@@ -213,6 +218,10 @@ class KOSBulkIngester:
         )
 
         for i, iid in enumerate(candidates, 1):
+            # floor 启用 + 带 limit：累计到 limit 个实际 ingest（pushed，含 dry-run）就停 ——
+            # priority 跳过的不计入 limit，故分批不会被低优先批卡死（codex review HIGH）。
+            if floor_active and limit and stats["pushed"] >= limit:
+                break
             # 排除低优先噪音 (与增量 producer priority_at_or_above 同语义;
             # 未分类/无 priority → 视为 normal → 保留)。floor='low' 时不过滤。
             if self.priority_floor and self.priority_floor != "low":
