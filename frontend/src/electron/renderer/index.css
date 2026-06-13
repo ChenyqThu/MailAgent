@@ -4623,6 +4623,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
+  /* inline-block 是 load-bearing: bg-clip-text 渐变在纯 inline 元素上不随
+     background-position 动画移动 (背景盒按行内片段裂开, 无可视位移) → "有文字、无
+     shimmer"。给独立块盒后 sweep 才生效 (chat 思考态 + 报告生成态两处之前都因缺这行
+     不显)。flex 子项不受影响 (本就 blockify)。 */
+  display: inline-block;
   animation: chat-think-shimmer 1.5s linear infinite;
 }
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
