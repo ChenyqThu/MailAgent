@@ -283,8 +283,9 @@ function buildStableSystemPrompt(
       '# Read silently; never echo back.\n\n' +
       cfg.userContext
   }
-  // KOS consumer 开启时注入使用指南（静态、可缓存；与 allKosTools 注册同 gate）。
-  if (cfg.kosConsumerEnabled) {
+  // KOS 可用（启用 AND 对接，= kosConfigured）时注入使用指南（静态、可缓存；与 allKosTools
+  // 注册同 gate —— 开关开着但凭据未对接时都不注入，避免 prompt 叫 AI 用未注册的工具）。
+  if (cfg.kosConfigured) {
     text += '\n\n' + buildKosGuidanceBlock()
   }
   if (cfg.kosL1HotBlockEnabled && ctx?.senderAddr) {

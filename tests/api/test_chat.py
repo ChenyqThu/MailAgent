@@ -324,6 +324,26 @@ def test_chat_config_kos_enabled_but_not_connected(
     assert data["kosConfigured"] is False  # 未对接 → 不注入
 
 
+def test_chat_config_kos_cleared_via_env_overrides_stale_os_environ(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """修 review LOW：.env 显式清空某凭据 (KEY=) 即以 .env 为准 → kosConfigured 翻 False，
+    不被 os.environ 启动注入的 stale 旧值覆盖 (clear-to-disable)。仅 key 完全不在 .env 时
+    才回退 os.environ。"""
+    # os.environ 模拟 serve-api 启动注入的旧凭据（齐全）
+    monkeypatch.setenv("KOS_MCP_BASE", "https://old.kos")
+    monkeypatch.setenv("KOS_OAUTH_CLIENT_ID", "gbrain_cl_old")
+    monkeypatch.setenv("KOS_OAUTH_CLIENT_SECRET", "gbrain_cs_old")
+    env = tmp_path / ".env"
+    # 开关开 + .env 显式清空 endpoint（KEY=）；另两个不在 .env → 回退 os.environ 仍有值
+    env.write_text("MAILAGENT_KOS_CONSUMER_ENABLED=true\nKOS_MCP_BASE=\n")
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["kosConsumerEnabled"] is True
+    # endpoint 被 .env 显式清空 → 凭据不齐 → 未对接（不被 os.environ 旧值救回）
+    assert data["kosConfigured"] is False
+
+
 def test_chat_config_user_context_injected(monkeypatch: pytest.MonkeyPatch) -> None:
     """task 06-08-chat 第二波 Bug B — ContextLoader 返回非空 markdown 时 userContext
     原样透传（custom-api system prompt 注入用户身份/Sender Priority）。"""

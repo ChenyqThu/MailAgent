@@ -410,6 +410,7 @@ export class HttpChatPlatform
     return {
       defaultModel: this.config.defaultModel,
       kosConsumerEnabled: this.config.kosConsumerEnabled,
+      kosConfigured: this.config.kosConfigured,
       kosL1HotBlockEnabled: this.config.kosL1HotBlockEnabled,
       // task 06-08-chat 第二波 Bug B — "" → null (not injected). custom_api
       // buildStableSystemPrompt only injects when non-null + non-empty.

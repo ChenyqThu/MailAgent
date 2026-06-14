@@ -128,8 +128,13 @@ export interface LlmFetchRequest {
 export interface ChatModelConfig {
   /** req.model 为 null 时的默认（electron: getLlmModel()=LLM_MODEL/claude-sonnet-4-6）。 */
   defaultModel: string
-  /** 注入 KOS 使用指南块（buildKosGuidanceBlock gate；MAILAGENT_KOS_CONSUMER_ENABLED）。 */
+  /** KOS consumer 原始开关（MAILAGENT_KOS_CONSUMER_ENABLED）。仅状态展示用；注入 gate
+   *  一律用 kosConfigured（开关 AND 凭据），勿再用本字段 gate 工具 / 指南。 */
   kosConsumerEnabled: boolean
+  /** KOS 工具真正可用 = 启用 AND 凭据齐全（serve-api kosConfigured = consumer AND
+   *  KOS_MCP_BASE/CLIENT_ID/CLIENT_SECRET 非空）。buildKosGuidanceBlock 注入 + 9 个 KOS
+   *  工具注册同 gate 它 —— 开关开着但未对接时都不注入，避免叫 AI 用未注册的工具。 */
+  kosConfigured: boolean
   /** 注入 L1 sender digest hot block gate（MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED）。 */
   kosL1HotBlockEnabled: boolean
   /** task 06-08-chat 第二波 Bug B — Notion context page markdown (user profile /

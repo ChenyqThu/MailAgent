@@ -201,9 +201,11 @@ async def chat_config(request: Request):
     原样覆盖 DEFAULT_HTTP_CONFIG（D-3c-3：配置以 serve-api 为准）。data 形状 =
     HttpPlatformConfig（frontend/src/shared/chat/http_platform.ts），camelCase 对齐前端。
 
-    ``kosConfigured`` = ``kos_consumer_enabled``（对齐 electron kosConfig().configured =
-    isKosConsumerEnabled() —— createBuiltinTools 据此 gate 9 个 KOS 工具注册；**非**
-    OAuth 凭据齐的 ``_kos_available``，后者 gate 的是 [✨ 保存到 KOS] 按钮）。
+    ``kosConsumerEnabled`` = 原始开关；``kosConfigured`` = 开关 AND OAuth 凭据齐全
+    （KOS_MCP_BASE + KOS_OAUTH_CLIENT_ID + KOS_OAUTH_CLIENT_SECRET 三者非空，对齐
+    ``_kos_available``）。renderer createBuiltinTools 据 ``kosConfigured`` gate 9 个 KOS
+    工具注册，custom_api KOS 使用指南块也同 gate —— 开关开着但未对接时都不注入，避免叫
+    AI 用未注册的工具（``[✨ 保存到 KOS]`` 按钮仍单独由 ``_kos_available`` gate）。
     """
     cfg = get_settings()
     # 归一化对齐 electron chat/config.ts getter 的防御（malformed/empty env 不漂移 ——
@@ -263,9 +265,15 @@ async def chat_config(request: Request):
     # renderer createBuiltinTools 据 kosConfigured 决定是否注册 9 个 KOS 工具 —— 开关开着却
     # 没配凭据（新用户 / 未对接）时不注入，避免注册了必然调用失败的工具。凭据热读 .env 为准、
     # os.environ（启动注入）兜底，与 enabledModels / kos 开关同样支持改 .env 即时生效。
+    def _kos_cred(k: str) -> str:
+        # .env 显式存在该 key（含空字符串）即以 .env 为准 → 用户在 Settings 清空某凭据即时
+        # 禁用（kosConfigured 翻 False）；仅 key 完全不在 .env 时才回退 os.environ（serve-api
+        # 启动注入值）。修 review LOW：旧 `env_vals.get(k) or os.environ.get(k)` 会让 .env
+        # 显式空被 os.environ stale 值覆盖、清不掉。
+        return ((env_vals[k] if k in env_vals else os.environ.get(k)) or "").strip()
+
     kos_creds = all(
-        (env_vals.get(k) or os.environ.get(k) or "").strip()
-        for k in ("KOS_MCP_BASE", "KOS_OAUTH_CLIENT_ID", "KOS_OAUTH_CLIENT_SECRET")
+        _kos_cred(k) for k in ("KOS_MCP_BASE", "KOS_OAUTH_CLIENT_ID", "KOS_OAUTH_CLIENT_SECRET")
     )
     kos_configured = kos_consumer and kos_creds
     return success_envelope(
