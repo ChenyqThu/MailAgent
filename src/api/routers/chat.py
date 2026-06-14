@@ -181,6 +181,18 @@ async def kos_available(request: Request):
     return success_envelope(_kos_available(), request=request, source="sqlite")
 
 
+def _hot_bool(env_vals: Dict[str, Any], key: str, fallback: bool) -> bool:
+    """从 dotenv_values dict 热读 bool（.env 为准），未设/空/malformed → fallback
+    （cfg singleton 值，不漂移）。对齐 electron readEnvBool（'1'/'true' → true），
+    并容 yes/on/0/false/no/off。用于 KOS 开关：serve-api 启动后才改 .env 也即时生效。"""
+    raw = (env_vals.get(key) or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return fallback
+
+
 @router.get("/config", dependencies=[Depends(verify_cf_access)])
 async def chat_config(request: Request):
     """chat 运行配置快照（V2.1 阶段 3c — renderer 构造 HttpChatPlatform 前预取）。
@@ -226,27 +238,36 @@ async def chat_config(request: Request):
         )
     except Exception:  # noqa: BLE001 — context is best-effort; never fail /config
         user_context = ""
-    # enabledModels: hot-read LLM_ENABLED_MODELS from .env (dotenv_values, not pydantic
-    # Config) so changes take effect without a serve-api restart — same pattern as
-    # 155eb006 (SYNC_FOLDERS hot-read). Best-effort: empty list on any error.
+    # enabledModels + KOS 开关: hot-read from .env (dotenv_values, not pydantic Config
+    # singleton) so changes take effect without a serve-api restart — same pattern as
+    # 155eb006 (SYNC_FOLDERS hot-read). 🔴 KOS 开关曾用 cfg.* singleton: serve-api 启动
+    # 后才往 app .env 加 MAILAGENT_KOS_CONSUMER_ENABLED → import-time config 缓存 stale
+    # false → /config 永远 kosConfigured:false → renderer createBuiltinTools 不注册 9 个
+    # KOS 工具（chat AI "没有 kos 工具"）。热读 .env 为准、cfg.* 兜底，根治该 stale。
     enabled_models: list = []
+    env_vals: Dict[str, Any] = {}
     try:
         env_path = get_env_file_path()
         if env_path:
-            raw = dotenv_values(env_path).get("LLM_ENABLED_MODELS") or ""
+            env_vals = dotenv_values(env_path) or {}
+            raw = env_vals.get("LLM_ENABLED_MODELS") or ""
             enabled_models = [m.strip() for m in raw.split(",") if m.strip()]
     except Exception:  # noqa: BLE001 — best-effort; never fail /config
         enabled_models = []
+        env_vals = {}
+    kos_consumer = _hot_bool(env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", cfg.kos_consumer_enabled)
+    kos_l1_hot = _hot_bool(env_vals, "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED", cfg.kos_l1_hot_block_enabled)
+    kos_time_decay = _hot_bool(env_vals, "MAILAGENT_KOS_TIME_DECAY_ENABLED", cfg.kos_time_decay_enabled)
     return success_envelope(
         {
             "maxIter": max_iter,
             "maxCostUsd": max_cost,
             "harnessEnabled": cfg.agent_harness_enabled,
-            "kosL1HotBlockEnabled": cfg.kos_l1_hot_block_enabled,
+            "kosL1HotBlockEnabled": kos_l1_hot,
             "defaultModel": default_model,
-            "kosConsumerEnabled": cfg.kos_consumer_enabled,
-            "kosConfigured": cfg.kos_consumer_enabled,
-            "kosTimeDecayEnabled": cfg.kos_time_decay_enabled,
+            "kosConsumerEnabled": kos_consumer,
+            "kosConfigured": kos_consumer,
+            "kosTimeDecayEnabled": kos_time_decay,
             "userContext": user_context,
             "enabledModels": enabled_models,
         },

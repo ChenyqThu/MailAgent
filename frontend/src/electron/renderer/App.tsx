@@ -19,7 +19,6 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { ToastContainer } from '@shared/components/Toast'
 import { UpdateReadyBanner } from '@shared/components/UpdateReadyBanner'
 import { PopoutShell } from '@shared/components/chat/PopoutShell'
-import { ShimmerDriver } from '@shared/components/ShimmerDriver'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
 import { usePopoutMode } from '@shared/state/popout-mode'
 
@@ -118,10 +117,6 @@ export default function App(): React.ReactElement {
             fire success/error/long-task toasts via the shared store.
             Toast is router-agnostic, so it stays outside the router. */}
         <ToastContainer />
-        {/* shimmer 全局驱动 — JS 每帧写 background-position 绕过 Electron 屏幕硬件
-            合成对 bg-clip-text + CSS animation 的纹理缓存 bug（见 ShimmerDriver 注释）。
-            root 级单挂一次, 覆盖 chat / 邮件详情 / 报告 三处 think-shimmer。 */}
-        <ShimmerDriver />
         {/* 主题 v2 — 静态噪点层 (fixed 全窗, mix-blend overlay/multiply)。
             根级单挂一次覆盖主窗 + popout 两种 shell; solid / reduced-
             transparency 下由 CSS display:none 关闭。🔴 禁止动画此层。 */}

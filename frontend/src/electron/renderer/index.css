@@ -4610,25 +4610,40 @@ body:not([data-batch-mode='true']) .email-row .cb {
    *文字类* in-progress 标签（思考中/翻译中/生成中/Loading）统一用本类。
    高光色经 --shimmer-hl 可换：AI 语境默认 --c-ai；非 AI 的纯加载文案挂
    .shimmer-neutral 切 ink-fg 中性高光，不蹭 AI 紫。 */
-@keyframes chat-think-shimmer { to { background-position: -200% center; } }
+/* 思考态流光 — transform 横扫高光带（GPU 合成线程原生, 真实屏幕保证逐帧重绘）。
+   ⚠️ 旧实现 bg-clip-text + @keyframes 动 background-position: 在 Electron macOS 真实
+   屏幕硬件 GPU 合成下, 文字裁切层被光栅化成纹理后缓存、background-position 更新不触发
+   重新光栅化（Chromium 已知 bug, CSS WG #9563）→ 文字在却不流光; 改用 GSAP 每帧写 inline
+   background-position 同样绕不过该纹理缓存（已验真机无效）。唯一在 GPU 合成下保证逐帧
+   重绘的是 transform（合成线程直接变换, 不经 main-thread raster）→ 高光做成 ::after 渐变
+   带 translateX 横扫; overflow:hidden 裁到文字盒避免外溢; mix-blend-mode plus-lighter +
+   isolation 让高光只提亮本元素文字。base 文字实色保证 reduce/兜底始终可读。 */
+@keyframes chat-think-shimmer {
+  from { transform: translateX(-130%); }
+  to   { transform: translateX(330%); }
+}
 .think-shimmer {
+  position: relative;
+  display: inline-block;
+  color: rgb(var(--ink-fg-2));
+  -webkit-text-fill-color: rgb(var(--ink-fg-2));
+  overflow: hidden;
+  isolation: isolate;
+}
+.think-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 42%;
   background: linear-gradient(
     90deg,
-    rgb(var(--ink-fg-2)) 30%,
-    rgb(var(--shimmer-hl, var(--c-ai))) 55%,
-    rgb(var(--ink-fg-2)) 75%
+    transparent 0%,
+    rgb(var(--shimmer-hl, var(--c-ai))) 50%,
+    transparent 100%
   );
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  /* inline-block 是 load-bearing: bg-clip-text 渐变在纯 inline 元素上不随
-     background-position 动画移动 (背景盒按行内片段裂开, 无可视位移) → "有文字、无
-     shimmer"。给独立块盒后 sweep 才生效 (chat 思考态 + 报告生成态两处之前都因缺这行
-     不显)。flex 子项不受影响 (本就 blockify)。 */
-  display: inline-block;
-  animation: chat-think-shimmer 1.5s linear infinite;
+  mix-blend-mode: plus-lighter;
+  pointer-events: none;
+  animation: chat-think-shimmer 1.4s linear infinite;
 }
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
 @keyframes chat-think-blink { 50% { opacity: 0; } }
@@ -4777,14 +4792,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
 
 @media (prefers-reduced-motion: reduce) {
   .spin > *, .shimmer, .email-flash, .think-shimmer, .think-caret { animation: none !important; }
+  /* base 文字已是实色 (color/-webkit-text-fill-color: ink-fg-2)，隐藏扫光带即静态可读。 */
+  .think-shimmer::after { animation: none !important; display: none; }
   .icon-swap-item { transition: none !important; }
-  /* No shimmer sweep → fall back to a plain solid head color (otherwise the
-     bg-clip text would render transparent). */
-  .think-shimmer {
-    background: none;
-    -webkit-text-fill-color: rgb(var(--ink-fg-2));
-    color: rgb(var(--ink-fg-2));
-  }
   /* Hide the (now non-blinking) caret so it doesn't read as a stuck cursor. */
   .think-caret { display: none; }
 }

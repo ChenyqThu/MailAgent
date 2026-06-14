@@ -235,9 +235,14 @@ class _ChatConfigStub:
 
 
 def _config_client(
-    monkeypatch: pytest.MonkeyPatch, cfg: object, user_context: str = ""
+    monkeypatch: pytest.MonkeyPatch, cfg: object, user_context: str = "",
+    env_file: object = None,
 ) -> TestClient:
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: cfg)
+    # /config 热读 .env（kos 开关 + enabledModels，dotenv_values 绕 singleton）。测试默认
+    # 隔离：env_file=None → get_env_file_path 返回 None → 热读 fallback 到 stub cfg，避免
+    # 读开发机真实 .env（否则 MAILAGENT_KOS_* 等真实值会污染 stub）。需测热读时传临时 .env。
+    monkeypatch.setattr("src.api.routers.chat.get_env_file_path", lambda: env_file)
     # task 06-08-chat 第二波 Bug B — stub the lazy ContextLoader so /config tests
     # don't hit Notion. Patch the _get_context_loader accessor (the singleton is
     # lazy / None until first use). Default "" (not configured); override per-test.
@@ -269,6 +274,28 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "userContext": "",
         "enabledModels": [],
     }
+
+
+def test_chat_config_kos_hot_read_overrides_stale_singleton(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """🔴 回归：serve-api 启动后才往 .env 加 MAILAGENT_KOS_CONSUMER_ENABLED=true 时，
+    import-time config singleton 仍是 stale false。/config 改热读 .env 为准 → kosConfigured
+    随 .env 即时翻 true（不必重启 serve-api），renderer createBuiltinTools 据此注册 9 个
+    KOS 工具。未在 .env 的开关 fallback 到 cfg singleton（不漂移）。"""
+    env = tmp_path / ".env"
+    env.write_text(
+        "MAILAGENT_KOS_CONSUMER_ENABLED=true\n"
+        "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED=true\n"
+    )
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    # .env 为准：stub cfg 两个开关均 False，被 .env 的 true 覆盖
+    assert data["kosConsumerEnabled"] is True
+    assert data["kosConfigured"] is True
+    assert data["kosL1HotBlockEnabled"] is True
+    # 未在 .env → fallback 到 cfg（_ChatConfigStub.kos_time_decay_enabled = True）
+    assert data["kosTimeDecayEnabled"] is True
 
 
 def test_chat_config_user_context_injected(monkeypatch: pytest.MonkeyPatch) -> None:
