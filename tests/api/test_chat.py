@@ -276,26 +276,52 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
 
+def _clear_kos_creds_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """隔离 os.environ 的真实 KOS 凭据（开发机 .env 已注入），让 kosConfigured 只由
+    被测 .env 决定。chat_config 读凭据 = env_vals(.env) or os.environ。"""
+    for k in ("KOS_MCP_BASE", "KOS_OAUTH_CLIENT_ID", "KOS_OAUTH_CLIENT_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+
+
 def test_chat_config_kos_hot_read_overrides_stale_singleton(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    """🔴 回归：serve-api 启动后才往 .env 加 MAILAGENT_KOS_CONSUMER_ENABLED=true 时，
+    """🔴 回归：serve-api 启动后才往 .env 加 MAILAGENT_KOS_CONSUMER_ENABLED=true + 凭据时，
     import-time config singleton 仍是 stale false。/config 改热读 .env 为准 → kosConfigured
     随 .env 即时翻 true（不必重启 serve-api），renderer createBuiltinTools 据此注册 9 个
-    KOS 工具。未在 .env 的开关 fallback 到 cfg singleton（不漂移）。"""
+    KOS 工具。kosConfigured = 启用 AND 凭据齐全（endpoint+client_id+secret）。"""
+    _clear_kos_creds_env(monkeypatch)
     env = tmp_path / ".env"
     env.write_text(
         "MAILAGENT_KOS_CONSUMER_ENABLED=true\n"
         "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED=true\n"
+        "KOS_MCP_BASE=https://kos.example\n"
+        "KOS_OAUTH_CLIENT_ID=gbrain_cl_test\n"
+        "KOS_OAUTH_CLIENT_SECRET=gbrain_cs_test\n"
     )
     with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
         data = c.get("/api/chat/config").json()["data"]
-    # .env 为准：stub cfg 两个开关均 False，被 .env 的 true 覆盖
+    # .env 为准：stub cfg 两个开关均 False，被 .env 的 true 覆盖；凭据齐 → configured
     assert data["kosConsumerEnabled"] is True
     assert data["kosConfigured"] is True
     assert data["kosL1HotBlockEnabled"] is True
     # 未在 .env → fallback 到 cfg（_ChatConfigStub.kos_time_decay_enabled = True）
     assert data["kosTimeDecayEnabled"] is True
+
+
+def test_chat_config_kos_enabled_but_not_connected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """🔴 用户需求：开了 consumer 开关但没配 KOS 凭据（未对接）→ kosConfigured=False，
+    renderer 不注册 KOS 工具（避免注册了必然调用失败的工具）。kosConsumerEnabled 仍反映
+    开关真值（True），UI 可据此显示「已启用但未对接」。"""
+    _clear_kos_creds_env(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text("MAILAGENT_KOS_CONSUMER_ENABLED=true\n")  # 开关开，无凭据
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert data["kosConsumerEnabled"] is True  # 开关真值
+    assert data["kosConfigured"] is False  # 未对接 → 不注入
 
 
 def test_chat_config_user_context_injected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -350,14 +376,19 @@ def test_chat_config_user_context_timeout_degrades(
     assert r.json()["data"]["userContext"] == ""
 
 
-def test_chat_config_kos_configured_mirrors_consumer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """kosConfigured == kosConsumerEnabled（同源 MAILAGENT_KOS_CONSUMER_ENABLED，对齐
-    electron kosConfig().configured = isKosConsumerEnabled()，gate 9 KOS 工具注册；
-    **非** OAuth 凭据齐的 _kos_available，那个 gate 的是 [✨ 保存到 KOS] 按钮）。"""
+def test_chat_config_kos_configured_requires_consumer_and_creds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """kosConfigured = consumer 开关 AND OAuth 凭据齐全（注入 gate 从旧「纯镜像 consumer」
+    收紧为「启用 AND 对接」）。凭据可来自 os.environ（启动注入）兜底 —— 此处 consumer=True
+    + 三凭据置于 os.environ → configured True（覆盖 .env 之外的 os.environ 兜底路径）。"""
 
     class _Stub(_ChatConfigStub):
         kos_consumer_enabled = True
 
+    monkeypatch.setenv("KOS_MCP_BASE", "https://kos.example")
+    monkeypatch.setenv("KOS_OAUTH_CLIENT_ID", "gbrain_cl_test")
+    monkeypatch.setenv("KOS_OAUTH_CLIENT_SECRET", "gbrain_cs_test")
     with _config_client(monkeypatch, _Stub()) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert data["kosConsumerEnabled"] is True

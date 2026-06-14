@@ -7,6 +7,7 @@ import { Check, Trash2, X } from 'lucide-react'
 import type { ReportCadence, ReportListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+import { ShimmerText } from '@shared/components/ShimmerText'
 import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
@@ -293,8 +294,8 @@ function GeneratingState(): React.ReactElement {
         <span className="spin" style={{ color: 'rgb(var(--c-info))', display: 'flex' }}>
           <ReportIcon name="loader" size={18} />
         </span>
-        <span className="think-shimmer shimmer-neutral" style={{ fontSize: 15, fontWeight: 600 }}>
-          {t('agents.reports.generating')}
+        <span style={{ fontSize: 15, fontWeight: 600 }}>
+          <ShimmerText text={t('agents.reports.generating')} neutral />
         </span>
       </div>
       <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))' }}>

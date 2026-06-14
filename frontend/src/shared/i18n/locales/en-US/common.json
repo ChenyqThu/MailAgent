@@ -639,7 +639,15 @@
       "decidedOk": "Authorized · callback received, executing",
       "decidedNo": "Rejected · no changes made to your mailbox"
     },
-    "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
+    "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated",
+    "thinkingPhrases": [
+      "Thinking…",
+      "Understanding your question…",
+      "Searching your emails…",
+      "Piecing together context…",
+      "Connecting the dots…",
+      "Composing a reply…"
+    ]
   },
   "admin": {
     "title": "Admin",
@@ -1436,6 +1444,42 @@
         "eyebrow": "INTEGRATIONS",
         "title": "Integrations",
         "intro": "Project progress sync, Office document conversion, dashboard reporting and CLI auth."
+      },
+      "kos": {
+        "title": "Knowledge Brain (KOS)",
+        "helper": "KOS lets the AI search across your emails / product knowledge, recall past facts, and find experts in chat. It needs a self-hosted gbrain knowledge service — deploy from ",
+        "helperSuffix": " and request OAuth credentials, then fill them in below. Without credentials, KOS tools aren't injected into chat.",
+        "enabled": {
+          "label": "Enable KOS tools",
+          "helper": "When on, the chat AI can call kos_query / kos_recall / kos_get_page and other knowledge-brain tools (requires credentials below)."
+        },
+        "endpoint": {
+          "label": "KOS service URL",
+          "helper": "The gbrain MCP endpoint, e.g. https://kos.example.com."
+        },
+        "clientId": {
+          "label": "OAuth Client ID",
+          "helper": "Client ID issued by gbrain (gbrain_cl_ prefix)."
+        },
+        "clientSecret": {
+          "label": "OAuth Client Secret",
+          "helper": "Client secret issued by gbrain (gbrain_cs_ prefix). Stored only in local .env, never returned to the UI."
+        },
+        "advanced": {
+          "label": "Advanced"
+        },
+        "ingest": {
+          "label": "Push emails to KOS",
+          "helper": "After sync, asynchronously push emails into KOS (producer) for later retrieval. Off by default."
+        },
+        "l1": {
+          "label": "Sender hot-memory prefetch",
+          "helper": "At chat start, prefetch a KOS digest by sender into the system prompt so the AI has more context. Off by default."
+        },
+        "timeDecay": {
+          "label": "Time-decay rerank",
+          "helper": "Rerank kos_query hits with a 14-day half-life time decay (favors recent). On by default."
+        }
       }
     },
     "realtime": {

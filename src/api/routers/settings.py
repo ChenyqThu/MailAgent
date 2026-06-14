@@ -149,6 +149,11 @@ _MANAGED_ENV_KEYS: List[str] = [
     "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED",
     "MAILAGENT_KOS_INGEST_ENABLED",
     "MAILAGENT_KOS_TIME_DECAY_ENABLED",
+    # KOS 对接三件套 (endpoint + OAuth client_id/secret)。IntegrationsTab KOS
+    # Section 经 env:set 写 app .env; client_secret 入 _SECRET_ENV_KEYS 脱敏回传。
+    "KOS_MCP_BASE",
+    "KOS_OAUTH_CLIENT_ID",
+    "KOS_OAUTH_CLIENT_SECRET",
     # — Island
     "PING_ISLAND_ENABLED",
     "ISLAND_SOCKET_PATH",
@@ -176,6 +181,9 @@ _SECRET_ENV_KEYS = {
     "MAILAGENT_CLI_API_KEY",
     "DAVMAIL_POC_CIPHER_KEY",
     "DAVMAIL_CIPHER_KEY",
+    # KOS (gbrain) OAuth client_secret — IntegrationsTab KOS Section 写 app .env;
+    # Python KOSClient os.getenv 读。脱敏不回 renderer (同其它 secret)。
+    "KOS_OAUTH_CLIENT_SECRET",
     # codex r4 [HIGH] — these are MANAGED (returned) URLs whose value embeds a
     # credential, so they must be redacted, not sent in plaintext:
     #   ALERT_FEISHU_WEBHOOK_URL — the trailing path segment IS the bot token;

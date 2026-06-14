@@ -19,6 +19,7 @@ import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { cn } from '@shared/lib/cn'
+import { ShimmerText } from '@shared/components/ShimmerText'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
@@ -651,7 +652,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   if (detailQ.isLoading) {
     return (
       <EmptyShell>
-        <div className="text-aux think-shimmer shimmer-neutral">{t('emailDetail.loading')}</div>
+        <ShimmerText text={t('emailDetail.loading')} neutral className="text-aux" />
       </EmptyShell>
     )
   }
@@ -851,7 +852,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             {isTranslating && (
               <div className="mt-2 inline-flex items-center gap-2 text-aux text-ink-fg-2">
                 <Languages size={13} strokeWidth={2} />
-                <span className="think-shimmer shimmer-neutral">{t('translate.loading')}</span>
+                <ShimmerText text={t('translate.loading')} neutral />
               </div>
             )}
             {translateError && (

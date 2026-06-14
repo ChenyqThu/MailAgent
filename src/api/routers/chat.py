@@ -258,6 +258,16 @@ async def chat_config(request: Request):
     kos_consumer = _hot_bool(env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", cfg.kos_consumer_enabled)
     kos_l1_hot = _hot_bool(env_vals, "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED", cfg.kos_l1_hot_block_enabled)
     kos_time_decay = _hot_bool(env_vals, "MAILAGENT_KOS_TIME_DECAY_ENABLED", cfg.kos_time_decay_enabled)
+    # 🔴「只在启用 AND 对接 KOS 时才注入工具」。kosConsumerEnabled = 纯开关；kosConfigured
+    # = 开关 AND OAuth 凭据齐全（endpoint + client_id + secret 三者非空，对齐 _kos_available）。
+    # renderer createBuiltinTools 据 kosConfigured 决定是否注册 9 个 KOS 工具 —— 开关开着却
+    # 没配凭据（新用户 / 未对接）时不注入，避免注册了必然调用失败的工具。凭据热读 .env 为准、
+    # os.environ（启动注入）兜底，与 enabledModels / kos 开关同样支持改 .env 即时生效。
+    kos_creds = all(
+        (env_vals.get(k) or os.environ.get(k) or "").strip()
+        for k in ("KOS_MCP_BASE", "KOS_OAUTH_CLIENT_ID", "KOS_OAUTH_CLIENT_SECRET")
+    )
+    kos_configured = kos_consumer and kos_creds
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -266,7 +276,7 @@ async def chat_config(request: Request):
             "kosL1HotBlockEnabled": kos_l1_hot,
             "defaultModel": default_model,
             "kosConsumerEnabled": kos_consumer,
-            "kosConfigured": kos_consumer,
+            "kosConfigured": kos_configured,
             "kosTimeDecayEnabled": kos_time_decay,
             "userContext": user_context,
             "enabledModels": enabled_models,

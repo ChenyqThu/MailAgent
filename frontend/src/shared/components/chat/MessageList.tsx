@@ -37,11 +37,13 @@ import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
+import { ShimmerText } from '@shared/components/ShimmerText'
 import { useCjkMonoSwap } from '@shared/i18n/cjk-mono'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ChatMessage, ChatToolCall } from '@shared/api/types'
 import type { LiveToolCall, PendingConfirmation } from '@shared/hooks/useEmailChat'
 import { ConfirmToolDialog } from './ConfirmToolDialog'
+import { ThinkingPhrases } from './ThinkingPhrases'
 import { auditSteps, classifyTool, liveSteps, type ToolKind, type ToolStepData } from './tool_steps'
 
 /** Sprint 13 — DraftPreviewCard action wiring. AIChatPanel injects real
@@ -1013,7 +1015,6 @@ function ToolGroup({
   running: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
-  const reduceMotion = useReducedMotion()
   // Default expanded while running; auto-collapse when finished. Adjust-on-prop-
   // change (react.dev / ThinkingBlock prevActive), not useEffect+setState.
   const [open, setOpen] = useState(running)
@@ -1048,9 +1049,7 @@ function ToolGroup({
           )}
         />
         {running ? (
-          <span className={cn('text-aux', !reduceMotion && 'think-shimmer')}>
-            {t('chat.toolGroup.running')}
-          </span>
+          <ShimmerText text={t('chat.toolGroup.running')} className="text-aux" />
         ) : (
           <span className="text-aux">{t('chat.toolGroup.using', { n: steps.length })}</span>
         )}
@@ -1094,7 +1093,6 @@ function ThinkingBlock({
   active: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
-  const reduceMotion = useReducedMotion()
   // Default open while active (watch the reasoning stream), collapsed once done.
   const [open, setOpen] = useState(active)
   const [prevActive, setPrevActive] = useState(active)
@@ -1122,9 +1120,11 @@ function ThinkingBlock({
             bodyShown && 'rotate-90'
           )}
         />
-        <span className={cn('text-aux', active && !reduceMotion && 'think-shimmer')}>
-          {active ? t('chat.thinking.streaming') : t('chat.thinking.label')}
-        </span>
+        {active ? (
+          <ShimmerText text={t('chat.thinking.streaming')} className="text-aux" />
+        ) : (
+          <span className="text-aux">{t('chat.thinking.label')}</span>
+        )}
       </button>
       <div className={cn('pl-[18px]', bodyShown ? 'block' : 'hidden')} aria-hidden={!bodyShown}>
         <div className="pt-1 pb-0.5">
@@ -1203,7 +1203,7 @@ function AssistantBubble({
               className="text-ink-fg-2 shrink-0 animate-spin"
               aria-hidden
             />
-            <span className="think-shimmer">{t('chat.status.thinking')}</span>
+            <ThinkingPhrases />
           </div>
         )}
       </div>

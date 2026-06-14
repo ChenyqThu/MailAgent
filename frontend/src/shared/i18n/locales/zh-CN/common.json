@@ -639,7 +639,15 @@
       "decidedOk": "已授权 · 收到回调，开始执行",
       "decidedNo": "已拒绝 · 未对邮箱做任何改动"
     },
-    "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
+    "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}",
+    "thinkingPhrases": [
+      "正在思考…",
+      "理解你的问题…",
+      "检索相关邮件…",
+      "梳理上下文…",
+      "整理思路…",
+      "组织回答…"
+    ]
   },
   "admin": {
     "title": "看板",
@@ -1436,6 +1444,42 @@
         "eyebrow": "INTEGRATIONS",
         "title": "集成",
         "intro": "项目周报同步、Office 文档转换、看板上报与 CLI 鉴权。"
+      },
+      "kos": {
+        "title": "知识大脑 (KOS)",
+        "helper": "KOS 让 AI 在对话中跨邮件 / 产品知识检索、召回历史事实、找专家。需对接一套自部署的 gbrain 知识库服务：去 ",
+        "helperSuffix": " 部署服务并申请 OAuth 凭据，填入下方。未对接（凭据缺失）时对话不会注入 KOS 工具。",
+        "enabled": {
+          "label": "启用 KOS 工具",
+          "helper": "开启后，对话 AI 可调用 kos_query / kos_recall / kos_get_page 等知识大脑工具（需下方凭据齐全）。"
+        },
+        "endpoint": {
+          "label": "KOS 服务地址",
+          "helper": "gbrain 服务的 MCP endpoint，例如 https://kos.example.com。"
+        },
+        "clientId": {
+          "label": "OAuth Client ID",
+          "helper": "gbrain 颁发的客户端 ID（gbrain_cl_ 前缀）。"
+        },
+        "clientSecret": {
+          "label": "OAuth Client Secret",
+          "helper": "gbrain 颁发的客户端密钥（gbrain_cs_ 前缀），仅本机 .env 存储，不回传界面。"
+        },
+        "advanced": {
+          "label": "高级"
+        },
+        "ingest": {
+          "label": "推送邮件入库",
+          "helper": "邮件同步完成后异步推送进 KOS（producer），供日后检索。默认关。"
+        },
+        "l1": {
+          "label": "发件人热记忆预取",
+          "helper": "对话开始时按发件人预取 KOS 摘要注入系统提示，让 AI 更懂上下文。默认关。"
+        },
+        "timeDecay": {
+          "label": "时间衰减重排",
+          "helper": "kos_query 命中结果按 14 天半衰期做时间衰减重排（更偏好近期）。默认开。"
+        }
       }
     },
     "realtime": {

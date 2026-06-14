@@ -136,15 +136,18 @@ export const MANAGED_ENV_KEYS = [
   'MAILAGENT_OUTBOX_CONCURRENCY',
 
   // — Agent Harness + KOS (Sprint 19 — chat agent multi-turn loop + Jarvis
-  // KOS v2 producer/consumer integration). 全是 boolean toggle, 默认 false.
-  // OAuth credentials (KOS_OAUTH_CLIENT_ID / SECRET) + endpoint (KOS_MCP_BASE)
-  // 暂不在白名单 — 走 .env 手动管理, 未来若做 Settings 'AI Agent' tab 第二段
-  // 再加 SECRET_ENV_KEYS 项.
+  // KOS v2 producer/consumer integration). boolean toggle 默认 false + KOS 对接
+  // 三件套: endpoint (KOS_MCP_BASE) + OAuth client_id/secret。IntegrationsTab 的
+  // KOS Section 经 env:set 写 app .env; KOS_OAUTH_CLIENT_SECRET 入 SECRET_ENV_KEYS
+  // → env:get 读取脱敏 (renderer 永不见明文, 同其它 secret)。其余两项非密钥明文。
   'MAILAGENT_AGENT_HARNESS',
   'MAILAGENT_KOS_CONSUMER_ENABLED',
   'MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED',
   'MAILAGENT_KOS_INGEST_ENABLED',
   'MAILAGENT_KOS_TIME_DECAY_ENABLED',
+  'KOS_MCP_BASE',
+  'KOS_OAUTH_CLIENT_ID',
+  'KOS_OAUTH_CLIENT_SECRET',
 
   // — Island (PR D IslandUpdatesTab)
   'PING_ISLAND_ENABLED',
@@ -206,6 +209,9 @@ export const SECRET_ENV_KEYS: Set<string> = new Set<string>([
   'MAILAGENT_CLI_API_KEY',
   'DAVMAIL_POC_CIPHER_KEY',
   'DAVMAIL_CIPHER_KEY',
+  // KOS (gbrain) OAuth client_secret — IntegrationsTab KOS Section 写, Python
+  // KOSClient 从 .env 读 (os.getenv). 同其它 secret: env:get 脱敏不回 renderer。
+  'KOS_OAUTH_CLIENT_SECRET',
   // codex r4 [HIGH] — MANAGED (returned) URLs whose value embeds a credential,
   // so they're redacted, not sent in plaintext. Parity mirror of
   // settings.py `_SECRET_ENV_KEYS`. ALERT_FEISHU_WEBHOOK_URL's trailing path

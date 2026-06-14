@@ -4610,42 +4610,46 @@ body:not([data-batch-mode='true']) .email-row .cb {
    *文字类* in-progress 标签（思考中/翻译中/生成中/Loading）统一用本类。
    高光色经 --shimmer-hl 可换：AI 语境默认 --c-ai；非 AI 的纯加载文案挂
    .shimmer-neutral 切 ink-fg 中性高光，不蹭 AI 紫。 */
-/* 思考态流光 — transform 横扫高光带（GPU 合成线程原生, 真实屏幕保证逐帧重绘）。
-   ⚠️ 旧实现 bg-clip-text + @keyframes 动 background-position: 在 Electron macOS 真实
-   屏幕硬件 GPU 合成下, 文字裁切层被光栅化成纹理后缓存、background-position 更新不触发
-   重新光栅化（Chromium 已知 bug, CSS WG #9563）→ 文字在却不流光; 改用 GSAP 每帧写 inline
-   background-position 同样绕不过该纹理缓存（已验真机无效）。唯一在 GPU 合成下保证逐帧
-   重绘的是 transform（合成线程直接变换, 不经 main-thread raster）→ 高光做成 ::after 渐变
-   带 translateX 横扫; overflow:hidden 裁到文字盒避免外溢; mix-blend-mode plus-lighter +
-   isolation 让高光只提亮本元素文字。base 文字实色保证 reduce/兜底始终可读。 */
-@keyframes chat-think-shimmer {
-  from { transform: translateX(-130%); }
-  to   { transform: translateX(330%); }
-}
-.think-shimmer {
-  position: relative;
-  display: inline-block;
-  color: rgb(var(--ink-fg-2));
-  -webkit-text-fill-color: rgb(var(--ink-fg-2));
-  overflow: hidden;
-  isolation: isolate;
-}
-.think-shimmer::after {
-  content: "";
+/* 思考态字形流光（ShimmerText.tsx）— 纯 CSS 双层 transform 抵消，绕过 GPU 对
+   bg-clip-text background-position / mask-position 的纹理缓存（元素处于合成层上下文
+   ——chat 列表祖先带 transform/will-change——时，文字裁切层光栅化成纹理后缓存，任何
+   background/mask 偏移更新都不重新光栅化；真机实测 CSS animation / GSAP inline / motion
+   三种 background-position 写法 + mask-position 均失效。唯 transform 走合成线程、不经
+   main-thread raster，合成层内仍逐帧重绘）。base 字形固定 + 高光字形 hi 固定 + transform
+   横扫的窗口 win（mask 软边）露出 hi；win/hi 反向 transform 抵消使 hi 视觉对齐 base →
+   只有窗口扫到的字形被照亮 = 字形流光。win width 40%、位移 -100%→250%(of winW)；hi 位移
+   40%→-100%(of hiW) = -0.4×win → 精确同步、任意文字宽自适应。详见 ShimmerText.tsx。
+   §8 loading 词汇：文字类 in-progress（思考中/翻译中/生成中/Loading）统一用 <ShimmerText>;
+   高光色 --shimmer-hl AI 语境默认 --c-ai，非 AI 纯加载传 neutral 切 ink-fg 中性高光。 */
+@keyframes shimmer-win { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes shimmer-hi  { from { transform: translateX(40%); }   to { transform: translateX(-100%); } }
+.shimmer-text { position: relative; display: inline-block; white-space: nowrap; }
+.shimmer-text-static { color: rgb(var(--ink-fg-2)); }
+.shimmer-text-base { color: rgb(var(--ink-fg-2)); }
+.shimmer-text-win {
   position: absolute;
   inset: 0 auto 0 0;
-  width: 42%;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgb(var(--shimmer-hl, var(--c-ai))) 50%,
-    transparent 100%
-  );
-  mix-blend-mode: plus-lighter;
+  width: 40%;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 50%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 50%, transparent);
   pointer-events: none;
-  animation: chat-think-shimmer 1.4s linear infinite;
+  animation: shimmer-win 1.4s linear infinite;
+}
+.shimmer-text-hi {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  color: rgb(var(--shimmer-hl, var(--c-ai)));
+  animation: shimmer-hi 1.4s linear infinite;
 }
 .shimmer-neutral { --shimmer-hl: var(--ink-fg); }
+/* AI 思考态多段 phrase 轮播（ThinkingPhrases.tsx）：切换时 fade + 上移 enter（opacity/
+   transform 合成器属性，合成层内可靠）。reduce 下由下方 @media 关闭。 */
+.thinking-phrases { display: inline-block; }
+.thinking-phrases-item { animation: phrase-in 0.34s ease both; }
+@keyframes phrase-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes chat-think-blink { 50% { opacity: 0; } }
 .think-caret {
   display: inline-block;
@@ -4791,9 +4795,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spin > *, .shimmer, .email-flash, .think-shimmer, .think-caret { animation: none !important; }
-  /* base 文字已是实色 (color/-webkit-text-fill-color: ink-fg-2)，隐藏扫光带即静态可读。 */
-  .think-shimmer::after { animation: none !important; display: none; }
+  .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
+  /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static
+     （无 win/hi 层），此处再兜底关掉动画 + phrase enter（防 reduce 运行时切换残留）。 */
+  .shimmer-text-win, .shimmer-text-hi, .thinking-phrases-item { animation: none !important; }
   .icon-swap-item { transition: none !important; }
   /* Hide the (now non-blinking) caret so it doesn't read as a stuck cursor. */
   .think-caret { display: none; }
