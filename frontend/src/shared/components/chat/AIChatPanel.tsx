@@ -385,7 +385,12 @@ export function AIChatPanel({ fullScreen = false }: AIChatPanelProps = {}): Reac
   const threadCount = threadQ.data ?? 0
 
   const quotaCooldownUntil = chat.quotaCooldownUntil
-  const inQuotaCooldown = quotaCooldownUntil !== null
+  // task 06-15 Bug 2 — the cooldown only applies to the tab that hit the quota
+  // cap (only custom-api can emit E_QUOTA). Gating on the owning kind keeps a
+  // Custom AI cooldown from disabling send / showing the timer in the Notion
+  // Agent tab and vice versa. (task 06-15 Bug 1 already stopped notion-agent
+  // rate limits from engaging this at all — they're a banner reminder now.)
+  const inQuotaCooldown = quotaCooldownUntil !== null && chat.quotaCooldownKind === backend.kind
   const canSend = activeInternalId !== null && !chat.isStreaming && !inQuotaCooldown
 
   // Sprint 13 — DraftPreviewCard buttons. send → real mailApi.email.createDraft;

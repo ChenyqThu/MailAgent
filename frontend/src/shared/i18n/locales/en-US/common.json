@@ -614,7 +614,7 @@
       "upstream": "Upstream LLM error · retry",
       "abort": "Cancelled",
       "agentAuth": "Notion login expired — re-run notion-agent init",
-      "agentRateLimit": "⚠️ Notion's anti-automation guard tripped (too many requests, not a system error). Auto-paused — you can send again in ~5 min. Manually retrying now only extends the wait.",
+      "agentRateLimit": "⚠️ Notion's anti-automation guard tripped (too many requests, not a system error). Wait ~5 min before sending again; retrying immediately only extends the wait.",
       "agentNotInstalled": "notion-agent CLI not installed — run pipx install notion-agent-cli",
       "agentTimeout": "Notion Agent timed out — retry",
       "modelUnsupported": "Current backend does not support this model",

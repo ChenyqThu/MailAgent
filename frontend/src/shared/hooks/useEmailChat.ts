@@ -142,6 +142,12 @@ export interface UseEmailChatReturn {
    *  `send` until this passes; Composer footer surfaces the remaining
    *  seconds via `useTimeUntil`. */
   quotaCooldownUntil: number | null
+  /** task 06-15 Bug 2 — the backend kind that owns the active cooldown (the
+   *  tab where the E_QUOTA cap was hit). AIChatPanel only treats the cooldown
+   *  as engaged when this matches the currently-selected backend, so a quota
+   *  cap on Custom AI never throttles the Notion Agent tab (and vice versa).
+   *  Null whenever `quotaCooldownUntil` is null. */
+  quotaCooldownKind: ChatBackendKind | null
   /** Sprint 14 PR A — all sessions for the current email, ordered by
    *  updated_at DESC. Surfaced to the history sidebar; refreshed on email
    *  switch + after each successful `send()` (which may have created a
@@ -197,6 +203,12 @@ const QUOTA_COOLDOWN_MS = 5 * 60 * 1000
 // into another upstream 429. Cosmetic fix; the in-memory path was already
 // correct for the common case.
 const QUOTA_COOLDOWN_STORAGE_KEY = 'mailagent.chat.quotaCooldownUntil'
+// task 06-15 Bug 2 — the cooldown is now scoped to the backend kind that
+// triggered it (only custom-api emits E_QUOTA), so the Notion Agent tab and
+// the Custom AI tab no longer share one throttle. We persist that owning kind
+// alongside the timestamp in a SECOND key (rather than reformatting the
+// timestamp key) so the legacy bare-int value stays readable across upgrades.
+const QUOTA_COOLDOWN_KIND_KEY = 'mailagent.chat.quotaCooldownKind'
 
 function readPersistedQuotaCooldown(): number | null {
   try {
@@ -217,6 +229,18 @@ function readPersistedQuotaCooldown(): number | null {
   } catch {
     // localStorage unavailable (privacy mode, SSR, etc.) — in-memory fallback
     // still works for the current session.
+    return null
+  }
+}
+
+function readPersistedQuotaCooldownKind(): ChatBackendKind | null {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    const v = localStorage.getItem(QUOTA_COOLDOWN_KIND_KEY)
+    // Only the two known kinds are valid owners; anything else (or a missing
+    // key from a pre-Bug-2 cooldown) reads as null so the gate below stays safe.
+    return v === 'notion-agent' || v === 'custom-api' ? v : null
+  } catch {
     return null
   }
 }
@@ -270,6 +294,13 @@ export function useEmailChat(
    *  restart inside the 5-min cooldown still respects the throttle. */
   const [quotaCooldownUntil, setQuotaCooldownUntil] = useState<number | null>(() =>
     readPersistedQuotaCooldown()
+  )
+  // task 06-15 Bug 2 — owning backend kind for the cooldown above (see the
+  // interface doc). Both reads hit localStorage once on mount; the timestamp
+  // read GCs an expired entry, but the kind read is side-effect-free, so a
+  // stale kind without a live timestamp simply never matches the gate.
+  const [quotaCooldownKind, setQuotaCooldownKind] = useState<ChatBackendKind | null>(() =>
+    readPersistedQuotaCooldownKind()
   )
   // Sprint 19 PR-1d.2 — pending ConfirmToolDialog queue. The harness can
   // surface multiple confirmations within a single iter (rare but possible
@@ -896,14 +927,26 @@ export function useEmailChat(
         setStreamingMessageId(null)
         setError({ code: event.code, message: event.message })
         // Sprint 5 state machine #4 — engage cooldown on quota cap.
-        // notion-agent trust-rule rate limit (CLI exit 75) reuses the same
-        // cooldown substrate: Notion's anti-automation guard reports
-        // isRetryable:false with retry_after≈300s, so the only safe response
-        // is a forced backoff (disable send + countdown). An immediate retry
-        // deepens the ban — hence E_NOTION_AGENT_RATE_LIMIT is deliberately
-        // absent from RETRIABLE_ERROR_CODES (no Retry button).
-        if (event.code === 'E_QUOTA' || event.code === 'E_NOTION_AGENT_RATE_LIMIT') {
+        //
+        // task 06-15 Bug 1 — notion-agent trust-rule rate limit
+        // (E_NOTION_AGENT_RATE_LIMIT, CLI exit 75) NO LONGER engages the
+        // forced backoff. Per product call it's a non-blocking reminder now:
+        // the error banner (chat.error.agentRateLimit) tells the user Notion's
+        // anti-automation guard tripped and to wait, but send stays enabled —
+        // a hard disable + countdown was too heavy a hand for a guard the user
+        // can simply pace around. So only the real upstream quota cap
+        // (E_QUOTA, custom-api only) drives the cooldown below.
+        //
+        // task 06-15 Bug 2 — record the backend kind that owns the cooldown so
+        // AIChatPanel can scope it to that tab. E_QUOTA is an Anthropic-account
+        // cap that only the custom-api backend can hit, so the cooldown must
+        // not leak into the Notion Agent tab.
+        if (event.code === 'E_QUOTA') {
           setQuotaCooldownUntil(Date.now() + QUOTA_COOLDOWN_MS)
+          // backendKindRef (not the closure `backendKind`): this subscribe
+          // effect captures props at mount time and never re-subscribes, so
+          // the ref is the only source of the CURRENT tab here.
+          setQuotaCooldownKind(backendKindRef.current)
         }
         // L2 cleanup — session won't produce more events; drop the meta entry
         // to keep the map from growing across long sessions with frequent retries.
@@ -922,7 +965,12 @@ export function useEmailChat(
   useEffect(() => {
     if (quotaCooldownUntil === null) return undefined
     const remaining = Math.max(0, quotaCooldownUntil - Date.now())
-    const t = setTimeout(() => setQuotaCooldownUntil(null), remaining)
+    const t = setTimeout(() => {
+      setQuotaCooldownUntil(null)
+      // task 06-15 Bug 2 — clear the owning kind in lock-step so the gate
+      // can never see a live kind with a lifted timestamp.
+      setQuotaCooldownKind(null)
+    }, remaining)
     return (): void => clearTimeout(t)
   }, [quotaCooldownUntil])
 
@@ -946,13 +994,21 @@ export function useEmailChat(
       if (typeof localStorage === 'undefined') return
       if (quotaCooldownUntil === null) {
         localStorage.removeItem(QUOTA_COOLDOWN_STORAGE_KEY)
+        localStorage.removeItem(QUOTA_COOLDOWN_KIND_KEY)
       } else {
         localStorage.setItem(QUOTA_COOLDOWN_STORAGE_KEY, String(quotaCooldownUntil))
+        // task 06-15 Bug 2 — persist the owning kind alongside so a reload
+        // inside the window restores a tab-scoped (not global) throttle.
+        if (quotaCooldownKind !== null) {
+          localStorage.setItem(QUOTA_COOLDOWN_KIND_KEY, quotaCooldownKind)
+        } else {
+          localStorage.removeItem(QUOTA_COOLDOWN_KIND_KEY)
+        }
       }
     } catch {
       // localStorage unavailable — cooldown still works in-memory.
     }
-  }, [quotaCooldownUntil])
+  }, [quotaCooldownUntil, quotaCooldownKind])
 
   // --- 3) abort on scope switch (email OR kind) / unmount ------------------
   // `activeSessionRef.current` may still be null at effect-run time (the
@@ -1418,6 +1474,7 @@ export function useEmailChat(
     newSession,
     retryLast,
     quotaCooldownUntil,
+    quotaCooldownKind,
     sessions,
     selectSession,
     editMessage,
@@ -1445,9 +1502,10 @@ export function useEmailChat(
 //
 // NOT here on purpose: E_NOTION_AGENT_RATE_LIMIT (CLI exit 75 / trust-rule).
 // Notion reports isRetryable:false — an immediate re-fire deepens the
-// anti-automation ban. It routes through the quota cooldown instead (see the
-// error-event handler above), which disables send + shows a countdown rather
-// than a Retry button.
+// anti-automation ban, so there's no Retry button. task 06-15 Bug 1: it no
+// longer engages the quota cooldown either (that was too heavy a hand for a
+// guard the user can pace around) — it's a plain banner reminder now, with
+// send left enabled (see the error-event handler above).
 const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   'E_NETWORK',
   'E_UPSTREAM',

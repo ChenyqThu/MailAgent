@@ -1118,9 +1118,12 @@ describe('useEmailChat — abort + lifecycle', () => {
     if (result.current.quotaCooldownUntil !== null) {
       expect(result.current.quotaCooldownUntil - Date.now()).toBeGreaterThan(4 * 60 * 1000)
     }
+    // task 06-15 Bug 2 — the cooldown records the backend kind that hit the cap
+    // so AIChatPanel can scope it to that tab (this hook ran as 'custom-api').
+    expect(result.current.quotaCooldownKind).toBe('custom-api')
   })
 
-  test('E_NOTION_AGENT_RATE_LIMIT (trust-rule) engages the cooldown, not a Retry', async () => {
+  test('E_NOTION_AGENT_RATE_LIMIT (trust-rule) is a reminder only — no cooldown, no Retry', async () => {
     mockChatListSessions.mockResolvedValue([fakeSession({ id: 1 })])
     mockChatListMessages.mockResolvedValue([
       fakeMessage({ id: 100, session_id: 1, role: 'user', content: 'hi' }),
@@ -1150,13 +1153,13 @@ describe('useEmailChat — abort + lifecycle', () => {
       })
     })
 
-    // Same cooldown substrate as E_QUOTA: send gets disabled via a ~5-min
-    // window, NOT a Retry button (an immediate retry deepens Notion's ban).
+    // task 06-15 Bug 1 — notion-agent's anti-automation guard no longer
+    // engages the forced backoff. It surfaces as a banner reminder
+    // (chat.error.agentRateLimit) with send left ENABLED (no cooldown), and
+    // still no Retry button (an immediate retry deepens Notion's ban).
     expect(result.current.error?.code).toBe('E_NOTION_AGENT_RATE_LIMIT')
-    expect(result.current.quotaCooldownUntil).not.toBeNull()
-    if (result.current.quotaCooldownUntil !== null) {
-      expect(result.current.quotaCooldownUntil - Date.now()).toBeGreaterThan(4 * 60 * 1000)
-    }
+    expect(result.current.quotaCooldownUntil).toBeNull()
+    expect(result.current.quotaCooldownKind).toBeNull()
     expect(result.current.retryLast).toBeNull()
   })
 
