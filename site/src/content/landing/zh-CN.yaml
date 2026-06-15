@@ -1,0 +1,224 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Landing copy — 简体中文 (root locale). Transcribed from the reference
+# frontend/docs/landing/MailAgent.html (.zh spans). Lane A consumes this via
+# getEntry('landing','zh-CN'); the schema (src/content.config.ts) is tolerant
+# so Lane A can add/restructure keys freely. All top-level keys are present.
+# ═══════════════════════════════════════════════════════════════════════
+
+seo:
+  title: MailAgent — 让 AI 替你看完每一封邮件
+  description: >-
+    MailAgent · 一个把 AI 装进收件箱的桌面邮件助手。自动分类、定级、摘要、起草回复，
+    灵动岛实时提醒，每日报告 Agent，全程可溯源。
+
+nav:
+  links:
+    - { label: 能力, href: '#features' }
+    - { label: 灵动岛, href: '#island' }
+    - { label: 报告 Agent, href: '#agent' }
+    - { label: 可溯源, href: '#trust' }
+    - { label: FAQ, href: '#faq' }
+  download: 下载
+
+hero:
+  pill: 把 AI 装进你的收件箱
+  pillTag: v1 · macOS
+  title: 你的收件箱，有人盯着了。
+  titleEm: 有人盯着了
+  sub: >-
+    MailAgent 在邮件落地的那一刻就替你读完它——自动分类、定优先级、写摘要、起草回复。
+    重要的浮上来，杂讯沉下去，全程可点回原文。
+  ctaPrimary: 下载 macOS 版
+  ctaGhost: 看看它怎么干活
+  meta:
+    - { text: 本地优先 · 数据存本机 }
+    - { text: claude-sonnet-4-6 }
+    - { text: 开源 · MIT }
+
+strip:
+  label: 一封邮件 · 五件事自动发生
+  items:
+    - 归类
+    - 定级
+    - 摘要
+    - 起草
+    - 建议动作
+
+features:
+  eyebrow: AI Triage
+  title: 每封邮件落地，AI 已经读完了。
+  titleEm: AI 已经读完了
+  lede: >-
+    不是事后批量处理，而是入库即处理。分类、优先级、一句话摘要、动作建议——
+    结构化写进每封邮件，列表里一眼就能看出哪封该先看。
+  cards:
+    - kicker: Category · Priority
+      title: 分类 + 优先级，一眼分流
+      body: >-
+        每封邮件被打上类别（产品管理 / 需要决策 / 仅供参考…）和优先级。
+        紧急的标红冒头，FYI 的自动沉底——你不再从 674 封里大海捞针。
+    - kicker: Summary
+      title: 一句话摘要
+      body: 长邮件串、几十层引用，压成你能在两秒里读完的要点。打开前就知道里面在说什么。
+    - kicker: Reply Suggestion
+      title: 回复，已经起好草
+      body: 该回的邮件，AI 顺着上下文先拟一版草稿。你改两句、或直接发——决定权永远在你手里。
+    - kicker: Action
+      title: 下一步动作建议
+      body: 「需要决策」「等待拍板」「可归档」——AI 不只告诉你这封讲什么，还告诉你该拿它怎么办。
+    - kicker: Full-text · FTS5
+      title: 全文搜索，瞬时命中
+      body: 本地 FTS5 索引 9,000+ 封邮件，⌘K 起手，毫秒级返回。KOS 不可达时也能优雅降级。
+
+aiFields:
+  eyebrow: AI Fields
+  title: AI 的判断，明明白白摆在邮件里
+  body: >-
+    每封邮件顶部一块 AI FIELDS 面板：摘要、优先级、动作、类别、回复建议——
+    全部结构化、可复核、可标记「已 Review」。不是一个黑盒，是一个透明的助手。
+  points:
+    - title: 结构化字段，不是散文
+      body: LLM 输出 JSON 块，前端原生渲染——稳定、可校验、可回填。
+    - title: 中英双语，正文不翻译
+      body: 界面、字段、动作可切中英；邮件正文永远保持原文。
+    - title: 你来定调
+      body: 6 个强调色、深浅主题、界面材质，一次切换全局生效。
+
+island:
+  eyebrow: Ping Island · Live
+  title: 重要邮件，不必你去找它
+  body: >-
+    MailAgent 把最关键的提醒送上灵动岛。一封紧急邮件进来，AI 判完级，
+    要点和建议动作直接浮在屏幕顶端——不用打开 App，不用翻收件箱。
+  points:
+    - title: 实时提醒
+      body: 只有真正紧急的才打扰你，其余静默归档。
+    - title: 岛上直接动作
+      body: 归档、稍后、打开——常用动作一步到位。
+    - title: 每日两次汇总
+      body: 9 点与 18 点，灵动岛汇总过去 24 小时的邮件动态。
+
+report:
+  eyebrow: Report Agent
+  title: 每天早上，一份读得完的邮件日报
+  titleEm: 读得完
+  lede: >-
+    Jarvis 每天回顾过去 24 小时的邮件，策展成一份结构化富报告：已处理了什么、
+    还需你亲自关注、你必须知道的关键信息、以及一般汇总。周报、月报同一引擎。
+  points:
+    - title: 日 / 周 / 月，自动排程
+      body: 日报看明细、周报看趋势、月报看高层回顾——开机补推，绝不漏发。
+    - title: 每封都能点回原文
+      body: 报告里的每封邮件可点击溯源——直达 App 内邮件或 Notion 页面。
+    - title: 趋势，用真实数据画
+      body: 周报 / 月报的统计与趋势全部由代码确定性计算，不是 LLM 编出来的。
+    - title: Run now · 改 prompt · 选模型
+      body: 在 /agents 页随时即时生成、调整排程窗口、编辑报告 prompt。
+
+customAI:
+  eyebrow: Custom AI · KOS
+  title: 对着一封邮件提问，它会自己去查资料
+  body: >-
+    Custom AI 通过 MCP 工具桥接到 KOS 知识库：邮件源、实体图谱、历史轨迹。
+    LLM 按上下文自判断该查什么，回答带来源。我们不替它注入，把工具和 skill 给它自驱。
+  points:
+    - title: 只读护栏
+      body: 只暴露 query / search / traverse 等只读工具，写操作一律拦在桥外，杜绝图谱污染。
+    - title: 不可达就降级
+      body: KOS 不可达时，自然回落到本地 FTS5 全文检索，对话不中断。
+
+provenance:
+  eyebrow: Provenance
+  title: AI 写文案，代码守数字
+  titleEm: 代码守数字
+  lede: >-
+    一个邮件助手最怕编。MailAgent 的纪律：统计、链接、邮件 ID 全由代码确定性回填，
+    LLM 只负责措辞和分组。出错的爆炸半径，被牢牢限制在文案里。
+  points:
+    - title: 数字由代码算
+      body: 总数 / 未读 / 紧急 / 已处理 / 待处理——全部确定性计算，与数据库一致。
+    - title: 幻觉 ID 被丢弃
+      body: LLM 分配邮件时给的 internal_id 会被校验回真实候选集，编造的直接扔掉。
+    - title: 链接是权威回填
+      body: 每条溯源链接由后端用真实 page_id 生成，点过去一定是对的那一封。
+    - title: 本地优先
+      body: 邮件存本机 SQLite，Electron 直读，正文从不自动外发翻译。
+
+observability:
+  eyebrow: Observability
+  title: 每一次调用，都有账可查
+  titleEm: 有账可查
+  lede: >-
+    LLM 看板和系统看板把真实数据摊开：处理量、token、耗时、缓存命中、同步健康、死信队列。
+    这不是装饰图表——是跑了 5,904 次的真实账本。
+  stats:
+    - { value: '5,904', key: Processed · 7d, sub: 近 7 天处理量 }
+    - { value: '1.11M', key: Input tokens, sub: 输入 token }
+    - { value: '42.5s', key: Avg latency, sub: 平均耗时 / 封 }
+    - { value: '9,311', key: Synced mail, sub: 同步邮件总数 }
+
+mobile:
+  eyebrow: Anywhere
+  title: 桌面是主场，手机里也跟得上
+  body: >-
+    同一套设计系统、同一份 AI 判断，响应式适配到手机。重点 / 其他分流、优先级标记、
+    灵动岛提醒——窄屏上一样清爽。
+  chips:
+    - 响应式 / Responsive
+    - 深浅主题 / Light · Dark
+    - 6 Accents
+
+download:
+  eyebrow: Get MailAgent
+  title: 把收件箱交给它
+  body: macOS 桌面应用，本地优先，开源。下载、连上你的邮箱，AI 从下一封邮件开始接管。
+  ctaPrimary: 下载 macOS 版 · GitHub Release
+  ctaGhost: 在 GitHub 上看源码
+  steps:
+    - { kicker: STEP 01, title: 下载并安装, body: 从 GitHub Release 取最新 .dmg，拖进应用程序。 }
+    - { kicker: STEP 02, title: 连接邮箱, body: 通过 DavMail / IMAP 接入，邮件同步到本地 SQLite。 }
+    - { kicker: STEP 03, title: 让 AI 接管, body: 填入模型密钥，开启 Agent，下一封邮件起自动处理。 }
+  note: 需要 macOS 13+ · 自带模型密钥 · 你的邮件不离开这台设备
+
+faq:
+  eyebrow: FAQ
+  title: 还有些问题
+  items:
+    - q: 我的邮件会被发去哪吗？
+      a: >-
+        邮件同步并存储在你这台机器的本地 SQLite 数据库里，Electron 直接读取。
+        只有做 AI 处理时，相关内容才会发给你自己配置的模型。邮件正文从不为了翻译而外发。
+    - q: 它会自己替我发邮件或归档吗？
+      a: >-
+        不会。v1 里 AI 的动作建议只是展示，执行权永远在你手上——回复是草稿，归档要你点。
+        批量执行是后续版本的事，且始终需要你确认。
+    - q: 报告里的数字可信吗？
+      a: >-
+        可信。所有统计、链接和邮件 ID 都由代码确定性计算与回填，与数据库一致。
+        LLM 只负责措辞、分组和挑重点；它给出的任何 ID 都会被校验，编造的会被丢弃。
+    - q: 支持哪些语言和模型？
+      a: >-
+        界面、字段、AI 快捷动作支持简体中文与 English 一键切换；邮件正文保持原文不翻译。
+        模型默认 claude-sonnet-4-6，可在设置中更换。
+    - q: 这是个什么项目？
+      a: >-
+        MailAgent 是一个开源的个人项目——为重度邮件用户打造的 AI 邮件助手。
+        设计系统、灵动岛、报告 Agent、KOS 桥接都在公开仓库里。欢迎在 GitHub 上围观、提 issue 或自己跑一份。
+
+footer:
+  tagline: 把 AI 装进收件箱的桌面邮件助手。本地优先、可溯源、开源。一个为重度邮件用户打造的个人项目。
+  cols:
+    - heading: Product
+      links:
+        - { label: 核心能力, href: '#features' }
+        - { label: 灵动岛, href: '#island' }
+        - { label: 报告 Agent, href: '#agent' }
+        - { label: 可溯源, href: '#trust' }
+    - heading: Get it
+      links:
+        - { label: 下载 macOS, href: '#download' }
+        - { label: GitHub, href: 'https://github.com/ChenyqThu/MailAgent/' }
+        - { label: Releases, href: 'https://github.com/ChenyqThu/MailAgent/releases' }
+        - { label: FAQ, href: '#faq' }
+  copyright: © 2026 MailAgent · MIT License
+  built: Built with claude-sonnet-4-6 · Local-first

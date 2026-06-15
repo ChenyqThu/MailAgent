@@ -1,0 +1,183 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   MailAgent · Site — design token SSoT
+   DERIVED FROM frontend/src/electron/renderer/index.css — re-sync on product
+   accent change (oklch re-export). Run `pnpm check:tokens` to detect drift.
+
+   Two token families (mirrors the product):
+     - surface (--ink-*) + foreground (--ink-fg-*) swap by data-theme.
+     - accent (--c-accent*) swaps by data-accent, independent of theme.
+   Plus a small set of landing-only tokens (fonts / ease / radius / grain /
+   shadows / maxw) that exist ONLY in the reference styles.css — the product
+   has no marketing-page equivalents, so they are kept from the reference.
+
+   Tailwind preset (tailwind.config.ts) maps these to utilities via
+   `rgb(var(--x) / <alpha-value>)`, so Astro/Tailwind and the React islands
+   share ONE token system. Channels-only triplets (e.g. `248 138 125`) let
+   `rgb(var(--c-accent) / 0.3)` alpha-modify everywhere.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@import './fonts.css';
+
+:root {
+  /* ── Surface · DARK (default) — product index.css :root ─────────────── */
+  --ink-0: 14 16 19;
+  --ink-1: 21 24 29;
+  --ink-2: 26 30 36;
+  --ink-3: 31 36 43;
+  --ink-4: 38 44 53;
+  --ink-5: 46 52 62;
+  --ink-border: 76 84 96;
+  --ink-border-soft: 58 65 76;
+
+  /* ── Foreground · DARK — product index.css :root ────────────────────── */
+  --ink-fg: 232 234 238;
+  --ink-fg-1: 192 198 208;
+  --ink-fg-2: 162 168 180;
+  --ink-fg-3: 152 158 170;
+
+  /* ── Accent · DARK · coral (default) — product oklch(.75 .135 28) ─────
+   * Uses the PRODUCT's current coral 248 138 125 — NOT the reference's old
+   * #E5654B / 229 101 75. */
+  --c-accent: 248 138 125;
+  --c-accent-hi: 230 123 110;
+  --c-accent-dim: 142 63 54;
+  --c-accent-fg: 15 16 21; /* near-black on accent (dark mode AA) */
+
+  /* ── Semantic / chip palette · DARK — product index.css :root ───────── */
+  --c-crit: 248 144 124;
+  --c-urg: 252 188 116;
+  --c-impt: 242 208 116;
+  --c-norm: 192 198 210;
+  --c-low: 174 180 194;
+  --c-ok: 152 232 192;
+  --c-warn: 252 212 128;
+  --c-fail: 252 152 152;
+  --c-info: 184 214 244;
+  --c-ai: 224 196 244;
+
+  /* ── Landing-only tokens — kept from reference styles.css (no product
+   * equivalent). Fonts/ease/radius/grain/shadows/maxw are part of the
+   * marketing-page visual language. ─────────────────────────────────── */
+  --font-display: 'Instrument Serif', 'Noto Sans SC', Georgia, serif;
+  --font-sans: 'Space Grotesk', 'Noto Sans SC', -apple-system, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --maxw: 1180px;
+
+  --grain: 0.05; /* landing grain overlay opacity (dark) */
+  --frame-glow: 0 40px 120px -30px rgb(var(--c-accent) / 0.28);
+  --card-shadow:
+    0 1px 0 rgb(255 255 255 / 0.03) inset,
+    0 20px 50px -24px rgb(0 0 0 / 0.7);
+
+  /* radius scale (landing) */
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-2xl: 20px;
+}
+
+/* ── Surface + Foreground · LIGHT — product index.css :root[data-theme=light] */
+:root[data-theme='light'] {
+  --ink-0: 250 250 250;
+  --ink-1: 242 242 244;
+  --ink-2: 234 235 237;
+  --ink-3: 255 255 255;
+  --ink-4: 225 227 230;
+  --ink-5: 215 217 220;
+  --ink-border: 214 217 221;
+  --ink-border-soft: 234 235 237;
+
+  --ink-fg: 26 29 34;
+  --ink-fg-1: 48 54 66;
+  --ink-fg-2: 68 74 86;
+  --ink-fg-3: 82 88 100;
+
+  /* light coral — product oklch(.50 .14 28) export */
+  --c-accent: 164 60 51;
+  --c-accent-hi: 144 40 34;
+  --c-accent-dim: 104 35 29;
+  --c-accent-fg: 255 255 255; /* white on deep light accent (AA) */
+
+  /* light chip palette — product index.css light block */
+  --c-crit: 138 36 22;
+  --c-urg: 122 64 12;
+  --c-impt: 96 68 14;
+  --c-norm: 54 60 72;
+  --c-low: 38 42 50;
+  --c-ok: 26 96 60;
+  --c-warn: 102 70 18;
+  --c-fail: 130 30 32;
+  --c-info: 24 70 116;
+  --c-ai: 92 58 130;
+
+  /* landing light overrides (reference styles.css light block) */
+  --grain: 0.03;
+  --frame-glow: 0 40px 120px -34px rgb(var(--c-accent) / 0.34);
+  --card-shadow:
+    0 1px 2px rgb(20 24 33 / 0.04),
+    0 24px 48px -28px rgb(20 24 33 / 0.22);
+}
+
+/* ── Accent presets · DARK — product oklch(.75 .135 H) exports ─────────── */
+:root[data-accent='cobalt'] {
+  --c-accent: 126 173 255;
+  --c-accent-hi: 111 157 242;
+  --c-accent-dim: 55 89 152;
+}
+:root[data-accent='teal'] {
+  --c-accent: 55 199 174;
+  --c-accent-hi: 25 183 158;
+  --c-accent-dim: 0 110 91;
+}
+:root[data-accent='rose'] {
+  --c-accent: 241 136 175;
+  --c-accent-hi: 224 120 160;
+  --c-accent-dim: 138 61 92;
+}
+:root[data-accent='slate'] {
+  --c-accent: 158 176 196;
+  --c-accent-hi: 142 161 180;
+  --c-accent-dim: 76 93 110;
+}
+:root[data-accent='olive'] {
+  --c-accent: 163 185 108;
+  --c-accent-hi: 147 169 92;
+  --c-accent-dim: 81 99 18;
+}
+
+/* ── Accent presets · LIGHT — product oklch(.50 .14 H) exports ─────────── */
+:root[data-theme='light']:not([data-accent]),
+:root[data-theme='light'][data-accent='coral'] {
+  --c-accent: 164 60 51;
+  --c-accent-hi: 144 40 34;
+  --c-accent-dim: 104 35 29;
+}
+:root[data-theme='light'][data-accent='cobalt'] {
+  --c-accent: 52 95 178;
+  --c-accent-hi: 36 77 158;
+  --c-accent-dim: 30 58 113;
+}
+:root[data-theme='light'][data-accent='teal'] {
+  --c-accent: 0 117 95;
+  --c-accent-hi: 0 100 80;
+  --c-accent-dim: 0 77 61;
+}
+:root[data-theme='light'][data-accent='rose'] {
+  --c-accent: 158 58 100;
+  --c-accent-hi: 138 39 84;
+  --c-accent-dim: 100 34 62;
+}
+:root[data-theme='light'][data-accent='slate'] {
+  --c-accent: 82 101 122;
+  --c-accent-hi: 66 84 104;
+  --c-accent-dim: 47 63 79;
+}
+:root[data-theme='light'][data-accent='olive'] {
+  --c-accent: 89 108 23;
+  --c-accent-hi: 73 91 0;
+  --c-accent-dim: 53 68 0;
+}

@@ -1,0 +1,60 @@
+---
+/**
+ * Ping Island · Live (split) — copy (eyebrow 03, h3, lede, 3-point flist) +
+ * media: the Dynamic-Island live-activity card. IslandMock (Lane D) renders the
+ * full .pi-stage > .island (LIVE pulse + card), so this section does NOT add a
+ * stage wrapper. Icons match the reference flist (bell / arrow / pulse).
+ */
+import Icon from './Icon.astro'
+import IslandMock from '../mock/IslandMock.tsx'
+import type { IconName } from './icons'
+import type { Locale } from '../../lib/i18n'
+
+interface FItem {
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  body?: string
+  points?: FItem[]
+  locale: Locale
+}
+
+const { eyebrow, title, body, points = [], locale } = Astro.props
+
+// flist icons in reference order: real-time pings · act from island · digest.
+const iconKeys: IconName[] = ['bell', 'arrowR2', 'pulse']
+---
+
+<section class="section" id="island">
+  <div class="wrap">
+    <div class="split">
+      <div class="split-copy reveal">
+        {eyebrow && <span class="eyebrow"><span class="num">03</span> {eyebrow}</span>}
+        {title && <h3>{title}</h3>}
+        {body && <p>{body}</p>}
+        {
+          points.length > 0 && (
+            <ul class="flist">
+              {points.map((p, i) => (
+                <li>
+                  <span class="fi"><Icon name={iconKeys[i] ?? 'bell'} size={14} /></span>
+                  <span>
+                    {p.title && <b>{p.title}</b>}
+                    {p.body && <span>{p.body}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </div>
+
+      <div class="split-media reveal" data-d="1">
+        <IslandMock client:visible live locale={locale} />
+      </div>
+    </div>
+  </div>
+</section>

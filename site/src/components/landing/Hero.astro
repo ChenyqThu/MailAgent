@@ -1,0 +1,125 @@
+---
+/**
+ * Hero — pill · editorial title (with coral <em> highlight + line break) · sub
+ * · two CTAs · local-first meta line · the 3-pane inbox product shot.
+ *
+ * The product shot is InboxMock (Lane D React island, client:visible) wrapped
+ * in the reference .window chrome. Title highlight: YAML gives `title` (full)
+ * + `titleEm` (the phrase to italicize); we split so the highlight retints with
+ * the accent and the break lands before it (matching the reference <br><em>).
+ */
+import Icon from './Icon.astro'
+import InboxMock from '../mock/InboxMock.tsx'
+import { aiFields } from '../mock/fixtures/fixtures'
+import type { Locale } from '../../lib/i18n'
+
+interface MetaItem {
+  text: string
+}
+interface Props {
+  pill?: string
+  pillTag?: string
+  title?: string
+  titleEm?: string
+  sub?: string
+  ctaPrimary?: string
+  ctaGhost?: string
+  meta?: MetaItem[]
+  locale: Locale
+}
+
+const {
+  pill,
+  pillTag = 'v1 · macOS',
+  title = 'MailAgent',
+  titleEm,
+  sub,
+  ctaPrimary,
+  ctaGhost,
+  meta = [],
+  locale,
+} = Astro.props
+
+// Split the title around the highlight phrase so <em> retints with the accent.
+// Break before the em segment to mirror the reference's <br><em>… layout.
+let before = title
+let em = ''
+let after = ''
+if (titleEm && title.includes(titleEm)) {
+  const idx = title.indexOf(titleEm)
+  before = title.slice(0, idx)
+  em = titleEm
+  after = title.slice(idx + titleEm.length)
+}
+
+const inboxAddress = locale === 'en' ? 'MailAgent — Inbox' : 'MailAgent — 收件箱 · Inbox'
+---
+
+<header class="hero" id="top">
+  <div class="hero-glow"></div>
+  <div class="hero-grid"></div>
+
+  <div class="wrap hero-inner" id="main">
+    {
+      pill && (
+        <div class="hero-pill reveal">
+          <span class="tag">
+            <span class="dot"></span>
+            {pillTag}
+          </span>
+          <b>{pill}</b>
+        </div>
+      )
+    }
+
+    <h1 class="hero-title reveal" data-d="1">
+      {before}
+      {em && <><br /><em>{em}</em></>}
+      {after}
+    </h1>
+
+    {sub && <p class="hero-sub reveal" data-d="2">{sub}</p>}
+
+    <div class="hero-cta reveal" data-d="2">
+      {
+        ctaPrimary && (
+          <a class="btn btn--primary btn--lg" href="#download">
+            <Icon name="apple" />
+            <span>{ctaPrimary}</span>
+          </a>
+        )
+      }
+      {
+        ctaGhost && (
+          <a class="btn btn--ghost btn--lg" href="#features">
+            <Icon name="arrowRight" />
+            <span>{ctaGhost}</span>
+          </a>
+        )
+      }
+    </div>
+
+    {
+      meta.length > 0 && (
+        <div class="hero-meta reveal" data-d="3">
+          {meta.map((m) => (
+            <span>
+              <i class="ok"></i> {m.text}
+            </span>
+          ))}
+        </div>
+      )
+    }
+  </div>
+
+  <!-- product shot: live 3-pane inbox mock (Lane D island) -->
+  <div class="wrap hero-shot reveal" data-d="2">
+    <div class="window">
+      <div class="window-bar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <div class="addr">{inboxAddress}</div>
+      </div>
+      <InboxMock client:visible selectedId="e1" aiFields={aiFields} locale={locale} />
+    </div>
+  </div>
+</header>

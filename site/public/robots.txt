@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Sitemap is emitted by @astrojs/sitemap at build (site set in astro.config.mjs).
+Sitemap: https://mailagent.pages.dev/sitemap-index.xml

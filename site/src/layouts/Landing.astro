@@ -1,0 +1,68 @@
+---
+/**
+ * Landing layout — full HTML document, NOT Starlight-themed. Used by the
+ * marketing pages (/ and /en/). Carries:
+ *   - no-flash theme bootstrap (inline <script>, runs before paint)
+ *   - self-hosted fonts via tokens.css import
+ *   - SEO head (title/description/OG/canonical/hreflang)
+ *   - grain overlay (.landing::before, from global.css)
+ *   - <slot/> for the page body
+ *
+ * Lane A builds out the real sections; M0 only ensures the page builds + the
+ * locale's hero renders from YAML.
+ */
+import '../styles/tokens.css'
+import '../styles/global.css'
+import { NO_FLASH_SNIPPET } from '../lib/theme'
+import { getLocale, localizePath, t, type Locale } from '../lib/i18n'
+
+export interface Props {
+  title: string
+  description?: string
+}
+
+const { title, description = '' } = Astro.props
+const locale: Locale = getLocale(Astro.url)
+const htmlLang = locale === 'en' ? 'en-US' : 'zh-CN'
+const chrome = t(locale)
+
+// canonical + hreflang alternates (site set in astro.config)
+const path = Astro.url.pathname
+const canonical = new URL(path, Astro.site ?? Astro.url).href
+const altZh = new URL(localizePath('zh-CN', path), Astro.site ?? Astro.url).href
+const altEn = new URL(localizePath('en', path), Astro.site ?? Astro.url).href
+---
+
+<!doctype html>
+<html lang={htmlLang} data-theme="dark" data-accent="coral">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title}</title>
+    {description && <meta name="description" content={description} />}
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" hreflang="zh-CN" href={altZh} />
+    <link rel="alternate" hreflang="en" href={altEn} />
+    <link rel="alternate" hreflang="x-default" href={altZh} />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    {description && <meta property="og:description" content={description} />}
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content="MailAgent" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- No-flash theme bootstrap: set data-theme/data-accent before first paint -->
+    <script is:inline set:html={NO_FLASH_SNIPPET} />
+  </head>
+  <body class={`landing lang-${locale === 'en' ? 'en' : 'zh'}`}>
+    <a
+      href="#main"
+      style="position:absolute;left:-9999px"
+      onfocus="this.style.left='12px';this.style.top='12px';this.style.zIndex='100'"
+      onblur="this.style.left='-9999px'">{chrome.skipToContent}</a>
+    <slot />
+  </body>
+</html>

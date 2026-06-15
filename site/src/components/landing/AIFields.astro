@@ -1,0 +1,67 @@
+---
+/**
+ * AI Fields (split) — reversed split: media (AI FIELDS panel in window chrome,
+ * AIFieldsMock panel variant w/ blinking draft caret) + copy (eyebrow 02, h3,
+ * lede, 3-point flist). Mirrors the reference "section--tight" split--rev block.
+ */
+import Icon from './Icon.astro'
+import AIFieldsMock from '../mock/AIFieldsMock.tsx'
+import type { Locale } from '../../lib/i18n'
+
+interface FItem {
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  body?: string
+  points?: FItem[]
+  locale: Locale
+}
+
+const { eyebrow, title, body, points = [], locale } = Astro.props
+// Address pill reads the same in both locales (matches the reference).
+const address = 'AI Fields · reviewed'
+---
+
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="split split--rev">
+      <div class="split-media reveal">
+        <div class="window">
+          <div class="window-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <div class="addr">{address}</div>
+          </div>
+          {/* AIFieldsMock renders the bare .aif panel; pad it like a reading
+              pane so it doesn't sit flush against the window chrome. */}
+          <div style="background:rgb(var(--ink-0));padding:18px 20px">
+            <AIFieldsMock client:visible variant="panel" animateCaret locale={locale} />
+          </div>
+        </div>
+      </div>
+
+      <div class="split-copy reveal" data-d="1">
+        {eyebrow && <span class="eyebrow"><span class="num">02</span> {eyebrow}</span>}
+        {title && <h3>{title}</h3>}
+        {body && <p>{body}</p>}
+        {
+          points.length > 0 && (
+            <ul class="flist">
+              {points.map((p) => (
+                <li>
+                  <span class="fi"><Icon name="check" size={14} /></span>
+                  <span>
+                    {p.title && <b>{p.title}</b>}
+                    {p.body && <span>{p.body}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </div>
+    </div>
+  </div>
+</section>

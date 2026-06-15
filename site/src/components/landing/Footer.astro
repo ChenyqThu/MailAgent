@@ -1,0 +1,64 @@
+---
+/**
+ * Footer — brand + tagline, link columns (from YAML), and the bottom bar
+ * (copyright + built-with). External links open in a new tab; in-page anchors
+ * stay same-tab. Mirrors the reference footer structure.
+ */
+import Icon from './Icon.astro'
+
+interface FooterLink {
+  label: string
+  href: string
+}
+interface Col {
+  heading: string
+  links: FooterLink[]
+}
+interface Props {
+  tagline?: string
+  cols?: Col[]
+  copyright?: string
+  built?: string
+  homeHref?: string
+}
+
+const { tagline, cols = [], copyright, built, homeHref = '#top' } = Astro.props
+
+const isExternal = (href: string) => href.startsWith('http')
+---
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <a class="brand" href={homeHref}>
+          <span class="logo" aria-hidden="true"><Icon name="star" size={15} /></span>
+          <span>MailAgent</span>
+        </a>
+        {tagline && <p>{tagline}</p>}
+      </div>
+
+      <div class="footer-cols">
+        {
+          cols.map((col) => (
+            <div class="footer-col">
+              <h5>{col.heading}</h5>
+              {col.links.map((l) =>
+                isExternal(l.href) ? (
+                  <a href={l.href} target="_blank" rel="noopener">{l.label}</a>
+                ) : (
+                  <a href={l.href}>{l.label}</a>
+                )
+              )}
+            </div>
+          ))
+        }
+      </div>
+    </div>
+
+    <div class="footer-bot">
+      {copyright && <span>{copyright}</span>}
+      {built && <span>{built}</span>}
+    </div>
+  </div>
+</footer>

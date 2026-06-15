@@ -1,0 +1,35 @@
+---
+/**
+ * Trust strip — "one email · five things, automatically" + five labelled
+ * actions (categorize / prioritize / summarize / draft / suggest). Bordered
+ * band between hero and features. Icons map 1:1 to the reference order.
+ */
+import Icon from './Icon.astro'
+import type { IconName } from './icons'
+
+interface Props {
+  label?: string
+  items?: string[]
+}
+
+const { label, items = [] } = Astro.props
+
+// Fixed icon order mirrors the reference strip (5 actions).
+const iconKeys: IconName[] = ['categorize', 'prioritize', 'summarize', 'draft', 'suggest']
+---
+
+<section class="strip">
+  <div class="wrap strip-inner">
+    {label && <span class="strip-label">{label}</span>}
+    <div class="strip-items">
+      {
+        items.map((item, i) => (
+          <span>
+            <Icon name={iconKeys[i] ?? 'categorize'} />
+            {item}
+          </span>
+        ))
+      }
+    </div>
+  </div>
+</section>

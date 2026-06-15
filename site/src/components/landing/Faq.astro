@@ -1,0 +1,40 @@
+---
+/**
+ * FAQ — native <details>/<summary> accordion (no JS, keyboard-accessible). First
+ * item open by default. Narrow .wrap (860px) per the reference. Copy from YAML.
+ */
+interface Item {
+  q: string
+  a: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  items?: Item[]
+}
+
+const { eyebrow, title, items = [] } = Astro.props
+---
+
+<section class="section section--tight" id="faq">
+  <div class="wrap" style="max-width:860px">
+    <div class="s-head reveal" style="margin-bottom:32px">
+      {eyebrow && <span class="eyebrow"><span class="num">10</span> {eyebrow}</span>}
+      {title && <h2 class="s-title">{title}</h2>}
+    </div>
+
+    <div class="faq reveal" data-d="1">
+      {
+        items.map((item, i) => (
+          <details open={i === 0}>
+            <summary>
+              <span class="q">{item.q}</span>
+              <span class="pm"></span>
+            </summary>
+            <div class="ans">{item.a}</div>
+          </details>
+        ))
+      }
+    </div>
+  </div>
+</section>

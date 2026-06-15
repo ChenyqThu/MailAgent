@@ -1,0 +1,66 @@
+---
+/**
+ * Custom AI · KOS (reversed showcase) — media is the Custom-AI chat transcript
+ * (ChatMock in window chrome: user bubble + KOS tool-call line + cited answer)
+ * + copy (eyebrow 05, h3, lede, 2-point flist). Icons: cube / bolt.
+ */
+import Icon from './Icon.astro'
+import ChatMock from '../mock/ChatMock.tsx'
+import type { IconName } from './icons'
+import type { Locale } from '../../lib/i18n'
+
+interface FItem {
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  body?: string
+  points?: FItem[]
+  locale: Locale
+}
+
+const { eyebrow, title, body, points = [], locale } = Astro.props
+
+const address = 'Custom AI · KOS bridge'
+const chatTitle = locale === 'en' ? 'Custom AI · chat with an email' : 'Custom AI · 对话一封邮件'
+const iconKeys: IconName[] = ['cube', 'bolt']
+---
+
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="showcase showcase--rev">
+      <div class="showcase-media reveal">
+        <div class="window">
+          <div class="window-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <div class="addr">{address}</div>
+          </div>
+          <ChatMock client:visible title={chatTitle} locale={locale} />
+        </div>
+      </div>
+
+      <div class="showcase-copy reveal" data-d="1">
+        {eyebrow && <span class="eyebrow"><span class="num">05</span> {eyebrow}</span>}
+        {title && <h3 style="margin-top:14px">{title}</h3>}
+        {body && <p>{body}</p>}
+        {
+          points.length > 0 && (
+            <ul class="flist">
+              {points.map((p, i) => (
+                <li>
+                  <span class="fi"><Icon name={iconKeys[i] ?? 'cube'} size={14} /></span>
+                  <span>
+                    {p.title && <b>{p.title}</b>}
+                    {p.body && <span>{p.body}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </div>
+    </div>
+  </div>
+</section>

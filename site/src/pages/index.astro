@@ -1,0 +1,145 @@
+---
+/**
+ * / — marketing landing (zh-CN, root locale). Composes all 14 landing blocks
+ * from src/components/landing/, each fed its slice of the landing YAML
+ * (getEntry('landing','zh-CN')) + the active locale. Mock product visuals are
+ * React islands (client:visible) imported by the section components.
+ *
+ * Bilingual is per-locale content (this page = zh), NOT .zh/.en double spans.
+ * The en sibling (/en/) reads landing/en with the same components.
+ */
+import { getEntry } from 'astro:content'
+import Landing from '../layouts/Landing.astro'
+import Nav from '../components/landing/Nav.astro'
+import Hero from '../components/landing/Hero.astro'
+import Strip from '../components/landing/Strip.astro'
+import Features from '../components/landing/Features.astro'
+import AIFields from '../components/landing/AIFields.astro'
+import Island from '../components/landing/Island.astro'
+import ReportAgent from '../components/landing/ReportAgent.astro'
+import CustomAI from '../components/landing/CustomAI.astro'
+import Provenance from '../components/landing/Provenance.astro'
+import Observability from '../components/landing/Observability.astro'
+import Mobile from '../components/landing/Mobile.astro'
+import Download from '../components/landing/Download.astro'
+import Faq from '../components/landing/Faq.astro'
+import Footer from '../components/landing/Footer.astro'
+import RevealScript from '../components/landing/RevealScript.astro'
+
+const locale = 'zh-CN' as const
+
+const entry = await getEntry('landing', 'zh-CN')
+const d = entry?.data ?? {}
+const seo = d.seo ?? {}
+---
+
+<Landing
+  title={seo.title ?? 'MailAgent — 让 AI 替你看完每一封邮件'}
+  description={seo.description ?? ''}
+>
+  <Nav links={d.nav?.links ?? []} download={d.nav?.download} />
+
+  <Hero
+    pill={d.hero?.pill}
+    pillTag={d.hero?.pillTag}
+    title={d.hero?.title}
+    titleEm={d.hero?.titleEm}
+    sub={d.hero?.sub}
+    ctaPrimary={d.hero?.ctaPrimary}
+    ctaGhost={d.hero?.ctaGhost}
+    meta={d.hero?.meta ?? []}
+    locale={locale}
+  />
+
+  <Strip label={d.strip?.label} items={d.strip?.items ?? []} />
+
+  <Features
+    eyebrow={d.features?.eyebrow}
+    title={d.features?.title}
+    titleEm={d.features?.titleEm as string | undefined}
+    lede={d.features?.lede}
+    cards={d.features?.cards ?? []}
+    locale={locale}
+  />
+
+  <AIFields
+    eyebrow={d.aiFields?.eyebrow}
+    title={d.aiFields?.title}
+    body={d.aiFields?.body}
+    points={d.aiFields?.points ?? []}
+    locale={locale}
+  />
+
+  <Island
+    eyebrow={d.island?.eyebrow}
+    title={d.island?.title}
+    body={d.island?.body}
+    points={d.island?.points ?? []}
+    locale={locale}
+  />
+
+  <ReportAgent
+    eyebrow={d.report?.eyebrow}
+    title={d.report?.title}
+    titleEm={d.report?.titleEm}
+    lede={d.report?.lede}
+    points={d.report?.points ?? []}
+    locale={locale}
+  />
+
+  <CustomAI
+    eyebrow={d.customAI?.eyebrow}
+    title={d.customAI?.title}
+    body={d.customAI?.body}
+    points={d.customAI?.points ?? []}
+    locale={locale}
+  />
+
+  <Provenance
+    eyebrow={d.provenance?.eyebrow}
+    title={d.provenance?.title}
+    titleEm={d.provenance?.titleEm}
+    lede={d.provenance?.lede}
+    points={d.provenance?.points ?? []}
+    locale={locale}
+  />
+
+  <Observability
+    eyebrow={d.observability?.eyebrow}
+    title={d.observability?.title}
+    titleEm={d.observability?.titleEm}
+    lede={d.observability?.lede}
+    stats={d.observability?.stats ?? []}
+    locale={locale}
+  />
+
+  <Mobile
+    eyebrow={d.mobile?.eyebrow}
+    title={d.mobile?.title}
+    body={d.mobile?.body}
+    chips={d.mobile?.chips ?? []}
+    locale={locale}
+  />
+
+  <Download
+    eyebrow={d.download?.eyebrow}
+    title={d.download?.title}
+    body={d.download?.body}
+    ctaPrimary={d.download?.ctaPrimary}
+    ctaGhost={d.download?.ctaGhost}
+    steps={d.download?.steps ?? []}
+    note={d.download?.note}
+  />
+
+  <Faq eyebrow={d.faq?.eyebrow} title={d.faq?.title} items={d.faq?.items ?? []} />
+
+  <Footer
+    tagline={d.footer?.tagline}
+    cols={d.footer?.cols ?? []}
+    copyright={d.footer?.copyright}
+    built={d.footer?.built}
+    homeHref="#top"
+  />
+
+  <RevealScript />
+</Landing>

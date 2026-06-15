@@ -1,0 +1,64 @@
+---
+/**
+ * Provenance / anti-hallucination — section head (eyebrow 06, s-title w/ em,
+ * lede) + .proof grid: the proof-card (AIFieldsMock 'proof' variant — field-row
+ * list with code-filled badge + source links) + numbered proof-points (01-04).
+ */
+import AIFieldsMock from '../mock/AIFieldsMock.tsx'
+import type { Locale } from '../../lib/i18n'
+
+interface FItem {
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  points?: FItem[]
+  locale: Locale
+}
+
+const { eyebrow, title = '', titleEm, lede, points = [], locale } = Astro.props
+
+let tBefore = title
+let tEm = ''
+let tAfter = ''
+if (titleEm && title.includes(titleEm)) {
+  const idx = title.indexOf(titleEm)
+  tBefore = title.slice(0, idx)
+  tEm = titleEm
+  tAfter = title.slice(idx + titleEm.length)
+}
+---
+
+<section class="section" id="trust">
+  <div class="wrap">
+    <div class="s-head reveal">
+      {eyebrow && <span class="eyebrow"><span class="num">06</span> {eyebrow}</span>}
+      <h2 class="s-title">{tBefore}{tEm && <em>{tEm}</em>}{tAfter}</h2>
+      {lede && <p class="s-lede">{lede}</p>}
+    </div>
+
+    <div class="proof">
+      <div class="reveal">
+        <AIFieldsMock client:visible variant="proof" locale={locale} />
+      </div>
+
+      <div class="proof-points reveal" data-d="1">
+        {
+          points.map((p, i) => (
+            <div class="pp">
+              <span class="n">{String(i + 1).padStart(2, '0')}</span>
+              <div>
+                {p.title && <b>{p.title}</b>}
+                {p.body && <p>{p.body}</p>}
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+</section>

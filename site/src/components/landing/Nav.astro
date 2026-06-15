@@ -1,0 +1,63 @@
+---
+/**
+ * Marketing nav — brand · in-page section links (from landing YAML) · docs link
+ * · theme/accent/language switchers (ThemeAccentLang island) · download CTA.
+ *
+ * Faithful to the reference frontend/docs/landing/MailAgent.html nav, but copy
+ * is per-locale (YAML), not .zh/.en double spans. Scroll-blur (.scrolled past
+ * 24px) is wired with a tiny passive inline script — matching main.js.
+ */
+import ThemeAccentLang from './controls/ThemeAccentLang.tsx'
+import Icon from './Icon.astro'
+import { getLocale, localizePath, t } from '../../lib/i18n'
+
+interface NavLink {
+  label: string
+  href: string
+}
+interface Props {
+  links?: NavLink[]
+  download?: string
+}
+
+const { links = [], download } = Astro.props
+
+const locale = getLocale(Astro.url)
+const chrome = t(locale)
+const docsHref = localizePath(locale, '/docs/')
+const homeHref = locale === 'en' ? '/en/' : '/'
+const downloadLabel = download ?? chrome.download
+---
+
+<nav class="nav" id="nav">
+  <a class="brand" href={homeHref}>
+    <span class="logo" aria-hidden="true">
+      <Icon name="star" size={15} />
+    </span>
+    <span>MailAgent</span>
+  </a>
+
+  <div class="nav-tools">
+    <div class="nav-links">
+      {links.map((l) => <a href={l.href}>{l.label}</a>)}
+      <a href={docsHref}>{chrome.docs}</a>
+    </div>
+
+    <ThemeAccentLang client:load />
+
+    <a class="btn btn--primary nav-cta" href="#download">
+      <Icon name="download" size={17} />
+      <span class="btn-label">{downloadLabel}</span>
+    </a>
+  </div>
+</nav>
+
+<script>
+  // Scroll-blur: add .scrolled past 24px (reference main.js threshold). Passive.
+  const nav = document.getElementById('nav')
+  if (nav) {
+    const onScroll = () => nav.classList.toggle('scrolled', window.scrollY > 24)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+  }
+</script>

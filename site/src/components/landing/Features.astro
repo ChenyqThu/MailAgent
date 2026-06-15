@@ -1,0 +1,93 @@
+---
+/**
+ * AI Triage feature grid — section head + .fgrid of 5 cards. Card 0 is the wide
+ * (col-8) classification card carrying the priority chip-row; the other four
+ * are col-4. Kicker → icon mapping + reveal cadence mirror the reference.
+ */
+import Icon from './Icon.astro'
+import type { IconName } from './icons'
+
+interface Card {
+  kicker?: string
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  cards?: Card[]
+  locale: 'zh-CN' | 'en'
+}
+
+const { eyebrow, title = '', titleEm, lede, cards = [] } = Astro.props
+
+// Split title around the highlight phrase (coral <em>).
+let tBefore = title
+let tEm = ''
+let tAfter = ''
+if (titleEm && title.includes(titleEm)) {
+  const idx = title.indexOf(titleEm)
+  tBefore = title.slice(0, idx)
+  tEm = titleEm
+  tAfter = title.slice(idx + titleEm.length)
+}
+
+// Per-card icon (by position, matching the reference card order) + col span +
+// reveal delay. Card 0 is the wide classification card with the chip row.
+const meta: { icon: IconName; col: string; d?: string }[] = [
+  { icon: 'categorize', col: 'col-8' },
+  { icon: 'summarize', col: 'col-4', d: '1' },
+  { icon: 'draft', col: 'col-4' },
+  { icon: 'suggest', col: 'col-4', d: '1' },
+  { icon: 'search', col: 'col-4', d: '2' },
+]
+
+// Priority chips shown inside the wide classification card.
+const chips = [
+  { cls: 'pip-crit', label: 'Critical' },
+  { cls: 'pip-urg', label: 'Urgent' },
+  { cls: 'pip-impt', label: 'Important' },
+  { cls: 'pip-norm', label: 'Normal' },
+]
+---
+
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="s-head reveal">
+      {eyebrow && <span class="eyebrow"><span class="num">01</span> {eyebrow}</span>}
+      <h2 class="s-title">
+        {tBefore}{tEm && <em>{tEm}</em>}{tAfter}
+      </h2>
+      {lede && <p class="s-lede">{lede}</p>}
+    </div>
+
+    <div class="fgrid">
+      {
+        cards.map((card, i) => {
+          const m = meta[i] ?? { icon: 'categorize', col: 'col-4' }
+          return (
+            <div class:list={['card', m.col, 'reveal']} data-d={m.d}>
+              {card.kicker && (
+                <div class="kicker">
+                  <span class="ic"><Icon name={m.icon} size={16} /></span>
+                  {card.kicker}
+                </div>
+              )}
+              {card.title && <h3>{card.title}</h3>}
+              {card.body && <p>{card.body}</p>}
+              {i === 0 && (
+                <div class="chip-row">
+                  {chips.map((c) => (
+                    <span class:list={['tag-pip', c.cls]}><span class="d"></span>{c.label}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })
+      }
+    </div>
+  </div>
+</section>

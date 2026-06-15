@@ -1,0 +1,33 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Self-hosted webfonts (@fontsource) — NOT Google CDN.
+   Imported by tokens.css. Families wired in tokens.css --font-* and the
+   Tailwind preset fontFamily. The reference landing pulled these from
+   fonts.googleapis.com; we self-host to avoid render-blocking + privacy.
+
+   - Instrument Serif → --font-display (editorial serif headings, en)
+   - Space Grotesk    → --font-sans    (UI / body)
+   - JetBrains Mono    → --font-mono    (eyebrows, code, data)
+   - Noto Sans SC      → CJK fallback in --font-sans / --font-display
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Instrument Serif — display (regular + italic) */
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+
+/* Space Grotesk — sans (300–700) */
+@import '@fontsource/space-grotesk/300.css';
+@import '@fontsource/space-grotesk/400.css';
+@import '@fontsource/space-grotesk/500.css';
+@import '@fontsource/space-grotesk/600.css';
+@import '@fontsource/space-grotesk/700.css';
+
+/* JetBrains Mono — mono (400–600) */
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/600.css';
+
+/* Noto Sans SC — CJK (400–700) */
+@import '@fontsource/noto-sans-sc/400.css';
+@import '@fontsource/noto-sans-sc/500.css';
+@import '@fontsource/noto-sans-sc/600.css';
+@import '@fontsource/noto-sans-sc/700.css';

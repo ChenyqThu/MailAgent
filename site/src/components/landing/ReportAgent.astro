@@ -1,0 +1,80 @@
+---
+/**
+ * Report Agent — section head (eyebrow 04, s-title w/ em, lede) + .showcase:
+ * media is the /agents daily-digest view (ReportMock in window chrome, with the
+ * CSS 3D perspective tilt-on-hover from global.css) + a 4-point flist.
+ */
+import Icon from './Icon.astro'
+import ReportMock from '../mock/ReportMock.tsx'
+import type { IconName } from './icons'
+import type { Locale } from '../../lib/i18n'
+
+interface FItem {
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  points?: FItem[]
+  locale: Locale
+}
+
+const { eyebrow, title = '', titleEm, lede, points = [], locale } = Astro.props
+
+let tBefore = title
+let tEm = ''
+let tAfter = ''
+if (titleEm && title.includes(titleEm)) {
+  const idx = title.indexOf(titleEm)
+  tBefore = title.slice(0, idx)
+  tEm = titleEm
+  tAfter = title.slice(idx + titleEm.length)
+}
+
+const address = locale === 'en' ? '/agents · Daily digest' : '/agents · 邮件日报'
+// flist icons in reference order: scheduled · source links · trends · run now.
+const iconKeys: IconName[] = ['calendar', 'shieldCheck', 'bars', 'refresh']
+---
+
+<section class="section" id="agent">
+  <div class="wrap">
+    <div class="s-head reveal">
+      {eyebrow && <span class="eyebrow"><span class="num">04</span> {eyebrow}</span>}
+      <h2 class="s-title">{tBefore}{tEm && <em>{tEm}</em>}{tAfter}</h2>
+      {lede && <p class="s-lede">{lede}</p>}
+    </div>
+
+    <div class="showcase">
+      <div class="showcase-media reveal">
+        <div class="window">
+          <div class="window-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <div class="addr">{address}</div>
+          </div>
+          <ReportMock client:visible selectedId="r1" locale={locale} />
+        </div>
+      </div>
+
+      <div class="showcase-copy reveal" data-d="1">
+        {
+          points.length > 0 && (
+            <ul class="flist">
+              {points.map((p, i) => (
+                <li>
+                  <span class="fi"><Icon name={iconKeys[i] ?? 'calendar'} size={14} /></span>
+                  <span>
+                    {p.title && <b>{p.title}</b>}
+                    {p.body && <span>{p.body}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </div>
+    </div>
+  </div>
+</section>

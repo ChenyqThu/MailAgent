@@ -1,0 +1,27 @@
+---
+/**
+ * /docs/ (zh) — docs entry point. Starlight mounts the docs collection at ROOT
+ * paths (/101/..., /agent/...), and the marketing landing owns `/`, so there's
+ * no Starlight page at `/docs/`. This thin page gives the PRD-specified `/docs/`
+ * URL a real home and forwards into the themed docs (first guide page).
+ *
+ * Uses a meta-refresh + JS redirect (static-host friendly; no SSR redirect).
+ */
+const target = '/101/overview/'
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MailAgent 文档</title>
+    <meta http-equiv="refresh" content={`0; url=${target}`} />
+    <link rel="canonical" href={target} />
+    <script is:inline define:vars={{ target }}>
+      window.location.replace(target)
+    </script>
+  </head>
+  <body>
+    <p>前往 <a href={target}>MailAgent 文档</a>…</p>
+  </body>
+</html>

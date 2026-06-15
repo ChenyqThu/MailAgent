@@ -1,0 +1,73 @@
+---
+/**
+ * Download — centered .dl block: eyebrow 09 · h2 · lede · two CTAs (real GitHub
+ * Release + source) · 3-step install grid · note. Buttons link to the actual
+ * MailAgent GitHub Releases / repo (the reference's real URLs).
+ */
+import Icon from './Icon.astro'
+
+interface Step {
+  kicker?: string
+  title?: string
+  body?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  body?: string
+  ctaPrimary?: string
+  ctaGhost?: string
+  steps?: Step[]
+  note?: string
+}
+
+const { eyebrow, title, body, ctaPrimary, ctaGhost, steps = [], note } = Astro.props
+
+const RELEASES = 'https://github.com/ChenyqThu/MailAgent/releases'
+const REPO = 'https://github.com/ChenyqThu/MailAgent/'
+---
+
+<section class="section" id="download">
+  <div class="wrap">
+    <div class="dl reveal">
+      {eyebrow && <span class="eyebrow" style="justify-content:center"><span class="num">09</span> {eyebrow}</span>}
+      {title && <h2 style="margin-top:18px">{title}</h2>}
+      {body && <p>{body}</p>}
+
+      <div class="dl-cta">
+        {
+          ctaPrimary && (
+            <a class="btn btn--primary btn--lg" href={RELEASES} target="_blank" rel="noopener">
+              <Icon name="apple" />
+              <span>{ctaPrimary}</span>
+            </a>
+          )
+        }
+        {
+          ctaGhost && (
+            <a class="btn btn--ghost btn--lg" href={REPO} target="_blank" rel="noopener">
+              <Icon name="github" />
+              <span>{ctaGhost}</span>
+            </a>
+          )
+        }
+      </div>
+
+      {
+        steps.length > 0 && (
+          <div class="dl-steps">
+            {steps.map((s) => (
+              <div class="dl-step">
+                {s.kicker && <div class="sn">{s.kicker}</div>}
+                {s.title && <b>{s.title}</b>}
+                {s.body && <p>{s.body}</p>}
+              </div>
+            ))}
+          </div>
+        )
+      }
+
+      {note && <div class="dl-note">{note}</div>}
+    </div>
+  </div>
+</section>

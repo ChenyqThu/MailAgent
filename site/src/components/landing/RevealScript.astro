@@ -1,0 +1,65 @@
+---
+/**
+ * Scroll-reveal bootstrap — ported verbatim (behavior) from the reference
+ * frontend/docs/landing/main.js reveal block. FAIL-OPEN by design:
+ *   - .reveal is visible by default (global.css); the hidden-then-animate state
+ *     (html.js-anim .reveal) is opted into ONLY once JS is confirmed running AND
+ *     prefers-reduced-motion is NOT set. So no-JS / reduced-motion → content is
+ *     always visible.
+ *   - On opt-in: immediately reveal anything already in view, then observe the
+ *     rest with an IntersectionObserver, plus a window 'load' re-check and a
+ *     2.6s safety net that reveals everything — content is never left hidden.
+ *
+ * Included once per page (after the sections). Theme/accent/lang switching is
+ * handled separately by the ThemeAccentLang island; nav scroll-blur lives in
+ * Nav.astro. This file owns reveal only.
+ */
+---
+
+<script>
+  ;(function () {
+    'use strict'
+    var root = document.documentElement
+    var reveals = document.querySelectorAll('.reveal')
+    var reduce =
+      window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    function revealAll() {
+      reveals.forEach(function (el) {
+        el.classList.add('in')
+      })
+    }
+    function revealInView() {
+      var vh = window.innerHeight || document.documentElement.clientHeight
+      reveals.forEach(function (el) {
+        var r = el.getBoundingClientRect()
+        if (r.top < vh * 0.92 && r.bottom > 0) el.classList.add('in')
+      })
+    }
+
+    if (!reduce && 'IntersectionObserver' in window) {
+      // Opt into the hidden-then-animate state now that JS is confirmed live.
+      root.classList.add('js-anim')
+      // Immediately reveal anything already on screen (don't wait on observer).
+      revealInView()
+      var io = new IntersectionObserver(
+        function (entries) {
+          entries.forEach(function (en) {
+            if (en.isIntersecting) {
+              en.target.classList.add('in')
+              io.unobserve(en.target)
+            }
+          })
+        },
+        { threshold: 0.08, rootMargin: '0px 0px -6% 0px' }
+      )
+      reveals.forEach(function (el) {
+        if (!el.classList.contains('in')) io.observe(el)
+      })
+      // Safety nets — never leave content hidden.
+      window.addEventListener('load', revealInView)
+      setTimeout(revealAll, 2600)
+    }
+    // reduced-motion or no-IO: leave content visible (CSS default). Nothing to do.
+  })()
+</script>

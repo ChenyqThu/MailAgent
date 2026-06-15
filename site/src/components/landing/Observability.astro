@@ -1,0 +1,82 @@
+---
+/**
+ * Observability — section head (eyebrow 07, s-title w/ em, lede) + a 4-cell
+ * .stats band + the LLM dashboard window (DashboardMock: cards · SVG donut ·
+ * cache bar). Stat values re-wrap a trailing unit (M / s …) in <em> so it
+ * retints with the accent, matching the reference's 1.11<em>M</em> styling.
+ */
+import DashboardMock from '../mock/DashboardMock.tsx'
+import type { Locale } from '../../lib/i18n'
+
+interface Stat {
+  value: string
+  key: string
+  sub?: string
+}
+interface Props {
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  stats?: Stat[]
+  locale: Locale
+}
+
+const { eyebrow, title = '', titleEm, lede, stats = [], locale } = Astro.props
+
+let tBefore = title
+let tEm = ''
+let tAfter = ''
+if (titleEm && title.includes(titleEm)) {
+  const idx = title.indexOf(titleEm)
+  tBefore = title.slice(0, idx)
+  tEm = titleEm
+  tAfter = title.slice(idx + titleEm.length)
+}
+
+// Split "1.11M" → { num: "1.11", unit: "M" }; "5,904" → { num: "5,904", unit: "" }.
+function splitStat(v: string): { num: string; unit: string } {
+  const m = v.match(/^([\d.,]+)([A-Za-z%]+)?$/)
+  if (m) return { num: m[1], unit: m[2] ?? '' }
+  return { num: v, unit: '' }
+}
+
+const address = locale === 'en' ? 'LLM Dashboard' : 'LLM Dashboard · 看板'
+---
+
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="s-head reveal">
+      {eyebrow && <span class="eyebrow"><span class="num">07</span> {eyebrow}</span>}
+      <h2 class="s-title">{tBefore}{tEm && <em>{tEm}</em>}{tAfter}</h2>
+      {lede && <p class="s-lede">{lede}</p>}
+    </div>
+
+    {
+      stats.length > 0 && (
+        <div class="stats reveal" style="margin-bottom:28px">
+          {stats.map((s) => {
+            const { num, unit } = splitStat(s.value)
+            return (
+              <div class="stat">
+                <div class="v">{num}{unit && <em>{unit}</em>}</div>
+                <div class="k">{s.key}</div>
+                {s.sub && <div class="sub">{s.sub}</div>}
+              </div>
+            )
+          })}
+        </div>
+      )
+    }
+
+    <div class="reveal" data-d="1">
+      <div class="window">
+        <div class="window-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="addr">{address}</div>
+        </div>
+        <DashboardMock client:visible range="7d" locale={locale} />
+      </div>
+    </div>
+  </div>
+</section>

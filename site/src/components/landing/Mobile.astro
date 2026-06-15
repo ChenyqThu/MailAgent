@@ -1,0 +1,44 @@
+---
+/**
+ * Mobile (split) — copy (eyebrow 08, h3, lede, 3 chips) + centered phone frame
+ * (PhoneMock: status bar · island ping · tabs · compact list · home indicator).
+ * Chips render as neutral tag-pips, matching the reference chip-row.
+ */
+import PhoneMock from '../mock/PhoneMock.tsx'
+import type { Locale } from '../../lib/i18n'
+
+interface Props {
+  eyebrow?: string
+  title?: string
+  body?: string
+  chips?: string[]
+  locale: Locale
+}
+
+const { eyebrow, title, body, chips = [], locale } = Astro.props
+---
+
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="split">
+      <div class="split-copy reveal">
+        {eyebrow && <span class="eyebrow"><span class="num">08</span> {eyebrow}</span>}
+        {title && <h3>{title}</h3>}
+        {body && <p>{body}</p>}
+        {
+          chips.length > 0 && (
+            <div class="chip-row" style="margin-top:24px">
+              {chips.map((c) => (
+                <span class="tag-pip pip-norm"><span class="d"></span>{c}</span>
+              ))}
+            </div>
+          )
+        }
+      </div>
+
+      <div class="split-media reveal" data-d="1" style="display:flex;justify-content:center">
+        <PhoneMock client:visible clock="9:41" locale={locale} />
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,258 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Landing copy — English. Transcribed from the reference
+# frontend/docs/landing/MailAgent.html (.en spans). Lane A consumes this via
+# getEntry('landing','en'). Schema is tolerant — see src/content.config.ts.
+# ═══════════════════════════════════════════════════════════════════════
+
+seo:
+  title: MailAgent — AI, native to your inbox
+  description: >-
+    MailAgent · a desktop email assistant with AI built into the inbox.
+    Auto-classify, prioritize, summarize and draft replies, with live Dynamic
+    Island pings, a daily report agent, and full provenance.
+
+nav:
+  links:
+    - { label: Features, href: '#features' }
+    - { label: Live, href: '#island' }
+    - { label: Reports, href: '#agent' }
+    - { label: Provenance, href: '#trust' }
+    - { label: FAQ, href: '#faq' }
+  download: Download
+
+hero:
+  pill: AI, native to your inbox
+  pillTag: v1 · macOS
+  title: Your inbox, finally handled.
+  titleEm: finally handled
+  sub: >-
+    MailAgent reads every email the moment it lands — classifying, prioritizing,
+    summarizing and drafting replies. What matters rises; noise settles. Every
+    claim links back to the source.
+  ctaPrimary: Download for macOS
+  ctaGhost: See how it works
+  meta:
+    - { text: Local-first · stays on device }
+    - { text: claude-sonnet-4-6 }
+    - { text: Open source · MIT }
+
+strip:
+  label: One email · five things, automatically
+  items:
+    - Categorize
+    - Prioritize
+    - Summarize
+    - Draft reply
+    - Suggest action
+
+features:
+  eyebrow: AI Triage
+  title: Every email arrives already read.
+  titleEm: already read
+  lede: >-
+    Not a batch job after the fact — processed on arrival. Category, priority,
+    a one-line summary and a suggested action, written structurally into every
+    message so the list tells you what to open first.
+  cards:
+    - kicker: Category · Priority
+      title: Category & priority, at a glance
+      body: >-
+        Each email is tagged with a category (product, decision-needed, FYI…)
+        and a priority. Critical mail surfaces in red; FYI settles to the
+        bottom — no more digging through 674 messages.
+    - kicker: Summary
+      title: One-line summaries
+      body: >-
+        Long threads and deep quote chains, compressed into a point you read in
+        two seconds — before you ever open it.
+    - kicker: Reply Suggestion
+      title: Replies, pre-drafted
+      body: >-
+        For mail that needs a reply, a context-aware draft is waiting. Tweak a
+        line or send as-is — you stay in control.
+    - kicker: Action
+      title: A suggested next step
+      body: >-
+        "Needs a decision," "awaiting sign-off," "archive" — it tells you not
+        just what an email says, but what to do with it.
+    - kicker: Full-text · FTS5
+      title: Instant full-text search
+      body: >-
+        A local FTS5 index over 9,000+ emails. Hit ⌘K for millisecond results —
+        and a graceful fallback when KOS is offline.
+
+aiFields:
+  eyebrow: AI Fields
+  title: The AI's reasoning, right there in the email
+  body: >-
+    Every email carries an AI FIELDS panel up top: summary, priority, action,
+    category, reply suggestion — all structured, reviewable, and markable as
+    "reviewed." Not a black box; a transparent assistant.
+  points:
+    - title: Structured fields, not prose
+      body: The LLM emits JSON blocks rendered natively — stable, checkable, back-fillable.
+    - title: Bilingual UI, body untouched
+      body: UI, fields and actions switch CN/EN; the email body always stays in its original language.
+    - title: You set the tone
+      body: Six accent colors, light/dark, interface materials — one switch re-skins everything.
+
+island:
+  eyebrow: Ping Island · Live
+  title: The mail that matters comes to you
+  body: >-
+    MailAgent pushes what's critical to the Dynamic Island. A high-priority
+    email lands, gets triaged, and its gist and suggested action float at the
+    top of your screen — no app, no inbox dive.
+  points:
+    - title: Real-time pings
+      body: Only the genuinely urgent interrupts you; the rest is archived in silence.
+    - title: Act from the island
+      body: Archive, snooze, open — common actions in a single tap.
+    - title: Twice-daily digest
+      body: At 9am and 6pm, the island sums up the last 24 hours.
+
+report:
+  eyebrow: Report Agent
+  title: A daily briefing you'll actually finish
+  titleEm: actually finish
+  lede: >-
+    Jarvis reviews the last 24 hours and curates a structured report: what's
+    been handled, what still needs you, the key facts you must know, and the
+    rest summarized. Weekly and monthly run on the same engine.
+  points:
+    - title: Daily / weekly / monthly, scheduled
+      body: >-
+        Detail by day, trends by week, a high-level recap by month — with
+        catch-up on launch so nothing is missed.
+    - title: Every line links to source
+      body: Every email in the report is clickable — straight to the message in-app or its Notion page.
+    - title: Trends from real counts
+      body: Weekly and monthly stats are computed deterministically in code — never hallucinated by the model.
+    - title: Run now · edit prompt · pick model
+      body: Generate on demand, adjust the schedule, and edit the report prompt right in /agents.
+
+customAI:
+  eyebrow: Custom AI · KOS
+  title: Ask about an email — it goes and looks things up
+  body: >-
+    Custom AI bridges to the KOS knowledge base over MCP — email sources, an
+    entity graph, historical trajectories. The model decides what to query from
+    context and answers with citations. We don't spoon-feed it; we hand it the
+    tools and let it drive.
+  points:
+    - title: Read-only guardrails
+      body: >-
+        Only read tools (query, search, traverse) are exposed; writes are
+        blocked at the bridge to keep the graph clean.
+    - title: Graceful degradation
+      body: If KOS is offline, it falls back to local FTS5 search — the conversation never breaks.
+
+provenance:
+  eyebrow: Provenance
+  title: The AI writes the prose. Code guards the numbers.
+  titleEm: Code guards the numbers.
+  lede: >-
+    The one thing an email assistant must never do is make things up.
+    MailAgent's discipline: counts, links and email IDs are back-filled
+    deterministically by code; the LLM only handles wording and grouping. The
+    blast radius of a mistake is confined to phrasing.
+  points:
+    - title: Numbers computed in code
+      body: Totals, unread, urgent, processed, pending — all deterministic and consistent with the database.
+    - title: Hallucinated IDs discarded
+      body: Any email ID the model emits is validated against the real candidate set; invented ones are dropped.
+    - title: Links are authoritative
+      body: Every source link is generated from a real page_id — it always lands on the right message.
+    - title: Local-first
+      body: Mail lives in local SQLite read directly by Electron; the body is never sent out for translation.
+
+observability:
+  eyebrow: Observability
+  title: Every call, fully accounted for
+  titleEm: fully accounted for
+  lede: >-
+    The LLM and system dashboards lay the real numbers bare: throughput, tokens,
+    latency, cache hits, sync health, dead-letter queue. Not decorative charts —
+    the actual ledger of 5,904 runs.
+  stats:
+    - { value: '5,904', key: Processed · 7d, sub: over the last week }
+    - { value: '1.11M', key: Input tokens, sub: input tokens }
+    - { value: '42.5s', key: Avg latency, sub: average per email }
+    - { value: '9,311', key: Synced mail, sub: emails synced }
+
+mobile:
+  eyebrow: Anywhere
+  title: At home on the desktop, with you on mobile
+  body: >-
+    The same design system and the same AI judgments, responsive down to the
+    phone. Focused/Other split, priority flags, island pings — just as clean on
+    a narrow screen.
+  chips:
+    - 响应式 / Responsive
+    - 深浅主题 / Light · Dark
+    - 6 Accents
+
+download:
+  eyebrow: Get MailAgent
+  title: Hand over your inbox
+  body: >-
+    A local-first macOS desktop app, open source. Download, connect your
+    mailbox, and the AI takes over from the next email.
+  ctaPrimary: Download for macOS · GitHub Release
+  ctaGhost: View source on GitHub
+  steps:
+    - { kicker: STEP 01, title: Download & install, body: Grab the latest .dmg from Releases and drop it in Applications. }
+    - { kicker: STEP 02, title: Connect mail, body: Connect over DavMail / IMAP; mail syncs to local SQLite. }
+    - { kicker: STEP 03, title: Let the AI run, body: Add your model key, enable the agent — triage starts on the next email. }
+  note: Requires macOS 13+ · bring your own model key · your mail never leaves this device
+
+faq:
+  eyebrow: FAQ
+  title: A few more things
+  items:
+    - q: Where does my mail go?
+      a: >-
+        Mail is synced and stored in a local SQLite database on your machine,
+        read directly by Electron. Only AI processing sends relevant content to
+        the model you configure. The email body is never sent out for translation.
+    - q: Will it send or archive on its own?
+      a: >-
+        No. In v1, suggested actions are display-only — you stay in control.
+        Replies are drafts; archiving is your click. Bulk execution is for a
+        later version and always behind your confirmation.
+    - q: Can I trust the numbers in reports?
+      a: >-
+        Yes. All counts, links and email IDs are computed and back-filled by
+        code, consistent with the database. The LLM only handles wording,
+        grouping and highlights; any ID it emits is validated, and invented ones
+        are discarded.
+    - q: Which languages and models?
+      a: >-
+        The UI, fields and AI quick-actions toggle between 简体中文 and English;
+        the email body stays in its original language. The default model is
+        claude-sonnet-4-6, swappable in settings.
+    - q: What kind of project is this?
+      a: >-
+        MailAgent is an open-source personal project — an AI email assistant for
+        heavy mail users. The design system, Ping Island, report agent and KOS
+        bridge all live in a public repo. Star it, file issues, or run your own.
+
+footer:
+  tagline: >-
+    A desktop email assistant with AI native to the inbox. Local-first,
+    traceable, open source. A personal project for people who live in their mail.
+  cols:
+    - heading: Product
+      links:
+        - { label: Features, href: '#features' }
+        - { label: Ping Island, href: '#island' }
+        - { label: Report Agent, href: '#agent' }
+        - { label: Provenance, href: '#trust' }
+    - heading: Get it
+      links:
+        - { label: Download macOS, href: '#download' }
+        - { label: GitHub, href: 'https://github.com/ChenyqThu/MailAgent/' }
+        - { label: Releases, href: 'https://github.com/ChenyqThu/MailAgent/releases' }
+        - { label: FAQ, href: '#faq' }
+  copyright: © 2026 MailAgent · MIT License
+  built: Built with claude-sonnet-4-6 · Local-first

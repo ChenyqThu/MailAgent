@@ -1,0 +1,51 @@
+---
+/**
+ * Inline-SVG icon helper — renders an ICONS[key] entry (icons.ts) with the
+ * reference's stroke/fill convention. Defaults match the reference defaults
+ * (stroke-width 2, viewBox 0 0 24 24). `size` sets width/height in px.
+ *
+ *   <Icon name="search" />
+ *   <Icon name="star" size={13} />        // fill icon, auto-detected
+ *   <Icon name="check" />                  // uses the icon's sw override (2.4)
+ */
+import { ICONS, type IconName } from './icons'
+
+interface Props {
+  name: IconName
+  size?: number
+  /** extra class on the <svg> */
+  class?: string
+}
+
+const { name, size, class: className } = Astro.props
+const icon = ICONS[name]
+const fill = icon?.f
+const sw = icon?.sw ?? 2
+---
+
+{
+  icon &&
+    (fill ? (
+      <svg
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        aria-hidden="true"
+        class={className}
+        width={size}
+        height={size}
+        set:html={icon.d}
+      />
+    ) : (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width={sw}
+        aria-hidden="true"
+        class={className}
+        width={size}
+        height={size}
+        set:html={icon.d}
+      />
+    ))
+}

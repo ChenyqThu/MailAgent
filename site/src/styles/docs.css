@@ -1,0 +1,22 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Starlight theme overrides — KEPT MINIMAL on purpose.
+   Only re-point Starlight's accent ramp at our coral token so the docs chrome
+   (active sidebar link, links, focus ring) matches the landing accent. We do
+   NOT restyle Starlight's layout/typography here — that fights the theme and
+   is out of M0 scope. tokens.css is loaded before this file, so --c-accent is
+   already resolved (and re-resolves on data-theme / data-accent swap).
+
+   Starlight reads --sl-color-accent / -low / -high for its accent ramp.
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --sl-color-accent-low: rgb(var(--c-accent-dim));
+  --sl-color-accent: rgb(var(--c-accent));
+  --sl-color-accent-high: rgb(var(--c-accent-hi));
+}
+
+/* Docs body uses the same UI sans as the landing for family consistency.
+   Starlight controls sizing/spacing; we only set the family var. */
+:root {
+  --sl-font: var(--font-sans);
+  --sl-font-mono: var(--font-mono);
+}

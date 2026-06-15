@@ -1,0 +1,23 @@
+---
+/**
+ * /en/docs/ (en) — docs entry point. See src/pages/docs/index.astro for why
+ * this thin forwarder exists. Forwards into the English first guide page.
+ */
+const target = '/en/101/overview/'
+---
+
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MailAgent Docs</title>
+    <meta http-equiv="refresh" content={`0; url=${target}`} />
+    <link rel="canonical" href={target} />
+    <script is:inline define:vars={{ target }}>
+      window.location.replace(target)
+    </script>
+  </head>
+  <body>
+    <p>Heading to the <a href={target}>MailAgent docs</a>…</p>
+  </body>
+</html>
