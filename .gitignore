@@ -88,6 +88,10 @@ frontend/index.js
 /v2-app-*.png
 /onboarding）/
 
+# --- 第三方 skill 安装产物（transitions-dev 等，留本地不进 git）---
+/skills-lock.json
+.claude/skills/transitions-dev
+
 # --- Trellis 工具（用户裁定: 留本地工具, 不进 git）---
 .trellis/
 .claude/agents/trellis-*.md
