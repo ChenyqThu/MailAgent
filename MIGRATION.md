@@ -171,7 +171,7 @@ sqlite3 data/sync_store.db ".tables" | tr ' ' '\n' | grep -E "email_outbox|calen
 - **Notion Email Agent（旧默认）**：Notion 端 Automation 填 AI 字段。不动它就继续用。
 - **本地 LLM 分类**（`LLM_AGENT_ENABLED=true`）：本地用 Anthropic 兼容网关填 AI 字段。
   ⚠️ **启用前必须先在 Notion 端把 Email Agent 停掉**（或加 "AI Summary is empty" 过滤），
-  否则两条 AI 路径双跑撞车。详见 [`docs/LLM_AGENT_SETUP.md`](docs/LLM_AGENT_SETUP.md)。
+  否则两条 AI 路径双跑撞车。详见 [`docs/reference/llm-agent/LLM_AGENT_SETUP.md`](docs/reference/llm-agent/LLM_AGENT_SETUP.md)。
 - **Notion Agent CLI**（`notion-agent`，前端 AI 后端选项之一）：前端 chat 可调；`pipx install notion-agent-cli`。
 - **建议**：维持现状最省心。想要本地可控/省 Notion AI 额度 → 切本地 LLM（注意防双跑）。
 
@@ -233,7 +233,7 @@ sed -i.bak 's/^MAILAGENT_BACKEND=davmail/MAILAGENT_BACKEND=applescript/' .env
 sqlite3 data/sync_store.db "UPDATE sync_state SET value = (SELECT MAX(internal_id) FROM email_metadata WHERE backend_origin='applescript') WHERE key='last_max_row_id';"
 pm2 restart mail-sync
 ```
-DavMail 完整配置项见 [`.env.example`](.env.example) §Dual-Backend，背景见 [`docs/claude/architecture-internals.md`](docs/claude/architecture-internals.md) §Sprint 16。
+DavMail 完整配置项见 [`.env.example`](.env.example) §Dual-Backend，背景见 [`docs/reference/architecture/architecture-internals.md`](docs/reference/architecture/architecture-internals.md) §Sprint 16。
 
 ### 5.3 回填历史邮件到 SSoT
 
@@ -287,16 +287,16 @@ mailagent attachment extract --pending --include-missing --limit 50   # 分批�
 
 **回填完成后再做**：
 - **读路径灰度**：`NOTION_READ_FROM_SQLITE=false`（默认）。SSoT 补满后可切 `true`，sync/resync 优先走 SQLite，
-  miss 自动 fallback。切前按 [`docs/architecture_v4_sqlite_ssot.md`](docs/architecture_v4_sqlite_ssot.md) 至少实测 3 封。**没回填完别切。**
+  miss 自动 fallback。切前按 [`docs/reference/architecture/architecture_v4_sqlite_ssot.md`](docs/reference/architecture/architecture_v4_sqlite_ssot.md) 至少实测 3 封。**没回填完别切。**
 - **磁盘**：附件落盘吃空间，大邮箱回填后可能 GB 级。`ATTACHMENT_STORAGE_DIR` 可改路径。
 
-完整回填配方与运维 SQL 见 [`docs/claude/v4-ssot-ops.md`](docs/claude/v4-ssot-ops.md)。
+完整回填配方与运维 SQL 见 [`docs/reference/architecture/v4-ssot-ops.md`](docs/reference/architecture/v4-ssot-ops.md)。
 
 ### 5.4 Sprint 15 outbox（反向同步 SSoT inversion）
 
 - **默认**：`MAILAGENT_OUTBOX_ENABLED` 灰度。关时反向同步（Notion → Mail.app）退回旧 AppleScript 直调，跟旧版一致。
 - **启用**：开关打开后，flag/状态变更写 SQLite intent + `email_outbox`，进程内 `FanoutWorker` 异步派发到 Mail.app + Notion。
-  切换流程（单封 smoke → 一处 callsite → 全切）见 [`docs/sprint15-backend-complete.md`](docs/sprint15-backend-complete.md)。
+  切换流程（单封 smoke → 一处 callsite → 全切）见 [`docs/archive/2026-05/sprint15-backend-complete.md`](docs/archive/2026-05/sprint15-backend-complete.md)。
 - **建议**：旧用户可暂不启用，等其它部分稳定后再灰度。
 
 ### 5.5 MailAgent Web 前端
@@ -334,20 +334,20 @@ bash scripts/dev/kos_smoke_test.sh        # health / token / MCP query / Python 
 - `MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED=true` —— chat system prompt 注入 sender digest（前端）
 - `MAILAGENT_AGENT_HARNESS=true` —— 前端多轮 tool-calling chat（KOS consumer 的载体之一）
 
-验收清单见 [`docs/eval/m2-dogfood-checklist.md`](docs/eval/m2-dogfood-checklist.md)，设计见 [`docs/kos-integration-design.md`](docs/kos-integration-design.md)。
+验收清单见 [`docs/eval/m2-dogfood-checklist.md`](docs/eval/m2-dogfood-checklist.md)，设计见 [`docs/reference/llm-agent/kos-integration-design.md`](docs/reference/llm-agent/kos-integration-design.md)。
 
 ### 5.7 日历 CalDAV → SQLite SSoT
 
 - davmail 模式下，设 `CALENDAR_CALDAV_SYNC_ENABLED=true` 启动进程内 `CalendarSyncWorker`，
   从 DavMail CalDAV 增量同步到 SQLite `calendar_event`。
 - applescript 模式下也能跑旧的"邮件 .ics → 日程"路径（与本 worker 无关）。
-- 详见 [`docs/claude/calendar-ops.md`](docs/claude/calendar-ops.md)。
+- 详见 [`docs/reference/calendar/calendar-ops.md`](docs/reference/calendar/calendar-ops.md)。
 
 ### 5.8 归档 / 草稿箱（folder_sync）
 
 - **davmail-only**：`MAILBOX_FOLDER_SYNC_ENABLED=true` 且 `MAILAGENT_BACKEND=davmail` 才启动 `FolderSyncWorker`。
 - applescript 模式下设了也不启动（启动日志会提示）。
-- 详见 [`docs/folder-ui-prd.md`](docs/folder-ui-prd.md)。
+- 详见 [`docs/reference/folder-sync/folder-ui-prd.md`](docs/reference/folder-sync/folder-ui-prd.md)。
 
 ---
 
@@ -355,7 +355,7 @@ bash scripts/dev/kos_smoke_test.sh        # health / token / MCP query / Python 
 
 迁移过程中最容易踩、且文档分散的坑，集中列在这里：
 
-1. **DavMail 合规红线**：当前 davmail 用伪装 client_id（PoC），**严禁上公司生产**。切之前跟用户确认这是个人 dogfood 还是生产。EWS 2026-10-01 关停，DavMail 6.7 仍走 EWS —— 长期方案是 Graph API（见 [`docs/roadmap-post-cutover.md`](docs/roadmap-post-cutover.md) §5.1）。
+1. **DavMail 合规红线**：当前 davmail 用伪装 client_id（PoC），**严禁上公司生产**。切之前跟用户确认这是个人 dogfood 还是生产。EWS 2026-10-01 关停，DavMail 6.7 仍走 EWS —— 长期方案是 Graph API（见 [`docs/reference/architecture/roadmap-post-cutover.md`](docs/reference/architecture/roadmap-post-cutover.md) §5.1）。
 2. **数据库迁移单向**：没有降级脚本。**一定先备份** `data/sync_store.db`（[§2](#2-升级前必做不可跳过)）。
 3. **backend 回切要 reset marker**：davmail → applescript 回切时若不重置 `last_max_row_id`，applescript 会因为看着 davmail 的 UIDNEXT 而永远 `has_new=False`，**新邮件静默不同步**。脚本见 [§5.2](#52-后端选择applescript--davmail)。
 4. **历史 SSoT 是空的，且回填有顺序**：旧用户的历史邮件在 `email_body` / `ai_priority` 等 SSoT 字段里是空的。**必须先回填**（[§5.3](#53-回填历史邮件到-ssot)：`mailagent backfill body --all` + `python3 -m src.llm_agent.notion_backfill`）**再启用前端 / `NOTION_READ_FROM_SQLITE=true` / KOS ingest**。顺序反了：前端显示空白正文，或 v4 读路径从空 SQLite 读出空值**覆盖写空 Notion 的 To/CC**。另：正文 backfill 走 AppleScript，davmail-only 用户也需 Mail.app 在位。
@@ -399,15 +399,15 @@ pm2 restart mail-sync
 | 主题 | 文档 |
 |---|---|
 | 架构总览（本次整理） | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| 架构内核 / Sprint15 / Sprint16 深度 | [`docs/claude/architecture-internals.md`](docs/claude/architecture-internals.md) |
-| DavMail cutover 全程 | [`docs/sprint16-cutover-complete.md`](docs/sprint16-cutover-complete.md) |
-| Post-cutover roadmap（含 EWS 退役应对） | [`docs/roadmap-post-cutover.md`](docs/roadmap-post-cutover.md) |
-| v4 SSoT 运维 | [`docs/architecture_v4_sqlite_ssot.md`](docs/architecture_v4_sqlite_ssot.md) · [`docs/claude/v4-ssot-ops.md`](docs/claude/v4-ssot-ops.md) |
-| 本地 LLM 分类启用 | [`docs/LLM_AGENT_SETUP.md`](docs/LLM_AGENT_SETUP.md) · [`docs/claude/llm-agent.md`](docs/claude/llm-agent.md) |
-| KOS 集成 | [`docs/kos-integration-design.md`](docs/kos-integration-design.md) · [`docs/claude/agent-harness-kos.md`](docs/claude/agent-harness-kos.md) |
-| 日历模块 | [`docs/claude/calendar-ops.md`](docs/claude/calendar-ops.md) |
+| 架构内核 / Sprint15 / Sprint16 深度 | [`docs/reference/architecture/architecture-internals.md`](docs/reference/architecture/architecture-internals.md) |
+| DavMail cutover 全程 | [`docs/archive/2026-05/sprint16-cutover-complete.md`](docs/archive/2026-05/sprint16-cutover-complete.md) |
+| Post-cutover roadmap（含 EWS 退役应对） | [`docs/reference/architecture/roadmap-post-cutover.md`](docs/reference/architecture/roadmap-post-cutover.md) |
+| v4 SSoT 运维 | [`docs/reference/architecture/architecture_v4_sqlite_ssot.md`](docs/reference/architecture/architecture_v4_sqlite_ssot.md) · [`docs/reference/architecture/v4-ssot-ops.md`](docs/reference/architecture/v4-ssot-ops.md) |
+| 本地 LLM 分类启用 | [`docs/reference/llm-agent/LLM_AGENT_SETUP.md`](docs/reference/llm-agent/LLM_AGENT_SETUP.md) · [`docs/reference/llm-agent/llm-agent.md`](docs/reference/llm-agent/llm-agent.md) |
+| KOS 集成 | [`docs/reference/llm-agent/kos-integration-design.md`](docs/reference/llm-agent/kos-integration-design.md) · [`docs/reference/llm-agent/agent-harness-kos.md`](docs/reference/llm-agent/agent-harness-kos.md) |
+| 日历模块 | [`docs/reference/calendar/calendar-ops.md`](docs/reference/calendar/calendar-ops.md) |
 | 前端安装 / 使用 | [`frontend/INSTALL.md`](frontend/INSTALL.md) |
-| CLI 命令全表 | [`docs/claude/cli-reference.md`](docs/claude/cli-reference.md) |
+| CLI 命令全表 | [`docs/reference/cli/cli-reference.md`](docs/reference/cli/cli-reference.md) |
 | 全部配置项 | [`.env.example`](.env.example) |
 | Agent 项目指南 | [`CLAUDE.md`](CLAUDE.md) |
 

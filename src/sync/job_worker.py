@@ -13,7 +13,7 @@ LongTaskContext 当前 unit 跑完即优雅中止 → 标 aborted)。
 进度: 每 ``_PROGRESS_STRIDE`` 个 unit 刷一次 ``async_jobs`` 进度 + SSE ``job.progress``
 (前端 events_bridge 已消费此 SSE 流; C2 才补 9200 鉴权)。
 
-详见 docs/backend-service-migration-matrix.md C1 + plan §C1。
+详见 docs/reference/architecture/backend-service-migration-matrix.md C1 + plan §C1。
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 // PR-1b (read tools) + PR-1d (write tools). This PR is types/schema only
 // so it can merge fast and unblock parallel work on the streaming layer.
 //
-// Design doc: docs/agent-harness-design.md §4.1.
+// Design doc: docs/reference/llm-agent/agent-harness-design.md §4.1.
 // Plan: ~/.claude/plans/subagent-plan-lexical-moler.md (D5: tool dispatch
 // surface = IPC handler direct for reads, IPC direct writes [D1 收编后改经
 // 本机 daemon serve-api], CLI subprocess only for long tasks).

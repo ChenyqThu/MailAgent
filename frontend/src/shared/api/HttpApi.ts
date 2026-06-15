@@ -1,7 +1,7 @@
 // V2 Web SPA / PWA MailApi implementation. Built against the local FastAPI
 // service (127.0.0.1:8200 via a cloudflared tunnel; default baseUrl '/api'
 // for same-origin). See REMOTE-ACCESS.md §4 (data layer) +
-// docs/v2-backend-sprint12-handoff.md (endpoint matrix + 减法清单).
+// docs/archive/2026-05/v2-backend-sprint12-handoff.md (endpoint matrix + 减法清单).
 //
 // Every JSON method funnels through `this.req()` → http_client.request(),
 // which parses the `{status, schema_version, data, error, meta}` envelope:

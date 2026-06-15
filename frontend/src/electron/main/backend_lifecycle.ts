@@ -270,7 +270,7 @@ interface ManagedService {
  * (renderer 经 chat_local_bridge webRequest 直连 loopback 8200 跑 shared harness) —— 故
  * flag 名为「远程访问」实为**本地 daemon/serve-api 总开关**, `=false` 连本地写 + chat 都挂
  * (非仅关远程)。纯本地装机 (无 CF_AUDIENCE) 也必须起。唯一关掉条件 = 显式
- * `MAILAGENT_REMOTE_ACCESS_ENABLED='false'`。详见 docs/claude/remote-chat-report-architecture.md §8。
+ * `MAILAGENT_REMOTE_ACCESS_ENABLED='false'`。详见 docs/reference/remote-chat-report/remote-chat-report-architecture.md §8。
  *
  * 历史 (C2 及之前): 曾额外要求 `CF_AUDIENCE` 非空才 spawn —— 因 serve-api 的 auth.py
  * 在**模块 import 期** `if not AUTH_DISABLED and not CF_AUDIENCE: raise` 会 crash。

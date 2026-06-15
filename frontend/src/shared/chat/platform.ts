@@ -26,7 +26,7 @@
 // （grep 钉死）。模型/工具板的 7 原语其消费方（两后端 / 工具 / KOS 保存）3a
 // 全留 main 走现有注入口，根本不调 platform → 3a 写它们 = 无消费方占位假线。
 // 按真实形状 3b 定形，避免「猜的形状 3b 还得改」。详见
-// docs/v2.1-stage3-chat-platform-design.md §3。
+// docs/reference/remote-chat-report/v2.1-stage3-chat-platform-design.md §3。
 
 import type {
   AppendMessageInput,

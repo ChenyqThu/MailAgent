@@ -8,5 +8,5 @@ BU == TPS-ENBU, upsert 到 Notion 项目进度库; 用 Sheet 2/3 的"已出货 /
 历史: v1 消费某转发版邮件 (单 sheet, 15 列); v2 起切到直接发件人版
 (4 sheet, 信息更全, 状态更准).
 
-参见 docs/notion_markdown_api.md 和 CLAUDE.md 的 "项目周报同步" 章节.
+参见 docs/reference/integrations/notion_markdown_api.md 和 CLAUDE.md 的 "项目周报同步" 章节.
 """

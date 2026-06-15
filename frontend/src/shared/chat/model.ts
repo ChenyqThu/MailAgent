@@ -16,7 +16,7 @@ export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'aborted'
 
 // Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
-// in `chat_tool_call`. See docs/agent-harness-design.md §4.5.
+// in `chat_tool_call`. See docs/reference/llm-agent/agent-harness-design.md §4.5.
 export type ToolCallStatus =
   | 'pending' // awaiting confirmation (tier=preview/edit)
   | 'confirmed' // user approved, not yet running

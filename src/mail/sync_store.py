@@ -199,14 +199,14 @@ class SyncStore:
     #                Path A (LLM 分类顺带, source='llm_agent') + Path B (用户点翻译, source='on_demand')
     #                双路径写入同一表; segments_json 形状 [{src, tgt}] 统一. 单语言 (zh) 设计,
     #                internal_id PK + FK CASCADE; 重新翻译先 DELETE 再 INSERT.
-    #                详见 frontend/SPRINT-IMMERSIVE-TRANSLATE-HANDOFF.md.
+    #                详见 frontend/archive/2026-05/SPRINT-IMMERSIVE-TRANSLATE-HANDOFF.md.
     # v13 (Sprint 16 dual-backend, 2026-05): email_metadata 加 imap_uidvalidity / imap_uid /
     #                backend_origin 三列, 支持 DavMail backend (IMAP) 与 AppleScript backend
     #                共存. backend_origin='applescript' → internal_id = Mail.app ROWID (<10^9);
     #                backend_origin='davmail' → internal_id = sync_state['davmail_next_internal_id']
     #                自增 (起点 1_000_000_000, 永不与 ROWID 冲突). 通过 allocate_davmail_internal_id()
     #                atomic 分配. 详见 plan §"主键 / 邮件标识策略" 方案 D +
-    #                docs/dual-backend-architecture-handoff.md.
+    #                docs/archive/2026-05/dual-backend-architecture-handoff.md.
     # v15 (Calendar SSoT, 2026-05): 新增 calendar_event + calendar_sync_state 两表, 把日历事件
     #                落地为 SQLite SSoT (前端日历视图 / CLI / Notion mirror 单一数据源).
     #                calendar_event: PK=id AUTOINCREMENT + UNIQUE(ical_uid, recurrence_id, source);
@@ -409,7 +409,7 @@ class SyncStore:
         # 新代码不再使用此表
 
         # === v4: email_body 表（邮件正文作为一等公民进 SQLite）===
-        # 详见 docs/architecture_v4_sqlite_ssot.md §4.1
+        # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md §4.1
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_body (
                 internal_id INTEGER PRIMARY KEY,
@@ -432,7 +432,7 @@ class SyncStore:
         """)
 
         # === v4: email_attachment 表（附件元数据，二进制落本地 data/attachments/{internal_id}/）===
-        # 详见 docs/architecture_v4_sqlite_ssot.md §4.2
+        # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md §4.2
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_attachment (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -468,7 +468,7 @@ class SyncStore:
         """)
 
         # === v5: email_body_fts FTS5 全文索引 ===
-        # 详见 docs/architecture_v4_sqlite_ssot.md §3.3 + docs/phase2-handoff-to-phase3.md §5.1
+        # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md §3.3 + docs/archive/2026-05/phase2-handoff-to-phase3.md §5.1
         # 设计稿用 contentless (content='')，但实测 snippet() / SELECT 列内容均返回空 ——
         # contentless 不存原文，snippet 无法工作。改成 contentful（FTS 自带数据副本），
         # 索引大小翻倍但实测全量 6131 封后估算 < 100 MB，完全可接受（handoff §7.3）。

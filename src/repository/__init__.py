@@ -3,7 +3,7 @@
 Web / Agent / 反向同步 / LLM / Notion uploader 一律走 EmailRepository 读 SQLite,
 不再各自重抽 AppleScript 或绕道 Notion。
 
-详见 docs/architecture_v4_sqlite_ssot.md.
+详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md.
 """
 
 from src.repository.attachment_store import AttachmentStore

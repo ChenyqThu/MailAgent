@@ -5,7 +5,7 @@
     - commit_email_with_body 是事务，metadata + body + attachments 原子提交
     - 附件二进制读写经由 AttachmentStore 子模块（不直接操作文件系统）
 
-详见 docs/architecture_v4_sqlite_ssot.md §5.
+详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md §5.
 """
 
 from __future__ import annotations

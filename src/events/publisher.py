@@ -12,7 +12,7 @@ webhook-server 的 ``/api/events/stream`` SSE endpoint 订阅同 channel，
 - redis_url 为空 → 整个 publisher noop
 - module-level 单例 ``get_publisher()`` 复用全局 src.config
 
-事件类型 (docs/sse-events.md 列全):
+事件类型 (docs/reference/integrations/sse-events.md 列全):
 - email.new / email.synced / email.failed / email.dead_letter
 - outbox.enqueued / outbox.done / outbox.failed
 - llm.success / llm.failed
@@ -77,7 +77,7 @@ class EventPublisher:
         """publish to mailagent:events:v1.
 
         Args:
-            event_type: 事件类型 (见 docs/sse-events.md)
+            event_type: 事件类型 (见 docs/reference/integrations/sse-events.md)
             internal_id: 邮件级事件附带 internal_id
             data: 事件特定 payload (json-serializable)
             source: 事件来源 (mailagent / outbox / fanout / handler / cli)

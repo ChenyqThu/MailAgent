@@ -1,6 +1,6 @@
 """Notion 项目进度库 Upsert.
 
-依赖 ntn_ token 下的 Notion Markdown API（参见 docs/notion_markdown_api.md）:
+依赖 ntn_ token 下的 Notion Markdown API（参见 docs/reference/integrations/notion_markdown_api.md）:
   - PATCH /v1/pages/{id}/markdown   type=replace_content   整页写入
 
 整体流程（每个 ENBU 项目）:

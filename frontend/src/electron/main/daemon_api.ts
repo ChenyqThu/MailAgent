@@ -1,6 +1,6 @@
 // D1 — main 进程本机 daemon 写客户端 (loopback serve-api + per-session 本地 token)。
 //
-// 写操作收编 (plan §D1 / docs/backend-service-migration-matrix.md): write_ops /
+// 写操作收编 (plan §D1 / docs/reference/architecture/backend-service-migration-matrix.md): write_ops /
 // draft / chat 写工具不再 fork `mailagent` CLI / 直写 SQLite, 统一经此转发到本机
 // serve-api (127.0.0.1:8200) 的 in-process service 层。写源从 4 (TS 直写 outbox /
 // TS fork CLI / serve-api fork CLI / reverse_sync) 收敛到 1 (daemon service)。

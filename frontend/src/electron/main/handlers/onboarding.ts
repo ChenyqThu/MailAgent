@@ -21,7 +21,7 @@
 //   onboarding:legacyRollback→ 停后端 + 删 COPY + 清 .env (回到 'new'); 老原件不动
 //   onboarding:bootBackend   → 仅起后端 + 等就绪 (不写 .env)
 //
-// 完整向导 PRD 见 docs/packaging/03-onboarding-prd.md。
+// 完整向导 PRD 见 docs/reference/packaging/03-onboarding-prd.md。
 
 import { BrowserWindow, app, ipcMain, shell } from 'electron'
 import {

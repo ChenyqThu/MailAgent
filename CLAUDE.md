@@ -3,9 +3,11 @@
 为 Claude Code 提供的项目指南。
 
 > **本文件是精简索引** —— 只保留每个 session 必须在场的核心约束、导航、速查。
-> 深度内容（架构内核、各子系统运维、CLI 全表）按需下沉到 `docs/claude/` 与 `docs/`，
+> 深度内容（架构内核、各子系统运维、CLI 全表）按需下沉到 `docs/reference/<子系统>/`，
 > 需要时用「文档地图」里的指针去 `Read`，不要全量塞进 context。
-> 改完某子系统的运行语义后，同步更新它在 `docs/claude/` 的下沉文档，别把流水账堆回这里。
+> 改完某子系统的运行语义后，同步更新它在 `docs/reference/` 的常青文档，别把流水账堆回这里。
+>
+> **文档规范** → [`docs/DOC-GUIDE.md`](./docs/DOC-GUIDE.md)：常青参考进 `docs/reference/`，过程产物（handoff/complete/phaseN/prN）进 `docs/archive/{年-月}/`；**新增常青文档必须在下面「文档地图」加一行**，否则无人发现。
 
 ## 通用指南
 
@@ -18,21 +20,22 @@
 
 | 主题 | 何时读 | 路径 |
 |---|---|---|
-| 架构内核（v3 流程 / 重试 / Processing Status / webhook / 线程 / Sprint15 outbox / Sprint16 dual-backend） | 改正/反向 sync、webhook、状态机前 | [`docs/claude/architecture-internals.md`](./docs/claude/architecture-internals.md) |
-| LLM Agent（本地 LLM 分类，fallback / cache / 监控 / payload） | 改邮件分类、prompt、cache 前 | [`docs/claude/llm-agent.md`](./docs/claude/llm-agent.md) + [`docs/LLM_AGENT_SETUP.md`](./docs/LLM_AGENT_SETUP.md) |
-| 项目周报同步（外挂模块，xlsx → Notion） | 动 `src/project_progress/` 前 | [`docs/claude/project-progress-sync.md`](./docs/claude/project-progress-sync.md) |
-| 报告 Agent 系统（日/周/月报，ReportDoc 块模型 + 定时生成 + 前端渲染 + KOS 工具桥） | 动 `src/reports/` / 报告 / Custom AI Agents 区前 | [`docs/report-agent-prd.md`](./docs/report-agent-prd.md) + [前端 handoff](./docs/report-agent-frontend-handoff.md) |
-| Calendar Module（CalDAV → SQLite SSoT） | 动日历同步 / `calendar_event` 表前 | [`docs/claude/calendar-ops.md`](./docs/claude/calendar-ops.md) + [`docs/calendar-module-prd.md`](./docs/calendar-module-prd.md) |
-| v4 SQLite-SSoT（body/附件 SSoT + FTS5 全文搜索） | 动 `EmailRepository` / 双写 / 搜索前 | [`docs/claude/v4-ssot-ops.md`](./docs/claude/v4-ssot-ops.md) + [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md) |
-| 后端服务层（统一写面：`src/services/` 应用服务 + CLI/serve-api 薄适配器 in-process + async-jobs + 双层鉴权 + 前端 daemon 转发） | 改写操作（flag/resync/archive/pin/llm/compose/send）/ 加传输端 / 动 `src/services/` 前 | [`docs/claude/service-layer-architecture.md`](./docs/claude/service-layer-architecture.md) + `~/.claude/plans/cli-streamed-brook.md` |
-| AI Agent Harness + KOS（前端 chat 多轮 agent + 跨域知识图） | 动前端 chat / KOS 集成前 | [`docs/claude/agent-harness-kos.md`](./docs/claude/agent-harness-kos.md) + [`docs/kos-integration-design.md`](./docs/kos-integration-design.md) |
-| V2.1 远程 chat + report/agent（B-pure-unified：一份引擎 `shared/chat` + 一份 serve-api + 一份 HttpChatPlatform；本地 token webRequest / 远程 CF cookie；cutover 后 chat 引擎跑 UI 进程） | 动远程 web chat / serve-api chat 端点 / chat 引擎 cutover 后语义前 | [`docs/claude/remote-chat-report-architecture.md`](./docs/claude/remote-chat-report-architecture.md) + [设计](./docs/v2.1-stage3-chat-platform-design.md) + [看板](./docs/v2.1-remote-chat-report-matrix.md) |
-| CLI 完整命令表 + 退出码 + schema 契约 | 查命令明细 / 加 CLI 命令前 | [`docs/claude/cli-reference.md`](./docs/claude/cli-reference.md) + [`docs/agent-cli-rfc.md`](./docs/agent-cli-rfc.md) |
-| 存档/草稿箱双入口（folder_sync） | 动 folder 同步前 | [`docs/folder-ui-prd.md`](./docs/folder-ui-prd.md) + [`docs/folder-next-session-handoff.md`](./docs/folder-next-session-handoff.md) |
-| Compose 回复/转发 + SMTP 发送 | 动 compose / 发送前 | [`docs/compose-reply-forward-handoff.md`](./docs/compose-reply-forward-handoff.md) |
+| 架构内核（v3 流程 / 重试 / Processing Status / webhook / 线程 / Sprint15 outbox / Sprint16 dual-backend） | 改正/反向 sync、webhook、状态机前 | [`architecture/architecture-internals.md`](./docs/reference/architecture/architecture-internals.md) |
+| LLM Agent（本地 LLM 分类，fallback / cache / 监控 / payload） | 改邮件分类、prompt、cache 前 | [`llm-agent/llm-agent.md`](./docs/reference/llm-agent/llm-agent.md) + [`llm-agent/LLM_AGENT_SETUP.md`](./docs/reference/llm-agent/LLM_AGENT_SETUP.md) |
+| 项目周报同步（外挂模块，xlsx → Notion） | 动 `src/project_progress/` 前 | [`project-progress/project-progress-sync.md`](./docs/reference/project-progress/project-progress-sync.md) |
+| 报告 Agent 系统（日/周/月报，ReportDoc 块模型 + 定时生成 + 前端渲染 + KOS 工具桥） | 动 `src/reports/` / 报告 / Custom AI Agents 区前 | [`remote-chat-report/report-agent-prd.md`](./docs/reference/remote-chat-report/report-agent-prd.md) |
+| Calendar Module（CalDAV → SQLite SSoT） | 动日历同步 / `calendar_event` 表前 | [`calendar/calendar-ops.md`](./docs/reference/calendar/calendar-ops.md) + [`calendar/calendar-module-prd.md`](./docs/reference/calendar/calendar-module-prd.md) |
+| v4 SQLite-SSoT（body/附件 SSoT + FTS5 全文搜索） | 动 `EmailRepository` / 双写 / 搜索前 | [`architecture/v4-ssot-ops.md`](./docs/reference/architecture/v4-ssot-ops.md) + [`architecture/architecture_v4_sqlite_ssot.md`](./docs/reference/architecture/architecture_v4_sqlite_ssot.md) |
+| 后端服务层（统一写面：`src/services/` 应用服务 + CLI/serve-api 薄适配器 in-process + async-jobs + 双层鉴权 + 前端 daemon 转发） | 改写操作（flag/resync/archive/pin/llm/compose/send）/ 加传输端 / 动 `src/services/` 前 | [`architecture/service-layer-architecture.md`](./docs/reference/architecture/service-layer-architecture.md) + `~/.claude/plans/cli-streamed-brook.md` |
+| AI Agent Harness + KOS（前端 chat 多轮 agent + 跨域知识图） | 动前端 chat / KOS 集成前 | [`llm-agent/agent-harness-kos.md`](./docs/reference/llm-agent/agent-harness-kos.md) + [`llm-agent/kos-integration-design.md`](./docs/reference/llm-agent/kos-integration-design.md) |
+| V2.1 远程 chat + report/agent（B-pure-unified：一份引擎 `shared/chat` + 一份 serve-api + 一份 HttpChatPlatform；本地 token webRequest / 远程 CF cookie；cutover 后 chat 引擎跑 UI 进程） | 动远程 web chat / serve-api chat 端点 / chat 引擎 cutover 后语义前 | [`remote-chat-report/remote-chat-report-architecture.md`](./docs/reference/remote-chat-report/remote-chat-report-architecture.md) + [设计](./docs/reference/remote-chat-report/v2.1-stage3-chat-platform-design.md) + [看板](./docs/reference/remote-chat-report/v2.1-remote-chat-report-matrix.md) |
+| CLI 完整命令表 + 退出码 + schema 契约 | 查命令明细 / 加 CLI 命令前 | [`cli/cli-reference.md`](./docs/reference/cli/cli-reference.md) + [`cli/agent-cli-rfc.md`](./docs/reference/cli/agent-cli-rfc.md) |
+| 存档/草稿箱 + 多文件夹同步（folder_sync） | 动 folder 同步前 | [`folder-sync/multi-folder-sync-design.md`](./docs/reference/folder-sync/multi-folder-sync-design.md) + [`folder-sync/folder-ui-prd.md`](./docs/reference/folder-sync/folder-ui-prd.md) |
+| Webhook / SSE / Openclaw / Notion API（集成面） | 动 webhook-server / 事件流 / 飞书回调前 | [`integrations/`](./docs/reference/integrations/) |
+| 邮件搜索 Query DSL（Python+TS 双端契约） | 改搜索语法前 | [`search/search-query-syntax.md`](./docs/reference/search/search-query-syntax.md) |
 | 灵动岛 Ping Island 集成 | 动通知/ack 中心前 | `~/.claude/plans/ultrathink-session-curious-cloud.md` |
-| 前端动效 + 列表性能铁律（Electron renderer：GSAP §8 动效 / snippet 懒取 / 线程批量 / 查询缓存 / 正文 iframe 链接） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/MOTION-PERF-HANDOFF.md`](./frontend/MOTION-PERF-HANDOFF.md) + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
-| 桌面 App 打包 / 发布（一体化 .app + 版本号机制 + 签名闸 + 故障排查） | 出新版 / 发布 App 前 | [`docs/claude/packaging-release.md`](./docs/claude/packaging-release.md) |
+| 前端动效 + 列表性能铁律（Electron renderer：GSAP §8 动效 / snippet 懒取 / 线程批量 / 查询缓存 / 正文 iframe 链接） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
+| 桌面 App 打包 / 发布（一体化 .app + 版本号机制 + 签名闸 + 故障排查） | 出新版 / 发布 App 前 | [`packaging/packaging-release.md`](./docs/reference/packaging/packaging-release.md) |
 
 技能（按需触发，正文不常驻）：`/deploy`（部署验证）、`/debug`（系统化排查）、`/health`（健康巡检）、`/db-migration`（schema 升级）、`/sprint-handoff`（交接文档）。
 
@@ -46,7 +49,7 @@
 - Notion Webhook → Redis → Mail.app 实时事件驱动
 - Office 附件自动转换（docx/pptx→PDF, xlsx→CSV）
 
-**当前架构状态**（演进叠加，详见 [`docs/claude/architecture-internals.md`](./docs/claude/architecture-internals.md)）：
+**当前架构状态**（演进叠加，详见 [`docs/reference/architecture/architecture-internals.md`](./docs/reference/architecture/architecture-internals.md)）：
 - **v3 SQLite-First**（2026-01）：`internal_id`（ROWID = AppleScript id）主键，`whose id is <int>` 查询比旧方式快 127 倍，支持 6-7 万封大邮箱。
 - **Sprint 15 SQLite SSoT inversion**（2026-05）：所有 mutating 操作反转方向，SQLite 是写入 intent 聚合点，FanoutWorker 异步派发到 Mail.app + Notion，统一走 `email_outbox`。
 - **Sprint 16 Dual-Backend**（2026-05-22 cutover）：抽象 `IMailBackend` Protocol，**davmail 模式为当前主路径**（IMAP/SMTP/CalDAV 桥 EWS），AppleScript 保留作 emergency fallback。
@@ -54,7 +57,7 @@
 
 **死硬约束**：
 - DavMail 当前用 Outlook for Windows well-known client_id 伪装（PoC），**不可上生产** —— 需走公司 IT 审批（推荐直接申请 Graph API）。
-- EWS 2026-10-01 关停，DavMail 6.7 仍走 EWS，Graph 路线图（Issue #404）未 merge —— 见 [`docs/roadmap-post-cutover.md`](./docs/roadmap-post-cutover.md) §5.1。
+- EWS 2026-10-01 关停，DavMail 6.7 仍走 EWS，Graph 路线图（Issue #404）未 merge —— 见 [`docs/reference/architecture/roadmap-post-cutover.md`](./docs/reference/architecture/roadmap-post-cutover.md) §5.1。
 - AppleScript fallback 路径**始终可用** —— 任何重构都必须保证 emergency 回切不丢数据（回切步骤见 architecture-internals.md）。
 
 **技术栈**：Python ≥3.9（本地 3.11+，远程 webhook-server 3.9+）· AppleScript（fallback）· DavMail 6.7 JVM（主路径）· SQLite（状态 + v4 SSoT + FTS5）· Notion API · BeautifulSoup/lxml · Pydantic · Redis · FastAPI · LibreOffice headless · pandas + python-calamine。
@@ -108,7 +111,7 @@ tail -f logs/sync.log
 
 ## 打包 / 发布（桌面 App）
 
-一体化 Electron 前端 + 内嵌 CPython 后端 → 单个 macOS `.app`。**全部在 `main` 上做**（前端是 `frontend/` 子目录，非独立 repo/submodule；打包/onboarding/auto-update 已全合入 main，feature 分支已删）。完整 runbook → [`docs/claude/packaging-release.md`](./docs/claude/packaging-release.md)。
+一体化 Electron 前端 + 内嵌 CPython 后端 → 单个 macOS `.app`。**全部在 `main` 上做**（前端是 `frontend/` 子目录，非独立 repo/submodule；打包/onboarding/auto-update 已全合入 main，feature 分支已删）。完整 runbook → [`docs/reference/packaging/packaging-release.md`](./docs/reference/packaging/packaging-release.md)。
 
 - **版本 SSoT** = `frontend/package.json` 的 `version`（electron-builder 据此写 `Info.plist` + 产物名 + auto-update feed `latest-mac.yml`）。流程：bump version → build → 装机验证 → `git tag -a vX.Y.Z`。semver：`0.1.0`=首个 beta，bug 修复走 patch。已发至 **v0.7.2**（GitHub Releases published + 完整 feed 产物，对外发布流程=`pnpm build:mac` → push main+tag → `gh release create` 传 5 件产物：latest-mac.yml + zip/dmg + 各自 blockmap）。**🔴 装机三步 `quit→ditto→open` 必串行单线**——多个 ditto 覆盖 `/Applications/MailAgent.app` 期间被 open 拉起 = torn bundle → dyld `libffmpeg.dylib` missing → SIGABRT（易误判成「启动崩溃/DB 版本 bug」；判据=崩溃 .ips `termination.namespace=DYLD`「Library missing」+ `codesign --verify --deep --strict /Applications/MailAgent.app` 报「sealed resource is missing or invalid」，但 dist 源 app codesign OK ⇒ Release 产物干净、只 /Applications 副本 torn ⇒ `rm -rf`+单次 ditto 重装即修）。**🔴 勿改 package.json `name`（`mailagent-frontend`）**—— 它决定 userData 目录 `~/Library/Application Support/mailagent-frontend/`，改了已装用户数据/`.env` 易主。
 - **前置**（`frontend/` 下，均 gitignored 本地产物）：`node_modules`（`pnpm install`）+ `resources/python`（`bash scripts/build-python-venv.sh`，~200M 可重定位嵌入式 CPython；本机已 provision，换机/新 clone 必先跑）。
@@ -118,7 +121,7 @@ tail -f logs/sync.log
 - **验证**（每次 build 后）：`codesign --verify --deep --strict <app>` 必 OK + `Info.plist` 版本号对 + `Resources/python/bin/python3.11` 在。
 - **装机/升级**：退出旧 app → `ditto dist/mac-arm64/MailAgent.app /Applications/` → open。userData 跨重装保留 → 升级**跳过 onboarding**（detect `'configured'`）+ 后端启动自动 DB 迁移。用 `.app` 时 pm2 `mail-sync` 必须停（防双写）；davmail 用户 `davmail-poc` 留 pm2（EWS 桥，不打进 app）。
 - **改 Python 后端**后：必先 `bash frontend/scripts/build-python-venv.sh` 重 provision 才进包；只改前端 TS/CSS 不用。
-- **自动更新**仍卡 Developer ID 签名（ad-hoc `quitAndInstall` 装不上更新，`AUTO_UPDATE_ENABLED` 默认关）→ 现走手动替换；P6 见 [`docs/packaging/05-auto-update-handoff.md`](./docs/packaging/05-auto-update-handoff.md)。
+- **自动更新**仍卡 Developer ID 签名（ad-hoc `quitAndInstall` 装不上更新，`AUTO_UPDATE_ENABLED` 默认关）→ 现走手动替换；P6 见 [`docs/reference/packaging/05-auto-update-handoff.md`](./docs/reference/packaging/05-auto-update-handoff.md)。
 
 ## 调试 & 部署
 
@@ -160,7 +163,7 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 | `src/converter/` | `html_converter.py`(HTML→Notion blocks+内联图) · `eml_generator.py` · `office_converter.py` · `attachment_text.py`(附件文本化) · `html_to_markdown.py` |
 | `src/repository/` | v4 `EmailRepository` / `AttachmentStore` / FTS5 搜索 |
 | `src/llm_agent/` / `src/project_progress/` / `src/kos/` | 见对应下沉文档 |
-| `src/reports/` | 报告 Agent 系统（日/周/月报）：`models`(ReportDoc 块模型) / `data`(取数+分组) / `summarizer`(LLM tool_use) / `assembler`(防幻觉权威回填) / `worker`(tick_loop 定时) / `store`(report_agent+report 表)。见 [`docs/report-agent-prd.md`](./docs/report-agent-prd.md) |
+| `src/reports/` | 报告 Agent 系统（日/周/月报）：`models`(ReportDoc 块模型) / `data`(取数+分组) / `summarizer`(LLM tool_use) / `assembler`(防幻觉权威回填) / `worker`(tick_loop 定时) / `store`(report_agent+report 表)。见 [`docs/reference/remote-chat-report/report-agent-prd.md`](./docs/reference/remote-chat-report/report-agent-prd.md) |
 | `src/stats_reporter.py` | 定期上报运行统计到远程看板 |
 | `webhook-server/` | FastAPI（接收 Notion Automation webhook → Redis 路由 + 看板 API，端口 8100）|
 
@@ -168,7 +171,7 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 
 `mailagent` CLI = agent-friendly 接口，10 个 group：`email` / `admin` / `attachment` / `llm` / `notion` / `calendar` / `debug` / `backfill` / `project-progress` / `init`。读命令无 auth，写命令需 token（`MAILAGENT_CLI_API_KEY` + `--api-key`，`--dry-run` 跳过）。Batch 写命令有长任务契约（SIGINT 二次 / 熔断 / checkpoint resume / PM2 检测）+ 退出码体系（0/1/2/4/5/6/7/8/9/130）。
 
-**完整命令表 / 退出码 / schema 契约 / 调用样例** → [`docs/claude/cli-reference.md`](./docs/claude/cli-reference.md)。
+**完整命令表 / 退出码 / schema 契约 / 调用样例** → [`docs/reference/cli/cli-reference.md`](./docs/reference/cli/cli-reference.md)。
 
 ```bash
 mailagent -o json email get 53675 | jq .data.subject
@@ -200,8 +203,8 @@ mailagent email resync 53675 --dry-run -o json
 ## 文件位置
 
 - 日志：`logs/sync.log` · 数据库：`data/sync_store.db` · 附件：`data/attachments/{internal_id}/` · 临时附件：`/tmp/email-notion-sync/{md5}/` · 配置：`.env`（示例 `.env.example`）
-- 优化文档：`docs/applescript_id_optimization.md` · Webhook Server：`webhook-server/`（一键部署 `./scripts/deploy-webhook.sh`）
-- 下沉的深度文档：`docs/claude/` · 设计/handoff 文档：`docs/`
+- 优化文档（已归档）：`docs/archive/2026-01/applescript_id_optimization.md` · Webhook Server：`webhook-server/`（一键部署 `./scripts/deploy-webhook.sh`）
+- 常青参考：`docs/reference/<子系统>/`（索引见各 `index.md` 与上方文档地图）· 过程归档：`docs/archive/{年-月}/` · 文档规范：`docs/DOC-GUIDE.md`
 
 ## 迁移与运维
 

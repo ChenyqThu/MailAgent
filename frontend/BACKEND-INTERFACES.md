@@ -2,13 +2,13 @@
 
 > 给前端工程师的后端契约速查。**不规定前端实现**，仅梳理"前端能调什么 / 调了会拿到什么"。
 >
-> 完整调研历史在归档 [`archive/frontend-integration-spec.md`](./archive/frontend-integration-spec.md)。
+> 完整调研历史在归档 [`archive/frontend-integration-spec.md`](./archive/2026-05/frontend-integration-spec.md)。
 >
 > **关联**:
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) §3-§4 数据流图 + 模块清单
 > - [`PROJECT-PLAN.md`](./PROJECT-PLAN.md) Sprint 依赖关系
 > - 后端 [`../CLAUDE.md`](../CLAUDE.md) CLI 全集 / Notion DB schema
-> - [`../docs/agent-cli-rfc.md`](../docs/agent-cli-rfc.md) CLI 完整 RFC
+> - [`../docs/agent-cli-rfc.md`](../docs/reference/cli/agent-cli-rfc.md) CLI 完整 RFC
 > - [`../docs/cli-schema/`](../docs/cli-schema/) 45+ JSON Schema 文件
 
 ---
@@ -544,7 +544,7 @@ SQLite 自带的 `unicode61` tokenizer 把**连续 CJK 字符当一个 token**�
 - ❌ 后端 schema 变更流程（mail-sync 已稳定 v4）
 - ❌ Notion 数据库 schema 设计 — 详 CLAUDE.md
 - ❌ 飞书 / Openclaw callback 协议 — webhook-server 内部
-- ❌ Notion Markdown API 边界 — 详 `docs/notion_markdown_api.md`
+- ❌ Notion Markdown API 边界 — 详 `docs/reference/integrations/notion_markdown_api.md`
 
 ---
 

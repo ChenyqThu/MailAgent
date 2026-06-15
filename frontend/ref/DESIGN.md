@@ -1,3 +1,5 @@
+> ⚠️ **归档参考（designer 原版 V1.4 全量版）**：工程侧当前设计 SSoT 是 [`../DESIGN.md`](../DESIGN.md)；本文件仅作 mockup 像素对照存档，不再随工程迭代更新。
+
 # MailAgent · Design System (V1)
 
 > Single source of truth for the macOS Electron mail app. Everything in

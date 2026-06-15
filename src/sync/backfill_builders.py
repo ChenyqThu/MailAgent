@@ -9,7 +9,7 @@ converter), 不 import cli / typer / output —— 故可被两个传输共用:
   - ``sync/job_runners.py`` (engine 层 async_jobs 执行器): JobWorker 调本模块 builder
     造 unit, 交共享 LongTaskContext driver 跑。
 
-分层 (D2a 决策, 见 docs/backend-service-migration-matrix.md 进度日志):
+分层 (D2a 决策, 见 docs/reference/architecture/backend-service-migration-matrix.md 进度日志):
   builder 是 sync-engine 的「取数 + 重 IO 执行单元」(sqlite / AppleScript / office
   convert / 写库), 与 fanout / job_runners 同属 engine 层 → 放 ``src/sync/`` 而非
   ``src/services/`` (后者只放写操作编排 + 守卫)。下沉消除了 ``job_runners`` 原先的

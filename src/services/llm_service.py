@@ -2,7 +2,7 @@
 
 把 ``mailagent llm run`` 的「编排 + 守卫」从 CLI 命令体下沉到这里, 让 CLI (typer) 与
 serve-api (FastAPI) 各自退化成「解析 → 调 service → 格式化」的薄壳, 不再 fork CLI 跨传输
-复用 (见 plan cli-streamed-brook.md §A3 / docs/backend-service-migration-matrix.md)。
+复用 (见 plan cli-streamed-brook.md §A3 / docs/reference/architecture/backend-service-migration-matrix.md)。
 
 ``run`` 对单封邮件跑 LLM 分类 → 填 Notion AI 字段。dry_run 仍真跑 LLM (烧 token) 只是不
 写 Notion —— 与 ``MailWriteService.plan_*`` 的「纯预览不烧资源」语义不同, 故 **无** plan_run。

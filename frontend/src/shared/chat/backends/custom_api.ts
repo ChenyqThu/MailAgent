@@ -230,7 +230,7 @@ function buildStaticSystemHeader(): string {
 /** Sprint 19 PR-2e+ — KOS usage guidance block, injected into the stable
  *  system prefix ONLY when the KOS consumer is enabled (so the LLM self-directs
  *  KOS reads/writes per the brain's consumption contract). Static (not
- *  per-email) → stays cacheable. Mirrors docs/report-agent-prd.md §3.3. */
+ *  per-email) → stays cacheable. Mirrors docs/reference/remote-chat-report/report-agent-prd.md §3.3. */
 function buildKosGuidanceBlock(): string {
   return [
     '## KOS knowledge brain (read cross-source, write to default):',

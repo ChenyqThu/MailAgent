@@ -1,7 +1,7 @@
 """Mail backend abstraction — single-driver switch between AppleScript and DavMail.
 
 详见 plan: `~/.claude/plans/ultrathink-docs-dual-backend-architectur-fluttering-bentley.md`
-背景文档: `docs/dual-backend-architecture-handoff.md`
+背景文档: `docs/archive/2026-05/dual-backend-architecture-handoff.md`
 
 Public API:
     create_backend(cfg) -> IMailBackend       # factory, probe-or-raise

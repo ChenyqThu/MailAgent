@@ -5,7 +5,7 @@ from pydantic import Field, ConfigDict
 
 # =============================================================================
 # DATA_ROOT 路径解析（P0 packaging：Python 侧路径解耦 / 绝对化）
-# 详见 docs/packaging/01-architecture-analysis.md §3.4 + 02-landing-plan.md P0
+# 详见 docs/reference/packaging/01-architecture-analysis.md §3.4 + 02-landing-plan.md P0
 #
 # 目的：让所有数据/文件路径不再依赖进程 cwd —— 打包后（或任何 cwd ≠ 项目根的
 # 场景）`Config()` 都能正确解析，不在必填字段阶段因相对路径 ValidationError。
@@ -87,7 +87,7 @@ class Config(BaseSettings):
     # 附件配置
     max_attachment_size: int = Field(default=20971520, env="MAX_ATTACHMENT_SIZE")  # 20MB (Notion limit)
 
-    # v4: SQLite SSoT 配置（邮件正文 + 附件元数据进 SQLite，详见 docs/architecture_v4_sqlite_ssot.md）
+    # v4: SQLite SSoT 配置（邮件正文 + 附件元数据进 SQLite，详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md）
     body_dual_write_enabled: bool = Field(
         default=True, env="BODY_DUAL_WRITE_ENABLED",
         description="是否在 Notion sync 前把邮件正文 + 附件双写到 SQLite（v4 架构）。失败仅 warning，不阻断主流程"
@@ -366,7 +366,7 @@ class Config(BaseSettings):
 
     # =========================================================================
     # KOS Producer (Sprint 19 M2 PR-2d) — 邮件 sync 完异步推 Jarvis KOS v2
-    # 详见 docs/kos-integration-design.md §3 + frontend/SPRINT19-M2-PLAN.md §3
+    # 详见 docs/reference/llm-agent/kos-integration-design.md §3 + frontend/archive/2026-05/SPRINT19-M2-PLAN.md §3
     # KOSClient 默认从 env 直接读 3 个 OAuth 凭据 (KOS_MCP_BASE /
     # KOS_OAUTH_CLIENT_ID / KOS_OAUTH_CLIENT_SECRET), 这里仅暴露 producer 行为
     # 开关; client 配置不重复.
@@ -491,7 +491,7 @@ class Config(BaseSettings):
     # C1: async_jobs 子系统 —— 长任务 (batch resync / backfill) 走统一 daemon API。
     # POST /api/jobs enqueue → serve 进程内 JobWorker 串行 claim + 执行 (复用
     # LongTaskContext checkpoint/熔断) + SSE job.progress 进度。默认关闭灰度期。
-    # 详见 docs/backend-service-migration-matrix.md C1 + plan §C1。
+    # 详见 docs/reference/architecture/backend-service-migration-matrix.md C1 + plan §C1。
     mailagent_async_jobs_enabled: bool = Field(
         default=False, env="MAILAGENT_ASYNC_JOBS_ENABLED",
         description=(

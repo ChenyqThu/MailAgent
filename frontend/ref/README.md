@@ -5,9 +5,11 @@
 > meant to be extracted directly into `tailwind.config.ts` + shadcn/ui
 > components when Sprint 0 scaffolding starts.
 >
-> **Single source of truth** for all design decisions is [`DESIGN.md`](./DESIGN.md).
-> This README is the human-facing summary + per-mockup decision notes; if
-> the two disagree, DESIGN.md wins.
+> ⚠️ **归档参考（designer 原版）**：本目录是 designer 交付的 V1 原版设计包（mockup 素材 +
+> 全量 `ref/DESIGN.md`）。**工程侧当前 SSoT 是 [`../DESIGN.md`](../DESIGN.md)**（经 sprint review 精简/迭代）。
+> 本目录的 `DESIGN.md` 仅作像素对照存档，不再是工程更新目标；两者冲突以 `../DESIGN.md` 为准。
+>
+> 本 README 是本目录内的人类摘要 + 各 mockup 决策注记。
 
 ---
 

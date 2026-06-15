@@ -718,7 +718,7 @@ async def health():
 # Sprint 15 Stage 2: SSE event stream
 # 订阅 Redis pub/sub channel mailagent:events:v1, 转发给前端 / 看板 / 外部观察者。
 # 事件来源: src/events/publisher.py (OutboxRepository / sync_store / llm_agent 等
-# 接入点 publish JSON 事件). 详 docs/sse-events.md。
+# 接入点 publish JSON 事件). 详 docs/reference/integrations/sse-events.md。
 SSE_CHANNEL = "mailagent:events:v1"
 SSE_HEARTBEAT_SEC = 15
 
@@ -733,7 +733,7 @@ SSE_HEARTBEAT_SEC = 15
         "客户端: `curl -N -H 'X-Webhook-Token: <secret>' "
         "<base>/api/events/stream`. 鉴权与 /api/command 一致。"
         "无认证客户端 → 401. 每 15s 发 ping 心跳防中间件断连。"
-        "事件 schema 详 docs/sse-events.md。"
+        "事件 schema 详 docs/reference/integrations/sse-events.md。"
     ),
 )
 async def stream_events(request: Request):

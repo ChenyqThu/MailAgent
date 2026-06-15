@@ -305,7 +305,7 @@ def admin_db_version(
             hint=(
                 f"Run migration to bring schema to v{EXPECTED_DB_VERSION}; "
                 "restart mail-sync to trigger SyncStore._init_database() auto-migrate. "
-                "See docs/architecture_v4_sqlite_ssot.md + SPRINT15-HANDOFF.md."
+                "See docs/reference/architecture/architecture_v4_sqlite_ssot.md + SPRINT15-HANDOFF.md."
             ),
             context={
                 "db_path": db_path,

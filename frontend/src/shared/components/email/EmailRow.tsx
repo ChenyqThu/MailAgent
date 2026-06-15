@@ -14,7 +14,7 @@
 // Sprint 15 D 块 — 4 处 ricon-flag / ricon-delete callsite 已切到
 // `mailApi.email.flag(...)` (SSoT inversion: 写 SQLite intent + outbox 双 target,
 // FanoutWorker 异步派发 Mail.app + Notion). 回退路径见
-// `frontend/SPRINT15-D-FRONTEND-HANDOFF.md` §8 — 老 `mailApi.notion.updateFlag`
+// `frontend/archive/2026-05/SPRINT15-D-FRONTEND-HANDOFF.md` §8 — 老 `mailApi.notion.updateFlag`
 // 在 ElectronApi.ts / HttpApi.ts 仍保留, 一周稳定期后删除.
 //
 // CSS class names are the contract — see index.css Sprint 12 block.

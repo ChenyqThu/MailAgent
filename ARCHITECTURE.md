@@ -1,7 +1,7 @@
 # MailAgent 架构总览
 
 > **定位**：系统级"大图"——组件、数据流、演进分层、子系统地图。
-> 想看**代码级深度**（具体流程/DDL/重试逻辑）去 [`docs/claude/architecture-internals.md`](docs/claude/architecture-internals.md)；
+> 想看**代码级深度**（具体流程/DDL/重试逻辑）去 [`docs/reference/architecture/architecture-internals.md`](docs/reference/architecture/architecture-internals.md)；
 > 想看**给 agent 的导航索引**去 [`CLAUDE.md`](CLAUDE.md)；
 > 想从**旧版本升级**去 [`MIGRATION.md`](MIGRATION.md)。
 
@@ -95,7 +95,7 @@ Sprint 15 outbox 路径 (MAILAGENT_OUTBOX_ENABLED=true):
 ```
 
 状态机：`未处理 →(AI 审核) AI Reviewed →(反向同步) 已同步 →(用户处理) 已完成`。
-完整映射见 [`docs/claude/architecture-internals.md`](docs/claude/architecture-internals.md) §Processing Status。
+完整映射见 [`docs/reference/architecture/architecture-internals.md`](docs/reference/architecture/architecture-internals.md) §Processing Status。
 
 ---
 
@@ -141,7 +141,7 @@ DB schema 版本当前 **v17**，迁移幂等自动（`src/mail/sync_store.py:_i
 
 1. **AppleScript fallback 始终可用** —— 任何重构都必须保证 davmail→applescript emergency 回切不丢数据（回切要 reset radar marker）。
 2. **DavMail PoC 不可上生产** —— 当前用 Outlook for Windows 伪装 client_id，需公司 IT 审批（建议直接申请 Graph API）。
-3. **EWS 2026-10-01 关停** —— DavMail 6.7 仍走 EWS，Graph 路线图（Issue #404）未 merge，见 [`docs/roadmap-post-cutover.md`](docs/roadmap-post-cutover.md) §5.1。
+3. **EWS 2026-10-01 关停** —— DavMail 6.7 仍走 EWS，Graph 路线图（Issue #404）未 merge，见 [`docs/reference/architecture/roadmap-post-cutover.md`](docs/reference/architecture/roadmap-post-cutover.md) §5.1。
 4. **AI 路径防双跑** —— 启用本地 LLM 前必须停掉 Notion Email Agent Automation。
 5. **可选功能默认 opt-in** —— KOS / 前端 / davmail / outbox 等不启用就维持旧行为。
 
@@ -149,8 +149,8 @@ DB schema 版本当前 **v17**，迁移幂等自动（`src/mail/sync_store.py:_i
 
 ## 7. 延伸阅读
 
-- 代码级架构内核：[`docs/claude/architecture-internals.md`](docs/claude/architecture-internals.md)
+- 代码级架构内核：[`docs/reference/architecture/architecture-internals.md`](docs/reference/architecture/architecture-internals.md)
 - 升级迁移：[`MIGRATION.md`](MIGRATION.md)
-- 各子系统下沉文档：[`docs/claude/`](docs/claude/)
+- 各子系统下沉文档：[`docs/reference/`](docs/reference/)
 - 配置全表：[`.env.example`](.env.example)
 - Agent 项目指南：[`CLAUDE.md`](CLAUDE.md)

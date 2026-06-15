@@ -17,7 +17,7 @@
 claim 用条件 UPDATE (status queued→running, 仿 ``fanout.py`` mark_processing): 即便
 未来多 worker 也不会双claim。
 
-详见 docs/backend-service-migration-matrix.md C1 + plan §C1。
+详见 docs/reference/architecture/backend-service-migration-matrix.md C1 + plan §C1。
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@
 启动 / 关闭由 main.py 控制 (asyncio.create_task + cleanup), 见 main.py
 `_sse_server_loop`. env `MAILAGENT_SSE_ENABLED=false` 时整个 server 不起.
 
-事件协议 / 已发布事件类型见 docs/sse-events.md + src/events/publisher.py.
+事件协议 / 已发布事件类型见 docs/reference/integrations/sse-events.md + src/events/publisher.py.
 """
 
 from __future__ import annotations

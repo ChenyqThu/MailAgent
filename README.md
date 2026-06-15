@@ -8,7 +8,7 @@
 > 直接把 [`MIGRATION.md`](./MIGRATION.md) 交给你的 Claude Code agent，它会带你逐步迁移并标出需要你拍板的决策点。
 
 > **Backend 切换**：`MAILAGENT_BACKEND=davmail|applescript` 一行切换。代码默认 `applescript`（Mail.app + AppleScript），
-> davmail（IMAP/SMTP/CalDAV 桥 EWS）为可选主路径，AppleScript 始终保留作 emergency fallback。详见 [`docs/sprint16-cutover-complete.md`](./docs/sprint16-cutover-complete.md)。
+> davmail（IMAP/SMTP/CalDAV 桥 EWS）为可选主路径，AppleScript 始终保留作 emergency fallback。详见 [`docs/archive/2026-05/sprint16-cutover-complete.md`](./docs/archive/2026-05/sprint16-cutover-complete.md)。
 
 ## 功能概览
 
@@ -17,7 +17,7 @@
 | **邮件同步** | DavMail IMAP（可选主）/ Mail.app（fallback） | 邮件内容、附件、线程关系同步到 Notion | 常驻 |
 | **会议邀请识别** | 邮件中的 .ics | 自动解析会议邀请创建日程 | 常驻 |
 | **双向状态同步** | Mail.app ↔ SQLite ↔ Notion | 已读/旗标/处理状态双向同步（Sprint15 起走 outbox） | 常驻 |
-| **AI 分类处理** | Notion Automation 或本地 LLM | Notion Email Agent 或本地 Anthropic 兼容 LLM（见 [docs/LLM_AGENT_SETUP.md](./docs/LLM_AGENT_SETUP.md)） | 可选 |
+| **AI 分类处理** | Notion Automation 或本地 LLM | Notion Email Agent 或本地 Anthropic 兼容 LLM（见 [docs/reference/llm-agent/LLM_AGENT_SETUP.md](./docs/reference/llm-agent/LLM_AGENT_SETUP.md)） | 可选 |
 | **全文搜索** | SQLite FTS5 | 邮件正文 + 附件文本化（PDF/docx/pptx/xlsx）全文检索，中文 smart wrapper | 随 v4 |
 | **MailAgent Web（前端）** | Electron 桌面 App | 收件箱 / 详情 / AI 多轮 chat / 回复转发撰写 / 一键翻译 / 灵动岛 / 设置 | 单独安装 |
 | **KOS 知识库对接** | Jarvis KOS v2 (gbrain) | 邮件推 `/ingest` 入知识图谱 + chat 跨域检索 | 关 |
@@ -30,7 +30,7 @@
 - **v3 SQLite-First 架构**：大邮箱（6-7 万封）支持，单封邮件获取 ~1s（applescript）/ ~236ms（davmail）
 - **v4 SQLite SSoT 架构（Phase 1–4 上线/灰度）**：邮件正文（HTML + Markdown）+ 附件双写到 SQLite，
   附件二进制落 `data/attachments/{internal_id}/`，FTS5 全文搜索就位，Notion 退化为镜像。
-  详见 [`docs/architecture_v4_sqlite_ssot.md`](./docs/architecture_v4_sqlite_ssot.md)
+  详见 [`docs/reference/architecture/architecture_v4_sqlite_ssot.md`](./docs/reference/architecture/architecture_v4_sqlite_ssot.md)
 - 基于 message_id 的 100% 准确去重 + 自动建立邮件线程 Parent-Child 关系
 - **自动识别会议邀请**：检测邮件中的 iCalendar 附件，创建日程页面
 - HTML 正文转 Notion Blocks（含内联图片）+ 附件上传 + 失败自动重试（指数退避）
@@ -165,7 +165,7 @@ backend(davmail/applescript) ─检测/取信─▶ SyncStore(internal_id 主键
 5. 反向（flag/状态变更）Sprint15 起走 `email_outbox` + `FanoutWorker` 异步派发到 Mail.app + Notion
 
 > **完整架构**（四层演进 / 顶层拓扑 / 数据流 / 子系统地图 / SSoT 边界）见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)；
-> 代码级深度见 [`docs/claude/architecture-internals.md`](./docs/claude/architecture-internals.md)。
+> 代码级深度见 [`docs/reference/architecture/architecture-internals.md`](./docs/reference/architecture/architecture-internals.md)。
 
 ---
 
@@ -273,12 +273,12 @@ MailAgent/
 - [Agent 项目指南](./CLAUDE.md) — 给 Claude Code 的导航索引
 
 **深度文档（按需读）：**
-- [架构内核](./docs/claude/architecture-internals.md) — 代码级流程 / Sprint15 / Sprint16 / DDL
-- [v4 SQLite SSoT 架构](./docs/architecture_v4_sqlite_ssot.md) · [运维](./docs/claude/v4-ssot-ops.md)
-- [Sprint 16 dual-backend cutover](./docs/sprint16-cutover-complete.md) — DavMail 切换全程纪要
-- [Post-cutover roadmap](./docs/roadmap-post-cutover.md) — 含 EWS 2026-10 关停应对
-- [LLM Agent 启用清单](./docs/LLM_AGENT_SETUP.md) · [日历模块](./docs/claude/calendar-ops.md)
-- [KOS 集成设计](./docs/kos-integration-design.md) · [CLI 命令全表](./docs/claude/cli-reference.md)
+- [架构内核](./docs/reference/architecture/architecture-internals.md) — 代码级流程 / Sprint15 / Sprint16 / DDL
+- [v4 SQLite SSoT 架构](./docs/reference/architecture/architecture_v4_sqlite_ssot.md) · [运维](./docs/reference/architecture/v4-ssot-ops.md)
+- [Sprint 16 dual-backend cutover](./docs/archive/2026-05/sprint16-cutover-complete.md) — DavMail 切换全程纪要
+- [Post-cutover roadmap](./docs/reference/architecture/roadmap-post-cutover.md) — 含 EWS 2026-10 关停应对
+- [LLM Agent 启用清单](./docs/reference/llm-agent/LLM_AGENT_SETUP.md) · [日历模块](./docs/reference/calendar/calendar-ops.md)
+- [KOS 集成设计](./docs/reference/llm-agent/kos-integration-design.md) · [CLI 命令全表](./docs/reference/cli/cli-reference.md)
 
 ## License
 

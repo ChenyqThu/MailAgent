@@ -84,7 +84,7 @@ def get_service_ctx() -> "ServiceContext":
     """返回 in-process 写端点 (A2: resync/flag) 用的 ServiceContext。
 
     FastAPI ``Depends(get_service_ctx)`` 用。MailWriteService 经它编排领域类, 不再
-    fork CLI (见 docs/backend-service-migration-matrix.md)。复用 import-time config
+    fork CLI (见 docs/reference/architecture/backend-service-migration-matrix.md)。复用 import-time config
     单例 → 与 mail-sync / serve 同一份 .env + db_path。
 
     **每次新建 (非单例)**: ServiceContext.notion_sync 持 ``NotionClient`` 的 httpx

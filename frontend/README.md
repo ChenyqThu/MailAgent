@@ -3,7 +3,7 @@
 > macOS Electron 邮件桌面 app（本机主战场）+ 远程 Web SPA / PWA（出差用）+
 > ping-island Hybrid 灵动岛集成（macOS 本机增强）三位一体的前端体系。
 >
-> **状态**: 2026-05-16 架构定稿 / 设计系统就位 / 项目计划完整 / **深度 review 完成（[REVIEW-LOG.md](./REVIEW-LOG.md)）** — 等 Sprint 0 启动。
+> **状态**: 2026-05-16 架构定稿 / 设计系统就位 / 项目计划完整 / **深度 review 完成（[REVIEW-LOG.md](./archive/2026-05/REVIEW-LOG.md)）** — 等 Sprint 0 启动。
 >
 > **后端**: SQLite-SSoT 邮件同步系统（详 `../CLAUDE.md`），mail-sync 在本地 macOS 跑，
 > Mail.app → SQLite → Notion 实时双向同步 + LLM 分类 + 飞书通知。
@@ -31,7 +31,7 @@
 故障排查 / 升级 / 卸载完整指南。Sprint 8 起 .dmg + auto-updater + 用户向
 README 都已就位。
 
-历史归档：[`archive/`](./archive/) — 7 份早期规划文档（被 ARCHITECTURE / PROJECT-PLAN / ISLAND-PLUGIN / REMOTE-ACCESS / BACKEND-INTERFACES 5 份新文档取代或精简）
+历史归档：[`archive/{年-月}/`](./archive/) — 早期规划文档 + 各 Sprint/Phase handoff + impeccable review + 主题 v2 handoff（冻结存史，非当前真相）。文档规范见 [`../docs/DOC-GUIDE.md`](../docs/DOC-GUIDE.md)。
 
 ---
 

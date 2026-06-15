@@ -1570,7 +1570,7 @@ export interface UpdaterApi {
 // ---- Sprint 16 §SSE — events bridge surface ----------------------------
 
 /** Sprint 16 — SSE event types. 后端 publish 点见 src/events/publisher.py
- *  + docs/sse-events.md. */
+ *  + docs/reference/integrations/sse-events.md. */
 export type SseEventType =
   | 'email.synced'
   | 'email.failed'

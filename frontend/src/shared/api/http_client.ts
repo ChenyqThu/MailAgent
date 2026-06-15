@@ -1,7 +1,7 @@
 // V2 Web SPA HTTP client helper. The single seam between HttpApi's typed
 // methods and the local FastAPI service (127.0.0.1:8200 reached via a
 // cloudflared tunnel; default baseUrl '/api' for same-origin). See
-// REMOTE-ACCESS.md §4 (data layer) + docs/v2-backend-sprint12-handoff.md.
+// REMOTE-ACCESS.md §4 (data layer) + docs/archive/2026-05/v2-backend-sprint12-handoff.md.
 //
 // Why a dedicated module: every JSON method funnels through `request()` so
 // the envelope contract (`{status, schema_version, data, error, meta}`) is

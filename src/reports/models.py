@@ -1,7 +1,7 @@
 """报告块模型（ReportDoc DSL）—— LLM 输出 + 后端组装的结构化报告 SSoT。
 
 前端 BlockRenderer 是这套 JSON 的消费方；契约见
-docs/report-agent-frontend-handoff.md §5。下面的 block builder 函数保证字段名
+docs/archive/2026-06/report-agent-frontend-handoff.md §5。下面的 block builder 函数保证字段名
 与前端 TS 类型 1:1 对齐 —— **改字段名必须同步改 handoff 文档 + 前端**。
 """
 

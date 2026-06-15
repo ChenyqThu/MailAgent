@@ -2,7 +2,7 @@
 
 把「编排 + 守卫」从 CLI 命令体下沉到这里, 让 CLI (typer) 与 serve-api (FastAPI)
 各自退化成「解析 → 调 service → 格式化」的薄壳, 不再 fork CLI 跨传输复用
-(见 plan cli-streamed-brook.md §A2-A4 / docs/backend-service-migration-matrix.md)。
+(见 plan cli-streamed-brook.md §A2-A4 / docs/reference/architecture/backend-service-migration-matrix.md)。
 
 两类方法:
   - ``plan_*`` (plan_flags/plan_resync/plan_archive/plan_pin/compose_plan): dry-run 纯预览,

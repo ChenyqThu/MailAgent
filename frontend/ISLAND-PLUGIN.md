@@ -425,7 +425,7 @@ git push origin main --force-with-lease
 
 ## 3. Bridge 协议 — 与 ping-island upstream 完全一致
 
-复用 ping-island 的 `BridgeEnvelope` JSON schema（不发明新协议）。从 [`archive/frontend-ping-island-integration.md`](./archive/frontend-ping-island-integration.md) §3.2 + 本地 fork 源码反推。
+复用 ping-island 的 `BridgeEnvelope` JSON schema（不发明新协议）。从 [`archive/frontend-ping-island-integration.md`](./archive/2026-05/frontend-ping-island-integration.md) §3.2 + 本地 fork 源码反推。
 
 ### 3.1 Wire（REVIEW-LOG H-16 / H-18 加 timeout + max-size）
 
@@ -955,7 +955,7 @@ CREATE TABLE IF NOT EXISTS island_dispatch (
 ## 11. 协议参考
 
 完整 BridgeEnvelope JSON schema / wire format / Swift Date 编码陷阱 / Python PoC 代码
-等详细协议参考见归档 [`archive/frontend-ping-island-integration.md`](./archive/frontend-ping-island-integration.md)
+等详细协议参考见归档 [`archive/frontend-ping-island-integration.md`](./archive/2026-05/frontend-ping-island-integration.md)
 §3 与 §6（保留作"快速调试用"参考实现）。
 
 ---

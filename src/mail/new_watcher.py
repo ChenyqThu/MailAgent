@@ -164,7 +164,7 @@ class NewWatcher:
             raise RuntimeError(f"SyncStore initialization failed: {e}")
 
         # v4: SQLite SSoT 仓库（strict DI 需要在 NotionSync 之前初始化）
-        # 详见 docs/architecture_v4_sqlite_ssot.md
+        # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md
         try:
             self.email_repo = EmailRepository(
                 db_path=sync_store_path,
@@ -742,7 +742,7 @@ class NewWatcher:
                     return
 
             # 5.5 v4: 双写邮件正文 + 附件到 SQLite（SSoT 切换的关键一步）
-            # 详见 docs/architecture_v4_sqlite_ssot.md
+            # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md
             # 失败仅 warning，主流程继续走 Notion sync
             self._maybe_dual_write_body(email_obj, internal_id, full_email.get("source"))
 
@@ -789,7 +789,7 @@ class NewWatcher:
 
         - BODY_DUAL_WRITE_ENABLED=false 时直接返回
         - 任何失败仅 warning，不阻断 Notion sync 主流程
-        - 详见 docs/architecture_v4_sqlite_ssot.md
+        - 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md
 
         v4 子步骤:
             1. **预跑 Office 转换**：把 docx→pdf / xlsx→csv 产物追加到 email_obj.attachments

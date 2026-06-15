@@ -625,7 +625,7 @@ class PageOps:
 
     # ============================================================
     # v4 SSoT 路径：从 SQLite 读 body+attachments+metadata 创建 Notion 页
-    # 详见 docs/architecture_v4_sqlite_ssot.md §5
+    # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md §5
     # ============================================================
 
     # 匹配 storage_payload_builder._rewrite_cid_to_local 写入 body_html 的相对路径
