@@ -123,6 +123,16 @@ tail -f logs/sync.log
 - **改 Python 后端**后：必先 `bash frontend/scripts/build-python-venv.sh` 重 provision 才进包；只改前端 TS/CSS 不用。
 - **自动更新**仍卡 Developer ID 签名（ad-hoc `quitAndInstall` 装不上更新，`AUTO_UPDATE_ENABLED` 默认关）→ 现走手动替换；P6 见 [`docs/reference/packaging/05-auto-update-handoff.md`](./docs/reference/packaging/05-auto-update-handoff.md)。
 
+## 官网（公开 Landing + 101）
+
+仓库根 `site/` 是**独立的公开官网**（Astro 6 + Starlight，与 `frontend/` electron app、Python 后端并列，同在 `main`）：营销 landing（复刻 `frontend/docs/landing/` 设计稿，14 区块，暗/亮 + 6 强调色 + 中英双语，**用真实 React mock 组件替代截图**）+ 双语「101」使用指南（用户 16 页 / agent 13 页，zh 全量、en 关键页 + 缺译 fallback）。**与 `mail.chenge.ink/app`（在 CF Access 鉴权墙后的产品 app）是两套独立部署** —— 公开站要部署成**不在 Access 后**的独立 Cloudflare Pages 项目。
+
+- **内容 markdown 驱动**：101 文档 = `site/src/content/docs/{101,agent}/<slug>.md`（zh root + `en/`，Starlight 同名文件自动关联 + 缺译 fallback）；营销文案 = `site/src/content/landing/{zh-CN,en}.yaml`（改 yaml 即更新，零碰组件）。加语言 = 加 locale + 目录 + yaml。
+- **设计 token** = `site/src/styles/tokens.css`，**从产品 `frontend/src/electron/renderer/index.css` 派生**（用产品 oklch coral `248 138 125`，非参考稿旧 `#E5654B`）；`pnpm check:tokens` 校验漂移。mock 组件在 `site/src/components/mock/`（纯展示、假数据、零真实 API）。
+- **命令**：`cd site && pnpm install`（独立 pnpm 项目）；`pnpm dev`（开发）/ `pnpm build`（→ `dist/`，静态）/ `pnpm astro check`（类型闸，build 默认不 typecheck）/ `pnpm preview`。**Astro 6 不兼容 `@astrojs/tailwind`** —— Tailwind v3 走 PostCSS，勿重新引入。
+- **规划/设计文档**（PRD/架构/101 内容规格）：`.trellis/tasks/06-15-landing-page-101-redesign/{prd,architecture,content-spec-101}.md`。
+- **部署**：CF Pages（Git 集成或 `wrangler pages deploy site/dist`），域名待定（PRD Q1，占位 `mailagent.pages.dev`）。
+
 ## 调试 & 部署
 
 调试服务按固定顺序排查（详见 `/debug` skill）：① `pm2 status` 进程存活 → ② `.env` token/secret → ③ Redis/webhook/代理 → ④ `pm2 logs <name> --lines 30 --nostream` → ⑤ `sqlite3 data/sync_store.db` 状态分布。**不要**：sudo / 交互式命令 / 没查基础项就改代码 / 错误 SSH 凭证重试。
