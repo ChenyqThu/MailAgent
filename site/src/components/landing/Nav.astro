@@ -43,7 +43,7 @@ const downloadLabel = download ?? chrome.download
       <a href={docsHref}>{chrome.docs}</a>
     </div>
 
-    <ThemeAccentLang client:load />
+    <ThemeAccentLang client:load locale={locale} />
 
     <a class="btn btn--primary nav-cta" href="#download">
       <Icon name="download" size={17} />

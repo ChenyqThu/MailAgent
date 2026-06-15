@@ -1,22 +1,133 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   Starlight theme overrides — KEPT MINIMAL on purpose.
-   Only re-point Starlight's accent ramp at our coral token so the docs chrome
-   (active sidebar link, links, focus ring) matches the landing accent. We do
-   NOT restyle Starlight's layout/typography here — that fights the theme and
-   is out of M0 scope. tokens.css is loaded before this file, so --c-accent is
-   already resolved (and re-resolves on data-theme / data-accent swap).
+   Starlight theme overrides — map Starlight's CSS custom properties onto OUR
+   design tokens (tokens.css) so the /docs/* chrome matches the dark/coral
+   editorial landing instead of Starlight's default blue/grey theme.
 
-   Starlight reads --sl-color-accent / -low / -high for its accent ramp.
+   Load order (astro.config customCss): tokens.css → global.css → docs.css, so
+   `rgb(var(--ink-*))` / `rgb(var(--c-accent))` are already resolved here and
+   auto-swap on data-theme (dark default + :root[data-theme='light']) and
+   data-accent.
+
+   Mapping strategy — Starlight's gray ramp REVERSES meaning per theme
+   (dark: gray-1 = lightest text … gray-6 = darkest surface, black = bg;
+    light: gray-1 = darkest text … gray-7 = lightest surface, black = white bg).
+   Our --ink-* ramp ALSO flips per theme (dark ink-0 = darkest surface; light
+   ink-0 = lightest surface; --ink-fg always = high-emphasis text). Because both
+   ramps flip together, a SINGLE :root mapping by ROLE auto-swaps correctly —
+   no per-theme override needed. We map by role:
+     gray-1 → ink-fg     (high-emphasis text)
+     gray-2 → ink-fg-1   (default body text; Starlight's --sl-color-text)
+     gray-3 → ink-fg-2   (muted text)
+     gray-4 → ink-fg-3   (dimmer text / faint borders)
+     gray-5 → ink-border (borders / hairline-light / inline-code bg in dark)
+     gray-6 → ink-2      (surface tier / hairline / inline-code bg in light)
+     gray-7 → ink-1      (lightest surface, used by nav in light)
+     black  → ink-0      (page bg)
+     white  → ink-fg     (high-emphasis heading color)
    ═══════════════════════════════════════════════════════════════════════ */
+
 :root {
+  /* ── Accent ramp → our coral (kept from the original minimal override) ── */
   --sl-color-accent-low: rgb(var(--c-accent-dim));
   --sl-color-accent: rgb(var(--c-accent));
   --sl-color-accent-high: rgb(var(--c-accent-hi));
-}
 
-/* Docs body uses the same UI sans as the landing for family consistency.
-   Starlight controls sizing/spacing; we only set the family var. */
-:root {
+  /* ── Gray ramp → our ink tokens (by role; auto-swaps with data-theme) ── */
+  --sl-color-white: rgb(var(--ink-fg));
+  --sl-color-gray-1: rgb(var(--ink-fg));
+  --sl-color-gray-2: rgb(var(--ink-fg-1));
+  --sl-color-gray-3: rgb(var(--ink-fg-2));
+  --sl-color-gray-4: rgb(var(--ink-fg-3));
+  --sl-color-gray-5: rgb(var(--ink-border));
+  --sl-color-gray-6: rgb(var(--ink-2));
+  --sl-color-gray-7: rgb(var(--ink-1));
+  --sl-color-black: rgb(var(--ink-0));
+
+  /* ── Text → our foreground ───────────────────────────────────────────── */
+  --sl-color-text: rgb(var(--ink-fg-1));
+  --sl-color-text-accent: rgb(var(--c-accent));
+
+  /* ── Surfaces → our ink tiers (explicit; not relying on derived grays) ── */
+  --sl-color-bg: rgb(var(--ink-0));
+  --sl-color-bg-nav: rgb(var(--ink-1));
+  --sl-color-bg-sidebar: rgb(var(--ink-1));
+  --sl-color-bg-inline-code: rgb(var(--ink-2));
+  --sl-color-bg-gutter: rgb(var(--ink-1));
+  --sl-color-backdrop-overlay: rgb(var(--ink-0) / 0.66);
+
+  /* ── Hairlines / borders → our border tokens ─────────────────────────── */
+  --sl-color-hairline: rgb(var(--ink-border-soft));
+  --sl-color-hairline-light: rgb(var(--ink-border));
+  --sl-color-hairline-shade: rgb(var(--ink-border-soft));
+
+  /* ── Fonts → the landing families ────────────────────────────────────── */
   --sl-font: var(--font-sans);
   --sl-font-mono: var(--font-mono);
+}
+
+/* ── Editorial headings — echo the landing's display serif (Instrument
+   Serif) on Starlight content h1/h2. CJK has no serif glyphs in that face, so
+   zh-CN falls back to the sans family at heavier weight (mirrors how the
+   landing's :root[lang='zh-CN'] .hero-title / .s-title rules do it). ──────── */
+.sl-markdown-content h1,
+.sl-markdown-content h2 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+:root[lang='zh-CN'] .sl-markdown-content h1,
+:root[lang='zh-CN'] .sl-markdown-content h2,
+:lang(zh) .sl-markdown-content h1,
+:lang(zh) .sl-markdown-content h2 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Asides (:::note / :::tip / :::caution / :::danger) — on-palette.
+
+   Starlight's asides.css (in @layer starlight.components) hardwires each
+   variant to its hue ramp: note=blue, tip=purple, caution=orange, danger=red,
+   each setting two vars (--sl-color-asides-text-accent for title/links,
+   --sl-color-asides-border for the inline-start bar) plus a background-color.
+   Those off-palette hues (esp. the purple tip) clash with our coral/ink look.
+
+   We remap by ROLE to our semantic tokens (tokens.css; they auto-swap on
+   data-theme so dark = bright text, light = darkened text for AA over the
+   faint wash):
+     note    → --c-info  (calm blue — informational)
+     tip     → --c-accent (brand coral — the on-palette "highlight")
+     caution → --c-warn  (amber)
+     danger  → --c-crit  (red)
+   Each gets a matching faint background via rgb(var(--c-x) / alpha). The
+   override is unlayered (this stylesheet sits outside @layer), so it beats
+   Starlight's layered component rules regardless of specificity. ───────── */
+.sl-markdown-content .starlight-aside--note {
+  --sl-color-asides-text-accent: rgb(var(--c-info));
+  --sl-color-asides-border: rgb(var(--c-info));
+  background-color: rgb(var(--c-info) / 0.1);
+}
+.sl-markdown-content .starlight-aside--tip {
+  --sl-color-asides-text-accent: rgb(var(--c-accent));
+  --sl-color-asides-border: rgb(var(--c-accent));
+  background-color: rgb(var(--c-accent) / 0.1);
+}
+.sl-markdown-content .starlight-aside--caution {
+  --sl-color-asides-text-accent: rgb(var(--c-warn));
+  --sl-color-asides-border: rgb(var(--c-warn));
+  background-color: rgb(var(--c-warn) / 0.1);
+}
+.sl-markdown-content .starlight-aside--danger {
+  --sl-color-asides-text-accent: rgb(var(--c-crit));
+  --sl-color-asides-border: rgb(var(--c-crit));
+  background-color: rgb(var(--c-crit) / 0.1);
+}
+/* Body text inside asides — Starlight sets it to --sl-color-white (our
+   --ink-fg), which is the right high-emphasis foreground in both themes. The
+   title + links pick up the per-variant accent var above. No extra rule needed,
+   but pin the content color explicitly so a future --sl-color-white tweak can't
+   wash out aside body text on the tinted background. */
+.sl-markdown-content .starlight-aside {
+  color: rgb(var(--ink-fg));
 }

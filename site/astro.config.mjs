@@ -18,6 +18,21 @@ export default defineConfig({
     starlight({
       title: 'MailAgent',
       favicon: '/favicon.svg',
+      // Make /docs/* follow the landing's theme, dark-first. The landing owns
+      // `data-theme` via the nanostore $theme (localStorage 'ma_theme', default
+      // 'dark'); Starlight is otherwise independent (own 'starlight-theme' key,
+      // defaults to 'auto' → follows OS). This inline head script runs before
+      // paint: it reads ma_theme (unset/anything but 'light' → 'dark'), applies
+      // it to <html data-theme>, and seeds Starlight's own key so its theme
+      // toggle shows the right state and its ThemeProvider agrees. One-way
+      // landing→docs sync (in-docs toggle still works as an override). Placed
+      // first in `head` so it precedes Starlight's own ThemeProvider script.
+      head: [
+        {
+          tag: 'script',
+          content: `(function(){try{var t=localStorage.getItem('ma_theme');var theme=(t==='light')?'light':'dark';document.documentElement.dataset.theme=theme;localStorage.setItem('starlight-theme',theme);}catch(e){document.documentElement.dataset.theme='dark';}})();`,
+        },
+      ],
       // zh-CN is the default locale (root, no /zh/ prefix); en lives under /en/.
       defaultLocale: 'root',
       locales: {

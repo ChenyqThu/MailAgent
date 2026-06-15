@@ -11,13 +11,30 @@ import { useStore } from '@nanostores/react'
 import { $theme, $accent, $lang, ACCENTS, wireThemeToDom, type Accent } from '../../../lib/theme'
 import { localizePath, type Locale } from '../../../lib/i18n'
 
-export default function ThemeAccentLang() {
+interface Props {
+  /**
+   * The ACTUAL locale of the rendered page (from getLocale(Astro.url)). The
+   * lang switcher's active state derives from this — NOT from the $lang store —
+   * so /en/ highlights EN even though the persisted store may still say zh-CN.
+   * Passed at build time so the static HTML marks the right lang active before
+   * hydration (no flash / mismatch).
+   */
+  locale: Locale
+}
+
+export default function ThemeAccentLang({ locale }: Props) {
   const theme = useStore($theme)
   const accent = useStore($accent)
-  const lang = useStore($lang)
 
   // Reflect store → DOM on mount (the no-flash snippet already set initial attrs).
   useEffect(() => wireThemeToDom(), [])
+
+  // Keep the persisted lang store in sync with the page you're actually on, so
+  // it never disagrees with the highlighted button (store is otherwise only for
+  // remembering the user's choice across navigations).
+  useEffect(() => {
+    if ($lang.get() !== locale) $lang.set(locale)
+  }, [locale])
 
   function setLang(next: Locale) {
     $lang.set(next)
@@ -73,20 +90,20 @@ export default function ThemeAccentLang() {
         </button>
       </div>
 
-      {/* language switch */}
+      {/* language switch — active state from the page's ACTUAL locale prop */}
       <div className="switch switch--mono" role="group" aria-label="Language">
         <button
           type="button"
-          className={lang === 'zh-CN' ? 'on' : ''}
-          aria-pressed={lang === 'zh-CN'}
+          className={locale !== 'en' ? 'on' : ''}
+          aria-pressed={locale !== 'en'}
           onClick={() => setLang('zh-CN')}
         >
           中
         </button>
         <button
           type="button"
-          className={lang === 'en' ? 'on' : ''}
-          aria-pressed={lang === 'en'}
+          className={locale === 'en' ? 'on' : ''}
+          aria-pressed={locale === 'en'}
           onClick={() => setLang('en')}
         >
           EN

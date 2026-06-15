@@ -298,15 +298,30 @@ html {
 .switch button:hover {
   color: rgb(var(--ink-fg));
 }
+/* Active state — accent-tinted so it's instantly distinguishable in BOTH
+   dark and light. The previous `rgb(var(--ink-4))` was nearly invisible in
+   dark and collapses to a faint light-grey in light mode (ink-4 light is a
+   pale grey, barely above the switch container). An accent wash + accent text
+   + an inset accent hairline + lift shadow reads clearly in both themes and
+   ties the active chip to the brand color. */
 .switch button.on {
-  background: rgb(var(--ink-4));
-  color: rgb(var(--ink-fg));
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+  background: rgb(var(--c-accent) / 0.16);
+  color: rgb(var(--c-accent));
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--c-accent) / 0.34),
+    0 1px 2px rgb(0 0 0 / 0.2);
+}
+.switch button.on:hover {
+  color: rgb(var(--c-accent));
 }
 .switch--mono button {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
+}
+/* Active language chip also pops with the accent (matches theme switch). */
+.switch--mono button.on {
+  color: rgb(var(--c-accent));
 }
 
 /* accent dots */
@@ -335,29 +350,35 @@ html {
     0 0 0 1.5px rgb(var(--ink-0)),
     0 0 0 3px currentColor;
 }
-/* Accent dot swatches use the PRODUCT dark-accent values (not reference hex). */
-.adot--coral {
-  background: rgb(248 138 125);
+/* Accent dot swatches use the PRODUCT dark-accent values (not reference hex).
+   Doubled `.adot.adot--x` selector (specificity 0,2,0) so the fill beats
+   Tailwind v3 preflight's `[type='button'] { background-color: transparent }`
+   (0,1,0) which loads later — single-class swatches tied and lost (dots were
+   transparent). `background-color` (not the `background` shorthand) is used so
+   the fill is unambiguous; `color` stays set because the aria-checked ring
+   below uses `currentColor`. */
+.adot.adot--coral {
+  background-color: rgb(248 138 125);
   color: rgb(248 138 125);
 }
-.adot--cobalt {
-  background: rgb(126 173 255);
+.adot.adot--cobalt {
+  background-color: rgb(126 173 255);
   color: rgb(126 173 255);
 }
-.adot--teal {
-  background: rgb(55 199 174);
+.adot.adot--teal {
+  background-color: rgb(55 199 174);
   color: rgb(55 199 174);
 }
-.adot--rose {
-  background: rgb(241 136 175);
+.adot.adot--rose {
+  background-color: rgb(241 136 175);
   color: rgb(241 136 175);
 }
-.adot--slate {
-  background: rgb(158 176 196);
+.adot.adot--slate {
+  background-color: rgb(158 176 196);
   color: rgb(158 176 196);
 }
-.adot--olive {
-  background: rgb(163 185 108);
+.adot.adot--olive {
+  background-color: rgb(163 185 108);
   color: rgb(163 185 108);
 }
 
