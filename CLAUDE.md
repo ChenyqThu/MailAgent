@@ -198,6 +198,7 @@ mailagent email resync 53675 --dry-run -o json
 - 改邮件解析：编辑 `src/mail/reader.py`，测 `python3 scripts/dev/test_mail_reader.py`
 - 改会议检测：`src/mail/icalendar_parser.py` 或 `src/calendar_notion/description_parser.py`
 - 加新配置：① `src/config.py` 加 Field → ② `.env.example` 加示例 → ③ 必要时更新本文件「关键开关现状」表
+- **加新文档**（防再次乱套，完整规范见 [`docs/DOC-GUIDE.md`](./docs/DOC-GUIDE.md)）：先判类型 —— **常青参考**（描述系统"现在如何"、会反复读）放 `docs/reference/<子系统>/`，**且必须在上方「文档地图」加一行**（否则无人发现）；**过程产物**（handoff / complete / phaseN / prN / sprint / 验收 matrix / 交接 / dogfood）放 `.trellis/tasks/<task>/`，已成历史的归 `docs/archive/{年-月}/` —— **禁止堆回 `docs/` 顶层或 `docs/reference/`**。判据：*半年后还有人为"现在怎么回事"来读吗？* 是→reference，否→archive。
 - SQLite schema 升级：用 `/db-migration` skill（bump DB_VERSION + idempotent migration + 一致性更新）。**bump `DB_VERSION` 必同步前端 `frontend/src/electron/main/backend_lifecycle.ts` 的 `EXPECTED_DB_VERSION`**（TS 手抄 Python 常量，漏改 → 打包 app 启动门控 `waitReady` 卡 120s 降级；判据已 `>=` 容错 + `frontend/tests/main/db_version_consistency.test.ts` 兜底）
 
 ## 文件位置
