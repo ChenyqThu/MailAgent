@@ -1,0 +1,26 @@
+---
+/**
+ * Starlight Sidebar override — replace the stacked topic GROUPS with a single
+ * DROPDOWN switcher (用户指南 / Agent 指南) above the active topic's sidebar.
+ *
+ * Composition (per starlight-sidebar-topics-dropdown getting-started + the base
+ * plugin's overrides/Sidebar.astro): render the dropdown topic switcher, then
+ * Starlight's Default sidebar (which the base topics plugin has already scoped
+ * to the CURRENT topic's items via its route middleware). The base plugin sets
+ * its own overrides/Sidebar.astro but spreads `...starlightConfig.components`
+ * AFTER, so THIS override (declared in astro.config `components.Sidebar`) wins
+ * and takes responsibility for rendering the topic switcher — here the dropdown
+ * instead of the default vertical topics list.
+ *
+ * `TopicsDropdown` reads Astro.locals.starlightSidebarTopics (populated by the
+ * base plugin's middleware), so it only needs to render on topic pages; on any
+ * excluded/non-topic page Starlight falls back to its built-in sidebar.
+ */
+import Default from '@astrojs/starlight/components/Sidebar.astro'
+import { TopicsDropdown } from 'starlight-sidebar-topics-dropdown'
+
+const { isPageWithTopic } = Astro.locals.starlightSidebarTopics
+---
+
+{isPageWithTopic && <TopicsDropdown />}
+<Default><slot /></Default>

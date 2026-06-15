@@ -131,3 +131,25 @@
 .sl-markdown-content .starlight-aside {
   color: rgb(var(--ink-fg));
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Sidebar group <summary> — kill the stray native disclosure marker.
+
+   Tailwind preflight's UNLAYERED `summary { display: list-item }` beats
+   Starlight's layered (@layer starlight.components) sidebar-summary rule
+   (`summary { display: flex }` + `summary::marker { display: none }`), so the
+   browser re-exposes its native disclosure marker — a lone ">" sitting on the
+   group rows. Restore Starlight's intended flex layout and re-hide the marker
+   with an UNLAYERED rule (this stylesheet sits outside @layer, so it wins over
+   both Tailwind preflight and Starlight's layered rules). Scoped to
+   `.sidebar-content` so the landing FAQ (its own `.faq summary { display:flex }`)
+   is untouched and any nested <details> in docs prose keeps default behavior. */
+.sidebar-content summary {
+  display: flex;
+  list-style: none;
+}
+.sidebar-content summary::marker,
+.sidebar-content summary::-webkit-details-marker {
+  display: none;
+  content: '';
+}

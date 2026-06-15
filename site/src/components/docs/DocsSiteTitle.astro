@@ -1,0 +1,53 @@
+---
+/**
+ * Starlight SiteTitle override — render the MailAgent BRAND (coral star mark +
+ * "MailAgent" wordmark, matching the landing nav brand) as an obvious link
+ * BACK to the landing home. Locale-correct: `/` for zh-CN, `/en/` for en.
+ *
+ * Why override: Starlight's default SiteTitle links to `siteTitleHref` (the
+ * docs root, `/docs/` or `/en/docs/`) and is just the plain word "MailAgent"
+ * tinted accent — not an obvious "return to the marketing site" affordance, and
+ * not locale-aware toward the landing. We reuse the landing's `.logo` mark +
+ * the same star SVG (Icon.astro) so the docs brand reads identically to the
+ * landing nav, making it a clear home link.
+ *
+ * Locale comes from Astro.url via lib/i18n getLocale; the home target is built
+ * with localizePath(locale, '/') → `/` (zh) or `/en/` (en).
+ */
+import Icon from '../landing/Icon.astro'
+import { getLocale, localizePath, type Locale } from '../../lib/i18n'
+
+const locale: Locale = getLocale(Astro.url)
+const homeHref = localizePath(locale, '/')
+const ariaLabel = locale === 'en' ? 'MailAgent · back to home' : 'MailAgent · 返回首页'
+---
+
+<a href={homeHref} class="docs-site-title sl-flex" aria-label={ariaLabel}>
+  <span class="logo" aria-hidden="true">
+    <Icon name="star" size={15} />
+  </span>
+  <span class="docs-brand-word" translate="no">MailAgent</span>
+</a>
+
+<style>
+  /* Echo the landing `.brand` (global.css): mark + wordmark, ink-fg text. The
+     `.logo` mark styling (coral gradient + glow) is provided by global.css,
+     which is loaded as customCss before docs.css. */
+  .docs-site-title {
+    align-items: center;
+    gap: var(--sl-nav-gap);
+    font-size: var(--sl-text-h4);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: rgb(var(--ink-fg));
+    text-decoration: none;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .docs-brand-word {
+    overflow: hidden;
+  }
+  .docs-site-title:hover {
+    color: rgb(var(--c-accent));
+  }
+</style>
