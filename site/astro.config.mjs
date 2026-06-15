@@ -6,9 +6,10 @@ import sitemap from '@astrojs/sitemap'
 
 // https://astro.build/config
 export default defineConfig({
-  // Deploy domain TBD (PRD open question Q1: new subdomain vs *.pages.dev).
-  // Placeholder kept so sitemap/canonical/hreflang generate valid absolute URLs.
-  site: 'https://mailagent.pages.dev',
+  // Production domain — bound 2026-06-15 via a dedicated cloudflared tunnel
+  // (mailagent-site → local static serve of dist). Drives sitemap/canonical/
+  // hreflang/OG absolute URLs. If later moved to CF Pages, keep this value.
+  site: 'https://mailagent.chenge.ink',
   // SSG: per-locale static HTML, served by any static host (Cloudflare Pages).
   output: 'static',
   integrations: [
