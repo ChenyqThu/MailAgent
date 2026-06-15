@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark" data-accent="coral" data-lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MailAgent — 让 AI 替你看完每一封邮件</title>
+<meta name="description" content="MailAgent · 一个把 AI 装进收件箱的桌面邮件助手。自动分类、定级、摘要、起草回复，灵动岛实时提醒，每日报告 Agent，全程可溯源。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="mockups.css">
+</head>
+<body>
+
+<!-- ══════════════ NAV ══════════════ -->
+<nav class="nav" id="nav">
+  <a class="brand" href="#top">
+    <span class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span>
+    <span>MailAgent</span>
+  </a>
+  <div class="nav-tools">
+    <div class="nav-links">
+      <a href="#features"><span class="zh">能力</span><span class="en">Features</span></a>
+      <a href="#island"><span class="zh">灵动岛</span><span class="en">Live</span></a>
+      <a href="#agent"><span class="zh">报告 Agent</span><span class="en">Reports</span></a>
+      <a href="#trust"><span class="zh">可溯源</span><span class="en">Provenance</span></a>
+      <a href="#faq">FAQ</a>
+    </div>
+
+    <!-- accent presets — mirrors product settings -->
+    <div class="accents" id="accents" role="radiogroup" aria-label="Accent">
+      <button class="adot adot--coral"  data-accent="coral"  aria-checked="true"  title="Coral"></button>
+      <button class="adot adot--cobalt" data-accent="cobalt" aria-checked="false" title="Cobalt"></button>
+      <button class="adot adot--teal"   data-accent="teal"   aria-checked="false" title="Teal"></button>
+      <button class="adot adot--rose"   data-accent="rose"   aria-checked="false" title="Rose"></button>
+      <button class="adot adot--olive"  data-accent="olive"  aria-checked="false" title="Olive"></button>
+    </div>
+
+    <!-- theme switch -->
+    <div class="switch switch--theme" id="themeSwitch">
+      <button data-theme="dark" class="on" title="Dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+      </button>
+      <button data-theme="light" title="Light">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>
+      </button>
+    </div>
+
+    <!-- language switch -->
+    <div class="switch switch--mono" id="langSwitch">
+      <button data-lang="zh" class="on">中</button>
+      <button data-lang="en">EN</button>
+    </div>
+
+    <a class="btn btn--primary nav-cta" href="#download">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+      <span class="btn-label zh">下载</span><span class="btn-label en">Download</span>
+    </a>
+  </div>
+</nav>
+
+<span id="top"></span>
+
+<!-- ══════════════ HERO ══════════════ -->
+<header class="hero">
+  <div class="hero-glow"></div>
+  <div class="hero-grid"></div>
+  <div class="wrap hero-inner">
+    <div class="hero-pill reveal">
+      <span class="tag"><span class="dot"></span>v1 · macOS</span>
+      <b class="zh">把 AI 装进你的收件箱</b><b class="en">AI, native to your inbox</b>
+    </div>
+
+    <h1 class="hero-title reveal" data-d="1" id="heroTitle">
+      <span class="zh">你的收件箱，<br><em>有人盯着了</em>。</span>
+      <span class="en">Your inbox,<br><em>finally handled</em>.</span>
+    </h1>
+
+    <p class="hero-sub reveal" data-d="2" id="heroSub">
+      <span class="zh">MailAgent 在邮件落地的那一刻就替你读完它——自动分类、定优先级、写摘要、起草回复。重要的浮上来，杂讯沉下去，全程可点回原文。</span>
+      <span class="en">MailAgent reads every email the moment it lands — classifying, prioritizing, summarizing and drafting replies. What matters rises; noise settles. Every claim links back to the source.</span>
+    </p>
+
+    <div class="hero-cta reveal" data-d="2">
+      <a class="btn btn--primary btn--lg" href="#download">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.4 12.9c0-2 1.6-3 1.7-3.1-.9-1.4-2.4-1.5-2.9-1.6-1.2-.1-2.4.7-3 .7s-1.6-.7-2.6-.7c-1.3 0-2.6.8-3.2 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.3-.6 2.5-.6s1.5.6 2.5.6 1.7-.9 2.4-1.9c.7-1.1 1-2.1 1-2.2 0 0-1.9-.8-1.9-2.9zM14.5 6.8c.5-.7.9-1.6.8-2.6-.8 0-1.8.6-2.4 1.2-.5.6-1 1.5-.8 2.4.9.1 1.8-.4 2.4-1z"/></svg>
+        <span class="zh">下载 macOS 版</span><span class="en">Download for macOS</span>
+      </a>
+      <a class="btn btn--ghost btn--lg" href="#features">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m0 0l-6-6m6 6l-6 6"/></svg>
+        <span class="zh">看看它怎么干活</span><span class="en">See how it works</span>
+      </a>
+    </div>
+
+    <div class="hero-meta reveal" data-d="3">
+      <span><i class="ok"></i> <span class="zh">本地优先 · 数据存本机</span><span class="en">Local-first · stays on device</span></span>
+      <span><i class="ok"></i> claude-sonnet-4-6</span>
+      <span><i class="ok"></i> <span class="zh">开源 · MIT</span><span class="en">Open source · MIT</span></span>
+    </div>
+  </div>
+
+  <!-- product shot -->
+  <div class="wrap hero-shot reveal" data-d="2">
+    <div class="window">
+      <div class="window-bar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <div class="addr">MailAgent — 收件箱 · Inbox</div>
+      </div>
+      <div class="app">
+        <!-- sidebar -->
+        <aside class="app-rail">
+          <div class="rail-acct"><span class="logo" style="width:20px;height:20px;border-radius:6px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span><span>me</span><span class="chev">▾</span></div>
+          <div class="rail-grp">Mailboxes</div>
+          <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span class="lbl"><span class="zh">收件箱</span><span class="en">Inbox</span></span><span class="badge">9</span></div>
+          <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg><span class="lbl"><span class="zh">发件箱</span><span class="en">Sent</span></span></div>
+          <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg><span class="lbl"><span class="zh">存档</span><span class="en">Archive</span></span></div>
+          <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg><span class="lbl"><span class="zh">已标旗</span><span class="en">Flagged</span></span><span class="ct">27</span></div>
+          <div class="rail-grp">AI Agents</div>
+          <div class="rail-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg><span class="lbl">Notion Agent</span><span class="dot" style="width:6px;height:6px;border-radius:50%;background:rgb(var(--ok))"></span></div>
+          <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span class="lbl">Custom AI</span></div>
+          <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-7 3.3M3 4v4h4"/><path d="M12 8v4l3 2"/></svg><span class="lbl"><span class="zh">AI 会话历史</span><span class="en">AI history</span></span></div>
+          <div class="rail-spacer"></div>
+          <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.4.92 1.65 1.65 0 0 0-1.5 1H10a2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 7 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 2.6 14H2.5a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4 9.4"/></svg><span class="lbl"><span class="zh">设置</span><span class="en">Settings</span></span></div>
+        </aside>
+
+        <!-- mail list -->
+        <div class="app-list">
+          <div class="list-top">
+            <div class="list-tabs"><button class="on"><span class="zh">重点</span><span class="en">Focused</span></button><button><span class="zh">其他</span><span class="en">Other</span></button></div>
+          </div>
+          <div class="list-meta"><span class="zh">9 未读 · 总计 674</span><span class="en">9 unread · 674 total</span></div>
+          <div class="mlist">
+            <div class="mrow sel unread">
+              <span class="dot"></span>
+              <div class="mbody">
+                <div class="mline1"><span class="sender">Alex Rivera · northwind.io</span><span class="time">14:23</span></div>
+                <div class="subj">Re: 多区域部署 — 关于 rate limit</div>
+                <div class="snip">看大家讨论得挺全面了，我补充几点一线观察供参考…</div>
+                <div class="mtags"><span class="ppip impt">Important</span><span class="apip">需要决策</span></div>
+              </div>
+            </div>
+            <div class="mrow unread">
+              <span class="dot"></span>
+              <div class="mbody">
+                <div class="mline1"><span class="sender">Sentry · sentry.io</span><span class="lpip">EN</span><span class="time">14:08</span></div>
+                <div class="subj">[Alert] webhook 8100: HTTP 502 from upstream</div>
+                <div class="snip">Triggered: nginx → webhook (process down). You are oncall.</div>
+                <div class="mtags"><span class="ppip crit">Critical</span><span class="apip">Reply Needed</span></div>
+              </div>
+            </div>
+            <div class="mrow read">
+              <span class="dot"></span>
+              <div class="mbody">
+                <div class="mline1"><span class="sender">Maya Park · acme-labs.dev</span><span class="time">11:40</span></div>
+                <div class="subj"><span style="color:rgb(var(--fg-2));margin-right:4px">Re:</span>周报 — W22 项目进度对齐</div>
+                <div class="snip">这周迁移基本收口了，6,184 封邮件全部迁完…</div>
+                <div class="mtags"><span class="ppip norm">Normal</span><span class="apip">仅供参考</span></div>
+              </div>
+            </div>
+            <div class="mrow read">
+              <span class="dot"></span>
+              <div class="mbody">
+                <div class="mline1"><span class="sender">Linear · linear.app</span><span class="lpip">EN</span><span class="time">昨天</span></div>
+                <div class="subj">ENG-1421 assigned to you · "V1 前端脚手架"</div>
+                <div class="snip">Sam Okafor moved this issue into "In Progress"…</div>
+                <div class="mtags"><span class="ppip norm">Normal</span></div>
+              </div>
+            </div>
+            <div class="mrow read">
+              <span class="dot"></span>
+              <div class="mbody">
+                <div class="mline1"><span class="sender">Stripe · stripe.com</span><span class="lpip">EN</span><span class="time">昨天</span></div>
+                <div class="subj">Your invoice for May is available</div>
+                <div class="snip">Receipt #4821 · $79.00 paid to OpenRouter…</div>
+                <div class="mtags"><span class="ppip norm">Normal</span><span class="apip">可归档</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- reading pane -->
+        <div class="app-read">
+          <div class="read-bar">
+            <span class="read-reply"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg><span class="zh">回复</span><span class="en">Reply</span></span>
+            <span class="read-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></span>
+            <span class="read-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></span>
+            <span class="read-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/></svg></span>
+            <span class="read-ic" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span>
+          </div>
+          <div class="read-body">
+            <div class="read-subj">Re: 多区域部署 — 关于 rate limit 的几点</div>
+            <div class="read-meta">
+              <span class="mk">From</span><span class="mv"><b>Alex Rivera</b> · northwind.io</span>
+              <span class="mk">To</span><span class="mv">you, Maya Park, Sam Okafor</span>
+              <span class="mk">Date</span><span class="mv">2026/05/29 · 14:23</span>
+            </div>
+
+            <div class="aif">
+              <div class="aif-top"><span class="star"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span> AI Fields · 5 <span class="rev"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>reviewed</span><span class="model">claude-sonnet-4-6</span></div>
+              <div class="aif-sec">
+                <div class="aif-lab"><span class="n">✶</span> Summary</div>
+                <div class="aif-sum"><span class="zh">Alex 汇总了多区域部署讨论，补充了一线观察：建议给 webhook 调用加指数退避，并在控制台、Web、CLI 三端统一新用户引导以降低试错成本。提出一版偏托管方案的蓝图待评估。</span><span class="en">Alex summed up the multi-region rollout thread, adding field notes: add exponential backoff to webhook calls and unify onboarding across console, web and CLI. Proposed a managed-leaning blueprint to evaluate.</span></div>
+              </div>
+              <div class="aif-sec">
+                <div class="aif-lab"><span class="n">✶</span> Reply Suggestion</div>
+                <div class="aif-reply"><span class="chev">›</span><span class="zh">已起草一版回复 · 点击展开</span><span class="en">A draft reply is ready · expand</span></div>
+              </div>
+              <div class="aif-foot">
+                <span class="ff"><span class="fk">Priority</span><span class="ppip impt">Important</span></span>
+                <span class="ff"><span class="fk">Action</span><span class="zh">需要决策</span><span class="en">Decision</span></span>
+                <span class="ff"><span class="fk">Category</span><span class="zh">产品管理</span><span class="en">Product</span></span>
+              </div>
+            </div>
+
+            <div class="read-prose">
+              <p><span class="zh">Hi 各位，</span><span class="en">Hi all,</span></p>
+              <p><span class="zh">我看大家已经有比较全面的讨论了，这里补充几点我在一线的观察供参考：多区域的部署节奏不同市场接受度不完全一样……</span><span class="en">I think the discussion is already thorough — here are a few notes from the field for reference: rollout pacing differs by market and adoption isn't uniform…</span></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════ TRUST STRIP ══════════════ -->
+<section class="strip">
+  <div class="wrap strip-inner">
+    <span class="strip-label zh">一封邮件 · 五件事自动发生</span>
+    <span class="strip-label en">One email · five things, automatically</span>
+    <div class="strip-items">
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h7"/></svg><span class="zh">归类</span><span class="en">Categorize</span></span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/></svg><span class="zh">定级</span><span class="en">Prioritize</span></span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 10h16M4 14h10M4 18h6"/></svg><span class="zh">摘要</span><span class="en">Summarize</span></span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20l4-1 11-11-3-3L4 16l-1 4z"/></svg><span class="zh">起草</span><span class="en">Draft reply</span></span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg><span class="zh">建议动作</span><span class="en">Suggest action</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ FEATURES ══════════════ -->
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <span class="eyebrow"><span class="num">01</span> AI Triage</span>
+      <h2 class="s-title">
+        <span class="zh">每封邮件落地，<em>AI 已经读完了</em>。</span>
+        <span class="en">Every email arrives <em>already read</em>.</span>
+      </h2>
+      <p class="s-lede">
+        <span class="zh">不是事后批量处理，而是入库即处理。分类、优先级、一句话摘要、动作建议——结构化写进每封邮件，列表里一眼就能看出哪封该先看。</span>
+        <span class="en">Not a batch job after the fact — processed on arrival. Category, priority, a one-line summary and a suggested action, written structurally into every message so the list tells you what to open first.</span>
+      </p>
+    </div>
+
+    <div class="fgrid">
+      <!-- big card: classification -->
+      <div class="card col-8 reveal">
+        <div class="kicker">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h7"/></svg></span>
+          Category · Priority
+        </div>
+        <h3><span class="zh">分类 + 优先级，一眼分流</span><span class="en">Category &amp; priority, at a glance</span></h3>
+        <p><span class="zh">每封邮件被打上类别（产品管理 / 需要决策 / 仅供参考…）和优先级。紧急的标红冒头，FYI 的自动沉底——你不再从 674 封里大海捞针。</span><span class="en">Each email is tagged with a category (product, decision-needed, FYI…) and a priority. Critical mail surfaces in red; FYI settles to the bottom — no more digging through 674 messages.</span></p>
+        <div class="chip-row">
+          <span class="tag-pip pip-crit"><span class="d"></span>Critical</span>
+          <span class="tag-pip pip-urg"><span class="d"></span>Urgent</span>
+          <span class="tag-pip pip-impt"><span class="d"></span>Important</span>
+          <span class="tag-pip pip-norm"><span class="d"></span>Normal</span>
+          <span class="tag-pip pip-norm"><span class="d"></span>需要决策</span>
+          <span class="tag-pip pip-norm"><span class="d"></span>仅供参考</span>
+        </div>
+      </div>
+
+      <!-- summary card -->
+      <div class="card col-4 reveal" data-d="1">
+        <div class="kicker">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 10h16M4 14h10M4 18h6"/></svg></span>
+          Summary
+        </div>
+        <h3><span class="zh">一句话摘要</span><span class="en">One-line summaries</span></h3>
+        <p><span class="zh">长邮件串、几十层引用，压成你能在两秒里读完的要点。打开前就知道里面在说什么。</span><span class="en">Long threads and deep quote chains, compressed into a point you read in two seconds — before you ever open it.</span></p>
+      </div>
+
+      <!-- reply draft card -->
+      <div class="card col-4 reveal">
+        <div class="kicker">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20l4-1 11-11-3-3L4 16l-1 4z"/></svg></span>
+          Reply Suggestion
+        </div>
+        <h3><span class="zh">回复，已经起好草</span><span class="en">Replies, pre-drafted</span></h3>
+        <p><span class="zh">该回的邮件，AI 顺着上下文先拟一版草稿。你改两句、或直接发——决定权永远在你手里。</span><span class="en">For mail that needs a reply, a context-aware draft is waiting. Tweak a line or send as-is — you stay in control.</span></p>
+      </div>
+
+      <!-- action / multilingual card -->
+      <div class="card col-4 reveal" data-d="1">
+        <div class="kicker">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg></span>
+          Action
+        </div>
+        <h3><span class="zh">下一步动作建议</span><span class="en">A suggested next step</span></h3>
+        <p><span class="zh">「需要决策」「等待拍板」「可归档」——AI 不只告诉你这封讲什么，还告诉你该拿它怎么办。</span><span class="en">"Needs a decision," "awaiting sign-off," "archive" — it tells you not just what an email says, but what to do with it.</span></p>
+      </div>
+
+      <!-- search card -->
+      <div class="card col-4 reveal" data-d="2">
+        <div class="kicker">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></span>
+          Full-text · FTS5
+        </div>
+        <h3><span class="zh">全文搜索，瞬时命中</span><span class="en">Instant full-text search</span></h3>
+        <p><span class="zh">本地 FTS5 索引 9,000+ 封邮件，<kbd>⌘K</kbd> 起手，毫秒级返回。KOS 不可达时也能优雅降级。</span><span class="en">A local FTS5 index over 9,000+ emails. Hit <kbd>⌘K</kbd> for millisecond results — and a graceful fallback when KOS is offline.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ AI FIELDS — split ══════════════ -->
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="split split--rev">
+      <div class="split-media reveal">
+        <div class="window">
+          <div class="window-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <div class="addr">AI Fields · reviewed</div>
+          </div>
+          <div style="display:flex;height:440px;background:rgb(var(--ink-0))">
+            <div class="app-read" style="flex:1">
+              <div class="read-bar">
+                <span class="read-reply"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg><span class="zh">回复</span><span class="en">Reply</span></span>
+                <span class="read-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></span>
+                <span class="read-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></span>
+                <span class="read-ic" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span>
+              </div>
+              <div class="read-body">
+                <div class="read-subj">[Alert] webhook 8100: HTTP 502 from upstream</div>
+                <div class="read-meta">
+                  <span class="mk">From</span><span class="mv"><b>Sentry</b> · sentry.io</span>
+                  <span class="mk">Date</span><span class="mv">2026/05/29 · 14:08</span>
+                </div>
+                <div class="aif">
+                  <div class="aif-top"><span class="star"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span> AI Fields · 5 <span class="rev"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>reviewed</span><span class="model">claude-sonnet-4-6</span></div>
+                  <div class="aif-sec">
+                    <div class="aif-lab"><span class="n">✶</span> Summary</div>
+                    <div class="aif-sum"><span class="zh">webhook 进程掉线导致上游 502，你是本次 oncall。建议给 update 调用加指数退避（3→9→27s）并重启进程。</span><span class="en">The webhook process is down, causing upstream 502s — you're oncall. Suggest adding exponential backoff (3→9→27s) to the update call and restarting the process.</span></div>
+                  </div>
+                  <div class="aif-sec">
+                    <div class="aif-lab"><span class="n">✶</span> Reply Suggestion</div>
+                    <div class="draftcard">
+                      <div class="dc-top"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg><span class="zh">草稿 · 待你确认</span><span class="en">Draft · awaiting you</span></div>
+                      <div class="dc-body"><span class="zh">已给 <code>update</code> 加 backoff（3→9→27s），进程已重启，prod 恢复。长期方案排到性能优化。</span><span class="en">Added backoff (3→9→27s) to <code>update</code>, restarted the process, prod recovered. Long-term fix queued under perf work.</span><span class="caret"></span></div>
+                      <div class="dc-act"><button class="dc-send"><span class="zh">发送</span><span class="en">Send</span></button><button class="dc-ghost">↺ <span class="zh">重写</span><span class="en">Redo</span></button><button class="dc-ghost">✎ <span class="zh">编辑</span><span class="en">Edit</span></button></div>
+                    </div>
+                  </div>
+                  <div class="aif-foot">
+                    <span class="ff"><span class="fk">Priority</span><span class="ppip crit">Critical</span></span>
+                    <span class="ff"><span class="fk">Action</span><span class="zh">Reply Needed</span><span class="en">Reply</span></span>
+                    <span class="ff"><span class="fk">Category</span><span class="zh">系统告警</span><span class="en">Alert</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="split-copy reveal" data-d="1">
+        <span class="eyebrow"><span class="num">02</span> AI Fields</span>
+        <h3><span class="zh">AI 的判断，明明白白摆在邮件里</span><span class="en">The AI's reasoning, right there in the email</span></h3>
+        <p><span class="zh">每封邮件顶部一块 <strong style="color:rgb(var(--fg))">AI FIELDS</strong> 面板：摘要、优先级、动作、类别、回复建议——全部结构化、可复核、可标记「已 Review」。不是一个黑盒，是一个透明的助手。</span><span class="en">Every email carries an <strong style="color:rgb(var(--fg))">AI FIELDS</strong> panel up top: summary, priority, action, category, reply suggestion — all structured, reviewable, and markable as "reviewed." Not a black box; a transparent assistant.</span></p>
+        <ul class="flist">
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg></span><span><b><span class="zh">结构化字段，不是散文</span><span class="en">Structured fields, not prose</span></b><span class="zh">LLM 输出 JSON 块，前端原生渲染——稳定、可校验、可回填。</span><span class="en">The LLM emits JSON blocks rendered natively — stable, checkable, back-fillable.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg></span><span><b><span class="zh">中英双语，正文不翻译</span><span class="en">Bilingual UI, body untouched</span></b><span class="zh">界面、字段、动作可切中英；邮件正文永远保持原文。</span><span class="en">UI, fields and actions switch CN/EN; the email body always stays in its original language.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg></span><span><b><span class="zh">你来定调</span><span class="en">You set the tone</span></b><span class="zh">6 个强调色、深浅主题、界面材质，一次切换全局生效。</span><span class="en">Six accent colors, light/dark, interface materials — one switch re-skins everything.</span></span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ PING ISLAND ══════════════ -->
+<section class="section" id="island">
+  <div class="wrap">
+    <div class="split">
+      <div class="split-copy reveal">
+        <span class="eyebrow"><span class="num">03</span> Ping Island · Live</span>
+        <h3><span class="zh">重要邮件，不必你去找它</span><span class="en">The mail that matters comes to you</span></h3>
+        <p><span class="zh">MailAgent 把最关键的提醒送上灵动岛。一封紧急邮件进来，AI 判完级，要点和建议动作直接浮在屏幕顶端——不用打开 App，不用翻收件箱。</span><span class="en">MailAgent pushes what's critical to the Dynamic Island. A high-priority email lands, gets triaged, and its gist and suggested action float at the top of your screen — no app, no inbox dive.</span></p>
+        <ul class="flist">
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7c0 5-2 6-2 6h18s-2-1-2-6a7 7 0 0 0-7-7zM10 21h4"/></svg></span><span><b><span class="zh">实时提醒</span><span class="en">Real-time pings</span></b><span class="zh">只有真正紧急的才打扰你，其余静默归档。</span><span class="en">Only the genuinely urgent interrupts you; the rest is archived in silence.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span><span><b><span class="zh">岛上直接动作</span><span class="en">Act from the island</span></b><span class="zh">归档、稍后、打开——常用动作一步到位。</span><span class="en">Archive, snooze, open — common actions in a single tap.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19V6l9 2v11M9 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm9-2a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg></span><span><b><span class="zh">每日两次汇总</span><span class="en">Twice-daily digest</span></b><span class="zh">9 点与 18 点，灵动岛汇总过去 24 小时的邮件动态。</span><span class="en">At 9am and 6pm, the island sums up the last 24 hours.</span></span></li>
+        </ul>
+      </div>
+
+      <div class="split-media reveal" data-d="1">
+        <div class="pi-stage">
+          <div class="island">
+            <div class="island-head">
+              <span class="lab">MailAgent · Ping Island</span>
+              <span class="live"><span class="d"></span>LIVE</span>
+            </div>
+            <div class="pi-mail">
+              <div class="pi-av" style="background:#E5654B">AR</div>
+              <div class="pi-body">
+                <div class="pi-eb"><span class="pri" style="background:rgba(229,99,79,.16);color:#E5654B">CRITICAL</span><span>Alex Rivera · northwind.io</span></div>
+                <div class="pi-tt">Re: 多区域部署 — 关于 rate limit</div>
+                <div class="pi-ss zh">需要决策 · 建议给 webhook 加指数退避，并三端统一新用户引导。</div>
+                <div class="pi-ss en">Needs a decision · add backoff to webhooks, unify onboarding across surfaces.</div>
+              </div>
+            </div>
+            <div class="pi-actions">
+              <button class="pi-btn acc"><span class="zh">打开</span><span class="en">Open</span></button>
+              <button class="pi-btn"><span class="zh">稍后</span><span class="en">Snooze</span></button>
+              <button class="pi-btn"><span class="zh">归档</span><span class="en">Archive</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ REPORT AGENT ══════════════ -->
+<section class="section" id="agent">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <span class="eyebrow"><span class="num">04</span> Report Agent</span>
+      <h2 class="s-title">
+        <span class="zh">每天早上，一份<em>读得完</em>的邮件日报</span>
+        <span class="en">A daily briefing you'll <em>actually finish</em></span>
+      </h2>
+      <p class="s-lede">
+        <span class="zh">Jarvis 每天回顾过去 24 小时的邮件，策展成一份结构化富报告：已处理了什么、还需你亲自关注、你必须知道的关键信息、以及一般汇总。周报、月报同一引擎。</span>
+        <span class="en">Jarvis reviews the last 24 hours and curates a structured report: what's been handled, what still needs you, the key facts you must know, and the rest summarized. Weekly and monthly run on the same engine.</span>
+      </p>
+    </div>
+
+    <div class="showcase">
+      <div class="showcase-media reveal">
+        <div class="window">
+          <div class="window-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <div class="addr">/agents · 邮件日报</div>
+          </div>
+          <div class="rep">
+            <div class="rep-list">
+              <div class="rep-tabs"><span class="off">Agents</span><span class="on"><span class="zh">报告</span><span class="en">Reports</span><span class="badge">8</span></span><span class="off">Chats</span></div>
+              <div class="rep-h"><span class="zh">历史报告</span><span class="en">History</span></div>
+              <div class="rep-card sel">
+                <div class="rc1"><span>06/01</span><span class="cad"><span class="zh">日报</span><span class="en">Daily</span></span><span class="ok"><span class="zh">已就绪</span><span class="en">Ready</span></span></div>
+                <div class="rtitle"><span class="zh">3 封紧急：PoC 排期 + 需求待拍板</span><span class="en">3 urgent: PoC timing + specs to sign off</span></div>
+                <div class="rstat"><span>32 <span class="zh">封</span><span class="en">mail</span></span><span class="crit">3 <span class="zh">紧急</span><span class="en">urgent</span></span></div>
+              </div>
+              <div class="rep-card">
+                <div class="rc1"><span>05/31</span><span class="cad"><span class="zh">周报</span><span class="en">Weekly</span></span><span class="ok"><span class="zh">已就绪</span><span class="en">Ready</span></span></div>
+                <div class="rtitle"><span class="zh">W22：两大标案进入决策窗口</span><span class="en">W22: two bids enter the decision window</span></div>
+                <div class="rstat"><span>187 <span class="zh">封</span><span class="en">mail</span></span><span class="crit">12 <span class="zh">紧急</span><span class="en">urgent</span></span></div>
+              </div>
+              <div class="rep-card">
+                <div class="rc1"><span>05/31</span><span class="cad"><span class="zh">月报</span><span class="en">Monthly</span></span><span class="ok"><span class="zh">已就绪</span><span class="en">Ready</span></span></div>
+                <div class="rtitle"><span class="zh">五月月报：PoC 进入决赛圈</span><span class="en">May recap: PoC reaches the finals</span></div>
+                <div class="rstat"><span>742 <span class="zh">封</span><span class="en">mail</span></span><span class="crit">41 <span class="zh">紧急</span><span class="en">urgent</span></span></div>
+              </div>
+            </div>
+            <div class="rep-detail">
+              <div class="rep-dtop">
+                <span class="pill"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="color:rgb(var(--accent))"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg><span class="zh">日报</span><span class="en">Daily</span></span>
+                <span class="pill">claude-sonnet-4-6</span>
+                <span class="regen"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-7 3.3M3 4v4h4"/></svg><span class="zh">重新生成</span><span class="en">Regenerate</span></span>
+              </div>
+              <div class="rep-title"><span class="zh">邮件日报</span><span class="en">Daily Email Digest</span></div>
+              <div class="rep-date"><span class="zh">2026年6月1日 · 过去 24 小时</span><span class="en">June 1, 2026 · last 24 hours</span></div>
+              <div class="rep-over"><span class="zh">昨天共 <b>32 封</b>邮件，Jarvis 已自动处理 28 封；有 <b>3 封紧急</b>需要你亲自跟进，主要围绕 PoC 排期与一处需求锁定。其余多为系统通知与抄送知会，已归档。</span><span class="en">Of <b>32 emails</b> yesterday, Jarvis handled 28; <b>3 urgent</b> need you — mostly PoC timing and one spec to lock. The rest were notifications and CCs, archived.</span></div>
+              <div class="rep-statrow">
+                <div class="s"><div class="sv">32</div><div class="sk"><span class="zh">总邮件</span><span class="en">Total</span></div></div>
+                <div class="s"><div class="sv">9</div><div class="sk"><span class="zh">未读</span><span class="en">Unread</span></div></div>
+                <div class="s acc"><div class="sv">3</div><div class="sk"><span class="zh">紧急</span><span class="en">Urgent</span></div></div>
+                <div class="s"><div class="sv">28</div><div class="sk">AI</div></div>
+                <div class="s"><div class="sv">4</div><div class="sk"><span class="zh">待你</span><span class="en">For you</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="showcase-copy reveal" data-d="1">
+        <ul class="flist">
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3v4M17 3v4M3 9h18M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg></span><span><b><span class="zh">日 / 周 / 月，自动排程</span><span class="en">Daily / weekly / monthly, scheduled</span></b><span class="zh">日报看明细、周报看趋势、月报看高层回顾——开机补推，绝不漏发。</span><span class="en">Detail by day, trends by week, a high-level recap by month — with catch-up on launch so nothing is missed.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4M12 3l7 4v5c0 4-3 7-7 8-4-1-7-4-7-8V7l7-4z"/></svg></span><span><b><span class="zh">每封都能点回原文</span><span class="en">Every line links to source</span></b><span class="zh">报告里的每封邮件可点击溯源——直达 App 内邮件或 Notion 页面。</span><span class="en">Every email in the report is clickable — straight to the message in-app or its Notion page.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M6 20v-3M18 20v-9M4 4h16"/></svg></span><span><b><span class="zh">趋势，用真实数据画</span><span class="en">Trends from real counts</span></b><span class="zh">周报 / 月报的统计与趋势全部由代码确定性计算，不是 LLM 编出来的。</span><span class="en">Weekly and monthly stats are computed deterministically in code — never hallucinated by the model.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8V4M8 4h8M12 8a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 14l3-3"/></svg></span><span><b><span class="zh">Run now · 改 prompt · 选模型</span><span class="en">Run now · edit prompt · pick model</span></b><span class="zh">在 /agents 页随时即时生成、调整排程窗口、编辑报告 prompt。</span><span class="en">Generate on demand, adjust the schedule, and edit the report prompt right in /agents.</span></span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ CUSTOM AI + KOS ══════════════ -->
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="showcase showcase--rev">
+      <div class="showcase-media reveal">
+        <div class="window">
+          <div class="window-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <div class="addr">Custom AI · KOS bridge</div>
+          </div>
+          <div class="chat">
+            <div class="chat-top"><span class="star"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span><span class="zh">Custom AI · 对话一封邮件</span><span class="en">Custom AI · chat with an email</span></div>
+            <div class="chat-row">
+              <div class="chat-av you"><span class="zh">你</span><span class="en">U</span></div>
+              <div class="chat-bub"><span class="zh">这个供应商以前的合同条款是什么？</span><span class="en">What were this vendor's previous contract terms?</span></div>
+            </div>
+            <div class="chat-row">
+              <div class="chat-av ai">✦</div>
+              <div style="flex:1;min-width:0">
+                <div class="chat-tool"><span class="d"></span>KOS → query · find_trajectory · sources/email/*</div>
+                <div class="chat-ans"><span class="zh">上一版合同（2025-11）约定 24 个月、按年付，附 SLA 99.5%。<span class="src">来源：3 封邮件 ↗</span></span><span class="en">The prior contract (2025-11) set 24 months, annual billing, 99.5% SLA. <span class="src">Source: 3 emails ↗</span></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="showcase-copy reveal" data-d="1">
+        <span class="eyebrow"><span class="num">05</span> Custom AI · KOS</span>
+        <h3 style="margin-top:14px"><span class="zh">对着一封邮件提问，它会自己去查资料</span><span class="en">Ask about an email — it goes and looks things up</span></h3>
+        <p><span class="zh">Custom AI 通过 MCP 工具桥接到 KOS 知识库：邮件源、实体图谱、历史轨迹。LLM 按上下文自判断该查什么，回答带来源。我们不替它注入，把工具和 skill 给它自驱。</span><span class="en">Custom AI bridges to the KOS knowledge base over MCP — email sources, an entity graph, historical trajectories. The model decides what to query from context and answers with citations. We don't spoon-feed it; we hand it the tools and let it drive.</span></p>
+        <ul class="flist">
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7l8-4 8 4v10l-8 4-8-4V7zM12 3v18M4 7l8 4 8-4"/></svg></span><span><b><span class="zh">只读护栏</span><span class="en">Read-only guardrails</span></b><span class="zh">只暴露 query / search / traverse 等只读工具，写操作一律拦在桥外，杜绝图谱污染。</span><span class="en">Only read tools (query, search, traverse) are exposed; writes are blocked at the bridge to keep the graph clean.</span></span></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></span><span><b><span class="zh">不可达就降级</span><span class="en">Graceful degradation</span></b><span class="zh">KOS 不可达时，自然回落到本地 FTS5 全文检索，对话不中断。</span><span class="en">If KOS is offline, it falls back to local FTS5 search — the conversation never breaks.</span></span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ ANTI-HALLUCINATION ══════════════ -->
+<section class="section" id="trust">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <span class="eyebrow"><span class="num">06</span> Provenance</span>
+      <h2 class="s-title">
+        <span class="zh">AI 写文案，<em>代码守数字</em></span>
+        <span class="en">The AI writes the prose. <em>Code guards the numbers.</em></span>
+      </h2>
+      <p class="s-lede">
+        <span class="zh">一个邮件助手最怕编。MailAgent 的纪律：统计、链接、邮件 ID 全由代码确定性回填，LLM 只负责措辞和分组。出错的爆炸半径，被牢牢限制在文案里。</span>
+        <span class="en">The one thing an email assistant must never do is make things up. MailAgent's discipline: counts, links and email IDs are back-filled deterministically by code; the LLM only handles wording and grouping. The blast radius of a mistake is confined to phrasing.</span>
+      </p>
+    </div>
+
+    <div class="proof">
+      <div class="proof-card reveal">
+        <div class="pc-top">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 4v5c0 4-3 7-7 8-4-1-7-4-7-8V7l7-4z"/></svg>
+          AI Fields · 5
+          <span class="reviewed"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>reviewed</span>
+        </div>
+        <div class="pc-body">
+          <div class="field-row"><span class="fk">Summary</span><span class="fv zh">Tom 补充了一线竞品观察，提了一版偏 Meraki 的方案蓝图。</span><span class="fv en">Tom added field competitive notes and proposed a Meraki-leaning blueprint.</span></div>
+          <div class="field-row"><span class="fk">Priority</span><span class="fv"><span class="tag-pip pip-impt" style="font-size:11px"><span class="d"></span>Important</span></span></div>
+          <div class="field-row"><span class="fk">Category</span><span class="fv zh">产品管理</span><span class="fv en">Product mgmt</span></div>
+          <div class="field-row"><span class="fk">Counts</span><span class="fv"><span class="badge-code">code-filled</span> &nbsp;<span style="color:rgb(var(--fg-2))">9 未读 · 总计 674</span></span></div>
+          <div class="field-row"><span class="fk">Source</span><span class="fv"><span class="src">notion.so/…830d80cb ↗</span> · <span class="src">open in app ↗</span></span></div>
+        </div>
+      </div>
+
+      <div class="proof-points reveal" data-d="1">
+        <div class="pp"><span class="n">01</span><div><b><span class="zh">数字由代码算</span><span class="en">Numbers computed in code</span></b><p><span class="zh">总数 / 未读 / 紧急 / 已处理 / 待处理——全部确定性计算，与数据库一致。</span><span class="en">Totals, unread, urgent, processed, pending — all deterministic and consistent with the database.</span></p></div></div>
+        <div class="pp"><span class="n">02</span><div><b><span class="zh">幻觉 ID 被丢弃</span><span class="en">Hallucinated IDs discarded</span></b><p><span class="zh">LLM 分配邮件时给的 internal_id 会被校验回真实候选集，编造的直接扔掉。</span><span class="en">Any email ID the model emits is validated against the real candidate set; invented ones are dropped.</span></p></div></div>
+        <div class="pp"><span class="n">03</span><div><b><span class="zh">链接是权威回填</span><span class="en">Links are authoritative</span></b><p><span class="zh">每条溯源链接由后端用真实 page_id 生成，点过去一定是对的那一封。</span><span class="en">Every source link is generated from a real page_id — it always lands on the right message.</span></p></div></div>
+        <div class="pp"><span class="n">04</span><div><b><span class="zh">本地优先</span><span class="en">Local-first</span></b><p><span class="zh">邮件存本机 SQLite，Electron 直读，正文从不自动外发翻译。</span><span class="en">Mail lives in local SQLite read directly by Electron; the body is never sent out for translation.</span></p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ LLM DASHBOARD / OBSERVABILITY ══════════════ -->
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="s-head reveal">
+      <span class="eyebrow"><span class="num">07</span> Observability</span>
+      <h2 class="s-title">
+        <span class="zh">每一次调用，都<em>有账可查</em></span>
+        <span class="en">Every call, <em>fully accounted for</em></span>
+      </h2>
+      <p class="s-lede">
+        <span class="zh">LLM 看板和系统看板把真实数据摊开：处理量、token、耗时、缓存命中、同步健康、死信队列。这不是装饰图表——是跑了 5,904 次的真实账本。</span>
+        <span class="en">The LLM and system dashboards lay the real numbers bare: throughput, tokens, latency, cache hits, sync health, dead-letter queue. Not decorative charts — the actual ledger of 5,904 runs.</span>
+      </p>
+    </div>
+
+    <div class="stats reveal" style="margin-bottom:28px">
+      <div class="stat"><div class="v">5,904</div><div class="k">Processed · 7d</div><div class="sub zh">近 7 天处理量</div><div class="sub en">over the last week</div></div>
+      <div class="stat"><div class="v">1.11<em>M</em></div><div class="k">Input tokens</div><div class="sub zh">输入 token</div><div class="sub en">input tokens</div></div>
+      <div class="stat"><div class="v">42.5<em>s</em></div><div class="k">Avg latency</div><div class="sub zh">平均耗时 / 封</div><div class="sub en">average per email</div></div>
+      <div class="stat"><div class="v">9,311</div><div class="k">Synced mail</div><div class="sub zh">同步邮件总数</div><div class="sub en">emails synced</div></div>
+    </div>
+
+    <div class="reveal" data-d="1">
+      <div class="window">
+        <div class="window-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="addr">LLM Dashboard · 看板</div>
+        </div>
+        <div class="dash">
+          <div class="dash-head">
+            <span class="star"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span>
+            <h4><span class="zh">LLM 看板</span><span class="en">LLM Dashboard</span></h4>
+            <div class="seg"><button class="on">7d</button><button>30d</button><button>90d</button></div>
+          </div>
+          <div class="dash-cards">
+            <div class="dcard acc"><div class="dk"><span class="zh">已处理 · 近 7 天</span><span class="en">Processed · 7d</span></div><div class="dv">5,904</div><div class="ds">5,894 success</div></div>
+            <div class="dcard"><div class="dk"><span class="zh">输入 Token</span><span class="en">Input tokens</span></div><div class="dv">1.11M</div><div class="ds">1,110,396</div></div>
+            <div class="dcard"><div class="dk"><span class="zh">输出 Token</span><span class="en">Output tokens</span></div><div class="dv">415.8K</div><div class="ds">415,819</div></div>
+            <div class="dcard"><div class="dk"><span class="zh">平均耗时</span><span class="en">Avg latency</span></div><div class="dv">42.5s</div><div class="ds">over 5,894 ok</div></div>
+          </div>
+          <div class="dash-low">
+            <div class="dpanel">
+              <div class="dk"><span class="zh">状态分布</span><span class="en">Status</span></div>
+              <div class="donut-wrap">
+                <div class="donut" style="--p:99.8"><div class="dc"><div class="n">5,904</div><div class="l">total</div></div></div>
+                <div class="dleg">
+                  <div class="lr"><span class="sw" style="background:rgb(var(--ok))"></span>success<span class="v">5,894</span></div>
+                  <div class="lr"><span class="sw" style="background:rgb(var(--info))"></span>pending<span class="v">10</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="dpanel">
+              <div class="dk"><span class="zh">缓存命中率</span><span class="en">Cache hit rate</span></div>
+              <div class="dbar-lab"><span>5.0%</span><span>target ≥ 70%</span></div>
+              <div class="dbar"><i style="width:5%"></i></div>
+              <div class="dkv">
+                <div><div class="k"><span class="zh">缓存写入</span><span class="en">Cache write</span></div><div class="v">856.1K</div></div>
+                <div><div class="k"><span class="zh">命中</span><span class="en">Cache read</span></div><div class="v">3.16M</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ MOBILE ══════════════ -->
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="split">
+      <div class="split-copy reveal">
+        <span class="eyebrow"><span class="num">08</span> Anywhere</span>
+        <h3><span class="zh">桌面是主场，手机里也跟得上</span><span class="en">At home on the desktop, with you on mobile</span></h3>
+        <p><span class="zh">同一套设计系统、同一份 AI 判断，响应式适配到手机。重点 / 其他分流、优先级标记、灵动岛提醒——窄屏上一样清爽。</span><span class="en">The same design system and the same AI judgments, responsive down to the phone. Focused/Other split, priority flags, island pings — just as clean on a narrow screen.</span></p>
+        <div class="chip-row" style="margin-top:24px">
+          <span class="tag-pip pip-norm"><span class="d"></span>响应式 / Responsive</span>
+          <span class="tag-pip pip-norm"><span class="d"></span>深浅主题 / Light · Dark</span>
+          <span class="tag-pip pip-norm"><span class="d"></span>6 Accents</span>
+        </div>
+      </div>
+      <div class="split-media reveal" data-d="1" style="display:flex;justify-content:center">
+        <div class="phone">
+          <div class="phone-status"><span>9:41</span><span class="r">5G ▪ ▪▪</span></div>
+          <div class="phone-island">
+            <div class="pa"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></div>
+            <div class="pb"><div class="pe">MailAgent</div><div class="pt"><span class="zh">1 封紧急 · 需要决策</span><span class="en">1 urgent · decision</span></div></div>
+            <span class="live"><span class="d"></span>LIVE</span>
+          </div>
+          <div class="phone-head"><span class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span><span class="t">MailAgent</span><span class="s"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></span></div>
+          <div class="phone-tabs"><button class="on"><span class="zh">重点</span><span class="en">Focused</span></button><button><span class="zh">其他</span><span class="en">Other</span></button></div>
+          <div class="phone-list">
+            <div class="mrow unread"><span class="dot"></span><div class="mbody"><div class="mline1"><span class="sender">Alex Rivera · northwind.io</span><span class="time">14:23</span></div><div class="subj">Re: 多区域部署</div><div class="mtags"><span class="ppip impt">Important</span><span class="apip">需要决策</span></div></div></div>
+            <div class="mrow unread"><span class="dot"></span><div class="mbody"><div class="mline1"><span class="sender">Sentry · sentry.io</span><span class="lpip">EN</span><span class="time">14:08</span></div><div class="subj">[Alert] HTTP 502 upstream</div><div class="mtags"><span class="ppip crit">Critical</span></div></div></div>
+            <div class="mrow read"><span class="dot"></span><div class="mbody"><div class="mline1"><span class="sender">Maya Park · acme-labs.dev</span><span class="time">11:40</span></div><div class="subj">Re: 周报 — W22 对齐</div><div class="mtags"><span class="ppip norm">Normal</span></div></div></div>
+          </div>
+          <div class="phone-home"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ DOWNLOAD ══════════════ -->
+<section class="section" id="download">
+  <div class="wrap">
+    <div class="dl reveal">
+      <span class="eyebrow" style="justify-content:center"><span class="num">09</span> Get MailAgent</span>
+      <h2 style="margin-top:18px"><span class="zh">把收件箱交给它</span><span class="en">Hand over your inbox</span></h2>
+      <p><span class="zh">macOS 桌面应用，本地优先，开源。下载、连上你的邮箱，AI 从下一封邮件开始接管。</span><span class="en">A local-first macOS desktop app, open source. Download, connect your mailbox, and the AI takes over from the next email.</span></p>
+      <div class="dl-cta">
+        <a class="btn btn--primary btn--lg" href="https://github.com/ChenyqThu/MailAgent/releases" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.4 12.9c0-2 1.6-3 1.7-3.1-.9-1.4-2.4-1.5-2.9-1.6-1.2-.1-2.4.7-3 .7s-1.6-.7-2.6-.7c-1.3 0-2.6.8-3.2 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.3-.6 2.5-.6s1.5.6 2.5.6 1.7-.9 2.4-1.9c.7-1.1 1-2.1 1-2.2 0 0-1.9-.8-1.9-2.9zM14.5 6.8c.5-.7.9-1.6.8-2.6-.8 0-1.8.6-2.4 1.2-.5.6-1 1.5-.8 2.4.9.1 1.8-.4 2.4-1z"/></svg>
+          <span class="zh">下载 macOS 版 · GitHub Release</span><span class="en">Download for macOS · GitHub Release</span>
+        </a>
+        <a class="btn btn--ghost btn--lg" href="https://github.com/ChenyqThu/MailAgent/" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.5 2 2 6.5 2 12c0 4.4 2.9 8.2 6.8 9.5.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .8.1-.7.4-1.1.6-1.4-2.2-.300-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 22 12c0-5.5-4.5-10-10-10z"/></svg>
+          <span class="zh">在 GitHub 上看源码</span><span class="en">View source on GitHub</span>
+        </a>
+      </div>
+
+      <div class="dl-steps">
+        <div class="dl-step"><div class="sn">STEP 01</div><b><span class="zh">下载并安装</span><span class="en">Download &amp; install</span></b><p><span class="zh">从 GitHub Release 取最新 .dmg，拖进应用程序。</span><span class="en">Grab the latest .dmg from Releases and drop it in Applications.</span></p></div>
+        <div class="dl-step"><div class="sn">STEP 02</div><b><span class="zh">连接邮箱</span><span class="en">Connect mail</span></b><p><span class="zh">通过 DavMail / IMAP 接入，邮件同步到本地 SQLite。</span><span class="en">Connect over DavMail / IMAP; mail syncs to local SQLite.</span></p></div>
+        <div class="dl-step"><div class="sn">STEP 03</div><b><span class="zh">让 AI 接管</span><span class="en">Let the AI run</span></b><p><span class="zh">填入模型密钥，开启 Agent，下一封邮件起自动处理。</span><span class="en">Add your model key, enable the agent — triage starts on the next email.</span></p></div>
+      </div>
+      <div class="dl-note zh">需要 macOS 13+ · 自带模型密钥 · 你的邮件不离开这台设备</div>
+      <div class="dl-note en">Requires macOS 13+ · bring your own model key · your mail never leaves this device</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ FAQ ══════════════ -->
+<section class="section section--tight" id="faq">
+  <div class="wrap" style="max-width:860px">
+    <div class="s-head reveal" style="margin-bottom:32px">
+      <span class="eyebrow"><span class="num">10</span> FAQ</span>
+      <h2 class="s-title"><span class="zh">还有些问题</span><span class="en">A few more things</span></h2>
+    </div>
+    <div class="faq reveal" data-d="1">
+      <details open>
+        <summary><span class="q"><span class="zh">我的邮件会被发去哪吗？</span><span class="en">Where does my mail go?</span></span><span class="pm"></span></summary>
+        <div class="ans"><span class="zh">邮件同步并存储在你这台机器的本地 SQLite 数据库里，Electron 直接读取。只有做 AI 处理时，相关内容才会发给你自己配置的模型。邮件正文从不为了翻译而外发。</span><span class="en">Mail is synced and stored in a local SQLite database on your machine, read directly by Electron. Only AI processing sends relevant content to the model you configure. The email body is never sent out for translation.</span></div>
+      </details>
+      <details>
+        <summary><span class="q"><span class="zh">它会自己替我发邮件或归档吗？</span><span class="en">Will it send or archive on its own?</span></span><span class="pm"></span></summary>
+        <div class="ans"><span class="zh">不会。v1 里 AI 的动作建议只是展示，执行权永远在你手上——回复是草稿，归档要你点。批量执行是后续版本的事，且始终需要你确认。</span><span class="en">No. In v1, suggested actions are display-only — you stay in control. Replies are drafts; archiving is your click. Bulk execution is for a later version and always behind your confirmation.</span></div>
+      </details>
+      <details>
+        <summary><span class="q"><span class="zh">报告里的数字可信吗？</span><span class="en">Can I trust the numbers in reports?</span></span><span class="pm"></span></summary>
+        <div class="ans"><span class="zh">可信。所有统计、链接和邮件 ID 都由代码确定性计算与回填，与数据库一致。LLM 只负责措辞、分组和挑重点；它给出的任何 ID 都会被校验，编造的会被丢弃。</span><span class="en">Yes. All counts, links and email IDs are computed and back-filled by code, consistent with the database. The LLM only handles wording, grouping and highlights; any ID it emits is validated, and invented ones are discarded.</span></div>
+      </details>
+      <details>
+        <summary><span class="q"><span class="zh">支持哪些语言和模型？</span><span class="en">Which languages and models?</span></span><span class="pm"></span></summary>
+        <div class="ans"><span class="zh">界面、字段、AI 快捷动作支持简体中文与 English 一键切换；邮件正文保持原文不翻译。模型默认 <code>claude-sonnet-4-6</code>，可在设置中更换。</span><span class="en">The UI, fields and AI quick-actions toggle between 简体中文 and English; the email body stays in its original language. The default model is <code>claude-sonnet-4-6</code>, swappable in settings.</span></div>
+      </details>
+      <details>
+        <summary><span class="q"><span class="zh">这是个什么项目？</span><span class="en">What kind of project is this?</span></span><span class="pm"></span></summary>
+        <div class="ans"><span class="zh">MailAgent 是一个开源的个人项目——为重度邮件用户打造的 AI 邮件助手。设计系统、灵动岛、报告 Agent、KOS 桥接都在公开仓库里。欢迎在 GitHub 上围观、提 issue 或自己跑一份。</span><span class="en">MailAgent is an open-source personal project — an AI email assistant for heavy mail users. The design system, Ping Island, report agent and KOS bridge all live in a public repo. Star it, file issues, or run your own.</span></div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ FOOTER ══════════════ -->
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <a class="brand" href="#top"><span class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg></span><span>MailAgent</span></a>
+        <p><span class="zh">把 AI 装进收件箱的桌面邮件助手。本地优先、可溯源、开源。一个为重度邮件用户打造的个人项目。</span><span class="en">A desktop email assistant with AI native to the inbox. Local-first, traceable, open source. A personal project for people who live in their mail.</span></p>
+      </div>
+      <div class="footer-cols">
+        <div class="footer-col">
+          <h5>Product</h5>
+          <a href="#features"><span class="zh">核心能力</span><span class="en">Features</span></a>
+          <a href="#island"><span class="zh">灵动岛</span><span class="en">Ping Island</span></a>
+          <a href="#agent"><span class="zh">报告 Agent</span><span class="en">Report Agent</span></a>
+          <a href="#trust"><span class="zh">可溯源</span><span class="en">Provenance</span></a>
+        </div>
+        <div class="footer-col">
+          <h5>Get it</h5>
+          <a href="#download"><span class="zh">下载 macOS</span><span class="en">Download macOS</span></a>
+          <a href="https://github.com/ChenyqThu/MailAgent/" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/ChenyqThu/MailAgent/releases" target="_blank" rel="noopener">Releases</a>
+          <a href="#faq">FAQ</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bot">
+      <span>© 2026 MailAgent · MIT License</span>
+      <span>Built with claude-sonnet-4-6 · Local-first</span>
+    </div>
+  </div>
+</footer>
+
+<!-- ══════════════ TWEAKS PANEL ══════════════ -->
+<div class="tweaks" id="tweaks" role="dialog" aria-label="Tweaks">
+  <div class="tweaks-head">
+    <span class="t">Tweaks</span>
+    <button id="tweaksClose" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="tweaks-sub"><span class="zh">实时调整这个落地页的方向</span><span class="en">Tune this landing page live</span></div>
+
+  <div class="tw-group">
+    <span class="tw-label">语气 · Tone</span>
+    <div class="tw-seg" id="twTone">
+      <button data-tone="restrained" class="on"><span class="zh">克制</span><span class="en">Calm</span></button>
+      <button data-tone="engineer"><span class="zh">工程师</span><span class="en">Eng</span></button>
+      <button data-tone="jarvis">Jarvis</button>
+    </div>
+  </div>
+
+  <div class="tw-group">
+    <span class="tw-label">Hero 版式 · Layout</span>
+    <div class="tw-seg" id="twHero">
+      <button data-hero="center" class="on"><span class="zh">居中</span><span class="en">Center</span></button>
+      <button data-hero="left"><span class="zh">左对齐</span><span class="en">Left</span></button>
+    </div>
+  </div>
+
+  <div class="tw-group">
+    <span class="tw-label">主题 · Theme</span>
+    <div class="tw-seg" id="twTheme">
+      <button data-theme="dark" class="on"><span class="zh">深色</span><span class="en">Dark</span></button>
+      <button data-theme="light"><span class="zh">浅色</span><span class="en">Light</span></button>
+    </div>
+  </div>
+
+  <div class="tw-group">
+    <span class="tw-label">强调色 · Accent</span>
+    <div class="tw-dots" id="twAccent">
+      <button class="adot adot--coral"  data-accent="coral"  aria-checked="true"></button>
+      <button class="adot adot--cobalt" data-accent="cobalt" aria-checked="false"></button>
+      <button class="adot adot--teal"   data-accent="teal"   aria-checked="false"></button>
+      <button class="adot adot--rose"   data-accent="rose"   aria-checked="false"></button>
+      <button class="adot adot--olive"  data-accent="olive"  aria-checked="false"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "tone": "restrained",
+  "hero": "center",
+  "theme": "light",
+  "accent": "coral"
+}/*EDITMODE-END*/;
+</script>
+<script src="main.js"></script>
+<script src="tweaks.js"></script>
+</body>
+</html>
